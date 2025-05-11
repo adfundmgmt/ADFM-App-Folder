@@ -25,7 +25,7 @@ TIGHT_BP = -40
 NBSP = "\u00A0"
 
 st.set_page_config(page_title="10-Year Yield Dashboard", layout="wide")
-st.title("📈 10-Year Nominal & Real Yield Dashboard")
+st.title("10-Year Nominal & Real Yield Dashboard")
 
 with st.sidebar:
     st.header("ℹ️ About This Tool")
