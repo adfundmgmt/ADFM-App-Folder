@@ -57,7 +57,7 @@ st.markdown(
 ###############################################################################
 # ───────────────────────────────────────────────────────── Sidebar ──
 with st.sidebar:
-    st.title("How to Use This Tool")      # keep the sidebar header
+    st.title("About This Tool")      # keep the sidebar header
 
     st.markdown(
         """
