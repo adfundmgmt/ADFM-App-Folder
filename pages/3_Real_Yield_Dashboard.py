@@ -28,7 +28,7 @@ st.set_page_config(page_title="10-Year Yield Dashboard", layout="wide")
 st.title("10-Year Nominal & Real Yield Dashboard")
 
 with st.sidebar:
-    st.header("ℹ️ About This Tool")
+    st.header("About This Tool")
     st.markdown("""
     This dashboard visualizes the **10-year nominal and real Treasury yields** alongside the **inverted 63-day momentum** of real yields.
 
