@@ -1,5 +1,4 @@
 import streamlit as st
-st.set_page_config(page_title="Your Tool Name", layout="wide")
 
 ############################################################
 # Built by AD Fund Management LP.
