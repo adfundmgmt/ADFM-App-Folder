@@ -2,7 +2,7 @@
 import streamlit as st
 st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
 
-st.title("AD Fund Management LP — Analytics Suite")
+st.title("AD Fund Management LP — Analytics Tools")
 
 st.markdown("""
 Welcome to the internal analytics platform of **AD Fund Management LP**.
