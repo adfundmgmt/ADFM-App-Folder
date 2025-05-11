@@ -36,7 +36,7 @@ st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
 with st.sidebar:
-    st.header("About")
+    st.header("About This Tool")
     st.markdown(
         "Explore the seasonal patterns behind any stock, index, or commodity:\n\n"
         "- **Broad Coverage**: Pulls data from Yahoo Finance, with automatic fallback to FRED for the S&P 500, Dow, and Nasdaq when going back before 1950.\n"
