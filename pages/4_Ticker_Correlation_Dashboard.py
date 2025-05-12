@@ -2,8 +2,8 @@
 """
 Correlation Dashboard — AD Fund Management LP
 --------------------------------------------
-Quantify how **Ticker X** co-moves with **Ticker Y** (plus optional **Index Z**) across five standard windows
-(YTD, 12 m, 24 m, 36 m, 60 m) and monitor rolling correlation. Designed as a quick reference for
+Quantify how **Ticker X** co‑moves with **Ticker Y** (plus optional **Index Z**) across five standard windows
+(YTD, 12 m, 24 m, 36 m, 60 m) and monitor rolling correlation. Designed as a quick reference for
 portfolio construction and risk alignment.
 """
 
@@ -31,22 +31,22 @@ with st.sidebar:
     st.markdown(
         """
         **Purpose**  
-        Provide an at-a-glance view of historical and rolling correlations to support relative-value
+        Provide an at‑a‑glance view of historical and rolling correlations to support relative‑value
         work, diversification checks, and position sizing.
 
         **Key features**  
-        • Pearson correlations on *daily log returns* for five windows (YTD, 12 / 24 / 36 / 60 m).  
-        • Window-specific overlay charts of the selected tickers, with correlation prominently shown.  
-        • Rolling-window correlation line for regime tracking.  
-        • Live data pulled via **yfinance** (*Adj Close*).
+        • Pearson correlations on *daily log returns* for five windows (YTD, 12 / 24 / 36 / 60 m).  
+        • Window‑specific overlay charts of the selected tickers with dynamic axes.  
+        • Rolling‑window correlation line for regime tracking.  
+        • Live data sourced via **yfinance** (*Adj Close*).
         """
     )
     st.markdown("---")
 
     st.header("Inputs")
-    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security to analyse.")
-    ticker_y = st.text_input("Ticker Y", value="MSFT")
-    ticker_z = st.text_input("Index Z (optional)", value="", help="Benchmark / index — leave blank to skip.")
+    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security to analyse.")
+    ticker_y = st.text_input("Ticker Y", value="MSFT")
+    ticker_z = st.text_input("Index Z (optional)", value="^GSPC", help="Benchmark / index — leave blank to skip.")
 
     years_back = st.slider("Data history (years)", 1, 10, value=6)
     roll_window = st.slider("Rolling window (days)", 20, 120, value=60)
@@ -54,7 +54,7 @@ with st.sidebar:
 # ── Helper functions ─────────────────────────────────────────────────────────
 
 def fetch_prices(symbols: list[str], start: dt.date, end: dt.date) -> pd.DataFrame:
-    """Download adjusted-close prices for the symbols."""
+    """Download adjusted‑close prices for the symbols."""
     raw = yf.download(
         symbols,
         start=start,
@@ -102,17 +102,17 @@ if prices.empty:
 
 returns = log_returns(prices)
 
-# ── Look-back windows ───────────────────────────────────────────────────────
+# ── Look‑back windows ───────────────────────────────────────────────────────
 windows = {
     "YTD": dt.date(end_date.year, 1, 1),
-    "12 m": end_date - relativedelta(months=12),
-    "24 m": end_date - relativedelta(months=24),
-    "36 m": end_date - relativedelta(months=36),
-    "60 m": end_date - relativedelta(months=60),
+    "12 m": end_date - relativedelta(months=12),
+    "24 m": end_date - relativedelta(months=24),
+    "36 m": end_date - relativedelta(months=36),
+    "60 m": end_date - relativedelta(months=60),
 }
 
 # ── Correlation + Price Overlay by Window ───────────────────────────────────
-st.subheader("Window-Specific Correlation & Price Paths")
+st.subheader("Window‑Specific Correlation & Price Paths")
 
 tabs = st.tabs(list(windows.keys()))
 
@@ -124,11 +124,15 @@ for tab, label in zip(tabs, windows.keys()):
     corr_value = ret_slice.corr().loc[ticker_x.upper(), ticker_y.upper()].round(3)
 
     with tab:
-        st.markdown(f"**{label}** window starting {since} — **Correlation: {corr_value}**")
+        st.markdown(f"**{label}** window starting {since} — **Correlation (X vs Y): {corr_value}**")
 
-        # Normalise prices to 100 at window start
-        norm_df = price_slice.apply(normalize)
-        norm_df = norm_df[[ticker_x.upper(), ticker_y.upper()]]  # show only X & Y for clarity
+        # Determine which tickers to plot
+        overlay_tickers = [ticker_x.upper(), ticker_y.upper()]
+        if ticker_z.strip():
+            overlay_tickers.append(ticker_z.strip().upper())
+
+        # Normalise selected prices to 100 at window start
+        norm_df = price_slice[overlay_tickers].apply(normalize)
         norm_df = norm_df.reset_index().melt(id_vars="Date", var_name="Ticker", value_name="IndexedPrice")
 
         line_chart = (
@@ -136,10 +140,14 @@ for tab, label in zip(tabs, windows.keys()):
             .mark_line()
             .encode(
                 x="Date:T",
-                y=alt.Y("IndexedPrice:Q", title="Indexed Price (Base = 100)"),
+                y=alt.Y(
+                    "IndexedPrice:Q",
+                    title="Indexed Price (Base = 100)",
+                    scale=alt.Scale(nice=True),  # dynamic auto‑scale
+                ),
                 color=alt.Color("Ticker:N", legend=alt.Legend(title="Ticker")),
             )
-            .properties(height=300)
+            .properties(height=320)
         )
         st.altair_chart(line_chart, use_container_width=True)
 
@@ -158,7 +166,7 @@ if ticker_y.strip():
         .mark_line()
         .encode(
             x="Date:T",
-            y=alt.Y("Correlation:Q", title="Correlation"),
+            y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=[-1, 1])),
         )
         .properties(height=400)
     )
@@ -169,10 +177,10 @@ with st.expander("Methodology / Notes"):
     st.markdown(
         f"""
         • Pearson correlation on *daily log returns*.  
-        • Rolling window = **{roll_window}** trading days (≈ {roll_window/21:.1f} months).  
-        • Raw prices via **yfinance** (*Adj Close*); splits / dividends included.  
+        • Rolling window = **{roll_window}** trading days (≈ {roll_window/21:.1f} months).  
+        • Raw prices via **yfinance** (*Adj Close*); splits / dividends included.  
         • Missing rows dropped before calculation.
         """
     )
 
-st.caption("© 2025 AD Fund Management LP — Internal use only")
+st.caption("© 2025 AD Fund Management LP — Internal use only")
