@@ -1,14 +1,15 @@
 """
-Sector & Single‑Ticker Momentum — 3‑D Surface Explorer (v2)
+Sector & Single‑Ticker Momentum — 3‑D Surface Explorer (v3)
 Author: ChatGPT / Arya Deniz
 
-Bug‑fix release:
-• Robust alignment of Momentum vs Relative series (no KeyError)  
-• Convert DatetimeIndex to numpy before broadcasting (fix ValueError)  
-• Clean NaN rows post‑merge to guarantee rectangular Z matrix
+Clarified UI + richer annotations
+────────────────────────────────
+✓ Sidebar now includes a **"How to read this"** guide for quick context.  
+✓ Hover shows Date | Category | Return% (no extra box).  
+✓ Camera preset gives a cleaner oblique angle; layout widened.  
+✓ Color‑bar labelled clearly as "Return (%)".
 
-Still allows **Sector View** (11 GICS ETFs) or **Ticker View** (12/24/36‑month
-look‑backs) with Momentum or Relative metrics.
+Unchanged core: Sector & Ticker modes with Momentum / Relative metrics.
 """
 
 import datetime as dt
@@ -38,7 +39,7 @@ SECTORS = {
 LOOKBACK_WINDOWS: List[int] = [12, 24, 36]
 
 st.set_page_config(page_title="Momentum 3‑D Surface", layout="wide")
-st.title("📈 Sector & Ticker Momentum — 3‑D Surface (v2)")
+st.title("📈 Sector & Ticker Momentum — 3‑D Surface (v3)")
 
 # ═════════ Sidebar ═══════════════════════════════════════════════════════════
 with st.sidebar:
@@ -56,6 +57,18 @@ with st.sidebar:
     else:
         user_ticker = st.text_input("Ticker symbol", value="AAPL").upper().strip()
 
+    st.markdown("""
+### How to read this surface
+* **X‑axis** → Category (Sector symbol *or* 12│24│36‑month window).
+* **Y‑axis** → Month‑end date.
+* **Z‑axis** → Return (%).
+
+**Momentum** = trailing total return for the selected window.  
+**Relative** = excess return vs SPY (Ticker mode) or vs equal‑weight sector basket (Sector mode).
+
+Hover the surface to see precise values; rotate to spot leadership shifts and mean‑reversion.
+""")
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 @lru_cache(maxsize=8)
 def load_prices(tickers: tuple) -> pd.DataFrame:
@@ -67,79 +80,89 @@ def load_prices(tickers: tuple) -> pd.DataFrame:
     return df.dropna(how="all")
 
 # Date range
-end = pd.Timestamp.today().normalize()
-start = end - pd.DateOffset(years=years_back)
+today = pd.Timestamp.today().normalize()
+start = today - pd.DateOffset(years=years_back)
 
-# ── Sector View ──────────────────────────────────────────────────────────────
+# ═════════ Data prep ═════════════════════════════════════════════════════════
 if view_mode == "Sector View":
-    sector_px = load_prices(tuple(SECTORS.keys())).loc[start:end]
-    mpx = sector_px.resample("M").last()
-
+    raw_px = load_prices(tuple(SECTORS.keys())).loc[start:today]
+    mpx = raw_px.resample("M").last()
     mom = mpx / mpx.shift(momentum_window) - 1
     mom = mom.dropna(how="all")
 
-    # equal‑weight basket rel perf
     basket = (1 + mpx.pct_change()).cumprod().mean(axis=1)
-    rel = ( (1 + mpx.pct_change()).cumprod().div(basket, axis=0) - 1 ).dropna(how="all")
+    rel = ((1 + mpx.pct_change()).cumprod().div(basket, axis=0) - 1).dropna(how="all")
 
     z_df = mom if metric == "Momentum" else rel.reindex_like(mom)
     z_df = z_df.dropna(how="all")
 
     cats = list(SECTORS.keys())
     x_vals = np.arange(len(cats))
-    z = z_df[cats].values
+    x_labels = [SECTORS[t] for t in cats]
 
-# ── Ticker View ──────────────────────────────────────────────────────────────
-else:
+else:  # Ticker View
     tickers = (user_ticker, "SPY") if metric == "Relative" else (user_ticker,)
-    px = load_prices(tickers).loc[start:end]
+    px = load_prices(tickers).loc[start:today]
     mpx = px.resample("M").last()
 
-    # trailing returns dict
-    def trail(series: pd.Series, win: int) -> pd.Series:
+    def trailing(series: pd.Series, win: int) -> pd.Series:
         return series / series.shift(win) - 1
 
-    mom_cols = {f"{w}M": trail(mpx[user_ticker], w) for w in LOOKBACK_WINDOWS}
+    mom_cols = {f"{w}M": trailing(mpx[user_ticker], w) for w in LOOKBACK_WINDOWS}
     mom_df = pd.DataFrame(mom_cols)
 
     if metric == "Momentum":
         z_df = mom_df.dropna(how="all")
     else:
-        spy_cols = {w: trail(mpx["SPY"], w) for w in LOOKBACK_WINDOWS}
+        spy_cols = {w: trailing(mpx["SPY"], w) for w in LOOKBACK_WINDOWS}
         rel_df = pd.concat({f"{w}M": mom_cols[f"{w}M"] - spy_cols[w] for w in LOOKBACK_WINDOWS}, axis=1)
         z_df = rel_df.dropna(how="all")
 
     cats = [f"{w}M" for w in LOOKBACK_WINDOWS]
     x_vals = np.arange(len(cats))
-    z = z_df[cats].values
+    x_labels = cats
 
-# ── Common mesh ──────────────────────────────────────────────────────────────
-dates = z_df.index
-if dates.empty:
-    st.error("Not enough data for the selected parameters. Try reducing 'Years of history'.")
+# ── Build matrices for Plotly ────────────────────────────────────────────────
+if z_df.empty:
+    st.error("Not enough data after filtering. Try shorter history or different ticker.")
     st.stop()
 
+dates = z_df.index
+z = z_df[cats].values  # rectangular
 x_mat = np.tile(x_vals, (len(dates), 1))
 
-# Y‑axis numeric matrix
 y_num = (dates.astype("int64") // 10 ** 9).to_numpy()
 y_mat = np.tile(y_num[:, None], (1, len(cats)))
 
-# ── Plotly surface ───────────────────────────────────────────────────────────
-fig = go.Figure(go.Surface(z=z, x=x_mat, y=y_mat, colorscale="Viridis", showscale=True))
-
-x_labels = [SECTORS[t] for t in cats] if view_mode == "Sector View" else cats
+# ═════════ Plotly Surface ════════════════════════════════════════════════════
+fig = go.Figure(
+    go.Surface(
+        z=z,
+        x=x_mat,
+        y=y_mat,
+        colorscale="Viridis",
+        showscale=True,
+        colorbar=dict(title="Return (%)"),
+        hovertemplate="Date: %{customdata[0]}<br>Category: %{customdata[1]}<br>Return: %{z:.2%}<extra></extra>",
+        customdata=np.dstack([
+            np.tile(dates.strftime("%Y-%m-%d").to_numpy()[:, None], (1, len(cats))),
+            np.tile(np.array(x_labels)[None, :], (len(dates), 1)),
+        ]),
+    )
+)
 
 fig.update_layout(
     scene=dict(
+        camera=dict(eye=dict(x=1.6, y=1.6, z=0.9)),
         xaxis=dict(title="Category", tickmode="array", tickvals=x_vals, ticktext=x_labels),
         yaxis=dict(
             title="Date",
             tickmode="array",
             tickvals=y_num[:: max(1, len(y_num) // 10)],
-            ticktext=[d.strftime("%Y-%m-%d") for d in dates][:: max(1, len(dates) // 10)],
+            ticktext=[d.strftime("%Y‑%m‑%d") for d in dates][:: max(1, len(dates) // 10)],
         ),
-        zaxis_title="Return (%)",
+        zaxis=dict(title="Return (%)"),
+        aspectratio=dict(x=1.2, y=2.0, z=0.7),
     ),
     margin=dict(l=0, r=0, b=0, t=40),
 )
@@ -148,6 +171,6 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ── Caption ──────────────────────────────────────────────────────────────────
 if view_mode == "Sector View":
-    st.caption(f"Sector View | {metric} | Window: {momentum_window}‑month | Rotate to inspect leadership rotations.")
+    st.caption(f"Sector View │ {metric} │ {momentum_window}-month window")
 else:
-    st.caption(f"Ticker View | {user_ticker} | {metric} | Horizons: 12/24/36‑month | Rotate to compare paths versus SPY.")
+    st.caption(f"Ticker View │ {user_ticker} │ {metric} │ Horizons: 12/24/36‑month")
