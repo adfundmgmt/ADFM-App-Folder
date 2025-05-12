@@ -282,3 +282,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# ── Footnotes ───────────────────────────────────────────────────────────────
+
+st.caption("© 2025 AD Fund Management LP")
