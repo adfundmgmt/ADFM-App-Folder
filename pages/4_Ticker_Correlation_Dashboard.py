@@ -27,19 +27,20 @@ st.title("📈 Correlation Dashboard")
 
 # ── Sidebar: About + Inputs ─────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ℹ️ About this tool")
+    st.markdown("## About This Tool")
     st.markdown(
         """
         **Purpose**  
-        Provide an at‑a‑glance view of historical and rolling correlations to support relative‑value
-        work, diversification checks, and position sizing.
+    This dashboard provides a fast, visual reference for understanding how two or more tickers move in relation to one another over various timeframes. It is intended to support relative-value analysis, correlation-aware risk sizing, and macro regime tracking.
 
-        **Key features**  
-        • Pearson correlations on *daily log returns* for eight windows (YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, 10 y).  
-        • Dynamic overlay charts of the selected tickers for each window.  
-        • Rolling‑window correlation line to monitor regime shifts.  
-        • Live data sourced via **yfinance** (*Adj Close*).
-        """
+    **Core Capabilities**  
+    • Computes **Pearson correlations** on *daily log returns* across eight standard windows:  
+      **YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, and 10 y**.  
+    • Renders **indexed price overlay charts** per window to visualize comparative price action.  
+    • Includes a **rolling correlation plot** (user-defined window) to monitor structural shifts in asset relationships.  
+    • Uses live, split- and dividend-adjusted data from **Yahoo Finance** (*Adj Close* field).  
+    """
+)
     )
     st.markdown("---")
 
