@@ -2,9 +2,9 @@
 """
 Correlation Dashboard — AD Fund Management LP
 --------------------------------------------
-Quantify how **Ticker X** co‑moves with **Ticker Y** (plus optional **Index Z**) across five standard windows
-(YTD, 12 m, 24 m, 36 m, 60 m) and monitor rolling correlation. Designed as a quick reference for
-portfolio construction and risk alignment.
+Quantify how **Ticker X** co‑moves with **Ticker Y** (plus optional **Index Z**) across eight
+look‑back windows (YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, 10 y) and monitor rolling correlation. Designed as a
+quick reference for portfolio construction and risk alignment.
 """
 
 import datetime as dt
@@ -35,9 +35,9 @@ with st.sidebar:
         work, diversification checks, and position sizing.
 
         **Key features**  
-        • Pearson correlations on *daily log returns* for five windows (YTD, 12 / 24 / 36 / 60 m).  
-        • Window‑specific overlay charts of the selected tickers with dynamic axes.  
-        • Rolling‑window correlation line for regime tracking.  
+        • Pearson correlations on *daily log returns* for eight windows (YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, 10 y).  
+        • Dynamic overlay charts of the selected tickers for each window.  
+        • Rolling‑window correlation line to monitor regime shifts.  
         • Live data sourced via **yfinance** (*Adj Close*).
         """
     )
@@ -48,7 +48,6 @@ with st.sidebar:
     ticker_y = st.text_input("Ticker Y", value="MSFT")
     ticker_z = st.text_input("Index Z (optional)", value="^GSPC", help="Benchmark / index — leave blank to skip.")
 
-    years_back = st.slider("Data history (years)", 1, 10, value=6)
     roll_window = st.slider("Rolling window (days)", 20, 120, value=60)
 
 # ── Helper functions ─────────────────────────────────────────────────────────
@@ -88,28 +87,33 @@ def normalize(prices: pd.Series) -> pd.Series:
 
 # ── Data download ────────────────────────────────────────────────────────────
 end_date = dt.date.today()
-start_date = end_date - relativedelta(years=years_back)
+
+# Define look‑back windows
+windows = {
+    "YTD": dt.date(end_date.year, 1, 1),
+    "3 m": end_date - relativedelta(months=3),
+    "6 m": end_date - relativedelta(months=6),
+    "9 m": end_date - relativedelta(months=9),
+    "1 y": end_date - relativedelta(years=1),
+    "3 y": end_date - relativedelta(years=3),
+    "5 y": end_date - relativedelta(years=5),
+    "10 y": end_date - relativedelta(years=10),
+}
+
+# Fetch data back to earliest window (add 1 month cushion)
+earliest_date = min(windows.values()) - relativedelta(months=1)
 
 symbols = [ticker_x.strip().upper(), ticker_y.strip().upper()]
 if ticker_z.strip():
     symbols.append(ticker_z.strip().upper())
 
-prices = fetch_prices(symbols, start=start_date, end=end_date)
+prices = fetch_prices(symbols, start=earliest_date, end=end_date)
 
 if prices.empty:
     st.error("No price data returned — check tickers and try again.")
     st.stop()
 
 returns = log_returns(prices)
-
-# ── Look‑back windows ───────────────────────────────────────────────────────
-windows = {
-    "YTD": dt.date(end_date.year, 1, 1),
-    "12 m": end_date - relativedelta(months=12),
-    "24 m": end_date - relativedelta(months=24),
-    "36 m": end_date - relativedelta(months=36),
-    "60 m": end_date - relativedelta(months=60),
-}
 
 # ── Correlation + Price Overlay by Window ───────────────────────────────────
 st.subheader("Window‑Specific Correlation & Price Paths")
@@ -121,17 +125,17 @@ for tab, label in zip(tabs, windows.keys()):
 
     price_slice = slice_since(prices, since)
     ret_slice = slice_since(returns, since)
+
+    # Correlation only between X & Y
     corr_value = ret_slice.corr().loc[ticker_x.upper(), ticker_y.upper()].round(3)
 
     with tab:
         st.markdown(f"**{label}** window starting {since} — **Correlation (X vs Y): {corr_value}**")
 
-        # Determine which tickers to plot
         overlay_tickers = [ticker_x.upper(), ticker_y.upper()]
         if ticker_z.strip():
             overlay_tickers.append(ticker_z.strip().upper())
 
-        # Normalise selected prices to 100 at window start
         norm_df = price_slice[overlay_tickers].apply(normalize)
         norm_df = norm_df.reset_index().melt(id_vars="Date", var_name="Ticker", value_name="IndexedPrice")
 
@@ -140,11 +144,7 @@ for tab, label in zip(tabs, windows.keys()):
             .mark_line()
             .encode(
                 x="Date:T",
-                y=alt.Y(
-                    "IndexedPrice:Q",
-                    title="Indexed Price (Base = 100)",
-                    scale=alt.Scale(nice=True),  # dynamic auto‑scale
-                ),
+                y=alt.Y("IndexedPrice:Q", title="Indexed Price (Base = 100)", scale=alt.Scale(nice=True)),
                 color=alt.Color("Ticker:N", legend=alt.Legend(title="Ticker")),
             )
             .properties(height=320)
@@ -178,8 +178,8 @@ with st.expander("Methodology / Notes"):
         f"""
         • Pearson correlation on *daily log returns*.  
         • Rolling window = **{roll_window}** trading days (≈ {roll_window/21:.1f} months).  
-        • Raw prices via **yfinance** (*Adj Close*); splits / dividends included.  
-        • Missing rows dropped before calculation.
+        • Prices via **yfinance** (*Adj Close*); splits / dividends included.  
+        • Missing rows dropped prior to calculation.
         """
     )
 
