@@ -28,7 +28,7 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 START_YEAR = 1980
 TRADING_DAYS_FULL_YEAR = 253
 
-st.set_page_config(page_title="YTD Correlation Dashboard", layout="wide")
+st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
 ###############################################################################
 # Optional logo (comment out if not needed)
