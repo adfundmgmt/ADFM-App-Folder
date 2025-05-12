@@ -34,8 +34,7 @@ with st.sidebar:
     This dashboard provides a fast, visual reference for understanding how two or more tickers move in relation to one another over various timeframes. It is intended to support relative-value analysis, correlation-aware risk sizing, and macro regime tracking.
 
     **Core Capabilities**  
-    • Computes **Pearson correlations** on *daily log returns* across eight standard windows:  
-      **YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, and 10 y**.  
+    • Computes **Pearson correlations** on *daily log returns* across eight standard windows: **YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, and 10 y**.  
     • Renders **indexed price overlay charts** per window to visualize comparative price action.  
     • Includes a **rolling correlation plot** (user-defined window) to monitor structural shifts in asset relationships.  
     • Uses live, split- and dividend-adjusted data from **Yahoo Finance** (*Adj Close* field).  
