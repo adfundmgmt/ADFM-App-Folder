@@ -273,15 +273,6 @@ st.pyplot(fig)
 ###############################################################################
 # Footer
 ###############################################################################
-st.markdown(
-    """
-    <hr style='margin-top:50px;margin-bottom:10px;'>
-    <div style='text-align:center;color:gray;font-size:13px;'>
-        © 2025 AD Fund Management LP
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
 # ── Footnotes ───────────────────────────────────────────────────────────────
 
