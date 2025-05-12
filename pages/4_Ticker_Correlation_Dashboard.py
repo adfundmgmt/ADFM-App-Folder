@@ -31,18 +31,17 @@ with st.sidebar:
     st.markdown(
         """
         **Purpose**  
-    This dashboard provides a fast, visual reference for understanding how two or more tickers move in relation to one another over various timeframes. It is intended to support relative-value analysis, correlation-aware risk sizing, and macro regime tracking.
+        Provide an at-a-glance view of historical and rolling correlations to streamline relative-value
+        analysis, diversification checks, and position sizing.
 
-    **Core Capabilities**  
-    • Computes **Pearson correlations** on *daily log returns* across eight standard windows: **YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, and 10 y**.  
-    • Renders **indexed price overlay charts** per window to visualize comparative price action.  
-    • Includes a **rolling correlation plot** (user-defined window) to monitor structural shifts in asset relationships.  
-    • Uses live, split- and dividend-adjusted data from **Yahoo Finance** (*Adj Close* field).  
-    """
-)
+        **Core capabilities**  
+        • Computes **Pearson correlations** on *daily log returns* for eight preset windows: **YTD, 3 m, 6 m, 9 m, 1 y, 3 y, 5 y, 10 y**.  
+        • Displays **indexed price overlays** for each window so you can eyeball path similarity and drift.  
+        • Plots a **rolling correlation line** (user-defined look-back) to flag structural regime shifts.  
+        • Pulls live, split- and dividend-adjusted data from **Yahoo Finance** (Adj Close).  
+        """
     )
     st.markdown("---")
-
     st.header("Inputs")
     ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security to analyse.")
     ticker_y = st.text_input("Ticker Y", value="MSFT")
