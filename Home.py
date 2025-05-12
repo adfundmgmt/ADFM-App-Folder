@@ -11,7 +11,7 @@ These are straightforward, proprietary tools we’ve built in-house to support o
 
 ---
 
-### 🛠 Tools Available (use the sidebar to launch):
+### Tools Available (use the sidebar to launch):
 
 - **Monthly Seasonality Explorer**  
   Looks at median monthly returns and hit rates for any stock, index, or commodity. Pulls from Yahoo Finance and FRED for deeper historical data. Helps us stay aware of recurring calendar trends and seasonality biases.
