@@ -2,8 +2,9 @@
 """
 Correlation Dashboard — AD Fund Management LP
 --------------------------------------------
-Gauge how **Ticker X** moves with **Ticker Y** (plus an optional benchmark **Index Z**) across five standard
-windows (YTD, 12 m, 24 m, 36 m, 60 m) and inspect a rolling correlation line. Built for quick intuition.
+Quantify how **Ticker X** co‑moves with **Ticker Y** (plus an optional benchmark **Index Z**) across five
+standard windows — YTD, 12 m, 24 m, 36 m, and 60 m — and view a rolling correlation trace. Designed as a
+lightweight, real‑time reference for portfolio construction and risk alignment.
 """
 
 import datetime as dt
@@ -29,29 +30,25 @@ with st.sidebar:
     st.markdown("## ℹ️ About this tool")
     st.markdown(
         """
-        **What it does**  
-        • Pearson correlations on *daily log returns*.  
-        • Windows: **YTD / 12 / 24 / 36 / 60 months**.  
-        • Rolling‑window chart to watch correlation drift.  
+        **Purpose**  
+        Provide an at‑a‑glance view of historical and rolling correlations to inform relative‑value
+        analysis, diversification checks, and position sizing.
 
-        **Why we care**  
-        Quick pulse on diversification, pair trades, and regime shifts.
+        **Key features**  
+        • Pearson correlations on *daily log returns* for five look‑back windows (YTD, 12 / 24 / 36 / 60 m).  
+        • Interactive heat‑maps and a rolling‑window line chart.  
+        • Data sourced on‑the‑fly from **yfinance** using adjusted closes (splits / dividends reflected).  
         """
     )
     st.markdown("---")
 
     st.header("Inputs")
-    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security to analyse.")
-    ticker_y = st.text_input("Ticker Y", value="MSFT")
-    ticker_z = st.text_input("Index Z (optional)", value="^GSPC", help="Benchmark / index — leave blank to skip.")
+    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security to analyse.")
+    ticker_y = st.text_input("Ticker Y", value="MSFT")
+    ticker_z = st.text_input("Index Z (optional)", value="^GSPC", help="Benchmark / index — leave blank to skip.")
 
     years_back = st.slider("Data history (years)", 1, 10, value=6)
     roll_window = st.slider("Rolling window (days)", 20, 120, value=60)
-
-    run = st.button("Run Analysis")
-
-if not run:
-    st.stop()
 
 # ── Helper functions ─────────────────────────────────────────────────────────
 
@@ -68,6 +65,7 @@ def fetch_prices(symbols: list[str], start: dt.date, end: dt.date) -> pd.DataFra
     if raw.empty:
         return pd.DataFrame()
 
+    # Multi‑ticker download returns a MultiIndex; single ticker returns a Series/DF
     if isinstance(raw.columns, pd.MultiIndex):
         adj = raw["Adj Close"].copy()
         adj.columns = adj.columns.get_level_values(0)
@@ -103,16 +101,18 @@ returns = log_returns(prices)
 # ── Look‑back windows ───────────────────────────────────────────────────────
 windows = {
     "YTD": dt.date(end_date.year, 1, 1),
-    "12 m": end_date - relativedelta(months=12),
-    "24 m": end_date - relativedelta(months=24),
-    "36 m": end_date - relativedelta(months=36),
-    "60 m": end_date - relativedelta(months=60),
+    "12 m": end_date - relativedelta(months=12),
+    "24 m": end_date - relativedelta(months=24),
+    "36 m": end_date - relativedelta(months=36),
+    "60 m": end_date - relativedelta(months=60),
 }
 
 # ── Correlation matrices & heat‑maps ────────────────────────────────────────
 st.subheader("Correlation Matrix (daily log returns)")
 
 tabs = st.tabs(list(windows.keys()))
+
+ticker_order = returns.columns.tolist()
 
 for tab, label in zip(tabs, windows.keys()):
     since = windows[label]
@@ -123,7 +123,7 @@ for tab, label in zip(tabs, windows.keys()):
         st.write(f"**{label}** window starting {since}")
         st.dataframe(corr, use_container_width=True)
 
-        # Heat‑map visual: build tidy frame safely
+        # Heat‑map visual
         heat_df = corr.copy()
         heat_df["Ticker1"] = heat_df.index
         heat_tidy = heat_df.melt(id_vars="Ticker1", var_name="Ticker2", value_name="Correlation")
@@ -132,14 +132,18 @@ for tab, label in zip(tabs, windows.keys()):
             alt.Chart(heat_tidy)
             .mark_rect()
             .encode(
-                x=alt.X("Ticker1:O", title=""),
-                y=alt.Y("Ticker2:O", title=""),
-                color=alt.Color("Correlation:Q", scale=alt.Scale(scheme="redyellowblue", domain=[-1, 1])),
+                x=alt.X("Ticker1:O", sort=ticker_order, title=""),
+                y=alt.Y("Ticker2:O", sort=ticker_order, title=""),
+                color=alt.Color(
+                    "Correlation:Q",
+                    scale=alt.Scale(scheme="blueorange", domain=[-1, 0, 1]),
+                    legend=alt.Legend(orient="right"),
+                ),
                 tooltip=["Ticker1", "Ticker2", "Correlation"],
             )
-            .properties(height=200)
+            .properties(width=200, height=200)
         )
-        st.altair_chart(heat_chart, use_container_width=True)
+        st.altair_chart(heat_chart, use_container_width=False)
 
 # ── Rolling correlation chart ───────────────────────────────────────────────
 if ticker_y.strip():
@@ -166,11 +170,12 @@ if ticker_y.strip():
 with st.expander("Methodology / Notes"):
     st.markdown(
         f"""
-        • **Pearson correlation** on *daily log returns*.  
-        • Rolling window = **{roll_window}** trading days (≈ {roll_window/21:.1f} months).  
-        • Prices via **yfinance** (*Adj Close*) — splits/dividends baked in.  
-        • Missing rows dropped before calc.
+        • Pearson correlation on *daily log returns*.  
+        • Rolling window = **{roll_window}** trading days (≈ {roll_window/21:.1f} months).  
+        • Raw prices via **yfinance** (*Adj Close*).  
+        • Splits / dividends automatically reflected.  
+        • Missing data rows dropped prior to calculation.
         """
     )
 
-st.caption("© 2025 AD Fund Management LP — Internal use only")
+st.caption("© 2025 AD Fund Management LP — Internal use only")
