@@ -43,7 +43,7 @@ if LOGO_PATH.exists():
 st.markdown(
     """
     <h1 style='text-align:center;color:#1f77b4;font-size:42px;'>
-        YTD Analog Year Correlation Explorer
+        Market Memory Explorer
     </h1>
     <h4 style='text-align:center;color:gray;'>
         Compare the current year's return path with history
