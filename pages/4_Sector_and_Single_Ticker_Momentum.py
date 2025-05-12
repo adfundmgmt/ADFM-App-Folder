@@ -1,18 +1,18 @@
 """
-Monthly Seasonality Surface — 3-D Explorer (v1)
-Author: ChatGPT / Arya Deniz
+Monthly Seasonality Surface — 3‑D Explorer (v1)
+Author: ChatGPT / Arya Deniz
 
 Purpose
 ───────
 Visualise a security’s **monthly return seasonality** across years in an
-interactive 3-D surface:
+interactive 3‑D surface:
 
-* **x-axis**  → Month (Jan … Dec)
-* **y-axis**  → Calendar year
-* **z-axis**  → Total return for that month (%)
+* **x‑axis**  → Month (Jan … Dec)
+* **y‑axis**  → Calendar year
+* **z‑axis**  → Total return for that month (%)
 
 Actionable uses:
-• Spot persistent positive/negative months (fade or front-run flows)  
+• Spot persistent positive/negative months (fade or front‑run flows)  
 • Identify regime shifts when seasonality flips sign  
 • Compare assets quickly — just change the ticker.
 
@@ -32,8 +32,8 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="Monthly Seasonality 3-D", layout="wide")
-st.title("📅 Monthly Seasonality — 3-D Surface")
+st.set_page_config(page_title="Monthly Seasonality 3‑D", layout="wide")
+st.title("📅 Monthly Seasonality — 3‑D Surface")
 
 # ═════════ Sidebar ═══════════════════════════════════════════════════════════
 with st.sidebar:
@@ -47,9 +47,9 @@ with st.sidebar:
 
     st.markdown("""
 ### How to read
-* **X-axis** = Month (1-12)
-* **Y-axis** = Year
-* **Z-axis** = Monthly % return (or hit-rate 0-1)
+* **X‑axis** = Month (1‑12)
+* **Y‑axis** = Year
+* **Z‑axis** = Monthly % return (or hit‑rate 0‑1)
 
 Rotate to view amplitude; hover for exact numbers.
 """)
@@ -69,15 +69,19 @@ if prices.empty:
 
 # monthly end prices & pct change
 mclose = prices.resample("M").last()
-ret = mclose.pct_change().dropna()
+ret_raw = mclose.pct_change().dropna()
+
+# ensure we have a **Series** (yfinance sometimes returns a 1‑col DataFrame)
+if isinstance(ret_raw, pd.DataFrame):
+    ret_raw = ret_raw.iloc[:, 0]
 
 # pivot: rows=year, cols=month
-ret_df = ret.to_frame("ret")
+ret_df = ret_raw.to_frame("ret")
 ret_df["Year"] = ret_df.index.year
 ret_df["Month"] = ret_df.index.month
-pivot = ret_df.pivot(index="Year", columns="Month", values="ret")
+pivot = ret_df.pivot(index="Year", columns="Month", values="ret")(index="Year", columns="Month", values="ret")
 
-# ensure full month columns 1-12
+# ensure full month columns 1‑12
 pivot = pivot.reindex(columns=range(1, 13))
 
 if metric == "Hit Rate":
@@ -89,7 +93,7 @@ else:
 years = pivot.index.to_numpy()
 months = np.arange(1, 13)
 
-# 3-D grid matrices
+# 3‑D grid matrices
 x_mat = np.tile(months, (len(years), 1))
 y_mat = np.tile(years[:, None], (1, len(months)))
 
