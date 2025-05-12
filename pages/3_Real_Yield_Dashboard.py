@@ -113,3 +113,7 @@ fig.update_layout(
 fig.update_xaxes(tickformat="%b-%y", row=2, col=1, title="Date")
 
 st.plotly_chart(fig, use_container_width=True)
+
+# ── Footnotes ───────────────────────────────────────────────────────────────
+
+st.caption("© 2025 AD Fund Management LP")
