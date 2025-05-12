@@ -1,24 +1,24 @@
 """
-SPX Implied Volatility Surface — 3-D Explorer (v1)
-Author: ChatGPT / Arya Deniz
+SPX Implied Volatility Surface — 3‑D Explorer (v1)
+Author: ChatGPT / Arya Deniz
 
-This Streamlit page pulls option-chain data for the S&P 500 index (ticker
-`^SPX`) from Yahoo Finance via *yfinance* and renders a 3-D implied-volatility
+This Streamlit page pulls option‑chain data for the S&P 500 index (ticker
+`^SPX`) from Yahoo Finance via *yfinance* and renders a 3‑D implied‑volatility
 surface:
 
-* **x-axis**  → Moneyness (strike / spot − 1)
-* **y-axis**  → Days-to-expiry
-* **z-axis**  → Implied volatility (σ)
+* **x‑axis**  → Moneyness (strike / spot − 1)
+* **y‑axis**  → Days‑to‑expiry
+* **z‑axis**  → Implied volatility (σ)
 
 Why it’s actionable
 ──────────────────
-• Spot smile/skew differences between near-dated and far-dated maturity wings.  
-• Identify term-structure kinks (e.g., event risk priced into a single expiry).  
+• Spot smile/skew differences between near‑dated and far‑dated maturity wings.  
+• Identify term‑structure kinks (e.g., event risk priced into a single expiry).  
 • Compare surface shape across dates (save a screenshot, rerun tomorrow).
 
 Dependencies
 ────────────
-› streamlit ≥ 1.30  • yfinance ≥ 0.2  • plotly ≥ 5.20  • pandas ≥ 2.2  • numpy
+› streamlit ≥ 1.30  • yfinance ≥ 0.2  • plotly ≥ 5.20  • pandas ≥ 2.2  • numpy
 """
 
 from datetime import datetime
@@ -32,7 +32,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title="SPX Volatility Surface", layout="wide")
-st.title("📈 SPX Implied Volatility — 3-D Surface")
+st.title("📈 SPX Implied Volatility — 3‑D Surface")
 
 # ═════════ Sidebar Controls ═════════════════════════════════════════════════
 with st.sidebar:
@@ -43,11 +43,11 @@ with st.sidebar:
 
     st.markdown("""
 ### How to read
-* **X** = (strike / spot − 1). 0 = ATM; 0.1 ≈ 10 % OTM calls; −0.1 ≈ 10 % OTM puts.
-* **Y** = calendar days until option expiry.
-* **Z** = Black-Scholes implied volatility (σ).
+* **X** = (strike / spot − 1). 0 = ATM; 0.1 ≈ 10 % OTM calls; −0.1 ≈ 10 % OTM puts.
+* **Y** = calendar days until option expiry.
+* **Z** = Black‑Scholes implied volatility (σ).
 
-Rotate, zoom, and hover to inspect skew and term-structure.
+Rotate, zoom, and hover to inspect skew and term‑structure.
 """)
 
 # ═════════ Data Helpers ═════════════════════════════════════════════════════
@@ -75,7 +75,20 @@ def fetch_chain(expiry: str) -> pd.DataFrame:
 spot_px = get_spx_price()
 all_exps = list_expirations()[:max_expiries]
 
-frames = [fetch_chain(exp) for exp in all_exps]
+frames: list[pd.DataFrame] = []
+for exp in all_exps:
+    try:
+        df = fetch_chain(exp)
+        if not df.empty:
+            frames.append(df)
+    except Exception:
+        # ignore expiries that fail to download / parse
+        continue
+
+if not frames:
+    st.error("No option data available for the selected expiries. Try widening the date range or come back later.")
+    st.stop()
+
 raw = pd.concat(frames, ignore_index=True)
 
 # filter by moneyness band
@@ -129,7 +142,7 @@ fig = go.Figure(
 fig.update_layout(
     scene=dict(
         camera=dict(eye=dict(x=1.6, y=1.6, z=0.9)),
-        xaxis=dict(title="Moneyness (strike / spot − 1)", tickformat=".0%"),
+        xaxis=dict(title="Moneyness (strike / spot − 1)", tickformat=".0%"),
         yaxis=dict(title="Days to Expiry"),
         zaxis=dict(title="Implied Vol (%)"),
         aspectratio=dict(x=1.3, y=1.6, z=0.7),
