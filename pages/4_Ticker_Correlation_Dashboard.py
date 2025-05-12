@@ -91,13 +91,13 @@ end_date = dt.date.today()
 # Define look‑back windows
 windows = {
     "YTD": dt.date(end_date.year, 1, 1),
-    "3 m": end_date - relativedelta(months=3),
-    "6 m": end_date - relativedelta(months=6),
-    "9 m": end_date - relativedelta(months=9),
-    "1 y": end_date - relativedelta(years=1),
-    "3 y": end_date - relativedelta(years=3),
-    "5 y": end_date - relativedelta(years=5),
-    "10 y": end_date - relativedelta(years=10),
+    "3 Months": end_date - relativedelta(months=3),
+    "6 Months": end_date - relativedelta(months=6),
+    "9 Months": end_date - relativedelta(months=9),
+    "1 Year": end_date - relativedelta(years=1),
+    "3 Years": end_date - relativedelta(years=3),
+    "5 Years": end_date - relativedelta(years=5),
+    "10 Years": end_date - relativedelta(years=10),
 }
 
 # Fetch data back to earliest window (add 1 month cushion)
@@ -173,14 +173,5 @@ if ticker_y.strip():
     st.altair_chart(line_chart_roll, use_container_width=True)
 
 # ── Footnotes ───────────────────────────────────────────────────────────────
-with st.expander("Methodology / Notes"):
-    st.markdown(
-        f"""
-        • Pearson correlation on *daily log returns*.  
-        • Rolling window = **{roll_window}** trading days (≈ {roll_window/21:.1f} months).  
-        • Prices via **yfinance** (*Adj Close*); splits / dividends included.  
-        • Missing rows dropped prior to calculation.
-        """
-    )
 
 st.caption("© 2025 AD Fund Management LP — Internal use only")
