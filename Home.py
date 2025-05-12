@@ -5,24 +5,24 @@ st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
 st.title("AD Fund Management LP — Analytics Suite")
 
 st.markdown("""
-Welcome to the internal analytics and visualization platform of **AD Fund Management LP** — a tactical decision support system built to translate market noise into signal.
+Welcome to the internal analytics dashboard for **AD Fund Management LP**.
 
-This suite of proprietary tools empowers the investment team to track historical analogs, spot inflection points in macro regimes, and uncover recurring patterns across asset classes. Designed for speed, clarity, and insight, these modules help reinforce high-conviction positioning in real time.
+These are straightforward, proprietary tools we’ve built in-house to support our daily decision-making. The goal is simple: make it easier to spot patterns, track shifts, and move faster with more context.
 
 ---
 
-### Available Dashboards
+### 🛠 Tools Available (use the sidebar to launch):
 
 - **Monthly Seasonality Explorer**  
-  Identify consistent return patterns by visualizing **median monthly performance** and **hit rates** across equities, indices, and commodities. Pulls data from Yahoo Finance, with deep historical coverage via FRED for major benchmarks like the S&P 500, Nasdaq, and Dow. Helps isolate seasonal strength/weakness and guide timing decisions.
+  Looks at median monthly returns and hit rates for any stock, index, or commodity. Pulls from Yahoo Finance and FRED for deeper historical data. Helps us stay aware of recurring calendar trends and seasonality biases.
 
 - **YTD Analog Year Correlation Explorer**  
-  Compares the **year-to-date trajectory** of a chosen ticker to historical paths with the **highest correlation**, enabling rapid discovery of similar past environments. Useful for scenario planning, expectation anchoring, and understanding the behavioral structure of the current tape.
+  Compares how this year is tracking versus past years with similar return paths. Useful for putting the current tape in historical context and building intuition around where we might go next.
 
 - **10-Year Yield Dashboard**  
-  Plots **nominal** and **real 10-year Treasury yields** alongside the **inverted 63-day momentum of real yields** to flag potential regime shifts. Built to highlight the transition points between tightening and easing cycles—this dashboard serves as a leading macro overlay for both equity and rates positioning.
+  Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
 
 ---
 
-These tools are in continuous development and tailored to the evolving strategy of ADFM. They serve as a foundation for research, narrative building, and timely risk/reward calibration. Feedback, feature ideas, and bug reports are always welcome.
+These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast-moving markets. Always a work in progress—open to feedback or feature ideas.
 """)
