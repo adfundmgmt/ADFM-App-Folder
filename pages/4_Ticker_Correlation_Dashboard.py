@@ -173,4 +173,4 @@ if ticker_y.strip():
 
 # ── Footnotes ───────────────────────────────────────────────────────────────
 
-st.caption("© 2025 AD Fund Management LP — Internal use only")
+st.caption("© 2025 AD Fund Management LP")
