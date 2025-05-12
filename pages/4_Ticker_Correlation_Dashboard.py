@@ -2,9 +2,8 @@
 """
 Correlation Dashboard — AD Fund Management LP
 --------------------------------------------
-Quickly measure how **Ticker X** moves with **Ticker Y** (and an optional benchmark **Index Z**) across
-five look‑back windows (YTD, 12 m, 24 m, 36 m, 60 m). Built for fast intuition‑building rather than
-heavy‑duty quant work.
+Gauge how **Ticker X** moves with **Ticker Y** (plus an optional benchmark **Index Z**) across five standard
+windows (YTD, 12 m, 24 m, 36 m, 60 m) and inspect a rolling correlation line. Built for quick intuition.
 """
 
 import datetime as dt
@@ -25,23 +24,22 @@ st.set_page_config(
 
 st.title("📈 Correlation Dashboard")
 
-# ── About this tool ──────────────────────────────────────────────────────────
-with st.expander("ℹ️ About this tool", expanded=False):
+# ── Sidebar: About + Inputs ─────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## ℹ️ About this tool")
     st.markdown(
         """
         **What it does**  
-        • Calculates **Pearson correlations** on *daily log returns* for the selected tickers.  
-        • Shows the numbers for five standard windows **(YTD / 12 / 24 / 36 / 60 months)**.  
-        • Plots a **rolling‑window correlation** line so you can see how relationships evolve.  
+        • Pearson correlations on *daily log returns*.  
+        • Windows: **YTD / 12 / 24 / 36 / 60 months**.  
+        • Rolling‑window chart to watch correlation drift.  
 
-        **Why it matters**  
-        We use correlation as a first‑pass gauge of diversification and regime shifts.  
-        Having the numbers one click away helps sanity‑check position sizing and basket risk.
+        **Why we care**  
+        Quick pulse on diversification, pair trades, and regime shifts.
         """
     )
+    st.markdown("---")
 
-# ── Sidebar inputs ───────────────────────────────────────────────────────────
-with st.sidebar:
     st.header("Inputs")
     ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security to analyse.")
     ticker_y = st.text_input("Ticker Y", value="MSFT")
@@ -58,7 +56,7 @@ if not run:
 # ── Helper functions ─────────────────────────────────────────────────────────
 
 def fetch_prices(symbols: list[str], start: dt.date, end: dt.date) -> pd.DataFrame:
-    """Download daily *adjusted close* prices."""
+    """Download adjusted‑close prices for the symbols."""
     raw = yf.download(
         symbols,
         start=start,
@@ -70,7 +68,6 @@ def fetch_prices(symbols: list[str], start: dt.date, end: dt.date) -> pd.DataFra
     if raw.empty:
         return pd.DataFrame()
 
-    # MultiIndex → pick Adj Close and flatten
     if isinstance(raw.columns, pd.MultiIndex):
         adj = raw["Adj Close"].copy()
         adj.columns = adj.columns.get_level_values(0)
@@ -112,7 +109,7 @@ windows = {
     "60 m": end_date - relativedelta(months=60),
 }
 
-# ── Correlation matrices ────────────────────────────────────────────────────
+# ── Correlation matrices & heat‑maps ────────────────────────────────────────
 st.subheader("Correlation Matrix (daily log returns)")
 
 tabs = st.tabs(list(windows.keys()))
@@ -126,14 +123,13 @@ for tab, label in zip(tabs, windows.keys()):
         st.write(f"**{label}** window starting {since}")
         st.dataframe(corr, use_container_width=True)
 
-        # Heatmap visual
-        heat_data = (
-            corr.reset_index()
-            .melt(id_vars="index", var_name="Ticker2", value_name="Correlation")
-            .rename(columns={"index": "Ticker1"})
-        )
-        heat = (
-            alt.Chart(heat_data)
+        # Heat‑map visual: build tidy frame safely
+        heat_df = corr.copy()
+        heat_df["Ticker1"] = heat_df.index
+        heat_tidy = heat_df.melt(id_vars="Ticker1", var_name="Ticker2", value_name="Correlation")
+
+        heat_chart = (
+            alt.Chart(heat_tidy)
             .mark_rect()
             .encode(
                 x=alt.X("Ticker1:O", title=""),
@@ -143,17 +139,20 @@ for tab, label in zip(tabs, windows.keys()):
             )
             .properties(height=200)
         )
-        st.altair_chart(heat, use_container_width=True)
+        st.altair_chart(heat_chart, use_container_width=True)
 
 # ── Rolling correlation chart ───────────────────────────────────────────────
 if ticker_y.strip():
-    ser_corr = returns[ticker_x.upper()].rolling(roll_window).corr(returns[ticker_y.upper()])
-    ser_corr = ser_corr.dropna().to_frame(name="Correlation")
+    rolling_corr = (
+        returns[ticker_x.upper()].rolling(roll_window).corr(returns[ticker_y.upper()])
+        .dropna()
+        .to_frame(name="Correlation")
+    )
 
     st.subheader(f"Rolling {roll_window}-day Correlation — {ticker_x.upper()} vs {ticker_y.upper()}")
 
-    line = (
-        alt.Chart(ser_corr.reset_index())
+    line_chart = (
+        alt.Chart(rolling_corr.reset_index())
         .mark_line()
         .encode(
             x="Date:T",
@@ -161,7 +160,7 @@ if ticker_y.strip():
         )
         .properties(height=400)
     )
-    st.altair_chart(line, use_container_width=True)
+    st.altair_chart(line_chart, use_container_width=True)
 
 # ── Footnotes ───────────────────────────────────────────────────────────────
 with st.expander("Methodology / Notes"):
@@ -169,9 +168,8 @@ with st.expander("Methodology / Notes"):
         f"""
         • **Pearson correlation** on *daily log returns*.  
         • Rolling window = **{roll_window}** trading days (≈ {roll_window/21:.1f} months).  
-        • Data via **yfinance** (*Adj Close*).  
-        • Splits/dividends are automatically accounted for.  
-        • Any missing rows are dropped prior to calculation.
+        • Prices via **yfinance** (*Adj Close*) — splits/dividends baked in.  
+        • Missing rows dropped before calc.
         """
     )
 
