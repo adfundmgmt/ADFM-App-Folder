@@ -16,12 +16,14 @@ These are straightforward, proprietary tools we’ve built in-house to support o
 - **Monthly Seasonality Explorer**  
   Looks at median monthly returns and hit rates for any stock, index, or commodity. Pulls from Yahoo Finance and FRED for deeper historical data. Helps us stay aware of recurring calendar trends and seasonality biases.
 
-- **YTD Analog Year Correlation Explorer**  
+- **Market Memory Explorer**  
   Compares how this year is tracking versus past years with similar return paths. Useful for putting the current tape in historical context and building intuition around where we might go next.
 
-- **10-Year Yield Dashboard**  
+- **Real Yield Dashboard**  
   Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
 
+- **Ticker Correlation Dashboard**  
+  Offers an at-a-glance view of historical and rolling correlations to streamline relative-value analysis, diversification checks, and position sizing.
 ---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast-moving markets. Always a work in progress—open to feedback or feature ideas.
