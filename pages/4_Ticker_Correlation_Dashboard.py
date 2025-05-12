@@ -23,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title("Correlation Dashboard")
+st.title("Ticker Correlation Dashboard")
 
 # ── Sidebar: About + Inputs ─────────────────────────────────────────────────
 with st.sidebar:
