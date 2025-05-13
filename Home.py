@@ -24,6 +24,10 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 
 - **Ticker Correlation Dashboard**  
   Offers an at-a-glance view of historical and rolling correlations to streamline relative-value analysis, diversification checks, and position sizing.
+
+- **US Inflation Dashboard**  
+  Dissects the latest CPI print with YoY and MoM breakdowns across headline, and core categories.
+  
 ---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast-moving markets. Always a work in progress—open to feedback or feature ideas.
