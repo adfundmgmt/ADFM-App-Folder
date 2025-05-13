@@ -143,200 +143,73 @@ fig_core.update_yaxes(title_text="% (annualised)", row=2, col=1)
 fig_core.update_layout(hovermode="x unified")
 
 # --------------------------------------------------
-# CHART 4: CPI select categories (y/y % change)
+# CHART 4 & 5: CPI select categories (dynamic fetch)
 # --------------------------------------------------
-# last values from April 2025 (static for demonstration)
-yoy_vals = {
-    'Natural gas (piped)': 15.7,
-    'Tobacco & smoking products': 7.1,
-    'Meats, poultry, fish, & eggs': 7.0,
-    'Motor vehicle insurance': 6.4,
-    'Motor vehicle maintenance & repair': 5.6,
-    "Owners' equivalent rent": 4.3,
-    'Rent of primary residence': 4.0,
-    'Food away from home': 3.9,
-    'Hospital services': 3.6,
-    'Electricity': 3.6,
-    'Nonalcoholic beverages': 3.2,
-    "Physicians' services": 3.1,
-    'All items': 2.3,
-    'Alcoholic beverages': 1.8,
-    'Dairy & related products': 1.6,
-    'Used cars and trucks': 1.5,
-    'Medical care commodities': 1.0,
-    'Other food at home': 0.7,
-    'New vehicles': 0.3,
-    'Cereal & bakery products': 0.0,
-    'Apparel': -0.7,
-    'Fruits and vegetables': -0.9,
-    'Airline fare': -7.9,
-    'Fuel oil': -9.6,
-    'Gasoline (all types)': -11.8,
+# Map of CPI component names to FRED series IDs
+category_series = {
+    'All items': 'CPIAUCNS',
+    'Natural gas (piped)': 'CUSR0000SEHB01',
+    'Tobacco & smoking products': 'CUSR0000SASAC',
+    'Meats, poultry, fish, & eggs': 'CUSR0000SEMT',
+    'Motor vehicle insurance': 'CUSR0000SEMC1',
+    'Motor vehicle maintenance & repair': 'CUSR0000SETR',
+    "Owners' equivalent rent": 'CUSR0000SEHA',
+    'Rent of primary residence': 'CUSR0000SEH',
+    'Food away from home': 'CUSR0000SEFA',
+    'Hospital services': 'CUSR0000SEHC',
+    'Electricity': 'CUSR0000SEEX',
+    'Nonalcoholic beverages': 'CUSR0000SEEC',
+    "Physicians' services": 'CUSR0000SEHC1',
+    'Alcoholic beverages': 'CUSR0000SEEA',
+    'Dairy & related products': 'CUSR0000SEMD',
+    'Used cars and trucks': 'CUSR0000SETC',
+    'Medical care commodities': 'CUSR0000SEMC',
+    'Other food at home': 'CUSR0000SEFO',
+    'New vehicles': 'CUSR0000SETT01',
+    'Cereal & bakery products': 'CUSR0000SEM',
+    'Apparel': 'CUSR0000SEPA',
+    'Fruits and vegetables': 'CUSR0000SEFV',
+    'Airline fare': 'CUSR0000SEFV01',
+    'Fuel oil': 'CUSR0000SEXH01',
+    'Gasoline (all types)': 'CUSR0000SETA01'
 }
+
+# Fetch and compute current YoY and MoM for each category
+yoy_vals = {}
+mom_vals = {}
+for name, sid in category_series.items():
+    series = load_series(sid, start_date_full)
+    yoy_vals[name] = series.pct_change(12).iloc[-1] * 100
+    mom_vals[name] = series.pct_change(1).iloc[-1] * 100
+
+# Build sorted DataFrames
 df_yoy = pd.Series(yoy_vals).sort_values()
-fig_cat_yoy = go.Figure(go.Bar(
-    x=df_yoy.values,
-    y=df_yoy.index,
-    orientation='h',
-    marker_color=['#ff7f0e' if name=='All items' else '#1f77b4' for name in df_yoy.index]
-))
-fig_cat_yoy.update_layout(
-    title='CPI select categories (y/y % change)',
-    xaxis_title='% change',
-    yaxis=dict(autorange='reversed'),
-    height=800,
-    margin=dict(l=200)
-)
-
-# --------------------------------------------------
-# CHART 5: CPI select categories (m/m % change)
-# --------------------------------------------------
-mom_vals = {
-    'Natural gas (piped)': 3.7,
-    'Electricity': 0.8,
-    'Nonalcoholic beverages': 0.7,
-    'Motor vehicle maintenance & repair': 0.7,
-    'Motor vehicle insurance': 0.6,
-    'Hospital services': 0.6,
-    'Food away from home': 0.4,
-    'Medical care commodities': 0.4,
-    "Owners' equivalent rent": 0.4,
-    "Physicians' services": 0.3,
-    'Rent of primary residence': 0.3,
-    'Tobacco & smoking products': 0.3,
-    'All items': 0.2,
-    'Alcoholic beverages': 0.0,
-    'New vehicles': 0.0,
-    'Gasoline (all types)': -0.1,
-    'Other food at home': -0.1,
-    'Dairy & related products': -0.2,
-    'Apparel': -0.2,
-    'Fruits and vegetables': -0.4,
-    'Cereal & bakery products': -0.5,
-    'Used cars and trucks': -0.5,
-    'Fuel oil': -1.3,
-    'Meats, poultry, fish, & eggs': -1.6,
-    'Airline fare': -2.8,
-}
 df_mom = pd.Series(mom_vals).sort_values()
-fig_cat_mom = go.Figure(go.Bar(
-    x=df_mom.values,
-    y=df_mom.index,
-    orientation='h',
-    marker_color=['#ff7f0e' if name=='All items' else '#1f77b4' for name in df_mom.index]
-))
-fig_cat_mom.update_layout(
-    title='CPI select categories (m/m % change)',
-    xaxis_title='% change',
-    yaxis=dict(autorange='reversed'),
-    height=800,
-    margin=dict(l=200)
-)
 
-# --------------------------------------------------
-# CHART 4: CPI select categories (y/y % change)
-# --------------------------------------------------
-# Static example values for April 2025; replace with dynamic fetch if desired
-```python
-# Year-over-year category changes
-yoy_vals = {
-    'Natural gas (piped)': 15.7,
-    'Tobacco & smoking products': 7.1,
-    'Meats, poultry, fish, & eggs': 7.0,
-    'Motor vehicle insurance': 6.4,
-    'Motor vehicle maintenance & repair': 5.6,
-    "Owners' equivalent rent": 4.3,
-    'Rent of primary residence': 4.0,
-    'Food away from home': 3.9,
-    'Hospital services': 3.6,
-    'Electricity': 3.6,
-    'Nonalcoholic beverages': 3.2,
-    "Physicians' services": 3.1,
-    'All items': 2.3,
-    'Alcoholic beverages': 1.8,
-    'Dairy & related products': 1.6,
-    'Used cars and trucks': 1.5,
-    'Medical care commodities': 1.0,
-    'Other food at home': 0.7,
-    'New vehicles': 0.3,
-    'Cereal & bakery products': 0.0,
-    'Apparel': -0.7,
-    'Fruits and vegetables': -0.9,
-    'Airline fare': -7.9,
-    'Fuel oil': -9.6,
-    'Gasoline (all types)': -11.8,
-}
+# Horizontal bar chart function
+def make_cat_fig(data: pd.Series, title: str):
+    fig = go.Figure(go.Bar(
+        x=data.values,
+        y=data.index,
+        orientation='h',
+        marker_color=[('#ff7f0e' if cat=='All items' else '#1f77b4') for cat in data.index]
+    ))
+    fig.update_layout(
+        title=title,
+        xaxis_title='% change',
+        yaxis=dict(autorange='reversed'),
+        height=800,
+        margin=dict(l=200)
+    )
+    return fig
 
-import pandas as pd
-from plotly.graph_objects import Figure, Bar
-
-# Prepare horizontal bar chart data
-cat_yoy = pd.Series(yoy_vals).sort_values()
-fig_cat_yoy = Figure(data=[Bar(
-    x=cat_yoy.values,
-    y=cat_yoy.index,
-    orientation='h',
-    marker_color=[('#ff7f0e' if i == 'All items' else '#1f77b4') for i in cat_yoy.index]
-)])
-fig_cat_yoy.update_layout(
-    title='CPI select categories (y/y % change)',
-    xaxis_title='% change',
-    yaxis=dict(autorange='reversed'),
-    height=800,
-    margin=dict(l=200)
-)
-```
-
-# --------------------------------------------------
-# CHART 5: CPI select categories (m/m % change)
-# --------------------------------------------------
-```python
-mom_vals = {
-    'Natural gas (piped)': 3.7,
-    'Electricity': 0.8,
-    'Nonalcoholic beverages': 0.7,
-    'Motor vehicle maintenance & repair': 0.7,
-    'Motor vehicle insurance': 0.6,
-    'Hospital services': 0.6,
-    'Food away from home': 0.4,
-    'Medical care commodities': 0.4,
-    "Owners' equivalent rent": 0.4,
-    "Physicians' services": 0.3,
-    'Rent of primary residence': 0.3,
-    'Tobacco & smoking products': 0.3,
-    'All items': 0.2,
-    'Alcoholic beverages': 0.0,
-    'New vehicles': 0.0,
-    'Gasoline (all types)': -0.1,
-    'Other food at home': -0.1,
-    'Dairy & related products': -0.2,
-    'Apparel': -0.2,
-    'Fruits and vegetables': -0.4,
-    'Cereal & bakery products': -0.5,
-    'Used cars and trucks': -0.5,
-    'Fuel oil': -1.3,
-    'Meats, poultry, fish, & eggs': -1.6,
-    'Airline fare': -2.8,
-}
-
-cat_mom = pd.Series(mom_vals).sort_values()
-fig_cat_mom = Figure(data=[Bar(
-    x=cat_mom.values,
-    y=cat_mom.index,
-    orientation='h',
-    marker_color=[('#ff7f0e' if i == 'All items' else '#1f77b4') for i in cat_mom.index]
-)])
-fig_cat_mom.update_layout(
-    title='CPI select categories (m/m % change)',
-    xaxis_title='% change',
-    yaxis=dict(autorange='reversed'),
-    height=800,
-    margin=dict(l=200)
-)
-```
+fig_cat_yoy = make_cat_fig(df_yoy, 'CPI select categories (y/y % change)')
+fig_cat_mom = make_cat_fig(df_mom, 'CPI select categories (m/m % change)')
 
 # --------------------------------------------------
 # RENDER
+# --------------------------------------------------
+# --------------------------------------------------
 # --------------------------------------------------
 # --------------------------------------------------
 st.title("US Inflation Dashboard")
