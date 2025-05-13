@@ -1,13 +1,13 @@
 # -------------------------------------------------------------
-#  Market Drawdown & Breadth Dashboard — Streamlit
-#  Polished UI v2.0 • AD Fund Management LP
+#  Market Drawdown Dashboard — v3.0  |  AD Fund Management LP
 # -------------------------------------------------------------
-#  What’s new
-#    • Clean headline banner & sidebar explainer
-#    • Optional light / dark theme toggle (CSS injection)
-#    • Colour-coded tables: greens for gains, reds for pain
-#    • Responsive KPI strip, centred
-#    • Sticky footer with data disclaimers
+#  Enhancements (per Arya):
+#    • Remove date-picker – always Year-to-Date (today’s close)
+#    • Broaden coverage: add key European, Japanese & Chinese benchmarks
+#          – Euro Stoxx 50, FTSE 100, Nikkei 225, TOPIX, FXI (China Large-Cap ETF)
+#    • Richer sidebar explainer
+#    • Replace simple breadth table with actionable breadth gauges:
+#          % constituents above 50-d MA, 200-d MA, near 52-w highs, and beating benchmark YTD
 # -------------------------------------------------------------
 
 import streamlit as st
@@ -17,34 +17,31 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
+TODAY = datetime.today().date()
+YEAR_START = datetime(TODAY.year, 1, 1)
+
 # -------------------------------------------------------------
-# Page / Theme utilities
+# Page config & theme CSS
 # -------------------------------------------------------------
 st.set_page_config(
-    page_title="Market Drawdown & Breadth Dashboard",
+    page_title="Market Drawdown Dashboard",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Inject CSS helpers (will be conditionally wrapped for light / dark)
 LIGHT_CSS = """
 <style>
-body { font-family: "Helvetica Neue", sans-serif; }
-/* KPI text bigger */
-.css-1ht1j8u .stMetric label { font-size:0.9rem; }
-.css-1ht1j8u .stMetric div { font-size:2rem; font-weight:700; }
-/* Table zebra */
-.dataframe tbody tr:nth-child(even) { background: #f8f9fc; }
+body { font-family: 'Helvetica Neue', sans-serif; }
+/* KPI */
+.css-1ht1j8u .stMetric label{font-size:.9rem}
+.css-1ht1j8u .stMetric div{font-size:2.2rem;font-weight:700}
 </style>
 """
-
 DARK_CSS = """
 <style>
-body { font-family: "Helvetica Neue", sans-serif; background:#0e1117; color:#f3f4f6; }
-.sidebar .sidebar-content { background:#111319; }
-/* KPI */
-.css-1ht1j8u .stMetric label { color:#c9d1d9; }
-.dataframe tbody tr:nth-child(even) { background: #161b22; }
+body{font-family:'Helvetica Neue',sans-serif;background:#0e1117;color:#f3f4f6}
+.sidebar .sidebar-content{background:#111319}
+.css-1ht1j8u .stMetric label{color:#c9d1d9}
 </style>
 """
 
@@ -53,134 +50,151 @@ body { font-family: "Helvetica Neue", sans-serif; background:#0e1117; color:#f3f
 # -------------------------------------------------------------
 with st.sidebar:
     st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f4c8.svg", width=40)
-    st.markdown("""### Market Drawdown & Breadth Dashboard  
-Quick snapshot of **index stress** (YTD drawdowns) and **internals** (% of S&P 500 constituents beating the index).  
-Select your benchmark, date, and theme — everything else updates on the fly.""")
+    st.markdown("""### Year-to-Date Market Stress Dashboard  
+**What you get:**
+* **Drawdown matrix** — instant view of how major global equity benchmarks have performed YTD, their bounces off the low, and max pain from the high.
+* **Breadth gauges** — holistic read on S&P 500 internals: trend health (50-/200-day MAs), momentum (near 52-week highs) and relative strength versus the index.
 
-    theme_choice = st.radio("Theme", ["Light", "Dark"], index=0)
-    if theme_choice == "Light":
-        st.markdown(LIGHT_CSS, unsafe_allow_html=True)
-    else:
-        st.markdown(DARK_CSS, unsafe_allow_html=True)
+Use the selector below to flip the headline benchmark; the breadth gauges always reference the S&P 500 (our cycle bellwether).""")
+
+    theme = st.radio("Theme", ["Light", "Dark"], index=0)
+    st.markdown(LIGHT_CSS if theme=="Light" else DARK_CSS, unsafe_allow_html=True)
 
     st.markdown("---")
-    index_choice = st.selectbox("Benchmark index", ("S&P 500", "Nasdaq 100", "Russell 2000", "Dow 30"))
-    as_of = st.date_input("As-of date", value=datetime.today().date())
-    if as_of > datetime.today().date():
-        st.error("As-of date cannot be in the future.")
-        st.stop()
+    benchmark = st.selectbox(
+        "Headline benchmark",
+        (
+            "S&P 500",
+            "Nasdaq 100",
+            "Russell 2000",
+            "Dow 30",
+            "Euro Stoxx 50",
+            "FTSE 100",
+            "Nikkei 225",
+            "TOPIX",
+            "FXI (China Large-Cap)"
+        ),
+        index=0,
+    )
 
 # -------------------------------------------------------------
-# Helper fns
+# Helper functions
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def get_index_members(index: str):
-    import pandas as pd
-    if index == "S&P 500":
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        return pd.read_html(url, header=0)[0]["Symbol"].tolist()
-    if index == "Nasdaq 100":
-        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        return pd.read_html(url, header=0, match="Ticker")[0]["Ticker"].str.strip().tolist()
-    if index == "Russell 2000":
-        return yf.Ticker("IWM").fund_holdings["symbol"].tolist()
-    if index == "Dow 30":
-        url = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"
-        return pd.read_html(url, header=0, match="Symbol")[1]["Symbol"].tolist()
-    return []
-
-@st.cache_data(show_spinner=False)
-def get_prices(tickers, start, end):
-    df = yf.download(tickers, start=start, end=end, progress=False, group_by="ticker", auto_adjust=False)
-    def adj(d):
-        if isinstance(d.columns, pd.MultiIndex):
-            lvl = "Adj Close" if "Adj Close" in d.columns.get_level_values(1) else "Close"
-            return d.swaplevel(axis=1)[lvl]
-        col = "Adj Close" if "Adj Close" in d.columns else "Close"
-        return d[[col]].rename(columns={col: tickers[0]})
-    out = adj(df).sort_index().loc[~df.index.duplicated(keep="first")]
+def load_prices(tickers, start, end):
+    """Return adjusted close prices dataframe."""
+    raw = yf.download(tickers, start=start, end=end, progress=False, group_by="ticker", auto_adjust=False)
+    def adj(df):
+        if isinstance(df.columns, pd.MultiIndex):
+            lvl = "Adj Close" if "Adj Close" in df.columns.get_level_values(1) else "Close"
+            return df.swaplevel(axis=1)[lvl]
+        col = "Adj Close" if "Adj Close" in df.columns else "Close"
+        return df[[col]].rename(columns={col: tickers[0]})
+    out = adj(raw).sort_index().loc[~raw.index.duplicated(keep="first")]
     return out
 
+# Simple pct return over n days
 def pct_ret(series, days):
-    if len(series) <= days: return np.nan
-    return series.iloc[-1] / series.iloc[-(days+1)] - 1
+    return np.nan if len(series)<=days else series.iloc[-1]/series.iloc[-(days+1)] - 1
 
 # -------------------------------------------------------------
-# Data prep
+# Index universe
 # -------------------------------------------------------------
-index_map = {"S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "Russell 2000": "^RUT", "Dow 30": "^DJI"}
-year_start = datetime(as_of.year, 1, 1)
-idx_series = get_prices([index_map[index_choice]], year_start, as_of + timedelta(days=1)).iloc[:,0]
+INDEX_TICKERS = {
+    "S&P 500": "^GSPC",
+    "Nasdaq 100": "^NDX",
+    "Russell 2000": "^RUT",
+    "Dow 30": "^DJI",
+    "Euro Stoxx 50": "^STOXX50E",
+    "FTSE 100": "^FTSE",
+    "Nikkei 225": "^N225",
+    "TOPIX": "^TOPX",
+    "FXI (China Large-Cap)": "FXI",
+}
 
 # -------------------------------------------------------------
-# KPI deck
+# Fetch YTD price series for all indices (single pull for performance)
 # -------------------------------------------------------------
-st.markdown("## Key Stats")
-kp1,kp2,kp3 = st.columns(3, gap="large")
-kp1.metric("YTD Return", f"{idx_series.iloc[-1]/idx_series.iloc[0]-1:+.1%}")
-kp2.metric("Bounce from YTD Low", f"{idx_series.iloc[-1]/idx_series.min()-1:+.1%}")
-kp3.metric("Max Drawdown", f"{idx_series.iloc[-1]/idx_series.max()-1:.1%}")
+all_prices = load_prices(list(INDEX_TICKERS.values()), YEAR_START, TODAY + timedelta(days=1))
 
-# -------------------------------------------------------------
-# Drawdown table (all indices)
-# -------------------------------------------------------------
+# Build drawdown DataFrame
 rows = []
-for n, tk in index_map.items():
-    s = get_prices([tk], year_start, as_of + timedelta(days=1)).iloc[:,0]
+for name, tk in INDEX_TICKERS.items():
+    ser = all_prices[tk]
     rows.append({
-        "Index": n,
-        "YTD": s.iloc[-1]/s.iloc[0]-1,
-        "From YTD Low": s.iloc[-1]/s.min()-1,
-        "Max DD": s.iloc[-1]/s.max()-1,
+        "Index": name,
+        "YTD" : ser.iloc[-1]/ser.iloc[0] - 1,
+        "From YTD Low" : ser.iloc[-1]/ser.min() - 1,
+        "Max DD" : ser.iloc[-1]/ser.max() - 1,
     })
 
 dd = pd.DataFrame(rows)
-fmt_cols = {c:"{:+.1%}" for c in dd.columns if c!="Index"}
+fmt = {c:"{:+.1%}" for c in dd.columns if c!="Index"}
+colorize = lambda v: f"color:{'green' if v>0 else 'red'}" if isinstance(v,(int,float)) else ""
 
-def colour(val):
-    return f"color:{'green' if val>0 else 'red'}" if isinstance(val,(int,float)) else ""
-
-dd_st = dd.style.format(fmt_cols).applymap(colour, subset=["YTD","From YTD Low","Max DD"])
-
-st.markdown("### Major Indices — YTD Stress")
-st.dataframe(dd_st, use_container_width=True, height=240)
-
-# -------------------------------------------------------------
-# Breadth table (always S&P 500)
-# -------------------------------------------------------------
-sp_members = get_index_members("S&P 500")
-prices = get_prices(sp_members, as_of - timedelta(days=370), as_of + timedelta(days=1))
-
-horizons = {"1m":21,"2m":42,"3m":63,"4m":84,"5m":105,"6m":126,"1y":252}
-rec = []
-for lbl, d in horizons.items():
-    member_ret = prices.apply(lambda s: pct_ret(s,d))
-    idx_ret = pct_ret(idx_series if index_choice=="S&P 500" else get_prices(["^GSPC"], year_start, as_of+timedelta(days=1)).iloc[:,0], d)
-    rec.append({"Horizon":lbl, "% Beats": (member_ret>idx_ret).mean()})
-
-breadth = pd.DataFrame(rec)
-breadth_st = breadth.style.format({"% Beats":"{:.0%}"}).applymap(lambda v: f"background-color:rgba(0,125,0,{v})" if isinstance(v,float) else "", subset=["% Beats"])
-
-st.markdown("### Breadth — Constituents Outperforming Benchmark")
-st.dataframe(breadth_st, use_container_width=True, height=220)
+st.markdown("## YTD Drawdowns (Global Benchmarks)")
+st.dataframe(
+    dd.style.format(fmt).applymap(colorize, subset=["YTD","From YTD Low","Max DD"]),
+    use_container_width=True,
+    height=340,
+)
 
 # -------------------------------------------------------------
-# Price chart
+# KPI strip for chosen benchmark
+# -------------------------------------------------------------
+sel_series = all_prices[INDEX_TICKERS[benchmark]]
+kp1,kp2,kp3 = st.columns(3, gap="large")
+kp1.metric("YTD Return", f"{sel_series.iloc[-1]/sel_series.iloc[0]-1:+.1%}")
+kp2.metric("Bounce from YTD Low", f"{sel_series.iloc[-1]/sel_series.min()-1:+.1%}")
+kp3.metric("Max Drawdown", f"{sel_series.iloc[-1]/sel_series.max()-1:.1%}")
+
+# -------------------------------------------------------------
+# Breadth Gauges (S&P 500 internals)
+# -------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def sp500_members():
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    return pd.read_html(url, header=0)[0]["Symbol"].tolist()
+
+sp_tickers = sp500_members()
+sp_prices = load_prices(sp_tickers, TODAY - timedelta(days=400), TODAY + timedelta(days=1))
+latest = sp_prices.iloc[-1]
+ma50 = sp_prices.rolling(50).mean().iloc[-1]
+ma200 = sp_prices.rolling(200).mean().iloc[-1]
+high52 = sp_prices.rolling(252).max().iloc[-1]
+
+pct_above50 = (latest > ma50).mean()
+pct_above200 = (latest > ma200).mean()
+pct_near_high = (latest >= high52*0.98).mean()
+
+# Relative YTD outperformance vs SPX
+spx_series = all_prices["^GSPC"]
+spx_ytd = spx_series.iloc[-1]/spx_series.iloc[0]-1
+member_ytd = sp_prices.apply(lambda s: s.iloc[-1]/s.iloc[0]-1)
+rel_outperf = (member_ytd > spx_ytd).mean()
+
+st.markdown("### S&P 500 Breadth Snapshot")
+colA,colB,colC,colD = st.columns(4)
+colA.metric("Above 50-d MA", f"{pct_above50:.0%}")
+colB.metric("Above 200-d MA", f"{pct_above200:.0%}")
+colC.metric("Near 52-w High (<2%)", f"{pct_near_high:.0%}")
+colD.metric("Beating SPX YTD", f"{rel_outperf:.0%}")
+
+# -------------------------------------------------------------
+# Price chart for selected benchmark
 # -------------------------------------------------------------
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=idx_series.index, y=idx_series, mode="lines", name=index_choice))
-fig.add_trace(go.Scatter(x=[idx_series.idxmax()], y=[idx_series.max()], mode="markers", marker_symbol="triangle-up", marker_size=12, name="YTD High"))
-fig.add_trace(go.Scatter(x=[idx_series.idxmin()], y=[idx_series.min()], mode="markers", marker_symbol="triangle-down", marker_size=12, name="YTD Low"))
-fig.update_layout(title=f"{index_choice} — Price YTD", hovermode="x unified", height=420, template="plotly_white" if theme_choice=="Light" else "plotly_dark")
+fig.add_trace(go.Scatter(x=sel_series.index, y=sel_series, mode="lines", name=benchmark))
+fig.add_trace(go.Scatter(x=[sel_series.idxmax()], y=[sel_series.max()], mode="markers", marker_symbol="triangle-up", marker_size=12, name="YTD High"))
+fig.add_trace(go.Scatter(x=[sel_series.idxmin()], y=[sel_series.min()], mode="markers", marker_symbol="triangle-down", marker_size=12, name="YTD Low"))
+fig.update_layout(title=f"{benchmark} — Price YTD", hovermode="x unified", height=420, template="plotly_white" if theme=="Light" else "plotly_dark")
 st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------------------------------------------
-# Downloads + footer
+# Downloads & footer
 # -------------------------------------------------------------
 c1,c2 = st.columns(2)
-with c1:
-    st.download_button("Download Drawdowns CSV", dd.to_csv(index=False).encode(), "index_drawdowns.csv", "text/csv")
-with c2:
-    st.download_button("Download Breadth CSV", breadth.to_csv(index=False).encode(), "sp500_breadth.csv", "text/csv")
+c1.download_button("Download Drawdowns CSV", dd.to_csv(index=False).encode(), "global_drawdowns.csv", "text/csv")
+c2.download_button("Download Breadth Metrics CSV", pd.DataFrame({"Metric":["Above50d","Above200d","NearHigh","BeatsYTD"],"Value":[pct_above50,pct_above200,pct_near_high,rel_outperf]}).to_csv(index=False).encode(), "sp500_breadth.csv", "text/csv")
 
-st.markdown("""<div style='text-align:center; font-size:0.75rem; margin-top:2rem;'>Data: Yahoo Finance • Calculations: AD Fund Management LP • Past performance is no guarantee of future results</div>""", unsafe_allow_html=True)
+st.markdown("""<div style='text-align:center;font-size:0.75rem;margin-top:2rem;'>Data: Yahoo Finance • Calculations: AD Fund Management LP • Past performance is no guarantee of future results</div>""", unsafe_allow_html=True)
