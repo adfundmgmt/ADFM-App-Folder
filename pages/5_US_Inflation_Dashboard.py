@@ -11,14 +11,20 @@ from datetime import datetime
 st.set_page_config(page_title="US CPI Dashboard", layout="wide")
 
 # --------------------------------------------------
-# SIDEBAR: About This Tool
+# SIDEBAR: About & Period Selector
 # --------------------------------------------------
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This dashboard presents three interactive inflation charts using the latest data from FRED. You can explore year‑over‑year and month‑over‑month changes for both headline and core CPI, and periods of NBER‑defined recessions are shaded for context. Data is fetched live and cached to ensure responsive performance.
+        Explore interactive inflation charts powered by the latest FRED data. View year‑over‑year and month‑over‑month changes for both headline and core CPI, with NBER recessions shaded for historical context. Data is fetched live and cached for responsiveness.
         """
+    )
+    st.subheader("Time Range")
+    period = st.selectbox(
+        "Select period:",
+        ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"],
+        index=7
     )
 
 # --------------------------------------------------
@@ -48,7 +54,7 @@ core_mom     = core.pct_change(1)      * 100
 core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100
 
 # --------------------------------------------------
-# Recession windows
+# Recession window extraction
 # --------------------------------------------------
 def get_recession_periods(flag: pd.Series):
     f = flag.dropna().astype(int)
@@ -66,7 +72,7 @@ def get_recession_periods(flag: pd.Series):
 recession_windows = get_recession_periods(recess)
 
 # --------------------------------------------------
-# 1. Chart: YoY Headline vs Core CPI
+# CHART 1: YoY Headline vs Core CPI
 # --------------------------------------------------
 fig_yoy = go.Figure()
 fig_yoy.add_trace(go.Scatter(
@@ -79,17 +85,10 @@ fig_yoy.add_trace(go.Scatter(
 ))
 for start, end in recession_windows:
     fig_yoy.add_shape(
-        type="rect",
-        xref="x",
-        yref="paper",
-        x0=start,
-        x1=end,
-        y0=0,
-        y1=1,
-        fillcolor="rgba(200,0,0,0.15)",
-        opacity=0.3,
-        layer="below",
-        line_width=0,
+        type="rect", xref="x", yref="paper",
+        x0=start, x1=end, y0=0, y1=1,
+        fillcolor="rgba(200,0,0,0.15)", opacity=0.3,
+        layer="below", line_width=0
     )
 fig_yoy.update_layout(
     title="US CPI YoY – Headline vs Core",
@@ -98,7 +97,7 @@ fig_yoy.update_layout(
 )
 
 # --------------------------------------------------
-# 2. Chart: MoM Bars for Headline & Core CPI
+# CHART 2: MoM Bars for Headline & Core CPI
 # --------------------------------------------------
 fig_mom = make_subplots(
     rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
@@ -114,41 +113,25 @@ fig_mom.add_trace(go.Bar(
 ), row=2, col=1)
 for start, end in recession_windows:
     fig_mom.add_shape(
-        type="rect",
-        xref="x",
-        yref="paper",
-        x0=start,
-        x1=end,
-        y0=0,
-        y1=1,
-        fillcolor="rgba(200,0,0,0.15)",
-        opacity=0.3,
-        layer="below",
-        line_width=0,
-        row=1,
-        col=1
+        type="rect", xref="x", yref="paper",
+        x0=start, x1=end, y0=0, y1=1,
+        fillcolor="rgba(200,0,0,0.15)", opacity=0.3,
+        layer="below", line_width=0,
+        row=1, col=1
     )
     fig_mom.add_shape(
-        type="rect",
-        xref="x",
-        yref="paper",
-        x0=start,
-        x1=end,
-        y0=0,
-        y1=1,
-        fillcolor="rgba(200,0,0,0.15)",
-        opacity=0.3,
-        layer="below",
-        line_width=0,
-        row=2,
-        col=1
+        type="rect", xref="x", yref="paper",
+        x0=start, x1=end, y0=0, y1=1,
+        fillcolor="rgba(200,0,0,0.15)", opacity=0.3,
+        layer="below", line_width=0,
+        row=2, col=1
     )
 fig_mom.update_yaxes(title_text="% MoM", row=1, col=1)
 fig_mom.update_yaxes(title_text="% MoM", row=2, col=1)
 fig_mom.update_layout(showlegend=False, hovermode="x unified")
 
 # --------------------------------------------------
-# 3. Chart: Core CPI Index & 3‑Mo Annualised
+# CHART 3: Core CPI Index & 3‑Mo Annualised Change
 # --------------------------------------------------
 fig_core = make_subplots(
     rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
@@ -164,43 +147,50 @@ fig_core.add_trace(go.Scatter(
 ), row=2, col=1)
 for start, end in recession_windows:
     fig_core.add_shape(
-        type="rect",
-        xref="x",
-        yref="paper",
-        x0=start,
-        x1=end,
-        y0=0,
-        y1=1,
-        fillcolor="rgba(200,0,0,0.15)",
-        opacity=0.3,
-        layer="below",
-        line_width=0,
-        row=1,
-        col=1
+        type="rect", xref="x", yref="paper",
+        x0=start, x1=end, y0=0, y1=1,
+        fillcolor="rgba(200,0,0,0.15)", opacity=0.3,
+        layer="below", line_width=0,
+        row=1, col=1
     )
     fig_core.add_shape(
-        type="rect",
-        xref="x",
-        yref="paper",
-        x0=start,
-        x1=end,
-        y0=0,
-        y1=1,
-        fillcolor="rgba(200,0,0,0.15)",
-        opacity=0.3,
-        layer="below",
-        line_width=0,
-        row=2,
-        col=1
+        type="rect", xref="x", yref="paper",
+        x0=start, x1=end, y0=0, y1=1,
+        fillcolor="rgba(200,0,0,0.15)", opacity=0.3,
+        layer="below", line_width=0,
+        row=2, col=1
     )
-fig_core.update_yaxes(title_text="Index Level",      row=1, col=1)
+fig_core.update_yaxes(title_text="Index Level", row=1, col=1)
 fig_core.update_yaxes(title_text="% (annualised)", row=2, col=1)
 fig_core.update_layout(hovermode="x unified")
 
 # --------------------------------------------------
-# 4. Main Layout
+# APPLY TIME RANGE FILTER
+# --------------------------------------------------
+end_date = headline.index.max()
+if period == "All":
+    start_date = headline.index.min()
+elif period.endswith("M"):
+    months = int(period[:-1])
+    start_date = end_date - pd.DateOffset(months=months)
+elif period.endswith("Y"):
+    years = int(period[:-1])
+    start_date = end_date - pd.DateOffset(years=years)
+
+fig_yoy.update_xaxes(range=[start_date, end_date])
+fig_mom.update_xaxes(range=[start_date, end_date], row=1, col=1)
+fig_mom.update_xaxes(range=[start_date, end_date], row=2, col=1)
+fig_core.update_xaxes(range=[start_date, end_date], row=1, col=1)
+fig_core.update_xaxes(range=[start_date, end_date], row=2, col=1)
+
+# --------------------------------------------------
+# MAIN LAYOUT
 # --------------------------------------------------
 st.title("US Inflation Dashboard")
+st.plotly_chart(fig_yoy,  use_container_width=True)
+st.plotly_chart(fig_mom,  use_container_width=True)
+st.plotly_chart(fig_core, use_container_width=True)
+
 with st.expander("Methodology & Sources", expanded=False):
     st.markdown(
         """
@@ -211,7 +201,5 @@ with st.expander("Methodology & Sources", expanded=False):
         **3‑Mo annualised formula:** `((CPI_t / CPI_{t-3}) ** 4 – 1) × 100`.
         """
     )
-st.plotly_chart(fig_yoy,  use_container_width=True)
-st.plotly_chart(fig_mom,  use_container_width=True)
-st.plotly_chart(fig_core, use_container_width=True)
+
 st.caption(f"© {datetime.today().year} • Built with Streamlit & Plotly • Data: FRED")
