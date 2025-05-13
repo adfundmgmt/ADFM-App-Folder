@@ -1,7 +1,7 @@
 # -------------------------------------------------------------
 #  Market Drawdown Dashboard — v3.1  |  AD Fund Management LP
 # -------------------------------------------------------------
-#  Changelog (2025-05-13)
+#  Changelog (2025‑05‑13)
 #    • Renamed column header → Max Drawdown (was Max DD)
 #    • Breadth snapshot now tied to the selected headline benchmark
 #    • Dropped theme toggle (default = light)
@@ -43,10 +43,10 @@ st.markdown(
 with st.sidebar:
     st.image("https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f4c8.svg", width=40)
     st.markdown(
-        """### Year-to-Date Market Stress Dashboard  
+        """### Year‑to‑Date Market Stress Dashboard  
 **What you get:**
 * **Drawdown matrix** — instant view of how major global equity benchmarks have performed YTD, their bounces off the low, and max pain from the high.
-* **Breadth gauges** — real-time internals for the **selected benchmark**: trend (% above 50-/200-day MAs), momentum (% near 52-week highs) and relative strength (constituents beating the index YTD).
+* **Breadth gauges** — real‑time internals for the **selected benchmark**: trend (% above 50‑/200‑day MAs), momentum (% near 52‑week highs) and relative strength (constituents beating the index YTD).
 
 Select a benchmark below — all panels update in sync."""
     )
@@ -62,7 +62,7 @@ Select a benchmark below — all panels update in sync."""
             "FTSE 100",
             "Nikkei 225",
             "TOPIX",
-            "FXI (China Large-Cap)",
+            "FXI (China Large‑Cap)",
         ),
         index=0,
     )
@@ -83,34 +83,50 @@ def load_prices(tickers, start, end):
 
 @lru_cache(maxsize=32)
 def get_members(index_name: str):
-    """Return constituent tickers for benchmarks we can reasonably fetch."""
+    """Safely retrieve constituent tickers by scraping Wikipedia or ETF holdings.
+    Falls back gracefully if the expected table layout changes."""
     import pandas as pd
+
+    def first_table_with(col_name: str, url: str):
+        try:
+            dfs = pd.read_html(url, header=0)
+            for d in dfs:
+                if col_name in d.columns:
+                    return d[col_name].tolist()
+        except Exception:
+            pass
+        return []  # empty → handled upstream
+
     if index_name == "S&P 500":
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        return pd.read_html(url, header=0)[0]["Symbol"].tolist()
+        return first_table_with("Symbol", "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+
     if index_name == "Nasdaq 100":
-        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        return pd.read_html(url, header=0, match="Ticker")[0]["Ticker"].str.strip().tolist()
+        out = first_table_with("Ticker", "https://en.wikipedia.org/wiki/Nasdaq-100")
+        return [t.strip() for t in out]
+
     if index_name == "Russell 2000":
-        return yf.Ticker("IWM").fund_holdings["symbol"].tolist()  # ETF proxy
+        return yf.Ticker("IWM").fund_holdings.get("symbol", []).tolist()
+
     if index_name == "Dow 30":
-        url = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"
-        return pd.read_html(url, header=0, match="Symbol")[1]["Symbol"].tolist()
+        return first_table_with("Symbol", "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average")
+
     if index_name == "Euro Stoxx 50":
-        url = "https://en.wikipedia.org/wiki/EURO_STOXX_50"
-        tbl = pd.read_html(url, header=0, match="Ticker symbol")[0]
-        return tbl["Ticker symbol"].str.replace(".ST", ".SW", regex=False).tolist()  # adjust Swiss listing code if any
+        tickers = first_table_with("Ticker symbol", "https://en.wikipedia.org/wiki/EURO_STOXX_50")
+        # adjust Swiss listing suffixes if needed
+        return [t.replace(".ST", ".SW") for t in tickers]
+
     if index_name == "FTSE 100":
-        url = "https://en.wikipedia.org/wiki/FTSE_100_Index"
-        return pd.read_html(url, header=0, match="EPIC")[0]["EPIC"].tolist()
+        return first_table_with("EPIC", "https://en.wikipedia.org/wiki/FTSE_100_Index")
+
     if index_name == "Nikkei 225":
-        url = "https://en.wikipedia.org/wiki/Nikkei_225"
-        return pd.read_html(url, header=0, match="Ticker")[0]["Ticker"].tolist()
+        return first_table_with("Ticker", "https://en.wikipedia.org/wiki/Nikkei_225")
+
     if index_name == "TOPIX":
-        # Pull top holdings via ETF 1306.T as proxy
-        return yf.Ticker("1306.T").fund_holdings["symbol"].tolist()
-    if index_name == "FXI (China Large-Cap)":
-        return yf.Ticker("FXI").fund_holdings["symbol"].tolist()
+        return yf.Ticker("1306.T").fund_holdings.get("symbol", []).tolist()
+
+    if index_name == "FXI (China Large‑Cap)":
+        return yf.Ticker("FXI").fund_holdings.get("symbol", []).tolist()
+
     return []
 
 # Map display name → yfinance ticker
@@ -123,7 +139,7 @@ INDEX_TICKERS = {
     "FTSE 100": "^FTSE",
     "Nikkei 225": "^N225",
     "TOPIX": "^TOPX",
-    "FXI (China Large-Cap)": "FXI",
+    "FXI (China Large‑Cap)": "FXI",
 }
 
 # -------------------------------------------------------------
@@ -187,9 +203,9 @@ if constituents:
 
     st.markdown(f"### {benchmark} Breadth Snapshot")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Above 50-d MA", f"{pct_above50:.0%}")
-    c2.metric("Above 200-d MA", f"{pct_above200:.0%}")
-    c3.metric("Near 52-w High (<2%)", f"{pct_near_high:.0%}")
+    c1.metric("Above 50‑d MA", f"{pct_above50:.0%}")
+    c2.metric("Above 200‑d MA", f"{pct_above200:.0%}")
+    c3.metric("Near 52‑w High (<2%)", f"{pct_near_high:.0%}")
     c4.metric("Beating Index YTD", f"{pct_beat_idx:.0%}")
 else:
     st.info("Breadth metrics unavailable for this benchmark (no constituent list)")
