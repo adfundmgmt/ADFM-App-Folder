@@ -37,10 +37,17 @@ with st.sidebar:
 # DATA LOADING
 # --------------------------------------------------
 @st.cache_data(show_spinner=False)
+from pandas_datareader._utils import RemoteDataError
 def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
-    df = DataReader(series_id, "fred", start)
-    s = df[series_id].copy()
-    return s.asfreq("MS").ffill()
+    """Fetch a FRED series and return a forward-filled monthly Series. Returns empty Series on failure."""
+    try:
+        df = DataReader(series_id, "fred", start)
+        s = df[series_id].copy()
+        return s.asfreq("MS").ffill()
+    except RemoteDataError:
+        return pd.Series(name=series_id, dtype=float)
+    except Exception:
+        return pd.Series(name=series_id, dtype=float)("MS").ffill()
 
 # Fetch series
 start_date_full = "1990-01-01"
@@ -175,14 +182,35 @@ category_series = {
 }
 
 # Fetch and compute current YoY and MoM for each category
+from pandas_datareader._utils import RemoteDataError
+
 yoy_vals = {}
 mom_vals = {}
 for name, sid in category_series.items():
-    series = load_series(sid, start_date_full)
+    try:
+        series = load_series(sid, start_date_full)
+    except RemoteDataError:
+        # Skip series if data not available
+        continue
+    # Ensure series has enough data
+    if len(series) < 2:
+        continue
     yoy_vals[name] = series.pct_change(12).iloc[-1] * 100
     mom_vals[name] = series.pct_change(1).iloc[-1] * 100
 
 # Build sorted DataFrames
+import pandas as pd
+if yoy_vals:
+    df_yoy = pd.Series(yoy_vals).sort_values()
+else:
+    df_yoy = pd.Series(dtype=float)
+if mom_vals:
+    df_mom = pd.Series(mom_vals).sort_values()
+else:
+    df_mom = pd.Series(dtype=float)
+# --------------------------------------------------
+# Horizontal bar chart function
+# --------------------------------------------------
 df_yoy = pd.Series(yoy_vals).sort_values()
 df_mom = pd.Series(mom_vals).sort_values()
 
