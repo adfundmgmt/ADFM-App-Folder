@@ -126,7 +126,7 @@ fig_mom.update_layout(showlegend=False, hovermode="x unified")
 fig_core = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
                          subplot_titles=("Core CPI Index", "3‑Mo Annualised Core CPI %"))
 fig_core.add_trace(go.Scatter(x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4"), row=2, col=1)
-fig_core.add_trace(go.Scatter(x=core.index.loc[idx], y=core.loc[idx], name="Core Index", line_color="#ff7f0e"), row=1, col=1)
+fig_core.add_trace(go.Scatter(x=core.loc[idx].index, y=core.loc[idx], name="Core Index", line_color="#ff7f0e"), row=1, col=1)
 for s,e in recs_window:
     fig_core.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
                              fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=1, col=1)
