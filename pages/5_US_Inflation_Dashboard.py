@@ -116,7 +116,7 @@ fig_mom.add_trace(go.Bar(x=c_mom.index, y=c_mom, name="Core MoM",     marker_col
 for s,e in recs_window:
     fig_mom.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=1, col=1)
-    fig_mom.add_shape(dict(type="rect", xref="x", yref="paper", x0<s>, x1=e, y0=0, y1=1,
+    fig_mom.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=2, col=1)
 fig_mom.update_yaxes(title_text="% MoM", row=1, col=1)
 fig_mom.update_yaxes(title_text="% MoM", row=2, col=1)
