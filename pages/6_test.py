@@ -6,38 +6,14 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 # --------------------------------------------------
-# PAGE CONFIG
+# IMPORT FOR ERROR HANDLING
 # --------------------------------------------------
-st.set_page_config(page_title="US CPI Dashboard", layout="wide")
-
-# --------------------------------------------------
-# SIDEBAR: About & Period Selector
-# --------------------------------------------------
-with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **US Inflation Dashboard**  
-        Provides a comprehensive view of U.S. consumer price trends over time. The tool tracks both headline and core CPI on a year-over-year and month-over-month basis, with recession periods shaded for macro context.  
-        3-month annualised core inflation is included to better detect near-term momentum shifts. Historical insights are made interactive with selectable time windows.
-
-        """ +
-        """
-        Explore interactive inflation charts powered by the latest FRED data. View year‑over‑year and month‑over‑month changes for both headline and core CPI, with NBER recessions shaded for context. Data is fetched live and cached for responsiveness.
-        """
-    )
-    st.subheader("Time Range")
-    period = st.selectbox(
-        "Select period:",
-        ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"],
-        index=7
-    )
+from pandas_datareader._utils import RemoteDataError
 
 # --------------------------------------------------
 # DATA LOADING
 # --------------------------------------------------
 @st.cache_data(show_spinner=False)
-from pandas_datareader._utils import RemoteDataError
 def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
     """Fetch a FRED series and return a forward-filled monthly Series. Returns empty Series on failure."""
     try:
@@ -45,9 +21,9 @@ def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
         s = df[series_id].copy()
         return s.asfreq("MS").ffill()
     except RemoteDataError:
-        return pd.Series(name=series_id, dtype=float)
+        return pd.Series(dtype=float, name=series_id)
     except Exception:
-        return pd.Series(name=series_id, dtype=float)("MS").ffill()
+        return pd.Series(dtype=float, name=series_id)
 
 # Fetch series
 start_date_full = "1990-01-01"
