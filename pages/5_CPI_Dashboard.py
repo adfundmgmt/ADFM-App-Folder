@@ -5,39 +5,49 @@ from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 from datetime import datetime
 
-"""
-US CPI Dashboard (Streamlit)
-• Re-creates three Bloomberg-style inflation charts.
-• Pulls data live from FRED (headline CPI, core CPI, USREC recession indicator).
-• All functions fully vectorised and cached for speed.
-Fix (v1.1): ensure `load_series()` always returns a **Series** (not a DataFrame). That removes the ValueError you hit when `get_recession_periods()` tried to index an empty/ambiguous DataFrame.
-"""
-
 # --------------------------------------------------
-# 1. CONFIG & CACHING
+# PAGE CONFIG – *must* be the first Streamlit command
 # --------------------------------------------------
 st.set_page_config(page_title="US CPI Dashboard", layout="wide")
 
+# --------------------------------------------------
+# SIDEBAR – ABOUT THIS TOOL
+# --------------------------------------------------
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **US CPI Dashboard (Streamlit)**  
+        • Re-creates three Bloomberg-style inflation charts.  
+        • Pulls data live from FRED (headline CPI, core CPI, USREC recession indicator).  
+        • All functions fully vectorised and cached for speed.  
+        
+        *Fix (v1.1):* `load_series()` now always returns a **Series**, eliminating the ambiguous DataFrame error that surfaced in `get_recession_periods()`.
+        """
+    )
+
+# --------------------------------------------------
+# 1. CACHING / DATA LOADER
+# --------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
-    """Download a FRED series and forward-fill missing values, always returning a Series."""
-    df = DataReader(series_id, "fred", start)            # DataFrame with one column
-    s = df[series_id].copy()                              # select the column → Series
+    """Fetch a FRED time-series and return as a forward-filled monthly Series."""
+    df = DataReader(series_id, "fred", start)  # DataFrame
+    s = df[series_id].copy()                   # → Series
     s.name = series_id
-    s = s.asfreq("MS")                                   # monthly frequency (start-of-month)
-    return s.ffill()
+    return s.asfreq("MS").ffill()
 
 # --------------------------------------------------
-# 2. DATA
+# 2. DATA INGESTION
 # --------------------------------------------------
 START_DATE = "1990-01-01"
-headline = load_series("CPIAUCNS", START_DATE)           # headline CPI (NSA)
-core     = load_series("CPILFESL", START_DATE)           # core CPI (SA)
-recess   = load_series("USREC", START_DATE)              # NBER recession flag (0/1)
+headline = load_series("CPIAUCNS", START_DATE)  # Headline CPI (NSA)
+core     = load_series("CPILFESL", START_DATE)  # Core CPI (SA)
+recess   = load_series("USREC",    START_DATE)  # NBER recession flag (0/1)
 
-# YoY / MoM / 3-month annualised
+# Year-on-year (%), month-on-month (%), and 3-month annualised core CPI
 headline_yoy = headline.pct_change(12) * 100
-core_yoy     = core.pct_change(12) * 100
+core_yoy     = core.pct_change(12)     * 100
 headline_mom = headline.pct_change(1)  * 100
 core_mom     = core.pct_change(1)      * 100
 core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100
@@ -50,22 +60,18 @@ def get_recession_periods(flag: pd.Series):
     flag = flag.dropna().astype(int)
     if flag.empty:
         return []
-
-    # detect 0→1 and 1→0 transitions
     transitions = flag.diff()
     starts = flag[(flag == 1) & (transitions == 1)].index
-    if flag.iloc[0] == 1:  # recession already in progress at start
+    if flag.iloc[0] == 1:
         starts = starts.insert(0, flag.index[0])
-
     ends = flag[(flag == 0) & (transitions == -1)].index
-    if len(ends) < len(starts):                 # recession running right now
+    if len(ends) < len(starts):
         ends = ends.append(pd.Index([flag.index[-1]]))
-
     return list(zip(starts, ends))
 
 recession_windows = get_recession_periods(recess)
 
-# helper to shade recessions on any Plotly fig
+# Helper – add shaded recession bands to Plotly figure
 
 def add_recession_bands(fig, windows, yref="paper", color="rgba(200,0,0,0.15)"):
     for start, end in windows:
@@ -103,20 +109,24 @@ fig_core.update_yaxes(title_text="% (annualised)", row=2, col=1)
 fig_core.update_layout(hovermode="x unified")
 
 # --------------------------------------------------
-# 5. STREAMLIT LAYOUT
+# 5. MAIN LAYOUT
 # --------------------------------------------------
 st.title("US Inflation Dashboard")
+
 with st.expander("Methodology & Sources", expanded=False):
     st.markdown(
         """
-        **Data:** FRED via *pandas-datareader* (headline: `CPIAUCNS`, core SA: `CPILFESL`, recessions: `USREC`).  
+        **Data:** FRED via *pandas-datareader*  
+        • Headline CPI (*NSA*): `CPIAUCNS`  
+        • Core CPI (*SA*): `CPILFESL`  
+        • Recessions: `USREC`  
         **3-Mo annualised formula:** `((CPI_t / CPI_{t-3}) ** 4 – 1) × 100`.  
-        **Update cadence:** fresh on every app launch or cache expiry.
+        **Refresh cadence:** live on every run (subject to Streamlit cache).
         """
     )
 
-st.plotly_chart(fig_yoy, use_container_width=True)
-st.plotly_chart(fig_mom, use_container_width=True)
+st.plotly_chart(fig_yoy,  use_container_width=True)
+st.plotly_chart(fig_mom,  use_container_width=True)
 st.plotly_chart(fig_core, use_container_width=True)
 
 st.caption(f"© {datetime.today().year} • Built with Streamlit & Plotly • Data: FRED")
