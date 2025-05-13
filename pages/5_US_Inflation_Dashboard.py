@@ -152,4 +152,7 @@ with st.expander("Methodology & Sources", expanded=False):
         **3‑Mo annualised formula:** ((CPI_t / CPI_{t-3}) ** 4 – 1) × 100
         """
     )
-st.caption(f"© {datetime.today().year} • Built with Streamlit & Plotly • Data: FRED")
+
+# ── Footnotes ───────────────────────────────────────────────────────────────
+
+st.caption("© 2025 AD Fund Management LP")
