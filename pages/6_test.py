@@ -43,6 +43,13 @@ core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100
 # --------------------------------------------------
 # DETERMINE DATE WINDOW
 # --------------------------------------------------
+# Ensure `period` is defined (fallback to All)
+try:
+    period
+except NameError:
+    period = "All"
+
+# --------------------------------------------------
 end_date = headline.index.max()
 if period == "All":
     start_date = headline.index.min()
