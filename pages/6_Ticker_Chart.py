@@ -111,7 +111,7 @@ ax_vol.tick_params(axis="y", labelcolor="gray", labelsize=8)
 ax_vol.grid(alpha=0.3)
 
 # RSI
-ax_rsi.set_title("Relative Strength Index (14-day)", fontsize=14, weight="bold", pad=30)
+ax_rsi.set_title("Relative Strength Index (14-day)", fontsize=14, weight="bold", pad=15)
 ax_rsi.plot(df_plot.index, df_plot["RSI14"], color="purple", linewidth=1.5)
 ax_rsi.axhline(70, linestyle="--", color="gray", linewidth=1)
 ax_rsi.axhline(30, linestyle="--", color="gray", linewidth=1)
@@ -119,7 +119,7 @@ ax_rsi.set_ylabel("RSI", fontsize=10)
 ax_rsi.grid(alpha=0.3)
 
 # MACD
-ax_macd.set_title("MACD (12,26,9)", fontsize=14, weight="bold", pad=30)
+ax_macd.set_title("MACD (12,26,9)", fontsize=14, weight="bold", pad=15)
 ax_macd.plot(df_plot.index, df_plot["MACD"], label="MACD", color="blue", linewidth=1.5)
 ax_macd.plot(df_plot.index, df_plot["Signal"], label="Signal", color="orange", linewidth=1.5)
 ax_macd.bar(df_plot.index, df_plot["Hist"], label="Hist", color="gray", alpha=0.5, width=1)
