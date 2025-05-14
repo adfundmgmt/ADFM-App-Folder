@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import yfinance as yf
-import mplfinance as mpf
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime
 
 st.set_page_config(layout="wide", page_title="Ticker Technical Chart")
@@ -18,86 +17,78 @@ interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 # Fetch data
 df = yf.Ticker(ticker).history(period=period, interval=interval)
 if df.empty:
-    st.error("No data for ticker. Check symbol or internet connection.")
+    st.error("No data for this ticker.")
     st.stop()
 
-# Compute moving averages
+# Moving averages
 for w in (20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
-# Compute RSI(14)
+# RSI(14)
 delta = df["Close"].diff()
 gain = delta.clip(lower=0).rolling(14).mean()
 loss = -delta.clip(upper=0).rolling(14).mean()
 rs = gain / loss
 df["RSI14"] = 100 - (100 / (1 + rs))
 
-# Compute MACD(12,26,9)
+# MACD(12,26,9)
 ema12 = df["Close"].ewm(span=12, adjust=False).mean()
 ema26 = df["Close"].ewm(span=26, adjust=False).mean()
 df["MACD"] = ema12 - ema26
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"] = df["MACD"] - df["Signal"]
 
-# Volume profile (distribution of Close weighted by Volume)
-price_bins = np.linspace(df["Low"].min(), df["High"].max(), 30)
-vol_profile, _ = np.histogram(df["Close"], bins=price_bins, weights=df["Volume"])
-# normalize for plotting
-vol_profile = vol_profile / vol_profile.max()
+# Volume profile
+bins = pd.interval_range(df["Low"].min(), df["High"].max(), periods=30)
+profile = pd.cut(df["Close"], bins).groupby(bins).apply(lambda rng: df.loc[rng.index, "Volume"].sum())
+profile = profile / profile.max()
 
-# Build mplfinance style
-mc = mpf.make_marketcolors(up="g", down="r", inherit=True)
-s  = mpf.make_mpf_style(marketcolors=mc)
-add_plots = [
-    mpf.make_addplot(df["MA20"], color="purple", width=1),
-    mpf.make_addplot(df["MA50"], color="blue",  width=1),
-    mpf.make_addplot(df["MA100"], color="orange",width=1),
-    mpf.make_addplot(df["MA200"], color="black", width=1),
-]
+# Build subplots: rows 4 (candles+volume), 2 (RSI), 2 (MACD), cols 2 with volume‑profile on right
+fig = make_subplots(
+    rows=4, cols=2,
+    column_widths=[0.85,0.15],
+    row_heights=[0.5,0.15,0.15,0.2],
+    specs=[
+        [{"type":"candlestick","rowspan":2}, {"type":"bar"}],
+        [           None               ,               None],
+        [{"type":"scatter"},          {"type":"scatter"}],
+        [{"type":"bar"},              {"type":"bar"}]
+    ],
+    shared_xaxes=True,
+    vertical_spacing=0.02,
+    horizontal_spacing=0.02
+)
 
-# Create figure
-fig = mpf.figure(style=s, figsize=(16,10), dpi=100)
-ax_candle = fig.add_subplot(4,4, (1,3))
-ax_rsi    = fig.add_subplot(4,4,  5)
-ax_macd   = fig.add_subplot(4,4,  9)
-ax_volpro = fig.add_subplot(4,4,  (4,8))
+# Candlestick + MAs
+fig.add_trace(go.Candlestick(
+    x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+    name="Price"), row=1, col=1)
+for w, color in zip((20,50,100,200), ("purple","blue","orange","black")):
+    fig.add_trace(go.Scatter(x=df.index, y=df[f"MA{w}"], mode="lines", 
+                             line=dict(color=color,width=1), name=f"MA{w}"), row=1, col=1)
 
-# Plot candlesticks + MAs
-mpf.plot(df,
-         type="candle",
-         ax=ax_candle,
-         addplot=add_plots,
-         volume=False,
-         show_nontrading=False)
+# Volume bars
+fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color="grey", name="Volume"), row=2, col=1)
 
-ax_candle.set_title(f"{ticker} Price ({period}, {interval})")
-ax_candle.grid(alpha=0.2)
+# Volume profile
+fig.add_trace(go.Barh(y=profile.index.mid, x=profile.values, marker_color="gold", name="Vol Profile"), row=1, col=2)
 
-# Plot RSI
-ax_rsi.plot(df.index, df["RSI14"], color="purple")
-ax_rsi.axhline(70, ls="--", color="gray")
-ax_rsi.axhline(30, ls="--", color="gray")
-ax_rsi.set_ylabel("RSI(14)")
-ax_rsi.grid(alpha=0.2)
+# RSI
+fig.add_trace(go.Scatter(x=df.index, y=df["RSI14"], mode="lines", line_color="purple", name="RSI(14)"), row=3, col=1)
+fig.add_hline(70, line_dash="dash", line_color="gray", row=3, col=1)
+fig.add_hline(30, line_dash="dash", line_color="gray", row=3, col=1)
 
-# Plot MACD
-ax_macd.plot(df.index, df["MACD"], label="MACD", color="blue")
-ax_macd.plot(df.index, df["Signal"], label="Signal", color="orange")
-ax_macd.bar(df.index, df["Hist"], label="Hist", color="gray", alpha=0.5)
-ax_macd.legend(loc="upper left", fontsize=8)
-ax_macd.set_ylabel("MACD")
-ax_macd.grid(alpha=0.2)
+# MACD & Signal
+fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], mode="lines", line_color="blue", name="MACD"), row=4, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=df["Signal"], mode="lines", line_color="orange", name="Signal"), row=4, col=1)
+fig.add_trace(go.Bar(x=df.index, y=df["Hist"], marker_color="lightgray", name="Hist"), row=4, col=1)
 
-# Plot Volume Profile as horizontal bars on the right
-# align bins to middle
-bin_centers = (price_bins[:-1] + price_bins[1:]) / 2
-ax_volpro.barh(bin_centers, vol_profile, height=price_bins[1]-price_bins[0], color="gold", alpha=0.6)
-ax_volpro.invert_xaxis()
-ax_volpro.set_ylabel("Price")
-ax_volpro.set_xlabel("Relative Volume")
-ax_volpro.grid(alpha=0.2)
+# Layout tweaks
+fig.update_layout(
+    showlegend=False,
+    xaxis_rangeslider_visible=False,
+    height=900,
+    margin=dict(l=50,r=20,t=50,b=50)
+)
 
-# Tight layout
-fig.tight_layout()
-st.pyplot(fig)
-
+st.plotly_chart(fig, use_container_width=True)
