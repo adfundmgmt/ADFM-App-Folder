@@ -1,9 +1,12 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import altair as alt
+import math
 
-# Simple Options Chain Viewer with Spread Heatmap & Summary Metrics
+# Simple Options Chain Viewer with Greek Distribution Panel
+
 st.title('Options Chain Viewer')
 
 # Sidebar Inputs
@@ -23,19 +26,36 @@ except Exception:
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
 
-# Retrieve option chain
-chain = yf.Ticker(ticker).option_chain(expiry)
+# Retrieve option chain & underlying spot price
+tk = yf.Ticker(ticker)
+spot = tk.history(period='1d')['Close'].iloc[-1]
+chain = tk.option_chain(expiry)
 
 # Prepare call and put DataFrames
-calls = chain.calls[['strike', 'bid', 'ask', 'volume', 'openInterest']].copy()
-puts = chain.puts[['strike', 'bid', 'ask', 'volume', 'openInterest']].copy()
+calls = chain.calls[['strike', 'bid', 'ask', 'volume', 'openInterest', 'impliedVolatility']].copy()
+puts  = chain.puts[['strike', 'bid', 'ask', 'volume', 'openInterest', 'impliedVolatility']].copy()
 calls['type'] = 'Call'
 puts['type'] = 'Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
-# Calculate bid-ask spread percentage
-combined['mid'] = (combined['bid'] + combined['ask']) / 2
-combined['spread_pct'] = ((combined['ask'] - combined['bid']) / combined['mid']) * 100
+# Time to expiry in years
+today = pd.Timestamp.utcnow().normalize()
+expiry_date = pd.to_datetime(expiry)
+T = max((expiry_date - today).days, 0) / 365
+
+# Black-Scholes Delta
+def bs_delta(option_type, S, K, T, r, sigma):
+    if T <= 0 or sigma <= 0:
+        return np.nan
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    if option_type == 'Call':
+        return 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
+    else:
+        return 0.5 * (1 + math.erf(d1 / math.sqrt(2))) - 1
+
+# Compute Delta for each row
+RISK_FREE_RATE = 0.03
+combined['delta'] = combined.apply(lambda row: bs_delta(row['type'], spot, row['strike'], T, RISK_FREE_RATE, row['impliedVolatility']), axis=1)
 
 # Top-level: Volume by Strike Bar Chart
 st.subheader('Volume by Strike')
@@ -43,31 +63,35 @@ vol_chart = alt.Chart(combined).mark_bar().encode(
     x=alt.X('strike:O', title='Strike'),
     y=alt.Y('volume:Q', title='Volume'),
     color=alt.Color('type:N', scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']), legend=alt.Legend(title='Option Type')),
-    tooltip=['type', 'strike', 'volume', 'openInterest']
+    tooltip=['type', 'strike', 'volume', 'openInterest', 'delta']
 ).properties(width=800, height=400)
 st.altair_chart(vol_chart, use_container_width=True)
-
-st.markdown('---')
-# Bid-Ask Spread Heatmap
-st.subheader('Bid-Ask Spread Heatmap (%)')
-spread_heatmap = alt.Chart(combined).mark_rect().encode(
-    x=alt.X('strike:O', title='Strike'),
-    y=alt.Y('type:N', title='Option Type'),
-    color=alt.Color('spread_pct:Q', title='Spread %', scale=alt.Scale(scheme='redyellowgreen')),
-    tooltip=['type', 'strike', alt.Tooltip('spread_pct:Q', format='.2f')]
-).properties(width=800, height=300)
-st.altair_chart(spread_heatmap, use_container_width=True)
 
 st.markdown('---')
 # Summary Metrics Panel
 st.subheader('Summary Metrics')
 total_call_vol = combined.loc[combined['type'] == 'Call', 'volume'].sum()
-total_put_vol = combined.loc[combined['type'] == 'Put', 'volume'].sum()
-avg_spread = combined['spread_pct'].mean()
+total_put_vol  = combined.loc[combined['type'] == 'Put',  'volume'].sum()
+avg_delta      = combined['delta'].mean()
 col1, col2, col3 = st.columns(3)
 col1.metric('Total Call Volume', f'{int(total_call_vol):,}')
 col2.metric('Total Put Volume', f'{int(total_put_vol):,}')
-col3.metric('Average Spread %', f'{avg_spread:.2f}%')
+col3.metric('Avg Delta', f'{avg_delta:.2f}')
+
+st.markdown('---')
+# Greek Distribution Panel
+st.subheader('Delta Distribution by Option Type')
+
+delta_hist = alt.Chart(combined).transform_density(
+    'delta',
+    as_=['delta', 'density'],
+    groupby=['type']
+).mark_area(opacity=0.5).encode(
+    x=alt.X('delta:Q', title='Delta'),
+    y=alt.Y('density:Q', title='Density'),
+    color=alt.Color('type:N', scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']), legend=alt.Legend(title='Option Type'))
+).properties(width=800, height=300)
+st.altair_chart(delta_hist, use_container_width=True)
 
 # Optional detail tables
 display = st.sidebar.checkbox('Show Calls & Puts Tables')
@@ -81,8 +105,8 @@ if display:
 # Footer Notes
 st.markdown('''
 **How to use:**
-- Volume chart highlights top traded strikes.
-- Spread heatmap shows relative bid-ask costs.
-- Summary metrics give a quick overview of chain activity.
-- Toggle tables for deeper inspection.
+- View volume chart to spot heavy strikes.
+- Summary metrics show chain activity & average delta.
+- Delta distribution reveals skew and moneyness across calls/puts.
+- Toggle tables for deeper chain details.
 ''')
