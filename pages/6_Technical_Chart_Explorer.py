@@ -89,9 +89,10 @@ for w,color in zip(available_mas, ("purple","blue","orange","gray")):
         name=f"MA{w}"
     ), row=1, col=1)
 
-# Row 2: Volume
+# Row 2: Volume (full‐width bars)
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"],
+    width=1,  # fill the entire category slot
     marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"], df["Open"])],
     name="Volume"
 ), row=2, col=1)
@@ -106,7 +107,7 @@ fig.update_yaxes(title_text="RSI", row=3, col=1)
 fig.add_hline(y=70, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 
-# Row 4: MACD
+# Row 4: MACD + Histogram
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Hist"], marker_color="gray", name="MACD Hist"
 ), row=4, col=1)
@@ -127,7 +128,7 @@ fig.update_layout(
     height=900, width=1000,
     title=f"{ticker} — OHLC + RSI & MACD",
     hovermode="x unified",
-    xaxis=dict(type="category", rangeslider_visible=False),
+    xaxis=dict(type="category", rangeslider_visible=False, matches='x'),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
