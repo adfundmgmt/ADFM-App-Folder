@@ -3,28 +3,18 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import altair as alt
-import plotly.express as px
 
-# Streamlit: Options Volume & Activity Alert Scanner with 3D Strike-Level Insights
+# Streamlit: Options Activity & Actionable Alerts Scanner
 
 @st.cache_data
 def fetch_volume_metrics(ticker: str, expiry: str) -> dict:
-    tk = yf.Ticker(ticker)
-    chain = tk.option_chain(expiry)
-    calls = chain.calls.copy()
-    puts = chain.puts.copy()
-    total_call_vol = calls['volume'].sum()
-    total_put_vol = puts['volume'].sum()
-    total_vol = total_call_vol + total_put_vol
-    cp_ratio = total_call_vol / total_put_vol if total_put_vol > 0 else np.nan
-    return {
-        'ticker': ticker,
-        'expiry': expiry,
-        'call_vol': total_call_vol,
-        'put_vol': total_put_vol,
-        'total_vol': total_vol,
-        'cp_ratio': cp_ratio
-    }
+    chain = yf.Ticker(ticker).option_chain(expiry)
+    calls = chain.calls.copy(); puts = chain.puts.copy()
+    call_vol = calls['volume'].sum()
+    put_vol = puts['volume'].sum()
+    total_vol = call_vol + put_vol
+    cp_ratio = call_vol / put_vol if put_vol>0 else np.nan
+    return {'ticker':ticker,'expiry':expiry,'call_vol':call_vol,'put_vol':put_vol,'total_vol':total_vol,'cp_ratio':cp_ratio}
 
 @st.cache_data
 def get_expiries(ticker: str) -> list:
@@ -32,86 +22,74 @@ def get_expiries(ticker: str) -> list:
 
 @st.cache_data
 def build_volume_df(tickers: list, expiries: list) -> pd.DataFrame:
-    rows = []
+    rows=[]
     for t in tickers:
         for e in expiries:
-            try:
-                rows.append(fetch_volume_metrics(t, e))
-            except Exception:
-                continue
+            try: rows.append(fetch_volume_metrics(t,e))
+            except: continue
     return pd.DataFrame(rows)
 
-# UI
-st.title('Options Activity & Alert Scanner')
-
-# Sidebar Inputs
-ticker_input = st.sidebar.text_input('Tickers (comma-separated)', 'AAPL,MSFT,GOOG')
-tickers = [t.strip().upper() for t in ticker_input.split(',') if t.strip()]
+# --- UI Setup ---
+st.title('Options Activity & Actionable Alerts')
+# Inputs
+raw = st.sidebar.text_input('Tickers (comma-separated)','AAPL,MSFT,GOOG')
+tickers=[t.strip().upper() for t in raw.split(',') if t.strip()]
 if not tickers:
     st.sidebar.error('Enter at least one ticker.')
     st.stop()
-primary = tickers[0]
-expiries = st.sidebar.multiselect('Option Expiries', get_expiries(primary), default=get_expiries(primary)[:3])
+primary=tickers[0]
+exps=get_expiries(primary)
+expiries=st.sidebar.multiselect('Select Expiries',exps,default=exps[:3])
 if not expiries:
-    st.sidebar.warning('Select at least one expiry to analyze.')
+    st.sidebar.warning('Select at least one expiry.')
     st.stop()
-
-# Overview Metric Selector
-overview_metric = st.sidebar.selectbox(
-    'Overview Metric',
-    ['total_vol', 'cp_ratio'],
-    format_func=lambda x: {'total_vol':'Total Volume','cp_ratio':'Call/Put Volume Ratio'}[x]
-)
-
-df = build_volume_df(tickers, expiries)
+# Overview
+metric = st.sidebar.selectbox('Overview Metric',['total_vol','cp_ratio'],format_func=lambda x:{'total_vol':'Total Volume','cp_ratio':'C/P Ratio'}[x])
+# Build DataFrame
+df=build_volume_df(tickers,expiries)
 if df.empty:
-    st.error('No data. Verify tickers and expiries.')
+    st.error('No data; verify inputs.')
     st.stop()
-
-# Top-level Heatmap
-heatmap = alt.Chart(df).mark_rect().encode(
-    x=alt.X('expiry:N', title='Expiry'),
-    y=alt.Y('ticker:N', title='Ticker'),
-    color=alt.Color(f'{overview_metric}:Q', title=overview_metric),
+# Heatmap Overview
+st.subheader('Volume Overview Heatmap')
+hm = alt.Chart(df).mark_rect().encode(
+    x=alt.X('expiry:N',title='Expiry'),
+    y=alt.Y('ticker:N',title='Ticker'),
+    color=alt.Color(f'{metric}:Q',title=metric),
     tooltip=['ticker','expiry','call_vol','put_vol','total_vol','cp_ratio']
 ).properties(width=700,height=300)
-st.altair_chart(heatmap,use_container_width=True)
+st.altair_chart(hm,use_container_width=True)
 
 st.markdown('---')
-# Strike-Level Activity Alerts (always available)
-sel = st.selectbox('Choose ticker-expiry for Strike-Level Alerts', df.apply(lambda r: f"{r['ticker']} | {r['expiry']}", axis=1).tolist())
-sel_t, sel_e = [s.strip() for s in sel.split('|')]
-chain = yf.Ticker(sel_t).option_chain(sel_e)
-combined = pd.concat([chain.calls.assign(type='call'), chain.puts.assign(type='put')], ignore_index=True)
-combined['volume'] = combined['volume'].fillna(0)
-combined['openInterest'] = combined['openInterest'].replace(0, np.nan)
-combined['vol_oi_ratio'] = (combined['volume'] / combined['openInterest']).round(3)
-# Top 10 strikes by vol/OI
-alerts = combined.sort_values('vol_oi_ratio', ascending=False).head(10)[['type','strike','volume','openInterest','vol_oi_ratio']]
-st.markdown('**Top 10 Strikes by Volume/Open Interest Ratio**')
-st.dataframe(alerts.reset_index(drop=True))
-# 2D Bar Chart with call/put color
-bar_chart = alt.Chart(alerts).mark_bar().encode(
-    x='strike:O',
-    y='vol_oi_ratio:Q',
-    color=alt.Color('type:N', scale=alt.Scale(domain=['put','call'], range=['#d7191c','#1a9641']), legend=alt.Legend(title='Type')),
-    tooltip=['type','strike','volume','openInterest','vol_oi_ratio']
-).properties(width=700,height=300)
-st.altair_chart(bar_chart,use_container_width=True)
+# Strike-Level Actionable Alerts
+sel = st.selectbox('Ticker & Expiry for Detailed Alerts',df.apply(lambda r:f"{r['ticker']} | {r['expiry']}",axis=1).tolist())
+tk,ex=map(str.strip,sel.split('|'))
+chain=yf.Ticker(tk).option_chain(ex)
+combo=pd.concat([chain.calls.assign(type='call'),chain.puts.assign(type='put')],ignore_index=True)
+combo['volume']=combo['volume'].fillna(0)
+combo['openInterest']=combo['openInterest'].replace(0,np.nan)
+combo['vol_oi']= (combo['volume']/combo['openInterest']).round(3)
+# select top strikes
+alerts=combo.sort_values('vol_oi',ascending=False).head(10)
 
-# 3D Scatter for deeper context
-fig3d = px.scatter_3d(
-    alerts,
-    x='strike', y='volume', z='vol_oi_ratio',
-    color='type',
-    title='3D View: Volume vs. Strike vs. Vol/OI Ratio'
-)
-st.plotly_chart(fig3d)
+# 2D Heatmap of Strike vs Vol/OI
+st.subheader('Strike vs. Activity Heatmap')
+m2 = alt.Chart(alerts).mark_rect().encode(
+    x=alt.X('strike:O',title='Strike'),
+    y=alt.Y('type:N',title='Option Type'),
+    color=alt.Color('vol_oi:Q',title='Vol/OI'),
+    tooltip=['type','strike','volume','openInterest','vol_oi']
+).properties(width=700,height=250)
+st.altair_chart(m2,use_container_width=True)
+
+# Actionable Summary
+st.subheader('Alerts Summary')
+for _,r in alerts.iterrows():
+    st.write(f"- **{r['type'].capitalize()}** @ strike {r['strike']}: vol/OI={r['vol_oi']} (vol={int(r['volume'])})")
 
 # Footer
 st.markdown("""
 **Notes:**
-- `cp_ratio`: call_vol / put_vol
-- `vol_oi_ratio`: volume / openInterest (high ≈ unusual activity)
-- Chart updates per selection; data via yfinance.
+- `C/P Ratio` = call_vol / put_vol
+- `vol_oi` = volume / openInterest (higher = unusual activity)
 """)
