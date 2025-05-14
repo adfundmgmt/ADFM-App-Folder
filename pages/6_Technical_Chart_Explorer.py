@@ -131,10 +131,12 @@ fig.add_trace(go.Scatter(
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
 # ── Build monthly ticks on categorical axis ────────────────────────────────
-# pick the first trading-day label for each month in view
+# find the first trading day of each month
 month_starts = df.index.to_series().groupby(df.index.to_period("M")).first()
-tickvals     = month_starts.strftime("%Y-%m-%d").tolist()
-ticktext     = month_starts.dt.strftime("%b-%y").tolist()
+
+# use .dt on the values to format
+tickvals = month_starts.dt.strftime("%Y-%m-%d").tolist()
+ticktext = month_starts.dt.strftime("%b-%y").tolist()
 
 fig.update_xaxes(
     type="category",
