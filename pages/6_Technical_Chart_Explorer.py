@@ -14,8 +14,8 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 - Interactive OHLC candlesticks  
 - 20/50/100/200‑day moving averages (full length)  
 - Volume bars color‑coded by up/down days  
-- MACD (12,26,9) panel  
 - RSI (14‑day) panel (0–100 scale)  
+- MACD (12,26,9) panel  
 """)
 ticker   = st.sidebar.text_input("Ticker", "NVDA").upper()
 period   = st.sidebar.selectbox(
@@ -76,14 +76,14 @@ fig = make_subplots(
     row_heights=[0.55,0.15,0.15,0.15],
     vertical_spacing=0.04,
     specs=[
-        [{"type":"candlestick"}],  # Price + MAs
-        [{"type":"bar"}],          # Volume
-        [{"type":"scatter"}],      # MACD
-        [{"type":"scatter"}],      # RSI
+        [{"type":"candlestick"}],  # 1 Price
+        [{"type":"bar"}],          # 2 Volume
+        [{"type":"scatter"}],      # 3 RSI
+        [{"type":"scatter"}],      # 4 MACD
     ]
 )
 
-# 1) Price + MAs (legend on)
+# 1) Price + MAs (show legend + label)
 fig.add_trace(go.Candlestick(
     x=df["DateStr"],
     open=df["Open"], high=df["High"],
@@ -97,8 +97,9 @@ for w,color in zip(available_mas,("purple","blue","orange","gray")):
         mode="lines", line=dict(color=color, width=1),
         name=f"MA{w}", showlegend=True
     ), row=1, col=1)
+fig.update_yaxes(title_text="Price", row=1, col=1)
 
-# 2) Volume (hide from legend, label axis)
+# 2) Volume
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"], width=1,
     marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"], df["Open"])],
@@ -106,39 +107,39 @@ fig.add_trace(go.Bar(
 ), row=2, col=1)
 fig.update_yaxes(title_text="Volume", row=2, col=1)
 
-# 3) MACD + Hist (hide legend)
-fig.add_trace(go.Bar(
-    x=df["DateStr"], y=df["Hist"], marker_color="gray",
-    name="MACD Hist", showlegend=False
-), row=3, col=1)
-fig.add_trace(go.Scatter(
-    x=df["DateStr"], y=df["MACD"],
-    mode="lines", line=dict(color="blue", width=1.5),
-    name="MACD", showlegend=False
-), row=3, col=1)
-fig.add_trace(go.Scatter(
-    x=df["DateStr"], y=df["Signal"],
-    mode="lines", line=dict(color="orange", width=1),
-    name="Signal", showlegend=False
-), row=3, col=1)
-fig.update_yaxes(title_text="MACD", row=3, col=1)
-
-# 4) RSI (hide legend)
+# 3) RSI
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["RSI14"],
     mode="lines", line=dict(color="purple", width=1),
     name="RSI (14)", showlegend=False
-), row=4, col=1)
+), row=3, col=1)
 fig.update_yaxes(
     range=[0,100],
     title_text="RSI",
-    row=4, col=1,
+    row=3, col=1,
     title_standoff=15
 )
-fig.add_hline(y=80, line_dash="dash", line_color="gray", row=4, col=1)
-fig.add_hline(y=20, line_dash="dash", line_color="gray", row=4, col=1)
+fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
+fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
-# ── Monthly ticks on categorical axis ───────────────────────────────────────
+# 4) MACD + Hist
+fig.add_trace(go.Bar(
+    x=df["DateStr"], y=df["Hist"], marker_color="gray",
+    name="MACD Hist", showlegend=False
+), row=4, col=1)
+fig.add_trace(go.Scatter(
+    x=df["DateStr"], y=df["MACD"],
+    mode="lines", line=dict(color="blue", width=1.5),
+    name="MACD", showlegend=False
+), row=4, col=1)
+fig.add_trace(go.Scatter(
+    x=df["DateStr"], y=df["Signal"],
+    mode="lines", line=dict(color="orange", width=1),
+    name="Signal", showlegend=False
+), row=4, col=1)
+fig.update_yaxes(title_text="MACD", row=4, col=1)
+
+# ── Monthly ticks ───────────────────────────────────────────────────────────
 month_starts = df.index.to_series().groupby(df.index.to_period("M")).first()
 tickvals     = month_starts.dt.strftime("%Y-%m-%d").tolist()
 ticktext     = month_starts.dt.strftime("%b-%y").tolist()
@@ -151,7 +152,7 @@ fig.update_xaxes(
 # ── Layout tweaks ────────────────────────────────────────────────────────────
 fig.update_layout(
     height=900, width=1000,
-    title=dict(text=f"{ticker} — OHLC + MACD & RSI", x=0.5),
+    title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5),
     hovermode="x unified",
     margin=dict(l=60, r=20, t=60, b=40),
     xaxis=dict(rangeslider_visible=False),
