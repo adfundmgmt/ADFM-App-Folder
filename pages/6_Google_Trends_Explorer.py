@@ -1,10 +1,27 @@
-# pages/trends.py
+# pages/6_Google_Trends_Explorer.py
 
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from pytrends.request import TrendReq
 from datetime import datetime
+
+# — Gracefully handle missing pytrends
+try:
+    from pytrends.request import TrendReq
+except ModuleNotFoundError:
+    st.error(
+        """
+        🚨 **Missing dependency**  
+        The `pytrends` library isn’t installed in this environment.
+
+        • **If you’re running locally**, do:
+          ```
+          pip install pytrends
+          ```
+        • **If you’re on Streamlit Cloud**, add `pytrends` to your `requirements.txt` (or `packages.txt`) and re‑deploy.
+        """
+    )
+    st.stop()
 
 # 1) Sidebar dropdown
 TERMS = [
@@ -18,45 +35,44 @@ st.sidebar.header("Google Trends Explorer")
 selected_term = st.sidebar.selectbox("Choose a term:", TERMS)
 
 # 2) Cache the pytrends fetch
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_trends(term: str) -> pd.DataFrame:
-    pytrends = TrendReq(hl='en-US', tz=360)
-    # timeframe from 2020-03-01 to today
+    py = TrendReq(hl="en-US", tz=360)
     today = datetime.today().strftime("%Y-%m-%d")
     timeframe = f"2020-03-01 {today}"
-    pytrends.build_payload([term], timeframe=timeframe)
-    df = pytrends.interest_over_time()
-    if df.empty:
-        st.error("No data returned from Google Trends.")
-    return df
+    py.build_payload([term], timeframe=timeframe)
+    df = py.interest_over_time()
+    if term in df:
+        return df[[term]]
+    else:
+        return pd.DataFrame()
 
-# 3) Load & display
+# 3) Load & plot
 data = load_trends(selected_term)
 
-if not data.empty:
+if data.empty:
+    st.warning(f"No Google Trends data for **{selected_term}**.")
+else:
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(data.index, data[selected_term], linewidth=1.5)
-    ax.set_title(f'Search Interest Over Time: "{selected_term}"', pad=12)
-    ax.set_ylabel("Google Trends Score (0–100)")
+    ax.set_title(f'Search Interest: "{selected_term}"', pad=12)
+    ax.set_ylabel("Score (0–100)")
     ax.set_xlabel("Date")
     ax.grid(alpha=0.2)
 
-    # 4) Annotate the top 3 spikes
-    top3 = data[selected_term].nlargest(3)
-    for date, value in top3.items():
+    # annotate top‑3 spikes
+    spikes = data[selected_term].nlargest(3)
+    for dt, val in spikes.items():
         ax.annotate(
-            date.strftime("%b %Y"),
-            xy=(date, value),
-            xytext=(date, value + 7),
-            ha='center',
-            arrowprops=dict(color='red', arrowstyle='->', lw=1)
+            dt.strftime("%b %Y"),
+            xy=(dt, val),
+            xytext=(0, 8),
+            textcoords="offset points",
+            ha="center",
+            arrowprops=dict(color="red", arrowstyle="->", lw=1),
         )
 
     st.pyplot(fig)
 
-    # 5) Show raw data toggle
-    if st.sidebar.checkbox("Show raw data", False):
-        st.dataframe(data[selected_term].rename(selected_term).to_frame())
-
-else:
-    st.warning("Unable to load trend data for this term.")
+    if st.sidebar.checkbox("Show raw data"):
+        st.dataframe(data.rename(columns={selected_term: "Trend Score"}))
