@@ -1,89 +1,82 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Breakout Scanner", layout="wide")
-st.title("📈 Breakout Scanner")
+st.title("📈 Breakout Scanner: 20D/50D Highs & RSI")
 
 st.sidebar.header("About")
 st.sidebar.info(
-    "Flags stocks at 20‑day or 50‑day highs and shows 14‑day RSI for momentum.\n\n"
-    "Enter comma‑separated tickers below."
+    "Enter comma‑separated tickers below. "
+    "This tool fetches the last 3 months of adjusted close prices, "
+    "then flags stocks at 20‑day or 50‑day highs and shows current 14‑day RSI."
 )
 
 # ─── Inputs ───────────────────────────────────────────────────────────────────
 tickers_input = st.sidebar.text_input(
     "Tickers (comma‑separated):", 
-    "AAPL, MSFT, NVDA, TSLA, AMD"
+    value="AAPL, MSFT, NVDA, TSLA, AMD"
 )
 tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 if not tickers:
-    st.warning("Please enter at least one ticker.")
+    st.warning("Please enter at least one ticker in the sidebar.")
     st.stop()
 
-# ─── Fetch Adjusted Close ──────────────────────────────────────────────────────
-lookback = 90
-start_date = datetime.now() - timedelta(days=lookback)
-
+# ─── Fetch Prices ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def get_adj_close(tickers, start):
-    raw = yf.download(tickers, start=start, progress=False)
-    # For multi-ticker, raw.columns is a MultiIndex
-    if isinstance(raw.columns, pd.MultiIndex):
-        # pick the 'Adj Close' subframe
-        if 'Adj Close' in raw.columns.get_level_values(0):
-            data = raw['Adj Close']
+def fetch_prices(tickers):
+    df = pd.DataFrame()
+    failed = []
+    for t in tickers:
+        data = yf.download(t, period="3mo", progress=False)
+        if "Adj Close" in data and not data["Adj Close"].isna().all():
+            df[t] = data["Adj Close"]
         else:
-            return pd.DataFrame()
-    else:
-        # single ticker case: wrap into DataFrame
-        if 'Adj Close' in raw.columns:
-            data = raw[['Adj Close']].rename(columns={'Adj Close': tickers[0]})
-        else:
-            return pd.DataFrame()
-    return data.dropna(axis=1, how='all')
+            failed.append(t)
+    df.dropna(axis=1, how="all", inplace=True)
+    return df, failed
 
-price_df = get_adj_close(tickers, start_date)
+price_df, failed = fetch_prices(tickers)
+
+if failed:
+    st.sidebar.warning(f"Ignored invalid tickers: {', '.join(failed)}")
 if price_df.empty:
-    st.error("No price data returned. Check tickers or internet access.")
+    st.error("No valid price data returned. Check your tickers or internet connection.")
     st.stop()
 
 # ─── Indicator Functions ──────────────────────────────────────────────────────
-def compute_rsi(s, window=14):
-    delta = s.diff()
+def compute_rsi(series: pd.Series, window: int = 14) -> float:
+    delta = series.diff()
     gain = delta.clip(lower=0).rolling(window).mean()
     loss = -delta.clip(upper=0).rolling(window).mean()
     rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    return float((100 - (100 / (1 + rs))).iloc[-1])
 
-# ─── Signal Generation ────────────────────────────────────────────────────────
+# ─── Generate Signals ───────────────────────────────────────────────────────────
 records = []
 for sym in price_df.columns:
-    series = price_df[sym].dropna()
-    if len(series) < 50:
+    s = price_df[sym].dropna()
+    if len(s) < 50:
         continue
-    price = series.iloc[-1]
-    high20 = series[-20:].max()
-    high50 = series[-50:].max()
-    rsi = compute_rsi(series).iloc[-1]
+    price = s.iloc[-1]
+    high20 = s[-20:].max()
+    high50 = s[-50:].max()
     records.append({
         "Ticker": sym,
         "Price": round(price, 2),
         "20D High": round(high20, 2),
         "50D High": round(high50, 2),
-        "Breakout 20D": price >= high20,
-        "Breakout 50D": price >= high50,
-        "RSI (14)": round(rsi, 2)
+        "Breakout 20D": price >= high20,
+        "Breakout 50D": price >= high50,
+        "RSI (14D)": round(compute_rsi(s), 2)
     })
 
-# ─── Display ─────────────────────────────────────────────────────────────────
+# ─── Display Results ─────────────────────────────────────────────────────────────
 if records:
-    df = pd.DataFrame(records)
-    df = df.sort_values(
-        by=["Breakout 50D", "Breakout 20D"], ascending=False
-    )
-    st.dataframe(df, use_container_width=True)
+    out = pd.DataFrame(records)
+    out = out.sort_values(by=["Breakout 50D", "Breakout 20D"], ascending=False)
+    st.dataframe(out, use_container_width=True)
 else:
-    st.info("No current breakouts detected.")
+    st.info("No current breakouts detected in your ticker list.")
