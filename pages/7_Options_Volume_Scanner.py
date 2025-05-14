@@ -4,23 +4,20 @@ import pandas as pd
 import numpy as np
 import altair as alt
 
-# Streamlit: Options Volume Scanner
+# Streamlit: Options Volume & Activity Alert Scanner
 
 @st.cache_data
 def fetch_volume_metrics(ticker: str, expiry: str) -> dict:
     tk = yf.Ticker(ticker)
-    # Fetch option chain
     try:
         chain = tk.option_chain(expiry)
     except Exception as e:
         raise ValueError(f"Error fetching chain for {ticker} {expiry}: {e}")
     calls = chain.calls.copy()
     puts = chain.puts.copy()
-    # Compute total volumes
     total_call_vol = calls['volume'].sum()
     total_put_vol = puts['volume'].sum()
     total_vol = total_call_vol + total_put_vol
-    # Call/Put volume ratio
     cp_ratio = total_call_vol / total_put_vol if total_put_vol > 0 else np.nan
     return {
         'ticker': ticker,
@@ -50,16 +47,15 @@ def build_volume_df(tickers: list, expiries: list) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 # --- Streamlit UI ---
-st.title('Options Volume Scanner')
+st.title('Options Activity & Alert Scanner')
 
-# Sidebar: Inputs
+# Sidebar Inputs
 ticker_input = st.sidebar.text_input('Tickers (comma-separated)', 'AAPL,MSFT,GOOG')
 tickers = [t.strip().upper() for t in ticker_input.split(',') if t.strip()]
 if not tickers:
     st.sidebar.error('Enter at least one ticker.')
     st.stop()
 
-# Fetch expiries from first ticker
 primary = tickers[0]
 all_exps = get_expiries(primary)
 if not all_exps:
@@ -71,49 +67,57 @@ if not expiries:
     st.sidebar.warning('Select at least one expiry to analyze.')
     st.stop()
 
+# Top-level Heatmap: total volume or C/P ratio
 metric = st.sidebar.selectbox(
-    'Metric',
-    ['total_vol', 'call_vol', 'put_vol', 'cp_ratio'],
-    format_func=lambda x: dict(total_vol='Total Volume', call_vol='Call Volume', put_vol='Put Volume', cp_ratio='Call/Put Ratio')[x]
+    'Overview Metric',
+    ['total_vol', 'cp_ratio'],
+    format_func=lambda x: dict(total_vol='Total Volume', cp_ratio='Call/Put Volume Ratio')[x]
 )
 
-# Build data frame
 df = build_volume_df(tickers, expiries)
 if df.empty:
-    st.error('No volume data. Verify tickers and expiries.')
+    st.error('No data. Verify tickers and expiries.')
     st.stop()
 
-# Heatmap: expiry vs ticker
 heatmap = alt.Chart(df).mark_rect().encode(
     x=alt.X('expiry:N', title='Expiry'),
     y=alt.Y('ticker:N', title='Ticker'),
-    color=alt.Color(f'{metric}:Q', title=dict(total_vol='Total Volume', call_vol='Call Volume', put_vol='Put Volume', cp_ratio='Call/Put Ratio')[metric]),
+    color=alt.Color(f'{metric}:Q', title=metric),
     tooltip=['ticker', 'expiry', 'call_vol', 'put_vol', 'total_vol', 'cp_ratio']
 ).properties(width=700, height=350)
 st.altair_chart(heatmap, use_container_width=True)
 
-# Drill-down: show top strikes by volume for a selected pair
+# Drill-Down: Strike-Level Alerts
 st.markdown('---')
-if st.button('Show Strike-Level Volume Details'):
-    sel = st.selectbox('Choose ticker-expiry', df.apply(lambda r: f"{r['ticker']} | {r['expiry']}", axis=1).tolist())
+if st.checkbox('Enable Strike-Level Activity Alerts'):
+    sel = st.selectbox('Choose ticker-expiry', df.apply(lambda r: f"{r['ticker']} | {r['expiry']}", axis=1))
     t_sel, e_sel = [s.strip() for s in sel.split('|')]
-    # Fetch chain again for details
     chain = yf.Ticker(t_sel).option_chain(e_sel)
-    combined = pd.concat([chain.calls.assign(type='call'), chain.puts.assign(type='put')])
-    combined['volume_abs'] = combined['volume']
-    top_strikes = combined.sort_values('volume_abs', ascending=False).head(10)
-    bar = alt.Chart(top_strikes).mark_bar().encode(
+    combined = pd.concat([
+        chain.calls.assign(type='call'),
+        chain.puts.assign(type='put')
+    ], ignore_index=True)
+    combined['volume'] = combined['volume'].fillna(0)
+    combined['openInterest'] = combined['openInterest'].replace(0, np.nan)
+    combined['vol_oi_ratio'] = (combined['volume'] / combined['openInterest']).round(3)
+    # Identify top activity by vol/OI
+    alerts = combined.sort_values('vol_oi_ratio', ascending=False).head(10)
+    alerts = alerts[['type', 'strike', 'volume', 'openInterest', 'vol_oi_ratio']]
+    st.markdown('**Top Strikes by Volume/Open Interest**')
+    st.dataframe(alerts.reset_index(drop=True))
+    # Visual highlight with call/put color spectrum
+    bars = alt.Chart(alerts).mark_bar().encode(
         x=alt.X('strike:O', title='Strike'),
-        y=alt.Y('volume_abs:Q', title='Volume'),
-        color=alt.Color('type:N'),
-        tooltip=['type', 'strike', 'volume_abs']
+        y=alt.Y('vol_oi_ratio:Q', title='Volume/OI Ratio'),
+        color=alt.Color('type:N', scale=alt.Scale(domain=['put','call'], range=['#d7191c','#1a9641']), legend=alt.Legend(title='Option Type')),
+        tooltip=['type', 'strike', 'volume', 'openInterest', 'vol_oi_ratio']
     ).properties(width=700, height=300)
-    st.altair_chart(bar, use_container_width=True)
-    st.table(top_strikes[['type','strike','volume_abs']].reset_index(drop=True))
+    st.altair_chart(bars, use_container_width=True)
 
-# Footer notes
+# Footer Notes
 st.markdown("""
 **Notes:**
 - `cp_ratio` = Call Volume / Put Volume
-- Data sourced in real-time via yfinance (subject to API limits)
+- `vol_oi_ratio` indicates the proportion of open interest traded today (higher = unusual activity).
+- Data via yfinance (API subject to quotas).
 """)
