@@ -13,6 +13,7 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 **Features:**
 - Interactive OHLC candlesticks
 - 20/50/100/200‑day moving averages
+- Volume bars color‑coded by up/down days
 - RSI (14‑day) panel
 - MACD (12,26,9) panel
 
@@ -33,18 +34,19 @@ else:
     df    = yf.Ticker(ticker).history(period="max", interval=interval)
 
 if df.empty:
-    st.error("No data returned.")
-    st.stop()
+    st.error("No data returned."); st.stop()
 
-# Strip timezone, trim to exact window, drop weekends
+# strip tz, trim to window, drop weekends
 df.index = pd.to_datetime(df.index).tz_localize(None)
 if period != "max":
     cutoff = df.index.max() - pd.Timedelta(days=period_map[period])
     df     = df.loc[df.index >= cutoff]
 df = df[df.index.weekday < 5]
+
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
+# Moving averages
 for w in (20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
@@ -55,35 +57,36 @@ loss        = -delta.clip(upper=0).rolling(14).mean()
 rs          = gain / loss
 df["RSI14"] = 100 - (100/(1+rs))
 
-# MACD(12,26,9)
+# MACD (12,26,9)
 df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
 df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
 df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# Only plot MAs that fit
+# Only plot MAs that have full data
 available_mas = [w for w in (20,50,100,200) if len(df) >= w]
 
-# ── Build Figure (3 rows) ───────────────────────────────────────────────────
+# ── Build Figure ────────────────────────────────────────────────────────────
 fig = make_subplots(
-    rows=3, cols=1,
+    rows=4, cols=1,
     shared_xaxes=True,
-    row_heights=[0.6, 0.2, 0.2],
-    vertical_spacing=0.05,
+    row_heights=[0.6, 0.12, 0.14, 0.14],
+    vertical_spacing=0.04,
     specs=[
-        [{"type":"candlestick"}],
-        [{"type":"scatter"}],
-        [{"type":"scatter"}],
+        [{"type":"candlestick"}],   # Row 1: price
+        [{"type":"bar"}],           # Row 2: volume only
+        [{"type":"scatter"}],       # Row 3: RSI
+        [{"type":"scatter"}],       # Row 4: MACD
     ]
 )
 
-# 1) Price + MAs
+# 1) Price + MAs in row 1
 fig.add_trace(
     go.Candlestick(
         x=df["DateStr"],
         open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"],
+        low=df["Low"],   close=df["Close"],
         increasing_line_color="green",
         decreasing_line_color="red",
         name="Price"
@@ -94,33 +97,45 @@ for w,color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(
         go.Scatter(
             x=df["DateStr"], y=df[f"MA{w}"],
-            mode="lines",
-            line=dict(color=color, width=1),
+            mode="lines", line=dict(color=color, width=1),
             name=f"MA{w}"
         ),
         row=1, col=1
     )
 
-# 2) RSI
+# 2) Volume only in row 2
+fig.add_trace(
+    go.Bar(
+        x=df["DateStr"], y=df["Volume"],
+        marker_color=[
+            "green" if c>=o else "red"
+            for c,o in zip(df["Close"], df["Open"])
+        ],
+        name="Volume"
+    ),
+    row=2, col=1
+)
+
+# 3) RSI in row 3
 fig.add_trace(
     go.Scatter(
         x=df["DateStr"], y=df["RSI14"],
         mode="lines", line=dict(color="purple", width=1),
         name="RSI (14)"
     ),
-    row=2, col=1
+    row=3, col=1
 )
-fig.update_yaxes(title_text="RSI", row=2, col=1)
-fig.add_hline(y=70, line_dash="dash", line_color="gray", row=2, col=1)
-fig.add_hline(y=30, line_dash="dash", line_color="gray", row=2, col=1)
+fig.update_yaxes(title_text="RSI", row=3, col=1)
+fig.add_hline(y=70, line_dash="dash", line_color="gray", row=3, col=1)
+fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 
-# 3) MACD + Histogram
+# 4) MACD + histogram in row 4
 fig.add_trace(
     go.Bar(
         x=df["DateStr"], y=df["Hist"],
         marker_color="gray", name="MACD Hist"
     ),
-    row=3, col=1
+    row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
@@ -128,7 +143,7 @@ fig.add_trace(
         mode="lines", line=dict(color="blue", width=1.5),
         name="MACD"
     ),
-    row=3, col=1
+    row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
@@ -136,13 +151,13 @@ fig.add_trace(
         mode="lines", line=dict(color="orange", width=1),
         name="Signal"
     ),
-    row=3, col=1
+    row=4, col=1
 )
-fig.update_yaxes(title_text="MACD", row=3, col=1)
+fig.update_yaxes(title_text="MACD", row=4, col=1)
 
 # ── Layout tweaks ────────────────────────────────────────────────────────────
 fig.update_layout(
-    height=800, width=1000,
+    height=900, width=1000,
     title=f"{ticker} — OHLC + RSI & MACD",
     hovermode="x unified",
     xaxis=dict(type="category"),
