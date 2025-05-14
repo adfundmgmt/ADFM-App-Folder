@@ -8,4 +8,3 @@ plotly
 packaging
 pytrends
 requests
-mlpfinance
