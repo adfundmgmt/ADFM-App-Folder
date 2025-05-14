@@ -18,7 +18,7 @@ st.sidebar.markdown(
     - RSI (14‑day) panel
     - MACD (12,26,9) panel
 
-    Hover to inspect open/high/low/close, MA values, RSI and MACD.
+    Hover anywhere to inspect OHLC, MA values, RSI and MACD.
     """
 )
 st.sidebar.subheader("Settings")
@@ -48,7 +48,7 @@ if df.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# normalize index
+# strip tz
 df.index = pd.to_datetime(df.index).tz_localize(None)
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ delta       = df["Close"].diff()
 gain        = delta.clip(lower=0).rolling(14).mean()
 loss        = -delta.clip(upper=0).rolling(14).mean()
 rs          = gain / loss
-df["RSI14"] = 100 - (100/(1+rs))
+df["RSI14"] = 100 - (100 / (1+rs))
 
 df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
 df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
@@ -67,16 +67,20 @@ df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# ── Trim to exact window (drop buffer portion) ──────────────────────────────
+# trim back to the exact window
 if period != "max":
     window = period_map[period]
     cutoff = df.index.max() - pd.Timedelta(days=window)
     df     = df.loc[df.index >= cutoff]
 
-# ── Remove non‑trading days (weekends) ───────────────────────────────────────
+# drop weekends if any slipped through
 df = df[df.index.weekday < 5]
 
-# ── Determine which MAs to plot ──────────────────────────────────────────────
+# ── Make a string‐date column to use as a category x‑axis ────────────────────
+df["DateStr"] = df.index.strftime("%Y-%m-%d")
+x            = df["DateStr"]
+
+# ── Select which MAs fit in your window ──────────────────────────────────────
 n = len(df)
 available_mas = [w for w in (20,50,100,200) if n >= w]
 
@@ -84,7 +88,7 @@ available_mas = [w for w in (20,50,100,200) if n >= w]
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
-    row_heights=[0.5, 0.1, 0.15, 0.25],
+    row_heights=[0.5,0.1,0.15,0.25],
     vertical_spacing=0.02,
     specs=[
         [{"type":"candlestick"}],
@@ -94,21 +98,22 @@ fig = make_subplots(
     ]
 )
 
-# 1) Candles + MAs
+# 1) Candlestick + MAs
 fig.add_trace(
     go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"],
+        x=x,
+        open=df["Open"], high=df["High"],
+        low=df["Low"],   close=df["Close"],
         name="Price",
         increasing_line_color="green",
         decreasing_line_color="red"
     ),
     row=1, col=1
 )
-for w, color in zip(available_mas, ("purple","blue","orange","gray")):
+for w,color in zip(available_mas,("purple","blue","orange","gray")):
     fig.add_trace(
         go.Scatter(
-            x=df.index, y=df[f"MA{w}"],
+            x=x, y=df[f"MA{w}"],
             mode="lines",
             line=dict(color=color, width=1),
             name=f"MA{w}"
@@ -119,11 +124,11 @@ for w, color in zip(available_mas, ("purple","blue","orange","gray")):
 # 2) Volume
 fig.add_trace(
     go.Bar(
-        x=df.index,
+        x=x,
         y=df["Volume"],
         marker_color=[
             "green" if c>=o else "red"
-            for c, o in zip(df["Close"], df["Open"])
+            for c,o in zip(df["Close"], df["Open"])
         ],
         name="Volume"
     ),
@@ -133,7 +138,7 @@ fig.add_trace(
 # 3) RSI
 fig.add_trace(
     go.Scatter(
-        x=df.index, y=df["RSI14"],
+        x=x, y=df["RSI14"],
         mode="lines", line=dict(color="purple", width=1),
         name="RSI (14)"
     ),
@@ -146,35 +151,32 @@ fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 # 4) MACD + Signal + Hist
 fig.add_trace(
     go.Bar(
-        x=df.index, y=df["Hist"],
+        x=x, y=df["Hist"],
         marker_color="gray", name="MACD Hist"
-    ),
-    row=4, col=1
+    ), row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
-        x=df.index, y=df["MACD"],
+        x=x, y=df["MACD"],
         mode="lines", line=dict(color="blue", width=1.5),
         name="MACD"
-    ),
-    row=4, col=1
+    ), row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
-        x=df.index, y=df["Signal"],
+        x=x, y=df["Signal"],
         mode="lines", line=dict(color="orange", width=1),
         name="Signal"
-    ),
-    row=4, col=1
+    ), row=4, col=1
 )
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
 # ── Layout tweaks ────────────────────────────────────────────────────────────
-fig.update(layout_xaxis_rangeslider_visible=False)
 fig.update_layout(
     height=900, width=1000,
     title=f"{ticker} — Interactive OHLC + RSI & MACD",
     hovermode="x unified",
+    xaxis=dict(type="category"),       # treat x as discrete trading‑day labels
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
