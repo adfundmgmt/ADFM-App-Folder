@@ -20,14 +20,6 @@ def bs_delta(option_type, S, K, T, r, sigma):
     return norm_cdf(d1) if option_type == 'call' else norm_cdf(d1) - 1
 
 @st.cache_data
-def get_expiries_for_ticker(ticker: str) -> list:
-    """Return list of available option expiries for a ticker"""
-    try:
-        return yf.Ticker(ticker).options
-    except Exception:
-        return []
-
-@st.cache_data
 def fetch_metrics(ticker: str, expiry: str) -> dict:
     tk = yf.Ticker(ticker)
     # Underlying spot price
@@ -45,26 +37,28 @@ def fetch_metrics(ticker: str, expiry: str) -> dict:
     df['mid_price'] = (df['bid'] + df['ask']) / 2
     # Time to expiry in years
     exp_date = pd.to_datetime(expiry)
-    T_val = max((exp_date - pd.Timestamp.utcnow()).days, 0) / 365
+    T_val = max((exp_date - pd.Timestamp.now()).days, 0) / 365
     df['T'] = T_val
     df['S'] = S
     # Calculate delta for each row
     df['delta'] = df.apply(lambda r: bs_delta(r['type'], r['S'], r['strike'], r['T'], RISK_FREE_RATE, r['mid_iv']), axis=1)
     # ATM IV
-    atm_row = df.loc[(df['strike'] - S).abs().idxmin()]
-    atm_iv = atm_row['mid_iv']
+    atm_iv = df.loc[(df['strike'] - S).abs().idxmin(), 'mid_iv']
     # 25-delta call & put
     call25 = df[df['type'] == 'call'].iloc[(df[df['type'] == 'call']['delta'] - 0.25).abs().argsort()[0]]
     put25 = df[df['type'] == 'put'].iloc[(df[df['type'] == 'put']['delta'] + 0.25).abs().argsort()[0]]
     # Compute metrics
     rr = call25['mid_iv'] - put25['mid_iv']
     fly = 0.5 * (call25['mid_iv'] + put25['mid_iv']) - atm_iv
-    return {
-        'ticker': ticker,
-        'expiry': expiry,
-        'rr': rr,
-        'fly': fly
-    }
+    return {'ticker': ticker, 'expiry': expiry, 'rr': rr, 'fly': fly}
+
+@st.cache_data
+def get_expiries_for_ticker(ticker: str) -> list:
+    try:
+        options = yf.Ticker(ticker).options
+        return options if options else []
+    except Exception:
+        return []
 
 @st.cache_data
 def build_dataframe(tickers: list, expiries: list) -> pd.DataFrame:
@@ -83,21 +77,31 @@ st.title('Vol Surface & Skew Scanner')
 # Sidebar inputs
 raw = st.sidebar.text_input('Tickers (comma-separated)', 'AAPL, MSFT, GOOG')
 tickers = [t.strip().upper() for t in raw.split(',') if t.strip()]
-# Aggregate expiries across all tickers
-all_exps = sorted(set(exp for t in tickers for exp in get_expiries_for_ticker(t)))
-if not all_exps:
-    st.warning('No option expiries found. Please check your tickers.')
+
+if not tickers:
+    st.error('Please enter at least one ticker.')
     st.stop()
+
+# Fetch expiries for the first valid ticker
+first = tickers[0]
+all_exps = get_expiries_for_ticker(first)
+if not all_exps:
+    st.error(f'Could not fetch expiries for {first}. Please check the ticker.')
+    st.stop()
+
 expiries = st.sidebar.multiselect('Select Expiries', all_exps, default=all_exps[:3])
+if not expiries:
+    st.warning('Select at least one expiry to proceed.')
+    st.stop()
+
 metric = st.sidebar.selectbox('Metric to Display', ['rr', 'fly'], format_func=lambda x: 'Risk Reversal' if x == 'rr' else 'Butterfly')
 
 # Build data
 df = build_dataframe(tickers, expiries)
 
 if df.empty:
-    st.error('No valid data—please verify tickers and expiries.')
+    st.error('No valid data—please verify your tickers and expiries.')
 else:
-    # Render heatmap
     chart = alt.Chart(df).mark_rect().encode(
         x=alt.X('expiry:N', title='Expiry'),
         y=alt.Y('ticker:N', title='Ticker'),
