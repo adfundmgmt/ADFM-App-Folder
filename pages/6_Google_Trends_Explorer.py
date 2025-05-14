@@ -1,3 +1,5 @@
+# pages/6_Google_Trends_Explorer.py
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -5,10 +7,10 @@ from datetime import datetime
 import random
 import time
 
-# -- Style setup
+# -- Matplotlib styling
 plt.style.use("seaborn-v0_8-darkgrid")
 
-# -- User-agent pool
+# -- User agents to reduce bot detection
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
@@ -17,7 +19,7 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPad; CPU OS 13_6 like Mac OS X)",
 ]
 
-# -- Macro-relevant trend terms
+# -- Macro-relevant search terms
 TERMS = [
     "Recession", "Inflation", "Unemployment", "Layoffs",
     "Credit Crunch", "Rate Hike", "Bond Market Crash",
@@ -26,27 +28,28 @@ TERMS = [
     "Hyperinflation", "Soft Landing"
 ]
 
-# -- Sidebar content
-st.sidebar.header("About This Tool")
+# -- Sidebar UI
+st.sidebar.header("🧠 Google Trends Explorer")
 st.sidebar.markdown(
     """
 Track macro sentiment shifts by visualizing live Google search interest from 2020 to today.
 
-⚠️ **Note**: Google rate-limits frequent queries. Wait ~30 seconds between searches if needed.  
-Data is auto-cached for 24h per term.
+⚠️ **Note**: Google may temporarily block multiple requests.  
+Wait **~45–60 seconds between queries** to avoid being rate-limited (error 429).  
+Data is cached for 24 hours per term.
 """
 )
 
 selected_term = st.sidebar.selectbox("Choose a term:", TERMS)
 
-# -- Ensure pytrends installed
+# -- Check pytrends
 try:
     from pytrends.request import TrendReq
 except ImportError:
-    st.error("`pytrends` not found. Add it to requirements.txt or run `pip install pytrends`.")
+    st.error("`pytrends` is not installed. Run `pip install pytrends` or add it to requirements.txt.")
     st.stop()
 
-# -- Cached fetcher with rate-limit recovery
+# -- Google Trends fetcher with rate-limit retry logic
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_trends(term: str) -> pd.DataFrame:
     def fetch():
@@ -62,12 +65,13 @@ def load_trends(term: str) -> pd.DataFrame:
         return fetch()
     except Exception as e:
         if "429" in str(e).lower() or "too many requests" in str(e).lower():
-            st.warning("⏳ Rate-limited by Google. Retrying after 15 seconds...")
-            time.sleep(15)
+            st.warning("🚧 Rate-limited by Google. Waiting 45 seconds before retrying...")
+            time.sleep(45)
             try:
                 return fetch()
             except Exception as retry_e:
-                raise RuntimeError(f"Google Trends request failed again: {retry_e}")
+                st.error("❌ Google blocked the request again. Please wait a few minutes and try again.")
+                return pd.DataFrame()
         else:
             raise RuntimeError(f"Google Trends request failed: {e}")
 
@@ -82,8 +86,8 @@ if data.empty:
     st.warning(f"No data available for **{selected_term}**.")
     st.stop()
 
-# -- Chart rendering
-fig, ax = plt.subplots(figsize=(11, 5.5))  # Full-width scale
+# -- Plot the chart
+fig, ax = plt.subplots(figsize=(11, 5.5))  # Full-width
 
 ax.plot(data.index, data[selected_term], color='black', linewidth=2.25)
 ax.set_title(f'Search Interest Over Time: "{selected_term}"', fontsize=18, pad=15, weight='bold')
@@ -106,6 +110,5 @@ for dt, val in spikes.items():
         bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", lw=0.8)
     )
 
-# -- Final layout
 fig.tight_layout()
 st.pyplot(fig)
