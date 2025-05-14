@@ -25,11 +25,10 @@ if not tickers:
     st.warning("Please enter at least one ticker.")
     st.stop()
 
-# ─── Fetch Prices ──────────────────────────────────────────────────────────────
-period = "6mo"
+# ─── Fetch Prices (1 Year) ──────────────────────────────────────────────────────
 price_dict, failed = {}, []
 for t in tickers:
-    hist = yf.Ticker(t).history(period=period)
+    hist = yf.Ticker(t).history(period="1y")
     if hist.empty or "Close" not in hist.columns:
         failed.append(t)
     else:
@@ -40,6 +39,7 @@ if failed:
 if not price_dict:
     st.error("No valid price data. Check tickers / internet.")
     st.stop()
+
 price_df = pd.DataFrame(price_dict)
 
 # ─── RSI Helper ────────────────────────────────────────────────────────────────
@@ -48,44 +48,37 @@ def compute_rsi(s, window):
     gain = delta.clip(lower=0).rolling(window).mean()
     loss = -delta.clip(upper=0).rolling(window).mean()
     rs = gain / loss
-    return (100 - (100 / (1 + rs)))
+    return 100 - (100 / (1 + rs))
 
 # ─── Build Signal Table ─────────────────────────────────────────────────────────
 records = []
 for sym, s in price_df.items():
+    # require at least 200 days for 200D high
     if len(s) < 200:
         continue
-    latest = s.iat[-1]
-    highs = {
-        20: s[-20:].max(),
-        50: s[-50:].max(),
-        100: s[-100:].max(),
-        200: s[-200:].max(),
-    }
-    rsis = {w: compute_rsi(s, w).iat[-1] for w in (7, 14, 21)}
+
+    latest = s.iloc[-1]
+    highs = {w: s.rolling(w).max().iloc[-1] for w in (20, 50, 100, 200)}
+    rsis  = {w: compute_rsi(s, w).iloc[-1] for w in (7, 14, 21)}
 
     rec = {
         "Ticker": sym,
         "Price": round(latest, 2),
-        "20D High": round(highs[20], 2),
-        "50D High": round(highs[50], 2),
-        "100D High": round(highs[100], 2),
-        "200D High": round(highs[200], 2),
-        "Breakout 20D": latest >= highs[20],
-        "Breakout 50D": latest >= highs[50],
-        "Breakout 100D": latest >= highs[100],
-        "Breakout 200D": latest >= highs[200],
-        "RSI (7)": round(rsis[7], 1),
-        "RSI (14)": round(rsis[14], 1),
-        "RSI (21)": round(rsis[21], 1),
     }
+    # add highs & breakouts
+    for w in highs:
+        rec[f"{w}D High"]    = round(highs[w], 2)
+        rec[f"Breakout {w}D"] = latest >= highs[w]
+    # add RSIs
+    for w in rsis:
+        rec[f"RSI ({w})"] = round(rsis[w], 1)
+
     records.append(rec)
 
 df = pd.DataFrame(records)
 
-# If no records, stop here
 if df.empty:
-    st.info("No breakouts detected or insufficient data for the provided tickers.")
+    st.info("No breakouts detected or insufficient data (need ≥200 days).")
     st.stop()
 
 # ─── Sort by breakout priority ─────────────────────────────────────────────────
@@ -93,29 +86,21 @@ break_cols = [c for c in df.columns if c.startswith("Breakout")]
 df = df.sort_values(by=break_cols, ascending=False)
 
 # ─── Style Table ───────────────────────────────────────────────────────────────
-def mark(v):
-    return "✅" if v else ""
-
+def mark(v): return "✅" if v else ""
 styled = (
     df.style
-      .format(
-         {"Price":"{:.2f}",
-          "20D High":"{:.2f}","50D High":"{:.2f}",
-          "100D High":"{:.2f}","200D High":"{:.2f}"}
-      )
+      .format({col:"{:.2f}" for col in df.columns if "High" in col or col=="Price"})
       .applymap(mark, subset=break_cols)
       .background_gradient(
           subset=[c for c in df.columns if c.startswith("RSI")],
           cmap="coolwarm", vmin=0, vmax=100
       )
 )
-
 st.subheader("Breakout & RSI Signals")
 st.dataframe(styled, use_container_width=True)
 
 # ─── Per‑Ticker Charts ─────────────────────────────────────────────────────────
-# Now Safe to access df["Ticker"]
-sel = st.selectbox("Select ticker to chart:", df["Ticker"].tolist())
+sel = st.selectbox("Select ticker to chart:", df["Ticker"])
 s = price_df[sel]
 
 fig, (ax1, ax2) = plt.subplots(2,1, figsize=(10,6), sharex=True)
