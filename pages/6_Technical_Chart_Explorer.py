@@ -45,34 +45,30 @@ if df.empty:
 df.index = pd.to_datetime(df.index).tz_localize(None)
 
 # ── Indicators ──────────────────────────────────────────────────────────────
-# Moving averages
 for w in (20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
-# RSI(14)
 delta = df["Close"].diff()
 gain  = delta.clip(lower=0).rolling(14).mean()
 loss  = -delta.clip(upper=0).rolling(14).mean()
 rs    = gain/loss
 df["RSI14"] = 100 - (100/(1+rs))
 
-# MACD(12,26,9)
 df["EMA12"]   = df["Close"].ewm(span=12, adjust=False).mean()
 df["EMA26"]   = df["Close"].ewm(span=26, adjust=False).mean()
 df["MACD"]    = df["EMA12"] - df["EMA26"]
 df["Signal"]  = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]    = df["MACD"] - df["Signal"]
 
-# Trim off the buffer so the main window is exactly your period
+# Trim off the buffer so main window = requested period
 if period!="max":
     window = {"1y":365,"2y":730,"3y":1095,"5y":1825}[period]
     df     = df.loc[df.index>=df.index.max()-pd.Timedelta(days=window)]
 
-# ── **NEW**: Force‑cast OHLCV to floats & drop any bad rows ─────────────────
-df[["Open","High","Low","Close","Volume"]] = df[["Open","High","Low","Close","Volume"]].apply(
-    pd.to_numeric, errors="coerce"
-)
-df.dropna(subset=["Open","High","Low","Close","Volume"], inplace=True)
+# ── CLEAN OHLCV ─────────────────────────────────────────────────────────────
+ohlcv = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
+df[ohlcv] = df[ohlcv].apply(pd.to_numeric, errors="coerce")
+df.dropna(subset=ohlcv, inplace=True)
 df.sort_index(inplace=True)
 
 # ── mplfinance add‑plots ────────────────────────────────────────────────────
