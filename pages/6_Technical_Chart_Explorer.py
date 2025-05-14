@@ -25,17 +25,13 @@ st.sidebar.subheader("Settings")
 ticker   = st.sidebar.text_input("Ticker",   "NVDA").upper()
 period   = st.sidebar.selectbox(
     "Period",
-    ["1mo","3mo","6mo","1y","2y","3y","5y","max"],
-    index=3
+    ["1mo","3mo","6mo","1y","2y","3y","5y","max"], index=3
 )
-interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
+interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"],   index=0)
 
 # ── Fetch with buffer for MAs ────────────────────────────────────────────────
 buffer_days = 250
-period_map = {
-    "1mo": 30, "3mo": 90,  "6mo": 180,
-    "1y": 365, "2y": 365*2, "3y": 365*3, "5y": 365*5
-}
+period_map = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":365*2,"3y":365*3,"5y":365*5}
 
 if period != "max":
     days  = period_map[period] + buffer_days
@@ -48,7 +44,6 @@ if df.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# strip tz
 df.index = pd.to_datetime(df.index).tz_localize(None)
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
@@ -59,7 +54,7 @@ delta       = df["Close"].diff()
 gain        = delta.clip(lower=0).rolling(14).mean()
 loss        = -delta.clip(upper=0).rolling(14).mean()
 rs          = gain / loss
-df["RSI14"] = 100 - (100 / (1+rs))
+df["RSI14"] = 100 - (100/(1+rs))
 
 df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
 df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
@@ -67,24 +62,22 @@ df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# trim back to the exact window
+# ── Trim to exact window & drop weekends ────────────────────────────────────
 if period != "max":
-    window = period_map[period]
-    cutoff = df.index.max() - pd.Timedelta(days=window)
+    cutoff = df.index.max() - pd.Timedelta(days=period_map[period])
     df     = df.loc[df.index >= cutoff]
 
-# drop weekends if any slipped through
-df = df[df.index.weekday < 5]
+df = df[df.index.weekday < 5]  # remove Saturdays & Sundays
 
-# ── Make a string‐date column to use as a category x‑axis ────────────────────
+# ── Prepare x as discrete trading‐day labels ────────────────────────────────
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 x            = df["DateStr"]
 
-# ── Select which MAs fit in your window ──────────────────────────────────────
+# ── Select MAs that fit your window ─────────────────────────────────────────
 n = len(df)
 available_mas = [w for w in (20,50,100,200) if n >= w]
 
-# ── Build Plotly Figure (4 rows) ────────────────────────────────────────────
+# ── Build Plotly Figure (4 stacked rows) ───────────────────────────────────
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
@@ -110,7 +103,7 @@ fig.add_trace(
     ),
     row=1, col=1
 )
-for w,color in zip(available_mas,("purple","blue","orange","gray")):
+for w,color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(
         go.Scatter(
             x=x, y=df[f"MA{w}"],
@@ -124,8 +117,7 @@ for w,color in zip(available_mas,("purple","blue","orange","gray")):
 # 2) Volume
 fig.add_trace(
     go.Bar(
-        x=x,
-        y=df["Volume"],
+        x=x, y=df["Volume"],
         marker_color=[
             "green" if c>=o else "red"
             for c,o in zip(df["Close"], df["Open"])
@@ -150,35 +142,36 @@ fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 
 # 4) MACD + Signal + Hist
 fig.add_trace(
-    go.Bar(
-        x=x, y=df["Hist"],
-        marker_color="gray", name="MACD Hist"
-    ), row=4, col=1
+    go.Bar(x=x, y=df["Hist"], marker_color="gray", name="MACD Hist"),
+    row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
         x=x, y=df["MACD"],
         mode="lines", line=dict(color="blue", width=1.5),
         name="MACD"
-    ), row=4, col=1
+    ),
+    row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
         x=x, y=df["Signal"],
         mode="lines", line=dict(color="orange", width=1),
         name="Signal"
-    ), row=4, col=1
+    ),
+    row=4, col=1
 )
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# ── Layout tweaks ────────────────────────────────────────────────────────────
+# ── Layout tweaks & axis‐linking ─────────────────────────────────────────────
 fig.update_layout(
     height=900, width=1000,
     title=f"{ticker} — Interactive OHLC + RSI & MACD",
     hovermode="x unified",
-    xaxis=dict(type="category"),       # treat x as discrete trading‑day labels
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
+# Treat x as discrete and link ALL x‑axes so zoom/pan stays in sync
+fig.update_xaxes(type="category", matches="x")
 
 # ── Render ───────────────────────────────────────────────────────────────────
 st.plotly_chart(fig, use_container_width=True)
