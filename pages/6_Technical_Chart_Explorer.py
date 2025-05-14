@@ -27,7 +27,7 @@ interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
 # ── Fetch with extra buffer for long MAs ────────────────────────────────────
 base_days   = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
-buffer_days = max(base_days.get(period,365), 1000)
+buffer_days = max(base_days.get(period,365), 10)
 
 if period != "max":
     start = datetime.today() - timedelta(days=base_days[period] + buffer_days)
