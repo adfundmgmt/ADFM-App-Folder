@@ -70,7 +70,7 @@ df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# Trim to exact window
+# Trim to exact window (drop the buffer portion)
 if period != "max":
     window = period_map[period]
     cutoff = df.index.max() - pd.Timedelta(days=window)
@@ -139,10 +139,7 @@ fig.add_trace(
     ),
     row=3, col=1
 )
-# Add axis label for RSI
 fig.update_yaxes(title_text="RSI", row=3, col=1)
-
-# Overbought/oversold lines
 fig.add_hline(y=70, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 
@@ -170,7 +167,6 @@ fig.add_trace(
     ),
     row=4, col=1
 )
-# Add axis label for MACD
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
 # ── Layout tweaks ────────────────────────────────────────────────────────────
@@ -182,9 +178,11 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
+# ── Remove weekends ─────────────────────────────────────────────────────────
+fig.update_xaxes(
+    rangebreaks=[dict(bounds=["sat","sun"])],  # hide Sat & Sun
+    row="all", col=1
+)
+
 # ── Render ───────────────────────────────────────────────────────────────────
 st.plotly_chart(fig, use_container_width=True)
-
-# ── Footnotes ───────────────────────────────────────────────────────────────
-
-st.caption("© 2025 AD Fund Management LP")
