@@ -16,8 +16,6 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 - Volume bars color‑coded by up/down days
 - RSI (14‑day) panel (0–100 scale)
 - MACD (12,26,9) panel
-
-Hover anywhere to inspect values—zoom/pan enabled.
 """)
 ticker   = st.sidebar.text_input("Ticker", "NVDA").upper()
 period   = st.sidebar.selectbox(
@@ -25,7 +23,7 @@ period   = st.sidebar.selectbox(
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ── Fetch with extra buffer for long MAs ────────────────────────────────────
+# ── Fetch with buffer for long MAs ──────────────────────────────────────────
 base_days   = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
 buffer_days = max(base_days.get(period,365), 500)
 
@@ -45,8 +43,6 @@ if period != "max":
     cutoff = df.index.max() - pd.Timedelta(days=base_days[period])
     df     = df.loc[df.index >= cutoff]
 df = df[df.index.weekday < 5]
-
-# categorical date label for perfect alignment
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
@@ -72,7 +68,7 @@ fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
     row_heights=[0.55,0.15,0.15,0.15],
-    vertical_spacing=0.05,
+    vertical_spacing=0.02,
     specs=[
         [{"type":"candlestick"}],
         [{"type":"bar"}],
@@ -90,21 +86,23 @@ fig.add_trace(go.Candlestick(
     decreasing_line_color="red",
     name="Price"
 ), row=1, col=1)
-for w,color in zip(available_mas, ("purple","blue","orange","gray")):
+for w, color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(go.Scatter(
         x=df["DateStr"], y=df[f"MA{w}"],
-        mode="lines", line=dict(color=color, width=1),
+        mode="lines",
+        line=dict(color=color, width=1),
         name=f"MA{w}"
     ), row=1, col=1)
 
-# 2) Volume (with legend entry)
+# 2) Volume
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"], width=1,
-    marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"],df["Open"])],
-    name="Volume", showlegend=True
+    marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"], df["Open"])],
+    name="Volume", showlegend=False
 ), row=2, col=1)
+fig.update_yaxes(title_text="Volume", row=2, col=1)
 
-# 3) RSI (0–100, lines at 80/20)
+# 3) RSI
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["RSI14"],
     mode="lines", line=dict(color="purple", width=1),
@@ -145,16 +143,11 @@ fig.update_xaxes(
 
 # ── Layout tweaks ────────────────────────────────────────────────────────────
 fig.update_layout(
-    template="plotly_white",
     height=900, width=1000,
-    title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5, xanchor="center", font_size=20),
+    title=f"{ticker} — OHLC + RSI & MACD",
     hovermode="x unified",
-    xaxis_rangeslider_visible=False,
-    legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
+    xaxis=dict(rangeslider_visible=False),
+    legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center")
 )
-
-# subtle grid styling
-fig.update_xaxes(showgrid=True, gridcolor="LightGray", gridwidth=0.5, zeroline=False)
-fig.update_yaxes(showgrid=True, gridcolor="LightGray", gridwidth=0.5)
 
 st.plotly_chart(fig, use_container_width=True)
