@@ -93,15 +93,16 @@ fig = make_subplots(
 
 # 1) Candlestick + MAs
 fig.add_trace(
-    go.Candlestick(
-        x=x,
-        open=df["Open"], high=df["High"],
-        low=df["Low"],   close=df["Close"],
-        name="Price",
-        increasing_line_color="green",
-        decreasing_line_color="red"
-    ),
-    row=1, col=1
+  go.Candlestick(
+    x=x,
+    open=df["Open"], high=df["High"],
+    low=df["Low"], close=df["Close"],
+    width=0.6,  # narrower bars
+    increasing_line_color="green",
+    decreasing_line_color="red",
+    name="Price"
+  ),
+  row=1, col=1
 )
 for w,color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(
@@ -171,7 +172,11 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 # Treat x as discrete and link ALL x‑axes so zoom/pan stays in sync
-fig.update_xaxes(type="category", matches="x")
+fig.update_xaxes(
+  type="category",
+  range=[-0.4, len(x)-0.6],  # adds a 0.4‑unit margin
+  matches="x"
+)
 
 # ── Render ───────────────────────────────────────────────────────────────────
 st.plotly_chart(fig, use_container_width=True)
