@@ -21,15 +21,14 @@ st.sidebar.markdown(
     Hover to inspect open/high/low/close, MA values, RSI and MACD.
     """
 )
-
 st.sidebar.subheader("Settings")
-ticker   = st.sidebar.text_input("Ticker",    "NVDA").upper()
+ticker   = st.sidebar.text_input("Ticker",   "NVDA").upper()
 period   = st.sidebar.selectbox(
     "Period",
     ["1mo","3mo","6mo","1y","2y","3y","5y","max"],
     index=3
 )
-interval = st.sidebar.selectbox("Interval",  ["1d","1wk","1mo"],   index=0)
+interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
 # ── Fetch with buffer for MAs ────────────────────────────────────────────────
 buffer_days = 250
@@ -49,32 +48,33 @@ if df.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
+# normalize index
 df.index = pd.to_datetime(df.index).tz_localize(None)
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
-# Moving Averages
 for w in (20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
-# RSI(14)
 delta       = df["Close"].diff()
 gain        = delta.clip(lower=0).rolling(14).mean()
 loss        = -delta.clip(upper=0).rolling(14).mean()
 rs          = gain / loss
 df["RSI14"] = 100 - (100/(1+rs))
 
-# MACD(12,26,9)
 df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
 df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
 df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# Trim to exact window (drop buffer portion)
+# ── Trim to exact window (drop buffer portion) ──────────────────────────────
 if period != "max":
     window = period_map[period]
     cutoff = df.index.max() - pd.Timedelta(days=window)
     df     = df.loc[df.index >= cutoff]
+
+# ── Remove non‑trading days (weekends) ───────────────────────────────────────
+df = df[df.index.weekday < 5]
 
 # ── Determine which MAs to plot ──────────────────────────────────────────────
 n = len(df)
@@ -105,7 +105,7 @@ fig.add_trace(
     ),
     row=1, col=1
 )
-for w,color in zip(available_mas, ("purple","blue","orange","gray")):
+for w, color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(
         go.Scatter(
             x=df.index, y=df[f"MA{w}"],
@@ -123,7 +123,7 @@ fig.add_trace(
         y=df["Volume"],
         marker_color=[
             "green" if c>=o else "red"
-            for c,o in zip(df["Close"], df["Open"])
+            for c, o in zip(df["Close"], df["Open"])
         ],
         name="Volume"
     ),
@@ -176,12 +176,6 @@ fig.update_layout(
     title=f"{ticker} — Interactive OHLC + RSI & MACD",
     hovermode="x unified",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-)
-
-# ── Remove weekends ─────────────────────────────────────────────────────────
-fig.update_xaxes(
-    rangebreaks=[dict(bounds=["sat","sun"])],  # hide Sat & Sun
-    rangeslider_visible=False
 )
 
 # ── Render ───────────────────────────────────────────────────────────────────
