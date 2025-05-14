@@ -6,8 +6,19 @@ import altair as alt
 import math
 
 # Simple Options Chain Viewer with Greek Distribution Panel
-
 st.title('Options Chain Viewer')
+
+# Sidebar: About This Tool
+st.sidebar.header('About This Tool')
+st.sidebar.markdown(
+    """
+- **Interactive Options Chain**: Fetch real-time call & put chains for any ticker and expiry via yfinance.
+- **Volume by Strike**: Bar chart highlighting today’s trading volume across strikes (calls in green, puts in red).
+- **Summary Metrics**: Total call/put volume and average Black‑Scholes delta for quick chain health checks.
+- **Delta Distribution Panel**: Density plots of option deltas to visualize skew and moneyness across the chain.
+- **Optional Tables**: Toggle to inspect detailed bid/ask, volume, and open interest values per strike.
+    """
+)
 
 # Sidebar Inputs
 ticker = st.sidebar.text_input('Ticker', 'AAPL').upper()
@@ -38,8 +49,8 @@ calls['type'] = 'Call'
 puts['type'] = 'Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
-# Time to expiry in years
-today = pd.Timestamp.utcnow().normalize()
+# Time to expiry in years (using local today date)
+today = pd.to_datetime('today').normalize()
 expiry_date = pd.to_datetime(expiry)
 T = max((expiry_date - today).days, 0) / 365
 
@@ -53,16 +64,19 @@ def bs_delta(option_type, S, K, T, r, sigma):
     else:
         return 0.5 * (1 + math.erf(d1 / math.sqrt(2))) - 1
 
-# Compute Delta for each row
+# Compute Delta for each option
 RISK_FREE_RATE = 0.03
-combined['delta'] = combined.apply(lambda row: bs_delta(row['type'], spot, row['strike'], T, RISK_FREE_RATE, row['impliedVolatility']), axis=1)
+combined['delta'] = combined.apply(
+    lambda row: bs_delta(row['type'], spot, row['strike'], T, RISK_FREE_RATE, row['impliedVolatility']),
+    axis=1
+)
 
-# Top-level: Volume by Strike Bar Chart
+# Top-level: Volume by Strike
 st.subheader('Volume by Strike')
 vol_chart = alt.Chart(combined).mark_bar().encode(
     x=alt.X('strike:O', title='Strike'),
     y=alt.Y('volume:Q', title='Volume'),
-    color=alt.Color('type:N', scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']), legend=alt.Legend(title='Option Type')),
+    color=alt.Color('type:N', scale=alt.Scale(domain=['Call', 'Put'], range=['#1a9641', '#d7191c']), legend=alt.Legend(title='Option Type')),
     tooltip=['type', 'strike', 'volume', 'openInterest', 'delta']
 ).properties(width=800, height=400)
 st.altair_chart(vol_chart, use_container_width=True)
@@ -89,7 +103,7 @@ delta_hist = alt.Chart(combined).transform_density(
 ).mark_area(opacity=0.5).encode(
     x=alt.X('delta:Q', title='Delta'),
     y=alt.Y('density:Q', title='Density'),
-    color=alt.Color('type:N', scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']), legend=alt.Legend(title='Option Type'))
+    color=alt.Color('type:N', scale=alt.Scale(domain=['Call', 'Put'], range=['#1a9641', '#d7191c']), legend=alt.Legend(title='Option Type'))
 ).properties(width=800, height=300)
 st.altair_chart(delta_hist, use_container_width=True)
 
@@ -105,8 +119,8 @@ if display:
 # Footer Notes
 st.markdown('''
 **How to use:**
-- View volume chart to spot heavy strikes.
-- Summary metrics show chain activity & average delta.
-- Delta distribution reveals skew and moneyness across calls/puts.
-- Toggle tables for deeper chain details.
+- Volume by strike identifies the busiest strikes.
+- Summary metrics provide quick chain IQ and average delta.
+- Delta distribution shows skew and moneyness bias.
+- Toggle tables for full chain details.
 ''')
