@@ -37,9 +37,7 @@ with st.sidebar:
 # --------------------------------------------------
 # DATA FETCH WITH BUFFER FOR MAs
 # --------------------------------------------------
-# Map user period to days
 period_map = {"1y":365, "2y":365*2, "3y":365*3, "5y":365*5}
-# Buffer days to cover max MA window
 buffer_days = 250
 if period != "max":
     days = period_map.get(period, 365) + buffer_days
@@ -52,36 +50,21 @@ if df.empty:
     st.error("No data for this ticker. Check symbol or internet.")
     st.stop()
 
-# Trim to user window for plotting after computing MAs
-# Ensure index is datetime
-try:
-    df.index = pd.to_datetime(df.index)
-    df.index = df.index.tz_localize(None)
-except Exception:
-    df.index = pd.to_datetime(df.index)
-
-display_days = period_map.get(period, None)
-if period != "max" and display_days:
-    cutoff = datetime.today() - timedelta(days=display_days)
-    cutoff = pd.to_datetime(cutoff)
-    df_plot = df.loc[df.index >= cutoff]
-else:
-    df_plot = df.copy()
+# Ensure datetime index without tz for consistency
+df.index = pd.to_datetime(df.index).tz_localize(None)
 
 # --------------------------------------------------
-# INDICATORS
+# INDICATOR CALCULATIONS
 # --------------------------------------------------
 # Moving Averages
 for w in (20, 50, 100, 200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
-
 # RSI(14)
 delta = df["Close"].diff()
 gain = delta.clip(lower=0).rolling(14).mean()
 loss = -delta.clip(upper=0).rolling(14).mean()
 rs = gain / loss
 df["RSI14"] = 100 - (100 / (1 + rs))
-
 # MACD(12,26,9)
 df["EMA12"] = df["Close"].ewm(span=12, adjust=False).mean()
 df["EMA26"] = df["Close"].ewm(span=26, adjust=False).mean()
@@ -89,18 +72,31 @@ df["MACD"] = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"] = df["MACD"] - df["Signal"]
 
-# Volume colors
+# --------------------------------------------------
+# TRIM TO DISPLAY WINDOW
+# --------------------------------------------------
+if period != "max":
+    display_days = period_map.get(period, 365)
+    cutoff = (datetime.today() - timedelta(days=display_days))
+    df_plot = df.loc[df.index >= cutoff]
+else:
+    df_plot = df.copy()
+
+# --------------------------------------------------
+# VOLUME COLORS
+# --------------------------------------------------
 vol_colors = ["green" if c >= o else "red" for c, o in zip(df_plot["Close"], df_plot["Open"])]
 
 # --------------------------------------------------
 # PLOTTING
 # --------------------------------------------------
-# Create 4-row subplot: Price, Volume, RSI, MACD
-grid_opts = {"height_ratios": [4, 1, 1, 1], "hspace": 0.2}
-fig, axes = plt.subplots(4, 1, figsize=(14, 11), sharex=True, gridspec_kw=grid_opts)
-ax_price, ax_vol, ax_rsi, ax_macd = axes
+# Layout: Price(80%), Volume, RSI, MACD
+grid_opts = {"height_ratios": [5, 1, 1, 1], "hspace": 0.25}
+fig, (ax_price, ax_vol, ax_rsi, ax_macd) = plt.subplots(
+    4, 1, figsize=(14, 10), sharex=True, gridspec_kw=grid_opts
+)
 
-# Price & MAs on trimmed data
+# Price & MAs
 ax_price.set_title(f"{ticker} Price & Moving Averages", fontsize=18, weight="bold", pad=20)
 ax_price.plot(df_plot.index, df_plot["Close"], label="Close", color="black", linewidth=1.5)
 for w, col in zip((20, 50, 100, 200), ("purple", "blue", "orange", "gray")):
@@ -108,28 +104,25 @@ for w, col in zip((20, 50, 100, 200), ("purple", "blue", "orange", "gray")):
 ax_price.legend(loc="upper left", fontsize=10)
 ax_price.grid(alpha=0.3)
 
-# Volume subplot
-df_vol = df_plot
-ax_vol.bar(df_vol.index, df_vol["Volume"], color=vol_colors, alpha=0.3, width=1)
+# Volume
+ax_vol.bar(df_plot.index, df_plot["Volume"], color=vol_colors, alpha=0.3, width=1)
 ax_vol.set_ylabel("Volume", color="gray", fontsize=10)
 ax_vol.tick_params(axis="y", labelcolor="gray", labelsize=8)
 ax_vol.grid(alpha=0.3)
 
-# RSI subplot
-df_rsi = df_plot
-ax_rsi.set_title("Relative Strength Index (14-day)", fontsize=14, weight="bold", pad=12)
-ax_rsi.plot(df_rsi.index, df_rsi["RSI14"], color="purple", linewidth=1.5)
+# RSI
+ax_rsi.set_title("Relative Strength Index (14-day)", fontsize=14, weight="bold", pad=15)
+ax_rsi.plot(df_plot.index, df_plot["RSI14"], color="purple", linewidth=1.5)
 ax_rsi.axhline(70, linestyle="--", color="gray", linewidth=1)
 ax_rsi.axhline(30, linestyle="--", color="gray", linewidth=1)
 ax_rsi.set_ylabel("RSI", fontsize=10)
 ax_rsi.grid(alpha=0.3)
 
-# MACD subplot
-df_macd = df_plot
-ax_macd.set_title("MACD (12,26,9)", fontsize=14, weight="bold", pad=12)
-ax_macd.plot(df_macd.index, df_macd["MACD"], label="MACD", color="blue", linewidth=1.5)
-ax_macd.plot(df_macd.index, df_macd["Signal"], label="Signal", color="orange", linewidth=1.5)
-ax_macd.bar(df_macd.index, df_macd["Hist"], label="Hist", color="gray", alpha=0.5, width=1)
+# MACD
+ax_macd.set_title("MACD (12,26,9)", fontsize=14, weight="bold", pad=15)
+ax_macd.plot(df_plot.index, df_plot["MACD"], label="MACD", color="blue", linewidth=1.5)
+ax_macd.plot(df_plot.index, df_plot["Signal"], label="Signal", color="orange", linewidth=1.5)
+ax_macd.bar(df_plot.index, df_plot["Hist"], label="Hist", color="gray", alpha=0.5, width=1)
 ax_macd.set_ylabel("MACD", fontsize=10)
 ax_macd.legend(loc="upper left", fontsize=10)
 ax_macd.grid(alpha=0.3)
