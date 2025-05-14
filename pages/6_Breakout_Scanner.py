@@ -4,40 +4,53 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
 
-# --- Sidebar: Tool Description ---
+# ─────────────────────────────────────────────────────────────────────────────
+# Sidebar: Description and Input
+# ─────────────────────────────────────────────────────────────────────────────
 st.sidebar.header("📘 About This Tool")
 st.sidebar.markdown("""
-This breakout scanner flags stocks that:
-- Hit **20-day or 50-day highs**
-- Show **RSI signals** of momentum
-- Belong to any custom list of tickers
+This breakout scanner helps identify stocks breaking out to:
+- 🔺 **20-day or 50-day highs**
+- 🔺 High **momentum** via 14-day RSI
 
-Useful for spotting high-momentum breakout setups favored by CTAs or trend followers.
-
-**Data Source:** Yahoo Finance  
-**Indicators Used:**  
-- 20D & 50D highs  
-- 14-day RSI
+Use it to spot potential trend continuation setups.
 """)
 
-# --- User Input for Tickers ---
 st.sidebar.subheader("🧩 Input Settings")
-user_input = st.sidebar.text_area("Enter tickers (comma-separated):", "AAPL, MSFT, NVDA, TSLA, AMD")
-tickers = [t.strip().upper() for t in user_input.split(",") if t.strip()]
+user_input = st.sidebar.text_area(
+    "Enter tickers (comma-separated):",
+    "AAPL, MSFT, NVDA, TSLA, AMD"
+)
+tickers_raw = [t.strip().upper() for t in user_input.split(",") if t.strip()]
+tickers = tickers_raw[0] if len(tickers_raw) == 1 else tickers_raw
 
-# --- Page Title ---
+# ─────────────────────────────────────────────────────────────────────────────
+# Main Page
+# ─────────────────────────────────────────────────────────────────────────────
 st.title("📈 Breakout Scanner")
 st.caption("Live scanner for 20D / 50D highs and RSI signals")
 
-# --- Define Lookback Window ---
 lookback_days = 90
 start_date = datetime.today() - timedelta(days=lookback_days)
 
-# --- Fetch Price Data ---
+# ─────────────────────────────────────────────────────────────────────────────
+# Data Fetcher
+# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def load_data(tickers):
-    data = yf.download(tickers, start=start_date.strftime("%Y-%m-%d"), progress=False)["Adj Close"]
-    return data
+    raw = yf.download(tickers, start=start_date.strftime("%Y-%m-%d"), progress=False)
+
+    if isinstance(tickers, str) or len(tickers) == 1:
+        # Single ticker: wrap Series into DataFrame
+        if "Adj Close" in raw:
+            return pd.DataFrame({tickers if isinstance(tickers, str) else tickers[0]: raw["Adj Close"]})
+        else:
+            raise ValueError("No 'Adj Close' data found.")
+    else:
+        if "Adj Close" in raw:
+            return raw["Adj Close"]
+        else:
+            raise ValueError("No 'Adj Close' data returned from Yahoo Finance.")
 
 try:
     price_data = load_data(tickers)
@@ -45,7 +58,9 @@ except Exception as e:
     st.error(f"Data download failed: {e}")
     st.stop()
 
-# --- RSI Calculation ---
+# ─────────────────────────────────────────────────────────────────────────────
+# RSI Calculator
+# ─────────────────────────────────────────────────────────────────────────────
 def compute_rsi(series, window=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
@@ -55,25 +70,27 @@ def compute_rsi(series, window=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-# --- Signal Generation ---
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal Engine
+# ─────────────────────────────────────────────────────────────────────────────
 signals = []
 
-for ticker in tickers:
+for ticker in (tickers_raw if isinstance(tickers, list) else [tickers]):
     try:
         series = price_data[ticker].dropna()
         if len(series) < 50:
             continue
 
-        today_price = series.iloc[-1]
+        price = series.iloc[-1]
         high_20d = series[-20:].max()
         high_50d = series[-50:].max()
-        breakout_20d = today_price >= high_20d
-        breakout_50d = today_price >= high_50d
+        breakout_20d = price >= high_20d
+        breakout_50d = price >= high_50d
         rsi = compute_rsi(series).iloc[-1]
 
         signals.append({
             "Ticker": ticker,
-            "Price": round(today_price, 2),
+            "Price": round(price, 2),
             "20D High": round(high_20d, 2),
             "50D High": round(high_50d, 2),
             "Breakout 20D": breakout_20d,
@@ -83,6 +100,12 @@ for ticker in tickers:
     except Exception as e:
         continue
 
-# --- Display Results ---
-df = pd.DataFrame(signals)
-st.dataframe(df.sort_values(by=["Breakout 50D", "Breakout 20D"], ascending=False), use_container_width=True)
+# ─────────────────────────────────────────────────────────────────────────────
+# Display Results
+# ─────────────────────────────────────────────────────────────────────────────
+if signals:
+    df = pd.DataFrame(signals)
+    df = df.sort_values(by=["Breakout 50D", "Breakout 20D"], ascending=False)
+    st.dataframe(df, use_container_width=True)
+else:
+    st.warning("No valid tickers returned data or breakouts.")
