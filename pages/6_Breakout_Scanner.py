@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 import matplotlib.pyplot as plt
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
@@ -56,38 +56,29 @@ records = []
 for sym, s in price_df.items():
     if len(s) < 200:
         continue
-
     latest = s.iloc[-1]
-    high20 = s[-20:].max()
-    high50 = s[-50:].max()
-    high100 = s[-100:].max()
-    high200 = s[-200:].max()
-    rsi7 = compute_rsi(s, 7).iloc[-1]
-    rsi14 = compute_rsi(s, 14).iloc[-1]
-    rsi21 = compute_rsi(s, 21).iloc[-1]
+    highs = {
+        20: s[-20:].max(),
+        50: s[-50:].max(),
+        100: s[-100:].max(),
+        200: s[-200:].max(),
+    }
+    rsis = {w: compute_rsi(s, w).iloc[-1] for w in (7, 14, 21)}
 
     rec = {
         "Ticker": sym,
-        "Price": latest,
-        "20D High": high20,
-        "50D High": high50,
-        "100D High": high100,
-        "200D High": high200,
-        "Breakout 20D": latest >= high20,
-        "Breakout 50D": latest >= high50,
-        "Breakout 100D": latest >= high100,
-        "Breakout 200D": latest >= high200,
-        "RSI (7)": round(rsi7, 1),
-        "RSI (14)": round(rsi14, 1),
-        "RSI (21)": round(rsi21, 1),
+        "Price": round(latest, 2),
+        **{f"{w}D High": round(highs[w], 2) for w in highs},
+        **{f"Breakout {w}D": latest >= highs[w] for w in highs},
+        **{f"RSI ({w})": round(rsis[w], 1) for w in rsis},
     }
     records.append(rec)
 
 df = pd.DataFrame(records)
-df = df.sort_values(
-    by=["Breakout 200D", "Breakout 100D", "Breakout 50D", "Breakout 20D"],
-    ascending=False
-)
+
+# Dynamically determine breakout columns to sort by
+break_cols = [col for col in df.columns if col.startswith("Breakout")]
+df = df.sort_values(by=break_cols, ascending=False) if break_cols else df
 
 # ─── Style Table ───────────────────────────────────────────────────────────────
 def mark(v):
@@ -96,8 +87,11 @@ def mark(v):
 styled = (
     df.style
       .format({"Price":"{:.2f}", **{f"{w}D High":"{:.2f}" for w in (20,50,100,200)}})
-      .applymap(mark, subset=["Breakout 20D","Breakout 50D","Breakout 100D","Breakout 200D"])
-      .background_gradient(subset=["RSI (7)","RSI (14)","RSI (21)"], cmap="coolwarm", vmin=0, vmax=100)
+      .applymap(mark, subset=break_cols)
+      .background_gradient(
+          subset=[c for c in df.columns if c.startswith("RSI")],
+          cmap="coolwarm", vmin=0, vmax=100
+      )
 )
 
 st.subheader("Breakout & RSI Signals")
