@@ -116,11 +116,6 @@ if display:
     st.subheader('Puts Table')
     st.dataframe(puts)
 
-# Footer Notes
-st.markdown('''
-**How to use:**
-- Volume by strike identifies the busiest strikes.
-- Summary metrics provide quick chain IQ and average delta.
-- Delta distribution shows skew and moneyness bias.
-- Toggle tables for full chain details.
-''')
+# ── Footnotes ───────────────────────────────────────────────────────────────
+
+st.caption("© 2025 AD Fund Management LP")
