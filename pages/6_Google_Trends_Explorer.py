@@ -29,7 +29,7 @@ TERMS = [
 ]
 
 # -- Sidebar UI
-st.sidebar.header("🧠 Google Trends Explorer")
+st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     """
 Track macro sentiment shifts by visualizing live Google search interest from 2020 to today.
