@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import altair as alt
 
-# Options Chain Viewer with ATM Filter & IV Skew
+# Simple Options Chain Viewer with Spread Heatmap & Summary Metrics
 st.title('Options Chain Viewer')
 
 # Sidebar Inputs
@@ -23,65 +23,66 @@ except Exception:
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
 
-# Retrieve chain & spot
-tk = yf.Ticker(ticker)
-spot = tk.history(period='1d')['Close'].iloc[-1]
-chain = tk.option_chain(expiry)
+# Retrieve option chain
+chain = yf.Ticker(ticker).option_chain(expiry)
 
-# Prepare data
-df_calls = chain.calls[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
-df_puts  = chain.puts[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
-for df, t in [(df_calls,'Call'), (df_puts,'Put')]:
-    df['type'] = t
-combined = pd.concat([df_calls, df_puts], ignore_index=True)
+# Prepare call and put DataFrames
+calls = chain.calls[['strike', 'bid', 'ask', 'volume', 'openInterest']].copy()
+puts = chain.puts[['strike', 'bid', 'ask', 'volume', 'openInterest']].copy()
+calls['type'] = 'Call'
+puts['type'] = 'Put'
+combined = pd.concat([calls, puts], ignore_index=True)
 
-# ATM filtering
-unique_strikes = sorted(combined['strike'].unique())
-atm_strike = min(unique_strikes, key=lambda x: abs(x - spot))
-n = st.sidebar.slider('Strikes ±N around ATM', 0, len(unique_strikes)//2, 0)
-if n > 0:
-    idx = unique_strikes.index(atm_strike)
-    keep = unique_strikes[max(idx-n,0): min(idx+n+1, len(unique_strikes))]
-    combined = combined[combined['strike'].isin(keep)]
+# Calculate bid-ask spread percentage
+combined['mid'] = (combined['bid'] + combined['ask']) / 2
+combined['spread_pct'] = ((combined['ask'] - combined['bid']) / combined['mid']) * 100
 
-# Volume by Strike chart
+# Top-level: Volume by Strike Bar Chart
 st.subheader('Volume by Strike')
-bar = alt.Chart(combined).mark_bar().encode(
+vol_chart = alt.Chart(combined).mark_bar().encode(
     x=alt.X('strike:O', title='Strike'),
     y=alt.Y('volume:Q', title='Volume'),
     color=alt.Color('type:N', scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']), legend=alt.Legend(title='Option Type')),
-    tooltip=['type','strike','volume','openInterest']
+    tooltip=['type', 'strike', 'volume', 'openInterest']
 ).properties(width=800, height=400)
-# Add ATM marker
-df_atm = pd.DataFrame({'strike':[atm_strike]})
-marker = alt.Chart(df_atm).mark_rule(color='black', strokeDash=[4,2]).encode(x='strike:O')
-st.altair_chart(bar + marker, use_container_width=True)
+st.altair_chart(vol_chart, use_container_width=True)
 
-# Implied Volatility Skew
-st.subheader('Implied Volatility Skew')
-iv_df = combined[['strike','impliedVolatility','type']].copy()
-skew = alt.Chart(iv_df).mark_line(point=True).encode(
-    x=alt.X('strike:Q', title='Strike'),
-    y=alt.Y('impliedVolatility:Q', title='Implied Volatility'),
-    color=alt.Color('type:N', scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']), legend=alt.Legend(title='Option Type')),
-    tooltip=['type','strike','impliedVolatility']
+st.markdown('---')
+# Bid-Ask Spread Heatmap
+st.subheader('Bid-Ask Spread Heatmap (%)')
+spread_heatmap = alt.Chart(combined).mark_rect().encode(
+    x=alt.X('strike:O', title='Strike'),
+    y=alt.Y('type:N', title='Option Type'),
+    color=alt.Color('spread_pct:Q', title='Spread %', scale=alt.Scale(scheme='redyellowgreen')),
+    tooltip=['type', 'strike', alt.Tooltip('spread_pct:Q', format='.2f')]
 ).properties(width=800, height=300)
-st.altair_chart(skew, use_container_width=True)
+st.altair_chart(spread_heatmap, use_container_width=True)
+
+st.markdown('---')
+# Summary Metrics Panel
+st.subheader('Summary Metrics')
+total_call_vol = combined.loc[combined['type'] == 'Call', 'volume'].sum()
+total_put_vol = combined.loc[combined['type'] == 'Put', 'volume'].sum()
+avg_spread = combined['spread_pct'].mean()
+col1, col2, col3 = st.columns(3)
+col1.metric('Total Call Volume', f'{int(total_call_vol):,}')
+col2.metric('Total Put Volume', f'{int(total_put_vol):,}')
+col3.metric('Average Spread %', f'{avg_spread:.2f}%')
 
 # Optional detail tables
 display = st.sidebar.checkbox('Show Calls & Puts Tables')
 if display:
     st.markdown('---')
-    st.subheader('Calls')
-    st.dataframe(df_calls)
-    st.subheader('Puts')
-    st.dataframe(df_puts)
+    st.subheader('Calls Table')
+    st.dataframe(calls)
+    st.subheader('Puts Table')
+    st.dataframe(puts)
 
-# Footer notes
+# Footer Notes
 st.markdown('''
-**Usage:**
-- Adjust slider to limit strikes around ATM.
-- Bar chart highlights volume with a dashed ATM line.
-- IV Skew chart reveals vol curve shape.
-- Toggle tables for deeper detail.
+**How to use:**
+- Volume chart highlights top traded strikes.
+- Spread heatmap shows relative bid-ask costs.
+- Summary metrics give a quick overview of chain activity.
+- Toggle tables for deeper inspection.
 ''')
