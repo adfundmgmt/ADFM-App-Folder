@@ -53,10 +53,18 @@ if df.empty:
     st.stop()
 
 # Trim to user window for plotting after computing MAs
+# Ensure index is datetime
+try:
+    df.index = pd.to_datetime(df.index)
+    df.index = df.index.tz_localize(None)
+except Exception:
+    df.index = pd.to_datetime(df.index)
+
 display_days = period_map.get(period, None)
 if period != "max" and display_days:
     cutoff = datetime.today() - timedelta(days=display_days)
-    df_plot = df[df.index >= cutoff]
+    cutoff = pd.to_datetime(cutoff)
+    df_plot = df.loc[df.index >= cutoff]
 else:
     df_plot = df.copy()
 
