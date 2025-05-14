@@ -1,158 +1,112 @@
 import streamlit as st
 import pandas as pd
-from pandas_datareader.data import DataReader
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
-from datetime import datetime
+import yfinance as yf
+import matplotlib.pyplot as plt
+from matplotlib.dates import DateFormatter
 
 # --------------------------------------------------
 # PAGE CONFIG
 # --------------------------------------------------
-st.set_page_config(page_title="US CPI Dashboard", layout="wide")
+st.set_page_config(layout="wide", page_title="Ticker Technical Chart")
+st.title("Technical Chart Explorer")
 
 # --------------------------------------------------
-# SIDEBAR: About & Period Selector
+# SIDEBAR: About & Settings
 # --------------------------------------------------
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Explore interactive inflation charts powered by the latest FRED data. View year‑over‑year and month‑over‑month changes for both headline and core CPI, with NBER recessions shaded for context. Data is fetched live and cached for responsiveness.
+        Visualize key technical indicators for any publicly traded stock using Yahoo Finance data.
+        
+        **Features:**
+        - Price & 20/50/100/200-day moving averages
+        - Volume bars color-coded by up/down days
+        - RSI (14-day)
+        - MACD (12,26,9)
+        
+        Customize the ticker symbol, data range, and interval below.
         """
     )
-    st.subheader("Time Range")
-    period = st.selectbox(
-        "Select period:",
-        ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"],
-        index=7
-    )
+    st.subheader("Settings")
+    ticker = st.text_input("Ticker", "NVDA").upper()
+    period = st.selectbox("Period", ["1y", "2y", "3y", "5y", "max"], index=1)
+    interval = st.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
 # --------------------------------------------------
-# DATA LOADING
+# DATA FETCH
 # --------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
-    df = DataReader(series_id, "fred", start)
-    s = df[series_id].copy()
-    return s.asfreq("MS").ffill()
-
-# Fetch series
-start_date_full = "1990-01-01"
-headline = load_series("CPIAUCNS", start_date_full)
-core     = load_series("CPILFESL", start_date_full)
-recess   = load_series("USREC",    start_date_full)
+df = yf.Ticker(ticker).history(period=period, interval=interval)
+if df.empty:
+    st.error("No data for this ticker. Check symbol or internet.")
+    st.stop()
 
 # --------------------------------------------------
-# TRANSFORMATIONS
+# INDICATORS
 # --------------------------------------------------
-headline_yoy = headline.pct_change(12) * 100
-core_yoy     = core.pct_change(12)     * 100
-headline_mom = headline.pct_change(1)  * 100
-core_mom     = core.pct_change(1)      * 100
-core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100
+# Moving Averages
+for w in (20, 50, 100, 200):
+    df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
-# --------------------------------------------------
-# DETERMINE DATE WINDOW
-# --------------------------------------------------
-end_date = headline.index.max()
-if period == "All":
-    start_date = headline.index.min()
-elif period.endswith("M"):
-    months = int(period[:-1])
-    start_date = end_date - pd.DateOffset(months=months)
-elif period.endswith("Y"):
-    years = int(period[:-1])
-    start_date = end_date - pd.DateOffset(years=years)
+# RSI(14)
+delta = df["Close"].diff()
+gain = delta.clip(lower=0).rolling(14).mean()
+loss = -delta.clip(upper=0).rolling(14).mean()
+rs = gain / loss
+df["RSI14"] = 100 - (100 / (1 + rs))
 
-# Slice all series for window
-idx = (headline.index >= start_date) & (headline.index <= end_date)
-h_yoy = headline_yoy.loc[idx]
-c_yoy = core_yoy.loc[idx]
-h_mom = headline_mom.loc[idx]
-c_mom = core_mom.loc[idx]
-c_3m  = core_3m_ann.loc[idx]
+# MACD(12,26,9)
+df["EMA12"] = df["Close"].ewm(span=12, adjust=False).mean()
+df["EMA26"] = df["Close"].ewm(span=26, adjust=False).mean()
+df["MACD"] = df["EMA12"] - df["EMA26"]
+df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+df["Hist"] = df["MACD"] - df["Signal"]
 
-# Filter recessions overlapping window
-def within_window(rec_list, start, end):
-    out = []
-    for s,e in rec_list:
-        if e < start or s > end:
-            continue
-        out.append((max(s,start), min(e,end)))
-    return out
-
-# Recession extraction
-def get_recessions(flag: pd.Series):
-    f = flag.dropna().astype(int)
-    dif = f.diff()
-    starts = f[(f==1)&(dif==1)].index
-    if f.iloc[0]==1: starts = starts.insert(0,f.index[0])
-    ends = f[(f==0)&(dif==-1)].index
-    if len(ends)<len(starts): ends = ends.append(pd.Index([f.index[-1]]))
-    return list(zip(starts, ends))
-
-recs = get_recessions(recess)
-recs_window = within_window(recs, start_date, end_date)
+# Volume colors
+vol_colors = ["green" if c >= o else "red" for c, o in zip(df["Close"], df["Open"])]
 
 # --------------------------------------------------
-# BUILD CHARTS
+# PLOTTING
 # --------------------------------------------------
-# 1) YoY
-fig_yoy = go.Figure()
-fig_yoy.add_trace(go.Scatter(x=h_yoy.index, y=h_yoy, name="Headline CPI YoY", line_color="#1f77b4"))
-fig_yoy.add_trace(go.Scatter(x=c_yoy.index, y=c_yoy, name="Core CPI YoY",     line_color="#ff7f0e"))
-for s,e in recs_window:
-    fig_yoy.add_shape(
-        dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0)
-    )
-fig_yoy.update_layout(title="US CPI YoY – Headline vs Core", yaxis_title="% YoY", hovermode="x unified")
+# Create 4-row subplot: Price, Volume, RSI, MACD
+grid_opts = {"height_ratios": [4, 1, 1, 1], "hspace": 0.2}
+fig, axes = plt.subplots(4, 1, figsize=(14, 11), sharex=True, gridspec_kw=grid_opts)
+ax_price, ax_vol, ax_rsi, ax_macd = axes
 
-# 2) MoM bars
-fig_mom = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-                        subplot_titles=("Headline CPI MoM %", "Core CPI MoM %"))
-fig_mom.add_trace(go.Bar(x=h_mom.index, y=h_mom, name="Headline MoM", marker_color="#1f77b4"), row=1, col=1)
-fig_mom.add_trace(go.Bar(x=c_mom.index, y=c_mom, name="Core MoM",     marker_color="#ff7f0e"), row=2, col=1)
-for s,e in recs_window:
-    fig_mom.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                            fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=1, col=1)
-    fig_mom.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                            fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=2, col=1)
-fig_mom.update_yaxes(title_text="% MoM", row=1, col=1)
-fig_mom.update_yaxes(title_text="% MoM", row=2, col=1)
-fig_mom.update_layout(showlegend=False, hovermode="x unified")
+# Price & MAs
+ax_price.set_title(f"{ticker} Price & Moving Averages", fontsize=18, weight="bold", pad=20)
+ax_price.plot(df.index, df["Close"], label="Close", color="black", linewidth=1.5)
+for w, col in zip((20, 50, 100, 200), ("purple", "blue", "orange", "gray")):
+    ax_price.plot(df.index, df[f"MA{w}"], label=f"MA{w}", color=col, linewidth=1)
+ax_price.legend(loc="upper left", fontsize=10)
+ax_price.grid(alpha=0.3)
 
-# 3) Core index & 3M ann
-fig_core = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-                         subplot_titles=("Core CPI Index", "3‑Mo Annualised Core CPI %"))
-fig_core.add_trace(go.Scatter(x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4"), row=2, col=1)
-fig_core.add_trace(go.Scatter(x=core.loc[idx].index, y=core.loc[idx], name="Core Index", line_color="#ff7f0e"), row=1, col=1)
-for s,e in recs_window:
-    fig_core.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=1, col=1)
-    fig_core.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=2, col=1)
-fig_core.update_yaxes(title_text="Index Level", row=1, col=1)
-fig_core.update_yaxes(title_text="% (annualised)", row=2, col=1)
-fig_core.update_layout(hovermode="x unified")
+# Volume subplot
+ax_vol.bar(df.index, df["Volume"], color=vol_colors, alpha=0.3, width=1)
+ax_vol.set_ylabel("Volume", color="gray", fontsize=10)
+ax_vol.tick_params(axis="y", labelcolor="gray", labelsize=8)
+ax_vol.grid(alpha=0.3)
 
-# --------------------------------------------------
-# RENDER
-# --------------------------------------------------
-st.title("US Inflation Dashboard")
-st.plotly_chart(fig_yoy,  use_container_width=True)
-st.plotly_chart(fig_mom,  use_container_width=True)
-st.plotly_chart(fig_core, use_container_width=True)
+# RSI subplot
+ax_rsi.set_title("Relative Strength Index (14-day)", fontsize=14, weight="bold", pad=12)
+ax_rsi.plot(df.index, df["RSI14"], color="purple", linewidth=1.5)
+ax_rsi.axhline(70, linestyle="--", color="gray", linewidth=1)
+ax_rsi.axhline(30, linestyle="--", color="gray", linewidth=1)
+ax_rsi.set_ylabel("RSI", fontsize=10)
+ax_rsi.grid(alpha=0.3)
 
-with st.expander("Methodology & Sources", expanded=False):
-    st.markdown(
-        """
-        **Data:** FRED via pandas-datareader  
-        **Series:** Headline CPI (CPIAUCNS), Core CPI (CPILFESL), Recessions (USREC)  
-        **3‑Mo annualised formula:** ((CPI_t / CPI_{t-3}) ** 4 – 1) × 100
-        """
-    )
+# MACD subplot
+ax_macd.set_title("MACD (12,26,9)", fontsize=14, weight="bold", pad=12)
+ax_macd.plot(df.index, df["MACD"], label="MACD", color="blue", linewidth=1.5)
+ax_macd.plot(df.index, df["Signal"], label="Signal", color="orange", linewidth=1.5)
+ax_macd.bar(df.index, df["Hist"], label="Hist", color="gray", alpha=0.5, width=1)
+ax_macd.set_ylabel("MACD", fontsize=10)
+ax_macd.legend(loc="upper left", fontsize=10)
+ax_macd.grid(alpha=0.3)
 
-# ── Footnotes ───────────────────────────────────────────────────────────────
+# X-axis formatting
+date_format = DateFormatter("%Y-%m")
+ax_macd.xaxis.set_major_formatter(date_format)
 
-st.caption("© 2025 AD Fund Management LP")
+fig.tight_layout()
+st.pyplot(fig)
