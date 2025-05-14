@@ -46,42 +46,39 @@ df = df[df.index.weekday < 5]
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
-# Moving averages
 for w in (20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
-# RSI(14)
 delta       = df["Close"].diff()
 gain        = delta.clip(lower=0).rolling(14).mean()
 loss        = -delta.clip(upper=0).rolling(14).mean()
 rs          = gain / loss
 df["RSI14"] = 100 - (100/(1+rs))
 
-# MACD (12,26,9)
 df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
 df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
 df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# Only plot MAs that have full data
 available_mas = [w for w in (20,50,100,200) if len(df) >= w]
 
-# ── Build Figure ────────────────────────────────────────────────────────────
+# ── Build Figure with extra gap for volume ──────────────────────────────────
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
-    row_heights=[0.6, 0.12, 0.14, 0.14],
-    vertical_spacing=0.04,
+    # Allocate more space to volume and add vertical gaps
+    row_heights=[0.55, 0.15, 0.15, 0.15],
+    vertical_spacing=0.06,
     specs=[
-        [{"type":"candlestick"}],   # Row 1: price
-        [{"type":"bar"}],           # Row 2: volume only
-        [{"type":"scatter"}],       # Row 3: RSI
-        [{"type":"scatter"}],       # Row 4: MACD
+        [{"type":"candlestick"}],  # price
+        [{"type":"bar"}],          # volume
+        [{"type":"scatter"}],      # RSI
+        [{"type":"scatter"}],      # MACD
     ]
 )
 
-# 1) Price + MAs in row 1
+# 1) Price + MAs
 fig.add_trace(
     go.Candlestick(
         x=df["DateStr"],
@@ -90,8 +87,7 @@ fig.add_trace(
         increasing_line_color="green",
         decreasing_line_color="red",
         name="Price"
-    ),
-    row=1, col=1
+    ), row=1, col=1
 )
 for w,color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(
@@ -99,11 +95,10 @@ for w,color in zip(available_mas, ("purple","blue","orange","gray")):
             x=df["DateStr"], y=df[f"MA{w}"],
             mode="lines", line=dict(color=color, width=1),
             name=f"MA{w}"
-        ),
-        row=1, col=1
+        ), row=1, col=1
     )
 
-# 2) Volume only in row 2
+# 2) Volume only
 fig.add_trace(
     go.Bar(
         x=df["DateStr"], y=df["Volume"],
@@ -112,50 +107,45 @@ fig.add_trace(
             for c,o in zip(df["Close"], df["Open"])
         ],
         name="Volume"
-    ),
-    row=2, col=1
+    ), row=2, col=1
 )
 
-# 3) RSI in row 3
+# 3) RSI
 fig.add_trace(
     go.Scatter(
         x=df["DateStr"], y=df["RSI14"],
         mode="lines", line=dict(color="purple", width=1),
         name="RSI (14)"
-    ),
-    row=3, col=1
+    ), row=3, col=1
 )
 fig.update_yaxes(title_text="RSI", row=3, col=1)
 fig.add_hline(y=70, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 
-# 4) MACD + histogram in row 4
+# 4) MACD + histogram
 fig.add_trace(
     go.Bar(
         x=df["DateStr"], y=df["Hist"],
         marker_color="gray", name="MACD Hist"
-    ),
-    row=4, col=1
+    ), row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
         x=df["DateStr"], y=df["MACD"],
         mode="lines", line=dict(color="blue", width=1.5),
         name="MACD"
-    ),
-    row=4, col=1
+    ), row=4, col=1
 )
 fig.add_trace(
     go.Scatter(
         x=df["DateStr"], y=df["Signal"],
         mode="lines", line=dict(color="orange", width=1),
         name="Signal"
-    ),
-    row=4, col=1
+    ), row=4, col=1
 )
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# ── Layout tweaks ────────────────────────────────────────────────────────────
+# ── Final layout tweaks ──────────────────────────────────────────────────────
 fig.update_layout(
     height=900, width=1000,
     title=f"{ticker} — OHLC + RSI & MACD",
@@ -164,5 +154,4 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
-# ── Render ───────────────────────────────────────────────────────────────────
 st.plotly_chart(fig, use_container_width=True)
