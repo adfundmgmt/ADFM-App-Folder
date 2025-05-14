@@ -6,10 +6,10 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import random
 
-# -- Optional: Set matplotlib style
+# -- Optional styling
 plt.style.use("seaborn-v0_8-darkgrid")
 
-# -- List of user-agent headers to rotate
+# -- User agents for anti-bot evasion
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
@@ -18,7 +18,7 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPad; CPU OS 13_6 like Mac OS X)",
 ]
 
-# -- Dropdown terms
+# -- Search terms
 TERMS = [
     "Recession", "Inflation", "Unemployment", "Layoffs",
     "Credit Crunch", "Rate Hike", "Bond Market Crash",
@@ -31,19 +31,19 @@ TERMS = [
 st.sidebar.header("Google Trends Explorer")
 selected_term = st.sidebar.selectbox("Choose a term:", TERMS)
 
-# -- Try importing pytrends
+# -- Safe pytrends import
 try:
     from pytrends.request import TrendReq
 except ImportError:
-    st.error("`pytrends` is not installed. Add it to requirements.txt or run `pip install pytrends`.")
+    st.error("`pytrends` is not installed. Run `pip install pytrends` or add it to `requirements.txt`.")
     st.stop()
 
-# -- Cached function to fetch Google Trends with rotated user agents
+# -- Data fetcher with rotating headers + caching
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_trends(term: str) -> pd.DataFrame:
     try:
         user_agent = random.choice(USER_AGENTS)
-        py = TrendReq(hl="en-US", tz=360, custom_useragent=user_agent)
+        py = TrendReq(requests_args={"headers": {"User-Agent": user_agent}})
         today = datetime.today().strftime("%Y-%m-%d")
         timeframe = f"2020-03-01 {today}"
         py.build_payload([term], timeframe=timeframe)
@@ -85,6 +85,6 @@ for dt, val in spikes.items():
 
 st.pyplot(fig)
 
-# -- Show raw data toggle
+# -- Optional raw data
 if st.sidebar.checkbox("Show raw data"):
     st.dataframe(data.rename(columns={selected_term: "Google Trend Score"}))
