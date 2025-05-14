@@ -28,7 +28,7 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **US Inflation Dashboard**  
   Dissects the latest CPI print with YoY and MoM breakdowns across headline, and core categories.
 
-  - **Technical Chart Explorer**  
+- **Technical Chart Explorer**  
   Visualize key technical indicators for any publicly traded ticker that is on Yahoo Finance (equities, commodities, credit).
 
 ---
