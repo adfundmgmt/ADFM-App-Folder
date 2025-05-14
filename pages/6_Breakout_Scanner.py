@@ -40,7 +40,6 @@ if failed:
 if not price_dict:
     st.error("No valid price data. Check tickers / internet.")
     st.stop()
-
 price_df = pd.DataFrame(price_dict)
 
 # ─── RSI Helper ────────────────────────────────────────────────────────────────
@@ -56,29 +55,42 @@ records = []
 for sym, s in price_df.items():
     if len(s) < 200:
         continue
-    latest = s.iloc[-1]
+    latest = s.iat[-1]
     highs = {
         20: s[-20:].max(),
         50: s[-50:].max(),
         100: s[-100:].max(),
         200: s[-200:].max(),
     }
-    rsis = {w: compute_rsi(s, w).iloc[-1] for w in (7, 14, 21)}
+    rsis = {w: compute_rsi(s, w).iat[-1] for w in (7, 14, 21)}
 
     rec = {
         "Ticker": sym,
         "Price": round(latest, 2),
-        **{f"{w}D High": round(highs[w], 2) for w in highs},
-        **{f"Breakout {w}D": latest >= highs[w] for w in highs},
-        **{f"RSI ({w})": round(rsis[w], 1) for w in rsis},
+        "20D High": round(highs[20], 2),
+        "50D High": round(highs[50], 2),
+        "100D High": round(highs[100], 2),
+        "200D High": round(highs[200], 2),
+        "Breakout 20D": latest >= highs[20],
+        "Breakout 50D": latest >= highs[50],
+        "Breakout 100D": latest >= highs[100],
+        "Breakout 200D": latest >= highs[200],
+        "RSI (7)": round(rsis[7], 1),
+        "RSI (14)": round(rsis[14], 1),
+        "RSI (21)": round(rsis[21], 1),
     }
     records.append(rec)
 
 df = pd.DataFrame(records)
 
-# Dynamically determine breakout columns to sort by
-break_cols = [col for col in df.columns if col.startswith("Breakout")]
-df = df.sort_values(by=break_cols, ascending=False) if break_cols else df
+# If no records, stop here
+if df.empty:
+    st.info("No breakouts detected or insufficient data for the provided tickers.")
+    st.stop()
+
+# ─── Sort by breakout priority ─────────────────────────────────────────────────
+break_cols = [c for c in df.columns if c.startswith("Breakout")]
+df = df.sort_values(by=break_cols, ascending=False)
 
 # ─── Style Table ───────────────────────────────────────────────────────────────
 def mark(v):
@@ -86,7 +98,11 @@ def mark(v):
 
 styled = (
     df.style
-      .format({"Price":"{:.2f}", **{f"{w}D High":"{:.2f}" for w in (20,50,100,200)}})
+      .format(
+         {"Price":"{:.2f}",
+          "20D High":"{:.2f}","50D High":"{:.2f}",
+          "100D High":"{:.2f}","200D High":"{:.2f}"}
+      )
       .applymap(mark, subset=break_cols)
       .background_gradient(
           subset=[c for c in df.columns if c.startswith("RSI")],
@@ -98,6 +114,7 @@ st.subheader("Breakout & RSI Signals")
 st.dataframe(styled, use_container_width=True)
 
 # ─── Per‑Ticker Charts ─────────────────────────────────────────────────────────
+# Now Safe to access df["Ticker"]
 sel = st.selectbox("Select ticker to chart:", df["Ticker"].tolist())
 s = price_df[sel]
 
