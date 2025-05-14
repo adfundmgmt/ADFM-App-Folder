@@ -70,7 +70,7 @@ df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# Trim to exact window (drop the buffer portion)
+# Trim to exact window (drop buffer portion)
 if period != "max":
     window = period_map[period]
     cutoff = df.index.max() - pd.Timedelta(days=window)
@@ -147,7 +147,7 @@ fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_trace(
     go.Bar(
         x=df.index, y=df["Hist"],
-        marker_color="gray", name="MACD Hist"
+        marker_color="gray", name="MACD Hist"
     ),
     row=4, col=1
 )
@@ -181,7 +181,7 @@ fig.update_layout(
 # ── Remove weekends ─────────────────────────────────────────────────────────
 fig.update_xaxes(
     rangebreaks=[dict(bounds=["sat","sun"])],  # hide Sat & Sun
-    row="all", col=1
+    rangeslider_visible=False
 )
 
 # ── Render ───────────────────────────────────────────────────────────────────
