@@ -5,30 +5,55 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
-# ── Sidebar / Inputs ────────────────────────────────────────────────────────
-st.sidebar.header("Settings")
-ticker   = st.sidebar.text_input("Ticker",    "NVDA").upper()
-period   = st.sidebar.selectbox("Period",    ["1y","2y","3y","5y","max"], index=1)
-interval = st.sidebar.selectbox("Interval",  ["1d","1wk","1mo"],      index=0)
+# ── Sidebar: About + Settings ────────────────────────────────────────────────
+st.sidebar.header("About This Tool")
+st.sidebar.markdown(
+    """
+    Visualize key technical indicators for any stock using Yahoo Finance data.
 
-# ── Fetch data (with buffer for MAs) ────────────────────────────────────────
+    **Features:**
+    - Interactive OHLC candlesticks
+    - 20/50/100/200‑day moving averages (only those that fit your window)
+    - Volume bars color‑coded by up/down days
+    - RSI (14‑day) panel
+    - MACD (12,26,9) panel
+
+    Hover to inspect open/high/low/close, MA values, RSI and MACD.
+    """
+)
+
+st.sidebar.subheader("Settings")
+ticker   = st.sidebar.text_input("Ticker",    "NVDA").upper()
+period   = st.sidebar.selectbox(
+    "Period",
+    ["1mo","3mo","6mo","1y","2y","3y","5y","max"],
+    index=3
+)
+interval = st.sidebar.selectbox("Interval",  ["1d","1wk","1mo"],   index=0)
+
+# ── Fetch with buffer for MAs ────────────────────────────────────────────────
 buffer_days = 250
+period_map = {
+    "1mo": 30, "3mo": 90,  "6mo": 180,
+    "1y": 365, "2y": 365*2, "3y": 365*3, "5y": 365*5
+}
+
 if period != "max":
-    days  = {"1y":365,"2y":730,"3y":1095,"5y":1825}[period] + buffer_days
+    days  = period_map[period] + buffer_days
     start = datetime.today() - timedelta(days=days)
     df    = yf.Ticker(ticker).history(start=start, interval=interval)
 else:
     df    = yf.Ticker(ticker).history(period="max", interval=interval)
 
 if df.empty:
-    st.error("No data returned. Check ticker/connection.")
+    st.error("No data returned. Check symbol or internet.")
     st.stop()
 
 df.index = pd.to_datetime(df.index).tz_localize(None)
 
-# ── Indicators ──────────────────────────────────────────────────────────────
+# ── Compute Indicators ───────────────────────────────────────────────────────
 # Moving Averages
-for w,color in zip((20,50,100,200),("purple","blue","orange","gray")):
+for w in (20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
 # RSI(14)
@@ -45,12 +70,17 @@ df["MACD"]   = df["EMA12"] - df["EMA26"]
 df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
 df["Hist"]   = df["MACD"] - df["Signal"]
 
-# Trim off buffer so main window = exact period
+# Trim to exact window
 if period != "max":
-    window = {"1y":365,"2y":730,"3y":1095,"5y":1825}[period]
-    df     = df.loc[df.index >= df.index.max() - pd.Timedelta(days=window)]
+    window = period_map[period]
+    cutoff = df.index.max() - pd.Timedelta(days=window)
+    df     = df.loc[df.index >= cutoff]
 
-# ── Build Plotly figure with 4 rows ─────────────────────────────────────────
+# ── Determine which MAs to plot ──────────────────────────────────────────────
+n = len(df)
+available_mas = [w for w in (20,50,100,200) if n >= w]
+
+# ── Build Plotly Figure (4 rows) ────────────────────────────────────────────
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
@@ -60,15 +90,14 @@ fig = make_subplots(
         [{"type":"candlestick"}],
         [{"type":"bar"}],
         [{"type":"scatter"}],
-        [{"type":"scatter"}],
+        [{"type":"scatter"}]
     ]
 )
 
-# 1) Candlestick + MAs
+# 1) Candles + MAs
 fig.add_trace(
     go.Candlestick(
-        x=df.index,
-        open=df["Open"], high=df["High"],
+        x=df.index, open=df["Open"], high=df["High"],
         low=df["Low"], close=df["Close"],
         name="Price",
         increasing_line_color="green",
@@ -76,7 +105,7 @@ fig.add_trace(
     ),
     row=1, col=1
 )
-for w,color in zip((20,50,100,200),("purple","blue","orange","gray")):
+for w,color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(
         go.Scatter(
             x=df.index, y=df[f"MA{w}"],
@@ -110,15 +139,18 @@ fig.add_trace(
     ),
     row=3, col=1
 )
-# RSI overbought/oversold lines
+# Add axis label for RSI
+fig.update_yaxes(title_text="RSI", row=3, col=1)
+
+# Overbought/oversold lines
 fig.add_hline(y=70, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=30, line_dash="dash", line_color="gray", row=3, col=1)
 
-# 4) MACD + Signal + Histogram
+# 4) MACD + Signal + Hist
 fig.add_trace(
     go.Bar(
         x=df.index, y=df["Hist"],
-        marker_color="gray", name="MACD Hist"
+        marker_color="gray", name="MACD Hist"
     ),
     row=4, col=1
 )
@@ -138,12 +170,14 @@ fig.add_trace(
     ),
     row=4, col=1
 )
+# Add axis label for MACD
+fig.update_yaxes(title_text="MACD", row=4, col=1)
 
 # ── Layout tweaks ────────────────────────────────────────────────────────────
 fig.update(layout_xaxis_rangeslider_visible=False)
 fig.update_layout(
     height=900, width=1000,
-    title=f"{ticker} — Interactive OHLC with RSI & MACD",
+    title=f"{ticker} — Interactive OHLC + RSI & MACD",
     hovermode="x unified",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
