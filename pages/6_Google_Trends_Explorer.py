@@ -4,26 +4,9 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
+import os
 
-# — Gracefully handle missing pytrends
-try:
-    from pytrends.request import TrendReq
-except ModuleNotFoundError:
-    st.error(
-        """
-        🚨 **Missing dependency**  
-        The `pytrends` library isn’t installed in this environment.
-
-        • **If you’re running locally**, do:
-          ```
-          pip install pytrends
-          ```
-        • **If you’re on Streamlit Cloud**, add `pytrends` to your `requirements.txt` (or `packages.txt`) and re‑deploy.
-        """
-    )
-    st.stop()
-
-# 1) Sidebar dropdown
+# ---- Search terms
 TERMS = [
     "Recession", "Inflation", "Unemployment", "Layoffs",
     "Credit Crunch", "Rate Hike", "Bond Market Crash",
@@ -31,48 +14,49 @@ TERMS = [
     "Bank Run", "Yield Curve Inversion", "Debt Ceiling",
     "Hyperinflation", "Soft Landing"
 ]
+
+# ---- Sidebar UI
 st.sidebar.header("Google Trends Explorer")
 selected_term = st.sidebar.selectbox("Choose a term:", TERMS)
 
-# 2) Cache the pytrends fetch
+# ---- Load CSV instead of using pytrends
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_trends(term: str) -> pd.DataFrame:
-    py = TrendReq(hl="en-US", tz=360)
-    today = datetime.today().strftime("%Y-%m-%d")
-    timeframe = f"2020-03-01 {today}"
-    py.build_payload([term], timeframe=timeframe)
-    df = py.interest_over_time()
-    if term in df:
-        return df[[term]]
-    else:
+def load_csv(term: str) -> pd.DataFrame:
+    filepath = f"data/{term}.csv"
+    if not os.path.exists(filepath):
+        st.error(f"No data file found for {term}. Please upload `{term}.csv` to the `data/` folder.")
         return pd.DataFrame()
+    df = pd.read_csv(filepath, parse_dates=["date"])
+    df.set_index("date", inplace=True)
+    return df
 
-# 3) Load & plot
-data = load_trends(selected_term)
+# ---- Load and visualize
+data = load_csv(selected_term)
 
 if data.empty:
-    st.warning(f"No Google Trends data for **{selected_term}**.")
-else:
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(data.index, data[selected_term], linewidth=1.5)
-    ax.set_title(f'Search Interest: "{selected_term}"', pad=12)
-    ax.set_ylabel("Score (0–100)")
-    ax.set_xlabel("Date")
-    ax.grid(alpha=0.2)
+    st.stop()
 
-    # annotate top‑3 spikes
-    spikes = data[selected_term].nlargest(3)
-    for dt, val in spikes.items():
-        ax.annotate(
-            dt.strftime("%b %Y"),
-            xy=(dt, val),
-            xytext=(0, 8),
-            textcoords="offset points",
-            ha="center",
-            arrowprops=dict(color="red", arrowstyle="->", lw=1),
-        )
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.plot(data.index, data[selected_term], linewidth=1.5)
+ax.set_title(f'Search Interest: "{selected_term}" (Google Trends)', pad=12)
+ax.set_ylabel("Trend Score (0–100)")
+ax.set_xlabel("Date")
+ax.grid(alpha=0.2)
 
-    st.pyplot(fig)
+# ---- Annotate top 3 spikes
+spikes = data[selected_term].nlargest(3)
+for dt, val in spikes.items():
+    ax.annotate(
+        dt.strftime("%b %Y"),
+        xy=(dt, val),
+        xytext=(0, 8),
+        textcoords="offset points",
+        ha="center",
+        arrowprops=dict(color="red", arrowstyle="->", lw=1),
+    )
 
-    if st.sidebar.checkbox("Show raw data"):
-        st.dataframe(data.rename(columns={selected_term: "Trend Score"}))
+st.pyplot(fig)
+
+# ---- Optional raw data
+if st.sidebar.checkbox("Show raw data"):
+    st.dataframe(data.rename(columns={selected_term: "Google Trend Score"}))
