@@ -13,7 +13,7 @@ st.sidebar.markdown(
 
     **Features:**
     - Interactive OHLC candlesticks
-    - 20/50/100/200‑day moving averages (only those that fit your window)
+    - 20/50/100/200‑day moving averages
     - Volume bars color‑coded by up/down days
     - RSI (14‑day) panel
     - MACD (12,26,9) panel
@@ -88,8 +88,9 @@ available_mas = [w for w in (20,50,100,200) if n >= w]
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
-    row_heights=[0.5,0.1,0.15,0.25],
-    vertical_spacing=0.02,
+    # increased RSI & MACD height, slightly less volume
+    row_heights=[0.5, 0.08, 0.22, 0.20],
+    vertical_spacing=0.03,
     specs=[
         [{"type":"candlestick"}],
         [{"type":"bar"}],
@@ -106,7 +107,8 @@ fig.add_trace(
         low=df["Low"],   close=df["Close"],
         name="Price",
         increasing_line_color="green",
-        decreasing_line_color="red"
+        decreasing_line_color="red",
+        showlegend=True
     ),
     row=1, col=1
 )
@@ -176,9 +178,8 @@ fig.update_layout(
     height=900, width=1000,
     title=f"{ticker} — Interactive OHLC + RSI & MACD",
     hovermode="x unified",
-    xaxis=dict(type="category"),       # treat x as discrete trading‑day labels
+    xaxis=dict(type="category"),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
-# ── Render ───────────────────────────────────────────────────────────────────
 st.plotly_chart(fig, use_container_width=True)
