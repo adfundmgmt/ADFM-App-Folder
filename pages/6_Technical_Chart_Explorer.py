@@ -1,11 +1,14 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import mplfinance as mpf
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.dates import DateFormatter, date2num
+from mplfinance.original_flavor import candlestick_ohlc
 from datetime import datetime, timedelta
 
 # ── Page config
-st.set_page_config(layout="wide", page_title="Technical Chart Explorer")
+st.set_page_config(layout="wide", page_title="Ticker Technical Chart")
 st.title("Technical Chart Explorer")
 
 # ── Sidebar
@@ -30,73 +33,103 @@ with st.sidebar:
     interval = st.selectbox("Interval", ["1d","1wk","1mo"],     index=0)
 
 # ── Data fetch (with buffer for MAs)
-buff = 250
+period_map  = {"1y":365,"2y":730,"3y":1095,"5y":1825}
+buffer_days = 250
 if period != "max":
-    days  = {"1y":365,"2y":730,"3y":1095,"5y":1825}[period] + buff
-    start = datetime.today() - timedelta(days=days)
-    df    = yf.download(ticker, start=start, interval=interval)
+    days     = period_map[period] + buffer_days
+    start_dt = datetime.today() - timedelta(days=days)
+    df       = yf.Ticker(ticker).history(start=start_dt, interval=interval)
 else:
-    df    = yf.download(ticker, period="max", interval=interval)
+    df       = yf.Ticker(ticker).history(period="max", interval=interval)
 
 if df.empty:
-    st.error("No data returned. Check your ticker/connection.")
+    st.error("No data returned. Check symbol or connection.")
     st.stop()
 
+# drop any tz info
 df.index = pd.to_datetime(df.index).tz_localize(None)
 
 # ── Indicators
 for w in (20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
-delta = df["Close"].diff()
-gain  = delta.clip(lower=0).rolling(14).mean()
-loss  = -delta.clip(upper=0).rolling(14).mean()
-rs    = gain/loss
-df["RSI14"] = 100 - (100/(1+rs))
+delta       = df["Close"].diff()
+gain        = delta.clip(lower=0).rolling(14).mean()
+loss        = -delta.clip(upper=0).rolling(14).mean()
+rs          = gain / loss
+df["RSI14"] = 100 - (100 / (1 + rs))
 
-df["EMA12"]   = df["Close"].ewm(span=12, adjust=False).mean()
-df["EMA26"]   = df["Close"].ewm(span=26, adjust=False).mean()
-df["MACD"]    = df["EMA12"] - df["EMA26"]
-df["Signal"]  = df["MACD"].ewm(span=9, adjust=False).mean()
-df["Hist"]    = df["MACD"] - df["Signal"]
+df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
+df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
+df["MACD"]   = df["EMA12"] - df["EMA26"]
+df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+df["Hist"]   = df["MACD"] - df["Signal"]
 
-# Trim buffer to exact window
-if period!="max":
-    window = {"1y":365,"2y":730,"3y":1095,"5y":1825}[period]
-    df     = df.loc[df.index>=df.index.max()-pd.Timedelta(days=window)]
+# trim to exact window
+if period != "max":
+    cutoff  = df.index.max() - pd.Timedelta(days=period_map[period])
+    df      = df.loc[df.index >= cutoff]
 
-# ── CLEAN OHLCV (robust)
-numeric_cols = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
-df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
-mask = df[numeric_cols].notna().all(axis=1)
-df = df.loc[mask]
-df.sort_index(inplace=True)
+# ── Prepare OHLC for candlestick_ohlc
+df_plot = df.copy()
+ohlc     = df_plot[["Open","High","Low","Close"]].reset_index()
+ohlc["DateNum"] = ohlc["Date"].apply(date2num)
+ohlc_vals      = ohlc[["DateNum","Open","High","Low","Close"]].values
 
-# ── mplfinance add‑plots
-apds = [
-    mpf.make_addplot(df["MA20"],   color="purple"),
-    mpf.make_addplot(df["MA50"],   color="blue"),
-    mpf.make_addplot(df["MA100"],  color="orange"),
-    mpf.make_addplot(df["MA200"],  color="gray"),
-    mpf.make_addplot(df["RSI14"],  panel=1, color="purple", ylabel="RSI (14)"),
-    mpf.make_addplot(df["MACD"],   panel=2, color="blue",   ylabel="MACD"),
-    mpf.make_addplot(df["Signal"], panel=2, color="orange"),
-    mpf.make_addplot(df["Hist"],   panel=2, type="bar", color="dimgray", alpha=0.5),
+# color map for volume
+vol_colors = [
+    "green" if row.Close >= row.Open else "red"
+    for _, row in df_plot.iterrows()
 ]
 
-# ── Plot
-mpf_style = mpf.make_mpf_style(base_mpf_style="charles", gridstyle=":")
-fig, _ = mpf.plot(
-    df,
-    type="candle",
-    mav=(20,50,100,200),
-    volume=True,
-    addplot=apds,
-    panel_ratios=(6,2,2),
-    figsize=(14,10),
-    style=mpf_style,
-    returnfig=True
+# ── Plot layout
+grid_opts = {"height_ratios":[5,1,1,1],"hspace":0.25}
+fig, (ax_price, ax_vol, ax_rsi, ax_macd) = plt.subplots(
+    4,1, figsize=(14,10), sharex=True, gridspec_kw=grid_opts
 )
 
+# ── Candlesticks + MAs
+ax_price.set_title(f"{ticker} Price & Moving Averages", fontsize=18, weight="bold", pad=20)
+candlestick_ohlc(
+    ax_price,
+    ohlc_vals,
+    width=0.6,
+    colorup="green",
+    colordown="red",
+    alpha=0.8
+)
+for w,col in zip((20,50,100,200),("purple","blue","orange","gray")):
+    ax_price.plot(df_plot.index, df_plot[f"MA{w}"], label=f"MA{w}", color=col, linewidth=1)
+ax_price.legend(loc="upper left", fontsize=10)
+ax_price.grid(alpha=0.3)
+ax_price.xaxis_date()
+
+# ── Volume
+ax_vol.bar(df_plot.index, df_plot["Volume"], color=vol_colors, width=1, alpha=0.3)
+ax_vol.set_ylabel("Volume", color="gray", fontsize=10)
+ax_vol.tick_params(axis="y", labelcolor="gray", labelsize=8)
+ax_vol.grid(alpha=0.3)
+
+# ── RSI
+ax_rsi.set_title("Relative Strength Index (14-day)", fontsize=14, weight="bold", pad=12)
+ax_rsi.plot(df_plot.index, df_plot["RSI14"], color="purple", linewidth=1.5)
+ax_rsi.axhline(70, linestyle="--", color="gray", linewidth=1)
+ax_rsi.axhline(30, linestyle="--", color="gray", linewidth=1)
+ax_rsi.set_ylabel("RSI", fontsize=10)
+ax_rsi.grid(alpha=0.3)
+
+# ── MACD
+ax_macd.set_title("MACD (12,26,9)", fontsize=14, weight="bold", pad=12)
+ax_macd.plot(df_plot.index, df_plot["MACD"],   label="MACD",   color="blue",   linewidth=1.5)
+ax_macd.plot(df_plot.index, df_plot["Signal"], label="Signal", color="orange", linewidth=1.5)
+ax_macd.bar(df_plot.index, df_plot["Hist"],     label="Hist",    color="gray",   alpha=0.5, width=1)
+ax_macd.set_ylabel("MACD", fontsize=10)
+ax_macd.legend(loc="upper left", fontsize=10)
+ax_macd.grid(alpha=0.3)
+
+# ── X‑axis formatting
+ax_macd.xaxis.set_major_formatter(DateFormatter("%Y-%m"))
+
+fig.tight_layout()
 st.pyplot(fig)
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2025 AD Fund Management LP")
