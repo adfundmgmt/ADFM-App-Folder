@@ -133,3 +133,8 @@ ax_macd.xaxis.set_major_formatter(date_format)
 
 fig.tight_layout()
 st.pyplot(fig)
+
+
+# ── Footnotes ───────────────────────────────────────────────────────────────
+
+st.caption("© 2025 AD Fund Management LP")
