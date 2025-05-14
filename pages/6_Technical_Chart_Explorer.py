@@ -11,11 +11,11 @@ st.sidebar.markdown("""
 Visualize key technical indicators for any stock using Yahoo Finance data.
 
 **Features:**
-- Interactive OHLC candlesticks
-- 20/50/100/200‑day moving averages (full length)
-- Volume bars color‑coded by up/down days
-- RSI (14‑day) panel (0–100 scale)
-- MACD (12,26,9) panel
+- Interactive OHLC candlesticks  
+- 20/50/100/200‑day moving averages (full length)  
+- Volume bars color‑coded by up/down days  
+- RSI (14‑day) panel (0–100 scale)  
+- MACD (12,26,9) panel  
 """)
 ticker   = st.sidebar.text_input("Ticker", "NVDA").upper()
 period   = st.sidebar.selectbox(
@@ -23,52 +23,61 @@ period   = st.sidebar.selectbox(
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ── Fetch with buffer for long MAs ──────────────────────────────────────────
+# ── Fetch with buffer for full-length MAs ─────────────────────────────────
 base_days   = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
 buffer_days = max(base_days.get(period,365), 500)
 
 if period != "max":
-    start = datetime.today() - timedelta(days=base_days[period] + buffer_days)
-    df    = yf.Ticker(ticker).history(start=start, interval=interval)
+    start   = datetime.today() - timedelta(days=base_days[period] + buffer_days)
+    df_full = yf.Ticker(ticker).history(start=start, interval=interval)
 else:
-    df    = yf.Ticker(ticker).history(period="max", interval=interval)
+    df_full = yf.Ticker(ticker).history(period="max", interval=interval)
 
-if df.empty:
+if df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# ── Prep: strip tz, trim to window, drop weekends ──────────────────────────
-df.index = pd.to_datetime(df.index).tz_localize(None)
-if period != "max":
-    cutoff = df.index.max() - pd.Timedelta(days=base_days[period])
-    df     = df.loc[df.index >= cutoff]
-df = df[df.index.weekday < 5]
-df["DateStr"] = df.index.strftime("%Y-%m-%d")
+# ── PREP & INDICATORS on full history ─────────────────────────────────────
+df_full.index = pd.to_datetime(df_full.index).tz_localize(None)
+# drop weekends entirely
+df_full = df_full[df_full.index.weekday < 5]
 
-# ── Compute Indicators ───────────────────────────────────────────────────────
+# rolling MAs
 for w in (20,50,100,200):
-    df[f"MA{w}"] = df["Close"].rolling(w).mean()
+    df_full[f"MA{w}"] = df_full["Close"].rolling(w).mean()
 
-delta       = df["Close"].diff()
+# RSI(14)
+delta       = df_full["Close"].diff()
 gain        = delta.clip(lower=0).rolling(14).mean()
 loss        = -delta.clip(upper=0).rolling(14).mean()
 rs          = gain / loss
-df["RSI14"] = 100 - (100/(1+rs))
+df_full["RSI14"] = 100 - (100/(1+rs))
 
-df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
-df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
-df["MACD"]   = df["EMA12"] - df["EMA26"]
-df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-df["Hist"]   = df["MACD"] - df["Signal"]
+# MACD(12,26,9)
+df_full["EMA12"]  = df_full["Close"].ewm(span=12, adjust=False).mean()
+df_full["EMA26"]  = df_full["Close"].ewm(span=26, adjust=False).mean()
+df_full["MACD"]   = df_full["EMA12"] - df_full["EMA26"]
+df_full["Signal"] = df_full["MACD"].ewm(span=9, adjust=False).mean()
+df_full["Hist"]   = df_full["MACD"] - df_full["Signal"]
+
+# ── Trim to display window ─────────────────────────────────────────────────
+if period != "max":
+    cutoff = df_full.index.max() - pd.Timedelta(days=base_days[period])
+    df     = df_full.loc[df_full.index >= cutoff]
+else:
+    df = df_full.copy()
+
+# categorical x‐axis labels so no gaps
+df["DateStr"] = df.index.strftime("%Y-%m-%d")
 
 available_mas = [w for w in (20,50,100,200) if len(df) >= w]
 
-# ── Build Figure ────────────────────────────────────────────────────────────
+# ── BUILD FIGURE ───────────────────────────────────────────────────────────
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
-    row_heights=[0.55,0.15,0.15,0.15],
-    vertical_spacing=0.02,
+    row_heights=[0.55,0.17,0.14,0.14],
+    vertical_spacing=0.08,  # more breathing room
     specs=[
         [{"type":"candlestick"}],
         [{"type":"bar"}],
@@ -79,25 +88,22 @@ fig = make_subplots(
 
 # 1) Price + MAs
 fig.add_trace(go.Candlestick(
-    x=df["DateStr"],
-    open=df["Open"], high=df["High"],
+    x=df["DateStr"], open=df["Open"], high=df["High"],
     low=df["Low"], close=df["Close"],
-    increasing_line_color="green",
-    decreasing_line_color="red",
+    increasing_line_color="green", decreasing_line_color="red",
     name="Price"
 ), row=1, col=1)
-for w, color in zip(available_mas, ("purple","blue","orange","gray")):
+for w,color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(go.Scatter(
         x=df["DateStr"], y=df[f"MA{w}"],
-        mode="lines",
-        line=dict(color=color, width=1),
+        mode="lines", line=dict(color=color, width=1),
         name=f"MA{w}"
     ), row=1, col=1)
 
 # 2) Volume
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"], width=1,
-    marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"], df["Open"])],
+    marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"],df["Open"])],
     name="Volume", showlegend=False
 ), row=2, col=1)
 fig.update_yaxes(title_text="Volume", row=2, col=1)
@@ -108,7 +114,12 @@ fig.add_trace(go.Scatter(
     mode="lines", line=dict(color="purple", width=1),
     name="RSI (14)"
 ), row=3, col=1)
-fig.update_yaxes(range=[0,100], title_text="RSI", row=3, col=1)
+fig.update_yaxes(
+    range=[0,100],
+    title_text="RSI",
+    row=3, col=1,
+    title_standoff=15  # move label out so ticks aren’t clipped
+)
 fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
@@ -132,7 +143,6 @@ fig.update_yaxes(title_text="MACD", row=4, col=1)
 month_starts = df.index.to_series().groupby(df.index.to_period("M")).first()
 tickvals     = month_starts.dt.strftime("%Y-%m-%d").tolist()
 ticktext     = month_starts.dt.strftime("%b-%y").tolist()
-
 fig.update_xaxes(
     type="category",
     tickmode="array",
@@ -141,11 +151,12 @@ fig.update_xaxes(
     tickangle=-45
 )
 
-# ── Layout tweaks ────────────────────────────────────────────────────────────
+# ── Final Layout tweaks ─────────────────────────────────────────────────────
 fig.update_layout(
     height=900, width=1000,
-    title=f"{ticker} — OHLC + RSI & MACD",
+    title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5, xanchor="center"),
     hovermode="x unified",
+    margin=dict(l=60, r=20, t=60, b=40),
     xaxis=dict(rangeslider_visible=False),
     legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center")
 )
