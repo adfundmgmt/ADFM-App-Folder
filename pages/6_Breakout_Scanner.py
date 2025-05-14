@@ -14,6 +14,9 @@ This breakout scanner helps identify stocks breaking out to:
 - 🔺 High **momentum** via 14-day RSI
 
 Use it to spot potential trend continuation setups.
+
+**Data Source:** Yahoo Finance  
+**Indicators:** 20D & 50D Highs, RSI(14)
 """)
 
 st.sidebar.subheader("🧩 Input Settings")
@@ -22,35 +25,49 @@ user_input = st.sidebar.text_area(
     "AAPL, MSFT, NVDA, TSLA, AMD"
 )
 tickers_raw = [t.strip().upper() for t in user_input.split(",") if t.strip()]
-tickers = tickers_raw[0] if len(tickers_raw) == 1 else tickers_raw
+tickers = tickers_raw if len(tickers_raw) > 1 else tickers_raw[0] if tickers_raw else None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main Page
+# Page Header
 # ─────────────────────────────────────────────────────────────────────────────
 st.title("📈 Breakout Scanner")
 st.caption("Live scanner for 20D / 50D highs and RSI signals")
+
+if not tickers:
+    st.warning("Please enter at least one valid ticker in the sidebar.")
+    st.stop()
 
 lookback_days = 90
 start_date = datetime.today() - timedelta(days=lookback_days)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Data Fetcher
+# Robust Data Loader
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def load_data(tickers):
-    raw = yf.download(tickers, start=start_date.strftime("%Y-%m-%d"), progress=False)
+    if isinstance(tickers, str):
+        tickers = [tickers]
+    
+    success = {}
+    errors = []
+    for ticker in tickers:
+        try:
+            df = yf.download(ticker, start=start_date.strftime("%Y-%m-%d"), progress=False)
+            if "Adj Close" in df and not df["Adj Close"].isna().all():
+                success[ticker] = df["Adj Close"]
+            else:
+                errors.append(ticker)
+        except Exception:
+            errors.append(ticker)
+    
+    if not success:
+        raise ValueError("No valid price data returned.")
+    
+    combined = pd.DataFrame(success)
+    if errors:
+        st.sidebar.warning(f"Ignored {len(errors)} invalid ticker(s): {', '.join(errors)}")
 
-    if isinstance(tickers, str) or len(tickers) == 1:
-        # Single ticker: wrap Series into DataFrame
-        if "Adj Close" in raw:
-            return pd.DataFrame({tickers if isinstance(tickers, str) else tickers[0]: raw["Adj Close"]})
-        else:
-            raise ValueError("No 'Adj Close' data found.")
-    else:
-        if "Adj Close" in raw:
-            return raw["Adj Close"]
-        else:
-            raise ValueError("No 'Adj Close' data returned from Yahoo Finance.")
+    return combined
 
 try:
     price_data = load_data(tickers)
@@ -97,7 +114,7 @@ for ticker in (tickers_raw if isinstance(tickers, list) else [tickers]):
             "Breakout 50D": breakout_50d,
             "RSI (14D)": round(rsi, 2)
         })
-    except Exception as e:
+    except Exception:
         continue
 
 # ─────────────────────────────────────────────────────────────────────────────
