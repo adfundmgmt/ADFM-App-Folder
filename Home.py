@@ -31,6 +31,8 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Technical Chart Explorer**  
   Visualize key technical indicators for any publicly traded ticker that is on Yahoo Finance (equities, commodities, credit).
 
+- **Options Chain Viewer**  
+  Fetch real-time call & put chains for any ticker and expiry via Yahoo Finance.
 ---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast-moving markets. Always a work in progress—open to feedback or feature ideas.
