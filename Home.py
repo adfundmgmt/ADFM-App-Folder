@@ -27,7 +27,10 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 
 - **US Inflation Dashboard**  
   Dissects the latest CPI print with YoY and MoM breakdowns across headline, and core categories.
-  
+
+  - **Technical Chart Explorer**  
+  Visualize key technical indicators for any publicly traded stock.
+
 ---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast-moving markets. Always a work in progress—open to feedback or feature ideas.
