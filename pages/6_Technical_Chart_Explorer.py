@@ -25,7 +25,7 @@ period   = st.sidebar.selectbox(
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ── Fetch & Prep Data ───────────────────────────────────────────────────────
+# ── Fetch with extra buffer for long MAs ────────────────────────────────────
 base_days   = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
 buffer_days = max(base_days.get(period,365), 500)
 
@@ -36,15 +36,19 @@ else:
     df    = yf.Ticker(ticker).history(period="max", interval=interval)
 
 if df.empty:
-    st.error("No data returned. Check symbol or internet.")
-    st.stop()
+    st.error("No data returned. Check symbol or internet."); st.stop()
 
-# normalize index, trim to window, drop weekends
+# ── Prep: strip tz, trim to exact window, drop weekends ─────────────────────
 df.index = pd.to_datetime(df.index).tz_localize(None)
 if period != "max":
     cutoff = df.index.max() - pd.Timedelta(days=base_days[period])
     df     = df.loc[df.index >= cutoff]
+
+# **Drop weekends here** so no trace or axis gap ever references them
 df = df[df.index.weekday < 5]
+
+# We'll use a categorical axis on these labels to remove any gaps
+df["DateStr"] = df.index.strftime("%Y-%m-%d")
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
 for w in (20,50,100,200):
@@ -80,28 +84,29 @@ fig = make_subplots(
 
 # 1) Price + MAs
 fig.add_trace(go.Candlestick(
-    x=df.index, open=df["Open"], high=df["High"],
+    x=df["DateStr"],
+    open=df["Open"], high=df["High"],
     low=df["Low"], close=df["Close"],
     increasing_line_color="green", decreasing_line_color="red",
     name="Price"
 ), row=1, col=1)
-for w,color in zip(available_mas, ("purple","blue","orange","gray")):
+for w,color in zip(available_mas,("purple","blue","orange","gray")):
     fig.add_trace(go.Scatter(
-        x=df.index, y=df[f"MA{w}"],
+        x=df["DateStr"], y=df[f"MA{w}"],
         mode="lines", line=dict(color=color, width=1),
         name=f"MA{w}"
     ), row=1, col=1)
 
 # 2) Volume
 fig.add_trace(go.Bar(
-    x=df.index, y=df["Volume"], width=24*3600*1000*0.8,  # ~0.8 day width
-    marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"], df["Open"])],
+    x=df["DateStr"], y=df["Volume"], width=1,
+    marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"],df["Open"])],
     name="Volume"
 ), row=2, col=1)
 
-# 3) RSI
+# 3) RSI (0–100, lines at 80/20)
 fig.add_trace(go.Scatter(
-    x=df.index, y=df["RSI14"],
+    x=df["DateStr"], y=df["RSI14"],
     mode="lines", line=dict(color="purple", width=1),
     name="RSI (14)"
 ), row=3, col=1)
@@ -111,25 +116,32 @@ fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
 # 4) MACD + Hist
 fig.add_trace(go.Bar(
-    x=df.index, y=df["Hist"], marker_color="gray", name="MACD Hist"
+    x=df["DateStr"], y=df["Hist"], marker_color="gray", name="MACD Hist"
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
-    x=df.index, y=df["MACD"],
+    x=df["DateStr"], y=df["MACD"],
     mode="lines", line=dict(color="blue", width=1.5),
     name="MACD"
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
-    x=df.index, y=df["Signal"],
+    x=df["DateStr"], y=df["Signal"],
     mode="lines", line=dict(color="orange", width=1),
     name="Signal"
 ), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# ── X‑axis Date Formatting ───────────────────────────────────────────────────
+# ── Build monthly ticks on categorical axis ────────────────────────────────
+# pick the first trading-day label for each month in view
+month_starts = df.index.to_series().groupby(df.index.to_period("M")).first()
+tickvals     = month_starts.strftime("%Y-%m-%d").tolist()
+ticktext     = month_starts.dt.strftime("%b-%y").tolist()
+
 fig.update_xaxes(
-    tickformat="%b-%y",
-    tickangle=-45,
-    dtick="M1"
+    type="category",
+    tickmode="array",
+    tickvals=tickvals,
+    ticktext=ticktext,
+    tickangle=-45
 )
 
 # ── Layout tweaks ────────────────────────────────────────────────────────────
