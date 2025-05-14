@@ -6,3 +6,4 @@ numpy
 pandas_datareader
 plotly
 packaging
+pytrends
