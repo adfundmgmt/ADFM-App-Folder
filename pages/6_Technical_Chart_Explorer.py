@@ -26,9 +26,8 @@ period   = st.sidebar.selectbox(
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
 # ── Fetch & Prep Data ───────────────────────────────────────────────────────
-# Make sure we fetch at least 200 days extra for the 200‑day MA
-base_days  = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
-buffer_days = max(base_days.get(period,365), 200)
+base_days   = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
+buffer_days = max(base_days.get(period,365), 500)  # now at least 500 days
 
 if period != "max":
     start = datetime.today() - timedelta(days=base_days[period] + buffer_days)
@@ -46,8 +45,6 @@ if period != "max":
     cutoff = df.index.max() - pd.Timedelta(days=base_days[period])
     df     = df.loc[df.index >= cutoff]
 df = df[df.index.weekday < 5]
-
-# categorical date for alignment
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 
 # ── Compute Indicators ───────────────────────────────────────────────────────
@@ -82,7 +79,7 @@ fig = make_subplots(
     ]
 )
 
-# 1) Price + MAs
+# Price + MAs
 fig.add_trace(go.Candlestick(
     x=df["DateStr"], open=df["Open"], high=df["High"],
     low=df["Low"], close=df["Close"],
@@ -96,14 +93,14 @@ for w,color in zip(available_mas, ("purple","blue","orange","gray")):
         name=f"MA{w}"
     ), row=1, col=1)
 
-# 2) Volume
+# Volume
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"], width=1,
     marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"], df["Open"])],
     name="Volume"
 ), row=2, col=1)
 
-# 3) RSI 0–100, lines at 80/20
+# RSI (0–100, lines at 80/20)
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["RSI14"],
     mode="lines", line=dict(color="purple", width=1),
@@ -113,7 +110,7 @@ fig.update_yaxes(range=[0,100], title_text="RSI", row=3, col=1)
 fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
-# 4) MACD + Hist
+# MACD + histogram
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Hist"], marker_color="gray", name="MACD Hist"
 ), row=4, col=1)
@@ -129,16 +126,16 @@ fig.add_trace(go.Scatter(
 ), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# ── X‑axis formatting to reduce clutter ─────────────────────────────────────
+# X‑axis formatting: MMM‑YY, 6 ticks, angled
 fig.update_xaxes(
     type="category",
-    tickformat="%b %y",
-    tickangle= -45,
+    tickformat="%b-%y",
+    tickangle=-45,
     tickmode="auto",
     nticks=6
 )
 
-# ── Layout tweaks ────────────────────────────────────────────────────────────
+# Layout tweaks
 fig.update_layout(
     height=900, width=1000,
     title=f"{ticker} — OHLC + RSI & MACD",
@@ -147,5 +144,4 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
-# ── Render ───────────────────────────────────────────────────────────────────
 st.plotly_chart(fig, use_container_width=True)
