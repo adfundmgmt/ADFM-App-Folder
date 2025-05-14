@@ -7,3 +7,4 @@ pandas_datareader
 plotly
 packaging
 pytrends
+requests
