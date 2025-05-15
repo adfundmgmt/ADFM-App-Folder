@@ -60,20 +60,24 @@ with st.sidebar:
     )
 
 def seasonal_stats(prices: pd.Series):
-    # Use Month Start ('MS') to correctly capture January and all months
-    monthly = prices.resample('MS').first().pct_change().dropna() * 100
+    monthly = prices.resample('MS').last().pct_change().dropna() * 100  # Month start
     monthly.index = monthly.index.to_period('M')
     grouped = monthly.groupby(monthly.index.month)
+    
     median_ret = grouped.median()
     hit_rate  = grouped.apply(lambda x: x.gt(0).mean() * 100)
     counts    = grouped.size()
+    years_observed = grouped.apply(lambda x: x.index.year.nunique())  # Count distinct years per month
+
     idx = pd.Index(range(1,13), name='month')
     stats = pd.DataFrame(index=idx)
     stats['median_ret'] = median_ret
     stats['hit_rate']   = hit_rate
     stats['count']      = counts
+    stats['years_observed'] = years_observed
     stats['label']      = MONTH_LABELS
     return stats
+
 
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
