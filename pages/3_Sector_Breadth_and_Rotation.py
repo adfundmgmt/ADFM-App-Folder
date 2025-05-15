@@ -24,7 +24,6 @@ st.set_page_config(page_title="Sector Breadth & Rotation", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
 st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
 
-# ---- Sidebar ----
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
@@ -47,25 +46,26 @@ def fetch_all_sector_prices():
     failed = []
     for t in tickers:
         df = yf.download(t, start=start_date, end=end_date, progress=False, auto_adjust=True)
+        # Valid data: must be a pd.Series with at least 10 dates
         if not df.empty and "Close" in df.columns:
             series = df["Close"].dropna()
-            if not series.empty:
+            if isinstance(series, pd.Series) and len(series) > 10 and isinstance(series.index, pd.DatetimeIndex):
                 price_data[t] = series
             else:
                 failed.append(t)
         else:
             failed.append(t)
+    # Only build the DataFrame from valid series
     if not price_data:
         st.error("No sector or SPY data found. Check Yahoo Finance or your internet connection.")
         st.stop()
     if failed:
-        st.warning(f"Could not fetch data for: {', '.join(failed)}")
-    # Use outer join to align all series by date (max coverage)
-    return pd.DataFrame(price_data).dropna(how="all")
+        st.sidebar.warning(f"Could not fetch data for: {', '.join(failed)}")
+    # Outer join so all series align by date
+    return pd.DataFrame(price_data)
 
 prices = fetch_all_sector_prices()
 
-# ---- Check for critical data ----
 if SECTOR_ETFS[selected_sector] not in prices or SPY_TICKER not in prices:
     st.error("Could not fetch data for selected sector or SPY.")
     st.stop()
