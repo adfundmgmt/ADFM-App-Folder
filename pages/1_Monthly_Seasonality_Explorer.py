@@ -39,37 +39,6 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("Crafted by **AD Fund Management LP**")
 
-# ---- Helper functions ----
-
-def get_figure_width():
-    # Try to guess page width; fallback if not available
-    # (streamlit.components.v1.html hack, works with most Streamlit deployments)
-    import streamlit.components.v1 as components
-    width_px = st.session_state.get("_page_width", None)
-    if width_px is None:
-        result = components.html(
-            """
-            <script>
-            const width = Math.min(window.innerWidth || 800, 1200);
-            window.parent.postMessage({streamlitWidth: width}, "*");
-            </script>
-            """,
-            height=0,
-            width=0,
-        )
-        # Listen for the message and store it
-        def _streamlit_set_page_width():
-            import streamlit.runtime.scriptrunner.script_run_context as src
-            import streamlit.runtime.legacy_caching as lc
-            if hasattr(src, "get_script_run_ctx") and hasattr(lc, "get_cache"):
-                ctx = src.get_script_run_ctx()
-                if ctx and hasattr(ctx, "enqueue") and hasattr(ctx, "streamlit"):
-                    ctx.streamlit.on_message(lambda msg: st.session_state.update({"_page_width": msg.get("streamlitWidth", 900)}))
-        _streamlit_set_page_width()
-        # Fallback until the width is available (default: desktop)
-        return 900
-    return int(width_px)
-
 def seasonal_stats(prices: pd.Series):
     monthly = prices.resample('ME').last().pct_change().dropna() * 100
     monthly.index = monthly.index.to_period('M')
@@ -85,11 +54,10 @@ def seasonal_stats(prices: pd.Series):
     stats['label']      = MONTH_LABELS
     return stats
 
-def plot_seasonality(stats: pd.DataFrame, title: str, fig_width_px: int = 900) -> io.BytesIO:
+def plot_seasonality(stats: pd.DataFrame, title: str, fig_width_px: int = 1100) -> io.BytesIO:
     dpi = 100
-    # Height is auto-calculated to keep aspect ratio readable
     fig_w = fig_width_px / dpi
-    fig_h = max(5.5, fig_w * 0.52)  # makes tall on mobile, landscape on desktop
+    fig_h = max(5.5, fig_w * 0.5)
 
     plot_df = stats.dropna(subset=['median_ret','hit_rate'], how='all')
     labels = plot_df['label'].tolist()
@@ -193,10 +161,12 @@ try:
     )
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Dynamic chart width: use 98% of the available page width
-    # Hardcode desktop default to 1100px, mobile to 380px if window.innerWidth<700
-    # Since Streamlit doesn't yet expose browser width, use best guess
-    chart_width = 1100 if st.columns(1)[0].width > 700 else 380
+    # Responsive chart: use 1100px (wide) for desktop, 380px for mobile
+    # (very basic mobile detection, not perfect)
+    import os
+    chart_width = 1100
+    if "MOBILE" in os.environ.get("HTTP_USER_AGENT", "").upper() or st.container()._parent._block_proto.HasField("mobile"):
+        chart_width = 380
 
     buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})", fig_width_px=chart_width)
 
