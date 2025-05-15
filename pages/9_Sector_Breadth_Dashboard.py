@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objs as go
-from plotly.subplots import make_subplots
 from datetime import datetime
 
 SECTOR_ETFS = {
@@ -23,24 +22,27 @@ SECTOR_ETFS = {
 
 # --- Page Config ---
 st.set_page_config("Sector Breadth & Rotation", layout="wide")
-st.title("📊 S&P 500 Sector Breadth & Rotation Monitor")
-st.caption("Built by AD Fund Management LP. All data via Yahoo Finance. For informational use only.")
+st.title("S&P 500 Sector Breadth & Rotation Monitor")
+st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
 
+# --- Sidebar with About ---
 with st.sidebar:
-    st.header("Instructions & Options")
+    st.header("About This Tool")
     st.markdown(
         """
-- **Sector Rotation Quadrant:** 3M vs 1W return, quadrant color = leading/lagging.
-- **Relative Strength:** Compare sectors vs SPY (overlay multiple).
-- **Heatmap & Breadth:** Color-coded tables for quick positioning.
+**Sector Rotation Quadrant (Interactive):**  
+Compares short-term (1W) and medium-term (3M) returns for each S&P 500 sector, visualizing leadership and laggards. The selected sector in the relative strength chart is automatically highlighted for easy comparison.
+
+**Sector Relative Strength vs. S&P 500 (Interactive):**  
+Plots the ratio of any sector ETF to the S&P 500 (SPY) for trend and leadership signals.
+
+**Performance Heatmap & Breadth Table:**  
+See which sectors are outperforming, and what percentage of each is above their 20, 50, and 200-day moving averages.
 ---
-""")
+"""
+    )
     lookback = st.slider("Lookback window (days)", 90, 365, 180, 15)
-    rs_sectors = st.multiselect("Sectors for Relative Strength Overlay", 
-        [k for k in SECTOR_ETFS if k != "S&P 500"], default=["Technology", "Health Care", "Financials"])
-    highlight = st.multiselect("Highlight on Rotation Quadrant", 
-        [k for k in SECTOR_ETFS if k != "S&P 500"], default=["Technology", "Energy", "Financials"])
-    st.caption("Data is end-of-day ETF closes. Interactive charts via Plotly.")
+    st.caption("All charts use end-of-day ETF closes. Charts are interactive.")
 
 # --- Data ---
 @st.cache_data(ttl=21600)
@@ -78,16 +80,17 @@ perf_df = pd.DataFrame(perf).T[["1W", "1M", "3M", "YTD"]].round(2)
 # ====================
 col1, col2 = st.columns([1.25, 1.0])
 
-# --- 1. Sector Relative Strength Overlay (Plotly)
+# --- 1. Sector Relative Strength (Single select, Plotly)
 with col1:
-    st.markdown("### 📈 Sector Relative Strength vs. S&P 500 (Interactive)")
+    st.markdown("Sector Relative Strength vs. S&P 500 (Interactive)")
+    sector = st.selectbox("Select sector to compare to S&P 500:", [k for k in SECTOR_ETFS if k != "S&P 500"], index=0)
+    ratio = prices[SECTOR_ETFS[sector]] / prices["SPY"]
     fig_rs = go.Figure()
-    for sector in rs_sectors:
-        ratio = prices[SECTOR_ETFS[sector]] / prices["SPY"]
-        fig_rs.add_trace(go.Scatter(
-            x=ratio.index, y=ratio, name=f"{sector}/SPY", mode="lines",
-            line=dict(width=2.3)
-        ))
+    fig_rs.add_trace(go.Scatter(
+        x=ratio.index, y=ratio, name=f"{sector}/SPY", mode="lines",
+        line=dict(width=2.5, color="#7d3c98"),
+        hovertemplate=f"{sector}/SPY<br>Date: %{x|%Y-%m-%d}<br>Ratio: %{y:.3f}<extra></extra>"
+    ))
     fig_rs.update_layout(
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
         height=370, margin=dict(l=25, r=15, t=35, b=25),
@@ -97,9 +100,9 @@ with col1:
     )
     st.plotly_chart(fig_rs, use_container_width=True)
 
-# --- 2. Sector Rotation Quadrant (Plotly)
+# --- 2. Sector Rotation Quadrant (Plotly, only highlight selected sector)
 with col2:
-    st.markdown("### 🔄 Sector Rotation Quadrant (Interactive)")
+    st.markdown("Sector Rotation Quadrant (Interactive)")
     x = perf_df["3M"]
     y = perf_df["1W"]
     figq = go.Figure()
@@ -113,13 +116,22 @@ with col2:
     figq.add_shape(type="rect", x0=min(x.min(),0), y0=min(y.min(),0), x1=0, y1=0,
                    fillcolor="rgba(240,60,60,0.11)", line=dict(width=0)) # Lagging
 
-    for sector in perf_df.index:
-        marker = dict(size=18, symbol="circle", color="#955DF2" if sector in highlight else "#ccc", line=dict(width=2, color="black" if sector in highlight else "#bbb"))
+    for sector_name in perf_df.index:
+        if sector_name == sector:
+            marker = dict(
+                size=21, symbol="circle", color="#7d3c98",
+                line=dict(width=2.5, color="black"),
+            )
+        else:
+            marker = dict(
+                size=16, symbol="circle", color="#cccccc",
+                line=dict(width=1, color="#bbb"),
+            )
         figq.add_trace(go.Scatter(
-            x=[x[sector]], y=[y[sector]], mode="markers+text",
-            marker=marker, text=[sector], textposition="bottom center",
-            hovertemplate=f"{sector}<br>3M: {x[sector]:+.2f}%<br>1W: {y[sector]:+.2f}%",
-            name=sector, showlegend=False
+            x=[x[sector_name]], y=[y[sector_name]], mode="markers+text",
+            marker=marker, text=[sector_name], textposition="bottom center",
+            hovertemplate=f"{sector_name}<br>3M: {x[sector_name]:+.2f}%<br>1W: {y[sector_name]:+.2f}%",
+            name=sector_name, showlegend=False
         ))
     figq.add_hline(0, line_width=1, line_dash="dot", line_color="gray")
     figq.add_vline(0, line_width=1, line_dash="dot", line_color="gray")
@@ -133,7 +145,7 @@ with col2:
 # ======================
 # Bottom Section: Heatmaps & Breadth
 # ======================
-st.markdown("### 🔥 Sector Performance Heatmap (%)")
+st.markdown("Sector Performance Heatmap (%)")
 st.dataframe(
     perf_df.style.background_gradient(cmap="RdYlGn", axis=0).format("{:+.2f}%"),
     use_container_width=True,
@@ -149,7 +161,7 @@ breadth = {
     for name, ticker in SECTOR_ETFS.items()
 }
 breadth_df = pd.DataFrame(breadth).T[[f"%>{w}D" for w in ma_windows]].round(1)
-st.markdown("### 🟩 Breadth Table: % Above Moving Averages")
+st.markdown("Breadth Table: % Above Moving Averages")
 st.dataframe(
     breadth_df.style.format("{:.1f}%").background_gradient(cmap="YlGn", axis=None),
     use_container_width=True,
@@ -160,8 +172,8 @@ best = perf_df["YTD"].idxmax()
 worst = perf_df["YTD"].idxmin()
 st.markdown(
     f"<div style='margin-top:1em;font-size:1.13em'>"
-    f"<b>🟢 Best YTD Sector:</b> <span style='color:green'>{best} ({perf_df.loc[best, 'YTD']:+.2f}%)</span><br>"
-    f"<b>🔴 Worst YTD Sector:</b> <span style='color:red'>{worst} ({perf_df.loc[worst, 'YTD']:+.2f}%)</span>"
+    f"<b>Best YTD Sector:</b> <span style='color:green'>{best} ({perf_df.loc[best, 'YTD']:+.2f}%)</span><br>"
+    f"<b>Worst YTD Sector:</b> <span style='color:red'>{worst} ({perf_df.loc[worst, 'YTD']:+.2f}%)</span>"
     "</div>",
     unsafe_allow_html=True,
 )
