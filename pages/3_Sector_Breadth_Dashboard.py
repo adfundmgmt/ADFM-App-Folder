@@ -20,12 +20,11 @@ SECTOR_ETFS = {
     "Communication Services": "XLC",
 }
 
-# --- Page Config ---
 st.set_page_config("Sector Breadth & Rotation", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
 st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
 
-# --- Sidebar with About ---
+# Sidebar with About
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
@@ -44,7 +43,7 @@ See which sectors are outperforming, and what percentage of each is above their 
     lookback = st.slider("Lookback window (days)", 90, 365, 180, 15)
     st.caption("All charts use end-of-day ETF closes. Charts are interactive.")
 
-# --- Data ---
+# Data
 @st.cache_data(ttl=21600)
 def fetch_prices(tickers, period="max"):
     px = yf.download(tickers, period=period, auto_adjust=True, progress=False)["Close"]
@@ -56,10 +55,11 @@ tickers = list(SECTOR_ETFS.values())
 prices = fetch_prices(tickers, period="max")
 prices = prices.iloc[-lookback:]
 
-# --- Performance Calculations ---
+# Performance Calculations
 def perf_calc(s, d):
     if len(s) < d: return np.nan
     return (s.iloc[-1] / s.iloc[-d] - 1) * 100
+
 def ytd_perf(s):
     ytd_idx = s.index.get_loc(s[s.index.year == datetime.now().year].index[0])
     return (s.iloc[-1] / s.iloc[ytd_idx] - 1) * 100
@@ -80,7 +80,7 @@ perf_df = pd.DataFrame(perf).T[["1W", "1M", "3M", "YTD"]].round(2)
 # ====================
 col1, col2 = st.columns([1.25, 1.0])
 
-# --- 1. Sector Relative Strength (Single select, Plotly)
+# 1. Sector Relative Strength (Single select, Plotly)
 with col1:
     st.markdown("Sector Relative Strength vs. S&P 500 (Interactive)")
     sector = st.selectbox("Select sector to compare to S&P 500:", [k for k in SECTOR_ETFS if k != "S&P 500"], index=0)
@@ -100,7 +100,7 @@ with col1:
     )
     st.plotly_chart(fig_rs, use_container_width=True)
 
-# --- 2. Sector Rotation Quadrant (Plotly, only highlight selected sector)
+# 2. Sector Rotation Quadrant (Plotly, only highlight selected sector)
 with col2:
     st.markdown("Sector Rotation Quadrant (Interactive)")
     x = perf_df["3M"]
@@ -151,7 +151,7 @@ st.dataframe(
     use_container_width=True,
 )
 
-# --- Breadth Table
+# Breadth Table
 def pct_above_ma(series, window):
     ma = series.rolling(window).mean()
     return (series > ma).mean() * 100
@@ -167,7 +167,7 @@ st.dataframe(
     use_container_width=True,
 )
 
-# --- Mini Panel for Best/Worst YTD
+# Mini Panel for Best/Worst YTD
 best = perf_df["YTD"].idxmax()
 worst = perf_df["YTD"].idxmin()
 st.markdown(
