@@ -5,6 +5,10 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.header("About This Tool")
 st.sidebar.markdown("""
