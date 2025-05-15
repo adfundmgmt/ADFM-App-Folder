@@ -123,3 +123,5 @@ fig_rot = px.scatter(
 fig_rot.update_traces(textposition="top center")
 fig_rot.update_layout(height=500, margin=dict(l=40, r=40, t=60, b=40), showlegend=False)
 st.plotly_chart(fig_rot, use_container_width=True)
+
+st.caption("© 2025 AD Fund Management LP")
