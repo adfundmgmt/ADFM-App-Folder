@@ -54,11 +54,9 @@ def seasonal_stats(prices: pd.Series):
     stats['label']      = MONTH_LABELS
     return stats
 
-def plot_seasonality(stats: pd.DataFrame, title: str, fig_width_px: int = 1100) -> io.BytesIO:
-    dpi = 100
-    fig_w = fig_width_px / dpi
-    fig_h = max(5.5, fig_w * 0.5)
-
+def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
+    # Standard aspect ratio, big enough for desktop, still looks good on mobile (Streamlit resizes with use_column_width)
+    fig, ax1 = plt.subplots(figsize=(11, 6), dpi=100)
     plot_df = stats.dropna(subset=['median_ret','hit_rate'], how='all')
     labels = plot_df['label'].tolist()
     median = plot_df['median_ret'].to_numpy(dtype=float)
@@ -69,7 +67,6 @@ def plot_seasonality(stats: pd.DataFrame, title: str, fig_width_px: int = 1100) 
     y2_bot = max(0.0, np.nanmin(hit)    - 5.0)
     y2_top = min(100.0, np.nanmax(hit)    + 5.0)
 
-    fig, ax1 = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
     ax2 = ax1.twinx()
     bar_cols  = ['mediumseagreen' if v>=0 else 'indianred' for v in median]
     edge_cols = ['darkgreen'    if v>=0 else 'darkred'    for v in median]
@@ -161,18 +158,9 @@ try:
     )
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Responsive chart: use 1100px (wide) for desktop, 380px for mobile
-    # (very basic mobile detection, not perfect)
-    import os
-    chart_width = 1100
-    if "MOBILE" in os.environ.get("HTTP_USER_AGENT", "").upper() or st.container()._parent._block_proto.HasField("mobile"):
-        chart_width = 380
+    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
 
-    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})", fig_width_px=chart_width)
-
-    st.markdown("<div style='display: flex; justify-content: center;'>", unsafe_allow_html=True)
-    st.image(buf)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.image(buf, use_column_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
     dl_col1, dl_col2 = st.columns([1,1])
