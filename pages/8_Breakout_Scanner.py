@@ -18,13 +18,12 @@ with st.sidebar:
     st.markdown(
         """
         **Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.**
-        
         ---
         - Enter comma‑separated tickers (e.g. `AAPL, MSFT, TSLA, NVDA, AMD`)
         - Table shows current price, recent highs, breakout flags, and RSI (7, 14, 21)
         - Click any ticker for annotated price and RSI chart
         - Breakouts: ✅ = new high today vs X-day
-        - RSI: Blue = low, Red = high
+        - RSI: Red = overbought (>80), Blue = oversold (<20)
         """
     )
 
@@ -104,29 +103,50 @@ if df.empty:
 break_cols = [c for c in df.columns if c.startswith("Breakout")]
 df = df.sort_values(by=break_cols + ["Price"], ascending=False).reset_index(drop=True)
 
-# ─── Style Table ───────────────────────────────────────────────────────────────
-def mark(v): return "✅" if v else ""
+# --- Table Styling Improvements ---
+def styled_table(df):
+    df_disp = df.copy()
+    # Emoji for breakouts (✅ or blank)
+    for col in break_cols:
+        df_disp[col] = df_disp[col].map(lambda x: "✅" if x else "")
+    # Format floats to two decimals, RSIs to one decimal
+    float_cols = [c for c in df_disp.columns if "High" in c or c == "Price"]
+    rsi_cols = [c for c in df_disp.columns if c.startswith("RSI")]
+    for c in float_cols:
+        df_disp[c] = df_disp[c].map(lambda x: f"{x:,.2f}")
+    for c in rsi_cols:
+        df_disp[c] = df_disp[c].map(lambda x: f"{x:.1f}")
 
-def style_df(df):
+    # Color code RSIs: >80 red (overbought), <20 blue (oversold)
+    def color_rsi(val):
+        try:
+            v = float(val)
+        except Exception:
+            return ""
+        if v >= 80:
+            return "color: #d62728; font-weight:bold;"   # red
+        elif v <= 20:
+            return "color: #1f77b4; font-weight:bold;"   # blue
+        return ""
+
     styled = (
-        df.style
-          .format({col:"{:.2f}" for col in df.columns if "High" in col or col=="Price"})
-          .applymap(mark, subset=break_cols)
-          .background_gradient(
-              subset=[c for c in df.columns if c.startswith("RSI")],
-              cmap="coolwarm", vmin=0, vmax=100
-          )
+        df_disp.style
+        .set_table_styles([
+            {'selector': 'th', 'props': [('font-size', '13px'), ('text-align', 'center'), ('font-weight', 'bold')]},
+            {'selector': 'td', 'props': [('font-size', '13px'), ('text-align', 'center')]},
+        ])
+        .applymap(color_rsi, subset=rsi_cols)
+        .set_properties(**{'background-color': '#f8fafc'}, subset=pd.IndexSlice[:, ["Price"]])
+        .set_properties(**{'border': '1.5px solid #e0e0e0'})
     )
     return styled
 
-try:
-    st.subheader("Breakout & RSI Signals")
-    st.dataframe(style_df(df), use_container_width=True)
-except Exception:
-    st.subheader("Breakout & RSI Signals")
-    st.write(df)
+# --- Section header (remove redundancy) ---
+st.markdown("### Breakout & RSI Signals", help="✅ = closing at a new X-day high. Table is sorted by most recent breakouts.")
 
-# CSV Download
+st.dataframe(styled_table(df), use_container_width=True)
+
+# --- Download Button remains below table ---
 st.download_button(
     "Download as CSV",
     df.to_csv(index=False),
@@ -152,8 +172,8 @@ fig.autofmt_xdate()
 # Multi‑RSI
 for w, col in zip((7,14,21), ("#9467bd","#8c564b","#e377c2")):
     ax2.plot(s.index, compute_rsi(s, w), color=col, label=f"RSI({w})")
-ax2.axhline(70, ls="--", color="gray", lw=0.8)
-ax2.axhline(30, ls="--", color="gray", lw=0.8)
+ax2.axhline(80, ls="--", color="gray", lw=0.9, label="RSI 80")
+ax2.axhline(20, ls="--", color="gray", lw=0.9, label="RSI 20")
 ax2.set_title(f"{sel} RSI Indicators", fontweight='bold')
 ax2.legend(fontsize=8)
 ax2.grid(alpha=0.3)
