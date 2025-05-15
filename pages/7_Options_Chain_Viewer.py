@@ -6,6 +6,10 @@ import altair as alt
 import math
 from datetime import datetime
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
+
 st.set_page_config(page_title="Options Chain Viewer", layout="wide")
 
 st.title('Options Chain Viewer')
