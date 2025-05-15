@@ -27,17 +27,35 @@ MONTH_LABELS = [
 st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
-# ---- Sidebar (About) ----
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        "Explore the seasonal patterns behind any stock, index, or commodity.\n\n"
-        "- **Broad Coverage**: Yahoo & FRED (S&P 500, Dow, Nasdaq pre-1950)\n"
-        "- **Clean Metrics**: Median monthly returns & hit rates\n"
-        "- **Green bars** = positive, **red** = negative, **black diamonds** = hit rates."
+        """
+        **Explore the seasonal patterns behind any stock, index, or commodity.**
+
+        ---
+        **Broad Coverage:**  
+        • Pulls data from Yahoo Finance for all global equities, ETFs, and commodities.  
+        • Automatic fallback to FRED for deep history on S&P 500, Dow, and Nasdaq (pre‑1950).
+
+        **Clean, Reliable Metrics:**  
+        • Median monthly returns show typical performance  
+        • Hit rates reveal consistency—how often each month finishes positive
+
+        **At-a-Glance Insight:**  
+        • <span style='color:mediumseagreen'><b>Green bars</b></span> for positive months  
+        • <span style='color:indianred'><b>Red bars</b></span> for negative months  
+        • <b>Black diamonds</b> to mark the frequency of gains (hit rate)
+
+        ---
+        **Customizable Scope:**  
+        • Enter any ticker and set your preferred start/end year to tailor historical depth  
+        • Download charts or stats instantly
+
+        ---
+        _Crafted by **AD Fund Management LP**_
+        """, unsafe_allow_html=True
     )
-    st.markdown("---")
-    st.markdown("Crafted by **AD Fund Management LP**")
 
 def seasonal_stats(prices: pd.Series):
     monthly = prices.resample('ME').last().pct_change().dropna() * 100
