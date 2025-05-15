@@ -14,6 +14,10 @@ import streamlit as st
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
+
 START_YEAR = 1980
 TRADING_DAYS_FULL_YEAR = 253
 
