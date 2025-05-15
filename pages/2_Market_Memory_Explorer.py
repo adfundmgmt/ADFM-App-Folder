@@ -121,17 +121,18 @@ if not top_matches:
     st.stop()
 
 ###############################################################################
-# Filter only analogs with complete data (no NaN, enough days)
+# Only include analogs with at least some data for YTD
 ###############################################################################
 valid_top_matches = []
 analog_returns = []
 
 for yr, rho in top_matches:
     analog = ytd_df[yr].dropna()
-    # Only include analogs with enough data points to match current year
+    # Only include analogs that have at least n_days points
     if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
         valid_top_matches.append((yr, rho))
-        analog_returns.append(analog.iloc[n_days-1])
+        # For mean metric, use final return for *entire* year, not just n_days (shows analog's total outcome)
+        analog_returns.append(analog.iloc[-1])
 
 ###############################################################################
 # Metrics — best, mean, all robust to missing analogs
@@ -140,7 +141,8 @@ current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('na
 
 if valid_top_matches and analog_returns:
     best_analog_year, best_rho = valid_top_matches[0]
-    best_analog_ytd_return = analog_returns[0]
+    # Best analog YTD up to today (for like-for-like), not full year
+    best_analog_ytd_return = ytd_df[best_analog_year].iloc[n_days-1]
     mean_analog_return = np.mean(analog_returns)
 else:
     best_analog_year = best_rho = best_analog_ytd_return = mean_analog_return = None
@@ -164,12 +166,12 @@ with metrics_col2:
 with metrics_col3:
     if analog_returns:
         st.metric(
-            f"Mean Analog YTD",
+            f"Mean Analog Year Return",
             f"{mean_analog_return:.2%}",
-            help=f"Mean final YTD return among valid analogs."
+            help=f"Mean final YEAR return among valid analogs."
         )
     else:
-        st.metric("Mean Analog YTD", "N/A")
+        st.metric("Mean Analog Year Return", "N/A")
 
 st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html=True)
 
@@ -225,35 +227,38 @@ with st.sidebar:
     )
 
 ###############################################################################
-# Main Chart — plot only valid analogs, dynamic y-axis
+# Main Chart — plot current YTD to today, full analogs, vertical marker
 ###############################################################################
 if len(valid_top_matches) > 0:
-    if top_n <= 10:
+    if len(valid_top_matches) <= 10:
         base_cmap = plt.cm.get_cmap("tab10")
     else:
         base_cmap = plt.cm.get_cmap("tab20")
     palette = base_cmap(np.linspace(0, 1, len(valid_top_matches)))
 
     fig, ax = plt.subplots(figsize=(14, 7))
-    ax.plot(
-        range(1, n_days + 1),
-        current_ytd,
-        color="black",
-        linewidth=3.2,
-        label=f"{current_year} (YTD)"
-    )
+    # Plot analogs: full year
     for idx, (yr, rho) in enumerate(valid_top_matches):
         analog = ytd_df[yr].dropna()
         ax.plot(
-            analog.index[:n_days],
-            analog.values[:n_days],
+            analog.index,
+            analog.values,
             linestyle="--",
             linewidth=2,
             color=palette[idx],
             alpha=0.7,
             label=f"{yr} (ρ={rho:.2f})"
         )
-
+    # Plot current year: only YTD so far
+    ax.plot(
+        current_ytd.index,
+        current_ytd.values,
+        color="black",
+        linewidth=3.2,
+        label=f"{current_year} (YTD)"
+    )
+    # Vertical marker at today
+    ax.axvline(current_ytd.index[-1], color="gray", linestyle=":", linewidth=1.3, alpha=0.7)
     ax.set_title(f"{ticker} YTD {current_year} vs Historical Analogs", fontsize=16, fontweight="bold")
     ax.set_xlabel("Trading Day of Year", fontsize=13)
     ax.set_ylabel("Cumulative Return", fontsize=13)
@@ -267,7 +272,7 @@ if len(valid_top_matches) > 0:
     all_y = [current_ytd.values]
     for yr, _ in valid_top_matches:
         analog = ytd_df[yr].dropna()
-        all_y.append(analog.values[:n_days])
+        all_y.append(analog.values)
     min_y = min(np.nanmin(arr) for arr in all_y)
     max_y = max(np.nanmax(arr) for arr in all_y)
     span = max_y - min_y
