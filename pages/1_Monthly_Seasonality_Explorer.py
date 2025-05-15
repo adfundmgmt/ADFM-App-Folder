@@ -160,7 +160,7 @@ try:
 
     buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
 
-    st.image(buf, use_column_width=True)
+    st.image(buf, use_container_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
     dl_col1, dl_col2 = st.columns([1,1])
