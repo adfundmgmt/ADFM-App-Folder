@@ -1,10 +1,11 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.express as px
 from datetime import datetime, timedelta
 
-# ---- Constants
+# ----- Sector ETFs -----
 SECTOR_ETFS = {
     "Communication Services": "XLC",
     "Consumer Discretionary": "XLY",
@@ -17,73 +18,111 @@ SECTOR_ETFS = {
     "Real Estate": "XLRE",
     "Technology": "XLK",
     "Utilities": "XLU",
+    "S&P 500": "SPY",
 }
-SPY_TICKER = "SPY"
+
+# Alphabetical order of sectors
+SECTORS = sorted([k for k in SECTOR_ETFS.keys() if k != "S&P 500"])
 
 st.set_page_config(page_title="Sector Breadth & Rotation", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
+st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
 
-# ---- UI: Sector Selection (alphabetical)
-sector_names = sorted(SECTOR_ETFS.keys())
-selected_sector = st.selectbox("Select sector to compare with S&P 500:", sector_names)
+# Sidebar
+st.sidebar.header("About This Tool")
+st.sidebar.markdown(
+    """
+    Sector Relative Strength vs. S&P 500: Plot the ratio of your chosen sector to the S&P 500.
 
-# ---- Download all at once
-tickers = [SECTOR_ETFS[sector] for sector in sector_names] + [SPY_TICKER]
-start = (datetime.today() - timedelta(days=370)).strftime("%Y-%m-%d")
-end = datetime.today().strftime("%Y-%m-%d")
-data = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)["Close"]
+    Sector Rotation Quadrant: 1M vs 3M total returns for all sectors to spot leaders/laggards.
 
-# Clean up: only use tickers with full data, drop rows with any NaN
-data = data.dropna(axis=1, how='any').dropna(axis=0, how='any')
+    Breadth Table: Percentage of sectors above their 20, 50, 100, and 200-day moving averages.
+    """
+)
 
-# ---- Require at least one sector + SPY
-if SPY_TICKER not in data.columns or len(data.columns) < 2:
-    st.error("Not enough data. Check your internet or try later.")
+# Select sector
+selected_sector = st.selectbox("Select sector to compare with S&P 500:", SECTORS)
+
+# ----- Fetch data -----
+@st.cache_data(ttl=3600)
+def fetch_prices(tickers, period="1y", interval="1d"):
+    # Download price data
+    data = yf.download(tickers, period=period, interval=interval, progress=False)["Adj Close"]
+    return data
+
+tickers = [SECTOR_ETFS[s] for s in SECTORS] + [SECTOR_ETFS["S&P 500"]]
+prices = fetch_prices(tickers)
+
+if prices.empty or SECTOR_ETFS["S&P 500"] not in prices.columns:
+    st.error("No sector or SPY data found. Check Yahoo Finance or your internet connection.")
     st.stop()
 
-# ---- Sector Relative Strength vs SPY
-sector_ticker = SECTOR_ETFS[selected_sector]
-if sector_ticker in data.columns:
-    rel = data[sector_ticker] / data[SPY_TICKER]
-    st.subheader(f"{selected_sector} / S&P 500 Relative Strength")
-    st.plotly_chart(px.line(rel, labels={"value": "Ratio", "index": "Date"}), use_container_width=True)
+# ----- Sector Relative Strength vs SPY -----
+def plot_relative_strength(prices, sector_ticker, spy_ticker="SPY"):
+    ratio = prices[sector_ticker] / prices[spy_ticker]
+    df = ratio.reset_index().rename(columns={sector_ticker: "Relative Strength"})
+    fig = px.line(df, x="Date", y="Relative Strength",
+                  title=f"{selected_sector} Relative Strength vs. S&P 500",
+                  labels={"Relative Strength": f"{selected_sector} / SPY", "Date": "Date"})
+    fig.update_layout(height=400)
+    return fig
 
-# ---- Sector Rotation Quadrant (1M vs 3M returns)
-try:
-    returns_1m = data.pct_change(21).iloc[-1]
-    returns_3m = data.pct_change(63).iloc[-1]
-    quadrant = pd.DataFrame({
-        "1M": returns_1m,
-        "3M": returns_3m
-    }).drop(index=SPY_TICKER)
-    quadrant["Sector"] = [sector for sector in sector_names if SECTOR_ETFS[sector] in quadrant.index]
-    fig = px.scatter(quadrant, x="1M", y="3M", text="Sector",
-                     labels={"1M":"1M Return", "3M":"3M Return"}, height=360)
-    fig.update_traces(marker=dict(size=16, color="#1f77b4"))
-    st.subheader("Sector Rotation Quadrant (1M vs 3M Returns)")
-    st.plotly_chart(fig, use_container_width=True)
-except Exception:
-    st.warning("Sector rotation chart unavailable.")
+fig_rs = plot_relative_strength(prices, SECTOR_ETFS[selected_sector])
+st.plotly_chart(fig_rs, use_container_width=True)
 
-# ---- Breadth Table: % Above 20/50/100/200 DMA
-try:
-    def above_ma(s, d): return s.iloc[-1] > s.rolling(d).mean().iloc[-1]
-    rows = []
-    for sector in sector_names:
-        ticker = SECTOR_ETFS[sector]
-        if ticker in data.columns:
-            s = data[ticker]
-            rows.append({
-                "Sector": sector,
-                "Above 20D": above_ma(s, 20),
-                "Above 50D": above_ma(s, 50),
-                "Above 100D": above_ma(s, 100),
-                "Above 200D": above_ma(s, 200)
-            })
-    breadth = pd.DataFrame(rows).set_index("Sector")
-    st.subheader("Breadth: Above Moving Averages")
-    st.dataframe(breadth.replace({True: "✅", False: ""}), use_container_width=True)
-except Exception:
-    st.warning("Breadth table unavailable.")
+# ----- Sector Rotation Quadrant (1M vs 3M Total Returns) -----
+def get_total_return(prices, latest_date, months_ago):
+    date_ago = latest_date - timedelta(days=months_ago*30)
+    # Find closest date on or before date_ago
+    valid_dates = prices.index[prices.index <= date_ago]
+    if len(valid_dates) == 0:
+        return None
+    closest_date = valid_dates.max()
+    return prices.loc[latest_date] / prices.loc[closest_date] - 1
 
-st.caption("© 2025 AD Fund Management LP")
+latest_date = prices.index.max()
+
+returns_1m = {}
+returns_3m = {}
+for ticker in tickers:
+    ret_1m = get_total_return(prices[ticker], latest_date, 1)
+    ret_3m = get_total_return(prices[ticker], latest_date, 3)
+    if ret_1m is not None and ret_3m is not None:
+        returns_1m[ticker] = ret_1m
+        returns_3m[ticker] = ret_3m
+
+rot_df = pd.DataFrame({
+    "1M Return": pd.Series(returns_1m),
+    "3M Return": pd.Series(returns_3m),
+})
+
+# Map tickers back to sector names (exclude SPY)
+inv_sector_etfs = {v: k for k, v in SECTOR_ETFS.items()}
+rot_df["Sector"] = rot_df.index.map(inv_sector_etfs)
+rot_df = rot_df[rot_df["Sector"] != "S&P 500"].reset_index(drop=True)
+
+fig_rot = px.scatter(rot_df, x="1M Return", y="3M Return", text="Sector",
+                     title="Sector Rotation Quadrant (1M vs 3M Returns)",
+                     labels={"1M Return": "1 Month Return", "3M Return": "3 Month Return"},
+                     height=450)
+fig_rot.update_traces(marker=dict(size=15, color="#1f77b4"))
+fig_rot.update_layout(xaxis_tickformat=".1%", yaxis_tickformat=".1%")
+st.plotly_chart(fig_rot, use_container_width=True)
+
+# ----- Breadth Table: % Above Moving Averages -----
+def calculate_breadth(prices, windows=[20, 50, 100, 200]):
+    breadth_data = {}
+    for window in windows:
+        ma = prices.rolling(window=window).mean()
+        breadth = (prices > ma).tail(1).T.astype(float) * 100
+        breadth_data[f"Above {window}D"] = breadth.iloc[:, 0]
+    breadth_df = pd.DataFrame(breadth_data)
+    breadth_df["Sector"] = breadth_df.index.map(inv_sector_etfs)
+    breadth_df = breadth_df[breadth_df["Sector"] != "S&P 500"]
+    return breadth_df.set_index("Sector").sort_index()
+
+breadth_df = calculate_breadth(prices)
+
+st.markdown("### % of Sectors Above Moving Averages")
+st.dataframe(breadth_df.style.format("{:.2f}").background_gradient(cmap="Greens"), height=350)
+
