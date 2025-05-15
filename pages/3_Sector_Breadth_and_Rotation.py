@@ -47,9 +47,10 @@ tickers = list(SECTORS.values()) + ["SPY"]
 @st.cache_data(ttl=3600)
 def fetch_prices(tickers, period="1y", interval="1d"):
     df = yf.download(tickers, period=period, interval=interval, progress=False)
-    # Extract adjusted close prices, handle multi-index columns
+    # If multi-level columns exist, get 'Adj Close'
     if isinstance(df.columns, pd.MultiIndex):
         df = df['Adj Close']
+    # Otherwise, data is probably already just price data
     return df.dropna(how="all")
 
 prices = fetch_prices(tickers)
