@@ -1,68 +1,90 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import requests
+from pandas_datareader import data as pdr
 
-# --- Page Config ---
-st.set_page_config(page_title="NAAIM Exposure Index", layout="wide")
-st.title("📊 NAAIM Exposure Index Dashboard")
+st.set_page_config(page_title="U.S. Sentiment & Exposure Dashboard", layout="wide")
+st.title("🧭 U.S. Equity Sentiment & Exposure Proxies")
 
-# --- Sidebar Info ---
-st.sidebar.header("About the Index")
+st.sidebar.header("About This Dashboard")
 st.sidebar.markdown("""
-The **NAAIM Exposure Index** reflects how actively managed portfolios are positioned in U.S. equities — 
-ranging from 200% short to 200% long. It’s published weekly by the National Association of Active Investment Managers.
+While the official NAAIM Exposure Index is no longer available via public API, these widely-used sentiment/exposure proxies are reliable for monitoring U.S. equity positioning:
 
-**Source**: Nasdaq Data Link  
-**Updated Weekly**
+- **AAII Bullish Sentiment (% Bulls)** — U.S. retail investor survey, updated weekly.
+- **CFTC S&P 500 Net Non-Commercial Positions** — Professional trader/fund futures net exposure, weekly.
+
+**Data source:** FRED (Federal Reserve Economic Data)
 """)
 
-# --- API Config ---
-API_KEY = "jP7MhQWA7jBxms_3FYzp"
-DATASET_CODE = "NAAIM/NAAIM-Exposure-Index"
-API_URL = f"https://data.nasdaq.com/api/v3/datasets/{DATASET_CODE}/data.json?api_key={API_KEY}"
+# --- Data Source Selection ---
+dataset = st.sidebar.radio(
+    "Select a Sentiment/Exposure Proxy:",
+    [
+        "AAII Bullish Sentiment (% Bulls)",
+        "CFTC S&P 500 Net Non-Commercial (Contracts)"
+    ]
+)
 
-# --- Data Loader ---
+if dataset == "AAII Bullish Sentiment (% Bulls)":
+    FRED_CODE = "AAIIBULL"
+    TITLE = "AAII Investor Sentiment: % Bulls"
+    YLABEL = "Percent (%)"
+    HL = 38  # Historical median
+elif dataset == "CFTC S&P 500 Net Non-Commercial (Contracts)":
+    FRED_CODE = "CFTC131741_F_L_NET"
+    TITLE = "CFTC S&P 500 Futures: Net Non-Commercial Positions"
+    YLABEL = "Contracts (Net Long/Short)"
+    HL = 0
+
+# --- Load Data from FRED ---
 @st.cache_data(ttl=86400)
-def load_naaim():
-    r = requests.get(API_URL, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"API error: {r.status_code} — {r.text}")
-    raw = r.json().get("dataset_data", {})
-    cols = raw.get("column_names", [])
-    data = raw.get("data", [])
-    if not data or "Date" not in cols:
-        raise RuntimeError("No data available or column names missing.")
-    df = pd.DataFrame(data, columns=cols)
-    df["Date"] = pd.to_datetime(df["Date"])
-    df.set_index("Date", inplace=True)
-    # Find exposure column by flexible naming
-    value_col = next((c for c in df.columns if "Value" in c or "Exposure" in c), df.columns[-1])
-    df = df.sort_index()
-    return df[[value_col]].rename(columns={value_col: "Exposure"})
+def load_fred_series(code):
+    df = pdr.DataReader(code, "fred")
+    df = df.rename(columns={code: "Value"})
+    df = df.dropna()
+    return df
 
-# --- Chart & UI ---
 try:
-    df = load_naaim()
-    st.subheader("Exposure Over Time")
+    df = load_fred_series(FRED_CODE)
+    st.subheader(f"{TITLE} (Weekly)")
 
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(df.index, df["Exposure"], label="NAAIM Exposure Index", color="black", linewidth=2.3)
-    ax.axhline(100, linestyle="--", color="gray", linewidth=1, label="Fully Long (+100)")
-    ax.axhline(0, linestyle="--", color="red", linewidth=1, label="Neutral (0)")
-    ax.axhline(-100, linestyle="--", color="blue", linewidth=1, label="Fully Short (–100)")
-    ax.set_title("NAAIM Active Manager Equity Exposure", fontsize=18, weight="bold")
+    ax.plot(df.index, df["Value"], color="black", linewidth=2.2, label=TITLE)
+
+    # Reference lines
+    if dataset == "AAII Bullish Sentiment (% Bulls)":
+        ax.axhline(HL, linestyle="--", color="gray", linewidth=1.1, label=f"Historical Median ({HL}%)")
+        ax.set_ylim(0, 75)
+    else:
+        ax.axhline(0, linestyle="--", color="gray", linewidth=1.1, label="Net Flat (0 Contracts)")
+        # Dynamic y-limits for clarity
+        ymin = df["Value"].min() * 1.2 if df["Value"].min() < 0 else df["Value"].min() * 0.8
+        ymax = df["Value"].max() * 1.2 if df["Value"].max() > 0 else df["Value"].max() * 0.8
+        ax.set_ylim(ymin, ymax)
+
+    ax.set_title(TITLE, fontsize=18, weight="bold")
     ax.set_xlabel("Date", fontsize=12)
-    ax.set_ylabel("Exposure Level", fontsize=12)
-    ax.set_ylim(-200, 200)
-    ax.legend(loc="upper right", frameon=False, fontsize=10)
+    ax.set_ylabel(YLABEL, fontsize=12)
     ax.grid(alpha=0.3)
+    ax.legend(loc="best", frameon=False, fontsize=10)
     fig.tight_layout()
     st.pyplot(fig, use_container_width=True)
 
-    # Optional: show most recent value as metric
-    recent = df["Exposure"].dropna().iloc[-1]
-    st.metric(label="Latest Weekly Exposure", value=f"{recent:.1f}%")
+    # Show latest value
+    last_val = df["Value"].iloc[-1]
+    last_date = df.index[-1].strftime("%b %d, %Y")
+    st.metric(
+        label=f"Latest ({last_date})",
+        value=f"{last_val:,.1f}" + ("%" if dataset == "AAII Bullish Sentiment (% Bulls)" else "")
+    )
+
+    with st.expander("See underlying data (downloadable)", expanded=False):
+        st.dataframe(df.tail(156), use_container_width=True)  # ~3 years
+        st.download_button(
+            "Download full series (CSV)",
+            df.to_csv(index=True),
+            file_name=f"{FRED_CODE}_FRED.csv"
+        )
 
 except Exception as e:
-    st.error(f"❌ Failed to fetch NAAIM data.\n\n{e}")
+    st.error(f"Failed to fetch data from FRED: {e}")
