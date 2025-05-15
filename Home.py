@@ -33,6 +33,10 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 
 - **Options Chain Viewer**  
   Fetch real-time call & put chains for any ticker and expiry via Yahoo Finance.
+
+- **Breakout Scanner**  
+  Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.
+
 ---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast-moving markets. Always a work in progress—open to feedback or feature ideas.
