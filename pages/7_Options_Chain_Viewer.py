@@ -6,106 +6,96 @@ import altair as alt
 import math
 from datetime import datetime
 
-# ── App Title & Sidebar ─────────────────────────────────────────────────────
 st.title('Options Chain Viewer')
 st.sidebar.header('About This Tool')
 st.sidebar.markdown("""
-- **Interactive Options Chain**: Fetch real‑time call & put chains via yfinance.  
-- **Volume by Strike**: Bars showing call volume (green) vs put volume (red).  
-- **Summary Metrics**: Total call/put volume and average Black‑Scholes delta.  
+- **Interactive Options Chain**: Fetch real-time call & put chains via yfinance.  
+- **Volume by Strike**: Bars showing call volume (green) vs put volume (red).  
+- **Summary Metrics**: Total call/put volume and average Black-Scholes delta.  
 - **Delta Distribution**: Density plots of option deltas to show skew.  
 - **Optional Tables**: Inspect bid/ask, volume, and open interest per strike.
 """)
 
-# ── Sidebar Inputs ─────────────────────────────────────────────────────────
 ticker = st.sidebar.text_input('Ticker', 'AAPL').upper()
 if not ticker:
     st.sidebar.error('Enter a valid ticker symbol')
     st.stop()
 
-# ── Choose cache decorator ─────────────────────────────────────────────────
-cache = getattr(st, "cache_data", st.cache)
+@st.cache_data(ttl=900, show_spinner=False)
+def get_spot(tkr):
+    hist = yf.Ticker(tkr).history(period='1d')
+    return hist['Close'].iloc[-1] if not hist.empty else None
 
-# ── Fetch & filter expiries (today or future) ──────────────────────────────
-@cache(ttl=3600, show_spinner=False)
-def get_valid_expiries(tkr):
-    raw = yf.Ticker(tkr).options
+@st.cache_data(ttl=900, show_spinner=True)
+def get_valid_expiries_and_data(tkr):
+    tk = yf.Ticker(tkr)
+    raw_expiries = tk.options
     today = datetime.today().date()
-    return [exp for exp in raw if pd.to_datetime(exp).date() >= today]
+    valid_expiries = []
+    option_chains = {}
+    for exp in raw_expiries:
+        exp_date = pd.to_datetime(exp).date()
+        if exp_date < today:
+            continue
+        try:
+            chain = tk.option_chain(exp)
+            if not chain.calls.empty or not chain.puts.empty:
+                valid_expiries.append(exp)
+                option_chains[exp] = chain
+        except Exception:
+            continue
+    return valid_expiries, option_chains
 
-expiries = get_valid_expiries(ticker)
+with st.spinner("Loading available expiries..."):
+    expiries, chains_dict = get_valid_expiries_and_data(ticker)
+
 if not expiries:
-    st.error(f"No upcoming expiries available for {ticker}.")
+    st.error(f"No valid options expiries available for {ticker}.")
     st.stop()
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
 
-# ── Fetch option chain safely ───────────────────────────────────────────────
-@cache(ttl=600, show_spinner=False)
-def get_chain_safe(tkr, exp):
-    return yf.Ticker(tkr).option_chain(exp)
-
-try:
-    chain = get_chain_safe(ticker, expiry)
-    if chain.calls.empty and chain.puts.empty:
-        raise ValueError
-except Exception:
-    st.warning(
-        f"⚠️ Could not load an options chain for {ticker} @ {expiry}. "
-        "Please pick a different expiry."
-    )
-    st.stop()
-
-# ── Spot price ──────────────────────────────────────────────────────────────
-@cache(ttl=600, show_spinner=False)
-def get_spot(tkr):
-    hist = yf.Ticker(tkr).history(period='1d')
-    return hist['Close'].iloc[-1] if not hist.empty else None
+chain = chains_dict[expiry]
 
 spot = get_spot(ticker)
 if spot is None:
     st.error("Could not retrieve spot price.")
     st.stop()
 
-# ── Prepare call & put DataFrames ──────────────────────────────────────────
 calls = chain.calls[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
-puts  = chain.puts [['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
+puts  = chain.puts[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
 calls['type'], puts['type'] = 'Call','Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
-# ── Time to expiry (ACT/252) ───────────────────────────────────────────────
+# Time to expiry (ACT/252 convention)
 today       = datetime.today().date()
 expiry_date = pd.to_datetime(expiry).date()
 days_bd     = np.busday_count(today, expiry_date)
 T           = max(days_bd, 0) / 252.0
-st.sidebar.caption(f"Time to expiry: {days_bd} business days → {T:.3f} years (ACT/252)")
+st.sidebar.caption(f"Time to expiry: {days_bd} business days → {T:.3f} years (ACT/252)")
 
-# ── Warn zero/missing IV ───────────────────────────────────────────────────
+# Warn about zero/missing IV
 if (combined['impliedVolatility'] <= 0).any() or combined['impliedVolatility'].isna().any():
     st.warning("Some strikes have zero or missing IV → their delta will be NaN.")
 
-# ── Vectorized Black‑Scholes Delta ─────────────────────────────────────────
-# Vectorize math.erf to work on arrays
+# Vectorized Black-Scholes Delta Calculation
 vec_erf = np.vectorize(math.erf)
-
 σ = combined['impliedVolatility'].values
 K = combined['strike'].values
 S = spot
 r = 0.03
 T_arr = np.full_like(K, T, dtype=float)
-
 valid = (σ > 0) & (T_arr > 0)
 d1 = np.zeros_like(K, dtype=float)
 d1[valid] = (
     np.log(S / K[valid]) +
     (r + 0.5 * σ[valid]**2) * T_arr[valid]
 ) / (σ[valid] * np.sqrt(T_arr[valid]))
-
 call_delta = 0.5 * (1 + vec_erf(d1 / np.sqrt(2)))
 combined['delta'] = np.where(combined['type']=='Call', call_delta, call_delta - 1)
 combined.loc[~valid, 'delta'] = np.nan
 
-# ── Summary Metrics ─────────────────────────────────────────────────────────
+# Summary Metrics
 total_call_vol = combined.query("type=='Call'")['volume'].sum()
 total_put_vol  = combined.query("type=='Put'")['volume'].sum()
 avg_delta      = combined['delta'].mean()
@@ -118,7 +108,7 @@ c3.metric('Avg Delta',          f"{avg_delta:.2f}")
 
 st.markdown('---')
 
-# ── Volume by Strike Chart ─────────────────────────────────────────────────
+# Volume by Strike Chart
 st.subheader('Volume by Strike')
 vol_chart = (
     alt.Chart(combined)
@@ -140,7 +130,7 @@ st.altair_chart(vol_chart, use_container_width=True)
 
 st.markdown('---')
 
-# ── Delta Distribution Panel ───────────────────────────────────────────────
+# Delta Distribution Panel
 st.subheader('Delta Distribution by Option Type')
 delta_hist = (
     alt.Chart(combined)
@@ -160,7 +150,6 @@ delta_hist = (
 )
 st.altair_chart(delta_hist, use_container_width=True)
 
-# ── Optional Tables ────────────────────────────────────────────────────────
 if st.sidebar.checkbox('Show Calls & Puts Tables'):
     st.markdown('---')
     st.subheader('Calls Table')
@@ -168,4 +157,4 @@ if st.sidebar.checkbox('Show Calls & Puts Tables'):
     st.subheader('Puts Table')
     st.dataframe(puts)
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2025 AD Fund Management LP")
