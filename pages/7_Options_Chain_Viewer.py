@@ -6,6 +6,8 @@ import altair as alt
 import math
 from datetime import datetime
 
+st.set_page_config(page_title="Options Chain Viewer", layout="wide")
+
 st.title('Options Chain Viewer')
 st.sidebar.header('About This Tool')
 st.sidebar.markdown("""
@@ -119,7 +121,7 @@ c3.metric('Avg Delta',          f"{avg_delta:.2f}")
 
 st.markdown('---')
 
-# Volume by Strike Chart
+# Volume by Strike Chart (dynamic width)
 st.subheader('Volume by Strike')
 vol_chart = (
     alt.Chart(combined)
@@ -134,14 +136,14 @@ vol_chart = (
            ),
            tooltip=['type','strike','volume','openInterest','delta']
        )
+       .properties(width='container', height=400)
        .interactive()
-       .properties(height=400)
 )
 st.altair_chart(vol_chart, use_container_width=True)
 
 st.markdown('---')
 
-# Delta Distribution Panel
+# Delta Distribution Panel (dynamic width)
 st.subheader('Delta Distribution by Option Type')
 delta_hist = (
     alt.Chart(combined)
@@ -156,8 +158,8 @@ delta_hist = (
                legend=alt.Legend(title='Option Type')
            )
        )
+       .properties(width='container', height=300)
        .interactive()
-       .properties(height=300)
 )
 st.altair_chart(delta_hist, use_container_width=True)
 
