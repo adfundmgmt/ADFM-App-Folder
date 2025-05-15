@@ -9,6 +9,9 @@ import streamlit as st
 import yfinance as yf
 from matplotlib.ticker import MultipleLocator, PercentFormatter
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
 try:
     from pandas_datareader import data as pdr
 except ImportError:
