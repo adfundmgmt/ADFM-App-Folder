@@ -6,29 +6,29 @@ from datetime import datetime, timedelta
 
 # ---- Constants
 SECTOR_ETFS = {
-    "Technology": "XLK",
-    "Health Care": "XLV",
-    "Financials": "XLF",
+    "Communication Services": "XLC",
     "Consumer Discretionary": "XLY",
-    "Industrials": "XLI",
     "Consumer Staples": "XLP",
     "Energy": "XLE",
+    "Financials": "XLF",
+    "Health Care": "XLV",
+    "Industrials": "XLI",
     "Materials": "XLB",
-    "Utilities": "XLU",
     "Real Estate": "XLRE",
-    "Communication Services": "XLC",
+    "Technology": "XLK",
+    "Utilities": "XLU",
 }
 SPY_TICKER = "SPY"
 
 st.set_page_config(page_title="Sector Breadth & Rotation", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
 
-# ---- UI: Sector Selection
-sector_names = list(SECTOR_ETFS.keys())
+# ---- UI: Sector Selection (alphabetical)
+sector_names = sorted(SECTOR_ETFS.keys())
 selected_sector = st.selectbox("Select sector to compare with S&P 500:", sector_names)
 
 # ---- Download all at once
-tickers = list(SECTOR_ETFS.values()) + [SPY_TICKER]
+tickers = [SECTOR_ETFS[sector] for sector in sector_names] + [SPY_TICKER]
 start = (datetime.today() - timedelta(days=370)).strftime("%Y-%m-%d")
 end = datetime.today().strftime("%Y-%m-%d")
 data = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)["Close"]
@@ -56,7 +56,7 @@ try:
         "1M": returns_1m,
         "3M": returns_3m
     }).drop(index=SPY_TICKER)
-    quadrant["Sector"] = [k for k,v in SECTOR_ETFS.items() if v in quadrant.index]
+    quadrant["Sector"] = [sector for sector in sector_names if SECTOR_ETFS[sector] in quadrant.index]
     fig = px.scatter(quadrant, x="1M", y="3M", text="Sector",
                      labels={"1M":"1M Return", "3M":"3M Return"}, height=360)
     fig.update_traces(marker=dict(size=16, color="#1f77b4"))
@@ -69,7 +69,8 @@ except Exception:
 try:
     def above_ma(s, d): return s.iloc[-1] > s.rolling(d).mean().iloc[-1]
     rows = []
-    for sector, ticker in SECTOR_ETFS.items():
+    for sector in sector_names:
+        ticker = SECTOR_ETFS[sector]
         if ticker in data.columns:
             s = data[ticker]
             rows.append({
