@@ -207,10 +207,6 @@ try:
 
     st.markdown("<hr style='margin-top: 16px; margin-bottom: 8px;'>", unsafe_allow_html=True)
 
-    with st.expander("Show Monthly Stats Table", expanded=False):
-        df_table = stats[['label','median_ret','hit_rate','years_observed']].copy()
-        df_table.columns = ['Month','Median Return (%)','Hit Rate (%)','Years Observed']
-        st.dataframe(df_table.set_index('Month').style.format("{:.2f}"))
 
 except Exception as e:
     st.error(f"Error: {e}")
