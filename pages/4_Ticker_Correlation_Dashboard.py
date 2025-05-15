@@ -9,6 +9,10 @@ import streamlit as st
 import yfinance as yf
 import altair as alt
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
+
 st.set_page_config(
     page_title="Correlation Dashboard — AD Fund Management LP",
     layout="wide",
