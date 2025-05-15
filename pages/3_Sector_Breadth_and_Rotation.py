@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
+import time
 
 # ---- S&P 500 Sector ETFs ----
 SECTOR_ETFS = {
@@ -39,32 +40,61 @@ selected_sector = st.selectbox("Select sector to compare with S&P 500:", sector_
 end_date = datetime.today()
 start_date = end_date - timedelta(days=365)
 
-@st.cache_data(ttl=3600)
+def test_yahoo():
+    """Test if Yahoo is up and returning data."""
+    try:
+        df = yf.download("SPY", period="7d", progress=False, auto_adjust=True)
+        return not df.empty
+    except Exception:
+        return False
+
+@st.cache_data(ttl=1800)
 def fetch_all_sector_prices():
     tickers = list(SECTOR_ETFS.values()) + [SPY_TICKER]
     price_data = {}
     failed = []
     for t in tickers:
-        df = yf.download(t, start=start_date, end=end_date, progress=False, auto_adjust=True)
-        # Valid data: must be a pd.Series with at least 10 dates
-        if not df.empty and "Close" in df.columns:
-            series = df["Close"].dropna()
-            if isinstance(series, pd.Series) and len(series) > 10 and isinstance(series.index, pd.DatetimeIndex):
-                price_data[t] = series
+        try:
+            df = yf.download(t, start=start_date, end=end_date, progress=False, auto_adjust=True)
+            if not df.empty and "Close" in df.columns:
+                series = df["Close"].dropna()
+                if isinstance(series, pd.Series) and len(series) > 10 and isinstance(series.index, pd.DatetimeIndex):
+                    price_data[t] = series
+                else:
+                    failed.append(t)
             else:
                 failed.append(t)
-        else:
+        except Exception:
             failed.append(t)
     # Only build the DataFrame from valid series
     if not price_data:
+        return None, failed
+    return pd.DataFrame(price_data), failed
+
+# ---- Main fetch logic ----
+if "reload" not in st.session_state:
+    st.session_state.reload = 0
+
+if st.button("Reload Data (force refresh)", key="reload_btn"):
+    st.session_state.reload += 1
+
+# Test Yahoo availability
+if not test_yahoo():
+    st.error("Yahoo Finance appears to be down or blocking data. Please try again later.")
+    st.stop()
+
+with st.spinner("Running fetch_all_sector_prices()."):
+    for attempt in range(2):  # Try twice, sleep in between if first fails
+        prices, failed = fetch_all_sector_prices()
+        if prices is not None and not prices.empty:
+            break
+        time.sleep(2)
+    else:
         st.error("No sector or SPY data found. Check Yahoo Finance or your internet connection.")
         st.stop()
-    if failed:
-        st.sidebar.warning(f"Could not fetch data for: {', '.join(failed)}")
-    # Outer join so all series align by date
-    return pd.DataFrame(price_data)
 
-prices = fetch_all_sector_prices()
+if failed:
+    st.sidebar.warning(f"Could not fetch data for: {', '.join(failed)}")
 
 if SECTOR_ETFS[selected_sector] not in prices or SPY_TICKER not in prices:
     st.error("Could not fetch data for selected sector or SPY.")
