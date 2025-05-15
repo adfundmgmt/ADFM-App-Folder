@@ -60,9 +60,9 @@ with st.sidebar:
     )
 
 def seasonal_stats(prices: pd.Series):
-    # Resample by Month Start, take first available price of each month
-    monthly_start = prices.resample('MS').first()
-    monthly_ret = monthly_start.pct_change().dropna() * 100
+    # Resample by Month End (standard for seasonality), take last price of each month
+    monthly_end = prices.resample('M').last()
+    monthly_ret = monthly_end.pct_change().dropna() * 100
 
     # Convert index to period month
     monthly_ret.index = monthly_ret.index.to_period('M')
@@ -73,35 +73,33 @@ def seasonal_stats(prices: pd.Series):
     hit_rate = grouped.apply(lambda x: (x > 0).mean() * 100)
     years_observed = grouped.apply(lambda x: x.index.year.nunique())
 
-    # Ensure all months are present
+    # Ensure all months are present, fill missing with NaN (not 0)
     idx = pd.Index(range(1, 13), name='month')
     stats = pd.DataFrame(index=idx)
     stats['median_ret'] = median_ret
     stats['hit_rate'] = hit_rate
     stats['years_observed'] = years_observed
     stats['label'] = MONTH_LABELS
-
-    # Fill missing months with NaN or zero as appropriate
-    stats = stats.reindex(idx).fillna({'median_ret': 0, 'hit_rate': 0, 'years_observed': 0})
+    stats = stats.reindex(idx)
 
     return stats
 
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     fig, ax1 = plt.subplots(figsize=(11, 6), dpi=100)
-    plot_df = stats.dropna(subset=['median_ret','hit_rate'], how='all')
+    plot_df = stats.dropna(subset=['median_ret', 'hit_rate'], how='all')
     labels = plot_df['label'].tolist()
     median = plot_df['median_ret'].to_numpy(dtype=float)
-    hit    = plot_df['hit_rate'].to_numpy(dtype=float)
+    hit = plot_df['hit_rate'].to_numpy(dtype=float)
 
-    y1_bot = min(0.0, np.nanmin(median) - 1.0)
-    y1_top =  np.nanmax(median) + 1.0
-    y2_bot = max(0.0, np.nanmin(hit)    - 5.0)
-    y2_top = min(100.0, np.nanmax(hit)    + 5.0)
+    y1_bot = min(0.0, np.nanmin(median) - 1.0) if not np.isnan(np.nanmin(median)) else -1
+    y1_top = np.nanmax(median) + 1.0 if not np.isnan(np.nanmax(median)) else 1
+    y2_bot = max(0.0, np.nanmin(hit) - 5.0) if not np.isnan(np.nanmin(hit)) else 0
+    y2_top = min(100.0, np.nanmax(hit) + 5.0) if not np.isnan(np.nanmax(hit)) else 100
 
     ax2 = ax1.twinx()
-    bar_cols  = ['mediumseagreen' if v>=0 else 'indianred' for v in median]
-    edge_cols = ['darkgreen'    if v>=0 else 'darkred'    for v in median]
+    bar_cols = ['mediumseagreen' if v >= 0 else 'indianred' for v in median]
+    edge_cols = ['darkgreen' if v >= 0 else 'darkred' for v in median]
     ax1.bar(
         labels, median, width=0.8,
         color=bar_cols, edgecolor=edge_cols, linewidth=1.2,
@@ -132,7 +130,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     return buf
 
 # ---- Main controls ----
-col1, col2, col3 = st.columns([2,1,1])
+col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     symbol = st.text_input("Ticker symbol", value="^GSPC")
 with col2:
@@ -153,7 +151,7 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='yfinance')
 try:
     start_dt = pd.to_datetime(start_date)
     end_dt = pd.to_datetime(end_date)
-    sym_up   = symbol.upper()
+    sym_up = symbol.upper()
 
     if pdr and sym_up in FALLBACK_MAP and start_dt.year < 1950:
         fred_tk = FALLBACK_MAP[sym_up]
@@ -195,18 +193,20 @@ try:
     st.image(buf, use_container_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    dl_col1, dl_col2 = st.columns([1,1])
+    dl_col1, dl_col2 = st.columns([1, 1])
     with dl_col1:
         st.download_button("Download chart as PNG", buf, file_name=f"{symbol}_seasonality_{first_year}_{last_year}.png")
     with dl_col2:
+        # Add month labels as first column in CSV for clarity
+        csv_df = stats[['label', 'median_ret', 'hit_rate', 'years_observed']].copy()
+        csv_df.rename(columns={'label': 'Month', 'median_ret': 'Median Return (%)', 'hit_rate': 'Hit Rate (%)', 'years_observed': 'Years Observed'}, inplace=True)
         st.download_button(
             "Download monthly stats (CSV)",
-            stats.to_csv(index=True),
+            csv_df.to_csv(index=False),
             file_name=f"{symbol}_monthly_stats_{first_year}_{last_year}.csv"
         )
 
     st.markdown("<hr style='margin-top: 16px; margin-bottom: 8px;'>", unsafe_allow_html=True)
-
 
 except Exception as e:
     st.error(f"Error: {e}")
