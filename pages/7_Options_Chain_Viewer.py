@@ -21,18 +21,13 @@ if not ticker:
     st.sidebar.error('Enter a valid ticker symbol')
     st.stop()
 
-@st.cache_data(ttl=900, show_spinner=False)
-def get_spot(tkr):
-    hist = yf.Ticker(tkr).history(period='1d')
-    return hist['Close'].iloc[-1] if not hist.empty else None
-
+# Only cache the valid expiries (list of strings)
 @st.cache_data(ttl=900, show_spinner=True)
-def get_valid_expiries_and_data(tkr):
+def get_valid_expiries(tkr):
     tk = yf.Ticker(tkr)
     raw_expiries = tk.options
     today = datetime.today().date()
     valid_expiries = []
-    option_chains = {}
     for exp in raw_expiries:
         exp_date = pd.to_datetime(exp).date()
         if exp_date < today:
@@ -41,13 +36,12 @@ def get_valid_expiries_and_data(tkr):
             chain = tk.option_chain(exp)
             if not chain.calls.empty or not chain.puts.empty:
                 valid_expiries.append(exp)
-                option_chains[exp] = chain
         except Exception:
             continue
-    return valid_expiries, option_chains
+    return valid_expiries
 
 with st.spinner("Loading available expiries..."):
-    expiries, chains_dict = get_valid_expiries_and_data(ticker)
+    expiries = get_valid_expiries(ticker)
 
 if not expiries:
     st.error(f"No valid options expiries available for {ticker}.")
@@ -55,7 +49,24 @@ if not expiries:
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
 
-chain = chains_dict[expiry]
+# Fetch the option chain (do NOT cache this!)
+try:
+    tk = yf.Ticker(ticker)
+    chain = tk.option_chain(expiry)
+    if chain.calls.empty and chain.puts.empty:
+        raise ValueError("Empty chain")
+except Exception:
+    st.warning(
+        f"⚠️ Could not load an options chain for {ticker} @ {expiry}. "
+        "Please pick a different expiry."
+    )
+    st.stop()
+
+# Spot price cache is OK, it's a float
+@st.cache_data(ttl=600, show_spinner=False)
+def get_spot(tkr):
+    hist = yf.Ticker(tkr).history(period='1d')
+    return hist['Close'].iloc[-1] if not hist.empty else None
 
 spot = get_spot(ticker)
 if spot is None:
@@ -63,7 +74,7 @@ if spot is None:
     st.stop()
 
 calls = chain.calls[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
-puts  = chain.puts[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
+puts  = chain.puts [['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
 calls['type'], puts['type'] = 'Call','Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
