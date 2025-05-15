@@ -2,7 +2,7 @@
 Market Memory Explorer — AD Fund Management LP
 ----------------------------------------------
 Compare the current year’s cumulative return path for any ticker with the
-most-correlated historical years.
+most-correlated historical years. Now fully robust for all corner cases.
 """
 
 import datetime as dt
@@ -31,13 +31,13 @@ if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), width=70)
 
 ###############################################################################
-# Consistent Title & Subheader (use st.title and st.subheader)
+# Consistent Title & Subheader
 ###############################################################################
 st.title("Market Memory Explorer")
 st.subheader("Compare the current year's return path with history")
 
 ###############################################################################
-# Input controls (one horizontal row, no wasted space)
+# Input controls (single row, clean)
 ###############################################################################
 input_col1, input_col2, input_col3 = st.columns([2, 1, 1])
 with input_col1:
@@ -56,7 +56,6 @@ st.markdown("<hr style='margin-top: 2px; margin-bottom: 15px;'>", unsafe_allow_h
 def fetch_price_history(symbol: str) -> pd.DataFrame:
     """Download daily close prices from Yahoo Finance."""
     df = yf.download(symbol, start=f"{START_YEAR}-01-01", auto_adjust=False, progress=False)
-    # Some indices return multi-level columns; flatten if needed
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(symbol, axis=1, level=1, drop_level=True)
     df = df[["Close"]].dropna().copy()
@@ -94,18 +93,20 @@ if current_year not in ytd_df.columns:
     st.stop()
 
 ###############################################################################
-# Correlation ranking and filter
+# Correlation ranking and filter (robust)
 ###############################################################################
 current_ytd = ytd_df[current_year].dropna()
+n_days = len(current_ytd)
 correlations = {}
 
 for year in ytd_df.columns:
     if year == current_year:
         continue
     past_ytd = ytd_df[year].dropna()
-    overlap = min(len(current_ytd), len(past_ytd))
+    overlap = min(n_days, len(past_ytd))
     if overlap < 30:
         continue
+    # Only compare up to the available overlap in both series
     rho = np.corrcoef(current_ytd[:overlap], past_ytd[:overlap])[0, 1]
     correlations[year] = rho
 
@@ -120,38 +121,55 @@ if not top_matches:
     st.stop()
 
 ###############################################################################
-# Quick metrics row — centered
+# Filter only analogs with complete data (no NaN, enough days)
 ###############################################################################
-best_analog_year, best_rho = top_matches[0]
-current_ytd_return = current_ytd.iloc[-1]
-best_analog_ytd_return = ytd_df[best_analog_year].loc[:len(current_ytd)].dropna().iloc[-1]
+valid_top_matches = []
+analog_returns = []
 
-# Most negative (worst) analog among top matches
-worst_analog_year, _ = min(top_matches, key=lambda kv: ytd_df[kv[0]].iloc[-1])
-worst_analog_ytd_return = ytd_df[worst_analog_year].iloc[-1]
+for yr, rho in top_matches:
+    analog = ytd_df[yr].dropna()
+    # Only include analogs with enough data points to match current year
+    if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
+        valid_top_matches.append((yr, rho))
+        analog_returns.append(analog.iloc[n_days-1])
+
+###############################################################################
+# Metrics — best, mean, all robust to missing analogs
+###############################################################################
+current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('nan')
+
+if valid_top_matches and analog_returns:
+    best_analog_year, best_rho = valid_top_matches[0]
+    best_analog_ytd_return = analog_returns[0]
+    mean_analog_return = np.mean(analog_returns)
+else:
+    best_analog_year = best_rho = best_analog_ytd_return = mean_analog_return = None
 
 metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
 with metrics_col1:
     st.metric(
         f"{current_year} YTD Return",
-        f"{current_ytd_return:.2%}",
+        f"{current_ytd_return:.2%}" if not np.isnan(current_ytd_return) else "N/A",
         help=f"{ticker} YTD cumulative return."
     )
 with metrics_col2:
-    st.metric(
-        f"Best Analog ({best_analog_year})",
-        f"{best_analog_ytd_return:.2%}",
-        help=f"YTD return for {best_analog_year} (ρ={best_rho:.2f})"
-    )
+    if best_analog_year is not None:
+        st.metric(
+            f"Best Analog ({best_analog_year})",
+            f"{best_analog_ytd_return:.2%}",
+            help=f"YTD return for {best_analog_year} (ρ={best_rho:.2f})"
+        )
+    else:
+        st.metric("Best Analog", "N/A")
 with metrics_col3:
-    arrow = "↑" if worst_analog_ytd_return > 0 else "↓"
-    color = "green" if worst_analog_ytd_return > 0 else "red"
-    st.metric(
-        f"Most Negative Analog",
-        f"{worst_analog_ytd_return:.2%}",
-        delta=f"{arrow} ({worst_analog_year})",
-        help=f"Lowest final YTD analog among top {top_n}."
-    )
+    if analog_returns:
+        st.metric(
+            f"Mean Analog YTD",
+            f"{mean_analog_return:.2%}",
+            help=f"Mean final YTD return among valid analogs."
+        )
+    else:
+        st.metric("Mean Analog YTD", "N/A")
 
 st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html=True)
 
@@ -177,20 +195,21 @@ with st.sidebar:
         """
     )
     st.markdown("---")
-    # Analogs card
-    st.markdown(
-        f"""
-        <div style='background-color:#f8fafb; border-radius:10px; padding:14px 18px 10px 18px; margin-top:4px; margin-bottom:8px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.03);'>
-            <span style='font-size:1.1rem; font-weight:600; color:#1761a0;'>
-                Top {top_n} Analogs to {current_year}
-            </span>
-            <ul style='margin-top:6px; margin-bottom:0;'>
-                {''.join(f"<li><b style='color:#1f77b4'>{yr}</b>: <span style='color:#555'>ρ = {rho:.4f}</span></li>" for yr, rho in top_matches)}
-            </ul>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Analogs card (only show valid analogs!)
+    if valid_top_matches:
+        st.markdown(
+            f"""
+            <div style='background-color:#f8fafb; border-radius:10px; padding:14px 18px 10px 18px; margin-top:4px; margin-bottom:8px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.03);'>
+                <span style='font-size:1.1rem; font-weight:600; color:#1761a0;'>
+                    Top {len(valid_top_matches)} Analogs to {current_year}
+                </span>
+                <ul style='margin-top:6px; margin-bottom:0;'>
+                    {''.join(f"<li><b style='color:#1f77b4'>{yr}</b>: <span style='color:#555'>ρ = {rho:.4f}</span></li>" for yr, rho in valid_top_matches)}
+                </ul>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     st.markdown("---")
     st.download_button(
         label="Download Returns CSV",
@@ -200,51 +219,66 @@ with st.sidebar:
     )
     st.download_button(
         label="Download Correlation Table",
-        data=pd.DataFrame(top_matches, columns=["Year", "Correlation"]).to_csv(index=False),
+        data=pd.DataFrame(valid_top_matches, columns=["Year", "Correlation"]).to_csv(index=False),
         file_name=f"{ticker}_top_analogs.csv",
         mime="text/csv"
     )
 
 ###############################################################################
-# Main Chart
+# Main Chart — plot only valid analogs, dynamic y-axis
 ###############################################################################
-if top_n <= 10:
-    base_cmap = plt.cm.get_cmap("tab10")
-else:
-    base_cmap = plt.cm.get_cmap("tab20")
-palette = base_cmap(np.linspace(0, 1, top_n))
+if len(valid_top_matches) > 0:
+    if top_n <= 10:
+        base_cmap = plt.cm.get_cmap("tab10")
+    else:
+        base_cmap = plt.cm.get_cmap("tab20")
+    palette = base_cmap(np.linspace(0, 1, len(valid_top_matches)))
 
-fig, ax = plt.subplots(figsize=(14, 7))
-ax.plot(
-    range(1, len(current_ytd) + 1),
-    current_ytd,
-    color="black",
-    linewidth=3.2,
-    label=f"{current_year} (YTD)"
-)
-for idx, (yr, rho) in enumerate(top_matches):
-    analog = ytd_df[yr].dropna()
+    fig, ax = plt.subplots(figsize=(14, 7))
     ax.plot(
-        analog.index,
-        analog.values,
-        linestyle="--",
-        linewidth=2,
-        color=palette[idx],
-        alpha=0.7 if yr != best_analog_year else 1.0,
-        label=f"{yr} (ρ={rho:.2f})" + (" ⭐" if yr == best_analog_year else "")
+        range(1, n_days + 1),
+        current_ytd,
+        color="black",
+        linewidth=3.2,
+        label=f"{current_year} (YTD)"
     )
+    for idx, (yr, rho) in enumerate(valid_top_matches):
+        analog = ytd_df[yr].dropna()
+        ax.plot(
+            analog.index[:n_days],
+            analog.values[:n_days],
+            linestyle="--",
+            linewidth=2,
+            color=palette[idx],
+            alpha=0.7,
+            label=f"{yr} (ρ={rho:.2f})"
+        )
 
-ax.set_title(f"{ticker} YTD {current_year} vs Historical Analogs", fontsize=16, fontweight="bold")
-ax.set_xlabel("Trading Day of Year", fontsize=13)
-ax.set_ylabel("Cumulative Return", fontsize=13)
-ax.axhline(0, color="gray", linestyle="--", linewidth=1)
-ax.set_xlim(1, TRADING_DAYS_FULL_YEAR)
-ax.grid(True, linestyle=":", linewidth=0.7, color="#888")
-ax.yaxis.set_major_locator(MultipleLocator(0.05))
-ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
-ax.legend(loc="upper left", fontsize=11, frameon=False, ncol=2)
-plt.tight_layout()
-st.pyplot(fig)
+    ax.set_title(f"{ticker} YTD {current_year} vs Historical Analogs", fontsize=16, fontweight="bold")
+    ax.set_xlabel("Trading Day of Year", fontsize=13)
+    ax.set_ylabel("Cumulative Return", fontsize=13)
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlim(1, TRADING_DAYS_FULL_YEAR)
+    ax.grid(True, linestyle=":", linewidth=0.7, color="#888")
+    ax.yaxis.set_major_locator(MultipleLocator(0.05))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
+
+    # Dynamic y-axis padding
+    all_y = [current_ytd.values]
+    for yr, _ in valid_top_matches:
+        analog = ytd_df[yr].dropna()
+        all_y.append(analog.values[:n_days])
+    min_y = min(np.nanmin(arr) for arr in all_y)
+    max_y = max(np.nanmax(arr) for arr in all_y)
+    span = max_y - min_y
+    pad = max(0.02, span * 0.08)
+    ax.set_ylim(min_y - pad, max_y + pad)
+
+    ax.legend(loc="upper left", fontsize=11, frameon=False, ncol=2)
+    plt.tight_layout()
+    st.pyplot(fig)
+else:
+    st.info("No valid analog years with complete YTD data for this ticker and selection.")
 
 ###############################################################################
 # Footer
