@@ -3,9 +3,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# ----- Sector ETFs -----
+# ---- Sector ETFs and names in alphabetical order ----
 SECTOR_ETFS = {
     "Communication Services": "XLC",
     "Consumer Discretionary": "XLY",
@@ -21,35 +22,25 @@ SECTOR_ETFS = {
     "S&P 500": "SPY",
 }
 
-# Alphabetical order of sectors
-SECTORS = sorted([k for k in SECTOR_ETFS.keys() if k != "S&P 500"])
+SECTORS = sorted([s for s in SECTOR_ETFS.keys() if s != "S&P 500"])
 
 st.set_page_config(page_title="Sector Breadth & Rotation", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
-st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
+st.markdown("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
 
-# Sidebar
-st.sidebar.header("About This Tool")
-st.sidebar.markdown(
-    """
-    Sector Relative Strength vs. S&P 500: Plot the ratio of your chosen sector to the S&P 500.
-
-    Sector Rotation Quadrant: 1M vs 3M total returns for all sectors to spot leaders/laggards.
-
-    Breadth Table: Percentage of sectors above their 20, 50, 100, and 200-day moving averages.
-    """
-)
-
-# Select sector
-selected_sector = st.selectbox("Select sector to compare with S&P 500:", SECTORS)
-
-# ----- Fetch data -----
+# ---- Fetch prices with caching ----
 @st.cache_data(ttl=3600)
 def fetch_prices(tickers, period="1y", interval="1d"):
-    # Download price data
-    data = yf.download(tickers, period=period, interval=interval, progress=False)["Adj Close"]
-    return data
+    raw_data = yf.download(tickers, period=period, interval=interval, progress=False)
+    if isinstance(raw_data.columns, pd.MultiIndex):
+        adj_close = raw_data["Adj Close"]
+    else:
+        adj_close = raw_data
+    if isinstance(adj_close.columns, pd.MultiIndex):
+        adj_close.columns = adj_close.columns.get_level_values(1)
+    return adj_close
 
+# Fetch prices for all sectors + SPY
 tickers = [SECTOR_ETFS[s] for s in SECTORS] + [SECTOR_ETFS["S&P 500"]]
 prices = fetch_prices(tickers)
 
@@ -57,72 +48,82 @@ if prices.empty or SECTOR_ETFS["S&P 500"] not in prices.columns:
     st.error("No sector or SPY data found. Check Yahoo Finance or your internet connection.")
     st.stop()
 
-# ----- Sector Relative Strength vs SPY -----
-def plot_relative_strength(prices, sector_ticker, spy_ticker="SPY"):
-    ratio = prices[sector_ticker] / prices[spy_ticker]
-    df = ratio.reset_index().rename(columns={sector_ticker: "Relative Strength"})
-    fig = px.line(df, x="Date", y="Relative Strength",
-                  title=f"{selected_sector} Relative Strength vs. S&P 500",
-                  labels={"Relative Strength": f"{selected_sector} / SPY", "Date": "Date"})
-    fig.update_layout(height=400)
-    return fig
+# ---- User selection ----
+selected_sector = st.selectbox("Select sector to compare with S&P 500:", SECTORS)
 
-fig_rs = plot_relative_strength(prices, SECTOR_ETFS[selected_sector])
+# Use last 12 months for all analysis
+end_date = prices.index[-1]
+start_date = end_date - pd.DateOffset(months=12)
+prices_12m = prices.loc[start_date:end_date]
+
+# ---- Sector Relative Strength vs SPY ----
+st.subheader(f"Sector Relative Strength vs. S&P 500: {selected_sector}")
+
+# Calculate ratio of sector / SPY
+ratio = prices_12m[selected_sector] / prices_12m[SECTOR_ETFS["S&P 500"]]
+
+fig_rs = px.line(
+    x=ratio.index,
+    y=ratio.values,
+    labels={"x": "Date", "y": f"{selected_sector} / SPY Ratio"},
+    title=f"{selected_sector} Relative Strength vs SPY (Last 12 Months)",
+)
 st.plotly_chart(fig_rs, use_container_width=True)
 
-# ----- Sector Rotation Quadrant (1M vs 3M Total Returns) -----
-def get_total_return(prices, latest_date, months_ago):
-    date_ago = latest_date - timedelta(days=months_ago*30)
-    # Find closest date on or before date_ago
-    valid_dates = prices.index[prices.index <= date_ago]
-    if len(valid_dates) == 0:
-        return None
-    closest_date = valid_dates.max()
-    return prices.loc[latest_date] / prices.loc[closest_date] - 1
+# ---- Sector Rotation Quadrant (1M vs 3M returns) ----
+st.subheader("Sector Rotation Quadrant (1M vs 3M Returns)")
 
-latest_date = prices.index.max()
+returns_1m = prices_12m.pct_change(21).iloc[-1]  # approx 21 trading days in 1 month
+returns_3m = prices_12m.pct_change(63).iloc[-1]  # approx 63 trading days in 3 months
 
-returns_1m = {}
-returns_3m = {}
-for ticker in tickers:
-    ret_1m = get_total_return(prices[ticker], latest_date, 1)
-    ret_3m = get_total_return(prices[ticker], latest_date, 3)
-    if ret_1m is not None and ret_3m is not None:
-        returns_1m[ticker] = ret_1m
-        returns_3m[ticker] = ret_3m
-
-rot_df = pd.DataFrame({
-    "1M Return": pd.Series(returns_1m),
-    "3M Return": pd.Series(returns_3m),
+rotation_df = pd.DataFrame({
+    "Sector": SECTORS,
+    "1M Return": returns_1m[[SECTOR_ETFS[s] for s in SECTORS]].values,
+    "3M Return": returns_3m[[SECTOR_ETFS[s] for s in SECTORS]].values,
 })
 
-# Map tickers back to sector names (exclude SPY)
-inv_sector_etfs = {v: k for k, v in SECTOR_ETFS.items()}
-rot_df["Sector"] = rot_df.index.map(inv_sector_etfs)
-rot_df = rot_df[rot_df["Sector"] != "S&P 500"].reset_index(drop=True)
-
-fig_rot = px.scatter(rot_df, x="1M Return", y="3M Return", text="Sector",
-                     title="Sector Rotation Quadrant (1M vs 3M Returns)",
-                     labels={"1M Return": "1 Month Return", "3M Return": "3 Month Return"},
-                     height=450)
-fig_rot.update_traces(marker=dict(size=15, color="#1f77b4"))
-fig_rot.update_layout(xaxis_tickformat=".1%", yaxis_tickformat=".1%")
+fig_rot = px.scatter(
+    rotation_df,
+    x="1M Return",
+    y="3M Return",
+    text="Sector",
+    labels={"1M Return": "1-Month Return", "3M Return": "3-Month Return"},
+    title="Sector Rotation Quadrant (1M vs 3M Returns)",
+    size_max=15,
+)
+fig_rot.update_traces(textposition="top center")
+fig_rot.add_shape(
+    type="line", x0=0, y0=rotation_df["3M Return"].min(), x1=0, y1=rotation_df["3M Return"].max(),
+    line=dict(dash="dash", color="gray")
+)
+fig_rot.add_shape(
+    type="line", x0=rotation_df["1M Return"].min(), y0=0, x1=rotation_df["1M Return"].max(), y1=0,
+    line=dict(dash="dash", color="gray")
+)
 st.plotly_chart(fig_rot, use_container_width=True)
 
-# ----- Breadth Table: % Above Moving Averages -----
-def calculate_breadth(prices, windows=[20, 50, 100, 200]):
-    breadth_data = {}
-    for window in windows:
-        ma = prices.rolling(window=window).mean()
-        breadth = (prices > ma).tail(1).T.astype(float) * 100
-        breadth_data[f"Above {window}D"] = breadth.iloc[:, 0]
-    breadth_df = pd.DataFrame(breadth_data)
-    breadth_df["Sector"] = breadth_df.index.map(inv_sector_etfs)
-    breadth_df = breadth_df[breadth_df["Sector"] != "S&P 500"]
-    return breadth_df.set_index("Sector").sort_index()
+# ---- Breadth Table: % Above Moving Averages ----
+st.subheader("Percentage of Sector Constituents Above Moving Averages")
 
-breadth_df = calculate_breadth(prices)
+# Fetch individual sector constituent data and calculate % above moving averages
+# For simplicity here: calculate % above 20, 50, 100, 200D for sector ETFs themselves (proxy)
 
-st.markdown("### % of Sectors Above Moving Averages")
-st.dataframe(breadth_df.style.format("{:.2f}").background_gradient(cmap="Greens"), height=350)
+def pct_above_ma(series, window):
+    ma = series.rolling(window).mean()
+    return (series > ma).mean() * 100
+
+breadth_data = []
+for sector in SECTORS:
+    series = prices_12m[SECTOR_ETFS[sector]]
+    breadth_data.append({
+        "Sector": sector,
+        "% Above 20D": pct_above_ma(series, 20),
+        "% Above 50D": pct_above_ma(series, 50),
+        "% Above 100D": pct_above_ma(series, 100),
+        "% Above 200D": pct_above_ma(series, 200),
+    })
+
+breadth_df = pd.DataFrame(breadth_data).set_index("Sector").sort_index()
+
+st.dataframe(breadth_df.style.background_gradient(cmap="Greens"))
 
