@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import warnings
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 pd.options.mode.chained_assignment = None  # Suppress SettingWithCopyWarning
 
