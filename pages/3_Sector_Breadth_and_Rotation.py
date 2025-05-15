@@ -9,17 +9,18 @@ st.set_page_config(page_title="S&P 500 Sector Breadth & Rotation Monitor", layou
 
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
 
-# Sector tickers and names
+# Sector tickers and names in alphabetical order
 SECTORS = {
-    "XLY": "Consumer Discretionary",
-    "XLP": "Consumer Staples",
+    "XLB": "Materials",
+    "XLC": "Communication Services",
     "XLE": "Energy",
     "XLF": "Financials",
-    "XLV": "Health Care",
     "XLI": "Industrials",
-    "XLB": "Materials",
-    "XLRE": "Real Estate",
     "XLK": "Technology",
+    "XLP": "Consumer Staples",
+    "XLRE": "Real Estate",
+    "XLV": "Health Care",
+    "XLY": "Consumer Discretionary",
     "XLU": "Utilities",
 }
 
@@ -60,8 +61,34 @@ if prices.empty:
 # Calculate sector relative strength vs SPY (ratio)
 relative_strength = prices[SECTORS.keys()].div(prices["SPY"], axis=0)
 
-# Select sector to display
-selected_sector = st.selectbox("Select sector to compare with S&P 500 (SPY):", options=list(SECTORS.keys()), format_func=lambda x: SECTORS[x])
+# Sidebar with About This Tool description
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        This dashboard monitors the relative performance and rotation of S&P 500 sectors to help identify leadership trends and market breadth dynamics.
+
+        **Features:**
+
+        - **Sector Relative Strength vs. S&P 500**  
+          Visualizes the price ratio of the selected sector ETF against SPY over the past 12 months, helping to track sector leadership or weakness.
+
+        - **Sector Rotation Quadrant**  
+          A scatter plot comparing 1-month vs 3-month total returns for all sectors. Quickly identifies which sectors are leading or lagging in the current market cycle.
+
+        - **Data Source**  
+          All price data is pulled from Yahoo Finance via yfinance, refreshed hourly.
+
+        *Built by AD Fund Management LP. For informational use only.*
+        """
+    )
+
+# Select sector to display (alphabetical order)
+selected_sector = st.selectbox(
+    "Select sector to compare with S&P 500 (SPY):",
+    options=sorted(SECTORS.keys()),
+    format_func=lambda x: SECTORS[x]
+)
 
 # Plot relative strength ratio chart with Plotly for interactivity
 fig_rs = px.line(
@@ -96,32 +123,3 @@ fig_rot = px.scatter(
 fig_rot.update_traces(textposition="top center")
 fig_rot.update_layout(height=500, margin=dict(l=40, r=40, t=60, b=40), showlegend=False)
 st.plotly_chart(fig_rot, use_container_width=True)
-
-# Breadth Table: % of sectors above moving averages
-def percent_above_ma(prices_df, windows):
-    result = {}
-    for window in windows:
-        above_ma = []
-        for sector in SECTORS.keys():
-            series = prices_df[sector].dropna()
-            if len(series) < window:
-                above_ma.append(False)
-                continue
-            ma = series.rolling(window).mean().iloc[-1]
-            price = series.iloc[-1]
-            above_ma.append(price > ma)
-        result[window] = np.mean(above_ma) * 100  # percent
-    return result
-
-ma_windows = [20, 50, 100, 200]
-breadth_stats = percent_above_ma(prices, ma_windows)
-breadth_df = pd.DataFrame({
-    "MA Window": [f"{w}D" for w in ma_windows],
-    "% Sectors Above MA": [f"{breadth_stats[w]:.1f}%" for w in ma_windows]
-})
-
-st.subheader("% of Sectors Above Key Moving Averages")
-st.table(breadth_df)
-
-# Footer
-st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
