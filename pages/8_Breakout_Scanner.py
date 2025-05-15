@@ -11,7 +11,7 @@ pd.options.mode.chained_assignment = None  # Suppress SettingWithCopyWarning
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Breakout Scanner", layout="wide")
-st.title("📈 Enhanced Breakout Scanner")
+st.title("Breakout Scanner")
 
 with st.sidebar:
     st.header("About This Tool")
