@@ -5,6 +5,9 @@
 import sys, types
 from typing import List, Tuple
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
 import packaging.version
 try:
     import distutils.version
