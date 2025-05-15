@@ -60,7 +60,7 @@ with st.sidebar:
     )
 
 def seasonal_stats(prices: pd.Series):
-    # Use 'MS' (Month Start) to capture proper monthly returns including January
+    # Use Month Start ('MS') to correctly capture January and all months
     monthly = prices.resample('MS').first().pct_change().dropna() * 100
     monthly.index = monthly.index.to_period('M')
     grouped = monthly.groupby(monthly.index.month)
@@ -74,6 +74,7 @@ def seasonal_stats(prices: pd.Series):
     stats['count']      = counts
     stats['label']      = MONTH_LABELS
     return stats
+
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     fig, ax1 = plt.subplots(figsize=(11, 6), dpi=100)
