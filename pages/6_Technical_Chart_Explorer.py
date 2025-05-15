@@ -45,12 +45,16 @@ df_full = df_full[df_full.index.weekday < 5]  # drop weekends
 for w in (20,50,100,200):
     df_full[f"MA{w}"] = df_full["Close"].rolling(w).mean()
 
-# RSI(14)
-delta       = df_full["Close"].diff()
-gain        = delta.clip(lower=0).rolling(14).mean()
-loss        = -delta.clip(upper=0).rolling(14).mean()
-rs          = gain / loss
-df_full["RSI14"] = 100 - (100/(1+rs))
+# RSI(14) — Using Wilder's method (EMA smoothing)
+delta = df_full["Close"].diff()
+gain = delta.clip(lower=0)
+loss = -delta.clip(upper=0)
+
+avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+
+rs = avg_gain / avg_loss
+df_full["RSI14"] = 100 - (100 / (1 + rs))
 
 # MACD(12,26,9)
 df_full["EMA12"]  = df_full["Close"].ewm(span=12, adjust=False).mean()
