@@ -172,3 +172,7 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
+# ── Footnotes ───────────────────────────────────────────────────────────────
+
+st.caption("© 2025 AD Fund Management LP")
