@@ -19,7 +19,7 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Market Memory Explorer**  
   Compares how this year is tracking versus past years with similar return paths. Useful for putting the current tape in historical context and building intuition around where we might go next.
 
-- **Sector Breadth Dashboard**
+- **Sector Breadth Dashboard**  
   This dashboard monitors the relative performance and rotation of S&P 500 sectors to help identify leadership trends and market breadth dynamics.
 
 - **Ticker Correlation Dashboard**  
