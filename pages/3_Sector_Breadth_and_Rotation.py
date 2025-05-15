@@ -32,40 +32,42 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
 **Sector Relative Strength vs. S&P 500:**  
-Compare a sector ETF's price performance relative to the S&P 500 (SPY).  
-Visualizes which sectors are leading or lagging the broad market over your selected time window.
+Compares a sector ETF's price performance relative to the S&P 500 (SPY) over the last 12 months.
 """)
 
 # ---- Select Sector ----
 sector_list = list(SECTOR_ETFS.keys())
-default_sector = sector_list[1]  # Technology by default (change as needed)
+default_sector = sector_list[1]  # Technology by default
 selected_sector = st.selectbox("Select sector to compare with S&P 500:", sector_list[1:], index=0)
 
-# ---- Select Time Window ----
-years = st.slider("Years of history:", min_value=1, max_value=10, value=2)
+# ---- Set Fixed 12-Month Window ----
 end_date = datetime.today()
-start_date = end_date - timedelta(days=365 * years)
+start_date = end_date - timedelta(days=365)
 
 # ---- Download Data ----
 def load_price(ticker):
     df = yf.download(ticker, start=start_date, end=end_date, auto_adjust=True, progress=False)
-    return df['Close']
+    if "Close" in df.columns:
+        return df["Close"]
+    return pd.Series(dtype="float64")
 
 @st.cache_data(ttl=86400)
-def fetch_all_data():
+def fetch_12m_data():
     price_data = {}
     for name, ticker in SECTOR_ETFS.items():
-        try:
-            price_data[name] = load_price(ticker)
-        except Exception:
-            st.warning(f"Failed to load data for {name} ({ticker})")
-    # Merge on date index
-    price_df = pd.DataFrame(price_data).dropna()
-    return price_df
+        s = load_price(ticker)
+        if not s.empty:
+            price_data[name] = s
+    if "S&P 500" not in price_data or selected_sector not in price_data:
+        return pd.DataFrame()  # Defensive: avoid errors if missing
+    # Join by date
+    df = pd.DataFrame(price_data)
+    df = df[["S&P 500", selected_sector]].dropna()
+    return df
 
-price_df = fetch_all_data()
-if price_df.empty or selected_sector not in price_df.columns:
-    st.error("Failed to load data for the selected sector or SPY. Try again later.")
+price_df = fetch_12m_data()
+if price_df.empty:
+    st.error("Failed to load sufficient data for this sector or SPY. Try again later.")
     st.stop()
 
 # ---- Compute Sector Relative Strength (Sector / SPY) ----
@@ -74,7 +76,7 @@ sector_rel = price_df[selected_sector] / price_df["S&P 500"]
 # ---- Plot ----
 fig, ax = plt.subplots(figsize=(9, 5))
 ax.plot(sector_rel.index, sector_rel, color="orange", linewidth=2.5, label=f"{selected_sector} / SPY")
-ax.set_title(f"{selected_sector} Relative Strength vs. S&P 500", fontsize=16, weight="bold", loc="left")
+ax.set_title(f"{selected_sector} Relative Strength vs. S&P 500 (Last 12 Months)", fontsize=16, weight="bold", loc="left")
 ax.set_ylabel("Sector / SPY (Ratio)")
 ax.set_xlabel("Date")
 ax.grid(alpha=0.25, linestyle="--")
