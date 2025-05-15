@@ -60,24 +60,31 @@ with st.sidebar:
     )
 
 def seasonal_stats(prices: pd.Series):
-    monthly = prices.resample('MS').last().pct_change().dropna() * 100  # Month start
-    monthly.index = monthly.index.to_period('M')
-    grouped = monthly.groupby(monthly.index.month)
-    
-    median_ret = grouped.median()
-    hit_rate  = grouped.apply(lambda x: x.gt(0).mean() * 100)
-    counts    = grouped.size()
-    years_observed = grouped.apply(lambda x: x.index.year.nunique())  # Count distinct years per month
+    # Resample by Month Start, take first available price of each month
+    monthly_start = prices.resample('MS').first()
+    monthly_ret = monthly_start.pct_change().dropna() * 100
 
-    idx = pd.Index(range(1,13), name='month')
+    # Convert index to period month
+    monthly_ret.index = monthly_ret.index.to_period('M')
+
+    grouped = monthly_ret.groupby(monthly_ret.index.month)
+
+    median_ret = grouped.median()
+    hit_rate = grouped.apply(lambda x: (x > 0).mean() * 100)
+    years_observed = grouped.apply(lambda x: x.index.year.nunique())
+
+    # Ensure all months are present
+    idx = pd.Index(range(1, 13), name='month')
     stats = pd.DataFrame(index=idx)
     stats['median_ret'] = median_ret
-    stats['hit_rate']   = hit_rate
-    stats['count']      = counts
+    stats['hit_rate'] = hit_rate
     stats['years_observed'] = years_observed
-    stats['label']      = MONTH_LABELS
-    return stats
+    stats['label'] = MONTH_LABELS
 
+    # Fill missing months with NaN or zero as appropriate
+    stats = stats.reindex(idx).fillna({'median_ret': 0, 'hit_rate': 0, 'years_observed': 0})
+
+    return stats
 
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
