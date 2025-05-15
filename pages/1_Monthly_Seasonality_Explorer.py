@@ -53,7 +53,7 @@ with st.sidebar:
         • Download charts or stats instantly
 
         ---
-        _Crafted by **AD Fund Management LP**_
+        Created by **AD Fund Management LP**
         """, unsafe_allow_html=True
     )
 
