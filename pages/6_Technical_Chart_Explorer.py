@@ -13,9 +13,9 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 **Features:**
 - Interactive OHLC candlesticks  
 - 20/50/100/200‑day moving averages (full length)  
-- Volume bars color‑coded by up/down days  
-- RSI (14‑day) panel (0–100 scale)  
-- MACD (12,26,9) panel  
+- Volume bars color‑coded by up/down days (vs prior close)  
+- RSI (14‑day) panel (0–100 scale) with Wilder smoothing  
+- MACD (12,26,9) panel with colored histogram  
 """)
 ticker   = st.sidebar.text_input("Ticker", "NVDA").upper()
 period   = st.sidebar.selectbox(
@@ -23,37 +23,42 @@ period   = st.sidebar.selectbox(
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ── Fetch with buffer for full-length MAs ─────────────────────────────────
+# ── Compute start & buffer for full‑length MAs ───────────────────────────────
 base_days   = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
 buffer_days = max(base_days.get(period,365), 500)
+start_date  = None if period=="max" else datetime.today() - timedelta(days=base_days[period] + buffer_days)
 
-if period != "max":
-    start   = datetime.today() - timedelta(days=base_days[period] + buffer_days)
-    df_full = yf.Ticker(ticker).history(start=start, interval=interval)
-else:
-    df_full = yf.Ticker(ticker).history(period="max", interval=interval)
+# ── Fetch & cache data ───────────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def get_data(tkr, start, prd, intrvl):
+    if prd != "max":
+        return yf.Ticker(tkr).history(start=start, interval=intrvl)
+    else:
+        return yf.Ticker(tkr).history(period="max", interval=intrvl)
 
-if df_full.empty:
+df_full = get_data(ticker, start_date, period, interval)
+if df_full is None or df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# ── PREP & INDICATORS on full history ─────────────────────────────────────
-df_full.index = pd.to_datetime(df_full.index).tz_localize(None)
-df_full = df_full[df_full.index.weekday < 5]  # drop weekends
+# ── Sanitize index, drop weekends only for daily data ────────────────────────
+if df_full.index.tz is not None:
+    df_full.index = df_full.index.tz_localize(None)
+if interval == "1d":
+    df_full = df_full[df_full.index.weekday < 5]
 
-# rolling MAs
-for w in (20,50,100,200):
+# ── Indicators on full history ──────────────────────────────────────────────
+# Moving averages
+for w in (20, 50, 100, 200):
     df_full[f"MA{w}"] = df_full["Close"].rolling(w).mean()
 
-# RSI(14) — Using Wilder's method (EMA smoothing)
-delta = df_full["Close"].diff()
-gain = delta.clip(lower=0)
-loss = -delta.clip(upper=0)
-
+# RSI(14) — Wilder smoothing
+delta    = df_full["Close"].diff()
+gain     = delta.clip(lower=0)
+loss     = -delta.clip(upper=0)
 avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
 avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-
-rs = avg_gain / avg_loss
+rs       = avg_gain / avg_loss
 df_full["RSI14"] = 100 - (100 / (1 + rs))
 
 # MACD(12,26,9)
@@ -66,12 +71,17 @@ df_full["Hist"]   = df_full["MACD"] - df_full["Signal"]
 # ── Trim to display window ─────────────────────────────────────────────────
 if period != "max":
     cutoff = df_full.index.max() - pd.Timedelta(days=base_days[period])
-    df     = df_full.loc[df_full.index >= cutoff]
+    df     = df_full.loc[df_full.index >= cutoff].copy()
 else:
     df = df_full.copy()
 
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 available_mas = [w for w in (20,50,100,200) if len(df) >= w]
+
+# ── Warn if window too short for certain MAs ────────────────────────────────
+for w in (20,50,100,200):
+    if len(df) < w:
+        st.warning(f"Showing MA{w} with fewer than {w} data points may appear choppy.")
 
 # ── Build Figure ────────────────────────────────────────────────────────────
 fig = make_subplots(
@@ -80,70 +90,68 @@ fig = make_subplots(
     row_heights=[0.55,0.15,0.15,0.15],
     vertical_spacing=0.04,
     specs=[
-        [{"type":"candlestick"}],  # 1 Price
-        [{"type":"bar"}],          # 2 Volume
-        [{"type":"scatter"}],      # 3 RSI
-        [{"type":"scatter"}],      # 4 MACD
+        [{"type":"candlestick"}],
+        [{"type":"bar"}],
+        [{"type":"scatter"}],
+        [{"type":"scatter"}],
     ]
 )
 
-# 1) Price + MAs (show legend + label)
+# 1) Price + MAs
 fig.add_trace(go.Candlestick(
-    x=df["DateStr"],
-    open=df["Open"], high=df["High"],
+    x=df["DateStr"], open=df["Open"], high=df["High"],
     low=df["Low"], close=df["Close"],
     increasing_line_color="green", decreasing_line_color="red",
-    name="Price", showlegend=True
+    name="Price"
 ), row=1, col=1)
-for w,color in zip(available_mas,("purple","blue","orange","gray")):
+for w, color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(go.Scatter(
         x=df["DateStr"], y=df[f"MA{w}"],
         mode="lines", line=dict(color=color, width=1),
-        name=f"MA{w}", showlegend=True
+        name=f"MA{w}"
     ), row=1, col=1)
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
-# 2) Volume
+# 2) Volume (vs prior close)
+vol_colors = ["gray"]
+for i in range(1, len(df)):
+    vol_colors.append("green" if df["Close"].iat[i] > df["Close"].iat[i-1] else "red")
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"], width=1,
-    marker_color=["green" if c>=o else "red" for c,o in zip(df["Close"], df["Open"])],
-    name="Volume", showlegend=False
+    marker_color=vol_colors, name="Volume"
 ), row=2, col=1)
 fig.update_yaxes(title_text="Volume", row=2, col=1)
 
-# 3) RSI
+# 3) RSI (14)
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["RSI14"],
-    mode="lines", line=dict(color="purple", width=1),
-    name="RSI (14)", showlegend=False
+    mode="lines", line=dict(width=1, color="purple"),
+    name="RSI (14)"
 ), row=3, col=1)
-fig.update_yaxes(
-    range=[0,100],
-    title_text="RSI",
-    row=3, col=1,
-    title_standoff=15
-)
+fig.update_yaxes(range=[0,100], title_text="RSI", row=3, col=1, title_standoff=15)
+# keep original 80/20 bands
 fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
-# 4) MACD + Hist
+# 4) MACD + colored Hist
+hist_colors = ["green" if h > 0 else "red" for h in df["Hist"]]
 fig.add_trace(go.Bar(
-    x=df["DateStr"], y=df["Hist"], marker_color="gray",
-    name="MACD Hist", showlegend=False
+    x=df["DateStr"], y=df["Hist"],
+    marker_color=hist_colors, name="MACD Hist"
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["MACD"],
-    mode="lines", line=dict(color="blue", width=1.5),
-    name="MACD", showlegend=False
+    mode="lines", line=dict(width=1.5, color="blue"),
+    name="MACD"
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["Signal"],
-    mode="lines", line=dict(color="orange", width=1),
-    name="Signal", showlegend=False
+    mode="lines", line=dict(width=1, color="orange"),
+    name="Signal"
 ), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# ── Monthly ticks ───────────────────────────────────────────────────────────
+# ── X‑Axis Monthly Ticks ─────────────────────────────────────────────────────
 month_starts = df.index.to_series().groupby(df.index.to_period("M")).first()
 tickvals     = month_starts.dt.strftime("%Y-%m-%d").tolist()
 ticktext     = month_starts.dt.strftime("%b-%y").tolist()
@@ -153,11 +161,11 @@ fig.update_xaxes(
     tickangle=-45
 )
 
-# ── Layout tweaks ────────────────────────────────────────────────────────────
+# ── Layout Tweaks ────────────────────────────────────────────────────────────
 fig.update_layout(
     height=900, width=1000,
     title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5),
-    hovermode="x unified",
+    hovermode="x unified",  # you can experiment with other modes if desired
     margin=dict(l=60, r=20, t=60, b=40),
     xaxis=dict(rangeslider_visible=False),
     legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center")
