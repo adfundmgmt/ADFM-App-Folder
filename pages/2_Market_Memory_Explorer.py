@@ -2,7 +2,12 @@
 Market Memory Explorer — AD Fund Management LP
 ----------------------------------------------
 Compare the current year’s cumulative return path for any ticker with the
-most-correlated historical years. Now fully robust for all corner cases.
+most-correlated historical years.
+
+**Filters applied to analogs:**
+- Only include analogs where the final annual return is between -95% and +300%.
+- Exclude analogs with any single-day absolute return >= 25%.
+- Metrics and chart are computed using only these "clean" analogs.
 """
 
 import datetime as dt
@@ -20,6 +25,11 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 ###############################################################################
 START_YEAR = 1980
 TRADING_DAYS_FULL_YEAR = 253
+
+# Filters for analog inclusion
+MIN_VALID_RETURN = -0.95   # -95%
+MAX_VALID_RETURN = 3.0     # +300%
+MAX_DAY_JUMP = 0.25        # 25%
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
@@ -121,18 +131,29 @@ if not top_matches:
     st.stop()
 
 ###############################################################################
-# Only include analogs with at least some data for YTD
+# Only include analogs with at least some data for YTD and passing filters
 ###############################################################################
 valid_top_matches = []
 analog_returns = []
+excluded_analogs = []
 
 for yr, rho in top_matches:
     analog = ytd_df[yr].dropna()
-    # Only include analogs that have at least n_days points
     if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
-        valid_top_matches.append((yr, rho))
-        # For mean metric, use final return for *entire* year, not just n_days (shows analog's total outcome)
-        analog_returns.append(analog.iloc[-1])
+        final_return = analog.iloc[-1]
+        max_jump = analog.pct_change().abs().max()
+        if (MIN_VALID_RETURN < final_return < MAX_VALID_RETURN) and (max_jump < MAX_DAY_JUMP):
+            valid_top_matches.append((yr, rho))
+            analog_returns.append(final_return)
+        else:
+            excluded_analogs.append((yr, final_return, max_jump))
+
+if excluded_analogs:
+    st.info(
+        f"{len(excluded_analogs)} analog(s) excluded due to abnormal total return "
+        f"(outside [{MIN_VALID_RETURN:.0%}, {MAX_VALID_RETURN:.0%}]) or "
+        f"single-day return over {MAX_DAY_JUMP:.0%}."
+    )
 
 ###############################################################################
 # Metrics — best, mean, all robust to missing analogs
@@ -144,8 +165,9 @@ if valid_top_matches and analog_returns:
     # Best analog YTD up to today (for like-for-like), not full year
     best_analog_ytd_return = ytd_df[best_analog_year].iloc[n_days-1]
     mean_analog_return = np.mean(analog_returns)
+    median_analog_return = np.median(analog_returns)
 else:
-    best_analog_year = best_rho = best_analog_ytd_return = mean_analog_return = None
+    best_analog_year = best_rho = best_analog_ytd_return = mean_analog_return = median_analog_return = None
 
 metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
 with metrics_col1:
@@ -181,7 +203,7 @@ st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        """
+        f"""
         Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
 
         - **Black = this year**
@@ -193,8 +215,15 @@ with st.sidebar:
         2. Adjust analog settings above.
         3. Chart + metrics update in real time.
 
+        <span style='font-size:0.95em;color:#333;'><b>Filters applied to analogs:</b>
+        <ul>
+        <li>Final return in [-95%, +300%]</li>
+        <li>No single-day jump &ge; 25%</li>
+        </ul>
+        </span>
         _Built by AD Fund Management LP_
-        """
+        """,
+        unsafe_allow_html=True
     )
     st.markdown("---")
     # Analogs card (only show valid analogs!)
@@ -283,7 +312,7 @@ if len(valid_top_matches) > 0:
     plt.tight_layout()
     st.pyplot(fig)
 else:
-    st.info("No valid analog years with complete YTD data for this ticker and selection.")
+    st.info("No valid analog years with complete YTD data and passing all filters for this ticker and selection.")
 
 ###############################################################################
 # Footer
