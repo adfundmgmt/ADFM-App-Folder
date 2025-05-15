@@ -4,6 +4,9 @@ from pandas_datareader.data import DataReader
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
+import matplotlib.pyplot as plt
+plt.style.use("default")
+
 # --------------------------------------------------
 # PAGE CONFIG
 # --------------------------------------------------
