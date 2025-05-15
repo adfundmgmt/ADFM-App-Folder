@@ -182,3 +182,5 @@ ax2.set_xlabel("Date")
 
 fig.tight_layout(h_pad=2)
 st.pyplot(fig)
+
+st.caption("© 2025 AD Fund Management LP")
