@@ -79,7 +79,7 @@ with st.sidebar:
         - **Data Source**  
           All price data is pulled from Yahoo Finance via yfinance, refreshed hourly.
 
-        *Built by AD Fund Management LP. For informational use only.*
+        *Built by AD Fund Management LP.*
         """
     )
 
