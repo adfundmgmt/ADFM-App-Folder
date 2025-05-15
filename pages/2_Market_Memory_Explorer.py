@@ -1,10 +1,7 @@
 """
 Market Memory Explorer — AD Fund Management LP
 ----------------------------------------------
-Compare the current year’s cumulative return path for any ticker with the
-most-correlated historical years.
-
-Filters for analogs are now fully user-adjustable in the sidebar!
+Always show analogs; filtering is *optional* and user-controlled.
 """
 
 import datetime as dt
@@ -17,30 +14,19 @@ import streamlit as st
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
-###############################################################################
-# Constants & configuration
-###############################################################################
 START_YEAR = 1980
 TRADING_DAYS_FULL_YEAR = 253
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
-###############################################################################
-# Optional logo (update path as needed)
-###############################################################################
 LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), width=70)
 
-###############################################################################
-# Consistent Title & Subheader
-###############################################################################
 st.title("Market Memory Explorer")
 st.subheader("Compare the current year's return path with history")
 
-###############################################################################
-# Sidebar: About, Filters, Analogs, Download
-###############################################################################
+# ---- Sidebar ----
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
@@ -50,35 +36,26 @@ with st.sidebar:
         - **Black = this year**
         - **Dashed = top-correlated analog years**
         - **Legend shows correlation coefficients (ρ)**
-
-        ---
-        1. Enter a ticker (e.g. `^GSPC`, `^IXIC`, `AAPL`, `TSLA`)
-        2. Adjust analog/filter settings below.
-        3. Chart + metrics update in real time.
-
-        _Built by AD Fund Management LP_
         """
     )
     st.markdown("---")
-
-    st.subheader("Analog Filter Settings")
-    min_return_sidebar, max_return_sidebar = st.slider(
-        "Allowed Total Annual Return (%)",
-        min_value=-100, max_value=1000, value=(-95, 300), step=1,
-        help="Exclude analogs with final year returns outside this range."
-    )
-    max_jump_sidebar = st.slider(
-        "Allowed Max Daily Jump (%)",
-        min_value=5, max_value=100, value=25, step=1,
-        help="Exclude analogs where any single day move exceeds this value."
-    )
-    st.caption(f"Current filters: return in [{min_return_sidebar}%, {max_return_sidebar}%], daily jump ≤ {max_jump_sidebar}%.")
-
+    st.subheader("Analog Outlier Filters (optional)")
+    filter_outliers = st.checkbox("Exclude analogs with extreme returns", value=False)
+    filter_jumps = st.checkbox("Exclude analogs with large daily jumps", value=False)
+    if filter_outliers:
+        min_return_sidebar, max_return_sidebar = st.slider(
+            "Total Return (%) Range",
+            min_value=-100, max_value=1000, value=(-95, 300), step=1,
+            help="Exclude analogs with final year returns outside this range."
+        )
+    if filter_jumps:
+        max_jump_sidebar = st.slider(
+            "Allowed Max Daily Jump (%)",
+            min_value=5, max_value=100, value=25, step=1,
+            help="Exclude analogs where any single day move exceeds this value."
+        )
     st.markdown("---")
 
-###############################################################################
-# Input controls (single row, clean)
-###############################################################################
 input_col1, input_col2, input_col3 = st.columns([2, 1, 1])
 with input_col1:
     ticker = st.text_input("Ticker", value="^GSPC", help="Index, ETF, or equity.").upper()
@@ -89,12 +66,8 @@ with input_col3:
 
 st.markdown("<hr style='margin-top: 2px; margin-bottom: 15px;'>", unsafe_allow_html=True)
 
-###############################################################################
-# Helper functions
-###############################################################################
 @st.cache_data(show_spinner=False)
 def fetch_price_history(symbol: str) -> pd.DataFrame:
-    """Download daily close prices from Yahoo Finance."""
     df = yf.download(symbol, start=f"{START_YEAR}-01-01", auto_adjust=False, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(symbol, axis=1, level=1, drop_level=True)
@@ -103,12 +76,8 @@ def fetch_price_history(symbol: str) -> pd.DataFrame:
     return df
 
 def cumulative_returns(prices: pd.Series) -> pd.Series:
-    """Convert a price series to cumulative returns starting at 0."""
     return prices / prices.iloc[0] - 1
 
-###############################################################################
-# Data retrieval & YTD matrix
-###############################################################################
 try:
     raw = fetch_price_history(ticker)
 except Exception as err:
@@ -132,9 +101,6 @@ if current_year not in ytd_df.columns:
     st.warning(f"No valid YTD data for {current_year}")
     st.stop()
 
-###############################################################################
-# Correlation ranking and filter (robust)
-###############################################################################
 current_ytd = ytd_df[current_year].dropna()
 n_days = len(current_ytd)
 correlations = {}
@@ -146,7 +112,6 @@ for year in ytd_df.columns:
     overlap = min(n_days, len(past_ytd))
     if overlap < 30:
         continue
-    # Only compare up to the available overlap in both series
     rho = np.corrcoef(current_ytd[:overlap], past_ytd[:overlap])[0, 1]
     correlations[year] = rho
 
@@ -160,43 +125,55 @@ if not top_matches:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-###############################################################################
-# Only include analogs with at least some data for YTD and passing filters
-###############################################################################
+# Outlier and jump exclusion logic: only applied if user checks box
 valid_top_matches = []
 analog_returns = []
 excluded_analogs = []
+outlier_count = 0
+jump_count = 0
 
-MIN_VALID_RETURN = min_return_sidebar / 100.0   # sidebar is in %, logic is float
-MAX_VALID_RETURN = max_return_sidebar / 100.0
-MAX_DAY_JUMP = max_jump_sidebar / 100.0
-
-for yr, rho in top_matches:
-    analog = ytd_df[yr].dropna()
-    if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
-        final_return = analog.iloc[-1]
-        max_jump = analog.pct_change().abs().max()
-        if (MIN_VALID_RETURN < final_return < MAX_VALID_RETURN) and (max_jump < MAX_DAY_JUMP):
+if filter_outliers or filter_jumps:
+    for yr, rho in top_matches:
+        analog = ytd_df[yr].dropna()
+        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
+            valid = True
+            final_return = analog.iloc[-1]
+            max_jump = analog.pct_change().abs().max()
+            if filter_outliers:
+                min_return = min_return_sidebar / 100.0
+                max_return = max_return_sidebar / 100.0
+                if not (min_return < final_return < max_return):
+                    valid = False
+                    outlier_count += 1
+            if filter_jumps:
+                jump_limit = max_jump_sidebar / 100.0
+                if max_jump > jump_limit:
+                    valid = False
+                    jump_count += 1
+            if valid:
+                valid_top_matches.append((yr, rho))
+                analog_returns.append(final_return)
+            else:
+                excluded_analogs.append((yr, final_return, max_jump))
+else:
+    for yr, rho in top_matches:
+        analog = ytd_df[yr].dropna()
+        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
             valid_top_matches.append((yr, rho))
-            analog_returns.append(final_return)
-        else:
-            excluded_analogs.append((yr, final_return, max_jump))
+            analog_returns.append(analog.iloc[-1])
 
 if excluded_analogs:
-    st.info(
-        f"{len(excluded_analogs)} analog(s) excluded due to abnormal total return "
-        f"(outside [{min_return_sidebar}%, {max_return_sidebar}%]) or "
-        f"single-day return over {max_jump_sidebar}%."
-    )
+    msg = f"{len(excluded_analogs)} analog(s) excluded"
+    if outlier_count:
+        msg += f" due to extreme returns (outside slider)"
+    if jump_count:
+        msg += f" due to large daily jump"
+    st.info(msg + ".")
 
-###############################################################################
-# Metrics — best, mean, all robust to missing analogs
-###############################################################################
 current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('nan')
 
 if valid_top_matches and analog_returns:
     best_analog_year, best_rho = valid_top_matches[0]
-    # Best analog YTD up to today (for like-for-like), not full year
     best_analog_ytd_return = ytd_df[best_analog_year].iloc[n_days-1]
     mean_analog_return = np.mean(analog_returns)
     median_analog_return = np.median(analog_returns)
@@ -231,11 +208,7 @@ with metrics_col3:
 
 st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html=True)
 
-###############################################################################
-# Sidebar: Analogs, Download
-###############################################################################
 with st.sidebar:
-    # Analogs card (only show valid analogs!)
     if valid_top_matches:
         st.markdown(
             f"""
@@ -264,9 +237,6 @@ with st.sidebar:
         mime="text/csv"
     )
 
-###############################################################################
-# Main Chart — plot current YTD to today, full analogs, vertical marker
-###############################################################################
 if len(valid_top_matches) > 0:
     if len(valid_top_matches) <= 10:
         base_cmap = plt.cm.get_cmap("tab10")
@@ -275,7 +245,6 @@ if len(valid_top_matches) > 0:
     palette = base_cmap(np.linspace(0, 1, len(valid_top_matches)))
 
     fig, ax = plt.subplots(figsize=(14, 7))
-    # Plot analogs: full year
     for idx, (yr, rho) in enumerate(valid_top_matches):
         analog = ytd_df[yr].dropna()
         ax.plot(
@@ -287,7 +256,6 @@ if len(valid_top_matches) > 0:
             alpha=0.7,
             label=f"{yr} (ρ={rho:.2f})"
         )
-    # Plot current year: only YTD so far
     ax.plot(
         current_ytd.index,
         current_ytd.values,
@@ -295,7 +263,6 @@ if len(valid_top_matches) > 0:
         linewidth=3.2,
         label=f"{current_year} (YTD)"
     )
-    # Vertical marker at today
     ax.axvline(current_ytd.index[-1], color="gray", linestyle=":", linewidth=1.3, alpha=0.7)
     ax.set_title(f"{ticker} YTD {current_year} vs Historical Analogs", fontsize=16, fontweight="bold")
     ax.set_xlabel("Trading Day of Year", fontsize=13)
@@ -305,8 +272,6 @@ if len(valid_top_matches) > 0:
     ax.grid(True, linestyle=":", linewidth=0.7, color="#888")
     ax.yaxis.set_major_locator(MultipleLocator(0.05))
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
-
-    # Dynamic y-axis padding
     all_y = [current_ytd.values]
     for yr, _ in valid_top_matches:
         analog = ytd_df[yr].dropna()
@@ -316,14 +281,10 @@ if len(valid_top_matches) > 0:
     span = max_y - min_y
     pad = max(0.02, span * 0.08)
     ax.set_ylim(min_y - pad, max_y + pad)
-
     ax.legend(loc="upper left", fontsize=11, frameon=False, ncol=2)
     plt.tight_layout()
     st.pyplot(fig)
 else:
     st.info("No valid analog years with complete YTD data and passing all filters for this ticker and selection.")
 
-###############################################################################
-# Footer
-###############################################################################
 st.caption("© 2025 AD Fund Management LP")
