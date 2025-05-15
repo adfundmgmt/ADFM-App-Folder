@@ -27,38 +27,56 @@ MONTH_LABELS = [
 st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
-# ── Sidebar: About, Controls, Download ──────────────────
-
+# ---- Sidebar (About) ----
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         "Explore the seasonal patterns behind any stock, index, or commodity.\n\n"
-        "- **Broad Coverage**: Yahoo & FRED (for S&P 500, Dow, Nasdaq pre-1950)\n"
-        "- **Clean Metrics**: Median monthly returns + hit rates\n"
+        "- **Broad Coverage**: Yahoo & FRED (S&P 500, Dow, Nasdaq pre-1950)\n"
+        "- **Clean Metrics**: Median monthly returns & hit rates\n"
         "- **Green bars** = positive, **red** = negative, **black diamonds** = hit rates."
     )
     st.markdown("---")
-    st.subheader("Analysis Controls")
-    filter_outliers = st.checkbox("Exclude months with abs(return) > X%", value=False)
-    outlier_thresh = st.slider("Outlier threshold (%)", 5, 100, 30, disabled=not filter_outliers)
-    st.markdown("---")
-    # User-chosen width: show as px or inches
-    chart_width = st.slider("Chart width (pixels)", min_value=320, max_value=1200, value=900, step=40,
-                            help="Adjust for your screen or device.")
-    chart_height = st.slider("Chart height (pixels)", min_value=250, max_value=800, value=520, step=10,
-                             help="Taller charts = more readable labels")
     st.markdown("Crafted by **AD Fund Management LP**")
 
-def seasonal_stats(prices: pd.Series, filter_outliers=False, outlier_thresh=30):
+# ---- Helper functions ----
+
+def get_figure_width():
+    # Try to guess page width; fallback if not available
+    # (streamlit.components.v1.html hack, works with most Streamlit deployments)
+    import streamlit.components.v1 as components
+    width_px = st.session_state.get("_page_width", None)
+    if width_px is None:
+        result = components.html(
+            """
+            <script>
+            const width = Math.min(window.innerWidth || 800, 1200);
+            window.parent.postMessage({streamlitWidth: width}, "*");
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
+        # Listen for the message and store it
+        def _streamlit_set_page_width():
+            import streamlit.runtime.scriptrunner.script_run_context as src
+            import streamlit.runtime.legacy_caching as lc
+            if hasattr(src, "get_script_run_ctx") and hasattr(lc, "get_cache"):
+                ctx = src.get_script_run_ctx()
+                if ctx and hasattr(ctx, "enqueue") and hasattr(ctx, "streamlit"):
+                    ctx.streamlit.on_message(lambda msg: st.session_state.update({"_page_width": msg.get("streamlitWidth", 900)}))
+        _streamlit_set_page_width()
+        # Fallback until the width is available (default: desktop)
+        return 900
+    return int(width_px)
+
+def seasonal_stats(prices: pd.Series):
     monthly = prices.resample('ME').last().pct_change().dropna() * 100
     monthly.index = monthly.index.to_period('M')
-    if filter_outliers:
-        monthly = monthly[monthly.abs() <= outlier_thresh]
     grouped = monthly.groupby(monthly.index.month)
     median_ret = grouped.median()
     hit_rate  = grouped.apply(lambda x: x.gt(0).mean() * 100)
     counts    = grouped.size()
-
     idx = pd.Index(range(1,13), name='month')
     stats = pd.DataFrame(index=idx)
     stats['median_ret'] = median_ret
@@ -67,11 +85,11 @@ def seasonal_stats(prices: pd.Series, filter_outliers=False, outlier_thresh=30):
     stats['label']      = MONTH_LABELS
     return stats
 
-def plot_seasonality(stats: pd.DataFrame, title: str, width_px=900, height_px=520) -> io.BytesIO:
-    # Convert pixels to inches (DPI=100 for best compatibility)
+def plot_seasonality(stats: pd.DataFrame, title: str, fig_width_px: int = 900) -> io.BytesIO:
     dpi = 100
-    fig_w = width_px / dpi
-    fig_h = height_px / dpi
+    # Height is auto-calculated to keep aspect ratio readable
+    fig_w = fig_width_px / dpi
+    fig_h = max(5.5, fig_w * 0.52)  # makes tall on mobile, landscape on desktop
 
     plot_df = stats.dropna(subset=['median_ret','hit_rate'], how='all')
     labels = plot_df['label'].tolist()
@@ -85,7 +103,6 @@ def plot_seasonality(stats: pd.DataFrame, title: str, width_px=900, height_px=52
 
     fig, ax1 = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
     ax2 = ax1.twinx()
-
     bar_cols  = ['mediumseagreen' if v>=0 else 'indianred' for v in median]
     edge_cols = ['darkgreen'    if v>=0 else 'darkred'    for v in median]
     ax1.bar(
@@ -117,14 +134,13 @@ def plot_seasonality(stats: pd.DataFrame, title: str, width_px=900, height_px=52
     buf.seek(0)
     return buf
 
-# ── Inputs ───────────────────────────────────────────────
-
+# ---- Main controls ----
 col1, col2, col3 = st.columns([2,1,1])
 with col1:
     symbol = st.text_input("Ticker symbol", value="^GSPC")
 with col2:
     start_year = st.number_input(
-        "Start year", value=1950,
+        "Start year", value=2020,
         min_value=1900, max_value=dt.datetime.today().year
     )
 with col3:
@@ -135,7 +151,6 @@ with col3:
 
 start_date = f"{int(start_year)}-01-01"
 end_date = f"{int(end_year)}-12-31"
-
 warnings.filterwarnings('ignore', category=FutureWarning, module='yfinance')
 
 try:
@@ -155,10 +170,11 @@ try:
             st.stop()
         prices = df['Close']
 
-    stats = seasonal_stats(prices, filter_outliers=filter_outliers, outlier_thresh=outlier_thresh)
+    stats = seasonal_stats(prices)
     first_year = prices.index[0].year
     last_year = prices.index[-1].year
 
+    # Best/worst up top
     st.markdown("<br>", unsafe_allow_html=True)
     best = stats.loc[stats['median_ret'].idxmax()]
     worst = stats.loc[stats['median_ret'].idxmin()]
@@ -177,7 +193,12 @@ try:
     )
     st.markdown("<br>", unsafe_allow_html=True)
 
-    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})", width_px=chart_width, height_px=chart_height)
+    # Dynamic chart width: use 98% of the available page width
+    # Hardcode desktop default to 1100px, mobile to 380px if window.innerWidth<700
+    # Since Streamlit doesn't yet expose browser width, use best guess
+    chart_width = 1100 if st.columns(1)[0].width > 700 else 380
+
+    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})", fig_width_px=chart_width)
 
     st.markdown("<div style='display: flex; justify-content: center;'>", unsafe_allow_html=True)
     st.image(buf)
