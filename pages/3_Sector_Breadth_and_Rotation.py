@@ -1,10 +1,10 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.express as px
 from datetime import datetime, timedelta
 
-# ---- Sector ETF Definitions ----
+# ---- S&P 500 Sector ETFs ----
 SECTOR_ETFS = {
     "Technology": "XLK",
     "Health Care": "XLV",
@@ -18,63 +18,103 @@ SECTOR_ETFS = {
     "Real Estate": "XLRE",
     "Communication Services": "XLC",
 }
-
 SPY_TICKER = "SPY"
 
 st.set_page_config(page_title="Sector Breadth & Rotation", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
 st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For informational use only.")
 
-# ---- Sidebar ----
+# Sidebar
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
-Compares a selected sector ETF's price performance relative to the S&P 500 (SPY) over the last 12 months.
-""")
+- **Sector Relative Strength vs. S&P 500:** Plot the ratio of your chosen sector to the S&P 500.
+- **Sector Rotation Quadrant:** 1M vs 3M returns for all sectors — instantly see leaders/laggards.
+- **Breadth Table:** % of sectors above their 20, 50, 100, and 200-day moving averages.
+    """)
 
-# ---- Select Sector ----
 sector_list = list(SECTOR_ETFS.keys())
 selected_sector = st.selectbox("Select sector to compare with S&P 500:", sector_list, index=0)
 
-# ---- Fetch Data ----
+# Fetch price data for all sectors + SPY (last 1 year)
 end_date = datetime.today()
 start_date = end_date - timedelta(days=365)
 
-@st.cache_data(ttl=86400)
-def load_close_series(ticker):
-    df = yf.download(ticker, start=start_date, end=end_date, auto_adjust=True, progress=False)
-    return df["Close"] if "Close" in df.columns and not df["Close"].empty else None
+@st.cache_data(ttl=3600)
+def fetch_all_sector_prices():
+    tickers = list(SECTOR_ETFS.values()) + [SPY_TICKER]
+    price_data = {}
+    for t in tickers:
+        df = yf.download(t, start=start_date, end=end_date, progress=False, auto_adjust=True)
+        if not df.empty and "Close" in df.columns:
+            price_data[t] = df["Close"]
+    return pd.DataFrame(price_data).dropna(axis=1, how="all")
 
-sector_close = load_close_series(SECTOR_ETFS[selected_sector])
-spy_close = load_close_series(SPY_TICKER)
+prices = fetch_all_sector_prices()
 
-if sector_close is None:
-    st.error(f"Could not load price data for {selected_sector}.")
-    st.stop()
-if spy_close is None:
-    st.error("Could not load price data for SPY.")
-    st.stop()
-
-# ---- Align data ----
-aligned = pd.concat([sector_close, spy_close], axis=1, join='inner')
-aligned.columns = [selected_sector, "SPY"]
-if aligned.empty:
-    st.error("No overlapping data between sector and SPY.")
+# Check for critical data
+if SECTOR_ETFS[selected_sector] not in prices or SPY_TICKER not in prices:
+    st.error("Could not fetch data for selected sector or SPY.")
     st.stop()
 
-# ---- Compute and Plot Relative Strength ----
-rel_strength = aligned[selected_sector] / aligned["SPY"]
+# ---- 1. Sector Relative Strength (Selected) ----
+rel_strength = prices[SECTOR_ETFS[selected_sector]] / prices[SPY_TICKER]
+fig_rel = px.line(
+    rel_strength,
+    title=f"{selected_sector} / S&P 500 (SPY) – 12M Relative Strength",
+    labels={"value": "Sector / SPY (Ratio)", "index": "Date"},
+    height=400,
+)
+fig_rel.update_traces(line_color="orange", name=f"{selected_sector}/SPY")
+fig_rel.update_layout(title_x=0.01, showlegend=False)
 
-fig, ax = plt.subplots(figsize=(9, 5))
-ax.plot(rel_strength.index, rel_strength, color="orange", linewidth=2.5, label=f"{selected_sector} / SPY")
-ax.set_title(f"{selected_sector} Relative Strength vs. S&P 500 (Last 12 Months)", fontsize=16, weight="bold", loc="left")
-ax.set_ylabel("Sector / SPY (Ratio)")
-ax.set_xlabel("Date")
-ax.grid(alpha=0.25, linestyle="--")
-ax.legend()
-fig.tight_layout()
-st.pyplot(fig)
+st.subheader(f"Sector Relative Strength vs S&P 500 ({selected_sector})")
+st.plotly_chart(fig_rel, use_container_width=True)
 
-# ---- Optional: Show Raw Data ----
-with st.expander("Show Relative Strength Data (Sector/SPY)"):
-    st.dataframe(rel_strength.rename(f"{selected_sector}/SPY").to_frame(), use_container_width=True)
+# ---- 2. Sector Rotation Quadrant (1M vs 3M return) ----
+returns_1m = prices.pct_change(21).iloc[-1]  # ~21 trading days = 1M
+returns_3m = prices.pct_change(63).iloc[-1]  # ~63 trading days = 3M
+rotation_df = pd.DataFrame({
+    "Sector": [s for s, t in SECTOR_ETFS.items() if t in prices],
+    "1M Return": [returns_1m[SECTOR_ETFS[s]] for s in SECTOR_ETFS if SECTOR_ETFS[s] in prices],
+    "3M Return": [returns_3m[SECTOR_ETFS[s]] for s in SECTOR_ETFS if SECTOR_ETFS[s] in prices],
+})
+highlight_color = "#ffa600"
+rotation_fig = px.scatter(
+    rotation_df,
+    x="1M Return",
+    y="3M Return",
+    text="Sector",
+    title="Sector Rotation Quadrant: 1M vs 3M Returns",
+    labels={"1M Return":"1 Month Return", "3M Return":"3 Month Return"},
+    height=400,
+)
+rotation_fig.update_traces(
+    marker=dict(size=13, color=[highlight_color if s == selected_sector else "#636efa" for s in rotation_df["Sector"]]),
+    selector=dict(mode='markers+text')
+)
+rotation_fig.update_layout(title_x=0.01)
+
+st.subheader("Sector Rotation Quadrant (1M vs 3M Returns)")
+st.plotly_chart(rotation_fig, use_container_width=True)
+
+# ---- 3. Sector Breadth Table ----
+breadth = {}
+for s, t in SECTOR_ETFS.items():
+    if t in prices:
+        close = prices[t]
+        breadth[s] = {
+            "Above 20D": 100.0 * (close.iloc[-1] > close.rolling(20).mean().iloc[-1]),
+            "Above 50D": 100.0 * (close.iloc[-1] > close.rolling(50).mean().iloc[-1]),
+            "Above 100D": 100.0 * (close.iloc[-1] > close.rolling(100).mean().iloc[-1]),
+            "Above 200D": 100.0 * (close.iloc[-1] > close.rolling(200).mean().iloc[-1]),
+        }
+breadth_df = pd.DataFrame(breadth).T
+
+st.subheader("% of Sectors Above 20, 50, 100, 200-Day MAs")
+st.dataframe(
+    breadth_df,
+    use_container_width=True,
+    hide_index=False,
+    height=420,
+)
