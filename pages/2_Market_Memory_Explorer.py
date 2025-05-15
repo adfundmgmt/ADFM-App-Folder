@@ -1,5 +1,5 @@
 """
-Market Memory Explorer – AD Fund Management LP
+Market Memory Explorer — AD Fund Management LP
 ----------------------------------------------
 Compare the current year’s cumulative return path for any ticker with the
 most-correlated historical years.
@@ -24,9 +24,9 @@ TRADING_DAYS_FULL_YEAR = 253
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
 ###############################################################################
-# Optional logo (comment out if not needed)
+# Optional logo (update path as needed)
 ###############################################################################
-LOGO_PATH = Path("/mnt/data/1c9f0c52-d1ac-41fc-9e8a-d75d172afc55.png")
+LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), width=70)
 
@@ -37,47 +37,17 @@ st.title("Market Memory Explorer")
 st.subheader("Compare the current year's return path with history")
 
 ###############################################################################
-# Sidebar – usage guide
+# Input controls (one horizontal row, no wasted space)
 ###############################################################################
-with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
+input_col1, input_col2, input_col3 = st.columns([2, 1, 1])
+with input_col1:
+    ticker = st.text_input("Ticker", value="^GSPC", help="Index, ETF, or equity.").upper()
+with input_col2:
+    top_n = st.slider("Top Analogs", 1, 10, 5, help="Number of most correlated years to overlay.")
+with input_col3:
+    min_corr = st.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f", help="Minimum correlation cutoff.")
 
-        - **Black = this year**
-        - **Dashed = top-correlated analog years**
-        - **Legend shows correlation coefficients (ρ)**
-
-        ---
-        **Steps:**
-        1. Enter a ticker (e.g. `^GSPC`, `^IXIC`, `AAPL`, `TSLA`)
-        2. Adjust the number of analog years and minimum correlation.
-        3. Explore chart, metrics, and export options.
-
-        _Built by AD Fund Management LP_
-        """
-    )
-
-###############################################################################
-# Input controls
-###############################################################################
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    ticker = st.text_input("Ticker symbol", value="^GSPC").upper()
-
-with col2:
-    top_n = st.slider("Top N analog years", 1, 10, 5)
-
-min_corr = st.slider(
-    "Correlation cutoff (ρ)",
-    0.00,   # min
-    1.00,   # max
-    0.00,   # default (0 = no filter)
-    0.05,   # step
-    format="%.2f",
-)
+st.markdown("<hr style='margin-top: 2px; margin-bottom: 15px;'>", unsafe_allow_html=True)
 
 ###############################################################################
 # Helper functions
@@ -98,7 +68,7 @@ def cumulative_returns(prices: pd.Series) -> pd.Series:
     return prices / prices.iloc[0] - 1
 
 ###############################################################################
-# Data retrieval
+# Data retrieval & YTD matrix
 ###############################################################################
 try:
     raw = fetch_price_history(ticker)
@@ -106,9 +76,6 @@ except Exception as err:
     st.error(f"Download failed – check ticker. ({err})")
     st.stop()
 
-###############################################################################
-# Build YTD return matrix
-###############################################################################
 returns_by_year: dict[int, pd.Series] = {}
 for year, grp in raw.groupby("Year"):
     if len(grp) < 30:
@@ -127,7 +94,7 @@ if current_year not in ytd_df.columns:
     st.stop()
 
 ###############################################################################
-# Correlation ranking
+# Correlation ranking and filter
 ###############################################################################
 current_ytd = ytd_df[current_year].dropna()
 correlations = {}
@@ -142,69 +109,105 @@ for year in ytd_df.columns:
     rho = np.corrcoef(current_ytd[:overlap], past_ytd[:overlap])[0, 1]
     correlations[year] = rho
 
-# ▶︎ Apply cutoff
 filtered_corr = {
     yr: rho for yr, rho in correlations.items()
     if rho >= min_corr
 }
-
-top_matches = sorted(filtered_corr.items(),
-                     key=lambda kv: kv[1],
-                     reverse=True)[: top_n]
+top_matches = sorted(filtered_corr.items(), key=lambda kv: kv[1], reverse=True)[: top_n]
 
 if not top_matches:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
 ###############################################################################
-# Quick metrics/summary box (new)
+# Quick metrics row — centered
 ###############################################################################
 best_analog_year, best_rho = top_matches[0]
 current_ytd_return = current_ytd.iloc[-1]
 best_analog_ytd_return = ytd_df[best_analog_year].loc[:len(current_ytd)].dropna().iloc[-1]
-worst_analog_year, worst_rho = min(top_matches, key=lambda kv: ytd_df[kv[0]].iloc[-1])
 
-c1, c2, c3 = st.columns([2,2,2])
-c1.metric(
-    label=f"{current_year} YTD Return",
-    value=f"{current_ytd_return:.2%}",
-    help=f"Cumulative return for {ticker} YTD."
-)
-c2.metric(
-    label=f"Best Analog ({best_analog_year}) YTD",
-    value=f"{best_analog_ytd_return:.2%}",
-    help=f"Best-matching year: {best_analog_year} (ρ={best_rho:.2f})"
-)
-c3.metric(
-    label=f"Most Negative Analog",
-    value=f"{ytd_df[worst_analog_year].iloc[-1]:.2%}",
-    delta=f"({worst_analog_year})",
-    help=f"Lowest final YTD analog among top {top_n} matches."
-)
+# Most negative (worst) analog among top matches
+worst_analog_year, _ = min(top_matches, key=lambda kv: ytd_df[kv[0]].iloc[-1])
+worst_analog_ytd_return = ytd_df[worst_analog_year].iloc[-1]
 
-###############################################################################
-# Display top matches – consistent style
-###############################################################################
-st.markdown(
-    f"""
-    <div style='background:#f0f2f6;padding:18px 16px 16px 16px;
-                border-radius:8px;margin-top:20px;max-width:700px;'>
-        <span style='font-size:1.15rem; font-weight:700; color:#1f77b4;'>
-            Top {top_n} Most Correlated Years to {current_year}
-        </span>
-        <ul style='margin-top:6px;'>
-            {''.join(f'<li><strong>{yr}</strong>: ρ = {rho:.4f}</li>'
-                      for yr, rho in top_matches)}
-        </ul>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+with metrics_col1:
+    st.metric(
+        f"{current_year} YTD Return",
+        f"{current_ytd_return:.2%}",
+        help=f"{ticker} YTD cumulative return."
+    )
+with metrics_col2:
+    st.metric(
+        f"Best Analog ({best_analog_year})",
+        f"{best_analog_ytd_return:.2%}",
+        help=f"YTD return for {best_analog_year} (ρ={best_rho:.2f})"
+    )
+with metrics_col3:
+    arrow = "↑" if worst_analog_ytd_return > 0 else "↓"
+    color = "green" if worst_analog_ytd_return > 0 else "red"
+    st.metric(
+        f"Most Negative Analog",
+        f"{worst_analog_ytd_return:.2%}",
+        delta=f"{arrow} ({worst_analog_year})",
+        help=f"Lowest final YTD analog among top {top_n}."
+    )
+
+st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html=True)
 
 ###############################################################################
-# Plot
+# Sidebar: About, Analogs, Download
 ###############################################################################
-# Use tab10/tab20 as base palette
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
+
+        - **Black = this year**
+        - **Dashed = top-correlated analog years**
+        - **Legend shows correlation coefficients (ρ)**
+
+        ---
+        1. Enter a ticker (e.g. `^GSPC`, `^IXIC`, `AAPL`, `TSLA`)
+        2. Adjust analog settings above.
+        3. Chart + metrics update in real time.
+
+        _Built by AD Fund Management LP_
+        """
+    )
+    st.markdown("---")
+    # Analogs card
+    st.markdown(
+        f"""
+        <div style='background-color:#f8fafb; border-radius:10px; padding:14px 18px 10px 18px; margin-top:4px; margin-bottom:8px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.03);'>
+            <span style='font-size:1.1rem; font-weight:600; color:#1761a0;'>
+                Top {top_n} Analogs to {current_year}
+            </span>
+            <ul style='margin-top:6px; margin-bottom:0;'>
+                {''.join(f"<li><b style='color:#1f77b4'>{yr}</b>: <span style='color:#555'>ρ = {rho:.4f}</span></li>" for yr, rho in top_matches)}
+            </ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("---")
+    st.download_button(
+        label="Download Returns CSV",
+        data=ytd_df.to_csv(index=True),
+        file_name=f"{ticker}_ytd_paths.csv",
+        mime="text/csv"
+    )
+    st.download_button(
+        label="Download Correlation Table",
+        data=pd.DataFrame(top_matches, columns=["Year", "Correlation"]).to_csv(index=False),
+        file_name=f"{ticker}_top_analogs.csv",
+        mime="text/csv"
+    )
+
+###############################################################################
+# Main Chart
+###############################################################################
 if top_n <= 10:
     base_cmap = plt.cm.get_cmap("tab10")
 else:
@@ -212,60 +215,38 @@ else:
 palette = base_cmap(np.linspace(0, 1, top_n))
 
 fig, ax = plt.subplots(figsize=(14, 7))
-
-# Current-year trace
-ax.plot(range(1, len(current_ytd) + 1),
-        current_ytd,
-        color="black",
-        linewidth=3.2,
-        label=f"{current_year} (YTD)")
-
-# Analog traces, semi-transparent
+ax.plot(
+    range(1, len(current_ytd) + 1),
+    current_ytd,
+    color="black",
+    linewidth=3.2,
+    label=f"{current_year} (YTD)"
+)
 for idx, (yr, rho) in enumerate(top_matches):
     analog = ytd_df[yr].dropna()
-    ax.plot(analog.index,
-            analog.values,
-            linestyle="--",
-            linewidth=2,
-            color=palette[idx],
-            alpha=0.65 if yr != best_analog_year else 1.0,
-            label=f"{yr} (ρ={rho:.2f})" + (" ⭐" if yr == best_analog_year else ""))
+    ax.plot(
+        analog.index,
+        analog.values,
+        linestyle="--",
+        linewidth=2,
+        color=palette[idx],
+        alpha=0.7 if yr != best_analog_year else 1.0,
+        label=f"{yr} (ρ={rho:.2f})" + (" ⭐" if yr == best_analog_year else "")
+    )
 
-ax.set_title(f"{ticker} YTD {current_year} vs Historical Analogs",
-             fontsize=16, fontweight="bold")
+ax.set_title(f"{ticker} YTD {current_year} vs Historical Analogs", fontsize=16, fontweight="bold")
 ax.set_xlabel("Trading Day of Year", fontsize=13)
 ax.set_ylabel("Cumulative Return", fontsize=13)
-
 ax.axhline(0, color="gray", linestyle="--", linewidth=1)
 ax.set_xlim(1, TRADING_DAYS_FULL_YEAR)
 ax.grid(True, linestyle=":", linewidth=0.7, color="#888")
-
 ax.yaxis.set_major_locator(MultipleLocator(0.05))
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
-
 ax.legend(loc="upper left", fontsize=11, frameon=False, ncol=2)
 plt.tight_layout()
 st.pyplot(fig)
 
 ###############################################################################
-# Data download/export section
-###############################################################################
-with st.expander("Download Data"):
-    st.download_button(
-        label="Download Cumulative Returns (CSV)",
-        data=ytd_df.to_csv(index=True),
-        file_name=f"{ticker}_market_memory_ytd_paths.csv",
-        mime="text/csv"
-    )
-    st.download_button(
-        label="Download Correlation Table (CSV)",
-        data=pd.DataFrame(top_matches, columns=["Year", "Correlation"]).to_csv(index=False),
-        file_name=f"{ticker}_market_memory_top_analogs.csv",
-        mime="text/csv"
-    )
-
-###############################################################################
 # Footer
 ###############################################################################
 st.caption("© 2025 AD Fund Management LP")
-
