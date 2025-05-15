@@ -1,5 +1,5 @@
 ############################################################
-# Built by AD Fund Management LP. Enhanced for usability
+# Built by AD Fund Management LP. Improved chart/layout
 ############################################################
 
 import datetime as dt
@@ -44,7 +44,6 @@ with st.sidebar:
     )
     st.markdown("---")
     st.subheader("Analysis Controls")
-    # Outlier toggle for monthly returns
     filter_outliers = st.checkbox("Exclude months with abs(return) > X%", value=False)
     outlier_thresh = st.slider("Outlier threshold (%)", 5, 100, 30, help="Hide months with extreme one-month moves", disabled=not filter_outliers)
     st.markdown("---")
@@ -55,7 +54,6 @@ with st.sidebar:
 def seasonal_stats(prices: pd.Series, filter_outliers=False, outlier_thresh=30):
     monthly = prices.resample('ME').last().pct_change().dropna() * 100
     monthly.index = monthly.index.to_period('M')
-    # Optionally filter out months with extreme returns (for robust stats)
     if filter_outliers:
         monthly = monthly[monthly.abs() <= outlier_thresh]
     grouped = monthly.groupby(monthly.index.month)
@@ -82,7 +80,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     y2_bot = max(0.0, np.nanmin(hit)    - 5.0)
     y2_top = min(100.0, np.nanmax(hit)    + 5.0)
 
-    fig, ax1 = plt.subplots(figsize=(8,5))
+    fig, ax1 = plt.subplots(figsize=(12,7))
     ax2 = ax1.twinx()
 
     bar_cols  = ['mediumseagreen' if v>=0 else 'indianred' for v in median]
@@ -98,9 +96,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     ax1.set_ylim(y1_bot, y1_top)
     ax1.grid(axis='y', linestyle='--', color='lightgrey', linewidth=0.5, alpha=0.7, zorder=1)
 
-    # diamonds: black
     ax2.scatter(
-        labels, hit, marker='D', s=80,
+        labels, hit, marker='D', s=90,
         facecolors='black', edgecolors='black', linewidths=0.8,
         zorder=3
     )
@@ -109,10 +106,10 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     ax2.yaxis.set_major_formatter(PercentFormatter())
     ax2.set_ylim(y2_bot, y2_top)
 
-    fig.suptitle(title, fontsize=14, weight='bold')
+    fig.suptitle(title, fontsize=17, weight='bold')
     fig.tight_layout(pad=2)
     buf = io.BytesIO()
-    fig.savefig(buf, format='png')
+    fig.savefig(buf, format='png', bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -159,29 +156,51 @@ try:
     first_year = prices.index[0].year
     last_year = prices.index[-1].year
 
-    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
-    st.image(buf, caption=f"Monthly seasonality for {symbol} ({first_year}–{last_year})", use_column_width=False)
-
-    # Download buttons
-    st.download_button("Download chart as PNG", buf, file_name=f"{symbol}_seasonality_{first_year}_{last_year}.png")
-    st.download_button(
-        "Download monthly stats (CSV)",
-        stats.to_csv(index=True),
-        file_name=f"{symbol}_monthly_stats_{first_year}_{last_year}.csv"
+    # --- Best and Worst months at the top, centered ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    best = stats.loc[stats['median_ret'].idxmax()]
+    worst = stats.loc[stats['median_ret'].idxmin()]
+    st.markdown(
+        f"""
+        <div style='text-align:center'>
+            <span style='font-size:1.18em; font-weight:600; color:#218739'>
+                ⬆️ Best month: {best['label']} ({best['median_ret']:.2f}%)
+            </span>
+            &nbsp;&nbsp;&nbsp;
+            <span style='font-size:1.18em; font-weight:600; color:#c93535'>
+                ⬇️ Worst month: {worst['label']} ({worst['median_ret']:.2f}%)
+            </span>
+        </div>
+        """, unsafe_allow_html=True
     )
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # Stats Table
-    st.markdown("### Monthly Stats Table")
-    df_table = stats[['label','median_ret','hit_rate','count']].copy()
-    df_table.columns = ['Month','Median Return (%)','Hit Rate (%)','Years Observed']
-    st.dataframe(df_table.set_index('Month').style.format("{:.2f}"))
+    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
 
-    # "Most seasonal" months: positive/negative extremes
-    st.markdown("### Most Seasonal Months")
-    best = df_table.loc[df_table['Median Return (%)'].idxmax()]
-    worst = df_table.loc[df_table['Median Return (%)'].idxmin()]
-    st.success(f"**Best month:** {best['Month']} (median return {best['Median Return (%)']:.2f}%)")
-    st.error(f"**Worst month:** {worst['Month']} (median return {worst['Median Return (%)']:.2f}%)")
+    # --- Centered, big chart ---
+    st.markdown("<div style='display: flex; justify-content: center;'>", unsafe_allow_html=True)
+    st.image(buf)
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Download buttons side by side
+    dl_col1, dl_col2 = st.columns([1,1])
+    with dl_col1:
+        st.download_button("Download chart as PNG", buf, file_name=f"{symbol}_seasonality_{first_year}_{last_year}.png")
+    with dl_col2:
+        st.download_button(
+            "Download monthly stats (CSV)",
+            stats.to_csv(index=True),
+            file_name=f"{symbol}_monthly_stats_{first_year}_{last_year}.csv"
+        )
+
+    st.markdown("<hr style='margin-top: 16px; margin-bottom: 8px;'>", unsafe_allow_html=True)
+
+    # Expand/collapse for stats table
+    with st.expander("Show Monthly Stats Table", expanded=False):
+        df_table = stats[['label','median_ret','hit_rate','count']].copy()
+        df_table.columns = ['Month','Median Return (%)','Hit Rate (%)','Years Observed']
+        st.dataframe(df_table.set_index('Month').style.format("{:.2f}"))
 
 except Exception as e:
     st.error(f"Error: {e}")
