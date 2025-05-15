@@ -75,9 +75,7 @@ for name, ticker in SECTOR_ETFS.items():
         perf[name]["YTD"] = np.nan
 perf_df = pd.DataFrame(perf).T[["1W", "1M", "3M", "YTD"]].round(2)
 
-# ====================
 # Top Section: Interactive Charts
-# ====================
 col1, col2 = st.columns([1.25, 1.0])
 
 # 1. Sector Relative Strength (Single select, Plotly)
@@ -142,9 +140,7 @@ with col2:
     )
     st.plotly_chart(figq, use_container_width=True)
 
-# ======================
 # Bottom Section: Heatmaps & Breadth
-# ======================
 st.markdown("Sector Performance Heatmap (%)")
 st.dataframe(
     perf_df.style.background_gradient(cmap="RdYlGn", axis=0).format("{:+.2f}%"),
