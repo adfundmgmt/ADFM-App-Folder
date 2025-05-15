@@ -1,7 +1,3 @@
-############################################################
-# Built by AD Fund Management LP. Improved chart/layout
-############################################################
-
 import datetime as dt
 import io
 import warnings
@@ -36,20 +32,22 @@ st.title("Monthly Seasonality Explorer")
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        "Explore the seasonal patterns behind any stock, index, or commodity:\n\n"
-        "- **Broad Coverage**: Pulls data from Yahoo Finance, with FRED fallback for the S&P 500, Dow, and Nasdaq (pre-1950).\n"
-        "- **Clean Metrics**: Median monthly returns + hit rates = real pattern discovery.\n"
-        "- **At-a-Glance Insight**: Green bars = positive, red = negative, black diamonds = hit rates.\n"
-        "- **Customizable Scope**: Choose ticker, start/end year, filter outlier months if desired."
+        "Explore the seasonal patterns behind any stock, index, or commodity.\n\n"
+        "- **Broad Coverage**: Yahoo & FRED (for S&P 500, Dow, Nasdaq pre-1950)\n"
+        "- **Clean Metrics**: Median monthly returns + hit rates\n"
+        "- **Green bars** = positive, **red** = negative, **black diamonds** = hit rates."
     )
     st.markdown("---")
     st.subheader("Analysis Controls")
     filter_outliers = st.checkbox("Exclude months with abs(return) > X%", value=False)
-    outlier_thresh = st.slider("Outlier threshold (%)", 5, 100, 30, help="Hide months with extreme one-month moves", disabled=not filter_outliers)
+    outlier_thresh = st.slider("Outlier threshold (%)", 5, 100, 30, disabled=not filter_outliers)
     st.markdown("---")
+    # User-chosen width: show as px or inches
+    chart_width = st.slider("Chart width (pixels)", min_value=320, max_value=1200, value=900, step=40,
+                            help="Adjust for your screen or device.")
+    chart_height = st.slider("Chart height (pixels)", min_value=250, max_value=800, value=520, step=10,
+                             help="Taller charts = more readable labels")
     st.markdown("Crafted by **AD Fund Management LP**")
-
-# ── Helper Functions ─────────────────────────────────────
 
 def seasonal_stats(prices: pd.Series, filter_outliers=False, outlier_thresh=30):
     monthly = prices.resample('ME').last().pct_change().dropna() * 100
@@ -69,7 +67,12 @@ def seasonal_stats(prices: pd.Series, filter_outliers=False, outlier_thresh=30):
     stats['label']      = MONTH_LABELS
     return stats
 
-def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
+def plot_seasonality(stats: pd.DataFrame, title: str, width_px=900, height_px=520) -> io.BytesIO:
+    # Convert pixels to inches (DPI=100 for best compatibility)
+    dpi = 100
+    fig_w = width_px / dpi
+    fig_h = height_px / dpi
+
     plot_df = stats.dropna(subset=['median_ret','hit_rate'], how='all')
     labels = plot_df['label'].tolist()
     median = plot_df['median_ret'].to_numpy(dtype=float)
@@ -80,7 +83,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     y2_bot = max(0.0, np.nanmin(hit)    - 5.0)
     y2_top = min(100.0, np.nanmax(hit)    + 5.0)
 
-    fig, ax1 = plt.subplots(figsize=(12,7))
+    fig, ax1 = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
     ax2 = ax1.twinx()
 
     bar_cols  = ['mediumseagreen' if v>=0 else 'indianred' for v in median]
@@ -156,7 +159,6 @@ try:
     first_year = prices.index[0].year
     last_year = prices.index[-1].year
 
-    # --- Best and Worst months at the top, centered ---
     st.markdown("<br>", unsafe_allow_html=True)
     best = stats.loc[stats['median_ret'].idxmax()]
     worst = stats.loc[stats['median_ret'].idxmin()]
@@ -175,15 +177,13 @@ try:
     )
     st.markdown("<br>", unsafe_allow_html=True)
 
-    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
+    buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})", width_px=chart_width, height_px=chart_height)
 
-    # --- Centered, big chart ---
     st.markdown("<div style='display: flex; justify-content: center;'>", unsafe_allow_html=True)
     st.image(buf)
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Download buttons side by side
     dl_col1, dl_col2 = st.columns([1,1])
     with dl_col1:
         st.download_button("Download chart as PNG", buf, file_name=f"{symbol}_seasonality_{first_year}_{last_year}.png")
@@ -196,7 +196,6 @@ try:
 
     st.markdown("<hr style='margin-top: 16px; margin-bottom: 8px;'>", unsafe_allow_html=True)
 
-    # Expand/collapse for stats table
     with st.expander("Show Monthly Stats Table", expanded=False):
         df_table = stats[['label','median_ret','hit_rate','count']].copy()
         df_table.columns = ['Month','Median Return (%)','Hit Rate (%)','Years Observed']
@@ -204,7 +203,5 @@ try:
 
 except Exception as e:
     st.error(f"Error: {e}")
-
-# ── Footnotes ─────────────────────────────────────────────
 
 st.caption("© 2025 AD Fund Management LP")
