@@ -9,7 +9,6 @@ import streamlit as st
 import yfinance as yf
 from matplotlib.ticker import MultipleLocator, PercentFormatter
 
-import matplotlib.pyplot as plt
 plt.style.use("default")
 
 try:
@@ -61,7 +60,8 @@ with st.sidebar:
     )
 
 def seasonal_stats(prices: pd.Series):
-    monthly = prices.resample('ME').last().pct_change().dropna() * 100
+    # Use 'MS' (Month Start) to capture proper monthly returns including January
+    monthly = prices.resample('MS').first().pct_change().dropna() * 100
     monthly.index = monthly.index.to_period('M')
     grouped = monthly.groupby(monthly.index.month)
     median_ret = grouped.median()
@@ -76,7 +76,6 @@ def seasonal_stats(prices: pd.Series):
     return stats
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
-    # Standard aspect ratio, big enough for desktop, still looks good on mobile (Streamlit resizes with use_column_width)
     fig, ax1 = plt.subplots(figsize=(11, 6), dpi=100)
     plot_df = stats.dropna(subset=['median_ret','hit_rate'], how='all')
     labels = plot_df['label'].tolist()
