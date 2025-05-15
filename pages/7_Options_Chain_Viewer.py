@@ -24,11 +24,11 @@ if not ticker:
     st.sidebar.error('Enter a valid ticker symbol')
     st.stop()
 
-# ── Select appropriate cache decorator ─────────────────────────────────────
-cache = getattr(st, "cache_data", st.cache)
+# ── Choose caching decorator ────────────────────────────────────────────────
+cache_data = getattr(st, "cache_data", st.cache)
 
 # ── Fetch & filter valid expiries (only today or future) ───────────────────
-@cache(ttl=3600, show_spinner=False)
+@cache_data(ttl=3600, show_spinner=False)
 def get_valid_expiries(tkr):
     raw = yf.Ticker(tkr).options
     today = datetime.today().date()
@@ -41,24 +41,22 @@ if not expiries:
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
 
-# ── Safe option-chain fetcher ──────────────────────────────────────────────
-@cache(ttl=600, show_spinner=False)
-def get_chain_safe(tkr, exp):
-    return yf.Ticker(tkr).option_chain(exp)
-
+# ── Fetch option chain (no caching) ─────────────────────────────────────────
 try:
-    chain = get_chain_safe(ticker, expiry)
+    ticker_obj = yf.Ticker(ticker)
+    chain = ticker_obj.option_chain(expiry)
+    # guard against empty chain
     if chain.calls.empty and chain.puts.empty:
         raise ValueError("Empty chain")
 except Exception:
     st.warning(
         f"⚠️ Could not load an options chain for {ticker} @ {expiry}. "
-        "It may have just expired or not yet populated. Please pick a different expiry."
+        "Please pick a different expiry."
     )
     st.stop()
 
 # ── Spot price fetcher ─────────────────────────────────────────────────────
-@cache(ttl=600, show_spinner=False)
+@cache_data(ttl=600, show_spinner=False)
 def get_spot(tkr):
     hist = yf.Ticker(tkr).history(period='1d')
     return hist['Close'].iloc[-1] if not hist.empty else None
@@ -70,7 +68,7 @@ if spot is None:
 
 # ── Prepare call & put DataFrames ──────────────────────────────────────────
 calls = chain.calls[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
-puts  = chain.puts [['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
+puts  = chain.puts[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
 calls['type'], puts['type'] = 'Call','Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
@@ -94,10 +92,13 @@ T_arr = np.full_like(K, T, dtype=float)
 
 valid = (σ > 0) & (T_arr > 0)
 d1 = np.zeros_like(K, dtype=float)
-d1[valid] = (np.log(S / K[valid]) + (r + 0.5 * σ[valid]**2) * T_arr[valid]) \
-            / (σ[valid] * np.sqrt(T_arr[valid]))
+d1[valid] = (
+    np.log(S / K[valid]) +
+    (r + 0.5 * σ[valid]**2) * T_arr[valid]
+) / (σ[valid] * np.sqrt(T_arr[valid]))
+
 call_delta = 0.5 * (1 + erf(d1 / np.sqrt(2)))
-combined['delta'] = np.where(combined['type'] == 'Call', call_delta, call_delta - 1)
+combined['delta'] = np.where(combined['type']=='Call', call_delta, call_delta - 1)
 combined.loc[~valid, 'delta'] = np.nan
 
 # ── Summary Metrics ─────────────────────────────────────────────────────────
@@ -117,19 +118,19 @@ st.markdown('---')
 st.subheader('Volume by Strike')
 vol_chart = (
     alt.Chart(combined)
-       .mark_bar()
-       .encode(
-           x=alt.X('strike:Q', title='Strike'),
-           y=alt.Y('volume:Q', title='Volume'),
-           color=alt.Color(
-               'type:N',
-               scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
-               legend=alt.Legend(title='Option Type')
-           ),
-           tooltip=['type','strike','volume','openInterest','delta']
-       )
-       .interactive()
-       .properties(height=400)
+        .mark_bar()
+        .encode(
+            x=alt.X('strike:Q', title='Strike'),
+            y=alt.Y('volume:Q', title='Volume'),
+            color=alt.Color(
+                'type:N',
+                scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
+                legend=alt.Legend(title='Option Type')
+            ),
+            tooltip=['type','strike','volume','openInterest','delta']
+        )
+        .interactive()
+        .properties(height=400)
 )
 st.altair_chart(vol_chart, use_container_width=True)
 
@@ -139,21 +140,21 @@ st.markdown('---')
 st.subheader('Delta Distribution by Option Type')
 delta_hist = (
     alt.Chart(combined)
-       .transform_density(
-           'delta', as_=['delta','density'], groupby=['type']
-       )
-       .mark_area(opacity=0.5)
-       .encode(
-           x=alt.X('delta:Q', title='Delta'),
-           y=alt.Y('density:Q', title='Density'),
-           color=alt.Color(
-               'type:N',
-               scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
-               legend=alt.Legend(title='Option Type')
-           )
-       )
-       .interactive()
-       .properties(height=300)
+        .transform_density(
+            'delta', as_=['delta','density'], groupby=['type']
+        )
+        .mark_area(opacity=0.5)
+        .encode(
+            x=alt.X('delta:Q', title='Delta'),
+            y=alt.Y('density:Q', title='Density'),
+            color=alt.Color(
+                'type:N',
+                scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
+                legend=alt.Legend(title='Option Type')
+            )
+        )
+        .interactive()
+        .properties(height=300)
 )
 st.altair_chart(delta_hist, use_container_width=True)
 
