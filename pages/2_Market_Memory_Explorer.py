@@ -4,10 +4,7 @@ Market Memory Explorer — AD Fund Management LP
 Compare the current year’s cumulative return path for any ticker with the
 most-correlated historical years.
 
-**Filters applied to analogs:**
-- Only include analogs where the final annual return is between -95% and +300%.
-- Exclude analogs with any single-day absolute return >= 25%.
-- Metrics and chart are computed using only these "clean" analogs.
+Filters for analogs are now fully user-adjustable in the sidebar!
 """
 
 import datetime as dt
@@ -26,11 +23,6 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 START_YEAR = 1980
 TRADING_DAYS_FULL_YEAR = 253
 
-# Filters for analog inclusion
-MIN_VALID_RETURN = -0.95   # -95%
-MAX_VALID_RETURN = 3.0     # +300%
-MAX_DAY_JUMP = 0.25        # 25%
-
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
 ###############################################################################
@@ -45,6 +37,44 @@ if LOGO_PATH.exists():
 ###############################################################################
 st.title("Market Memory Explorer")
 st.subheader("Compare the current year's return path with history")
+
+###############################################################################
+# Sidebar: About, Filters, Analogs, Download
+###############################################################################
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        f"""
+        Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
+
+        - **Black = this year**
+        - **Dashed = top-correlated analog years**
+        - **Legend shows correlation coefficients (ρ)**
+
+        ---
+        1. Enter a ticker (e.g. `^GSPC`, `^IXIC`, `AAPL`, `TSLA`)
+        2. Adjust analog/filter settings below.
+        3. Chart + metrics update in real time.
+
+        _Built by AD Fund Management LP_
+        """
+    )
+    st.markdown("---")
+
+    st.subheader("Analog Filter Settings")
+    min_return_sidebar, max_return_sidebar = st.slider(
+        "Allowed Total Annual Return (%)",
+        min_value=-100, max_value=1000, value=(-95, 300), step=1,
+        help="Exclude analogs with final year returns outside this range."
+    )
+    max_jump_sidebar = st.slider(
+        "Allowed Max Daily Jump (%)",
+        min_value=5, max_value=100, value=25, step=1,
+        help="Exclude analogs where any single day move exceeds this value."
+    )
+    st.caption(f"Current filters: return in [{min_return_sidebar}%, {max_return_sidebar}%], daily jump ≤ {max_jump_sidebar}%.")
+
+    st.markdown("---")
 
 ###############################################################################
 # Input controls (single row, clean)
@@ -137,6 +167,10 @@ valid_top_matches = []
 analog_returns = []
 excluded_analogs = []
 
+MIN_VALID_RETURN = min_return_sidebar / 100.0   # sidebar is in %, logic is float
+MAX_VALID_RETURN = max_return_sidebar / 100.0
+MAX_DAY_JUMP = max_jump_sidebar / 100.0
+
 for yr, rho in top_matches:
     analog = ytd_df[yr].dropna()
     if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
@@ -151,8 +185,8 @@ for yr, rho in top_matches:
 if excluded_analogs:
     st.info(
         f"{len(excluded_analogs)} analog(s) excluded due to abnormal total return "
-        f"(outside [{MIN_VALID_RETURN:.0%}, {MAX_VALID_RETURN:.0%}]) or "
-        f"single-day return over {MAX_DAY_JUMP:.0%}."
+        f"(outside [{min_return_sidebar}%, {max_return_sidebar}%]) or "
+        f"single-day return over {max_jump_sidebar}%."
     )
 
 ###############################################################################
@@ -198,34 +232,9 @@ with metrics_col3:
 st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html=True)
 
 ###############################################################################
-# Sidebar: About, Analogs, Download
+# Sidebar: Analogs, Download
 ###############################################################################
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        f"""
-        Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
-
-        - **Black = this year**
-        - **Dashed = top-correlated analog years**
-        - **Legend shows correlation coefficients (ρ)**
-
-        ---
-        1. Enter a ticker (e.g. `^GSPC`, `^IXIC`, `AAPL`, `TSLA`)
-        2. Adjust analog settings above.
-        3. Chart + metrics update in real time.
-
-        <span style='font-size:0.95em;color:#333;'><b>Filters applied to analogs:</b>
-        <ul>
-        <li>Final return in [-95%, +300%]</li>
-        <li>No single-day jump &ge; 25%</li>
-        </ul>
-        </span>
-        _Built by AD Fund Management LP_
-        """,
-        unsafe_allow_html=True
-    )
-    st.markdown("---")
     # Analogs card (only show valid analogs!)
     if valid_top_matches:
         st.markdown(
