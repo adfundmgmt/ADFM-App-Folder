@@ -1,118 +1,148 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 import numpy as np
+import yfinance as yf
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# --- Sector ETFs and tickers
+# --- Sector ETF mapping
 SECTOR_ETFS = {
-    'S&P 500': 'SPY',
-    'Technology': 'XLK',
-    'Health Care': 'XLV',
-    'Financials': 'XLF',
-    'Consumer Discretionary': 'XLY',
-    'Industrials': 'XLI',
-    'Consumer Staples': 'XLP',
-    'Energy': 'XLE',
-    'Materials': 'XLB',
-    'Utilities': 'XLU',
-    'Real Estate': 'XLRE',
-    'Communication Services': 'XLC',
+    "S&P 500": "SPY",
+    "Technology": "XLK",
+    "Health Care": "XLV",
+    "Financials": "XLF",
+    "Consumer Discretionary": "XLY",
+    "Industrials": "XLI",
+    "Consumer Staples": "XLP",
+    "Energy": "XLE",
+    "Materials": "XLB",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
 }
 
-st.set_page_config(page_title="Sector Breadth & Rotation", layout="wide")
+# --- Page Setup
+st.set_page_config("S&P 500 Sector Breadth & Rotation", layout="wide")
 st.title("📊 S&P 500 Sector Breadth & Rotation Monitor")
-st.markdown(
-    "Tracks sector leadership, momentum, and internal market breadth using free Yahoo Finance data. "
-    "Helps you spot turning points, regime shifts, and emerging sector trends—no paywalls or data headaches."
-)
+st.caption("Built by AD Fund Management LP. All data via Yahoo Finance. For informational use only.")
 
-# --- Inputs
+# --- Sidebar
 with st.sidebar:
-    st.header("Analysis Window")
-    lookback = st.slider("Lookback (days)", 60, 365, 180, 10)
-    show_ratio = st.checkbox("Show Sector/SPY Relative Strength", value=True)
-    st.caption("Powered by Yahoo Finance. All data is delayed.")
+    st.header("How to Use This Tool")
+    st.markdown(
+        """
+        - **Breadth Table:** % of sector/market above key moving averages (20/50/200-day).
+        - **Performance Heatmap:** Recent returns for all sectors.
+        - **Relative Strength Chart:** Plot any sector vs. SPY to see leadership trends.
+        - **Sector Rotation Quadrant:** Visualize which sectors are leading/lagging (3M vs 1W return).
+        ---
+        """
+    )
+    lookback = st.slider("Lookback window (days)", 90, 365, 180, 15)
+    st.markdown("Data is end-of-day. ETF proxies are used for sectors (e.g., XLK, XLV).")
 
-# --- Fetch prices
+# --- Data Download & Cleaning
 @st.cache_data(ttl=21600)
-def fetch_prices(tickers, period="1y"):
-    data = yf.download(tickers, period=period, auto_adjust=True, progress=False)["Close"]
-    if isinstance(data, pd.Series):  # one ticker
-        data = data.to_frame()
-    return data.ffill().bfill()
+def fetch_prices(tickers, period="max"):
+    px = yf.download(tickers, period=period, auto_adjust=True, progress=False)["Close"]
+    if isinstance(px, pd.Series):  # just one ticker
+        px = px.to_frame()
+    px = px.ffill().bfill()
+    return px
 
+# Pull prices
 tickers = list(SECTOR_ETFS.values())
 prices = fetch_prices(tickers, period="max")
-prices = prices[-lookback:]
+prices = prices.iloc[-lookback:]
 
-# --- Breadth: % above MA (20D, 50D, 200D)
-def pct_above_ma(s, window):
-    return (s > s.rolling(window).mean()).mean() * 100
+# --- 1. Sector Breadth Table (% Above MA)
+def pct_above_ma(series, window):
+    ma = series.rolling(window).mean()
+    return (series > ma).mean() * 100
 
 ma_windows = [20, 50, 200]
-breadth_stats = {
-    name: {
-        f"%>{w}D": pct_above_ma(prices[ticker], w)
-        for w in ma_windows
+breadth = {}
+for name, ticker in SECTOR_ETFS.items():
+    breadth[name] = {
+        f"%>{w}D": pct_above_ma(prices[ticker], w) for w in ma_windows
     }
-    for name, ticker in SECTOR_ETFS.items()
-}
 
-breadth_df = pd.DataFrame(breadth_stats).T
-breadth_df = breadth_df[[f"%>{w}D" for w in ma_windows]]
-st.subheader("Sector Breadth: % Above Moving Average")
-st.dataframe(breadth_df.style.format("{:.1f}%"))
+breadth_df = pd.DataFrame(breadth).T[[f"%>{w}D" for w in ma_windows]].round(1)
+st.markdown("### 🟩 Breadth Table: % Above Moving Averages")
+st.dataframe(
+    breadth_df.style.format("{:.1f}%")
+        .background_gradient(cmap="YlGn", axis=None),
+    use_container_width=True,
+)
 
-# --- Performance Heatmap
-perf_windows = {
-    "1W": 5,
-    "1M": 21,
-    "3M": 63,
-    "YTD": (prices.index[0] - pd.offsets.BDay(prices.index[0].weekday())).days if prices.index[0].year == datetime.now().year else None,
-}
+# --- 2. Sector Performance Heatmap
+def perf_calc(s, d):
+    if len(s) < d:
+        return np.nan
+    return (s.iloc[-1] / s.iloc[-d] - 1) * 100
+
+def ytd_perf(s):
+    ytd_idx = s.index.get_loc(s[s.index.year == datetime.now().year].index[0])
+    return (s.iloc[-1] / s.iloc[ytd_idx] - 1) * 100
+
+perf_windows = [("1W", 5), ("1M", 21), ("3M", 63)]
 perf = {}
 for name, ticker in SECTOR_ETFS.items():
-    perf[name] = {}
-    for label, days in perf_windows.items():
-        if days is not None and len(prices[ticker]) > days:
-            p = (prices[ticker].iloc[-1] / prices[ticker].iloc[-days] - 1) * 100
-            perf[name][label] = p
-        elif label == "YTD":
-            ytd = (prices[ticker].iloc[-1] / prices[ticker][prices[ticker].index.year == datetime.now().year].iloc[0] - 1) * 100
-            perf[name][label] = ytd
-        else:
-            perf[name][label] = np.nan
-perf_df = pd.DataFrame(perf).T[["1W", "1M", "3M", "YTD"]]
-st.subheader("Sector Performance Heatmap (%)")
-st.dataframe(perf_df.style.background_gradient(cmap="RdYlGn", axis=0).format("{:+.2f}%"))
+    s = prices[ticker]
+    perf[name] = {label: perf_calc(s, days) for label, days in perf_windows}
+    # Add YTD
+    try:
+        perf[name]["YTD"] = ytd_perf(s)
+    except Exception:
+        perf[name]["YTD"] = np.nan
 
-# --- Relative Strength Plot
-if show_ratio:
-    st.subheader("Sector Relative Strength vs. SPY")
-    sector = st.selectbox("Select sector for relative chart:", [k for k in SECTOR_ETFS if k != "S&P 500"])
-    ratio = prices[SECTOR_ETFS[sector]] / prices["SPY"]
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(ratio.index, ratio, color="purple", lw=2)
-    ax.set_title(f"{sector} / SPY Ratio")
-    ax.set_ylabel("Relative Strength")
-    ax.grid(alpha=0.2)
-    st.pyplot(fig)
+perf_df = pd.DataFrame(perf).T[["1W", "1M", "3M", "YTD"]].round(2)
+st.markdown("### 🔥 Sector Performance Heatmap")
+st.dataframe(
+    perf_df.style.background_gradient(
+        cmap="RdYlGn", axis=0
+    ).format("{:+.2f}%"),
+    use_container_width=True,
+)
 
-# --- Mini-rotation chart
-st.subheader("Sector Rotation Plot (3M vs 1W Returns)")
-fig, ax = plt.subplots(figsize=(7, 7))
+# --- 3. Sector Rotation Quadrant (Momentum vs Short-Term)
+st.markdown("### 🔄 Sector Rotation Quadrant")
+fig1, ax1 = plt.subplots(figsize=(7.5, 7))
 x = perf_df["3M"]
 y = perf_df["1W"]
+colors = plt.cm.tab10(np.linspace(0, 1, len(perf_df)))
 for i, name in enumerate(perf_df.index):
-    ax.scatter(x[name], y[name], s=150, label=name)
-    ax.annotate(name, (x[name], y[name]), fontsize=9, ha='center', va='bottom')
-ax.axhline(0, color="gray", ls="--", lw=1)
-ax.axvline(0, color="gray", ls="--", lw=1)
-ax.set_xlabel("3M Return (%)")
-ax.set_ylabel("1W Return (%)")
-ax.set_title("Sector Rotation: Momentum vs Short-term Reversal")
-st.pyplot(fig)
+    ax1.scatter(x[name], y[name], s=170, label=name, color=colors[i])
+    ax1.annotate(name, (x[name], y[name]), fontsize=10, ha='center', va='bottom')
+ax1.axhline(0, color="gray", ls="--", lw=1)
+ax1.axvline(0, color="gray", ls="--", lw=1)
+ax1.set_xlabel("3M Return (%)", fontsize=12)
+ax1.set_ylabel("1W Return (%)", fontsize=12)
+ax1.set_title("Sector Rotation (Momentum vs Short-term)", fontsize=14, weight="bold")
+plt.tight_layout()
+st.pyplot(fig1)
 
-st.caption("Built by AD Fund Management LP — All data via Yahoo Finance. Use for informational purposes only.")
+# --- 4. Relative Strength Chart (Sector/Market Ratio)
+st.markdown("### 📈 Sector Relative Strength vs. S&P 500")
+sector = st.selectbox("Select a sector to chart relative to S&P 500 (SPY):", [k for k in SECTOR_ETFS if k != "S&P 500"])
+ratio = prices[SECTOR_ETFS[sector]] / prices["SPY"]
+fig2, ax2 = plt.subplots(figsize=(11, 4))
+ax2.plot(ratio.index, ratio, color="#7d3c98", lw=2.4)
+ax2.set_title(f"{sector} / SPY Ratio (Relative Strength)", fontsize=14, weight="bold")
+ax2.set_ylabel("Ratio")
+ax2.grid(alpha=0.25)
+st.pyplot(fig2)
+
+# --- 5. Mini Trend Panel: Best/Worst Sectors (YTD)
+best = perf_df["YTD"].idxmax()
+worst = perf_df["YTD"].idxmin()
+st.markdown(
+    f"<div style='margin-top:1em;font-size:1.1em'>"
+    f"<b>🟢 Best YTD Sector:</b> <span style='color:green'>{best} ({perf_df.loc[best, 'YTD']:+.2f}%)</span><br>"
+    f"<b>🔴 Worst YTD Sector:</b> <span style='color:red'>{worst} ({perf_df.loc[worst, 'YTD']:+.2f}%)</span>"
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+st.caption("Data: Yahoo Finance. Calculations: AD Fund Management LP. All rights reserved.")
+
