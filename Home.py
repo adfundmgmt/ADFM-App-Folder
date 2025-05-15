@@ -19,8 +19,7 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Market Memory Explorer**  
   Compares how this year is tracking versus past years with similar return paths. Useful for putting the current tape in historical context and building intuition around where we might go next.
 
-- **Real Yield Dashboard**  
-  Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
+- **Sector Breadth Dashboard**
 
 - **Ticker Correlation Dashboard**  
   Offers an at-a-glance view of historical and rolling correlations to streamline relative-value analysis, diversification checks, and position sizing.
@@ -36,6 +35,10 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 
 - **Breakout Scanner**  
   Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.
+
+- **Real Yield Dashboard**  
+  Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
+
 
 ---
 
