@@ -11,17 +11,17 @@ st.title("S&P 500 Sector Breadth & Rotation Monitor")
 
 # Sector tickers and names in alphabetical order
 SECTORS = {
-    "XLB": "Materials",
-    "XLC": "Communication Services",
-    "XLE": "Energy",
-    "XLF": "Financials",
-    "XLI": "Industrials",
-    "XLK": "Technology",
-    "XLP": "Consumer Staples",
-    "XLRE": "Real Estate",
-    "XLV": "Health Care",
-    "XLY": "Consumer Discretionary",
-    "XLU": "Utilities",
+    "Communication Services": "XLC",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Energy": "XLE",
+    "Financials": "XLF",
+    "Health Care": "XLV",
+    "Industrials": "XLI",
+    "Materials": "XLB",
+    "Real Estate": "XLRE",
+    "Technology": "XLK",
+    "Utilities": "XLU",
 }
 
 # Timeframe for data: last 12 months
