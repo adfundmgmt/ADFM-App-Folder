@@ -3,9 +3,8 @@ import yfinance as yf
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
-import time
 
-# ---- S&P 500 Sector ETFs ----
+# ---- Sector ETF Mapping ----
 SECTOR_ETFS = {
     "Technology": "XLK",
     "Health Care": "XLV",
@@ -28,137 +27,94 @@ st.caption("Built by AD Fund Management LP. Data: Yahoo Finance. For information
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
-- **Sector Relative Strength vs. S&P 500:** Plot the ratio of your chosen sector to the S&P 500.
-- **Sector Rotation Quadrant:** 1M vs 3M returns for all sectors — instantly see leaders/laggards.
-- **Breadth Table:** % of sectors above their 20, 50, 100, and 200-day moving averages.
-    """)
+Sector Relative Strength vs. S&P 500: Ratio of each sector ETF to SPY.
+Sector Rotation Quadrant: 1M vs 3M returns for all sectors.
+Breadth Table: % above 20/50/100/200-day MAs.
+""")
 
+# ---- User selection ----
 sector_list = list(SECTOR_ETFS.keys())
 selected_sector = st.selectbox("Select sector to compare with S&P 500:", sector_list, index=0)
 
-# ---- Fetch price data for all sectors + SPY (last 12 months) ----
+# ---- Fetch price data (12 months) ----
 end_date = datetime.today()
-start_date = end_date - timedelta(days=365)
+start_date = end_date - timedelta(days=366)
+tickers = list(SECTOR_ETFS.values()) + [SPY_TICKER]
 
-def test_yahoo():
-    """Test if Yahoo is up and returning data."""
-    try:
-        df = yf.download("SPY", period="7d", progress=False, auto_adjust=True)
-        return not df.empty
-    except Exception:
-        return False
-
-@st.cache_data(ttl=1800)
-def fetch_all_sector_prices():
-    tickers = list(SECTOR_ETFS.values()) + [SPY_TICKER]
-    price_data = {}
-    failed = []
+@st.cache_data(ttl=3600)
+def fetch_sector_prices():
+    data, failed = {}, []
     for t in tickers:
         try:
             df = yf.download(t, start=start_date, end=end_date, progress=False, auto_adjust=True)
-            if not df.empty and "Close" in df.columns:
-                series = df["Close"].dropna()
-                if isinstance(series, pd.Series) and len(series) > 10 and isinstance(series.index, pd.DatetimeIndex):
-                    price_data[t] = series
-                else:
-                    failed.append(t)
+            if "Close" in df and not df["Close"].empty:
+                data[t] = df["Close"].dropna()
             else:
                 failed.append(t)
         except Exception:
             failed.append(t)
-    # Only build the DataFrame from valid series
-    if not price_data:
+    if not data:
         return None, failed
-    return pd.DataFrame(price_data), failed
+    df = pd.DataFrame(data)
+    df = df.dropna(axis=0, how='any')
+    return df, failed
 
-# ---- Main fetch logic ----
-if "reload" not in st.session_state:
-    st.session_state.reload = 0
-
-if st.button("Reload Data (force refresh)", key="reload_btn"):
-    st.session_state.reload += 1
-
-# Test Yahoo availability
-if not test_yahoo():
-    st.error("Yahoo Finance appears to be down or blocking data. Please try again later.")
+prices, failed = fetch_sector_prices()
+if not prices or prices.empty or SPY_TICKER not in prices.columns:
+    st.error("No sector or SPY data found. Check Yahoo Finance or your internet connection.")
     st.stop()
-
-with st.spinner("Running fetch_all_sector_prices()."):
-    for attempt in range(2):  # Try twice, sleep in between if first fails
-        prices, failed = fetch_all_sector_prices()
-        if prices is not None and not prices.empty:
-            break
-        time.sleep(2)
-    else:
-        st.error("No sector or SPY data found. Check Yahoo Finance or your internet connection.")
-        st.stop()
-
 if failed:
-    st.sidebar.warning(f"Could not fetch data for: {', '.join(failed)}")
+    st.sidebar.warning("Missing data for: " + ", ".join(failed))
 
-if SECTOR_ETFS[selected_sector] not in prices or SPY_TICKER not in prices:
-    st.error("Could not fetch data for selected sector or SPY.")
-    st.stop()
+# ---- 1. Sector Relative Strength vs SPY ----
+if SECTOR_ETFS[selected_sector] in prices.columns:
+    rel = prices[SECTOR_ETFS[selected_sector]] / prices[SPY_TICKER]
+    st.subheader(f"{selected_sector} Relative Strength vs SPY")
+    fig1 = px.line(rel, labels={"value": "Ratio", "index": "Date"})
+    fig1.update_traces(line_color="#d95f02")
+    fig1.update_layout(showlegend=False, height=340, margin=dict(l=30, r=30, t=40, b=30))
+    st.plotly_chart(fig1, use_container_width=True)
+else:
+    st.warning(f"No data for {selected_sector}")
 
-# ---- 1. Sector Relative Strength (Selected) ----
-rel_strength = prices[SECTOR_ETFS[selected_sector]] / prices[SPY_TICKER]
-fig_rel = px.line(
-    rel_strength,
-    title=f"{selected_sector} / S&P 500 (SPY) – 12M Relative Strength",
-    labels={"value": "Sector / SPY (Ratio)", "index": "Date"},
-    height=400,
-)
-fig_rel.update_traces(line_color="orange", name=f"{selected_sector}/SPY")
-fig_rel.update_layout(title_x=0.01, showlegend=False, margin=dict(l=40, r=40, t=60, b=40))
-st.subheader(f"Sector Relative Strength vs S&P 500 ({selected_sector})")
-st.plotly_chart(fig_rel, use_container_width=True)
+# ---- 2. Sector Rotation Quadrant (1M vs 3M returns) ----
+try:
+    returns_1m = prices.pct_change(21).iloc[-1]
+    returns_3m = prices.pct_change(63).iloc[-1]
+    rotation_df = pd.DataFrame({
+        "Sector": [k for k,v in SECTOR_ETFS.items() if v in prices.columns],
+        "1M Return": [returns_1m[v] for v in SECTOR_ETFS.values() if v in prices.columns],
+        "3M Return": [returns_3m[v] for v in SECTOR_ETFS.values() if v in prices.columns],
+    })
+    fig2 = px.scatter(rotation_df, x="1M Return", y="3M Return", text="Sector",
+                      color=(rotation_df["Sector"] == selected_sector),
+                      color_discrete_map={True: "#d95f02", False: "#7570b3"},
+                      labels={"1M Return":"1M", "3M Return":"3M"},
+                      height=340)
+    fig2.update_layout(showlegend=False, margin=dict(l=30, r=30, t=40, b=30),
+                      title="Sector Rotation Quadrant: 1M vs 3M Returns")
+    st.subheader("Sector Rotation Quadrant (1M vs 3M Returns)")
+    st.plotly_chart(fig2, use_container_width=True)
+except Exception:
+    st.warning("Could not compute sector rotation quadrant.")
 
-# ---- 2. Sector Rotation Quadrant (1M vs 3M return) ----
-returns_1m = prices.pct_change(21).iloc[-1]  # ~21 trading days = 1M
-returns_3m = prices.pct_change(63).iloc[-1]  # ~63 trading days = 3M
-rotation_df = pd.DataFrame({
-    "Sector": [s for s, t in SECTOR_ETFS.items() if t in prices],
-    "1M Return": [returns_1m[SECTOR_ETFS[s]] for s in SECTOR_ETFS if SECTOR_ETFS[s] in prices],
-    "3M Return": [returns_3m[SECTOR_ETFS[s]] for s in SECTOR_ETFS if SECTOR_ETFS[s] in prices],
-})
-highlight_color = "#ffa600"
-rotation_fig = px.scatter(
-    rotation_df,
-    x="1M Return",
-    y="3M Return",
-    text="Sector",
-    title="Sector Rotation Quadrant: 1M vs 3M Returns",
-    labels={"1M Return":"1 Month Return", "3M Return":"3 Month Return"},
-    height=400,
-)
-rotation_fig.update_traces(
-    marker=dict(size=13, color=[highlight_color if s == selected_sector else "#636efa" for s in rotation_df["Sector"]]),
-    selector=dict(mode='markers+text')
-)
-rotation_fig.update_layout(title_x=0.01, margin=dict(l=40, r=40, t=60, b=40))
-st.subheader("Sector Rotation Quadrant (1M vs 3M Returns)")
-st.plotly_chart(rotation_fig, use_container_width=True)
+# ---- 3. Breadth Table ----
+try:
+    def is_above(s, d): return "✅" if s.iloc[-1] > s.rolling(d).mean().iloc[-1] else ""
+    breadth = {}
+    for k, v in SECTOR_ETFS.items():
+        if v in prices.columns:
+            s = prices[v]
+            breadth[k] = {
+                "Above 20D": is_above(s, 20),
+                "Above 50D": is_above(s, 50),
+                "Above 100D": is_above(s, 100),
+                "Above 200D": is_above(s, 200),
+            }
+    breadth_df = pd.DataFrame(breadth).T
+    st.subheader("% Above 20, 50, 100, 200-Day Moving Averages")
+    st.dataframe(breadth_df, use_container_width=True)
+except Exception:
+    st.warning("Could not compute breadth table.")
 
-# ---- 3. Sector Breadth Table ----
-breadth = {}
-for s, t in SECTOR_ETFS.items():
-    if t in prices:
-        close = prices[t]
-        breadth[s] = {
-            "Above 20D": "✅" if close.iloc[-1] > close.rolling(20).mean().iloc[-1] else "",
-            "Above 50D": "✅" if close.iloc[-1] > close.rolling(50).mean().iloc[-1] else "",
-            "Above 100D": "✅" if close.iloc[-1] > close.rolling(100).mean().iloc[-1] else "",
-            "Above 200D": "✅" if close.iloc[-1] > close.rolling(200).mean().iloc[-1] else "",
-        }
-breadth_df = pd.DataFrame(breadth).T
-
-st.subheader("% of Sectors Above 20, 50, 100, 200-Day MAs")
-st.dataframe(
-    breadth_df,
-    use_container_width=True,
-    hide_index=False,
-    height=420,
-)
-
-# Footer
 st.caption("© 2025 AD Fund Management LP")
