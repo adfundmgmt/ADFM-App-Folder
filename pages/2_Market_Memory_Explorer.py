@@ -194,7 +194,7 @@ with metrics_col1:
 with metrics_col2:
     if best_analog_year is not None:
         st.metric(
-            f"Best Analog ({best_analog_year})",
+            f"Best Analog YTD ({best_analog_year})",
             f"{best_analog_ytd_return:.2%}",
             help=f"YTD return for {best_analog_year} (ρ={best_rho:.2f})"
         )
