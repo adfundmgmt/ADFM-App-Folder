@@ -79,7 +79,7 @@ def seasonal_stats(prices: pd.Series):
     stats = stats.reindex(idx)
     return stats
 
-def average_cumulative_path(prices, window=10):
+def median_cumulative_path(prices, window=10):
     if isinstance(prices, pd.DataFrame):
         prices = prices.iloc[:, 0]
     df = prices.to_frame('Close').copy()
@@ -96,16 +96,19 @@ def average_cumulative_path(prices, window=10):
     df['Return'] = df['Close'].pct_change()
     df['CumReturn'] = df.groupby('Year')['Return'].transform(lambda x: (1 + x).cumprod() - 1)
 
-    # Group by day-of-year across all years (1-365 only)
-    avg_cum = df.groupby('DayOfYear')['CumReturn'].mean() * 100
+    # Pivot: rows=DayOfYear (1-365), columns=Year, values=CumReturn
+    pivot = df.pivot(index='DayOfYear', columns='Year', values='CumReturn')
 
-    # Smooth with rolling mean
-    avg_cum = avg_cum.rolling(window, min_periods=1, center=True).mean()
+    # Median across years for each day
+    med_cum = pivot.median(axis=1) * 100
+
+    # Smooth with rolling median (not mean)
+    med_cum = med_cum.rolling(window, min_periods=1, center=True).median()
 
     # For plotting: map day-of-year to a dummy year for proper month labeling (use 2021, not leap)
     dummy_dates = pd.date_range('2021-01-01', '2021-12-31')
     day_map = {d.dayofyear: d for d in dummy_dates}
-    avg_cum.index = [day_map[doy] for doy in avg_cum.index]
+    med_cum.index = [day_map[doy] for doy in med_cum.index]
 
     # Compute where the current year stops in dummy calendar
     today = pd.Timestamp.now(tz='America/New_York')
@@ -116,27 +119,27 @@ def average_cumulative_path(prices, window=10):
         current_doy = 365
     last_date_in_current_year = pd.Timestamp(year=2021, month=today.month, day=today.day)
 
-    return avg_cum, last_date_in_current_year
+    return med_cum, last_date_in_current_year
 
-def plot_avg_cumulative_path(avg_cum, last_date_in_current_year, symbol, years):
+def plot_median_cumulative_path(med_cum, last_date_in_current_year, symbol, years):
     fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
     # Before and after split for color coding
-    before = avg_cum.index <= last_date_in_current_year
-    after = avg_cum.index > last_date_in_current_year
+    before = med_cum.index <= last_date_in_current_year
+    after = med_cum.index > last_date_in_current_year
 
     ax.plot(
-        np.array(avg_cum.index)[before], np.array(avg_cum.values)[before],
+        np.array(med_cum.index)[before], np.array(med_cum.values)[before],
         lw=2, color='royalblue', label='Up to today (current year included)'
     )
     ax.plot(
-        np.array(avg_cum.index)[after], np.array(avg_cum.values)[after],
+        np.array(med_cum.index)[after], np.array(med_cum.values)[after],
         lw=2, color='gray', linestyle='--', label='Past years only'
     )
 
     # Today marker
     today_dummy = last_date_in_current_year
-    if today_dummy in avg_cum.index:
-        yval = avg_cum.loc[today_dummy]
+    if today_dummy in med_cum.index:
+        yval = med_cum.loc[today_dummy]
         ax.scatter(today_dummy, yval, color='black', s=100, marker='v', zorder=10)
         ax.text(today_dummy, yval + 0.4, "We are\nhere", ha='center', va='bottom', fontsize=11, color='gray', weight='bold')
 
@@ -144,9 +147,9 @@ def plot_avg_cumulative_path(avg_cum, last_date_in_current_year, symbol, years):
     months = pd.date_range('2021-01-01', '2021-12-31', freq='MS')
     ax.set_xticks(months)
     ax.set_xticklabels([d.strftime('%b') for d in months], fontsize=12)
-    ax.set_xlim(avg_cum.index[0], avg_cum.index[-1])
-    ax.set_ylabel('Average YTD Return (%)', fontsize=12)
-    ax.set_title(f"{symbol.upper()} Index Seasonality (Smoothed) ({years})", fontsize=15, weight='bold')
+    ax.set_xlim(med_cum.index[0], med_cum.index[-1])
+    ax.set_ylabel('Median YTD Return (%)', fontsize=12)
+    ax.set_title(f"{symbol.upper()} Index Seasonality (Smoothed, Median) ({years})", fontsize=15, weight='bold')
     ax.axhline(0, color='black', linewidth=1, linestyle='-')
     ax.grid(axis='y', linestyle='--', color='lightgrey', linewidth=0.6)
     ax.legend()
@@ -212,7 +215,7 @@ with col3:
         min_value=int(start_year), max_value=dt.datetime.today().year
     )
 
-smooth_window = st.slider("Smoothing window (days)", min_value=3, max_value=31, value=10, step=2)
+smooth_window = st.slider("Smoothing window (days, median)", min_value=3, max_value=31, value=10, step=2)
 
 start_date = f"{int(start_year)}-01-01"
 end_date = f"{int(end_year)}-12-31"
@@ -262,14 +265,14 @@ try:
     st.image(buf, use_container_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- Add smoothed daily seasonality line chart below ---
+    # --- Add smoothed median daily seasonality line chart below ---
     try:
-        avg_cum, last_date_in_current_year = average_cumulative_path(prices, window=smooth_window)
+        med_cum, last_date_in_current_year = median_cumulative_path(prices, window=smooth_window)
         years_label = f"{first_year}–{last_year}"
-        fig3 = plot_avg_cumulative_path(avg_cum, last_date_in_current_year, symbol, years_label)
+        fig3 = plot_median_cumulative_path(med_cum, last_date_in_current_year, symbol, years_label)
         st.pyplot(fig3, use_container_width=True)
     except Exception as e:
-        st.warning(f"Could not plot average cumulative seasonality: {e}")
+        st.warning(f"Could not plot median cumulative seasonality: {e}")
 
     dl_col1, dl_col2 = st.columns([1, 1])
     with dl_col1:
