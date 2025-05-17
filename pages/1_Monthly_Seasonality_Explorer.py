@@ -60,16 +60,20 @@ with st.sidebar:
     )
 
 def seasonal_stats(prices: pd.Series):
+    # Resample by Month End (standard for seasonality), take last price of each month
     monthly_end = prices.resample('M').last()
     monthly_ret = monthly_end.pct_change().dropna() * 100
 
+    # Convert index to period month
     monthly_ret.index = monthly_ret.index.to_period('M')
+
     grouped = monthly_ret.groupby(monthly_ret.index.month)
 
     median_ret = grouped.median()
     hit_rate = grouped.apply(lambda x: (x > 0).mean() * 100)
     years_observed = grouped.apply(lambda x: x.index.year.nunique())
 
+    # Ensure all months are present, fill missing with NaN (not 0)
     idx = pd.Index(range(1, 13), name='month')
     stats = pd.DataFrame(index=idx)
     stats['median_ret'] = median_ret
@@ -77,84 +81,9 @@ def seasonal_stats(prices: pd.Series):
     stats['years_observed'] = years_observed
     stats['label'] = MONTH_LABELS
     stats = stats.reindex(idx)
+
     return stats
 
-def median_cumulative_path(prices, window=10):
-    if isinstance(prices, pd.DataFrame):
-        prices = prices.iloc[:, 0]
-    df = prices.to_frame('Close').copy()
-    df['Year'] = df.index.year
-    df['Month'] = df.index.month
-    df['Day'] = df.index.day
-    df['DayOfYear'] = df.index.dayofyear
-
-    # Remove leap day (Feb 29)
-    df = df[~((df['Month'] == 2) & (df['Day'] == 29))]
-    df = df[df['DayOfYear'] <= 365]
-
-    # Daily returns and YTD path
-    df['Return'] = df['Close'].pct_change()
-    df['CumReturn'] = df.groupby('Year')['Return'].transform(lambda x: (1 + x).cumprod() - 1)
-
-    # Pivot: rows=DayOfYear (1-365), columns=Year, values=CumReturn
-    pivot = df.pivot(index='DayOfYear', columns='Year', values='CumReturn')
-
-    # Median across years for each day
-    med_cum = pivot.median(axis=1) * 100
-
-    # Smooth with rolling median (not mean)
-    med_cum = med_cum.rolling(window, min_periods=1, center=True).median()
-
-    # For plotting: map day-of-year to a dummy year for proper month labeling (use 2021, not leap)
-    dummy_dates = pd.date_range('2021-01-01', '2021-12-31')
-    day_map = {d.dayofyear: d for d in dummy_dates}
-    med_cum.index = [day_map[doy] for doy in med_cum.index]
-
-    # Compute where the current year stops in dummy calendar
-    today = pd.Timestamp.now(tz='America/New_York')
-    current_doy = today.dayofyear
-    if today.month == 2 and today.day == 29:
-        current_doy -= 1
-    if current_doy > 365:
-        current_doy = 365
-    last_date_in_current_year = pd.Timestamp(year=2021, month=today.month, day=today.day)
-
-    return med_cum, last_date_in_current_year
-
-def plot_median_cumulative_path(med_cum, last_date_in_current_year, symbol, years):
-    fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
-    # Before and after split for color coding
-    before = med_cum.index <= last_date_in_current_year
-    after = med_cum.index > last_date_in_current_year
-
-    ax.plot(
-        np.array(med_cum.index)[before], np.array(med_cum.values)[before],
-        lw=2, color='royalblue', label='Up to today (current year included)'
-    )
-    ax.plot(
-        np.array(med_cum.index)[after], np.array(med_cum.values)[after],
-        lw=2, color='gray', linestyle='--', label='Past years only'
-    )
-
-    # Today marker
-    today_dummy = last_date_in_current_year
-    if today_dummy in med_cum.index:
-        yval = med_cum.loc[today_dummy]
-        ax.scatter(today_dummy, yval, color='black', s=100, marker='v', zorder=10)
-        ax.text(today_dummy, yval + 0.4, "We are\nhere", ha='center', va='bottom', fontsize=11, color='gray', weight='bold')
-
-    # Format x-axis: show one label per month, aligned
-    months = pd.date_range('2021-01-01', '2021-12-31', freq='MS')
-    ax.set_xticks(months)
-    ax.set_xticklabels([d.strftime('%b') for d in months], fontsize=12)
-    ax.set_xlim(med_cum.index[0], med_cum.index[-1])
-    ax.set_ylabel('Median YTD Return (%)', fontsize=12)
-    ax.set_title(f"{symbol.upper()} Index Seasonality (Smoothed, Median) ({years})", fontsize=15, weight='bold')
-    ax.axhline(0, color='black', linewidth=1, linestyle='-')
-    ax.grid(axis='y', linestyle='--', color='lightgrey', linewidth=0.6)
-    ax.legend()
-    plt.tight_layout()
-    return fig
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     fig, ax1 = plt.subplots(figsize=(11, 6), dpi=100)
@@ -206,7 +135,7 @@ with col1:
     symbol = st.text_input("Ticker symbol", value="^GSPC")
 with col2:
     start_year = st.number_input(
-        "Start year", value=2010,
+        "Start year", value=2020,
         min_value=1900, max_value=dt.datetime.today().year
     )
 with col3:
@@ -214,8 +143,6 @@ with col3:
         "End year", value=dt.datetime.today().year,
         min_value=int(start_year), max_value=dt.datetime.today().year
     )
-
-smooth_window = st.slider("Smoothing window (days, median)", min_value=3, max_value=31, value=10, step=2)
 
 start_date = f"{int(start_year)}-01-01"
 end_date = f"{int(end_year)}-12-31"
@@ -228,9 +155,9 @@ try:
 
     if pdr and sym_up in FALLBACK_MAP and start_dt.year < 1950:
         fred_tk = FALLBACK_MAP[sym_up]
+        st.info(f"Using FRED fallback: {fred_tk} from {start_date}")
         df_fred = pdr.DataReader(fred_tk, 'fred', start_dt, end_dt)
         prices = df_fred[fred_tk].rename('Close')
-        prices = prices[prices.notnull()]  # clean up missing FRED data
     else:
         df = yf.download(symbol, start=start_date, end=end_date, auto_adjust=True, progress=False)
         if df.empty:
@@ -262,17 +189,9 @@ try:
     st.markdown("<br>", unsafe_allow_html=True)
 
     buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
+
     st.image(buf, use_container_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
-
-    # --- Add smoothed median daily seasonality line chart below ---
-    try:
-        med_cum, last_date_in_current_year = median_cumulative_path(prices, window=smooth_window)
-        years_label = f"{first_year}–{last_year}"
-        fig3 = plot_median_cumulative_path(med_cum, last_date_in_current_year, symbol, years_label)
-        st.pyplot(fig3, use_container_width=True)
-    except Exception as e:
-        st.warning(f"Could not plot median cumulative seasonality: {e}")
 
     dl_col1, dl_col2 = st.columns([1, 1])
     with dl_col1:
