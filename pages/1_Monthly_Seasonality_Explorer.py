@@ -84,7 +84,10 @@ def seasonal_stats(prices: pd.Series):
 
     return stats
 
-def daily_seasonality(prices: pd.Series):
+def daily_seasonality(prices):
+    # Ensure prices is a Series, not a DataFrame
+    if isinstance(prices, pd.DataFrame):
+        prices = prices.iloc[:, 0]
     df = prices.to_frame('Close').copy()
     df['Year'] = df.index.year
     df['DayOfYear'] = df.index.dayofyear
