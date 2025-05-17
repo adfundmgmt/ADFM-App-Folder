@@ -60,20 +60,16 @@ with st.sidebar:
     )
 
 def seasonal_stats(prices: pd.Series):
-    # Resample by Month End (standard for seasonality), take last price of each month
     monthly_end = prices.resample('M').last()
     monthly_ret = monthly_end.pct_change().dropna() * 100
 
-    # Convert index to period month
     monthly_ret.index = monthly_ret.index.to_period('M')
-
     grouped = monthly_ret.groupby(monthly_ret.index.month)
 
     median_ret = grouped.median()
     hit_rate = grouped.apply(lambda x: (x > 0).mean() * 100)
     years_observed = grouped.apply(lambda x: x.index.year.nunique())
 
-    # Ensure all months are present, fill missing with NaN (not 0)
     idx = pd.Index(range(1, 13), name='month')
     stats = pd.DataFrame(index=idx)
     stats['median_ret'] = median_ret
@@ -81,34 +77,53 @@ def seasonal_stats(prices: pd.Series):
     stats['years_observed'] = years_observed
     stats['label'] = MONTH_LABELS
     stats = stats.reindex(idx)
-
     return stats
 
-def daily_seasonality(prices):
-    # Ensure prices is a Series, not a DataFrame
+def average_cumulative_path(prices):
+    # Always Series
     if isinstance(prices, pd.DataFrame):
         prices = prices.iloc[:, 0]
     df = prices.to_frame('Close').copy()
     df['Year'] = df.index.year
-    df['DayOfYear'] = df.index.dayofyear
+    df['Month'] = df.index.month
+    df['Day'] = df.index.day
 
-    # Compute daily returns
     df['Return'] = df['Close'].pct_change()
-    # Use .transform to preserve original index for cumulative returns by year
     df['CumReturn'] = df.groupby('Year')['Return'].transform(lambda x: (1 + x).cumprod() - 1)
 
-    # Now calculate the mean cumulative return for each day-of-year across years
-    day_grouped = df.groupby('DayOfYear')['CumReturn'].mean()
-    # We want day 1 to have value 0
-    if 1 in day_grouped.index:
-        day_grouped.iloc[0] = 0
-    else:
-        day_grouped = pd.concat([pd.Series([0], index=[1]), day_grouped])
+    # Calendar day as Month-Day (e.g., 'Jan-01')
+    df['MonthDay'] = df.index.strftime('%b-%d')
+    # Exclude Feb-29 for leap years to avoid discontinuity
+    df = df[~((df.index.month == 2) & (df.index.day == 29))]
+    avg_cum = df.groupby('MonthDay')['CumReturn'].mean() * 100
 
-    # Get current day of year to plot marker
-    today = pd.Timestamp.now(tz='America/New_York')
-    today_doy = today.dayofyear
-    return day_grouped, today_doy
+    # X-tick labels at month starts for clarity
+    months = df.index.strftime('%b').unique()
+    month_start_idx = [df[df.index.strftime('%b') == m].index[0].strftime('%b-%d') for m in months]
+    return avg_cum, month_start_idx
+
+def plot_avg_cumulative_path(avg_cum, month_start_idx, symbol, years):
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
+    ax.plot(avg_cum.index, avg_cum.values, lw=2, color='royalblue')
+
+    # Current position marker (today)
+    today_md = pd.Timestamp.now(tz='America/New_York').strftime('%b-%d')
+    if today_md in avg_cum.index:
+        yval = avg_cum.loc[today_md]
+        ax.scatter(today_md, yval, color='black', s=100, marker='v', zorder=10)
+        ax.text(today_md, yval + 0.4, "We are\nhere", ha='center', va='bottom', fontsize=11, color='gray', weight='bold')
+
+    # X-axis ticks at month starts, minor ticks at weeks
+    ax.set_xticks(month_start_idx)
+    ax.set_xticklabels([md[:3] for md in month_start_idx], fontsize=12)
+    ax.set_xlabel('')
+    ax.set_ylabel('Average YTD Return (%)', fontsize=12)
+    ax.set_title(f"{symbol.upper()} Index Seasonality ({years})", fontsize=14, weight='bold')
+    ax.axhline(0, color='black', linewidth=1, linestyle='-')
+    ax.set_ylim(avg_cum.min() - 2, avg_cum.max() + 2)
+    ax.grid(axis='y', linestyle='--', color='lightgrey', linewidth=0.6)
+    plt.tight_layout()
+    return fig
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     fig, ax1 = plt.subplots(figsize=(11, 6), dpi=100)
@@ -153,24 +168,6 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     plt.close(fig)
     buf.seek(0)
     return buf
-
-def plot_daily_seasonality(day_grouped, today_doy, title="S&P 500 Index Seasonality"):
-    fig, ax = plt.subplots(figsize=(11, 4), dpi=100)
-    ax.plot(day_grouped.index, day_grouped.values * 100, lw=2, color='royalblue', label="Avg YTD Return")
-    ax.axhline(0, color='black', linewidth=1, linestyle='--')
-
-    # Mark "We are here"
-    if today_doy in day_grouped.index:
-        yval = day_grouped.loc[today_doy] * 100
-        ax.scatter(today_doy, yval, color='black', s=100, marker='v', zorder=10)
-        ax.text(today_doy, yval + 0.2, "We are\nhere", ha='center', va='bottom', fontsize=10, color='gray')
-
-    ax.set_ylabel('Average YTD Return (%)')
-    ax.set_xlabel('Day of Year')
-    ax.set_title(title)
-    ax.grid(axis='y', linestyle='--', color='lightgrey', linewidth=0.6)
-    ax.set_xlim(1, 366)
-    return fig
 
 # ---- Main controls ----
 col1, col2, col3 = st.columns([2, 1, 1])
@@ -232,17 +229,17 @@ try:
     st.markdown("<br>", unsafe_allow_html=True)
 
     buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
-
     st.image(buf, use_container_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- Add daily seasonality line chart below ---
+    # --- Add cumulative return seasonality line chart below ---
     try:
-        day_grouped, today_doy = daily_seasonality(prices)
-        fig2 = plot_daily_seasonality(day_grouped, today_doy, f"{symbol} Daily Seasonality Line ({first_year}–{last_year})")
-        st.pyplot(fig2, use_container_width=True)
+        avg_cum, month_start_idx = average_cumulative_path(prices)
+        years_label = f"{first_year}–{last_year}"
+        fig3 = plot_avg_cumulative_path(avg_cum, month_start_idx, symbol, years_label)
+        st.pyplot(fig3, use_container_width=True)
     except Exception as e:
-        st.warning(f"Could not plot daily seasonality: {e}")
+        st.warning(f"Could not plot average cumulative seasonality: {e}")
 
     dl_col1, dl_col2 = st.columns([1, 1])
     with dl_col1:
