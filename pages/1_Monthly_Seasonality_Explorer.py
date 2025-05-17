@@ -85,42 +85,51 @@ def average_cumulative_path(prices):
         prices = prices.iloc[:, 0]
     df = prices.to_frame('Close').copy()
     df['Year'] = df.index.year
+    df['DayOfYear'] = df.index.dayofyear
     df['Month'] = df.index.month
     df['Day'] = df.index.day
 
+    # Remove leap day (Feb 29)
+    df = df[~((df['Month'] == 2) & (df['Day'] == 29))]
+
+    # Daily returns and YTD path
     df['Return'] = df['Close'].pct_change()
     df['CumReturn'] = df.groupby('Year')['Return'].transform(lambda x: (1 + x).cumprod() - 1)
 
-    # Calendar day as Month-Day (e.g., 'Jan-01')
-    df['MonthDay'] = df.index.strftime('%b-%d')
-    # Exclude Feb-29 for leap years to avoid discontinuity
-    df = df[~((df.index.month == 2) & (df.index.day == 29))]
-    avg_cum = df.groupby('MonthDay')['CumReturn'].mean() * 100
+    # Group by day-of-year across all years
+    avg_cum = df.groupby('DayOfYear')['CumReturn'].mean() * 100
 
-    # X-tick labels at month starts for clarity
-    months = df.index.strftime('%b').unique()
-    month_start_idx = [df[df.index.strftime('%b') == m].index[0].strftime('%b-%d') for m in months]
-    return avg_cum, month_start_idx
+    # For plotting: map day-of-year to a dummy year for proper month labeling (use 2021, not leap)
+    dummy_dates = pd.date_range('2021-01-01', '2021-12-31')
+    day_map = {d.dayofyear: d for d in dummy_dates}
+    avg_cum.index = [day_map[doy] for doy in avg_cum.index]
 
-def plot_avg_cumulative_path(avg_cum, month_start_idx, symbol, years):
+    return avg_cum
+
+def plot_avg_cumulative_path(avg_cum, symbol, years):
     fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
     ax.plot(avg_cum.index, avg_cum.values, lw=2, color='royalblue')
 
-    # Current position marker (today)
-    today_md = pd.Timestamp.now(tz='America/New_York').strftime('%b-%d')
-    if today_md in avg_cum.index:
-        yval = avg_cum.loc[today_md]
-        ax.scatter(today_md, yval, color='black', s=100, marker='v', zorder=10)
-        ax.text(today_md, yval + 0.4, "We are\nhere", ha='center', va='bottom', fontsize=11, color='gray', weight='bold')
+    # Today marker
+    today = pd.Timestamp.now(tz='America/New_York')
+    # Map today to dummy year (2021) for x-axis
+    today_doy = today.dayofyear
+    if today.month == 2 and today.day == 29:
+        today_doy -= 1  # skip leap
+    today_dummy = pd.Timestamp(year=2021, month=today.month, day=today.day)
+    if today_dummy in avg_cum.index:
+        yval = avg_cum.loc[today_dummy]
+        ax.scatter(today_dummy, yval, color='black', s=100, marker='v', zorder=10)
+        ax.text(today_dummy, yval + 0.4, "We are\nhere", ha='center', va='bottom', fontsize=11, color='gray', weight='bold')
 
-    # X-axis ticks at month starts, minor ticks at weeks
-    ax.set_xticks(month_start_idx)
-    ax.set_xticklabels([md[:3] for md in month_start_idx], fontsize=12)
-    ax.set_xlabel('')
+    # Format x-axis: show one label per month, aligned
+    months = pd.date_range('2021-01-01', '2021-12-31', freq='MS')
+    ax.set_xticks(months)
+    ax.set_xticklabels([d.strftime('%b') for d in months], fontsize=12)
+    ax.set_xlim(avg_cum.index[0], avg_cum.index[-1])
     ax.set_ylabel('Average YTD Return (%)', fontsize=12)
     ax.set_title(f"{symbol.upper()} Index Seasonality ({years})", fontsize=14, weight='bold')
     ax.axhline(0, color='black', linewidth=1, linestyle='-')
-    ax.set_ylim(avg_cum.min() - 2, avg_cum.max() + 2)
     ax.grid(axis='y', linestyle='--', color='lightgrey', linewidth=0.6)
     plt.tight_layout()
     return fig
@@ -234,9 +243,9 @@ try:
 
     # --- Add cumulative return seasonality line chart below ---
     try:
-        avg_cum, month_start_idx = average_cumulative_path(prices)
+        avg_cum = average_cumulative_path(prices)
         years_label = f"{first_year}–{last_year}"
-        fig3 = plot_avg_cumulative_path(avg_cum, month_start_idx, symbol, years_label)
+        fig3 = plot_avg_cumulative_path(avg_cum, symbol, years_label)
         st.pyplot(fig3, use_container_width=True)
     except Exception as e:
         st.warning(f"Could not plot average cumulative seasonality: {e}")
