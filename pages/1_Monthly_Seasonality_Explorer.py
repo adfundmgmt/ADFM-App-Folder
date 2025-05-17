@@ -85,18 +85,20 @@ def average_cumulative_path(prices):
         prices = prices.iloc[:, 0]
     df = prices.to_frame('Close').copy()
     df['Year'] = df.index.year
-    df['DayOfYear'] = df.index.dayofyear
     df['Month'] = df.index.month
     df['Day'] = df.index.day
+    df['DayOfYear'] = df.index.dayofyear
 
     # Remove leap day (Feb 29)
     df = df[~((df['Month'] == 2) & (df['Day'] == 29))]
+    # Also remove day 366 (if exists)
+    df = df[df['DayOfYear'] <= 365]
 
     # Daily returns and YTD path
     df['Return'] = df['Close'].pct_change()
     df['CumReturn'] = df.groupby('Year')['Return'].transform(lambda x: (1 + x).cumprod() - 1)
 
-    # Group by day-of-year across all years
+    # Group by day-of-year across all years (1-365 only)
     avg_cum = df.groupby('DayOfYear')['CumReturn'].mean() * 100
 
     # For plotting: map day-of-year to a dummy year for proper month labeling (use 2021, not leap)
@@ -113,14 +115,20 @@ def plot_avg_cumulative_path(avg_cum, symbol, years):
     # Today marker
     today = pd.Timestamp.now(tz='America/New_York')
     # Map today to dummy year (2021) for x-axis
-    today_doy = today.dayofyear
-    if today.month == 2 and today.day == 29:
-        today_doy -= 1  # skip leap
-    today_dummy = pd.Timestamp(year=2021, month=today.month, day=today.day)
-    if today_dummy in avg_cum.index:
-        yval = avg_cum.loc[today_dummy]
-        ax.scatter(today_dummy, yval, color='black', s=100, marker='v', zorder=10)
-        ax.text(today_dummy, yval + 0.4, "We are\nhere", ha='center', va='bottom', fontsize=11, color='gray', weight='bold')
+    try:
+        today_doy = today.dayofyear
+        # Skip Feb 29 if it doesn't exist in 2021
+        if today.month == 2 and today.day == 29:
+            today_doy -= 1
+        if today_doy > 365:
+            today_doy = 365
+        today_dummy = pd.Timestamp(year=2021, month=today.month, day=today.day)
+        if today_dummy in avg_cum.index:
+            yval = avg_cum.loc[today_dummy]
+            ax.scatter(today_dummy, yval, color='black', s=100, marker='v', zorder=10)
+            ax.text(today_dummy, yval + 0.4, "We are\nhere", ha='center', va='bottom', fontsize=11, color='gray', weight='bold')
+    except Exception:
+        pass
 
     # Format x-axis: show one label per month, aligned
     months = pd.date_range('2021-01-01', '2021-12-31', freq='MS')
