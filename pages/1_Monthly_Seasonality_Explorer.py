@@ -91,9 +91,8 @@ def daily_seasonality(prices: pd.Series):
 
     # Compute daily returns
     df['Return'] = df['Close'].pct_change()
-    # Group by Year, then calculate cumulative returns for each year
-    cumrets = df.groupby('Year')['Return'].apply(lambda x: (1 + x).cumprod() - 1)
-    df['CumReturn'] = cumrets
+    # Use .transform to preserve original index for cumulative returns by year
+    df['CumReturn'] = df.groupby('Year')['Return'].transform(lambda x: (1 + x).cumprod() - 1)
 
     # Now calculate the mean cumulative return for each day-of-year across years
     day_grouped = df.groupby('DayOfYear')['CumReturn'].mean()
@@ -176,7 +175,7 @@ with col1:
     symbol = st.text_input("Ticker symbol", value="^GSPC")
 with col2:
     start_year = st.number_input(
-        "Start year", value=1920,
+        "Start year", value=2020,
         min_value=1900, max_value=dt.datetime.today().year
     )
 with col3:
@@ -196,7 +195,6 @@ try:
 
     if pdr and sym_up in FALLBACK_MAP and start_dt.year < 1950:
         fred_tk = FALLBACK_MAP[sym_up]
-        st.info(f"Using FRED fallback: {fred_tk} from {start_date}")
         df_fred = pdr.DataReader(fred_tk, 'fred', start_dt, end_dt)
         prices = df_fred[fred_tk].rename('Close')
         prices = prices[prices.notnull()]  # clean up missing FRED data
