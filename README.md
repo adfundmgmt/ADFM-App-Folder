@@ -1,7 +1,3 @@
-st.title("AD Fund Management LP — Analytics Suite")
-
-st.markdown("""
-Welcome to the internal analytics dashboard for **AD Fund Management LP**.
 
 These are proprietary tools ADFM has built in-house to support daily decision-making. The goal is simple: make it easier to spot patterns, track shifts, and move faster with more context.
 
