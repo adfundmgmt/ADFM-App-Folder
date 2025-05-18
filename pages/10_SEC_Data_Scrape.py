@@ -6,23 +6,29 @@ import re
 st.set_page_config(page_title="SEC 10-Q/10-K Dashboard", layout="wide")
 st.title("SEC Filing Metrics Dashboard")
 
-@st.cache_data(ttl=24*3600, show_spinner=False)
-def build_ticker_cik_map():
-    url = 'https://www.sec.gov/include/ticker.txt'
-    resp = requests.get(url)
-    lookup = {}
-    for line in resp.text.splitlines():
-        parts = line.strip().split()
-        if len(parts) == 2:
-            tkr, cik = parts
-            lookup[tkr.lower()] = cik.zfill(10)
-    return lookup
+# Hardcoded fallback: major US tickers mapped to CIKs (expand as needed)
+FALLBACK_TICKER_CIK = {
+    "aapl": "0000320193",
+    "msft": "0000789019",
+    "goog": "0001652044",
+    "googl": "0001652044",
+    "nvda": "0001045810",
+    "meta": "0001326801",
+    "amzn": "0001018724",
+    "tsla": "0001318605",
+    "brk.a": "0001067983",
+    "brk.b": "0001067983",
+    "unh": "0000731766",
+    "jpm": "0000019617",
+    "bac": "0000070858",
+    "v": "0001403161",
+    "ma": "0001141391",
+    "orcl": "0001341439",
+    # Add more as needed
+}
 
-def get_cik(ticker, lookup):
-    # For debugging: print available keys
-    if ticker.lower().strip() not in lookup:
-        st.warning(f"First 10 tickers loaded: {list(lookup.keys())[:10]}")
-    return lookup.get(ticker.lower().strip(), None)
+def get_cik(ticker):
+    return FALLBACK_TICKER_CIK.get(ticker.lower().strip())
 
 def get_filing_metadata(cik, count=6):
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
@@ -78,14 +84,11 @@ def extract_metrics_from_filing(url):
             return metrics
     return {}
 
-lookup = build_ticker_cik_map()
-
 ticker = st.text_input("Enter Ticker Symbol (e.g., NVDA, AAPL, MSFT):", value="nvda")
-cik = get_cik(ticker, lookup)
+cik = get_cik(ticker)
 
 if not cik:
-    st.error("Ticker not found. Please check spelling, use all lowercase (e.g., 'nvda'), and ensure it's a US-listed ticker.")
-    st.info("Try typing the ticker in all lowercase. If still not found, see the first 10 tickers loaded above for reference.")
+    st.error("Ticker not found. Try one of: " + ", ".join(sorted(FALLBACK_TICKER_CIK.keys())))
 else:
     st.info(f"CIK for '{ticker.upper()}' is {cik}")
     filings = get_filing_metadata(cik, count=6)
@@ -111,4 +114,5 @@ else:
         df = pd.DataFrame(data)
         st.write(df.to_markdown(index=False), unsafe_allow_html=True)
         st.download_button("Download CSV", df.to_csv(index=False), file_name=f"{ticker}_sec_filings.csv")
-        st.caption("Metrics auto-extracted from first few tables in each SEC filing. If data missing, try viewing filing directly (link provided). For best results, use major US tickers.")
+        st.caption("Metrics auto-extracted from first few tables in each SEC filing. If data missing, try viewing filing directly (link provided). For best results, use major US tickers from the supported list.")
+
