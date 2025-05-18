@@ -7,27 +7,29 @@ import math
 from datetime import datetime
 
 st.set_page_config(page_title="Options Chain Viewer", layout="wide")
+
 st.title('Options Chain Viewer')
 
-# About box at top instead of sidebar for clarity
-with st.expander("ℹ️ About This Tool", expanded=False):
-    st.markdown("""
-    - **Interactive Options Chain**: Fetch real-time call & put chains via yfinance.  
-    - **Volume by Strike**: Bars showing call volume (green) vs put volume (red), ATM highlighted.  
-    - **Summary Metrics**: Total call/put volume, put/call ratio, and average Black-Scholes delta.  
-    - **Delta Distribution**: Density plots of option deltas to show skew.  
-    - **Optional Tables & Download**: Inspect bid/ask, volume, open interest per strike; download full option chain.
-    """)
+# --- Sidebar stays for About/info only ---
+st.sidebar.header('About This Tool')
+st.sidebar.markdown("""
+- **Interactive Options Chain**: Fetch real-time call & put chains via yfinance.  
+- **Volume by Strike**: Bars showing call volume (green) vs put volume (red), ATM highlighted.  
+- **Summary Metrics**: Total call/put volume, put/call ratio, and average Black-Scholes delta.  
+- **Delta Distribution**: Density plots of option deltas to show skew.  
+- **Optional Tables & Download**: Inspect bid/ask, volume, open interest per strike; download full option chain.
+""")
 
-# --- Inputs: Ticker, Expiry, Filtering ---
-input1, input2 = st.columns([2, 3])
-with input1:
-    ticker = st.text_input('Ticker', 'AAPL').upper()
+# --- Input controls in main area ---
+c1, c2, c3 = st.columns([2, 2, 2])
+with c1:
+    ticker = st.text_input('Ticker', 'AAPL', key="ticker_input").upper()
+with c2:
+    hide_zero_vol = st.checkbox("Hide zero-volume options", value=True, key="hide_zero_vol")
+with c3:
+    show_tables = st.checkbox('Show Calls & Puts Tables', value=False, key="show_tables")
 
-with input2:
-    hide_zero_vol = st.checkbox("Hide zero-volume options", value=True, help="Show only strikes with nonzero volume")
-
-# --- Expiry selection with stickiness ---
+# --- Expiry management with sticky state ---
 @st.cache_data(ttl=900, show_spinner=True)
 def get_valid_expiries(tkr):
     tk = yf.Ticker(tkr)
@@ -53,17 +55,11 @@ if not expiries:
     st.error(f"No valid options expiries available for {ticker}.")
     st.stop()
 
-# --- Maintain previous expiry selection if possible ---
-prev_expiry = st.session_state.get("prev_expiry")
-if prev_expiry in expiries:
-    default_expiry_idx = expiries.index(prev_expiry)
-else:
-    default_expiry_idx = 0
-
-expiry = st.selectbox('Select Expiry', expiries, index=default_expiry_idx, key="expiry_select")
-
-# Save the selected expiry for stickiness
-st.session_state["prev_expiry"] = expiry
+# Use session state to remember previous expiry if available
+prev_expiry = st.session_state.get("expiry", expiries[0])
+expiry_idx = expiries.index(prev_expiry) if prev_expiry in expiries else 0
+expiry = st.selectbox("Select Expiry", expiries, index=expiry_idx, key="expiry")
+st.session_state["expiry"] = expiry
 
 # --- Fetch the option chain ---
 try:
@@ -127,6 +123,81 @@ atm_idx = (combined['strike'] - spot).abs().idxmin()
 atm_strike = combined.loc[atm_idx, 'strike']
 st.caption(f"📌 Spot price: **${spot:.2f}** &nbsp; | &nbsp; ATM Strike: **{atm_strike}**")
 
-# --- Layout: Metrics, Charts, Tables as before ---
-# ... (your chart/table code unchanged)
+# --- Metrics, Charts, and Tables (as before) ---
 
+total_call_vol = combined.query("type=='Call'")['volume'].sum()
+total_put_vol  = combined.query("type=='Put'")['volume'].sum()
+avg_delta      = combined['delta'].mean()
+put_call_ratio = total_put_vol / total_call_vol if total_call_vol > 0 else np.nan
+
+st.subheader('Summary Metrics')
+m1, m2, m3, m4 = st.columns(4)
+m1.metric('Total Call Volume', f"{int(total_call_vol):,}")
+m2.metric('Total Put Volume',  f"{int(total_put_vol):,}")
+m3.metric('Put/Call Ratio',    f"{put_call_ratio:.2f}")
+m4.metric('Avg Delta',         f"{avg_delta:.2f}")
+
+st.markdown('---')
+
+st.subheader('Volume by Strike')
+highlight_color = "#FFD600"
+combined['highlight'] = np.where(combined['strike'] == atm_strike, 'ATM', 'Other')
+vol_chart = (
+    alt.Chart(combined)
+       .mark_bar()
+       .encode(
+           x=alt.X('strike:Q', title='Strike'),
+           y=alt.Y('volume:Q', title='Volume'),
+           color=alt.condition(
+               alt.datum.highlight == 'ATM',
+               alt.value(highlight_color),
+               alt.Color(
+                   'type:N',
+                   scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
+                   legend=alt.Legend(title='Option Type')
+               )
+           ),
+           tooltip=['type','strike','volume','openInterest','delta']
+       )
+       .properties(width='container', height=400)
+       .interactive()
+)
+st.altair_chart(vol_chart, use_container_width=True)
+st.markdown(f"**Yellow bar highlights the ATM strike ({atm_strike}).**")
+
+st.markdown('---')
+
+st.subheader('Delta Distribution by Option Type')
+delta_hist = (
+    alt.Chart(combined)
+       .transform_density('delta', as_=['delta','density'], groupby=['type'])
+       .mark_area(opacity=0.5)
+       .encode(
+           x=alt.X('delta:Q', title='Delta'),
+           y=alt.Y('density:Q', title='Density'),
+           color=alt.Color(
+               'type:N',
+               scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
+               legend=alt.Legend(title='Option Type')
+           )
+       )
+       .properties(width='container', height=300)
+       .interactive()
+)
+st.altair_chart(delta_hist, use_container_width=True)
+
+if show_tables:
+    st.markdown('---')
+    st.subheader('Calls Table')
+    st.dataframe(calls)
+    st.subheader('Puts Table')
+    st.dataframe(puts)
+
+with st.expander("Download Option Chain Table"):
+    st.download_button(
+        "Download as CSV",
+        combined.to_csv(index=False),
+        file_name=f"{ticker}_{expiry}_option_chain.csv"
+    )
+
+st.caption("© 2025 AD Fund Management LP")
