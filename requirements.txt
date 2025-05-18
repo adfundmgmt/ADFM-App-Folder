@@ -9,3 +9,5 @@ packaging
 pytrends
 requests
 mplfinance
+sec-edgar-downloader
+beautifulsoup4
