@@ -9,8 +9,14 @@ def get_cik(ticker):
     # Use SEC's full list
     url = 'https://www.sec.gov/include/ticker.txt'
     resp = requests.get(url)
-    lookup = dict(line.strip().split('\t') for line in resp.text.splitlines())
+    lookup = {}
+    for line in resp.text.splitlines():
+        parts = line.strip().split()
+        if len(parts) == 2:
+            tkr, cik = parts
+            lookup[tkr.lower()] = cik.lstrip('0')  # Remove leading zeros for the main code
     return lookup.get(ticker.lower(), None)
+
 
 # Helper: find latest two filings of specified type
 def get_latest_filing_urls(cik, filing_type, count=2):
