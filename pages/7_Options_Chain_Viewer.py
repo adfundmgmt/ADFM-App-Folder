@@ -9,23 +9,25 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 plt.style.use("default")
 
-
 st.set_page_config(page_title="Options Chain Viewer", layout="wide")
 
 st.title('Options Chain Viewer')
 st.sidebar.header('About This Tool')
 st.sidebar.markdown("""
 - **Interactive Options Chain**: Fetch real-time call & put chains via yfinance.  
-- **Volume by Strike**: Bars showing call volume (green) vs put volume (red).  
-- **Summary Metrics**: Total call/put volume and average Black-Scholes delta.  
+- **Volume by Strike**: Bars showing call volume (green) vs put volume (red), ATM highlighted.  
+- **Summary Metrics**: Total call/put volume, put/call ratio, and average Black-Scholes delta.  
 - **Delta Distribution**: Density plots of option deltas to show skew.  
-- **Optional Tables**: Inspect bid/ask, volume, and open interest per strike.
+- **Optional Tables & Download**: Inspect bid/ask, volume, open interest per strike; download full option chain.
 """)
 
 ticker = st.sidebar.text_input('Ticker', 'AAPL').upper()
 if not ticker:
     st.sidebar.error('Enter a valid ticker symbol')
     st.stop()
+
+# Option to filter out zero-volume options
+hide_zero_vol = st.sidebar.checkbox("Hide zero-volume options", value=True)
 
 # Only cache the valid expiries (list of strings)
 @st.cache_data(ttl=900, show_spinner=True)
@@ -84,6 +86,12 @@ puts  = chain.puts [['strike','bid','ask','volume','openInterest','impliedVolati
 calls['type'], puts['type'] = 'Call','Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
+# Optionally filter out zero-volume rows
+if hide_zero_vol:
+    combined = combined[combined["volume"] > 0]
+    calls = calls[calls["volume"] > 0]
+    puts = puts[puts["volume"] > 0]
+
 # Time to expiry (ACT/252 convention)
 today       = datetime.today().date()
 expiry_date = pd.to_datetime(expiry).date()
@@ -112,31 +120,44 @@ call_delta = 0.5 * (1 + vec_erf(d1 / np.sqrt(2)))
 combined['delta'] = np.where(combined['type']=='Call', call_delta, call_delta - 1)
 combined.loc[~valid, 'delta'] = np.nan
 
-# Summary Metrics
+# Display spot + ATM strike
+atm_idx = (combined['strike'] - spot).abs().idxmin()
+atm_strike = combined.loc[atm_idx, 'strike']
+st.caption(f"📌 Spot price: **${spot:.2f}** &nbsp; | &nbsp; ATM Strike: **{atm_strike}**")
+
+# Summary Metrics & Put/Call Ratio
 total_call_vol = combined.query("type=='Call'")['volume'].sum()
 total_put_vol  = combined.query("type=='Put'")['volume'].sum()
 avg_delta      = combined['delta'].mean()
+put_call_ratio = total_put_vol / total_call_vol if total_call_vol > 0 else np.nan
 
 st.subheader('Summary Metrics')
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric('Total Call Volume', f"{int(total_call_vol):,}")
 c2.metric('Total Put Volume',  f"{int(total_put_vol):,}")
-c3.metric('Avg Delta',          f"{avg_delta:.2f}")
+c3.metric('Put/Call Ratio',    f"{put_call_ratio:.2f}")
+c4.metric('Avg Delta',         f"{avg_delta:.2f}")
 
 st.markdown('---')
 
-# Volume by Strike Chart (dynamic width)
+# Volume by Strike Chart with ATM highlight
 st.subheader('Volume by Strike')
+highlight_color = "#FFD600"
+combined['highlight'] = np.where(combined['strike'] == atm_strike, 'ATM', 'Other')
 vol_chart = (
     alt.Chart(combined)
        .mark_bar()
        .encode(
            x=alt.X('strike:Q', title='Strike'),
            y=alt.Y('volume:Q', title='Volume'),
-           color=alt.Color(
-               'type:N',
-               scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
-               legend=alt.Legend(title='Option Type')
+           color=alt.condition(
+               alt.datum.highlight == 'ATM',
+               alt.value(highlight_color),  # ATM strike bar highlight
+               alt.Color(
+                   'type:N',
+                   scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
+                   legend=alt.Legend(title='Option Type')
+               )
            ),
            tooltip=['type','strike','volume','openInterest','delta']
        )
@@ -144,6 +165,8 @@ vol_chart = (
        .interactive()
 )
 st.altair_chart(vol_chart, use_container_width=True)
+
+st.markdown(f"**Yellow bar highlights the ATM strike ({atm_strike}).**")
 
 st.markdown('---')
 
@@ -173,5 +196,13 @@ if st.sidebar.checkbox('Show Calls & Puts Tables'):
     st.dataframe(calls)
     st.subheader('Puts Table')
     st.dataframe(puts)
+
+# Download full option chain
+with st.expander("Download Option Chain Table"):
+    st.download_button(
+        "Download as CSV",
+        combined.to_csv(index=False),
+        file_name=f"{ticker}_{expiry}_option_chain.csv"
+    )
 
 st.caption("© 2025 AD Fund Management LP")
