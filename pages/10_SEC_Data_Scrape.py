@@ -19,6 +19,9 @@ def build_ticker_cik_map():
     return lookup
 
 def get_cik(ticker, lookup):
+    # For debugging: print available keys
+    if ticker.lower().strip() not in lookup:
+        st.warning(f"First 10 tickers loaded: {list(lookup.keys())[:10]}")
     return lookup.get(ticker.lower().strip(), None)
 
 def get_filing_metadata(cik, count=6):
@@ -43,7 +46,6 @@ def get_filing_metadata(cik, count=6):
     return filings
 
 def parse_metrics_from_table(df):
-    # Try to extract key metrics from common labels (case insensitive, flexible)
     metrics = {}
     possible_labels = {
         "revenue": ["total revenue", "net revenue", "revenues", "sales"],
@@ -52,13 +54,11 @@ def parse_metrics_from_table(df):
         "operating_cash_flow": ["net cash provided by operating activities", "net cash from operating activities", "operating cash flow"],
         "shares_outstanding": ["weighted average shares", "shares outstanding"]
     }
-    # Flatten columns, search for metrics
     df_flat = df.applymap(lambda x: str(x).lower() if pd.notnull(x) else "")
     for metric, labels in possible_labels.items():
         for label in labels:
             for idx, row in df_flat.iterrows():
                 if any(label in cell for cell in row):
-                    # Try to extract the value from numeric columns in the row
                     row_vals = [v for v in row if re.search(r"\d", v)]
                     if row_vals:
                         metrics[metric] = row_vals[-1]
@@ -68,7 +68,6 @@ def parse_metrics_from_table(df):
     return metrics
 
 def extract_metrics_from_filing(url):
-    # Download and read tables (try the first 2-3 tables only for speed/robustness)
     try:
         tables = pd.read_html(url, flavor="bs4", header=0)
     except Exception:
@@ -81,11 +80,12 @@ def extract_metrics_from_filing(url):
 
 lookup = build_ticker_cik_map()
 
-ticker = st.text_input("Enter Ticker Symbol (e.g., NVDA, AAPL, MSFT):", value="NVDA")
+ticker = st.text_input("Enter Ticker Symbol (e.g., NVDA, AAPL, MSFT):", value="nvda")
 cik = get_cik(ticker, lookup)
 
 if not cik:
-    st.error("Ticker not found. Please check spelling and use official US stock tickers.")
+    st.error("Ticker not found. Please check spelling, use all lowercase (e.g., 'nvda'), and ensure it's a US-listed ticker.")
+    st.info("Try typing the ticker in all lowercase. If still not found, see the first 10 tickers loaded above for reference.")
 else:
     st.info(f"CIK for '{ticker.upper()}' is {cik}")
     filings = get_filing_metadata(cik, count=6)
