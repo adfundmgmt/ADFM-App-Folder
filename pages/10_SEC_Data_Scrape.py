@@ -77,7 +77,7 @@ def extract_metrics_from_filing(url):
     try:
         tables = pd.read_html(url, flavor="bs4", header=0)
     except Exception:
-        return None
+        return {}
     for df in tables[:3]:
         metrics = parse_metrics_from_table(df)
         if metrics:
@@ -98,22 +98,20 @@ else:
         data = []
         st.subheader(f"Recent 10-Q and 10-K Filings for {ticker.upper()}")
         for f in filings:
-with st.spinner(f"Parsing {f['form']} from {f['date']}..."):
-    metrics = extract_metrics_from_filing(f["url"]) or {}
-row = {
-    "Form": f["form"],
-    "Filing Date": f["date"],
-    "Filing Link": f"[View Filing]({f['url']})",
-    "Revenue": metrics.get("revenue", ""),
-    "Net Income": metrics.get("net_income", ""),
-    "EPS": metrics.get("eps", ""),
-    "Operating Cash Flow": metrics.get("operating_cash_flow", ""),
-    "Shares Outstanding": metrics.get("shares_outstanding", ""),
-}
-data.append(row)
-
+            with st.spinner(f"Parsing {f['form']} from {f['date']}..."):
+                metrics = extract_metrics_from_filing(f["url"]) or {}
+            row = {
+                "Form": f["form"],
+                "Filing Date": f["date"],
+                "Filing Link": f"[View Filing]({f['url']})",
+                "Revenue": metrics.get("revenue", ""),
+                "Net Income": metrics.get("net_income", ""),
+                "EPS": metrics.get("eps", ""),
+                "Operating Cash Flow": metrics.get("operating_cash_flow", ""),
+                "Shares Outstanding": metrics.get("shares_outstanding", ""),
+            }
+            data.append(row)
         df = pd.DataFrame(data)
         st.write(df.to_markdown(index=False), unsafe_allow_html=True)
         st.download_button("Download CSV", df.to_csv(index=False), file_name=f"{ticker}_sec_filings.csv")
         st.caption("Metrics auto-extracted from first few tables in each SEC filing. If data missing, try viewing filing directly (link provided). For best results, use major US tickers from the supported list.")
-
