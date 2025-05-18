@@ -19,36 +19,46 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 """)
 ticker   = st.sidebar.text_input("Ticker", "NVDA").upper()
 period   = st.sidebar.selectbox(
-    "Period", ["1mo","3mo","6mo","1y","2y","3y","5y","max"], index=3
+    "Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ── Compute start & buffer for full‑length MAs ───────────────────────────────
-base_days   = {"1mo":30,"3mo":90,"6mo":180,"1y":365,"2y":730,"3y":1095,"5y":1825}
-buffer_days = max(base_days.get(period,365), 500)
-start_date  = None if period=="max" else datetime.today() - timedelta(days=base_days[period] + buffer_days)
+# ── Define lookback days for each period ───────────────────────────────────
+base_days = {
+    "1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "3y": 1095,
+    "5y": 1825, "10y": 3652
+}
+CAP_MAX_DAYS = 365 * 25  # Cap "max" at 25 years ≈ 9125 days
 
-# ── Fetch & cache data ───────────────────────────────────────────────────────
+# ── Cap 'max' period at 25 years of daily data ─────────────────────────────
+if period == "max":
+    effective_period = "max"
+    st.info("⚠️ 'Max' is capped at 25 years of daily data to ensure smooth performance.")
+    lookback_days = CAP_MAX_DAYS
+else:
+    effective_period = period
+    lookback_days = base_days[period]
+
+buffer_days = max(lookback_days, 500)
+start_date = datetime.today() - timedelta(days=lookback_days + buffer_days)
+
+# ── Fetch & cache data ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def get_data(tkr, start, prd, intrvl):
-    if prd != "max":
-        return yf.Ticker(tkr).history(start=start, interval=intrvl)
-    else:
-        return yf.Ticker(tkr).history(period="max", interval=intrvl)
+def get_data(tkr, start, intrvl):
+    return yf.Ticker(tkr).history(start=start, interval=intrvl)
 
-df_full = get_data(ticker, start_date, period, interval)
+df_full = get_data(ticker, start_date, interval)
 if df_full is None or df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# ── Sanitize index, drop weekends only for daily data ────────────────────────
+# ── Sanitize index, drop weekends for daily data ───────────────────────────
 if df_full.index.tz is not None:
     df_full.index = df_full.index.tz_localize(None)
 if interval == "1d":
     df_full = df_full[df_full.index.weekday < 5]
 
-# ── Indicators on full history ──────────────────────────────────────────────
-# Moving averages
+# ── Indicators on full history ─────────────────────────────────────────────
 for w in (20, 50, 100, 200):
     df_full[f"MA{w}"] = df_full["Close"].rolling(w).mean()
 
@@ -68,32 +78,33 @@ df_full["MACD"]   = df_full["EMA12"] - df_full["EMA26"]
 df_full["Signal"] = df_full["MACD"].ewm(span=9, adjust=False).mean()
 df_full["Hist"]   = df_full["MACD"] - df_full["Signal"]
 
-# ── Trim to display window ─────────────────────────────────────────────────
-if period != "max":
-    cutoff = df_full.index.max() - pd.Timedelta(days=base_days[period])
-    df     = df_full.loc[df_full.index >= cutoff].copy()
+# ── Trim to display window ────────────────────────────────────────────────
+if period == "max":
+    cutoff = df_full.index.max() - pd.Timedelta(days=CAP_MAX_DAYS)
+    df = df_full.loc[df_full.index >= cutoff].copy()
 else:
-    df = df_full.copy()
+    cutoff = df_full.index.max() - pd.Timedelta(days=lookback_days)
+    df = df_full.loc[df_full.index >= cutoff].copy()
 
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
-available_mas = [w for w in (20,50,100,200) if len(df) >= w]
+available_mas = [w for w in (20, 50, 100, 200) if len(df) >= w]
 
-# ── Warn if window too short for certain MAs ────────────────────────────────
-for w in (20,50,100,200):
+# ── Warn if window too short for certain MAs ──────────────────────────────
+for w in (20, 50, 100, 200):
     if len(df) < w:
         st.warning(f"Showing MA{w} with fewer than {w} data points may appear choppy.")
 
-# ── Build Figure ────────────────────────────────────────────────────────────
+# ── Build Figure ──────────────────────────────────────────────────────────
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
-    row_heights=[0.60,0.14,0.13,0.13],
+    row_heights=[0.60, 0.14, 0.13, 0.13],
     vertical_spacing=0.04,
     specs=[
-        [{"type":"candlestick"}],
-        [{"type":"bar"}],
-        [{"type":"scatter"}],
-        [{"type":"scatter"}],
+        [{"type": "candlestick"}],
+        [{"type": "bar"}],
+        [{"type": "scatter"}],
+        [{"type": "scatter"}],
     ]
 )
 
@@ -104,7 +115,7 @@ fig.add_trace(go.Candlestick(
     increasing_line_color="#43A047", decreasing_line_color="#E53935",
     name="Price"
 ), row=1, col=1)
-for w, color in zip(available_mas, ("purple","blue","orange","gray")):
+for w, color in zip(available_mas, ("purple", "blue", "orange", "gray")):
     fig.add_trace(go.Scatter(
         x=df["DateStr"], y=df[f"MA{w}"],
         mode="lines", line=dict(color=color, width=1.3),
@@ -130,7 +141,7 @@ fig.add_trace(go.Scatter(
     mode="lines", line=dict(width=1.5, color="purple"),
     name="RSI (14)"
 ), row=3, col=1)
-fig.update_yaxes(range=[0,100], title_text="RSI", row=3, col=1, title_standoff=10)
+fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1, title_standoff=10)
 fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
@@ -153,7 +164,7 @@ fig.add_trace(go.Scatter(
 ), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# ── X‑Axis Monthly Ticks ─────────────────────────────────────────────────────
+# ── X‑Axis Monthly Ticks ──────────────────────────────────────────────────
 month_starts = df.index.to_series().groupby(df.index.to_period("M")).first()
 tickvals     = month_starts.dt.strftime("%Y-%m-%d").tolist()
 ticktext     = month_starts.dt.strftime("%b-%y").tolist()
@@ -164,7 +175,7 @@ fig.update_xaxes(
     showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed"
 )
 
-# ── Layout Tweaks ────────────────────────────────────────────────────────────
+# ── Layout Tweaks ─────────────────────────────────────────────────────────
 fig.update_layout(
     height=950, width=1100,
     title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5),
@@ -179,5 +190,5 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ── Footnotes ───────────────────────────────────────────────────────────────
+# ── Footnotes ─────────────────────────────────────────────────────────────
 st.caption("© 2025 AD Fund Management LP")
