@@ -4,9 +4,9 @@ from bs4 import BeautifulSoup
 import difflib
 import re
 
-# Helper: get company CIK
-def get_cik(ticker):
-    # Use SEC's full list
+# Robust CIK lookup
+@st.cache_data(ttl=24*3600, show_spinner=False)
+def build_ticker_cik_map():
     url = 'https://www.sec.gov/include/ticker.txt'
     resp = requests.get(url)
     lookup = {}
@@ -14,11 +14,12 @@ def get_cik(ticker):
         parts = line.strip().split()
         if len(parts) == 2:
             tkr, cik = parts
-            lookup[tkr.lower()] = cik.lstrip('0')  # Remove leading zeros for the main code
-    return lookup.get(ticker.lower(), None)
+            lookup[tkr.lower()] = cik.lstrip('0')
+    return lookup
 
+def get_cik(ticker, lookup):
+    return lookup.get(ticker.lower().strip(), None)
 
-# Helper: find latest two filings of specified type
 def get_latest_filing_urls(cik, filing_type, count=2):
     base = f"https://data.sec.gov/submissions/CIK{int(cik):010}.json"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -32,7 +33,6 @@ def get_latest_filing_urls(cik, filing_type, count=2):
             urls.append(url)
     return urls
 
-# Helper: extract section (very naive)
 def extract_section(html, section_name):
     soup = BeautifulSoup(html, 'html.parser')
     text = soup.get_text(separator='\n')
@@ -40,10 +40,9 @@ def extract_section(html, section_name):
     if not matches:
         return "Section not found."
     idx = matches[0]
-    # crude window for diff
-    return text[idx:idx+6000]
+    return text[idx:idx+6000]  # crude window, could be improved
 
-st.set_page_config(page_title="SEC Filing Change Detector", layout="wide")
+st.set_page_config(page_title="SEC Filing Change Detector (No Dependencies)", layout="wide")
 st.title("SEC Filing Change Detector (No Dependencies)")
 
 st.markdown("""
@@ -56,9 +55,10 @@ section = st.selectbox("Compare Which Section?", ["Risk Factors", "MD&A", "Finan
 
 if st.button("Compare Latest Filings"):
     with st.spinner("Fetching and parsing filings..."):
-        cik = get_cik(ticker)
+        lookup = build_ticker_cik_map()
+        cik = get_cik(ticker, lookup)
         if not cik:
-            st.error("Ticker not found.")
+            st.error("Ticker not found. Please check the symbol (try all lowercase, e.g. 'nvda').")
         else:
             urls = get_latest_filing_urls(cik, filing_type)
             if len(urls) < 2:
@@ -96,3 +96,5 @@ if st.button("Compare Latest Filings"):
                 st.write(added[:10] if added else "None")
                 st.markdown("**Removed Text:**")
                 st.write(removed[:10] if removed else "None")
+
+st.caption("For best results, use official SEC ticker (all lowercase). If ticker still not found, try searching the company on [SEC's company lookup](https://www.sec.gov/edgar/searchedgar/companysearch.html).")
