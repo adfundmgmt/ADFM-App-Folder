@@ -5,10 +5,6 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
-import matplotlib.pyplot as plt
-plt.style.use("default")
-
-
 # ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.header("About This Tool")
 st.sidebar.markdown("""
@@ -91,7 +87,7 @@ for w in (20,50,100,200):
 fig = make_subplots(
     rows=4, cols=1,
     shared_xaxes=True,
-    row_heights=[0.55,0.15,0.15,0.15],
+    row_heights=[0.60,0.14,0.13,0.13],
     vertical_spacing=0.04,
     specs=[
         [{"type":"candlestick"}],
@@ -105,43 +101,45 @@ fig = make_subplots(
 fig.add_trace(go.Candlestick(
     x=df["DateStr"], open=df["Open"], high=df["High"],
     low=df["Low"], close=df["Close"],
-    increasing_line_color="green", decreasing_line_color="red",
+    increasing_line_color="#43A047", decreasing_line_color="#E53935",
     name="Price"
 ), row=1, col=1)
 for w, color in zip(available_mas, ("purple","blue","orange","gray")):
     fig.add_trace(go.Scatter(
         x=df["DateStr"], y=df[f"MA{w}"],
-        mode="lines", line=dict(color=color, width=1),
+        mode="lines", line=dict(color=color, width=1.3),
         name=f"MA{w}"
     ), row=1, col=1)
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
 # 2) Volume (vs prior close)
-vol_colors = ["gray"]
+vol_colors = ["#B0BEC5"]
 for i in range(1, len(df)):
-    vol_colors.append("green" if df["Close"].iat[i] > df["Close"].iat[i-1] else "red")
+    vol_colors.append("#43A047" if df["Close"].iat[i] > df["Close"].iat[i-1] else "#E53935")
 fig.add_trace(go.Bar(
-    x=df["DateStr"], y=df["Volume"], width=1,
-    marker_color=vol_colors, name="Volume"
+    x=df["DateStr"], y=df["Volume"],
+    width=0.4,
+    marker_color=vol_colors, opacity=0.7,
+    name="Volume"
 ), row=2, col=1)
 fig.update_yaxes(title_text="Volume", row=2, col=1)
 
 # 3) RSI (14)
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["RSI14"],
-    mode="lines", line=dict(width=1, color="purple"),
+    mode="lines", line=dict(width=1.5, color="purple"),
     name="RSI (14)"
 ), row=3, col=1)
-fig.update_yaxes(range=[0,100], title_text="RSI", row=3, col=1, title_standoff=15)
-# keep original 80/20 bands
+fig.update_yaxes(range=[0,100], title_text="RSI", row=3, col=1, title_standoff=10)
 fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
 # 4) MACD + colored Hist
-hist_colors = ["green" if h > 0 else "red" for h in df["Hist"]]
+hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df["Hist"]]
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Hist"],
-    marker_color=hist_colors, name="MACD Hist"
+    marker_color=hist_colors, opacity=0.6, width=0.4,
+    name="MACD Hist"
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["MACD"],
@@ -150,7 +148,7 @@ fig.add_trace(go.Scatter(
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
     x=df["DateStr"], y=df["Signal"],
-    mode="lines", line=dict(width=1, color="orange"),
+    mode="lines", line=dict(width=1.2, color="orange"),
     name="Signal"
 ), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
@@ -162,21 +160,24 @@ ticktext     = month_starts.dt.strftime("%b-%y").tolist()
 fig.update_xaxes(
     type="category", tickmode="array",
     tickvals=tickvals, ticktext=ticktext,
-    tickangle=-45
+    tickangle=-45,
+    showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed"
 )
 
 # ── Layout Tweaks ────────────────────────────────────────────────────────────
 fig.update_layout(
-    height=900, width=1000,
+    height=950, width=1100,
     title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5),
-    hovermode="x unified",  # you can experiment with other modes if desired
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+    hovermode="x unified",
     margin=dict(l=60, r=20, t=60, b=40),
-    xaxis=dict(rangeslider_visible=False),
-    legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center")
+    xaxis=dict(rangeslider_visible=False, showline=True, linewidth=1, linecolor='black'),
+    legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center"),
+    font=dict(family="Arial, sans-serif", size=12)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ── Footnotes ───────────────────────────────────────────────────────────────
-
 st.caption("© 2025 AD Fund Management LP")
