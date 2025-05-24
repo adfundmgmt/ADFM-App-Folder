@@ -12,7 +12,7 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 
 **Features:**
 - Interactive OHLC candlesticks  
-- 20/50/100/200‑day moving averages (full length)  
+- 8/20/50/100/200‑day moving averages (full length)  
 - Volume bars color‑coded by up/down days (vs prior close)  
 - RSI (14‑day) panel (0–100 scale) with Wilder smoothing  
 - MACD (12,26,9) panel with colored histogram  
@@ -59,7 +59,7 @@ if interval == "1d":
     df_full = df_full[df_full.index.weekday < 5]
 
 # ── Indicators on full history ─────────────────────────────────────────────
-for w in (20, 50, 100, 200):
+for w in (8, 20, 50, 100, 200):
     df_full[f"MA{w}"] = df_full["Close"].rolling(w).mean()
 
 # RSI(14) — Wilder smoothing
@@ -87,10 +87,10 @@ else:
     df = df_full.loc[df_full.index >= cutoff].copy()
 
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
-available_mas = [w for w in (20, 50, 100, 200) if len(df) >= w]
+available_mas = [w for w in (8, 20, 50, 100, 200) if len(df) >= w]
 
 # ── Warn if window too short for certain MAs ──────────────────────────────
-for w in (20, 50, 100, 200):
+for w in (8, 20, 50, 100, 200):
     if len(df) < w:
         st.warning(f"Showing MA{w} with fewer than {w} data points may appear choppy.")
 
@@ -115,7 +115,7 @@ fig.add_trace(go.Candlestick(
     increasing_line_color="#43A047", decreasing_line_color="#E53935",
     name="Price"
 ), row=1, col=1)
-for w, color in zip(available_mas, ("purple", "blue", "orange", "gray")):
+for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")):
     fig.add_trace(go.Scatter(
         x=df["DateStr"], y=df[f"MA{w}"],
         mode="lines", line=dict(color=color, width=1.3),
