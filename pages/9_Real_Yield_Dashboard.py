@@ -1,5 +1,5 @@
 ############################################################
-# Built by AD Fund Management LP. Macro Overlays: Automated.
+# Built by AD Fund Management LP. Clean Final Version.
 ############################################################
 
 import sys, types
@@ -67,8 +67,7 @@ def fred(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
         s = pdr.DataReader(series, "fred", start, end)[series]
         s = s.ffill().dropna()
         return s
-    except Exception as e:
-        st.error(f"Failed to load FRED series '{series}': {e}")
+    except Exception:
         return pd.Series(dtype=float)
 
 def contiguous(mask: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
@@ -82,10 +81,9 @@ def contiguous(mask: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
         segs.append((st, mask.index[-1]))
     return segs
 
-# ── Macro Data Overlays (Automated Scraping) ────────────
-@st.cache_data(ttl=86400, show_spinner="Fetching macro overlay dates…")
+# ── Macro Data Overlays (Silent Fail) ───────────────────
+@st.cache_data(ttl=86400)
 def fetch_fomc_dates():
-    # Official: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
     url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
     try:
         r = requests.get(url, timeout=10)
@@ -96,13 +94,11 @@ def fetch_fomc_dates():
             if pd.notnull(dt):
                 dates.append(dt)
         return sorted(list(set(dates)))
-    except Exception as e:
-        st.warning(f"Could not fetch FOMC dates: {e}")
+    except Exception:
         return []
 
-@st.cache_data(ttl=86400, show_spinner="Fetching CPI print dates…")
+@st.cache_data(ttl=86400)
 def fetch_cpi_dates():
-    # Official: https://www.bls.gov/schedule/news_release/cpi.htm
     url = "https://www.bls.gov/schedule/news_release/cpi.htm"
     try:
         r = requests.get(url, timeout=10)
@@ -118,13 +114,11 @@ def fetch_cpi_dates():
                 except:
                     continue
         return sorted(list(set(dates)))
-    except Exception as e:
-        st.warning(f"Could not fetch CPI dates: {e}")
+    except Exception:
         return []
 
-@st.cache_data(ttl=86400, show_spinner="Fetching NBER recession dates…")
+@st.cache_data(ttl=86400)
 def fetch_recession_bands():
-    # Official NBER: https://www.nber.org/research/data/us-business-cycle-expansions-and-contractions
     url = "https://www.nber.org/releases.csv"
     try:
         df = pd.read_csv(url)
@@ -132,13 +126,8 @@ def fetch_recession_bands():
         ends = pd.to_datetime(df['Trough'], errors='coerce')
         bands = [(start, end) for start, end in zip(starts, ends) if pd.notnull(start) and pd.notnull(end)]
         return bands
-    except Exception as e:
-        # Fallback to last two recessions
-        st.warning(f"Could not fetch NBER recessions: {e}")
-        return [
-            (pd.Timestamp("2007-12-01"), pd.Timestamp("2009-06-30")),
-            (pd.Timestamp("2020-02-01"), pd.Timestamp("2020-04-30"))
-        ]
+    except Exception:
+        return []  # Just skip if not available
 
 # ── Main Analysis ───────────────────────────────────────
 end = pd.Timestamp.today().normalize()
@@ -149,16 +138,11 @@ real = fred(REAL_SERIES, ext, end)
 nom = fred(NOM_SERIES, ext, end)
 
 if real.empty or nom.empty:
-    st.warning("Data download failed or series is empty. Please check FRED or try again later.")
     st.stop()
-if abs((real.index[-1] - end).days) > 3:
-    st.warning(f"Latest real yield data from FRED is stale (last: {real.index[-1].date()}).")
 
-# --- Align Index ---
 df = pd.DataFrame({"Nominal": nom, "Real": real}).dropna()
 df = df[df.index >= start]
 if df.empty:
-    st.warning("No overlapping data in window. Check FRED.")
     st.stop()
 
 mom = -(df['Real'] - df['Real'].shift(win)) * 100
@@ -166,7 +150,6 @@ mom = mom.dropna()
 df = df.loc[mom.index]
 df["Spread"] = df["Nominal"] - df["Real"]
 
-# --- Regime Detection ---
 latest = dict(
     date=df.index[-1],
     real=df['Real'].iloc[-1],
@@ -212,12 +195,12 @@ for th, lab in [(ease_bp, f"+{ease_bp} bp"), (0, "zero"), (tight_bp, f"{tight_bp
     fig.add_hline(y=th, line=dict(color="grey", dash="dot", width=1), row=2, col=1,
                   annotation_text=lab, annotation_position="right")
 
-# Regime shading with labels
+# --- Clean Regime Shading (NO annotations, no label spam) ---
 if show_regime:
     for s, e in contiguous(mom > ease_bp):
-        fig.add_vrect(x0=s, x1=e, fillcolor="rgba(0,128,0,0.12)", line_width=0, row=2, col=1, annotation_text="Easing", annotation_position="top left")
+        fig.add_vrect(x0=s, x1=e, fillcolor="rgba(0,128,0,0.12)", line_width=0, row=2, col=1)
     for s, e in contiguous(mom < tight_bp):
-        fig.add_vrect(x0=s, x1=e, fillcolor="rgba(255,0,0,0.12)", line_width=0, row=2, col=1, annotation_text="Tightening", annotation_position="top left")
+        fig.add_vrect(x0=s, x1=e, fillcolor="rgba(255,0,0,0.12)", line_width=0, row=2, col=1)
 
 fig.update_yaxes(title="bp", tickformat=".0f", row=2, col=1)
 fig.update_xaxes(tickformat="%b-%y", row=nrows, col=1, title="Date")
@@ -226,7 +209,7 @@ if show_spread:
     fig.add_trace(go.Scatter(x=df.index, y=df['Spread'], name="10Y Spread", line=dict(color="#2ca02c", width=2)), row=3, col=1)
     fig.update_yaxes(title="Spread (%)", tickformat=".2f", row=3, col=1)
 
-# --- Macro Overlays ---
+# --- Macro Overlays (No user-facing warning on failure) ---
 if show_fomc:
     fomc_dates = fetch_fomc_dates()
     for dt in fomc_dates:
@@ -252,7 +235,7 @@ if show_recession:
             fig.add_vrect(
                 x0=max(start, df.index[0]), x1=min(end, df.index[-1]),
                 fillcolor="rgba(128,128,128,0.18)", line_width=0,
-                annotation_text="Recession", annotation_position="top left"
+                # No annotation_text!
             )
 
 fig.update_layout(
@@ -294,7 +277,8 @@ with st.expander("Methodology & Interpretation", expanded=False):
     • **CPI Prints**: Orange dotted verticals, CPI releases.  
     • **Recession Bands**: Gray bands, official NBER cycles.
 
-    These overlays contextualize regime shifts and volatility in real-time.
-
+    **Color bands in the momentum panel**:  
+    - Green = macro "easing" (real yield momentum above threshold)  
+    - Red = macro "tightening" (below threshold)
     """)
 st.caption("© 2025 AD Fund Management LP")
