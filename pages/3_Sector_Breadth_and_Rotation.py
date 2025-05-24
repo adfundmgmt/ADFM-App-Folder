@@ -68,7 +68,7 @@ with st.sidebar:
         **Features:**
         - Sector Relative Strength vs. S&P 500  
         - Sector Rotation Quadrant (1M vs 3M returns)  
-        - Downloadable sector performance table  
+        - Downloadable & sortable sector performance table  
         - Robust to missing sector tickers
 
         **Data Source:**  
@@ -134,15 +134,24 @@ fig_rot.update_traces(textposition="top center")
 fig_rot.update_layout(height=500, margin=dict(l=40, r=40, t=60, b=40), showlegend=False)
 st.plotly_chart(fig_rot, use_container_width=True)
 
-# Sector Performance Table
+# --- Sector Performance Table (sortable and formatted) ---
+
+st.subheader("Sector Total Returns Table (sortable)")
+# Show numeric values for sorting
+st.dataframe(
+    rotation_df[["Sector", "1M Return", "3M Return"]].set_index("Sector"),
+    height=350
+)
+
+# Show pretty-formatted, non-sortable summary table for reporting
+st.write("Formatted for screenshots/reporting (not sortable):")
 rotation_df_show = rotation_df[["Sector", "1M Return", "3M Return"]].copy()
 rotation_df_show["1M Return"] = rotation_df_show["1M Return"].apply(lambda x: f"{x:.2%}")
 rotation_df_show["3M Return"] = rotation_df_show["3M Return"].apply(lambda x: f"{x:.2%}")
-st.subheader("Sector Total Returns Table")
-st.dataframe(rotation_df_show.set_index("Sector"), height=350)
+st.table(rotation_df_show.set_index("Sector"))
 
-# Option to download table as CSV
-csv = rotation_df_show.to_csv(index=False).encode()
+# Option to download returns table as CSV (numeric for sorting in Excel)
+csv = rotation_df[["Sector", "1M Return", "3M Return"]].to_csv(index=False).encode()
 st.download_button(
     label="Download returns table as CSV",
     data=csv,
