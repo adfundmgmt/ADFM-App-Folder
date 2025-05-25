@@ -84,7 +84,6 @@ def seasonal_stats(prices: pd.Series):
 
     return stats
 
-
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     fig, ax1 = plt.subplots(figsize=(11, 6), dpi=100)
     plot_df = stats.dropna(subset=['median_ret', 'hit_rate'], how='all')
@@ -129,6 +128,92 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     buf.seek(0)
     return buf
 
+# ---- NEW: Add TSM-style cumulative chart functions below ----
+
+def get_cumulative_returns(prices: pd.Series):
+    rets = prices.pct_change().dropna()
+    cumrets = (1 + rets).cumprod() - 1
+    return cumrets
+
+def get_historical_seasonality(prices: pd.Series, ref_year=None):
+    df = prices.pct_change().dropna().to_frame("ret")
+    df["year"] = df.index.year
+    df["doy"] = df.index.dayofyear
+    if ref_year:
+        df = df[df["year"] != ref_year]
+    # For each year, calculate cumulative returns per calendar day
+    all_cumrets = []
+    for y in df["year"].unique():
+        yr = df[df["year"] == y]
+        cr = (1 + yr["ret"]).cumprod().values - 1
+        s = pd.Series(cr, index=yr["doy"])
+        all_cumrets.append(s)
+    cumrets = pd.DataFrame(all_cumrets).T  # Index: doy, Columns: years
+    median = cumrets.median(axis=1)
+    lower = cumrets.quantile(0.16, axis=1)
+    upper = cumrets.quantile(0.84, axis=1)
+    return median, lower, upper
+
+def plot_seasonality_vs_year(prices: pd.Series, year: int, symbol: str):
+    prices = prices.sort_index()
+    prices = prices.asfreq('B').ffill()  # Fill missing business days for proper alignment
+
+    # Drop years with partial data
+    min_days = 200
+    year_counts = prices.index.year.value_counts()
+    good_years = year_counts[year_counts > min_days].index.tolist()
+    prices = prices[prices.index.year.isin(good_years)]
+
+    # Historical (all but selected year)
+    median, lower, upper = get_historical_seasonality(prices, ref_year=year)
+    # Actual YTD
+    this_year = prices[prices.index.year == year]
+    if len(this_year) == 0:
+        return None
+    cum_this_year = get_cumulative_returns(this_year)
+
+    # X-axis mapping: day of year to month
+    months = pd.to_datetime(this_year.index)
+    doy = (this_year.index - this_year.index[0]).days + 1
+    xticks = []
+    xticklabels = []
+    for m in range(1, 13):
+        idx = np.where(months.month == m)[0]
+        if len(idx) > 0:
+            xticks.append(doy[idx[0]])
+            xticklabels.append(MONTH_LABELS[m-1])
+
+    fig, ax = plt.subplots(figsize=(11, 7), dpi=100)
+    # Shaded ±1 std band
+    ax.fill_between(
+        median.index, lower.values * 100, upper.values * 100,
+        color="lightgrey", alpha=0.5, label="Historical Seasonality ±1σ"
+    )
+    # Median historical
+    ax.plot(
+        median.index, median.values * 100,
+        color="indianred", linewidth=2, label="Historical Seasonality"
+    )
+    # Current year
+    ax.plot(
+        doy, cum_this_year.values * 100,
+        color="#3682F4", linewidth=2, label=f"{year} Returns"
+    )
+
+    ax.set_title(f"Seasonality and {year} Performance of {symbol.upper()}", fontsize=16, weight="bold")
+    ax.set_ylabel("Cumulative Returns (%)")
+    ax.set_xlabel("Month")
+    ax.set_xlim(1, 366)
+    ax.set_ylim(-20, 100)
+    ax.yaxis.set_major_formatter(PercentFormatter())
+    ax.grid(linestyle="--", color="grey", alpha=0.3)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xticklabels)
+    ax.legend(loc="upper left")
+    ax.margins(x=0)
+    plt.tight_layout()
+    return fig
+
 # ---- Main controls ----
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
@@ -143,6 +228,13 @@ with col3:
         "End year", value=dt.datetime.today().year,
         min_value=int(start_year), max_value=dt.datetime.today().year
     )
+
+# For the bottom chart: user can select the "actual" performance year (defaults to latest in range)
+actual_year = st.number_input(
+    "Show actual performance for year (bottom chart)", 
+    value=int(end_year),
+    min_value=int(start_year), max_value=int(end_year)
+)
 
 start_date = f"{int(start_year)}-01-01"
 end_date = f"{int(end_year)}-12-31"
@@ -165,11 +257,11 @@ try:
             st.stop()
         prices = df['Close']
 
+    # --- TOP CHART: Monthly Seasonality ---
     stats = seasonal_stats(prices)
     first_year = prices.index[0].year
     last_year = prices.index[-1].year
 
-    # Best/worst up top
     st.markdown("<br>", unsafe_allow_html=True)
     best = stats.loc[stats['median_ret'].idxmax()]
     worst = stats.loc[stats['median_ret'].idxmin()]
@@ -189,7 +281,6 @@ try:
     st.markdown("<br>", unsafe_allow_html=True)
 
     buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})")
-
     st.image(buf, use_container_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -207,6 +298,15 @@ try:
         )
 
     st.markdown("<hr style='margin-top: 16px; margin-bottom: 8px;'>", unsafe_allow_html=True)
+
+    # --- BOTTOM CHART: TSM-style seasonality vs actual ---
+    st.subheader("Seasonality vs. Actual Cumulative Returns")
+    fig2 = plot_seasonality_vs_year(prices, int(actual_year), symbol)
+    if fig2 is not None:
+        st.pyplot(fig2)
+        st.caption("Data: Yahoo! Finance | Plot: AD Fund Management LP")
+    else:
+        st.warning(f"No data available for {symbol} in {actual_year}.")
 
 except Exception as e:
     st.error(f"Error: {e}")
