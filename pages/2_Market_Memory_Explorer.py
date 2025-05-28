@@ -48,7 +48,7 @@ with st.sidebar:
         min_return_sidebar, max_return_sidebar = st.slider(
             "Total Return (%) Range",
             min_value=-100, max_value=1000, value=(-95, 300), step=1,
-            help="Exclude analogs with final year returns outside this range."
+            help="Exclude analogs with YTD returns outside this range."
         )
     if filter_jumps:
         max_jump_sidebar = st.slider(
@@ -127,7 +127,7 @@ if not top_matches:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-# Outlier and jump exclusion logic: only applied if user checks box
+# ---- Core Fix: always YTD-matched, never full year ----
 valid_top_matches = []
 analog_returns = []
 excluded_analogs = []
@@ -137,10 +137,9 @@ jump_count = 0
 if filter_outliers or filter_jumps:
     for yr, rho in top_matches:
         analog = ytd_df[yr].dropna()
-        # Only proceed if the analog year has at least as many trading days as the current YTD
-        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
+        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days - 1]):
             valid = True
-            ytd_return = analog.iloc[n_days-1]  # FIXED: Use YTD as of today's trading day count, NOT final year return
+            ytd_return = analog.iloc[n_days - 1]
             max_jump = analog.pct_change().abs().max()
             if filter_outliers:
                 min_return = min_return_sidebar / 100.0
@@ -161,9 +160,9 @@ if filter_outliers or filter_jumps:
 else:
     for yr, rho in top_matches:
         analog = ytd_df[yr].dropna()
-        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days-1]):
+        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days - 1]):
             valid_top_matches.append((yr, rho))
-            ytd_return = analog.iloc[n_days-1]   # FIXED
+            ytd_return = analog.iloc[n_days - 1]
             analog_returns.append(ytd_return)
 
 if excluded_analogs:
@@ -178,7 +177,7 @@ current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('na
 
 if valid_top_matches and analog_returns:
     best_analog_year, best_rho = valid_top_matches[0]
-    best_analog_ytd_return = ytd_df[best_analog_year].iloc[n_days-1]  # FIXED
+    best_analog_ytd_return = ytd_df[best_analog_year].iloc[n_days - 1] if len(ytd_df[best_analog_year]) >= n_days else float('nan')
     mean_analog_return = np.mean(analog_returns)
     median_analog_return = np.median(analog_returns)
 else:
@@ -195,7 +194,7 @@ with metrics_col2:
     if best_analog_year is not None:
         st.metric(
             f"Best Analog YTD ({best_analog_year})",
-            f"{best_analog_ytd_return:.2%}",
+            f"{best_analog_ytd_return:.2%}" if not np.isnan(best_analog_ytd_return) else "N/A",
             help=f"YTD return for {best_analog_year} (ρ={best_rho:.2f})"
         )
     else:
