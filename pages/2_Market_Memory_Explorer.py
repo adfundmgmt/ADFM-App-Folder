@@ -127,10 +127,10 @@ if not top_matches:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-# ---- Core Fix: always YTD-matched, never full year ----
+# --- Filtering and final analog return computation ---
 valid_top_matches = []
-analog_returns = []
 excluded_analogs = []
+analog_ytd_returns = []
 outlier_count = 0
 jump_count = 0
 
@@ -154,7 +154,7 @@ if filter_outliers or filter_jumps:
                     jump_count += 1
             if valid:
                 valid_top_matches.append((yr, rho))
-                analog_returns.append(ytd_return)
+                analog_ytd_returns.append(ytd_return)
             else:
                 excluded_analogs.append((yr, ytd_return, max_jump))
 else:
@@ -162,8 +162,7 @@ else:
         analog = ytd_df[yr].dropna()
         if len(analog) >= n_days and not np.isnan(analog.iloc[n_days - 1]):
             valid_top_matches.append((yr, rho))
-            ytd_return = analog.iloc[n_days - 1]
-            analog_returns.append(ytd_return)
+            analog_ytd_returns.append(analog.iloc[n_days - 1])
 
 if excluded_analogs:
     msg = f"{len(excluded_analogs)} analog(s) excluded"
@@ -175,14 +174,20 @@ if excluded_analogs:
 
 current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('nan')
 
-if valid_top_matches and analog_returns:
-    best_analog_year, best_rho = valid_top_matches[0]
-    best_analog_ytd_return = ytd_df[best_analog_year].iloc[n_days - 1] if len(ytd_df[best_analog_year]) >= n_days else float('nan')
-    mean_analog_return = np.mean(analog_returns)
-    median_analog_return = np.median(analog_returns)
-else:
-    best_analog_year = best_rho = best_analog_ytd_return = mean_analog_return = median_analog_return = None
+# --- NEW: Compute final (full-year) return for each analog ---
+final_analog_returns = []
+for yr, rho in valid_top_matches:
+    analog = ytd_df[yr].dropna()
+    if len(analog) > 0:
+        final_analog_returns.append(analog.iloc[-1])
 
+if final_analog_returns:
+    median_final = np.median(final_analog_returns)
+    std_final = np.std(final_analog_returns)
+else:
+    median_final = std_final = float("nan")
+
+# --- Metrics display ---
 metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
 with metrics_col1:
     st.metric(
@@ -191,23 +196,17 @@ with metrics_col1:
         help=f"{ticker} YTD cumulative return."
     )
 with metrics_col2:
-    if best_analog_year is not None:
-        st.metric(
-            f"Best Analog YTD ({best_analog_year})",
-            f"{best_analog_ytd_return:.2%}" if not np.isnan(best_analog_ytd_return) else "N/A",
-            help=f"YTD return for {best_analog_year} (ρ={best_rho:.2f})"
-        )
-    else:
-        st.metric("Best Analog", "N/A")
+    st.metric(
+        "Median Final Analog Return",
+        f"{median_final:.2%}" if not np.isnan(median_final) else "N/A",
+        help="Median full-year return among top analogs."
+    )
 with metrics_col3:
-    if analog_returns:
-        st.metric(
-            f"Mean Analog YTD Return",
-            f"{mean_analog_return:.2%}",
-            help=f"Mean YTD return (not full year) among valid analogs."
-        )
-    else:
-        st.metric("Mean Analog YTD Return", "N/A")
+    st.metric(
+        "Analog Return Dispersion",
+        f"{std_final:.2%}" if not np.isnan(std_final) else "N/A",
+        help="Standard deviation of full-year returns among top analogs."
+    )
 
 st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html=True)
 
