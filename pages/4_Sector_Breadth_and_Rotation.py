@@ -22,22 +22,45 @@ SECTORS = {
 
 @st.cache_data(ttl=3600)
 def robust_fetch(tickers, period="1y", interval="1d"):
-    results = {}
+    close_series = {}
+    full_index = None
     for t in tickers:
         try:
             data = yf.download(t, period=period, interval=interval, progress=False)
             st.write(f"DEBUG: {t} shape={data.shape} cols={list(data.columns)}")
-            if "Adj Close" in data.columns:
-                results[t] = data["Adj Close"]
-            elif "Close" in data.columns:
-                results[t] = data["Close"]
+            # For multi-index, flatten
+            if isinstance(data.columns, pd.MultiIndex):
+                if ('Adj Close', t) in data.columns:
+                    close = data[('Adj Close', t)]
+                elif ('Close', t) in data.columns:
+                    close = data[('Close', t)]
+                else:
+                    st.warning(f"No 'Close' or 'Adj Close' for {t}")
+                    continue
             else:
-                st.warning(f"No price columns found for {t}")
+                if "Adj Close" in data.columns:
+                    close = data["Adj Close"]
+                elif "Close" in data.columns:
+                    close = data["Close"]
+                else:
+                    st.warning(f"No 'Close' or 'Adj Close' for {t}")
+                    continue
+            close = close.dropna()
+            close_series[t] = close
+            if full_index is None:
+                full_index = close.index
+            else:
+                # Union all indexes to avoid alignment errors
+                full_index = full_index.union(close.index)
         except Exception as e:
             st.warning(f"Failed to fetch {t}: {e}")
-    if not results:
+
+    if not close_series:
         return pd.DataFrame()
-    df = pd.DataFrame(results)
+    # Now reindex all Series to the unioned index and build DataFrame
+    for t in close_series:
+        close_series[t] = close_series[t].reindex(full_index)
+    df = pd.DataFrame(close_series)
     df = df.dropna(how="all")
     st.write("DEBUG: Final fetched tickers:", list(df.columns))
     return df
