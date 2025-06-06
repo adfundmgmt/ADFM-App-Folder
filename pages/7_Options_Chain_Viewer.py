@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -27,14 +26,16 @@ if not ticker:
     st.sidebar.error('Enter a valid ticker symbol')
     st.stop()
 
-# Option to filter out zero-volume options
 hide_zero_vol = st.sidebar.checkbox("Hide zero-volume options", value=True)
 
-# Only cache the valid expiries (list of strings)
+# Get valid expiries robustly, with diagnostics and user-friendly error
 @st.cache_data(ttl=900, show_spinner=True)
 def get_valid_expiries(tkr):
     tk = yf.Ticker(tkr)
-    raw_expiries = tk.options
+    try:
+        raw_expiries = tk.options
+    except Exception:
+        raw_expiries = []
     today = datetime.today().date()
     valid_expiries = []
     for exp in raw_expiries:
@@ -47,13 +48,22 @@ def get_valid_expiries(tkr):
                 valid_expiries.append(exp)
         except Exception:
             continue
-    return valid_expiries
+    return raw_expiries, valid_expiries
 
 with st.spinner("Loading available expiries..."):
-    expiries = get_valid_expiries(ticker)
+    raw_expiries, expiries = get_valid_expiries(ticker)
+
+# Diagnostics: only shown if there is a problem
+if not raw_expiries:
+    st.error(f"Yahoo Finance returned no option expiry dates for {ticker}. This is usually a data outage or rate limit. Try another ticker, VPN, or wait and retry.")
+    st.stop()
 
 if not expiries:
-    st.error(f"No valid options expiries available for {ticker}.")
+    st.error(f"No valid options chains available for {ticker}.\n"
+             f"Yahoo reports these expiries: {', '.join(raw_expiries) if raw_expiries else 'None'}\n"
+             "All available chains are empty or could not be loaded. "
+             "This often means Yahoo is blocking automated requests or is experiencing a temporary outage. "
+             "Try another ticker, VPN, or wait 1-2 hours and refresh.")
     st.stop()
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
