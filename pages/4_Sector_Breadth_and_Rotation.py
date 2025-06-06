@@ -27,7 +27,6 @@ def robust_fetch(tickers, period="1y", interval="1d"):
     for t in tickers:
         try:
             data = yf.download(t, period=period, interval=interval, progress=False)
-            st.write(f"DEBUG: {t} shape={data.shape} cols={list(data.columns)}")
             # For multi-index, flatten
             if isinstance(data.columns, pd.MultiIndex):
                 if ('Adj Close', t) in data.columns:
@@ -35,7 +34,6 @@ def robust_fetch(tickers, period="1y", interval="1d"):
                 elif ('Close', t) in data.columns:
                     close = data[('Close', t)]
                 else:
-                    st.warning(f"No 'Close' or 'Adj Close' for {t}")
                     continue
             else:
                 if "Adj Close" in data.columns:
@@ -43,32 +41,26 @@ def robust_fetch(tickers, period="1y", interval="1d"):
                 elif "Close" in data.columns:
                     close = data["Close"]
                 else:
-                    st.warning(f"No 'Close' or 'Adj Close' for {t}")
                     continue
             close = close.dropna()
             close_series[t] = close
             if full_index is None:
                 full_index = close.index
             else:
-                # Union all indexes to avoid alignment errors
                 full_index = full_index.union(close.index)
-        except Exception as e:
-            st.warning(f"Failed to fetch {t}: {e}")
+        except Exception:
+            continue
 
     if not close_series:
         return pd.DataFrame()
-    # Now reindex all Series to the unioned index and build DataFrame
     for t in close_series:
         close_series[t] = close_series[t].reindex(full_index)
     df = pd.DataFrame(close_series)
     df = df.dropna(how="all")
-    st.write("DEBUG: Final fetched tickers:", list(df.columns))
     return df
 
 tickers = list(SECTORS.keys()) + ["SPY"]
 prices = robust_fetch(tickers, period="1y", interval="1d")
-
-st.write("DEBUG: Downloaded columns:", list(prices.columns))
 
 if prices.empty:
     st.error("Downloaded data is empty. Yahoo Finance API might be rate-limited or unavailable.")
