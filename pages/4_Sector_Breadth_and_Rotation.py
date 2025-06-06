@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
-from datetime import datetime, timedelta
 
 st.set_page_config(page_title="S&P 500 Sector Breadth & Rotation Monitor", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
@@ -23,26 +22,40 @@ SECTORS = {
 
 @st.cache_data(ttl=3600)
 def fetch_prices(tickers, period="1y", interval="1d"):
-    raw_data = yf.download(tickers, period=period, interval=interval, progress=False)
+    raw_data = yf.download(tickers, period=period, interval=interval, progress=False, group_by="ticker")
+    # Handle MultiIndex and single-index
     if isinstance(raw_data.columns, pd.MultiIndex):
         if "Adj Close" in raw_data.columns.get_level_values(0):
-            adj_close = raw_data.loc[:, "Adj Close"]
-        else:
-            adj_close = raw_data.loc[:, "Close"]
-    else:
-        if "Adj Close" in raw_data.columns:
             adj_close = raw_data["Adj Close"]
-        else:
+        elif "Close" in raw_data.columns.get_level_values(0):
             adj_close = raw_data["Close"]
-    if isinstance(adj_close.columns, pd.MultiIndex):
-        adj_close.columns = adj_close.columns.get_level_values(1)
+        else:
+            adj_close = raw_data.xs(raw_data.columns.levels[0][0], axis=1, level=0)
+    else:
+        # Single ticker fallback (returns just one column)
+        if "Adj Close" in raw_data.columns:
+            adj_close = raw_data[["Adj Close"]].rename(columns={"Adj Close": tickers[0]})
+        elif "Close" in raw_data.columns:
+            adj_close = raw_data[["Close"]].rename(columns={"Close": tickers[0]})
+        else:
+            adj_close = pd.DataFrame()
+    # Defensive: Clean up columns
+    adj_close.columns = [str(col).strip() for col in adj_close.columns]
     return adj_close.dropna(how="all")
 
 tickers = list(SECTORS.keys()) + ["SPY"]
 prices = fetch_prices(tickers, period="1y", interval="1d")
 
-available_sector_tickers = [t for t in SECTORS.keys() if t in prices.columns]
-missing_sectors = [SECTORS[t] for t in SECTORS if t not in prices.columns]
+# Print debug info
+st.write("DEBUG: Downloaded columns:", list(prices.columns))
+
+if prices.empty:
+    st.error("Downloaded data is empty. Yahoo Finance API might be rate-limited or unavailable.")
+    st.stop()
+
+price_cols = [str(c).strip() for c in prices.columns]
+available_sector_tickers = [t for t in SECTORS.keys() if t in price_cols]
+missing_sectors = [SECTORS[t] for t in SECTORS if t not in price_cols]
 
 # Sidebar
 with st.sidebar:
@@ -64,12 +77,13 @@ with st.sidebar:
         """
     )
     st.markdown("---")
-    st.write(f"**Sectors available:** {', '.join([SECTORS[t] for t in available_sector_tickers])}")
+    if available_sector_tickers:
+        st.write(f"**Sectors available:** {', '.join([SECTORS[t] for t in available_sector_tickers])}")
     if missing_sectors:
         st.warning(f"Missing data for: {', '.join(missing_sectors)}")
 
 if not available_sector_tickers:
-    st.error("No sector tickers found in the downloaded data.")
+    st.error("No sector tickers found in the downloaded data. Try refreshing in a few minutes.")
     st.stop()
 
 # --- Relative Strength vs SPY Chart ---
