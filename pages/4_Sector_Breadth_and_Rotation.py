@@ -21,32 +21,30 @@ SECTORS = {
 }
 
 @st.cache_data(ttl=3600)
-def fetch_prices(tickers, period="1y", interval="1d"):
-    raw_data = yf.download(tickers, period=period, interval=interval, progress=False, group_by="ticker")
-    # Handle MultiIndex and single-index
-    if isinstance(raw_data.columns, pd.MultiIndex):
-        if "Adj Close" in raw_data.columns.get_level_values(0):
-            adj_close = raw_data["Adj Close"]
-        elif "Close" in raw_data.columns.get_level_values(0):
-            adj_close = raw_data["Close"]
-        else:
-            adj_close = raw_data.xs(raw_data.columns.levels[0][0], axis=1, level=0)
-    else:
-        # Single ticker fallback (returns just one column)
-        if "Adj Close" in raw_data.columns:
-            adj_close = raw_data[["Adj Close"]].rename(columns={"Adj Close": tickers[0]})
-        elif "Close" in raw_data.columns:
-            adj_close = raw_data[["Close"]].rename(columns={"Close": tickers[0]})
-        else:
-            adj_close = pd.DataFrame()
-    # Defensive: Clean up columns
-    adj_close.columns = [str(col).strip() for col in adj_close.columns]
-    return adj_close.dropna(how="all")
+def robust_fetch(tickers, period="1y", interval="1d"):
+    results = {}
+    for t in tickers:
+        try:
+            data = yf.download(t, period=period, interval=interval, progress=False)
+            st.write(f"DEBUG: {t} shape={data.shape} cols={list(data.columns)}")
+            if "Adj Close" in data.columns:
+                results[t] = data["Adj Close"]
+            elif "Close" in data.columns:
+                results[t] = data["Close"]
+            else:
+                st.warning(f"No price columns found for {t}")
+        except Exception as e:
+            st.warning(f"Failed to fetch {t}: {e}")
+    if not results:
+        return pd.DataFrame()
+    df = pd.DataFrame(results)
+    df = df.dropna(how="all")
+    st.write("DEBUG: Final fetched tickers:", list(df.columns))
+    return df
 
 tickers = list(SECTORS.keys()) + ["SPY"]
-prices = fetch_prices(tickers, period="1y", interval="1d")
+prices = robust_fetch(tickers, period="1y", interval="1d")
 
-# Print debug info
 st.write("DEBUG: Downloaded columns:", list(prices.columns))
 
 if prices.empty:
