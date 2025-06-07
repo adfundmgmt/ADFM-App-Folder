@@ -21,50 +21,47 @@ SECTORS = {
 }
 
 @st.cache_data(ttl=3600)
-def robust_fetch(tickers, period="1y", interval="1d"):
-    close_series = {}
-    full_index = None
-    for t in tickers:
-        try:
-            data = yf.download(t, period=period, interval=interval, progress=False)
-            close = data.get("Adj Close", data.get("Close"))
-            if close is not None and not close.empty:
-                close = close.dropna()
-                close_series[t] = close
-                full_index = close.index if full_index is None else full_index.union(close.index)
-        except Exception:
-            continue
-
-    if not close_series or full_index is None:
-        return pd.DataFrame()
-
-    # Reindex all series to same date index
-    for t in close_series:
-        close_series[t] = close_series[t].reindex(full_index)
-
+def fetch_adj_close(tickers, period="1y", interval="1d"):
     try:
-        df = pd.DataFrame(close_series).dropna(how="all")
-    except Exception as e:
-        return pd.DataFrame()
-    return df
+        data = yf.download(tickers, period=period, interval=interval, group_by="ticker", auto_adjust=False, progress=False)
+    except Exception:
+        return pd.DataFrame(), []
+    if data is None or data.empty:
+        return pd.DataFrame(), []
+
+    # Handle single ticker (simple columns) or multi ticker (MultiIndex)
+    if isinstance(data.columns, pd.Index) and "Adj Close" in data.columns:
+        # Only one ticker - ensure always DataFrame shape [date, ticker]
+        t = tickers[0] if isinstance(tickers, list) else tickers
+        df = data[["Adj Close"]].rename(columns={"Adj Close": t})
+        available = [t]
+        return df, available
+
+    if isinstance(data.columns, pd.MultiIndex):
+        # MultiIndex: get 'Adj Close' for all tickers
+        if "Adj Close" in data.columns.get_level_values(0):
+            df = data["Adj Close"].copy()
+            df = df.dropna(how="all")
+            available = list(df.columns)
+            return df, available
+
+    # Fallback
+    return pd.DataFrame(), []
 
 # --- FETCH DATA ---
 tickers = list(SECTORS.keys()) + ["SPY"]
-prices = robust_fetch(tickers, period="1y", interval="1d")
+prices, available_columns = fetch_adj_close(tickers, period="1y", interval="1d")
 
-if prices is None or prices.empty:
-    st.error("No valid data retrieved for the selected tickers. Yahoo API may be down or all tickers failed. Try refreshing in a few minutes.")
+if prices.empty:
+    st.error("No valid data retrieved for sector ETFs or SPY. Check Yahoo Finance or try again later.")
     st.stop()
 
-price_columns = list(prices.columns)
-missing_columns = [t for t in tickers if t not in price_columns]
+available_sector_tickers = [t for t in SECTORS if t in available_columns]
+missing_sectors = [SECTORS[t] for t in SECTORS if t not in available_columns]
 
-if "SPY" not in price_columns:
-    st.error("S&P 500 ETF ('SPY') data is missing, so no relative strength or rotation analytics can be displayed.\n\nMost likely, Yahoo Finance API is rate-limited or SPY was delisted temporarily. Try again later.")
+if "SPY" not in available_columns:
+    st.error("SPY data is missing. No relative analytics can be displayed.")
     st.stop()
-
-available_sector_tickers = [t for t in SECTORS if t in price_columns]
-missing_sectors = [SECTORS[t] for t in SECTORS if t not in price_columns]
 
 with st.sidebar:
     st.header("About This Tool")
@@ -84,7 +81,7 @@ with st.sidebar:
         st.success(f"Sectors available: {', '.join([SECTORS[t] for t in available_sector_tickers])}")
     if missing_sectors:
         st.warning(f"Missing data for: {', '.join(missing_sectors)}")
-    if "SPY" not in price_columns:
+    if "SPY" not in available_columns:
         st.error("'SPY' is missing from price columns.")
 
 if not available_sector_tickers:
