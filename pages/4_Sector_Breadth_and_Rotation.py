@@ -28,18 +28,14 @@ def robust_fetch(tickers, period="1y", interval="1d"):
         try:
             data = yf.download(t, period=period, interval=interval, progress=False)
             close = data.get("Adj Close", data.get("Close"))
-            if close is None:
-                continue
-            close = close.dropna()
-            close_series[t] = close
-            if full_index is None:
-                full_index = close.index
-            else:
-                full_index = full_index.union(close.index)
+            if close is not None and not close.empty:
+                close = close.dropna()
+                close_series[t] = close
+                full_index = close.index if full_index is None else full_index.union(close.index)
         except Exception:
             continue
 
-    if not close_series:
+    if not close_series or full_index is None:
         return pd.DataFrame()
 
     for t in close_series:
@@ -52,7 +48,7 @@ tickers = list(SECTORS.keys()) + ["SPY"]
 prices = robust_fetch(tickers, period="1y", interval="1d")
 
 if prices.empty:
-    st.error("Downloaded data is empty. Yahoo Finance API might be rate-limited or unavailable.")
+    st.error("No valid data retrieved for the selected tickers. Please retry later.")
     st.stop()
 
 if "SPY" not in prices.columns:
