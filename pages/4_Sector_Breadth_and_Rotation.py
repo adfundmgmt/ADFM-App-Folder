@@ -38,25 +38,33 @@ def robust_fetch(tickers, period="1y", interval="1d"):
     if not close_series or full_index is None:
         return pd.DataFrame()
 
+    # Reindex all series to same date index
     for t in close_series:
         close_series[t] = close_series[t].reindex(full_index)
 
-    df = pd.DataFrame(close_series).dropna(how="all")
+    try:
+        df = pd.DataFrame(close_series).dropna(how="all")
+    except Exception as e:
+        return pd.DataFrame()
     return df
 
+# --- FETCH DATA ---
 tickers = list(SECTORS.keys()) + ["SPY"]
 prices = robust_fetch(tickers, period="1y", interval="1d")
 
-if prices.empty:
-    st.error("No valid data retrieved for the selected tickers. Please retry later.")
+if prices is None or prices.empty:
+    st.error("No valid data retrieved for the selected tickers. Yahoo API may be down or all tickers failed. Try refreshing in a few minutes.")
     st.stop()
 
-if "SPY" not in prices.columns:
-    st.error("'SPY' data not available. Cannot calculate relative strength without SPY.")
+price_columns = list(prices.columns)
+missing_columns = [t for t in tickers if t not in price_columns]
+
+if "SPY" not in price_columns:
+    st.error("S&P 500 ETF ('SPY') data is missing, so no relative strength or rotation analytics can be displayed.\n\nMost likely, Yahoo Finance API is rate-limited or SPY was delisted temporarily. Try again later.")
     st.stop()
 
-available_sector_tickers = [t for t in SECTORS if t in prices.columns]
-missing_sectors = [SECTORS[t] for t in SECTORS if t not in prices.columns]
+available_sector_tickers = [t for t in SECTORS if t in price_columns]
+missing_sectors = [SECTORS[t] for t in SECTORS if t not in price_columns]
 
 with st.sidebar:
     st.header("About This Tool")
@@ -69,59 +77,88 @@ with st.sidebar:
     - Downloadable & sortable sector performance table
 
     **Data Source:** Yahoo Finance (via yfinance)
-
+    
     *Built by AD Fund Management LP.*
     """)
-
-if missing_sectors:
-    st.warning(f"Missing data for: {', '.join(missing_sectors)}")
+    if available_sector_tickers:
+        st.success(f"Sectors available: {', '.join([SECTORS[t] for t in available_sector_tickers])}")
+    if missing_sectors:
+        st.warning(f"Missing data for: {', '.join(missing_sectors)}")
+    if "SPY" not in price_columns:
+        st.error("'SPY' is missing from price columns.")
 
 if not available_sector_tickers:
-    st.error("No sector tickers found in the downloaded data.")
+    st.error("No sector tickers found in the downloaded data. Wait a few minutes or check your network/API access.")
     st.stop()
 
-relative_strength = prices[available_sector_tickers].div(prices["SPY"], axis=0)
+# --- RELATIVE STRENGTH ---
+try:
+    relative_strength = prices[available_sector_tickers].div(prices["SPY"], axis=0)
+except Exception as e:
+    st.error(f"Failed to compute relative strength: {e}")
+    st.stop()
+
 selected_sector = st.selectbox(
     "Select sector to compare with S&P 500 (SPY):",
     options=available_sector_tickers,
     format_func=lambda x: SECTORS[x]
 )
 
-fig_rs = px.line(
-    relative_strength[selected_sector].dropna(),
-    title=f"Relative Strength: {SECTORS[selected_sector]} vs. S&P 500 (SPY)",
-    labels={"value": "Ratio (Sector Price / SPY Price)", "index": "Date"},
-)
-st.plotly_chart(fig_rs, use_container_width=True)
+try:
+    fig_rs = px.line(
+        relative_strength[selected_sector].dropna(),
+        title=f"Relative Strength: {SECTORS[selected_sector]} vs. S&P 500 (SPY)",
+        labels={"value": "Ratio (Sector Price / SPY Price)", "index": "Date"},
+    )
+    st.plotly_chart(fig_rs, use_container_width=True)
+except Exception as e:
+    st.warning(f"Unable to display relative strength chart for {selected_sector}: {e}")
 
-returns_1m = prices.pct_change(21).iloc[-1]
-returns_3m = prices.pct_change(63).iloc[-1]
+# --- ROTATION QUADRANT ---
+try:
+    returns_1m = prices.pct_change(21).iloc[-1]
+    returns_3m = prices.pct_change(63).iloc[-1]
+except Exception as e:
+    st.warning(f"Failed to calculate 1M/3M returns: {e}")
+    returns_1m = pd.Series(dtype=float)
+    returns_3m = pd.Series(dtype=float)
 
 rotation_df = pd.DataFrame({
     "1M Return": returns_1m,
     "3M Return": returns_3m,
-    "Ticker": returns_1m.index
+    "Ticker": returns_1m.index if not returns_1m.empty else []
 })
-rotation_df = rotation_df[rotation_df["Ticker"].isin(available_sector_tickers)]
-rotation_df["Sector"] = rotation_df["Ticker"].map(SECTORS)
+if not rotation_df.empty:
+    rotation_df = rotation_df[rotation_df["Ticker"].isin(available_sector_tickers)]
+    rotation_df["Sector"] = rotation_df["Ticker"].map(SECTORS)
+    try:
+        fig_rot = px.scatter(
+            rotation_df,
+            x="3M Return",
+            y="1M Return",
+            text="Sector",
+            title="Sector Rotation Quadrant (1M vs 3M Total Return)",
+            labels={"3M Return": "3-Month Return", "1M Return": "1-Month Return"},
+            color="Sector",
+        )
+        fig_rot.update_traces(textposition="top center")
+        st.plotly_chart(fig_rot, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Unable to render sector rotation chart: {e}")
+else:
+    st.info("Not enough data to display rotation quadrant.")
 
-fig_rot = px.scatter(
-    rotation_df,
-    x="3M Return",
-    y="1M Return",
-    text="Sector",
-    title="Sector Rotation Quadrant (1M vs 3M Total Return)",
-    labels={"3M Return": "3-Month Return", "1M Return": "1-Month Return"},
-    color="Sector",
-)
-fig_rot.update_traces(textposition="top center")
-st.plotly_chart(fig_rot, use_container_width=True)
-
-df = rotation_df.set_index("Sector")[["1M Return", "3M Return"]]
-st.subheader("Sector Total Returns Table")
-st.dataframe(df.style.format("{:.2%}"), height=400)
-
-csv = df.to_csv().encode()
-st.download_button("Download returns table as CSV", csv, "sector_returns.csv", "text/csv")
+# --- SECTOR TABLE ---
+try:
+    if not rotation_df.empty:
+        df = rotation_df.set_index("Sector")[["1M Return", "3M Return"]]
+        st.subheader("Sector Total Returns Table")
+        st.dataframe(df.style.format("{:.2%}"), height=400)
+        csv = df.to_csv().encode()
+        st.download_button("Download returns table as CSV", csv, "sector_returns.csv", "text/csv")
+    else:
+        st.info("No sector returns to display or download.")
+except Exception as e:
+    st.warning(f"Unable to display or download returns table: {e}")
 
 st.caption("© 2025 AD Fund Management LP")
