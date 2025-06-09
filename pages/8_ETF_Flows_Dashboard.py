@@ -10,7 +10,7 @@ st.set_page_config(page_title="ETF Flows Dashboard", layout="wide")
 # ----- SIDEBAR -----
 st.sidebar.title("ETF Flows")
 st.sidebar.markdown("""
-A dashboard of **thematic, global, and high-conviction ETF flows**—see where money is moving among major macro and innovation trades, not just vanilla sectors.
+A dashboard of **thematic, and global flows** - see where money is moving among major macro and innovation trades.
 
 - **Flows are proxies**, not official fund flows.
 - **Themes:** AI, robotics, Mag 7, semis, clean energy, China tech, EM, LatAm, Europe, gold, commodities, min vol, free cash flow, Bitcoin, T-bills, and more.
