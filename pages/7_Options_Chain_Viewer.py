@@ -5,12 +5,12 @@ import numpy as np
 import altair as alt
 import math
 from datetime import datetime
-
 import matplotlib.pyplot as plt
+from time import sleep
+
 plt.style.use("default")
 
 st.set_page_config(page_title="Options Chain Viewer", layout="wide")
-
 st.title('Options Chain Viewer')
 st.sidebar.header('About This Tool')
 st.sidebar.markdown("""
@@ -21,75 +21,94 @@ st.sidebar.markdown("""
 - **Optional Tables & Download**: Inspect bid/ask, volume, open interest per strike; download full option chain.
 """)
 
-ticker = st.sidebar.text_input('Ticker', 'AAPL').upper()
+ticker = st.sidebar.text_input('Ticker', 'AAPL').upper().strip()
 if not ticker:
     st.sidebar.error('Enter a valid ticker symbol')
     st.stop()
 
 hide_zero_vol = st.sidebar.checkbox("Hide zero-volume options", value=True)
 
-# Get valid expiries robustly, with diagnostics and user-friendly error
-@st.cache_data(ttl=900, show_spinner=True)
-def get_valid_expiries(tkr):
-    tk = yf.Ticker(tkr)
-    try:
-        raw_expiries = tk.options
-    except Exception:
-        raw_expiries = []
-    today = datetime.today().date()
-    valid_expiries = []
-    for exp in raw_expiries:
-        exp_date = pd.to_datetime(exp).date()
-        if exp_date < today:
-            continue
+# --- Robust Expiry Fetch with Retry ---
+@st.cache_data(ttl=300, show_spinner=True)
+def get_valid_expiries(tkr, max_retries=3):
+    for attempt in range(max_retries):
         try:
-            chain = tk.option_chain(exp)
-            if not chain.calls.empty or not chain.puts.empty:
-                valid_expiries.append(exp)
+            tk = yf.Ticker(tkr)
+            raw_expiries = tk.options
+            if raw_expiries is None:
+                raw_expiries = []
+            today = datetime.today().date()
+            valid_expiries = []
+            for exp in raw_expiries:
+                try:
+                    exp_date = pd.to_datetime(exp).date()
+                    if exp_date < today:
+                        continue
+                    chain = tk.option_chain(exp)
+                    if not chain.calls.empty or not chain.puts.empty:
+                        valid_expiries.append(exp)
+                except Exception:
+                    continue
+            if raw_expiries:
+                return raw_expiries, valid_expiries
         except Exception:
+            sleep(1 + attempt)
             continue
-    return raw_expiries, valid_expiries
+    return [], []
 
 with st.spinner("Loading available expiries..."):
     raw_expiries, expiries = get_valid_expiries(ticker)
 
-# Diagnostics: only shown if there is a problem
 if not raw_expiries:
-    st.error(f"Yahoo Finance returned no option expiry dates for {ticker}. This is usually a data outage or rate limit. Try another ticker, VPN, or wait and retry.")
+    st.error(
+        f"Yahoo Finance returned no option expiry dates for **{ticker}**.\n\n"
+        "This is *almost always* a Yahoo outage, a rate-limit, or a VPN/IP block. "
+        "Steps to fix:\n"
+        "- Try a common large cap (MSFT, NVDA, SPY).\n"
+        "- If those also fail, wait 5-10 minutes and refresh.\n"
+        "- If only this ticker fails, it may be delisted or have no options.\n"
+        "- If nothing works, try switching networks or a VPN."
+    )
     st.stop()
 
 if not expiries:
-    st.error(f"No valid options chains available for {ticker}.\n"
-             f"Yahoo reports these expiries: {', '.join(raw_expiries) if raw_expiries else 'None'}\n"
-             "All available chains are empty or could not be loaded. "
-             "This often means Yahoo is blocking automated requests or is experiencing a temporary outage. "
-             "Try another ticker, VPN, or wait 1-2 hours and refresh.")
+    st.error(
+        f"**No valid options chains available for {ticker}.**\n"
+        f"Raw expiries fetched: {', '.join(raw_expiries) if raw_expiries else 'None'}\n\n"
+        "Yahoo returned expiry dates, but all chains are empty or could not be loaded. "
+        "This is usually a temporary Yahoo Finance API issue or a sign of rate-limiting. "
+        "Try again in 15 minutes, switch tickers, or rotate your IP."
+    )
     st.stop()
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
 
-# Fetch the option chain (do NOT cache this!)
+# -- Defensive option chain fetch --
 try:
     tk = yf.Ticker(ticker)
     chain = tk.option_chain(expiry)
     if chain.calls.empty and chain.puts.empty:
         raise ValueError("Empty chain")
-except Exception:
+except Exception as e:
     st.warning(
         f"⚠️ Could not load an options chain for {ticker} @ {expiry}. "
-        "Please pick a different expiry."
+        f"Exception: {str(e)}\n"
+        "Try picking a different expiry or refreshing the page."
     )
     st.stop()
 
-# Spot price cache is OK, it's a float
+# Spot price fetch
 @st.cache_data(ttl=600, show_spinner=False)
 def get_spot(tkr):
-    hist = yf.Ticker(tkr).history(period='1d')
-    return hist['Close'].iloc[-1] if not hist.empty else None
+    try:
+        hist = yf.Ticker(tkr).history(period='1d')
+        return hist['Close'].iloc[-1] if not hist.empty else None
+    except Exception:
+        return None
 
 spot = get_spot(ticker)
-if spot is None:
-    st.error("Could not retrieve spot price.")
+if spot is None or np.isnan(spot):
+    st.error("Could not retrieve spot price for this ticker.")
     st.stop()
 
 calls = chain.calls[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
@@ -97,7 +116,6 @@ puts  = chain.puts [['strike','bid','ask','volume','openInterest','impliedVolati
 calls['type'], puts['type'] = 'Call','Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
-# Optionally filter out zero-volume rows
 if hide_zero_vol:
     combined = combined[combined["volume"] > 0]
     calls = calls[calls["volume"] > 0]
@@ -163,7 +181,7 @@ vol_chart = (
            y=alt.Y('volume:Q', title='Volume'),
            color=alt.condition(
                alt.datum.highlight == 'ATM',
-               alt.value(highlight_color),  # ATM strike bar highlight
+               alt.value(highlight_color),
                alt.Color(
                    'type:N',
                    scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
