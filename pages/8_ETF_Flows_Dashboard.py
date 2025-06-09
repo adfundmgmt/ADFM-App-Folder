@@ -58,40 +58,59 @@ etf_tickers = list(etf_info.keys())
 
 # ----- DATA COLLECTION -----
 @st.cache_data(show_spinner=True)
-def robust_flow_estimate(ticker, period_days):
+def fetch_etf_metrics(ticker, period_days):
+    flow, mcap, flow_pct = 0.0, None, None
     try:
         t = yf.Ticker(ticker)
+        # --- FLOW CALC ---
         hist = t.history(period=f"{period_days+10}d")
         hist = hist.dropna()
-        if hist.empty or len(hist) < 2:
-            return 0.0
+        if not hist.empty and len(hist) >= 2:
+            try:
+                so = t.get_shares_full()
+                if so is not None and not so.empty:
+                    so = so.dropna()
+                    so.index = pd.to_datetime(so.index)
+                    so = so.loc[hist.index[0]:hist.index[-1]]
+                    if len(so) >= 2:
+                        so = so.reindex(hist.index, method='ffill')
+                        start, end = so.iloc[0], so.iloc[-1]
+                        close = hist['Close']
+                        flow = (end - start) * close.iloc[-1]
+                    else:
+                        flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
+                else:
+                    flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
+            except Exception:
+                flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
+        # --- MARKET CAP + % FLOW CALC ---
+        shares_out = None
+        last_close = None
         try:
-            so = t.get_shares_full()
-            if so is not None and not so.empty:
-                so = so.dropna()
-                so.index = pd.to_datetime(so.index)
-                so = so.loc[hist.index[0]:hist.index[-1]]
-                if len(so) >= 2:
-                    so = so.reindex(hist.index, method='ffill')
-                    start, end = so.iloc[0], so.iloc[-1]
-                    close = hist['Close']
-                    flow = (end - start) * close.iloc[-1]
-                    return flow
+            shares_out = t.info.get("sharesOutstanding", None)
+            last_close = t.history(period="1d")['Close'][-1]
         except Exception:
             pass
-        flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
-        return flow
+        if shares_out and last_close:
+            mcap = shares_out * last_close
+            if mcap:
+                flow_pct = 100 * flow / mcap
+        else:
+            mcap, flow_pct = None, None
     except Exception:
-        return 0.0
+        pass
+    return flow, mcap, flow_pct
 
 results = []
 for ticker in etf_tickers:
-    flow = robust_flow_estimate(ticker, period_days)
+    flow, mcap, flow_pct = fetch_etf_metrics(ticker, period_days)
     cat, desc = etf_info[ticker]
     results.append({
         "Ticker": ticker,
         "Category": cat,
         "Flow ($)": flow,
+        "Market Cap": mcap,
+        "Flow (% MC)": flow_pct,
         "Description": desc
     })
 
@@ -101,8 +120,13 @@ df = pd.DataFrame(results)
 df = df.sort_values("Flow ($)", ascending=False)
 df['Flow (Formatted)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
 
-# For the user table, only show the formatted column, but keep numeric for sorting (sorting is now correct)
+# -------- FLOW % OF MC FORMATTING -------
+df['Market Cap (Formatted)'] = df['Market Cap'].apply(lambda x: f"${x/1e9:,.2f}B" if x and abs(x) > 1e9 else (f"${x/1e6:,.2f}M" if x else "N/A"))
+df['Flow (% MC)'] = df['Flow (% MC)'].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "N/A")
+
+# ------ DISPLAY TABLES ------
 df_display = df[['Ticker', 'Category', 'Flow (Formatted)', 'Description']]
+df_display_pct = df[['Ticker', 'Category', 'Flow (Formatted)', 'Market Cap (Formatted)', 'Flow (% MC)', 'Description']].sort_values("Flow (% MC)", ascending=False, key=lambda x: pd.to_numeric(x.str.replace('%','').replace('N/A','0'), errors='coerce'))
 
 # ----- MAIN CONTENT -----
 st.title("ETF Flows Dashboard")
@@ -135,5 +159,11 @@ def plot_with_labels(data):
     return fig
 
 st.pyplot(plot_with_labels(df))
+
+# ------ TABLES ------
+st.subheader("Nominal ETF Flows")
+st.dataframe(df_display, hide_index=True)
+st.subheader("Flows as % of Market Cap")
+st.dataframe(df_display_pct, hide_index=True)
 
 st.caption("© 2025 AD Fund Management LP")
