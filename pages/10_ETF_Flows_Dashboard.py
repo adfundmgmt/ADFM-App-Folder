@@ -135,11 +135,3 @@ def plot_with_labels(data):
     return fig
 
 st.pyplot(plot_with_labels(df))
-
-# ------ TABLE ------
-# Show the table, always sorted by numeric flow, but display only formatted version
-st.dataframe(
-    df_display,
-    hide_index=True,
-    column_order=["Ticker", "Category", "Flow (Formatted)", "Description"]
-)
