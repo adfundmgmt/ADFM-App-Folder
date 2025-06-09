@@ -2,38 +2,56 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+from datetime import datetime
 
-st.title("ETF Flows Dashboard")
-st.write("Proxy flows for major US ETFs based on share issuance and price moves. Not official fund flow data; interpret as indicative.")
+st.set_page_config(page_title="ETF Flows Dashboard", layout="wide")
 
-# ETF metadata: Ticker → (Category, Description)
+# ----- SIDEBAR -----
+st.sidebar.title("ETF Flows")
+st.sidebar.markdown("""
+This dashboard visualizes **proxy flows** for major U.S. ETFs using changes in shares outstanding and price. 
+Flows are shown in dollars and are **approximate**—they may not match official fund flows.
+- **Positive flow:** More money entering the ETF (creations)
+- **Negative flow:** Money leaving the ETF (redemptions)
+Data is from Yahoo Finance. 
+""")
+lookback_dict = {
+    "1 Month": 30,
+    "3 Months": 90,
+    "6 Months": 180,
+    "12 Months": 365,
+    "YTD": (datetime.now() - datetime(datetime.now().year, 1, 1)).days
+}
+period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
+period_days = lookback_dict[period_label]
+
+# ----- ETF INFO -----
 etf_info = {
-    "BITO": ("Crypto", "Bitcoin Futures ETF, offers exposure to Bitcoin price via futures contracts."),
-    "IBIT": ("Crypto", "BlackRock's Spot Bitcoin ETF, directly tracks Bitcoin's price."),
-    "SHV": ("Short Duration Bonds", "iShares Short Treasury Bond ETF, invests in US T-bills <1 year."),
-    "BIL": ("Short Duration Bonds", "SPDR Bloomberg 1-3 Month T-Bill ETF."),
-    "SGOV": ("Treasury Bill ETF", "iShares 0-3 Month Treasury Bond ETF."),
-    "IEF": ("Intermediate Duration Bonds", "iShares 7-10 Year Treasury Bond ETF."),
-    "AGG": ("Intermediate Duration Bonds", "iShares Core U.S. Aggregate Bond ETF."),
-    "TLT": ("Long Duration Bonds", "iShares 20+ Year Treasury Bond ETF."),
-    "XLK": ("Tech Sector", "Technology Select Sector SPDR Fund."),
-    "XLF": ("Financials Sector", "Financial Select Sector SPDR Fund."),
-    "XLY": ("Consumer Discretionary", "Consumer Discretionary Select Sector SPDR Fund."),
-    "XLE": ("Energy", "Energy Select Sector SPDR Fund."),
-    "XLP": ("Consumer Staples", "Consumer Staples Select Sector SPDR Fund."),
-    "XLV": ("Health Care", "Health Care Select Sector SPDR Fund."),
-    "XLU": ("Utilities", "Utilities Select Sector SPDR Fund."),
-    "XLI": ("Industrials", "Industrials Select Sector SPDR Fund."),
-    "XLB": ("Materials", "Materials Select Sector SPDR Fund."),
-    "VTV": ("Value Factor", "Vanguard Value ETF, US large-cap value stocks."),
-    "VUG": ("Growth Factor", "Vanguard Growth ETF, US large-cap growth stocks."),
-    "IWM": ("Small Cap", "iShares Russell 2000 ETF, US small cap stocks."),
+    "BITO": ("Crypto", "Bitcoin Futures ETF"),
+    "IBIT": ("Crypto", "BlackRock Spot Bitcoin ETF"),
+    "SHV": ("Short Duration Bonds", "0-1 Yr T-Bills"),
+    "BIL": ("Short Duration Bonds", "1-3 Mo T-Bills"),
+    "SGOV": ("Treasury Bill ETF", "0-3 Mo T-Bills"),
+    "IEF": ("Intermediate Duration Bonds", "7-10 Yr Treasuries"),
+    "AGG": ("Intermediate Duration Bonds", "Core US Bonds"),
+    "TLT": ("Long Duration Bonds", "20+ Yr Treasuries"),
+    "XLK": ("Tech Sector", "Tech Stocks"),
+    "XLF": ("Financials Sector", "Financials"),
+    "XLY": ("Consumer Discretionary", "Discretionary Stocks"),
+    "XLE": ("Energy", "Energy Stocks"),
+    "XLP": ("Consumer Staples", "Staples"),
+    "XLV": ("Health Care", "Health Care"),
+    "XLU": ("Utilities", "Utilities"),
+    "XLI": ("Industrials", "Industrials"),
+    "XLB": ("Materials", "Materials"),
+    "VTV": ("Value Factor", "US Large Value"),
+    "VUG": ("Growth Factor", "US Large Growth"),
+    "IWM": ("Small Cap", "US Small Caps"),
 }
 etf_tickers = list(etf_info.keys())
 
-period_days = st.slider('Number of days to look back', 30, 90, 45)  # UI control
-st.caption(f"Calculating proxy flows for the last {period_days} days.")
-
+# ----- DATA COLLECTION -----
 @st.cache_data(show_spinner=True)
 def robust_flow_estimate(ticker, period_days):
     try:
@@ -56,13 +74,11 @@ def robust_flow_estimate(ticker, period_days):
                     return flow
         except Exception:
             pass
-        # Fallback: price delta x average volume proxy
         flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
         return flow
     except Exception:
         return 0
 
-# Calculate flows and collect ETF metadata
 results = []
 for ticker in etf_tickers:
     flow = robust_flow_estimate(ticker, period_days)
@@ -73,19 +89,44 @@ for ticker in etf_tickers:
         "Flow ($)": flow,
         "Description": desc
     })
-
 df = pd.DataFrame(results).sort_values("Flow ($)", ascending=False)
 
-if df.empty or df['Flow ($)'].abs().sum() == 0:
-    st.warning("No data available for selected period. Try changing the lookback window or check your internet connection.")
-else:
-    st.dataframe(df, hide_index=True)
-    # Bar chart (horizontal)
-    fig, ax = plt.subplots(figsize=(12, 8))
-    bars = ax.barh(df['Ticker'], df['Flow ($)'], color=['green' if x > 0 else 'red' for x in df['Flow ($)']])
+# Format Flow in $000,000,000
+df['Flow ($)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
+df_display = df.copy()
+df_display = df_display[['Ticker', 'Category', 'Flow ($)', 'Description']]
+
+# ----- MAIN CONTENT -----
+st.title("ETF Proxy Flows")
+st.caption(f"Proxy flows (not official) for selected U.S. ETFs. Period: **{period_label}**")
+
+st.dataframe(df_display, hide_index=True)
+
+# Plot with label descriptions
+def plot_with_labels(data):
+    fig, ax = plt.subplots(figsize=(14, 8))
+    raw_flows = []
+    tiny_descs = []
+    for ticker in data['Ticker']:
+        # Pull original (unformatted) flow for plot
+        idx = df['Ticker'] == ticker
+        # Undo formatting to float for bar chart
+        val = results[[r['Ticker'] for r in results].index(ticker)]['Flow ($)']
+        raw_flows.append(float(val))
+        tiny_descs.append(etf_info[ticker][1])
+    bars = ax.barh(data['Ticker'], raw_flows, color=['green' if x > 0 else 'red' for x in raw_flows])
     ax.set_xlabel('Estimated Flow ($)')
-    ax.set_title(f'ETF Proxy Flows – Last {period_days} Days')
+    ax.set_title(f'ETF Proxy Flows – {period_label}')
     ax.invert_yaxis()
-    st.pyplot(fig)
-    st.caption("Descriptions: " + "; ".join([f"{row.Ticker}: {row.Description}" for row in df.itertuples()]))
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.2f}B' if abs(x)>=1e9 else f'${x/1e6:,.1f}M'))
+
+    # Add tiny description labels on bars
+    for bar, val, desc in zip(bars, raw_flows, tiny_descs):
+        width = bar.get_width()
+        ax.text(width + (1e7 if width > 0 else -1e7), bar.get_y() + bar.get_height()/2,
+                f"{desc}", va='center', ha='left' if width > 0 else 'right', fontsize=8, color='black')
+    plt.tight_layout()
+    return fig
+
+st.pyplot(plot_with_labels(df))
 
