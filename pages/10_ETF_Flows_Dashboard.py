@@ -13,7 +13,7 @@ st.sidebar.markdown("""
 A dashboard of **thematic, global, and high-conviction ETF flows**—see where money is moving among major macro and innovation trades, not just vanilla sectors.
 
 - **Flows are proxies**, not official fund flows.
-- **Themes:** AI, robotics, Mag 7, semis, clean energy, China tech, EM, LatAm, Europe, Bitcoin, T-bills, and more.
+- **Themes:** AI, robotics, Mag 7, semis, clean energy, China tech, EM, LatAm, Europe, gold, commodities, min vol, free cash flow, Bitcoin, T-bills, and more.
 """)
 lookback_dict = {
     "1 Month": 30,
@@ -25,10 +25,8 @@ lookback_dict = {
 period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=1)
 period_days = lookback_dict[period_label]
 
-# ----- ETF UNIVERSE (Creative/Thematic/Regional) -----
+# ----- ETF UNIVERSE -----
 etf_info = {
-    "QQQ": ("Nasdaq 100", "U.S. tech/growth (Nasdaq 100)"),
-    "SPY": ("S&P 500", "U.S. large cap equities"),
     "MAGS": ("Mag 7", "Magnificent 7 stocks ETF"),
     "SMH": ("Semiconductors", "Semiconductor stocks (VanEck)"),
     "BOTZ": ("Robotics/AI", "Global robotics and AI leaders"),
@@ -40,9 +38,16 @@ etf_info = {
     "EWZ": ("Brazil", "Brazil large-cap equities"),
     "EEM": ("Emerging Markets", "EM equities (MSCI)"),
     "VWO": ("Emerging Markets", "EM equities (Vanguard)"),
-    "EUFN": ("Europe Financials", "European banks and insurers"),
-    "EZU": ("Europe", "Eurozone large caps"),
     "VGK": ("Europe Large-Cap", "Developed Europe stocks (Vanguard)"),
+    "FEZ": ("Eurozone", "Euro STOXX 50 ETF"),
+    "ILF": ("Latin America", "Latin America 40 ETF"),
+    "ARGT": ("Argentina", "Global X MSCI Argentina ETF"),
+    "GLD": ("Gold", "SPDR Gold Trust ETF"),
+    "SLV": ("Silver", "iShares Silver Trust ETF"),
+    "DBC": ("Commodities", "Invesco DB Commodity Index ETF"),
+    "HEDJ": ("Hedged Europe", "WisdomTree Europe Hedged Equity ETF"),
+    "USMV": ("US Min Volatility", "iShares MSCI USA Min Volatility ETF"),
+    "COWZ": ("US Free Cash Flow", "Pacer US Cash Cows 100 ETF"),
     "BITO": ("BTC Futures", "Bitcoin futures ETF"),
     "IBIT": ("Spot BTC", "BlackRock spot Bitcoin ETF"),
     "BIL": ("1-3mo T-Bills", "1-3 month U.S. Treasury bills"),
@@ -74,7 +79,6 @@ def robust_flow_estimate(ticker, period_days):
                     return flow
         except Exception:
             pass
-        # Fallback: price delta x average volume
         flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
         return flow
     except Exception:
@@ -91,26 +95,26 @@ for ticker in etf_tickers:
         "Description": desc
     })
 
-df = pd.DataFrame(results).sort_values("Flow ($)", ascending=False)
-df['Flow ($)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
-df_display = df[['Ticker', 'Category', 'Flow ($)', 'Description']]
+df = pd.DataFrame(results)
+# Sort by raw flow for both chart and table
+df = df.sort_values("Flow ($)", ascending=False)
+df['Flow (Formatted)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
+df_display = df[['Ticker', 'Category', 'Flow (Formatted)', 'Description']]
 
 # ----- MAIN CONTENT -----
 st.title("ETF Proxy Flows (Creative Universe)")
-st.caption(f"Flows are proxies (not official). Themes: AI, innovation, EM, China, Bitcoin, T-bills. Period: **{period_label}**")
+st.caption(f"Flows are proxies (not official). Themes: AI, innovation, EM, China, Bitcoin, commodities, free cash flow, T-bills. Period: **{period_label}**")
 
 # ------ CHART ------
 def plot_with_labels(data):
     fig, ax = plt.subplots(figsize=(15, 9))
-    # Build a mapping from Ticker to original float Flow ($)
-    raw_flow_map = {r['Ticker']: float(r['Flow ($)']) if isinstance(r['Flow ($)'], float) or isinstance(r['Flow ($)'], int) else 0.0 for r in results}
     nicknames = []
     raw_flows = []
-    for ticker in data['Ticker']:
-        val_num = raw_flow_map.get(ticker, 0.0)
+    for _, row in data.iterrows():
+        val_num = row['Flow ($)']
         raw_flows.append(val_num)
-        # Use the short nickname for the bar
-        nickname = etf_info[ticker][0]
+        nickname = etf_info[row['Ticker']][0]
+        # Truncate if longer than 14 chars
         if len(nickname) > 14:
             nickname = nickname[:13] + "…"
         nicknames.append(nickname)
@@ -126,7 +130,6 @@ def plot_with_labels(data):
                 va='center', ha='left' if width > 0 else 'right', fontsize=9, color='black')
     plt.tight_layout()
     return fig
-
 
 st.pyplot(plot_with_labels(df))
 
