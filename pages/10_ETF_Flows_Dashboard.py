@@ -105,7 +105,7 @@ df['Flow (Formatted)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs
 df_display = df[['Ticker', 'Category', 'Flow (Formatted)', 'Description']]
 
 # ----- MAIN CONTENT -----
-st.title("ETF Proxy Flows (Creative Universe)")
+st.title("ETF Flows Dashboard")
 st.caption(f"Flows are proxies (not official). Themes: AI, innovation, EM, China, Bitcoin, commodities, free cash flow, T-bills. Period: **{period_label}**")
 
 # ------ CHART ------
