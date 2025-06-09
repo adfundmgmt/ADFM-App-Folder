@@ -25,6 +25,9 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Options Chain Viewer**  
   Fetch real-time call & put chains for any ticker and expiry via Yahoo Finance.
 
+- **ETF Flows Dashboard**  
+  A dashboard of thematic, global, and high-conviction ETF flows—see where money is moving among major macro and innovation trades, not just vanilla sectors.
+
 - **US Inflation Dashboard**  
   Dissects the latest CPI print with YoY and MoM breakdowns across headline, and core categories.
 
