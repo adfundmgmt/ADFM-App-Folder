@@ -1,84 +1,84 @@
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
 
-# ETF Tickers (diverse, liquid, representative)
-etf_tickers = [
-    "BITO", "IBIT", "SHV", "BIL", "SGOV",  # Crypto, short T-bills
-    "IEF", "AGG", "TLT",                   # Bonds: intermediate, aggregate, long
-    "XLK", "XLF", "XLY", "XLE", "XLP",     # Sectors: Tech, Financials, Disc, Energy, Staples
-    "XLV", "XLU", "XLI", "XLB",            # Sectors: Health, Utilities, Industrials, Materials
-    "VTV", "VUG", "IWM"                    # Value, Growth, Small Cap
-]
-
-# Timeframes for flows
-periods = {
-    'Daily': 1,
-    '3M': 90,
-    '6M': 180,
-    '12M': 365,
-    '3Y': 1095
+# ETF metadata: Ticker → (Category, Description)
+etf_info = {
+    "BITO": ("Crypto", "Bitcoin Futures ETF, offers exposure to Bitcoin price via futures contracts."),
+    "IBIT": ("Crypto", "BlackRock's Spot Bitcoin ETF, directly tracks Bitcoin's price."),
+    "SHV": ("Short Duration Bonds", "iShares Short Treasury Bond ETF, invests in US T-bills <1 year."),
+    "BIL": ("Short Duration Bonds", "SPDR Bloomberg 1-3 Month T-Bill ETF."),
+    "SGOV": ("Treasury Bill ETF", "iShares 0-3 Month Treasury Bond ETF."),
+    "IEF": ("Intermediate Duration Bonds", "iShares 7-10 Year Treasury Bond ETF."),
+    "AGG": ("Intermediate Duration Bonds", "iShares Core U.S. Aggregate Bond ETF."),
+    "TLT": ("Long Duration Bonds", "iShares 20+ Year Treasury Bond ETF."),
+    "XLK": ("Tech Sector", "Technology Select Sector SPDR Fund."),
+    "XLF": ("Financials Sector", "Financial Select Sector SPDR Fund."),
+    "XLY": ("Consumer Discretionary", "Consumer Discretionary Select Sector SPDR Fund."),
+    "XLE": ("Energy", "Energy Select Sector SPDR Fund."),
+    "XLP": ("Consumer Staples", "Consumer Staples Select Sector SPDR Fund."),
+    "XLV": ("Health Care", "Health Care Select Sector SPDR Fund."),
+    "XLU": ("Utilities", "Utilities Select Sector SPDR Fund."),
+    "XLI": ("Industrials", "Industrials Select Sector SPDR Fund."),
+    "XLB": ("Materials", "Materials Select Sector SPDR Fund."),
+    "VTV": ("Value Factor", "Vanguard Value ETF, US large-cap value stocks."),
+    "VUG": ("Growth Factor", "Vanguard Growth ETF, US large-cap growth stocks."),
+    "IWM": ("Small Cap", "iShares Russell 2000 ETF, US small cap stocks."),
 }
 
-# Function to get shares outstanding history (Yahoo, best effort)
-def get_shares_outstanding(ticker):
-    try:
-        t = yf.Ticker(ticker)
-        so = t.get_shares_full()
-        so = so.dropna()
-        so.index = pd.to_datetime(so.index)
-        return so
-    except Exception as e:
-        return None
+etf_tickers = list(etf_info.keys())
+period_days = 45  # Approximate period since 4/8/25
 
-# Function to estimate flows for one ETF
-def estimate_flow(ticker, period_days):
-    so = get_shares_outstanding(ticker)
+def robust_flow_estimate(ticker, period_days):
     t = yf.Ticker(ticker)
-    hist = t.history(period=f"{period_days+2}d")
+    hist = t.history(period=f"{period_days+10}d")
     hist = hist.dropna()
-    # Use shares outstanding if available
-    if so is not None and len(so) > 2:
-        # Align SO and Close
-        df = pd.DataFrame({'Close': hist['Close']})
-        df['SO'] = so.reindex(df.index, method='ffill')
-        df = df.dropna()
-        if len(df) < 2:
-            return None
-        start, end = df.iloc[0], df.iloc[-1]
-        flow = (end['SO'] - start['SO']) * end['Close']
-        return flow
-    else:
-        # Proxy: change in market cap
-        if len(hist) < 2:
-            return None
-        flow = (hist['Close'][-1] - hist['Close'][0]) * hist['Volume'][-1]
-        return flow
+    if hist.empty or len(hist) < 2:
+        print(f"{ticker}: No data found")
+        return 0
+    try:
+        so = t.get_shares_full()
+        if so is not None and not so.empty:
+            so = so.dropna()
+            so.index = pd.to_datetime(so.index)
+            so = so.loc[hist.index[0]:hist.index[-1]]
+            if len(so) >= 2:
+                so = so.reindex(hist.index, method='ffill')
+                start, end = so.iloc[0], so.iloc[-1]
+                close = hist['Close']
+                flow = (end - start) * close.iloc[-1]
+                return flow
+    except Exception as e:
+        pass
+    # Fallback: proxy flow via market cap change (not official flow)
+    flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
+    return flow
 
-# Function to build a full flow DataFrame for selected period
-def get_flows(period_days):
-    results = []
-    for ticker in etf_tickers:
-        flow = estimate_flow(ticker, period_days)
-        results.append({'ETF': ticker, 'Flow ($)': flow if flow is not None else 0})
-    df = pd.DataFrame(results).set_index('ETF').sort_values('Flow ($)', ascending=False)
-    return df
+# Run calculation and build result dataframe
+results = []
+for ticker in etf_tickers:
+    flow = robust_flow_estimate(ticker, period_days)
+    cat, desc = etf_info[ticker]
+    results.append({
+        "Ticker": ticker,
+        "Category": cat,
+        "Flow ($)": flow,
+        "Description": desc
+    })
+df = pd.DataFrame(results)
+df = df.sort_values("Flow ($)", ascending=False)
 
-# Choose timeframe to run (change as needed)
-timeframe = '3M'  # Options: 'Daily', '3M', '6M', '12M', '3Y'
-period_days = periods[timeframe]
-
-df = get_flows(period_days)
-
-# Plotting
-plt.figure(figsize=(14, 7))
-bars = plt.barh(df.index, df['Flow ($)'], color=['green' if x > 0 else 'red' for x in df['Flow ($)']])
-plt.xlabel('Estimated ETF Flow ($)')
-plt.title(f'ETF Flows Over the Last {timeframe}')
-plt.grid(axis='x', linestyle='--', alpha=0.6)
+# Plotting (with labels)
+plt.figure(figsize=(14, 8))
+colors = ['green' if x > 0 else 'red' for x in df['Flow ($)']]
+plt.barh(df['Ticker'], df['Flow ($)'], color=colors)
+plt.xlabel('Estimated Flow ($)')
+plt.title(f'ETF Flow Proxies (Last {period_days} Days)')
+plt.gca().invert_yaxis()
+plt.grid(axis='x', linestyle='--', alpha=0.5)
 plt.tight_layout()
 plt.show()
 
-# Display DataFrame for inspection
-print(df)
+# Show DataFrame with category & description
+pd.set_option('display.max_colwidth', 100)
+print(df[['Ticker', 'Category', 'Flow ($)', 'Description']])
