@@ -118,15 +118,15 @@ df = pd.DataFrame(results)
 
 # ------ SORT THE DATAFRAME BY RAW FLOW ------
 df = df.sort_values("Flow ($)", ascending=False)
-df['Flow (Formatted)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
+df['Flow'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
 
 # -------- FLOW % OF MC FORMATTING -------
-df['Market Cap (Formatted)'] = df['Market Cap'].apply(lambda x: f"${x/1e9:,.2f}B" if x and abs(x) > 1e9 else (f"${x/1e6:,.2f}M" if x else "N/A"))
+df['Market Cap'] = df['Market Cap'].apply(lambda x: f"${x/1e9:,.2f}B" if x and abs(x) > 1e9 else (f"${x/1e6:,.2f}M" if x else "N/A"))
 df['Flow (% MC)'] = df['Flow (% MC)'].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "N/A")
 
 # ------ DISPLAY TABLES ------
-df_display = df[['Ticker', 'Category', 'Flow (Formatted)', 'Description']]
-df_display_pct = df[['Ticker', 'Category', 'Flow (Formatted)', 'Market Cap (Formatted)', 'Flow (% MC)', 'Description']].sort_values("Flow (% MC)", ascending=False, key=lambda x: pd.to_numeric(x.str.replace('%','').replace('N/A','0'), errors='coerce'))
+df_display = df[['Ticker', 'Category', 'Flow', 'Description']]
+df_display_pct = df[['Ticker', 'Category', 'Flow', 'Market Cap', 'Flow (% MC)', 'Description']].sort_values("Flow (% MC)", ascending=False, key=lambda x: pd.to_numeric(x.str.replace('%','').replace('N/A','0'), errors='coerce'))
 
 # ----- MAIN CONTENT -----
 st.title("ETF Flows Dashboard")
