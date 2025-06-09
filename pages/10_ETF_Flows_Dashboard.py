@@ -102,22 +102,15 @@ st.caption(f"Flows are proxies (not official). Themes: AI, innovation, EM, China
 # ------ CHART ------
 def plot_with_labels(data):
     fig, ax = plt.subplots(figsize=(15, 9))
-    raw_flows = []
+    # Build a mapping from Ticker to original float Flow ($)
+    raw_flow_map = {r['Ticker']: float(r['Flow ($)']) if isinstance(r['Flow ($)'], float) or isinstance(r['Flow ($)'], int) else 0.0 for r in results}
     nicknames = []
+    raw_flows = []
     for ticker in data['Ticker']:
-        idx = [r['Ticker'] for r in results].index(ticker)
-        val = results[idx]['Flow ($)']
-        # Undo formatting for plotting
-        if "B" in val:
-            val_num = float(val.replace("$", "").replace("B", "").replace(",", "")) * 1e9
-        elif "M" in val:
-            val_num = float(val.replace("$", "").replace("M", "").replace(",", "")) * 1e6
-        else:
-            val_num = 0.0
+        val_num = raw_flow_map.get(ticker, 0.0)
         raw_flows.append(val_num)
         # Use the short nickname for the bar
         nickname = etf_info[ticker][0]
-        # Truncate if longer than 14 chars
         if len(nickname) > 14:
             nickname = nickname[:13] + "…"
         nicknames.append(nickname)
@@ -126,7 +119,6 @@ def plot_with_labels(data):
     ax.set_title(f'ETF Proxy Flows – {period_label}')
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.2f}B' if abs(x)>=1e9 else f'${x/1e6:,.1f}M'))
-    # Add tiny nickname labels to bars
     for bar, nickname in zip(bars, nicknames):
         width = bar.get_width()
         ax.text(width + (1e7 if width > 0 else -1e7), bar.get_y() + bar.get_height()/2,
@@ -134,6 +126,7 @@ def plot_with_labels(data):
                 va='center', ha='left' if width > 0 else 'right', fontsize=9, color='black')
     plt.tight_layout()
     return fig
+
 
 st.pyplot(plot_with_labels(df))
 
