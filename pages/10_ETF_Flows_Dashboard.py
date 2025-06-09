@@ -96,9 +96,12 @@ for ticker in etf_tickers:
     })
 
 df = pd.DataFrame(results)
-# Sort by raw flow for both chart and table
+
+# ------ SORT THE DATAFRAME BY RAW FLOW ------
 df = df.sort_values("Flow ($)", ascending=False)
 df['Flow (Formatted)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
+
+# For the user table, only show the formatted column, but keep numeric for sorting (sorting is now correct)
 df_display = df[['Ticker', 'Category', 'Flow (Formatted)', 'Description']]
 
 # ----- MAIN CONTENT -----
@@ -134,4 +137,9 @@ def plot_with_labels(data):
 st.pyplot(plot_with_labels(df))
 
 # ------ TABLE ------
-st.dataframe(df_display, hide_index=True)
+# Show the table, always sorted by numeric flow, but display only formatted version
+st.dataframe(
+    df_display,
+    hide_index=True,
+    column_order=["Ticker", "Category", "Flow (Formatted)", "Description"]
+)
