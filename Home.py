@@ -34,6 +34,9 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Options Chain Viewer**  
   Fetch real-time call & put chains for any ticker and expiry via Yahoo Finance.
 
+- **ETF Flows Dashboard**  
+  Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
+
 - **US Inflation Dashboard**  
   Dissects the latest CPI print with YoY and MoM breakdowns across headline, and core categories.
 
