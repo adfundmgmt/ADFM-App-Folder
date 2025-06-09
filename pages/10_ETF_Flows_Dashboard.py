@@ -135,3 +135,5 @@ def plot_with_labels(data):
     return fig
 
 st.pyplot(plot_with_labels(df))
+
+st.caption("© 2025 AD Fund Management LP")
