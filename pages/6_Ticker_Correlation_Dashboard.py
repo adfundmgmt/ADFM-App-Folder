@@ -2,16 +2,13 @@
 
 import datetime as dt
 from dateutil.relativedelta import relativedelta
-
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 import altair as alt
-
 import matplotlib.pyplot as plt
 plt.style.use("default")
-
 
 st.set_page_config(
     page_title="Correlation Dashboard — AD Fund Management LP",
@@ -49,12 +46,11 @@ with st.sidebar:
 
 # ── Helper functions ────────────────────────────────────────────────────────
 def fetch_prices(symbols: list, start: dt.date, end: dt.date) -> pd.DataFrame:
-    """Download adjusted-close prices for the symbols."""
     try:
         raw = yf.download(
             symbols,
             start=start,
-            end=end + dt.timedelta(days=1),  # yfinance end is exclusive
+            end=end + dt.timedelta(days=1),
             progress=False,
             auto_adjust=False,
         )
@@ -87,6 +83,15 @@ def emoji_corr(val: float) -> str:
     if val < -0.3: return "🔴"
     return "⚪️"
 
+def dynamic_axis(data, buffer_ratio=0.04, axis='y'):
+    min_val = float(np.nanmin(data))
+    max_val = float(np.nanmax(data))
+    buffer = (max_val - min_val) * buffer_ratio
+    if min_val == max_val:
+        # flat line, just buffer a bit
+        return [min_val - 1, max_val + 1]
+    return [min_val - buffer, max_val + buffer]
+
 # ── Data download ───────────────────────────────────────────────────────────
 end_date = dt.date.today()
 windows = {
@@ -118,7 +123,64 @@ returns = log_returns(prices)
 if prices.index[0].date() > earliest_date:
     st.info(f"Note: Oldest available price is {prices.index[0].date()}, so not all look-back windows may be shown.")
 
-# ── Correlation Table for Each Window ───────────────────────────────────────
+# ── Window‑Specific Overlay Charts (dynamic Y axis) ────────────────────────
+st.subheader("Window‑Specific Indexed Price Overlays")
+tabs = st.tabs(list(windows.keys()))
+for tab, label in zip(tabs, windows.keys()):
+    since = windows[label]
+    price_slice = slice_since(prices, since)
+    overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
+    overlay_tickers = [t for t in overlay_tickers if t in price_slice.columns]
+    norm_df = price_slice[overlay_tickers].apply(normalize)
+    norm_df = norm_df.reset_index().melt(id_vars="Date", var_name="Ticker", value_name="IndexedPrice")
+    y_axis_range = dynamic_axis(norm_df['IndexedPrice'], buffer_ratio=0.06)
+    chart = (
+        alt.Chart(norm_df)
+        .mark_line()
+        .encode(
+            x=alt.X("Date:T", title="Date"),
+            y=alt.Y("IndexedPrice:Q", title="Indexed Price (Base=100)", scale=alt.Scale(domain=y_axis_range)),
+            color=alt.Color("Ticker:N", legend=alt.Legend(title="Ticker")),
+            tooltip=["Date:T", "Ticker:N", alt.Tooltip("IndexedPrice:Q", format=".2f")],
+        )
+        .properties(height=320)
+        .interactive()
+    )
+    with tab:
+        st.altair_chart(chart, use_container_width=True)
+
+# ── Rolling correlation chart (dynamic Y axis) ──────────────────────────────
+st.subheader("Rolling Correlation Chart")
+corr_df = pd.DataFrame(index=returns.index)
+corr_df[f"{ticker_x} vs {ticker_y}"] = (
+    returns[ticker_x].rolling(roll_window).corr(returns[ticker_y])
+)
+if ticker_z and ticker_z in returns.columns:
+    corr_df[f"{ticker_x} vs {ticker_z}"] = (
+        returns[ticker_x].rolling(roll_window).corr(returns[ticker_z])
+    )
+    corr_df[f"{ticker_y} vs {ticker_z}"] = (
+        returns[ticker_y].rolling(roll_window).corr(returns[ticker_z])
+    )
+corr_df = corr_df.dropna(how="all")
+
+corr_long = corr_df.reset_index().melt(id_vars="Date", var_name="Pair", value_name="Correlation")
+y_axis_corr = dynamic_axis(corr_long['Correlation'].dropna(), buffer_ratio=0.06)
+roll_chart = (
+    alt.Chart(corr_long)
+    .mark_line()
+    .encode(
+        x=alt.X("Date:T", title="Date"),
+        y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=y_axis_corr)),
+        color=alt.Color("Pair:N", legend=alt.Legend(title="Pairs")),
+        tooltip=["Date:T", "Pair:N", alt.Tooltip("Correlation:Q", format=".2f")],
+    )
+    .properties(height=400)
+    .interactive()
+)
+st.altair_chart(roll_chart, use_container_width=True)
+
+# ── Correlation Table for Each Window (moved below charts) ─────────────────
 st.subheader("Correlation Table by Look-Back Window")
 rows = []
 for label, since in windows.items():
@@ -142,61 +204,6 @@ df_corr_display = df_corr.copy()
 for c in df_corr.columns[1:]:
     df_corr_display[c] = df_corr_display[c].apply(lambda v: f"{v:.2f} {emoji_corr(v)}" if pd.notnull(v) else "")
 st.dataframe(df_corr_display.set_index("Window"), height=320)
-
-# ── Window‑Specific Overlay Charts ──────────────────────────────────────────
-st.subheader("Window‑Specific Indexed Price Overlays")
-tabs = st.tabs(list(windows.keys()))
-for tab, label in zip(tabs, windows.keys()):
-    since = windows[label]
-    price_slice = slice_since(prices, since)
-    overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
-    overlay_tickers = [t for t in overlay_tickers if t in price_slice.columns]
-    norm_df = price_slice[overlay_tickers].apply(normalize)
-    norm_df = norm_df.reset_index().melt(id_vars="Date", var_name="Ticker", value_name="IndexedPrice")
-    chart = (
-        alt.Chart(norm_df)
-        .mark_line()
-        .encode(
-            x="Date:T",
-            y=alt.Y("IndexedPrice:Q", title="Indexed Price (Base=100)", scale=alt.Scale(nice=True)),
-            color=alt.Color("Ticker:N", legend=alt.Legend(title="Ticker")),
-            tooltip=["Date:T", "Ticker:N", alt.Tooltip("IndexedPrice:Q", format=".2f")],
-        )
-        .properties(height=320)
-        .interactive()
-    )
-    with tab:
-        st.altair_chart(chart, use_container_width=True)
-
-# ── Rolling correlation chart ───────────────────────────────────────────────
-st.subheader("Rolling Correlation Chart")
-corr_df = pd.DataFrame(index=returns.index)
-corr_df[f"{ticker_x} vs {ticker_y}"] = (
-    returns[ticker_x].rolling(roll_window).corr(returns[ticker_y])
-)
-if ticker_z and ticker_z in returns.columns:
-    corr_df[f"{ticker_x} vs {ticker_z}"] = (
-        returns[ticker_x].rolling(roll_window).corr(returns[ticker_z])
-    )
-    corr_df[f"{ticker_y} vs {ticker_z}"] = (
-        returns[ticker_y].rolling(roll_window).corr(returns[ticker_z])
-    )
-corr_df = corr_df.dropna(how="all")
-
-corr_long = corr_df.reset_index().melt(id_vars="Date", var_name="Pair", value_name="Correlation")
-roll_chart = (
-    alt.Chart(corr_long)
-    .mark_line()
-    .encode(
-        x="Date:T",
-        y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=[-1, 1])),
-        color=alt.Color("Pair:N", legend=alt.Legend(title="Pairs")),
-        tooltip=["Date:T", "Pair:N", alt.Tooltip("Correlation:Q", format=".2f")],
-    )
-    .properties(height=400)
-    .interactive()
-)
-st.altair_chart(roll_chart, use_container_width=True)
 
 # ── Data Download Option ────────────────────────────────────────────────────
 with st.expander("Download Data"):
