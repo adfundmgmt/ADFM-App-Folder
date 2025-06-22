@@ -239,26 +239,25 @@ if ticker_x and ticker_y and ticker_x in prices.columns and ticker_y in prices.c
         since = windows[label]
         price_slice = slice_since(prices, since)
         ratio = compute_ratio(price_slice, ticker_x, ticker_y)
-        if ratio.empty or ratio.isnull().all():
-            with tab:
+        # Require at least 2 valid points for Altair charting (Altair needs more than 1 point)
+        enough_data = not ratio.empty and ratio.notnull().sum() >= 2
+        with tab:
+            if enough_data:
+                ratio_df = ratio.reset_index()
+                ratio_df.columns = ["Date", "Ratio"]
+                chart_title = f"<b style='color:#08179b;font-size:1.35em'>{ticker_x} / {ticker_y}</b>"
+                chart = strazza_relative_chart(
+                    ratio_df,
+                    title=chart_title,
+                    y_title=f"{ticker_x} / {ticker_y} Ratio",
+                    highlight_zone=None
+                )
+                st.altair_chart(chart, use_container_width=True)
+            else:
                 st.info(
                     f"Not enough overlapping price history for {ticker_x} / {ticker_y} in this window "
                     f"(min 30 data points required)."
                 )
-            continue
-        ratio_df = ratio.reset_index()
-        ratio_df.columns = ["Date", "Ratio"]
-
-        chart_title = f"<b style='color:#08179b;font-size:1.35em'>{ticker_x} / {ticker_y}</b>"
-
-        chart = strazza_relative_chart(
-            ratio_df,
-            title=chart_title,
-            y_title=f"{ticker_x} / {ticker_y} Ratio",
-            highlight_zone=None
-        )
-        with tab:
-            st.altair_chart(chart, use_container_width=True)
 
 # --- Indexed Price Overlays ---
 st.markdown("### Indexed Price Overlays")
