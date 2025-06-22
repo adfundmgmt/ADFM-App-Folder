@@ -119,7 +119,14 @@ def plot_seasonality(
     bar_cols = ['mediumseagreen' if v >= 0 else 'indianred' for v in ret]
     edge_cols = ['darkgreen' if v >= 0 else 'darkred' for v in ret]
 
-    # Bars with volatility error bars
+    # --- Left Y: Return axis ---
+    # Pad min/max for clean visual
+    y_min = np.nanmin(ret - vol) if vol is not None else np.nanmin(ret)
+    y_max = np.nanmax(ret + vol) if vol is not None else np.nanmax(ret)
+    # Always include 0 for visual reference, pad both sides by 10%
+    y_lower = min(0, y_min) - 0.1 * abs(y_min)
+    y_upper = max(0, y_max) + 0.1 * abs(y_max)
+
     ax1.bar(
         labels, ret, width=0.8,
         color=bar_cols, edgecolor=edge_cols, linewidth=1.2,
@@ -127,14 +134,12 @@ def plot_seasonality(
         error_kw=dict(ecolor='gray', lw=1.6, alpha=0.7)
     )
     ax1.set_ylabel(f'{return_metric} return (%)', weight='bold')
-    ax1.yaxis.set_major_locator(MaxNLocator(nbins=8, prune='both'))
+    ax1.yaxis.set_major_locator(MaxNLocator(nbins=8, prune=None))
     ax1.yaxis.set_major_formatter(PercentFormatter())
-    y1_bot = min(0.0, np.nanmin(ret) - np.nanmax(vol) - 1.0) if not np.isnan(np.nanmin(ret)) else -1
-    y1_top = np.nanmax(ret) + np.nanmax(vol) + 1.0 if not np.isnan(np.nanmax(ret)) else 1
-    ax1.set_ylim(y1_bot, y1_top)
+    ax1.set_ylim(y_lower, y_upper)
     ax1.grid(axis='y', linestyle='--', color='lightgrey', linewidth=0.6, alpha=0.7, zorder=1)
 
-    # Hit rate overlay
+    # --- Right Y: Hit Rate (always 0% to 100%) ---
     ax2 = ax1.twinx()
     ax2.scatter(
         labels, hit, marker='D', s=90,
@@ -142,9 +147,9 @@ def plot_seasonality(
         zorder=3
     )
     ax2.set_ylabel('Hit rate of positive returns', weight='bold')
-    ax2.yaxis.set_major_locator(MaxNLocator(nbins=8, prune='both'))
-    ax2.yaxis.set_major_formatter(PercentFormatter())
     ax2.set_ylim(0, 100)
+    ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True, prune=None))
+    ax2.yaxis.set_major_formatter(PercentFormatter())
 
     fig.suptitle(title, fontsize=17, weight='bold')
     fig.tight_layout(pad=2)
