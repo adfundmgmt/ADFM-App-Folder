@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from matplotlib.ticker import MultipleLocator, PercentFormatter
+from matplotlib.ticker import PercentFormatter, MaxNLocator
 
 plt.style.use("default")
 warnings.filterwarnings('ignore', category=FutureWarning, module='yfinance')
@@ -42,7 +42,7 @@ with st.sidebar:
         • Automatic fallback to FRED for deep history on S&P 500, Dow, and Nasdaq (pre‑1950).
 
         **Clean, Reliable Metrics:**  
-        • Choose median, mean, or percentile monthly returns  
+        • Choose median or mean monthly returns  
         • Hit rates reveal consistency—how often each month finishes positive  
         • Volatility overlays show risk context
 
@@ -64,14 +64,12 @@ with st.sidebar:
 
 @st.cache_data(show_spinner=False)
 def fetch_prices(symbol, start, end):
-    # Try Yahoo Finance
     try:
         df = yf.download(symbol, start=start, end=end, auto_adjust=True, progress=False)
         if not df.empty:
             return df['Close']
     except Exception:
         pass
-    # Try FRED if eligible
     try:
         if pdr and symbol.upper() in FALLBACK_MAP:
             fred_tk = FALLBACK_MAP[symbol.upper()]
@@ -84,18 +82,14 @@ def fetch_prices(symbol, start, end):
 
 @st.cache_data(show_spinner=False)
 def seasonal_stats(prices: pd.Series):
-    # Resample by Month End (standard for seasonality), take last price of each month
     monthly_end = prices.resample('M').last()
     monthly_ret = monthly_end.pct_change().dropna() * 100
     monthly_ret.index = monthly_ret.index.to_period('M')
     grouped = monthly_ret.groupby(monthly_ret.index.month)
 
-    # Core stats
     stats = pd.DataFrame(index=pd.Index(range(1,13), name='month'))
     stats['median_ret'] = grouped.median()
     stats['mean_ret'] = grouped.mean()
-    stats['q25'] = grouped.quantile(0.25)
-    stats['q75'] = grouped.quantile(0.75)
     stats['hit_rate'] = grouped.apply(lambda x: (x > 0).mean() * 100)
     stats['volatility'] = grouped.std()
     stats['years_observed'] = grouped.apply(lambda x: x.index.year.nunique())
@@ -108,12 +102,9 @@ def plot_seasonality(
     title: str, 
     return_metric: str = "Median"
 ) -> io.BytesIO:
-    # Get correct column for plotting
     col_map = {
         "Median": "median_ret",
-        "Mean": "mean_ret",
-        "25th Percentile": "q25",
-        "75th Percentile": "q75"
+        "Mean": "mean_ret"
     }
     ret_col = col_map.get(return_metric, "median_ret")
 
@@ -128,7 +119,7 @@ def plot_seasonality(
     bar_cols = ['mediumseagreen' if v >= 0 else 'indianred' for v in ret]
     edge_cols = ['darkgreen' if v >= 0 else 'darkred' for v in ret]
 
-    # Bar plot with error bars for volatility
+    # Bars with volatility error bars
     ax1.bar(
         labels, ret, width=0.8,
         color=bar_cols, edgecolor=edge_cols, linewidth=1.2,
@@ -136,7 +127,7 @@ def plot_seasonality(
         error_kw=dict(ecolor='gray', lw=1.6, alpha=0.7)
     )
     ax1.set_ylabel(f'{return_metric} return (%)', weight='bold')
-    ax1.yaxis.set_major_locator(MultipleLocator(1))
+    ax1.yaxis.set_major_locator(MaxNLocator(nbins=8, prune='both'))
     ax1.yaxis.set_major_formatter(PercentFormatter())
     y1_bot = min(0.0, np.nanmin(ret) - np.nanmax(vol) - 1.0) if not np.isnan(np.nanmin(ret)) else -1
     y1_top = np.nanmax(ret) + np.nanmax(vol) + 1.0 if not np.isnan(np.nanmax(ret)) else 1
@@ -151,7 +142,7 @@ def plot_seasonality(
         zorder=3
     )
     ax2.set_ylabel('Hit rate of positive returns', weight='bold')
-    ax2.yaxis.set_major_locator(MultipleLocator(5))
+    ax2.yaxis.set_major_locator(MaxNLocator(nbins=8, prune='both'))
     ax2.yaxis.set_major_formatter(PercentFormatter())
     ax2.set_ylim(0, 100)
 
@@ -166,12 +157,7 @@ def plot_seasonality(
 # ---- Main controls ----
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
-    # Ticker input with autocomplete (experimental)
-    try:
-        from streamlit_extras.st_autocomplete import st_autocomplete
-        symbol = st_autocomplete("Ticker symbol", value="^GSPC")
-    except ImportError:
-        symbol = st.text_input("Ticker symbol", value="^GSPC")
+    symbol = st.text_input("Ticker symbol", value="^GSPC")
 with col2:
     start_year = st.number_input(
         "Start year", value=2020,
@@ -188,7 +174,7 @@ end_date = f"{int(end_year)}-12-31"
 
 metric = st.radio(
     "Select return metric for chart:",
-    ["Median", "Mean", "25th Percentile", "75th Percentile"],
+    ["Median", "Mean"],
     horizontal=True
 )
 
@@ -206,12 +192,9 @@ stats = seasonal_stats(prices)
 first_year = prices.index[0].year
 last_year = prices.index[-1].year
 
-# Best/worst by return
 ret_col = {
     "Median": "median_ret",
-    "Mean": "mean_ret",
-    "25th Percentile": "q25",
-    "75th Percentile": "q75"
+    "Mean": "mean_ret"
 }[metric]
 best = stats.loc[stats[ret_col].idxmax()]
 worst = stats.loc[stats[ret_col].idxmin()]
@@ -243,10 +226,9 @@ with dl_col1:
         file_name=f"{symbol}_seasonality_{first_year}_{last_year}.png"
     )
 with dl_col2:
-    csv_df = stats[['label', 'median_ret', 'mean_ret', 'q25', 'q75', 'hit_rate', 'volatility', 'years_observed']].copy()
+    csv_df = stats[['label', 'median_ret', 'mean_ret', 'hit_rate', 'volatility', 'years_observed']].copy()
     csv_df.rename(columns={
         'label': 'Month', 'median_ret': 'Median Return (%)', 'mean_ret': 'Mean Return (%)',
-        'q25': '25th Percentile (%)', 'q75': '75th Percentile (%)',
         'hit_rate': 'Hit Rate (%)', 'volatility': 'Volatility (%)', 'years_observed': 'Years Observed'
     }, inplace=True)
     st.download_button(
@@ -260,7 +242,7 @@ st.markdown(
     <details>
     <summary><b>How to interpret these stats?</b></summary>
     <ul>
-    <li><b>Median/Mean/Percentile Return:</b> Typical percent gain/loss for each month across years</li>
+    <li><b>Median/Mean Return:</b> Typical percent gain/loss for each month across years</li>
     <li><b>Hit Rate:</b> % of years each month finished positive</li>
     <li><b>Volatility (σ):</b> Standard deviation of monthly returns, a risk proxy</li>
     </ul>
