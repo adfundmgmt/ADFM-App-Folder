@@ -30,12 +30,12 @@ with st.sidebar:
         3. View correlations, Strazza-style ratio charts, and indexed overlays.
         ---
         - **Correlation**: Pearson on log returns (Adj Close).
-        - **Relative Value Chart**: Ratio paths (A/B, A/C, ...), optional highlights/annotations.
+        - **Relative Value Chart**: Ratio paths (A/B only), no annotations.
         - **All charts** are interactive.
         """
     )
     st.markdown("---")
-    ticker_x = st.text_input("Ticker X", value="ARKK").strip().upper()
+    ticker_x = st.text_input("Ticker X", value="AAPL").strip().upper()
     ticker_y = st.text_input("Ticker Y", value="SPY").strip().upper()
     ticker_z = st.text_input("Ticker Z (optional)", value="", help="Benchmark/index (optional).").strip().upper()
     freq = st.selectbox("Return Frequency", ["Daily", "Weekly", "Monthly"], index=1)
@@ -79,19 +79,21 @@ def log_returns(prices: pd.DataFrame) -> pd.DataFrame:
     return np.log(prices / prices.shift(1)).dropna(how="all")
 
 def slice_since(df: pd.DataFrame, since: dt.date) -> pd.DataFrame:
-    return df.loc[since:]
+    if len(df.index) == 0:
+        return df
+    if df.index[0].tzinfo is not None:
+        df = df.tz_localize(None)
+    return df.loc[df.index >= pd.Timestamp(since)]
 
 def normalize(prices: pd.Series) -> pd.Series:
     return prices / prices.iloc[0] * 100
 
-# --- Strazza-style Ratio Chart Function ---
+# --- Strazza-style Ratio Chart Function (NO ANNOTATIONS) ---
 def strazza_relative_chart(
     ratio_df,
     title="Relative Value (Ratio) Chart",
     y_title=None,
-    highlight_zone=None,  # e.g., (0.11, 0.13)
-    annotation_points=None,  # list of dicts: {"date": pd.Timestamp, "label": str}
-    curve_base=None,  # tuple: (x0, x1, y0, y1)
+    highlight_zone=None,
     height=340
 ):
     base = (
@@ -109,7 +111,7 @@ def strazza_relative_chart(
         .properties(height=height, width=750, title=title)
     )
 
-    # Horizontal highlight zone (resistance/support)
+    # Horizontal highlight zone (resistance/support), if wanted
     if highlight_zone:
         highlight = (
             alt.Chart(pd.DataFrame({
@@ -127,37 +129,6 @@ def strazza_relative_chart(
             .properties(width=750)
         )
         base = highlight + base
-
-    # Optional event annotations
-    if annotation_points:
-        annot_df = pd.DataFrame(annotation_points)
-        annotation = (
-            alt.Chart(annot_df)
-            .mark_point(color="red", size=65, shape="triangle")
-            .encode(x="date:T", y="value:Q")
-        ) + (
-            alt.Chart(annot_df)
-            .mark_text(align='left', dx=6, dy=-8, fontSize=13, color='black')
-            .encode(
-                x="date:T",
-                y="value:Q",
-                text="label:N"
-            )
-        )
-        base = base + annotation
-
-    # Optional: green base curve for rounded support (for demonstration, rough parabolic fit)
-    if curve_base:
-        import numpy as np
-        x0, x1, y0, y1 = curve_base
-        xs = pd.date_range(x0, x1, periods=80)
-        ymid = min(y0, y1) - (max(y0, y1) - min(y0, y1)) * 0.13
-        ys = ymid + (np.cos(np.linspace(-np.pi, 0, 80)) + 1) / 2 * (max(y0, y1) - ymid)
-        curve_df = pd.DataFrame({"Date": xs, "y": ys})
-        arc = alt.Chart(curve_df).mark_line(color="green", strokeDash=[4, 4]).encode(
-            x="Date:T", y="y:Q"
-        )
-        base = base + arc
 
     return base.configure_view(
         strokeWidth=0,
@@ -250,54 +221,44 @@ roll_chart = (
 roll_chart = roll_chart.configure_legend(disable=True)
 st.altair_chart(roll_chart, use_container_width=True)
 
-# --- Relative Value (Ratio) Charts, Strazza Style ---
+# --- Relative Value (Ratio) Chart (Top Pair Only, Clean, No Annotations) ---
 def compute_ratio(prices, t1, t2):
-    s1, s2 = prices[t1].dropna(), prices[t2].dropna()
+    s1 = prices[t1].dropna() if t1 in prices else pd.Series(dtype=float)
+    s2 = prices[t2].dropna() if t2 in prices else pd.Series(dtype=float)
     common_idx = s1.index.intersection(s2.index)
-    if len(common_idx) < 5:
+    # Require at least 30 datapoints for a chart to be meaningful
+    if len(common_idx) < 30:
         return pd.Series(dtype=float)
     ratio = s1.loc[common_idx] / s2.loc[common_idx]
     return ratio
 
-pair_list = [(a, b) for a, b in permutations([t for t in [ticker_x, ticker_y, ticker_z] if t], 2)]
-
-if pair_list:
+if ticker_x and ticker_y and ticker_x in prices.columns and ticker_y in prices.columns:
     st.markdown("### Relative Value (Ratio) Chart(s)")
     ratio_tabs = st.tabs(list(windows.keys()))
     for tab, label in zip(ratio_tabs, windows.keys()):
         since = windows[label]
         price_slice = slice_since(prices, since)
-        with tab:
-            for t1, t2 in pair_list:
-                if t1 not in price_slice.columns or t2 not in price_slice.columns:
-                    continue
-                ratio = compute_ratio(price_slice, t1, t2)
-                if ratio.empty:
-                    continue
-                ratio_df = ratio.reset_index()
-                ratio_df.columns = ["Date", "Ratio"]
-
-                # Only for ARKK/SPY and "3 Years" show Strazza-style highlights as demo
-                highlight_zone = None
-                annotation_points = None
-                curve_base = None
-                if t1 == "ARKK" and t2 == "SPY" and label in ["3 Years", "5 Years"]:
-                    highlight_zone = (0.11, 0.13)
-                    annotation_points = [
-                        {"date": pd.Timestamp("2023-12-15"), "value": 0.12, "label": "Q4 2023"},
-                        {"date": pd.Timestamp("2025-03-20"), "value": 0.12, "label": "Q1 2025"},
-                    ]
-                    curve_base = (pd.Timestamp("2021-04-01"), pd.Timestamp("2025-07-01"), 0.07, 0.12)
-
-                chart = strazza_relative_chart(
-                    ratio_df,
-                    title=f"{t1} / {t2}",
-                    y_title=f"{t1} / {t2} Ratio",
-                    highlight_zone=highlight_zone,
-                    annotation_points=annotation_points,
-                    curve_base=curve_base
+        ratio = compute_ratio(price_slice, ticker_x, ticker_y)
+        if ratio.empty or ratio.isnull().all():
+            with tab:
+                st.info(
+                    f"Not enough overlapping price history for {ticker_x} / {ticker_y} in this window "
+                    f"(min 30 data points required)."
                 )
-                st.altair_chart(chart, use_container_width=True)
+            continue
+        ratio_df = ratio.reset_index()
+        ratio_df.columns = ["Date", "Ratio"]
+
+        chart_title = f"<b style='color:#08179b;font-size:1.35em'>{ticker_x} / {ticker_y}</b>"
+
+        chart = strazza_relative_chart(
+            ratio_df,
+            title=chart_title,
+            y_title=f"{ticker_x} / {ticker_y} Ratio",
+            highlight_zone=None
+        )
+        with tab:
+            st.altair_chart(chart, use_container_width=True)
 
 # --- Indexed Price Overlays ---
 st.markdown("### Indexed Price Overlays")
@@ -307,6 +268,10 @@ for tab, label in zip(tabs, windows.keys()):
     price_slice = slice_since(prices, since)
     overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
     overlay_tickers = [t for t in overlay_tickers if t in price_slice.columns]
+    if not overlay_tickers:
+        with tab:
+            st.info("No price data available for this window.")
+        continue
     norm_df = price_slice[overlay_tickers].apply(normalize)
     min_val, max_val = norm_df.min().min(), norm_df.max().max()
     ymin = min_val - 0.07 * abs(min_val)
