@@ -106,17 +106,25 @@ def get_all_flows(etf_tickers, period_days):
 
 df = get_all_flows(etf_tickers, period_days)
 df = df.sort_values("Flow ($)", ascending=False)
-df['Flow (Formatted)'] = df['Flow ($)'].apply(
-    lambda x: f"${x/1e9:,.2f}B" if x and abs(x) > 1e9 else (f"${x/1e6:,.2f}M" if x and abs(x) > 1e6 else ("n/a" if x is None else f"${x:,.0f}"))
-)
-# Compose y-axis labels: "Semiconductors (SMH)"
 df['Label'] = [f"{etf_info[t][0]} ({t})" for t in df['Ticker']]
+
+def flow_label(x):
+    if x is None:
+        return ""
+    abs_x = abs(x)
+    if abs_x >= 1e9:
+        return f"{'-' if x < 0 else '+'}{int(round(abs_x / 1e9))}B"
+    elif abs_x >= 1e6:
+        return f"{'-' if x < 0 else '+'}{int(round(abs_x / 1e6))}M"
+    elif abs_x >= 1e3:
+        return f"{'-' if x < 0 else '+'}{int(round(abs_x / 1e3))}K"
+    else:
+        return f"{x:,.0f}"
 
 # ------ MAIN CONTENT ------
 st.title("ETF Flows Dashboard")
 st.caption(f"Flows are proxies (not official). Period: **{period_label}**")
 
-# ------ CHART ONLY ------
 chart_df = df
 max_val = chart_df['Flow ($)'].dropna().abs().max()
 buffer = max_val * 0.15
@@ -134,24 +142,27 @@ bars = ax.barh(
 ax.set_xlabel('Estimated Flow ($)')
 ax.set_title(f'ETF Proxy Flows – {period_label}')
 ax.invert_yaxis()
-ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.2f}B' if abs(x)>=1e9 else f'${x/1e6:,.1f}M'))
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.0f}B' if abs(x)>=1e9 else f'${x/1e6:,.0f}M'))
 
 # Set axis limits for better scaling/label fit
 ax.set_xlim([-buffer if min(chart_df['Flow ($)'].fillna(0)) < 0 else 0, max_val + buffer])
 
-# Annotate: right-aligned if positive, left-aligned if negative or near right edge
-for bar, val, label in zip(bars, chart_df['Flow ($)'], chart_df['Label']):
+# Annotate: show only amount, right-aligned if positive, left-aligned if negative
+for bar, val in zip(bars, chart_df['Flow ($)']):
     if val is not None:
+        label = flow_label(val)
         x_text = bar.get_width()
-        align = 'left' if val > 0 and (x_text + buffer * 0.8) < ax.get_xlim()[1] else 'right'
-        x_offset = 1e7 if (val > 0 and align == 'left') else -1e7
+        align = 'left' if val > 0 else 'right'
+        x_offset = 1e7 if (val > 0) else -1e7
+        # keep annotation inside the chart, clip if too wide
+        text_x = x_text + x_offset if (abs(x_text) + buffer*0.5 < ax.get_xlim()[1]) else x_text - (buffer*0.05 if val > 0 else 0)
         ax.text(
-            x_text + x_offset,
+            text_x,
             bar.get_y() + bar.get_height() / 2,
-            f"{label.split('(')[-1][:-1]} ({'+' if val > 0 else ''}{df.loc[df['Label'] == label, 'Flow (Formatted)'].values[0]})",
+            label,
             va='center',
             ha=align,
-            fontsize=9,
+            fontsize=10,
             color='black',
             clip_on=True
         )
@@ -161,18 +172,19 @@ st.markdown("*Green: inflow, Red: outflow, Gray: missing or flat*")
 
 # ------ TOP FLOWS / OUTFLOWS SUMMARY ------
 st.markdown("#### Top Inflows & Outflows")
-top_in = df.head(3)[["Label", "Flow (Formatted)"]]
-top_out = df.sort_values("Flow ($)").head(3)[["Label", "Flow (Formatted)"]]
+top_in = df.head(3)[["Label", "Flow ($)"]].copy()
+top_in['Flow'] = top_in['Flow ($)'].apply(flow_label)
+top_out = df.sort_values("Flow ($)").head(3)[["Label", "Flow ($)"]].copy()
+top_out['Flow'] = top_out['Flow ($)'].apply(flow_label)
 col1, col2 = st.columns(2)
 with col1:
     st.write("**Top Inflows**")
-    st.table(top_in.set_index("Label"))
+    st.table(top_in[["Flow"]].set_index(top_in["Label"]))
 with col2:
     st.write("**Top Outflows**")
-    st.table(top_out.set_index("Label"))
+    st.table(top_out[["Flow"]].set_index(top_out["Label"]))
 
-# ------ DATA FRESHNESS / WARNINGS ------
-if df['Flow (Formatted)'].str.contains('n/a').any():
+if df['Flow ($)'].isnull().any():
     st.warning("Some ETFs are missing flow data (no shares outstanding history or price). Gray bars indicate incomplete flow data.")
 else:
     st.success("All flow proxies calculated using latest data.")
