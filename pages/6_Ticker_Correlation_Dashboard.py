@@ -8,10 +8,9 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 import altair as alt
-
 import matplotlib.pyplot as plt
-plt.style.use("default")
 
+plt.style.use("default")
 
 st.set_page_config(
     page_title="Correlation Dashboard — AD Fund Management LP",
@@ -29,7 +28,7 @@ with st.sidebar:
         Provides a quick, at-a-glance view of historical and rolling correlations for up to three tickers, supporting portfolio construction and risk assessment.
 
         **Key features**  
-        • Computes Pearson correlations on *daily log returns* for eight windows: YTD, 3m, 6m, 9m, 1y, 3y, 5y, 10y.  
+        • Computes Pearson correlations on *daily/weekly/monthly log returns* for eight windows: YTD, 3m, 6m, 9m, 1y, 3y, 5y, 10y.  
         • Shows indexed price overlays for each window.  
         • Plots rolling correlation, highlights potential regime shifts.  
         • Pulls split- and dividend-adjusted data from **Yahoo Finance** (Adj Close).
@@ -44,17 +43,17 @@ with st.sidebar:
         value="", 
         help="Benchmark/index (optional; leave blank to skip)."
     ).strip().upper()
-
-    roll_window = st.slider("Rolling window (days)", 20, 120, value=60)
+    freq = st.selectbox("Return Frequency", ["Daily", "Weekly", "Monthly"], index=0)
+    roll_window = st.slider("Rolling window (periods)", 20, 120, value=60)
 
 # ── Helper functions ────────────────────────────────────────────────────────
-def fetch_prices(symbols: list, start: dt.date, end: dt.date) -> pd.DataFrame:
-    """Download adjusted-close prices for the symbols."""
+@st.cache_data(show_spinner=False)
+def fetch_prices(symbols: list, start: dt.date, end: dt.date, freq: str) -> pd.DataFrame:
     try:
         raw = yf.download(
             symbols,
             start=start,
-            end=end + dt.timedelta(days=1),  # yfinance end is exclusive
+            end=end + dt.timedelta(days=1),
             progress=False,
             auto_adjust=False,
         )
@@ -68,8 +67,14 @@ def fetch_prices(symbols: list, start: dt.date, end: dt.date) -> pd.DataFrame:
         adj.columns = adj.columns.get_level_values(0)
     else:
         adj = raw[["Adj Close"]].rename(columns={"Adj Close": symbols[0]})
+    adj = adj.dropna(how="all")
+    if freq == "Weekly":
+        adj = adj.resample("W-FRI").last()
+    elif freq == "Monthly":
+        adj = adj.resample("M").last()
     return adj.dropna(how="all")
 
+@st.cache_data(show_spinner=False)
 def log_returns(prices: pd.DataFrame) -> pd.DataFrame:
     return np.log(prices / prices.shift(1)).dropna(how="all")
 
@@ -78,6 +83,12 @@ def slice_since(df: pd.DataFrame, since: dt.date) -> pd.DataFrame:
 
 def normalize(prices: pd.Series) -> pd.Series:
     return prices / prices.iloc[0] * 100
+
+def highlight_corr(val):
+    if pd.isnull(val): return ''
+    if val > 0.85: return 'background-color: #B7F7B7'
+    if val < -0.3: return 'background-color: #F7B7B7'
+    return ''
 
 def emoji_corr(val: float) -> str:
     if pd.isnull(val):
@@ -108,13 +119,17 @@ if not (ticker_x and ticker_y):
     st.warning("You must enter at least two tickers.")
     st.stop()
 
-prices = fetch_prices(symbols, start=earliest_date, end=end_date)
+prices = fetch_prices(symbols, start=earliest_date, end=end_date, freq=freq)
 if prices.empty:
     st.error("No price data returned — check ticker symbols and try again.")
     st.stop()
 returns = log_returns(prices)
 
-# Check available data range
+# Flag missing data
+missing = prices.isnull().sum()
+if missing.any():
+    st.warning(f"Data gaps detected: {dict(missing[missing > 0])}")
+
 if prices.index[0].date() > earliest_date:
     st.info(f"Note: Oldest available price is {prices.index[0].date()}, so not all look-back windows may be shown.")
 
@@ -142,6 +157,12 @@ df_corr_display = df_corr.copy()
 for c in df_corr.columns[1:]:
     df_corr_display[c] = df_corr_display[c].apply(lambda v: f"{v:.2f} {emoji_corr(v)}" if pd.notnull(v) else "")
 st.dataframe(df_corr_display.set_index("Window"), height=320)
+
+# Add styled table with color highlighting
+df_corr_styled = df_corr.set_index("Window").style.applymap(
+    highlight_corr, subset=pd.IndexSlice[:, df_corr.columns[1:]]
+)
+st.dataframe(df_corr_styled, height=320)
 
 # ── Window‑Specific Overlay Charts ──────────────────────────────────────────
 st.subheader("Window‑Specific Indexed Price Overlays")
@@ -183,6 +204,21 @@ if ticker_z and ticker_z in returns.columns:
     )
 corr_df = corr_df.dropna(how="all")
 
+# Detect regime shifts: Large changes in correlation
+regime_lines = []
+if f"{ticker_x} vs {ticker_y}" in corr_df.columns:
+    diff = corr_df[f"{ticker_x} vs {ticker_y}"].diff().abs()
+    threshold = 0.4
+    regime_points = corr_df.index[diff > threshold]
+    for date in regime_points:
+        regime_lines.append({"Date": date})
+
+# Display latest rolling correlations
+if not corr_df.empty:
+    latest_corrs = corr_df.iloc[-1].dropna()
+    corr_display = " | ".join([f"{col}: {val:.2f}" for col, val in latest_corrs.items()])
+    st.markdown(f"**Latest Rolling Correlation:** {corr_display}")
+
 corr_long = corr_df.reset_index().melt(id_vars="Date", var_name="Pair", value_name="Correlation")
 roll_chart = (
     alt.Chart(corr_long)
@@ -196,6 +232,15 @@ roll_chart = (
     .properties(height=400)
     .interactive()
 )
+# Overlay regime shifts as vertical rules
+if regime_lines:
+    regime_df = pd.DataFrame(regime_lines)
+    rule_chart = (
+        alt.Chart(regime_df)
+        .mark_rule(color="red", opacity=0.25)
+        .encode(x="Date:T")
+    )
+    roll_chart = roll_chart + rule_chart
 st.altair_chart(roll_chart, use_container_width=True)
 
 # ── Data Download Option ────────────────────────────────────────────────────
@@ -216,6 +261,12 @@ with st.expander("Download Data"):
         "Download Correlation Table (CSV)",
         df_corr.to_csv(index=False),
         file_name="correlation_dashboard_correlation_table.csv",
+        mime="text/csv"
+    )
+    st.download_button(
+        "Download Rolling Correlation (CSV)",
+        corr_df.to_csv(index=True),
+        file_name="correlation_dashboard_rolling_corr.csv",
         mime="text/csv"
     )
 
