@@ -27,21 +27,6 @@ lookback_dict = {
 period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=1)
 period_days = lookback_dict[period_label]
 
-theme_dict = {
-    "AI/Robotics": ["MAGS", "SMH", "BOTZ", "ARKK"],
-    "Semiconductors": ["SMH"],
-    "Clean Energy": ["ICLN", "URNM"],
-    "China/EM": ["KWEB", "FXI", "EEM", "VWO"],
-    "LatAm": ["EWZ", "ILF", "ARGT"],
-    "Europe": ["VGK", "FEZ", "HEDJ"],
-    "Gold/Commodities": ["GLD", "SLV", "DBC"],
-    "Defensive": ["USMV", "COWZ"],
-    "Crypto": ["BITO", "IBIT"],
-    "Rates": ["BIL", "TLT", "SHV"],
-}
-theme_choices = ["All"] + list(theme_dict.keys())
-theme = st.sidebar.selectbox("Filter by Theme", theme_choices)
-
 etf_info = {
     "MAGS": ("Mag 7", "Magnificent 7 stocks ETF"),
     "SMH": ("Semiconductors", "Semiconductor stocks (VanEck)"),
@@ -70,10 +55,7 @@ etf_info = {
     "TLT": ("20+yr Treasuries", "20+ year U.S. Treasuries"),
     "SHV": ("0-1yr T-Bills", "Short-term Treasury bonds"),
 }
-if theme != "All":
-    etf_tickers = [t for t in theme_dict[theme] if t in etf_info]
-else:
-    etf_tickers = list(etf_info.keys())
+etf_tickers = list(etf_info.keys())
 
 # ----- DATA COLLECTION -----
 @st.cache_data(show_spinner=True)
@@ -143,9 +125,8 @@ tab1, tab2 = st.tabs(["Flows Chart", "Table View"])
 
 # ------ CHART ------
 with tab1:
-    show_count = st.slider("Show top N ETFs", min_value=5, max_value=len(df), value=min(12, len(df)))
-    chart_df = df.head(show_count)
-    fig, ax = plt.subplots(figsize=(15, max(6, show_count * 0.4)))
+    chart_df = df  # Always show all ETFs, no slider
+    fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.4)))
     bars = ax.barh(
         chart_df['Ticker'],
         chart_df['Flow ($)'].fillna(0),
