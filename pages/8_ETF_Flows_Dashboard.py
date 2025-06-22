@@ -104,8 +104,7 @@ def get_all_flows(etf_tickers, period_days):
             "Flow ($)": flow,
             "Flow (%)": flow_pct * 100 if flow_pct is not None else None,
             "AUM ($)": aum,
-            "Description": desc,
-            "Yahoo Link": f"https://finance.yahoo.com/quote/{ticker}"
+            "Description": desc
         })
     return pd.DataFrame(results)
 
@@ -114,57 +113,43 @@ df = df.sort_values("Flow ($)", ascending=False)
 df['Flow (Formatted)'] = df['Flow ($)'].apply(
     lambda x: f"${x/1e9:,.2f}B" if x and abs(x) > 1e9 else (f"${x/1e6:,.2f}M" if x and abs(x) > 1e6 else ("n/a" if x is None else f"${x:,.0f}"))
 )
-df['Flow (% AUM)'] = df['Flow (%)'].apply(lambda x: f"{x:,.2f}%" if x is not None else "n/a")
 
 # ------ MAIN CONTENT ------
 st.title("ETF Flows Dashboard")
 st.caption(f"Flows are proxies (not official). Period: **{period_label}**")
 
-# ------ TABS ------
-tab1, tab2 = st.tabs(["Flows Chart", "Table View"])
-
-# ------ CHART ------
-with tab1:
-    chart_df = df  # Always show all ETFs, no slider
-    fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.4)))
-    bars = ax.barh(
-        chart_df['Ticker'],
-        chart_df['Flow ($)'].fillna(0),
-        color=[
-            'green' if (x is not None and x > 0) else ('red' if (x is not None and x < 0) else 'gray')
-            for x in chart_df['Flow ($)']
-        ],
-        alpha=0.8
-    )
-    ax.set_xlabel('Estimated Flow ($)')
-    ax.set_title(f'ETF Proxy Flows – {period_label}')
-    ax.invert_yaxis()
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.2f}B' if abs(x)>=1e9 else f'${x/1e6:,.1f}M'))
-    for bar, val, ticker in zip(bars, chart_df['Flow ($)'], chart_df['Ticker']):
-        if val is not None:
-            ax.text(
-                bar.get_width() + (1e7 if val > 0 else -1e7),
-                bar.get_y() + bar.get_height()/2,
-                f"{ticker} ({'+' if val > 0 else ''}{df.loc[df['Ticker'] == ticker, 'Flow (Formatted)'].values[0]})",
-                va='center', ha='left' if val > 0 else 'right', fontsize=9, color='black'
-            )
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.markdown("*Green: inflow, Red: outflow, Gray: missing or flat*")
-
-# ------ TABLE ------
-with tab2:
-    st.dataframe(
-        df[["Ticker", "Category", "Flow (Formatted)", "Flow (% AUM)", "Description"]].set_index("Ticker"),
-        use_container_width=True,
-        hide_index=False
-    )
-    st.markdown("Links: " + " · ".join([f"[{t}](https://finance.yahoo.com/quote/{t})" for t in chart_df['Ticker']]))
+# ------ CHART ONLY ------
+chart_df = df  # Always show all ETFs, no slider
+fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.4)))
+bars = ax.barh(
+    chart_df['Ticker'],
+    chart_df['Flow ($)'].fillna(0),
+    color=[
+        'green' if (x is not None and x > 0) else ('red' if (x is not None and x < 0) else 'gray')
+        for x in chart_df['Flow ($)']
+    ],
+    alpha=0.8
+)
+ax.set_xlabel('Estimated Flow ($)')
+ax.set_title(f'ETF Proxy Flows – {period_label}')
+ax.invert_yaxis()
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.2f}B' if abs(x)>=1e9 else f'${x/1e6:,.1f}M'))
+for bar, val, ticker in zip(bars, chart_df['Flow ($)'], chart_df['Ticker']):
+    if val is not None:
+        ax.text(
+            bar.get_width() + (1e7 if val > 0 else -1e7),
+            bar.get_y() + bar.get_height()/2,
+            f"{ticker} ({'+' if val > 0 else ''}{df.loc[df['Ticker'] == ticker, 'Flow (Formatted)'].values[0]})",
+            va='center', ha='left' if val > 0 else 'right', fontsize=9, color='black'
+        )
+plt.tight_layout()
+st.pyplot(fig)
+st.markdown("*Green: inflow, Red: outflow, Gray: missing or flat*")
 
 # ------ TOP FLOWS / OUTFLOWS SUMMARY ------
 st.markdown("#### Top Inflows & Outflows")
-top_in = df.head(3)[["Ticker", "Category", "Flow (Formatted)", "Flow (% AUM)"]]
-top_out = df.sort_values("Flow ($)").head(3)[["Ticker", "Category", "Flow (Formatted)", "Flow (% AUM)"]]
+top_in = df.head(3)[["Ticker", "Category", "Flow (Formatted)"]]
+top_out = df.sort_values("Flow ($)").head(3)[["Ticker", "Category", "Flow (Formatted)"]]
 col1, col2 = st.columns(2)
 with col1:
     st.write("**Top Inflows**")
