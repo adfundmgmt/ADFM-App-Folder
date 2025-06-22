@@ -119,47 +119,48 @@ if prices.index[0].date() > earliest_date:
 st.markdown("### Rolling Correlation (live regime shifts)")
 from itertools import permutations
 
-corr_df = pd.DataFrame(index=returns.index)
-corr_label_list = []
-corr_df[f"{ticker_x} vs {ticker_y}"] = returns[ticker_x].rolling(roll_window).corr(returns[ticker_y])
-corr_label_list.append(f"{ticker_x} vs {ticker_y}")
-if ticker_z and ticker_z in returns.columns:
-    corr_df[f"{ticker_x} vs {ticker_z}"] = returns[ticker_x].rolling(roll_window).corr(returns[ticker_z])
-    corr_label_list.append(f"{ticker_x} vs {ticker_z}")
-    corr_df[f"{ticker_y} vs {ticker_z}"] = returns[ticker_y].rolling(roll_window).corr(returns[ticker_z])
-    corr_label_list.append(f"{ticker_y} vs {ticker_z}")
-corr_df = corr_df.dropna(how="all")
+def compute_ratio(prices, t1, t2):
+    s1, s2 = prices[t1].dropna(), prices[t2].dropna()
+    common_idx = s1.index.intersection(s2.index)
+    if len(common_idx) < 5:
+        return pd.Series(dtype=float)
+    ratio = s1.loc[common_idx] / s2.loc[common_idx]
+    return ratio
 
-# Use only the first pair for tight Y axis (usually enough)
-corr_min, corr_max = None, None
-if not corr_df.empty:
-    main_corr = corr_df.iloc[:,0].dropna()
-    if not main_corr.empty:
-        corr_min = main_corr.min() - 0.07 * abs(main_corr.min())
-        corr_max = main_corr.max() + 0.07 * abs(main_corr.max())
-        if corr_min == corr_max:  # degenerate case
-            corr_min, corr_max = -1, 1
-    else:
-        corr_min, corr_max = -1, 1
-else:
-    corr_min, corr_max = -1, 1
+pair_list = [(a, b) for a, b in permutations([t for t in [ticker_x, ticker_y, ticker_z] if t], 2)]
 
-corr_long = corr_df.reset_index().melt(id_vars="Date", var_name="Pair", value_name="Correlation")
-roll_chart = (
-    alt.Chart(corr_long)
-    .mark_line(strokeWidth=3)
-    .encode(
-        x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
-        y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=[corr_min, corr_max])),
-        # No color/legend for single pair
-        tooltip=["Date:T", "Pair:N", alt.Tooltip("Correlation:Q", format=".2f")],
-        detail="Pair:N",
-    )
-    .properties(height=330)
-    .interactive()
-)
-roll_chart = roll_chart.configure_legend(disable=True)  # Remove legend
-st.altair_chart(roll_chart, use_container_width=True)
+if pair_list:
+    st.markdown("### Relative Value (Ratio) Chart(s)")
+    ratio_tabs = st.tabs(list(windows.keys()))
+    for tab, label in zip(ratio_tabs, windows.keys()):
+        since = windows[label]
+        price_slice = slice_since(prices, since)
+        with tab:
+            for t1, t2 in pair_list:
+                if t1 not in price_slice.columns or t2 not in price_slice.columns:
+                    continue
+                ratio = compute_ratio(price_slice, t1, t2)
+                if ratio.empty:
+                    continue
+                rmin = ratio.min() - 0.07 * abs(ratio.min())
+                rmax = ratio.max() + 0.07 * abs(ratio.max())
+                if rmin == rmax:
+                    rmin, rmax = None, None
+                ratio_df = ratio.reset_index()
+                ratio_df.columns = ["Date", "Ratio"]
+                chart = (
+                    alt.Chart(ratio_df)
+                    .mark_line(strokeWidth=2.2)
+                    .encode(
+                        x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
+                        y=alt.Y("Ratio:Q", title=f"{t1} / {t2} Ratio", scale=alt.Scale(domain=[rmin, rmax] if rmin is not None and rmax is not None else None)),
+                        tooltip=["Date:T", alt.Tooltip("Ratio:Q", format=".3f")]
+                    )
+                    .properties(height=200, title=f"{t1} / {t2}")
+                    .interactive()
+                ).configure_legend(disable=True)
+                st.altair_chart(chart, use_container_width=True)
+
 
 # --- Relative Value (Ratio) Charts (tight axes, no legend) ---
 def compute_ratio(prices, t1, t2):
