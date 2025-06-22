@@ -112,14 +112,16 @@ def flow_label(x):
     if x is None:
         return ""
     abs_x = abs(x)
+    sign = '-' if x < 0 else '+'
     if abs_x >= 1e9:
-        return f"{'-' if x < 0 else '+'}{int(round(abs_x / 1e9))}B"
+        return f"{sign}${int(round(abs_x / 1e9))}B"
     elif abs_x >= 1e6:
-        return f"{'-' if x < 0 else '+'}{int(round(abs_x / 1e6))}M"
+        return f"{sign}${int(round(abs_x / 1e6))}M"
     elif abs_x >= 1e3:
-        return f"{'-' if x < 0 else '+'}{int(round(abs_x / 1e3))}K"
+        return f"{sign}${int(round(abs_x / 1e3))}K"
     else:
-        return f"{x:,.0f}"
+        return f"{sign}${int(round(abs_x))}"
+
 
 # ------ MAIN CONTENT ------
 st.title("ETF Flows Dashboard")
