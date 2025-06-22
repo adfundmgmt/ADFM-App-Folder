@@ -124,7 +124,7 @@ if prices.index[0].date() > earliest_date:
     st.info(f"Note: Oldest available price is {prices.index[0].date()}, so not all look-back windows may be shown.")
 
 # ── Window‑Specific Overlay Charts (dynamic Y axis) ────────────────────────
-st.subheader("Window‑Specific Indexed Price Overlays")
+st.subheader("Indexed Price Overlays")
 tabs = st.tabs(list(windows.keys()))
 for tab, label in zip(tabs, windows.keys()):
     since = windows[label]
