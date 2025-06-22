@@ -31,10 +31,10 @@ with st.sidebar:
         """
         1. Enter two or three tickers (US equities, ETF, or index).
         2. Select log-return frequency and rolling window.
-        3. View *live* correlations across timeframes and chart regimes.
+        3. View *live* correlations, ratio charts, and indexed overlays.
         ---
-        - **Correlation** is calculated using Pearson on log returns (Adj Close).
-        - **Relative Value Table** compares how each input outperforms the other.
+        - **Correlation** uses Pearson on log returns (Adj Close).
+        - **Relative Value Chart** shows ratio paths (A/B, A/C, ...).
         - **Charts** are interactive (zoom/hover).
         """
     )
@@ -183,6 +183,40 @@ if regime_lines:
     roll_chart = roll_chart + rule_chart
 st.altair_chart(roll_chart, use_container_width=True)
 
+# --- Relative Value (Ratio) Charts ---
+from itertools import permutations
+
+def compute_ratio(prices, t1, t2):
+    s1, s2 = prices[t1].dropna(), prices[t2].dropna()
+    common_idx = s1.index.intersection(s2.index)
+    if len(common_idx) < 5:
+        return pd.Series(dtype=float)
+    ratio = s1.loc[common_idx] / s2.loc[common_idx]
+    return ratio
+
+pair_list = [(a, b) for a, b in permutations([t for t in [ticker_x, ticker_y, ticker_z] if t], 2)]
+
+if pair_list:
+    st.markdown("### Relative Value (Ratio) Chart(s)")
+    for t1, t2 in pair_list:
+        ratio = compute_ratio(prices, t1, t2)
+        if ratio.empty:
+            continue
+        ratio_df = ratio.reset_index()
+        ratio_df.columns = ["Date", "Ratio"]
+        chart = (
+            alt.Chart(ratio_df)
+            .mark_line(strokeWidth=2.3)
+            .encode(
+                x=alt.X("Date:T", title="Date"),
+                y=alt.Y("Ratio:Q", title=f"{t1} / {t2} Ratio", scale=alt.Scale(nice=True)),
+                tooltip=["Date:T", alt.Tooltip("Ratio:Q", format=".3f")]
+            )
+            .properties(height=210, title=f"{t1} / {t2}")
+            .interactive()
+        )
+        st.altair_chart(chart, use_container_width=True)
+
 # --- Window overlays ---
 st.markdown("### Indexed Price Overlays")
 tabs = st.tabs(list(windows.keys()))
@@ -231,35 +265,6 @@ for c in df_corr.columns[1:]:
     df_corr_display[c] = df_corr_display[c].apply(lambda v: f"{v:.2f} {emoji_corr(v)}" if pd.notnull(v) else "")
 st.dataframe(df_corr_display.set_index("Window"), height=350)
 
-# --- Relative Value Table ---
-def get_all_pairs(symbols):
-    from itertools import permutations
-    return list(permutations(symbols, 2))
-
-pairs = get_all_pairs([t for t in [ticker_x, ticker_y, ticker_z] if t])
-rel_rows = []
-for label, since in windows.items():
-    price_slice = slice_since(prices, since)
-    rel_row = {"Window": label}
-    for t1, t2 in pairs:
-        if t1 in price_slice.columns and t2 in price_slice.columns:
-            s1, s2 = price_slice[t1].dropna(), price_slice[t2].dropna()
-            common_idx = s1.index.intersection(s2.index)
-            if len(common_idx) < 5:
-                rel_row[f"{t1}/{t2}"] = np.nan
-                continue
-            ratio_start = s1.loc[common_idx[0]] / s2.loc[common_idx[0]]
-            ratio_end = s1.loc[common_idx[-1]] / s2.loc[common_idx[-1]]
-            rel_row[f"{t1}/{t2}"] = f"{ratio_end:.3f} ({ratio_end - ratio_start:+.3f})"
-        else:
-            rel_row[f"{t1}/{t2}"] = ""
-    rel_rows.append(rel_row)
-
-df_rel = pd.DataFrame(rel_rows)
-if len(pairs) > 0:
-    st.markdown("### Relative Value Table (Final Ratio | Change Over Window)")
-    st.dataframe(df_rel.set_index("Window"), height=350)
-
 # --- Data Download Option ---
 with st.expander("Download Data"):
     st.download_button(
@@ -278,12 +283,6 @@ with st.expander("Download Data"):
         "Download Correlation Table (CSV)",
         df_corr.to_csv(index=False),
         file_name="correlation_dashboard_correlation_table.csv",
-        mime="text/csv"
-    )
-    st.download_button(
-        "Download Relative Value Table (CSV)",
-        df_rel.to_csv(index=False),
-        file_name="correlation_dashboard_rel_table.csv",
         mime="text/csv"
     )
     st.download_button(
