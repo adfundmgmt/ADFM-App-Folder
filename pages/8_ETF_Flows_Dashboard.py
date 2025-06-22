@@ -4,17 +4,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from datetime import datetime
+import concurrent.futures
 
 st.set_page_config(page_title="ETF Flows Dashboard", layout="wide")
 
 # ----- SIDEBAR -----
 st.sidebar.title("ETF Flows")
 st.sidebar.markdown("""
-A dashboard of **thematic, and global flows** - see where money is moving among major macro and innovation trades.
+A dashboard of **thematic and global ETF flows** — see where money is moving among major macro and innovation trades.
 
-- **Flows are proxies**, not official fund flows.
+- **Flows are proxies** using daily shares outstanding × price.
 - **Themes:** AI, robotics, Mag 7, semis, clean energy, China tech, EM, LatAm, Europe, gold, commodities, min vol, free cash flow, Bitcoin, T-bills, and more.
 """)
+
 lookback_dict = {
     "1 Month": 30,
     "3 Months": 90,
@@ -25,7 +27,21 @@ lookback_dict = {
 period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=1)
 period_days = lookback_dict[period_label]
 
-# ----- ETF UNIVERSE -----
+theme_dict = {
+    "AI/Robotics": ["MAGS", "SMH", "BOTZ", "ARKK"],
+    "Semiconductors": ["SMH"],
+    "Clean Energy": ["ICLN", "URNM"],
+    "China/EM": ["KWEB", "FXI", "EEM", "VWO"],
+    "LatAm": ["EWZ", "ILF", "ARGT"],
+    "Europe": ["VGK", "FEZ", "HEDJ"],
+    "Gold/Commodities": ["GLD", "SLV", "DBC"],
+    "Defensive": ["USMV", "COWZ"],
+    "Crypto": ["BITO", "IBIT"],
+    "Rates": ["BIL", "TLT", "SHV"],
+}
+theme_choices = ["All"] + list(theme_dict.keys())
+theme = st.sidebar.selectbox("Filter by Theme", theme_choices)
+
 etf_info = {
     "MAGS": ("Mag 7", "Magnificent 7 stocks ETF"),
     "SMH": ("Semiconductors", "Semiconductor stocks (VanEck)"),
@@ -54,7 +70,10 @@ etf_info = {
     "TLT": ("20+yr Treasuries", "20+ year U.S. Treasuries"),
     "SHV": ("0-1yr T-Bills", "Short-term Treasury bonds"),
 }
-etf_tickers = list(etf_info.keys())
+if theme != "All":
+    etf_tickers = [t for t in theme_dict[theme] if t in etf_info]
+else:
+    etf_tickers = list(etf_info.keys())
 
 # ----- DATA COLLECTION -----
 @st.cache_data(show_spinner=True)
@@ -64,7 +83,7 @@ def robust_flow_estimate(ticker, period_days):
         hist = t.history(period=f"{period_days+10}d")
         hist = hist.dropna()
         if hist.empty or len(hist) < 2:
-            return 0.0
+            return None, None, None
         try:
             so = t.get_shares_full()
             if so is not None and not so.empty:
@@ -76,64 +95,107 @@ def robust_flow_estimate(ticker, period_days):
                     start, end = so.iloc[0], so.iloc[-1]
                     close = hist['Close']
                     flow = (end - start) * close.iloc[-1]
-                    return flow
+                    aum = end * close.iloc[-1]
+                    flow_pct = flow / aum if aum != 0 else None
+                    return flow, flow_pct, aum
         except Exception:
             pass
+        # fallback proxy
         flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
-        return flow
+        aum = hist['Close'].iloc[-1] * 1e6  # fallback guess: $1B AUM proxy
+        flow_pct = flow / aum if aum != 0 else None
+        return flow, flow_pct, aum
     except Exception:
-        return 0.0
+        return None, None, None
 
-results = []
-for ticker in etf_tickers:
-    flow = robust_flow_estimate(ticker, period_days)
-    cat, desc = etf_info[ticker]
-    results.append({
-        "Ticker": ticker,
-        "Category": cat,
-        "Flow ($)": flow,
-        "Description": desc
-    })
+@st.cache_data(show_spinner=True)
+def get_all_flows(etf_tickers, period_days):
+    results = []
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        flows = list(executor.map(lambda t: robust_flow_estimate(t, period_days), etf_tickers))
+    for i, ticker in enumerate(etf_tickers):
+        cat, desc = etf_info[ticker]
+        flow, flow_pct, aum = flows[i]
+        results.append({
+            "Ticker": ticker,
+            "Category": cat,
+            "Flow ($)": flow,
+            "Flow (%)": flow_pct * 100 if flow_pct is not None else None,
+            "AUM ($)": aum,
+            "Description": desc,
+            "Yahoo Link": f"https://finance.yahoo.com/quote/{ticker}"
+        })
+    return pd.DataFrame(results)
 
-df = pd.DataFrame(results)
-
-# ------ SORT THE DATAFRAME BY RAW FLOW ------
+df = get_all_flows(etf_tickers, period_days)
 df = df.sort_values("Flow ($)", ascending=False)
-df['Flow (Formatted)'] = df['Flow ($)'].apply(lambda x: f"${x/1e9:,.2f}B" if abs(x) > 1e9 else f"${x/1e6:,.2f}M")
+df['Flow (Formatted)'] = df['Flow ($)'].apply(
+    lambda x: f"${x/1e9:,.2f}B" if x and abs(x) > 1e9 else (f"${x/1e6:,.2f}M" if x and abs(x) > 1e6 else ("n/a" if x is None else f"${x:,.0f}"))
+)
+df['Flow (% AUM)'] = df['Flow (%)'].apply(lambda x: f"{x:,.2f}%" if x is not None else "n/a")
 
-# For the user table, only show the formatted column, but keep numeric for sorting (sorting is now correct)
-df_display = df[['Ticker', 'Category', 'Flow (Formatted)', 'Description']]
-
-# ----- MAIN CONTENT -----
+# ------ MAIN CONTENT ------
 st.title("ETF Flows Dashboard")
-st.caption(f"Flows are proxies (not official). Themes: AI, innovation, EM, China, Bitcoin, commodities, free cash flow, T-bills. Period: **{period_label}**")
+st.caption(f"Flows are proxies (not official). Period: **{period_label}**")
+
+# ------ TABS ------
+tab1, tab2 = st.tabs(["Flows Chart", "Table View"])
 
 # ------ CHART ------
-def plot_with_labels(data):
-    fig, ax = plt.subplots(figsize=(15, 9))
-    nicknames = []
-    raw_flows = []
-    for _, row in data.iterrows():
-        val_num = row['Flow ($)']
-        raw_flows.append(val_num)
-        nickname = etf_info[row['Ticker']][0]
-        # Truncate if longer than 14 chars
-        if len(nickname) > 14:
-            nickname = nickname[:13] + "…"
-        nicknames.append(nickname)
-    bars = ax.barh(data['Ticker'], raw_flows, color=['green' if x > 0 else 'red' for x in raw_flows])
+with tab1:
+    show_count = st.slider("Show top N ETFs", min_value=5, max_value=len(df), value=min(12, len(df)))
+    chart_df = df.head(show_count)
+    fig, ax = plt.subplots(figsize=(15, max(6, show_count * 0.4)))
+    bars = ax.barh(
+        chart_df['Ticker'],
+        chart_df['Flow ($)'].fillna(0),
+        color=[
+            'green' if (x is not None and x > 0) else ('red' if (x is not None and x < 0) else 'gray')
+            for x in chart_df['Flow ($)']
+        ],
+        alpha=0.8
+    )
     ax.set_xlabel('Estimated Flow ($)')
     ax.set_title(f'ETF Proxy Flows – {period_label}')
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.2f}B' if abs(x)>=1e9 else f'${x/1e6:,.1f}M'))
-    for bar, nickname in zip(bars, nicknames):
-        width = bar.get_width()
-        ax.text(width + (1e7 if width > 0 else -1e7), bar.get_y() + bar.get_height()/2,
-                f"{nickname}",
-                va='center', ha='left' if width > 0 else 'right', fontsize=9, color='black')
+    for bar, val, ticker in zip(bars, chart_df['Flow ($)'], chart_df['Ticker']):
+        if val is not None:
+            ax.text(
+                bar.get_width() + (1e7 if val > 0 else -1e7),
+                bar.get_y() + bar.get_height()/2,
+                f"{ticker} ({'+' if val > 0 else ''}{df.loc[df['Ticker'] == ticker, 'Flow (Formatted)'].values[0]})",
+                va='center', ha='left' if val > 0 else 'right', fontsize=9, color='black'
+            )
     plt.tight_layout()
-    return fig
+    st.pyplot(fig)
+    st.markdown("*Green: inflow, Red: outflow, Gray: missing or flat*")
 
-st.pyplot(plot_with_labels(df))
+# ------ TABLE ------
+with tab2:
+    st.dataframe(
+        df[["Ticker", "Category", "Flow (Formatted)", "Flow (% AUM)", "Description"]].set_index("Ticker"),
+        use_container_width=True,
+        hide_index=False
+    )
+    st.markdown("Links: " + " · ".join([f"[{t}](https://finance.yahoo.com/quote/{t})" for t in chart_df['Ticker']]))
+
+# ------ TOP FLOWS / OUTFLOWS SUMMARY ------
+st.markdown("#### Top Inflows & Outflows")
+top_in = df.head(3)[["Ticker", "Category", "Flow (Formatted)", "Flow (% AUM)"]]
+top_out = df.sort_values("Flow ($)").head(3)[["Ticker", "Category", "Flow (Formatted)", "Flow (% AUM)"]]
+col1, col2 = st.columns(2)
+with col1:
+    st.write("**Top Inflows**")
+    st.table(top_in.set_index("Ticker"))
+with col2:
+    st.write("**Top Outflows**")
+    st.table(top_out.set_index("Ticker"))
+
+# ------ DATA FRESHNESS / WARNINGS ------
+if df['Flow (Formatted)'].str.contains('n/a').any():
+    st.warning("Some ETFs are missing flow data (no shares outstanding history or price). Gray bars indicate incomplete flow data.")
+else:
+    st.success("All flow proxies calculated using latest data.")
 
 st.caption("© 2025 AD Fund Management LP")
