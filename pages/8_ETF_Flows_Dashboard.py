@@ -8,13 +8,11 @@ import concurrent.futures
 
 st.set_page_config(page_title="ETF Flows Dashboard", layout="wide")
 
-# ----- SIDEBAR -----
 st.sidebar.title("ETF Flows")
 st.sidebar.markdown("""
 A dashboard of **thematic and global ETF flows** — see where money is moving among major macro and innovation trades.
 
 - **Flows are proxies** using daily shares outstanding × price.
-- **Themes:** AI, robotics, Mag 7, semis, clean energy, China tech, EM, LatAm, Europe, gold, commodities, min vol, free cash flow, Bitcoin, T-bills, and more.
 """)
 
 lookback_dict = {
@@ -57,7 +55,6 @@ etf_info = {
 }
 etf_tickers = list(etf_info.keys())
 
-# ----- DATA COLLECTION -----
 @st.cache_data(show_spinner=True)
 def robust_flow_estimate(ticker, period_days):
     try:
@@ -82,7 +79,6 @@ def robust_flow_estimate(ticker, period_days):
                     return flow, flow_pct, aum
         except Exception:
             pass
-        # fallback proxy
         flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
         aum = hist['Close'].iloc[-1] * 1e6  # fallback guess: $1B AUM proxy
         flow_pct = flow / aum if aum != 0 else None
@@ -113,16 +109,21 @@ df = df.sort_values("Flow ($)", ascending=False)
 df['Flow (Formatted)'] = df['Flow ($)'].apply(
     lambda x: f"${x/1e9:,.2f}B" if x and abs(x) > 1e9 else (f"${x/1e6:,.2f}M" if x and abs(x) > 1e6 else ("n/a" if x is None else f"${x:,.0f}"))
 )
+# Compose y-axis labels: "Semiconductors (SMH)"
+df['Label'] = [f"{etf_info[t][0]} ({t})" for t in df['Ticker']]
 
 # ------ MAIN CONTENT ------
 st.title("ETF Flows Dashboard")
 st.caption(f"Flows are proxies (not official). Period: **{period_label}**")
 
 # ------ CHART ONLY ------
-chart_df = df  # Always show all ETFs, no slider
-fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.4)))
+chart_df = df
+max_val = chart_df['Flow ($)'].dropna().abs().max()
+buffer = max_val * 0.15
+
+fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
 bars = ax.barh(
-    chart_df['Ticker'],
+    chart_df['Label'],
     chart_df['Flow ($)'].fillna(0),
     color=[
         'green' if (x is not None and x > 0) else ('red' if (x is not None and x < 0) else 'gray')
@@ -134,13 +135,25 @@ ax.set_xlabel('Estimated Flow ($)')
 ax.set_title(f'ETF Proxy Flows – {period_label}')
 ax.invert_yaxis()
 ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.2f}B' if abs(x)>=1e9 else f'${x/1e6:,.1f}M'))
-for bar, val, ticker in zip(bars, chart_df['Flow ($)'], chart_df['Ticker']):
+
+# Set axis limits for better scaling/label fit
+ax.set_xlim([-buffer if min(chart_df['Flow ($)'].fillna(0)) < 0 else 0, max_val + buffer])
+
+# Annotate: right-aligned if positive, left-aligned if negative or near right edge
+for bar, val, label in zip(bars, chart_df['Flow ($)'], chart_df['Label']):
     if val is not None:
+        x_text = bar.get_width()
+        align = 'left' if val > 0 and (x_text + buffer * 0.8) < ax.get_xlim()[1] else 'right'
+        x_offset = 1e7 if (val > 0 and align == 'left') else -1e7
         ax.text(
-            bar.get_width() + (1e7 if val > 0 else -1e7),
-            bar.get_y() + bar.get_height()/2,
-            f"{ticker} ({'+' if val > 0 else ''}{df.loc[df['Ticker'] == ticker, 'Flow (Formatted)'].values[0]})",
-            va='center', ha='left' if val > 0 else 'right', fontsize=9, color='black'
+            x_text + x_offset,
+            bar.get_y() + bar.get_height() / 2,
+            f"{label.split('(')[-1][:-1]} ({'+' if val > 0 else ''}{df.loc[df['Label'] == label, 'Flow (Formatted)'].values[0]})",
+            va='center',
+            ha=align,
+            fontsize=9,
+            color='black',
+            clip_on=True
         )
 plt.tight_layout()
 st.pyplot(fig)
@@ -148,15 +161,15 @@ st.markdown("*Green: inflow, Red: outflow, Gray: missing or flat*")
 
 # ------ TOP FLOWS / OUTFLOWS SUMMARY ------
 st.markdown("#### Top Inflows & Outflows")
-top_in = df.head(3)[["Ticker", "Category", "Flow (Formatted)"]]
-top_out = df.sort_values("Flow ($)").head(3)[["Ticker", "Category", "Flow (Formatted)"]]
+top_in = df.head(3)[["Label", "Flow (Formatted)"]]
+top_out = df.sort_values("Flow ($)").head(3)[["Label", "Flow (Formatted)"]]
 col1, col2 = st.columns(2)
 with col1:
     st.write("**Top Inflows**")
-    st.table(top_in.set_index("Ticker"))
+    st.table(top_in.set_index("Label"))
 with col2:
     st.write("**Top Outflows**")
-    st.table(top_out.set_index("Ticker"))
+    st.table(top_out.set_index("Label"))
 
 # ------ DATA FRESHNESS / WARNINGS ------
 if df['Flow (Formatted)'].str.contains('n/a').any():
