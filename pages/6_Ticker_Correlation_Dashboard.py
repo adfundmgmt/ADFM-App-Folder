@@ -27,18 +27,18 @@ with st.sidebar:
         """
         1. Enter two or three tickers (US equities, ETF, or index).
         2. Select log-return frequency and rolling window.
-        3. View *live* correlations, ratio charts, and indexed overlays.
+        3. View correlations, Strazza-style ratio charts, and indexed overlays.
         ---
-        - **Correlation** uses Pearson on log returns (Adj Close).
-        - **Relative Value Chart** shows ratio paths (A/B, A/C, ...).
-        - **Charts** are interactive (zoom/hover).
+        - **Correlation**: Pearson on log returns (Adj Close).
+        - **Relative Value Chart**: Ratio paths (A/B, A/C, ...), optional highlights/annotations.
+        - **All charts** are interactive.
         """
     )
     st.markdown("---")
-    ticker_x = st.text_input("Ticker X", value="AAPL").strip().upper()
+    ticker_x = st.text_input("Ticker X", value="ARKK").strip().upper()
     ticker_y = st.text_input("Ticker Y", value="SPY").strip().upper()
     ticker_z = st.text_input("Ticker Z (optional)", value="", help="Benchmark/index (optional).").strip().upper()
-    freq = st.selectbox("Return Frequency", ["Daily", "Weekly", "Monthly"], index=0)
+    freq = st.selectbox("Return Frequency", ["Daily", "Weekly", "Monthly"], index=1)
     roll_window = st.slider("Rolling window (periods)", 20, 120, value=60)
     st.markdown("---")
     st.caption("© 2025 AD Fund Management LP")
@@ -84,7 +84,98 @@ def slice_since(df: pd.DataFrame, since: dt.date) -> pd.DataFrame:
 def normalize(prices: pd.Series) -> pd.Series:
     return prices / prices.iloc[0] * 100
 
-# --- Data setup ---
+# --- Strazza-style Ratio Chart Function ---
+def strazza_relative_chart(
+    ratio_df,
+    title="Relative Value (Ratio) Chart",
+    y_title=None,
+    highlight_zone=None,  # e.g., (0.11, 0.13)
+    annotation_points=None,  # list of dicts: {"date": pd.Timestamp, "label": str}
+    curve_base=None,  # tuple: (x0, x1, y0, y1)
+    height=340
+):
+    base = (
+        alt.Chart(ratio_df)
+        .mark_line(
+            color="black",
+            strokeWidth=2.7
+        )
+        .encode(
+            x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
+            y=alt.Y("Ratio:Q", title=y_title if y_title else "Ratio",
+                    scale=alt.Scale(domain=[ratio_df["Ratio"].min()*0.97, ratio_df["Ratio"].max()*1.03])),
+            tooltip=["Date:T", alt.Tooltip("Ratio:Q", format=".3f")]
+        )
+        .properties(height=height, width=750, title=title)
+    )
+
+    # Horizontal highlight zone (resistance/support)
+    if highlight_zone:
+        highlight = (
+            alt.Chart(pd.DataFrame({
+                "y1": [highlight_zone[0]],
+                "y2": [highlight_zone[1]],
+            }))
+            .mark_rect(
+                opacity=0.17,
+                fill="grey"
+            )
+            .encode(
+                y="y1:Q",
+                y2="y2:Q"
+            )
+            .properties(width=750)
+        )
+        base = highlight + base
+
+    # Optional event annotations
+    if annotation_points:
+        annot_df = pd.DataFrame(annotation_points)
+        annotation = (
+            alt.Chart(annot_df)
+            .mark_point(color="red", size=65, shape="triangle")
+            .encode(x="date:T", y="value:Q")
+        ) + (
+            alt.Chart(annot_df)
+            .mark_text(align='left', dx=6, dy=-8, fontSize=13, color='black')
+            .encode(
+                x="date:T",
+                y="value:Q",
+                text="label:N"
+            )
+        )
+        base = base + annotation
+
+    # Optional: green base curve for rounded support (for demonstration, rough parabolic fit)
+    if curve_base:
+        import numpy as np
+        x0, x1, y0, y1 = curve_base
+        xs = pd.date_range(x0, x1, periods=80)
+        ymid = min(y0, y1) - (max(y0, y1) - min(y0, y1)) * 0.13
+        ys = ymid + (np.cos(np.linspace(-np.pi, 0, 80)) + 1) / 2 * (max(y0, y1) - ymid)
+        curve_df = pd.DataFrame({"Date": xs, "y": ys})
+        arc = alt.Chart(curve_df).mark_line(color="green", strokeDash=[4, 4]).encode(
+            x="Date:T", y="y:Q"
+        )
+        base = base + arc
+
+    return base.configure_view(
+        strokeWidth=0,
+        fill='white'
+    ).configure_axis(
+        gridColor='lightgray',
+        gridOpacity=0.13,
+        domain=False,
+        labelFontSize=13,
+        titleFontSize=15
+    ).configure_title(
+        fontSize=22,
+        font='sans-serif',
+        anchor='middle',
+        color='navy'
+    )
+
+# --- Window definitions ---
 end_date = dt.date.today()
 windows = {
     "YTD": dt.date(end_date.year, 1, 1),
@@ -115,10 +206,51 @@ if missing.any():
 if prices.index[0].date() > earliest_date:
     st.info(f"Note: Oldest available price is {prices.index[0].date()}, so not all look-back windows may be shown.")
 
-# --- Rolling Correlation Chart (tight axes, no legend) ---
+# --- Rolling Correlation Chart ---
 st.markdown("### Rolling Correlation (live regime shifts)")
 from itertools import permutations
 
+corr_df = pd.DataFrame(index=returns.index)
+corr_label_list = []
+corr_df[f"{ticker_x} vs {ticker_y}"] = returns[ticker_x].rolling(roll_window).corr(returns[ticker_y])
+corr_label_list.append(f"{ticker_x} vs {ticker_y}")
+if ticker_z and ticker_z in returns.columns:
+    corr_df[f"{ticker_x} vs {ticker_z}"] = returns[ticker_x].rolling(roll_window).corr(returns[ticker_z])
+    corr_label_list.append(f"{ticker_x} vs {ticker_z}")
+    corr_df[f"{ticker_y} vs {ticker_z}"] = returns[ticker_y].rolling(roll_window).corr(returns[ticker_z])
+    corr_label_list.append(f"{ticker_y} vs {ticker_z}")
+corr_df = corr_df.dropna(how="all")
+
+corr_min, corr_max = None, None
+if not corr_df.empty:
+    main_corr = corr_df.iloc[:,0].dropna()
+    if not main_corr.empty:
+        corr_min = main_corr.min() - 0.07 * abs(main_corr.min())
+        corr_max = main_corr.max() + 0.07 * abs(main_corr.max())
+        if corr_min == corr_max:
+            corr_min, corr_max = -1, 1
+    else:
+        corr_min, corr_max = -1, 1
+else:
+    corr_min, corr_max = -1, 1
+
+corr_long = corr_df.reset_index().melt(id_vars="Date", var_name="Pair", value_name="Correlation")
+roll_chart = (
+    alt.Chart(corr_long)
+    .mark_line(strokeWidth=3)
+    .encode(
+        x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
+        y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=[corr_min, corr_max])),
+        tooltip=["Date:T", "Pair:N", alt.Tooltip("Correlation:Q", format=".2f")],
+        detail="Pair:N",
+    )
+    .properties(height=330)
+    .interactive()
+)
+roll_chart = roll_chart.configure_legend(disable=True)
+st.altair_chart(roll_chart, use_container_width=True)
+
+# --- Relative Value (Ratio) Charts, Strazza Style ---
 def compute_ratio(prices, t1, t2):
     s1, s2 = prices[t1].dropna(), prices[t2].dropna()
     common_idx = s1.index.intersection(s2.index)
@@ -142,63 +274,32 @@ if pair_list:
                 ratio = compute_ratio(price_slice, t1, t2)
                 if ratio.empty:
                     continue
-                rmin = ratio.min() - 0.07 * abs(ratio.min())
-                rmax = ratio.max() + 0.07 * abs(ratio.max())
-                if rmin == rmax:
-                    rmin, rmax = None, None
                 ratio_df = ratio.reset_index()
                 ratio_df.columns = ["Date", "Ratio"]
-                chart = (
-                    alt.Chart(ratio_df)
-                    .mark_line(strokeWidth=2.2)
-                    .encode(
-                        x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
-                        y=alt.Y("Ratio:Q", title=f"{t1} / {t2} Ratio", scale=alt.Scale(domain=[rmin, rmax] if rmin is not None and rmax is not None else None)),
-                        tooltip=["Date:T", alt.Tooltip("Ratio:Q", format=".3f")]
-                    )
-                    .properties(height=200, title=f"{t1} / {t2}")
-                    .interactive()
-                ).configure_legend(disable=True)
+
+                # Only for ARKK/SPY and "3 Years" show Strazza-style highlights as demo
+                highlight_zone = None
+                annotation_points = None
+                curve_base = None
+                if t1 == "ARKK" and t2 == "SPY" and label in ["3 Years", "5 Years"]:
+                    highlight_zone = (0.11, 0.13)
+                    annotation_points = [
+                        {"date": pd.Timestamp("2023-12-15"), "value": 0.12, "label": "Q4 2023"},
+                        {"date": pd.Timestamp("2025-03-20"), "value": 0.12, "label": "Q1 2025"},
+                    ]
+                    curve_base = (pd.Timestamp("2021-04-01"), pd.Timestamp("2025-07-01"), 0.07, 0.12)
+
+                chart = strazza_relative_chart(
+                    ratio_df,
+                    title=f"{t1} / {t2}",
+                    y_title=f"{t1} / {t2} Ratio",
+                    highlight_zone=highlight_zone,
+                    annotation_points=annotation_points,
+                    curve_base=curve_base
+                )
                 st.altair_chart(chart, use_container_width=True)
 
-
-# --- Relative Value (Ratio) Charts (tight axes, no legend) ---
-def compute_ratio(prices, t1, t2):
-    s1, s2 = prices[t1].dropna(), prices[t2].dropna()
-    common_idx = s1.index.intersection(s2.index)
-    if len(common_idx) < 5:
-        return pd.Series(dtype=float)
-    ratio = s1.loc[common_idx] / s2.loc[common_idx]
-    return ratio
-
-pair_list = [(a, b) for a, b in permutations([t for t in [ticker_x, ticker_y, ticker_z] if t], 2)]
-
-if pair_list:
-    st.markdown("### Relative Value (Ratio) Chart(s)")
-    for t1, t2 in pair_list:
-        ratio = compute_ratio(prices, t1, t2)
-        if ratio.empty:
-            continue
-        rmin = ratio.min() - 0.07 * abs(ratio.min())
-        rmax = ratio.max() + 0.07 * abs(ratio.max())
-        if rmin == rmax:  # fallback for degenerate
-            rmin, rmax = None, None
-        ratio_df = ratio.reset_index()
-        ratio_df.columns = ["Date", "Ratio"]
-        chart = (
-            alt.Chart(ratio_df)
-            .mark_line(strokeWidth=2.2)
-            .encode(
-                x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
-                y=alt.Y("Ratio:Q", title=f"{t1} / {t2} Ratio", scale=alt.Scale(domain=[rmin, rmax] if rmin is not None and rmax is not None else None)),
-                tooltip=["Date:T", alt.Tooltip("Ratio:Q", format=".3f")]
-            )
-            .properties(height=180, title=f"{t1} / {t2}")
-            .interactive()
-        ).configure_legend(disable=True)
-        st.altair_chart(chart, use_container_width=True)
-
-# --- Indexed Price Overlays (tight axes, no legend) ---
+# --- Indexed Price Overlays ---
 st.markdown("### Indexed Price Overlays")
 tabs = st.tabs(list(windows.keys()))
 for tab, label in zip(tabs, windows.keys()):
@@ -207,11 +308,10 @@ for tab, label in zip(tabs, windows.keys()):
     overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
     overlay_tickers = [t for t in overlay_tickers if t in price_slice.columns]
     norm_df = price_slice[overlay_tickers].apply(normalize)
-    # Y axis range tight
     min_val, max_val = norm_df.min().min(), norm_df.max().max()
     ymin = min_val - 0.07 * abs(min_val)
     ymax = max_val + 0.07 * abs(max_val)
-    if ymin == ymax:  # fallback
+    if ymin == ymax:
         ymin, ymax = None, None
     norm_df = norm_df.reset_index().melt(id_vars="Date", var_name="Ticker", value_name="IndexedPrice")
     chart = (
@@ -228,3 +328,18 @@ for tab, label in zip(tabs, windows.keys()):
     )
     with tab:
         st.altair_chart(chart, use_container_width=True)
+
+# --- Data Download Option ---
+with st.expander("Download Data"):
+    st.download_button(
+        "Download Indexed Prices (CSV)", 
+        prices.to_csv(index=True), 
+        file_name="correlation_dashboard_prices.csv", 
+        mime="text/csv"
+    )
+    st.download_button(
+        "Download Log Returns (CSV)",
+        returns.to_csv(index=True),
+        file_name="correlation_dashboard_returns.csv",
+        mime="text/csv"
+    )
