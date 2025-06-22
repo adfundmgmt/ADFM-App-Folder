@@ -6,9 +6,6 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 import altair as alt
-import matplotlib.pyplot as plt
-
-plt.style.use("default")
 
 st.set_page_config(
     page_title="Correlation Dashboard — AD Fund Management LP",
@@ -24,7 +21,6 @@ st.markdown(
     """, unsafe_allow_html=True,
 )
 
-# --- Sidebar ---
 with st.sidebar:
     st.header("How it Works")
     st.markdown(
@@ -39,15 +35,14 @@ with st.sidebar:
         """
     )
     st.markdown("---")
-    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security.").strip().upper()
-    ticker_y = st.text_input("Ticker Y", value="MSFT").strip().upper()
+    ticker_x = st.text_input("Ticker X", value="AAPL").strip().upper()
+    ticker_y = st.text_input("Ticker Y", value="SPY").strip().upper()
     ticker_z = st.text_input("Ticker Z (optional)", value="", help="Benchmark/index (optional).").strip().upper()
     freq = st.selectbox("Return Frequency", ["Daily", "Weekly", "Monthly"], index=0)
     roll_window = st.slider("Rolling window (periods)", 20, 120, value=60)
     st.markdown("---")
     st.caption("© 2025 AD Fund Management LP")
 
-# --- Header Inputs Card ---
 with st.container():
     c1, c2, c3, c4 = st.columns([2,2,2,3])
     c1.markdown(f"<b>Primary</b>: <span style='color:#1976D2'>{ticker_x}</span>", unsafe_allow_html=True)
@@ -56,20 +51,15 @@ with st.container():
         c3.markdown(f"<b>Benchmark</b>: <span style='color:#2ca02c'>{ticker_z}</span>", unsafe_allow_html=True)
     c4.markdown(f"<b>Freq</b>: {freq} <br><b>Rolling</b>: {roll_window}", unsafe_allow_html=True)
 
-# --- Data download + log-returns ---
 @st.cache_data(show_spinner=False)
 def fetch_prices(symbols: list, start: dt.date, end: dt.date, freq: str) -> pd.DataFrame:
-    try:
-        raw = yf.download(
-            symbols,
-            start=start,
-            end=end + dt.timedelta(days=1),
-            progress=False,
-            auto_adjust=False,
-        )
-    except Exception as e:
-        st.error(f"Data fetch failed: {e}")
-        return pd.DataFrame()
+    raw = yf.download(
+        symbols,
+        start=start,
+        end=end + dt.timedelta(days=1),
+        progress=False,
+        auto_adjust=False,
+    )
     if raw.empty:
         return pd.DataFrame()
     if isinstance(raw.columns, pd.MultiIndex):
@@ -94,20 +84,7 @@ def slice_since(df: pd.DataFrame, since: dt.date) -> pd.DataFrame:
 def normalize(prices: pd.Series) -> pd.Series:
     return prices / prices.iloc[0] * 100
 
-def highlight_corr(val):
-    if pd.isnull(val): return ''
-    if val > 0.85: return 'background-color: #C8FFD4'
-    if val < -0.3: return 'background-color: #FFD6D6'
-    return ''
-
-def emoji_corr(val: float) -> str:
-    if pd.isnull(val): return ""
-    if val > 0.7: return "🟢"
-    if val > 0.3: return "🟡"
-    if val < -0.3: return "🔴"
-    return "⚪️"
-
-# --- Data Download Logic ---
+# --- Data setup ---
 end_date = dt.date.today()
 windows = {
     "YTD": dt.date(end_date.year, 1, 1),
@@ -138,54 +115,53 @@ if missing.any():
 if prices.index[0].date() > earliest_date:
     st.info(f"Note: Oldest available price is {prices.index[0].date()}, so not all look-back windows may be shown.")
 
-# --- Rolling Correlation Chart (First!) ---
+# --- Rolling Correlation Chart (tight axes, no legend) ---
 st.markdown("### Rolling Correlation (live regime shifts)")
+from itertools import permutations
+
 corr_df = pd.DataFrame(index=returns.index)
+corr_label_list = []
 corr_df[f"{ticker_x} vs {ticker_y}"] = returns[ticker_x].rolling(roll_window).corr(returns[ticker_y])
+corr_label_list.append(f"{ticker_x} vs {ticker_y}")
 if ticker_z and ticker_z in returns.columns:
     corr_df[f"{ticker_x} vs {ticker_z}"] = returns[ticker_x].rolling(roll_window).corr(returns[ticker_z])
+    corr_label_list.append(f"{ticker_x} vs {ticker_z}")
     corr_df[f"{ticker_y} vs {ticker_z}"] = returns[ticker_y].rolling(roll_window).corr(returns[ticker_z])
+    corr_label_list.append(f"{ticker_y} vs {ticker_z}")
 corr_df = corr_df.dropna(how="all")
 
-regime_lines = []
-if f"{ticker_x} vs {ticker_y}" in corr_df.columns:
-    diff = corr_df[f"{ticker_x} vs {ticker_y}"].diff().abs()
-    threshold = 0.4
-    regime_points = corr_df.index[diff > threshold]
-    for date in regime_points:
-        regime_lines.append({"Date": date})
-
+# Use only the first pair for tight Y axis (usually enough)
+corr_min, corr_max = None, None
 if not corr_df.empty:
-    latest_corrs = corr_df.iloc[-1].dropna()
-    corr_display = " &nbsp; | &nbsp; ".join([f"<b>{col}:</b> <span style='color:#1976D2'>{val:.2f}</span>" for col, val in latest_corrs.items()])
-    st.markdown(f"<div style='margin-bottom:-6px'>{corr_display}</div>", unsafe_allow_html=True)
+    main_corr = corr_df.iloc[:,0].dropna()
+    if not main_corr.empty:
+        corr_min = main_corr.min() - 0.07 * abs(main_corr.min())
+        corr_max = main_corr.max() + 0.07 * abs(main_corr.max())
+        if corr_min == corr_max:  # degenerate case
+            corr_min, corr_max = -1, 1
+    else:
+        corr_min, corr_max = -1, 1
+else:
+    corr_min, corr_max = -1, 1
 
 corr_long = corr_df.reset_index().melt(id_vars="Date", var_name="Pair", value_name="Correlation")
 roll_chart = (
     alt.Chart(corr_long)
     .mark_line(strokeWidth=3)
     .encode(
-        x=alt.X("Date:T", title="Date"),
-        y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=[-1, 1])),
-        color=alt.Color("Pair:N", legend=alt.Legend(title="Pairs")),
+        x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
+        y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=[corr_min, corr_max])),
+        # No color/legend for single pair
         tooltip=["Date:T", "Pair:N", alt.Tooltip("Correlation:Q", format=".2f")],
+        detail="Pair:N",
     )
-    .properties(height=340)
+    .properties(height=330)
     .interactive()
 )
-if regime_lines:
-    regime_df = pd.DataFrame(regime_lines)
-    rule_chart = (
-        alt.Chart(regime_df)
-        .mark_rule(color="red", opacity=0.21)
-        .encode(x="Date:T")
-    )
-    roll_chart = roll_chart + rule_chart
+roll_chart = roll_chart.configure_legend(disable=True)  # Remove legend
 st.altair_chart(roll_chart, use_container_width=True)
 
-# --- Relative Value (Ratio) Charts ---
-from itertools import permutations
-
+# --- Relative Value (Ratio) Charts (tight axes, no legend) ---
 def compute_ratio(prices, t1, t2):
     s1, s2 = prices[t1].dropna(), prices[t2].dropna()
     common_idx = s1.index.intersection(s2.index)
@@ -202,22 +178,26 @@ if pair_list:
         ratio = compute_ratio(prices, t1, t2)
         if ratio.empty:
             continue
+        rmin = ratio.min() - 0.07 * abs(ratio.min())
+        rmax = ratio.max() + 0.07 * abs(ratio.max())
+        if rmin == rmax:  # fallback for degenerate
+            rmin, rmax = None, None
         ratio_df = ratio.reset_index()
         ratio_df.columns = ["Date", "Ratio"]
         chart = (
             alt.Chart(ratio_df)
-            .mark_line(strokeWidth=2.3)
+            .mark_line(strokeWidth=2.2)
             .encode(
-                x=alt.X("Date:T", title="Date"),
-                y=alt.Y("Ratio:Q", title=f"{t1} / {t2} Ratio", scale=alt.Scale(nice=True)),
+                x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
+                y=alt.Y("Ratio:Q", title=f"{t1} / {t2} Ratio", scale=alt.Scale(domain=[rmin, rmax] if rmin is not None and rmax is not None else None)),
                 tooltip=["Date:T", alt.Tooltip("Ratio:Q", format=".3f")]
             )
-            .properties(height=210, title=f"{t1} / {t2}")
+            .properties(height=180, title=f"{t1} / {t2}")
             .interactive()
-        )
+        ).configure_legend(disable=True)
         st.altair_chart(chart, use_container_width=True)
 
-# --- Window overlays ---
+# --- Indexed Price Overlays (tight axes, no legend) ---
 st.markdown("### Indexed Price Overlays")
 tabs = st.tabs(list(windows.keys()))
 for tab, label in zip(tabs, windows.keys()):
@@ -226,68 +206,24 @@ for tab, label in zip(tabs, windows.keys()):
     overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
     overlay_tickers = [t for t in overlay_tickers if t in price_slice.columns]
     norm_df = price_slice[overlay_tickers].apply(normalize)
+    # Y axis range tight
+    min_val, max_val = norm_df.min().min(), norm_df.max().max()
+    ymin = min_val - 0.07 * abs(min_val)
+    ymax = max_val + 0.07 * abs(max_val)
+    if ymin == ymax:  # fallback
+        ymin, ymax = None, None
     norm_df = norm_df.reset_index().melt(id_vars="Date", var_name="Ticker", value_name="IndexedPrice")
     chart = (
         alt.Chart(norm_df)
-        .mark_line(strokeWidth=2.3)
+        .mark_line(strokeWidth=2.1)
         .encode(
-            x=alt.X("Date:T", title="Date"),
-            y=alt.Y("IndexedPrice:Q", title="Indexed Price (Base=100)", scale=alt.Scale(nice=True)),
-            color=alt.Color("Ticker:N", legend=alt.Legend(title="Ticker")),
+            x=alt.X("Date:T", title="Date", axis=alt.Axis(labelAngle=0, format="%b %Y")),
+            y=alt.Y("IndexedPrice:Q", title="Indexed Price (Base=100)", scale=alt.Scale(domain=[ymin, ymax] if ymin is not None and ymax is not None else None)),
+            color=alt.Color("Ticker:N", legend=None if len(overlay_tickers) == 1 else alt.Legend(title="Ticker")),
             tooltip=["Date:T", "Ticker:N", alt.Tooltip("IndexedPrice:Q", format=".2f")],
         )
-        .properties(height=250)
+        .properties(height=180)
         .interactive()
     )
     with tab:
         st.altair_chart(chart, use_container_width=True)
-
-# --- Correlation Table (after charts) ---
-st.markdown("### Correlation Table by Look-Back Window")
-rows = []
-for label, since in windows.items():
-    ret_slice = slice_since(returns, since)
-    row = {"Window": label}
-    try:
-        row["X vs Y"] = ret_slice.corr().loc[ticker_x, ticker_y].round(3)
-    except: row["X vs Y"] = np.nan
-    if ticker_z:
-        try:
-            row["X vs Z"] = ret_slice.corr().loc[ticker_x, ticker_z].round(3)
-        except: row["X vs Z"] = np.nan
-        try:
-            row["Y vs Z"] = ret_slice.corr().loc[ticker_y, ticker_z].round(3)
-        except: row["Y vs Z"] = np.nan
-    rows.append(row)
-df_corr = pd.DataFrame(rows)
-df_corr_display = df_corr.copy()
-for c in df_corr.columns[1:]:
-    df_corr_display[c] = df_corr_display[c].apply(lambda v: f"{v:.2f} {emoji_corr(v)}" if pd.notnull(v) else "")
-st.dataframe(df_corr_display.set_index("Window"), height=350)
-
-# --- Data Download Option ---
-with st.expander("Download Data"):
-    st.download_button(
-        "Download Indexed Prices (CSV)", 
-        prices.to_csv(index=True), 
-        file_name="correlation_dashboard_prices.csv", 
-        mime="text/csv"
-    )
-    st.download_button(
-        "Download Log Returns (CSV)",
-        returns.to_csv(index=True),
-        file_name="correlation_dashboard_returns.csv",
-        mime="text/csv"
-    )
-    st.download_button(
-        "Download Correlation Table (CSV)",
-        df_corr.to_csv(index=False),
-        file_name="correlation_dashboard_correlation_table.csv",
-        mime="text/csv"
-    )
-    st.download_button(
-        "Download Rolling Correlation (CSV)",
-        corr_df.to_csv(index=True),
-        file_name="correlation_dashboard_rolling_corr.csv",
-        mime="text/csv"
-    )
