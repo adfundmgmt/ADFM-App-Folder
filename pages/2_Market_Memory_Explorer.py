@@ -1,3 +1,9 @@
+"""
+Market Memory Explorer — AD Fund Management LP
+----------------------------------------------
+Always show analogs; filtering is *optional* and user-controlled.
+"""
+
 import datetime as dt
 from pathlib import Path
 
@@ -22,10 +28,11 @@ if LOGO_PATH.exists():
 st.title("Market Memory Explorer")
 st.subheader("Compare the current year's return path with history")
 
+# ---- Sidebar ----
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        """
+        f"""
         Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
 
         - **Black = this year**
@@ -53,7 +60,7 @@ with st.sidebar:
 
 input_col1, input_col2, input_col3 = st.columns([2, 1, 1])
 with input_col1:
-    ticker = st.text_input("Ticker", value="QQQ", help="Index, ETF, or equity.").upper()
+    ticker = st.text_input("Ticker", value="^GSPC", help="Index, ETF, or equity.").upper()
 with input_col2:
     top_n = st.slider("Top Analogs", 1, 10, 5, help="Number of most correlated years to overlay.")
 with input_col3:
@@ -84,7 +91,6 @@ for year, grp in raw.groupby("Year"):
     if len(grp) < 30:
         continue
     ytd = cumulative_returns(grp["Close"])
-    # -- YTD index is trading day-of-year, but for full analog plotting, keep full year
     ytd.index = grp.index.dayofyear
     if ytd.isnull().any() or len(ytd) < 30:
         continue
@@ -121,6 +127,7 @@ if not top_matches:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
+# --- Filtering and final analog return computation ---
 valid_top_matches = []
 excluded_analogs = []
 analog_ytd_returns = []
@@ -167,7 +174,7 @@ if excluded_analogs:
 
 current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('nan')
 
-# --- Compute final (full-year) return for each analog ---
+# --- NEW: Compute final (full-year) return for each analog ---
 final_analog_returns = []
 for yr, rho in valid_top_matches:
     analog = ytd_df[yr].dropna()
@@ -180,6 +187,7 @@ if final_analog_returns:
 else:
     median_final = std_final = float("nan")
 
+# --- Metrics display ---
 metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
 with metrics_col1:
     st.metric(
@@ -231,7 +239,6 @@ with st.sidebar:
         mime="text/csv"
     )
 
-# --- FULL YEAR PLOTTING for analogs ---
 if len(valid_top_matches) > 0:
     if len(valid_top_matches) <= 10:
         base_cmap = plt.cm.get_cmap("tab10")
@@ -240,8 +247,6 @@ if len(valid_top_matches) > 0:
     palette = base_cmap(np.linspace(0, 1, len(valid_top_matches)))
 
     fig, ax = plt.subplots(figsize=(14, 7))
-
-    # Plot FULL YEAR for analogs
     for idx, (yr, rho) in enumerate(valid_top_matches):
         analog = ytd_df[yr].dropna()
         ax.plot(
@@ -253,8 +258,6 @@ if len(valid_top_matches) > 0:
             alpha=0.7,
             label=f"{yr} (ρ={rho:.2f})"
         )
-
-    # Plot current year up to YTD only
     ax.plot(
         current_ytd.index,
         current_ytd.values,
