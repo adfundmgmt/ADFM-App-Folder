@@ -17,7 +17,7 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 plt.style.use("default")
 
 START_YEAR = 1980
-TRADING_DAYS_FULL_YEAR = 253
+TRADING_DAYS_FULL_YEAR = 253  # US average, NYSE/NASDAQ; 2025 = 250 days
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
@@ -91,7 +91,7 @@ for year, grp in raw.groupby("Year"):
     if len(grp) < 30:
         continue
     ytd = cumulative_returns(grp["Close"])
-    ytd.index = grp.index.dayofyear
+    ytd.index = np.arange(1, len(grp) + 1)  # <<--- FIX: Use trading-day index, NOT dayofyear
     if ytd.isnull().any() or len(ytd) < 30:
         continue
     returns_by_year[year] = ytd
@@ -174,7 +174,7 @@ if excluded_analogs:
 
 current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('nan')
 
-# --- NEW: Compute final (full-year) return for each analog ---
+# --- Compute final (full-year) return for each analog ---
 final_analog_returns = []
 for yr, rho in valid_top_matches:
     analog = ytd_df[yr].dropna()
