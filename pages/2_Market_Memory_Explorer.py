@@ -2,7 +2,7 @@
 #  Market Memory Explorer  –  AD Fund Management LP
 #  ------------------------------------------------
 #  Compare the current year's YTD return path with historical analog years.
-#  Re-written from scratch, July 2025.
+#  Re-written from scratch, July 2025.  (v1.1 – slider bug fixed)
 # ──────────────────────────────────────────────────────────────────────────
 import datetime as dt
 import time
@@ -20,7 +20,7 @@ plt.style.use("default")
 START_YEAR              = 1980
 TRADING_DAYS_FULL_YEAR  = 253        # NYSE / NASDAQ long-run average
 MIN_DAYS_REQUIRED       = 30         # discard stub years
-CACHE_TTL_SECONDS       = 3600       # 1-h data cache
+CACHE_TTL_SECONDS       = 3600       # 1-hour data cache
 
 # ── Streamlit page config ────────────────────────────────────────────────
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
@@ -52,7 +52,8 @@ with st.sidebar:
 col1, col2, col3 = st.columns([2, 1, 1])
 ticker   = col1.text_input("Ticker", "^GSPC").upper()
 top_n    = col2.slider("Top Analogs", 1, 10, 5)
-min_corr = col3.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, step=0.05, format="%.2f")
+min_corr = col3.slider("Min ρ", min_value=0.00, max_value=1.00, value=0.00,
+                       step=0.05, format="%.2f")      # ← fixed duplicate step arg
 
 st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>", unsafe_allow_html=True)
 
@@ -66,8 +67,7 @@ def load_history(symbol: str) -> pd.DataFrame:
         if not df.empty:
             break
         attempts += 1
-        time.sleep(delay)
-        delay *= 2
+        time.sleep(delay); delay *= 2
     if df.empty:
         raise ValueError("Yahoo returned no data after 4 attempts.")
     if "Close" not in df.columns:
@@ -99,8 +99,8 @@ if not paths:
     st.error("No usable yearly data found.")
     st.stop()
 
-ytd_df       = pd.DataFrame(paths)
-this_year    = dt.datetime.now().year
+ytd_df    = pd.DataFrame(paths)
+this_year = dt.datetime.now().year
 
 if this_year not in ytd_df.columns:
     st.warning(f"No YTD data for {this_year}")
@@ -129,7 +129,7 @@ if not top:
 # ── Apply optional filters ───────────────────────────────────────────────
 def keep_year(yr: int) -> bool:
     ser = ytd_df[yr].dropna()
-    ret = ser.iloc[n_days-1]       # YTD as of equal day count
+    ret = ser.iloc[n_days - 1]          # YTD as-of equal day count
     max_d = ser.pct_change().abs().max()
     if f_outliers and not (lo/100 < ret < hi/100):
         return False
@@ -143,16 +143,15 @@ if not valid:
     st.stop()
 
 # ── Metrics ──────────────────────────────────────────────────────────────
-finals   = [ytd_df[yr].iloc[-1] for yr, _ in valid]
 current_ret = current.iloc[-1]
+finals      = [ytd_df[yr].iloc[-1] for yr, _ in valid]
 
 m1, m2, m3 = st.columns(3)
 m1.metric(f"{this_year} YTD",         f"{current_ret:.2%}")
 m2.metric("Median Final Return",      f"{np.median(finals):.2%}")
 m3.metric("Analog Dispersion (σ)",    f"{np.std(finals):.2%}")
 
-st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>",
-            unsafe_allow_html=True)
+st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
 
 # ── Plot ─────────────────────────────────────────────────────────────────
 palette = plt.cm.get_cmap("tab10" if len(valid) <= 10 else "tab20")(
@@ -162,17 +161,16 @@ palette = plt.cm.get_cmap("tab10" if len(valid) <= 10 else "tab20")(
 fig, ax = plt.subplots(figsize=(14, 7))
 
 for idx, (yr, rho) in enumerate(valid):
-    ax.plot(
-        ytd_df[yr].dropna().index,
-        ytd_df[yr].dropna().values,
-        "--", lw=2, alpha=0.7, color=palette[idx],
-        label=f"{yr} (ρ={rho:.2f})"
-    )
+    ser = ytd_df[yr].dropna()
+    ax.plot(ser.index, ser.values, "--", lw=2, alpha=0.7,
+            color=palette[idx], label=f"{yr} (ρ={rho:.2f})")
 
-ax.plot(current.index, current.values, color="black", lw=3.2, label=f"{this_year} (YTD)")
+ax.plot(current.index, current.values,
+        color="black", lw=3.2, label=f"{this_year} (YTD)")
 ax.axvline(current.index[-1], color="gray", ls=":", lw=1.3, alpha=0.7)
 
-ax.set_title(f"{ticker} — {this_year} vs Historical Analogs", fontsize=16, weight="bold")
+ax.set_title(f"{ticker} — {this_year} vs Historical Analogs",
+             fontsize=16, weight="bold")
 ax.set_xlabel("Trading Day of Year", fontsize=13)
 ax.set_ylabel("Cumulative Return",   fontsize=13)
 ax.axhline(0, color="gray", ls="--", lw=1)
@@ -181,8 +179,9 @@ ax.yaxis.set_major_locator(MultipleLocator(0.05))
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
 ax.grid(True, ls=":", lw=0.7, color="#888")
 
-# dynamic y-lim with 8 % padding
-all_y = np.hstack([current.values] + [ytd_df[yr].dropna().values for yr, _ in valid])
+# dynamic y-limits with 8 % padding
+all_y = np.hstack([current.values] +
+                  [ytd_df[yr].dropna().values for yr, _ in valid])
 pad   = 0.08 * (all_y.max() - all_y.min())
 ax.set_ylim(all_y.min() - pad, all_y.max() + pad)
 ax.legend(loc="upper left", frameon=False, ncol=2, fontsize=11)
