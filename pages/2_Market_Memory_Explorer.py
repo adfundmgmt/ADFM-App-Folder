@@ -17,7 +17,7 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 plt.style.use("default")
 
 START_YEAR = 1980
-TRADING_DAYS_FULL_YEAR = 253           # US average (NYSE/NASDAQ)
+TRADING_DAYS_FULL_YEAR = 253  # US average, NYSE/NASDAQ; 2025 = 250 days
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
@@ -28,23 +28,22 @@ if LOGO_PATH.exists():
 st.title("Market Memory Explorer")
 st.subheader("Compare the current year's return path with history")
 
-# ---- Sidebar UI -----------------------------------------------------------
+# ---- Sidebar ----
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        """
-Compare **this year’s YTD performance** for any ticker (index, ETF, or stock)
-to prior years with the most similar path.
+        f"""
+        Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
 
-- **Black = this year**
-- **Dashed = top-correlated analogs**
-- **Legend shows correlation coefficients (ρ)**
-"""
+        - **Black = this year**
+        - **Dashed = top-correlated analog years**
+        - **Legend shows correlation coefficients (ρ)**
+        """
     )
     st.markdown("---")
     st.subheader("Analog Outlier Filters (optional)")
     filter_outliers = st.checkbox("Exclude analogs with extreme returns", value=False)
-    filter_jumps    = st.checkbox("Exclude analogs with large daily jumps", value=False)
+    filter_jumps = st.checkbox("Exclude analogs with large daily jumps", value=False)
     if filter_outliers:
         min_return_sidebar, max_return_sidebar = st.slider(
             "Total Return (%) Range",
@@ -55,60 +54,46 @@ to prior years with the most similar path.
         max_jump_sidebar = st.slider(
             "Allowed Max Daily Jump (%)",
             min_value=5, max_value=100, value=25, step=1,
-            help="Exclude analogs where any single-day move exceeds this value."
+            help="Exclude analogs where any single day move exceeds this value."
         )
     st.markdown("---")
 
 input_col1, input_col2, input_col3 = st.columns([2, 1, 1])
 with input_col1:
-    ticker   = st.text_input("Ticker", value="^GSPC",
-                             help="Index, ETF, or equity.").upper()
+    ticker = st.text_input("Ticker", value="^GSPC", help="Index, ETF, or equity.").upper()
 with input_col2:
-    top_n    = st.slider("Top Analogs", 1, 10, 5,
-                         help="Number of most-correlated years to overlay.")
+    top_n = st.slider("Top Analogs", 1, 10, 5, help="Number of most correlated years to overlay.")
 with input_col3:
-    min_corr = st.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f",
-                         help="Minimum correlation cutoff.")
+    min_corr = st.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f", help="Minimum correlation cutoff.")
 
-st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>",
-            unsafe_allow_html=True)
+st.markdown("<hr style='margin-top: 2px; margin-bottom: 15px;'>", unsafe_allow_html=True)
 
-# ---- Data layer -----------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def fetch_price_history(symbol: str) -> pd.DataFrame:
-    df = yf.download(
-        symbol,
-        start=f"{START_YEAR}-01-01",
-        progress=False,                # still accepted, but harmless if ignored
-        interval="1d",
-        auto_adjust=False,
-    )
-    if df.empty:
-        raise ValueError("Yahoo returned no data.")
+    df = yf.download(symbol, start=f"{START_YEAR}-01-01", auto_adjust=False, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(symbol, axis=1, level=1, drop_level=True)
-    df = df[["Close"]].copy()
+    df = df[["Close"]].dropna().copy()
     df["Year"] = df.index.year
     return df
 
 def cumulative_returns(prices: pd.Series) -> pd.Series:
     return prices / prices.iloc[0] - 1
 
-# pull data
 try:
     raw = fetch_price_history(ticker)
 except Exception as err:
     st.error(f"Download failed – check ticker. ({err})")
     st.stop()
 
-# build yearly YTD return paths
 returns_by_year: dict[int, pd.Series] = {}
 for year, grp in raw.groupby("Year"):
-    clean = grp["Close"].dropna()                # ← KEY CHANGE
-    if len(clean) < 30:                          # keep 30-day sanity filter
+    if len(grp) < 30:
         continue
-    ytd = cumulative_returns(clean)
-    ytd.index = np.arange(1, len(clean) + 1)
+    ytd = cumulative_returns(grp["Close"])
+    ytd.index = np.arange(1, len(grp) + 1)  # <<--- FIX: Use trading-day index, NOT dayofyear
+    if ytd.isnull().any() or len(ytd) < 30:
+        continue
     returns_by_year[year] = ytd
 
 ytd_df = pd.DataFrame(returns_by_year)
@@ -119,103 +104,189 @@ if current_year not in ytd_df.columns:
     st.stop()
 
 current_ytd = ytd_df[current_year].dropna()
-n_days      = len(current_ytd)
-
-# --- Correlation & filtering ----------------------------------------------
+n_days = len(current_ytd)
 correlations = {}
+
 for year in ytd_df.columns:
     if year == current_year:
         continue
-    past = ytd_df[year].dropna()
-    overlap = min(n_days, len(past))
+    past_ytd = ytd_df[year].dropna()
+    overlap = min(n_days, len(past_ytd))
     if overlap < 30:
         continue
-    rho = np.corrcoef(current_ytd[:overlap], past[:overlap])[0, 1]
+    rho = np.corrcoef(current_ytd[:overlap], past_ytd[:overlap])[0, 1]
     correlations[year] = rho
 
-filtered_corr = {yr: rho for yr, rho in correlations.items() if rho >= min_corr}
-top_matches   = sorted(filtered_corr.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+filtered_corr = {
+    yr: rho for yr, rho in correlations.items()
+    if rho >= min_corr
+}
+top_matches = sorted(filtered_corr.items(), key=lambda kv: kv[1], reverse=True)[: top_n]
 
 if not top_matches:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-# optional outlier / jump screens
-valid_top_matches, excluded = [], []
-for yr, rho in top_matches:
-    analog = ytd_df[yr].dropna()
-    if len(analog) < n_days:
-        continue
-    ytd_return = analog.iloc[n_days - 1]
-    max_jump   = analog.pct_change().abs().max()
+# --- Filtering and final analog return computation ---
+valid_top_matches = []
+excluded_analogs = []
+analog_ytd_returns = []
+outlier_count = 0
+jump_count = 0
 
-    # apply filters
-    if filter_outliers:
-        lo, hi = min_return_sidebar / 100, max_return_sidebar / 100
-        if not (lo < ytd_return < hi):
-            excluded.append((yr, "outlier"))
-            continue
-    if filter_jumps and max_jump > max_jump_sidebar / 100:
-        excluded.append((yr, "jump"))
-        continue
-
-    valid_top_matches.append((yr, rho))
-
-if excluded:
-    st.info(f"{len(excluded)} analog(s) excluded by your filters.")
-
-if not valid_top_matches:
-    st.info("No analogs left after filtering.")
-    st.stop()
-
-# --- Metrics --------------------------------------------------------------
-current_ytd_return = current_ytd.iloc[-1]
-final_analog_returns = [ytd_df[yr].iloc[-1] for yr, _ in valid_top_matches]
-median_final = np.median(final_analog_returns)
-std_final    = np.std(final_analog_returns)
-
-met1, met2, met3 = st.columns(3)
-met1.metric(f"{current_year} YTD Return", f"{current_ytd_return:.2%}")
-met2.metric("Median Final Analog Return", f"{median_final:.2%}")
-met3.metric("Analog Return Dispersion", f"{std_final:.2%}")
-
-st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>",
-            unsafe_allow_html=True)
-
-# ---- Plot ---------------------------------------------------------------
-if len(valid_top_matches) <= 10:
-    base_cmap = plt.cm.get_cmap("tab10")
+if filter_outliers or filter_jumps:
+    for yr, rho in top_matches:
+        analog = ytd_df[yr].dropna()
+        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days - 1]):
+            valid = True
+            ytd_return = analog.iloc[n_days - 1]
+            max_jump = analog.pct_change().abs().max()
+            if filter_outliers:
+                min_return = min_return_sidebar / 100.0
+                max_return = max_return_sidebar / 100.0
+                if not (min_return < ytd_return < max_return):
+                    valid = False
+                    outlier_count += 1
+            if filter_jumps:
+                jump_limit = max_jump_sidebar / 100.0
+                if max_jump > jump_limit:
+                    valid = False
+                    jump_count += 1
+            if valid:
+                valid_top_matches.append((yr, rho))
+                analog_ytd_returns.append(ytd_return)
+            else:
+                excluded_analogs.append((yr, ytd_return, max_jump))
 else:
-    base_cmap = plt.cm.get_cmap("tab20")
-palette = base_cmap(np.linspace(0, 1, len(valid_top_matches)))
+    for yr, rho in top_matches:
+        analog = ytd_df[yr].dropna()
+        if len(analog) >= n_days and not np.isnan(analog.iloc[n_days - 1]):
+            valid_top_matches.append((yr, rho))
+            analog_ytd_returns.append(analog.iloc[n_days - 1])
 
-fig, ax = plt.subplots(figsize=(14, 7))
-for idx, (yr, rho) in enumerate(valid_top_matches):
+if excluded_analogs:
+    msg = f"{len(excluded_analogs)} analog(s) excluded"
+    if outlier_count:
+        msg += f" due to extreme returns (outside slider)"
+    if jump_count:
+        msg += f" due to large daily jump"
+    st.info(msg + ".")
+
+current_ytd_return = current_ytd.iloc[-1] if len(current_ytd) > 0 else float('nan')
+
+# --- Compute final (full-year) return for each analog ---
+final_analog_returns = []
+for yr, rho in valid_top_matches:
     analog = ytd_df[yr].dropna()
-    ax.plot(analog.index, analog.values, "--", linewidth=2,
-            color=palette[idx], alpha=0.7, label=f"{yr} (ρ={rho:.2f})")
+    if len(analog) > 0:
+        final_analog_returns.append(analog.iloc[-1])
 
-ax.plot(current_ytd.index, current_ytd.values,
-        color="black", linewidth=3.2, label=f"{current_year} (YTD)")
-ax.axvline(current_ytd.index[-1], color="gray", linestyle=":", linewidth=1.3, alpha=0.7)
+if final_analog_returns:
+    median_final = np.median(final_analog_returns)
+    std_final = np.std(final_analog_returns)
+else:
+    median_final = std_final = float("nan")
 
-ax.set_title(f"{ticker} — {current_year} vs Historical Analogs", fontsize=16, fontweight="bold")
-ax.set_xlabel("Trading Day of Year", fontsize=13)
-ax.set_ylabel("Cumulative Return", fontsize=13)
-ax.axhline(0, color="gray", linestyle="--", linewidth=1)
-ax.set_xlim(1, TRADING_DAYS_FULL_YEAR)
-ax.grid(True, linestyle=":", linewidth=0.7, color="#888")
-ax.yaxis.set_major_locator(MultipleLocator(0.05))
-ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
+# --- Metrics display ---
+metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+with metrics_col1:
+    st.metric(
+        f"{current_year} YTD Return",
+        f"{current_ytd_return:.2%}" if not np.isnan(current_ytd_return) else "N/A",
+        help=f"{ticker} YTD cumulative return."
+    )
+with metrics_col2:
+    st.metric(
+        "Median Final Analog Return",
+        f"{median_final:.2%}" if not np.isnan(median_final) else "N/A",
+        help="Median full-year return among top analogs."
+    )
+with metrics_col3:
+    st.metric(
+        "Analog Return Dispersion",
+        f"{std_final:.2%}" if not np.isnan(std_final) else "N/A",
+        help="Standard deviation of full-year returns among top analogs."
+    )
 
-# dynamic y-limits
-all_y = [current_ytd.values] + [ytd_df[yr].dropna().values for yr, _ in valid_top_matches]
-min_y, max_y = np.nanmin(np.hstack(all_y)), np.nanmax(np.hstack(all_y))
-pad = max(0.02, (max_y - min_y) * 0.08)
-ax.set_ylim(min_y - pad, max_y + pad)
+st.markdown("<hr style='margin-top: 0; margin-bottom: 6px;'>", unsafe_allow_html=True)
 
-ax.legend(loc="upper left", fontsize=11, frameon=False, ncol=2)
-plt.tight_layout()
-st.pyplot(fig)
+with st.sidebar:
+    if valid_top_matches:
+        st.markdown(
+            f"""
+            <div style='background-color:#f8fafb; border-radius:10px; padding:14px 18px 10px 18px; margin-top:4px; margin-bottom:8px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.03);'>
+                <span style='font-size:1.1rem; font-weight:600; color:#1761a0;'>
+                    Top {len(valid_top_matches)} Analogs to {current_year}
+                </span>
+                <ul style='margin-top:6px; margin-bottom:0;'>
+                    {''.join(f"<li><b style='color:#1f77b4'>{yr}</b>: <span style='color:#555'>ρ = {rho:.4f}</span></li>" for yr, rho in valid_top_matches)}
+                </ul>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.markdown("---")
+    st.download_button(
+        label="Download Returns CSV",
+        data=ytd_df.to_csv(index=True),
+        file_name=f"{ticker}_ytd_paths.csv",
+        mime="text/csv"
+    )
+    st.download_button(
+        label="Download Correlation Table",
+        data=pd.DataFrame(valid_top_matches, columns=["Year", "Correlation"]).to_csv(index=False),
+        file_name=f"{ticker}_top_analogs.csv",
+        mime="text/csv"
+    )
 
-st.caption("© 2025 AD Fund Management LP")
+if len(valid_top_matches) > 0:
+    if len(valid_top_matches) <= 10:
+        base_cmap = plt.cm.get_cmap("tab10")
+    else:
+        base_cmap = plt.cm.get_cmap("tab20")
+    palette = base_cmap(np.linspace(0, 1, len(valid_top_matches)))
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+    for idx, (yr, rho) in enumerate(valid_top_matches):
+        analog = ytd_df[yr].dropna()
+        ax.plot(
+            analog.index,
+            analog.values,
+            linestyle="--",
+            linewidth=2,
+            color=palette[idx],
+            alpha=0.7,
+            label=f"{yr} (ρ={rho:.2f})"
+        )
+    ax.plot(
+        current_ytd.index,
+        current_ytd.values,
+        color="black",
+        linewidth=3.2,
+        label=f"{current_year} (YTD)"
+    )
+    ax.axvline(current_ytd.index[-1], color="gray", linestyle=":", linewidth=1.3, alpha=0.7)
+    ax.set_title(f"{ticker} YTD {current_year} vs Historical Analogs", fontsize=16, fontweight="bold")
+    ax.set_xlabel("Trading Day of Year", fontsize=13)
+    ax.set_ylabel("Cumulative Return", fontsize=13)
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlim(1, TRADING_DAYS_FULL_YEAR)
+    ax.grid(True, linestyle=":", linewidth=0.7, color="#888")
+    ax.yaxis.set_major_locator(MultipleLocator(0.05))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
+    all_y = [current_ytd.values]
+    for yr, _ in valid_top_matches:
+        analog = ytd_df[yr].dropna()
+        all_y.append(analog.values)
+    min_y = min(np.nanmin(arr) for arr in all_y)
+    max_y = max(np.nanmax(arr) for arr in all_y)
+    span = max_y - min_y
+    pad = max(0.02, span * 0.08)
+    ax.set_ylim(min_y - pad, max_y + pad)
+    ax.legend(loc="upper left", fontsize=11, frameon=False, ncol=2)
+    plt.tight_layout()
+    st.pyplot(fig)
+else:
+    st.info("No valid analog years with complete YTD data and passing all filters for this ticker and selection.")
+
+st.caption("© 2025 AD Fund Management LP")
