@@ -1,3 +1,9 @@
+"""
+Market Memory Explorer — AD Fund Management LP
+----------------------------------------------
+Always show analogs; filtering is *optional* and user-controlled.
+"""
+
 import datetime as dt
 from pathlib import Path
 
@@ -11,7 +17,7 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 plt.style.use("default")
 
 START_YEAR = 1980
-TRADING_DAYS_FULL_YEAR = 253  # US avg; tweak if needed
+TRADING_DAYS_FULL_YEAR = 253  # US average, NYSE/NASDAQ; 2025 = 250 days
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
@@ -26,7 +32,7 @@ st.subheader("Compare the current year's return path with history")
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        """
+        f"""
         Compare **this year’s YTD performance** for any ticker (index, ETF, or stock) to prior years with the most similar path.
 
         - **Black = this year**
@@ -62,35 +68,30 @@ with input_col3:
 
 st.markdown("<hr style='margin-top: 2px; margin-bottom: 15px;'>", unsafe_allow_html=True)
 
-# -- Revised fetch function: NO CACHE, handles all column quirks, prints data --
+@st.cache_data(show_spinner=False)
 def fetch_price_history(symbol: str) -> pd.DataFrame:
     df = yf.download(symbol, start=f"{START_YEAR}-01-01", auto_adjust=False, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(symbol, axis=1, level=1, drop_level=True)
-    # Try Adj Close first, fallback to Close
-    if 'Adj Close' in df.columns:
-        df['Close'] = df['Adj Close']
-    elif 'Close' not in df.columns:
-        raise ValueError("No price data found for this ticker.")
-    df = df[['Close']].dropna()
+    df = df[["Close"]].dropna().copy()
     df["Year"] = df.index.year
     return df
 
+def cumulative_returns(prices: pd.Series) -> pd.Series:
+    return prices / prices.iloc[0] - 1
+
 try:
     raw = fetch_price_history(ticker)
-    st.write("Fetched data (last 10 rows):", raw.tail(10))
-    current_year = dt.datetime.now().year
-    st.write(f"Rows for {current_year}:", raw[raw["Year"] == current_year].tail(10))
 except Exception as err:
-    st.error(f"Download failed – check ticker or data source. ({err})")
+    st.error(f"Download failed – check ticker. ({err})")
     st.stop()
 
 returns_by_year: dict[int, pd.Series] = {}
 for year, grp in raw.groupby("Year"):
     if len(grp) < 30:
         continue
-    ytd = grp["Close"] / grp["Close"].iloc[0] - 1
-    ytd.index = np.arange(1, len(grp) + 1)
+    ytd = cumulative_returns(grp["Close"])
+    ytd.index = np.arange(1, len(grp) + 1)  # <<--- FIX: Use trading-day index, NOT dayofyear
     if ytd.isnull().any() or len(ytd) < 30:
         continue
     returns_by_year[year] = ytd
@@ -98,8 +99,8 @@ for year, grp in raw.groupby("Year"):
 ytd_df = pd.DataFrame(returns_by_year)
 current_year = dt.datetime.now().year
 
-if current_year not in ytd_df.columns or ytd_df[current_year].dropna().empty:
-    st.warning(f"No valid YTD data for {current_year} (raw shape: {raw.shape})")
+if current_year not in ytd_df.columns:
+    st.warning(f"No valid YTD data for {current_year}")
     st.stop()
 
 current_ytd = ytd_df[current_year].dropna()
