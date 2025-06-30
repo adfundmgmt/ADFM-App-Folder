@@ -1,8 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 #  Market Memory Explorer  –  AD Fund Management LP
 #  ------------------------------------------------
-#  Compare the current year's YTD return path with historical analog years.
-#  Re-written from scratch, July 2025.  (v1.1 – slider bug fixed)
+#  v1.2  ·  fixes NaN in Median / σ metrics
 # ──────────────────────────────────────────────────────────────────────────
 import datetime as dt
 import time
@@ -52,8 +51,8 @@ with st.sidebar:
 col1, col2, col3 = st.columns([2, 1, 1])
 ticker   = col1.text_input("Ticker", "^GSPC").upper()
 top_n    = col2.slider("Top Analogs", 1, 10, 5)
-min_corr = col3.slider("Min ρ", min_value=0.00, max_value=1.00, value=0.00,
-                       step=0.05, format="%.2f")      # ← fixed duplicate step arg
+min_corr = col3.slider("Min ρ", min_value=0.00, max_value=1.00,
+                       value=0.00, step=0.05, format="%.2f")
 
 st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>", unsafe_allow_html=True)
 
@@ -128,8 +127,8 @@ if not top:
 
 # ── Apply optional filters ───────────────────────────────────────────────
 def keep_year(yr: int) -> bool:
-    ser = ytd_df[yr].dropna()
-    ret = ser.iloc[n_days - 1]          # YTD as-of equal day count
+    ser   = ytd_df[yr].dropna()
+    ret   = ser.iloc[n_days - 1]          # YTD as-of equal day count
     max_d = ser.pct_change().abs().max()
     if f_outliers and not (lo/100 < ret < hi/100):
         return False
@@ -142,14 +141,28 @@ if not valid:
     st.info("All top matches excluded by your filters.")
     st.stop()
 
-# ── Metrics ──────────────────────────────────────────────────────────────
+# ── Metrics (fixed) ──────────────────────────────────────────────────────
 current_ret = current.iloc[-1]
-finals      = [ytd_df[yr].iloc[-1] for yr, _ in valid]
+
+finals = []
+for yr, _ in valid:
+    ser = ytd_df[yr].dropna()
+    if not ser.empty:
+        finals.append(ser.iloc[-1])
+
+if finals:
+    median_final = float(np.nanmedian(finals))
+    sigma_final  = float(np.nanstd(finals))
+else:
+    median_final = sigma_final = np.nan
+
+def fmt(x):
+    return "N/A" if np.isnan(x) else f"{x:.2%}"
 
 m1, m2, m3 = st.columns(3)
-m1.metric(f"{this_year} YTD",         f"{current_ret:.2%}")
-m2.metric("Median Final Return",      f"{np.median(finals):.2%}")
-m3.metric("Analog Dispersion (σ)",    f"{np.std(finals):.2%}")
+m1.metric(f"{this_year} YTD",         fmt(current_ret))
+m2.metric("Median Final Return",      fmt(median_final))
+m3.metric("Analog Dispersion (σ)",    fmt(sigma_final))
 
 st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
 
