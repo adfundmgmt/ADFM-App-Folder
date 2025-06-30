@@ -45,11 +45,15 @@ start_date = datetime.today() - timedelta(days=lookback_days + buffer_days)
 # ── Fetch & cache data ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def get_data(tkr, start, intrvl):
-    return yf.Ticker(tkr).history(start=start, interval=intrvl)
+    try:
+        df = yf.Ticker(tkr).history(start=start, interval=intrvl, auto_adjust=False)
+        return df
+    except Exception as e:
+        return None
 
 df_full = get_data(ticker, start_date, interval)
 if df_full is None or df_full.empty:
-    st.error("No data returned. Check symbol or internet.")
+    st.error("No data returned. Check symbol, period, interval, or internet.")
     st.stop()
 
 # ── Sanitize index, drop weekends for daily data ───────────────────────────
@@ -85,6 +89,16 @@ if period == "max":
 else:
     cutoff = df_full.index.max() - pd.Timedelta(days=lookback_days)
     df = df_full.loc[df_full.index >= cutoff].copy()
+
+if df.empty:
+    st.error("No data to plot for selected period/interval. Try a shorter window or different ticker.")
+    st.stop()
+
+# Remove rows with missing price data
+df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"], how='any')
+if df.empty:
+    st.error("No data after dropping missing values. Try different settings.")
+    st.stop()
 
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 available_mas = [w for w in (8, 20, 50, 100, 200) if len(df) >= w]
@@ -124,9 +138,10 @@ for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
 # 2) Volume (vs prior close)
-vol_colors = ["#B0BEC5"]
-for i in range(1, len(df)):
-    vol_colors.append("#43A047" if df["Close"].iat[i] > df["Close"].iat[i-1] else "#E53935")
+vol_colors = ["#B0BEC5"] + [
+    "#43A047" if df["Close"].iloc[i] > df["Close"].iloc[i-1] else "#E53935"
+    for i in range(1, len(df))
+]
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"],
     width=0.4,
@@ -142,11 +157,15 @@ fig.add_trace(go.Scatter(
     name="RSI (14)"
 ), row=3, col=1)
 fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1, title_standoff=10)
-fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
-fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
+
+# Draw horizontal RSI 80/20 lines, compatible with all Plotly versions
+fig.add_shape(type="line", x0=df["DateStr"].iloc[0], x1=df["DateStr"].iloc[-1], y0=80, y1=80,
+              line=dict(color="gray", dash="dash"), row=3, col=1)
+fig.add_shape(type="line", x0=df["DateStr"].iloc[0], x1=df["DateStr"].iloc[-1], y0=20, y1=20,
+              line=dict(color="gray", dash="dash"), row=3, col=1)
 
 # 4) MACD + colored Hist
-hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df["Hist"]]
+hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df["Hist"].fillna(0)]
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Hist"],
     marker_color=hist_colors, opacity=0.6, width=0.4,
