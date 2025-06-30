@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 #  Market Memory Explorer  –  AD Fund Management LP
 #  ------------------------------------------------
-#  v1.2  ·  fixes NaN in Median / σ metrics
+#  v1.3  ·  guards against analog years shorter than current year
 # ──────────────────────────────────────────────────────────────────────────
 import datetime as dt
 import time
@@ -18,7 +18,7 @@ plt.style.use("default")
 
 START_YEAR              = 1980
 TRADING_DAYS_FULL_YEAR  = 253        # NYSE / NASDAQ long-run average
-MIN_DAYS_REQUIRED       = 30         # discard stub years
+MIN_DAYS_REQUIRED       = 30         # discard stub years entirely
 CACHE_TTL_SECONDS       = 3600       # 1-hour data cache
 
 # ── Streamlit page config ────────────────────────────────────────────────
@@ -66,7 +66,8 @@ def load_history(symbol: str) -> pd.DataFrame:
         if not df.empty:
             break
         attempts += 1
-        time.sleep(delay); delay *= 2
+        time.sleep(delay)
+        delay *= 2
     if df.empty:
         raise ValueError("Yahoo returned no data after 4 attempts.")
     if "Close" not in df.columns:
@@ -113,10 +114,10 @@ corrs = {}
 for yr, series in ytd_df.items():
     if yr == this_year:
         continue
-    overlap = min(n_days, len(series.dropna()))
-    if overlap < MIN_DAYS_REQUIRED:
+    clean = series.dropna()
+    if len(clean) < n_days:                       # NEW: skip shorter years early
         continue
-    rho = np.corrcoef(current[:overlap], series[:overlap])[0, 1]
+    rho = np.corrcoef(current.values, clean.iloc[:n_days].values)[0, 1]
     if rho >= min_corr:
         corrs[yr] = rho
 
@@ -127,8 +128,10 @@ if not top:
 
 # ── Apply optional filters ───────────────────────────────────────────────
 def keep_year(yr: int) -> bool:
-    ser   = ytd_df[yr].dropna()
-    ret   = ser.iloc[n_days - 1]          # YTD as-of equal day count
+    ser = ytd_df[yr].dropna()
+    if len(ser) < n_days:          # NEW: guard against IndexError
+        return False
+    ret   = ser.iloc[n_days - 1]   # YTD as-of equal day count
     max_d = ser.pct_change().abs().max()
     if f_outliers and not (lo/100 < ret < hi/100):
         return False
@@ -141,7 +144,7 @@ if not valid:
     st.info("All top matches excluded by your filters.")
     st.stop()
 
-# ── Metrics (fixed) ──────────────────────────────────────────────────────
+# ── Metrics ──────────────────────────────────────────────────────────────
 current_ret = current.iloc[-1]
 
 finals = []
