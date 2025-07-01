@@ -168,7 +168,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
 # ────────────────────────── Main controls ────────────────────────── #
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
-    symbol = st.text_input("Ticker symbol", value="SPY").upper()
+    symbol = st.text_input("Ticker symbol", value="^GSPC").upper()
 with col2:
     start_year = st.number_input("Start year", value=2020, min_value=1900, max_value=dt.datetime.today().year)
 with col3:
