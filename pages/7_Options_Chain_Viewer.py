@@ -5,13 +5,11 @@ import numpy as np
 import altair as alt
 import math
 from datetime import datetime
-
-import matplotlib.pyplot as plt
-plt.style.use("default")
+import sys
 
 st.set_page_config(page_title="Options Chain Viewer", layout="wide")
-
 st.title('Options Chain Viewer')
+
 st.sidebar.header('About This Tool')
 st.sidebar.markdown("""
 - **Interactive Options Chain**: Fetch real-time call & put chains via yfinance.  
@@ -21,6 +19,12 @@ st.sidebar.markdown("""
 - **Optional Tables & Download**: Inspect bid/ask, volume, open interest per strike; download full option chain.
 """)
 
+# -- Version check --
+required_yf = "0.2.37"
+if tuple(map(int, yf.__version__.split("."))) < tuple(map(int, required_yf.split("."))):
+    st.error(f"yfinance version {required_yf}+ required. You have {yf.__version__}. Update with `pip install --upgrade yfinance`.")
+    st.stop()
+
 ticker = st.sidebar.text_input('Ticker', 'AAPL').upper()
 if not ticker:
     st.sidebar.error('Enter a valid ticker symbol')
@@ -28,13 +32,13 @@ if not ticker:
 
 hide_zero_vol = st.sidebar.checkbox("Hide zero-volume options", value=True)
 
-# Get valid expiries robustly, with diagnostics and user-friendly error
+# -- Expiry fetch, robust & cached --
 @st.cache_data(ttl=900, show_spinner=True)
-def get_valid_expiries(tkr):
+def get_expiries_and_chain(tkr):
     tk = yf.Ticker(tkr)
     try:
         raw_expiries = tk.options
-    except Exception:
+    except Exception as e:
         raw_expiries = []
     today = datetime.today().date()
     valid_expiries = []
@@ -50,38 +54,52 @@ def get_valid_expiries(tkr):
             continue
     return raw_expiries, valid_expiries
 
-with st.spinner("Loading available expiries..."):
-    raw_expiries, expiries = get_valid_expiries(ticker)
+# -- Try/except for global protection --
+try:
+    with st.spinner("Loading available expiries..."):
+        raw_expiries, expiries = get_expiries_and_chain(ticker)
+except Exception as e:
+    st.error(f"Failed to fetch option expiry dates: {e}")
+    st.stop()
 
-# Diagnostics: only shown if there is a problem
+# -- Diagnostics --
 if not raw_expiries:
-    st.error(f"Yahoo Finance returned no option expiry dates for {ticker}. This is usually a data outage or rate limit. Try another ticker, VPN, or wait and retry.")
+    st.error(
+        f"Yahoo Finance returned no option expiry dates for {ticker}. "
+        "This is almost always a Yahoo data outage or rate limit (not your code). "
+        "Try:\n"
+        "- Waiting 10–30 minutes (Yahoo usually unblocks after a cooldown)\n"
+        "- Running locally (not cloud/VM)\n"
+        "- Using a VPN or different network\n\n"
+        "Or check [Yahoo's website for this ticker](https://finance.yahoo.com/quote/{ticker}/options)."
+    )
     st.stop()
 
 if not expiries:
-    st.error(f"No valid options chains available for {ticker}.\n"
-             f"Yahoo reports these expiries: {', '.join(raw_expiries) if raw_expiries else 'None'}\n"
-             "All available chains are empty or could not be loaded. "
-             "This often means Yahoo is blocking automated requests or is experiencing a temporary outage. "
-             "Try another ticker, VPN, or wait 1-2 hours and refresh.")
+    st.error(
+        f"No valid options chains available for {ticker}. "
+        f"Yahoo reports these expiries: {', '.join(raw_expiries) if raw_expiries else 'None'}\n"
+        "All available chains are empty or could not be loaded.\n"
+        "This usually means Yahoo is rate-limiting or has a temporary outage."
+    )
     st.stop()
 
 expiry = st.sidebar.selectbox('Select Expiry', expiries)
 
-# Fetch the option chain (do NOT cache this!)
+# -- Option chain fetch (not cached, always fresh) --
 try:
     tk = yf.Ticker(ticker)
     chain = tk.option_chain(expiry)
     if chain.calls.empty and chain.puts.empty:
         raise ValueError("Empty chain")
-except Exception:
+except Exception as e:
     st.warning(
-        f"⚠️ Could not load an options chain for {ticker} @ {expiry}. "
-        "Please pick a different expiry."
+        f"⚠️ Could not load an options chain for {ticker} @ {expiry} ({e}). "
+        "Please pick a different expiry or try later."
     )
     st.stop()
 
-# Spot price cache is OK, it's a float
+# -- Spot price fetch (cache OK) --
 @st.cache_data(ttl=600, show_spinner=False)
 def get_spot(tkr):
     hist = yf.Ticker(tkr).history(period='1d')
@@ -92,29 +110,33 @@ if spot is None:
     st.error("Could not retrieve spot price.")
     st.stop()
 
+# -- Calls & puts tables --
 calls = chain.calls[['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
 puts  = chain.puts [['strike','bid','ask','volume','openInterest','impliedVolatility']].copy()
 calls['type'], puts['type'] = 'Call','Put'
 combined = pd.concat([calls, puts], ignore_index=True)
 
-# Optionally filter out zero-volume rows
+# -- Filter zero-vol options --
 if hide_zero_vol:
     combined = combined[combined["volume"] > 0]
     calls = calls[calls["volume"] > 0]
     puts = puts[puts["volume"] > 0]
+if combined.empty:
+    st.info("No options with nonzero volume for this expiry.")
+    st.stop()
 
-# Time to expiry (ACT/252 convention)
+# -- Time to expiry --
 today       = datetime.today().date()
 expiry_date = pd.to_datetime(expiry).date()
 days_bd     = np.busday_count(today, expiry_date)
 T           = max(days_bd, 0) / 252.0
 st.sidebar.caption(f"Time to expiry: {days_bd} business days → {T:.3f} years (ACT/252)")
 
-# Warn about zero/missing IV
+# -- Warn on IV --
 if (combined['impliedVolatility'] <= 0).any() or combined['impliedVolatility'].isna().any():
     st.warning("Some strikes have zero or missing IV → their delta will be NaN.")
 
-# Vectorized Black-Scholes Delta Calculation
+# -- Black-Scholes delta calculation --
 vec_erf = np.vectorize(math.erf)
 σ = combined['impliedVolatility'].values
 K = combined['strike'].values
@@ -131,12 +153,12 @@ call_delta = 0.5 * (1 + vec_erf(d1 / np.sqrt(2)))
 combined['delta'] = np.where(combined['type']=='Call', call_delta, call_delta - 1)
 combined.loc[~valid, 'delta'] = np.nan
 
-# Display spot + ATM strike
+# -- ATM strike --
 atm_idx = (combined['strike'] - spot).abs().idxmin()
 atm_strike = combined.loc[atm_idx, 'strike']
 st.caption(f"📌 Spot price: **${spot:.2f}** &nbsp; | &nbsp; ATM Strike: **{atm_strike}**")
 
-# Summary Metrics & Put/Call Ratio
+# -- Metrics --
 total_call_vol = combined.query("type=='Call'")['volume'].sum()
 total_put_vol  = combined.query("type=='Put'")['volume'].sum()
 avg_delta      = combined['delta'].mean()
@@ -151,7 +173,7 @@ c4.metric('Avg Delta',         f"{avg_delta:.2f}")
 
 st.markdown('---')
 
-# Volume by Strike Chart with ATM highlight
+# -- Volume by Strike Chart --
 st.subheader('Volume by Strike')
 highlight_color = "#FFD600"
 combined['highlight'] = np.where(combined['strike'] == atm_strike, 'ATM', 'Other')
@@ -163,7 +185,7 @@ vol_chart = (
            y=alt.Y('volume:Q', title='Volume'),
            color=alt.condition(
                alt.datum.highlight == 'ATM',
-               alt.value(highlight_color),  # ATM strike bar highlight
+               alt.value(highlight_color),
                alt.Color(
                    'type:N',
                    scale=alt.Scale(domain=['Call','Put'], range=['#1a9641','#d7191c']),
@@ -176,12 +198,10 @@ vol_chart = (
        .interactive()
 )
 st.altair_chart(vol_chart, use_container_width=True)
-
 st.markdown(f"**Yellow bar highlights the ATM strike ({atm_strike}).**")
-
 st.markdown('---')
 
-# Delta Distribution Panel (dynamic width)
+# -- Delta Distribution Chart --
 st.subheader('Delta Distribution by Option Type')
 delta_hist = (
     alt.Chart(combined)
@@ -208,7 +228,7 @@ if st.sidebar.checkbox('Show Calls & Puts Tables'):
     st.subheader('Puts Table')
     st.dataframe(puts)
 
-# Download full option chain
+# -- Download button --
 with st.expander("Download Option Chain Table"):
     st.download_button(
         "Download as CSV",
