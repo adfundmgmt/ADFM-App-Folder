@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import pandas as pd
 import yfinance as yf
@@ -14,9 +12,9 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 
 **Features:**
 - Interactive OHLC candlesticks  
-- 8/20/50/100/200‑day moving averages (full length)  
-- Volume bars color‑coded by up/down days (vs prior close)  
-- RSI (14‑day) panel (0–100 scale) with Wilder smoothing  
+- 8/20/50/100/200-day moving averages (full length)  
+- Volume bars color-coded by up/down days (vs prior close)  
+- RSI (14-day) panel (0–100 scale) with Wilder smoothing  
 - MACD (12,26,9) panel with colored histogram  
 """)
 ticker   = st.sidebar.text_input("Ticker", "NVDA").upper()
@@ -25,31 +23,30 @@ period   = st.sidebar.selectbox(
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ── Define lookback days for each period ───────────────────────────────────
-base_days = {
-    "1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "3y": 1095,
-    "5y": 1825, "10y": 3652
+# ── Define trading days for each period ────────────────────────────────────
+# US market trading days: 1y ≈ 252, 3y ≈ 756, etc.
+base_trading_days = {
+    "1mo": 21, "3mo": 63, "6mo": 126, "1y": 252, "2y": 504, "3y": 756,
+    "5y": 1260, "10y": 2520
 }
-CAP_MAX_DAYS = 365 * 25  # Cap "max" at 25 years ≈ 9125 days
-
-# ── Cap 'max' period at 25 years of daily data ─────────────────────────────
-if period == "max":
-    effective_period = "max"
-    st.info("⚠️ 'Max' is capped at 25 years of daily data to ensure smooth performance.")
-    lookback_days = CAP_MAX_DAYS
-else:
-    effective_period = period
-    lookback_days = base_days[period]
-
-buffer_days = max(lookback_days, 500)
-start_date = datetime.today() - timedelta(days=lookback_days + buffer_days)
+CAP_MAX_DAYS = 252 * 25  # Cap 'max' at 25 years ≈ 6300 trading days
 
 # ── Fetch & cache data ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def get_data(tkr, start, intrvl):
-    return yf.Ticker(tkr).history(start=start, interval=intrvl)
+def get_data(tkr, period, intrvl):
+    try:
+        return yf.Ticker(tkr).history(period=period, interval=intrvl)
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return pd.DataFrame()
 
-df_full = get_data(ticker, start_date, interval)
+# For Yahoo's API, 'period' strings are best for fetching; we slice later
+yahoo_period_map = {
+    "1mo": "2mo", "3mo": "6mo", "6mo": "1y", "1y": "2y", "2y": "3y",
+    "3y": "5y", "5y": "10y", "10y": "max", "max": "max"
+}
+fetch_period = yahoo_period_map.get(period, "max")
+df_full = get_data(ticker, fetch_period, interval)
 if df_full is None or df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
@@ -80,13 +77,16 @@ df_full["MACD"]   = df_full["EMA12"] - df_full["EMA26"]
 df_full["Signal"] = df_full["MACD"].ewm(span=9, adjust=False).mean()
 df_full["Hist"]   = df_full["MACD"] - df_full["Signal"]
 
-# ── Trim to display window ────────────────────────────────────────────────
+# ── Trim to display window using trading days ──────────────────────────────
 if period == "max":
-    cutoff = df_full.index.max() - pd.Timedelta(days=CAP_MAX_DAYS)
-    df = df_full.loc[df_full.index >= cutoff].copy()
+    df = df_full.tail(CAP_MAX_DAYS).copy()
+    effective_trading_days = CAP_MAX_DAYS
 else:
-    cutoff = df_full.index.max() - pd.Timedelta(days=lookback_days)
-    df = df_full.loc[df_full.index >= cutoff].copy()
+    effective_trading_days = base_trading_days[period]
+    if len(df_full) < effective_trading_days:
+        df = df_full.copy()
+    else:
+        df = df_full.tail(effective_trading_days).copy()
 
 df["DateStr"] = df.index.strftime("%Y-%m-%d")
 available_mas = [w for w in (8, 20, 50, 100, 200) if len(df) >= w]
@@ -126,9 +126,12 @@ for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
 # 2) Volume (vs prior close)
-vol_colors = ["#B0BEC5"]
-for i in range(1, len(df)):
-    vol_colors.append("#43A047" if df["Close"].iat[i] > df["Close"].iat[i-1] else "#E53935")
+vol_colors = [
+    "#B0BEC5" if i == 0 else (
+        "#43A047" if df["Close"].iat[i] > df["Close"].iat[i-1] else "#E53935"
+    )
+    for i in range(len(df))
+]
 fig.add_trace(go.Bar(
     x=df["DateStr"], y=df["Volume"],
     width=0.4,
