@@ -168,7 +168,7 @@ def plot_seasonality(
 # ---- Main controls ----
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
-    symbol = st.text_input("Ticker symbol", value="SPY")
+    symbol = st.text_input("Ticker symbol", value="^GSPC")
 with col2:
     start_year = st.number_input(
         "Start year", value=2020,
