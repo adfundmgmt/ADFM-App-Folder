@@ -44,8 +44,6 @@ with st.sidebar:
         • Pulls data from Yahoo Finance (plus FRED fallback for deep index history)  
         • Median/mean monthly return, hit rate, min/max, volatility bands  
         • Green = positive month, red = negative, black diamonds = hit rate  
-        —  
-        Created by **AD Fund Management LP**
         """,
         unsafe_allow_html=True,
     )
