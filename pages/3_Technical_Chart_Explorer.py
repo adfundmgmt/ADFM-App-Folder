@@ -17,7 +17,7 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 - RSI (14-day) panel (0–100 scale) with Wilder smoothing  
 - MACD (12,26,9) panel with colored histogram  
 """)
-ticker   = st.sidebar.text_input("Ticker", "NVDA").upper()
+ticker   = st.sidebar.text_input("Ticker", "^GSPC").upper()
 period   = st.sidebar.selectbox(
     "Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3
 )
