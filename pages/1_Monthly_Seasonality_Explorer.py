@@ -91,7 +91,9 @@ def seasonal_stats(prices: pd.Series):
     stats['median_ret'] = grouped.median()
     stats['mean_ret'] = grouped.mean()
     stats['hit_rate'] = grouped.apply(lambda x: (x > 0).mean() * 100)
-    stats['volatility'] = grouped.std()
+    # stats['volatility'] = grouped.std()
+    stats['min_ret'] = grouped.min()  # ADD min
+    stats['max_ret'] = grouped.max()  # ADD max
     stats['years_observed'] = grouped.apply(lambda x: x.index.year.nunique())
     stats['label'] = MONTH_LABELS
     stats = stats.reindex(range(1,13))
@@ -113,24 +115,28 @@ def plot_seasonality(
     labels = plot_df['label'].tolist()
     ret = plot_df[ret_col].to_numpy(dtype=float)
     hit = plot_df['hit_rate'].to_numpy(dtype=float)
-    vol = plot_df['volatility'].to_numpy(dtype=float)
+    #vol = plot_df['volatility'].to_numpy(dtype=float)   # REMOVE
+    min_ret = plot_df['min_ret'].to_numpy(dtype=float)
+    max_ret = plot_df['max_ret'].to_numpy(dtype=float)
 
     # Bar colors
     bar_cols = ['mediumseagreen' if v >= 0 else 'indianred' for v in ret]
     edge_cols = ['darkgreen' if v >= 0 else 'darkred' for v in ret]
 
+    # Range for error bars: [distance below, distance above]
+    yerr = np.abs(np.vstack([ret - min_ret, max_ret - ret]))
+
     # --- Left Y: Return axis ---
     # Pad min/max for clean visual
-    y_min = np.nanmin(ret - vol) if vol is not None else np.nanmin(ret)
-    y_max = np.nanmax(ret + vol) if vol is not None else np.nanmax(ret)
-    # Always include 0 for visual reference, pad both sides by 10%
+    y_min = np.nanmin(min_ret)
+    y_max = np.nanmax(max_ret)
     y_lower = min(0, y_min) - 0.1 * abs(y_min)
     y_upper = max(0, y_max) + 0.1 * abs(y_max)
 
     ax1.bar(
         labels, ret, width=0.8,
         color=bar_cols, edgecolor=edge_cols, linewidth=1.2,
-        yerr=vol, capsize=6, alpha=0.85, zorder=2,
+        yerr=yerr, capsize=6, alpha=0.85, zorder=2,
         error_kw=dict(ecolor='gray', lw=1.6, alpha=0.7)
     )
     ax1.set_ylabel(f'{return_metric} return (%)', weight='bold')
@@ -209,11 +215,11 @@ st.markdown(
     f"""
     <div style='text-align:center'>
         <span style='font-size:1.18em; font-weight:600; color:#218739'>
-            ⬆️ Best month: {best['label']} ({best[ret_col]:.2f}% | σ={best['volatility']:.2f})
+            ⬆️ Best month: {best['label']} ({best[ret_col]:.2f}% | High: {best['max_ret']:.2f}% | Low: {best['min_ret']:.2f}%)
         </span>
         &nbsp;&nbsp;&nbsp;
         <span style='font-size:1.18em; font-weight:600; color:#c93535'>
-            ⬇️ Worst month: {worst['label']} ({worst[ret_col]:.2f}% | σ={worst['volatility']:.2f})
+            ⬇️ Worst month: {worst['label']} ({worst[ret_col]:.2f}% | High: {worst['max_ret']:.2f}% | Low: {worst['min_ret']:.2f}%)
         </span>
     </div>
     """, unsafe_allow_html=True
@@ -231,10 +237,10 @@ with dl_col1:
         file_name=f"{symbol}_seasonality_{first_year}_{last_year}.png"
     )
 with dl_col2:
-    csv_df = stats[['label', 'median_ret', 'mean_ret', 'hit_rate', 'volatility', 'years_observed']].copy()
+    csv_df = stats[['label', 'median_ret', 'mean_ret', 'hit_rate', 'min_ret', 'max_ret', 'years_observed']].copy()
     csv_df.rename(columns={
         'label': 'Month', 'median_ret': 'Median Return (%)', 'mean_ret': 'Mean Return (%)',
-        'hit_rate': 'Hit Rate (%)', 'volatility': 'Volatility (%)', 'years_observed': 'Years Observed'
+        'hit_rate': 'Hit Rate (%)', 'min_ret': 'Min Return (%)', 'max_ret': 'Max Return (%)', 'years_observed': 'Years Observed'
     }, inplace=True)
     st.download_button(
         "Download monthly stats (CSV)",
@@ -249,7 +255,7 @@ st.markdown(
     <ul>
     <li><b>Median/Mean Return:</b> Typical percent gain/loss for each month across years</li>
     <li><b>Hit Rate:</b> % of years each month finished positive</li>
-    <li><b>Volatility (σ):</b> Standard deviation of monthly returns, a risk proxy</li>
+    <li><b>High/Low:</b> Maximum and minimum return observed for each month (across all years)</li>
     </ul>
     </details>
     """, unsafe_allow_html=True
