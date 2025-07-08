@@ -51,24 +51,27 @@ recess   = load_series("USREC",    start_date_full)
 if headline.empty or core.empty or recess.empty:
     st.stop()
 
-# **Alignment fix here**
-recess_aligned = recess.reindex(headline.index)
+# --------------------------------------------------
+# ALIGN ALL SERIES TO CANONICAL INDEX (headline)
+# --------------------------------------------------
+canonical_index = headline.index
 
-# --------------------------------------------------
-# TRANSFORMATIONS
-# --------------------------------------------------
-headline_yoy = headline.pct_change(12) * 100
-core_yoy     = core.pct_change(12)     * 100
-headline_mom = headline.pct_change(1)  * 100
-core_mom     = core.pct_change(1)      * 100
-core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100
+headline_aligned      = headline.reindex(canonical_index)
+core_aligned          = core.reindex(canonical_index)
+recess_aligned        = recess.reindex(canonical_index)
+
+headline_yoy_aligned  = headline_aligned.pct_change(12) * 100
+core_yoy_aligned      = core_aligned.pct_change(12) * 100
+headline_mom_aligned  = headline_aligned.pct_change(1)  * 100
+core_mom_aligned      = core_aligned.pct_change(1) * 100
+core_3m_ann_aligned   = ((core_aligned / core_aligned.shift(3)) ** 4 - 1) * 100
 
 # --------------------------------------------------
 # DETERMINE DATE WINDOW
 # --------------------------------------------------
-end_date = headline.index.max()
+end_date = canonical_index.max()
 if period == "All":
-    start_date = headline.index.min()
+    start_date = canonical_index.min()
 elif period.endswith("M"):
     months = int(period[:-1])
     start_date = end_date - pd.DateOffset(months=months)
@@ -84,26 +87,28 @@ manual_range = st.sidebar.checkbox("Custom date range")
 if manual_range:
     slider = st.sidebar.slider(
         "Select date range:",
-        min_value=headline.index.min().to_pydatetime().date(),
-        max_value=headline.index.max().to_pydatetime().date(),
+        min_value=canonical_index.min().to_pydatetime().date(),
+        max_value=canonical_index.max().to_pydatetime().date(),
         value=(start_date.to_pydatetime().date(), end_date.to_pydatetime().date()),
         format="YYYY-MM"
     )
     start_date = pd.Timestamp(slider[0])
     end_date = pd.Timestamp(slider[1])
 
-# Slice all series for window
-idx = (headline.index >= start_date) & (headline.index <= end_date)
-h_yoy = headline_yoy.loc[idx]
-c_yoy = core_yoy.loc[idx]
-h_mom = headline_mom.loc[idx]
-c_mom = core_mom.loc[idx]
-c_3m  = core_3m_ann.loc[idx]
+# Slice all series for window (now everything is perfectly aligned)
+idx = (canonical_index >= start_date) & (canonical_index <= end_date)
+headline_window = headline_aligned.loc[idx]
+core_window     = core_aligned.loc[idx]
+h_yoy           = headline_yoy_aligned.loc[idx]
+c_yoy           = core_yoy_aligned.loc[idx]
+h_mom           = headline_mom_aligned.loc[idx]
+c_mom           = core_mom_aligned.loc[idx]
+c_3m            = core_3m_ann_aligned.loc[idx]
+recess_window   = recess_aligned.loc[idx]
 
-# **ALSO align and slice recessions for download**
-recess_window = recess_aligned.loc[idx]
-
-# Filter recessions overlapping window
+# --------------------------------------------------
+# Recession shading: extract periods
+# --------------------------------------------------
 def within_window(rec_list, start, end):
     out = []
     for s,e in rec_list:
@@ -112,16 +117,13 @@ def within_window(rec_list, start, end):
         out.append((max(s,start), min(e,end)))
     return out
 
-# Recession extraction
 def get_recessions(flag: pd.Series):
     f = flag.dropna().astype(int)
     dif = f.diff()
     starts = f[(f==1)&(dif==1)].index
     if f.iloc[0]==1: starts = starts.insert(0,f.index[0])
     ends = f[(f==0)&(dif==-1)].index
-    # Patch for rare bug: Recession starts but never ends in data
     if len(ends)<len(starts): ends = ends.append(pd.Index([f.index[-1]]))
-    # Patch for instant recessions (same start and end)
     return [(s, e) for s, e in zip(starts, ends) if e >= s]
 
 recs = get_recessions(recess_aligned)
@@ -184,7 +186,7 @@ fig_core = make_subplots(
     rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
     subplot_titles=("Core CPI Index", "3‑Mo Annualised Core CPI %"))
 fig_core.add_trace(go.Scatter(
-    x=core.loc[idx].index, y=core.loc[idx], name="Core Index", line_color="#ff7f0e", mode="lines+markers", hovertemplate='%{y:.2f}'), row=1, col=1)
+    x=core_window.index, y=core_window, name="Core Index", line_color="#ff7f0e", mode="lines+markers", hovertemplate='%{y:.2f}'), row=1, col=1)
 fig_core.add_trace(go.Scatter(
     x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4", mode="lines+markers", hovertemplate='%{y:.2f}%'), row=2, col=1)
 for s,e in recs_window:
@@ -213,7 +215,7 @@ fig_core.update_layout(
 # --------------------------------------------------
 st.title("US Inflation Dashboard")
 
-# Cool addition: Headline/Core latest values + delta
+# Headline/Core latest values + delta
 latest_date = h_yoy.index.max()
 headline_latest = h_yoy.iloc[-1]
 core_latest = c_yoy.iloc[-1]
@@ -232,8 +234,8 @@ st.plotly_chart(fig_core, use_container_width=True)
 # Download section
 with st.expander("Download Data"):
     combined = pd.DataFrame({
-        "Headline CPI": headline.loc[idx],
-        "Core CPI": core.loc[idx],
+        "Headline CPI": headline_window,
+        "Core CPI": core_window,
         "Headline YoY (%)": h_yoy,
         "Core YoY (%)": c_yoy,
         "Headline MoM (%)": h_mom,
