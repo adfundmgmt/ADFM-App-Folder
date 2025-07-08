@@ -133,7 +133,7 @@ fig_yoy.add_trace(go.Scatter(
 for s,e in recs_window:
     fig_yoy.add_shape(
         dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0)
+             fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0)
     )
 fig_yoy.update_layout(
     title="US CPI YoY – Headline vs Core",
@@ -160,9 +160,9 @@ fig_mom.add_trace(go.Bar(
     x=c_mom.index, y=c_mom, name="Core MoM",     marker_color="#ff7f0e", hovertemplate='%{y:.2f}%'), row=2, col=1)
 for s,e in recs_window:
     fig_mom.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                            fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=1, col=1)
+                            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0), row=1, col=1)
     fig_mom.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                            fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=2, col=1)
+                            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0), row=2, col=1)
 fig_mom.update_yaxes(title_text="% MoM", row=1, col=1)
 fig_mom.update_yaxes(title_text="% MoM", row=2, col=1)
 fig_mom.update_layout(
@@ -183,9 +183,9 @@ fig_core.add_trace(go.Scatter(
     x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4", mode="lines+markers", hovertemplate='%{y:.2f}%'), row=2, col=1)
 for s,e in recs_window:
     fig_core.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=1, col=1)
+                             fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0), row=1, col=1)
     fig_core.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=2, col=1)
+                             fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0), row=2, col=1)
 fig_core.update_yaxes(title_text="Index Level", row=1, col=1)
 fig_core.update_yaxes(title_text="% (annualised)", row=2, col=1)
 fig_core.update_layout(
