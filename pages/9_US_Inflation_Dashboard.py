@@ -1,16 +1,38 @@
 import streamlit as st
 import pandas as pd
-from pandas_datareader.data import DataReader
+import io, requests
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
 import matplotlib.pyplot as plt
 plt.style.use("default")
 
-# --------------------------------------------------
-# PAGE CONFIG
-# --------------------------------------------------
 st.set_page_config(page_title="US CPI Dashboard", layout="wide")
+
+# --- Robust FRED CSV loader (no pandas_datareader required) ---
+FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}"
+
+@st.cache_data(show_spinner=False, ttl=6*60*60)
+def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
+    def fetch():
+        r = requests.get(FRED_CSV.format(sid=series_id), timeout=10)
+        if "text/csv" not in r.headers.get("Content-Type", ""):
+            raise ValueError("FRED did not return CSV")
+        return pd.read_csv(io.StringIO(r.text))
+    try:
+        df = fetch()
+    except Exception:
+        df = fetch()
+    if "DATE" not in df or series_id not in df:
+        st.error(f"Could not load {series_id} from FRED: column missing")
+        return pd.Series(dtype=float)
+    df["DATE"] = pd.to_datetime(df["DATE"])
+    s = (df.set_index("DATE")[series_id]
+           .replace({".": None})
+           .astype(float)
+           .asfreq("MS")
+           .ffill())
+    return s.loc[start:]
 
 # --------------------------------------------------
 # SIDEBAR: About & Period Selector
@@ -32,17 +54,6 @@ with st.sidebar:
 # --------------------------------------------------
 # DATA LOADING
 # --------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
-    try:
-        df = DataReader(series_id, "fred", start)
-        s = df[series_id].copy()
-        return s.asfreq("MS").ffill()
-    except Exception as e:
-        st.error(f"Could not load {series_id} from FRED: {e}")
-        return pd.Series(dtype=float)
-
-# Fetch series
 start_date_full = "1990-01-01"
 headline = load_series("CPIAUCNS", start_date_full)
 core     = load_series("CPILFESL", start_date_full)
@@ -76,7 +87,6 @@ else:
     st.error(f"Invalid period selection: {period}")
     st.stop()
 
-# Optional: Allow manual override with a date slider
 manual_range = st.sidebar.checkbox("Custom date range")
 if manual_range:
     slider = st.sidebar.slider(
@@ -89,7 +99,6 @@ if manual_range:
     start_date = pd.Timestamp(slider[0])
     end_date = pd.Timestamp(slider[1])
 
-# Slice all series for window
 idx = (headline.index >= start_date) & (headline.index <= end_date)
 h_yoy = headline_yoy.loc[idx]
 c_yoy = core_yoy.loc[idx]
@@ -113,9 +122,7 @@ def get_recessions(flag: pd.Series):
     starts = f[(f==1)&(dif==1)].index
     if f.iloc[0]==1: starts = starts.insert(0,f.index[0])
     ends = f[(f==0)&(dif==-1)].index
-    # Patch for rare bug: Recession starts but never ends in data
     if len(ends)<len(starts): ends = ends.append(pd.Index([f.index[-1]]))
-    # Patch for instant recessions (same start and end)
     return [(s, e) for s, e in zip(starts, ends) if e >= s]
 
 recs = get_recessions(recess)
@@ -124,7 +131,6 @@ recs_window = within_window(recs, start_date, end_date)
 # --------------------------------------------------
 # BUILD CHARTS
 # --------------------------------------------------
-# 1) YoY
 fig_yoy = go.Figure()
 fig_yoy.add_trace(go.Scatter(
     x=h_yoy.index, y=h_yoy, name="Headline CPI YoY", line_color="#1f77b4", hovertemplate='%{y:.2f}%'))
@@ -150,7 +156,6 @@ fig_yoy.update_layout(
     )
 )
 
-# 2) MoM bars
 fig_mom = make_subplots(
     rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
     subplot_titles=("Headline CPI MoM %", "Core CPI MoM %"))
@@ -169,11 +174,10 @@ fig_mom.update_layout(
     showlegend=False,
     hovermode="x unified",
     margin=dict(t=80),
-    xaxis=dict(rangeslider=dict(visible=False)),      # disable side zoom top
-    xaxis2=dict(rangeslider=dict(visible=False))      # disable side zoom bottom
+    xaxis=dict(rangeslider=dict(visible=False)),
+    xaxis2=dict(rangeslider=dict(visible=False))
 )
 
-# 3) Core index & 3M ann
 fig_core = make_subplots(
     rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
     subplot_titles=("Core CPI Index", "3‑Mo Annualised Core CPI %"))
@@ -198,16 +202,12 @@ fig_core.update_layout(
         xanchor="right",
         x=1
     ),
-    xaxis=dict(rangeslider=dict(visible=False)),      # disable side zoom top
-    xaxis2=dict(rangeslider=dict(visible=False))      # disable side zoom bottom
+    xaxis=dict(rangeslider=dict(visible=False)),
+    xaxis2=dict(rangeslider=dict(visible=False))
 )
 
-# --------------------------------------------------
-# RENDER: HEADLINE + DELTA BOX
-# --------------------------------------------------
 st.title("US Inflation Dashboard")
 
-# Cool addition: Headline/Core latest values + delta
 latest_date = h_yoy.index.max()
 headline_latest = h_yoy.iloc[-1]
 core_latest = c_yoy.iloc[-1]
@@ -218,12 +218,10 @@ cols = st.columns(2)
 cols[0].metric("Headline CPI YoY", f"{headline_latest:.2f}%", f"{(headline_latest - headline_prev):+.2f}%" if headline_prev else "0.00%")
 cols[1].metric("Core CPI YoY", f"{core_latest:.2f}%", f"{(core_latest - core_prev):+.2f}%" if core_prev else "0.00%")
 
-# Main plots
 st.plotly_chart(fig_yoy,  use_container_width=True)
 st.plotly_chart(fig_mom,  use_container_width=True)
 st.plotly_chart(fig_core, use_container_width=True)
 
-# Download section
 with st.expander("Download Data"):
     combined = pd.DataFrame({
         "Headline CPI": headline.loc[idx],
@@ -242,7 +240,7 @@ with st.expander("Download Data"):
 with st.expander("Methodology & Sources", expanded=False):
     st.markdown(
         """
-        **Data:** FRED via pandas-datareader  
+        **Data:** FRED via direct CSV  
         **Series:** Headline CPI (CPIAUCNS), Core CPI (CPILFESL), Recessions (USREC)  
         **3‑Mo annualised formula:** ((CPI_t / CPI_{t-3}) ** 4 – 1) × 100
         """
