@@ -97,14 +97,14 @@ if manual_range:
 
 # Slice all series for window (now everything is perfectly aligned)
 idx = (canonical_index >= start_date) & (canonical_index <= end_date)
-headline_window = headline_aligned.loc[idx]
-core_window     = core_aligned.loc[idx]
-h_yoy           = headline_yoy_aligned.loc[idx]
-c_yoy           = core_yoy_aligned.loc[idx]
-h_mom           = headline_mom_aligned.loc[idx]
-c_mom           = core_mom_aligned.loc[idx]
-c_3m            = core_3m_ann_aligned.loc[idx]
-recess_window   = recess_aligned.loc[idx]
+headline_window = headline_aligned[idx]
+core_window     = core_aligned[idx]
+h_yoy           = headline_yoy_aligned[idx]
+c_yoy           = core_yoy_aligned[idx]
+h_mom           = headline_mom_aligned[idx]
+c_mom           = core_mom_aligned[idx]
+c_3m            = core_3m_ann_aligned[idx]
+recess_window   = recess_aligned[idx]
 
 # --------------------------------------------------
 # Recession shading: extract periods
@@ -231,21 +231,21 @@ st.plotly_chart(fig_yoy,  use_container_width=True)
 st.plotly_chart(fig_mom,  use_container_width=True)
 st.plotly_chart(fig_core, use_container_width=True)
 
-# Download section
-with st.expander("Download Data"):
-    combined = pd.DataFrame({
-        "Headline CPI": headline_window,
-        "Core CPI": core_window,
-        "Headline YoY (%)": h_yoy,
-        "Core YoY (%)": c_yoy,
-        "Headline MoM (%)": h_mom,
-        "Core MoM (%)": c_mom,
-        "Core 3M Ann. (%)": c_3m,
-        "Recession Flag": recess_window,
-    })
-    st.download_button(
-        "Download CSV", combined.to_csv(index=True), file_name="us_cpi_data.csv", mime="text/csv"
-    )
+# # Download section (REMOVED)
+# with st.expander("Download Data"):
+#     combined = pd.DataFrame({
+#         "Headline CPI": headline_window,
+#         "Core CPI": core_window,
+#         "Headline YoY (%)": h_yoy,
+#         "Core YoY (%)": c_yoy,
+#         "Headline MoM (%)": h_mom,
+#         "Core MoM (%)": c_mom,
+#         "Core 3M Ann. (%)": c_3m,
+#         "Recession Flag": recess_window,
+#     })
+#     st.download_button(
+#         "Download CSV", combined.to_csv(index=True), file_name="us_cpi_data.csv", mime="text/csv"
+#     )
 
 with st.expander("Methodology & Sources", expanded=False):
     st.markdown(
