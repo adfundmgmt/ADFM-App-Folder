@@ -231,21 +231,7 @@ st.plotly_chart(fig_yoy,  use_container_width=True)
 st.plotly_chart(fig_mom,  use_container_width=True)
 st.plotly_chart(fig_core, use_container_width=True)
 
-# # Download section (REMOVED)
-# with st.expander("Download Data"):
-#     combined = pd.DataFrame({
-#         "Headline CPI": headline_window,
-#         "Core CPI": core_window,
-#         "Headline YoY (%)": h_yoy,
-#         "Core YoY (%)": c_yoy,
-#         "Headline MoM (%)": h_mom,
-#         "Core MoM (%)": c_mom,
-#         "Core 3M Ann. (%)": c_3m,
-#         "Recession Flag": recess_window,
-#     })
-#     st.download_button(
-#         "Download CSV", combined.to_csv(index=True), file_name="us_cpi_data.csv", mime="text/csv"
-#     )
+# All download and combined DataFrame code is fully deleted, not commented
 
 with st.expander("Methodology & Sources", expanded=False):
     st.markdown(
