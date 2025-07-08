@@ -38,8 +38,8 @@ def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
         df = DataReader(series_id, "fred", start)
         s = df[series_id].copy()
         return s.asfreq("MS").ffill()
-    except Exception as e:
-        st.error(f"Could not load {series_id} from FRED: {e}")
+    except Exception:
+        # Fail silently: do not show any message to user.
         return pd.Series(dtype=float)
 
 # Fetch series
@@ -48,6 +48,7 @@ headline = load_series("CPIAUCNS", start_date_full)
 core     = load_series("CPILFESL", start_date_full)
 recess   = load_series("USREC",    start_date_full)
 
+# If any series fails, fail silently (show nothing further)
 if headline.empty or core.empty or recess.empty:
     st.stop()
 
@@ -73,7 +74,6 @@ elif period.endswith("Y"):
     years = int(period[:-1])
     start_date = end_date - pd.DateOffset(years=years)
 else:
-    st.error(f"Invalid period selection: {period}")
     st.stop()
 
 # Optional: Allow manual override with a date slider
@@ -166,86 +166,4 @@ for s,e in recs_window:
 fig_mom.update_yaxes(title_text="% MoM", row=1, col=1)
 fig_mom.update_yaxes(title_text="% MoM", row=2, col=1)
 fig_mom.update_layout(
-    showlegend=False,
-    hovermode="x unified",
-    margin=dict(t=80),
-    xaxis=dict(rangeslider=dict(visible=False)),      # disable side zoom top
-    xaxis2=dict(rangeslider=dict(visible=False))      # disable side zoom bottom
-)
-
-# 3) Core index & 3M ann
-fig_core = make_subplots(
-    rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-    subplot_titles=("Core CPI Index", "3‑Mo Annualised Core CPI %"))
-fig_core.add_trace(go.Scatter(
-    x=core.loc[idx].index, y=core.loc[idx], name="Core Index", line_color="#ff7f0e", mode="lines+markers", hovertemplate='%{y:.2f}'), row=1, col=1)
-fig_core.add_trace(go.Scatter(
-    x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4", mode="lines+markers", hovertemplate='%{y:.2f}%'), row=2, col=1)
-for s,e in recs_window:
-    fig_core.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=1, col=1)
-    fig_core.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                             fillcolor="rgba(200,0,0,0.15)", opacity=0.3, layer="below", line_width=0), row=2, col=1)
-fig_core.update_yaxes(title_text="Index Level", row=1, col=1)
-fig_core.update_yaxes(title_text="% (annualised)", row=2, col=1)
-fig_core.update_layout(
-    hovermode="x unified",
-    margin=dict(t=80),
-    legend=dict(
-        orientation="h",
-        yanchor="bottom",
-        y=1.05,
-        xanchor="right",
-        x=1
-    ),
-    xaxis=dict(rangeslider=dict(visible=False)),      # disable side zoom top
-    xaxis2=dict(rangeslider=dict(visible=False))      # disable side zoom bottom
-)
-
-# --------------------------------------------------
-# RENDER: HEADLINE + DELTA BOX
-# --------------------------------------------------
-st.title("US Inflation Dashboard")
-
-# Cool addition: Headline/Core latest values + delta
-latest_date = h_yoy.index.max()
-headline_latest = h_yoy.iloc[-1]
-core_latest = c_yoy.iloc[-1]
-headline_prev = h_yoy.iloc[-2] if len(h_yoy) > 1 else None
-core_prev = c_yoy.iloc[-2] if len(c_yoy) > 1 else None
-
-cols = st.columns(2)
-cols[0].metric("Headline CPI YoY", f"{headline_latest:.2f}%", f"{(headline_latest - headline_prev):+.2f}%" if headline_prev else "0.00%")
-cols[1].metric("Core CPI YoY", f"{core_latest:.2f}%", f"{(core_latest - core_prev):+.2f}%" if core_prev else "0.00%")
-
-# Main plots
-st.plotly_chart(fig_yoy,  use_container_width=True)
-st.plotly_chart(fig_mom,  use_container_width=True)
-st.plotly_chart(fig_core, use_container_width=True)
-
-# Download section
-with st.expander("Download Data"):
-    combined = pd.DataFrame({
-        "Headline CPI": headline.loc[idx],
-        "Core CPI": core.loc[idx],
-        "Headline YoY (%)": h_yoy,
-        "Core YoY (%)": c_yoy,
-        "Headline MoM (%)": h_mom,
-        "Core MoM (%)": c_mom,
-        "Core 3M Ann. (%)": c_3m,
-        "Recession Flag": recess.loc[idx],
-    })
-    st.download_button(
-        "Download CSV", combined.to_csv(index=True), file_name="us_cpi_data.csv", mime="text/csv"
-    )
-
-with st.expander("Methodology & Sources", expanded=False):
-    st.markdown(
-        """
-        **Data:** FRED via pandas-datareader  
-        **Series:** Headline CPI (CPIAUCNS), Core CPI (CPILFESL), Recessions (USREC)  
-        **3‑Mo annualised formula:** ((CPI_t / CPI_{t-3}) ** 4 – 1) × 100
-        """
-    )
-
-st.caption("© 2025 AD Fund Management LP")
+    showlegend=Fals
