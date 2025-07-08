@@ -51,6 +51,9 @@ recess   = load_series("USREC",    start_date_full)
 if headline.empty or core.empty or recess.empty:
     st.stop()
 
+# **Alignment fix here**
+recess_aligned = recess.reindex(headline.index)
+
 # --------------------------------------------------
 # TRANSFORMATIONS
 # --------------------------------------------------
@@ -97,6 +100,9 @@ h_mom = headline_mom.loc[idx]
 c_mom = core_mom.loc[idx]
 c_3m  = core_3m_ann.loc[idx]
 
+# **ALSO align and slice recessions for download**
+recess_window = recess_aligned.loc[idx]
+
 # Filter recessions overlapping window
 def within_window(rec_list, start, end):
     out = []
@@ -118,7 +124,7 @@ def get_recessions(flag: pd.Series):
     # Patch for instant recessions (same start and end)
     return [(s, e) for s, e in zip(starts, ends) if e >= s]
 
-recs = get_recessions(recess)
+recs = get_recessions(recess_aligned)
 recs_window = within_window(recs, start_date, end_date)
 
 # --------------------------------------------------
@@ -233,7 +239,7 @@ with st.expander("Download Data"):
         "Headline MoM (%)": h_mom,
         "Core MoM (%)": c_mom,
         "Core 3M Ann. (%)": c_3m,
-        "Recession Flag": recess.loc[idx],
+        "Recession Flag": recess_window,
     })
     st.download_button(
         "Download CSV", combined.to_csv(index=True), file_name="us_cpi_data.csv", mime="text/csv"
