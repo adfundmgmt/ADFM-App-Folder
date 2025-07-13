@@ -21,18 +21,14 @@ st.title("Ticker Correlation Dashboard")
 with st.sidebar:
     st.markdown("## About This Tool")
     st.markdown("""
-    **AD Fund Management LP — Correlation Regime Dashboard**
+    Institutional dashboard for analyzing dynamic correlations and risk across up to three tickers (stocks, ETFs, or indices).
 
-    This tool provides institutional-grade, multi-asset correlation and risk analytics for up to three tickers (stocks, ETFs, or indices). Built for professional portfolio managers and analysts, it enables you to:
-
-    • **Quantify Relationships:** Track the evolving Spearman (rank-based) correlation regimes between two or three tickers across multiple look-back windows.
-    • **Return Frequency Control:** Analyze daily, weekly, or monthly log returns—resampled directly from Yahoo Finance data.
-    • **Rolling Risk and Regime Analytics:** Visualize rolling correlations and annualized volatility to identify breakdowns or regime shifts.
-    • **Heatmap and Table Views:** Get both interactive heatmaps and color-coded regime tables for quick, actionable insight.
-    • **Institutional Output:** All data can be exported as clean CSVs or a single ZIP package—ready for further analysis or reporting.
-
-    **Designed for fast, robust workflows with error handling, professional labeling, and direct download support.**
+    • Tracks Spearman (rank-based) correlations across multiple look-back windows  
+    • Supports daily, weekly, or monthly log returns  
+    • Rolling volatility and regime shift detection  
+    • Interactive heatmaps, regime tables, and export-ready data
     """)
+
     st.markdown("---")
     st.header("Inputs")
     ticker_x = st.text_input("Ticker X", value="AAPL", help="First ticker (required)").strip().upper()
