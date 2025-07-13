@@ -79,6 +79,27 @@ def get_rolling_corr(s1, s2, window):
     s2r = s2.rank()
     return s1r.rolling(window).corr(s2r)
 
+def spearman_corr_matrix(df):
+    # Rank transform then pearson
+    ranked = df.rank(axis=0)
+    return ranked.corr(method="pearson")
+
+def emoji_corr(val):
+    if pd.isnull(val):
+        return ""
+    if val > 0.7:
+        return "🟢"
+    if val > 0.3:
+        return "🟡"
+    if val < -0.3:
+        return "🔴"
+    return "⚪️"
+
+def pct_fmt(val):
+    if pd.isnull(val):
+        return ""
+    return f"{val*100:.1f}%"
+
 # Validate tickers up front
 bad_tickers = []
 for tk in [ticker_x, ticker_y, ticker_z]:
@@ -146,7 +167,7 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# ─── Rolling Correlation Chart (Plotly, Spearman) ───────
+# ─── Rolling Correlation Chart (Plotly, Spearman, % y-axis) ───────
 st.subheader("Rolling Correlation Chart (Spearman)")
 corr_df = pd.DataFrame(index=returns.index)
 corr_df[f"{ticker_x} vs {ticker_y}"] = get_rolling_corr(returns[ticker_x], returns[ticker_y], roll_window)
@@ -159,19 +180,19 @@ fig_corr = go.Figure()
 for col in corr_df.columns:
     fig_corr.add_trace(go.Scatter(
         x=corr_df.index,
-        y=corr_df[col],
+        y=corr_df[col]*100,  # convert to percent
         mode="lines",
         name=col,
         line=dict(width=2)
     ))
 fig_corr.update_layout(
-    yaxis_title="Rolling Correlation (Spearman)",
+    yaxis_title="Rolling Correlation (Spearman, %)",
     xaxis_title="Date",
     legend_title="Pairs",
     template="plotly_white",
     height=400,
     hovermode="x unified",
-    yaxis=dict(range=[-1, 1])
+    yaxis=dict(range=[-100, 100])
 )
 st.plotly_chart(fig_corr, use_container_width=True)
 
@@ -197,13 +218,8 @@ fig_vol.update_layout(
 )
 st.plotly_chart(fig_vol, use_container_width=True)
 
-# ─── Correlation Matrix Heatmap (Spearman) ─────────────
+# ─── Correlation Matrix Heatmap (Spearman, % text) ─────────────
 st.subheader("Correlation Matrix (Look-back Windows, Spearman)")
-def spearman_corr_matrix(df):
-    # Rank transform then pearson
-    ranked = df.rank(axis=0)
-    return ranked.corr(method="pearson")
-
 corr_matrices = {}
 for label, since in windows.items():
     ret_slice = returns.loc[returns.index >= pd.Timestamp(since)]
@@ -211,18 +227,19 @@ for label, since in windows.items():
     corr_matrices[label] = mat
 
 selected_window = st.selectbox("Select window for heatmap:", list(windows.keys()), index=0)
+matrix_pct = corr_matrices[selected_window].applymap(lambda v: v*100)
 fig_heat = px.imshow(
-    corr_matrices[selected_window].round(2),
+    matrix_pct.round(1),
     text_auto=True,
     aspect="auto",
     color_continuous_scale="RdBu",
-    zmin=-1, zmax=1,
+    zmin=-100, zmax=100,
     title=f"Correlation Heatmap (Spearman, {selected_window})"
 )
 fig_heat.update_layout(height=340)
 st.plotly_chart(fig_heat, use_container_width=True)
 
-# ─── Correlation Table by Window (Spearman) ────────────
+# ─── Enhanced Correlation Table by Window (X% format, emojis) ────────────
 st.subheader("Correlation Table by Look-Back Window (Spearman)")
 rows = []
 for label, since in windows.items():
@@ -231,26 +248,37 @@ for label, since in windows.items():
     row = {"Window": label}
     # X↔Y
     try:
-        row["X vs Y"] = mat.loc[ticker_x, ticker_y].round(3)
-    except: row["X vs Y"] = np.nan
+        v = mat.loc[ticker_x, ticker_y]
+        row["X vs Y"] = f"{v*100:.1f}% {emoji_corr(v)}"
+    except: row["X vs Y"] = ""
     if ticker_z:
         try:
-            row["X vs Z"] = mat.loc[ticker_x, ticker_z].round(3)
-        except: row["X vs Z"] = np.nan
+            v = mat.loc[ticker_x, ticker_z]
+            row["X vs Z"] = f"{v*100:.1f}% {emoji_corr(v)}"
+        except: row["X vs Z"] = ""
         try:
-            row["Y vs Z"] = mat.loc[ticker_y, ticker_z].round(3)
-        except: row["Y vs Z"] = np.nan
+            v = mat.loc[ticker_y, ticker_z]
+            row["Y vs Z"] = f"{v*100:.1f}% {emoji_corr(v)}"
+        except: row["Y vs Z"] = ""
     rows.append(row)
-df_corr = pd.DataFrame(rows)
-st.dataframe(df_corr.set_index("Window"), height=340)
+df_corr_disp = pd.DataFrame(rows).set_index("Window")
+st.dataframe(df_corr_disp, height=340)
 
-# ─── Data Download (ZIP all outputs) ───────────────────
+# ─── Data Download (ZIP all outputs, float corr) ───────────────────
 with st.expander("Download All Outputs (.zip)"):
     zbuf = io.BytesIO()
     with zipfile.ZipFile(zbuf, "w") as zipf:
         zipf.writestr("indexed_prices.csv", prices.to_csv(index=True))
         zipf.writestr("log_returns.csv", returns.to_csv(index=True))
-        zipf.writestr("correlation_table.csv", df_corr.to_csv(index=False))
+        # Also save the numeric (not emoji) version of correlation table for quant use
+        df_corr_numeric = pd.DataFrame([
+            {"Window": row["Window"], **{k: mat.loc[ticker_x, ticker_y] if k == "X vs Y"
+                else mat.loc[ticker_x, ticker_z] if k == "X vs Z"
+                else mat.loc[ticker_y, ticker_z] if k == "Y vs Z" else None
+                for k in row.keys() if k != "Window"}}
+            for row, mat in zip(rows, [spearman_corr_matrix(returns.loc[returns.index >= pd.Timestamp(since)][overlay_tickers]) for _, since in windows.items()])
+        ]).set_index("Window")
+        zipf.writestr("correlation_table.csv", df_corr_numeric.to_csv())
         for label, mat in corr_matrices.items():
             zipf.writestr(f"corr_matrix_{label}.csv", mat.to_csv(index=True))
     st.download_button(
