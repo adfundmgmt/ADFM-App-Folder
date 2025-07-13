@@ -21,7 +21,7 @@ st.title("Ticker Correlation Dashboard")
 with st.sidebar:
     st.markdown("## About This Tool")
     st.markdown("""
-    Dashboard for analyzing dynamic correlations and risk across up to three tickers (stocks, ETFs, or indices).
+    Dashboard for analyzing dynamic correlations and risk across up to three tickers (stocks, commodities, ETFs, or indices).
 
     • Tracks Spearman (rank-based) correlations across multiple look-back windows  
     • Supports daily, weekly, or monthly log returns  
