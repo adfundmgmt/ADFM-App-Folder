@@ -216,6 +216,8 @@ st.plotly_chart(plot_core(core.loc[idx], c_3m), use_container_width=True)
 # --- Download ---
 with st.expander("Download Data"):
     include_rec = st.checkbox("Include recession flag", value=False)
+    # Align the recession flag series index to match headline/core index to avoid IndexError
+    recession_aligned = recess.reindex(headline.index)
     data_dict = {
         "Headline CPI": headline.loc[idx],
         "Core CPI": core.loc[idx],
@@ -226,7 +228,7 @@ with st.expander("Download Data"):
         "Core 3M Ann. (%)": c_3m,
     }
     if include_rec:
-        data_dict["Recession Flag"] = recess.loc[idx]
+        data_dict["Recession Flag"] = recession_aligned.loc[idx]
     combined = pd.DataFrame(data_dict)
     st.download_button(
         "Download CSV", combined.to_csv(index=True), file_name="us_cpi_data.csv", mime="text/csv"
