@@ -19,14 +19,19 @@ st.title("Ticker Correlation Dashboard")
 
 # ─── Sidebar: About + Inputs ──────────────────────────────
 with st.sidebar:
-    st.markdown("## About")
+    st.markdown("## About This Tool")
     st.markdown("""
-    Institutional correlation regime dashboard  
-    • Up to 3 tickers (equity, ETF, or index)  
-    • Daily, weekly, or monthly log returns  
-    • Spearman (rank-based) correlations  
-    • Rolling annualized volatility  
-    • Download all outputs  
+    **AD Fund Management LP — Correlation Regime Dashboard**
+
+    This tool provides institutional-grade, multi-asset correlation and risk analytics for up to three tickers (stocks, ETFs, or indices). Built for professional portfolio managers and analysts, it enables you to:
+
+    • **Quantify Relationships:** Track the evolving Spearman (rank-based) correlation regimes between two or three tickers across multiple look-back windows.
+    • **Return Frequency Control:** Analyze daily, weekly, or monthly log returns—resampled directly from Yahoo Finance data.
+    • **Rolling Risk and Regime Analytics:** Visualize rolling correlations and annualized volatility to identify breakdowns or regime shifts.
+    • **Heatmap and Table Views:** Get both interactive heatmaps and color-coded regime tables for quick, actionable insight.
+    • **Institutional Output:** All data can be exported as clean CSVs or a single ZIP package—ready for further analysis or reporting.
+
+    **Designed for fast, robust workflows with error handling, professional labeling, and direct download support.**
     """)
     st.markdown("---")
     st.header("Inputs")
@@ -35,6 +40,7 @@ with st.sidebar:
     ticker_z = st.text_input("Ticker Z (optional)", value="", help="Third ticker or benchmark (optional)").strip().upper()
     freq = st.selectbox("Return Frequency", options=["Daily", "Weekly", "Monthly"], index=0)
     roll_window = st.slider("Rolling Window (periods)", 20, 120, value=60)
+
 
 # ─── Helper Functions ──────────────────────────────
 def clean_ticker(t):
