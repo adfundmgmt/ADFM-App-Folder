@@ -18,32 +18,21 @@ st.title("Ticker Correlation Dashboard")
 
 # ─── Sidebar: About + Inputs ──────────────────────────────
 with st.sidebar:
-    st.markdown("## About This Tool")
+    st.markdown("## About")
     st.markdown("""
-    **Purpose**  
-    Provides a robust, institutional view of correlations and volatility for up to 3 tickers.
-
-    **Features**  
-    • Supports daily, weekly, monthly log returns  
-    • Spearman correlation (rank-based, default for all analytics)  
-    • Interactive, professional Plotly charts  
-    • Rolling volatility  
-    • Correlation matrix heatmap  
-    • Download all outputs  
+    Correlation regime dashboard for two or three tickers.  
+    All correlations are **Spearman** (rank-based).  
+    Data: Yahoo Finance (Adj Close, total return).
     """)
     st.markdown("---")
     st.header("Inputs")
-    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security").strip().upper()
-    ticker_y = st.text_input("Ticker Y", value="MSFT").strip().upper()
-    ticker_z = st.text_input(
-        "Ticker Z (optional)", 
-        value="", 
-        help="Benchmark/index (optional; leave blank to skip)."
-    ).strip().upper()
-    freq = st.selectbox("Return Frequency", options=["Daily", "Weekly", "Monthly"], index=0)
+    ticker_x = st.text_input("Ticker X", value="AAPL").strip().upper()
+    ticker_y = st.text_input("Ticker Y", value="MSFT").strip().upper()
+    ticker_z = st.text_input("Ticker Z (optional)", value="", help="Benchmark or index (optional)").strip().upper()
+    freq = st.selectbox("Return Frequency", ["Daily", "Weekly", "Monthly"], index=0)
     roll_window = st.slider("Rolling Window (periods)", 20, 120, value=60)
 
-# ─── Helper: Fetch and Validate ───────────────────────────
+# ─── Helpers ───────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def fetch_prices(symbols, start, end):
     try:
@@ -85,22 +74,18 @@ def spearman_corr_matrix(df):
     return ranked.corr(method="pearson")
 
 def emoji_corr(val):
-    if pd.isnull(val):
-        return ""
-    if val > 0.7:
-        return "🟢"
-    if val > 0.3:
-        return "🟡"
-    if val < -0.3:
-        return "🔴"
+    if pd.isnull(val): return ""
+    if val > 0.7: return "🟢"
+    if val > 0.3: return "🟡"
+    if val < -0.3: return "🔴"
     return "⚪️"
 
-def pct_fmt(val):
+def pct_fmt(val, nan_as_blank=True):
     if pd.isnull(val):
-        return ""
+        return "" if nan_as_blank else "N/A"
     return f"{val*100:.1f}%"
 
-# Validate tickers up front
+# ─── Validate ─────────────────────────────────────────────
 bad_tickers = []
 for tk in [ticker_x, ticker_y, ticker_z]:
     if tk and not validate_ticker(tk):
@@ -109,13 +94,12 @@ if bad_tickers:
     st.error(f"Invalid ticker(s): {', '.join(bad_tickers)}. Please correct.")
     st.stop()
 
-# Prepare date range
+# ─── Download data ───────────────────────────────────────
 end_date = dt.date.today()
 windows = {
     "YTD": dt.date(end_date.year, 1, 1),
     "3M": end_date - relativedelta(months=3),
     "6M": end_date - relativedelta(months=6),
-    "9M": end_date - relativedelta(months=9),
     "1Y": end_date - relativedelta(years=1),
     "3Y": end_date - relativedelta(years=3),
     "5Y": end_date - relativedelta(years=5),
@@ -123,72 +107,63 @@ windows = {
 }
 earliest_date = min(windows.values()) - relativedelta(months=1)
 symbols = sorted(set(filter(bool, [ticker_x, ticker_y, ticker_z])))
-
 prices, fetch_err = fetch_prices(symbols, start=earliest_date, end=end_date)
 if fetch_err or prices is None or prices.empty:
     st.error(fetch_err or "No price data returned — check ticker symbols and try again.")
     st.stop()
 
-# ─── Frequency Handling ───────────────────────────
+# ─── Resample to frequency ───────────────────────────────
 def resample_prices(prices, freq):
-    if freq == "Daily":
-        return prices
-    elif freq == "Weekly":
-        return prices.resample("W-FRI").last()
-    elif freq == "Monthly":
-        return prices.resample("M").last()
-    else:
-        raise ValueError("Unknown frequency.")
+    if freq == "Daily": return prices
+    if freq == "Weekly": return prices.resample("W-FRI").last()
+    if freq == "Monthly": return prices.resample("M").last()
+    raise ValueError("Unknown frequency.")
 
 prices = resample_prices(prices, freq)
 returns = np.log(prices / prices.shift(1)).dropna(how="all")
 
-# ─── Overlay: Indexed Price Chart (Plotly) ──────────────
-st.subheader("Indexed Price Overlays")
-overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
-overlay_tickers = [t for t in overlay_tickers if t in prices.columns]
-fig = go.Figure()
-for tk in overlay_tickers:
-    indexed = prices[tk] / prices[tk].iloc[0] * 100
-    fig.add_trace(go.Scatter(
-        x=indexed.index,
-        y=indexed,
-        mode="lines",
-        name=tk,
-        line=dict(width=2)
-    ))
-fig.update_layout(
-    yaxis_title="Indexed Price (Base=100)",
-    xaxis_title="Date",
-    legend_title="Ticker",
-    template="plotly_white",
-    height=400,
-    hovermode="x unified"
-)
-st.plotly_chart(fig, use_container_width=True)
+# --- Key ticker pairs for correlations ---
+pairs = [(ticker_x, ticker_y)]
+if ticker_z:
+    pairs += [(ticker_x, ticker_z), (ticker_y, ticker_z)]
 
-# ─── Rolling Correlation Chart (Plotly, Spearman, % y-axis) ───────
-st.subheader("Rolling Correlation Chart (Spearman)")
-corr_df = pd.DataFrame(index=returns.index)
-corr_df[f"{ticker_x} vs {ticker_y}"] = get_rolling_corr(returns[ticker_x], returns[ticker_y], roll_window)
-if ticker_z and ticker_z in returns.columns:
-    corr_df[f"{ticker_x} vs {ticker_z}"] = get_rolling_corr(returns[ticker_x], returns[ticker_z], roll_window)
-    corr_df[f"{ticker_y} vs {ticker_z}"] = get_rolling_corr(returns[ticker_y], returns[ticker_z], roll_window)
-corr_df = corr_df.dropna(how="all")
+# ─── 1. Key regime stats summary ─────────────────────────
+with st.container():
+    st.subheader("Latest & Regime Stats")
+    regime_rows = []
+    for pair in pairs:
+        c_label = f"{pair[0]} vs {pair[1]}"
+        roll = get_rolling_corr(returns[pair[0]], returns[pair[1]], roll_window)
+        latest = roll.dropna().iloc[-1] if not roll.dropna().empty else np.nan
+        minv = roll.min()
+        maxv = roll.max()
+        medv = roll.median()
+        regime_rows.append({
+            "Pair": c_label,
+            "Latest": pct_fmt(latest),
+            "Median": pct_fmt(medv),
+            "Min": pct_fmt(minv),
+            "Max": pct_fmt(maxv),
+            "Regime": emoji_corr(latest)
+        })
+    df_regime = pd.DataFrame(regime_rows).set_index("Pair")
+    st.table(df_regime)
 
+# ─── 2. Rolling Correlation Plot (Spearman, % y-axis) ────
+st.subheader("Rolling Correlation")
 fig_corr = go.Figure()
-for col in corr_df.columns:
+for pair in pairs:
+    roll = get_rolling_corr(returns[pair[0]], returns[pair[1]], roll_window)
     fig_corr.add_trace(go.Scatter(
-        x=corr_df.index,
-        y=corr_df[col]*100,  # convert to percent
+        x=roll.index, y=roll*100,
         mode="lines",
-        name=col,
+        name=f"{pair[0]} vs {pair[1]}",
         line=dict(width=2)
     ))
 fig_corr.update_layout(
     yaxis_title="Rolling Correlation (Spearman, %)",
     xaxis_title="Date",
-    legend_title="Pairs",
+    legend_title="Pair",
     template="plotly_white",
     height=400,
     hovermode="x unified",
@@ -196,91 +171,48 @@ fig_corr.update_layout(
 )
 st.plotly_chart(fig_corr, use_container_width=True)
 
-# ─── Rolling Volatility Chart (Plotly) ────────────────
-st.subheader("Rolling Volatility (Annualized)")
-fig_vol = go.Figure()
-for tk in overlay_tickers:
-    vol = returns[tk].rolling(roll_window).std() * np.sqrt({"Daily":252, "Weekly":52, "Monthly":12}[freq])
-    fig_vol.add_trace(go.Scatter(
-        x=vol.index,
-        y=vol,
-        mode="lines",
-        name=tk,
-        line=dict(width=2)
-    ))
-fig_vol.update_layout(
-    yaxis_title="Annualized Volatility",
-    xaxis_title="Date",
-    legend_title="Ticker",
-    template="plotly_white",
-    height=400,
-    hovermode="x unified"
-)
-st.plotly_chart(fig_vol, use_container_width=True)
-
-# ─── Correlation Matrix Heatmap (Spearman, % text) ─────────────
-st.subheader("Correlation Matrix (Look-back Windows, Spearman)")
-corr_matrices = {}
+# ─── 3. Correlation Table by Window (Spearman, %) ────────
+st.subheader("Look-Back Window Correlations")
+rows = []
 for label, since in windows.items():
     ret_slice = returns.loc[returns.index >= pd.Timestamp(since)]
-    mat = spearman_corr_matrix(ret_slice[overlay_tickers])
-    corr_matrices[label] = mat
+    mat = spearman_corr_matrix(ret_slice)
+    row = {"Window": label}
+    for pair in pairs:
+        try:
+            val = mat.loc[pair[0], pair[1]]
+            row[f"{pair[0]} vs {pair[1]}"] = f"{pct_fmt(val)} {emoji_corr(val)}"
+        except:
+            row[f"{pair[0]} vs {pair[1]}"] = ""
+    rows.append(row)
+df_corr_disp = pd.DataFrame(rows).set_index("Window")
+st.dataframe(df_corr_disp, height=320)
 
-selected_window = st.selectbox("Select window for heatmap:", list(windows.keys()), index=0)
-matrix_pct = corr_matrices[selected_window].applymap(lambda v: v*100)
+# ─── 4. Heatmap for Selected Window (Spearman, %) ────────
+st.subheader("Correlation Matrix Heatmap")
+selected_window = st.selectbox("Window", list(windows.keys()), index=0)
+ret_slice = returns.loc[returns.index >= pd.Timestamp(windows[selected_window])]
+mat = spearman_corr_matrix(ret_slice)
+matrix_pct = mat.applymap(lambda v: v*100)
 fig_heat = px.imshow(
     matrix_pct.round(1),
     text_auto=True,
     aspect="auto",
     color_continuous_scale="RdBu",
     zmin=-100, zmax=100,
-    title=f"Correlation Heatmap (Spearman, {selected_window})"
+    title=f"Spearman Correlation Heatmap ({selected_window})"
 )
 fig_heat.update_layout(height=340)
 st.plotly_chart(fig_heat, use_container_width=True)
 
-# ─── Enhanced Correlation Table by Window (X% format, emojis) ────────────
-st.subheader("Correlation Table by Look-Back Window (Spearman)")
-rows = []
-for label, since in windows.items():
-    ret_slice = returns.loc[returns.index >= pd.Timestamp(since)]
-    mat = spearman_corr_matrix(ret_slice[overlay_tickers])
-    row = {"Window": label}
-    # X↔Y
-    try:
-        v = mat.loc[ticker_x, ticker_y]
-        row["X vs Y"] = f"{v*100:.1f}% {emoji_corr(v)}"
-    except: row["X vs Y"] = ""
-    if ticker_z:
-        try:
-            v = mat.loc[ticker_x, ticker_z]
-            row["X vs Z"] = f"{v*100:.1f}% {emoji_corr(v)}"
-        except: row["X vs Z"] = ""
-        try:
-            v = mat.loc[ticker_y, ticker_z]
-            row["Y vs Z"] = f"{v*100:.1f}% {emoji_corr(v)}"
-        except: row["Y vs Z"] = ""
-    rows.append(row)
-df_corr_disp = pd.DataFrame(rows).set_index("Window")
-st.dataframe(df_corr_disp, height=340)
-
-# ─── Data Download (ZIP all outputs, float corr) ───────────────────
-with st.expander("Download All Outputs (.zip)"):
+# ─── 5. Download ─────────────────────────────────────────
+with st.expander("Download Raw Data (.zip)"):
     zbuf = io.BytesIO()
     with zipfile.ZipFile(zbuf, "w") as zipf:
-        zipf.writestr("indexed_prices.csv", prices.to_csv(index=True))
-        zipf.writestr("log_returns.csv", returns.to_csv(index=True))
-        # Also save the numeric (not emoji) version of correlation table for quant use
-        df_corr_numeric = pd.DataFrame([
-            {"Window": row["Window"], **{k: mat.loc[ticker_x, ticker_y] if k == "X vs Y"
-                else mat.loc[ticker_x, ticker_z] if k == "X vs Z"
-                else mat.loc[ticker_y, ticker_z] if k == "Y vs Z" else None
-                for k in row.keys() if k != "Window"}}
-            for row, mat in zip(rows, [spearman_corr_matrix(returns.loc[returns.index >= pd.Timestamp(since)][overlay_tickers]) for _, since in windows.items()])
-        ]).set_index("Window")
-        zipf.writestr("correlation_table.csv", df_corr_numeric.to_csv())
-        for label, mat in corr_matrices.items():
-            zipf.writestr(f"corr_matrix_{label}.csv", mat.to_csv(index=True))
+        zipf.writestr("prices.csv", prices.to_csv(index=True))
+        zipf.writestr("returns.csv", returns.to_csv(index=True))
+        zipf.writestr("correlation_table.csv", df_corr_disp.to_csv())
+        zipf.writestr("window_corr_matrix.csv", mat.to_csv(index=True))
     st.download_button(
         "Download ZIP",
         data=zbuf.getvalue(),
