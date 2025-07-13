@@ -25,7 +25,7 @@ with st.sidebar:
 
     **Features**  
     • Supports daily, weekly, monthly log returns  
-    • Pearson & Spearman correlations  
+    • Spearman correlation (rank-based, default for all analytics)  
     • Interactive, professional Plotly charts  
     • Rolling volatility  
     • Correlation matrix heatmap  
@@ -41,7 +41,6 @@ with st.sidebar:
         help="Benchmark/index (optional; leave blank to skip)."
     ).strip().upper()
     freq = st.selectbox("Return Frequency", options=["Daily", "Weekly", "Monthly"], index=0)
-    corr_type = st.selectbox("Correlation Type", options=["Pearson", "Spearman"], index=0)
     roll_window = st.slider("Rolling Window (periods)", 20, 120, value=60)
 
 # ─── Helper: Fetch and Validate ───────────────────────────
@@ -73,6 +72,12 @@ def validate_ticker(ticker):
         return 'shortName' in info or 'symbol' in info
     except Exception:
         return False
+
+def get_rolling_corr(s1, s2, window):
+    # Spearman by default: rank transform before rolling Pearson
+    s1r = s1.rank()
+    s2r = s2.rank()
+    return s1r.rolling(window).corr(s2r)
 
 # Validate tickers up front
 bad_tickers = []
@@ -141,21 +146,13 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# ─── Rolling Correlation Chart (Plotly) ────────────────
-st.subheader("Rolling Correlation Chart")
+# ─── Rolling Correlation Chart (Plotly, Spearman) ───────
+st.subheader("Rolling Correlation Chart (Spearman)")
 corr_df = pd.DataFrame(index=returns.index)
-method = "pearson" if corr_type == "Pearson" else "spearman"
-
-corr_df[f"{ticker_x} vs {ticker_y}"] = (
-    returns[ticker_x].rolling(roll_window).corr(returns[ticker_y], method=method)
-)
+corr_df[f"{ticker_x} vs {ticker_y}"] = get_rolling_corr(returns[ticker_x], returns[ticker_y], roll_window)
 if ticker_z and ticker_z in returns.columns:
-    corr_df[f"{ticker_x} vs {ticker_z}"] = (
-        returns[ticker_x].rolling(roll_window).corr(returns[ticker_z], method=method)
-    )
-    corr_df[f"{ticker_y} vs {ticker_z}"] = (
-        returns[ticker_y].rolling(roll_window).corr(returns[ticker_z], method=method)
-    )
+    corr_df[f"{ticker_x} vs {ticker_z}"] = get_rolling_corr(returns[ticker_x], returns[ticker_z], roll_window)
+    corr_df[f"{ticker_y} vs {ticker_z}"] = get_rolling_corr(returns[ticker_y], returns[ticker_z], roll_window)
 corr_df = corr_df.dropna(how="all")
 
 fig_corr = go.Figure()
@@ -168,7 +165,7 @@ for col in corr_df.columns:
         line=dict(width=2)
     ))
 fig_corr.update_layout(
-    yaxis_title="Rolling Correlation",
+    yaxis_title="Rolling Correlation (Spearman)",
     xaxis_title="Date",
     legend_title="Pairs",
     template="plotly_white",
@@ -200,16 +197,19 @@ fig_vol.update_layout(
 )
 st.plotly_chart(fig_vol, use_container_width=True)
 
-# ─── Correlation Matrix Heatmap ────────────────────────
-st.subheader("Correlation Matrix (Look-back Windows)")
-# For each window, compute correlation matrix for entered tickers
+# ─── Correlation Matrix Heatmap (Spearman) ─────────────
+st.subheader("Correlation Matrix (Look-back Windows, Spearman)")
+def spearman_corr_matrix(df):
+    # Rank transform then pearson
+    ranked = df.rank(axis=0)
+    return ranked.corr(method="pearson")
+
 corr_matrices = {}
 for label, since in windows.items():
     ret_slice = returns.loc[returns.index >= pd.Timestamp(since)]
-    mat = ret_slice[overlay_tickers].corr(method=method)
+    mat = spearman_corr_matrix(ret_slice[overlay_tickers])
     corr_matrices[label] = mat
 
-# Show heatmap for latest window (YTD by default)
 selected_window = st.selectbox("Select window for heatmap:", list(windows.keys()), index=0)
 fig_heat = px.imshow(
     corr_matrices[selected_window].round(2),
@@ -217,28 +217,28 @@ fig_heat = px.imshow(
     aspect="auto",
     color_continuous_scale="RdBu",
     zmin=-1, zmax=1,
-    title=f"Correlation Heatmap ({selected_window})"
+    title=f"Correlation Heatmap (Spearman, {selected_window})"
 )
 fig_heat.update_layout(height=340)
 st.plotly_chart(fig_heat, use_container_width=True)
 
-# ─── Correlation Table by Window ───────────────────────
-st.subheader("Correlation Table by Look-Back Window")
+# ─── Correlation Table by Window (Spearman) ────────────
+st.subheader("Correlation Table by Look-Back Window (Spearman)")
 rows = []
 for label, since in windows.items():
     ret_slice = returns.loc[returns.index >= pd.Timestamp(since)]
+    mat = spearman_corr_matrix(ret_slice[overlay_tickers])
     row = {"Window": label}
     # X↔Y
     try:
-        row["X vs Y"] = ret_slice.corr(method=method).loc[ticker_x, ticker_y].round(3)
+        row["X vs Y"] = mat.loc[ticker_x, ticker_y].round(3)
     except: row["X vs Y"] = np.nan
-    # X↔Z and Y↔Z if Z provided
     if ticker_z:
         try:
-            row["X vs Z"] = ret_slice.corr(method=method).loc[ticker_x, ticker_z].round(3)
+            row["X vs Z"] = mat.loc[ticker_x, ticker_z].round(3)
         except: row["X vs Z"] = np.nan
         try:
-            row["Y vs Z"] = ret_slice.corr(method=method).loc[ticker_y, ticker_z].round(3)
+            row["Y vs Z"] = mat.loc[ticker_y, ticker_z].round(3)
         except: row["Y vs Z"] = np.nan
     rows.append(row)
 df_corr = pd.DataFrame(rows)
@@ -251,7 +251,6 @@ with st.expander("Download All Outputs (.zip)"):
         zipf.writestr("indexed_prices.csv", prices.to_csv(index=True))
         zipf.writestr("log_returns.csv", returns.to_csv(index=True))
         zipf.writestr("correlation_table.csv", df_corr.to_csv(index=False))
-        # Save all correlation matrices
         for label, mat in corr_matrices.items():
             zipf.writestr(f"corr_matrix_{label}.csv", mat.to_csv(index=True))
     st.download_button(
