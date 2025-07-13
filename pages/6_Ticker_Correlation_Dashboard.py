@@ -21,12 +21,12 @@ st.title("Ticker Correlation Dashboard")
 with st.sidebar:
     st.markdown("## About")
     st.markdown("""
-    **Institutional Correlation Regime Dashboard**  
+    Institutional correlation regime dashboard  
     • Up to 3 tickers (equity, ETF, or index)  
     • Daily, weekly, or monthly log returns  
     • Spearman (rank-based) correlations  
     • Rolling annualized volatility  
-    • Download all outputs (CSV, ZIP)  
+    • Download all outputs  
     """)
     st.markdown("---")
     st.header("Inputs")
@@ -156,7 +156,7 @@ def get_rolling_corr(s1, s2, window):
     s2r = s2.rank()
     return s1r.rolling(window).corr(s2r)
 
-st.subheader("Rolling Correlation (Spearman, %)")
+st.subheader("Rolling Correlation (Spearman)")
 corr_df = pd.DataFrame(index=returns.index)
 label_xy = f"{ticker_x} vs {ticker_y}"
 if ticker_x in returns.columns and ticker_y in returns.columns:
@@ -174,28 +174,28 @@ fig_corr = go.Figure()
 for col in corr_df.columns:
     fig_corr.add_trace(go.Scatter(
         x=corr_df.index,
-        y=100 * corr_df[col],  # as percent
+        y=corr_df[col],
         mode="lines",
         name=col,
         line=dict(width=2)
     ))
 fig_corr.update_layout(
-    yaxis_title="Rolling Correlation (%)",
+    yaxis_title="Rolling Correlation",
     xaxis_title="Date",
     legend_title="Pair",
     template="plotly_white",
     height=400,
     hovermode="x unified",
-    yaxis=dict(range=[-100, 100])
+    yaxis=dict(range=[-1, 1])
 )
 st.plotly_chart(fig_corr, use_container_width=True)
 
 # ─── Rolling Volatility Chart ──────────────────────────────
-st.subheader("Rolling Annualized Volatility (%)")
+st.subheader("Rolling Annualized Volatility")
 fig_vol = go.Figure()
 periods_per_year = {"Daily": 252, "Weekly": 52, "Monthly": 12}[freq]
 for tk in plot_tickers:
-    vol = returns[tk].rolling(roll_window).std() * np.sqrt(periods_per_year) * 100  # percent
+    vol = returns[tk].rolling(roll_window).std() * np.sqrt(periods_per_year)
     fig_vol.add_trace(go.Scatter(
         x=vol.index,
         y=vol,
@@ -204,7 +204,7 @@ for tk in plot_tickers:
         line=dict(width=2)
     ))
 fig_vol.update_layout(
-    yaxis_title="Annualized Volatility (%)",
+    yaxis_title="Annualized Volatility",
     xaxis_title="Date",
     legend_title="Ticker",
     template="plotly_white",
@@ -214,7 +214,7 @@ fig_vol.update_layout(
 st.plotly_chart(fig_vol, use_container_width=True)
 
 # ─── Spearman Correlation Matrix (heatmap) ──────────────────────────────
-st.subheader("Correlation Heatmap (Spearman, %)")
+st.subheader("Correlation Heatmap (Spearman)")
 def spearman_corr_matrix(df):
     ranked = df.rank(axis=0)
     return ranked.corr(method="pearson")
@@ -223,35 +223,35 @@ corr_matrices = {}
 for label, since in windows.items():
     ret_slice = returns.loc[returns.index >= pd.Timestamp(since), plot_tickers]
     mat = spearman_corr_matrix(ret_slice)
-    corr_matrices[label] = mat * 100  # as percent
+    corr_matrices[label] = mat
 
 selected_window = st.selectbox("Select look-back window:", list(windows.keys()), index=0)
 fig_heat = px.imshow(
-    corr_matrices[selected_window].round(1),
-    text_auto='.1f',
+    corr_matrices[selected_window].round(3),
+    text_auto='.3f',
     aspect="auto",
     color_continuous_scale="RdBu",
-    zmin=-100, zmax=100,
-    title=f"Correlation Heatmap (%), {selected_window}"
+    zmin=-1, zmax=1,
+    title=f"Correlation Heatmap, {selected_window}"
 )
 fig_heat.update_layout(height=340)
 st.plotly_chart(fig_heat, use_container_width=True)
 
-# ─── Correlation Table by Window (Spearman, % + color codes) ──────────────────────────────
-st.subheader("Correlation Regime Table by Window (Spearman, %)")
+# ─── Correlation Table by Window (Spearman, 3 decimals + color codes) ──────────────────────────────
+st.subheader("Correlation Regime Table by Window (Spearman)")
 def format_corr(val):
-    """Return emoji + formatted % string."""
+    """Return emoji + formatted float string."""
     if pd.isna(val): return ""
     absval = abs(val)
-    if absval >= 70: emoji = "🟢"
-    elif absval >= 30: emoji = "🟡"
+    if absval >= 0.7: emoji = "🟢"
+    elif absval >= 0.3: emoji = "🟡"
     else: emoji = "🔴"
-    return f"{emoji} {val:.1f}%"
+    return f"{emoji} {val:.3f}"
 
 rows = []
 for label, since in windows.items():
     ret_slice = returns.loc[returns.index >= pd.Timestamp(since), plot_tickers]
-    mat = spearman_corr_matrix(ret_slice) * 100  # as percent
+    mat = spearman_corr_matrix(ret_slice)
     row = {"Window": label}
     # X↔Y
     try: row["X vs Y"] = mat.loc[ticker_x, ticker_y]
