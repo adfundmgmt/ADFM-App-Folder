@@ -43,12 +43,6 @@ with st.sidebar:
     freq = st.selectbox("Return Frequency", options=["Daily", "Weekly", "Monthly"], index=0)
     corr_type = st.selectbox("Correlation Type", options=["Pearson", "Spearman"], index=0)
     roll_window = st.slider("Rolling Window (periods)", 20, 120, value=60)
-    st.markdown("---")
-    run_analysis = st.button("Run Analysis")
-
-# Only run analysis when button is clicked
-if not run_analysis:
-    st.stop()
 
 # ─── Helper: Fetch and Validate ───────────────────────────
 @st.cache_data(show_spinner=False)
@@ -76,7 +70,6 @@ def validate_ticker(ticker):
     if not ticker: return False
     try:
         info = yf.Ticker(ticker).info
-        # yfinance returns dict with 'shortName' if valid, else just 'quoteType'
         return 'shortName' in info or 'symbol' in info
     except Exception:
         return False
@@ -151,10 +144,7 @@ st.plotly_chart(fig, use_container_width=True)
 # ─── Rolling Correlation Chart (Plotly) ────────────────
 st.subheader("Rolling Correlation Chart")
 corr_df = pd.DataFrame(index=returns.index)
-if corr_type == "Pearson":
-    method = "pearson"
-else:
-    method = "spearman"
+method = "pearson" if corr_type == "Pearson" else "spearman"
 
 corr_df[f"{ticker_x} vs {ticker_y}"] = (
     returns[ticker_x].rolling(roll_window).corr(returns[ticker_y], method=method)
