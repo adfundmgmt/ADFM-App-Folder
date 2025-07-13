@@ -1,14 +1,13 @@
-# correlation_dashboard.py
-
+import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
 import datetime as dt
 from dateutil.relativedelta import relativedelta
-import numpy as np
-import pandas as pd
-import streamlit as st
-import yfinance as yf
-import altair as alt
-import matplotlib.pyplot as plt
-plt.style.use("default")
+import plotly.graph_objects as go
+import plotly.express as px
+import io
+import zipfile
 
 st.set_page_config(
     page_title="Correlation Dashboard — AD Fund Management LP",
@@ -17,37 +16,45 @@ st.set_page_config(
 )
 st.title("Ticker Correlation Dashboard")
 
-# ── Sidebar: About + Inputs ────────────────────────────────────────────────
+# ─── Sidebar: About + Inputs ──────────────────────────────
 with st.sidebar:
     st.markdown("## About This Tool")
-    st.markdown(
-        """
-        **Purpose**  
-        Provides a quick, at-a-glance view of historical and rolling correlations for up to three tickers, supporting portfolio construction and risk assessment.
+    st.markdown("""
+    **Purpose**  
+    Provides a robust, institutional view of correlations and volatility for up to 3 tickers.
 
-        **Key features**  
-        • Computes Pearson correlations on *daily log returns* for eight windows: YTD, 3m, 6m, 9m, 1y, 3y, 5y, 10y.  
-        • Shows indexed price overlays for each window.  
-        • Plots rolling correlation, highlights potential regime shifts.  
-        • Pulls split- and dividend-adjusted data from **Yahoo Finance** (Adj Close).
-        """
-    )
+    **Features**  
+    • Supports daily, weekly, monthly log returns  
+    • Pearson & Spearman correlations  
+    • Interactive, professional Plotly charts  
+    • Rolling volatility  
+    • Correlation matrix heatmap  
+    • Download all outputs  
+    """)
     st.markdown("---")
     st.header("Inputs")
-    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security to analyse.").strip().upper()
+    ticker_x = st.text_input("Ticker X", value="AAPL", help="Primary security").strip().upper()
     ticker_y = st.text_input("Ticker Y", value="MSFT").strip().upper()
     ticker_z = st.text_input(
-        "Index Z (optional)", 
+        "Ticker Z (optional)", 
         value="", 
         help="Benchmark/index (optional; leave blank to skip)."
     ).strip().upper()
+    freq = st.selectbox("Return Frequency", options=["Daily", "Weekly", "Monthly"], index=0)
+    corr_type = st.selectbox("Correlation Type", options=["Pearson", "Spearman"], index=0)
+    roll_window = st.slider("Rolling Window (periods)", 20, 120, value=60)
+    st.markdown("---")
+    run_analysis = st.button("Run Analysis")
 
-    roll_window = st.slider("Rolling window (days)", 20, 120, value=60)
+# Only run analysis when button is clicked
+if not run_analysis:
+    st.stop()
 
-# ── Helper functions ────────────────────────────────────────────────────────
-def fetch_prices(symbols: list, start: dt.date, end: dt.date) -> pd.DataFrame:
+# ─── Helper: Fetch and Validate ───────────────────────────
+@st.cache_data(show_spinner=False)
+def fetch_prices(symbols, start, end):
     try:
-        raw = yf.download(
+        df = yf.download(
             symbols,
             start=start,
             end=end + dt.timedelta(days=1),
@@ -55,175 +62,213 @@ def fetch_prices(symbols: list, start: dt.date, end: dt.date) -> pd.DataFrame:
             auto_adjust=False,
         )
     except Exception as e:
-        st.error(f"Data fetch failed: {e}")
-        return pd.DataFrame()
-    if raw.empty:
-        return pd.DataFrame()
-    if isinstance(raw.columns, pd.MultiIndex):
-        adj = raw["Adj Close"].copy()
+        return None, f"Data fetch failed: {e}"
+    if df.empty:
+        return None, "No data returned (bad ticker or unavailable data)."
+    if isinstance(df.columns, pd.MultiIndex):
+        adj = df["Adj Close"].copy()
         adj.columns = adj.columns.get_level_values(0)
     else:
-        adj = raw[["Adj Close"]].rename(columns={"Adj Close": symbols[0]})
-    return adj.dropna(how="all")
+        adj = df[["Adj Close"]].rename(columns={"Adj Close": symbols[0]})
+    return adj.dropna(how="all"), None
 
-def log_returns(prices: pd.DataFrame) -> pd.DataFrame:
-    return np.log(prices / prices.shift(1)).dropna(how="all")
+def validate_ticker(ticker):
+    if not ticker: return False
+    try:
+        info = yf.Ticker(ticker).info
+        # yfinance returns dict with 'shortName' if valid, else just 'quoteType'
+        return 'shortName' in info or 'symbol' in info
+    except Exception:
+        return False
 
-def slice_since(df: pd.DataFrame, since: dt.date) -> pd.DataFrame:
-    return df.loc[since:]
+# Validate tickers up front
+bad_tickers = []
+for tk in [ticker_x, ticker_y, ticker_z]:
+    if tk and not validate_ticker(tk):
+        bad_tickers.append(tk)
+if bad_tickers:
+    st.error(f"Invalid ticker(s): {', '.join(bad_tickers)}. Please correct.")
+    st.stop()
 
-def normalize(prices: pd.Series) -> pd.Series:
-    return prices / prices.iloc[0] * 100
-
-def emoji_corr(val: float) -> str:
-    if pd.isnull(val):
-        return ""
-    if val > 0.7: return "🟢"
-    if val > 0.3: return "🟡"
-    if val < -0.3: return "🔴"
-    return "⚪️"
-
-def dynamic_axis(data, buffer_ratio=0.04, axis='y'):
-    min_val = float(np.nanmin(data))
-    max_val = float(np.nanmax(data))
-    buffer = (max_val - min_val) * buffer_ratio
-    if min_val == max_val:
-        # flat line, just buffer a bit
-        return [min_val - 1, max_val + 1]
-    return [min_val - buffer, max_val + buffer]
-
-# ── Data download ───────────────────────────────────────────────────────────
+# Prepare date range
 end_date = dt.date.today()
 windows = {
     "YTD": dt.date(end_date.year, 1, 1),
-    "3 Months": end_date - relativedelta(months=3),
-    "6 Months": end_date - relativedelta(months=6),
-    "9 Months": end_date - relativedelta(months=9),
-    "1 Year": end_date - relativedelta(years=1),
-    "3 Years": end_date - relativedelta(years=3),
-    "5 Years": end_date - relativedelta(years=5),
-    "10 Years": end_date - relativedelta(years=10),
+    "3M": end_date - relativedelta(months=3),
+    "6M": end_date - relativedelta(months=6),
+    "9M": end_date - relativedelta(months=9),
+    "1Y": end_date - relativedelta(years=1),
+    "3Y": end_date - relativedelta(years=3),
+    "5Y": end_date - relativedelta(years=5),
+    "10Y": end_date - relativedelta(years=10),
 }
 earliest_date = min(windows.values()) - relativedelta(months=1)
-
-# Remove blanks/dupes
 symbols = sorted(set(filter(bool, [ticker_x, ticker_y, ticker_z])))
 
-if not (ticker_x and ticker_y):
-    st.warning("You must enter at least two tickers.")
+prices, fetch_err = fetch_prices(symbols, start=earliest_date, end=end_date)
+if fetch_err or prices is None or prices.empty:
+    st.error(fetch_err or "No price data returned — check ticker symbols and try again.")
     st.stop()
 
-prices = fetch_prices(symbols, start=earliest_date, end=end_date)
-if prices.empty:
-    st.error("No price data returned — check ticker symbols and try again.")
-    st.stop()
-returns = log_returns(prices)
+# ─── Frequency Handling ───────────────────────────
+def resample_prices(prices, freq):
+    if freq == "Daily":
+        return prices
+    elif freq == "Weekly":
+        return prices.resample("W-FRI").last()
+    elif freq == "Monthly":
+        return prices.resample("M").last()
+    else:
+        raise ValueError("Unknown frequency.")
 
-# Check available data range
-if prices.index[0].date() > earliest_date:
-    st.info(f"Note: Oldest available price is {prices.index[0].date()}, so not all look-back windows may be shown.")
+prices = resample_prices(prices, freq)
+returns = np.log(prices / prices.shift(1)).dropna(how="all")
 
-# ── Window‑Specific Overlay Charts (dynamic Y axis) ────────────────────────
+# ─── Overlay: Indexed Price Chart (Plotly) ──────────────
 st.subheader("Indexed Price Overlays")
-tabs = st.tabs(list(windows.keys()))
-for tab, label in zip(tabs, windows.keys()):
-    since = windows[label]
-    price_slice = slice_since(prices, since)
-    overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
-    overlay_tickers = [t for t in overlay_tickers if t in price_slice.columns]
-    norm_df = price_slice[overlay_tickers].apply(normalize)
-    norm_df = norm_df.reset_index().melt(id_vars="Date", var_name="Ticker", value_name="IndexedPrice")
-    y_axis_range = dynamic_axis(norm_df['IndexedPrice'], buffer_ratio=0.06)
-    chart = (
-        alt.Chart(norm_df)
-        .mark_line()
-        .encode(
-            x=alt.X("Date:T", title="Date"),
-            y=alt.Y("IndexedPrice:Q", title="Indexed Price (Base=100)", scale=alt.Scale(domain=y_axis_range)),
-            color=alt.Color("Ticker:N", legend=alt.Legend(title="Ticker")),
-            tooltip=["Date:T", "Ticker:N", alt.Tooltip("IndexedPrice:Q", format=".2f")],
-        )
-        .properties(height=320)
-        .interactive()
-    )
-    with tab:
-        st.altair_chart(chart, use_container_width=True)
+overlay_tickers = [ticker_x, ticker_y] + ([ticker_z] if ticker_z else [])
+overlay_tickers = [t for t in overlay_tickers if t in prices.columns]
+fig = go.Figure()
+for tk in overlay_tickers:
+    indexed = prices[tk] / prices[tk].iloc[0] * 100
+    fig.add_trace(go.Scatter(
+        x=indexed.index,
+        y=indexed,
+        mode="lines",
+        name=tk,
+        line=dict(width=2)
+    ))
+fig.update_layout(
+    yaxis_title="Indexed Price (Base=100)",
+    xaxis_title="Date",
+    legend_title="Ticker",
+    template="plotly_white",
+    height=400,
+    hovermode="x unified"
+)
+st.plotly_chart(fig, use_container_width=True)
 
-# ── Rolling correlation chart (dynamic Y axis) ──────────────────────────────
+# ─── Rolling Correlation Chart (Plotly) ────────────────
 st.subheader("Rolling Correlation Chart")
 corr_df = pd.DataFrame(index=returns.index)
+if corr_type == "Pearson":
+    method = "pearson"
+else:
+    method = "spearman"
+
 corr_df[f"{ticker_x} vs {ticker_y}"] = (
-    returns[ticker_x].rolling(roll_window).corr(returns[ticker_y])
+    returns[ticker_x].rolling(roll_window).corr(returns[ticker_y], method=method)
 )
 if ticker_z and ticker_z in returns.columns:
     corr_df[f"{ticker_x} vs {ticker_z}"] = (
-        returns[ticker_x].rolling(roll_window).corr(returns[ticker_z])
+        returns[ticker_x].rolling(roll_window).corr(returns[ticker_z], method=method)
     )
     corr_df[f"{ticker_y} vs {ticker_z}"] = (
-        returns[ticker_y].rolling(roll_window).corr(returns[ticker_z])
+        returns[ticker_y].rolling(roll_window).corr(returns[ticker_z], method=method)
     )
 corr_df = corr_df.dropna(how="all")
 
-corr_long = corr_df.reset_index().melt(id_vars="Date", var_name="Pair", value_name="Correlation")
-y_axis_corr = dynamic_axis(corr_long['Correlation'].dropna(), buffer_ratio=0.06)
-roll_chart = (
-    alt.Chart(corr_long)
-    .mark_line()
-    .encode(
-        x=alt.X("Date:T", title="Date"),
-        y=alt.Y("Correlation:Q", title="Correlation", scale=alt.Scale(domain=y_axis_corr)),
-        color=alt.Color("Pair:N", legend=alt.Legend(title="Pairs")),
-        tooltip=["Date:T", "Pair:N", alt.Tooltip("Correlation:Q", format=".2f")],
-    )
-    .properties(height=400)
-    .interactive()
+fig_corr = go.Figure()
+for col in corr_df.columns:
+    fig_corr.add_trace(go.Scatter(
+        x=corr_df.index,
+        y=corr_df[col],
+        mode="lines",
+        name=col,
+        line=dict(width=2)
+    ))
+fig_corr.update_layout(
+    yaxis_title="Rolling Correlation",
+    xaxis_title="Date",
+    legend_title="Pairs",
+    template="plotly_white",
+    height=400,
+    hovermode="x unified",
+    yaxis=dict(range=[-1, 1])
 )
-st.altair_chart(roll_chart, use_container_width=True)
+st.plotly_chart(fig_corr, use_container_width=True)
 
-# ── Correlation Table for Each Window (moved below charts) ─────────────────
+# ─── Rolling Volatility Chart (Plotly) ────────────────
+st.subheader("Rolling Volatility (Annualized)")
+fig_vol = go.Figure()
+for tk in overlay_tickers:
+    vol = returns[tk].rolling(roll_window).std() * np.sqrt({"Daily":252, "Weekly":52, "Monthly":12}[freq])
+    fig_vol.add_trace(go.Scatter(
+        x=vol.index,
+        y=vol,
+        mode="lines",
+        name=tk,
+        line=dict(width=2)
+    ))
+fig_vol.update_layout(
+    yaxis_title="Annualized Volatility",
+    xaxis_title="Date",
+    legend_title="Ticker",
+    template="plotly_white",
+    height=400,
+    hovermode="x unified"
+)
+st.plotly_chart(fig_vol, use_container_width=True)
+
+# ─── Correlation Matrix Heatmap ────────────────────────
+st.subheader("Correlation Matrix (Look-back Windows)")
+# For each window, compute correlation matrix for entered tickers
+corr_matrices = {}
+for label, since in windows.items():
+    ret_slice = returns.loc[returns.index >= pd.Timestamp(since)]
+    mat = ret_slice[overlay_tickers].corr(method=method)
+    corr_matrices[label] = mat
+
+# Show heatmap for latest window (YTD by default)
+selected_window = st.selectbox("Select window for heatmap:", list(windows.keys()), index=0)
+fig_heat = px.imshow(
+    corr_matrices[selected_window].round(2),
+    text_auto=True,
+    aspect="auto",
+    color_continuous_scale="RdBu",
+    zmin=-1, zmax=1,
+    title=f"Correlation Heatmap ({selected_window})"
+)
+fig_heat.update_layout(height=340)
+st.plotly_chart(fig_heat, use_container_width=True)
+
+# ─── Correlation Table by Window ───────────────────────
 st.subheader("Correlation Table by Look-Back Window")
 rows = []
 for label, since in windows.items():
-    ret_slice = slice_since(returns, since)
+    ret_slice = returns.loc[returns.index >= pd.Timestamp(since)]
     row = {"Window": label}
     # X↔Y
     try:
-        row["X vs Y"] = ret_slice.corr().loc[ticker_x, ticker_y].round(3)
+        row["X vs Y"] = ret_slice.corr(method=method).loc[ticker_x, ticker_y].round(3)
     except: row["X vs Y"] = np.nan
     # X↔Z and Y↔Z if Z provided
     if ticker_z:
         try:
-            row["X vs Z"] = ret_slice.corr().loc[ticker_x, ticker_z].round(3)
+            row["X vs Z"] = ret_slice.corr(method=method).loc[ticker_x, ticker_z].round(3)
         except: row["X vs Z"] = np.nan
         try:
-            row["Y vs Z"] = ret_slice.corr().loc[ticker_y, ticker_z].round(3)
+            row["Y vs Z"] = ret_slice.corr(method=method).loc[ticker_y, ticker_z].round(3)
         except: row["Y vs Z"] = np.nan
     rows.append(row)
 df_corr = pd.DataFrame(rows)
-df_corr_display = df_corr.copy()
-for c in df_corr.columns[1:]:
-    df_corr_display[c] = df_corr_display[c].apply(lambda v: f"{v:.2f} {emoji_corr(v)}" if pd.notnull(v) else "")
-st.dataframe(df_corr_display.set_index("Window"), height=320)
+st.dataframe(df_corr.set_index("Window"), height=340)
 
-# ── Data Download Option ────────────────────────────────────────────────────
-with st.expander("Download Data"):
+# ─── Data Download (ZIP all outputs) ───────────────────
+with st.expander("Download All Outputs (.zip)"):
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w") as zipf:
+        zipf.writestr("indexed_prices.csv", prices.to_csv(index=True))
+        zipf.writestr("log_returns.csv", returns.to_csv(index=True))
+        zipf.writestr("correlation_table.csv", df_corr.to_csv(index=False))
+        # Save all correlation matrices
+        for label, mat in corr_matrices.items():
+            zipf.writestr(f"corr_matrix_{label}.csv", mat.to_csv(index=True))
     st.download_button(
-        "Download Indexed Prices (CSV)", 
-        prices.to_csv(index=True), 
-        file_name="correlation_dashboard_prices.csv", 
-        mime="text/csv"
-    )
-    st.download_button(
-        "Download Log Returns (CSV)",
-        returns.to_csv(index=True),
-        file_name="correlation_dashboard_returns.csv",
-        mime="text/csv"
-    )
-    st.download_button(
-        "Download Correlation Table (CSV)",
-        df_corr.to_csv(index=False),
-        file_name="correlation_dashboard_correlation_table.csv",
-        mime="text/csv"
+        "Download ZIP",
+        data=zbuf.getvalue(),
+        file_name="correlation_dashboard_all_outputs.zip",
+        mime="application/zip"
     )
 
 st.caption("© 2025 AD Fund Management LP")
