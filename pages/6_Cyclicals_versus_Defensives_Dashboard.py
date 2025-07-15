@@ -65,7 +65,7 @@ def rsi(series, n=14):
     rs = ma_up / ma_dn
     return 100 - 100 / (1 + rs)
 
-def plot_ratio_panel(ratio, disp_start, color, title, ylab="Ratio", ma_multiplier=1.0):
+def plot_ratio_panel(ratio, disp_start, title, ylab="Ratio"):
     mask = ratio.index >= disp_start
     ratio_disp = ratio[mask]
     ma50 = ratio.rolling(50).mean()[mask]
@@ -75,7 +75,7 @@ def plot_ratio_panel(ratio, disp_start, color, title, ylab="Ratio", ma_multiplie
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         row_heights=[0.75, 0.25], vertical_spacing=0.03)
     fig.add_trace(go.Scatter(x=ratio_disp.index, y=ratio_disp,
-                             line=dict(color=color, width=2), name=title), row=1, col=1)
+                             line=dict(color="black", width=2), name=title), row=1, col=1)
     fig.add_trace(go.Scatter(x=ma50.index, y=ma50,
                              line=dict(color="blue", width=2), name="50‑DMA"), row=1, col=1)
     fig.add_trace(go.Scatter(x=ma200.index, y=ma200,
@@ -96,12 +96,12 @@ def plot_ratio_panel(ratio, disp_start, color, title, ylab="Ratio", ma_multiplie
 
 # --- Panel 1: Cyclicals vs Defensives
 cyc_def_ratio = calc_ratio(CYCLICALS, DEFENSIVES)
-plot_ratio_panel(cyc_def_ratio, disp_start, "#355E3B", "Cyclicals / Defensives (Equal-Weight)", ylab="Relative Ratio")
+plot_ratio_panel(cyc_def_ratio, disp_start, "Cyclicals / Defensives (Equal-Weight)", ylab="Relative Ratio")
 
 # --- Panel 2: SMH / IGV
 smh_igv_ratio = calc_ratio_simple("SMH", "IGV")
-plot_ratio_panel(smh_igv_ratio, disp_start, "#0a5ba1", "SMH / IGV Relative Strength & RSI", ylab="SMH / IGV")
+plot_ratio_panel(smh_igv_ratio, disp_start, "SMH / IGV Relative Strength & RSI", ylab="SMH / IGV")
 
 # --- Panel 3: QQQ / IWM
 qqq_iwm_ratio = calc_ratio_simple("QQQ", "IWM")
-plot_ratio_panel(qqq_iwm_ratio, disp_start, "#902090", "QQQ / IWM Relative Strength & RSI", ylab="QQQ / IWM")
+plot_ratio_panel(qqq_iwm_ratio, disp_start, "QQQ / IWM Relative Strength & RSI", ylab="QQQ / IWM")
