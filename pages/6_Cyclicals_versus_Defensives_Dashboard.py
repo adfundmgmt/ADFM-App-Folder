@@ -6,6 +6,18 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
+# ------ CSS to tighten sidebar spacing ------
+st.markdown("""
+    <style>
+    section[data-testid="stSidebar"] h2 {
+        margin-bottom: 0.25rem !important;
+    }
+    section[data-testid="stSidebar"] .stSelectbox {
+        margin-top: 0.2rem !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 
