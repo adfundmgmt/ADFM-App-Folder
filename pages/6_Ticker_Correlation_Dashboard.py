@@ -22,9 +22,9 @@ ALL_TICKS  = CYCLICALS + DEFENSIVES
 with st.sidebar:
     st.header("Period")
     period_choice = st.selectbox(
-        "Select look‑back window",
+        "Look‑back window",
         ("3 M","6 M","9 M","YTD","1 Y","3 Y","5 Y","10 Y"),
-        index=4     # default 1 Y
+        index=4                                              # default 1 Y
     )
     rsi_n   = st.slider("RSI window", 5, 30, 14)
     ma_fast = st.slider("Short MA", 10, 100, 50)
@@ -32,14 +32,21 @@ with st.sidebar:
 
 # ── Date handling ─────────────────────────────────────────────────────────────
 today = dt.date.today()
+
 if period_choice == "YTD":
     start_date = dt.date(today.year, 1, 1)
 else:
+    # Remove any Unicode thin spaces, regular spaces and capitalise (e.g. '3M','1Y')
+    key = period_choice.replace(" ", "").replace(" ", "")
     lookback = {
-        "3 M":  {"months":3},  "6 M":  {"months":6},  "9 M": {"months":9},
-        "1 Y":  {"years":1},   "3 Y":  {"years":3},   "5 Y": {"years":5},
-        "10 Y": {"years":10}
-    }[period_choice.replace(" ","")]  # remove thin‑space
+        "3M":  {"months": 3},
+        "6M":  {"months": 6},
+        "9M":  {"months": 9},
+        "1Y":  {"years": 1},
+        "3Y":  {"years": 3},
+        "5Y":  {"years": 5},
+        "10Y": {"years": 10},
+    }[key]
     start_date = today - relativedelta(**lookback)
 
 # ── Data download ─────────────────────────────────────────────────────────────
@@ -48,7 +55,7 @@ def fetch_prices(tickers, start, end):
     px = yf.download(tickers, start=start, end=end, auto_adjust=True)["Adj Close"]
     return px.dropna(axis=1, how="all")
 
-prices = fetch_prices(ALL_TICKS, start_date, today)
+prices  = fetch_prices(ALL_TICKS, start_date, today)
 returns = prices.pct_change().dropna()
 
 cyc_live = [t for t in CYCLICALS  if t in prices]
@@ -87,7 +94,7 @@ ax1.plot(ma_fast_series, color="blue",     lw=1.5, ls="--", label=f"{ma_fast}‑
 ax1.plot(ma_slow_series, color="firebrick",lw=1.8, ls="-.", label=f"{ma_slow}‑day MA")
 
 ax1.set_ylabel("Ratio")
-ax1.set_title(f"Cyclicals vs Defensives — {period_choice} window", fontsize=13, pad=10)
+ax1.set_title(f"Cyclicals vs Defensives — {period_choice} Window", fontsize=13, pad=10)
 ax1.legend(frameon=False, fontsize=9)
 ax1.grid(True, which="both", ls=":", lw=0.4)
 
