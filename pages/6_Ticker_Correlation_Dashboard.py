@@ -5,6 +5,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from datetime import datetime
 
+# ─── Config ────────────────────────────────────────────────
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 
@@ -14,20 +15,34 @@ st.title("S&P Cyclicals Relative to Defensives – Equal-Weight")
 start_date = "2022-07-01"
 end_date = datetime.today().strftime('%Y-%m-%d')
 
+# ─── Robust ETF Basket Fetcher ─────────────────────────────
 def basket_price(etfs, start, end):
-    data = yf.download(etfs, start=start, end=end)["Adj Close"]
-    basket = data.pct_change().mean(axis=1)
+    data = yf.download(etfs, start=start, end=end, group_by="ticker", auto_adjust=True)
+    price_df = pd.DataFrame()
+    for etf in etfs:
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                px = data[etf]["Close"]
+            else:
+                px = data["Close"]
+            price_df[etf] = px
+        except Exception:
+            continue  # skip tickers not present in data
+    price_df = price_df.fillna(method='ffill').dropna()
+    basket = price_df.pct_change().mean(axis=1)
     basket_cum = (1 + basket).cumprod()
     return basket_cum
 
 cyc = basket_price(CYCLICALS, start_date, end_date)
 defn = basket_price(DEFENSIVES, start_date, end_date)
 
-rel = (cyc / defn) * 100  # scale for better visual match
+# ─── Cyclical/Defensive Relative Chart ─────────────────────
+rel = (cyc / defn) * 100
 
 rel_ma50  = rel.rolling(50).mean()
 rel_ma200 = rel.rolling(200).mean()
 
+# ─── Native RSI Calculation ────────────────────────────────
 def compute_rsi(series, window=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
@@ -38,10 +53,12 @@ def compute_rsi(series, window=14):
 
 rsi = compute_rsi(rel, window=14)
 
+# ─── Trend Signals (MA Crossovers) ─────────────────────────
 signal = pd.Series(index=rel.index, dtype="object")
 signal[(rel_ma50 > rel_ma200) & (rel_ma50.shift(1) <= rel_ma200.shift(1))] = "up"
 signal[(rel_ma50 < rel_ma200) & (rel_ma50.shift(1) >= rel_ma200.shift(1))] = "down"
 
+# ─── Plot: Relative Ratio with MAs and Arrows ──────────────
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=rel.index, y=rel, mode='lines', name='Cyc/Def Rel', line=dict(color='#355E3B')))
 fig.add_trace(go.Scatter(x=rel_ma50.index, y=rel_ma50, mode='lines', name='50D MA', line=dict(color='blue')))
@@ -64,6 +81,7 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
+# ─── Plot: RSI Subplot ────────────────────────────────────
 fig_rsi = go.Figure()
 fig_rsi.add_trace(go.Scatter(x=rel.index, y=rsi, mode='lines', name='RSI (14)', line=dict(color='black')))
 fig_rsi.add_hline(y=70, line_dash="dot", line_color="red")
@@ -75,5 +93,6 @@ fig_rsi.update_layout(height=250, width=1000,
     title="Overbought / Oversold"
 )
 
+# ─── Streamlit Display ────────────────────────────────────
 st.plotly_chart(fig, use_container_width=True)
 st.plotly_chart(fig_rsi, use_container_width=True)
