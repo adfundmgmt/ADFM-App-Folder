@@ -88,18 +88,24 @@ def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio"):
     ma200 = ratio.rolling(200).mean()[mask]
     rsi_panel = rsi(ratio)[mask]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(14, 5), gridspec_kw={'height_ratios': [3, 1]})
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1,
+        sharex=True,
+        figsize=(16, 4.8),  # More width, less height for panoramic look
+        gridspec_kw={'height_ratios': [3, 1]}
+    )
 
-    # --- Top: ratio and MAs
+    # Top panel: Ratio & MAs
     ax1.plot(ratio_disp.index, ratio_disp, color="black", label=title, linewidth=2)
     ax1.plot(ma50.index, ma50, color="blue", label="50-DMA", linewidth=1)
     ax1.plot(ma200.index, ma200, color="red", label="200-DMA", linewidth=1)
-    ax1.set_ylabel(ylab)
+    ax1.set_ylabel(ylab, fontsize=11)
     ax1.legend(loc="upper left", fontsize=10)
     ax1.set_title(title, fontsize=15, pad=8)
-    ax1.grid(True, which='both', linestyle='--', alpha=0.3)
+    ax1.grid(True, which='both', linestyle='--', alpha=0.28)
+    ax1.margins(x=0)  # Remove x-axis margin
 
-    # --- Bottom: RSI
+    # Bottom panel: RSI
     ax2.plot(rsi_panel.index, rsi_panel, color="black", linewidth=1)
     ax2.axhline(70, color="red", linestyle="dotted", linewidth=1)
     ax2.axhline(30, color="green", linestyle="dotted", linewidth=1)
@@ -107,12 +113,16 @@ def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio"):
         ax2.text(rsi_panel.index[0], 72, "Overbought", color="red", fontsize=9, va="bottom")
         ax2.text(rsi_panel.index[0], 32, "Oversold", color="green", fontsize=9, va="top")
     ax2.set_ylim(0, 100)
-    ax2.set_ylabel("RSI")
-    ax2.grid(True, which='both', linestyle='--', alpha=0.3)
+    ax2.set_ylabel("RSI", fontsize=11)
+    ax2.grid(True, which='both', linestyle='--', alpha=0.28)
+    ax2.margins(x=0)  # Remove x-axis margin
 
-    plt.tight_layout(h_pad=1.2)
+    # Remove subplot padding and shrink whitespace
+    plt.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.12, hspace=0.12)
+
     st.pyplot(fig)
     plt.close(fig)
+
 
 # ------ Panels: Only the ratios you requested ------
 
