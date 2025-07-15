@@ -1,117 +1,96 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import yfinance as yf
+import streamlit as st, pandas as pd, numpy as np, yfinance as yf
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
-# ─── Basket definitions ───────────────────────────────────
-CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
-DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
+CYCLICALS  = ["XLK","XLI","XLF","XLC","XLY"]
+DEFENSIVES = ["XLP","XLE","XLV","XLRE","XLB","XLU"]
 
-# ─── Streamlit page setup ─────────────────────────────────
 st.set_page_config(layout="wide",
                    page_title="S&P Cyclicals vs Defensives Dashboard")
 st.title("S&P Cyclicals Relative to Defensives — Equal‑Weight")
 
-# ─── Sidebar: info + look‑back selector ───────────────────
+# ─── Sidebar ──────────────────────────────────────────────
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown("""
-Tracks the equal‑weighted ratio of S&P cyclical vs defensive sector ETFs to
-gauge risk‑on / risk‑off positioning.
+    st.header("Look‑back")
+    spans = {"3 M":90,"6 M":180,"9 M":270,"YTD":None,"1 Y":365,
+             "3 Y":365*3,"5 Y":365*5,"10 Y":365*10}
+    span_key = st.selectbox("", list(spans.keys()), index=list(spans).index("5 Y"))
 
-**Method**
-- Cyclical basket: XLK XLI XLF XLC XLY  
-- Defensive basket: XLP XLE XLV XLRE XLB XLU  
-- Plots the cumulative‑return ratio with 50‑ & 200‑day MAs + RSI‑14.
-""")
+# ─── Date windows ─────────────────────────────────────────
+today = datetime.today();  hist_start = today - timedelta(days=365*10+220)
+disp_start = datetime(today.year,1,1) if span_key=="YTD" \
+             else today - timedelta(days=spans[span_key])
 
-    st.subheader("Time Frame")
-    LOOKBACKS = {
-        "3 Months": 90, "6 Months": 180, "9 Months": 270,
-        "YTD": None, "1 Year": 365,
-        "3 Years": 365*3, "5 Years": 365*5, "10 Years": 365*10
-    }
-    time_choice = st.selectbox("Look‑back:", list(LOOKBACKS.keys()),
-                               index=list(LOOKBACKS.keys()).index("5 Years"))
+# ─── Cached Yahoo pull ────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner="Fetching prices…")
+def yf_prices(tickers,start,end):
+    return yf.download(tickers,start, end,
+                       group_by="ticker",auto_adjust=True,progress=False)
 
-# ─── Helper: cached price fetch ───────────────────────────
-@st.cache_data(ttl=3600, show_spinner="Pulling Yahoo prices…")
-def fetch_prices(tickers: list, start: str, end: str) -> pd.DataFrame:
-    return yf.download(tickers, start=start, end=end,
-                       group_by="ticker", auto_adjust=True,
-                       progress=False)
+def basket(etfs):
+    raw=yf_prices(etfs,hist_start, today)
+    closes = (raw.xs('Close',level=1,axis=1)
+              if isinstance(raw.columns,pd.MultiIndex) else raw[['Close']])
+    closes = closes.fillna(method='ffill').dropna()
+    return (1+closes.pct_change()).cumprod().mean(axis=1)
 
-# ─── Date window set‑up ───────────────────────────────────
-today = datetime.today()
-hist_start = today - timedelta(days=365*10 + 220)  # 10 yrs + MA buffer
-display_start = (
-    datetime(today.year, 1, 1)
-    if time_choice == "YTD"
-    else today - timedelta(days=LOOKBACKS[time_choice])
-)
-start_str, end_str = hist_start.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d')
+cyc,defn = basket(CYCLICALS), basket(DEFENSIVES)
+ratio = (cyc/defn*100).dropna()
 
-# ─── Basket builder ───────────────────────────────────────
-def build_basket(etfs):
-    raw = fetch_prices(etfs, start_str, end_str)
-    missing = [t for t in etfs if t not in raw.columns.get_level_values(0)]
-    if missing:
-        st.warning(f"Skipped missing tickers: {', '.join(missing)}")
-    closes = (raw.xs("Close", level=1, axis=1)
-              if isinstance(raw.columns, pd.MultiIndex)
-              else raw[["Close"]])
-    closes = closes.fillna(method="ffill").dropna()
-    basket = (1 + closes.pct_change()).cumprod().mean(axis=1)
-    return basket
+def rsi(series,n=14):
+    delta=series.diff(); up=delta.clip(lower=0); dn=-delta.clip(upper=0)
+    rs=(up.rolling(n).mean()/dn.rolling(n).mean())
+    return 100-100/(1+rs)
+rsi_full=rsi(ratio)
 
-cyc = build_basket(CYCLICALS)
-defn = build_basket(DEFENSIVES)
+ma50,ma200 = ratio.rolling(50).mean(), ratio.rolling(200).mean()
 
-ratio = (cyc / defn * 100).dropna()
-ma50, ma200 = ratio.rolling(50).mean(), ratio.rolling(200).mean()
-rsi = lambda s: 100 - 100 / (1 + (s.diff().clip(lower=0).rolling(14).mean() /
-                                  -s.diff().clip(upper=0).rolling(14).mean()))
-rsi_series = rsi(ratio)
+mask = ratio.index>=disp_start
+ratio_v, rsi_v = ratio[mask], rsi_full[mask]
 
-# ─── Slice to look‑back window (MAs stay intact) ──────────
-mask = ratio.index >= display_start
-ratio_disp, rsi_disp = ratio[mask], rsi_series[mask]
+# ─── Metric strip ─────────────────────────────────────────
+col1,col2,col3 = st.columns([1,1,1.4])
+col1.metric("Return",f"{(ratio_v.iat[-1]/ratio_v.iat[0]-1)*100:,.1f}%")
+col2.metric("RSI‑14",f"{rsi_v.iat[-1]:.0f}")
+trend = "Bullish (50>200)" if ma50.iat[-1]>ma200.iat[-1] else "Bearish (50<200)"
+col3.metric("Trend Regime",trend)
 
-# ─── Dashboard metrics strip ──────────────────────────────
-ret_pct = (ratio_disp.iloc[-1] / ratio_disp.iloc[0] - 1) * 100
-rsi_now = rsi_disp.iloc[-1]
-regime = "Bullish (50>200)" if ma50.iloc[-1] > ma200.iloc[-1] else "Bearish (50<200)"
-col1, col2, col3 = st.columns(3)
-col1.metric("Return over window", f"{ret_pct:.1f} %")
-col2.metric("RSI‑14", f"{rsi_now:.0f}")
-col3.metric("Trend Regime", regime)
+# ─── Figure w/ subplots ───────────────────────────────────
+fig = make_subplots(rows=2,cols=1,
+                    shared_xaxes=True,
+                    row_heights=[0.75,0.25],
+                    vertical_spacing=0.03)
 
-# ─── Plot: ratio + MAs ────────────────────────────────────
-fig = go.Figure()
-fig.add_scatter(x=ratio_disp.index, y=ratio_disp, name="Cyc/Def", line=dict(color="#355E3B", width=2))
-fig.add_scatter(x=ma50.index, y=ma50, name="50‑DMA", line=dict(color="blue", width=2))
-fig.add_scatter(x=ma200.index, y=ma200, name="200‑DMA", line=dict(color="red", width=2))
-fig.update_layout(height=550, margin=dict(l=20, r=20, t=20, b=20),
-                  font=dict(size=15), yaxis_title="Relative Ratio",
-                  plot_bgcolor="white", legend_orientation="h")
+fig.add_trace(go.Scatter(x=ratio_v.index,y=ratio_v,
+                         line=dict(color="#355E3B",width=2),
+                         name="Cyc/Def"),row=1,col=1)
+fig.add_trace(go.Scatter(x=ma50.index,y=ma50,
+                         line=dict(color="blue",width=2),
+                         name="50‑DMA"),row=1,col=1)
+fig.add_trace(go.Scatter(x=ma200.index,y=ma200,
+                         line=dict(color="red",width=2),
+                         name="200‑DMA"),row=1,col=1)
 
-# ─── Plot: RSI ────────────────────────────────────────────
-fig_rsi = go.Figure()
-fig_rsi.add_scatter(x=rsi_disp.index, y=rsi_disp, name="RSI", line=dict(color="black", width=2))
-for lvl, clr in [(70, "red"), (30, "green")]:
-    fig_rsi.add_hline(y=lvl, line_dash="dot", line_color=clr)
-fig_rsi.update_layout(height=200, margin=dict(l=20, r=20, t=10, b=30),
-                      font=dict(size=14), yaxis=dict(title="RSI", range=[0, 100]),
-                      plot_bgcolor="white", showlegend=False)
+fig.add_trace(go.Scatter(x=rsi_v.index,y=rsi_v,
+                         line=dict(color="black",width=2),
+                         name="RSI‑14",showlegend=False),row=2,col=1)
 
-# ─── Streamlit output ────────────────────────────────────
-st.plotly_chart(fig, use_container_width=True)
-st.plotly_chart(fig_rsi, use_container_width=True)
+# Horizontal RSI bands
+for y,clr,txt in [(70,"red","Overbought"),(30,"green","Oversold")]:
+    fig.add_hline(y=y,row=2,col=1,line_dash="dot", line_color=clr)
+    fig.add_annotation(x=rsi_v.index[0],y=y,text=txt,
+                       yshift=4 if y==70 else -8,
+                       showarrow=False,font=dict(color=clr),row=2,col=1)
 
-# ─── Download button ─────────────────────────────────────
-csv = pd.concat([ratio_disp.rename("Ratio"),
-                 ma50.rename("MA50"), ma200.rename("MA200"),
-                 rsi_disp.rename("RSI")], axis=1).dropna().to_csv().encode()
-st.download_button("Download data (CSV)", csv, "cyc_def_ratio.csv")
+fig.update_layout(height=700,margin=dict(l=20,r=20,t=30,b=20),
+                  plot_bgcolor="white",
+                  legend=dict(orientation="h",y=1.02,x=1,xanchor="right",
+                              font=dict(size=13)))
+
+st.plotly_chart(fig,use_container_width=True)
+
+# ─── Download CSV ────────────────────────────────────────
+csv = pd.concat({"Ratio":ratio_v,"MA50":ma50,"MA200":ma200,"RSI":rsi_v},
+                axis=1).dropna().to_csv().encode()
+st.download_button("Download CSV",csv,"cyc_def_ratio.csv")
