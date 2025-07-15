@@ -1,154 +1,117 @@
+# ──────────────────────────────────────────────────────────────────────────────
+#  S&P Cyclicals vs. Defensives (Equal‑Weight) – Static Matplotlib Dashboard
+# ──────────────────────────────────────────────────────────────────────────────
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+from matplotlib.dates import DateFormatter
+from dateutil.relativedelta import relativedelta
 import datetime as dt
 
-st.set_page_config(page_title="Cyclical vs Defensive Regime Dashboard", layout="wide")
-st.title("S&P Cyclicals Relative to Defensives — Equal Weight")
+st.set_page_config(page_title="Cyc vs Def Static Dashboard", layout="wide")
+st.title("S&P Cyclicals Relative to Defensives — Equal‑Weight (Static)")
 
-cyclicals = ["XLK", "XLI", "XLF", "XLC", "XLY"]
-defensives = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
-all_sectors = cyclicals + defensives
+# ── Basket definitions ────────────────────────────────────────────────────────
+CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
+DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
+ALL_TICKS  = CYCLICALS + DEFENSIVES
 
+# ── Sidebar controls ──────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Settings")
-    st.markdown(
-        "Plots equal-weighted Cyclicals vs Defensives with 50/200-day moving averages and custom RSI."
+    st.header("Period")
+    period_choice = st.selectbox(
+        "Select look‑back window",
+        ("3 M","6 M","9 M","YTD","1 Y","3 Y","5 Y","10 Y"),
+        index=4     # default 1 Y
     )
-    start_date = st.date_input("Start Date", value=dt.date.today() - dt.timedelta(days=1100))
-    end_date = st.date_input("End Date", value=dt.date.today())
-    rsi_window = st.slider("RSI Window", 5, 30, 14)
-    ma_short = st.slider("Short MA (days)", 10, 100, 50)
-    ma_long = st.slider("Long MA (days)", 100, 300, 200)
+    rsi_n   = st.slider("RSI window", 5, 30, 14)
+    ma_fast = st.slider("Short MA", 10, 100, 50)
+    ma_slow = st.slider("Long  MA", 100, 300, 200)
 
-@st.cache_data
-def load_sector_data(tickers, start, end):
-    df = yf.download(tickers, start=start, end=end, auto_adjust=True)
-    if isinstance(df.columns, pd.MultiIndex):
-        if "Adj Close" in df.columns.get_level_values(0):
-            df = df["Adj Close"]
-        else:
-            last_lvl = df.columns.get_level_values(0).unique()[-1]
-            df = df.xs(last_lvl, axis=1, level=0)
-    else:
-        df = df.to_frame()
-    df = df.dropna(axis=1, how="all")
-    return df
+# ── Date handling ─────────────────────────────────────────────────────────────
+today = dt.date.today()
+if period_choice == "YTD":
+    start_date = dt.date(today.year, 1, 1)
+else:
+    lookback = {
+        "3 M":  {"months":3},  "6 M":  {"months":6},  "9 M": {"months":9},
+        "1 Y":  {"years":1},   "3 Y":  {"years":3},   "5 Y": {"years":5},
+        "10 Y": {"years":10}
+    }[period_choice.replace(" ","")]  # remove thin‑space
+    start_date = today - relativedelta(**lookback)
 
-prices = load_sector_data(all_sectors, start_date, end_date)
+# ── Data download ─────────────────────────────────────────────────────────────
+@st.cache_data(ttl=12*3600)
+def fetch_prices(tickers, start, end):
+    px = yf.download(tickers, start=start, end=end, auto_adjust=True)["Adj Close"]
+    return px.dropna(axis=1, how="all")
+
+prices = fetch_prices(ALL_TICKS, start_date, today)
 returns = prices.pct_change().dropna()
 
-cyclicals_live = [x for x in cyclicals if x in prices.columns]
-defensives_live = [x for x in defensives if x in prices.columns]
+cyc_live = [t for t in CYCLICALS  if t in prices]
+def_live = [t for t in DEFENSIVES if t in prices]
 
-# -- Properly build equal-weighted index for each group --
-cyc_index = (1 + returns[cyclicals_live]).cumprod().mean(axis=1)
-def_index = (1 + returns[defensives_live]).cumprod().mean(axis=1)
+# ── Equal‑weight index (daily rebalanced) ─────────────────────────────────────
+cyc_idx = (1 + returns[cyc_live].mean(axis=1)).cumprod()*100
+def_idx = (1 + returns[def_live].mean(axis=1)).cumprod()*100
+ratio   = cyc_idx / def_idx
 
-# -- Or, for perfect fidelity, use geometric mean instead of arithmetic mean: --
-# cyc_index = (1 + returns[cyclicals_live]).cumprod(axis=0).prod(axis=1)**(1/len(cyclicals_live))
-# def_index = (1 + returns[defensives_live]).cumprod(axis=0).prod(axis=1)**(1/len(defensives_live))
+# ── Moving averages & RSI ─────────────────────────────────────────────────────
+ma_fast_series = ratio.rolling(ma_fast).mean()
+ma_slow_series = ratio.rolling(ma_slow).mean()
 
-ratio = cyc_index / def_index
-ratio.name = "Cyclicals/Defensives Ratio"
+def rsi(series, n):
+    delta = series.diff()
+    up, dn = delta.clip(lower=0), -delta.clip(upper=0)
+    rs = up.rolling(n).mean() / dn.rolling(n).mean()
+    return 100 - 100/(1+rs)
+
+rsi_series = rsi(ratio, rsi_n)
+
+# ── Static Matplotlib figure ──────────────────────────────────────────────────
+fig, (ax1, ax2) = plt.subplots(
+    2, 1, figsize=(12, 8), sharex=True,
+    gridspec_kw={"height_ratios":[2,1], "hspace":0.05}
+)
+
+# Regime colouring: green above slow MA, red below
+above = ratio >= ma_slow_series
+ax1.plot(ratio.index, ratio.where(above), color="green", lw=2, label="Ratio > MA200")
+ax1.plot(ratio.index, ratio.where(~above), color="red",   lw=2, label="Ratio < MA200")
 
 # Moving averages
-ratio_ma_short = ratio.rolling(ma_short).mean()
-ratio_ma_long = ratio.rolling(ma_long).mean()
+ax1.plot(ma_fast_series, color="blue",     lw=1.5, ls="--", label=f"{ma_fast}‑day MA")
+ax1.plot(ma_slow_series, color="firebrick",lw=1.8, ls="-.", label=f"{ma_slow}‑day MA")
 
-def compute_rsi(series, window):
-    delta = series.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    roll_up = up.rolling(window=window).mean()
-    roll_down = down.rolling(window=window).mean()
-    rs = roll_up / roll_down
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+ax1.set_ylabel("Ratio")
+ax1.set_title(f"Cyclicals vs Defensives — {period_choice} window", fontsize=13, pad=10)
+ax1.legend(frameon=False, fontsize=9)
+ax1.grid(True, which="both", ls=":", lw=0.4)
 
-rsi_series = compute_rsi(ratio, rsi_window)
+# RSI pane
+ax2.plot(rsi_series, color="black", lw=1.2)
+ax2.axhline(70, color="red",   ls="--", lw=1)
+ax2.axhline(30, color="green", ls="--", lw=1)
+ax2.set_ylabel("RSI")
+ax2.set_ylim(0,100)
+ax2.grid(True, ls=":", lw=0.4)
 
-from plotly.subplots import make_subplots
+# Nice date formatting
+ax2.xaxis.set_major_formatter(DateFormatter('%b %Y'))
+fig.autofmt_xdate()
 
-fig = make_subplots(
-    rows=2, cols=1, 
-    shared_xaxes=True,
-    row_heights=[0.66, 0.34],
-    vertical_spacing=0.05,
-    subplot_titles=(
-        "Cyclicals Relative to Defensives (Equal Weight, 50/200-day MA)", 
-        f"RSI ({rsi_window}-day) — Overbought / Oversold"
-    )
-)
+st.pyplot(fig, clear_figure=False)
 
-# Top panel: Smooth ratio + MAs
-fig.add_trace(go.Scatter(
-    x=ratio.index, y=ratio, 
-    mode='lines', name='Cyc/Def Ratio',
-    line=dict(color='green', width=2)
-), row=1, col=1)
-fig.add_trace(go.Scatter(
-    x=ratio_ma_short.index, y=ratio_ma_short,
-    mode='lines', name=f'{ma_short}-day MA',
-    line=dict(color='blue', width=2, dash='dot')
-), row=1, col=1)
-fig.add_trace(go.Scatter(
-    x=ratio_ma_long.index, y=ratio_ma_long,
-    mode='lines', name=f'{ma_long}-day MA',
-    line=dict(color='firebrick', width=2, dash='dash')
-), row=1, col=1)
-
-# Bottom panel: RSI
-fig.add_trace(go.Scatter(
-    x=rsi_series.index, y=rsi_series, 
-    mode='lines', name=f'RSI({rsi_window})', 
-    line=dict(color='black', width=1.5)
-), row=2, col=1)
-fig.add_hline(y=70, line_dash='dash', line_color='red', row=2, col=1)
-fig.add_hline(y=30, line_dash='dash', line_color='green', row=2, col=1)
-fig.update_yaxes(title_text="Ratio", row=1, col=1)
-fig.update_yaxes(title_text="RSI", row=2, col=1)
-fig.update_layout(
-    height=720, width=1100,
-    showlegend=True,
-    margin=dict(t=80, l=40, r=40, b=40),
-    title=dict(
-        text="S&P Cyclicals Relative to Defensives — Equal Weight",
-        font=dict(size=22)
-    ),
-    plot_bgcolor="#fff",
-    paper_bgcolor="#fff",
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# Current regime
-latest_ratio = ratio.dropna().iloc[-1]
+# ── Current reading table ─────────────────────────────────────────────────────
 latest_rsi = rsi_series.dropna().iloc[-1]
-if latest_rsi > 70:
-    regime = "Overbought"
-elif latest_rsi < 30:
-    regime = "Oversold"
-else:
-    regime = "Neutral"
+status = "Overbought" if latest_rsi>70 else "Oversold" if latest_rsi<30 else "Neutral"
 
-st.markdown("### Regime Table")
-regime_df = pd.DataFrame({
-    "Latest Ratio": [f"{latest_ratio:.2f}"],
-    f"RSI ({rsi_window})": [f"{latest_rsi:.1f}"],
-    "Status": [regime],
-})
-st.table(regime_df)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Download Series**")
-export_df = pd.DataFrame({
-    "Cyc_Def_Ratio": ratio, 
-    f"MA_{ma_short}": ratio_ma_short, 
-    f"MA_{ma_long}": ratio_ma_long,
-    f"RSI_{rsi_window}": rsi_series
-})
-csv = export_df.to_csv().encode()
-st.sidebar.download_button("Download CSV", csv, "cyc_def_ratio_ma_rsi.csv")
+st.markdown("### Latest Readings")
+st.table(pd.DataFrame({
+    "Ratio" : [f"{ratio.iloc[-1]:.2f}"],
+    f"RSI({rsi_n})":[f"{latest_rsi:.1f}"],
+    "Status":[status]
+}))
