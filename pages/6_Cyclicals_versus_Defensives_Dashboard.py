@@ -108,13 +108,18 @@ rel_ma200 = rel_ma200[rel_ma200.index >= display_start_str]
 rsi       = rsi[rsi.index >= display_start_str]
 signal    = signal[signal.index >= display_start_str]
 
+# Align all time series to rel's index for perfect plot sync
+rel_ma50  = rel_ma50.reindex(rel.index)
+rel_ma200 = rel_ma200.reindex(rel.index)
+rsi       = rsi.reindex(rel.index)
+signal    = signal.reindex(rel.index)
+
 # Main plot with stronger visuals
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=rel.index, y=rel, mode='lines', name='Cyc/Def Rel', line=dict(color='#355E3B', width=2)))
 fig.add_trace(go.Scatter(x=rel_ma50.index, y=rel_ma50, mode='lines', name='50D MA', line=dict(color='blue', width=2)))
 fig.add_trace(go.Scatter(x=rel_ma200.index, y=rel_ma200, mode='lines', name='200D MA', line=dict(color='red', width=2)))
 
-# Add only the first signal of each type in the legend to avoid clutter
 legend_seen = set()
 for date, sig in signal.dropna().items():
     show_in_legend = sig not in legend_seen
