@@ -19,8 +19,8 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Breakout Scanner**  
   Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.
 
-- **Ticker Correlation Dashboard**  
-  Offers an at-a-glance view of historical and rolling correlations to streamline relative-value analysis, diversification checks, and position sizing.
+- **Cyclicals versus Defensives Dashboard**  
+  Tracks the relative performance of S&P cyclical and defensive sector ETFs (equal-weighted) to visualize risk-on/risk-off regime shifts in US equities.
 
 - **Options Chain Viewer**  
   Fetch real-time call & put chains for any ticker and expiry via Yahoo Finance.
