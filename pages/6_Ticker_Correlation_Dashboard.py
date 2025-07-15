@@ -1,119 +1,89 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.dates import DateFormatter
-from dateutil.relativedelta import relativedelta
-import datetime as dt
+import yfinance as yf
+import plotly.graph_objects as go
+from ta.momentum import RSIIndicator
+from datetime import datetime
 
-st.set_page_config(page_title="Cyclicals vs Defensives — Bloomberg Style", layout="wide")
-st.title("S&P Cyclicals Relative to Defensives — Equal-Weight (Bloomberg Replication)")
-
+# 1. Define sector ETF lists
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
-ALL        = CYCLICALS + DEFENSIVES
 
-with st.sidebar:
-    period = st.selectbox("Look-back Window",
-                          ("6 M","YTD","1 Y","3 Y"),
-                          index=2)
-    rsi_n   = st.slider("RSI Window", 5, 30, 14, 1)
-    ma_fast = st.slider("Short MA (blue)", 10, 100, 50, 1)
-    ma_slow = st.slider("Long  MA (red)", 100, 300, 200, 5)
+st.set_page_config(layout="wide", page_title="S&P Cyclicals vs Defensives Dashboard")
+st.title("S&P Cyclicals Relative to Defensives – Equal-Weight")
 
-today = dt.date.today()
-if period == "YTD":
-    start = dt.date(today.year, 1, 1)
-elif period == "6 M":
-    start = today - relativedelta(months=6)
-elif period == "1 Y":
-    start = today - relativedelta(years=1)
-elif period == "3 Y":
-    start = today - relativedelta(years=3)
-else:
-    start = today - relativedelta(years=1)
+# 2. Download historical price data
+start_date = "2022-07-01"
+end_date = datetime.today().strftime('%Y-%m-%d')
 
-@st.cache_data(ttl=12*3600)
-def fetch_prices(tickers, start, end):
-    df = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df = df["Adj Close"] if "Adj Close" in df.columns.get_level_values(0) else \
-             df.xs(df.columns.get_level_values(0).unique()[-1], axis=1, level=0)
+def basket_price(etfs, start, end):
+    data = yf.download(etfs, start=start, end=end)["Adj Close"]
+    basket = data.pct_change().mean(axis=1)
+    basket_cum = (1 + basket).cumprod()
+    return basket_cum
+
+cyc = basket_price(CYCLICALS, start_date, end_date)
+defn = basket_price(DEFENSIVES, start_date, end_date)
+
+# 3. Compute relative ratio
+rel = (cyc / defn) * 100  # scale for better visual match
+
+# 4. Calculate 50D & 200D MAs
+rel_ma50  = rel.rolling(50).mean()
+rel_ma200 = rel.rolling(200).mean()
+
+# 5. Generate RSI
+rsi = RSIIndicator(rel, window=14).rsi()
+
+# 6. Mark trend signals (crossovers)
+signal = pd.Series(index=rel.index, dtype="object")
+signal[(rel_ma50 > rel_ma200) & (rel_ma50.shift(1) <= rel_ma200.shift(1))] = "up"
+signal[(rel_ma50 < rel_ma200) & (rel_ma50.shift(1) >= rel_ma200.shift(1))] = "down"
+
+# 7. Main Plot (Price & MAs)
+fig = go.Figure()
+
+# Relative line
+fig.add_trace(go.Scatter(x=rel.index, y=rel, mode='lines', name='Cyc/Def Rel', line=dict(color='#355E3B')))
+# 50d MA
+fig.add_trace(go.Scatter(x=rel_ma50.index, y=rel_ma50, mode='lines', name='50D MA', line=dict(color='blue')))
+# 200d MA
+fig.add_trace(go.Scatter(x=rel_ma200.index, y=rel_ma200, mode='lines', name='200D MA', line=dict(color='red')))
+
+# Trend signals (arrows)
+for date, sig in signal.dropna().items():
+    if sig == "up":
+        fig.add_trace(go.Scatter(x=[date], y=[rel_ma50[date]], mode='markers',
+                                 marker_symbol='arrow-up', marker_size=15, marker_color='green', name='Positive Signal'))
     else:
-        df = df.to_frame(name=tickers[0] if isinstance(tickers, list) else tickers)
-    df = df.replace(0, np.nan)
-    return df
+        fig.add_trace(go.Scatter(x=[date], y=[rel_ma50[date]], mode='markers',
+                                 marker_symbol='arrow-down', marker_size=15, marker_color='red', name='Negative Signal'))
 
-prices = fetch_prices(ALL, start, today)
-prices = prices.ffill().bfill()
+# No Election Day vertical or "No let up here" annotation
 
-# -- Only use tickers with *complete* data for entire window
-keep = prices.notna().all(axis=0)
-prices = prices.loc[:, keep]
-cyc_live = [t for t in CYCLICALS  if t in prices]
-def_live = [t for t in DEFENSIVES if t in prices]
+# Layout
+fig.update_layout(
+    height=600, width=1000,
+    margin=dict(l=20, r=20, t=60, b=40),
+    title=None,
+    yaxis=dict(range=[rel.min()-10, rel.max()+10], title="Relative Ratio"),
+    xaxis=dict(title="Date"),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
 
-# -- Build rebased price-level equal-weighted indices
-rebased = prices / prices.iloc[0] * 100
-cyc_index = rebased[cyc_live].mean(axis=1)
-def_index = rebased[def_live].mean(axis=1)
-ratio_index = (cyc_index / def_index) * 100
+# 8. RSI subplot
+fig_rsi = go.Figure()
+fig_rsi.add_trace(go.Scatter(x=rel.index, y=rsi, mode='lines', name='RSI (14)', line=dict(color='black')))
+fig_rsi.add_hline(y=70, line_dash="dot", line_color="red")
+fig_rsi.add_hline(y=30, line_dash="dot", line_color="green")
+fig_rsi.update_layout(height=250, width=1000,
+    margin=dict(l=20, r=20, t=40, b=40),
+    yaxis=dict(title="RSI", range=[0, 100]),
+    xaxis=dict(title="Date"),
+    title="Overbought / Oversold"
+)
 
-# -- Moving averages
-ma_fast_ser = ratio_index.rolling(ma_fast).mean()
-ma_slow_ser = ratio_index.rolling(ma_slow).mean()
-
-# -- RSI function
-def rsi(series, window):
-    delta = series.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    avg_gain = up.rolling(window=window, min_periods=window).mean()
-    avg_loss = down.rolling(window=window, min_periods=window).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-rsi_ser = rsi(ratio_index, rsi_n)
-
-# -- Chart (Bloomberg style, trend-colored)
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True,
-                               gridspec_kw={"height_ratios": [2, 1], "hspace":0.05})
-
-trend_up = ratio_index >= ma_slow_ser
-ax1.plot(ratio_index.index, ratio_index.where(trend_up),  color="green", lw=1.6, label="Trend Up")
-ax1.plot(ratio_index.index, ratio_index.where(~trend_up), color="red",   lw=1.6, label="Trend Down")
-ax1.plot(ma_fast_ser, color="blue",      lw=1.2, ls="--", label=f"{ma_fast}-day MA")
-ax1.plot(ma_slow_ser, color="firebrick", lw=1.4, ls="-.", label=f"{ma_slow}-day MA")
-ax1.set_ylabel("Ratio Index")
-ax1.set_title(f"S&P Cyclicals vs Defensives — {period} Window", pad=10, fontsize=14)
-ax1.legend(frameon=False, fontsize=10)
-ax1.grid(True, ls=":", lw=0.3)
-# Dynamic y-axis: slight padding for professional look
-ymin, ymax = np.nanpercentile(ratio_index, 1), np.nanpercentile(ratio_index, 99)
-ax1.set_ylim(ymin - (ymax-ymin)*0.06, ymax + (ymax-ymin)*0.10)
-
-ax2.plot(rsi_ser, color="black", lw=1.2)
-ax2.axhline(70, color="red",   ls="--", lw=1)
-ax2.axhline(30, color="green", ls="--", lw=1)
-ax2.set_ylabel("RSI")
-ax2.set_ylim(0, 100)
-ax2.grid(True, ls=":", lw=0.3)
-ax2.xaxis.set_major_formatter(DateFormatter('%b %Y'))
-fig.autofmt_xdate()
-
-st.pyplot(fig, clear_figure=False)
-
-# -- Diagnostics & Latest Table
-st.markdown(f"**Cyclicals in basket:** {cyc_live}")
-st.markdown(f"**Defensives in basket:** {def_live}")
-
-latest_rsi = rsi_ser.dropna().iloc[-1]
-state = "Overbought" if latest_rsi > 70 else "Oversold" if latest_rsi < 30 else "Neutral"
-st.markdown("### Latest Readings")
-st.table(pd.DataFrame({
-    "Ratio Index": [f"{ratio_index.iloc[-1]:.1f}"],
-    f"RSI({rsi_n})": [f"{latest_rsi:.1f}"],
-    "Status": [state]
-}))
+# 9. Display in Streamlit
+st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig_rsi, use_container_width=True)
