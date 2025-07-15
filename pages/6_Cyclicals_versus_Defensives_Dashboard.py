@@ -21,7 +21,6 @@ with st.sidebar:
     - Cyclical basket: XLK, XLI, XLF, XLC, XLY
     - Defensive basket: XLP, XLE, XLV, XLRE, XLB, XLU
     - The ratio of cumulative returns (Cyc/Def) is shown, with 50D & 200D moving averages and RSI (14).
-    - Trend signals at MA crossovers.
     - Select your preferred lookback.
     """)
 
@@ -90,47 +89,23 @@ def compute_rsi(series, window=14):
 
 rsi = compute_rsi(rel, window=14)
 
-signal = pd.Series(index=rel.index, dtype="object")
-signal[(rel_ma50 > rel_ma200) & (rel_ma50.shift(1) <= rel_ma200.shift(1))] = "up"
-signal[(rel_ma50 < rel_ma200) & (rel_ma50.shift(1) >= rel_ma200.shift(1))] = "down"
+# Slice for display period (keep MA's full length, slice only rel and RSI)
+display_mask = rel.index >= display_start_str
+rel_disp  = rel[display_mask]
+rsi_disp  = rsi[display_mask]
 
-# Slice for display period
-rel       = rel[rel.index >= display_start_str]
-rel_ma50  = rel_ma50[rel_ma50.index >= display_start_str]
-rel_ma200 = rel_ma200[rel_ma200.index >= display_start_str]
-rsi       = rsi[rsi.index >= display_start_str]
-signal    = signal[signal.index >= display_start_str]
-
-# Align all to rel index
-rel_ma50  = rel_ma50.reindex(rel.index)
-rel_ma200 = rel_ma200.reindex(rel.index)
-rsi       = rsi.reindex(rel.index)
-signal    = signal.reindex(rel.index)
-
+# Main chart (no signals, always full MA curves)
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=rel.index, y=rel, mode='lines', name='Cyc/Def Rel', line=dict(color='#355E3B', width=2)))
+fig.add_trace(go.Scatter(x=rel_disp.index, y=rel_disp, mode='lines', name='Cyc/Def Rel', line=dict(color='#355E3B', width=2)))
 fig.add_trace(go.Scatter(x=rel_ma50.index, y=rel_ma50, mode='lines', name='50D MA', line=dict(color='blue', width=2)))
 fig.add_trace(go.Scatter(x=rel_ma200.index, y=rel_ma200, mode='lines', name='200D MA', line=dict(color='red', width=2)))
-
-legend_seen = set()
-for date, sig in signal.dropna().items():
-    show_in_legend = sig not in legend_seen
-    legend_seen.add(sig)
-    if sig == "up":
-        fig.add_trace(go.Scatter(x=[date], y=[rel_ma50[date]], mode='markers',
-                                 marker_symbol='arrow-up', marker_size=14, marker_color='green',
-                                 name='Positive Signal' if show_in_legend else None, showlegend=show_in_legend))
-    else:
-        fig.add_trace(go.Scatter(x=[date], y=[rel_ma50[date]], mode='markers',
-                                 marker_symbol='arrow-down', marker_size=14, marker_color='red',
-                                 name='Negative Signal' if show_in_legend else None, showlegend=show_in_legend))
 
 fig.update_layout(
     height=600, width=1000,
     margin=dict(l=20, r=20, t=40, b=40),
     font=dict(size=16, family="Arial"),
     yaxis=dict(title="Relative Ratio"),
-    xaxis=dict(title="Date"),
+    xaxis=dict(title="Date", range=[rel_disp.index.min(), rel_disp.index.max()]),
     legend=dict(
         orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1,
         font=dict(size=14, family="Arial")
@@ -138,8 +113,9 @@ fig.update_layout(
     plot_bgcolor="white"
 )
 
+# RSI subplot
 fig_rsi = go.Figure()
-fig_rsi.add_trace(go.Scatter(x=rsi.index, y=rsi, mode='lines', name='RSI (14)', line=dict(color='black', width=2)))
+fig_rsi.add_trace(go.Scatter(x=rsi_disp.index, y=rsi_disp, mode='lines', name='RSI (14)', line=dict(color='black', width=2)))
 fig_rsi.add_hline(y=70, line_dash="dot", line_color="red", annotation_text="Overbought", annotation_position="top left")
 fig_rsi.add_hline(y=30, line_dash="dot", line_color="green", annotation_text="Oversold", annotation_position="bottom left")
 fig_rsi.update_layout(
@@ -147,7 +123,7 @@ fig_rsi.update_layout(
     margin=dict(l=20, r=20, t=25, b=40),
     font=dict(size=15, family="Arial"),
     yaxis=dict(title="RSI", range=[0, 100]),
-    xaxis=dict(title="Date"),
+    xaxis=dict(title="Date", range=[rel_disp.index.min(), rel_disp.index.max()]),
     legend=dict(
         orientation="h", font=dict(size=14, family="Arial")
     ),
