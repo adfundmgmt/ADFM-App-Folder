@@ -43,9 +43,14 @@ returns = prices.pct_change().dropna()
 cyclicals_live = [x for x in cyclicals if x in prices.columns]
 defensives_live = [x for x in defensives if x in prices.columns]
 
-# Equal-weighted cumulative index
+# -- Properly build equal-weighted index for each group --
 cyc_index = (1 + returns[cyclicals_live]).cumprod().mean(axis=1)
 def_index = (1 + returns[defensives_live]).cumprod().mean(axis=1)
+
+# -- Or, for perfect fidelity, use geometric mean instead of arithmetic mean: --
+# cyc_index = (1 + returns[cyclicals_live]).cumprod(axis=0).prod(axis=1)**(1/len(cyclicals_live))
+# def_index = (1 + returns[defensives_live]).cumprod(axis=0).prod(axis=1)**(1/len(defensives_live))
+
 ratio = cyc_index / def_index
 ratio.name = "Cyclicals/Defensives Ratio"
 
@@ -53,7 +58,6 @@ ratio.name = "Cyclicals/Defensives Ratio"
 ratio_ma_short = ratio.rolling(ma_short).mean()
 ratio_ma_long = ratio.rolling(ma_long).mean()
 
-# Custom RSI
 def compute_rsi(series, window):
     delta = series.diff()
     up = delta.clip(lower=0)
@@ -66,14 +70,6 @@ def compute_rsi(series, window):
 
 rsi_series = compute_rsi(ratio, rsi_window)
 
-# Election day vertical line (2024-11-05 for US Election)
-election_date = pd.Timestamp("2024-11-05")
-if election_date not in ratio.index:
-    # find closest available date
-    idx = ratio.index.get_indexer([election_date], method='nearest')[0]
-    election_date = ratio.index[idx]
-
-# --- Build composite Plotly figure with subplots ---
 from plotly.subplots import make_subplots
 
 fig = make_subplots(
@@ -87,7 +83,7 @@ fig = make_subplots(
     )
 )
 
-# Top panel: Ratio + MAs
+# Top panel: Smooth ratio + MAs
 fig.add_trace(go.Scatter(
     x=ratio.index, y=ratio, 
     mode='lines', name='Cyc/Def Ratio',
@@ -96,21 +92,13 @@ fig.add_trace(go.Scatter(
 fig.add_trace(go.Scatter(
     x=ratio_ma_short.index, y=ratio_ma_short,
     mode='lines', name=f'{ma_short}-day MA',
-    line=dict(color='blue', width=1, dash='dot')
+    line=dict(color='blue', width=2, dash='dot')
 ), row=1, col=1)
 fig.add_trace(go.Scatter(
     x=ratio_ma_long.index, y=ratio_ma_long,
     mode='lines', name=f'{ma_long}-day MA',
-    line=dict(color='firebrick', width=1.5, dash='dash')
+    line=dict(color='firebrick', width=2, dash='dash')
 ), row=1, col=1)
-fig.add_vline(
-    x=election_date, line_width=1.5, line_dash="dot", line_color="black", row=1, col=1
-)
-fig.add_annotation(
-    x=election_date, y=ratio.max(), text="Election Day 2024", 
-    showarrow=True, arrowhead=1, ay=-40, ax=30, 
-    font=dict(size=12), row=1, col=1
-)
 
 # Bottom panel: RSI
 fig.add_trace(go.Scatter(
