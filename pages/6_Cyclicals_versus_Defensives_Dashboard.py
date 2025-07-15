@@ -43,7 +43,6 @@ with st.sidebar:
         index=default_ix
     )
 
-# Always download 10 years to support long MAs
 today = datetime.today()
 data_start_date = today - timedelta(days=365*10 + 220)  # 10 years + 200D buffer
 data_start_str = data_start_date.strftime('%Y-%m-%d')
@@ -102,13 +101,12 @@ rel_ma200 = rel_ma200[rel_ma200.index >= display_start_str]
 rsi       = rsi[rsi.index >= display_start_str]
 signal    = signal[signal.index >= display_start_str]
 
-# Align everything to rel's index for perfect sync
+# Align all to rel index
 rel_ma50  = rel_ma50.reindex(rel.index)
 rel_ma200 = rel_ma200.reindex(rel.index)
 rsi       = rsi.reindex(rel.index)
 signal    = signal.reindex(rel.index)
 
-# Main chart
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=rel.index, y=rel, mode='lines', name='Cyc/Def Rel', line=dict(color='#355E3B', width=2)))
 fig.add_trace(go.Scatter(x=rel_ma50.index, y=rel_ma50, mode='lines', name='50D MA', line=dict(color='blue', width=2)))
@@ -131,16 +129,8 @@ fig.update_layout(
     height=600, width=1000,
     margin=dict(l=20, r=20, t=40, b=40),
     font=dict(size=16, family="Arial"),
-    yaxis=dict(
-        title="Relative Ratio",
-        titlefont=dict(size=16, family="Arial"),
-        tickfont=dict(size=14, family="Arial")
-    ),
-    xaxis=dict(
-        title="Date",
-        titlefont=dict(size=16, family="Arial"),
-        tickfont=dict(size=14, family="Arial")
-    ),
+    yaxis=dict(title="Relative Ratio"),
+    xaxis=dict(title="Date"),
     legend=dict(
         orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1,
         font=dict(size=14, family="Arial")
@@ -148,7 +138,6 @@ fig.update_layout(
     plot_bgcolor="white"
 )
 
-# RSI subplot
 fig_rsi = go.Figure()
 fig_rsi.add_trace(go.Scatter(x=rsi.index, y=rsi, mode='lines', name='RSI (14)', line=dict(color='black', width=2)))
 fig_rsi.add_hline(y=70, line_dash="dot", line_color="red", annotation_text="Overbought", annotation_position="top left")
@@ -157,16 +146,8 @@ fig_rsi.update_layout(
     height=220, width=1000,
     margin=dict(l=20, r=20, t=25, b=40),
     font=dict(size=15, family="Arial"),
-    yaxis=dict(
-        title="RSI", range=[0, 100],
-        titlefont=dict(size=16, family="Arial"),
-        tickfont=dict(size=14, family="Arial")
-    ),
-    xaxis=dict(
-        title="Date",
-        titlefont=dict(size=16, family="Arial"),
-        tickfont=dict(size=14, family="Arial")
-    ),
+    yaxis=dict(title="RSI", range=[0, 100]),
+    xaxis=dict(title="Date"),
     legend=dict(
         orientation="h", font=dict(size=14, family="Arial")
     ),
