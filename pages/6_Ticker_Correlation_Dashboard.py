@@ -1,298 +1,104 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
-import datetime as dt
-from dateutil.relativedelta import relativedelta
-import plotly.graph_objects as go
 import plotly.express as px
-import io
-import zipfile
-import re
+import plotly.figure_factory as ff
+import datetime as dt
 
-st.set_page_config(
-    page_title="Correlation Dashboard — AD Fund Management LP",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-st.title("Ticker Correlation Dashboard")
+st.set_page_config(page_title="Sector Correlation Dashboard", layout="wide")
+st.title("Sector Correlation Dashboard: Cyclicals vs. Defensives")
 
-# ─── Sidebar: About + Inputs ──────────────────────────────
+# ---- Define sector groups ----
+cyclicals = ["XLK", "XLI", "XLF", "XLC", "XLY"]
+defensives = ["XLP", "XLE", "XLV", "XLRE", "XLU"]
+all_sectors = cyclicals + defensives
+
+# ---- Sidebar options ----
 with st.sidebar:
-    st.markdown("## About This Tool")
-    st.markdown("""
-    Dashboard for analyzing dynamic correlations and risk across up to three tickers (stocks, commodities, ETFs, or indices).
+    st.header("Settings")
+    st.markdown("Analyze rolling and static correlations between key S&P 500 sector ETFs.")
+    start_date = st.date_input("Start Date", value=dt.date.today() - dt.timedelta(days=365*3))
+    end_date = st.date_input("End Date", value=dt.date.today())
+    roll_window = st.slider("Rolling Window (days)", 20, 120, 60)
 
-    • Tracks Spearman (rank-based) correlations across multiple look-back windows  
-    • Supports daily, weekly, or monthly log returns  
-    • Rolling volatility and regime shift detection  
-    • Interactive heatmaps, regime tables, and export-ready data
-    """)
+# ---- Load price data ----
+@st.cache_data
+def load_sector_data(tickers, start, end):
+    df = yf.download(tickers, start=start, end=end, auto_adjust=True)["Adj Close"]
+    return df
 
-    st.markdown("---")
-    st.header("Inputs")
-    ticker_x = st.text_input("Ticker X", value="AAPL", help="First ticker (required)").strip().upper()
-    ticker_y = st.text_input("Ticker Y", value="MSFT", help="Second ticker (required)").strip().upper()
-    ticker_z = st.text_input("Ticker Z (optional)", value="", help="Third ticker or benchmark (optional)").strip().upper()
-    freq = st.selectbox("Return Frequency", options=["Daily", "Weekly", "Monthly"], index=0)
-    roll_window = st.slider("Rolling Window (periods)", 20, 120, value=60)
+prices = load_sector_data(all_sectors, start_date, end_date)
+returns = prices.pct_change().dropna()
 
+# ---- Helper: Correlation Table ----
+def styled_corr_table(corr_df):
+    styled = corr_df.style.format("{:.2f}").background_gradient(
+        cmap="RdYlGn", axis=None, gmap=corr_df.values)
+    return styled
 
-# ─── Helper Functions ──────────────────────────────
-def clean_ticker(t):
-    """Remove extra spaces and only allow A-Z0-9-.^ for tickers."""
-    return re.sub(r'[^A-Z0-9\-\.\^]', '', t.upper().strip())
+# ---- Static Correlation Tables ----
+st.subheader("Pairwise Correlations")
+col1, col2 = st.columns(2)
 
-ticker_x, ticker_y, ticker_z = map(clean_ticker, [ticker_x, ticker_y, ticker_z])
+with col1:
+    st.markdown("**Cyclicals**")
+    corr_cyc = returns[cyclicals].corr(method="spearman")
+    st.dataframe(corr_cyc.style.background_gradient(cmap="RdYlGn"))
 
-def validate_ticker(ticker):
-    if not ticker:
-        return False
-    try:
-        hist = yf.download(ticker, period="5d", progress=False)
-        return not hist.empty
-    except Exception:
-        return False
+with col2:
+    st.markdown("**Defensives**")
+    corr_def = returns[defensives].corr(method="spearman")
+    st.dataframe(corr_def.style.background_gradient(cmap="RdYlGn"))
 
-bad_tickers = [tk for tk in [ticker_x, ticker_y, ticker_z] if tk and not validate_ticker(tk)]
-if bad_tickers:
-    st.error(f"Invalid ticker(s): {', '.join(bad_tickers)}. Please correct and retry.")
-    st.stop()
+st.markdown("**Cyclicals vs. Defensives (Average Correlation)**")
+cyc_def_corr = returns[cyclicals].corrwith(returns[defensives].mean(axis=1), method="spearman")
+st.write(cyc_def_corr.to_frame("Corr with Defensives Mean").style.background_gradient(cmap="RdYlGn"))
 
-symbols = list(filter(bool, [ticker_x, ticker_y, ticker_z]))
-symbols = sorted(set(symbols))  # De-duplicate
+# ---- Rolling Correlations ----
+st.subheader("Rolling Correlation Heatmaps")
 
-# ─── Date Range Setup ──────────────────────────────
-end_date = dt.date.today()
-windows = {
-    "Year-to-date": dt.date(end_date.year, 1, 1),
-    "3 Months": end_date - relativedelta(months=3),
-    "6 Months": end_date - relativedelta(months=6),
-    "9 Months": end_date - relativedelta(months=9),
-    "1 Year": end_date - relativedelta(years=1),
-    "3 Years": end_date - relativedelta(years=3),
-    "5 Years": end_date - relativedelta(years=5),
-    "10 Years": end_date - relativedelta(years=10),
-}
-earliest_date = min(windows.values()) - relativedelta(months=1)
+# 1. Cyclicals rolling correlation
+rolling_corr_cyc = returns[cyclicals].rolling(roll_window).corr().dropna()
+rolling_corr_def = returns[defensives].rolling(roll_window).corr().dropna()
 
-@st.cache_data(show_spinner=False)
-def fetch_prices(symbols, start, end):
-    try:
-        df = yf.download(
-            symbols,
-            start=start,
-            end=end + dt.timedelta(days=1),
-            progress=False,
-            auto_adjust=False,
-        )
-    except Exception as e:
-        return None, f"Data fetch failed: {e}"
-    if df.empty:
-        return None, "No data returned (bad ticker or unavailable data)."
-    if isinstance(df.columns, pd.MultiIndex):
-        adj = df["Adj Close"].copy()
-        adj.columns = adj.columns.get_level_values(0)
-    else:
-        # Single ticker, not multi-index
-        adj = df[["Adj Close"]].rename(columns={"Adj Close": symbols[0]})
-    adj = adj.dropna(axis=1, how="all")
-    if adj.empty:
-        return None, "No valid price data found for tickers."
-    return adj.dropna(how="all"), None
+# Show average rolling pairwise correlation over time
+cyc_pairs = [(i, j) for idx, i in enumerate(cyclicals) for j in cyclicals[idx+1:]]
+def_pairs = [(i, j) for idx, i in enumerate(defensives) for j in defensives[idx+1:]]
 
-prices, fetch_err = fetch_prices(symbols, start=earliest_date, end=end_date)
-if fetch_err or prices is None or prices.empty:
-    st.error(fetch_err or "No price data returned — check ticker symbols and try again.")
-    st.stop()
+avg_rolling_corr_cyc = pd.DataFrame({
+    f"{i}-{j}": rolling_corr_cyc.xs(i, level=1)[j].values
+    for i, j in cyc_pairs
+}, index=rolling_corr_cyc.index.levels[0][roll_window-1:])
 
-# ─── Frequency Handling ──────────────────────────────
-def resample_prices(prices, freq):
-    if freq == "Daily":
-        return prices
-    elif freq == "Weekly":
-        return prices.resample("W-FRI").last()
-    elif freq == "Monthly":
-        return prices.resample("M").last()
-    else:
-        raise ValueError("Unknown frequency.")
+avg_rolling_corr_def = pd.DataFrame({
+    f"{i}-{j}": rolling_corr_def.xs(i, level=1)[j].values
+    for i, j in def_pairs
+}, index=rolling_corr_def.index.levels[0][roll_window-1:])
 
-prices = resample_prices(prices, freq)
-returns = np.log(prices / prices.shift(1)).dropna(how="all")
+tab1, tab2 = st.tabs(["Cyclicals", "Defensives"])
+with tab1:
+    st.markdown("**Cyclicals: Rolling Pairwise Correlations**")
+    fig = px.line(avg_rolling_corr_cyc, labels={"value":"Corr", "index":"Date"})
+    st.plotly_chart(fig, use_container_width=True)
 
-# ─── Data Coverage Warning ──────────────────────────────
-min_required = roll_window + 10  # Require at least this many points for robust results
-for tk in symbols:
-    if tk not in returns.columns or returns[tk].dropna().size < min_required:
-        st.warning(
-            f"Warning: {tk} has insufficient price history for the selected rolling window. "
-            "Results for this ticker may be unstable or missing in charts below."
-        )
+with tab2:
+    st.markdown("**Defensives: Rolling Pairwise Correlations**")
+    fig = px.line(avg_rolling_corr_def, labels={"value":"Corr", "index":"Date"})
+    st.plotly_chart(fig, use_container_width=True)
 
-# ─── Indexed Price Chart (Plotly) ──────────────────────────────
-st.subheader("Indexed Price Performance")
-plot_tickers = [t for t in [ticker_x, ticker_y, ticker_z] if t in prices.columns]
-fig = go.Figure()
-for tk in plot_tickers:
-    indexed = prices[tk] / prices[tk].iloc[0] * 100
-    fig.add_trace(go.Scatter(
-        x=indexed.index,
-        y=indexed,
-        mode="lines",
-        name=tk,
-        line=dict(width=2)
-    ))
-fig.update_layout(
-    yaxis_title="Indexed Price (Base=100)",
-    xaxis_title="Date",
-    legend_title="Ticker",
-    template="plotly_white",
-    height=400,
-    hovermode="x unified"
-)
+# ---- Cyclicals vs Defensives rolling correlation ----
+st.subheader("Rolling Mean: Cyclicals vs. Defensives")
+rolling_cyc = returns[cyclicals].mean(axis=1)
+rolling_def = returns[defensives].mean(axis=1)
+rolling_corr = rolling_cyc.rolling(roll_window).corr(rolling_def)
+
+fig = px.line(rolling_corr, labels={"value":"Corr", "index":"Date"}, title="Rolling Correlation: Mean Cyclicals vs Mean Defensives")
 st.plotly_chart(fig, use_container_width=True)
 
-# ─── Rolling Correlation Chart ──────────────────────────────
-def get_rolling_corr(s1, s2, window):
-    s1r = s1.rank()
-    s2r = s2.rank()
-    return s1r.rolling(window).corr(s2r)
+# ---- Option: Download Data ----
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Download Data**")
+csv = returns.to_csv().encode()
+st.sidebar.download_button("Download Returns CSV", csv, "sector_returns.csv")
 
-st.subheader("Rolling Correlation (Spearman)")
-corr_df = pd.DataFrame(index=returns.index)
-label_xy = f"{ticker_x} vs {ticker_y}"
-if ticker_x in returns.columns and ticker_y in returns.columns:
-    corr_df[label_xy] = get_rolling_corr(returns[ticker_x], returns[ticker_y], roll_window)
-if ticker_z and ticker_z in returns.columns:
-    label_xz = f"{ticker_x} vs {ticker_z}"
-    label_yz = f"{ticker_y} vs {ticker_z}"
-    if ticker_x in returns.columns and ticker_z in returns.columns:
-        corr_df[label_xz] = get_rolling_corr(returns[ticker_x], returns[ticker_z], roll_window)
-    if ticker_y in returns.columns and ticker_z in returns.columns:
-        corr_df[label_yz] = get_rolling_corr(returns[ticker_y], returns[ticker_z], roll_window)
-corr_df = corr_df.dropna(how="all")
-
-fig_corr = go.Figure()
-for col in corr_df.columns:
-    fig_corr.add_trace(go.Scatter(
-        x=corr_df.index,
-        y=corr_df[col],
-        mode="lines",
-        name=col,
-        line=dict(width=2)
-    ))
-fig_corr.update_layout(
-    yaxis_title="Rolling Correlation",
-    xaxis_title="Date",
-    legend_title="Pair",
-    template="plotly_white",
-    height=400,
-    hovermode="x unified",
-    yaxis=dict(range=[-1, 1])
-)
-st.plotly_chart(fig_corr, use_container_width=True)
-
-# ─── Rolling Volatility Chart ──────────────────────────────
-st.subheader("Rolling Annualized Volatility")
-fig_vol = go.Figure()
-periods_per_year = {"Daily": 252, "Weekly": 52, "Monthly": 12}[freq]
-for tk in plot_tickers:
-    vol = returns[tk].rolling(roll_window).std() * np.sqrt(periods_per_year)
-    fig_vol.add_trace(go.Scatter(
-        x=vol.index,
-        y=vol,
-        mode="lines",
-        name=tk,
-        line=dict(width=2)
-    ))
-fig_vol.update_layout(
-    yaxis_title="Annualized Volatility",
-    xaxis_title="Date",
-    legend_title="Ticker",
-    template="plotly_white",
-    height=400,
-    hovermode="x unified"
-)
-st.plotly_chart(fig_vol, use_container_width=True)
-
-# ─── Spearman Correlation Matrix (heatmap) ──────────────────────────────
-st.subheader("Correlation Heatmap (Spearman)")
-def spearman_corr_matrix(df):
-    ranked = df.rank(axis=0)
-    return ranked.corr(method="pearson")
-
-corr_matrices = {}
-for label, since in windows.items():
-    ret_slice = returns.loc[returns.index >= pd.Timestamp(since), plot_tickers]
-    mat = spearman_corr_matrix(ret_slice)
-    corr_matrices[label] = mat
-
-selected_window = st.selectbox("Select look-back window:", list(windows.keys()), index=0)
-fig_heat = px.imshow(
-    corr_matrices[selected_window].round(3),
-    text_auto='.3f',
-    aspect="auto",
-    color_continuous_scale="RdBu",
-    zmin=-1, zmax=1,
-    title=f"Correlation Heatmap, {selected_window}"
-)
-fig_heat.update_layout(height=340)
-st.plotly_chart(fig_heat, use_container_width=True)
-
-# ─── Correlation Table by Window (Spearman, 3 decimals + color codes) ──────────────────────────────
-st.subheader("Correlation Regime Table by Window (Spearman)")
-def format_corr(val):
-    """Return emoji + formatted float string."""
-    if pd.isna(val): return ""
-    absval = abs(val)
-    if absval >= 0.7: emoji = "🟢"
-    elif absval >= 0.3: emoji = "🟡"
-    else: emoji = "🔴"
-    return f"{emoji} {val:.3f}"
-
-rows = []
-for label, since in windows.items():
-    ret_slice = returns.loc[returns.index >= pd.Timestamp(since), plot_tickers]
-    mat = spearman_corr_matrix(ret_slice)
-    row = {"Window": label}
-    # X↔Y
-    try: row["X vs Y"] = mat.loc[ticker_x, ticker_y]
-    except: row["X vs Y"] = np.nan
-    if ticker_z:
-        try: row["X vs Z"] = mat.loc[ticker_x, ticker_z]
-        except: row["X vs Z"] = np.nan
-        try: row["Y vs Z"] = mat.loc[ticker_y, ticker_z]
-        except: row["Y vs Z"] = np.nan
-    rows.append(row)
-
-df_corr = pd.DataFrame(rows)
-df_corr_fmt = df_corr.copy()
-for col in df_corr.columns[1:]:
-    df_corr_fmt[col] = df_corr[col].apply(format_corr)
-st.dataframe(df_corr_fmt.set_index("Window"), height=340)
-
-# ─── Data Download (ZIP) ──────────────────────────────
-with st.expander("Download All Outputs (.zip)"):
-    zbuf = io.BytesIO()
-    with zipfile.ZipFile(zbuf, "w") as zipf:
-        zipf.writestr("indexed_prices.csv", prices.to_csv(index=True))
-        zipf.writestr("log_returns.csv", returns.to_csv(index=True))
-        zipf.writestr("correlation_table.csv", df_corr.to_csv(index=False))
-        for label, mat in corr_matrices.items():
-            zipf.writestr(f"corr_matrix_{label.replace(' ', '_').lower()}.csv", mat.to_csv(index=True))
-        # Add simple README
-        zipf.writestr("README.txt",
-            "Institutional Correlation Dashboard Output\n"
-            "• indexed_prices.csv: Price data, base-100\n"
-            "• log_returns.csv: Log returns (resampled)\n"
-            "• correlation_table.csv: Lookback regime summary\n"
-            "• corr_matrix_*.csv: Spearman correlation matrices by window"
-        )
-    st.download_button(
-        "Download ZIP",
-        data=zbuf.getvalue(),
-        file_name="correlation_dashboard_outputs.zip",
-        mime="application/zip"
-    )
-
-st.caption("© 2025 AD Fund Management LP | All rights reserved")
