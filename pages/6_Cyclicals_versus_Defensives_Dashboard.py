@@ -36,7 +36,6 @@ with st.sidebar:
         "5 Years": 365*5,
         "10 Years": 365*10
     }
-    # Default to "5 Years"
     default_ix = list(time_options.keys()).index("5 Years")
     time_choice = st.selectbox(
         "Select the lookback period:",
@@ -56,9 +55,8 @@ else:
     display_start = today - timedelta(days=time_options[time_choice])
 display_start_str = display_start.strftime('%Y-%m-%d')
 
-# Download and construct baskets (full 10Y)
 def basket_price(etfs, start, end):
-    data = yf.download(etfs, start=start, end=end, group_by="ticker", auto_adjust=True)
+    data = yf.download(etfs, start=start, end=end, group_by="ticker", auto_adjust=True, progress=False)
     price_df = pd.DataFrame()
     for etf in etfs:
         try:
@@ -77,15 +75,12 @@ def basket_price(etfs, start, end):
 cyc = basket_price(CYCLICALS, data_start_str, end_date)
 defn = basket_price(DEFENSIVES, data_start_str, end_date)
 
-# Align and drop missing
 rel = (cyc / defn) * 100
 rel = rel.dropna()
 
-# Moving averages: always full period
 rel_ma50  = rel.rolling(50).mean()
 rel_ma200 = rel.rolling(200).mean()
 
-# Native RSI
 def compute_rsi(series, window=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
@@ -96,25 +91,24 @@ def compute_rsi(series, window=14):
 
 rsi = compute_rsi(rel, window=14)
 
-# Trend signals (full period)
 signal = pd.Series(index=rel.index, dtype="object")
 signal[(rel_ma50 > rel_ma200) & (rel_ma50.shift(1) <= rel_ma200.shift(1))] = "up"
 signal[(rel_ma50 < rel_ma200) & (rel_ma50.shift(1) >= rel_ma200.shift(1))] = "down"
 
-# Now slice everything to the user's lookback
+# Slice for display period
 rel       = rel[rel.index >= display_start_str]
 rel_ma50  = rel_ma50[rel_ma50.index >= display_start_str]
 rel_ma200 = rel_ma200[rel_ma200.index >= display_start_str]
 rsi       = rsi[rsi.index >= display_start_str]
 signal    = signal[signal.index >= display_start_str]
 
-# Align all time series to rel's index for perfect plot sync
+# Align everything to rel's index for perfect sync
 rel_ma50  = rel_ma50.reindex(rel.index)
 rel_ma200 = rel_ma200.reindex(rel.index)
 rsi       = rsi.reindex(rel.index)
 signal    = signal.reindex(rel.index)
 
-# Main plot with stronger visuals
+# Main chart
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=rel.index, y=rel, mode='lines', name='Cyc/Def Rel', line=dict(color='#355E3B', width=2)))
 fig.add_trace(go.Scatter(x=rel_ma50.index, y=rel_ma50, mode='lines', name='50D MA', line=dict(color='blue', width=2)))
@@ -137,9 +131,20 @@ fig.update_layout(
     height=600, width=1000,
     margin=dict(l=20, r=20, t=40, b=40),
     font=dict(size=16, family="Arial"),
-    yaxis=dict(title="Relative Ratio", titlefont=dict(size=16), tickfont=dict(size=14)),
-    xaxis=dict(title="Date", titlefont=dict(size=16), tickfont=dict(size=14)),
-    legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1, font=dict(size=14)),
+    yaxis=dict(
+        title="Relative Ratio",
+        titlefont=dict(size=16, family="Arial"),
+        tickfont=dict(size=14, family="Arial")
+    ),
+    xaxis=dict(
+        title="Date",
+        titlefont=dict(size=16, family="Arial"),
+        tickfont=dict(size=14, family="Arial")
+    ),
+    legend=dict(
+        orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1,
+        font=dict(size=14, family="Arial")
+    ),
     plot_bgcolor="white"
 )
 
@@ -152,8 +157,19 @@ fig_rsi.update_layout(
     height=220, width=1000,
     margin=dict(l=20, r=20, t=25, b=40),
     font=dict(size=15, family="Arial"),
-    yaxis=dict(title="RSI", range=[0, 100], titlefont=dict(size=16), tickfont=dict(size=14)),
-    xaxis=dict(title="Date", titlefont=dict(size=16), tickfont=dict(size=14)),
+    yaxis=dict(
+        title="RSI", range=[0, 100],
+        titlefont=dict(size=16, family="Arial"),
+        tickfont=dict(size=14, family="Arial")
+    ),
+    xaxis=dict(
+        title="Date",
+        titlefont=dict(size=16, family="Arial"),
+        tickfont=dict(size=14, family="Arial")
+    ),
+    legend=dict(
+        orientation="h", font=dict(size=14, family="Arial")
+    ),
     title="<b>Overbought / Oversold</b>",
     plot_bgcolor="white"
 )
