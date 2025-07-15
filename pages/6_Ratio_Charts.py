@@ -25,7 +25,7 @@ DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
 
-# ------ Sidebar: About section and lookback ------
+# ------ Sidebar: About section and lookback + Custom Ratio Inputs ------
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
@@ -42,6 +42,11 @@ with st.sidebar:
              "3 Y":365*3,"5 Y":365*5,"10 Y":365*10}
     default_ix = list(spans.keys()).index("5 Y")
     span_key = st.selectbox("", list(spans.keys()), index=default_ix)
+
+    st.markdown("---")
+    st.subheader("Custom Ratio")
+    custom_ticker_1 = st.text_input("Custom Ticker 1", value="AAPL").strip().upper()
+    custom_ticker_2 = st.text_input("Custom Ticker 2", value="MSFT").strip().upper()
 
 # ------ Date handling ------
 today = datetime.today()
@@ -133,7 +138,7 @@ def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio", y_margin=0.1
 
 cyc_def_ratio = calc_ratio(CYCLICALS, DEFENSIVES)
 plot_ratio_panel_static(cyc_def_ratio, disp_start, "Cyclicals / Defensives (Equal-Weight)", ylab="Relative Ratio")
-st.markdown("<br>", unsafe_allow_html=True)   # Blank space
+st.markdown("<br>", unsafe_allow_html=True)
 
 smh_igv_ratio = calc_ratio_simple("SMH", "IGV")
 plot_ratio_panel_static(smh_igv_ratio, disp_start, "SMH / IGV Relative Strength & RSI", ylab="SMH / IGV")
@@ -149,4 +154,17 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 hyg_ief_ratio = calc_ratio_simple("HYG", "IEF")
 plot_ratio_panel_static(hyg_ief_ratio, disp_start, "HYG / IEF (High Yield vs Treasuries)", ylab="HYG / IEF")
+st.markdown("<br><br>", unsafe_allow_html=True)
 
+# ------ Custom Ratio Chart Panel ------
+if custom_ticker_1 and custom_ticker_2:
+    try:
+        custom_ratio = calc_ratio_simple(custom_ticker_1, custom_ticker_2)
+        plot_ratio_panel_static(
+            custom_ratio, disp_start,
+            f"{custom_ticker_1} / {custom_ticker_2} Relative Strength & RSI",
+            ylab=f"{custom_ticker_1} / {custom_ticker_2}"
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"Error loading ratio for {custom_ticker_1} / {custom_ticker_2}: {e}")
