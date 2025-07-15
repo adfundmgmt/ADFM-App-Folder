@@ -21,8 +21,8 @@ st.markdown("""
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 
-st.set_page_config(layout="wide", page_title="S&P Cyclicals vs Defensives Dashboard")
-st.title("S&P Cyclicals Relative to Defensives — Equal‑Weight")
+st.set_page_config(layout="wide", page_title="Ratio Charts")
+st.title("Ratio Charts")
 
 # Sidebar: About section and lookback selector
 with st.sidebar:
