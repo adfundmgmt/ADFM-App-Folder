@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # ------ CSS to tighten sidebar spacing ------
@@ -18,33 +17,38 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# ------ ETF groups ------
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 
-st.set_page_config(layout="wide", page_title="Ratio Charts")
-st.title("Ratio Charts")
+# ------ Page config ------
+st.set_page_config(layout="wide", page_title="S&P Cyclicals vs Defensives Dashboard")
+st.title("S&P Cyclicals Relative to Defensives — Equal‑Weight")
 
-# Sidebar: About section and lookback selector
+# ------ Sidebar: About section and lookback ------
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
     This dashboard tracks the **relative performance of S&P cyclical and defensive sector ETFs** (equal-weighted) to visualize risk-on/risk-off regime shifts in US equities.
 
-    - **Cyclical basket:** XLK, XLI, XLF, XLC, XLY
-    - **Defensive basket:** XLP, XLE, XLV, XLRE, XLB, XLU
+    - **Cyclical basket:** XLK, XLI, XLF, XLC, XLY  
+    - **Defensive basket:** XLP, XLE, XLV, XLRE, XLB, XLU  
     - Shows cumulative return ratio, 50/200-day moving averages, and RSI (14).
 
-    There are also other miscellaneous ratio charts below (Semis/Software, QQQ/IWM et al.) for context and macro leadership.
+    **Other ratio charts below**: Semis/Software, QQQ/IWM, Credit Spreads.
     """)
     st.header("Look‑back")
     spans = {"3 M":90,"6 M":180,"9 M":270,"YTD":None,"1 Y":365,
              "3 Y":365*3,"5 Y":365*5,"10 Y":365*10}
-    span_key = st.selectbox("", list(spans.keys()), index=list(spans).index("5 Y"))
+    default_ix = list(spans.keys()).index("5 Y")
+    span_key = st.selectbox("", list(spans.keys()), index=default_ix)
 
+# ------ Date handling ------
 today = datetime.today()
 hist_start = today - timedelta(days=365*10+220)
 disp_start = datetime(today.year,1,1) if span_key=="YTD" else today - timedelta(days=spans[span_key])
 
+# ------ Data fetch (cached) ------
 @st.cache_data(ttl=3600, show_spinner="Fetching ETF prices…")
 def fetch_etfs(tickers, start, end):
     df = yf.download(tickers, start, end, group_by="ticker", auto_adjust=True, progress=False)
@@ -77,52 +81,52 @@ def rsi(series, n=14):
     rs = ma_up / ma_dn
     return 100 - 100 / (1 + rs)
 
-def plot_ratio_panel(ratio, disp_start, title, ylab="Ratio"):
+def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio"):
     mask = ratio.index >= disp_start
     ratio_disp = ratio[mask]
     ma50 = ratio.rolling(50).mean()[mask]
     ma200 = ratio.rolling(200).mean()[mask]
     rsi_panel = rsi(ratio)[mask]
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        row_heights=[0.75, 0.25], vertical_spacing=0.03)
-    fig.add_trace(go.Scatter(x=ratio_disp.index, y=ratio_disp,
-                             line=dict(color="black", width=2), name=title), row=1, col=1)
-    fig.add_trace(go.Scatter(x=ma50.index, y=ma50,
-                             line=dict(color="blue", width=2), name="50‑DMA"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=ma200.index, y=ma200,
-                             line=dict(color="red", width=2), name="200‑DMA"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=rsi_panel.index, y=rsi_panel,
-                             line=dict(color="black", width=2), name="RSI‑14", showlegend=False), row=2, col=1)
-    for y, clr, txt in [(70, "red", "Overbought"), (30, "green", "Oversold")]:
-        fig.add_hline(y=y, row=2, col=1, line_dash="dot", line_color=clr)
-        fig.add_annotation(x=rsi_panel.index[0], y=y, text=txt, yshift=4 if y == 70 else -8,
-                           showarrow=False, font=dict(color=clr), row=2, col=1)
-    fig.update_layout(height=600, margin=dict(l=20, r=20, t=30, b=20),
-                      plot_bgcolor="white",
-                      legend=dict(orientation="h", y=1.02, x=1, xanchor="right", font=dict(size=13)),
-                      title=title)
-    fig.update_yaxes(title_text=ylab, row=1, col=1)
-    fig.update_yaxes(title_text="RSI", row=2, col=1)
-    st.plotly_chart(fig, use_container_width=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(14, 5), gridspec_kw={'height_ratios': [3, 1]})
 
-# --- Panel 1: Cyclicals vs Defensives
+    # --- Top: ratio and MAs
+    ax1.plot(ratio_disp.index, ratio_disp, color="black", label=title, linewidth=2)
+    ax1.plot(ma50.index, ma50, color="blue", label="50-DMA", linewidth=1)
+    ax1.plot(ma200.index, ma200, color="red", label="200-DMA", linewidth=1)
+    ax1.set_ylabel(ylab)
+    ax1.legend(loc="upper left", fontsize=10)
+    ax1.set_title(title, fontsize=15, pad=8)
+    ax1.grid(True, which='both', linestyle='--', alpha=0.3)
+
+    # --- Bottom: RSI
+    ax2.plot(rsi_panel.index, rsi_panel, color="black", linewidth=1)
+    ax2.axhline(70, color="red", linestyle="dotted", linewidth=1)
+    ax2.axhline(30, color="green", linestyle="dotted", linewidth=1)
+    if not rsi_panel.empty:
+        ax2.text(rsi_panel.index[0], 72, "Overbought", color="red", fontsize=9, va="bottom")
+        ax2.text(rsi_panel.index[0], 32, "Oversold", color="green", fontsize=9, va="top")
+    ax2.set_ylim(0, 100)
+    ax2.set_ylabel("RSI")
+    ax2.grid(True, which='both', linestyle='--', alpha=0.3)
+
+    plt.tight_layout(h_pad=1.2)
+    st.pyplot(fig)
+    plt.close(fig)
+
+# ------ Panels: Only the ratios you requested ------
+
 cyc_def_ratio = calc_ratio(CYCLICALS, DEFENSIVES)
-plot_ratio_panel(cyc_def_ratio, disp_start, "Cyclicals / Defensives (Equal-Weight)", ylab="Relative Ratio")
+plot_ratio_panel_static(cyc_def_ratio, disp_start, "Cyclicals / Defensives (Equal-Weight)", ylab="Relative Ratio")
 
-# --- Panel 2: Semiconductors vs. Software: SMH / IGV
 smh_igv_ratio = calc_ratio_simple("SMH", "IGV")
-plot_ratio_panel(smh_igv_ratio, disp_start, "SMH / IGV Relative Strength & RSI", ylab="SMH / IGV")
+plot_ratio_panel_static(smh_igv_ratio, disp_start, "SMH / IGV Relative Strength & RSI", ylab="SMH / IGV")
 
-# --- Panel 3: Nasdaq vs. Russell: QQQ / IWM
 qqq_iwm_ratio = calc_ratio_simple("QQQ", "IWM")
-plot_ratio_panel(qqq_iwm_ratio, disp_start, "QQQ / IWM Relative Strength & RSI", ylab="QQQ / IWM")
+plot_ratio_panel_static(qqq_iwm_ratio, disp_start, "QQQ / IWM Relative Strength & RSI", ylab="QQQ / IWM")
 
-# --- Panel 4: Credit spread: HYG / LQD
 hyg_lqd_ratio = calc_ratio_simple("HYG", "LQD")
-plot_ratio_panel(hyg_lqd_ratio, disp_start, "HYG / LQD (High Yield vs Investment Grade)", ylab="HYG / LQD")
+plot_ratio_panel_static(hyg_lqd_ratio, disp_start, "HYG / LQD (High Yield vs Investment Grade)", ylab="HYG / LQD")
 
-# --- Panel 5: Credit spread: HYG / IEF
 hyg_ief_ratio = calc_ratio_simple("HYG", "IEF")
-plot_ratio_panel(hyg_ief_ratio, disp_start, "HYG / IEF (High Yield vs Treasuries)", ylab="HYG / IEF")
-
+plot_ratio_panel_static(hyg_ief_ratio, disp_start, "HYG / IEF (High Yield vs Treasuries)", ylab="HYG / IEF")
