@@ -98,10 +98,19 @@ def plot_ratio_panel(ratio, disp_start, title, ylab="Ratio"):
 cyc_def_ratio = calc_ratio(CYCLICALS, DEFENSIVES)
 plot_ratio_panel(cyc_def_ratio, disp_start, "Cyclicals / Defensives (Equal-Weight)", ylab="Relative Ratio")
 
-# --- Panel 2: SMH / IGV
+# --- Panel 2: Semiconductors vs. Software: SMH / IGV
 smh_igv_ratio = calc_ratio_simple("SMH", "IGV")
 plot_ratio_panel(smh_igv_ratio, disp_start, "SMH / IGV Relative Strength & RSI", ylab="SMH / IGV")
 
-# --- Panel 3: QQQ / IWM
+# --- Panel 3: Nasdaq vs. Russell: QQQ / IWM
 qqq_iwm_ratio = calc_ratio_simple("QQQ", "IWM")
 plot_ratio_panel(qqq_iwm_ratio, disp_start, "QQQ / IWM Relative Strength & RSI", ylab="QQQ / IWM")
+
+# --- Panel 4: Credit spread: HYG / LQD
+hyg_lqd_ratio = calc_ratio_simple("HYG", "LQD")
+plot_ratio_panel(hyg_lqd_ratio, disp_start, "HYG / LQD (High Yield vs Investment Grade)", ylab="HYG / LQD")
+
+# --- Panel 5: Credit spread: HYG / IEF
+hyg_ief_ratio = calc_ratio_simple("HYG", "IEF")
+plot_ratio_panel(hyg_ief_ratio, disp_start, "HYG / IEF (High Yield vs Treasuries)", ylab="HYG / IEF")
+
