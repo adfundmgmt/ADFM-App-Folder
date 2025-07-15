@@ -22,7 +22,7 @@ with st.sidebar:
     - **Defensive basket:** XLP, XLE, XLV, XLRE, XLB, XLU
     - Shows cumulative return ratio, 50/200-day moving averages, and RSI (14).
 
-    There are also other miscellaneous ratio charts below (Semis/Software, QQQ/IWM) for context and macro leadership.
+    There are also other miscellaneous ratio charts below (Semis/Software, QQQ/IWM et al.) for context and macro leadership.
     """)
     st.header("Look‑back")
     spans = {"3 M":90,"6 M":180,"9 M":270,"YTD":None,"1 Y":365,
