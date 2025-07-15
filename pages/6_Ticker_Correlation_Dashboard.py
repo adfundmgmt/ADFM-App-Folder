@@ -29,13 +29,15 @@ with st.sidebar:
 @st.cache_data
 def load_sector_data(tickers, start, end):
     df = yf.download(tickers, start=start, end=end, auto_adjust=True)
-    # If MultiIndex, select Adj Close; else, just wrap single series as DataFrame
+    # Defensive: always check MultiIndex and levels before selecting
     if isinstance(df.columns, pd.MultiIndex):
-        if "Adj Close" in df.columns.get_level_values(0):
+        levels = list(df.columns.get_level_values(0).unique())
+        if "Adj Close" in levels:
             df = df["Adj Close"]
         else:
-            # fallback: just try to get price columns (shouldn't happen)
-            df = df.xs("Adj Close", axis=1, level=0, drop_level=True)
+            # If "Adj Close" is missing, pick the last available level and show a warning
+            st.warning(f"Expected 'Adj Close' in columns, got levels: {levels}. Using close prices fallback.")
+            df = df.xs(levels[-1], axis=1, level=0)
     else:
         df = df.to_frame()
     # Drop tickers with all NaNs
@@ -83,7 +85,8 @@ def get_rolling_corr(df, tickers, window):
     pairs = [(i, j) for idx, i in enumerate(tickers) for j in tickers[idx+1:]]
     out = pd.DataFrame(index=df.index)
     for i, j in pairs:
-        out[f"{i}-{j}"] = df[i].rolling(window).corr(df[j])
+        if i in df.columns and j in df.columns:
+            out[f"{i}-{j}"] = df[i].rolling(window).corr(df[j])
     return out.dropna()
 
 # 1. Cyclicals rolling
