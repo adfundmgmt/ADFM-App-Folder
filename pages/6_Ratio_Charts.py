@@ -81,7 +81,7 @@ def rsi(series, n=14):
     rs = ma_up / ma_dn
     return 100 - 100 / (1 + rs)
 
-def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio"):
+def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio", y_margin=0.12):
     mask = ratio.index >= disp_start
     ratio_disp = ratio[mask]
     ma50 = ratio.rolling(50).mean()[mask]
@@ -91,11 +91,11 @@ def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio"):
     fig, (ax1, ax2) = plt.subplots(
         2, 1,
         sharex=True,
-        figsize=(16, 4.8),  # More width, less height for panoramic look
+        figsize=(16, 5),
         gridspec_kw={'height_ratios': [3, 1]}
     )
 
-    # Top panel: Ratio & MAs
+    # Top: Ratio & MAs
     ax1.plot(ratio_disp.index, ratio_disp, color="black", label=title, linewidth=2)
     ax1.plot(ma50.index, ma50, color="blue", label="50-DMA", linewidth=1)
     ax1.plot(ma200.index, ma200, color="red", label="200-DMA", linewidth=1)
@@ -103,9 +103,16 @@ def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio"):
     ax1.legend(loc="upper left", fontsize=10)
     ax1.set_title(title, fontsize=15, pad=8)
     ax1.grid(True, which='both', linestyle='--', alpha=0.28)
-    ax1.margins(x=0)  # Remove x-axis margin
+    ax1.margins(x=0)
 
-    # Bottom panel: RSI
+    # Expand y-axis (add margin top and bottom)
+    if not ratio_disp.empty:
+        y_min, y_max = ratio_disp.min(), ratio_disp.max()
+        y_range = y_max - y_min
+        pad = y_margin * y_range if y_range else 1
+        ax1.set_ylim(y_min - pad, y_max + pad)
+
+    # Bottom: RSI
     ax2.plot(rsi_panel.index, rsi_panel, color="black", linewidth=1)
     ax2.axhline(70, color="red", linestyle="dotted", linewidth=1)
     ax2.axhline(30, color="green", linestyle="dotted", linewidth=1)
@@ -115,14 +122,12 @@ def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio"):
     ax2.set_ylim(0, 100)
     ax2.set_ylabel("RSI", fontsize=11)
     ax2.grid(True, which='both', linestyle='--', alpha=0.28)
-    ax2.margins(x=0)  # Remove x-axis margin
+    ax2.margins(x=0)
 
-    # Remove subplot padding and shrink whitespace
-    plt.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.12, hspace=0.12)
+    plt.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.12, hspace=0.13)
 
     st.pyplot(fig)
     plt.close(fig)
-
 
 # ------ Panels: Only the ratios you requested ------
 
