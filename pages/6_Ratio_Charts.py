@@ -133,15 +133,20 @@ def plot_ratio_panel_static(ratio, disp_start, title, ylab="Ratio", y_margin=0.1
 
 cyc_def_ratio = calc_ratio(CYCLICALS, DEFENSIVES)
 plot_ratio_panel_static(cyc_def_ratio, disp_start, "Cyclicals / Defensives (Equal-Weight)", ylab="Relative Ratio")
+st.markdown("<br>", unsafe_allow_html=True)   # Blank space
 
 smh_igv_ratio = calc_ratio_simple("SMH", "IGV")
 plot_ratio_panel_static(smh_igv_ratio, disp_start, "SMH / IGV Relative Strength & RSI", ylab="SMH / IGV")
+st.markdown("<br>", unsafe_allow_html=True)
 
 qqq_iwm_ratio = calc_ratio_simple("QQQ", "IWM")
 plot_ratio_panel_static(qqq_iwm_ratio, disp_start, "QQQ / IWM Relative Strength & RSI", ylab="QQQ / IWM")
+st.markdown("<br>", unsafe_allow_html=True)
 
 hyg_lqd_ratio = calc_ratio_simple("HYG", "LQD")
 plot_ratio_panel_static(hyg_lqd_ratio, disp_start, "HYG / LQD (High Yield vs Investment Grade)", ylab="HYG / LQD")
+st.markdown("<br>", unsafe_allow_html=True)
 
 hyg_ief_ratio = calc_ratio_simple("HYG", "IEF")
 plot_ratio_panel_static(hyg_ief_ratio, disp_start, "HYG / IEF (High Yield vs Treasuries)", ylab="HYG / IEF")
+
