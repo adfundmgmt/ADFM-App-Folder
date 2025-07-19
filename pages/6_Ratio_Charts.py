@@ -137,9 +137,9 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
 
         # RSI panel
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
-    # Overbought/oversold thresholds
-    ax2.axhline(80, color='red', linestyle=':', linewidth=1.0)
-    ax2.axhline(20, color='green', linestyle=':', linewidth=1.0)
+        # Overbought/oversold thresholds
+    ax2.axhline(70, color='red', linestyle=':', linewidth=1.0)
+    ax2.axhline(30, color='green', linestyle=':', linewidth=1.0)
     ax2.set_xlim(disp_start, now)
     ax2.set_ylim(0, 100)
     ax2.set_ylabel('RSI')
@@ -148,7 +148,7 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
         ax2.text(rsi_vals.index[0], 72, 'Overbought', color='red', fontsize=7, va='bottom')
         ax2.text(rsi_vals.index[0], 28, 'Oversold', color='green', fontsize=7, va='top')
     ax2.grid(True, linestyle='--', alpha=0.3)
-    ax2.margins(x=0)
+    ax2.margins(x=0)(x=0)
 
     plt.tight_layout()
     return fig
