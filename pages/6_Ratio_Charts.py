@@ -112,15 +112,15 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
         2, 1, sharex=True, figsize=(12, 4),
         gridspec_kw={'height_ratios': [3, 1]}
     )
-    # Top chart: show full MA history but ratio only for display window
+        # Top chart: plot MAs full history but clip view to display window
     ax1.plot(ma50_full.index, ma50_full, color='blue', linewidth=1.0, label='50-DMA')
     ax1.plot(ma200_full.index, ma200_full, color='red', linewidth=1.0, label='200-DMA')
     ax1.plot(data.index, data, color='black', linewidth=1.0, label=title)
 
-    # X-axis from full history
-    ax1.set_xlim(hist_start, now)
+    # Clip view to display window
+    ax1.set_xlim(disp_start, now)
     # Y-limits based on full MA and data
-    y_all = pd.concat([data, ma50_full, ma200_full])
+    y_all = pd.concat([data, ma50_full.loc[data.index.min():], ma200_full.loc[data.index.min():]])
     y_min, y_max = y_all.min(), y_all.max()
     pad = (y_max - y_min) * 0.05
     ax1.set_ylim(y_min - pad, y_max + pad)
