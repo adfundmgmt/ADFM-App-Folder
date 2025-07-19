@@ -64,14 +64,11 @@ def fetch_close_data(tickers: list[str], start: datetime, end: datetime) -> pd.D
                      auto_adjust=True, progress=False)
     # Attempt to extract Close prices
     if 'Close' in df.columns:
-        # Single-level columns
         closes = df['Close']
     elif isinstance(df.columns, pd.MultiIndex) and 'Close' in df.columns.get_level_values(1):
-        # MultiIndex: ticker × OHLCV
         closes = df.xs('Close', level=1, axis=1)
     else:
         raise KeyError("Unable to find 'Close' in downloaded data columns")
-    # Ensure DataFrame format
     if isinstance(closes, pd.Series):
         closes = closes.to_frame(name=tickers[0])
     return closes.fillna(method='ffill').dropna()
@@ -103,10 +100,8 @@ cumrets = compute_cumrets(closes)
 
 # ------ Plotting ------
 def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
-    # compute full history MAs
     ma50_full = ratio.rolling(50).mean()
     ma200_full = ratio.rolling(200).mean()
-    # slice for display window
     mask = ratio.index >= disp_start
     data = ratio.loc[mask]
     ma50 = ma50_full.loc[mask]
@@ -121,40 +116,35 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
     ax1.plot(data.index, data, color='black', linewidth=1.0, label=title)
     ax1.plot(ma50.index, ma50, color='blue', linewidth=1.0, label='50-DMA')
     ax1.plot(ma200.index, ma200, color='red', linewidth=1.0, label='200-DMA')
-
-    # X/Y limits with padding
     ax1.set_xlim(disp_start, now)
     y_all = pd.concat([data, ma50, ma200])
     y_min, y_max = y_all.min(), y_all.max()
     pad = (y_max - y_min) * 0.05
     ax1.set_ylim(y_min - pad, y_max + pad)
-
     ax1.set_title(title)
     ax1.set_ylabel(ylab)
     ax1.legend(loc='upper left', fontsize=8)
     ax1.grid(True, linestyle='--', alpha=0.3)
     ax1.margins(x=0)
 
-        # RSI panel
+    # RSI panel
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
-        # Overbought/oversold thresholds
+    # Overbought/oversold thresholds
     ax2.axhline(70, color='red', linestyle=':', linewidth=1.0)
     ax2.axhline(30, color='green', linestyle=':', linewidth=1.0)
     ax2.set_xlim(disp_start, now)
     ax2.set_ylim(0, 100)
     ax2.set_ylabel('RSI')
-    # Annotations
     if not rsi_vals.empty:
         ax2.text(rsi_vals.index[0], 72, 'Overbought', color='red', fontsize=7, va='bottom')
         ax2.text(rsi_vals.index[0], 28, 'Oversold', color='green', fontsize=7, va='top')
     ax2.grid(True, linestyle='--', alpha=0.3)
-    ax2.margins(x=0)(x=0)
+    ax2.margins(x=0)
 
     plt.tight_layout()
     return fig
 
 # ------ Render Chart Panels ------
-# 1. Cyclicals vs Defensives
 ratio_cd = compute_ratio(
     cumrets[CYCLICALS].mean(axis=1),
     cumrets[DEFENSIVES].mean(axis=1)
@@ -163,7 +153,6 @@ fig1 = make_ratio_figure(ratio_cd, 'Cyclicals / Defensives (Eq-Wt)', 'Ratio')
 st.pyplot(fig1, use_container_width=True)
 
 st.markdown('---')
-# 2. Preset Pairs
 for t1, t2 in OTHER_PAIRS:
     if t1 in cumrets and t2 in cumrets:
         r = compute_ratio(cumrets[t1], cumrets[t2], scale=1.0)
@@ -171,18 +160,16 @@ for t1, t2 in OTHER_PAIRS:
         st.pyplot(f, use_container_width=True)
         st.markdown('---')
 
-# 3. Custom Ratio
 if custom_t1 and custom_t2:
     if custom_t1 in cumrets and custom_t2 in cumrets:
         r_custom = compute_ratio(cumrets[custom_t1], cumrets[custom_t2])
-        f_custom = make_ratio_figure(r_custom,
-                                     f'{custom_t1} / {custom_t2}',
-                                     f'{custom_t1}/{custom_t2}')
+        f_custom = make_ratio_figure(
+            r_custom, f'{custom_t1} / {custom_t2}', f'{custom_t1}/{custom_t2}'
+        )
         st.pyplot(f_custom, use_container_width=True)
     else:
         st.warning(f"Data not available for {custom_t1} or {custom_t2}.")
 
-# ------ Download Primary Chart ------
 with st.expander("Download Chart"):
     buf = io.BytesIO()
     fig1.savefig(buf, format='png')
