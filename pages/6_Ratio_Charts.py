@@ -62,14 +62,18 @@ else:
 def fetch_close_data(tickers: list[str], start: datetime, end: datetime) -> pd.DataFrame:
     df = yf.download(tickers, start=start, end=end,
                      auto_adjust=True, progress=False)
-    # MultiIndex for multiple tickers
-    if isinstance(df.columns, pd.MultiIndex):
+    # Attempt to extract Close prices
+    if 'Close' in df.columns:
+        # Single-level columns
+        closes = df['Close']
+    elif isinstance(df.columns, pd.MultiIndex) and 'Close' in df.columns.get_level_values(1):
+        # MultiIndex: ticker × OHLCV
         closes = df.xs('Close', level=1, axis=1)
     else:
-        # Single ticker DataFrame
-        closes = df['Close'].to_frame()
-        # rename column to ticker symbol
-        closes.columns = [tickers[0]]
+        raise KeyError("Unable to find 'Close' in downloaded data columns")
+    # Ensure DataFrame format
+    if isinstance(closes, pd.Series):
+        closes = closes.to_frame(name=tickers[0])
     return closes.fillna(method='ffill').dropna()
 
 # Collect tickers
