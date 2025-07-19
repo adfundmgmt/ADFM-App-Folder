@@ -48,25 +48,27 @@ with st.sidebar:
 # ------ Date Ranges ------
 now = datetime.today()
 if span_key == "YTD":
+    disp_days = None
     disp_start = pd.Timestamp(datetime(now.year, 1, 1))
 else:
     disp_days = spans[span_key]
     disp_start = now - timedelta(days=disp_days)
-min_hist_days = 200 + (spans[span_key] or 365)
+min_hist_days = 200 + (disp_days or 365)
 hist_start = now - timedelta(days=min_hist_days)
 
 # ------ Data Fetch ------
 @st.cache_data(ttl=3600)
 def fetch_close_data(tickers, start, end):
     df = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
-    # Extract 'Close' and ensure columns are tickers
-    if isinstance(df.columns, pd.MultiIndex):
+    # Use single indexing for close prices
+    try:
+        closes = df['Close']
+    except (KeyError, TypeError):
+        # fallback if df['Close'] fails
         closes = df.xs('Close', level=1, axis=1)
-    else:
-        closes = df[['Close']].copy()
-        # rename single column to ticker
-        if len(tickers) == 1:
-            closes.columns = tickers
+    # Ensure DataFrame
+    if isinstance(closes, pd.Series):
+        closes = closes.to_frame(name=tickers[0])
     return closes.fillna(method='ffill').dropna()
 
 # Pre-fetch all needed tickers
@@ -104,7 +106,6 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str):
 
     fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 4),
                                    gridspec_kw={'height_ratios': [3, 1]})
-    # Top: ratio and MAs
     ax1.plot(data.index, data, color='black', linewidth=1.0, label=title)
     ax1.plot(ma50.index, ma50, color='blue', linewidth=1.0, label='50-DMA')
     ax1.plot(ma200.index, ma200, color='red', linewidth=1.0, label='200-DMA')
@@ -113,7 +114,6 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str):
     ax1.legend(loc='upper left', fontsize=8)
     ax1.grid(True, linestyle='--', alpha=0.3)
 
-    # Bottom: RSI
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
     ax2.axhline(70, linestyle=':', linewidth=1.0)
     ax2.axhline(30, linestyle=':', linewidth=1.0)
