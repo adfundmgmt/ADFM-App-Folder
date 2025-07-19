@@ -57,7 +57,7 @@ def fetch_closes(tickers, start, end):
     if isinstance(closes, pd.Series):
         # single ticker
         closes = closes.to_frame(name=tickers[0])
-    return closes.fillna(method='ffill').dropna()(method='ffill').dropna()
+    return closes.fillna(method='ffill').dropna()()
 
 # Ticker lists
 CYCLICALS = ["XLK", "XLI", "XLF", "XLC", "XLY"]
