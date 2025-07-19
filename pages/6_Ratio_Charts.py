@@ -104,7 +104,7 @@ def make_fig(ratio, title, ylab):
     mn, mx = y.min(), y.max(); pad=(mx-mn)*0.05
     ax1.set_ylim(mn-pad, mx+pad)
     ax1.set_ylabel(ylab); ax1.set_title(title)
-    ax1.legend(fontsize=8); ax1.grid(True, linestyle='--', alpha=0.3)
+    ax1.legend(loc='upper left', bbox_to_anchor=(0.01, 0.99), fontsize=8); ax1.grid(True, linestyle='--', alpha=0.3)
 
     ax2.plot(rsi.index, rsi, 'k-', lw=1)
     ax2.axhline(70, color='red', ls=':', lw=1)
