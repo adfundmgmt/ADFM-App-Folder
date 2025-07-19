@@ -22,7 +22,7 @@ st.markdown("""
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 OTHER_PAIRS = [("SMH","IGV"), ("QQQ","IWM"), ("HYG","LQD"), ("HYG","IEF")]
-STATS_YEARS = 15  # lookback for moving averages
+STATS_YEARS = 15  # lookback to ensure full MA history
 
 st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
@@ -30,14 +30,14 @@ st.title("Ratio Charts")
 # ------ Sidebar Inputs ------
 with st.sidebar:
     st.header("About This Tool")
-    st.markdown("""
-    Tracks relative performance of S&P cyclical vs defensive sector ETFs (equal-weighted),
-    plus other ratio charts with RSI & moving averages.
-    """)
+    st.markdown(
+        "Tracks relative performance of S&P cyclical vs defensive sector ETFs (equal-weighted), "
+        "plus other ratio charts with RSI & moving averages."
+    )
 
     st.header("Look‑back")
-    spans = {"3 M":90, "6 M":180, "9 M":270, "YTD":None, "1 Y":365,
-             "3 Y":365*3, "5 Y":365*5, "10 Y":365*10}
+    spans = {"3 M": 90, "6 M": 180, "9 M": 270, "YTD": None,
+             "1 Y": 365, "3 Y": 365*3, "5 Y": 365*5, "10 Y": 365*10}
     default_ix = list(spans.keys()).index("5 Y")
     span_key = st.selectbox("", list(spans.keys()), index=default_ix)
 
@@ -48,9 +48,9 @@ with st.sidebar:
 
 # ------ Date Ranges ------
 now = datetime.today()
-# ensure full MA lookback
+# Full history for moving averages
 hist_start = now - timedelta(days=365 * STATS_YEARS)
-# display window
+# Display period
 if span_key == "YTD":
     disp_start = pd.Timestamp(datetime(now.year, 1, 1))
 else:
@@ -59,20 +59,23 @@ else:
 
 # ------ Data Fetch ------
 @st.cache_data(ttl=3600)
-def fetch_close_data(tickers, start, end):
-    df = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
-    # Extract Close
+def fetch_close_data(tickers: list[str], start: datetime, end: datetime) -> pd.DataFrame:
+    df = yf.download(tickers, start=start, end=end,
+                     auto_adjust=True, progress=False)
+    # MultiIndex for multiple tickers
     if isinstance(df.columns, pd.MultiIndex):
         closes = df.xs('Close', level=1, axis=1)
     else:
-        closes = df[['Close']].copy()
-        closes.columns = tickers if len(tickers) > 1 else tickers
+        # Single ticker DataFrame
+        closes = df['Close'].to_frame()
+        # rename column to ticker symbol
+        closes.columns = [tickers[0]]
     return closes.fillna(method='ffill').dropna()
 
-# gather tickers
+# Collect tickers
 tickers = set(CYCLICALS + DEFENSIVES + [t for pair in OTHER_PAIRS for t in pair])
 if custom_t1 and custom_t2:
-    tickers.update([custom_t1, custom_t2])
+    tickers |= {custom_t1, custom_t2}
 closes = fetch_close_data(list(tickers), hist_start, now)
 
 # ------ Analytics Helpers ------
@@ -95,62 +98,65 @@ def compute_rsi(series: pd.Series, window: int = 14) -> pd.Series:
 cumrets = compute_cumrets(closes)
 
 # ------ Plotting ------
-def make_ratio_figure(ratio: pd.Series, title: str, ylab: str):
-    # full-series MAs for extension
+def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
+    # compute full history MAs
     ma50_full = ratio.rolling(50).mean()
     ma200_full = ratio.rolling(200).mean()
-    # slice display
-    mask = (ratio.index >= disp_start)
-    data = ratio[mask]
-    ma50 = ma50_full[mask]
-    ma200 = ma200_full[mask]
-    rsi_vals = compute_rsi(ratio)[mask]
+    # slice for display window
+    mask = ratio.index >= disp_start
+    data = ratio.loc[mask]
+    ma50 = ma50_full.loc[mask]
+    ma200 = ma200_full.loc[mask]
+    rsi_vals = compute_rsi(ratio).loc[mask]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 4),
-                                   gridspec_kw={'height_ratios': [3, 1]})
-    # Top: ratio and MAs
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, sharex=True, figsize=(12, 4),
+        gridspec_kw={'height_ratios': [3, 1]}
+    )
+    # Top chart
     ax1.plot(data.index, data, color='black', linewidth=1.0, label=title)
     ax1.plot(ma50.index, ma50, color='blue', linewidth=1.0, label='50-DMA')
     ax1.plot(ma200.index, ma200, color='red', linewidth=1.0, label='200-DMA')
 
-    # axis limits and margins
+    # X/Y limits with padding
     ax1.set_xlim(disp_start, now)
     y_all = pd.concat([data, ma50, ma200])
     y_min, y_max = y_all.min(), y_all.max()
     pad = (y_max - y_min) * 0.05
     ax1.set_ylim(y_min - pad, y_max + pad)
 
-    ax1.set_ylabel(ylab)
     ax1.set_title(title)
+    ax1.set_ylabel(ylab)
     ax1.legend(loc='upper left', fontsize=8)
     ax1.grid(True, linestyle='--', alpha=0.3)
     ax1.margins(x=0)
 
-    # Bottom: RSI
+    # RSI panel
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
     ax2.axhline(70, linestyle=':', linewidth=1.0)
     ax2.axhline(30, linestyle=':', linewidth=1.0)
     ax2.set_xlim(disp_start, now)
-    ax2.set_ylabel('RSI')
     ax2.set_ylim(0, 100)
+    ax2.set_ylabel('RSI')
     ax2.grid(True, linestyle='--', alpha=0.3)
     ax2.margins(x=0)
 
     plt.tight_layout()
     return fig
 
-# ------ Render Charts ------
+# ------ Render Chart Panels ------
 # 1. Cyclicals vs Defensives
-basket1 = cumrets[CYCLICALS].mean(axis=1)
-basket2 = cumrets[DEFENSIVES].mean(axis=1)
-ratio_cd = compute_ratio(basket1, basket2)
+ratio_cd = compute_ratio(
+    cumrets[CYCLICALS].mean(axis=1),
+    cumrets[DEFENSIVES].mean(axis=1)
+)
 fig1 = make_ratio_figure(ratio_cd, 'Cyclicals / Defensives (Eq-Wt)', 'Ratio')
 st.pyplot(fig1, use_container_width=True)
 
 st.markdown('---')
 # 2. Preset Pairs
 for t1, t2 in OTHER_PAIRS:
-    if t1 in cumrets.columns and t2 in cumrets.columns:
+    if t1 in cumrets and t2 in cumrets:
         r = compute_ratio(cumrets[t1], cumrets[t2], scale=1.0)
         f = make_ratio_figure(r, f'{t1} / {t2}', f'{t1}/{t2}')
         st.pyplot(f, use_container_width=True)
@@ -158,9 +164,11 @@ for t1, t2 in OTHER_PAIRS:
 
 # 3. Custom Ratio
 if custom_t1 and custom_t2:
-    if custom_t1 in cumrets.columns and custom_t2 in cumrets.columns:
+    if custom_t1 in cumrets and custom_t2 in cumrets:
         r_custom = compute_ratio(cumrets[custom_t1], cumrets[custom_t2])
-        f_custom = make_ratio_figure(r_custom, f'{custom_t1} / {custom_t2}', f'{custom_t1}/{custom_t2}')
+        f_custom = make_ratio_figure(r_custom,
+                                     f'{custom_t1} / {custom_t2}',
+                                     f'{custom_t1}/{custom_t2}')
         st.pyplot(f_custom, use_container_width=True)
     else:
         st.warning(f"Data not available for {custom_t1} or {custom_t2}.")
@@ -169,4 +177,7 @@ if custom_t1 and custom_t2:
 with st.expander("Download Chart"):
     buf = io.BytesIO()
     fig1.savefig(buf, format='png')
-    st.download_button("Download Cyclicals/Defensives", buf.getvalue(), "cyc_def.png", "image/png")
+    st.download_button(
+        "Download Cyclicals/Defensives", buf.getvalue(),
+        "cyc_def.png", "image/png"
+    )
