@@ -16,9 +16,14 @@ st.markdown(
         "Overlaid are 50-day and 200-day moving averages (MA) to highlight trend shifts.  
 "
         "
+**Additional Preset Ratios:** Semiconductor vs Software (SMH/IGV), Large-Cap Growth vs Small-Cap (QQQ/IWM), and credit spread proxies (HYG/LQD, HYG/IEF).  
+"
+        "
+**Technical Indicators:** A 14-period Relative Strength Index (RSI) panel with overbought (70) and oversold (30) thresholds.  
+"
+        "
 **Custom Ratio:** Enter any two tickers to compare their cumulative-return ratio and RSI over the selected look-back period."
     )
-""", unsafe_allow_html=True)
 
 # ------ Configuration ------
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
