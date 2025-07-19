@@ -145,8 +145,8 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
     ax2.set_ylabel('RSI')
     # Annotations
     if not rsi_vals.empty:
-        ax2.text(rsi_vals.index[0], 82, 'Overbought', color='red', fontsize=7, va='bottom')
-        ax2.text(rsi_vals.index[0], 18, 'Oversold', color='green', fontsize=7, va='top')
+        ax2.text(rsi_vals.index[0], 72, 'Overbought', color='red', fontsize=7, va='bottom')
+        ax2.text(rsi_vals.index[0], 28, 'Oversold', color='green', fontsize=7, va='top')
     ax2.grid(True, linestyle='--', alpha=0.3)
     ax2.margins(x=0)
 
