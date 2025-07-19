@@ -15,7 +15,6 @@ st.sidebar.markdown(
     "This dashboard visualizes regime shifts in US equities by comparing cyclical vs defensive sector performance and other key ratios.  \n"
     "- **Cyclical vs Defensive (Eq-Wt):** Ratio of cumulative returns for cyclical (XLK, XLI, XLF, XLC, XLY) vs defensive (XLP, XLE, XLV, XLRE, XLB, XLU) ETFs with 50/200-day MAs.  \n"
     "- **Preset Ratios:** SMH/IGV, QQQ/IWM, HYG/LQD, HYG/IEF.  \n"
-    "- **Technicals:** 14-day RSI with 70/30 thresholds.  \n"
     "- **Custom Ratio:** Compare any two tickers over selected look-back."
 )
 
@@ -27,8 +26,8 @@ span_key = st.sidebar.selectbox("", list(spans.keys()), index=default_ix)
 
 st.sidebar.markdown("---")
 st.sidebar.header("Custom Ratio")
-custom_t1 = st.sidebar.text_input("Ticker 1", "AAPL").strip().upper()
-custom_t2 = st.sidebar.text_input("Ticker 2", "MSFT").strip().upper()
+custom_t1 = st.sidebar.text_input("Ticker 1", "NVDA").strip().upper()
+custom_t2 = st.sidebar.text_input("Ticker 2", "SMH").strip().upper()
 
 # ------ Main Title ------
 st.title("Ratio Charts")
