@@ -7,31 +7,20 @@ import io
 from datetime import datetime, timedelta
 
 # ------ CSS to tighten sidebar spacing ------
-st.markdown(
-        "This dashboard provides a visual regime-monitoring tool by plotting relative performance ratios and key technical indicators for US equity ETFs.  
-"
-        "
-**Cyclical vs Defensive Sectors (Equal-Weighted):** Computes and charts the ratio of cumulative returns between equal-weighted baskets of cyclical (XLK, XLI, XLF, XLC, XLY) and defensive (XLP, XLE, XLV, XLRE, XLB, XLU) sector ETFs.  
-"
-        "Overlaid are 50-day and 200-day moving averages (MA) to highlight trend shifts.  
-"
-        "
-**Additional Preset Ratios:** Semiconductor vs Software (SMH/IGV), Large-Cap Growth vs Small-Cap (QQQ/IWM), and credit spread proxies (HYG/LQD, HYG/IEF).  
-"
-        "
-**Technical Indicators:** A 14-period Relative Strength Index (RSI) panel with overbought (70) and oversold (30) thresholds.  
-"
-        "
-**Custom Ratio:** Enter any two tickers to compare their cumulative-return ratio and RSI over the selected look-back period."
-    )
+st.markdown("""
+This dashboard provides a visual regime-monitoring tool by plotting relative performance ratios and key technical indicators for US equity ETFs.
 
-# ------ Configuration ------
-CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
-DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
-OTHER_PAIRS = [("SMH","IGV"), ("QQQ","IWM"), ("HYG","LQD"), ("HYG","IEF")]
-STATS_YEARS = 15  # lookback to ensure full MA history
+**Cyclical vs Defensive Sectors (Equal-Weighted):** Computes and charts the ratio of cumulative returns between equal-weighted baskets of cyclical (XLK, XLI, XLF, XLC, XLY) and defensive (XLP, XLE, XLV, XLRE, XLB, XLU) sector ETFs. Overlaid are 50-day and 200-day moving averages (MA) to highlight trend shifts.
 
-st.set_page_config(layout="wide", page_title="Ratio Charts")
+**Additional Preset Ratios:** Semiconductor vs Software (SMH/IGV), Large-Cap Growth vs Small-Cap (QQQ/IWM), and credit spread proxies (HYG/LQD, HYG/IEF).
+
+**Technical Indicators:** A 14-period Relative Strength Index (RSI) panel with overbought (70) and oversold (30) thresholds.
+
+**Custom Ratio:** Enter any two tickers to compare their cumulative-return ratio and RSI over the selected look-back period.
+""", unsafe_allow_html=True)
+
+# ------ Page config ------
+st.set_page_config(layout="wide", page_title="Ratio Charts")(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
 
 # ------ Sidebar Inputs ------
@@ -43,15 +32,15 @@ with st.sidebar:
     )
 
     st.header("Look‑back")
-    spans = {"3 Months": 90, "6 Months": 180, "9 Months": 270, "YTD": None,
-         "1 Year": 365, "3 Year": 365*3, "5 Year": 365*5}
-    default_ix = list(spans.keys()).index("5 Year")
+    spans = {"3 M": 90, "6 M": 180, "9 M": 270, "YTD": None,
+         "1 Y": 365, "3 Y": 365*3, "5 Y": 365*5}
+    default_ix = list(spans.keys()).index("5 Y")
     span_key = st.selectbox("", list(spans.keys()), index=default_ix)
 
     st.markdown("---")
     st.subheader("Custom Ratio")
-    custom_t1 = st.text_input("Ticker 1", "NVDA").strip().upper()
-    custom_t2 = st.text_input("Ticker 2", "SMH").strip().upper()
+    custom_t1 = st.text_input("Ticker 1", "AAPL").strip().upper()
+    custom_t2 = st.text_input("Ticker 2", "MSFT").strip().upper()
 
 # ------ Date Ranges ------
 now = datetime.today()
@@ -182,4 +171,4 @@ if custom_t1 and custom_t2:
     else:
         st.warning(f"Data not available for {custom_t1} or {custom_t2}.")
 
-st.caption("© 2025 AD Fund Management LP")
+
