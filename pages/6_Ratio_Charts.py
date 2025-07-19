@@ -48,11 +48,16 @@ else:
 @st.cache_data(ttl=3600)
 def fetch_closes(tickers, start, end):
     df = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
+    # Prefer direct access; fall back to xs for MultiIndex
+    try:
+        closes = df['Close']
+    except (KeyError, TypeError):
         closes = df.xs('Close', level=1, axis=1)
-    else:
-        closes = df['Close'].to_frame(name=tickers[0])
-    return closes.fillna(method='ffill').dropna()
+    # Ensure DataFrame
+    if isinstance(closes, pd.Series):
+        # single ticker
+        closes = closes.to_frame(name=tickers[0])
+    return closes.fillna(method='ffill').dropna()(method='ffill').dropna()
 
 # Ticker lists
 CYCLICALS = ["XLK", "XLI", "XLF", "XLC", "XLY"]
