@@ -7,15 +7,17 @@ import io
 from datetime import datetime, timedelta
 
 # ------ CSS to tighten sidebar spacing ------
-st.markdown("""
-    <style>
-    section[data-testid=\"stSidebar\"] h2 {
-        margin-bottom: 0.25rem !important;
-    }
-    section[data-testid=\"stSidebar\"] .stSelectbox {
-        margin-top: 0.2rem !important;
-    }
-    </style>
+st.markdown(
+        "This dashboard provides a visual regime-monitoring tool by plotting relative performance ratios and key technical indicators for US equity ETFs.  
+"
+        "
+**Cyclical vs Defensive Sectors (Equal-Weighted):** Computes and charts the ratio of cumulative returns between equal-weighted baskets of cyclical (XLK, XLI, XLF, XLC, XLY) and defensive (XLP, XLE, XLV, XLRE, XLB, XLU) sector ETFs.  
+"
+        "Overlaid are 50-day and 200-day moving averages (MA) to highlight trend shifts.  
+"
+        "
+**Custom Ratio:** Enter any two tickers to compare their cumulative-return ratio and RSI over the selected look-back period."
+    )
 """, unsafe_allow_html=True)
 
 # ------ Configuration ------
