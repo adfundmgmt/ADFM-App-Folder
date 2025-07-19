@@ -34,7 +34,7 @@ with st.sidebar:
 # ─── Inputs ───────────────────────────────────────────────────────────────────
 tickers_input = st.sidebar.text_input(
     "Tickers (comma‑separated):",
-    "AAPL, MSFT, NVDA, TSLA, AMD"
+    "NVDA, MSFT, AAPL, AMZN, GOOGL, META, TSLA, AVGO, TSM"
 ).upper()
 tickers = [t.strip() for t in tickers_input.split(",") if t.strip()]
 if not tickers:
