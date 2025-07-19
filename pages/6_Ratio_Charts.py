@@ -175,10 +175,4 @@ if custom_t1 and custom_t2:
     else:
         st.warning(f"Data not available for {custom_t1} or {custom_t2}.")
 
-with st.expander("Download Chart"):
-    buf = io.BytesIO()
-    fig1.savefig(buf, format='png')
-    st.download_button(
-        "Download Cyclicals/Defensives", buf.getvalue(),
-        "cyc_def.png", "image/png"
-    )
+st.caption("© 2025 AD Fund Management LP")
