@@ -23,7 +23,7 @@ with st.sidebar:
         """
         **Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.**
         ---
-        - Enter comma‑separated tickers (e.g. `NVDA, MSFT, AAPL, AMZN, GOOGL, META, TSLA, AVGO, TSM`)
+        - Enter comma‑separated tickers (e.g. `NVDA, MSFT, SPY, CL=F, TLT`)
         - Table shows current price, recent highs, breakout flags, and RSI (7, 14, 21)
         - Click any ticker for annotated price and RSI chart
         - Breakouts: ✅ = new high today vs X-day
