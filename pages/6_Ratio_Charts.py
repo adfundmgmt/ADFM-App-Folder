@@ -47,42 +47,44 @@ with st.sidebar:
 
 # ------ Date Ranges ------
 now = datetime.today()
-# Determine display start
 if span_key == "YTD":
-    disp_start = pd.Timestamp(datetime(now.year,1,1))
+    disp_start = pd.Timestamp(datetime(now.year, 1, 1))
 else:
     disp_days = spans[span_key]
     disp_start = now - timedelta(days=disp_days)
-# Minimum history needed (for 200-day MA + buffer)
-min_hist_days = 200 + (disp_days or 365)
+min_hist_days = 200 + (spans[span_key] or 365)
 hist_start = now - timedelta(days=min_hist_days)
 
 # ------ Data Fetch ------
 @st.cache_data(ttl=3600)
 def fetch_close_data(tickers, start, end):
     df = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
+    # Extract 'Close' and ensure columns are tickers
     if isinstance(df.columns, pd.MultiIndex):
         closes = df.xs('Close', level=1, axis=1)
     else:
-        closes = df[['Close']]
+        closes = df[['Close']].copy()
+        # rename single column to ticker
+        if len(tickers) == 1:
+            closes.columns = tickers
     return closes.fillna(method='ffill').dropna()
 
 # Pre-fetch all needed tickers
-all_tickers = set(CYCLICALS + DEFENSIVES + [t for pair in OTHER_PAIRS for t in pair])
+tickers = set(CYCLICALS + DEFENSIVES + [t for pair in OTHER_PAIRS for t in pair])
 if custom_t1 and custom_t2:
-    all_tickers.update([custom_t1, custom_t2])
-closes = fetch_close_data(list(all_tickers), hist_start, now)
+    tickers.update([custom_t1, custom_t2])
+closes = fetch_close_data(list(tickers), hist_start, now)
 
 # ------ Analytics Helpers ------
 def compute_cumrets(df: pd.DataFrame) -> pd.DataFrame:
     return (1 + df.pct_change()).cumprod()
 
-def compute_ratio(series1: pd.Series, series2: pd.Series, scale=100) -> pd.Series:
-    return (series1 / series2) * scale
+def compute_ratio(s1: pd.Series, s2: pd.Series, scale: float = 100.0) -> pd.Series:
+    return (s1 / s2) * scale
 
 
-def compute_rsi(s: pd.Series, window: int=14) -> pd.Series:
-    delta = s.diff()
+def compute_rsi(series: pd.Series, window: int = 14) -> pd.Series:
+    delta = series.diff()
     up = delta.clip(lower=0)
     dn = -delta.clip(upper=0)
     ma_up = up.rolling(window).mean()
@@ -90,7 +92,6 @@ def compute_rsi(s: pd.Series, window: int=14) -> pd.Series:
     rs = ma_up / ma_dn
     return 100 - (100 / (1 + rs))
 
-# Precompute cumulative returns for all tickers
 cumrets = compute_cumrets(closes)
 
 # ------ Plotting ------
@@ -101,54 +102,58 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str):
     ma200 = data.rolling(200).mean()
     rsi_vals = compute_rsi(ratio)[mask]
 
-    fig, (ax1, ax2) = plt.subplots(2,1, sharex=True, figsize=(12,4), gridspec_kw={'height_ratios':[3,1]})
-    # Top plot
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 4),
+                                   gridspec_kw={'height_ratios': [3, 1]})
+    # Top: ratio and MAs
     ax1.plot(data.index, data, color='black', linewidth=1.0, label=title)
     ax1.plot(ma50.index, ma50, color='blue', linewidth=1.0, label='50-DMA')
     ax1.plot(ma200.index, ma200, color='red', linewidth=1.0, label='200-DMA')
     ax1.set_ylabel(ylab)
+    ax1.set_title(title)
     ax1.legend(loc='upper left', fontsize=8)
     ax1.grid(True, linestyle='--', alpha=0.3)
 
-    # Bottom RSI
+    # Bottom: RSI
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
     ax2.axhline(70, linestyle=':', linewidth=1.0)
     ax2.axhline(30, linestyle=':', linewidth=1.0)
+    ax2.text(rsi_vals.index[0], 72, 'Overbought', fontsize=7, va='bottom')
+    ax2.text(rsi_vals.index[0], 28, 'Oversold', fontsize=7, va='top')
     ax2.set_ylabel('RSI')
-    ax2.set_ylim(0,100)
+    ax2.set_ylim(0, 100)
     ax2.grid(True, linestyle='--', alpha=0.3)
 
     plt.tight_layout()
     return fig
 
-# ------ Render Panels ------
-# 1. Cyclicals/Defensives
-b1 = cumrets[CYCLICALS].mean(axis=1)
-b2 = cumrets[DEFENSIVES].mean(axis=1)
-ratio_cd = compute_ratio(b1, b2)
+# ------ Render Charts ------
+# 1. Cyclicals vs Defensives
+basket1 = cumrets[CYCLICALS].mean(axis=1)
+basket2 = cumrets[DEFENSIVES].mean(axis=1)
+ratio_cd = compute_ratio(basket1, basket2)
 fig1 = make_ratio_figure(ratio_cd, 'Cyclicals / Defensives (Eq-Wt)', 'Ratio')
 st.pyplot(fig1, use_container_width=True)
 
 st.markdown('---')
-
-# 2. Other preset pairs
+# 2. Preset Pairs
 for t1, t2 in OTHER_PAIRS:
-    ratio = compute_ratio(cumrets[t1], cumrets[t2], scale=1.0)
-    fig = make_ratio_figure(ratio, f'{t1} / {t2}', f'{t1}/{t2}')
-    st.pyplot(fig, use_container_width=True)
-    st.markdown('---')
+    if t1 in cumrets.columns and t2 in cumrets.columns:
+        r = compute_ratio(cumrets[t1], cumrets[t2], scale=1.0)
+        f = make_ratio_figure(r, f'{t1} / {t2}', f'{t1}/{t2}')
+        st.pyplot(f, use_container_width=True)
+        st.markdown('---')
 
 # 3. Custom Ratio
 if custom_t1 and custom_t2:
-    if custom_t1 in closes.columns and custom_t2 in closes.columns:
-        ratio_custom = compute_ratio(cumrets[custom_t1], cumrets[custom_t2])
-        figc = make_ratio_figure(ratio_custom, f'{custom_t1} / {custom_t2}', f'{custom_t1}/{custom_t2}')
-        st.pyplot(figc, use_container_width=True)
+    if custom_t1 in cumrets.columns and custom_t2 in cumrets.columns:
+        r_custom = compute_ratio(cumrets[custom_t1], cumrets[custom_t2])
+        f_custom = make_ratio_figure(r_custom, f'{custom_t1} / {custom_t2}', f'{custom_t1}/{custom_t2}')
+        st.pyplot(f_custom, use_container_width=True)
     else:
-        st.warning(f"Unable to fetch data for {custom_t1} or {custom_t2}.")
+        st.warning(f"Data not available for {custom_t1} or {custom_t2}.")
 
-# ------ Download Buttons ------
-with st.expander("Downloads"):
+# ------ Download Primary Chart ------
+with st.expander("Download Chart"):
     buf = io.BytesIO()
     fig1.savefig(buf, format='png')
-    st.download_button("Download Cyc/Def Chart", buf.getvalue(), "cyc_def.png", "image/png")
+    st.download_button("Download Cyclicals/Defensives", buf.getvalue(), "cyc_def.png", "image/png")
