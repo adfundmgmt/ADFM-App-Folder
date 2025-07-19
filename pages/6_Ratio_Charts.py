@@ -43,8 +43,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Custom Ratio")
-    custom_t1 = st.text_input("Ticker 1", "AAPL").strip().upper()
-    custom_t2 = st.text_input("Ticker 2", "MSFT").strip().upper()
+    custom_t1 = st.text_input("Ticker 1", "NVDA").strip().upper()
+    custom_t2 = st.text_input("Ticker 2", "SMH").strip().upper()
 
 # ------ Date Ranges ------
 now = datetime.today()
