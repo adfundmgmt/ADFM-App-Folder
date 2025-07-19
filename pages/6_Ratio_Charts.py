@@ -133,10 +133,11 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
 
     # RSI panel
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
+    # Overbought/oversold thresholds
     ax2.axhline(70, color='red', linestyle=':', linewidth=1.0)
     ax2.axhline(30, color='green', linestyle=':', linewidth=1.0)
-    # extend x-axis on RSI also
-    ax2.set_xlim(hist_start, now)
+    # Clip RSI x-axis to display window
+    ax2.set_xlim(disp_start, now)
     ax2.set_ylim(0, 100)
     ax2.set_ylabel('RSI')
     if not rsi_vals.empty:
