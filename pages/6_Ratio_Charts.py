@@ -27,20 +27,27 @@ st.title("Ratio Charts")
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        "Tracks relative performance of S&P cyclical vs defensive sector ETFs (equal-weighted), "
-        "plus other ratio charts with RSI & moving averages."
+        "This dashboard visualizes regime shifts in US equities by comparing cyclical vs defensive sector performance and other key ratios.  
+"
+        "- **Cyclical vs Defensive (Eq-Wt):** Ratio of cumulative returns for cyclical (XLK, XLI, XLF, XLC, XLY) vs defensive (XLP, XLE, XLV, XLRE, XLB, XLU) ETFs, with 50/200d MAs.  
+"
+        "- **Preset Ratios:** SMH/IGV, QQQ/IWM, HYG/LQD, HYG/IEF.  
+"
+        "- **Technicals:** 14-day RSI with 70/30 thresholds.  
+"
+        "- **Custom Ratio:** Any two tickers over selected look-back."
     )
 
     st.header("Look‑back")
     spans = {"3 M": 90, "6 M": 180, "9 M": 270, "YTD": None,
-         "1 Y": 365, "3 Y": 365*3, "5 Y": 365*5}
+             "1 Y": 365, "3 Y": 365*3, "5 Y": 365*5}
     default_ix = list(spans.keys()).index("5 Y")
     span_key = st.selectbox("", list(spans.keys()), index=default_ix)
 
     st.markdown("---")
     st.subheader("Custom Ratio")
     custom_t1 = st.text_input("Ticker 1", "AAPL").strip().upper()
-    custom_t2 = st.text_input("Ticker 2", "MSFT").strip().upper()
+    custom_t2 = st.text_input("Ticker 2", "MSFT").strip().upper()("Ticker 2", "MSFT").strip().upper()
 
 # ------ Date Ranges ------
 now = datetime.today()
