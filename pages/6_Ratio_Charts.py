@@ -22,6 +22,7 @@ st.markdown("""
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 OTHER_PAIRS = [("SMH","IGV"), ("QQQ","IWM"), ("HYG","LQD"), ("HYG","IEF")]
+STATS_YEARS = 15  # lookback for moving averages
 
 st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
@@ -47,31 +48,28 @@ with st.sidebar:
 
 # ------ Date Ranges ------
 now = datetime.today()
+# ensure full MA lookback
+hist_start = now - timedelta(days=365 * STATS_YEARS)
+# display window
 if span_key == "YTD":
-    disp_days = None
     disp_start = pd.Timestamp(datetime(now.year, 1, 1))
 else:
     disp_days = spans[span_key]
     disp_start = now - timedelta(days=disp_days)
-min_hist_days = 200 + (disp_days or 365)
-hist_start = now - timedelta(days=min_hist_days)
 
 # ------ Data Fetch ------
 @st.cache_data(ttl=3600)
 def fetch_close_data(tickers, start, end):
     df = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
-    # Use single indexing for close prices
-    try:
-        closes = df['Close']
-    except (KeyError, TypeError):
-        # fallback if df['Close'] fails
+    # Extract Close
+    if isinstance(df.columns, pd.MultiIndex):
         closes = df.xs('Close', level=1, axis=1)
-    # Ensure DataFrame
-    if isinstance(closes, pd.Series):
-        closes = closes.to_frame(name=tickers[0])
+    else:
+        closes = df[['Close']].copy()
+        closes.columns = tickers if len(tickers) > 1 else tickers
     return closes.fillna(method='ffill').dropna()
 
-# Pre-fetch all needed tickers
+# gather tickers
 tickers = set(CYCLICALS + DEFENSIVES + [t for pair in OTHER_PAIRS for t in pair])
 if custom_t1 and custom_t2:
     tickers.update([custom_t1, custom_t2])
@@ -98,30 +96,45 @@ cumrets = compute_cumrets(closes)
 
 # ------ Plotting ------
 def make_ratio_figure(ratio: pd.Series, title: str, ylab: str):
-    mask = ratio.index >= disp_start
+    # full-series MAs for extension
+    ma50_full = ratio.rolling(50).mean()
+    ma200_full = ratio.rolling(200).mean()
+    # slice display
+    mask = (ratio.index >= disp_start)
     data = ratio[mask]
-    ma50 = data.rolling(50).mean()
-    ma200 = data.rolling(200).mean()
+    ma50 = ma50_full[mask]
+    ma200 = ma200_full[mask]
     rsi_vals = compute_rsi(ratio)[mask]
 
     fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 4),
                                    gridspec_kw={'height_ratios': [3, 1]})
+    # Top: ratio and MAs
     ax1.plot(data.index, data, color='black', linewidth=1.0, label=title)
     ax1.plot(ma50.index, ma50, color='blue', linewidth=1.0, label='50-DMA')
     ax1.plot(ma200.index, ma200, color='red', linewidth=1.0, label='200-DMA')
+
+    # axis limits and margins
+    ax1.set_xlim(disp_start, now)
+    y_all = pd.concat([data, ma50, ma200])
+    y_min, y_max = y_all.min(), y_all.max()
+    pad = (y_max - y_min) * 0.05
+    ax1.set_ylim(y_min - pad, y_max + pad)
+
     ax1.set_ylabel(ylab)
     ax1.set_title(title)
     ax1.legend(loc='upper left', fontsize=8)
     ax1.grid(True, linestyle='--', alpha=0.3)
+    ax1.margins(x=0)
 
+    # Bottom: RSI
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
     ax2.axhline(70, linestyle=':', linewidth=1.0)
     ax2.axhline(30, linestyle=':', linewidth=1.0)
-    ax2.text(rsi_vals.index[0], 72, 'Overbought', fontsize=7, va='bottom')
-    ax2.text(rsi_vals.index[0], 28, 'Oversold', fontsize=7, va='top')
+    ax2.set_xlim(disp_start, now)
     ax2.set_ylabel('RSI')
     ax2.set_ylim(0, 100)
     ax2.grid(True, linestyle='--', alpha=0.3)
+    ax2.margins(x=0)
 
     plt.tight_layout()
     return fig
