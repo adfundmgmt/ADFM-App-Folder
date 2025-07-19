@@ -112,15 +112,19 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
         2, 1, sharex=True, figsize=(12, 4),
         gridspec_kw={'height_ratios': [3, 1]}
     )
-    # Top chart
+    # Top chart: show full MA history but ratio only for display window
+    ax1.plot(ma50_full.index, ma50_full, color='blue', linewidth=1.0, label='50-DMA')
+    ax1.plot(ma200_full.index, ma200_full, color='red', linewidth=1.0, label='200-DMA')
     ax1.plot(data.index, data, color='black', linewidth=1.0, label=title)
-    ax1.plot(ma50.index, ma50, color='blue', linewidth=1.0, label='50-DMA')
-    ax1.plot(ma200.index, ma200, color='red', linewidth=1.0, label='200-DMA')
-    ax1.set_xlim(disp_start, now)
-    y_all = pd.concat([data, ma50, ma200])
+
+    # X-axis from full history
+    ax1.set_xlim(hist_start, now)
+    # Y-limits based on full MA and data
+    y_all = pd.concat([data, ma50_full, ma200_full])
     y_min, y_max = y_all.min(), y_all.max()
     pad = (y_max - y_min) * 0.05
     ax1.set_ylim(y_min - pad, y_max + pad)
+
     ax1.set_title(title)
     ax1.set_ylabel(ylab)
     ax1.legend(loc='upper left', fontsize=8)
@@ -129,10 +133,10 @@ def make_ratio_figure(ratio: pd.Series, title: str, ylab: str) -> plt.Figure:
 
     # RSI panel
     ax2.plot(rsi_vals.index, rsi_vals, color='black', linewidth=1.0)
-    # Overbought/oversold thresholds
     ax2.axhline(70, color='red', linestyle=':', linewidth=1.0)
     ax2.axhline(30, color='green', linestyle=':', linewidth=1.0)
-    ax2.set_xlim(disp_start, now)
+    # extend x-axis on RSI also
+    ax2.set_xlim(hist_start, now)
     ax2.set_ylim(0, 100)
     ax2.set_ylabel('RSI')
     if not rsi_vals.empty:
