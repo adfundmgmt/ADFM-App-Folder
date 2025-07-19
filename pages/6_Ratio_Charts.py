@@ -37,7 +37,7 @@ with st.sidebar:
 
     st.header("Look‑back")
     spans = {"3 M": 90, "6 M": 180, "9 M": 270, "YTD": None,
-             "1 Y": 365, "3 Y": 365*3, "5 Y": 365*5, "10 Y": 365*10}
+         "1 Y": 365, "3 Y": 365*3, "5 Y": 365*5}
     default_ix = list(spans.keys()).index("5 Y")
     span_key = st.selectbox("", list(spans.keys()), index=default_ix)
 
