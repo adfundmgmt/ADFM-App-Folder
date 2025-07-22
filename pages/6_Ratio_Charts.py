@@ -57,10 +57,23 @@ def compute_cumrets(df):
     return (1 + df.pct_change()).cumprod()
 
 def compute_ratio(s1, s2, scale=1, base=100):
-    # normalize both to base at disp_start
-    norm1 = s1 / s1.loc[disp_start] * base
-    norm2 = s2 / s2.loc[disp_start] * base
+    # normalize both to base at disp_start using last available value at or after disp_start
+    try:
+        base1 = s1.asof(disp_start)
+        if pd.isna(base1):
+            base1 = s1.dropna().iloc[0]
+    except Exception:
+        base1 = s1.dropna().iloc[0]
+    try:
+        base2 = s2.asof(disp_start)
+        if pd.isna(base2):
+            base2 = s2.dropna().iloc[0]
+    except Exception:
+        base2 = s2.dropna().iloc[0]
+    norm1 = s1 / base1 * base
+    norm2 = s2 / base2 * base
     return (norm1 / norm2) * scale
+
 
 def compute_rsi(s, window=14):
     d = s.diff()
