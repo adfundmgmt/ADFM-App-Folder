@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import yfinance as yf
+import numpy as np\import yfinance as yf
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
@@ -35,8 +34,7 @@ st.title("Ratio Charts")
 
 # ------ Date ranges ------
 now = datetime.today()
-hist_start = now - timedelta(days=365 * 15)  # for full MA history
-
+hist_start = now - timedelta(days=365 * 15)
 if span_key == "YTD":
     disp_start = pd.Timestamp(datetime(now.year, 1, 1))
 else:
@@ -76,6 +74,8 @@ def compute_rsi(s, window=14):
     rs    = ma_up / ma_dn
     return 100 - (100 / (1 + rs))
 
+# Updated make_fig with NaN/Inf handling and guard for empty/constant data
+
 def make_fig(ratio, title, ylab):
     ma50   = ratio.rolling(50).mean()
     ma200  = ratio.rolling(200).mean()
@@ -92,9 +92,14 @@ def make_fig(ratio, title, ylab):
     ax1.set_xlim(disp_start, now)
 
     y_all = pd.concat([view, ma50.loc[disp_start:], ma200.loc[disp_start:]])
-    mn, mx = y_all.min(), y_all.max()
-    pad    = (mx - mn) * 0.05
-    ax1.set_ylim(mn - pad, mx + pad)
+    y_all = y_all.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if not y_all.empty:
+        mn, mx = y_all.min(), y_all.max()
+        pad = (mx - mn) * 0.05 if mx != mn else (abs(mn) * 0.05 if mn != 0 else 1)
+        ax1.set_ylim(mn - pad, mx + pad)
+    else:
+        ax1.set_ylim(0, 1)
 
     ax1.set_ylabel(ylab)
     ax1.set_title(title)
@@ -102,14 +107,14 @@ def make_fig(ratio, title, ylab):
     ax1.grid(True, linestyle='--', alpha=0.3)
 
     ax2.plot(rsi.index, rsi, 'k-', lw=1)
-    ax2.axhline(70, ls=':', lw=1, color='red')
-    ax2.axhline(30, ls=':', lw=1, color='green')
+    ax2.axhline(70, ls=':', lw=1)
+    ax2.axhline(30, ls=':', lw=1)
     ax2.set_xlim(disp_start, now)
     ax2.set_ylim(0, 100)
     ax2.set_ylabel('RSI')
     if not rsi.empty:
-        ax2.text(rsi.index[0], 72, 'Overbought', fontsize=7, color='red')
-        ax2.text(rsi.index[0], 28, 'Oversold',   fontsize=7, color='green')
+        ax2.text(rsi.index[0], 72, 'Overbought', fontsize=7)
+        ax2.text(rsi.index[0], 28, 'Oversold',   fontsize=7)
     ax2.grid(True, linestyle='--', alpha=0.3)
 
     plt.tight_layout()
@@ -119,7 +124,6 @@ def make_fig(ratio, title, ylab):
 closes_static   = fetch_closes(STATIC, hist_start, now)
 cumrets_static  = compute_cumrets(closes_static)
 
-# Cyclicals vs Defensives (×100 baseline)
 ratio_cd = compute_ratio(
     cumrets_static[CYCLICALS].mean(axis=1),
     cumrets_static[DEFENSIVES].mean(axis=1),
@@ -129,11 +133,9 @@ st.pyplot(make_fig(ratio_cd, 'Cyclicals / Defensives (Eq‑Wt)', 'Ratio'),
            use_container_width=True)
 
 st.markdown('---')
-# Preset pairs (×1)
 for t1, t2 in PRESETS:
-    r = compute_ratio(cumrets_static[t1], cumrets_static[t2], scale=1)
-    st.pyplot(make_fig(r, f'{t1}/{t2}', f'{t1}/{t2}'),
-               use_container_width=True)
+    r = compute_ratio(cumrets_static[t1], cumrets_static[t2])
+    st.pyplot(make_fig(r, f'{t1}/{t2}', f'{t1}/{t2}'), use_container_width=True)
     st.markdown('---')
 
 # ------ 2) Custom fetch & chart ------
@@ -141,12 +143,7 @@ if custom_t1 and custom_t2:
     try:
         closes_cust  = fetch_closes([custom_t1, custom_t2], hist_start, now)
         cumrets_cust = compute_cumrets(closes_cust)
-        r_cust = compute_ratio(
-            cumrets_cust[custom_t1],
-            cumrets_cust[custom_t2],
-            scale=1
-        )
-        st.pyplot(make_fig(r_cust, f'{custom_t1}/{custom_t2}', f'{custom_t1}/{custom_t2}'),
-                   use_container_width=True)
+        r_cust = compute_ratio(cumrets_cust[custom_t1], cumrets_cust[custom_t2])
+        st.pyplot(make_fig(r_cust, f'{custom_t1}/{custom_t2}', custom_t1+'/'+custom_t2), use_container_width=True)
     except Exception:
         st.warning(f"Data not available for {custom_t1}/{custom_t2}.")
