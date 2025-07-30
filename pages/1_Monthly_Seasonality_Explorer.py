@@ -206,7 +206,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-buf = plot_seasonality(stats, f"{symbol} seasonality ({first_year}–{last_year})", metric)
+buf = plot_seasonality(stats, f"{symbol} Seasonality ({first_year}–{last_year})", metric)
 st.image(buf, use_container_width=True)
 
 dl1, dl2 = st.columns(2)
