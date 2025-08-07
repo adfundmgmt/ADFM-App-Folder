@@ -19,8 +19,10 @@ st.sidebar.markdown(
     """
 A dashboard of **thematic and global ETF flows** — see where money is moving.
 
-**Method**: Dollar flow ≈ Δ(shares outstanding) × price (end of period).  
-Flow % ≈ Dollar flow / AUM (end of period). Proxies when SO/AUM missing.
+**Method priority**  
+1) Δ(Shares Outstanding) × last price  
+2) Δ(AUM/Price) × last price (when SO missing)  
+3) Proxy (clearly flagged): price change × avg volume
 """
 )
 
@@ -35,7 +37,7 @@ spans = {
 }
 period_label = st.sidebar.radio("Select Lookback Period", list(spans.keys()), index=1)
 period_days = int(spans[period_label])
-start_date = today - pd.Timedelta(days=period_days + 10)  # +buffer for alignment
+start_date = today - pd.Timedelta(days=period_days + 10)  # buffer for alignment
 
 # Universe
 etf_info = {
@@ -72,7 +74,10 @@ TICKERS = list(etf_info.keys())
 @st.cache_data(ttl=900, show_spinner=True)
 def fetch_prices(tickers, start, end):
     """Batch adjusted closes to align with SO dates."""
-    df = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False, group_by="ticker", threads=True)
+    df = yf.download(
+        tickers, start=start, end=end, auto_adjust=True,
+        progress=False, group_by="ticker", threads=True
+    )
     if isinstance(df.columns, pd.MultiIndex):
         closes = {t: df[(t, "Close")] for t in tickers if (t, "Close") in df.columns}
         if not closes:
@@ -83,87 +88,89 @@ def fetch_prices(tickers, start, end):
         # single ticker fallback
         return pd.DataFrame({tickers[0]: df["Close"]}).sort_index().ffill() if "Close" in df.columns else pd.DataFrame()
 
-def _flow_from_so_and_price(so_series, price_series, end_price):
-    """Compute dollar flow from ΔSO × end_price; also return AUM_end."""
+def normalize_so_units(so: pd.Series):
+    """
+    Heuristic: many ETF SO series from yfinance are reported in *millions*.
+    If median SO is suspiciously small (<1e4), treat values as millions and scale by 1e6.
+    Returns (shares_series_in_units, note)
+    """
+    so = so.dropna().astype(float)
+    if so.empty:
+        return so, "SO:unknown"
+    med = float(so.median())
+    if med < 1e4:  # e.g., 100–1000 => likely 'millions of shares'
+        return so * 1_000_000.0, "SO(millions→shares)"
+    return so, "SO(shares)"
+
+def flow_from_so_and_price(so_series, price_series):
+    """Compute (flow_dollars, aum_end, note) from ΔSO × last_price with unit fix + alignment."""
     if so_series is None or so_series.dropna().empty:
-        return None, None
-    so = so_series.dropna().astype(float)
-    # Align SO to trading days for the period
-    aligned = so.reindex(price_series.index, method="ffill").dropna()
+        return None, None, "no_SO"
+    so_fixed, note = normalize_so_units(so_series)
+    aligned = so_fixed.reindex(price_series.index, method="ffill").dropna()
     if aligned.empty:
-        return None, None
+        return None, None, "no_alignment"
     so_start, so_end = float(aligned.iloc[0]), float(aligned.iloc[-1])
-    flow_dollars = (so_end - so_start) * float(end_price)
-    aum_end = so_end * float(end_price)
-    return flow_dollars, aum_end
+    end_price = float(price_series.iloc[-1])
+    flow_dollars = (so_end - so_start) * end_price
+    aum_end = so_end * end_price
+    return flow_dollars, aum_end, note
 
 @st.cache_data(ttl=900, show_spinner=True)
 def robust_flow_estimate(ticker, price_slice: pd.Series):
     """
     Best-effort flow and AUM.
-    Prefers: Δ(Shares Outstanding) × Price_end. Falls back to info['totalAssets'] for AUM.
-    Last-ditch proxy: price change × avg volume (clearly labeled as proxy).
     """
+    price_slice = price_slice.dropna()
+    if price_slice.empty:
+        return {"flow": None, "flow_pct": None, "aum": None, "method": "no_price"}
+
+    tk = yf.Ticker(ticker)
+
+    # Primary: ΔSO × Price_end (with unit normalization)
     try:
-        tk = yf.Ticker(ticker)
-        # Shares outstanding history (may be sparse by issuer)
-        try:
-            so_full = tk.get_shares_full()  # pandas Series
-        except Exception:
-            so_full = None
-
-        price_slice = price_slice.dropna()
-        if price_slice.empty:
-            return {"flow": None, "flow_pct": None, "aum": None, "method": "no_price"}
-
-        end_price = price_slice.iloc[-1]
-
-        # Primary method: ΔSO × end_price
-        flow, aum = _flow_from_so_and_price(so_full, price_slice, end_price)
-        if flow is not None and aum not in (None, 0):
-            return {"flow": float(flow), "flow_pct": float(flow / aum), "aum": float(aum), "method": "ΔSO×P_end"}
-
-        # Secondary: issuer AUM if available
-        info = {}
-        try:
-            info = tk.fast_info or {}
-        except Exception:
-            pass
-        if not info:
-            try:
-                info = tk.info or {}
-            except Exception:
-                info = {}
-
-        total_assets = info.get("totalAssets") or info.get("total_assets")
-        if total_assets and price_slice.size >= 2:
-            # When SO unavailable, estimate flow by Δ(estimated SO) = AUM/P
-            so_est = (float(total_assets) / price_slice).dropna()
-            flow2, aum2 = _flow_from_so_and_price(so_est, price_slice, end_price)
-            if flow2 is not None and aum2 not in (None, 0):
-                return {"flow": float(flow2), "flow_pct": float(flow2 / aum2), "aum": float(aum2), "method": "Δ(AUM/P)×P_end"}
-
-        # Fallback proxy (worst): price Δ × avg volume
-        if price_slice.size >= 2:
-            proxy_flow = (price_slice.iloc[-1] - price_slice.iloc[0]) * float(price_slice.rolling(10, min_periods=1).mean().iloc[-1])
-            # very rough AUM proxy: attempt fast_info market cap or default to $1B
-            aum_proxy = float(info.get("marketCap") or 1_000_000_000.0)
-            flow_pct = float(proxy_flow / aum_proxy) if aum_proxy != 0 else None
-            return {"flow": float(proxy_flow), "flow_pct": flow_pct, "aum": aum_proxy, "method": "ΔP×Vol_proxy"}
-
-        return {"flow": None, "flow_pct": None, "aum": None, "method": "no_data"}
-
+        so_full = tk.get_shares_full()
     except Exception:
-        return {"flow": None, "flow_pct": None, "aum": None, "method": "error"}
+        so_full = None
+
+    flow, aum, note = flow_from_so_and_price(so_full, price_slice)
+    if flow is not None and aum not in (None, 0):
+        return {"flow": float(flow), "flow_pct": float(flow / aum), "aum": float(aum), "method": f"ΔSO×P_end[{note}]"}
+
+    # Secondary: Δ(AUM/Price) × Price_end
+    info = {}
+    try:
+        info = tk.fast_info or {}
+    except Exception:
+        pass
+    if not info:
+        try:
+            info = tk.info or {}
+        except Exception:
+            info = {}
+
+    total_assets = info.get("totalAssets") or info.get("total_assets")
+    if total_assets:
+        so_est = (float(total_assets) / price_slice).dropna()  # shares (not millions)
+        flow2, aum2, _ = flow_from_so_and_price(so_est, price_slice)
+        if flow2 is not None and aum2 not in (None, 0):
+            return {"flow": float(flow2), "flow_pct": float(flow2 / aum2), "aum": float(aum2), "method": "Δ(AUM/P)×P_end"}
+
+    # Fallback proxy: ΔPrice × avg volume (very rough)
+    if price_slice.size >= 2:
+        proxy_flow = (price_slice.iloc[-1] - price_slice.iloc[0]) * float(price_slice.rolling(10, min_periods=1).mean().iloc[-1])
+        aum_proxy = float(info.get("marketCap") or 1_000_000_000.0)
+        flow_pct = float(proxy_flow / aum_proxy) if aum_proxy != 0 else None
+        return {"flow": float(proxy_flow), "flow_pct": flow_pct, "aum": aum_proxy, "method": "ΔP×Vol_proxy"}
+
+    return {"flow": None, "flow_pct": None, "aum": None, "method": "no_data"}
 
 @st.cache_data(ttl=900, show_spinner=True)
 def compute_flows(tickers, start_date, end_date):
-    # Batch prices once
     prices = fetch_prices(tickers, start_date, end_date)
     if prices.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    # Compute per-ticker in a thread pool, with a sane cap to avoid rate limits
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(tickers))) as ex:
         futures = {
@@ -189,89 +196,107 @@ def compute_flows(tickers, start_date, end_date):
         })
 
     df = pd.DataFrame(rows)
-    # Aggregate by category
-    cat_df = df.groupby("Category", as_index=False).agg({"Flow ($)": "sum"})
-    # For % at category level, show flow / sum AUM where available
-    aum_cat = df.groupby("Category", as_index=False).agg({"AUM ($)": "sum"})
-    cat_df = cat_df.merge(aum_cat, on="Category", how="left")
+    cat_df = df.groupby("Category", as_index=False).agg({"Flow ($)": "sum", "AUM ($)": "sum"})
     cat_df["Flow (%)"] = np.where(cat_df["AUM ($)"].fillna(0) != 0, cat_df["Flow ($)"] / cat_df["AUM ($)"] * 100.0, np.nan)
-
     return df, cat_df
 
-# ───────────────── Compute & prepare ─────────────────
+# ───────────────── Compute ─────────────────
 tickers = TICKERS
 df, cat_df = compute_flows(tickers, start_date, today)
 
 # Label helpers
 def money_label(x):
-    if x is None or pd.isna(x):
-        return ""
+    if x is None or pd.isna(x): return ""
     s = "-" if x < 0 else "+"
     ax = abs(x)
-    if ax >= 1e12:  return f"{s}${ax/1e12:,.0f}T"
-    if ax >= 1e9:   return f"{s}${ax/1e9:,.0f}B"
-    if ax >= 1e6:   return f"{s}${ax/1e6:,.0f}M"
-    if ax >= 1e3:   return f"{s}${ax/1e3:,.0f}K"
+    if ax >= 1e12: return f"{s}${ax/1e12:,.0f}T"
+    if ax >= 1e9:  return f"{s}${ax/1e9:,.0f}B"
+    if ax >= 1e6:  return f"{s}${ax/1e6:,.0f}M"
+    if ax >= 1e3:  return f"{s}${ax/1e3:,.0f}K"
     return f"{s}${ax:,.0f}"
 
-# Sort by flow
+def choose_scale(max_abs_value):
+    """Return (scale_factor, suffix) so axis shows sensible units."""
+    if max_abs_value >= 1e12: return 1e12, "$T"
+    if max_abs_value >= 1e9:  return 1e9, "$B"
+    if max_abs_value >= 1e6:  return 1e6, "$M"
+    if max_abs_value >= 1e3:  return 1e3, "$K"
+    return 1.0, "$"
+
+# Sort by flow, build labels
 df = df.sort_values("Flow ($)", ascending=False, na_position="last").reset_index(drop=True)
 df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
 
 # ───────────────── Main ─────────────────
 st.title("ETF Flows Dashboard")
-st.caption(f"Period: **{period_label}** (ending {today.date()})  •  Method priority: ΔSO×Price → Δ(AUM/P)×Price → proxy")
+st.caption(f"Period: **{period_label}** (ending {today.date()})  •  Methods: ΔSO×P → Δ(AUM/P)×P → proxy")
 
-# — ETF bar chart —
+# — ETF bar chart with adaptive axis units —
 chart_df = df.copy()
-max_val = chart_df["Flow ($)"].dropna().abs().max() if chart_df["Flow ($)"].notna().any() else 0.0
-buffer = max(1.0, max_val * 0.15)
+vals_raw = chart_df["Flow ($)"].astype(float)
+max_abs = float(np.nanmax(np.abs(vals_raw))) if vals_raw.notna().any() else 0.0
+scale, suffix = choose_scale(max_abs if max_abs > 0 else 1.0)
+vals = vals_raw.fillna(0.0) / scale
 
 fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
-vals = chart_df["Flow ($)"].fillna(0.0).to_numpy()
 colors = np.where(vals > 0, "#2ca02c", np.where(vals < 0, "#d62728", "#bdbdbd"))
-bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.85)
+bars = ax.barh(chart_df["Label"], vals.to_numpy(), color=colors, alpha=0.88)
 
-ax.set_xlabel("Estimated Flow ($)")
+ax.set_xlabel(f"Estimated Flow ({suffix})")
 ax.set_title(f"ETF Proxy Flows — {period_label}")
 ax.invert_yaxis()
-ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.0f}B' if abs(x)>=1e9 else f'${x/1e6:,.0f}M'))
-x_lo = -buffer if np.nanmin(vals) < 0 else 0
-x_hi = max_val + buffer
-ax.set_xlim([x_lo, x_hi])
 
-for bar, val in zip(bars, chart_df["Flow ($)"]):
-    if pd.isna(val):
-        continue
-    label = money_label(val)
+x_lo = min(vals.min(), 0.0)
+x_hi = max(vals.max(), 0.0)
+pad = (x_hi - x_lo) * 0.15 if x_hi != x_lo else 1.0
+ax.set_xlim([x_lo - pad, x_hi + pad])
+
+# Clean ticks: show integers where possible
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+
+for bar, val_raw in zip(bars, vals_raw):
+    if pd.isna(val_raw): continue
+    label = money_label(val_raw)
     x = bar.get_width()
-    ha = "left" if val >= 0 else "right"
-    offset = 0.01 * (x_hi - x_lo)
-    ax.text(x + (offset if val >= 0 else -offset), bar.get_y() + bar.get_height()/2, label, va="center", ha=ha, fontsize=10)
+    ha = "left" if x >= 0 else "right"
+    offset = 0.02 * (ax.get_xlim()[1] - ax.get_xlim()[0])
+    ax.text(x + (offset if x >= 0 else -offset),
+            bar.get_y() + bar.get_height()/2,
+            label, va="center", ha=ha, fontsize=10)
 
 plt.tight_layout()
 st.pyplot(fig)
-st.markdown("*Green = inflow, Red = outflow, Gray = missing/unknown.*")
+st.markdown("*Green = inflow, Red = outflow, Gray = missing/unknown. Axis is scaled to B/M/K automatically.*")
 
 # — Category rollup —
 st.markdown("### Category Totals")
-cat_v = cat_df.sort_values("Flow ($)", ascending=False, na_position="last")
+cat_v = cat_df.sort_values("Flow ($)", ascending=False, na_position="last").reset_index(drop=True)
+
+vals2_raw = cat_v["Flow ($)"].astype(float)
+max_abs2 = float(np.nanmax(np.abs(vals2_raw))) if vals2_raw.notna().any() else 0.0
+scale2, suffix2 = choose_scale(max_abs2 if max_abs2 > 0 else 1.0)
+vals2 = vals2_raw.fillna(0.0) / scale2
+
 fig2, ax2 = plt.subplots(figsize=(12, max(3, len(cat_v) * 0.45)))
-vals2 = cat_v["Flow ($)"].fillna(0.0).to_numpy()
 colors2 = np.where(vals2 > 0, "#2ca02c", np.where(vals2 < 0, "#d62728", "#bdbdbd"))
-bars2 = ax2.barh(cat_v["Category"], vals2, color=colors2, alpha=0.9)
-ax2.set_xlabel("Estimated Flow ($)")
-ax2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.0f}B' if abs(x)>=1e9 else f'${x/1e6:,.0f}M'))
-x2_max = np.nanmax(np.abs(vals2)) if vals2.size else 0.0
-ax2.set_xlim([-(x2_max*1.15), x2_max*1.15])
-for bar, val in zip(bars2, cat_v["Flow ($)"]):
+bars2 = ax2.barh(cat_v["Category"], vals2.to_numpy(), color=colors2, alpha=0.9)
+ax2.set_xlabel(f"Estimated Flow ({suffix2})")
+ax2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+
+xlo2, xhi2 = min(vals2.min(), 0.0), max(vals2.max(), 0.0)
+pad2 = (xhi2 - xlo2) * 0.15 if xhi2 != xlo2 else 1.0
+ax2.set_xlim([xlo2 - pad2, xhi2 + pad2])
+
+for bar, val in zip(bars2, vals2_raw):
     if pd.isna(val): continue
-    ax2.text(bar.get_width() + np.sign(val)*0.01*x2_max, bar.get_y()+bar.get_height()/2, money_label(val), va="center",
-             ha=("left" if val>=0 else "right"), fontsize=10)
+    ax2.text(bar.get_width() + np.sign(bar.get_width())*0.02*(ax2.get_xlim()[1]-ax2.get_xlim()[0]),
+             bar.get_y()+bar.get_height()/2,
+             money_label(val), va="center",
+             ha=("left" if bar.get_width()>=0 else "right"), fontsize=10)
 plt.tight_layout()
 st.pyplot(fig2)
 
-# — Top movers tables —
+# — Top movers (kept) —
 st.markdown("### Top Inflows & Outflows")
 top_in  = df.head(5)[["Label","Flow ($)","Flow (%)","AUM ($)","Method"]].copy()
 top_out = df.sort_values("Flow ($)").head(5)[["Label","Flow ($)","Flow (%)","AUM ($)","Method"]].copy()
@@ -291,18 +316,10 @@ with c2:
     st.write("**Top Outflows**")
     st.table(fmt_table(top_out))
 
-# — Full table —
-st.markdown("### Full Table")
-full_tbl = df[["Ticker","Category","Flow ($)","Flow (%)","AUM ($)","Method","Description"]].copy()
-full_tbl["Flow ($)"] = full_tbl["Flow ($)"].map(money_label)
-full_tbl["Flow (%)"] = full_tbl["Flow (%)"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
-full_tbl["AUM ($)"]  = full_tbl["AUM ($)"].map(lambda x: money_label(x).replace("+",""))
-st.dataframe(full_tbl, use_container_width=True)
-
 # — Status —
 if df["Flow ($)"].isna().any():
-    st.warning("Some ETFs missing SO/AUM; used fallback methods where needed (see Method column).")
+    st.warning("Some ETFs missing SO/AUM; fallbacks used (see Method column).")
 else:
-    st.success("All flows computed via ΔSO×Price.")
+    st.success("All flows computed via ΔSO×Price (unit-normalized).")
 
 st.caption("© 2025 AD Fund Management LP")
