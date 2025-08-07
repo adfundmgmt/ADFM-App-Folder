@@ -168,7 +168,6 @@ max_val = pd.to_numeric(chart_df["Abs Proxy ($)"], errors="coerce").max()
 if pd.isna(max_val) or max_val == 0:
     st.info("No valid values computed. Try a different period.")
 else:
-   # Replace this part in the chart section
 values_signed = pd.to_numeric(chart_df["CMF Proxy ($)"], errors="coerce").fillna(0.0)
 colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in values_signed]
 
