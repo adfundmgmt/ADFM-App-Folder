@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-from datetime import datetime, timedelta
+from datetime import datetime
 import concurrent.futures
 
 plt.style.use("default")
@@ -28,16 +28,16 @@ A dashboard of **thematic and global ETF flows** — see where money is moving.
 
 # Lookback
 today = pd.Timestamp.today().normalize()
-spans = {
+lookback_dict = {
     "1 Month": 30,
     "3 Months": 90,
     "6 Months": 180,
     "12 Months": 365,
     "YTD": (today - pd.Timestamp(year=today.year, month=1, day=1)).days,
 }
-period_label = st.sidebar.radio("Select Lookback Period", list(spans.keys()), index=1)
-period_days = int(spans[period_label])
-start_date = today - pd.Timedelta(days=period_days + 10)  # buffer for alignment
+period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=1)
+period_days = int(lookback_dict[period_label])
+start_date = today - pd.Timedelta(days=period_days + 10)  # buffer helps alignment
 
 # Universe
 etf_info = {
@@ -70,74 +70,67 @@ etf_info = {
 }
 TICKERS = list(etf_info.keys())
 
-# ───────────────── Data helpers ─────────────────
+# ───────────────── Helpers ─────────────────
 @st.cache_data(ttl=900, show_spinner=True)
 def fetch_prices(tickers, start, end):
     """Batch adjusted closes to align with SO dates."""
-    df = yf.download(
-        tickers, start=start, end=end, auto_adjust=True,
-        progress=False, group_by="ticker", threads=True
-    )
+    df = yf.download(tickers, start=start, end=end, auto_adjust=True,
+                     progress=False, group_by="ticker", threads=True)
     if isinstance(df.columns, pd.MultiIndex):
         closes = {t: df[(t, "Close")] for t in tickers if (t, "Close") in df.columns}
         if not closes:
             return pd.DataFrame()
-        out = pd.DataFrame(closes).sort_index().ffill()
-        return out
-    else:
-        # single ticker fallback
-        return pd.DataFrame({tickers[0]: df["Close"]}).sort_index().ffill() if "Close" in df.columns else pd.DataFrame()
+        return pd.DataFrame(closes).sort_index().ffill()
+    elif "Close" in df.columns:
+        return pd.DataFrame({tickers[0]: df["Close"]}).sort_index().ffill()
+    return pd.DataFrame()
 
 def normalize_so_units(so: pd.Series):
     """
-    Heuristic: many ETF SO series from yfinance are reported in *millions*.
-    If median SO is suspiciously small (<1e4), treat values as millions and scale by 1e6.
-    Returns (shares_series_in_units, note)
+    Many ETF SO series from yfinance look like they're in **millions of shares**.
+    If median SO < 1e4, treat as millions → multiply by 1e6.
     """
+    if so is None or so.dropna().empty:
+        return pd.Series(dtype=float), "no_SO"
     so = so.dropna().astype(float)
-    if so.empty:
-        return so, "SO:unknown"
     med = float(so.median())
-    if med < 1e4:  # e.g., 100–1000 => likely 'millions of shares'
+    if med < 1e4:
         return so * 1_000_000.0, "SO(millions→shares)"
     return so, "SO(shares)"
 
 def flow_from_so_and_price(so_series, price_series):
-    """Compute (flow_dollars, aum_end, note) from ΔSO × last_price with unit fix + alignment."""
-    if so_series is None or so_series.dropna().empty:
+    if so_series is None:
         return None, None, "no_SO"
     so_fixed, note = normalize_so_units(so_series)
+    if so_fixed.empty or price_series.dropna().empty:
+        return None, None, "no_data"
     aligned = so_fixed.reindex(price_series.index, method="ffill").dropna()
     if aligned.empty:
         return None, None, "no_alignment"
     so_start, so_end = float(aligned.iloc[0]), float(aligned.iloc[-1])
     end_price = float(price_series.iloc[-1])
-    flow_dollars = (so_end - so_start) * end_price
-    aum_end = so_end * end_price
-    return flow_dollars, aum_end, note
+    flow = (so_end - so_start) * end_price
+    aum = so_end * end_price
+    return flow, aum, note
 
 @st.cache_data(ttl=900, show_spinner=True)
 def robust_flow_estimate(ticker, price_slice: pd.Series):
-    """
-    Best-effort flow and AUM.
-    """
     price_slice = price_slice.dropna()
     if price_slice.empty:
         return {"flow": None, "flow_pct": None, "aum": None, "method": "no_price"}
 
     tk = yf.Ticker(ticker)
 
-    # Primary: ΔSO × Price_end (with unit normalization)
+    # Primary: ΔSO × P_end
     try:
         so_full = tk.get_shares_full()
     except Exception:
         so_full = None
-
     flow, aum, note = flow_from_so_and_price(so_full, price_slice)
     if flow is not None and aum not in (None, 0):
         return {"flow": float(flow), "flow_pct": float(flow / aum), "aum": float(aum), "method": f"ΔSO×P_end[{note}]"}
 
-    # Secondary: Δ(AUM/Price) × Price_end
+    # Secondary: Δ(AUM/P) × P_end (using totalAssets if available)
     info = {}
     try:
         info = tk.fast_info or {}
@@ -148,16 +141,15 @@ def robust_flow_estimate(ticker, price_slice: pd.Series):
             info = tk.info or {}
         except Exception:
             info = {}
-
     total_assets = info.get("totalAssets") or info.get("total_assets")
     if total_assets:
-        so_est = (float(total_assets) / price_slice).dropna()  # shares (not millions)
+        so_est = (float(total_assets) / price_slice).dropna()
         flow2, aum2, _ = flow_from_so_and_price(so_est, price_slice)
         if flow2 is not None and aum2 not in (None, 0):
             return {"flow": float(flow2), "flow_pct": float(flow2 / aum2), "aum": float(aum2), "method": "Δ(AUM/P)×P_end"}
 
-    # Fallback proxy: ΔPrice × avg volume (very rough)
-    if price_slice.size >= 2:
+    # Fallback: ΔP × avg volume (very rough proxy)
+    if len(price_slice) >= 2:
         proxy_flow = (price_slice.iloc[-1] - price_slice.iloc[0]) * float(price_slice.rolling(10, min_periods=1).mean().iloc[-1])
         aum_proxy = float(info.get("marketCap") or 1_000_000_000.0)
         flow_pct = float(proxy_flow / aum_proxy) if aum_proxy != 0 else None
@@ -173,13 +165,10 @@ def compute_flows(tickers, start_date, end_date):
 
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(tickers))) as ex:
-        futures = {
-            ex.submit(robust_flow_estimate, t, prices[t] if t in prices.columns else pd.Series(dtype=float)): t
-            for t in tickers
-        }
-        for fut in concurrent.futures.as_completed(futures):
-            t = futures[fut]
-            results[t] = fut.result()
+        futs = {ex.submit(robust_flow_estimate, t, prices[t] if t in prices.columns else pd.Series(dtype=float)): t
+                for t in tickers}
+        for fut in concurrent.futures.as_completed(futs):
+            results[futs[fut]] = fut.result()
 
     rows = []
     for t in tickers:
@@ -194,118 +183,119 @@ def compute_flows(tickers, start_date, end_date):
             "AUM ($)": res.get("aum"),
             "Method": res.get("method"),
         })
-
     df = pd.DataFrame(rows)
+
     cat_df = df.groupby("Category", as_index=False).agg({"Flow ($)": "sum", "AUM ($)": "sum"})
     cat_df["Flow (%)"] = np.where(cat_df["AUM ($)"].fillna(0) != 0, cat_df["Flow ($)"] / cat_df["AUM ($)"] * 100.0, np.nan)
     return df, cat_df
 
 # ───────────────── Compute ─────────────────
-tickers = TICKERS
-df, cat_df = compute_flows(tickers, start_date, today)
+df, cat_df = compute_flows(TICKERS, start_date, today)
 
-# Label helpers
-def money_label(x):
-    if x is None or pd.isna(x): return ""
-    s = "-" if x < 0 else "+"
-    ax = abs(x)
-    if ax >= 1e12: return f"{s}${ax/1e12:,.0f}T"
-    if ax >= 1e9:  return f"{s}${ax/1e9:,.0f}B"
-    if ax >= 1e6:  return f"{s}${ax/1e6:,.0f}M"
-    if ax >= 1e3:  return f"{s}${ax/1e3:,.0f}K"
-    return f"{s}${ax:,.0f}"
+# ───────────────── Formatting (k/M/B) ─────────────────
+def human_money(x, signed=True, decimals=2):
+    """$X.XXk / $X.XXM / $X.XXB formatting (lowercase k)."""
+    if x is None or pd.isna(x):
+        return ""
+    sgn = "+" if (signed and x > 0) else ("-" if (signed and x < 0) else "")
+    ax = abs(float(x))
+    if ax >= 1e9:  val, suf = ax / 1e9, "B"
+    elif ax >= 1e6: val, suf = ax / 1e6, "M"
+    elif ax >= 1e3: val, suf = ax / 1e3, "k"
+    else:           val, suf = ax, ""
+    return f"{sgn}${val:,.{decimals}f}{suf}"
 
-def choose_scale(max_abs_value):
-    """Return (scale_factor, suffix) so axis shows sensible units."""
-    if max_abs_value >= 1e12: return 1e12, "$T"
-    if max_abs_value >= 1e9:  return 1e9, "$B"
-    if max_abs_value >= 1e6:  return 1e6, "$M"
-    if max_abs_value >= 1e3:  return 1e3, "$K"
-    return 1.0, "$"
-
-# Sort by flow, build labels
-df = df.sort_values("Flow ($)", ascending=False, na_position="last").reset_index(drop=True)
-df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
+def tick_human_money(x, pos):
+    # axis ticks: no explicit sign for clarity; still show suffix
+    ax = abs(float(x))
+    sgn = "-" if x < 0 else ""
+    if ax >= 1e9:  val, suf = ax / 1e9, "B"
+    elif ax >= 1e6: val, suf = ax / 1e6, "M"
+    elif ax >= 1e3: val, suf = ax / 1e3, "k"
+    else:           val, suf = ax, ""
+    return f"{sgn}${val:,.2f}{suf}"
 
 # ───────────────── Main ─────────────────
 st.title("ETF Flows Dashboard")
 st.caption(f"Period: **{period_label}** (ending {today.date()})  •  Methods: ΔSO×P → Δ(AUM/P)×P → proxy")
 
-# — ETF bar chart with adaptive axis units —
+# Sort & label
+df = df.sort_values("Flow ($)", ascending=False, na_position="last").reset_index(drop=True)
+df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
+
+# — ETF bar chart —
 chart_df = df.copy()
-vals_raw = chart_df["Flow ($)"].astype(float)
-max_abs = float(np.nanmax(np.abs(vals_raw))) if vals_raw.notna().any() else 0.0
-scale, suffix = choose_scale(max_abs if max_abs > 0 else 1.0)
-vals = vals_raw.fillna(0.0) / scale
+vals = chart_df["Flow ($)"].fillna(0.0).astype(float).to_numpy()
 
 fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
 colors = np.where(vals > 0, "#2ca02c", np.where(vals < 0, "#d62728", "#bdbdbd"))
-bars = ax.barh(chart_df["Label"], vals.to_numpy(), color=colors, alpha=0.88)
+bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.88)
 
-ax.set_xlabel(f"Estimated Flow ({suffix})")
+ax.set_xlabel("Estimated Flow ($ with k/M/B)")
 ax.set_title(f"ETF Proxy Flows — {period_label}")
 ax.invert_yaxis()
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(tick_human_money))
 
 x_lo = min(vals.min(), 0.0)
 x_hi = max(vals.max(), 0.0)
 pad = (x_hi - x_lo) * 0.15 if x_hi != x_lo else 1.0
 ax.set_xlim([x_lo - pad, x_hi + pad])
 
-# Clean ticks: show integers where possible
-ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
-
-for bar, val_raw in zip(bars, vals_raw):
-    if pd.isna(val_raw): continue
-    label = money_label(val_raw)
+# Right/left-aligned labels with $X.XXk/M/B
+for bar, val in zip(bars, chart_df["Flow ($)"]):
+    if pd.isna(val): 
+        continue
+    text = human_money(val, signed=True, decimals=2)
     x = bar.get_width()
     ha = "left" if x >= 0 else "right"
     offset = 0.02 * (ax.get_xlim()[1] - ax.get_xlim()[0])
     ax.text(x + (offset if x >= 0 else -offset),
-            bar.get_y() + bar.get_height()/2,
-            label, va="center", ha=ha, fontsize=10)
+            bar.get_y() + bar.get_height() / 2,
+            text, va="center", ha=ha, fontsize=10)
 
 plt.tight_layout()
 st.pyplot(fig)
-st.markdown("*Green = inflow, Red = outflow, Gray = missing/unknown. Axis is scaled to B/M/K automatically.*")
+st.markdown("*Green = inflow, Red = outflow, Gray = missing/unknown. Axis and labels use $X.XXk / $X.XXM / $X.XXB.*")
 
 # — Category rollup —
 st.markdown("### Category Totals")
 cat_v = cat_df.sort_values("Flow ($)", ascending=False, na_position="last").reset_index(drop=True)
-
-vals2_raw = cat_v["Flow ($)"].astype(float)
-max_abs2 = float(np.nanmax(np.abs(vals2_raw))) if vals2_raw.notna().any() else 0.0
-scale2, suffix2 = choose_scale(max_abs2 if max_abs2 > 0 else 1.0)
-vals2 = vals2_raw.fillna(0.0) / scale2
+vals2 = cat_v["Flow ($)"].fillna(0.0).astype(float).to_numpy()
 
 fig2, ax2 = plt.subplots(figsize=(12, max(3, len(cat_v) * 0.45)))
 colors2 = np.where(vals2 > 0, "#2ca02c", np.where(vals2 < 0, "#d62728", "#bdbdbd"))
-bars2 = ax2.barh(cat_v["Category"], vals2.to_numpy(), color=colors2, alpha=0.9)
-ax2.set_xlabel(f"Estimated Flow ({suffix2})")
-ax2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+bars2 = ax2.barh(cat_v["Category"], vals2, color=colors2, alpha=0.9)
+ax2.set_xlabel("Estimated Flow ($ with k/M/B)")
+ax2.xaxis.set_major_formatter(mticker.FuncFormatter(tick_human_money))
 
-xlo2, xhi2 = min(vals2.min(), 0.0), max(vals2.max(), 0.0)
-pad2 = (xhi2 - xlo2) * 0.15 if xhi2 != xlo2 else 1.0
-ax2.set_xlim([xlo2 - pad2, xhi2 + pad2])
+x_lo2 = min(vals2.min(), 0.0)
+x_hi2 = max(vals2.max(), 0.0)
+pad2 = (x_hi2 - x_lo2) * 0.15 if x_hi2 != x_lo2 else 1.0
+ax2.set_xlim([x_lo2 - pad2, x_hi2 + pad2])
 
-for bar, val in zip(bars2, vals2_raw):
+for bar, val in zip(bars2, cat_v["Flow ($)"]):
     if pd.isna(val): continue
-    ax2.text(bar.get_width() + np.sign(bar.get_width())*0.02*(ax2.get_xlim()[1]-ax2.get_xlim()[0]),
-             bar.get_y()+bar.get_height()/2,
-             money_label(val), va="center",
-             ha=("left" if bar.get_width()>=0 else "right"), fontsize=10)
+    text = human_money(val, signed=True, decimals=2)
+    x = bar.get_width()
+    ha = "left" if x >= 0 else "right"
+    offset = 0.02 * (ax2.get_xlim()[1] - ax2.get_xlim()[0])
+    ax2.text(x + (offset if x >= 0 else -offset),
+             bar.get_y() + bar.get_height()/2,
+             text, va="center", ha=ha, fontsize=10)
+
 plt.tight_layout()
 st.pyplot(fig2)
 
-# — Top movers (kept) —
+# — Top movers (tables only) —
 st.markdown("### Top Inflows & Outflows")
 top_in  = df.head(5)[["Label","Flow ($)","Flow (%)","AUM ($)","Method"]].copy()
 top_out = df.sort_values("Flow ($)").head(5)[["Label","Flow ($)","Flow (%)","AUM ($)","Method"]].copy()
 
 def fmt_table(_df):
     out = _df.copy()
-    out["Flow ($)"] = out["Flow ($)"].map(money_label)
+    out["Flow ($)"] = out["Flow ($)"].map(lambda v: human_money(v, signed=True))
     out["Flow (%)"] = out["Flow (%)"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
-    out["AUM ($)"]  = out["AUM ($)"].map(lambda x: money_label(x).replace("+",""))
+    out["AUM ($)"]  = out["AUM ($)"].map(lambda v: human_money(v, signed=False))
     return out.set_index("Label")
 
 c1, c2 = st.columns(2)
