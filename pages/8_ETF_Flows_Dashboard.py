@@ -1,267 +1,194 @@
-# ETF Flows — Core 20 with Upload Support (ΔSO × Close)
-# ------------------------------------------------------
-import warnings
-warnings.filterwarnings("ignore", category=FutureWarning)
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from datetime import datetime
+import concurrent.futures
 
-plt.style.use("default")
-st.set_page_config(page_title="ETF Flows — Core 20", layout="wide")
+st.set_page_config(page_title="ETF Flows Dashboard", layout="wide")
 
-# ========= Config =========
-BASKET = {
-    # Core beta
-    "SPY": "S&P 500", "IVV": "S&P 500 (iShares)", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
-    "EFA": "Developed ex-US", "EEM": "Emerging Markets",
-    # Sectors (SPDR)
-    "XLK": "Tech", "XLF": "Financials", "XLE": "Energy", "XLV": "Health Care", "XLI": "Industrials",
-    # Credit & Rates
-    "HYG": "High Yield", "LQD": "IG Corp", "TLT": "20+Y Treasuries", "IEF": "7–10Y Treas", "SHY": "1–3Y Treas",
-    # Cash / metals / alt beta
-    "BIL": "T-Bills 1–3M", "GLD": "Gold", "SLV": "Silver", "USMV": "US Min Vol",
-}
-TICKERS = list(BASKET.keys())
-
-# ========= Sidebar =========
-st.sidebar.title("ETF Flows — Core 20")
+st.sidebar.title("ETF Flows")
 st.sidebar.markdown("""
-Flows = **Δ Shares Outstanding × Close**.
+A dashboard of **thematic and global ETF flows** — see where money is moving among major macro and innovation trades.
 
-- **Source:**
-  - *Yahoo (best-effort)* — tries to fetch SO history. Many ETFs won’t have it.
-  - *Upload (recommended)* — provide a CSV of daily SO for any subset.
+- **Flows are proxies** using daily shares outstanding × price.
 """)
 
-today = pd.Timestamp.today().normalize()
-LOOKBACKS = {
-    "1M": 30, "3M": 90, "6M": 180, "12M": 365,
-    "YTD": (today - pd.Timestamp(year=today.year, month=1, day=1)).days,
+lookback_dict = {
+    "1 Month": 30,
+    "3 Months": 90,
+    "6 Months": 180,
+    "12 Months": 365,
+    "YTD": (datetime.now() - datetime(datetime.now().year, 1, 1)).days
 }
-lb_key = st.sidebar.selectbox("Lookback", list(LOOKBACKS.keys()), index=1)
-days = int(LOOKBACKS[lb_key])
-start = today - pd.Timedelta(days=days + 10)
+period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=1)
+period_days = lookback_dict[period_label]
 
-agg = st.sidebar.selectbox("Aggregate", ["Daily", "Weekly"], index=1)
-source = st.sidebar.selectbox("Source", ["Yahoo (best-effort)", "Upload (CSV)"], index=1)
-show_missing = st.sidebar.checkbox("Show Missing audit", value=True)
+etf_info = {
+    "MAGS": ("Mag 7", "Magnificent 7 stocks ETF"),
+    "SMH": ("Semiconductors", "Semiconductor stocks (VanEck)"),
+    "BOTZ": ("Robotics/AI", "Global robotics and AI leaders"),
+    "ICLN": ("Clean Energy", "Global clean energy stocks"),
+    "URNM": ("Uranium", "Uranium miners (Sprott)"),
+    "ARKK": ("Innovation", "Disruptive growth stocks (ARK)"),
+    "KWEB": ("China Internet", "China internet leaders (KraneShares)"),
+    "FXI": ("China Large-Cap", "China mega-cap stocks"),
+    "EWZ": ("Brazil", "Brazil large-cap equities"),
+    "EEM": ("Emerging Markets", "EM equities (MSCI)"),
+    "VWO": ("Emerging Markets", "EM equities (Vanguard)"),
+    "VGK": ("Europe Large-Cap", "Developed Europe stocks (Vanguard)"),
+    "FEZ": ("Eurozone", "Euro STOXX 50 ETF"),
+    "ILF": ("Latin America", "Latin America 40 ETF"),
+    "ARGT": ("Argentina", "Global X MSCI Argentina ETF"),
+    "GLD": ("Gold", "SPDR Gold Trust ETF"),
+    "SLV": ("Silver", "iShares Silver Trust ETF"),
+    "DBC": ("Commodities", "Invesco DB Commodity Index ETF"),
+    "HEDJ": ("Hedged Europe", "WisdomTree Europe Hedged Equity ETF"),
+    "USMV": ("US Min Volatility", "iShares MSCI USA Min Volatility ETF"),
+    "COWZ": ("US Free Cash Flow", "Pacer US Cash Cows 100 ETF"),
+    "BITO": ("BTC Futures", "Bitcoin futures ETF"),
+    "IBIT": ("Spot BTC", "BlackRock spot Bitcoin ETF"),
+    "BIL": ("1-3mo T-Bills", "1-3 month U.S. Treasury bills"),
+    "TLT": ("20+yr Treasuries", "20+ year U.S. Treasuries"),
+    "SHV": ("0-1yr T-Bills", "Short-term Treasury bonds"),
+}
+etf_tickers = list(etf_info.keys())
 
-uploaded = None
-if source == "Upload (CSV)":
-    st.sidebar.markdown("**CSV format** (wide or long):")
-    st.sidebar.code("date,ticker,shares\n2024-01-02,SPY,123456789\n...", language="text")
-    uploaded = st.sidebar.file_uploader("Upload Shares Outstanding CSV", type=["csv"])
-
-# ========= Helpers =========
-@st.cache_data(ttl=900, show_spinner=True)
-def batch_prices(tickers, start_dt, end_dt):
-    df = yf.download(tickers, start=start_dt, end=end_dt, auto_adjust=False,
-                     progress=False, group_by="ticker", threads=True)
-    if isinstance(df.columns, pd.MultiIndex):
-        closes = {t: df[(t, "Close")] for t in tickers if (t, "Close") in df.columns}
-        if not closes: return pd.DataFrame()
-        out = pd.DataFrame(closes).sort_index().ffill()
-    elif "Close" in df.columns:
-        out = pd.DataFrame({tickers[0]: df["Close"]}).sort_index().ffill()
-    else:
-        return pd.DataFrame()
-    out.index = pd.to_datetime(out.index).tz_localize(None)
-    return out
-
-def fmt_money(x, signed=True, d=2):
-    if x is None or pd.isna(x): return ""
-    s = "+" if (signed and x > 0) else ("-" if (signed and x < 0) else "")
-    ax = abs(float(x))
-    if   ax >= 1e9: val, suf = ax/1e9, "B"
-    elif ax >= 1e6: val, suf = ax/1e6, "M"
-    elif ax >= 1e3: val, suf = ax/1e3, "k"
-    else:           val, suf = ax, ""
-    return f"{s}${val:,.{d}f}{suf}"
-
-def tick_money(x, _):
-    ax = abs(float(x)); s = "-" if x < 0 else ""
-    if   ax >= 1e9: val, suf = ax/1e9, "B"
-    elif ax >= 1e6: val, suf = ax/1e6, "M"
-    elif ax >= 1e3: val, suf = ax/1e3, "k"
-    else:           val, suf = ax, ""
-    return f"{s}${val:,.2f}{suf}"
-
-def normalize_so_units(so: pd.Series):
-    so = (so or pd.Series(dtype=float)).dropna().astype(float)
-    if so.empty: return so
-    # If median looks like "millions", scale up to shares
-    return so*1_000_000.0 if float(so.median()) < 1e4 else so
-
-def parse_uploaded_so(file):
-    df = pd.read_csv(file)
-    cols = [c.lower() for c in df.columns]
-    if set(["date","ticker","shares"]).issubset(cols):
-        # long format
-        df.columns = cols
-        df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
-        pivot = df.pivot(index="date", columns="ticker", values="shares").sort_index()
-        return pivot
-    # wide format: first col is date, rest tickers
-    df.columns = ["date"] + [c.strip().upper() for c in df.columns[1:]]
-    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
-    return df.set_index("date").sort_index()
-
-def fetch_yahoo_so_series(ticker):
+@st.cache_data(show_spinner=True)
+def robust_flow_estimate(ticker, period_days):
     try:
-        so = yf.Ticker(ticker).get_shares_full()
+        t = yf.Ticker(ticker)
+        hist = t.history(period=f"{period_days+10}d")
+        hist = hist.dropna()
+        if hist.empty or len(hist) < 2:
+            return None, None, None
+        try:
+            so = t.get_shares_full()
+            if so is not None and not so.empty:
+                so = so.dropna()
+                so.index = pd.to_datetime(so.index)
+                so = so.loc[hist.index[0]:hist.index[-1]]
+                if len(so) >= 2:
+                    so = so.reindex(hist.index, method='ffill')
+                    start, end = so.iloc[0], so.iloc[-1]
+                    close = hist['Close']
+                    flow = (end - start) * close.iloc[-1]
+                    aum = end * close.iloc[-1]
+                    flow_pct = flow / aum if aum != 0 else None
+                    return flow, flow_pct, aum
+        except Exception:
+            pass
+        flow = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) * hist['Volume'].mean()
+        aum = hist['Close'].iloc[-1] * 1e6  # fallback guess: $1B AUM proxy
+        flow_pct = flow / aum if aum != 0 else None
+        return flow, flow_pct, aum
     except Exception:
-        return None
-    if so is None:
-        return None
-    s = pd.Series(so).dropna()
-    if s.empty:
-        return None
-    s.index = pd.to_datetime(s.index).tz_localize(None)
-    return normalize_so_units(s)
+        return None, None, None
 
-def compute_flows(px: pd.Series, so: pd.Series, freq: str):
-    pxw = px.loc[start:today].dropna()
-    if pxw.empty or so is None or so.dropna().empty:
-        return None, None
-    so_al = so.reindex(pxw.index, method="ffill").dropna()
-    if so_al.empty: return None, None
-    dso = so_al.diff().fillna(0.0)
-    flow_daily = dso * pxw.loc[so_al.index]
-    flow = flow_daily if freq == "D" else flow_daily.resample("W-FRI").sum()
-    return flow.to_frame(name="Flow ($)"), float(flow.sum())
+@st.cache_data(show_spinner=True)
+def get_all_flows(etf_tickers, period_days):
+    results = []
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        flows = list(executor.map(lambda t: robust_flow_estimate(t, period_days), etf_tickers))
+    for i, ticker in enumerate(etf_tickers):
+        cat, desc = etf_info[ticker]
+        flow, flow_pct, aum = flows[i]
+        results.append({
+            "Ticker": ticker,
+            "Category": cat,
+            "Flow ($)": flow,
+            "Flow (%)": flow_pct * 100 if flow_pct is not None else None,
+            "AUM ($)": aum,
+            "Description": desc
+        })
+    return pd.DataFrame(results)
 
-# ========= Data =========
-closes = batch_prices(TICKERS, start, today)
-if closes.empty:
-    st.error("Couldn’t download prices. Try again later.")
-    st.stop()
+df = get_all_flows(etf_tickers, period_days)
+df = df.sort_values("Flow ($)", ascending=False)
+df['Label'] = [f"{etf_info[t][0]} ({t})" for t in df['Ticker']]
 
-freq = "W" if agg == "Weekly" else "D"
-
-# Shares Outstanding source
-if source == "Upload (CSV)":
-    if uploaded is None:
-        st.info("Upload a CSV with daily Shares Outstanding to compute flows.")
-        so_table = pd.DataFrame()
+def flow_label(x):
+    if x is None:
+        return ""
+    abs_x = abs(x)
+    sign = '-' if x < 0 else '+'
+    if abs_x >= 1e9:
+        return f"{sign}${int(round(abs_x / 1e9))}B"
+    elif abs_x >= 1e6:
+        return f"{sign}${int(round(abs_x / 1e6))}M"
+    elif abs_x >= 1e3:
+        return f"{sign}${int(round(abs_x / 1e3))}K"
     else:
-        so_table = parse_uploaded_so(uploaded)
-else:
-    # Yahoo best-effort: build a table of SO series we can actually get
-    series = {}
-    for t in TICKERS:
-        s = fetch_yahoo_so_series(t)
-        if s is not None:
-            series[t] = s
-    so_table = pd.concat(series, axis=1) if series else pd.DataFrame()
+        return f"{sign}${int(round(abs_x))}"
 
-# ========= Compute flows per ticker =========
-rows, per_ticker, missing = [], {}, []
-for t in TICKERS:
-    if t not in closes.columns:
-        missing.append((t, BASKET[t], "no_price"))
-        continue
 
-    so_series = None
-    if not so_table.empty:
-        # support mismatched indices/columns
-        if t in so_table.columns.get_level_values(-1):
-            # MultiIndex (from Yahoo concat)
-            if isinstance(so_table.columns, pd.MultiIndex):
-                so_series = so_table.xs(t, axis=1, level=-1).squeeze()
-            else:
-                so_series = so_table[t]
-        elif t in so_table.columns:
-            so_series = so_table[t]
+# ------ MAIN CONTENT ------
+st.title("ETF Flows Dashboard")
+st.caption(f"Flows are proxies (not official). Period: **{period_label}**")
 
-    df_flow, net = compute_flows(closes[t], so_series, freq)
-    if df_flow is None:
-        missing.append((t, BASKET[t], "no_SO"))
-        continue
+chart_df = df
+max_val = chart_df['Flow ($)'].dropna().abs().max()
+buffer = max_val * 0.15
 
-    per_ticker[t] = df_flow
-    rows.append({"Ticker": t, "Label": f"{BASKET[t]} ({t})", "Net Flow ($)": net})
-
-if not rows:
-    st.error("No ETFs had usable Shares Outstanding for the chosen source.\n"
-             "Tip: switch to **Upload (CSV)** and drop in SO for the ETFs you care about.")
-    if show_missing and missing:
-        st.markdown("### Missing (audit)")
-        st.dataframe(pd.DataFrame(missing, columns=["Ticker","Label","Reason"]), use_container_width=True)
-    st.stop()
-
-df = pd.DataFrame(rows).sort_values("Net Flow ($)", ascending=False).reset_index(drop=True)
-
-# ========= UI =========
-st.title("ETF Flows — Core 20")
-src_label = "Upload" if source.startswith("Upload") else "Yahoo (best-effort)"
-st.caption(f"Source: **{src_label}** • Period: **{lb_key}** (ending {today.date()}) • Aggregation: **{agg}** • Flows = ΔSO × Close")
-
-# Bar chart
-vals = df["Net Flow ($)"].to_numpy()
-fig, ax = plt.subplots(figsize=(15, max(6, len(df)*0.42)))
-colors = np.where(vals >= 0, "#2ca02c", "#d62728")
-bars = ax.barh(df["Label"], vals, color=colors, alpha=0.9)
+fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
+bars = ax.barh(
+    chart_df['Label'],
+    chart_df['Flow ($)'].fillna(0),
+    color=[
+        'green' if (x is not None and x > 0) else ('red' if (x is not None and x < 0) else 'gray')
+        for x in chart_df['Flow ($)']
+    ],
+    alpha=0.8
+)
+ax.set_xlabel('Estimated Flow ($)')
+ax.set_title(f'ETF Proxy Flows – {period_label}')
 ax.invert_yaxis()
-ax.set_xlabel("Net Flow ($ with k/M/B)")
-ax.xaxis.set_major_formatter(mticker.FuncFormatter(tick_money))
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x/1e9:,.0f}B' if abs(x)>=1e9 else f'${x/1e6:,.0f}M'))
 
-x_lo, x_hi = min(vals.min(), 0.0), max(vals.max(), 0.0)
-pad = (x_hi - x_lo) * 0.15 if x_hi != x_lo else 1.0
-ax.set_xlim([x_lo - pad, x_hi + pad])
+# Set axis limits for better scaling/label fit
+ax.set_xlim([-buffer if min(chart_df['Flow ($)'].fillna(0)) < 0 else 0, max_val + buffer])
 
-for bar, v in zip(bars, vals):
-    txt = fmt_money(v, signed=True, d=2)
-    x = bar.get_width()
-    ha = "left" if x >= 0 else "right"
-    off = 0.02 * (ax.get_xlim()[1] - ax.get_xlim()[0])
-    ax.text(x + (off if x >= 0 else -off),
-            bar.get_y() + bar.get_height()/2, txt, va="center", ha=ha, fontsize=10)
-
+# Annotate: show only amount, right-aligned if positive, left-aligned if negative
+for bar, val in zip(bars, chart_df['Flow ($)']):
+    if val is not None:
+        label = flow_label(val)
+        x_text = bar.get_width()
+        align = 'left' if val > 0 else 'right'
+        x_offset = 1e7 if (val > 0) else -1e7
+        # keep annotation inside the chart, clip if too wide
+        text_x = x_text + x_offset if (abs(x_text) + buffer*0.5 < ax.get_xlim()[1]) else x_text - (buffer*0.05 if val > 0 else 0)
+        ax.text(
+            text_x,
+            bar.get_y() + bar.get_height() / 2,
+            label,
+            va='center',
+            ha=align,
+            fontsize=10,
+            color='black',
+            clip_on=True
+        )
 plt.tight_layout()
 st.pyplot(fig)
+st.markdown("*Green: inflow, Red: outflow, Gray: missing or flat*")
 
-# Summary
-c1, c2, c3 = st.columns(3)
-total_in  = df.loc[df["Net Flow ($)"] > 0, "Net Flow ($)"].sum()
-total_out = df.loc[df["Net Flow ($)"] < 0, "Net Flow ($)"].sum()
-coverage  = len(df) / len(TICKERS)
-c1.metric("Total Inflows",  fmt_money(total_in, True))
-c2.metric("Total Outflows", fmt_money(total_out, True))
-c3.metric("Coverage", f"{coverage:.0%}")
+# ------ TOP FLOWS / OUTFLOWS SUMMARY ------
+st.markdown("#### Top Inflows & Outflows")
+top_in = df.head(3)[["Label", "Flow ($)"]].copy()
+top_in['Flow'] = top_in['Flow ($)'].apply(flow_label)
+top_out = df.sort_values("Flow ($)").head(3)[["Label", "Flow ($)"]].copy()
+top_out['Flow'] = top_out['Flow ($)'].apply(flow_label)
+col1, col2 = st.columns(2)
+with col1:
+    st.write("**Top Inflows**")
+    st.table(top_in[["Flow"]].set_index(top_in["Label"]))
+with col2:
+    st.write("**Top Outflows**")
+    st.table(top_out[["Flow"]].set_index(top_out["Label"]))
 
-# Time series (Total & Cumulative)
-st.markdown("### Flow Time Series")
-panel = pd.concat([per_ticker[t]["Flow ($)"].rename(t) for t in per_ticker], axis=1).fillna(0.0)
-panel["Total Flow"] = panel.sum(axis=1)
-panel["Cumulative"] = panel["Total Flow"].cumsum()
+if df['Flow ($)'].isnull().any():
+    st.warning("Some ETFs are missing flow data (no shares outstanding history or price). Gray bars indicate incomplete flow data.")
+else:
+    st.success("All flow proxies calculated using latest data.")
 
-t1, t2 = st.columns(2)
-with t1:
-    st.line_chart(panel["Total Flow"], height=260, use_container_width=True)
-    st.caption("Total flow per period")
-with t2:
-    st.line_chart(panel["Cumulative"], height=260, use_container_width=True)
-    st.caption("Cumulative flow over the lookback")
-
-# Top in/out tables
-st.markdown("### Top Inflows & Outflows")
-L, R = st.columns(2)
-with L:
-    top_in = df.head(5).copy()
-    top_in["Net Flow ($)"] = top_in["Net Flow ($)"].map(lambda v: fmt_money(v, True))
-    st.table(top_in.set_index("Label")[["Net Flow ($)"]])
-with R:
-    top_out = df.sort_values("Net Flow ($)").head(5).copy()
-    top_out["Net Flow ($)"] = top_out["Net Flow ($)"].map(lambda v: fmt_money(v, True))
-    st.table(top_out.set_index("Label")[["Net Flow ($)"]])
-
-# Missing audit
-if show_missing and missing:
-    st.markdown("### Missing (audit)")
-    st.dataframe(pd.DataFrame(missing, columns=["Ticker","Label","Reason"]), use_container_width=True)
-
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2025 AD Fund Management LP")
