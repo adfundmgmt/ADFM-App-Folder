@@ -1,5 +1,5 @@
 ############################################################
-# Liquidity & Fed Policy Tracker — scale-optimized and robust deltas
+# Liquidity & Fed Policy Tracker — clean metrics, no deltas
 # Built by AD Fund Management LP
 ############################################################
 
@@ -20,7 +20,6 @@ FRED = {
     "nasdaq": "NASDAQCOM",    # Nasdaq Composite index level
 }
 DEFAULT_SMOOTH_DAYS = 5
-DEFAULT_CORR_WINDOW = 60  # trading days
 
 st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
@@ -30,30 +29,29 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Goal**: Track Net Liquidity and relate it to policy and equities.
+        Goal: track Net Liquidity and relate it to policy and equities.
 
-        **Definition**: Net Liquidity = WALCL − RRP − TGA  
+        Definition: Net Liquidity = WALCL − RRP − TGA  
         Units are billions. Sustained rises often coincide with risk-on conditions.
 
-        **Series**  
-        • **WALCL**: Federal Reserve total assets on the consolidated balance sheet.  
-        • **RRPONTSYD (RRP)**: Overnight reverse repo facility usage by counterparties.  
-        • **WDTGAL (TGA)**: U.S. Treasury’s cash balance at the Federal Reserve.  
-        • **EFFR**: Effective federal funds rate (volume-weighted overnight rate).
+        Series  
+        • WALCL: Federal Reserve total assets on the consolidated balance sheet.  
+        • RRPONTSYD (RRP): overnight reverse repo facility usage by counterparties.  
+        • WDTGAL (TGA): U.S. Treasury cash balance at the Fed.  
+        • EFFR: effective federal funds rate (volume-weighted overnight rate).
 
-        **Panels**  
-        1) Net Liquidity (billions).  
-        2) Components rebased to 100 at the lookback start.  
-        3) EFFR.  
-        4) Equities rebased to 100.
+        Panels  
+        1) Net Liquidity (billions)  
+        2) Components rebased to 100 at the lookback start  
+        3) EFFR  
+        4) Equities rebased to 100
         """
     )
     st.markdown("---")
     st.header("Settings")
-    lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "5y", "10y", index=2)
+    lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "5y", "10y"], index=2)
     years = int(lookback[:-1])
     smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
-    corr_win = st.number_input("Correlation window (trading days)", 20, 120, DEFAULT_CORR_WINDOW, 5)
     show_nasdaq = st.checkbox("Show Nasdaq in Equities panel", value=False)
     st.caption("Data source: FRED via pandas-datareader")
 
@@ -67,8 +65,8 @@ def fred_series(series, start, end):
         return pd.Series(dtype=float)
 
 today = pd.Timestamp.today().normalize()
-# Fetch wide enough so 25y is available
-start_all = today - pd.DateOffset(years=40)
+# Wide enough for 10y plus buffer
+start_all = today - pd.DateOffset(years=15)
 start_lb = today - pd.DateOffset(years=years)
 
 fed_bs = fred_series(FRED["fed_bs"], start_all, today)       # millions
@@ -85,7 +83,7 @@ df = pd.concat(
     keys=["WALCL", "RRP", "TGA", "EFFR", "SPX", "NASDAQ"]
 ).ffill()
 
-# If early years lack RRP (pre-2013), drop until all three exist
+# Ensure all components exist (RRP begins in 2013)
 df = df.dropna(subset=["WALCL", "RRP", "TGA"])
 df = df[df.index >= start_lb]
 if df.empty:
@@ -120,59 +118,26 @@ reb["SPX_idx"]   = rebase(df["SPX"])
 if show_nasdaq:
     reb["NASDAQ_idx"] = rebase(df["NASDAQ"])
 
-# Correlations on changes
-returns = pd.DataFrame(index=df.index)
-returns["NetLiq_chg"] = df["NetLiq"].diff()
-returns["SPX_ret"]    = df["SPX"].pct_change()
-returns["NASDAQ_ret"] = df["NASDAQ"].pct_change()
-corr_spx = returns["NetLiq_chg"].rolling(corr_win).corr(returns["SPX_ret"])
-corr_nasdaq = returns["NetLiq_chg"].rolling(corr_win).corr(returns["NASDAQ_ret"])
-
-# Robust deltas that never disappear
-def safe_delta_num(series: pd.Series, periods: int):
-    n = series.size
-    if n < 2:
-        return pd.NA
-    k = min(periods, n - 1)
-    return series.iloc[-1] - series.iloc[-1 - k]
-
+# ---------------- Metrics ----------------
 def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
 def fmt_pct(x): return "N/A" if pd.isna(x) else f"{x:.2f}%"
-def signed_html(x):
-    if pd.isna(x): return "N/A"
-    color = "#2ca02c" if x >= 0 else "#d62728"
-    sign = "+" if x >= 0 else ""
-    return f'<span style="color:{color}">{sign}{x:,.0f} B</span>'
 
 latest = {
     "date": df.index[-1].date(),
     "netliq": df["NetLiq"].iloc[-1],
-    "netliq_5d": safe_delta_num(df["NetLiq"], 5),
-    "netliq_20d": safe_delta_num(df["NetLiq"], 20),
     "walcl": df["WALCL_b"].iloc[-1],
     "rrp": df["RRP_b"].iloc[-1],
     "tga": df["TGA_b"].iloc[-1],
     "effr": df["EFFR"].iloc[-1],
-    "corr_spx": corr_spx.iloc[-1],
-    "corr_nasdaq": corr_nasdaq.iloc[-1] if show_nasdaq else pd.NA,
 }
 
-# ---------------- Metrics ----------------
 m1, m2, m3, m4, m5 = st.columns(5)
-# Use numeric delta for correct Streamlit coloring; show 20d below with sign-aware HTML
-m1.metric("Net Liquidity", fmt_b(latest["netliq"]), latest["netliq_5d"], help="5d change shown; 20d below")
-m1.markdown(f"**20d** {signed_html(latest['netliq_20d'])}", unsafe_allow_html=True)
+# Net Liquidity level only (no delta coloring)
+m1.metric("Net Liquidity", fmt_b(latest["netliq"]), help="WALCL - RRP - TGA")
 m2.metric("WALCL", fmt_b(latest["walcl"]))
 m3.metric("RRP", fmt_b(latest["rrp"]))
 m4.metric("TGA", fmt_b(latest["tga"]))
 m5.metric("EFFR", fmt_pct(latest["effr"]))
-
-m6, m7 = st.columns(2)
-m6.metric(f"Corr(NetLiq Δ, SPX ret) {corr_win}d",
-          "N/A" if pd.isna(latest["corr_spx"]) else f"{latest['corr_spx']:.2f}")
-if show_nasdaq:
-    m7.metric(f"Corr(NetLiq Δ, Nasdaq ret) {corr_win}d",
-              "N/A" if pd.isna(latest["corr_nasdaq"]) else f"{latest['corr_nasdaq']:.2f}")
 
 # ---------------- Charts ----------------
 fig = make_subplots(
@@ -205,13 +170,10 @@ fig.add_trace(go.Scatter(x=df.index, y=df["EFFR_s"], name="EFFR",
 fig.update_yaxes(title="Percent", tickformat=".2f", row=3, col=1)
 
 # Row 4: Equities rebased
-reb_equities = pd.DataFrame(index=df.index)
-reb_equities["SPX_idx"] = (df["SPX"] / df["SPX"].iloc[0]) * 100
-fig.add_trace(go.Scatter(x=reb_equities.index, y=reb_equities["SPX_idx"], name="SPX idx",
+fig.add_trace(go.Scatter(x=reb.index, y=reb["SPX_idx"], name="SPX idx",
                          line=dict(color="#9467bd")), row=4, col=1)
 if show_nasdaq:
-    reb_equities["NASDAQ_idx"] = (df["NASDAQ"] / df["NASDAQ"].iloc[0]) * 100
-    fig.add_trace(go.Scatter(x=reb_equities.index, y=reb_equities["NASDAQ_idx"], name="NASDAQ idx",
+    fig.add_trace(go.Scatter(x=reb.index, y=reb["NASDAQ_idx"], name="NASDAQ idx",
                              line=dict(color="#8c564b")), row=4, col=1)
 fig.update_yaxes(title="Index = 100", row=4, col=1)
 
@@ -241,14 +203,12 @@ with st.expander("Methodology"):
     st.markdown(
         f"""
         Net Liquidity = WALCL − RRP − TGA.  
-        WALCL, RRP, TGA are millions on FRED and are displayed in billions.
+        WALCL, RRP, TGA are millions on FRED and displayed here in billions.
 
         Smoothing applies a simple moving average over {smooth} days.  
         Components are rebased to 100 at the lookback start to remove scale distortion.
 
-        Correlations use Pearson correlation between daily Net Liquidity changes and equity returns over {corr_win} trading days.
-
-        Note: RRP daily series begins in 2013. Selecting longer lookbacks will truncate to available data.
+        Note: RRP daily series begins in 2013. Long lookbacks truncate to available history.
         """
     )
 
