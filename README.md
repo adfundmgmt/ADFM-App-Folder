@@ -37,7 +37,8 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Liquidity Tracker**  
   Tracks Net Liquidity and relate it to policy and equities. Definition: Net Liquidity = WALCL − RRP − TGA. Units are billions. Sustained rises often coincide with risk-on conditions.
 
-
+- **Market Stress Composite**  
+  A single 0 to 100 stress score blending volatility, credit, curve, funding, and equity drawdown. Higher = more stress.
 
 ---
 
