@@ -20,10 +20,10 @@ with st.sidebar:
         """
         **Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.**
         ---
-        • Enter comma-separated tickers (e.g. `NVDA, MSFT, SPY, CL=F, TLT`)  
-        • Table shows current price, recent highs, breakout flags, and RSI (7, 14, 21)  
-        • Click any ticker for annotated price and RSI chart  
-        • Breakouts: ✅ = new high today vs X-day  
+        • Enter comma-separated tickers (e.g. `NVDA, MSFT, SPY, CL=F, TLT`)
+        • Table shows current price, recent highs, breakout flags, and RSI (7, 14, 21)
+        • Click any ticker for annotated price and RSI chart
+        • Breakouts: ✅ = new high today vs X-day
         • RSI: Red = overbought (>80), Blue = oversold (<20)
         """
     )
@@ -50,12 +50,8 @@ MIN_BARS = 200
 def fetch_adj_close_batch(ticks, period=LOOKBACK_PERIOD, interval=INTERVAL) -> pd.DataFrame:
     try:
         raw = yf.download(
-            ticks,
-            period=period,
-            interval=interval,
-            progress=False,
-            group_by="ticker",
-            auto_adjust=False,
+            ticks, period=period, interval=interval,
+            progress=False, group_by="ticker", auto_adjust=False
         )
     except Exception:
         return pd.DataFrame()
@@ -77,8 +73,7 @@ def fetch_adj_close_batch(ticks, period=LOOKBACK_PERIOD, interval=INTERVAL) -> p
     if not out:
         return pd.DataFrame()
 
-    df = pd.DataFrame(out).sort_index()
-    df = df.dropna(how="all")
+    df = pd.DataFrame(out).sort_index().dropna(how="all")
     return df
 
 prices = fetch_adj_close_batch(tickers)
@@ -87,6 +82,7 @@ if prices.empty:
     st.error("No valid price data. Check tickers or connectivity.")
     st.stop()
 
+# Filter by last valid price
 last_valid = prices.apply(lambda s: s.dropna().iloc[-1] if s.dropna().shape[0] else np.nan)
 valid_by_price = last_valid[last_valid >= min_price].index.tolist()
 prices = prices[valid_by_price]
@@ -95,9 +91,9 @@ if prices.empty:
     st.error(f"No tickers above min price ${min_price:.2f}.")
     st.stop()
 
+# Ensure enough bars
 sufficient_len = [c for c in prices.columns if prices[c].dropna().shape[0] >= MIN_BARS]
 prices = prices[sufficient_len]
-
 if prices.empty:
     st.info("No tickers have at least 200 daily observations.")
     st.stop()
@@ -126,7 +122,6 @@ for sym in prices.columns:
         continue
 
     latest = float(s.iloc[-1])
-
     highs = {w: float(s.rolling(w).max().iloc[-1]) for w in WINDOWS_HI}
     rsis = {w: float(rsi_wilder(s, w).iloc[-1]) for w in WINDOWS_RSI}
 
@@ -139,7 +134,6 @@ for sym in prices.columns:
     records.append(rec)
 
 df = pd.DataFrame(records)
-
 if df.empty:
     st.info("No breakouts detected or insufficient data (need ≥200 days and above min price).")
     st.stop()
@@ -206,20 +200,24 @@ s = prices[sel].dropna()
 if s.shape[0] < MIN_BARS:
     st.info(f"{sel} does not have enough data to draw rolling highs.")
 else:
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    # Use constrained layout to reduce padding around axes
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=True, constrained_layout=True)
 
     # Price and rolling highs
-    ax1.plot(s.index, s, label="Adj Close", color="black", linewidth=2)  # black line
+    ax1.plot(s.index, s, label="Adj Close", color="black", linewidth=2)
     for w, col in zip((20, 50, 100, 200), ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")):
         ax1.plot(s.index, s.rolling(w).max(), lw=1.1, color=col, label=f"{w}D High")
     ax1.set_title(f"{sel} Price & Rolling Highs", fontweight="bold")
     ax1.legend(fontsize=8)
     ax1.grid(alpha=0.3)
     ax1.set_ylabel("Price")
-    fig.autofmt_xdate()
+
+    # Remove default horizontal padding and force full-span x limits
+    ax1.margins(x=0)
+    ax1.set_xlim(s.index.min(), s.index.max())
 
     # Multi-RSI
-    for w, col in zip((7, 14, 21), ("black", "#8c564b", "#e377c2")):  # RSI(7) is black
+    for w, col in zip((7, 14, 21), ("black", "#8c564b", "#e377c2")):
         ax2.plot(s.index, rsi_wilder(s, w), color=col, label=f"RSI({w})")
     ax2.axhline(80, ls="--", color="gray", lw=0.9, label="RSI 80")
     ax2.axhline(20, ls="--", color="gray", lw=0.9, label="RSI 20")
@@ -229,8 +227,12 @@ else:
     ax2.set_ylabel("RSI")
     ax2.set_xlabel("Date")
 
-    fig.tight_layout(h_pad=2)
-    st.pyplot(fig)
+    # Same x treatment for RSI panel; lock y to 0–100 to use the full band
+    ax2.margins(x=0)
+    ax2.set_xlim(s.index.min(), s.index.max())
+    ax2.set_ylim(0, 100)
+
+    st.pyplot(fig, use_container_width=True)
 
 st.caption(f"Data through: {prices.index.max().date()}")
 st.caption("© 2025 AD Fund Management LP")
