@@ -42,16 +42,12 @@ if not tickers:
 min_price = st.sidebar.number_input("Min Price (to filter penny stocks)", value=2.0, step=0.5)
 
 # ── Data Fetch (Batch + Cached) ─────────────────────────────────────────────
-LOOKBACK_PERIOD = "2y"   # ensures we always have ≥200 sessions after NaNs
+LOOKBACK_PERIOD = "2y"
 INTERVAL = "1d"
-MIN_BARS = 200           # need at least 200 for the 200D high
+MIN_BARS = 200
 
 @st.cache_data(ttl=1800)
 def fetch_adj_close_batch(ticks, period=LOOKBACK_PERIOD, interval=INTERVAL) -> pd.DataFrame:
-    """
-    Batch download Adjusted Close for all tickers to preserve total-return semantics.
-    Skips tickers without Adj Close. Returns DataFrame[date, ticker].
-    """
     try:
         raw = yf.download(
             ticks,
@@ -74,7 +70,6 @@ def fetch_adj_close_batch(ticks, period=LOOKBACK_PERIOD, interval=INTERVAL) -> p
             except Exception:
                 continue
     else:
-        # Single-ticker fallback
         if "Adj Close" in raw.columns:
             t0 = ticks[0] if isinstance(ticks, list) and len(ticks) == 1 else "TICKER"
             out[t0] = raw["Adj Close"].dropna()
@@ -83,7 +78,6 @@ def fetch_adj_close_batch(ticks, period=LOOKBACK_PERIOD, interval=INTERVAL) -> p
         return pd.DataFrame()
 
     df = pd.DataFrame(out).sort_index()
-    # Drop rows that are entirely NaN
     df = df.dropna(how="all")
     return df
 
@@ -93,7 +87,6 @@ if prices.empty:
     st.error("No valid price data. Check tickers or connectivity.")
     st.stop()
 
-# Filter by minimum price using the last valid observation per series
 last_valid = prices.apply(lambda s: s.dropna().iloc[-1] if s.dropna().shape[0] else np.nan)
 valid_by_price = last_valid[last_valid >= min_price].index.tolist()
 prices = prices[valid_by_price]
@@ -102,7 +95,6 @@ if prices.empty:
     st.error(f"No tickers above min price ${min_price:.2f}.")
     st.stop()
 
-# Ensure each ticker has enough bars for 200D windows
 sufficient_len = [c for c in prices.columns if prices[c].dropna().shape[0] >= MIN_BARS]
 prices = prices[sufficient_len]
 
@@ -110,7 +102,6 @@ if prices.empty:
     st.info("No tickers have at least 200 daily observations.")
     st.stop()
 
-# Drop any leading rows that are all NaN, and any trailing rows that are all NaN
 prices = prices.dropna(how="all").copy()
 
 # ── RSI (Wilder) ───────────────────────────────────────────────────────────
@@ -153,19 +144,15 @@ if df.empty:
     st.info("No breakouts detected or insufficient data (need ≥200 days and above min price).")
     st.stop()
 
-# Sort with breakout priority
 break_cols = [c for c in df.columns if c.startswith("Breakout ")]
 df = df.sort_values(by=break_cols + ["Price"], ascending=False).reset_index(drop=True)
 
 # ── Table Styling ───────────────────────────────────────────────────────────
 def styled_table(dfin: pd.DataFrame):
     df_disp = dfin.copy()
-
-    # Replace booleans with emoji
     for col in break_cols:
         df_disp[col] = df_disp[col].map(lambda x: "✅" if bool(x) else "")
 
-    # Format numeric columns
     float_cols = [c for c in df_disp.columns if "High" in c or c == "Price"]
     rsi_cols = [c for c in df_disp.columns if c.startswith("RSI")]
 
@@ -180,9 +167,9 @@ def styled_table(dfin: pd.DataFrame):
         except Exception:
             return ""
         if v >= 80:
-            return "color: #d62728; font-weight: bold;"   # red
+            return "color: #d62728; font-weight: bold;"
         if v <= 20:
-            return "color: #1f77b4; font-weight: bold;"   # blue
+            return "color: #1f77b4; font-weight: bold;"
         return ""
 
     styled = (
@@ -207,7 +194,6 @@ st.download_button(
 )
 
 # ── Per-Ticker Charts ───────────────────────────────────────────────────────
-# Persist selection across reruns
 default_choice = st.session_state.get("selected_ticker", df["Ticker"].iloc[0])
 if default_choice not in df["Ticker"].values:
     default_choice = df["Ticker"].iloc[0]
@@ -217,16 +203,15 @@ st.session_state["selected_ticker"] = sel
 
 s = prices[sel].dropna()
 
-# Guard: if somehow selected series is too short to draw 200D lines
 if s.shape[0] < MIN_BARS:
     st.info(f"{sel} does not have enough data to draw rolling highs.")
 else:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
 
     # Price and rolling highs
-    ax1.plot(s.index, s, label="Adj Close", linewidth=2)
-    for w in (20, 50, 100, 200):
-        ax1.plot(s.index, s.rolling(w).max(), lw=1.1, label=f"{w}D High")
+    ax1.plot(s.index, s, label="Adj Close", color="black", linewidth=2)  # black line
+    for w, col in zip((20, 50, 100, 200), ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")):
+        ax1.plot(s.index, s.rolling(w).max(), lw=1.1, color=col, label=f"{w}D High")
     ax1.set_title(f"{sel} Price & Rolling Highs", fontweight="bold")
     ax1.legend(fontsize=8)
     ax1.grid(alpha=0.3)
@@ -234,8 +219,8 @@ else:
     fig.autofmt_xdate()
 
     # Multi-RSI
-    for w in (7, 14, 21):
-        ax2.plot(s.index, rsi_wilder(s, w), label=f"RSI({w})")
+    for w, col in zip((7, 14, 21), ("black", "#8c564b", "#e377c2")):  # RSI(7) is black
+        ax2.plot(s.index, rsi_wilder(s, w), color=col, label=f"RSI({w})")
     ax2.axhline(80, ls="--", color="gray", lw=0.9, label="RSI 80")
     ax2.axhline(20, ls="--", color="gray", lw=0.9, label="RSI 20")
     ax2.set_title(f"{sel} RSI Indicators", fontweight="bold")
@@ -247,6 +232,5 @@ else:
     fig.tight_layout(h_pad=2)
     st.pyplot(fig)
 
-# Data freshness
 st.caption(f"Data through: {prices.index.max().date()}")
 st.caption("© 2025 AD Fund Management LP")
