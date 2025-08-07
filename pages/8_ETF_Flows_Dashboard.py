@@ -18,21 +18,24 @@ st.sidebar.markdown(
     """
 **What this does:** Net flow ≈ Δ(Shares Outstanding) × last price  
 **What it won't do:** No AUM/price proxies, no guesswork.  
-If SO is unavailable or ambiguous → the ETF is skipped.
+If SO is unavailable or suspect → the ETF is skipped.
 """
 )
 
 # Lookback
 today = pd.Timestamp.today().normalize()
 lookbacks = {
-    "1M": 30, "3M": 90, "6M": 180, "12M": 365,
-    "YTD": (today - pd.Timestamp(year=today.year, month=1, day=1)).days
+    "1M": 30,
+    "3M": 90,
+    "6M": 180,
+    "12M": 365,
+    "YTD": (today - pd.Timestamp(year=today.year, month=1, day=1)).days,
 }
 lb_key = st.sidebar.radio("Period", list(lookbacks.keys()), index=1)
 days = int(lookbacks[lb_key])
-start = today - pd.Timedelta(days=days + 10)  # small buffer for alignment
+start = today - pd.Timedelta(days=days + 10)  # buffer for alignment
 
-# Universe (keep it simple; edit as you like)
+# Universe (edit as needed)
 ETF_INFO = {
     "MAGS": "Mag 7",
     "SMH": "Semiconductors",
@@ -70,7 +73,8 @@ def dl_prices(tickers, start_dt, end_dt):
                      progress=False, threads=True, group_by="ticker")
     if isinstance(df.columns, pd.MultiIndex):
         closes = {t: df[(t, "Close")].rename(t) for t in tickers if (t, "Close") in df.columns}
-        if not closes: return pd.DataFrame()
+        if not closes:
+            return pd.DataFrame()
         return pd.concat(closes.values(), axis=1).sort_index().ffill()
     elif "Close" in df.columns:
         return pd.DataFrame({tickers[0]: df["Close"]}).sort_index().ffill()
@@ -84,7 +88,7 @@ def human_money(x, signed=True, decimals=2):
     elif ax >= 1e6: val, suf = ax/1e6, "M"
     elif ax >= 1e3: val, suf = ax/1e3, "k"
     else:           val, suf = ax, ""
-    return f"{sgn}${val:,.{decimals}f}{suf}"
+    return f"{sgn}${val:,.2f}{suf}"
 
 def tick_fmt(x, pos):
     ax = abs(float(x))
@@ -96,7 +100,7 @@ def tick_fmt(x, pos):
     return f"{sgn}${val:,.2f}{suf}"
 
 def normalize_so_units(so: pd.Series):
-    """If the median SO is tiny (<1e4), assume it's in millions → multiply by 1e6."""
+    """If median SO looks like 'millions', multiply by 1e6."""
     so = (so or pd.Series(dtype=float)).dropna().astype(float)
     if so.empty: return so, "no_SO"
     return (so*1_000_000.0, "SO(millions→shares)") if float(so.median()) < 1e4 else (so, "SO(shares)")
@@ -104,17 +108,20 @@ def normalize_so_units(so: pd.Series):
 def compute_flow_strict(ticker, px: pd.Series):
     """
     Strict ΔSO × last Close.
-    Returns dict with keys: flow, method, note.
-    Skips ETF if SO is missing/ambiguous or if alignment fails.
+    Skip if SO missing, cannot align, or SO jump looks bogus.
     """
     try:
         so = yf.Ticker(ticker).get_shares_full()
     except Exception:
         so = None
-    if so is None or (isinstance(so, (pd.Series, pd.DataFrame)) and pd.Series(so).dropna().empty):
+    if so is None:
         return {"flow": None, "method": "skip", "note": "no_SO"}
 
-    so_series = pd.Series(so).copy()
+    so_series = pd.Series(so).dropna()
+    if so_series.empty:
+        return {"flow": None, "method": "skip", "note": "no_SO"}
+
+    # ensure tz-naive datetime index
     so_series.index = pd.to_datetime(so_series.index).tz_localize(None)
     so_series, note = normalize_so_units(so_series)
 
@@ -122,20 +129,20 @@ def compute_flow_strict(ticker, px: pd.Series):
     if px.empty:
         return {"flow": None, "method": "skip", "note": "no_price"}
 
-    # Align SO to trading days inside the window
+    # window & align
     px_window = px.loc[start:today]
+    if px_window.empty:
+        return {"flow": None, "method": "skip", "note": "no_window"}
     so_aligned = so_series.reindex(px_window.index, method="ffill").dropna()
     if so_aligned.empty:
         return {"flow": None, "method": "skip", "note": "no_align"}
 
     so_start, so_end = float(so_aligned.iloc[0]), float(so_aligned.iloc[-1])
-    p_end = float(px_window.iloc[-1])
-    flow = (so_end - so_start) * p_end
-
-    # Basic sanity: if |ΔSO| > 50% of SO_end for the period, flag as suspect (likely unit jump/rebalance)
     if so_end != 0 and abs(so_end - so_start) / abs(so_end) > 0.5:
         return {"flow": None, "method": "skip", "note": "suspect_SO_jump"}
 
+    p_end = float(px_window.iloc[-1])
+    flow = (so_end - so_start) * p_end
     return {"flow": flow, "method": f"ΔSO×P_end[{note}]", "note": ""}
 
 # ---------------- Compute ----------------
@@ -144,27 +151,27 @@ if prices.empty:
     st.error("Price download failed. Try again later.")
     st.stop()
 
-rows = []
-skipped = []
+rows, skipped = [], []
 for t in TICKERS:
     px = prices[t] if t in prices.columns else pd.Series(dtype=float)
     res = compute_flow_strict(t, px)
     if res["flow"] is None:
-        skipped.append((t, ETF_INFO[t], res["note"]))
-        continue
-    rows.append({"Ticker": t, "Label": f"{ETF_INFO[t]} ({t})", "Flow ($)": res["flow"], "Method": res["method"]})
+        skipped.append((t, ETF_INFO[t], res.get("note","")))
+    else:
+        rows.append({"Ticker": t, "Label": f"{ETF_INFO[t]} ({t})", "Flow ($)": res["flow"], "Method": res["method"]})
 
-df = pd.DataFrame(rows).sort_values("Flow ($)", ascending=False).reset_index(drop=True)
+df = pd.DataFrame(rows)  # may be empty!
 
 # ---------------- UI ----------------
 st.title("ETF Flows — Strict ΔSO × Price")
-st.caption(f"Period: **{lb_key}** (ending {today.date()}) • Only ETFs with reliable shares-outstanding history are shown.")
+st.caption(f"Period: **{lb_key}** (ending {today.date()}) • Only ETFs with reliable SO are shown.")
 
 if df.empty:
     st.warning("Nothing to show (no ETFs had clean SO data for this lookback).")
 else:
-    # Chart
+    df = df.sort_values("Flow ($)", ascending=False).reset_index(drop=True)
     vals = df["Flow ($)"].to_numpy()
+
     fig, ax = plt.subplots(figsize=(15, max(5, len(df) * 0.45)))
     colors = np.where(vals > 0, "#2ca02c", "#d62728")
     bars = ax.barh(df["Label"], vals, color=colors, alpha=0.9)
@@ -201,7 +208,7 @@ else:
         top_out["Flow ($)"] = top_out["Flow ($)"].map(lambda v: human_money(v, True))
         st.table(top_out[["Label", "Flow ($)", "Method"]].set_index("Label"))
 
-# Skipped tickers
+# Skipped tickers (always show)
 if skipped:
     st.markdown("### Skipped (no reliable SO)")
     skip_df = pd.DataFrame(skipped, columns=["Ticker", "Label", "Reason"])
