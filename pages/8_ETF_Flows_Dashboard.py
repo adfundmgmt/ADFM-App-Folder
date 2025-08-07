@@ -1,3 +1,5 @@
+# ETF Flows — Efficient & Useful (ΔSO × Price, curated liquid ETFs)
+# ---------------------------------------------------------------
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -10,208 +12,227 @@ import matplotlib.ticker as mticker
 from datetime import datetime
 
 plt.style.use("default")
-st.set_page_config(page_title="ETF Flows (Strict)", layout="wide")
+st.set_page_config(page_title="ETF Flows — Core 20", layout="wide")
 
-# ---------------- Sidebar ----------------
-st.sidebar.title("ETF Flows — Strict Mode")
-st.sidebar.markdown(
-    """
-**What this does:** Net flow ≈ Δ(Shares Outstanding) × last price  
-**What it won't do:** No AUM/price proxies, no guesswork.  
-If SO is unavailable or suspect → the ETF is skipped.
-"""
-)
+# ========= Sidebar =========
+st.sidebar.title("ETF Flows — Core 20")
+st.sidebar.markdown("""
+Flows = **Δ Shares Outstanding × Close**.  
+Only includes ETFs with reliable SO history; others are listed as *Missing*.
+""")
 
-# Lookback
 today = pd.Timestamp.today().normalize()
-lookbacks = {
-    "1M": 30,
-    "3M": 90,
-    "6M": 180,
-    "12M": 365,
+LOOKBACKS = {
+    "1M": 30, "3M": 90, "6M": 180, "12M": 365,
     "YTD": (today - pd.Timestamp(year=today.year, month=1, day=1)).days,
 }
-lb_key = st.sidebar.radio("Period", list(lookbacks.keys()), index=1)
-days = int(lookbacks[lb_key])
+lb_key = st.sidebar.radio("Lookback", list(LOOKBACKS.keys()), index=1)
+days = int(LOOKBACKS[lb_key])
 start = today - pd.Timedelta(days=days + 10)  # buffer for alignment
 
-# Universe (edit as needed)
-ETF_INFO = {
-    "MAGS": "Mag 7",
-    "SMH": "Semiconductors",
-    "BOTZ": "Robotics/AI",
-    "ICLN": "Clean Energy",
-    "URNM": "Uranium",
-    "ARKK": "Innovation",
-    "KWEB": "China Internet",
-    "FXI":  "China Large-Cap",
-    "EWZ":  "Brazil",
-    "EEM":  "Emerging Markets",
-    "VWO":  "Emerging Markets (Vanguard)",
-    "VGK":  "Europe Large-Cap",
-    "FEZ":  "Eurozone",
-    "ILF":  "Latin America",
-    "ARGT": "Argentina",
-    "GLD":  "Gold",
-    "SLV":  "Silver",
-    "DBC":  "Commodities",
-    "HEDJ": "Hedged Europe",
-    "USMV": "US Min Vol",
-    "COWZ": "US Free Cash Flow",
-    "BITO": "BTC Futures",
-    "IBIT": "Spot BTC",
-    "BIL":  "1–3m T-Bills",
-    "TLT":  "20+y Treasuries",
-    "SHV":  "0–1y T-Bills",
-}
-TICKERS = list(ETF_INFO.keys())
+agg = st.sidebar.selectbox("Aggregate", ["Daily", "Weekly"], index=1)
+show_missing = st.sidebar.checkbox("Show Missing table", value=True)
 
-# ---------------- Helpers ----------------
+# ========= Curated liquid basket (broad + sector + credit/rates + metals) =========
+BASKET = {
+    # Core beta
+    "SPY": "S&P 500", "IVV": "S&P 500 (iShares)", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
+    "EFA": "Developed ex-US", "EEM": "Emerging Mkts",
+    # Sectors (SPDR)
+    "XLK": "Tech", "XLF": "Financials", "XLE": "Energy", "XLV": "Health Care", "XLI": "Industrials",
+    # Credit & Rates (iShares)
+    "HYG": "High Yield", "LQD": "IG Corp", "TLT": "20+Y Treasuries", "IEF": "7–10Y Treas", "SHY": "1–3Y Treas",
+    # Cash-like & metals
+    "BIL": "T-Bills 1–3M", "GLD": "Gold", "SLV": "Silver",
+    # Value/low vol & alt beta
+    "USMV": "US Min Vol", "VLUE": "US Value"
+}
+TICKERS = list(BASKET.keys())
+
+# ========= Helpers =========
 @st.cache_data(ttl=900, show_spinner=True)
-def dl_prices(tickers, start_dt, end_dt):
-    df = yf.download(tickers, start=start_dt, end=end_dt, auto_adjust=False,
-                     progress=False, threads=True, group_by="ticker")
+def batch_prices(tickers, start_dt, end_dt):
+    """Batch download CLOSE (unadjusted) for proper $ flows with SO."""
+    df = yf.download(
+        tickers, start=start_dt, end=end_dt,
+        auto_adjust=False, progress=False, group_by="ticker", threads=True
+    )
     if isinstance(df.columns, pd.MultiIndex):
-        closes = {t: df[(t, "Close")].rename(t) for t in tickers if (t, "Close") in df.columns}
-        if not closes:
-            return pd.DataFrame()
-        return pd.concat(closes.values(), axis=1).sort_index().ffill()
+        closes = {t: df[(t, "Close")] for t in tickers if (t, "Close") in df.columns}
+        if not closes: return pd.DataFrame()
+        out = pd.DataFrame(closes).sort_index().ffill()
+        out.index = pd.to_datetime(out.index).tz_localize(None)
+        return out
     elif "Close" in df.columns:
-        return pd.DataFrame({tickers[0]: df["Close"]}).sort_index().ffill()
+        out = pd.DataFrame({tickers[0]: df["Close"]}).sort_index().ffill()
+        out.index = pd.to_datetime(out.index).tz_localize(None)
+        return out
     return pd.DataFrame()
 
 def human_money(x, signed=True, decimals=2):
     if x is None or pd.isna(x): return ""
-    sgn = "+" if (signed and x > 0) else ("-" if (signed and x < 0) else "")
+    s = "+" if (signed and x > 0) else ("-" if (signed and x < 0) else "")
     ax = abs(float(x))
-    if ax >= 1e9:  val, suf = ax/1e9, "B"
+    if   ax >= 1e9: val, suf = ax/1e9, "B"
     elif ax >= 1e6: val, suf = ax/1e6, "M"
     elif ax >= 1e3: val, suf = ax/1e3, "k"
     else:           val, suf = ax, ""
-    return f"{sgn}${val:,.2f}{suf}"
+    return f"{s}${val:,.{decimals}f}{suf}"
 
-def tick_fmt(x, pos):
-    ax = abs(float(x))
-    sgn = "-" if x < 0 else ""
-    if ax >= 1e9:  val, suf = ax/1e9, "B"
+def tick_money(x, _):
+    ax = abs(float(x)); s = "-" if x < 0 else ""
+    if   ax >= 1e9: val, suf = ax/1e9, "B"
     elif ax >= 1e6: val, suf = ax/1e6, "M"
     elif ax >= 1e3: val, suf = ax/1e3, "k"
     else:           val, suf = ax, ""
-    return f"{sgn}${val:,.2f}{suf}"
+    return f"{s}${val:,.2f}{suf}"
 
 def normalize_so_units(so: pd.Series):
-    """If median SO looks like 'millions', multiply by 1e6."""
+    """If median SO looks like 'millions' (<1e4), scale to shares."""
     so = (so or pd.Series(dtype=float)).dropna().astype(float)
     if so.empty: return so, "no_SO"
     return (so*1_000_000.0, "SO(millions→shares)") if float(so.median()) < 1e4 else (so, "SO(shares)")
 
-def compute_flow_strict(ticker, px: pd.Series):
-    """
-    Strict ΔSO × last Close.
-    Skip if SO missing, cannot align, or SO jump looks bogus.
-    """
+def fetch_so_series(ticker: str) -> pd.Series | None:
+    """yfinance SO (can be spotty). Returns Series indexed by date or None."""
     try:
         so = yf.Ticker(ticker).get_shares_full()
     except Exception:
-        so = None
-    if so is None:
-        return {"flow": None, "method": "skip", "note": "no_SO"}
+        return None
+    if so is None: return None
+    s = pd.Series(so).dropna()
+    if s.empty: return None
+    s.index = pd.to_datetime(s.index).tz_localize(None)
+    s, _ = normalize_so_units(s)
+    return s
 
-    so_series = pd.Series(so).dropna()
-    if so_series.empty:
-        return {"flow": None, "method": "skip", "note": "no_SO"}
+def compute_flows_for_ticker(ticker: str, px: pd.Series, freq: str):
+    """
+    Returns:
+      df_flow: DataFrame with columns ['Flow ($)'] aggregated to freq
+      net: period net flow (float)
+    """
+    so = fetch_so_series(ticker)
+    if so is None: return None, None
+    # align to trading days in window
+    pxw = px.loc[start:today].dropna()
+    if pxw.empty: return None, None
+    so_al = so.reindex(pxw.index, method="ffill").dropna()
+    if so_al.empty: return None, None
+    # daily ΔSO × Close
+    dso = so_al.diff().fillna(0.0)
+    flow_daily = dso * pxw.loc[so_al.index]
+    if freq == "W":
+        flow = flow_daily.resample("W-FRI").sum()
+    else:
+        flow = flow_daily
+    return flow.to_frame(name="Flow ($)"), float(flow.sum())
 
-    # ensure tz-naive datetime index
-    so_series.index = pd.to_datetime(so_series.index).tz_localize(None)
-    so_series, note = normalize_so_units(so_series)
-
-    px = px.dropna()
-    if px.empty:
-        return {"flow": None, "method": "skip", "note": "no_price"}
-
-    # window & align
-    px_window = px.loc[start:today]
-    if px_window.empty:
-        return {"flow": None, "method": "skip", "note": "no_window"}
-    so_aligned = so_series.reindex(px_window.index, method="ffill").dropna()
-    if so_aligned.empty:
-        return {"flow": None, "method": "skip", "note": "no_align"}
-
-    so_start, so_end = float(so_aligned.iloc[0]), float(so_aligned.iloc[-1])
-    if so_end != 0 and abs(so_end - so_start) / abs(so_end) > 0.5:
-        return {"flow": None, "method": "skip", "note": "suspect_SO_jump"}
-
-    p_end = float(px_window.iloc[-1])
-    flow = (so_end - so_start) * p_end
-    return {"flow": flow, "method": f"ΔSO×P_end[{note}]", "note": ""}
-
-# ---------------- Compute ----------------
-prices = dl_prices(TICKERS, start, today)
-if prices.empty:
-    st.error("Price download failed. Try again later.")
+# ========= Compute =========
+closes = batch_prices(TICKERS, start, today)
+if closes.empty:
+    st.error("Couldn’t download prices. Try again later.")
     st.stop()
 
-rows, skipped = [], []
+freq = "W" if agg == "Weekly" else "D"
+
+rows = []
+per_ticker_flows = {}
+missing = []
 for t in TICKERS:
-    px = prices[t] if t in prices.columns else pd.Series(dtype=float)
-    res = compute_flow_strict(t, px)
-    if res["flow"] is None:
-        skipped.append((t, ETF_INFO[t], res.get("note","")))
-    else:
-        rows.append({"Ticker": t, "Label": f"{ETF_INFO[t]} ({t})", "Flow ($)": res["flow"], "Method": res["method"]})
+    if t not in closes.columns:
+        missing.append((t, BASKET[t], "no_price"))
+        continue
+    df_flow, net = compute_flows_for_ticker(t, closes[t], freq)
+    if df_flow is None:
+        missing.append((t, BASKET[t], "no_SO"))
+        continue
+    per_ticker_flows[t] = df_flow
+    rows.append({
+        "Ticker": t,
+        "Label": f"{BASKET[t]} ({t})",
+        "Net Flow ($)": net
+    })
 
-df = pd.DataFrame(rows)  # may be empty!
+# If nothing usable, tell user clearly (but this basket should usually work)
+if not rows:
+    st.error("No ETFs returned usable Shares Outstanding from Yahoo. "
+             "Try switching lookback/aggregation or consider adding issuer feeds later.")
+    if show_missing and missing:
+        st.markdown("### Missing (no reliable SO)")
+        st.dataframe(pd.DataFrame(missing, columns=["Ticker","Label","Reason"]), use_container_width=True)
+    st.stop()
 
-# ---------------- UI ----------------
-st.title("ETF Flows — Strict ΔSO × Price")
-st.caption(f"Period: **{lb_key}** (ending {today.date()}) • Only ETFs with reliable SO are shown.")
+df = pd.DataFrame(rows).sort_values("Net Flow ($)", ascending=False).reset_index(drop=True)
 
-if df.empty:
-    st.warning("Nothing to show (no ETFs had clean SO data for this lookback).")
-else:
-    df = df.sort_values("Flow ($)", ascending=False).reset_index(drop=True)
-    vals = df["Flow ($)"].to_numpy()
+# ========= UI =========
+st.title("ETF Flows — Core 20")
+st.caption(f"Period: **{lb_key}** (ending {today.date()}), Aggregation: **{agg}** • Flows = ΔSO × Close")
 
-    fig, ax = plt.subplots(figsize=(15, max(5, len(df) * 0.45)))
-    colors = np.where(vals > 0, "#2ca02c", "#d62728")
-    bars = ax.barh(df["Label"], vals, color=colors, alpha=0.9)
+# Top bar chart
+vals = df["Net Flow ($)"].to_numpy()
+fig, ax = plt.subplots(figsize=(15, max(6, len(df)*0.42)))
+colors = np.where(vals >= 0, "#2ca02c", "#d62728")
+bars = ax.barh(df["Label"], vals, color=colors, alpha=0.9)
+ax.invert_yaxis()
+ax.set_xlabel("Net Flow ($ with k/M/B)")
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(tick_money))
 
-    ax.set_xlabel("Estimated Flow ($ with k/M/B)")
-    ax.set_title(f"ETF Proxy Flows — {lb_key}")
-    ax.invert_yaxis()
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(tick_fmt))
+x_lo, x_hi = min(vals.min(), 0.0), max(vals.max(), 0.0)
+pad = (x_hi - x_lo) * 0.15 if x_hi != x_lo else 1.0
+ax.set_xlim([x_lo - pad, x_hi + pad])
 
-    x_lo, x_hi = min(vals.min(), 0.0), max(vals.max(), 0.0)
-    pad = (x_hi - x_lo) * 0.15 if x_hi != x_lo else 1.0
-    ax.set_xlim([x_lo - pad, x_hi + pad])
+for bar, v in zip(bars, vals):
+    txt = human_money(v, signed=True, decimals=2)
+    x = bar.get_width()
+    ha = "left" if x >= 0 else "right"
+    off = 0.02 * (ax.get_xlim()[1] - ax.get_xlim()[0])
+    ax.text(x + (off if x >= 0 else -off),
+            bar.get_y() + bar.get_height()/2, txt,
+            va="center", ha=ha, fontsize=10)
 
-    for bar, v in zip(bars, df["Flow ($)"]):
-        txt = human_money(v, signed=True, decimals=2)
-        x = bar.get_width()
-        ha = "left" if x >= 0 else "right"
-        off = 0.02 * (ax.get_xlim()[1] - ax.get_xlim()[0])
-        ax.text(x + (off if x >= 0 else -off),
-                bar.get_y() + bar.get_height()/2, txt, va="center", ha=ha, fontsize=10)
+plt.tight_layout()
+st.pyplot(fig)
 
-    plt.tight_layout()
-    st.pyplot(fig)
+# Summary tiles
+c1, c2, c3 = st.columns(3)
+total_in = df.loc[df["Net Flow ($)"] > 0, "Net Flow ($)"].sum()
+total_out = df.loc[df["Net Flow ($)"] < 0, "Net Flow ($)"].sum()
+coverage = len(df) / len(TICKERS)
+c1.metric("Total Inflows", human_money(total_in, True))
+c2.metric("Total Outflows", human_money(total_out, True))
+c3.metric("Coverage (SO available)", f"{coverage:.0%}")
 
-    # Top movers
-    st.markdown("### Top Inflows & Outflows (strict)")
-    left, right = st.columns(2)
-    with left:
-        top_in = df.head(5).copy()
-        top_in["Flow ($)"] = top_in["Flow ($)"].map(lambda v: human_money(v, True))
-        st.table(top_in[["Label", "Flow ($)", "Method"]].set_index("Label"))
-    with right:
-        top_out = df.sort_values("Flow ($)").head(5).copy()
-        top_out["Flow ($)"] = top_out["Flow ($)"].map(lambda v: human_money(v, True))
-        st.table(top_out[["Label", "Flow ($)", "Method"]].set_index("Label"))
+# Time-series panel: stackable flows & cumulative
+st.markdown("### Flow Time Series")
+# align to common index
+panel = pd.concat([per_ticker_flows[t]["Flow ($)"].rename(t) for t in per_ticker_flows], axis=1).fillna(0.0)
+panel["Total Flow"] = panel.sum(axis=1)
+panel["Cumulative"] = panel["Total Flow"].cumsum()
 
-# Skipped tickers (always show)
-if skipped:
-    st.markdown("### Skipped (no reliable SO)")
-    skip_df = pd.DataFrame(skipped, columns=["Ticker", "Label", "Reason"])
-    st.dataframe(skip_df, use_container_width=True)
+c4, c5 = st.columns(2)
+with c4:
+    st.line_chart(panel["Total Flow"], height=260, use_container_width=True)
+    st.caption("Total flow per period")
+with c5:
+    st.line_chart(panel["Cumulative"], height=260, use_container_width=True)
+    st.caption("Cumulative flow over the lookback")
+
+# Top In/Out tables
+st.markdown("### Top Inflows & Outflows")
+left, right = st.columns(2)
+with left:
+    top_in = df.head(5).copy()
+    top_in["Net Flow ($)"] = top_in["Net Flow ($)"].map(lambda v: human_money(v, True))
+    st.table(top_in.set_index("Label")[["Net Flow ($)"]])
+with right:
+    top_out = df.sort_values("Net Flow ($)").head(5).copy()
+    top_out["Net Flow ($)"] = top_out["Net Flow ($)"].map(lambda v: human_money(v, True))
+    st.table(top_out.set_index("Label")[["Net Flow ($)"]])
+
+# Missing table
+if show_missing and missing:
+    st.markdown("### Missing (no reliable SO from Yahoo)")
+    st.dataframe(pd.DataFrame(missing, columns=["Ticker","Label","Reason"]), use_container_width=True)
 
 st.caption("© 2025 AD Fund Management LP")
