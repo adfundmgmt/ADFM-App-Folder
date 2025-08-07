@@ -33,6 +33,10 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 
 - **Real Yield Dashboard**  
   Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
+  
+- **Liquidity Tracker**  
+  Tracks Net Liquidity and relate it to policy and equities. Definition: Net Liquidity = WALCL − RRP − TGA. Units are billions. Sustained rises often coincide with risk-on conditions.
+
 
 
 ---
