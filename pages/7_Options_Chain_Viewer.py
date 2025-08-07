@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import altair as alt
 import math
+from math import erf
 from datetime import datetime, date
 
 import matplotlib.pyplot as plt
@@ -63,21 +64,20 @@ def busdays_to_expiry(exp: str) -> int:
     ed = pd.to_datetime(exp).date()
     return int(np.busday_count(today, ed))
 
-def bs_call_delta_from_d1(d1: np.ndarray) -> np.ndarray:
-    # standard normal CDF via erf
-    return 0.5 * (1.0 + np.erf(d1 / np.sqrt(2.0)))
+# Safe normal CDF without np.erf
+def norm_cdf(x):
+    x = np.asarray(x, dtype=float)
+    return 0.5 * (1.0 + np.vectorize(erf)(x / np.sqrt(2.0)))
 
 # ---------------- Sidebar form with submit ----------------
 with st.sidebar.form("controls", clear_on_submit=False):
     ticker = st.text_input("Ticker", "AAPL").strip().upper()
 
-    # Load expiries live so the selectbox is always valid
     expiries = get_expiries(ticker) if ticker else []
     if not expiries:
         expiry = None
         st.caption("No expiries available")
     else:
-        # default to the nearest expiry
         expiry = st.selectbox("Expiry", expiries, index=0)
 
     st.markdown("---")
@@ -143,17 +143,13 @@ if chain.empty:
     st.stop()
 
 # ---------------- Filters and enrich ----------------
-# Hide zero OI Vol
 if hide_zero:
     chain = chain[(chain["openInterest"] > 0) | (chain["volume"] > 0)]
-
-# Min OI and Vol
 if min_oi > 0:
     chain = chain[chain["openInterest"] >= min_oi]
 if min_vol > 0:
     chain = chain[chain["volume"] >= min_vol]
 
-# Moneyness window
 low = spot * (1 - mny_win / 100.0)
 high = spot * (1 + mny_win / 100.0)
 chain = chain[(chain["strike"] >= low) & (chain["strike"] <= high)]
@@ -162,16 +158,14 @@ if chain.empty:
     st.warning("No contracts left after filtering. Adjust filters and click Run.")
     st.stop()
 
-# Time to expiry in years
 bdays = busdays_to_expiry(expiry)
 T = max(bdays, 0) / 252.0
 
-# Choose price source
 px_src = chain["mid"] if use_mid else chain["lastPrice"]
 chain["price_src"] = px_src
 chain.loc[chain["price_src"].isna(), "price_src"] = chain["mid"]
 
-# Compute deltas using Black Scholes with chain IV
+# ---------------- Deltas using Black Scholes ----------------
 sigma = chain["impliedVolatility"].astype(float).to_numpy(copy=False)
 K = chain["strike"].astype(float).to_numpy(copy=False)
 S = float(spot)
@@ -182,20 +176,20 @@ d1 = np.zeros_like(K, dtype=float)
 # risk neutral with dividends: r - q
 d1[valid] = (np.log(S / K[valid]) + (r - q + 0.5 * sigma[valid] ** 2) * T_arr[valid]) / (sigma[valid] * np.sqrt(T_arr[valid]))
 
-call_delta = bs_call_delta_from_d1(d1)
-# map to calls puts
+call_delta = np.zeros_like(K, dtype=float)
+call_delta[valid] = norm_cdf(d1[valid])
+
 is_call = (chain["type"] == "Call").to_numpy()
 delta = np.where(is_call, call_delta, call_delta - 1.0)
 delta[~valid] = np.nan
 chain["delta"] = delta
 
-# ATM identification
+# ---------------- ATM and summary ----------------
 atm_idx = (chain["strike"] - spot).abs().idxmin()
 atm_strike = float(chain.loc[atm_idx, "strike"])
 atm_iv = float(chain.loc[atm_idx, "impliedVolatility"]) if pd.notna(chain.loc[atm_idx, "impliedVolatility"]) else float("nan")
 expected_move = S * atm_iv * math.sqrt(T) if np.isfinite(atm_iv) and T > 0 else float("nan")
 
-# Summary metrics
 total_call_vol = int(chain.query("type == 'Call'")["volume"].sum())
 total_put_vol  = int(chain.query("type == 'Put'")["volume"].sum())
 put_call_ratio = (total_put_vol / total_call_vol) if total_call_vol > 0 else float("nan")
