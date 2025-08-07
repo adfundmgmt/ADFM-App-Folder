@@ -15,12 +15,12 @@ st.sidebar.title("ETF Demand Proxies")
 st.sidebar.markdown("""
 **Chaikin Money Flow ($ proxy) only.**
 
-Proxy formula per day:
+Daily proxy:
 - Money Flow Multiplier = ((Close - Low) - (High - Close)) / (High - Low)
 - Dollar Flow Proxy = Multiplier × Volume × Typical Price
 - We sum Dollar Flow Proxy over the selected period.
 
-Bars show **absolute** magnitude to the right. Color shows sign.
+Positive values plot to the right in green. Negative values to the left in red.
 """)
 
 lookback_dict = {
@@ -77,15 +77,14 @@ def fmt_compact_cur(x) -> str:
     return f"${x:,.0f}"
 
 def axis_fmt(x, _pos=None) -> str:
-    # axis is absolute values
     ax = abs(x)
     if ax >= 1e9:
-        return f"${ax/1e9:,.0f}B"
+        return f"${x/1e9:,.0f}B"
     if ax >= 1e6:
-        return f"${ax/1e6:,.0f}M"
+        return f"${x/1e6:,.0f}M"
     if ax >= 1e3:
-        return f"${ax/1e3:,.0f}K"
-    return f"${ax:,.0f}"
+        return f"${x/1e3:,.0f}K"
+    return f"${x:,.0f}"
 
 def retry(n=3, delay=0.4):
     def deco(fn):
@@ -151,68 +150,66 @@ def build_table(tickers, period_days: int) -> pd.DataFrame:
         })
     df = pd.DataFrame(rows)
     df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
-    # Add sign and absolute magnitude for scaling and sorting
-    df["Sign"] = np.sign(df["CMF Proxy ($)"]).replace({-1.0: -1, 0.0: 0, 1.0: 1})
-    df["Abs Proxy ($)"] = df["CMF Proxy ($)"].abs()
     return df
 
 # --------------------------- MAIN ---------------------------
 st.title("ETF Demand Proxies")
-st.caption(f"Chaikin Money Flow ($ proxy). Period: {period_label}. Bars show absolute magnitude. Color shows sign.")
+st.caption(f"Chaikin Money Flow ($ proxy). Period: {period_label}.")
 
 df = build_table(etf_tickers, period_days)
-chart_df = df.sort_values("Abs Proxy ($)", ascending=False).copy()
+chart_df = df.sort_values("CMF Proxy ($)", ascending=False).copy()
 
 # Guard when no values
-max_val = pd.to_numeric(chart_df["Abs Proxy ($)"], errors="coerce").max()
-if pd.isna(max_val) or max_val == 0:
+values_signed = pd.to_numeric(chart_df["CMF Proxy ($)"], errors="coerce").fillna(0.0)
+abs_max = values_signed.abs().max()
+if pd.isna(abs_max) or abs_max == 0:
     st.info("No valid values computed. Try a different period.")
 else:
-values_signed = pd.to_numeric(chart_df["CMF Proxy ($)"], errors="coerce").fillna(0.0)
-colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in values_signed]
+    colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in values_signed]
 
-fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
-bars = ax.barh(chart_df["Label"], values_signed, color=colors, alpha=0.85)
+    fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
+    bars = ax.barh(chart_df["Label"], values_signed, color=colors, alpha=0.85)
 
-ax.set_xlabel("Chaikin Money Flow ($ proxy)")
-ax.set_title(f"ETF Demand Proxies - {period_label}")
-ax.invert_yaxis()
-ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
+    ax.set_xlabel("Chaikin Money Flow ($ proxy)")
+    ax.set_title(f"ETF Demand Proxies - {period_label}")
+    ax.invert_yaxis()
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
 
-# Axis limits with buffer
-abs_max = values_signed.abs().max()
-buffer = 0.15 * abs_max if abs_max > 0 else 1.0
-ax.set_xlim([-abs_max - buffer, abs_max + buffer])
+    # Symmetric axis with buffer
+    buffer = 0.15 * abs_max if abs_max > 0 else 1.0
+    ax.set_xlim([-abs_max - buffer, abs_max + buffer])
 
-# Annotate: show signed label next to each bar
-x_range = (abs_max + buffer) * 2
-for bar, raw in zip(bars, values_signed):
-    label = fmt_compact_cur(raw) if pd.notna(raw) else ""
-    x_text = bar.get_width()
-    align = "left" if raw > 0 else "right" if raw < 0 else "center"
-    x_offset = 0.01 * abs_max if raw > 0 else -0.01 * abs_max if raw < 0 else 0.0
-    ax.text(
-        x_text + x_offset,
-        bar.get_y() + bar.get_height() / 2,
-        label if label else "$0",
-        va="center",
-        ha=align,
-        fontsize=10,
-        color="black",
-        clip_on=True
-    )
+    # Annotate with signed labels
+    for bar, raw in zip(bars, values_signed):
+        label = fmt_compact_cur(raw) if pd.notna(raw) else ""
+        x_text = bar.get_width()
+        align = "left" if raw > 0 else "right" if raw < 0 else "center"
+        x_offset = 0.01 * abs_max if raw > 0 else -0.01 * abs_max if raw < 0 else 0.0
+        ax.text(
+            x_text + x_offset,
+            bar.get_y() + bar.get_height() / 2,
+            label if label else "$0",
+            va="center",
+            ha=align,
+            fontsize=10,
+            color="black",
+            clip_on=True
+        )
 
+    plt.tight_layout()
+    st.pyplot(fig)
+    st.markdown("*Green indicates positive proxy, red negative. Length reflects magnitude and direction.*")
 
 # --------------------------- TOP LISTS ---------------------------
-st.markdown("#### Top Positive and Negative (by absolute magnitude)")
+st.markdown("#### Top Positive and Negative")
 valid = df.dropna(subset=["CMF Proxy ($)"]).copy()
 
 if valid.empty:
     st.write("No ETFs with computable values in the selected period.")
 else:
     valid["Label"] = [f"{etf_info[t][0]} ({t})" for t in valid["Ticker"]]
-    top_pos = valid[valid["CMF Proxy ($)"] > 0].nlargest(3, "Abs Proxy ($)")[["Label", "CMF Proxy ($)"]].copy()
-    top_neg = valid[valid["CMF Proxy ($)"] < 0].nlargest(3, "Abs Proxy ($)")[["Label", "CMF Proxy ($)"]].copy()
+    top_pos = valid[valid["CMF Proxy ($)"] > 0].nlargest(3, "CMF Proxy ($)")[["Label", "CMF Proxy ($)"]].copy()
+    top_neg = valid[valid["CMF Proxy ($)"] < 0].nsmallest(3, "CMF Proxy ($)")[["Label", "CMF Proxy ($)"]].copy()
     top_pos["Value"] = top_pos["CMF Proxy ($)"].apply(fmt_compact_cur)
     top_neg["Value"] = top_neg["CMF Proxy ($)"].apply(fmt_compact_cur)
 
