@@ -1,14 +1,14 @@
 ############################################################
-# Market Stress Composite
+# Market Stress Composite - latest-safe and short-lookback-safe
 # Built by AD Fund Management LP
 ############################################################
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-import numpy as np
 
 # --------------- Config ---------------
 TITLE = "Market Stress Composite"
@@ -21,7 +21,7 @@ FRED = {
 }
 DEFAULT_LOOKBACK = "5y"
 DEFAULT_SMOOTH = 5
-DEFAULT_PERCENTILE_WINDOW_YEARS = 10  # history window for percentile ranks
+DEFAULT_PERCENTILE_WINDOW_YEARS = 10
 REGIME_HI = 70
 REGIME_LO = 30
 
@@ -32,18 +32,18 @@ st.title(TITLE)
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
-    A single **0 to 100 stress score** that blends volatility, credit, curve, funding,
+    A single **0 to 100 stress score** blending volatility, credit, curve, funding,
     and equity drawdown. Higher = more stress.
 
-    **Inputs**
-    • **VIX (VIXCLS)**: equity implied vol  
-    • **HY OAS (BAMLH0A0HYM2)**: high-yield credit spread  
-    • **T10Y3M**: 10y minus 3m Treasury spread (inverted for stress)  
-    • **TEDRATE**: interbank funding stress  
-    • **SPX drawdown**: percent off trailing high
+    Inputs
+    • VIX (VIXCLS): equity implied vol  
+    • HY OAS (BAMLH0A0HYM2): high-yield credit spread  
+    • T10Y3M: 10y minus 3m Treasury spread (we invert for stress)  
+    • TEDRATE: interbank funding stress  
+    • SPX drawdown: percent off trailing high
 
-    Each input is converted to a **rolling percentile** over a selectable history window,
-    then combined using your weights.
+    Method
+    - Each input becomes a rolling percentile over a history window, then we weight and sum.
     """)
     st.markdown("---")
     st.header("Settings")
@@ -65,25 +65,38 @@ with st.sidebar:
 def fred_series(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
     try:
         s = pdr.DataReader(series, "fred", start, end)[series]
-        return s.asfreq("B").ffill()  # business day, forward fill
+        return s
     except Exception:
         return pd.Series(dtype=float)
 
 today = pd.Timestamp.today().normalize()
-# fetch wide so percentile history is available even on short lookbacks
+# fetch wide so percentile window is covered even for short lookbacks
 start_all = today - pd.DateOffset(years=max(perc_years + 2, years + 2))
 
+# load raw
 vix   = fred_series(FRED["vix"], start_all, today)
 hy    = fred_series(FRED["hy_oas"], start_all, today)
-yc    = fred_series(FRED["yc_10y_3m"], start_all, today)      # positive = steep, negative = inverted
+yc    = fred_series(FRED["yc_10y_3m"], start_all, today)
 ted   = fred_series(FRED["ted"], start_all, today)
 spx   = fred_series(FRED["spx"], start_all, today)
 
+# build a shared business-day index through today to guarantee latest alignment
+bidx = pd.bdate_range(start_all, today)
+def to_bidx(s: pd.Series) -> pd.Series:
+    return s.reindex(bidx).ffill()
+
+vix, hy, yc, ted, spx = map(to_bidx, [vix, hy, yc, ted, spx])
+
+# assemble, then drop rows until all series are present at least once
 df_all = pd.concat([vix, hy, yc, ted, spx], axis=1)
 df_all.columns = ["VIX", "HY_OAS", "T10Y3M", "TED", "SPX"]
-df_all = df_all.dropna(how="any")
+first_ok = df_all.dropna(how="any").index.min()
+if pd.isna(first_ok):
+    st.error("No overlapping history across inputs.")
+    st.stop()
+df_all = df_all.loc[first_ok:].ffill()
 
-# subset to display lookback
+# subset to lookback for display, but keep full df_all for percentiles
 start_lb = today - pd.DateOffset(years=years)
 df = df_all[df_all.index >= start_lb].copy()
 if df.empty:
@@ -91,53 +104,50 @@ if df.empty:
     st.stop()
 
 # --------------- Transformations ---------------
-# SPX drawdown as positive stress metric
+# Drawdown stress as positive number
 roll_max = df_all["SPX"].cummax()
-dd_all = 100.0 * (df_all["SPX"] / roll_max - 1.0)  # 0 or negative
-stress_dd_all = -dd_all.clip(upper=0)              # positive when drawdown
+dd_all = 100.0 * (df_all["SPX"] / roll_max - 1.0)  # negative or 0
+stress_dd_all = -dd_all.clip(upper=0)
 
-# Invert the curve spread for stress: more inversion => higher stress
+# Invert curve for stress
 inv_curve_all = -df_all["T10Y3M"]
 
-# Rolling percentile helper
+# Rolling percentile helper - robust for short lookbacks since we compute over df_all
 def rolling_percentile(s: pd.Series, window_days: int) -> pd.Series:
-    # window in calendar days approximated to business days
-    w = max(60, int(window_days * 252 / 365))  # at least ~3 months of obs
+    w = max(60, int(window_days * 252 / 365))  # convert years to approx business days
+    # use rank of last element within rolling window
     return s.rolling(w, min_periods=max(20, w // 5)).apply(
-        lambda x: pd.Series(x).rank(pct=True).iloc[-1]
+        lambda x: pd.Series(x).rank(pct=True).iloc[-1],
+        raw=False
     )
 
 window_days = perc_years * 365
 
-# Percentile ranks in 0..1
 pct_vix   = rolling_percentile(df_all["VIX"], window_days)
 pct_hy    = rolling_percentile(df_all["HY_OAS"], window_days)
 pct_curve = rolling_percentile(inv_curve_all, window_days)
 pct_ted   = rolling_percentile(df_all["TED"], window_days)
 pct_dd    = rolling_percentile(stress_dd_all, window_days)
 
-# align and subset to display window
-scores_all = pd.concat(
-    [pct_vix, pct_hy, pct_curve, pct_ted, pct_dd], axis=1
-).dropna()
+scores_all = pd.concat([pct_vix, pct_hy, pct_curve, pct_ted, pct_dd], axis=1)
 scores_all.columns = ["VIX_p", "HY_p", "CurveInv_p", "TED_p", "DD_p"]
-
-scores = scores_all.loc[df.index.min(): df.index.max()].copy().dropna()
-df = df.loc[scores.index]  # align
+# align to display window and drop rows where any percentile is nan
+scores = scores_all.loc[df.index.min(): df.index.max()].dropna()
+# align df to scores to ensure latest present
+df = df.loc[scores.index]
 
 # optional smoothing
 if smooth > 1:
     scores = scores.rolling(smooth, min_periods=1).mean()
 
-# normalize weights to sum 1
+# weights
 weights = np.array([w_vix, w_hy, w_curve, w_ted, w_dd], dtype=float)
-if weights.sum() == 0:
-    weights = np.array([1, 1, 1, 1, 1], dtype=float)
+weights = weights if weights.sum() > 0 else np.ones(5)
 weights = weights / weights.sum()
 
 # composite 0..100
-composite = 100.0 * (scores.values @ weights)
-comp_s = pd.Series(composite, index=scores.index, name="Composite")
+comp = 100.0 * (scores.values @ weights)
+comp_s = pd.Series(comp, index=scores.index, name="Composite")
 
 # --------------- Metrics ---------------
 def tag_for_level(x: float) -> str:
@@ -170,26 +180,25 @@ c6.metric("SPX Drawdown (%)", fmt2(latest["dd"]))
 st.info(f"Regime: {latest['regime']}  |  Weights: VIX {weights[0]:.2f}, HY {weights[1]:.2f}, Curve {weights[2]:.2f}, TED {weights[3]:.2f}, Drawdown {weights[4]:.2f}")
 
 # --------------- Charts ---------------
-# Main composite + regime shading
+rows = 2 + (2 if show_components else 0)
 fig = make_subplots(
-    rows=2 + (2 if show_components else 0), cols=1, shared_xaxes=True, vertical_spacing=0.05,
+    rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.05,
     subplot_titles=(
         "Market Stress Composite (0 to 100)",
         "Component Percentile Scores (0 to 100)",
         "Raw Series (Credit, Curve, Funding, VIX)" if show_components else None,
         "SPX and Drawdown" if show_components else None
-    )[: 2 + (2 if show_components else 0)]
+    )[:rows]
 )
 
-# Row 1: composite
+# Row 1: composite with regime bands
 fig.add_trace(go.Scatter(x=comp_s.index, y=comp_s, name="Composite",
                          line=dict(color="#000000", width=2)), row=1, col=1)
-# regime bands
 fig.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10)", row=1, col=1)
 fig.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)", row=1, col=1)
 fig.update_yaxes(title="Score", range=[0,100], row=1, col=1)
 
-# Row 2: component scores
+# Row 2: component percentiles
 for name, series, color in [
     ("VIX",        100.0 * scores["VIX_p"],       "#1f77b4"),
     ("HY OAS",     100.0 * scores["HY_p"],        "#d62728"),
@@ -200,16 +209,15 @@ for name, series, color in [
     fig.add_trace(go.Scatter(x=series.index, y=series, name=name, line=dict(width=1.8, color=color)), row=2, col=1)
 fig.update_yaxes(title="Score", range=[0,100], row=2, col=1)
 
+# Optional raw panels
 row_ptr = 3
 if show_components:
-    # Row 3: raw series except SPX
     fig.add_trace(go.Scatter(x=df.index, y=df["HY_OAS"], name="HY OAS (pp)", line=dict(color="#d62728")), row=row_ptr, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["T10Y3M"], name="T10Y3M (pp)", line=dict(color="#2ca02c")), row=row_ptr, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["TED"], name="TED (pp)", line=dict(color="#9467bd")), row=row_ptr, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["VIX"], name="VIX", line=dict(color="#1f77b4")), row=row_ptr, col=1)
     fig.update_yaxes(title="Raw units", row=row_ptr, col=1)
 
-    # Row 4: SPX and drawdown
     row_ptr += 1
     spx_rebased = df["SPX"] / df["SPX"].iloc[0] * 100
     dd_series = -100.0 * (df["SPX"] / df["SPX"].cummax() - 1.0)
@@ -223,7 +231,7 @@ fig.update_layout(
     legend=dict(orientation="h", x=0, y=1.12, xanchor="left"),
     margin=dict(l=60, r=40, t=60, b=60)
 )
-fig.update_xaxes(tickformat="%b-%y", row=(2 + (2 if show_components else 0)), col=1, title="Date")
+fig.update_xaxes(tickformat="%b-%y", row=rows, col=1, title="Date")
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -241,23 +249,15 @@ with st.expander("Download Data"):
 # --------------- Methodology ---------------
 with st.expander("Methodology"):
     st.markdown(f"""
-    **Composite** = weighted average of component percentile scores, scaled 0 to 100.
+    Composite = weighted average of component percentile scores, scaled 0 to 100.
 
-    **Percentile scoring**  
-    For each component we compute a rolling percentile of the latest value relative to the prior
-    {perc_years} years of history.  
-    Higher percentile means more stressed conditions. For the yield curve we use the **negative**
-    of T10Y3M so deeper inversion maps to higher stress.  
-    SPX drawdown is the percent below the running high, converted to a positive stress value.
+    Percentiles use a rolling window of {perc_years} years over the full history,
+    so short lookbacks still have valid tail data.
 
-    **Smoothing** applies a simple moving average over {smooth} days to the percentile series.
+    Curve is inverted so deeper inversion reads as higher stress.
+    SPX drawdown converts percent off high to a positive stress input.
 
-    **Regimes**  
-    Low stress: score <= {REGIME_LO}  
-    Neutral: between {REGIME_LO} and {REGIME_HI}  
-    High stress: score >= {REGIME_HI}
-
-    Notes: HY OAS and TED are not strictly daily; this app forward-fills to business days for alignment.
+    Smoothing applies a {smooth}-day moving average to percentile series.
+    Regimes: Low <= {REGIME_LO}, High >= {REGIME_HI}.
     """)
-
 st.caption("© 2025 AD Fund Management LP")
