@@ -12,7 +12,7 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 
 **Features:**
 - Interactive OHLC candlesticks  
-- 8/20/50/100/200-day moving averages  
+- 8/20/50/100/200-day moving averages with full continuity  
 - Volume bars color-coded by up/down days  
 - RSI (14-day) with Wilder smoothing  
 - MACD (12,26,9) with histogram  
@@ -24,28 +24,40 @@ period = st.sidebar.selectbox(
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
+# Trading day approximations for display slicing
+base_trading_days = {
+    "1mo": 21, "3mo": 63, "6mo": 126, "1y": 252, "2y": 504, "3y": 756,
+    "5y": 1260, "10y": 2520, "max": 252 * 25
+}
+
 # ── Cache with parameters ───────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def get_data(tkr, per, intrvl):
+def get_full_history(tkr, intrvl):
     try:
-        return yf.Ticker(tkr).history(period=per, interval=intrvl)
+        # Always fetch max, but Yahoo may limit historical depth per interval
+        return yf.Ticker(tkr).history(period="max", interval=intrvl)
     except Exception as e:
         st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-# Fetch exactly the period/interval from Yahoo
-df_full = get_data(ticker, period, interval)
+# Fetch full history for indicators
+df_full = get_full_history(ticker, interval)
 if df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
+
+# Cap at ~25 years
+CAP_MAX_DAYS = 252 * 25
+if len(df_full) > CAP_MAX_DAYS:
+    df_full = df_full.tail(CAP_MAX_DAYS)
 
 # Clean index
 if df_full.index.tz is not None:
     df_full.index = df_full.index.tz_localize(None)
 if interval == "1d":
-    df_full = df_full[df_full.index.weekday < 5]  # remove weekends
+    df_full = df_full[df_full.index.weekday < 5]
 
-# Indicators
+# Indicators on full history
 for w in (8, 20, 50, 100, 200):
     df_full[f"MA{w}"] = df_full["Close"].rolling(w).mean()
 
@@ -65,17 +77,21 @@ df_full["MACD"]   = df_full["EMA12"] - df_full["EMA26"]
 df_full["Signal"] = df_full["MACD"].ewm(span=9, adjust=False).mean()
 df_full["Hist"]   = df_full["MACD"] - df_full["Signal"]
 
-# Trim data to exactly selected period for display
-df = df_full.copy()
+# Slice for display but keep MA continuity
+display_days = base_trading_days[period]
+if len(df_full) <= display_days:
+    df_display = df_full.copy()
+else:
+    df_display = df_full.tail(display_days).copy()
 
-# Convert to string for plotting
-df["DateStr"] = df.index.strftime("%Y-%m-%d")
-available_mas = [w for w in (8, 20, 50, 100, 200) if len(df) >= w]
+# Plotting index
+df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
+available_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) >= w]
 
-# Aggregate MA warnings
-missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df) < w]
+# MA warnings aggregated
+missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) < w]
 if missing_mas:
-    st.warning(f"Some MAs may appear choppy due to limited data: {', '.join(f'MA{w}' for w in missing_mas)}.")
+    st.warning(f"Some MAs may appear choppy due to limited visible data: {', '.join(f'MA{w}' for w in missing_mas)}.")
 
 # ── Build figure ────────────────────────────────────────────────────────────
 fig = make_subplots(
@@ -87,12 +103,13 @@ fig = make_subplots(
 
 # Price + MAs
 fig.add_trace(go.Candlestick(
-    x=df["DateStr"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+    x=df_display["DateStr"], open=df_display["Open"], high=df_display["High"],
+    low=df_display["Low"], close=df_display["Close"],
     increasing_line_color="#43A047", decreasing_line_color="#E53935", name="Price"
 ), row=1, col=1)
 for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")):
     fig.add_trace(go.Scatter(
-        x=df["DateStr"], y=df[f"MA{w}"],
+        x=df_display["DateStr"], y=df_display[f"MA{w}"],
         mode="lines", line=dict(color=color, width=1.3),
         name=f"MA{w}"
     ), row=1, col=1)
@@ -101,19 +118,19 @@ fig.update_yaxes(title_text="Price", row=1, col=1)
 # Volume
 vol_colors = [
     "#B0BEC5" if i == 0 else (
-        "#43A047" if df["Close"].iat[i] > df["Close"].iat[i-1] else "#E53935"
+        "#43A047" if df_display["Close"].iat[i] > df_display["Close"].iat[i-1] else "#E53935"
     )
-    for i in range(len(df))
+    for i in range(len(df_display))
 ]
 fig.add_trace(go.Bar(
-    x=df["DateStr"], y=df["Volume"], width=0.4,
+    x=df_display["DateStr"], y=df_display["Volume"], width=0.4,
     marker_color=vol_colors, opacity=0.7, name="Volume"
 ), row=2, col=1)
 fig.update_yaxes(title_text="Volume", row=2, col=1)
 
 # RSI
 fig.add_trace(go.Scatter(
-    x=df["DateStr"], y=df["RSI14"],
+    x=df_display["DateStr"], y=df_display["RSI14"],
     mode="lines", line=dict(width=1.5, color="purple"), name="RSI (14)"
 ), row=3, col=1)
 fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1, title_standoff=10)
@@ -121,20 +138,20 @@ fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
 # MACD
-hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df["Hist"]]
+hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df_display["Hist"]]
 fig.add_trace(go.Bar(
-    x=df["DateStr"], y=df["Hist"], marker_color=hist_colors, opacity=0.6, width=0.4, name="MACD Hist"
+    x=df_display["DateStr"], y=df_display["Hist"], marker_color=hist_colors, opacity=0.6, width=0.4, name="MACD Hist"
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
-    x=df["DateStr"], y=df["MACD"], mode="lines", line=dict(width=1.5, color="blue"), name="MACD"
+    x=df_display["DateStr"], y=df_display["MACD"], mode="lines", line=dict(width=1.5, color="blue"), name="MACD"
 ), row=4, col=1)
 fig.add_trace(go.Scatter(
-    x=df["DateStr"], y=df["Signal"], mode="lines", line=dict(width=1.2, color="orange"), name="Signal"
+    x=df_display["DateStr"], y=df_display["Signal"], mode="lines", line=dict(width=1.2, color="orange"), name="Signal"
 ), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
 # X-axis ticks
-month_starts = df.index.to_series().groupby(df.index.to_period("M")).first()
+month_starts = df_display.index.to_series().groupby(df_display.index.to_period("M")).first()
 tickvals = month_starts.dt.strftime("%Y-%m-%d").tolist()
 ticktext = month_starts.dt.strftime("%b-%y").tolist()
 fig.update_xaxes(
