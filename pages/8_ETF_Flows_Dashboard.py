@@ -30,30 +30,7 @@ period_days = int(lookback_dict[period_label])
 etf_info = {
     "MAGS": ("Mag 7", "Magnificent 7 stocks ETF"),
     "SMH": ("Semiconductors", "Semiconductor stocks (VanEck)"),
-    "BOTZ": ("Robotics/AI", "Global robotics and AI leaders"),
-    "ICLN": ("Clean Energy", "Global clean energy stocks"),
-    "URNM": ("Uranium", "Uranium miners (Sprott)"),
-    "ARKK": ("Innovation", "Disruptive growth stocks (ARK)"),
-    "KWEB": ("China Internet", "China internet leaders (KraneShares)"),
-    "FXI": ("China Large-Cap", "China mega-cap stocks"),
-    "EWZ": ("Brazil", "Brazil large-cap equities"),
-    "EEM": ("Emerging Markets", "EM equities (MSCI)"),
-    "VWO": ("Emerging Markets", "EM equities (Vanguard)"),
-    "VGK": ("Europe Large-Cap", "Developed Europe stocks (Vanguard)"),
-    "FEZ": ("Eurozone", "Euro STOXX 50 ETF"),
-    "ILF": ("Latin America", "Latin America 40 ETF"),
-    "ARGT": ("Argentina", "Global X MSCI Argentina ETF"),
-    "GLD": ("Gold", "SPDR Gold Trust ETF"),
-    "SLV": ("Silver", "iShares Silver Trust ETF"),
-    "DBC": ("Commodities", "Invesco DB Commodity Index ETF"),
-    "HEDJ": ("Hedged Europe", "WisdomTree Europe Hedged Equity ETF"),
-    "USMV": ("US Min Volatility", "iShares MSCI USA Min Volatility ETF"),
-    "COWZ": ("US Free Cash Flow", "Pacer US Cash Cows 100 ETF"),
-    "BITO": ("BTC Futures", "Bitcoin futures ETF"),
-    "IBIT": ("Spot BTC", "BlackRock spot Bitcoin ETF"),
-    "BIL": ("1-3mo T-Bills", "1-3 month U.S. Treasury bills"),
-    "TLT": ("20+yr Treasuries", "20+ year U.S. Treasuries"),
-    "SHV": ("0-1yr T-Bills", "Short-term Treasury bonds"),
+
 }
 etf_tickers = list(etf_info.keys())
 
