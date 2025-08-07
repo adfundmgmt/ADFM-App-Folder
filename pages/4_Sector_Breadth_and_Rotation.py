@@ -20,55 +20,84 @@ SECTORS = {
     "XLU": "Utilities",
 }
 
-@st.cache_data(ttl=3600)
-def robust_fetch(tickers, period="1y", interval="1d"):
-    close_series = {}
-    full_index = None
-    for t in tickers:
-        try:
-            data = yf.download(t, period=period, interval=interval, progress=False)
-            # For multi-index, flatten
-            if isinstance(data.columns, pd.MultiIndex):
-                if ('Adj Close', t) in data.columns:
-                    close = data[('Adj Close', t)]
-                elif ('Close', t) in data.columns:
-                    close = data[('Close', t)]
-                else:
-                    continue
-            else:
-                if "Adj Close" in data.columns:
-                    close = data["Adj Close"]
-                elif "Close" in data.columns:
-                    close = data["Close"]
-                else:
-                    continue
-            close = close.dropna()
-            close_series[t] = close
-            if full_index is None:
-                full_index = close.index
-            else:
-                full_index = full_index.union(close.index)
-        except Exception:
-            continue
+# Parameters
+LOOKBACK_PERIOD = "1y"
+INTERVAL = "1d"
+MIN_OBS_FOR_RETURNS = 63  # need at least 63 daily obs for 3M returns
 
-    if not close_series:
+@st.cache_data(ttl=3600)
+def robust_fetch_batch(tickers, period="1y", interval="1d") -> pd.DataFrame:
+    """
+    Batch download Adjusted Close for all tickers.
+    Only keep tickers with Adj Close to preserve total return semantics.
+    Returns a DataFrame indexed by date with columns per ticker.
+    """
+    try:
+        data = yf.download(
+            tickers,
+            period=period,
+            interval=interval,
+            progress=False,
+            group_by="ticker",
+            auto_adjust=False,
+        )
+    except Exception:
         return pd.DataFrame()
-    for t in close_series:
-        close_series[t] = close_series[t].reindex(full_index)
-    df = pd.DataFrame(close_series)
+
+    out = {}
+    # yfinance returns MultiIndex columns (Ticker, Field) under group_by="ticker"
+    if isinstance(data.columns, pd.MultiIndex):
+        for t in tickers:
+            try:
+                s = data[(t, "Adj Close")].dropna()
+                if not s.empty:
+                    out[t] = s
+            except Exception:
+                # No Adj Close for this ticker; skip to preserve total return labeling
+                continue
+    else:
+        # Fallback handling if yfinance returns flat columns for a single ticker
+        # Expect columns like ["Adj Close", "Close", ...]
+        if "Adj Close" in data.columns:
+            t = tickers[0] if isinstance(tickers, list) and len(tickers) == 1 else "TICKER"
+            out[t] = data["Adj Close"].dropna()
+
+    if not out:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(out).sort_index()
+    # Drop rows that are entirely NaN
     df = df.dropna(how="all")
     return df
 
 tickers = list(SECTORS.keys()) + ["SPY"]
-prices = robust_fetch(tickers, period="1y", interval="1d")
+prices = robust_fetch_batch(tickers, period=LOOKBACK_PERIOD, interval=INTERVAL)
 
 if prices.empty:
     st.error("Downloaded data is empty. Yahoo Finance API might be rate-limited or unavailable.")
     st.stop()
 
+# Ensure SPY availability and integrity
+if "SPY" not in prices.columns:
+    st.error("SPY data unavailable. Cannot compute relative measures.")
+    st.stop()
+
+# Mild forward fill on SPY for non-trading gaps, then drop any dates where SPY is still NaN
+prices["SPY"] = prices["SPY"].ffill()
+prices = prices[prices["SPY"].notna()]
+
+# Enforce sufficient history for return windows
+enough_history_cols = [c for c in prices.columns if prices[c].dropna().shape[0] >= MIN_OBS_FOR_RETURNS]
+prices = prices[enough_history_cols]
+
+# Compute availability after filtering
 price_cols = [str(c).strip() for c in prices.columns]
 available_sector_tickers = [t for t in SECTORS.keys() if t in price_cols]
 missing_sectors = [SECTORS[t] for t in SECTORS if t not in price_cols]
+
+if not available_sector_tickers:
+    st.error("No sector tickers with sufficient data. Try again later.")
+    st.stop()
 
 # Sidebar
 with st.sidebar:
@@ -77,35 +106,38 @@ with st.sidebar:
         """
         This dashboard monitors the relative performance and rotation of S&P 500 sectors to help identify leadership trends and market breadth dynamics.
 
-        **Features:**
-        - Sector Relative Strength vs. S&P 500  
-        - Sector Rotation Quadrant (1M vs 3M returns)  
-        - Downloadable & sortable sector performance table  
-        - Robust to missing sector tickers
+        Features:
+        • Sector Relative Strength vs. S&P 500  
+        • Sector Rotation Quadrant (1M vs 3M returns)  
+        • Downloadable and sortable sector performance table  
+        • Robust to missing sector tickers
 
-        **Data Source:**  
-        Yahoo Finance (via yfinance), refreshed hourly.
+        Data Source: Yahoo Finance (via yfinance), refreshed hourly.
 
-        *Built by AD Fund Management LP.*
+        Built by AD Fund Management LP.
         """
     )
     st.markdown("---")
     if available_sector_tickers:
-        st.write(f"**Sectors available:** {', '.join([SECTORS[t] for t in available_sector_tickers])}")
+        st.write(f"Sectors available: {', '.join([SECTORS[t] for t in available_sector_tickers])}")
     if missing_sectors:
-        st.warning(f"Missing data for: {', '.join(missing_sectors)}")
-
-if not available_sector_tickers:
-    st.error("No sector tickers found in the downloaded data. Try refreshing in a few minutes.")
-    st.stop()
+        st.warning(f"Missing or insufficient data for: {', '.join(missing_sectors)}")
 
 # --- Relative Strength vs SPY Chart ---
 relative_strength = prices[available_sector_tickers].div(prices["SPY"], axis=0)
+
+# Persist selection across reruns
+default_choice = st.session_state.get("sel_sector", available_sector_tickers[0])
+if default_choice not in available_sector_tickers:
+    default_choice = available_sector_tickers[0]
+
 selected_sector = st.selectbox(
     "Select sector to compare with S&P 500 (SPY):",
     options=available_sector_tickers,
+    index=available_sector_tickers.index(default_choice),
     format_func=lambda x: SECTORS[x]
 )
+st.session_state["sel_sector"] = selected_sector
 
 fig_rs = px.line(
     relative_strength[selected_sector].dropna(),
@@ -137,21 +169,27 @@ fig_rot = px.scatter(
     labels={"3M Return": "3-Month Return", "1M Return": "1-Month Return"},
     color="Sector",
     color_discrete_sequence=px.colors.qualitative.Dark24,
-    hover_data={"3M Return": ':.2%', "1M Return": ':.2%'}
 )
-fig_rot.update_traces(textposition="top center")
+
+fig_rot.update_traces(
+    textposition="top center",
+    hovertemplate="<b>%{text}</b><br>3M: %{x:.2%}<br>1M: %{y:.2%}<extra></extra>"
+)
 fig_rot.update_layout(height=500, margin=dict(l=40, r=40, t=60, b=40), showlegend=False)
+fig_rot.add_hline(y=0, line_width=1, opacity=0.4)
+fig_rot.add_vline(x=0, line_width=1, opacity=0.4)
 st.plotly_chart(fig_rot, use_container_width=True)
 
-# --- One Table: Sortable, Percentage Format ---
+# --- Sortable Table with percentage formatting ---
 df = pd.DataFrame({
     "Sector": [SECTORS[t] for t in available_sector_tickers],
-    "1M Return": [returns_1m[t] for t in available_sector_tickers],
-    "3M Return": [returns_3m[t] for t in available_sector_tickers]
+    "1M Return": [returns_1m.get(t, pd.NA) for t in available_sector_tickers],
+    "3M Return": [returns_3m.get(t, pd.NA) for t in available_sector_tickers],
 }).set_index("Sector")
 
 st.subheader("Sector Total Returns Table")
-st.dataframe(df.style.format("{:.2%}"), height=400)
+styled = df.style.format("{:.2%}").bar(subset=["1M Return", "3M Return"], align="mid")
+st.dataframe(styled, height=400)
 
 csv = df.to_csv().encode()
 st.download_button(
@@ -161,4 +199,8 @@ st.download_button(
     mime="text/csv"
 )
 
-st.caption("© 2025 AD Fund Management LP")
+# Data freshness note
+if not prices.empty:
+    st.caption(f"Data through: {prices.index.max().date()}")
+
+st.caption("© 2025 AD Fund Management LP")
