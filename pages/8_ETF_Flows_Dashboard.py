@@ -6,15 +6,22 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from datetime import datetime
 import concurrent.futures
+import time
+from typing import Tuple, Optional
 
 st.set_page_config(page_title="ETF Flows Dashboard", layout="wide")
 
 # --------------------------- SIDEBAR ---------------------------
 st.sidebar.title("ETF Flows")
 st.sidebar.markdown("""
-A dashboard of **thematic and global ETF flows** to see where money is moving among major macro and innovation trades.
+A dashboard of **thematic and global ETF flows**.
 
-- **Flows are proxies** computed as the sum of daily changes in shares outstanding multiplied by daily close.
+- **Method options**
+  - **SO-based (if available):** sum of daily changes in shares outstanding multiplied by close.
+  - **Chaikin Money Flow ($ proxy):** money flow multiplier × volume × typical price, summed over the period.
+  - **Dollar OBV proxy:** sign of daily return × volume × close, summed over the period.
+
+These are **proxies**, not official flow figures.
 """)
 
 lookback_dict = {
@@ -27,30 +34,46 @@ lookback_dict = {
 period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=1)
 period_days = int(lookback_dict[period_label])
 
+method = st.sidebar.radio(
+    "Method",
+    ["SO-based (if available)", "Chaikin Money Flow ($ proxy)", "Dollar OBV proxy"],
+    index=1
+)
+
 etf_info = {
     "MAGS": ("Mag 7", "Magnificent 7 stocks ETF"),
     "SMH": ("Semiconductors", "Semiconductor stocks (VanEck)"),
-
+    "BOTZ": ("Robotics/AI", "Global robotics and AI leaders"),
+    "ICLN": ("Clean Energy", "Global clean energy stocks"),
+    "URNM": ("Uranium", "Uranium miners (Sprott)"),
+    "ARKK": ("Innovation", "Disruptive growth stocks (ARK)"),
+    "KWEB": ("China Internet", "China internet leaders (KraneShares)"),
+    "FXI": ("China Large-Cap", "China mega-cap stocks"),
+    "EWZ": ("Brazil", "Brazil large-cap equities"),
+    "EEM": ("Emerging Markets", "EM equities (MSCI)"),
+    "VWO": ("Emerging Markets", "EM equities (Vanguard)"),
+    "VGK": ("Europe Large-Cap", "Developed Europe stocks (Vanguard)"),
+    "FEZ": ("Eurozone", "Euro STOXX 50 ETF"),
+    "ILF": ("Latin America", "Latin America 40 ETF"),
+    "ARGT": ("Argentina", "Global X MSCI Argentina ETF"),
+    "GLD": ("Gold", "SPDR Gold Trust ETF"),
+    "SLV": ("Silver", "iShares Silver Trust ETF"),
+    "DBC": ("Commodities", "Invesco DB Commodity Index ETF"),
+    "HEDJ": ("Hedged Europe", "WisdomTree Europe Hedged Equity ETF"),
+    "USMV": ("US Min Volatility", "iShares MSCI USA Min Volatility ETF"),
+    "COWZ": ("US Free Cash Flow", "Pacer US Cash Cows 100 ETF"),
+    "BITO": ("BTC Futures", "Bitcoin futures ETF"),
+    "IBIT": ("Spot BTC", "BlackRock spot Bitcoin ETF"),
+    "BIL": ("1-3mo T-Bills", "1-3 month U.S. Treasury bills"),
+    "TLT": ("20+yr Treasuries", "20+ year U.S. Treasuries"),
+    "SHV": ("0-1yr T-Bills", "Short-term Treasury bonds"),
 }
 etf_tickers = list(etf_info.keys())
 
 # --------------------------- HELPERS ---------------------------
-def _fmt_compact_cur(x):
+def fmt_compact_cur(x) -> str:
     if x is None or pd.isna(x):
         return ""
-    ax = abs(x)
-    sign = "-" if x < 0 else "+" if x > 0 else ""
-    if ax >= 1e9:
-        return f"{sign}${int(round(ax/1e9))}B"
-    if ax >= 1e6:
-        return f"{sign}${int(round(ax/1e6))}M"
-    if ax >= 1e3:
-        return f"{sign}${int(round(ax/1e3))}K"
-    if ax < 1:
-        return "$0"
-    return f"{sign}${int(round(ax))}"
-
-def _axis_fmt(x, _pos=None):
     ax = abs(x)
     if ax >= 1e9:
         return f"${x/1e9:,.0f}B"
@@ -60,22 +83,50 @@ def _axis_fmt(x, _pos=None):
         return f"${x/1e3:,.0f}K"
     return f"${x:,.0f}"
 
-# --------------------------- DATA FUNCTIONS ---------------------------
-@st.cache_data(show_spinner=True, ttl=300)
-def robust_flow_estimate(ticker: str, period_days: int):
-    """
-    Returns (flow_usd, flow_pct_of_aum, aum_usd) or (None, None, None) if not computable.
-    Flow proxy is sum over the period of delta(shares_outstanding) * close_price.
-    """
+def axis_fmt(x, _pos=None) -> str:
+    ax = abs(x)
+    if ax >= 1e9:
+        return f"${x/1e9:,.0f}B"
+    if ax >= 1e6:
+        return f"${x/1e6:,.0f}M"
+    if ax >= 1e3:
+        return f"${x/1e3:,.0f}K"
+    return f"${x:,.0f}"
+
+def retry(n=3, delay=0.4):
+    def deco(fn):
+        def wrap(*args, **kwargs):
+            last = None
+            for i in range(n):
+                try:
+                    return fn(*args, **kwargs)
+                except Exception as e:
+                    last = e
+                    time.sleep(delay * (i + 1))
+            raise last
+        return wrap
+    return deco
+
+@st.cache_data(show_spinner=False, ttl=300)
+@retry(n=3, delay=0.5)
+def fetch_hist(ticker: str, period_days: int) -> pd.DataFrame:
+    t = yf.Ticker(ticker)
+    hist = t.history(period=f"{period_days+10}d", interval="1d", auto_adjust=False)
+    if hist is None or hist.empty:
+        return pd.DataFrame()
+    hist = hist.dropna()
+    hist.index = pd.to_datetime(hist.index).tz_localize(None)
+    cols = ["Open", "High", "Low", "Close", "Volume"]
+    for c in cols:
+        if c in hist.columns:
+            hist[c] = pd.to_numeric(hist[c], errors="coerce")
+    hist = hist.dropna(subset=["Close", "Volume", "High", "Low"])
+    return hist
+
+@st.cache_data(show_spinner=False, ttl=300)
+def fetch_shares_series(ticker: str, hist_index: pd.DatetimeIndex) -> Optional[pd.Series]:
     try:
         t = yf.Ticker(ticker)
-        # Fetch a little extra on both ends for forward fill and diff stability
-        hist = t.history(period=f"{period_days+10}d", interval="1d", auto_adjust=False)
-        hist = hist.dropna()
-        if hist.empty or len(hist) < 2:
-            return None, None, None
-
-        # Try to get shares outstanding history
         so = None
         try:
             so = t.get_shares_full()
@@ -86,80 +137,95 @@ def robust_flow_estimate(ticker: str, period_days: int):
                 so = t.get_shares()
             except Exception:
                 so = None
-
         if so is None or (hasattr(so, "empty") and so.empty):
-            return None, None, None
-
-        # Align indices and coerce types
-        hist.index = pd.to_datetime(hist.index).tz_localize(None)
+            return None
         so.index = pd.to_datetime(so.index).tz_localize(None)
-        so = pd.to_numeric(so, errors="coerce").dropna()
+        so = pd.to_numeric(so, errors="coerce").dropna().sort_index()
         if so.empty:
-            return None, None, None
-
-        # Restrict to hist range and forward fill to trading days
-        so = so.sort_index().loc[hist.index.min():hist.index.max()]
+            return None
+        so = so.loc[hist_index.min():hist_index.max()]
         if len(so) < 2:
-            return None, None, None
-
-        so_daily = so.reindex(hist.index, method="ffill")
-        dso = so_daily.diff().fillna(0.0)
-
-        close = pd.to_numeric(hist["Close"], errors="coerce").fillna(method="ffill")
-        if close.isna().all():
-            return None, None, None
-
-        # Flow proxy and AUM
-        flow = float((dso * close).sum())
-        aum = float(so_daily.iloc[-1] * close.iloc[-1]) if pd.notna(so_daily.iloc[-1]) and pd.notna(close.iloc[-1]) else None
-        flow_pct = (flow / aum) if (aum is not None and aum != 0) else None
-
-        return flow, flow_pct, aum
-
+            return None
+        so_daily = so.reindex(hist_index, method="ffill")
+        return so_daily
     except Exception:
-        return None, None, None
+        return None
 
+def compute_so_flow(hist: pd.DataFrame, so_daily: pd.Series) -> Tuple[Optional[float], Optional[float]]:
+    if hist.empty or so_daily is None or so_daily.empty:
+        return None, None
+    close = hist["Close"]
+    dso = so_daily.diff().fillna(0.0)
+    flow = float((dso * close).sum())
+    aum = float(so_daily.iloc[-1] * close.iloc[-1]) if pd.notna(so_daily.iloc[-1]) else None
+    return flow, aum
+
+def compute_cmf_dollar_proxy(hist: pd.DataFrame) -> float:
+    # Money Flow Multiplier = ((Close - Low) - (High - Close)) / (High - Low)
+    hl_range = (hist["High"] - hist["Low"]).replace(0, np.nan)
+    mfm = ((hist["Close"] - hist["Low"]) - (hist["High"] - hist["Close"])) / hl_range
+    mfm = mfm.fillna(0.0)
+    typical_price = (hist["High"] + hist["Low"] + hist["Close"]) / 3.0
+    dollar_mf = mfm * hist["Volume"] * typical_price
+    return float(dollar_mf.sum())
+
+def compute_dollar_obv_proxy(hist: pd.DataFrame) -> float:
+    ret_sign = np.sign(hist["Close"].diff().fillna(0.0))
+    dollar_obv = ret_sign * hist["Volume"] * hist["Close"]
+    return float(dollar_obv.sum())
+
+# --------------------------- DATA AGG ---------------------------
 @st.cache_data(show_spinner=True, ttl=300)
-def get_all_flows(etf_tickers, period_days: int) -> pd.DataFrame:
-    results = []
+def build_table(tickers, period_days: int, method: str) -> pd.DataFrame:
+    rows = []
 
-    # Cap concurrency to avoid rate limits
-    def _runner(tk):
-        return robust_flow_estimate(tk, period_days)
+    def worker(tk):
+        hist = fetch_hist(tk, period_days)
+        if hist.empty:
+            return tk, np.nan, np.nan, np.nan
+        if method == "SO-based (if available)":
+            so_daily = fetch_shares_series(tk, hist.index)
+            flow, aum = compute_so_flow(hist, so_daily)
+            return tk, flow if flow is not None else np.nan, np.nan, aum if aum is not None else np.nan
+        elif method == "Chaikin Money Flow ($ proxy)":
+            proxy = compute_cmf_dollar_proxy(hist)
+            return tk, proxy, np.nan, np.nan
+        else:  # Dollar OBV proxy
+            proxy = compute_dollar_obv_proxy(hist)
+            return tk, proxy, np.nan, np.nan
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        flows = list(executor.map(_runner, etf_tickers))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(worker, tickers))
 
-    for i, ticker in enumerate(etf_tickers):
-        cat, desc = etf_info[ticker]
-        flow, flow_pct, aum = flows[i]
-        results.append({
-            "Ticker": ticker,
+    for tk, flow, flow_pct, aum in results:
+        cat, desc = etf_info[tk]
+        rows.append({
+            "Ticker": tk,
             "Category": cat,
-            "Flow ($)": float(flow) if flow is not None else np.nan,
-            "Flow (%)": float(flow_pct * 100) if flow_pct is not None else np.nan,
-            "AUM ($)": float(aum) if aum is not None else np.nan,
+            "Flow ($)": float(flow) if pd.notna(flow) else np.nan,
+            "Flow (%)": float(flow_pct) if pd.notna(flow_pct) else np.nan,
+            "AUM ($)": float(aum) if pd.notna(aum) else np.nan,
             "Description": desc
         })
-    df = pd.DataFrame(results)
+    df = pd.DataFrame(rows)
+    df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
     return df
 
 # --------------------------- MAIN ---------------------------
 st.title("ETF Flows Dashboard")
-st.caption(f"Flows are proxies, not official. Period: {period_label}")
+st.caption(f"Flows are proxies, not official. Period: {period_label}. Method: {method}")
 
-df = get_all_flows(etf_tickers, period_days)
-
-# Sort by Flow ($) desc for chart rendering but keep a clean copy for tables
+df = build_table(etf_tickers, period_days, method)
 chart_df = df.sort_values("Flow ($)", ascending=False).copy()
-chart_df["Label"] = [f"{etf_info[t][0]} ({t})" for t in chart_df["Ticker"]]
 
-# Guard when no valid flow data
+# Guard when no values
 max_val = pd.to_numeric(chart_df["Flow ($)"], errors="coerce").abs().max()
 if pd.isna(max_val) or max_val == 0:
-    st.info("No valid flow data available for the selected period. This likely means shares outstanding history is not provided by the data source for these ETFs.")
+    if method == "SO-based (if available)":
+        st.info("No valid SO-based data for the selected period. Switch to a proxy method for a robust approximation.")
+    else:
+        st.info("No valid values computed. Try a different period.")
 else:
-    # Build colors: green for positive, red for negative, gray for zero or NaN
     flows_series = pd.to_numeric(chart_df["Flow ($)"], errors="coerce")
     colors = []
     for x in flows_series:
@@ -173,12 +239,12 @@ else:
     fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
     bars = ax.barh(chart_df["Label"], flows_series.fillna(0.0), color=colors, alpha=0.85)
 
-    ax.set_xlabel("Estimated Flow ($)")
-    ax.set_title(f"ETF Proxy Flows - {period_label}")
+    ax.set_xlabel("Estimated Flow ($)" if method == "SO-based (if available)" else f"{method}")
+    ax.set_title(f"ETF {('Proxy Flows' if method == 'SO-based (if available)' else 'Demand Proxies')} - {period_label}")
     ax.invert_yaxis()
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(_axis_fmt))
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
 
-    # Axis limits with buffer
+    # Axis limits
     min_flow = flows_series.min(skipna=True)
     max_flow = flows_series.max(skipna=True)
     abs_max = max(abs(min_flow if pd.notna(min_flow) else 0.0), abs(max_flow if pd.notna(max_flow) else 0.0))
@@ -187,19 +253,14 @@ else:
     right_lim = abs_max + buffer
     ax.set_xlim([left_lim, right_lim])
 
-    # Annotations with scale aware offset
+    # Annotations
     x_range = right_lim - left_lim
     for bar, val in zip(bars, flows_series):
         if pd.notna(val):
-            label = _fmt_compact_cur(val)
+            label = fmt_compact_cur(val)
             x_text = bar.get_width()
             align = "left" if val > 0 else "right" if val < 0 else "center"
-            if val > 0:
-                x_offset = 0.01 * x_range
-            elif val < 0:
-                x_offset = -0.01 * x_range
-            else:
-                x_offset = 0.0
+            x_offset = 0.01 * x_range if val > 0 else -0.01 * x_range if val < 0 else 0.0
             ax.text(
                 x_text + x_offset,
                 bar.get_y() + bar.get_height() / 2,
@@ -213,34 +274,38 @@ else:
 
     plt.tight_layout()
     st.pyplot(fig)
-    st.markdown("*Green indicates inflow, red indicates outflow, gray indicates missing or zero flow*")
+    st.markdown("*Green indicates positive, red negative, gray zero or missing*")
 
-# --------------------------- TOP FLOWS AND OUTFLOWS ---------------------------
+# --------------------------- TOP LISTS ---------------------------
 st.markdown("#### Top Inflows and Outflows")
 valid = df.dropna(subset=["Flow ($)"]).copy()
 
 if valid.empty:
-    st.write("No ETFs with computable flows in the selected period.")
+    if method == "SO-based (if available)":
+        st.write("No ETFs with computable SO-based flows in the selected period.")
+    else:
+        st.write("No ETFs with computable values in the selected period.")
 else:
-    valid["Label"] = [f"{etf_info[t][0]} ({t})" for t in valid["Ticker"]]
     top_in = valid.nlargest(3, "Flow ($)")[["Label", "Flow ($)"]].copy()
     top_out = valid.nsmallest(3, "Flow ($)")[["Label", "Flow ($)"]].copy()
-    top_in["Flow"] = top_in["Flow ($)"].apply(_fmt_compact_cur)
-    top_out["Flow"] = top_out["Flow ($)"].apply(_fmt_compact_cur)
+    top_in["Value"] = top_in["Flow ($)"].apply(fmt_compact_cur)
+    top_out["Value"] = top_out["Flow ($)"].apply(fmt_compact_cur)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.write("**Top Inflows**")
-        st.table(top_in[["Flow"]].set_index(top_in["Label"]))
+        st.write("**Top Inflows**" if method == "SO-based (if available)" else "**Top Positive**")
+        st.table(top_in[["Value"]].set_index(top_in["Label"]))
     with col2:
-        st.write("**Top Outflows**")
-        st.table(top_out[["Flow"]].set_index(top_out["Label"]))
+        st.write("**Top Outflows**" if method == "SO-based (if available)" else "**Top Negative**")
+        st.table(top_out[["Value"]].set_index(top_out["Label"]))
 
 # --------------------------- STATUS ---------------------------
-if df["Flow ($)"].isna().any():
-    st.warning("Some ETFs are missing flow data due to unavailable shares outstanding history.")
+if method == "SO-based (if available)":
+    if df["Flow ($)"].isna().any():
+        st.warning("Some ETFs are missing SO-based flows due to unavailable shares outstanding history.")
+    else:
+        st.success("All SO-based flow proxies computed using available shares outstanding history.")
 else:
-    st.success("All flow proxies computed using available shares outstanding history.")
+    st.info("Proxy methods approximate money movement using price and volume. They are not official creation or redemption figures.")
 
-st.caption("Methodology: Flow proxy is the sum over the selected period of daily changes in shares outstanding multiplied by the daily close. AUM is shares outstanding at the end of the period multiplied by the close on that date.")
 st.caption("© 2025 AD Fund Management LP")
