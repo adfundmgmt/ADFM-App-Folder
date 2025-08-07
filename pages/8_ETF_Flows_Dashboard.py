@@ -168,45 +168,41 @@ max_val = pd.to_numeric(chart_df["Abs Proxy ($)"], errors="coerce").max()
 if pd.isna(max_val) or max_val == 0:
     st.info("No valid values computed. Try a different period.")
 else:
-    values_abs = pd.to_numeric(chart_df["Abs Proxy ($)"], errors="coerce").fillna(0.0)
-    # Color by original sign
-    colors = ["green" if s > 0 else "red" if s < 0 else "gray" for s in chart_df["Sign"]]
+   # Replace this part in the chart section
+values_signed = pd.to_numeric(chart_df["CMF Proxy ($)"], errors="coerce").fillna(0.0)
+colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in values_signed]
 
-    fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
-    bars = ax.barh(chart_df["Label"], values_abs, color=colors, alpha=0.85)
+fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
+bars = ax.barh(chart_df["Label"], values_signed, color=colors, alpha=0.85)
 
-    ax.set_xlabel("Chaikin Money Flow ($ proxy) - absolute value")
-    ax.set_title(f"ETF Demand Proxies - {period_label}")
-    ax.invert_yaxis()
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
+ax.set_xlabel("Chaikin Money Flow ($ proxy)")
+ax.set_title(f"ETF Demand Proxies - {period_label}")
+ax.invert_yaxis()
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
 
-    # Axis limits with buffer
-    abs_max = values_abs.max()
-    buffer = 0.15 * abs_max if abs_max > 0 else 1.0
-    left_lim = 0.0
-    right_lim = abs_max + buffer
-    ax.set_xlim([left_lim, right_lim])
+# Axis limits with buffer
+abs_max = values_signed.abs().max()
+buffer = 0.15 * abs_max if abs_max > 0 else 1.0
+ax.set_xlim([-abs_max - buffer, abs_max + buffer])
 
-    # Annotations: show signed labels while bars are absolute
-    x_range = right_lim - left_lim
-    for bar, val_abs, sign, raw in zip(bars, values_abs, chart_df["Sign"], chart_df["CMF Proxy ($)"]):
-        label = fmt_compact_cur(raw) if pd.notna(raw) else ""
-        x_text = bar.get_width()
-        x_offset = 0.01 * x_range
-        ax.text(
-            x_text + x_offset,
-            bar.get_y() + bar.get_height() / 2,
-            label if label else "$0",
-            va="center",
-            ha="left",
-            fontsize=10,
-            color="black",
-            clip_on=True
-        )
+# Annotate: show signed label next to each bar
+x_range = (abs_max + buffer) * 2
+for bar, raw in zip(bars, values_signed):
+    label = fmt_compact_cur(raw) if pd.notna(raw) else ""
+    x_text = bar.get_width()
+    align = "left" if raw > 0 else "right" if raw < 0 else "center"
+    x_offset = 0.01 * abs_max if raw > 0 else -0.01 * abs_max if raw < 0 else 0.0
+    ax.text(
+        x_text + x_offset,
+        bar.get_y() + bar.get_height() / 2,
+        label if label else "$0",
+        va="center",
+        ha=align,
+        fontsize=10,
+        color="black",
+        clip_on=True
+    )
 
-    plt.tight_layout()
-    st.pyplot(fig)
-    st.markdown("*Green indicates positive proxy, red negative. Bar length reflects absolute magnitude.*")
 
 # --------------------------- TOP LISTS ---------------------------
 st.markdown("#### Top Positive and Negative (by absolute magnitude)")
