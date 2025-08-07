@@ -41,9 +41,9 @@ st.title("10-Year Nominal and Real Yield Dashboard")
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
-    This dashboard visualizes the 10-year nominal and real Treasury yields with macro overlays.
-    • Top: Nominal (blue) vs real (orange)  
-    • Bottom: Inverted 63 trading day momentum — positive (green) suggests easing, negative (red) suggests tightening
+    Visualizes 10-year U.S. nominal and real Treasury yields with context.  
+    Top: Nominal (blue) vs real (orange) yields.  
+    Bottom: Inverted {win}-day real yield momentum — green for easing, red for tightening.
     """)
     st.markdown("---")
     st.header("Settings")
@@ -55,13 +55,7 @@ with st.sidebar:
     show_regime = st.checkbox("Show Regime Shading", value=True)
     show_spread = st.checkbox("Show Yield Spread (Nominal - Real)", value=False)
     st.markdown("---")
-    st.header("Macro Overlays")
-    show_fomc = st.checkbox("Show FOMC Meeting Dates", value=True)
-    show_cpi = st.checkbox("Show CPI Print Dates", value=False)
-    show_recession = st.checkbox("Show Recession Bands", value=True)
-    st.markdown("---")
     st.caption("Yields: FRED DGS10 (nominal), DFII10 (real)")
-
 # ── Data Download Helper ────────────────────────────────
 @st.cache_data(ttl=86400, show_spinner=False)
 def fred(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
