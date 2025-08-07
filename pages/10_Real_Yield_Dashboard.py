@@ -31,6 +31,11 @@ DEFAULT_WIN = 63         # trading days
 DEFAULT_EASE_BP  = 40
 DEFAULT_TIGHT_BP = -40
 
+# Macro overlays: always-on defaults
+SHOW_FOMC = True
+SHOW_CPI = False
+SHOW_RECESSION = True
+
 REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/1.0)"}
 
 # ── Streamlit Setup ──────────────────────────────────────
@@ -41,9 +46,9 @@ st.title("10-Year Nominal and Real Yield Dashboard")
 with st.sidebar:
     st.header("About This Tool")
     st.markdown("""
-    Visualizes 10-year U.S. nominal and real Treasury yields with context.  
-    Top: Nominal (blue) vs real (orange) yields.  
-    Bottom: Inverted {win}-day real yield momentum — green for easing, red for tightening.
+    Tracks 10-year U.S. nominal and real Treasury yields with macro context.
+    Top: nominal (blue) vs real (orange). Bottom: inverted {win}-day real-yield momentum
+    where green suggests easing and red suggests tightening.
     """)
     st.markdown("---")
     st.header("Settings")
@@ -56,12 +61,12 @@ with st.sidebar:
     show_spread = st.checkbox("Show Yield Spread (Nominal - Real)", value=False)
     st.markdown("---")
     st.caption("Yields: FRED DGS10 (nominal), DFII10 (real)")
+
 # ── Data Download Helper ────────────────────────────────
 @st.cache_data(ttl=86400, show_spinner=False)
 def fred(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
     try:
         s = pdr.DataReader(series, "fred", start, end)[series]
-        # FRED daily series may have missing business days; forward-fill within range only
         s = s.ffill().dropna()
         return s
     except Exception:
@@ -90,8 +95,6 @@ def fetch_fomc_dates():
         dates = []
         for td in soup.select("td.eventdate"):
             txt = td.get_text(strip=True)
-            # Some cells may contain ranges like "July 29-30, 2025"
-            # Parse first date token robustly
             try:
                 dt = pd.to_datetime(txt, errors="coerce")
                 if pd.notnull(dt):
@@ -137,7 +140,7 @@ def fetch_recession_bands():
 # ── Main Analysis ───────────────────────────────────────
 today = pd.Timestamp.today().normalize()
 start = today - pd.DateOffset(years=start_years)
-ext = start - pd.Timedelta(days=win * 2)
+ext = start - pd.Timedelta(days=DEFAULT_WIN * 2)
 
 real = fred(REAL_SERIES, ext, today)
 nom  = fred(NOM_SERIES,  ext, today)
@@ -155,7 +158,6 @@ if df.empty:
 # Inverted momentum in basis points over win observations
 mom = -(df["Real"] - df["Real"].shift(win)) * 100
 mom = mom.dropna()
-# Align for plotting together
 df = df.loc[mom.index]
 df["Spread"] = df["Nominal"] - df["Real"]
 
@@ -224,9 +226,7 @@ fig.update_yaxes(title="Yield (%)", tickformat=".2f", row=1, col=1)
 fig.add_trace(go.Scatter(x=mom.index, y=mom, name=f"Momentum ({win})",
                          line=dict(color="#d62728", dash="dash", width=1.8)), row=2, col=1)
 
-# Replace add_hline with shapes for compatibility
 def add_hline_shape(y, row, col, color="grey", dash="dot", width=1, text=None):
-    # yref uses axis coordinate; span entire x of that row via xref="x{row}"
     xref = f"x{row}" if row > 1 else "x"
     fig.add_shape(
         type="line",
@@ -262,8 +262,8 @@ if show_spread:
                              line=dict(color="#2ca02c", width=2)), row=3, col=1)
     fig.update_yaxes(title="Spread (%)", tickformat=".2f", row=3, col=1)
 
-# Macro overlays using shapes for robustness
-def add_vline_shape(x_dt, row, col, color, dash, width, text=None, ypos="top right"):
+# Macro overlays (always-on per constants above)
+def add_vline_shape(x_dt, row, col, color, dash, width, text=None):
     xref = f"x{row}" if row > 1 else "x"
     fig.add_shape(
         type="line", xref=xref, yref="paper",
@@ -278,17 +278,17 @@ def add_vline_shape(x_dt, row, col, color, dash, width, text=None, ypos="top rig
             font=dict(size=9), row=row, col=col
         )
 
-if show_fomc:
+if SHOW_FOMC:
     for dt in fetch_fomc_dates():
         if df.index[0] <= dt <= df.index[-1]:
             add_vline_shape(dt, 1, 1, color="rgba(44,160,44,0.7)", dash="dashdot", width=1.2, text="FOMC")
 
-if show_cpi:
+if SHOW_CPI:
     for dt in fetch_cpi_dates():
         if df.index[0] <= dt <= df.index[-1]:
             add_vline_shape(dt, 1, 1, color="rgba(255,127,14,0.3)", dash="dot", width=1.0, text="CPI")
 
-if show_recession:
+if SHOW_RECESSION:
     for rs, re in fetch_recession_bands():
         if re >= df.index[0] and rs <= df.index[-1]:
             fig.add_vrect(
@@ -318,22 +318,22 @@ with st.expander("Download Data"):
 
 with st.expander("Methodology and Interpretation", expanded=False):
     st.markdown(f"""
-    Yield Sources:  
-    • Nominal: FRED DGS10  
+    Yield Sources:
+    • Nominal: FRED DGS10
     • Real: FRED DFII10
 
-    Inverted Momentum:  
-    − (Current real yield − real yield {win} observations ago) × 100
+    Inverted Momentum:
+    - (Current real yield - real yield {win} observations ago) × 100
 
-    Regime Definition:  
-    • 🟢 Easing: momentum > {ease_bp} bp  
-    • ⚪️ Neutral: between thresholds  
+    Regime Definition:
+    • 🟢 Easing: momentum > {ease_bp} bp
+    • ⚪️ Neutral: between thresholds
     • 🔴 Tightening: momentum < {tight_bp} bp
 
-    Macro Overlays:  
-    • FOMC Dates: Green dashed verticals  
-    • CPI Prints: Orange dotted verticals  
-    • Recession Bands: Gray bands (NBER)
+    Macro Overlays:
+    • FOMC Dates: green dashed verticals
+    • CPI Prints: orange dotted verticals
+    • Recession Bands: gray bands (NBER)
     """)
 
 st.caption("© 2025 AD Fund Management LP")
