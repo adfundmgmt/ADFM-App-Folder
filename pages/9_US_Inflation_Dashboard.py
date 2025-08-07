@@ -19,7 +19,7 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Explore interactive inflation charts powered by the latest FRED data. View year‑over‑year and month‑over‑month changes for both headline and core CPI, with NBER recessions shaded for context. Data is fetched live and cached for responsiveness.
+        Explore interactive inflation charts powered by the latest FRED data. View year-over-year and month-over-month changes for both headline and core CPI, with NBER recessions shaded for context. Data is fetched live and cached for responsiveness.
         """
     )
     st.subheader("Time Range")
@@ -29,12 +29,23 @@ with st.sidebar:
         index=7
     )
 
-@st.cache_data(show_spinner=False)
+# --- Data Loader ---
+@st.cache_data(show_spinner=False, ttl=24*60*60)
 def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
     try:
         df = DataReader(series_id, "fred", start)
         s = df[series_id].copy()
-        return s.asfreq("MS").ffill()
+
+        # Ensure monthly frequency aligned to MS without backfilling pre-history
+        # Many FRED CPI series already arrive as MS; resample defensively if needed
+        try:
+            freqstr = s.index.freqstr
+        except Exception:
+            freqstr = None
+        if freqstr != "MS":
+            s = s.resample("MS").ffill()
+
+        return s
     except Exception as e:
         st.warning(f"Failed to load series {series_id}: {e}")
         return pd.Series(dtype=float)
@@ -52,7 +63,7 @@ headline_yoy = headline.pct_change(12) * 100
 core_yoy     = core.pct_change(12)     * 100
 headline_mom = headline.pct_change(1)  * 100
 core_mom     = core.pct_change(1)      * 100
-core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100
+core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100  # 3-month annualized
 
 end_date = headline.index.max()
 if period == "All":
@@ -91,70 +102,87 @@ if h_yoy.empty or c_yoy.empty or h_mom.empty or c_mom.empty:
     st.warning("No data is available for the selected range.")
     st.stop()
 
+# --- Recessions ---
 def within_window(rec_list, start, end):
     out = []
-    for s,e in rec_list:
+    for s, e in rec_list:
         if e < start or s > end:
             continue
-        out.append((max(s,start), min(e,end)))
+        out.append((max(s, start), min(e, end)))
     return out
 
 def get_recessions(flag: pd.Series):
     f = flag.dropna().astype(int)
+    if f.empty:
+        return []
     dif = f.diff()
-    starts = f[(f==1)&(dif==1)].index
-    if f.iloc[0]==1: starts = starts.insert(0,f.index[0])
-    ends = f[(f==0)&(dif==-1)].index
-    if len(ends)<len(starts): ends = ends.append(pd.Index([f.index[-1]]))
+    starts = f[(f == 1) & (dif == 1)].index
+    if f.iloc[0] == 1:
+        starts = starts.insert(0, f.index[0])
+    ends = f[(f == 0) & (dif == -1)].index
+    if len(ends) < len(starts):
+        ends = ends.insert(len(ends), f.index[-1])
     return [(s, e) for s, e in zip(starts, ends) if e >= s]
 
 recs = get_recessions(recess)
 recs_window = within_window(recs, start_date, end_date)
 
-# --- Plotting Helper Functions ---
+# --- Plotting Helpers ---
+def _add_recession_shapes_single_axis(fig, recs_window):
+    # For single-axis figures
+    for s, e in recs_window:
+        fig.add_shape(
+            type="rect", xref="x", yref="paper",
+            x0=s, x1=e, y0=0, y1=1,
+            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0
+        )
+
+def _add_recession_shapes_two_rows(fig, recs_window):
+    # For two-row subplots where each row has its own x-axis
+    for s, e in recs_window:
+        fig.add_shape(
+            type="rect", xref="x", yref="paper",
+            x0=s, x1=e, y0=0, y1=0.5,
+            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0
+        )
+        fig.add_shape(
+            type="rect", xref="x2", yref="paper",
+            x0=s, x1=e, y0=0.5, y1=1,
+            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0
+        )
+
+hover_pct = dict(hovertemplate='%{y:.2f}%')
 
 def plot_yoy(h_yoy, c_yoy, recs_window):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=h_yoy.index, y=h_yoy, name="Headline CPI YoY", line_color="#1f77b4", hovertemplate='%{y:.2f}%'))
+        x=h_yoy.index, y=h_yoy, name="Headline CPI YoY", line_color="#1f77b4", **hover_pct))
     fig.add_trace(go.Scatter(
-        x=c_yoy.index, y=c_yoy, name="Core CPI YoY",     line_color="#ff7f0e", hovertemplate='%{y:.2f}%'))
-    for s, e in recs_window:
-        fig.add_shape(
-            dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                 fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0)
-        )
+        x=c_yoy.index, y=c_yoy, name="Core CPI YoY",     line_color="#ff7f0e", **hover_pct))
+    _add_recession_shapes_single_axis(fig, recs_window)
     fig.update_layout(
-        title="US CPI YoY – Headline vs Core",
+        title="US CPI YoY — Headline vs Core",
         yaxis_title="% YoY",
         hovermode="x unified",
         margin=dict(t=80),
         xaxis=dict(rangeslider=dict(visible=False), showline=True, linewidth=1),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.05,
-            xanchor="right",
-            x=1
-        )
+        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1)
     )
     return fig
 
 def plot_mom(h_mom, c_mom, recs_window):
     fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+        rows=2, cols=1, shared_xaxes=False, vertical_spacing=0.02,
         subplot_titles=("Headline CPI MoM %", "Core CPI MoM %"))
     fig.add_trace(go.Bar(
-        x=h_mom.index, y=h_mom, name="Headline MoM", marker_color="#1f77b4", hovertemplate='%{y:.2f}%'), row=1, col=1)
+        x=h_mom.index, y=h_mom, name="Headline MoM", marker_color="#1f77b4", **hover_pct), row=1, col=1)
     fig.add_trace(go.Bar(
-        x=c_mom.index, y=c_mom, name="Core MoM",     marker_color="#ff7f0e", hovertemplate='%{y:.2f}%'), row=2, col=1)
-    for s, e in recs_window:
-        fig.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0), row=1, col=1)
-        fig.add_shape(dict(type="rect", xref="x", yref="paper", x0=s, x1=e, y0=0, y1=1,
-                            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0), row=2, col=1)
-    fig.update_yaxes(title_text="% MoM", row=1, col=1)
-    fig.update_yaxes(title_text="% MoM", row=2, col=1)
+        x=c_mom.index, y=c_mom, name="Core MoM",     marker_color="#ff7f0e", **hover_pct), row=2, col=1)
+
+    _add_recession_shapes_two_rows(fig, recs_window)
+
+    fig.update_yaxes(title_text="% MoM", zeroline=True, zerolinewidth=1, row=1, col=1)
+    fig.update_yaxes(title_text="% MoM", zeroline=True, zerolinewidth=1, row=2, col=1)
     fig.update_layout(
         showlegend=False,
         hovermode="x unified",
@@ -167,23 +195,19 @@ def plot_mom(h_mom, c_mom, recs_window):
 def plot_core(core_idx, c_3m):
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-        subplot_titles=("Core CPI Index", "3‑Mo Annualised Core CPI %"))
+        subplot_titles=("Core CPI Index", "3 Mo Annualised Core CPI %"))
     fig.add_trace(go.Scatter(
-        x=core_idx.index, y=core_idx, name="Core Index", line_color="#ff7f0e", mode="lines+markers", hovertemplate='%{y:.2f}'), row=1, col=1)
+        x=core_idx.index, y=core_idx, name="Core Index", line_color="#ff7f0e",
+        mode="lines+markers", hovertemplate='%{y:.2f}'), row=1, col=1)
     fig.add_trace(go.Scatter(
-        x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4", mode="lines+markers", hovertemplate='%{y:.2f}%'), row=2, col=1)
+        x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4",
+        mode="lines+markers", **hover_pct), row=2, col=1)
     fig.update_yaxes(title_text="Index Level", row=1, col=1)
-    fig.update_yaxes(title_text="% (annualised)", row=2, col=1)
+    fig.update_yaxes(title_text="% (annualised)", zeroline=True, zerolinewidth=1, row=2, col=1)
     fig.update_layout(
         hovermode="x unified",
         margin=dict(t=80),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.05,
-            xanchor="right",
-            x=1
-        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
         xaxis=dict(rangeslider=dict(visible=False)),
         xaxis2=dict(rangeslider=dict(visible=False))
     )
@@ -192,22 +216,26 @@ def plot_core(core_idx, c_3m):
 # --- Render UI ---
 st.title("US Inflation Dashboard")
 
-latest_date = h_yoy.index.max()
-headline_latest = h_yoy.iloc[-1] if not h_yoy.empty else float("nan")
-core_latest = c_yoy.iloc[-1] if not c_yoy.empty else float("nan")
-headline_prev = h_yoy.iloc[-2] if len(h_yoy) > 1 else float("nan")
-core_prev = c_yoy.iloc[-2] if len(c_yoy) > 1 else float("nan")
+# Clean metric handling to avoid NaN display on short windows
+def fmt_pct(x):
+    return "N/A" if pd.isna(x) else f"{x:.2f}%"
 
-# Helper for metric delta
 def safe_delta(curr, prev):
     if pd.isna(curr) or pd.isna(prev):
-        return "0.00%"
-    else:
-        return f"{curr-prev:+.2f}%"
+        return "N/A"
+    return f"{curr - prev:+.2f}%"
+
+h_yoy_disp = h_yoy.dropna()
+c_yoy_disp = c_yoy.dropna()
+
+headline_latest = h_yoy_disp.iloc[-1] if not h_yoy_disp.empty else float("nan")
+headline_prev   = h_yoy_disp.iloc[-2] if h_yoy_disp.size > 1 else float("nan")
+core_latest     = c_yoy_disp.iloc[-1] if not c_yoy_disp.empty else float("nan")
+core_prev       = c_yoy_disp.iloc[-2] if c_yoy_disp.size > 1 else float("nan")
 
 cols = st.columns(2)
-cols[0].metric("Headline CPI YoY", f"{headline_latest:.2f}%", safe_delta(headline_latest, headline_prev))
-cols[1].metric("Core CPI YoY", f"{core_latest:.2f}%", safe_delta(core_latest, core_prev))
+cols[0].metric("Headline CPI YoY", fmt_pct(headline_latest), safe_delta(headline_latest, headline_prev))
+cols[1].metric("Core CPI YoY",     fmt_pct(core_latest),     safe_delta(core_latest, core_prev))
 
 st.plotly_chart(plot_yoy(h_yoy, c_yoy, recs_window),  use_container_width=True)
 st.plotly_chart(plot_mom(h_mom, c_mom, recs_window),  use_container_width=True)
@@ -216,7 +244,6 @@ st.plotly_chart(plot_core(core.loc[idx], c_3m), use_container_width=True)
 # --- Download ---
 with st.expander("Download Data"):
     include_rec = st.checkbox("Include recession flag", value=False)
-    # Align the recession flag series index to match headline/core index to avoid IndexError
     recession_aligned = recess.reindex(headline.index)
     data_dict = {
         "Headline CPI": headline.loc[idx],
@@ -231,7 +258,10 @@ with st.expander("Download Data"):
         data_dict["Recession Flag"] = recession_aligned.loc[idx]
     combined = pd.DataFrame(data_dict)
     st.download_button(
-        "Download CSV", combined.to_csv(index=True), file_name="us_cpi_data.csv", mime="text/csv"
+        "Download CSV",
+        combined.to_csv(index=True, index_label="Date"),
+        file_name="us_cpi_data.csv",
+        mime="text/csv"
     )
 
 with st.expander("Methodology & Sources", expanded=False):
@@ -239,8 +269,8 @@ with st.expander("Methodology & Sources", expanded=False):
         """
         **Data:** FRED via pandas-datareader  
         **Series:** Headline CPI (CPIAUCNS), Core CPI (CPILFESL), Recessions (USREC)  
-        **3‑Mo annualised formula:** ((CPI_t / CPI_{t-3}) ** 4 – 1) × 100
+        **3 Mo annualised formula:** ((CPI_t / CPI_{t-3}) ** 4 - 1) × 100
         """
     )
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2025 AD Fund Management LP")
