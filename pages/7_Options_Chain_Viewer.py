@@ -7,8 +7,7 @@ import pandas as pd
 import numpy as np
 import altair as alt
 import math
-from math import erf
-from datetime import datetime, date
+from datetime import date
 
 import matplotlib.pyplot as plt
 plt.style.use("default")
@@ -64,10 +63,19 @@ def busdays_to_expiry(exp: str) -> int:
     ed = pd.to_datetime(exp).date()
     return int(np.busday_count(today, ed))
 
-# Safe normal CDF without np.erf
+# Vectorized normal CDF (no scipy, no np.erf)
 def norm_cdf(x):
+    """
+    Hastings approximation, vectorized.
+    Max abs error ~ 7.5e-8 which is plenty for delta.
+    """
     x = np.asarray(x, dtype=float)
-    return 0.5 * (1.0 + np.vectorize(erf)(x / np.sqrt(2.0)))
+    a1, a2, a3, a4, a5 = 0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429
+    L = np.abs(x)
+    k = 1.0 / (1.0 + 0.2316419 * L)
+    poly = (((a5*k + a4)*k + a3)*k + a2)*k + a1
+    w = 1.0 - (1.0/np.sqrt(2*np.pi)) * np.exp(-0.5*L*L) * poly
+    return np.where(x >= 0, w, 1.0 - w)
 
 # ---------------- Sidebar form with submit ----------------
 with st.sidebar.form("controls", clear_on_submit=False):
@@ -172,12 +180,14 @@ S = float(spot)
 T_arr = np.full_like(K, T, dtype=float)
 
 valid = (sigma > 0) & (T_arr > 0)
+
 d1 = np.zeros_like(K, dtype=float)
-# risk neutral with dividends: r - q
-d1[valid] = (np.log(S / K[valid]) + (r - q + 0.5 * sigma[valid] ** 2) * T_arr[valid]) / (sigma[valid] * np.sqrt(T_arr[valid]))
+if valid.any():
+    d1[valid] = (np.log(S / K[valid]) + (r - q + 0.5 * sigma[valid] ** 2) * T_arr[valid]) / (sigma[valid] * np.sqrt(T_arr[valid]))
 
 call_delta = np.zeros_like(K, dtype=float)
-call_delta[valid] = norm_cdf(d1[valid])
+if valid.any():
+    call_delta[valid] = norm_cdf(d1[valid])
 
 is_call = (chain["type"] == "Call").to_numpy()
 delta = np.where(is_call, call_delta, call_delta - 1.0)
