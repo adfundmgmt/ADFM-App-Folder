@@ -1,5 +1,5 @@
 ############################################################
-# Liquidity & Fed Policy Tracker
+# Liquidity & Fed Policy Tracker  —  Scale-optimized layout
 # Built by AD Fund Management LP
 ############################################################
 
@@ -12,12 +12,12 @@ import plotly.graph_objects as go
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
 FRED = {
-    "fed_bs": "WALCL",        # Fed total assets
-    "rrp": "RRPONTSYD",       # ON RRP
-    "tga": "WDTGAL",          # Treasury General Account
-    "effr": "EFFR",           # Effective Fed Funds Rate
-    "spx": "SP500",           # S&P 500 index
-    "nasdaq": "NASDAQCOM",    # Nasdaq Composite
+    "fed_bs": "WALCL",        # Fed total assets (millions)
+    "rrp": "RRPONTSYD",       # ON RRP (millions)
+    "tga": "WDTGAL",          # Treasury General Account (millions)
+    "effr": "EFFR",           # Effective Fed Funds Rate (percent)
+    "spx": "SP500",           # S&P 500 index level
+    "nasdaq": "NASDAQCOM",    # Nasdaq Composite index level
 }
 DEFAULT_LOOKBACK_YEARS = 3
 DEFAULT_SMOOTH_DAYS = 5
@@ -31,9 +31,16 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Tracks Fed balance sheet, ON RRP, and TGA to derive a **Net Liquidity** proxy, and relates it to equity markets.
-        - Net Liquidity = WALCL − RRP − TGA
-        - Panels: Liquidity stack with net line, policy rate, and equities.
+        **Purpose:** Track Net Liquidity and relate it to policy and equities.
+
+        **Definition:** Net Liquidity = WALCL - RRP - TGA  
+        Units are billions. Higher is generally risk-on if sustained.
+
+        **Panels**  
+        1) **Net Liquidity (B):** primary signal. Look for trend turns and 5d or 20d inflections.  
+        2) **Components Rebased:** WALCL, RRP, TGA each set to 100 at the lookback start to show direction without scale distortion.  
+        3) **Policy Rate:** EFFR level.  
+        4) **Equities Rebased:** SPX and optional Nasdaq, base 100 at lookback start.
         """
     )
     st.markdown("---")
@@ -78,10 +85,10 @@ if df.empty:
     st.stop()
 
 # Net Liquidity in billions
-df["NetLiq"] = (df["WALCL"] - df["RRP"] - df["TGA"]) / 1000.0
 df["WALCL_b"] = df["WALCL"] / 1000.0
 df["RRP_b"]   = df["RRP"]   / 1000.0
 df["TGA_b"]   = df["TGA"]   / 1000.0
+df["NetLiq"]  = df["WALCL_b"] - df["RRP_b"] - df["TGA_b"]
 
 # Smoothing
 if smooth > 1:
@@ -91,31 +98,44 @@ else:
     for col in ["WALCL_b", "RRP_b", "TGA_b", "NetLiq", "EFFR"]:
         df[f"{col}_s"] = df[col]
 
-# Returns for correlation
+# Rebased panels
+def rebase(series):
+    base = series.iloc[0]
+    return (series / base) * 100 if base and base != 0 else series * 0 + 100
+
+reb = pd.DataFrame(index=df.index)
+reb["WALCL_idx"] = rebase(df["WALCL_b"])
+reb["RRP_idx"]   = rebase(df["RRP_b"])
+reb["TGA_idx"]   = rebase(df["TGA_b"])
+reb["SPX_idx"]   = rebase(df["SPX"])
+if show_nasdaq:
+    reb["NASDAQ_idx"] = rebase(df["NASDAQ"])
+
+# Correlations on changes
 returns = pd.DataFrame(index=df.index)
-returns["NetLiq_chg"] = df["NetLiq"].diff()  # daily change in billions
-returns["SPX_ret"] = df["SPX"].pct_change()
+returns["NetLiq_chg"] = df["NetLiq"].diff()
+returns["SPX_ret"]    = df["SPX"].pct_change()
 returns["NASDAQ_ret"] = df["NASDAQ"].pct_change()
+corr_spx = returns["NetLiq_chg"].rolling(DEFAULT_CORR_WINDOW).corr(returns["SPX_ret"])
+corr_nasdaq = returns["NetLiq_chg"].rolling(DEFAULT_CORR_WINDOW).corr(returns["NASDAQ_ret"])
 
-def rolling_corr(a, b, w):
-    return a.rolling(w).corr(b)
-
-corr_spx = rolling_corr(returns["NetLiq_chg"], returns["SPX_ret"], corr_win)
-corr_nasdaq = rolling_corr(returns["NetLiq_chg"], returns["NASDAQ_ret"], corr_win)
-
-# Metrics
-def last_delta(series, lag_days=7):
+# Quick deltas for takeaways
+def delta(series, days):
     try:
-        return series.iloc[-1] - series.shift(lag_days).iloc[-1]
+        return series.iloc[-1] - series.shift(days).iloc[-1]
     except Exception:
         return pd.NA
+
+def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
+def fmt_bp(x):  return "N/A" if pd.isna(x) else f"{x:+,.0f} B"
+def fmt_pct(x): return "N/A" if pd.isna(x) else f"{x:.2f}%"
 
 latest = {
     "date": df.index[-1].date(),
     "netliq": df["NetLiq"].iloc[-1],
-    "netliq_d1": df["NetLiq"].iloc[-1] - df["NetLiq"].iloc[-2] if len(df) > 1 else pd.NA,
+    "netliq_5d": delta(df["NetLiq"], 5),
+    "netliq_20d": delta(df["NetLiq"], 20),
     "walcl": df["WALCL_b"].iloc[-1],
-    "walcl_wow": last_delta(df["WALCL_b"]),
     "rrp": df["RRP_b"].iloc[-1],
     "tga": df["TGA_b"].iloc[-1],
     "effr": df["EFFR"].iloc[-1],
@@ -123,57 +143,69 @@ latest = {
     "corr_nasdaq": corr_nasdaq.iloc[-1] if show_nasdaq else pd.NA,
 }
 
-def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
-def fmt_bp(x):  return "N/A" if pd.isna(x) else f"{x:+,.0f} B"
-def fmt_pct(x): return "N/A" if pd.isna(x) else f"{x:.2f}%"
+# ---------------- Metrics ----------------
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Net Liquidity", fmt_b(latest["netliq"]),
+          f"5d {fmt_bp(latest['netliq_5d'])} | 20d {fmt_bp(latest['netliq_20d'])}",
+          help="WALCL - RRP - TGA")
+m2.metric("WALCL", fmt_b(latest["walcl"]))
+m3.metric("RRP", fmt_b(latest["rrp"]))
+m4.metric("TGA", fmt_b(latest["tga"]))
+m5.metric("EFFR", fmt_pct(latest["effr"]))
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Net Liquidity", fmt_b(latest["netliq"]), fmt_bp(latest["netliq_d1"]), help="WALCL - RRP - TGA")
-c2.metric("Fed Balance Sheet", fmt_b(latest["walcl"]), fmt_bp(latest["walcl_wow"]), help="Level and 7d change")
-c3.metric("ON RRP", fmt_b(latest["rrp"]))
-c4.metric("TGA", fmt_b(latest["tga"]))
-c5.metric(f"EFFR", fmt_pct(latest["effr"]))
-
-c6, c7 = st.columns(2)
-c6.metric(f"Corr(NetLiq Δ, SPX ret) {corr_win}d", "N/A" if pd.isna(latest["corr_spx"]) else f"{latest['corr_spx']:.2f}")
+m6, m7 = st.columns(2)
+m6.metric(f"Corr(NetLiq Δ, SPX ret) {DEFAULT_CORR_WINDOW}d",
+          "N/A" if pd.isna(latest["corr_spx"]) else f"{latest['corr_spx']:.2f}")
 if show_nasdaq:
-    c7.metric(f"Corr(NetLiq Δ, Nasdaq ret) {corr_win}d", "N/A" if pd.isna(latest["corr_nasdaq"]) else f"{latest['corr_nasdaq']:.2f}")
+    m7.metric(f"Corr(NetLiq Δ, Nasdaq ret) {DEFAULT_CORR_WINDOW}d",
+              "N/A" if pd.isna(latest["corr_nasdaq"]) else f"{latest['corr_nasdaq']:.2f}")
 
 # ---------------- Charts ----------------
-nrows = 3
+# Layout: 4 rows to avoid scale compression
 fig = make_subplots(
-    rows=nrows, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-    subplot_titles=("Liquidity Stack and Net Liquidity",
-                    "Policy Rate",
-                    "Equities (rebased)"))
+    rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+    subplot_titles=(
+        "Net Liquidity (Billions)",
+        "Components Rebased to 100 at Lookback Start",
+        "Effective Fed Funds Rate",
+        "Equities Rebased to 100"
+    )
+)
 
-# Panel 1: Liquidity stack and Net Liquidity
-fig.add_trace(go.Scatter(x=df.index, y=df["WALCL_b_s"], name="WALCL (B)", line=dict(color="#1f77b4")), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=-df["RRP_b_s"], name="RRP as negative (B)", line=dict(color="#2ca02c")), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=-df["TGA_b_s"], name="TGA as negative (B)", line=dict(color="#d62728")), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df["NetLiq_s"], name="Net Liquidity (B)", line=dict(color="#000000", width=2)), row=1, col=1)
+# Row 1: Net Liquidity only — clean, big signal
+fig.add_trace(go.Scatter(x=df.index, y=df["NetLiq_s"], name="Net Liquidity (B)",
+                         line=dict(color="#000000", width=2)), row=1, col=1)
 fig.update_yaxes(title="Billions USD", row=1, col=1)
 
-# Panel 2: EFFR
-fig.add_trace(go.Scatter(x=df.index, y=df["EFFR_s"], name="EFFR", line=dict(color="#ff7f0e")), row=2, col=1)
-fig.update_yaxes(title="Percent", tickformat=".2f", row=2, col=1)
+# Row 2: Components rebased — direction without scale distortion
+fig.add_trace(go.Scatter(x=reb.index, y=reb["WALCL_idx"], name="WALCL idx",
+                         line=dict(color="#1f77b4")), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"], name="RRP idx",
+                         line=dict(color="#2ca02c")), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"], name="TGA idx",
+                         line=dict(color="#d62728")), row=2, col=1)
+fig.update_yaxes(title="Index = 100", row=2, col=1)
 
-# Panel 3: Equities rebased
-rebased = pd.DataFrame(index=df.index)
-rebased["SPX"] = df["SPX"] / df["SPX"].iloc[0] * 100
-fig.add_trace(go.Scatter(x=rebased.index, y=rebased["SPX"], name="SPX (rebased=100)", line=dict(color="#9467bd")), row=3, col=1)
+# Row 3: Policy rate
+fig.add_trace(go.Scatter(x=df.index, y=df["EFFR_s"], name="EFFR",
+                         line=dict(color="#ff7f0e")), row=3, col=1)
+fig.update_yaxes(title="Percent", tickformat=".2f", row=3, col=1)
+
+# Row 4: Equities rebased
+fig.add_trace(go.Scatter(x=reb.index, y=reb["SPX_idx"], name="SPX idx",
+                         line=dict(color="#9467bd")), row=4, col=1)
 if show_nasdaq:
-    rebased["NASDAQ"] = df["NASDAQ"] / df["NASDAQ"].iloc[0] * 100
-    fig.add_trace(go.Scatter(x=rebased.index, y=rebased["NASDAQ"], name="NASDAQ (rebased=100)", line=dict(color="#8c564b")), row=3, col=1)
-fig.update_yaxes(title="Index (rebased)", row=3, col=1)
+    fig.add_trace(go.Scatter(x=reb.index, y=reb["NASDAQ_idx"], name="NASDAQ idx",
+                             line=dict(color="#8c564b")), row=4, col=1)
+fig.update_yaxes(title="Index = 100", row=4, col=1)
 
 fig.update_layout(
     template="plotly_white",
-    height=900,
-    legend=dict(orientation="h", x=0, y=1.12, xanchor="left"),
+    height=980,
+    legend=dict(orientation="h", x=0, y=1.13, xanchor="left"),
     margin=dict(l=60, r=40, t=60, b=60),
 )
-fig.update_xaxes(tickformat="%b-%y", row=3, col=1, title="Date")
+fig.update_xaxes(tickformat="%b-%y", row=4, col=1, title="Date")
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -191,11 +223,16 @@ with st.expander("Download Data"):
 # ---------------- Notes ----------------
 with st.expander("Methodology"):
     st.markdown(
-        """
-        **Net Liquidity** = WALCL − RRP − TGA.  
-        - WALCL, RRP, TGA are in millions on FRED. This app converts to billions for readability.  
-        - Smoothing applies a simple moving average over the chosen window.  
-        - Correlation uses Pearson correlation between daily Net Liquidity changes and equity daily returns over the selected window.
+        f"""
+        **Net Liquidity** = WALCL - RRP - TGA.  
+        Units: WALCL, RRP, TGA are millions on FRED. Displayed in billions.
+
+        **Smoothing:** simple moving average over {smooth} days on Net Liquidity and EFFR.
+
+        **Rebased panels:** set the first observation in the lookback window to 100.  
+        This avoids scale compression and makes direction of change clear.
+
+        **Correlations:** Pearson correlation of daily Net Liquidity changes and equity daily returns over {DEFAULT_CORR_WINDOW} trading days.
         """
     )
 
