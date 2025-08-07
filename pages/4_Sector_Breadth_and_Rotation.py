@@ -113,8 +113,6 @@ with st.sidebar:
         • Robust to missing sector tickers
 
         Data Source: Yahoo Finance (via yfinance), refreshed hourly.
-
-        Built by AD Fund Management LP.
         """
     )
     st.markdown("---")
