@@ -211,6 +211,24 @@ fig.update_layout(template="plotly_white", height=420,
 fig.update_xaxes(tickformat="%b-%y", title="Date")
 st.plotly_chart(fig, use_container_width=True)
 
+# Row 4 dual axis: SPX left, Drawdown right
+    row_ptr += 1
+    spx_rebased = df["SPX"] / df["SPX"].iloc[0] * 100
+    dd_series = -100.0 * (df["SPX"] / df["SPX"].cummax() - 1.0)
+
+    llo, lhi = pad_range(spx_rebased.min(), spx_rebased.max())
+    rlo = max(0.0, dd_series.min())
+    rhi = dd_series.max()
+    rlo, rhi = pad_range(rlo, rhi)
+
+    fig.add_trace(go.Scatter(x=df.index, y=spx_rebased, name="SPX (rebased=100)", line=dict(color="#7f7f7f")),
+                  row=row_ptr, col=1, secondary_y=False)
+    fig.add_trace(go.Scatter(x=df.index, y=dd_series, name="Drawdown (%)", line=dict(color="#ff7f0e")),
+                  row=row_ptr, col=1, secondary_y=True)
+
+    fig.update_yaxes(title="Index", range=[llo, lhi], row=row_ptr, col=1, secondary_y=False)
+    fig.update_yaxes(title="Drawdown %", range=[rlo, rhi], row=row_ptr, col=1, secondary_y=True)
+
 # --------------- Download ---------------
 with st.expander("Download Data"):
     out = pd.concat(
