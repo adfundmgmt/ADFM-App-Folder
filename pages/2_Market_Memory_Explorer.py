@@ -1,8 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 #  Market Memory Explorer  –  AD Fund Management LP
 #  ------------------------------------------------
-#  v1.6  ·  y-scale modes (auto/symmetric/trimmed), first-n-days limits,
-#           MaxNLocator percent ticks, no em dash in title
+#  v1.7  ·  y-limits from full analog range, dynamic percent ticks, no options
 # ──────────────────────────────────────────────────────────────────────────
 import datetime as dt
 import time
@@ -39,19 +38,11 @@ with st.sidebar:
         """
 Quickly benchmark **this year’s cumulative return** against history.
 
-**What it does**
-- Pulls daily closes from Yahoo Finance for any stock, ETF, or index  
-- Aligns every calendar year by trading-day #: 1 → n  
-- Finds and overlays the *n* most-correlated analogue years (ρ)
+- Pulls adjusted daily closes from Yahoo Finance  
+- Aligns each year by trading day  
+- Finds and overlays the most-correlated analogue years (ρ)
 
-**Why it helps**
-- Spot repeating return arcs early  
-- Gauge where we stand inside bullish or bearish road maps  
-- Stress-test price targets with real precedent
-
-**Extras**
-- Optional filters to drop extreme years or > X % one-day jumps  
-- One-click download of YTD paths and correlation table
+Extras: optional filters and CSV downloads.
 """
     )
     st.markdown("---")
@@ -62,11 +53,6 @@ Quickly benchmark **this year’s cumulative return** against history.
         lo, hi = st.slider("Allowed YTD Return Range (%)", -100, 1000, (-95, 300), 1)
     if f_jumps:
         max_jump = st.slider("Max Single-Day Move (%)", 5, 100, 25, 1)
-
-    st.markdown("---")
-    st.subheader("Y-axis scaling")
-    scale_mode = st.radio("Mode", ["Auto", "Symmetric", "Trimmed"], horizontal=True, index=0)
-    trim_pct = st.slider("Trim extremes for scale (%)", 0, 20, 5, 1) if scale_mode == "Trimmed" else 0
     st.markdown("---")
 
 col1, col2, col3 = st.columns([2, 1, 1])
@@ -80,7 +66,6 @@ st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>", unsafe_allow_htm
 # ── Data fetch helper ────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def load_history(symbol: str, auto_adjust: bool = True) -> pd.DataFrame:
-    """Yahoo fetch with retries. Returns df[Close, Year] using adjusted prices."""
     attempts, delay = 0, 1
     df = pd.DataFrame()
     while attempts < 4:
@@ -104,7 +89,7 @@ def load_history(symbol: str, auto_adjust: bool = True) -> pd.DataFrame:
 def cumret(series: pd.Series) -> pd.Series:
     return series / series.iloc[0] - 1
 
-# ── Download and build YTD paths ─────────────────────────────────────────
+# ── Build YTD paths ──────────────────────────────────────────────────────
 try:
     raw = load_history(ticker, auto_adjust=True)
 except Exception as e:
@@ -133,7 +118,7 @@ if this_year not in ytd_df.columns:
 current = ytd_df[this_year].dropna()
 n_days  = len(current)
 
-# ── Correlation table ────────────────────────────────────────────────────
+# ── Correlations ─────────────────────────────────────────────────────────
 corrs = {}
 for yr, series in ytd_df.items():
     if yr == this_year:
@@ -151,7 +136,7 @@ if not corrs:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-# ── Optional filters then Top-N ──────────────────────────────────────────
+# ── Filters then Top-N ───────────────────────────────────────────────────
 def keep_year(yr: int) -> bool:
     ser = ytd_df[yr].dropna()
     if len(ser) < n_days:
@@ -174,13 +159,7 @@ top = sorted(eligible.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
 
 # ── Metrics ──────────────────────────────────────────────────────────────
 current_ret = float(current.iloc[-1])
-
-finals = []
-for yr, _ in top:
-    ser = ytd_df[yr].dropna()
-    if not ser.empty:
-        finals.append(float(ser.iloc[-1]))
-
+finals = [float(ytd_df[yr].dropna().iloc[-1]) for yr, _ in top if not ytd_df[yr].dropna().empty]
 median_final = float(np.nanmedian(finals)) if finals else np.nan
 sigma_final  = float(np.nanstd(finals))    if finals else np.nan
 fmt = lambda x: "N/A" if np.isnan(x) else f"{x:.2%}"
@@ -193,10 +172,7 @@ m3.metric("Analog Dispersion (σ)",    fmt(sigma_final))
 st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
 
 # ── Plot ─────────────────────────────────────────────────────────────────
-palette = plt.cm.get_cmap("tab10" if len(top) <= 10 else "tab20")(
-    np.linspace(0, 1, len(top))
-)
-
+palette = plt.cm.get_cmap("tab10" if len(top) <= 10 else "tab20")(np.linspace(0, 1, len(top)))
 fig, ax = plt.subplots(figsize=(14, 7))
 
 for idx, (yr, rho) in enumerate(top):
@@ -204,12 +180,10 @@ for idx, (yr, rho) in enumerate(top):
     ax.plot(ser.index, ser.values, "--", lw=2, alpha=0.7,
             color=palette[idx], label=f"{yr} (ρ={rho:.2f})")
 
-ax.plot(current.index, current.values,
-        color="black", lw=3.2, label=f"{this_year} (YTD)")
+ax.plot(current.index, current.values, color="black", lw=3.2, label=f"{this_year} (YTD)")
 ax.axvline(current.index[-1], color="gray", ls=":", lw=1.3, alpha=0.7)
 
-ax.set_title(f"{ticker} - {this_year} vs Historical Analogs",
-             fontsize=16, weight="bold")
+ax.set_title(f"{ticker} - {this_year} vs Historical Analogs", fontsize=16, weight="bold")
 ax.set_xlabel("Trading Day of Year", fontsize=13)
 ax.set_ylabel("Cumulative Return",   fontsize=13)
 ax.axhline(0, color="gray", ls="--", lw=1)
@@ -218,26 +192,17 @@ ax.axhline(0, color="gray", ls="--", lw=1)
 xmax = max(len(ytd_df[c].dropna()) for c in ytd_df.columns)
 ax.set_xlim(1, xmax)
 
-# y-limits from first n days, with selectable scaling
-vals = np.hstack([current.values] + [ytd_df[yr].dropna().values[:n_days] for yr, _ in top])
-vals = vals[np.isfinite(vals)]
-if vals.size == 0:
+# y-limits from full range of all plotted paths (capture entire move)
+all_y = np.hstack([current.values] + [ytd_df[yr].dropna().values for yr, _ in top])
+all_y = all_y[np.isfinite(all_y)]
+if all_y.size == 0:
     ymin, ymax = -0.02, 0.02
 else:
-    if scale_mode == "Trimmed":
-        lo_q = np.percentile(vals, trim_pct)
-        hi_q = np.percentile(vals, 100 - trim_pct)
-        ymin, ymax = float(lo_q), float(hi_q)
-    elif scale_mode == "Symmetric":
-        lim = float(np.max(np.abs(vals)))
-        ymin, ymax = -lim, lim
-    else:  # Auto
-        ymin, ymax = float(np.min(vals)), float(np.max(vals))
-
+    ymin, ymax = float(np.min(all_y)), float(np.max(all_y))
 pad = 0.06 * (ymax - ymin) if ymax > ymin else 0.02
 ax.set_ylim(ymin - pad, ymax + pad)
 
-# clean percent ticks
+# dynamic percent ticks
 ax.yaxis.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
 
@@ -248,39 +213,25 @@ st.pyplot(fig)
 
 # ── Downloads ────────────────────────────────────────────────────────────
 st.subheader("Downloads")
-
 paths_trunc = ytd_df.apply(lambda s: s.dropna().iloc[:n_days])
-csv_paths = paths_trunc.to_csv(index_label="TradingDay")
 st.download_button(
     "Download YTD Paths (first n days)",
-    data=csv_paths,
+    data=paths_trunc.to_csv(index_label="TradingDay"),
     file_name=f"{ticker}_ytd_paths_first_{n_days}_days.csv",
     mime="text/csv",
 )
-
-corr_df = pd.DataFrame(
-    sorted(corrs.items(), key=lambda kv: kv[1], reverse=True),
-    columns=["Year", "Corr"]
-)
-csv_corr_all = corr_df.to_csv(index=False)
-
-top_df = pd.DataFrame(top, columns=["Year", "Corr"])
-csv_corr_top = top_df.to_csv(index=False)
-
+corr_df = pd.DataFrame(sorted(corrs.items(), key=lambda kv: kv[1], reverse=True), columns=["Year", "Corr"])
+top_df  = pd.DataFrame(top, columns=["Year", "Corr"])
 c1, c2 = st.columns(2)
 with c1:
-    st.download_button(
-        "Download Correlations (all eligible)",
-        data=csv_corr_all,
-        file_name=f"{ticker}_correlations_all.csv",
-        mime="text/csv",
-    )
+    st.download_button("Download Correlations (all eligible)",
+                       data=corr_df.to_csv(index=False),
+                       file_name=f"{ticker}_correlations_all.csv",
+                       mime="text/csv")
 with c2:
-    st.download_button(
-        "Download Correlations (top shown)",
-        data=csv_corr_top,
-        file_name=f"{ticker}_correlations_top.csv",
-        mime="text/csv",
-    )
+    st.download_button("Download Correlations (top shown)",
+                       data=top_df.to_csv(index=False),
+                       file_name=f"{ticker}_correlations_top.csv",
+                       mime="text/csv")
 
 st.caption("© 2025 AD Fund Management LP")
