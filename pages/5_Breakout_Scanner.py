@@ -193,6 +193,7 @@ st.dataframe(styled_table(df), use_container_width=True)
 st.download_button("Download as CSV", df.to_csv(index=False), file_name="breakout_signals.csv")
 
 # ── Per-Ticker Charts ───────────────────────────────────────────────────────
+from datetime import timedelta
 sel = st.selectbox("Select ticker to chart:", df["Ticker"], index=0)
 s_close = prices[sel].dropna()
 
@@ -211,7 +212,7 @@ else:
     ax1.grid(alpha=0.3)
     ax1.set_ylabel("Price")
     ax1.margins(x=0)
-    ax1.set_xlim(s_close.index.min(), s_close.index.max())
+    ax1.set_xlim(s_close.index.min(), s_close.index.max() + timedelta(days=3))
 
     # RSI panel (daily)
     for w in RSI_WINDOWS:
@@ -225,6 +226,7 @@ else:
     ax2.set_ylabel("RSI")
     ax2.set_xlabel("Date")
     ax2.margins(x=0)
+    ax2.set_xlim(base.index.min(), base.index.max() + timedelta(days=3))
     ax2.set_ylim(0, 100)
 
     st.pyplot(fig, use_container_width=True)
