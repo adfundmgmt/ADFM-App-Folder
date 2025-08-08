@@ -1,8 +1,8 @@
 # ──────────────────────────────────────────────────────────────────────────
 #  Market Memory Explorer  –  AD Fund Management LP
 #  ------------------------------------------------
-#  v1.5  ·  fixed jump filter, adjusted prices, dynamic y-limits, filter-first,
-#           dynamic tick step, added downloads, minor hygiene
+#  v1.6  ·  y-scale modes (auto/symmetric/trimmed), first-n-days limits,
+#           MaxNLocator percent ticks, no em dash in title
 # ──────────────────────────────────────────────────────────────────────────
 import datetime as dt
 import time
@@ -14,13 +14,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from matplotlib.ticker import FuncFormatter, MultipleLocator
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 plt.style.use("default")
 
-TRADING_DAYS_FULL_YEAR  = 253        # long-run average
-MIN_DAYS_REQUIRED       = 30         # drop stub years
-CACHE_TTL_SECONDS       = 3600       # 1-hour data cache
+TRADING_DAYS_FULL_YEAR  = 253
+MIN_DAYS_REQUIRED       = 30
+CACHE_TTL_SECONDS       = 3600
 
 # ── Page config ──────────────────────────────────────────────────────────
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
@@ -42,16 +42,16 @@ Quickly benchmark **this year’s cumulative return** against history.
 **What it does**
 - Pulls daily closes from Yahoo Finance for any stock, ETF, or index  
 - Aligns every calendar year by trading-day #: 1 → n  
-- Finds & overlays the *n* most-correlated analogue years (ρ)
+- Finds and overlays the *n* most-correlated analogue years (ρ)
 
 **Why it helps**
 - Spot repeating return arcs early  
-- Gauge where we stand inside bullish or bearish road-maps  
+- Gauge where we stand inside bullish or bearish road maps  
 - Stress-test price targets with real precedent
 
 **Extras**
 - Optional filters to drop extreme years or > X % one-day jumps  
-- One-click download of YTD paths & correlation table
+- One-click download of YTD paths and correlation table
 """
     )
     st.markdown("---")
@@ -62,6 +62,11 @@ Quickly benchmark **this year’s cumulative return** against history.
         lo, hi = st.slider("Allowed YTD Return Range (%)", -100, 1000, (-95, 300), 1)
     if f_jumps:
         max_jump = st.slider("Max Single-Day Move (%)", 5, 100, 25, 1)
+
+    st.markdown("---")
+    st.subheader("Y-axis scaling")
+    scale_mode = st.radio("Mode", ["Auto", "Symmetric", "Trimmed"], horizontal=True, index=0)
+    trim_pct = st.slider("Trim extremes for scale (%)", 0, 20, 5, 1) if scale_mode == "Trimmed" else 0
     st.markdown("---")
 
 col1, col2, col3 = st.columns([2, 1, 1])
@@ -99,7 +104,7 @@ def load_history(symbol: str, auto_adjust: bool = True) -> pd.DataFrame:
 def cumret(series: pd.Series) -> pd.Series:
     return series / series.iloc[0] - 1
 
-# ── Download & build YTD paths ───────────────────────────────────────────
+# ── Download and build YTD paths ─────────────────────────────────────────
 try:
     raw = load_history(ticker, auto_adjust=True)
 except Exception as e:
@@ -112,7 +117,7 @@ for yr, grp in raw.groupby("Year"):
     if len(closes) < MIN_DAYS_REQUIRED:
         continue
     ytd = cumret(closes)
-    ytd.index = np.arange(1, len(closes) + 1)  # trading-day index
+    ytd.index = np.arange(1, len(closes) + 1)
     paths[yr] = ytd
 
 if not paths:
@@ -128,7 +133,7 @@ if this_year not in ytd_df.columns:
 current = ytd_df[this_year].dropna()
 n_days  = len(current)
 
-# ── Correlation table (shape-only option shown in comment) ───────────────
+# ── Correlation table ────────────────────────────────────────────────────
 corrs = {}
 for yr, series in ytd_df.items():
     if yr == this_year:
@@ -138,8 +143,6 @@ for yr, series in ytd_df.items():
         continue
     x = current.values
     y = clean.iloc[:n_days].values
-    # shape-only alternative:
-    # x, y = x - x.mean(), y - y.mean()
     rho = np.corrcoef(x, y)[0, 1]
     if rho >= min_corr:
         corrs[yr] = rho
@@ -148,13 +151,13 @@ if not corrs:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-# ── Optional filters, then take Top-N (filter-first ordering) ────────────
+# ── Optional filters then Top-N ──────────────────────────────────────────
 def keep_year(yr: int) -> bool:
     ser = ytd_df[yr].dropna()
     if len(ser) < n_days:
         return False
-    ret_n = ser.iloc[n_days - 1]  # cumulative YTD
-    daily_ret = (1.0 + ser).pct_change()  # true daily move computed on price index
+    ret_n = ser.iloc[n_days - 1]
+    daily_ret = (1.0 + ser).pct_change()
     max_d = daily_ret.abs().max()
     if f_outliers and not (lo/100 <= ret_n <= hi/100):
         return False
@@ -205,28 +208,37 @@ ax.plot(current.index, current.values,
         color="black", lw=3.2, label=f"{this_year} (YTD)")
 ax.axvline(current.index[-1], color="gray", ls=":", lw=1.3, alpha=0.7)
 
-ax.set_title(f"{ticker} — {this_year} vs Historical Analogs",
+ax.set_title(f"{ticker} - {this_year} vs Historical Analogs",
              fontsize=16, weight="bold")
 ax.set_xlabel("Trading Day of Year", fontsize=13)
 ax.set_ylabel("Cumulative Return",   fontsize=13)
 ax.axhline(0, color="gray", ls="--", lw=1)
 
-# x-limit from data rather than hard 253
+# x-limit from data
 xmax = max(len(ytd_df[c].dropna()) for c in ytd_df.columns)
 ax.set_xlim(1, xmax)
 
-# dynamic y-limits based on first n_days of analogs
-all_y = np.hstack([current.values] +
-                  [ytd_df[yr].dropna().values[:n_days] for yr, _ in top])
-if all_y.size:
-    rng = float(all_y.max() - all_y.min())
-    pad = 0.08 * rng if rng > 0 else 0.02
-    ax.set_ylim(all_y.min() - pad, all_y.max() + pad)
+# y-limits from first n days, with selectable scaling
+vals = np.hstack([current.values] + [ytd_df[yr].dropna().values[:n_days] for yr, _ in top])
+vals = vals[np.isfinite(vals)]
+if vals.size == 0:
+    ymin, ymax = -0.02, 0.02
+else:
+    if scale_mode == "Trimmed":
+        lo_q = np.percentile(vals, trim_pct)
+        hi_q = np.percentile(vals, 100 - trim_pct)
+        ymin, ymax = float(lo_q), float(hi_q)
+    elif scale_mode == "Symmetric":
+        lim = float(np.max(np.abs(vals)))
+        ymin, ymax = -lim, lim
+    else:  # Auto
+        ymin, ymax = float(np.min(vals)), float(np.max(vals))
 
-# dynamic tick step
-rng_total = ax.get_ylim()[1] - ax.get_ylim()[0]
-step = 0.05 if rng_total <= 1.0 else 0.10
-ax.yaxis.set_major_locator(MultipleLocator(step))
+pad = 0.06 * (ymax - ymin) if ymax > ymin else 0.02
+ax.set_ylim(ymin - pad, ymax + pad)
+
+# clean percent ticks
+ax.yaxis.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
 
 ax.grid(True, ls=":", lw=0.7, color="#888")
@@ -237,7 +249,6 @@ st.pyplot(fig)
 # ── Downloads ────────────────────────────────────────────────────────────
 st.subheader("Downloads")
 
-# YTD paths, truncated to n_days for comparability
 paths_trunc = ytd_df.apply(lambda s: s.dropna().iloc[:n_days])
 csv_paths = paths_trunc.to_csv(index_label="TradingDay")
 st.download_button(
@@ -247,7 +258,6 @@ st.download_button(
     mime="text/csv",
 )
 
-# Correlation table (pre- and post-filter views)
 corr_df = pd.DataFrame(
     sorted(corrs.items(), key=lambda kv: kv[1], reverse=True),
     columns=["Year", "Corr"]
