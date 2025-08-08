@@ -1,5 +1,5 @@
 # seasonality_dashboard.py
-# Streamlit app – hardened download logic for SPY/Yahoo hiccups
+# Streamlit app - hardened download logic for SPY and Yahoo hiccups
 import datetime as dt
 import io
 import time
@@ -31,7 +31,7 @@ MONTH_LABELS = [
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ]
 
-# ────────────────────────── Streamlit UI ────────────────────────── #
+# -------------------------- Streamlit UI -------------------------- #
 st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
@@ -42,16 +42,16 @@ with st.sidebar:
         **Explore the seasonal patterns behind any stock, index, or commodity.**
 
         • Pulls data from Yahoo Finance (plus FRED fallback for deep index history)  
-        • Median/mean monthly return, hit rate, min/max, volatility bands  
+        • Median or mean monthly return, hit rate, min or max, volatility bands  
         • Green = positive month, red = negative, black diamonds = hit rate  
         """,
         unsafe_allow_html=True,
     )
 
-# ────────────────────────── Data helpers ────────────────────────── #
+# -------------------------- Data helpers -------------------------- #
 def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> pd.Series | None:
     """
-    Robust yfinance fetch with exponential back-off and no caching.
+    Robust yfinance fetch with exponential backoff and no caching.
     Returns a Close-price Series or None.
     """
     for n in range(retries):
@@ -61,18 +61,18 @@ def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> pd.Seri
             end=end,
             auto_adjust=True,
             progress=False,
-            threads=False,  # single thread avoids extra 429s
+            threads=False,  # single thread reduces 429s
         )
-        if not df.empty:
+        if not df.empty and "Close" in df:
             return df["Close"]
-        time.sleep(2 * (n + 1))  # simple back-off
+        time.sleep(2 * (n + 1))
     return None
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_prices(symbol: str, start: str, end: str) -> pd.Series | None:
     """
-    Wrapper with fallback logic.  Cached for 1 h to avoid hammering YF.
+    Wrapper with fallback logic. Cached for 1 hour to avoid hammering Yahoo.
     """
     symbol = symbol.strip().upper()
     end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
@@ -82,18 +82,18 @@ def fetch_prices(symbol: str, start: str, end: str) -> pd.Series | None:
     if series is not None:
         return series
 
-    # 2) Special-case SPY → use underlying index
+    # 2) Special-case SPY - try the underlying index
     if symbol == "SPY":
         series = _yf_download("^GSPC", start, end)
         if series is not None:
             return series
 
-    # 3) Fallback to FRED mappings for ^GSPC, ^DJI, ^IXIC
+    # 3) FRED fallbacks for major indices
     if pdr and symbol in FALLBACK_MAP:
         try:
             fred_tk = FALLBACK_MAP[symbol]
             df_fred = pdr.DataReader(fred_tk, "fred", start, end)
-            if not df_fred.empty:
+            if df_fred is not None and not df_fred.empty and fred_tk in df_fred:
                 return df_fred[fred_tk].rename("Close")
         except Exception:
             pass
@@ -123,12 +123,15 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     col_map = {"Median": "median_ret", "Mean": "mean_ret"}
     ret_col = col_map[return_metric]
 
+    # Drop months with insufficient data
+    plot_df = stats.dropna(subset=[ret_col, "hit_rate", "min_ret", "max_ret"]).copy()
+    labels = plot_df["label"]
+    ret = plot_df[ret_col].to_numpy(float)
+    hit = plot_df["hit_rate"].to_numpy(float)
+    min_ret = plot_df["min_ret"].to_numpy(float)
+    max_ret = plot_df["max_ret"].to_numpy(float)
+
     fig, ax1 = plt.subplots(figsize=(11, 6), dpi=200)
-    labels = stats["label"]
-    ret = stats[ret_col].to_numpy(float)
-    hit = stats["hit_rate"].to_numpy(float)
-    min_ret = stats["min_ret"].to_numpy(float)
-    max_ret = stats["max_ret"].to_numpy(float)
 
     bar_cols = ["mediumseagreen" if v >= 0 else "indianred" for v in ret]
     edge_cols = ["darkgreen" if v >= 0 else "darkred" for v in ret]
@@ -142,7 +145,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     )
     ax1.set_ylabel(f"{return_metric} return (%)", weight="bold")
     ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
-    ax1.yaxis.set_major_formatter(PercentFormatter())
+    ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))  # correct scale
     pad = 0.1 * max(abs(min_ret.min()), abs(max_ret.max()))
     ax1.set_ylim(min(min_ret.min(), 0) - pad, max(max_ret.max(), 0) + pad)
     ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
@@ -152,7 +155,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     ax2.set_ylabel("Hit rate of positive returns", weight="bold")
     ax2.set_ylim(0, 100)
     ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
-    ax2.yaxis.set_major_formatter(PercentFormatter())
+    ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))  # correct scale
 
     fig.suptitle(title, fontsize=17, weight="bold")
     fig.tight_layout(pad=2)
@@ -163,7 +166,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     return buf
 
 
-# ────────────────────────── Main controls ────────────────────────── #
+# -------------------------- Main controls -------------------------- #
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     symbol = st.text_input("Ticker symbol", value="^GSPC").upper()
@@ -178,13 +181,25 @@ end_date = f"{int(end_year)}-12-31"
 
 metric = st.radio("Select return metric for chart:", ["Median", "Mean"], horizontal=True)
 
-with st.spinner("Fetching and analyzing data…"):
+with st.spinner("Fetching and analyzing data..."):
+    used_symbol = symbol
     prices = fetch_prices(symbol, start_date, end_date)
+    if prices is None and symbol == "SPY":
+        prices = fetch_prices("^GSPC", start_date, end_date)
+        if prices is not None:
+            used_symbol = "^GSPC"
 
 if prices is None or prices.empty:
-    st.error(f"No data found for '{symbol}' in the given date range. "
-             "Try a different symbol or adjust the years.")
+    st.error(f"No data found for '{symbol}' in the given date range. Try a different symbol or adjust the years.")
     st.stop()
+
+# Clamp to first valid date to avoid empty early years
+first_valid = prices.first_valid_index()
+if first_valid is not None:
+    prices = prices.loc[first_valid:]
+
+if used_symbol != symbol:
+    st.info("SPY data unavailable. Using S&P 500 index (^GSPC) fallback for seasonality.")
 
 stats = seasonal_stats(prices)
 first_year, last_year = prices.index[0].year, prices.index[-1].year
@@ -206,17 +221,23 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-buf = plot_seasonality(stats, f"{symbol} Seasonality ({first_year}–{last_year})", metric)
+buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({first_year}–{last_year})", metric)
 st.image(buf, use_container_width=True)
 
 dl1, dl2 = st.columns(2)
 with dl1:
-    st.download_button("Download chart as PNG", buf.getvalue(),
-                       file_name=f"{symbol}_seasonality_{first_year}_{last_year}.png")
+    st.download_button(
+        "Download chart as PNG",
+        buf.getvalue(),
+        file_name=f"{used_symbol}_seasonality_{first_year}_{last_year}.png"
+    )
 with dl2:
     csv_df = stats[["label", "median_ret", "mean_ret", "hit_rate", "min_ret", "max_ret", "years_observed"]].copy()
     csv_df.columns = ["Month", "Median %", "Mean %", "Hit-Rate %", "Min %", "Max %", "Years"]
-    st.download_button("Download stats (CSV)", csv_df.to_csv(index=False),
-                       file_name=f"{symbol}_monthly_stats_{first_year}_{last_year}.csv")
+    st.download_button(
+        "Download stats (CSV)",
+        csv_df.to_csv(index=False),
+        file_name=f"{used_symbol}_monthly_stats_{first_year}_{last_year}.csv"
+    )
 
 st.caption("© 2025 AD Fund Management LP")
