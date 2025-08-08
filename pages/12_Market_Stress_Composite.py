@@ -110,9 +110,10 @@ if not non_empty:
     st.error("No FRED data available. Check connectivity or FRED service.")
     st.stop()
 
-# business-day grid through today
+# business-day grid through today + 3 business days of right-side padding
+pad_days = 3
 bidx_start = min(s.index.min() for s in non_empty)
-bidx = pd.bdate_range(bidx_start, today)
+bidx = pd.bdate_range(bidx_start, today + pd.tseries.offsets.BDay(pad_days))
 
 def to_bidx(s: pd.Series) -> pd.Series:
     return s.reindex(bidx).ffill()
