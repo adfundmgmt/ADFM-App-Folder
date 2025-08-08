@@ -21,7 +21,7 @@ with st.sidebar:
         Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.
 
         This version:
-        • Always uses weekly RSI
+        • Always uses daily RSI
         • RSI from Typical Price ((H+L+C)/3)
         • RSI lines smoothed with EMA(3)
         • No price filter
@@ -111,10 +111,6 @@ def rsi_wilder(series: pd.Series, window: int) -> pd.Series:
     rs = roll_up / roll_down.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
-# Always weekly RSI
-def weekly_series(s: pd.Series) -> pd.Series:
-    return s.resample("W-FRI").last().dropna()
-
 # Always Typical Price for RSI
 def typical_price(sym: str) -> pd.Series:
     H = data["High"].get(sym)
@@ -139,7 +135,7 @@ for sym in prices.columns:
     latest = float(s.iloc[-1])
     highs = {w: float(s.rolling(w).max().iloc[-1]) for w in WINDOWS_HI}
 
-    base = weekly_series(typical_price(sym)).dropna()
+    base = typical_price(sym).dropna()
     rsi_vals = {w: float(rsi_wilder(base, w).ewm(span=RSI_SMOOTH_SPAN, adjust=False).mean().iloc[-1])
                 for w in RSI_WINDOWS if base.shape[0] >= w}
 
@@ -203,7 +199,7 @@ s_close = prices[sel].dropna()
 if s_close.shape[0] < MIN_BARS:
     st.info(f"{sel} does not have enough data to draw rolling highs.")
 else:
-    base = weekly_series(typical_price(sel)).dropna()
+    base = typical_price(sel).dropna()
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=False, constrained_layout=True)
 
     # Price and rolling highs
@@ -217,10 +213,10 @@ else:
     ax1.margins(x=0)
     ax1.set_xlim(s_close.index.min(), s_close.index.max())
 
-    # RSI panel
+    # RSI panel (daily)
     for w in RSI_WINDOWS:
         r = rsi_wilder(base, w).ewm(span=RSI_SMOOTH_SPAN, adjust=False).mean()
-        ax2.plot(r.index, r, label=f"RSI({w}) W", linewidth=1.4)
+        ax2.plot(r.index, r, label=f"RSI({w})", linewidth=1.4)
     ax2.axhline(80, ls="--", color="gray", lw=0.9)
     ax2.axhline(20, ls="--", color="gray", lw=0.9)
     ax2.set_title(f"{sel} RSI Indicators", fontweight="bold")
