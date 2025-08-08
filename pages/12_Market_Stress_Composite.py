@@ -33,10 +33,37 @@ st.title(TITLE)
 # --------------- Sidebar ---------------
 with st.sidebar:
     st.header("About This Tool")
-    st.markdown("""
-Daily **0–100 stress score** from VIX, HY OAS, inverted 10y−3m,
-funding spread (3m AA CP − 3m T-bill), and SPX drawdown.
-Stale inputs get zero weight for that day. Others renormalize.
+st.markdown(f"""
+**Purpose.** A daily 0–100 composite of market stress. Higher = more stress. Built from five liquid risk proxies. Use for risk-on/off context, not for trade timing.
+
+**Inputs (FRED mnemonics).**
+- **VIX (VIXCLS):** equity implied volatility index level.
+- **HY credit spread (BAMLH0A0HYM2):** high-yield OAS in percentage points.
+- **Yield curve (T10Y3M, inverted):** 10y minus 3m. Deeper inversion maps to higher stress.
+- **Funding spread (DCPF3M − DTB3):** 3m AA financial commercial paper minus 3m T-bill, in percentage points.
+- **SPX drawdown (SP500):** percent off trailing closing high, positive when below peak.
+
+**Method.**
+1) Convert each input to a rolling percentile over a {perc_years}-year history so extremes remain comparable across regimes.  
+2) Optionally smooth each percentile with a {smooth}-day moving average.  
+3) Take a weighted average and scale to 0–100. Weights are user-set in the sidebar.  
+4) **Freshness rule:** if an input’s latest print is older than {MAX_STALE_BDAYS} business day, its weight is set to zero for that date and remaining weights are renormalized. This keeps the composite **daily** even when HY or funding data lag.
+
+**Reading the score.**
+- **Low stress:** 0–{REGIME_LO}.  
+- **Neutral:** {REGIME_LO+1}–{REGIME_HI-1}.  
+- **High stress:** {REGIME_HI}–100.  
+Spikes often coincide with risk-off episodes. Persistent high readings flag tightening conditions.
+
+**Units and signs.**
+- HY OAS, curve, and funding are shown in percentage points. Curve is inverted.  
+- SPX drawdown is positive by construction.  
+- VIX is the index level.
+
+**Data cadence and caveats.**
+- Source: FRED via pandas-datareader. Series may post with 1–2 business day lag at times.  
+- Daily close data only. No intraday updates.  
+- Composite quality depends on data availability. The “Active weight in use” tile shows the share of total weight based on fresh prints for the day.
 """)
     st.markdown("---")
     st.header("Settings")
