@@ -111,7 +111,7 @@ if not non_empty:
     st.stop()
 
 # business-day grid through today + 3 business days of right-side padding
-pad_days = 3
+pad_days = 5
 bidx_start = min(s.index.min() for s in non_empty)
 bidx = pd.bdate_range(bidx_start, today + pd.tseries.offsets.BDay(pad_days))
 
