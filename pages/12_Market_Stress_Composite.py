@@ -1,5 +1,5 @@
 ############################################################
-# Market Stress Composite – daily-safe with SPX/Drawdown panel
+# Market Stress Composite - daily-safe with SPX/Drawdown panel
 # Built by AD Fund Management LP
 ############################################################
 
@@ -32,8 +32,24 @@ st.title(TITLE)
 
 # --------------- Sidebar ---------------
 with st.sidebar:
+    st.header("Settings")
+    lookback = st.selectbox("Lookback", ["1y","2y","3y","5y","10y"],
+                            index=["1y","2y","3y","5y","10y"].index(DEFAULT_LOOKBACK))
+    years = int(lookback[:-1])
+    smooth = st.number_input("Smoothing window (days)", 1, 60, DEFAULT_SMOOTH, 1)
+    perc_years = st.number_input("Percentile history window (years)", 3, 25,
+                                 DEFAULT_PERCENTILE_WINDOW_YEARS, 1)
+    st.subheader("Weights")
+    w_vix   = st.slider("VIX", 0.0, 1.0, 0.25, 0.05)
+    w_hy    = st.slider("HY OAS", 0.0, 1.0, 0.25, 0.05)
+    w_curve = st.slider("Yield Curve (inverted)", 0.0, 1.0, 0.20, 0.05)
+    w_fund  = st.slider("Funding (CP − T-bill)", 0.0, 1.0, 0.15, 0.05)
+    w_dd    = st.slider("SPX Drawdown", 0.0, 1.0, 0.15, 0.05)
+    st.caption("Source: FRED via pandas-datareader")
+
+    st.markdown("---")
     st.header("About This Tool")
-st.markdown(f"""
+    st.markdown(f"""
 **Purpose.** A daily 0–100 composite of market stress. Higher = more stress. Built from five liquid risk proxies. Use for risk-on/off context, not for trade timing.
 
 **Inputs (FRED mnemonics).**
@@ -65,21 +81,6 @@ Spikes often coincide with risk-off episodes. Persistent high readings flag tigh
 - Daily close data only. No intraday updates.  
 - Composite quality depends on data availability. The “Active weight in use” tile shows the share of total weight based on fresh prints for the day.
 """)
-    st.markdown("---")
-    st.header("Settings")
-    lookback = st.selectbox("Lookback", ["1y","2y","3y","5y","10y"],
-                            index=["1y","2y","3y","5y","10y"].index(DEFAULT_LOOKBACK))
-    years = int(lookback[:-1])
-    smooth = st.number_input("Smoothing window (days)", 1, 60, DEFAULT_SMOOTH, 1)
-    perc_years = st.number_input("Percentile history window (years)", 3, 25,
-                                 DEFAULT_PERCENTILE_WINDOW_YEARS, 1)
-    st.subheader("Weights")
-    w_vix   = st.slider("VIX", 0.0, 1.0, 0.25, 0.05)
-    w_hy    = st.slider("HY OAS", 0.0, 1.0, 0.25, 0.05)
-    w_curve = st.slider("Yield Curve (inverted)", 0.0, 1.0, 0.20, 0.05)
-    w_fund  = st.slider("Funding (CP − T-bill)", 0.0, 1.0, 0.15, 0.05)
-    w_dd    = st.slider("SPX Drawdown", 0.0, 1.0, 0.15, 0.05)
-    st.caption("Source: FRED via pandas-datareader")
 
 # --------------- Data ---------------
 @st.cache_data(ttl=24*60*60, show_spinner=False)
@@ -91,7 +92,7 @@ def fred_series(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Serie
         return pd.Series(dtype=float)
 
 today = pd.Timestamp.today().normalize()
-start_all = today - pd.DateOffset(years=max(perc_years + 2, years + 2))
+start_all = today - pd.DateOffset(years=max(int(perc_years) + 2, years + 2))
 
 vix   = fred_series(FRED["vix"], start_all, today)
 hy    = fred_series(FRED["hy_oas"], start_all, today)
@@ -102,8 +103,16 @@ spx   = fred_series(FRED["spx"], start_all, today)
 
 fund_raw = (cp3m - tb3m)
 
+# guard for fully empty data
+series_list = [vix, hy, yc, fund_raw, spx]
+non_empty = [s.dropna() for s in series_list if not s.dropna().empty]
+if not non_empty:
+    st.error("No FRED data available. Check connectivity or FRED service.")
+    st.stop()
+
 # business-day grid through today
-bidx = pd.bdate_range(min(x.dropna().index.min() for x in [vix, hy, yc, fund_raw, spx]), today)
+bidx_start = min(s.index.min() for s in non_empty)
+bidx = pd.bdate_range(bidx_start, today)
 
 def to_bidx(s: pd.Series) -> pd.Series:
     return s.reindex(bidx).ffill()
@@ -129,6 +138,10 @@ m_dd   = fresh_mask(spx,     bidx, MAX_STALE_BDAYS)
 df_all = pd.DataFrame({"VIX": vix_b, "HY_OAS": hy_b, "T10Y3M": yc_b, "FUND": fund_b, "SPX": spx_b}).dropna(how="all")
 
 # --------------- Transforms ---------------
+if df_all.empty:
+    st.error("No overlapping data across components.")
+    st.stop()
+
 roll_max = df_all["SPX"].cummax()
 dd_all = 100.0 * (df_all["SPX"] / roll_max - 1.0)
 stress_dd_all = -dd_all.clip(upper=0)
@@ -179,21 +192,27 @@ coverage = pd.Series(active_w / W.sum(), index=scores.index, name="ActiveWeightS
 
 # --------------- Metrics ---------------
 def tag_for_level(x: float) -> str:
+    if pd.isna(x): return "N/A"
     if x >= REGIME_HI: return "High stress"
     if x <= REGIME_LO: return "Low stress"
     return "Neutral"
+
+if comp_s.dropna().empty:
+    st.warning("Composite has no valid points for the selected window.")
+    st.stop()
 
 latest_idx = comp_s.dropna().index[-1]
 latest = {
     "date": latest_idx.date(),
     "level": comp_s.loc[latest_idx],
     "regime": tag_for_level(comp_s.loc[latest_idx]),
-    "coverage": coverage.loc[latest_idx],
-    "vix": panel["VIX"].loc[latest_idx],
-    "hy": panel["HY_OAS"].loc[latest_idx],
-    "yc": panel["T10Y3M"].loc[latest_idx],
-    "fund": panel["FUND"].loc[latest_idx],
-    "dd": -100.0 * (panel["SPX"].loc[latest_idx] / panel["SPX"][:latest_idx].cummax().iloc[-1] - 1.0),
+    "coverage": coverage.loc[latest_idx] if not coverage.dropna().empty else np.nan,
+    "vix": panel["VIX"].loc[latest_idx] if "VIX" in panel else np.nan,
+    "hy": panel["HY_OAS"].loc[latest_idx] if "HY_OAS" in panel else np.nan,
+    "yc": panel["T10Y3M"].loc[latest_idx] if "T10Y3M" in panel else np.nan,
+    "fund": panel["FUND"].loc[latest_idx] if "FUND" in panel else np.nan,
+    "dd": -100.0 * (panel["SPX"].loc[latest_idx] / panel["SPX"][:latest_idx].cummax().iloc[-1] - 1.0)
+           if "SPX" in panel else np.nan,
 }
 
 def fmt2(x): return "N/A" if pd.isna(x) else f"{x:.2f}"
@@ -243,16 +262,18 @@ fig.update_yaxes(title="Score", range=[0,100], row=1, col=1)
 spx_rebased = panel["SPX"] / panel["SPX"].iloc[0] * 100
 dd_series = -100.0 * (panel["SPX"] / panel["SPX"].cummax() - 1.0)
 
-llo, lhi = pad_range(spx_rebased.min(), spx_rebased.max())
-rlo, rhi = pad_range(max(0.0, dd_series.min()), dd_series.max())
+left_range = pad_range(spx_rebased.min(), spx_rebased.max())
+right_range = pad_range(max(0.0, dd_series.min()), dd_series.max())
 
 fig.add_trace(go.Scatter(x=panel.index, y=spx_rebased, name="SPX (rebased=100)",
                          line=dict(color="#7f7f7f")), row=2, col=1, secondary_y=False)
 fig.add_trace(go.Scatter(x=panel.index, y=dd_series, name="Drawdown (%)",
                          line=dict(color="#ff7f0e")), row=2, col=1, secondary_y=True)
 
-fig.update_yaxes(title="Index", range=[llo, lhi], row=2, col=1, secondary_y=False)
-fig.update_yaxes(title="Drawdown %", range=[rlo, rhi], row=2, col=1, secondary_y=True)
+if left_range:
+    fig.update_yaxes(title="Index", range=list(left_range), row=2, col=1, secondary_y=False)
+if right_range:
+    fig.update_yaxes(title="Drawdown %", range=list(right_range), row=2, col=1, secondary_y=True)
 
 fig.update_layout(
     template="plotly_white",
@@ -266,17 +287,26 @@ st.plotly_chart(fig, use_container_width=True)
 
 # --------------- Download ---------------
 with st.expander("Download Data"):
+    # align outputs on panel index to avoid mismatched lengths
+    export_idx = panel.index
+    export_scores = (100.0 * scores.rename(columns={
+        "VIX_p":"VIX_pct","HY_p":"HY_pct","CurveInv_p":"CurveInv_pct",
+        "Fund_p":"Fund_pct","DD_p":"DD_pct"
+    })).reindex(export_idx)
+    export_masks = masks.rename(columns={
+        "VIX_m":"VIX_fresh","HY_m":"HY_fresh",
+        "Curve_m":"Curve_fresh","Fund_m":"Fund_fresh","DD_m":"DD_fresh"
+    }).reindex(export_idx)
+    export_cov = coverage.reindex(export_idx)
+    export_comp = comp_s.rename("Composite").reindex(export_idx)
+
     out = pd.concat(
         [
             panel[["VIX","HY_OAS","T10Y3M","FUND","SPX"]],
-            100.0 * scores.rename(columns={"VIX_p":"VIX_pct","HY_p":"HY_pct",
-                                           "CurveInv_p":"CurveInv_pct","Fund_p":"Fund_pct",
-                                           "DD_p":"DD_pct"}),
-            masks.rename(columns={"VIX_m":"VIX_fresh","HY_m":"HY_fresh",
-                                  "Curve_m":"Curve_fresh","Fund_m":"Fund_fresh",
-                                  "DD_m":"DD_fresh"}),
-            coverage,
-            comp_s.rename("Composite"),
+            export_scores,
+            export_masks,
+            export_cov,
+            export_comp,
         ],
         axis=1
     )
