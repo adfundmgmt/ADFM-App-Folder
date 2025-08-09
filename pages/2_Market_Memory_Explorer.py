@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 #  Market Memory Explorer  –  AD Fund Management LP
 #  ------------------------------------------------
-#  v1.7  ·  y-limits from full analog range, dynamic percent ticks, no options
+#  v1.8  ·  dynamic percent tick density using MultipleLocator
 # ──────────────────────────────────────────────────────────────────────────
 import datetime as dt
 import time
@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from matplotlib.ticker import FuncFormatter, MaxNLocator
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 plt.style.use("default")
 
@@ -202,8 +202,14 @@ else:
 pad = 0.06 * (ymax - ymin) if ymax > ymin else 0.02
 ax.set_ylim(ymin - pad, ymax + pad)
 
-# dynamic percent ticks
-ax.yaxis.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
+# adaptive percent ticks: target ~12 major ticks, choose a clean step
+span = (ax.get_ylim()[1] - ax.get_ylim()[0])
+target_ticks = 12
+raw_step = max(span / target_ticks, 0.0025)  # min 0.25%
+candidates = np.array([0.0025, 0.005, 0.01, 0.02, 0.025, 0.05, 0.10, 0.20, 0.25, 0.50, 1.00])
+step = float(candidates[np.argmin(np.abs(candidates - raw_step))])
+ax.yaxis.set_major_locator(MultipleLocator(step))
+ax.yaxis.set_minor_locator(MultipleLocator(step / 2))
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
 
 ax.grid(True, ls=":", lw=0.7, color="#888")
