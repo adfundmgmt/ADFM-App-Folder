@@ -47,10 +47,6 @@ period_days = int(lookback_dict[period_label])
 
 etf_info = {
     # US Equity
-    "SPY": ("S&P 500", "US large-cap equities"),
-    "QQQ": ("Nasdaq 100", "US large-cap growth"),
-    "IWM": ("Russell 2000", "US small-cap equities"),
-    "DIA": ("Dow Jones 30", "US blue-chip stocks"),
     "XLK": ("US Technology", "S&P 500 technology sector"),
     "XLF": ("US Financials", "S&P 500 financial sector"),
     "XLE": ("US Energy", "S&P 500 energy sector"),
