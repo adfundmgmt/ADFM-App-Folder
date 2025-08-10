@@ -45,34 +45,56 @@ lookback_dict = {
 period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
 period_days = int(lookback_dict[period_label])
 
-etf_info: Dict[str, Tuple[str, str]] = {
-    "MAGS": ("Mag 7", "Magnificent 7 stocks ETF"),
+etf_info = {
+    # US Equity
+    "SPY": ("S&P 500", "US large-cap equities"),
+    "QQQ": ("Nasdaq 100", "US large-cap growth"),
+    "IWM": ("Russell 2000", "US small-cap equities"),
+    "DIA": ("Dow Jones 30", "US blue-chip stocks"),
+    "XLK": ("US Technology", "S&P 500 technology sector"),
+    "XLF": ("US Financials", "S&P 500 financial sector"),
+    "XLE": ("US Energy", "S&P 500 energy sector"),
+    "XLV": ("US Healthcare", "S&P 500 healthcare sector"),
+    "XLI": ("US Industrials", "S&P 500 industrial sector"),
+    "XLB": ("US Materials", "S&P 500 materials sector"),
+    "XLRE": ("US Real Estate", "S&P 500 real estate sector"),
     "SMH": ("Semiconductors", "VanEck Semiconductor ETF"),
-    "BOTZ": ("Robotics/AI", "Global robotics and AI leaders"),
-    "ICLN": ("Clean Energy", "Global clean energy stocks"),
-    "URNM": ("Uranium", "Uranium miners (Sprott)"),
-    "ARKK": ("Innovation", "Disruptive growth stocks (ARK)"),
-    "KWEB": ("China Internet", "China internet leaders (KraneShares)"),
-    "FXI": ("China Large-Cap", "China mega-cap stocks"),
-    "EWZ": ("Brazil", "Brazil large-cap equities"),
+
+    # International Equity
+    "EFA": ("Developed ex-US", "Developed international equities"),
+    "VGK": ("Europe Large-Cap", "Developed Europe equities"),
+    "EWJ": ("Japan", "Japanese equities"),
     "EEM": ("Emerging Markets", "EM equities (MSCI)"),
-    "VWO": ("Emerging Markets", "EM equities (Vanguard)"),
-    "VGK": ("Europe Large-Cap", "Developed Europe stocks (Vanguard)"),
-    "FEZ": ("Eurozone", "Euro STOXX 50 ETF"),
-    "ILF": ("Latin America", "Latin America 40 ETF"),
-    "ARGT": ("Argentina", "Global X MSCI Argentina ETF"),
+    "FXI": ("China Large-Cap", "China mega-cap equities"),
+    "INDA": ("India", "Indian equities"),
+    "EWZ": ("Brazil", "Brazilian equities"),
+
+    # Factors / Styles
+    "USMV": ("US Min Volatility", "Low volatility US equities"),
+    "MTUM": ("US Momentum", "Momentum factor US equities"),
+    "VLUE": ("US Value", "Value factor US equities"),
+
+    # Commodities
     "GLD": ("Gold", "SPDR Gold Trust ETF"),
     "SLV": ("Silver", "iShares Silver Trust ETF"),
-    "DBC": ("Commodities", "Invesco DB Commodity Index ETF"),
-    "HEDJ": ("Hedged Europe", "WisdomTree Europe Hedged Equity ETF"),
-    "USMV": ("US Min Volatility", "iShares MSCI USA Min Volatility ETF"),
-    "COWZ": ("US Free Cash Flow", "Pacer US Cash Cows 100 ETF"),
+    "USO": ("Crude Oil", "US Oil Fund"),
+    "DBC": ("Broad Commodities", "Invesco DB Commodity Index ETF"),
+
+    # Fixed Income
+    "BIL": ("1-3mo T-Bills", "Short-term US Treasuries"),
+    "SHY": ("1-3yr Treasuries", "Short-term US Treasuries"),
+    "IEF": ("7-10yr Treasuries", "Intermediate US Treasuries"),
+    "TLT": ("20+yr Treasuries", "Long-term US Treasuries"),
+    "LQD": ("US IG Corporate Bonds", "Investment-grade corporates"),
+    "HYG": ("US High Yield", "High-yield corporate bonds"),
+    "EMB": ("Emerging Market Bonds", "USD-denominated EM debt"),
+
+    # Alternatives / Crypto
     "BITO": ("BTC Futures", "Bitcoin futures ETF"),
-    "IBIT": ("Spot BTC", "BlackRock spot Bitcoin ETF"),
-    "BIL": ("1-3mo T-Bills", "1-3 month U.S. Treasury bills"),
-    "TLT": ("20+yr Treasuries", "20+ year U.S. Treasuries"),
-    "SHV": ("0-1yr T-Bills", "Short-term Treasury bonds"),
+    "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
+    "ETH": ("Spot ETH", "Grayscale Ethereum Mini Trust ETF"),
 }
+
 etf_tickers: List[str] = list(etf_info.keys())
 
 # --------------------------- HELPERS ---------------------------
