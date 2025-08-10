@@ -15,17 +15,21 @@ st.set_page_config(page_title="ETF Net Flows (Estimated)", layout="wide")
 st.sidebar.title("ETF Net Flows (Estimated)")
 st.sidebar.markdown("""
 **Methodology priority**
-1) **True flows**: ΔShares Outstanding × NAV (uses Close as proxy for NAV).
-2) If historical shares are unavailable: show **CMF turnover proxy** as a fallback and clearly label it.
+1) True flows: ΔShares Outstanding × NAV (uses Close as proxy for NAV).
+2) If historical shares are unavailable: show CMF turnover proxy as a fallback and label it.
 
 Notes:
-- yfinance’s historical shares series (`get_shares_full`) is not available for every ETF.
-- Close is used as a proxy for daily NAV, which is usually acceptable for liquid ETFs.
+- yfinance historical shares (`get_shares_full`) is not available for every ETF.
+- Close is used as a proxy for daily NAV.
 """)
 
 # Timezone-aware today for YTD and windows
 TZ = pytz.timezone("US/Eastern")
 now_et = datetime.now(TZ)
+
+def as_naive_ts(dt: datetime) -> pd.Timestamp:
+    """Return a tz-naive pandas Timestamp from a tz-aware datetime."""
+    return pd.Timestamp(dt).tz_convert(None)
 
 def ytd_days() -> int:
     start_ytd = TZ.localize(datetime(now_et.year, 1, 1))
@@ -138,19 +142,14 @@ def fetch_prices(tickers: Tuple[str, ...], start_date: date) -> Dict[str, pd.Dat
 @retry()
 @st.cache_data(show_spinner=False, ttl=1800)
 def fetch_shares_series(ticker: str, start_date: date) -> pd.Series:
-    """
-    Uses yfinance Ticker.get_shares_full to fetch historical shares outstanding.
-    This often returns a lower frequency series (weekly or monthly).
-    """
     t = yf.Ticker(ticker)
     try:
         s = t.get_shares_full(start=start_date)
     except Exception:
         s = None
-    if s is None or isinstance(s, pd.DataFrame) and s.empty:
+    if s is None or (isinstance(s, pd.DataFrame) and s.empty):
         return pd.Series(dtype="float64")
     if isinstance(s, pd.DataFrame):
-        # yfinance sometimes returns a DataFrame with a single column
         if s.shape[1] >= 1:
             s = s.iloc[:, 0]
         else:
@@ -161,22 +160,15 @@ def fetch_shares_series(ticker: str, start_date: date) -> pd.Series:
     return s
 
 def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
-    """
-    Aligns close and shares, forward-fills shares to daily, diffs, multiplies by Close.
-    Flow_t = ΔShares_t * Close_t
-    """
     if close.empty or shares.empty:
         return pd.Series(dtype="float64")
-    # Daily index from price
     idx = pd.DatetimeIndex(close.index)
-    # Resample shares to business day, ffill, align to price index
     sh_daily = shares.sort_index().resample("B").ffill().reindex(idx).ffill()
     delta_shares = sh_daily.diff().fillna(0.0)
     flows = delta_shares * close.astype(float)
     return flows
 
 def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
-    """Fallback only. CMF style turnover proxy."""
     if df.empty:
         return np.nan
     hl = (df["High"] - df["Low"]).replace(0, np.nan)
@@ -195,9 +187,8 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
     rows = []
     for tk in tickers:
         px = price_map.get(tk, pd.DataFrame())
-        # slice to exact window
         if not px.empty:
-            cutoff = pd.Timestamp(now_et.tz_convert(None)) - pd.Timedelta(days=period_days)
+            cutoff = as_naive_ts(now_et) - pd.Timedelta(days=period_days)
             px = px[px.index >= cutoff]
 
         flow_usd_sum = np.nan
@@ -208,7 +199,6 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
             if not daily_flows.empty and daily_flows.abs().sum() > 0:
                 flow_usd_sum = float(daily_flows.sum())
             else:
-                # fallback to CMF proxy
                 method = "cmf_proxy"
                 flow_usd_sum = compute_cmf_turnover_proxy(px)
         cat, desc = etf_info.get(tk, ("", ""))
