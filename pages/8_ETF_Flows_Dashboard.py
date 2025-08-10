@@ -9,10 +9,10 @@ import pytz
 import time
 from typing import Dict, Tuple, List
 
-st.set_page_config(page_title="ETF Net Flows (Estimated)", layout="wide")
+st.set_page_config(page_title="ETF Net Flows", layout="wide")
 
 # --------------------------- SIDEBAR ---------------------------
-st.sidebar.title("ETF Net Flows (Estimated)")
+st.sidebar.title("ETF Net Flows")
 st.sidebar.markdown("""
 **Methodology priority**
 1) True flows: ΔShares Outstanding × NAV (uses Close as proxy for NAV).
