@@ -1,5 +1,6 @@
 # seasonality_dashboard.py
 # Streamlit app: robust downloads, correct Jan counts, clean CSV
+# Adds intra-month split (1H vs 2H) inside each bar
 
 import datetime as dt
 import io
@@ -11,6 +12,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter, MaxNLocator
 
 plt.style.use("default")
@@ -45,6 +47,7 @@ with st.sidebar:
         • Yahoo Finance primary source, FRED fallback for deep index history  
         • Median or mean monthly return, hit rate, min and max, error bars  
         • Green = positive month, red = negative, black diamonds = hit rate  
+        • New: In-bar split shows average 1st-half vs 2nd-half contributions  
         """,
         unsafe_allow_html=True,
     )
@@ -105,157 +108,157 @@ def fetch_prices(symbol: str, start: str, end: str) -> pd.Series | None:
     return None
 
 
+def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
+    """
+    Build a table of per-month returns and their 1H / 2H decomposition using trading days.
+
+    Returns DataFrame indexed by month period (YYYY-MM) with columns:
+      total_ret, h1_ret, h2_ret
+    All returns in percent.
+    """
+    if prices.empty:
+        return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret"])
+
+    # Work with daily closes
+    daily = prices.asfreq("B")  # business day index; NaNs for non-trading days
+    daily = daily.ffill()        # forward-fill to handle non-trading business days
+
+    out_rows = []
+    # iterate over calendar months present in the series
+    months = pd.period_range(prices.index.min().to_period("M"), prices.index.max().to_period("M"), freq="M")
+    for m in months:
+        # slice actual trading days belonging to this calendar month based on original index
+        mask = (prices.index.to_period("M") == m)
+        month_days = prices.loc[mask]
+        if month_days.shape[0] < 3:
+            continue
+
+        first = month_days.iloc[0]
+        last = month_days.iloc[-1]
+
+        # midpoint based on trading-day count
+        n = month_days.shape[0]
+        mid_idx = (n // 2) - 1  # end of first half (0-based)
+        if mid_idx < 0:
+            continue
+        mid_close = month_days.iloc[mid_idx]
+
+        h1 = (mid_close / first - 1.0) * 100.0
+        h2 = (last / mid_close - 1.0) * 100.0
+        tot = (last / first - 1.0) * 100.0
+
+        out_rows.append(
+            {
+                "period": m,              # Period[M]
+                "total_ret": tot,
+                "h1_ret": h1,
+                "h2_ret": h2,
+                "year": m.year,
+                "month": m.month,
+            }
+        )
+
+    df = pd.DataFrame(out_rows)
+    if df.empty:
+        return df
+    df.set_index(pd.PeriodIndex(df["period"], freq="M"), inplace=True)
+    df.drop(columns=["period"], inplace=True)
+    return df
+
+
 def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.DataFrame:
     """
     Compute monthly seasonality stats, filtered to the requested [start_year, end_year].
-    Padding in fetch_prices ensures January in start_year has a prior month-end.
+    Also compute average first-half and second-half contribution shares per month.
     """
+    # Monthly totals (for min/max, hit-rate, etc.)
     monthly_end = prices.resample("M").last()
     monthly_ret = monthly_end.pct_change().dropna() * 100
     monthly_ret.index = monthly_ret.index.to_period("M")
 
-    # filter to requested window
-    monthly_ret = monthly_ret[(monthly_ret.index.year >= start_year) & (monthly_ret.index.year <= end_year)]
+    # Intra-month halves
+    halves = _intra_month_halves(prices)
 
-    grouped = monthly_ret.groupby(monthly_ret.index.month)
+    # Filter to requested window
+    sel = (monthly_ret.index.year >= start_year) & (monthly_ret.index.year <= end_year)
+    monthly_ret = monthly_ret[sel]
+
+    if halves.empty:
+        grouped = monthly_ret.groupby(monthly_ret.index.month)
+        stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
+        stats["median_ret"] = grouped.median()
+        stats["mean_ret"] = grouped.mean()
+        stats["hit_rate"] = grouped.apply(lambda x: (x > 0).mean() * 100)
+        stats["min_ret"] = grouped.min()
+        stats["max_ret"] = grouped.max()
+        stats["years_observed"] = grouped.apply(lambda x: x.index.year.nunique())
+        stats["label"] = MONTH_LABELS
+        # no halves available
+        stats["h1_share"] = np.nan
+        stats["h2_share"] = np.nan
+        return stats
+
+    halves = halves[(halves["year"] >= start_year) & (halves["year"] <= end_year)]
+
+    # Shares are based on MEAN contributions to ensure additivity when scaling the bar
+    # Avoid divide-by-zero; if avg total near 0, split 50/50.
+    halves["total_epsilon"] = halves["h1_ret"] + halves["h2_ret"]
+    grouped_total = monthly_ret.groupby(monthly_ret.index.month)
+    grouped_halves = halves.groupby("month")
 
     stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
-    stats["median_ret"] = grouped.median()
-    stats["mean_ret"] = grouped.mean()
-    stats["hit_rate"] = grouped.apply(lambda x: (x > 0).mean() * 100)
-    stats["min_ret"] = grouped.min()
-    stats["max_ret"] = grouped.max()
-    stats["years_observed"] = grouped.apply(lambda x: x.index.year.nunique())
+    stats["median_ret"] = grouped_total.median()
+    stats["mean_ret"] = grouped_total.mean()
+    stats["hit_rate"] = grouped_total.apply(lambda x: (x > 0).mean() * 100)
+    stats["min_ret"] = grouped_total.min()
+    stats["max_ret"] = grouped_total.max()
+    stats["years_observed"] = grouped_total.apply(lambda x: x.index.year.nunique())
     stats["label"] = MONTH_LABELS
+
+    mean_h1 = grouped_halves["h1_ret"].mean()
+    mean_h2 = grouped_halves["h2_ret"].mean()
+    mean_tot_halves = mean_h1.add(mean_h2, fill_value=0)
+
+    # contribution shares used to split the bar height (summing to 1)
+    h1_share = pd.Series(0.5, index=stats.index)  # default
+    valid = (mean_tot_halves.abs() > 1e-9)
+    h1_share.loc[valid] = (mean_h1.loc[valid] / mean_tot_halves.loc[valid]).clip(-2, 2)  # keep sane bounds
+    # if total mean near zero or invalid, keep 0.5/0.5
+    stats["h1_share"] = h1_share
+    stats["h2_share"] = 1.0 - h1_share
+
     return stats
 
 
 def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Median") -> io.BytesIO:
+    """
+    Plot monthly bars with error bars and hit rate.
+    Bars are internally split into average 1H and 2H contributions (scaled to bar height).
+    """
     col_map = {"Median": "median_ret", "Mean": "mean_ret"}
     ret_col = col_map[return_metric]
 
     # Drop months with insufficient data
     plot_df = stats.dropna(subset=[ret_col, "hit_rate", "min_ret", "max_ret"]).copy()
-    labels = plot_df["label"]
+    labels = plot_df["label"].tolist()
     ret = plot_df[ret_col].to_numpy(float)
     hit = plot_df["hit_rate"].to_numpy(float)
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
+    h1_share = plot_df["h1_share"].fillna(0.5).to_numpy(float)
+    h2_share = plot_df["h2_share"].fillna(0.5).to_numpy(float)
 
-    fig, ax1 = plt.subplots(figsize=(11, 6), dpi=200)
+    # main figure
+    fig, ax1 = plt.subplots(figsize=(11.5, 6.3), dpi=200)
 
-    bar_cols = ["mediumseagreen" if v >= 0 else "indianred" for v in ret]
-    edge_cols = ["darkgreen" if v >= 0 else "darkred" for v in ret]
-    yerr = np.abs(np.vstack([ret - min_ret, max_ret - ret]))
+    # Compute stacked heights so they always sum to the chosen bar metric
+    h1_height = ret * h1_share
+    h2_height = ret - h1_height  # ensures exact sum
 
-    ax1.bar(
-        labels, ret, width=0.8,
-        color=bar_cols, edgecolor=edge_cols, linewidth=1.2,
-        yerr=yerr, capsize=6, alpha=0.85, zorder=2,
-        error_kw=dict(ecolor="gray", lw=1.6, alpha=0.7),
-    )
-    ax1.set_ylabel(f"{return_metric} return (%)", weight="bold")
-    ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
-    ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
-    pad = 0.1 * max(abs(min_ret.min()), abs(max_ret.max()))
-    ax1.set_ylim(min(min_ret.min(), 0) - pad, max(max_ret.max(), 0) + pad)
-    ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
+    # choose colors by sign of each segment; two shades for halves
+    def seg_colors(values):
+        base_pos = np.array(["#62c38e"] * len(values))   # light green
+        base_neg = np.array(["#e07a73"] * len(values))   # light red
+        return np.where(values >= 0, base_pos, base_neg)
 
-    ax2 = ax1.twinx()
-    ax2.scatter(labels, hit, marker="D", s=90, color="black", zorder=3)
-    ax2.set_ylabel("Hit rate of positive returns", weight="bold")
-    ax2.set_ylim(0, 100)
-    ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
-    ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
-
-    fig.suptitle(title, fontsize=17, weight="bold")
-    fig.tight_layout(pad=2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
-    plt.close(fig)
-    buf.seek(0)
-    return buf
-
-
-# -------------------------- Main controls -------------------------- #
-col1, col2, col3 = st.columns([2, 1, 1])
-with col1:
-    symbol = st.text_input("Ticker symbol", value="^GSPC").upper()
-with col2:
-    start_year = st.number_input("Start year", value=2020, min_value=1900, max_value=dt.datetime.today().year)
-with col3:
-    end_year = st.number_input("End year", value=dt.datetime.today().year,
-                               min_value=int(start_year), max_value=dt.datetime.today().year)
-
-start_date = f"{int(start_year)}-01-01"
-end_date = f"{int(end_year)}-12-31"
-
-metric = st.radio("Select return metric for chart:", ["Median", "Mean"], horizontal=True)
-
-with st.spinner("Fetching and analyzing data..."):
-    used_symbol = symbol
-    prices = fetch_prices(symbol, start_date, end_date)
-    if prices is None and symbol == "SPY":
-        prices = fetch_prices("^GSPC", start_date, end_date)
-        if prices is not None:
-            used_symbol = "^GSPC"
-
-if prices is None or prices.empty:
-    st.error(f"No data found for '{symbol}' in the given date range. Try a different symbol or adjust the years.")
-    st.stop()
-
-# Clamp to first valid date to avoid empty early years in the fetched series
-first_valid = prices.first_valid_index()
-if first_valid is not None:
-    prices = prices.loc[first_valid:]
-
-if used_symbol != symbol:
-    st.info("SPY data unavailable. Using S&P 500 index (^GSPC) fallback for seasonality.")
-
-stats = seasonal_stats(prices, int(start_year), int(end_year))
-first_year, last_year = int(start_year), int(end_year)
-ret_col = {"Median": "median_ret", "Mean": "mean_ret"}[metric]
-
-# Guard for all-NaN rows when window is very short
-valid_rows = stats.dropna(subset=[ret_col])
-if valid_rows.empty:
-    st.error("Insufficient data in the selected window to compute statistics.")
-    st.stop()
-
-best = stats.loc[valid_rows[ret_col].idxmax()]
-worst = stats.loc[valid_rows[ret_col].idxmin()]
-
-st.markdown(
-    f"""
-    <div style='text-align:center'>
-        <span style='font-size:1.18em; font-weight:600; color:#218739'>
-            ⬆️ Best month: {best['label']} ({best[ret_col]:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
-        </span>&nbsp;&nbsp;&nbsp;
-        <span style='font-size:1.18em; font-weight:600; color:#c93535'>
-            ⬇️ Worst month: {worst['label']} ({worst[ret_col]:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
-        </span>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({first_year}–{last_year})", metric)
-st.image(buf, use_container_width=True)
-
-dl1, dl2 = st.columns(2)
-with dl1:
-    st.download_button(
-        "Download chart as PNG",
-        buf.getvalue(),
-        file_name=f"{used_symbol}_seasonality_{first_year}_{last_year}.png"
-    )
-with dl2:
-    csv_df = stats[["label", "median_ret", "mean_ret", "hit_rate", "min_ret", "max_ret", "years_observed"]].copy()
-    csv_df.columns = ["Month", "Median %", "Mean %", "Hit-Rate %", "Min %", "Max %", "Years"]
-    st.download_button(
-        "Download stats (CSV)",
-        csv_df.to_csv(index=False),
-        file_name=f"{used_symbol}_monthly_stats_{first_year}_{last_year}.csv"
-    )
-
-st.caption("© 2025 AD Fund Management LP")
+    def edge_colors(values)_
