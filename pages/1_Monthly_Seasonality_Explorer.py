@@ -1,6 +1,6 @@
 # seasonality_dashboard.py
 # Streamlit app: robust downloads, correct Jan counts, clean CSV
-# Adds intra-month split (1H vs 2H) inside each bar
+# Adds intra-month split (1H vs 2H) with color by half sign and hatch on 2H
 
 import datetime as dt
 import io
@@ -40,8 +40,8 @@ with st.sidebar:
 
         • Yahoo Finance primary source, FRED fallback for deep index history  
         • Median or mean monthly return, hit rate, min and max, error bars  
-        • Green = positive month, red = negative, black diamonds = hit rate  
-        • New: In-bar split shows average first-half vs second-half contributions  
+        • Green = positive, red = negative, black diamonds = hit rate  
+        • In-bar split: first half (solid) vs second half (hatched)  
         """,
         unsafe_allow_html=True,
     )
@@ -104,7 +104,7 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
 def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     """
     Build a table of per-month returns and their 1H / 2H decomposition using trading days.
-    Returns DataFrame indexed by month period (YYYY-MM) with columns: total_ret, h1_ret, h2_ret (percent).
+    Returns DataFrame indexed by month period with columns: total_ret, h1_ret, h2_ret (percent).
     """
     if prices.empty:
         return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret"])
@@ -192,7 +192,7 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
 def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Median") -> io.BytesIO:
     """
     Plot monthly bars with error bars and hit rate.
-    Bars are internally split into average 1H and 2H contributions (scaled to bar height).
+    Bars are split into 1H (solid) and 2H (hatched). Each half is colored by its own sign.
     """
     col_map = {"Median": "median_ret", "Mean": "mean_ret"}
     ret_col = col_map[return_metric]
@@ -212,21 +212,35 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     h2_height = ret - h1_height
     x = np.arange(len(labels))
 
-    def seg_colors(values):
-        pos = np.array(["#62c38e"] * len(values))
-        neg = np.array(["#e07a73"] * len(values))
-        return np.where(values >= 0, pos, neg)
+    # Colors by sign per segment
+    def seg_face(values):
+        return np.where(values >= 0, "#62c38e", "#e07a73")
 
-    def edge_colors(values):
-        pos = np.array(["#1f7a4f"] * len(values))
-        neg = np.array(["#8b1e1a"] * len(values))
-        return np.where(values >= 0, pos, neg)
+    def seg_edge(values):
+        return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
 
-    ax1.bar(x, h1_height, width=0.8, color=seg_colors(h1_height),
-            edgecolor=edge_colors(h1_height), linewidth=1.0, zorder=2, alpha=0.95)
-    ax1.bar(x, h2_height, width=0.8, bottom=h1_height, color=seg_colors(h2_height),
-            edgecolor=edge_colors(h2_height), linewidth=1.0, zorder=2, alpha=0.95)
+    h1_face = seg_face(h1_height)
+    h1_edge = seg_edge(h1_height)
+    h2_face = seg_face(h2_height)
+    h2_edge = seg_edge(h2_height)
 
+    # First half: solid
+    bar1 = ax1.bar(
+        x, h1_height, width=0.8,
+        color=h1_face, edgecolor=h1_edge, linewidth=1.0, zorder=2, alpha=0.95
+    )
+
+    # Second half: hatched
+    bar2 = ax1.bar(
+        x, h2_height, width=0.8, bottom=h1_height,
+        color=h2_face, edgecolor=h2_edge, linewidth=1.0, zorder=2, alpha=0.95,
+        hatch="///"
+    )
+    # Ensure hatches render crisply
+    for rect in bar2:
+        rect.set_hatch("///")
+
+    # Error bars around the chosen metric
     yerr = np.abs(np.vstack([ret - min_ret, max_ret - ret]))
     ax1.errorbar(x, ret, yerr=yerr, fmt="none", ecolor="gray",
                  elinewidth=1.6, alpha=0.7, capsize=6, zorder=3)
@@ -239,6 +253,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     ax1.set_ylim(min(min_ret.min(), 0) - pad, max(max_ret.max(), 0) + pad)
     ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
 
+    # Hit rate
     ax2 = ax1.twinx()
     ax2.scatter(x, hit, marker="D", s=90, color="black", zorder=4)
     ax2.set_ylabel("Hit rate of positive returns", weight="bold")
@@ -246,9 +261,11 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
     ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
 
+    # Legend: show semantics of halves and sign coloring
     legend = [
-        Patch(facecolor="#62c38e", edgecolor="#1f7a4f", label="1st half"),
-        Patch(facecolor="#3aa369", edgecolor="#1f7a4f", label="2nd half"),
+        Patch(facecolor="#62c38e", edgecolor="#1f7a4f", label="Positive segment"),
+        Patch(facecolor="#e07a73", edgecolor="#8b1e1a", label="Negative segment"),
+        Patch(facecolor="white", edgecolor="black", label="2nd half hatch", hatch="///"),
     ]
     ax1.legend(handles=legend, loc="upper left", frameon=False)
 
@@ -344,5 +361,5 @@ with dl2:
         file_name=f"{used_symbol}_monthly_stats_{first_year}_{last_year}.csv"
     )
 
-st.caption("Note: In-bar split uses the average 1H and 2H contribution shares for that calendar month, scaled to the selected metric so segments sum exactly to the bar height. Shares are based on trading-day halves.")
+st.caption("Note: First half is solid; second half is hatched. Each half is colored green if its return is positive, red if negative. Halves are scaled to the selected monthly metric so they sum to the bar height.")
 st.caption("© 2025 AD Fund Management LP")
