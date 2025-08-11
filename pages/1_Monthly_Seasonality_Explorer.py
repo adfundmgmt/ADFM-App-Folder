@@ -306,8 +306,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
         else:
             # data rows: subtract 1 to index into our colors
             cell.set_facecolor(cell_colors[row - 1][col])
-            cell.set_edgecolor("#d0d0d0")
-
+            cell.set_edgecolor("black")
+            cell.set_linewidth(1)
     fig.suptitle(title, fontsize=17, weight="bold")
     fig.tight_layout(pad=1.5)
     buf = io.BytesIO()
