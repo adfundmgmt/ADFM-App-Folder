@@ -1,7 +1,7 @@
 # seasonality_dashboard.py
-# Monthly seasonality with accurate 1H vs 2H contributions
-# Bars = mean(1H) + mean(2H). Colors by each half's sign. 2H is hatched.
-# If "Median" is selected, a thin marker shows the monthly median total.
+# Mean-based seasonality with accurate 1H vs 2H contributions
+# Top: stacked bar chart (1H solid, 2H hatched). Bottom: per-month summary table.
+# Colors by each half's sign. Error bars = min/max of total monthly returns.
 
 import datetime as dt
 import io
@@ -16,6 +16,7 @@ import streamlit as st
 import yfinance as yf
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter, MaxNLocator
+from matplotlib import gridspec
 
 plt.style.use("default")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
@@ -26,7 +27,6 @@ except ImportError:
     pdr = None
 
 FALLBACK_MAP = {"^GSPC": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
-
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
 # -------------------------- Streamlit UI -------------------------- #
@@ -43,7 +43,7 @@ with st.sidebar:
         • Bars = mean of first-half + mean of second-half returns (accurate)  
         • First half solid, second half hatched; each half colored by its own sign  
         • Error bars show min and max monthly total returns; black diamonds = hit rate  
-        • If 'Median' is chosen, a thin marker shows the monthly median total
+        • Bottom table consolidates 1H, 2H, Total per month with color coding
         """,
         unsafe_allow_html=True,
     )
@@ -68,10 +68,7 @@ def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> Optiona
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
-    """
-    Wrapper with fallback logic. Pads the start to ensure prior month-end exists
-    so January in the first requested year is computable.
-    """
+    """Wrapper with fallback logic. Pads start to include prior month-end."""
     symbol = symbol.strip().upper()
     end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
 
@@ -146,10 +143,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
 
 
 def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.DataFrame:
-    """
-    Compute monthly seasonality stats in [start_year, end_year].
-    Bars are built from mean first-half and mean second-half, summed exactly.
-    """
+    """Compute monthly seasonality stats in [start_year, end_year]."""
     # Monthly totals
     monthly_end = prices.resample("M").last()
     monthly_ret = monthly_end.pct_change().dropna() * 100
@@ -163,98 +157,95 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
 
     stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
     grouped_total = monthly_ret.groupby(monthly_ret.index.month)
-    stats["mean_total"] = grouped_total.mean()
-    stats["median_total"] = grouped_total.median()
     stats["hit_rate"] = grouped_total.apply(lambda x: (x > 0).mean() * 100)
     stats["min_ret"] = grouped_total.min()
     stats["max_ret"] = grouped_total.max()
     stats["years_observed"] = grouped_total.apply(lambda x: x.index.year.nunique())
     stats["label"] = MONTH_LABELS
 
-    # Halves averaged by calendar month
     if halves.empty:
         stats["mean_h1"] = np.nan
         stats["mean_h2"] = np.nan
+        stats["mean_total"] = np.nan
         return stats
 
     halves = halves[(halves["year"] >= start_year) & (halves["year"] <= end_year)]
     grouped_halves = halves.groupby("month")
     stats["mean_h1"] = grouped_halves["h1_ret"].mean()
     stats["mean_h2"] = grouped_halves["h2_ret"].mean()
-
-    # Ensure total consistency from halves
-    stats["mean_total_from_halves"] = stats["mean_h1"].fillna(0) + stats["mean_h2"].fillna(0)
+    stats["mean_total"] = stats["mean_h1"].fillna(0) + stats["mean_h2"].fillna(0)
 
     return stats
 
 
-def plot_seasonality(stats: pd.DataFrame, title: str, main_metric: str = "Mean",
-                     show_labels: bool = True, label_threshold: float = 0.15) -> io.BytesIO:
+def _format_pct(x: float) -> str:
+    return f"{x:+.1f}%" if pd.notna(x) else "n/a"
+
+
+def _cell_colors(values: list[list[float]]) -> list[list[str]]:
+    """Return background colors per cell by sign of value."""
+    pos = "#d9f2e4"  # soft green
+    neg = "#f7d9d7"  # soft red
+    neu = "#f2f2f2"  # light gray
+    colors = []
+    for row in values:
+        colors.append([pos if (pd.notna(v) and v > 0) else neg if (pd.notna(v) and v < 0) else neu for v in row])
+    return colors
+
+
+def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     """
-    Plot monthly bars with error bars and hit rate.
-    Bars are the sum of mean_h1 and mean_h2. Each half is colored by its own sign.
-    If main_metric == "Median", draw a thin marker at the median total for transparency.
+    Top: stacked bars built from mean_h1 and mean_h2. Each half colored by own sign; 2H hatched.
+    Bottom: compact table with 1H, 2H, Total for each month; cells colored by sign.
     """
-    # Clean rows
-    plot_df = stats.dropna(subset=["mean_h1", "mean_h2", "hit_rate", "min_ret", "max_ret"]).copy()
+    # keep only months with data
+    plot_df = stats.dropna(subset=["mean_h1", "mean_h2", "min_ret", "max_ret", "hit_rate"]).copy()
 
     labels = plot_df["label"].tolist()
     mean_h1 = plot_df["mean_h1"].to_numpy(float)
     mean_h2 = plot_df["mean_h2"].to_numpy(float)
-    mean_total_from_halves = plot_df["mean_total_from_halves"].to_numpy(float)
-    median_total = plot_df["median_total"].to_numpy(float)
+    totals = plot_df["mean_total"].to_numpy(float)
     hit = plot_df["hit_rate"].to_numpy(float)
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
 
-    # Center for error bars and annotations
-    if main_metric == "Mean":
-        center_total = mean_total_from_halves
-    else:
-        center_total = median_total
-
-    fig, ax1 = plt.subplots(figsize=(11.8, 6.5), dpi=200)
+    # Build figure with gridspec
+    fig = plt.figure(figsize=(12.5, 7.8), dpi=200)
+    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[3.2, 1.1], hspace=0.25)
+    ax1 = fig.add_subplot(gs[0])
 
     x = np.arange(len(labels))
-    # first half heights and second half heights (stacked)
     h1 = mean_h1
     h2 = mean_h2
-    totals = mean_total_from_halves
 
-    # segment colors by sign
     def seg_face(values):
         return np.where(values >= 0, "#62c38e", "#e07a73")
 
     def seg_edge(values):
         return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
 
-    # Draw first half (solid)
+    # First half (solid)
     ax1.bar(
         x, h1, width=0.8,
         color=seg_face(h1), edgecolor=seg_edge(h1), linewidth=1.0, zorder=2, alpha=0.95
     )
-
-    # Draw second half (hatched), stacked on top of first half
+    # Second half (hatched)
     bars2 = ax1.bar(
         x, h2, width=0.8, bottom=h1,
         color=seg_face(h2), edgecolor=seg_edge(h2), linewidth=1.0, zorder=2, alpha=0.95,
         hatch="///"
     )
-    for rect in bars2:
-        rect.set_hatch("///")
+    for r in bars2:
+        r.set_hatch("///")
 
-    # Error bars: min/max relative to selected center_total
-    yerr = np.abs(np.vstack([center_total - min_ret, max_ret - center_total]))
-    ax1.errorbar(x, center_total, yerr=yerr, fmt="none", ecolor="gray",
+    # Error bars centered on mean totals
+    yerr = np.abs(np.vstack([totals - min_ret, max_ret - totals]))
+    ax1.errorbar(x, totals, yerr=yerr, fmt="none", ecolor="gray",
                  elinewidth=1.6, alpha=0.7, capsize=6, zorder=3)
 
-    # If main metric is Median, draw a thin marker at the median total for each bar
-    if main_metric == "Median":
-        ax1.hlines(median_total, x - 0.35, x + 0.35, colors="black", linestyles="-", linewidth=1.0, zorder=4)
-
-    # Axes cosmetics
+    # Cosmetics
     ax1.set_xticks(x, labels)
-    ax1.set_ylabel(f"{main_metric} return (%)", weight="bold")
+    ax1.set_ylabel("Mean return (%)", weight="bold")
     ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
     ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
     pad = 0.1 * max(abs(min_ret.min()), abs(max_ret.max()))
@@ -263,29 +254,13 @@ def plot_seasonality(stats: pd.DataFrame, title: str, main_metric: str = "Mean",
     ax1.set_ylim(ymin, ymax)
     ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
 
-    # Hit rate on twin axis
+    # Hit rate
     ax2 = ax1.twinx()
     ax2.scatter(x, hit, marker="D", s=90, color="black", zorder=4)
     ax2.set_ylabel("Hit rate of positive returns", weight="bold")
     ax2.set_ylim(0, 100)
     ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
     ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
-
-    # Numeric labels for clarity
-    if show_labels:
-        for xi, a, b, t in zip(x, h1, h2, totals):
-            # 1H label at the top of the first segment
-            if abs(a) >= label_threshold:
-                ax1.text(xi, a - (0.02 if a < 0 else 0) , f"1H {a:+.1f}%", ha="center",
-                         va="bottom" if a >= 0 else "top", fontsize=8)
-            # 2H label at the top of the second segment
-            top_of_2h = a + b
-            if abs(b) >= label_threshold:
-                ax1.text(xi, top_of_2h - (0.02 if top_of_2h < 0 else 0), f"2H {b:+.1f}%",
-                         ha="center", va="bottom" if top_of_2h >= 0 else "top", fontsize=8)
-            # Total label slightly above the center metric marker
-            ax1.text(xi, t, f"Tot {t:+.1f}%", ha="center",
-                     va="bottom" if t >= 0 else "top", fontsize=8, color="dimgray")
 
     # Legend
     legend = [
@@ -295,8 +270,46 @@ def plot_seasonality(stats: pd.DataFrame, title: str, main_metric: str = "Mean",
     ]
     ax1.legend(handles=legend, loc="upper left", frameon=False)
 
+    # Bottom table
+    ax_tbl = fig.add_subplot(gs[1])
+    ax_tbl.axis("off")
+
+    # Prepare cell texts and colors
+    row_labels = ["1H %", "2H %", "Total %"]
+    row1 = [float(v) if pd.notna(v) else np.nan for v in mean_h1]
+    row2 = [float(v) if pd.notna(v) else np.nan for v in mean_h2]
+    row3 = [float(v) if pd.notna(v) else np.nan for v in totals]
+    cell_vals = [row1, row2, row3]
+    cell_txt = [[_format_pct(v) for v in row] for row in cell_vals]
+    cell_colors = _cell_colors(cell_vals)
+
+    table = ax_tbl.table(
+        cellText=cell_txt,
+        rowLabels=row_labels,
+        colLabels=labels,
+        loc="center",
+        cellLoc="center",
+        rowLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+
+    # style cells
+    for (row, col), cell in table.get_celld().items():
+        # header row is row == 0; our data starts at row 1
+        if row == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#f0f0f0")
+        elif col == -1:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#f0f0f0")
+        else:
+            # data rows: subtract 1 to index into our colors
+            cell.set_facecolor(cell_colors[row - 1][col])
+            cell.set_edgecolor("#d0d0d0")
+
     fig.suptitle(title, fontsize=17, weight="bold")
-    fig.tight_layout(pad=2)
+    fig.tight_layout(pad=1.5)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
     plt.close(fig)
@@ -320,9 +333,6 @@ with col3:
 
 start_date = f"{int(start_year)}-01-01"
 end_date = f"{int(end_year)}-12-31"
-
-metric = st.radio("Select main metric for center and label:", ["Mean", "Median"], horizontal=True)
-show_labels = st.checkbox("Show numeric 1H, 2H, Total labels", value=True)
 
 with st.spinner("Fetching and analyzing data..."):
     used_symbol = symbol
@@ -350,10 +360,10 @@ if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
     st.error("Insufficient data in the selected window to compute statistics.")
     st.stop()
 
-# Best / worst by mean totals from halves
-stats_valid = stats.dropna(subset=["mean_total_from_halves"])
-best_idx = stats_valid["mean_total_from_halves"].idxmax()
-worst_idx = stats_valid["mean_total_from_halves"].idxmin()
+# Best / worst by mean totals
+stats_valid = stats.dropna(subset=["mean_total"])
+best_idx = stats_valid["mean_total"].idxmax()
+worst_idx = stats_valid["mean_total"].idxmin()
 best = stats.loc[best_idx]
 worst = stats.loc[worst_idx]
 
@@ -361,22 +371,17 @@ st.markdown(
     f"""
     <div style='text-align:center'>
         <span style='font-size:1.18em; font-weight:600; color:#218739'>
-            ⬆️ Best month (by mean): {best['label']} ({best['mean_total_from_halves']:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
+            ⬆️ Best month (by mean): {best['label']} ({best['mean_total']:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
         </span>&nbsp;&nbsp;&nbsp;
         <span style='font-size:1.18em; font-weight:600; color:#c93535'>
-            ⬇️ Worst month (by mean): {worst['label']} ({worst['mean_total_from_halves']:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
+            ⬇️ Worst month (by mean): {worst['label']} ({worst['mean_total']:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
         </span>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-buf = plot_seasonality(
-    stats,
-    f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})",
-    main_metric=metric,
-    show_labels=show_labels,
-)
+buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})")
 st.image(buf, use_container_width=True)
 
 dl1, dl2 = st.columns(2)
@@ -388,12 +393,12 @@ with dl1:
     )
 with dl2:
     csv_df = stats[[
-        "label","mean_h1","mean_h2","mean_total_from_halves",
-        "median_total","hit_rate","min_ret","max_ret","years_observed"
+        "label","mean_h1","mean_h2","mean_total",
+        "hit_rate","min_ret","max_ret","years_observed"
     ]].copy()
     csv_df.columns = [
         "Month","Mean 1H %","Mean 2H %","Mean Total %",
-        "Median Total %","Hit-Rate %","Min %","Max %","Years"
+        "Hit-Rate %","Min %","Max %","Years"
     ]
     st.download_button(
         "Download stats (CSV)",
@@ -401,5 +406,5 @@ with dl2:
         file_name=f"{used_symbol}_monthly_stats_{int(start_year)}_{int(end_year)}.csv"
     )
 
-st.caption("Bars equal mean(1H) + mean(2H). First half is solid; second half is hatched. Each half is green if positive, red if negative. Error bars use min and max of total monthly returns. If 'Median' is selected, the thin marker shows the monthly median total.")
+st.caption("Bars equal mean(1H) + mean(2H). First half solid; second half hatched. Each half is green if positive, red if negative. Error bars use min and max of total monthly returns. Table cells are color coded by sign.")
 st.caption("© 2025 AD Fund Management LP")
