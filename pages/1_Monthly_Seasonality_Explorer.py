@@ -1,6 +1,7 @@
 # seasonality_dashboard.py
-# Streamlit app: robust downloads, correct Jan counts, clean CSV
-# Adds intra-month split (1H vs 2H) with color by half sign and hatch on 2H
+# Monthly seasonality with accurate 1H vs 2H contributions
+# Bars = mean(1H) + mean(2H). Colors by each half's sign. 2H is hatched.
+# If "Median" is selected, a thin marker shows the monthly median total.
 
 import datetime as dt
 import io
@@ -39,9 +40,10 @@ with st.sidebar:
         Explore seasonal patterns for any stock, index, or commodity.
 
         • Yahoo Finance primary source, FRED fallback for deep index history  
-        • Median or mean monthly return, hit rate, min and max, error bars  
-        • Green = positive, red = negative, black diamonds = hit rate  
-        • In-bar split: first half (solid) vs second half (hatched)  
+        • Bars = mean of first-half + mean of second-half returns (accurate)  
+        • First half solid, second half hatched; each half colored by its own sign  
+        • Error bars show min and max monthly total returns; black diamonds = hit rate  
+        • If 'Median' is chosen, a thin marker shows the monthly median total
         """,
         unsafe_allow_html=True,
     )
@@ -107,7 +109,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     Returns DataFrame indexed by month period with columns: total_ret, h1_ret, h2_ret (percent).
     """
     if prices.empty:
-        return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret"])
+        return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret", "year", "month"])
 
     out_rows = []
     months = pd.period_range(prices.index.min().to_period("M"),
@@ -146,7 +148,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
 def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.DataFrame:
     """
     Compute monthly seasonality stats in [start_year, end_year].
-    Also compute average first-half and second-half contribution shares per month.
+    Bars are built from mean first-half and mean second-half, summed exactly.
     """
     # Monthly totals
     monthly_end = prices.resample("M").last()
@@ -159,101 +161,109 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
     sel = (monthly_ret.index.year >= start_year) & (monthly_ret.index.year <= end_year)
     monthly_ret = monthly_ret[sel]
 
-    grouped_total = monthly_ret.groupby(monthly_ret.index.month)
     stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
-    stats["median_ret"] = grouped_total.median()
-    stats["mean_ret"] = grouped_total.mean()
+    grouped_total = monthly_ret.groupby(monthly_ret.index.month)
+    stats["mean_total"] = grouped_total.mean()
+    stats["median_total"] = grouped_total.median()
     stats["hit_rate"] = grouped_total.apply(lambda x: (x > 0).mean() * 100)
     stats["min_ret"] = grouped_total.min()
     stats["max_ret"] = grouped_total.max()
     stats["years_observed"] = grouped_total.apply(lambda x: x.index.year.nunique())
     stats["label"] = MONTH_LABELS
 
+    # Halves averaged by calendar month
     if halves.empty:
-        stats["h1_share"] = np.nan
-        stats["h2_share"] = np.nan
+        stats["mean_h1"] = np.nan
+        stats["mean_h2"] = np.nan
         return stats
 
     halves = halves[(halves["year"] >= start_year) & (halves["year"] <= end_year)]
     grouped_halves = halves.groupby("month")
-    mean_h1 = grouped_halves["h1_ret"].mean()
-    mean_h2 = grouped_halves["h2_ret"].mean()
-    mean_tot = mean_h1.add(mean_h2, fill_value=0)
+    stats["mean_h1"] = grouped_halves["h1_ret"].mean()
+    stats["mean_h2"] = grouped_halves["h2_ret"].mean()
 
-    h1_share = pd.Series(0.5, index=stats.index)
-    valid = (mean_tot.abs() > 1e-9) & mean_tot.index.to_series().isin(stats.index)
-    h1_share.loc[valid] = (mean_h1.loc[valid] / mean_tot.loc[valid]).clip(-2, 2)
-    stats["h1_share"] = h1_share
-    stats["h2_share"] = 1.0 - h1_share
+    # Ensure total consistency from halves
+    stats["mean_total_from_halves"] = stats["mean_h1"].fillna(0) + stats["mean_h2"].fillna(0)
 
     return stats
 
 
-def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Median") -> io.BytesIO:
+def plot_seasonality(stats: pd.DataFrame, title: str, main_metric: str = "Mean",
+                     show_labels: bool = True, label_threshold: float = 0.15) -> io.BytesIO:
     """
     Plot monthly bars with error bars and hit rate.
-    Bars are split into 1H (solid) and 2H (hatched). Each half is colored by its own sign.
+    Bars are the sum of mean_h1 and mean_h2. Each half is colored by its own sign.
+    If main_metric == "Median", draw a thin marker at the median total for transparency.
     """
-    col_map = {"Median": "median_ret", "Mean": "mean_ret"}
-    ret_col = col_map[return_metric]
+    # Clean rows
+    plot_df = stats.dropna(subset=["mean_h1", "mean_h2", "hit_rate", "min_ret", "max_ret"]).copy()
 
-    plot_df = stats.dropna(subset=[ret_col, "hit_rate", "min_ret", "max_ret"]).copy()
     labels = plot_df["label"].tolist()
-    ret = plot_df[ret_col].to_numpy(float)
+    mean_h1 = plot_df["mean_h1"].to_numpy(float)
+    mean_h2 = plot_df["mean_h2"].to_numpy(float)
+    mean_total_from_halves = plot_df["mean_total_from_halves"].to_numpy(float)
+    median_total = plot_df["median_total"].to_numpy(float)
     hit = plot_df["hit_rate"].to_numpy(float)
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
-    h1_share = plot_df["h1_share"].fillna(0.5).to_numpy(float)
-    h2_share = plot_df["h2_share"].fillna(0.5).to_numpy(float)
 
-    fig, ax1 = plt.subplots(figsize=(11.5, 6.3), dpi=200)
+    # Center for error bars and annotations
+    if main_metric == "Mean":
+        center_total = mean_total_from_halves
+    else:
+        center_total = median_total
 
-    h1_height = ret * h1_share
-    h2_height = ret - h1_height
+    fig, ax1 = plt.subplots(figsize=(11.8, 6.5), dpi=200)
+
     x = np.arange(len(labels))
+    # first half heights and second half heights (stacked)
+    h1 = mean_h1
+    h2 = mean_h2
+    totals = mean_total_from_halves
 
-    # Colors by sign per segment
+    # segment colors by sign
     def seg_face(values):
         return np.where(values >= 0, "#62c38e", "#e07a73")
 
     def seg_edge(values):
         return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
 
-    h1_face = seg_face(h1_height)
-    h1_edge = seg_edge(h1_height)
-    h2_face = seg_face(h2_height)
-    h2_edge = seg_edge(h2_height)
-
-    # First half: solid
-    bar1 = ax1.bar(
-        x, h1_height, width=0.8,
-        color=h1_face, edgecolor=h1_edge, linewidth=1.0, zorder=2, alpha=0.95
+    # Draw first half (solid)
+    ax1.bar(
+        x, h1, width=0.8,
+        color=seg_face(h1), edgecolor=seg_edge(h1), linewidth=1.0, zorder=2, alpha=0.95
     )
 
-    # Second half: hatched
-    bar2 = ax1.bar(
-        x, h2_height, width=0.8, bottom=h1_height,
-        color=h2_face, edgecolor=h2_edge, linewidth=1.0, zorder=2, alpha=0.95,
+    # Draw second half (hatched), stacked on top of first half
+    bars2 = ax1.bar(
+        x, h2, width=0.8, bottom=h1,
+        color=seg_face(h2), edgecolor=seg_edge(h2), linewidth=1.0, zorder=2, alpha=0.95,
         hatch="///"
     )
-    # Ensure hatches render crisply
-    for rect in bar2:
+    for rect in bars2:
         rect.set_hatch("///")
 
-    # Error bars around the chosen metric
-    yerr = np.abs(np.vstack([ret - min_ret, max_ret - ret]))
-    ax1.errorbar(x, ret, yerr=yerr, fmt="none", ecolor="gray",
+    # Error bars: min/max relative to selected center_total
+    yerr = np.abs(np.vstack([center_total - min_ret, max_ret - center_total]))
+    ax1.errorbar(x, center_total, yerr=yerr, fmt="none", ecolor="gray",
                  elinewidth=1.6, alpha=0.7, capsize=6, zorder=3)
 
+    # If main metric is Median, draw a thin marker at the median total for each bar
+    if main_metric == "Median":
+        ax1.hlines(median_total, x - 0.35, x + 0.35, colors="black", linestyles="-", linewidth=1.0, zorder=4)
+
+    # Axes cosmetics
     ax1.set_xticks(x, labels)
-    ax1.set_ylabel(f"{return_metric} return (%)", weight="bold")
+    ax1.set_ylabel(f"{main_metric} return (%)", weight="bold")
     ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
     ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
     pad = 0.1 * max(abs(min_ret.min()), abs(max_ret.max()))
-    ax1.set_ylim(min(min_ret.min(), 0) - pad, max(max_ret.max(), 0) + pad)
+    ymin = min(min_ret.min(), totals.min(), 0) - pad
+    ymax = max(max_ret.max(), totals.max(), 0) + pad
+    ax1.set_ylim(ymin, ymax)
     ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
 
-    # Hit rate
+    # Hit rate on twin axis
     ax2 = ax1.twinx()
     ax2.scatter(x, hit, marker="D", s=90, color="black", zorder=4)
     ax2.set_ylabel("Hit rate of positive returns", weight="bold")
@@ -261,11 +271,27 @@ def plot_seasonality(stats: pd.DataFrame, title: str, return_metric: str = "Medi
     ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
     ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
 
-    # Legend: show semantics of halves and sign coloring
+    # Numeric labels for clarity
+    if show_labels:
+        for xi, a, b, t in zip(x, h1, h2, totals):
+            # 1H label at the top of the first segment
+            if abs(a) >= label_threshold:
+                ax1.text(xi, a - (0.02 if a < 0 else 0) , f"1H {a:+.1f}%", ha="center",
+                         va="bottom" if a >= 0 else "top", fontsize=8)
+            # 2H label at the top of the second segment
+            top_of_2h = a + b
+            if abs(b) >= label_threshold:
+                ax1.text(xi, top_of_2h - (0.02 if top_of_2h < 0 else 0), f"2H {b:+.1f}%",
+                         ha="center", va="bottom" if top_of_2h >= 0 else "top", fontsize=8)
+            # Total label slightly above the center metric marker
+            ax1.text(xi, t, f"Tot {t:+.1f}%", ha="center",
+                     va="bottom" if t >= 0 else "top", fontsize=8, color="dimgray")
+
+    # Legend
     legend = [
         Patch(facecolor="#62c38e", edgecolor="#1f7a4f", label="Positive segment"),
         Patch(facecolor="#e07a73", edgecolor="#8b1e1a", label="Negative segment"),
-        Patch(facecolor="white", edgecolor="black", label="2nd half hatch", hatch="///"),
+        Patch(facecolor="white", edgecolor="black", hatch="///", label="Second half (hatched)"),
     ]
     ax1.legend(handles=legend, loc="upper left", frameon=False)
 
@@ -295,7 +321,8 @@ with col3:
 start_date = f"{int(start_year)}-01-01"
 end_date = f"{int(end_year)}-12-31"
 
-metric = st.radio("Select return metric for chart:", ["Median", "Mean"], horizontal=True)
+metric = st.radio("Select main metric for center and label:", ["Mean", "Median"], horizontal=True)
+show_labels = st.checkbox("Show numeric 1H, 2H, Total labels", value=True)
 
 with st.spinner("Fetching and analyzing data..."):
     used_symbol = symbol
@@ -317,32 +344,39 @@ if used_symbol != symbol:
     st.info("SPY data unavailable. Using S&P 500 index (^GSPC) fallback for seasonality.")
 
 stats = seasonal_stats(prices, int(start_year), int(end_year))
-first_year, last_year = int(start_year), int(end_year)
-ret_col = {"Median": "median_ret", "Mean": "mean_ret"}[metric]
 
-valid_rows = stats.dropna(subset=[ret_col])
-if valid_rows.empty:
+# Guard
+if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
     st.error("Insufficient data in the selected window to compute statistics.")
     st.stop()
 
-best = stats.loc[valid_rows[ret_col].idxmax()]
-worst = stats.loc[valid_rows[ret_col].idxmin()]
+# Best / worst by mean totals from halves
+stats_valid = stats.dropna(subset=["mean_total_from_halves"])
+best_idx = stats_valid["mean_total_from_halves"].idxmax()
+worst_idx = stats_valid["mean_total_from_halves"].idxmin()
+best = stats.loc[best_idx]
+worst = stats.loc[worst_idx]
 
 st.markdown(
     f"""
     <div style='text-align:center'>
         <span style='font-size:1.18em; font-weight:600; color:#218739'>
-            ⬆️ Best month: {best['label']} ({best[ret_col]:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
+            ⬆️ Best month (by mean): {best['label']} ({best['mean_total_from_halves']:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
         </span>&nbsp;&nbsp;&nbsp;
         <span style='font-size:1.18em; font-weight:600; color:#c93535'>
-            ⬇️ Worst month: {worst['label']} ({worst[ret_col]:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
+            ⬇️ Worst month (by mean): {worst['label']} ({worst['mean_total_from_halves']:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
         </span>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({first_year}-{last_year})", metric)
+buf = plot_seasonality(
+    stats,
+    f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})",
+    main_metric=metric,
+    show_labels=show_labels,
+)
 st.image(buf, use_container_width=True)
 
 dl1, dl2 = st.columns(2)
@@ -350,16 +384,22 @@ with dl1:
     st.download_button(
         "Download chart as PNG",
         buf.getvalue(),
-        file_name=f"{used_symbol}_seasonality_{first_year}_{last_year}.png"
+        file_name=f"{used_symbol}_seasonality_{int(start_year)}_{int(end_year)}.png"
     )
 with dl2:
-    csv_df = stats[["label","median_ret","mean_ret","hit_rate","min_ret","max_ret","years_observed","h1_share","h2_share"]].copy()
-    csv_df.columns = ["Month","Median %","Mean %","Hit-Rate %","Min %","Max %","Years","Avg 1H Share","Avg 2H Share"]
+    csv_df = stats[[
+        "label","mean_h1","mean_h2","mean_total_from_halves",
+        "median_total","hit_rate","min_ret","max_ret","years_observed"
+    ]].copy()
+    csv_df.columns = [
+        "Month","Mean 1H %","Mean 2H %","Mean Total %",
+        "Median Total %","Hit-Rate %","Min %","Max %","Years"
+    ]
     st.download_button(
         "Download stats (CSV)",
         csv_df.to_csv(index=False),
-        file_name=f"{used_symbol}_monthly_stats_{first_year}_{last_year}.csv"
+        file_name=f"{used_symbol}_monthly_stats_{int(start_year)}_{int(end_year)}.csv"
     )
 
-st.caption("Note: First half is solid; second half is hatched. Each half is colored green if its return is positive, red if negative. Halves are scaled to the selected monthly metric so they sum to the bar height.")
+st.caption("Bars equal mean(1H) + mean(2H). First half is solid; second half is hatched. Each half is green if positive, red if negative. Error bars use min and max of total monthly returns. If 'Median' is selected, the thin marker shows the monthly median total.")
 st.caption("© 2025 AD Fund Management LP")
