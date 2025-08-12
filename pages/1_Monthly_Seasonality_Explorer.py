@@ -264,8 +264,6 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
 
     # Legend
     legend = [
-        Patch(facecolor="#62c38e", edgecolor="#1f7a4f", label="Positive segment"),
-        Patch(facecolor="#e07a73", edgecolor="#8b1e1a", label="Negative segment"),
         Patch(facecolor="white", edgecolor="black", hatch="///", label="Second half (hatched)"),
     ]
     ax1.legend(handles=legend, loc="upper left", frameon=False)
