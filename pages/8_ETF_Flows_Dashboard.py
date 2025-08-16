@@ -8,6 +8,7 @@ from datetime import datetime, date
 import pytz
 import time
 from typing import Dict, Tuple, List
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 st.set_page_config(page_title="ETF Net Flows", layout="wide")
 
@@ -28,8 +29,13 @@ TZ = pytz.timezone("US/Eastern")
 now_et = datetime.now(TZ)
 
 def as_naive_ts(dt: datetime) -> pd.Timestamp:
-    """Return a tz-naive pandas Timestamp from a tz-aware datetime."""
-    return pd.Timestamp(dt).tz_convert(None)
+    """Return tz-naive pandas Timestamp from a tz-aware or naive datetime safely."""
+    ts = pd.Timestamp(dt)
+    if ts.tzinfo is not None:
+        # convert to UTC then drop tz to avoid pandas tz_convert(None) issues
+        return ts.tz_convert("UTC").tz_localize(None)
+    # if already naive, ensure it is a Timestamp
+    return ts.tz_localize(None) if ts.tzinfo is None else ts.tz_localize(None)
 
 def ytd_days() -> int:
     start_ytd = TZ.localize(datetime(now_et.year, 1, 1))
@@ -90,7 +96,6 @@ etf_info = {
     "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
     "ETH": ("Spot ETH", "Grayscale Ethereum Mini Trust ETF"),
 }
-
 etf_tickers: List[str] = list(etf_info.keys())
 
 # --------------------------- HELPERS ---------------------------
@@ -122,12 +127,20 @@ def retry(n=3, delay=0.6):
     return deco
 
 def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Open","High","Low","Close","Volume"])
     need = ["Open", "High", "Low", "Close", "Volume"]
     for c in need:
         if c not in df.columns:
             df[c] = np.nan
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
+    # make index tz-naive
+    idx = pd.to_datetime(df.index, errors="coerce")
+    try:
+        idx = idx.tz_localize(None)
+    except Exception:
+        pass
+    df.index = idx
     return df.dropna(subset=["Close"])
 
 # --------------------------- DATA ---------------------------
@@ -148,18 +161,17 @@ def fetch_prices(tickers: Tuple[str, ...], start_date: date) -> Dict[str, pd.Dat
         threads=True,
         progress=False,
     )
-    out = {}
+    out: Dict[str, pd.DataFrame] = {}
     for tk in tickers:
         try:
             df = data[tk].copy() if isinstance(data.columns, pd.MultiIndex) else data.copy()
         except Exception:
             df = pd.DataFrame()
-        out[tk] = _normalize_ohlcv(df) if df is not None else pd.DataFrame()
+        out[tk] = _normalize_ohlcv(df)
     return out
 
 @retry()
-@st.cache_data(show_spinner=False, ttl=1800)
-def fetch_shares_series(ticker: str, start_date: date) -> pd.Series:
+def _fetch_one_shares_series(ticker: str, start_date: date) -> pd.Series:
     t = yf.Ticker(ticker)
     try:
         s = t.get_shares_full(start=start_date)
@@ -173,12 +185,33 @@ def fetch_shares_series(ticker: str, start_date: date) -> pd.Series:
         else:
             return pd.Series(dtype="float64")
     s = pd.to_numeric(s, errors="coerce")
-    s.index = pd.to_datetime(s.index, errors="coerce").tz_localize(None)
+    idx = pd.to_datetime(s.index, errors="coerce")
+    try:
+        idx = idx.tz_localize(None)
+    except Exception:
+        pass
+    s.index = idx
     s = s.dropna()
     return s
 
+@st.cache_data(show_spinner=False, ttl=1800)
+def fetch_shares_series_parallel(tickers: Tuple[str, ...], start_date: date, timeout_sec: float = 4.0) -> Dict[str, pd.Series]:
+    """Fetch historical shares in parallel with a hard per-ticker timeout. On timeout, return empty Series."""
+    results: Dict[str, pd.Series] = {tk: pd.Series(dtype="float64") for tk in tickers}
+    with ThreadPoolExecutor(max_workers=min(12, len(tickers))) as ex:
+        fut_map = {ex.submit(_fetch_one_shares_series, tk, start_date): tk for tk in tickers}
+        for fut in fut_map:
+            tk = fut_map[fut]
+            try:
+                results[tk] = fut.result(timeout=timeout_sec)
+            except FuturesTimeoutError:
+                results[tk] = pd.Series(dtype="float64")  # fallback handled later
+            except Exception:
+                results[tk] = pd.Series(dtype="float64")
+    return results
+
 def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
-    if close.empty or shares.empty:
+    if close is None or shares is None or close.empty or shares.empty:
         return pd.Series(dtype="float64")
     idx = pd.DatetimeIndex(close.index)
     sh_daily = shares.sort_index().resample("B").ffill().reindex(idx).ffill()
@@ -187,7 +220,7 @@ def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
     return flows
 
 def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
-    if df.empty:
+    if df is None or df.empty:
         return np.nan
     hl = (df["High"] - df["Low"]).replace(0, np.nan)
     mfm = ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / hl
@@ -202,23 +235,29 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
     start_date = _calc_start_date(period_days)
     price_map = fetch_prices(tuple(tickers), start_date)
 
+    # fetch all shares in parallel with timeout
+    shares_map = fetch_shares_series_parallel(tuple(tickers), start_date, timeout_sec=4.0)
+
     rows = []
+    cutoff = as_naive_ts(now_et) - pd.Timedelta(days=period_days)
+
     for tk in tickers:
         px = price_map.get(tk, pd.DataFrame())
         if not px.empty:
-            cutoff = as_naive_ts(now_et) - pd.Timedelta(days=period_days)
             px = px[px.index >= cutoff]
 
         flow_usd_sum = np.nan
         method = "flows"
+
         if not px.empty:
-            shares = fetch_shares_series(tk, start_date)
+            shares = shares_map.get(tk, pd.Series(dtype="float64"))
             daily_flows = compute_daily_flows(px["Close"], shares) if not shares.empty else pd.Series(dtype="float64")
             if not daily_flows.empty and daily_flows.abs().sum() > 0:
                 flow_usd_sum = float(daily_flows.sum())
             else:
                 method = "cmf_proxy"
                 flow_usd_sum = compute_cmf_turnover_proxy(px)
+
         cat, desc = etf_info.get(tk, ("", ""))
         rows.append({
             "Ticker": tk,
@@ -227,6 +266,7 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
             "Method": method,
             "Description": desc
         })
+
     df = pd.DataFrame(rows)
     df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
     return df
