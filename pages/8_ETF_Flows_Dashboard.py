@@ -1,4 +1,4 @@
-import streamlit as st 
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -16,26 +16,24 @@ st.set_page_config(page_title="ETF Net Flows", layout="wide")
 st.sidebar.title("ETF Net Flows")
 st.sidebar.markdown("""
 **Methodology priority**
-1) True flows: ΔShares Outstanding × NAV (uses Close as proxy for NAV).
-2) If historical shares are unavailable: show CMF turnover proxy as a fallback and label it.
+1) True flows = ΔShares Outstanding × Close (Close as NAV proxy).
+2) If historical shares are unavailable: CMF turnover proxy is used and tagged [proxy].
 
 Notes:
 - yfinance historical shares (`get_shares_full`) is not available for every ETF.
 - Close is used as a proxy for daily NAV.
 """)
 
-# Timezone-aware today for YTD and windows
+# Timezone-aware now
 TZ = pytz.timezone("US/Eastern")
 now_et = datetime.now(TZ)
 
 def as_naive_ts(dt: datetime) -> pd.Timestamp:
-    """Return tz-naive pandas Timestamp from a tz-aware or naive datetime safely."""
     ts = pd.Timestamp(dt)
     if ts.tzinfo is not None:
-        # convert to UTC then drop tz to avoid pandas tz_convert(None) issues
         return ts.tz_convert("UTC").tz_localize(None)
-    # if already naive, ensure it is a Timestamp
-    return ts.tz_localize(None) if ts.tzinfo is None else ts.tz_localize(None)
+    # ensure naive even if already naive
+    return pd.Timestamp(ts.replace(tzinfo=None))
 
 def ytd_days() -> int:
     start_ytd = TZ.localize(datetime(now_et.year, 1, 1))
@@ -66,7 +64,7 @@ etf_info = {
     "EFA": ("Developed ex-US", "Developed international equities"),
     "VGK": ("Europe Large-Cap", "Developed Europe equities"),
     "EWJ": ("Japan", "Japanese equities"),
-    "EEM": ("Emerging Markets", "EM equities (MSCI)"),
+    "EEM": ("Emerging Markets", "EM equities"),
     "FXI": ("China Large-Cap", "China mega-cap equities"),
     "INDA": ("India", "Indian equities"),
     "EWZ": ("Brazil", "Brazilian equities"),
@@ -91,10 +89,11 @@ etf_info = {
     "HYG": ("US High Yield", "High-yield corporate bonds"),
     "EMB": ("Emerging Market Bonds", "USD-denominated EM debt"),
 
-    # Alternatives / Crypto
+    # Crypto ETFs
     "BITO": ("BTC Futures", "Bitcoin futures ETF"),
     "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
-    "ETHA": ("Spot ETH", "BlackRock Spot Ethereum ETF"),
+    # If you track a spot ETH ETF, add its real ticker here, for example:
+    # "ETHA": ("Spot ETH", "iShares Ethereum ETF"),
 }
 etf_tickers: List[str] = list(etf_info.keys())
 
@@ -112,7 +111,7 @@ def fmt_compact_cur(x) -> str:
 def axis_fmt(x, _pos=None) -> str:
     return fmt_compact_cur(x)
 
-def retry(n=3, delay=0.6):
+def retry(n=2, delay=0.5):
     def deco(fn):
         def wrap(*args, **kwargs):
             last = None
@@ -122,7 +121,8 @@ def retry(n=3, delay=0.6):
                 except Exception as e:
                     last = e
                     time.sleep(delay * (i + 1))
-            if last: raise last
+            if last:
+                raise last
         return wrap
     return deco
 
@@ -134,7 +134,6 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = np.nan
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    # make index tz-naive
     idx = pd.to_datetime(df.index, errors="coerce")
     try:
         idx = idx.tz_localize(None)
@@ -194,18 +193,17 @@ def _fetch_one_shares_series(ticker: str, start_date: date) -> pd.Series:
     s = s.dropna()
     return s
 
-@st.cache_data(show_spinner=False, ttl=1800)
-def fetch_shares_series_parallel(tickers: Tuple[str, ...], start_date: date, timeout_sec: float = 4.0) -> Dict[str, pd.Series]:
-    """Fetch historical shares in parallel with a hard per-ticker timeout. On timeout, return empty Series."""
+@st.cache_data(show_spinner=False, ttl=900)
+def fetch_shares_series_parallel(tickers: Tuple[str, ...], start_date: date, timeout_sec: float = 6.0) -> Dict[str, pd.Series]:
     results: Dict[str, pd.Series] = {tk: pd.Series(dtype="float64") for tk in tickers}
-    with ThreadPoolExecutor(max_workers=min(12, len(tickers))) as ex:
+    with ThreadPoolExecutor(max_workers=min(8, len(tickers))) as ex:
         fut_map = {ex.submit(_fetch_one_shares_series, tk, start_date): tk for tk in tickers}
         for fut in fut_map:
             tk = fut_map[fut]
             try:
                 results[tk] = fut.result(timeout=timeout_sec)
             except FuturesTimeoutError:
-                results[tk] = pd.Series(dtype="float64")  # fallback handled later
+                results[tk] = pd.Series(dtype="float64")
             except Exception:
                 results[tk] = pd.Series(dtype="float64")
     return results
@@ -213,10 +211,15 @@ def fetch_shares_series_parallel(tickers: Tuple[str, ...], start_date: date, tim
 def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
     if close is None or shares is None or close.empty or shares.empty:
         return pd.Series(dtype="float64")
+    close = pd.to_numeric(close, errors="coerce")
+    close.index = pd.to_datetime(close.index).tz_localize(None)
+    sh = pd.to_numeric(shares, errors="coerce").dropna()
+    sh.index = pd.to_datetime(sh.index).tz_localize(None)
+    # Align to business day index of prices
     idx = pd.DatetimeIndex(close.index)
-    sh_daily = shares.sort_index().resample("B").ffill().reindex(idx).ffill()
+    sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
     delta_shares = sh_daily.diff().fillna(0.0)
-    flows = delta_shares * close.astype(float)
+    flows = (delta_shares * close).astype(float)
     return flows
 
 def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
@@ -235,8 +238,8 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
     start_date = _calc_start_date(period_days)
     price_map = fetch_prices(tuple(tickers), start_date)
 
-    # fetch all shares in parallel with timeout
-    shares_map = fetch_shares_series_parallel(tuple(tickers), start_date, timeout_sec=4.0)
+    # Try shares, but do not block UI if Yahoo does not have them
+    shares_map = fetch_shares_series_parallel(tuple(tickers), start_date, timeout_sec=6.0)
 
     rows = []
     cutoff = as_naive_ts(now_et) - pd.Timedelta(days=period_days)
@@ -252,8 +255,9 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
         if not px.empty:
             shares = shares_map.get(tk, pd.Series(dtype="float64"))
             daily_flows = compute_daily_flows(px["Close"], shares) if not shares.empty else pd.Series(dtype="float64")
-            if not daily_flows.empty and daily_flows.abs().sum() > 0:
+            if not daily_flows.empty and daily_flows.replace(0.0, np.nan).dropna().size > 0:
                 flow_usd_sum = float(daily_flows.sum())
+                method = "flows"
             else:
                 method = "cmf_proxy"
                 flow_usd_sum = compute_cmf_turnover_proxy(px)
@@ -268,29 +272,36 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
         })
 
     df = pd.DataFrame(rows)
-    df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
+    # Tag method in label so you see which bars are proxies
+    def label_for(t):
+        cat = etf_info.get(t, ("", ""))[0]
+        return f"{cat} ({t})"
+    df["Label"] = [label_for(t) for t in df["Ticker"]]
+    df["Tag"] = df["Method"].map({"flows": "", "cmf_proxy": " [proxy]"})
+    df["Label+Tag"] = df["Label"] + df["Tag"]
     return df
 
 # --------------------------- MAIN ---------------------------
 st.title("ETF Net Flows")
-st.caption(f"Estimated net creations/redemptions over: {period_label}. "
-           f"When shares history is unavailable, shows CMF turnover proxy and labels it as such.")
+st.caption(
+    f"Estimated net creations/redemptions over: {period_label}. "
+    f"If shares history is unavailable, CMF turnover proxy is used and tagged [proxy]."
+)
 
 df = build_table(etf_tickers, period_days)
-chart_df = df.sort_values("Flow ($)", ascending=False).copy()
+chart_df = df.dropna(subset=["Flow ($)"]).sort_values("Flow ($)", ascending=False).copy()
 
 vals = pd.to_numeric(chart_df["Flow ($)"], errors="coerce").fillna(0.0)
 abs_max = float(vals.abs().max()) if len(vals) else 0.0
 
-if not len(vals) or abs_max == 0.0 or np.isnan(abs_max):
-    st.info("No valid values computed. Try a different period or different ETFs.")
+if not len(vals):
+    st.info("No values computed. Try a different period or add ETFs like SPY, QQQ, IWM.")
 else:
     colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in vals]
-
     fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
-    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9)
+    bars = ax.barh(chart_df["Label+Tag"], vals, color=colors, alpha=0.9)
 
-    ax.set_xlabel("Estimated Net Flow ($)")
+    ax.set_xlabel("Estimated Net Flow or Proxy ($)")
     ax.set_title(f"ETF Net Flows - {period_label}")
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
@@ -318,7 +329,6 @@ else:
 # --------------------------- TOP LISTS ---------------------------
 st.markdown("#### Top Inflows and Outflows")
 valid = df.dropna(subset=["Flow ($)"]).copy()
-
 if valid.empty:
     st.write("No ETFs with computable values in the selected period.")
 else:
@@ -326,9 +336,9 @@ else:
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Top Inflows**")
-        st.table(valid[valid["Flow ($)"] > 0].nlargest(3, "Flow ($)").set_index("Label")[["Value", "Method"]])
+        st.table(valid[valid["Flow ($)"] > 0].nlargest(3, "Flow ($)").set_index("Label+Tag")[["Value", "Method"]])
     with col2:
         st.write("**Top Outflows**")
-        st.table(valid[valid["Flow ($)"] < 0].nsmallest(3, "Flow ($)").set_index("Label")[["Value", "Method"]])
+        st.table(valid[valid["Flow ($)"] < 0].nsmallest(3, "Flow ($)").set_index("Label+Tag")[["Value", "Method"]])
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption(f"Last refresh: {as_naive_ts(now_et)}  |  © 2025 AD Fund Management LP")
