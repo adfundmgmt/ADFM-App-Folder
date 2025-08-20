@@ -1,5 +1,5 @@
 ############################################################
-# Liquidity & Fed Policy Tracker — clean metrics, no deltas
+# Liquidity & Fed Policy Tracker - clean metrics, no deltas
 # Built by AD Fund Management LP
 ############################################################
 
@@ -12,9 +12,9 @@ import plotly.graph_objects as go
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
 FRED = {
-    "fed_bs": "WALCL",        # Fed total assets (millions)
-    "rrp": "RRPONTSYD",       # ON RRP (millions)
-    "tga": "WDTGAL",          # Treasury General Account (millions)
+    "fed_bs": "WALCL",        # Fed total assets (millions on FRED)
+    "rrp": "RRPONTSYD",       # ON RRP (billions on FRED)
+    "tga": "WDTGAL",          # Treasury General Account (millions on FRED)
     "effr": "EFFR",           # Effective Fed Funds Rate (percent)
     "spx": "SP500",           # S&P 500 index level
     "nasdaq": "NASDAQCOM",    # Nasdaq Composite index level
@@ -35,9 +35,9 @@ with st.sidebar:
         Units are billions. Sustained rises often coincide with risk-on conditions.
 
         Series  
-        • WALCL: Federal Reserve total assets on the consolidated balance sheet.  
-        • RRPONTSYD (RRP): overnight reverse repo facility usage by counterparties.  
-        • WDTGAL (TGA): U.S. Treasury cash balance at the Fed.  
+        • WALCL: Federal Reserve total assets on the consolidated balance sheet (millions on FRED).  
+        • RRPONTSYD (RRP): overnight reverse repo facility usage by counterparties (billions on FRED).  
+        • WDTGAL (TGA): U.S. Treasury cash balance at the Fed (millions on FRED).  
         • EFFR: effective federal funds rate (volume-weighted overnight rate).
 
         Panels  
@@ -65,12 +65,11 @@ def fred_series(series, start, end):
         return pd.Series(dtype=float)
 
 today = pd.Timestamp.today().normalize()
-# Wide enough for 10y plus buffer
 start_all = today - pd.DateOffset(years=15)
 start_lb = today - pd.DateOffset(years=years)
 
 fed_bs = fred_series(FRED["fed_bs"], start_all, today)       # millions
-rrp    = fred_series(FRED["rrp"],    start_all, today)       # millions (starts 2013)
+rrp    = fred_series(FRED["rrp"],    start_all, today)       # billions
 tga    = fred_series(FRED["tga"],    start_all, today)       # millions
 effr   = fred_series(FRED["effr"],   start_all, today)       # percent
 spx    = fred_series(FRED["spx"],    start_all, today)       # index
@@ -83,7 +82,7 @@ df = pd.concat(
     keys=["WALCL", "RRP", "TGA", "EFFR", "SPX", "NASDAQ"]
 ).ffill()
 
-# Ensure all components exist (RRP begins in 2013)
+# Ensure all components exist
 df = df.dropna(subset=["WALCL", "RRP", "TGA"])
 df = df[df.index >= start_lb]
 if df.empty:
@@ -91,9 +90,10 @@ if df.empty:
     st.stop()
 
 # Net Liquidity in billions
+# WALCL and TGA are millions -> /1000; RRP already billions -> no scaling
 df["WALCL_b"] = df["WALCL"] / 1000.0
-df["RRP_b"]   = df["RRP"]   / 1000.0
-df["TGA_b"]   = df["TGA"]   / 1000.0
+df["RRP_b"]   = df["RRP"]
+df["TGA_b"]   = df["TGA"] / 1000.0
 df["NetLiq"]  = df["WALCL_b"] - df["RRP_b"] - df["TGA_b"]
 
 # Smoothing
@@ -108,7 +108,9 @@ else:
 # Rebased panels
 def rebase(series):
     base = series.iloc[0]
-    return (series / base) * 100 if base and base != 0 else series * 0 + 100
+    if pd.notna(base) and base != 0:
+        return (series / base) * 100
+    return series * 0 + 100
 
 reb = pd.DataFrame(index=df.index)
 reb["WALCL_idx"] = rebase(df["WALCL_b"])
@@ -132,7 +134,6 @@ latest = {
 }
 
 m1, m2, m3, m4, m5 = st.columns(5)
-# Net Liquidity level only (no delta coloring)
 m1.metric("Net Liquidity", fmt_b(latest["netliq"]), help="WALCL - RRP - TGA")
 m2.metric("WALCL", fmt_b(latest["walcl"]))
 m3.metric("RRP", fmt_b(latest["rrp"]))
@@ -189,7 +190,15 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- Download ----------------
 with st.expander("Download Data"):
-    out = df[["WALCL", "RRP", "TGA", "EFFR", "SPX", "NASDAQ", "NetLiq"]].copy()
+    out = pd.DataFrame(index=df.index)
+    # Export in billions for consistency
+    out["WALCL_B"]  = df["WALCL_b"]
+    out["RRP_B"]    = df["RRP_b"]
+    out["TGA_B"]    = df["TGA_b"]
+    out["EFFR_%"]   = df["EFFR"]
+    out["SPX"]      = df["SPX"]
+    out["NASDAQ"]   = df["NASDAQ"]
+    out["NetLiq_B"] = df["NetLiq"]
     out.index.name = "Date"
     st.download_button(
         "Download CSV",
@@ -203,7 +212,8 @@ with st.expander("Methodology"):
     st.markdown(
         f"""
         Net Liquidity = WALCL − RRP − TGA.  
-        WALCL, RRP, TGA are millions on FRED and displayed here in billions.
+        Units: WALCL and TGA are reported by FRED in millions; RRP is reported in billions.  
+        All panels display values in billions after scaling.
 
         Smoothing applies a simple moving average over {smooth} days.  
         Components are rebased to 100 at the lookback start to remove scale distortion.
