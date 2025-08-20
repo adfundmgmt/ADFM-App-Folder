@@ -89,9 +89,8 @@ etf_info = {
     "EMB": ("Emerging Market Bonds", "USD-denominated EM debt"),
 
     # Crypto ETFs
-    "BITO": ("BTC Futures", "Bitcoin futures ETF"),
-    "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
-    "ETHA": ("Spot ETH", "iShares Ethereum Trust ETF"),
+    "ETH": ("Spot ETH", "Grayscale Ethereum Mini Trust ETF"),
+    "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),    
 }
 etf_tickers: List[str] = list(etf_info.keys())
 
