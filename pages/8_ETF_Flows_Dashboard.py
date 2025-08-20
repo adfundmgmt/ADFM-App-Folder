@@ -91,8 +91,7 @@ etf_info = {
     # Crypto ETFs
     "BITO": ("BTC Futures", "Bitcoin futures ETF"),
     "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
-    # If you track a spot ETH ETF, add its ticker here, for example:
-    # "ETHA": ("Spot ETH", "iShares Ethereum ETF"),
+    "ETHA": ("Spot BTC", "BlackRock Spot Ethereum ETF"),
 }
 etf_tickers: List[str] = list(etf_info.keys())
 
