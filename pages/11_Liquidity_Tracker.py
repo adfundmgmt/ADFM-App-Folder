@@ -21,6 +21,10 @@ FRED = {
 }
 DEFAULT_SMOOTH_DAYS = 5
 
+# Robust rebase parameters
+REBASE_BASE_WINDOW = 10   # use median of first 10 points
+RRP_BASE_FLOOR_B   = 5.0  # billions; prevents divide-by-near-zero
+
 st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
 
@@ -105,16 +109,22 @@ else:
     for col in cols_to_smooth:
         df[f"{col}_s"] = df[col]
 
-# Rebased panels
-def rebase(series):
-    base = series.iloc[0]
-    if pd.notna(base) and base != 0:
-        return (series / base) * 100
-    return series * 0 + 100
+# Rebased panels (robust against near-zero bases)
+def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
+    s = series.copy()
+    if s.isna().all():
+        return s * 0 + 100
+    head = s.dropna().iloc[:max(1, base_window)]
+    base = head.median() if not head.empty else s.dropna().iloc[0]
+    if min_base is not None:
+        base = max(base, float(min_base))
+    if pd.isna(base) or base == 0:
+        return s * 0 + 100
+    return (s / base) * 100
 
 reb = pd.DataFrame(index=df.index)
 reb["WALCL_idx"] = rebase(df["WALCL_b"])
-reb["RRP_idx"]   = rebase(df["RRP_b"])
+reb["RRP_idx"]   = rebase(df["RRP_b"], min_base=RRP_BASE_FLOOR_B)
 reb["TGA_idx"]   = rebase(df["TGA_b"])
 reb["SPX_idx"]   = rebase(df["SPX"])
 if show_nasdaq:
@@ -163,7 +173,7 @@ fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"], name="RRP idx",
                          line=dict(color="#2ca02c")), row=2, col=1)
 fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"], name="TGA idx",
                          line=dict(color="#d62728")), row=2, col=1)
-fig.update_yaxes(title="Index = 100", row=2, col=1)
+fig.update_yaxes(title="Index = 100", row=2, col=1, rangemode="tozero")
 
 # Row 3: EFFR
 fig.add_trace(go.Scatter(x=df.index, y=df["EFFR_s"], name="EFFR",
@@ -215,8 +225,11 @@ with st.expander("Methodology"):
         Units: WALCL and TGA are reported by FRED in millions; RRP is reported in billions.  
         All panels display values in billions after scaling.
 
+        Rebase uses the median of the first {REBASE_BASE_WINDOW} observations as the base.  
+        For RRP, a {RRP_BASE_FLOOR_B:.0f}B floor is applied to avoid divide-by-near-zero artifacts at regimes where usage was ~0.
+
         Smoothing applies a simple moving average over {smooth} days.  
-        Components are rebased to 100 at the lookback start to remove scale distortion.
+        Components are rebased to 100 at the lookback start using the robust base above.
 
         Note: RRP daily series begins in 2013. Long lookbacks truncate to available history.
         """
