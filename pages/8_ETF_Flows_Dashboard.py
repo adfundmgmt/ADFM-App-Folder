@@ -17,7 +17,7 @@ st.sidebar.title("ETF Net Flows")
 st.sidebar.markdown("""
 **Methodology priority**
 1) True flows = ΔShares Outstanding × Close (Close as NAV proxy).
-2) If historical shares are unavailable: CMF turnover proxy is used and tagged [proxy].
+2) If historical shares are unavailable, the app uses a CMF turnover proxy under the hood.
 
 Notes:
 - yfinance historical shares (`get_shares_full`) is not available for every ETF.
@@ -32,7 +32,6 @@ def as_naive_ts(dt: datetime) -> pd.Timestamp:
     ts = pd.Timestamp(dt)
     if ts.tzinfo is not None:
         return ts.tz_convert("UTC").tz_localize(None)
-    # ensure naive even if already naive
     return pd.Timestamp(ts.replace(tzinfo=None))
 
 def ytd_days() -> int:
@@ -92,7 +91,7 @@ etf_info = {
     # Crypto ETFs
     "BITO": ("BTC Futures", "Bitcoin futures ETF"),
     "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
-    # If you track a spot ETH ETF, add its real ticker here, for example:
+    # If you track a spot ETH ETF, add its ticker here, for example:
     # "ETHA": ("Spot ETH", "iShares Ethereum ETF"),
 }
 etf_tickers: List[str] = list(etf_info.keys())
@@ -215,7 +214,6 @@ def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
     close.index = pd.to_datetime(close.index).tz_localize(None)
     sh = pd.to_numeric(shares, errors="coerce").dropna()
     sh.index = pd.to_datetime(sh.index).tz_localize(None)
-    # Align to business day index of prices
     idx = pd.DatetimeIndex(close.index)
     sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
     delta_shares = sh_daily.diff().fillna(0.0)
@@ -237,8 +235,6 @@ def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
 def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
     start_date = _calc_start_date(period_days)
     price_map = fetch_prices(tuple(tickers), start_date)
-
-    # Try shares, but do not block UI if Yahoo does not have them
     shares_map = fetch_shares_series_parallel(tuple(tickers), start_date, timeout_sec=6.0)
 
     rows = []
@@ -272,20 +268,17 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
         })
 
     df = pd.DataFrame(rows)
-    # Tag method in label so you see which bars are proxies
     def label_for(t):
         cat = etf_info.get(t, ("", ""))[0]
         return f"{cat} ({t})"
     df["Label"] = [label_for(t) for t in df["Ticker"]]
-    df["Tag"] = df["Method"].map({"flows": "", "cmf_proxy": " [proxy]"})
-    df["Label+Tag"] = df["Label"] + df["Tag"]
     return df
 
 # --------------------------- MAIN ---------------------------
 st.title("ETF Net Flows")
 st.caption(
     f"Estimated net creations/redemptions over: {period_label}. "
-    f"If shares history is unavailable, CMF turnover proxy is used and tagged [proxy]."
+    f"When shares history is unavailable, the chart still shows an estimate."
 )
 
 df = build_table(etf_tickers, period_days)
@@ -299,9 +292,9 @@ if not len(vals):
 else:
     colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in vals]
     fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
-    bars = ax.barh(chart_df["Label+Tag"], vals, color=colors, alpha=0.9)
+    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9)
 
-    ax.set_xlabel("Estimated Net Flow or Proxy ($)")
+    ax.set_xlabel("Estimated Net Flow ($)")
     ax.set_title(f"ETF Net Flows - {period_label}")
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
@@ -336,9 +329,9 @@ else:
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Top Inflows**")
-        st.table(valid[valid["Flow ($)"] > 0].nlargest(3, "Flow ($)").set_index("Label+Tag")[["Value", "Method"]])
+        st.table(valid[valid["Flow ($)"] > 0].nlargest(3, "Flow ($)").set_index("Label")[["Value"]])
     with col2:
         st.write("**Top Outflows**")
-        st.table(valid[valid["Flow ($)"] < 0].nsmallest(3, "Flow ($)").set_index("Label+Tag")[["Value", "Method"]])
+        st.table(valid[valid["Flow ($)"] < 0].nsmallest(3, "Flow ($)").set_index("Label")[["Value"]])
 
 st.caption(f"Last refresh: {as_naive_ts(now_et)}  |  © 2025 AD Fund Management LP")
