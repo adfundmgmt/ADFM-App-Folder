@@ -16,26 +16,24 @@ st.set_page_config(page_title="ETF Net Flows", layout="wide")
 st.sidebar.title("ETF Net Flows")
 st.sidebar.markdown("""
 **Methodology priority**
-1) True flows: ΔShares Outstanding × NAV (uses Close as proxy for NAV).
-2) If historical shares are unavailable: show CMF turnover proxy as a fallback and label it.
+1) True flows = ΔShares Outstanding × Close (Close as NAV proxy).
+2) If historical shares are unavailable: show CMF turnover proxy in a separate section.
 
 Notes:
 - yfinance historical shares (`get_shares_full`) is not available for every ETF.
 - Close is used as a proxy for daily NAV.
 """)
 
-# Timezone-aware today for YTD and windows
+# Timezone-aware now for YTD and windows
 TZ = pytz.timezone("US/Eastern")
 now_et = datetime.now(TZ)
 
 def as_naive_ts(dt: datetime) -> pd.Timestamp:
-    """Return tz-naive pandas Timestamp from a tz-aware or naive datetime safely."""
+    """Return tz-naive pandas Timestamp from tz-aware or naive datetime safely."""
     ts = pd.Timestamp(dt)
     if ts.tzinfo is not None:
-        # convert to UTC then drop tz to avoid pandas tz_convert(None) issues
         return ts.tz_convert("UTC").tz_localize(None)
-    # if already naive, ensure it is a Timestamp
-    return ts.tz_localize(None) if ts.tzinfo is None else ts.tz_localize(None)
+    return pd.Timestamp(ts.replace(tzinfo=None))
 
 def ytd_days() -> int:
     start_ytd = TZ.localize(datetime(now_et.year, 1, 1))
@@ -94,7 +92,7 @@ etf_info = {
     # Alternatives / Crypto
     "BITO": ("BTC Futures", "Bitcoin futures ETF"),
     "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
-    "ETH": ("Spot ETH", "Grayscale Ethereum Mini Trust ETF"),
+    "ETHA": ("Spot ETH", "iShares Ethereum ETF"),
 }
 etf_tickers: List[str] = list(etf_info.keys())
 
@@ -122,7 +120,8 @@ def retry(n=3, delay=0.6):
                 except Exception as e:
                     last = e
                     time.sleep(delay * (i + 1))
-            if last: raise last
+            if last:
+                raise last
         return wrap
     return deco
 
@@ -205,7 +204,7 @@ def fetch_shares_series_parallel(tickers: Tuple[str, ...], start_date: date, tim
             try:
                 results[tk] = fut.result(timeout=timeout_sec)
             except FuturesTimeoutError:
-                results[tk] = pd.Series(dtype="float64")  # fallback handled later
+                results[tk] = pd.Series(dtype="float64")
             except Exception:
                 results[tk] = pd.Series(dtype="float64")
     return results
@@ -213,13 +212,19 @@ def fetch_shares_series_parallel(tickers: Tuple[str, ...], start_date: date, tim
 def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
     if close is None or shares is None or close.empty or shares.empty:
         return pd.Series(dtype="float64")
+    close = pd.to_numeric(close, errors="coerce")
+    close.index = pd.to_datetime(close.index).tz_localize(None)
+    sh = pd.to_numeric(shares, errors="coerce").dropna()
+    sh.index = pd.to_datetime(sh.index).tz_localize(None)
+    # Align to business day index of prices
     idx = pd.DatetimeIndex(close.index)
-    sh_daily = shares.sort_index().resample("B").ffill().reindex(idx).ffill()
+    sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
     delta_shares = sh_daily.diff().fillna(0.0)
-    flows = delta_shares * close.astype(float)
+    flows = (delta_shares * close).astype(float)
     return flows
 
 def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
+    """Chaikin Money Flow turnover proxy over the period. Not comparable to creations/redemptions."""
     if df is None or df.empty:
         return np.nan
     hl = (df["High"] - df["Low"]).replace(0, np.nan)
@@ -248,6 +253,7 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
 
         flow_usd_sum = np.nan
         method = "flows"
+        note = ""
 
         if not px.empty:
             shares = shares_map.get(tk, pd.Series(dtype="float64"))
@@ -257,6 +263,7 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
             else:
                 method = "cmf_proxy"
                 flow_usd_sum = compute_cmf_turnover_proxy(px)
+                note = "No shares history. Showing CMF turnover proxy."
 
         cat, desc = etf_info.get(tk, ("", ""))
         rows.append({
@@ -264,34 +271,41 @@ def build_table(tickers: List[str], period_days: int) -> pd.DataFrame:
             "Category": cat,
             "Flow ($)": flow_usd_sum,
             "Method": method,
-            "Description": desc
+            "Description": desc,
+            "Note": note
         })
 
     df = pd.DataFrame(rows)
-    df["Label"] = [f"{etf_info[t][0]} ({t})" for t in df["Ticker"]]
+    df["Label"] = [f"{etf_info.get(t, ('', ''))[0]} ({t})" for t in df["Ticker"]]
     return df
 
 # --------------------------- MAIN ---------------------------
 st.title("ETF Net Flows")
-st.caption(f"Estimated net creations/redemptions over: {period_label}. "
-           f"When shares history is unavailable, shows CMF turnover proxy and labels it as such.")
+st.caption(
+    f"Estimated net creations/redemptions over: {period_label}. "
+    f"When shares history is unavailable, a CMF turnover proxy is shown in a separate section."
+)
 
 df = build_table(etf_tickers, period_days)
-chart_df = df.sort_values("Flow ($)", ascending=False).copy()
 
-vals = pd.to_numeric(chart_df["Flow ($)"], errors="coerce").fillna(0.0)
-abs_max = float(vals.abs().max()) if len(vals) else 0.0
+# Separate real flows vs proxies
+flows_df = df[(df["Method"] == "flows") & (~df["Flow ($)"].isna())].copy()
+proxies_df = df[(df["Method"] == "cmf_proxy") & (~df["Flow ($)"].isna())].copy()
 
-if not len(vals) or abs_max == 0.0 or np.isnan(abs_max):
-    st.info("No valid values computed. Try a different period or different ETFs.")
+# -------- Chart for true flows only --------
+if flows_df.empty:
+    st.info("No ETFs with computable share-based flows in the selected period.")
 else:
-    colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in vals]
+    chart_df = flows_df.sort_values("Flow ($)", ascending=False).copy()
+    vals = pd.to_numeric(chart_df["Flow ($)"], errors="coerce").fillna(0.0)
+    abs_max = float(vals.abs().max()) if len(vals) else 0.0
 
+    colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in vals]
     fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
     bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9)
 
     ax.set_xlabel("Estimated Net Flow ($)")
-    ax.set_title(f"ETF Net Flows - {period_label}")
+    ax.set_title(f"ETF Net Flows (share-based) - {period_label}")
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
 
@@ -315,20 +329,31 @@ else:
     plt.tight_layout()
     st.pyplot(fig)
 
-# --------------------------- TOP LISTS ---------------------------
-st.markdown("#### Top Inflows and Outflows")
-valid = df.dropna(subset=["Flow ($)"]).copy()
-
-if valid.empty:
-    st.write("No ETFs with computable values in the selected period.")
+# -------- Top lists --------
+st.markdown("#### Top Inflows and Outflows (share-based only)")
+if flows_df.empty:
+    st.write("No ETFs with computable share-based flows in the selected period.")
 else:
-    valid["Value"] = valid["Flow ($)"].apply(fmt_compact_cur)
+    flows_df["Value"] = flows_df["Flow ($)"].apply(fmt_compact_cur)
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Top Inflows**")
-        st.table(valid[valid["Flow ($)"] > 0].nlargest(3, "Flow ($)").set_index("Label")[["Value", "Method"]])
+        st.table(flows_df[flows_df["Flow ($)"] > 0].nlargest(3, "Flow ($)").set_index("Label")[["Value"]])
     with col2:
         st.write("**Top Outflows**")
-        st.table(valid[valid["Flow ($)"] < 0].nsmallest(3, "Flow ($)").set_index("Label")[["Value", "Method"]])
+        st.table(flows_df[flows_df["Flow ($)"] < 0].nsmallest(3, "Flow ($)").set_index("Label")[["Value"]])
 
-st.caption("© 2025 AD Fund Management LP")
+# -------- CMF proxies section --------
+st.markdown("#### CMF Turnover Proxies (not comparable to creations/redemptions)")
+if proxies_df.empty:
+    st.write("No CMF proxies for this selection.")
+else:
+    # Rank by absolute magnitude for a quick sense of intensity, but display the raw number compacted
+    proxies_df = proxies_df.copy()
+    proxies_df["Abs"] = proxies_df["Flow ($)"].abs()
+    proxies_df = proxies_df.sort_values("Abs", ascending=False)
+    show_cols = proxies_df[["Label", "Flow ($)", "Note"]].copy()
+    show_cols["Proxy size"] = show_cols["Flow ($)"].apply(fmt_compact_cur)
+    st.table(show_cols.drop(columns=["Flow ($)"]).set_index("Label"))
+
+st.caption(f"Last refresh: {as_naive_ts(now_et)}  |  © 2025 AD Fund Management LP")
