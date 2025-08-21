@@ -53,7 +53,7 @@ with st.sidebar:
     )
     st.markdown("---")
     st.header("Settings")
-    lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "5y", "10y"], index=2)
+    lookback = st.selectbox("Lookback", ["1 year", "2 year", "3 year", "10 year", "25 year"], index=2)
     years = int(lookback[:-1])
     smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
     show_nasdaq = st.checkbox("Show Nasdaq in Equities panel", value=False)
