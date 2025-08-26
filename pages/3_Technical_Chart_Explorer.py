@@ -11,13 +11,12 @@ Visualize key technical indicators using Yahoo Finance data.
 
 Features:
 - OHLC candlesticks
-- 8/20/50/100/200 MAs (on chosen bar size)
-- RSI(14) and MACD(12,26,9) with histogram
+- 8/20/50/100/200 MAs
+- RSI(14) and MACD(12,26,9)
 """)
 
-ticker  = st.sidebar.text_input("Ticker", "^GSPC").upper()
-period  = st.sidebar.selectbox("Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3)
-interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
+ticker = st.sidebar.text_input("Ticker", "^GSPC").upper()
+period = st.sidebar.selectbox("Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3)
 
 # ===================== Helpers =====================
 def period_offset(p: str) -> pd.DateOffset | None:
@@ -30,7 +29,7 @@ def period_offset(p: str) -> pd.DateOffset | None:
         "3y":  pd.DateOffset(years=3),
         "5y":  pd.DateOffset(years=5),
         "10y": pd.DateOffset(years=10),
-        "max": None
+        "max": None,
     }[p]
 
 def xaxis_fmt(p: str):
@@ -38,61 +37,46 @@ def xaxis_fmt(p: str):
     if p in ("6mo","1y"):  return dict(fmt="%b %Y", angle=0)
     return dict(fmt="%Y", angle=0)
 
-def resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    agg = {"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}
-    return df.resample(rule).apply(agg).dropna()
-
 # ===================== Data (daily only) =====================
 @st.cache_data(ttl=3600)
-def get_daily_max(tkr: str) -> pd.DataFrame:
+def get_daily(tkr: str) -> pd.DataFrame:
     df = yf.download(tkr, period="max", interval="1d", auto_adjust=False, progress=False)
     if df.empty: return df
     if df.index.tz is not None: df.index = df.index.tz_localize(None)
-    df = df[df.index.weekday < 5]  # drop weekends for even spacing
+    df = df[df.index.weekday < 5]  # drop weekends
     return df
 
-daily_all = get_daily_max(ticker)
-if daily_all.empty:
+df = get_daily(ticker)
+if df.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# compute exact window
-end = daily_all.index.max()
+# compute window
+end = df.index.max()
 off = period_offset(period)
-start = daily_all.index.min() if off is None else (end - off)
+start = df.index.min() if off is None else (end - off)
 
-# fixed left buffer in **days** to preserve MAs regardless of bar size
-LEFT_BUFFER_DAYS = 400
-daily = daily_all.loc[(daily_all.index >= (start - pd.Timedelta(days=LEFT_BUFFER_DAYS))) & (daily_all.index <= end)].copy()
-
-# choose resample rule (we NEVER fetch weekly/monthly from Yahoo)
-if interval == "1d":
-    bars = daily.copy()
-elif interval == "1wk":
-    bars = resample_ohlc(daily, "W-FRI")
-else:  # "1mo"
-    bars = resample_ohlc(daily, "M")
-
-# ===================== Indicators on resampled bars =====================
+# add MAs
 for w in (8,20,50,100,200):
-    bars[f"MA{w}"] = bars["Close"].rolling(w).mean()
+    df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
-chg = bars["Close"].diff()
+# RSI
+chg = df["Close"].diff()
 gain = chg.clip(lower=0)
 loss = -chg.clip(upper=0)
 avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
 avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
 rs = avg_gain / avg_loss
-bars["RSI14"] = 100 - (100 / (1 + rs))
+df["RSI14"] = 100 - (100 / (1 + rs))
 
-bars["EMA12"]  = bars["Close"].ewm(span=12, adjust=False).mean()
-bars["EMA26"]  = bars["Close"].ewm(span=26, adjust=False).mean()
-bars["MACD"]   = bars["EMA12"] - bars["EMA26"]
-bars["Signal"] = bars["MACD"].ewm(span=9, adjust=False).mean()
-bars["Hist"]   = bars["MACD"] - bars["Signal"]
+# MACD
+df["EMA12"]  = df["Close"].ewm(span=12, adjust=False).mean()
+df["EMA26"]  = df["Close"].ewm(span=26, adjust=False).mean()
+df["MACD"]   = df["EMA12"] - df["EMA26"]
+df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+df["Hist"]   = df["MACD"] - df["Signal"]
 
-# final trim to the **exact** visible window
-plot_df = bars.loc[(bars.index >= start) & (bars.index <= end)].copy()
+plot_df = df.loc[(df.index >= start) & (df.index <= end)].copy()
 if plot_df.empty:
     st.error("No data in selected window.")
     st.stop()
@@ -117,6 +101,7 @@ for w, color in zip((8,20,50,100,200), ("green","purple","blue","orange","gray")
         x=plot_df.index, y=plot_df[f"MA{w}"], mode="lines",
         line=dict(color=color, width=1.2), name=f"MA{w}"
     ), row=1, col=1)
+
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
 # Volume
@@ -139,7 +124,7 @@ fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["MACD"],   mode="lines", lin
 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["Signal"], mode="lines", line=dict(width=1.2, color="orange"), name="Signal"), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# clamp x-range on ALL subplots
+# X-axis clamp
 fmt = xaxis_fmt(period)
 for ax in ["xaxis","xaxis2","xaxis3","xaxis4"]:
     fig["layout"][ax].update(
@@ -163,6 +148,4 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
-# debug footer
-st.caption(f"Plotted window: {start.date()} → {end.date()}   |   Bars: {len(plot_df)}   |   Interval: {interval}")
+st.caption(f"Window: {start.date()} → {end.date()}   |   Interval: Daily   |   Bars: {len(plot_df)}")
