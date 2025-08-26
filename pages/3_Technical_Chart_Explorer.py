@@ -158,3 +158,4 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 st.caption(f"Window: {start.date()} → {end.date()}   |   Interval: Daily   |   Bars: {len(plot_df)}   |   Max cap: {MAX_YEARS}y")
+st.caption("© 2025 AD Fund Management LP")
