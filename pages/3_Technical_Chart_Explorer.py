@@ -4,214 +4,175 @@ import yfinance as yf
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from datetime import datetime
-from typing import Optional
 
-# ===================== UI =====================
-st.set_page_config(page_title="ADFM Chart", layout="wide")
-
+# ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.header("About This Tool")
-st.sidebar.markdown(
-    "Visualize OHLC candlesticks with MAs, RSI, and MACD using Yahoo Finance daily data."
-)
+st.sidebar.markdown("""
+Visualize key technical indicators for any stock using Yahoo Finance data.
+
+**Features:**
+- Interactive OHLC candlesticks  
+- 8/20/50/100/200-day moving averages with full continuity  
+- Volume bars color-coded by up/down days  
+- RSI (14-day) with Wilder smoothing  
+- MACD (12,26,9) with histogram  
+""")
 
 ticker = st.sidebar.text_input("Ticker", "^GSPC").upper()
 period = st.sidebar.selectbox(
-    "Period",
-    ["1mo", "3mo", "6mo", "1y", "2y", "3y", "5y", "10y", "max"],
-    index=3,
+    "Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3
 )
+interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ===================== Helpers =====================
-def period_offset(p: str) -> Optional[pd.DateOffset]:
-    return {
-        "1mo": pd.DateOffset(months=1),
-        "3mo": pd.DateOffset(months=3),
-        "6mo": pd.DateOffset(months=6),
-        "1y": pd.DateOffset(years=1),
-        "2y": pd.DateOffset(years=2),
-        "3y": pd.DateOffset(years=3),
-        "5y": pd.DateOffset(years=5),
-        "10y": pd.DateOffset(years=10),
-        "max": None,
-    }[p]
+# Trading day approximations for display slicing
+base_trading_days = {
+    "1mo": 21, "3mo": 63, "6mo": 126, "1y": 252, "2y": 504, "3y": 756,
+    "5y": 1260, "10y": 2520, "max": 252 * 25
+}
 
-def xaxis_fmt(p: str):
-    if p in ("1mo", "3mo"):
-        return {"fmt": "%b %d", "angle": -45}
-    if p in ("6mo", "1y"):
-        return {"fmt": "%b %Y", "angle": 0}
-    return {"fmt": "%Y", "angle": 0}
+# ── Cache with parameters ───────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def get_full_history(tkr, intrvl):
+    try:
+        # Always fetch max, but Yahoo may limit historical depth per interval
+        return yf.Ticker(tkr).history(period="max", interval=intrvl)
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return pd.DataFrame()
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_daily(tkr: str, start_dt: pd.Timestamp, end_dt: pd.Timestamp) -> pd.DataFrame:
-    df = yf.download(
-        tkr,
-        start=start_dt,
-        end=end_dt + pd.Timedelta(days=1),
-        interval="1d",
-        auto_adjust=False,
-        progress=False,
-    )
-    if df.empty:
-        return df
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-    # weekdays only
-    df = df[df.index.weekday < 5]
-    return df
-
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    for w in (8, 20, 50, 100, 200):
-        out[f"MA{w}"] = out["Close"].rolling(w).mean()
-
-    # RSI(14)
-    chg = out["Close"].diff()
-    gain = chg.clip(lower=0)
-    loss = -chg.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    out["RSI14"] = 100 - (100 / (1 + rs))
-
-    # MACD(12,26,9)
-    out["EMA12"] = out["Close"].ewm(span=12, adjust=False).mean()
-    out["EMA26"] = out["Close"].ewm(span=26, adjust=False).mean()
-    out["MACD"] = out["EMA12"] - out["EMA26"]
-    out["Signal"] = out["MACD"].ewm(span=9, adjust=False).mean()
-    out["Hist"] = out["MACD"] - out["Signal"]
-    return out
-
-# ===================== Data window =====================
-probe = fetch_daily(ticker, pd.Timestamp("1990-01-01"), pd.Timestamp.today().normalize())
-if probe.empty:
+# Fetch full history for indicators
+df_full = get_full_history(ticker, interval)
+if df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-end_bar = probe.index.max()
-off = period_offset(period)
-if off is None:
-    start_target = probe.index.min()
+# Cap at ~25 years
+CAP_MAX_DAYS = 252 * 25
+if len(df_full) > CAP_MAX_DAYS:
+    df_full = df_full.tail(CAP_MAX_DAYS)
+
+# Clean index
+if df_full.index.tz is not None:
+    df_full.index = df_full.index.tz_localize(None)
+if interval == "1d":
+    df_full = df_full[df_full.index.weekday < 5]
+
+# Indicators on full history
+for w in (8, 20, 50, 100, 200):
+    df_full[f"MA{w}"] = df_full["Close"].rolling(w).mean()
+
+# RSI
+delta = df_full["Close"].diff()
+gain = delta.clip(lower=0)
+loss = -delta.clip(upper=0)
+avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+rs = avg_gain / avg_loss
+df_full["RSI14"] = 100 - (100 / (1 + rs))
+
+# MACD
+df_full["EMA12"]  = df_full["Close"].ewm(span=12, adjust=False).mean()
+df_full["EMA26"]  = df_full["Close"].ewm(span=26, adjust=False).mean()
+df_full["MACD"]   = df_full["EMA12"] - df_full["EMA26"]
+df_full["Signal"] = df_full["MACD"].ewm(span=9, adjust=False).mean()
+df_full["Hist"]   = df_full["MACD"] - df_full["Signal"]
+
+# Slice for display but keep MA continuity
+display_days = base_trading_days[period]
+if len(df_full) <= display_days:
+    df_display = df_full.copy()
 else:
-    start_target = end_bar - off
+    df_display = df_full.tail(display_days).copy()
 
-# indicator buffer so edges are smooth
-buffer_days = 260
-fetch_start = start_target - pd.DateOffset(days=buffer_days)
+# Plotting index
+df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
+available_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) >= w]
 
-raw = fetch_daily(ticker, fetch_start, end_bar)
-if raw.empty:
-    st.error("No data returned for selected settings.")
-    st.stop()
+# MA warnings aggregated
+missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) < w]
+if missing_mas:
+    st.warning(f"Some MAs may appear choppy due to limited visible data: {', '.join(f'MA{w}' for w in missing_mas)}.")
 
-bars = add_indicators(raw)
-plot_df = bars[(bars.index >= start_target) & (bars.index <= end_bar)].copy()
-if plot_df.empty:
-    st.error("No data in selected window.")
-    st.stop()
-
-# ===================== Figure =====================
+# ── Build figure ────────────────────────────────────────────────────────────
 fig = make_subplots(
     rows=4, cols=1, shared_xaxes=True,
     row_heights=[0.60, 0.14, 0.13, 0.13],
     vertical_spacing=0.04,
-    specs=[[{"type": "candlestick"}],
-           [{"type": "bar"}],
-           [{"type": "scatter"}],
-           [{"type": "scatter"}]]
+    specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}], [{"type": "scatter"}]]
 )
 
-# Price
-fig.add_trace(
-    go.Candlestick(
-        x=plot_df.index,
-        open=plot_df["Open"],
-        high=plot_df["High"],
-        low=plot_df["Low"],
-        close=plot_df["Close"],
-        increasing_line_color="#43A047",
-        decreasing_line_color="#E53935",
-        name="Price",
-    ),
-    row=1, col=1,
-)
-
-for w, color in zip((8, 20, 50, 100, 200), ("green", "purple", "blue", "orange", "gray")):
-    fig.add_trace(
-        go.Scatter(x=plot_df.index, y=plot_df[f"MA{w}"], mode="lines",
-                   line=dict(color=color, width=1.2), name=f"MA{w}"),
-        row=1, col=1,
-    )
+# Price + MAs
+fig.add_trace(go.Candlestick(
+    x=df_display["DateStr"], open=df_display["Open"], high=df_display["High"],
+    low=df_display["Low"], close=df_display["Close"],
+    increasing_line_color="#43A047", decreasing_line_color="#E53935", name="Price"
+), row=1, col=1)
+for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")):
+    fig.add_trace(go.Scatter(
+        x=df_display["DateStr"], y=df_display[f"MA{w}"],
+        mode="lines", line=dict(color=color, width=1.3),
+        name=f"MA{w}"
+    ), row=1, col=1)
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
 # Volume
-cl = plot_df["Close"].to_numpy()
-vol_colors = ["#B0BEC5"] + [
-    "#43A047" if cl[i] > cl[i - 1] else "#E53935" for i in range(1, len(cl))
+vol_colors = [
+    "#B0BEC5" if i == 0 else (
+        "#43A047" if df_display["Close"].iat[i] > df_display["Close"].iat[i-1] else "#E53935"
+    )
+    for i in range(len(df_display))
 ]
-fig.add_trace(
-    go.Bar(x=plot_df.index, y=plot_df["Volume"],
-           marker_color=vol_colors, opacity=0.7, name="Volume"),
-    row=2, col=1,
-)
-fig.update_yaxes(title_text="Volume", row=2, col=1, rangemode="tozero")
+fig.add_trace(go.Bar(
+    x=df_display["DateStr"], y=df_display["Volume"], width=0.4,
+    marker_color=vol_colors, opacity=0.7, name="Volume"
+), row=2, col=1)
+fig.update_yaxes(title_text="Volume", row=2, col=1)
 
 # RSI
-fig.add_trace(
-    go.Scatter(x=plot_df.index, y=plot_df["RSI14"], mode="lines",
-               line=dict(width=1.5, color="purple"), name="RSI (14)"),
-    row=3, col=1,
-)
-fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1)
-# horizontal guides via shapes so it works reliably with subplots
-for y in (80, 20):
-    fig.add_shape(type="line",
-                  xref="x3", yref="y3",
-                  x0=plot_df.index.min(), x1=plot_df.index.max(),
-                  y0=y, y1=y,
-                  line=dict(width=1, dash="dash", color="gray"))
+fig.add_trace(go.Scatter(
+    x=df_display["DateStr"], y=df_display["RSI14"],
+    mode="lines", line=dict(width=1.5, color="purple"), name="RSI (14)"
+), row=3, col=1)
+fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1, title_standoff=10)
+fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
+fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
 # MACD
-hist_colors = ["#43A047" if h > 0 else "#E53935" for h in plot_df["Hist"].fillna(0)]
-fig.add_trace(go.Bar(x=plot_df.index, y=plot_df["Hist"],
-                     marker_color=hist_colors, opacity=0.6, name="MACD Hist"),
-              row=4, col=1)
-fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["MACD"], mode="lines",
-                         line=dict(width=1.5), name="MACD"),
-              row=4, col=1)
-fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["Signal"], mode="lines",
-                         line=dict(width=1.2), name="Signal"),
-              row=4, col=1)
+hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df_display["Hist"]]
+fig.add_trace(go.Bar(
+    x=df_display["DateStr"], y=df_display["Hist"], marker_color=hist_colors, opacity=0.6, width=0.4, name="MACD Hist"
+), row=4, col=1)
+fig.add_trace(go.Scatter(
+    x=df_display["DateStr"], y=df_display["MACD"], mode="lines", line=dict(width=1.5, color="blue"), name="MACD"
+), row=4, col=1)
+fig.add_trace(go.Scatter(
+    x=df_display["DateStr"], y=df_display["Signal"], mode="lines", line=dict(width=1.2, color="orange"), name="Signal"
+), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# X axis clamp, weekend breaks, period-specific tickformat
-fmt = xaxis_fmt(period)
-for i, ax in enumerate(["xaxis", "xaxis2", "xaxis3", "xaxis4"], start=1):
-    fig["layout"][ax].update(
-        type="date",
-        tickformat=fmt["fmt"],
-        tickangle=fmt["angle"],
-        rangeslider_visible=False,
-        rangebreaks=[dict(bounds=["sat", "mon"])],
-        range=[start_target, end_bar],
-        showgrid=True,
-        gridwidth=0.5,
-        gridcolor="#e1e5ed",
-    )
+# X-axis ticks
+month_starts = df_display.index.to_series().groupby(df_display.index.to_period("M")).first()
+tickvals = month_starts.dt.strftime("%Y-%m-%d").tolist()
+ticktext = month_starts.dt.strftime("%b-%y").tolist()
+fig.update_xaxes(
+    type="category", tickmode="array",
+    tickvals=tickvals, ticktext=ticktext,
+    tickangle=-45, showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed"
+)
 
+# Layout
 fig.update_layout(
     height=950,
-    title=dict(text=f"{ticker} | Daily OHLC + RSI & MACD", x=0.5),
-    plot_bgcolor="white",
-    paper_bgcolor="white",
+    title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5),
+    plot_bgcolor="white", paper_bgcolor="white",
     hovermode="x unified",
     margin=dict(l=60, r=20, t=60, b=40),
+    xaxis=dict(rangeslider_visible=False, showline=True, linewidth=1, linecolor='black'),
     legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center"),
-    font=dict(family="Arial, sans-serif", size=12),
-    bargap=0.05,
+    font=dict(family="Arial, sans-serif", size=12)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-st.caption(f"Window: {start_target.date()} → {end_bar.date()} | Interval: 1d | Rows: {len(plot_df)}")
+# Footnote
 st.caption("© 2025 AD Fund Management LP")
