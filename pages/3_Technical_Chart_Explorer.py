@@ -47,42 +47,7 @@ def get_daily(tkr: str) -> pd.DataFrame:
     # Hard-locked to daily candles. No interval option anywhere.
     df = yf.download(tkr, period="max", interval="1d", auto_adjust=False, progress=False)
     if df.empty:
-        return df
-    # Ensure naive datetime index
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-    # Remove non-trading days to avoid ragged spacing
-    df = df[df.index.weekday < 5]
-    # Drop rows with all NaNs that some tickers include
-    df = df.dropna(how="all")
-    # Forward-fill Volume zeros if any vendors return 0 on holidays
-    if "Volume" in df.columns:
-        df["Volume"] = df["Volume"].fillna(0)
-    return df
-
-df = get_daily(ticker)
-if df.empty:
-    st.error("No data returned. Check symbol or internet.")
-    st.stop()
-
-# Compute window
-end = df.index.max()
-off = period_offset(period)
-start = df.index.min() if off is None else (end - off)
-
-# Guard: if start is before available data, clamp
-start = max(start, df.index.min())
-
-# Add MAs
-for w in (8,20,50,100,200):
-    df[f"MA{w}"] = df["Close"].rolling(w).mean()
-
-# RSI
-chg = df["Close"].diff()
-gain = chg.clip(lower=0)
-loss = -chg.clip(upper=0)
-avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+     
 rs = avg_gain / avg_loss
 df["RSI14"] = 100 - (100 / (1 + rs))
 
