@@ -4,23 +4,22 @@ import yfinance as yf
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
-# ── UI ─────────────────────────────────────────────────────────────────────
+# ===================== UI =====================
 st.sidebar.header("About This Tool")
 st.sidebar.markdown("""
-Visualize key technical indicators using Yahoo Finance.
+Visualize key technical indicators using Yahoo Finance data.
 
 Features:
-- Interactive OHLC candlesticks
-- 8/20/50/100/200 moving averages (on the selected bar size)
-- Volume color-coded by up/down days
-- RSI(14) and MACD(12,26,9)
+- OHLC candlesticks
+- 8/20/50/100/200 MAs (on chosen bar size)
+- RSI(14) and MACD(12,26,9) with histogram
 """)
 
 ticker  = st.sidebar.text_input("Ticker", "^GSPC").upper()
 period  = st.sidebar.selectbox("Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3)
-interval_mode = st.sidebar.selectbox("Interval", ["Auto","1d","1wk","1mo"], index=0)
+interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+# ===================== Helpers =====================
 def period_offset(p: str) -> pd.DateOffset | None:
     return {
         "1mo": pd.DateOffset(months=1),
@@ -31,116 +30,92 @@ def period_offset(p: str) -> pd.DateOffset | None:
         "3y":  pd.DateOffset(years=3),
         "5y":  pd.DateOffset(years=5),
         "10y": pd.DateOffset(years=10),
-        "max": None,
+        "max": None
     }[p]
-
-def auto_interval(p: str) -> str:
-    if p in ("1mo","3mo","6mo","1y"): return "1d"
-    if p in ("2y","3y","5y"):         return "1wk"
-    return "1mo"
 
 def xaxis_fmt(p: str):
     if p in ("1mo","3mo"): return dict(fmt="%b %d", angle=-45)
     if p in ("6mo","1y"):  return dict(fmt="%b %Y", angle=0)
     return dict(fmt="%Y", angle=0)
 
-# strict Yahoo fetch at target bar size
+def resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    agg = {"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}
+    return df.resample(rule).apply(agg).dropna()
+
+# ===================== Data (daily only) =====================
 @st.cache_data(ttl=3600)
-def fetch_bars(tkr: str, start: pd.Timestamp, end: pd.Timestamp, intrvl: str) -> pd.DataFrame:
-    df = yf.download(
-        tkr,
-        start=start,
-        end=end + pd.Timedelta(days=1),
-        interval=intrvl,
-        auto_adjust=False,
-        progress=False,
-    )
-    if df.empty:
-        return df
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
+def get_daily_max(tkr: str) -> pd.DataFrame:
+    df = yf.download(tkr, period="max", interval="1d", auto_adjust=False, progress=False)
+    if df.empty: return df
+    if df.index.tz is not None: df.index = df.index.tz_localize(None)
+    df = df[df.index.weekday < 5]  # drop weekends for even spacing
     return df
 
-# indicators computed on the same bar size
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    for w in (8,20,50,100,200):
-        out[f"MA{w}"] = out["Close"].rolling(w).mean()
-    chg = out["Close"].diff()
-    gain = chg.clip(lower=0)
-    loss = -chg.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    out["RSI14"] = 100 - (100 / (1 + rs))
-    out["EMA12"]  = out["Close"].ewm(span=12, adjust=False).mean()
-    out["EMA26"]  = out["Close"].ewm(span=26, adjust=False).mean()
-    out["MACD"]   = out["EMA12"] - out["EMA26"]
-    out["Signal"] = out["MACD"].ewm(span=9, adjust=False).mean()
-    out["Hist"]   = out["MACD"] - out["Signal"]
-    return out
-
-# ── Determine window and interval ──────────────────────────────────────────
-# Step 1: get last available daily bar to anchor 'end'
-daily_probe = fetch_bars(ticker, pd.Timestamp("1990-01-01"), pd.Timestamp.today().normalize(), "1d")
-if daily_probe.empty:
+daily_all = get_daily_max(ticker)
+if daily_all.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
-end_bar = daily_probe.index.max()
 
+# compute exact window
+end = daily_all.index.max()
 off = period_offset(period)
-if off is None:
-    # max: span full history
-    start_target = daily_probe.index.min()
-else:
-    start_target = end_bar - off
+start = daily_all.index.min() if off is None else (end - off)
 
-interval = auto_interval(period) if interval_mode == "Auto" else interval_mode
+# fixed left buffer in **days** to preserve MAs regardless of bar size
+LEFT_BUFFER_DAYS = 400
+daily = daily_all.loc[(daily_all.index >= (start - pd.Timedelta(days=LEFT_BUFFER_DAYS))) & (daily_all.index <= end)].copy()
 
-# Buffer for MA continuity at left edge
-bars_needed = 220
-if interval == "1d":   buffer_days = bars_needed
-elif interval == "1wk": buffer_days = bars_needed * 7
-else:                  buffer_days = bars_needed * 30
-
-fetch_start = start_target - pd.DateOffset(days=buffer_days)
-
-# ── Fetch only the needed bars at the chosen bar size ──────────────────────
-raw = fetch_bars(ticker, fetch_start, end_bar, interval)
+# choose resample rule (we NEVER fetch weekly/monthly from Yahoo)
 if interval == "1d":
-    raw = raw[raw.index.weekday < 5]  # remove weekends
+    bars = daily.copy()
+elif interval == "1wk":
+    bars = resample_ohlc(daily, "W-FRI")
+else:  # "1mo"
+    bars = resample_ohlc(daily, "M")
 
-if raw.empty:
-    st.error("No data returned for selected settings.")
-    st.stop()
+# ===================== Indicators on resampled bars =====================
+for w in (8,20,50,100,200):
+    bars[f"MA{w}"] = bars["Close"].rolling(w).mean()
 
-# ── Indicators and final trim ──────────────────────────────────────────────
-bars = add_indicators(raw)
-plot_df = bars[(bars.index >= start_target) & (bars.index <= end_bar)].copy()
+chg = bars["Close"].diff()
+gain = chg.clip(lower=0)
+loss = -chg.clip(upper=0)
+avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+rs = avg_gain / avg_loss
+bars["RSI14"] = 100 - (100 / (1 + rs))
+
+bars["EMA12"]  = bars["Close"].ewm(span=12, adjust=False).mean()
+bars["EMA26"]  = bars["Close"].ewm(span=26, adjust=False).mean()
+bars["MACD"]   = bars["EMA12"] - bars["EMA26"]
+bars["Signal"] = bars["MACD"].ewm(span=9, adjust=False).mean()
+bars["Hist"]   = bars["MACD"] - bars["Signal"]
+
+# final trim to the **exact** visible window
+plot_df = bars.loc[(bars.index >= start) & (bars.index <= end)].copy()
 if plot_df.empty:
     st.error("No data in selected window.")
     st.stop()
 
-# ── Build figure ───────────────────────────────────────────────────────────
+# ===================== Figure =====================
 fig = make_subplots(
     rows=4, cols=1, shared_xaxes=True,
     row_heights=[0.60, 0.14, 0.13, 0.13], vertical_spacing=0.04,
     specs=[[{"type":"candlestick"}],[{"type":"bar"}],[{"type":"scatter"}],[{"type":"scatter"}]]
 )
 
-# Price
+# Price + MAs
 fig.add_trace(go.Candlestick(
     x=plot_df.index,
-    open=plot_df["Open"], high=plot_df["High"],
-    low=plot_df["Low"], close=plot_df["Close"],
+    open=plot_df["Open"], high=plot_df["High"], low=plot_df["Low"], close=plot_df["Close"],
     increasing_line_color="#43A047", decreasing_line_color="#E53935",
     name="Price"
 ), row=1, col=1)
 
 for w, color in zip((8,20,50,100,200), ("green","purple","blue","orange","gray")):
     fig.add_trace(go.Scatter(
-        x=plot_df.index, y=plot_df[f"MA{w}"],
-        mode="lines", line=dict(color=color, width=1.2), name=f"MA{w}"
+        x=plot_df.index, y=plot_df[f"MA{w}"], mode="lines",
+        line=dict(color=color, width=1.2), name=f"MA{w}"
     ), row=1, col=1)
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
@@ -164,17 +139,15 @@ fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["MACD"],   mode="lines", lin
 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["Signal"], mode="lines", line=dict(width=1.2, color="orange"), name="Signal"), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# Clamp the x-range on ALL subplot axes
+# clamp x-range on ALL subplots
 fmt = xaxis_fmt(period)
-range_breaks = [dict(bounds=["sat","mon"])] if interval == "1d" else []
 for ax in ["xaxis","xaxis2","xaxis3","xaxis4"]:
     fig["layout"][ax].update(
         type="date",
         tickformat=fmt["fmt"],
         tickangle=fmt["angle"],
         rangeslider_visible=False,
-        rangebreaks=range_breaks,
-        range=[start_target, end_bar],
+        range=[start, end],
         showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed"
     )
 
@@ -191,6 +164,5 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# Debug footer: shows the actual plotted window and interval
-st.caption(f"Window: {start_target.date()} → {end_bar.date()}   |   Interval: {interval}   |   Rows: {len(plot_df)}")
-st.caption("© 2025 AD Fund Management LP")
+# debug footer
+st.caption(f"Plotted window: {start.date()} → {end.date()}   |   Bars: {len(plot_df)}   |   Interval: {interval}")
