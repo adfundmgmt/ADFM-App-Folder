@@ -10,7 +10,7 @@ st.sidebar.markdown("""
 Visualize key technical indicators using Yahoo Finance data.
 
 Features:
-- OHLC candlesticks
+- OHLC candlesticks (daily only)
 - 8/20/50/100/200 MAs
 - RSI(14) and MACD(12,26,9)
 """)
@@ -32,18 +32,32 @@ def period_offset(p: str) -> pd.DateOffset | None:
         "max": None,
     }[p]
 
-def xaxis_fmt(p: str):
-    if p in ("1mo","3mo"): return dict(fmt="%b %d", angle=-45)
-    if p in ("6mo","1y"):  return dict(fmt="%b %Y", angle=0)
-    return dict(fmt="%Y", angle=0)
+def xaxis_style(p: str):
+    # Tick density and label format tuned by horizon
+    if p in ("1mo","3mo"):
+        return dict(tickformat="%b %d", ticklabelmode="instant", tickangle=-45, nticks=30)
+    if p in ("6mo","1y"):
+        return dict(tickformat="%b %Y", ticklabelmode="instant", tickangle=0, nticks=24)
+    # 2y+
+    return dict(tickformat="%Y", ticklabelmode="instant", tickangle=0, nticks=10)
 
 # ===================== Data (daily only) =====================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_daily(tkr: str) -> pd.DataFrame:
+    # Hard-locked to daily candles. No interval option anywhere.
     df = yf.download(tkr, period="max", interval="1d", auto_adjust=False, progress=False)
-    if df.empty: return df
-    if df.index.tz is not None: df.index = df.index.tz_localize(None)
-    df = df[df.index.weekday < 5]  # drop weekends
+    if df.empty:
+        return df
+    # Ensure naive datetime index
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    # Remove non-trading days to avoid ragged spacing
+    df = df[df.index.weekday < 5]
+    # Drop rows with all NaNs that some tickers include
+    df = df.dropna(how="all")
+    # Forward-fill Volume zeros if any vendors return 0 on holidays
+    if "Volume" in df.columns:
+        df["Volume"] = df["Volume"].fillna(0)
     return df
 
 df = get_daily(ticker)
@@ -51,12 +65,15 @@ if df.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# compute window
+# Compute window
 end = df.index.max()
 off = period_offset(period)
 start = df.index.min() if off is None else (end - off)
 
-# add MAs
+# Guard: if start is before available data, clamp
+start = max(start, df.index.min())
+
+# Add MAs
 for w in (8,20,50,100,200):
     df[f"MA{w}"] = df["Close"].rolling(w).mean()
 
@@ -124,21 +141,25 @@ fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["MACD"],   mode="lines", lin
 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["Signal"], mode="lines", line=dict(width=1.2, color="orange"), name="Signal"), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# X-axis clamp
-fmt = xaxis_fmt(period)
+# X-axis style and clamp
+style = xaxis_style(period)
 for ax in ["xaxis","xaxis2","xaxis3","xaxis4"]:
     fig["layout"][ax].update(
         type="date",
-        tickformat=fmt["fmt"],
-        tickangle=fmt["angle"],
+        tickformat=style["tickformat"],
+        ticklabelmode=style["ticklabelmode"],
+        tickangle=style["tickangle"],
+        nticks=style["nticks"],
         rangeslider_visible=False,
         range=[start, end],
-        showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed"
+        showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed",
+        # Remove weekend gaps to keep spacing clean even if a few slipped through
+        rangebreaks=[dict(bounds=["sat","mon"])]
     )
 
 fig.update_layout(
     height=950,
-    title=dict(text=f"{ticker} | OHLC + RSI & MACD", x=0.5),
+    title=dict(text=f"{ticker} | OHLC + RSI & MACD (Daily)", x=0.5),
     plot_bgcolor="white", paper_bgcolor="white",
     hovermode="x unified",
     margin=dict(l=60, r=20, t=60, b=40),
