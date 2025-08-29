@@ -23,7 +23,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="AI Datacenter Theme Monitor", page_icon="📊", layout="wide")
+st.set_page_config(page_title="AI Datacenter Theme Monitor", layout="wide")
 
 # ---------------------
 # Preset baskets
