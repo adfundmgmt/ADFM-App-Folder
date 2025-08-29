@@ -88,25 +88,31 @@ def compute_metrics(close: pd.DataFrame, vol: pd.DataFrame, spy: pd.Series) -> p
         if len(s) < 61:
             continue
         pct = lambda r: (r-1)*100
+        # RS60 as scalar with guards
         try:
             rs60_ratio = (s.iloc[-1]/s.iloc[-61]) / (spy.reindex(s.index).iloc[-1]/spy.reindex(s.index).iloc[-61])
             rs60_pct = float(pct(rs60_ratio))
         except Exception:
             rs60_pct = np.nan
-        dist52w_pct = float(pct(s.iloc[-1]/high52[t].loc[s.index].iloc[-1]))
+        # 52w high distance (use last valid high scalar)
+        try:
+            hval = high52[t].reindex(s.index).dropna().iloc[-1]
+            dist52w_pct = float((s.iloc[-1]/hval - 1)*100) if hval and np.isfinite(hval) else np.nan
+        except Exception:
+            dist52w_pct = np.nan
         rows.append({
             "ticker": t,
             "price": round(float(s.iloc[-1]),2),
             "d5": round(float(pct(s.iloc[-1]/s.iloc[-6])) if len(s)>6 else np.nan,2),
             "d20": round(float(pct(s.iloc[-1]/s.iloc[-21])) if len(s)>21 else np.nan,2),
             "rs60": round(rs60_pct,2) if pd.notna(rs60_pct) else np.nan,
-            "dist52w": round(dist52w_pct,2),
-            "above50": bool(s.iloc[-1] > ma50[t].loc[s.index].iloc[-1]),
-            "above200": bool(s.iloc[-1] > ma200[t].loc[s.index].iloc[-1]),
-            "volz": round(float(((v.iloc[-1] - v20[t].loc[s.index].iloc[-1]) / vsd[t].loc[s.index].iloc[-1]) if vsd[t].loc[s.index].iloc[-1] else 0),2),
-            "rsi14": round(float(rsi14[t].loc[s.index].iloc[-1]),1),
-            "atrp": round(float(atrp[t].loc[s.index].iloc[-1]),2),
-            "break20": bool(s.iloc[-1] >= s.rolling(20).max().iloc[-1] and (((v.iloc[-1]-v20[t].loc[s.index].iloc[-1]) / (vsd[t].loc[s.index].iloc[-1] or np.nan))>1)),
+            "dist52w": round(dist52w_pct,2) if pd.notna(dist52w_pct) else np.nan,
+            "above50": bool(s.iloc[-1] > ma50[t].reindex(s.index).iloc[-1]),
+            "above200": bool(s.iloc[-1] > ma200[t].reindex(s.index).iloc[-1]),
+            "volz": round(float(((v.iloc[-1] - v20[t].reindex(s.index).iloc[-1]) / (vsd[t].reindex(s.index).iloc[-1] or np.nan))),2) if len(s)>20 else 0.0,
+            "rsi14": round(float(rsi14[t].reindex(s.index).iloc[-1]),1),
+            "atrp": round(float(atrp[t].reindex(s.index).iloc[-1]),2),
+            "break20": bool(len(s)>=20 and s.iloc[-1] >= s.rolling(20).max().iloc[-1] and ((v.iloc[-1]-v20[t].reindex(s.index).iloc[-1]) / (vsd[t].reindex(s.index).iloc[-1] or np.nan))>1),
         })
     df = pd.DataFrame(rows)
     if df.empty:
