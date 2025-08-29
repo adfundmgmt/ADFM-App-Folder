@@ -5,13 +5,12 @@ AI + Datacenter Theme Monitor
 No logins. No API keys. Uses Yahoo Finance via yfinance.
 
 Upgrades in this version
-- Cleaner layout with tabs and KPI cards
-- Consistent percent formatting in tables
-- Better legends and margins on charts
-- Controls grouped in sidebar with presets + custom tickers
+- Breadth redesigned: table now shows both % above DMAs and counts of highs/lows side by side.
+- Rolling 20d beta plot: replaced SMCI with META, added AAPL.
+- Added a new tab: "Extras" with correlation heatmap and rolling 60d return distribution.
 
 Run
-pip install streamlit yfinance pandas numpy plotly
+pip install streamlit yfinance pandas numpy plotly seaborn
 streamlit run theme_monitor.py
 """
 
@@ -22,14 +21,16 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="AI Datacenter Theme Monitor", layout="wide")
 
 # ---------------------
 # Preset baskets
 # ---------------------
-HYPERS = ["AMZN","MSFT","GOOGL","META","ORCL"]
-VENDORS = ["NVDA","AMD","AVGO","MRVL","SMCI","TSM","ASML","MU"]
+HYPERS = ["AMZN","MSFT","GOOGL","META","ORCL","AAPL"]
+VENDORS = ["NVDA","AMD","AVGO","MRVL","TSM","ASML","MU"]
 NETWORK_POWER = ["ANET","CSCO","ACLS","AMAT","LRCX","KLAC","HPE","NTAP"]
 REITS_POWER = ["EQIX","DLR","IRM","VST","NEE","DUK"]
 DEFAULT = HYPERS + VENDORS + NETWORK_POWER + REITS_POWER
@@ -64,21 +65,21 @@ def returns_table(df: pd.DataFrame) -> pd.DataFrame:
     return rets.sort_values("20d", ascending=False).round(2)
 
 def breadth(df: pd.DataFrame) -> pd.DataFrame:
+    last = df.iloc[-1]
     out = {}
     for w in [20,50,200]:
         ma = df.rolling(w).mean()
-        out[f">{w}DMA"] = (df.iloc[-1] > ma.iloc[-1]).mean()*100.0
+        out[f">{w}DMA %"] = (last > ma.iloc[-1]).mean()*100.0
+        out[f">{w}DMA count"] = int((last > ma.iloc[-1]).sum())
     win = 63
-    out["3m highs"] = int((df.iloc[-1] >= df.rolling(win).max().iloc[-1]).sum())
-    out["3m lows"] = int((df.iloc[-1] <= df.rolling(win).min().iloc[-1]).sum())
+    out["3m highs"] = int((last >= df.rolling(win).max().iloc[-1]).sum())
+    out["3m lows"] = int((last <= df.rolling(win).min().iloc[-1]).sum())
     return pd.DataFrame(out, index=["Breadth"]).T
 
 def rolling_beta(series: pd.Series, market: pd.Series, window: int = 20) -> pd.Series:
     x = market.pct_change()
     y = series.pct_change()
-    cov = y.rolling(window).cov(x)
-    var = x.rolling(window).var()
-    return cov/var
+    return y.rolling(window).cov(x) / x.rolling(window).var()
 
 # ---------------------
 # Sidebar controls
@@ -90,8 +91,9 @@ with st.sidebar.expander("About This Tool", expanded=True):
         Price-based trackers for the AI compute and datacenter buildout.
         - Equal-weight basket vs SPY
         - Leaders and laggards over 1d, 5d, 20d, YTD
-        - Breadth: % above 20/50/200 DMA, 3m highs and lows
-        - Risk: rolling beta to SPY
+        - Breadth redesigned: % above DMAs + counts
+        - Risk: rolling beta to SPY (NVDA, AMD, META, AMZN, MSFT, GOOGL, AAPL)
+        - Extras: correlations and rolling return distributions
         """
     )
 
@@ -119,7 +121,6 @@ if custom.strip():
 # ---------------------
 spy = fetch_prices(("SPY",), period=period).squeeze()
 px = fetch_prices(tuple(tickers), period=period)
-
 if px.empty or spy.empty:
     st.warning("No price data returned. Try fewer tickers or a shorter history.")
     st.stop()
@@ -129,7 +130,7 @@ px = px.loc[px.index.intersection(spy.index)]
 spy = spy.loc[px.index]
 
 # ---------------------
-# Top KPIs
+# KPIs
 # ---------------------
 idx = ew_index(px)
 rel_vs_spy = idx/(spy/spy.iloc[0])
@@ -143,7 +144,7 @@ k4.metric("20d dispersion σ", f"{px.pct_change(20).iloc[-1].std()*100:,.1f}%")
 # ---------------------
 # Tabs
 # ---------------------
-overview, leaders_tab, risk_tab = st.tabs(["Overview","Leaders & Breadth","Risk & Beta"])
+overview, leaders_tab, risk_tab, extras_tab = st.tabs(["Overview","Leaders & Breadth","Risk & Beta","Extras"])
 
 with overview:
     st.subheader("Equal-weight basket vs SPY")
@@ -157,37 +158,31 @@ with leaders_tab:
     c1, c2 = st.columns([1,1])
     with c1:
         st.subheader("Leaders & laggards")
-        tbl = returns_table(px)
-        st.dataframe(
-            tbl,
-            use_container_width=True,
-            column_config={
-                "1d": st.column_config.NumberColumn(format="%.2f%%"),
-                "5d": st.column_config.NumberColumn(format="%.2f%%"),
-                "20d": st.column_config.NumberColumn(format="%.2f%%"),
-                "YTD": st.column_config.NumberColumn(format="%.2f%%"),
-            },
-        )
+        st.dataframe(returns_table(px), use_container_width=True)
     with c2:
         st.subheader("Breadth")
-        br = breadth(px)
-        st.dataframe(
-            br,
-            use_container_width=True,
-            column_config={
-                ">20DMA": st.column_config.NumberColumn(format="%.1f%%"),
-                ">50DMA": st.column_config.NumberColumn(format="%.1f%%"),
-                ">200DMA": st.column_config.NumberColumn(format="%.1f%%"),
-            },
-        )
+        st.dataframe(breadth(px), use_container_width=True)
 
 with risk_tab:
     st.subheader("Rolling 20d beta to SPY (key names)")
-    key_show = [t for t in ["NVDA","AMD","SMCI","AMZN","MSFT","GOOGL","EQIX","DLR"] if t in px.columns][:6]
+    key_show = [t for t in ["NVDA","AMD","META","AMZN","MSFT","GOOGL","AAPL"] if t in px.columns]
     fig2 = go.Figure()
     for t in key_show:
         fig2.add_trace(go.Scatter(x=px.index, y=rolling_beta(px[t], spy, 20), mode="lines", name=t))
     fig2.update_layout(height=380, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.02, x=0))
     st.plotly_chart(fig2, use_container_width=True)
+
+with extras_tab:
+    st.subheader("Correlation heatmap (60d returns)")
+    rets = px.pct_change().dropna()
+    corr = rets.rolling(60).corr().groupby(level=0).tail(len(px.columns))
+    latest_corr = corr.xs(corr.index.get_level_values(0)[-1])
+    fig, ax = plt.subplots(figsize=(6,5))
+    sns.heatmap(latest_corr, cmap="RdBu_r", center=0, annot=False, ax=ax)
+    st.pyplot(fig)
+
+    st.subheader("Rolling 60d return distribution")
+    roll = rets.rolling(60).sum()*100
+    st.line_chart(roll)
 
 st.caption("All series equal-weight. For decisions, combine with positioning and flows.")
