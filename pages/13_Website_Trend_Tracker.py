@@ -60,14 +60,22 @@ def _chunk_with_anchor(domains: List[str], anchor: str) -> List[List[str]]:
     return chunks
 
 def _stitch_with_anchor(frames: List[pd.DataFrame], anchor: str) -> pd.DataFrame:
-    """Scale each frame to the first frame using the anchor column's overlap average ratio."""
-    # Normalize column names and set Date
+    """Scale each frame to the first frame using the anchor column's overlap average ratio.
+    Handles pytrends' date-as-index shape robustly.
+    """
+    # Normalize column names and ensure a Date column exists
     normed = []
     for df in frames:
         df = df.copy()
+        # pytrends returns a DateTimeIndex named 'date' (or unnamed). Convert to column.
+        if "Date" not in df.columns and "date" not in df.columns:
+            df = df.reset_index()
+        # Drop isPartial if present
         if "isPartial" in df.columns:
             df = df.drop(columns=["isPartial"])
-        df = df.rename(columns={"date": "Date"})
+        # Standardize column name and dtype
+        if "date" in df.columns and "Date" not in df.columns:
+            df = df.rename(columns={"date": "Date"})
         df["Date"] = pd.to_datetime(df["Date"])  # ensure ts
         normed.append(df)
 
@@ -79,6 +87,32 @@ def _stitch_with_anchor(frames: List[pd.DataFrame], anchor: str) -> pd.DataFrame
             out = out.merge(df, on="Date", how="outer")
         out = out.sort_values("Date").reset_index(drop=True)
         return out
+
+    # Use the base anchor as reference level
+    out = base.copy()
+    for df in normed[1:]:
+        if anchor not in df.columns:
+            # Merge without scaling if anchor absent (fallback)
+            out = out.merge(df, on="Date", how="outer")
+            continue
+        # compute scaling on overlapping dates where both anchors > 0
+        merged_anchor = pd.merge(out[["Date", anchor]], df[["Date", anchor]], on="Date", how="inner", suffixes=("_base", "_new"))
+        overlap = merged_anchor[(merged_anchor[f"{anchor}_base"] > 0) & (merged_anchor[f"{anchor}_new"] > 0)]
+        if len(overlap) == 0:
+            scale = 1.0
+        else:
+            # ratio to scale new frame so that its anchor matches base anchor on average
+            scale = (overlap[f"{anchor}_base"].astype(float).mean()) / (overlap[f"{anchor}_new"].astype(float).mean())
+        df_scaled = df.copy()
+        for c in df_scaled.columns:
+            if c not in {"Date"}:
+                df_scaled[c] = pd.to_numeric(df_scaled[c], errors="coerce").astype(float) * scale
+        out = out.merge(df_scaled, on="Date", how="outer")
+
+    # If duplicate columns resulted (same site from multiple chunks), take the max
+    out = out.groupby(level=0, axis=1).max()
+    out = out.sort_values("Date").reset_index()
+    return out
 
     # Use the base anchor as reference level
     out = base.copy()
