@@ -4,6 +4,7 @@ import numpy as np
 import yfinance as yf
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
+import io
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -16,14 +17,14 @@ st.title("Ratio Charts")
 # -------------- Sidebar --------------
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
-    "This dashboard visualizes regime shifts in US equities:\n\n"
-    "- Cyclical vs Defensive (Eq Wt): ratio of cumulative returns for cyclical (XLK, XLI, XLF, XLC, XLY) vs defensive (XLP, XLE, XLV, XLRE, XLB, XLU) ETFs, normalized to 100.\n"
-    "- Preset Ratios: SMH/IGV, QQQ/IWM, HYG/LQD, HYG/IEF.\n"
-    "- Custom Ratio: compare any two tickers."
+    "Visualizes regime shifts via ratios.\n\n"
+    "- Cyclicals vs Defensives (Eq Wt) normalized to base date\n"
+    "- Presets: SMH/IGV, QQQ/IWM, HYG/LQD, HYG/IEF\n"
+    "- Custom ratio between any two tickers"
 )
 
 st.sidebar.header("Look back")
-spans = {
+SPANS = {
     "3 Months": 90,
     "6 Months": 180,
     "9 Months": 270,
@@ -32,7 +33,11 @@ spans = {
     "3 Years": 365 * 3,
     "5 Years": 365 * 5
 }
-span_key = st.sidebar.selectbox("", list(spans.keys()), index=list(spans.keys()).index("5 Years"))
+span_key = st.sidebar.selectbox("", list(SPANS.keys()), index=list(SPANS.keys()).index("5 Years"))
+
+st.sidebar.markdown("---")
+st.sidebar.header("Options")
+use_log = st.sidebar.checkbox("Log scale", value=False)
 
 st.sidebar.markdown("---")
 st.sidebar.header("Custom Ratio")
@@ -40,32 +45,150 @@ custom_t1 = st.sidebar.text_input("Ticker 1", "NVDA").strip().upper()
 custom_t2 = st.sidebar.text_input("Ticker 2", "SMH").strip().upper()
 
 # -------------- Dates --------------
-now = datetime.today()
+now = pd.Timestamp(datetime.today().date())
 hist_start = now - timedelta(days=365 * 15)
 
 if span_key == "YTD":
     disp_start = pd.Timestamp(datetime(now.year, 1, 1))
 else:
-    disp_start = pd.Timestamp(now - timedelta(days=spans[span_key]))
+    disp_start = pd.Timestamp(now - timedelta(days=SPANS[span_key]))
+
+# Add lookback pad for indicators (RSI 14, MA 200)
+INDICATOR_PAD_DAYS = 260
+fetch_start = min(hist_start, disp_start - timedelta(days=INDICATOR_PAD_DAYS))
+fetch_end = now + timedelta(days=1)  # yfinance end is exclusive
+
+# -------------- Definitions --------------
+CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
+DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
+PRESETS    = [("SMH", "IGV"), ("QQQ", "IWM"), ("HYG", "LQD"), ("HYG", "IEF")]
+STATIC     = sorted(set(CYCLICALS + DEFENSIVES + [t for a, b in PRESETS for t in (a, b)]))
+
+# -------------- Helpers --------------
+def first_on_or_after_index(idx: pd.DatetimeIndex, ts: pd.Timestamp) -> pd.Timestamp | None:
+    if len(idx) == 0:
+        return None
+    i = idx.searchsorted(ts, side="left")
+    if i >= len(idx):
+        return None
+    return idx[i]
+
+def last_on_or_before_value(s: pd.Series, ts: pd.Timestamp) -> float | None:
+    if s.empty:
+        return None
+    i = s.index.searchsorted(ts, side="right") - 1
+    if i < 0:
+        return None
+    v = float(s.iloc[i])
+    return v if np.isfinite(v) else None
+
+def rsi_wilder(s: pd.Series, window=14) -> pd.Series:
+    d = s.diff()
+    up = d.clip(lower=0)
+    dn = -d.clip(upper=0)
+    ma_up = up.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+    ma_dn = dn.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+    rs = ma_up / ma_dn.replace(0, np.nan)
+    out = 100 - (100 / (1 + rs))
+    return out
+
+def compute_cumrets(df: pd.DataFrame) -> pd.DataFrame:
+    return (1.0 + df.pct_change()).cumprod()
+
+def compute_ratio_by_base(s1: pd.Series, s2: pd.Series, base_ts: pd.Timestamp, base=100.0) -> pd.Series:
+    s1, s2 = s1.align(s2, join="inner")
+    s1 = s1.replace([np.inf, -np.inf], np.nan).dropna()
+    s2 = s2.replace([np.inf, -np.inf], np.nan).dropna()
+    if s1.empty or s2.empty:
+        return pd.Series(dtype=float)
+
+    b1 = last_on_or_before_value(s1, base_ts)
+    b2 = last_on_or_before_value(s2, base_ts)
+    if b1 is None or b2 is None or not np.isfinite(b1) or not np.isfinite(b2) or b2 == 0:
+        return pd.Series(dtype=float)
+
+    n1 = s1 / b1 * base
+    n2 = s2 / b2 * base
+    ratio = n1 / n2
+    ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+    return ratio
+
+def plot_ratio(ratio: pd.Series, title: str, ylab: str, use_log_scale: bool = False):
+    ratio = ratio.dropna()
+    if ratio.empty:
+        fig, ax = plt.subplots(figsize=(10, 2))
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        ax.axis("off")
+        return fig, None
+
+    # indicators across the full series then cut to view
+    ma50  = ratio.rolling(50, min_periods=1).mean()
+    ma200 = ratio.rolling(200, min_periods=1).mean()
+    rsi = rsi_wilder(ratio)
+
+    view = ratio.loc[disp_start:]
+    ma50v = ma50.loc[disp_start:]
+    ma200v = ma200.loc[disp_start:]
+    rsiv = rsi.loc[disp_start:]
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, sharex=True, figsize=(12, 4),
+        gridspec_kw={"height_ratios": [3, 1]},
+        constrained_layout=True
+    )
+
+    ax1.plot(view.index, view.values, lw=1.2, label=title)
+    ax1.plot(ma50v.index, ma50v.values, lw=1.0, label="50 DMA")
+    ax1.plot(ma200v.index, ma200v.values, lw=1.0, label="200 DMA")
+
+    if use_log_scale:
+        ax1.set_yscale("log")
+
+    x_min = view.index.min()
+    x_max = now
+    ax1.set_xlim(left=x_min, right=x_max)
+    ax1.margins(x=0)
+
+    y_all = pd.concat([view, ma50v, ma200v]).replace([np.inf, -np.inf], np.nan).dropna()
+    if not y_all.empty and not use_log_scale:
+        mn, mx = y_all.min(), y_all.max()
+        pad = (mx - mn) * 0.05 if mx != mn else (abs(mn) * 0.05 if mn != 0 else 1.0)
+        ax1.set_ylim(mn - pad, mx + pad)
+
+    ax1.set_ylabel(ylab)
+    ax1.set_title(title)
+    ax1.legend(loc="upper left", fontsize=8)
+    ax1.grid(True, linestyle="--", alpha=0.3)
+
+    ax2.plot(rsiv.index, rsiv.values, lw=1.0)
+    ax2.axhline(70, ls=":", lw=1)
+    ax2.axhline(30, ls=":", lw=1)
+    ax2.set_xlim(left=x_min, right=x_max)
+    ax2.set_ylim(0, 100)
+    ax2.set_ylabel("RSI")
+    ax2.grid(True, linestyle="--", alpha=0.3)
+
+    # prepare CSV for download
+    out = pd.DataFrame({"ratio": ratio}).loc[disp_start:]
+    return fig, out
+
+def to_download(name: str, df: pd.DataFrame) -> bytes:
+    buf = io.StringIO()
+    df.to_csv(buf, index=True)
+    return buf.getvalue().encode()
 
 # -------------- Data fetch --------------
-@st.cache_data(ttl=3600)
-def fetch_closes(tickers, start, end):
-    """
-    Returns a DataFrame of adjusted closes with one column per ticker.
-    Uses yf.download with auto_adjust=True and handles single vs multi output.
-    Retries once with period if needed.
-    """
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_closes(tickers: list[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     if isinstance(tickers, str):
         tickers = [tickers]
 
-    def _normalize(df, tickers_list):
-        if df is None or df.empty:
+    def _normalize(df, tlist):
+        if df is None or len(tlist) == 0:
             return pd.DataFrame()
-        # When auto_adjust=True, 'Close' is already adjusted
         if isinstance(df.columns, pd.MultiIndex):
             cols = {}
-            for t in tickers_list:
+            for t in tlist:
                 try:
                     s = df[(t, "Close")].dropna()
                     if not s.empty:
@@ -74,11 +197,15 @@ def fetch_closes(tickers, start, end):
                     continue
             out = pd.DataFrame(cols)
         else:
-            # Single ticker case
+            # single ticker shape
             if "Close" in df.columns:
-                out = pd.DataFrame({tickers_list[0]: df["Close"].dropna()})
+                out = pd.DataFrame({tlist[0]: df["Close"].dropna()})
             else:
-                out = pd.DataFrame()
+                # sometimes yf returns a Series
+                if isinstance(df, pd.Series):
+                    out = df.to_frame(name=tlist[0]).dropna()
+                else:
+                    out = pd.DataFrame()
         return out.sort_index().ffill().dropna(how="all")
 
     try:
@@ -92,11 +219,10 @@ def fetch_closes(tickers, start, end):
     except Exception:
         pass
 
-    # Retry using a long period if start/end failed on some symbols
+    # fallback with long period
     try:
-        period = "15y"
         raw2 = yf.download(
-            tickers, period=period,
+            tickers, period="15y",
             auto_adjust=True, progress=False, group_by="ticker", threads=True
         )
         out2 = _normalize(raw2, tickers)
@@ -104,124 +230,46 @@ def fetch_closes(tickers, start, end):
     except Exception:
         return pd.DataFrame()
 
-# -------------- Definitions --------------
-CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
-DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
-PRESETS    = [("SMH", "IGV"), ("QQQ", "IWM"), ("HYG", "LQD"), ("HYG", "IEF")]
-STATIC     = CYCLICALS + DEFENSIVES + [t for a, b in PRESETS for t in (a, b)]
-
-def compute_cumrets(df: pd.DataFrame) -> pd.DataFrame:
-    return (1.0 + df.pct_change()).cumprod()
-
-def last_on_or_before(s: pd.Series, ts: pd.Timestamp) -> float:
-    s = s.dropna()
-    if s.empty:
-        return np.nan
-    try:
-        return float(s.loc[:ts].iloc[-1])
-    except Exception:
-        return float(s.iloc[0])
-
-def compute_ratio(s1: pd.Series, s2: pd.Series, base_date: pd.Timestamp, base=100.0, scale=1.0) -> pd.Series:
-    if s1.dropna().empty or s2.dropna().empty:
-        return pd.Series(dtype=float)
-    s1, s2 = s1.align(s2, join="inner")
-    if s1.dropna().empty or s2.dropna().empty:
-        return pd.Series(dtype=float)
-    b1 = last_on_or_before(s1, base_date)
-    b2 = last_on_or_before(s2, base_date)
-    if not np.isfinite(b1) or not np.isfinite(b2):
-        return pd.Series(dtype=float)
-    n1 = s1 / b1 * base
-    n2 = s2 / b2 * base
-    return (n1 / n2) * scale
-
-def rsi_wilder(s: pd.Series, window=14) -> pd.Series:
-    d = s.diff()
-    up = d.clip(lower=0)
-    dn = -d.clip(upper=0)
-    ma_up = up.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
-    ma_dn = dn.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
-    rs = ma_up / ma_dn.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
-
-def make_fig(ratio: pd.Series, title: str, ylab: str):
-    ratio = ratio.dropna()
-    if ratio.empty:
-        fig, ax = plt.subplots(figsize=(10, 2))
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
-        ax.axis("off")
-        return fig
-
-    ma50  = ratio.rolling(50, min_periods=1).mean()
-    ma200 = ratio.rolling(200, min_periods=1).mean()
-    view = ratio.loc[disp_start:]
-    rsi  = rsi_wilder(ratio).loc[disp_start:]
-
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, sharex=True, figsize=(12, 4),
-        gridspec_kw={"height_ratios": [3, 1]},
-        constrained_layout=True
-    )
-
-    ax1.plot(view.index, view, color="black", lw=1.2, label=title)
-    ax1.plot(ma50.index, ma50, color="#1f77b4", lw=1.0, label="50 DMA")
-    ax1.plot(ma200.index, ma200, color="#d62728", lw=1.0, label="200 DMA")
-    ax1.set_xlim(view.index.min(), pd.Timestamp(now))
-    ax1.margins(x=0)
-
-    y_all = pd.concat([view, ma50.loc[disp_start:], ma200.loc[disp_start:]]).replace([np.inf, -np.inf], np.nan).dropna()
-    mn, mx = y_all.min(), y_all.max()
-    pad = (mx - mn) * 0.05 if mx != mn else (abs(mn) * 0.05 if mn != 0 else 1.0)
-    ax1.set_ylim(mn - pad, mx + pad)
-
-    ax1.set_ylabel(ylab)
-    ax1.set_title(title)
-    ax1.legend(loc="upper left", fontsize=8)
-    ax1.grid(True, linestyle="--", alpha=0.3)
-
-    ax2.plot(rsi.index, rsi, color="black", lw=1.0)
-    ax2.axhline(70, ls=":", lw=1, color="red")
-    ax2.axhline(30, ls=":", lw=1, color="green")
-    ax2.set_xlim(view.index.min(), pd.Timestamp(now))
-    ax2.set_ylim(0, 100)
-    ax2.set_ylabel("RSI")
-    if not rsi.empty:
-        ax2.text(rsi.index[0], 72, "Overbought", fontsize=7, color="red")
-        ax2.text(rsi.index[0], 28, "Oversold", fontsize=7, color="green")
-    ax2.grid(True, linestyle="--", alpha=0.3)
-
-    return fig
-
 # -------------- Static block: Cyclicals vs Defensives --------------
-closes_static = fetch_closes(STATIC, hist_start, now)
+closes_static = fetch_closes(STATIC, fetch_start, fetch_end)
 if closes_static.empty:
     st.error("Failed to download price data.")
     st.stop()
 
-cumrets_stat = compute_cumrets(closes_static)
+cumrets = compute_cumrets(closes_static)
 
-eq_cyc = cumrets_stat[CYCLICALS].mean(axis=1)
-eq_def = cumrets_stat[DEFENSIVES].mean(axis=1)
-r_cd   = compute_ratio(eq_cyc, eq_def, base_date=disp_start, base=100.0)
+# Equal weight baskets of cumulative returns
+eq_cyc = cumrets[CYCLICALS].mean(axis=1, skipna=True)
+eq_def = cumrets[DEFENSIVES].mean(axis=1, skipna=True)
 
-st.pyplot(make_fig(r_cd, "Cyclicals/Defensives (Eq Wt)", "Ratio"), use_container_width=True)
+ratio_cd = compute_ratio_by_base(eq_cyc, eq_def, base_ts=disp_start, base=100.0)
+fig, df_download = plot_ratio(ratio_cd, "Cyclical vs Defensive (Eq Wt)", "Ratio", use_log_scale=use_log)
+st.pyplot(fig, use_container_width=True)
+if df_download is not None and not df_download.empty:
+    st.download_button("Download Cyc/Def CSV", data=to_download("cyc_def.csv", df_download), file_name="cyc_def.csv", mime="text/csv")
 
 st.markdown("---")
 
 # -------------- Preset ratios --------------
 for a, b in PRESETS:
-    if a in cumrets_stat.columns and b in cumrets_stat.columns:
-        ratio = compute_ratio(cumrets_stat[a], cumrets_stat[b], base_date=disp_start, base=100.0)
-        st.pyplot(make_fig(ratio, f"{a}/{b}", f"{a}/{b}"), use_container_width=True)
+    if a in cumrets.columns and b in cumrets.columns:
+        r = compute_ratio_by_base(cumrets[a], cumrets[b], base_ts=disp_start, base=100.0)
+        fig, dd = plot_ratio(r, f"{a}/{b}", f"{a}/{b}", use_log_scale=use_log)
+        st.pyplot(fig, use_container_width=True)
+        if dd is not None and not dd.empty:
+            st.download_button(f"Download {a}_{b} CSV", data=to_download(f"{a}_{b}.csv", dd), file_name=f"{a}_{b}.csv", mime="text/csv")
         st.markdown('---')
 
 # -------------- Custom ratio --------------
 if custom_t1 and custom_t2:
-    closes_c = fetch_closes([custom_t1, custom_t2], hist_start, now)
-    if not closes_c.empty and all(t in closes_c.columns for t in [custom_t1, custom_t2]):
+    tickers = [custom_t1, custom_t2]
+    closes_c = fetch_closes(tickers, fetch_start, fetch_end)
+    if not closes_c.empty and all(t in closes_c.columns for t in tickers):
         cum_c = compute_cumrets(closes_c)
-        r_c = compute_ratio(cum_c[custom_t1], cum_c[custom_t2], base_date=disp_start, base=100.0)
-        st.pyplot(make_fig(r_c, f"{custom_t1}/{custom_t2}", f"{custom_t1}/{custom_t2}"), use_container_width=True)
+        r_c = compute_ratio_by_base(cum_c[custom_t1], cum_c[custom_t2], base_ts=disp_start, base=100.0)
+        fig, dd = plot_ratio(r_c, f"{custom_t1}/{custom_t2}", f"{custom_t1}/{custom_t2}", use_log_scale=use_log)
+        st.pyplot(fig, use_container_width=True)
+        if dd is not None and not dd.empty:
+            st.download_button(f"Download {custom_t1}_{custom_t2} CSV", data=to_download(f"{custom_t1}_{custom_t2}.csv", dd), file_name=f"{custom_t1}_{custom_t2}.csv", mime="text/csv")
     else:
         st.warning(f"Data not available for {custom_t1}/{custom_t2}.")
