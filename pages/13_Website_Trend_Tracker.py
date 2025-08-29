@@ -18,12 +18,10 @@ st.set_page_config(page_title="Website Trend Tracker", page_icon="📈", layout=
 DEFAULT_SITES = [
     # AI front-end
     "openai.com", "anthropic.com", "perplexity.ai",
-    # Compute and servers
-    "nvidia.com", "amd.com", "supermicro.com",
+    # China
+    "alibaba.com",
     # Cloud / hyperscalers
     "aws.amazon.com", "azure.microsoft.com", "cloud.google.com", "coreweave.com",
-    # Infra REIT / power
-    "digitalrealty.com", "vistracorp.com"
 ]
 
 # =====================
