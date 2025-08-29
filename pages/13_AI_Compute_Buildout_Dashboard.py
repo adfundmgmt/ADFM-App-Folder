@@ -1,376 +1,189 @@
-# ai_compute_buildout_dashboard.py
+# theme_monitor.py
 
 """
-A single Streamlit app with 4 practical trackers for the AI + datacenter theme
-across US, Europe ADRs, and Asia ADRs. No GA4. No Google Trends.
+AI + Datacenter Theme Monitor
+No logins. No API keys. Uses Yahoo Finance via yfinance.
 
-Tabs
-1) Hyperscaler CapEx (SEC EDGAR XBRL facts)
-2) Filings AI Mentions (10-Q/10-K keyword counts)
-3) Power Demand & Prices (EIA API)
-4) Vendor Revenue Trend (NVDA, AMD, SMCI, etc via SEC facts)
+Panels
+- Basket overview: equal-weight index, vs SPY, KPIs
+- Leaders & laggards: 1d, 5d, 20d returns
+- Breadth: % above 20/50/200 DMA, 3m highs/lows
+- Risk: rolling beta to SPY, drawdowns
+- Ratio charts: NVDA vs basket, Vendors vs Hyperscalers
 
-Notes
-- Requires internet access when you run it locally or on Streamlit Cloud.
-- SEC API requires a User-Agent header with your email or firm. Enter it in the sidebar.
-- EIA API requires an API key (free). Enter it in the sidebar to enable the Power tab.
+Run
+pip install streamlit yfinance pandas numpy plotly
+streamlit run theme_monitor.py
 """
 
-from __future__ import annotations
-import json
 import math
-import re
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
-
-import pandas as pd
+from typing import Dict, List, Tuple
 import numpy as np
-import requests
-import streamlit as st
+import pandas as pd
 import plotly.graph_objects as go
+import streamlit as st
+import yfinance as yf
 
-st.set_page_config(page_title="AI Compute Buildout Dashboard", page_icon="📊", layout="wide")
-
-# =====================
-# Sidebar: About
-# =====================
-with st.sidebar:
-    st.title("AI Compute Buildout")
-    st.caption("Decision trackers for the AI + datacenter theme. Data from SEC EDGAR and EIA.")
-    with st.expander("About This Tool", expanded=True):
-        st.write(
-            """
-            **What this does**
-            - Pulls **CapEx** and **Revenue** time series from the SEC XBRL facts API for selected companies.
-            - Scans the latest **10-Q/10-K** filings for **AI/data center** keyword counts.
-            - Optional: fetches **US power demand and prices** from EIA for PJM, ERCOT, CAISO, MISO.
-
-            **Why it helps**
-            - CapEx lines at hyperscalers are a direct proxy for compute and data center build.
-            - Filing mentions show narrative intensity that often leads real spend.
-            - Power demand and price tighten when GPU buildouts stress grids.
-
-            **Inputs needed**
-            - SEC header: add your email or firm so EDGAR permits requests.
-            - EIA key: paste your API key to enable power data.
-            """
-        )
-    st.markdown("---")
-    sec_header = st.text_input("SEC User-Agent (email or firm)", value="you@example.com")
-    eia_key = st.text_input("EIA API key (optional for Power tab)", value="", type="password")
+st.set_page_config(page_title="AI Datacenter Theme Monitor", page_icon="📊", layout="wide")
 
 # =====================
-# Static helpers
+# Preset baskets (tickers are liquid US listings / ADRs)
 # =====================
-SEC_BASE = "https://data.sec.gov"
-HEADERS = lambda: {"User-Agent": sec_header or "you@example.com", "Accept-Encoding": "gzip", "Host": "data.sec.gov"}
+HYPERS = ["AMZN","MSFT","GOOGL","META","ORCL"]
+VENDORS = ["NVDA","AMD","AVGO","MRVL","SMCI","TSM","ASML","MU"]
+NETWORK_POWER = ["ANET","CSCO","ACLS","AMAT","LRCX","KLAC","HPE","NTAP"]
+REITS_POWER = ["EQIX","DLR","IRM","VST","NEE","DUK"]
+ASIA_ADR = ["BIDU","BABA","JD","NTES","TCEHY"]
+EU_NAMES = ["SAP","ADBE","SNOW","ORCL","ASML"]
 
-# Common tickers and CIKs (leading zeros kept)
-CIK_MAP: Dict[str, str] = {
-    # Hyperscalers
-    "AMZN": "0001018724",
-    "MSFT": "0000789019",
-    "GOOGL": "0001652044",  # Alphabet
-    "META": "0001326801",
-    "ORCL": "0001341439",
-    # Infra REITs
-    "EQIX": "0001101239",
-    "DLR":  "0001297996",
-    # AI vendors / servers
-    "NVDA": "0001045810",
-    "AMD":  "0000002488",
-    "SMCI": "0001629280",
-    # Asia/EU ADRs with SEC reporting
-    "TSM":  "0001046179",
-    "ASML": "0000937480",
-}
-
-CAPEX_CANDIDATES = [
-    "PaymentsToAcquirePropertyPlantAndEquipment",
-    "PurchaseOfPropertyAndEquipment",
-    "PaymentsToAcquireProductiveAssets",
-    "CapitalExpenditures",
-]
-REVENUE_CANDIDATES = [
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "SalesRevenueNet",
-    "Revenues",
-]
-
-KEYWORDS = ["data center", "datacenter", "GPU", "accelerator", "AI", "NVIDIA", "HBM", "inference", "training"]
-
-EBA_SERIES = {
-    # EIA EBA series ids: demand hourly. For CAISO use CISO, ERCOT ERCO
-    "PJM": "EBA.PJM-ALL.D.H",
-    "ERCOT": "EBA.ERCO-ALL.D.H",
-    "CAISO": "EBA.CISO-ALL.D.H",
-    "MISO": "EBA.MISO-ALL.D.H",
-}
-PRICE_SERIES = {
-    # Retail industrial electricity price cents/kWh (monthly). State averages as simple proxies.
-    # Users can adjust to precise hubs if they prefer.
-    "US": "ELEC.PRICE.IND.US-ALL.M",
-}
+DEFAULT = HYPERS + VENDORS + NETWORK_POWER + REITS_POWER
 
 # =====================
-# Caching wrappers
-# =====================
-@st.cache_data(show_spinner=False)
-def sec_company_facts(cik: str) -> dict:
-    url = f"{SEC_BASE}/api/xbrl/companyfacts/CIK{cik}.json"
-    r = requests.get(url, headers=HEADERS(), timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-@st.cache_data(show_spinner=False)
-def sec_submissions(cik: str) -> dict:
-    url = f"{SEC_BASE}/submissions/CIK{cik}.json"
-    r = requests.get(url, headers=HEADERS(), timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-@st.cache_data(show_spinner=False)
-def fetch_eia_series(series_id: str, api_key: str, rows: int = 2000) -> pd.DataFrame:
-    url = f"https://api.eia.gov/series/?api_key={api_key}&series_id={series_id}"
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    js = r.json()
-    data = js["series"][0]["data"]
-    df = pd.DataFrame(data, columns=["period", "value"])  # newest first
-    # Handle hourly vs monthly formats
-    if len(df.iloc[0, 0]) in (10, 13):  # hourly like YYYYMMDDHH or YYYYMMDDTHHZ
-        df["Date"] = pd.to_datetime(df["period"].astype(str).str[:10], format="%Y%m%d%H", errors="coerce")
-    else:
-        # monthly YYYYMM
-        df["Date"] = pd.to_datetime(df["period"].astype(str)+"01", format="%Y%m%d", errors="coerce")
-    df["value"] = pd.to_numeric(df["value"], errors="coerce")
-    return df.sort_values("Date")
-
-# =====================
-# Parsing helpers
+# Helpers
 # =====================
 
-def _best_concept(facts: dict, candidates: List[str]) -> Optional[Tuple[str, list]]:
-    if not facts or "facts" not in facts:
-        return None
-    usgaap = facts.get("facts", {}).get("us-gaap", {})
-    best_name, best_list = None, None
-    for name in candidates:
-        obj = usgaap.get(name)
-        if not obj:
-            continue
-        units = obj.get("units", {})
-        # prefer USD then USDm
-        for u in ("USD", "USDm", "USD Millions"):
-            if u in units and units[u]:
-                best_name, best_list = name, units[u]
-                break
-        if best_list:
-            break
-    if best_list is None:
-        return None
-    return best_name, best_list
-
-
-def _to_quarterly_df(measures: list, filter_forms: Tuple[str, ...] = ("10-Q", "10-K", "20-F", "6-K")) -> pd.DataFrame:
-    rows = []
-    for m in measures:
-        form = m.get("form", "")
-        if filter_forms and form not in filter_forms:
-            continue
+def fetch_prices(tickers: List[str], period: str = "2y") -> pd.DataFrame:
+    data = yf.download(tickers, period=period, auto_adjust=True, progress=False, group_by="ticker")
+    # Normalize to a flat column MultiIndex -> close only
+    frames = []
+    for t in tickers:
         try:
-            end = pd.to_datetime(m["end"])
+            close = data[(t, "Close")].rename(t)
+            frames.append(close)
         except Exception:
-            continue
-        val = pd.to_numeric(m.get("val"), errors="coerce")
-        if pd.isna(val):
-            continue
-        rows.append({"Date": end, "value": float(val), "form": form, "fy": m.get("fy"), "fp": m.get("fp")})
-    if not rows:
-        return pd.DataFrame(columns=["Date", "value"])
-    df = pd.DataFrame(rows).sort_values("Date").drop_duplicates("Date", keep="last")
+            pass
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, axis=1).dropna(how="all")
+    df.index.name = "Date"
     return df
 
+@st.cache_data(show_spinner=False)
+def get_prices_cached(tickers: Tuple[str, ...], period: str) -> pd.DataFrame:
+    return fetch_prices(list(tickers), period=period)
 
-def sec_timeseries_for_concept(ticker: str, candidates: List[str]) -> pd.DataFrame:
-    cik = CIK_MAP[ticker]
-    facts = sec_company_facts(cik)
-    best = _best_concept(facts, candidates)
-    if not best:
-        return pd.DataFrame(columns=["Date", ticker])
-    _, measures = best
-    q = _to_quarterly_df(measures)
-    if q.empty:
-        return pd.DataFrame(columns=["Date", ticker])
-    q = q[["Date", "value"]].rename(columns={"value": ticker})
-    return q
+def ew_index(df: pd.DataFrame) -> pd.Series:
+    return (df.pct_change().fillna(0).add(1).cumprod()).mean(axis=1)
 
+def returns_table(df: pd.DataFrame) -> pd.DataFrame:
+    rets = pd.DataFrame(index=df.columns)
+    for label, win in {"1d":1, "5d":5, "20d":20}.items():
+        rets[label] = df.pct_change(win).iloc[-1]*100.0
+    rets["YTD"] = (df.iloc[-1]/df[df.index.year==df.index[-1].year].iloc[0]-1)*100.0
+    rets = rets.sort_values("20d", ascending=False)
+    return rets.round(2)
 
-def build_capex_panel(tickers: List[str]) -> pd.DataFrame:
-    frames = []
-    for t in tickers:
-        try:
-            df = sec_timeseries_for_concept(t, CAPEX_CANDIDATES)
-            frames.append(df)
-        except Exception:
-            continue
-    if not frames:
-        return pd.DataFrame()
-    out = frames[0]
-    for f in frames[1:]:
-        out = out.merge(f, on="Date", how="outer")
-    return out.sort_values("Date")
+def breadth(df: pd.DataFrame) -> pd.DataFrame:
+    out = {}
+    for w in [20,50,200]:
+        ma = df.rolling(w).mean()
+        out[f">{w}DMA"] = (df.iloc[-1] > ma.iloc[-1]).mean()*100.0
+    # 3m highs/lows
+    win = 63
+    highs = (df.iloc[-1] >= df.rolling(win).max().iloc[-1]).sum()
+    lows = (df.iloc[-1] <= df.rolling(win).min().iloc[-1]).sum()
+    out["3m highs"] = int(highs)
+    out["3m lows"] = int(lows)
+    return pd.DataFrame(out, index=["Breadth"]).T
 
-
-def build_revenue_panel(tickers: List[str]) -> pd.DataFrame:
-    frames = []
-    for t in tickers:
-        try:
-            df = sec_timeseries_for_concept(t, REVENUE_CANDIDATES)
-            frames.append(df)
-        except Exception:
-            continue
-    if not frames:
-        return pd.DataFrame()
-    out = frames[0]
-    for f in frames[1:]:
-        out = out.merge(f, on="Date", how="outer")
-    return out.sort_values("Date")
+def rolling_beta(series: pd.Series, market: pd.Series, window: int = 20) -> pd.Series:
+    x = market.pct_change()
+    y = series.pct_change()
+    cov = y.rolling(window).cov(x)
+    var = x.rolling(window).var()
+    beta = cov/var
+    return beta
 
 # =====================
-# UI controls
+# Sidebar
 # =====================
-DEFAULT_HYPERS = ["AMZN", "MSFT", "GOOGL", "META", "ORCL"]
-DEFAULT_REITS  = ["EQIX", "DLR"]
-DEFAULT_VENDORS = ["NVDA", "AMD", "SMCI", "TSM", "ASML"]
+st.sidebar.title("AI Datacenter Theme Monitor")
+with st.sidebar.expander("About This Tool", expanded=True):
+    st.write(
+        """
+        Track price-based proxies for the AI compute and datacenter buildout.
+        No logins. No keys. Data from Yahoo Finance via yfinance.
+        - Equal-weight basket index vs SPY
+        - Leaders and laggards over 1d, 5d, 20d, YTD
+        - Breadth: % above 20/50/200 DMA, 3m highs and lows
+        - Risk: rolling beta to SPY and drawdowns
+        """
+    )
 
-sel_hypers = st.sidebar.multiselect("Hyperscalers", DEFAULT_HYPERS, default=DEFAULT_HYPERS)
-sel_reits = st.sidebar.multiselect("Data center REITs", DEFAULT_REITS, default=DEFAULT_REITS)
-sel_vendors = st.sidebar.multiselect("Vendors", DEFAULT_VENDORS, default=["NVDA", "AMD", "SMCI"])
+preset = st.sidebar.selectbox("Preset", ["Core US","Vendors only","Hypers only","With REITs/Power","Everything"], index=0)
+period = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=2)
 
-st.sidebar.markdown("---")
-fetch_btn = st.sidebar.button("Pull latest data", type="primary")
+if preset == "Core US":
+    tickers = HYPERS + VENDORS
+elif preset == "Vendors only":
+    tickers = VENDORS
+elif preset == "Hypers only":
+    tickers = HYPERS
+elif preset == "With REITs/Power":
+    tickers = HYPERS + VENDORS + REITS_POWER
+else:
+    tickers = DEFAULT
+
+custom = st.sidebar.text_input("Add tickers (comma separated)", value="")
+if custom.strip():
+    add = [t.strip().upper() for t in custom.split(",") if t.strip()]
+    tickers = list(dict.fromkeys(tickers + add))
 
 # =====================
-# Tabs
+# Data
 # =====================
+spy = get_prices_cached(("SPY",), period=period)
+px = get_prices_cached(tuple(tickers), period=period)
 
-capex_tab, filings_tab, power_tab, revenue_tab = st.tabs([
-    "Hyperscaler CapEx", "Filings AI Mentions", "Power Demand & Prices", "Vendor Revenue"
-])
+if px.empty or spy.empty:
+    st.warning("No price data returned. Try fewer tickers or a shorter history.")
+    st.stop()
 
-# ============= Tab 1: CapEx
-with capex_tab:
-    st.subheader("Hyperscaler CapEx (quarterly, USD)")
-    if fetch_btn or "_capex" not in st.session_state:
-        capex_df = build_capex_panel(sel_hypers)
-        st.session_state["_capex"] = capex_df
-    capex_df = st.session_state.get("_capex", pd.DataFrame())
-    if capex_df.empty:
-        st.info("No CapEx data returned. Check SEC header or try fewer tickers.")
-    else:
-        # LTM roll
-        ltm = capex_df.set_index("Date").rolling(4).sum().reset_index()
-        fig = go.Figure()
-        for c in [col for col in ltm.columns if col != "Date"]:
-            fig.add_trace(go.Scatter(x=ltm["Date"], y=ltm[c], mode="lines", name=f"{c} LTM"))
-        fig.update_layout(height=460, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(capex_df.tail(12), use_container_width=True)
+# Align
+px = px.dropna(how="all").dropna(axis=1, how="all")
+spy = spy.squeeze()
+px = px.loc[px.index.intersection(spy.index)]
+spy = spy.loc[px.index]
 
-# ============= Tab 2: Filings Mentions
-with filings_tab:
-    st.subheader("Keyword mentions in latest 10-Q/10-K")
+# =====================
+# KPIs
+# =====================
+idx = ew_index(px)
+rel = idx / (spy/spy.iloc[0])
 
-    @st.cache_data(show_spinner=False)
-    def scan_filings_counts(tickers: List[str], keywords: List[str]) -> pd.DataFrame:
-        rows = []
-        for t in tickers:
-            try:
-                cik = CIK_MAP[t]
-                sub = sec_submissions(cik)
-                # Gather last up to 6 relevant filings
-                filings = pd.DataFrame(sub.get("filings", {}).get("recent", {}))
-                if filings.empty:
-                    continue
-                mask = filings["form"].isin(["10-Q", "10-K"]).fillna(False)
-                f = filings[mask].head(6)
-                total_counts = {k: 0 for k in keywords}
-                for _, r in f.iterrows():
-                    acc = str(r["accessionNumber"]).replace("-", "")
-                    doc = str(r["primaryDocument"])
-                    url = f"https://www.sec.gov/Archives/edgar/data/{int(CIK_MAP[t])}/{acc}/{doc}"
-                    try:
-                        txt = requests.get(url, headers=HEADERS(), timeout=30).text.lower()
-                        for kw in keywords:
-                            total_counts[kw] += txt.count(kw.lower())
-                    except Exception:
-                        continue
-                row = {"Ticker": t, **total_counts}
-                rows.append(row)
-            except Exception:
-                continue
-        return pd.DataFrame(rows)
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("Basket total return", f"{(idx.iloc[-1]-1)*100:,.1f}%")
+c2.metric("Basket vs SPY", f"{(rel.iloc[-1]-1)*100:,.1f}%")
+c3.metric("1m return", f"{px.pct_change(21).mean(axis=1).iloc[-1]*100:,.1f}%")
+c4.metric("Dispersion 20d σ", f"{px.pct_change(20).iloc[-1].std()*100:,.1f}%")
 
-    if fetch_btn or "_mentions" not in st.session_state:
-        st.session_state["_mentions"] = scan_filings_counts(sel_hypers + sel_reits + sel_vendors, KEYWORDS)
-    mentions = st.session_state.get("_mentions", pd.DataFrame())
-    if mentions.empty:
-        st.info("No filings found. Check SEC header or try again later.")
-    else:
-        st.dataframe(mentions.set_index("Ticker").sort_values("AI", ascending=False), use_container_width=True)
-        st.caption("Counts are rough string matches across the latest few filings.")
+# =====================
+# Charts
+# =====================
+st.subheader("Equal-weight index vs SPY")
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=idx.index, y=idx, mode="lines", name="Basket EW"))
+fig.add_trace(go.Scatter(x=spy.index, y=spy/spy.iloc[0], mode="lines", name="SPY"))
+fig.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10))
+st.plotly_chart(fig, use_container_width=True)
 
-# ============= Tab 3: Power
-with power_tab:
-    st.subheader("US Power Demand and Industrial Price")
-    if not eia_key:
-        st.info("Add an EIA API key in the sidebar to enable this tab.")
-    else:
-        bas = st.multiselect("Balancing Authorities", list(EBA_SERIES.keys()), default=["PJM", "ERCOT", "CAISO"]) 
-        frames = []
-        for ba in bas:
-            try:
-                s = fetch_eia_series(EBA_SERIES[ba], eia_key)
-                s = s.rename(columns={"value": ba})
-                frames.append(s[["Date", ba]])
-            except Exception:
-                continue
-        if frames:
-            out = frames[0]
-            for f in frames[1:]:
-                out = out.merge(f, on="Date", how="outer")
-            fig = go.Figure()
-            for c in [col for col in out.columns if col != "Date"]:
-                fig.add_trace(go.Scatter(x=out["Date"], y=out[c], mode="lines", name=c))
-            fig.update_layout(height=460, margin=dict(l=10, r=10, t=30, b=10), yaxis_title="Demand (MW)")
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(out.tail(168), use_container_width=True)
-        st.markdown("---")
-        try:
-            price = fetch_eia_series(PRICE_SERIES["US"], eia_key)
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=price["Date"], y=price["value"], mode="lines", name="US Industrial c/kWh"))
-            fig2.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(fig2, use_container_width=True)
-        except Exception:
-            st.caption("Industrial price series not available with current key.")
+st.subheader("Rolling 20d beta to SPY (key names)")
+key_show = [t for t in ["NVDA","AMD","SMCI","AMZN","MSFT","GOOGL","EQIX","DLR"] if t in px.columns][:6]
+fig2 = go.Figure()
+for t in key_show:
+    fig2.add_trace(go.Scatter(x=px.index, y=rolling_beta(px[t], spy, 20), mode="lines", name=t))
+fig2.update_layout(height=360, margin=dict(l=10,r=10,t=30,b=10))
+st.plotly_chart(fig2, use_container_width=True)
 
-# ============= Tab 4: Vendor revenue
-with revenue_tab:
-    st.subheader("Vendor Revenue (quarterly, USD)")
-    if fetch_btn or "_rev" not in st.session_state:
-        rev_df = build_revenue_panel(sel_vendors)
-        st.session_state["_rev"] = rev_df
-    rev_df = st.session_state.get("_rev", pd.DataFrame())
-    if rev_df.empty:
-        st.info("No revenue data returned.")
-    else:
-        fig = go.Figure()
-        for c in [col for col in rev_df.columns if col != "Date"]:
-            fig.add_trace(go.Scatter(x=rev_df["Date"], y=rev_df[c], mode="lines", name=c))
-        fig.update_layout(height=460, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(rev_df.tail(12), use_container_width=True)
+# =====================
+# Tables
+# =====================
+left, right = st.columns([1,1])
+with left:
+    st.subheader("Leaders & laggards")
+    st.dataframe(returns_table(px), use_container_width=True)
+with right:
+    st.subheader("Breadth")
+    st.dataframe(breadth(px), use_container_width=True)
 
-st.markdown("\n")
+st.caption("All series equal-weight. For investment decisions, combine with positioning and flows.")
