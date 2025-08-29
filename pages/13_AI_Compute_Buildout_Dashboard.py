@@ -5,12 +5,12 @@ AI + Datacenter Theme Monitor
 No logins. No API keys. Uses Yahoo Finance via yfinance.
 
 Upgrades in this version
-- Breadth redesigned: table now shows both % above DMAs and counts of highs/lows side by side.
-- Rolling 20d beta plot: replaced SMCI with META, added AAPL.
+- Breadth redesigned: table shows % above DMAs and counts of highs/lows.
+- Rolling 20d beta plot: NVDA, AMD, META, AMZN, MSFT, GOOGL, AAPL.
 - Added a new tab: "Extras" with correlation heatmap and rolling 60d return distribution.
 
 Run
-pip install streamlit yfinance pandas numpy plotly seaborn
+pip install streamlit yfinance pandas numpy plotly
 streamlit run theme_monitor.py
 """
 
@@ -21,8 +21,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
-import seaborn as sns
-import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="AI Datacenter Theme Monitor", layout="wide")
 
@@ -85,17 +83,16 @@ def rolling_beta(series: pd.Series, market: pd.Series, window: int = 20) -> pd.S
 # Sidebar controls
 # ---------------------
 st.sidebar.title("AI Datacenter Theme Monitor")
-with st.sidebar.expander("About This Tool", expanded=True):
-    st.write(
-        """
-        Price-based trackers for the AI compute and datacenter buildout.
-        - Equal-weight basket vs SPY
-        - Leaders and laggards over 1d, 5d, 20d, YTD
-        - Breadth redesigned: % above DMAs + counts
-        - Risk: rolling beta to SPY (NVDA, AMD, META, AMZN, MSFT, GOOGL, AAPL)
-        - Extras: correlations and rolling return distributions
-        """
-    )
+st.sidebar.write(
+    """
+    Price-based trackers for the AI compute and datacenter buildout.
+    - Equal-weight basket vs SPY
+    - Leaders and laggards over 1d, 5d, 20d, YTD
+    - Breadth: % above DMAs + counts
+    - Risk: rolling beta to SPY (NVDA, AMD, META, AMZN, MSFT, GOOGL, AAPL)
+    - Extras: correlations and rolling return distributions
+    """
+)
 
 preset = st.sidebar.selectbox("Preset", ["Core US","Vendors only","Hypers only","With REITs/Power","Everything"], index=0)
 period = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=2)
@@ -175,11 +172,10 @@ with risk_tab:
 with extras_tab:
     st.subheader("Correlation heatmap (60d returns)")
     rets = px.pct_change().dropna()
-    corr = rets.rolling(60).corr().groupby(level=0).tail(len(px.columns))
-    latest_corr = corr.xs(corr.index.get_level_values(0)[-1])
-    fig, ax = plt.subplots(figsize=(6,5))
-    sns.heatmap(latest_corr, cmap="RdBu_r", center=0, annot=False, ax=ax)
-    st.pyplot(fig)
+    corr = rets.tail(60).corr().round(2)
+    heat = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.index, zmin=-1, zmax=1, colorscale="RdBu"))
+    heat.update_layout(height=520, margin=dict(l=10,r=10,t=30,b=10))
+    st.plotly_chart(heat, use_container_width=True)
 
     st.subheader("Rolling 60d return distribution")
     roll = rets.rolling(60).sum()*100
