@@ -1,279 +1,163 @@
 # streamlit_app.py
 
-import os
-import io
-import json
+import re
 import datetime as dt
 from typing import List, Optional
 
-import numpy as np
+import numpy as pd
 import pandas as pd
+import numpy as np
 import streamlit as st
-import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# Optional GA4 import. The app runs without GA4 if the package is missing.
-try:
-    from google.analytics.data_v1beta import BetaAnalyticsDataClient
-    from google.analytics.data_v1beta.types import DateRange, Dimension, Metric, RunReportRequest
-    GA4_AVAILABLE = True
-except Exception:
-    GA4_AVAILABLE = False
+# External source: Google Trends via pytrends (no API key required)
+# pip install pytrends
+from pytrends.request import TrendReq
 
-# =====================
-# App Config
-# =====================
-st.set_page_config(page_title="Website Traffic Tracker", page_icon="📈", layout="wide")
-
-st.sidebar.title("📈 Website Traffic Tracker")
-st.sidebar.caption("Source: GA4 API or CSV export")
+st.set_page_config(page_title="Website Interest Tracker", page_icon="📈", layout="wide")
 
 # =====================
-# Utilities
+# Helpers
 # =====================
+
+def normalize_domains(text: str) -> List[str]:
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    cleaned = []
+    for p in parts:
+        p = re.sub(r"^https?://", "", p, flags=re.I)
+        p = re.sub(r"^www\.", "", p, flags=re.I)
+        cleaned.append(p.lower())
+    return list(dict.fromkeys(cleaned))  # de-dupe in order
 
 @st.cache_data(show_spinner=False)
-def zscore_anomalies(series: pd.Series, lookback: int = 14, z: float = 2.5) -> pd.Series:
-    """Return boolean mask where values are anomalous by rolling z score."""
-    s = series.astype(float)
-    roll_mean = s.rolling(lookback, min_periods=max(3, lookback // 2)).mean()
-    roll_std = s.rolling(lookback, min_periods=max(3, lookback // 2)).std(ddof=0)
-    zscores = (s - roll_mean) / roll_std.replace(0, np.nan)
-    return zscores.abs() >= z
+def fetch_trends(domains: List[str], timeframe: str, region: str, property_kind: str) -> pd.DataFrame:
+    gprop = {"Web": "", "News": "news", "Images": "images", "YouTube": "youtube"}[property_kind]
+    pytrends = TrendReq(hl="en-US", tz=0)
 
-@st.cache_data(show_spinner=False)
-def parse_ga4_service_account(sa_json_text: str):
-    """Create a GA4 client from a service account JSON string."""
-    from google.oauth2 import service_account
-    from google.analytics.data_v1beta import BetaAnalyticsDataClient
+    # pytrends supports up to 5 terms per request; chunk if needed
+    chunks = [domains[i:i+5] for i in range(0, len(domains), 5)]
+    frames = []
+    for chunk in chunks:
+        pytrends.build_payload(kw_list=chunk, timeframe=timeframe, geo=region, gprop=gprop)
+        df = pytrends.interest_over_time()
+        if df.empty:
+            continue
+        df = df.drop(columns=[c for c in ["isPartial"] if c in df.columns])
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, axis=1)
+    out = out.groupby(level=0, axis=1).max()  # if duplicates
+    out.reset_index(inplace=True)
+    out.rename(columns={"date": "Date"}, inplace=True)
+    return out
 
-    info = json.loads(sa_json_text)
-    creds = service_account.Credentials.from_service_account_info(info)
-    scoped = creds.with_scopes(["https://www.googleapis.com/auth/analytics.readonly"])
-    client = BetaAnalyticsDataClient(credentials=scoped)
-    return client
-
-@st.cache_data(show_spinner=False)
-def fetch_ga4_timeseries(client, property_id: str, start_date: str, end_date: str,
-                         granularity: str = "daily",
-                         dims: Optional[List[str]] = None,
-                         metrics: Optional[List[str]] = None) -> pd.DataFrame:
-    """Fetch GA4 timeseries using RunReport. Returns a tidy DataFrame."""
-    if dims is None:
-        dims = ["date"]
-    if metrics is None:
-        metrics = ["totalUsers", "activeUsers", "newUsers", "sessions"]
-
-    if granularity == "weekly" and "week" not in dims:
-        dims = ["week"] + [d for d in dims if d != "date"]
-    elif granularity == "monthly" and "month" not in dims:
-        dims = ["month"] + [d for d in dims if d != "date"]
-
-    request = RunReportRequest(
-        property=f"properties/{property_id}",
-        date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-        dimensions=[Dimension(name=d) for d in dims],
-        metrics=[Metric(name=m) for m in metrics],
-    )
-    resp = client.run_report(request)
-
+def annotate_breakouts(df_long: pd.DataFrame, lookback: int = 90) -> pd.DataFrame:
     rows = []
-    for r in resp.rows:
-        row = {d.name: v.value for d, v in zip(resp.dimension_headers, r.dimension_values)}
-        row.update({m.name: float(v.value) for m, v in zip(resp.metric_headers, r.metric_values)})
-        rows.append(row)
+    for k, g in df_long.groupby("Site"):
+        s = g.set_index("Date")["Value"].astype(float)
+        if len(s) < 10:
+            continue
+        recent = s.iloc[-1]
+        roll_max = s.rolling(lookback, min_periods=max(10, lookback//3)).max()
+        is_breakout = recent >= roll_max.iloc[-1]
+        chg_7 = pct(s, 7)
+        chg_30 = pct(s, 30)
+        rows.append({"Site": k, "Latest": recent, "7d%": chg_7, "30d%": chg_30, "90dHighBreakout": bool(is_breakout)})
+    return pd.DataFrame(rows)
 
-    df = pd.DataFrame(rows)
-    # Normalize date fields
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], format="%Y%m%d")
-    if "week" in df.columns:
-        df["date"] = pd.to_datetime(df["week"] + "-1", format="%Y-W%W-%w")
-    if "month" in df.columns and "date" not in df.columns:
-        df["date"] = pd.to_datetime(df["month"] + "-01")
-    df = df.sort_values("date")
-    return df
-
-@st.cache_data(show_spinner=False)
-def load_csv(upload: io.BytesIO) -> pd.DataFrame:
-    df = pd.read_csv(upload)
-    # Attempt to coerce common date column names
-    for c in ["date", "Date", "day", "Day"]:
-        if c in df.columns:
-            df["date"] = pd.to_datetime(df[c])
-            break
-    if "date" not in df.columns:
-        raise ValueError("CSV must include a date column. Example headers: date,totalUsers,sessions,pageViews")
-    return df
+def pct(s: pd.Series, n: int) -> float:
+    if len(s) <= n or s.iloc[-n-1] == 0:
+        return np.nan
+    return (s.iloc[-1] / s.iloc[-n-1] - 1) * 100.0
 
 # =====================
-# Sidebar Controls
+# Sidebar
 # =====================
 
-source = st.sidebar.radio("Data source", ["GA4 API", "CSV upload"], index=0)
-start_default = (dt.date.today() - dt.timedelta(days=90)).isoformat()
-end_default = dt.date.today().isoformat()
-start_date = st.sidebar.date_input("Start", value=pd.to_datetime(start_default))
-end_date = st.sidebar.date_input("End", value=pd.to_datetime(end_default))
-agg = st.sidebar.selectbox("Granularity", ["daily", "weekly", "monthly"], index=0)
+st.sidebar.title("📈 Website Interest Tracker")
+st.sidebar.caption("Type domains. Data source: Google Trends interest over time. No GA4. No CSV.")
+
+sites_input = st.sidebar.text_area("Websites (comma separated)", value="alibaba.com, tesla.com, openai.com")
+region = st.sidebar.text_input("Region code (geo)", value="")
+
+# Timeframe presets supported by Google Trends
+preset = st.sidebar.selectbox("Timeframe", [
+    "today 3-m", "today 12-m", "today 5-y", "all"
+], index=1)
+
+prop_kind = st.sidebar.selectbox("Search property", ["Web", "News", "Images", "YouTube"], index=0)
+
+smooth = st.sidebar.slider("SMA window", 1, 12, 3, help="Simple moving average on the chart")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Metrics**")
-metric_choices = ["totalUsers", "activeUsers", "newUsers", "sessions", "screenPageViews", "engagedSessions"]
-selected_metrics = st.sidebar.multiselect("Select up to 6", metric_choices, default=["totalUsers", "sessions", "screenPageViews"])
+show_table = st.sidebar.checkbox("Show data table", value=False)
 
 # =====================
-# Data Ingest
+# Main
 # =====================
 
-df: Optional[pd.DataFrame] = None
-error_msg = None
+st.title("Website Trend Tracker")
+st.caption("Interest over time for typed domains using Google Trends. Values are indexed 0 to 100 per Google methodology.")
 
-if source == "GA4 API":
-    if not GA4_AVAILABLE:
-        st.warning("google-analytics-data is not installed. Switch to CSV upload or add it to requirements.txt")
-    property_id = st.sidebar.text_input("GA4 Property ID", "123456789")
-    sa_file = st.sidebar.file_uploader("Service account JSON", type=["json"], help="Create a GA4 service account and grant it Viewer on your property")
-    sa_text = None
-    if sa_file is not None:
-        sa_text = sa_file.read().decode("utf-8")
-
-    if st.sidebar.checkbox("Fetch GA4 data", value=False):
-        try:
-            if sa_text is None:
-                st.stop()
-            client = parse_ga4_service_account(sa_text)
-            df = fetch_ga4_timeseries(
-                client=client,
-                property_id=property_id,
-                start_date=pd.to_datetime(start_date).date().isoformat(),
-                end_date=pd.to_datetime(end_date).date().isoformat(),
-                granularity=agg,
-                dims=["date"],
-                metrics=selected_metrics or ["totalUsers", "sessions"],
-            )
-        except Exception as e:
-            error_msg = str(e)
-else:
-    csv_file = st.sidebar.file_uploader("Upload CSV export", type=["csv"], help="Headers example: date,totalUsers,sessions,screenPageViews")
-    if csv_file is not None:
-        try:
-            df = load_csv(csv_file)
-        except Exception as e:
-            error_msg = str(e)
-
-# =====================
-# Main Layout
-# =====================
-
-st.title("Website Traffic Tracker")
-st.caption("Track users, sessions, and page views with anomalies, top pages, sources, and cohort views")
-
-if error_msg:
-    st.error(error_msg)
-
-if df is None or df.empty:
-    st.info("Load data using GA4 or upload a CSV to see charts")
+sites = normalize_domains(sites_input)
+if not sites:
+    st.info("Enter at least one domain to begin")
     st.stop()
 
-# Basic normalization
-num_cols = [c for c in df.columns if c not in {"date"}]
-for c in num_cols:
-    try:
-        df[c] = pd.to_numeric(df[c])
-    except Exception:
-        pass
+with st.spinner("Fetching Google Trends..."):
+    df = fetch_trends(sites, timeframe=preset, region=region, property_kind=prop_kind)
 
-df = df.sort_values("date").reset_index(drop=True)
+if df.empty:
+    st.warning("No trend data returned. Try fewer sites, another timeframe, or switch property.")
+    st.stop()
 
-# KPIs
-latest = df.iloc[-1]
-prev = df.iloc[-2] if len(df) > 1 else latest
+# Long format for plotting
+long = df.melt(id_vars=["Date"], var_name="Site", value_name="Value").sort_values("Date")
 
-kpi_cols = st.columns(3)
-metric_names = [m for m in ["totalUsers", "sessions", "screenPageViews"] if m in df.columns]
-metric_names = metric_names[:3]
+# Apply smoothing for display
+if smooth > 1:
+    long["Value"] = long.groupby("Site")["Value"].transform(lambda s: s.rolling(smooth, min_periods=1).mean())
 
-for i, m in enumerate(metric_names):
-    delta = ((latest[m] - prev[m]) / prev[m] * 100.0) if prev[m] else 0.0
-    kpi_cols[i].metric(label=m, value=f"{latest[m]:,.0f}", delta=f"{delta:+.1f}%")
+# Chart
+fig = go.Figure()
+for site, g in long.groupby("Site"):
+    fig.add_trace(go.Scatter(x=g["Date"], y=g["Value"], mode="lines", name=site))
 
-# Timeseries chart
-st.subheader("Timeseries")
-value_col = metric_names[0] if metric_names else selected_metrics[0]
-fig_ts = px.line(df, x="date", y=[c for c in df.columns if c in selected_metrics], markers=False)
-fig_ts.update_layout(height=420, margin=dict(l=10, r=10, t=30, b=10))
-st.plotly_chart(fig_ts, use_container_width=True)
+fig.update_layout(
+    height=520,
+    margin=dict(l=10, r=10, t=35, b=10),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    yaxis_title="Interest (0-100)",
+)
 
-# Anomaly detection on the first metric
-st.subheader("Anomalies")
-lookback = st.slider("Rolling window", 7, 56, 21, step=1)
-thresh = st.slider("Z threshold", 1.5, 4.0, 2.5, step=0.1)
-mask = zscore_anomalies(df[value_col], lookback=lookback, z=thresh)
+st.plotly_chart(fig, use_container_width=True)
 
-anom_df = df.loc[mask, ["date", value_col]].copy()
-fig_anom = go.Figure()
-fig_anom.add_trace(go.Scatter(x=df["date"], y=df[value_col], mode="lines", name=value_col))
-fig_anom.add_trace(go.Scatter(x=anom_df["date"], y=anom_df[value_col], mode="markers", name="anomaly", marker=dict(size=10)))
-fig_anom.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10))
-st.plotly_chart(fig_anom, use_container_width=True)
+# Breakout and momentum table
+st.subheader("Signals")
+sig = annotate_breakouts(long, lookback=90)
+st.dataframe(sig.sort_values(["90dHighBreakout", "30d%", "7d%"], ascending=[False, False, False]), use_container_width=True)
 
-col_a, col_b = st.columns([1, 1])
+# Notes
+st.markdown("""
+**How to read this**
+- Values are relative interest from Google search, indexed per query. They are not absolute traffic counts. For cross-site comparison, the index is shared within the same call which allows relative ranking.
+- Use it as a proxy for attention and top-of-funnel demand. For actual session counts, wire GA4 later if desired.
+""")
 
-with col_a:
-    st.subheader("Top days")
-    top_days = df.sort_values(value_col, ascending=False).head(15)
-    st.dataframe(top_days[["date", value_col]].reset_index(drop=True))
+# Optional raw table and download
+if show_table:
+    st.subheader("Raw data")
+    st.dataframe(df)
+    st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8"), file_name="website_trends.csv", mime="text/csv")
 
-with col_b:
-    st.subheader("Moving averages")
-    for w in [7, 14, 28]:
-        df[f"ma_{w}"] = df[value_col].rolling(w, min_periods=w//2).mean()
-    fig_ma = px.line(df, x="date", y=[value_col, "ma_7", "ma_14", "ma_28"]).update_layout(height=320)
-    st.plotly_chart(fig_ma, use_container_width=True)
-
-st.markdown("---")
-
-# Optional page-level breakdown if present
-page_cols = [c for c in df.columns if c.lower() in {"pagepath", "pagetitle", "page", "landingpage"}]
-if page_cols:
-    key = page_cols[0]
-    st.subheader("Pages")
-    agg_pages = df.groupby(key, as_index=False)[value_col].sum().sort_values(value_col, ascending=False).head(25)
-    fig_pages = px.bar(agg_pages, x=value_col, y=key, orientation="h")
-    fig_pages.update_layout(height=600)
-    st.plotly_chart(fig_pages, use_container_width=True)
-else:
-    st.caption("Upload a CSV with a page column to unlock the Pages view. Example header: pagePath")
-
-# Optional source breakdown if present
-source_cols = [c for c in df.columns if c.lower() in {"source", "medium", "sourcemedium", "channel"}]
-if source_cols:
-    key = source_cols[0]
-    st.subheader("Sources")
-    agg_src = df.groupby(key, as_index=False)[value_col].sum().sort_values(value_col, ascending=False).head(20)
-    fig_src = px.bar(agg_src, x=key, y=value_col)
-    st.plotly_chart(fig_src, use_container_width=True)
-else:
-    st.caption("Upload a CSV with source or medium to unlock the Sources view")
-
-# =====================
-# Notes and Setup
-# =====================
-with st.expander("Setup notes"):
+# Footer
+with st.expander("Tips"):
     st.markdown(
         """
-        **GA4 mode**
-        1. Create a Google Cloud project and service account.
-        2. Grant the service account Viewer on your GA4 property in Admin.
-        3. Upload the service account JSON and enter your Property ID.
-        
-        **CSV mode**
-        - Include columns like: `date,totalUsers,sessions,screenPageViews,pagePath,source`.
-        - Dates can be in `YYYY-MM-DD` and will be parsed automatically.
-        
-        **Deploy**
-        - Add to `requirements.txt`: `streamlit plotly pandas numpy google-analytics-data` (GA4 optional)
-        - Run: `streamlit run streamlit_app.py`
+        - Region codes use ISO geo codes accepted by Google Trends. Example: US, GB, TR. Leave blank for worldwide.
+        - Timeframes: try `today 3-m`, `today 12-m`, `today 5-y`, or `all`.
+        - Keep to 5 sites per comparison for the cleanest scaling.
         """
     )
