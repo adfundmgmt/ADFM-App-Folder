@@ -101,7 +101,6 @@ def compute_metrics(close: pd.DataFrame, vol: pd.DataFrame, spy: pd.Series) -> p
     ma20 = close.rolling(20).mean(); ma50 = close.rolling(50).mean(); ma200 = close.rolling(200).mean()
     v20 = vol.rolling(20).mean(); vsd = vol.rolling(20).std().replace(0, np.nan)
     high52 = close.rolling(252).max()
-    spy_rel = (close / close.iloc[0]) / (spy/spy.iloc[0]).reindex(close.index, method="ffill")
     rsi14_all = close.apply(rsi)
     atrp_all = close.apply(lambda s: atr(s).rename(s.name))
 
@@ -219,8 +218,8 @@ st.subheader("Signals (sortable)")
 st.dataframe(scored, use_container_width=True)
 
 # Candidate lists
-longs = scored.query("Above50 and Above200 and RS60% > 0 and `%from52wHigh` > -5 or Breakout20").head(8)
-trims = scored.query("Above200 == False or RS60% < 0").sort_values("Score").head(8)
+longs = scored.query("((Above50 and Above200 and `RS60%` > 0 and `%from52wHigh` > -5) or Breakout20)").head(8)
+trims = scored.query("(`RS60%` < 0) or (Above200 == False)").sort_values("Score").head(8)
 
 st.subheader("Long candidates")
 if longs.empty:
