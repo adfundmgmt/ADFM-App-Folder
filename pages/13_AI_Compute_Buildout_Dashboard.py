@@ -1,184 +1,280 @@
-# theme_monitor.py
+# ai_tradeboard.py
 
 """
-AI + Datacenter Theme Monitor
-No logins. No API keys. Uses Yahoo Finance via yfinance.
+AI + Datacenter Tradeboard — zero logins, zero keys
+Data: Yahoo Finance via yfinance (prices & volumes only)
 
-Upgrades in this version
-- Breadth redesigned: table shows % above DMAs and counts of highs/lows.
-- Rolling 20d beta plot: NVDA, AMD, META, AMZN, MSFT, GOOGL, AAPL.
-- Added a new tab: "Extras" with correlation heatmap and rolling 60d return distribution.
+What this page does
+- Builds a **Core AI/Datacenter universe** (US + key EU/Asia ADRs) and computes actionable signals:
+  - Relative strength vs SPY (60d), distance to 52w high, trend state (50/200DMA)
+  - Volume z‑score, RSI(14), ATR% (risk proxy), breakouts (20d high with volume surge)
+- Creates an **Equal‑Weight Theme Index** and compares it to SPY
+- Surfaces **Long candidates** and **Trim/Short candidates** using a transparent scoring model you can tune
+- Pairs & Ratios tab to track supply/demand leadership (Vendors ↔ Hypers, NVDA vs peers, REITs vs Power)
 
 Run
 pip install streamlit yfinance pandas numpy plotly
-streamlit run theme_monitor.py
+streamlit run ai_tradeboard.py
 """
 
-import math
+from __future__ import annotations
+from dataclasses import dataclass
 from typing import Dict, List, Tuple
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="AI Datacenter Theme Monitor", layout="wide")
+st.set_page_config(page_title="AI + Datacenter Tradeboard", layout="wide")
 
 # ---------------------
-# Preset baskets
+# Universe presets (adjust freely)
 # ---------------------
-HYPERS = ["AMZN","MSFT","GOOGL","META","ORCL","AAPL"]
-VENDORS = ["NVDA","AMD","AVGO","MRVL","TSM","ASML","MU"]
-NETWORK_POWER = ["ANET","CSCO","ACLS","AMAT","LRCX","KLAC","HPE","NTAP"]
-REITS_POWER = ["EQIX","DLR","IRM","VST","NEE","DUK"]
-DEFAULT = HYPERS + VENDORS + NETWORK_POWER + REITS_POWER
+US_HYPERS   = ["AMZN","MSFT","GOOGL","META","ORCL","AAPL"]
+US_VENDORS  = ["NVDA","AMD","AVGO","MRVL","SMCI","MU"]
+EU_ASIA     = ["TSM","ASML","BABA","TCEHY"]  # ADRs only for reliability
+REITS_PWR   = ["EQIX","DLR","VST","NEE","DUK"]
+UNIVERSE_DEFAULT = US_HYPERS + US_VENDORS + EU_ASIA + REITS_PWR
 
 # ---------------------
-# Helpers
+# Data fetch
 # ---------------------
 @st.cache_data(show_spinner=False)
-def fetch_prices(tickers: Tuple[str, ...], period: str = "2y") -> pd.DataFrame:
-    data = yf.download(list(tickers), period=period, auto_adjust=True, progress=False, group_by="ticker")
-    frames = []
+def fetch_ohlcv(tickers: Tuple[str, ...], period: str = "2y") -> Tuple[pd.DataFrame, pd.DataFrame]:
+    raw = yf.download(list(tickers), period=period, interval="1d", auto_adjust=True,
+                      progress=False, group_by="ticker")
+    closes, vols = [], []
     for t in tickers:
         try:
-            frames.append(data[(t, "Close")].rename(t))
+            closes.append(raw[(t, "Close")].rename(t))
+            vols.append(raw[(t, "Volume")].rename(t))
         except Exception:
             pass
-    if not frames:
-        return pd.DataFrame()
-    df = pd.concat(frames, axis=1).dropna(how="all")
-    df.index.name = "Date"
-    return df
+    if not closes:
+        return pd.DataFrame(), pd.DataFrame()
+    close = pd.concat(closes, axis=1).dropna(how="all"); close.index.name = "Date"
+    vol   = pd.concat(vols,   axis=1).reindex(close.index).fillna(0)
+    return close, vol
 
-def ew_index(df: pd.DataFrame) -> pd.Series:
-    return (df.pct_change().fillna(0).add(1).cumprod()).mean(axis=1)
+# ---------------------
+# Indicators & transforms
+# ---------------------
 
-def returns_table(df: pd.DataFrame) -> pd.DataFrame:
-    rets = pd.DataFrame(index=df.columns)
-    for label, win in {"1d":1, "5d":5, "20d":20}.items():
-        rets[label] = df.pct_change(win).iloc[-1]*100.0
-    ytd_start = df.index[df.index.year==df.index[-1].year][0]
-    rets["YTD"] = (df.iloc[-1]/df.loc[ytd_start]-1)*100.0
-    return rets.sort_values("20d", ascending=False).round(2)
+def theme_index(df_close: pd.DataFrame) -> pd.Series:
+    return (df_close.pct_change().fillna(0).add(1).cumprod()).mean(axis=1)
 
-def breadth(df: pd.DataFrame) -> pd.DataFrame:
-    last = df.iloc[-1]
-    out = {}
-    for w in [20,50,200]:
-        ma = df.rolling(w).mean()
-        out[f">{w}DMA %"] = (last > ma.iloc[-1]).mean()*100.0
-        out[f">{w}DMA count"] = int((last > ma.iloc[-1]).sum())
-    win = 63
-    out["3m highs"] = int((last >= df.rolling(win).max().iloc[-1]).sum())
-    out["3m lows"] = int((last <= df.rolling(win).min().iloc[-1]).sum())
-    return pd.DataFrame(out, index=["Breadth"]).T
+def rsi(series: pd.Series, n: int = 14) -> pd.Series:
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    ma_up = up.ewm(com=n-1, adjust=False).mean()
+    ma_down = down.ewm(com=n-1, adjust=False).mean()
+    rs = ma_up / ma_down.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
 
-def rolling_beta(series: pd.Series, market: pd.Series, window: int = 20) -> pd.Series:
-    x = market.pct_change()
-    y = series.pct_change()
-    return y.rolling(window).cov(x) / x.rolling(window).var()
+def atr(series: pd.Series, n: int = 14) -> pd.Series:
+    # Proxy ATR using close-to-close true range (no H/L intraday available in yfinance group fetch reliably across tickers)
+    tr = series.pct_change().abs()
+    return tr.rolling(n).mean()
+
+@dataclass
+class Metrics:
+    price: float
+    ret1d: float
+    ret5d: float
+    ret20d: float
+    rs60: float
+    from_high: float
+    above50: bool
+    above200: bool
+    vol_z: float
+    rsi14: float
+    atrp: float
+    breakout20: bool
+
+
+def compute_metrics(close: pd.DataFrame, vol: pd.DataFrame, spy: pd.Series) -> pd.DataFrame:
+    out = []
+    # precomputes
+    ma20 = close.rolling(20).mean(); ma50 = close.rolling(50).mean(); ma200 = close.rolling(200).mean()
+    v20 = vol.rolling(20).mean(); vsd = vol.rolling(20).std().replace(0, np.nan)
+    high52 = close.rolling(252).max()
+    spy_rel = (close / close.iloc[0]) / (spy/spy.iloc[0]).reindex(close.index, method="ffill")
+    rsi14_all = close.apply(rsi)
+    atrp_all = close.apply(lambda s: atr(s).rename(s.name))
+
+    for t in close.columns:
+        s = close[t].dropna(); v = vol[t].reindex(s.index).fillna(0)
+        if len(s) < 250:
+            continue
+        price = s.iloc[-1]
+        ret1 = (s.iloc[-1]/s.iloc[-2]-1)*100 if len(s) > 1 else np.nan
+        ret5 = (s.iloc[-1]/s.iloc[-6]-1)*100 if len(s) > 6 else np.nan
+        ret20= (s.iloc[-1]/s.iloc[-21]-1)*100 if len(s) > 21 else np.nan
+        rs60 = (s.iloc[-1]/s.iloc[-61]) / (spy.reindex(s.index).iloc[-1]/spy.reindex(s.index).iloc[-61]) - 1 if len(s)>61 else np.nan
+        from_high = (s.iloc[-1]/high52[t].loc[s.index].iloc[-1]-1)*100
+        above50 = bool(s.iloc[-1] > ma50[t].loc[s.index].iloc[-1])
+        above200= bool(s.iloc[-1] > ma200[t].loc[s.index].iloc[-1])
+        volz = float(((v.iloc[-1] - v20[t].loc[s.index].iloc[-1]) / vsd[t].loc[s.index].iloc[-1]) if vsd[t].loc[s.index].iloc[-1] else 0)
+        rsi14v = float(rsi14_all[t].loc[s.index].iloc[-1])
+        atrp = float(atrp_all[t].loc[s.index].iloc[-1]*100)
+        breakout20 = bool(s.iloc[-1] >= s.rolling(20).max().iloc[-1] and volz > 1)
+        out.append({
+            "Ticker": t,
+            "Price": round(price,2),
+            "1d%": round(ret1,2),
+            "5d%": round(ret5,2),
+            "20d%": round(ret20,2),
+            "RS60%": round(rs60*100,2) if pd.notna(rs60) else np.nan,
+            "%from52wHigh": round(from_high*100,2),
+            "Above50": above50,
+            "Above200": above200,
+            "VolZ20": round(volz,2),
+            "RSI14": round(rsi14v,1),
+            "ATR%": round(atrp,2),
+            "Breakout20": breakout20,
+        })
+    df = pd.DataFrame(out).set_index("Ticker")
+    return df.sort_values("RS60%", ascending=False)
+
+# Composite score (tunable)
+
+def score_table(df: pd.DataFrame, w_rs=0.35, w_dist=0.25, w_trend=0.2, w_vol=0.2) -> pd.DataFrame:
+    trend = df["Above50"].astype(int)*0.5 + df["Above200"].astype(int)*0.5
+    dist = -df["%from52wHigh"].clip(-100,100) # closer to high is better
+    z = (df[["VolZ20"]] - df[["VolZ20"]].mean())/df[["VolZ20"]].std(ddof=0)
+    score = w_rs*df["RS60%"].fillna(0) + w_dist*dist.fillna(0) + w_trend*(trend*100) + w_vol*z["VolZ20"].fillna(0)
+    out = df.copy()
+    out["Score"] = score.round(2)
+    return out.sort_values("Score", ascending=False)
 
 # ---------------------
 # Sidebar controls
 # ---------------------
-st.sidebar.title("AI Datacenter Theme Monitor")
-st.sidebar.write(
-    """
-    Price-based trackers for the AI compute and datacenter buildout.
-    - Equal-weight basket vs SPY
-    - Leaders and laggards over 1d, 5d, 20d, YTD
-    - Breadth: % above DMAs + counts
-    - Risk: rolling beta to SPY (NVDA, AMD, META, AMZN, MSFT, GOOGL, AAPL)
-    - Extras: correlations and rolling return distributions
-    """
-)
+with st.sidebar:
+    st.title("AI + Datacenter Tradeboard")
+    st.write("Decision‑oriented signals using only price/volume.")
+    preset = st.selectbox("Universe preset", ["Core","US Vendors","US Hypers","Add REITs/Power","Custom"], index=0)
+    period = st.selectbox("History", ["1y","2y","5y"], index=1)
+    custom = st.text_input("Add tickers (comma separated)", value="")
+    st.markdown("**Scoring weights** (sum is arbitrary; relative weights matter)")
+    w_rs = st.slider("Relative strength (60d)", 0.0, 1.0, 0.35, 0.05)
+    w_dist = st.slider("Near 52w High", 0.0, 1.0, 0.25, 0.05)
+    w_trend = st.slider("Trend (50/200DMA)", 0.0, 1.0, 0.20, 0.05)
+    w_vol = st.slider("Volume Z‑score", 0.0, 1.0, 0.20, 0.05)
 
-preset = st.sidebar.selectbox("Preset", ["Core US","Vendors only","Hypers only","With REITs/Power","Everything"], index=0)
-period = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=2)
-
-if preset == "Core US":
-    tickers = HYPERS + VENDORS
-elif preset == "Vendors only":
-    tickers = VENDORS
-elif preset == "Hypers only":
-    tickers = HYPERS
-elif preset == "With REITs/Power":
-    tickers = HYPERS + VENDORS + REITS_POWER
+# Select universe
+if preset == "Core":
+    universe = UNIVERSE_DEFAULT
+elif preset == "US Vendors":
+    universe = US_VENDORS
+elif preset == "US Hypers":
+    universe = US_HYPERS
+elif preset == "Add REITs/Power":
+    universe = UNIVERSE_DEFAULT + REITS_PWR
 else:
-    tickers = DEFAULT
+    universe = []
 
-custom = st.sidebar.text_input("Add tickers (comma separated)", value="")
 if custom.strip():
-    add = [t.strip().upper() for t in custom.split(",") if t.strip()]
-    tickers = list(dict.fromkeys(tickers + add))
+    add = [t.strip().upper() for t in custom.split(',') if t.strip()]
+    universe = list(dict.fromkeys(universe + add))
 
 # ---------------------
-# Data
+# Data load
 # ---------------------
-spy = fetch_prices(("SPY",), period=period).squeeze()
-px = fetch_prices(tuple(tickers), period=period)
-if px.empty or spy.empty:
-    st.warning("No price data returned. Try fewer tickers or a shorter history.")
+close, vol = fetch_ohlcv(tuple(universe + ["SPY"]), period=period)
+if close.empty:
+    st.warning("No data. Try different universe or history.")
     st.stop()
-
-px = px.dropna(how="all").dropna(axis=1, how="all")
-px = px.loc[px.index.intersection(spy.index)]
-spy = spy.loc[px.index]
+spy = close.pop("SPY")
 
 # ---------------------
-# KPIs
+# Theme overview
 # ---------------------
-idx = ew_index(px)
-rel_vs_spy = idx/(spy/spy.iloc[0])
+idx = theme_index(close)
+rel = idx / (spy/spy.iloc[0])
 
 k1,k2,k3,k4 = st.columns(4)
-k1.metric("Basket total return", f"{(idx.iloc[-1]-1)*100:,.1f}%")
-k2.metric("Basket vs SPY", f"{(rel_vs_spy.iloc[-1]-1)*100:,.1f}%")
-k3.metric("1m avg return", f"{px.pct_change(21).mean(axis=1).iloc[-1]*100:,.1f}%")
-k4.metric("20d dispersion σ", f"{px.pct_change(20).iloc[-1].std()*100:,.1f}%")
+k1.metric("Theme total return", f"{(idx.iloc[-1]-1)*100:,.1f}%")
+k2.metric("Theme vs SPY", f"{(rel.iloc[-1]-1)*100:,.1f}%")
+k3.metric("Breadth >50DMA", f"{(close.iloc[-1] > close.rolling(50).mean().iloc[-1]).mean()*100:,.1f}%")
+k4.metric("New 20d highs", f"{int((close.iloc[-1] >= close.rolling(20).max().iloc[-1]).sum())}")
+
+st.subheader("Theme index vs SPY")
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=idx.index, y=idx, mode="lines", name="Theme EW"))
+fig.add_trace(go.Scatter(x=spy.index, y=spy/spy.iloc[0], mode="lines", name="SPY"))
+fig.update_layout(height=380, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.02, x=0))
+st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------
-# Tabs
+# Signals table & candidates
 # ---------------------
-overview, leaders_tab, risk_tab, extras_tab = st.tabs(["Overview","Leaders & Breadth","Risk & Beta","Extras"])
+base = compute_metrics(close, vol, spy)
+scored = score_table(base, w_rs=w_rs, w_dist=w_dist, w_trend=w_trend, w_vol=w_vol)
 
-with overview:
-    st.subheader("Equal-weight basket vs SPY")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=idx.index, y=idx, mode="lines", name="Basket EW"))
-    fig.add_trace(go.Scatter(x=spy.index, y=spy/spy.iloc[0], mode="lines", name="SPY"))
-    fig.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.02, x=0))
-    st.plotly_chart(fig, use_container_width=True)
+st.subheader("Signals (sortable)")
+st.dataframe(scored, use_container_width=True)
 
-with leaders_tab:
-    c1, c2 = st.columns([1,1])
-    with c1:
-        st.subheader("Leaders & laggards")
-        st.dataframe(returns_table(px), use_container_width=True)
-    with c2:
-        st.subheader("Breadth")
-        st.dataframe(breadth(px), use_container_width=True)
+# Candidate lists
+longs = scored.query("Above50 and Above200 and RS60% > 0 and `%from52wHigh` > -5 or Breakout20").head(8)
+trims = scored.query("Above200 == False or RS60% < 0").sort_values("Score").head(8)
 
-with risk_tab:
-    st.subheader("Rolling 20d beta to SPY (key names)")
-    key_show = [t for t in ["NVDA","AMD","META","AMZN","MSFT","GOOGL","AAPL"] if t in px.columns]
-    fig2 = go.Figure()
-    for t in key_show:
-        fig2.add_trace(go.Scatter(x=px.index, y=rolling_beta(px[t], spy, 20), mode="lines", name=t))
-    fig2.update_layout(height=380, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.02, x=0))
-    st.plotly_chart(fig2, use_container_width=True)
+st.subheader("Long candidates")
+if longs.empty:
+    st.write("None meet criteria today.")
+else:
+    st.dataframe(longs[["Price","1d%","5d%","20d%","RS60%","%from52wHigh","VolZ20","RSI14","ATR%","Breakout20","Score"]], use_container_width=True)
 
-with extras_tab:
-    st.subheader("Correlation heatmap (60d returns)")
-    rets = px.pct_change().dropna()
-    corr = rets.tail(60).corr().round(2)
-    heat = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.index, zmin=-1, zmax=1, colorscale="RdBu"))
-    heat.update_layout(height=520, margin=dict(l=10,r=10,t=30,b=10))
-    st.plotly_chart(heat, use_container_width=True)
+st.subheader("Trim/Short candidates")
+if trims.empty:
+    st.write("None meet criteria today.")
+else:
+    st.dataframe(trims[["Price","1d%","5d%","20d%","RS60%","%from52wHigh","VolZ20","RSI14","ATR%","Breakout20","Score"]], use_container_width=True)
 
-    st.subheader("Rolling 60d return distribution")
-    roll = rets.rolling(60).sum()*100
-    st.line_chart(roll)
+# ---------------------
+# Pairs & Ratios
+# ---------------------
+rat1, rat2, rat3 = st.tabs(["NVDA vs Vendor basket","Vendors vs Hypers","REITs vs Power"]) 
 
-st.caption("All series equal-weight. For decisions, combine with positioning and flows.")
+with rat1:
+    needed = ["NVDA","AMD","AVGO","MRVL","MU"]
+    avail = [t for t in needed if t in close.columns]
+    if "NVDA" in avail and len(avail) > 1:
+        vendors = (close[[t for t in avail if t != "NVDA"]].pct_change().add(1).cumprod()).mean(axis=1)
+        ratio = (close["NVDA"]/close["NVDA"].iloc[0]) / (vendors/vendors.iloc[0])
+        f = go.Figure(); f.add_trace(go.Scatter(x=ratio.index, y=ratio, mode="lines", name="NVDA / Vendors EW"))
+        f.update_layout(height=320, margin=dict(l=10,r=10,t=30,b=10))
+        st.plotly_chart(f, use_container_width=True)
+    else:
+        st.write("Insufficient data for this ratio.")
+
+with rat2:
+    v = [t for t in US_VENDORS if t in close.columns]
+    h = [t for t in US_HYPERS if t in close.columns]
+    if len(v)>=2 and len(h)>=2:
+        vend = (close[v].pct_change().add(1).cumprod()).mean(axis=1)
+        hyp  = (close[h].pct_change().add(1).cumprod()).mean(axis=1)
+        ratio = (vend/vend.iloc[0]) / (hyp/hyp.iloc[0])
+        f = go.Figure(); f.add_trace(go.Scatter(x=ratio.index, y=ratio, mode="lines", name="Vendors / Hypers"))
+        f.update_layout(height=320, margin=dict(l=10,r=10,t=30,b=10))
+        st.plotly_chart(f, use_container_width=True)
+    else:
+        st.write("Insufficient data for this ratio.")
+
+with rat3:
+    r = [t for t in ["EQIX","DLR"] if t in close.columns]
+    p = [t for t in ["VST","NEE","DUK"] if t in close.columns]
+    if len(r)>=1 and len(p)>=1:
+        reits = (close[r].pct_change().add(1).cumprod()).mean(axis=1)
+        power = (close[p].pct_change().add(1).cumprod()).mean(axis=1)
+        ratio = (reits/reits.iloc[0]) / (power/power.iloc[0])
+        f = go.Figure(); f.add_trace(go.Scatter(x=ratio.index, y=ratio, mode="lines", name="REITs / Power"))
+        f.update_layout(height=320, margin=dict(l=10,r=10,t=30,b=10))
+        st.plotly_chart(f, use_container_width=True)
+    else:
+        st.write("Insufficient data for this ratio.")
+
+st.caption("Signals from price/volume only. Use as a fast read; layer in fundamentals, positioning, and policy.")
