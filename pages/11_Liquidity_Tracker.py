@@ -5,10 +5,22 @@
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+import time
+from typing import Tuple, Optional
+
+# Primary loader
 from pandas_datareader import data as pdr
+
+# Optional fallback loader if available in your environment
+try:
+    from fredapi import Fred  # pip install fredapi
+    HAS_FREDAPI = True
+except Exception:
+    HAS_FREDAPI = False
+
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-import numpy as np
 
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
@@ -52,72 +64,118 @@ with st.sidebar:
     lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "10y"], index=2)
     years = int(lookback[:-1])
     smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
-    st.caption("Data source: FRED via pandas-datareader")
 
-# ---------------- Data ----------------
-@st.cache_data(ttl=24*60*60, show_spinner=False)
-def fred_series(series, start, end, ffill=False):
-    """
-    Fetch a single FRED series. Optionally forward-fill for chart continuity,
-    but keep raw series without ffill for integrity calculations.
-    """
-    try:
-        s = pdr.DataReader(series, "fred", start, end)[series]
-        return s.ffill() if ffill else s
-    except Exception:
-        return pd.Series(dtype=float)
+    st.markdown("---")
+    st.subheader("FRED access")
+    st.caption("If FRED rate limits or blocks anonymous requests, add an API key.")
+    fred_key = st.text_input("FRED API key (optional, kept in session only)", value=st.secrets.get("FRED_API_KEY", ""))
 
+    st.caption("Source: FRED via pandas-datareader or fredapi (fallback)")
+
+# ---------------- Dates ----------------
 today = pd.Timestamp.today().normalize()
 start_all = today - pd.DateOffset(years=15)
 start_lb = today - pd.DateOffset(years=years)
 
-# Raw series (no forward fill) for integrity and headline metrics
-walcl_raw = fred_series(FRED["fed_bs"], start_all, today, ffill=False)  # millions; weekly
-rrp_raw   = fred_series(FRED["rrp"],    start_all, today, ffill=False)  # billions; daily
-tga_raw   = fred_series(FRED["tga"],    start_all, today, ffill=False)  # millions; daily
-effr_raw  = fred_series(FRED["effr"],   start_all, today, ffill=False)  # percent; daily
+# ---------------- Data loaders ----------------
+def fetch_with_pdr(series: str, start, end) -> Tuple[pd.Series, Optional[str]]:
+    try:
+        s = pdr.DataReader(series, "fred", start, end)[series]
+        return s, None
+    except Exception as e:
+        return pd.Series(dtype=float), f"pandas_datareader error: {repr(e)}"
 
-# Guard rails
-if walcl_raw.empty or rrp_raw.empty or tga_raw.empty:
-    st.error("Missing required series from FRED. Try again later.")
+def fetch_with_fredapi(series: str, start, end, api_key: str) -> Tuple[pd.Series, Optional[str]]:
+    if not HAS_FREDAPI:
+        return pd.Series(dtype=float), "fredapi not installed"
+    try:
+        fred = Fred(api_key=api_key) if api_key else Fred()
+        # fred.get_series returns pandas Series indexed by datetime
+        s = fred.get_series(series, observation_start=start, observation_end=end)
+        if isinstance(s, pd.Series):
+            s.index = pd.to_datetime(s.index)
+        return s, None
+    except Exception as e:
+        return pd.Series(dtype=float), f"fredapi error: {repr(e)}"
+
+@st.cache_data(ttl=24*60*60, show_spinner=False)
+def robust_fred(series: str, start, end, retries: int = 3, sleep_sec: float = 0.8, api_key: str = ""):
+    """
+    Try pandas_datareader with retries. If it fails and api_key is provided,
+    try fredapi as a fallback. Return raw series (no ffill) and a status dict.
+    """
+    attempts = []
+    # Primary: pandas_datareader with backoff
+    for i in range(retries):
+        s, err = fetch_with_pdr(series, start, end)
+        if err is None and not s.empty:
+            return s.sort_index(), {"loader": "pandas_datareader", "attempts": attempts}
+        attempts.append(err or "unknown error")
+        time.sleep(sleep_sec * (i + 1))
+
+    # Fallback: fredapi if key provided or available
+    s2, err2 = fetch_with_fredapi(series, start, end, api_key)
+    if err2 is None and not s2.empty:
+        return s2.sort_index(), {"loader": "fredapi", "attempts": attempts}
+    attempts.append(err2 or "unknown fredapi error")
+
+    # Failed
+    return pd.Series(dtype=float), {"loader": "failed", "attempts": attempts}
+
+# ---------------- Fetch raw series (no forward fill) ----------------
+walcl_raw, walcl_status = robust_fred(FRED["fed_bs"], start_all, today, api_key=fred_key)
+rrp_raw,   rrp_status   = robust_fred(FRED["rrp"],    start_all, today, api_key=fred_key)
+tga_raw,   tga_status   = robust_fred(FRED["tga"],    start_all, today, api_key=fred_key)
+effr_raw,  effr_status  = robust_fred(FRED["effr"],   start_all, today, api_key=fred_key)
+
+# ---------------- Integrity checks ----------------
+missing = []
+if walcl_raw.empty: missing.append("WALCL")
+if rrp_raw.empty:   missing.append("RRPONTSYD")
+if tga_raw.empty:   missing.append("WDTGAL")
+
+if missing:
+    st.error(
+        "Missing required series from FRED: " + ", ".join(missing) +
+        ". Add a FRED API key in the sidebar and try again. If this persists, FRED may be rate limiting."
+    )
+    with st.expander("Fetch diagnostics"):
+        st.write("WALCL loader:", walcl_status)
+        st.write("RRP loader:", rrp_status)
+        st.write("TGA loader:", tga_status)
+        st.write("EFFR loader:", effr_status)
     st.stop()
 
-# Build integrity-aligned Net Liquidity series:
-# Use only exact dates where all three have observations. No forward fill.
-df_exact = pd.concat(
-    [walcl_raw, rrp_raw, tga_raw],
-    axis=1, join="inner"
-)
+# Exact same-date intersection for headline integrity
+df_exact = pd.concat([walcl_raw, rrp_raw, tga_raw], axis=1, join="inner")
 df_exact.columns = ["WALCL_m", "RRP_b", "TGA_m"]
 
-# Convert to billions and compute Net Liquidity
 df_exact["WALCL_b"] = df_exact["WALCL_m"] / 1000.0
 df_exact["TGA_b"]   = df_exact["TGA_m"] / 1000.0
 df_exact["NetLiq"]  = df_exact["WALCL_b"] - df_exact["RRP_b"] - df_exact["TGA_b"]
 
-# Apply lookback to exact-date series
 df_exact_lb = df_exact[df_exact.index >= start_lb]
 if df_exact_lb.empty:
     st.error("No overlapping WALCL, RRP, and TGA observations within the selected lookback.")
+    with st.expander("Fetch diagnostics"):
+        st.write("WALCL last obs:", None if walcl_raw.empty else walcl_raw.index.max().date())
+        st.write("RRP last obs:", None if rrp_raw.empty else rrp_raw.index.max().date())
+        st.write("TGA last obs:", None if tga_raw.empty else tga_raw.index.max().date())
     st.stop()
 
-# Latest exact-date point used for headline
 latest_common_date = df_exact.index.max()
 latest_exact = df_exact.loc[latest_common_date]
 
-# Separate chart-friendly dataframe with optional ffill for smoother visuals.
-# This does not affect headline metrics.
+# Build chart series with ffill for continuity - does not affect headline metrics
 walcl_ff = walcl_raw.ffill()
 rrp_ff   = rrp_raw.ffill()
 tga_ff   = tga_raw.ffill()
 effr_ff  = effr_raw.ffill()
 
-df_chart = pd.concat([walcl_ff, rrp_ff, tga_ff, effr_ff], axis=1, join="outer")
+df_chart = pd.concat([walcl_ff, rrp_ff, tga_ff, effr_ff], axis=1, join="outer").sort_index()
 df_chart.columns = ["WALCL_m", "RRP_b", "TGA_m", "EFFR"]
-df_chart = df_chart.sort_index()
 df_chart_lb = df_chart[df_chart.index >= start_lb].copy()
 
-# Scale for charts and compute Net Liquidity for charts only
 df_chart_lb["WALCL_b"] = df_chart_lb["WALCL_m"] / 1000.0
 df_chart_lb["TGA_b"]   = df_chart_lb["TGA_m"] / 1000.0
 df_chart_lb["NetLiq"]  = df_chart_lb["WALCL_b"] - df_chart_lb["RRP_b"] - df_chart_lb["TGA_b"]
@@ -151,7 +209,7 @@ reb["WALCL_idx"] = rebase(df_chart_lb["WALCL_b"])
 reb["RRP_idx"]   = rebase(df_chart_lb["RRP_b"], min_base=RRP_BASE_FLOOR_B)
 reb["TGA_idx"]   = rebase(df_chart_lb["TGA_b"])
 
-# ---------------- Lookback change on integrity series ----------------
+# Lookback change on integrity series
 def change_since_lookback(series: pd.Series):
     s = series.dropna()
     if s.empty:
@@ -164,7 +222,7 @@ def change_since_lookback(series: pd.Series):
 
 nl_start, nl_end, nl_pct = change_since_lookback(df_exact_lb["NetLiq"])
 
-# ---------------- Metrics (integrity-driven) ----------------
+# ---------------- Metrics ----------------
 def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
 def fmt_pct(x): return "N/A" if pd.isna(x) else f"{x:.3f}%"
 
@@ -177,13 +235,13 @@ latest_metrics = {
     "effr": effr_ff.loc[:latest_common_date].iloc[-1] if not effr_ff.loc[:latest_common_date].empty else np.nan,
     "nl_abs_chg": nl_end - nl_start if pd.notna(nl_start) else np.nan,
     "nl_pct_chg": nl_pct,
-    "walcl_last_obs": walcl_raw.dropna().index.max().date() if not walcl_raw.dropna().empty else None,
-    "rrp_last_obs": rrp_raw.dropna().index.max().date() if not rrp_raw.dropna().empty else None,
-    "tga_last_obs": tga_raw.dropna().index.max().date() if not tga_raw.dropna().empty else None,
+    "walcl_last_obs": walcl_raw.index.max().date(),
+    "rrp_last_obs": rrp_raw.index.max().date(),
+    "tga_last_obs": tga_raw.index.max().date(),
 }
 
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Net Liquidity", fmt_b(latest_metrics["netliq"]), help="Exact-date WALCL - RRP - TGA")
+m1.metric("Net Liquidity", fmt_b(latest_metrics["netliq"]), help="Exact same-date WALCL - RRP - TGA")
 m2.metric("WALCL", fmt_b(latest_metrics["walcl"]))
 m3.metric("RRP", fmt_b(latest_metrics["rrp"]))
 m4.metric("TGA", fmt_b(latest_metrics["tga"]))
@@ -193,15 +251,17 @@ m6.metric(
     fmt_b(latest_metrics["nl_abs_chg"]),
     delta=fmt_pct(latest_metrics["nl_pct_chg"])
 )
+
 st.caption(
-    f"Headline date: {latest_metrics['date']}  |  WALCL last obs: {latest_metrics['walcl_last_obs']}  |  RRP last obs: {latest_metrics['rrp_last_obs']}  |  TGA last obs: {latest_metrics['tga_last_obs']}"
+    f"Headline date: {latest_metrics['date']}  |  WALCL last obs: {latest_metrics['walcl_last_obs']}  |  "
+    f"RRP last obs: {latest_metrics['rrp_last_obs']}  |  TGA last obs: {latest_metrics['tga_last_obs']}"
 )
 
-# ---------------- Charts (visuals can use smoothed/ffill) ----------------
+# ---------------- Charts ----------------
 fig = make_subplots(
     rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
     subplot_titles=(
-        "Net Liquidity (Billions)  [chart uses ffill for continuity, headline uses exact-date intersection]",
+        "Net Liquidity (Billions)  [chart uses ffill for continuity, headline uses exact intersection]",
         "Components Rebased to 100 at Lookback Start",
         "Effective Fed Funds Rate"
     )
@@ -234,26 +294,50 @@ fig.update_xaxes(tickformat="%b-%y", row=3, col=1, title="Date")
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Lookback Change Summary (below charts) ----------------
+# ---------------- Data Integrity panel ----------------
+with st.expander("Data integrity and diagnostics"):
+    st.markdown(
+        f"""
+**Latest raw observations**
+- WALCL last obs: **{latest_metrics['walcl_last_obs']}**  
+- RRP last obs: **{latest_metrics['rrp_last_obs']}**  
+- TGA last obs: **{latest_metrics['tga_last_obs']}**
+
+**Headline Net Liquidity date:** **{latest_metrics['date']}**  
+Computed only where WALCL, RRP, and TGA all report on the same date. No forward fill.
+
+**Loaders**
+- WALCL: {walcl_status.get('loader')}
+- RRP: {rrp_status.get('loader')}
+- TGA: {tga_status.get('loader')}
+- EFFR: {effr_status.get('loader')}
+
+If a series ever fails, expand Fetch diagnostics below to see the last error and try adding a FRED API key.
+        """
+    )
+with st.expander("Fetch diagnostics"):
+    st.write("WALCL attempts:", walcl_status.get("attempts"))
+    st.write("RRP attempts:", rrp_status.get("attempts"))
+    st.write("TGA attempts:", tga_status.get("attempts"))
+    st.write("EFFR attempts:", effr_status.get("attempts"))
+
+# ---------------- Lookback Change Summary ----------------
 with st.expander("Lookback Change Summary"):
     st.markdown(
         f"""
-**Net Liquidity is computed only on exact dates where WALCL, RRP, and TGA all report.**
-
 **Lookback window:** {lookback}  
 **Start date:** {df_exact_lb.index[0].date()}  
 **End date:** {df_exact_lb.index[-1].date()}  
 
 • **Start Net Liquidity:** {fmt_b(nl_start)}  
 • **End Net Liquidity:** {fmt_b(nl_end)}  
-• **Absolute Change:** {fmt_b(latest_metrics["nl_abs_chg"])}  
-• **Percent Change:** {fmt_pct(latest_metrics["nl_pct_chg"])}
+• **Absolute Change:** {fmt_b(latest_metrics['nl_abs_chg'])}  
+• **Percent Change:** {fmt_pct(latest_metrics['nl_pct_chg'])}
         """
     )
 
-# ---------------- Download ----------------
+# ---------------- Downloads ----------------
 with st.expander("Download Data"):
-    # Raw exact-date series used for headline metrics
     exact_export = df_exact.copy()
     exact_export = exact_export.assign(
         WALCL_B=exact_export["WALCL_b"],
@@ -262,7 +346,6 @@ with st.expander("Download Data"):
     )[["WALCL_B", "RRP_b", "TGA_B", "NetLiq_B"]]
     exact_export.index.name = "Date"
 
-    # Chart data export (continuous with ffill)
     chart_export = df_chart_lb.copy()
     chart_export = chart_export.assign(
         WALCL_B=chart_export["WALCL_b"],
@@ -272,7 +355,6 @@ with st.expander("Download Data"):
     )[["WALCL_B", "RRP_b", "TGA_B", "EFFR", "NetLiq_B", "NetLiq_s_B"]]
     chart_export.index.name = "Date"
 
-    # One-row lookback summary
     summary = pd.DataFrame(
         {
             "Lookback": [lookback],
@@ -309,15 +391,15 @@ with st.expander("Methodology"):
     st.markdown(
         f"""
 Net Liquidity = WALCL − RRP − TGA.  
-WALCL and TGA are reported in **millions**; we divide by 1,000 to billions. RRP is already **billions**.
+WALCL and TGA are reported in millions and are divided by 1,000 to billions. RRP is already in billions.
 
-**Integrity rule:** headline Net Liquidity and metrics are computed using only dates where all three series have a same-day observation (inner join, no forward fill).  
-Charts may use forward fill for visual continuity, but do not affect the headline numbers.
+Integrity rule: headline values use only exact same-date observations across WALCL, RRP, and TGA.  
+Charts may use forward fill for continuity and do not affect headline numbers.
 
 Rebase uses the median of the first {REBASE_BASE_WINDOW} observations as the base for each component index.  
 A {RRP_BASE_FLOOR_B:.0f}B floor is applied for RRP rebase.
 
-Percent change since lookback uses the integrity Net Liquidity series: ((last − first) ÷ first) × 100.
+Percent change since lookback is computed on the integrity Net Liquidity series.
         """
     )
 
