@@ -1,3 +1,5 @@
+
+
 # options_chain_viewer.py
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -10,8 +12,8 @@ import altair as alt
 import math
 from datetime import datetime, date, time
 import pytz
-import matplotlib.pyplot as plt
 
+import matplotlib.pyplot as plt
 plt.style.use("default")
 
 # ---------------- Page ----------------
@@ -113,64 +115,58 @@ def norm_cdf(x):
     w = 1.0 - (1.0/np.sqrt(2*np.pi)) * np.exp(-0.5*L*L) * poly
     return np.where(x >= 0, w, 1.0 - w)
 
-# ---------------- Sidebar controls (live, no form) ----------------
-st.sidebar.subheader("Inputs")
+# ---------------- Sidebar form with submit ----------------
+with st.sidebar.form("controls", clear_on_submit=False):
+    ticker = st.text_input("Ticker", "AAPL").strip().upper()
 
-# Persist last used ticker and expiry lock
-if "locked_expiry_str" not in st.session_state:
-    st.session_state.locked_expiry_str = None
-if "lock_expiry" not in st.session_state:
-    st.session_state.lock_expiry = False
-
-ticker = st.sidebar.text_input("Ticker", st.session_state.get("last_ticker", "AAPL")).strip().upper()
-st.session_state.last_ticker = ticker
-
-expiries_list = get_expiries(ticker) if ticker else []
-
-# Lock expiry across tickers
-lock_expiry = st.sidebar.checkbox("Lock expiry across tickers", value=st.session_state.lock_expiry)
-st.session_state.lock_expiry = lock_expiry
-
-def nearest_expiry(target_iso: str, avail: list) -> str | None:
-    if not avail:
-        return None
-    if target_iso in avail:
-        return target_iso
-    try:
-        t = pd.to_datetime(target_iso)
-        diffs = [abs(pd.to_datetime(e) - t) for e in avail]
-        return avail[int(np.argmin(diffs))]
-    except Exception:
-        return avail[0]
-
-# Pick expiry
-if expiries_list:
-    if lock_expiry and st.session_state.locked_expiry_str:
-        expiry = nearest_expiry(st.session_state.locked_expiry_str, expiries_list)
-        st.sidebar.selectbox("Expiry", expiries_list, index=expiries_list.index(expiry), key="expiry_dummy", disabled=True)
+    expiries = get_expiries(ticker) if ticker else []
+    if not expiries:
+        expiry = None
+        st.caption("No expiries available")
     else:
-        expiry = st.sidebar.selectbox("Expiry", expiries_list, index=0, key="expiry_select")
-        st.session_state.locked_expiry_str = expiry
-else:
-    expiry = None
-    st.sidebar.caption("No expiries available")
+        expiry = st.selectbox("Expiry", expiries, index=0)
 
-st.sidebar.markdown("---")
-use_mid = st.sidebar.selectbox("Price source", ["Mid (bid ask)", "Last"], index=0) == "Mid (bid ask)"
-hide_zero = st.sidebar.checkbox("Hide zero OI Vol", value=True)
-min_oi = st.sidebar.number_input("Min open interest", value=0, step=10)
-min_vol = st.sidebar.number_input("Min volume", value=0, step=10)
-mny_win = st.sidebar.slider("Moneyness window around spot percent", 5, 50, 25)
+    st.markdown("---")
+    use_mid = st.selectbox("Price source", ["Mid (bid ask)", "Last"], index=0) == "Mid (bid ask)"
+    hide_zero = st.checkbox("Hide zero OI Vol", value=True)
+    min_oi = st.number_input("Min open interest", value=0, step=10)
+    min_vol = st.number_input("Min volume", value=0, step=10)
+    mny_win = st.slider("Moneyness window around spot percent", 5, 50, 25)
 
-st.sidebar.markdown("---")
-r_pct = st.sidebar.number_input("Risk free rate percent", value=4.5, step=0.25)
-q_pct = st.sidebar.number_input("Dividend yield percent", value=0.0, step=0.25)
+    st.markdown("---")
+    r_pct = st.number_input("Risk free rate percent", value=4.5, step=0.25)
+    q_pct = st.number_input("Dividend yield percent", value=0.0, step=0.25)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("Delta distribution controls")
-ymax = st.sidebar.slider("Density y-max", 0.5, 5.0, 2.0, 0.1)
-bandwidth = st.sidebar.slider("KDE bandwidth", 0.02, 0.20, 0.08, 0.01)
-weight_mode = st.sidebar.selectbox("Weight density by", ["Contracts (unweighted)", "Open interest", "Volume"], index=0)
+    submitted = st.form_submit_button("Run")
+
+# Persist last valid params so charts remain after reruns
+if submitted and ticker and expiry:
+    st.session_state["_params"] = {
+        "ticker": ticker,
+        "expiry": expiry,
+        "use_mid": use_mid,
+        "hide_zero": hide_zero,
+        "min_oi": int(min_oi),
+        "min_vol": int(min_vol),
+        "mny_win": int(mny_win),
+        "r": float(r_pct) / 100.0,
+        "q": float(q_pct) / 100.0,
+    }
+
+params = st.session_state.get("_params")
+if not params:
+    st.info("Set your inputs in the sidebar and click Run.")
+    st.stop()
+
+ticker = params["ticker"]
+expiry = params["expiry"]
+use_mid = params["use_mid"]
+hide_zero = params["hide_zero"]
+min_oi = params["min_oi"]
+min_vol = params["min_vol"]
+mny_win = params["mny_win"]
+r = params["r"]
+q = params["q"]
 
 # ---------------- Data fetch and checks ----------------
 spot = get_spot(ticker)
@@ -196,16 +192,16 @@ if chain.empty:
 if hide_zero:
     chain = chain[(chain["openInterest"] > 0) | (chain["volume"] > 0)]
 if min_oi > 0:
-    chain = chain[chain["openInterest"] >= int(min_oi)]
+    chain = chain[chain["openInterest"] >= min_oi]
 if min_vol > 0:
-    chain = chain[chain["volume"] >= int(min_vol)]
+    chain = chain[chain["volume"] >= min_vol]
 
 low = spot * (1 - mny_win / 100.0)
 high = spot * (1 + mny_win / 100.0)
 chain = chain[(chain["strike"] >= low) & (chain["strike"] <= high)]
 
 if chain.empty:
-    st.warning("No contracts left after filtering. Adjust filters.")
+    st.warning("No contracts left after filtering. Adjust filters and click Run.")
     st.stop()
 
 # Price source
@@ -217,8 +213,7 @@ bdays = busdays_to_expiry(expiry)
 T = act365_time_to_expiry(expiry)  # ACT/365 for pricing
 
 # ---------------- ATM selection and expected move ----------------
-atm_idx = (chain["strike"] - spot).abs().idxmin()
-atm_strike = float(chain.loc[atm_idx, "strike"])
+atm_strike = float(chain.loc[(chain["strike"] - spot).abs().idxmin(), "strike"])
 atm_iv_row = chain.loc[chain["strike"] == atm_strike, "blend_iv"]
 atm_iv = float(atm_iv_row.mean()) if not atm_iv_row.empty else float("nan")
 
@@ -236,9 +231,9 @@ valid = (sigma > 0) & (T_arr > 0) & np.isfinite(S) & np.isfinite(K)
 
 d1 = np.zeros_like(K, dtype=float)
 if valid.any():
-    d1[valid] = (np.log(S / K[valid]) + (r_pct/100.0 - q_pct/100.0 + 0.5 * sigma[valid] ** 2) * T_arr[valid]) / (sigma[valid] * np.sqrt(T_arr[valid]))
+    d1[valid] = (np.log(S / K[valid]) + (r - q + 0.5 * sigma[valid] ** 2) * T_arr[valid]) / (sigma[valid] * np.sqrt(T_arr[valid]))
 
-disc_q = np.exp(-(q_pct/100.0) * T_arr)
+disc_q = np.exp(-q * T_arr)
 call_delta = np.zeros_like(K, dtype=float)
 if valid.any():
     call_delta[valid] = disc_q[valid] * norm_cdf(d1[valid])
@@ -262,6 +257,7 @@ c4.metric("ATM IV", f"{atm_iv:.2%}" if np.isfinite(atm_iv) else "n a")
 c5.metric("Expected move 1 sigma", f"{expected_move:,.2f}" if np.isfinite(expected_move) else "n a")
 
 st.caption("PCR and averages computed on the filtered window")
+
 st.markdown("---")
 
 st.subheader("Summary")
@@ -272,6 +268,7 @@ s3.metric("Put call ratio", f"{put_call_ratio:.2f}" if np.isfinite(put_call_rati
 s4.metric("Average delta", f"{avg_delta:.2f}" if np.isfinite(avg_delta) else "n a")
 
 st.caption(f"Spot {spot:,.2f}   ATM strike {atm_strike:,.2f}")
+
 st.markdown("---")
 
 # ---------------- Open Interest by strike with ATM highlight ----------------
@@ -300,36 +297,24 @@ oi_chart = (
 )
 st.altair_chart(oi_chart, use_container_width=True)
 st.caption(f"Yellow bar highlights the ATM strike {atm_strike:,.2f}")
+
 st.markdown("---")
 
 # ---------------- Delta distribution by option type ----------------
 st.subheader("Delta distribution by option type")
 
-df = chain[["type","delta","openInterest","volume"]].dropna().copy()
-
-# If user picked weighted modes, fall back gracefully (Altair in this env lacks weights=)
-if weight_mode != "Contracts (unweighted)":
-    st.info("Density weighting by OI/Volume not available in this Altair build. Showing unweighted density.")
-    # no 'w' used below; kept variable in case of future upgrade
-
 dist = (
-    alt.Chart(df)
-      .transform_density(
-          "delta",
-          as_=["delta","density"],
-          groupby=["type"],
-          extent=[-1.0, 1.0],
-          bandwidth=float(bandwidth)
-      )
+    alt.Chart(chain[["type","delta"]].dropna())
+      .transform_density("delta", as_=["delta","density"], groupby=["type"])
       .mark_area(opacity=0.5)
       .encode(
-          x=alt.X("delta:Q", title="Delta", scale=alt.Scale(domain=[-1, 1])),
-          y=alt.Y("density:Q", title="Density", scale=alt.Scale(domain=[0, float(ymax)])),
+          x=alt.X("delta:Q", title="Delta"),
+          y=alt.Y("density:Q", title="Density"),
           color=alt.Color("type:N",
                           scale=alt.Scale(domain=["Call","Put"], range=["#1a9641","#d7191c"]),
                           legend=alt.Legend(title="Type"))
       )
-      .properties(height=320)
+      .properties(height=300)
 )
 st.altair_chart(dist, use_container_width=True)
 
@@ -346,9 +331,5 @@ with st.expander("Download filtered chain as CSV"):
         file_name=f"{ticker}_{expiry}_filtered_chain.csv",
         mime="text/csv"
     )
-
-# Persist locked expiry if the user wants it
-if lock_expiry and expiry:
-    st.session_state.locked_expiry_str = expiry
 
 st.caption("© 2025 AD Fund Management LP")
