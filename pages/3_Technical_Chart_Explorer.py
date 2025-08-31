@@ -35,7 +35,6 @@ def start_date_from_period(p: str) -> pd.Timestamp | None:
     if p.endswith("y"):
         years = int(p[:-1])
         return today - pd.DateOffset(years=years)
-    # fallback
     return None
 
 @st.cache_data(ttl=3600)
@@ -46,7 +45,7 @@ def get_full_history(tkr: str, intrvl: str) -> pd.DataFrame:
         st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-# ── Fetch ──────────────────────────────────────────────────────────────────
+# ── Fetch full history for the chosen interval ─────────────────────────────
 df_full = get_full_history(ticker, interval)
 if df_full.empty:
     st.error("No data returned. Check symbol or internet.")
@@ -58,46 +57,57 @@ if df_full.index.tz is not None:
 if interval == "1d":
     df_full = df_full[df_full.index.weekday < 5]
 
-# Cap to avoid giant payloads (keeps indicators stable but bounded)
-CAP_MAX_ROWS = 20000
+# Optional hard cap to avoid huge payloads
+CAP_MAX_ROWS = 200000
 if len(df_full) > CAP_MAX_ROWS:
     df_full = df_full.tail(CAP_MAX_ROWS)
 
-# ── Date-based window (fixes your issue) ───────────────────────────────────
+# ── Date-based windowing with a long warmup for indicators ─────────────────
 start_dt = start_date_from_period(period)
+
+# Warmup history length for indicators
+BUFFER_YEARS = 20
 if start_dt is not None:
-    df_display = df_full[df_full.index >= start_dt].copy()
-    # if the window is empty due to sparse old tickers, fall back to last 300 rows
-    if df_display.empty:
-        df_display = df_full.tail(300).copy()
+    warmup_start = start_dt - pd.DateOffset(years=BUFFER_YEARS)
+    df_ind = df_full[df_full.index >= warmup_start].copy()
 else:
-    df_display = df_full.copy()
+    # Max period: just use all available history for indicators
+    df_ind = df_full.copy()
 
-# ── Indicators computed on the displayed set (interval-consistent) ────────
+# ── Indicators computed on the warmup+window set ───────────────────────────
 for w in (8, 20, 50, 100, 200):
-    df_display[f"MA{w}"] = df_display["Close"].rolling(w).mean()
+    df_ind[f"MA{w}"] = df_ind["Close"].rolling(w).mean()
 
-delta = df_display["Close"].diff()
+# RSI (14)
+delta = df_ind["Close"].diff()
 gain = delta.clip(lower=0)
 loss = -delta.clip(upper=0)
 avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
 avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
 rs = avg_gain / avg_loss
-df_display["RSI14"] = 100 - (100 / (1 + rs))
+df_ind["RSI14"] = 100 - (100 / (1 + rs))
 
-df_display["EMA12"]  = df_display["Close"].ewm(span=12, adjust=False).mean()
-df_display["EMA26"]  = df_display["Close"].ewm(span=26, adjust=False).mean()
-df_display["MACD"]   = df_display["EMA12"] - df_display["EMA26"]
-df_display["Signal"] = df_display["MACD"].ewm(span=9, adjust=False).mean()
-df_display["Hist"]   = df_display["MACD"] - df_display["Signal"]
+# MACD (12, 26, 9)
+df_ind["EMA12"]  = df_ind["Close"].ewm(span=12, adjust=False).mean()
+df_ind["EMA26"]  = df_ind["Close"].ewm(span=26, adjust=False).mean()
+df_ind["MACD"]   = df_ind["EMA12"] - df_ind["EMA26"]
+df_ind["Signal"] = df_ind["MACD"].ewm(span=9, adjust=False).mean()
+df_ind["Hist"]   = df_ind["MACD"] - df_ind["Signal"]
 
+# Final display slice (now indicators retain full continuity)
+if start_dt is not None:
+    df_display = df_ind[df_ind.index >= start_dt].copy()
+    if df_display.empty:
+        df_display = df_ind.tail(300).copy()
+else:
+    df_display = df_ind.copy()
+
+# ── Plot ───────────────────────────────────────────────────────────────────
+df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
 available_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) >= w]
 missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) < w]
 if missing_mas:
     st.warning("Some MAs may appear choppy due to limited visible data: " + ", ".join(f"MA{w}" for w in missing_mas))
-
-# ── Plot ───────────────────────────────────────────────────────────────────
-df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
 
 fig = make_subplots(
     rows=4, cols=1, shared_xaxes=True,
