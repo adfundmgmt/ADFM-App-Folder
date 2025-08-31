@@ -10,11 +10,11 @@ import altair as alt
 import math
 from datetime import datetime, date, time
 import pytz
-
 import matplotlib.pyplot as plt
+
 plt.style.use("default")
 
-# -------------- Page --------------
+# ---------------- Page ----------------
 st.set_page_config(page_title="Options Chain Viewer", layout="wide")
 st.title("Options Chain Viewer")
 
@@ -28,7 +28,7 @@ with st.sidebar:
     - Optional tables and CSV export
     """)
 
-# -------------- Helpers --------------
+# ---------------- Helpers ----------------
 NY = pytz.timezone("America/New_York")
 
 @st.cache_data(ttl=600)
@@ -45,6 +45,9 @@ def get_expiries(tkr: str):
 
 @st.cache_data(ttl=300)
 def get_chain(tkr: str, exp: str) -> pd.DataFrame:
+    """
+    Returns a tidy chain with calls and puts combined, includes clean 'mid' and IV fields.
+    """
     tk = yf.Ticker(tkr)
     ch = tk.option_chain(exp)
     calls = ch.calls.copy()
@@ -64,12 +67,15 @@ def get_chain(tkr: str, exp: str) -> pd.DataFrame:
         df["impliedVolatility"] = pd.to_numeric(df["impliedVolatility"], errors="coerce")
         df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
 
+        # Robust mid: only if both bid and ask are positive, else fall back to lastPrice
         has_ba = (df["bid"] > 0) & (df["ask"] > 0)
         df["mid"] = np.where(has_ba, (df["bid"] + df["ask"]) / 2.0, np.nan)
         df["mid"] = df["mid"].fillna(df["lastPrice"])
 
+    # Keep side IV and later compute blended IV per strike
     calls.rename(columns={"impliedVolatility": "side_iv"}, inplace=True)
     puts.rename(columns={"impliedVolatility": "side_iv"}, inplace=True)
+
     calls["type"] = "Call"
     puts["type"]  = "Put"
     out = pd.concat([calls, puts], ignore_index=True)
@@ -88,13 +94,16 @@ def busdays_to_expiry(exp: str) -> int:
     return int(np.busday_count(today, ed))
 
 def act365_time_to_expiry(exp: str) -> float:
+    """
+    Calendar time to 4 pm New York on expiry, ACT/365.
+    """
     now = datetime.now(NY)
     ed = pd.to_datetime(exp).date()
     expiry_dt = NY.localize(datetime.combine(ed, time(16, 0)))
     seconds = max((expiry_dt - now).total_seconds(), 0.0)
     return seconds / (365.0 * 24 * 60 * 60)
 
-# Vectorized normal CDF
+# Vectorized normal CDF (Hastings)
 def norm_cdf(x):
     x = np.asarray(x, dtype=float)
     a1, a2, a3, a4, a5 = 0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429
@@ -104,10 +113,10 @@ def norm_cdf(x):
     w = 1.0 - (1.0/np.sqrt(2*np.pi)) * np.exp(-0.5*L*L) * poly
     return np.where(x >= 0, w, 1.0 - w)
 
-# -------------- Sidebar controls (live, no form) --------------
+# ---------------- Sidebar controls (live, no form) ----------------
 st.sidebar.subheader("Inputs")
 
-# Persist last used ticker and expiry
+# Persist last used ticker and expiry lock
 if "locked_expiry_str" not in st.session_state:
     st.session_state.locked_expiry_str = None
 if "lock_expiry" not in st.session_state:
@@ -122,7 +131,7 @@ expiries_list = get_expiries(ticker) if ticker else []
 lock_expiry = st.sidebar.checkbox("Lock expiry across tickers", value=st.session_state.lock_expiry)
 st.session_state.lock_expiry = lock_expiry
 
-def nearest_expiry(target_iso: str, avail: list[str]) -> str | None:
+def nearest_expiry(target_iso: str, avail: list) -> str | None:
     if not avail:
         return None
     if target_iso in avail:
@@ -134,10 +143,11 @@ def nearest_expiry(target_iso: str, avail: list[str]) -> str | None:
     except Exception:
         return avail[0]
 
-# pick default expiry
+# Pick expiry
 if expiries_list:
     if lock_expiry and st.session_state.locked_expiry_str:
         expiry = nearest_expiry(st.session_state.locked_expiry_str, expiries_list)
+        st.sidebar.selectbox("Expiry", expiries_list, index=expiries_list.index(expiry), key="expiry_dummy", disabled=True)
     else:
         expiry = st.sidebar.selectbox("Expiry", expiries_list, index=0, key="expiry_select")
         st.session_state.locked_expiry_str = expiry
@@ -162,7 +172,7 @@ ymax = st.sidebar.slider("Density y-max", 0.5, 5.0, 2.0, 0.1)
 bandwidth = st.sidebar.slider("KDE bandwidth", 0.02, 0.20, 0.08, 0.01)
 weight_mode = st.sidebar.selectbox("Weight density by", ["Contracts (unweighted)", "Open interest", "Volume"], index=0)
 
-# -------------- Data fetch and checks --------------
+# ---------------- Data fetch and checks ----------------
 spot = get_spot(ticker)
 if not np.isfinite(spot):
     st.error("Could not retrieve spot. Try again later.")
@@ -182,7 +192,7 @@ if chain.empty:
     st.error("Empty chain returned by data source.")
     st.stop()
 
-# -------------- Filters and enrich --------------
+# ---------------- Filters and enrich ----------------
 if hide_zero:
     chain = chain[(chain["openInterest"] > 0) | (chain["volume"] > 0)]
 if min_oi > 0:
@@ -198,27 +208,30 @@ if chain.empty:
     st.warning("No contracts left after filtering. Adjust filters.")
     st.stop()
 
+# Price source
 px_src = chain["mid"] if use_mid else chain["lastPrice"]
 chain["price_src"] = px_src
 
-# -------------- Time to expiry --------------
+# ---------------- Time to expiry ----------------
 bdays = busdays_to_expiry(expiry)
-T = act365_time_to_expiry(expiry)
+T = act365_time_to_expiry(expiry)  # ACT/365 for pricing
 
-# -------------- ATM selection and expected move --------------
+# ---------------- ATM selection and expected move ----------------
 atm_idx = (chain["strike"] - spot).abs().idxmin()
 atm_strike = float(chain.loc[atm_idx, "strike"])
 atm_iv_row = chain.loc[chain["strike"] == atm_strike, "blend_iv"]
 atm_iv = float(atm_iv_row.mean()) if not atm_iv_row.empty else float("nan")
+
 expected_move = spot * atm_iv * math.sqrt(T) if np.isfinite(atm_iv) and T > 0 else float("nan")
 
-# -------------- Delta calc (BSM with dividend yield) --------------
+# ---------------- Deltas using Black Scholes with dividend yield ----------------
 sigma = pd.to_numeric(chain["side_iv"], errors="coerce").astype(float).to_numpy(copy=False)
-sigma = np.clip(sigma, 1e-6, 5.0)
+sigma = np.clip(sigma, 1e-6, 5.0)  # clamp to avoid artifacts
 
 K = chain["strike"].astype(float).to_numpy(copy=False)
 S = float(spot)
 T_arr = np.full_like(K, T, dtype=float)
+
 valid = (sigma > 0) & (T_arr > 0) & np.isfinite(S) & np.isfinite(K)
 
 d1 = np.zeros_like(K, dtype=float)
@@ -235,7 +248,7 @@ delta = np.where(is_call, call_delta, call_delta - disc_q)
 delta[~valid] = np.nan
 chain["delta"] = delta
 
-# -------------- Summary metrics --------------
+# ---------------- Summary metrics ----------------
 total_call_vol = int(chain.query("type == 'Call'")["volume"].sum())
 total_put_vol  = int(chain.query("type == 'Put'")["volume"].sum())
 put_call_ratio = (total_put_vol / total_call_vol) if total_call_vol > 0 else float("nan")
@@ -261,7 +274,7 @@ s4.metric("Average delta", f"{avg_delta:.2f}" if np.isfinite(avg_delta) else "n 
 st.caption(f"Spot {spot:,.2f}   ATM strike {atm_strike:,.2f}")
 st.markdown("---")
 
-# -------------- Open Interest by strike with ATM highlight --------------
+# ---------------- Open Interest by strike with ATM highlight ----------------
 st.subheader("Open Interest by strike")
 
 chart_data = chain[["type","strike","openInterest","volume","delta"]].copy()
@@ -289,16 +302,15 @@ st.altair_chart(oi_chart, use_container_width=True)
 st.caption(f"Yellow bar highlights the ATM strike {atm_strike:,.2f}")
 st.markdown("---")
 
-# -------------- Delta distribution by option type --------------
+# ---------------- Delta distribution by option type ----------------
 st.subheader("Delta distribution by option type")
 
 df = chain[["type","delta","openInterest","volume"]].dropna().copy()
-if weight_mode == "Open interest":
-    df["w"] = df["openInterest"].clip(lower=0.0)
-elif weight_mode == "Volume":
-    df["w"] = df["volume"].clip(lower=0.0)
-else:
-    df["w"] = 1.0
+
+# If user picked weighted modes, fall back gracefully (Altair in this env lacks weights=)
+if weight_mode != "Contracts (unweighted)":
+    st.info("Density weighting by OI/Volume not available in this Altair build. Showing unweighted density.")
+    # no 'w' used below; kept variable in case of future upgrade
 
 dist = (
     alt.Chart(df)
@@ -306,7 +318,6 @@ dist = (
           "delta",
           as_=["delta","density"],
           groupby=["type"],
-          weights="w",
           extent=[-1.0, 1.0],
           bandwidth=float(bandwidth)
       )
@@ -322,7 +333,7 @@ dist = (
 )
 st.altair_chart(dist, use_container_width=True)
 
-# -------------- Optional tables and download --------------
+# ---------------- Optional tables and download ----------------
 with st.expander("Show calls and puts tables"):
     show_cols = ["type","strike","bid","ask","lastPrice","mid","openInterest","volume","side_iv","blend_iv","delta"]
     st.dataframe(chain.query("type == 'Call'")[show_cols].sort_values("strike"), use_container_width=True)
