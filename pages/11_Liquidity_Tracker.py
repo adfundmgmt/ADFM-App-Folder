@@ -13,16 +13,14 @@ import numpy as np
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
 FRED = {
-    "fed_bs": "WALCL",   # Fed total assets (millions; weekly, H.4.1 Wednesday)
-    "rrp": "RRPONTSYD",  # ON RRP (billions; daily)
-    "tga": "WDTGAL",     # Treasury General Account (millions; daily)
-    "effr": "EFFR",      # Effective Fed Funds Rate (percent; daily)
+    "fed_bs": "WALCL",   # Fed total assets (millions on FRED, weekly H.4.1 Wednesday)
+    "rrp": "RRPONTSYD",  # ON RRP (billions on FRED, daily)
+    "tga": "WDTGAL",     # Treasury General Account (millions on FRED, daily)
+    "effr": "EFFR",      # Effective Fed Funds Rate (percent, daily)
 }
 DEFAULT_SMOOTH_DAYS = 5
-
-# Robust rebase parameters
-REBASE_BASE_WINDOW = 10   # median of first 10 points
-RRP_BASE_FLOOR_B   = 5.0  # billions; avoids near-zero base
+REBASE_BASE_WINDOW = 10
+RRP_BASE_FLOOR_B   = 5.0
 
 st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
@@ -35,10 +33,10 @@ with st.sidebar:
         Goal: track Net Liquidity and relate it to policy.
 
         Definition: Net Liquidity = WALCL − RRP − TGA  
-        Units are billions. Sustained rises often coincide with risk-on conditions.
+        Units are billions.
 
         Series  
-        • WALCL: Fed total assets, H.4.1 weekly (millions).  
+        • WALCL: Fed total assets, weekly H.4.1 (millions).  
         • RRPONTSYD (RRP): ON RRP usage (billions).  
         • WDTGAL (TGA): Treasury cash at the Fed (millions).  
         • EFFR: effective fed funds rate (percent).
@@ -54,18 +52,18 @@ with st.sidebar:
     lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "10y"], index=2)
     years = int(lookback[:-1])
     smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
-    align_to_walcl = st.checkbox(
-        "Align chart to WALCL H.4.1 dates (avoid forward-fill artifacts)",
-        value=True
-    )
     st.caption("Data source: FRED via pandas-datareader")
 
 # ---------------- Data ----------------
 @st.cache_data(ttl=24*60*60, show_spinner=False)
-def fred_series(series, start, end):
+def fred_series(series, start, end, ffill=False):
+    """
+    Fetch a single FRED series. Optionally forward-fill for chart continuity,
+    but keep raw series without ffill for integrity calculations.
+    """
     try:
         s = pdr.DataReader(series, "fred", start, end)[series]
-        return s.ffill()
+        return s.ffill() if ffill else s
     except Exception:
         return pd.Series(dtype=float)
 
@@ -73,47 +71,69 @@ today = pd.Timestamp.today().normalize()
 start_all = today - pd.DateOffset(years=15)
 start_lb = today - pd.DateOffset(years=years)
 
-walcl = fred_series(FRED["fed_bs"], start_all, today)  # millions; weekly Wed
-rrp    = fred_series(FRED["rrp"],    start_all, today) # billions; daily
-tga    = fred_series(FRED["tga"],    start_all, today) # millions; daily
-effr   = fred_series(FRED["effr"],   start_all, today) # percent; daily
+# Raw series (no forward fill) for integrity and headline metrics
+walcl_raw = fred_series(FRED["fed_bs"], start_all, today, ffill=False)  # millions; weekly
+rrp_raw   = fred_series(FRED["rrp"],    start_all, today, ffill=False)  # billions; daily
+tga_raw   = fred_series(FRED["tga"],    start_all, today, ffill=False)  # millions; daily
+effr_raw  = fred_series(FRED["effr"],   start_all, today, ffill=False)  # percent; daily
 
-# Base concat on the union of indices then ffill
-df = pd.concat(
-    [walcl, rrp, tga, effr],
-    axis=1,
-    keys=["WALCL", "RRP", "TGA", "EFFR"]
-).ffill()
-
-# Optional: align everything strictly to WALCL observation dates
-if align_to_walcl and not walcl.empty:
-    df = df.loc[walcl.index]  # restrict to weekly H.4.1 dates
-    # Guard: drop anything beyond last WALCL date
-    df = df[df.index <= walcl.index.max()]
-
-# Ensure components exist and apply lookback
-df = df.dropna(subset=["WALCL", "RRP", "TGA"])
-df = df[df.index >= start_lb]
-if df.empty:
-    st.error("No data for selected lookback. Try a shorter window.")
+# Guard rails
+if walcl_raw.empty or rrp_raw.empty or tga_raw.empty:
+    st.error("Missing required series from FRED. Try again later.")
     st.stop()
 
-# Net Liquidity in billions
-df["WALCL_b"] = df["WALCL"] / 1000.0
-df["RRP_b"]   = df["RRP"]
-df["TGA_b"]   = df["TGA"] / 1000.0
-df["NetLiq"]  = df["WALCL_b"] - df["RRP_b"] - df["TGA_b"]
+# Build integrity-aligned Net Liquidity series:
+# Use only exact dates where all three have observations. No forward fill.
+df_exact = pd.concat(
+    [walcl_raw, rrp_raw, tga_raw],
+    axis=1, join="inner"
+)
+df_exact.columns = ["WALCL_m", "RRP_b", "TGA_m"]
 
-# Smoothing
+# Convert to billions and compute Net Liquidity
+df_exact["WALCL_b"] = df_exact["WALCL_m"] / 1000.0
+df_exact["TGA_b"]   = df_exact["TGA_m"] / 1000.0
+df_exact["NetLiq"]  = df_exact["WALCL_b"] - df_exact["RRP_b"] - df_exact["TGA_b"]
+
+# Apply lookback to exact-date series
+df_exact_lb = df_exact[df_exact.index >= start_lb]
+if df_exact_lb.empty:
+    st.error("No overlapping WALCL, RRP, and TGA observations within the selected lookback.")
+    st.stop()
+
+# Latest exact-date point used for headline
+latest_common_date = df_exact.index.max()
+latest_exact = df_exact.loc[latest_common_date]
+
+# Separate chart-friendly dataframe with optional ffill for smoother visuals.
+# This does not affect headline metrics.
+walcl_ff = walcl_raw.ffill()
+rrp_ff   = rrp_raw.ffill()
+tga_ff   = tga_raw.ffill()
+effr_ff  = effr_raw.ffill()
+
+df_chart = pd.concat([walcl_ff, rrp_ff, tga_ff, effr_ff], axis=1, join="outer")
+df_chart.columns = ["WALCL_m", "RRP_b", "TGA_m", "EFFR"]
+df_chart = df_chart.sort_index()
+df_chart_lb = df_chart[df_chart.index >= start_lb].copy()
+
+# Scale for charts and compute Net Liquidity for charts only
+df_chart_lb["WALCL_b"] = df_chart_lb["WALCL_m"] / 1000.0
+df_chart_lb["TGA_b"]   = df_chart_lb["TGA_m"] / 1000.0
+df_chart_lb["NetLiq"]  = df_chart_lb["WALCL_b"] - df_chart_lb["RRP_b"] - df_chart_lb["TGA_b"]
+
+# Smoothing for charts
 cols_to_smooth = ["WALCL_b", "RRP_b", "TGA_b", "NetLiq", "EFFR"]
 if smooth > 1:
     for col in cols_to_smooth:
-        df[f"{col}_s"] = df[col].rolling(smooth, min_periods=1).mean()
+        if col in df_chart_lb:
+            df_chart_lb[f"{col}_s"] = df_chart_lb[col].rolling(smooth, min_periods=1).mean()
 else:
     for col in cols_to_smooth:
-        df[f"{col}_s"] = df[col]
+        if col in df_chart_lb:
+            df_chart_lb[f"{col}_s"] = df_chart_lb[col]
 
-# Rebased panel
+# Rebased panel for charts
 def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
     s = series.dropna()
     if s.empty:
@@ -122,16 +142,16 @@ def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
     base = head.median()
     if min_base is not None:
         base = max(base, float(min_base))
-    if base == 0 or pd.isna(base):
+    if pd.isna(base) or base == 0:
         return series * 0 + 100
     return (series / base) * 100
 
-reb = pd.DataFrame(index=df.index)
-reb["WALCL_idx"] = rebase(df["WALCL_b"])
-reb["RRP_idx"]   = rebase(df["RRP_b"], min_base=RRP_BASE_FLOOR_B)
-reb["TGA_idx"]   = rebase(df["TGA_b"])
+reb = pd.DataFrame(index=df_chart_lb.index)
+reb["WALCL_idx"] = rebase(df_chart_lb["WALCL_b"])
+reb["RRP_idx"]   = rebase(df_chart_lb["RRP_b"], min_base=RRP_BASE_FLOOR_B)
+reb["TGA_idx"]   = rebase(df_chart_lb["TGA_b"])
 
-# ---------------- Lookback change ----------------
+# ---------------- Lookback change on integrity series ----------------
 def change_since_lookback(series: pd.Series):
     s = series.dropna()
     if s.empty:
@@ -142,45 +162,46 @@ def change_since_lookback(series: pd.Series):
     pct_chg = np.nan if start_val == 0 else (abs_chg / start_val) * 100.0
     return start_val, end_val, pct_chg
 
-nl_start, nl_end, nl_pct = change_since_lookback(df["NetLiq"])
+nl_start, nl_end, nl_pct = change_since_lookback(df_exact_lb["NetLiq"])
 
-# ---------------- Metrics ----------------
+# ---------------- Metrics (integrity-driven) ----------------
 def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
 def fmt_pct(x): return "N/A" if pd.isna(x) else f"{x:.3f}%"
 
-latest = {
-    "date": df.index[-1].date(),
-    "netliq": df["NetLiq"].iloc[-1],
-    "walcl": df["WALCL_b"].iloc[-1],
-    "rrp": df["RRP_b"].iloc[-1],
-    "tga": df["TGA_b"].iloc[-1],
-    "effr": df["EFFR"].iloc[-1],
+latest_metrics = {
+    "date": latest_common_date.date(),
+    "netliq": latest_exact["NetLiq"],
+    "walcl": latest_exact["WALCL_b"],
+    "rrp": latest_exact["RRP_b"],
+    "tga": latest_exact["TGA_b"],
+    "effr": effr_ff.loc[:latest_common_date].iloc[-1] if not effr_ff.loc[:latest_common_date].empty else np.nan,
     "nl_abs_chg": nl_end - nl_start if pd.notna(nl_start) else np.nan,
     "nl_pct_chg": nl_pct,
-    "walcl_last_date": df["WALCL_b"].dropna().index[-1].date() if not df["WALCL_b"].dropna().empty else None,
+    "walcl_last_obs": walcl_raw.dropna().index.max().date() if not walcl_raw.dropna().empty else None,
+    "rrp_last_obs": rrp_raw.dropna().index.max().date() if not rrp_raw.dropna().empty else None,
+    "tga_last_obs": tga_raw.dropna().index.max().date() if not tga_raw.dropna().empty else None,
 }
 
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Net Liquidity", fmt_b(latest["netliq"]), help="WALCL - RRP - TGA")
-m2.metric("WALCL", fmt_b(latest["walcl"]))
-m3.metric("RRP", fmt_b(latest["rrp"]))
-m4.metric("TGA", fmt_b(latest["tga"]))
-m5.metric("EFFR", fmt_pct(latest["effr"]))
+m1.metric("Net Liquidity", fmt_b(latest_metrics["netliq"]), help="Exact-date WALCL - RRP - TGA")
+m2.metric("WALCL", fmt_b(latest_metrics["walcl"]))
+m3.metric("RRP", fmt_b(latest_metrics["rrp"]))
+m4.metric("TGA", fmt_b(latest_metrics["tga"]))
+m5.metric("EFFR", fmt_pct(latest_metrics["effr"]))
 m6.metric(
     f"Net Liquidity since {lookback}",
-    fmt_b(latest["nl_abs_chg"]),
-    delta=fmt_pct(latest["nl_pct_chg"])
+    fmt_b(latest_metrics["nl_abs_chg"]),
+    delta=fmt_pct(latest_metrics["nl_pct_chg"])
 )
-
 st.caption(
-    f"WALCL last observation date: {latest['walcl_last_date']}  |  Frequency: weekly (H.4.1, Wednesday)."
+    f"Headline date: {latest_metrics['date']}  |  WALCL last obs: {latest_metrics['walcl_last_obs']}  |  RRP last obs: {latest_metrics['rrp_last_obs']}  |  TGA last obs: {latest_metrics['tga_last_obs']}"
 )
 
-# ---------------- Charts ----------------
+# ---------------- Charts (visuals can use smoothed/ffill) ----------------
 fig = make_subplots(
     rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
     subplot_titles=(
-        "Net Liquidity (Billions)",
+        "Net Liquidity (Billions)  [chart uses ffill for continuity, headline uses exact-date intersection]",
         "Components Rebased to 100 at Lookback Start",
         "Effective Fed Funds Rate"
     )
@@ -188,19 +209,19 @@ fig = make_subplots(
 
 # Row 1: Net Liquidity
 fig.add_trace(
-    go.Scatter(x=df.index, y=df["NetLiq_s"], name="Net Liquidity (B)", line=dict(color="#000000", width=2)),
+    go.Scatter(x=df_chart_lb.index, y=df_chart_lb["NetLiq_s"], name="Net Liquidity (B)", line=dict(color="#000000", width=2)),
     row=1, col=1
 )
 fig.update_yaxes(title="Billions USD", row=1, col=1)
 
 # Row 2: Components rebased
-fig.add_trace(go.Scatter(x=reb.index, y=reb["WALCL_idx"], name="WALCL idx", line=dict(color="#1f77b4")), row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"],   name="RRP idx",   line=dict(color="#2ca02c")), row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"],   name="TGA idx",   line=dict(color="#d62728")), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["WALCL_idx"], name="WALCL idx", line=dict()), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"],   name="RRP idx",   line=dict()), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"],   name="TGA idx",   line=dict()), row=2, col=1)
 fig.update_yaxes(title="Index = 100", row=2, col=1, rangemode="tozero")
 
 # Row 3: EFFR
-fig.add_trace(go.Scatter(x=df.index, y=df["EFFR_s"], name="EFFR", line=dict(color="#ff7f0e")), row=3, col=1)
+fig.add_trace(go.Scatter(x=df_chart_lb.index, y=df_chart_lb["EFFR_s"], name="EFFR", line=dict()), row=3, col=1)
 fig.update_yaxes(title="Percent", tickformat=".2f", row=3, col=1)
 
 fig.update_layout(
@@ -217,43 +238,63 @@ st.plotly_chart(fig, use_container_width=True)
 with st.expander("Lookback Change Summary"):
     st.markdown(
         f"""
-**Lookback start date:** {df.index[0].date()}
+**Net Liquidity is computed only on exact dates where WALCL, RRP, and TGA all report.**
+
+**Lookback window:** {lookback}  
+**Start date:** {df_exact_lb.index[0].date()}  
+**End date:** {df_exact_lb.index[-1].date()}  
 
 • **Start Net Liquidity:** {fmt_b(nl_start)}  
 • **End Net Liquidity:** {fmt_b(nl_end)}  
-• **Absolute Change:** {fmt_b(latest["nl_abs_chg"])}  
-• **Percent Change:** {fmt_pct(latest["nl_pct_chg"])}
+• **Absolute Change:** {fmt_b(latest_metrics["nl_abs_chg"])}  
+• **Percent Change:** {fmt_pct(latest_metrics["nl_pct_chg"])}
         """
     )
 
 # ---------------- Download ----------------
 with st.expander("Download Data"):
-    out = pd.DataFrame(index=df.index)
-    # Export in billions for consistency
-    out["WALCL_B"]    = df["WALCL_b"]
-    out["RRP_B"]      = df["RRP_b"]
-    out["TGA_B"]      = df["TGA_b"]
-    out["EFFR_%"]     = df["EFFR"]
-    out["NetLiq_B"]   = df["NetLiq"]
-    out["NetLiq_s_B"] = df["NetLiq_s"]
-    out.index.name = "Date"
+    # Raw exact-date series used for headline metrics
+    exact_export = df_exact.copy()
+    exact_export = exact_export.assign(
+        WALCL_B=exact_export["WALCL_b"],
+        TGA_B=exact_export["TGA_b"],
+        NetLiq_B=exact_export["NetLiq"]
+    )[["WALCL_B", "RRP_b", "TGA_B", "NetLiq_B"]]
+    exact_export.index.name = "Date"
 
+    # Chart data export (continuous with ffill)
+    chart_export = df_chart_lb.copy()
+    chart_export = chart_export.assign(
+        WALCL_B=chart_export["WALCL_b"],
+        TGA_B=chart_export["TGA_b"],
+        NetLiq_B=chart_export["NetLiq"],
+        NetLiq_s_B=chart_export["NetLiq_s"]
+    )[["WALCL_B", "RRP_b", "TGA_B", "EFFR", "NetLiq_B", "NetLiq_s_B"]]
+    chart_export.index.name = "Date"
+
+    # One-row lookback summary
     summary = pd.DataFrame(
         {
             "Lookback": [lookback],
-            "StartDate": [df.index[0].date()],
+            "StartDate": [df_exact_lb.index[0].date()],
+            "EndDate": [df_exact_lb.index[-1].date()],
             "Start_NetLiq_B": [nl_start],
             "End_NetLiq_B": [nl_end],
-            "AbsChange_B": [latest["nl_abs_chg"]],
-            "PctChange": [latest["nl_pct_chg"]],
-            "AlignedToWALCL": [align_to_walcl],
+            "AbsChange_B": [latest_metrics["nl_abs_chg"]],
+            "PctChange": [latest_metrics["nl_pct_chg"]],
         }
     )
 
     st.download_button(
-        "Download Main CSV",
-        out.to_csv(),
-        file_name="liquidity_tracker.csv",
+        "Download Headline Integrity Series (CSV)",
+        exact_export.to_csv(),
+        file_name="liquidity_tracker_exact_integrity.csv",
+        mime="text/csv",
+    )
+    st.download_button(
+        "Download Chart Series (CSV)",
+        chart_export.to_csv(),
+        file_name="liquidity_tracker_chart_series.csv",
         mime="text/csv",
     )
     st.download_button(
@@ -268,19 +309,15 @@ with st.expander("Methodology"):
     st.markdown(
         f"""
 Net Liquidity = WALCL − RRP − TGA.  
-Units: WALCL and TGA are reported by FRED in **millions**; RRP is in **billions**.  
-We scale WALCL and TGA by 1,000 to billions before calculating Net Liquidity.
+WALCL and TGA are reported in **millions**; we divide by 1,000 to billions. RRP is already **billions**.
 
-**WALCL integrity:** WALCL is a weekly H.4.1 series with Wednesday observation dates.  
-When **Align to WALCL dates** is enabled, all series are restricted to WALCL's index to avoid forward-filled distortion.  
-This is usually the most accurate view if you are sanity-checking against the FRED WALCL chart.
+**Integrity rule:** headline Net Liquidity and metrics are computed using only dates where all three series have a same-day observation (inner join, no forward fill).  
+Charts may use forward fill for visual continuity, but do not affect the headline numbers.
 
-Rebase uses the median of the first {REBASE_BASE_WINDOW} observations as the base.  
-For RRP, a {RRP_BASE_FLOOR_B:.0f}B floor prevents divide-by-near-zero artifacts.
+Rebase uses the median of the first {REBASE_BASE_WINDOW} observations as the base for each component index.  
+A {RRP_BASE_FLOOR_B:.0f}B floor is applied for RRP rebase.
 
-Smoothing is a simple moving average over {smooth} points on the selected index.  
-Percent change since lookback is computed on the **raw** Net Liquidity series:
-((last − first) ÷ first) × 100. If the first value is zero, percent is N/A.
+Percent change since lookback uses the integrity Net Liquidity series: ((last − first) ÷ first) × 100.
         """
     )
 
