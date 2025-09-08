@@ -66,7 +66,7 @@ if len(df_full) > CAP_MAX_ROWS:
 start_dt = start_date_from_period(period)
 
 # Warmup history length for indicators
-BUFFER_YEARS = 20
+BUFFER_YEARS = 50
 if start_dt is not None:
     warmup_start = start_dt - pd.DateOffset(years=BUFFER_YEARS)
     df_ind = df_full[df_full.index >= warmup_start].copy()
