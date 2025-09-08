@@ -129,7 +129,7 @@ fig.add_trace(go.Candlestick(
 if show_bbands:
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display["BB_UPPER"],
-        mode="lines", line=dict(width=1, color="#607D8B"), name="BB Upper"
+        mode="lines", line=dict(width=1, color="#cfc61f"), name="BB Upper"
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display["BB_LOWER"],
@@ -138,7 +138,7 @@ if show_bbands:
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display["BB_MA"],
-        mode="lines", line=dict(width=1, color="#455A64", dash="dot"), name="BB Mid"
+        mode="lines", line=dict(width=1, color="#faf593", dash="dot"), name="BB Mid"
     ), row=1, col=1)
 
 # Moving Averages
