@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import io
 import matplotlib.pyplot as plt
+import mplfinance as mpf  # NEW
 
 # ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.header("About This Tool")
@@ -18,8 +19,8 @@ Visualize key technical indicators for any stock using Yahoo Finance data.
 - Volume bars color-coded by up/down days
 - RSI (14-day) with Wilder smoothing
 - MACD (12,26,9) with histogram
-- Optional Bollinger Bands (20, 2.0)
-- Static image panel for easy copy or download
+- Bollinger Bands (20, 2.0)
+- Static export that mirrors the interactive layout
 """)
 
 ticker = st.sidebar.text_input("Ticker", "^GSPC").upper()
@@ -72,7 +73,6 @@ if len(df_full) > CAP_MAX_ROWS:
 # ── Date-based windowing with a long warmup for indicators ─────────────────
 start_dt = start_date_from_period(period)
 
-# Warmup history length for indicators
 BUFFER_YEARS = 50
 if start_dt is not None:
     warmup_start = start_dt - pd.DateOffset(years=BUFFER_YEARS)
@@ -84,7 +84,7 @@ else:
 for w in (8, 20, 50, 100, 200):
     df_ind[f"MA{w}"] = df_ind["Close"].rolling(w).mean()
 
-# RSI (14)
+# RSI (14) with Wilder smoothing via EWM alpha=1/14
 delta = df_ind["Close"].diff()
 gain = delta.clip(lower=0)
 loss = -delta.clip(upper=0)
@@ -101,15 +101,13 @@ df_ind["Signal"] = df_ind["MACD"].ewm(span=9, adjust=False).mean()
 df_ind["Hist"]   = df_ind["MACD"] - df_ind["Signal"]
 
 # Bollinger Bands (20, 2.0)
-if show_bbands:
-    bb_window = 20
-    bb_mult = 2.0
-    df_ind["BB_MA"] = df_ind["Close"].rolling(bb_window).mean()
-    df_ind["BB_STD"] = df_ind["Close"].rolling(bb_window).std()
-    df_ind["BB_UPPER"] = df_ind["BB_MA"] + bb_mult * df_ind["BB_STD"]
-    df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_ind["BB_STD"]
+bb_window, bb_mult = 20, 2.0
+df_ind["BB_MA"]    = df_ind["Close"].rolling(bb_window).mean()
+df_ind["BB_STD"]   = df_ind["Close"].rolling(bb_window).std()
+df_ind["BB_UPPER"] = df_ind["BB_MA"] + bb_mult * df_ind["BB_STD"]
+df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_ind["BB_STD"]
 
-# Final display slice (now indicators retain full continuity)
+# Final display slice
 if start_dt is not None:
     df_display = df_ind[df_ind.index >= start_dt].copy()
     if df_display.empty:
@@ -117,7 +115,7 @@ if start_dt is not None:
 else:
     df_display = df_ind.copy()
 
-# ── Plotly Interactive Plot ────────────────────────────────────────────────
+# ── Plotly Interactive Plot (unchanged except title) ───────────────────────
 df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
 available_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) >= w]
 missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) < w]
@@ -139,28 +137,23 @@ fig.add_trace(go.Candlestick(
 ), row=1, col=1)
 
 # Bollinger on price panel
-if show_bbands and "BB_UPPER" in df_display and "BB_LOWER" in df_display:
-    # Plot upper first, then lower with fill to create a band
+if show_bbands:
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display["BB_UPPER"],
-        mode="lines", line=dict(width=1, color="#607D8B"),
-        name="BB Upper"
+        mode="lines", line=dict(width=1, color="#607D8B"), name="BB Upper"
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display["BB_LOWER"],
         mode="lines", line=dict(width=1, color="#607D8B"),
-        fill="tonexty", fillcolor="rgba(96,125,139,0.15)",
-        name="BB Lower"
+        fill="tonexty", fillcolor="rgba(96,125,139,0.15)", name="BB Lower"
     ), row=1, col=1)
-    # Mid band
     fig.add_trace(go.Scatter(
-        x=df_display["DateStr"], y=df_display.get("BB_MA", pd.Series(index=df_display.index)),
-        mode="lines", line=dict(width=1, color="#455A64", dash="dot"),
-        name="BB Mid"
+        x=df_display["DateStr"], y=df_display["BB_MA"],
+        mode="lines", line=dict(width=1, color="#455A64", dash="dot"), name="BB Mid"
     ), row=1, col=1)
 
 # Moving averages
-for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")):
+for w, color in zip(available_mas, ("#7CB342", "#8E44AD", "#1565C0", "#F39C12", "#607D8B")):
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display[f"MA{w}"],
         mode="lines", line=dict(color=color, width=1.3), name=f"MA{w}"
@@ -226,45 +219,71 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ── Static Image Panel (copy friendly) ─────────────────────────────────────
-def render_static_panel(df: pd.DataFrame, show_bbands_flag: bool) -> bytes:
+# ── Static Export that mirrors the interactive view ────────────────────────
+def render_static_mpf(df: pd.DataFrame, show_bbands_flag: bool) -> bytes:
     """
-    Returns PNG bytes for a clean static price panel.
-    Plots Close, MA20, MA50, MA200, optional Bollinger Bands.
+    Create a static PNG with 4 stacked panels:
+    1) Candles + MAs + optional Bollinger
+    2) Volume
+    3) RSI(14)
+    4) MACD with histogram and signal
     """
-    # Choose a compact subset of lines for readability
-    cols_needed = ["Close", "MA20", "MA50", "MA200"]
-    if show_bbands_flag and ("BB_UPPER" in df and "BB_LOWER" in df and "BB_MA" in df):
-        cols_needed += ["BB_UPPER", "BB_LOWER", "BB_MA"]
+    data = df[["Open","High","Low","Close","Volume","MA8","MA20","MA50","MA100","MA200","BB_UPPER","BB_LOWER","BB_MA","RSI14","MACD","Signal","Hist"]].copy()
 
-    data = df[cols_needed].dropna(how="all").copy()
-    if data.empty:
-        # Fallback to Close only
-        data = df[["Close"]].copy()
+    # mplfinance expects a DatetimeIndex and OHLC columns
+    data = data.dropna(subset=["Open","High","Low","Close"])
 
-    fig, ax = plt.subplots(figsize=(10.5, 5.5), dpi=160)
-    ax.plot(data.index, data["Close"], linewidth=1.3, label="Close")
+    # Addplots
+    aps = []
+    # Moving averages
+    for w, col in [(8,"MA8"), (20,"MA20"), (50,"MA50"), (100,"MA100"), (200,"MA200")]:
+        if col in data:
+            aps.append(mpf.make_addplot(data[col], panel=0, width=1.2, secondary_y=False))
 
-    if "MA20" in data:
-        ax.plot(data.index, data["MA20"], linewidth=1.0, label="MA20")
-    if "MA50" in data:
-        ax.plot(data.index, data["MA50"], linewidth=1.0, label="MA50")
-    if "MA200" in data:
-        ax.plot(data.index, data["MA200"], linewidth=1.0, label="MA200")
+    # Bollinger band lines + fill
+    if show_bbands_flag and {"BB_UPPER","BB_LOWER","BB_MA"} <= set(data.columns):
+        aps.append(mpf.make_addplot(data["BB_MA"], panel=0, width=1.0, linestyle="dotted"))
+        aps.append(mpf.make_addplot(data["BB_UPPER"], panel=0, width=0.8, color="0.35"))
+        aps.append(mpf.make_addplot(data["BB_LOWER"], panel=0, width=0.8, color="0.35",
+                                    fill_between=dict(y1=data["BB_UPPER"].values, alpha=0.12)))
 
-    if show_bbands_flag and all(c in data for c in ["BB_UPPER", "BB_LOWER"]):
-        ax.plot(data.index, data["BB_UPPER"], linewidth=0.9, label="BB Upper")
-        ax.plot(data.index, data["BB_LOWER"], linewidth=0.9, label="BB Lower")
-        # Fill band lightly
-        ax.fill_between(data.index, data["BB_LOWER"], data["BB_UPPER"], alpha=0.12)
+    # RSI panel (panel=2 since panel=1 is volume)
+    aps.append(mpf.make_addplot(data["RSI14"], panel=2, ylim=(0,100), width=1.2, color="purple"))
 
-    ax.set_title(f"{ticker} Static Panel")
-    ax.set_xlabel("")
-    ax.set_ylabel("Price")
-    ax.grid(True, linewidth=0.5, alpha=0.5)
-    ax.legend(ncol=6, fontsize=8, frameon=False, loc="upper left")
+    # MACD panel
+    aps.append(mpf.make_addplot(data["MACD"], panel=3, width=1.5, color="blue"))
+    aps.append(mpf.make_addplot(data["Signal"], panel=3, width=1.2, color="orange"))
+    aps.append(mpf.make_addplot(data["Hist"], type="bar", panel=3, width=0.6,
+                                color=["#43A047" if h>0 else "#E53935" for h in data["Hist"].values]))
 
-    plt.tight_layout()
+    style = mpf.make_mpf_style(base_mpf_style="yahoo", gridstyle="--", gridcolor="#e1e5ed",
+                               rc={"font.size": 9})
+
+    fig = mpf.figure(figsize=(13,8), style=style, dpi=160)
+    # 4 panels: price, volume, RSI, MACD
+    ax_main = fig.add_subplot(4,1,1)
+    ax_vol  = fig.add_subplot(4,1,2, sharex=ax_main)
+    ax_rsi  = fig.add_subplot(4,1,3, sharex=ax_main)
+    ax_macd = fig.add_subplot(4,1,4, sharex=ax_main)
+
+    mpf.plot(
+        data,
+        type="candle",
+        ax=ax_main,
+        volume=ax_vol,
+        addplot=aps,
+        xrotation=25,
+        datetime_format="%b-%y",
+        warn_too_much_data=1000000,  # disable warnings for long series
+        tight_layout=True,
+        show_nontrading=False
+    )
+
+    ax_main.set_title(f"{ticker} — OHLC + RSI & MACD" + (" + Bollinger Bands" if show_bbands_flag else ""))
+    ax_rsi.axhline(70, linestyle="--", color="gray", linewidth=1)
+    ax_rsi.axhline(30, linestyle="--", color="gray", linewidth=1)
+    ax_macd.axhline(0, linestyle=":", color="gray", linewidth=1)
+
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight")
     plt.close(fig)
@@ -273,8 +292,8 @@ def render_static_panel(df: pd.DataFrame, show_bbands_flag: bool) -> bytes:
 
 if show_static:
     st.subheader("Static image panel")
-    png_bytes = render_static_panel(df_display, show_bbands)
-    st.image(png_bytes, caption=f"{ticker} static price panel", use_column_width=True)
+    png_bytes = render_static_mpf(df_display, show_bbands)
+    st.image(png_bytes, caption=f"{ticker} static price panel", use_container_width=True)
     st.download_button(
         label="Download static panel as PNG",
         data=png_bytes,
