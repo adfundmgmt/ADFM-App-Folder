@@ -133,7 +133,7 @@ if show_bbands:
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display["BB_LOWER"],
-        mode="lines", line=dict(width=1, color="#607D8B"),
+        mode="lines", line=dict(width=1, color="#cfc61f"),
         fill="tonexty", fillcolor="rgba(96,125,139,0.15)", name="BB Lower"
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
