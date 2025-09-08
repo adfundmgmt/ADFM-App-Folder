@@ -4,6 +4,8 @@ import yfinance as yf
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from datetime import datetime
+import io
+import matplotlib.pyplot as plt
 
 # ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.header("About This Tool")
@@ -11,11 +13,13 @@ st.sidebar.markdown("""
 Visualize key technical indicators for any stock using Yahoo Finance data.
 
 **Features:**
-- Interactive OHLC candlesticks  
-- 8/20/50/100/200-day moving averages with full continuity  
-- Volume bars color-coded by up/down days  
-- RSI (14-day) with Wilder smoothing  
-- MACD (12,26,9) with histogram  
+- Interactive OHLC candlesticks
+- 8/20/50/100/200-day moving averages with full continuity
+- Volume bars color-coded by up/down days
+- RSI (14-day) with Wilder smoothing
+- MACD (12,26,9) with histogram
+- Optional Bollinger Bands (20, 2.0)
+- Static image panel for easy copy or download
 """)
 
 ticker = st.sidebar.text_input("Ticker", "^GSPC").upper()
@@ -23,6 +27,9 @@ period = st.sidebar.selectbox(
     "Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3
 )
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
+
+show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=True)
+show_static = st.sidebar.checkbox("Show static image panel", value=True)
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def start_date_from_period(p: str) -> pd.Timestamp | None:
@@ -71,7 +78,6 @@ if start_dt is not None:
     warmup_start = start_dt - pd.DateOffset(years=BUFFER_YEARS)
     df_ind = df_full[df_full.index >= warmup_start].copy()
 else:
-    # Max period: just use all available history for indicators
     df_ind = df_full.copy()
 
 # ── Indicators computed on the warmup+window set ───────────────────────────
@@ -94,6 +100,15 @@ df_ind["MACD"]   = df_ind["EMA12"] - df_ind["EMA26"]
 df_ind["Signal"] = df_ind["MACD"].ewm(span=9, adjust=False).mean()
 df_ind["Hist"]   = df_ind["MACD"] - df_ind["Signal"]
 
+# Bollinger Bands (20, 2.0)
+if show_bbands:
+    bb_window = 20
+    bb_mult = 2.0
+    df_ind["BB_MA"] = df_ind["Close"].rolling(bb_window).mean()
+    df_ind["BB_STD"] = df_ind["Close"].rolling(bb_window).std()
+    df_ind["BB_UPPER"] = df_ind["BB_MA"] + bb_mult * df_ind["BB_STD"]
+    df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_ind["BB_STD"]
+
 # Final display slice (now indicators retain full continuity)
 if start_dt is not None:
     df_display = df_ind[df_ind.index >= start_dt].copy()
@@ -102,7 +117,7 @@ if start_dt is not None:
 else:
     df_display = df_ind.copy()
 
-# ── Plot ───────────────────────────────────────────────────────────────────
+# ── Plotly Interactive Plot ────────────────────────────────────────────────
 df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
 available_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) >= w]
 missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) < w]
@@ -116,12 +131,35 @@ fig = make_subplots(
     specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}], [{"type": "scatter"}]]
 )
 
+# Candles
 fig.add_trace(go.Candlestick(
     x=df_display["DateStr"], open=df_display["Open"], high=df_display["High"],
     low=df_display["Low"], close=df_display["Close"],
     increasing_line_color="#43A047", decreasing_line_color="#E53935", name="Price"
 ), row=1, col=1)
 
+# Bollinger on price panel
+if show_bbands and "BB_UPPER" in df_display and "BB_LOWER" in df_display:
+    # Plot upper first, then lower with fill to create a band
+    fig.add_trace(go.Scatter(
+        x=df_display["DateStr"], y=df_display["BB_UPPER"],
+        mode="lines", line=dict(width=1, color="#607D8B"),
+        name="BB Upper"
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df_display["DateStr"], y=df_display["BB_LOWER"],
+        mode="lines", line=dict(width=1, color="#607D8B"),
+        fill="tonexty", fillcolor="rgba(96,125,139,0.15)",
+        name="BB Lower"
+    ), row=1, col=1)
+    # Mid band
+    fig.add_trace(go.Scatter(
+        x=df_display["DateStr"], y=df_display.get("BB_MA", pd.Series(index=df_display.index)),
+        mode="lines", line=dict(width=1, color="#455A64", dash="dot"),
+        name="BB Mid"
+    ), row=1, col=1)
+
+# Moving averages
 for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")):
     fig.add_trace(go.Scatter(
         x=df_display["DateStr"], y=df_display[f"MA{w}"],
@@ -129,6 +167,7 @@ for w, color in zip(available_mas, ("green", "purple", "blue", "orange", "gray")
     ), row=1, col=1)
 fig.update_yaxes(title_text="Price", row=1, col=1)
 
+# Volume
 vol_colors = [
     "#B0BEC5" if i == 0 else (
         "#43A047" if df_display["Close"].iat[i] > df_display["Close"].iat[i-1] else "#E53935"
@@ -141,6 +180,7 @@ fig.add_trace(go.Bar(
 ), row=2, col=1)
 fig.update_yaxes(title_text="Volume", row=2, col=1)
 
+# RSI
 fig.add_trace(go.Scatter(
     x=df_display["DateStr"], y=df_display["RSI14"],
     mode="lines", line=dict(width=1.5, color="purple"), name="RSI (14)"
@@ -149,6 +189,7 @@ fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1, title_standoff=
 fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
 fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
 
+# MACD
 hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df_display["Hist"]]
 fig.add_trace(go.Bar(
     x=df_display["DateStr"], y=df_display["Hist"], marker_color=hist_colors, opacity=0.6, width=0.4, name="MACD Hist"
@@ -171,9 +212,10 @@ fig.update_xaxes(
     tickangle=-45, showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed"
 )
 
+title_suffix = " + Bollinger Bands" if show_bbands else ""
 fig.update_layout(
     height=950,
-    title=dict(text=f"{ticker} — OHLC + RSI & MACD", x=0.5),
+    title=dict(text=f"{ticker} — OHLC + RSI & MACD{title_suffix}", x=0.5),
     plot_bgcolor="white", paper_bgcolor="white",
     hovermode="x unified",
     margin=dict(l=60, r=20, t=60, b=40),
@@ -183,4 +225,61 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
+# ── Static Image Panel (copy friendly) ─────────────────────────────────────
+def render_static_panel(df: pd.DataFrame, show_bbands_flag: bool) -> bytes:
+    """
+    Returns PNG bytes for a clean static price panel.
+    Plots Close, MA20, MA50, MA200, optional Bollinger Bands.
+    """
+    # Choose a compact subset of lines for readability
+    cols_needed = ["Close", "MA20", "MA50", "MA200"]
+    if show_bbands_flag and ("BB_UPPER" in df and "BB_LOWER" in df and "BB_MA" in df):
+        cols_needed += ["BB_UPPER", "BB_LOWER", "BB_MA"]
+
+    data = df[cols_needed].dropna(how="all").copy()
+    if data.empty:
+        # Fallback to Close only
+        data = df[["Close"]].copy()
+
+    fig, ax = plt.subplots(figsize=(10.5, 5.5), dpi=160)
+    ax.plot(data.index, data["Close"], linewidth=1.3, label="Close")
+
+    if "MA20" in data:
+        ax.plot(data.index, data["MA20"], linewidth=1.0, label="MA20")
+    if "MA50" in data:
+        ax.plot(data.index, data["MA50"], linewidth=1.0, label="MA50")
+    if "MA200" in data:
+        ax.plot(data.index, data["MA200"], linewidth=1.0, label="MA200")
+
+    if show_bbands_flag and all(c in data for c in ["BB_UPPER", "BB_LOWER"]):
+        ax.plot(data.index, data["BB_UPPER"], linewidth=0.9, label="BB Upper")
+        ax.plot(data.index, data["BB_LOWER"], linewidth=0.9, label="BB Lower")
+        # Fill band lightly
+        ax.fill_between(data.index, data["BB_LOWER"], data["BB_UPPER"], alpha=0.12)
+
+    ax.set_title(f"{ticker} Static Panel")
+    ax.set_xlabel("")
+    ax.set_ylabel("Price")
+    ax.grid(True, linewidth=0.5, alpha=0.5)
+    ax.legend(ncol=6, fontsize=8, frameon=False, loc="upper left")
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+if show_static:
+    st.subheader("Static image panel")
+    png_bytes = render_static_panel(df_display, show_bbands)
+    st.image(png_bytes, caption=f"{ticker} static price panel", use_column_width=True)
+    st.download_button(
+        label="Download static panel as PNG",
+        data=png_bytes,
+        file_name=f"{ticker}_static_panel.png",
+        mime="image/png"
+    )
+
 st.caption("© 2025 AD Fund Management LP")
