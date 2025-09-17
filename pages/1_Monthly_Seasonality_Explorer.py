@@ -96,7 +96,6 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
 
 def last_bmonth_end(period: pd.Period) -> pd.Timestamp:
     """Last business day for a period like 2025-08."""
-    # Take calendar month-end then roll to last business day
     return (period.to_timestamp("M") + pd.offsets.BMonthEnd(0))
 
 
@@ -112,11 +111,9 @@ def drop_partial_months(prices: pd.Series, end_year: int) -> pd.Series:
 
     max_dt = prices.index.max()
     current_period = max_dt.to_period("M")
-    # If we already have the last business day of the current period, the current month is complete
     is_current_complete = max_dt >= last_bmonth_end(current_period)
     last_complete_period = current_period if is_current_complete else current_period - 1
 
-    # Keep only observations up to and including last complete month
     prices = prices[prices.index.to_period("M") <= last_complete_period]
     return prices
 
@@ -124,7 +121,7 @@ def drop_partial_months(prices: pd.Series, end_year: int) -> pd.Series:
 def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     """
     Per-month returns and 1H / 2H decomposition using trading days.
-    Month is considered valid if we have data through that month's last business day.
+    Month is valid if we have data through that month's last business day.
     """
     if prices.empty:
         return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret", "year", "month"])
@@ -137,7 +134,6 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
         if month_days.shape[0] < 3:
             continue
 
-        # Require coverage through last business day
         if month_days.index.max() < last_bmonth_end(m):
             continue
 
@@ -145,7 +141,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
         last = month_days.iloc[-1]
 
         n = month_days.shape[0]
-        mid_idx = (n // 2) - 1  # end of 1H
+        mid_idx = (n // 2) - 1
         if mid_idx < 0:
             continue
         mid_close = month_days.iloc[mid_idx]
@@ -221,7 +217,8 @@ def _cell_colors(values: list[list[float]]) -> list[list[str]]:
 
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
-    plot_df = stats.dropna(subset=["mean_h1", "mean_h2", "min_ret", "max_ret", "hit_rate"]).copy()
+    # Keep months that have halves; other stats can be NaN and will be masked
+    plot_df = stats.dropna(subset=["mean_h1", "mean_h2"]).copy()
     if plot_df.empty:
         fig = plt.figure(figsize=(12.5, 7.8), dpi=200)
         ax = fig.add_subplot(111)
@@ -236,8 +233,10 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     labels = plot_df["label"].tolist()
     mean_h1 = plot_df["mean_h1"].to_numpy(float)
     mean_h2 = plot_df["mean_h2"].to_numpy(float)
-    totals = plot_df["mean_total"].to_numpy(float)
-    hit = plot_df["hit_rate"].to_numpy(float)
+    totals  = plot_df["mean_total"].to_numpy(float)
+
+    # These may contain NaNs; handle gracefully
+    hit     = plot_df["hit_rate"].to_numpy(float)
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
 
@@ -255,27 +254,40 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     def seg_edge(values):
         return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
 
+    # First half
     ax1.bar(x, h1, width=0.8, color=seg_face(h1), edgecolor=seg_edge(h1), linewidth=1.0, zorder=2, alpha=0.95)
+    # Second half (hatched)
     bars2 = ax1.bar(x, h2, width=0.8, bottom=h1, color=seg_face(h2),
                     edgecolor=seg_edge(h2), linewidth=1.0, zorder=2, alpha=0.95, hatch="///")
     for r in bars2:
         r.set_hatch("///")
 
-    yerr = np.abs(np.vstack([totals - min_ret, max_ret - totals]))
-    ax1.errorbar(x, totals, yerr=yerr, fmt="none", ecolor="gray", elinewidth=1.6, alpha=0.7, capsize=6, zorder=3)
+    # Error bars only where min/max and totals are available
+    ok_err = ~(np.isnan(min_ret) | np.isnan(max_ret) | np.isnan(totals))
+    if ok_err.any():
+        x_err = x[ok_err]
+        yerr = np.abs(np.vstack([totals[ok_err] - min_ret[ok_err],
+                                 max_ret[ok_err] - totals[ok_err]]))
+        ax1.errorbar(x_err, totals[ok_err], yerr=yerr, fmt="none", ecolor="gray",
+                     elinewidth=1.6, alpha=0.7, capsize=6, zorder=3)
 
+    # Cosmetics
     ax1.set_xticks(x, labels)
     ax1.set_ylabel("Mean return (%)", weight="bold")
+    # Determine y-lims robustly
+    min_all = np.nanmin([np.nanmin(min_ret), np.nanmin(totals), 0.0])
+    max_all = np.nanmax([np.nanmax(max_ret), np.nanmax(totals), 0.0])
+    pad = 0.1 * max(abs(min_all), abs(max_all))
+    ax1.set_ylim(min_all - pad, max_all + pad)
     ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
     ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
-    pad = 0.1 * max(abs(min_ret.min()), abs(max_ret.max()))
-    ymin = min(min_ret.min(), totals.min(), 0) - pad
-    ymax = max(max_ret.max(), totals.max(), 0) + pad
-    ax1.set_ylim(ymin, ymax)
     ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
 
+    # Hit rate only where available
     ax2 = ax1.twinx()
-    ax2.scatter(x, hit, marker="D", s=90, color="black", zorder=4)
+    ok_hit = ~np.isnan(hit)
+    if ok_hit.any():
+        ax2.scatter(x[ok_hit], hit[ok_hit], marker="D", s=90, color="black", zorder=4)
     ax2.set_ylabel("Hit rate of positive returns", weight="bold")
     ax2.set_ylim(0, 100)
     ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
@@ -284,6 +296,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     legend = [Patch(facecolor="white", edgecolor="black", hatch="///", label="Second half (hatched)")]
     ax1.legend(handles=legend, loc="upper left", frameon=False)
 
+    # Bottom table
     ax_tbl = fig.add_subplot(gs[1])
     ax_tbl.axis("off")
     row_labels = ["1H %", "2H %", "Total %"]
@@ -411,5 +424,5 @@ with dl2:
         file_name=f"{used_symbol}_monthly_stats_{int(start_year)}_{int(end_year)}.csv"
     )
 
-st.caption("Bars equal mean(1H) plus mean(2H). First half solid; second half hatched. Each half is green if positive, red if negative. Error bars use min and max of total monthly returns. Table cells are color coded by sign. Partial months excluded using last business day.")
+st.caption("Bars equal mean(1H) plus mean(2H). First half solid, second half hatched. Error bars and hit rate appear only where available. Partial months excluded using last business day.")
 st.caption("© 2025 AD Fund Management LP")
