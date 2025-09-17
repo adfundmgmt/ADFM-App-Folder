@@ -1,7 +1,6 @@
 # seasonality_dashboard.py
 # Mean-based seasonality with accurate 1H vs 2H contributions
-# Top: stacked bar chart (1H solid, 2H hatched). Bottom: per-month summary table.
-# Colors by each half's sign. Error bars = min/max of total monthly returns.
+# Partial months are excluded from all calculations.
 
 import datetime as dt
 import io
@@ -40,10 +39,11 @@ with st.sidebar:
         Explore seasonal patterns for any stock, index, or commodity.
 
         • Yahoo Finance primary source, FRED fallback for deep index history  
-        • Bars = mean of first-half + mean of second-half returns (accurate)  
+        • Bars = mean of first-half + mean of second-half returns  
         • First half solid, second half hatched; each half colored by its own sign  
-        • Error bars show min and max monthly total returns; black diamonds = hit rate  
-        • Bottom table consolidates 1H, 2H, Total per month with color coding
+        • Error bars show min and max of total monthly returns; black diamonds show hit rate  
+        • Bottom table consolidates 1H, 2H, Total per month with color coding  
+        • Partial months are excluded to prevent MTD bleed
         """,
         unsafe_allow_html=True,
     )
@@ -100,10 +100,44 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     return None
 
 
+def drop_partial_months(prices: pd.Series, end_year: int) -> pd.Series:
+    """
+    Remove any month that is not complete in the fetched window.
+    A month is considered complete if we have data at or after the calendar month-end date.
+    """
+    if prices.empty:
+        return prices
+
+    # Clip data to the requested year range end
+    hard_end = min(pd.Timestamp(f"{int(end_year)}-12-31"), pd.Timestamp.today())
+    prices = prices.loc[:hard_end]
+
+    # Identify the last available month in the series
+    last_available = prices.index.max()
+    last_period = last_available.to_period("M")
+    last_m_end = last_period.to_timestamp("M")
+
+    # If our latest observation is strictly before that month's calendar month-end, drop that month
+    if last_available < last_m_end:
+        prices = prices[prices.index.to_period("M") < last_period]
+
+    # Also drop any leading partial month if the first obs is not the first trading day of that month
+    first_available = prices.index.min()
+    first_period = first_available.to_period("M")
+    # Recompute using resample to detect the true first trading day we have for that month
+    month_firsts = prices.resample("M").apply(lambda s: s.index[0] if len(s) else pd.NaT)
+    first_obs_of_first_period = month_firsts.loc[first_period.to_timestamp("M")]
+    if pd.notna(first_obs_of_first_period) and first_obs_of_first_period > first_available:
+        prices = prices[prices.index.to_period("M") > first_period]
+
+    return prices
+
+
 def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     """
     Build a table of per-month returns and their 1H / 2H decomposition using trading days.
-    Returns DataFrame indexed by month period with columns: total_ret, h1_ret, h2_ret (percent).
+    Only full months should be present, but we still guard inside.
+    Returns DataFrame with columns: total_ret, h1_ret, h2_ret, year, month.
     """
     if prices.empty:
         return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret", "year", "month"])
@@ -115,6 +149,10 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
         mask = (prices.index.to_period("M") == m)
         month_days = prices.loc[mask]
         if month_days.shape[0] < 3:
+            continue
+
+        # Guard: ensure we reached the calendar month-end for this period
+        if month_days.index.max() < m.to_timestamp("M"):
             continue
 
         first = month_days.iloc[0]
@@ -143,8 +181,8 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
 
 
 def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.DataFrame:
-    """Compute monthly seasonality stats in [start_year, end_year]."""
-    # Monthly totals
+    """Compute monthly seasonality stats in [start_year, end_year], excluding partial months."""
+    # Monthly totals using last price of each calendar month
     monthly_end = prices.resample("M").last()
     monthly_ret = monthly_end.pct_change().dropna() * 100
     monthly_ret.index = monthly_ret.index.to_period("M")
@@ -157,10 +195,10 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
 
     stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
     grouped_total = monthly_ret.groupby(monthly_ret.index.month)
-    stats["hit_rate"] = grouped_total.apply(lambda x: (x > 0).mean() * 100)
-    stats["min_ret"] = grouped_total.min()
-    stats["max_ret"] = grouped_total.max()
-    stats["years_observed"] = grouped_total.apply(lambda x: x.index.year.nunique())
+    stats["hit_rate"] = grouped_total.apply(lambda x: (x > 0).mean() * 100) if not monthly_ret.empty else np.nan
+    stats["min_ret"] = grouped_total.min() if not monthly_ret.empty else np.nan
+    stats["max_ret"] = grouped_total.max() if not monthly_ret.empty else np.nan
+    stats["years_observed"] = grouped_total.apply(lambda x: x.index.year.nunique()) if not monthly_ret.empty else np.nan
     stats["label"] = MONTH_LABELS
 
     if halves.empty:
@@ -200,6 +238,17 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     """
     # keep only months with data
     plot_df = stats.dropna(subset=["mean_h1", "mean_h2", "min_ret", "max_ret", "hit_rate"]).copy()
+    if plot_df.empty:
+        # create an empty plot with a message
+        fig = plt.figure(figsize=(12.5, 7.8), dpi=200)
+        ax = fig.add_subplot(111)
+        ax.axis("off")
+        ax.text(0.5, 0.5, "No complete months in the selected range", ha="center", va="center", fontsize=14)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
+        plt.close(fig)
+        buf.seek(0)
+        return buf
 
     labels = plot_df["label"].tolist()
     mean_h1 = plot_df["mean_h1"].to_numpy(float)
@@ -294,7 +343,6 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
 
     # style cells
     for (row, col), cell in table.get_celld().items():
-        # header row is row == 0; our data starts at row 1
         if row == 0:
             cell.set_text_props(weight="bold")
             cell.set_facecolor("#f0f0f0")
@@ -302,7 +350,6 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
             cell.set_text_props(weight="bold")
             cell.set_facecolor("#f0f0f0")
         else:
-            # data rows: subtract 1 to index into our colors
             cell.set_facecolor(cell_colors[row - 1][col])
             cell.set_edgecolor("black")
             cell.set_linewidth(1)
@@ -344,9 +391,12 @@ if prices is None or prices.empty:
     st.error(f"No data found for '{symbol}' in the given date range. Try a different symbol or adjust the years.")
     st.stop()
 
+# Trim to first valid and drop partial months
 first_valid = prices.first_valid_index()
 if first_valid is not None:
     prices = prices.loc[first_valid:]
+
+prices = drop_partial_months(prices, int(end_year))
 
 if used_symbol != symbol:
     st.info("SPY data unavailable. Using S&P 500 index (^GSPC) fallback for seasonality.")
@@ -355,10 +405,10 @@ stats = seasonal_stats(prices, int(start_year), int(end_year))
 
 # Guard
 if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
-    st.error("Insufficient data in the selected window to compute statistics.")
+    st.error("Insufficient complete months in the selected window to compute statistics.")
     st.stop()
 
-# Best / worst by mean totals
+# Best and worst by mean totals
 stats_valid = stats.dropna(subset=["mean_total"])
 best_idx = stats_valid["mean_total"].idxmax()
 worst_idx = stats_valid["mean_total"].idxmin()
@@ -404,5 +454,5 @@ with dl2:
         file_name=f"{used_symbol}_monthly_stats_{int(start_year)}_{int(end_year)}.csv"
     )
 
-st.caption("Bars equal mean(1H) + mean(2H). First half solid; second half hatched. Each half is green if positive, red if negative. Error bars use min and max of total monthly returns. Table cells are color coded by sign.")
+st.caption("Bars equal mean(1H) plus mean(2H). First half solid; second half hatched. Each half is green if positive, red if negative. Error bars use min and max of total monthly returns. Table cells are color coded by sign. Partial months are excluded to prevent MTD bias.")
 st.caption("© 2025 AD Fund Management LP")
