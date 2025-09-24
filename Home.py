@@ -1,3 +1,6 @@
+import streamlit as st
+st.write("Loaded Home.py: checkpoint 1")
+
 # Home.py
 import streamlit as st
 st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
