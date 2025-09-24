@@ -10,8 +10,8 @@ requests==2.32.3
 packaging==24.1
 pytrends==4.9.2
 beautifulsoup4==4.12.3
-lxml==5.2.2              # for bs4/pandas read_html
-html5lib==1.1            # fallback HTML parser
-openpyxl==3.1.5          # if pandas reads/writes xlsx
+lxml==5.2.2
+html5lib==1.1
+openpyxl==3.1.5
 sec-edgar-downloader==5.0.2
-cot-reports==0.0.8
+cot_reports==0.0.8
