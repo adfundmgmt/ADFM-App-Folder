@@ -25,6 +25,36 @@ os.makedirs(INGEST_DIR, exist_ok=True)
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
 
+# ---- Universe helpers ----
+@st.cache_data(ttl=6*60*60, show_spinner=False)
+def get_sp500_symbols() -> list:
+    """Fetch S&P 500 symbols from Wikipedia. Fallback to a bundled subset if fetch fails."""
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        # Find the table with 'Symbol' column
+        sym = None
+        for t in tables:
+            if "Symbol" in t.columns:
+                sym = t["Symbol"].astype(str).tolist()
+                break
+        if sym is None:
+            raise RuntimeError("No Symbol column found")
+        # yfinance expects BRK.B style as BRK-B, BF.B -> BF-B, etc.
+        sym = [s.replace(".", "-").upper().strip() for s in sym if s and isinstance(s, str)]
+        # De-dup and keep deterministic order
+        seen, out = set(), []
+        for s in sym:
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
+    except Exception:
+        # Minimal safe fallback list if web is blocked
+        return [
+            "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
+            "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX"
+        ]
+
 SP500_TOP200 = [
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
     "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX",
@@ -46,13 +76,19 @@ SP500_TOP200 = [
 # -------------------------
 with st.sidebar:
     st.markdown("### Universe")
-    preset = st.selectbox("Preset", ["S&P 500 Top 200","Custom"], index=0)
+    preset = st.selectbox("Preset", ["S&P 500 (All)", "S&P 500 Top 200", "Custom"], index=0)
     if preset == "Custom":
         tickers_input = st.text_area("Tickers (comma/space)", value="AAPL, AMD, NVDA, TSLA")
         parts = tickers_input.replace("\n", ",").replace(" ", ",").split(",")
         tickers = sorted(list({t.strip().upper() for t in parts if t.strip()}))
-    else:
+    elif preset == "S&P 500 Top 200":
         tickers = SP500_TOP200
+    else:
+        tickers = get_sp500_symbols()
+
+    # Optional cap for performance when fetching chains
+    universe_cap = st.number_input("Universe cap (to limit requests)", min_value=10, max_value=600, value=min(200, len(tickers)), step=10)
+    tickers = tickers[:int(universe_cap)]
 
     st.markdown("### Data Limits")
     max_expiries = st.number_input("Max expirations per ticker", min_value=1, max_value=12, value=4, step=1)
