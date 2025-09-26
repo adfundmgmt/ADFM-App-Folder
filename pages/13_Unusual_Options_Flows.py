@@ -60,7 +60,8 @@ with st.sidebar:
             value="AAPL, AMD, NVDA, TSLA, MSFT, META, AMZN, GOOGL",
             height=90
         )
-        tickers = sorted(list({t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()}))
+        tickers = sorted(list({t.strip().upper() for t in tickers_input.replace("
+", ",").split(",") if t.strip()}))
     else:
         tickers = SP500_TOP200
 
@@ -340,18 +341,64 @@ st.subheader("Priority Summary")
 if unusual.empty:
     st.info("No contracts matched the current UOA rules in the selected universe.")
 else:
+    # Filters to make table digestible
+    with st.expander("Display filters", expanded=False):
+        min_z = st.slider("Min max_zscore", min_value=0.0, max_value=10.0, value=0.0, step=0.5)
+        min_not = st.number_input("Min total_notional (league)", 0, 100_000_000_000, 0, 1_000_000)
     league = unusual.groupby("ticker", as_index=False).agg(
         unusual_trades=("contractSymbol","count"),
         total_notional=("notional_usd","sum"),
         max_zscore=("z_notional","max")
     )
+    league = league[(league["max_zscore"].fillna(0) >= min_z) & (league["total_notional"] >= min_not)]
     league = league.sort_values(["total_notional","max_zscore","unusual_trades"], ascending=[False, False, False])
+
+    # Pretty formatting, then styling
     _fmt_usd = lambda x: "" if pd.isna(x) else f"${x:,.0f}"
     _fmt_z   = lambda x: "" if pd.isna(x) else f"{x:.2f}"
     league_disp = league.copy()
-    league_disp["total_notional"] = league_disp["total_notional"].apply(_fmt_usd)
-    league_disp["max_zscore"] = league_disp["max_zscore"].apply(_fmt_z)
-    st.dataframe(league_disp[["ticker","unusual_trades","total_notional","max_zscore"]], use_container_width=True, hide_index=True)
+    league_disp["total_notional"] = league_disp["total_notional"].astype(float)
+
+    styler = (league_disp
+        .style
+        .format({"total_notional": _fmt_usd, "max_zscore": _fmt_z})
+        .bar(subset=["total_notional"], align="left")
+        .background_gradient(subset=["max_zscore"], cmap="Oranges")
+    )
+    st.dataframe(styler, use_container_width=True, hide_index=True)
+
+    st.subheader("Top contracts per ticker (head 5)")
+    top = unusual.sort_values(["ticker","notional_usd"], ascending=[True, False]).groupby("ticker").head(5)
+    disp = top[[
+        "ticker","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
+        "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp","z_notional"
+    ]].copy()
+    disp["expiration"] = pd.to_datetime(disp["expiration"]).dt.date.astype(str)
+    disp["impliedVolatility"] = disp["impliedVolatility"].apply(lambda v: "" if pd.isna(v) else f"{v*100:.1f}%")
+    disp["underlying_price"] = disp["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+    disp["lastPrice"] = disp["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+
+    # Style highlights: big notional, extreme z, near expiry, high Vol/OI
+    def highlight_rows(r):
+        styles = []
+        extreme = (pd.to_numeric(r.get("z_notional"), errors="coerce") >= 3)
+        near = (pd.to_numeric(r.get("days_to_exp"), errors="coerce") <= 7)
+        voloi = (pd.to_numeric(r.get("vol_oi"), errors="coerce") >= 2)
+        if extreme or near or voloi:
+            styles.append("background-color: #fff7e6")
+        else:
+            styles.append("")
+        return styles * len(r.index)
+
+    disp["z_notional"] = disp["z_notional"].apply(lambda x: "" if pd.isna(x) else f"{float(x):.2f}")
+    disp["notional_usd"] = disp["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
+    styler2 = (disp
+        .style
+        .apply(highlight_rows, axis=1)
+        .bar(subset=["volume","openInterest"], align="left")
+        .background_gradient(subset=["z_notional"], cmap="Reds")
+    )
+    st.dataframe(styler2, use_container_width=True, hide_index=True)
 
     st.subheader("Top contracts per ticker (head 5)")
     top = unusual.sort_values(["ticker","notional_usd"], ascending=[True, False]).groupby("ticker").head(5)
