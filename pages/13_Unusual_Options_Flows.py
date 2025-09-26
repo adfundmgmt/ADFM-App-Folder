@@ -134,6 +134,69 @@ def load_most_recent_snapshot() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+# Load many snapshots for history/z-scores
+def load_history_snapshots(max_files: int = 40) -> pd.DataFrame:
+    files = list_snapshots()
+    if not files:
+        return pd.DataFrame()
+    files = files[-max_files:]
+    frames = []
+    for f in files:
+        try:
+            df = pd.read_parquet(f) if f.endswith(".parquet") else pd.read_csv(f)
+            # attach snapshot date from filename when available
+            snap_tag = os.path.splitext(os.path.basename(f))[0].replace("options_snapshot_", "")
+            df["snapshot_date"] = snap_tag
+            frames.append(df)
+        except Exception:
+            continue
+    if not frames:
+        return pd.DataFrame()
+    hist = pd.concat(frames, ignore_index=True)
+    # ensure expected columns exist
+    for c in ["notional_usd","impliedVolatility","ttm_years","moneyness","side","ticker"]:
+        if c not in hist.columns:
+            hist[c] = np.nan
+    # reconstruct DTE if missing
+    hist["DTE"] = (hist.get("ttm_years", pd.Series(np.nan, index=hist.index)).astype(float) * 365.0).round()
+    # moneyness band by absolute deviation from 1.0
+    def m_band(m):
+        try:
+            d = abs(float(m) - 1.0)
+        except Exception:
+            return "unknown"
+        if d <= 0.05:
+            return "ATM"
+        if d <= 0.10:
+            return "Near-OTM"
+        if d <= 0.20:
+            return "OTM"
+        return "Deep-OTM"
+    hist["moneyness_band"] = hist["moneyness"].apply(m_band)
+    # DTE buckets
+    def dte_band(d):
+        try:
+            d = float(d)
+        except Exception:
+            return "unknown"
+        if d <= 7:
+            return "0-7d"
+        if d <= 30:
+            return "8-30d"
+        if d <= 90:
+            return "31-90d"
+        return ">90d"
+    hist["dte_band"] = hist["DTE"].apply(dte_band)
+    return hist
+    latest = files[-1]
+    try:
+        if latest.endswith(".parquet"):
+            return pd.read_parquet(latest)
+        else:
+            return pd.read_csv(latest)
+    except Exception:
+        return pd.DataFrame()
+
 
 def fetch_option_chain(ticker: str, max_exp: int) -> Tuple[pd.DataFrame, float]:
     tk = yf.Ticker(ticker)
@@ -295,6 +358,64 @@ aug = merge_with_previous_oi(current_df, previous_df)
 # Save today snapshot for future comparisons
 saved_path = save_snapshot(current_df)
 
+# ============================
+# Z-Score anomalies vs 30-day history
+# ============================
+history = load_history_snapshots(max_files=40)
+if not history.empty:
+    # compute per-bucket stats on notional
+    grp_cols = ["ticker","side","moneyness_band","dte_band"]
+    # build bands for current as well
+    def m_band_now(m):
+        try:
+            d = abs(float(m) - 1.0)
+        except Exception:
+            return "unknown"
+        if d <= 0.05:
+            return "ATM"
+        if d <= 0.10:
+            return "Near-OTM"
+        if d <= 0.20:
+            return "OTM"
+        return "Deep-OTM"
+    def dte_band_now(days):
+        try:
+            d = float(days)
+        except Exception:
+            return "unknown"
+        if d <= 7:
+            return "0-7d"
+        if d <= 30:
+            return "8-30d"
+        if d <= 90:
+            return "31-90d"
+        return ">90d"
+
+    # ensure bands on history
+    if "moneyness_band" not in history.columns:
+        history["moneyness_band"] = history["moneyness"].apply(m_band_now)
+    if "dte_band" not in history.columns:
+        # try to compute from ttm_years
+        if "ttm_years" in history.columns:
+            history["DTE"] = (history["ttm_years"].astype(float) * 365.0).round()
+        history["dte_band"] = history.get("DTE", pd.Series(np.nan, index=history.index)).apply(dte_band_now)
+
+    stats = history.groupby(grp_cols).agg(
+        mean_notional=("notional_usd","mean"),
+        std_notional=("notional_usd","std")
+    ).reset_index()
+
+    # bands on current aug
+    aug["DTE"] = (pd.to_datetime(aug["expiration"], utc=True) - pd.Timestamp.now(tz="UTC")).dt.days
+    aug["moneyness_band"] = aug["moneyness"].apply(m_band_now)
+    aug["dte_band"] = aug["DTE"].apply(dte_band_now)
+
+    aug = aug.merge(stats, on=["ticker","side","moneyness_band","dte_band"], how="left")
+    aug["z_notional"] = (aug["notional_usd"] - aug["mean_notional"]) / aug["std_notional"]
+    aug.loc[~np.isfinite(aug["z_notional"])] = np.nan
+else:
+    aug["z_notional"] = np.nan
+
 ############################################################
 # Filtering and Display
 ############################################################
@@ -333,6 +454,38 @@ filtered["bucket"] = filtered["bucket"].astype(str).astype(bucket_order)
 filtered = filtered.sort_values([
     "bucket","unusual_trades","notional_usd","vol_oi"
 ], ascending=[True, False, False, False])
+
+# ============================
+# Priority Summary (league table)
+# ============================
+st.subheader("Priority Summary")
+_league = aug.copy()
+mask_unusual = (
+    (_league["notional_usd"] >= min_notional) &
+    (_league["vol_oi"].fillna(0) >= min_vol_oi)
+)
+_league = _league.loc[mask_unusual].copy()
+counts = _league.groupby("ticker", as_index=False).agg(
+    unusual_trades=("contractSymbol","count"),
+    total_notional=("notional_usd","sum"),
+    median_zscore=("z_notional","median")
+)
+counts["bucket"] = pd.cut(
+    counts["unusual_trades"],
+    bins=[-1,2,5,9,10**9],
+    labels=["<=2","3-5","6-9","10+"],
+    right=True
+)
+bucket_order = pd.CategoricalDtype(categories=["10+","6-9","3-5","<=2"], ordered=True)
+counts["bucket"] = counts["bucket"].astype(str).astype(bucket_order)
+counts = counts.sort_values(["bucket","unusual_trades","total_notional","median_zscore"], ascending=[True, False, False, False])
+# pretty
+_fmt_usd = lambda x: "" if pd.isna(x) else f"${x:,.0f}"
+_fmt_z = lambda x: "" if pd.isna(x) else f"{x:.2f}"
+counts_disp = counts.copy()
+counts_disp["total_notional"] = counts_disp["total_notional"].apply(_fmt_usd)
+counts_disp["median_zscore"] = counts_disp["median_zscore"].apply(_fmt_z)
+st.dataframe(counts_disp[["ticker","bucket","unusual_trades","total_notional","median_zscore"]], use_container_width=True, hide_index=True)
 
 st.subheader("Flow Summary")
 st.caption("Approximation based on option volumes and OI. Not a trade tape.")
