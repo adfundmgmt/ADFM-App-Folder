@@ -73,8 +73,11 @@ with st.sidebar:
     refresh_secs = st.number_input("Refresh every N seconds", min_value=10, max_value=3600, value=120, step=10)
 
 if use_autorefresh:
-    # Streamlit query params setter; keep ASCII only
-    st.query_params = {"ts": str(int(time.time()))}
+    # safer item assignment; ignore if older Streamlit
+    try:
+        st.query_params["ts"] = str(int(time.time()))
+    except Exception:
+        pass
 
 # -------------------------
 # Helpers
@@ -347,60 +350,92 @@ if extra_min_vol_oi and extra_min_vol_oi > 0:
 
 unusual = aug.loc[mask_unusual].copy()
 
-# Priority Summary
-st.subheader("Priority Summary")
-if unusual.empty:
-    st.info("No contracts matched the current UOA rules in the selected universe.")
+# --- Tiered Premium Scanner (insider-like tells) ---
+# Tier 1: premium >= 10M, Vol/OI >= 3, DTE <= 21
+# Tier 2: premium >= 2M,  Vol/OI >= 2, DTE <= 45
+
+def _classify(row):
+    prem = float(row.get("premium_usd", float("nan")))
+    voi  = float(row.get("vol_oi", float("nan"))) if pd.notna(row.get("vol_oi")) else float("nan")
+    dte  = float(row.get("days_to_exp", float("nan"))) if pd.notna(row.get("days_to_exp")) else float("nan")
+    if (not math.isnan(prem)) and (not math.isnan(voi)) and (not math.isnan(dte)):
+        if prem >= 10_000_000 and voi >= 3 and dte <= 21:
+            return "Tier 1"
+        if prem >= 2_000_000 and voi >= 2 and dte <= 45:
+            return "Tier 2"
+    return "Tier 3"
+
+unusual["tier"] = unusual.apply(_classify, axis=1)
+signal = unusual[unusual["tier"].isin(["Tier 1","Tier 2"])].copy()
+
+# -------------------------
+# Priority Summary – Tier 1 & 2 only (premium-first)
+# -------------------------
+st.subheader("Priority Summary (Tier 1 & 2)")
+if signal.empty:
+    st.info("No Tier 1 or Tier 2 contracts matched today in the selected universe.")
 else:
-    with st.expander("Display filters", expanded=False):
-        min_z = st.slider("Min max_zscore", min_value=0.0, max_value=10.0, value=0.0, step=0.5)
-        min_not = st.number_input("Min total_notional (league)", min_value=0, max_value=100_000_000_000, value=0, step=1_000_000)
-    league = unusual.groupby("ticker", as_index=False).agg(
-        unusual_trades=("contractSymbol","count"),
+    league = signal.groupby("ticker", as_index=False).agg(
+        tier1_trades=("tier", lambda s: int((s == "Tier 1").sum())),
+        tier2_trades=("tier", lambda s: int((s == "Tier 2").sum())),
         total_premium=("premium_usd","sum"),
         total_notional=("notional_usd","sum"),
-        max_z_premium=("z_premium","max"),
-        max_zscore=("z_notional","max")
-    )
-    league = league[(league["max_z_premium"].fillna(0) >= min_z) | (league["max_zscore"].fillna(0) >= min_z)]
-    league = league[(league["total_notional"] >= min_not) | (league["total_premium"] >= min_not)]
-    # Rank primarily by premium committed, then by z_premium, then notional
-    league = league.sort_values(["total_premium","max_z_premium","total_notional","max_zscore","unusual_trades"], ascending=[False, False, False, False, False])
+        max_premium=("premium_usd","max")
+    ).sort_values(["total_premium","tier1_trades","max_premium"], ascending=[False, False, False])
+
     league_display = league.copy()
     league_display["total_premium"] = league_display["total_premium"].apply(lambda x: f"${x:,.0f}")
     league_display["total_notional"] = league_display["total_notional"].apply(lambda x: f"${x:,.0f}")
-    league_display["max_z_premium"] = league_display["max_z_premium"].apply(lambda x: "" if pd.isna(x) else f"{x:.2f}")
-    league_display["max_zscore"] = league_display["max_zscore"].apply(lambda x: "" if pd.isna(x) else f"{x:.2f}")
-    league_display["unusual_trades"] = league_display["unusual_trades"].apply(lambda x: f"{int(x):,}")
+    league_display["max_premium"] = league_display["max_premium"].apply(lambda x: f"${x:,.0f}")
+    league_display["tier1_trades"] = league_display["tier1_trades"].apply(lambda x: f"{int(x):,}")
+    league_display["tier2_trades"] = league_display["tier2_trades"].apply(lambda x: f"{int(x):,}")
     st.dataframe(league_display, use_container_width=True, hide_index=True)
 
-    st.subheader("Top contracts per ticker (head 5)")
-    top = unusual.sort_values(["ticker","notional_usd"], ascending=[True, False]).groupby("ticker").head(5).copy()
+    st.subheader("Top contracts per ticker (by premium)")
+    top = signal.sort_values(["ticker","premium_usd"], ascending=[True, False]).groupby("ticker").head(3).copy()
     top["expiration"] = pd.to_datetime(top["expiration"]).dt.date.astype(str)
-    def make_flag(row):
-        flags = []
-        z = pd.to_numeric(row.get("z_notional"), errors="coerce")
-        dte = pd.to_numeric(row.get("days_to_exp"), errors="coerce")
-        voi = pd.to_numeric(row.get("vol_oi"), errors="coerce")
-        if pd.notna(z) and z >= 3: flags.append("Z>=3")
-        if pd.notna(dte) and dte <= 7: flags.append("<=7d")
-        if pd.notna(voi) and voi >= 2: flags.append("Vol/OI>=2")
-        return " | ".join(flags)
-    top["flags"] = top.apply(make_flag, axis=1)
     top_display = top[[
-        "ticker","flags","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
-        "vol_oi","impliedVolatility","delta","premium_usd","notional_usd","days_to_exp","z_premium","z_notional"
+        "ticker","tier","side","expiration","days_to_exp","strike","underlying_price","lastPrice",
+        "volume","openInterest","vol_oi","impliedVolatility","delta","premium_usd","notional_usd"
     ]].copy()
     top_display["underlying_price"] = top_display["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-    top_display["lastPrice"] = top_display["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-    top_display["premium_usd"] = top_display["premium_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
-    top_display["notional_usd"] = top_display["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
+    top_display["lastPrice"]        = top_display["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+    top_display["premium_usd"]      = top_display["premium_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
+    top_display["notional_usd"]     = top_display["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
+    for _c in ["volume","openInterest"]:
+        top_display[_c] = pd.to_numeric(top_display[_c], errors="coerce").astype("Int64").map(lambda x: f"{x:,}" if pd.notna(x) else "")
+    top_display["vol_oi"]            = top_display["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
     top_display["impliedVolatility"] = top_display["impliedVolatility"].apply(lambda v: "" if pd.isna(v) else f"{v*100:.1f}%")
-    top_display["delta"] = top_display["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-    top_display["vol_oi"] = top_display["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-    top_display["z_premium"] = top_display["z_premium"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-    top_display["z_notional"] = top_display["z_notional"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+    top_display["delta"]             = top_display["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
     st.dataframe(top_display, use_container_width=True, hide_index=True)
+
+# -------------------------
+# Flow Summary – signals only (Tier 1 & 2)
+# -------------------------
+st.subheader("Flow Summary (signals: Tier 1 & 2)")
+st.caption("Rules: Tier 1 = premium >= $10M, Vol/OI >= 3, DTE <= 21; Tier 2 = premium >= $2M, Vol/OI >= 2, DTE <= 45.")
+if signal.empty:
+    st.stop()
+
+view = signal[[
+    "ticker","tier","side","expiration","days_to_exp","strike","underlying_price","lastPrice",
+    "volume","openInterest","vol_oi","oi_change","oi_change_pct","impliedVolatility","delta",
+    "premium_usd","notional_usd","moneyness"
+]].copy()
+view["expiration"] = pd.to_datetime(view["expiration"]).dt.date.astype(str)
+view["oi_change_pct"]     = view["oi_change_pct"].apply(lambda x: "" if pd.isna(x) else f"{x*100:.1f}%")
+view["impliedVolatility"] = view["impliedVolatility"].apply(lambda x: "" if pd.isna(x) else f"{x*100:.1f}%")
+view["delta"]             = view["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+for _c in ["volume","openInterest"]:
+    view[_c] = pd.to_numeric(view[_c], errors="coerce").astype("Int64").map(lambda x: f"{x:,}" if pd.notna(x) else "")
+view["vol_oi"]        = view["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+view["premium_usd"]   = view["premium_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
+view["notional_usd"]  = view["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
+view["underlying_price"] = view["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+view["lastPrice"]        = view["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+
+view = view.sort_values(["premium_usd"], ascending=[False])
+st.dataframe(view, use_container_width=True, hide_index=True)
 
 # Flow Summary
 st.subheader("Flow Summary")
