@@ -343,7 +343,7 @@ if unusual.empty:
 else:
     with st.expander("Display filters", expanded=False):
         min_z = st.slider("Min max_zscore", min_value=0.0, max_value=10.0, value=0.0, step=0.5)
-        min_not = st.number_input("Min total_notional (league)", 0, 100_000_000_000, 0, 1_000_000)
+        min_not = st.number_input("Min total_notional (league)", min_value=0, max_value=100_000_000_000, value=0, step=1_000_000)
 
     league = unusual.groupby("ticker", as_index=False).agg(
         unusual_trades=("contractSymbol","count"),
@@ -353,56 +353,44 @@ else:
     league = league[(league["max_zscore"].fillna(0) >= min_z) & (league["total_notional"] >= min_not)]
     league = league.sort_values(["total_notional","max_zscore","unusual_trades"], ascending=[False, False, False])
 
-    # Display with Streamlit column configs (no pandas Styler to avoid parsing/styling issues)
-    st.dataframe(
-        league,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "ticker": st.column_config.TextColumn("ticker"),
-            "unusual_trades": st.column_config.NumberColumn("unusual_trades", format="%d"),
-            "total_notional": st.column_config.NumberColumn("total_notional", format="$%,.0f"),
-            "max_zscore": st.column_config.NumberColumn("max_zscore", format="%.2f"),
-        }
-    )
+    # Simple formatting without Styler or column_config
+    league_display = league.copy()
+    league_display["total_notional"] = league_display["total_notional"].apply(lambda x: f"${x:,.0f}")
+    league_display["max_zscore"] = league_display["max_zscore"].apply(lambda x: "" if pd.isna(x) else f"{x:.2f}")
+    st.dataframe(league_display, use_container_width=True, hide_index=True)
 
     st.subheader("Top contracts per ticker (head 5)")
     top = unusual.sort_values(["ticker","notional_usd"], ascending=[True, False]).groupby("ticker").head(5).copy()
     top["expiration"] = pd.to_datetime(top["expiration"]).dt.date.astype(str)
-    # Highlight flags column
+
     def make_flag(row):
         flags = []
-        if pd.to_numeric(row.get("z_notional"), errors="coerce") >= 3: flags.append("🔴 z≥3")
-        if pd.to_numeric(row.get("days_to_exp"), errors="coerce") <= 7: flags.append("⏳ ≤7d")
-        if pd.to_numeric(row.get("vol_oi"), errors="coerce") >= 2: flags.append("📈 Vol/OI≥2")
-        return " · ".join(flags)
+        z = pd.to_numeric(row.get("z_notional"), errors="coerce")
+        dte = pd.to_numeric(row.get("days_to_exp"), errors="coerce")
+        voi = pd.to_numeric(row.get("vol_oi"), errors="coerce")
+        if pd.notna(z) and z >= 3:
+            flags.append("z≥3")
+        if pd.notna(dte) and dte <= 7:
+            flags.append("≤7d")
+        if pd.notna(voi) and voi >= 2:
+            flags.append("Vol/OI≥2")
+        return " | ".join(flags)
+
     top["flags"] = top.apply(make_flag, axis=1)
 
-    st.dataframe(
-        top[[
-            "ticker","flags","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
-            "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp","z_notional"
-        ]],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "ticker": st.column_config.TextColumn("ticker"),
-            "flags": st.column_config.TextColumn("flags"),
-            "side": st.column_config.TextColumn("side"),
-            "expiration": st.column_config.TextColumn("expiration"),
-            "strike": st.column_config.NumberColumn("strike", format="%.2f"),
-            "underlying_price": st.column_config.NumberColumn("underlying_price", format="$%,.2f"),
-            "lastPrice": st.column_config.NumberColumn("lastPrice", format="$%,.2f"),
-            "volume": st.column_config.NumberColumn("volume", format="%d"),
-            "openInterest": st.column_config.NumberColumn("openInterest", format="%d"),
-            "vol_oi": st.column_config.NumberColumn("vol_oi", format="%.2f"),
-            "impliedVolatility": st.column_config.NumberColumn("impliedVolatility", format="%.1f%%"),
-            "delta": st.column_config.NumberColumn("delta", format="%.2f"),
-            "notional_usd": st.column_config.NumberColumn("notional_usd", format="$%,.0f"),
-            "days_to_exp": st.column_config.NumberColumn("days_to_exp", format="%d"),
-            "z_notional": st.column_config.NumberColumn("z_notional", format="%.2f"),
-        }
-    )
+    top_display = top[[
+        "ticker","flags","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
+        "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp","z_notional"
+    ]].copy()
+    top_display["underlying_price"] = top_display["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+    top_display["lastPrice"] = top_display["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+    top_display["notional_usd"] = top_display["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
+    top_display["impliedVolatility"] = top_display["impliedVolatility"].apply(lambda v: "" if pd.isna(v) else f"{v*100:.1f}%")
+    top_display["delta"] = top_display["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+    top_display["vol_oi"] = top_display["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+    top_display["z_notional"] = top_display["z_notional"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+
+    st.dataframe(top_display, use_container_width=True, hide_index=True)
 
 # -------------------------
 # Flow Summary – contracts that passed UOA rule
@@ -435,11 +423,7 @@ st.dataframe(view, use_container_width=True, hide_index=True)
 # External Feeds (optional)
 # -------------------------
 with st.expander("External ingest (CSV)"):
-    st.write(
-        "Drop CSV files into ./ingest with columns like "
-        "[datetime, ticker, side, strike, expiration, size, price, notional, exchange]. "
-        "They will be unified and shown here."
-    )
+    st.write("Drop CSV files into ./ingest with columns like [datetime, ticker, side, strike, expiration, size, price, notional, exchange]. They will be unified and shown here.")
     ext = read_external_flows()
     if not ext.empty:
         st.dataframe(ext, use_container_width=True, hide_index=True)
@@ -449,7 +433,4 @@ with st.expander("External ingest (CSV)"):
 # -------------------------
 # Footer
 # -------------------------
-st.caption(
-    "Data: Yahoo Finance option chains via yfinance. Flags are inferred with UOA rules and z-scores; "
-    f"snapshot saved: {os.path.basename(saved_path)}. Run daily to build history."
-)
+st.caption("Data: Yahoo Finance option chains via yfinance. Flags are inferred with UOA rules and z-scores; snapshot saved. Run daily to build history.")
