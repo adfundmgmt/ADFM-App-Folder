@@ -76,19 +76,9 @@ SP500_TOP200 = [
 # -------------------------
 with st.sidebar:
     st.markdown("### Universe")
-    preset = st.selectbox("Preset", ["S&P 500 (All)", "S&P 500 Top 200", "Custom"], index=0)
-    if preset == "Custom":
-        tickers_input = st.text_area("Tickers (comma/space)", value="AAPL, AMD, NVDA, TSLA")
-        parts = tickers_input.replace("\n", ",").replace(" ", ",").split(",")
-        tickers = sorted(list({t.strip().upper() for t in parts if t.strip()}))
-    elif preset == "S&P 500 Top 200":
-        tickers = SP500_TOP200
-    else:
-        tickers = get_sp500_symbols()
-
-    # Optional cap for performance when fetching chains
-    universe_cap = st.number_input("Universe cap (to limit requests)", min_value=10, max_value=600, value=min(200, len(tickers)), step=10)
-    tickers = tickers[:int(universe_cap)]
+    st.caption("Using full S&P 500 universe (auto-refreshed every 6h).")
+    tickers = get_sp500_symbols()
+st.caption(f"Loaded {len(tickers)} S&P 500 symbols.")
 
     st.markdown("### Data Limits")
     max_expiries = st.number_input("Max expirations per ticker", min_value=1, max_value=12, value=4, step=1)
