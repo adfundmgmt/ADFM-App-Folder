@@ -49,8 +49,7 @@ with st.sidebar:
     preset = st.selectbox("Preset", ["S&P 500 Top 200","Custom"], index=0)
     if preset == "Custom":
         tickers_input = st.text_area("Tickers (comma/space)", value="AAPL, AMD, NVDA, TSLA")
-        parts = tickers_input.replace("
-", ",").replace(" ", ",").split(",")
+        parts = tickers_input.replace("\n", ",").replace(" ", ",").split(",")
         tickers = sorted(list({t.strip().upper() for t in parts if t.strip()}))
     else:
         tickers = SP500_TOP200
