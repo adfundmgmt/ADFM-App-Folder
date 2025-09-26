@@ -49,7 +49,8 @@ with st.sidebar:
     preset = st.selectbox("Preset", ["S&P 500 Top 200","Custom"], index=0)
     if preset == "Custom":
         tickers_input = st.text_area("Tickers (comma/space)", value="AAPL, AMD, NVDA, TSLA")
-        parts = tickers_input.replace("\n", ",").replace(" ", ",").split(",")
+        parts = tickers_input.replace("
+", ",").replace(" ", ",").split(",")
         tickers = sorted(list({t.strip().upper() for t in parts if t.strip()}))
     else:
         tickers = SP500_TOP200
@@ -59,6 +60,7 @@ with st.sidebar:
 
     st.markdown("### UOA Thresholds")
     min_notional = st.number_input("Min notional per line, USD", min_value=0, max_value=100_000_000, value=500_000, step=100_000)
+    min_premium = st.number_input("Min premium per line, USD", min_value=0, max_value=100_000_000, value=0, step=100_000)
     rule_otm_pct = st.number_input("OTM threshold %", min_value=0.0, max_value=200.0, value=10.0, step=1.0)
     rule_max_dte = st.number_input("Max DTE (days)", min_value=1, max_value=365, value=30, step=1)
     extra_min_vol_oi = st.number_input("Extra floor for Vol/OI (optional)", min_value=0.0, max_value=50.0, value=0.0, step=0.1)
@@ -205,6 +207,7 @@ def enrich(df: pd.DataFrame, spot: float, r: float, q: float) -> pd.DataFrame:
             out[c] = pd.to_numeric(out[c], errors="coerce")
     out["underlying_price"] = spot
     out["notional_usd"] = out["volume"].fillna(0) * spot * 100.0
+    out["premium_usd"]  = out["volume"].fillna(0) * out["lastPrice"].fillna(0) * 100.0
     out["vol_oi"] = out.apply(lambda x: (x["volume"] / x["openInterest"]) if pd.notna(x.get("openInterest")) and x.get("openInterest", 0) > 0 else np.nan, axis=1)
     now_utc = pd.Timestamp.now(tz="UTC")
     out["expiration"] = pd.to_datetime(out["expiration"], utc=True)
@@ -219,7 +222,7 @@ def enrich(df: pd.DataFrame, spot: float, r: float, q: float) -> pd.DataFrame:
     keep = [
         "ticker","contractSymbol","side","expiration","strike","lastPrice","bid","ask",
         "volume","openInterest","vol_oi","impliedVolatility","delta","moneyness",
-        "underlying_price","notional_usd","ttm_years"
+        "underlying_price","notional_usd","premium_usd","ttm_years"
     ]
     for k in keep:
         if k not in out.columns:
@@ -312,17 +315,22 @@ if not hist.empty:
         hist["dte_band"] = hist.get("DTE", pd.Series(np.nan, index=hist.index)).apply(dte_band_now)
     stats = hist.groupby(["ticker","side","moneyness_band","dte_band"]).agg(
         mean_notional=("notional_usd","mean"),
-        std_notional=("notional_usd","std")
+        std_notional=("notional_usd","std"),
+        mean_premium=("premium_usd","mean"),
+        std_premium=("premium_usd","std")
     ).reset_index()
     aug["days_to_exp"] = (pd.to_datetime(aug["expiration"], utc=True) - pd.Timestamp.now(tz="UTC")).dt.days
     aug["moneyness_band"] = aug["moneyness"].apply(m_band_now)
     aug["dte_band"] = aug["days_to_exp"].apply(dte_band_now)
     aug = aug.merge(stats, on=["ticker","side","moneyness_band","dte_band"], how="left")
     aug["z_notional"] = (aug["notional_usd"] - aug["mean_notional"]) / aug["std_notional"]
+    aug["z_premium"]  = (aug["premium_usd"]  - aug["mean_premium"])  / aug["std_premium"]
     aug.loc[~np.isfinite(aug["z_notional"]), "z_notional"] = np.nan
+    aug.loc[~np.isfinite(aug["z_premium"]),  "z_premium"]  = np.nan
 else:
     aug["days_to_exp"] = (pd.to_datetime(aug["expiration"], utc=True) - pd.Timestamp.now(tz="UTC")).dt.days
     aug["z_notional"] = np.nan
+    aug["z_premium"]  = np.nan
 
 # UOA rule
 otm = rule_otm_pct / 100.0
@@ -330,6 +338,7 @@ call_otm = aug["side"].eq("call") & (aug["strike"] >= (1 + otm) * aug["underlyin
 put_otm  = aug["side"].eq("put")  & (aug["strike"] <= (1 - otm) * aug["underlying_price"]) 
 mask_unusual = (
     (aug["notional_usd"] >= min_notional) &
+    (aug["premium_usd"]  >= min_premium) &
     (aug["volume"] >= aug["openInterest"].fillna(0)) &
     (aug["days_to_exp"].between(0, rule_max_dte)) &
     (call_otm | put_otm)
@@ -349,14 +358,21 @@ else:
         min_not = st.number_input("Min total_notional (league)", min_value=0, max_value=100_000_000_000, value=0, step=1_000_000)
     league = unusual.groupby("ticker", as_index=False).agg(
         unusual_trades=("contractSymbol","count"),
+        total_premium=("premium_usd","sum"),
         total_notional=("notional_usd","sum"),
+        max_z_premium=("z_premium","max"),
         max_zscore=("z_notional","max")
     )
-    league = league[(league["max_zscore"].fillna(0) >= min_z) & (league["total_notional"] >= min_not)]
-    league = league.sort_values(["total_notional","max_zscore","unusual_trades"], ascending=[False, False, False])
+    league = league[(league["max_z_premium"].fillna(0) >= min_z) | (league["max_zscore"].fillna(0) >= min_z)]
+    league = league[(league["total_notional"] >= min_not) | (league["total_premium"] >= min_not)]
+    # Rank primarily by premium committed, then by z_premium, then notional
+    league = league.sort_values(["total_premium","max_z_premium","total_notional","max_zscore","unusual_trades"], ascending=[False, False, False, False, False])
     league_display = league.copy()
+    league_display["total_premium"] = league_display["total_premium"].apply(lambda x: f"${x:,.0f}")
     league_display["total_notional"] = league_display["total_notional"].apply(lambda x: f"${x:,.0f}")
+    league_display["max_z_premium"] = league_display["max_z_premium"].apply(lambda x: "" if pd.isna(x) else f"{x:.2f}")
     league_display["max_zscore"] = league_display["max_zscore"].apply(lambda x: "" if pd.isna(x) else f"{x:.2f}")
+    league_display["unusual_trades"] = league_display["unusual_trades"].apply(lambda x: f"{int(x):,}")
     st.dataframe(league_display, use_container_width=True, hide_index=True)
 
     st.subheader("Top contracts per ticker (head 5)")
@@ -374,14 +390,16 @@ else:
     top["flags"] = top.apply(make_flag, axis=1)
     top_display = top[[
         "ticker","flags","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
-        "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp","z_notional"
+        "vol_oi","impliedVolatility","delta","premium_usd","notional_usd","days_to_exp","z_premium","z_notional"
     ]].copy()
     top_display["underlying_price"] = top_display["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
     top_display["lastPrice"] = top_display["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+    top_display["premium_usd"] = top_display["premium_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
     top_display["notional_usd"] = top_display["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
     top_display["impliedVolatility"] = top_display["impliedVolatility"].apply(lambda v: "" if pd.isna(v) else f"{v*100:.1f}%")
     top_display["delta"] = top_display["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
     top_display["vol_oi"] = top_display["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+    top_display["z_premium"] = top_display["z_premium"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
     top_display["z_notional"] = top_display["z_notional"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
     st.dataframe(top_display, use_container_width=True, hide_index=True)
 
@@ -393,13 +411,14 @@ if unusual.empty:
 view = unusual[[
     "ticker","side","expiration","days_to_exp","strike","underlying_price","lastPrice",
     "volume","openInterest","vol_oi","oi_change","oi_change_pct","impliedVolatility","delta",
-    "notional_usd","moneyness"
+    "premium_usd","notional_usd","moneyness"
 ]].copy()
 view["expiration"] = pd.to_datetime(view["expiration"]).dt.date.astype(str)
 view["oi_change_pct"] = view["oi_change_pct"].apply(lambda x: "" if pd.isna(x) else f"{x*100:.1f}%")
 view["impliedVolatility"] = view["impliedVolatility"].apply(lambda x: "" if pd.isna(x) else f"{x*100:.1f}%")
 view["delta"] = view["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
 view["vol_oi"] = view["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+view["premium_usd"] = view["premium_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
 view["notional_usd"] = view["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
 view["underlying_price"] = view["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
 view["lastPrice"] = view["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
