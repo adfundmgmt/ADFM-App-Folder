@@ -341,10 +341,10 @@ st.subheader("Priority Summary")
 if unusual.empty:
     st.info("No contracts matched the current UOA rules in the selected universe.")
 else:
-    # Filters to make table digestible
     with st.expander("Display filters", expanded=False):
         min_z = st.slider("Min max_zscore", min_value=0.0, max_value=10.0, value=0.0, step=0.5)
         min_not = st.number_input("Min total_notional (league)", 0, 100_000_000_000, 0, 1_000_000)
+
     league = unusual.groupby("ticker", as_index=False).agg(
         unusual_trades=("contractSymbol","count"),
         total_notional=("notional_usd","sum"),
@@ -353,68 +353,56 @@ else:
     league = league[(league["max_zscore"].fillna(0) >= min_z) & (league["total_notional"] >= min_not)]
     league = league.sort_values(["total_notional","max_zscore","unusual_trades"], ascending=[False, False, False])
 
-    # Pretty formatting, then styling
-    _fmt_usd = lambda x: "" if pd.isna(x) else f"${x:,.0f}"
-    _fmt_z   = lambda x: "" if pd.isna(x) else f"{x:.2f}"
-    league_disp = league.copy()
-    league_disp["total_notional"] = league_disp["total_notional"].astype(float)
-
-    styler = (league_disp
-        .style
-        .format({"total_notional": _fmt_usd, "max_zscore": _fmt_z})
-        .bar(subset=["total_notional"], align="left")
-        .background_gradient(subset=["max_zscore"], cmap="Oranges")
+    # Display with Streamlit column configs (no pandas Styler to avoid parsing/styling issues)
+    st.dataframe(
+        league,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "ticker": st.column_config.TextColumn("ticker"),
+            "unusual_trades": st.column_config.NumberColumn("unusual_trades", format="%d"),
+            "total_notional": st.column_config.NumberColumn("total_notional", format="$%,.0f"),
+            "max_zscore": st.column_config.NumberColumn("max_zscore", format="%.2f"),
+        }
     )
-    st.dataframe(styler, use_container_width=True, hide_index=True)
 
     st.subheader("Top contracts per ticker (head 5)")
-    top = unusual.sort_values(["ticker","notional_usd"], ascending=[True, False]).groupby("ticker").head(5)
-    disp = top[[
-        "ticker","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
-        "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp","z_notional"
-    ]].copy()
-    disp["expiration"] = pd.to_datetime(disp["expiration"]).dt.date.astype(str)
-    disp["impliedVolatility"] = disp["impliedVolatility"].apply(lambda v: "" if pd.isna(v) else f"{v*100:.1f}%")
-    disp["underlying_price"] = disp["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-    disp["lastPrice"] = disp["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+    top = unusual.sort_values(["ticker","notional_usd"], ascending=[True, False]).groupby("ticker").head(5).copy()
+    top["expiration"] = pd.to_datetime(top["expiration"]).dt.date.astype(str)
+    # Highlight flags column
+    def make_flag(row):
+        flags = []
+        if pd.to_numeric(row.get("z_notional"), errors="coerce") >= 3: flags.append("🔴 z≥3")
+        if pd.to_numeric(row.get("days_to_exp"), errors="coerce") <= 7: flags.append("⏳ ≤7d")
+        if pd.to_numeric(row.get("vol_oi"), errors="coerce") >= 2: flags.append("📈 Vol/OI≥2")
+        return " · ".join(flags)
+    top["flags"] = top.apply(make_flag, axis=1)
 
-    # Style highlights: big notional, extreme z, near expiry, high Vol/OI
-    def highlight_rows(r):
-        styles = []
-        extreme = (pd.to_numeric(r.get("z_notional"), errors="coerce") >= 3)
-        near = (pd.to_numeric(r.get("days_to_exp"), errors="coerce") <= 7)
-        voloi = (pd.to_numeric(r.get("vol_oi"), errors="coerce") >= 2)
-        if extreme or near or voloi:
-            styles.append("background-color: #fff7e6")
-        else:
-            styles.append("")
-        return styles * len(r.index)
-
-    disp["z_notional"] = disp["z_notional"].apply(lambda x: "" if pd.isna(x) else f"{float(x):.2f}")
-    disp["notional_usd"] = disp["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
-    styler2 = (disp
-        .style
-        .apply(highlight_rows, axis=1)
-        .bar(subset=["volume","openInterest"], align="left")
-        .background_gradient(subset=["z_notional"], cmap="Reds")
+    st.dataframe(
+        top[[
+            "ticker","flags","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
+            "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp","z_notional"
+        ]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "ticker": st.column_config.TextColumn("ticker"),
+            "flags": st.column_config.TextColumn("flags"),
+            "side": st.column_config.TextColumn("side"),
+            "expiration": st.column_config.TextColumn("expiration"),
+            "strike": st.column_config.NumberColumn("strike", format="%.2f"),
+            "underlying_price": st.column_config.NumberColumn("underlying_price", format="$%,.2f"),
+            "lastPrice": st.column_config.NumberColumn("lastPrice", format="$%,.2f"),
+            "volume": st.column_config.NumberColumn("volume", format="%d"),
+            "openInterest": st.column_config.NumberColumn("openInterest", format="%d"),
+            "vol_oi": st.column_config.NumberColumn("vol_oi", format="%.2f"),
+            "impliedVolatility": st.column_config.NumberColumn("impliedVolatility", format="%.1f%%"),
+            "delta": st.column_config.NumberColumn("delta", format="%.2f"),
+            "notional_usd": st.column_config.NumberColumn("notional_usd", format="$%,.0f"),
+            "days_to_exp": st.column_config.NumberColumn("days_to_exp", format="%d"),
+            "z_notional": st.column_config.NumberColumn("z_notional", format="%.2f"),
+        }
     )
-    st.dataframe(styler2, use_container_width=True, hide_index=True)
-
-    st.subheader("Top contracts per ticker (head 5)")
-    top = unusual.sort_values(["ticker","notional_usd"], ascending=[True, False]).groupby("ticker").head(5)
-    disp = top[[
-        "ticker","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
-        "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp","z_notional"
-    ]].copy()
-    disp["expiration"] = pd.to_datetime(disp["expiration"]).dt.date.astype(str)
-    disp["impliedVolatility"] = disp["impliedVolatility"].apply(lambda v: "" if pd.isna(v) else f"{v*100:.1f}%")
-    disp["vol_oi"] = disp["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-    disp["delta"] = disp["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-    disp["underlying_price"] = disp["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-    disp["lastPrice"] = disp["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-    disp["notional_usd"] = disp["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
-    disp["z_notional"] = disp["z_notional"].apply(_fmt_z)
-    st.dataframe(disp, use_container_width=True, hide_index=True)
 
 # -------------------------
 # Flow Summary – contracts that passed UOA rule
