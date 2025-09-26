@@ -49,7 +49,8 @@ with st.sidebar:
     preset = st.selectbox("Preset", ["S&P 500 Top 200","Custom"], index=0)
     if preset == "Custom":
         tickers_input = st.text_area("Tickers (comma/space)", value="AAPL, AMD, NVDA, TSLA")
-        tickers = sorted(list({t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()}))
+        tickers = sorted(list({t.strip().upper() for t in tickers_input.replace("
+", ",").split(",") if t.strip()}))
     else:
         tickers = SP500_TOP200
 
@@ -356,6 +357,7 @@ else:
     league_display = league.copy()
     league_display["total_notional"] = league_display["total_notional"].apply(lambda x: f"${x:,.0f}")
     league_display["max_zscore"] = league_display["max_zscore"].apply(lambda x: "" if pd.isna(x) else f"{x:.2f}")
+    league_display["unusual_trades"] = league_display["unusual_trades"].apply(lambda x: f"{int(x):,}")
     st.dataframe(league_display, use_container_width=True, hide_index=True)
 
     st.subheader("Top contracts per ticker (head 5)")
