@@ -305,7 +305,7 @@ mask = (
 filtered = aug[mask].copy() if only_unusual else aug.copy()
 
 # Derived flags
-filtered["days_to_exp"] = (pd.to_datetime(filtered["expiration"]) - pd.Timestamp.utcnow()).dt.days
+filtered["days_to_exp"] = (pd.to_datetime(filtered["expiration"], utc=True) - pd.Timestamp.now(tz="UTC")).dt.days
 filtered["moneyness_flag"] = np.where(filtered["moneyness"].between(0.95, 1.05), "~ATM",
                                np.where(filtered["moneyness"] > 1.05, "ITM call / OTM put", "OTM call / ITM put"))
 
