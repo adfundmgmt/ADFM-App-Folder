@@ -27,36 +27,104 @@ st.title(APP_TITLE)
 # -------------------------
 @st.cache_data(ttl=6*60*60, show_spinner=False)
 def get_sp500_symbols() -> list:
-    """Fetch S&P 500 symbols from Wikipedia. Fallback to a small subset if fetch fails."""
+    """Fetch S&P 500 symbols from public sources with robust fallbacks.
+    Order: Wikipedia -> datahub.io CSV -> local ./ingest/sp500_symbols.csv -> small fallback.
+    Accepts either a single 'Symbol' column or a CSV with 'Symbol'/'Ticker'.
+    """
+    # 1) Wikipedia (HTML table)
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        import requests
+        r = requests.get(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=15
+        )
+        r.raise_for_status()
+        tables = pd.read_html(r.text)
         sym = None
         for t in tables:
-            if "Symbol" in t.columns:
-                sym = t["Symbol"].astype(str).tolist()
+            cols = [c.strip() for c in t.columns]
+            if any(c.lower() == "symbol" for c in cols):
+                colname = [c for c in t.columns if c.lower() == "symbol"][0]
+                sym = t[colname].astype(str).tolist()
                 break
-        if sym is None:
-            raise RuntimeError("No Symbol column found")
-        sym = [s.replace(".", "-").upper().strip() for s in sym if s and isinstance(s, str)]
-        # dedupe preserving order
-        seen, out = set(), []
-        for s in sym:
-            if s not in seen:
-                seen.add(s)
-                out.append(s)
-        return out
+        if sym:
+            sym = [s.replace(".", "-").upper().strip() for s in sym if isinstance(s, str) and s.strip()]
+            seen, out = set(), []
+            for s in sym:
+                if s not in seen:
+                    seen.add(s)
+                    out.append(s)
+            return out
     except Exception:
-        return [
-            "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
-            "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX"
-        ]
+        pass
+
+    # 2) Datahub CSV
+    try:
+        import io, requests
+        url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        df = pd.read_csv(io.StringIO(r.text))
+        col = None
+        for c in df.columns:
+            if c.lower() in ("symbol","ticker"):
+                col = c
+                break
+        if col:
+            sym = df[col].astype(str).tolist()
+            sym = [s.replace(".", "-").upper().strip() for s in sym if isinstance(s, str) and s.strip()]
+            seen, out = set(), []
+            for s in sym:
+                if s not in seen:
+                    seen.add(s)
+                    out.append(s)
+            return out
+    except Exception:
+        pass
+
+    # 3) Local override CSV in ./ingest
+    try:
+        local = os.path.join(INGEST_DIR, "sp500_symbols.csv")
+        if os.path.exists(local):
+            df = pd.read_csv(local)
+            col = None
+            for c in df.columns:
+                if c.lower() in ("symbol","ticker"):
+                    col = c
+                    break
+            if col:
+                sym = df[col].astype(str).tolist()
+                sym = [s.replace(".", "-").upper().strip() for s in sym if isinstance(s, str) and s.strip()]
+                seen, out = set(), []
+                for s in sym:
+                    if s not in seen:
+                        seen.add(s)
+                        out.append(s)
+                return out
+    except Exception:
+        pass
+
+    # 4) Small safe fallback
+    return [
+        "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
+        "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX"
+    ]
 
 # -------------------------
 # Sidebar
 # -------------------------
 with st.sidebar:
     st.markdown("### Universe")
-    st.caption("Using full S&P 500 universe (auto-refreshed every 6h).")
+    st.caption("Using full S&P 500 universe (auto-refreshed every 6h). If internet is blocked, drop a CSV named 'sp500_symbols.csv' in ./ingest with a 'Symbol' column.")
+    # Optional uploader to override locally
+    uploaded = st.file_uploader("Upload sp500_symbols.csv (optional)", type=["csv"], accept_multiple_files=False)
+    if uploaded is not None:
+        try:
+            df_up = pd.read_csv(uploaded)
+            df_up.to_csv(os.path.join(INGEST_DIR, "sp500_symbols.csv"), index=False)
+            st.success("Uploaded and saved to ./ingest/sp500_symbols.csv. Reload to use.")
+        except Exception as e:
+            st.warning(f"Upload failed: {e}")
     tickers = get_sp500_symbols()
     st.caption(f"Loaded {len(tickers)} symbols.")
 
