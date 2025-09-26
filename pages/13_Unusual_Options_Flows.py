@@ -1,8 +1,5 @@
-# streamlit_app.py (Safe ASCII baseline)
-# Unusual Options Flow – Free UOA Scanner
-# - Avoids emojis / pandas Styler / exotic APIs to prevent parse issues.
-# - Industry-style UOA rule: Volume >= OI, Notional >= floor, DTE <= cap, OTM by threshold.
-# - Z-score vs recent snapshots (approx 30 days, using saved parquet/csv files).
+# streamlit_app.py — Insider-style UOA (Safe ASCII, full S&P 500)
+# Focus: premium-first tiers, simple UI, full S&P500 universe (no caps)
 
 import os
 import glob
@@ -25,13 +22,14 @@ os.makedirs(INGEST_DIR, exist_ok=True)
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
 
-# ---- Universe helpers ----
+# -------------------------
+# Universe helpers
+# -------------------------
 @st.cache_data(ttl=6*60*60, show_spinner=False)
 def get_sp500_symbols() -> list:
-    """Fetch S&P 500 symbols from Wikipedia. Fallback to a bundled subset if fetch fails."""
+    """Fetch S&P 500 symbols from Wikipedia. Fallback to a small subset if fetch fails."""
     try:
         tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-        # Find the table with 'Symbol' column
         sym = None
         for t in tables:
             if "Symbol" in t.columns:
@@ -39,9 +37,8 @@ def get_sp500_symbols() -> list:
                 break
         if sym is None:
             raise RuntimeError("No Symbol column found")
-        # yfinance expects BRK.B style as BRK-B, BF.B -> BF-B, etc.
         sym = [s.replace(".", "-").upper().strip() for s in sym if s and isinstance(s, str)]
-        # De-dup and keep deterministic order
+        # dedupe preserving order
         seen, out = set(), []
         for s in sym:
             if s not in seen:
@@ -49,27 +46,10 @@ def get_sp500_symbols() -> list:
                 out.append(s)
         return out
     except Exception:
-        # Minimal safe fallback list if web is blocked
         return [
             "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
             "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX"
         ]
-
-SP500_TOP200 = [
-    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
-    "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX",
-    "ASML","AMD","TMUS","CRM","ADBE","CSCO","LIN","TMO","ACN","INTU","MCD","WFC","VZ",
-    "CMCSA","TXN","ABT","DHR","IBM","PM","CAT","GE","PFE","NOW","AMAT","SPGI","NEE","NKE",
-    "AMGN","LOW","RTX","ETN","HON","BKNG","BX","ISRG","PLTR","QCOM","UBER","SCHW","MDLZ",
-    "AMT","INTC","UNP","SO","ADP","BLK","ELV","DE","MS","MMC","SYK","GS","CME","TJX","GILD",
-    "PYPL","BA","C","PH","MO","LMT","CI","T","CVX","PANW","REGN","VRTX","KLAC","MU","FISV",
-    "ZTS","EQIX","CSX","COP","BDX","EMR","ICE","HCA","AON","CDNS","MAR","SHW","WM","PGR",
-    "HUM","ITW","DUK","EOG","ADSK","NSC","PXD","FDX","AEP","PLD","LRCX","ORLY","AZO","MRVL",
-    "SBUX","ROST","PSA","TRV","MNST","WDAY","IDXX","CEG","PCAR","TT","F","MET","DG","D",
-    "AIG","GM","CNC","FCX","CMG","CTAS","PRU","ED","HPQ","GIS","KR","HAL","CTVA","MSCI",
-    "SNPS","HES","VLO","PSX","KHC","ADM","DVN","KDP","MCHP","WBA","NUE","LULU","ROK","RMD",
-    "PAYX","CDW","TGT","PHM","LEN","CPRT","NEM","ON","AFL","ALL","A","ALB","AAL","UAL"
-]
 
 # -------------------------
 # Sidebar
@@ -78,14 +58,14 @@ with st.sidebar:
     st.markdown("### Universe")
     st.caption("Using full S&P 500 universe (auto-refreshed every 6h).")
     tickers = get_sp500_symbols()
-st.caption(f"Loaded {len(tickers)} S&P 500 symbols.")
+    st.caption(f"Loaded {len(tickers)} symbols.")
 
     st.markdown("### Data Limits")
     max_expiries = st.number_input("Max expirations per ticker", min_value=1, max_value=12, value=4, step=1)
 
     st.markdown("### UOA Thresholds")
     min_notional = st.number_input("Min notional per line, USD", min_value=0, max_value=100_000_000, value=500_000, step=100_000)
-    min_premium = st.number_input("Min premium per line, USD", min_value=0, max_value=100_000_000, value=0, step=100_000)
+    min_premium  = st.number_input("Min premium per line, USD",  min_value=0, max_value=100_000_000, value=0, step=100_000)
     rule_otm_pct = st.number_input("OTM threshold %", min_value=0.0, max_value=200.0, value=10.0, step=1.0)
     rule_max_dte = st.number_input("Max DTE (days)", min_value=1, max_value=365, value=30, step=1)
     extra_min_vol_oi = st.number_input("Extra floor for Vol/OI (optional)", min_value=0.0, max_value=50.0, value=0.0, step=0.1)
@@ -99,7 +79,6 @@ st.caption(f"Loaded {len(tickers)} S&P 500 symbols.")
     refresh_secs = st.number_input("Refresh every N seconds", min_value=10, max_value=3600, value=120, step=10)
 
 if use_autorefresh:
-    # safer item assignment; ignore if older Streamlit
     try:
         st.query_params["ts"] = str(int(time.time()))
     except Exception:
@@ -163,7 +142,7 @@ def load_history(max_files: int = 40) -> pd.DataFrame:
     if not out:
         return pd.DataFrame()
     hist = pd.concat(out, ignore_index=True)
-    for c in ["notional_usd","impliedVolatility","ttm_years","moneyness","side","ticker"]:
+    for c in ["notional_usd","premium_usd","impliedVolatility","ttm_years","moneyness","side","ticker"]:
         if c not in hist.columns:
             hist[c] = np.nan
     hist["DTE"] = (hist.get("ttm_years", pd.Series(np.nan, index=hist.index)).astype(float) * 365.0).round()
@@ -308,7 +287,7 @@ previous = load_latest_snapshot()
 aug = merge_prev_oi(current, previous)
 saved_path = save_snapshot(current)
 
-# Z-scores vs history
+# Z-scores vs history (kept, but not displayed)
 hist = load_history(max_files=40)
 if not hist.empty:
     def m_band_now(m):
@@ -395,7 +374,7 @@ unusual["tier"] = unusual.apply(_classify, axis=1)
 signal = unusual[unusual["tier"].isin(["Tier 1","Tier 2"])].copy()
 
 # -------------------------
-# Priority Summary – Tier 1 & 2 only (premium-first)
+# Priority Summary – Tier 1 & 2 (premium-first)
 # -------------------------
 st.subheader("Priority Summary (Tier 1 & 2)")
 if signal.empty:
@@ -410,11 +389,11 @@ else:
     ).sort_values(["total_premium","tier1_trades","max_premium"], ascending=[False, False, False])
 
     league_display = league.copy()
-    league_display["total_premium"] = league_display["total_premium"].apply(lambda x: f"${x:,.0f}")
+    league_display["total_premium"]  = league_display["total_premium"].apply(lambda x: f"${x:,.0f}")
     league_display["total_notional"] = league_display["total_notional"].apply(lambda x: f"${x:,.0f}")
-    league_display["max_premium"] = league_display["max_premium"].apply(lambda x: f"${x:,.0f}")
-    league_display["tier1_trades"] = league_display["tier1_trades"].apply(lambda x: f"{int(x):,}")
-    league_display["tier2_trades"] = league_display["tier2_trades"].apply(lambda x: f"{int(x):,}")
+    league_display["max_premium"]    = league_display["max_premium"].apply(lambda x: f"${x:,.0f}")
+    league_display["tier1_trades"]   = league_display["tier1_trades"].apply(lambda x: f"{int(x):,}")
+    league_display["tier2_trades"]   = league_display["tier2_trades"].apply(lambda x: f"{int(x):,}")
     st.dataframe(league_display, use_container_width=True, hide_index=True)
 
     st.subheader("Top contracts per ticker (by premium)")
@@ -463,32 +442,9 @@ view["lastPrice"]        = view["lastPrice"].apply(lambda v: "" if pd.isna(v) el
 view = view.sort_values(["premium_usd"], ascending=[False])
 st.dataframe(view, use_container_width=True, hide_index=True)
 
-# Flow Summary
-st.subheader("Flow Summary")
-st.caption("Contracts that satisfy: Volume >= OI, notional >= floor, short-dated, and OTM by threshold.")
-if unusual.empty:
-    st.stop()
-view = unusual[[
-    "ticker","side","expiration","days_to_exp","strike","underlying_price","lastPrice",
-    "volume","openInterest","vol_oi","oi_change","oi_change_pct","impliedVolatility","delta",
-    "premium_usd","notional_usd","moneyness"
-]].copy()
-view["expiration"] = pd.to_datetime(view["expiration"]).dt.date.astype(str)
-view["oi_change_pct"] = view["oi_change_pct"].apply(lambda x: "" if pd.isna(x) else f"{x*100:.1f}%")
-view["impliedVolatility"] = view["impliedVolatility"].apply(lambda x: "" if pd.isna(x) else f"{x*100:.1f}%")
-view["delta"] = view["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-view["vol_oi"] = view["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-view["premium_usd"] = view["premium_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
-view["notional_usd"] = view["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
-view["underlying_price"] = view["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-view["lastPrice"] = view["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-# comma-format counts in Flow Summary
-view["volume"] = pd.to_numeric(view["volume"], errors="coerce").astype("Int64").map(lambda x: f"{x:,}" if pd.notna(x) else "")
-view["openInterest"] = pd.to_numeric(view["openInterest"], errors="coerce").astype("Int64").map(lambda x: f"{x:,}" if pd.notna(x) else "")
-
-view = view.sort_values(["ticker","notional_usd"], ascending=[True, False])
-st.dataframe(view, use_container_width=True, hide_index=True)
-
+# -------------------------
+# External ingest (optional CSVs)
+# -------------------------
 with st.expander("External ingest (CSV)"):
     st.write("Drop CSV files into ./ingest with columns: datetime, ticker, side, strike, expiration, size, price, notional, exchange.")
     ext = read_external()
@@ -497,4 +453,4 @@ with st.expander("External ingest (CSV)"):
     else:
         st.info("No external CSVs detected.")
 
-st.caption("Data: Yahoo Finance chains via yfinance. UOA rules applied. Snapshot saved. Run daily to build history.")
+st.caption("Data: Yahoo Finance chains via yfinance. Premium-first Tier rules; snapshots saved daily for history.")
