@@ -49,8 +49,8 @@ with st.sidebar:
     preset = st.selectbox("Preset", ["S&P 500 Top 200","Custom"], index=0)
     if preset == "Custom":
         tickers_input = st.text_area("Tickers (comma/space)", value="AAPL, AMD, NVDA, TSLA")
-        tickers = sorted(list({t.strip().upper() for t in tickers_input.replace("
-", ",").split(",") if t.strip()}))
+        parts = tickers_input.replace("\n", ",").replace(" ", ",").split(",")
+        tickers = sorted(list({t.strip().upper() for t in parts if t.strip()}))
     else:
         tickers = SP500_TOP200
 
@@ -403,6 +403,10 @@ view["vol_oi"] = view["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}"
 view["notional_usd"] = view["notional_usd"].apply(lambda v: "" if pd.isna(v) else f"${v:,.0f}")
 view["underlying_price"] = view["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
 view["lastPrice"] = view["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+# comma-format counts in Flow Summary
+view["volume"] = pd.to_numeric(view["volume"], errors="coerce").astype("Int64").map(lambda x: f"{x:,}" if pd.notna(x) else "")
+view["openInterest"] = pd.to_numeric(view["openInterest"], errors="coerce").astype("Int64").map(lambda x: f"{x:,}" if pd.notna(x) else "")
+
 view = view.sort_values(["ticker","notional_usd"], ascending=[True, False])
 st.dataframe(view, use_container_width=True, hide_index=True)
 
