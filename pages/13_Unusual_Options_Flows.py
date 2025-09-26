@@ -1,310 +1,403 @@
 # streamlit_app.py
-# Unusual Options Flow: Rule-based market scanner using yfinance chains
+# Unusual Options Flow Tracker using Yahoo Finance and public sources
 # Notes:
-# - Approximates “big flow” via notional, Vol/OI, OTM %, and DTE.
-# - No tape-level sweep/venue metadata in free sources.
-# - Scans preset universe (S&P500 top 200) or your custom list.
-# - Persists daily snapshots for OI delta comparisons when run regularly.
+# - Relies on yfinance for options chains. Yahoo does NOT expose individual trade prints, sweeps, or block tags.
+# - We approximate "big flow" using notional size, Volume/Open Interest ratio, and day-over-day OI change.
+# - The app persists daily snapshots of OI to compute changes over time. Run it daily for best results.
+# - Optional: you can drop CSVs of external option trade logs into the ./ingest folder and the app will unify them.
+# - No manual refresh button is included. Optionally enable auto-refresh in the sidebar.
 
 import os
+import io
 import math
-import glob
+import json
 import time
-from datetime import datetime, timezone
-from typing import List, Tuple
+import glob
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Tuple
 
 import numpy as np
 import pandas as pd
-import streamlit as st
 import yfinance as yf
+import streamlit as st
 
-APP_TITLE = "Unusual Options Flow – Rule Scanner"
-DATA_DIR = "data"
-INGEST_DIR = "ingest"
+############################################################
+# Config & Paths
+############################################################
+APP_TITLE = "Unusual Options Flow Tracker"
+DATA_DIR = "data"  # local persistence for snapshots
+INGEST_DIR = "ingest"  # optional external CSVs with option flows
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(INGEST_DIR, exist_ok=True)
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
 
-# ---------- Preset Universe ----------
-SP500_TOP200 = [
-    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
-    "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX",
-    "ASML","AMD","TMUS","CRM","ADBE","CSCO","LIN","TMO","ACN","INTU","MCD","WFC","VZ",
-    "CMCSA","TXN","ABT","DHR","IBM","PM","CAT","GE","PFE","NOW","AMAT","SPGI","NEE","NKE",
-    "AMGN","LOW","RTX","ETN","HON","BKNG","BX","ISRG","PLTR","QCOM","UBER","SCHW","MDLZ",
-    "AMT","INTC","UNP","SO","ADP","BLK","ELV","DE","MS","MMC","SYK","GS","CME","TJX","GILD",
-    "PYPL","BA","C","PH","MO","LMT","CI","T","CVX","PANW","REGN","VRTX","KLAC","MU","FISV",
-    "ZTS","EQIX","CSX","COP","BDX","EMR","ICE","HCA","AON","CDNS","MAR","SHW","WM","PGR",
-    "HUM","ITW","DUK","EOG","ADSK","NSC","PXD","FDX","AEP","PLD","LRCX","ORLY","AZO","MRVL",
-    "SBUX","ROST","PSA","TRV","MNST","WDAY","IDXX","CEG","PCAR","TT","F","MET","DG","D",
-    "AIG","GM","CNC","FCX","CMG","CTAS","PRU","ED","HPQ","GIS","KR","HAL","CTVA","MSCI",
-    "SNPS","HES","VLO","PSX","KHC","ADM","DVN","KDP","MCHP","WBA","NUE","LULU","ROK","RMD",
-    "PAYX","CDW","TGT","PHM","LEN","CPRT","NEM","ON","AFL","ALL","A","ALB","AAL","UAL"
-]
-
-# ---------- Sidebar Controls ----------
+############################################################
+# Sidebar Controls
+############################################################
 with st.sidebar:
     st.markdown("### Universe")
-    universe_preset = st.selectbox("Preset", ["S&P 500 Top 200", "Custom"], index=0)
+    tickers_input = st.text_area(
+        "Tickers (comma or whitespace separated)",
+        value="AAPL, AMD, NVDA, TSLA, MSFT, META, AMZN, GOOGL",
+        height=90,
+        help="Add liquid names first to avoid API throttles."
+    )
+    tickers = sorted(list({t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()}))
 
-    if universe_preset == "Custom":
-        tickers_input = st.text_area(
-            "Tickers (comma/space separated)",
-            value="AAPL, AMD, NVDA, TSLA, MSFT, META, AMZN, GOOGL",
-            height=90
-        )
-        tickers = sorted(list({t.strip().upper()
-                               for t in tickers_input.replace("\n", ",").split(",")
-                               if t.strip()}))
-    else:
-        tickers = SP500_TOP200
+    st.markdown("### Scan Parameters")
+    max_expiries = st.number_input(
+        "Max expirations per ticker", min_value=1, max_value=12, value=4, step=1,
+        help="To manage rate limits, cap the number of expirations pulled per ticker."
+    )
+    min_notional = st.number_input(
+        "Min notional per line, USD", min_value=0, value=1_000_000, step=100_000,
+        help="Underlying price x 100 x option volume."
+    )
+    min_vol_oi = st.number_input(
+        "Min Volume / OI", min_value=0.0, value=0.5, step=0.1,
+        help="Higher suggests flow that exceeds existing open interest."
+    )
+    only_unusual = st.checkbox(
+        "Show only unusual flow (meets thresholds)", value=True,
+        help="Filter to lines that cross notional and Volume/OI thresholds."
+    )
 
-    st.markdown("### Data Limits")
-    max_expiries = st.number_input("Max expirations per ticker", 1, 12, 4)
-    st.caption("Tip: 3 to 5 expirations is plenty to find short-dated activity.")
-
-    st.markdown("### Thresholds")
-    min_notional = st.number_input("Min notional per line, USD", 0, 100_000_000, 1_000_000, 100_000)
-    min_vol_oi = st.number_input("Min Volume / OI", 0.0, 50.0, 0.5, 0.1)
-
-    st.markdown("### Rule-based Scanner")
-    rule_side = st.selectbox("Side", ["call", "put"], index=0)
-    rule_otm_pct = st.number_input("OTM threshold %", 0.0, 200.0, 10.0, 1.0)
-    rule_max_dte = st.number_input("Max DTE (days)", 1, 365, 30)
-    st.caption("Example: 10 percent OTM calls with ≤ 30 DTE.")
-
-    st.markdown("### Greeks Setup")
-    risk_free_rate = st.number_input("Risk-free rate %", -1.0, 10.0, 1.5, 0.1)
-    dividend_yield = st.number_input("Dividend yield %", 0.0, 20.0, 0.0, 0.1)
-
-    st.markdown("### Auto-refresh")
+    st.markdown("### Auto-Refresh (optional)")
     use_autorefresh = st.checkbox("Enable auto-refresh", value=False)
-    refresh_secs = st.number_input("Refresh every N seconds", 10, 3600, 120, 10)
+    refresh_secs = st.number_input("Refresh every N seconds", min_value=10, value=120, step=10)
+
+    st.markdown("### Advanced")
+    st.caption("Historical OI deltas require at least one prior snapshot saved by this app.")
+    risk_free_rate = st.number_input("Risk-free rate %, annualized", min_value=-1.0, value=1.5, step=0.1)
+    dividend_yield = st.number_input("Dividend yield %, annualized", min_value=0.0, value=0.0, step=0.1)
 
 if use_autorefresh:
-    st.experimental_set_query_params(ts=int(time.time()))
+    # Streamlit API update: experimental_set_query_params deprecated
+    st.query_params["ts"] = str(int(time.time()))  # change URL param to trigger reruns
 
-# ---------- Helpers ----------
+############################################################
+# Helper Functions
+############################################################
+
 def bs_delta(S, K, T, r, q, iv, is_call=True):
+    """Black-Scholes delta using continuous compounding.
+    S: spot, K: strike, T: years to expiry, r: rate, q: dividend yield, iv: implied vol (decimal)
+    """
     try:
         if T <= 0 or iv <= 0 or S <= 0 or K <= 0:
             return np.nan
+        from math import log, sqrt, exp
         d1 = (math.log(S / K) + (r - q + 0.5 * iv * iv) * T) / (iv * math.sqrt(T))
-        def phi(x):  # standard normal CDF
+        # standard normal CDF
+        def phi(x):
             return 0.5 * (1.0 + math.erf(x / math.sqrt(2)))
-        return math.exp(-q * T) * (phi(d1) if is_call else -phi(-d1))
+        if is_call:
+            return math.exp(-q * T) * phi(d1)
+        else:
+            return -math.exp(-q * T) * phi(-d1)
     except Exception:
         return np.nan
 
-def snapshot_path(tag_date: str) -> str:
-    return os.path.join(DATA_DIR, f"options_snapshot_{tag_date}.parquet")
+
+def load_previous_snapshot_path(snapshot_date: str) -> str:
+    return os.path.join(DATA_DIR, f"options_snapshot_{snapshot_date}.parquet")
+
 
 def list_snapshots() -> List[str]:
     return sorted(glob.glob(os.path.join(DATA_DIR, "options_snapshot_*.parquet")))
 
-def save_snapshot(df: pd.DataFrame):
-    d = datetime.now().strftime("%Y%m%d")
-    p = snapshot_path(d)
-    try:
-        df.to_parquet(p, index=False)
-    except Exception:
-        p = p.replace(".parquet", ".csv")
-        df.to_csv(p, index=False)
-    return p
 
-def load_latest_snapshot() -> pd.DataFrame:
+def save_snapshot(df: pd.DataFrame):
+    snapshot_date = datetime.now().strftime("%Y%m%d")
+    path = load_previous_snapshot_path(snapshot_date)
+    try:
+        df.to_parquet(path, index=False)
+    except Exception:
+        # fallback to csv if parquet not available
+        path = path.replace(".parquet", ".csv")
+        df.to_csv(path, index=False)
+    return path
+
+
+def load_most_recent_snapshot() -> pd.DataFrame:
     files = list_snapshots()
     if not files:
         return pd.DataFrame()
-    f = files[-1]
+    latest = files[-1]
     try:
-        if f.endswith(".parquet"):
-            return pd.read_parquet(f)
+        if latest.endswith(".parquet"):
+            return pd.read_parquet(latest)
         else:
-            return pd.read_csv(f)
+            return pd.read_csv(latest)
     except Exception:
         return pd.DataFrame()
 
-def fetch_chain(ticker: str, max_exp: int) -> Tuple[pd.DataFrame, float]:
+
+def fetch_option_chain(ticker: str, max_exp: int) -> Tuple[pd.DataFrame, float]:
     tk = yf.Ticker(ticker)
-    spot = np.nan
+    spot = float('nan')
     try:
-        spot = float(tk.fast_info.get("last_price")
-                     or tk.info.get("regularMarketPrice")
-                     or tk.history(period="1d").iloc[-1]["Close"])
+        spot = float(tk.fast_info.get("last_price") or tk.info.get("regularMarketPrice") or tk.history(period="1d").iloc[-1]["Close"])  # robust fallback
     except Exception:
         pass
-    try:
-        expirations = tk.options or []
-    except Exception:
-        expirations = []
-    rows = []
-    for exp in expirations[:max_exp]:
-        try:
-            oc = tk.option_chain(exp)
-            for side, df in [("call", oc.calls), ("put", oc.puts)]:
-                if df is None or df.empty:
-                    continue
-                tmp = df.copy()
-                tmp["ticker"] = ticker
-                tmp["side"] = side
-                tmp["expiration"] = pd.to_datetime(exp)
-                rows.append(tmp)
-        except Exception:
-            continue
-    if not rows:
-        return pd.DataFrame(), spot
-    return pd.concat(rows, ignore_index=True), spot
 
-def enrich(df: pd.DataFrame, spot: float, r: float, q: float) -> pd.DataFrame:
+    expirations = []
+    try:
+        expirations = tk.options
+    except Exception:
+        pass
+
+    chains = []
+    if expirations:
+        for exp in expirations[:max_exp]:
+            try:
+                oc = tk.option_chain(exp)
+                calls = oc.calls.copy()
+                puts = oc.puts.copy()
+                for side, df in [("call", calls), ("put", puts)]:
+                    if df is None or df.empty:
+                        continue
+                    df["ticker"] = ticker
+                    df["side"] = side
+                    df["expiration"] = pd.to_datetime(exp)
+                    chains.append(df)
+            except Exception:
+                continue
+    if not chains:
+        return pd.DataFrame(), spot
+    all_df = pd.concat(chains, ignore_index=True)
+    return all_df, spot
+
+
+def compute_metrics(df: pd.DataFrame, spot: float, r: float, q: float) -> pd.DataFrame:
     if df.empty:
         return df
-    out = df.copy()
-    for c in ["volume","openInterest","impliedVolatility","strike","lastPrice","bid","ask"]:
-        if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce")
-    out["underlying_price"] = spot
-    out["notional_usd"] = out["volume"].fillna(0) * spot * 100.0
-    out["vol_oi"] = out.apply(lambda x: (x["volume"] / x["openInterest"])
-                              if pd.notna(x.get("openInterest")) and x.get("openInterest", 0) > 0 else np.nan, axis=1)
-    now_utc = pd.Timestamp.now(tz="UTC")
-    out["expiration"] = pd.to_datetime(out["expiration"], utc=True)
-    out["ttm_years"] = (out["expiration"] - now_utc).dt.total_seconds() / (365 * 24 * 3600)
-    out.loc[out["ttm_years"] < 0, "ttm_years"] = 0.0
-    out["delta"] = out.apply(
-        lambda x: bs_delta(
-            S=spot, K=x["strike"], T=max(float(x["ttm_years"]), 1e-6),
-            r=r/100.0, q=q/100.0,
-            iv=float(x["impliedVolatility"]) if pd.notna(x["impliedVolatility"]) else np.nan,
-            is_call=True if x["side"] == "call" else False
-        ), axis=1
-    )
-    out["moneyness"] = spot / out["strike"]
+    # Normalize columns present in yfinance
+    # Expected columns: ['contractSymbol','lastTradeDate','strike','lastPrice','bid','ask','change','percentChange','volume','openInterest','impliedVolatility','inTheMoney','contractSize','currency']
+    df = df.copy()
+    df["volume"] = pd.to_numeric(df.get("volume"), errors="coerce")
+    df["openInterest"] = pd.to_numeric(df.get("openInterest"), errors="coerce")
+    df["impliedVolatility"] = pd.to_numeric(df.get("impliedVolatility"), errors="coerce")
+    df["strike"] = pd.to_numeric(df.get("strike"), errors="coerce")
+    df["lastPrice"] = pd.to_numeric(df.get("lastPrice"), errors="coerce")
+
+    # Notional approximation
+    df["underlying_price"] = spot
+    df["notional_usd"] = df["volume"].fillna(0) * spot * 100.0
+
+    # Volume / OI ratio
+    df["vol_oi"] = df.apply(lambda x: (x["volume"] / x["openInterest"]) if x.get("openInterest", 0) not in [0, np.nan, None] else np.nan, axis=1)
+
+    # Time to expiry in years
+    now = datetime.now(timezone.utc)
+    df["ttm_years"] = (pd.to_datetime(df["expiration"]).dt.tz_localize("UTC") - now).dt.total_seconds() / (365.0 * 24 * 3600)
+    df.loc[df["ttm_years"] < 0, "ttm_years"] = 0.0
+
+    # Delta approximation via Black-Scholes using IV
+    r_d = r / 100.0
+    q_d = q / 100.0
+    df["delta"] = df.apply(lambda x: bs_delta(
+        S=spot,
+        K=x["strike"],
+        T=max(float(x["ttm_years"]), 1e-6),
+        r=r_d,
+        q=q_d,
+        iv=float(x["impliedVolatility"]) if pd.notna(x["impliedVolatility"]) else np.nan,
+        is_call=True if x["side"] == "call" else False
+    ), axis=1)
+
+    # Moneyness
+    df["moneyness"] = spot / df["strike"]
+
+    # Clean contract size if present
+    if "contractSize" in df.columns:
+        df["contractSize"] = df["contractSize"].fillna("REGULAR")
+
+    # Select compact view
     keep = [
         "ticker","contractSymbol","side","expiration","strike","lastPrice","bid","ask",
         "volume","openInterest","vol_oi","impliedVolatility","delta","moneyness",
         "underlying_price","notional_usd","ttm_years"
     ]
-    for k in keep:
-        if k not in out.columns:
-            out[k] = np.nan
-    return out[keep]
+    for c in keep:
+        if c not in df.columns:
+            df[c] = np.nan
+    return df[keep]
 
-def merge_prev_oi(curr: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
-    if curr.empty:
-        return curr
-    key = ["ticker","contractSymbol"]
-    prev_slim = prev[key + ["openInterest"]].rename(columns={"openInterest":"openInterest_prev"}) if not prev.empty else pd.DataFrame(columns=key + ["openInterest_prev"])
-    out = curr.merge(prev_slim, on=key, how="left")
-    out["oi_change"] = out["openInterest"] - out["openInterest_prev"]
-    out["oi_change_pct"] = np.where(out["openInterest_prev"].fillna(0) > 0, out["oi_change"] / out["openInterest_prev"], np.nan)
-    return out
 
-# ---------- Fetch + Build ----------
+def merge_with_previous_oi(curr_df: pd.DataFrame, prev_df: pd.DataFrame) -> pd.DataFrame:
+    if curr_df.empty:
+        return curr_df
+    curr_df = curr_df.copy()
+    key_cols = ["ticker","contractSymbol"]
+    prev = prev_df[key_cols + ["openInterest"]].rename(columns={"openInterest": "openInterest_prev"}) if not prev_df.empty else pd.DataFrame(columns=key_cols + ["openInterest_prev"])
+    curr_df = curr_df.merge(prev, on=key_cols, how="left")
+    curr_df["oi_change"] = curr_df["openInterest"] - curr_df["openInterest_prev"]
+    curr_df["oi_change_pct"] = np.where(
+        curr_df["openInterest_prev"].fillna(0) > 0,
+        curr_df["oi_change"] / curr_df["openInterest_prev"],
+        np.nan
+    )
+    return curr_df
+
+
+def read_external_flows() -> pd.DataFrame:
+    # Optional: unify any CSV files in ./ingest with columns like
+    # [datetime, ticker, side, strike, expiration, size, price, notional, exchange]
+    files = sorted(glob.glob(os.path.join(INGEST_DIR, "*.csv")))
+    dfs = []
+    for f in files:
+        try:
+            df = pd.read_csv(f)
+            if "ticker" in df.columns and "expiration" in df.columns:
+                # normalize
+                df["expiration"] = pd.to_datetime(df["expiration"])  # try parse
+                df["source_file"] = os.path.basename(f)
+                dfs.append(df)
+        except Exception:
+            continue
+    if dfs:
+        ext = pd.concat(dfs, ignore_index=True)
+        return ext
+    return pd.DataFrame()
+
+############################################################
+# Data Pipeline
+############################################################
 progress = st.progress(0.0, text="Fetching chains...")
-spots = {}
+
 rows = []
+spots = {}
 for i, tk in enumerate(tickers):
     try:
-        chain, spot = fetch_chain(tk, max_expiries)
+        chain, spot = fetch_option_chain(tk, max_expiries)
         spots[tk] = spot
         if not chain.empty:
-            rows.append(enrich(chain, spot, risk_free_rate, dividend_yield))
+            enriched = compute_metrics(chain, spot, r=risk_free_rate, q=dividend_yield)
+            rows.append(enriched)
     except Exception as e:
         st.warning(f"{tk}: {e}")
     progress.progress((i + 1) / max(1, len(tickers)), text=f"Fetched {i+1}/{len(tickers)}")
+
 progress.empty()
 
-if not rows:
+if rows:
+    current_df = pd.concat(rows, ignore_index=True)
+else:
     st.stop()
 
-current = pd.concat(rows, ignore_index=True)
-previous = load_latest_snapshot()
-aug = merge_prev_oi(current, previous)
-saved = save_snapshot(current)
+# Load previous snapshot to compute OI deltas
+previous_df = load_most_recent_snapshot()
+aug = merge_with_previous_oi(current_df, previous_df)
 
-# ---------- Unusual Flow View (thresholds) ----------
-aug = aug.copy()
-aug["days_to_exp"] = (pd.to_datetime(aug["expiration"], utc=True) - pd.Timestamp.now(tz="UTC")).dt.days
-mask_unusual = (aug["notional_usd"] >= min_notional) & (aug["vol_oi"].fillna(0) >= min_vol_oi)
-unusual = aug.loc[mask_unusual].copy()
-unusual["moneyness_flag"] = np.where(
-    unusual["moneyness"].between(0.95, 1.05), "~ATM",
-    np.where(unusual["moneyness"] > 1.05, "ITM call / OTM put", "OTM call / ITM put")
+# Save today snapshot for future comparisons
+saved_path = save_snapshot(current_df)
+
+############################################################
+# Filtering and Display
+############################################################
+# Apply thresholds
+mask = (
+    (aug["notional_usd"] >= min_notional) &
+    (aug["vol_oi"].fillna(0) >= min_vol_oi)
 )
-unusual = unusual.sort_values(["notional_usd","vol_oi"], ascending=[False, False])
+filtered = aug[mask].copy() if only_unusual else aug.copy()
 
-st.subheader("Unusual Flow (by thresholds)")
-cols = [
+# Derived flags
+filtered["days_to_exp"] = (pd.to_datetime(filtered["expiration"], utc=True) - pd.Timestamp.now(tz="UTC")).dt.days
+filtered["moneyness_flag"] = np.where(filtered["moneyness"].between(0.95, 1.05), "~ATM",
+                               np.where(filtered["moneyness"] > 1.05, "ITM call / OTM put", "OTM call / ITM put"))
+
+# Sort by notional, then vol_oi
+filtered = filtered.sort_values(["notional_usd","vol_oi"], ascending=[False, False])
+
+# Rank tickers by number of unusual lines and prioritize heavy clusters
+counts = filtered.groupby("ticker", as_index=False).agg(
+    unusual_trades=("contractSymbol","count"),
+    total_notional=("notional_usd","sum")
+)
+# Bucket by size to make the "10+ first, then 6+, etc" ordering explicit
+counts["bucket"] = pd.cut(
+    counts["unusual_trades"],
+    bins=[-1,2,5,9,10**9],
+    labels=["<=2","3-5","6-9","10+"],
+    right=True
+)
+# Merge counts back so rows can inherit the sorting priority
+filtered = filtered.merge(counts[["ticker","unusual_trades","bucket","total_notional"]], on="ticker", how="left")
+# Custom sort: bucket order then unusual_trades desc then notional
+bucket_order = pd.CategoricalDtype(categories=["10+","6-9","3-5","<=2"], ordered=True)
+filtered["bucket"] = filtered["bucket"].astype(str).astype(bucket_order)
+filtered = filtered.sort_values([
+    "bucket","unusual_trades","notional_usd","vol_oi"
+], ascending=[True, False, False, False])
+
+st.subheader("Flow Summary")
+st.caption("Approximation based on option volumes and OI. Not a trade tape.")
+
+summary_cols = [
     "ticker","side","expiration","days_to_exp","strike","underlying_price","lastPrice",
     "volume","openInterest","vol_oi","oi_change","oi_change_pct","impliedVolatility","delta",
     "notional_usd","moneyness_flag"
 ]
-view = unusual[cols].copy()
-view["expiration"] = pd.to_datetime(view["expiration"]).dt.date.astype(str)
-fmt_pct = lambda x: "" if pd.isna(x) else f"{x*100:.1f}%"
-fmt_usd = lambda x: "" if pd.isna(x) else f"${x:,.0f}"
-view["oi_change_pct"] = view["oi_change_pct"].apply(fmt_pct)
-view["impliedVolatility"] = view["impliedVolatility"].apply(fmt_pct)
-view["delta"] = view["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-view["vol_oi"] = view["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-view["notional_usd"] = view["notional_usd"].apply(fmt_usd)
-view["underlying_price"] = view["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-view["lastPrice"] = view["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-st.dataframe(view, use_container_width=True, hide_index=True)
 
-# ---------- Rule-based Market Scan ----------
-st.subheader("Rule-based flags")
-aug2 = aug.copy()
-otm = rule_otm_pct / 100.0
-if rule_side == "call":
-    side_mask = aug2["side"].eq("call")
-    moneyness_mask = aug2["strike"] >= (1 + otm) * aug2["underlying_price"]
-else:
-    side_mask = aug2["side"].eq("put")
-    moneyness_mask = aug2["strike"] <= (1 - otm) * aug2["underlying_price"]
+# Pretty formatting
+def fmt_pct(x):
+    return "" if pd.isna(x) else f"{x*100:.1f}%"
 
-rule_mask = (
-    side_mask &
-    moneyness_mask &
-    (aug2["days_to_exp"] >= 0) & (aug2["days_to_exp"] <= rule_max_dte) &
-    (aug2["notional_usd"] >= min_notional) &
-    (aug2["vol_oi"].fillna(0) >= min_vol_oi)
-)
-hits = aug2.loc[rule_mask].copy().sort_values(["notional_usd","vol_oi"], ascending=[False, False])
+def fmt_usd(x):
+    return "" if pd.isna(x) else f"${x:,.0f}"
 
-if hits.empty:
-    st.info("No contracts matched the current rules in the selected universe.")
-else:
-    h = hits[[
-        "ticker","side","expiration","strike","underlying_price","lastPrice","volume","openInterest",
-        "vol_oi","impliedVolatility","delta","notional_usd","days_to_exp"
-    ]].copy()
-    h["expiration"] = pd.to_datetime(h["expiration"]).dt.date.astype(str)
-    h["impliedVolatility"] = h["impliedVolatility"].apply(fmt_pct)
-    h["vol_oi"] = h["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-    h["delta"] = h["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-    h["underlying_price"] = h["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-    h["lastPrice"] = h["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
-    h["notional_usd"] = h["notional_usd"].apply(fmt_usd)
-    st.dataframe(h, use_container_width=True, hide_index=True)
+show = filtered[summary_cols].copy()
+show["expiration"] = pd.to_datetime(show["expiration"]).dt.date.astype(str)
+show["oi_change_pct"] = show["oi_change_pct"].apply(fmt_pct)
+show["impliedVolatility"] = show["impliedVolatility"].apply(fmt_pct)
+show["delta"] = show["delta"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+show["vol_oi"] = show["vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+show["notional_usd"] = show["notional_usd"].apply(fmt_usd)
+show["underlying_price"] = show["underlying_price"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
+show["lastPrice"] = show["lastPrice"].apply(lambda v: "" if pd.isna(v) else f"${v:,.2f}")
 
-# ---------- Aggregates ----------
-st.subheader("By Ticker Aggregates (thresholded)")
-agg = unusual.groupby(["ticker","side"], as_index=False).agg(
+st.dataframe(show, use_container_width=True, hide_index=True)
+
+############################################################
+# Universe Level Stats
+############################################################
+st.subheader("By Ticker Aggregates")
+agg = filtered.groupby(["ticker","side"], as_index=False).agg(
     total_notional=("notional_usd","sum"),
     lines=("contractSymbol","count"),
     avg_vol_oi=("vol_oi","mean"),
     sum_volume=("volume","sum"),
-    sum_openInterest=("openInterest","sum")
-).sort_values("total_notional", ascending=False)
-agg["total_notional"] = agg["total_notional"].apply(fmt_usd)
-agg["avg_vol_oi"] = agg["avg_vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
-st.dataframe(agg, use_container_width=True, hide_index=True)
+    sum_openInterest=("openInterest","sum"),
+)
+agg = agg.sort_values(["total_notional"], ascending=False)
+agg_disp = agg.copy()
+agg_disp["total_notional"] = agg_disp["total_notional"].apply(fmt_usd)
+agg_disp["avg_vol_oi"] = agg_disp["avg_vol_oi"].apply(lambda v: "" if pd.isna(v) else f"{v:.2f}")
+st.dataframe(agg_disp, use_container_width=True, hide_index=True)
 
+############################################################
+# External Feeds (optional)
+############################################################
+with st.expander("External ingest (CSV)"):
+    st.write(
+        "Drop CSV files into ./ingest with columns like "
+        "[datetime, ticker, side, strike, expiration, size, price, notional, exchange]. "
+        "They will be unified and shown here."
+    )
+    ext = read_external_flows()
+    if not ext.empty:
+        st.dataframe(ext, use_container_width=True, hide_index=True)
+    else:
+        st.info("No external CSVs detected.")
+
+############################################################
+# Footer / Diagnostics
+############################################################
 st.caption(
-    "Data: Yahoo Finance chains via yfinance. Flags are inferred using rules and thresholds; "
-    "they are not trade-tape sweeps. Snapshot saved for OI history."
+    "Data: Yahoo Finance option chains via yfinance. Flow is inferred using Volume/OI and OI deltas. "
+    f"Saved snapshot: {os.path.basename(saved_path)}. Run daily to build OI history."
 )
