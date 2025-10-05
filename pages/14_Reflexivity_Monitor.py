@@ -250,25 +250,42 @@ for i, tkr in enumerate(valid_assets):
             st.info("Insufficient data for rolling correlations.")
             continue
         ri_z = _zscore(ri)
-        ri_idx = (50 + 15*ri_z).clip(0, 100)
-        # KPI on top, then a full-width chart
-latest_val = float(ri_idx.dropna().iloc[-1]) if not ri_idx.dropna().empty else np.nan
-st.metric(label=f"{tkr} reflexivity (0–100)", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA")
+        ri_idx = (50 + 15 * ri_z).clip(0, 100)
 
-# Build plot: full width, yearly ticks, show warm-up shading so the x-axis starts at chosen start date
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=ri_idx.index, y=ri_idx, name="Gauge 0-100", mode="lines"))
-fig.add_hline(y=65, line_dash="dash", line_color="gray", opacity=0.5)
-fig.add_hline(y=35, line_dash="dash", line_color="gray", opacity=0.5)
+        # ---- KPI on top ----
+        latest_series = ri_idx.dropna()
+        latest_val = float(latest_series.iloc[-1]) if not latest_series.empty else np.nan
+        st.metric(label=f"{tkr} reflexivity (0–100)", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA")
 
-first_valid = ri_idx.first_valid_index()
-if first_valid is not None and pd.to_datetime(first_valid) > pd.to_datetime(start_date):
-    fig.add_vrect(x0=pd.to_datetime(start_date), x1=pd.to_datetime(first_valid), fillcolor="lightgray", opacity=0.15, line_width=0, annotation_text="warm‑up", annotation_position="top left")
+        # ---- Chart full width ----
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=ri_idx.index, y=ri_idx, name="Gauge 0-100", mode="lines"))
+        fig.add_hline(y=65, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.add_hline(y=35, line_dash="dash", line_color="gray", opacity=0.5)
 
-fig.update_yaxes(range=[0,100], title_text="Reflexivity gauge")
-fig.update_xaxes(range=[pd.to_datetime(start_date), ri_idx.index.max()], dtick="M12", tickformat="%Y", title_text="Year")
-fig.update_layout(height=520, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h"))
-st.plotly_chart(fig, use_container_width=True)
+        first_valid = ri_idx.first_valid_index()
+        if first_valid is not None and pd.to_datetime(first_valid) > pd.to_datetime(start_date):
+            fig.add_vrect(
+                x0=pd.to_datetime(start_date),
+                x1=pd.to_datetime(first_valid),
+                fillcolor="lightgray",
+                opacity=0.15,
+                line_width=0,
+                annotation_text="warm-up",
+                annotation_position="top left",
+            )
+
+        fig.update_yaxes(range=[0, 100], title_text="Reflexivity gauge")
+        fig.update_xaxes(
+            range=[pd.to_datetime(start_date), ri_idx.index.max()],
+            dtick="M12",
+            tickformat="%Y",
+            title_text="Year",
+        )
+        fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
+        st.plotly_chart(fig, use_container_width=True)
+
+        # ---- Factor panel ----
         with st.expander("Factor contributions (latest)"):
             if not details.empty:
                 det_nonan = details.dropna(how="all")
@@ -277,18 +294,24 @@ st.plotly_chart(fig, use_container_width=True)
                 else:
                     try:
                         last_row = det_nonan.iloc[-1]
-                        fig = go.Figure(data=[go.Bar(x=last_row.index, y=last_row.values)])
-                        fig.update_layout(height=300, margin=dict(l=20,r=20,t=10,b=10))
-                        st.plotly_chart(fig, use_container_width=True)
+                        fig2 = go.Figure(data=[go.Bar(x=last_row.index, y=last_row.values)])
+                        fig2.update_layout(height=300, margin=dict(l=20, r=20, t=10, b=10))
+                        st.plotly_chart(fig2, use_container_width=True)
                     except Exception:
                         st.dataframe(det_nonan.tail(5))
                     st.dataframe(det_nonan.tail(5))
             else:
                 st.info("No factor details available with current frequency/window.")
+
+        # ---- Download ----
         with st.expander("Download data"):
             out = pd.concat([s.rename("price"), fund], axis=1)
             out["ReflexivityIntensity"] = ri
-            st.download_button("Download CSV", out.to_csv().encode(), file_name=f"{tkr}_reflexivity_monitor.csv")
+            st.download_button(
+                "Download CSV",
+                out.to_csv().encode(),
+                file_name=f"{tkr}_reflexivity_monitor.csv",
+            )
 
 st.divider()
 
