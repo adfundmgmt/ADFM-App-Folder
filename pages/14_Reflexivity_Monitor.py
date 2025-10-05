@@ -11,6 +11,7 @@ import streamlit as st
 import yfinance as yf
 from pandas_datareader import data as pdr
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # ---------------- Optional fredapi ----------------
 FRED_AVAILABLE, FRED = False, None
@@ -34,7 +35,7 @@ def _zscore(x: pd.Series, clip=3.0):
     return z.clip(-clip, clip) if clip is not None else z
 
 @st.cache_data(show_spinner=False)
-def load_prices(tickers, start="2005-01-01", freq="W-FRI"):
+def load_prices(tickers, start="2010-01-01", freq="W-FRI"):
     px = yf.download(tickers, start=start, auto_adjust=True, progress=False)["Close"]
     if isinstance(px, pd.Series):
         px = px.to_frame()
@@ -44,7 +45,7 @@ def load_prices(tickers, start="2005-01-01", freq="W-FRI"):
     return px.dropna(how="all")
 
 @st.cache_data(show_spinner=False, ttl=24*3600)
-def load_fred_series(series_map: dict, start="2005-01-01", freq="W-FRI"):
+def load_fred_series(series_map: dict, start="2010-01-01", freq="W-FRI"):
     frames = []
     # Try fredapi first
     if FRED_AVAILABLE:
@@ -175,7 +176,7 @@ We compute at **weekly frequency** for stability and speed.
 )
 
 st.sidebar.header("Settings")
-start_date = st.sidebar.date_input("Start date", pd.to_datetime("2015-01-01"))
+start_date = st.sidebar.date_input("Start date", pd.to_datetime("2005-01-01"))
 window = st.sidebar.number_input("Rolling window (weeks)", 20, 156, 26, step=2)
 sel_lags = st.sidebar.multiselect("Lead/Lag steps (weeks)", [2, 4, 8, 12, 26], [4, 8, 12])
 
@@ -247,33 +248,60 @@ for i, tkr in enumerate(valid_assets):
         ri_z = _zscore(ri)
         ri_idx = (50 + 15 * ri_z).clip(0, 100)
 
-        # KPI + Action badge
         latest_series = ri_idx.dropna()
         latest_val = float(latest_series.iloc[-1]) if not latest_series.empty else np.nan
-        # slope over 4 weeks
         delta4 = latest_series.iloc[-1] - latest_series.iloc[-5] if len(latest_series) > 5 else np.nan
         regime = "Self‑reinforcing" if latest_val >= 65 else ("Self‑correcting" if latest_val <= 35 else "Neutral")
         action = "Increase beta (with hedges)" if regime == "Self‑reinforcing" else ("Reduce beta / mean‑revert" if regime == "Self‑correcting" else "Base sizing")
-        st.metric(label=f"{tkr} reflexivity (0–100) — {regime}", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA", delta=(None if np.isnan(delta4) else f"{delta4:+.1f} over 4w"))
-        st.caption(f"Suggested action: **{action}**")
 
-        # Chart with colored regime bands
-        fig = go.Figure()
-        # Bands: red [0,35], gray [35,65], green [65,100]
-        x0 = pd.to_datetime(start_date)
-        x1 = ri_idx.index.max()
-        fig.add_hrect(y0=0, y1=35, line_width=0, fillcolor="#fde2e1", opacity=0.6)
-        fig.add_hrect(y0=35, y1=65, line_width=0, fillcolor="#eef0f2", opacity=0.5)
-        fig.add_hrect(y0=65, y1=100, line_width=0, fillcolor="#e5f5ea", opacity=0.6)
-        fig.add_trace(go.Scatter(x=ri_idx.index, y=ri_idx, name="Gauge 0–100", mode="lines"))
+        # Summary cards
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(f"{tkr} gauge", f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA", (None if np.isnan(delta4) else f"{delta4:+.1f} / 4w"))
+        c2.metric("Regime", regime)
+        # time-in-regime
+        tir = np.nan
+        if not latest_series.empty:
+            last_reg = (latest_series>=65).astype(int) - (latest_series<=35).astype(int)  # 1 / 0 / -1
+            cur = 1 if latest_val>=65 else (-1 if latest_val<=35 else 0)
+            if cur!=0:
+                # count consecutive weeks in same extreme regime
+                rev = last_reg[::-1]
+                cnt=0
+                for v in rev:
+                    if v==cur: cnt+=1
+                    else: break
+                tir = cnt
+        c3.metric("Time in regime", "NA" if np.isnan(tir) else f"{int(tir)}w")
+        c4.metric("Suggested action", action)
+
+        # Build subplot: top line, bottom regime strip
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2])
+        # Regime bands on top panel
+        fig.add_hrect(y0=0, y1=35, line_width=0, fillcolor="#fde2e1", opacity=0.6, row=1, col=1)
+        fig.add_hrect(y0=35, y1=65, line_width=0, fillcolor="#eef0f2", opacity=0.5, row=1, col=1)
+        fig.add_hrect(y0=65, y1=100, line_width=0, fillcolor="#e5f5ea", opacity=0.6, row=1, col=1)
+        fig.add_trace(go.Scatter(x=ri_idx.index, y=ri_idx, name="Gauge 0–100", mode="lines"), row=1, col=1)
 
         first_valid = ri_idx.first_valid_index()
         if first_valid is not None and pd.to_datetime(first_valid) > pd.to_datetime(start_date):
-            fig.add_vrect(x0=pd.to_datetime(start_date), x1=pd.to_datetime(first_valid), fillcolor="lightgray", opacity=0.15, line_width=0, annotation_text="warm‑up", annotation_position="top left")
+            fig.add_vrect(x0=pd.to_datetime(start_date), x1=pd.to_datetime(first_valid), fillcolor="lightgray", opacity=0.15, line_width=0, annotation_text="warm‑up", annotation_position="top left", row=1, col=1)
 
-        fig.update_yaxes(range=[0, 100], title_text="Reflexivity gauge")
-        fig.update_xaxes(range=[pd.to_datetime(start_date), ri_idx.index.max()], dtick="M12", tickformat="%Y", hoverformat="%b %Y", title_text="Year")
-        fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
+        # Regime strip (second row)
+        # map to 0 (self-correct), 1 (neutral), 2 (self-reinforce)
+        strip_vals = ri_idx.copy()
+        strip_vals[:] = np.where(ri_idx<=35, 0, np.where(ri_idx>=65, 2, 1))
+        fig.add_trace(go.Heatmap(
+            x=strip_vals.index,
+            z=strip_vals.values.reshape(1,-1),
+            colorscale=[[0.0, '#f8b4ad'], [0.5, '#d9dce1'], [1.0, '#a6e3b8']],
+            showscale=False,
+        ), row=2, col=1)
+
+        # Axes/format
+        fig.update_yaxes(range=[0, 100], title_text="Reflexivity gauge", row=1, col=1)
+        fig.update_yaxes(showticklabels=False, row=2, col=1)
+        fig.update_xaxes(range=[pd.to_datetime(start_date), ri_idx.index.max()], dtick="M12", tickformat="%Y", hoverformat="%b %Y", title_text="Year", row=2, col=1)
+        fig.update_layout(height=600, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
         st.plotly_chart(fig, use_container_width=True)
 
         # Factor panel — sorted bars, positive/negative colors
