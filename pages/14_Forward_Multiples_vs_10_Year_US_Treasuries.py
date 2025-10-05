@@ -1,119 +1,68 @@
 # streamlit_forward_pe_app.py
+# Requirements:
+#   pip install streamlit yahooquery yfinance requests bs4
+
 import streamlit as st
 import pandas as pd
 import numpy as np
+from typing import List, Dict, Any
 
 st.set_page_config(page_title="Forward P/E vs 10Y", layout="wide")
 st.title("Forward P/E Path vs U.S. 10Y Inverse")
 
-# ----------------------------- Helpers -----------------------------
+# ----------------------------- Fetchers -----------------------------
 @st.cache_data(ttl=300)
-def fetch_from_yahooquery(tickers: list[str]) -> pd.DataFrame:
-    try:
-        from yahooquery import Ticker
-    except Exception as e:
-        raise RuntimeError("yahooquery is required. Try: pip install yahooquery") from e
+def fetch_from_yahooquery(tickers: List[str]) -> pd.DataFrame:
+    from yahooquery import Ticker
 
     yq = Ticker(tickers, asynchronous=True)
 
-    price = yq.price
-    summary_detail = yq.summary_detail
-    key_stats = yq.key_stats
-    earnings_trend = yq.earnings_trend
+    price = yq.price or {}
+    summary_detail = yq.summary_detail or {}
+    key_stats = yq.key_stats or {}
+    earnings_trend = yq.earnings_trend or {}
+    analysis = yq.analysis or {}
 
     rows = []
     for t in tickers:
-        p = price.get(t, {}) or {}
-        sd = summary_detail.get(t, {}) or {}
-        ks = key_stats.get(t, {}) or {}
-        et = earnings_trend.get(t, {}) or {}
+        p = (price.get(t) or {})
+        sd = (summary_detail.get(t) or {})
+        ks = (key_stats.get(t) or {})
+        et = (earnings_trend.get(t) or {})
+        an = (analysis.get(t) or {})
 
-        # Current price
+        # Price
         last = p.get("regularMarketPrice") or p.get("postMarketPrice")
 
         # EPS TTM
-        eps_ttm = (
-            ks.get("trailingEps")
-            or sd.get("trailingEps")
-            or p.get("epsTrailingTwelveMonths")
-        )
+        eps_ttm = ks.get("trailingEps") or sd.get("trailingEps") or p.get("epsTrailingTwelveMonths")
 
-        # Forward EPS next year from earnings trend
+        # Forward EPS next year and long term growth
         eps_next_y = None
         growth_5y = None
         fwd_pe_next_y = sd.get("forwardPE")
 
+        # Primary: earnings_trend
         trend_list = et.get("trend") if isinstance(et.get("trend"), list) else []
         for node in trend_list:
             if str(node.get("period")).lower() in {"y+1", "nextyear"}:
                 eps_next_y = (node.get("epsTrend") or {}).get("avg")
-            # growth longTerm is a float like 0.15 for 15 percent
-            g = (et.get("growth") or {}).get("longTerm")
-            if g is not None:
-                growth_5y = g * 100.0
+        g = (et.get("growth") or {}).get("longTerm")
+        if g is not None:
+            growth_5y = float(g) * 100.0
 
-        # If forward PE missing, derive from price and forward EPS
-        if fwd_pe_next_y in (None, 0) and eps_next_y:
-            if last and eps_next_y:
-                try:
-                    fwd_pe_next_y = float(last) / float(eps_next_y)
-                except Exception:
-                    fwd_pe_next_y = None
+        # Secondary: analysis growthEstimates
+        if growth_5y is None:
+            ge = (an.get("growth_estimates") or {})
+            # Expected keys sometimes look like: {'next_5_years': {'avg': 0.15, ...}}
+            for k in ["next_5_years", "nextFiveYears", "next5Years"]:
+                node = ge.get(k)
+                if isinstance(node, dict) and node.get("avg") is not None:
+                    growth_5y = float(node["avg"]) * 100.0
+                    break
 
-        rows.append(
-            {
-                "Ticker": t,
-                "EPS_TTM": eps_ttm,
-                "EPS_nextY": eps_next_y,
-                "EPS_growth_5Y_pct": growth_5y,
-                "Fwd_PE_nextY": fwd_pe_next_y,
-                "Current_Price": last,
-            }
-        )
-
-    df = pd.DataFrame(rows).set_index("Ticker")
-    return df
-
-
-@st.cache_data(ttl=300)
-def fetch_from_yfinance(tickers: list[str]) -> pd.DataFrame:
-    # Secondary fallback for environments where yahooquery is blocked
-    import yfinance as yf
-
-    rows = []
-    for t in tickers:
-        tk = yf.Ticker(t)
-        info = {}
-        try:
-            info = tk.info or {}
-        except Exception:
-            info = {}
-        last = None
-        try:
-            last = float(tk.fast_info.last_price)
-        except Exception:
-            try:
-                last = float(info.get("regularMarketPrice"))
-            except Exception:
-                last = None
-
-        eps_ttm = info.get("trailingEps")
-        eps_next_y = info.get("forwardEps")  # note: this is next 12m EPS, often close to next fiscal Y
-        growth_5y = None
-        try:
-            trend = tk.get_earnings_trend()  # returns DataFrame in newer yfinance
-            if isinstance(trend, pd.DataFrame) and not trend.empty:
-                node = trend[trend["period"].str.lower().isin(["y+1", "nextyear"])]
-                if not node.empty and "epsTrend_avg" in node.columns:
-                    eps_next_y = node.iloc[0]["epsTrend_avg"]
-                if "growth_longTerm" in trend.columns:
-                    g = trend.iloc[0]["growth_longTerm"]
-                    growth_5y = float(g) * 100.0 if pd.notna(g) else None
-        except Exception:
-            pass
-
-        fwd_pe_next_y = info.get("forwardPE")
-        if not fwd_pe_next_y and last and eps_next_y:
+        # Derive forward PE if missing
+        if (fwd_pe_next_y in (None, 0)) and last and eps_next_y:
             try:
                 fwd_pe_next_y = float(last) / float(eps_next_y)
             except Exception:
@@ -132,16 +81,109 @@ def fetch_from_yfinance(tickers: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("Ticker")
 
 
-def fetch_live(tickers: list[str]) -> pd.DataFrame:
+@st.cache_data(ttl=300)
+def fetch_from_yfinance(tickers: List[str]) -> pd.DataFrame:
+    import yfinance as yf
+
+    rows = []
+    for t in tickers:
+        tk = yf.Ticker(t)
+        info = {}
+        try:
+            info = tk.info or {}
+        except Exception:
+            info = {}
+
+        # Price
+        last = None
+        try:
+            last = float(tk.fast_info.last_price)
+        except Exception:
+            last = info.get("regularMarketPrice")
+
+        eps_ttm = info.get("trailingEps")
+        eps_next_y = info.get("forwardEps")
+        fwd_pe_next_y = info.get("forwardPE")
+        growth_5y = None
+
+        # Try new earnings trend API if available
+        try:
+            trend = tk.get_earnings_trend()
+            if isinstance(trend, pd.DataFrame) and not trend.empty:
+                nxt = trend[trend["period"].str.lower().isin(["y+1", "nextyear"])]
+                if not nxt.empty:
+                    if "epsTrend_avg" in nxt.columns:
+                        eps_next_y = nxt.iloc[0]["epsTrend_avg"]
+                if "growth_longTerm" in trend.columns and pd.notna(trend.iloc[0]["growth_longTerm"]):
+                    growth_5y = float(trend.iloc[0]["growth_longTerm"]) * 100.0
+        except Exception:
+            pass
+
+        if (not fwd_pe_next_y) and last and eps_next_y:
+            try:
+                fwd_pe_next_y = float(last) / float(eps_next_y)
+            except Exception:
+                fwd_pe_next_y = None
+
+        rows.append(
+            {
+                "Ticker": t,
+                "EPS_TTM": eps_ttm,
+                "EPS_nextY": eps_next_y,
+                "EPS_growth_5Y_pct": growth_5y,
+                "Fwd_PE_nextY": fwd_pe_next_y,
+                "Current_Price": last,
+            }
+        )
+    return pd.DataFrame(rows).set_index("Ticker")
+
+
+@st.cache_data(ttl=3600)
+def fetch_eps_5y_from_finviz(ticker: str) -> float | None:
+    # Finviz shows "EPS next 5Y" on the quote page. Use a light HTML parse.
+    import requests
+    from bs4 import BeautifulSoup
+
+    url = f"https://finviz.com/quote.ashx?t={ticker}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=10)
+    if r.status_code != 200:
+        return None
+    soup = BeautifulSoup(r.text, "html.parser")
+    # Look for the snapshot table cells
+    cells = [c.get_text(strip=True) for c in soup.select("table.snapshot-table2 td")]
+    # Cells alternate as Label, Value
+    for i in range(0, len(cells) - 1, 2):
+        if cells[i].lower() in {"eps next 5y", "epsnext5y"}:
+            val = cells[i + 1].replace("%", "").replace(",", "")
+            try:
+                return float(val)
+            except Exception:
+                return None
+    return None
+
+
+def fill_missing_growth_with_finviz(df: pd.DataFrame) -> pd.DataFrame:
+    for t in df.index:
+        if pd.isna(df.at[t, "EPS_growth_5Y_pct"]):
+            g = fetch_eps_5y_from_finviz(t)
+            if g is not None:
+                df.at[t, "EPS_growth_5Y_pct"] = g
+    return df
+
+
+def fetch_live(tickers: List[str]) -> pd.DataFrame:
     try:
         df = fetch_from_yahooquery(tickers)
     except Exception:
         df = fetch_from_yfinance(tickers)
 
-    # Clean numeric types
+    # Clean numeric
     for c in ["EPS_TTM", "EPS_nextY", "EPS_growth_5Y_pct", "Fwd_PE_nextY", "Current_Price"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
+    # Backfill 5Y growth from Finviz if Yahoo missing
+    df = fill_missing_growth_with_finviz(df)
     return df
 
 # ----------------------------- UI -----------------------------
@@ -156,26 +198,22 @@ with st.sidebar:
         "Tickers (comma separated)",
         value="MSFT, NVDA, META, AAPL, GOOGL, AMZN, TSLA",
     )
-    keep_price_constant = st.checkbox("Freeze prices at fetch time", value=True)
-    st.caption("If unchecked, you can paste your own Current Price after fetch.")
+    allow_edit_prices = st.checkbox("Allow manual price edits after fetch", value=False)
 
 st.caption(
-    "Inputs are fetched from Yahoo Finance. EPS next Y uses Yahoo earnings trend where available. "
-    "5Y growth uses long term EPS growth from Yahoo. Forward P/E next Y comes from Yahoo or price divided by forward EPS."
+    "EPS next Y and 5Y growth are fetched from Yahoo first and backfilled from Finviz when missing. "
+    "Forward P/E next Y is from Yahoo or derived as Price divided by EPS next Y."
 )
 
 tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
-
 live_df = fetch_live(tickers)
-if not keep_price_constant:
-    # Allow user edits to price
-    pass
 
-st.subheader("Fetched Inputs")
-editable = st.data_editor(
+st.subheader("Inputs")
+df_edit = st.data_editor(
     live_df,
     use_container_width=True,
     num_rows="dynamic",
+    disabled=None if allow_edit_prices else ["Current_Price"],
     column_config={
         "EPS_TTM": st.column_config.NumberColumn("EPS (TTM)", format="%.4f"),
         "EPS_nextY": st.column_config.NumberColumn("EPS next Y", format="%.4f"),
@@ -185,7 +223,7 @@ editable = st.data_editor(
     },
 )
 
-df = editable.copy()
+df = df_edit.copy()
 
 # ----------------------------- Calculations -----------------------------
 years = [1, 2, 3, 4, 5]
@@ -231,7 +269,7 @@ st.divider()
 st.subheader("Download Results")
 out = pd.concat(
     [
-        editable,                       # possibly edited inputs
+        df_edit,
         pretty_eps.add_prefix("EPS "),
         pretty_fpe.add_prefix("Fwd P/E "),
         ce_table,
@@ -241,4 +279,4 @@ out = pd.concat(
 csv = out.to_csv(index=True).encode("utf-8")
 st.download_button("Download CSV", csv, file_name="forward_pe_vs_10y.csv", mime="text/csv")
 
-st.caption("Notes: Data quality varies by ticker. If a field is missing, edit it directly in the grid.")
+st.caption("If a growth value still shows empty, Finviz may not have it or is rate limited. Edit the cell directly when needed.")
