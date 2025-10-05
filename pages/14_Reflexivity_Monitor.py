@@ -194,6 +194,13 @@ if custom_series.strip():
             name, sid = [x.strip() for x in line.split("=", 1)]
             series_map[name] = sid
 
+# Ensure assets are defined (guard against earlier edits reordering the code)
+try:
+    _ = assets  # noqa
+except NameError:
+    assets_default = ["SPY","QQQ","IWM","HYG","XLF","XHB","XLE","GLD","BTC-USD"]
+    assets = st.sidebar.text_input("Assets (comma separated)", ",".join(assets_default)).replace(" ","").split(",")
+
 with st.spinner("Loading prices"):
     px = load_prices(assets, start=str(start_date), freq="W-FRI")
 
