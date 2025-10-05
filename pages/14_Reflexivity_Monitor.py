@@ -1,5 +1,5 @@
 # reflexivity_monitor.py
-# Streamlit page: Reflexivity Monitor (Soros)
+# Streamlit page: Reflexivity Monitor
 # FRED pulls: try fredapi, fallback to pandas_datareader (no key needed).
 # Weekly computation only. Visual polish: regime bands, action badges, sorted factor bars, clearer hover.
 
@@ -160,7 +160,7 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
 
 
 # ---------------- UI ----------------
-st.title("Reflexivity Monitor (Soros)")
+st.title("Reflexivity Monitor")
 st.caption("Quantify when prices are feeding back into fundamentals. Output is a real-time reflexivity intensity index for position sizing and reversal timing.")
 
 # Sidebar
