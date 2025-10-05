@@ -235,7 +235,15 @@ for i, tkr in enumerate(valid_assets):
         ri_idx = (50 + 15*ri_z).clip(0, 100)
         c1, c2 = st.columns([2,1])
         with c1:
-            st.line_chart(pd.DataFrame({"ReflexivityIntensity": ri, "Gauge": ri_idx}, index=ri.index))
+            # Plot only the 0-100 gauge with regime bands, yearly ticks
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=ri.index, y=ri_idx, name="Gauge 0-100", mode="lines"))
+            fig.add_hline(y=65, line_dash="dash", line_color="gray", opacity=0.5)
+            fig.add_hline(y=35, line_dash="dash", line_color="gray", opacity=0.5)
+            fig.update_yaxes(range=[0,100], title_text="Reflexivity gauge")
+            fig.update_xaxes(dtick="M12", tickformat="%Y", title_text="Year")
+            fig.update_layout(height=360, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h"))
+            st.plotly_chart(fig, use_container_width=True)
         with c2:
             latest_val = float(ri_idx.dropna().iloc[-1]) if not ri_idx.dropna().empty else np.nan
             st.metric(label=f"{tkr} latest reflexivity", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA")
