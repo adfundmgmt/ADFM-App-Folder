@@ -113,14 +113,23 @@ def rolling_lead_corr(asset_ret: pd.Series, fund_delta: pd.Series, window=52, le
     return aligned[fund_delta.name].rolling(window).corr(aligned[r_fwd.name])
 
 def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, params: dict):
+    """
+    Build reflexivity score using rolling correlations between price returns and
+    *lag-matched* fundamental changes. To avoid zero-variance windows (e.g.,
+    monthly series forward-filled to weekly), compute dF as a diff over the
+    same step as the tested lag.
+    """
     r = asset_px.pct_change().rename("ret")
     scores, meta = [], []
+    window = params.get("window", 52)
+    lags = params.get("lags", [4, 12])
     for fcol in fundamentals.columns:
         f = fundamentals[fcol].rename(fcol)
-        dF = f.diff().rename(f"d_{fcol}")
-        for lag in params.get("lags", [4, 12]):  # in steps (weeks by default)
-            rc = rolling_lag_corr(r, dF, window=params.get("window", 52), lag_steps=lag)
-            fc = rolling_lead_corr(r, dF, window=params.get("window", 52), lead_steps=lag)
+        for lag in lags:
+            # change over the lag step to inject variance for monthly series
+            dF = f.diff(int(lag)).rename(f"d_{fcol}")
+            rc = rolling_lag_corr(r, dF, window=window, lag_steps=int(lag))
+            fc = rolling_lead_corr(r, dF, window=window, lead_steps=int(lag))
             spread = rc - fc
             spread.name = f"spread_{fcol}_{lag}"
             scores.append(spread)
@@ -128,7 +137,11 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
     if not scores:
         return pd.Series(dtype=float), pd.DataFrame()
     S = pd.concat(scores, axis=1)
-    w = np.array([params.get("factor_weights", {}).get(m["factor"], 1.0) for m in meta], dtype=float)
+    # Drop columns that are entirely NaN to prevent empty last-row errors
+    S = S.dropna(axis=1, how="all")
+    if S.empty:
+        return pd.Series(dtype=float), pd.DataFrame()
+    w = np.array([params.get("factor_weights", {}).get(m["factor"], 1.0) for m in meta if f"spread_{m['factor']}_{m['lag']}" in S.columns], dtype=float)
     w = w / (w.sum() if w.sum() != 0 else 1.0)
     Z = S.apply(_zscore)
     composite = (Z @ w).rename("ReflexivityIntensity")
