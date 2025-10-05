@@ -180,8 +180,8 @@ assets = st.sidebar.text_input("Assets (comma separated)", ",".join(assets_defau
 
 # Windows and lags in steps of chosen frequency
 if use_weekly:
-    window = st.sidebar.number_input("Rolling window (weeks)", 26, 156, 52, step=4)
-    sel_lags = st.sidebar.multiselect("Lead/Lag steps", [4, 12, 26], [4, 12])
+    window = st.sidebar.number_input("Rolling window (weeks)", 20, 156, 26, step=2)
+    sel_lags = st.sidebar.multiselect("Lead/Lag steps", [2, 4, 8, 12, 26], [4, 8, 12])
     freq_str = "W-FRI"
 else:
     window = st.sidebar.number_input("Rolling window (days)", 60, 252, 126, step=21)
@@ -251,21 +251,24 @@ for i, tkr in enumerate(valid_assets):
             continue
         ri_z = _zscore(ri)
         ri_idx = (50 + 15*ri_z).clip(0, 100)
-        c1, c2 = st.columns([2,1])
-        with c1:
-            # Plot only the 0-100 gauge with regime bands, yearly ticks
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=ri.index, y=ri_idx, name="Gauge 0-100", mode="lines"))
-            fig.add_hline(y=65, line_dash="dash", line_color="gray", opacity=0.5)
-            fig.add_hline(y=35, line_dash="dash", line_color="gray", opacity=0.5)
-            fig.update_yaxes(range=[0,100], title_text="Reflexivity gauge")
-            fig.update_xaxes(dtick="M12", tickformat="%Y", title_text="Year")
-            fig.update_layout(height=360, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h"))
-            st.plotly_chart(fig, use_container_width=True)
-        with c2:
-            latest_val = float(ri_idx.dropna().iloc[-1]) if not ri_idx.dropna().empty else np.nan
-            st.metric(label=f"{tkr} latest reflexivity", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA")
-            st.caption("0 to 100 scale. >65 self reinforcing, 35-65 neutral, <35 self correcting.")
+        # KPI on top, then a full-width chart
+latest_val = float(ri_idx.dropna().iloc[-1]) if not ri_idx.dropna().empty else np.nan
+st.metric(label=f"{tkr} reflexivity (0–100)", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA")
+
+# Build plot: full width, yearly ticks, show warm-up shading so the x-axis starts at chosen start date
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ri_idx.index, y=ri_idx, name="Gauge 0-100", mode="lines"))
+fig.add_hline(y=65, line_dash="dash", line_color="gray", opacity=0.5)
+fig.add_hline(y=35, line_dash="dash", line_color="gray", opacity=0.5)
+
+first_valid = ri_idx.first_valid_index()
+if first_valid is not None and pd.to_datetime(first_valid) > pd.to_datetime(start_date):
+    fig.add_vrect(x0=pd.to_datetime(start_date), x1=pd.to_datetime(first_valid), fillcolor="lightgray", opacity=0.15, line_width=0, annotation_text="warm‑up", annotation_position="top left")
+
+fig.update_yaxes(range=[0,100], title_text="Reflexivity gauge")
+fig.update_xaxes(range=[pd.to_datetime(start_date), ri_idx.index.max()], dtick="M12", tickformat="%Y", title_text="Year")
+fig.update_layout(height=520, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h"))
+st.plotly_chart(fig, use_container_width=True)
         with st.expander("Factor contributions (latest)"):
             if not details.empty:
                 det_nonan = details.dropna(how="all")
