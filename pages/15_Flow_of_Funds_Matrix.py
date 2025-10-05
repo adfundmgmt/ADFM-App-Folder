@@ -1,5 +1,5 @@
 # 15_Flow_of_Funds_Matrix.py
-# Flow of Funds Matrix (Druckenmiller) — allocator-ready with:
+# Flow of Funds Matrix:
 # - Sidebar description
 # - Annualized/weekly toggle, significance hints, stability score
 # - Liquidity Pulse starts at selected start date with adaptive date ticks
@@ -122,8 +122,8 @@ def choose_dtick_and_format(x_index: pd.DatetimeIndex):
         return "M12", "%Y"
 
 # ---------------- UI ----------------
-st.set_page_config(page_title="Flow of Funds Matrix (Druckenmiller)", layout="wide")
-st.title("Flow of Funds Matrix (Druckenmiller)")
+st.set_page_config(page_title="Flow of Funds Matrix", layout="wide")
+st.title("Flow of Funds Matrix")
 
 with st.sidebar:
     st.header("About")
