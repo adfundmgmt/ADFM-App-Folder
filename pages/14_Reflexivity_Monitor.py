@@ -1,23 +1,24 @@
 # reflexivity_monitor.py
 # Streamlit page: Reflexivity Monitor (Soros)
-# Purpose: quantify when price action is feeding back into fundamentals and produce a reflexivity intensity index
+# Pulls FRED data via fredapi if available, else falls back to pandas_datareader.
+# Purpose: quantify when price action is feeding back into fundamentals and produce a reflexivity intensity index.
 
 import os
 from datetime import datetime
-
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-# Try to import fredapi and pull key from either st.secrets or env
+# Try to import fredapi and pandas_datareader
 FRED_AVAILABLE = False
 FRED = None
+
 try:
     from fredapi import Fred
     fred_key = None
     try:
-        fred_key = st.secrets.get("FRED_API_KEY", None)  # Streamlit Cloud secrets
+        fred_key = st.secrets.get("FRED_API_KEY", None)
     except Exception:
         fred_key = None
     if fred_key is None:
@@ -25,7 +26,9 @@ try:
     FRED = Fred(api_key=fred_key) if fred_key else Fred()
     FRED_AVAILABLE = True
 except Exception:
-    FRED_AVAILABLE = False
+    pass
+
+from pandas_datareader import data as pdr
 
 # -----------------------------
 # Helpers
@@ -45,24 +48,36 @@ def load_prices(tickers, start="2005-01-01"):
 
 @st.cache_data(show_spinner=False)
 def load_fred_series(series_map: dict, start="2005-01-01"):
-    if not FRED_AVAILABLE:
-        return pd.DataFrame()
     frames = []
-    for name, sid in series_map.items():
+    # Try fredapi first, fallback to pandas_datareader
+    if FRED_AVAILABLE:
         try:
-            s = FRED.get_series(sid)
+            for name, sid in series_map.items():
+                s = FRED.get_series(sid)
+                s.name = name
+                frames.append(s.to_frame())
+            if frames:
+                df = pd.concat(frames, axis=1)
+                df = df.loc[pd.to_datetime(start):]
+                daily = pd.date_range(df.index.min(), pd.Timestamp.today().normalize(), freq="B")
+                df = df.reindex(daily).ffill()
+                return df
+        except Exception:
+            pass
+    # Fallback to pandas_datareader (no API key needed)
+    try:
+        for name, sid in series_map.items():
+            s = pdr.DataReader(sid, "fred", start)[sid]
             s.name = name
             frames.append(s.to_frame())
-        except Exception:
-            continue
-    if not frames:
+        if frames:
+            df = pd.concat(frames, axis=1)
+            daily = pd.date_range(df.index.min(), pd.Timestamp.today().normalize(), freq="B")
+            df = df.reindex(daily).ffill()
+            return df
+    except Exception:
         return pd.DataFrame()
-    df = pd.concat(frames, axis=1)
-    df = df.loc[pd.to_datetime(start):]
-    # Business daily index for alignment
-    daily = pd.date_range(df.index.min(), pd.Timestamp.today().normalize(), freq="B")
-    df = df.reindex(daily).ffill()
-    return df
+    return pd.DataFrame()
 
 def net_liquidity(df):
     need = ["WALCL","RRPONTSYD","WTREGEN"]
@@ -80,7 +95,6 @@ def real_yield(df):
     return pd.Series(dtype=float)
 
 def growth_yoy(s: pd.Series, months=12):
-    # Proxy monthly to trading days bridge at ~21 d/month
     return s.pct_change(int(months*21))
 
 def rolling_lag_corr(asset_ret: pd.Series, fund_delta: pd.Series, window=126, lag_days=21):
@@ -114,7 +128,6 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
     if not scores:
         return pd.Series(dtype=float), pd.DataFrame()
     S = pd.concat(scores, axis=1)
-    # weights
     w = np.array([params.get("factor_weights", {}).get(m["factor"], 1.0) for m in meta], dtype=float)
     w = w / (w.sum() if w.sum() != 0 else 1.0)
     Z = S.apply(_zscore)
@@ -127,18 +140,6 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
 
 st.title("Reflexivity Monitor (Soros)")
 st.caption("Quantify when prices are feeding back into fundamentals. Output is a real time reflexivity intensity index for position sizing and reversal timing.")
-
-if not FRED_AVAILABLE:
-    with st.container(border=True):
-        st.warning("fredapi not available or API key missing. Install fredapi and set FRED_API_KEY to enable FRED pulls.")
-        st.markdown(
-            """
-**Setup**
-1) `pip install fredapi`
-2) Create a free key at FRED → API Keys
-3) Set `FRED_API_KEY` in Streamlit Secrets or environment and reload
-"""
-        )
 
 st.sidebar.header("Settings")
 start_date = st.sidebar.date_input("Start date", pd.to_datetime("2010-01-01"))
@@ -175,15 +176,12 @@ with st.spinner("Loading FRED series"):
 fund = pd.DataFrame(index=px.index)
 if not fred_df.empty:
     fred_df = fred_df.reindex(px.index).ffill()
-    # Liquidity
     tmp_nl = net_liquidity(fred_df)
     if not tmp_nl.empty:
         fund["NetLiquidity"] = tmp_nl
-    # Real yield
     tmp_ry = real_yield(fred_df)
     if not tmp_ry.empty:
         fund["Real10y"] = tmp_ry
-    # Credit, Money, Activity
     if "HY_OAS" in fred_df:
         fund["HY_OAS"] = fred_df["HY_OAS"]
     if "M2SL" in fred_df:
@@ -193,14 +191,7 @@ if not fred_df.empty:
 
 fund = fund.ffill()
 
-# Factor weights (edit later as needed)
-base_weights = {
-    "NetLiquidity": 1.25,
-    "Real10y": 1.0,
-    "HY_OAS": 1.25,
-    "M2_YoY": 0.75,
-    "INDPRO_YoY": 0.75,
-}
+base_weights = {"NetLiquidity": 1.25, "Real10y": 1.0, "HY_OAS": 1.25, "M2_YoY": 0.75, "INDPRO_YoY": 0.75}
 params = {"lags": lags, "window": int(window), "factor_weights": base_weights}
 
 st.subheader("Reflexivity intensity by asset")
@@ -253,7 +244,7 @@ st.markdown(
 - Z score and weight by liquidity sensitivity to produce a composite reflexivity intensity index
 
 **Caveats**
-- Use ALFRED vintages if you want real time data without revisions
+- Uses fredapi if available, else pandas_datareader fallback (no key required)
 - Series have different frequencies. We daily align with forward fill to avoid lookahead
 - This is a meta signal to size risk and to spot parabolic feedback loops. It is not a day trading signal
 """
