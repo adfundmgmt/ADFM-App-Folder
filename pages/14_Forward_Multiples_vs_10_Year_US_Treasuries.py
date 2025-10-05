@@ -1,199 +1,94 @@
-# finviz_forward_pe_app.py
-# Requirements: streamlit, requests, pandas, numpy
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import re, time, requests
+import streamlit as st, pandas as pd, numpy as np, requests, re, time, yfinance as yf
 
 st.set_page_config(page_title="Forward P/E vs 10Y", layout="wide")
 
-st.markdown("""
-<style>
-.dataframe tbody td { padding:6px 8px!important; }
-.dataframe thead th { padding:6px 8px!important; font-weight:600; }
-.block-container { padding-top:1rem; padding-bottom:2rem; }
-.kpi { border:1px solid #e6e6e6; border-radius:12px; padding:14px; background:#fff; }
-.badge { padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
-.badge.green { background:#d9f2e4; color:#146c2e; }
-.badge.red { background:#f9d5d0; color:#7a1c15; }
-.small { color:#666; font-size:12px; }
-.section-title { font-size:18px; font-weight:700; margin:12px 0 6px 0; }
-</style>
-""", unsafe_allow_html=True)
+UA = {"User-Agent":"Mozilla/5.0"}
+FIELDS = ["Price","EPS_TTM","EPS_nextY","EPS_growth_5Y_pct","Fwd_PE_nextY"]
 
-st.title("Forward P/E vs U.S. 10Y Inverse")
-
-UA = {"User-Agent": "Mozilla/5.0"}
-CANON_COLS = ["Price","EPS_TTM","EPS_nextY","EPS_growth_5Y_pct","Fwd_PE_nextY"]
-
-def _num(x):
-    try: return float(x)
+def safe_float(x):
+    try: return float(x.replace("%","").replace(",",""))
     except: return np.nan
 
 @st.cache_data(ttl=600)
-def finviz_parse(ticker: str) -> dict:
-    """Parse Finviz snapshot table into canonical fields. Always returns all keys."""
-    url = f"https://finviz.com/quote.ashx?t={ticker}"
-    r = requests.get(url, headers=UA, timeout=10)
-    out = {"Ticker": ticker, "Price": np.nan, "EPS_TTM": np.nan,
-           "EPS_nextY": np.nan, "EPS_growth_5Y_pct": np.nan, "Fwd_PE_nextY": np.nan}
-    if r.status_code != 200:
-        return out
-
-    html = r.text
-
-    # Pull the snapshot table cells
-    cells = re.findall(r'<td[^>]*>(.*?)</td>', html, flags=re.I|re.S)
-    # Normalize to label -> value dict
-    pairs = {}
-    for i in range(0, len(cells)-1, 2):
-        label = re.sub(r'<.*?>', '', cells[i]).strip()
-        value = re.sub(r'<.*?>', '', cells[i+1]).strip()
-        if label:
-            pairs[label.lower()] = value
-
-    # Map common label variants to canonical keys
-    def clean_pct(s):
-        return _num(s.replace('%','').replace(',','')) if isinstance(s,str) else np.nan
-    def clean_num(s):
-        return _num(s.replace(',','')) if isinstance(s,str) else np.nan
-
-    # Price
-    for key in ["price"]:
-        if key in pairs:
-            out["Price"] = clean_num(pairs[key]); break
-
-    # EPS TTM
-    for key in ["eps (ttm)", "epsttm", "eps ttm"]:
-        if key in pairs:
-            out["EPS_TTM"] = clean_num(pairs[key]); break
-
-    # EPS next Y
-    for key in ["eps next y", "eps next year", "epsnexty"]:
-        if key in pairs:
-            out["EPS_nextY"] = clean_num(pairs[key]); break
-
-    # EPS next 5Y
-    for key in ["eps next 5y", "eps next 5 y", "epsnext5y"]:
-        if key in pairs:
-            out["EPS_growth_5Y_pct"] = clean_pct(pairs[key]); break
-
-    # Forward P/E
-    for key in ["forward p/e", "forward pe", "forward p⁄e"]:
-        if key in pairs:
-            out["Fwd_PE_nextY"] = clean_num(pairs[key]); break
-
-    return out
+def finviz_fetch(ticker):
+    url=f"https://finviz.com/quote.ashx?t={ticker}"
+    r=requests.get(url,headers=UA,timeout=10)
+    if r.status_code!=200: return None
+    html=r.text
+    if "P/E" not in html: return None  # page likely blocked
+    data={}
+    for lbl, key in [
+        ("Price","Price"),
+        ("EPS (ttm)","EPS_TTM"),
+        ("EPS next Y","EPS_nextY"),
+        ("EPS next 5Y","EPS_growth_5Y_pct"),
+        ("Forward P/E","Fwd_PE_nextY")
+    ]:
+        m=re.search(rf"{lbl}.*?</td>\s*<td[^>]*>(.*?)</td>",html,re.I|re.S)
+        if m:
+            val=re.sub(r"<.*?>","",m.group(1)).strip()
+            data[key]=safe_float(val)
+    return data if data else None
 
 @st.cache_data(ttl=600)
-def fetch_finviz_batch(tickers):
-    rows = []
+def get_batch(tickers):
+    rows=[]
     for t in tickers:
-        try:
-            rows.append(finviz_parse(t))
-            time.sleep(0.15)  # polite throttling
-        except Exception:
-            rows.append({"Ticker": t})
-    df = pd.DataFrame(rows).set_index("Ticker")
-
-    # Force canonical columns so downstream never KeyErrors
-    for c in CANON_COLS:
-        if c not in df.columns:
-            df[c] = np.nan
-    df = df[CANON_COLS]
-
-    # Safe numeric cast
-    for c in CANON_COLS:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+        info=finviz_fetch(t)
+        if not info:
+            try:
+                y=yf.Ticker(t)
+                info={"Price":y.fast_info["last_price"]}
+            except Exception:
+                info={"Price":np.nan}
+        info["Ticker"]=t
+        rows.append(info)
+        time.sleep(0.25)
+    df=pd.DataFrame(rows).set_index("Ticker")
+    for c in FIELDS:
+        if c not in df: df[c]=np.nan
+        df[c]=pd.to_numeric(df[c],errors="coerce")
     return df
 
 # Sidebar
 with st.sidebar:
     st.subheader("Settings")
-    ten_year = st.number_input("U.S. 10Y Treasury yield (%)", value=4.12, step=0.01, format="%.2f")
-    inv_pe = 100.0 / ten_year if ten_year > 0 else np.nan
-    st.metric("10Y Inverse P/E", f"{inv_pe:,.2f}x")
+    ten_year=st.number_input("U.S. 10Y Treasury yield (%)",value=4.12,step=0.01)
+    inv_pe=100/ten_year if ten_year>0 else np.nan
+    st.metric("10Y Inverse P/E",f"{inv_pe:,.2f}x")
+    tickers=st.text_input("Tickers","MSFT,NVDA,META,AAPL,GOOGL,AMZN,TSLA").upper().split(",")
 
-    st.subheader("Universe")
-    tickers_input = st.text_input("Tickers", value="MSFT, NVDA, META, AAPL, GOOGL, AMZN, TSLA")
+df=get_batch([t.strip() for t in tickers if t.strip()])
 
-tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
-df = fetch_finviz_batch(tickers)
+# compute
+for y in range(1,6):
+    if y==1: df[f"EPS_Y{y}"]=df["EPS_nextY"]
+    else: df[f"EPS_Y{y}"]=df[f"EPS_Y{y-1}"]*(1+df["EPS_growth_5Y_pct"].fillna(0)/100)
+    df[f"FwdPE_Y{y}"]=df["Price"]/df[f"EPS_Y{y}"]
+threshold=inv_pe
+def tag(v): return "Cheap" if v<=threshold else "Expensive" if not pd.isna(v) else ""
 
-# Projections
-years = [1,2,3,4,5]
-for y in years:
-    if y == 1:
-        df[f"EPS_Y{y}"] = df["EPS_nextY"]
-    else:
-        g = df["EPS_growth_5Y_pct"].fillna(0) / 100.0
-        df[f"EPS_Y{y}"] = df[f"EPS_Y{y-1}"] * (1 + g)
-for y in years:
-    df[f"FwdPE_Y{y}"] = df["Price"] / df[f"EPS_Y{y}"]
-
-threshold = inv_pe
-def ce_flag(v):
-    if pd.isna(v): return ""
-    return "Cheap" if v <= threshold else "Expensive"
-ce_tbl = pd.DataFrame(index=df.index)
-for y in [1,2,3]:
-    ce_tbl[f"Year {y}"] = df[f"FwdPE_Y{y}"].apply(ce_flag)
-
-# KPI cards
-cols = st.columns(len(df.index))
-for i, t in enumerate(df.index):
+# KPIs
+cols=st.columns(len(df))
+for i,t in enumerate(df.index):
     with cols[i]:
-        price = df.at[t, "Price"]
-        fwd1  = df.at[t, "FwdPE_Y1"]
-        label = ce_tbl.at[t, "Year 1"] or "N/A"
-        tag = "green" if label == "Cheap" else "red"
+        price=df.at[t,"Price"]
+        f1=df.at[t,"FwdPE_Y1"]
+        label=tag(f1)
+        color="green" if label=="Cheap" else "red"
         st.markdown(f"""
-        <div class="kpi">
-          <div style="font-size:15px;font-weight:700;margin-bottom:4px">{t}</div>
-          <div class="small">Price</div>
-          <div style="font-size:20px;font-weight:700">${price if not pd.isna(price) else 0:,.2f}</div>
-          <div class="small" style="margin-top:6px">Forward P/E Y1</div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <div style="font-size:20px;font-weight:700">{fwd1 if not pd.isna(fwd1) else 0:.2f}x</div>
-            <span class="badge {tag}">{label}</span>
-          </div>
+        <div style="border:1px solid #ddd;border-radius:10px;padding:14px;">
+        <b>{t}</b><br>
+        <span class='small'>Price</span><br>
+        <b>${price:,.2f}</b><br>
+        <span class='small'>Forward P/E Y1</span><br>
+        <b>{f1 if not np.isnan(f1) else 0:.2f}x</b>
+        <span style='color:{'green' if color=='green' else 'crimson'}'> {label}</span>
         </div>
-        """, unsafe_allow_html=True)
-
-st.caption("Cheap or Expensive judged versus the 10Y inverse P/E above.")
+        """,unsafe_allow_html=True)
 
 # Tables
-st.markdown('<div class="section-title">Inputs from Finviz</div>', unsafe_allow_html=True)
-inputs_tbl = df[["Price","EPS_TTM","EPS_nextY","EPS_growth_5Y_pct","Fwd_PE_nextY"]].rename(columns={
-    "Price":"Current Price",
-    "EPS_TTM":"EPS (TTM)",
-    "EPS_nextY":"EPS next Y",
-    "EPS_growth_5Y_pct":"EPS growth next 5Y (%)",
-    "Fwd_PE_nextY":"Forward P/E (next Y)"
-})
-st.dataframe(inputs_tbl.style.format({
-    "Current Price":"${:,.2f}",
-    "EPS (TTM)":"{:.2f}",
-    "EPS next Y":"{:.2f}",
-    "EPS growth next 5Y (%)":"{:.2f}",
-    "Forward P/E (next Y)":"{:.2f}",
-}), use_container_width=True)
-
-st.markdown('<div class="section-title">Forward P/E Path (constant price)</div>', unsafe_allow_html=True)
-pe_tbl = df[[f"FwdPE_Y{y}" for y in years]].copy()
-pe_tbl.columns = [f"Year {y}" for y in years]
-def color(v):
-    if pd.isna(v): return ""
-    return "background-color:#d9f2e4" if v <= threshold else "background-color:#f9d5d0"
-st.dataframe(pe_tbl.style.format("{:.2f}x").applymap(color), use_container_width=True)
-
-st.markdown('<div class="section-title">Cheap or Expensive Summary</div>', unsafe_allow_html=True)
-st.dataframe(
-    ce_tbl.style.apply(lambda s: ["background-color:#d9f2e4" if v=="Cheap" else "background-color:#f9d5d0" for v in s], axis=1),
-    use_container_width=True
-)
-
-# Export
-out = pd.concat([df, ce_tbl.add_prefix("CE_")], axis=1)
-st.download_button("Download CSV", out.to_csv().encode("utf-8"), file_name="forward_pe_finviz.csv")
+st.subheader("Inputs (Finviz)")
+st.dataframe(df[FIELDS],use_container_width=True)
+st.subheader("Forward P/E Path")
+st.dataframe(df[[f"FwdPE_Y{y}" for y in range(1,6)]].style.format("{:.2f}x"),use_container_width=True)
