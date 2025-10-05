@@ -166,27 +166,15 @@ st.sidebar.markdown(
 - **35–65** → neutral; follow base process.
 - **< 35** → self‑correcting; prioritize mean‑reversion / reduce beta.
 
-Weekly mode is default for speed; daily is available in the settings.
+We compute at **weekly frequency** for stability and speed.
 """
 )
 
 st.sidebar.header("Settings")
 start_date = st.sidebar.date_input("Start date", pd.to_datetime("2015-01-01"))
-freq = st.sidebar.selectbox("Computation frequency", ["Weekly (fast)", "Daily (slow)"] , index=0)
-use_weekly = freq.startswith("Weekly")
-
-assets_default = ["SPY","QQQ","IWM","HYG","XLF","XHB","XLE","GLD","BTC-USD"]
-assets = st.sidebar.text_input("Assets (comma separated)", ",".join(assets_default)).replace(" ","").split(",")
-
-# Windows and lags in steps of chosen frequency
-if use_weekly:
-    window = st.sidebar.number_input("Rolling window (weeks)", 20, 156, 26, step=2)
-    sel_lags = st.sidebar.multiselect("Lead/Lag steps", [2, 4, 8, 12, 26], [4, 8, 12])
-    freq_str = "W-FRI"
-else:
-    window = st.sidebar.number_input("Rolling window (days)", 60, 252, 126, step=21)
-    sel_lags = st.sidebar.multiselect("Lead/Lag steps (days)", [21, 63, 126], [21, 63])
-    freq_str = None
+# Weekly-only settings for speed and consistency
+window = st.sidebar.number_input("Rolling window (weeks)", 20, 156, 26, step=2)
+sel_lags = st.sidebar.multiselect("Lead/Lag steps (weeks)", [2, 4, 8, 12, 26], [4, 8, 12])
 
 st.sidebar.subheader("FRED series")
 series_map = {
@@ -207,10 +195,10 @@ if custom_series.strip():
             series_map[name] = sid
 
 with st.spinner("Loading prices"):
-    px = load_prices(assets, start=str(start_date), freq=freq_str)
+    px = load_prices(assets, start=str(start_date), freq="W-FRI")
 
 with st.spinner("Loading FRED series"):
-    fred_df = load_fred_series(series_map, start=str(start_date), freq=freq_str or "W-FRI")
+    fred_df = load_fred_series(series_map, start=str(start_date), freq="W-FRI")
 
 # Fundamentals
 fund = pd.DataFrame(index=px.index)
@@ -225,9 +213,9 @@ if not fred_df.empty:
     if "HY_OAS" in fred_df:
         fund["HY_OAS"] = fred_df["HY_OAS"]
     if "M2SL" in fred_df:
-        fund["M2_YoY"] = growth_yoy(fred_df["M2SL"], freq_weeks=use_weekly)
+        fund["M2_YoY"] = growth_yoy(fred_df["M2SL"], freq_weeks=True)
     if "INDPRO" in fred_df:
-        fund["INDPRO_YoY"] = growth_yoy(fred_df["INDPRO"], freq_weeks=use_weekly)
+        fund["INDPRO_YoY"] = growth_yoy(fred_df["INDPRO"], freq_weeks=True)
 
 fund = fund.ffill()
 
@@ -280,6 +268,7 @@ for i, tkr in enumerate(valid_assets):
             range=[pd.to_datetime(start_date), ri_idx.index.max()],
             dtick="M12",
             tickformat="%Y",
+            hoverformat="%b %Y",
             title_text="Year",
         )
         fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
@@ -318,7 +307,7 @@ st.divider()
 st.subheader("Notes")
 st.markdown(
     """
-- Weekly frequency is the default for speed and stability; switch to Daily if needed.
+- Computation is **weekly** for stability and speed.
 - FRED fetching tries fredapi first, then falls back to pandas_datareader with no key.
 - Fundamentals are forward-filled and aligned to the chosen frequency to avoid lookahead.
 - The score compares price→future fundamentals vs fundamentals→future price. Positive spread implies reflexive loop.
