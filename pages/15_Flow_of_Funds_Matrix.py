@@ -70,29 +70,10 @@ def load_fred(series_map: dict, start="2005-01-01", freq="W-FRI"):
     return df
 
 def zscore(s: pd.Series):
-    return (s - s.mean()) / (s.std(ddof=0) + 1e-9)
-
-def ols_beta(y: pd.Series, X: pd.DataFrame):
-    # returns betas, t-stats, R^2 using last valid window
-    df = pd.concat([y, X], axis=1).dropna()
-    if len(df) < max(40, X.shape[1] * 8):
-        return None, None, np.nan
-    Y = df.iloc[:, 0].values.reshape(-1, 1)
-    Xmat = np.column_stack([np.ones(len(df)), df.iloc[:, 1:].values])
-    # OLS (no regularization)
-    beta = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
-    yhat = Xmat @ beta
-    resid = (Y.flatten() - yhat)
-    s2 = (resid @ resid) / (len(df) - Xmat.shape[1])
-    cov = s2 * np.linalg.inv(Xmat.T @ Xmat)
-    se = np.sqrt(np.diag(cov))
-    tstats = beta / se
-    r2 = 1.0 - (resid @ resid) / (((Y - Y.mean()) ** 2).sum())
-    # drop intercept from outputs
-    names = ["Intercept"] + list(df.columns[1:])
-    betas = pd.Series(beta, index=names).drop("Intercept")
-    tser = pd.Series(tstats, index=names).drop("Intercept")
-    return betas, tser, float(r2)
+    std = s.std(ddof=0)
+    if not np.isfinite(std) or std == 0:
+        return pd.Series(index=s.index, dtype=float)
+    return (s - s.mean()) / (std + 1e-9)
 
 # ---------------- UI ----------------
 st.set_page_config(page_title="Flow of Funds Matrix (Druckenmiller)", layout="wide")
@@ -112,7 +93,6 @@ with st.sidebar:
 
 We build **4w and 8w deltas** of each, standardize, and regress asset returns on these shocks.
 **Liquidity beta** = sum of positive-flow betas (sign-corrected). Higher = more elastic to liquidity.
-
 """
     )
     st.header("Settings")
@@ -135,12 +115,7 @@ We build **4w and 8w deltas** of each, standardize, and regress asset returns on
     extra = st.text_area("Extra FRED series (name=ID per line)", value="", height=120)
 
 # Base FRED map
-fred_map = {
-    "WALCL": "WALCL",
-    "RRPONTSYD": "RRPONTSYD",
-    "WTREGEN": "WTREGEN",  # TGA proxy (weekly)
-}
-# Parse user-provided FRED ids
+fred_map = {"WALCL": "WALCL", "RRPONTSYD": "RRPONTSYD", "WTREGEN": "WTREGEN"}  # TGA proxy (weekly)
 if extra.strip():
     for line in extra.splitlines():
         if "=" in line:
@@ -159,71 +134,112 @@ if px.empty:
 fund = pd.DataFrame(index=px.index)
 if not fred.empty:
     fred = fred.reindex(px.index).ffill()
-    # Core flows
     if {"WALCL", "RRPONTSYD", "WTREGEN"}.issubset(fred.columns):
         fund["Fed_NetLiq"] = fred["WALCL"] - fred["RRPONTSYD"] - fred["WTREGEN"]
-        # TGA drain (higher WTREGEN = less market liquidity) -> use negative sign so "more drain" is negative liquidity
-        fund["TGA_Drain"] = -fred["WTREGEN"]
-    # Optional FX reserves (user must provide series like CHN_RES, JPN_RES)
+        fund["TGA_Drain"] = -fred["WTREGEN"]  # more drain => negative liquidity
     fx_cols = [c for c in fred.columns if c.upper().startswith(("CHN", "JPN")) or c.endswith("_RES")]
     if fx_cols:
         fund["FX_Reserves"] = fred[fx_cols].sum(axis=1)
 
-# Only keep selected flows
 flow_cols = [c for c in ["Fed_NetLiq","FX_Reserves","TGA_Drain"] if (c in fund.columns and c in use_flows)]
 if not flow_cols:
     st.error("No flow series available. Add FX reserve IDs or include Fed/TGA.")
     st.stop()
 
-# Build flow deltas (4w/8w), standardized
+# ---------------- Build flow deltas (4w/8w), standardized ----------------
 flows = {}
 for c in flow_cols:
     for h in horizons:
         d = fund[c] - fund[c].shift(h)
         flows[f"{c}_d{h}w"] = zscore(d)
 
-X = pd.DataFrame(flows).dropna(how="all")
-# Asset returns (weekly)
-rets = np.log(px).diff()
-rets = rets.reindex(X.index).dropna(how="all")
+X_raw = pd.DataFrame(flows)
 
-# Align for rolling regression window
-def last_window(df, n):
-    return df.iloc[-n:] if len(df) >= n else df
+# Drop factor columns with too few valid rows
+min_factor_rows = 40
+valid_cols = [c for c in X_raw.columns if X_raw[c].notna().sum() >= min_factor_rows]
+X_raw = X_raw[valid_cols]
 
-Xw = last_window(X, int(reg_window))
-retsw = last_window(rets, int(reg_window))
-common_idx = Xw.index.intersection(retsw.index)
-Xw = Xw.loc[common_idx]
-retsw = retsw.loc[common_idx]
+# Asset returns (weekly log)
+rets_raw = np.log(px).diff()
+
+# Align
+X_aligned = X_raw.dropna(how="all")
+rets_aligned = rets_raw.reindex(X_aligned.index).dropna(how="all")
+
+common_idx = X_aligned.index.intersection(rets_aligned.index)
+X_aligned = X_aligned.loc[common_idx]
+rets_aligned = rets_aligned.loc[common_idx]
+
+avail = len(common_idx)
+min_needed = max(40, max(1, len(valid_cols)) * 8)
+eff_window = min(int(reg_window), avail)
+
+# If thin, auto-relax to only 4w deltas (more rows survive differencing)
+if eff_window < min_needed and 8 in horizons:
+    horizons = [4]
+    flows = {}
+    for c in flow_cols:
+        d = fund[c] - fund[c].shift(4)
+        flows[f"{c}_d4w"] = zscore(d)
+    X_aligned = pd.DataFrame(flows).reindex(common_idx)
+    valid_cols = [c for c in X_aligned.columns if X_aligned[c].notna().sum() >= 30]
+    X_aligned = X_aligned[valid_cols]
+    avail = len(common_idx)
+    min_needed = max(30, max(1, len(valid_cols)) * 6)
+    eff_window = min(int(reg_window), avail)
+
+# Final guard: proceed with all available rows even if thin
+if eff_window < 30:
+    st.warning(f"Thin sample ({eff_window} weeks). Using all available data; interpret betas with caution.")
+
+# Slice last eff_window
+Xw = X_aligned.iloc[-eff_window:]
+retsw = rets_aligned.iloc[-eff_window:]
+
+st.caption(f"Effective regression rows: {eff_window} of {avail}. Factors in model: {len(valid_cols)}.")
 
 # ---------------- Regressions ----------------
-betas = {}
-tstats = {}
-r2s = {}
+betas, tstats, r2s = {}, {}, {}
+
+# Drop assets with too few returns
+asset_min_rows = max(30, max(1, len(valid_cols)) * 6)
+valid_assets = [a for a in retsw.columns if retsw[a].notna().sum() >= asset_min_rows]
+retsw = retsw[valid_assets]
 
 for col in retsw.columns:
-    b, t, r2 = ols_beta(retsw[col], Xw)
-    if b is None:
+    y = retsw[col]
+    X = Xw
+    df_reg = pd.concat([y, X], axis=1).dropna()
+    if len(df_reg) < max(30, X.shape[1] * 6):
         continue
-    betas[col] = b
-    tstats[col] = t
-    r2s[col] = r2
+    Y = df_reg.iloc[:, 0].values.reshape(-1, 1)
+    Xmat = np.column_stack([np.ones(len(df_reg)), df_reg.iloc[:, 1:].values])
+    beta = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
+    yhat = Xmat @ beta
+    resid = (Y.flatten() - yhat)
+    s2 = (resid @ resid) / max(1, (len(df_reg) - Xmat.shape[1]))
+    cov = s2 * np.linalg.pinv(Xmat.T @ Xmat)  # stable
+    se = np.sqrt(np.clip(np.diag(cov), 1e-12, None))
+    t = beta / se
+    names = ["Intercept"] + list(df_reg.columns[1:])
+    b = pd.Series(beta, index=names).drop("Intercept")
+    tser = pd.Series(t, index=names).drop("Intercept")
+    r2 = 1.0 - (resid @ resid) / (((Y - Y.mean()) ** 2).sum() + 1e-12)
+    betas[col], tstats[col], r2s[col] = b, tser, float(r2)
 
 if not betas:
-    st.warning("Insufficient overlap for regression window. Try a shorter window or later start date.")
+    st.warning("Very limited overlap even after relaxing settings. Try: later start date, shorter window, or only 4w flow deltas.")
     st.stop()
 
 B = pd.DataFrame(betas).T  # assets x factors
 T = pd.DataFrame(tstats).T
 R2 = pd.Series(r2s, name="R2")
 
-# Define "liquidity beta" as sum of betas to positive-liquidity shocks only
-# We treat: Fed_NetLiq_d* > 0 as positive liquidity; FX_Reserves_d* > 0 positive; TGA_Drain_d* > 0 positive (since we flipped sign)
+# ---------------- Liquidity beta & visuals ----------------
 liquidity_factor_cols = [c for c in B.columns if any(key in c for key in ["Fed_NetLiq", "FX_Reserves", "TGA_Drain"])]
 liq_beta = B[liquidity_factor_cols].sum(axis=1).rename("LiquidityBeta")
 
-# ---------------- UI: Heatmap + Ranking ----------------
 st.subheader("Liquidity beta heatmap (assets × flow shocks)")
 hm = go.Figure(
     data=go.Heatmap(
@@ -239,17 +255,13 @@ hm = go.Figure(
 hm.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(hm, use_container_width=True)
 
-# Ranked table
 rank_df = pd.concat([liq_beta, R2], axis=1).sort_values("LiquidityBeta", ascending=False)
 rank_df.index.name = "Asset"
-
 st.subheader("Ranking by Liquidity Beta (higher = more elastic to liquidity up)")
 st.dataframe(rank_df.style.format({"LiquidityBeta": "{:.3f}", "R2": "{:.2%}"}), use_container_width=True)
 
 # ---------------- Quick Visuals ----------------
 st.subheader("Detail: latest betas and recent flows")
-
-# Bar of an asset's betas
 asset_pick = st.selectbox("Asset for details", list(B.index), index=0)
 b_series = B.loc[asset_pick, liquidity_factor_cols].sort_values(ascending=False)
 colors = ["#2ca02c" if v >= 0 else "#d62728" for v in b_series.values]
@@ -257,8 +269,7 @@ bar = go.Figure(data=[go.Bar(x=b_series.index, y=b_series.values, marker=dict(co
 bar.update_layout(height=320, margin=dict(l=20, r=20, t=10, b=10), yaxis_title="Beta")
 st.plotly_chart(bar, use_container_width=True)
 
-# Recent standardized flow shocks (last ~26w)
-recent = X.iloc[-26:][liquidity_factor_cols]
+recent = Xw.iloc[-26:][liquidity_factor_cols] if not Xw.empty else pd.DataFrame()
 line = go.Figure()
 for c in recent.columns:
     line.add_trace(go.Scatter(x=recent.index, y=recent[c], name=c, mode="lines"))
@@ -269,15 +280,6 @@ st.plotly_chart(line, use_container_width=True)
 
 # ---------------- Download ----------------
 with st.expander("Download results"):
-    out = {
-        "betas": B,
-        "tstats": T,
-        "r2": R2,
-        "rank": rank_df,
-        "flows_design_matrix": X,
-        "returns": rets,
-    }
-    # package to CSVs in a zip-like multi-file? Here: provide individual downloads
     st.download_button("Download betas (CSV)", B.to_csv().encode(), file_name="flow_matrix_betas.csv")
     st.download_button("Download t-stats (CSV)", T.to_csv().encode(), file_name="flow_matrix_tstats.csv")
     st.download_button("Download ranking (CSV)", rank_df.to_csv().encode(), file_name="flow_matrix_rank.csv")
@@ -287,7 +289,7 @@ with st.expander("Methodology notes"):
     st.markdown(
         """
 - **Net Liquidity** = WALCL − RRPONTSYD − WTREGEN. We flip WTREGEN sign for the **TGA_Drain** factor so higher values mean **less** liquidity.
-- We build **4w and 8w level deltas** of each flow series, then **z-score** them to comparable units.
+- We build **4w and 8w** level deltas of each flow series, then **z-score** them to comparable units.
 - Weekly asset **log returns** are regressed on these shocks over the last configurable window (default 156w).
 - **Liquidity Beta** = sum of betas to positive-liquidity shocks (Fed_NetLiq, FX_Reserves, TGA_Drain already sign-corrected).  
   Higher beta ⇒ asset tends to outperform when liquidity rises (Druckenmiller tilt).
