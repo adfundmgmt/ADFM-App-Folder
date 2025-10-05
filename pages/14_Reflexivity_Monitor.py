@@ -254,27 +254,34 @@ for i, tkr in enumerate(valid_assets):
         regime = "Self‑reinforcing" if latest_val >= 65 else ("Self‑correcting" if latest_val <= 35 else "Neutral")
         action = "Increase beta (with hedges)" if regime == "Self‑reinforcing" else ("Reduce beta / mean‑revert" if regime == "Self‑correcting" else "Base sizing")
 
-        # Summary cards
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(f"{tkr} gauge", f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA", (None if np.isnan(delta4) else f"{delta4:+.1f} / 4w"))
-        c2.metric("Regime", regime)
-        # time-in-regime
-        tir = np.nan
-        if not latest_series.empty:
-            last_reg = (latest_series>=65).astype(int) - (latest_series<=35).astype(int)  # 1 / 0 / -1
-            cur = 1 if latest_val>=65 else (-1 if latest_val<=35 else 0)
-            if cur!=0:
-                # count consecutive weeks in same extreme regime
-                rev = last_reg[::-1]
-                cnt=0
-                for v in rev:
-                    if v==cur: cnt+=1
-                    else: break
-                tir = cnt
-        c3.metric("Time in regime", "NA" if np.isnan(tir) else f"{int(tir)}w")
-        c4.metric("Suggested action", action)
+        # Summary cards — avoid ellipsis by using markdown for the action column
+c1, c2, c3, c4 = st.columns([1, 1, 1, 2.2])
+c1.metric(f"{tkr} gauge", f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA", (None if np.isnan(delta4) else f"{delta4:+.1f} / 4w"))
+c2.metric("Regime", regime)
+# time-in-regime
+tir = np.nan
+if not latest_series.empty:
+    last_reg = (latest_series>=65).astype(int) - (latest_series<=35).astype(int)  # 1 / 0 / -1
+    cur = 1 if latest_val>=65 else (-1 if latest_val<=35 else 0)
+    if cur!=0:
+        rev = last_reg[::-1]
+        cnt=0
+        for v in rev:
+            if v==cur: cnt+=1
+            else: break
+        tir = cnt
+c3.metric("Time in regime", "NA" if np.isnan(tir) else f"{int(tir)}w")
+with c4:
+    st.markdown("**Suggested action**")
+    # Use concise, non-truncated phrasing with markdown (no ellipsis)
+    action_short = (
+        "**Increase beta** · add on strength · trail stops"
+        if regime == "Self‑reinforcing"
+        else ("**Reduce beta** · favor mean‑reversion · lighten cyclicals" if regime == "Self‑correcting" else "**Base sizing** · rotate on relative strength")
+    )
+    st.markdown(f"<div style='font-size:26px; line-height:1.25; font-weight:600'>{action_short}</div>", unsafe_allow_html=True)
 
-        # Build subplot: top line, bottom regime strip
+# Build subplot: top line, bottom regime strip
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2])
         # Regime bands on top panel
         fig.add_hrect(y0=0, y1=35, line_width=0, fillcolor="#fde2e1", opacity=0.6, row=1, col=1)
