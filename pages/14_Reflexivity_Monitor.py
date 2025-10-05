@@ -152,8 +152,26 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
 st.title("Reflexivity Monitor (Soros)")
 st.caption("Quantify when prices are feeding back into fundamentals. Output is a real time reflexivity intensity index for position sizing and reversal timing.")
 
+st.sidebar.header("About this tool")
+st.sidebar.markdown(
+    """
+**Reflexivity Monitor (Soros)**
+
+**What it is:** A meta-signal that quantifies when **prices are feeding back into fundamentals** (Soros-style reflexivity) versus when fundamentals are leading prices.
+
+**How it works:** We compute rolling correlations in two directions over selected lead/lag steps: (1) **price → future changes** in macro factors (Net Liquidity, Real 10y, HY OAS, M2 YoY, INDPRO YoY), and (2) **factor changes → future price**. The difference (spread) is weighted and standardized into a **0–100 gauge**.
+
+**How to read it:**
+- **> 65** → self‑reinforcing loop likely (price driving fundamentals); lean into trends, fade mean‑reversion.
+- **35–65** → neutral; follow base process.
+- **< 35** → self‑correcting; prioritize mean‑reversion / reduce beta.
+
+Weekly mode is default for speed; daily is available in the settings.
+"""
+)
+
 st.sidebar.header("Settings")
-start_date = st.sidebar.date_input("Start date", pd.to_datetime("2010-01-01"))
+start_date = st.sidebar.date_input("Start date", pd.to_datetime("2015-01-01"))
 freq = st.sidebar.selectbox("Computation frequency", ["Weekly (fast)", "Daily (slow)"] , index=0)
 use_weekly = freq.startswith("Weekly")
 
