@@ -1,7 +1,7 @@
 # reflexivity_monitor.py
 # Streamlit page: Reflexivity Monitor (Soros)
 # FRED pulls: try fredapi, fallback to pandas_datareader (no key needed).
-# Perf: weekly option, lighter calculations, safer charts.
+# Weekly computation only. Visual polish: regime bands, action badges, sorted factor bars, clearer hover.
 
 import os
 from datetime import datetime
@@ -12,7 +12,7 @@ import yfinance as yf
 from pandas_datareader import data as pdr
 import plotly.graph_objects as go
 
-# fredapi optional
+# ---------------- Optional fredapi ----------------
 FRED_AVAILABLE, FRED = False, None
 try:
     from fredapi import Fred
@@ -27,14 +27,14 @@ try:
 except Exception:
     FRED_AVAILABLE = False
 
-# --------------- Helpers ---------------
+# ---------------- Helpers ----------------
 
 def _zscore(x: pd.Series, clip=3.0):
     z = (x - x.mean()) / (x.std(ddof=0) + 1e-9)
     return z.clip(-clip, clip) if clip is not None else z
 
 @st.cache_data(show_spinner=False)
-def load_prices(tickers, start="2010-01-01", freq="W-FRI"):
+def load_prices(tickers, start="2005-01-01", freq="W-FRI"):
     px = yf.download(tickers, start=start, auto_adjust=True, progress=False)["Close"]
     if isinstance(px, pd.Series):
         px = px.to_frame()
@@ -44,7 +44,7 @@ def load_prices(tickers, start="2010-01-01", freq="W-FRI"):
     return px.dropna(how="all")
 
 @st.cache_data(show_spinner=False, ttl=24*3600)
-def load_fred_series(series_map: dict, start="2010-01-01", freq="W-FRI"):
+def load_fred_series(series_map: dict, start="2005-01-01", freq="W-FRI"):
     frames = []
     # Try fredapi first
     if FRED_AVAILABLE:
@@ -55,7 +55,7 @@ def load_fred_series(series_map: dict, start="2010-01-01", freq="W-FRI"):
                 frames.append(s.to_frame())
         except Exception:
             frames = []
-    # Fallback to pandas_datareader
+    # Fallback to pandas_datareader (no key)
     if not frames:
         for name, sid in series_map.items():
             try:
@@ -75,8 +75,10 @@ def load_fred_series(series_map: dict, start="2010-01-01", freq="W-FRI"):
         df = df.reindex(daily).ffill()
     return df
 
+# Macro builders
+
 def net_liquidity(df):
-    need = {"WALCL","RRPONTSYD","WTREGEN"}
+    need = {"WALCL", "RRPONTSYD", "WTREGEN"}
     if not need.issubset(df.columns):
         return pd.Series(dtype=float)
     nl = df["WALCL"] - df["RRPONTSYD"] - df["WTREGEN"]
@@ -84,8 +86,7 @@ def net_liquidity(df):
     return nl
 
 def real_yield(df):
-    have = {"DGS10","T10YIE"}.issubset(df.columns)
-    if have:
+    if {"DGS10", "T10YIE"}.issubset(df.columns):
         ry = df["DGS10"] - df["T10YIE"]
         ry.name = "Real10y"
         return ry
@@ -95,8 +96,10 @@ def growth_yoy(s: pd.Series, months=12, freq_weeks=True):
     if s.empty:
         return s
     if freq_weeks:
-        return s.pct_change(int(months*4.33/1))  # ~weeks
-    return s.pct_change(int(months*21))
+        return s.pct_change(int(months * 4.33))  # ~weeks per month
+    return s.pct_change(int(months * 21))
+
+# Rolling lead/lag utilities
 
 def rolling_lag_corr(asset_ret: pd.Series, fund_delta: pd.Series, window=52, lag_steps=4):
     dF_fwd = fund_delta.shift(-lag_steps)
@@ -112,12 +115,11 @@ def rolling_lead_corr(asset_ret: pd.Series, fund_delta: pd.Series, window=52, le
         return pd.Series(dtype=float)
     return aligned[fund_delta.name].rolling(window).corr(aligned[r_fwd.name])
 
+# Main score
+
 def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, params: dict):
-    """
-    Build reflexivity score using rolling correlations between price returns and
-    *lag-matched* fundamental changes. To avoid zero-variance windows (e.g.,
-    monthly series forward-filled to weekly), compute dF as a diff over the
-    same step as the tested lag.
+    """Compute reflexivity score from two-way rolling correlations.
+    Lag-matched deltas (diff(lag)) avoid zero-variance windows for monthly series.
     """
     r = asset_px.pct_change().rename("ret")
     scores, meta = [], []
@@ -126,7 +128,6 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
     for fcol in fundamentals.columns:
         f = fundamentals[fcol].rename(fcol)
         for lag in lags:
-            # change over the lag step to inject variance for monthly series
             dF = f.diff(int(lag)).rename(f"d_{fcol}")
             rc = rolling_lag_corr(r, dF, window=window, lag_steps=int(lag))
             fc = rolling_lead_corr(r, dF, window=window, lead_steps=int(lag))
@@ -136,35 +137,38 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
             meta.append({"factor": fcol, "lag": lag})
     if not scores:
         return pd.Series(dtype=float), pd.DataFrame()
-    S = pd.concat(scores, axis=1)
-    # Drop columns that are entirely NaN to prevent empty last-row errors
-    S = S.dropna(axis=1, how="all")
+    S = pd.concat(scores, axis=1).dropna(axis=1, how="all")
     if S.empty:
         return pd.Series(dtype=float), pd.DataFrame()
-    w = np.array([params.get("factor_weights", {}).get(m["factor"], 1.0) for m in meta if f"spread_{m['factor']}_{m['lag']}" in S.columns], dtype=float)
+    # weights
+    valid_meta = [m for m in meta if f"spread_{m['factor']}_{m['lag']}" in S.columns]
+    w = np.array([params.get("factor_weights", {}).get(m["factor"], 1.0) for m in valid_meta], dtype=float)
     w = w / (w.sum() if w.sum() != 0 else 1.0)
     Z = S.apply(_zscore)
     composite = (Z @ w).rename("ReflexivityIntensity")
     return composite, S
 
-# --------------- UI ---------------
+# ---------------- UI ----------------
 
 st.title("Reflexivity Monitor (Soros)")
-st.caption("Quantify when prices are feeding back into fundamentals. Output is a real time reflexivity intensity index for position sizing and reversal timing.")
+st.caption("Quantify when prices are feeding back into fundamentals. Output is a real-time reflexivity intensity index for position sizing and reversal timing.")
 
+# Sidebar
 st.sidebar.header("About this tool")
 st.sidebar.markdown(
     """
-**Reflexivity Monitor (Soros)**
+**What it is**: A meta-signal that measures when **prices drive fundamentals** (reflexive loop) vs when fundamentals drive prices.
 
-**What it is:** A meta-signal that quantifies when **prices are feeding back into fundamentals** (Soros-style reflexivity) versus when fundamentals are leading prices.
+**How it works**: We run rolling correlations both ways and compare:
+1) **Price → future changes** in macro factors (Net Liquidity, Real 10y, HY OAS, M2 YoY, INDPRO YoY)
+2) **Factor changes → future price**
 
-**How it works:** We compute rolling correlations in two directions over selected lead/lag steps: (1) **price → future changes** in macro factors (Net Liquidity, Real 10y, HY OAS, M2 YoY, INDPRO YoY), and (2) **factor changes → future price**. The difference (spread) is weighted and standardized into a **0–100 gauge**.
+The weighted, standardized spread becomes a **0–100 gauge**.
 
-**How to read it:**
-- **> 65** → self‑reinforcing loop likely (price driving fundamentals); lean into trends, fade mean‑reversion.
-- **35–65** → neutral; follow base process.
-- **< 35** → self‑correcting; prioritize mean‑reversion / reduce beta.
+**How to read it**
+- **> 65**: Self‑reinforcing loop; trend-friendly → you can **increase beta** (with risk controls).
+- **35–65**: Neutral; run base sizing and rotate on other signals.
+- **< 35**: Self‑correcting; favor mean‑reversion → **reduce beta**.
 
 We compute at **weekly frequency** for stability and speed.
 """
@@ -172,7 +176,6 @@ We compute at **weekly frequency** for stability and speed.
 
 st.sidebar.header("Settings")
 start_date = st.sidebar.date_input("Start date", pd.to_datetime("2015-01-01"))
-# Weekly-only settings for speed and consistency
 window = st.sidebar.number_input("Rolling window (weeks)", 20, 156, 26, step=2)
 sel_lags = st.sidebar.multiselect("Lead/Lag steps (weeks)", [2, 4, 8, 12, 26], [4, 8, 12])
 
@@ -194,16 +197,13 @@ if custom_series.strip():
             name, sid = [x.strip() for x in line.split("=", 1)]
             series_map[name] = sid
 
-# Ensure assets are defined (guard against earlier edits reordering the code)
-try:
-    _ = assets  # noqa
-except NameError:
-    assets_default = ["SPY","QQQ","IWM","HYG","XLF","XHB","XLE","GLD","BTC-USD"]
-    assets = st.sidebar.text_input("Assets (comma separated)", ",".join(assets_default)).replace(" ","").split(",")
+# Assets
+assets_default = ["SPY", "QQQ", "IWM", "HYG", "XLF", "XHB", "XLE", "GLD", "BTC-USD"]
+assets = st.sidebar.text_input("Assets (comma separated)", ",".join(assets_default)).replace(" ", "").split(",")
 
+# Data
 with st.spinner("Loading prices"):
     px = load_prices(assets, start=str(start_date), freq="W-FRI")
-
 with st.spinner("Loading FRED series"):
     fred_df = load_fred_series(series_map, start=str(start_date), freq="W-FRI")
 
@@ -223,14 +223,14 @@ if not fred_df.empty:
         fund["M2_YoY"] = growth_yoy(fred_df["M2SL"], freq_weeks=True)
     if "INDPRO" in fred_df:
         fund["INDPRO_YoY"] = growth_yoy(fred_df["INDPRO"], freq_weeks=True)
-
 fund = fund.ffill()
 
 base_weights = {"NetLiquidity": 1.25, "Real10y": 1.0, "HY_OAS": 1.25, "M2_YoY": 0.75, "INDPRO_YoY": 0.75}
 params = {"lags": sel_lags, "window": int(window), "factor_weights": base_weights}
 
-st.subheader("Reflexivity intensity by asset")
+# ---------------- Main panel ----------------
 
+st.subheader("Reflexivity intensity by asset")
 valid_assets = [a for a in assets if a in px.columns]
 tabs = st.tabs(valid_assets if valid_assets else ["No assets"])
 
@@ -247,67 +247,56 @@ for i, tkr in enumerate(valid_assets):
         ri_z = _zscore(ri)
         ri_idx = (50 + 15 * ri_z).clip(0, 100)
 
-        # ---- KPI on top ----
+        # KPI + Action badge
         latest_series = ri_idx.dropna()
         latest_val = float(latest_series.iloc[-1]) if not latest_series.empty else np.nan
-        st.metric(label=f"{tkr} reflexivity (0–100)", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA")
+        # slope over 4 weeks
+        delta4 = latest_series.iloc[-1] - latest_series.iloc[-5] if len(latest_series) > 5 else np.nan
+        regime = "Self‑reinforcing" if latest_val >= 65 else ("Self‑correcting" if latest_val <= 35 else "Neutral")
+        action = "Increase beta (with hedges)" if regime == "Self‑reinforcing" else ("Reduce beta / mean‑revert" if regime == "Self‑correcting" else "Base sizing")
+        st.metric(label=f"{tkr} reflexivity (0–100) — {regime}", value=f"{latest_val:.1f}" if not np.isnan(latest_val) else "NA", delta=(None if np.isnan(delta4) else f"{delta4:+.1f} over 4w"))
+        st.caption(f"Suggested action: **{action}**")
 
-        # ---- Chart full width ----
+        # Chart with colored regime bands
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=ri_idx.index, y=ri_idx, name="Gauge 0-100", mode="lines"))
-        fig.add_hline(y=65, line_dash="dash", line_color="gray", opacity=0.5)
-        fig.add_hline(y=35, line_dash="dash", line_color="gray", opacity=0.5)
+        # Bands: red [0,35], gray [35,65], green [65,100]
+        x0 = pd.to_datetime(start_date)
+        x1 = ri_idx.index.max()
+        fig.add_hrect(y0=0, y1=35, line_width=0, fillcolor="#fde2e1", opacity=0.6)
+        fig.add_hrect(y0=35, y1=65, line_width=0, fillcolor="#eef0f2", opacity=0.5)
+        fig.add_hrect(y0=65, y1=100, line_width=0, fillcolor="#e5f5ea", opacity=0.6)
+        fig.add_trace(go.Scatter(x=ri_idx.index, y=ri_idx, name="Gauge 0–100", mode="lines"))
 
         first_valid = ri_idx.first_valid_index()
         if first_valid is not None and pd.to_datetime(first_valid) > pd.to_datetime(start_date):
-            fig.add_vrect(
-                x0=pd.to_datetime(start_date),
-                x1=pd.to_datetime(first_valid),
-                fillcolor="lightgray",
-                opacity=0.15,
-                line_width=0,
-                annotation_text="warm-up",
-                annotation_position="top left",
-            )
+            fig.add_vrect(x0=pd.to_datetime(start_date), x1=pd.to_datetime(first_valid), fillcolor="lightgray", opacity=0.15, line_width=0, annotation_text="warm‑up", annotation_position="top left")
 
         fig.update_yaxes(range=[0, 100], title_text="Reflexivity gauge")
-        fig.update_xaxes(
-            range=[pd.to_datetime(start_date), ri_idx.index.max()],
-            dtick="M12",
-            tickformat="%Y",
-            hoverformat="%b %Y",
-            title_text="Year",
-        )
+        fig.update_xaxes(range=[pd.to_datetime(start_date), ri_idx.index.max()], dtick="M12", tickformat="%Y", hoverformat="%b %Y", title_text="Year")
         fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
         st.plotly_chart(fig, use_container_width=True)
 
-        # ---- Factor panel ----
+        # Factor panel — sorted bars, positive/negative colors
         with st.expander("Factor contributions (latest)"):
             if not details.empty:
                 det_nonan = details.dropna(how="all")
                 if det_nonan.empty:
                     st.info("No valid factor spreads yet for this asset and settings.")
                 else:
-                    try:
-                        last_row = det_nonan.iloc[-1]
-                        fig2 = go.Figure(data=[go.Bar(x=last_row.index, y=last_row.values)])
-                        fig2.update_layout(height=300, margin=dict(l=20, r=20, t=10, b=10))
-                        st.plotly_chart(fig2, use_container_width=True)
-                    except Exception:
-                        st.dataframe(det_nonan.tail(5))
+                    last_row = det_nonan.iloc[-1].sort_values(ascending=False)
+                    colors = ["#2ca02c" if v >= 0 else "#d62728" for v in last_row.values]
+                    fig2 = go.Figure(data=[go.Bar(x=last_row.index, y=last_row.values, marker=dict(color=colors))])
+                    fig2.update_layout(height=320, margin=dict(l=20, r=20, t=10, b=10))
+                    st.plotly_chart(fig2, use_container_width=True)
                     st.dataframe(det_nonan.tail(5))
             else:
-                st.info("No factor details available with current frequency/window.")
+                st.info("No factor details available with current window.")
 
-        # ---- Download ----
+        # Download
         with st.expander("Download data"):
             out = pd.concat([s.rename("price"), fund], axis=1)
             out["ReflexivityIntensity"] = ri
-            st.download_button(
-                "Download CSV",
-                out.to_csv().encode(),
-                file_name=f"{tkr}_reflexivity_monitor.csv",
-            )
+            st.download_button("Download CSV", out.to_csv().encode(), file_name=f"{tkr}_reflexivity_monitor.csv")
 
 st.divider()
 
@@ -316,7 +305,7 @@ st.markdown(
     """
 - Computation is **weekly** for stability and speed.
 - FRED fetching tries fredapi first, then falls back to pandas_datareader with no key.
-- Fundamentals are forward-filled and aligned to the chosen frequency to avoid lookahead.
-- The score compares price→future fundamentals vs fundamentals→future price. Positive spread implies reflexive loop.
+- Fundamentals are forward‑filled and aligned to avoid lookahead.
+- The score compares price→future fundamentals vs fundamentals→future price. Positive spread implies a reflexive loop.
 """
 )
