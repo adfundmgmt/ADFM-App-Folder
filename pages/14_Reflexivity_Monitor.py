@@ -159,6 +159,28 @@ def make_reflexivity_score(asset_px: pd.Series, fundamentals: pd.DataFrame, para
     return composite, S
 
 
+# ---------------- Small utilities for context panel ----------------
+def _percentile_rank(series: pd.Series, value: float) -> float:
+    if series.empty or np.isnan(value):
+        return np.nan
+    return float(series.rank(pct=True).iloc[-1] * 100.0)
+
+def _streak_lengths(mask: pd.Series) -> list:
+    # mask is boolean series for a given regime
+    if mask.empty:
+        return []
+    lengths, run = [], 0
+    for v in mask.astype(bool).values:
+        if v:
+            run += 1
+        elif run > 0:
+            lengths.append(run)
+            run = 0
+    if run > 0:
+        lengths.append(run)
+    return lengths
+
+
 # ---------------- UI ----------------
 st.title("Reflexivity Monitor")
 st.caption("Quantify when prices are feeding back into fundamentals. Output is a real-time reflexivity intensity index for position sizing and reversal timing.")
@@ -176,9 +198,9 @@ st.sidebar.markdown(
 The weighted, standardized spread becomes a **0–100 gauge**.
 
 **How to read it**
-- **> 65**: Self-reinforcing loop; trend-friendly → you can **increase beta** (with risk controls).
-- **35–65**: Neutral; run base sizing and rotate on other signals.
-- **< 35**: Self-correcting; favor mean-reversion → **reduce beta**.
+- **> 65**: Self-reinforcing loop; trend-friendly.
+- **35–65**: Neutral.
+- **< 35**: Self-correcting; mean-reversion bias.
 
 We compute at **weekly frequency** for stability and speed.
 """
@@ -289,20 +311,35 @@ for i, tkr in enumerate(valid_assets):
                 tir = cnt
         c3.metric("Time in regime", "NA" if np.isnan(tir) else f"{int(tir)}w")
 
-        action_short = (
-            "**Increase beta** · add on strength · trail stops"
-            if regime == "Self-reinforcing"
-            else (
-                "**Reduce beta** · favor mean-reversion · lighten cyclicals"
-                if regime == "Self-correcting"
-                else "**Base sizing** · rotate on relative strength"
+        # ---------------- Regime context (replaces Suggested action) ----------------
+        # Percentile rank of latest gauge vs history
+        pct_rank = _percentile_rank(latest_series, latest_val) if not np.isnan(latest_val) else np.nan
+
+        # Historical median streak length for this regime
+        if regime == "Self-reinforcing":
+            mask = latest_series >= 65
+            lengths = _streak_lengths(mask)
+            median_streak = int(np.median(lengths)) if len(lengths) else np.nan
+        elif regime == "Self-correcting":
+            mask = latest_series <= 35
+            lengths = _streak_lengths(mask)
+            median_streak = int(np.median(lengths)) if len(lengths) else np.nan
+        else:
+            median_streak = np.nan
+
+        c4.markdown("**Regime context**")
+        ctx_lines = []
+        ctx_lines.append(
+            f"<div style='font-size:22px; line-height:1.25; font-weight:600'>Percentile: "
+            f"{'NA' if np.isnan(pct_rank) else f'{pct_rank:.0f}th'}</div>"
+        )
+        if not np.isnan(tir) and not np.isnan(median_streak):
+            ctx_lines.append(
+                f"<div style='font-size:18px; line-height:1.25'>Streak: {int(tir)}w vs {int(median_streak)}w median</div>"
             )
-        )
-        c4.markdown("**Suggested action**")
-        c4.markdown(
-            f"<div style='font-size:26px; line-height:1.25; font-weight:600'>{action_short}</div>",
-            unsafe_allow_html=True,
-        )
+        else:
+            ctx_lines.append("<div style='font-size:18px; line-height:1.25'>Streak: NA</div>")
+        c4.markdown("<br/>".join(ctx_lines), unsafe_allow_html=True)
 
         # ---------------- Chart: gauge + regime strip ----------------
         fig = make_subplots(
