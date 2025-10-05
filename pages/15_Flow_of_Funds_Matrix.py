@@ -1,6 +1,6 @@
 # 15_Flow_of_Funds_Matrix.py
-# Flow of Funds Matrix (Druckenmiller) — allocator-ready UI
-# Robust data pipeline + readable outputs (annualized betas, compass, quadrant map)
+# Flow of Funds Matrix (Druckenmiller) — allocator-ready with sidebar description,
+# annualized/weekly toggle, significance hints, stability score, and clearer visuals.
 
 import os
 import numpy as np
@@ -83,22 +83,63 @@ def build_design(fund_df: pd.DataFrame, flows, horizons, min_rows=12):
     valid = [c for c in X.columns if X[c].notna().sum() >= min_rows]
     return X[valid], valid
 
+def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
+    """OLS with pseudo-inverse; returns annualized betas, weekly betas, t-stats, R2."""
+    df = pd.concat([y, X], axis=1).dropna()
+    if df.empty: return None
+    Y = df.iloc[:, 0].values.reshape(-1, 1)
+    X0 = df.iloc[:, 1:]
+    Xmat = np.column_stack([np.ones(len(df)), X0.values])
+    beta_w = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
+    yhat = Xmat @ beta_w
+    resid = (Y.flatten() - yhat)
+    s2 = (resid @ resid) / max(1, (len(df) - Xmat.shape[1]))
+    cov = s2 * np.linalg.pinv(Xmat.T @ Xmat)
+    se = np.sqrt(np.clip(np.diag(cov), 1e-12, None))
+    t = beta_w / se
+    names = ["Intercept"] + list(X0.columns)
+    b_weekly = pd.Series(beta_w, index=names).drop("Intercept")
+    tser = pd.Series(t, index=names).drop("Intercept")
+    r2 = float(1.0 - (resid @ resid) / (((Y - Y.mean()) ** 2).sum() + 1e-12))
+    b_annual = b_weekly * scale
+    return {"weekly": b_weekly, "annual": b_annual, "t": tser, "r2": r2, "rows": len(df)}
+
 # ---------------- UI ----------------
 st.set_page_config(page_title="Flow of Funds Matrix (Druckenmiller)", layout="wide")
 st.title("Flow of Funds Matrix (Druckenmiller)")
-st.caption("Identify where incremental liquidity and relative performance co-move. Regress weekly log returns on 4/8-week flow-of-funds shocks; annualized betas for intuition.")
 
 with st.sidebar:
+    st.header("About")
+    st.markdown(
+        """
+**Purpose**  
+See where **incremental liquidity** (Fed/Treasury/FX reserves) and **relative performance** are co-moving — the Druckenmiller playbook.
+
+**How it works**  
+1) Build **4w/8w flow shocks** from FRED (robust alignment, MAD z-score).  
+2) Regress **weekly log returns** of major assets on those shocks over a rolling window.  
+3) Show **liquidity betas** (elasticity to liquidity) and a **compass** for gross tilts.
+
+**How to read**  
+- **Green β** → asset **outperforms** when liquidity expands (risk-on).  
+- **Red β** → asset **lags** when liquidity expands (defensive).  
+- **LiquidityBeta** (sum across flows) guides **overweight/underweight**.  
+- Stars on the heatmap indicate **t-stat**: ★ (>|1.7|), ★★ (>|2.0|), ★★★ (>|3.0|).
+        """
+    )
     st.header("Settings")
     start_date = st.date_input("Start date", pd.to_datetime("2012-01-01"))
     reg_window = st.number_input("Regression window (weeks)", 52, 520, 156, step=13)
     horizons = st.multiselect("Delta horizons (weeks)", [4, 8], default=[4, 8])
+    show_annual = st.toggle("Show betas annualized (×52)", value=True)
     default_assets = ["SPY","QQQ","TLT","HYG","XLE","XLF","GLD","BTC-USD"]
     tickers = st.text_input("Assets (comma separated)", ",".join(default_assets)).replace(" ","").split(",")
     st.markdown("---")
     st.subheader("FRED IDs")
-    st.caption("Preloaded: WALCL, RRPONTSYD, WTREGEN (weekly change), WDTGAL (level). Add CHN/JPN reserve IDs if you have them.")
-    extra = st.text_area("Extra FRED series (name=ID per line)", height=110)
+    st.caption("Preloaded: WALCL, RRPONTSYD, WTREGEN (chg), WDTGAL (level). Add CHN/JPN reserve IDs if you have them.")
+    extra = st.text_area("Extra FRED (name=ID per line)", height=100)
+
+st.caption("Identify where incremental liquidity and relative performance co-move. Outputs are scaled for allocator use (betas annualized by default).")
 
 # Base FRED ids
 fred_ids = {"WALCL":"WALCL", "RRPONTSYD":"RRPONTSYD", "WTREGEN":"WTREGEN", "WDTGAL":"WDTGAL"}
@@ -166,8 +207,8 @@ eff_window = min(int(reg_window), len(widx))
 if eff_window < 20:
     st.warning(f"Thin sample ({eff_window} weeks). Using all available rows; interpret with caution.")
 
-# Per-asset OLS (per-asset overlap), then annualize betas (×52)
-betas, tstats, r2s = {}, {}, {}
+# ---------------- Per-asset regressions ----------------
+betas_a, betas_w, tstats, r2s, rows_used = {}, {}, {}, {}, {}
 min_rows = max(20, 5*max(1,len(valid)))
 
 for asset in rets.columns:
@@ -176,80 +217,133 @@ for asset in rets.columns:
     if df.empty: continue
     df = df.iloc[-eff_window:]
     if df.shape[0] < min_rows: continue
-    Y = df.iloc[:,0].values.reshape(-1,1)
-    X0 = df.iloc[:,1:]
-    Xmat = np.column_stack([np.ones(len(df)), X0.values])
-    beta = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
-    yhat = Xmat @ beta
-    resid = (Y.flatten() - yhat)
-    s2 = (resid @ resid) / max(1,(len(df)-Xmat.shape[1]))
-    cov = s2 * np.linalg.pinv(Xmat.T @ Xmat)
-    se = np.sqrt(np.clip(np.diag(cov),1e-12,None))
-    t = beta / se
-    names = ["Intercept"] + list(X0.columns)
-    b = pd.Series(beta, index=names).drop("Intercept") * 52.0  # annualize
-    tser = pd.Series(t, index=names).drop("Intercept")
-    r2 = 1.0 - (resid @ resid) / (((Y - Y.mean())**2).sum() + 1e-12)
-    betas[asset], tstats[asset], r2s[asset] = b, tser, float(r2)
+    res = ols_annualized(df.iloc[:,0], df.iloc[:,1:], scale=52.0)
+    if res is None: continue
+    betas_a[asset] = res["annual"]
+    betas_w[asset] = res["weekly"]
+    tstats[asset]  = res["t"]
+    r2s[asset]     = res["r2"]
+    rows_used[asset] = res["rows"]
 
-if not betas:
+if not betas_a:
     st.error("No asset met minimal overlap. Try start ≥ 2013 and 4w horizon."); st.stop()
 
-B = pd.DataFrame(betas).T      # assets × factors (ANNUALIZED betas)
-T = pd.DataFrame(tstats).T
-R2 = pd.Series(r2s, name="R2")
+B_ann = pd.DataFrame(betas_a).T
+B_wk  = pd.DataFrame(betas_w).T
+T     = pd.DataFrame(tstats).T
+R2    = pd.Series(r2s, name="R2")
+rowsS = pd.Series(rows_used, name="Rows")
 
-liq_cols = [c for c in B.columns if any(k in c for k in ["Fed_NetLiq","TGA_Drain","FX_Reserves","Fed_NetLiq_proxy"])]
-Bv = B[liq_cols].copy()
+# choose display matrix
+Bdisp = B_ann if show_annual else B_wk
+unit_label = "Annualized β" if show_annual else "Weekly β"
+
+liq_cols = [c for c in Bdisp.columns if any(k in c for k in ["Fed_NetLiq","TGA_Drain","FX_Reserves","Fed_NetLiq_proxy"])]
+Bv = Bdisp[liq_cols].copy()
 liq_beta = Bv.sum(axis=1).rename("LiquidityBeta")
+
+# ---------------- Stability score (half-window consistency) ----------------
+def half_window_liq_beta(asset):
+    # first and second halves
+    y = rets[asset]
+    df = pd.concat([y, X], axis=1).dropna()
+    if df.empty or len(df) < 2*min_rows: return np.nan
+    mid = len(df)//2
+    first = ols_annualized(df.iloc[:mid,0], df.iloc[:mid,1:], scale=(52.0 if show_annual else 1.0))
+    second= ols_annualized(df.iloc[mid:,0], df.iloc[mid:,1:], scale=(52.0 if show_annual else 1.0))
+    if first is None or second is None: return np.nan
+    # sum across liquidity columns
+    b1 = first["annual"] if show_annual else first["weekly"]
+    b2 = second["annual"] if show_annual else second["weekly"]
+    b1 = b1.reindex(liq_cols).sum()
+    b2 = b2.reindex(liq_cols).sum()
+    if not np.isfinite(b1) or not np.isfinite(b2): return np.nan
+    # stability in [0,1]: 1 - normalized absolute change
+    denom = abs(b1) + abs(b2) + 1e-9
+    return max(0.0, 1.0 - abs(b1 - b2)/denom)
+
+stability = pd.Series({a: half_window_liq_beta(a) for a in Bv.index}, name="Stability")
 
 # ---------------- Top annotations ----------------
 st.caption(
-    f"Factors used: {list(Bv.columns)} • Assets: {Bv.shape[0]} • Per-asset window ≤ {eff_window} weeks"
+    f"Factors used: {list(Bv.columns)} • Assets: {Bv.shape[0]} • Per-asset rows ≤ {eff_window} • Unit: {unit_label}"
 )
 pulse = float(liq_beta.mean()) if not liq_beta.empty else 0.0
 st.markdown(f"**Liquidity Pulse (avg beta):** {pulse:+.2f}  → positive favors cyclicals/growth; negative favors defensives.")
 
-# ---------------- Liquidity Compass (rank + tilt) ----------------
-tilt = np.where(liq_beta > 0.10, "Overweight risk",
-        np.where(liq_beta < -0.10, "Defensive / trim", "Neutral"))
-compass = pd.DataFrame({"LiquidityBeta": liq_beta, "R2": R2.reindex(liq_beta.index), "Tilt": tilt})
+# ---------------- Liquidity Compass (rank + tilt + stability) ----------------
+tilt = np.select(
+    [liq_beta > 0.15, liq_beta > 0.05, liq_beta < -0.15, liq_beta < -0.05],
+    ["Overweight risk (strong)", "Overweight risk (modest)", "Defensive / trim (strong)", "Defensive / trim (modest)"],
+    default="Neutral"
+)
+compass = pd.DataFrame({"LiquidityBeta": liq_beta, "R2": R2.reindex(liq_beta.index), "Stability": stability, "Tilt": tilt})
 compass = compass.sort_values("LiquidityBeta", ascending=False)
 st.subheader("Liquidity Compass — where to tilt gross exposure")
-st.dataframe(compass.style.format({"LiquidityBeta":"{:.2f}", "R2":"{:.2%}"}), use_container_width=True)
+st.dataframe(compass.style.format({"LiquidityBeta":"{:.2f}", "R2":"{:.2%}", "Stability":"{:.0%}"}), use_container_width=True)
 
-# ---------------- Heatmap (diverging, centered at 0) ----------------
-st.subheader("Liquidity beta heatmap (annualized sensitivity)")
-colorscale = [[0.0, "#1a9850"], [0.5, "#f7f7f7"], [1.0, "#d73027"]]  # green (risk-on) → red (risk-off)
+# ---------------- Heatmap (diverging, with t-stat stars & tooltips) ----------------
+st.subheader(f"Liquidity beta heatmap ({unit_label})")
+colorscale = [[0.0, "#1a9850"], [0.5, "#f7f7f7"], [1.0, "#d73027"]]  # green → red, centered at 0
+
+# Build star annotations from t-stats
+def stars(x):
+    a = abs(x)
+    return "★★★" if a>=3.0 else ("★★" if a>=2.0 else ("★" if a>=1.7 else ""))
+
+Tmatch = T.reindex(index=Bv.index, columns=Bv.columns)
+star_text = Tmatch.applymap(stars).fillna("")
+custom = np.stack([
+    Bv.values,
+    np.where(Tmatch.values!=None, Tmatch.values, np.nan)
+], axis=-1)
+
 hm = go.Figure(data=go.Heatmap(
-    z=Bv.values, x=Bv.columns, y=Bv.index,
-    colorscale=colorscale, zmid=0, colorbar=dict(title="Annualized β")
+    z=Bv.values,
+    x=Bv.columns,
+    y=Bv.index,
+    colorscale=colorscale, zmid=0,
+    colorbar=dict(title=unit_label),
+    text=star_text.values,
+    texttemplate="%{text}",
+    hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>"+unit_label+": %{z:.3f}<br>t-stat: %{customdata[1]:.2f}<extra></extra>",
+    customdata=custom
 ))
-hm.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10))
+hm.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(hm, use_container_width=True)
 
-# ---------------- Quadrant Map (allocator map) ----------------
-st.subheader("Allocator map — Fed_NetLiq vs TGA_Drain betas (size = R², color = net LiquidityBeta)")
+# ---------------- Quadrant Map ----------------
+st.subheader("Allocator map — Fed_NetLiq vs TGA_Drain (size = R², color = LiquidityBeta)")
 xcol = next((c for c in Bv.columns if c.startswith("Fed_NetLiq")), None)
 ycol = next((c for c in Bv.columns if c.startswith("TGA_Drain")), None)
 if xcol is not None and ycol is not None:
     xs = Bv[xcol]; ys = Bv[ycol]; rsq = R2.reindex(Bv.index).fillna(0)
     scatter = go.Figure()
+    scatter.add_hline(y=0, line=dict(color="#bbbbbb", dash="dot"))
+    scatter.add_vline(x=0, line=dict(color="#bbbbbb", dash="dot"))
     scatter.add_trace(go.Scatter(
         x=xs, y=ys, mode="markers+text", text=Bv.index,
         textposition="top center",
-        marker=dict(size=10 + 60*rsq.clip(0,0.2), color=liq_beta, colorscale=colorscale, cmin=-abs(liq_beta).max(), cmax=abs(liq_beta).max(), showscale=True),
+        marker=dict(
+            size=10 + 60*rsq.clip(0,0.2),
+            color=liq_beta, colorscale=colorscale,
+            cmin=-abs(liq_beta).max(), cmax=abs(liq_beta).max(), showscale=True
+        ),
+        hovertemplate="<b>%{text}</b><br>"+xcol+": %{x:.2f}<br>"+ycol+": %{y:.2f}<br>R²: %{marker.size:.1f}<extra></extra>"
     ))
-    scatter.update_xaxes(title=f"{xcol} (β, annualized)")
-    scatter.update_yaxes(title=f"{ycol} (β, annualized)")
-    scatter.update_layout(height=500, margin=dict(l=10,r=10,t=10,b=10))
+    scatter.update_xaxes(title=f"{xcol} ({unit_label})")
+    scatter.update_yaxes(title=f"{ycol} ({unit_label})")
+    scatter.update_layout(height=520, margin=dict(l=10,r=10,t=10,b=10),
+                          annotations=[
+                              dict(x=0.98, y=0.98, xref="paper", yref="paper", text="↑ risk-on", showarrow=False, font=dict(color="#1a9850")),
+                              dict(x=0.02, y=0.02, xref="paper", yref="paper", text="↓ defensive", showarrow=False, font=dict(color="#d73027")),
+                          ])
     st.plotly_chart(scatter, use_container_width=True)
 else:
     st.info("Need both Fed_NetLiq_* and TGA_Drain_* factors for the quadrant map.")
 
 # ---------------- Liquidity Pulse (recent) ----------------
 st.subheader("Liquidity Pulse — recent net momentum (standardized)")
-# Build a single composite flow shock (sum of available positive-liquidity shocks)
 pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","FX_Reserves","TGA_Drain","Fed_NetLiq_proxy"])]
 pulse_series = X[pos_cols].sum(axis=1).dropna()
 pulse_recent = pulse_series.iloc[-26:]
@@ -262,28 +356,28 @@ st.plotly_chart(line, use_container_width=True)
 
 # ---------------- Downloads ----------------
 with st.expander("Download results"):
-    st.download_button("Betas (annualized) CSV", B.to_csv().encode(), file_name="flow_betas_annualized.csv")
-    st.download_button("Liquidity Compass CSV", compass.to_csv().encode(), file_name="flow_liquidity_compass.csv")
+    st.download_button("Betas (display units) CSV", Bdisp.to_csv().encode(), file_name="flow_betas.csv")
+    st.download_button("Liquidity Compass CSV", pd.concat([compass, rowsS], axis=1).to_csv().encode(), file_name="flow_liquidity_compass.csv")
 
 # ---------------- Diagnostics ----------------
 with st.expander("Diagnostics"):
     st.write("Design columns used:", list(X.columns))
+    diag = []
     if 'fred_df' in locals() and not fred_df.empty:
-        meta = []
         for c in fred_df.columns:
             s = fred_df[c].dropna()
             if not s.empty:
-                meta.append([c, str(s.index.min().date()), str(s.index.max().date()), int(s.notna().sum())])
-        if meta:
-            st.dataframe(pd.DataFrame(meta, columns=["Series","First","Last","Obs"]), use_container_width=True)
+                diag.append([c, str(s.index.min().date()), str(s.index.max().date()), int(s.notna().sum())])
+    if diag:
+        st.dataframe(pd.DataFrame(diag, columns=["Series","First","Last","Obs"]), use_container_width=True)
 
 # ---------------- Notes ----------------
 with st.expander("Methodology notes"):
     st.markdown(
         """
-- Betas are **annualized** (weekly × 52) so magnitudes are intuitive. Example: β=+0.15 ⇒ +1σ liquidity = +15% annualized relative impact.
-- **LiquidityBeta** = sum of annualized betas to liquidity-positive shocks (Fed_NetLiq, FX_Reserves, TGA_Drain already sign-corrected).
-- Quadrant map shows where assets sit on **Fed_NetLiq (x)** vs **TGA_Drain (y)** axes; bubble size = R² (fit quality).
-- Liquidity Pulse is a **single composite** of recent standardized shocks (last ~26w) to track regime turns.
+- Betas default to **annualized (×52)** for intuition; toggle to weekly if you prefer raw units.
+- **LiquidityBeta** = sum of (display-unit) betas across liquidity-positive shocks.
+- Stars (★/★★/★★★) reflect t-stat thresholds (1.7/2.0/3.0). Use with **R²** and **Stability**.
+- **Stability** compares liquidity beta in the first half vs second half of the regression window (1.0 = very consistent).
 """
     )
