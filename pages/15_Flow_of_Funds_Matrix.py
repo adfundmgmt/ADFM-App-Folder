@@ -1,7 +1,9 @@
 # 15_Flow_of_Funds_Matrix.py
-# Flow of Funds Matrix (Druckenmiller) — allocator-ready with sidebar description,
-# annualized/weekly toggle, significance hints, stability score, clearer visuals,
-# and Liquidity Pulse that ALWAYS starts at the selected start date.
+# Flow of Funds Matrix (Druckenmiller) — allocator-ready with:
+# - Sidebar description
+# - Annualized/weekly toggle, significance hints, stability score
+# - Liquidity Pulse starts at selected start date with adaptive date ticks
+# - Heatmap: positive beta = GREEN (outperforms on liquidity up), friendly labels, clearer hover & subtitle
 
 import os
 import numpy as np
@@ -105,6 +107,20 @@ def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
     b_annual = b_weekly * scale
     return {"weekly": b_weekly, "annual": b_annual, "t": tser, "r2": r2, "rows": len(df)}
 
+def choose_dtick_and_format(x_index: pd.DatetimeIndex):
+    """Adaptive tick density: monthly for <1y; quarterly for 1–3y; semiannual for 3–7y; yearly beyond."""
+    if x_index.empty:
+        return "M12", "%Y"
+    span_days = (x_index.max() - x_index.min()).days
+    if span_days <= 370:
+        return "M1", "%b %y"
+    elif span_days <= 3*365:
+        return "M3", "%b %y"
+    elif span_days <= 7*365:
+        return "M6", "%Y"
+    else:
+        return "M12", "%Y"
+
 # ---------------- UI ----------------
 st.set_page_config(page_title="Flow of Funds Matrix (Druckenmiller)", layout="wide")
 st.title("Flow of Funds Matrix (Druckenmiller)")
@@ -125,7 +141,7 @@ See where **incremental liquidity** (Fed/Treasury/FX reserves) and **relative pe
 - **Green β** → asset **outperforms** when liquidity expands (risk-on).  
 - **Red β** → asset **lags** when liquidity expands (defensive).  
 - **LiquidityBeta** (sum across flows) guides **overweight/underweight**.  
-- Stars on the heatmap indicate **t-stat**: ★ (>|1.7|), ★★ (>|2.0|), ★★★ (>|3.0|).
+- Stars: ★ (>|1.7|), ★★ (>|2.0|), ★★★ (>|3.0|).
         """
     )
     st.header("Settings")
@@ -140,7 +156,7 @@ See where **incremental liquidity** (Fed/Treasury/FX reserves) and **relative pe
     st.caption("Preloaded: WALCL, RRPONTSYD, WTREGEN (chg), WDTGAL (level). Add CHN/JPN reserve IDs if you have them.")
     extra = st.text_area("Extra FRED (name=ID per line)", height=100)
 
-st.caption("Identify where incremental liquidity and relative performance co-move. Outputs are scaled for allocator use (betas annualized by default).")
+st.caption("Identify where incremental liquidity and relative performance co-move. Betas are annualized by default.")
 
 # Base FRED ids
 fred_ids = {"WALCL":"WALCL", "RRPONTSYD":"RRPONTSYD", "WTREGEN":"WTREGEN", "WDTGAL":"WDTGAL"}
@@ -166,7 +182,7 @@ with st.spinner("Loading data"):
 if px.empty:
     st.error("No price data."); st.stop()
 
-# Build flows gracefully
+# Build flows gracefully (TGA_Drain is sign-corrected so positive = more liquidity)
 fund = pd.DataFrame(index=widx)
 have = set(fred_df.columns)
 tga = fred_df["WTREGEN"] if "WTREGEN" in have else (fred_df["WDTGAL"] if "WDTGAL" in have else None)
@@ -266,7 +282,7 @@ st.caption(
     f"Factors used: {list(Bv.columns)} • Assets: {Bv.shape[0]} • Per-asset rows ≤ {eff_window} • Unit: {unit_label}"
 )
 pulse_avg = float(liq_beta.mean()) if not liq_beta.empty else 0.0
-st.markdown(f"**Liquidity Pulse (avg beta):** {pulse_avg:+.2f}  → positive favors cyclicals/growth; negative favors defensives.")
+st.markdown(f"**Liquidity Pulse (avg beta):** {pulse_avg:+.2f} → positive favors cyclicals/growth; negative favors defensives.")
 
 # ---------------- Liquidity Compass ----------------
 tilt = np.select(
@@ -279,33 +295,48 @@ compass = compass.sort_values("LiquidityBeta", ascending=False)
 st.subheader("Liquidity Compass — where to tilt gross exposure")
 st.dataframe(compass.style.format({"LiquidityBeta":"{:.2f}", "R2":"{:.2%}", "Stability":"{:.0%}"}), use_container_width=True)
 
-# ---------------- Heatmap (diverging, with t-stat stars & tooltips) ----------------
+# ---------------- Heatmap (positive = GREEN) ----------------
 st.subheader(f"Liquidity beta heatmap ({unit_label})")
-colorscale = [[0.0, "#1a9850"], [0.5, "#f7f7f7"], [1.0, "#d73027"]]  # green → red, centered at 0
+
+# Friendlier column labels
+def relabel(col: str) -> str:
+    col = col.replace("Fed_NetLiq", "Fed NL").replace("TGA_Drain", "TGA drain").replace("FX_Reserves","FX reserves").replace("_d"," Δ")
+    col = col.replace("w", "w")
+    return col
+
+Bv_disp = Bv.copy()
+Bv_disp.columns = [relabel(c) for c in Bv.columns]
+Tmatch = T.reindex(index=Bv.index, columns=Bv.columns)
+Tmatch.columns = Bv_disp.columns  # keep aligned after relabel
 
 def stars(x):
     a = abs(x)
     return "★★★" if a>=3.0 else ("★★" if a>=2.0 else ("★" if a>=1.7 else ""))
 
-Tmatch = T.reindex(index=Bv.index, columns=Bv.columns)
 star_text = Tmatch.applymap(stars).fillna("")
-custom = np.stack([Bv.values, np.where(Tmatch.values!=None, Tmatch.values, np.nan)], axis=-1)
+custom = np.stack([Bv_disp.values, np.where(Tmatch.values!=None, Tmatch.values, np.nan)], axis=-1)
+
+# colors: negative (underperform on liquidity up) = RED; positive = GREEN
+colors_pos_green = [[0.0, "#d73027"], [0.5, "#f7f7f7"], [1.0, "#1a9850"]]
 
 hm = go.Figure(data=go.Heatmap(
-    z=Bv.values,
-    x=Bv.columns,
-    y=Bv.index,
-    colorscale=colorscale, zmid=0,
+    z=Bv_disp.values,
+    x=Bv_disp.columns,
+    y=Bv_disp.index,
+    colorscale=colors_pos_green, zmid=0,
     colorbar=dict(title=unit_label),
     text=star_text.values, texttemplate="%{text}",
-    hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>"+unit_label+": %{z:.3f}<br>t-stat: %{customdata[1]:.2f}<extra></extra>",
+    hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>"+unit_label+": %{z:.3f}"
+                  "<br>Meaning: +1σ liquidity shock → %{z:.2f} annualized return change"
+                  "<br>t-stat: %{customdata[1]:.2f}<extra></extra>",
     customdata=custom
 ))
 hm.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(hm, use_container_width=True)
+st.caption("Interpretation: a **+0.12** beta means a **+1σ** liquidity shock historically coincided with about **+12% annualized** return for that asset (sign-corrected for TGA).")
 
 # ---------------- Quadrant Map ----------------
-st.subheader("Allocator map — Fed_NetLiq vs TGA_Drain (size = R², color = LiquidityBeta)")
+st.subheader("Allocator map — Fed NL vs TGA drain (size = R², color = LiquidityBeta)")
 xcol = next((c for c in Bv.columns if c.startswith("Fed_NetLiq")), None)
 ycol = next((c for c in Bv.columns if c.startswith("TGA_Drain")), None)
 if xcol is not None and ycol is not None:
@@ -316,12 +347,12 @@ if xcol is not None and ycol is not None:
     scatter.add_trace(go.Scatter(
         x=xs, y=ys, mode="markers+text", text=Bv.index, textposition="top center",
         marker=dict(size=10 + 60*rsq.clip(0,0.2),
-                    color=liq_beta, colorscale=colorscale,
+                    color=liq_beta, colorscale=colors_pos_green,
                     cmin=-abs(liq_beta).max(), cmax=abs(liq_beta).max(), showscale=True),
         hovertemplate="<b>%{text}</b><br>"+xcol+": %{x:.2f}<br>"+ycol+": %{y:.2f}<br>R² (scaled bubble): %{marker.size:.1f}<extra></extra>"
     ))
-    scatter.update_xaxes(title=f"{xcol} ({unit_label})")
-    scatter.update_yaxes(title=f"{ycol} ({unit_label})")
+    scatter.update_xaxes(title=f"{relabel(xcol)} ({unit_label})")
+    scatter.update_yaxes(title=f"{relabel(ycol)} ({unit_label})")
     scatter.update_layout(height=520, margin=dict(l=10,r=10,t=10,b=10),
                           annotations=[
                               dict(x=0.98, y=0.98, xref="paper", yref="paper", text="↑ risk-on", showarrow=False, font=dict(color="#1a9850")),
@@ -331,18 +362,19 @@ if xcol is not None and ycol is not None:
 else:
     st.info("Need both Fed_NetLiq_* and TGA_Drain_* factors for the quadrant map.")
 
-# ---------------- Liquidity Pulse — ALWAYS from start_date ----------------
+# ---------------- Liquidity Pulse — ALWAYS from start_date with adaptive ticks ----------------
 st.subheader("Liquidity Pulse — net momentum (standardized)")
-# Composite of standardized liquidity shocks (already z/MAD-scored in X)
 pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","FX_Reserves","TGA_Drain","Fed_NetLiq_proxy"])]
 pulse_series = X[pos_cols].sum(axis=1).dropna()
-pulse_plot = pulse_series.loc[str(start_date):]  # <-- full history from chosen start date
+pulse_plot = pulse_series.loc[str(start_date):]
+
+dtick, tfmt = choose_dtick_and_format(pulse_plot.index)
 
 fig_pulse = go.Figure()
 fig_pulse.add_trace(go.Scatter(x=pulse_plot.index, y=pulse_plot, mode="lines", name="Net liquidity momentum"))
-fig_pulse.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10))
+fig_pulse.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10))
 fig_pulse.update_yaxes(title_text="Σ standardized flow shocks")
-fig_pulse.update_xaxes(dtick="M1", tickformat="%b %y", hoverformat="%b %d, %Y")
+fig_pulse.update_xaxes(dtick=dtick, tickformat=tfmt, hoverformat="%b %d, %Y")
 st.plotly_chart(fig_pulse, use_container_width=True)
 
 # ---------------- Downloads ----------------
@@ -366,10 +398,9 @@ with st.expander("Diagnostics"):
 with st.expander("Methodology notes"):
     st.markdown(
         """
-- Betas default to **annualized (×52)** for intuition; toggle to weekly if you prefer raw units.
-- **LiquidityBeta** = sum of (display-unit) betas across liquidity-positive shocks.
+- Betas default to **annualized (×52)**; toggle to weekly if you prefer raw units.
+- **LiquidityBeta** = sum of betas to pro-liquidity shocks across selected horizons (TGA already sign-corrected).
 - Stars (★/★★/★★★) reflect t-stat thresholds (1.7/2.0/3.0). Use with **R²** and **Stability**.
-- **Stability** compares liquidity beta in the first half vs second half of the regression window (1.0 = very consistent).
-- **Liquidity Pulse** always plots from your selected start date; the earliest valid date is still constrained by flow availability and differencing horizons.
+- **Liquidity Pulse** is the sum of standardized flow shocks and always plots from your selected start date; earliest points are naturally delayed by differencing horizons and data availability.
 """
     )
