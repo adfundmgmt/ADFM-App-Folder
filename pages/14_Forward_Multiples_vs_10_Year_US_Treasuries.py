@@ -1,19 +1,18 @@
-# streamlit_forward_pe_app.py
-# Requirements:
-#   pip install streamlit yahooquery yfinance requests bs4
+# 14_Forward_Multiples_vs_10_Year_US_Treasuries.py
+# Requirements: streamlit, yfinance, requests
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+import re
+import requests
 from typing import List
 
 # -------------- Page setup --------------
 st.set_page_config(page_title="Forward P/E vs 10Y", layout="wide")
 
-# Minimal CSS to tighten density and add chip styling
 st.markdown("""
 <style>
-/* compact tables */
 .dataframe tbody td { padding: 6px 8px !important; }
 .dataframe thead th { padding: 6px 8px !important; font-weight: 600; }
 .block-container { padding-top: 1rem; padding-bottom: 2rem; }
@@ -27,99 +26,106 @@ st.markdown("""
 
 st.title("Forward P/E Path vs U.S. 10Y Inverse")
 
-# -------------- Data fetchers --------------
+# -------------- Fetchers: yfinance primary, Finviz backfill for 5Y growth --------------
 @st.cache_data(ttl=300)
-def fetch_from_yahooquery(tickers: List[str]) -> pd.DataFrame:
-    from yahooquery import Ticker
-    yq = Ticker(tickers, asynchronous=True)
-
-    price = yq.price or {}
-    summary_detail = yq.summary_detail or {}
-    key_stats = yq.key_stats or {}
-    earnings_trend = yq.earnings_trend or {}
-    analysis = yq.analysis or {}
+def fetch_from_yfinance(tickers: List[str]) -> pd.DataFrame:
+    import yfinance as yf
 
     rows = []
     for t in tickers:
-        p = (price.get(t) or {})
-        sd = (summary_detail.get(t) or {})
-        ks = (key_stats.get(t) or {})
-        et = (earnings_trend.get(t) or {})
-        an = (analysis.get(t) or {})
+        tk = yf.Ticker(t)
+        info = {}
+        try:
+            info = tk.info or {}
+        except Exception:
+            info = {}
 
-        last = p.get("regularMarketPrice") or p.get("postMarketPrice")
-        eps_ttm = ks.get("trailingEps") or sd.get("trailingEps") or p.get("epsTrailingTwelveMonths")
+        # Price
+        last = None
+        try:
+            last = float(getattr(tk, "fast_info", {}).get("last_price"))
+        except Exception:
+            last = info.get("regularMarketPrice")
 
-        eps_next_y = None
-        trend_list = et.get("trend") if isinstance(et.get("trend"), list) else []
-        for node in trend_list:
-            if str(node.get("period")).lower() in {"y+1", "nextyear"}:
-                eps_next_y = (node.get("epsTrend") or {}).get("avg")
+        # EPS TTM
+        eps_ttm = info.get("trailingEps")
 
-        growth_5y = None
-        g = (et.get("growth") or {}).get("longTerm")
-        if g is not None:
-            growth_5y = float(g) * 100.0
-        if growth_5y is None:
-            ge = (an.get("growth_estimates") or {})
-            for k in ["next_5_years","nextFiveYears","next5Years"]:
-                node = ge.get(k)
-                if isinstance(node, dict) and node.get("avg") is not None:
-                    growth_5y = float(node["avg"]) * 100.0
-                    break
+        # Forward EPS next year
+        eps_next_y = info.get("forwardEps")
+        # Try earnings trend DataFrame if available
+        try:
+            trend = tk.get_earnings_trend()
+            if isinstance(trend, pd.DataFrame) and not trend.empty:
+                nxt = trend[trend["period"].astype(str).str.lower().isin(["y+1", "nextyear"])]
+                if not nxt.empty:
+                    for col in ["epsTrend_avg", "epsTrendAvg", "epsTrend.average"]:
+                        if col in nxt.columns and pd.notna(nxt.iloc[0][col]):
+                            eps_next_y = float(nxt.iloc[0][col])
+                            break
+                if "growth_longTerm" in trend.columns and pd.notna(trend.iloc[0]["growth_longTerm"]):
+                    growth_5y = float(trend.iloc[0]["growth_longTerm"]) * 100.0
+                else:
+                    growth_5y = None
+            else:
+                growth_5y = None
+        except Exception:
+            growth_5y = None
 
-        fwd_pe_next_y = sd.get("forwardPE")
-        if (fwd_pe_next_y in (None, 0)) and last and eps_next_y:
+        # Forward PE next year
+        fwd_pe_next_y = info.get("forwardPE")
+        if not fwd_pe_next_y and last and eps_next_y:
             try:
                 fwd_pe_next_y = float(last) / float(eps_next_y)
             except Exception:
                 fwd_pe_next_y = None
 
-        rows.append({
-            "Ticker": t,
-            "EPS_TTM": eps_ttm,
-            "EPS_nextY": eps_next_y,
-            "EPS_growth_5Y_pct": growth_5y,
-            "Fwd_PE_nextY": fwd_pe_next_y,
-            "Current_Price": last,
-        })
-    return pd.DataFrame(rows).set_index("Ticker")
+        rows.append(
+            {
+                "Ticker": t,
+                "EPS_TTM": eps_ttm,
+                "EPS_nextY": eps_next_y,
+                "EPS_growth_5Y_pct": growth_5y,
+                "Fwd_PE_nextY": fwd_pe_next_y,
+                "Current_Price": last,
+            }
+        )
+    df = pd.DataFrame(rows).set_index("Ticker")
+    for c in ["EPS_TTM","EPS_nextY","EPS_growth_5Y_pct","Fwd_PE_nextY","Current_Price"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
 
 
-@st.cache_data(ttl=3600)
-def fetch_eps_5y_from_finviz(ticker: str) -> float | None:
-    import requests
-    from bs4 import BeautifulSoup
-    url = f"https://finviz.com/quote.ashx?t={ticker}"
-    r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-    if r.status_code != 200:
+@st.cache_data(ttl=1800)
+def finviz_eps_5y(ticker: str) -> float | None:
+    # Minimal parser with requests + regex to avoid extra dependencies
+    try:
+        r = requests.get(f"https://finviz.com/quote.ashx?t={ticker}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        if r.status_code != 200:
+            return None
+        html = r.text
+        # Find "EPS next 5Y" followed by its value cell
+        m = re.search(r"EPS\s*next\s*5Y.*?</td>\s*<td[^>]*>(.*?)</td>", html, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None
+        val = re.sub(r"<.*?>", "", m.group(1)).strip()
+        val = val.replace("%","").replace(",","")
+        return float(val)
+    except Exception:
         return None
-    soup = BeautifulSoup(r.text, "html.parser")
-    cells = [c.get_text(strip=True) for c in soup.select("table.snapshot-table2 td")]
-    for i in range(0, len(cells)-1, 2):
-        if cells[i].lower() in {"eps next 5y","epsnext5y"}:
-            val = cells[i+1].replace("%","").replace(",","")
-            try:
-                return float(val)
-            except Exception:
-                return None
-    return None
 
 
-def backfill_growth_with_finviz(df: pd.DataFrame) -> pd.DataFrame:
+def backfill_growth(df: pd.DataFrame) -> pd.DataFrame:
     for t in df.index:
         if pd.isna(df.at[t, "EPS_growth_5Y_pct"]):
-            g = fetch_eps_5y_from_finviz(t)
+            g = finviz_eps_5y(t)
             if g is not None:
                 df.at[t, "EPS_growth_5Y_pct"] = g
     return df
 
 
 def fetch_live(tickers: List[str]) -> pd.DataFrame:
-    df = fetch_from_yahooquery(tickers)
-    for c in ["EPS_TTM","EPS_nextY","EPS_growth_5Y_pct","Fwd_PE_nextY","Current_Price"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df = backfill_growth_with_finviz(df)
+    df = fetch_from_yfinance(tickers)
+    df = backfill_growth(df)
     return df
 
 # -------------- Sidebar controls --------------
@@ -141,8 +147,8 @@ df_inputs = fetch_live(tickers)
 
 # -------------- Calculations --------------
 df = df_inputs.copy()
-
 years = [1,2,3,4,5]
+
 for y in years:
     if y == 1:
         df[f"EPS_Y{y}"] = df["EPS_nextY"]
@@ -169,13 +175,14 @@ cols = st.columns(len(df.index))
 for i, t in enumerate(df.index):
     with cols[i]:
         fwd1 = df.at[t, "FwdPE_Y1"]
-        tag = "green" if ce.at[t,"Year 1"] == "Cheap" else "red"
-        label = ce.at[t,"Year 1"] or "N/A"
+        label = ce.at[t, "Year 1"] or "N/A"
+        tag = "green" if label == "Cheap" else "red"
+        price = df.at[t, "Current_Price"]
         st.markdown(f"""
         <div class="kpi">
           <div style="font-size:15px; font-weight:700; margin-bottom:4px">{t}</div>
           <div class="small">Price</div>
-          <div style="font-size:20px; font-weight:700">${df.at[t,'Current_Price']:.2f}</div>
+          <div style="font-size:20px; font-weight:700">${price:.2f}</div>
           <div class="small" style="margin-top:6px">Forward P/E Y1</div>
           <div style="display:flex; gap:8px; align-items:center">
             <div style="font-size:20px; font-weight:700">{fwd1:.2f}x</div>
@@ -190,8 +197,7 @@ st.caption("Cheap or Expensive is judged versus the 10Y inverse P/E shown above.
 tab1, tab2, tab3 = st.tabs(["Inputs", "Projections", "Forward P/E"])
 
 with tab1:
-    tbl = df_inputs.copy()
-    tbl = tbl.rename(columns={
+    tbl = df_inputs.rename(columns={
         "EPS_TTM":"EPS (TTM)",
         "EPS_nextY":"EPS next Y",
         "EPS_growth_5Y_pct":"EPS growth next 5Y (%)",
@@ -213,14 +219,12 @@ with tab2:
     eps = df[[f"EPS_Y{y}" for y in years]]
     eps.columns = [f"Year {y}" for y in years]
     st.dataframe(
-        eps.style.format("{:.2f}").background_gradient(
-            cmap="Greens", axis=None
-        ),
+        eps.style.format("{:.2f}").background_gradient(cmap="Greens", axis=None),
         use_container_width=True
     )
 
 with tab3:
-    fpe = df[[f"FwdPE_Y{y}" for y in years]].copy()
+    fpe = df[[f"FwdPE_Y{y}" for y in years]]
     fpe.columns = [f"Year {y}" for y in years]
 
     def color_pe(val):
@@ -231,7 +235,7 @@ with tab3:
     styled = fpe.style.format("{:.2f}x").applymap(color_pe)
     st.dataframe(styled, use_container_width=True)
 
-    st.markdown("**Cheap/Expensive summary**")
+    st.markdown("**Cheap or Expensive summary**")
     st.dataframe(
         ce.style.apply(
             lambda s: ["background-color: #d9f2e4" if v=="Cheap" else "background-color: #f9d5d0" for v in s],
@@ -244,13 +248,7 @@ with tab3:
 st.divider()
 out = pd.concat(
     [
-        df_inputs.rename(columns={
-            "EPS_TTM":"EPS_TTM",
-            "EPS_nextY":"EPS_nextY",
-            "EPS_growth_5Y_pct":"EPS_growth_5Y_pct",
-            "Fwd_PE_nextY":"Fwd_PE_nextY",
-            "Current_Price":"Current_Price"
-        }),
+        df_inputs,
         df[[f"EPS_Y{y}" for y in years]],
         df[[f"FwdPE_Y{y}" for y in years]],
         ce.add_prefix("CE_"),
