@@ -229,12 +229,20 @@ for i, tkr in enumerate(valid_assets):
             st.caption("0 to 100 scale. >65 self reinforcing, 35-65 neutral, <35 self correcting.")
         with st.expander("Factor contributions (latest)"):
             if not details.empty:
-                last_vals = details.dropna().iloc[-1]
-                # Safer bar: use Plotly instead of st.bar_chart to avoid Altair shorthand errors
-                fig = go.Figure(data=[go.Bar(x=last_vals.index, y=last_vals.values)])
-                fig.update_layout(height=300, margin=dict(l=20,r=20,t=10,b=10))
-                st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(details.tail(5))
+                det_nonan = details.dropna(how="all")
+                if det_nonan.empty:
+                    st.info("No valid factor spreads yet for this asset and settings.")
+                else:
+                    try:
+                        last_row = det_nonan.iloc[-1]
+                        fig = go.Figure(data=[go.Bar(x=last_row.index, y=last_row.values)])
+                        fig.update_layout(height=300, margin=dict(l=20,r=20,t=10,b=10))
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception:
+                        st.dataframe(det_nonan.tail(5))
+                    st.dataframe(det_nonan.tail(5))
+            else:
+                st.info("No factor details available with current frequency/window.")
         with st.expander("Download data"):
             out = pd.concat([s.rename("price"), fund], axis=1)
             out["ReflexivityIntensity"] = ri
