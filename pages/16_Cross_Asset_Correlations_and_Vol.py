@@ -51,12 +51,12 @@ st.sidebar.markdown(
 
 **Correlation matrix**
 - Lower-triangle only, gray diagonal, group-colored header, highlight when absolute rho ≥ 0.75.
-- ETFs proxy indices where needed: LQD/HYG for IG/HY, EEM for MXEF.
+- ETFs proxy indices where needed, for example LQD/HYG for IG/HY, EEM for MXEF.
 
 **Volatility**
 - Realized vol = 21-day rolling standard deviation of daily returns, annualized.
-- Implied vol shown where Yahoo provides it: VIX for SPX, OVX for oil.
-- MOVE, CDX, most FX implied vols are unavailable on Yahoo, so realized proxies are used.
+- Implied vol shown where Yahoo provides it, VIX for SPX, OVX for oil.
+- MOVE, CDX, and most FX implied vols are unavailable on Yahoo, so realized proxies are used.
 
 **Downloads**
 - CSV buttons for matrix and prices.
@@ -164,7 +164,7 @@ def style_corr_matrix(df, groups, highlight_thresh=0.75):
     return sty
 
 def align_series_to_x(x_index, series):
-    """Return y aligned to x_index as a numpy array. Fixes mismatched lengths."""
+    """Return y aligned to x_index as a numpy array."""
     if isinstance(series, pd.Series):
         return x_index, series.reindex(pd.Index(x_index)).astype(float).values
     return x_index, np.array(series)
@@ -186,11 +186,20 @@ RET = pct_returns(PRICES)
 WIN = 21  # 1M ~ 21 trading days
 
 # -------------------------------
-# Top: big correlation matrix
+# Top: big correlation matrix, no vertical scroll
 # -------------------------------
 st.subheader("Cross-Asset Correlation Matrix (1M)")
 corr_1m = RET.tail(WIN).corr().replace([-np.inf, np.inf], np.nan)
-st.dataframe(style_corr_matrix(corr_1m, GROUPS), use_container_width=True)
+
+# Auto-fit height to rows so the whole matrix is visible at first glance
+rows = corr_1m.shape[0]            # number of tickers
+row_px = 40                         # row height estimate
+header_px = 110                     # header height estimate
+table_height = header_px + row_px * rows
+table_height = min(table_height, 2000)  # safety cap for small screens
+
+sty = style_corr_matrix(corr_1m, GROUPS)
+st.dataframe(sty, use_container_width=True, height=table_height)
 
 c1, c2 = st.columns([1, 1])
 with c1:
@@ -199,20 +208,17 @@ with c2:
     st.download_button("Download prices (CSV)", data=PRICES.to_csv().encode(), file_name="prices.csv")
 
 # -------------------------------
-# Middle: 3×2 correlation panels styled like your image
+# Middle: 3×2 correlation panels
 # -------------------------------
 st.subheader("Cross-Asset Correlation Analysis")
 
-# Panel configuration: titles and y-axis ranges that mirror the screenshot
 PANEL_SPECS = [
-    # row 1
     dict(a="^GSPC", b="^TNX", la="SPX", lb="US 10Y Tsy Yield",
          title="Equity-Rates Correlation (1M)", ymin=-0.8, ymax=0.8),
     dict(a="^RUT", b="LQD", la="RTY", lb="IG Bonds (LQD)",
          title="Equity-Corp Bond Correlation (1M)", ymin=-0.6, ymax=1.2),
     dict(a="^GSPC", b="CL=F", la="SPX", lb="Oil (WTI)",
          title="Equity-Oil Correlation (1M)", ymin=-0.8, ymax=0.8),
-    # row 2
     dict(a="^GSPC", b="GLD", la="SPX", lb="GLD",
          title="Equity-Gold Correlation (1M)", ymin=-1.0, ymax=0.8),
     dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD",
@@ -236,15 +242,12 @@ def panel(ax, spec):
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
     ax.set_title(spec["title"])
     ax.set_ylabel("Correlation (%)")
-    # small legend text like the reference
     ax.legend([f"{spec['la']} vs. {spec['lb']}"], loc="upper left", fontsize=9)
-    # source text at bottom left
     ymin, ymax = ax.get_ylim()
     ax.text(rc.index.min(), ymin + 0.02*(ymax - ymin), "Source: Yahoo Finance", fontsize=8)
 
-# render 3 x 2
-rows = [PANEL_SPECS[:3], PANEL_SPECS[3:]]
-for row in rows:
+rows_specs = [PANEL_SPECS[:3], PANEL_SPECS[3:]]
+for row in rows_specs:
     col1, col2, col3 = st.columns(3)
     for spec, col in zip(row, [col1, col2, col3]):
         with col:
@@ -253,7 +256,7 @@ for row in rows:
             st.pyplot(fig, use_container_width=True)
 
 # -------------------------------
-# Lower: 3×2 volatility monitor (unchanged layout, with index alignment)
+# Lower: 3×2 volatility monitor
 # -------------------------------
 st.subheader("Cross-Asset Volatility Monitor")
 REALVOL = realized_vol(RET, window=WIN)
@@ -321,13 +324,11 @@ with c6:
 st.subheader("Cross-Asset Volatility Snapshot, Z-Scores")
 z_panel = {}
 
-# Implied if available
 for sym in ["^VIX", "^OVX"]:
     iv = fetch_prices([sym], str(start_date), str(end_date))
     if not iv.empty:
         z_panel[sym] = iv.iloc[:, 0]
 
-# Realized proxies in percent units
 for sym, label in [("^GSPC", "SPX Realized"),
                    ("^TNX", "US10Y Realized"),
                    ("LQD", "IG Realized"),
