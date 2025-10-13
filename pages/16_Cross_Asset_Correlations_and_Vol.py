@@ -9,22 +9,28 @@ import matplotlib.pyplot as plt
 import streamlit as st
 
 # -------------------------------
-# App Config
+# App Config and style
 # -------------------------------
 st.set_page_config(page_title="Cross-Asset Correlations and Vol", layout="wide")
 
+plt.rcParams.update({
+    "figure.figsize": (8, 3),
+    "axes.grid": True,
+    "grid.alpha": 0.3,
+    "axes.titlesize": 12,
+    "axes.labelsize": 10,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+})
+
 st.title("Cross-Asset Correlation and Volatility Dashboard")
-st.caption("Data source: Yahoo Finance via yfinance.")
+st.caption("Data source: Yahoo Finance via yfinance. Layout mirrors your reference, with the matrix up top and 3x2 panels below.")
 
 # -------------------------------
 # Utilities
 # -------------------------------
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def fetch_prices(tickers, start, end, interval="1d"):
-    """
-    Download Adjusted Close for a list of tickers.
-    Returns a wide DataFrame of prices with Date index.
-    """
     data = yf.download(
         tickers=tickers,
         start=start,
@@ -48,7 +54,6 @@ def fetch_prices(tickers, start, end, interval="1d"):
             return pd.DataFrame()
         wide = pd.concat(frames, axis=1)
     else:
-        # single ticker path
         if data.empty:
             return pd.DataFrame()
         col = "Adj Close" if "Adj Close" in data.columns else ("Close" if "Close" in data.columns else data.columns[0])
@@ -71,10 +76,7 @@ def zscores(series, lookback=2520):
     sd = s.rolling(lookback, min_periods=max(20, lookback//10)).std()
     return (s - m) / sd
 
-def safe_plot(fig):
-    st.pyplot(fig, clear_figure=True, use_container_width=True)
-
-def annotate_latest(ax, series, fmt="{:.2f}"):
+def annotate_latest(ax, series, fmt="{:.0%}"):
     s = pd.Series(series).dropna()
     if s.empty:
         return
@@ -82,6 +84,16 @@ def annotate_latest(ax, series, fmt="{:.2f}"):
     y = s.iloc[-1]
     ax.scatter([x], [y])
     ax.text(x, y, " " + fmt.format(y))
+
+def style_corr(df):
+    # diverging background from -100% to +100%
+    return (df.style
+            .format("{:.0%}")
+            .background_gradient(cmap="PiYG", vmin=-1, vmax=1)
+            .set_table_styles([{"selector": "th.col_heading",
+                                "props": [("text-align", "center")]},
+                               {"selector": "th.row_heading",
+                                "props": [("text-align", "left")]}]))
 
 # -------------------------------
 # Sidebar Controls
@@ -92,29 +104,20 @@ default_start = datetime.now() - timedelta(days=365*12)
 start_date = st.sidebar.date_input("Start date", value=default_start.date())
 end_date = st.sidebar.date_input("End date", value=datetime.now().date())
 rolling_days = st.sidebar.number_input("Rolling window (trading days)", min_value=5, max_value=126, value=21, step=1)
-
 zlb = st.sidebar.number_input("Z-score lookback (days)", min_value=252, max_value=5040, value=2520, step=21)
 
 st.sidebar.divider()
-st.sidebar.caption("Tickers are editable. Keep Yahoo Finance symbols.")
+st.sidebar.caption("Tickers are editable. Keep Yahoo symbols.")
 
-# Equity indices
-eq_tickers = st.sidebar.text_area("Equity indices (comma separated)",
+eq_tickers = st.sidebar.text_area("Equity indices",
                                   value="^GSPC,^RUT,^N225,EEM")
-# Credit ETFs
-credit_tickers = st.sidebar.text_area("Credit ETFs (comma separated)", value="LQD,HYG")
-# Rates proxies (yields or bond ETFs)
-rates_tickers = st.sidebar.text_area("Rates and bond proxies (comma separated)",
+credit_tickers = st.sidebar.text_area("Credit ETFs", value="LQD,HYG")
+rates_tickers = st.sidebar.text_area("Rates and bond proxies",
                                      value="^TNX,^TYX,IEF,TLT")
-# Commodities
-cmd_tickers = st.sidebar.text_area("Commodities (comma separated)",
+cmd_tickers = st.sidebar.text_area("Commodities",
                                    value="CL=F,GC=F,HG=F,GLD,USO")
-# FX
-fx_tickers = st.sidebar.text_area("FX pairs (comma separated)", value="EURUSD=X,USDJPY=X,GBPUSD=X")
-
-# Implied vol indices on Yahoo (optional)
-impvol_tickers = st.sidebar.text_area("Implied vol indices, optional (comma separated)",
-                                      value="^VIX,^OVX")
+fx_tickers = st.sidebar.text_area("FX pairs", value="EURUSD=X,USDJPY=X,GBPUSD=X")
+impvol_tickers = st.sidebar.text_area("Implied vol tickers (optional)", value="^VIX,^OVX")
 
 def parse_tickers(text):
     return [t.strip() for t in text.split(",") if t.strip()]
@@ -127,9 +130,7 @@ groups = {
     "FX": parse_tickers(fx_tickers),
 }
 implied_vol_list = parse_tickers(impvol_tickers)
-
 all_tickers = sorted(list(set(sum(groups.values(), []))))
-
 st.sidebar.write(f"Total tickers: {len(all_tickers)}")
 
 # -------------------------------
@@ -145,48 +146,33 @@ with st.spinner("Downloading market data from Yahoo Finance..."):
 if price_wide.empty:
     st.error("No data downloaded. Check tickers and date range.")
     st.stop()
-else:
-    st.success(f"Fetched {price_wide.shape[1]} series and {price_wide.shape[0]} rows.")
 
-# -------------------------------
-# Correlation Matrix (1M)
-# -------------------------------
-st.header("Cross-Asset Correlation Matrix (1M)")
-# Use last N trading days
 rets_all = pct_returns(price_wide)
 rets_last = rets_all.tail(rolling_days)
-
 corr_matrix = rets_last.corr().replace([-np.inf, np.inf], np.nan)
 
-def build_group_labels(cols):
-    label_map = {}
-    for gname, ticklist in groups.items():
-        for t in ticklist:
-            label_map[t] = gname
-    return pd.Series([label_map.get(c, "Other") for c in cols], index=cols, name="Group")
+# -------------------------------
+# TOP: Big Correlation Matrix
+# -------------------------------
+st.subheader("Cross-Asset Correlation Matrix (1M)")
+st.caption("Rolling 1M returns, percentage format, diverging color map. Use the CSV below to share.")
+st.dataframe(style_corr(corr_matrix), use_container_width=True)
 
-group_labels = build_group_labels(corr_matrix.columns)
-corr_display = corr_matrix.copy()
-corr_display.index = corr_display.index.map(lambda x: f"{x}  [{group_labels.loc[x]}]")
+c1, c2 = st.columns([1, 1])
+with c1:
+    st.download_button("Download matrix (CSV)",
+                       data=corr_matrix.to_csv().encode(),
+                       file_name="corr_1m.csv")
 
-st.dataframe(corr_display.style.format("{:.0%}"))
+with c2:
+    st.download_button("Download prices (CSV)",
+                       data=price_wide.to_csv().encode(),
+                       file_name="prices.csv")
 
 # -------------------------------
-# Correlation Analysis Plots
+# MIDDLE: Correlation Analysis, 3 x 2
 # -------------------------------
-st.header("Cross-Asset Correlation Analysis")
-
-def plot_rolling_corr(prices_a, prices_b, label_a, label_b, window=21):
-    r = pd.DataFrame({label_a: prices_a, label_b: prices_b}).dropna()
-    rcorr = r[label_a].pct_change().rolling(window).corr(r[label_b].pct_change())
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.plot(rcorr.index, rcorr.values)
-    ax.set_title(f"Rolling {window}-day Correlation: {label_a} vs {label_b}")
-    ax.set_ylabel("Correlation")
-    ax.grid(True, alpha=0.3)
-    annotate_latest(ax, rcorr, "{:.0%}")
-    safe_plot(fig)
-
+st.subheader("Cross-Asset Correlation Analysis (Rolling 1M)")
 pairs = [
     ("^GSPC", "^TNX", "SPX", "US 10Y Yield"),
     ("^RUT", "LQD", "RTY", "IG Credit (LQD)"),
@@ -196,91 +182,103 @@ pairs = [
     ("^N225", "USDJPY=X", "Nikkei 225", "USDJPY"),
 ]
 
-for a, b, la, lb in pairs:
-    if a in price_wide.columns and b in price_wide.columns:
-        plot_rolling_corr(price_wide[a], price_wide[b], la, lb, window=rolling_days)
+def plot_rolling_corr(ax, prices_a, prices_b, la, lb, window=21):
+    r = pd.DataFrame({la: prices_a, lb: prices_b}).dropna()
+    rcorr = r[la].pct_change().rolling(window).corr(r[lb].pct_change())
+    ax.plot(rcorr.index, rcorr.values)
+    ax.set_title(f"{la} vs {lb}")
+    ax.set_ylabel("Correlation")
+    annotate_latest(ax, rcorr, "{:.0%}")
+
+rows = [pairs[:3], pairs[3:]]
+for row in rows:
+    col1, col2, col3 = st.columns(3)
+    for (a, b, la, lb), col in zip(row, [col1, col2, col3]):
+        with col:
+            if a in price_wide.columns and b in price_wide.columns:
+                fig, ax = plt.subplots()
+                plot_rolling_corr(ax, price_wide[a], price_wide[b], la, lb, window=rolling_days)
+                st.pyplot(fig, use_container_width=True)
 
 # -------------------------------
-# Volatility Monitor
+# LOWER: Volatility Monitor, 3 x 2
 # -------------------------------
-st.header("Cross-Asset Volatility Monitor")
+st.subheader("Cross-Asset Volatility Monitor")
+real_vol = realized_vol(rets_all, window=rolling_days)
 
-realized = realized_vol(rets_all, window=rolling_days)
+def plot_series(ax, x, y_list, title, ylabel="Percent"):
+    for y, label in y_list:
+        ax.plot(x, y, label=label)
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.legend(fontsize=8, ncol=2)
 
-# Equity vol: VIX vs SPX realized
-if "^GSPC" in price_wide.columns:
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.plot(realized.index, realized["^GSPC"] * 100, label="SPX 1M Realized Vol")
-    if "^VIX" in implied_vol_list:
-        vix = fetch_prices(["^VIX"], str(start_date), str(end_date))
-        if not vix.empty:
-            ax.plot(vix.index, vix["^VIX"], label="VIX Index")
-    ax.set_title("Equity Volatility: implied vs realized")
-    ax.set_ylabel("Percent")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    safe_plot(fig)
+# Row 1
+col1, col2, col3 = st.columns(3)
 
-# Rates vol: realized for 10Y yield
-if "^TNX" in price_wide.columns:
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.plot(realized.index, realized["^TNX"] * 100, label="US 10Y Yield 1M Realized Vol")
-    ax.set_title("Rates Volatility: realized proxy")
-    ax.set_ylabel("Percent")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    safe_plot(fig)
+with col1:
+    if "^GSPC" in real_vol.columns:
+        fig, ax = plt.subplots()
+        y = [(real_vol["^GSPC"] * 100, "SPX 1M Realized Vol")]
+        if "^VIX" in implied_vol_list:
+            vix = fetch_prices(["^VIX"], str(start_date), str(end_date))
+            if not vix.empty:
+                y.append((vix["^VIX"], "VIX Index"))
+        plot_series(ax, real_vol.index, y, "Equity Vol, implied vs realized")
+        st.pyplot(fig, use_container_width=True)
 
-# Credit vol: realized for LQD and HYG
-for tkr, name in [("LQD", "IG Credit"), ("HYG", "HY Credit")]:
-    if tkr in realized.columns:
-        fig, ax = plt.subplots(figsize=(8, 3))
-        ax.plot(realized.index, realized[tkr] * 100, label=f"{name} 1M Realized Vol")
-        ax.set_title(f"{name} Volatility: realized proxy")
-        ax.set_ylabel("Percent")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        safe_plot(fig)
+with col2:
+    if "^TNX" in real_vol.columns:
+        fig, ax = plt.subplots()
+        plot_series(ax, real_vol.index, [(real_vol["^TNX"] * 100, "US 10Y Realized Vol")], "Rates Vol, realized proxy")
+        st.pyplot(fig, use_container_width=True)
 
-# Oil vol: OVX vs Oil realized
-if "CL=F" in price_wide.columns:
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.plot(realized.index, realized["CL=F"] * 100, label="Oil 1M Realized Vol")
-    if "^OVX" in implied_vol_list:
-        ovx = fetch_prices(["^OVX"], str(start_date), str(end_date))
-        if not ovx.empty:
-            ax.plot(ovx.index, ovx["^OVX"], label="OVX Index")
-    ax.set_title("Oil Volatility: implied vs realized")
-    ax.set_ylabel("Percent")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    safe_plot(fig)
+with col3:
+    if "CL=F" in real_vol.columns:
+        fig, ax = plt.subplots()
+        y = [(real_vol["CL=F"] * 100, "Oil 1M Realized Vol")]
+        if "^OVX" in implied_vol_list:
+            ovx = fetch_prices(["^OVX"], str(start_date), str(end_date))
+            if not ovx.empty:
+                y.append((ovx["^OVX"], "OVX Index"))
+        plot_series(ax, real_vol.index, y, "Oil Vol, implied vs realized")
+        st.pyplot(fig, use_container_width=True)
 
-# FX vol: realized only
-for tkr in ["EURUSD=X", "USDJPY=X"]:
-    if tkr in realized.columns:
-        fig, ax = plt.subplots(figsize=(8, 3))
-        ax.plot(realized.index, realized[tkr] * 100, label=f"{tkr} 1M Realized Vol")
-        ax.set_title(f"FX Volatility: realized proxy, {tkr}")
-        ax.set_ylabel("Percent")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        safe_plot(fig)
+# Row 2
+col4, col5, col6 = st.columns(3)
+
+with col4:
+    if "LQD" in real_vol.columns:
+        fig, ax = plt.subplots()
+        plot_series(ax, real_vol.index, [(real_vol["LQD"] * 100, "IG 1M Realized Vol")], "IG Credit Vol, realized proxy")
+        st.pyplot(fig, use_container_width=True)
+
+with col5:
+    if "HYG" in real_vol.columns:
+        fig, ax = plt.subplots()
+        plot_series(ax, real_vol.index, [(real_vol["HYG"] * 100, "HY 1M Realized Vol")], "HY Credit Vol, realized proxy")
+        st.pyplot(fig, use_container_width=True)
+
+with col6:
+    to_plot = []
+    if "EURUSD=X" in real_vol.columns:
+        to_plot.append((real_vol["EURUSD=X"] * 100, "EURUSD Realized Vol"))
+    if "USDJPY=X" in real_vol.columns:
+        to_plot.append((real_vol["USDJPY=X"] * 100, "USDJPY Realized Vol"))
+    if len(to_plot) > 0:
+        fig, ax = plt.subplots()
+        plot_series(ax, real_vol.index, to_plot, "FX Vol, realized proxies")
+        st.pyplot(fig, use_container_width=True)
 
 # -------------------------------
-# Z-Score Snapshot
+# Bottom: Long Lookback Z-Scores, full width
 # -------------------------------
-st.header("Cross-Asset Volatility Snapshot (Z-Scores)")
-
+st.subheader("Cross-Asset Volatility Snapshot, Z-Scores (long lookback)")
 z_panel = {}
-
-# Implied indices
 for sym in implied_vol_list:
     iv = fetch_prices([sym], str(start_date), str(end_date))
     if not iv.empty:
         z_panel[sym] = iv.iloc[:, 0]
-
-# Realized proxies (percent)
 for sym, label in [("^GSPC", "SPX Realized"),
                    ("^TNX", "US10Y Realized"),
                    ("LQD", "IG Realized"),
@@ -289,8 +287,8 @@ for sym, label in [("^GSPC", "SPX Realized"),
                    ("GLD", "Gold Realized"),
                    ("EURUSD=X", "EURUSD Realized"),
                    ("USDJPY=X", "USDJPY Realized")]:
-    if sym in realized.columns:
-        z_panel[label] = realized[sym] * 100
+    if sym in real_vol.columns:
+        z_panel[label] = real_vol[sym] * 100
 
 if len(z_panel) >= 2:
     zdf = pd.DataFrame(z_panel).dropna(how="all")
@@ -299,30 +297,11 @@ if len(z_panel) >= 2:
     for c in zdf.columns:
         ax.plot(zdf.index, zdf[c], label=c)
     ax.axhline(0, linestyle="--", linewidth=1)
-    ax.set_title("Vol standardized to long lookback where available")
     ax.set_ylabel("Z-Score")
-    ax.grid(True, alpha=0.3)
-    ax.legend(ncol=2, fontsize=8)
-    safe_plot(fig)
+    ax.set_title("Standardized to long history where available")
+    ax.legend(ncol=3, fontsize=8)
+    st.pyplot(fig, use_container_width=True)
 else:
     st.info("Not enough series to compute a z-score snapshot.")
 
-# -------------------------------
-# Data and Downloads
-# -------------------------------
-st.header("Data")
-st.write("Spot prices")
-st.dataframe(price_wide.tail().style.format("{:,.4f}"))
-
-st.write("1M correlation matrix")
-st.dataframe(corr_matrix.style.format("{:.0%}"))
-
-def to_csv_bytes(df):
-    buf = io.StringIO()
-    df.to_csv(buf)
-    return buf.getvalue().encode()
-
-st.download_button("Download current prices (CSV)", data=to_csv_bytes(price_wide), file_name="prices.csv")
-st.download_button("Download 1M correlation matrix (CSV)", data=to_csv_bytes(corr_matrix), file_name="corr_1m.csv")
-
-st.caption("Coverage notes: Yahoo provides VIX and OVX. MOVE, CDX IG/HY, and most FX implied vols are not on Yahoo. The app uses realized volatility proxies where implied data are unavailable.")
+st.caption("Notes: VIX and OVX are available on Yahoo. MOVE and CDX are not, so rates and credit use realized proxies.")
