@@ -1,11 +1,12 @@
-# Cross-Asset Correlation & Volatility Dashboard — Insight-First, Full App
+# Cross-Asset Correlation & Volatility Dashboard - Insight-first, final
+# Key features
 # - Single batched Yahoo fetch (cached)
 # - Rolling correlations on returns
-# - Correlation matrix: abs toggle, threshold highlights, ranked top pairs, group-to-group view
-# - Correlation panels: 6M mean ±1σ band, metric tiles, shading only (no regime labels)
-# - Vol monitor: IQR shading, metric tiles, optional implied overlays
-# - Z-score snapshot: grouped into tabs to avoid clutter
-# - Restored sidebar reading guide
+# - Correlation matrix: red->green for signed, Greens for absolute, threshold highlights, compact Top pairs, correct group-to-group view
+# - Correlation panels: 6M mean ±1σ band, metric tiles, subtle regime shading
+# - Vol monitor: IQR shading, metric tiles, implied overlays
+# - Z-score snapshot: grouped into tabs, tight layout
+# - Sidebar reading guide restored
 
 import math
 from datetime import datetime, timedelta
@@ -34,44 +35,44 @@ plt.rcParams.update({
 })
 
 st.title("Cross-Asset Correlation and Volatility Dashboard")
-st.caption("Data: Yahoo Finance via yfinance. Universe is locked. Views add percentiles, bands, metric tiles, and group structure.")
+st.caption("Data: Yahoo Finance via yfinance. Universe is locked. Views add percentiles, bands, tiles, and group structure.")
 
 # =========================
 # Fixed universe and order (Yahoo symbols)
 # =========================
 GROUPS = {
-    "Equities": ["^GSPC", "^RUT", "^STOXX50E", "^N225", "EEM"],      # SPX, RTY, SX5E, NKY, MXEF proxy (EEM)
-    "Corporate Credit": ["LQD", "HYG"],                              # IG, HY ETFs
-    "Rates": ["^TNX", "^TYX"],                                       # US 10Y, 30Y yields
-    "Commodities": ["CL=F", "GLD", "HG=F"],                          # WTI, Gold ETF, Copper futures
-    "Foreign Exchange": ["EURUSD=X", "USDJPY=X", "GBPUSD=X"],        # EURUSD, USDJPY, GBPUSD
+    "Equities": ["^GSPC", "^RUT", "^STOXX50E", "^N225", "EEM"],
+    "Corporate Credit": ["LQD", "HYG"],
+    "Rates": ["^TNX", "^TYX"],
+    "Commodities": ["CL=F", "GLD", "HG=F"],
+    "Foreign Exchange": ["EURUSD=X", "USDJPY=X", "GBPUSD=X"],
 }
 ORDER = sum(GROUPS.values(), [])
 IV_TICKERS = ["^VIX", "^OVX"]
 
 # =========================
-# Sidebar: reading guide + controls
+# Sidebar: guide and controls
 # =========================
 st.sidebar.header("Reading guide")
 st.sidebar.markdown(
 """
 **Core definitions**
-- **1M** = 21 trading days.
-- **Correlation panels** show 21D rolling correlation with a **6M mean** and **±1σ band** to separate noise from drift.
-- **Matrix** uses the last 21 sessions of returns. Lower triangle only, **bold cells** cross a user-set |ρ| threshold. Toggle **absolute view** to see structure, then use **signed** view for hedge direction.
-- **Volatility**: **realized** = 21D stdev of returns, annualized and in percent. **Implied** overlays use **^VIX** for SPX and **^OVX** for oil.
-- **Z-scores** standardize each series to its own full history, grouped into tabs for readability.
+- 1M = 21 trading days.
+- Correlation panels show 21D rolling correlation with a 6M mean and ±1σ band to separate noise from drift.
+- Matrix uses the last 21 sessions of returns. Lower triangle only. Bold cells cross a user-set |ρ| threshold. Use absolute mode to see structure, signed mode for hedge direction.
+- Volatility: realized = 21D stdev of returns, annualized and in percent. Implied overlays use ^VIX for SPX and ^OVX for oil.
+- Z-scores standardize each series to its own full history, grouped in tabs for readability.
 
 **Reading tips**
-- If equity–rates corr is negative and large in magnitude, rate rallies likely support equities.
-- Positive equity–credit corr means credit sells off with equities, watch HY risk.
-- Use the **Top pairs** tables for immediate hedging and pair-trade ideas.
+- Negative equity-rates correlation means rate rallies often support equities.
+- Positive equity-credit correlation means credit sells off with equities. Watch HY.
+- Use Top pairs tables for immediate hedge and pair ideas.
 """
 )
 
 st.sidebar.header("View controls")
-focus_since_2017 = st.sidebar.checkbox("Focus on 2017–present", value=True)
-clip_extremes = st.sidebar.checkbox("Clip y-axes at 1st–99th percentiles", value=True)
+focus_since_2017 = st.sidebar.checkbox("Focus on 2017 to present", value=True)
+clip_extremes = st.sidebar.checkbox("Clip y-axes at 1st to 99th percentiles", value=True)
 show_regimes = st.sidebar.checkbox("Show regime shading (no labels)", value=True)
 z_snapshot_mode = st.sidebar.selectbox("Z-score layout", ["Tabs (recommended)", "Stacked"], index=0)
 
@@ -98,7 +99,6 @@ def fetch_prices(tickers, start, end, interval="1d"):
     if data is None or len(data) == 0:
         return pd.DataFrame()
 
-    # Normalize to wide frame of Adj Close (or Close)
     if isinstance(data.columns, pd.MultiIndex):
         frames = []
         for t in tickers:
@@ -172,67 +172,6 @@ def add_regime_shading(ax):
     for a, b in spans:
         ax.axvspan(pd.to_datetime(a), pd.to_datetime(b), color="#cccccc", alpha=0.18)
 
-def style_corr_matrix(corr_df, groups, highlight_thresh=0.75):
-    if corr_df is None or corr_df.empty:
-        st.error("Correlation matrix is empty.")
-        return None
-    cols = [c for c in ORDER if c in corr_df.columns]
-    if not cols:
-        st.error("No valid tickers found for correlation matrix.")
-        return None
-    base = corr_df.loc[cols, cols].copy()
-
-    col_groups = []
-    for t in base.columns:
-        g_found = None
-        for g, lst in groups.items():
-            if t in lst:
-                g_found = g
-                break
-        col_groups.append(g_found or "Other")
-    base.columns = pd.MultiIndex.from_arrays([col_groups, base.columns], names=["Group", "Ticker"])
-    base.index.name = "Ticker"
-
-    n = base.shape[0]
-    mask_upper = np.triu(np.ones((n, n), dtype=bool), k=1)
-    mask_diag  = np.eye(n, dtype=bool)
-    display = base.copy()
-    vals = display.values.astype(float)
-    vals[mask_upper] = np.nan
-    vals[mask_diag]  = np.nan
-    display.iloc[:, :] = vals
-
-    group_colors = {
-        "Equities": "#d9ead3",
-        "Corporate Credit": "#d0e0e3",
-        "Rates": "#fce5cd",
-        "Commodities": "#fff2cc",
-        "Foreign Exchange": "#ead1dc",
-        "Other": "#f2f2f2",
-    }
-    header_styles = []
-    for i, (g, _) in enumerate(display.columns.tolist()):
-        header_styles.append({
-            "selector": f"th.col_heading.level0.col{i}",
-            "props": [("background-color", group_colors.get(g, "#f2f2f2"))]
-        })
-
-    def highlight_extremes(x):
-        css = np.full(x.shape, "", dtype=object)
-        cond = (np.abs(x.values) >= highlight_thresh) & ~np.isnan(x.values)
-        css[cond] = "background-color: #f8d7da;"
-        for i in range(min(x.shape)):
-            css[i, i] = "background-color: #e6e6e6;"
-        return pd.DataFrame(css, index=x.index, columns=x.columns)
-
-    sty = (display.style
-           .format(lambda v: "" if pd.isna(v) else f"{int(round(v*100, 0))}%")
-           .apply(highlight_extremes, axis=None)
-           .set_table_styles(header_styles, overwrite=False)
-           .set_properties(**{"text-align": "center"}))
-    st.caption("Header colors: Equities, Corporate Credit, Rates, Commodities, Foreign Exchange.")
-    return sty
-
 # =========================
 # Data download (single batched call)
 # =========================
@@ -258,11 +197,10 @@ WIN = 21
 REALVOL = realized_vol(RET, window=WIN)
 
 # =========================
-# Correlation Matrix: insight-first section
+# Correlation Matrix - insight-first
 # =========================
 st.subheader("Cross-Asset Correlation Matrix (1M)")
 
-# Matrix options
 with st.expander("Matrix options", expanded=True):
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
@@ -272,7 +210,6 @@ with st.expander("Matrix options", expanded=True):
     with c3:
         sort_mode = st.selectbox("Ordering", ["Original groups", "By average |ρ|"], index=0)
 
-# Build 1M correlation on returns
 if len(RET) >= WIN:
     recent_ret = RET.tail(WIN)
     corr_raw = recent_ret.corr().replace([-np.inf, np.inf], np.nan)
@@ -285,7 +222,7 @@ else:
     corr_signed = corr_raw.copy()
     corr = corr_raw.abs() if show_abs else corr_raw.copy()
 
-    # Reorder columns/rows
+    # ordering
     if sort_mode == "By average |ρ|":
         avg_abs = corr_raw.abs().mean().sort_values(ascending=False).index.tolist()
         order = [t for t in avg_abs if t in corr.columns]
@@ -295,7 +232,7 @@ else:
     corr = corr.loc[order, order]
     corr_signed = corr_signed.loc[order, order]
 
-    # Lower triangle only, blank diagonal
+    # lower triangle, blank diagonal
     n = corr.shape[0]
     mask_upper = np.triu(np.ones((n, n), dtype=bool), k=1)
     mask_diag  = np.eye(n, dtype=bool)
@@ -303,7 +240,7 @@ else:
     disp.values[mask_upper] = np.nan
     disp.values[mask_diag]  = np.nan
 
-    # MultiIndex columns with group headers
+    # multiindex headers with groups
     group_colors = {"Equities":"#d9ead3","Corporate Credit":"#d0e0e3","Rates":"#fce5cd","Commodities":"#fff2cc","Foreign Exchange":"#ead1dc"}
     col_groups = []
     for t in disp.columns:
@@ -312,11 +249,13 @@ else:
     disp.columns = pd.MultiIndex.from_arrays([col_groups, disp.columns], names=["Group", "Ticker"])
     disp.index.name = "Ticker"
 
-    # Styles
+    # styling: red->green for signed, Greens for abs
+    cmap = "RdYlGn" if not show_abs else "Greens"
+
     def _highlight_threshold(x):
         css = np.full(x.shape, "", dtype=object)
         cond = (np.abs(x.values) >= rho_thresh) & ~np.isnan(x.values)
-        css[cond] = "font-weight:700; border:1px solid #999999;"
+        css[cond] = "font-weight:700; border:1px solid #777;"
         for i in range(min(x.shape)):
             css[i, i] = "background-color:#efefef;"
         return pd.DataFrame(css, index=x.index, columns=x.columns)
@@ -328,21 +267,19 @@ else:
             "props": [("background-color", group_colors.get(g, "#f2f2f2"))]
         })
 
-    cmap = "RdBu_r" if not show_abs else "Greys"
     sty = (
         disp.style
-            .background_gradient(cmap=cmap, vmin=-1 if not show_abs else 0, vmax=1)
+            .background_gradient(cmap=cmap, vmin=(-1 if not show_abs else 0), vmax=1)
             .format(na_rep="", formatter=lambda v: "" if pd.isna(v) else f"{int(round(v*100,0))}%")
             .apply(_highlight_threshold, axis=None)
             .set_table_styles(header_styles, overwrite=False)
             .set_properties(**{"text-align":"center"})
     )
-
     rows = disp.shape[0]
     st.dataframe(sty, use_container_width=True, height=min(110 + 40*rows, 2400))
-    st.caption(f"Lower triangle only. Bold boxes are |ρ| ≥ {rho_thresh:.2f}. Use absolute mode to see structure, signed mode for hedge direction.")
+    st.caption(f"Lower triangle only. Bold cells meet |ρ| ≥ {rho_thresh:.2f}. Red=negative, green=positive. Absolute mode removes direction.")
 
-    # Digestible takeaways
+    # compact top pairs
     def pair_snapshot(ret_df, a, b):
         r = ret_df[[a, b]].dropna()
         if r.empty:
@@ -363,81 +300,95 @@ else:
             if ps is None:
                 continue
             now, pct = ps
-            pairs.append({
-                "A": a, "B": b, "ρ": now, "|ρ|": abs(now), "Percentile(5y)": pct,
-                "Group A": next((g for g, l in GROUPS.items() if a in l), "Other"),
-                "Group B": next((g for g, l in GROUPS.items() if b in l), "Other")
-            })
+            pairs.append({"A": a, "B": b, "ρ": now, "|ρ|": abs(now), "Percentile(5y)": pct})
 
     pairs_df = pd.DataFrame(pairs)
     if not pairs_df.empty:
         filt = pairs_df[pairs_df["|ρ|"] >= rho_thresh].copy().sort_values("|ρ|", ascending=False)
 
+        def _render_pairs(df):
+            if df.empty:
+                return df
+            out = df.copy()
+            out["Corr"] = out["ρ"].map(lambda x: f"{x: .2f}")
+            out["Percentile(5y)"] = out["Percentile(5y)"].map(lambda x: f"{x:.0f}th")
+            return out[["A","B","Corr","Percentile(5y)"]].rename(columns={"A":"Leg A","B":"Leg B"})
+
         c1, c2, c3 = st.columns([1.2, 1.2, 1])
         with c1:
             st.markdown("**Top positive pairs (now)**")
             pos = filt.sort_values("ρ", ascending=False).head(6)
-            st.dataframe(pos[["A", "B", "ρ", "Percentile(5y)", "Group A", "Group B"]]
-                         .rename(columns={"ρ": "Corr"}),
-                         use_container_width=True, height=270)
+            st.dataframe(_render_pairs(pos), use_container_width=True, height=262)
         with c2:
             st.markdown("**Top negative pairs (now)**")
             neg = filt.sort_values("ρ", ascending=True).head(6)
-            st.dataframe(neg[["A", "B", "ρ", "Percentile(5y)", "Group A", "Group B"]]
-                         .rename(columns={"ρ": "Corr"}),
-                         use_container_width=True, height=270)
+            st.dataframe(_render_pairs(neg), use_container_width=True, height=262)
         with c3:
             st.markdown("**Stats**")
             st.metric("Pairs ≥ threshold", f"{len(filt)}/{len(pairs_df)}")
             st.metric("Median |ρ| (all)", f"{pairs_df['|ρ|'].median():.2f}")
             st.metric("Max |ρ| now", f"{pairs_df['|ρ|'].max():.2f}")
 
-        # Group-to-group structure heatmap
-        def group_avg_corr(corr_signed, groups):
-            gmap = {t: g for g, lst in groups.items() for t in lst if t in corr_signed.columns}
-            G = sorted({gmap[t] for t in corr_signed.columns})
-            M = pd.DataFrame(index=G, columns=G, dtype=float)
-            for ga in G:
-                for gb in G:
-                    ta = [t for t, g in gmap.items() if g == ga]
-                    tb = [t for t, g in gmap.items() if g == gb]
-                    sub = corr_signed.loc[ta, tb].values if ta and tb else np.array([])
-                    if sub.size == 0:
+        # correct group-to-group averages from same window
+        def group_avg_corr_from_returns(ret_df, groups, window=WIN):
+            if len(ret_df) < window:
+                return pd.DataFrame()
+            C = ret_df.tail(window).corr().replace([-np.inf, np.inf], np.nan)
+            group_names = [g for g in groups.keys() if any(t in C.columns for t in groups[g])]
+            M = pd.DataFrame(index=group_names, columns=group_names, dtype=float)
+            for ga in group_names:
+                Ta = [t for t in groups[ga] if t in C.columns]
+                for gb in group_names:
+                    Tb = [t for t in groups[gb] if t in C.columns]
+                    if not Ta or not Tb:
                         M.loc[ga, gb] = np.nan
                         continue
+                    sub = C.loc[Ta, Tb].to_numpy()
                     if ga == gb:
-                        mask = ~np.eye(len(ta), len(tb), dtype=bool)
-                        sub = sub[mask].ravel()
-                    M.loc[ga, gb] = np.nanmean(sub) if sub.size else np.nan
+                        if sub.shape[0] == sub.shape[1]:
+                            mask = np.ones(sub.shape, dtype=bool)
+                            np.fill_diagonal(mask, False)
+                            vals = sub[mask]
+                        else:
+                            vals = sub.flatten()
+                    else:
+                        vals = sub.flatten()
+                    vals = vals[~np.isnan(vals)]
+                    M.loc[ga, gb] = np.nan if vals.size == 0 else float(np.mean(vals))
             return M
 
-        GAVG = group_avg_corr(corr_signed, GROUPS)
-        st.markdown("**Group-to-group average correlation (signed)**")
-        fig, ax = plt.subplots(figsize=(5.5, 4.5))
-        im = ax.imshow(GAVG.values, vmin=-1, vmax=1, cmap="RdBu_r")
-        ax.set_xticks(range(len(GAVG.columns))); ax.set_xticklabels(GAVG.columns, rotation=45, ha="right")
-        ax.set_yticks(range(len(GAVG.index)));   ax.set_yticklabels(GAVG.index)
-        for i in range(GAVG.shape[0]):
-            for j in range(GAVG.shape[1]):
-                val = GAVG.iat[i, j]
-                ax.text(j, i, "" if np.isnan(val) else f"{val*100:.0f}%", ha="center", va="center", fontsize=9, color="black")
-        ax.set_title("Avg signed correlation by asset class")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        plt.tight_layout()
-        st.pyplot(fig, use_container_width=False)
+        GAVG = group_avg_corr_from_returns(RET, GROUPS, WIN)
+
+        st.markdown("**Group-to-group average correlation (signed, last 21 sessions)**")
+        if GAVG.empty:
+            st.info("Not enough data for group summary.")
+        else:
+            fig, ax = plt.subplots(figsize=(6.0, 4.8))
+            im = ax.imshow(GAVG.values, vmin=-1, vmax=1, cmap="RdYlGn")
+            ax.set_xticks(range(len(GAVG.columns))); ax.set_xticklabels(GAVG.columns, rotation=45, ha="right")
+            ax.set_yticks(range(len(GAVG.index)));   ax.set_yticklabels(GAVG.index)
+            for i in range(GAVG.shape[0]):
+                for j in range(GAVG.shape[1]):
+                    val = GAVG.iat[i, j]
+                    ax.text(j, i, "" if np.isnan(val) else f"{val*100:.0f}%", ha="center", va="center", fontsize=9)
+            ax.set_title("Average signed correlation by asset class")
+            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.ax.set_ylabel("Correlation", rotation=270, labelpad=12)
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=False)
 
 # =========================
-# Correlation panels with bands + metric tiles
+# Correlation panels with bands and tiles
 # =========================
 st.subheader("Cross-Asset Correlation Analysis")
 
 PANEL_SPECS = [
-    dict(a="^GSPC", b="^TNX", la="SPX", lb="US 10Y",      title="Equity–Rates (1M)"),
-    dict(a="^RUT",  b="LQD",  la="RTY", lb="IG (LQD)",     title="Equity–IG Credit (1M)"),
-    dict(a="^GSPC", b="CL=F", la="SPX", lb="Oil (WTI)",    title="Equity–Oil (1M)"),
-    dict(a="^GSPC", b="GLD",  la="SPX", lb="GLD",          title="Equity–Gold (1M)"),
-    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD", title="Equity–EURUSD (1M)"),
-    dict(a="^N225", b="USDJPY=X", la="NKY", lb="USDJPY",   title="Equity–USDJPY (1M)"),
+    dict(a="^GSPC", b="^TNX", la="SPX", lb="US 10Y",      title="Equity - Rates (1M)"),
+    dict(a="^RUT",  b="LQD",  la="RTY", lb="IG (LQD)",     title="Equity - IG Credit (1M)"),
+    dict(a="^GSPC", b="CL=F", la="SPX", lb="Oil (WTI)",    title="Equity - Oil (1M)"),
+    dict(a="^GSPC", b="GLD",  la="SPX", lb="GLD",          title="Equity - Gold (1M)"),
+    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD", title="Equity - EURUSD (1M)"),
+    dict(a="^N225", b="USDJPY=X", la="NKY", lb="USDJPY",   title="Equity - USDJPY (1M)"),
 ]
 
 def roll_corr_from_returns(ret_df, a, b, window=21):
@@ -455,8 +406,8 @@ def corr_with_context(ax, rc):
     mean_rc = rc.rolling(126).mean()
     std_rc  = rc.rolling(126).std()
     ax.fill_between(rc.index, (mean_rc-std_rc).values, (mean_rc+std_rc).values, alpha=0.15)
-    ax.plot(mean_rc.index, mean_rc.values, linewidth=1.5, label="6M Mean")
-    ax.plot(rc.index, rc.values, linewidth=1.0, label="21D Corr")
+    ax.plot(mean_rc.index, mean_rc.values, linewidth=1.5, label="6M mean")
+    ax.plot(rc.index, rc.values, linewidth=1.0, label="21D corr")
     ax.axhline(0, linewidth=1)
     lims = clip_limits(rc.values, 1, 99)
     if lims:
@@ -487,7 +438,7 @@ for row_specs in [PANEL_SPECS[:3], PANEL_SPECS[3:]]:
                 st.metric("Percentile vs history", f"{pct:.0f}th" if pct is not None and not np.isnan(pct) else "NA")
 
 # =========================
-# Volatility Monitor with IQR shading + metric tiles
+# Volatility Monitor
 # =========================
 st.subheader("Cross-Asset Volatility Monitor")
 
@@ -528,13 +479,13 @@ with c1:
     if "^GSPC" in REALVOL.columns:
         vix = IV["^VIX"] if "^VIX" in IV.columns else None
         if vix is not None: vix.name = "VIX Index"
-        vol_panel(REALVOL["^GSPC"] * 100, "SPX 1M Realized Vol", "Equity Vol, implied vs realized", overlay=vix)
+        vol_panel(REALVOL["^GSPC"] * 100, "SPX 1M Realized Vol", "Equity vol, implied vs realized", overlay=vix)
     else:
         st.info("SPX realized vol unavailable.")
 
 with c2:
     if "^TNX" in REALVOL.columns:
-        vol_panel(REALVOL["^TNX"] * 100, "US 10Y Realized Vol", "Rates Vol, realized proxy")
+        vol_panel(REALVOL["^TNX"] * 100, "US 10Y Realized Vol", "Rates vol, realized proxy")
     else:
         st.info("US 10Y realized vol unavailable.")
 
@@ -542,7 +493,7 @@ with c3:
     if "CL=F" in REALVOL.columns:
         ovx = IV["^OVX"] if "^OVX" in IV.columns else None
         if ovx is not None: ovx.name = "OVX Index"
-        vol_panel(REALVOL["CL=F"] * 100, "Oil 1M Realized Vol", "Oil Vol, implied vs realized", overlay=ovx)
+        vol_panel(REALVOL["CL=F"] * 100, "Oil 1M Realized Vol", "Oil vol, implied vs realized", overlay=ovx)
     else:
         st.info("Oil realized vol unavailable.")
 
@@ -550,13 +501,13 @@ with c3:
 c4, c5, c6 = st.columns(3)
 with c4:
     if "LQD" in REALVOL.columns:
-        vol_panel(REALVOL["LQD"] * 100, "IG 1M Realized Vol", "IG Credit Vol, realized proxy")
+        vol_panel(REALVOL["LQD"] * 100, "IG 1M Realized Vol", "IG credit vol, realized proxy")
     else:
         st.info("IG realized vol unavailable.")
 
 with c5:
     if "HYG" in REALVOL.columns:
-        vol_panel(REALVOL["HYG"] * 100, "HY 1M Realized Vol", "HY Credit Vol, realized proxy")
+        vol_panel(REALVOL["HYG"] * 100, "HY 1M Realized Vol", "HY credit vol, realized proxy")
     else:
         st.info("HY realized vol unavailable.")
 
@@ -573,7 +524,7 @@ with c6:
         all_fx = pd.concat([(REALVOL[c]*100).dropna() for c in fx_cols], axis=0) if fx_cols else pd.Series(dtype=float)
         lims = clip_limits(all_fx.values if len(all_fx) else [], 1, 99)
         if lims: ax.set_ylim(lims)
-        ax.set_title("FX Vol, realized proxies")
+        ax.set_title("FX vol, realized proxies")
         ax.set_ylabel("Percent")
         ax.margins(y=0.05)
         add_regime_shading(ax)
@@ -587,15 +538,15 @@ with c6:
                 break
         if pick is not None and not pick.empty:
             m1, m2 = st.columns(2)
-            with m1: st.metric("FX Realized, current", f"{current_value(pick):.1f}%")
-            with m2: st.metric("FX Realized, percentile", f"{percentile_of_last(pick):.0f}th")
+            with m1: st.metric("FX realized, current", f"{current_value(pick):.1f}%")
+            with m2: st.metric("FX realized, percentile", f"{percentile_of_last(pick):.0f}th")
     else:
         st.info("FX realized vol unavailable.")
 
 # =========================
-# Z-score Snapshot — standardized, grouped
+# Z-score snapshot - grouped
 # =========================
-st.subheader("Volatility Snapshot — Standardized, Grouped")
+st.subheader("Volatility Snapshot - Standardized, Grouped")
 
 z_panel = {}
 if "^VIX" in IV.columns:  z_panel["^VIX"] = IV["^VIX"]
@@ -621,9 +572,9 @@ if len(z_panel) >= 2:
 
     if not zdf.empty:
         groups = {
-            "Implied Vol": [c for c in ["^VIX", "^OVX"] if c in zdf.columns],
-            "Rates & Credit": [c for c in ["US10Y Realized", "IG Realized", "HY Realized"] if c in zdf.columns],
-            "Commodities & FX": [c for c in ["Oil Realized", "Gold Realized", "EURUSD Realized", "USDJPY Realized", "GBPUSD Realized"] if c in zdf.columns],
+            "Implied vol": [c for c in ["^VIX", "^OVX"] if c in zdf.columns],
+            "Rates and credit": [c for c in ["US10Y Realized", "IG Realized", "HY Realized"] if c in zdf.columns],
+            "Commodities and FX": [c for c in ["Oil Realized", "Gold Realized", "EURUSD Realized", "USDJPY Realized", "GBPUSD Realized"] if c in zdf.columns],
         }
 
         def plot_group(cols, title):
@@ -636,7 +587,7 @@ if len(z_panel) >= 2:
             if lims:
                 ax.set_ylim(lims)
             ax.set_ylabel("Z-Score")
-            ax.set_title(title + " — standardized to full history")
+            ax.set_title(title + " - standardized to full history")
             ax.legend(ncol=min(3, len(cols)), fontsize=8)
             ax.margins(y=0.05)
             plt.tight_layout()
