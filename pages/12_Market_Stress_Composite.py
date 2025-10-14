@@ -296,7 +296,6 @@ panel_lb = panel.loc[start_lb:].copy()
 
 # Optional smoothing on scores only
 if DEFAULT_SMOOTH and DEFAULT_SMOOTH != 1:
-    # use the sidebar value 'smooth'
     if smooth > 1:
         scores = scores.rolling(smooth, min_periods=1).mean()
         scores = to_naive_date_index(scores)
@@ -388,10 +387,13 @@ fig.add_trace(go.Scatter(x=panel_lb.index, y=dd_series, name="Drawdown (%)",
 if lr: fig.update_yaxes(title="Index", range=lr, row=2, col=1, secondary_y=False)
 if rr: fig.update_yaxes(title="Drawdown %", range=rr, row=2, col=1, secondary_y=True)
 
+# ***** Day + Month + Year labels on BOTH x-axes *****
+fig.update_xaxes(tickformat="%b-%d-%y", row=1, col=1)
+fig.update_xaxes(tickformat="%b-%d-%y", title="Date", row=2, col=1)
+
 fig.update_layout(template="plotly_white", height=720,
                   legend=dict(orientation="h", x=0, y=1.14, xanchor="left"),
                   margin=dict(l=60, r=40, t=60, b=60))
-fig.update_xaxes(tickformat="%b-%y", title="Date", row=2, col=1)
 
 st.plotly_chart(fig, use_container_width=True)
 
