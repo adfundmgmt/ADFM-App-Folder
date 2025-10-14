@@ -440,16 +440,31 @@ dtick, tfmt = choose_dtick_and_format(pulse_plot.index)
 
 fig_pulse = go.Figure()
 fig_pulse.add_hline(y=0, line=dict(color="#cccccc", dash="dot"))
+
+# remove legend label by omitting name and forcing showlegend=False
+fig_pulse.add_trace(go.Scatter(
+    x=pulse_plot.index,
+    y=pulse_plot,
+    mode="lines",
+    showlegend=False  # <- key line
+))
+
 if not pulse_plot.empty:
     fig_pulse.add_trace(go.Scatter(
-        x=[pulse_plot.index[-1]], y=[pulse_plot.iloc[-1]],
-        mode="markers+text", text=[f"{pulse_plot.iloc[-1]:+.2f}"], textposition="top center",
+        x=[pulse_plot.index[-1]],
+        y=[pulse_plot.iloc[-1]],
+        mode="markers+text",
+        text=[f"{pulse_plot.iloc[-1]:+.2f}"],
+        textposition="top center",
         showlegend=False
     ))
-fig_pulse.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10))
+
+# also disable legend at layout level to reclaim right-side space
+fig_pulse.update_layout(showlegend=False, height=300, margin=dict(l=10, r=10, t=10, b=10))
 fig_pulse.update_yaxes(title_text="Sum of standardized flow shocks")
 fig_pulse.update_xaxes(dtick=dtick, tickformat=tfmt, hoverformat="%b %d, %Y")
 st.plotly_chart(fig_pulse, use_container_width=True)
+
 
 # ---------------- Downloads ----------------
 with st.expander("Download results"):
