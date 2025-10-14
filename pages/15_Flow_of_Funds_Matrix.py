@@ -440,7 +440,6 @@ dtick, tfmt = choose_dtick_and_format(pulse_plot.index)
 
 fig_pulse = go.Figure()
 fig_pulse.add_hline(y=0, line=dict(color="#cccccc", dash="dot"))
-fig_pulse.add_trace(go.Scatter(x=pulse_plot.index, y=pulse_plot, mode="lines", name="Net liquidity momentum"))
 if not pulse_plot.empty:
     fig_pulse.add_trace(go.Scatter(
         x=[pulse_plot.index[-1]], y=[pulse_plot.iloc[-1]],
