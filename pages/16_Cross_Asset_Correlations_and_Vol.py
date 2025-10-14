@@ -1,12 +1,9 @@
-# Cross-Asset Correlation & Volatility Dashboard — Insight-First Edition
-# Changes:
-# - Single batched Yahoo fetch (cached)
-# - Rolling correlations on returns
-# - 6M mean and ±1σ band on correlation panels
-# - Macro regime markers and labels
-# - Metric tiles: current value and historical percentile
-# - Vol panels with IQR band shading and tiles
-# - Z-score snapshot split into grouped subplots for readability
+# Cross-Asset Correlation & Volatility Dashboard — Layout Fixes
+# Changes in this revision:
+# - Remove regime text labels entirely (keep shading only)
+# - Use tight_layout() and margins to kill whitespace/clipping
+# - Put Z-score snapshot into tabs by default (toggle to stacked if desired)
+# - Keep metric tiles, 6M ±1σ bands, and IQR shading
 
 import math
 from datetime import datetime, timedelta
@@ -35,20 +32,19 @@ plt.rcParams.update({
 })
 
 st.title("Cross-Asset Correlation and Volatility Dashboard")
-st.caption("Data: Yahoo Finance via yfinance. Universe locked. Views add regime context, percentiles, and summary tiles.")
+st.caption("Data: Yahoo Finance via yfinance. Universe locked. Views add percentiles, bands, and summary tiles.")
 
 # =========================
 # Fixed universe and order (Yahoo symbols)
 # =========================
 GROUPS = {
-    "Equities": ["^GSPC", "^RUT", "^STOXX50E", "^N225", "EEM"],      # SPX, RTY, SX5E, NKY, MXEF proxy (EEM)
-    "Corporate Credit": ["LQD", "HYG"],                              # IG, HY ETFs
-    "Rates": ["^TNX", "^TYX"],                                       # US 10Y, 30Y yields
-    "Commodities": ["CL=F", "GLD", "HG=F"],                          # WTI, Gold ETF, Copper futures
-    "Foreign Exchange": ["EURUSD=X", "USDJPY=X", "GBPUSD=X"],        # EURUSD, USDJPY, GBPUSD
+    "Equities": ["^GSPC", "^RUT", "^STOXX50E", "^N225", "EEM"],
+    "Corporate Credit": ["LQD", "HYG"],
+    "Rates": ["^TNX", "^TYX"],
+    "Commodities": ["CL=F", "GLD", "HG=F"],
+    "Foreign Exchange": ["EURUSD=X", "USDJPY=X", "GBPUSD=X"],
 }
 ORDER = sum(GROUPS.values(), [])
-
 IV_TICKERS = ["^VIX", "^OVX"]
 
 # =========================
@@ -57,8 +53,8 @@ IV_TICKERS = ["^VIX", "^OVX"]
 st.sidebar.header("View controls")
 focus_since_2017 = st.sidebar.checkbox("Focus on 2017–present", value=True)
 clip_extremes = st.sidebar.checkbox("Clip y-axes at 1st–99th percentiles", value=True)
-show_regimes = st.sidebar.checkbox("Show regime shading", value=True)
-show_labels = st.sidebar.checkbox("Show regime labels", value=True)
+show_regimes = st.sidebar.checkbox("Show regime shading (no labels)", value=True)
+z_snapshot_mode = st.sidebar.selectbox("Z-score layout", ["Tabs (recommended)", "Stacked"], index=0)
 
 # =========================
 # Helpers
@@ -149,14 +145,13 @@ def clip_limits(array_like, pmin=1, pmax=99):
 def add_regime_shading(ax):
     if not show_regimes:
         return
+    # No labels, only subtle shading
     spans = [
-        ("2020-02-15", "2020-06-30", "COVID Shock"),
-        ("2022-03-01", "2023-11-01", "Fed Hikes"),
+        ("2020-02-15", "2020-06-30"),
+        ("2022-03-01", "2023-11-01"),
     ]
-    for a, b, label in spans:
-        ax.axvspan(pd.to_datetime(a), pd.to_datetime(b), color="#cccccc", alpha=0.25)
-        if show_labels:
-            ax.text(pd.to_datetime(a), ax.get_ylim()[1]*0.95, label, fontsize=8)
+    for a, b in spans:
+        ax.axvspan(pd.to_datetime(a), pd.to_datetime(b), color="#cccccc", alpha=0.18)
 
 def style_corr_matrix(corr_df, groups, highlight_thresh=0.75):
     if corr_df is None or corr_df.empty:
@@ -245,7 +240,7 @@ WIN = 21
 REALVOL = realized_vol(RET, window=WIN)
 
 # =========================
-# Top: correlation matrix + download
+# Correlation Matrix
 # =========================
 st.subheader("Cross-Asset Correlation Matrix (1M)")
 corr_1m = RET.tail(WIN).corr().replace([-np.inf, np.inf], np.nan) if len(RET) >= WIN else pd.DataFrame()
@@ -270,12 +265,12 @@ else:
 st.subheader("Cross-Asset Correlation Analysis")
 
 PANEL_SPECS = [
-    dict(a="^GSPC", b="^TNX", la="SPX", lb="US 10Y Tsy Yield", title="Equity–Rates (1M)"),
-    dict(a="^RUT", b="LQD", la="RTY", lb="IG Bonds (LQD)",     title="Equity–IG Credit (1M)"),
-    dict(a="^GSPC", b="CL=F", la="SPX", lb="Oil (WTI)",        title="Equity–Oil (1M)"),
-    dict(a="^GSPC", b="GLD",  la="SPX", lb="GLD",              title="Equity–Gold (1M)"),
-    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD",  title="Equity–EURUSD (1M)"),
-    dict(a="^N225", b="USDJPY=X", la="NKY", lb="USDJPY",       title="Equity–USDJPY (1M)"),
+    dict(a="^GSPC", b="^TNX", la="SPX", lb="US 10Y",      title="Equity–Rates (1M)"),
+    dict(a="^RUT",  b="LQD",  la="RTY", lb="IG (LQD)",     title="Equity–IG Credit (1M)"),
+    dict(a="^GSPC", b="CL=F", la="SPX", lb="Oil (WTI)",    title="Equity–Oil (1M)"),
+    dict(a="^GSPC", b="GLD",  la="SPX", lb="GLD",          title="Equity–Gold (1M)"),
+    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD", title="Equity–EURUSD (1M)"),
+    dict(a="^N225", b="USDJPY=X", la="NKY", lb="USDJPY",   title="Equity–USDJPY (1M)"),
 ]
 
 def roll_corr_from_returns(ret_df, a, b, window=21):
@@ -290,7 +285,6 @@ def corr_with_context(ax, rc):
     rc = rc.loc[apply_focus_window(rc.index)]
     if rc.empty:
         return None, None, None
-    # 6M mean and ±1σ band
     mean_rc = rc.rolling(126).mean()
     std_rc  = rc.rolling(126).std()
     ax.fill_between(rc.index, (mean_rc-std_rc).values, (mean_rc+std_rc).values, alpha=0.15)
@@ -303,6 +297,7 @@ def corr_with_context(ax, rc):
     else:
         ax.set_ylim(-1, 1)
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+    ax.margins(y=0.05)
     add_regime_shading(ax)
     return current_value(rc), percentile_of_last(rc), rc
 
@@ -315,12 +310,9 @@ for row_specs in [PANEL_SPECS[:3], PANEL_SPECS[3:]]:
             curr, pct, series = corr_with_context(ax, rc)
             ax.set_title(spec["title"])
             ax.legend(loc="lower left", fontsize=8)
-            if series is not None and not series.empty:
-                ymin, ymax = ax.get_ylim()
-                ax.text(series.index.min(), ymin + 0.02*(ymax - ymin), "Source: Yahoo Finance", fontsize=8)
+            plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
 
-            # Metric tiles under each chart
             m1, m2 = st.columns(2)
             with m1:
                 st.metric("Current corr", f"{curr:.1%}" if curr is not None and not np.isnan(curr) else "NA")
@@ -331,57 +323,45 @@ for row_specs in [PANEL_SPECS[:3], PANEL_SPECS[3:]]:
 # Volatility Monitor with IQR shading + metric tiles
 # =========================
 st.subheader("Cross-Asset Volatility Monitor")
-def iqr_band(ax, s):
-    q25, q75 = np.nanpercentile(s.dropna(), [25, 75]) if s.dropna().shape[0] > 0 else (np.nan, np.nan)
-    if not np.isnan(q25) and not np.isnan(q75):
-        ax.axhspan(q25, q75, color="lightgray", alpha=0.25)
 
-def vol_panel(series, label, title):
+def iqr_band(ax, s):
+    s = pd.Series(s).dropna()
+    if s.empty:
+        return
+    q25, q75 = np.nanpercentile(s, [25, 75])
+    ax.axhspan(q25, q75, color="lightgray", alpha=0.25)
+
+def vol_panel(series, label, title, overlay=None):
     fig, ax = plt.subplots()
     s = series.loc[apply_focus_window(series.index)] if series is not None else pd.Series(dtype=float)
     if s is None or s.empty:
         st.info(f"{label} unavailable.")
         return
     ax.plot(s.index, s.values, label=label)
+    if overlay is not None and not overlay.empty:
+        o = overlay.loc[apply_focus_window(overlay.index)]
+        ax.plot(o.index, o.values, label=overlay.name)
     iqr_band(ax, s)
     lims = clip_limits(s.values, 1, 99)
     if lims: ax.set_ylim(lims)
     ax.set_title(title)
     ax.set_ylabel("Percent")
+    ax.margins(y=0.05)
     add_regime_shading(ax)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, ncol=2)
+    plt.tight_layout()
     st.pyplot(fig, use_container_width=True)
-    st.caption("Shaded band shows 25th–75th percentile of history.")
-
-    # Metric tiles
     m1, m2 = st.columns(2)
-    with m1:
-        st.metric("Current", f"{current_value(s):.1f}%")
-    with m2:
-        st.metric("Percentile vs history", f"{percentile_of_last(s):.0f}th")
+    with m1: st.metric("Current", f"{current_value(s):.1f}%")
+    with m2: st.metric("Percentile vs history", f"{percentile_of_last(s):.0f}th")
 
 # Row 1
 c1, c2, c3 = st.columns(3)
 with c1:
     if "^GSPC" in REALVOL.columns:
-        # Add VIX overlay
-        fig, ax = plt.subplots()
-        s = (REALVOL["^GSPC"] * 100).loc[apply_focus_window(REALVOL.index)]
-        ax.plot(s.index, s.values, label="SPX 1M Realized Vol")
-        if "^VIX" in IV.columns:
-            v = IV["^VIX"].loc[apply_focus_window(IV.index)]
-            ax.plot(v.index, v.values, label="VIX Index")
-        iqr_band(ax, s)
-        lims = clip_limits(s.values, 1, 99)
-        if lims: ax.set_ylim(lims)
-        ax.set_title("Equity Vol, implied vs realized")
-        ax.set_ylabel("Percent")
-        add_regime_shading(ax)
-        ax.legend(fontsize=8, ncol=2)
-        st.pyplot(fig, use_container_width=True)
-        m1, m2 = st.columns(2)
-        with m1: st.metric("SPX Realized, current", f"{current_value(s):.1f}%")
-        with m2: st.metric("SPX Realized, percentile", f"{percentile_of_last(s):.0f}th")
+        vix = IV["^VIX"] if "^VIX" in IV.columns else None
+        if vix is not None: vix.name = "VIX Index"
+        vol_panel(REALVOL["^GSPC"] * 100, "SPX 1M Realized Vol", "Equity Vol, implied vs realized", overlay=vix)
     else:
         st.info("SPX realized vol unavailable.")
 
@@ -393,23 +373,9 @@ with c2:
 
 with c3:
     if "CL=F" in REALVOL.columns:
-        fig, ax = plt.subplots()
-        s = (REALVOL["CL=F"] * 100).loc[apply_focus_window(REALVOL.index)]
-        ax.plot(s.index, s.values, label="Oil 1M Realized Vol")
-        if "^OVX" in IV.columns:
-            o = IV["^OVX"].loc[apply_focus_window(IV.index)]
-            ax.plot(o.index, o.values, label="OVX Index")
-        iqr_band(ax, s)
-        lims = clip_limits(s.values, 1, 99)
-        if lims: ax.set_ylim(lims)
-        ax.set_title("Oil Vol, implied vs realized")
-        ax.set_ylabel("Percent")
-        add_regime_shading(ax)
-        ax.legend(fontsize=8, ncol=2)
-        st.pyplot(fig, use_container_width=True)
-        m1, m2 = st.columns(2)
-        with m1: st.metric("Oil Realized, current", f"{current_value(s):.1f}%")
-        with m2: st.metric("Oil Realized, percentile", f"{percentile_of_last(s):.0f}th")
+        ovx = IV["^OVX"] if "^OVX" in IV.columns else None
+        if ovx is not None: ovx.name = "OVX Index"
+        vol_panel(REALVOL["CL=F"] * 100, "Oil 1M Realized Vol", "Oil Vol, implied vs realized", overlay=ovx)
     else:
         st.info("Oil realized vol unavailable.")
 
@@ -442,10 +408,11 @@ with c6:
         if lims: ax.set_ylim(lims)
         ax.set_title("FX Vol, realized proxies")
         ax.set_ylabel("Percent")
+        ax.margins(y=0.05)
         add_regime_shading(ax)
         ax.legend(fontsize=8)
+        plt.tight_layout()
         st.pyplot(fig, use_container_width=True)
-        # tiles, take EURUSD if present otherwise any
         pick = None
         for name in ["EURUSD=X", "USDJPY=X", "GBPUSD=X"]:
             if name in REALVOL.columns:
@@ -459,7 +426,7 @@ with c6:
         st.info("FX realized vol unavailable.")
 
 # =========================
-# Z-score Snapshot — grouped for readability
+# Z-score Snapshot — grouped, tabbed by default
 # =========================
 st.subheader("Volatility Snapshot — Standardized, Grouped")
 
@@ -491,23 +458,32 @@ if len(z_panel) >= 2:
             "Rates & Credit": [c for c in ["US10Y Realized", "IG Realized", "HY Realized"] if c in zdf.columns],
             "Commodities & FX": [c for c in ["Oil Realized", "Gold Realized", "EURUSD Realized", "USDJPY Realized", "GBPUSD Realized"] if c in zdf.columns],
         }
-        for title, cols in groups.items():
-            if not cols:
-                continue
+
+        def plot_group(cols, title):
             fig, ax = plt.subplots(figsize=(10, 3.8))
             for c in cols:
                 ax.plot(zdf.index, zdf[c], label=c)
             ax.axhline(0, linestyle="--", linewidth=1)
-            add_regime_shading(ax)
+            add_regime_shading(ax)  # shading only, no labels
             lims = clip_limits(zdf[cols].values.flatten(), 1, 99)
             if lims:
                 ax.set_ylim(lims)
             ax.set_ylabel("Z-Score")
             ax.set_title(title + " — standardized to full history")
             ax.legend(ncol=min(3, len(cols)), fontsize=8)
+            ax.margins(y=0.05)
+            plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
 
-        # Ranked current z-scores table
+        if z_snapshot_mode.startswith("Tabs"):
+            tabs = st.tabs(list(groups.keys()))
+            for (name, cols), t in zip(groups.items(), tabs):
+                with t:
+                    if cols: plot_group(cols, name)
+        else:
+            for name, cols in groups.items():
+                if cols: plot_group(cols, name)
+
         latest = zdf.tail(1).T.rename(columns={zdf.index[-1]: "Current Z"})
         latest["Percentile"] = pd.Series({c: percentile_of_last(zdf[c]) for c in zdf.columns})
         latest = latest.sort_values("Current Z", ascending=False)
