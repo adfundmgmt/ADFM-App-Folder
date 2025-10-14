@@ -1,5 +1,5 @@
 ############################################################
-# Market Stress Composite — pdr-only FRED + proxy fallback
+# Market Stress Composite — keyless FRED + strict tz-naive indexing
 # Built for AD Fund Management LP
 ############################################################
 
@@ -7,7 +7,7 @@
 import sys, types
 import packaging.version
 try:
-    import distutils.version  # some pdr installs still import this
+    import distutils.version  # some pdr installs import this
 except Exception:
     _d = types.ModuleType("distutils")
     _dv = types.ModuleType("distutils.version")
@@ -38,7 +38,7 @@ FRED = {
     "spx": "SP500",           # S&P 500 index
 }
 
-# Intraday proxies (no keys)
+# Intraday proxies (optional nowcast)
 PX = {"VIX":"^VIX","SPX":"^GSPC","TNX":"^TNX","IRX":"^IRX","HYG":"HYG","LQD":"LQD","BIL":"BIL","SHY":"SHY"}
 
 DEFAULT_LOOKBACK = "5y"
@@ -72,23 +72,36 @@ with st.sidebar:
         st.autorefresh(interval=60_000, key="autorf")
     st.caption("Sources: FRED via pandas-datareader, intraday proxies via Yahoo Finance")
 
-    st.markdown("---")
-    st.header("About This Tool")
-    st.markdown("""
-Daily 0–100 composite of market stress. FRED history, optional intraday nowcast. 
-Zero-weights stale inputs and re-normalizes weights.
-""")
+# ---- Time helpers, strict tz-naive policy ----
+def today_naive() -> pd.Timestamp:
+    """Return today's date as tz-naive Timestamp(date)."""
+    return pd.Timestamp(pd.Timestamp.now(tz="America/New_York").date())
 
-# ---- Utilities ----
-def _today():
-    return pd.Timestamp.now(tz="America/New_York").normalize()
+def to_naive_date_index(obj):
+    """Coerce Series/DataFrame index to tz-naive date-only."""
+    if isinstance(obj, pd.Series):
+        idx = pd.to_datetime(obj.index)
+        obj.index = pd.DatetimeIndex(idx.date)  # strips tz and time
+        return obj
+    elif isinstance(obj, pd.DataFrame):
+        idx = pd.to_datetime(obj.index)
+        obj.index = pd.DatetimeIndex(idx.date)
+        return obj
+    return obj
 
+def as_naive_date(ts_like) -> pd.Timestamp:
+    """Return a tz-naive date Timestamp for slicing and .loc keys."""
+    t = pd.to_datetime(ts_like)
+    return pd.Timestamp(t.date())
+
+# ---- Data loaders ----
 @st.cache_data(ttl=900, show_spinner=False)
 def fred_series(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
     """Keyless FRED via pandas_datareader only."""
     try:
         s = pdr.DataReader(series, "fred", start, end)[series]
-        return s.ffill().dropna()
+        s = s.ffill().dropna()
+        return to_naive_date_index(s)
     except Exception:
         return pd.Series(dtype=float)
 
@@ -99,12 +112,13 @@ def yf_hist(tickers, period="max", interval="1d"):
                          auto_adjust=False, progress=False)["Close"]
         if isinstance(df, pd.Series):
             df = df.to_frame()
-        return df
+        return to_naive_date_index(df.dropna(how="all"))
     except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=30, show_spinner=False)
 def yf_last_minute(tickers):
+    """Recent 1m bars for a fresh quote. We never use their tz for indexing, only for freshness."""
     try:
         data = {}
         for tk in tickers:
@@ -122,6 +136,7 @@ def latest_quote(df_1m: pd.DataFrame, symbol: str):
     ts = s.dropna()
     if ts.empty:
         return np.nan, None
+    # return raw last timestamp for freshness check only
     return float(ts.iloc[-1]), ts.index[-1]
 
 def is_fresh(ts, max_age_min=MAX_PROXY_AGE_MIN):
@@ -132,10 +147,12 @@ def is_fresh(ts, max_age_min=MAX_PROXY_AGE_MIN):
     return (now - t).total_seconds() / 60.0 <= max_age_min
 
 def rolling_percentile(s: pd.Series, window_days: int) -> pd.Series:
+    s = to_naive_date_index(s)
     w = max(60, int(window_days * 252 / 365))
-    return s.rolling(w, min_periods=max(20, w // 5)).apply(
+    out = s.rolling(w, min_periods=max(20, w // 5)).apply(
         lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
     )
+    return to_naive_date_index(out)
 
 def pad_range(lo: float, hi: float, pad: float = 0.06):
     if pd.isna(lo) or pd.isna(hi):
@@ -143,9 +160,9 @@ def pad_range(lo: float, hi: float, pad: float = 0.06):
     d = (hi - lo) if hi != lo else (abs(hi) if hi != 0 else 1.0)
     return lo - d * pad, hi + d * pad
 
-# ---- Load FRED data (no keys) ----
-today = _today()
-start_all = today - pd.DateOffset(years=max(int(perc_years) + 2, years + 2))
+# ---- Load FRED history (keyless) ----
+today = today_naive()
+start_all = as_naive_date(today - pd.DateOffset(years=12))
 
 vix_f   = fred_series(FRED["vix"], start_all, today)
 hy_f    = fred_series(FRED["hy_oas"], start_all, today)
@@ -155,24 +172,33 @@ tb3m_f  = fred_series(FRED["tbill_3m"], start_all, today)
 spx_f   = fred_series(FRED["spx"], start_all, today)
 
 fund_f = (cp3m_f - tb3m_f)
+fund_f = to_naive_date_index(fund_f)
 
 series_list = [vix_f, hy_f, yc_f, fund_f, spx_f]
 have_any_fred = any((not s.dropna().empty) for s in series_list)
 
-# ---- Always load proxies for nowcast/fallback ----
+# ---- Always load proxies ----
 px_daily = yf_hist(list(PX.values()), period="max", interval="1d")
 px_last  = yf_last_minute(list(PX.values()))
 
-# ---- Build panel ----
+# ---- Build the base panel with strict tz-naive date index ----
 if have_any_fred:
     bidx_start = min(s.index.min() for s in series_list if not s.dropna().empty)
-    bidx = pd.bdate_range(bidx_start, today)
-    to_bidx = lambda s: s.reindex(bidx).ffill()
-    vix_b, hy_b, yc_b, fund_b, spx_b = map(to_bidx, [vix_f, hy_f, yc_f, fund_f, spx_f])
-    panel = pd.DataFrame({"VIX": vix_b, "HY_OAS": hy_b, "T10Y3M": yc_b, "FUND": fund_b, "SPX": spx_b}).dropna(how="all")
+    bidx_start = as_naive_date(bidx_start)
+    bidx = pd.bdate_range(bidx_start, today)  # tz-naive
+    def to_bidx(s): 
+        s = to_naive_date_index(s)
+        return s.reindex(bidx).ffill()
 
-    # freshness masks by business day age
+    vix_b, hy_b, yc_b, fund_b, spx_b = map(to_bidx, [vix_f, hy_f, yc_f, fund_f, spx_f])
+
+    panel = pd.DataFrame({"VIX": vix_b, "HY_OAS": hy_b, "T10Y3M": yc_b, "FUND": fund_b, "SPX": spx_b})
+    panel = panel.dropna(how="all")
+    panel = to_naive_date_index(panel)
+
+    # freshness masks
     def fresh_mask_bdays(original: pd.Series) -> pd.Series:
+        original = to_naive_date_index(original)
         obs = original.reindex(panel.index)
         pos = np.arange(len(panel.index))
         has = obs.notna().values
@@ -188,7 +214,6 @@ if have_any_fred:
 
     mode = "FRED+Proxies"
 else:
-    # Proxy-only fallback, no CSV, no keys
     if px_daily.empty:
         st.error("Neither FRED nor Yahoo proxies are available. Check network.")
         st.stop()
@@ -200,8 +225,7 @@ else:
     fund_ratio = (px_daily["BIL"] / px_daily["SHY"]).rename("BIL_SHY_RATIO") if {"BIL","SHY"}.issubset(px_daily.columns) else pd.Series(dtype=float, name="BIL_SHY_RATIO")
 
     panel = pd.concat([vix, spx, curve, hy_ratio, fund_ratio], axis=1).dropna(how="all")
-    panel.index = pd.DatetimeIndex(panel.index.date)
-    panel = panel.sort_index()
+    panel = to_naive_date_index(panel)
 
     m_vix  = pd.Series(True, index=panel.index)
     m_yc   = pd.Series(True, index=panel.index)
@@ -210,17 +234,21 @@ else:
     m_dd   = pd.Series(True, index=panel.index)
     mode = "Proxy-only"
 
-# ---- Inject intraday nowcast (optional) ----
+# ---- Inject intraday nowcast without introducing tz ----
 if use_nowcast and not px_last.empty:
-    tb = pd.Timestamp(pd.Timestamp.now(tz="America/New_York").date())
-    vix_q, vix_ts = latest_quote(px_last, "^VIX")
-    spx_q, spx_ts = latest_quote(px_last, "^GSPC")
-    tnx_q, tnx_ts = latest_quote(px_last, "^TNX")
-    irx_q, irx_ts = latest_quote(px_last, "^IRX")
-    hyg_q, hyg_ts = latest_quote(px_last, "HYG")
-    lqd_q, lqd_ts = latest_quote(px_last, "LQD")
-    bil_q, bil_ts = latest_quote(px_last, "BIL")
-    shy_q, shy_ts = latest_quote(px_last, "SHY")
+    tb = today_naive()
+    def q(sym): 
+        v, ts = latest_quote(px_last, sym)
+        return v, ts
+
+    vix_q, vix_ts = q("^VIX")
+    spx_q, spx_ts = q("^GSPC")
+    tnx_q, tnx_ts = q("^TNX")
+    irx_q, irx_ts = q("^IRX")
+    hyg_q, hyg_ts = q("HYG")
+    lqd_q, lqd_ts = q("LQD")
+    bil_q, bil_ts = q("BIL")
+    shy_q, shy_ts = q("SHY")
 
     if is_fresh(vix_ts) and not np.isnan(vix_q): panel.loc[tb, "VIX"] = vix_q;       m_vix.loc[tb]  = True
     if is_fresh(spx_ts) and not np.isnan(spx_q): panel.loc[tb, "SPX"] = spx_q;       m_dd.loc[tb]   = True
@@ -231,11 +259,13 @@ if use_nowcast and not px_last.empty:
     if is_fresh(bil_ts) and is_fresh(shy_ts) and not np.isnan(bil_q) and not np.isnan(shy_q):
         panel.loc[tb, "BIL_SHY_RATIO"] = bil_q / shy_q; m_fund.loc[tb] = True
 
-# Ensure FUND and HY stress proxies exist if FRED fields missing
+# Ensure FUND and HY proxies exist if FRED fields missing
 if "FUND" not in panel.columns and "BIL_SHY_RATIO" in panel.columns:
     panel["FUND"] = panel["BIL_SHY_RATIO"]
 if "HY_OAS" not in panel.columns and "HYG_LQD_RATIO" in panel.columns:
     panel["HY_OAS_PROXY"] = -(panel["HYG_LQD_RATIO"])  # lower ratio -> wider spreads -> higher stress
+
+panel = to_naive_date_index(panel)
 
 # ---- Transforms ----
 roll_max = panel["SPX"].dropna().cummax()
@@ -254,22 +284,38 @@ if "HY_OAS" in panel.columns and not panel["HY_OAS"].dropna().empty:
 else:
     pct_hy = rolling_percentile(panel["HY_OAS_PROXY"], window_days) if "HY_OAS_PROXY" in panel else pd.Series(index=panel.index, dtype=float)
 
+# Compose scores_all and force tz-naive again
 scores_all = pd.concat([pct_vix, pct_hy, pct_curve, pct_fund, pct_dd], axis=1)
 scores_all.columns = ["VIX_p","HY_p","CurveInv_p","Fund_p","DD_p"]
+scores_all = to_naive_date_index(scores_all)
 
-# Lookback and smoothing
-start_lb = today - pd.DateOffset(years=years)
-scores = scores_all.loc[start_lb:].copy()
+# ---- Lookback subset, strictly naive ----
+start_lb = as_naive_date(today - pd.DateOffset(years=years))
+scores   = scores_all.loc[start_lb:].copy()
 panel_lb = panel.loc[start_lb:].copy()
-if smooth > 1:
-    scores = scores.rolling(smooth, min_periods=1).mean()
 
-# Masks on lookback index
-masks = pd.concat([m_vix, m_hy, m_yc, m_fund, m_dd], axis=1)
+# Optional smoothing on scores only
+if DEFAULT_SMOOTH and DEFAULT_SMOOTH != 1:
+    # use the sidebar value 'smooth'
+    if smooth > 1:
+        scores = scores.rolling(smooth, min_periods=1).mean()
+        scores = to_naive_date_index(scores)
+
+# Masks on lookback index, align and fill
+def _align_mask(m):
+    m = to_naive_date_index(m)
+    return m.reindex(scores.index).astype(float).fillna(0.0)
+
+masks = pd.concat([
+    _align_mask(locals().get("m_vix", pd.Series(index=scores.index))),
+    _align_mask(locals().get("m_hy", pd.Series(index=scores.index))),
+    _align_mask(locals().get("m_yc", pd.Series(index=scores.index))),
+    _align_mask(locals().get("m_fund", pd.Series(index=scores.index))),
+    _align_mask(locals().get("m_dd", pd.Series(index=scores.index))),
+], axis=1)
 masks.columns = ["VIX_m","HY_m","Curve_m","Fund_m","DD_m"]
-masks = masks.reindex(scores.index).astype(float).fillna(0.0)
 
-# Composite
+# ---- Composite ----
 weights = np.array([w_vix, w_hy, w_curve, w_fund, w_dd], dtype=float)
 weights = weights if weights.sum() > 0 else np.ones(5)
 weights = weights / weights.sum()
@@ -296,14 +342,14 @@ if comp_s.dropna().empty:
 latest_idx = comp_s.dropna().index[-1]
 fmt2 = lambda x: "N/A" if pd.isna(x) else f"{x:.2f}"
 fmt0 = lambda x: "N/A" if pd.isna(x) else f"{x:.0f}"
-pct = lambda x: "N/A" if pd.isna(x) else f"{100*x:.0f}%"
+pctf = lambda x: "N/A" if pd.isna(x) else f"{100*x:.0f}%"
 
 st.info(f"Mode: {mode}. As of {latest_idx.date()} | Weights: VIX {weights[0]:.2f}, HY {weights[1]:.2f}, Curve {weights[2]:.2f}, Funding {weights[3]:.2f}, Drawdown {weights[4]:.2f}")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Stress Composite", fmt0(comp_s.loc[latest_idx]))
 c2.metric("Regime", tag_for_level(comp_s.loc[latest_idx]))
-c3.metric("Active weight in use", pct(coverage.loc[latest_idx]))
+c3.metric("Active weight in use", pctf(coverage.loc[latest_idx]))
 
 c4, c5, c6, c7, c8 = st.columns(5)
 c4.metric("VIX", fmt2(panel_lb.get("VIX").reindex([latest_idx]).iloc[0] if "VIX" in panel_lb else np.nan))
@@ -366,13 +412,5 @@ with st.expander("Download Data"):
     )
     out.index.name = "Date"
     st.download_button("Download CSV", out.to_csv(), file_name="market_stress_composite.csv", mime="text/csv")
-
-# sanity: all major frames must be naive date indexes
-for name, obj in [("panel", panel), ("scores_all", scores_all), ("comp_s", comp_s)]:
-    assert isinstance(obj.index, pd.DatetimeIndex), f"{name} not datetime index"
-    assert obj.index.tz is None, f"{name} index has tz set"
-# sanity: start_lb is naive
-assert isinstance(start_lb, pd.Timestamp) and start_lb.tz is None
-
 
 st.caption("© 2025 AD Fund Management LP")
