@@ -30,9 +30,12 @@ spans = {
     "YTD": None,
     "1 Year": 365,
     "3 Years": 365 * 3,
-    "5 Years": 365 * 5
+    "5 Years": 365 * 5,
+    "10 Years": 365 * 10,     # NEW
+    "20 Years": 365 * 20      # NEW
 }
-span_key = st.sidebar.selectbox("", list(spans.keys()), index=list(spans.keys()).index("5 Years"))
+span_key = st.sidebar.selectbox("", list(spans.keys()),
+                                index=list(spans.keys()).index("5 Years"))
 
 st.sidebar.markdown("---")
 st.sidebar.header("Custom Ratio")
@@ -41,7 +44,8 @@ custom_t2 = st.sidebar.text_input("Ticker 2", "SMH").strip().upper()
 
 # -------------- Dates --------------
 now = datetime.today()
-hist_start = now - timedelta(days=365 * 15)
+# expand base history to comfortably cover 20y selections
+hist_start = now - timedelta(days=365 * 25)  # was 15y
 
 if span_key == "YTD":
     disp_start = pd.Timestamp(datetime(now.year, 1, 1))
@@ -92,11 +96,10 @@ def fetch_closes(tickers, start, end):
     except Exception:
         pass
 
-    # Retry using a long period if start/end failed on some symbols
+    # Retry using maximum available history to support 20y span
     try:
-        period = "15y"
         raw2 = yf.download(
-            tickers, period=period,
+            tickers, period="max",
             auto_adjust=True, progress=False, group_by="ticker", threads=True
         )
         out2 = _normalize(raw2, tickers)
