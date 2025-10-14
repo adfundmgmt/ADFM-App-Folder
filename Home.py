@@ -48,7 +48,18 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 
 - **Market Stress Composite**  
   A single 0 to 100 stress score blending volatility, credit, curve, funding, and equity drawdown. Higher = more stress.
+
+- **Unusual Options Flow Tracker**  
+  Tracks unusual options flow tracker.
   
+- **Reflexivity Monitor**  
+   A meta-signal that measures when prices drive fundamentals (reflexive loop) vs when fundamentals drive prices.
+
+- **Flow of Funds Matrix**  
+  See where incremental liquidity (Fed/Treasury/FX reserves) and relative performance are co-moving.
+  
+- **Cross-Asset Correlation and Volatility Dashboard**  
+  App that fetches data to visualize cross-asset correlations and volatility, featuring a 1M thresholded correlation matrix, and grouped z-scores.  
 ---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast moving markets. Always a work in progress, open to feedback or feature ideas.
