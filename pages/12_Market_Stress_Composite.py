@@ -367,4 +367,12 @@ with st.expander("Download Data"):
     out.index.name = "Date"
     st.download_button("Download CSV", out.to_csv(), file_name="market_stress_composite.csv", mime="text/csv")
 
+# sanity: all major frames must be naive date indexes
+for name, obj in [("panel", panel), ("scores_all", scores_all), ("comp_s", comp_s)]:
+    assert isinstance(obj.index, pd.DatetimeIndex), f"{name} not datetime index"
+    assert obj.index.tz is None, f"{name} index has tz set"
+# sanity: start_lb is naive
+assert isinstance(start_lb, pd.Timestamp) and start_lb.tz is None
+
+
 st.caption("© 2025 AD Fund Management LP")
