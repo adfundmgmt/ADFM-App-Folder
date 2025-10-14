@@ -1,4 +1,5 @@
-# Cross-Asset Correlations & Vol — 6 panels, minimal matrix, insight-first
+# Cross-Asset Correlations & Volatility — Ultimate Page
+# Six correlation panels, minimal matrix, vol monitor, standardized snapshot, auto Playbook
 
 import math
 from datetime import datetime, timedelta
@@ -14,7 +15,7 @@ import streamlit as st
 # =========================
 # App config and style
 # =========================
-st.set_page_config(page_title="Cross-Asset Correlations & Vol (6-Panel, Minimal Matrix)", layout="wide")
+st.set_page_config(page_title="Cross-Asset Correlations & Vol — Ultimate", layout="wide")
 
 plt.rcParams.update({
     "figure.figsize": (8, 3),
@@ -27,8 +28,8 @@ plt.rcParams.update({
     "lines.linewidth": 2.0,
 })
 
-st.title("Cross-Asset Correlations & Volatility — Six Panels, Minimal Matrix")
-st.caption("Data: Yahoo Finance via yfinance. Matrix is text-first, low-ink. Six correlation panels stay.")
+st.title("Cross-Asset Correlations & Volatility — Ultimate")
+st.caption("Data: Yahoo Finance via yfinance. Insight-first, minimal ink, pastel where helpful.")
 
 # =========================
 # Universe
@@ -44,15 +45,20 @@ ORDER = sum(GROUPS.values(), [])
 IV_TICKERS = ["^VIX", "^OVX"]
 
 # =========================
-# Sidebar: slim controls
+# Sidebar, slim by design
 # =========================
 st.sidebar.header("Controls")
-rho_thresh = st.sidebar.slider("|ρ| threshold", 0.30, 0.90, 0.50, 0.05)
-show_abs = st.sidebar.checkbox("Matrix in absolute terms", value=False)
+rho_thresh = st.sidebar.slider("|ρ| highlight threshold", 0.30, 0.90, 0.50, 0.05)
 matrix_style = st.sidebar.selectbox("Matrix style", ["Minimal text-only", "Greyscale heat"], index=0)
+abs_view = st.sidebar.checkbox("Matrix in absolute terms", value=False)
+clip_extremes = st.sidebar.checkbox("Clip chart y-axes at 1st–99th pct", value=True)
+focus_since_2017 = st.sidebar.checkbox("Focus on 2017 to present", value=True)
 
-st.sidebar.caption("Panels: 21D rolling corr, 6M mean ±1σ band, focus 2017+.")
-focus_since_2017 = True
+st.sidebar.header("Playbook knobs")
+pos_cut = st.sidebar.slider("Strong positive corr cutoff", 0.60, 0.95, 0.80, 0.05)
+neg_cut = st.sidebar.slider("Strong negative corr cutoff", -0.95, -0.60, -0.80, 0.05)
+z_hot = st.sidebar.slider("Hot vol Z threshold", 1.0, 3.0, 1.5, 0.1)
+z_cold = st.sidebar.slider("Cold vol Z threshold", -3.0, -1.0, -1.5, 0.1)
 
 # =========================
 # Helpers
@@ -63,7 +69,8 @@ def pastelize_cmap(name="RdYlGn", lighten=0.65, n=256):
     colors[:, :3] = 1.0 - lighten * (1.0 - colors[:, :3])  # toward white
     return ListedColormap(colors)
 
-PASTEL_RdYlGn = pastelize_cmap("RdYlGn", lighten=0.65)
+PASTEL_RdYlGn = pastelize_cmap("RdYlGn", lighten=0.70)    # very soft
+PASTEL_Greens = pastelize_cmap("Greens", lighten=0.70)
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def fetch_prices(tickers, start, end, interval="1d"):
@@ -131,6 +138,8 @@ def apply_focus_window(index):
     return index[index >= start]
 
 def clip_limits(array_like, pmin=1, pmax=99):
+    if not clip_extremes:
+        return None
     a = pd.Series(np.asarray(array_like).astype(float)).dropna()
     if a.empty:
         return None
@@ -167,102 +176,8 @@ last_date = BASE.index.max()
 st.info(f"Data last date: {last_date.strftime('%Y-%m-%d')}" if pd.notna(last_date) else "No dates available.")
 
 # =========================
-# Minimal Matrix (lower triangle, text-first)
+# Header KPIs, quick read
 # =========================
-st.subheader("Cross-Asset Correlation Matrix (1M) — Minimal")
-
-def _style_matrix_text(df, thresh=0.5, sign_color=True):
-    """Return a Styler that colors text subtly by sign, bolds above thresh, no background fill."""
-    def fmt(v):
-        return "" if pd.isna(v) else f"{int(round(v*100,0))}%"
-
-    def style_fn(x):
-        css = np.full(x.shape, "", dtype=object)
-        vals = x.values
-        # Bold with thin border above threshold
-        hit = (np.abs(vals) >= thresh) & ~np.isnan(vals)
-        css[hit] = "font-weight:700; border:1px solid #999;"
-
-        if sign_color:
-            # Soft red/green text, opacity scales with |ρ|
-            with np.errstate(invalid="ignore"):
-                alpha = np.clip(np.abs(vals), 0.2, 0.9)  # floor/ceiling
-                red = (vals < 0) & ~np.isnan(vals)
-                green = (vals > 0) & ~np.isnan(vals)
-            def rgba(a, g=False):
-                # muted red or green
-                return f"color: rgba({60 if g else 200}, {150 if g else 60}, {80 if g else 60}, {a:.2f});"
-            for i in range(x.shape[0]):
-                for j in range(x.shape[1]):
-                    if red[i, j]:
-                        css[i, j] += " " + rgba(alpha[i, j], g=False)
-                    elif green[i, j]:
-                        css[i, j] += " " + rgba(alpha[i, j], g=True)
-        # Center text, uniform font
-        css = np.where(css == "", "text-align:center; font-size:0.95rem;", css + " text-align:center; font-size:0.95rem;")
-        return pd.DataFrame(css, index=x.index, columns=x.columns)
-
-    return (
-        df.style
-        .format(fmt)
-        .apply(style_fn, axis=None)
-        .set_properties(**{"background-color": "white"})  # keep blank background
-    )
-
-if len(RET) >= WIN:
-    corr_raw = RET.tail(WIN).corr().replace([-np.inf, np.inf], np.nan)
-else:
-    corr_raw = pd.DataFrame()
-
-if corr_raw.empty:
-    st.warning("Not enough data to compute the 1M correlation matrix.")
-else:
-    order = [t for t in ORDER if t in corr_raw.columns]
-    corr_signed = corr_raw.loc[order, order]
-    corr = corr_raw.abs().loc[order, order] if show_abs else corr_signed.copy()
-
-    # lower triangle, blank diagonal
-    n = corr.shape[0]
-    mask_upper = np.triu(np.ones((n, n), dtype=bool), k=1)
-    mask_diag  = np.eye(n, dtype=bool)
-    disp = corr.copy().astype(float)
-    disp.values[mask_upper] = np.nan
-    disp.values[mask_diag]  = np.nan
-
-    if matrix_style == "Minimal text-only":
-        sty = _style_matrix_text(disp, thresh=rho_thresh, sign_color=not show_abs)
-        st.dataframe(sty, use_container_width=True, height=min(110 + 40*disp.shape[0], 1200))
-    else:
-        # Greyscale heat uses |ρ| to avoid color confusion, still blanks upper/diag
-        abs_disp = disp.abs()
-        sty = (
-            abs_disp.style
-            .background_gradient(cmap="Greys", vmin=0, vmax=1)
-            .format(lambda v: "" if pd.isna(v) else f"{int(round(v*100,0))}%")
-            .apply(lambda x: np.where((x.values >= rho_thresh) & ~np.isnan(x.values),
-                                      "font-weight:700; border:1px solid #999; text-align:center;",
-                                      "text-align:center;"),
-                   axis=None)
-        )
-        st.dataframe(sty, use_container_width=True, height=min(110 + 40*disp.shape[0], 1200))
-
-    st.caption(f"Lower triangle only, blanks on diagonal. Bold marks |ρ| ≥ {rho_thresh:.2f}. "
-               + ("Absolute mode removes direction." if show_abs else "Subtle text color shows sign."))
-
-# =========================
-# Six correlation panels (two rows of three)
-# =========================
-st.subheader("Cross-Asset Correlation Panels (21D)")
-
-PANEL_SPECS = [
-    dict(a="^GSPC", b="^TNX", la="SPX", lb="US 10Y",      title="Equity vs Rates"),
-    dict(a="^RUT",  b="LQD",  la="RTY", lb="IG (LQD)",     title="Small Caps vs IG Credit"),
-    dict(a="^GSPC", b="HYG",  la="SPX", lb="HY (HYG)",     title="Equity vs HY Credit"),
-    dict(a="^GSPC", b="CL=F", la="SPX", lb="Oil (WTI)",    title="Equity vs Oil"),
-    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD", title="Europe vs EURUSD"),
-    dict(a="^N225", b="USDJPY=X", la="NKY", lb="USDJPY",   title="Japan vs USDJPY"),
-]
-
 def roll_corr(ret_df, a, b, window=21):
     if a not in ret_df.columns or b not in ret_df.columns:
         return pd.Series(dtype=float)
@@ -270,6 +185,59 @@ def roll_corr(ret_df, a, b, window=21):
     if df.empty:
         return pd.Series(dtype=float)
     return df[a].rolling(window).corr(df[b])
+
+k1, k2, k3, k4 = st.columns(4)
+
+# SPX vs 10Y corr
+rc_er = roll_corr(RET, "^GSPC", "^TNX", WIN)
+with k1:
+    st.metric("SPX vs US10Y, 21D corr",
+              value=("NA" if rc_er.empty else f"{rc_er.iloc[-1]:.1%}"),
+              delta=(None if rc_er.empty else f"{percentile_of_last(rc_er):.0f}th pct"))
+
+# VIX minus SPX realized
+if "^GSPC" in REALVOL.columns and "^VIX" in IV.columns:
+    rv = (REALVOL["^GSPC"] * 100).dropna()
+    vix = IV["^VIX"].dropna()
+    common = rv.to_frame("rv").join(vix.to_frame("vix"), how="inner")
+    if not common.empty:
+        spread = common["vix"] - common["rv"]
+        with k2:
+            st.metric("VIX minus SPX realized",
+                      value=f"{spread.iloc[-1]:.1f} pts",
+                      delta=f"{percentile_of_last(spread):.0f}th pct")
+
+# HY vol percentile
+if "HYG" in REALVOL.columns:
+    hyg = (REALVOL["HYG"] * 100).dropna()
+    with k3:
+        st.metric("HY realized vol, now", f"{current_value(hyg):.1f}%", f"{percentile_of_last(hyg):.0f}th pct")
+
+# USDJPY vol percentile if available
+fx_pick = None
+for fx in ["USDJPY=X", "EURUSD=X", "GBPUSD=X"]:
+    if fx in REALVOL.columns:
+        fx_pick = (REALVOL[fx] * 100).dropna()
+        break
+with k4:
+    if fx_pick is not None and not fx_pick.empty:
+        st.metric(f"{fx} realized vol, now", f"{fx_pick.iloc[-1]:.1f}%", f"{percentile_of_last(fx_pick):.0f}th pct")
+    else:
+        st.metric("FX realized vol, now", "NA")
+
+# =========================
+# Six correlation panels
+# =========================
+st.subheader("Correlation panels, 21D, with 6M bands")
+
+PANEL_SPECS = [
+    dict(a="^GSPC", b="^TNX", la="SPX", lb="US 10Y",      title="Equity vs Rates"),
+    dict(a="^GSPC", b="HYG",  la="SPX", lb="HY (HYG)",     title="Equity vs HY Credit"),
+    dict(a="^GSPC", b="CL=F", la="SPX", lb="Oil (WTI)",    title="Equity vs Oil"),
+    dict(a="^RUT",  b="LQD",  la="RTY", lb="IG (LQD)",     title="Small Caps vs IG Credit"),
+    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD", title="Europe vs EURUSD"),
+    dict(a="^N225", b="USDJPY=X", la="NKY", lb="USDJPY",   title="Japan vs USDJPY"),
+]
 
 def corr_with_context(ax, rc):
     rc = rc.loc[apply_focus_window(rc.index)]
@@ -287,36 +255,156 @@ def corr_with_context(ax, rc):
     ax.margins(y=0.05); add_regime_shading(ax)
     return rc.iloc[-1], percentile_of_last(rc)
 
-# Row 1
-row1 = st.columns(3)
-for spec, col in zip(PANEL_SPECS[:3], row1):
-    with col:
-        fig, ax = plt.subplots()
-        rc = roll_corr(RET, spec["a"], spec["b"], WIN)
-        curr, pct = corr_with_context(ax, rc)
-        ax.set_title(spec["title"]); ax.legend(loc="lower left", fontsize=8); plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-        m1, m2 = st.columns(2)
-        with m1: st.metric("Current corr", f"{curr:.1%}" if curr is not None and not np.isnan(curr) else "NA")
-        with m2: st.metric("Percentile", f"{pct:.0f}th" if pct is not None and not np.isnan(pct) else "NA")
-
-# Row 2
-row2 = st.columns(3)
-for spec, col in zip(PANEL_SPECS[3:], row2):
-    with col:
-        fig, ax = plt.subplots()
-        rc = roll_corr(RET, spec["a"], spec["b"], WIN)
-        curr, pct = corr_with_context(ax, rc)
-        ax.set_title(spec["title"]); ax.legend(loc="lower left", fontsize=8); plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-        m1, m2 = st.columns(2)
-        with m1: st.metric("Current corr", f"{curr:.1%}" if curr is not None and not np.isnan(curr) else "NA")
-        with m2: st.metric("Percentile", f"{pct:.0f}th" if pct is not None and not np.isnan(pct) else "NA")
+for row_specs in [PANEL_SPECS[:3], PANEL_SPECS[3:]]:
+    cols = st.columns(3)
+    for spec, col in zip(row_specs, cols):
+        with col:
+            fig, ax = plt.subplots()
+            rc = roll_corr(RET, spec["a"], spec["b"], WIN)
+            curr, pct = corr_with_context(ax, rc)
+            ax.set_title(spec["title"]); ax.legend(loc="lower left", fontsize=8); plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+            m1, m2 = st.columns(2)
+            with m1: st.metric("Current corr", f"{curr:.1%}" if curr is not None and not np.isnan(curr) else "NA")
+            with m2: st.metric("Percentile", f"{pct:.0f}th" if pct is not None and not np.isnan(pct) else "NA")
 
 # =========================
-# Volatility snapshot (ranked)
+# Minimal correlation matrix, lower triangle
 # =========================
-st.subheader("Vol snapshot — standardized, ranked")
+st.subheader("Cross-Asset Correlation Matrix (1M)")
+
+def style_matrix_text(df, thresh=0.5, sign_color=True):
+    def fmt(v):
+        return "" if pd.isna(v) else f"{int(round(v*100,0))}%"
+    def style_fn(x):
+        css = np.full(x.shape, "", dtype=object)
+        vals = x.values
+        hit = (np.abs(vals) >= thresh) & ~np.isnan(vals)
+        css[hit] = "font-weight:700; border:1px solid #999;"
+        if sign_color:
+            with np.errstate(invalid="ignore"):
+                alpha = np.clip(np.abs(vals), 0.2, 0.9)
+                red = (vals < 0) & ~np.isnan(vals)
+                green = (vals > 0) & ~np.isnan(vals)
+            def rgba(a, green_flag=False):
+                return f"color: rgba({60 if green_flag else 200}, {150 if green_flag else 60}, {80 if green_flag else 60}, {a:.2f});"
+            for i in range(x.shape[0]):
+                for j in range(x.shape[1]):
+                    if red[i, j]:
+                        css[i, j] += " " + rgba(alpha[i, j], green_flag=False)
+                    elif green[i, j]:
+                        css[i, j] += " " + rgba(alpha[i, j], green_flag=True)
+        css = np.where(css == "", "text-align:center; font-size:0.95rem;", css + " text-align:center; font-size:0.95rem;")
+        return pd.DataFrame(css, index=x.index, columns=x.columns)
+    return (
+        df.style
+        .format(fmt)
+        .apply(style_fn, axis=None)
+        .set_properties(**{"background-color": "white"})
+    )
+
+if len(RET) >= WIN:
+    corr_raw = RET.tail(WIN).corr().replace([-np.inf, np.inf], np.nan)
+else:
+    corr_raw = pd.DataFrame()
+
+if corr_raw.empty:
+    st.warning("Not enough data to compute the 1M correlation matrix.")
+else:
+    order = [t for t in ORDER if t in corr_raw.columns]
+    corr_signed = corr_raw.loc[order, order]
+    corr = corr_raw.abs().loc[order, order] if abs_view else corr_signed.copy()
+
+    n = corr.shape[0]
+    mask_upper = np.triu(np.ones((n, n), dtype=bool), k=1)
+    mask_diag  = np.eye(n, dtype=bool)
+    disp = corr.copy().astype(float)
+    disp.values[mask_upper] = np.nan
+    disp.values[mask_diag]  = np.nan
+
+    if matrix_style == "Minimal text-only":
+        sty = style_matrix_text(disp, thresh=rho_thresh, sign_color=not abs_view)
+        st.dataframe(sty, use_container_width=True, height=min(110 + 40*disp.shape[0], 1200))
+    else:
+        abs_disp = disp.abs()
+        sty = (
+            abs_disp.style
+            .background_gradient(cmap="Greys", vmin=0, vmax=1)
+            .format(lambda v: "" if pd.isna(v) else f"{int(round(v*100,0))}%")
+            .apply(lambda x: np.where((x.values >= rho_thresh) & ~np.isnan(x.values),
+                                      "font-weight:700; border:1px solid #999; text-align:center;",
+                                      "text-align:center;"),
+                   axis=None)
+        )
+        st.dataframe(sty, use_container_width=True, height=min(110 + 40*disp.shape[0], 1200))
+
+    st.caption(f"Lower triangle only, blanks on diagonal. Bold marks |ρ| ≥ {rho_thresh:.2f}. "
+               + ("Absolute mode removes direction." if abs_view else "Subtle text color shows sign."))
+
+# =========================
+# Vol monitor, realized vs implied
+# =========================
+st.subheader("Volatility monitor")
+
+def iqr_band(ax, s):
+    s = pd.Series(s).dropna()
+    if s.empty:
+        return
+    q25, q75 = np.nanpercentile(s, [25, 75])
+    ax.axhspan(q25, q75, color="lightgray", alpha=0.25)
+
+def vol_panel(series, label, title, overlay=None):
+    fig, ax = plt.subplots()
+    s = series.loc[apply_focus_window(series.index)] if series is not None else pd.Series(dtype=float)
+    if s is None or s.empty:
+        st.info(f"{label} unavailable.")
+        return None, None
+    ax.plot(s.index, s.values, label=label)
+    if overlay is not None and not overlay.dropna().empty:
+        o = overlay.loc[apply_focus_window(overlay.index)]
+        ax.plot(o.index, o.values, label=overlay.name)
+    iqr_band(ax, s)
+    lims = clip_limits(s.values, 1, 99)
+    if lims:
+        ax.set_ylim(lims)
+    ax.set_title(title); ax.set_ylabel("Percent"); ax.margins(y=0.05); add_regime_shading(ax)
+    ax.legend(fontsize=8, ncol=2); plt.tight_layout(); st.pyplot(fig, use_container_width=True)
+    return current_value(s), percentile_of_last(s)
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    vix = IV["^VIX"] if "^VIX" in IV.columns else None
+    if vix is not None: vix.name = "VIX"
+    if "^GSPC" in REALVOL.columns:
+        v_now, v_pct = vol_panel(REALVOL["^GSPC"] * 100, "SPX 1M Realized", "Equity vol, implied vs realized", overlay=vix)
+        if v_now is not None:
+            m1, m2 = st.columns(2)
+            with m1: st.metric("SPX realized, now", f"{v_now:.1f}%")
+            with m2: st.metric("Percentile", f"{v_pct:.0f}th")
+with c2:
+    ovx = IV["^OVX"] if "^OVX" in IV.columns else None
+    if ovx is not None: ovx.name = "OVX"
+    if "CL=F" in REALVOL.columns:
+        o_now, o_pct = vol_panel(REALVOL["CL=F"] * 100, "WTI 1M Realized", "Oil vol, implied vs realized", overlay=ovx)
+        if o_now is not None:
+            m1, m2 = st.columns(2)
+            with m1: st.metric("Oil realized, now", f"{o_now:.1f}%")
+            with m2: st.metric("Percentile", f"{o_pct:.0f}th")
+with c3:
+    fx_cols = [c for c in REALVOL.columns if c.endswith("=X")]
+    fx_name = None
+    if fx_cols:
+        fx_name = "USDJPY=X" if "USDJPY=X" in REALVOL.columns else fx_cols[0]
+        f_now, f_pct = vol_panel(REALVOL[fx_name] * 100, f"{fx_name} 1M Realized", "FX vol, realized proxy")
+        if f_now is not None:
+            m1, m2 = st.columns(2)
+            with m1: st.metric("FX realized, now", f"{f_now:.1f}%")
+            with m2: st.metric("Percentile", f"{f_pct:.0f}th")
+
+# =========================
+# Standardized vol snapshot, ranked table
+# =========================
+st.subheader("Vol snapshot, standardized, ranked")
 
 z_panel = {}
 if "^VIX" in IV.columns:  z_panel["^VIX"] = IV["^VIX"]
@@ -351,3 +439,102 @@ if len(z_panel) >= 2:
         )
 else:
     st.info("Not enough series for standardized snapshot.")
+
+# =========================
+# Playbook, auto generated
+# =========================
+st.subheader("Playbook, auto generated")
+
+bullets = []
+
+# 1) Correlation extremes across the full matrix
+def matrix_extremes(ret_df, tickers, window=21, pos_cut=0.8, neg_cut=-0.8):
+    if len(ret_df) < window:
+        return [], []
+    corr = ret_df.tail(window).corr().replace([-np.inf, np.inf], np.nan)
+    order = [t for t in tickers if t in corr.columns]
+    pos, neg = [], []
+    for i in range(1, len(order)):
+        for j in range(0, i):
+            a, b = order[i], order[j]
+            val = corr.loc[a, b]
+            if pd.isna(val):
+                continue
+            if val >= pos_cut:
+                pos.append((a, b, float(val)))
+            if val <= neg_cut:
+                neg.append((a, b, float(val)))
+    pos = sorted(pos, key=lambda x: -x[2])[:6]
+    neg = sorted(neg, key=lambda x: x[2])[:6]
+    return pos, neg
+
+pos_ext, neg_ext = matrix_extremes(RET, ORDER, WIN, pos_cut=pos_cut, neg_cut=neg_cut)
+if pos_ext:
+    bullets.append("Strong positives, consider relative value rather than directional hedge:")
+    for a, b, v in pos_ext:
+        bullets.append(f"• {a} with {b}: {v:.2f}")
+if neg_ext:
+    bullets.append("Strong negatives, hedge candidates and macro pivots:")
+    for a, b, v in neg_ext:
+        bullets.append(f"• {a} with {b}: {v:.2f}")
+
+# 2) Equity, rates, credit triangle
+if not rc_er.empty:
+    if rc_er.iloc[-1] <= -0.5:
+        bullets.append("• Equities vs rates negative, rallies in duration tend to support equities.")
+    elif rc_er.iloc[-1] >= 0.5:
+        bullets.append("• Equities vs rates positive, rate selloffs are pressuring equities.")
+
+rc_ehy = roll_corr(RET, "^GSPC", "HYG", WIN)
+if not rc_ehy.empty and rc_ehy.iloc[-1] >= 0.5:
+    bullets.append("• Equities vs HY positive, equity drawdowns likely travel with credit widening.")
+
+# 3) Volatility regime hints
+def last_z(name, series_map):
+    s = series_map.get(name)
+    if s is None:
+        return None
+    z = zscores(s.dropna())
+    return float(z.iloc[-1]) if not z.empty else None
+
+series_map = {}
+if "^VIX" in IV.columns: series_map["VIX"] = IV["^VIX"]
+if "^OVX" in IV.columns: series_map["OVX"] = IV["^OVX"]
+if "^GSPC" in REALVOL.columns: series_map["SPX RV"] = REALVOL["^GSPC"] * 100
+if "HYG" in REALVOL.columns: series_map["HY RV"] = REALVOL["HYG"] * 100
+if "CL=F" in REALVOL.columns: series_map["Oil RV"] = REALVOL["CL=F"] * 100
+
+vix_z = last_z("VIX", series_map)
+spxrv_z = last_z("SPX RV", series_map)
+hyrv_z = last_z("HY RV", series_map)
+oilrv_z = last_z("Oil RV", series_map)
+
+if vix_z is not None and vix_z >= z_hot and spxrv_z is not None and spxrv_z < vix_z:
+    bullets.append("• Implied equity vol rich to realized, consider short vol structures or overwrite.")
+if vix_z is not None and vix_z <= z_cold:
+    bullets.append("• Implied equity vol depressed, consider buying convexity or collars.")
+
+if hyrv_z is not None and hyrv_z >= z_hot:
+    bullets.append("• HY vol hot, watch for spillover into equities, reduce gross or add credit hedges.")
+
+if oilrv_z is not None and oilrv_z >= z_hot:
+    bullets.append("• Oil vol elevated, check energy beta in book and rebalance exposures.")
+
+# 4) FX volatility cue
+if fx_pick is not None and not fx_pick.empty:
+    fx_pct = percentile_of_last(fx_pick)
+    if fx_pct >= 80:
+        bullets.append("• FX vol in higher regime, cross-asset correlations can rotate faster, tighten stops.")
+    elif fx_pct <= 20:
+        bullets.append("• FX vol subdued, carry and pair trades tend to persist longer.")
+
+# Render playbook
+if bullets:
+    st.markdown("\n".join(bullets))
+else:
+    st.info("No strong signals based on current thresholds.")
+
+# =========================
+# Footer notes
+# =========================
+st.caption("Notes: 21 trading days used for 1M windows, realized vol is 21D standard deviation annualized. Rolling correlations are 21D. Implied overlays use VIX and OVX where available.")
