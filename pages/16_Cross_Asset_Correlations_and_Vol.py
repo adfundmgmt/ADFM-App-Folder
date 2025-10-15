@@ -533,6 +533,8 @@ if bullets:
 else:
     st.info("No strong signals based on current thresholds.")
 
+st.caption("© 2025 AD Fund Management LP")
+
 # =========================
 # Footer notes
 # =========================
