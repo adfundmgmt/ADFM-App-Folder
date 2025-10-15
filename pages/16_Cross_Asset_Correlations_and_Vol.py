@@ -1,7 +1,3 @@
-# Cross-Asset Correlations & Volatility — Ultimate Page (Revised)
-# Six correlation panels, minimal matrix (no FX rows, black numerals, pastel cell colors),
-# vol monitor, standardized snapshot, auto Playbook.
-
 import math
 from datetime import datetime, timedelta
 
@@ -16,7 +12,7 @@ import streamlit as st
 # =========================
 # App config and style
 # =========================
-st.set_page_config(page_title="Cross-Asset Correlations & Vol — Ultimate", layout="wide")
+st.set_page_config(page_title="Cross-Asset Correlations & Vol", layout="wide")
 
 plt.rcParams.update({
     "figure.figsize": (8, 3),
