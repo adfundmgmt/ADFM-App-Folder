@@ -483,6 +483,8 @@ with st.expander("Diagnostics"):
     if diag:
         st.dataframe(pd.DataFrame(diag, columns=["Series","First","Last","Obs"]), use_container_width=True)
 
+st.caption("© 2025 AD Fund Management LP")
+
 # ---------------- Notes ----------------
 with st.expander("Methodology notes"):
     st.markdown(
@@ -493,3 +495,5 @@ with st.expander("Methodology notes"):
 - Liquidity Pulse is the sum of standardized flow shocks and always plots from your selected start date; earliest points are delayed by differencing horizons and data availability.
 """
     )
+
+
