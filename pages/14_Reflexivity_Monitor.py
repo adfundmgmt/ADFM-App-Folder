@@ -529,3 +529,5 @@ st.markdown(
 - Score compares price→future fundamentals vs fundamentals→future price. Positive spread implies a reflexive loop.
 """
 )
+
+st.caption("© 2025 AD Fund Management LP")
