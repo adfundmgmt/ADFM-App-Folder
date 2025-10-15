@@ -25,7 +25,7 @@ plt.rcParams.update({
     "lines.linewidth": 2.0,
 })
 
-st.title("Cross-Asset Correlations & Volatility — Ultimate")
+st.title("Cross-Asset Correlations & Volatility")
 st.caption("Data: Yahoo Finance via yfinance. Insight-first, minimal ink, pastel where helpful.")
 
 # =========================
