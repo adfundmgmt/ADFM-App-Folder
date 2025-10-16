@@ -1,12 +1,9 @@
 # seasonality_dashboard.py
 # Monthly Seasonality Explorer
-# - Original bar+table unchanged
-# - Intra-month curve (white, black lines) anchored to prior month-end
-# - Now shows THREE lines:
-#     • Average over selected window (start_year–end_year)  -> solid black
-#     • Long-history average (max(1950, first year)–end_year) -> dotted
-#     • Current year path (if present) -> dashed black, light alpha
-# - Forward-to-EOM mini-stats when the selected month is the current month
+# - Bar+table unchanged
+# - Intra-month curve: two lines only
+#     • Solid black: average over [start_year–end_year]
+#     • Dashed black: current year path (if available)
 # - Robust trading-day ordinal, no stray outputs, px.index masks
 
 import datetime as dt
@@ -68,6 +65,7 @@ def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> Optiona
 def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     symbol = symbol.strip().upper()
     end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
+
     # pad start to capture prior month-end
     start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
     start_pad = start_pad_dt.strftime("%Y-%m-%d")
@@ -292,10 +290,6 @@ def _avg_calendar_day_for_ordinal(prices: pd.Series, month_int: int, start_year:
 
 # ---- Robust trading-day ordinal (handles weekends/holidays/out-of-range) ---- #
 def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> int:
-    """
-    Return 1-based trading-day ordinal for `when` within `month_index`.
-    Works if `when` is a weekend/holiday or outside the month’s range.
-    """
     if month_index.empty:
         return 1
     idx = month_index.sort_values()
@@ -306,63 +300,54 @@ def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> i
 def plot_intra_month_curve(
     prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str
 ) -> io.BytesIO:
-    # Selected-window average
+    # Selected-window average (solid)
     df_sel, avg_sel = _month_paths_prev_eom(prices, month_int, start_year, end_year)
-
-    # Long-history average from max(1950, first available year) to end_year
-    first_avail = int(prices.index.year.min())
-    long_start = max(1950, first_avail)
-    df_long, avg_long = _month_paths_prev_eom(prices, month_int, long_start, end_year)
 
     fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="white")
     ax = fig.add_subplot(111, facecolor="white")
 
-    if avg_sel.empty and avg_long.empty:
+    if avg_sel.empty:
         ax.text(0.5, 0.5, "Not enough data to compute intra-month curve", ha="center", va="center", fontsize=12, color="black")
         ax.axis("off")
         buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white"); plt.close(fig); buf.seek(0); return buf
 
-    # Plot lines
-    if not avg_long.empty:
-        ax.plot(avg_long.index.values, avg_long.values, linewidth=1.8, color="black", linestyle=":", label=f"Avg {MONTH_LABELS[month_int-1]} {long_start}–{end_year}")
-    if not avg_sel.empty:
-        ax.plot(avg_sel.index.values, avg_sel.values, linewidth=2.6, color="black", linestyle="-", label=f"Avg {MONTH_LABELS[month_int-1]} {start_year}–{end_year}")
+    # Solid average
+    ax.plot(avg_sel.index.values, avg_sel.values, linewidth=2.6, color="black",
+            linestyle="-", label=f"Avg {MONTH_LABELS[month_int-1]} {start_year}–{end_year}")
 
-    # Current year overlay
+    # Current year overlay (dashed) if available
     today = pd.Timestamp.today()
     cur_year = today.year
-    if start_year <= cur_year <= end_year:
-        m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
-        prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
-                    (prices.index.month == (month_int - 1 if month_int > 1 else 12))
-        prev_month = prices.loc[prev_mask]
-        if not m.empty and not prev_month.empty:
-            prev_eom = float(prev_month.iloc[-1])
-            cur_norm = (m / prev_eom) * 100.0
-            cur_norm.index = pd.RangeIndex(start=1, stop=1 + len(cur_norm), step=1)
-            if len(cur_norm) >= 2:
-                ax.plot(cur_norm.index.values, cur_norm.values, linewidth=2.0, color="black",
-                        alpha=0.5, linestyle="--", label=str(cur_year))
+    m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
+    prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
+                (prices.index.month == (month_int - 1 if month_int > 1 else 12))
+    prev_month = prices.loc[prev_mask]
+    if not m.empty and not prev_month.empty:
+        prev_eom = float(prev_month.iloc[-1])
+        cur_norm = (m / prev_eom) * 100.0
+        cur_norm.index = pd.RangeIndex(start=1, stop=1 + len(cur_norm), step=1)
+        if len(cur_norm) >= 2:
+            ax.plot(cur_norm.index.values, cur_norm.values, linewidth=2.0, color="black",
+                    alpha=0.5, linestyle="--", label=str(cur_year))
 
-    # Key points based on selected-window average
-    if not avg_sel.empty:
-        low_idx, low_val = int(avg_sel.idxmin()), float(avg_sel.min())
-        high_idx, high_val = int(avg_sel.idxmax()), float(avg_sel.max())
-        ax.scatter([low_idx, high_idx], [low_val, high_val], s=45, color="black", zorder=3)
+    # Key points on selected-window average
+    low_idx, low_val = int(avg_sel.idxmin()), float(avg_sel.min())
+    high_idx, high_val = int(avg_sel.idxmax()), float(avg_sel.max())
+    ax.scatter([low_idx, high_idx], [low_val, high_val], s=45, color="black", zorder=3)
 
-        low_dom  = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
-        high_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
+    low_dom  = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
+    high_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
 
-        def _box(txt, xy, offset_xy):
-            ax.annotate(txt, xy=xy, xytext=(xy[0] + offset_xy[0], xy[1] + offset_xy[1]), textcoords="data",
-                        arrowprops=dict(arrowstyle="-", color="black", lw=1.0, shrinkA=2, shrinkB=2),
-                        fontsize=9.5, color="black", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="black", lw=0.8))
-        if low_dom is not None:
-            _box(f"Avg low • Day {low_idx}\n≈ {MONTH_LABELS[month_int-1]} {low_dom}\nIndex {low_val:.2f}",
-                 (low_idx, low_val), (0.7, -0.35))
-        if high_dom is not None:
-            _box(f"Avg high • Day {high_idx}\n≈ {MONTH_LABELS[month_int-1]} {high_dom}\nIndex {high_val:.2f}",
-                 (high_idx, high_val), (-2.0, 0.35))
+    def _box(txt, xy, offset_xy):
+        ax.annotate(txt, xy=xy, xytext=(xy[0] + offset_xy[0], xy[1] + offset_xy[1]), textcoords="data",
+                    arrowprops=dict(arrowstyle="-", color="black", lw=1.0, shrinkA=2, shrinkB=2),
+                    fontsize=9.5, color="black", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="black", lw=0.8))
+    if low_dom is not None:
+        _box(f"Avg low • Day {low_idx}\n≈ {MONTH_LABELS[month_int-1]} {low_dom}\nIndex {low_val:.2f}",
+             (low_idx, low_val), (0.7, -0.35))
+    if high_dom is not None:
+        _box(f"Avg high • Day {high_idx}\n≈ {MONTH_LABELS[month_int-1]} {high_dom}\nIndex {high_val:.2f}",
+             (high_idx, high_val), (-2.0, 0.35))
 
     # Titles and axes
     ax.set_title(f"{symbol_shown} {MONTH_LABELS[month_int-1]}: Intra-Month Performance by Trading Day", color="black",
@@ -373,11 +358,11 @@ def plot_intra_month_curve(
     ax.tick_params(colors="black")
     for sp in ax.spines.values(): sp.set_color("black")
 
-    # Legend clarifies ranges
+    # Legend
     ax.legend(frameon=False, loc="upper left", title="Series", title_fontsize=10)
 
-    # Forward-to-EOM stats only if selected month is current month and current year is in range
-    if (today.month == month_int) and (start_year <= today.year <= end_year) and not df_sel.empty:
+    # Forward-to-EOM stats only if selected month is current month and current year has data
+    if (today.month == month_int) and not df_sel.empty:
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
         if not m_cur.empty:
             tday_ord = _trading_day_ordinal(m_cur.index, today)
