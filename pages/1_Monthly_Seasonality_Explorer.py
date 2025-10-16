@@ -4,7 +4,7 @@
 # - Intra-month curve (white, black lines) anchored to prior month-end
 # - Optional overlay of the current year's path
 # - Actionable forward-to-EOM stats when the selected month is the current month
-# - No stray Streamlit outputs
+# - Robust trading-day ordinal (no crash), no stray Streamlit outputs
 
 import datetime as dt
 import io
@@ -157,8 +157,7 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
     grouped_halves = halves.groupby("month")
     stats["mean_h1"] = grouped_halves["h1_ret"].mean()
     stats["mean_h2"] = grouped_halves["h2_ret"].mean()
-    stats["mean_total"] = grouped_halves["total_ret"].mean()
-
+    stats["mean_total"] = grouped_halves["total_ret"].mean()  # equals mean_h1 + mean_h2
     return stats
 
 def _format_pct(x: float) -> str:
@@ -179,8 +178,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     labels = plot_df["label"].tolist()
     mean_h1 = plot_df["mean_h1"].to_numpy(float)
     mean_h2 = plot_df["mean_h2"].to_numpy(float)
-    totals = plot_df["mean_total"].to_numpy(float)
-    hit = plot_df["hit_rate"].to_numpy(float)
+    totals  = plot_df["mean_total"].to_numpy(float)
+    hit     = plot_df["hit_rate"].to_numpy(float)
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
 
@@ -221,13 +220,11 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     ax1.legend(handles=legend, loc="upper left", frameon=False)
 
     ax_tbl = fig.add_subplot(gs[1]); ax_tbl.axis("off")
-
     row_labels = ["1H %", "2H %", "Total %"]
     row1, row2, row3 = list(map(list, [mean_h1, mean_h2, totals]))
     cell_vals = [row1, row2, row3]
     cell_txt = [[_format_pct(v) for v in row] for row in cell_vals]
     cell_colors = _cell_colors(cell_vals)
-
     table = ax_tbl.table(cellText=cell_txt, rowLabels=row_labels, colLabels=labels,
                          loc="center", cellLoc="center", rowLoc="center")
     table.auto_set_font_size(False); table.set_fontsize(9)
@@ -252,11 +249,11 @@ def _month_paths_prev_eom(prices: pd.Series, month_int: int, start_year: int, en
 
     paths = {}
     for y in sorted(px.index.year.unique()):
-        m = px.loc[(px.index.year == y) & (px.index.month == month_int)]
+        m = px.loc[(prices.index.year == y) & (prices.index.month == month_int)]
         if m.shape[0] < 3:
             continue
-        prev_mask = (px.index.year == (y if month_int > 1 else y - 1)) & \
-                    (px.index.month == (month_int - 1 if month_int > 1 else 12))
+        prev_mask = (prices.index.year == (y if month_int > 1 else y - 1)) & \
+                    (prices.index.month == (month_int - 1 if month_int > 1 else 12))
         prev_month = px.loc[prev_mask]
         if prev_month.empty:
             continue
@@ -287,8 +284,23 @@ def _avg_calendar_day_for_ordinal(prices: pd.Series, month_int: int, start_year:
         return None
     return int(round(np.mean(days)))
 
-def plot_intra_month_curve(prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str,
-                           overlay_current_year: bool = True) -> io.BytesIO:
+# ---- Robust trading-day ordinal (fixes crash on weekends/holidays/out-of-range) ---- #
+def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> int:
+    """
+    Return 1-based trading-day ordinal for `when` within `month_index`.
+    Works if `when` is a weekend/holiday or outside the month’s range.
+    """
+    if month_index.empty:
+        return 1
+    idx = month_index.sort_values()
+    d = pd.Timestamp(when).normalize()
+    ord_ = int(np.searchsorted(idx.values, np.datetime64(d), side="right"))
+    return max(1, min(ord_, len(idx)))
+
+def plot_intra_month_curve(
+    prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str,
+    overlay_current_year: bool = True
+) -> io.BytesIO:
     df, avg_path = _month_paths_prev_eom(prices, month_int, start_year, end_year)
     fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="white")
     ax = fig.add_subplot(111, facecolor="white")
@@ -302,19 +314,20 @@ def plot_intra_month_curve(prices: pd.Series, month_int: int, start_year: int, e
     ax.plot(x, y, linewidth=2.4, color="black", label="Average")
 
     # Optional overlay of current year
-    if overlay_current_year:
-        cur_year = pd.Timestamp.today().year
-        if start_year <= cur_year <= end_year:
-            m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
-            prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
-                        (prices.index.month == (month_int - 1 if month_int > 1 else 12))
-            prev_month = prices.loc[prev_mask]
-            if not m.empty and not prev_month.empty:
-                prev_eom = float(prev_month.iloc[-1])
-                cur_norm = (m / prev_eom) * 100.0
-                cur_norm.index = pd.RangeIndex(start=1, stop=1 + len(cur_norm), step=1)
-                if len(cur_norm) >= 2:
-                    ax.plot(cur_norm.index.values, cur_norm.values, linewidth=1.8, color="black", alpha=0.4, linestyle="--", label=str(cur_year))
+    today = pd.Timestamp.today()
+    cur_year = today.year
+    if overlay_current_year and (start_year <= cur_year <= end_year):
+        m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
+        prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
+                    (prices.index.month == (month_int - 1 if month_int > 1 else 12))
+        prev_month = prices.loc[prev_mask]
+        if not m.empty and not prev_month.empty:
+            prev_eom = float(prev_month.iloc[-1])
+            cur_norm = (m / prev_eom) * 100.0
+            cur_norm.index = pd.RangeIndex(start=1, stop=1 + len(cur_norm), step=1)
+            if len(cur_norm) >= 2:
+                ax.plot(cur_norm.index.values, cur_norm.values, linewidth=1.8, color="black",
+                        alpha=0.4, linestyle="--", label=str(cur_year))
 
     low_idx, low_val = int(avg_path.idxmin()), float(avg_path.min())
     high_idx, high_val = int(avg_path.idxmax()), float(avg_path.max())
@@ -344,20 +357,14 @@ def plot_intra_month_curve(prices: pd.Series, month_int: int, start_year: int, e
         _box(f"Avg {MONTH_LABELS[month_int-1]} High\nDay {high_idx} (~{MONTH_LABELS[month_int-1]} {high_dom})\n{high_val:.2f}",
              (high_idx, high_val), (-2.0, 0.35))
 
-    # actionable mini-stats, only if selected month is current month
-    today = pd.Timestamp.today()
-    if today.month == month_int:
-        # infer today's trading-day ordinal for the current year within this month
+    # actionable mini-stats, only if selected month is the current month and current year is in range
+    if (today.month == month_int) and (start_year <= today.year <= end_year):
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
         if not m_cur.empty:
-            tday_ord = (m_cur.index.get_indexer([m_cur.index[m_cur.index.get_loc(today, method='pad')]])[0] + 1) \
-                       if today in m_cur.index or today > m_cur.index[0] else 1
-            # compute forward-to-EOM returns across years for matching ordinal
-            df_all, _ = _month_paths_prev_eom(prices, month_int, start_year, end_year)
-            if tday_ord in df_all.index:
-                # forward = end_level - level_at_tday
-                lvl_t = df_all.loc[tday_ord]
-                lvl_end = df_all.iloc[-1]
+            tday_ord = _trading_day_ordinal(m_cur.index, today)
+            if tday_ord in df.index:
+                lvl_t = df.loc[tday_ord]
+                lvl_end = df.iloc[-1]
                 fwd = (lvl_end - lvl_t).dropna()
                 if not fwd.empty:
                     stats_text = (
