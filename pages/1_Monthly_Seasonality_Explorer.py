@@ -2,10 +2,11 @@
 # Monthly Seasonality Explorer
 # - Original bar+table unchanged
 # - Intra-month curve (white, black lines) anchored to prior month-end
-# - Optional overlay of the current year's path
+# - Current year's path overlay is ALWAYS shown (no toggle)
 # - Forward-to-EOM mini-stats when the selected month is the current month
 # - Robust trading-day ordinal (no crash), no stray Streamlit outputs
 # - FIX: _month_paths_prev_eom uses px.index for masks (prevents IndexError)
+# - UI cleaned: removed all download buttons
 
 import datetime as dt
 import io
@@ -303,8 +304,7 @@ def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> i
     return max(1, min(ord_, len(idx)))
 
 def plot_intra_month_curve(
-    prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str,
-    overlay_current_year: bool = True
+    prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str
 ) -> io.BytesIO:
     df, avg_path = _month_paths_prev_eom(prices, month_int, start_year, end_year)
     fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="white")
@@ -318,10 +318,10 @@ def plot_intra_month_curve(
     x = avg_path.index.values; y = avg_path.values
     ax.plot(x, y, linewidth=2.4, color="black", label="Average")
 
-    # Optional overlay of current year
+    # Always overlay current year if available within selected range
     today = pd.Timestamp.today()
     cur_year = today.year
-    if overlay_current_year and (start_year <= cur_year <= end_year):
+    if start_year <= cur_year <= end_year:
         m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
         prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
                     (prices.index.month == (month_int - 1 if month_int > 1 else 12))
@@ -362,7 +362,7 @@ def plot_intra_month_curve(
         _box(f"Avg {MONTH_LABELS[month_int-1]} High\nDay {high_idx} (~{MONTH_LABELS[month_int-1]} {high_dom})\n{high_val:.2f}",
              (high_idx, high_val), (-2.0, 0.35))
 
-    # actionable mini-stats only if selected month is current month and current year is in range
+    # Forward-to-EOM stats only if selected month is current month and current year is in range
     if (today.month == month_int) and (start_year <= today.year <= end_year):
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
         if not m_cur.empty:
@@ -421,7 +421,7 @@ if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
     st.error("Insufficient data in the selected window to compute statistics.")
     st.stop()
 
-# Best/worst
+# Best/worst display
 stats_valid = stats.dropna(subset=["mean_total"])
 best_idx = stats_valid["mean_total"].idxmax()
 worst_idx = stats_valid["mean_total"].idxmin()
@@ -445,35 +445,13 @@ st.markdown(
 buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})")
 st.image(buf, use_container_width=True)
 
-dl1, dl2 = st.columns(2)
-with dl1:
-    st.download_button("Download chart as PNG", buf.getvalue(),
-                       file_name=f"{used_symbol}_seasonality_{int(start_year)}_{int(end_year)}.png")
-with dl2:
-    csv_df = stats[["label","mean_h1","mean_h2","mean_total","hit_rate","min_ret","max_ret","years_observed"]].copy()
-    csv_df.columns = ["Month","Mean 1H %","Mean 2H %","Mean Total %","Hit-Rate %","Min %","Max %","Years"]
-    st.download_button("Download stats (CSV)", csv_df.to_csv(index=False),
-                       file_name=f"{used_symbol}_monthly_stats_{int(start_year)}_{int(end_year)}.csv")
-
 st.caption("Bars equal mean(1H) + mean(2H). First half solid; second half hatched. Error bars use min and max of total monthly returns.")
 
 # -------------------------- Intra-month curve below -------------------------- #
 st.subheader("Intra-Month Seasonality Curve")
-col_m1, col_m2 = st.columns([2,1])
-with col_m1:
-    month_choice = st.selectbox("Month", options=list(range(1,13)), index=9, format_func=lambda m: MONTH_LABELS[m-1])
-with col_m2:
-    overlay = st.checkbox("Overlay current year", value=True)
+month_choice = st.selectbox("Month", options=list(range(1,13)), index=9, format_func=lambda m: MONTH_LABELS[m-1])
 
-curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol,
-                                   overlay_current_year=overlay)
+curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol)
 st.image(curve_buf, use_container_width=True)
-
-# Clean export only, no stray prints
-df_all, avg_series = _month_paths_prev_eom(prices, month_choice, int(start_year), int(end_year))
-if not avg_series.empty:
-    avg_df = avg_series.to_frame(name="Avg Path (Prev EOM=100)"); avg_df.index.name = "Trading Day"
-    st.download_button("Download average path (CSV)", avg_df.to_csv(),
-                       file_name=f"{used_symbol}_{MONTH_LABELS[month_choice-1]}_avg_path_{int(start_year)}_{int(end_year)}.csv")
 
 st.caption("© 2025 AD Fund Management LP")
