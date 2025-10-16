@@ -1,6 +1,7 @@
 # seasonality_dashboard.py
 # Mean-based seasonality with accurate 1H vs 2H contributions
-# NEW: Intra-Month Seasonality Curve (white background, black lines), rendered directly below the original table.
+# FIX: Intra-Month Seasonality Curve now anchors to prior month-end (matches bar/table stats)
+# STYLE: White background, black lines/labels, compact callouts; curve always rendered below the table.
 
 import datetime as dt
 import io
@@ -43,7 +44,7 @@ with st.sidebar:
         • First half solid, second half hatched; each half colored by its own sign  
         • Error bars show min and max monthly total returns; black diamonds = hit rate  
         • Bottom table consolidates 1H, 2H, Total per month  
-        • Below, an intra-month curve shows the average path by trading day, with low/high markers
+        • Below, an intra-month curve shows the average path by trading day relative to the **prior month-end**
         """,
         unsafe_allow_html=True,
     )
@@ -65,6 +66,7 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     symbol = symbol.strip().upper()
     end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
 
+    # pad start by 45 days to ensure we capture the prior month-end
     start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
     start_pad = start_pad_dt.strftime("%Y-%m-%d")
 
@@ -96,23 +98,27 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     months = pd.period_range(prices.index.min().to_period("M"),
                              prices.index.max().to_period("M"), freq="M")
     for m in months:
-        mask = (prices.index.to_period("M") == m)
-        month_days = prices.loc[mask]
+        m_mask = (prices.index.to_period("M") == m)
+        month_days = prices.loc[m_mask]
         if month_days.shape[0] < 3:
             continue
 
-        first = month_days.iloc[0]
-        last = month_days.iloc[-1]
+        # monthly return uses prior month-end, consistent with resample("M").last().pct_change()
+        prev_month_days = prices.loc[(prices.index.to_period("M") == (m - 1))]
+        if prev_month_days.empty:
+            continue
+        prev_eom = prev_month_days.iloc[-1]
 
+        last = month_days.iloc[-1]
         n = month_days.shape[0]
         mid_idx = (n // 2) - 1
         if mid_idx < 0:
             continue
         mid_close = month_days.iloc[mid_idx]
 
-        h1 = (mid_close / first - 1.0) * 100.0
+        h1 = (mid_close / prev_eom - 1.0) * 100.0
         h2 = (last / mid_close - 1.0) * 100.0
-        tot = (last / first - 1.0) * 100.0
+        tot = (last / prev_eom - 1.0) * 100.0
 
         out_rows.append(
             {"period": m, "total_ret": tot, "h1_ret": h1, "h2_ret": h2, "year": m.year, "month": m.month}
@@ -154,7 +160,8 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
     grouped_halves = halves.groupby("month")
     stats["mean_h1"] = grouped_halves["h1_ret"].mean()
     stats["mean_h2"] = grouped_halves["h2_ret"].mean()
-    stats["mean_total"] = stats["mean_h1"].fillna(0) + stats["mean_h2"].fillna(0)
+    stats["mean_total"] = grouped_halves["total_ret"].mean()
+    # equality holds because total_ret = h1_ret + h2_ret by construction
 
     return stats
 
@@ -189,22 +196,13 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     ax1 = fig.add_subplot(gs[0])
 
     x = np.arange(len(labels))
-    h1 = mean_h1
-    h2 = mean_h2
+    def seg_face(values): return np.where(values >= 0, "#62c38e", "#e07a73")
+    def seg_edge(values): return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
 
-    def seg_face(values):
-        return np.where(values >= 0, "#62c38e", "#e07a73")
-
-    def seg_edge(values):
-        return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
-
-    ax1.bar(x, h1, width=0.8, color=seg_face(h1), edgecolor=seg_edge(h1), linewidth=1.0, zorder=2, alpha=0.95)
-    bars2 = ax1.bar(
-        x, h2, width=0.8, bottom=h1,
-        color=seg_face(h2), edgecolor=seg_edge(h2), linewidth=1.0, zorder=2, alpha=0.95, hatch="///"
-    )
-    for r in bars2:
-        r.set_hatch("///")
+    ax1.bar(x, mean_h1, width=0.8, color=seg_face(mean_h1), edgecolor=seg_edge(mean_h1), linewidth=1.0, zorder=2, alpha=0.95)
+    bars2 = ax1.bar(x, mean_h2, width=0.8, bottom=mean_h1, color=seg_face(mean_h2), edgecolor=seg_edge(mean_h2),
+                    linewidth=1.0, zorder=2, alpha=0.95, hatch="///")
+    for r in bars2: r.set_hatch("///")
 
     yerr = np.abs(np.vstack([totals - min_ret, max_ret - totals]))
     ax1.errorbar(x, totals, yerr=yerr, fmt="none", ecolor="gray", elinewidth=1.6, alpha=0.7, capsize=6, zorder=3)
@@ -229,60 +227,57 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     legend = [Patch(facecolor="white", edgecolor="black", hatch="///", label="Second half (hatched)")]
     ax1.legend(handles=legend, loc="upper left", frameon=False)
 
-    ax_tbl = fig.add_subplot(gs[1])
-    ax_tbl.axis("off")
+    ax_tbl = fig.add_subplot(gs[1]); ax_tbl.axis("off")
 
     row_labels = ["1H %", "2H %", "Total %"]
-    row1 = [float(v) if pd.notna(v) else np.nan for v in mean_h1]
-    row2 = [float(v) if pd.notna(v) else np.nan for v in mean_h2]
-    row3 = [float(v) if pd.notna(v) else np.nan for v in totals]
+    row1, row2, row3 = list(map(list, [mean_h1, mean_h2, totals]))
     cell_vals = [row1, row2, row3]
     cell_txt = [[_format_pct(v) for v in row] for row in cell_vals]
     cell_colors = _cell_colors(cell_vals)
 
-    table = ax_tbl.table(
-        cellText=cell_txt, rowLabels=row_labels, colLabels=labels,
-        loc="center", cellLoc="center", rowLoc="center",
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-
+    table = ax_tbl.table(cellText=cell_txt, rowLabels=row_labels, colLabels=labels,
+                         loc="center", cellLoc="center", rowLoc="center")
+    table.auto_set_font_size(False); table.set_fontsize(9)
     for (row, col), cell in table.get_celld().items():
         if row == 0:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
+            cell.set_text_props(weight="bold"); cell.set_facecolor("#f0f0f0")
         elif col == -1:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
+            cell.set_text_props(weight="bold"); cell.set_facecolor("#f0f0f0")
         else:
-            cell.set_facecolor(cell_colors[row - 1][col])
-            cell.set_edgecolor("black")
-            cell.set_linewidth(1)
+            cell.set_facecolor(cell_colors[row - 1][col]); cell.set_edgecolor("black"); cell.set_linewidth(1)
 
     fig.suptitle(title, fontsize=17, weight="bold")
     fig.tight_layout(pad=1.5)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
-    plt.close(fig)
-    buf.seek(0)
+    buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight", dpi=200); plt.close(fig); buf.seek(0)
     return buf
 
 
-# -------------------------- NEW: Intra-month path (white, black ink) -------------------------- #
-def _month_paths_by_trading_day(
+# -------- NEW: Intra-month path anchored to prior month-end (white, black ink) -------- #
+def _month_paths_by_trading_day_prev_eom(
     prices: pd.Series, target_month: int, start_year: int, end_year: int
 ) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    For each year, compute normalized path for target_month as price(t)/prev_month_end * 100.
+    Return DataFrame with columns=years, index=trading-day ordinal, plus average path Series.
+    """
     px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)].copy()
     if px.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
 
     paths = {}
     for y in sorted(px.index.year.unique()):
-        m = px.loc[(px.index.year == y) & (px.index.month == target_month)]
+        month_mask = (px.index.year == y) & (px.index.month == target_month)
+        m = px.loc[month_mask]
         if m.shape[0] < 3:
             continue
-        base = float(m.iloc[0])
-        norm = (m / base) * 100.0
+        prev_mask = (px.index.year == (y if target_month > 1 else y - 1)) & \
+                    (px.index.month == (target_month - 1 if target_month > 1 else 12))
+        prev_month = px.loc[prev_mask]
+        if prev_month.empty:
+            continue
+        prev_eom = float(prev_month.iloc[-1])
+
+        norm = (m / prev_eom) * 100.0
         norm.index = pd.RangeIndex(start=1, stop=1 + len(norm), step=1)
         paths[y] = norm
 
@@ -313,13 +308,9 @@ def _avg_calendar_day_for_ordinal(
 
 
 def plot_intra_month_curve(
-    prices: pd.Series,
-    month_int: int,
-    start_year: int,
-    end_year: int,
-    symbol_shown: str
+    prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str
 ) -> io.BytesIO:
-    df, avg_path = _month_paths_by_trading_day(prices, month_int, start_year, end_year)
+    df, avg_path = _month_paths_by_trading_day_prev_eom(prices, month_int, start_year, end_year)
     fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="white")
     ax = fig.add_subplot(111, facecolor="white")
 
@@ -327,19 +318,16 @@ def plot_intra_month_curve(
         ax.text(0.5, 0.5, "Not enough data to compute intra-month curve",
                 ha="center", va="center", fontsize=12, color="black")
         ax.axis("off")
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
-        plt.close(fig)
-        buf.seek(0)
-        return buf
+        buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
+        plt.close(fig); buf.seek(0); return buf
 
-    x = avg_path.index.values
-    y = avg_path.values
-
-    # Black ink style
+    x = avg_path.index.values; y = avg_path.values
     ax.plot(x, y, linewidth=2.4, color="black")
-    ax.scatter([int(avg_path.idxmin())], [float(avg_path.min())], s=45, color="black", zorder=3)
-    ax.scatter([int(avg_path.idxmax())], [float(avg_path.max())], s=45, color="black", zorder=3)
+    low_idx, low_val = int(avg_path.idxmin()), float(avg_path.min())
+    high_idx, high_val = int(avg_path.idxmax()), float(avg_path.max())
+    end_val = float(avg_path.iloc[-1])
+
+    ax.scatter([low_idx, high_idx], [low_val, high_val], s=45, color="black", zorder=3)
 
     ax.set_title(
         f"{symbol_shown} {MONTH_LABELS[month_int-1]} Performance by Trading Day "
@@ -347,17 +335,10 @@ def plot_intra_month_curve(
         color="black", fontsize=16, weight="bold", pad=8
     )
     ax.set_xlabel(f"{MONTH_LABELS[month_int-1]} trading days", color="black", fontsize=10, weight="bold")
-    ax.set_ylabel("Cumulative index (Day 1 = 100)", color="black", fontsize=10, weight="bold")
+    ax.set_ylabel("Cumulative index (prev month-end = 100)", color="black", fontsize=10, weight="bold")
 
     ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0)
-    ax.tick_params(colors="black")
-    for spine in ax.spines.values():
-        spine.set_color("black")
-
-    # Tight, close-in callouts with short leaders
-    low_idx = int(avg_path.idxmin()); low_val = float(avg_path.min())
-    high_idx = int(avg_path.idxmax()); high_val = float(avg_path.max())
-    end_val = float(avg_path.iloc[-1])
+    ax.tick_params(colors="black");  [sp.set_color("black") for sp in ax.spines.values()]
 
     low_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
     high_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
@@ -374,14 +355,12 @@ def plot_intra_month_curve(
     if low_dom is not None:
         _box(
             f"Avg {MONTH_LABELS[month_int-1]} Low\nDay {low_idx} (~{MONTH_LABELS[month_int-1]} {low_dom})\n{low_val:.2f}",
-            (low_idx, low_val),
-            (0.6, -0.35),
+            (low_idx, low_val), (0.6, -0.35),
         )
     if high_dom is not None:
         _box(
             f"Avg {MONTH_LABELS[month_int-1]} High\nDay {high_idx} (~{MONTH_LABELS[month_int-1]} {high_dom})\n{high_val:.2f}",
-            (high_idx, high_val),
-            (-2.0, 0.35),
+            (high_idx, high_val), (-2.0, 0.35),
         )
 
     years_analyzed = df.shape[1]
@@ -392,19 +371,12 @@ def plot_intra_month_curve(
         f"• Avg low: Day {low_idx} • Avg high: Day {high_idx}\n"
         f"• Move low to month end: {end_val - low_val:+.2f}"
     )
-    ax.text(
-        0.02, 0.04, stats_text,
-        transform=ax.transAxes,
-        fontsize=9.0, color="black",
-        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8)
-    )
+    ax.text(0.02, 0.04, stats_text, transform=ax.transAxes, fontsize=9.0, color="black",
+            bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8))
 
     fig.tight_layout(pad=1.0)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
-    plt.close(fig)
-    buf.seek(0)
-    return buf
+    buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
+    plt.close(fig); buf.seek(0); return buf
 
 
 # -------------------------- Main controls -------------------------- #
@@ -415,10 +387,7 @@ with col2:
     start_year = st.number_input("Start year", value=2020, min_value=1900, max_value=dt.datetime.today().year)
 with col3:
     end_year = st.number_input(
-        "End year",
-        value=dt.datetime.today().year,
-        min_value=int(start_year),
-        max_value=dt.datetime.today().year,
+        "End year", value=dt.datetime.today().year, min_value=int(start_year), max_value=dt.datetime.today().year,
     )
 
 start_date = f"{int(start_year)}-01-01"
@@ -444,16 +413,15 @@ if used_symbol != symbol:
     st.info("SPY data unavailable. Using S&P 500 index (^GSPC) fallback for seasonality.")
 
 stats = seasonal_stats(prices, int(start_year), int(end_year))
-
 if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
     st.error("Insufficient data in the selected window to compute statistics.")
     st.stop()
 
+# Best/worst
 stats_valid = stats.dropna(subset=["mean_total"])
 best_idx = stats_valid["mean_total"].idxmax()
 worst_idx = stats_valid["mean_total"].idxmin()
-best = stats.loc[best_idx]
-worst = stats.loc[worst_idx]
+best = stats.loc[best_idx]; worst = stats.loc[worst_idx]
 
 st.markdown(
     f"""
@@ -469,64 +437,42 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Original chart+table
+# Original chart + table (unchanged)
 buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})")
 st.image(buf, use_container_width=True)
 
 dl1, dl2 = st.columns(2)
 with dl1:
     st.download_button(
-        "Download chart as PNG",
-        buf.getvalue(),
+        "Download chart as PNG", buf.getvalue(),
         file_name=f"{used_symbol}_seasonality_{int(start_year)}_{int(end_year)}.png"
     )
 with dl2:
-    csv_df = stats[[
-        "label","mean_h1","mean_h2","mean_total",
-        "hit_rate","min_ret","max_ret","years_observed"
-    ]].copy()
-    csv_df.columns = [
-        "Month","Mean 1H %","Mean 2H %","Mean Total %",
-        "Hit-Rate %","Min %","Max %","Years"
-    ]
+    csv_df = stats[["label","mean_h1","mean_h2","mean_total","hit_rate","min_ret","max_ret","years_observed"]].copy()
+    csv_df.columns = ["Month","Mean 1H %","Mean 2H %","Mean Total %","Hit-Rate %","Min %","Max %","Years"]
     st.download_button(
-        "Download stats (CSV)",
-        csv_df.to_csv(index=False),
+        "Download stats (CSV)", csv_df.to_csv(index=False),
         file_name=f"{used_symbol}_monthly_stats_{int(start_year)}_{int(end_year)}.csv"
     )
 
 st.caption("Bars equal mean(1H) + mean(2H). First half solid; second half hatched. Error bars use min and max of total monthly returns.")
 
-# -------------------------- Always-visible intra-month curve below -------------------------- #
+# -------------------------- Intra-month curve below (now prev EOM anchored) -------------------------- #
 st.subheader("Intra-Month Seasonality Curve")
-col_m1, col_m2 = st.columns([2,1])
+col_m1, _ = st.columns([2,1])
 with col_m1:
-    month_choice = st.selectbox(
-        "Month", options=list(range(1,13)), index=9, format_func=lambda m: MONTH_LABELS[m-1]
-    )
-with col_m2:
-    st.write("")  # spacer
+    month_choice = st.selectbox("Month", options=list(range(1,13)), index=9, format_func=lambda m: MONTH_LABELS[m-1])
 
 curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol)
 st.image(curve_buf, use_container_width=True)
 
-c1, c2 = st.columns(2)
-with c1:
+# Optional CSV for the average path
+_df, _avg = _month_paths_by_trading_day_prev_eom(prices, month_choice, int(start_year), int(end_year))
+if not _avg.empty:
+    avg_df = _avg.to_frame(name="Avg Path (Prev EOM=100)"); avg_df.index.name = "Trading Day"
     st.download_button(
-        "Download intra-month chart (PNG)",
-        curve_buf.getvalue(),
-        file_name=f"{used_symbol}_{MONTH_LABELS[month_choice-1]}_intra_month_{int(start_year)}_{int(end_year)}.png"
+        "Download average path (CSV)", avg_df.to_csv(),
+        file_name=f"{used_symbol}_{MONTH_LABELS[month_choice-1]}_avg_path_{int(start_year)}_{int(end_year)}.csv"
     )
-with c2:
-    # export average path CSV
-    _df, _avg = _month_paths_by_trading_day(prices, month_choice, int(start_year), int(end_year))
-    if not _avg.empty:
-        avg_df = _avg.to_frame(name="Avg Path (Day1=100)")
-        avg_df.index.name = "Trading Day"
-        st.download_button(
-            "Download average path (CSV)",
-            avg_df.to_csv(),
-            file_name=f"{used_symbol}_{MONTH_LABELS[month_choice-1]}_avg_path_{int(start_year)}_{int(end_year)}.csv"
-        )
 
 st.caption("© 2025 AD Fund Management LP")
