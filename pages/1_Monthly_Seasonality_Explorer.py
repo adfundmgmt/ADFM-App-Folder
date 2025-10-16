@@ -1,14 +1,12 @@
-
 # seasonality_dashboard.py
 # Mean-based seasonality with accurate 1H vs 2H contributions
-# Top: stacked bar chart (1H solid, 2H hatched). Bottom: per-month summary table.
-# Colors by each half's sign. Error bars = min/max of total monthly returns.
+# NEW: Optional Intra-Month Seasonality Curve by trading day (avg path, low/high markers)
 
 import datetime as dt
 import io
 import time
 import warnings
-from typing import Optional
+from typing import Optional, Tuple, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -44,7 +42,8 @@ with st.sidebar:
         • Bars = mean of first-half + mean of second-half returns (accurate)  
         • First half solid, second half hatched; each half colored by its own sign  
         • Error bars show min and max monthly total returns; black diamonds = hit rate  
-        • Bottom table consolidates 1H, 2H, Total per month with color coding
+        • Bottom table consolidates 1H, 2H, Total per month with color coding  
+        • Optional view plots average intra-month path by trading day with low/high markers
         """,
         unsafe_allow_html=True,
     )
@@ -183,7 +182,7 @@ def _format_pct(x: float) -> str:
     return f"{x:+.1f}%" if pd.notna(x) else "n/a"
 
 
-def _cell_colors(values: list[list[float]]) -> list[list[str]]:
+def _cell_colors(values: List[List[float]]) -> List[List[str]]:
     """Return background colors per cell by sign of value."""
     pos = "#d9f2e4"  # soft green
     neg = "#f7d9d7"  # soft red
@@ -316,6 +315,171 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     return buf
 
 
+# -------------------------- NEW: Intra-Month path -------------------------- #
+def _month_paths_by_trading_day(
+    prices: pd.Series, target_month: int, start_year: int, end_year: int
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    For each year in range, compute the normalized path within the selected month:
+    day 1 = 100, subsequent days cumulative index. Return a DataFrame whose columns are years
+    and index is trading-day ordinal (1..max_days), plus a Series with average path.
+    """
+    # restrict to years
+    px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)].copy()
+    if px.empty:
+        return pd.DataFrame(), pd.Series(dtype=float)
+
+    # collect paths
+    paths = {}
+    for y in sorted(px.index.year.unique()):
+        # select that month in that year
+        mask = (px.index.year == y) & (px.index.month == target_month)
+        m = px.loc[mask]
+        if m.shape[0] < 3:
+            continue
+        base = float(m.iloc[0])
+        norm = (m / base) * 100.0
+        norm.index = pd.RangeIndex(start=1, stop=1 + len(norm), step=1)
+        paths[y] = norm
+
+    if not paths:
+        return pd.DataFrame(), pd.Series(dtype=float)
+
+    max_days = max(len(s) for s in paths.values())
+    # align into a DataFrame with NaNs for shorter months
+    df = pd.DataFrame(index=pd.RangeIndex(1, max_days))
+    for y, s in paths.items():
+        df[y] = s
+
+    avg_path = df.mean(axis=1, skipna=True)
+    return df, avg_path
+
+
+def _avg_calendar_day_for_ordinal(
+    prices: pd.Series, target_month: int, start_year: int, end_year: int, ordinal: int
+) -> Optional[int]:
+    """
+    Compute the average calendar day-of-month for a given trading-day ordinal in the month,
+    averaged across available years. Helps annotate "Day N (~Oct 26)" style labels.
+    """
+    px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)]
+    days = []
+    for y in sorted(px.index.year.unique()):
+        m = px.loc[(px.index.year == y) & (px.index.month == target_month)]
+        if len(m) >= ordinal:
+            days.append(m.index[ordinal - 1].day)
+    if not days:
+        return None
+    return int(round(np.mean(days)))
+
+
+def plot_intra_month_curve(
+    prices: pd.Series,
+    month_int: int,
+    start_year: int,
+    end_year: int,
+    symbol_shown: str
+) -> io.BytesIO:
+    """
+    Make a dark-themed line chart for the average intra-month path. Annotate average low and high,
+    show late-month rally from low to month-end.
+    """
+    df, avg_path = _month_paths_by_trading_day(prices, month_int, start_year, end_year)
+    if df.empty or avg_path.empty:
+        # return an empty buffer with a simple figure explaining no data
+        fig = plt.figure(figsize=(12, 6), dpi=180)
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, "Not enough data to compute intra-month curve",
+                ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    # key points
+    low_idx = int(avg_path.idxmin())
+    high_idx = int(avg_path.idxmax())
+    final_idx = int(avg_path.index.max())
+
+    low_val = float(avg_path.loc[low_idx])
+    high_val = float(avg_path.loc[high_idx])
+    end_val = float(avg_path.iloc[-1])
+    rally_from_low = end_val - low_val
+
+    # approximate calendar day annotations
+    avg_low_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
+    avg_high_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
+
+    # build figure
+    fig = plt.figure(figsize=(13, 7), dpi=200, facecolor="#121417")
+    ax = fig.add_subplot(111, facecolor="#121417")
+
+    x = avg_path.index.values
+    y = avg_path.values
+
+    ax.plot(x, y, linewidth=3.0, color="#ffd84d")
+    ax.scatter([low_idx], [low_val], s=90, color="#ff5a5f", zorder=3)
+    ax.scatter([high_idx], [high_val], s=90, color="#1ee0a1", zorder=3)
+
+    ax.set_title(
+        f"{symbol_shown} {MONTH_LABELS[month_int-1]} Performance by Trading Day "
+        f"({int(start_year)}–{int(end_year)})",
+        color="white", fontsize=18, weight="bold", pad=12
+    )
+    ax.set_xlabel(f"{MONTH_LABELS[month_int-1]} trading days", color="white", fontsize=11, weight="bold")
+    ax.set_ylabel("Cumulative index (Day 1 = 100)", color="white", fontsize=11, weight="bold")
+
+    # grid and axes styling
+    ax.grid(axis="y", linestyle="--", color="#2a2f36", alpha=0.8)
+    ax.tick_params(colors="white")
+    for spine in ax.spines.values():
+        spine.set_color("#2a2f36")
+
+    # annotations
+    if avg_low_dom is not None:
+        ax.annotate(
+            f"Avg {MONTH_LABELS[month_int-1]} Low\nDay {low_idx} (~{MONTH_LABELS[month_int-1]} {avg_low_dom})\n{low_val:.2f}",
+            xy=(low_idx, low_val),
+            xytext=(low_idx + max(1, int(0.1*len(x))), low_val - 0.8),
+            arrowprops=dict(arrowstyle="->", color="#ff5a5f"),
+            color="white", fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="#9c2f2f", ec="#ff5a5f", alpha=0.85)
+        )
+    if avg_high_dom is not None:
+        ax.annotate(
+            f"Avg {MONTH_LABELS[month_int-1]} High\nDay {high_idx} (~{MONTH_LABELS[month_int-1]} {avg_high_dom})\n{high_val:.2f}",
+            xy=(high_idx, high_val),
+            xytext=(high_idx - max(2, int(0.18*len(x))), high_val + 0.8),
+            arrowprops=dict(arrowstyle="->", color="#1ee0a1"),
+            color="white", fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="#106650", ec="#1ee0a1", alpha=0.9)
+        )
+
+    # small stats box
+    years_analyzed = df.shape[1]
+    low_to_end = rally_from_low
+    stats_text = (
+        f"{MONTH_LABELS[month_int-1].upper()} PATTERN ({int(start_year)}–{int(end_year)})\n"
+        f"• Years analyzed: {years_analyzed}\n"
+        f"• Avg month return: {end_val - 100.0:+.2f}\n"
+        f"• Avg low: Day {low_idx}  • Avg high: Day {high_idx}\n"
+        f"• Late-month move (low to end): {low_to_end:+.2f}"
+    )
+    ax.text(
+        0.02, 0.05, stats_text,
+        transform=ax.transAxes,
+        fontsize=9.5, color="white",
+        bbox=dict(boxstyle="round,pad=0.5", fc="#1b1f24", ec="#3b414a", alpha=0.95)
+    )
+
+    fig.tight_layout(pad=1.0)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 # -------------------------- Main controls -------------------------- #
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
@@ -380,6 +544,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ORIGINAL OUTPUT
 buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})")
 st.image(buf, use_container_width=True)
 
@@ -407,3 +572,52 @@ with dl2:
 
 st.caption("Bars equal mean(1H) + mean(2H). First half solid; second half hatched. Each half is green if positive, red if negative. Error bars use min and max of total monthly returns. Table cells are color coded by sign.")
 st.caption("© 2025 AD Fund Management LP")
+
+# -------------------------- NEW OPTIONAL VIEW -------------------------- #
+st.markdown("---")
+with st.expander("Intra-Month Seasonality Curve (average path by trading day)"):
+    colm1, colm2, colm3 = st.columns([2,1,1])
+    with colm1:
+        month_choice = st.selectbox(
+            "Month to plot",
+            options=list(range(1,13)),
+            index=9,  # default Oct
+            format_func=lambda m: MONTH_LABELS[m-1]
+        )
+    with colm2:
+        show_series_overlay = st.checkbox("Show individual year paths", value=False)
+    with colm3:
+        st.write("")  # spacer
+
+    path_df, avg_path_series = _month_paths_by_trading_day(prices, month_choice, int(start_year), int(end_year))
+    if path_df.empty or avg_path_series.empty:
+        st.info("Not enough data to render the intra-month curve in this window.")
+    else:
+        # plot dark themed figure
+        curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol)
+        st.image(curve_buf, use_container_width=True)
+
+        # optional overlay table or csv
+        ocol1, ocol2 = st.columns(2)
+        with ocol1:
+            st.download_button(
+                "Download intra-month chart (PNG)",
+                curve_buf.getvalue(),
+                file_name=f"{used_symbol}_{MONTH_LABELS[month_choice-1]}_intra_month_{int(start_year)}_{int(end_year)}.png"
+            )
+        with ocol2:
+            # export average path
+            avg_df = avg_path_series.to_frame(name="Avg Path (Day1=100)")
+            avg_df.index.name = "Trading Day"
+            st.download_button(
+                "Download average path (CSV)",
+                avg_df.to_csv(),
+                file_name=f"{used_symbol}_{MONTH_LABELS[month_choice-1]}_avg_path_{int(start_year)}_{int(end_year)}.csv"
+            )
+
+        if show_series_overlay:
+            st.dataframe(
+                path_df.round(2),
+                use_container_width=True,
+                height=min(480, 28 * len(path_df))
+            )
