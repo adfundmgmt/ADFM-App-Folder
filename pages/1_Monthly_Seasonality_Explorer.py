@@ -3,8 +3,9 @@
 # - Original bar+table unchanged
 # - Intra-month curve (white, black lines) anchored to prior month-end
 # - Optional overlay of the current year's path
-# - Actionable forward-to-EOM stats when the selected month is the current month
+# - Forward-to-EOM mini-stats when the selected month is the current month
 # - Robust trading-day ordinal (no crash), no stray Streamlit outputs
+# - FIX: _month_paths_prev_eom uses px.index for masks (prevents IndexError)
 
 import datetime as dt
 import io
@@ -249,14 +250,18 @@ def _month_paths_prev_eom(prices: pd.Series, month_int: int, start_year: int, en
 
     paths = {}
     for y in sorted(px.index.year.unique()):
-        m = px.loc[(prices.index.year == y) & (prices.index.month == month_int)]
+        # IMPORTANT: build masks on px.index, not prices.index
+        m = px.loc[(px.index.year == y) & (px.index.month == month_int)]
         if m.shape[0] < 3:
             continue
-        prev_mask = (prices.index.year == (y if month_int > 1 else y - 1)) & \
-                    (prices.index.month == (month_int - 1 if month_int > 1 else 12))
+
+        prev_year = y if month_int > 1 else y - 1
+        prev_month_num = month_int - 1 if month_int > 1 else 12
+        prev_mask = (px.index.year == prev_year) & (px.index.month == prev_month_num)
         prev_month = px.loc[prev_mask]
         if prev_month.empty:
             continue
+
         prev_eom = float(prev_month.iloc[-1])
         norm = (m / prev_eom) * 100.0
         norm.index = pd.RangeIndex(start=1, stop=1 + len(norm), step=1)
@@ -284,7 +289,7 @@ def _avg_calendar_day_for_ordinal(prices: pd.Series, month_int: int, start_year:
         return None
     return int(round(np.mean(days)))
 
-# ---- Robust trading-day ordinal (fixes crash on weekends/holidays/out-of-range) ---- #
+# ---- Robust trading-day ordinal (handles weekends/holidays/out-of-range) ---- #
 def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> int:
     """
     Return 1-based trading-day ordinal for `when` within `month_index`.
@@ -357,7 +362,7 @@ def plot_intra_month_curve(
         _box(f"Avg {MONTH_LABELS[month_int-1]} High\nDay {high_idx} (~{MONTH_LABELS[month_int-1]} {high_dom})\n{high_val:.2f}",
              (high_idx, high_val), (-2.0, 0.35))
 
-    # actionable mini-stats, only if selected month is the current month and current year is in range
+    # actionable mini-stats only if selected month is current month and current year is in range
     if (today.month == month_int) and (start_year <= today.year <= end_year):
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
         if not m_cur.empty:
