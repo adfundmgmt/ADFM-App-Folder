@@ -18,7 +18,7 @@ st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     "This dashboard visualizes regime shifts in US equities:\n\n"
     "- Cyclical vs Defensive (Eq Wt): ratio of cumulative returns for cyclical (XLK, XLI, XLF, XLC, XLY) vs defensive (XLP, XLE, XLV, XLRE, XLB, XLU) ETFs, normalized to 100.\n"
-    "- Preset Ratios: SMH/IGV, QQQ/IWM, HYG/LQD, HYG/IEF.\n"
+    "- Preset Ratios: SMH/IGV, SMH/FXY, QQQ/IWM, HYG/LQD, HYG/IEF.\n"
     "- Custom Ratio: compare any two tickers."
 )
 
@@ -110,7 +110,16 @@ def fetch_closes(tickers, start, end):
 # -------------- Definitions --------------
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
-PRESETS    = [("SMH", "IGV"), ("QQQ", "IWM"), ("HYG", "LQD"), ("HYG", "IEF")]
+
+# Order matters. SMH/IGV first, SMH/FXY directly below it, then others.
+PRESETS    = [
+    ("SMH", "IGV"),
+    ("SMH", "FXY"),  # NEW chart directly below SMH/IGV
+    ("QQQ", "IWM"),
+    ("HYG", "LQD"),
+    ("HYG", "IEF"),
+]
+
 STATIC     = CYCLICALS + DEFENSIVES + [t for a, b in PRESETS for t in (a, b)]
 
 def compute_cumrets(df: pd.DataFrame) -> pd.DataFrame:
