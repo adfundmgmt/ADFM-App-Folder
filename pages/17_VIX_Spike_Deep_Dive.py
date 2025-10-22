@@ -13,7 +13,7 @@ from datetime import datetime
 import streamlit as st
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(page_title="ADFM | VIX 20%+ Spike Deep Dive", layout="wide")
+st.set_page_config(page_title="ADFM | VIX Spike Deep Dive", layout="wide")
 plt.style.use("default")
 
 # ------------------------------- Pastel palette ----------------------------
@@ -121,7 +121,7 @@ def card_box(inner_html):
     )
 
 # ------------------------------- Sidebar -----------------------------------
-st.title("VIX 20%+ Spike Deep Dive • ADFM")
+st.title("VIX Spike Deep Dive")
 
 with st.sidebar:
     st.header("Controls")
