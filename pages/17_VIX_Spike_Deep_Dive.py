@@ -1,6 +1,6 @@
 # vix_spike_deep_dive.py
-# ADFM Analytics Platform, VIX 20%+ Spike Deep Dive
-# Light theme, pastel palette, matplotlib only, dynamic regime-aware commentary.
+# ADFM Analytics Platform — VIX 20%+ Spike Deep Dive
+# Light theme, pastel palette, matplotlib only. Dynamic, regime-aware commentary.
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -13,7 +13,7 @@ from datetime import datetime
 import streamlit as st
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(page_title="ADFM | VIX Spike Deep Dive", layout="wide")
+st.set_page_config(page_title="ADFM | VIX 20%+ Spike Deep Dive", layout="wide")
 plt.style.use("default")
 
 # ------------------------------- Pastel palette ----------------------------
@@ -109,18 +109,19 @@ def barplot(ax, categories, values, colors, title, ylabel="2-Day Win Rate (%)"):
             continue
         ax.text(i, v + 1.5, f"{v:.1f}%", ha="center", va="bottom", color=TEXT_COLOR, fontsize=10)
 
-def card_box(text):
+def card_box(inner_html):
+    # Wrap content once, no nested closing tags rendered
     st.markdown(
         f"""
         <div style="border:1px solid #e0e0e0; border-radius:10px; padding:14px; background:#fafafa; color:{TEXT_COLOR}; font-size:14px; line-height:1.35;">
-        {text}
+          {inner_html}
         </div>
-        """,
+        """.strip(),
         unsafe_allow_html=True
     )
 
 # ------------------------------- Sidebar -----------------------------------
-st.title("VIX Spike Deep Dive")
+st.title("VIX 20%+ Spike Deep Dive • ADFM")
 
 with st.sidebar:
     st.header("Controls")
@@ -156,16 +157,18 @@ events = events[events["decade"].isin(decade_filter)]
 
 latest = events.iloc[-1] if not events.empty else None
 if latest is not None:
-    bucket = latest["vix_base_bucket"]
-    magcat = latest["spike_mag"]
+    bucket_now = latest["vix_base_bucket"]
+    mag_now = latest["spike_mag"]
     regime_now = latest["regime"]
+    rsi_state = latest["oversold"]
     comps_mask = (
-        (events["vix_base_bucket"] == bucket) &
-        (events["spike_mag"] == magcat) &
+        (events["vix_base_bucket"] == bucket_now) &
+        (events["spike_mag"] == mag_now) &
         (events["regime"] == regime_now)
     )
     comps = events[comps_mask].copy()
 else:
+    bucket_now = mag_now = regime_now = rsi_state = None
     comps = pd.DataFrame(columns=events.columns)
 
 # ------------------------------- Stats for commentary ----------------------
@@ -194,10 +197,10 @@ ov_no = ov_wr.get("Not Oversold", np.nan)
 # ------------------------------- Commentary engine -------------------------
 def generate_commentary(ctx):
     """
-    Build a regime-aware, data-driven note from phrase banks.
-    No randomness, selection keyed to regime, VIX bucket, spike mag, RSI, and stats.
+    Build a concise, regime-aware note from phrase banks.
+    No risks/next-steps sections. No trailing tags. No redundancy.
     """
-    # Context unpack
+    # Context
     wr_all, med, avg, n = ctx["wr_all"], ctx["med_all"], ctx["avg_all"], ctx["n_all"]
     p10, p50, p90 = ctx["p10"], ctx["p50"], ctx["p90"]
     best_bucket_label, best_bucket_wr = ctx["best_bucket_label"], ctx["best_bucket_wr"]
@@ -210,235 +213,120 @@ def generate_commentary(ctx):
     mag_now = ctx["mag_now"]
     regime_now = ctx["regime_now"]
     rsi_state = ctx["rsi_state"]
-    mad_all = ctx["mad_all"]
+    ma_window = ctx["ma_window"]
+    show_legend = ctx["show_legend"]
 
-    # Category indices for deterministic variety
-    bucket_idx = ["0-12","12-16","16-20","20-24","24-30","30+"].index(str(bucket_now)) if bucket_now is not None else 0
-    mag_idx = ["Moderate (20-30%)","Large (30-50%)","Extreme (50%+)"].index(str(mag_now)) if mag_now is not None else 0
+    # Indices for deterministic variety
+    bucket_order = ["0-12","12-16","16-20","20-24","24-30","30+"]
+    mag_order = ["Moderate (20-30%)","Large (30-50%)","Extreme (50%+)"]
+    bucket_idx = bucket_order.index(str(bucket_now)) if bucket_now in bucket_order else 0
+    mag_idx = mag_order.index(str(mag_now)) if mag_now in mag_order else 0
     regime_idx = 0 if regime_now == "Bull" else 1
     rsi_idx = 0 if rsi_state == "Oversold" else 1
-    edge_up = 1 if (wr_all is not None and pd.notna(wr_all) and wr_all >= 50 and pd.notna(med) and med >= 0) else 0
 
-    # Headline banks (12 variants)
+    # Headline
     headline_bank_bull = [
-        "Short window leans green after a spike",
-        "Tape supports a quick bounce after stress",
-        "Panic cooled, bias tilts up in trend",
-        "Vol shock fades, drift favors buyers",
-        "Bid returns with trend at the back",
-        "Spike absorbed, path of least resistance is higher",
+        "Vol shock fades, drift favors buyers.",
+        "Panic cooled, bias tilts up in trend.",
+        "Spike absorbed, path of least resistance is higher.",
+        "Stress unwinds, reflex bid shows up.",
+        "Trend steady, bounce odds improve.",
+        "Compression after shock supports a tactical long.",
     ]
     headline_bank_bear = [
-        "Relief bounces exist, but trend resists",
-        "Vol shock in a down tape, edge is thinner",
-        "Panic meets gravity, bounces are shorter",
-        "Stress signal inside a weak regime",
-        "Counter-trend pops possible, carry is hostile",
-        "Snapbacks fade faster in this regime",
+        "Relief pops exist, trend resists.",
+        "Shock inside a weak tape, edge thinner.",
+        "Pops fade faster in this regime.",
+        "Down-trend blunts the reflex bid.",
+        "Counter-trend carry is hostile.",
+        "Stress persists, bounce quality is lower.",
     ]
     headline = (headline_bank_bull if regime_idx == 0 else headline_bank_bear)[(bucket_idx + mag_idx) % 6]
 
-    # Why it matters (6 variants)
+    # Why it matters
     wim_bank = [
-        f"Quick read on a {fwd_days}-day hold after a ≥{threshold}% VIX jump.",
-        f"Whether to press for a {fwd_days}-day relief move after a hard vol shock.",
+        f"Whether to press for a {fwd_days}-day relief move after a ≥{threshold}% VIX jump.",
         f"Signal quality for a short tactical hold into mean reversion.",
         f"Gauge if panic creates a near-term buyable skew.",
-        f"Should you lean into a fast bounce or stand down.",
-        f"Context to size a brief risk-on probe after stress.",
+        f"Decide if a brief probe long is justified after stress.",
+        f"Size and timing for a quick bounce attempt.",
+        f"Should you lean into a fast mean-revert move.",
     ]
     why = wim_bank[(regime_idx + rsi_idx + mag_idx) % len(wim_bank)]
 
-    # Bucket phrasing (6 variants)
-    bucket_bank = [
+    # Descriptors
+    bucket_desc = [
         "low base VIX leaves less fuel",
         "mid base VIX offers some spring",
         "upper-mid base VIX carries energy",
         "elevated base VIX adds thrust",
         "high base VIX loads the coil",
-        "very high base VIX, tails get wider",
-    ]
-    bucket_phrase = bucket_bank[bucket_idx]
+        "very high base VIX, tails widen",
+    ][bucket_idx]
 
-    # Magnitude phrasing (6 variants)
-    mag_bank = [
+    mag_desc = [
         "a manageable shock",
         "a heavy jolt",
-        "a disorderly jump",
         "a sharp dislocation",
+        "a disorderly jump",
         "a capitulation-style surge",
         "a face-ripper spike",
-    ]
-    mag_phrase = mag_bank[(mag_idx + bucket_idx) % len(mag_bank)]
+    ][(mag_idx + bucket_idx) % 6]
 
-    # RSI phrasing (4 variants)
-    rsi_bank_oversold = [
-        "oversold helps the snapback",
-        "stretch adds mean-revert energy",
-        "pressure built for a reflex bounce",
-        "decompression flows favor upside",
-    ]
-    rsi_bank_not = [
-        "no stretch lowers the spring",
-        "lack of stretch tempers the pop",
-        "neutral RSI, less pent-up energy",
-        "without stretch, moves are cleaner but smaller",
-    ]
-    rsi_phrase = (rsi_bank_oversold if rsi_idx == 0 else rsi_bank_not)[(bucket_idx + mag_idx) % 4]
-
-    # Regime split phrasing (8 variants)
+    # Regime line
     if regime_idx == 0:
-        regime_phrase = [
-            f"Trend filter shows Bull {fmt_pct(bull_wr,1)} vs Bear {fmt_pct(bear_wr,1)}, trend helps.",
-            f"Above the {ma_window}-DMA, hit rate improves to {fmt_pct(bull_wr,1)}.",
-            f"Bull regime carries a better base rate at {fmt_pct(bull_wr,1)}.",
-            f"With trend up, win rate outpaces bear at {fmt_pct(bull_wr,1)}.",
-        ][(mag_idx + rsi_idx) % 4]
+        regime_line = f"Above the {ma_window}-DMA, hit rate improves to {fmt_pct(bull_wr,1)}."
     else:
-        regime_phrase = [
-            f"Below the {ma_window}-DMA, hit rate slips to {fmt_pct(bear_wr,1)}.",
-            f"Bear regime drags base rate at {fmt_pct(bear_wr,1)}.",
-            f"Counter-trend carry cuts the edge to {fmt_pct(bear_wr,1)}.",
-            f"Trend is down, base rate sits near {fmt_pct(bear_wr,1)}.",
-        ][(mag_idx + rsi_idx) % 4]
+        regime_line = f"Below the {ma_window}-DMA, hit rate slips to {fmt_pct(bear_wr,1)}."
 
-    # Edge classification from stats
-    edge_level = "positive" if (pd.notna(wr_all) and wr_all >= 53 and pd.notna(med) and med >= 0) else \
-                 "balanced" if (pd.notna(wr_all) and 47 <= wr_all < 53) else "negative"
-
-    # Conclusion variants (12 total)
-    if edge_level == "positive":
-        concl_bank = [
-            "Short window favors a bounce.",
-            "Expect a modest reflex higher.",
-            "Bias is up, not huge, but real.",
-            "Mean-reversion tilt is on.",
-            "Setup supports a tactical long.",
-            "Relief pop is the base case.",
-        ]
-    elif edge_level == "balanced":
-        concl_bank = [
-            "Edge is mixed, discipline over conviction.",
-            "Distribution is balanced, sizing matters.",
-            "No strong tilt, pick your spots.",
-            "Signal is flat, respect levels.",
-            "Even split, execution is the edge.",
-            "Neutral skew, wait for better alignment.",
-        ]
+    # Edge classification
+    if pd.notna(wr_all) and pd.notna(med):
+        if wr_all >= 53 and med >= 0:
+            conclusion_tail = "Setup supports a tactical long."
+        elif 47 <= wr_all < 53:
+            conclusion_tail = "Edge is mixed, execution matters."
+        else:
+            conclusion_tail = "Edge is weak, caution first."
     else:
-        concl_bank = [
-            "Edge is weak, caution first.",
-            "Pops are for sale unless trend turns.",
-            "Downside risk dominates the short window.",
-            "Snapbacks are fragile in this tape.",
-            "Avoid forcing the bounce.",
-            "Defense until the filter improves.",
-        ]
-    conclusion = concl_bank[(bucket_idx + regime_idx + rsi_idx) % 6]
+        conclusion_tail = "Insufficient sample."
 
-    # Drivers assembled from actual numbers
+    # Drivers, minimal and non-redundant
     drivers = []
     drivers.append(f"Base case, WR {fmt_pct(wr_all,1)}, median {fmt_pct(med)}, average {fmt_pct(avg)}, N {n}.")
     if pd.notna(best_bucket_wr) and best_bucket_label is not None:
-        drivers.append(f"Starting VIX level, best bucket {best_bucket_label}, WR {fmt_pct(best_bucket_wr,1)} ({bucket_phrase}).")
+        drivers.append(f"Base VIX {best_bucket_label} works best, WR {fmt_pct(best_bucket_wr,1)} ({bucket_desc}).")
     if pd.notna(best_mag_wr) and best_mag_label is not None:
-        drivers.append(f"Spike size, favored magnitude {best_mag_label}, WR {fmt_pct(best_mag_wr,1)} ({mag_phrase}).")
-    drivers.append(regime_phrase)
+        drivers.append(f"Spike magnitude {best_mag_label}, WR {fmt_pct(best_mag_wr,1)} ({mag_desc}).")
+    drivers.append(regime_line)
     if pd.notna(ov_yes) and pd.notna(ov_no):
-        if rsi_idx == 0:
-            drivers.append(f"RSI filter, Oversold {fmt_pct(ov_yes,1)} vs Not {fmt_pct(ov_no,1)} ({rsi_phrase}).")
-        else:
-            drivers.append(f"RSI filter, Oversold {fmt_pct(ov_yes,1)} vs Not {fmt_pct(ov_no,1)} ({rsi_phrase}).")
+        rsi_line = "Oversold helps" if rsi_idx == 0 else "No stretch tempers the pop"
+        drivers.append(f"RSI filter, Oversold {fmt_pct(ov_yes,1)} vs Not {fmt_pct(ov_no,1)} ({rsi_line}).")
     drivers.append(f"Expected range for {fwd_days} days, p10 {fmt_pct(p10)}, p50 {fmt_pct(p50)}, p90 {fmt_pct(p90)}.")
 
-    # Risks and reversals banks (10 variants chosen deterministically)
-    risk_bank = [
-        "Low base VIX buckets reduce bounce quality.",
-        "Bear regime increases failure rate and drawdown risk.",
-        "Extreme spikes widen both tails, entries matter.",
-        "Tight liquidity windows can invert the edge.",
-        "Weak medians erase thin WR advantages.",
-        "Event clustering changes forward drift.",
-        "Overnight gaps can dominate short horizons.",
-        "Macro catalysts can swamp historical patterns.",
-        "Slippage and carry can turn small edges negative.",
-        "Sample changes as you tighten filters.",
-    ]
-    risks = [
-        risk_bank[(bucket_idx) % 10],
-        risk_bank[(bucket_idx + mag_idx + 2) % 10],
-        risk_bank[(regime_idx + rsi_idx + 4) % 10],
-    ]
+    # Assemble inner HTML only, no wrapping div here
+    body = (
+        f'<div style="font-weight:700; margin-bottom:6px;">Conclusion</div>'
+        f'<div>{headline} {conclusion_tail}</div>'
+        f'<div style="font-weight:700; margin:10px 0 6px;">Why it matters</div>'
+        f'<div>{why}</div>'
+        f'<div style="font-weight:700; margin:10px 0 6px;">Key drivers</div>'
+        f'<ul style="margin-top:4px; margin-bottom:4px;">'
+        + ''.join(f'<li>{d}</li>' for d in drivers) +
+        '</ul>'
+    )
 
-    # Next steps banks (12 variants)
-    if edge_level == "positive":
-        next_bank = [
-            f"Prefer entries when base VIX is {bucket_now} and spike is {mag_now}.",
-            f"Size modestly, lean long into the {fwd_days}-day window.",
-            f"Respect p10 near {fmt_pct(p10)} for risk control.",
-            "Tight stop or hedge, keep it tactical.",
-            "If two filters flip against you, pass.",
-            f"Keep regime filter on {ma_window}-DMA to avoid whips.",
-        ]
-    elif edge_level == "balanced":
-        next_bank = [
-            "Trade small or wait for alignment of filters.",
-            f"Let price confirm, above yesterday’s high or {ma_window}-DMA.",
-            f"Guardrail with p10 near {fmt_pct(p10)}.",
-            "Favor options structures with defined risk.",
-            "Stand down if liquidity is thin around data.",
-            "Recheck after the next session’s close.",
-        ]
-    else:
-        next_bank = [
-            "Skip the bounce setup, wait for regime to improve.",
-            "If participating, use tiny size and tight timing.",
-            f"Use spreads or collars, respect p10 near {fmt_pct(p10)}.",
-            "Only reconsider if RSI flips to oversold and base VIX lifts.",
-            "Let vol decay first before probing.",
-            f"Require reclaim of the {ma_window}-DMA before attempts.",
-        ]
-    next_steps = [
-        next_bank[(bucket_idx + mag_idx) % 6],
-        next_bank[(regime_idx + rsi_idx + 2) % 6],
-        next_bank[(bucket_idx + regime_idx + 3) % 6],
-    ]
+    if show_legend:
+        body += (
+            '<hr style="border-top:1px solid #eee; margin:10px 0;">'
+            '<div style="font-size:13px;">'
+            '<b>Legend</b> WR win rate, Avg and Med forward SPX returns, N sample size. '
+            'Base bucket is VIX level before the spike. Magnitude is spike size. '
+            'Regime uses your DMA. RSI uses your slider. '
+            'p10, p50, p90 are percentile bands of forward returns for the chosen horizon.'
+            '</div>'
+        )
 
-    # Assemble HTML
-    body = f"""
-    <div style="font-size:14px;">
-      <div style="font-weight:700; margin-bottom:6px;">Conclusion</div>
-      <div>{headline}. {conclusion}</div>
-      <div style="font-weight:700; margin:10px 0 6px;">Why it matters</div>
-      <div>{why}</div>
-      <div style="font-weight:700; margin:10px 0 6px;">Key drivers</div>
-      <ul>
-        {''.join(f'<li>{d}</li>' for d in drivers)}
-      </ul>
-      <div style="font-weight:700; margin:10px 0 6px;">Risks and reversals</div>
-      <ul>
-        {''.join(f'<li>{r}</li>' for r in risks)}
-      </ul>
-      <div style="font-weight:700; margin:10px 0 6px;">Next steps</div>
-      <ul>
-        {''.join(f'<li>{n}</li>' for n in next_steps)}
-      </ul>
-    </div>
-    """
-
-    # Optional legend
-    if ctx.get("show_legend", False):
-        legend = """
-        <hr style="border-top:1px solid #eee; margin:10px 0;">
-        <div style="font-size:13px;">
-          <b>Legend</b> WR win rate, Avg and Med forward SPX returns, Disp mean absolute deviation, N sample size.
-          Base bucket is VIX level before the spike. Magnitude is spike size. Regime uses your DMA. RSI uses your slider.
-          p10, p50, p90 are percentile bands of forward returns for the chosen horizon.
-        </div>
-        """
-        body += legend
-
-    # Four-lights score for the filter panel
+    # Four-lights score shown in Filters card
     lights = 0
     if bucket_now in ["24-30","30+"]:
         lights += 1
@@ -451,14 +339,9 @@ def generate_commentary(ctx):
 
     return body, lights
 
-# Build context and render
-bucket_now = latest["vix_base_bucket"] if latest is not None else None
-mag_now = latest["spike_mag"] if latest is not None else None
-regime_now = latest["regime"] if latest is not None else None
-rsi_state = latest["oversold"] if latest is not None else None
-
+# Build context and commentary
 ctx = {
-    "wr_all": wr_all, "med_all": med_all, "avg_all": avg_all, "mad_all": mad_all, "n_all": n_all,
+    "wr_all": wr_all, "med_all": med_all, "avg_all": avg_all, "n_all": n_all,
     "p10": p10, "p50": p50, "p90": p90,
     "best_bucket_label": best_bucket_label, "best_bucket_wr": best_bucket_wr,
     "best_mag_label": best_mag_label, "best_mag_wr": best_mag_wr,
@@ -468,17 +351,16 @@ ctx = {
     "bucket_now": bucket_now, "mag_now": mag_now, "regime_now": regime_now, "rsi_state": rsi_state,
     "ma_window": ma_window, "show_legend": show_legend,
 }
-
 summary_html, lights = generate_commentary(ctx)
 
-# ------------------------------- Summary top row ---------------------------
-left, right = st.columns([2, 1])
+# ------------------------------- Top row: Decision Box + Filters -----------
+col1, col2 = st.columns([1.8, 1])
 
-with left:
+with col1:
     st.subheader("Decision Box")
     card_box(summary_html)
 
-with right:
+with col2:
     st.subheader("Filters")
     card_box(
         f"""
@@ -488,13 +370,14 @@ with right:
         <b>Regime MA</b>: {ma_window}-day<br>
         <b>Decades</b>: {', '.join(decade_filter) if decade_filter else 'None'}<br>
         <b>Four lights</b>: {lights} / 4
-        """
+        """.strip()
     )
 
 # ------------------------------- Plots grid --------------------------------
 fig, axes = plt.subplots(2, 3, figsize=(16, 8))
 fig.subplots_adjust(wspace=0.35, hspace=0.45)
 
+# 1) Win rate by VIX base bucket
 base_wr_plot = events.groupby("vix_base_bucket")[f"spx_fwd{fwd_days}_ret"].apply(winrate).reindex(
     ["0-12", "12-16", "16-20", "20-24", "24-30", "30+"]
 )
@@ -506,6 +389,7 @@ barplot(
     "Win Rate by VIX Base Level"
 )
 
+# 2) Win rate by spike magnitude with two-line labels
 mag_wr_plot = events.groupby("spike_mag")[f"spx_fwd{fwd_days}_ret"].apply(winrate).reindex(
     ["Moderate (20-30%)", "Large (30-50%)", "Extreme (50%+)"]
 )
@@ -526,6 +410,7 @@ barplot(
 ax_mag.margins(x=0.05)
 ax_mag.tick_params(axis="x", labelsize=10)
 
+# 3) Win rate by regime
 reg_wr_plot = events.groupby("regime")[f"spx_fwd{fwd_days}_ret"].apply(winrate).reindex(["Bull", "Bear"])
 barplot(
     axes[0, 2],
@@ -535,6 +420,7 @@ barplot(
     "Win Rate by Market Regime"
 )
 
+# 4) Scatter: VIX base vs forward returns by decade
 ax = axes[1, 0]
 for i, dec in enumerate(sorted(events["decade"].unique())):
     e = events[events["decade"] == dec]
@@ -550,6 +436,7 @@ ax.set_ylabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
 ax.grid(color=GRID_COLOR, linewidth=0.6)
 ax.legend(fontsize=8, frameon=False, ncol=2)
 
+# 5) Oversold split
 ov_wr_plot = events.groupby("oversold")[f"spx_fwd{fwd_days}_ret"].apply(winrate).reindex(["Oversold", "Not Oversold"])
 barplot(
     axes[1, 1],
@@ -559,6 +446,7 @@ barplot(
     "Win Rate by RSI Oversold"
 )
 
+# 6) Setup Distribution histogram for comps
 axd = axes[1, 2]
 axd.set_title("Setup Distribution", color=TEXT_COLOR, fontsize=12, pad=8)
 axd.set_xlabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
@@ -610,7 +498,7 @@ def latest_context_box():
     <br><br>
     <b>Setup stats</b> same bucket, magnitude, regime. WR {fmt_pct(wr,1)}, Avg {fmt_pct(avg)}, Med {fmt_pct(med)}, Disp {fmt_pct(mad)}, N {n}.
     Bands p10 {fmt_pct(p10_c)}, p50 {fmt_pct(p50_c)}, p90 {fmt_pct(p90_c)}.
-    """
+    """.strip()
     card_box(text)
 
     if n > 0:
