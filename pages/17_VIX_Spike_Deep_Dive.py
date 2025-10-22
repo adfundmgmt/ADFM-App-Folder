@@ -1,3 +1,7 @@
+**Conclusion**
+Here is the full file with the spike-magnitude label fix integrated, plus the earlier “Setup Distribution” fix. Drop in as a replacement.
+
+```python
 # vix_spike_deep_dive.py
 # ADFM Analytics Platform, VIX 20%+ Spike Deep Dive
 # Light theme, pastel palette, matplotlib only.
@@ -60,7 +64,7 @@ def bucket_vix_base(x):
     return pd.cut([x], bins=bins, labels=labels, right=False)[0]
 
 def bucket_spike_mag(pct):
-    # pct is a fraction, compare to thresholds
+    # pct is a fraction
     if pct < 0.30:
         return "Moderate (20-30%)"
     elif pct < 0.50:
@@ -246,17 +250,26 @@ barplot(
     "Win Rate by VIX Base Level"
 )
 
-# 2) Win rate by spike magnitude
+# 2) Win rate by spike magnitude  (label overlap fix: two-line labels)
 mag_wr = events.groupby("spike_mag")[f"spx_fwd{fwd_days}_ret"].apply(winrate).reindex(
     ["Moderate (20-30%)", "Large (30-50%)", "Extreme (50%+)"]
 )
+mag_display = {
+    "Moderate (20-30%)": "Moderate\n20-30%",
+    "Large (30-50%)":    "Large\n30-50%",
+    "Extreme (50%+)":    "Extreme\n50%+",
+}
+mag_categories_draw = [mag_display.get(k, k) for k in mag_wr.index.tolist()]
+ax_mag = axes[0, 1]
 barplot(
-    axes[0, 1],
-    mag_wr.index.tolist(),
+    ax_mag,
+    mag_categories_draw,
     mag_wr.values.astype(float),
     PASTELS[6:9],
     "Win Rate by Spike Magnitude"
 )
+ax_mag.margins(x=0.05)
+ax_mag.tick_params(axis="x", labelsize=10)
 
 # 3) Win rate by regime
 reg_wr = events.groupby("regime")[f"spx_fwd{fwd_days}_ret"].apply(winrate).reindex(["Bull", "Bear"])
@@ -294,13 +307,12 @@ barplot(
     "Win Rate by RSI Oversold"
 )
 
-# 6) Setup Distribution: histogram on the grid (FIX)
+# 6) Setup Distribution: histogram on the grid (fix retained)
 axd = axes[1, 2]
 axd.set_title("Setup Distribution", color=TEXT_COLOR, fontsize=12, pad=8)
 axd.set_xlabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
 axd.set_ylabel("Frequency", color=TEXT_COLOR)
 axd.grid(color=GRID_COLOR, linewidth=0.6)
-
 vals = comps[f"spx_fwd{fwd_days}_ret"].dropna().values if not comps.empty else np.array([])
 if vals.size > 0:
     axd.hist(vals, bins=min(20, max(8, int(np.sqrt(len(vals))))), edgecolor=BAR_EDGE)
@@ -402,3 +414,4 @@ with st.expander("Show events table"):
 
 # ------------------------------- Footer ------------------------------------
 st.caption("ADFM Analytics Platform · VIX 20%+ Spike Deep Dive · Data source: Yahoo Finance")
+```
