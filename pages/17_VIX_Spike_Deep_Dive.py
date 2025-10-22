@@ -120,7 +120,7 @@ def card_box(text):
     )
 
 # ------------------------------- Sidebar -----------------------------------
-st.title("VIX 20%+ Spike Deep Dive • ADFM")
+st.title("VIX Spike Deep Dive")
 
 with st.sidebar:
     st.header("Controls")
