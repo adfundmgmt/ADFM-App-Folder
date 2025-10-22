@@ -1,7 +1,3 @@
-**Conclusion**
-Here is the full file with the spike-magnitude label fix integrated, plus the earlier “Setup Distribution” fix. Drop in as a replacement.
-
-```python
 # vix_spike_deep_dive.py
 # ADFM Analytics Platform, VIX 20%+ Spike Deep Dive
 # Light theme, pastel palette, matplotlib only.
@@ -307,7 +303,7 @@ barplot(
     "Win Rate by RSI Oversold"
 )
 
-# 6) Setup Distribution: histogram on the grid (fix retained)
+# 6) Setup Distribution: histogram on the grid
 axd = axes[1, 2]
 axd.set_title("Setup Distribution", color=TEXT_COLOR, fontsize=12, pad=8)
 axd.set_xlabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
@@ -414,4 +410,3 @@ with st.expander("Show events table"):
 
 # ------------------------------- Footer ------------------------------------
 st.caption("ADFM Analytics Platform · VIX 20%+ Spike Deep Dive · Data source: Yahoo Finance")
-```
