@@ -156,6 +156,21 @@ all_decades = sorted(events["decade"].unique().tolist())
 decade_filter = st.sidebar.multiselect("Decades to include", options=all_decades, default=all_decades)
 events = events[events["decade"].isin(decade_filter)]
 
+# ------------------------------- Latest setup and comps ---------------------
+latest = events.iloc[-1] if not events.empty else None
+if latest is not None:
+    bucket = latest["vix_base_bucket"]
+    magcat = latest["spike_mag"]
+    regime_now = latest["regime"]
+    comps_mask = (
+        (events["vix_base_bucket"] == bucket) &
+        (events["spike_mag"] == magcat) &
+        (events["regime"] == regime_now)
+    )
+    comps = events[comps_mask].copy()
+else:
+    comps = pd.DataFrame(columns=events.columns)
+
 # ------------------------------- Summary top row ---------------------------
 left, right = st.columns([2, 1])
 
@@ -279,11 +294,23 @@ barplot(
     "Win Rate by RSI Oversold"
 )
 
-# 6) Distribution of forward returns for current setup (filled later if possible)
-axes[1, 2].set_title("Setup Distribution", color=TEXT_COLOR, fontsize=12, pad=8)
-axes[1, 2].set_xlabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
-axes[1, 2].set_ylabel("Frequency", color=TEXT_COLOR)
-axes[1, 2].grid(color=GRID_COLOR, linewidth=0.6)
+# 6) Setup Distribution: histogram on the grid (FIX)
+axd = axes[1, 2]
+axd.set_title("Setup Distribution", color=TEXT_COLOR, fontsize=12, pad=8)
+axd.set_xlabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
+axd.set_ylabel("Frequency", color=TEXT_COLOR)
+axd.grid(color=GRID_COLOR, linewidth=0.6)
+
+vals = comps[f"spx_fwd{fwd_days}_ret"].dropna().values if not comps.empty else np.array([])
+if vals.size > 0:
+    axd.hist(vals, bins=min(20, max(8, int(np.sqrt(len(vals))))), edgecolor=BAR_EDGE)
+    axd.axvline(0, color="#888888", linewidth=1)
+else:
+    axd.text(
+        0.5, 0.5,
+        "No matching comps for latest setup\nunder current filters",
+        ha="center", va="center", transform=axd.transAxes, color="#555555"
+    )
 
 st.pyplot(fig, clear_figure=True)
 
@@ -291,11 +318,10 @@ st.pyplot(fig, clear_figure=True)
 st.subheader("Dynamic Commentary")
 
 def latest_context_box():
-    if events.empty:
+    if latest is None:
         card_box("No qualifying VIX spike events in the filtered sample.")
         return
 
-    latest = events.iloc[-1]
     dt = latest.name.strftime("%Y-%m-%d")
     vix_now = latest["vix_close"]
     vix_base = latest["vix_base"]
@@ -307,22 +333,13 @@ def latest_context_box():
     magcat = latest["spike_mag"]
     over = latest["oversold"]
 
-    # Matching analogs by same bucket, magnitude, regime
-    mask = (
-        (events["vix_base_bucket"] == bucket) &
-        (events["spike_mag"] == magcat) &
-        (events["regime"] == regime_now)
-    )
-    comps = events[mask].copy()
+    wr = winrate(comps[f"spx_fwd{fwd_days}_ret"]) if not comps.empty else np.nan
+    avg = comps[f"spx_fwd{fwd_days}_ret"].mean() if not comps.empty else np.nan
+    med = comps[f"spx_fwd{fwd_days}_ret"].median() if not comps.empty else np.nan
+    mad = mean_abs_deviation(comps[f"spx_fwd{fwd_days}_ret"]) if not comps.empty else np.nan
+    p10, p50, p90 = pct_bands(comps[f"spx_fwd{fwd_days}_ret"]) if not comps.empty else (np.nan, np.nan, np.nan)
+    n = len(comps) if not comps.empty else 0
 
-    wr = winrate(comps[f"spx_fwd{fwd_days}_ret"])
-    avg = comps[f"spx_fwd{fwd_days}_ret"].mean() if len(comps) else np.nan
-    med = comps[f"spx_fwd{fwd_days}_ret"].median() if len(comps) else np.nan
-    mad = mean_abs_deviation(comps[f"spx_fwd{fwd_days}_ret"])
-    p10, p50, p90 = pct_bands(comps[f"spx_fwd{fwd_days}_ret"])
-    n = len(comps)
-
-    # Simple edge score for quick triage: WR premium over 50 multiplied by median over dispersion
     edge_score = np.nan
     if pd.notna(wr) and pd.notna(med) and pd.notna(mad) and mad > 0:
         edge_score = (wr - 50.0) * (med / mad)
@@ -340,7 +357,6 @@ def latest_context_box():
     """
     card_box(text)
 
-    # Show recent analogs table
     if n > 0:
         show_cols = [
             "vix_close", "vix_base", "vix_pctchg", "spx_close", f"spx_fwd{fwd_days}_ret", "rsi14"
@@ -362,18 +378,6 @@ def latest_context_box():
         analogs = analogs.round(2).sort_index(ascending=False).head(10)
         st.markdown("**Nearest analogs, same setup, last 10 occurrences**")
         st.dataframe(analogs, use_container_width=True)
-
-        # Fill the distribution plot slot for this setup
-        fig2, ax2 = plt.subplots(figsize=(6, 3.5))
-        vals = comps[f"spx_fwd{fwd_days}_ret"].dropna().values
-        if len(vals) > 0:
-            ax2.hist(vals, bins=min(20, max(8, int(np.sqrt(len(vals))))), edgecolor=BAR_EDGE)
-        ax2.axvline(0, color="#888888", linewidth=1)
-        ax2.set_title(f"Distribution, {bucket} base, {magcat}, {regime_now}", color=TEXT_COLOR, fontsize=12, pad=8)
-        ax2.set_xlabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
-        ax2.set_ylabel("Frequency", color=TEXT_COLOR)
-        ax2.grid(color=GRID_COLOR, linewidth=0.6)
-        st.pyplot(fig2, clear_figure=True)
 
 latest_context_box()
 
