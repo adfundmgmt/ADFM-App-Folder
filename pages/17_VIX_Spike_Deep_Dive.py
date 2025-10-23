@@ -1,5 +1,5 @@
 # vix_spike_deep_dive.py
-# ADFM Analytics Platform — VIX 20%+ Spike Deep Dive
+# ADFM Analytics Platform — VIX Spike Deep Dive
 # Light theme, pastel palette, matplotlib only. Dynamic, regime-aware commentary.
 
 import warnings
@@ -96,7 +96,10 @@ def fmt_pct(x, digits=2, sign=False):
         s = "+" + s
     return s
 
-def barplot(ax, categories, values, colors, title, ylabel="2-Day Win Rate (%)"):
+def day_word(n: int) -> str:
+    return "Day" if int(n) == 1 else "Days"
+
+def barplot(ax, categories, values, colors, title, ylabel):
     ax.bar(categories, values, color=colors, edgecolor=BAR_EDGE)
     ax.axhline(50, linestyle="--", linewidth=1, color="#888888")
     ax.set_title(title, color=TEXT_COLOR, fontsize=12, pad=8)
@@ -110,7 +113,6 @@ def barplot(ax, categories, values, colors, title, ylabel="2-Day Win Rate (%)"):
         ax.text(i, v + 1.5, f"{v:.1f}%", ha="center", va="bottom", color=TEXT_COLOR, fontsize=10)
 
 def card_box(inner_html):
-    # Wrap content once, no nested closing tags rendered
     st.markdown(
         f"""
         <div style="border:1px solid #e0e0e0; border-radius:10px; padding:14px; background:#fafafa; color:{TEXT_COLOR}; font-size:14px; line-height:1.35;">
@@ -303,7 +305,7 @@ def generate_commentary(ctx):
         drivers.append(f"RSI filter, Oversold {fmt_pct(ov_yes,1)} vs Not {fmt_pct(ov_no,1)} ({rsi_line}).")
     drivers.append(f"Expected range for {fwd_days} days, p10 {fmt_pct(p10)}, p50 {fmt_pct(p50)}, p90 {fmt_pct(p90)}.")
 
-    # Assemble inner HTML only, no wrapping div here
+    # Assemble inner HTML only
     body = (
         f'<div style="font-weight:700; margin-bottom:6px;">Conclusion</div>'
         f'<div>{headline} {conclusion_tail}</div>'
@@ -377,6 +379,8 @@ with col2:
 fig, axes = plt.subplots(2, 3, figsize=(16, 8))
 fig.subplots_adjust(wspace=0.35, hspace=0.45)
 
+win_ylabel = f"{fwd_days}-{day_word(fwd_days)} Win Rate (%)"
+
 # 1) Win rate by VIX base bucket
 base_wr_plot = events.groupby("vix_base_bucket")[f"spx_fwd{fwd_days}_ret"].apply(winrate).reindex(
     ["0-12", "12-16", "16-20", "20-24", "24-30", "30+"]
@@ -386,7 +390,8 @@ barplot(
     base_wr_plot.index.tolist(),
     base_wr_plot.values.astype(float),
     PASTELS[:6],
-    "Win Rate by VIX Base Level"
+    "Win Rate by VIX Base Level",
+    win_ylabel,
 )
 
 # 2) Win rate by spike magnitude with two-line labels
@@ -405,7 +410,8 @@ barplot(
     mag_categories_draw,
     mag_wr_plot.values.astype(float),
     PASTELS[6:9],
-    "Win Rate by Spike Magnitude"
+    "Win Rate by Spike Magnitude",
+    win_ylabel,
 )
 ax_mag.margins(x=0.05)
 ax_mag.tick_params(axis="x", labelsize=10)
@@ -417,7 +423,8 @@ barplot(
     reg_wr_plot.index.tolist(),
     reg_wr_plot.values.astype(float),
     [PASTELS[0], PASTELS[2]],
-    "Win Rate by Market Regime"
+    "Win Rate by Market Regime",
+    win_ylabel,
 )
 
 # 4) Scatter: VIX base vs forward returns by decade
@@ -432,7 +439,7 @@ for i, dec in enumerate(sorted(events["decade"].unique())):
 ax.axhline(0, color="#888888", linewidth=1)
 ax.set_title("VIX Base Level vs Forward Returns", color=TEXT_COLOR, fontsize=12, pad=8)
 ax.set_xlabel("VIX Level Before Spike", color=TEXT_COLOR)
-ax.set_ylabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
+ax.set_ylabel(f"SPX {fwd_days}-{day_word(fwd_days)} Return (%)", color=TEXT_COLOR)
 ax.grid(color=GRID_COLOR, linewidth=0.6)
 ax.legend(fontsize=8, frameon=False, ncol=2)
 
@@ -443,13 +450,14 @@ barplot(
     ov_wr_plot.index.tolist(),
     ov_wr_plot.values.astype(float),
     [PASTELS[3], PASTELS[1]],
-    "Win Rate by RSI Oversold"
+    "Win Rate by RSI Oversold",
+    win_ylabel,
 )
 
 # 6) Setup Distribution histogram for comps
 axd = axes[1, 2]
 axd.set_title("Setup Distribution", color=TEXT_COLOR, fontsize=12, pad=8)
-axd.set_xlabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
+axd.set_xlabel(f"SPX {fwd_days}-{day_word(fwd_days)} Return (%)", color=TEXT_COLOR)
 axd.set_ylabel("Frequency", color=TEXT_COLOR)
 axd.grid(color=GRID_COLOR, linewidth=0.6)
 vals = comps[f"spx_fwd{fwd_days}_ret"].dropna().values if not comps.empty else np.array([])
@@ -545,4 +553,4 @@ with st.expander("Show events table"):
     st.dataframe(tbl.round(2), use_container_width=True)
 
 # ------------------------------- Footer ------------------------------------
-st.caption("ADFM Analytics Platform · VIX 20%+ Spike Deep Dive · Data source: Yahoo Finance")
+st.caption("ADFM Analytics Platform · VIX Spike Deep Dive · Data source: Yahoo Finance")
