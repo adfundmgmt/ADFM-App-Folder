@@ -44,22 +44,22 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
   Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
 
 - **Liquidity Tracker**  
-  Tracks Net Liquidity and relate it to policy and equities. Definition: Net Liquidity = WALCL − RRP − TGA. Units are billions. Sustained rises often coincide with risk-on conditions.
+  Tracks Net Liquidity and relate it to policy and equities. Definition: Net Liquidity = WALCL - RRP - TGA. Units are billions. Sustained rises often coincide with risk-on conditions.
 
 - **Market Stress Composite**  
   A single 0 to 100 stress score blending volatility, credit, curve, funding, and equity drawdown. Higher = more stress.
 
 - **Unusual Options Flow Tracker**  
   Tracks unusual options flow tracker.
-  
-- **Reflexivity Monitor**  
-   A meta-signal that measures when prices drive fundamentals (reflexive loop) vs when fundamentals drive prices.
 
 - **Flow of Funds Matrix**  
   See where incremental liquidity (Fed/Treasury/FX reserves) and relative performance are co-moving.
   
 - **Cross-Asset Correlation and Volatility Dashboard**  
-  App that fetches data to visualize cross-asset correlations and volatility, featuring a 1M thresholded correlation matrix, and grouped z-scores.  
+  Fetches data to visualize cross-asset correlations and volatility, featuring a 1M thresholded correlation matrix, and grouped z-scores.  
+
+- **VIX Spike Deep Dive**  
+  Evaluates short-horizon SPX behavior after a VIX spike. Support sizing and timing of tactical bounce or fade setups.
 ---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast moving markets. Always a work in progress, open to feedback or feature ideas.
