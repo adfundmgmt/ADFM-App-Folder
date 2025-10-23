@@ -1,6 +1,7 @@
-# sp_sector_rotation_clean.py
+# sp_sector_rotation_clean_v2.py
 # ADFM — S&P 500 Sector Breadth and Rotation Monitor
-# Plotly, Streamlit, yfinance. Clean rotation views.
+# Clean rotation views: quadrant-occupancy heatmap, rank-flow slopegraph, minimal snapshot.
+# Plotly, Streamlit, yfinance.
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -57,6 +58,7 @@ def robust_fetch_batch(tickers, period="1y", interval="1d") -> pd.DataFrame:
         return pd.DataFrame()
 
     out = {}
+    # yfinance returns MultiIndex columns when group_by="ticker"
     if isinstance(data.columns, pd.MultiIndex):
         for t in tickers:
             try:
@@ -67,8 +69,8 @@ def robust_fetch_batch(tickers, period="1y", interval="1d") -> pd.DataFrame:
                 continue
     else:
         if "Adj Close" in data.columns:
-            t = tickers[0] if isinstance(tickers, list) and len(tickers) == 1 else "TICKER"
-            out[t] = data["Adj Close"].dropna()
+            name = tickers[0] if isinstance(tickers, list) and len(tickers) == 1 else "TICKER"
+            out[name] = data["Adj Close"].dropna()
 
     if not out:
         return pd.DataFrame()
@@ -109,14 +111,15 @@ with st.sidebar:
     st.markdown(
         """
         This dashboard monitors sector relative strength and rotation.
-        Views include:
+
+        Views
         • Relative Strength vs SPY  
-        • Focus paths with weekly sampling  
-        • Small multiples grid  
-        • Angle and speed time series  
+        • Quadrant-occupancy heatmap  
+        • Rank-flow slopegraph  
+        • Minimal latest snapshot  
         • Downloadable returns table
 
-        Data source: Yahoo Finance via yfinance, refreshed hourly.
+        Data: Yahoo Finance via yfinance, refreshed hourly.
         """
     )
     st.markdown("---")
@@ -152,211 +155,176 @@ st.plotly_chart(fig_rs, use_container_width=True)
 rets_1m_df = prices[available_sector_tickers].pct_change(DAYS_1M)
 rets_3m_df = prices[available_sector_tickers].pct_change(DAYS_3M)
 
-# Latest snapshot table
-returns_1m = rets_1m_df.iloc[-1]
-returns_3m = rets_3m_df.iloc[-1]
-rotation_df = pd.DataFrame({
-    "1M Return": returns_1m,
-    "3M Return": returns_3m,
-    "Ticker": returns_1m.index
-})
-rotation_df = rotation_df[rotation_df["Ticker"].isin(available_sector_tickers)]
-rotation_df["Sector"] = rotation_df["Ticker"].map(SECTORS)
-rotation_df = rotation_df.sort_values("Sector")
+# Latest snapshot table data
+returns_1m_latest = rets_1m_df.iloc[-1]
+returns_3m_latest = rets_3m_df.iloc[-1]
 
 # Palette
 palette = px.colors.qualitative.Dark24
-sector_list = list(rotation_df["Sector"])
-color_map = {sec: palette[i % len(palette)] for i, sec in enumerate(sector_list)}
+sector_names = [SECTORS[t] for t in available_sector_tickers]
+color_map = {SECTORS[t]: palette[i % len(palette)] for i, t in enumerate(available_sector_tickers)}
 
 # ------------------------------- Helpers -----------------------------------
 def weekly_index(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    """Return weekly sampling on Fridays or last business day."""
-    df_idx = pd.Series(1, index=idx).to_frame("x")
-    wk = df_idx.resample("W-FRI").last().index
+    """Return weekly sampling on Fridays or last business day present in idx."""
+    s = pd.Series(1, index=idx)
+    wk = s.resample("W-FRI").last().index
     wk = pd.DatetimeIndex([d for d in wk if d in idx])
     return wk if len(wk) else idx
 
-# ------------------------------- Rotation tabs -----------------------------
-st.subheader("Sector Rotation, cleaner views")
-tab1, tab2, tab3 = st.tabs(["Focus paths", "Small multiples", "Angle and speed"])
+# ------------------------------- Rotation summary --------------------------
+st.subheader("Rotation summary, clutter-free")
 
-# -------- Tab 1: Focus paths (1–3 sectors, weekly points, monthly knots) ---
-with tab1:
-    left, right = st.columns([2, 3])
-    focus = left.multiselect(
-        "Focus sectors",
-        options=available_sector_tickers,
-        default=[t for t in ["XLK", "XLU"] if t in available_sector_tickers],
-        format_func=lambda t: SECTORS[t],
-        max_selections=3
-    )
-    weeks_back = right.slider("Lookback weeks", 8, 52, 26, step=1)
+c1, c2, _ = st.columns([2, 2, 3])
+weeks_back = c1.slider("Lookback weeks", 8, 52, 26, step=1, help="Weekly sampling window for heatmap")
+focus_topn = c2.slider("Top N for rank-flow", 3, len(available_sector_tickers), 8, step=1)
 
-    fig = go.Figure()
-    fig.add_hline(y=0, line_width=1, opacity=0.4)
-    fig.add_vline(x=0, line_width=1, opacity=0.4)
+# ---------- 1) Quadrant occupancy heatmap ----------
+wk_idx = weekly_index(rets_1m_df.index)
+wk_idx = wk_idx[-weeks_back:] if len(wk_idx) > weeks_back else wk_idx
 
-    # faint context: all sectors latest point
-    fig.add_trace(go.Scatter(
-        x=rotation_df["3M Return"], y=rotation_df["1M Return"],
-        mode="markers+text",
-        text=rotation_df["Sector"],
-        textposition="top center",
-        marker=dict(size=7, color="rgba(120,120,120,0.35)"),
-        textfont=dict(color="rgba(80,80,80,0.6)"),
-        hovertemplate="<b>%{text}</b><br>3M: %{x:.2%}<br>1M: %{y:.2%}<extra></extra>",
-        showlegend=False
-    ))
+quad_cols = ["Q1 ++", "Q2 -+", "Q3 --", "Q4 +-"]  # Q1: 3M>0,1M>0 etc.
+rows = []
+for t in available_sector_tickers:
+    s1 = rets_1m_df[t].reindex(wk_idx)
+    s3 = rets_3m_df[t].reindex(wk_idx)
+    mask = s1.notna() & s3.notna()
+    if mask.sum() == 0:
+        rows.append([SECTORS[t], 0, 0, 0, 0])
+        continue
+    s1 = s1[mask]; s3 = s3[mask]
+    q1 = ((s3 > 0) & (s1 > 0)).mean()
+    q2 = ((s3 < 0) & (s1 > 0)).mean()
+    q3 = ((s3 < 0) & (s1 < 0)).mean()
+    q4 = ((s3 > 0) & (s1 < 0)).mean()
+    rows.append([SECTORS[t], q1, q2, q3, q4])
 
-    if focus:
-        wk_idx = weekly_index(rets_1m_df.index)
-        wk_idx = wk_idx[-weeks_back:] if len(wk_idx) > weeks_back else wk_idx
+occ = pd.DataFrame(rows, columns=["Sector"] + quad_cols).set_index("Sector").loc[sector_names]
 
-        for t in focus:
-            s1 = rets_1m_df[t].reindex(wk_idx)
-            s3 = rets_3m_df[t].reindex(wk_idx)
-            m = s1.notna() & s3.notna()
-            if m.sum() < 2:
-                continue
+fig_occ = px.imshow(
+    occ[quad_cols].T,
+    aspect="auto",
+    color_continuous_scale="Blues",
+    labels=dict(x="Sector", y="Quadrant", color="Share of weeks"),
+    origin="lower",
+)
+fig_occ.update_coloraxes(cmin=0, cmax=1)
+fig_occ.update_layout(
+    title=f"Quadrant occupancy, last {weeks_back} weeks (weekly sampling)",
+    height=380, margin=dict(l=30, r=30, t=60, b=30)
+)
+st.plotly_chart(fig_occ, use_container_width=True)
 
-            sec = SECTORS[t]
-            clr = color_map[sec]
+# ---------- 2) Rank-flow slopegraph (monthly checkpoints, 3M returns) ----------
+# Choose four recent month-end checkpoints aligned to available dates
+all_idx = rets_3m_df.index.dropna()
+if len(all_idx) >= 1:
+    end = all_idx[-1]
+    month_ends = pd.date_range(end=end, periods=4, freq="M")
+    marks = []
+    for d in month_ends:
+        if (all_idx <= d).any():
+            marks.append(max(all_idx[all_idx <= d]))
+        else:
+            marks.append(all_idx[0])
+    marks = sorted(list(dict.fromkeys(marks)))
+else:
+    marks = list(rets_3m_df.index[-4:])
 
-            # path
-            fig.add_trace(go.Scatter(
-                x=s3[m], y=s1[m],
-                mode="lines+markers",
-                line=dict(width=2, color=clr),
-                marker=dict(size=5, color=clr),
-                name=sec,
-                hovertemplate="<b>"+sec+"</b><br>%{customdata}<br>3M: %{x:.2%}<br>1M: %{y:.2%}<extra></extra>",
-                customdata=[d.strftime("%Y-%m-%d") for d in s1[m].index]
-            ))
-
-            # monthly knots
-            monthly = pd.Series(1, index=s1[m].index).resample("MS").first()
-            month_knots = [d for d in monthly.index if d in s1[m].index]
-            if month_knots:
-                mk1 = s1.loc[month_knots]; mk3 = s3.loc[month_knots]
-                fig.add_trace(go.Scatter(
-                    x=mk3, y=mk1,
-                    mode="markers+text",
-                    marker=dict(size=9, symbol="circle-open", line=dict(width=2, color=clr)),
-                    text=[d.strftime("%b") for d in mk1.index],
-                    textposition="bottom center",
-                    showlegend=False,
-                    hovertemplate="<b>"+sec+"</b><br>%{text} knot<br>3M: %{x:.2%}<br>1M: %{y:.2%}<extra></extra>"
-                ))
-
-            # start to end arrow
-            x0, y0 = s3[m].iloc[0], s1[m].iloc[0]
-            x1, y1 = s3[m].iloc[-1], s1[m].iloc[-1]
-            fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0,
-                               xref="x", yref="y", axref="x", ayref="y",
-                               arrowhead=3, arrowsize=1, arrowwidth=1.5, arrowcolor=clr,
-                               opacity=0.9)
-
-    fig.update_layout(
-        title="Focus paths, weekly sampled",
-        xaxis_title="3-Month Return",
-        yaxis_title="1-Month Return",
-        height=560,
-        margin=dict(l=40, r=40, t=60, b=40),
-        legend_title=""
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-# -------- Tab 2: Small multiples grid -------------------------------------
-with tab2:
-    weeks_back_2 = st.slider("Lookback weeks for grid", 8, 52, 26, key="grid_weeks")
-    wk_idx = weekly_index(rets_1m_df.index)
-    wk_idx = wk_idx[-weeks_back_2:] if len(wk_idx) > weeks_back_2 else wk_idx
-
-    # tidy frame
-    tidy = []
-    for t in available_sector_tickers:
-        s1 = rets_1m_df[t].reindex(wk_idx)
-        s3 = rets_3m_df[t].reindex(wk_idx)
-        m = s1.notna() & s3.notna()
-        if m.sum() < 2:
-            continue
-        df_t = pd.DataFrame({
-            "date": s1[m].index,
-            "one_m": s1[m].values,
-            "three_m": s3[m].values,
-            "Sector": SECTORS[t]
+tidy_rank = []
+for d in marks:
+    row = rets_3m_df.loc[d].dropna()
+    if row.empty:
+        continue
+    r = (-row).rank(method="min")  # descending rank, 1 is best
+    for t, val in row.items():
+        tidy_rank.append({
+            "date": d.strftime("%Y-%m-%d"),
+            "Sector": SECTORS[t],
+            "rank": int(r[t]),
+            "ret3m": val
         })
-        tidy.append(df_t)
+rank_df = pd.DataFrame(tidy_rank)
 
-    if tidy:
-        tidy = pd.concat(tidy, ignore_index=True)
+if not rank_df.empty:
+    latest_date = rank_df["date"].iloc[-1]
+    keep = rank_df[rank_df["date"] == latest_date].nsmallest(focus_topn, "rank")["Sector"].tolist()
+    plot_df = rank_df[rank_df["Sector"].isin(keep)].copy()
 
-        fig_grid = px.line(
-            tidy, x="three_m", y="one_m",
-            facet_col="Sector", facet_col_wrap=4,
-            color="Sector", color_discrete_map=color_map,
-        )
-        fig_grid.update_traces(line=dict(width=2), selector=dict(mode="lines"))
-        fig_grid.update_layout(
-            title="Small multiples, weekly sampled",
-            height=920, margin=dict(l=30, r=30, t=60, b=30), showlegend=False
-        )
-        # quadrant axes
-        fig_grid.add_hline(y=0, line_width=1, opacity=0.3)
-        fig_grid.add_vline(x=0, line_width=1, opacity=0.3)
-        st.plotly_chart(fig_grid, use_container_width=True)
-    else:
-        st.info("Insufficient data for grid.")
-
-# -------- Tab 3: Angle and speed decomposition ----------------------------
-with tab3:
-    look_weeks = st.slider("Lookback weeks for angle and speed", 8, 104, 52, key="ang_weeks")
-    wk_idx = weekly_index(rets_1m_df.index)
-    wk_idx = wk_idx[-look_weeks:] if len(wk_idx) > look_weeks else wk_idx
-
-    sec_pick = st.selectbox(
-        "Sector",
-        options=available_sector_tickers,
-        format_func=lambda t: SECTORS[t],
-        index=available_sector_tickers.index("XLK") if "XLK" in available_sector_tickers else 0
+    x_positions = {d: i for i, d in enumerate(sorted(plot_df["date"].unique()))}
+    fig_slope = go.Figure()
+    for sec in keep:
+        df_s = plot_df[plot_df["Sector"] == sec].sort_values("date")
+        fig_slope.add_trace(go.Scatter(
+            x=[x_positions[d] for d in df_s["date"]],
+            y=df_s["rank"],
+            mode="lines+markers+text",
+            line=dict(width=2, color=color_map[sec]),
+            marker=dict(size=7, color=color_map[sec]),
+            text=[sec] + [""] * (len(df_s) - 1),
+            textposition="top left",
+            hovertemplate="<b>"+sec+"</b><br>Rank %{y} at %{x}<extra></extra>",
+            showlegend=False
+        ))
+    fig_slope.update_yaxes(autorange="reversed", dtick=1, title="Rank (1 best)")
+    fig_slope.update_xaxes(
+        tickmode="array",
+        tickvals=list(x_positions.values()),
+        ticktext=sorted(plot_df["date"].unique()),
+        title="Checkpoint"
     )
-    s1 = rets_1m_df[sec_pick].reindex(wk_idx)
-    s3 = rets_3m_df[sec_pick].reindex(wk_idx)
-    m = s1.notna() & s3.notna()
-    a = np.degrees(np.arctan2(s1[m].values, s3[m].values))    # angle
-    v = np.sqrt(s1[m].values**2 + s3[m].values**2)            # speed
-    sec_name = SECTORS[sec_pick]
-    clr = color_map[sec_name]
+    fig_slope.update_layout(
+        title=f"Rank flow of 3M returns, monthly checkpoints, top {focus_topn}",
+        height=420, margin=dict(l=40, r=40, t=60, b=40)
+    )
+    st.plotly_chart(fig_slope, use_container_width=True)
+else:
+    st.info("Not enough monthly checkpoints to draw rank flow.")
 
-    fig_ang = go.Figure()
-    fig_ang.add_trace(go.Scatter(x=s1[m].index, y=a, mode="lines+markers",
-                                 line=dict(width=2, color=clr)))
-    fig_ang.update_layout(title=f"{sec_name} rotation angle, +y is 1M, +x is 3M",
-                          yaxis_title="Angle (degrees)", xaxis_title="Date",
-                          height=320, margin=dict(l=40, r=40, t=50, b=40))
-    st.plotly_chart(fig_ang, use_container_width=True)
+# ---------- 3) Minimal latest snapshot ----------
+snap = pd.DataFrame({
+    "Sector": [SECTORS[t] for t in available_sector_tickers],
+    "1M": [returns_1m_latest.get(t, np.nan) for t in available_sector_tickers],
+    "3M": [returns_3m_latest.get(t, np.nan) for t in available_sector_tickers],
+})
+fig_snap = px.scatter(
+    snap, x="3M", y="1M", text="Sector",
+    color="Sector", color_discrete_map=color_map
+)
+fig_snap.update_traces(
+    textposition="top center",
+    marker=dict(size=9, line=dict(width=0.5, color="rgba(0,0,0,0.4)"))
+)
+fig_snap.add_hline(y=0, line_width=1, opacity=0.4)
+fig_snap.add_vline(x=0, line_width=1, opacity=0.4)
+fig_snap.update_layout(
+    title="Current snapshot, 1M vs 3M total return",
+    showlegend=False, height=440, margin=dict(l=40, r=40, t=60, b=40)
+)
+st.plotly_chart(fig_snap, use_container_width=True)
 
-    fig_spd = go.Figure()
-    fig_spd.add_trace(go.Scatter(x=s1[m].index, y=v, mode="lines+markers",
-                                 line=dict(width=2, color=clr)))
-    fig_spd.update_layout(title=f"{sec_name} rotation speed, norm of 1M and 3M",
-                          yaxis_title="Speed", xaxis_title="Date",
-                          height=300, margin=dict(l=40, r=40, t=40, b=40))
-    st.plotly_chart(fig_spd, use_container_width=True)
+# Optional compact table sorted by speed
+snap["Angle (deg)"] = np.degrees(np.arctan2(snap["1M"], snap["3M"]))
+snap["Speed"] = np.sqrt(snap["1M"]**2 + snap["3M"]**2)
+st.dataframe(
+    snap.set_index("Sector")
+        .sort_values("Speed", ascending=False)
+        .style.format({"1M": "{:.2%}", "3M": "{:.2%}", "Speed": "{:.2%}"}),
+    height=360
+)
 
 # ------------------------------- Returns table -----------------------------
-df = pd.DataFrame({
+df_table = pd.DataFrame({
     "Sector": [SECTORS[t] for t in available_sector_tickers],
-    "1M Return": [returns_1m.get(t, pd.NA) for t in available_sector_tickers],
-    "3M Return": [returns_3m.get(t, pd.NA) for t in available_sector_tickers],
+    "1M Return": [returns_1m_latest.get(t, pd.NA) for t in available_sector_tickers],
+    "3M Return": [returns_3m_latest.get(t, pd.NA) for t in available_sector_tickers],
 }).set_index("Sector")
 
 st.subheader("Sector Total Returns Table")
-styled = df.style.format("{:.2%}").bar(subset=["1M Return", "3M Return"], align="mid")
+styled = df_table.style.format("{:.2%}").bar(subset=["1M Return", "3M Return"], align="mid")
 st.dataframe(styled, height=400)
 
-csv = df.to_csv().encode()
+csv = df_table.to_csv().encode()
 st.download_button(
     label="Download returns table as CSV",
     data=csv,
