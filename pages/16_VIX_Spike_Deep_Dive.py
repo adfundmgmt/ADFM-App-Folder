@@ -105,6 +105,26 @@ def card_box(inner_html):
 st.title("VIX Spike Deep Dive")
 
 with st.sidebar:
+    # About box added here
+    card_box(
+        """
+        <div style="margin-bottom:8px;"><b>What this tool does</b></div>
+        <div>
+        Evaluates short-horizon SPX edge after a VIX spike. It:
+        <ul style="margin:6px 0 0 18px;">
+          <li>Detects days when VIX jumps by at least your threshold.</li>
+          <li>Buckets setups by VIX base level, spike magnitude, trend regime versus your DMA, and RSI oversold.</li>
+          <li>Computes forward SPX returns for your horizon, with win rates, medians, and percentile bands.</li>
+          <li>Summarizes the setup in the Decision Box and scores four lights based on tailwinds.</li>
+          <li>Shows distributions, a base × magnitude heatmap, regime ECDFs, a scatter of base vs forward return, an event study curve, and yearly spike counts.</li>
+        </ul>
+        <div style="margin-top:6px; font-size:12.5px; color:#444;">
+          Data source Yahoo Finance, sample size changes with filters, research utility only.
+        </div>
+        </div>
+        """
+    )
+
     st.header("Controls")
     start_date = st.date_input("History start", value=datetime(1990, 1, 1))
     fwd_days = st.number_input("Forward horizon (days)", min_value=1, max_value=30, value=2, step=1)
