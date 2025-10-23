@@ -58,7 +58,6 @@ def bucket_vix_base(x):
     return pd.cut([x], bins=bins, labels=labels, right=False)[0]
 
 def bucket_spike_mag(pct):
-    # pct is a fraction
     if pct < 0.30:
         return "Moderate (20-30%)"
     elif pct < 0.50:
@@ -105,25 +104,34 @@ def card_box(inner_html):
 st.title("VIX Spike Deep Dive")
 
 with st.sidebar:
-    # About box added here
-    card_box(
-        """
-        <div style="margin-bottom:8px;"><b>What this tool does</b></div>
-        <div>
-        Evaluates short-horizon SPX edge after a VIX spike. It:
-        <ul style="margin:6px 0 0 18px;">
-          <li>Detects days when VIX jumps by at least your threshold.</li>
-          <li>Buckets setups by VIX base level, spike magnitude, trend regime versus your DMA, and RSI oversold.</li>
-          <li>Computes forward SPX returns for your horizon, with win rates, medians, and percentile bands.</li>
-          <li>Summarizes the setup in the Decision Box and scores four lights based on tailwinds.</li>
-          <li>Shows distributions, a base × magnitude heatmap, regime ECDFs, a scatter of base vs forward return, an event study curve, and yearly spike counts.</li>
-        </ul>
-        <div style="margin-top:6px; font-size:12.5px; color:#444;">
-          Data source Yahoo Finance, sample size changes with filters, research utility only.
-        </div>
-        </div>
-        """
+    st.header("About")
+
+    st.markdown("**Purpose**")
+    st.markdown(
+        "Evaluate short-horizon SPX behavior after a VIX spike. "
+        "Support sizing and timing of tactical bounce or fade setups."
     )
+
+    st.markdown("**How it works**")
+    st.markdown(
+        "1. Detect days where VIX jumps by at least your threshold.\n"
+        "2. Bucket setups by VIX base level, spike magnitude, SPX regime vs chosen DMA, and RSI oversold.\n"
+        "3. Compute forward SPX returns for your horizon, with win rate, median, average, and p10, p50, p90 bands.\n"
+        "4. Summarize the setup in a Decision Box and score four lights based on tailwinds.\n"
+        "5. Render six panels: distributions, base × magnitude heatmap, regime ECDFs, base vs forward scatter, event study, yearly counts."
+    )
+
+    st.markdown("**How to read**")
+    st.markdown(
+        "- Heatmap higher percentages indicate better hit rate for that base and magnitude.\n"
+        "- ECDF right shift indicates better outcomes in that regime.\n"
+        "- Scatter marker size reflects spike percent, color tags RSI oversold.\n"
+        "- Event study line shows average path after qualifying spikes, band is p10 to p90.\n"
+        "- Four lights is a simple composite of base, magnitude, regime, and RSI filters."
+    )
+
+    st.caption("Data Yahoo Finance. Research utility only. Sample size changes with filters.")
+    st.divider()
 
     st.header("Controls")
     start_date = st.date_input("History start", value=datetime(1990, 1, 1))
@@ -365,8 +373,6 @@ with col2:
     )
 
 # ------------------------------- Panels v2 ---------------------------------
-# Six revised charts. Decision Box above remains unchanged.
-
 def safe_group_lists(g, col, order):
     data = []
     labels = []
@@ -505,9 +511,8 @@ ax6.set_ylabel("Count", color=TEXT_COLOR)
 ax6.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
 
 st.pyplot(fig, clear_figure=True)
-# ----------------------------- End Panels v2 -------------------------------
 
-# ------------------------------- Dynamic commentary for latest event -------
+# ------------------------------- Dynamic commentary ------------------------
 st.subheader("Dynamic Commentary")
 
 def latest_context_box():
