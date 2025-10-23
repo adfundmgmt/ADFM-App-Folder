@@ -43,14 +43,14 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Unusual Options Flow Tracker**  
   Tracks unusual options flow tracker.
   
-- **Reflexivity Monitor**  
-   A meta-signal that measures when prices drive fundamentals (reflexive loop) vs when fundamentals drive prices.
-
 - **Flow of Funds Matrix**  
   See where incremental liquidity (Fed/Treasury/FX reserves) and relative performance are co-moving.
   
 - **Cross-Asset Correlation and Volatility Dashboard**  
-  App that fetches data to visualize cross-asset correlations and volatility, featuring a 1M thresholded correlation matrix, and grouped z-scores.  
+  Fetches data to visualize cross-asset correlations and volatility, featuring a 1M thresholded correlation matrix, and grouped z-scores.  
+
+- **VIX Spike Deep Dive**  
+  Evaluates short-horizon SPX behavior after a VIX spike. Support sizing and timing of tactical bounce or fade setups.
 
 ---
 
