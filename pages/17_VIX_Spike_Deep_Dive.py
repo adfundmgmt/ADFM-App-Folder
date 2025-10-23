@@ -128,7 +128,7 @@ st.title("VIX Spike Deep Dive")
 with st.sidebar:
     st.header("Controls")
     start_date = st.date_input("History start", value=datetime(1990, 1, 1))
-    fwd_days = st.number_input("Forward horizon (days)", min_value=1, max_value=10, value=2, step=1)
+    fwd_days = st.number_input("Forward horizon (days)", min_value=1, max_value=30, value=2, step=1)
     spike_threshold = st.slider("VIX spike threshold (%)", 20, 100, 20, step=5)
     rsi_thresh = st.slider("Oversold RSI threshold", 10, 40, 30, step=1)
     ma_window = st.selectbox("Regime MA window", [100, 150, 200], index=2)
