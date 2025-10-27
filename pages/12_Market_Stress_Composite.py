@@ -2,7 +2,7 @@
 # Market Stress Composite — clean UI, daily panel with live nowcast
 # Built for AD Fund Management LP
 # Design: single composite, regime bands, Daily/Weekly/Monthly regimes,
-#         fixed weights (no UI controls), SPX + Drawdown panel.
+#         fixed weights, SPX + Drawdown panel aligned to composite dates.
 ############################################################
 
 # ---- Py3.12 compat shim for pandas_datareader ----
@@ -86,11 +86,11 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("About this tool")
     st.markdown(
-        "- Purpose: a single **risk dial** that blends volatility, credit, curve inversion, funding, and SPX drawdown into a 0–100 score.\n"
-        "- Data: daily history from **FRED** with **intraday quotes** used only to refresh today’s row.\n"
-        "- Method: each factor is percentile-ranked over a 3-year window, then combined with fixed weights.\n"
+        "- Purpose: a single **risk dial** blending volatility, credit, curve inversion, funding, and SPX drawdown into a 0–100 score.\n"
+        "- Data: daily history from **FRED**, intraday quotes only refresh today’s row.\n"
+        "- Method: percentile rank each factor over 3 years, then combine with fixed weights.\n"
         "- Interpretation: above 70 = **High stress**, below 30 = **Low stress**, between = **Neutral**.\n"
-        "- Design: minimal UI, no user-tunable weights, clean top regimes for Daily, Weekly, Monthly."
+        "- UI: top shows Daily, Weekly, Monthly regimes. Bottom adds SPX and drawdown for context."
     )
 
 # ---- Time helpers ----
@@ -301,14 +301,13 @@ latest_val = comp_s.loc[latest_idx]
 def bday_mean(series: pd.Series, n: int) -> float:
     ser = series.dropna()
     if ser.empty: return np.nan
-    return float(ser.tail(n).mean()) if len(ser) >= 1 else np.nan
+    return float(ser.tail(n).mean())
 
 weekly_val = bday_mean(comp_s, 5)
 monthly_val = bday_mean(comp_s, 21)
 
 # ---- Clean top summary ----
-weights_text = f"VIX {W_VIX:.2f}, HY {W_HY:.2f}, Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}"
-st.info(f"As of {latest_idx.date()} | Weights: {weights_text}")
+st.info(f"As of {latest_idx.date()} | Weights: VIX {W_VIX:.2f}, HY {W_HY:.2f}, Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Daily regime", tag_for_level(latest_val), f"{latest_val:.0f}")
@@ -316,11 +315,15 @@ c2.metric("Weekly regime", tag_for_level(weekly_val), f"{weekly_val:.0f}" if not
 c3.metric("Monthly regime", tag_for_level(monthly_val), f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
 
 # ---- Charts ----
+# Canonical index for both panes to ensure alignment
+canon_idx = comp_s.index  # business-day, tz-naive
+panel_view = panel.reindex(canon_idx).ffill()  # align SPX to composite dates
+
 # Figure 1: Composite with regime bands
 fig1 = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
                      subplot_titles=("Market Stress Composite",))
 
-fig1.add_trace(go.Scatter(x=comp_s.index, y=comp_s, name="Composite",
+fig1.add_trace(go.Scatter(x=canon_idx, y=comp_s.reindex(canon_idx), name="Composite",
                           line=dict(color="#111111", width=2)))
 fig1.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10)")
 fig1.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)")
@@ -333,48 +336,52 @@ fig1.update_layout(template="plotly_white", height=520,
                    margin=dict(l=60, r=40, t=60, b=60))
 st.plotly_chart(fig1, use_container_width=True)
 
-# Figure 2: SPX and Drawdown (daily)
-panel_lb = panel.loc[start_lb:].copy()
-if not panel_lb.empty:
-    spx_rebased = panel_lb["SPX"] / panel_lb["SPX"].iloc[0] * 100
-    dd_series = -100.0 * (panel_lb["SPX"] / panel_lb["SPX"].cummax() - 1.0)
+# Figure 2: SPX and Drawdown (daily) aligned to canon_idx
+if not panel_view.empty and "SPX" in panel_view.columns:
+    # Rebase from first valid SPX inside the canonical window
+    spx_series = panel_view["SPX"].dropna()
+    if not spx_series.empty:
+        base_val = spx_series.iloc[0]
+        spx_rebased = (panel_view["SPX"] / base_val) * 100
+        dd_series = -100.0 * (panel_view["SPX"] / panel_view["SPX"].cummax() - 1.0)
 
-    fig2 = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
-                         subplot_titles=("SPX and Drawdown (daily)",), specs=[[{"secondary_y": True}]])
-    fig2.add_trace(go.Scatter(x=panel_lb.index, y=spx_rebased, name="SPX (rebased=100)",
-                              line=dict(color="#7f7f7f")), row=1, col=1, secondary_y=False)
-    fig2.add_trace(go.Scatter(x=panel_lb.index, y=dd_series, name="Drawdown (%)",
-                              line=dict(color="#ff7f0e")), row=1, col=1, secondary_y=True)
+        fig2 = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+                             subplot_titles=("SPX and Drawdown (daily)",),
+                             specs=[[{"secondary_y": True}]])
+        fig2.add_trace(go.Scatter(x=canon_idx, y=spx_rebased.reindex(canon_idx), name="SPX (rebased=100)",
+                                  line=dict(color="#7f7f7f")), row=1, col=1, secondary_y=False)
+        fig2.add_trace(go.Scatter(x=canon_idx, y=dd_series.reindex(canon_idx), name="Drawdown (%)",
+                                  line=dict(color="#ff7f0e")), row=1, col=1, secondary_y=True)
 
-    # pad ranges a bit
-    def pad_range(lo: float, hi: float, pad: float = 0.06):
-        if pd.isna(lo) or pd.isna(hi): return None
-        d = (hi - lo) if hi != lo else (abs(hi) if hi != 0 else 1.0)
-        return lo - d * pad, hi + d * pad
+        # pad ranges a bit
+        def pad_range(lo: float, hi: float, pad: float = 0.06):
+            if pd.isna(lo) or pd.isna(hi): return None
+            d = (hi - lo) if hi != lo else (abs(hi) if hi != 0 else 1.0)
+            return lo - d * pad, hi + d * pad
 
-    lr = pad_range(spx_rebased.min(), spx_rebased.max())
-    rr = pad_range(max(0.0, dd_series.min()), dd_series.max())
-    if lr: fig2.update_yaxes(title="Index", range=lr, row=1, col=1, secondary_y=False)
-    if rr: fig2.update_yaxes(title="Drawdown %", range=rr, row=1, col=1, secondary_y=True)
+        lr = pad_range(spx_rebased.min(), spx_rebased.max())
+        rr = pad_range(max(0.0, dd_series.min()), dd_series.max())
+        if lr: fig2.update_yaxes(title="Index", range=lr, row=1, col=1, secondary_y=False)
+        if rr: fig2.update_yaxes(title="Drawdown %", range=rr, row=1, col=1, secondary_y=True)
 
-    fig2.update_xaxes(tickformat="%b-%d-%y", title="Date")
-    fig2.update_layout(template="plotly_white", height=520,
-                       legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
-                       margin=dict(l=60, r=40, t=60, b=60))
-    st.plotly_chart(fig2, use_container_width=True)
+        fig2.update_xaxes(tickformat="%b-%d-%y", title="Date")
+        fig2.update_layout(template="plotly_white", height=520,
+                           legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
+                           margin=dict(l=60, r=40, t=60, b=60))
+        st.plotly_chart(fig2, use_container_width=True)
 
 # ---- Download ----
 with st.expander("Download Data"):
-    export_idx = scores.index
-    export_scores = (100.0 * scores.rename(columns={
+    export_idx = canon_idx
+    export_scores = (100.0 * scores.reindex(export_idx).rename(columns={
         "VIX_p":"VIX_pct","HY_p":"HY_pct","CurveInv_p":"CurveInv_pct","Fund_p":"Fund_pct","DD_p":"DD_pct"
-    })).reindex(export_idx)
+    }))
     cols = ["VIX","HY_OAS","HY_OAS_PROXY","T10Y3M","FUND","SPX"] if "HY_OAS_PROXY" in panel.columns else ["VIX","HY_OAS","T10Y3M","FUND","SPX"]
     out = pd.concat(
         [
             panel.reindex(export_idx)[cols],
             export_scores,
-            comp_s.rename("Composite")
+            comp_s.reindex(export_idx).rename("Composite")
         ],
         axis=1
     )
