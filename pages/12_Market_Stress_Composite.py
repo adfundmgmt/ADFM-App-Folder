@@ -1,27 +1,3 @@
-# Conclusion
-
-Dates are now perfectly aligned. Both panes share a single canonical business-day index and render off the same valid set of composite dates.
-
-# Why it matters
-
-Misaligned indices create phantom moves and incorrect regime reads. Reindexing the SPX and drawdown panel to the composite’s exact business-day index removes that bias.
-
-# Key drivers
-
-* One canonical bday index. Composite and context panels reindex to the same business-day index.
-* Validity filter. Both panes use only dates where the composite is valid, avoiding gaps when a factor is stale today.
-* HY proxy merge. Uses HY OAS when available, falls back to an intraday HYG/LQD proxy only for missing points.
-
-# Risks and reversals
-
-* If all inputs are stale today, today will be dropped from both panes by design. That is correct behavior.
-* Intraday proxies are muted to only update today’s row, but if a feed lags, the composite will exclude that factor for today.
-
-# Next steps
-
-* If you want forced inclusion of today even when some series are stale, we can add a “grace” window and visually flag partial reliability.
-
-```python
 ############################################################
 # Market Stress Composite — clean UI, daily panel with live nowcast
 # Built for AD Fund Management LP
@@ -33,7 +9,7 @@ Misaligned indices create phantom moves and incorrect regime reads. Reindexing t
 import sys, types
 import packaging.version
 try:
-    import distutils.version
+    import distutils.version  # some pdr installs import this import
 except Exception:
     _d = types.ModuleType("distutils")
     _dv = types.ModuleType("distutils.version")
@@ -180,7 +156,6 @@ def latest_quote(df_1m: pd.DataFrame, symbol: str):
     return float(s.iloc[-1]), s.index[-1]
 
 def rolling_percentile_daily(s: pd.Series, window_days: int) -> pd.Series:
-    # business-day rolling percentile, evaluated on last element
     s = to_naive_date_index(s)
     w = max(60, int(window_days * 252 / 365))
     out = s.rolling(w, min_periods=max(20, w // 5)).apply(
@@ -264,15 +239,11 @@ if use_nowcast:
         if is_fresh(hyg_ts) and is_fresh(lqd_ts) and not np.isnan(hyg_q) and not np.isnan(lqd_q):
             panel["HY_OAS_PROXY"] = panel.get("HY_OAS_PROXY", pd.Series(index=panel.index))
             panel.loc[tb, "HY_OAS_PROXY"] = -(hyg_q / lqd_q)  # wider credit = higher stress
-            # do not flip m_hy mask to True here if HY_OAS proper is present for the same date
         if is_fresh(bil_ts) and is_fresh(shy_ts) and not np.isnan(bil_q) and not np.isnan(shy_q):
             panel.loc[tb, "FUND"] = bil_q / shy_q; m_fund.loc[tb] = True
 
 # Use HY_OAS, but fall back to proxy where HY_OAS is missing
-if "HY_OAS_PROXY" in panel.columns:
-    hy_used = panel["HY_OAS"].combine_first(panel["HY_OAS_PROXY"])
-else:
-    hy_used = panel["HY_OAS"]
+hy_used = panel["HY_OAS"].combine_first(panel.get("HY_OAS_PROXY", pd.Series(index=panel.index)))
 
 # ---- Scores (percentiles over shorter window) ----
 window_days = int(PCTL_WINDOW_YEARS * 365)
@@ -320,14 +291,23 @@ if comp_s.dropna().empty:
     st.stop()
 
 # ---- Validity filter and canonical index ----
-# Use only dates where the composite is valid to guarantee identical x-axes and visibility
 valid_idx = comp_s.dropna().index
 comp_s = comp_s.reindex(valid_idx)
 
-# Weekly and Monthly averages on valid business days
+# ---- Regime helpers (fix SyntaxError source) ----
+def regime_label(x: float) -> str:
+    if pd.isna(x):
+        return "N/A"
+    if x >= REGIME_HI:
+        return "High stress"
+    if x <= REGIME_LO:
+        return "Low stress"
+    return "Neutral"
+
 def bday_mean(series: pd.Series, n: int) -> float:
     ser = series.dropna()
-    if ser.empty: return np.nan
+    if ser.empty:
+        return np.nan
     return float(ser.tail(n).mean())
 
 latest_idx = comp_s.index[-1]
@@ -339,9 +319,9 @@ monthly_val = bday_mean(comp_s, 21)
 st.info(f"As of {latest_idx.date()} | Weights: VIX {W_VIX:.2f}, HY {W_HY:.2f}, Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}")
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Daily regime", "High stress" if latest_val >= REGIME_HI else ("Low stress" if latest_val <= REGIME_LO else "Neutral"), f"{latest_val:.0f}")
-c2.metric("Weekly regime", "High stress" if weekly_val >= REGIME_HI else ("Low stress" if weekly_val <= REGIME_LO else "Neutral") if not pd.isna(weekly_val) else "N/A", f"{weekly_val:.0f}" if not pd.isna(weekly_val) else "N/A")
-c3.metric("Monthly regime", "High stress" if monthly_val >= REGIME_HI else ("Low stress" if monthly_val <= REGIME_LO else "Neutral") if not pd.isna(monthly_val) else "N/A", f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
+c1.metric("Daily regime", regime_label(latest_val), f"{latest_val:.0f}")
+c2.metric("Weekly regime", regime_label(weekly_val), f"{weekly_val:.0f}" if not pd.isna(weekly_val) else "N/A")
+c3.metric("Monthly regime", regime_label(monthly_val), f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
 
 # ---- Charts ----
 # Canonical index for both panes to ensure alignment
@@ -384,14 +364,17 @@ if not panel_view.empty and "SPX" in panel_view.columns:
 
         # pad ranges a bit
         def pad_range(lo: float, hi: float, pad: float = 0.06):
-            if pd.isna(lo) or pd.isna(hi): return None
+            if pd.isna(lo) or pd.isna(hi):
+                return None
             d = (hi - lo) if hi != lo else (abs(hi) if hi != 0 else 1.0)
             return lo - d * pad, hi + d * pad
 
         lr = pad_range(float(np.nanmin(spx_rebased.values)), float(np.nanmax(spx_rebased.values)))
         rr = pad_range(float(max(0.0, np.nanmin(dd_series.values))), float(np.nanmax(dd_series.values)))
-        if lr: fig2.update_yaxes(title="Index", range=lr, row=1, col=1, secondary_y=False)
-        if rr: fig2.update_yaxes(title="Drawdown %", range=rr, row=1, col=1, secondary_y=True)
+        if lr:
+            fig2.update_yaxes(title="Index", range=lr, row=1, col=1, secondary_y=False)
+        if rr:
+            fig2.update_yaxes(title="Drawdown %", range=rr, row=1, col=1, secondary_y=True)
 
         fig2.update_xaxes(tickformat="%b-%d-%y", title="Date")
         fig2.update_layout(template="plotly_white", height=520,
@@ -418,4 +401,3 @@ with st.expander("Download Data"):
     st.download_button("Download CSV", out.to_csv(), file_name="market_stress_composite.csv", mime="text/csv")
 
 st.caption("© 2025 AD Fund Management LP")
-```
