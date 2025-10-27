@@ -111,13 +111,14 @@ def fetch_closes(tickers, start, end):
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 
-# Order matters. SMH/IGV first, SMH/FXY directly below it, then others.
+# Order matters.
 PRESETS    = [
     ("SMH", "IGV"),
-    ("SMH", "FXY"),  # NEW chart directly below SMH/IGV
+    ("SMH", "FXY"),
     ("QQQ", "IWM"),
     ("HYG", "LQD"),
     ("HYG", "IEF"),
+    ("SPHB", "SPLV"),
 ]
 
 STATIC     = CYCLICALS + DEFENSIVES + [t for a, b in PRESETS for t in (a, b)]
