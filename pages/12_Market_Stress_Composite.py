@@ -1,7 +1,8 @@
 ############################################################
 # Market Stress Composite — clean UI, daily panel with live nowcast
 # Built for AD Fund Management LP
-# Design: single composite, regime bands, Daily/Weekly/Monthly regimes
+# Design: single composite, regime bands, Daily/Weekly/Monthly regimes,
+#         fixed weights (no UI controls), SPX + Drawdown panel.
 ############################################################
 
 # ---- Py3.12 compat shim for pandas_datareader ----
@@ -52,13 +53,22 @@ PX = {
     "SHY": "SHY",
 }
 
-# ---- Defaults tuned for responsiveness without clutter ----
+# ---- Fixed parameters tuned for responsiveness without clutter ----
 DEFAULT_LOOKBACK = "3y"
 PCTL_WINDOW_YEARS = 3
 DEFAULT_SMOOTH = 1
 REGIME_HI, REGIME_LO = 70, 30
 MAX_STALE_BDAYS = 0        # do not accept yesterday as fresh for the composite
 MAX_PROXY_AGE_MIN = 2      # minutes
+
+# ---- LOCKED WEIGHTS (no UI to change) ----
+W_VIX   = 0.25
+W_HY    = 0.25
+W_CURVE = 0.20
+W_FUND  = 0.15
+W_DD    = 0.15
+WEIGHTS_VEC = np.array([W_VIX, W_HY, W_CURVE, W_FUND, W_DD], dtype=float)
+WEIGHTS_VEC = WEIGHTS_VEC / WEIGHTS_VEC.sum()
 
 # ---- Sidebar ----
 with st.sidebar:
@@ -67,12 +77,21 @@ with st.sidebar:
                             index=["1y","2y","3y","5y","10y"].index(DEFAULT_LOOKBACK))
     years = int(lookback[:-1])
 
-    st.subheader("Weights")
-    w_vix   = st.slider("VIX", 0.0, 1.0, 0.25, 0.05)
-    w_hy    = st.slider("HY OAS", 0.0, 1.0, 0.25, 0.05)
-    w_curve = st.slider("Yield Curve (inverted)", 0.0, 1.0, 0.20, 0.05)
-    w_fund  = st.slider("Funding (CP − T-bill)", 0.0, 1.0, 0.15, 0.05)
-    w_dd    = st.slider("SPX Drawdown", 0.0, 1.0, 0.15, 0.05)
+    st.subheader("Nowcast")
+    use_nowcast = st.checkbox("Use intraday proxies to update today", value=True)
+
+    st.subheader("Weights (fixed)")
+    st.caption(f"VIX {W_VIX:.2f}, HY {W_HY:.2f}, Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}")
+
+    st.markdown("---")
+    st.subheader("About this tool")
+    st.markdown(
+        "- Purpose: a single **risk dial** that blends volatility, credit, curve inversion, funding, and SPX drawdown into a 0–100 score.\n"
+        "- Data: daily history from **FRED** with **intraday quotes** used only to refresh today’s row.\n"
+        "- Method: each factor is percentile-ranked over a 3-year window, then combined with fixed weights.\n"
+        "- Interpretation: above 70 = **High stress**, below 30 = **Low stress**, between = **Neutral**.\n"
+        "- Design: minimal UI, no user-tunable weights, clean top regimes for Daily, Weekly, Monthly."
+    )
 
 # ---- Time helpers ----
 NY_TZ = "America/New_York"
@@ -250,7 +269,6 @@ if DEFAULT_SMOOTH > 1:
     scores = scores.rolling(DEFAULT_SMOOTH, min_periods=1).mean()
     scores = to_naive_date_index(scores)
 
-# masks aligned
 def _align(m): 
     m = to_naive_date_index(m)
     return m.reindex(scores.index).astype(float).fillna(0.0)
@@ -258,9 +276,7 @@ def _align(m):
 masks = pd.concat([_align(m_vix), _align(m_hy), _align(m_yc), _align(m_fund), _align(m_dd)], axis=1)
 masks.columns = ["VIX_m","HY_m","Curve_m","Fund_m","DD_m"]
 
-weights_vec = np.array([w_vix, w_hy, w_curve, w_fund, w_dd], dtype=float)
-weights_vec = weights_vec if weights_vec.sum() > 0 else np.ones(5)
-W = (weights_vec / weights_vec.sum()).reshape(1, -1)
+W = WEIGHTS_VEC.reshape(1, -1)
 X = scores[["VIX_p","HY_p","CurveInv_p","Fund_p","DD_p"]].values
 M = masks.values
 active_w = (W * M).sum(axis=1)
@@ -291,7 +307,7 @@ weekly_val = bday_mean(comp_s, 5)
 monthly_val = bday_mean(comp_s, 21)
 
 # ---- Clean top summary ----
-weights_text = f"VIX {weights_vec[0]:.2f}, HY {weights_vec[1]:.2f}, Curve {weights_vec[2]:.2f}, Funding {weights_vec[3]:.2f}, Drawdown {weights_vec[4]:.2f}"
+weights_text = f"VIX {W_VIX:.2f}, HY {W_HY:.2f}, Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}"
 st.info(f"As of {latest_idx.date()} | Weights: {weights_text}")
 
 c1, c2, c3 = st.columns(3)
@@ -299,27 +315,53 @@ c1.metric("Daily regime", tag_for_level(latest_val), f"{latest_val:.0f}")
 c2.metric("Weekly regime", tag_for_level(weekly_val), f"{weekly_val:.0f}" if not pd.isna(weekly_val) else "N/A")
 c3.metric("Monthly regime", tag_for_level(monthly_val), f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
 
-# ---- Main chart: composite with regime bands ----
-fig = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
-                    subplot_titles=("Market Stress Composite",))
+# ---- Charts ----
+# Figure 1: Composite with regime bands
+fig1 = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+                     subplot_titles=("Market Stress Composite",))
 
-fig.add_trace(go.Scatter(x=comp_s.index, y=comp_s, name="Composite",
-                         line=dict(color="#111111", width=2)))
+fig1.add_trace(go.Scatter(x=comp_s.index, y=comp_s, name="Composite",
+                          line=dict(color="#111111", width=2)))
+fig1.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10)")
+fig1.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)")
+fig1.add_shape(type="line", x0=latest_idx, x1=latest_idx, y0=0, y1=latest_val,
+               line=dict(color="#888888", width=1, dash="dot"))
+fig1.update_yaxes(title="Score", range=[0,100])
+fig1.update_xaxes(tickformat="%b-%d-%y", title="Date")
+fig1.update_layout(template="plotly_white", height=520,
+                   legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
+                   margin=dict(l=60, r=40, t=60, b=60))
+st.plotly_chart(fig1, use_container_width=True)
 
-fig.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10)")
-fig.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)")
+# Figure 2: SPX and Drawdown (daily)
+panel_lb = panel.loc[start_lb:].copy()
+if not panel_lb.empty:
+    spx_rebased = panel_lb["SPX"] / panel_lb["SPX"].iloc[0] * 100
+    dd_series = -100.0 * (panel_lb["SPX"] / panel_lb["SPX"].cummax() - 1.0)
 
-fig.add_shape(type="line",
-              x0=latest_idx, x1=latest_idx,
-              y0=0, y1=latest_val,
-              line=dict(color="#888888", width=1, dash="dot"))
+    fig2 = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+                         subplot_titles=("SPX and Drawdown (daily)",), specs=[[{"secondary_y": True}]])
+    fig2.add_trace(go.Scatter(x=panel_lb.index, y=spx_rebased, name="SPX (rebased=100)",
+                              line=dict(color="#7f7f7f")), row=1, col=1, secondary_y=False)
+    fig2.add_trace(go.Scatter(x=panel_lb.index, y=dd_series, name="Drawdown (%)",
+                              line=dict(color="#ff7f0e")), row=1, col=1, secondary_y=True)
 
-fig.update_yaxes(title="Score", range=[0,100])
-fig.update_xaxes(tickformat="%b-%d-%y", title="Date")
-fig.update_layout(template="plotly_white", height=520,
-                  legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
-                  margin=dict(l=60, r=40, t=60, b=60))
-st.plotly_chart(fig, use_container_width=True)
+    # pad ranges a bit
+    def pad_range(lo: float, hi: float, pad: float = 0.06):
+        if pd.isna(lo) or pd.isna(hi): return None
+        d = (hi - lo) if hi != lo else (abs(hi) if hi != 0 else 1.0)
+        return lo - d * pad, hi + d * pad
+
+    lr = pad_range(spx_rebased.min(), spx_rebased.max())
+    rr = pad_range(max(0.0, dd_series.min()), dd_series.max())
+    if lr: fig2.update_yaxes(title="Index", range=lr, row=1, col=1, secondary_y=False)
+    if rr: fig2.update_yaxes(title="Drawdown %", range=rr, row=1, col=1, secondary_y=True)
+
+    fig2.update_xaxes(tickformat="%b-%d-%y", title="Date")
+    fig2.update_layout(template="plotly_white", height=520,
+                       legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
+                       margin=dict(l=60, r=40, t=60, b=60))
+    st.plotly_chart(fig2, use_container_width=True)
 
 # ---- Download ----
 with st.expander("Download Data"):
@@ -327,9 +369,10 @@ with st.expander("Download Data"):
     export_scores = (100.0 * scores.rename(columns={
         "VIX_p":"VIX_pct","HY_p":"HY_pct","CurveInv_p":"CurveInv_pct","Fund_p":"Fund_pct","DD_p":"DD_pct"
     })).reindex(export_idx)
+    cols = ["VIX","HY_OAS","HY_OAS_PROXY","T10Y3M","FUND","SPX"] if "HY_OAS_PROXY" in panel.columns else ["VIX","HY_OAS","T10Y3M","FUND","SPX"]
     out = pd.concat(
         [
-            panel.reindex(export_idx)[["VIX","HY_OAS","HY_OAS_PROXY","T10Y3M","FUND","SPX"] if "HY_OAS_PROXY" in panel.columns else ["VIX","HY_OAS","T10Y3M","FUND","SPX"]],
+            panel.reindex(export_idx)[cols],
             export_scores,
             comp_s.rename("Composite")
         ],
