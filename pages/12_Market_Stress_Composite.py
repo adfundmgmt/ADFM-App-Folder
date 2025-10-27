@@ -1,15 +1,15 @@
 ############################################################
 # Market Stress Composite — clean UI, daily panel with live nowcast
-# Built for AD Fund Management LP
-# Design: single composite, regime bands, Daily/Weekly/Monthly regimes,
-#         fixed weights, SPX + Drawdown panel aligned to composite dates.
+# AD Fund Management LP
+# Single composite with regime bands. Daily/Weekly/Monthly regimes.
+# Fixed weights. SPX + Drawdown panel aligned to composite dates.
 ############################################################
 
 # ---- Py3.12 compat shim for pandas_datareader ----
 import sys, types
 import packaging.version
 try:
-    import distutils.version  # some pdr installs import this import
+    import distutils.version
 except Exception:
     _d = types.ModuleType("distutils")
     _dv = types.ModuleType("distutils.version")
@@ -41,7 +41,7 @@ FRED = {
     "spx": "SP500",           # S&P 500 index
 }
 
-# Intraday proxies used only to refresh today's row
+# Intraday proxies used only to refresh today’s row
 PX = {
     "VIX": "^VIX",
     "SPX": "^GSPC",
@@ -53,20 +53,16 @@ PX = {
     "SHY": "SHY",
 }
 
-# ---- Fixed parameters tuned for responsiveness without clutter ----
+# ---- Parameters ----
 DEFAULT_LOOKBACK = "3y"
 PCTL_WINDOW_YEARS = 3
 DEFAULT_SMOOTH = 1
 REGIME_HI, REGIME_LO = 70, 30
-MAX_STALE_BDAYS = 0        # do not accept yesterday as fresh for the composite
-MAX_PROXY_AGE_MIN = 2      # minutes
+MAX_STALE_BDAYS = 0
+MAX_PROXY_AGE_MIN = 2
 
-# ---- LOCKED WEIGHTS (no UI to change) ----
-W_VIX   = 0.25
-W_HY    = 0.25
-W_CURVE = 0.20
-W_FUND  = 0.15
-W_DD    = 0.15
+# ---- LOCKED WEIGHTS ----
+W_VIX, W_HY, W_CURVE, W_FUND, W_DD = 0.25, 0.25, 0.20, 0.15, 0.15
 WEIGHTS_VEC = np.array([W_VIX, W_HY, W_CURVE, W_FUND, W_DD], dtype=float)
 WEIGHTS_VEC = WEIGHTS_VEC / WEIGHTS_VEC.sum()
 
@@ -86,37 +82,27 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("About this tool")
     st.markdown(
-        "- Purpose: a single **risk dial** blending volatility, credit, curve inversion, funding, and SPX drawdown into a 0–100 score.\n"
-        "- Data: daily history from **FRED**, intraday quotes only refresh today’s row.\n"
+        "- Purpose: a single risk dial blending volatility, credit, curve inversion, funding, and SPX drawdown into a 0–100 score.\n"
+        "- Data: daily history from FRED, intraday quotes only refresh today’s row.\n"
         "- Method: percentile rank each factor over 3 years, then combine with fixed weights.\n"
-        "- Interpretation: above 70 = **High stress**, below 30 = **Low stress**, between = **Neutral**.\n"
+        "- Interpretation: above 70 High stress, below 30 Low stress, between Neutral.\n"
         "- UI: top shows Daily, Weekly, Monthly regimes. Bottom adds SPX and drawdown for context."
     )
 
 # ---- Time helpers ----
 NY_TZ = "America/New_York"
-
 def today_naive() -> pd.Timestamp:
     return pd.Timestamp(pd.Timestamp.now(tz=NY_TZ).date())
-
 def to_naive_date_index(obj):
-    if isinstance(obj, pd.Series):
+    if isinstance(obj, (pd.Series, pd.DataFrame)):
         idx = pd.to_datetime(obj.index)
         obj.index = pd.DatetimeIndex(idx.date)
-        return obj
-    if isinstance(obj, pd.DataFrame):
-        idx = pd.to_datetime(obj.index)
-        obj.index = pd.DatetimeIndex(idx.date)
-        return obj
     return obj
-
 def as_naive_date(ts_like) -> pd.Timestamp:
     t = pd.to_datetime(ts_like)
     return pd.Timestamp(t.date())
-
 def is_fresh(ts, max_age_min=MAX_PROXY_AGE_MIN):
-    if ts is None or pd.isna(ts):
-        return False
+    if ts is None or pd.isna(ts): return False
     now = pd.Timestamp.now(tz=NY_TZ)
     t = ts if getattr(ts, "tzinfo", None) else pd.Timestamp(ts).tz_localize(NY_TZ)
     return (now - t).total_seconds() / 60.0 <= max_age_min
@@ -126,8 +112,7 @@ def is_fresh(ts, max_age_min=MAX_PROXY_AGE_MIN):
 def fred_series(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
     try:
         s = pdr.DataReader(series, "fred", start, end)[series]
-        s = s.ffill().dropna()
-        return to_naive_date_index(s)
+        return to_naive_date_index(s.ffill().dropna())
     except Exception:
         return pd.Series(dtype=float)
 
@@ -138,21 +123,17 @@ def yf_last_minute(tickers):
         for tk in tickers:
             h = yf.Ticker(tk).history(period="5d", interval="1m")
             if not h.empty:
-                if h.index.tz is None:
-                    h.index = h.index.tz_localize(NY_TZ)
-                else:
-                    h.index = h.index.tz_convert(NY_TZ)
+                if h.index.tz is None: h.index = h.index.tz_localize(NY_TZ)
+                else: h.index = h.index.tz_convert(NY_TZ)
                 data[tk] = h["Close"].copy()
         return pd.concat(data, axis=1) if data else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
 def latest_quote(df_1m: pd.DataFrame, symbol: str):
-    if df_1m.empty or symbol not in df_1m.columns:
-        return np.nan, None
+    if df_1m.empty or symbol not in df_1m.columns: return np.nan, None
     s = df_1m[symbol].dropna()
-    if s.empty:
-        return np.nan, None
+    if s.empty: return np.nan, None
     return float(s.iloc[-1]), s.index[-1]
 
 def rolling_percentile_daily(s: pd.Series, window_days: int) -> pd.Series:
@@ -166,7 +147,6 @@ def rolling_percentile_daily(s: pd.Series, window_days: int) -> pd.Series:
 # ---- Load FRED daily history ----
 today = today_naive()
 start_all = as_naive_date(today - pd.DateOffset(years=12))
-
 vix_f   = fred_series(FRED["vix"], start_all, today)
 hy_f    = fred_series(FRED["hy_oas"], start_all, today)
 yc_f    = fred_series(FRED["yc_10y_3m"], start_all, today)
@@ -183,11 +163,9 @@ if not any((not s.dropna().empty) for s in series_list):
 # ---- Business-day panel ----
 bidx_start = min(s.index.min() for s in series_list if not s.dropna().empty)
 bidx = pd.bdate_range(as_naive_date(bidx_start), today)
-
 def to_bidx(s):
     s = to_naive_date_index(s)
     return s.reindex(bidx).ffill()
-
 panel = pd.DataFrame({
     "VIX": to_bidx(vix_f),
     "HY_OAS": to_bidx(hy_f),
@@ -197,7 +175,7 @@ panel = pd.DataFrame({
 }).dropna(how="all")
 panel = to_naive_date_index(panel)
 
-# ---- Freshness masks for daily data ----
+# ---- Freshness masks ----
 def fresh_mask_bdays(original: pd.Series) -> pd.Series:
     original = to_naive_date_index(original)
     obs = original.reindex(panel.index)
@@ -206,21 +184,14 @@ def fresh_mask_bdays(original: pd.Series) -> pd.Series:
     last_pos = pd.Series(np.where(has, pos, np.nan), index=panel.index).ffill().values
     age = pos - last_pos
     return pd.Series((~np.isnan(age)) & (age <= MAX_STALE_BDAYS), index=panel.index)
+m_vix, m_hy, m_yc, m_fund, m_dd = map(fresh_mask_bdays, [vix_f, hy_f, yc_f, fund_f, spx_f])
 
-m_vix  = fresh_mask_bdays(vix_f)
-m_hy   = fresh_mask_bdays(hy_f)
-m_yc   = fresh_mask_bdays(yc_f)
-m_fund = fresh_mask_bdays(fund_f)
-m_dd   = fresh_mask_bdays(spx_f)
-
-# ---- Intraday nowcast: refresh today's row only, quietly ----
+# ---- Intraday nowcast: refresh today’s row only ----
 if use_nowcast:
     px_last = yf_last_minute(list(PX.values()))
     if not px_last.empty:
         tb = today_naive()
-        def q(sym):
-            v, ts = latest_quote(px_last, sym)
-            return v, ts
+        q = lambda sym: latest_quote(px_last, sym)
         vix_q, vix_ts = q(PX["VIX"])
         spx_q, spx_ts = q(PX["SPX"])
         tnx_q, tnx_ts = q(PX["TNX"])
@@ -236,23 +207,23 @@ if use_nowcast:
             panel.loc[tb, "SPX"] = spx_q; m_dd.loc[tb] = True
         if is_fresh(tnx_ts) and is_fresh(irx_ts) and not np.isnan(tnx_q) and not np.isnan(irx_q):
             panel.loc[tb, "T10Y3M"] = tnx_q - irx_q; m_yc.loc[tb] = True
+        # CREDIT PROXY FIX: wider credit => higher value
         if is_fresh(hyg_ts) and is_fresh(lqd_ts) and not np.isnan(hyg_q) and not np.isnan(lqd_q):
-            panel["HY_OAS_PROXY"] = panel.get("HY_OAS_PROXY", pd.Series(index=panel.index))
-            panel.loc[tb, "HY_OAS_PROXY"] = -(hyg_q / lqd_q)  # wider credit = higher stress
+            panel["HY_OAS_PROXY"] = panel.get("HY_OAS_PROXY", pd.Series(index=panel.index, dtype=float))
+            panel.loc[tb, "HY_OAS_PROXY"] = (lqd_q / hyg_q) - 1.0  # higher when credit widens
+            # do not flip m_hy if HY_OAS proper is present for the same date
+        # Funding proxy stand-in: higher ratio ~ tighter
         if is_fresh(bil_ts) and is_fresh(shy_ts) and not np.isnan(bil_q) and not np.isnan(shy_q):
             panel.loc[tb, "FUND"] = bil_q / shy_q; m_fund.loc[tb] = True
 
-# Use HY_OAS, but fall back to proxy where HY_OAS is missing
-hy_used = panel["HY_OAS"].combine_first(panel.get("HY_OAS_PROXY", pd.Series(index=panel.index)))
+# Use HY_OAS, fall back to proxy where missing
+hy_used = panel["HY_OAS"].combine_first(panel.get("HY_OAS_PROXY", pd.Series(index=panel.index, dtype=float)))
 
-# ---- Scores (percentiles over shorter window) ----
+# ---- Scores ----
 window_days = int(PCTL_WINDOW_YEARS * 365)
-
-# SPX drawdown on the full business-day panel
 roll_max = panel["SPX"].dropna().cummax()
 dd_all = 100.0 * (panel["SPX"] / roll_max - 1.0)
 stress_dd = -dd_all.clip(upper=0)
-
 inv_curve = -panel["T10Y3M"]
 
 pct_vix   = rolling_percentile_daily(panel["VIX"], window_days)
@@ -269,13 +240,9 @@ scores_all = to_naive_date_index(scores_all)
 start_lb = as_naive_date(today - pd.DateOffset(years=years))
 scores = scores_all.loc[start_lb:].copy()
 if DEFAULT_SMOOTH > 1:
-    scores = scores.rolling(DEFAULT_SMOOTH, min_periods=1).mean()
-    scores = to_naive_date_index(scores)
+    scores = to_naive_date_index(scores.rolling(DEFAULT_SMOOTH, min_periods=1).mean())
 
-def _align(m):
-    m = to_naive_date_index(m)
-    return m.reindex(scores.index).astype(float).fillna(0.0)
-
+def _align(m): return to_naive_date_index(m).reindex(scores.index).astype(float).fillna(0.0)
 masks = pd.concat([_align(m_vix), _align(m_hy), _align(m_yc), _align(m_fund), _align(m_dd)], axis=1)
 masks.columns = ["VIX_m","HY_m","Curve_m","Fund_m","DD_m"]
 
@@ -284,54 +251,41 @@ X = scores[["VIX_p","HY_p","CurveInv_p","Fund_p","DD_p"]].values
 M = masks.values
 active_w = (W * M).sum(axis=1)
 comp = np.where(active_w > 0, 100.0 * (X * W * M).sum(axis=1) / active_w, np.nan)
-comp_s = pd.Series(comp, index=scores.index, name="Composite")
+comp_s = pd.Series(comp, index=scores.index, name="Composite").dropna()
 
-if comp_s.dropna().empty:
+if comp_s.empty:
     st.error("Composite has no valid points for the selected window.")
     st.stop()
 
-# ---- Validity filter and canonical index ----
-valid_idx = comp_s.dropna().index
-comp_s = comp_s.reindex(valid_idx)
-
-# ---- Regime helpers (fix SyntaxError source) ----
+# ---- Regime helpers ----
 def regime_label(x: float) -> str:
-    if pd.isna(x):
-        return "N/A"
-    if x >= REGIME_HI:
-        return "High stress"
-    if x <= REGIME_LO:
-        return "Low stress"
+    if pd.isna(x): return "N/A"
+    if x >= REGIME_HI: return "High stress"
+    if x <= REGIME_LO: return "Low stress"
     return "Neutral"
-
 def bday_mean(series: pd.Series, n: int) -> float:
     ser = series.dropna()
-    if ser.empty:
-        return np.nan
-    return float(ser.tail(n).mean())
+    return float(ser.tail(n).mean()) if not ser.empty else np.nan
 
 latest_idx = comp_s.index[-1]
 latest_val = float(comp_s.iloc[-1])
 weekly_val = bday_mean(comp_s, 5)
 monthly_val = bday_mean(comp_s, 21)
 
-# ---- Clean top summary ----
+# ---- Summary ----
 st.info(f"As of {latest_idx.date()} | Weights: VIX {W_VIX:.2f}, HY {W_HY:.2f}, Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}")
-
 c1, c2, c3 = st.columns(3)
 c1.metric("Daily regime", regime_label(latest_val), f"{latest_val:.0f}")
 c2.metric("Weekly regime", regime_label(weekly_val), f"{weekly_val:.0f}" if not pd.isna(weekly_val) else "N/A")
 c3.metric("Monthly regime", regime_label(monthly_val), f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
 
 # ---- Charts ----
-# Canonical index for both panes to ensure alignment
-canon_idx = valid_idx  # strictly the composite's valid business-day dates
-panel_view = panel.reindex(canon_idx).ffill()  # align SPX to composite dates only
+canon_idx = comp_s.index
+panel_view = panel.reindex(canon_idx).ffill()
 
-# Figure 1: Composite with regime bands
+# Figure 1: Composite
 fig1 = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
                      subplot_titles=("Market Stress Composite",))
-
 fig1.add_trace(go.Scatter(x=canon_idx, y=comp_s.values, name="Composite",
                           line=dict(color="#111111", width=2)))
 fig1.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10)")
@@ -345,15 +299,13 @@ fig1.update_layout(template="plotly_white", height=520,
                    margin=dict(l=60, r=40, t=60, b=60))
 st.plotly_chart(fig1, use_container_width=True)
 
-# Figure 2: SPX and Drawdown (daily) aligned to canon_idx
+# Figure 2: SPX and Drawdown aligned
 if not panel_view.empty and "SPX" in panel_view.columns:
     spx_series = panel_view["SPX"].dropna()
     if not spx_series.empty:
         base_val = spx_series.iloc[0]
         spx_rebased = (panel_view["SPX"] / base_val) * 100
-        # Drawdown computed over the aligned window to ensure perfect alignment
         dd_series = -100.0 * (panel_view["SPX"] / panel_view["SPX"].cummax() - 1.0)
-
         fig2 = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.04,
                              subplot_titles=("SPX and Drawdown (daily)",),
                              specs=[[{"secondary_y": True}]])
@@ -361,26 +313,29 @@ if not panel_view.empty and "SPX" in panel_view.columns:
                                   line=dict(color="#7f7f7f")), row=1, col=1, secondary_y=False)
         fig2.add_trace(go.Scatter(x=canon_idx, y=dd_series.values, name="Drawdown (%)",
                                   line=dict(color="#ff7f0e")), row=1, col=1, secondary_y=True)
-
-        # pad ranges a bit
-        def pad_range(lo: float, hi: float, pad: float = 0.06):
-            if pd.isna(lo) or pd.isna(hi):
-                return None
-            d = (hi - lo) if hi != lo else (abs(hi) if hi != 0 else 1.0)
-            return lo - d * pad, hi + d * pad
-
-        lr = pad_range(float(np.nanmin(spx_rebased.values)), float(np.nanmax(spx_rebased.values)))
-        rr = pad_range(float(max(0.0, np.nanmin(dd_series.values))), float(np.nanmax(dd_series.values)))
-        if lr:
-            fig2.update_yaxes(title="Index", range=lr, row=1, col=1, secondary_y=False)
-        if rr:
-            fig2.update_yaxes(title="Drawdown %", range=rr, row=1, col=1, secondary_y=True)
-
         fig2.update_xaxes(tickformat="%b-%d-%y", title="Date")
         fig2.update_layout(template="plotly_white", height=520,
                            legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
                            margin=dict(l=60, r=40, t=60, b=60))
         st.plotly_chart(fig2, use_container_width=True)
+
+# ---- Diagnostics ----
+with st.expander("Diagnostics"):
+    latest = canon_idx[-1]
+    diag = pd.DataFrame({
+        "raw_VIX": [panel.loc[latest, "VIX"]],
+        "raw_HY_used": [hy_used.loc[latest]],
+        "raw_curve_inv": [inv_curve.reindex(panel.index).loc[latest]],
+        "raw_fund": [panel.loc[latest, "FUND"]],
+        "raw_dd_stress": [stress_dd.reindex(panel.index).loc[latest]],
+        "pct_VIX": [scores_all.loc[latest, "VIX_p"]],
+        "pct_HY": [scores_all.loc[latest, "HY_p"]],
+        "pct_CurveInv": [scores_all.loc[latest, "CurveInv_p"]],
+        "pct_Fund": [scores_all.loc[latest, "Fund_p"]],
+        "pct_DD": [scores_all.loc[latest, "DD_p"]],
+        "Composite": [latest_val],
+    })
+    st.dataframe(diag.T, use_container_width=True)
 
 # ---- Download ----
 with st.expander("Download Data"):
@@ -390,11 +345,7 @@ with st.expander("Download Data"):
     }))
     cols = ["VIX","HY_OAS","HY_OAS_PROXY","T10Y3M","FUND","SPX"] if "HY_OAS_PROXY" in panel.columns else ["VIX","HY_OAS","T10Y3M","FUND","SPX"]
     out = pd.concat(
-        [
-            panel.reindex(export_idx)[cols],
-            export_scores,
-            comp_s.reindex(export_idx).rename("Composite")
-        ],
+        [panel.reindex(export_idx)[cols], export_scores, comp_s.reindex(export_idx).rename("Composite")],
         axis=1
     )
     out.index.name = "Date"
