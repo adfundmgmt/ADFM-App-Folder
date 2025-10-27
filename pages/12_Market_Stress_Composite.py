@@ -74,13 +74,6 @@ with st.sidebar:
     w_fund  = st.slider("Funding (CP − T-bill)", 0.0, 1.0, 0.15, 0.05)
     w_dd    = st.slider("SPX Drawdown", 0.0, 1.0, 0.15, 0.05)
 
-    st.subheader("Nowcast")
-    use_nowcast = st.checkbox("Use intraday proxies to update today", value=True)
-    auto_refresh = st.checkbox("Auto refresh every 60 seconds", value=False)
-    if auto_refresh:
-        st.autorefresh(interval=60_000, key="autorf")
-    st.caption("Daily history from FRED, intraday quotes from Yahoo Finance")
-
 # ---- Time helpers ----
 NY_TZ = "America/New_York"
 
