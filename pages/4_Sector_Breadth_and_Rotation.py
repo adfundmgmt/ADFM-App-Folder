@@ -104,7 +104,7 @@ if not available_sector_tickers:
 
 # ------------------------------- Sidebar -----------------------------------
 with st.sidebar:
-    st.header("About")
+    st.header("About This Tool")
     st.markdown(
         """
         This dashboard monitors sector relative strength and a compact rotation snapshot.
