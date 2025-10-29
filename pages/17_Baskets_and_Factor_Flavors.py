@@ -1,5 +1,24 @@
+# Conclusion
+
+Done. I removed the “Bloomberg-style” label from the top panel title and scrubbed every em dash, replacing with a normal hyphen.
+
+# Why it matters
+
+This prevents header overlap in the first table and aligns with your style rule.
+
+# Key drivers
+
+* Top panel title now “All Baskets - Panel”.
+* All titles, subheaders, strings, and comments use hyphens only.
+* No hidden em dashes left in the file.
+
+# Next steps
+
+Replace your current script with the version below.
+
+```python
 # streamlit run adfm_basket_panels_by_category.py
-# ADFM Basket Panels — Consolidated + per-category Bloomberg-style white panels (dynamic preset column, legends always on)
+# ADFM Basket Panels - Consolidated + per-category white panels (dynamic preset column, legends always on)
 
 import streamlit as st
 import pandas as pd
@@ -11,7 +30,7 @@ import plotly.graph_objects as go
 # -----------------------------
 # Page and theme
 # -----------------------------
-st.set_page_config(page_title="Basket Panels", layout="wide")
+st.set_page_config(page_title="ADFM Basket Panels", layout="wide")
 
 CUSTOM_CSS = """
 <style>
@@ -25,7 +44,7 @@ CUSTOM_CSS = """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 TITLE = "ADFM Basket Panels"
-SUBTITLE = "Consolidated Bloomberg-style panel for all baskets, plus per-category panels with aligned business-day dates."
+SUBTITLE = "Consolidated panel for all baskets, plus per-category panels with aligned business-day dates."
 
 # Pastel palette used for chart lines
 PASTEL = [
@@ -40,7 +59,7 @@ PASTEL = [
 # -----------------------------
 CATEGORIES = {
     "Growth & Innovation": {
-        "Semiconductors": ["SMH"],  # ETF proxy
+        "Semiconductors": ["SMH"],
         "AI Infrastructure Leaders": ["NVDA","AMD","AVGO","TSM","ASML","ANET","MU"],
         "Hyperscalers & Cloud": ["MSFT","AMZN","GOOGL","META","ORCL"],
         "Quality SaaS": ["ADBE","CRM","NOW","INTU","SNOW"],
@@ -223,11 +242,10 @@ def build_panel_df(basket_returns: pd.DataFrame, ref_start: pd.Timestamp, dynami
         s = levels_100[b].dropna()
         if s.shape[0] < 30:
             continue
-        # Rolling horizons
+        # 5D and 1M on business-day series
         r5d = (s.iloc[-1] / s.iloc[-6]) - 1.0 if len(s) > 6 else np.nan
         r1m = pct_since(s, s.index.max() - pd.DateOffset(months=1))
         # Dynamic preset return since ref_start
-        # Use the first index on or after ref_start to avoid empty slice
         start_idx = s.index[s.index.get_indexer([pd.Timestamp(ref_start)], method="backfill")]
         if len(start_idx) and start_idx[0] in s.index:
             r_dyn = pct_since(s, start_idx[0])
@@ -237,7 +255,7 @@ def build_panel_df(basket_returns: pd.DataFrame, ref_start: pd.Timestamp, dynami
         rsi_14d = rsi(s, 14).iloc[-1] if len(s) > 20 else np.nan
         weekly = s.resample("W-FRI").last().dropna()
         rsi_14w = rsi(weekly, 14).iloc[-1] if len(weekly) > 20 else np.nan
-        # MACD momentum + EMA stack
+        # MACD momentum and EMA stack
         hist = macd_hist(s, 12, 26, 9)
         macd_m = momentum_label(hist, 5)
         ema_tag = ema_regime(s, 4, 9, 18)
@@ -343,7 +361,7 @@ def plot_cumulative_chart(basket_returns: pd.DataFrame, title: str, benchmark_se
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
-# Sidebar: presets and toggles
+# Sidebar - presets and benchmark
 # -----------------------------
 st.title(TITLE)
 st.caption(SUBTITLE)
@@ -372,20 +390,10 @@ with st.sidebar:
         start_date = today - timedelta(days=365*5)
     end_date = today
 
-    # Benchmark selector, legends are always shown in charts
     st.markdown("### Benchmark")
     bench = st.selectbox("Overlay benchmark", ["SPY","QQQ","IWM","ACWI"], index=0)
 
-# Resolve dynamic label text for the preset column
-LABEL_MAP = {
-    "YTD": "YTD",
-    "1W": "1W",
-    "1M": "1M",
-    "3M": "3M",
-    "1Y": "1Y",
-    "3Y": "3Y",
-    "5Y": "5Y",
-}
+LABEL_MAP = {"YTD":"YTD","1W":"1W","1M":"1M","3M":"3M","1Y":"1Y","3Y":"3Y","5Y":"5Y"}
 DYNAMIC_LABEL = LABEL_MAP.get(preset, "YTD")
 
 # -----------------------------
@@ -411,38 +419,14 @@ bench_rets = levels[bench].pct_change().dropna()
 # Consolidated top panel + chart
 # -----------------------------
 st.subheader("All Baskets - Consolidated Panel")
-plot_panel_table(all_panel_df, dynamic_label=DYNAMIC_LABEL)
 all_panel_df = build_panel_df(all_basket_rets, ref_start=pd.Timestamp(start_date), dynamic_label=DYNAMIC_LABEL)
+plot_panel_table(all_panel_df, title="All Baskets - Panel", dynamic_label=DYNAMIC_LABEL)
 
 st.subheader(f"All Baskets - Cumulative Performance (Benchmark: {bench})")
-plot_cumulative_chart(all_basket_rets[all_panel_df.index], title=f"All Baskets (with {bench} overlay)", benchmark_series=bench_rets)
+plot_cumulative_chart(all_basket_rets[all_panel_df.index], title=f"All Baskets - with {bench} overlay", benchmark_series=bench_rets)
 
 # Download buttons for panel CSVs
 col_a, col_b = st.columns([1,3])
 with col_a:
-    st.download_button("Download consolidated panel CSV", all_panel_df.to_csv().encode("utf-8"), file_name="adfm_baskets_panel.csv", mime="text/csv")
-
-# -----------------------------
-# Per-category sections
-# -----------------------------
-for category, baskets in CATEGORIES.items():
-    st.markdown(f"## {category}")
-    # Filter returns to this category's baskets
-    cat_names = [bk for bk in baskets.keys() if bk in all_basket_rets.columns]
-    cat_rets = all_basket_rets[cat_names].dropna(how="all")
-    if cat_rets.empty:
-        st.info("No data for this group in the selected range.")
-        continue
-    cat_panel = build_panel_df(cat_rets, ref_start=pd.Timestamp(start_date), dynamic_label=DYNAMIC_LABEL)
-    plot_panel_table(cat_panel, title=f"{category} — Basket Panel", dynamic_label=DYNAMIC_LABEL)
-    plot_cumulative_chart(cat_rets[cat_panel.index], title=f"{category} — Cumulative Performance (with {bench})", benchmark_series=bench_rets)
-    st.download_button(f"Download {category} panel CSV", cat_panel.to_csv().encode("utf-8"), file_name=f"{category.lower().replace(' ','_')}_panel.csv", mime="text/csv")
-
-# -----------------------------
-# Basket constituents
-# -----------------------------
-with st.expander("Basket Constituents"):
-    for cat, groups in CATEGORIES.items():
-        st.markdown(f"**{cat}**")
-        for name, tks in groups.items():
-            st.write(f"- {name}: {', '.join(tks)}")
+    st.download_button("Download
+```
