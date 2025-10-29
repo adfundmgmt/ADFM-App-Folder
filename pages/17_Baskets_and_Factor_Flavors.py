@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 # -----------------------------
 # Page and theme
 # -----------------------------
-st.set_page_config(page_title="ADFM Basket Panels", layout="wide")
+st.set_page_config(page_title="Basket Panels", layout="wide")
 
 CUSTOM_CSS = """
 <style>
@@ -410,11 +410,10 @@ bench_rets = levels[bench].pct_change().dropna()
 # -----------------------------
 # Consolidated top panel + chart
 # -----------------------------
-st.subheader("All Baskets — Consolidated Panel")
+st.subheader("All Baskets - Consolidated Panel")
 all_panel_df = build_panel_df(all_basket_rets, ref_start=pd.Timestamp(start_date), dynamic_label=DYNAMIC_LABEL)
-plot_panel_table(all_panel_df, title="All Baskets — Bloomberg-Style Panel", dynamic_label=DYNAMIC_LABEL)
 
-st.subheader(f"All Baskets — Cumulative Performance (Benchmark: {bench})")
+st.subheader(f"All Baskets - Cumulative Performance (Benchmark: {bench})")
 plot_cumulative_chart(all_basket_rets[all_panel_df.index], title=f"All Baskets (with {bench} overlay)", benchmark_series=bench_rets)
 
 # Download buttons for panel CSVs
