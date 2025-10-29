@@ -1,5 +1,5 @@
 # streamlit run adfm_basket_panels_by_category.py
-# ADFM Basket Panels — Consolidated + per-category Bloomberg-style white panels
+# ADFM Basket Panels — Consolidated + per-category Bloomberg-style white panels (refined UI)
 
 import streamlit as st
 import pandas as pd
@@ -8,10 +8,26 @@ import yfinance as yf
 from datetime import date, timedelta
 import plotly.graph_objects as go
 
+# -----------------------------
+# Page and theme
+# -----------------------------
 st.set_page_config(page_title="ADFM Basket Panels", layout="wide")
 
+# Global typography and spacing tweaks for a clean, Bloomberg-like white panel
+CUSTOM_CSS = """
+<style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px;}
+    h1, h2, h3 {font-weight: 600; letter-spacing: 0.15px;}
+    .stPlotlyChart {background: #ffffff;}
+    .sidebar-content {padding-top: 0.5rem;}
+    /* tighter table text */
+    .js-plotly-plot .table .cell {font-size: 12px;}
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
 TITLE = "ADFM Basket Panels"
-SUBTITLE = "Consolidated Bloomberg-style panel for ALL baskets, plus a per-category panel and chart for each group."
+SUBTITLE = "Consolidated Bloomberg-style panel for all baskets, plus per-category panels with aligned business-day dates."
 
 # Pastel palette used for chart lines
 PASTEL = [
@@ -26,7 +42,7 @@ PASTEL = [
 # -----------------------------
 CATEGORIES = {
     "Growth & Innovation": {
-        "Semiconductors": ["SMH"],  # ETF proxy
+        "Semiconductors": ["SMH"],
         "AI Infrastructure Leaders": ["NVDA","AMD","AVGO","TSM","ASML","ANET","MU"],
         "Hyperscalers & Cloud": ["MSFT","AMZN","GOOGL","META","ORCL"],
         "Quality SaaS": ["ADBE","CRM","NOW","INTU","SNOW"],
@@ -96,7 +112,6 @@ CATEGORIES = {
     }
 }
 
-# Flatten to a dict of all baskets
 ALL_BASKETS = {bk: tks for cat in CATEGORIES.values() for bk, tks in cat.items()}
 
 # -----------------------------
@@ -105,15 +120,20 @@ ALL_BASKETS = {bk: tks for cat in CATEGORIES.values() for bk, tks in cat.items()
 @st.cache_data(show_spinner=False)
 def fetch_daily_levels(tickers, start, end):
     df = yf.download(list(set(tickers)), start=start, end=end, auto_adjust=True, progress=False)["Close"]
-    if isinstance(df, pd.Series): df = df.to_frame()
-    return df.sort_index()
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    df = df.sort_index()
+    # Align to business days to standardize hover and panel dates
+    bidx = pd.bdate_range(df.index.min(), df.index.max(), name=df.index.name)
+    return df.reindex(bidx).ffill()
 
 def ew_rets_from_levels(levels: pd.DataFrame, baskets: dict) -> pd.DataFrame:
     rets = levels.pct_change()
     out = {}
     for b, tks in baskets.items():
         cols = [c for c in tks if c in rets.columns]
-        if not cols: continue
+        if not cols:
+            continue
         out[b] = rets[cols].mean(axis=1, skipna=True) if len(cols) > 1 else rets[cols[0]]
     return pd.DataFrame(out).dropna(how="all")
 
@@ -143,11 +163,13 @@ def ema_regime(series: pd.Series, e1=4, e2=9, e3=18) -> str:
     return "Neutral"
 
 def momentum_label(hist: pd.Series, lookback: int = 5) -> str:
-    if hist.empty: return "Neutral"
+    if hist.empty:
+        return "Neutral"
     latest = hist.iloc[-1]
     ref = hist.iloc[-lookback] if len(hist) > lookback else hist.iloc[0]
     base = "Positive" if latest > 0 else ("Negative" if latest < 0 else "Neutral")
-    if base == "Neutral": return "Neutral"
+    if base == "Neutral":
+        return "Neutral"
     return f"{base} {'Strengthening' if latest - ref > 0 else 'Weakening'}"
 
 def realized_vol(returns: pd.Series, days: int = 63, ann: int = 252) -> float:
@@ -174,9 +196,9 @@ def color_ret(x):
 
 def color_rsi(x):
     if pd.isna(x): return "white"
-    if x >= 70: return "rgb(255,237,170)"    # soft amber
-    if x <= 30: return "rgb(255,210,210)"    # soft red
-    return "rgb(230,236,245)"                # neutral
+    if x >= 70: return "rgb(255,237,170)"
+    if x <= 30: return "rgb(255,210,210)"
+    return "rgb(230,236,245)"
 
 def color_macd(tag):
     if not isinstance(tag, str): return "white"
@@ -201,18 +223,23 @@ def build_panel_df(basket_returns: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for b in levels_100.columns:
         s = levels_100[b].dropna()
-        if s.shape[0] < 30: 
+        if s.shape[0] < 30:
             continue
+        # 5D and 1M on business-day series
         r5d = (s.iloc[-1] / s.iloc[-6]) - 1.0 if len(s) > 6 else np.nan
         r1m = pct_since(s, s.index.max() - pd.DateOffset(months=1))
+        # YTD from Jan 1
         y_start = pd.Timestamp(year=s.index.max().year, month=1, day=1, tz=getattr(s.index.max(),"tz",None))
         rytd = pct_since(s, y_start)
+        # RSI daily and weekly
         rsi_14d = rsi(s, 14).iloc[-1] if len(s) > 20 else np.nan
         weekly = s.resample("W-FRI").last().dropna()
         rsi_14w = rsi(weekly, 14).iloc[-1] if len(weekly) > 20 else np.nan
+        # MACD momentum + EMA stack
         hist = macd_hist(s, 12, 26, 9)
         macd_m = momentum_label(hist, 5)
         ema_tag = ema_regime(s, 4, 9, 18)
+        # 3M RVOL on returns
         rv = realized_vol(basket_returns[b], 63, 252)
         rows.append({
             "Basket": b,
@@ -234,7 +261,7 @@ def plot_panel_table(panel_df: pd.DataFrame, title: str):
     headers = ["Basket","%5D","%1M","↓ %YTD","RSI 14D","MACD Momentum","EMA 4/9/18","RSI 14W","3M RVOL"]
     values = [panel_df.index.tolist()]
     fill_colors = [["white"] * len(panel_df)]
-    # build colorized columns
+    # colorized columns
     for col in ["%5D","%1M","↓ %YTD"]:
         vals = panel_df[col].tolist()
         values.append(vals)
@@ -245,21 +272,44 @@ def plot_panel_table(panel_df: pd.DataFrame, title: str):
     vals = panel_df["RSI 14W"].tolist(); values.append(vals); fill_colors.append([color_rsi(v) for v in vals])
     vals = panel_df["3M RVOL"].tolist(); values.append(vals); fill_colors.append([color_vol(v) for v in vals])
 
+    # column widths for better legibility
+    col_widths = [0.28, 0.08, 0.08, 0.10, 0.10, 0.16, 0.12, 0.08, 0.10]
+
     fig_tbl = go.Figure(data=[go.Table(
-        header=dict(values=headers, fill_color="white", line_color="rgb(230,230,230)",
-                    font=dict(color="black", size=13), align="left", height=32),
-        cells=dict(values=values, fill_color=fill_colors, line_color="rgb(240,240,240)",
-                   font=dict(color="black", size=12), align="left", height=28,
-                   format=[None, ".1f", ".1f", ".1f", ".2f", None, None, ".2f", ".1f"])
+        columnwidth=[int(w*1000) for w in col_widths],
+        header=dict(
+            values=headers,
+            fill_color="white",
+            line_color="rgb(230,230,230)",
+            font=dict(color="black", size=13),
+            align="left",
+            height=32
+        ),
+        cells=dict(
+            values=values,
+            fill_color=fill_colors,
+            line_color="rgb(240,240,240)",
+            font=dict(color="black", size=12),
+            align="left",
+            height=26,
+            format=[None, ".1f", ".1f", ".1f", ".2f", None, None, ".2f", ".1f"]
+        )
     )])
     # height scales with rows
-    h = 60 + 28 * max(3, len(panel_df))
-    fig_tbl.update_layout(title=dict(text=title, x=0, xanchor="left", y=0.95),
-                          margin=dict(l=0,r=0,t=30,b=0), height=min(900, h))
+    h = 64 + 26 * max(3, len(panel_df))
+    fig_tbl.update_layout(
+        title=dict(text=title, x=0, xanchor="left", y=0.95),
+        margin=dict(l=0,r=0,t=30,b=0),
+        height=min(900, h)
+    )
     st.plotly_chart(fig_tbl, use_container_width=True)
 
-def plot_cumulative_chart(basket_returns: pd.DataFrame, title: str):
-    cum_pct = ((1 + basket_returns).cumprod() - 1.0) * 100.0
+def plot_cumulative_chart(basket_returns: pd.DataFrame, title: str, benchmark_series: pd.Series, show_legend: bool=False):
+    # Align index and compute cumulative pct
+    common_index = basket_returns.index.intersection(benchmark_series.index)
+    cum_pct = ((1 + basket_returns.loc[common_index]).cumprod() - 1.0) * 100.0
+    bm_cum = ((1 + benchmark_series.loc[common_index]).cumprod() - 1.0) * 100.0
+
     fig = go.Figure()
     for i, b in enumerate(cum_pct.columns):
         fig.add_trace(go.Scatter(
@@ -269,18 +319,23 @@ def plot_cumulative_chart(basket_returns: pd.DataFrame, title: str):
             name=b,
             hovertemplate=f"{b}<br>% Cum: %{ '{y:.1f}' }%<extra></extra>"
         ))
-    # SPY overlay
-    spy_cum = ((1 + levels["SPY"].pct_change().dropna()).cumprod() - 1.0) * 100.0
+    # Benchmark overlay
     fig.add_trace(go.Scatter(
-        x=spy_cum.index, y=spy_cum.values,
+        x=bm_cum.index, y=bm_cum.values,
         mode="lines",
         line=dict(width=2, dash="dash", color="#888"),
-        name="SPY",
-        hovertemplate="SPY<br>% Cum: %{y:.1f}%<extra></extra>"
+        name="Benchmark",
+        hovertemplate="Benchmark<br>% Cum: %{y:.1f}%<extra></extra>"
     ))
-    fig.update_layout(showlegend=False, hovermode="x unified", yaxis_title="Cumulative return, %",
-                      title=dict(text=title, x=0, xanchor="left", y=0.95),
-                      margin=dict(l=10, r=10, t=35, b=10))
+    fig.update_layout(
+        showlegend=show_legend,  # default off, toggle via sidebar
+        hovermode="x unified",
+        yaxis_title="Cumulative return, %",
+        title=dict(text=title, x=0, xanchor="left", y=0.95),
+        margin=dict(l=10, r=10, t=35, b=10),
+        xaxis=dict(showspikes=True, spikemode="across", spikesnap="cursor", showgrid=True),
+        yaxis=dict(zeroline=False, showgrid=True)
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
@@ -291,7 +346,7 @@ st.caption(SUBTITLE)
 
 with st.sidebar:
     st.markdown("### About This Tool")
-    st.write("All metrics computed from **daily** data: %5D, %1M, %YTD, RSI-14D/W, MACD momentum, EMA 4/9/18 regime, 3M RVOL. Equal-weight inside each basket.")
+    st.write("Daily metrics: %5D, %1M, %YTD, RSI-14D/W, MACD momentum, EMA 4/9/18, 3M RVOL. Equal-weight inside each basket. Business-day alignment for consistent panels and hover.")
     st.divider()
     st.markdown("### Controls")
     today = date.today()
@@ -313,12 +368,18 @@ with st.sidebar:
         start_date = today - timedelta(days=365*5)
     end_date = today
 
+    # Optional: legend toggle for power users
+    legend_toggle = st.checkbox("Show legend on charts", value=False)
     show_category_charts = st.checkbox("Show per-category cumulative charts", value=True)
+
+    # Benchmark selector
+    st.markdown("### Benchmark")
+    bench = st.selectbox("Overlay benchmark", ["SPY","QQQ","IWM","ACWI"], index=0)
 
 # -----------------------------
 # Data fetch once
 # -----------------------------
-need = {"SPY"}
+need = {bench}
 for tks in ALL_BASKETS.values():
     need.update(tks)
 levels = fetch_daily_levels(sorted(list(need)), start=pd.to_datetime(start_date), end=pd.to_datetime(end_date) + pd.Timedelta(days=1))
@@ -328,6 +389,12 @@ if levels.empty:
 
 all_basket_rets = ew_rets_from_levels(levels, ALL_BASKETS)
 
+# Guard against missing benchmark
+if bench not in levels.columns or levels[bench].dropna().empty:
+    st.warning(f"Benchmark {bench} missing or empty, falling back to SPY.")
+    bench = "SPY"
+bench_rets = levels[bench].pct_change().dropna()
+
 # -----------------------------
 # Consolidated top panel + chart
 # -----------------------------
@@ -335,8 +402,13 @@ st.subheader("All Baskets — Consolidated Panel")
 all_panel_df = build_panel_df(all_basket_rets)
 plot_panel_table(all_panel_df, title="All Baskets — Bloomberg-Style Panel")
 
-st.subheader("All Baskets — Cumulative Performance (interactive)")
-plot_cumulative_chart(all_basket_rets[all_panel_df.index], title="All Baskets (with SPY overlay)")
+st.subheader(f"All Baskets — Cumulative Performance (Benchmark: {bench})")
+plot_cumulative_chart(all_basket_rets[all_panel_df.index], title=f"All Baskets (with {bench} overlay)", benchmark_series=bench_rets, show_legend=legend_toggle)
+
+# Download buttons for panel CSVs
+col_a, col_b = st.columns([1,3])
+with col_a:
+    st.download_button("Download consolidated panel CSV", all_panel_df.to_csv().encode("utf-8"), file_name="adfm_baskets_panel.csv", mime="text/csv")
 
 # -----------------------------
 # Per-category sections
@@ -352,7 +424,8 @@ for category, baskets in CATEGORIES.items():
     cat_panel = build_panel_df(cat_rets)
     plot_panel_table(cat_panel, title=f"{category} — Basket Panel")
     if show_category_charts:
-        plot_cumulative_chart(cat_rets[cat_panel.index], title=f"{category} — Cumulative Performance")
+        plot_cumulative_chart(cat_rets[cat_panel.index], title=f"{category} — Cumulative Performance (with {bench})", benchmark_series=bench_rets, show_legend=legend_toggle)
+    st.download_button(f"Download {category} panel CSV", cat_panel.to_csv().encode("utf-8"), file_name=f"{category.lower().replace(' ','_')}_panel.csv", mime="text/csv")
 
 # -----------------------------
 # Basket constituents
