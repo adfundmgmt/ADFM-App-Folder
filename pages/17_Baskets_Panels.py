@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # -----------------------------
 # Page and theme
 # -----------------------------
-st.set_page_config(page_title="ADFM Basket Panels", layout="wide")
+st.set_page_config(page_title="Basket Panels", layout="wide")
 
 CUSTOM_CSS = """
 <style>
