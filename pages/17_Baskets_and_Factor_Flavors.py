@@ -411,6 +411,7 @@ bench_rets = levels[bench].pct_change().dropna()
 # Consolidated top panel + chart
 # -----------------------------
 st.subheader("All Baskets - Consolidated Panel")
+plot_panel_table(all_panel_df, dynamic_label=DYNAMIC_LABEL)
 all_panel_df = build_panel_df(all_basket_rets, ref_start=pd.Timestamp(start_date), dynamic_label=DYNAMIC_LABEL)
 
 st.subheader(f"All Baskets - Cumulative Performance (Benchmark: {bench})")
