@@ -1,22 +1,3 @@
-# Conclusion
-
-Done. I removed the “Bloomberg-style” label from the top panel title and scrubbed every em dash, replacing with a normal hyphen.
-
-# Why it matters
-
-This prevents header overlap in the first table and aligns with your style rule.
-
-# Key drivers
-
-* Top panel title now “All Baskets - Panel”.
-* All titles, subheaders, strings, and comments use hyphens only.
-* No hidden em dashes left in the file.
-
-# Next steps
-
-Replace your current script with the version below.
-
-```python
 # streamlit run adfm_basket_panels_by_category.py
 # ADFM Basket Panels - Consolidated + per-category white panels (dynamic preset column, legends always on)
 
@@ -428,5 +409,28 @@ plot_cumulative_chart(all_basket_rets[all_panel_df.index], title=f"All Baskets -
 # Download buttons for panel CSVs
 col_a, col_b = st.columns([1,3])
 with col_a:
-    st.download_button("Download
-```
+    st.download_button("Download consolidated panel CSV", all_panel_df.to_csv().encode("utf-8"), file_name="adfm_baskets_panel.csv", mime="text/csv")
+
+# -----------------------------
+# Per-category sections
+# -----------------------------
+for category, baskets in CATEGORIES.items():
+    st.markdown(f"## {category}")
+    cat_names = [bk for bk in baskets.keys() if bk in all_basket_rets.columns]
+    cat_rets = all_basket_rets[cat_names].dropna(how="all")
+    if cat_rets.empty:
+        st.info("No data for this group in the selected range.")
+        continue
+    cat_panel = build_panel_df(cat_rets, ref_start=pd.Timestamp(start_date), dynamic_label=DYNAMIC_LABEL)
+    plot_panel_table(cat_panel, title=f"{category} - Panel", dynamic_label=DYNAMIC_LABEL)
+    plot_cumulative_chart(cat_rets[cat_panel.index], title=f"{category} - Cumulative Performance (with {bench})", benchmark_series=bench_rets)
+    st.download_button(f"Download {category} panel CSV", cat_panel.to_csv().encode("utf-8"), file_name=f"{category.lower().replace(' ','_')}_panel.csv", mime="text/csv")
+
+# -----------------------------
+# Basket constituents
+# -----------------------------
+with st.expander("Basket Constituents"):
+    for cat, groups in CATEGORIES.items():
+        st.markdown(f"**{cat}**")
+        for name, tks in groups.items():
+            st.write(f"- {name}: {', '.join(tks)}")
