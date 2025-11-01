@@ -1,6 +1,3 @@
-Here’s the full revised Streamlit app code you can paste in directly:
-
-```python
 ############################################################
 # Market Stress Composite — trading-day aligned, hardened
 # AD Fund Management LP
@@ -442,4 +439,3 @@ with st.expander("Download Data"):
     st.download_button("Download CSV", out.to_csv(), file_name="market_stress_composite.csv", mime="text/csv")
 
 st.caption("© 2025 AD Fund Management LP")
-```
