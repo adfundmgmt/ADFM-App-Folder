@@ -1,10 +1,8 @@
 # 15_Flow_of_Funds_Matrix.py
-# Flow of Funds Matrix:
-# - Sidebar description
-# - Annualized/weekly toggle, significance hints, stability score
-# - Liquidity Pulse starts at selected start date with adaptive date ticks
-# - Heatmap: positive beta = GREEN (outperforms on liquidity up), friendly labels, clearer hover & subtitle
-# - Hardened IO, explicit label mapping, true R2 in hover, safer stability metric
+# Flow of Funds Matrix — Actionable Playbook edition
+# - Adds conviction-weighted TiltScore, Top OW/UW lists, hedge pairs
+# - Regime triggers from Liquidity Pulse (z and slope)
+# - Keeps your heatmap, compass, quadrant map, diagnostics
 
 import os
 import numpy as np
@@ -35,7 +33,6 @@ if not FRED_AVAILABLE:
 # ---------------- Helpers ----------------
 @st.cache_data(show_spinner=False, ttl=6*3600)
 def load_prices(tickers, start="2012-01-01") -> pd.DataFrame:
-    """Download adjusted close, drop all-NaN columns, forward fill."""
     try:
         px = yf.download(tickers, start=start, auto_adjust=True, progress=False)["Close"]
     except Exception as e:
@@ -43,7 +40,6 @@ def load_prices(tickers, start="2012-01-01") -> pd.DataFrame:
         return pd.DataFrame()
     if isinstance(px, pd.Series):
         px = px.to_frame()
-    # drop columns with no data
     bad = [c for c in px.columns if px[c].dropna().empty]
     if bad:
         st.warning(f"No data for: {', '.join(map(str, bad))}. Excluding.")
@@ -52,7 +48,6 @@ def load_prices(tickers, start="2012-01-01") -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False, ttl=24*3600)
 def fred_series(series_id: str, start="2012-01-01") -> pd.Series:
-    """Return a float Series indexed by DatetimeIndex."""
     s = pd.Series(dtype=float)
     if FRED_AVAILABLE:
         try:
@@ -85,7 +80,6 @@ def robust_scale(s: pd.Series):
     med = s.median()
     mad = (s - med).abs().median()
     if np.isfinite(mad) and mad > 1e-12:
-        # 1.4826 * MAD ~ sigma for normal
         return (s - med) / max(1.4826 * mad, 1e-12)
     std = s.std(ddof=0)
     if np.isfinite(std) and std > 1e-12:
@@ -108,7 +102,6 @@ def build_design(fund_df: pd.DataFrame, flows, horizons, min_rows=12):
     return X[valid], valid
 
 def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
-    """OLS with pseudo-inverse; returns annualized betas, weekly betas, t-stats, R2."""
     df = pd.concat([y, X], axis=1).dropna()
     if df.empty:
         return None
@@ -118,7 +111,6 @@ def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
     beta_w = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
     yhat = Xmat @ beta_w
     resid = (Y.flatten() - yhat)
-    # s2 uses dof correction
     dof = max(1, (len(df) - Xmat.shape[1]))
     s2 = (resid @ resid) / dof
     cov = s2 * np.linalg.pinv(Xmat.T @ Xmat)
@@ -133,7 +125,6 @@ def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
     return {"weekly": b_weekly, "annual": b_annual, "t": tser, "r2": r2, "rows": len(df)}
 
 def choose_dtick_and_format(x_index: pd.DatetimeIndex):
-    """Adaptive tick density: monthly for <1y; quarterly for 1–3y; semiannual for 3–7y; yearly beyond."""
     if x_index.empty:
         return "M12", "%Y"
     span_days = (x_index.max() - x_index.min()).days
@@ -155,18 +146,18 @@ with st.sidebar:
     st.markdown(
         """
 **Purpose**  
-See where **incremental liquidity** (Fed, Treasury, FX reserves) and **relative performance** are co-moving, the Druckenmiller playbook.
+Translate liquidity betas into **positioning tilts and hedges** with clear triggers.
 
 **How it works**  
-1) Build **4w and 8w flow shocks** from FRED with robust alignment and MAD z-score.  
-2) Regress **weekly log returns** of major assets on those shocks over a rolling window.  
-3) Show **liquidity betas** and a **compass** for gross tilts.
+1) Build **4w and 8w flow shocks** from FRED, robust z-scores.  
+2) Regress **weekly log returns** on those shocks.  
+3) Compute **LiquidityBeta** and a **conviction score** from |t|, Stability, and R².  
+4) Output **TiltScore**, top OW/UW lists, **pairs**, and **triggers**.
 
-**How to read**  
-- **Green β** means the asset **outperforms** when liquidity expands.  
-- **Red β** means the asset **lags** when liquidity expands.  
-- **LiquidityBeta** is the sum across flows.  
-- Stars: ★ over 1.7, ★★ over 2.0, ★★★ over 3.0 on absolute t.
+**Reading guide**  
+- Green β = outperformance on liquidity up.  
+- TiltScore = LiquidityBeta × Confidence.  
+- Triggers use Liquidity Pulse z and slope plus score flips.
         """
     )
     st.header("Settings")
@@ -180,8 +171,15 @@ See where **incremental liquidity** (Fed, Treasury, FX reserves) and **relative 
     st.subheader("FRED IDs")
     st.caption("Preloaded: WALCL, RRPONTSYD, WTREGEN (chg), WDTGAL (level). Add CHN or JPN reserve IDs if you have them.")
     extra = st.text_area("Extra FRED (name=ID per line)", height=100)
+    st.markdown("---")
+    st.subheader("Action thresholds")
+    t_min = st.slider("|t|-stat min for conviction", 0.0, 3.0, 1.7, 0.1)
+    stab_min = st.slider("Stability min", 0.0, 1.0, 0.50, 0.05)
+    r2_cap = st.slider("R² cap for confidence", 0.05, 0.50, 0.15, 0.01)
+    strong_q = st.slider("Strong tilt at top abs-quantile", 0.50, 0.95, 0.80, 0.01)
+    medium_q = st.slider("Medium tilt at mid abs-quantile", 0.30, 0.80, 0.60, 0.01)
 
-st.caption("Identify where incremental liquidity and relative performance co-move. Betas are annualized by default.")
+st.caption("Identify where incremental liquidity co-moves with relative performance, then turn it into tilts, hedges, and triggers.")
 
 # Base FRED ids
 fred_ids = {"WALCL":"WALCL", "RRPONTSYD":"RRPONTSYD", "WTREGEN":"WTREGEN", "WDTGAL":"WDTGAL"}
@@ -251,7 +249,7 @@ if X.empty or len(valid) == 0:
     st.error("No usable factors after fallbacks. Try start on or after 2013 and use only Fed_NetLiq.")
     st.stop()
 
-# Weekly log returns
+# Weekly log returns and window
 rets = np.log(px).diff()
 eff_window = min(int(reg_window), len(widx))
 if eff_window < 20:
@@ -288,7 +286,6 @@ T = pd.DataFrame(tstats).T
 R2 = pd.Series(r2s, name="R2")
 rowsS = pd.Series(rows_used, name="Rows")
 
-# choose display matrix
 Bdisp = B_ann if show_annual else B_wk
 unit_label = "Annualized β" if show_annual else "Weekly β"
 
@@ -314,18 +311,138 @@ def half_window_liq_beta(asset):
     if not np.isfinite(b1) or not np.isfinite(b2):
         return np.nan
     if max(abs(b1), abs(b2)) < 1e-3:
-        return np.nan  # too small to judge stability
+        return np.nan
     denom = abs(b1) + abs(b2) + 1e-6
     return float(np.clip(1.0 - abs(b1 - b2)/denom, 0.0, 1.0))
 
 stability = pd.Series({a: half_window_liq_beta(a) for a in Bv.index}, name="Stability")
 
-# ---------------- Top annotations ----------------
-st.caption(
-    f"Factors used: {list(Bv.columns)} • Assets: {Bv.shape[0]} • Per-asset rows ≤ {eff_window} • Unit: {unit_label}"
+# ---------------- Liquidity Pulse ----------------
+pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","FX_Reserves","TGA_Drain","Fed_NetLiq_proxy"])]
+pulse_series = X[pos_cols].sum(axis=1).dropna()
+pulse_plot = pulse_series.loc[str(start_date):]
+
+def zscore(s, w=26):
+    r = s.rolling(w, min_periods=max(8, w//3))
+    return (s - r.mean()) / (r.std(ddof=0) + 1e-12)
+
+pulse_z = zscore(pulse_series)
+pulse_slope = pulse_series.diff(4)  # 4-week slope
+pulse_state = dict(
+    z=float(pulse_z.iloc[-1]) if not pulse_z.empty else np.nan,
+    slope=float(pulse_slope.iloc[-1]) if not pulse_slope.empty else np.nan
 )
-pulse_avg = float(liq_beta.mean()) if not liq_beta.empty else 0.0
-st.markdown(f"**Liquidity Pulse, average beta:** {pulse_avg:+.2f} → positive favors cyclicals and growth, negative favors defensives.")
+
+# ---------------- Conviction and TiltScore ----------------
+# Confidence components: |t| clipped to [0,3], Stability [0,1], R2 capped at r2_cap and rescaled
+abs_t_mean = T[liq_cols].abs().mean(axis=1).rename("|t|_mean")
+t_conf = np.clip(abs_t_mean, 0.0, 3.0) / 3.0
+stab_conf = stability.fillna(0.0).clip(0.0, 1.0)
+r2_conf = (R2.fillna(0.0).clip(0.0, r2_cap) / r2_cap).rename("R2_conf")
+
+confidence = (0.5 * t_conf + 0.3 * stab_conf + 0.2 * r2_conf).rename("Confidence")
+tilt_score = (liq_beta * confidence).rename("TiltScore")
+
+# Filters for conviction
+meets = (abs_t_mean >= t_min) & (stab_conf >= stab_min)
+# Quantile thresholds for sizing
+abs_scores = tilt_score.abs().dropna()
+q_strong = abs_scores.quantile(strong_q) if not abs_scores.empty else np.nan
+q_medium = abs_scores.quantile(medium_q) if not abs_scores.empty else np.nan
+
+def bucket(score):
+    if pd.isna(score):
+        return "Neutral"
+    a = abs(score)
+    if a >= q_strong and a > 0:
+        return "Strong OW" if score > 0 else "Strong UW"
+    if a >= q_medium and a > 0:
+        return "Medium OW" if score > 0 else "Medium UW"
+    if a > 0:
+        return "Small OW" if score > 0 else "Small UW"
+    return "Neutral"
+
+# ---------------- Playbook table ----------------
+playbook = pd.concat([
+    liq_beta, confidence, tilt_score, abs_t_mean, stab_conf.rename("Stability"), r2_conf, R2, rowsS
+], axis=1)
+playbook["Tilt"] = [bucket(v) if meets.get(a, False) else "Neutral" for a, v in tilt_score.items()]
+playbook = playbook.sort_values("TiltScore", ascending=False)
+
+# ---------------- Top lists and pairs ----------------
+ow = playbook[(playbook["Tilt"].str.contains("OW")) & meets].copy()
+uw = playbook[(playbook["Tilt"].str.contains("UW")) & meets].copy()
+
+top_n = 5
+ow_top = ow.head(top_n)
+uw_top = uw.head(top_n)
+
+def make_pairs(long_df, short_df, n=3):
+    if long_df.empty or short_df.empty:
+        return pd.DataFrame(columns=["Long","Short","NetScore"])
+    pairs = []
+    for la, ls in zip(long_df.index[:n], short_df.index[:n]):
+        pairs.append([la, ls, float(long_df.loc[la,"TiltScore"] - short_df.loc[ls,"TiltScore"])])
+    return pd.DataFrame(pairs, columns=["Long","Short","NetScore"])
+
+pairs = make_pairs(ow_top, uw_top, n=min(3, len(ow_top), len(uw_top)))
+
+# ---------------- Header metrics ----------------
+st.subheader("Actionable Playbook")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Liquidity Pulse z", f"{pulse_state['z']:+.2f}")
+c2.metric("Pulse 4w slope", f"{pulse_state['slope']:+.2f}")
+c3.metric("Avg Confidence", f"{confidence.mean():.2f}")
+c4.metric("Coverage", f"{len(playbook)} assets")
+
+st.caption("TiltScore = LiquidityBeta × Confidence. Confidence blends |t|-mean, Stability, and capped R².")
+
+# ---------------- Display playbook summary ----------------
+def fmt_tbl(df):
+    cols = ["LiquidityBeta","Confidence","TiltScore","|t|_mean","Stability","R2_conf","R2","Rows","Tilt"]
+    view = df.reindex(columns=cols)
+    try:
+        return view.style.format({
+            "LiquidityBeta":"{:+.2f}", "Confidence":"{:.2f}", "TiltScore":"{:+.2f}",
+            "|t|_mean":"{:.2f}", "Stability":"{:.0%}", "R2_conf":"{:.0%}", "R2":"{:.1%}"
+        }).background_gradient(subset=["TiltScore"], cmap="RdYlGn")
+    except Exception:
+        return view
+
+st.markdown("**Top Overweights**")
+st.dataframe(fmt_tbl(ow_top), use_container_width=True)
+st.markdown("**Top Underweights**")
+st.dataframe(fmt_tbl(uw_top), use_container_width=True)
+
+st.markdown("**Pairs for expression**")
+if pairs.empty:
+    st.info("Insufficient conviction for pairs. Raise horizons or lower thresholds if desired.")
+else:
+    try:
+        st.dataframe(pairs.style.format({"NetScore":"{:+.2f}"}), use_container_width=True)
+    except Exception:
+        st.dataframe(pairs, use_container_width=True)
+
+# ---------------- Triggers ----------------
+st.subheader("Triggers and invalidation rules")
+def pulse_regime(z, slope):
+    if not np.isfinite(z) or not np.isfinite(slope):
+        return "N/A"
+    if z >= 1.0 and slope > 0:
+        return "Liquidity improving"
+    if z <= -1.0 and slope < 0:
+        return "Liquidity deteriorating"
+    return "Mixed/neutral"
+
+regime = pulse_regime(pulse_state["z"], pulse_state["slope"])
+st.markdown(
+    f"""
+- **Regime:** **{regime}**.  
+- **Flip risk ON** when Pulse z > +1 and 4w slope > 0, keep only **OW** tilts with Confidence above thresholds.  
+- **Flip risk OFF** when Pulse z < −1 and slope < 0, keep only **UW** tilts with Confidence above thresholds.  
+- **Invalidate an asset tilt** if its TiltScore changes sign or |t|-mean falls below {t_min:.1f}, or if Stability drops under {stab_min:.2f}.  
+"""
+)
 
 # ---------------- Liquidity Compass ----------------
 tilt = np.select(
@@ -337,7 +454,8 @@ compass = pd.DataFrame({"LiquidityBeta": liq_beta, "R2": R2.reindex(liq_beta.ind
 compass = compass.sort_values("LiquidityBeta", ascending=False)
 try:
     compass_fmt = compass.style.format({"LiquidityBeta":"{:+.2f}", "R2":"{:.2%}", "Stability":"{:.0%}"}) \
-        .background_gradient(subset=["LiquidityBeta"], cmap="RdYlGn", vmin=-compass["LiquidityBeta"].abs().max(), vmax=compass["LiquidityBeta"].abs().max())
+        .background_gradient(subset=["LiquidityBeta"], cmap="RdYlGn",
+                             vmin=-compass["LiquidityBeta"].abs().max(), vmax=compass["LiquidityBeta"].abs().max())
     st.subheader("Liquidity Compass, where to tilt gross exposure")
     st.dataframe(compass_fmt, use_container_width=True)
 except Exception:
@@ -347,7 +465,6 @@ except Exception:
 # ---------------- Heatmap (positive = GREEN) ----------------
 st.subheader(f"Liquidity beta heatmap ({unit_label})")
 
-# Friendlier column labels with explicit mapping
 def relabel(col: str) -> str:
     out = (col.replace("Fed_NetLiq", "Fed NL")
                .replace("TGA_Drain", "TGA drain")
@@ -357,8 +474,6 @@ def relabel(col: str) -> str:
 
 label_map = {c: relabel(c) for c in Bv.columns}
 Bv_disp = Bv.rename(columns=label_map)
-
-# Align T by original names, then rename by same map to preserve identity
 Tmatch = T.reindex(index=Bv.index, columns=Bv.columns).rename(columns=label_map)
 
 def star_marker(x):
@@ -368,14 +483,12 @@ def star_marker(x):
     return "★★★" if ax >= 3.0 else ("★★" if ax >= 2.0 else ("★" if ax >= 1.7 else ""))
 
 star_text = Tmatch.applymap(star_marker).fillna("")
-# customdata layers: [:,:,0] = beta for reference, [:,:,1] = t-stat
 custom = np.dstack([Bv_disp.values, Tmatch.values])
 
-# pastel red to white to green
 colors_pos_green = [
-    [0.0, "#d6604d"],   # soft red
-    [0.5, "#f7f7f7"],   # white midpoint
-    [1.0, "#1a9850"],   # green
+    [0.0, "#d6604d"],
+    [0.5, "#f7f7f7"],
+    [1.0, "#1a9850"],
 ]
 
 hm = go.Figure(data=go.Heatmap(
@@ -394,7 +507,7 @@ hm = go.Figure(data=go.Heatmap(
 ))
 hm.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(hm, use_container_width=True)
-st.caption("Interpretation: a +0.12 beta means a +1σ liquidity shock historically coincided with about +12 percent annualized return for that asset. TGA is sign corrected.")
+st.caption("Interpretation: +0.12 beta means a +1σ liquidity shock historically coincided with about +12 percent annualized return. TGA is sign corrected.")
 
 # ---------------- Quadrant Map ----------------
 st.subheader("Allocator map, Fed NL vs TGA drain (size is R², color is LiquidityBeta)")
@@ -404,7 +517,7 @@ if xcol is not None and ycol is not None:
     xs = Bv[xcol]
     ys = Bv[ycol]
     rsq = R2.reindex(Bv.index).fillna(0).clip(0, 1)
-    size = 10 + 60*rsq.clip(0, 0.2)  # visual scaling only
+    size = 10 + 60*rsq.clip(0, 0.2)
     scatter = go.Figure()
     scatter.add_hline(y=0, line=dict(color="#bbbbbb", dash="dot"))
     scatter.add_vline(x=0, line=dict(color="#bbbbbb", dash="dot"))
@@ -430,50 +543,33 @@ if xcol is not None and ycol is not None:
 else:
     st.info("Need both Fed_NetLiq_* and TGA_Drain_* factors for the quadrant map.")
 
-# ---------------- Liquidity Pulse, net momentum (standardized) ----------------
+# ---------------- Liquidity Pulse chart ----------------
 st.subheader("Liquidity Pulse, net momentum (standardized)")
-pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","FX_Reserves","TGA_Drain","Fed_NetLiq_proxy"])]
-pulse_series = X[pos_cols].sum(axis=1).dropna()
-pulse_plot = pulse_series.loc[str(start_date):]
-
 dtick, tfmt = choose_dtick_and_format(pulse_plot.index)
 
 fig_pulse = go.Figure()
 fig_pulse.add_hline(y=0, line=dict(color="#cccccc", dash="dot"))
-
-# remove legend label by omitting name and forcing showlegend=False
-fig_pulse.add_trace(go.Scatter(
-    x=pulse_plot.index,
-    y=pulse_plot,
-    mode="lines",
-    showlegend=False  # <- key line
-))
-
+fig_pulse.add_trace(go.Scatter(x=pulse_plot.index, y=pulse_plot, mode="lines", name="Pulse"))
 if not pulse_plot.empty:
     fig_pulse.add_trace(go.Scatter(
-        x=[pulse_plot.index[-1]],
-        y=[pulse_plot.iloc[-1]],
-        mode="markers+text",
-        text=[f"{pulse_plot.iloc[-1]:+.2f}"],
-        textposition="top center",
+        x=[pulse_plot.index[-1]], y=[pulse_plot.iloc[-1]],
+        mode="markers+text", text=[f"{pulse_plot.iloc[-1]:+.2f}"], textposition="top center",
         showlegend=False
     ))
-
-# also disable legend at layout level to reclaim right-side space
 fig_pulse.update_layout(showlegend=False, height=300, margin=dict(l=10, r=10, t=10, b=10))
 fig_pulse.update_yaxes(title_text="Sum of standardized flow shocks")
 fig_pulse.update_xaxes(dtick=dtick, tickformat=tfmt, hoverformat="%b %d, %Y")
 st.plotly_chart(fig_pulse, use_container_width=True)
 
-
 # ---------------- Downloads ----------------
 with st.expander("Download results"):
     st.download_button("Betas (display units) CSV", Bdisp.to_csv().encode(), file_name="flow_betas.csv")
-    st.download_button("Liquidity Compass CSV", pd.concat([compass, rowsS], axis=1).to_csv().encode(), file_name="flow_liquidity_compass.csv")
+    st.download_button("Liquidity Compass CSV", pd.concat([playbook, rowsS], axis=1).to_csv().encode(), file_name="flow_liquidity_playbook.csv")
 
 # ---------------- Diagnostics ----------------
 with st.expander("Diagnostics"):
-    st.write("Design columns used:", list(X.columns))
+    st.write("Factors used:", list(X.columns))
+    st.write("Conviction components are |t|-mean, Stability, capped R².")
     diag = []
     if 'fred_df' in locals() and not fred_df.empty:
         for c in fred_df.columns:
@@ -484,16 +580,3 @@ with st.expander("Diagnostics"):
         st.dataframe(pd.DataFrame(diag, columns=["Series","First","Last","Obs"]), use_container_width=True)
 
 st.caption("© 2025 AD Fund Management LP")
-
-# ---------------- Notes ----------------
-with st.expander("Methodology notes"):
-    st.markdown(
-        """
-- Betas default to annualized at 52 times the weekly beta, toggle to weekly if you prefer raw units.
-- LiquidityBeta is the sum of betas to pro-liquidity shocks across selected horizons. TGA is sign corrected.
-- Stars reflect t-stat thresholds at 1.7, 2.0, and 3.0. Use with R² and Stability.
-- Liquidity Pulse is the sum of standardized flow shocks and always plots from your selected start date; earliest points are delayed by differencing horizons and data availability.
-"""
-    )
-
-
