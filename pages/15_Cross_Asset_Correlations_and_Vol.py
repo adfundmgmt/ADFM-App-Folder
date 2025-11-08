@@ -1,5 +1,6 @@
 # cross_asset_weekly_compass.py
 # Weekly decision-grade view: correlations, vol, regime, conclusions, actions.
+# Tables are rendered at the BOTTOM with clean formatting and clear columns.
 
 import math
 from datetime import datetime, timedelta
@@ -44,7 +45,6 @@ GROUPS = {
 ORDER = sum(GROUPS.values(), [])
 IV_TICKERS = ["^VIX", "^OVX", "^VIX3M"]
 
-# Key correlation pairs we will score each week
 PAIR_SPECS = [
     dict(a="^GSPC", b="^TNX", la="SPX", lb="US10Y", title="Equity vs Rates"),
     dict(a="^GSPC", b="HYG",  la="SPX", lb="HY",    title="Equity vs HY Credit"),
@@ -59,7 +59,7 @@ PAIR_SPECS = [
 # =========================
 st.sidebar.header("Controls")
 lookback_years = st.sidebar.slider("History window (years)", 5, 15, 10)
-win = st.sidebar.selectbox("Rolling window", [21, 63], index=0)  # 1M or 3M
+win = st.sidebar.selectbox("Rolling window", [21, 63], index=0)  # 1M or ~3M
 wk_delta = st.sidebar.selectbox("Compare vs", ["1 week ago", "2 weeks ago"], index=0)
 wk_back = 5 if wk_delta == "1 week ago" else 10  # business days
 rho_alert = st.sidebar.slider("|ρ| alert threshold", 0.30, 0.90, 0.50, 0.05)
@@ -163,6 +163,9 @@ def roll_corr(ret_df, a, b, window=21):
         return pd.Series(dtype=float)
     return df[a].rolling(window).corr(df[b])
 
+def computed_height(n_rows, row_px=32, header_px=38, pad_px=16, max_px=800):
+    return min(max_px, int(header_px + row_px * n_rows + pad_px))
+
 # =========================
 # Data
 # =========================
@@ -187,7 +190,7 @@ wk_ago_idx = BASE.index.get_loc(last_date) - wk_back if last_date is not None el
 st.info(f"Data last date: {last_date.strftime('%Y-%m-%d')}" if pd.notna(last_date) else "No dates available.")
 
 # =========================
-# Weekly regime classification
+# Regime classification
 # =========================
 def vix_term_structure(iv_df):
     if "^VIX" in iv_df.columns and "^VIX3M" in iv_df.columns:
@@ -196,7 +199,6 @@ def vix_term_structure(iv_df):
     return pd.Series(dtype=float)
 
 def classify_regime():
-    # Core inputs
     ts = vix_term_structure(IV)
     vix = IV["^VIX"] if "^VIX" in IV.columns else pd.Series(dtype=float)
     rv_spx = REALVOL["^GSPC"] * 100 if "^GSPC" in REALVOL.columns else pd.Series(dtype=float)
@@ -207,16 +209,15 @@ def classify_regime():
     rv_now = current_value(rv_spx)
     corr_now = current_value(corr_er)
 
-    # Simple grid
     stress = 0
-    if ts_now is not None and not np.isnan(ts_now) and ts_now < 0:      # backwardation
+    if ts_now is not None and not np.isnan(ts_now) and ts_now < 0:
         stress += 1
     if vix_now is not None and not np.isnan(vix_now) and vix_now >= 25:
         stress += 1
     if rv_now is not None and not np.isnan(rv_now) and percentile_of_last(rv_spx) >= 70:
         stress += 1
     if corr_now is not None and not np.isnan(corr_now) and corr_now >= 0.5:
-        stress += 1  # rates selloff pressuring equities
+        stress += 1
 
     if stress >= 3:
         regime = "Risk-off"
@@ -225,10 +226,7 @@ def classify_regime():
     else:
         regime = "Risk-on to neutral"
 
-    return dict(
-        regime=regime,
-        ts_now=ts_now, vix_now=vix_now, rv_now=rv_now, corr_now=corr_now
-    )
+    return dict(regime=regime, ts_now=ts_now, vix_now=vix_now, rv_now=rv_now, corr_now=corr_now)
 
 reg = classify_regime()
 c1, c2, c3, c4 = st.columns(4)
@@ -238,105 +236,22 @@ c3.metric("VIX", f"{reg['vix_now']:.1f}" if reg["vix_now"] is not None and not n
 c4.metric("SPX vs 10Y ρ", f"{reg['corr_now']:.1%}" if reg["corr_now"] is not None and not np.isnan(reg["corr_now"]) else "NA")
 
 # =========================
-# Weekly deltas: correlations and volatility
-# =========================
-st.subheader("This week vs last: correlations and vol")
-
-def weekly_delta(series, steps=5):
-    s = pd.Series(series).dropna()
-    if s.shape[0] <= steps:
-        return np.nan
-    return float(s.iloc[-1] - s.iloc[-steps-1])
-
-# Correlation snapshot table
-rows = []
-for spec in PAIR_SPECS:
-    rc = roll_corr(RET, spec["a"], spec["b"], win)
-    if rc.empty: 
-        continue
-    curr = rc.iloc[-1]
-    delta = weekly_delta(rc, wk_back)
-    pct = percentile_of_last(rc)
-    rows.append([spec["title"], spec["a"], spec["b"], curr, delta, pct])
-
-corr_tbl = pd.DataFrame(rows, columns=["Pair", "A", "B", "ρ_now", "Δρ_wk", "Percentile"])
-if not corr_tbl.empty:
-    corr_tbl = corr_tbl.sort_values("Δρ_wk", ascending=True)  # largest drops first
-    st.dataframe(
-        corr_tbl.style.format({"ρ_now":"{:+.2%}", "Δρ_wk":"{:+.2%}", "Percentile":"{:.0f}%"}).background_gradient(
-            subset=["Δρ_wk"], cmap="RdYlGn"),
-        use_container_width=True, height=330
-    )
-else:
-    st.info("No correlation data available.")
-
-# Volatility snapshot table
-vol_map = []
-def add_vol(label, s):
-    if s is None or s.dropna().empty:
-        return
-    vol_map.append([
-        label,
-        float(s.dropna().iloc[-1]),
-        weekly_delta(s, wk_back),
-        percentile_of_last(s)
-    ])
-
-# Realized vols in percent
-if "^GSPC" in REALVOL.columns: add_vol("SPX 1M RV", REALVOL["^GSPC"] * 100)
-if "HYG" in REALVOL.columns:   add_vol("HY 1M RV", REALVOL["HYG"] * 100)
-if "CL=F" in REALVOL.columns:  add_vol("WTI 1M RV", REALVOL["CL=F"] * 100)
-fx_cols = [c for c in REALVOL.columns if c.endswith("=X")]
-if "USDJPY=X" in fx_cols:      add_vol("USDJPY 1M RV", REALVOL["USDJPY=X"] * 100)
-elif fx_cols:                  add_vol(f"{fx_cols[0]} 1M RV", REALVOL[fx_cols[0]] * 100)
-
-# Implied vols
-if "^VIX" in IV.columns:       add_vol("VIX", IV["^VIX"])
-if "^OVX" in IV.columns:       add_vol("OVX", IV["^OVX"])
-
-vol_tbl = pd.DataFrame(vol_map, columns=["Series", "Level", "Δw", "Percentile"])
-if not vol_tbl.empty:
-    st.dataframe(
-        vol_tbl.sort_values("Δw", ascending=False).style.format({"Level":"{:.1f}", "Δw":"{:+.1f}", "Percentile":"{:.0f}%"}).background_gradient(
-            subset=["Δw"], cmap="RdYlGn"),
-        use_container_width=True, height=280
-    )
-
-# =========================
 # Conclusions and actions
 # =========================
 st.subheader("Conclusions and actions")
 
 bullets = []
 
-# 1) Correlation regime notes
-if not corr_tbl.empty:
-    er_row = corr_tbl[corr_tbl["Pair"]=="Equity vs Rates"]
-    if not er_row.empty:
-        rho = float(er_row["ρ_now"].iloc[0])
-        d   = float(er_row["Δρ_wk"].iloc[0])
-        if rho <= -0.30:
-            bullets.append(f"Equity vs rates is negatively correlated at {rho:.0%}. Duration rallies should support equities.")
-        elif rho >= 0.30:
-            bullets.append(f"Equity vs rates is positively correlated at {rho:.0%}. Rate selloffs are pressuring equities.")
-        if abs(d) >= 0.10:
-            bullets.append(f"The weekly change in equity vs rates correlation is {d:+.0%}, a meaningful rotation.")
+# Equity vs Rates correlation
+corr_er = roll_corr(RET, "^GSPC", "^TNX", win)
+if not corr_er.empty:
+    rho = corr_er.iloc[-1]
+    if rho <= -0.30:
+        bullets.append(f"Equity vs rates negative at {rho:.0%}. Duration rallies should support equities.")
+    elif rho >= 0.30:
+        bullets.append(f"Equity vs rates positive at {rho:.0%}. Rate selloffs are pressuring equities.")
 
-    ehy = corr_tbl[corr_tbl["Pair"]=="Equity vs HY Credit"]
-    if not ehy.empty:
-        rho = float(ehy["ρ_now"].iloc[0])
-        if rho >= 0.50:
-            bullets.append("Equities are tightly linked to HY. Drawdowns will likely travel with credit widening.")
-
-    oil = corr_tbl[corr_tbl["Pair"]=="Equity vs Oil"]
-    if not oil.empty:
-        rho, d = float(oil["ρ_now"].iloc[0]), float(oil["Δρ_wk"].iloc[0])
-        if rho >= 0.30:
-            bullets.append("Equities are moving with oil. Energy shocks can bleed into the tape.")
-        if d <= -0.10:
-            bullets.append("Equity vs oil correlation fell sharply week over week, a sign of rotation in drivers.")
-
-# 2) Implied minus realized and term structure
+# Implied minus realized
 if "^GSPC" in REALVOL.columns and "^VIX" in IV.columns:
     rv = (REALVOL["^GSPC"] * 100).dropna()
     vix = IV["^VIX"].dropna()
@@ -347,19 +262,20 @@ if "^GSPC" in REALVOL.columns and "^VIX" in IV.columns:
         sp_now = float(spread.iloc[-1])
         z_now  = float(z.iloc[-1]) if not z.empty else np.nan
         if z_now >= 1.0:
-            bullets.append(f"VIX is rich to realized by {sp_now:.1f} points. Overwrite and short vol structures are attractive.")
+            bullets.append(f"VIX rich to realized by {sp_now:.1f} pts. Overwrite or short-vol structures are attractive.")
         elif z_now <= -1.0:
-            bullets.append(f"VIX is cheap to realized by {sp_now:.1f} points. Consider buying convexity or collars.")
+            bullets.append(f"VIX cheap to realized by {sp_now:.1f} pts. Consider buying convexity or collars.")
 
+# Term structure
 ts = vix_term_structure(IV)
 if not ts.dropna().empty:
     ts_now = ts.iloc[-1]
     if ts_now < 0:
-        bullets.append("VIX term structure is in backwardation. Respect gap risk and reduce leverage.")
+        bullets.append("VIX term structure in backwardation. Respect gap risk and keep leverage modest.")
     elif ts_now > 0.10:
-        bullets.append("VIX term structure is in contango. Carry strategies and relative value work better.")
+        bullets.append("VIX term structure in contango. Carry and relative value should work better.")
 
-# 3) HY and Oil vol heat
+# HY and Oil vol heat
 def add_hot_cold(label, s):
     if s is None or s.dropna().empty:
         return
@@ -368,16 +284,16 @@ def add_hot_cold(label, s):
         return
     z_now = float(z.iloc[-1])
     if z_now >= z_hot:
-        bullets.append(f"{label} volatility is hot on a Z of {z_now:.2f}. Tighten risk on exposures tied to this factor.")
+        bullets.append(f"{label} volatility hot on a Z of {z_now:.2f}. Tighten risk on exposures tied to this factor.")
     if z_now <= z_cold:
-        bullets.append(f"{label} volatility is cold on a Z of {z_now:.2f}. Harvest carry where risk is well bounded.")
+        bullets.append(f"{label} volatility cold on a Z of {z_now:.2f}. Harvest carry where risk is bounded.")
 
 if "HYG" in REALVOL.columns:
     add_hot_cold("High yield", REALVOL["HYG"] * 100)
 if "CL=F" in REALVOL.columns:
     add_hot_cold("Oil", REALVOL["CL=F"] * 100)
 
-# 4) Summary regime
+# Summary regime
 if reg["regime"] == "Risk-off":
     bullets.append("Overall read is risk-off. Favor defensives, reduce gross, add convexity.")
 elif reg["regime"] == "Cautious":
@@ -385,25 +301,17 @@ elif reg["regime"] == "Cautious":
 else:
     bullets.append("Overall read is neutral to constructive. Let carry work but define invalidations.")
 
-# 5) Suggested expressions and invalidations
-express = []
-if not corr_tbl.empty:
-    # Pick one pair trade from extremes
-    extremes = corr_tbl.reindex(columns=["Pair","Δρ_wk"]).sort_values("Δρ_wk")
-    if not extremes.empty:
-        pr = extremes.iloc[0]
-        express.append(f"Express the sharpest correlation move in pairs. Focus on {pr['Pair']} which shifted {pr['Δρ_wk']:+.0%} this week.")
-if "^VIX" in IV.columns:
-    express.append("If VIX rich to realized, run covered calls or short dated call spreads against longs.")
-if "HYG" in REALVOL.columns:
-    express.append("If HY vol stays hot and equities track credit, hedge with HYG puts or IG vs HY RV.")
+# Expressions and invalidations
+express = [
+    "If VIX rich to realized, run covered calls or short-dated call spreads against longs.",
+    "If HY vol stays hot and equities track credit, hedge with HYG puts or IG vs HY relative value."
+]
+invalid = [
+    "Flip or reduce if SPX vs 10Y correlation crosses back through zero and holds for a week.",
+    "Flip or reduce if VIX term structure turns to contango and realized vol falls.",
+    "Re-assess if the VIX minus realized spread mean reverts by more than 1 standard deviation."
+]
 
-invalid = []
-invalid.append("Flip or reduce if the SPX vs 10Y correlation crosses back through zero and holds for a week.")
-invalid.append("Flip or reduce if VIX term structure turns from backwardation to contango and realized vol falls.")
-invalid.append("Re-assess if the VIX minus realized spread mean reverts by more than 1 standard deviation.")
-
-# Render narrative
 st.markdown("**Why this matters and how to act**")
 if bullets:
     st.markdown("\n".join(f"- {b}" for b in bullets))
@@ -411,10 +319,7 @@ else:
     st.info("No strong weekly conclusions at current thresholds.")
 
 st.markdown("**Expressions**")
-if express:
-    st.markdown("\n".join(f"- {e}" for e in express))
-else:
-    st.info("No clear expressions this week.")
+st.markdown("\n".join(f"- {e}" for e in express))
 
 st.markdown("**Invalidations**")
 st.markdown("\n".join(f"- {x}" for x in invalid))
@@ -484,8 +389,113 @@ else:
                   axis=None)
            .set_properties(**{"background-color": "white"})
     )
-    st.dataframe(sty, use_container_width=True, height=min(110 + 22*mat.shape[0], 1000))
-    st.caption(f"Bold marks |ρ| ≥ {rho_alert:.2f}. Use matrix to sanity check panel reads.")
+    st.dataframe(
+        sty,
+        use_container_width=True,
+        height=computed_height(mat.shape[0])
+    )
+    st.caption(f"Bold marks |ρ| ≥ {rho_alert:.2f}. Use matrix to sanity-check panel reads.")
+
+# =========================
+# WEEKLY SNAPSHOTS — placed at the BOTTOM
+# =========================
+# Build correlation snapshot table (clean, no blanks, clarified columns)
+rows = []
+for spec in PAIR_SPECS:
+    rc = roll_corr(RET, spec["a"], spec["b"], win)
+    if rc.empty or np.isnan(rc.iloc[-1]):
+        continue
+    curr = float(rc.iloc[-1])
+    # Δ vs prior week; guard if not enough history
+    delta = np.nan
+    if rc.shape[0] > wk_back + 1 and not np.isnan(rc.iloc[-wk_back-1]):
+        delta = float(rc.iloc[-1] - rc.iloc[-wk_back-1])
+    pct = percentile_of_last(rc)
+    rows.append([spec["title"], spec["a"], spec["b"], curr, delta, pct])
+
+corr_tbl = pd.DataFrame(rows, columns=[
+    "Pair",
+    "Series A",
+    "Series B",
+    "ρ now (rolling)",
+    "Δρ w/w",
+    "Percentile rank"
+])
+# Drop any all-NaN rows that slipped through
+corr_tbl = corr_tbl.dropna(how="all")
+# Sort by magnitude of weekly change, biggest rotation first
+if not corr_tbl.empty:
+    corr_tbl = corr_tbl.sort_values("Δρ w/w", key=lambda s: s.abs(), ascending=False)
+
+# Build volatility snapshot with explicit units/classes
+vol_rows = []
+def add_vol(label, s, vclass, units):
+    if s is None or s.dropna().empty:
+        return
+    s = s.dropna()
+    lvl = float(s.iloc[-1])
+    dv  = np.nan
+    if s.shape[0] > wk_back + 1 and not np.isnan(s.iloc[-wk_back-1]):
+        dv = float(s.iloc[-1] - s.iloc[-wk_back-1])
+    pr  = percentile_of_last(s)
+    vol_rows.append([label, vclass, units, lvl, dv, pr])
+
+# Realized vols in percent
+if "^GSPC" in REALVOL.columns: add_vol("SPX 1M RV", REALVOL["^GSPC"] * 100, "Realized", "%")
+if "HYG" in REALVOL.columns:   add_vol("HY 1M RV",  REALVOL["HYG"] * 100,   "Realized", "%")
+if "CL=F" in REALVOL.columns:  add_vol("WTI 1M RV", REALVOL["CL=F"] * 100,  "Realized", "%")
+fx_cols = [c for c in REALVOL.columns if c.endswith("=X")]
+if "USDJPY=X" in fx_cols:      add_vol("USDJPY 1M RV", REALVOL["USDJPY=X"] * 100, "Realized", "%")
+elif fx_cols:                  add_vol(f"{fx_cols[0]} 1M RV", REALVOL[fx_cols[0]] * 100, "Realized", "%")
+
+# Implied vols in points
+if "^VIX" in IV.columns:       add_vol("VIX", IV["^VIX"], "Implied", "pts")
+if "^OVX" in IV.columns:       add_vol("OVX", IV["^OVX"], "Implied", "pts")
+
+vol_tbl = pd.DataFrame(vol_rows, columns=["Series", "Class", "Units", "Level", "Δ w/w", "Percentile rank"])
+vol_tbl = vol_tbl.dropna(how="all")
+if not vol_tbl.empty:
+    # Keep implied and realized grouped, then by weekly change magnitude
+    vol_tbl = vol_tbl.sort_values(["Class", vol_tbl["Δ w/w"].abs().rename("abschg")], ascending=[True, False]).drop(columns=["abschg"])
+
+# Render at the bottom
+st.subheader("This week vs last: correlations and vol")
+
+if not corr_tbl.empty:
+    corr_style = (
+        corr_tbl.style
+            .format({
+                "ρ now (rolling)": "{:+.2%}",
+                "Δρ w/w": "{:+.2%}",
+                "Percentile rank": "{:.0f}%"
+            })
+            .background_gradient(subset=["Δρ w/w"], cmap="RdYlGn")
+            .hide_index()
+    )
+    st.dataframe(
+        corr_style,
+        use_container_width=True,
+        height=computed_height(corr_tbl.shape[0])
+    )
+    st.caption("ρ now is the current rolling correlation of daily returns over the selected window. Δρ w/w is change versus the prior week. Percentile rank is within the chosen history window.")
+
+if not vol_tbl.empty:
+    vol_style = (
+        vol_tbl.style
+            .format({
+                "Level": lambda v: f"{v:.1f}",
+                "Δ w/w": lambda v: "" if pd.isna(v) else f"{v:+.1f}",
+                "Percentile rank": "{:.0f}%"
+            })
+            .background_gradient(subset=["Δ w/w"], cmap="RdYlGn")
+            .hide_index()
+    )
+    st.dataframe(
+        vol_style,
+        use_container_width=True,
+        height=computed_height(vol_tbl.shape[0])
+    )
+    st.caption("Class identifies implied vs realized volatility. Units are points for implied indices (VIX/OVX) and percent for realized 1M vol. Δ w/w is change versus the prior week; Percentile rank is within the chosen history window.")
 
 # =========================
 # Downloads
