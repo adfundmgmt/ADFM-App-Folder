@@ -17,6 +17,7 @@ Features:
 - RSI (14-day) with Wilder smoothing
 - MACD (12,26,9) with histogram
 - Bollinger Bands (20, 2.0)
+- VIX panel aligned to your visible window
 """)
 
 ticker = st.sidebar.text_input("Ticker", "^GSPC").upper()
@@ -26,6 +27,7 @@ period = st.sidebar.selectbox(
 interval = st.sidebar.selectbox("Interval", ["1d","1wk","1mo"], index=0)
 
 show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=True)
+show_vix = st.sidebar.checkbox("Show VIX panel", value=True)
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def start_date_from_period(p: str) -> pd.Timestamp | None:
@@ -54,14 +56,31 @@ if df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
+# VIX history (only if panel enabled)
+df_vix_full = pd.DataFrame()
+if show_vix:
+    df_vix_full = get_full_history("^VIX", interval)
+    if df_vix_full.empty:
+        st.warning("VIX data unavailable; hiding VIX panel.")
+        show_vix = False
+
+# Normalize indices
 if df_full.index.tz is not None:
     df_full.index = df_full.index.tz_localize(None)
 if interval == "1d":
     df_full = df_full[df_full.index.weekday < 5]
 
+if show_vix:
+    if df_vix_full.index.tz is not None:
+        df_vix_full.index = df_vix_full.index.tz_localize(None)
+    if interval == "1d":
+        df_vix_full = df_vix_full[df_vix_full.index.weekday < 5]
+
 CAP_MAX_ROWS = 200000
 if len(df_full) > CAP_MAX_ROWS:
     df_full = df_full.tail(CAP_MAX_ROWS)
+if show_vix and len(df_vix_full) > CAP_MAX_ROWS:
+    df_vix_full = df_vix_full.tail(CAP_MAX_ROWS)
 
 # ── Date-based windowing with warmup ──────────────────────────────────────
 start_dt = start_date_from_period(period)
@@ -72,10 +91,18 @@ if start_dt is not None:
 else:
     df_ind = df_full.copy()
 
+# VIX window
+if show_vix:
+    if start_dt is not None:
+        df_vix_ind = df_vix_full[df_vix_full.index >= (start_dt - pd.DateOffset(years=1))].copy()
+    else:
+        df_vix_ind = df_vix_full.copy()
+
 # ── Indicators ───────────────────────────────────────────────────────────
 for w in (8, 20, 50, 100, 200):
     df_ind[f"MA{w}"] = df_ind["Close"].rolling(w).mean()
 
+# RSI (Wilder)
 delta = df_ind["Close"].diff()
 gain = delta.clip(lower=0)
 loss = -delta.clip(upper=0)
@@ -84,17 +111,19 @@ avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
 rs = avg_gain / avg_loss
 df_ind["RSI14"] = 100 - (100 / (1 + rs))
 
+# MACD
 df_ind["EMA12"]  = df_ind["Close"].ewm(span=12, adjust=False).mean()
 df_ind["EMA26"]  = df_ind["Close"].ewm(span=26, adjust=False).mean()
 df_ind["MACD"]   = df_ind["EMA12"] - df_ind["EMA26"]
 df_ind["Signal"] = df_ind["MACD"].ewm(span=9, adjust=False).mean()
 df_ind["Hist"]   = df_ind["MACD"] - df_ind["Signal"]
 
+# Bollinger Bands
 bb_window, bb_mult = 20, 2.0
 df_ind["BB_MA"]    = df_ind["Close"].rolling(bb_window).mean()
 df_ind["BB_STD"]   = df_ind["Close"].rolling(bb_window).std()
 df_ind["BB_UPPER"] = df_ind["BB_MA"] + bb_mult * df_ind["BB_STD"]
-df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_ind["BB_STD"]
+df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_mult = bb_mult * df_ind["BB_STD"]
 
 # ── Final slice ──────────────────────────────────────────────────────────
 if start_dt is not None:
@@ -104,18 +133,49 @@ if start_dt is not None:
 else:
     df_display = df_ind.copy()
 
+# VIX visible slice aligned to main dates
+if show_vix:
+    if start_dt is not None:
+        df_vix_display = df_vix_ind[df_vix_ind.index >= start_dt].copy()
+        if df_vix_display.empty:
+            df_vix_display = df_vix_ind.tail(300).copy()
+    else:
+        df_vix_display = df_vix_ind.copy()
+    # Align to main index for consistent ticks/hover
+    df_vix_display = df_vix_display.reindex(df_display.index).ffill()
+
 # ── Plotly Interactive Plot ──────────────────────────────────────────────
 df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
+if show_vix:
+    df_vix_display["DateStr"] = df_vix_display.index.strftime("%Y-%m-%d")
+
 available_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) >= w]
 missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) < w]
 if missing_mas:
     st.warning("Some MAs may appear choppy due to limited visible data: " + ", ".join(f"MA{w}" for w in missing_mas))
 
+# Decide subplot structure based on VIX toggle
+if show_vix:
+    rows = 5
+    row_heights = [0.56, 0.12, 0.12, 0.12, 0.08]
+    specs = [[{"type": "candlestick"}],
+             [{"type": "bar"}],
+             [{"type": "scatter"}],
+             [{"type": "scatter"}],
+             [{"type": "scatter"}]]
+else:
+    rows = 4
+    row_heights = [0.60, 0.14, 0.13, 0.13]
+    specs = [[{"type": "candlestick"}],
+             [{"type": "bar"}],
+             [{"type": "scatter"}],
+             [{"type": "scatter"}]]
+
 fig = make_subplots(
-    rows=4, cols=1, shared_xaxes=True,
-    row_heights=[0.60, 0.14, 0.13, 0.13],
+    rows=rows, cols=1, shared_xaxes=True,
+    row_heights=row_heights,
     vertical_spacing=0.04,
-    specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}], [{"type": "scatter"}]]
+    specs=specs
 )
 
 # Candlesticks
@@ -184,6 +244,14 @@ fig.add_trace(go.Scatter(
 ), row=4, col=1)
 fig.update_yaxes(title_text="MACD", row=4, col=1)
 
+# VIX panel
+if show_vix:
+    fig.add_trace(go.Scatter(
+        x=df_vix_display["DateStr"], y=df_vix_display["Close"],
+        mode="lines", line=dict(width=1.2, color="#546E7A"), name="VIX"
+    ), row=5, col=1)
+    fig.update_yaxes(title_text="VIX", row=5, col=1)
+
 # Month ticks
 month_starts = df_display.index.to_series().groupby(df_display.index.to_period("M")).first()
 tickvals = month_starts.dt.strftime("%Y-%m-%d").tolist()
@@ -193,8 +261,8 @@ fig.update_xaxes(type="category", tickmode="array",
                  tickangle=-45, showgrid=True, gridwidth=0.5, gridcolor="#e1e5ed")
 
 fig.update_layout(
-    height=950,
-    title=dict(text=f"{ticker} — OHLC + RSI & MACD" + (" + Bollinger Bands" if show_bbands else ""), x=0.5),
+    height=1120 if show_vix else 950,
+    title=dict(text=f"{ticker} — OHLC + RSI & MACD" + (" + VIX" if show_vix else "") + (" + Bollinger Bands" if show_bbands else ""), x=0.5),
     plot_bgcolor="white", paper_bgcolor="white",
     hovermode="x unified",
     margin=dict(l=60, r=20, t=60, b=40),
