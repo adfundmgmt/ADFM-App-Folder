@@ -56,7 +56,7 @@ if df_full.empty:
     st.error("No data returned. Check symbol or internet.")
     st.stop()
 
-# VIX history (only if panel enabled)
+# VIX history
 df_vix_full = pd.DataFrame()
 if show_vix:
     df_vix_full = get_full_history("^VIX", interval)
@@ -123,7 +123,7 @@ bb_window, bb_mult = 20, 2.0
 df_ind["BB_MA"]    = df_ind["Close"].rolling(bb_window).mean()
 df_ind["BB_STD"]   = df_ind["Close"].rolling(bb_window).std()
 df_ind["BB_UPPER"] = df_ind["BB_MA"] + bb_mult * df_ind["BB_STD"]
-df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_mult = bb_mult * df_ind["BB_STD"]
+df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_ind["BB_STD"]  # fixed typo
 
 # ── Final slice ──────────────────────────────────────────────────────────
 if start_dt is not None:
@@ -141,7 +141,6 @@ if show_vix:
             df_vix_display = df_vix_ind.tail(300).copy()
     else:
         df_vix_display = df_vix_ind.copy()
-    # Align to main index for consistent ticks/hover
     df_vix_display = df_vix_display.reindex(df_display.index).ffill()
 
 # ── Plotly Interactive Plot ──────────────────────────────────────────────
