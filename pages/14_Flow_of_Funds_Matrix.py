@@ -1,19 +1,23 @@
-# 15_Flow_of_Funds_Matrix.py
-# Flow of Funds Matrix — Actionable, always-populated version
-# Outputs: Top OW/UW, Pairs, Triggers + the usual heatmap/compass
+# 15_Flow_of_Funds_Compass.py
+# A simpler, more robust Flow-of-Funds model:
+# - Build a weekly Liquidity Composite L(t) from core FRED flows
+# - Features: Level Z-score L(t) and 4-week Slope Z-score ΔL(t)
+# - OLS on weekly returns for each asset using [L, ΔL]
+# - Output: Regime metrics, OW/UW, pairs, contribution bars, sensitivity compass
 
-import os
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from pandas_datareader import data as pdr
 
-# -------------------- Utilities --------------------
-st.set_page_config(page_title="Flow of Funds Matrix", layout="wide")
-st.title("Flow of Funds Matrix")
+# ────────────────────────────── Page ──────────────────────────────
+st.set_page_config(page_title="Flow of Funds Compass", layout="wide")
+st.title("Flow of Funds Compass")
 
+# ────────────────────────────── Utils ─────────────────────────────
 @st.cache_data(ttl=6*3600, show_spinner=False)
 def load_prices(tickers, start="2012-01-01"):
     try:
@@ -31,7 +35,6 @@ def load_prices(tickers, start="2012-01-01"):
 
 @st.cache_data(ttl=24*3600, show_spinner=False)
 def fred_series(series_id: str, start="2012-01-01") -> pd.Series:
-    # Try pd_datareader first (no key required)
     try:
         s = pdr.DataReader(series_id, "fred", start)
         s = s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
@@ -45,14 +48,16 @@ def weekly_index(start, end=None):
 
 def align_to_weekly(s: pd.Series, widx: pd.DatetimeIndex) -> pd.Series:
     if s.empty:
-        return s.reindex(widx)
+        return pd.Series(index=widx, dtype=float)
     df = pd.DataFrame({"v": s.sort_index()})
     df = df.reindex(df.index.union(widx)).sort_index().ffill()
     return df.loc[widx, "v"]
 
-def robust_scale(s: pd.Series):
-    if s.isna().all():
-        return s
+def zscore(s: pd.Series, w=26, minp=8):
+    r = s.rolling(w, min_periods=max(minp, w//3))
+    return (s - r.mean()) / (r.std(ddof=0) + 1e-12)
+
+def robust_z(s: pd.Series):
     med = s.median()
     mad = (s - med).abs().median()
     if np.isfinite(mad) and mad > 1e-12:
@@ -60,312 +65,347 @@ def robust_scale(s: pd.Series):
     std = s.std(ddof=0)
     return (s - s.mean()) / (std + 1e-12) if np.isfinite(std) and std > 1e-12 else s*0
 
-def build_design(fund_df: pd.DataFrame, flows, horizons, min_rows=12):
-    feats = {}
-    for c in flows:
-        if c not in fund_df.columns:
-            continue
-        for h in horizons:
-            d = fund_df[c] - fund_df[c].shift(h)
-            feats[f"{c}_d{h}w"] = robust_scale(d)
-    if not feats:
-        return pd.DataFrame(index=fund_df.index), []
-    X = pd.DataFrame(feats, index=fund_df.index)
-    valid = [c for c in X.columns if X[c].notna().sum() >= min_rows]
-    return X[valid], valid
-
-def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
+def ols_two_factors(y: pd.Series, X: pd.DataFrame):
+    # X has columns ["L", "DL"]
     df = pd.concat([y, X], axis=1).dropna()
-    if df.empty:
+    if df.shape[0] < 30:
         return None
     Y = df.iloc[:, 0].values.reshape(-1, 1)
-    X0 = df.iloc[:, 1:]
-    Xmat = np.column_stack([np.ones(len(df)), X0.values])
-    beta_w = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
-    yhat = Xmat @ beta_w
-    resid = Y.flatten() - yhat
-    dof = max(1, (len(df) - Xmat.shape[1]))
-    s2 = (resid @ resid) / dof
+    X0 = df[["L", "DL"]].values
+    Xmat = np.column_stack([np.ones(len(df)), X0])
+    beta = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
+    yhat = Xmat @ beta
+    resid = (Y.flatten() - yhat)
+    dof = max(1, len(df) - Xmat.shape[1])
+    s2 = float((resid @ resid) / dof)
     cov = s2 * np.linalg.pinv(Xmat.T @ Xmat)
     se = np.sqrt(np.clip(np.diag(cov), 1e-12, None))
-    t = beta_w / se
-    names = ["Intercept"] + list(X0.columns)
-    b_weekly = pd.Series(beta_w, index=names).drop("Intercept")
-    tser = pd.Series(t, index=names).drop("Intercept")
+    t = beta / se
     denom = ((Y - Y.mean()) ** 2).sum() + 1e-12
     r2 = float(1.0 - (resid @ resid) / denom)
-    return {"weekly": b_weekly, "annual": b_weekly*scale, "t": tser, "r2": r2, "rows": len(df)}
+    names = ["Intercept", "L", "DL"]
+    out = {
+        "beta": pd.Series(beta, index=names),
+        "t": pd.Series(t, index=names),
+        "r2": r2,
+        "rows": int(len(df)),
+        "last_pred": float(np.array([1.0, X["L"].iloc[-1], X["DL"].iloc[-1]]) @ beta)
+    }
+    return out
 
-def choose_dtick_and_format(x_index: pd.DatetimeIndex):
-    if x_index.empty: return "M12", "%Y"
-    span_days = (x_index.max() - x_index.min()).days
-    if span_days <= 370: return "M1", "%b %y"
-    if span_days <= 3*365: return "M3", "%b %y"
-    if span_days <= 7*365: return "M6", "%Y"
-    return "M12", "%Y"
-
-# -------------------- Sidebar --------------------
+# ───────────────────────────── Sidebar ───────────────────────────
 with st.sidebar:
     st.header("Settings")
     start_date = st.date_input("Start date", pd.to_datetime("2012-01-01"))
-    reg_window = st.number_input("Regression window (weeks)", 52, 520, 156, step=13)
-    horizons = st.multiselect("Delta horizons (weeks)", [4, 8], default=[4, 8])
-    show_annual = st.toggle("Show betas annualized (×52)", value=True)
     default_assets = ["SPY","QQQ","TLT","HYG","XLE","XLF","GLD","BTC-USD"]
     tickers = st.text_input("Assets (comma separated)", ",".join(default_assets)).replace(" ","").split(",")
+    reg_window_weeks = st.number_input("Regression window (weeks)", 52, 520, 156, step=13)
+    z_win = st.number_input("Z-score window (weeks)", 26, 104, 52, step=13)
+    slope_lag = st.selectbox("Slope horizon for ΔL", [2,4,8], index=1)
     st.markdown("---")
-    st.subheader("FRED IDs")
-    st.caption("Defaults cover Fed balance sheet, RRP, TGA. Add reserve series if you like.")
-    extra = st.text_area("Extra FRED (name=ID per line)", value="", height=80)
+    st.subheader("Liquidity Composite Weights")
+    w_walcl = st.slider("WALCL (Fed balance sheet)", 0.0, 2.0, 1.0, 0.1)
+    w_rrp   = st.slider("RRPONTSYD (Reverse repo, negative)", 0.0, 2.0, 1.0, 0.1)
+    w_tga   = st.slider("TGA (Treasury cash, negative)", 0.0, 2.0, 0.8, 0.1)
+    w_fx    = st.slider("FX reserves proxy (CHN/JPN/etc.)", 0.0, 2.0, 0.5, 0.1)
+    method = st.selectbox("Composite method", ["Z-sum", "PCA-1"], index=0)
+    st.caption("Z-sum uses standardized levels; PCA-1 uses the first principal component of standardized flows.")
     st.markdown("---")
-    st.subheader("Conviction weights")
-    t_weight = st.slider("Weight of |t|-mean", 0.0, 1.0, 0.5, 0.05)
-    stab_weight = st.slider("Weight of Stability", 0.0, 1.0, 0.3, 0.05)
-    r2_weight = st.slider("Weight of R²", 0.0, 1.0, 0.2, 0.05)
+    st.subheader("Confidence Weights")
+    wt_t = st.slider("Weight of |t|-mean", 0.0, 1.0, 0.55, 0.05)
+    wt_r2 = st.slider("Weight of R²", 0.0, 1.0, 0.25, 0.05)
+    wt_stab = st.slider("Weight of Stability", 0.0, 1.0, 0.20, 0.05)
 
-st.caption("Identify where liquidity and relative performance co-move, then act: tilts, pairs, triggers. Always populated, no silent filters.")
+st.caption("Compact specification: assets’ weekly returns regressed on Liquidity Level Z and Liquidity Slope Z. Always populated, readable, and fast.")
 
-# -------------------- Data --------------------
-fred_ids = {"WALCL":"WALCL", "RRPONTSYD":"RRPONTSYD", "WTREGEN":"WTREGEN", "WDTGAL":"WDTGAL"}
-if extra.strip():
-    for line in extra.splitlines():
-        if "=" in line:
-            k, v = [x.strip() for x in line.split("=",1)]
-            fred_ids[k] = v
-
+# ───────────────────────────── Data ──────────────────────────────
 with st.spinner("Loading data"):
+    widx = weekly_index(start_date)
+    # Prices
     px_d = load_prices(tickers, start=str(start_date))
     if px_d.empty:
         st.error("No price data. Check tickers.")
         st.stop()
-    widx = weekly_index(start_date)
     px = px_d.resample("W-FRI").last().reindex(widx).ffill()
+    rets = np.log(px).diff()
+
+    # FRED series
+    fred_ids = {
+        "WALCL":"WALCL",          # Fed balance sheet
+        "RRPONTSYD":"RRPONTSYD",  # Reverse repo
+        "WTREGEN":"WTREGEN",      # TGA (preferred)
+        "WDTGAL":"WDTGAL",        # TGA alt
+        # Optional FX reserve proxies (names vary; use any that exist)
+        "CHNR":"CHNRORGDPM",      # Example placeholder may or may not exist
+        "JPNR":"JPNRGSBP",        # Example placeholder may or may not exist
+    }
 
     fred_raw = {}
     for name, sid in fred_ids.items():
         s = fred_series(sid, start=str(start_date))
         if not s.empty:
             fred_raw[name] = align_to_weekly(s, widx)
-    fred_df = pd.DataFrame(fred_raw, index=widx) if fred_raw else pd.DataFrame(index=widx)
 
-if px.empty:
-    st.error("No price data.")
-    st.stop()
+    fred_df = pd.DataFrame(fred_raw, index=widx)
+    if fred_df.empty:
+        st.error("No FRED data returned. Try a later start date.")
+        st.stop()
 
-fund = pd.DataFrame(index=widx)
+# Build core flows
+flows = {}
 have = set(fred_df.columns)
-tga = fred_df["WTREGEN"] if "WTREGEN" in have else (fred_df["WDTGAL"] if "WDTGAL" in have else None)
+tga = None
+if "WTREGEN" in have:
+    tga = fred_df["WTREGEN"]
+elif "WDTGAL" in have:
+    tga = fred_df["WDTGAL"]
 
-if "WALCL" in have and "RRPONTSYD" in have:
-    fund["Fed_NetLiq"] = fred_df["WALCL"] - fred_df["RRPONTSYD"] - (tga if tga is not None else 0)
-    if tga is not None:
-        fund["TGA_Drain"] = -tga
-elif "WALCL" in have:
-    fund["Fed_NetLiq_proxy"] = fred_df["WALCL"]
+if "WALCL" in have:
+    flows["WALCL"] = fred_df["WALCL"]
+if "RRPONTSYD" in have:
+    flows["RRPONTSYD"] = fred_df["RRPONTSYD"]
+if tga is not None:
+    flows["TGA"] = tga
 
-fx_cols = [c for c in fred_df.columns if c.upper().startswith(("CHN","JPN")) or c.endswith("_RES")]
+# FX reserves proxy if present
+fx_cols = [c for c in fred_df.columns if c.upper().startswith(("CHN","JPN")) or c.upper().endswith("RGSBP")]
 if fx_cols:
-    fund["FX_Reserves"] = fred_df[fx_cols].sum(axis=1)
+    flows["FXRES"] = fred_df[fx_cols].sum(axis=1)
 
-flow_priority = [
-    ["Fed_NetLiq","TGA_Drain","FX_Reserves"],
-    ["Fed_NetLiq","TGA_Drain"],
-    ["Fed_NetLiq"],
-    ["Fed_NetLiq_proxy"],
-]
-flow_list = next((ok for cand in flow_priority if (ok := [c for c in cand if c in fund.columns])), [])
-if not flow_list:
-    st.error("No usable flows. Need WALCL and RRPONTSYD, or at least WALCL.")
+if not flows:
+    st.error("No usable flow series present.")
     st.stop()
 
-X, valid = build_design(fund, flow_list, horizons, min_rows=12)
-if X.empty:
-    st.error("No usable flow shocks built. Try a later start date.")
-    st.stop()
+flows_df = pd.DataFrame(flows, index=widx).ffill()
 
-rets = np.log(px).diff()
-eff_window = min(int(reg_window), len(widx))
-if eff_window < 26:
-    st.warning(f"Short sample ({eff_window} weeks). Consider a longer window.")
+# Standardize levels for composite
+Z = flows_df.apply(lambda s: zscore(s, w=z_win), axis=0)
 
-# -------------------- Regressions --------------------
-betas_a, betas_w, tstats, r2s, rows_used = {}, {}, {}, {}, {}
-min_rows = max(20, 5*max(1, len(valid)))
-for asset in rets.columns:
-    y = rets[asset]
-    df = pd.concat([y, X], axis=1).dropna().iloc[-eff_window:]
-    if df.shape[0] < min_rows:
-        continue
-    res = ols_annualized(df.iloc[:, 0], df.iloc[:, 1:], scale=52.0)
+# Signed weights
+w_map = {
+    "WALCL": +w_walcl,
+    "RRPONTSYD": -w_rrp,
+    "TGA": -w_tga,
+    "FXRES": +w_fx
+}
+weights = pd.Series({k: w_map.get(k, 0.0) for k in Z.columns})
+
+# Composite L(t)
+if method == "Z-sum":
+    L = (Z * weights.reindex(Z.columns).fillna(0.0)).sum(axis=1)
+else:
+    # PCA-1 on standardized columns that have data
+    Zc = Z.dropna(how="all", axis=1).fillna(0.0)
+    if Zc.shape[1] == 0:
+        L = (Z * weights.reindex(Z.columns).fillna(0.0)).sum(axis=1)
+    else:
+        M = Zc.values
+        cov = np.cov(M.T)
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        pc1 = eigvecs[:, -1]  # largest eigenvector
+        L = pd.Series(M @ pc1, index=Zc.index)
+        # Align name list for contributions later
+        Z = Zc.copy()
+        weights = pd.Series(pc1, index=Zc.columns)
+
+# Level Z and Slope Z
+Lz = zscore(L, w=z_win)
+DL = L.diff(int(slope_lag))
+DLz = zscore(DL, w=z_win)
+
+features = pd.DataFrame({"L": Lz, "DL": DLz}, index=widx)
+
+# Trim to regression window
+eff_w = min(int(reg_window_weeks), len(widx))
+features_w = features.iloc[-eff_w:]
+rets_w = rets.reindex(features_w.index)
+
+# ───────────────────────────── Model ─────────────────────────────
+betas, tstats, r2s, rows_used, preds = {}, {}, {}, {}, {}
+stab = {}
+for asset in rets_w.columns:
+    y = rets_w[asset]
+    res = ols_two_factors(y, features_w)
     if res is None:
         continue
-    betas_a[asset] = res["annual"]
-    betas_w[asset] = res["weekly"]
+    betas[asset] = res["beta"]
     tstats[asset] = res["t"]
     r2s[asset] = res["r2"]
     rows_used[asset] = res["rows"]
+    preds[asset] = res["last_pred"]
 
-if not betas_a:
-    st.error("No assets had sufficient overlap. Try fewer tickers or a later start.")
+    # Stability: compare first half vs second half betas on L and DL
+    df = pd.concat([y, features_w], axis=1).dropna()
+    mid = len(df)//2
+    def part_beta(df_part):
+        out = ols_two_factors(df_part.iloc[:,0], df_part.iloc[:,1:])
+        if out is None:
+            return np.nan, np.nan
+        b = out["beta"]
+        return float(b["L"]), float(b["DL"])
+    b1L, b1D = part_beta(df.iloc[:mid])
+    b2L, b2D = part_beta(df.iloc[mid:])
+    if np.any(~np.isfinite([b1L,b1D,b2L,b2D])):
+        stab[asset] = np.nan
+    else:
+        denom = abs(b1L)+abs(b2L)+abs(b1D)+abs(b2D)+1e-6
+        stab[asset] = float(np.clip(1.0 - (abs(b1L-b2L)+abs(b1D-b2D))/denom, 0.0, 1.0))
+
+if not betas:
+    st.error("No assets had sufficient overlap for regression.")
     st.stop()
 
-B_ann = pd.DataFrame(betas_a).T
-B_wk = pd.DataFrame(betas_w).T
-T = pd.DataFrame(tstats).T
+B = pd.DataFrame(betas).T[["L","DL"]]
+Tstats = pd.DataFrame(tstats).T[["L","DL"]]
 R2 = pd.Series(r2s, name="R2")
-rowsS = pd.Series(rows_used, name="Rows")
+Rows = pd.Series(rows_used, name="Rows")
+Pred = pd.Series(preds, name="FlowNow")
 
-Bdisp = B_ann if show_annual else B_wk
-unit_label = "Annualized β" if show_annual else "Weekly β"
-
-liq_cols = [c for c in Bdisp.columns if any(k in c for k in ["Fed_NetLiq","TGA_Drain","FX_Reserves","Fed_NetLiq_proxy"])]
-Bv = Bdisp[liq_cols].copy()
-liq_beta = Bv.sum(axis=1).rename("LiquidityBeta")
-
-# -------------------- Confidence & Tilt --------------------
-def half_window_liq_beta(asset):
-    y = rets[asset]
-    df = pd.concat([y, X], axis=1).dropna()
-    if len(df) < 2*min_rows:
-        return np.nan
-    mid = len(df)//2
-    def part_beta(dfp):
-        r = ols_annualized(dfp.iloc[:,0], dfp.iloc[:,1:], scale=(52.0 if show_annual else 1.0))
-        if r is None: return np.nan
-        b = r["annual"] if show_annual else r["weekly"]
-        return b.reindex(liq_cols).sum()
-    b1, b2 = part_beta(df.iloc[:mid]), part_beta(df.iloc[mid:])
-    if not np.isfinite(b1) or not np.isfinite(b2): return np.nan
-    denom = abs(b1) + abs(b2) + 1e-6
-    return float(np.clip(1.0 - abs(b1 - b2)/denom, 0.0, 1.0))
-
-stability = pd.Series({a: half_window_liq_beta(a) for a in Bv.index}, name="Stability")
-abs_t_mean = T.reindex(columns=liq_cols).abs().mean(axis=1).rename("|t|_mean").fillna(0.0)
+# Confidence blend
+abs_t_mean = Tstats.abs().mean(axis=1).rename("|t|_mean").fillna(0.0)
 t_conf = np.clip(abs_t_mean, 0.0, 3.0) / 3.0
-r2_conf = (R2.fillna(0.0).clip(0.0, 0.15) / 0.15).rename("R2_conf")
-stab_conf = stability.fillna(0.0).clip(0.0, 1.0)
+r2_conf = R2.fillna(0.0).clip(0.0, 0.20) / 0.20
+stab_conf = pd.Series(stab).fillna(0.0).clip(0.0, 1.0)
 
-# normalize weights
-w_sum = max(1e-6, t_weight + stab_weight + r2_weight)
-confidence = ((t_weight/w_sum)*t_conf + (stab_weight/w_sum)*stab_conf + (r2_weight/w_sum)*r2_conf).rename("Confidence")
-tilt_score = (liq_beta.fillna(0.0) * confidence).rename("TiltScore")
+w_sum = max(1e-6, wt_t + wt_r2 + wt_stab)
+Confidence = ((wt_t/w_sum)*t_conf + (wt_r2/w_sum)*r2_conf + (wt_stab/w_sum)*stab_conf).rename("Confidence")
 
-playbook = pd.concat([liq_beta, confidence, tilt_score, abs_t_mean, stab_conf.rename("Stability"), r2_conf, R2, rowsS], axis=1)
+# Tilt: exposures to L and ΔL against current state
+state_L = float(features_w["L"].iloc[-1]) if not features_w.empty else np.nan
+state_DL = float(features_w["DL"].iloc[-1]) if not features_w.empty else np.nan
+TiltRaw = (B["L"]*state_L + B["DL"]*state_DL).rename("TiltRaw")
+Tilt = (TiltRaw * Confidence).rename("TiltScore")
+
+playbook = pd.concat([B, Tstats.add_prefix("t_"), R2, Rows, Confidence, Tilt, Pred], axis=1)
 playbook = playbook.sort_values("TiltScore", ascending=False)
 
-# -------------------- Liquidity Pulse & triggers --------------------
-pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","FX_Reserves","TGA_Drain","Fed_NetLiq_proxy"])]
-pulse_series = X[pos_cols].sum(axis=1).dropna()
-def zscore(s, w=26):
-    r = s.rolling(w, min_periods=max(8, w//3))
-    return (s - r.mean()) / (r.std(ddof=0) + 1e-12)
-pulse_z = zscore(pulse_series)
-pulse_slope = pulse_series.diff(4)
-state_z = float(pulse_z.iloc[-1]) if not pulse_z.empty else np.nan
-state_slope = float(pulse_slope.iloc[-1]) if not pulse_slope.empty else np.nan
-
-# -------------------- Header metrics --------------------
-st.subheader("Actionable Playbook")
+# ────────────────────────── Header metrics ───────────────────────
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Liquidity Pulse z", f"{state_z:+.2f}")
-c2.metric("Pulse 4w slope", f"{state_slope:+.2f}")
-c3.metric("Avg Confidence", f"{confidence.mean():.2f}")
+c1.metric("Liquidity Level z", f"{state_L:+.2f}")
+c2.metric("Liquidity Slope z", f"{state_DL:+.2f}")
+c3.metric("Avg Confidence", f"{Confidence.mean():.2f}")
 c4.metric("Coverage", f"{len(playbook)} assets")
 
-st.caption("TiltScore = LiquidityBeta × Confidence. Confidence blends |t|-mean, Stability, capped R² with your weights.")
+# Regime text
+def regime_text(Lz_now, DLz_now):
+    if not np.isfinite(Lz_now) or not np.isfinite(DLz_now):
+        return "N/A"
+    if Lz_now >= 1.0 and DLz_now > 0:
+        return "Liquidity improving"
+    if Lz_now <= -1.0 and DLz_now < 0:
+        return "Liquidity deteriorating"
+    return "Mixed/neutral"
+st.caption(f"Regime: {regime_text(state_L, state_DL)}. Use OW/UW or pairs accordingly. Invalidate if TiltScore flips sign or |t|-mean collapses.")
 
-# -------------------- Top lists & pairs (always populated) --------------------
+# ─────────────────────── OW / UW and Pairs ───────────────────────
 top_n = min(5, len(playbook))
-ow_top = playbook.head(top_n)
-uw_top = playbook.tail(top_n).iloc[::-1]
+ow = playbook.head(top_n)
+uw = playbook.tail(top_n).iloc[::-1]
+
 def fmt_tbl(df):
-    cols = ["LiquidityBeta","Confidence","TiltScore","|t|_mean","Stability","R2_conf","R2","Rows"]
+    cols = ["L","DL","t_L","t_DL","R2","Confidence","TiltScore","FlowNow","Rows"]
     view = df.reindex(columns=cols)
     try:
         return view.style.format({
-            "LiquidityBeta":"{:+.2f}", "Confidence":"{:.2f}", "TiltScore":"{:+.2f}",
-            "|t|_mean":"{:.2f}", "Stability":"{:.0%}", "R2_conf":"{:.0%}", "R2":"{:.1%}"
+            "L":"{:+.2f}","DL":"{:+.2f}",
+            "t_L":"{:+.2f}","t_DL":"{:+.2f}",
+            "R2":"{:.1%}","Confidence":"{:.2f}",
+            "TiltScore":"{:+.3f}","FlowNow":"{:+.3f}","Rows":"{:d}"
         }).background_gradient(subset=["TiltScore"], cmap="RdYlGn")
     except Exception:
         return view
 
-st.markdown("**Top Overweights**")
-st.dataframe(fmt_tbl(ow_top), use_container_width=True)
-st.markdown("**Top Underweights**")
-st.dataframe(fmt_tbl(uw_top), use_container_width=True)
+st.subheader("Actionable Playbook")
+cL, cR = st.columns(2)
+with cL:
+    st.markdown("**Top Overweights**")
+    st.dataframe(fmt_tbl(ow), use_container_width=True)
+with cR:
+    st.markdown("**Top Underweights**")
+    st.dataframe(fmt_tbl(uw), use_container_width=True)
 
 def make_pairs(long_df, short_df, n=3):
     pairs = []
     for la, ls in zip(long_df.index[:n], short_df.index[:n]):
         pairs.append([la, ls, float(long_df.loc[la,"TiltScore"] - short_df.loc[ls,"TiltScore"])])
     return pd.DataFrame(pairs, columns=["Long","Short","NetScore"])
-pairs = make_pairs(ow_top, uw_top, n=min(3, top_n))
-st.markdown("**Pairs for expression**")
+pairs = make_pairs(ow, uw, n=min(3, top_n))
+st.markdown("**Pairs**")
 try:
-    st.dataframe(pairs.style.format({"NetScore":"{:+.2f}"}), use_container_width=True)
+    st.dataframe(pairs.style.format({"NetScore":"{:+.3f}"}), use_container_width=True)
 except Exception:
     st.dataframe(pairs, use_container_width=True)
 
-# -------------------- Triggers --------------------
-st.subheader("Triggers and invalidation rules")
-def pulse_regime(z, slope):
-    if not np.isfinite(z) or not np.isfinite(slope): return "N/A"
-    if z >= 1.0 and slope > 0: return "Liquidity improving"
-    if z <= -1.0 and slope < 0: return "Liquidity deteriorating"
-    return "Mixed/neutral"
-regime = pulse_regime(state_z, state_slope)
-st.markdown(
-    f"- **Regime:** **{regime}**. Risk-on when Pulse z > +1 and slope > 0. Risk-off when z < −1 and slope < 0.\n"
-    "- **Act:** Overweight the OW list, underweight the UW list, or express via pairs above.\n"
-    "- **Invalidate:** Flip or reduce if TiltScore changes sign, |t|-mean falls, or Stability drops sharply."
+# ───────────────── Liquidity composite visuals ───────────────────
+st.subheader("Liquidity Composite and Contributions")
+# Contribution bars: last 26 weeks, show how each flow moved
+bars_weeks = 26
+contrib = pd.DataFrame(index=Z.index, columns=Z.columns, dtype=float)
+for c in Z.columns:
+    # contribution to level from standardized series weighted
+    contrib[c] = Z[c] * (weights.get(c, 0.0))
+contrib = contrib.iloc[-bars_weeks:]
+
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                    row_heights=[0.65, 0.35], vertical_spacing=0.06,
+                    specs=[[{"type":"scatter"}],[{"type":"bar"}]])
+
+# Composite line
+fig.add_hline(y=0, line=dict(color="#cccccc", width=1, dash="dot"), row=1, col=1)
+fig.add_trace(go.Scatter(x=Lz.index, y=Lz, mode="lines", name="Level Z", line=dict(width=1.6)), row=1, col=1)
+fig.add_trace(go.Scatter(x=DLz.index, y=DLz, mode="lines", name="Slope Z", line=dict(width=1.2, dash="dot")), row=1, col=1)
+
+# Shade regimes
+if len(Lz.dropna()) > 0:
+    up = (Lz >= 1.0) & (DLz > 0)
+    dn = (Lz <= -1.0) & (DLz < 0)
+    # simple markers for last state
+    fig.add_trace(go.Scatter(x=Lz.index[up], y=Lz[up], mode="markers", name="Improving", marker=dict(size=5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=Lz.index[dn], y=Lz[dn], mode="markers", name="Deteriorating", marker=dict(size=5)), row=1, col=1)
+
+# Contribution stacked bars
+for c in contrib.columns:
+    fig.add_trace(go.Bar(x=contrib.index, y=contrib[c], name=c, showlegend=True), row=2, col=1)
+
+fig.update_yaxes(title_text="Z-scores", row=1, col=1)
+fig.update_yaxes(title_text="Weighted level contribution", row=2, col=1)
+fig.update_layout(height=520, margin=dict(l=40, r=10, t=40, b=30), barmode="relative", hovermode="x unified")
+st.plotly_chart(fig, use_container_width=True)
+
+# ───────────────── Sensitivity compass ──────────────────────────
+st.subheader("Sensitivity Compass (β to Level vs β to Slope)")
+comp = B.copy()
+comp["Confidence"] = Confidence
+comp["Tilt"] = Tilt
+comp = comp.sort_values("Tilt", ascending=False)
+
+scatter = go.Figure()
+scatter.add_hline(y=0, line=dict(color="#cccccc", dash="dot"))
+scatter.add_vline(x=0, line=dict(color="#cccccc", dash="dot"))
+scatter.add_trace(
+    go.Scatter(
+        x=comp["L"], y=comp["DL"],
+        mode="markers+text",
+        text=comp.index,
+        textposition="top center",
+        marker=dict(
+            size=(5 + 20*comp["Confidence"].clip(0,1)).astype(float),
+            opacity=0.85,
+        ),
+        name="Assets",
+        customdata=np.stack([comp["Tilt"], comp["Confidence"], comp.index], axis=1),
+        hovertemplate="<b>%{customdata[2]}</b><br>β_L=%{x:.2f}  β_ΔL=%{y:.2f}<br>Tilt=%{customdata[0]:+.3f}<br>Conf=%{customdata[1]:.2f}<extra></extra>"
+    )
 )
+scatter.update_xaxes(title="β to Liquidity Level (Z)")
+scatter.update_yaxes(title="β to Liquidity Slope (Z)")
+scatter.update_layout(height=480, margin=dict(l=40, r=10, t=40, b=40), showlegend=False)
+st.plotly_chart(scatter, use_container_width=True)
 
-# -------------------- Heatmap (context) --------------------
-st.subheader(f"Liquidity beta heatmap ({unit_label})")
-def relabel(col: str) -> str:
-    return (col.replace("Fed_NetLiq","Fed NL").replace("TGA_Drain","TGA drain")
-               .replace("FX_Reserves","FX reserves").replace("_d"," Δ"))
-label_map = {c: relabel(c) for c in Bv.columns}
-Bv_disp = Bv.rename(columns=label_map)
-Tmatch = T.reindex(index=Bv.index, columns=Bv.columns).rename(columns=label_map)
-
-def star_marker(x):
-    if pd.isna(x): return ""
-    ax = abs(x)
-    return "★★★" if ax >= 3.0 else ("★★" if ax >= 2.0 else ("★" if ax >= 1.7 else ""))
-
-star_text = Tmatch.applymap(star_marker).fillna("")
-custom = np.dstack([Bv_disp.values, Tmatch.values])
-colors_pos_green = [[0.0, "#d6604d"], [0.5, "#f7f7f7"], [1.0, "#1a9850"]]
-hm = go.Figure(data=go.Heatmap(
-    z=Bv_disp.values, x=list(Bv_disp.columns), y=list(Bv_disp.index),
-    colorscale=colors_pos_green, zmid=0, colorbar=dict(title=unit_label),
-    text=star_text.values, texttemplate="%{text}",
-    customdata=custom,
-    hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>"+unit_label+": %{z:.3f}<br>t-stat: %{customdata[1]:.2f}<extra></extra>"
-))
-hm.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10))
-st.plotly_chart(hm, use_container_width=True)
-
-# -------------------- Pulse chart --------------------
-st.subheader("Liquidity Pulse (sum of standardized flow shocks)")
-pulse_plot = pulse_series.loc[str(start_date):]
-dtick, tfmt = choose_dtick_and_format(pulse_plot.index)
-fig_pulse = go.Figure()
-fig_pulse.add_hline(y=0, line=dict(color="#cccccc", dash="dot"))
-fig_pulse.add_trace(go.Scatter(x=pulse_plot.index, y=pulse_plot, mode="lines", name="Pulse"))
-if not pulse_plot.empty:
-    fig_pulse.add_trace(go.Scatter(x=[pulse_plot.index[-1]], y=[pulse_plot.iloc[-1]],
-                                   mode="markers+text", text=[f"{pulse_plot.iloc[-1]:+.2f}"],
-                                   textposition="top center", showlegend=False))
-fig_pulse.update_layout(showlegend=False, height=300, margin=dict(l=10, r=10, t=10, b=10))
-fig_pulse.update_yaxes(title_text="Standardized shocks")
-fig_pulse.update_xaxes(dtick=dtick, tickformat=tfmt, hoverformat="%b %d, %Y")
-st.plotly_chart(fig_pulse, use_container_width=True)
-
-# -------------------- Downloads --------------------
-with st.expander("Download results"):
-    st.download_button("Betas (display units) CSV", Bdisp.to_csv().encode(), file_name="flow_betas.csv")
-    st.download_button("Playbook CSV", playbook.to_csv().encode(), file_name="flow_playbook.csv")
+# ───────────────── Downloads ─────────────────────────────────────
+with st.expander("Download data"):
+    st.download_button("Playbook CSV", playbook.to_csv().encode(), file_name="flow_of_funds_playbook.csv")
+    out_feats = pd.DataFrame({"Lz": Lz, "DLz": DLz})
+    st.download_button("Composite features (Lz, DLz) CSV", out_feats.to_csv().encode(), file_name="liquidity_features.csv")
 
 st.caption("© 2025 AD Fund Management LP")
