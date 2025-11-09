@@ -107,12 +107,20 @@ with st.sidebar:
     reg_window = st.number_input("Regression window (weeks)", 52, 520, 156, step=13)
     horizons = st.multiselect("Delta horizons (weeks)", [4, 8], default=[4, 8])
     show_annual = st.toggle("Show betas annualized (×52)", value=True)
-    default_assets = ["SPY","QQQ","TLT","HYG","XLE","XLF","GLD","BTC-USD"]
+
+    # Expanded default asset set: added 12
+    # IWM, EFA, EEM, SMH, XLU, XLB, XLI, USO, SLV, URA, UUP, ETH-USD
+    default_assets = [
+        "SPY","QQQ","TLT","HYG","XLE","XLF","GLD","BTC-USD",
+        "IWM","EFA","EEM","SMH","XLU","XLB","XLI","USO","SLV","URA","UUP","ETH-USD"
+    ]
     tickers = st.text_input("Assets (comma separated)", ",".join(default_assets)).replace(" ","").split(",")
+
     st.markdown("---")
     st.subheader("FRED IDs")
     st.caption("Defaults cover Fed balance sheet, RRP, TGA. Add reserve series if you like.")
     extra = st.text_area("Extra FRED (name=ID per line)", value="", height=80)
+
     st.markdown("---")
     st.subheader("Conviction weights")
     t_weight = st.slider("Weight of |t|-mean", 0.0, 1.0, 0.5, 0.05)
