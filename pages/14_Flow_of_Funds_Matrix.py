@@ -1,7 +1,7 @@
 # flow_of_funds_matrix.py
 # Flow of Funds Matrix – cross-asset flows with macro regime header and actionable takeaways
 # Data sources: Yahoo Finance (prices, volumes) and FRED (yields, breakevens, credit spreads) via pandas_datareader
-# FRED access here requires no login or API key
+# FRED access here uses pandas_datareader's public endpoint (no login or API key)
 
 import datetime as dt
 from typing import Dict, Tuple
@@ -37,6 +37,7 @@ st.markdown(
         border-radius: 16px;
         padding: 16px 18px;
         box-shadow: 0 6px 18px rgba(0,0,0,0.05);
+        min-height: 180px;
     }}
     .matrix-card {{
         background: {PASTEL_CARD};
@@ -131,8 +132,8 @@ FRED_SERIES = {
     "DGS2": "UST 2y Yield (%)",
     "DGS10": "UST 10y Yield (%)",
     "T10YIE": "10y Breakeven (%)",
-    "BAMLH0A0HYM2": "HY OAS (bps)",
-    "BAMLC0A0CM": "IG OAS (bps)",
+    "BAMLH0A0HYM2": "HY OAS (bps)",   # FRED returns percent; convert to bps
+    "BAMLC0A0CM": "IG OAS (bps)",     # FRED returns percent; convert to bps
 }
 FRED_CODES: Tuple[str, ...] = tuple(FRED_SERIES.keys())  # tuple for Streamlit cache hashing
 
@@ -150,7 +151,7 @@ with st.sidebar:
         default=list(UNIVERSE.keys()),
     )
 
-    # FlowScore weights are editable so you can tune aggressiveness
+    # FlowScore weights are adjustable
     st.markdown("**FlowScore weights**")
     w5d = st.slider("5D weight", 0.0, 1.0, 0.45, 0.05)
     w1m = st.slider("1M weight", 0.0, 1.0, 0.35, 0.05)
@@ -164,12 +165,7 @@ with st.sidebar:
         "VOL": wvol / wsum,
     }
 
-    horizon_cols = st.multiselect(
-        "Horizons for return matrix",
-        options=list(HORIZONS.keys()),
-        default=["1D", "5D", "1M", "3M", "6M", "1Y"],
-    )
-
+    horizon_cols = ["1D", "5D", "1M", "3M", "6M", "1Y"]
     disable_fred = st.checkbox("Disable FRED if service is flaky", value=False)
 
 # -----------------------------
@@ -199,7 +195,6 @@ def load_yahoo_data(tickers_tuple: Tuple[str, ...], start_date: dt.date) -> pd.D
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_fred_series(series_codes_tuple: Tuple[str, ...], start_date: dt.date) -> pd.DataFrame:
-    # No key needed for FRED via pandas_datareader
     out = {}
     for code in series_codes_tuple:
         try:
@@ -234,7 +229,11 @@ def vol_percentile(vol: pd.DataFrame, window: int = 60) -> pd.DataFrame:
         raw=False,
     )
 
-def compute_flow_score(px: pd.DataFrame, vol: pd.DataFrame, horizons: Dict[str, int], weights: Dict[str, float]) -> pd.DataFrame:
+def compute_flow_score(
+    px: pd.DataFrame, vol: pd.DataFrame, horizons: Dict[str, int], weights: Dict[str, float]
+) -> pd.DataFrame:
+    """Weighted z across 5D, 1M, 3M returns and 60D volume percentile z.
+       Robust to missing components: reweights per-ticker by available pieces."""
     ret_5d = px.pct_change(horizons["5D"])
     ret_1m = px.pct_change(horizons["1M"])
     ret_3m = px.pct_change(horizons["3M"])
@@ -245,7 +244,20 @@ def compute_flow_score(px: pd.DataFrame, vol: pd.DataFrame, horizons: Dict[str, 
     z3m = ret_3m.apply(rolling_zscore, window=252)
     zv = volp.apply(rolling_zscore, window=126)
 
-    flow = weights["5D"] * z5 + weights["1M"] * z1m + weights["3M"] * z3m + weights["VOL"] * zv
+    # Align all components
+    all_cols = sorted(set(px.columns))
+    z5 = z5.reindex(columns=all_cols)
+    z1m = z1m.reindex(columns=all_cols)
+    z3m = z3m.reindex(columns=all_cols)
+    zv = zv.reindex(columns=all_cols)
+
+    numerator = 0
+    denominator = 0
+    for comp, w in [(z5, weights["5D"]), (z1m, weights["1M"]), (z3m, weights["3M"]), (zv, weights["VOL"])]:
+        numerator = numerator + comp.multiply(w)
+        denominator = denominator + comp.notna().astype(float).multiply(w)
+
+    flow = numerator / denominator.replace(0, np.nan)
     return flow
 
 def tidy_matrix(flow_score: pd.DataFrame, groups_dict: Dict[str, Dict[str, str]]) -> pd.DataFrame:
@@ -283,7 +295,7 @@ with st.spinner("Loading market data..."):
 px, vol = compute_price_panels(yh)
 
 # -----------------------------
-# Macro regime header
+# Macro regime header (fixed units and clearer layout)
 # -----------------------------
 st.markdown("### Macro regime snapshot")
 c1, c2, c3, c4 = st.columns(4)
@@ -292,11 +304,11 @@ with c1:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Treasury curve</div>', unsafe_allow_html=True)
     if not fred.empty and {"DGS2", "DGS10"}.issubset(fred.columns):
-        d2 = fred["DGS2"].dropna().iloc[-1]
-        d10 = fred["DGS10"].dropna().iloc[-1]
+        d2 = float(fred["DGS2"].dropna().iloc[-1])
+        d10 = float(fred["DGS10"].dropna().iloc[-1])
         st.metric("2s", f"{d2:.2f}%")
         st.metric("10s", f"{d10:.2f}%")
-        st.metric("2s10s", f"{d10 - d2:.2f} pp")
+        st.metric("2s10s", f"{(d10 - d2):.2f} pp")
     else:
         st.caption("FRED unavailable")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -305,7 +317,8 @@ with c2:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Breakeven inflation</div>', unsafe_allow_html=True)
     if "T10YIE" in fred.columns and not fred["T10YIE"].dropna().empty:
-        st.metric("10y BE", f"{fred['T10YIE'].dropna().iloc[-1]:.2f}%")
+        be10 = float(fred["T10YIE"].dropna().iloc[-1])
+        st.metric("10y BE", f"{be10:.2f}%")
     else:
         st.caption("FRED unavailable")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -313,10 +326,13 @@ with c2:
 with c3:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Credit spreads</div>', unsafe_allow_html=True)
+    # FRED provides these in percent. Convert to bps.
     if "BAMLH0A0HYM2" in fred.columns and not fred["BAMLH0A0HYM2"].dropna().empty:
-        st.metric("HY OAS", f"{fred['BAMLH0A0HYM2'].dropna().iloc[-1]:.0f} bps")
+        hy_bps = float(fred["BAMLH0A0HYM2"].dropna().iloc[-1]) * 100.0
+        st.metric("HY OAS", f"{hy_bps:.0f} bps")
     if "BAMLC0A0CM" in fred.columns and not fred["BAMLC0A0CM"].dropna().empty:
-        st.metric("IG OAS", f"{fred['BAMLC0A0CM'].dropna().iloc[-1]:.0f} bps")
+        ig_bps = float(fred["BAMLC0A0CM"].dropna().iloc[-1]) * 100.0
+        st.metric("IG OAS", f"{ig_bps:.0f} bps")
     st.markdown("</div>", unsafe_allow_html=True)
 
 with c4:
@@ -332,7 +348,7 @@ with c4:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # -----------------------------
-# Flow of funds matrix
+# Flow of funds matrix (robust, dense)
 # -----------------------------
 st.markdown("### Flow of Funds matrix")
 
@@ -340,6 +356,7 @@ flow = compute_flow_score(px, vol, HORIZONS, W)
 matrix_df = tidy_matrix(flow, {g: UNIVERSE[g] for g in show_groups})
 
 if not matrix_df.empty:
+    # Order assets within each group by FlowScore
     hm = matrix_df.pivot_table(index=["Group", "Label"], columns="Ticker", values="FlowScore")
     fig = go.Figure(
         data=go.Heatmap(
@@ -355,7 +372,7 @@ if not matrix_df.empty:
             colorbar=dict(title="FlowScore", ticksuffix="σ"),
         )
     )
-    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=380 + 8 * len(hm.index))
+    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=min(900, 380 + 10 * len(hm.index)))
     st.markdown('<div class="matrix-card">', unsafe_allow_html=True)
     st.plotly_chart(fig, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -363,9 +380,10 @@ else:
     st.info("Matrix unavailable. Check data availability for the selected groups.")
 
 # -----------------------------
-# Return matrix snapshot
+# Return matrix snapshot (x.xx% formatting and fixed column order)
 # -----------------------------
 st.markdown("### Return matrix by horizon")
+
 def build_return_snapshot(px: pd.DataFrame, horizons, selected_groups) -> pd.DataFrame:
     rows = []
     tick2label = {t: lbl for g in selected_groups for t, lbl in UNIVERSE[g].items()}
@@ -379,36 +397,45 @@ def build_return_snapshot(px: pd.DataFrame, horizons, selected_groups) -> pd.Dat
             rows.append(
                 {
                     "Group": [g for g in selected_groups if t in UNIVERSE[g]][0],
-                    "Ticker": t,
                     "Label": tick2label[t],
+                    "Ticker": t,
                     "Horizon": name,
                     "Return": s.iloc[-1] * 100.0,
                 }
             )
     if not rows:
         return pd.DataFrame()
-    pivot = pd.DataFrame(rows).pivot_table(
-        index=["Group", "Label", "Ticker"], columns="Horizon", values="Return"
-    )
-    return pivot.sort_values(["Group", "Label"], ascending=[True, True])
+    df = pd.DataFrame(rows)
+    pivot = df.pivot_table(index=["Group", "Label", "Ticker"], columns="Horizon", values="Return")
+    # enforce clean column order and percent strings
+    pivot = pivot.reindex(columns=horizon_cols)
+    pivot = pivot.applymap(lambda v: "" if pd.isna(v) else f"{v:.2f}%")
+    return pivot
 
-ret_snapshot = build_return_snapshot(px, {k: v for k, v in HORIZONS.items() if k in horizon_cols}, show_groups)
+ret_snapshot = build_return_snapshot(px, {k: HORIZONS[k] for k in horizon_cols}, show_groups)
 if ret_snapshot.empty:
     st.caption("No returns available for the selected horizons and assets.")
 else:
-    st.dataframe(ret_snapshot.round(2), use_container_width=True)
+    st.dataframe(ret_snapshot, use_container_width=True)
 
 # -----------------------------
-# Actionable takeaways
+# Actionable takeaways (now broad-based, not only crypto)
 # -----------------------------
 st.markdown("### Actionable takeaways")
 if not matrix_df.empty:
-    latest = flow.dropna(how="all").iloc[-1].dropna()
+    latest = flow.dropna(how="all").iloc[-1]
+    # keep only displayed tickers
     keep = set(matrix_df["Ticker"])
-    latest = latest[latest.index.isin(keep)]
-    top = latest.sort_values(ascending=False).head(5)
-    bot = latest.sort_values(ascending=True).head(5)
+    latest = latest[latest.index.isin(keep)].dropna()
 
+    # rank across all assets; then show diversified top/bottom
+    top = latest.sort_values(ascending=False).head(6)
+    bot = latest.sort_values(ascending=True).head(6)
+
+    def fmt_names(idx):
+        return [f"{t} ({map_name(t)})" for t in idx]
+
+    # Curve and vol notes
     notes = []
     if not fred.empty and {"DGS2", "DGS10"}.issubset(fred.columns):
         curve_now = (fred["DGS10"] - fred["DGS2"]).dropna()
@@ -423,9 +450,6 @@ if not matrix_df.empty:
         regime = "calmer tape" if vix_floor == vix_floor and vix_now <= vix_floor else "risk premium rebuilding"
         notes.append(f"VIX at {vix_now:.1f} suggests {regime}.")
 
-    def fmt_names(idx):
-        return [f"{t} ({map_name(t)})" for t in idx]
-
     extremes_long = [t for t, v in top.items() if v >= 2.0]
     extremes_short = [t for t, v in bot.items() if v <= -2.0]
 
@@ -438,7 +462,7 @@ if not matrix_df.empty:
         Extremes flagged at |FlowScore| ≥ 2σ:
         <span class="good">{", ".join(fmt_names(extremes_long)) if extremes_long else "none"}</span> /
         <span class="bad">{", ".join(fmt_names(extremes_short)) if extremes_short else "none"}</span>.
-        Consider incremental tilts with tight invalidation on a close back inside one sigma.
+        Use as a tilt map; invalidate on a close back inside one sigma.
         </p>
         </div>
         """,
@@ -447,36 +471,4 @@ if not matrix_df.empty:
 else:
     st.caption("No takeaways available due to missing data.")
 
-# -----------------------------
-# Asset detail panel
-# -----------------------------
-st.markdown("### Asset detail")
-left, right = st.columns([1, 1])
-
-with left:
-    all_labels = []
-    for g in show_groups:
-        all_labels += [f"{t} • {lbl}" for t, lbl in UNIVERSE[g].items() if t in px.columns]
-    choice = st.selectbox("Select an asset", sorted(all_labels)) if all_labels else ""
-    tkr = choice.split("•")[0].strip() if "•" in choice else choice.strip()
-
-with right:
-    if tkr and tkr in px.columns:
-        s = px[tkr].dropna()
-        if not s.empty:
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=s.index, y=s, mode="lines", name=tkr))
-            for w in [21, 50, 100, 200]:
-                fig2.add_trace(go.Scatter(x=s.index, y=s.rolling(w).mean(), mode="lines", name=f"DMA{w}", opacity=0.6))
-            fig2.update_layout(
-                margin=dict(l=10, r=10, t=10, b=10),
-                height=380,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("No price history for this selection.")
-    else:
-        st.info("No price history for this selection.")
-
-st.caption(f"Last updated on {TODAY.isoformat()}.")
+st.caption(f"Last updated on {TODAY.isoformat()}. Data: Yahoo Finance, FRED via pandas_datareader.")
