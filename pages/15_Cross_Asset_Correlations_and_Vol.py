@@ -242,7 +242,6 @@ st.subheader("Conclusions and actions")
 
 bullets = []
 
-# Equity vs Rates correlation
 corr_er = roll_corr(RET, "^GSPC", "^TNX", win)
 if not corr_er.empty:
     rho = corr_er.iloc[-1]
@@ -251,7 +250,6 @@ if not corr_er.empty:
     elif rho >= 0.30:
         bullets.append(f"Equity vs rates positive at {rho:.0%}. Rate selloffs are pressuring equities.")
 
-# Implied minus realized
 if "^GSPC" in REALVOL.columns and "^VIX" in IV.columns:
     rv = (REALVOL["^GSPC"] * 100).dropna()
     vix = IV["^VIX"].dropna()
@@ -266,7 +264,6 @@ if "^GSPC" in REALVOL.columns and "^VIX" in IV.columns:
         elif z_now <= -1.0:
             bullets.append(f"VIX cheap to realized by {sp_now:.1f} pts. Consider buying convexity or collars.")
 
-# Term structure
 ts = vix_term_structure(IV)
 if not ts.dropna().empty:
     ts_now = ts.iloc[-1]
@@ -275,7 +272,6 @@ if not ts.dropna().empty:
     elif ts_now > 0.10:
         bullets.append("VIX term structure in contango. Carry and relative value should work better.")
 
-# HY and Oil vol heat
 def add_hot_cold(label, s):
     if s is None or s.dropna().empty:
         return
@@ -293,7 +289,6 @@ if "HYG" in REALVOL.columns:
 if "CL=F" in REALVOL.columns:
     add_hot_cold("Oil", REALVOL["CL=F"] * 100)
 
-# Summary regime
 if reg["regime"] == "Risk-off":
     bullets.append("Overall read is risk-off. Favor defensives, reduce gross, add convexity.")
 elif reg["regime"] == "Cautious":
@@ -301,7 +296,6 @@ elif reg["regime"] == "Cautious":
 else:
     bullets.append("Overall read is neutral to constructive. Let carry work but define invalidations.")
 
-# Expressions and invalidations
 express = [
     "If VIX rich to realized, run covered calls or short-dated call spreads against longs.",
     "If HY vol stays hot and equities track credit, hedge with HYG puts or IG vs HY relative value."
@@ -320,7 +314,6 @@ else:
 
 st.markdown("**Expressions**")
 st.markdown("\n".join(f"- {e}" for e in express))
-
 st.markdown("**Invalidations**")
 st.markdown("\n".join(f"- {x}" for x in invalid))
 
@@ -406,7 +399,6 @@ for spec in PAIR_SPECS:
     if rc.empty or np.isnan(rc.iloc[-1]):
         continue
     curr = float(rc.iloc[-1])
-    # Δ vs prior week; guard if not enough history
     delta = np.nan
     if rc.shape[0] > wk_back + 1 and not np.isnan(rc.iloc[-wk_back-1]):
         delta = float(rc.iloc[-1] - rc.iloc[-wk_back-1])
@@ -420,10 +412,8 @@ corr_tbl = pd.DataFrame(rows, columns=[
     "ρ now (rolling)",
     "Δρ w/w",
     "Percentile rank"
-])
-# Drop any all-NaN rows that slipped through
-corr_tbl = corr_tbl.dropna(how="all")
-# Sort by magnitude of weekly change, biggest rotation first
+]).dropna(how="all")
+
 if not corr_tbl.empty:
     corr_tbl = corr_tbl.sort_values("Δρ w/w", key=lambda s: s.abs(), ascending=False)
 
@@ -452,13 +442,13 @@ elif fx_cols:                  add_vol(f"{fx_cols[0]} 1M RV", REALVOL[fx_cols[0]
 if "^VIX" in IV.columns:       add_vol("VIX", IV["^VIX"], "Implied", "pts")
 if "^OVX" in IV.columns:       add_vol("OVX", IV["^OVX"], "Implied", "pts")
 
-vol_tbl = pd.DataFrame(vol_rows, columns=["Series", "Class", "Units", "Level", "Δ w/w", "Percentile rank"])
-vol_tbl = vol_tbl.dropna(how="all")
-if not vol_tbl.empty:
-    # Keep implied and realized grouped, then by weekly change magnitude
-    vol_tbl = vol_tbl.sort_values(["Class", vol_tbl["Δ w/w"].abs().rename("abschg")], ascending=[True, False]).drop(columns=["abschg"])
+vol_tbl = pd.DataFrame(vol_rows, columns=["Series", "Class", "Units", "Level", "Δ w/w", "Percentile rank"]).dropna(how="all")
 
-# Render at the bottom
+# FIX: create temp abs-change column, sort by it, then drop
+if not vol_tbl.empty:
+    vol_tbl["abschg"] = vol_tbl["Δ w/w"].abs()
+    vol_tbl = vol_tbl.sort_values(["Class", "abschg"], ascending=[True, False], na_position="last").drop(columns=["abschg"])
+
 st.subheader("This week vs last: correlations and vol")
 
 if not corr_tbl.empty:
