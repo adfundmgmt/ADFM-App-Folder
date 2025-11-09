@@ -166,6 +166,22 @@ def roll_corr(ret_df, a, b, window=21):
 def computed_height(n_rows, row_px=32, header_px=38, pad_px=16, max_px=800):
     return min(max_px, int(header_px + row_px * n_rows + pad_px))
 
+def hide_index_compat(styler: pd.io.formats.style.Styler) -> pd.io.formats.style.Styler:
+    """Hide index across pandas versions."""
+    # pandas >= 1.4
+    if hasattr(styler, "hide"):
+        try:
+            return styler.hide(axis="index")
+        except Exception:
+            pass
+    # pandas >= 1.5 has hide_index, some builds omit it
+    if hasattr(styler, "hide_index"):
+        try:
+            return styler.hide_index()
+        except Exception:
+            pass
+    return styler  # fallback
+
 # =========================
 # Data
 # =========================
@@ -382,17 +398,13 @@ else:
                   axis=None)
            .set_properties(**{"background-color": "white"})
     )
-    st.dataframe(
-        sty,
-        use_container_width=True,
-        height=computed_height(mat.shape[0])
-    )
+    sty = hide_index_compat(sty)
+    st.dataframe(sty, use_container_width=True, height=computed_height(mat.shape[0]))
     st.caption(f"Bold marks |ρ| ≥ {rho_alert:.2f}. Use matrix to sanity-check panel reads.")
 
 # =========================
-# WEEKLY SNAPSHOTS — placed at the BOTTOM
+# WEEKLY SNAPSHOTS — at the BOTTOM
 # =========================
-# Build correlation snapshot table (clean, no blanks, clarified columns)
 rows = []
 for spec in PAIR_SPECS:
     rc = roll_corr(RET, spec["a"], spec["b"], win)
@@ -406,18 +418,11 @@ for spec in PAIR_SPECS:
     rows.append([spec["title"], spec["a"], spec["b"], curr, delta, pct])
 
 corr_tbl = pd.DataFrame(rows, columns=[
-    "Pair",
-    "Series A",
-    "Series B",
-    "ρ now (rolling)",
-    "Δρ w/w",
-    "Percentile rank"
+    "Pair", "Series A", "Series B", "ρ now (rolling)", "Δρ w/w", "Percentile rank"
 ]).dropna(how="all")
-
 if not corr_tbl.empty:
     corr_tbl = corr_tbl.sort_values("Δρ w/w", key=lambda s: s.abs(), ascending=False)
 
-# Build volatility snapshot with explicit units/classes
 vol_rows = []
 def add_vol(label, s, vclass, units):
     if s is None or s.dropna().empty:
@@ -430,21 +435,16 @@ def add_vol(label, s, vclass, units):
     pr  = percentile_of_last(s)
     vol_rows.append([label, vclass, units, lvl, dv, pr])
 
-# Realized vols in percent
 if "^GSPC" in REALVOL.columns: add_vol("SPX 1M RV", REALVOL["^GSPC"] * 100, "Realized", "%")
 if "HYG" in REALVOL.columns:   add_vol("HY 1M RV",  REALVOL["HYG"] * 100,   "Realized", "%")
 if "CL=F" in REALVOL.columns:  add_vol("WTI 1M RV", REALVOL["CL=F"] * 100,  "Realized", "%")
 fx_cols = [c for c in REALVOL.columns if c.endswith("=X")]
 if "USDJPY=X" in fx_cols:      add_vol("USDJPY 1M RV", REALVOL["USDJPY=X"] * 100, "Realized", "%")
 elif fx_cols:                  add_vol(f"{fx_cols[0]} 1M RV", REALVOL[fx_cols[0]] * 100, "Realized", "%")
-
-# Implied vols in points
 if "^VIX" in IV.columns:       add_vol("VIX", IV["^VIX"], "Implied", "pts")
 if "^OVX" in IV.columns:       add_vol("OVX", IV["^OVX"], "Implied", "pts")
 
 vol_tbl = pd.DataFrame(vol_rows, columns=["Series", "Class", "Units", "Level", "Δ w/w", "Percentile rank"]).dropna(how="all")
-
-# FIX: create temp abs-change column, sort by it, then drop
 if not vol_tbl.empty:
     vol_tbl["abschg"] = vol_tbl["Δ w/w"].abs()
     vol_tbl = vol_tbl.sort_values(["Class", "abschg"], ascending=[True, False], na_position="last").drop(columns=["abschg"])
@@ -454,38 +454,22 @@ st.subheader("This week vs last: correlations and vol")
 if not corr_tbl.empty:
     corr_style = (
         corr_tbl.style
-            .format({
-                "ρ now (rolling)": "{:+.2%}",
-                "Δρ w/w": "{:+.2%}",
-                "Percentile rank": "{:.0f}%"
-            })
+            .format({"ρ now (rolling)": "{:+.2%}", "Δρ w/w": "{:+.2%}", "Percentile rank": "{:.0f}%"})
             .background_gradient(subset=["Δρ w/w"], cmap="RdYlGn")
-            .hide_index()
     )
-    st.dataframe(
-        corr_style,
-        use_container_width=True,
-        height=computed_height(corr_tbl.shape[0])
-    )
+    corr_style = hide_index_compat(corr_style)
+    st.dataframe(corr_style, use_container_width=True, height=computed_height(corr_tbl.shape[0]))
     st.caption("ρ now is the current rolling correlation of daily returns over the selected window. Δρ w/w is change versus the prior week. Percentile rank is within the chosen history window.")
 
 if not vol_tbl.empty:
     vol_style = (
         vol_tbl.style
-            .format({
-                "Level": lambda v: f"{v:.1f}",
-                "Δ w/w": lambda v: "" if pd.isna(v) else f"{v:+.1f}",
-                "Percentile rank": "{:.0f}%"
-            })
+            .format({"Level": "{:.1f}", "Δ w/w": lambda v: "" if pd.isna(v) else f"{v:+.1f}", "Percentile rank": "{:.0f}%"})
             .background_gradient(subset=["Δ w/w"], cmap="RdYlGn")
-            .hide_index()
     )
-    st.dataframe(
-        vol_style,
-        use_container_width=True,
-        height=computed_height(vol_tbl.shape[0])
-    )
-    st.caption("Class identifies implied vs realized volatility. Units are points for implied indices (VIX/OVX) and percent for realized 1M vol. Δ w/w is change versus the prior week; Percentile rank is within the chosen history window.")
+    vol_style = hide_index_compat(vol_style)
+    st.dataframe(vol_style, use_container_width=True, height=computed_height(vol_tbl.shape[0]))
+    st.caption("Class identifies implied vs realized volatility. Units are points for implied indices and percent for realized 1M vol. Δ w/w is change versus the prior week; Percentile rank is within the chosen history window.")
 
 # =========================
 # Downloads
