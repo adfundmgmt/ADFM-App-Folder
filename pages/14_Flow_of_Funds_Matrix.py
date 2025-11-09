@@ -1,6 +1,9 @@
 # 14_Flow_of_Funds_Compass.py
-# Flow-of-funds model with robust FRED fetch (API or CSV), VIX TS overlay, OW/UW, pairs, compass.
+# Resilient, no-stop flow-of-funds: mirror-first, non-FRED where possible, cache, graceful degrade.
 
+import os
+import io
+import json
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -13,7 +16,28 @@ import requests
 st.set_page_config(page_title="Flow of Funds Compass", layout="wide")
 st.title("Flow of Funds Compass")
 
-# ───────── Utils ─────────
+# ───────── Settings & secrets ─────────
+FRED_KEY = st.secrets.get("FRED_API_KEY", "")
+FRED_MIRROR = st.secrets.get("FRED_MIRROR_URL", "").rstrip("/")  # e.g. https://raw.githubusercontent.com/yourorg/adfm-data/main/fred
+CACHE_DIR = "/mnt/data/ff_cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+# ───────── Utilities ─────────
+def weekly_index(start, end=None):
+    end = end or pd.Timestamp.today().normalize()
+    return pd.date_range(pd.to_datetime(start), end, freq="W-FRI")
+
+def daily_index(start, end=None):
+    end = end or pd.Timestamp.today().normalize()
+    return pd.date_range(pd.to_datetime(start), end, freq="B")
+
+def align_to_index(s: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
+    if s is None or s.empty:
+        return pd.Series(index=idx, dtype=float)
+    df = pd.DataFrame({"v": s.sort_index()})
+    df = df.reindex(df.index.union(idx)).sort_index().ffill()
+    return df.loc[idx, "v"]
+
 @st.cache_data(ttl=6*3600, show_spinner=False)
 def load_prices(tickers, start="2012-01-01", interval="1d"):
     try:
@@ -28,79 +52,6 @@ def load_prices(tickers, start="2012-01-01", interval="1d"):
         st.warning(f"No data for: {', '.join(map(str, bad))}. Excluding.")
         px = px.drop(columns=bad)
     return px.ffill()
-
-def _fred_api_observations(series_id: str, start: str, api_key: str) -> pd.Series:
-    url = "https://api.stlouisfed.org/fred/series/observations"
-    params = {
-        "series_id": series_id,
-        "observation_start": start,
-        "file_type": "json",
-        "api_key": api_key,
-    }
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    js = r.json()
-    obs = js.get("observations", [])
-    if not obs:
-        return pd.Series(dtype=float)
-    dates = pd.to_datetime([o["date"] for o in obs])
-    vals = pd.to_numeric([o.get("value", ".") for o in obs], errors="coerce")
-    return pd.Series(vals, index=dates, name=series_id).dropna()
-
-def _fred_csv(series_id: str) -> pd.Series:
-    # Two CSV endpoints; send headers to avoid 403
-    headers = {"User-Agent": "ADFM-Streamlit/1.0 (+https://adfm.example)"}
-    urls = [
-        f"https://fred.stlouisfed.org/series/{series_id}/downloaddata/{series_id}.csv",
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
-    ]
-    for url in urls:
-        try:
-            r = requests.get(url, headers=headers, timeout=20)
-            r.raise_for_status()
-            df = pd.read_csv(pd.compat.StringIO(r.text), parse_dates=["DATE"])
-            value_col = "VALUE" if "VALUE" in df.columns else (series_id if series_id in df.columns else None)
-            if value_col is None:
-                continue
-            s = pd.to_numeric(df[value_col], errors="coerce")
-            return pd.Series(s.values, index=pd.to_datetime(df["DATE"]), name=series_id).dropna()
-        except Exception:
-            continue
-    return pd.Series(dtype=float)
-
-@st.cache_data(ttl=24*3600, show_spinner=False)
-def fred_series(series_id: str, start="2012-01-01", api_key: str | None = None) -> pd.Series:
-    # Try API if key present, else CSV fallback
-    try_api = bool(api_key)
-    s = pd.Series(dtype=float)
-    if try_api:
-        try:
-            s = _fred_api_observations(series_id, start, api_key)
-        except Exception:
-            s = pd.Series(dtype=float)
-    if s.empty:
-        try:
-            s = _fred_csv(series_id)
-            if start:
-                s = s[s.index >= pd.to_datetime(start)]
-        except Exception:
-            s = pd.Series(dtype=float)
-    return s
-
-def weekly_index(start, end=None):
-    end = end or pd.Timestamp.today().normalize()
-    return pd.date_range(pd.to_datetime(start), end, freq="W-FRI")
-
-def daily_index(start, end=None):
-    end = end or pd.Timestamp.today().normalize()
-    return pd.date_range(pd.to_datetime(start), end, freq="B")
-
-def align_to_index(s: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
-    if s.empty:
-        return pd.Series(index=idx, dtype=float)
-    df = pd.DataFrame({"v": s.sort_index()})
-    df = df.reindex(df.index.union(idx)).sort_index().ffill()
-    return df.loc[idx, "v"]
 
 def rolling_zscore(s: pd.Series, w: int, minp: int | None = None):
     minp = minp or max(8, w // 3)
@@ -133,6 +84,141 @@ def ols_two_factors(y: pd.Series, X: pd.DataFrame):
         "last_pred": float(np.array([1.0, X["L"].iloc[-1], X["DL"].iloc[-1]]) @ beta),
     }
 
+# ───────── Robust series fetchers ─────────
+def cache_path(series_id: str) -> str:
+    return os.path.join(CACHE_DIR, f"{series_id}.parquet")
+
+def load_from_cache(series_id: str) -> pd.Series:
+    p = cache_path(series_id)
+    if os.path.exists(p):
+        try:
+            df = pd.read_parquet(p)
+            s = df.iloc[:, 0]
+            s.index = pd.to_datetime(s.index)
+            s.name = series_id
+            return s.dropna()
+        except Exception:
+            return pd.Series(dtype=float)
+    return pd.Series(dtype=float)
+
+def save_to_cache(series_id: str, s: pd.Series):
+    try:
+        df = s.dropna().to_frame(series_id)
+        df.to_parquet(cache_path(series_id))
+    except Exception:
+        pass
+
+def fred_api_observations(series_id: str, start: str, api_key: str) -> pd.Series:
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {"series_id": series_id, "observation_start": start, "file_type": "json", "api_key": api_key}
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    js = r.json()
+    obs = js.get("observations", [])
+    dates = pd.to_datetime([o["date"] for o in obs])
+    vals = pd.to_numeric([o.get("value", ".") for o in obs], errors="coerce")
+    return pd.Series(vals, index=dates, name=series_id).dropna()
+
+def fred_csv(series_id: str) -> pd.Series:
+    headers = {"User-Agent": "ADFM-Streamlit/1.0"}
+    urls = [
+        f"https://fred.stlouisfed.org/series/{series_id}/downloaddata/{series_id}.csv",
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=20)
+            r.raise_for_status()
+            df = pd.read_csv(io.StringIO(r.text))
+            date_col = "DATE" if "DATE" in df.columns else "date"
+            value_col = "VALUE" if "VALUE" in df.columns else (series_id if series_id in df.columns else None)
+            if value_col is None:
+                continue
+            s = pd.to_numeric(df[value_col], errors="coerce")
+            return pd.Series(s.values, index=pd.to_datetime(df[date_col]), name=series_id).dropna()
+        except Exception:
+            continue
+    return pd.Series(dtype=float)
+
+def fred_mirror(series_id: str) -> pd.Series:
+    if not FRED_MIRROR:
+        return pd.Series(dtype=float)
+    url = f"{FRED_MIRROR}/{series_id}.csv"
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        df = pd.read_csv(io.StringIO(r.text))
+        date_col = "DATE" if "DATE" in df.columns else "date"
+        value_col = "VALUE" if "VALUE" in df.columns else (series_id if series_id in df.columns else None)
+        if value_col is None:
+            # accept two-column generic mirror: date,value
+            if df.shape[1] >= 2:
+                value_col = df.columns[1]
+        s = pd.to_numeric(df[value_col], errors="coerce")
+        return pd.Series(s.values, index=pd.to_datetime(df[date_col]), name=series_id).dropna()
+    except Exception:
+        return pd.Series(dtype=float)
+
+def fetch_tga_fiscaldata(start: str) -> pd.Series:
+    # Treasury Operating Cash Balance (TGA) from FiscalData API
+    base = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/operating_cash_balance"
+    params = {
+        "format": "json",
+        "fields": "record_date,close_today_bal",
+        "filter": f"record_date:gte:{start}",
+        "sort": "record_date",
+        "page[size]": "10000",
+    }
+    try:
+        r = requests.get(base, params=params, timeout=25)
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if not data:
+            return pd.Series(dtype=float)
+        dates = pd.to_datetime([d["record_date"] for d in data])
+        vals = pd.to_numeric([d["close_today_bal"] for d in data], errors="coerce")
+        return pd.Series(vals, index=dates, name="WTREGEN").dropna()
+    except Exception:
+        return pd.Series(dtype=float)
+
+def get_series(series_id: str, start: str) -> pd.Series:
+    # Special handling: prefer non-FRED source for TGA
+    if series_id in ("WTREGEN", "WDTGAL", "TGA"):
+        s = fetch_tga_fiscaldata(start)
+        if not s.empty:
+            save_to_cache("WTREGEN", s)
+            return s
+        # fallback chain for WTREGEN via FRED
+        series_try = ["WTREGEN", "WDTGAL"]
+        for sid in series_try:
+            s = fred_mirror(sid)
+            if s.empty and FRED_KEY:
+                try:
+                    s = fred_api_observations(sid, start, FRED_KEY)
+                except Exception:
+                    s = pd.Series(dtype=float)
+            if s.empty:
+                s = fred_csv(sid)
+            if not s.empty:
+                save_to_cache(sid, s)
+                return s
+        return load_from_cache("WTREGEN")
+
+    # Generic chain for other FRED series
+    s = fred_mirror(series_id)
+    if s.empty and FRED_KEY:
+        try:
+            s = fred_api_observations(series_id, start, FRED_KEY)
+        except Exception:
+            s = pd.Series(dtype=float)
+    if s.empty:
+        s = fred_csv(series_id)
+    if s.empty:
+        s = load_from_cache(series_id)
+    else:
+        save_to_cache(series_id, s)
+    return s
+
 # ───────── Sidebar ─────────
 with st.sidebar:
     st.header("Settings")
@@ -160,16 +246,10 @@ with st.sidebar:
     wt_r2 = st.slider("Weight of R²", 0.0, 1.0, 0.25, 0.05)
     wt_stab = st.slider("Weight of Stability", 0.0, 1.0, 0.20, 0.05)
     st.markdown("---")
-    st.subheader("FRED access")
-    default_key = st.secrets.get("FRED_API_KEY", "")
-    fred_key = st.text_input("FRED API key (optional)", type="password", value=default_key)
-    st.caption("If left blank, app uses CSV fallback with headers.")
-    st.markdown("---")
     st.subheader("VIX Overlay")
     show_vix = st.toggle("Show VIX term structure overlay", value=True)
-    st.caption("Overlay VIX3M/VIX - 1 on the regime chart. Backwardation < 0, contango > 0.")
 
-st.caption("Two-factor spec on returns: Liquidity Level Z and Liquidity Slope Z. Overlay VIX term structure for risk context. Toggle weekly or daily resolution.")
+st.caption("Two-factor spec on returns: Liquidity Level Z and Liquidity Slope Z. Mirror-first, cached fallback, no hard dependency on FRED at runtime.")
 
 # ───────── Data ─────────
 with st.spinner("Loading data"):
@@ -180,6 +260,7 @@ with st.spinner("Loading data"):
         idx = daily_index(start_date)
         yf_interval = "1d"
 
+    # Prices
     px_raw = load_prices(tickers, start=str(start_date), interval=yf_interval)
     if px_raw.empty:
         st.error("No price data. Check tickers.")
@@ -187,62 +268,65 @@ with st.spinner("Loading data"):
     px = px_raw.resample("W-FRI").last().reindex(idx).ffill() if resolution == "Weekly" else px_raw.reindex(idx).ffill()
     rets = np.log(px).diff()
 
+    # VIX overlay
     vix_df = pd.DataFrame()
     if show_vix:
         vix_src = load_prices(["^VIX","^VIX3M"], start=str(start_date), interval=yf_interval)
-        if not vix_src.empty:
-            vix_df = vix_src.resample("W-FRI").last().reindex(idx).ffill() if resolution == "Weekly" else vix_src.reindex(idx).ffill()
-        else:
-            st.warning("VIX data unavailable. Overlay disabled.")
-            show_vix = False
+        vix_df = (vix_src.resample("W-FRI").last().reindex(idx).ffill() if resolution == "Weekly" else vix_src.reindex(idx).ffill()) if not vix_src.empty else pd.DataFrame()
 
-    fred_ids = {
-        "WALCL":"WALCL",
-        "RRPONTSYD":"RRPONTSYD",
-        "WTREGEN":"WTREGEN",
-        "WDTGAL":"WDTGAL",
-        "CHNR":"CHNRORGDPM",
-        "JPNR":"JPNRGSBP",
-    }
-
-    loaded = {}
-    for name, sid in fred_ids.items():
-        s = fred_series(sid, start=str(start_date), api_key=fred_key or None)
+    # Flow series: try to get as many as possible; never stop on failure
+    raw = {}
+    for sid in ["WALCL", "RRPONTSYD", "WTREGEN"]:
+        s = get_series(sid, str(start_date))
         if not s.empty:
-            loaded[name] = align_to_index(s, idx)
+            raw[sid] = align_to_index(s, idx)
 
-    fred_df = pd.DataFrame(loaded, index=idx)
+    # Optional FX reserve proxies if you have a mirror (leave empty otherwise)
+    fx_sum = pd.Series(index=idx, dtype=float)
+    # Example: If you mirror CHNRORGDPM and JPNRGSBP under your mirror, they will load via get_series
+    fx_parts = []
+    for sid in ["CHNRORGDPM", "JPNRGSBP"]:
+        s = get_series(sid, str(start_date))
+        if not s.empty:
+            fx_parts.append(align_to_index(s, idx))
+    if fx_parts:
+        fx_sum = pd.concat(fx_parts, axis=1).sum(axis=1)
+        raw["FXRES"] = fx_sum
 
-if fred_df.empty:
-    st.error("No FRED data returned. Enter an API key in the sidebar or try again later.")
-    st.stop()
-else:
-    ok_cols = ", ".join(fred_df.columns)
-    st.info(f"FRED series loaded: {ok_cols}")
+fred_df = pd.DataFrame(raw, index=idx)
+used_cols = list(fred_df.columns)
+missing_cols = [c for c in ["WALCL","RRPONTSYD","WTREGEN","FXRES"] if c not in used_cols]
+msg = f"Flows loaded: {', '.join(used_cols) if used_cols else 'none'}."
+if missing_cols:
+    msg += f" Missing: {', '.join(missing_cols)}. Using what is available; results degrade gracefully."
+st.info(msg)
 
-# Build core flows
+# Build flows; if none, keep app functional
 flows = {}
-have = set(fred_df.columns)
-tga = fred_df["WTREGEN"] if "WTREGEN" in have else (fred_df["WDTGAL"] if "WDTGAL" in have else None)
-
-if "WALCL" in have:
+if "WALCL" in fred_df:
     flows["WALCL"] = fred_df["WALCL"]
-if "RRPONTSYD" in have:
+if "RRPONTSYD" in fred_df:
     flows["RRPONTSYD"] = fred_df["RRPONTSYD"]
-if tga is not None:
-    flows["TGA"] = tga
-
-fx_cols = [c for c in fred_df.columns if c.upper().startswith(("CHN","JPN")) or c.upper().endswith("RGSBP")]
-if fx_cols:
-    flows["FXRES"] = fred_df[fx_cols].sum(axis=1)
-
-if not flows:
-    st.error("No usable flow series present after fetch.")
-    st.stop()
+if "WTREGEN" in fred_df:
+    flows["TGA"] = fred_df["WTREGEN"]
+if "FXRES" in fred_df:
+    flows["FXRES"] = fred_df["FXRES"]
 
 flows_df = pd.DataFrame(flows, index=idx).ffill()
 
-# Standardize and composite
+# If absolutely nothing, show overlay-only view
+if flows_df.empty:
+    st.warning("No flow series available from mirror, API, CSV, or cache. Showing VIX overlay only.")
+    if not vix_df.empty and "^VIX" in vix_df and "^VIX3M" in vix_df:
+        ts = (vix_df["^VIX3M"] / vix_df["^VIX"] - 1.0).rename("TS")
+        fig = go.Figure()
+        fig.add_hline(y=0, line=dict(color="#cccccc", dash="dot"))
+        fig.add_trace(go.Scatter(x=ts.index, y=ts, mode="lines", name="VIX3M/VIX - 1"))
+        fig.update_layout(height=360, margin=dict(l=40, r=10, t=40, b=40))
+        st.plotly_chart(fig, use_container_width=True)
+    st.stop()
+
+# Composite
 Z = flows_df.apply(lambda s: rolling_zscore(s, w=int(z_win)), axis=0)
 w_map = {"WALCL": +w_walcl, "RRPONTSYD": -w_rrp, "TGA": -w_tga, "FXRES": +w_fx}
 weights = pd.Series({k: w_map.get(k, 0.0) for k in Z.columns})
@@ -267,30 +351,28 @@ DL = L.diff(int(slope_lag))
 DLz = rolling_zscore(DL, w=int(z_win))
 features = pd.DataFrame({"L": Lz, "DL": DLz}, index=idx)
 
-# Trim window
+# Window and regressions
 eff_w = min(int(reg_window), len(idx))
 features_w = features.iloc[-eff_w:]
-rets_w = rets.reindex(features_w.index)
+rets_w = np.log(px).diff().reindex(features_w.index)
 
-# Model
 betas, tstats, r2s, rows_used, preds, stab = {}, {}, {}, {}, {}, {}
 for asset in rets_w.columns:
-    y = rets_w[asset]
-    res = ols_two_factors(y, features_w)
-    if res is None:
+    out = ols_two_factors(rets_w[asset], features_w)
+    if out is None:
         continue
-    betas[asset] = res["beta"]
-    tstats[asset] = res["t"]
-    r2s[asset] = res["r2"]
-    rows_used[asset] = res["rows"]
-    preds[asset] = res["last_pred"]
+    betas[asset] = out["beta"]
+    tstats[asset] = out["t"]
+    r2s[asset] = out["r2"]
+    rows_used[asset] = out["rows"]
+    preds[asset] = out["last_pred"]
 
-    df = pd.concat([y, features_w], axis=1).dropna()
+    df = pd.concat([rets_w[asset], features_w], axis=1).dropna()
     mid = len(df)//2
     def part_beta(dfp):
-        out = ols_two_factors(dfp.iloc[:,0], dfp.iloc[:,1:])
-        if out is None: return np.nan, np.nan
-        b = out["beta"]; return float(b["L"]), float(b["DL"])
+        res = ols_two_factors(dfp.iloc[:,0], dfp.iloc[:,1:])
+        if res is None: return np.nan, np.nan
+        b = res["beta"]; return float(b["L"]), float(b["DL"])
     b1L, b1D = part_beta(df.iloc[:mid]); b2L, b2D = part_beta(df.iloc[mid:])
     if np.any(~np.isfinite([b1L,b1D,b2L,b2D])):
         stab[asset] = np.nan
@@ -299,7 +381,7 @@ for asset in rets_w.columns:
         stab[asset] = float(np.clip(1.0 - (abs(b1L-b2L)+abs(b1D-b2D))/denom, 0.0, 1.0))
 
 if not betas:
-    st.error("No assets had sufficient overlap for regression.")
+    st.warning("Insufficient overlap for regressions with current window. Reduce window or add assets.")
     st.stop()
 
 B = pd.DataFrame(betas).T[["L","DL"]]
@@ -325,10 +407,8 @@ playbook = pd.concat([B, Tstats.add_prefix("t_"), R2, Rows, Stability, Confidenc
 playbook = playbook.sort_values("TiltScore", ascending=False)
 
 # Header metrics
-if show_vix and not vix_df.empty:
-    vix = vix_df["^VIX"]
-    vix3m = vix_df["^VIX3M"] if "^VIX3M" in vix_df.columns else vix_df.get("VIX3M", pd.Series(index=idx))
-    ts = (vix3m / vix - 1.0).rename("TS")
+if show_vix and not vix_df.empty and "^VIX" in vix_df and "^VIX3M" in vix_df:
+    ts = (vix_df["^VIX3M"] / vix_df["^VIX"] - 1.0).rename("TS")
     ts_now = float(ts.iloc[-1]) if ts.notna().any() else np.nan
 else:
     ts = pd.Series(index=idx, dtype=float); ts_now = np.nan
@@ -337,19 +417,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Liquidity Level z", f"{state_L:+.2f}")
 c2.metric("Liquidity Slope z", f"{state_DL:+.2f}")
 c3.metric("Avg Confidence", f"{Confidence.mean():.2f}")
-c4.metric("VIX3M/VIX - 1", f"{ts_now:+.3f}" if show_vix else "n/a")
-
-def regime_text(Lz_now, DLz_now, ts_now_val):
-    base = "Mixed/neutral"
-    if np.isfinite(Lz_now) and np.isfinite(DLz_now):
-        if Lz_now >= 1.0 and DLz_now > 0: base = "Liquidity improving"
-        elif Lz_now <= -1.0 and DLz_now < 0: base = "Liquidity deteriorating"
-    if np.isfinite(ts_now_val):
-        if ts_now_val < 0: return base + " with VIX backwardation"
-        elif ts_now_val > 0.1: return base + " with VIX contango"
-    return base
-
-st.caption(f"Regime: {regime_text(state_L, state_DL, ts_now)}. Use OW/UW or pairs accordingly. Invalidate if TiltScore flips sign or |t|-mean collapses.")
+c4.metric("VIX3M/VIX - 1", f"{ts_now:+.3f}" if np.isfinite(ts_now) else "n/a")
 
 # OW/UW and Pairs
 top_n = min(5, len(playbook))
@@ -392,9 +460,12 @@ except Exception:
 # Liquidity composite visuals
 st.subheader("Liquidity Composite, Slope, and VIX Term Structure")
 bars_periods = 26
-contrib = pd.DataFrame(index=Z.index, columns=Z.columns, dtype=float)
-for c in Z.columns:
-    contrib[c] = Z[c] * (weights.get(c, 0.0))
+Z_for_plot = Z.copy()
+weights_for_plot = weights.copy()
+
+contrib = pd.DataFrame(index=Z_for_plot.index, columns=Z_for_plot.columns, dtype=float)
+for c in Z_for_plot.columns:
+    contrib[c] = Z_for_plot[c] * (weights_for_plot.get(c, 0.0))
 contrib = contrib.iloc[-bars_periods:]
 
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
@@ -405,7 +476,7 @@ fig.add_hline(y=0, line=dict(color="#cccccc", width=1, dash="dot"), row=1, col=1
 fig.add_trace(go.Scatter(x=Lz.index, y=Lz, mode="lines", name="Level Z", line=dict(width=1.6)), row=1, col=1, secondary_y=False)
 fig.add_trace(go.Scatter(x=DLz.index, y=DLz, mode="lines", name="Slope Z", line=dict(width=1.2, dash="dot")), row=1, col=1, secondary_y=False)
 
-if show_vix and not ts.empty:
+if not ts.empty:
     fig.add_trace(go.Scatter(x=ts.index, y=ts, mode="lines", name="VIX3M/VIX - 1", line=dict(width=1.2)), row=1, col=1, secondary_y=True)
     fig.update_yaxes(title_text="VIX TS", row=1, col=1, secondary_y=True)
 
@@ -422,7 +493,7 @@ st.plotly_chart(fig, use_container_width=True)
 with st.expander("Download data"):
     st.download_button("Playbook CSV", playbook.to_csv().encode(), file_name="flow_of_funds_playbook.csv")
     out_feats = pd.DataFrame({"Lz": Lz, "DLz": DLz})
-    if show_vix and not ts.empty:
+    if not ts.empty:
         out_feats["VIX_TS"] = ts
     st.download_button("Composite features CSV", out_feats.to_csv().encode(), file_name="liquidity_features.csv")
 
