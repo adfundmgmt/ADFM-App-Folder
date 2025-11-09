@@ -1,4 +1,4 @@
-# 15_Flow_of_Funds_Compass.py
+# 14_Flow_of_Funds_Compass.py
 # Compact flow-of-funds model with:
 # - Liquidity Composite L(t) from core FRED flows
 # - Features: Level Z = Lz, Slope Z = ΔLz over a selectable horizon
@@ -7,6 +7,7 @@
 # - VIX term structure overlay (VIX3M/VIX) on the regime chart
 # - Resolution toggle: Weekly or Daily
 # - 20-asset default universe
+# NOTE: No pandas_datareader. FRED pulled via CSV endpoints.
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,6 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from pandas_datareader import data as pdr
 
 # ────────────────────────────── Page ──────────────────────────────
 st.set_page_config(page_title="Flow of Funds Compass", layout="wide")
@@ -38,12 +38,26 @@ def load_prices(tickers, start="2012-01-01", interval="1d"):
 
 @st.cache_data(ttl=24*3600, show_spinner=False)
 def fred_series(series_id: str, start="2012-01-01") -> pd.Series:
-    try:
-        s = pdr.DataReader(series_id, "fred", start)
-        s = s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
-        return s.dropna()
-    except Exception:
-        return pd.Series(dtype=float)
+    """Fetch a FRED series without pandas_datareader using the public CSV endpoints."""
+    # Primary endpoint
+    url1 = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    # Reliable fallback
+    url2 = f"https://fred.stlouisfed.org/series/{series_id}/downloaddata/{series_id}.csv"
+    for url in (url1, url2):
+        try:
+            df = pd.read_csv(url, parse_dates=["DATE"])
+            # Standard FRED CSV has DATE and either VALUE or the series_id as column name
+            value_col = "VALUE" if "VALUE" in df.columns else series_id if series_id in df.columns else None
+            if value_col is None:
+                continue
+            s = pd.to_numeric(df[value_col], errors="coerce")
+            out = pd.Series(s.values, index=pd.to_datetime(df["DATE"]), name=series_id).dropna()
+            if start:
+                out = out[out.index >= pd.to_datetime(start)]
+            return out
+        except Exception:
+            continue
+    return pd.Series(dtype=float)
 
 def weekly_index(start, end=None):
     end = end or pd.Timestamp.today().normalize()
@@ -168,7 +182,7 @@ with st.spinner("Loading data"):
         "RRPONTSYD":"RRPONTSYD",  # Reverse repo (daily)
         "WTREGEN":"WTREGEN",      # TGA (daily, preferred)
         "WDTGAL":"WDTGAL",        # TGA alt (daily)
-        # Optional FX reserve proxies (may or may not exist in your environment)
+        # Optional FX reserve proxies
         "CHNR":"CHNRORGDPM",
         "JPNR":"JPNRGSBP",
     }
@@ -309,7 +323,7 @@ playbook = playbook.sort_values("TiltScore", ascending=False)
 if show_vix and not vix_df.empty:
     vix = vix_df["^VIX"]
     vix3m = vix_df["^VIX3M"] if "^VIX3M" in vix_df.columns else vix_df.get("VIX3M", pd.Series(index=idx))
-    ts = (vix3m / vix - 1.0).rename("TS")  # term structure
+    ts = (vix3m / vix - 1.0).rename("TS")
     ts_now = float(ts.iloc[-1]) if ts.notna().any() else np.nan
     vix_now = float(vix.iloc[-1]) if vix.notna().any() else np.nan
 else:
