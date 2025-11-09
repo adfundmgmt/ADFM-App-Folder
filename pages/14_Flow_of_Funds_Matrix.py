@@ -1,474 +1,367 @@
-# flow_of_funds_matrix.py
-# Flow of Funds Matrix – cross-asset flows with macro regime header and actionable takeaways
-# Data sources: Yahoo Finance (prices, volumes) and FRED (yields, breakevens, credit spreads) via pandas_datareader
-# FRED access here uses pandas_datareader's public endpoint (no login or API key)
-
-import datetime as dt
-from typing import Dict, Tuple
-
+import os
 import numpy as np
 import pandas as pd
-import yfinance as yf
-from pandas_datareader import data as pdr
-import plotly.graph_objects as go
 import streamlit as st
+import yfinance as yf
+import plotly.graph_objects as go
+from pandas_datareader import data as pdr
 
-# -----------------------------
-# Page config and styling
-# -----------------------------
+# -------------------- Utilities --------------------
 st.set_page_config(page_title="Flow of Funds Matrix", layout="wide")
+st.title("Flow of Funds Matrix")
 
-PASTEL_BG = "#f7f8fc"
-PASTEL_CARD = "white"
-PASTEL_POS = "#9ad1bc"   # gentle green
-PASTEL_NEG = "#f5a6a6"   # gentle red
-PASTEL_NEU = "#cfd8e3"   # soft blue gray
-PASTEL_ACCENT = "#93c5fd"  # light blue
+@st.cache_data(ttl=6*3600, show_spinner=False)
+def load_prices(tickers, start="2012-01-01"):
+    try:
+        px = yf.download(tickers, start=start, auto_adjust=True, progress=False)["Close"]
+    except Exception as e:
+        st.error(f"yfinance error: {e}")
+        return pd.DataFrame()
+    if isinstance(px, pd.Series):
+        px = px.to_frame()
+    bad = [c for c in px.columns if px[c].dropna().empty]
+    if bad:
+        st.warning(f"No data for: {', '.join(map(str, bad))}. Excluding.")
+        px = px.drop(columns=bad)
+    return px.ffill()
 
-st.markdown(
-    f"""
-    <style>
-    .stApp {{
-        background: linear-gradient(180deg, {PASTEL_BG} 0%, #ffffff 100%);
-    }}
-    .metric-card {{
-        background: {PASTEL_CARD};
-        border: 1px solid #e6e8f0;
-        border-radius: 16px;
-        padding: 16px 18px;
-        box-shadow: 0 6px 18px rgba(0,0,0,0.05);
-        min-height: 180px;
-    }}
-    .matrix-card {{
-        background: {PASTEL_CARD};
-        border: 1px solid #e6e8f0;
-        border-radius: 16px;
-        padding: 12px 14px;
-        box-shadow: 0 6px 18px rgba(0,0,0,0.05);
-    }}
-    .section-title {{
-        font-weight: 700;
-        font-size: 1.05rem;
-        letter-spacing: .2px;
-        color: #0f172a;
-        margin-bottom: 8px;
-    }}
-    .soft {{
-        color: #475569;
-        font-size: 0.95rem;
-    }}
-    .takeaways {{
-        background: #fbfdff;
-        border-left: 4px solid {PASTEL_ACCENT};
-        padding: 10px 14px;
-        border-radius: 8px;
-    }}
-    .good {{ color: #166534; font-weight: 600; }}
-    .bad {{ color: #7f1d1d; font-weight: 600; }}
-    .neutral {{ color: #334155; font-weight: 600; }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+@st.cache_data(ttl=24*3600, show_spinner=False)
+def fred_series(series_id: str, start="2012-01-01") -> pd.Series:
+    # Try pd_datareader first (no key required)
+    try:
+        s = pdr.DataReader(series_id, "fred", start)
+        s = s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
+        return s.dropna()
+    except Exception:
+        return pd.Series(dtype=float)
 
-# -----------------------------
-# Parameters and universe
-# -----------------------------
-TODAY = dt.date.today()
-DEFAULT_YEARS = 5
+def weekly_index(start, end=None):
+    end = end or pd.Timestamp.today().normalize()
+    return pd.date_range(pd.to_datetime(start), end, freq="W-FRI")
 
-HORIZONS = {
-    "1D": 1,
-    "5D": 5,
-    "1M": 21,
-    "3M": 63,
-    "6M": 126,
-    "1Y": 252,
-}
+def align_to_weekly(s: pd.Series, widx: pd.DatetimeIndex) -> pd.Series:
+    if s.empty:
+        return s.reindex(widx)
+    df = pd.DataFrame({"v": s.sort_index()})
+    df = df.reindex(df.index.union(widx)).sort_index().ffill()
+    return df.loc[widx, "v"]
 
-UNIVERSE: Dict[str, Dict[str, str]] = {
-    "Equities": {
-        "SPY": "S&P 500",
-        "QQQ": "Nasdaq 100",
-        "IWM": "Russell 2000",
-        "EFA": "Developed ex US",
-        "EEM": "Emerging Markets",
-        "SMH": "Semiconductors",
-        "XLK": "Tech",
-        "XLF": "Financials",
-        "XLE": "Energy",
-    },
-    "Rates & Credit": {
-        "IEF": "US 7-10y Treasuries ETF",
-        "TLT": "US 20y+ Treasuries ETF",
-        "HYG": "US High Yield ETF",
-        "LQD": "US Investment Grade ETF",
-    },
-    "FX": {
-        "^DXY": "US Dollar Index",
-        "EURUSD=X": "EURUSD",
-        "JPY=X": "USDJPY",
-    },
-    "Commodities": {
-        "GLD": "Gold",
-        "SLV": "Silver",
-        "USO": "WTI Oil",
-        "UNG": "US Nat Gas",
-        "DBC": "Broad Commodities",
-    },
-    "Crypto": {
-        "BTC-USD": "Bitcoin",
-        "ETH-USD": "Ethereum",
-    },
-    "Cash": {
-        "BIL": "T-Bills 1-3M",
-    },
-    "Vol": {
-        "^VIX": "VIX",
-    },
-}
+def robust_scale(s: pd.Series):
+    if s.isna().all():
+        return s
+    med = s.median()
+    mad = (s - med).abs().median()
+    if np.isfinite(mad) and mad > 1e-12:
+        return (s - med) / (1.4826*mad)
+    std = s.std(ddof=0)
+    return (s - s.mean()) / (std + 1e-12) if np.isfinite(std) and std > 1e-12 else s*0
 
-FRED_SERIES = {
-    "DGS2": "UST 2y Yield (%)",
-    "DGS10": "UST 10y Yield (%)",
-    "T10YIE": "10y Breakeven (%)",
-    "BAMLH0A0HYM2": "HY OAS (bps)",   # FRED returns percent; convert to bps
-    "BAMLC0A0CM": "IG OAS (bps)",     # FRED returns percent; convert to bps
-}
-FRED_CODES: Tuple[str, ...] = tuple(FRED_SERIES.keys())  # tuple for Streamlit cache hashing
+def build_design(fund_df: pd.DataFrame, flows, horizons, min_rows=12):
+    feats = {}
+    for c in flows:
+        if c not in fund_df.columns:
+            continue
+        for h in horizons:
+            d = fund_df[c] - fund_df[c].shift(h)
+            feats[f"{c}_d{h}w"] = robust_scale(d)
+    if not feats:
+        return pd.DataFrame(index=fund_df.index), []
+    X = pd.DataFrame(feats, index=fund_df.index)
+    valid = [c for c in X.columns if X[c].notna().sum() >= min_rows]
+    return X[valid], valid
 
-# -----------------------------
-# Sidebar controls
-# -----------------------------
+def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
+    df = pd.concat([y, X], axis=1).dropna()
+    if df.empty:
+        return None
+    Y = df.iloc[:, 0].values.reshape(-1, 1)
+    X0 = df.iloc[:, 1:]
+    Xmat = np.column_stack([np.ones(len(df)), X0.values])
+    beta_w = np.linalg.lstsq(Xmat, Y, rcond=None)[0].flatten()
+    yhat = Xmat @ beta_w
+    resid = Y.flatten() - yhat
+    dof = max(1, (len(df) - Xmat.shape[1]))
+    s2 = (resid @ resid) / dof
+    cov = s2 * np.linalg.pinv(Xmat.T @ Xmat)
+    se = np.sqrt(np.clip(np.diag(cov), 1e-12, None))
+    t = beta_w / se
+    names = ["Intercept"] + list(X0.columns)
+    b_weekly = pd.Series(beta_w, index=names).drop("Intercept")
+    tser = pd.Series(t, index=names).drop("Intercept")
+    denom = ((Y - Y.mean()) ** 2).sum() + 1e-12
+    r2 = float(1.0 - (resid @ resid) / denom)
+    return {"weekly": b_weekly, "annual": b_weekly*scale, "t": tser, "r2": r2, "rows": len(df)}
+
+def choose_dtick_and_format(x_index: pd.DatetimeIndex):
+    if x_index.empty: return "M12", "%Y"
+    span_days = (x_index.max() - x_index.min()).days
+    if span_days <= 370: return "M1", "%b %y"
+    if span_days <= 3*365: return "M3", "%b %y"
+    if span_days <= 7*365: return "M6", "%Y"
+    return "M12", "%Y"
+
+# -------------------- Sidebar --------------------
 with st.sidebar:
     st.header("Settings")
-    years = st.slider("History (years)", 2, 15, DEFAULT_YEARS, 1)
-    START = TODAY - dt.timedelta(days=365 * years)
+    start_date = st.date_input("Start date", pd.to_datetime("2012-01-01"))
+    reg_window = st.number_input("Regression window (weeks)", 52, 520, 156, step=13)
+    horizons = st.multiselect("Delta horizons (weeks)", [4, 8], default=[4, 8])
+    show_annual = st.toggle("Show betas annualized (×52)", value=True)
+    default_assets = ["SPY","QQQ","TLT","HYG","XLE","XLF","GLD","BTC-USD"]
+    tickers = st.text_input("Assets (comma separated)", ",".join(default_assets)).replace(" ","").split(",")
+    st.markdown("---")
+    st.subheader("FRED IDs")
+    st.caption("Defaults cover Fed balance sheet, RRP, TGA. Add reserve series if you like.")
+    extra = st.text_area("Extra FRED (name=ID per line)", value="", height=80)
+    st.markdown("---")
+    st.subheader("Conviction weights")
+    t_weight = st.slider("Weight of |t|-mean", 0.0, 1.0, 0.5, 0.05)
+    stab_weight = st.slider("Weight of Stability", 0.0, 1.0, 0.3, 0.05)
+    r2_weight = st.slider("Weight of R²", 0.0, 1.0, 0.2, 0.05)
 
-    show_groups = st.multiselect(
-        "Asset groups",
-        options=list(UNIVERSE.keys()),
-        default=list(UNIVERSE.keys()),
-    )
+st.caption("Identify where liquidity and relative performance co-move, then act: tilts, pairs, triggers. Always populated, no silent filters.")
 
-    # FlowScore weights are adjustable
-    st.markdown("**FlowScore weights**")
-    w5d = st.slider("5D weight", 0.0, 1.0, 0.45, 0.05)
-    w1m = st.slider("1M weight", 0.0, 1.0, 0.35, 0.05)
-    w3m = st.slider("3M weight", 0.0, 1.0, 0.15, 0.05)
-    wvol = st.slider("Volume weight", 0.0, 1.0, 0.05, 0.05)
-    wsum = max(w5d + w1m + w3m + wvol, 1e-9)
-    W = {  # normalized
-        "5D": w5d / wsum,
-        "1M": w1m / wsum,
-        "3M": w3m / wsum,
-        "VOL": wvol / wsum,
-    }
+# -------------------- Data --------------------
+fred_ids = {"WALCL":"WALCL", "RRPONTSYD":"RRPONTSYD", "WTREGEN":"WTREGEN", "WDTGAL":"WDTGAL"}
+if extra.strip():
+    for line in extra.splitlines():
+        if "=" in line:
+            k, v = [x.strip() for x in line.split("=",1)]
+            fred_ids[k] = v
 
-    horizon_cols = ["1D", "5D", "1M", "3M", "6M", "1Y"]
-    disable_fred = st.checkbox("Disable FRED if service is flaky", value=False)
+with st.spinner("Loading data"):
+    px_d = load_prices(tickers, start=str(start_date))
+    if px_d.empty:
+        st.error("No price data. Check tickers.")
+        st.stop()
+    widx = weekly_index(start_date)
+    px = px_d.resample("W-FRI").last().reindex(widx).ffill()
 
-# -----------------------------
-# Data loaders with caching
-# -----------------------------
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_yahoo_data(tickers_tuple: Tuple[str, ...], start_date: dt.date) -> pd.DataFrame:
-    tickers = list(tickers_tuple)
-    df = yf.download(
-        tickers,
-        start=start_date,
-        auto_adjust=True,
-        progress=False,
-        group_by="ticker",
-        threads=True,
-    )
-    frames = []
-    for t in tickers:
-        if t in df.columns.get_level_values(0):
-            sub = df[t][["Close", "Volume"]].copy()
-            sub.columns = pd.MultiIndex.from_product([[t], sub.columns])
-            frames.append(sub)
-    if not frames:
-        return pd.DataFrame()
-    out = pd.concat(frames, axis=1).sort_index()
-    return out
+    fred_raw = {}
+    for name, sid in fred_ids.items():
+        s = fred_series(sid, start=str(start_date))
+        if not s.empty:
+            fred_raw[name] = align_to_weekly(s, widx)
+    fred_df = pd.DataFrame(fred_raw, index=widx) if fred_raw else pd.DataFrame(index=widx)
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_fred_series(series_codes_tuple: Tuple[str, ...], start_date: dt.date) -> pd.DataFrame:
-    out = {}
-    for code in series_codes_tuple:
-        try:
-            s = pdr.DataReader(code, "fred", start_date)
-            out[code] = s[code]
-        except Exception:
-            out[code] = pd.Series(dtype=float, name=code)
-    return pd.DataFrame(out).dropna(how="all")
+if px.empty:
+    st.error("No price data.")
+    st.stop()
 
-# -----------------------------
-# Helpers and signals
-# -----------------------------
-def compute_price_panels(yh: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    if yh.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    close_cols = [c for c in yh.columns if c[1] == "Close"]
-    vol_cols = [c for c in yh.columns if c[1] == "Volume"]
-    px = yh[close_cols].copy()
-    px.columns = [c[0] for c in close_cols]
-    vol = yh[vol_cols].copy()
-    vol.columns = [c[0] for c in vol_cols]
-    return px, vol
+fund = pd.DataFrame(index=widx)
+have = set(fred_df.columns)
+tga = fred_df["WTREGEN"] if "WTREGEN" in have else (fred_df["WDTGAL"] if "WDTGAL" in have else None)
 
-def rolling_zscore(s: pd.Series, window: int = 63) -> pd.Series:
-    mu = s.rolling(window).mean()
-    sd = s.rolling(window).std(ddof=0)
-    return (s - mu) / (sd.replace(0, np.nan))
+if "WALCL" in have and "RRPONTSYD" in have:
+    fund["Fed_NetLiq"] = fred_df["WALCL"] - fred_df["RRPONTSYD"] - (tga if tga is not None else 0)
+    if tga is not None:
+        fund["TGA_Drain"] = -tga
+elif "WALCL" in have:
+    fund["Fed_NetLiq_proxy"] = fred_df["WALCL"]
 
-def vol_percentile(vol: pd.DataFrame, window: int = 60) -> pd.DataFrame:
-    return vol.rolling(window).apply(
-        lambda a: pd.Series(a).rank(pct=True).iloc[-1] if len(a) > 0 else np.nan,
-        raw=False,
-    )
+fx_cols = [c for c in fred_df.columns if c.upper().startswith(("CHN","JPN")) or c.endswith("_RES")]
+if fx_cols:
+    fund["FX_Reserves"] = fred_df[fx_cols].sum(axis=1)
 
-def compute_flow_score(
-    px: pd.DataFrame, vol: pd.DataFrame, horizons: Dict[str, int], weights: Dict[str, float]
-) -> pd.DataFrame:
-    """Weighted z across 5D, 1M, 3M returns and 60D volume percentile z.
-       Robust to missing components: reweights per-ticker by available pieces."""
-    ret_5d = px.pct_change(horizons["5D"])
-    ret_1m = px.pct_change(horizons["1M"])
-    ret_3m = px.pct_change(horizons["3M"])
-    volp = vol_percentile(vol, window=60)
+flow_priority = [
+    ["Fed_NetLiq","TGA_Drain","FX_Reserves"],
+    ["Fed_NetLiq","TGA_Drain"],
+    ["Fed_NetLiq"],
+    ["Fed_NetLiq_proxy"],
+]
+flow_list = next((ok for cand in flow_priority if (ok := [c for c in cand if c in fund.columns])), [])
+if not flow_list:
+    st.error("No usable flows. Need WALCL and RRPONTSYD, or at least WALCL.")
+    st.stop()
 
-    z5 = ret_5d.apply(rolling_zscore, window=63)
-    z1m = ret_1m.apply(rolling_zscore, window=126)
-    z3m = ret_3m.apply(rolling_zscore, window=252)
-    zv = volp.apply(rolling_zscore, window=126)
+X, valid = build_design(fund, flow_list, horizons, min_rows=12)
+if X.empty:
+    st.error("No usable flow shocks built. Try a later start date.")
+    st.stop()
 
-    # Align all components
-    all_cols = sorted(set(px.columns))
-    z5 = z5.reindex(columns=all_cols)
-    z1m = z1m.reindex(columns=all_cols)
-    z3m = z3m.reindex(columns=all_cols)
-    zv = zv.reindex(columns=all_cols)
+rets = np.log(px).diff()
+eff_window = min(int(reg_window), len(widx))
+if eff_window < 26:
+    st.warning(f"Short sample ({eff_window} weeks). Consider a longer window.")
 
-    numerator = 0
-    denominator = 0
-    for comp, w in [(z5, weights["5D"]), (z1m, weights["1M"]), (z3m, weights["3M"]), (zv, weights["VOL"])]:
-        numerator = numerator + comp.multiply(w)
-        denominator = denominator + comp.notna().astype(float).multiply(w)
+# -------------------- Regressions --------------------
+betas_a, betas_w, tstats, r2s, rows_used = {}, {}, {}, {}, {}
+min_rows = max(20, 5*max(1, len(valid)))
+for asset in rets.columns:
+    y = rets[asset]
+    df = pd.concat([y, X], axis=1).dropna().iloc[-eff_window:]
+    if df.shape[0] < min_rows:
+        continue
+    res = ols_annualized(df.iloc[:, 0], df.iloc[:, 1:], scale=52.0)
+    if res is None:
+        continue
+    betas_a[asset] = res["annual"]
+    betas_w[asset] = res["weekly"]
+    tstats[asset] = res["t"]
+    r2s[asset] = res["r2"]
+    rows_used[asset] = res["rows"]
 
-    flow = numerator / denominator.replace(0, np.nan)
-    return flow
+if not betas_a:
+    st.error("No assets had sufficient overlap. Try fewer tickers or a later start.")
+    st.stop()
 
-def tidy_matrix(flow_score: pd.DataFrame, groups_dict: Dict[str, Dict[str, str]]) -> pd.DataFrame:
-    if flow_score.dropna(how="all").empty:
-        return pd.DataFrame()
-    latest = flow_score.dropna(how="all").iloc[-1].dropna()
-    rows = []
-    for group, members in groups_dict.items():
-        for tkr, label in members.items():
-            if tkr in latest.index:
-                rows.append(
-                    {"Group": group, "Ticker": tkr, "Label": label, "FlowScore": latest[tkr]}
-                )
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows).sort_values(["Group", "FlowScore"], ascending=[True, False])
+B_ann = pd.DataFrame(betas_a).T
+B_wk = pd.DataFrame(betas_w).T
+T = pd.DataFrame(tstats).T
+R2 = pd.Series(r2s, name="R2")
+rowsS = pd.Series(rows_used, name="Rows")
 
-def map_name(t: str) -> str:
-    for g in UNIVERSE:
-        if t in UNIVERSE[g]:
-            return UNIVERSE[g][t]
-    return t
+Bdisp = B_ann if show_annual else B_wk
+unit_label = "Annualized β" if show_annual else "Weekly β"
 
-# -----------------------------
-# Load data
-# -----------------------------
-tickers = tuple(sorted({t for g in show_groups for t in UNIVERSE[g].keys()}))
+liq_cols = [c for c in Bdisp.columns if any(k in c for k in ["Fed_NetLiq","TGA_Drain","FX_Reserves","Fed_NetLiq_proxy"])]
+Bv = Bdisp[liq_cols].copy()
+liq_beta = Bv.sum(axis=1).rename("LiquidityBeta")
 
-with st.spinner("Loading market data..."):
-    yh = load_yahoo_data(tickers, START)
-    fred = pd.DataFrame()
-    if not disable_fred:
-        fred = load_fred_series(FRED_CODES, START)
+# -------------------- Confidence & Tilt --------------------
+def half_window_liq_beta(asset):
+    y = rets[asset]
+    df = pd.concat([y, X], axis=1).dropna()
+    if len(df) < 2*min_rows:
+        return np.nan
+    mid = len(df)//2
+    def part_beta(dfp):
+        r = ols_annualized(dfp.iloc[:,0], dfp.iloc[:,1:], scale=(52.0 if show_annual else 1.0))
+        if r is None: return np.nan
+        b = r["annual"] if show_annual else r["weekly"]
+        return b.reindex(liq_cols).sum()
+    b1, b2 = part_beta(df.iloc[:mid]), part_beta(df.iloc[mid:])
+    if not np.isfinite(b1) or not np.isfinite(b2): return np.nan
+    denom = abs(b1) + abs(b2) + 1e-6
+    return float(np.clip(1.0 - abs(b1 - b2)/denom, 0.0, 1.0))
 
-px, vol = compute_price_panels(yh)
+stability = pd.Series({a: half_window_liq_beta(a) for a in Bv.index}, name="Stability")
+abs_t_mean = T.reindex(columns=liq_cols).abs().mean(axis=1).rename("|t|_mean").fillna(0.0)
+t_conf = np.clip(abs_t_mean, 0.0, 3.0) / 3.0
+r2_conf = (R2.fillna(0.0).clip(0.0, 0.15) / 0.15).rename("R2_conf")
+stab_conf = stability.fillna(0.0).clip(0.0, 1.0)
 
-# -----------------------------
-# Macro regime header (fixed units and clearer layout)
-# -----------------------------
-st.markdown("### Macro regime snapshot")
+# normalize weights
+w_sum = max(1e-6, t_weight + stab_weight + r2_weight)
+confidence = ((t_weight/w_sum)*t_conf + (stab_weight/w_sum)*stab_conf + (r2_weight/w_sum)*r2_conf).rename("Confidence")
+tilt_score = (liq_beta.fillna(0.0) * confidence).rename("TiltScore")
+
+playbook = pd.concat([liq_beta, confidence, tilt_score, abs_t_mean, stab_conf.rename("Stability"), r2_conf, R2, rowsS], axis=1)
+playbook = playbook.sort_values("TiltScore", ascending=False)
+
+# -------------------- Liquidity Pulse & triggers --------------------
+pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","FX_Reserves","TGA_Drain","Fed_NetLiq_proxy"])]
+pulse_series = X[pos_cols].sum(axis=1).dropna()
+def zscore(s, w=26):
+    r = s.rolling(w, min_periods=max(8, w//3))
+    return (s - r.mean()) / (r.std(ddof=0) + 1e-12)
+pulse_z = zscore(pulse_series)
+pulse_slope = pulse_series.diff(4)
+state_z = float(pulse_z.iloc[-1]) if not pulse_z.empty else np.nan
+state_slope = float(pulse_slope.iloc[-1]) if not pulse_slope.empty else np.nan
+
+# -------------------- Header metrics --------------------
+st.subheader("Actionable Playbook")
 c1, c2, c3, c4 = st.columns(4)
+c1.metric("Liquidity Pulse z", f"{state_z:+.2f}")
+c2.metric("Pulse 4w slope", f"{state_slope:+.2f}")
+c3.metric("Avg Confidence", f"{confidence.mean():.2f}")
+c4.metric("Coverage", f"{len(playbook)} assets")
 
-with c1:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Treasury curve</div>', unsafe_allow_html=True)
-    if not fred.empty and {"DGS2", "DGS10"}.issubset(fred.columns):
-        d2 = float(fred["DGS2"].dropna().iloc[-1])
-        d10 = float(fred["DGS10"].dropna().iloc[-1])
-        st.metric("2s", f"{d2:.2f}%")
-        st.metric("10s", f"{d10:.2f}%")
-        st.metric("2s10s", f"{(d10 - d2):.2f} pp")
-    else:
-        st.caption("FRED unavailable")
-    st.markdown("</div>", unsafe_allow_html=True)
+st.caption("TiltScore = LiquidityBeta × Confidence. Confidence blends |t|-mean, Stability, capped R² with your weights.")
 
-with c2:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Breakeven inflation</div>', unsafe_allow_html=True)
-    if "T10YIE" in fred.columns and not fred["T10YIE"].dropna().empty:
-        be10 = float(fred["T10YIE"].dropna().iloc[-1])
-        st.metric("10y BE", f"{be10:.2f}%")
-    else:
-        st.caption("FRED unavailable")
-    st.markdown("</div>", unsafe_allow_html=True)
+# -------------------- Top lists & pairs (always populated) --------------------
+top_n = min(5, len(playbook))
+ow_top = playbook.head(top_n)
+uw_top = playbook.tail(top_n).iloc[::-1]
+def fmt_tbl(df):
+    cols = ["LiquidityBeta","Confidence","TiltScore","|t|_mean","Stability","R2_conf","R2","Rows"]
+    view = df.reindex(columns=cols)
+    try:
+        return view.style.format({
+            "LiquidityBeta":"{:+.2f}", "Confidence":"{:.2f}", "TiltScore":"{:+.2f}",
+            "|t|_mean":"{:.2f}", "Stability":"{:.0%}", "R2_conf":"{:.0%}", "R2":"{:.1%}"
+        }).background_gradient(subset=["TiltScore"], cmap="RdYlGn")
+    except Exception:
+        return view
 
-with c3:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Credit spreads</div>', unsafe_allow_html=True)
-    # FRED provides these in percent. Convert to bps.
-    if "BAMLH0A0HYM2" in fred.columns and not fred["BAMLH0A0HYM2"].dropna().empty:
-        hy_bps = float(fred["BAMLH0A0HYM2"].dropna().iloc[-1]) * 100.0
-        st.metric("HY OAS", f"{hy_bps:.0f} bps")
-    if "BAMLC0A0CM" in fred.columns and not fred["BAMLC0A0CM"].dropna().empty:
-        ig_bps = float(fred["BAMLC0A0CM"].dropna().iloc[-1]) * 100.0
-        st.metric("IG OAS", f"{ig_bps:.0f} bps")
-    st.markdown("</div>", unsafe_allow_html=True)
+st.markdown("**Top Overweights**")
+st.dataframe(fmt_tbl(ow_top), use_container_width=True)
+st.markdown("**Top Underweights**")
+st.dataframe(fmt_tbl(uw_top), use_container_width=True)
 
-with c4:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Equity trend & vol</div>', unsafe_allow_html=True)
-    if "SPY" in px.columns and not px["SPY"].dropna().empty:
-        spy = px["SPY"].dropna()
-        st.metric("SPY", f"{spy.iloc[-1]:.2f}")
-        for w in [21, 50, 200]:
-            st.caption(f"DMA{w}: {spy.rolling(w).mean().iloc[-1]:.2f}")
-    if "^VIX" in px.columns and not px["^VIX"].dropna().empty:
-        st.metric("VIX", f"{px['^VIX'].dropna().iloc[-1]:.1f}")
-    st.markdown("</div>", unsafe_allow_html=True)
+def make_pairs(long_df, short_df, n=3):
+    pairs = []
+    for la, ls in zip(long_df.index[:n], short_df.index[:n]):
+        pairs.append([la, ls, float(long_df.loc[la,"TiltScore"] - short_df.loc[ls,"TiltScore"])])
+    return pd.DataFrame(pairs, columns=["Long","Short","NetScore"])
+pairs = make_pairs(ow_top, uw_top, n=min(3, top_n))
+st.markdown("**Pairs for expression**")
+try:
+    st.dataframe(pairs.style.format({"NetScore":"{:+.2f}"}), use_container_width=True)
+except Exception:
+    st.dataframe(pairs, use_container_width=True)
 
-# -----------------------------
-# Flow of funds matrix (robust, dense)
-# -----------------------------
-st.markdown("### Flow of Funds matrix")
+# -------------------- Triggers --------------------
+st.subheader("Triggers and invalidation rules")
+def pulse_regime(z, slope):
+    if not np.isfinite(z) or not np.isfinite(slope): return "N/A"
+    if z >= 1.0 and slope > 0: return "Liquidity improving"
+    if z <= -1.0 and slope < 0: return "Liquidity deteriorating"
+    return "Mixed/neutral"
+regime = pulse_regime(state_z, state_slope)
+st.markdown(
+    f"- **Regime:** **{regime}**. Risk-on when Pulse z > +1 and slope > 0. Risk-off when z < −1 and slope < 0.\n"
+    "- **Act:** Overweight the OW list, underweight the UW list, or express via pairs above.\n"
+    "- **Invalidate:** Flip or reduce if TiltScore changes sign, |t|-mean falls, or Stability drops sharply."
+)
 
-flow = compute_flow_score(px, vol, HORIZONS, W)
-matrix_df = tidy_matrix(flow, {g: UNIVERSE[g] for g in show_groups})
+# -------------------- Heatmap (context) --------------------
+st.subheader(f"Liquidity beta heatmap ({unit_label})")
+def relabel(col: str) -> str:
+    return (col.replace("Fed_NetLiq","Fed NL").replace("TGA_Drain","TGA drain")
+               .replace("FX_Reserves","FX reserves").replace("_d"," Δ"))
+label_map = {c: relabel(c) for c in Bv.columns}
+Bv_disp = Bv.rename(columns=label_map)
+Tmatch = T.reindex(index=Bv.index, columns=Bv.columns).rename(columns=label_map)
 
-if not matrix_df.empty:
-    # Order assets within each group by FlowScore
-    hm = matrix_df.pivot_table(index=["Group", "Label"], columns="Ticker", values="FlowScore")
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=hm.values,
-            x=hm.columns.tolist(),
-            y=[f"{g} • {l}" for g, l in hm.index],
-            colorscale=[
-                [0.0, PASTEL_NEG],
-                [0.5, PASTEL_NEU],
-                [1.0, PASTEL_POS],
-            ],
-            zmid=0,
-            colorbar=dict(title="FlowScore", ticksuffix="σ"),
-        )
-    )
-    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=min(900, 380 + 10 * len(hm.index)))
-    st.markdown('<div class="matrix-card">', unsafe_allow_html=True)
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-else:
-    st.info("Matrix unavailable. Check data availability for the selected groups.")
+def star_marker(x):
+    if pd.isna(x): return ""
+    ax = abs(x)
+    return "★★★" if ax >= 3.0 else ("★★" if ax >= 2.0 else ("★" if ax >= 1.7 else ""))
 
-# -----------------------------
-# Return matrix snapshot (x.xx% formatting and fixed column order)
-# -----------------------------
-st.markdown("### Return matrix by horizon")
+star_text = Tmatch.applymap(star_marker).fillna("")
+custom = np.dstack([Bv_disp.values, Tmatch.values])
+colors_pos_green = [[0.0, "#d6604d"], [0.5, "#f7f7f7"], [1.0, "#1a9850"]]
+hm = go.Figure(data=go.Heatmap(
+    z=Bv_disp.values, x=list(Bv_disp.columns), y=list(Bv_disp.index),
+    colorscale=colors_pos_green, zmid=0, colorbar=dict(title=unit_label),
+    text=star_text.values, texttemplate="%{text}",
+    customdata=custom,
+    hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>"+unit_label+": %{z:.3f}<br>t-stat: %{customdata[1]:.2f}<extra></extra>"
+))
+hm.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10))
+st.plotly_chart(hm, use_container_width=True)
 
-def build_return_snapshot(px: pd.DataFrame, horizons, selected_groups) -> pd.DataFrame:
-    rows = []
-    tick2label = {t: lbl for g in selected_groups for t, lbl in UNIVERSE[g].items()}
-    for t in tick2label:
-        if t not in px.columns:
-            continue
-        for name, n in horizons.items():
-            s = px[t].pct_change(n).dropna()
-            if s.empty:
-                continue
-            rows.append(
-                {
-                    "Group": [g for g in selected_groups if t in UNIVERSE[g]][0],
-                    "Label": tick2label[t],
-                    "Ticker": t,
-                    "Horizon": name,
-                    "Return": s.iloc[-1] * 100.0,
-                }
-            )
-    if not rows:
-        return pd.DataFrame()
-    df = pd.DataFrame(rows)
-    pivot = df.pivot_table(index=["Group", "Label", "Ticker"], columns="Horizon", values="Return")
-    # enforce clean column order and percent strings
-    pivot = pivot.reindex(columns=horizon_cols)
-    pivot = pivot.applymap(lambda v: "" if pd.isna(v) else f"{v:.2f}%")
-    return pivot
+# -------------------- Pulse chart --------------------
+st.subheader("Liquidity Pulse (sum of standardized flow shocks)")
+pulse_plot = pulse_series.loc[str(start_date):]
+dtick, tfmt = choose_dtick_and_format(pulse_plot.index)
+fig_pulse = go.Figure()
+fig_pulse.add_hline(y=0, line=dict(color="#cccccc", dash="dot"))
+fig_pulse.add_trace(go.Scatter(x=pulse_plot.index, y=pulse_plot, mode="lines", name="Pulse"))
+if not pulse_plot.empty:
+    fig_pulse.add_trace(go.Scatter(x=[pulse_plot.index[-1]], y=[pulse_plot.iloc[-1]],
+                                   mode="markers+text", text=[f"{pulse_plot.iloc[-1]:+.2f}"],
+                                   textposition="top center", showlegend=False))
+fig_pulse.update_layout(showlegend=False, height=300, margin=dict(l=10, r=10, t=10, b=10))
+fig_pulse.update_yaxes(title_text="Standardized shocks")
+fig_pulse.update_xaxes(dtick=dtick, tickformat=tfmt, hoverformat="%b %d, %Y")
+st.plotly_chart(fig_pulse, use_container_width=True)
 
-ret_snapshot = build_return_snapshot(px, {k: HORIZONS[k] for k in horizon_cols}, show_groups)
-if ret_snapshot.empty:
-    st.caption("No returns available for the selected horizons and assets.")
-else:
-    st.dataframe(ret_snapshot, use_container_width=True)
+# -------------------- Downloads --------------------
+with st.expander("Download results"):
+    st.download_button("Betas (display units) CSV", Bdisp.to_csv().encode(), file_name="flow_betas.csv")
+    st.download_button("Playbook CSV", playbook.to_csv().encode(), file_name="flow_playbook.csv")
 
-# -----------------------------
-# Actionable takeaways (now broad-based, not only crypto)
-# -----------------------------
-st.markdown("### Actionable takeaways")
-if not matrix_df.empty:
-    latest = flow.dropna(how="all").iloc[-1]
-    # keep only displayed tickers
-    keep = set(matrix_df["Ticker"])
-    latest = latest[latest.index.isin(keep)].dropna()
-
-    # rank across all assets; then show diversified top/bottom
-    top = latest.sort_values(ascending=False).head(6)
-    bot = latest.sort_values(ascending=True).head(6)
-
-    def fmt_names(idx):
-        return [f"{t} ({map_name(t)})" for t in idx]
-
-    # Curve and vol notes
-    notes = []
-    if not fred.empty and {"DGS2", "DGS10"}.issubset(fred.columns):
-        curve_now = (fred["DGS10"] - fred["DGS2"]).dropna()
-        if not curve_now.empty:
-            cur = curve_now.iloc[-1]
-            prev = curve_now.shift(21).dropna().iloc[-1] if len(curve_now) > 21 else np.nan
-            tilt = "steepened" if prev == prev and cur > prev else "flattened" if prev == prev else "moved"
-            notes.append(f"Curve {tilt} to {cur:.2f} pp vs one month ago.")
-    if "^VIX" in px.columns and not px["^VIX"].dropna().empty:
-        vix_now = px["^VIX"].dropna().iloc[-1]
-        vix_floor = px["^VIX"].dropna().rolling(60).quantile(0.2).iloc[-1] if len(px["^VIX"].dropna()) >= 60 else np.nan
-        regime = "calmer tape" if vix_floor == vix_floor and vix_now <= vix_floor else "risk premium rebuilding"
-        notes.append(f"VIX at {vix_now:.1f} suggests {regime}.")
-
-    extremes_long = [t for t, v in top.items() if v >= 2.0]
-    extremes_short = [t for t, v in bot.items() if v <= -2.0]
-
-    st.markdown(
-        f"""
-        <div class="takeaways">
-        <p class="soft">
-        Capital is favoring <span class="good">{", ".join(fmt_names(top.index))}</span> and leaking from <span class="bad">{", ".join(fmt_names(bot.index))}</span>.
-        {" ".join(notes)}
-        Extremes flagged at |FlowScore| ≥ 2σ:
-        <span class="good">{", ".join(fmt_names(extremes_long)) if extremes_long else "none"}</span> /
-        <span class="bad">{", ".join(fmt_names(extremes_short)) if extremes_short else "none"}</span>.
-        Use as a tilt map; invalidate on a close back inside one sigma.
-        </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-else:
-    st.caption("No takeaways available due to missing data.")
-
-st.caption(f"Last updated on {TODAY.isoformat()}. Data: Yahoo Finance, FRED via pandas_datareader.")
+st.caption("© 2025 AD Fund Management LP")
