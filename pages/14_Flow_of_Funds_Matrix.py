@@ -5,10 +5,11 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 
-# -------------------- Utilities --------------------
-st.set_page_config(page_title="Flow of Funds Matrix", layout="wide")
-st.title("Flow of Funds Matrix")
+# -------------------- App --------------------
+st.set_page_config(page_title="Flow of Funds Matrix — No FRED", layout="wide")
+st.title("Flow of Funds Matrix — Market-Proxy Drivers (No FRED)")
 
+# -------------------- Utils --------------------
 @st.cache_data(ttl=6*3600, show_spinner=False)
 def load_prices(tickers, start="2012-01-01"):
     try:
@@ -24,38 +25,9 @@ def load_prices(tickers, start="2012-01-01"):
         px = px.drop(columns=bad)
     return px.ffill()
 
-# Free, public FRED CSV fetch (no API key)
-@st.cache_data(ttl=24*3600, show_spinner=False)
-def fred_series(series: str, start="2012-01-01", end=None) -> pd.Series:
-    base = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-    cosd = pd.to_datetime(start).date()
-    coed = pd.to_datetime(end).date() if end else ""
-    url = f"{base}?id={series}&cosd={cosd}" + (f"&coed={coed}" if coed else "")
-    try:
-        df = pd.read_csv(url, parse_dates=["DATE"])
-    except Exception:
-        return pd.Series(dtype=float)
-    if "DATE" not in df.columns or series not in df.columns:
-        return pd.Series(dtype=float)
-    s = (
-        df.set_index("DATE")[series]
-        .replace(".", np.nan)
-        .astype(float)
-        .dropna()
-    )
-    s.index = pd.to_datetime(s.index).tz_localize(None)
-    return s.ffill()
-
 def weekly_index(start, end=None):
     end = end or pd.Timestamp.today().normalize()
     return pd.date_range(pd.to_datetime(start), end, freq="W-FRI")
-
-def align_to_weekly(s: pd.Series, widx: pd.DatetimeIndex) -> pd.Series:
-    if s.empty:
-        return s.reindex(widx)
-    df = pd.DataFrame({"v": s.sort_index()})
-    df = df.reindex(df.index.union(widx)).sort_index().ffill()
-    return df.loc[widx, "v"]
 
 def robust_scale(s: pd.Series):
     if s.isna().all():
@@ -67,17 +39,46 @@ def robust_scale(s: pd.Series):
     std = s.std(ddof=0)
     return (s - s.mean()) / (std + 1e-12) if np.isfinite(std) and std > 1e-12 else s * 0
 
-def build_design(fund_df: pd.DataFrame, flows, horizons, min_rows=12):
-    feats = {}
-    for c in flows:
-        if c not in fund_df.columns:
-            continue
+def build_design_from_proxies(px_w: pd.DataFrame, horizons, min_rows=12):
+    """
+    Build standardized delta features from market proxies only (no FRED).
+    """
+    # Define proxy columns we will compute from prices
+    need = ["TLT","SHY","HYG","IEF","UUP","USO","GLD","RSP","SPY","BTC-USD","ETH-USD"]
+    have = [c for c in need if c in px_w.columns]
+    if len(have) == 0:
+        return pd.DataFrame(index=px_w.index), []
+
+    # Log prices for additive returns
+    L = np.log(px_w[have]).copy()
+
+    # Base single-asset drivers
+    drivers = {}
+    def add_deltas(base: pd.Series, name_prefix: str):
         for h in horizons:
-            d = fund_df[c] - fund_df[c].shift(h)
-            feats[f"{c}_d{h}w"] = robust_scale(d)
-    if not feats:
-        return pd.DataFrame(index=fund_df.index), []
-    X = pd.DataFrame(feats, index=fund_df.index)
+            d = base - base.shift(h)
+            drivers[f"{name_prefix}_d{h}w"] = robust_scale(d)
+
+    # Duration, front-end, credit, FX, commodities, breadth, crypto
+    if "TLT" in have:      add_deltas(L["TLT"], "TLT")
+    if "SHY" in have:      add_deltas(L["SHY"], "SHY")
+    if set(["TLT","SHY"]).issuperset({"TLT","SHY"}) and all(x in have for x in ["TLT","SHY"]):
+        add_deltas(L["TLT"] - L["SHY"], "Curve_TLT_minus_SHY")
+    if all(x in have for x in ["HYG","IEF"]):
+        add_deltas(L["HYG"] - L["IEF"], "Credit_HYG_minus_IEF")
+    if "UUP" in have:
+        add_deltas(-L["UUP"], "USD_inv")  # weaker USD = looser global conditions
+    if "USO" in have:      add_deltas(L["USO"], "Oil_USO")
+    if "GLD" in have:      add_deltas(L["GLD"], "Gold_GLD")
+    if all(x in have for x in ["RSP","SPY"]):
+        add_deltas(L["RSP"] - L["SPY"], "Breadth_RSP_minus_SPY")
+    if "BTC-USD" in have:  add_deltas(L["BTC-USD"], "Crypto_BTC")
+    if "ETH-USD" in have:  add_deltas(L["ETH-USD"], "Crypto_ETH")
+
+    if not drivers:
+        return pd.DataFrame(index=px_w.index), []
+
+    X = pd.DataFrame(drivers, index=px_w.index)
     valid = [c for c in X.columns if X[c].notna().sum() >= min_rows]
     return X[valid], valid
 
@@ -101,15 +102,14 @@ def ols_annualized(y: pd.Series, X: pd.DataFrame, scale=52.0):
     tser = pd.Series(t, index=names).drop("Intercept")
     denom = ((Y - Y.mean()) ** 2).sum() + 1e-12
     r2 = float(1.0 - (resid @ resid) / denom)
-    return {"weekly": b_weekly, "annual": b_weekly * scale, "t": tser, "r2": r2, "rows": len(df)}
+    return {"weekly": b_weekly, "annual": b_weekly*scale, "t": tser, "r2": r2, "rows": len(df)}
 
 def choose_dtick_and_format(x_index: pd.DatetimeIndex):
-    if x_index.empty:
-        return "M12", "%Y"
+    if x_index.empty: return "M12", "%Y"
     span_days = (x_index.max() - x_index.min()).days
     if span_days <= 370: return "M1", "%b %y"
-    if span_days <= 3 * 365: return "M3", "%b %y"
-    if span_days <= 7 * 365: return "M6", "%Y"
+    if span_days <= 3*365: return "M3", "%b %y"
+    if span_days <= 7*365: return "M6", "%Y"
     return "M12", "%Y"
 
 # -------------------- Sidebar --------------------
@@ -117,19 +117,15 @@ with st.sidebar:
     st.header("Settings")
     start_date = st.date_input("Start date", pd.to_datetime("2012-01-01"))
     reg_window = st.number_input("Regression window (weeks)", 52, 520, 156, step=13)
-    horizons = st.multiselect("Delta horizons (weeks)", [4, 8], default=[4, 8])
+    horizons = st.multiselect("Delta horizons (weeks)", [4, 8, 12], default=[4, 8])
     show_annual = st.toggle("Show betas annualized (×52)", value=True)
 
+    # Target assets to rank
     default_assets = [
-        "SPY","QQQ","TLT","HYG","XLE","XLF","GLD","BTC-USD",
-        "IWM","EFA","EEM","SMH","XLU","XLB","XLI","USO","SLV","URA","UUP","ETH-USD"
+        "SPY","QQQ","IWM","EFA","EEM","SMH","XLE","XLF","XLU","XLB","XLI",
+        "TLT","IEF","HYG","GLD","SLV","USO","UUP","URA","BTC-USD","ETH-USD"
     ]
-    tickers = st.text_input("Assets (comma separated)", ",".join(default_assets)).replace(" ", "").split(",")
-
-    st.markdown("---")
-    st.subheader("FRED IDs")
-    st.caption("Defaults: Fed balance sheet, RRP, TGA. Add others as needed.")
-    extra = st.text_area("Extra FRED (name=ID per line)", value="", height=80)
+    tickers = st.text_input("Assets (comma separated)", ",".join(default_assets)).replace(" ","").split(",")
 
     st.markdown("---")
     st.subheader("Conviction weights")
@@ -137,111 +133,41 @@ with st.sidebar:
     stab_weight = st.slider("Weight of Stability", 0.0, 1.0, 0.3, 0.05)
     r2_weight = st.slider("Weight of R²", 0.0, 1.0, 0.2, 0.05)
 
-st.caption("Identify where liquidity and relative performance co-move, then act: tilts, pairs, triggers. Always populated, no silent filters.")
+st.caption("Market-proxy design: duration, curve, credit, USD, commodities, breadth, and crypto. No FRED or keys.")
 
 # -------------------- Data --------------------
-fred_ids = {"WALCL":"WALCL", "RRPONTSYD":"RRPONTSYD", "WTREGEN":"WTREGEN", "WDTGAL":"WDTGAL"}
-if extra.strip():
-    for line in extra.splitlines():
-        if "=" in line:
-            k, v = [x.strip() for x in line.split("=", 1)]
-            fred_ids[k] = v
-
-with st.spinner("Loading data"):
-    px_d = load_prices(tickers, start=str(start_date))
+with st.spinner("Loading market data"):
+    px_d = load_prices(tickers + ["TLT","SHY","HYG","IEF","UUP","USO","GLD","RSP","SPY","BTC-USD","ETH-USD"], start=str(start_date))
     if px_d.empty:
         st.error("No price data. Check tickers.")
         st.stop()
     widx = weekly_index(start_date)
     px = px_d.resample("W-FRI").last().reindex(widx).ffill()
 
-    fred_raw = {}
-    for name, sid in fred_ids.items():
-        s = fred_series(sid, start=str(start_date))
-        if not s.empty:
-            fred_raw[name] = align_to_weekly(s, widx)
-    fred_df = pd.DataFrame(fred_raw, index=widx) if fred_raw else pd.DataFrame(index=widx)
-
 if px.empty:
     st.error("No price data.")
     st.stop()
 
-# -------------------- Build flows with robust fallbacks --------------------
-fund = pd.DataFrame(index=widx)
-have = set(fred_df.columns)
-
-walcl = fred_df["WALCL"] if "WALCL" in have else None
-rrp = fred_df["RRPONTSYD"] if "RRPONTSYD" in have else None
-tga = None
-if "WTREGEN" in have:
-    tga = fred_df["WTREGEN"]
-elif "WDTGAL" in have:
-    tga = fred_df["WDTGAL"]
-
-# Primary definitions when available
-if walcl is not None:
-    fund["WALCL"] = walcl
-if rrp is not None:
-    fund["RRP"] = rrp
-if tga is not None:
-    fund["TGA"] = tga
-    fund["TGA_Drain"] = -tga
-
-# Best-case full net liquidity
-if walcl is not None and rrp is not None and tga is not None:
-    fund["Fed_NetLiq"] = walcl - rrp - tga
-# If one leg is missing, build the best proxy available
-elif walcl is not None and rrp is not None:
-    fund["Fed_NetLiq"] = walcl - rrp
-elif walcl is not None and tga is not None:
-    fund["Fed_NetLiq"] = walcl - tga
-elif rrp is not None and tga is not None:
-    # No WALCL: approximate net liquidity pressure from the drains alone
-    fund["Fed_NetLiq_proxy"] = -(rrp + tga)
-elif walcl is not None:
-    fund["Fed_NetLiq_proxy"] = walcl
-elif rrp is not None:
-    fund["RRP_only"] = -rrp  # higher RRP reduces liquidity
-elif tga is not None:
-    fund["TGA_only"] = -tga  # higher TGA reduces liquidity
-
-# Assemble candidate list in descending order of quality
-candidates_priority = [
-    ["Fed_NetLiq", "TGA_Drain"],
-    ["Fed_NetLiq"],
-    ["Fed_NetLiq_proxy", "TGA_Drain"],
-    ["Fed_NetLiq_proxy"],
-    ["RRP_only", "TGA_only", "TGA_Drain"],
-    ["RRP_only"],
-    ["TGA_only"],
-]
-
-flow_list = next((ok for cand in candidates_priority if (ok := [c for c in cand if c in fund.columns])), [])
-if not flow_list:
-    st.error("Still missing all WALCL, RRP, and TGA. Add at least one FRED series or adjust start date.")
-    st.stop()
-
-# -------------------- Design matrix --------------------
-X, valid = build_design(fund, flow_list, horizons, min_rows=12)
+# -------------------- Design matrix from proxies --------------------
+X, valid = build_design_from_proxies(px, horizons, min_rows=12)
 if X.empty:
-    st.error("No usable flow shocks built. Try a later start date.")
+    st.error("Could not build proxy flows. Try a later start date or add more proxies.")
     st.stop()
 
-# -------------------- Returns & windowing --------------------
-rets = np.log(px).diff()
+rets = np.log(px[tickers]).diff()
 eff_window = min(int(reg_window), len(widx))
 if eff_window < 26:
     st.warning(f"Short sample ({eff_window} weeks). Consider a longer window.")
 
 # -------------------- Regressions --------------------
 betas_a, betas_w, tstats, r2s, rows_used = {}, {}, {}, {}, {}
-min_rows = max(20, 5 * max(1, len(valid)))
+min_rows = max(20, 5*max(1, len(valid)))
 for asset in rets.columns:
     y = rets[asset]
     df = pd.concat([y, X], axis=1).dropna().iloc[-eff_window:]
     if df.shape[0] < min_rows:
         continue
-    res = ols_annualized(df.iloc[:, 0], df.iloc[:, 1:], scale=52.0)
+    res = ols_annualized(df.iloc[:,0], df.iloc[:,1:], scale=52.0)
     if res is None:
         continue
     betas_a[asset] = res["annual"]
@@ -256,53 +182,59 @@ if not betas_a:
 
 B_ann = pd.DataFrame(betas_a).T
 B_wk  = pd.DataFrame(betas_w).T
-T     = pd.DataFrame(tstats).T
+Tstat = pd.DataFrame(tstats).T
 R2    = pd.Series(r2s, name="R2")
 rowsS = pd.Series(rows_used, name="Rows")
 
 Bdisp = B_ann if show_annual else B_wk
 unit_label = "Annualized β" if show_annual else "Weekly β"
 
-liq_cols = [c for c in Bdisp.columns if any(k in c for k in ["Fed_NetLiq","Fed_NetLiq_proxy","TGA_Drain","RRP_only","TGA_only"])]
-Bv = Bdisp[liq_cols].copy()
+# Aggregate a single LiquidityBeta from key proxy groups
+key_cols = [c for c in Bdisp.columns if any(k in c for k in [
+    "TLT_", "SHY_", "Curve_TLT_minus_SHY_", "Credit_HYG_minus_IEF_",
+    "USD_inv_", "Oil_USO_", "Gold_GLD_", "Breadth_RSP_minus_SPY_", "Crypto_"
+])]
+Bv = Bdisp[key_cols].copy()
 liq_beta = Bv.sum(axis=1).rename("LiquidityBeta")
 
 # -------------------- Confidence & Tilt --------------------
 def half_window_liq_beta(asset):
     y = rets[asset]
     df = pd.concat([y, X], axis=1).dropna()
-    if len(df) < 2 * min_rows:
+    if len(df) < 2*min_rows:
         return np.nan
-    mid = len(df) // 2
+    mid = len(df)//2
     def part_beta(dfp):
-        r = ols_annualized(dfp.iloc[:, 0], dfp.iloc[:, 1:], scale=(52.0 if show_annual else 1.0))
+        r = ols_annualized(dfp.iloc[:,0], dfp.iloc[:,1:], scale=(52.0 if show_annual else 1.0))
         if r is None: return np.nan
         b = r["annual"] if show_annual else r["weekly"]
-        return b.reindex(liq_cols).sum()
+        return b.reindex(key_cols).sum()
     b1, b2 = part_beta(df.iloc[:mid]), part_beta(df.iloc[mid:])
     if not np.isfinite(b1) or not np.isfinite(b2): return np.nan
     denom = abs(b1) + abs(b2) + 1e-6
-    return float(np.clip(1.0 - abs(b1 - b2) / denom, 0.0, 1.0))
+    return float(np.clip(1.0 - abs(b1 - b2)/denom, 0.0, 1.0))
 
 stability = pd.Series({a: half_window_liq_beta(a) for a in Bv.index}, name="Stability")
-abs_t_mean = T.reindex(columns=liq_cols).abs().mean(axis=1).rename("|t|_mean").fillna(0.0)
+abs_t_mean = Tstat.reindex(columns=key_cols).abs().mean(axis=1).rename("|t|_mean").fillna(0.0)
 t_conf = np.clip(abs_t_mean, 0.0, 3.0) / 3.0
 r2_conf = (R2.fillna(0.0).clip(0.0, 0.15) / 0.15).rename("R2_conf")
 stab_conf = stability.fillna(0.0).clip(0.0, 1.0)
 
 w_sum = max(1e-6, t_weight + stab_weight + r2_weight)
-confidence = ((t_weight / w_sum) * t_conf + (stab_weight / w_sum) * stab_conf + (r2_weight / w_sum) * r2_conf).rename("Confidence")
+confidence = ((t_weight/w_sum)*t_conf + (stab_weight/w_sum)*stab_conf + (r2_weight/w_sum)*r2_conf).rename("Confidence")
 tilt_score = (liq_beta.fillna(0.0) * confidence).rename("TiltScore")
 
 playbook = pd.concat([liq_beta, confidence, tilt_score, abs_t_mean, stab_conf.rename("Stability"), r2_conf, R2, rowsS], axis=1)
 playbook = playbook.sort_values("TiltScore", ascending=False)
 
-# -------------------- Liquidity Pulse & triggers --------------------
-pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","Fed_NetLiq_proxy","FX_Reserves","TGA_Drain","RRP_only","TGA_only"])]
+# -------------------- Pulse & triggers from proxy shocks --------------------
+pos_cols = [c for c in X.columns if any(k in c for k in [
+    "TLT_", "Curve_TLT_minus_SHY_", "Credit_HYG_minus_IEF_", "USD_inv_", "Oil_USO_", "Gold_GLD_", "Breadth_RSP_minus_SPY_", "Crypto_"
+])]
 pulse_series = X[pos_cols].sum(axis=1).dropna()
 
 def zscore(s, w=26):
-    r = s.rolling(w, min_periods=max(8, w // 3))
+    r = s.rolling(w, min_periods=max(8, w//3))
     return (s - r.mean()) / (r.std(ddof=0) + 1e-12)
 
 pulse_z = zscore(pulse_series)
@@ -344,7 +276,7 @@ st.dataframe(fmt_tbl(uw_top), use_container_width=True)
 def make_pairs(long_df, short_df, n=3):
     pairs = []
     for la, ls in zip(long_df.index[:n], short_df.index[:n]):
-        pairs.append([la, ls, float(long_df.loc[la, "TiltScore"] - short_df.loc[ls, "TiltScore"])])
+        pairs.append([la, ls, float(long_df.loc[la,"TiltScore"] - short_df.loc[ls,"TiltScore"])])
     return pd.DataFrame(pairs, columns=["Long","Short","NetScore"])
 
 pairs = make_pairs(ow_top, uw_top, n=min(3, top_n))
@@ -354,32 +286,23 @@ try:
 except Exception:
     st.dataframe(pairs, use_container_width=True)
 
-# -------------------- Triggers --------------------
-st.subheader("Triggers and invalidation rules")
-def pulse_regime(z, slope):
-    if not np.isfinite(z) or not np.isfinite(slope): return "N/A"
-    if z >= 1.0 and slope > 0: return "Liquidity improving"
-    if z <= -1.0 and slope < 0: return "Liquidity deteriorating"
-    return "Mixed/neutral"
-
-regime = pulse_regime(state_z, state_slope)
-st.markdown(
-    f"- Regime: **{regime}**. Risk-on when Pulse z > +1 and slope > 0. Risk-off when z < −1 and slope < 0.\n"
-    "- Act: overweight the OW list, underweight the UW list, or express via pairs above.\n"
-    "- Invalidate: flip or reduce if TiltScore changes sign, |t|-mean falls, or Stability drops sharply."
-)
-
-# -------------------- Heatmap (no emojis) --------------------
+# -------------------- Heatmap --------------------
 st.subheader(f"Liquidity beta heatmap ({unit_label})")
 
 def relabel(col: str) -> str:
-    return (col.replace("Fed_NetLiq","Fed NL").replace("Fed_NetLiq_proxy","Fed NL proxy")
-               .replace("TGA_Drain","TGA drain").replace("RRP_only","RRP only")
-               .replace("TGA_only","TGA only").replace("_d"," Δ"))
+    return (col.replace("Curve_TLT_minus_SHY","Curve")
+               .replace("Credit_HYG_minus_IEF","Credit")
+               .replace("USD_inv","USD inv")
+               .replace("Oil_USO","Oil")
+               .replace("Gold_GLD","Gold")
+               .replace("Breadth_RSP_minus_SPY","Breadth")
+               .replace("Crypto_BTC","Crypto BTC")
+               .replace("Crypto_ETH","Crypto ETH")
+               .replace("_d"," Δ"))
 
 label_map = {c: relabel(c) for c in Bv.columns}
 Bv_disp = Bv.rename(columns=label_map)
-Tmatch = T.reindex(index=Bv.index, columns=Bv.columns).rename(columns=label_map)
+Tmatch = Tstat.reindex(index=Bv.index, columns=Bv.columns).rename(columns=label_map)
 
 hm = go.Figure(data=go.Heatmap(
     z=Bv_disp.values,
@@ -394,7 +317,7 @@ hm.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(hm, use_container_width=True)
 
 # -------------------- Pulse chart --------------------
-st.subheader("Liquidity Pulse (sum of standardized flow shocks)")
+st.subheader("Liquidity Pulse (sum of standardized proxy shocks)")
 pulse_plot = pulse_series.loc[str(start_date):]
 dtick, tfmt = choose_dtick_and_format(pulse_plot.index)
 fig_pulse = go.Figure()
