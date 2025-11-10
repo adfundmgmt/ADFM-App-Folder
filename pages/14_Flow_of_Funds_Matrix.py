@@ -6,8 +6,8 @@ import yfinance as yf
 import plotly.graph_objects as go
 
 # -------------------- App --------------------
-st.set_page_config(page_title="Flow of Funds Matrix — No FRED", layout="wide")
-st.title("Flow of Funds Matrix — Market-Proxy Drivers (No FRED)")
+st.set_page_config(page_title="Flow of Funds Matrix", layout="wide")
+st.title("Flow of Funds Matrix")
 
 # -------------------- Utils --------------------
 @st.cache_data(ttl=6*3600, show_spinner=False)
@@ -41,7 +41,7 @@ def robust_scale(s: pd.Series):
 
 def build_design_from_proxies(px_w: pd.DataFrame, horizons, min_rows=12):
     """
-    Build standardized delta features from market proxies only (no FRED).
+    Build standardized delta features from market proxies only.
     """
     # Define proxy columns we will compute from prices
     need = ["TLT","SHY","HYG","IEF","UUP","USO","GLD","RSP","SPY","BTC-USD","ETH-USD"]
