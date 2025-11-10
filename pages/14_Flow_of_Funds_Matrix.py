@@ -24,7 +24,7 @@ def load_prices(tickers, start="2012-01-01"):
         px = px.drop(columns=bad)
     return px.ffill()
 
-# === Free, public FRED fetch (same pattern you use elsewhere): CSV endpoint, no key ===
+# Free, public FRED CSV fetch (no API key)
 @st.cache_data(ttl=24*3600, show_spinner=False)
 def fred_series(series: str, start="2012-01-01", end=None) -> pd.Series:
     base = "https://fred.stlouisfed.org/graph/fredgraph.csv"
@@ -120,7 +120,6 @@ with st.sidebar:
     horizons = st.multiselect("Delta horizons (weeks)", [4, 8], default=[4, 8])
     show_annual = st.toggle("Show betas annualized (×52)", value=True)
 
-    # Expanded default asset set: added 12
     default_assets = [
         "SPY","QQQ","TLT","HYG","XLE","XLF","GLD","BTC-USD",
         "IWM","EFA","EEM","SMH","XLU","XLB","XLI","USO","SLV","URA","UUP","ETH-USD"
@@ -129,7 +128,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("FRED IDs")
-    st.caption("Defaults cover Fed balance sheet, RRP, TGA. Add reserve series if you like.")
+    st.caption("Defaults: Fed balance sheet, RRP, TGA. Add others as needed.")
     extra = st.text_area("Extra FRED (name=ID per line)", value="", height=80)
 
     st.markdown("---")
@@ -167,37 +166,68 @@ if px.empty:
     st.error("No price data.")
     st.stop()
 
+# -------------------- Build flows with robust fallbacks --------------------
 fund = pd.DataFrame(index=widx)
 have = set(fred_df.columns)
-tga = fred_df["WTREGEN"] if "WTREGEN" in have else (fred_df["WDTGAL"] if "WDTGAL" in have else None)
 
-if "WALCL" in have and "RRPONTSYD" in have:
-    fund["Fed_NetLiq"] = fred_df["WALCL"] - fred_df["RRPONTSYD"] - (tga if tga is not None else 0)
-    if tga is not None:
-        fund["TGA_Drain"] = -tga
-elif "WALCL" in have:
-    fund["Fed_NetLiq_proxy"] = fred_df["WALCL"]
+walcl = fred_df["WALCL"] if "WALCL" in have else None
+rrp = fred_df["RRPONTSYD"] if "RRPONTSYD" in have else None
+tga = None
+if "WTREGEN" in have:
+    tga = fred_df["WTREGEN"]
+elif "WDTGAL" in have:
+    tga = fred_df["WDTGAL"]
 
-fx_cols = [c for c in fred_df.columns if c.upper().startswith(("CHN", "JPN")) or c.endswith("_RES")]
-if fx_cols:
-    fund["FX_Reserves"] = fred_df[fx_cols].sum(axis=1)
+# Primary definitions when available
+if walcl is not None:
+    fund["WALCL"] = walcl
+if rrp is not None:
+    fund["RRP"] = rrp
+if tga is not None:
+    fund["TGA"] = tga
+    fund["TGA_Drain"] = -tga
 
-flow_priority = [
-    ["Fed_NetLiq","TGA_Drain","FX_Reserves"],
-    ["Fed_NetLiq","TGA_Drain"],
+# Best-case full net liquidity
+if walcl is not None and rrp is not None and tga is not None:
+    fund["Fed_NetLiq"] = walcl - rrp - tga
+# If one leg is missing, build the best proxy available
+elif walcl is not None and rrp is not None:
+    fund["Fed_NetLiq"] = walcl - rrp
+elif walcl is not None and tga is not None:
+    fund["Fed_NetLiq"] = walcl - tga
+elif rrp is not None and tga is not None:
+    # No WALCL: approximate net liquidity pressure from the drains alone
+    fund["Fed_NetLiq_proxy"] = -(rrp + tga)
+elif walcl is not None:
+    fund["Fed_NetLiq_proxy"] = walcl
+elif rrp is not None:
+    fund["RRP_only"] = -rrp  # higher RRP reduces liquidity
+elif tga is not None:
+    fund["TGA_only"] = -tga  # higher TGA reduces liquidity
+
+# Assemble candidate list in descending order of quality
+candidates_priority = [
+    ["Fed_NetLiq", "TGA_Drain"],
     ["Fed_NetLiq"],
+    ["Fed_NetLiq_proxy", "TGA_Drain"],
     ["Fed_NetLiq_proxy"],
+    ["RRP_only", "TGA_only", "TGA_Drain"],
+    ["RRP_only"],
+    ["TGA_only"],
 ]
-flow_list = next((ok for cand in flow_priority if (ok := [c for c in cand if c in fund.columns])), [])
+
+flow_list = next((ok for cand in candidates_priority if (ok := [c for c in cand if c in fund.columns])), [])
 if not flow_list:
-    st.error("No usable flows. Need WALCL and RRPONTSYD, or at least WALCL.")
+    st.error("Still missing all WALCL, RRP, and TGA. Add at least one FRED series or adjust start date.")
     st.stop()
 
+# -------------------- Design matrix --------------------
 X, valid = build_design(fund, flow_list, horizons, min_rows=12)
 if X.empty:
     st.error("No usable flow shocks built. Try a later start date.")
     st.stop()
 
+# -------------------- Returns & windowing --------------------
 rets = np.log(px).diff()
 eff_window = min(int(reg_window), len(widx))
 if eff_window < 26:
@@ -225,15 +255,15 @@ if not betas_a:
     st.stop()
 
 B_ann = pd.DataFrame(betas_a).T
-B_wk = pd.DataFrame(betas_w).T
-T = pd.DataFrame(tstats).T
-R2 = pd.Series(r2s, name="R2")
+B_wk  = pd.DataFrame(betas_w).T
+T     = pd.DataFrame(tstats).T
+R2    = pd.Series(r2s, name="R2")
 rowsS = pd.Series(rows_used, name="Rows")
 
 Bdisp = B_ann if show_annual else B_wk
 unit_label = "Annualized β" if show_annual else "Weekly β"
 
-liq_cols = [c for c in Bdisp.columns if any(k in c for k in ["Fed_NetLiq","TGA_Drain","FX_Reserves","Fed_NetLiq_proxy"])]
+liq_cols = [c for c in Bdisp.columns if any(k in c for k in ["Fed_NetLiq","Fed_NetLiq_proxy","TGA_Drain","RRP_only","TGA_only"])]
 Bv = Bdisp[liq_cols].copy()
 liq_beta = Bv.sum(axis=1).rename("LiquidityBeta")
 
@@ -260,7 +290,6 @@ t_conf = np.clip(abs_t_mean, 0.0, 3.0) / 3.0
 r2_conf = (R2.fillna(0.0).clip(0.0, 0.15) / 0.15).rename("R2_conf")
 stab_conf = stability.fillna(0.0).clip(0.0, 1.0)
 
-# normalize weights
 w_sum = max(1e-6, t_weight + stab_weight + r2_weight)
 confidence = ((t_weight / w_sum) * t_conf + (stab_weight / w_sum) * stab_conf + (r2_weight / w_sum) * r2_conf).rename("Confidence")
 tilt_score = (liq_beta.fillna(0.0) * confidence).rename("TiltScore")
@@ -269,11 +298,13 @@ playbook = pd.concat([liq_beta, confidence, tilt_score, abs_t_mean, stab_conf.re
 playbook = playbook.sort_values("TiltScore", ascending=False)
 
 # -------------------- Liquidity Pulse & triggers --------------------
-pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","FX_Reserves","TGA_Drain","Fed_NetLiq_proxy"])]
+pos_cols = [c for c in X.columns if any(k in c for k in ["Fed_NetLiq","Fed_NetLiq_proxy","FX_Reserves","TGA_Drain","RRP_only","TGA_only"])]
 pulse_series = X[pos_cols].sum(axis=1).dropna()
+
 def zscore(s, w=26):
     r = s.rolling(w, min_periods=max(8, w // 3))
     return (s - r.mean()) / (r.std(ddof=0) + 1e-12)
+
 pulse_z = zscore(pulse_series)
 pulse_slope = pulse_series.diff(4)
 state_z = float(pulse_z.iloc[-1]) if not pulse_z.empty else np.nan
@@ -289,7 +320,7 @@ c4.metric("Coverage", f"{len(playbook)} assets")
 
 st.caption("TiltScore = LiquidityBeta × Confidence. Confidence blends |t|-mean, Stability, capped R² with your weights.")
 
-# -------------------- Top lists & pairs (always populated) --------------------
+# -------------------- Top lists & pairs --------------------
 top_n = min(5, len(playbook))
 ow_top = playbook.head(top_n)
 uw_top = playbook.tail(top_n).iloc[::-1]
@@ -333,34 +364,31 @@ def pulse_regime(z, slope):
 
 regime = pulse_regime(state_z, state_slope)
 st.markdown(
-    f"- **Regime:** **{regime}**. Risk-on when Pulse z > +1 and slope > 0. Risk-off when z < −1 and slope < 0.\n"
-    "- **Act:** Overweight the OW list, underweight the UW list, or express via pairs above.\n"
-    "- **Invalidate:** Flip or reduce if TiltScore changes sign, |t|-mean falls, or Stability drops sharply."
+    f"- Regime: **{regime}**. Risk-on when Pulse z > +1 and slope > 0. Risk-off when z < −1 and slope < 0.\n"
+    "- Act: overweight the OW list, underweight the UW list, or express via pairs above.\n"
+    "- Invalidate: flip or reduce if TiltScore changes sign, |t|-mean falls, or Stability drops sharply."
 )
 
-# -------------------- Heatmap (context) --------------------
+# -------------------- Heatmap (no emojis) --------------------
 st.subheader(f"Liquidity beta heatmap ({unit_label})")
+
 def relabel(col: str) -> str:
-    return (col.replace("Fed_NetLiq","Fed NL").replace("TGA_Drain","TGA drain")
-               .replace("FX_Reserves","FX reserves").replace("_d"," Δ"))
+    return (col.replace("Fed_NetLiq","Fed NL").replace("Fed_NetLiq_proxy","Fed NL proxy")
+               .replace("TGA_Drain","TGA drain").replace("RRP_only","RRP only")
+               .replace("TGA_only","TGA only").replace("_d"," Δ"))
 
 label_map = {c: relabel(c) for c in Bv.columns}
 Bv_disp = Bv.rename(columns=label_map)
 Tmatch = T.reindex(index=Bv.index, columns=Bv.columns).rename(columns=label_map)
 
-def star_marker(x):
-    if pd.isna(x): return ""
-    ax = abs(x)
-    return "★★★" if ax >= 3.0 else ("★★" if ax >= 2.0 else ("★" if ax >= 1.7 else ""))
-
-star_text = Tmatch.applymap(star_marker).fillna("")
-colors_pos_green = [[0.0, "#d6604d"], [0.5, "#f7f7f7"], [1.0, "#1a9850"]]
 hm = go.Figure(data=go.Heatmap(
-    z=Bv_disp.values, x=list(Bv_disp.columns), y=list(Bv_disp.index),
-    colorscale=colors_pos_green, zmid=0, colorbar=dict(title=unit_label),
-    text=star_text.values, texttemplate="%{text}",
-    customdata=np.dstack([Bv_disp.values, Tmatch.values]),
-    hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>"+unit_label+": %{z:.3f}<br>t-stat: %{customdata[1]:.2f}<extra></extra>"
+    z=Bv_disp.values,
+    x=list(Bv_disp.columns),
+    y=list(Bv_disp.index),
+    colorscale=[[0.0, "#d6604d"], [0.5, "#f7f7f7"], [1.0, "#1a9850"]],
+    zmid=0,
+    colorbar=dict(title=unit_label),
+    hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>"+unit_label+": %{z:.3f}<extra></extra>"
 ))
 hm.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(hm, use_container_width=True)
