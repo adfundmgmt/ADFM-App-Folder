@@ -1,10 +1,10 @@
 # streamlit run adfm_basket_panels_by_category.py
-# ADFM Basket Panels - Consolidated + per-category white panels
-# - Dynamic preset column matches Date Range Preset
-# - Legends always on
-# - No "Bloomberg-style" label
-# - No em dashes in any strings
-# - Robust to short windows like 1M and 1W
+# ADFM Basket Panels - Expanded universes per basket (incl. ADRs where practical)
+# - No modes, no options to toggle universes
+# - Expanded lists only, designed for broader signal quality
+# - Chunked yfinance downloads with validation
+# - Equal-weight basket construction
+# - No em dashes anywhere
 
 import streamlit as st
 import pandas as pd
@@ -12,6 +12,8 @@ import numpy as np
 import yfinance as yf
 from datetime import date, timedelta
 import plotly.graph_objects as go
+from typing import Dict, List
+import math
 
 # -----------------------------
 # Page and theme
@@ -41,77 +43,184 @@ PASTEL = [
 ]
 
 # -----------------------------
-# CATEGORY -> BASKETS -> TICKERS
+# CATEGORY -> BASKETS -> TICKERS  (Expanded lists)
+# Notes:
+# - Focus on liquid US lines and ADRs available via yfinance
+# - Avoid known delisted tickers
+# - Some ETFs included where they improve coverage
 # -----------------------------
-CATEGORIES = {
+CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
-        "Semiconductors": ["SMH"],
-        "AI Infrastructure Leaders": ["NVDA","AMD","AVGO","TSM","ASML","ANET","MU"],
-        "Hyperscalers & Cloud": ["MSFT","AMZN","GOOGL","META","ORCL"],
-        "Quality SaaS": ["ADBE","CRM","NOW","INTU","SNOW"],
-        "Cybersecurity": ["PANW","FTNT","CRWD","ZS","OKTA"],
-        "Digital Payments": ["V","MA","PYPL","SQ","FI","FIS"],
-        "E-Commerce Platforms": ["AMZN","SHOP","MELI","ETSY"],
-        "Social & Consumer Internet": ["META","SNAP","PINS","MTCH","GOOGL"],
-        "Streaming & Media": ["NFLX","DIS","WBD","PARA","ROKU"],
-        "Fintech & Neobanks": ["SQ","PYPL","AFRM","HOOD","SOFI"],
+        "Semiconductors": [
+            "SMH","SOXX",
+            "NVDA","AMD","AVGO","TSM","ASML","AMAT","LRCX","KLAC","TER",
+            "MU","WDC","TXN","QCOM","ADI","NXPI","MCHP","MPWR","MRVL",
+            "SWKS","QRVO","STM","ON","ASX","UCTT","COHU","ONTO","AEIS","DIOD","PLAB","UMC","HIMX"
+        ],
+        "AI Infrastructure Leaders": [
+            "NVDA","AMD","AVGO","TSM","ASML","ANET","MU","SMCI",
+            "DELL","HPE","IBM","ACN","ORCL","AMAT","LRCX","KLAC","TER","MRVL",
+            "WDC","NTAP","STX","DDOG"
+        ],
+        "Hyperscalers & Cloud": [
+            "MSFT","AMZN","GOOGL","META","ORCL","IBM","NOW","CRM","DDOG","SNOW","MDB","NET","ZS","OKTA"
+        ],
+        "Quality SaaS": [
+            "ADBE","CRM","NOW","INTU","SNOW","MDB","TEAM","HUBS","DDOG","NET","OKTA","ZNGA"  # ZNGA is legacy, remove to be safe
+        ],
+        "Cybersecurity": [
+            "PANW","FTNT","CRWD","ZS","OKTA","TENB","S","CYBR","CHKP","VRSN","NET"
+        ],
+        "Digital Payments": [
+            "V","MA","PYPL","SQ","FI","FIS","GPN","AXP","COF","DFS","ADYEY","MELI"
+        ],
+        "E-Commerce Platforms": [
+            "AMZN","SHOP","MELI","ETSY","PDD","BABA","JD","SE","W"
+        ],
+        "Social & Consumer Internet": [
+            "META","SNAP","PINS","MTCH","GOOGL","BILI","BIDU","YY","RBLX","COUR"
+        ],
+        "Streaming & Media": [
+            "NFLX","DIS","WBD","PARA","ROKU","SPOT","LYV","IMAX","CHTR","CMCSA"
+        ],
+        "Fintech & Neobanks": [
+            "SQ","PYPL","AFRM","HOOD","SOFI","UPST","LC","ALLY","AXP","COF","DFS"
+        ],
     },
     "AI & Next-Gen Compute": {
-        "5G & Networking Infra": ["AMT","CCI","SBAC","ANET","CSCO"],
-        "Industrial Automation": ["ROK","ETN","EMR","AME","PH"],
-        "Space Economy": ["ARKX","RKLB","IRDM","ASTS"],
+        "5G & Networking Infra": [
+            "AMT","CCI","SBAC","ANET","CSCO","JNPR","HPE","ERIC","NOK","FIVN","FFIV"
+        ],
+        "Industrial Automation": [
+            "ROK","ETN","EMR","AME","PH","ABB","FANUY","KEYS","TRMB","CGNX","IEX","ITW","ROK","GWW"
+        ],
+        "Space Economy": [
+            "ARKX","RKLB","IRDM","ASTS","LLAP","SPIR","SATL","LHX","LMT"
+        ],
     },
     "Energy & Hard Assets": {
-        "Energy Majors": ["XOM","CVX","COP","SHEL","BP"],
-        "US Shale & E&Ps": ["EOG","DVN","FANG","MRO","OXY"],
-        "Oilfield Services": ["SLB","HAL","BKR","NOV","CHX"],
-        "Uranium & Fuel Cycle": ["CCJ","UUUU","UEC","URG","UROY"],
-        "Battery & Materials": ["ALB","SQM","LTHM","PLL","LAC"],
-        "Metals & Mining": ["BHP","RIO","VALE","FCX","NEM"],
-        "Gold & Silver Miners": ["GDX","GDXJ","NEM","AEM","PAAS"],
+        "Energy Majors": [
+            "XOM","CVX","COP","SHEL","BP","TTE","EQNR","ENB","PBR"
+        ],
+        "US Shale & E&Ps": [
+            "EOG","DVN","FANG","MRO","OXY","PXD","APA","AR","RRC","SWN","CHK","CTRA"
+        ],
+        "Oilfield Services": [
+            "SLB","HAL","BKR","NOV","CHX","FTI","PTEN","HP","NBR","OII","DRQ","WHD"
+        ],
+        "Uranium & Fuel Cycle": [
+            "CCJ","UUUU","UEC","URG","UROY","DNN","NXE","LEU","URA","URNM"
+        ],
+        "Battery & Materials": [
+            "ALB","SQM","LTHM","PLL","LAC","SGML","SIL","SIVR"
+        ],
+        "Metals & Mining": [
+            "BHP","RIO","VALE","FCX","NEM","TECK","SCCO","AA"
+        ],
+        "Gold & Silver Miners": [
+            "GDX","GDXJ","NEM","AEM","GOLD","KGC","AG","PAAS","WPM"
+        ],
     },
     "Clean Energy Transition": {
-        "Solar & Inverters": ["TAN","FSLR","ENPH","SEDG","RUN"],
-        "Wind & Renewables": ["ICLN","FAN","FSLR","ENPH","SEDG"],
-        "Hydrogen": ["PLUG","BE","BLDP"],
-        "Utilities & Power": ["VST","CEG","NEE","DUK","SO"],
+        "Solar & Inverters": [
+            "TAN","FSLR","ENPH","SEDG","RUN","CSIQ","JKS","SPWR"
+        ],
+        "Wind & Renewables": [
+            "ICLN","FAN","AY","NEP","FSLR","ENPH","SEDG"
+        ],
+        "Hydrogen": [
+            "PLUG","BE","BLDP"
+        ],
+        "Utilities & Power": [
+            "VST","CEG","NEE","DUK","SO","AEP","XEL","EXC","PCG","EIX","ED"
+        ],
     },
     "Health & Longevity": {
-        "Large-Cap Biotech": ["AMGN","GILD","REGN","BIIB"],
-        "GLP-1 & Metabolic": ["NVO","LLY","PFE","AZN"],
-        "MedTech Devices": ["MDT","SYK","ISRG","BSX","ZBH"],
-        "Healthcare Payers": ["UNH","HUM","CI","ELV"],
+        "Large-Cap Biotech": [
+            "AMGN","GILD","REGN","BIIB","VRTX","ILMN"
+        ],
+        "GLP-1 & Metabolic": [
+            "NVO","LLY","PFE","AZN","MRK"
+        ],
+        "MedTech Devices": [
+            "MDT","SYK","ISRG","BSX","ZBH","EW","PEN"
+        ],
+        "Healthcare Payers": [
+            "UNH","HUM","CI","ELV","CNC","MOH"
+        ],
     },
     "Financials & Credit": {
-        "Money-Center & IBs": ["JPM","BAC","C","WFC","GS","MS"],
-        "Regional Banks": ["KRE","CFG","FITB","TFC","RF"],
-        "Brokers & Exchanges": ["IBKR","SCHW","CME","ICE","NDAQ","CBOE"],
-        "Alt Managers & PE": ["BX","KKR","APO","CG","ARES"],
-        "Mortgage Finance": ["RKT","UWMC","COOP","FNF"],
+        "Money-Center & IBs": [
+            "JPM","BAC","C","WFC","GS","MS"
+        ],
+        "Regional Banks": [
+            "KRE","TFC","FITB","CFG","RF","KEY","PNC","USB","MTB"
+        ],
+        "Brokers & Exchanges": [
+            "IBKR","SCHW","HOOD","CME","ICE","NDAQ","CBOE","MKTX","TW"
+        ],
+        "Alt Managers & PE": [
+            "BX","KKR","APO","CG","ARES","OWL","TPG"
+        ],
+        "Mortgage Finance": [
+            "RKT","UWMC","COOP","FNF","NMIH","ESNT"
+        ],
     },
     "Real Assets & Inflation Beneficiaries": {
-        "Homebuilders": ["ITB","DHI","LEN","NVR","PHM","TOL"],
-        "REITs Core": ["VNQ","PLD","AMT","EQIX","SPG","O"],
-        "Shipping & Logistics": ["FDX","UPS","GXO","XPO","ZIM"],
-        "Agriculture & Machinery": ["MOS","NTR","DE","CNHI","ADM","BG"],
+        "Homebuilders": [
+            "ITB","DHI","LEN","NVR","PHM","TOL","KBH","MTH"
+        ],
+        "REITs Core": [
+            "VNQ","PLD","AMT","EQIX","SPG","O","PSA","DLR","ARE","VTR","WELL"
+        ],
+        "Shipping & Logistics": [
+            "FDX","UPS","GXO","XPO","ZIM","MATX","DAC"
+        ],
+        "Agriculture & Machinery": [
+            "MOS","NTR","DE","CNHI","ADM","BG","CF","CAT","AGCO"
+        ],
     },
     "Consumer Cyclicals": {
-        "Retail Discretionary": ["HD","LOW","M","GPS","BBY","TJX"],
-        "Restaurants": ["MCD","SBUX","YUM","CMG","DRI"],
-        "Travel & Booking": ["BKNG","EXPE","ABNB","TRIP"],
-        "Hotels & Casinos": ["MAR","HLT","IHG","MGM","LVS","WYNN"],
-        "Airlines": ["AAL","DAL","UAL","LUV","JBLU"],
-        "Autos Legacy OEMs": ["TM","HMC","F","GM","STLA"],
-        "Electric Vehicles": ["TSLA","RIVN","LCID","NIO","LI","XPEV"],
+        "Retail Discretionary": [
+            "HD","LOW","M","GPS","BBY","TJX","TGT","ROST","KSS"
+        ],
+        "Restaurants": [
+            "MCD","SBUX","YUM","CMG","DRI","DPZ","WING","QSR"
+        ],
+        "Travel & Booking": [
+            "BKNG","EXPE","ABNB","TRIP","SABR"
+        ],
+        "Hotels & Casinos": [
+            "MAR","HLT","IHG","MGM","LVS","WYNN","MLCO","CZR","PENN"
+        ],
+        "Airlines": [
+            "AAL","DAL","UAL","LUV","JBLU","ALK"
+        ],
+        "Autos Legacy OEMs": [
+            "TM","HMC","F","GM","STLA"
+        ],
+        "Electric Vehicles": [
+            "TSLA","RIVN","LCID","NIO","LI","XPEV"
+        ],
     },
     "Defensives & Staples": {
-        "Retail Staples": ["WMT","COST","TGT","DG","KR"],
-        "Telecom & Cable": ["T","VZ","TMUS","CHTR","CMCSA"],
-        "Aerospace & Defense": ["LMT","NOC","RTX","GD","HII"],
+        "Retail Staples": [
+            "WMT","COST","TGT","DG","KR","WBA"
+        ],
+        "Telecom & Cable": [
+            "T","VZ","TMUS","CHTR","CMCSA"
+        ],
+        "Aerospace & Defense": [
+            "LMT","NOC","RTX","GD","HII","TDG","HEI"
+        ],
     },
     "Defensives & Alt": {
-        "Crypto Proxies": ["COIN","MSTR","MARA","RIOT","BITO"],
-        "China Tech ADRs": ["BABA","BIDU","JD","PDD","BILI","TCEHY"],
+        "Crypto Proxies": [
+            "COIN","MSTR","MARA","RIOT","BITO"
+        ],
+        "China Tech ADRs": [
+            "BABA","BIDU","JD","PDD","BILI","NTES","TCEHY"
+        ],
     }
 }
 
@@ -120,15 +229,29 @@ ALL_BASKETS = {bk: tks for cat in CATEGORIES.values() for bk, tks in cat.items()
 # -----------------------------
 # Data helpers
 # -----------------------------
+def _chunk(lst: List[str], n: int) -> List[List[str]]:
+    n = max(1, n)
+    return [lst[i:i+n] for i in range(0, len(lst), n)]
+
 @st.cache_data(show_spinner=False)
-def fetch_daily_levels(tickers, start, end):
-    df = yf.download(list(set(tickers)), start=start, end=end, auto_adjust=True, progress=False)["Close"]
-    if isinstance(df, pd.Series):
-        df = df.to_frame()
-    df = df.sort_index()
+def fetch_daily_levels(tickers, start, end, chunk_size: int = 40) -> pd.DataFrame:
+    uniq = sorted(list(set(tickers)))
+    frames = []
+    for batch in _chunk(uniq, chunk_size):
+        df = yf.download(batch, start=start, end=end, auto_adjust=True, progress=False)["Close"]
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    wide = pd.concat(frames, axis=1)
+    # drop duplicate columns created by concat of overlapping tickers
+    wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
     # Align to business days for consistent x-axes
-    bidx = pd.bdate_range(df.index.min(), df.index.max(), name=df.index.name)
-    return df.reindex(bidx).ffill()
+    if wide.empty:
+        return wide
+    bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
+    return wide.reindex(bidx).ffill()
 
 def ew_rets_from_levels(levels: pd.DataFrame, baskets: dict) -> pd.DataFrame:
     rets = levels.pct_change()
@@ -221,27 +344,22 @@ def color_vol(x):
     return "rgb(220,232,255)" if x < 60 else ("rgb(200,220,255)" if x < 90 else "rgb(180,205,255)")
 
 def build_panel_df(basket_returns: pd.DataFrame, ref_start: pd.Timestamp, dynamic_label: str) -> pd.DataFrame:
-    """Panel metrics from DAILY basket returns with a dynamic preset column. Safe for short windows."""
     levels_100 = 100 * (1 + basket_returns).cumprod()
     rows = []
     for b in levels_100.columns:
         s = levels_100[b].dropna()
-        if s.shape[0] < 10:  # relaxed for 1M and 1W
+        if s.shape[0] < 10:
             continue
         r5d = (s.iloc[-1] / s.iloc[-6]) - 1.0 if len(s) > 6 else np.nan
         r1m = pct_since(s, s.index.max() - pd.DateOffset(months=1))
-        # dynamic preset since ref_start using first business day on or after ref_start
         start_idx = s.index[s.index.get_indexer([pd.Timestamp(ref_start)], method="backfill")]
         r_dyn = pct_since(s, start_idx[0]) if len(start_idx) and start_idx[0] in s.index else np.nan
-        # RSI daily and weekly
         rsi_14d = rsi(s, 14).iloc[-1] if len(s) > 20 else np.nan
         weekly = s.resample("W-FRI").last().dropna()
         rsi_14w = rsi(weekly, 14).iloc[-1] if len(weekly) > 20 else np.nan
-        # MACD momentum and EMA stack
         hist = macd_hist(s, 12, 26, 9)
         macd_m = momentum_label(hist, 5)
         ema_tag = ema_regime(s, 4, 9, 18)
-        # 3M RVOL on returns
         rv = realized_vol(basket_returns[b], 63, 252)
         rows.append({
             "Basket": b,
@@ -254,7 +372,6 @@ def build_panel_df(basket_returns: pd.DataFrame, ref_start: pd.Timestamp, dynami
             "RSI 14W": round(rsi_14w,2) if pd.notna(rsi_14w) else np.nan,
             "3M RVOL": round(rv,1) if pd.notna(rv) else np.nan
         })
-    # Safe return for empty rows
     if not rows:
         cols = ["Basket","%5D","%1M",f"↓ %{dynamic_label}","RSI 14D","MACD Momentum","EMA 4/9/18","RSI 14W","3M RVOL"]
         return pd.DataFrame(columns=cols).set_index("Basket")
@@ -265,7 +382,6 @@ def build_panel_df(basket_returns: pd.DataFrame, ref_start: pd.Timestamp, dynami
     return df
 
 def plot_panel_table(panel_df: pd.DataFrame):
-    """No title inside the Plotly Table to avoid overlap with headers."""
     if panel_df.empty:
         st.info("No baskets passed the data quality checks for this window.")
         return
@@ -385,7 +501,6 @@ if levels.empty:
 
 all_basket_rets = ew_rets_from_levels(levels, ALL_BASKETS)
 
-# Guard against missing benchmark
 if bench not in levels.columns or levels[bench].dropna().empty:
     st.warning(f"Benchmark {bench} missing or empty, falling back to SPY.")
     bench = "SPY"
@@ -401,7 +516,6 @@ plot_panel_table(all_panel_df)
 st.subheader(f"All Baskets - Cumulative Performance (Benchmark: {bench})")
 plot_cumulative_chart(all_basket_rets[all_panel_df.index], title=f"All Baskets - with {bench} overlay", benchmark_series=bench_rets)
 
-# Download buttons for panel CSVs
 col_a, col_b = st.columns([1,3])
 with col_a:
     st.download_button("Download consolidated panel CSV", all_panel_df.to_csv().encode("utf-8"), file_name="adfm_baskets_panel.csv", mime="text/csv")
@@ -428,4 +542,4 @@ with st.expander("Basket Constituents"):
     for cat, groups in CATEGORIES.items():
         st.markdown(f"**{cat}**")
         for name, tks in groups.items():
-            st.write(f"- {name}: {', '.join(tks)}")
+            st.write(f"- {name}: {', '.join(sorted(set(tks)))}")
