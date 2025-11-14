@@ -8,6 +8,7 @@ import yfinance as yf
 from datetime import date, timedelta
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
+import requests  # NEW
 
 # -----------------------------
 # Page config
@@ -38,11 +39,27 @@ def get_nasdaq100_tickers() -> list[str]:
     """
     Fetch current Nasdaq-100 constituents from Wikipedia.
     Returns a list of ticker symbols suitable for Yahoo Finance / yfinance.
+    We fetch with requests and a browser User-Agent to avoid HTTPError blocks.
     """
     url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-    tables = pd.read_html(url)
 
-    tickers = []
+    # Fetch HTML with a real User-Agent so Wikipedia does not block the request
+    resp = requests.get(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            )
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+    tables = pd.read_html(resp.text)
+
+    tickers: list[str] = []
     for tbl in tables:
         cols_lower = [str(c).lower() for c in tbl.columns]
         if any("ticker" in c or "symbol" in c for c in cols_lower):
