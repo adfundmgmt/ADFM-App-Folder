@@ -1,10 +1,10 @@
 ############################################################
-# Market Stress Composite — trading-day aligned, hardened
+# Market Stress Composite - trading-day aligned, hardened
 # AD Fund Management LP
 # - Canonical trading-day index shared by all plots
 # - Combined figure: SPX+Drawdown (top), Composite (bottom)
-# - Close-only mode toggle to disable intraday nowcast
-# - Robust daily regime, NaN-safe percentiles, mask-based renorm
+# - Close-only: no intraday nowcast, end-of-day data only
+# - 8-factor composite with mask-based renorm of weights
 ############################################################
 
 # Py3.12 compat shim for pandas_datareader
@@ -42,27 +42,29 @@ FRED = {
     "spx": "SP500",            # S&P 500 Index
 }
 
-# Intraday quotes for nowcast
-PX = {
-    "VIX": "^VIX",
-    "SPX": "^GSPC",
-    "TNX": "^TNX",   # 10y yield *10
-    "IRX": "^IRX",   # 13w T-bill *10
-    "HYG": "HYG",
-    "LQD": "LQD",
-}
-
 # ---------------- Parameters ----------------
 DEFAULT_LOOKBACK = "3y"
 PCTL_WINDOW_YEARS = 3
 DEFAULT_SMOOTH = 1
 REGIME_HI, REGIME_LO = 70, 30
-MAX_STALE_BDAYS = 0
-MAX_PROXY_AGE_MIN = 3
 
-# Locked weights
-W_VIX, W_HY, W_CURVE, W_FUND, W_DD = 0.25, 0.25, 0.20, 0.15, 0.15
-WEIGHTS_VEC = np.array([W_VIX, W_HY, W_CURVE, W_FUND, W_DD], dtype=float)
+# Allow macro data to be stale for a few sessions before dropping
+MAX_STALE_BDAYS = 3
+
+# Weights for 8-factor composite
+W_VIX      = 0.20  # implied vol
+W_HY_OAS   = 0.15  # HY OAS (FRED)
+W_HY_LQD   = 0.15  # HYG/LQD spread
+W_CURVE    = 0.10  # 10Y-3M inversion
+W_FUND     = 0.10  # CP - TBill funding stress
+W_DD       = 0.15  # SPX drawdown
+W_RV       = 0.10  # SPX 21d realized vol
+W_BREADTH  = 0.05  # SPY/RSP breadth
+
+WEIGHTS_VEC = np.array(
+    [W_VIX, W_HY_OAS, W_HY_LQD, W_CURVE, W_FUND, W_DD, W_RV, W_BREADTH],
+    dtype=float
+)
 WEIGHTS_VEC = WEIGHTS_VEC / WEIGHTS_VEC.sum()
 
 # ---------------- Sidebar -------------------
@@ -72,21 +74,23 @@ with st.sidebar:
                             index=["1y", "2y", "3y", "5y", "10y"].index(DEFAULT_LOOKBACK))
     years = int(lookback[:-1])
 
-    st.subheader("Nowcast")
-    close_only_mode = st.toggle("Close-only mode (disable intraday nowcast)", value=False)
-    use_nowcast = st.checkbox("Use intraday proxies for today", value=not close_only_mode, disabled=close_only_mode)
-
     st.subheader("Weights (fixed)")
-    st.caption(f"VIX {W_VIX:.2f}, HY {W_HY:.2f}, Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}")
+    weights_text = (
+        f"VIX {W_VIX:.2f}, HY_OAS {W_HY_OAS:.2f}, HY_LQD {W_HY_LQD:.2f}, "
+        f"Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}, "
+        f"RV21 {W_RV:.2f}, Breadth {W_BREADTH:.2f}"
+    )
+    st.caption(weights_text)
 
     st.markdown("---")
     st.subheader("About this tool")
     st.markdown(
-        "- Purpose: a single risk dial blending volatility, credit, curve inversion, funding, and SPX drawdown into a 0-100 score.\n"
-        "- Data: FRED for history. Intraday quotes only adjust today's row when enabled.\n"
-        "- Method: 3-year rolling percentiles by factor, fixed weights.\n"
-        "- Alignment: all factors evaluated on SPX trading days only.\n"
-        "- When a factor is stale today, it is dropped and weights re-normalize across active factors."
+        "- Purpose: a single risk dial blending volatility, credit, curve inversion, funding, equity drawdown, "
+        "realized volatility, ETF credit spread, and breadth into a 0-100 score.\n"
+        "- Data: FRED for macro series, Yahoo Finance for ETF and equity breadth series.\n"
+        "- Method: rolling percentiles over a 3-year window, fixed weights, mask-based renormalization.\n"
+        "- Alignment: all factors evaluated on SPX trading days only, close-only (end-of-day data).\n"
+        "- When a factor is stale beyond the allowed lag, it is dropped and weights re-normalize across active factors."
     )
 
 # ---------------- Time helpers --------------
@@ -105,13 +109,6 @@ def as_naive_date(ts_like) -> pd.Timestamp:
     t = pd.to_datetime(ts_like)
     return pd.Timestamp(t.date())
 
-def is_fresh(ts, max_age_min=MAX_PROXY_AGE_MIN):
-    if ts is None or pd.isna(ts):
-        return False
-    now = pd.Timestamp.now(tz=NY_TZ)
-    t = ts if getattr(ts, "tzinfo", None) else pd.Timestamp(ts).tz_localize(NY_TZ)
-    return (now - t).total_seconds() / 60.0 <= max_age_min
-
 # ---------------- Loaders -------------------
 @st.cache_data(ttl=900, show_spinner=False)
 def fred_series(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
@@ -121,31 +118,38 @@ def fred_series(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Serie
     except Exception:
         return pd.Series(dtype=float)
 
-@st.cache_data(ttl=30, show_spinner=False)
-def yf_last_minute(tickers):
+@st.cache_data(ttl=900, show_spinner=False)
+def yf_history_daily(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     try:
-        data = {}
-        for tk in tickers:
-            h = yf.Ticker(tk).history(period="5d", interval="1m")
-            if not h.empty:
-                if h.index.tz is None:
-                    h.index = h.index.tz_localize(NY_TZ)
-                else:
-                    h.index = h.index.tz_convert(NY_TZ)
-                data[tk] = h["Close"].copy()
-        if data:
-            return pd.concat(data, axis=1)
-        return pd.DataFrame()
+        data = yf.download(
+            tickers,
+            start=start,
+            end=end,
+            progress=False,
+            auto_adjust=False
+        )
+        if isinstance(data, pd.Series):
+            data = data.to_frame()
+        # Prefer Adj Close if present, then Close
+        if isinstance(data.columns, pd.MultiIndex):
+            if ("Adj Close" in data.columns.get_level_values(0)):
+                px = data["Adj Close"].copy()
+            elif ("Close" in data.columns.get_level_values(0)):
+                px = data["Close"].copy()
+            else:
+                # Fallback to first top-level field
+                first_field = data.columns.levels[0][0]
+                px = data[first_field].copy()
+        else:
+            px = data.copy()
+
+        if isinstance(px, pd.Series):
+            px = px.to_frame()
+
+        px = px.ffill().dropna(how="all")
+        return to_naive_date_index(px)
     except Exception:
         return pd.DataFrame()
-
-def latest_quote(df_1m: pd.DataFrame, symbol: str):
-    if df_1m.empty or symbol not in df_1m.columns:
-        return np.nan, None
-    s = df_1m[symbol].dropna()
-    if s.empty:
-        return np.nan, None
-    return float(s.iloc[-1]), s.index[-1]
 
 # Rolling percentile on trading days, NaN-safe
 def rolling_percentile_trading(values: pd.Series, idx: pd.DatetimeIndex, window_trading_days: int) -> pd.Series:
@@ -155,19 +159,23 @@ def rolling_percentile_trading(values: pd.Series, idx: pd.DatetimeIndex, window_
         if arr.empty:
             return np.nan
         return arr.rank(pct=True).iloc[-1]
-    out = s.rolling(window_trading_days, min_periods=max(40, window_trading_days // 6)).apply(_last_percentile, raw=False)
+    out = s.rolling(
+        window_trading_days,
+        min_periods=max(40, window_trading_days // 6)
+    ).apply(_last_percentile, raw=False)
     return to_naive_date_index(out)
 
 # ---------------- Load history --------------
 today = today_naive()
 start_all = as_naive_date(today - pd.DateOffset(years=12))
 
-vix_f   = fred_series(FRED["vix"], start_all, today)
-hy_f    = fred_series(FRED["hy_oas"], start_all, today)
+# FRED series
+vix_f   = fred_series(FRED["vix"],       start_all, today)
+hy_f    = fred_series(FRED["hy_oas"],    start_all, today)
 yc_f    = fred_series(FRED["yc_10y_3m"], start_all, today)
-cp3m_f  = fred_series(FRED["cp_3m"], start_all, today)
-tb3m_f  = fred_series(FRED["tbill_3m"], start_all, today)
-spx_f   = fred_series(FRED["spx"], start_all, today)
+cp3m_f  = fred_series(FRED["cp_3m"],     start_all, today)
+tb3m_f  = fred_series(FRED["tbill_3m"],  start_all, today)
+spx_f   = fred_series(FRED["spx"],       start_all, today)
 
 fund_f = to_naive_date_index(cp3m_f - tb3m_f)  # higher = tighter
 
@@ -175,24 +183,50 @@ if all(s.dropna().empty for s in [vix_f, hy_f, yc_f, fund_f, spx_f]):
     st.error("FRED series unavailable. Check network.")
     st.stop()
 
-# Build BD index and align
-bidx_start = min(s.index.min() for s in [vix_f, hy_f, yc_f, fund_f, spx_f] if not s.dropna().empty)
+# ETF and breadth series (HYG, LQD, SPY, RSP)
+px_eq_credit = yf_history_daily(["HYG", "LQD", "SPY", "RSP"], start_all, today)
+hy_lqd_s = pd.Series(dtype=float)
+breadth_s = pd.Series(dtype=float)
+
+if not px_eq_credit.empty:
+    cols = list(px_eq_credit.columns)
+    colset = set(cols)
+    if "HYG" in colset and "LQD" in colset:
+        hy_lqd_s = -np.log(px_eq_credit["HYG"] / px_eq_credit["LQD"])
+    if "SPY" in colset and "RSP" in colset:
+        breadth_s = px_eq_credit["SPY"] / px_eq_credit["RSP"]
+
+# ---------------- Build BD index and align --------------
+bidx_start_candidates = [s.index.min() for s in [vix_f, hy_f, yc_f, fund_f, spx_f] if not s.dropna().empty]
+if bidx_start_candidates:
+    bidx_start = min(bidx_start_candidates)
+else:
+    bidx_start = start_all
+
 bidx = pd.bdate_range(as_naive_date(bidx_start), today)
 
 def to_bidx(s):
     s = to_naive_date_index(s)
     return s.reindex(bidx).ffill()
 
-panel = pd.DataFrame({
-    "VIX": to_bidx(vix_f),
+panel_dict = {
+    "VIX":    to_bidx(vix_f),
     "HY_OAS": to_bidx(hy_f),
     "T10Y3M": to_bidx(yc_f),
-    "FUND": to_bidx(fund_f),
-    "SPX": to_bidx(spx_f),
-}).dropna(how="all")
+    "FUND":   to_bidx(fund_f),
+    "SPX":    to_bidx(spx_f),
+}
+
+if not hy_lqd_s.dropna().empty:
+    panel_dict["HY_LQD"] = to_bidx(hy_lqd_s)
+
+if not breadth_s.dropna().empty:
+    panel_dict["SPY_RSP"] = to_bidx(breadth_s)
+
+panel = pd.DataFrame(panel_dict).dropna(how="all")
 panel = to_naive_date_index(panel)
 
-# ---------------- Freshness masks -----------
+# ---------------- Freshness masks ----------- 
 def fresh_mask(original: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
     original = to_naive_date_index(original).reindex(idx)
     pos = np.arange(len(idx))
@@ -201,98 +235,88 @@ def fresh_mask(original: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
     age = pos - last_pos
     return pd.Series((~np.isnan(age)) & (age <= MAX_STALE_BDAYS), index=idx)
 
-m_vix  = fresh_mask(vix_f, panel.index)
-m_hy   = fresh_mask(hy_f,  panel.index)
-m_yc   = fresh_mask(yc_f,  panel.index)
-m_fund = fresh_mask(fund_f, panel.index)
-m_dd   = fresh_mask(spx_f, panel.index)
-
-# ---------------- Intraday nowcast ----------
-hy_proxy_today = np.nan
-
-if use_nowcast:
-    px_last = yf_last_minute(list(PX.values()))
-    if not px_last.empty:
-        tb = today_naive()
-
-        vix_q, vix_ts = latest_quote(px_last, PX["VIX"])
-        spx_q, spx_ts = latest_quote(px_last, PX["SPX"])
-        tnx_q, tnx_ts = latest_quote(px_last, PX["TNX"])
-        irx_q, irx_ts = latest_quote(px_last, PX["IRX"])
-        hyg_q, hyg_ts = latest_quote(px_last, PX["HYG"])
-        lqd_q, lqd_ts = latest_quote(px_last, PX["LQD"])
-
-        if is_fresh(vix_ts) and not np.isnan(vix_q):
-            panel.loc[tb, "VIX"] = vix_q
-            m_vix.loc[tb] = True
-        if is_fresh(spx_ts) and not np.isnan(spx_q):
-            panel.loc[tb, "SPX"] = spx_q
-            m_dd.loc[tb] = True
-        if is_fresh(tnx_ts) and is_fresh(irx_ts) and not np.isnan(tnx_q) and not np.isnan(irx_q):
-            panel.loc[tb, "T10Y3M"] = tnx_q - irx_q
-            m_yc.loc[tb] = True
-
-        # HY proxy: -log(HYG/LQD) so wider credit -> higher number (matches OAS direction)
-        if is_fresh(hyg_ts) and is_fresh(lqd_ts) and not np.isnan(hyg_q) and not np.isnan(lqd_q):
-            hy_proxy_today = -np.log(hyg_q / lqd_q)
-            if "HY_OAS_PROXY" not in panel.columns:
-                panel["HY_OAS_PROXY"] = np.nan
-            panel.loc[tb, "HY_OAS_PROXY"] = hy_proxy_today  # store for diagnostics
+m_vix    = fresh_mask(vix_f,    panel.index)
+m_hy     = fresh_mask(hy_f,     panel.index)
+m_yc     = fresh_mask(yc_f,     panel.index)
+m_fund   = fresh_mask(fund_f,   panel.index)
+m_dd     = fresh_mask(spx_f,    panel.index)
+m_hy_lqd = fresh_mask(hy_lqd_s, panel.index) if not hy_lqd_s.dropna().empty else pd.Series(False, index=panel.index)
+m_breadth = fresh_mask(breadth_s, panel.index) if not breadth_s.dropna().empty else pd.Series(False, index=panel.index)
 
 # ---------------- Trading-day index ---------
 trade_idx = panel.index[panel["SPX"].notna()].unique()
 panel_tr = panel.reindex(trade_idx).ffill()
 
-# ---------------- Percentiles ----------------
+# ---------------- Derived series and percentiles ---------
 window_td = int(PCTL_WINDOW_YEARS * 252)
+
+# Inverted curve and drawdown-based stress
 inv_curve = -panel_tr["T10Y3M"]
 roll_max = panel_tr["SPX"].dropna().cummax()
 dd_all = 100.0 * (panel_tr["SPX"] / roll_max - 1.0)
 stress_dd = -dd_all.clip(upper=0)
 
-pct_vix   = rolling_percentile_trading(panel_tr["VIX"],   trade_idx, window_td)
-pct_hy    = rolling_percentile_trading(panel_tr["HY_OAS"], trade_idx, window_td)
-pct_curve = rolling_percentile_trading(inv_curve,         trade_idx, window_td)
-pct_fund  = rolling_percentile_trading(panel_tr["FUND"],  trade_idx, window_td)
-pct_dd    = rolling_percentile_trading(stress_dd,         trade_idx, window_td)
+# Realized volatility (21d annualized)
+ret_spx = panel_tr["SPX"].pct_change()
+rv_21 = np.sqrt(252.0) * ret_spx.rolling(21, min_periods=10).std()
+panel_tr["RV21"] = rv_21
 
-# HY proxy percentile override for today if HY OAS is stale
-m_hy_tr = m_hy.reindex(trade_idx).fillna(False)
-if use_nowcast and pd.notna(hy_proxy_today) and not m_hy_tr.iloc[-1]:
-    try:
-        px_hist = yf.download(["HYG", "LQD"], period=f"{PCTL_WINDOW_YEARS+1}y", interval="1d", auto_adjust=False, progress=False)["Close"]
-    except Exception:
-        px_hist = pd.DataFrame()
-    if isinstance(px_hist, pd.Series):
-        px_hist = px_hist.to_frame()
-    if not px_hist.empty and {"HYG","LQD"}.issubset(set(px_hist.columns)):
-        px_hist = to_naive_date_index(px_hist.reindex(trade_idx)).ffill()
-        proxy_hist = -np.log(px_hist["HYG"] / px_hist["LQD"])
-        pct_proxy = rolling_percentile_trading(proxy_hist, trade_idx, window_td)
-        today_idx = trade_idx[-1]
-        if pd.notna(pct_proxy.loc[today_idx]):
-            pct_hy.loc[today_idx] = pct_proxy.loc[today_idx]
-            m_hy_tr.iloc[-1] = True
+# Percentiles for original 5
+pct_vix    = rolling_percentile_trading(panel_tr["VIX"],     trade_idx, window_td)
+pct_hy     = rolling_percentile_trading(panel_tr["HY_OAS"],  trade_idx, window_td)
+pct_curve  = rolling_percentile_trading(inv_curve,           trade_idx, window_td)
+pct_fund   = rolling_percentile_trading(panel_tr["FUND"],    trade_idx, window_td)
+pct_dd     = rolling_percentile_trading(stress_dd,           trade_idx, window_td)
 
-# Close-only gate: if selected, drop today's point unless every core mask is fresh
-if close_only_mode and len(trade_idx) > 0:
-    must_be_fresh = [m_vix.reindex(trade_idx).iloc[-1],
-                     m_dd.reindex(trade_idx).iloc[-1],
-                     m_yc.reindex(trade_idx).iloc[-1],
-                     m_hy_tr.iloc[-1],
-                     m_fund.reindex(trade_idx).iloc[-1]]
-    if not all(must_be_fresh):
-        # Trim today across all percentile series
-        pct_vix  = pct_vix.iloc[:-1]
-        pct_hy   = pct_hy.iloc[:-1]
-        pct_curve= pct_curve.iloc[:-1]
-        pct_fund = pct_fund.iloc[:-1]
-        pct_dd   = pct_dd.iloc[:-1]
-        trade_idx = trade_idx[:-1]
-        panel_tr = panel_tr.reindex(trade_idx)
+# Percentiles for new signals
+if "HY_LQD" in panel_tr.columns:
+    pct_hy_lqd = rolling_percentile_trading(panel_tr["HY_LQD"], trade_idx, window_td)
+else:
+    pct_hy_lqd = pd.Series(index=trade_idx, dtype=float)
 
-scores_all = pd.concat([pct_vix, pct_hy, pct_curve, pct_fund, pct_dd], axis=1)
-scores_all.columns = ["VIX_p", "HY_p", "CurveInv_p", "Fund_p", "DD_p"]
+pct_rv = rolling_percentile_trading(panel_tr["RV21"], trade_idx, window_td)
+
+if "SPY_RSP" in panel_tr.columns:
+    pct_breadth = rolling_percentile_trading(panel_tr["SPY_RSP"], trade_idx, window_td)
+else:
+    pct_breadth = pd.Series(index=trade_idx, dtype=float)
+
+# Masks on trading index
+m_hy_tr       = m_hy.reindex(trade_idx).fillna(False)
+m_vix_tr      = m_vix.reindex(trade_idx).fillna(False)
+m_yc_tr       = m_yc.reindex(trade_idx).fillna(False)
+m_fund_tr     = m_fund.reindex(trade_idx).fillna(False)
+m_dd_tr       = m_dd.reindex(trade_idx).fillna(False)
+m_hy_lqd_tr   = m_hy_lqd.reindex(trade_idx).fillna(False)
+m_breadth_tr  = m_breadth.reindex(trade_idx).fillna(False)
+m_rv_tr       = panel_tr["RV21"].reindex(trade_idx).notna()
+
+# No intraday override logic, pure close-only
+
+# ---------------- Scores and composite base ----------------
+scores_all = pd.concat(
+    [
+        pct_vix,
+        pct_hy,
+        pct_hy_lqd,
+        pct_curve,
+        pct_fund,
+        pct_dd,
+        pct_rv,
+        pct_breadth,
+    ],
+    axis=1
+)
+scores_all.columns = [
+    "VIX_p",
+    "HY_OAS_p",
+    "HY_LQD_p",
+    "CurveInv_p",
+    "Fund_p",
+    "DD_p",
+    "RV21_p",
+    "Breadth_p",
+]
 scores_all = to_naive_date_index(scores_all)
 
 # ---------------- Composite -----------------
@@ -304,16 +328,53 @@ if DEFAULT_SMOOTH > 1:
 def _align(m):
     return to_naive_date_index(m).reindex(scores.index).astype(float).fillna(0.0)
 
-m_vix_tr  = m_vix.reindex(scores.index).fillna(False)
-m_yc_tr   = m_yc.reindex(scores.index).fillna(False)
-m_fund_tr = m_fund.reindex(scores.index).fillna(False)
-m_dd_tr   = m_dd.reindex(scores.index).fillna(False)
-masks = pd.concat([_align(m_vix_tr), _align(m_hy_tr.reindex(scores.index)), _align(m_yc_tr),
-                   _align(m_fund_tr), _align(m_dd_tr)], axis=1)
-masks.columns = ["VIX_m", "HY_m", "Curve_m", "Fund_m", "DD_m"]
+# Rebuild masks on scores index
+m_vix_s      = m_vix_tr.reindex(scores.index).fillna(False)
+m_hy_oas_s   = m_hy_tr.reindex(scores.index).fillna(False)
+m_hy_lqd_s   = m_hy_lqd_tr.reindex(scores.index).fillna(False)
+m_yc_s       = m_yc_tr.reindex(scores.index).fillna(False)
+m_fund_s     = m_fund_tr.reindex(scores.index).fillna(False)
+m_dd_s       = m_dd_tr.reindex(scores.index).fillna(False)
+m_rv_s       = m_rv_tr.reindex(scores.index).fillna(False)
+m_breadth_s  = m_breadth_tr.reindex(scores.index).fillna(False)
+
+masks = pd.concat(
+    [
+        _align(m_vix_s),
+        _align(m_hy_oas_s),
+        _align(m_hy_lqd_s),
+        _align(m_yc_s),
+        _align(m_fund_s),
+        _align(m_dd_s),
+        _align(m_rv_s),
+        _align(m_breadth_s),
+    ],
+    axis=1
+)
+masks.columns = [
+    "VIX_m",
+    "HY_OAS_m",
+    "HY_LQD_m",
+    "Curve_m",
+    "Fund_m",
+    "DD_m",
+    "RV21_m",
+    "Breadth_m",
+]
 
 W = WEIGHTS_VEC.reshape(1, -1)
-X = scores[["VIX_p", "HY_p", "CurveInv_p", "Fund_p", "DD_p"]].values
+X = scores[
+    [
+        "VIX_p",
+        "HY_OAS_p",
+        "HY_LQD_p",
+        "CurveInv_p",
+        "Fund_p",
+        "DD_p",
+        "RV21_p",
+        "Breadth_p",
+    ]
+].values
 M = masks.values
 
 X_masked = np.nan_to_num(X) * M
@@ -350,8 +411,7 @@ monthly_val = mean_last(comp_s, 21)
 
 # ---------------- Header --------------------
 st.info(
-    f"As of {latest_idx.date()} | Weights: VIX {W_VIX:.2f}, HY {W_HY:.2f}, "
-    f"Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}"
+    f"As of {latest_idx.date()} | Weights: {weights_text}"
 )
 
 c1, c2, c3 = st.columns(3)
@@ -400,7 +460,7 @@ fig.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)"
 # Axes and layout
 dd_max = np.nanmax(y_dd) if np.isfinite(np.nanmax(y_dd)) else 5.0
 fig.update_yaxes(title_text="Rebased", row=1, col=1, secondary_y=False)
-fig.update_yaxes(title_text="Drawdown %", row=1, col=1, secondary_y=True, range=[0, max(5, dd_max*1.1)])
+fig.update_yaxes(title_text="Drawdown %", row=1, col=1, secondary_y=True, range=[0, max(5, dd_max * 1.1)])
 fig.update_yaxes(title_text="Score", row=2, col=1, range=[0, 100])
 fig.update_xaxes(tickformat="%b-%d-%y", title_text="Date", row=2, col=1)
 
@@ -415,24 +475,41 @@ st.plotly_chart(fig, use_container_width=True)
 # ---------------- Diagnostics ----------------
 with st.expander("Diagnostics"):
     latest = plot_idx[-1]
+    # Get helper series with safe defaults
+    hy_lqd_plot = panel_plot.get("HY_LQD", pd.Series(index=plot_idx))
+    spy_rsp_plot = panel_plot.get("SPY_RSP", pd.Series(index=plot_idx))
+    rv_plot = panel_plot.get("RV21", pd.Series(index=plot_idx))
+
+    scores_all_plot = scores_all.reindex(plot_idx)
+
+    last_masks = masks.reindex(plot_idx).iloc[-1]
+
     diag = pd.DataFrame({
         "raw_VIX": [panel_plot.loc[latest, "VIX"]],
         "raw_HY_OAS": [panel_plot.get("HY_OAS", pd.Series(index=plot_idx)).reindex(plot_idx).loc[latest]],
-        "raw_HY_proxy(-log(HYG/LQD))": [panel.get("HY_OAS_PROXY", pd.Series(index=panel.index)).reindex(plot_idx).loc[latest] if "HY_OAS_PROXY" in panel.columns else np.nan],
+        "raw_HY_LQD(-log(HYG/LQD))": [hy_lqd_plot.loc[latest]],
         "raw_curve_inv(-T10Y3M)": [(-panel_plot["T10Y3M"]).loc[latest]],
         "raw_fund(CP-TBill)": [panel_plot.loc[latest, "FUND"]],
-        "raw_dd_stress": [(-100.0 * (panel_plot["SPX"]/panel_plot["SPX"].cummax() - 1.0)).loc[latest]],
-        "pct_VIX": [scores_all.reindex(plot_idx).loc[latest, "VIX_p"]],
-        "pct_HY": [scores_all.reindex(plot_idx).loc[latest, "HY_p"]],
-        "pct_CurveInv": [scores_all.reindex(plot_idx).loc[latest, "CurveInv_p"]],
-        "pct_Fund": [scores_all.reindex(plot_idx).loc[latest, "Fund_p"]],
-        "pct_DD": [scores_all.reindex(plot_idx).loc[latest, "DD_p"]],
-        "mask_VIX": [bool(masks.iloc[-1,0])],
-        "mask_HY": [bool(masks.iloc[-1,1])],
-        "mask_Curve": [bool(masks.iloc[-1,2])],
-        "mask_Fund": [bool(masks.iloc[-1,3])],
-        "mask_DD": [bool(masks.iloc[-1,4])],
-        "active_weight_sum": [float((WEIGHTS_VEC * masks.iloc[-1].values).sum())],
+        "raw_dd_stress": [(-100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)).loc[latest]],
+        "raw_RV21": [rv_plot.loc[latest]],
+        "raw_SPY_RSP(SPY/RSP)": [spy_rsp_plot.loc[latest]],
+        "pct_VIX": [scores_all_plot.loc[latest, "VIX_p"]],
+        "pct_HY_OAS": [scores_all_plot.loc[latest, "HY_OAS_p"]],
+        "pct_HY_LQD": [scores_all_plot.loc[latest, "HY_LQD_p"]],
+        "pct_CurveInv": [scores_all_plot.loc[latest, "CurveInv_p"]],
+        "pct_Fund": [scores_all_plot.loc[latest, "Fund_p"]],
+        "pct_DD": [scores_all_plot.loc[latest, "DD_p"]],
+        "pct_RV21": [scores_all_plot.loc[latest, "RV21_p"]],
+        "pct_Breadth": [scores_all_plot.loc[latest, "Breadth_p"]],
+        "mask_VIX": [bool(last_masks["VIX_m"])],
+        "mask_HY_OAS": [bool(last_masks["HY_OAS_m"])],
+        "mask_HY_LQD": [bool(last_masks["HY_LQD_m"])],
+        "mask_Curve": [bool(last_masks["Curve_m"])],
+        "mask_Fund": [bool(last_masks["Fund_m"])],
+        "mask_DD": [bool(last_masks["DD_m"])],
+        "mask_RV21": [bool(last_masks["RV21_m"])],
+        "mask_Breadth": [bool(last_masks["Breadth_m"])],
+        "active_weight_sum": [float((WEIGHTS_VEC * last_masks.values).sum())],
         "Composite": [latest_val],
     })
     st.dataframe(diag.T, use_container_width=True)
@@ -441,10 +518,24 @@ with st.expander("Diagnostics"):
 with st.expander("Download Data"):
     export_idx = plot_idx
     export_scores = (100.0 * scores.reindex(export_idx).rename(columns={
-        "VIX_p": "VIX_pct", "HY_p": "HY_pct", "CurveInv_p": "CurveInv_pct",
-        "Fund_p": "Fund_pct", "DD_p": "DD_pct"
+        "VIX_p": "VIX_pct",
+        "HY_OAS_p": "HY_OAS_pct",
+        "HY_LQD_p": "HY_LQD_pct",
+        "CurveInv_p": "CurveInv_pct",
+        "Fund_p": "Fund_pct",
+        "DD_p": "DD_pct",
+        "RV21_p": "RV21_pct",
+        "Breadth_p": "Breadth_pct",
     }))
-    cols = ["VIX", "HY_OAS", "HY_OAS_PROXY", "T10Y3M", "FUND", "SPX"] if "HY_OAS_PROXY" in panel.columns else ["VIX", "HY_OAS", "T10Y3M", "FUND", "SPX"]
+
+    cols = ["VIX", "HY_OAS", "T10Y3M", "FUND", "SPX"]
+    if "HY_LQD" in panel_tr.columns:
+        cols.append("HY_LQD")
+    if "SPY_RSP" in panel_tr.columns:
+        cols.append("SPY_RSP")
+    if "RV21" in panel_tr.columns:
+        cols.append("RV21")
+
     out = pd.concat(
         [panel_tr.reindex(export_idx)[cols], export_scores, comp_s.reindex(export_idx).rename("Composite")],
         axis=1
