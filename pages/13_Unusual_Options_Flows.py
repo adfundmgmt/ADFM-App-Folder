@@ -27,11 +27,7 @@ st.title(APP_TITLE)
 # -------------------------
 @st.cache_data(ttl=6*60*60, show_spinner=False)
 def get_sp500_symbols() -> list:
-    """Fetch S&P 500 symbols from public sources with robust fallbacks.
-    Order: Wikipedia -> datahub.io CSV -> local ./ingest/sp500_symbols.csv -> small fallback.
-    Accepts either a single 'Symbol' column or a CSV with 'Symbol'/'Ticker'.
-    """
-    # 1) Wikipedia (HTML table)
+    """Fetch S&P 500 symbols from public sources with robust fallbacks."""
     try:
         import requests
         r = requests.get(
@@ -58,7 +54,6 @@ def get_sp500_symbols() -> list:
     except Exception:
         pass
 
-    # 2) Datahub CSV
     try:
         import io, requests
         url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
@@ -82,7 +77,6 @@ def get_sp500_symbols() -> list:
     except Exception:
         pass
 
-    # 3) Local override CSV in ./ingest
     try:
         local = os.path.join(INGEST_DIR, "sp500_symbols.csv")
         if os.path.exists(local):
@@ -104,7 +98,6 @@ def get_sp500_symbols() -> list:
     except Exception:
         pass
 
-    # 4) Small safe fallback
     return [
         "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
         "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX"
@@ -114,9 +107,45 @@ def get_sp500_symbols() -> list:
 # Sidebar
 # -------------------------
 with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        Objective: detect institutional-grade unusual options activity using the full S&P 500.
+
+        Philosophy: premium first, intensity second. Focus on flows large enough to matter,
+        filtered by moneyness, expiration window, and volume-relative-to-open-interest behavior.
+
+        Key fields
+        • Notional = volume × underlying_price × 100  
+        • Premium = volume × option_price × 100  
+        • Vol/OI = volume ÷ open_interest  
+        • DTE = days to expiration  
+        • Moneyness = underlying_price ÷ strike
+
+        Base rules
+        • High premium or notional  
+        • Volume meeting or exceeding OI  
+        • Strike materially OTM  
+        • Short or medium DTE  
+        • Optional Vol/OI floor
+
+        Tiering
+        • Tier 1 = large premium, high Vol/OI, short DTE  
+        • Tier 2 = meaningful premium, elevated Vol/OI  
+        • Contextual Flow = does not meet Tier 1–2 thresholds but passes UOA screen
+
+        Outputs
+        • Priority Summary ranks tickers by Tier 1 and Tier 2 premium.  
+        • Tables list the highest-premium structures per name.  
+        • Snapshots saved daily for OI-based accumulation history.
+
+        Universe
+        • Full S&P 500 fetched automatically with fallback to local CSV when offline.
+        """
+    )
+
     st.markdown("### Universe")
-    st.caption("Using full S&P 500 universe (auto-refreshed every 6h). If internet is blocked, drop a CSV named 'sp500_symbols.csv' in ./ingest with a 'Symbol' column.")
-    # Optional uploader to override locally
+    st.caption("Using full S&P 500 universe (auto-refreshed every 6h). If offline, upload sp500_symbols.csv.")
     uploaded = st.file_uploader("Upload sp500_symbols.csv (optional)", type=["csv"], accept_multiple_files=False)
     if uploaded is not None:
         try:
@@ -125,6 +154,7 @@ with st.sidebar:
             st.success("Uploaded and saved to ./ingest/sp500_symbols.csv. Reload to use.")
         except Exception as e:
             st.warning(f"Upload failed: {e}")
+
     tickers = get_sp500_symbols()
     st.caption(f"Loaded {len(tickers)} symbols.")
 
@@ -161,7 +191,6 @@ def bs_delta(S: float, K: float, T: float, r: float, q: float, iv: float, is_cal
         if T <= 0 or iv <= 0 or S <= 0 or K <= 0:
             return float("nan")
         d1 = (math.log(S / K) + (r - q + 0.5 * iv * iv) * T) / (iv * math.sqrt(T))
-        # standard normal CDF
         return math.exp(-q * T) * (0.5 * (1.0 + math.erf(d1 / math.sqrt(2))) if is_call else -0.5 * (1.0 - math.erf(d1 / math.sqrt(2))))
     except Exception:
         return float("nan")
@@ -213,11 +242,11 @@ def load_history(max_files: int = 40) -> pd.DataFrame:
     for c in ["notional_usd","premium_usd","impliedVolatility","ttm_years","moneyness","side","ticker"]:
         if c not in hist.columns:
             hist[c] = np.nan
-    hist["DTE"] = (hist.get("ttm_years", pd.Series(np.nan, index=hist.index)).astype(float) * 365.0).round()
+    hist["DTE"] = (hist.get("ttm_years", pd.Series(np.nan)).astype(float) * 365.0).round()
     def m_band(m):
         try:
             d = abs(float(m) - 1.0)
-        except Exception:
+        except:
             return "unknown"
         if d <= 0.05:
             return "ATM"
@@ -226,10 +255,10 @@ def load_history(max_files: int = 40) -> pd.DataFrame:
         if d <= 0.20:
             return "OTM"
         return "Deep-OTM"
-    def dte_band(d):
+    def d_band(d):
         try:
             x = float(d)
-        except Exception:
+        except:
             return "unknown"
         if x <= 7:
             return "0-7d"
@@ -239,7 +268,7 @@ def load_history(max_files: int = 40) -> pd.DataFrame:
             return "31-90d"
         return ">90d"
     hist["moneyness_band"] = hist["moneyness"].apply(m_band)
-    hist["dte_band"] = hist["DTE"].apply(dte_band)
+    hist["dte_band"] = hist["DTE"].apply(d_band)
     return hist
 
 
@@ -248,11 +277,11 @@ def fetch_chain(ticker: str, max_exp: int) -> Tuple[pd.DataFrame, float]:
     spot = float("nan")
     try:
         spot = float(tk.fast_info.get("last_price") or tk.info.get("regularMarketPrice") or tk.history(period="1d").iloc[-1]["Close"])
-    except Exception:
+    except:
         pass
     try:
         expirations = tk.options or []
-    except Exception:
+    except:
         expirations = []
     rows = []
     for exp in expirations[:max_exp]:
@@ -266,7 +295,7 @@ def fetch_chain(ticker: str, max_exp: int) -> Tuple[pd.DataFrame, float]:
                 tmp["side"] = side
                 tmp["expiration"] = pd.to_datetime(exp)
                 rows.append(tmp)
-        except Exception:
+        except:
             pass
     if not rows:
         return pd.DataFrame(), spot
@@ -309,8 +338,8 @@ def merge_prev_oi(curr: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
     if curr.empty:
         return curr
     key = ["ticker","contractSymbol"]
-    prev_slim = prev[key + ["openInterest"]].rename(columns={"openInterest": "openInterest_prev"}) if not prev.empty else pd.DataFrame(columns=key + ["openInterest_prev"])
-    out = curr.merge(prev_slim, on=key, how="left")
+    prev_s = prev[key + ["openInterest"]].rename(columns={"openInterest": "openInterest_prev"}) if not prev.empty else pd.DataFrame(columns=key + ["openInterest_prev"])
+    out = curr.merge(prev_s, on=key, how="left")
     out["oi_change"] = out["openInterest"] - out["openInterest_prev"]
     out["oi_change_pct"] = np.where(out["openInterest_prev"].fillna(0) > 0, out["oi_change"] / out["openInterest_prev"], np.nan)
     return out
@@ -323,10 +352,10 @@ def read_external() -> pd.DataFrame:
         try:
             df = pd.read_csv(f)
             if "ticker" in df.columns and "expiration" in df.columns:
-                df["expiration"] = pd.to_datetime(df["expiration"])  # normalize
+                df["expiration"] = pd.to_datetime(df["expiration"])
                 df["source_file"] = os.path.basename(f)
                 acc.append(df)
-        except Exception:
+        except:
             pass
     return pd.concat(acc, ignore_index=True) if acc else pd.DataFrame()
 
@@ -355,13 +384,12 @@ previous = load_latest_snapshot()
 aug = merge_prev_oi(current, previous)
 saved_path = save_snapshot(current)
 
-# Z-scores vs history (kept, but not displayed)
 hist = load_history(max_files=40)
 if not hist.empty:
     def m_band_now(m):
         try:
             d = abs(float(m) - 1.0)
-        except Exception:
+        except:
             return "unknown"
         if d <= 0.05:
             return "ATM"
@@ -373,7 +401,7 @@ if not hist.empty:
     def dte_band_now(days):
         try:
             d = float(days)
-        except Exception:
+        except:
             return "unknown"
         if d <= 7:
             return "0-7d"
@@ -387,7 +415,7 @@ if not hist.empty:
     if "moneyness_band" not in hist.columns:
         hist["moneyness_band"] = hist["moneyness"].apply(m_band_now)
     if "dte_band" not in hist.columns:
-        hist["dte_band"] = hist.get("DTE", pd.Series(np.nan, index=hist.index)).apply(dte_band_now)
+        hist["dte_band"] = hist.get("DTE").apply(dte_band_now)
     stats = hist.groupby(["ticker","side","moneyness_band","dte_band"]).agg(
         mean_notional=("notional_usd","mean"),
         std_notional=("notional_usd","std"),
@@ -407,10 +435,9 @@ else:
     aug["z_notional"] = np.nan
     aug["z_premium"]  = np.nan
 
-# UOA rule
 otm = rule_otm_pct / 100.0
-call_otm = aug["side"].eq("call") & (aug["strike"] >= (1 + otm) * aug["underlying_price"]) 
-put_otm  = aug["side"].eq("put")  & (aug["strike"] <= (1 - otm) * aug["underlying_price"]) 
+call_otm = aug["side"].eq("call") & (aug["strike"] >= (1 + otm) * aug["underlying_price"])
+put_otm  = aug["side"].eq("put")  & (aug["strike"] <= (1 - otm) * aug["underlying_price"])
 mask_unusual = (
     (aug["notional_usd"] >= min_notional) &
     (aug["premium_usd"]  >= min_premium) &
@@ -423,26 +450,23 @@ if extra_min_vol_oi and extra_min_vol_oi > 0:
 
 unusual = aug.loc[mask_unusual].copy()
 
-# --- Tiered Premium Scanner (insider-like tells) ---
-# Tier 1: premium >= 10M, Vol/OI >= 3, DTE <= 21
-# Tier 2: premium >= 2M,  Vol/OI >= 2, DTE <= 45
-
+# Revised classification
 def _classify(row):
     prem = float(row.get("premium_usd", float("nan")))
-    voi  = float(row.get("vol_oi", float("nan"))) if pd.notna(row.get("vol_oi")) else float("nan")
-    dte  = float(row.get("days_to_exp", float("nan"))) if pd.notna(row.get("days_to_exp")) else float("nan")
+    voi  = float(row.get("vol_oi", float("nan")))
+    dte  = float(row.get("days_to_exp", float("nan")))
     if (not math.isnan(prem)) and (not math.isnan(voi)) and (not math.isnan(dte)):
         if prem >= 10_000_000 and voi >= 3 and dte <= 21:
             return "Tier 1"
         if prem >= 2_000_000 and voi >= 2 and dte <= 45:
             return "Tier 2"
-    return "Tier 3"
+    return "Contextual Flow"
 
 unusual["tier"] = unusual.apply(_classify, axis=1)
 signal = unusual[unusual["tier"].isin(["Tier 1","Tier 2"])].copy()
 
 # -------------------------
-# Priority Summary – Tier 1 & 2 (premium-first)
+# Priority Summary – Tier 1 & 2
 # -------------------------
 st.subheader("Priority Summary (Tier 1 & 2)")
 if signal.empty:
@@ -483,7 +507,7 @@ else:
     st.dataframe(top_display, use_container_width=True, hide_index=True)
 
 # -------------------------
-# Flow Summary – signals only (Tier 1 & 2)
+# Flow Summary – signals only
 # -------------------------
 st.subheader("Flow Summary (signals: Tier 1 & 2)")
 st.caption("Rules: Tier 1 = premium >= $10M, Vol/OI >= 3, DTE <= 21; Tier 2 = premium >= $2M, Vol/OI >= 2, DTE <= 45.")
@@ -511,7 +535,7 @@ view = view.sort_values(["premium_usd"], ascending=[False])
 st.dataframe(view, use_container_width=True, hide_index=True)
 
 # -------------------------
-# External ingest (optional CSVs)
+# External ingest
 # -------------------------
 with st.expander("External ingest (CSV)"):
     st.write("Drop CSV files into ./ingest with columns: datetime, ticker, side, strike, expiration, size, price, notional, exchange.")
@@ -522,5 +546,4 @@ with st.expander("External ingest (CSV)"):
         st.info("No external CSVs detected.")
 
 st.caption("Data: Yahoo Finance chains via yfinance. Premium-first Tier rules; snapshots saved daily for history.")
-
 st.caption("© 2025 AD Fund Management LP")
