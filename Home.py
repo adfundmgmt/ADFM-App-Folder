@@ -62,7 +62,7 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
   Evaluates short-horizon SPX behavior after a VIX spike. Support sizing and timing of tactical bounce or fade setups.
 
 - **ADFM Public Equities Baskets**  
-  A consolidated dashboard that tracks daily, equal-weight performance and technicals across all ADFM baskets, benchmarked to SPY, with aligned business-day panels and category-level drilldowns.---
+  A consolidated dashboard that tracks daily, equal-weight performance and technicals across all ADFM baskets, benchmarked to SPY, with aligned business-day panels and category-level drilldowns.
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast moving markets. Always a work in progress, open to feedback or feature ideas.
 """)
