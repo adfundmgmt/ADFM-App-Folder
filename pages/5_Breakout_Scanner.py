@@ -18,14 +18,17 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.
+        Screen a custom ticker list for fresh price breakouts and multi-period RSI levels.
 
-        This version:
-        • Always uses daily RSI
-        • RSI from Typical Price ((H+L+C)/3)
-        • RSI lines smoothed with EMA(3)
-        • No price filter
-        """
+        • Uses Yahoo Finance daily data over a fixed 2 year lookback  
+        • Checks for closes at or above rolling 20 / 50 / 100 / 200 day highs  
+        • Computes daily RSI(7 / 14 / 21) from Typical Price ((H+L+C)/3)  
+        • Smooths each RSI line with a 3 period EMA for cleaner signals  
+        • Ranks and displays tickers in a breakout table with quick download  
+
+        Use the per-ticker chart at the bottom to inspect rolling highs and RSI in more detail.
+        """,
+        unsafe_allow_html=True,
     )
 
 # ── Inputs ─────────────────────────────────────────────────────────────────
