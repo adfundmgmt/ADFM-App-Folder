@@ -13,16 +13,26 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 st.set_page_config(page_title="ETF Net Flows", layout="wide")
 
 # --------------------------- SIDEBAR ---------------------------
-st.sidebar.title("ETF Net Flows")
-st.sidebar.markdown("""
-**Methodology priority**
-1) True flows = ΔShares Outstanding × Close (Close as NAV proxy).
-2) If historical shares are unavailable, the app uses a CMF turnover proxy under the hood.
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        Estimate primary market money moving in and out of key ETFs over a chosen window.
 
-Notes:
-- yfinance historical shares (`get_shares_full`) is not available for every ETF.
-- Close is used as a proxy for daily NAV.
-""")
+        Methodology
+        • First pass: true primary flows from Δ shares outstanding × daily close (close as NAV proxy)  
+        • Fallback: CMF-style turnover proxy when historical shares data are missing or incomplete  
+        • Sign convention: positive = net creations (inflows), negative = net redemptions (outflows)  
+
+        Notes
+        • `get_shares_full` from Yahoo Finance is not available for every ETF or every date  
+        • Close is used as a proxy for daily NAV where needed  
+        • All flows are aggregated over the selected lookback window and shown in USD
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("---")
+    st.subheader("Lookback")
 
 # Timezone-aware now
 TZ = pytz.timezone("US/Eastern")
@@ -90,7 +100,7 @@ etf_info = {
 
     # Crypto ETFs
     "ETH": ("Spot ETH", "Grayscale Ethereum Mini Trust ETF"),
-    "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),    
+    "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
 }
 etf_tickers: List[str] = list(etf_info.keys())
 
