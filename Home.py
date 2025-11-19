@@ -22,7 +22,7 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Technical Chart Explorer**  
   Visualize key technical indicators for any publicly traded ticker that is on Yahoo Finance (equities, commodities, credit).
 
-- **Sector Breadth Dashboard**  
+- **Sector Breadth and Rotation**  
   This dashboard monitors the relative performance and rotation of S&P 500 sectors to help identify leadership trends and market breadth dynamics.
 
 - **Breakout Scanner**  
@@ -55,12 +55,14 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Flow of Funds Matrix**  
   See where incremental liquidity (Fed/Treasury/FX reserves) and relative performance are co-moving.
   
-- **Cross-Asset Correlation and Volatility Dashboard**  
-  Fetches data to visualize cross-asset correlations and volatility, featuring a 1M thresholded correlation matrix, and grouped z-scores.  
+- **Weekly Cross-Asset Compass**  
+  A weekly cross-asset readout that maps regime shifts, correlations, and volatility changes to clear actions, invalidations, and trade expressions in one place.
 
 - **VIX Spike Deep Dive**  
   Evaluates short-horizon SPX behavior after a VIX spike. Support sizing and timing of tactical bounce or fade setups.
----
+
+- **ADFM Public Equities Baskets**  
+  A consolidated dashboard that tracks daily, equal-weight performance and technicals across all ADFM baskets, benchmarked to SPY, with aligned business-day panels and category-level drilldowns.---
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast moving markets. Always a work in progress, open to feedback or feature ideas.
 """)
