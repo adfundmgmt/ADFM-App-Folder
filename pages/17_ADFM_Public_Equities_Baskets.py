@@ -1,5 +1,5 @@
 # streamlit run adfm_basket_panels_by_category.py
-# ADFM Basket Panels - Expanded universes per basket (incl. ADRs where practical)
+# ADFM Public Equities Baskets- Expanded universes per basket (incl. ADRs where practical)
 # - No modes, no options to toggle universes
 # - Expanded lists only, designed for broader signal quality
 # - Chunked yfinance downloads with validation
