@@ -1,5 +1,3 @@
-
-
 # options_chain_viewer.py
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -22,13 +20,21 @@ st.title("Options Chain Viewer")
 
 with st.sidebar:
     st.header("About This Tool")
-    st.markdown("""
-    - Interactive options chain with filters that matter
-    - Open interest by strike with ATM highlight
-    - Summary metrics: put call ratio, expected move, average delta
-    - Delta distribution to visualize skew
-    - Optional tables and CSV export
-    """)
+    st.markdown(
+        """
+        Inspect a single expiry options chain with the filters and views that matter for trading.
+
+        • Uses Yahoo Finance option chains for the selected underlying and expiry  
+        • Filters by open interest, volume, and moneyness window around spot  
+        • Computes blended IV per strike and Black Scholes deltas with dividend yield  
+        • Highlights ATM strike and 1σ expected move from ATM IV and time to expiry  
+        • Visualizes open interest by strike and delta distribution by option type  
+        • Optional full tables and CSV export for the filtered chain
+
+        Designed to answer: where is the real positioning by strike and side, and how is skew distributed in delta space.
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ---------------- Helpers ----------------
 NY = pytz.timezone("America/New_York")
@@ -221,7 +227,7 @@ expected_move = spot * atm_iv * math.sqrt(T) if np.isfinite(atm_iv) and T > 0 el
 
 # ---------------- Deltas using Black Scholes with dividend yield ----------------
 sigma = pd.to_numeric(chain["side_iv"], errors="coerce").astype(float).to_numpy(copy=False)
-sigma = np.clip(sigma, 1e-6, 5.0)  # clamp to avoid artifacts
+sigma = np.clip(sigma, 1e-6, 5.0)
 
 K = chain["strike"].astype(float).to_numpy(copy=False)
 S = float(spot)
@@ -288,6 +294,7 @@ oi_chart = (
               alt.value("#FFD600"),
               alt.Color("type:N",
                         scale=alt.Scale(domain=["Call","Put"], range=["#1a9641","#d7191c"]),
+
                         legend=alt.Legend(title="Type"))
           ),
           tooltip=["type","strike","openInterest","volume","delta"]
