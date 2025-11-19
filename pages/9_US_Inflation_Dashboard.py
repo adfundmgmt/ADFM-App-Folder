@@ -19,9 +19,20 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Explore interactive inflation charts powered by the latest FRED data. View year-over-year and month-over-month changes for both headline and core CPI, with NBER recessions shaded for context. Data is fetched live and cached for responsiveness.
+        Track US inflation with a clean, recession-aware view of the CPI data direct from FRED.
+
+        What it shows
+        • Headline and core CPI levels, YoY and MoM changes  
+        • 3 month annualised core inflation as a short-horizon signal  
+        • NBER recession shading over every chart for macro context  
+
+        Under the hood
+        • FRED series via `pandas-datareader`  
+        • Monthly frequency aligned to month start where needed  
+        • All rates expressed in % terms, with simple CSV export
         """
     )
+    st.markdown("---")
     st.subheader("Time Range")
     period = st.selectbox(
         "Select period:",
@@ -161,7 +172,7 @@ def plot_yoy(h_yoy, c_yoy, recs_window):
         x=c_yoy.index, y=c_yoy, name="Core CPI YoY",     line_color="#ff7f0e", **hover_pct))
     _add_recession_shapes_single_axis(fig, recs_window)
     fig.update_layout(
-        title="US CPI YoY — Headline vs Core",
+        title="US CPI YoY - Headline vs Core",
         yaxis_title="% YoY",
         hovermode="x unified",
         margin=dict(t=80),
