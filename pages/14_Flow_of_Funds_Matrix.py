@@ -117,25 +117,28 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Objective: map how cross asset flows show up in weekly return betas for your chosen assets.
+        Maps how cross asset flows show up in weekly return betas for your chosen assets.
 
         Philosophy: treat duration, curve, credit, USD, commodities, breadth and crypto as a common proxy
         factor set, and regress each asset on those shocks to recover a stable LiquidityBeta plus a
         confidence score.
 
         Design
-        • Weekly closes only from Yahoo Finance, no FRED and no keys  
+        
+        • Weekly closes only from Yahoo Finance  
         • Proxies built from log price differences over several horizons (4w, 8w, 12w)  
         • Regressions on weekly log returns over a rolling window  
         • LiquidityBeta is the sum of betas to the key proxy blocks  
         • Confidence blends average |t|, stability of LiquidityBeta across time, and a capped R²
 
         Outputs
+        
         • TiltScore = LiquidityBeta × Confidence, used to rank overweights and underweights  
         • Heatmap shows the sign and size of betas to each proxy family  
         • Liquidity Pulse tracks recent standardized shocks to the proxy set
 
         Use cases
+        
         • See which assets lean into easing versus tightening liquidity regimes  
         • Build long short expressions that align with the current flow of funds regime
         """
