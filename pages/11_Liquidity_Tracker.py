@@ -153,19 +153,56 @@ fig = make_subplots(
 
 # Row 1: Net Liquidity
 fig.add_trace(
-    go.Scatter(x=df.index, y=df["NetLiq_s"], name="Net Liquidity (B)", line=dict(color="#000000", width=2)),
+    go.Scatter(
+        x=df.index,
+        y=df["NetLiq_s"],
+        name="Net Liquidity (B)",
+        line=dict(color="#000000", width=2)
+    ),
     row=1, col=1
 )
 fig.update_yaxes(title="Billions USD", row=1, col=1)
 
 # Row 2: Components rebased
-fig.add_trace(go.Scatter(x=reb.index, y=reb["WALCL_idx"], name="WALCL idx", line=dict(color="#1f77b4")), row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"],   name="RRP idx",   line=dict(color="#2ca02c")), row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"],   name="TGA idx",   line=dict(color="#d62728")), row=2, col=1)
+fig.add_trace(
+    go.Scatter(
+        x=reb.index,
+        y=reb["WALCL_idx"],
+        name="WALCL idx",
+        line=dict(color="#1f77b4")
+    ),
+    row=2, col=1
+)
+fig.add_trace(
+    go.Scatter(
+        x=reb.index,
+        y=reb["RRP_idx"],
+        name="RRP idx",
+        line=dict(color="#2ca02c")
+    ),
+    row=2, col=1
+)
+fig.add_trace(
+    go.Scatter(
+        x=reb.index,
+        y=reb["TGA_idx"],
+        name="TGA idx",
+        line=dict(color="#d62728")
+    ),
+    row=2, col=1
+)
 fig.update_yaxes(title="Index = 100", row=2, col=1, rangemode="tozero")
 
 # Row 3: EFFR
-fig.add_trace(go.Scatter(x=df.index, y=df["EFFR_s"], name="EFFR", line=dict(color="#ff7f0e")), row=3, col=1)
+fig.add_trace(
+    go.Scatter(
+        x=df.index,
+        y=df["EFFR_s"],
+        name="EFFR",
+        line=dict(color="#ff7f0e")
+    ),
+    row=3, col=1
+)
 fig.update_yaxes(title="Percent", tickformat=".2f", row=3, col=1)
 
 fig.update_layout(
