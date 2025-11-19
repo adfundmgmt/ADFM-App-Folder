@@ -114,6 +114,34 @@ def choose_dtick_and_format(x_index: pd.DatetimeIndex):
 
 # -------------------- Sidebar --------------------
 with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        Objective: map how cross asset flows show up in weekly return betas for your chosen assets.
+
+        Philosophy: treat duration, curve, credit, USD, commodities, breadth and crypto as a common proxy
+        factor set, and regress each asset on those shocks to recover a stable LiquidityBeta plus a
+        confidence score.
+
+        Design
+        • Weekly closes only from Yahoo Finance, no FRED and no keys  
+        • Proxies built from log price differences over several horizons (4w, 8w, 12w)  
+        • Regressions on weekly log returns over a rolling window  
+        • LiquidityBeta is the sum of betas to the key proxy blocks  
+        • Confidence blends average |t|, stability of LiquidityBeta across time, and a capped R²
+
+        Outputs
+        • TiltScore = LiquidityBeta × Confidence, used to rank overweights and underweights  
+        • Heatmap shows the sign and size of betas to each proxy family  
+        • Liquidity Pulse tracks recent standardized shocks to the proxy set
+
+        Use cases
+        • See which assets lean into easing versus tightening liquidity regimes  
+        • Build long short expressions that align with the current flow of funds regime
+        """
+    )
+
+    st.markdown("---")
     st.header("Settings")
     start_date = st.date_input("Start date", pd.to_datetime("2012-01-01"))
     reg_window = st.number_input("Regression window (weeks)", 52, 520, 156, step=13)
