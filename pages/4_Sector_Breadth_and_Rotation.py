@@ -95,18 +95,19 @@ if not available_sector_tickers:
 
 # ------------------------------- Sidebar -----------------------------------
 with st.sidebar:
-    st.header("About")
+    st.header("About This Tool")
     st.markdown(
         """
-        This dashboard tracks sector relative strength and rotation.
+        Track S&P 500 sector leadership, breadth, and rotation on a consistent template.
 
-        Views
-        • Relative Strength vs SPY  
-        • 1M vs 3M scatter (rotation map)  
-        • Sorted rotation snapshot table  
+        • Uses SPDR sector ETFs with SPY as the benchmark  
+        • Relative strength panel shows how each sector is trending vs the index  
+        • 1M vs 3M scatter maps rotation speed and direction by quadrant  
+        • Rotation snapshot table ranks sectors by speed and summarizes quadrant, angle, and returns  
 
-        Data: Yahoo Finance, refreshed hourly.
-        """
+        Data source: Yahoo Finance, refreshed up to once per hour.
+        """,
+        unsafe_allow_html=True,
     )
 
 # ------------------------------- Relative strength -------------------------
