@@ -45,11 +45,21 @@ st.title("10-Year Nominal and Real Yield Dashboard")
 # ── Sidebar: Controls and Info ───────────────────────────
 with st.sidebar:
     st.header("About This Tool")
-    st.markdown("""
-    Tracks 10-year U.S. nominal and real Treasury yields with macro context.
-    Top: nominal (blue) vs real (orange). Bottom: inverted {win}-day real-yield momentum
-    where green suggests easing and red suggests tightening.
-    """)
+    st.markdown(
+        """
+        Track the 10-year nominal and real Treasury curve with a simple, regime-focused lens.
+
+        What it shows
+        • Nominal vs TIPS-implied real 10-year yields  
+        • Inverted rolling real-yield momentum in bp as a crude easing or tightening gauge  
+        • Optional 10-year nominal minus real spread panel and regime shading  
+
+        Under the hood
+        • FRED DGS10 and DFII10 via pandas-datareader  
+        • Momentum computed on a configurable trading-day window  
+        • Macro overlays include FOMC dates, CPI prints, and NBER recessions (where available)
+        """
+    )
     st.markdown("---")
     st.header("Settings")
     lookback = st.selectbox("Lookback Window", ["2y", "3y", "5y", "10y"], index=2)
@@ -194,9 +204,12 @@ def fmt_bp(x):
 c1, c2, c3, c4, c5 = st.columns([2,2,2,2,3])
 c1.metric("Nominal 10Y Yield", fmt_pct(latest["nom"]), fmt_pct(latest["d_nom"]))
 c2.metric("Real 10Y Yield", fmt_pct(latest["real"]), fmt_pct(latest["d_real"]))
-c3.metric(f"Inverted {win}-Trading-Day Real Momentum", f"{latest['mom']:+.0f} bp",
-          fmt_bp(latest["mom"] - latest["mom_prev"]) if pd.notna(latest["mom_prev"]) else "N/A",
-          help=f"-(Current real yield - real yield {win} observations ago) × 100")
+c3.metric(
+    f"Inverted {win}-Trading-Day Real Momentum",
+    f"{latest['mom']:+.0f} bp",
+    fmt_bp(latest["mom"] - latest["mom_prev"]) if pd.notna(latest["mom_prev"]) else "N/A",
+    help=f"-(Current real yield - real yield {win} observations ago) × 100"
+)
 c4.metric("10Y Yield Spread", fmt_pct(latest["spread"]), help="Nominal minus real yield")
 c5.markdown(f"<h3>{regime}</h3><small>as of {latest['date'].date()}</small>", unsafe_allow_html=True)
 
@@ -216,15 +229,30 @@ fig = make_subplots(
 )
 
 # Top panel
-fig.add_trace(go.Scatter(x=df.index, y=df["Nominal"], name="Nominal Yield",
-                         line=dict(color="#1f77b4", width=2)), row=1, col=1)
-fig.add_trace(go.Scatter(x=df.index, y=df["Real"], name="Real Yield",
-                         line=dict(color="#ff7f0e", width=2)), row=1, col=1)
+fig.add_trace(
+    go.Scatter(
+        x=df.index, y=df["Nominal"], name="Nominal Yield",
+        line=dict(color="#1f77b4", width=2)
+    ),
+    row=1, col=1
+)
+fig.add_trace(
+    go.Scatter(
+        x=df.index, y=df["Real"], name="Real Yield",
+        line=dict(color="#ff7f0e", width=2)
+    ),
+    row=1, col=1
+)
 fig.update_yaxes(title="Yield (%)", tickformat=".2f", row=1, col=1)
 
 # Momentum panel
-fig.add_trace(go.Scatter(x=mom.index, y=mom, name=f"Momentum ({win})",
-                         line=dict(color="#d62728", dash="dash", width=1.8)), row=2, col=1)
+fig.add_trace(
+    go.Scatter(
+        x=mom.index, y=mom, name=f"Momentum ({win})",
+        line=dict(color="#d62728", dash="dash", width=1.8)
+    ),
+    row=2, col=1
+)
 
 def add_hline_shape(y, row, col, color="grey", dash="dot", width=1, text=None):
     xref = f"x{row}" if row > 1 else "x"
@@ -258,8 +286,13 @@ fig.update_xaxes(tickformat="%b-%y", row=nrows, col=1, title="Date")
 
 # Spread panel
 if show_spread:
-    fig.add_trace(go.Scatter(x=df.index, y=df["Spread"], name="10Y Spread",
-                             line=dict(color="#2ca02c", width=2)), row=3, col=1)
+    fig.add_trace(
+        go.Scatter(
+            x=df.index, y=df["Spread"], name="10Y Spread",
+            line=dict(color="#2ca02c", width=2)
+        ),
+        row=3, col=1
+    )
     fig.update_yaxes(title="Spread (%)", tickformat=".2f", row=3, col=1)
 
 # Macro overlays (always-on per constants above)
@@ -319,21 +352,21 @@ with st.expander("Download Data"):
 with st.expander("Methodology and Interpretation", expanded=False):
     st.markdown(f"""
     Yield Sources:
-    • Nominal: FRED DGS10
-    • Real: FRED DFII10
+    • Nominal: FRED DGS10  
+    • Real: FRED DFII10  
 
     Inverted Momentum:
-    - (Current real yield - real yield {win} observations ago) × 100
+    • (Current real yield - real yield {win} observations ago) × 100  
 
     Regime Definition:
-    • 🟢 Easing: momentum > {ease_bp} bp
-    • ⚪️ Neutral: between thresholds
-    • 🔴 Tightening: momentum < {tight_bp} bp
+    • 🟢 Easing: momentum > {ease_bp} bp  
+    • ⚪️ Neutral: between thresholds  
+    • 🔴 Tightening: momentum < {tight_bp} bp  
 
     Macro Overlays:
-    • FOMC Dates: green dashed verticals
-    • CPI Prints: orange dotted verticals
-    • Recession Bands: gray bands (NBER)
+    • FOMC dates: green dashed verticals  
+    • CPI prints: orange dotted verticals (if enabled)  
+    • Recession bands: gray bands using NBER peaks and troughs  
     """)
 
 st.caption("© 2025 AD Fund Management LP")
