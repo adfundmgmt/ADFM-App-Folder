@@ -57,15 +57,39 @@ PAIR_SPECS = [
 # =========================
 # Sidebar
 # =========================
-st.sidebar.header("Controls")
-lookback_years = st.sidebar.slider("History window (years)", 5, 15, 10)
-win = st.sidebar.selectbox("Rolling window", [21, 63], index=0)  # 1M or ~3M
-wk_delta = st.sidebar.selectbox("Compare vs", ["1 week ago", "2 weeks ago"], index=0)
-wk_back = 5 if wk_delta == "1 week ago" else 10  # business days
-rho_alert = st.sidebar.slider("|ρ| alert threshold", 0.30, 0.90, 0.50, 0.05)
-z_hot = st.sidebar.slider("Hot vol Z threshold", 1.0, 3.0, 1.5, 0.1)
-z_cold = st.sidebar.slider("Cold vol Z threshold", -3.0, -1.0, -1.5, 0.1)
-clip_extremes = st.sidebar.checkbox("Clip chart y-axes at 1st–99th pct", value=True)
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **Objective**  
+        Weekly cross asset compass that tracks how equities, credit, rates, FX and commodities trade
+        against each other, then turns that into a simple regime read and action list.
+
+        **Method**  
+        • Daily closes from Yahoo Finance only  
+        • Rolling correlations (21d or 63d) on returns for key equity, credit, rate, FX and commodity pairs  
+        • One month realized volatility for SPX, HY, oil and select FX crosses  
+        • VIX term structure and SPX vs US10Y correlation drive the regime label
+
+        **Outputs**  
+        • Regime panel: VIX3M/VIX - 1, VIX level, SPX vs 10Y correlation  
+        • Conclusions and expressions: what the tape is saying and how to express it in trades  
+        • Rolling correlation mini panels for core pairs  
+        • One month cross asset correlation matrix to sanity check views  
+        • Weekly change tables for correlations and volatility at the bottom
+        """
+    )
+
+    st.markdown("---")
+    st.header("Controls")
+    lookback_years = st.slider("History window (years)", 5, 15, 10)
+    win = st.selectbox("Rolling window", [21, 63], index=0)  # 1M or ~3M
+    wk_delta = st.selectbox("Compare vs", ["1 week ago", "2 weeks ago"], index=0)
+    wk_back = 5 if wk_delta == "1 week ago" else 10  # business days
+    rho_alert = st.slider("|ρ| alert threshold", 0.30, 0.90, 0.50, 0.05)
+    z_hot = st.slider("Hot vol Z threshold", 1.0, 3.0, 1.5, 0.1)
+    z_cold = st.slider("Cold vol Z threshold", -3.0, -1.0, -1.5, 0.1)
+    clip_extremes = st.checkbox("Clip chart y-axes at 1st-99th pct", value=True)
 
 # =========================
 # Helpers
@@ -168,19 +192,17 @@ def computed_height(n_rows, row_px=32, header_px=38, pad_px=16, max_px=800):
 
 def hide_index_compat(styler: pd.io.formats.style.Styler) -> pd.io.formats.style.Styler:
     """Hide index across pandas versions."""
-    # pandas >= 1.4
     if hasattr(styler, "hide"):
         try:
             return styler.hide(axis="index")
         except Exception:
             pass
-    # pandas >= 1.5 has hide_index, some builds omit it
     if hasattr(styler, "hide_index"):
         try:
             return styler.hide_index()
         except Exception:
             pass
-    return styler  # fallback
+    return styler
 
 # =========================
 # Data
@@ -247,7 +269,7 @@ def classify_regime():
 reg = classify_regime()
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Regime", reg["regime"])
-c2.metric("VIX3M/VIX − 1", f"{reg['ts_now']:+.3f}" if reg["ts_now"] is not None and not np.isnan(reg["ts_now"]) else "NA")
+c2.metric("VIX3M/VIX - 1", f"{reg['ts_now']:+.3f}" if reg["ts_now"] is not None and not np.isnan(reg["ts_now"]) else "NA")
 c3.metric("VIX", f"{reg['vix_now']:.1f}" if reg["vix_now"] is not None and not np.isnan(reg["vix_now"]) else "NA")
 c4.metric("SPX vs 10Y ρ", f"{reg['corr_now']:.1%}" if reg["corr_now"] is not None and not np.isnan(reg["corr_now"]) else "NA")
 
@@ -262,7 +284,7 @@ corr_er = roll_corr(RET, "^GSPC", "^TNX", win)
 if not corr_er.empty:
     rho = corr_er.iloc[-1]
     if rho <= -0.30:
-        bullets.append(f"Equity vs rates negative at {rho:.0%}. Duration rallies should support equities.")
+        bullets.append(f"Equity vs rates negative at {rho:.0%}. Duration rallies are supporting equities.")
     elif rho >= 0.30:
         bullets.append(f"Equity vs rates positive at {rho:.0%}. Rate selloffs are pressuring equities.")
 
@@ -392,10 +414,14 @@ else:
         mat.style
            .background_gradient(cmap=PASTEL_RWG, vmin=-0.75, vmax=0.75)
            .format(_fmt)
-           .apply(lambda x: np.where((np.abs(x.values.astype(float)) >= rho_alert) & ~np.isnan(x.values),
-                                     "color:black; font-weight:700; border:1px solid #888; text-align:center; font-size:0.95rem;",
-                                     "color:black; text-align:center; font-size:0.95rem;"),
-                  axis=None)
+           .apply(
+               lambda x: np.where(
+                   (np.abs(x.values.astype(float)) >= rho_alert) & ~np.isnan(x.values),
+                   "color:black; font-weight:700; border:1px solid #888; text-align:center; font-size:0.95rem;",
+                   "color:black; text-align:center; font-size:0.95rem;",
+               ),
+               axis=None
+           )
            .set_properties(**{"background-color": "white"})
     )
     sty = hide_index_compat(sty)
@@ -459,25 +485,4 @@ if not corr_tbl.empty:
     )
     corr_style = hide_index_compat(corr_style)
     st.dataframe(corr_style, use_container_width=True, height=computed_height(corr_tbl.shape[0]))
-    st.caption("ρ now is the current rolling correlation of daily returns over the selected window. Δρ w/w is change versus the prior week. Percentile rank is within the chosen history window.")
-
-if not vol_tbl.empty:
-    vol_style = (
-        vol_tbl.style
-            .format({"Level": "{:.1f}", "Δ w/w": lambda v: "" if pd.isna(v) else f"{v:+.1f}", "Percentile rank": "{:.0f}%"})
-            .background_gradient(subset=["Δ w/w"], cmap="RdYlGn")
-    )
-    vol_style = hide_index_compat(vol_style)
-    st.dataframe(vol_style, use_container_width=True, height=computed_height(vol_tbl.shape[0]))
-    st.caption("Class identifies implied vs realized volatility. Units are points for implied indices and percent for realized 1M vol. Δ w/w is change versus the prior week; Percentile rank is within the chosen history window.")
-
-# =========================
-# Downloads
-# =========================
-with st.expander("Download snapshots"):
-    if not corr_tbl.empty:
-        st.download_button("Weekly correlation snapshot CSV", corr_tbl.to_csv(index=False).encode(), file_name="weekly_corr_snapshot.csv")
-    if not vol_tbl.empty:
-        st.download_button("Weekly vol snapshot CSV", vol_tbl.to_csv(index=False).encode(), file_name="weekly_vol_snapshot.csv")
-
-st.caption("© 2025 AD Fund Management LP")
+    st.caption("ρ now is
