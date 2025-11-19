@@ -67,6 +67,12 @@ WEIGHTS_VEC = np.array(
 )
 WEIGHTS_VEC = WEIGHTS_VEC / WEIGHTS_VEC.sum()
 
+weights_text = (
+    f"VIX {W_VIX:.2f}, HY_OAS {W_HY_OAS:.2f}, HY_LQD {W_HY_LQD:.2f}, "
+    f"Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}, "
+    f"RV21 {W_RV:.2f}, Breadth {W_BREADTH:.2f}"
+)
+
 # ---------------- Sidebar -------------------
 with st.sidebar:
     st.header("Settings")
@@ -75,11 +81,6 @@ with st.sidebar:
     years = int(lookback[:-1])
 
     st.subheader("Weights (fixed)")
-    weights_text = (
-        f"VIX {W_VIX:.2f}, HY_OAS {W_HY_OAS:.2f}, HY_LQD {W_HY_LQD:.2f}, "
-        f"Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}, "
-        f"RV21 {W_RV:.2f}, Breadth {W_BREADTH:.2f}"
-    )
     st.caption(weights_text)
 
     st.markdown("---")
@@ -90,7 +91,8 @@ with st.sidebar:
         "- Data: FRED for macro series, Yahoo Finance for ETF and equity breadth series.\n"
         "- Method: rolling percentiles over a 3-year window, fixed weights, mask-based renormalization.\n"
         "- Alignment: all factors evaluated on SPX trading days only, close-only (end-of-day data).\n"
-        "- When a factor is stale beyond the allowed lag, it is dropped and weights re-normalize across active factors."
+        "- When a factor is stale beyond the allowed lag, it is dropped and weights re-normalize across active factors.\n"
+        f"- Current weights: {weights_text}"
     )
 
 # ---------------- Time helpers --------------
@@ -137,7 +139,6 @@ def yf_history_daily(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.Data
             elif ("Close" in data.columns.get_level_values(0)):
                 px = data["Close"].copy()
             else:
-                # Fallback to first top-level field
                 first_field = data.columns.levels[0][0]
                 px = data[first_field].copy()
         else:
@@ -291,8 +292,6 @@ m_hy_lqd_tr   = m_hy_lqd.reindex(trade_idx).fillna(False)
 m_breadth_tr  = m_breadth.reindex(trade_idx).fillna(False)
 m_rv_tr       = panel_tr["RV21"].reindex(trade_idx).notna()
 
-# No intraday override logic, pure close-only
-
 # ---------------- Scores and composite base ----------------
 scores_all = pd.concat(
     [
@@ -404,20 +403,136 @@ def mean_last(series: pd.Series, n: int) -> float:
         return np.nan
     return float(ser.tail(n).mean())
 
+def regime_bucket(x: float) -> str:
+    if pd.isna(x):
+        return "na"
+    if x >= REGIME_HI:
+        return "high"
+    if x <= REGIME_LO:
+        return "low"
+    return "neutral"
+
+def dd_bucket(dd: float) -> str:
+    # dd is positive drawdown: 0 = at peak, higher = deeper drawdown
+    if pd.isna(dd):
+        return "na"
+    if dd < 5:
+        return "shallow"
+    if dd < 15:
+        return "medium"
+    return "deep"
+
+def generate_commentary(
+    as_of_date: pd.Timestamp,
+    daily_val: float,
+    weekly_val: float,
+    monthly_val: float,
+    spx_level: float,
+    dd_val: float
+) -> str:
+    d_reg = regime_bucket(daily_val)
+    w_reg = regime_bucket(weekly_val)
+    m_reg = regime_bucket(monthly_val)
+    dd_b  = dd_bucket(dd_val)
+
+    date_str = as_of_date.date().isoformat()
+    dd_pct = f"{dd_val:.1f}" if not pd.isna(dd_val) else "N/A"
+    spx_str = f"{spx_level:,.1f}" if not pd.isna(spx_level) else "N/A"
+
+    daily_map = {
+        "low": (
+            "The composite is signaling a low-stress tape on a daily basis, "
+            "which usually lines up with constructive liquidity and tame risk premia."
+        ),
+        "neutral": (
+            "The daily composite sits in a neutral zone, pointing to a market that is balancing "
+            "local shocks against still-functioning liquidity and credit conditions."
+        ),
+        "high": (
+            "The daily composite is in high-stress territory, which tells you that volatility, "
+            "credit and curve dynamics are collectively skewed toward defense."
+        ),
+        "na": (
+            "The daily composite cannot be interpreted cleanly today because too many inputs are missing, "
+            "so the risk read has to lean more on trend and drawdown context."
+        ),
+    }
+
+    weekly_map = {
+        "low": (
+            "On a weekly basis the regime remains calm, suggesting that the short-term shocks we see in the tape "
+            "have not yet hardened into a persistent stress regime."
+        ),
+        "neutral": (
+            "The weekly profile is neutral, which fits with a market that grinds between fear and relief "
+            "without a clear directional stress trend."
+        ),
+        "high": (
+            "The weekly composite is elevated, which means stress has been persistent rather than a single-day flare-up, "
+            "often a sign to respect the trend in risk reduction rather than fade it aggressively."
+        ),
+        "na": (
+            "The weekly regime flag is unclear, so you should lean more on the daily and monthly structure "
+            "to anchor your risk-taking."
+        ),
+    }
+
+    monthly_map = {
+        "low": (
+            "At the monthly horizon the regime is still low, telling you that the bigger backdrop remains benign "
+            "even if the nearer term feels noisy."
+        ),
+        "neutral": (
+            "At the monthly horizon the signal is neutral, which usually corresponds to a mid-cycle environment where "
+            "positioning and narratives swing around a relatively stable macro core."
+        ),
+        "high": (
+            "At the monthly horizon the composite is high, which is the kind of backdrop where deleveraging waves, "
+            "risk parity de-risking and tighter financial conditions can feed on each other."
+        ),
+        "na": (
+            "The monthly regime cannot be pinned down cleanly, so longer-term conclusions need to be made with some humility "
+            "around the state of the macro regime."
+        ),
+    }
+
+    dd_map = {
+        "shallow": (
+            f"SPX is sitting around {spx_str} with only about {dd_pct}% drawdown from the local peak, "
+            "which says price has not yet delivered the kind of cleansing air-pocket that usually resets risk appetite."
+        ),
+        "medium": (
+            f"SPX trades near {spx_str} with a mid-teens drawdown of roughly {dd_pct}%, "
+            "a zone where forced selling begins to slow and new money debates whether this is a range or the start of a larger break."
+        ),
+        "deep": (
+            f"SPX is down near {spx_str} with a deep drawdown of roughly {dd_pct}%, "
+            "the kind of damage that tends to flush weak hands, create forced rebalancing and set the stage for reflexive turns "
+            "if policy or data surprise positively."
+        ),
+        "na": (
+            "The drawdown profile is not well defined here, so the composite should be read more as a cross-asset risk barometer "
+            "than a precise timing tool."
+        ),
+    }
+
+    daily_sentence = daily_map.get(d_reg, daily_map["na"])
+    weekly_sentence = weekly_map.get(w_reg, weekly_map["na"])
+    monthly_sentence = monthly_map.get(m_reg, monthly_map["na"])
+    dd_sentence = dd_map.get(dd_b, dd_map["na"])
+
+    commentary = (
+        f"As of {date_str}, {daily_sentence} "
+        f"{weekly_sentence} "
+        f"{monthly_sentence} "
+        f"{dd_sentence}"
+    )
+    return commentary
+
 latest_idx = comp_s.index[-1]
 latest_val = float(comp_s.iloc[-1])
 weekly_val = mean_last(comp_s, 5)
 monthly_val = mean_last(comp_s, 21)
-
-# ---------------- Header --------------------
-st.info(
-    f"As of {latest_idx.date()} | Weights: {weights_text}"
-)
-
-c1, c2, c3 = st.columns(3)
-c1.metric("Daily regime", regime_label(latest_val), f"{latest_val:.0f}")
-c2.metric("Weekly regime", regime_label(weekly_val), f"{weekly_val:.0f}" if not pd.isna(weekly_val) else "N/A")
-c3.metric("Monthly regime", regime_label(monthly_val), f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
 
 # ---------------- Unified plotting index ----------------
 plot_idx = comp_s.index.copy()                 # canonical x-axis for both panes
@@ -431,6 +546,25 @@ dd_series = -100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)
 y_spx = spx_rebased.reindex(plot_idx).values
 y_dd  = dd_series.reindex(plot_idx).values
 y_comp = comp_s.reindex(plot_idx).values
+
+latest_spx_level = float(panel_plot["SPX"].reindex(plot_idx).iloc[-1]) if len(plot_idx) > 0 else np.nan
+latest_dd_val = float(dd_series.reindex(plot_idx).iloc[-1]) if len(plot_idx) > 0 else np.nan
+
+# ---------------- Header commentary --------------------
+commentary_text = generate_commentary(
+    as_of_date=latest_idx,
+    daily_val=latest_val,
+    weekly_val=weekly_val,
+    monthly_val=monthly_val,
+    spx_level=latest_spx_level,
+    dd_val=latest_dd_val
+)
+st.info(commentary_text)
+
+c1, c2, c3 = st.columns(3)
+c1.metric("Daily regime", regime_label(latest_val), f"{latest_val:.0f}")
+c2.metric("Weekly regime", regime_label(weekly_val), f"{weekly_val:.0f}" if not pd.isna(weekly_val) else "N/A")
+c3.metric("Monthly regime", regime_label(monthly_val), f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
 
 # ---------------- Combined figure ----------------
 fig = make_subplots(
