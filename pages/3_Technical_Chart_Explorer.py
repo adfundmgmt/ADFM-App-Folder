@@ -7,17 +7,21 @@ from datetime import datetime
 
 # ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.header("About This Tool")
-st.sidebar.markdown("""
-Visualize key technical indicators for any stock using Yahoo Finance data.
+st.sidebar.markdown(
+    """
+    Quickly inspect price action and key technical indicators for any stock, ETF, or index.
 
-Features:
-- Interactive OHLC candlesticks
-- 8/20/50/100/200-day moving averages with full continuity
-- Volume bars color-coded by up/down days
-- RSI (14-day) with Wilder smoothing
-- MACD (12,26,9) with histogram
-- Bollinger Bands (20, 2.0)
-""")
+    • Interactive OHLC candlesticks using Yahoo Finance data  
+    • 8 / 20 / 50 / 100 / 200 day moving averages with full history continuity  
+    • Volume bars color coded by up / down days  
+    • RSI (14 day) with Wilder style smoothing  
+    • MACD (12, 26, 9) with histogram for momentum inflections  
+    • Optional Bollinger Bands (20, 2.0) to frame short term ranges  
+
+    Use the controls below to adjust the time window, sampling interval, and overlays.
+    """,
+    unsafe_allow_html=True,
+)
 
 ticker = st.sidebar.text_input("Ticker", "^GSPC").upper()
 period = st.sidebar.selectbox(
@@ -194,7 +198,7 @@ fig.update_xaxes(type="category", tickmode="array",
 
 fig.update_layout(
     height=950,
-    title=dict(text=f"{ticker} — OHLC + RSI & MACD" + (" + Bollinger Bands" if show_bbands else ""), x=0.5),
+    title=dict(text=f"{ticker} - OHLC + RSI & MACD" + (" + Bollinger Bands" if show_bbands else ""), x=0.5),
     plot_bgcolor="white", paper_bgcolor="white",
     hovermode="x unified",
     margin=dict(l=60, r=20, t=60, b=40),
