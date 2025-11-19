@@ -16,10 +16,18 @@ st.title("Ratio Charts")
 # -------------- Sidebar --------------
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
-    "This dashboard visualizes regime shifts in US equities:\n\n"
-    "- Cyclical vs Defensive (Eq Wt): ratio of cumulative returns for cyclical (XLK, XLI, XLF, XLC, XLY) vs defensive (XLP, XLE, XLV, XLRE, XLB, XLU) ETFs, normalized to 100.\n"
-    "- Preset Ratios: SMH/IGV, SMH/FXY, QQQ/IWM, HYG/LQD, HYG/IEF.\n"
-    "- Custom Ratio: compare any two tickers."
+    """
+    Track structural shifts in US equity leadership through ratio charts.
+
+    What this dashboard shows  
+    • Cyclical vs Defensive regime trend using equal weight baskets  
+    • Preset macro ratios such as SMH/IGV, SMH/FXY, QQQ/IWM, HYG/LQD, HYG/IEF  
+    • Dynamic custom ratio between any two tickers  
+    • Rolling 50 and 200 day averages to highlight trend direction  
+    • RSI panel to assess momentum and exhaustion points
+
+    Data: Yahoo Finance, updated hourly.
+    """
 )
 
 st.sidebar.header("Look back")
@@ -31,8 +39,8 @@ spans = {
     "1 Year": 365,
     "3 Years": 365 * 3,
     "5 Years": 365 * 5,
-    "10 Years": 365 * 10,     # NEW
-    "20 Years": 365 * 20      # NEW
+    "10 Years": 365 * 10,
+    "20 Years": 365 * 20
 }
 span_key = st.sidebar.selectbox("", list(spans.keys()),
                                 index=list(spans.keys()).index("5 Years"))
@@ -44,8 +52,7 @@ custom_t2 = st.sidebar.text_input("Ticker 2", "SMH").strip().upper()
 
 # -------------- Dates --------------
 now = datetime.today()
-# expand base history to comfortably cover 20y selections
-hist_start = now - timedelta(days=365 * 25)  # was 15y
+hist_start = now - timedelta(days=365 * 25)
 
 if span_key == "YTD":
     disp_start = pd.Timestamp(datetime(now.year, 1, 1))
@@ -66,7 +73,6 @@ def fetch_closes(tickers, start, end):
     def _normalize(df, tickers_list):
         if df is None or df.empty:
             return pd.DataFrame()
-        # When auto_adjust=True, 'Close' is already adjusted
         if isinstance(df.columns, pd.MultiIndex):
             cols = {}
             for t in tickers_list:
@@ -78,7 +84,6 @@ def fetch_closes(tickers, start, end):
                     continue
             out = pd.DataFrame(cols)
         else:
-            # Single ticker case
             if "Close" in df.columns:
                 out = pd.DataFrame({tickers_list[0]: df["Close"].dropna()})
             else:
@@ -96,7 +101,6 @@ def fetch_closes(tickers, start, end):
     except Exception:
         pass
 
-    # Retry using maximum available history to support 20y span
     try:
         raw2 = yf.download(
             tickers, period="max",
@@ -111,8 +115,7 @@ def fetch_closes(tickers, start, end):
 CYCLICALS  = ["XLK", "XLI", "XLF", "XLC", "XLY"]
 DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 
-# Order matters.
-PRESETS    = [
+PRESETS = [
     ("SMH", "IGV"),
     ("SMH", "FXY"),
     ("QQQ", "IWM"),
@@ -121,7 +124,7 @@ PRESETS    = [
     ("SPHB", "SPLV"),
 ]
 
-STATIC     = CYCLICALS + DEFENSIVES + [t for a, b in PRESETS for t in (a, b)]
+STATIC = CYCLICALS + DEFENSIVES + [t for a, b in PRESETS for t in (a, b)]
 
 def compute_cumrets(df: pd.DataFrame) -> pd.DataFrame:
     return (1.0 + df.pct_change()).cumprod()
