@@ -104,7 +104,7 @@ def card_box(inner_html):
 st.title("VIX Spike Deep Dive")
 
 with st.sidebar:
-    st.header("About")
+    st.header("About This Tool")
 
     st.markdown("**Purpose**")
     st.markdown(
