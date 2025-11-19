@@ -36,14 +36,16 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-Quickly benchmark **this year’s cumulative return** against history.
+        Explore how this year's cumulative return path compares to history.
 
-- Pulls adjusted daily closes from Yahoo Finance  
-- Aligns each year by trading day  
-- Finds and overlays the most-correlated analogue years (ρ)
+        • Pulls adjusted daily closes from Yahoo Finance  
+        • Aligns each calendar year by trading day to build YTD paths  
+        • Computes correlations (ρ) between the current year and all past years  
+        • Overlays the highest-correlation analogue paths for visual comparison  
 
-Extras: optional filters and CSV downloads.
-"""
+        Use the filters below to exclude extreme years or large jump days, and export CSV snapshots for further work.
+        """,
+        unsafe_allow_html=True,
     )
     st.markdown("---")
     st.subheader("Filters (optional)")
