@@ -480,7 +480,7 @@ def build_panel_df(
             "EMA 4/9/18": ema_tag,
             "RSI 14W": round(rsi_14w,2) if pd.notna(rsi_14w) else np.nan,
             "3M RVOL": round(rv,1) if pd.notna(rv) else np.nan,
-            "Corr SPY": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan
+            "Corr": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan
         })
     if not rows:
         cols = ["Basket","%5D","%1M",f"↓ %{dynamic_label}","RSI 14D","MACD Momentum","EMA 4/9/18","RSI 14W","3M RVOL","Corr SPY"]
