@@ -483,7 +483,7 @@ def build_panel_df(
             "Corr": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan
         })
     if not rows:
-        cols = ["Basket","%5D","%1M",f"↓ %{dynamic_label}","RSI 14D","MACD Momentum","EMA 4/9/18","RSI 14W","3M RVOL","Corr SPY"]
+        cols = ["Basket","%5D","%1M",f"↓ %{dynamic_label}","RSI 14D","MACD Momentum","EMA 4/9/18","RSI 14W","3M RVOL","Corr"]
         return pd.DataFrame(columns=cols).set_index("Basket")
     df = pd.DataFrame(rows).set_index("Basket")
     dyn_col = f"↓ %{dynamic_label}"
@@ -496,7 +496,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
         st.info("No baskets passed the data quality checks for this window.")
         return
     dynamic_col = [c for c in panel_df.columns if c.startswith("↓ %")][0]
-    headers = ["Basket","%5D","%1M",dynamic_col,"RSI 14D","MACD Momentum","EMA 4/9/18","RSI 14W","3M RVOL","Corr SPY"]
+    headers = ["Basket","%5D","%1M",dynamic_col,"RSI 14D","MACD Momentum","EMA 4/9/18","RSI 14W","3M RVOL","Corr"]
     values = [panel_df.index.tolist()]
     fill_colors = [["white"] * len(panel_df)]
 
@@ -525,7 +525,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
     values.append(vals)
     fill_colors.append([color_vol(v) for v in vals])
 
-    vals = panel_df["Corr SPY"].tolist()
+    vals = panel_df["Corr"].tolist()
     values.append(vals)
     fill_colors.append([color_corr(v) for v in vals])
 
