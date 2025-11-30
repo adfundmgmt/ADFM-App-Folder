@@ -196,7 +196,6 @@ mom_df = pd.DataFrame(
     columns=["Factor", "%5D", "Short", "Long", "Momentum", "Trend", "Inflection"],
 ).set_index("Factor")
 
-# Guard
 if mom_df.empty:
     st.error("No factors passed data length checks.")
     st.stop()
@@ -211,7 +210,6 @@ num_up = int(trend_counts.get("Up", 0))
 num_down = int(trend_counts.get("Down", 0))
 breadth = num_up / len(mom_df) * 100.0
 
-# Regime score: rescale composite signal into 0–100, centered at 50
 raw_score = (
     0.4 * mom_df["Short"].mean()
     + 0.3 * ((mom_df["Inflection"] == "Turning Up").mean() - (mom_df["Inflection"] == "Turning Down").mean())
@@ -329,20 +327,34 @@ cbar.ax.set_ylabel("Corr", rotation=270, labelpad=12)
 fig_corr.tight_layout()
 st.pyplot(fig_corr, clear_figure=True)
 
-# ---------------- Relative strength vs SPY ----------------
-st.subheader("Relative Strength vs SPY")
+# ---------------- Relative strength vs SPY (up leg vs SPY) ----------------
+st.subheader("Relative Strength vs SPY (Up Leg ETFs)")
 
 if "SPY" in prices.columns:
     spy = prices["SPY"]
-    rs_df = {}
-    for f_name, s in factor_levels.items():
-        if isinstance(s, pd.Series):
-            rel = rs(s, spy)
-            if not rel.empty:
-                rs_df[f_name] = rel
+    rs_series = {}
 
-    rs_df = pd.DataFrame(rs_df).dropna(how="all")
+    # build RS of each up-leg ETF vs SPY, skip trivial SPY vs SPY
+    for factor_name, (up, down) in FACTOR_ETFS.items():
+        if up is None:
+            continue
+        if up not in prices.columns:
+            continue
+        if up == "SPY":
+            continue  # US vs World up-leg is SPY, would just be a flat line at 1
+
+        rel = rs(prices[up], spy)
+        if not rel.empty:
+            rs_series[factor_name] = rel
+
+    rs_df = pd.DataFrame(rs_series).dropna(how="all")
+
     if not rs_df.empty:
+        # focus on last 5 years to keep it readable
+        max_date = rs_df.index.max()
+        cutoff = max_date - pd.DateOffset(years=5)
+        rs_df = rs_df[rs_df.index >= cutoff]
+
         fig_rs, ax_rs = plt.subplots(figsize=(10, 4))
         for i, f in enumerate(rs_df.columns):
             ax_rs.plot(
@@ -350,13 +362,12 @@ if "SPY" in prices.columns:
                 rs_df[f],
                 label=f,
                 color=PASTELS[i % len(PASTELS)],
-                linewidth=1.6,
+                linewidth=1.8,
             )
 
-        # SPY baseline, always 1
         ax_rs.axhline(1.0, color="#444444", linewidth=1.2, linestyle="--", label="SPY baseline")
 
-        ax_rs.set_title("Factor Relative Strength vs SPY (up leg vs SPY)", color=TEXT)
+        ax_rs.set_title("Factor Up-Leg Relative Strength vs SPY", color=TEXT)
         ax_rs.grid(color=GRID, linewidth=0.6)
         ax_rs.legend(
             fontsize=8,
