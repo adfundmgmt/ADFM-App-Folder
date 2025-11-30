@@ -1,8 +1,3 @@
-# 19_Factor_Momentum_Leadership.py
-# ADFM Factor Momentum and Leadership Dashboard
-# Enhanced with trend classification, inflection detector, breadth index, regime scoring
-# Pastel style, clean tables, no em dashes
-
 import streamlit as st
 import pandas as pd
 import numpy as np
