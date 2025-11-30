@@ -1,7 +1,3 @@
-# 18_Cross_Asset_Vol_Surface.py
-# ADFM Cross Asset Volatility Surface Monitor
-# Pastel theme, decision grade, simple and robust
-
 import streamlit as st
 import pandas as pd
 import numpy as np
