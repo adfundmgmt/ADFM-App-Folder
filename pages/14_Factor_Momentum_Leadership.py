@@ -94,30 +94,115 @@ def inflection(short_mom: float, long_mom: float) -> str:
     return "Weakening"
 
 
-def factor_commentary(breadth_up, num_up, num_down, regime_score):
-    if breadth_up >= 60 and regime_score >= 60:
-        headline = "Leadership is broad and skewed to the upside."
-        tail = "Tape supports leaning into risk and pressing winners."
-    elif breadth_up <= 30 and regime_score <= 40:
-        headline = "Leadership is weak and tilted to the downside."
-        tail = "Tape argues for defense, relative shorts, or lower gross."
-    else:
-        headline = "Factor tape is mixed and rotational."
-        tail = "Edge favors stock selection over big factor bets."
+def bucket_breadth(breadth: float) -> str:
+    if breadth < 10:
+        return "extremely narrow"
+    if breadth < 25:
+        return "narrow and selective"
+    if breadth < 40:
+        return "tilted to a small group of styles"
+    if breadth < 60:
+        return "balanced across factors"
+    if breadth < 75:
+        return "broadening out across styles"
+    return "very broad and inclusive"
 
-    body = f"""
-    <b>Conclusion</b><br>
-    {headline}<br><br>
-    <b>Why it matters</b><br>
-    Breadth and factor regime tell you if the equity tape is being driven by a narrow group of factors
-    or by broad participation across styles. That should shape how aggressive you are with gross,
-    how much you lean on factor expressions versus idiosyncratic stock picking,
-    and whether you fade or ride the current leadership.<br><br>
-    <b>Key drivers</b><br>
-    Up trends: {num_up} factors, Down trends: {num_down}. Breadth index {breadth_up:.1f}%.<br>
-    Regime score {regime_score:.1f} on a 0–100 scale, where 50 is neutral.
-    """
-    return body
+
+def bucket_regime(regime_score: float) -> str:
+    if regime_score < 25:
+        return "deeply defensive and stress driven"
+    if regime_score < 40:
+        return "defensive and risk averse"
+    if regime_score < 55:
+        return "roughly neutral with a mild defensive lean"
+    if regime_score < 70:
+        return "constructive and risk friendly"
+    return "high beta, late-cycle risk on"
+
+
+def factor_tilt_phrase(leaders: list, laggards: list) -> str:
+    lead_str = ", ".join(leaders) if leaders else "no clear leaders"
+    lag_str = ", ".join(laggards) if laggards else "no obvious laggards"
+    return (
+        f"Leadership today is coming from {lead_str}, "
+        f"while pressure is most visible in {lag_str}."
+    )
+
+
+def positioning_hint(breadth: float, regime_score: float, up_count: int, down_count: int) -> str:
+    if breadth < 25 and regime_score < 40:
+        return (
+            "Keep gross light, lean on index or factor hedges, and size single name longs off the "
+            "few factors that are actually in up trends. This is a good environment to express "
+            "views through relative value and pair trades rather than outright beta."
+        )
+    if breadth < 40 and regime_score >= 55:
+        return (
+            "Tape is friendly but leadership is narrow. Concentrate capital in the leading styles, "
+            "avoid shorting them mechanically, and use losers as funding shorts. Be careful with "
+            "broad risk-on assumptions because only a subset of factors is really working."
+        )
+    if breadth >= 60 and regime_score >= 60:
+        return (
+            "This is a broad, constructive regime. It supports running higher gross and letting "
+            "winners compound, but you should already be thinking about where to hide once "
+            "breadth and momentum start to roll over."
+        )
+    if breadth >= 60 and regime_score < 45:
+        return (
+            "Breadth is okay but the quality of leadership is questionable. Rotate toward higher "
+            "quality expressions inside each factor and be quicker to cut when momentum rolls."
+        )
+    if abs(up_count - down_count) <= 2:
+        return (
+            "Up and down trends are roughly balanced. Stock selection matters more than big "
+            "top-down factor tilts here."
+        )
+    return (
+        "Treat factors as a map, not a trade list. Use them to sanity-check your book: make sure "
+        "your largest positions rhyme with the leadership you actually see in the tape."
+    )
+
+
+def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) -> str:
+    trend_counts = mom_df["Trend"].value_counts()
+    up_count = int(trend_counts.get("Up", 0))
+    down_count = int(trend_counts.get("Down", 0))
+
+    # Leaders and laggards on short momentum
+    short_sorted = mom_df["Short"].sort_values(ascending=False)
+    leaders = [f for f in short_sorted.index[:3]]
+    laggards = [f for f in short_sorted.index[-3:]]
+
+    breadth_desc = bucket_breadth(breadth)
+    regime_desc = bucket_regime(regime_score)
+    tilt_text = factor_tilt_phrase(leaders, laggards)
+    position_text = positioning_hint(breadth, regime_score, up_count, down_count)
+
+    conclusion = (
+        f"Factor tape is {breadth_desc} and currently {regime_desc}. "
+        f"{tilt_text}"
+    )
+
+    why_matters = (
+        "Factor structure tells you whether the equity market is being driven by style and macro "
+        "buckets or by idiosyncratic stories. It should anchor how much you trust breakout moves, "
+        "how aggressive you are with gross, and whether you express views through index, factor, "
+        "or single stock risk."
+    )
+
+    key_stats = (
+        f"Up trends: {up_count} factors, Down trends: {down_count}. "
+        f"Breadth index {breadth:.1f}%. "
+        f"Regime score {regime_score:.1f} on a 0–100 scale, where 50 is neutral."
+    )
+
+    return (
+        f"<b>Conclusion</b><br>{conclusion}<br><br>"
+        f"<b>Why it matters</b><br>{why_matters}<br><br>"
+        f"<b>Positioning cues</b><br>{position_text}<br><br>"
+        f"<b>Key stats</b><br>{key_stats}"
+    )
 
 # ---------------- Factors ----------------
 FACTOR_ETFS = {
@@ -142,19 +227,19 @@ with st.sidebar:
     st.markdown(
         "Tracks style and macro factor leadership using ETF pairs. "
         "Each factor is built as a relative strength ratio and scored on short and long momentum, "
-        "trend structure, and inflection. Top section summarizes breadth and overall regime."
+        "trend structure, and inflection."
     )
     st.markdown(
-        "- Breadth Index: share of factors in up trends.\n"
-        "- Regime Score: composite of momentum, trend, and turning points.\n"
-        "- Scatter plot: Short vs Long momentum quadrants for quick leadership read."
+        "- Snapshot table shows short and long window performance, trend, and inflection.\n"
+        "- Scatter map puts factors into quadrants by short vs long momentum.\n"
+        "- Correlation and RS vs SPY help you understand clustering and crowding."
     )
     st.divider()
     st.header("Settings")
     start_date = st.date_input("History start", datetime(2015, 1, 1))
     lookback_short = st.slider("Short momentum window (days)", 10, 60, 20)
     lookback_long = st.slider("Long momentum window (days)", 30, 180, 60)
-    st.caption("Data source: Yahoo Finance. Calculations are for internal research only.")
+    st.caption("Data source: Yahoo Finance. Internal use only.")
 
 # ---------------- Load data ----------------
 prices = load_prices(ALL_TICKERS, start=str(start_date))
@@ -177,7 +262,7 @@ if factor_df.empty:
     st.error("No factor series could be constructed.")
     st.stop()
 
-# ---------------- Momentum snapshot table ----------------
+# ---------------- Momentum snapshot table base data ----------------
 rows = []
 for f in factor_df.columns:
     s = factor_df[f].dropna()
@@ -202,9 +287,7 @@ if mom_df.empty:
 
 mom_df = mom_df.sort_values("Short", ascending=False)
 
-# ---------------- Breadth and regime (top section) ----------------
-st.subheader("Breadth and Regime")
-
+# ---------------- Compute breadth and regime (no metrics, for commentary only) ----------------
 trend_counts = mom_df["Trend"].value_counts()
 num_up = int(trend_counts.get("Up", 0))
 num_down = int(trend_counts.get("Down", 0))
@@ -217,18 +300,12 @@ raw_score = (
 )
 regime_score = max(0.0, min(100.0, 50.0 + 50.0 * (raw_score / 5.0)))
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.metric("Breadth Index (Up trends)", f"{breadth:.1f}%")
-with c2:
-    st.metric("Up factors", f"{num_up}")
-with c3:
-    st.metric("Factor Regime Score", f"{regime_score:.1f}")
+# ---------------- Top: Factor tape summary (commentary only) ----------------
+st.subheader("Factor Tape Summary")
+summary_html = build_commentary(mom_df, breadth, regime_score)
+card_box(summary_html)
 
-commentary_html = factor_commentary(breadth, num_up, num_down, regime_score)
-card_box(commentary_html)
-
-# ---------------- Factor time series (2nd block) ----------------
+# ---------------- Factor time series (second from top) ----------------
 st.subheader("Factor Time Series")
 
 n_factors = len(factor_df.columns)
@@ -315,10 +392,7 @@ ax_corr.set_title("Correlation of Daily Returns", color=TEXT, pad=10)
 for i in range(len(labels)):
     for j in range(len(labels)):
         val = corr.values[i, j]
-        if abs(val) < 0.3:
-            txt = ""
-        else:
-            txt = f"{val:.2f}"
+        txt = f"{val:.2f}" if abs(val) >= 0.3 else ""
         ax_corr.text(j, i, txt, ha="center", va="center", fontsize=8, color="black")
 
 cbar = fig_corr.colorbar(im, ax=ax_corr, fraction=0.046, pad=0.04)
@@ -334,11 +408,21 @@ if "SPY" in prices.columns:
     spy = prices["SPY"]
     rs_series = {}
 
+    for factor_name, (up, down) in FACTOR_ETFS.items():
+        if up is None:
+            continue
+        if up not in prices.columns:
+            continue
+        if up == "SPY":
+            continue  # skip trivial SPY vs SPY
+
+        rel = rs(prices[up], spy)
+        if not rel.empty:
+            rs_series[factor_name] = rel
 
     rs_df = pd.DataFrame(rs_series).dropna(how="all")
 
     if not rs_df.empty:
-        # focus on last 5 years to keep it readable
         max_date = rs_df.index.max()
         cutoff = max_date - pd.DateOffset(years=5)
         rs_df = rs_df[rs_df.index >= cutoff]
