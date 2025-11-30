@@ -334,18 +334,6 @@ if "SPY" in prices.columns:
     spy = prices["SPY"]
     rs_series = {}
 
-    # build RS of each up-leg ETF vs SPY, skip trivial SPY vs SPY
-    for factor_name, (up, down) in FACTOR_ETFS.items():
-        if up is None:
-            continue
-        if up not in prices.columns:
-            continue
-        if up == "SPY":
-            continue  # US vs World up-leg is SPY, would just be a flat line at 1
-
-        rel = rs(prices[up], spy)
-        if not rel.empty:
-            rs_series[factor_name] = rel
 
     rs_df = pd.DataFrame(rs_series).dropna(how="all")
 
