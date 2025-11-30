@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ---------------- Config ----------------
 st.set_page_config(page_title="Factor Momentum and Leadership", layout="wide")
@@ -37,6 +37,63 @@ def card_box(inner_html: str):
         unsafe_allow_html=True,
     )
 
+# --------- Timeframe config ---------
+TIMEFRAME_OPTIONS = ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"]
+
+
+def get_timeframe_config(label: str):
+    """
+    Returns (short_window_days, long_window_days, start_date_for_download, cutoff_date_for_display)
+    Short/long are in trading days; cutoff is calendar date for charts / returns.
+    """
+    today = datetime.today().date()
+
+    if label == "1M":
+        short_win = 10
+        long_win = 21
+        display_days = 30
+        cutoff = today - timedelta(days=display_days)
+    elif label == "3M":
+        short_win = 21
+        long_win = 63
+        display_days = 90
+        cutoff = today - timedelta(days=display_days)
+    elif label == "6M":
+        short_win = 63
+        long_win = 126
+        display_days = 180
+        cutoff = today - timedelta(days=display_days)
+    elif label == "YTD":
+        year_start = datetime(today.year, 1, 1).date()
+        display_days = (today - year_start).days
+        short_win = 21
+        long_win = max(60, display_days)  # effectively YTD long lookback
+        cutoff = year_start
+    elif label == "1Y":
+        short_win = 63
+        long_win = 252
+        display_days = 365
+        cutoff = today - timedelta(days=display_days)
+    elif label == "3Y":
+        short_win = 126
+        long_win = 756
+        display_days = 365 * 3
+        cutoff = today - timedelta(days=display_days)
+    elif label == "5Y":
+        short_win = 252
+        long_win = 1260
+        display_days = 365 * 5
+        cutoff = today - timedelta(days=display_days)
+    else:  # "10Y"
+        short_win = 252
+        long_win = 2520
+        display_days = 365 * 10
+        cutoff = today - timedelta(days=display_days)
+
+    # download a bit more than long window so rolling stats have room
+    start_date = cutoff - timedelta(days=long_win // 2 + 30)
+    return short_win, long_win, datetime.combine(start_date, datetime.min.time()), datetime.combine(cutoff, datetime.min.time())
+
 # ---------------- Helpers ----------------
 def load_prices(tickers, start):
     data = yf.download(tickers, start=start, progress=False, auto_adjust=True)
@@ -46,14 +103,15 @@ def load_prices(tickers, start):
 
 
 def pct_change_window(series: pd.Series, days: int) -> float:
-    if len(series) <= days:
+    # allow len == days (we will use the first observation)
+    if len(series) < days or days <= 0:
         return np.nan
     return float(series.iloc[-1] / series.iloc[-days] - 1.0)
 
 
 def momentum(series: pd.Series, win: int = 20) -> float:
     r = series.pct_change().dropna()
-    if len(r) < win:
+    if len(r) < win or win <= 0:
         return np.nan
     return float(r.rolling(win).mean().iloc[-1])
 
@@ -169,7 +227,6 @@ def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) 
     up_count = int(trend_counts.get("Up", 0))
     down_count = int(trend_counts.get("Down", 0))
 
-    # Leaders and laggards on short momentum
     short_sorted = mom_df["Short"].sort_values(ascending=False)
     leaders = [f for f in short_sorted.index[:3]]
     laggards = [f for f in short_sorted.index[-3:]]
@@ -232,17 +289,21 @@ with st.sidebar:
     st.markdown(
         "- Snapshot table shows short and long window performance, trend, and inflection.\n"
         "- Scatter map puts factors into quadrants by short vs long momentum.\n"
-        "- Correlation and RS vs SPY help you understand clustering and crowding."
+        "- Correlation heatmap helps you see clustering and crowding."
     )
     st.divider()
     st.header("Settings")
-    start_date = st.date_input("History start", datetime(2015, 1, 1))
-    lookback_short = st.slider("Short momentum window (days)", 10, 60, 20)
-    lookback_long = st.slider("Long momentum window (days)", 30, 180, 60)
+    timeframe_label = st.selectbox("Analysis window", TIMEFRAME_OPTIONS, index=4)
+    short_window, long_window, start_date, cutoff_date = get_timeframe_config(timeframe_label)
+    st.caption(
+        f"Short window: {short_window} trading days. "
+        f"Long window: {long_window} trading days.\n"
+        f"Displayed history: {timeframe_label}."
+    )
     st.caption("Data source: Yahoo Finance. Internal use only.")
 
 # ---------------- Load data ----------------
-prices = load_prices(ALL_TICKERS, start=str(start_date))
+prices = load_prices(ALL_TICKERS, start=start_date)
 if prices.empty:
     st.error("No data returned.")
     st.stop()
@@ -257,21 +318,30 @@ for name, (up, down) in FACTOR_ETFS.items():
     if up in prices and down in prices:
         factor_levels[name] = rs(prices[up], prices[down])
 
-factor_df = pd.DataFrame(factor_levels).dropna(how="all")
-if factor_df.empty:
+factor_df_all = pd.DataFrame(factor_levels).dropna(how="all")
+if factor_df_all.empty:
     st.error("No factor series could be constructed.")
     st.stop()
 
-# ---------------- Momentum snapshot table base data ----------------
+# restrict to selected display window
+cutoff_ts = pd.Timestamp(cutoff_date)
+factor_df = factor_df_all[factor_df_all.index >= cutoff_ts]
+if factor_df.empty:
+    st.error("No data in the selected window.")
+    st.stop()
+
+# ---------------- Momentum snapshot base data ----------------
 rows = []
+min_len_required = max(long_window, short_window, 5)
+
 for f in factor_df.columns:
     s = factor_df[f].dropna()
-    if len(s) < lookback_long + 5:
+    if len(s) < min_len_required:
         continue
-    r5 = pct_change_window(s, 5)
-    r_short = pct_change_window(s, lookback_short)
-    r_long = pct_change_window(s, lookback_long)
-    mom_val = momentum(s, win=lookback_short)
+    r5 = pct_change_window(s, min(5, len(s) - 1))
+    r_short = pct_change_window(s, short_window)
+    r_long = pct_change_window(s, long_window)
+    mom_val = momentum(s, win=short_window)
     tclass = trend_class(s)
     infl = inflection(r_short, r_long)
     rows.append([f, r5, r_short, r_long, mom_val, tclass, infl])
@@ -282,12 +352,12 @@ mom_df = pd.DataFrame(
 ).set_index("Factor")
 
 if mom_df.empty:
-    st.error("No factors passed data length checks.")
+    st.error("No factors passed data length checks for this window.")
     st.stop()
 
 mom_df = mom_df.sort_values("Short", ascending=False)
 
-# ---------------- Compute breadth and regime (no metrics, for commentary only) ----------------
+# ---------------- Compute breadth and regime (for commentary only) ----------------
 trend_counts = mom_df["Trend"].value_counts()
 num_up = int(trend_counts.get("Up", 0))
 num_down = int(trend_counts.get("Down", 0))
@@ -300,12 +370,12 @@ raw_score = (
 )
 regime_score = max(0.0, min(100.0, 50.0 + 50.0 * (raw_score / 5.0)))
 
-# ---------------- Top: Factor tape summary (commentary only) ----------------
+# ---------------- Top: Factor tape summary ----------------
 st.subheader("Factor Tape Summary")
 summary_html = build_commentary(mom_df, breadth, regime_score)
 card_box(summary_html)
 
-# ---------------- Factor time series (second from top) ----------------
+# ---------------- Factor time series ----------------
 st.subheader("Factor Time Series")
 
 n_factors = len(factor_df.columns)
@@ -330,6 +400,11 @@ st.pyplot(fig_ts, clear_figure=True)
 
 # ---------------- Factor momentum snapshot (table) ----------------
 st.subheader("Factor Momentum Snapshot")
+st.caption(
+    f"Short window: {short_window} trading days. "
+    f"Long window: {long_window} trading days. "
+    f"Returns shown for the selected {timeframe_label} window."
+)
 
 display_df = mom_df.copy()
 for col in ["%5D", "Short", "Long", "Momentum"]:
