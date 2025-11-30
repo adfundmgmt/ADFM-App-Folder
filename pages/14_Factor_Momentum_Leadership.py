@@ -44,7 +44,6 @@ TIMEFRAME_OPTIONS = ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"]
 def get_timeframe_config(label: str):
     """
     Returns (short_window_days, long_window_days, start_date_for_download, cutoff_date_for_display)
-    Short/long are in trading days; cutoff is calendar date for charts / returns.
     """
     today = datetime.today().date()
 
@@ -67,7 +66,7 @@ def get_timeframe_config(label: str):
         year_start = datetime(today.year, 1, 1).date()
         display_days = (today - year_start).days
         short_win = 21
-        long_win = max(60, display_days)  # effectively YTD long lookback
+        long_win = max(60, display_days)
         cutoff = year_start
     elif label == "1Y":
         short_win = 63
@@ -90,7 +89,7 @@ def get_timeframe_config(label: str):
         display_days = 365 * 10
         cutoff = today - timedelta(days=display_days)
 
-    # download a bit more than long window so rolling stats have room
+    # Download a bit more so long_window has room
     start_date = cutoff - timedelta(days=long_win // 2 + 30)
     return short_win, long_win, datetime.combine(start_date, datetime.min.time()), datetime.combine(cutoff, datetime.min.time())
 
@@ -103,15 +102,14 @@ def load_prices(tickers, start):
 
 
 def pct_change_window(series: pd.Series, days: int) -> float:
-    # allow len == days (we will use the first observation)
-    if len(series) < days or days <= 0:
+    if days <= 0 or len(series) <= days:
         return np.nan
     return float(series.iloc[-1] / series.iloc[-days] - 1.0)
 
 
 def momentum(series: pd.Series, win: int = 20) -> float:
     r = series.pct_change().dropna()
-    if len(r) < win or win <= 0:
+    if win <= 0 or len(r) < win:
         return np.nan
     return float(r.rolling(win).mean().iloc[-1])
 
@@ -297,7 +295,7 @@ with st.sidebar:
     short_window, long_window, start_date, cutoff_date = get_timeframe_config(timeframe_label)
     st.caption(
         f"Short window: {short_window} trading days. "
-        f"Long window: {long_window} trading days.\n"
+        f"Long window: {long_window} trading days. "
         f"Displayed history: {timeframe_label}."
     )
     st.caption("Data source: Yahoo Finance. Internal use only.")
@@ -323,26 +321,27 @@ if factor_df_all.empty:
     st.error("No factor series could be constructed.")
     st.stop()
 
-# restrict to selected display window
+# visible subset for charts
 cutoff_ts = pd.Timestamp(cutoff_date)
 factor_df = factor_df_all[factor_df_all.index >= cutoff_ts]
 if factor_df.empty:
     st.error("No data in the selected window.")
     st.stop()
 
-# ---------------- Momentum snapshot base data ----------------
+# ---------------- Momentum snapshot base data (use full history) ----------------
 rows = []
-min_len_required = max(long_window, short_window, 5)
+min_len_required = max(long_window, short_window, 30)
 
-for f in factor_df.columns:
-    s = factor_df[f].dropna()
-    if len(s) < min_len_required:
+for f in factor_df_all.columns:
+    s_full = factor_df_all[f].dropna()
+    if len(s_full) < min_len_required:
         continue
-    r5 = pct_change_window(s, min(5, len(s) - 1))
-    r_short = pct_change_window(s, short_window)
-    r_long = pct_change_window(s, long_window)
-    mom_val = momentum(s, win=short_window)
-    tclass = trend_class(s)
+
+    r5 = pct_change_window(s_full, min(5, len(s_full) - 1))
+    r_short = pct_change_window(s_full, short_window)
+    r_long = pct_change_window(s_full, long_window)
+    mom_val = momentum(s_full, win=short_window)
+    tclass = trend_class(s_full)
     infl = inflection(r_short, r_long)
     rows.append([f, r5, r_short, r_long, mom_val, tclass, infl])
 
@@ -403,7 +402,7 @@ st.subheader("Factor Momentum Snapshot")
 st.caption(
     f"Short window: {short_window} trading days. "
     f"Long window: {long_window} trading days. "
-    f"Returns shown for the selected {timeframe_label} window."
+    f"Returns and momentum are computed on full history up to today."
 )
 
 display_df = mom_df.copy()
