@@ -22,6 +22,7 @@ PASTEL = [
 GRID = "#e8e8e8"
 TEXT = "#222222"
 
+
 # ---------------- Helpers ----------------
 def zscore_series(s: pd.Series) -> pd.Series:
     s = s.dropna()
@@ -33,11 +34,13 @@ def zscore_series(s: pd.Series) -> pd.Series:
         return s * np.nan
     return (s - mu) / sig
 
+
 def last_z(s: pd.Series) -> float:
     if s is None or s.dropna().empty:
         return np.nan
     z = zscore_series(s)
     return float(z.iloc[-1]) if not z.empty else np.nan
+
 
 def percentile_rank_last(s: pd.Series) -> float:
     s = s.dropna()
@@ -45,9 +48,11 @@ def percentile_rank_last(s: pd.Series) -> float:
         return np.nan
     return float(s.rank(pct=True).iloc[-1] * 100.0)
 
+
 def realized_vol(series, window=21, ann=252):
     r = series.pct_change().dropna()
     return r.rolling(window).std() * np.sqrt(ann)
+
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def load_series(tickers, start="2010-01-01"):
@@ -55,7 +60,6 @@ def load_series(tickers, start="2010-01-01"):
         tickers, start=start, progress=False, auto_adjust=False, group_by="ticker"
     )
     out = {}
-    # Handle MultiIndex or single frame
     if isinstance(data.columns, pd.MultiIndex):
         for t in tickers:
             if t in data.columns.get_level_values(0):
@@ -63,10 +67,10 @@ def load_series(tickers, start="2010-01-01"):
                 if "Close" in df_t.columns:
                     out[t] = df_t["Close"].dropna()
     else:
-        # Single ticker case
-        if "Close" in data.columns:
+        if "Close" in data.columns and len(tickers) == 1:
             out[tickers[0]] = data["Close"].dropna()
     return out
+
 
 def pastel_cmap():
     return LinearSegmentedColormap.from_list(
@@ -74,6 +78,30 @@ def pastel_cmap():
         ["#F1FAEE", "#A8DADC", "#457B9D"],
         N=256
     )
+
+
+def card_box(inner_html: str):
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e0e0e0; border-radius:10px; padding:14px; background:#fafafa; color:{TEXT}; font-size:14px; line-height:1.35;">
+          {inner_html}
+        </div>
+        """.strip(),
+        unsafe_allow_html=True,
+    )
+
+
+def fmt_pct(x):
+    if pd.isna(x):
+        return "NA"
+    return f"{x:.0f}%"
+
+
+def fmt_z(x):
+    if pd.isna(x):
+        return "NA"
+    return f"{x:.2f}"
+
 
 # ---------------- Sidebar ----------------
 st.title("Cross Asset Volatility Surface Monitor")
@@ -163,7 +191,7 @@ for idx in VOL_IDX:
             "5D %": round(ch_5d, 1) if not np.isnan(ch_5d) else np.nan,
             "Z": round(z, 2) if not np.isnan(z) else np.nan,
             "Percentile": round(pct_rank, 0) if not np.isnan(pct_rank) else np.nan,
-            "Type": "Implied"
+            "Type": "Implied",
         }
     )
 
@@ -187,22 +215,24 @@ for p in PRICE_UNDERLYING:
             "5D %": round(ch_5d, 1) if not np.isnan(ch_5d) else np.nan,
             "Z": round(z, 2) if not np.isnan(z) else np.nan,
             "Percentile": round(pct_rank, 0) if not np.isnan(pct_rank) else np.nan,
-            "Type": "Realized"
+            "Type": "Realized",
         }
     )
 
 df = pd.DataFrame(rows)
 df = df.sort_values(["Type", "Series"]).reset_index(drop=True)
 
+if df.empty:
+    st.error("No valid volatility series for the selected window.")
+    st.stop()
+
 # ---------------- Regime header ----------------
 vix_row = df[df["Series"] == "^VIX"]
 move_row = df[df["Series"] == "^MOVE"]
-ovx_row = df[df["Series"] == "^OVX"]
 
 vix_z = float(vix_row["Z"].iloc[0]) if not vix_row.empty and not pd.isna(vix_row["Z"].iloc[0]) else np.nan
 move_z = float(move_row["Z"].iloc[0]) if not move_row.empty and not pd.isna(move_row["Z"].iloc[0]) else np.nan
 
-# simple regime summary based on VIX and MOVE Z scores
 stress_score = 0
 for z in [vix_z, move_z]:
     if not np.isnan(z) and z >= 1.0:
@@ -221,8 +251,9 @@ hot_count = df[(df["Z"].abs() >= 1.0)].shape[0]
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Regime", regime)
-c2.metric("VIX Z", f"{vix_z:.2f}" if not np.isnan(vix_z) else "NA")
+c2.metric("VIX Z", fmt_z(vix_z))
 c3.metric("Series |Z| ≥ 1", int(hot_count))
+
 
 # ---------------- Levels table ----------------
 st.subheader("Current Volatility Levels")
@@ -230,8 +261,98 @@ st.subheader("Current Volatility Levels")
 st.dataframe(
     df[["Series", "Type", "Level", "5D %", "Z", "Percentile"]],
     use_container_width=True,
-    hide_index=True
+    hide_index=True,
 )
+
+# ---------------- Dynamic Commentary ----------------
+def sleeve_stats(df_in: pd.DataFrame, names):
+    sub = df_in[df_in["Series"].isin(names)]
+    if sub.empty:
+        return np.nan, np.nan, 0
+    med_z = sub["Z"].median(skipna=True)
+    med_pct = sub["Percentile"].median(skipna=True)
+    hot = sub[sub["Z"].abs() >= 1.0].shape[0]
+    return med_z, med_pct, hot
+
+
+eq_names = ["^VIX", "^VIX3M", "^VVIX"]
+rt_names = ["^MOVE", "TLT 1M RV"]
+cmd_names = ["^GVZ", "^OVX", "GLD 1M RV", "CL=F 1M RV"]
+
+eq_z, eq_pct, eq_hot = sleeve_stats(df, eq_names)
+rt_z, rt_pct, rt_hot = sleeve_stats(df, rt_names)
+cmd_z, cmd_pct, cmd_hot = sleeve_stats(df, cmd_names)
+
+top_outliers = (
+    df.dropna(subset=["Z"])
+    .assign(abs_z=lambda x: x["Z"].abs())
+    .sort_values("abs_z", ascending=False)
+    .head(3)
+)
+
+if not df.empty:
+    if regime == "Risk off":
+        conclusion = (
+            "Vol regime is hostile to net risk. Equity and rates volatility sit at elevated Z scores, "
+            "which argues for tighter gross and cleaner hedges rather than adding exposure."
+        )
+    elif regime == "Cautious":
+        conclusion = (
+            "Vol regime is cautious. One sleeve is stretched while the other is closer to its median range, "
+            "so sizing and hedge expression matter more than direction."
+        )
+    else:
+        conclusion = (
+            "Vol regime is neutral to constructive. Neither equity nor rates volatility is screaming, "
+            "which keeps optionality cheap enough to add selectively instead of defensively."
+        )
+
+    why = (
+        "The table and Z bar tell you where optionality is rich or cheap versus its own history across equity, "
+        "rates, and commodity sleeves. That should inform where to source hedges and where to lean on outright risk."
+    )
+
+    drivers = []
+
+    drivers.append(
+        f"Equity vol sleeve (VIX, VIX3M, VVIX) sits at median Z {fmt_z(eq_z)} and roughly {fmt_pct(eq_pct)} percentile, "
+        f"with {eq_hot} series showing |Z| ≥ 1."
+    )
+
+    drivers.append(
+        f"Rates vol sleeve (MOVE, TLT realized) shows median Z {fmt_z(rt_z)} and about {fmt_pct(rt_pct)} percentile, "
+        f"with {rt_hot} hot series. This is the anchor for how aggressive you want to be with duration and curve trades."
+    )
+
+    drivers.append(
+        f"Commodity vol sleeve (gold and crude implied and realized) has median Z {fmt_z(cmd_z)} and "
+        f"around {fmt_pct(cmd_pct)} percentile, with {cmd_hot} names stretched. This flags whether macro hedges "
+        f"via gold or energy are rich or still reasonably priced."
+    )
+
+    if not top_outliers.empty:
+        bullet_lines = []
+        for _, r in top_outliers.iterrows():
+            bullet_lines.append(
+                f"{r['Series']} at level {r['Level']}, Z {fmt_z(r['Z'])}, about {fmt_pct(r['Percentile'])} percentile."
+            )
+        drivers.append(
+            "Top outliers right now: " + " ".join(bullet_lines)
+        )
+
+    body = (
+        '<div style="font-weight:700; margin-bottom:6px;">Conclusion</div>'
+        f'<div>{conclusion}</div>'
+        '<div style="font-weight:700; margin:10px 0 6px;">Why it matters</div>'
+        f'<div>{why}</div>'
+        '<div style="font-weight:700; margin:10px 0 6px;">Key drivers</div>'
+        '<ul style="margin-top:4px; margin-bottom:4px;">'
+        + "".join(f"<li>{d}</li>" for d in drivers)
+        + "</ul>"
+    )
+
+    st.subheader("Dynamic Commentary")
+    card_box(body)
 
 # ---------------- Z score bar chart ----------------
 st.subheader("Cross Asset Volatility Z Scores")
@@ -258,7 +379,7 @@ axes = axes.ravel()
 
 targets = [
     "^VIX", "^VVIX", "^MOVE",
-    "^GVZ", "^OVX", "^VIX3M"
+    "^GVZ", "^OVX", "^VIX3M",
 ]
 
 for i, t in enumerate(targets):
