@@ -254,16 +254,6 @@ c1.metric("Regime", regime)
 c2.metric("VIX Z", fmt_z(vix_z))
 c3.metric("Series |Z| ≥ 1", int(hot_count))
 
-
-# ---------------- Levels table ----------------
-st.subheader("Current Volatility Levels")
-
-st.dataframe(
-    df[["Series", "Type", "Level", "5D %", "Z", "Percentile"]],
-    use_container_width=True,
-    hide_index=True,
-)
-
 # ---------------- Dynamic Commentary ----------------
 def sleeve_stats(df_in: pd.DataFrame, names):
     sub = df_in[df_in["Series"].isin(names)]
@@ -353,6 +343,15 @@ if not df.empty:
 
     st.subheader("Dynamic Commentary")
     card_box(body)
+
+# ---------------- Levels table ----------------
+st.subheader("Current Volatility Levels")
+
+st.dataframe(
+    df[["Series", "Type", "Level", "5D %", "Z", "Percentile"]],
+    use_container_width=True,
+    hide_index=True,
+)
 
 # ---------------- Z score bar chart ----------------
 st.subheader("Cross Asset Volatility Z Scores")
