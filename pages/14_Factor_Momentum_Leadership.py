@@ -1,9 +1,12 @@
+# 14_Factor_Momentum_Leadership.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+import matplotlib.dates as mdates
+from datetime import datetime, date
 
 # ---------------- Config ----------------
 st.set_page_config(page_title="Factor Momentum and Leadership", layout="wide")
@@ -37,62 +40,6 @@ def card_box(inner_html: str):
         unsafe_allow_html=True,
     )
 
-# --------- Timeframe config ---------
-TIMEFRAME_OPTIONS = ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"]
-
-
-def get_timeframe_config(label: str):
-    """
-    Returns (short_window_days, long_window_days, start_date_for_download, cutoff_date_for_display)
-    """
-    today = datetime.today().date()
-
-    if label == "1M":
-        short_win = 10
-        long_win = 21
-        display_days = 30
-        cutoff = today - timedelta(days=display_days)
-    elif label == "3M":
-        short_win = 21
-        long_win = 63
-        display_days = 90
-        cutoff = today - timedelta(days=display_days)
-    elif label == "6M":
-        short_win = 63
-        long_win = 126
-        display_days = 180
-        cutoff = today - timedelta(days=display_days)
-    elif label == "YTD":
-        year_start = datetime(today.year, 1, 1).date()
-        display_days = (today - year_start).days
-        short_win = 21
-        long_win = max(60, display_days)
-        cutoff = year_start
-    elif label == "1Y":
-        short_win = 63
-        long_win = 252
-        display_days = 365
-        cutoff = today - timedelta(days=display_days)
-    elif label == "3Y":
-        short_win = 126
-        long_win = 756
-        display_days = 365 * 3
-        cutoff = today - timedelta(days=display_days)
-    elif label == "5Y":
-        short_win = 252
-        long_win = 1260
-        display_days = 365 * 5
-        cutoff = today - timedelta(days=display_days)
-    else:  # "10Y"
-        short_win = 252
-        long_win = 2520
-        display_days = 365 * 10
-        cutoff = today - timedelta(days=display_days)
-
-    # Download a bit more so long_window has room
-    start_date = cutoff - timedelta(days=long_win // 2 + 30)
-    return short_win, long_win, datetime.combine(start_date, datetime.min.time()), datetime.combine(cutoff, datetime.min.time())
-
 # ---------------- Helpers ----------------
 def load_prices(tickers, start):
     data = yf.download(tickers, start=start, progress=False, auto_adjust=True)
@@ -102,15 +49,17 @@ def load_prices(tickers, start):
 
 
 def pct_change_window(series: pd.Series, days: int) -> float:
-    if days <= 0 or len(series) <= days:
+    if len(series) <= 1:
         return np.nan
+    days = int(min(days, len(series) - 1))
     return float(series.iloc[-1] / series.iloc[-days] - 1.0)
 
 
 def momentum(series: pd.Series, win: int = 20) -> float:
     r = series.pct_change().dropna()
-    if win <= 0 or len(r) < win:
+    if len(r) < 2:
         return np.nan
+    win = int(min(win, len(r)))
     return float(r.rolling(win).mean().iloc[-1])
 
 
@@ -189,25 +138,23 @@ def positioning_hint(breadth: float, regime_score: float, up_count: int, down_co
     if breadth < 25 and regime_score < 40:
         return (
             "Keep gross light, lean on index or factor hedges, and size single name longs off the "
-            "few factors that are actually in up trends. This is a good environment to express "
-            "views through relative value and pair trades rather than outright beta."
+            "few factors that are actually in up trends. This regime favors relative value and "
+            "pair trades over outright beta."
         )
     if breadth < 40 and regime_score >= 55:
         return (
             "Tape is friendly but leadership is narrow. Concentrate capital in the leading styles, "
-            "avoid shorting them mechanically, and use losers as funding shorts. Be careful with "
-            "broad risk-on assumptions because only a subset of factors is really working."
+            "avoid shorting them mechanically, and use laggards as funding shorts."
         )
     if breadth >= 60 and regime_score >= 60:
         return (
             "This is a broad, constructive regime. It supports running higher gross and letting "
-            "winners compound, but you should already be thinking about where to hide once "
-            "breadth and momentum start to roll over."
+            "winners compound, while keeping an eye on when breadth and momentum start to roll."
         )
     if breadth >= 60 and regime_score < 45:
         return (
             "Breadth is okay but the quality of leadership is questionable. Rotate toward higher "
-            "quality expressions inside each factor and be quicker to cut when momentum rolls."
+            "quality expressions inside each factor and be quick to cut when momentum weakens."
         )
     if abs(up_count - down_count) <= 2:
         return (
@@ -215,8 +162,8 @@ def positioning_hint(breadth: float, regime_score: float, up_count: int, down_co
             "top-down factor tilts here."
         )
     return (
-        "Treat factors as a map, not a trade list. Use them to sanity-check your book: make sure "
-        "your largest positions rhyme with the leadership you actually see in the tape."
+        "Treat factors as a map. Use them to sanity-check your book: make sure your largest "
+        "positions rhyme with the leadership you see in the tape."
     )
 
 
@@ -241,15 +188,14 @@ def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) 
 
     why_matters = (
         "Factor structure tells you whether the equity market is being driven by style and macro "
-        "buckets or by idiosyncratic stories. It should anchor how much you trust breakout moves, "
-        "how aggressive you are with gross, and whether you express views through index, factor, "
-        "or single stock risk."
+        "buckets or by idiosyncratic stories. It should anchor how much you trust breakouts, how "
+        "aggressive you are with gross, and whether you lean on index, factor, or single stock risk."
     )
 
     key_stats = (
         f"Up trends: {up_count} factors, Down trends: {down_count}. "
         f"Breadth index {breadth:.1f}%. "
-        f"Regime score {regime_score:.1f} on a 0–100 scale, where 50 is neutral."
+        f"Regime score {regime_score:.1f} on a 0-100 scale, where 50 is neutral."
     )
 
     return (
@@ -274,6 +220,16 @@ FACTOR_ETFS = {
 
 ALL_TICKERS = sorted({t for pair in FACTOR_ETFS.values() for t in pair if t is not None})
 
+WINDOW_MAP_DAYS = {
+    "1M": 21,
+    "3M": 63,
+    "6M": 126,
+    "1Y": 252,
+    "3Y": 252 * 3,
+    "5Y": 252 * 5,
+    "10Y": 252 * 10,
+}
+
 # ---------------- Sidebar ----------------
 st.title("Factor Momentum and Leadership Dashboard")
 
@@ -281,67 +237,73 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         "Tracks style and macro factor leadership using ETF pairs. "
-        "Each factor is built as a relative strength ratio and scored on short and long momentum, "
+        "Each factor is a relative strength ratio scored on short and long momentum, "
         "trend structure, and inflection."
     )
     st.markdown(
-        "- Snapshot table shows short and long window performance, trend, and inflection.\n"
-        "- Scatter map puts factors into quadrants by short vs long momentum.\n"
-        "- Correlation heatmap helps you see clustering and crowding."
+        "- Snapshot table: short and long window performance, trend, inflection.\n"
+        "- Scatter map: factors in quadrants by short vs long momentum.\n"
+        "- Correlation: clustering and crowding across styles."
     )
     st.divider()
     st.header("Settings")
-    timeframe_label = st.selectbox("Analysis window", TIMEFRAME_OPTIONS, index=4)
-    short_window, long_window, start_date, cutoff_date = get_timeframe_config(timeframe_label)
-    st.caption(
-        f"Short window: {short_window} trading days. "
-        f"Long window: {long_window} trading days. "
-        f"Displayed history: {timeframe_label}."
+    history_start = st.date_input("History start", datetime(2015, 1, 1))
+    window_choice = st.selectbox(
+        "Analysis window",
+        ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"],
+        index=3,  # YTD by default
     )
+    lookback_short = st.slider("Short momentum window (days)", 10, 60, 20)
+    lookback_long = st.slider("Long momentum window (days)", 30, 180, 60)
     st.caption("Data source: Yahoo Finance. Internal use only.")
 
 # ---------------- Load data ----------------
-prices = load_prices(ALL_TICKERS, start=start_date)
-if prices.empty:
+prices_full = load_prices(ALL_TICKERS, start=str(history_start))
+if prices_full.empty:
     st.error("No data returned.")
     st.stop()
 
-# ---------------- Compute factor levels ----------------
-factor_levels = {}
+# ---------------- Build factor series (full history) ----------------
+factor_levels_full = {}
 for name, (up, down) in FACTOR_ETFS.items():
     if down is None:
-        if up in prices:
-            factor_levels[name] = prices[up]
+        if up in prices_full:
+            factor_levels_full[name] = prices_full[up]
         continue
-    if up in prices and down in prices:
-        factor_levels[name] = rs(prices[up], prices[down])
+    if up in prices_full and down in prices_full:
+        factor_levels_full[name] = rs(prices_full[up], prices_full[down])
 
-factor_df_all = pd.DataFrame(factor_levels).dropna(how="all")
-if factor_df_all.empty:
+factor_df_full = pd.DataFrame(factor_levels_full).dropna(how="all")
+if factor_df_full.empty:
     st.error("No factor series could be constructed.")
     st.stop()
 
-# visible subset for charts
-cutoff_ts = pd.Timestamp(cutoff_date)
-factor_df = factor_df_all[factor_df_all.index >= cutoff_ts]
+# ---------------- Window selection ----------------
+if window_choice == "YTD":
+    current_year_start = date(datetime.now().year, 1, 1)
+    factor_df = factor_df_full[factor_df_full.index >= pd.to_datetime(current_year_start)]
+else:
+    days = WINDOW_MAP_DAYS[window_choice]
+    if len(factor_df_full) <= days:
+        factor_df = factor_df_full.copy()
+    else:
+        factor_df = factor_df_full.iloc[-days:].copy()
+
 if factor_df.empty:
-    st.error("No data in the selected window.")
+    st.error("No data available for the selected window.")
     st.stop()
 
-# ---------------- Momentum snapshot base data (use full history) ----------------
+# ---------------- Momentum snapshot data ----------------
 rows = []
-min_len_required = max(long_window, short_window, 30)
-
-for f in factor_df_all.columns:
-    s_full = factor_df_all[f].dropna()
-    if len(s_full) < min_len_required:
+for f in factor_df.columns:
+    s = factor_df[f].dropna()
+    if len(s) < 5:
         continue
-
-    r5 = pct_change_window(s_full, min(5, len(s_full) - 1))
-    r_short = pct_change_window(s_full, short_window)
-    r_long = pct_change_window(s_full, long_window)
-    mom_val = momentum(s_full, win=short_window)
-    tclass = trend_class(s_full)
+    r5 = pct_change_window(s, 5)
+    r_short = pct_change_window(s, lookback_short)
+    r_long = pct_change_window(s, lookback_long)
+    mom_val = momentum(s, win=lookback_short)
+    tclass = trend_class(s)
     infl = inflection(r_short, r_long)
     rows.append([f, r5, r_short, r_long, mom_val, tclass, infl])
 
@@ -351,15 +313,14 @@ mom_df = pd.DataFrame(
 ).set_index("Factor")
 
 if mom_df.empty:
-    st.error("No factors passed data length checks for this window.")
+    st.error("No factors passed data checks for this window.")
     st.stop()
 
 mom_df = mom_df.sort_values("Short", ascending=False)
 
-# ---------------- Compute breadth and regime (for commentary only) ----------------
+# ---------------- Breadth & regime for commentary only ----------------
 trend_counts = mom_df["Trend"].value_counts()
 num_up = int(trend_counts.get("Up", 0))
-num_down = int(trend_counts.get("Down", 0))
 breadth = num_up / len(mom_df) * 100.0
 
 raw_score = (
@@ -369,13 +330,13 @@ raw_score = (
 )
 regime_score = max(0.0, min(100.0, 50.0 + 50.0 * (raw_score / 5.0)))
 
-# ---------------- Top: Factor tape summary ----------------
-st.subheader("Factor Tape Summary")
+# ---------------- Factor tape summary ----------------
+st.subheader(f"Factor Tape Summary ({window_choice})")
 summary_html = build_commentary(mom_df, breadth, regime_score)
 card_box(summary_html)
 
 # ---------------- Factor time series ----------------
-st.subheader("Factor Time Series")
+st.subheader(f"Factor Time Series ({window_choice})")
 
 n_factors = len(factor_df.columns)
 ncols = 3
@@ -384,6 +345,19 @@ nrows = int(np.ceil(n_factors / ncols))
 fig_ts, axes = plt.subplots(nrows, ncols, figsize=(15, 4 * nrows), squeeze=False)
 axes = axes.ravel()
 
+# Decide date formatting based on window span
+if len(factor_df.index) > 1:
+    span_days = (factor_df.index[-1] - factor_df.index[0]).days
+else:
+    span_days = 0
+
+if span_days <= 370:
+    locator = mdates.MonthLocator()
+    formatter = mdates.DateFormatter("%b")
+else:
+    locator = mdates.YearLocator()
+    formatter = mdates.DateFormatter("%Y")
+
 for i, f in enumerate(factor_df.columns):
     ax = axes[i]
     s = factor_df[f].dropna()
@@ -391,6 +365,13 @@ for i, f in enumerate(factor_df.columns):
     ax.set_title(f, color=TEXT)
     ax.grid(color=GRID, linewidth=0.5)
 
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+    for label in ax.get_xticklabels():
+        label.set_rotation(0)
+        label.set_fontsize(8)
+
+# Turn off any unused axes
 for j in range(i + 1, len(axes)):
     axes[j].axis("off")
 
@@ -399,11 +380,6 @@ st.pyplot(fig_ts, clear_figure=True)
 
 # ---------------- Factor momentum snapshot (table) ----------------
 st.subheader("Factor Momentum Snapshot")
-st.caption(
-    f"Short window: {short_window} trading days. "
-    f"Long window: {long_window} trading days. "
-    f"Returns and momentum are computed on full history up to today."
-)
 
 display_df = mom_df.copy()
 for col in ["%5D", "Short", "Long", "Momentum"]:
@@ -439,7 +415,8 @@ ax_lead.axhline(0, color="#bbbbbb", linewidth=1)
 for i, factor in enumerate(mom_df.index):
     x = short_vals.loc[factor]
     y = long_vals.loc[factor]
-    ax_lead.scatter(x, y, s=60, color=PASTELS[i % len(PASTELS)], edgecolor="#444444", linewidth=0.5)
+    ax_lead.scatter(x, y, s=60, color=PASTELS[i % len(PASTELS)],
+                    edgecolor="#444444", linewidth=0.5)
     ax_lead.text(x, y, " " + factor, fontsize=9, va="center")
 
 ax_lead.set_xlabel("Short window return %", color=TEXT)
