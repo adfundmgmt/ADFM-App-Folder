@@ -31,8 +31,8 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Ratio Charts**  
   Tracks the relative performance of S&P cyclical and defensive sector ETFs (equal-weighted) to visualize risk-on/risk-off regime shifts in US equities.
 
-- **Options Chain Viewer**  
-  Fetch real-time call & put chains for any ticker and expiry via Yahoo Finance.
+- **Cross Asset Volatility Surface**  
+  Track cross asset implied and realized volatility in one place and map it to a simple regime read that can steer gross and hedging.
 
 - **ETF Flows Dashboard**  
   A dashboard of thematic, and global ETF flows - see where money is moving among major macro and innovation trades.
@@ -52,8 +52,8 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **Unusual Options Flow Tracker**  
   Tracks unusual options flow tracker.
 
-- **Flow of Funds Matrix**  
-  See where incremental liquidity (Fed/Treasury/FX reserves) and relative performance are co-moving.
+- **Factor Momentum Leadership**  
+  Tracks style and macro factor leadership using ETF pairs. Each factor is a relative strength ratio scored on short and long momentum, trend structure, and inflection.
   
 - **Weekly Cross-Asset Compass**  
   A weekly cross-asset readout that maps regime shifts, correlations, and volatility changes to clear actions, invalidations, and trade expressions in one place.
