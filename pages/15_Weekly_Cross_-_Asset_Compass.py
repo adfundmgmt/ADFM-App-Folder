@@ -1,16 +1,17 @@
 # ---------------------------------------------------------
-# Rolling Cross-Asset Correlation Dashboard
-# ADFM Edition – Clean, correlation-only, high-signal
+# Rolling Cross-Asset Correlations – ADFM Edition
+# Clean rebuild. Only rolling correlations. Dynamic x/y scaling.
+# Matching original visual style. Max 30 charts.
 # ---------------------------------------------------------
 
 import math
 from datetime import datetime, timedelta
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
-from matplotlib.colors import LinearSegmentedColormap
 
 import streamlit as st
 
@@ -27,29 +28,24 @@ plt.rcParams.update({
     "axes.labelsize": 11,
     "xtick.labelsize": 9,
     "ytick.labelsize": 9,
-    "lines.linewidth": 1.8,
+    "lines.linewidth": 1.6,
 })
 
-# Red → Yellow → Green gradient for correlations
-RYG = LinearSegmentedColormap.from_list(
-    "RYG",
-    [(0.75, 0.2, 0.2), (0.95, 0.95, 0.5), (0.3, 0.7, 0.3)],
-    N=256
-)
 
 # ---------------------------------------------------------
-# EXPANDED UNIVERSE (feel free to expand further)
+# EXPANDED UNIVERSE (curated for quality + variety)
 # ---------------------------------------------------------
 UNIVERSE = {
     "US Equities": ["^GSPC", "^NDX", "^RUT", "IWM", "QQQ"],
-    "Global Equities": ["^STOXX50E", "^N225", "EEM", "EWJ", "EWZ"],
-    "Credit": ["LQD", "HYG", "JNK"],
-    "Rates": ["^TNX", "^TYX", "^FVX"],
-    "Commodities": ["CL=F", "NG=F", "GC=F", "HG=F", "SI=F"],
-    "FX": ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X", "CNY=X"],
+    "Global Equities": ["^STOXX50E", "^N225", "EEM", "EWJ"],
+    "Credit": ["LQD", "HYG"],
+    "Rates": ["^TNX", "^TYX"],
+    "Commodities": ["CL=F", "NG=F", "GC=F", "HG=F"],
+    "FX": ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"],
 }
 
 ALL_TICKERS = list(dict.fromkeys(sum(UNIVERSE.values(), [])))
+
 
 # ---------------------------------------------------------
 # HELPERS
@@ -57,18 +53,20 @@ ALL_TICKERS = list(dict.fromkeys(sum(UNIVERSE.values(), [])))
 def pct_returns(prices):
     return prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna(how="all")
 
+
 @st.cache_data(show_spinner=False, ttl=1800)
-def fetch(tickers, start, end):
+def fetch_prices(tickers, start, end):
     data = yf.download(
-        tickers,
+        tickers=tickers,
         start=start,
         end=end,
         interval="1d",
         auto_adjust=True,
-        progress=False,
         group_by="ticker",
-        threads=True
+        progress=False,
+        threads=True,
     )
+
     if data is None or len(data) == 0:
         return pd.DataFrame()
 
@@ -84,56 +82,38 @@ def fetch(tickers, start, end):
 
     return pd.DataFrame()
 
-def roll_corr(df, a, b, window):
+
+def roll_corr(df, a, b, win):
     if a not in df.columns or b not in df.columns:
         return pd.Series(dtype=float)
     tmp = df[[a, b]].dropna()
     if tmp.empty:
         return pd.Series(dtype=float)
-    return tmp[a].rolling(window).corr(tmp[b])
+    return tmp[a].rolling(win).corr(tmp[b])
 
-def smooth(series):
-    return series.rolling(3).mean() if series is not None else series
 
-def auto_commentary(cmat, asset_labels):
-    if cmat.dropna(how="all").empty:
-        return "Correlation matrix empty. No signal."
+def auto_commentary(corr_last, pairs):
+    if corr_last.empty:
+        return "No correlation signal."
 
-    # Identify strong positive and negative pairs
-    pairs = []
-    for i in range(len(asset_labels)):
-        for j in range(i):
-            v = cmat.iat[i, j]
-            if pd.isna(v):
-                continue
-            pairs.append((asset_labels[i], asset_labels[j], v))
+    lines = []
 
-    if not pairs:
-        return "No usable correlation pairs."
+    strong_pos = corr_last[corr_last > 0.6].sort_values(ascending=False)
+    strong_neg = corr_last[corr_last < -0.6].sort_values()
 
-    # Sort strongest absolute correlations
-    pairs_sorted = sorted(pairs, key=lambda x: abs(x[2]), reverse=True)
-    top_pos = [p for p in pairs_sorted if p[2] > 0][:3]
-    top_neg = [p for p in pairs_sorted if p[2] < 0][:3]
+    if not strong_pos.empty:
+        items = [f"{a} vs {b} at {v:.0%}" for (a, b, v) in pairs if v in strong_pos.values]
+        lines.append("Strong positive correlations: " + "; ".join(items))
 
-    text = ""
+    if not strong_neg.empty:
+        items = [f"{a} vs {b} at {v:.0%}" for (a, b, v) in pairs if v in strong_neg.values]
+        lines.append("Strong negative correlations: " + "; ".join(items))
 
-    if top_pos:
-        text += "Highest positive correlations: "
-        text += "; ".join([f"{a} with {b} at {v:.0%}" for a, b, v in top_pos]) + ". "
-    if top_neg:
-        text += "Highest negative correlations: "
-        text += "; ".join([f"{a} vs {b} at {v:.0%}" for a, b, v in top_neg]) + ". "
+    if not lines:
+        return "Correlations are mostly mid-range. No strong cross-asset regime signal."
 
-    # Look for correlation regime shifts
-    shocks = []
-    for a, b, v in pairs_sorted[:8]:
-        if abs(v) > 0.7:
-            shocks.append(f"{a}/{b} showing regime-level correlation at {v:.0%}")
-    if shocks:
-        text += "Regime signals: " + "; ".join(shocks) + ". "
+    return " ".join(lines)
 
-    return text.strip()
 
 # ---------------------------------------------------------
 # SIDEBAR
@@ -141,16 +121,16 @@ def auto_commentary(cmat, asset_labels):
 st.sidebar.header("About this tool")
 st.sidebar.markdown(
     """
-Rolling cross-asset correlation dashboard using Yahoo Finance data.
-Clean, high-signal, used to understand how equities, credit, rates,
-commodities and FX move together across chosen time horizons.
+Rolling cross-asset correlations across equities, credit, rates,
+commodities, and FX using Yahoo Finance data.  
+Designed for regime detection, hedge selection, and factor alignment.
 """
 )
 
 window_choice = st.sidebar.selectbox(
     "Analysis window",
     ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"],
-    index=3
+    index=3,
 )
 
 lookback_map = {
@@ -164,8 +144,8 @@ lookback_map = {
     "10Y": 252 * 10,
 }
 
-rolling_win = st.sidebar.selectbox("Rolling window (days)", [21, 63], index=0)
-do_smooth = st.sidebar.checkbox("Smooth rolling correlations", value=True)
+rolling_window = st.sidebar.selectbox("Rolling window (days)", [21, 63], index=0)
+
 
 # ---------------------------------------------------------
 # DATA LOAD
@@ -173,14 +153,14 @@ do_smooth = st.sidebar.checkbox("Smooth rolling correlations", value=True)
 end = datetime.now().date()
 start = (datetime.now() - timedelta(days=365 * 12)).date()
 
-PR = fetch(ALL_TICKERS, str(start), str(end))
+PR = fetch_prices(ALL_TICKERS, str(start), str(end))
 if PR.empty:
-    st.error("No data returned from Yahoo Finance.")
+    st.error("No price data returned.")
     st.stop()
 
 RET = pct_returns(PR)
 
-# Apply analysis window subset
+# Apply selected analysis window
 if window_choice == "YTD":
     y0 = datetime(datetime.now().year, 1, 1)
     RETW = RET[RET.index >= y0]
@@ -189,79 +169,82 @@ else:
     RETW = RET.iloc[-days:] if len(RET) > days else RET.copy()
 
 if RETW.empty:
-    st.error("Insufficient data for the selected window.")
+    st.error("Insufficient data for selected window.")
     st.stop()
 
-asset_list = RETW.columns.tolist()
+assets = RETW.columns.tolist()
+
 
 # ---------------------------------------------------------
-# ROLLING CORRELATION MATRIX
+# COMPUTE LAST CORRELATIONS FOR COMMENTARY
 # ---------------------------------------------------------
-st.subheader(f"Rolling Correlation Matrix ({window_choice})")
+pairs = []
+corr_last_vals = []
 
-# Compute last available rolling correlation between all pairs
-corr_last = pd.DataFrame(index=asset_list, columns=asset_list, dtype=float)
+for i in range(len(assets)):
+    for j in range(i):
+        a, b = assets[i], assets[j]
+        rc = roll_corr(RETW, a, b, rolling_window)
+        if not rc.dropna().empty:
+            v = float(rc.dropna().iloc[-1])
+            pairs.append((a, b, v))
+            corr_last_vals.append(v)
 
-for a in asset_list:
-    for b in asset_list:
-        if a == b:
-            corr_last.loc[a, b] = np.nan
-            continue
-        rc = roll_corr(RETW, a, b, rolling_win)
-        if do_smooth:
-            rc = smooth(rc)
-        corr_last.loc[a, b] = rc.dropna().iloc[-1] if not rc.dropna().empty else np.nan
 
-# Mask upper triangle
-for i in range(len(asset_list)):
-    for j in range(i, len(asset_list)):
-        corr_last.iat[i, j] = np.nan
-
-sty = (
-    corr_last.style
-        .background_gradient(cmap=RYG, vmin=-1, vmax=1)
-        .format(lambda x: "" if pd.isna(x) else f"{x:.0%}")
+corr_last_series = pd.Series(
+    corr_last_vals,
+    index=[f"{a}-{b}" for a, b, _ in pairs],
+    dtype=float,
 )
 
-st.dataframe(sty, use_container_width=True, height=600)
+# ---------------------------------------------------------
+# COMMENTARY
+# ---------------------------------------------------------
+st.subheader("Correlation Commentary")
+st.markdown(auto_commentary(corr_last_series, pairs))
+
 
 # ---------------------------------------------------------
-# AUTO COMMENTARY
+# ROLLING CORRELATION PANELS (MAX 30)
 # ---------------------------------------------------------
-st.subheader("Correlation Read")
-st.markdown(auto_commentary(corr_last, asset_list))
+st.subheader(f"Rolling Correlations ({rolling_window}-day)")
 
-# ---------------------------------------------------------
-# PAIRWISE ROLLING CORRELATION PANELS
-# ---------------------------------------------------------
-st.subheader(f"Rolling Correlations ({rolling_win} day)")
+max_charts = 30
+pairs_to_plot = pairs[:max_charts]
+n_pairs = len(pairs_to_plot)
 
-# Create figure grid
-n = len(asset_list)
-pairs = [(asset_list[i], asset_list[j]) for i in range(n) for j in range(i)]
-rows = math.ceil(len(pairs) / 3)
+rows = math.ceil(n_pairs / 3)
+idx = 0
 
-fig_idx = 0
-
-for i in range(rows):
+for r in range(rows):
     cols = st.columns(3)
-    for j in range(3):
-        if fig_idx >= len(pairs):
+    for c in range(3):
+        if idx >= n_pairs:
             break
-        a, b = pairs[fig_idx]
-        rc = roll_corr(RETW, a, b, rolling_win)
-        if do_smooth:
-            rc = smooth(rc)
 
-        with cols[j]:
+        a, b, _ = pairs_to_plot[idx]
+        rc = roll_corr(RETW, a, b, rolling_window)
+        rc = rc.dropna()
+
+        with cols[c]:
             fig, ax = plt.subplots(figsize=(7, 3))
-            ax.plot(rc.index, rc.values, color="#336699", linewidth=1.4)
+
+            if not rc.empty:
+                ymin = float(rc.min()) - 0.05
+                ymax = float(rc.max()) + 0.05
+                ymin = max(ymin, -1)
+                ymax = min(ymax, 1)
+
+                ax.plot(rc.index, rc.values, color="#336699", linewidth=1.6)
+                ax.set_ylim(ymin, ymax)
+
             ax.axhline(0, color="black", linewidth=1.0)
-            ax.set_title(f"{a} vs {b}")
             ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+            ax.set_title(f"{a} vs {b}")
+
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
 
-        fig_idx += 1
+        idx += 1
 
 # END OF FILE
