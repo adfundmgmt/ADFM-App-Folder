@@ -307,17 +307,52 @@ def plot_intra_month_curve(
     ax = fig.add_subplot(111, facecolor="white")
 
     if avg_sel.empty:
-        ax.text(0.5, 0.5, "Not enough data to compute intra-month curve", ha="center", va="center", fontsize=12, color="black")
+        ax.text(0.5, 0.5, "Not enough data to compute intra-month curve", ha="center", va="center",
+                fontsize=12, color="black")
         ax.axis("off")
-        buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white"); plt.close(fig); buf.seek(0); return buf
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
 
-    # Solid average
-    ax.plot(avg_sel.index.values, avg_sel.values, linewidth=2.6, color="black",
-            linestyle="-", label=f"Avg {MONTH_LABELS[month_int-1]} {start_year}–{end_year}")
+    # Convert from index level (prev month-end = 100) to return in %
+    df_sel = df_sel - 100.0
+    avg_sel = avg_sel - 100.0
+    std_sel = df_sel.std(axis=1, skipna=True)
 
-    # Current year overlay (dashed) if available
+    x_vals = avg_sel.index.values
+    y_vals = avg_sel.values
+
+    # Zero line
+    ax.axhline(0.0, color="#999999", linestyle=":", linewidth=1.0, zorder=1)
+
+    # ±1 standard deviation band
+    ax.fill_between(
+        x_vals,
+        (avg_sel - std_sel).values,
+        (avg_sel + std_sel).values,
+        color="#d0d0d0",
+        alpha=0.3,
+        zorder=1.5,
+        label="±1σ"
+    )
+
+    # Solid average path
+    ax.plot(
+        x_vals,
+        y_vals,
+        linewidth=2.6,
+        color="black",
+        linestyle="-",
+        label=f"Avg {MONTH_LABELS[month_int-1]} {start_year}–{end_year}"
+    )
+
     today = pd.Timestamp.today()
     cur_year = today.year
+
+    # Current year overlay (dashed) if available
+    cur_norm_pct = None
     m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
     prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
                 (prices.index.month == (month_int - 1 if month_int > 1 else 12))
@@ -326,62 +361,126 @@ def plot_intra_month_curve(
         prev_eom = float(prev_month.iloc[-1])
         cur_norm = (m / prev_eom) * 100.0
         cur_norm.index = pd.RangeIndex(start=1, stop=1 + len(cur_norm), step=1)
-        if len(cur_norm) >= 2:
-            ax.plot(cur_norm.index.values, cur_norm.values, linewidth=2.0, color="black",
-                    alpha=0.5, linestyle="--", label=str(cur_year))
+        cur_norm_pct = cur_norm - 100.0
+        if len(cur_norm_pct) >= 2:
+            ax.plot(
+                cur_norm_pct.index.values,
+                cur_norm_pct.values,
+                linewidth=2.0,
+                color="black",
+                alpha=0.45,
+                linestyle="--",
+                label=str(cur_year)
+            )
 
     # Key points on selected-window average
-    low_idx, low_val = int(avg_sel.idxmin()), float(avg_sel.min())
-    high_idx, high_val = int(avg_sel.idxmax()), float(avg_sel.max())
+    low_idx = int(avg_sel.idxmin())
+    low_val = float(avg_sel.loc[low_idx])
+    high_idx = int(avg_sel.idxmax())
+    high_val = float(avg_sel.loc[high_idx])
     ax.scatter([low_idx, high_idx], [low_val, high_val], s=45, color="black", zorder=3)
 
     low_dom  = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
     high_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
 
-    def _box(txt, xy, offset_xy):
-        ax.annotate(txt, xy=xy, xytext=(xy[0] + offset_xy[0], xy[1] + offset_xy[1]), textcoords="data",
-                    arrowprops=dict(arrowstyle="-", color="black", lw=1.0, shrinkA=2, shrinkB=2),
-                    fontsize=9.5, color="black", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="black", lw=0.8))
+    def _box(txt: str, xy, offset_xy):
+        ax.annotate(
+            txt,
+            xy=xy,
+            xytext=(xy[0] + offset_xy[0], xy[1] + offset_xy[1]),
+            textcoords="data",
+            arrowprops=dict(arrowstyle="-", color="black", lw=1.0, shrinkA=2, shrinkB=2),
+            fontsize=9.5,
+            color="black",
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="black", lw=0.8),
+        )
+
     if low_dom is not None:
-        _box(f"Avg low • Day {low_idx}\n≈ {MONTH_LABELS[month_int-1]} {low_dom}\nIndex {low_val:.2f}",
-             (low_idx, low_val), (0.7, -0.35))
+        _box(
+            f"Avg low: Day {low_idx}\n~{MONTH_LABELS[month_int-1]} {low_dom}, {low_val:+.2f}%",
+            (low_idx, low_val),
+            (0.7, -0.9),
+        )
     if high_dom is not None:
-        _box(f"Avg high • Day {high_idx}\n≈ {MONTH_LABELS[month_int-1]} {high_dom}\nIndex {high_val:.2f}",
-             (high_idx, high_val), (-2.0, 0.35))
+        _box(
+            f"Avg high: Day {high_idx}\n~{MONTH_LABELS[month_int-1]} {high_dom}, {high_val:+.2f}%",
+            (high_idx, high_val),
+            (-3.0, 0.9),
+        )
 
     # Titles and axes
-    ax.set_title(f"{symbol_shown} {MONTH_LABELS[month_int-1]}: Intra-Month Performance by Trading Day", color="black",
-                 fontsize=16, weight="bold", pad=8)
+    ax.set_title(
+        f"{symbol_shown} {MONTH_LABELS[month_int-1]}: Intra-Month Performance by Trading Day",
+        color="black",
+        fontsize=16,
+        weight="bold",
+        pad=8,
+    )
     ax.set_xlabel(f"Trading day of {MONTH_LABELS[month_int-1]}", color="black", fontsize=10, weight="bold")
-    ax.set_ylabel("Index (prev month-end = 100)", color="black", fontsize=10, weight="bold")
+    ax.set_ylabel("Return from prior month-end (%)", color="black", fontsize=10, weight="bold")
     ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0)
     ax.tick_params(colors="black")
-    for sp in ax.spines.values(): sp.set_color("black")
+    for sp in ax.spines.values():
+        sp.set_color("black")
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-    # Legend
-    ax.legend(frameon=False, loc="upper left", title="Series", title_fontsize=10)
-
-    # Forward-to-EOM stats only if selected month is current month and current year has data
+    # Forward-to-EOM stats and "today" marker if selected month is current month
     if (today.month == month_int) and not df_sel.empty:
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
         if not m_cur.empty:
             tday_ord = _trading_day_ordinal(m_cur.index, today)
             if tday_ord in df_sel.index:
+                # vertical marker for today
+                ax.axvline(tday_ord, color="#b0b0b0", linestyle=":", linewidth=1.2, zorder=2.0)
+
+                # highlight average and current-year level at today's ordinal if in range
+                if tday_ord in avg_sel.index:
+                    ax.scatter(tday_ord, avg_sel.loc[tday_ord], s=35, color="black", zorder=4)
+                if cur_norm_pct is not None and tday_ord in cur_norm_pct.index:
+                    ax.scatter(
+                        tday_ord,
+                        cur_norm_pct.loc[tday_ord],
+                        s=40,
+                        facecolors="white",
+                        edgecolors="black",
+                        linewidths=1.0,
+                        zorder=4,
+                    )
+
                 lvl_t = df_sel.loc[tday_ord]
                 lvl_end = df_sel.iloc[-1]
                 fwd = (lvl_end - lvl_t).dropna()
                 if not fwd.empty:
                     stats_text = (
                         f"From today (Day {tday_ord}) → month-end across years:\n"
-                        f"• Mean: {fwd.mean():+.2f}\n"
-                        f"• Median: {fwd.median():+.2f}\n"
+                        f"• Mean: {fwd.mean():+.2f}%\n"
+                        f"• Median: {fwd.median():+.2f}%\n"
                         f"• Hit rate >0: {(fwd > 0).mean()*100:0.0f}%  | N={fwd.shape[0]}"
                     )
-                    ax.text(0.02, 0.05, stats_text, transform=ax.transAxes, fontsize=9.0, color="black",
-                            bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8))
+                    ax.text(
+                        0.02,
+                        0.05,
+                        stats_text,
+                        transform=ax.transAxes,
+                        fontsize=9.0,
+                        color="black",
+                        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8),
+                    )
+
+    # Y limits with a bit of padding around the band
+    y_min = float((avg_sel - std_sel).min())
+    y_max = float((avg_sel + std_sel).max())
+    pad_y = 0.1 * max(abs(y_min), abs(y_max)) if np.isfinite(y_min) and np.isfinite(y_max) else 0.0
+    ax.set_ylim(y_min - pad_y, y_max + pad_y)
+
+    # Legend
+    ax.legend(frameon=False, loc="upper left", title="Series", title_fontsize=10)
 
     fig.tight_layout(pad=1.0)
-    buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white"); plt.close(fig); buf.seek(0)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
     return buf
 
 # -------------------------- Main controls -------------------------- #
@@ -448,7 +547,14 @@ st.caption("Bars equal mean(1H) + mean(2H). First half solid; second half hatche
 
 # -------------------------- Intra-month curve below -------------------------- #
 st.subheader("Intra-Month Seasonality Curve")
-month_choice = st.selectbox("Month", options=list(range(1,13)), index=9, format_func=lambda m: MONTH_LABELS[m-1])
+today_dt = dt.datetime.today()
+default_month_idx = max(0, min(today_dt.month - 1, 11))
+month_choice = st.selectbox(
+    "Month",
+    options=list(range(1, 13)),
+    index=default_month_idx,
+    format_func=lambda m: MONTH_LABELS[m-1],
+)
 
 curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol)
 st.image(curve_buf, use_container_width=True)
