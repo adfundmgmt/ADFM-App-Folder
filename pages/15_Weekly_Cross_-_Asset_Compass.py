@@ -1,8 +1,6 @@
-# ---------------------------------------------------------
-# Rolling Cross-Asset Correlations – ADFM Edition
-# Clean rebuild. Only rolling correlations. Dynamic x/y scaling.
-# Matching original visual style. Max 30 charts.
-# ---------------------------------------------------------
+# cross_asset_weekly_compass.py
+# Weekly decision-grade view: correlations, vol, regime, conclusions, actions.
+# Rolling correlation pairs are now a precise, non-redundant cross-asset set.
 
 import math
 from datetime import datetime, timedelta
@@ -12,60 +10,133 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
-
+from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import streamlit as st
 
-# ---------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------
-st.set_page_config(page_title="Rolling Cross-Asset Correlations", layout="wide")
+# =========================
+# App config and style
+# =========================
+st.set_page_config(page_title="Weekly Cross-Asset Compass", layout="wide")
 
 plt.rcParams.update({
-    "figure.figsize": (7, 3),
+    "figure.figsize": (8, 3),
     "axes.grid": True,
     "grid.alpha": 0.25,
-    "axes.titlesize": 13,
-    "axes.labelsize": 11,
+    "axes.titlesize": 14,
+    "axes.labelsize": 10,
     "xtick.labelsize": 9,
     "ytick.labelsize": 9,
-    "lines.linewidth": 1.6,
+    "lines.linewidth": 2.0,
 })
 
+st.title("Weekly Cross-Asset Compass")
+st.caption("Data: Yahoo Finance via yfinance. Focus: what changed this week, why it matters, and how to express it.")
 
-# ---------------------------------------------------------
-# EXPANDED UNIVERSE (curated for quality + variety)
-# ---------------------------------------------------------
-UNIVERSE = {
-    "US Equities": ["^GSPC", "^NDX", "^RUT", "IWM", "QQQ"],
-    "Global Equities": ["^STOXX50E", "^N225", "EEM", "EWJ"],
-    "Credit": ["LQD", "HYG"],
+# =========================
+# Universe
+# =========================
+GROUPS = {
+    "Equities": ["^GSPC", "^RUT", "^STOXX50E", "^N225", "EEM"],
+    "Corporate Credit": ["LQD", "HYG"],
     "Rates": ["^TNX", "^TYX"],
-    "Commodities": ["CL=F", "NG=F", "GC=F", "HG=F"],
-    "FX": ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"],
+    "Commodities": ["CL=F", "GLD", "HG=F"],
+    "FX": ["EURUSD=X", "USDJPY=X", "GBPUSD=X"],
 }
+ORDER = sum(GROUPS.values(), [])
+IV_TICKERS = ["^VIX", "^OVX", "^VIX3M"]
 
-ALL_TICKERS = list(dict.fromkeys(sum(UNIVERSE.values(), [])))
+# Curated, non redundant rolling correlation universe:
+# - SPX vs rates, credit, oil, gold
+# - Small caps vs rates
+# - EM vs credit and funding FX
+# - Europe vs EURUSD
+# - Japan vs USDJPY
+# - HY vs oil, IG vs rates
+PAIR_SPECS = [
+    dict(a="^GSPC", b="^TNX",      la="SPX", lb="US10Y",  title="SPX vs 10Y rates"),
+    dict(a="^GSPC", b="HYG",       la="SPX", lb="HY",     title="SPX vs high yield credit"),
+    dict(a="^GSPC", b="LQD",       la="SPX", lb="IG",     title="SPX vs IG credit"),
+    dict(a="^GSPC", b="CL=F",      la="SPX", lb="WTI",    title="SPX vs oil"),
+    dict(a="^GSPC", b="GLD",       la="SPX", lb="Gold",   title="SPX vs gold"),
 
+    dict(a="^RUT",  b="^TNX",      la="RTY", lb="US10Y",  title="Small caps vs 10Y"),
 
-# ---------------------------------------------------------
-# HELPERS
-# ---------------------------------------------------------
-def pct_returns(prices):
-    return prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna(how="all")
+    dict(a="EEM",   b="HYG",       la="EM",  lb="HY",     title="EM vs high yield credit"),
+    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD", title="Europe vs EURUSD"),
+    dict(a="^N225", b="USDJPY=X",  la="NKY", lb="USDJPY", title="Japan vs USDJPY"),
+    dict(a="EEM",   b="USDJPY=X",  la="EM",  lb="USDJPY", title="EM vs USDJPY"),
 
+    dict(a="HYG",   b="CL=F",      la="HY",  lb="WTI",    title="HY credit vs oil"),
+    dict(a="LQD",   b="^TNX",      la="IG",  lb="US10Y",  title="IG credit vs 10Y"),
+]
 
-@st.cache_data(show_spinner=False, ttl=1800)
-def fetch_prices(tickers, start, end):
-    data = yf.download(
-        tickers=tickers,
-        start=start,
-        end=end,
-        interval="1d",
-        auto_adjust=True,
-        group_by="ticker",
-        progress=False,
-        threads=True,
+# =========================
+# Sidebar
+# =========================
+st.sidebar.header("About this tool")
+st.sidebar.markdown(
+    """
+**Objective**  
+Weekly cross-asset compass that blends correlations, volatility, and regime flags into a single view you can act on.
+
+**Design**  
+- Daily closes from Yahoo Finance only  
+- 1M or 3M rolling windows on daily returns  
+- Regime built from VIX term structure, VIX level, SPX realized vol, and SPX vs 10Y correlation  
+- Correlation panels for key equity vs rates, credit, oil, FX pairs  
+- Vol block tracks both realized 1M vol and implied indices
+
+**Outputs**  
+- Regime read (risk-on, cautious, risk-off) with key metrics in the header  
+- Action bullets, expressions, and explicit invalidation levels  
+- Correlation matrix quickscan and weekly snapshot tables for correlations and vol
+
+**Use cases**  
+- Align gross and net with the current stress regime  
+- Check whether equities are trading with or against duration and credit  
+- Sanity check single-name or sector exposure against the broader cross-asset tape
+"""
+)
+
+st.sidebar.header("Controls")
+lookback_years = st.sidebar.slider("History window (years)", 5, 15, 10)
+win = st.sidebar.selectbox("Rolling window", [21, 63], index=0)  # 1M or ~3M
+wk_delta = st.sidebar.selectbox("Compare vs", ["1 week ago", "2 weeks ago"], index=0)
+wk_back = 5 if wk_delta == "1 week ago" else 10  # business days
+rho_alert = st.sidebar.slider("|ρ| alert threshold", 0.30, 0.90, 0.50, 0.05)
+z_hot = st.sidebar.slider("Hot vol Z threshold", 1.0, 3.0, 1.5, 0.1)
+z_cold = st.sidebar.slider("Cold vol Z threshold", -3.0, -1.0, -1.5, 0.1)
+clip_extremes = st.sidebar.checkbox("Clip chart y-axes at 1st to 99th pct", value=True)
+
+# =========================
+# Helpers
+# =========================
+def pastelize_cmap(name="RdYlGn", lighten=0.70, n=256):
+    base = plt.cm.get_cmap(name, n)
+    colors = base(np.linspace(0, 1, n))
+    colors[:, :3] = 1.0 - lighten * (1.0 - colors[:, :3])
+    return ListedColormap(colors)
+
+def pastel_red_white_green():
+    return LinearSegmentedColormap.from_list(
+        "RwG_pastel",
+        [(0.93, 0.60, 0.60), (1.0, 1.0, 1.0), (0.60, 0.85, 0.60)],
+        N=256
     )
+
+PASTEL_RdYlGn = pastelize_cmap("RdYlGn", lighten=0.70)
+PASTEL_RWG = pastel_red_white_green()
+
+@st.cache_data(show_spinner=False, ttl=60 * 30)
+def fetch_prices(tickers, start, end, interval="1d"):
+    try:
+        data = yf.download(
+            tickers=tickers, start=start, end=end, interval=interval,
+            auto_adjust=True, progress=False, group_by="ticker", threads=True
+        )
+    except Exception as e:
+        st.error(f"Yahoo Finance error: {e}")
+        return pd.DataFrame()
 
     if data is None or len(data) == 0:
         return pd.DataFrame()
@@ -73,178 +144,389 @@ def fetch_prices(tickers, start, end):
     if isinstance(data.columns, pd.MultiIndex):
         frames = []
         for t in tickers:
-            if t not in data.columns.get_level_values(0):
+            try:
+                if t not in data.columns.get_level_values(0):
+                    continue
+                df = data[t].copy()
+                col = "Adj Close" if "Adj Close" in df.columns else ("Close" if "Close" in df.columns else df.columns[0])
+                frames.append(df[col].rename(t).to_frame())
+            except Exception:
                 continue
-            df = data[t]
-            col = "Adj Close" if "Adj Close" in df else "Close"
-            frames.append(df[col].rename(t))
-        return pd.concat(frames, axis=1).sort_index()
+        if not frames:
+            return pd.DataFrame()
+        wide = pd.concat(frames, axis=1)
+    else:
+        col = "Adj Close" if "Adj Close" in data.columns else ("Close" if "Close" in data.columns else data.columns[0])
+        wide = data[[col]]
+        if len(tickers) == 1:
+            wide = wide.rename(columns={col: tickers[0]})
+    wide.index.name = "Date"
+    return wide.sort_index()
 
-    return pd.DataFrame()
+def pct_returns(prices):
+    return prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna(how="all")
 
+def realized_vol(returns, window=21, annualization=252):
+    return returns.rolling(window).std() * math.sqrt(annualization)
 
-def roll_corr(df, a, b, win):
-    if a not in df.columns or b not in df.columns:
+def zscores(series):
+    s = pd.Series(series).dropna()
+    if s.empty:
+        return s
+    m, sd = s.mean(), s.std(ddof=0)
+    if sd == 0 or np.isnan(sd):
+        return pd.Series(np.nan, index=s.index)
+    return (s - m) / sd
+
+def percentile_of_last(series):
+    s = pd.Series(series).dropna()
+    return float(s.rank(pct=True).iloc[-1] * 100.0) if not s.empty else np.nan
+
+def current_value(series):
+    s = pd.Series(series).dropna()
+    return float(s.iloc[-1]) if not s.empty else np.nan
+
+def clip_limits(array_like, pmin=1, pmax=99):
+    if not clip_extremes:
+        return None
+    a = pd.Series(np.asarray(array_like).astype(float)).dropna()
+    if a.empty:
+        return None
+    lo, hi = np.percentile(a, [pmin, pmax])
+    span = hi - lo
+    return (lo - 0.05*span, hi + 0.05*span)
+
+def roll_corr(ret_df, a, b, window=21):
+    if a not in ret_df.columns or b not in ret_df.columns:
         return pd.Series(dtype=float)
-    tmp = df[[a, b]].dropna()
-    if tmp.empty:
+    df = ret_df[[a, b]].dropna()
+    if df.empty:
         return pd.Series(dtype=float)
-    return tmp[a].rolling(win).corr(tmp[b])
+    return df[a].rolling(window).corr(df[b])
 
+def computed_height(n_rows, row_px=32, header_px=38, pad_px=16, max_px=800):
+    return min(max_px, int(header_px + row_px * n_rows + pad_px))
 
-def auto_commentary(corr_last, pairs):
-    if corr_last.empty:
-        return "No correlation signal."
+def hide_index_compat(styler: pd.io.formats.style.Styler) -> pd.io.formats.style.Styler:
+    """Hide index across pandas versions."""
+    # pandas >= 1.4
+    if hasattr(styler, "hide"):
+        try:
+            return styler.hide(axis="index")
+        except Exception:
+            pass
+    # pandas >= 1.5
+    if hasattr(styler, "hide_index"):
+        try:
+            return styler.hide_index()
+        except Exception:
+            pass
+    return styler  # fallback
 
-    lines = []
+# =========================
+# Data
+# =========================
+end_date = datetime.now().date()
+start_date = (datetime.now() - timedelta(days=365*lookback_years)).date()
+ALL = list(dict.fromkeys(ORDER + IV_TICKERS))
 
-    strong_pos = corr_last[corr_last > 0.6].sort_values(ascending=False)
-    strong_neg = corr_last[corr_last < -0.6].sort_values()
+with st.spinner("Downloading market data..."):
+    PRICES = fetch_prices(ALL, str(start_date), str(end_date), interval="1d")
 
-    if not strong_pos.empty:
-        items = [f"{a} vs {b} at {v:.0%}" for (a, b, v) in pairs if v in strong_pos.values]
-        lines.append("Strong positive correlations: " + "; ".join(items))
-
-    if not strong_neg.empty:
-        items = [f"{a} vs {b} at {v:.0%}" for (a, b, v) in pairs if v in strong_neg.values]
-        lines.append("Strong negative correlations: " + "; ".join(items))
-
-    if not lines:
-        return "Correlations are mostly mid-range. No strong cross-asset regime signal."
-
-    return " ".join(lines)
-
-
-# ---------------------------------------------------------
-# SIDEBAR
-# ---------------------------------------------------------
-st.sidebar.header("About this tool")
-st.sidebar.markdown(
-    """
-Rolling cross-asset correlations across equities, credit, rates,
-commodities, and FX using Yahoo Finance data.  
-Designed for regime detection, hedge selection, and factor alignment.
-"""
-)
-
-window_choice = st.sidebar.selectbox(
-    "Analysis window",
-    ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"],
-    index=3,
-)
-
-lookback_map = {
-    "1M": 21,
-    "3M": 63,
-    "6M": 126,
-    "YTD": None,
-    "1Y": 252,
-    "3Y": 252 * 3,
-    "5Y": 252 * 5,
-    "10Y": 252 * 10,
-}
-
-rolling_window = st.sidebar.selectbox("Rolling window (days)", [21, 63], index=0)
-
-
-# ---------------------------------------------------------
-# DATA LOAD
-# ---------------------------------------------------------
-end = datetime.now().date()
-start = (datetime.now() - timedelta(days=365 * 12)).date()
-
-PR = fetch_prices(ALL_TICKERS, str(start), str(end))
-if PR.empty:
-    st.error("No price data returned.")
+if PRICES.empty:
+    st.error("No data downloaded. Check connectivity.")
     st.stop()
 
-RET = pct_returns(PR)
+BASE = PRICES[[c for c in ORDER if c in PRICES.columns]].copy()
+IV   = PRICES[[c for c in IV_TICKERS if c in PRICES.columns]].copy()
+RET = pct_returns(BASE)
+REALVOL = realized_vol(RET, window=21)
 
-# Apply selected analysis window
-if window_choice == "YTD":
-    y0 = datetime(datetime.now().year, 1, 1)
-    RETW = RET[RET.index >= y0]
+last_date = BASE.index.max()
+wk_ago_idx = BASE.index.get_loc(last_date) - wk_back if last_date is not None else None
+st.info(f"Data last date: {last_date.strftime('%Y-%m-%d')}" if pd.notna(last_date) else "No dates available.")
+
+# =========================
+# Regime classification
+# =========================
+def vix_term_structure(iv_df):
+    if "^VIX" in iv_df.columns and "^VIX3M" in iv_df.columns:
+        ts = iv_df["^VIX3M"] / iv_df["^VIX"] - 1.0
+        return ts.dropna()
+    return pd.Series(dtype=float)
+
+def classify_regime():
+    ts = vix_term_structure(IV)
+    vix = IV["^VIX"] if "^VIX" in IV.columns else pd.Series(dtype=float)
+    rv_spx = REALVOL["^GSPC"] * 100 if "^GSPC" in REALVOL.columns else pd.Series(dtype=float)
+    corr_er = roll_corr(RET, "^GSPC", "^TNX", win)
+
+    ts_now = current_value(ts)
+    vix_now = current_value(vix)
+    rv_now = current_value(rv_spx)
+    corr_now = current_value(corr_er)
+
+    stress = 0
+    if ts_now is not None and not np.isnan(ts_now) and ts_now < 0:
+        stress += 1
+    if vix_now is not None and not np.isnan(vix_now) and vix_now >= 25:
+        stress += 1
+    if rv_now is not None and not np.isnan(rv_now) and percentile_of_last(rv_spx) >= 70:
+        stress += 1
+    if corr_now is not None and not np.isnan(corr_now) and corr_now >= 0.5:
+        stress += 1
+
+    if stress >= 3:
+        regime = "Risk-off"
+    elif stress == 2:
+        regime = "Cautious"
+    else:
+        regime = "Risk-on to neutral"
+
+    return dict(regime=regime, ts_now=ts_now, vix_now=vix_now, rv_now=rv_now, corr_now=corr_now)
+
+reg = classify_regime()
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Regime", reg["regime"])
+c2.metric("VIX3M/VIX − 1", f"{reg['ts_now']:+.3f}" if reg["ts_now"] is not None and not np.isnan(reg["ts_now"]) else "NA")
+c3.metric("VIX", f"{reg['vix_now']:.1f}" if reg["vix_now"] is not None and not np.isnan(reg["vix_now"]) else "NA")
+c4.metric("SPX vs 10Y ρ", f"{reg['corr_now']:.1%}" if reg["corr_now"] is not None and not np.isnan(reg["corr_now"]) else "NA")
+
+# =========================
+# Conclusions and actions
+# =========================
+st.subheader("Conclusions and actions")
+
+bullets = []
+
+corr_er = roll_corr(RET, "^GSPC", "^TNX", win)
+if not corr_er.empty:
+    rho = corr_er.iloc[-1]
+    if rho <= -0.30:
+        bullets.append(f"Equity vs rates negative at {rho:.0%}. Duration rallies should support equities.")
+    elif rho >= 0.30:
+        bullets.append(f"Equity vs rates positive at {rho:.0%}. Rate selloffs are pressuring equities.")
+
+if "^GSPC" in REALVOL.columns and "^VIX" in IV.columns:
+    rv = (REALVOL["^GSPC"] * 100).dropna()
+    vix = IV["^VIX"].dropna()
+    both = rv.to_frame("rv").join(vix.to_frame("vix"), how="inner")
+    if not both.empty:
+        spread = both["vix"] - both["rv"]
+        z = zscores(spread)
+        sp_now = float(spread.iloc[-1])
+        z_now  = float(z.iloc[-1]) if not z.empty else np.nan
+        if z_now >= 1.0:
+            bullets.append(f"VIX rich to realized by {sp_now:.1f} pts. Overwrite or short-vol structures are attractive.")
+        elif z_now <= -1.0:
+            bullets.append(f"VIX cheap to realized by {sp_now:.1f} pts. Consider buying convexity or collars.")
+
+ts = vix_term_structure(IV)
+if not ts.dropna().empty:
+    ts_now = ts.iloc[-1]
+    if ts_now < 0:
+        bullets.append("VIX term structure in backwardation. Respect gap risk and keep leverage modest.")
+    elif ts_now > 0.10:
+        bullets.append("VIX term structure in contango. Carry and relative value should work better.")
+
+def add_hot_cold(label, s):
+    if s is None or s.dropna().empty:
+        return
+    z = zscores(s.dropna())
+    if z.empty:
+        return
+    z_now = float(z.iloc[-1])
+    if z_now >= z_hot:
+        bullets.append(f"{label} volatility hot on a Z of {z_now:.2f}. Tighten risk on exposures tied to this factor.")
+    if z_now <= z_cold:
+        bullets.append(f"{label} volatility cold on a Z of {z_now:.2f}. Harvest carry where risk is bounded.")
+
+if "HYG" in REALVOL.columns:
+    add_hot_cold("High yield", REALVOL["HYG"] * 100)
+if "CL=F" in REALVOL.columns:
+    add_hot_cold("Oil", REALVOL["CL=F"] * 100)
+
+if reg["regime"] == "Risk-off":
+    bullets.append("Overall read is risk-off. Favor defensives, reduce gross, add convexity.")
+elif reg["regime"] == "Cautious":
+    bullets.append("Overall read is cautious. Keep nets modest and rely on pairs and relative value.")
 else:
-    days = lookback_map[window_choice]
-    RETW = RET.iloc[-days:] if len(RET) > days else RET.copy()
+    bullets.append("Overall read is neutral to constructive. Let carry work but define invalidations.")
 
-if RETW.empty:
-    st.error("Insufficient data for selected window.")
-    st.stop()
+express = [
+    "If VIX rich to realized, run covered calls or short-dated call spreads against longs.",
+    "If HY vol stays hot and equities track credit, hedge with HYG puts or IG vs HY relative value."
+]
+invalid = [
+    "Flip or reduce if SPX vs 10Y correlation crosses back through zero and holds for a week.",
+    "Flip or reduce if VIX term structure turns to contango and realized vol falls.",
+    "Re-assess if the VIX minus realized spread mean reverts by more than 1 standard deviation."
+]
 
-assets = RETW.columns.tolist()
+st.markdown("**Why this matters and how to act**")
+if bullets:
+    st.markdown("\n".join(f"- {b}" for b in bullets))
+else:
+    st.info("No strong weekly conclusions at current thresholds.")
 
+st.markdown("**Expressions**")
+st.markdown("\n".join(f"- {e}" for e in express))
+st.markdown("**Invalidations**")
+st.markdown("\n".join(f"- {x}" for x in invalid))
 
-# ---------------------------------------------------------
-# COMPUTE LAST CORRELATIONS FOR COMMENTARY
-# ---------------------------------------------------------
-pairs = []
-corr_last_vals = []
+# =========================
+# Compact visuals - Rolling correlations
+# =========================
+st.subheader("Correlation panels, rolling")
 
-for i in range(len(assets)):
-    for j in range(i):
-        a, b = assets[i], assets[j]
-        rc = roll_corr(RETW, a, b, rolling_window)
-        if not rc.dropna().empty:
-            v = float(rc.dropna().iloc[-1])
-            pairs.append((a, b, v))
-            corr_last_vals.append(v)
+def corr_with_context(ax, rc):
+    rc = rc.dropna()
+    if rc.empty:
+        return
+    mean_rc = rc.rolling(126).mean()
+    std_rc  = rc.rolling(126).std()
+    ax.fill_between(rc.index, (mean_rc-std_rc).values, (mean_rc+std_rc).values, alpha=0.15)
+    ax.plot(mean_rc.index, mean_rc.values, linewidth=1.5, label="6M mean")
+    ax.plot(rc.index, rc.values, linewidth=1.0, label=f"{win}D corr")
+    ax.axhline(0, linewidth=1)
+    lims = clip_limits(rc.values, 1, 99)
+    if lims:
+        ax.set_ylim(max(-1, lims[0]), min(1, lims[1]))
+    else:
+        ax.set_ylim(-1, 1)
+    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+    ax.margins(y=0.05)
+    ax.legend(loc="lower left", fontsize=8)
 
-
-corr_last_series = pd.Series(
-    corr_last_vals,
-    index=[f"{a}-{b}" for a, b, _ in pairs],
-    dtype=float,
-)
-
-# ---------------------------------------------------------
-# COMMENTARY
-# ---------------------------------------------------------
-st.subheader("Correlation Commentary")
-st.markdown(auto_commentary(corr_last_series, pairs))
-
-
-# ---------------------------------------------------------
-# ROLLING CORRELATION PANELS (MAX 30)
-# ---------------------------------------------------------
-st.subheader(f"Rolling Correlations ({rolling_window}-day)")
-
+# cap at 30 charts if PAIR_SPECS ever grows
 max_charts = 30
-pairs_to_plot = pairs[:max_charts]
-n_pairs = len(pairs_to_plot)
+specs_to_plot = PAIR_SPECS[:max_charts]
 
-rows = math.ceil(n_pairs / 3)
-idx = 0
-
-for r in range(rows):
+for row_specs in [specs_to_plot[:3], specs_to_plot[3:6], specs_to_plot[6:9], specs_to_plot[9:12]]:
+    row_specs = [s for s in row_specs if s] if isinstance(row_specs, list) else []
+    if not row_specs:
+        continue
     cols = st.columns(3)
-    for c in range(3):
-        if idx >= n_pairs:
-            break
+    for spec, col in zip(row_specs, cols):
+        with col:
+            fig, ax = plt.subplots()
+            rc = roll_corr(RET, spec["a"], spec["b"], win)
+            if rc.dropna().empty:
+                st.info("No data")
+            else:
+                corr_with_context(ax, rc)
+                ax.set_title(spec["title"])
+                plt.tight_layout()
+                st.pyplot(fig, use_container_width=True)
 
-        a, b, _ = pairs_to_plot[idx]
-        rc = roll_corr(RETW, a, b, rolling_window)
-        rc = rc.dropna()
+# =========================
+# Correlation matrix quickscan
+# =========================
+st.subheader("Cross-Asset Correlation Matrix (1M, lower triangle)")
+corr_raw = RET.tail(21).corr().replace([-np.inf, np.inf], np.nan) if len(RET) >= 21 else pd.DataFrame()
+if corr_raw.empty:
+    st.info("Insufficient data for matrix.")
+else:
+    order = [t for t in ORDER if t in corr_raw.columns]
+    mat = corr_raw.loc[order, order].copy().astype(float)
+    n = mat.shape[0]
+    for i in range(n):
+        for j in range(n):
+            if j >= i:
+                mat.iat[i, j] = np.nan
+            if i == j:
+                mat.iat[i, j] = np.nan
+    def _fmt(v): return "" if pd.isna(v) else f"{int(round(v*100, 0))}%"
+    sty = (
+        mat.style
+           .background_gradient(cmap=PASTEL_RWG, vmin=-0.75, vmax=0.75)
+           .format(_fmt)
+           .apply(lambda x: np.where((np.abs(x.values.astype(float)) >= rho_alert) & ~np.isnan(x.values),
+                                     "color:black; font-weight:700; border:1px solid #888; text-align:center; font-size:0.95rem;",
+                                     "color:black; text-align:center; font-size:0.95rem;"),
+                  axis=None)
+           .set_properties(**{"background-color": "white"})
+    )
+    sty = hide_index_compat(sty)
+    st.dataframe(sty, use_container_width=True, height=computed_height(mat.shape[0]))
+    st.caption(f"Bold marks |ρ| ≥ {rho_alert:.2f}. Use matrix to sanity-check panel reads.")
 
-        with cols[c]:
-            fig, ax = plt.subplots(figsize=(7, 3))
+# =========================
+# WEEKLY SNAPSHOTS — at the BOTTOM
+# =========================
+rows = []
+for spec in PAIR_SPECS:
+    rc = roll_corr(RET, spec["a"], spec["b"], win)
+    if rc.empty or np.isnan(rc.iloc[-1]):
+        continue
+    curr = float(rc.iloc[-1])
+    delta = np.nan
+    if rc.shape[0] > wk_back + 1 and not np.isnan(rc.iloc[-wk_back-1]):
+        delta = float(rc.iloc[-1] - rc.iloc[-wk_back-1])
+    pct = percentile_of_last(rc)
+    rows.append([spec["title"], spec["a"], spec["b"], curr, delta, pct])
 
-            if not rc.empty:
-                ymin = float(rc.min()) - 0.05
-                ymax = float(rc.max()) + 0.05
-                ymin = max(ymin, -1)
-                ymax = min(ymax, 1)
+corr_tbl = pd.DataFrame(rows, columns=[
+    "Pair", "Series A", "Series B", "ρ now (rolling)", "Δρ w/w", "Percentile rank"
+]).dropna(how="all")
+if not corr_tbl.empty:
+    corr_tbl = corr_tbl.sort_values("Δρ w/w", key=lambda s: s.abs(), ascending=False)
 
-                ax.plot(rc.index, rc.values, color="#336699", linewidth=1.6)
-                ax.set_ylim(ymin, ymax)
+vol_rows = []
+def add_vol(label, s, vclass, units):
+    if s is None or s.dropna().empty:
+        return
+    s = s.dropna()
+    lvl = float(s.iloc[-1])
+    dv  = np.nan
+    if s.shape[0] > wk_back + 1 and not np.isnan(s.iloc[-wk_back-1]):
+        dv = float(s.iloc[-1] - s.iloc[-wk_back-1])
+    pr  = percentile_of_last(s)
+    vol_rows.append([label, vclass, units, lvl, dv, pr])
 
-            ax.axhline(0, color="black", linewidth=1.0)
-            ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
-            ax.set_title(f"{a} vs {b}")
+if "^GSPC" in REALVOL.columns: add_vol("SPX 1M RV", REALVOL["^GSPC"] * 100, "Realized", "%")
+if "HYG" in REALVOL.columns:   add_vol("HY 1M RV",  REALVOL["HYG"] * 100,   "Realized", "%")
+if "CL=F" in REALVOL.columns:  add_vol("WTI 1M RV", REALVOL["CL=F"] * 100,  "Realized", "%")
+fx_cols = [c for c in REALVOL.columns if c.endswith("=X")]
+if "USDJPY=X" in fx_cols:      add_vol("USDJPY 1M RV", REALVOL["USDJPY=X"] * 100, "Realized", "%")
+elif fx_cols:                  add_vol(f"{fx_cols[0]} 1M RV", REALVOL[fx_cols[0]] * 100, "Realized", "%")
+if "^VIX" in IV.columns:       add_vol("VIX", IV["^VIX"], "Implied", "pts")
+if "^OVX" in IV.columns:       add_vol("OVX", IV["^OVX"], "Implied", "pts")
 
-            plt.tight_layout()
-            st.pyplot(fig, use_container_width=True)
+vol_tbl = pd.DataFrame(vol_rows, columns=["Series", "Class", "Units", "Level", "Δ w/w", "Percentile rank"]).dropna(how="all")
+if not vol_tbl.empty:
+    vol_tbl["abschg"] = vol_tbl["Δ w/w"].abs()
+    vol_tbl = vol_tbl.sort_values(["Class", "abschg"], ascending=[True, False], na_position="last").drop(columns=["abschg"])
 
-        idx += 1
+st.subheader("This week vs last: correlations and vol")
 
-# END OF FILE
+if not corr_tbl.empty:
+    corr_style = (
+        corr_tbl.style
+            .format({"ρ now (rolling)": "{:+.2%}", "Δρ w/w": "{:+.2%}", "Percentile rank": "{:.0f}%"})
+            .background_gradient(subset=["Δρ w/w"], cmap="RdYlGn")
+    )
+    corr_style = hide_index_compat(corr_style)
+    st.dataframe(corr_style, use_container_width=True, height=computed_height(corr_tbl.shape[0]))
+    st.caption("ρ now is the current rolling correlation of daily returns over the selected window. Δρ w/w is change versus the prior week. Percentile rank is within the chosen history window.")
+
+if not vol_tbl.empty:
+    vol_style = (
+        vol_tbl.style
+            .format({"Level": "{:.1f}", "Δ w/w": lambda v: "" if pd.isna(v) else f"{v:+.1f}", "Percentile rank": "{:.0f}%"})
+            .background_gradient(subset=["Δ w/w"], cmap="RdYlGn")
+    )
+    vol_style = hide_index_compat(vol_style)
+    st.dataframe(vol_style, use_container_width=True, height=computed_height(vol_tbl.shape[0]))
+    st.caption("Class identifies implied vs realized volatility. Units are points for implied indices and % for realized 1M vol. Δ w/w is change versus the prior week; Percentile rank is within the chosen history window.")
+
+# =========================
+# Downloads
+# =========================
+with st.expander("Download snapshots"):
+    if not corr_tbl.empty:
+        st.download_button("Weekly correlation snapshot CSV", corr_tbl.to_csv(index=False).encode(), file_name="weekly_corr_snapshot.csv")
+    if not vol_tbl.empty:
+        st.download_button("Weekly vol snapshot CSV", vol_tbl.to_csv(index=False).encode(), file_name="weekly_vol_snapshot.csv")
+
+st.caption("© 2025 AD Fund Management LP")
