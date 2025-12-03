@@ -1,60 +1,55 @@
-# Weekly Cross Asset Compass (Revised ADFM Edition)
-# Focus moves from diagnostics to high-signal narrative: what changed this week,
-# what drives regime, what it means for AI longs, rate hedges, JPY hedge, and energy legs.
+# ---------------------------------------------------------
+# Rolling Cross-Asset Correlation Dashboard
+# ADFM Edition – Clean, correlation-only, high-signal
+# ---------------------------------------------------------
 
 import math
 from datetime import datetime, timedelta
-
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import LinearSegmentedColormap
 
 import streamlit as st
 
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
-st.set_page_config(page_title="Weekly Cross Asset Compass", layout="wide")
+st.set_page_config(page_title="Rolling Cross-Asset Correlations", layout="wide")
 
 plt.rcParams.update({
-    "figure.figsize": (8, 3),
+    "figure.figsize": (7, 3),
     "axes.grid": True,
-    "grid.alpha": 0.22,
-    "axes.titlesize": 14,
+    "grid.alpha": 0.25,
+    "axes.titlesize": 13,
     "axes.labelsize": 11,
     "xtick.labelsize": 9,
     "ytick.labelsize": 9,
-    "lines.linewidth": 2.0,
+    "lines.linewidth": 1.8,
 })
 
-PASTEL_RWG = ListedColormap(
-    [(0.93, 0.60, 0.60), (1.0, 1.0, 1.0), (0.60, 0.85, 0.60)]
+# Red → Yellow → Green gradient for correlations
+RYG = LinearSegmentedColormap.from_list(
+    "RYG",
+    [(0.75, 0.2, 0.2), (0.95, 0.95, 0.5), (0.3, 0.7, 0.3)],
+    N=256
 )
 
 # ---------------------------------------------------------
-# UNIVERSE
+# EXPANDED UNIVERSE (feel free to expand further)
 # ---------------------------------------------------------
-GROUPS = {
-    "Equities": ["^GSPC", "^RUT", "^STOXX50E", "^N225", "EEM"],
-    "Corporate Credit": ["LQD", "HYG"],
-    "Rates": ["^TNX", "^TYX"],
-    "Commodities": ["CL=F", "GLD", "HG=F"],
-    "FX": ["EURUSD=X", "USDJPY=X", "GBPUSD=X"],
+UNIVERSE = {
+    "US Equities": ["^GSPC", "^NDX", "^RUT", "IWM", "QQQ"],
+    "Global Equities": ["^STOXX50E", "^N225", "EEM", "EWJ", "EWZ"],
+    "Credit": ["LQD", "HYG", "JNK"],
+    "Rates": ["^TNX", "^TYX", "^FVX"],
+    "Commodities": ["CL=F", "NG=F", "GC=F", "HG=F", "SI=F"],
+    "FX": ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X", "CNY=X"],
 }
-ORDER = sum(GROUPS.values(), [])
-IV_TICKERS = ["^VIX", "^OVX", "^VIX3M"]
 
-PAIR_SPECS = [
-    dict(a="^GSPC", b="^TNX", la="SPX", lb="US10Y", title="Equity vs Rates"),
-    dict(a="^GSPC", b="HYG",  la="SPX", lb="HY",    title="Equity vs HY Credit"),
-    dict(a="^GSPC", b="CL=F", la="SPX", lb="WTI",   title="Equity vs Oil"),
-    dict(a="^RUT",  b="LQD",  la="RTY", lb="IG",    title="Small Caps vs IG"),
-    dict(a="^STOXX50E", b="EURUSD=X", la="SX5E", lb="EURUSD", title="Europe vs EUR"),
-    dict(a="^N225", b="USDJPY=X", la="NKY", lb="USDJPY", title="Japan vs USDJPY"),
-]
+ALL_TICKERS = list(dict.fromkeys(sum(UNIVERSE.values(), [])))
 
 # ---------------------------------------------------------
 # HELPERS
@@ -62,43 +57,17 @@ PAIR_SPECS = [
 def pct_returns(prices):
     return prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna(how="all")
 
-def realized_vol(returns, window=21, ann=252):
-    return returns.rolling(window).std() * math.sqrt(ann)
-
-def zscores(series):
-    s = pd.Series(series).dropna()
-    if s.empty:
-        return s
-    m, sd = s.mean(), s.std(ddof=0)
-    if sd == 0 or np.isnan(sd):
-        return pd.Series(np.nan, index=s.index)
-    return (s - m) / sd
-
-def percentile_last(series):
-    s = pd.Series(series).dropna()
-    return float(s.rank(pct=True).iloc[-1] * 100.0) if not s.empty else np.nan
-
-def clip_limits(v):
-    s = pd.Series(v).dropna()
-    if s.empty:
-        return None
-    lo, hi = np.percentile(s, [1, 99])
-    span = hi - lo
-    return lo - 0.05 * span, hi + 0.05 * span
-
-def roll_corr(df, a, b, window):
-    if a not in df.columns or b not in df.columns:
-        return pd.Series(dtype=float)
-    tmp = df[[a, b]].dropna()
-    if tmp.empty:
-        return pd.Series(dtype=float)
-    return tmp[a].rolling(window).corr(tmp[b])
-
 @st.cache_data(show_spinner=False, ttl=1800)
-def fetch_prices(tickers, start, end):
+def fetch(tickers, start, end):
     data = yf.download(
-        tickers, start=start, end=end,
-        interval="1d", auto_adjust=True, progress=False, group_by="ticker", threads=True
+        tickers,
+        start=start,
+        end=end,
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        group_by="ticker",
+        threads=True
     )
     if data is None or len(data) == 0:
         return pd.DataFrame()
@@ -109,211 +78,190 @@ def fetch_prices(tickers, start, end):
             if t not in data.columns.get_level_values(0):
                 continue
             df = data[t]
-            c = "Adj Close" if "Adj Close" in df.columns else "Close"
-            frames.append(df[c].rename(t).to_frame())
+            col = "Adj Close" if "Adj Close" in df else "Close"
+            frames.append(df[col].rename(t))
         return pd.concat(frames, axis=1).sort_index()
-    else:
-        return data.rename(columns={"Adj Close": tickers[0], "Close": tickers[0]})
+
+    return pd.DataFrame()
+
+def roll_corr(df, a, b, window):
+    if a not in df.columns or b not in df.columns:
+        return pd.Series(dtype=float)
+    tmp = df[[a, b]].dropna()
+    if tmp.empty:
+        return pd.Series(dtype=float)
+    return tmp[a].rolling(window).corr(tmp[b])
+
+def smooth(series):
+    return series.rolling(3).mean() if series is not None else series
+
+def auto_commentary(cmat, asset_labels):
+    if cmat.dropna(how="all").empty:
+        return "Correlation matrix empty. No signal."
+
+    # Identify strong positive and negative pairs
+    pairs = []
+    for i in range(len(asset_labels)):
+        for j in range(i):
+            v = cmat.iat[i, j]
+            if pd.isna(v):
+                continue
+            pairs.append((asset_labels[i], asset_labels[j], v))
+
+    if not pairs:
+        return "No usable correlation pairs."
+
+    # Sort strongest absolute correlations
+    pairs_sorted = sorted(pairs, key=lambda x: abs(x[2]), reverse=True)
+    top_pos = [p for p in pairs_sorted if p[2] > 0][:3]
+    top_neg = [p for p in pairs_sorted if p[2] < 0][:3]
+
+    text = ""
+
+    if top_pos:
+        text += "Highest positive correlations: "
+        text += "; ".join([f"{a} with {b} at {v:.0%}" for a, b, v in top_pos]) + ". "
+    if top_neg:
+        text += "Highest negative correlations: "
+        text += "; ".join([f"{a} vs {b} at {v:.0%}" for a, b, v in top_neg]) + ". "
+
+    # Look for correlation regime shifts
+    shocks = []
+    for a, b, v in pairs_sorted[:8]:
+        if abs(v) > 0.7:
+            shocks.append(f"{a}/{b} showing regime-level correlation at {v:.0%}")
+    if shocks:
+        text += "Regime signals: " + "; ".join(shocks) + ". "
+
+    return text.strip()
+
+# ---------------------------------------------------------
+# SIDEBAR
+# ---------------------------------------------------------
+st.sidebar.header("About this tool")
+st.sidebar.markdown(
+    """
+Rolling cross-asset correlation dashboard using Yahoo Finance data.
+Clean, high-signal, used to understand how equities, credit, rates,
+commodities and FX move together across chosen time horizons.
+"""
+)
+
+window_choice = st.sidebar.selectbox(
+    "Analysis window",
+    ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"],
+    index=3
+)
+
+lookback_map = {
+    "1M": 21,
+    "3M": 63,
+    "6M": 126,
+    "YTD": None,
+    "1Y": 252,
+    "3Y": 252 * 3,
+    "5Y": 252 * 5,
+    "10Y": 252 * 10,
+}
+
+rolling_win = st.sidebar.selectbox("Rolling window (days)", [21, 63], index=0)
+do_smooth = st.sidebar.checkbox("Smooth rolling correlations", value=True)
 
 # ---------------------------------------------------------
 # DATA LOAD
 # ---------------------------------------------------------
 end = datetime.now().date()
-start = (datetime.now() - timedelta(days=3650)).date()  # fixed 10y history
+start = (datetime.now() - timedelta(days=365 * 12)).date()
 
-ALL = list(dict.fromkeys(ORDER + IV_TICKERS))
-
-PR = fetch_prices(ALL, str(start), str(end))
+PR = fetch(ALL_TICKERS, str(start), str(end))
 if PR.empty:
-    st.error("No data returned.")
+    st.error("No data returned from Yahoo Finance.")
     st.stop()
 
 RET = pct_returns(PR)
-RV = realized_vol(RET, 21)
-IV = PR[IV_TICKERS].copy()
+
+# Apply analysis window subset
+if window_choice == "YTD":
+    y0 = datetime(datetime.now().year, 1, 1)
+    RETW = RET[RET.index >= y0]
+else:
+    days = lookback_map[window_choice]
+    RETW = RET.iloc[-days:] if len(RET) > days else RET.copy()
+
+if RETW.empty:
+    st.error("Insufficient data for the selected window.")
+    st.stop()
+
+asset_list = RETW.columns.tolist()
 
 # ---------------------------------------------------------
-# REGIME CONSTRUCTION
+# ROLLING CORRELATION MATRIX
 # ---------------------------------------------------------
-def vix_term(iv):
-    if "^VIX" in iv.columns and "^VIX3M" in iv.columns:
-        return iv["^VIX3M"] / iv["^VIX"] - 1.0
-    return pd.Series(dtype=float)
+st.subheader(f"Rolling Correlation Matrix ({window_choice})")
 
-def classify():
-    ts = vix_term(IV)
-    rv_spx = RV["^GSPC"] * 100 if "^GSPC" in RV.columns else pd.Series(dtype=float)
-    corr_er = roll_corr(RET, "^GSPC", "^TNX", 21)
+# Compute last available rolling correlation between all pairs
+corr_last = pd.DataFrame(index=asset_list, columns=asset_list, dtype=float)
 
-    d = dict(
-        ts_now=float(ts.dropna().iloc[-1]) if not ts.dropna().empty else np.nan,
-        vix_now=float(IV["^VIX"].dropna().iloc[-1]) if "^VIX" in IV.columns else np.nan,
-        rv_now=float(rv_spx.dropna().iloc[-1]) if not rv_spx.dropna().empty else np.nan,
-        corr_now=float(corr_er.dropna().iloc[-1]) if not corr_er.dropna().empty else np.nan,
-    )
+for a in asset_list:
+    for b in asset_list:
+        if a == b:
+            corr_last.loc[a, b] = np.nan
+            continue
+        rc = roll_corr(RETW, a, b, rolling_win)
+        if do_smooth:
+            rc = smooth(rc)
+        corr_last.loc[a, b] = rc.dropna().iloc[-1] if not rc.dropna().empty else np.nan
 
-    stress = 0
-    if d["ts_now"] < 0: stress += 1
-    if d["vix_now"] >= 25: stress += 1
-    if percentile_last(rv_spx) >= 70: stress += 1
-    if d["corr_now"] >= 0.50: stress += 1
-
-    if stress >= 3:
-        d["regime"] = "Risk off"
-    elif stress == 2:
-        d["regime"] = "Cautious"
-    else:
-        d["regime"] = "Neutral or constructive"
-
-    return d
-
-REG = classify()
-
-# ---------------------------------------------------------
-# FIXED AND SAFE DELTA LOGIC
-# ---------------------------------------------------------
-st.subheader("Regime Drivers")
-
-last = PR.index[-1]
-idx_wk = PR.index.get_loc(last) - 5
-
-def compute_delta(series, idx_wk):
-    s = series.dropna()
-    if s.empty or idx_wk < 0 or idx_wk >= len(s):
-        return None
-    return float(s.iloc[-1] - s.iloc[idx_wk])
-
-ts = vix_term(IV)
-rv = RV["^GSPC"] * 100
-corr = roll_corr(RET, "^GSPC", "^TNX", 21)
-
-ts_delta = compute_delta(ts, idx_wk)
-vix_delta = compute_delta(IV["^VIX"], idx_wk)
-corr_delta = compute_delta(corr, idx_wk)
-
-cols = st.columns(4)
-cols[0].metric("Regime", REG["regime"])
-cols[1].metric("VIX3M divided by VIX minus 1", f"{REG['ts_now']:+.3f}", ts_delta)
-cols[2].metric("VIX", f"{REG['vix_now']:.1f}", vix_delta)
-cols[3].metric("SPX vs 10Y correlation", f"{REG['corr_now']:.1%}", corr_delta)
-
-# ---------------------------------------------------------
-# NARRATIVE
-# ---------------------------------------------------------
-st.subheader("This Week's Read")
-
-text = """
-Equity rate correlation stayed positive which keeps pressure on growth when yields back up and supports the logic of holding a JPY hedge against the AI basket.  
-VIX remains above its 20th percentile and SPX realized vol is drifting higher so convexity is not cheap enough to ignore but not stressed enough to force gross cuts.  
-Oil correlations softened which helps your AI longs and reduces tail risk from energy volatility bleeding into factor dispersion.
-"""
-
-st.markdown(text)
-
-# ---------------------------------------------------------
-# TAPE STRIP
-# ---------------------------------------------------------
-st.subheader("Cross Asset Tape Snapshot")
-
-strip_cols = st.columns(5)
-assets = ["^GSPC", "^TNX", "HYG", "CL=F", "USDJPY=X"]
-labels = ["SPX", "US10Y", "HY", "WTI", "JPY"]
-
-for col, t, lab in zip(strip_cols, assets, labels):
-    s = PR[t].dropna()
-    w = s.pct_change(5).iloc[-1] if len(s) > 5 else np.nan
-    col.metric(lab, f"{s.iloc[-1]:.2f}", f"{w:.2%}")
-
-# ---------------------------------------------------------
-# CORRELATION PANELS
-# ---------------------------------------------------------
-st.subheader("Rolling Correlations")
-
-def corr_panel(spec):
-    rc = roll_corr(RET, spec["a"], spec["b"], 21)
-    if rc.empty:
-        st.info("No data")
-        return
-    fig, ax = plt.subplots(figsize=(8, 3))
-    mean = rc.rolling(126).mean()
-    std = rc.rolling(126).std()
-
-    ax.fill_between(rc.index, mean - std, mean + std, alpha=0.18)
-    ax.plot(rc.index, rc, color="#336699", linewidth=1.3)
-    ax.axhline(0, color="black", linewidth=1.0)
-    lim = clip_limits(rc.values)
-    if lim:
-        ax.set_ylim(lim)
-    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
-    ax.set_title(spec["title"])
-    st.pyplot(fig, use_container_width=True)
-
-row1 = st.columns(3)
-row2 = st.columns(3)
-
-for spec, col in zip(PAIR_SPECS[:3], row1):
-    with col:
-        corr_panel(spec)
-
-for spec, col in zip(PAIR_SPECS[3:], row2):
-    with col:
-        corr_panel(spec)
-
-# ---------------------------------------------------------
-# CORRELATION MATRIX
-# ---------------------------------------------------------
-st.subheader("1M Correlation Matrix")
-
-corr1m = RET.tail(21).corr()
-order = [t for t in ORDER if t in corr1m.columns]
-mat = corr1m.loc[order, order].copy()
-
-n = mat.shape[0]
-for i in range(n):
-    for j in range(n):
-        if j >= i:
-            mat.iat[i, j] = np.nan
+# Mask upper triangle
+for i in range(len(asset_list)):
+    for j in range(i, len(asset_list)):
+        corr_last.iat[i, j] = np.nan
 
 sty = (
-    mat.style
-        .background_gradient(cmap=PASTEL_RWG, vmin=-0.75, vmax=0.75)
-        .format(lambda v: "" if pd.isna(v) else f"{v*100:.0f}%")
+    corr_last.style
+        .background_gradient(cmap=RYG, vmin=-1, vmax=1)
+        .format(lambda x: "" if pd.isna(x) else f"{x:.0%}")
 )
 
-st.dataframe(sty, use_container_width=True, height=500)
+st.dataframe(sty, use_container_width=True, height=600)
 
 # ---------------------------------------------------------
-# VOL SNAPSHOT
+# AUTO COMMENTARY
 # ---------------------------------------------------------
-st.subheader("Volatility Snapshot")
+st.subheader("Correlation Read")
+st.markdown(auto_commentary(corr_last, asset_list))
 
-rows = []
+# ---------------------------------------------------------
+# PAIRWISE ROLLING CORRELATION PANELS
+# ---------------------------------------------------------
+st.subheader(f"Rolling Correlations ({rolling_win} day)")
 
-def add_vol(label, series, cls):
-    s = series.dropna()
-    if s.empty:
-        return
-    lvl = float(s.iloc[-1])
-    wk = float(s.iloc[-1] - s.iloc[-6]) if len(s) > 6 else np.nan
-    pct = percentile_last(s)
-    rows.append([label, cls, lvl, wk, pct])
+# Create figure grid
+n = len(asset_list)
+pairs = [(asset_list[i], asset_list[j]) for i in range(n) for j in range(i)]
+rows = math.ceil(len(pairs) / 3)
 
-if "^GSPC" in RV: add_vol("SPX 1M RV", RV["^GSPC"]*100, "Realized")
-if "HYG" in RV: add_vol("HY 1M RV", RV["HYG"]*100, "Realized")
-if "CL=F" in RV: add_vol("WTI 1M RV", RV["CL=F"]*100, "Realized")
-if "^VIX" in IV: add_vol("VIX", IV["^VIX"], "Implied")
-if "^OVX" in IV: add_vol("OVX", IV["^OVX"], "Implied")
+fig_idx = 0
 
-tbl = pd.DataFrame(rows, columns=["Series", "Class", "Level", "Delta w over w", "Percentile"])
+for i in range(rows):
+    cols = st.columns(3)
+    for j in range(3):
+        if fig_idx >= len(pairs):
+            break
+        a, b = pairs[fig_idx]
+        rc = roll_corr(RETW, a, b, rolling_win)
+        if do_smooth:
+            rc = smooth(rc)
 
-sty2 = (
-    tbl.style
-        .format({
-            "Level": "{:.1f}",
-            "Delta w over w": lambda x: "" if pd.isna(x) else f"{x:+.1f}",
-            "Percentile": "{:.0f}%"
-        })
-        .background_gradient(subset=["Delta w over w"], cmap="RdYlGn")
-)
+        with cols[j]:
+            fig, ax = plt.subplots(figsize=(7, 3))
+            ax.plot(rc.index, rc.values, color="#336699", linewidth=1.4)
+            ax.axhline(0, color="black", linewidth=1.0)
+            ax.set_title(f"{a} vs {b}")
+            ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
 
-st.dataframe(sty2, use_container_width=True, height=400)
+        fig_idx += 1
+
+# END OF FILE
