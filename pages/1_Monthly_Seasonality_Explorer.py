@@ -1,6 +1,6 @@
 # seasonality_dashboard.py
 # Monthly Seasonality Explorer
-# - Bar+table unchanged
+# - Bar+table unchanged visually
 # - Intra-month curve: two lines only
 #     • Solid black: average over [start_year–end_year]
 #     • Dashed black: current year path (if available)
@@ -43,7 +43,7 @@ with st.sidebar:
         Explore seasonal patterns for any stock, index, or commodity.
 
         • Yahoo Finance primary source, FRED fallback for deep index history  
-        • Bars = mean of first-half + mean of second-half returns  
+        • Bars = mean of first-half + mean of second-half contributions  
         • First half solid, second half hatched; each half colored by its own sign  
         • Error bars show min and max monthly total returns; black diamonds = hit rate  
         • Bottom table consolidates 1H, 2H, Total per month  
@@ -90,12 +90,25 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     return None
 
 def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
+    """
+    For each month:
+      prev_eom   = previous month-end close
+      mid_close  = close at mid-point of trading days
+      last       = month-end close
+
+    total_ret (%) = (last / prev_eom - 1)
+    h1_ret   (%)  = (mid_close / prev_eom - 1)
+    h2_ret   (%)  = total_ret - h1_ret   (second-half *contribution* to total)
+    """
     if prices.empty:
         return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret", "year", "month"])
 
     out_rows = []
-    months = pd.period_range(prices.index.min().to_period("M"),
-                             prices.index.max().to_period("M"), freq="M")
+    months = pd.period_range(
+        prices.index.min().to_period("M"),
+        prices.index.max().to_period("M"),
+        freq="M",
+    )
     for m in months:
         m_mask = (prices.index.to_period("M") == m)
         month_days = prices.loc[m_mask]
@@ -105,21 +118,28 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
         prev_month_days = prices.loc[(prices.index.to_period("M") == (m - 1))]
         if prev_month_days.empty:
             continue
-        prev_eom = prev_month_days.iloc[-1]
+        prev_eom = float(prev_month_days.iloc[-1])
 
-        last = month_days.iloc[-1]
+        last = float(month_days.iloc[-1])
         n = month_days.shape[0]
         mid_idx = (n // 2) - 1
         if mid_idx < 0:
             continue
-        mid_close = month_days.iloc[mid_idx]
+        mid_close = float(month_days.iloc[mid_idx])
 
-        h1 = (mid_close / prev_eom - 1.0) * 100.0
-        h2 = (last / mid_close - 1.0) * 100.0
         tot = (last / prev_eom - 1.0) * 100.0
+        h1  = (mid_close / prev_eom - 1.0) * 100.0
+        h2  = tot - h1   # contribution from second half so that tot = h1 + h2
 
         out_rows.append(
-            {"period": m, "total_ret": tot, "h1_ret": h1, "h2_ret": h2, "year": m.year, "month": m.month}
+            {
+                "period": m,
+                "total_ret": tot,
+                "h1_ret": h1,
+                "h2_ret": h2,
+                "year": m.year,
+                "month": m.month,
+            }
         )
 
     df = pd.DataFrame(out_rows)
@@ -130,34 +150,40 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     return df
 
 def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.DataFrame:
-    monthly_end = prices.resample("M").last()
-    monthly_ret = monthly_end.pct_change().dropna() * 100
-    monthly_ret.index = monthly_ret.index.to_period("M")
-
+    """
+    Compute all seasonality stats from the same monthly set produced by _intra_month_halves,
+    so that mean_total == mean_h1 + mean_h2 (up to rounding).
+    """
     halves = _intra_month_halves(prices)
-
-    sel = (monthly_ret.index.year >= start_year) & (monthly_ret.index.year <= end_year)
-    monthly_ret = monthly_ret[sel]
-
     stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
-    grouped_total = monthly_ret.groupby(monthly_ret.index.month)
-    stats["hit_rate"] = grouped_total.apply(lambda x: (x > 0).mean() * 100)
-    stats["min_ret"] = grouped_total.min()
-    stats["max_ret"] = grouped_total.max()
-    stats["years_observed"] = grouped_total.apply(lambda x: x.index.year.nunique())
     stats["label"] = MONTH_LABELS
 
     if halves.empty:
+        stats["hit_rate"] = np.nan
+        stats["min_ret"] = np.nan
+        stats["max_ret"] = np.nan
+        stats["years_observed"] = np.nan
         stats["mean_h1"] = np.nan
         stats["mean_h2"] = np.nan
         stats["mean_total"] = np.nan
         return stats
 
     halves = halves[(halves["year"] >= start_year) & (halves["year"] <= end_year)]
-    grouped_halves = halves.groupby("month")
-    stats["mean_h1"] = grouped_halves["h1_ret"].mean()
-    stats["mean_h2"] = grouped_halves["h2_ret"].mean()
-    stats["mean_total"] = grouped_halves["total_ret"].mean()  # equals mean_h1 + mean_h2
+    if halves.empty:
+        stats[["hit_rate", "min_ret", "max_ret", "years_observed",
+               "mean_h1", "mean_h2", "mean_total"]] = np.nan
+        return stats
+
+    grouped = halves.groupby("month")
+
+    stats["hit_rate"]       = grouped["total_ret"].apply(lambda x: (x > 0).mean() * 100)
+    stats["min_ret"]        = grouped["total_ret"].min()
+    stats["max_ret"]        = grouped["total_ret"].max()
+    stats["years_observed"] = grouped["year"].nunique()
+    stats["mean_h1"]        = grouped["h1_ret"].mean()
+    stats["mean_h2"]        = grouped["h2_ret"].mean()
+    stats["mean_total"]     = grouped["total_ret"].mean()
+
     return stats
 
 def _format_pct(x: float) -> str:
@@ -191,13 +217,43 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     def seg_face(values): return np.where(values >= 0, "#62c38e", "#e07a73")
     def seg_edge(values): return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
 
-    ax1.bar(x, mean_h1, width=0.8, color=seg_face(mean_h1), edgecolor=seg_edge(mean_h1), linewidth=1.0, zorder=2, alpha=0.95)
-    bars2 = ax1.bar(x, mean_h2, width=0.8, bottom=mean_h1, color=seg_face(mean_h2), edgecolor=seg_edge(mean_h2),
-                    linewidth=1.0, zorder=2, alpha=0.95, hatch="///")
-    for r in bars2: r.set_hatch("///")
+    ax1.bar(
+        x,
+        mean_h1,
+        width=0.8,
+        color=seg_face(mean_h1),
+        edgecolor=seg_edge(mean_h1),
+        linewidth=1.0,
+        zorder=2,
+        alpha=0.95,
+    )
+    bars2 = ax1.bar(
+        x,
+        mean_h2,
+        width=0.8,
+        bottom=mean_h1,
+        color=seg_face(mean_h2),
+        edgecolor=seg_edge(mean_h2),
+        linewidth=1.0,
+        zorder=2,
+        alpha=0.95,
+        hatch="///",
+    )
+    for r in bars2:
+        r.set_hatch("///")
 
     yerr = np.abs(np.vstack([totals - min_ret, max_ret - totals]))
-    ax1.errorbar(x, totals, yerr=yerr, fmt="none", ecolor="gray", elinewidth=1.6, alpha=0.7, capsize=6, zorder=3)
+    ax1.errorbar(
+        x,
+        totals,
+        yerr=yerr,
+        fmt="none",
+        ecolor="gray",
+        elinewidth=1.6,
+        alpha=0.7,
+        capsize=6,
+        zorder=3,
+    )
 
     ax1.set_xticks(x, labels)
     ax1.set_ylabel("Mean return (%)", weight="bold")
@@ -225,8 +281,14 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     cell_vals = [row1, row2, row3]
     cell_txt = [[_format_pct(v) for v in row] for row in cell_vals]
     cell_colors = _cell_colors(cell_vals)
-    table = ax_tbl.table(cellText=cell_txt, rowLabels=row_labels, colLabels=labels,
-                         loc="center", cellLoc="center", rowLoc="center")
+    table = ax_tbl.table(
+        cellText=cell_txt,
+        rowLabels=row_labels,
+        colLabels=labels,
+        loc="center",
+        cellLoc="center",
+        rowLoc="center",
+    )
     table.auto_set_font_size(False); table.set_fontsize(9)
     for (row, col), cell in table.get_celld().items():
         if row == 0:
@@ -249,7 +311,6 @@ def _month_paths_prev_eom(prices: pd.Series, month_int: int, start_year: int, en
 
     paths = {}
     for y in sorted(px.index.year.unique()):
-        # IMPORTANT: build masks on px.index, not prices.index
         m = px.loc[(px.index.year == y) & (px.index.month == month_int)]
         if m.shape[0] < 3:
             continue
@@ -430,10 +491,8 @@ def plot_intra_month_curve(
         if not m_cur.empty:
             tday_ord = _trading_day_ordinal(m_cur.index, today)
             if tday_ord in df_sel.index:
-                # vertical marker for today
                 ax.axvline(tday_ord, color="#b0b0b0", linestyle=":", linewidth=1.2, zorder=2.0)
 
-                # highlight average and current-year level at today's ordinal if in range
                 if tday_ord in avg_sel.index:
                     ax.scatter(tday_ord, avg_sel.loc[tday_ord], s=35, color="black", zorder=4)
                 if cur_norm_pct is not None and tday_ord in cur_norm_pct.index:
@@ -543,7 +602,7 @@ st.markdown(
 buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})")
 st.image(buf, use_container_width=True)
 
-st.caption("Bars equal mean(1H) + mean(2H). First half solid; second half hatched. Error bars use min and max of total monthly returns.")
+st.caption("Bars equal mean(1H) + mean(2H) contributions. First half solid; second half hatched. Error bars use min and max of total monthly returns.")
 
 # -------------------------- Intra-month curve below -------------------------- #
 st.subheader("Intra-Month Seasonality Curve")
