@@ -242,7 +242,7 @@ with st.sidebar:
     )
     st.markdown(
         "- Snapshot table: short and long window performance, trend, inflection.\n"
-        "- Scatter map: factors in quadrants by short vs long momentum.\n"
+        "- Leadership map: factors in quadrants by short vs long momentum.\n"
         "- Correlation: clustering and crowding across styles."
     )
     st.divider()
@@ -404,47 +404,143 @@ st.dataframe(
 # ---------------- Leadership map (Short vs Long scatter) ----------------
 st.subheader("Leadership Map (Short vs Long Momentum)")
 
-fig_lead, ax_lead = plt.subplots(figsize=(7, 5))
+fig_lead, ax_lead = plt.subplots(figsize=(8, 6))
 
 short_vals = mom_df["Short"] * 100.0
 long_vals = mom_df["Long"] * 100.0
 
-ax_lead.axvline(0, color="#bbbbbb", linewidth=1)
-ax_lead.axhline(0, color="#bbbbbb", linewidth=1)
+# Symmetric axes around zero with small padding
+x_max = max(abs(short_vals.min()), abs(short_vals.max()))
+y_max = max(abs(long_vals.min()), abs(long_vals.max()))
+pad_x = x_max * 0.15 if x_max > 0 else 1.0
+pad_y = y_max * 0.15 if y_max > 0 else 1.0
 
+ax_lead.set_xlim(-x_max - pad_x, x_max + pad_x)
+ax_lead.set_ylim(-y_max - pad_y, y_max + pad_y)
+
+# Light quadrant shading to make regimes obvious
+x_min, x_max_lim = ax_lead.get_xlim()
+y_min, y_max_lim = ax_lead.get_ylim()
+
+ax_lead.fill_between([0, x_max_lim], 0, y_max_lim, color="#e5f5e0", alpha=0.5)  # Short up, Long up
+ax_lead.fill_between([x_min, 0], 0, y_max_lim, color="#fee6ce", alpha=0.5)      # Short down, Long up
+ax_lead.fill_between([x_min, 0], y_min, 0, color="#fddede", alpha=0.5)          # Short down, Long down
+ax_lead.fill_between([0, x_max_lim], y_min, 0, color="#d0e1f9", alpha=0.5)      # Short up, Long down
+
+# Axis lines
+ax_lead.axvline(0, color="#888888", linewidth=1)
+ax_lead.axhline(0, color="#888888", linewidth=1)
+
+# Quadrant labels
+ax_lead.text(
+    x_max_lim * 0.65,
+    y_max_lim * 0.75,
+    "Short ↑ / Long ↑\nEstablished leaders",
+    fontsize=9,
+    ha="center",
+    va="center",
+    color="#333333",
+)
+ax_lead.text(
+    x_min * 0.65,
+    y_max_lim * 0.75,
+    "Short ↓ / Long ↑\nMean reversion",
+    fontsize=9,
+    ha="center",
+    va="center",
+    color="#333333",
+)
+ax_lead.text(
+    x_min * 0.65,
+    y_min * 0.75,
+    "Short ↓ / Long ↓\nPersistent laggards",
+    fontsize=9,
+    ha="center",
+    va="center",
+    color="#333333",
+)
+ax_lead.text(
+    x_max_lim * 0.65,
+    y_min * 0.75,
+    "Short ↑ / Long ↓\nNew rotations",
+    fontsize=9,
+    ha="center",
+    va="center",
+    color="#333333",
+)
+
+# Points and labels
 for i, factor in enumerate(mom_df.index):
     x = short_vals.loc[factor]
     y = long_vals.loc[factor]
-    ax_lead.scatter(x, y, s=60, color=PASTELS[i % len(PASTELS)],
-                    edgecolor="#444444", linewidth=0.5)
-    ax_lead.text(x, y, " " + factor, fontsize=9, va="center")
+    ax_lead.scatter(
+        x,
+        y,
+        s=70,
+        color=PASTELS[i % len(PASTELS)],
+        edgecolor="#444444",
+        linewidth=0.6,
+        zorder=3,
+    )
+    ax_lead.annotate(
+        factor,
+        xy=(x, y),
+        xytext=(4, 3),
+        textcoords="offset points",
+        fontsize=9,
+        va="center",
+        color="#111111",
+    )
 
 ax_lead.set_xlabel("Short window return %", color=TEXT)
 ax_lead.set_ylabel("Long window return %", color=TEXT)
-ax_lead.set_title("Factors by Short vs Long Momentum", color=TEXT)
-ax_lead.grid(color=GRID, linewidth=0.6)
+ax_lead.set_title("Factors by Short vs Long Momentum", color=TEXT, pad=10)
+ax_lead.grid(color=GRID, linewidth=0.6, alpha=0.6)
+fig_lead.tight_layout()
 st.pyplot(fig_lead, clear_figure=True)
 
 # ---------------- Cross factor correlation matrix ----------------
 st.subheader("Cross Factor Correlation Matrix")
 
-corr = factor_df.pct_change().dropna(how="all").corr()
-labels = corr.columns.tolist()
+corr_raw = factor_df.pct_change().dropna(how="all").corr()
 
-fig_corr, ax_corr = plt.subplots(figsize=(8, 6))
+# Sort factors by average correlation to create visual clustering
+avg_corr = corr_raw.mean().sort_values(ascending=False)
+sorted_labels = avg_corr.index.tolist()
+corr = corr_raw.loc[sorted_labels, sorted_labels]
+
+fig_corr, ax_corr = plt.subplots(figsize=(8.5, 7.2))
+
 im = ax_corr.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
 
-ax_corr.set_xticks(range(len(labels)))
-ax_corr.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
-ax_corr.set_yticks(range(len(labels)))
-ax_corr.set_yticklabels(labels, fontsize=9)
-ax_corr.set_title("Correlation of Daily Returns", color=TEXT, pad=10)
+ax_corr.set_xticks(range(len(sorted_labels)))
+ax_corr.set_xticklabels(sorted_labels, rotation=45, ha="right", fontsize=9)
+ax_corr.set_yticks(range(len(sorted_labels)))
+ax_corr.set_yticklabels(sorted_labels, fontsize=9)
+ax_corr.set_title("Correlation of Daily Returns (sorted by crowding)", color=TEXT, pad=12)
 
-for i in range(len(labels)):
-    for j in range(len(labels)):
-        val = corr.values[i, j]
-        txt = f"{val:.2f}" if abs(val) >= 0.3 else ""
-        ax_corr.text(j, i, txt, ha="center", va="center", fontsize=8, color="black")
+# Annotate only lower triangle excluding diagonal to cut noise
+n = len(sorted_labels)
+for i in range(n):
+    for j in range(n):
+        if i > j:
+            val = corr.values[i, j]
+            if abs(val) >= 0.35:
+                ax_corr.text(
+                    j,
+                    i,
+                    f"{val:.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color="black",
+                )
+
+# Add grid lines between cells
+ax_corr.set_xticks(np.arange(-0.5, n, 1), minor=True)
+ax_corr.set_yticks(np.arange(-0.5, n, 1), minor=True)
+ax_corr.grid(which="minor", color="white", linewidth=0.6)
+ax_corr.tick_params(which="minor", bottom=False, left=False)
 
 cbar = fig_corr.colorbar(im, ax=ax_corr, fraction=0.046, pad=0.04)
 cbar.ax.set_ylabel("Corr", rotation=270, labelpad=12)
