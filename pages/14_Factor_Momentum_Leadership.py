@@ -1,5 +1,3 @@
-# 14_Factor_Momentum_Leadership.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -125,85 +123,107 @@ def bucket_regime(regime_score: float) -> str:
     return "high beta, late-cycle risk on"
 
 
-def factor_tilt_phrase(leaders: list, laggards: list) -> str:
-    lead_str = ", ".join(leaders) if leaders else "no clear leaders"
-    lag_str = ", ".join(laggards) if laggards else "no obvious laggards"
-    return (
-        f"Leadership today is coming from {lead_str}, "
-        f"while pressure is most visible in {lag_str}."
-    )
-
-
-def positioning_hint(breadth: float, regime_score: float, up_count: int, down_count: int) -> str:
-    if breadth < 25 and regime_score < 40:
-        return (
-            "Keep gross light, lean on index or factor hedges, and size single name longs off the "
-            "few factors that are actually in up trends. This regime favors relative value and "
-            "pair trades over outright beta."
-        )
-    if breadth < 40 and regime_score >= 55:
-        return (
-            "Tape is friendly but leadership is narrow. Concentrate capital in the leading styles, "
-            "avoid shorting them mechanically, and use laggards as funding shorts."
-        )
-    if breadth >= 60 and regime_score >= 60:
-        return (
-            "This is a broad, constructive regime. It supports running higher gross and letting "
-            "winners compound, while keeping an eye on when breadth and momentum start to roll."
-        )
-    if breadth >= 60 and regime_score < 45:
-        return (
-            "Breadth is okay but the quality of leadership is questionable. Rotate toward higher "
-            "quality expressions inside each factor and be quick to cut when momentum weakens."
-        )
-    if abs(up_count - down_count) <= 2:
-        return (
-            "Up and down trends are roughly balanced. Stock selection matters more than big "
-            "top-down factor tilts here."
-        )
-    return (
-        "Treat factors as a map. Use them to sanity-check your book: make sure your largest "
-        "positions rhyme with the leadership you see in the tape."
-    )
-
-
-def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) -> str:
+def build_commentary(
+    mom_df: pd.DataFrame,
+    breadth: float,
+    regime_score: float,
+    corr: pd.DataFrame | None = None,
+) -> str:
     trend_counts = mom_df["Trend"].value_counts()
     up_count = int(trend_counts.get("Up", 0))
     down_count = int(trend_counts.get("Down", 0))
 
-    short_sorted = mom_df["Short"].sort_values(ascending=False)
-    leaders = [f for f in short_sorted.index[:3]]
-    laggards = [f for f in short_sorted.index[-3:]]
+    # Leadership and rotations
+    established_leaders = mom_df[
+        (mom_df["Short"] > 0) & (mom_df["Long"] > 0)
+    ].sort_values("Short", ascending=False).index.tolist()
+
+    new_rotations = mom_df[mom_df["Inflection"] == "Turning Up"].index.tolist()
+    fading_leaders = mom_df[mom_df["Inflection"] == "Turning Down"].index.tolist()
+
+    leaders_text = ", ".join(established_leaders[:4]) if established_leaders else "no factor pair in a clean dual-horizon uptrend"
+    rotations_text = ", ".join(new_rotations[:4]) if new_rotations else "no factor is clearly turning up yet"
+    fading_text = ", ".join(fading_leaders[:4]) if fading_leaders else "no obvious factor is rolling over from strength"
 
     breadth_desc = bucket_breadth(breadth)
     regime_desc = bucket_regime(regime_score)
-    tilt_text = factor_tilt_phrase(leaders, laggards)
-    position_text = positioning_hint(breadth, regime_score, up_count, down_count)
+
+    # Correlation / crowding read
+    crowd_line = "Correlation picture is mixed and does not add a strong crowding signal."
+    if corr is not None and not corr.empty:
+        avg_abs = {}
+        for f in corr.columns:
+            vals = corr.loc[f].drop(f)
+            if vals.empty:
+                continue
+            avg_abs[f] = float(vals.abs().mean())
+        if avg_abs:
+            crowded_factor = max(avg_abs, key=avg_abs.get)
+            diversifier = min(avg_abs, key=avg_abs.get)
+            crowd_line = (
+                f"Most crowded style on this window is {crowded_factor} with average |corr| around "
+                f"{avg_abs[crowded_factor]:.2f} to peers, while the cleanest diversifier is "
+                f"{diversifier} with average |corr| near {avg_abs[diversifier]:.2f}."
+            )
 
     conclusion = (
         f"Factor tape is {breadth_desc} and currently {regime_desc}. "
-        f"{tilt_text}"
+        f"Leadership is anchored in {leaders_text}, with rotations starting to show up in "
+        f"{rotations_text}, and pressure building in {fading_text}."
     )
 
     why_matters = (
-        "Factor structure tells you whether the equity market is being driven by style and macro "
-        "buckets or by idiosyncratic stories. It should anchor how much you trust breakouts, how "
-        "aggressive you are with gross, and whether you lean on index, factor, or single stock risk."
+        "This grid is the style map for the equity tape. It tells you which buckets the market is "
+        "paying for right now, how persistent that preference is across short and long windows, "
+        "and whether you should lean into existing trends or hunt for rotations."
     )
 
+    drivers = []
+
+    drivers.append(
+        f"{up_count} factors are in up trends and {down_count} are in down trends based on the "
+        "10/20/40-day moving average stack, with the rest stuck in noisy ranges."
+    )
+
+    drivers.append(
+        f"Short horizon strength is concentrated in "
+        f"{', '.join(mom_df.sort_values('Short', ascending=False).index.tolist()[:5])}, "
+        "while the weakest short-term tape sits in "
+        f"{', '.join(mom_df.sort_values('Short', ascending=True).index.tolist()[:3])}."
+    )
+
+    if new_rotations:
+        drivers.append(
+            f"Inflection signals flag {', '.join(new_rotations)} as turning up from weaker long-term trends, "
+            "which is where new leaders usually emerge if the regime stays constructive."
+        )
+    if fading_leaders:
+        drivers.append(
+            f"On the other side, {', '.join(fading_leaders)} are turning down against still-positive long windows, "
+            "a typical pattern near the end of a leadership run."
+        )
+
+    drivers.append(crowd_line)
+
     key_stats = (
-        f"Up trends: {up_count} factors, Down trends: {down_count}. "
         f"Breadth index {breadth:.1f}%. "
         f"Regime score {regime_score:.1f} on a 0-100 scale, where 50 is neutral."
     )
 
-    return (
-        f"<b>Conclusion</b><br>{conclusion}<br><br>"
-        f"<b>Why it matters</b><br>{why_matters}<br><br>"
-        f"<b>Positioning cues</b><br>{position_text}<br><br>"
-        f"<b>Key stats</b><br>{key_stats}"
+    body = (
+        '<div style="font-weight:700; margin-bottom:6px;">Conclusion</div>'
+        f'<div>{conclusion}</div>'
+        '<div style="font-weight:700; margin:10px 0 6px;">Why it matters</div>'
+        f'<div>{why_matters}</div>'
+        '<div style="font-weight:700; margin:10px 0 6px;">Key drivers</div>'
+        '<ul style="margin-top:4px; margin-bottom:4px;">'
+        + "".join(f"<li>{d}</li>" for d in drivers)
+        + "</ul>"
+        '<div style="font-weight:700; margin:10px 0 6px;">Key stats</div>'
+        f'<div>{key_stats}</div>'
     )
+
+    return body
 
 # ---------------- Factors ----------------
 FACTOR_ETFS = {
@@ -236,14 +256,18 @@ st.title("Factor Momentum and Leadership Dashboard")
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
-        "Tracks style and macro factor leadership using ETF pairs. "
-        "Each factor is a relative strength ratio scored on short and long momentum, "
-        "trend structure, and inflection."
+        """
+        Tracks style and macro factor leadership using ETF pairs and scores each factor on
+        short and long momentum, trend structure, and inflection. Use it as a style map
+        for how your book lines up with what the tape is rewarding.
+        """
     )
     st.markdown(
-        "- Snapshot table: short and long window performance, trend, inflection.\n"
-        "- Leadership map: factors in quadrants by short vs long momentum.\n"
-        "- Correlation: clustering and crowding across styles."
+        """
+        - Time series grid: context for each factor ratio  
+        - Leadership map: short vs long momentum quadrants  
+        - Crowding view: which styles are most correlated and where diversifiers sit
+        """
     )
     st.divider()
     st.header("Settings")
@@ -318,7 +342,7 @@ if mom_df.empty:
 
 mom_df = mom_df.sort_values("Short", ascending=False)
 
-# ---------------- Breadth & regime for commentary only ----------------
+# ---------------- Breadth & regime + correlation for commentary ----------------
 trend_counts = mom_df["Trend"].value_counts()
 num_up = int(trend_counts.get("Up", 0))
 breadth = num_up / len(mom_df) * 100.0
@@ -330,9 +354,11 @@ raw_score = (
 )
 regime_score = max(0.0, min(100.0, 50.0 + 50.0 * (raw_score / 5.0)))
 
+corr_matrix = factor_df.pct_change().dropna(how="all").corr()
+
 # ---------------- Factor tape summary ----------------
 st.subheader(f"Factor Tape Summary ({window_choice})")
-summary_html = build_commentary(mom_df, breadth, regime_score)
+summary_html = build_commentary(mom_df, breadth, regime_score, corr_matrix)
 card_box(summary_html)
 
 # ---------------- Factor time series ----------------
@@ -345,7 +371,7 @@ nrows = int(np.ceil(n_factors / ncols))
 fig_ts, axes = plt.subplots(nrows, ncols, figsize=(15, 4 * nrows), squeeze=False)
 axes = axes.ravel()
 
-# Decide date formatting based on window span
+# Date formatting based on span
 if len(factor_df.index) > 1:
     span_days = (factor_df.index[-1] - factor_df.index[0]).days
 else:
@@ -371,7 +397,6 @@ for i, f in enumerate(factor_df.columns):
         label.set_rotation(0)
         label.set_fontsize(8)
 
-# Turn off any unused axes
 for j in range(i + 1, len(axes)):
     axes[j].axis("off")
 
@@ -409,7 +434,6 @@ fig_lead, ax_lead = plt.subplots(figsize=(8, 6))
 short_vals = mom_df["Short"] * 100.0
 long_vals = mom_df["Long"] * 100.0
 
-# Symmetric axes around zero with small padding
 x_max = max(abs(short_vals.min()), abs(short_vals.max()))
 y_max = max(abs(long_vals.min()), abs(long_vals.max()))
 pad_x = x_max * 0.15 if x_max > 0 else 1.0
@@ -418,20 +442,17 @@ pad_y = y_max * 0.15 if y_max > 0 else 1.0
 ax_lead.set_xlim(-x_max - pad_x, x_max + pad_x)
 ax_lead.set_ylim(-y_max - pad_y, y_max + pad_y)
 
-# Light quadrant shading to make regimes obvious
 x_min, x_max_lim = ax_lead.get_xlim()
 y_min, y_max_lim = ax_lead.get_ylim()
 
-ax_lead.fill_between([0, x_max_lim], 0, y_max_lim, color="#e5f5e0", alpha=0.5)  # Short up, Long up
-ax_lead.fill_between([x_min, 0], 0, y_max_lim, color="#fee6ce", alpha=0.5)      # Short down, Long up
-ax_lead.fill_between([x_min, 0], y_min, 0, color="#fddede", alpha=0.5)          # Short down, Long down
-ax_lead.fill_between([0, x_max_lim], y_min, 0, color="#d0e1f9", alpha=0.5)      # Short up, Long down
+ax_lead.fill_between([0, x_max_lim], 0, y_max_lim, color="#e5f5e0", alpha=0.5)
+ax_lead.fill_between([x_min, 0], 0, y_max_lim, color="#fee6ce", alpha=0.5)
+ax_lead.fill_between([x_min, 0], y_min, 0, color="#fddede", alpha=0.5)
+ax_lead.fill_between([0, x_max_lim], y_min, 0, color="#d0e1f9", alpha=0.5)
 
-# Axis lines
 ax_lead.axvline(0, color="#888888", linewidth=1)
 ax_lead.axhline(0, color="#888888", linewidth=1)
 
-# Quadrant labels
 ax_lead.text(
     x_max_lim * 0.65,
     y_max_lim * 0.75,
@@ -469,7 +490,6 @@ ax_lead.text(
     color="#333333",
 )
 
-# Points and labels
 for i, factor in enumerate(mom_df.index):
     x = short_vals.loc[factor]
     y = long_vals.loc[factor]
@@ -499,53 +519,64 @@ ax_lead.grid(color=GRID, linewidth=0.6, alpha=0.6)
 fig_lead.tight_layout()
 st.pyplot(fig_lead, clear_figure=True)
 
-# ---------------- Cross factor correlation matrix ----------------
-st.subheader("Cross Factor Correlation Matrix")
+# ---------------- Factor crowding & correlation ----------------
+st.subheader("Factor Crowding and Diversifiers")
 
-corr_raw = factor_df.pct_change().dropna(how="all").corr()
+if corr_matrix.empty or corr_matrix.shape[0] < 2:
+    st.info("Not enough data to compute factor correlations.")
+else:
+    # Compute average absolute correlation (excluding self) for each factor
+    crowd_rows = []
+    for f in corr_matrix.columns:
+        peers = corr_matrix.loc[f].drop(f)
+        if peers.empty:
+            continue
+        avg_abs = float(peers.abs().mean())
+        max_corr = float(peers.max())
+        min_corr = float(peers.min())
+        top_partner = peers.abs().idxmax()
+        crowd_rows.append(
+            {
+                "Factor": f,
+                "Avg |corr| to others": avg_abs,
+                "Max corr partner": top_partner,
+                "Max corr": max_corr,
+                "Min corr": min_corr,
+            }
+        )
 
-# Sort factors by average correlation to create visual clustering
-avg_corr = corr_raw.mean().sort_values(ascending=False)
-sorted_labels = avg_corr.index.tolist()
-corr = corr_raw.loc[sorted_labels, sorted_labels]
+    crowd_df = pd.DataFrame(crowd_rows)
+    if not crowd_df.empty:
+        crowd_df = crowd_df.sort_values("Avg |corr| to others", ascending=False)
 
-fig_corr, ax_corr = plt.subplots(figsize=(8.5, 7.2))
+        # Bar chart for crowding
+        fig_crowd, ax_crowd = plt.subplots(figsize=(8, 4.5))
+        ax_crowd.barh(
+            crowd_df["Factor"],
+            crowd_df["Avg |corr| to others"],
+            color="#A8DADC",
+        )
+        ax_crowd.invert_yaxis()
+        ax_crowd.set_xlabel("Average |correlation| vs other factors", color=TEXT)
+        ax_crowd.set_title("Which styles are most crowded?", color=TEXT, pad=8)
+        ax_crowd.grid(axis="x", color=GRID, linewidth=0.6, alpha=0.7)
+        fig_crowd.tight_layout()
+        st.pyplot(fig_crowd, clear_figure=True)
 
-im = ax_corr.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
+        # Compact table with key relationships
+        display_crowd = crowd_df.copy()
+        display_crowd["Avg |corr| to others"] = display_crowd["Avg |corr| to others"].map(
+            lambda x: f"{x:.2f}"
+        )
+        display_crowd["Max corr"] = display_crowd["Max corr"].map(lambda x: f"{x:.2f}")
+        display_crowd["Min corr"] = display_crowd["Min corr"].map(lambda x: f"{x:.2f}")
 
-ax_corr.set_xticks(range(len(sorted_labels)))
-ax_corr.set_xticklabels(sorted_labels, rotation=45, ha="right", fontsize=9)
-ax_corr.set_yticks(range(len(sorted_labels)))
-ax_corr.set_yticklabels(sorted_labels, fontsize=9)
-ax_corr.set_title("Correlation of Daily Returns (sorted by crowding)", color=TEXT, pad=12)
+        st.dataframe(
+            display_crowd,
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No valid correlation pairs to show.")
 
-# Annotate only lower triangle excluding diagonal to cut noise
-n = len(sorted_labels)
-for i in range(n):
-    for j in range(n):
-        if i > j:
-            val = corr.values[i, j]
-            if abs(val) >= 0.35:
-                ax_corr.text(
-                    j,
-                    i,
-                    f"{val:.2f}",
-                    ha="center",
-                    va="center",
-                    fontsize=8,
-                    color="black",
-                )
-
-# Add grid lines between cells
-ax_corr.set_xticks(np.arange(-0.5, n, 1), minor=True)
-ax_corr.set_yticks(np.arange(-0.5, n, 1), minor=True)
-ax_corr.grid(which="minor", color="white", linewidth=0.6)
-ax_corr.tick_params(which="minor", bottom=False, left=False)
-
-cbar = fig_corr.colorbar(im, ax=ax_corr, fraction=0.046, pad=0.04)
-cbar.ax.set_ylabel("Corr", rotation=270, labelpad=12)
-
-fig_corr.tight_layout()
-st.pyplot(fig_corr, clear_figure=True)
-
-st.caption("ADFM Factor Momentum and Leadership Dashboard")
+st.caption("© 2025 AD Fund Management LP")
