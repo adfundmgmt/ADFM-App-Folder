@@ -44,7 +44,7 @@ GROUPS = {
 ORDER = sum(GROUPS.values(), [])
 IV_TICKERS = ["^VIX", "^OVX", "^VIX3M"]
 
-# Curated non-redundant rolling-correlation universe (21 pairs)
+# Curated non-redundant rolling-correlation universe (21 pairs, <=30 cap)
 PAIR_SPECS = [
     # SPX vs macro sleeves
     dict(a="^GSPC", b="^TNX",      la="SPX", lb="US10Y",  title="SPX vs 10Y rates"),
@@ -203,12 +203,14 @@ def roll_corr(ret_df, a, b, window=21):
 def computed_height(n_rows, row_px=32, header_px=38, pad_px=16, max_px=800):
     return min(max_px, int(header_px + row_px * n_rows + pad_px))
 
-def hide_index_compat(styler: pd.io.formats.style.Styler) -> pd.io.formats.style.Styler:
+def hide_index_compat(styler):
+    # pandas >= 1.4
     if hasattr(styler, "hide"):
         try:
             return styler.hide(axis="index")
         except Exception:
             pass
+    # pandas >= 1.5 has hide_index, some builds omit it
     if hasattr(styler, "hide_index"):
         try:
             return styler.hide_index()
@@ -323,14 +325,13 @@ if "CL=F" in REALVOL.columns:
 
 lines = []
 
-# Regime paragraph
 if not np.isnan(reg["vix_now"]) and not np.isnan(reg["rv_now"]):
     lines.append(
         f"Regime screens {reg['regime'].lower()}. VIX around {reg['vix_now']:.1f} with 1M SPX realized volatility near "
-        f"{reg['rv_now']:.1f}% and VIX3M/VIX − 1 at {reg['ts_now']:+.3f} tells you this is a {('stressy' if reg['regime']=='Risk-off' else 'workable')} tape rather than a full-vol panic."
+        f"{reg['rv_now']:.1f}% and VIX3M/VIX − 1 at {reg['ts_now']:+.3f} tells you this is a "
+        f"{'stressy' if reg['regime'] == 'Risk-off' else 'workable'} tape rather than a full-vol panic."
     )
 
-# Equity vs rates
 if not np.isnan(rho):
     if rho >= 0.3:
         lines.append(
@@ -348,7 +349,6 @@ if not np.isnan(rho):
             "so you should treat duration as a separate macro bet rather than a reliable hedge or amplifier."
         )
 
-# VIX vs realized
 if vix_rv_spread is not None and vix_rv_z is not None:
     if vix_rv_z >= 1.0:
         lines.append(
@@ -361,7 +361,6 @@ if vix_rv_spread is not None and vix_rv_z is not None:
             "in this state collars and long optionality are a better hedge than just leaning on index futures."
         )
 
-# HY and oil vol
 if hy_z is not None:
     if hy_z >= z_hot:
         lines.append(
@@ -383,7 +382,6 @@ if oil_z is not None:
             f"Oil volatility is suppressed with a Z score around {oil_z:.1f}, which keeps energy from dominating the macro tape and gives more room for AI and growth leadership."
         )
 
-# Action bias and invalidations
 action_bits = []
 if reg["regime"] == "Risk-off":
     action_bits.append("Keep gross lighter, skew toward defensives and avoid chasing upside breakouts in the AI basket until stress eases.")
@@ -398,7 +396,7 @@ elif vix_rv_z is not None and vix_rv_z <= -1.0:
     action_bits.append("Express downside and regime change risk through index or basket optionality while implied vol is discounted.")
 
 if not np.isnan(rho) and rho >= 0.3:
-    action_bits.append("Treat duration shorts as risk-on expressions and do not assume TLT or 10Y futures will hedge a selloff in your AI and growth names.")
+    action_bits.append("Treat duration shorts as risk-on expressions and do not assume 10Y hedges will offset a selloff in your AI and growth names.")
 
 invalid_bits = [
     "This stance flips if SPX versus 10Y correlation holds the opposite sign for a full week, "
@@ -467,7 +465,8 @@ for spec in PAIR_SPECS:
     if rc.shape[0] > wk_back + 1 and not np.isnan(rc.iloc[-wk_back-1]):
         delta = float(rc.iloc[-1] - rc.iloc[-wk_back-1])
     pct = percentile_of_last(rc)
-    rows.append([spec["Pair"] if "Pair" in spec else spec["title"], spec["a"], spec["b"], curr, delta, pct])
+    pair_name = spec["title"]
+    rows.append([pair_name, spec["a"], spec["b"], curr, delta, pct])
 
 corr_tbl = pd.DataFrame(rows, columns=[
     "Pair", "Series A", "Series B", "ρ now (rolling)", "Δρ w/w", "Percentile rank"
