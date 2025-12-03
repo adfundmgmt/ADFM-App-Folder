@@ -133,7 +133,6 @@ def build_commentary(
     up_count = int(trend_counts.get("Up", 0))
     down_count = int(trend_counts.get("Down", 0))
 
-    # Leadership and rotations
     established_leaders = mom_df[
         (mom_df["Short"] > 0) & (mom_df["Long"] > 0)
     ].sort_values("Short", ascending=False).index.tolist()
@@ -148,7 +147,6 @@ def build_commentary(
     breadth_desc = bucket_breadth(breadth)
     regime_desc = bucket_regime(regime_score)
 
-    # Correlation / crowding read
     crowd_line = "Correlation picture is mixed and does not add a strong crowding signal."
     if corr is not None and not corr.empty:
         avg_abs = {}
@@ -275,7 +273,7 @@ with st.sidebar:
     window_choice = st.selectbox(
         "Analysis window",
         ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"],
-        index=3,  # YTD by default
+        index=3,
     )
     lookback_short = st.slider("Short momentum window (days)", 10, 60, 20)
     lookback_long = st.slider("Long momentum window (days)", 30, 180, 60)
@@ -371,7 +369,6 @@ nrows = int(np.ceil(n_factors / ncols))
 fig_ts, axes = plt.subplots(nrows, ncols, figsize=(15, 4 * nrows), squeeze=False)
 axes = axes.ravel()
 
-# Date formatting based on span
 if len(factor_df.index) > 1:
     span_days = (factor_df.index[-1] - factor_df.index[0]).days
 else:
@@ -445,10 +442,14 @@ ax_lead.set_ylim(-y_max - pad_y, y_max + pad_y)
 x_min, x_max_lim = ax_lead.get_xlim()
 y_min, y_max_lim = ax_lead.get_ylim()
 
-ax_lead.fill_between([0, x_max_lim], 0, y_max_lim, color="#e5f5e0", alpha=0.5)
-ax_lead.fill_between([x_min, 0], 0, y_max_lim, color="#fee6ce", alpha=0.5)
-ax_lead.fill_between([x_min, 0], y_min, 0, color="#fddede", alpha=0.5)
-ax_lead.fill_between([0, x_max_lim], y_min, 0, color="#d0e1f9", alpha=0.5)
+# Red-yellow-green spectrum:
+#   bottom-left (laggards)  -> red
+#   left-top & right-bottom -> yellow / amber (neutral / rotational)
+#   top-right (leaders)     -> green
+ax_lead.fill_between([0, x_max_lim], 0, y_max_lim, color="#e1f5e0", alpha=0.55)   # green
+ax_lead.fill_between([x_min, 0], 0, y_max_lim, color="#fff9c4", alpha=0.55)       # yellow
+ax_lead.fill_between([x_min, 0], y_min, 0, color="#fde0dc", alpha=0.55)           # red
+ax_lead.fill_between([0, x_max_lim], y_min, 0, color="#ffe9b3", alpha=0.55)       # amber
 
 ax_lead.axvline(0, color="#888888", linewidth=1)
 ax_lead.axhline(0, color="#888888", linewidth=1)
@@ -525,7 +526,6 @@ st.subheader("Factor Crowding and Diversifiers")
 if corr_matrix.empty or corr_matrix.shape[0] < 2:
     st.info("Not enough data to compute factor correlations.")
 else:
-    # Compute average absolute correlation (excluding self) for each factor
     crowd_rows = []
     for f in corr_matrix.columns:
         peers = corr_matrix.loc[f].drop(f)
@@ -549,7 +549,6 @@ else:
     if not crowd_df.empty:
         crowd_df = crowd_df.sort_values("Avg |corr| to others", ascending=False)
 
-        # Bar chart for crowding
         fig_crowd, ax_crowd = plt.subplots(figsize=(8, 4.5))
         ax_crowd.barh(
             crowd_df["Factor"],
@@ -563,7 +562,6 @@ else:
         fig_crowd.tight_layout()
         st.pyplot(fig_crowd, clear_figure=True)
 
-        # Compact table with key relationships
         display_crowd = crowd_df.copy()
         display_crowd["Avg |corr| to others"] = display_crowd["Avg |corr| to others"].map(
             lambda x: f"{x:.2f}"
