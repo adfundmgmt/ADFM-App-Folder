@@ -1,6 +1,6 @@
-# Weekly Cross-Asset Compass (Revised ADFM Edition)
-# Focus moves from diagnostics to high-signal narrative: what changed this week, what drives regime,
-# what it means for AI longs, rate hedges, JPY hedge, and energy legs.
+# Weekly Cross Asset Compass (Revised ADFM Edition)
+# Focus moves from diagnostics to high-signal narrative: what changed this week,
+# what drives regime, what it means for AI longs, rate hedges, JPY hedge, and energy legs.
 
 import math
 from datetime import datetime, timedelta
@@ -17,7 +17,7 @@ import streamlit as st
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
-st.set_page_config(page_title="Weekly Cross-Asset Compass", layout="wide")
+st.set_page_config(page_title="Weekly Cross Asset Compass", layout="wide")
 
 plt.rcParams.update({
     "figure.figsize": (8, 3),
@@ -119,7 +119,7 @@ def fetch_prices(tickers, start, end):
 # DATA LOAD
 # ---------------------------------------------------------
 end = datetime.now().date()
-start = (datetime.now() - timedelta(days=3650)).date()  # Fixed 10y history, cleaner comparisons
+start = (datetime.now() - timedelta(days=3650)).date()  # fixed 10y history
 
 ALL = list(dict.fromkeys(ORDER + IV_TICKERS))
 
@@ -158,55 +158,62 @@ def classify():
     if percentile_last(rv_spx) >= 70: stress += 1
     if d["corr_now"] >= 0.50: stress += 1
 
-    if stress >= 3: d["regime"] = "Risk-off"
-    elif stress == 2: d["regime"] = "Cautious"
-    else: d["regime"] = "Neutral or Constructive"
+    if stress >= 3:
+        d["regime"] = "Risk off"
+    elif stress == 2:
+        d["regime"] = "Cautious"
+    else:
+        d["regime"] = "Neutral or constructive"
 
     return d
 
 REG = classify()
 
 # ---------------------------------------------------------
-# TOP-LEVEL METRICS WITH DELTA VS LAST WEEK
+# FIXED AND SAFE DELTA LOGIC
 # ---------------------------------------------------------
 st.subheader("Regime Drivers")
 
 last = PR.index[-1]
 idx_wk = PR.index.get_loc(last) - 5
 
-def delta(series, idx_wk):
+def compute_delta(series, idx_wk):
     s = series.dropna()
     if s.empty or idx_wk < 0 or idx_wk >= len(s):
-        return np.nan
+        return None
     return float(s.iloc[-1] - s.iloc[idx_wk])
 
 ts = vix_term(IV)
 rv = RV["^GSPC"] * 100
 corr = roll_corr(RET, "^GSPC", "^TNX", 21)
 
+ts_delta = compute_delta(ts, idx_wk)
+vix_delta = compute_delta(IV["^VIX"], idx_wk)
+corr_delta = compute_delta(corr, idx_wk)
+
 cols = st.columns(4)
 cols[0].metric("Regime", REG["regime"])
-cols[1].metric("VIX3M/VIX − 1", f"{REG['ts_now']:+.3f}", delta(delta(ts, idx_wk)))
-cols[2].metric("VIX", f"{REG['vix_now']:.1f}", delta(delta(IV["^VIX"], idx_wk)))
-cols[3].metric("SPX vs 10Y ρ", f"{REG['corr_now']:.1%}", delta(delta(corr, idx_wk)))
+cols[1].metric("VIX3M divided by VIX minus 1", f"{REG['ts_now']:+.3f}", ts_delta)
+cols[2].metric("VIX", f"{REG['vix_now']:.1f}", vix_delta)
+cols[3].metric("SPX vs 10Y correlation", f"{REG['corr_now']:.1%}", corr_delta)
 
 # ---------------------------------------------------------
-# DECISION-GRADE NARRATIVE
+# NARRATIVE
 # ---------------------------------------------------------
-st.subheader("This Week’s Read")
+st.subheader("This Week's Read")
 
 text = """
-Equity–rate correlation stayed positive, which keeps pressure on growth when yields back up and supports the logic of holding a JPY hedge against the AI basket. 
-VIX remains above its 20th percentile and SPX realized vol is drifting higher, so convexity is not cheap enough to ignore but not stressed enough to force gross cuts. 
+Equity rate correlation stayed positive which keeps pressure on growth when yields back up and supports the logic of holding a JPY hedge against the AI basket.  
+VIX remains above its 20th percentile and SPX realized vol is drifting higher so convexity is not cheap enough to ignore but not stressed enough to force gross cuts.  
 Oil correlations softened which helps your AI longs and reduces tail risk from energy volatility bleeding into factor dispersion.
 """
 
 st.markdown(text)
 
 # ---------------------------------------------------------
-# THIS WEEK’S TAPE STRIP
+# TAPE STRIP
 # ---------------------------------------------------------
-st.subheader("Cross-Asset Tape Snapshot")
+st.subheader("Cross Asset Tape Snapshot")
 
 strip_cols = st.columns(5)
 assets = ["^GSPC", "^TNX", "HYG", "CL=F", "USDJPY=X"]
@@ -253,7 +260,7 @@ for spec, col in zip(PAIR_SPECS[3:], row2):
         corr_panel(spec)
 
 # ---------------------------------------------------------
-# CORRELATION MATRIX — IMPROVED VISUAL
+# CORRELATION MATRIX
 # ---------------------------------------------------------
 st.subheader("1M Correlation Matrix")
 
@@ -276,7 +283,7 @@ sty = (
 st.dataframe(sty, use_container_width=True, height=500)
 
 # ---------------------------------------------------------
-# VOL TABLE — CLEANER, HIGHER SIGNAL
+# VOL SNAPSHOT
 # ---------------------------------------------------------
 st.subheader("Volatility Snapshot")
 
@@ -297,16 +304,16 @@ if "CL=F" in RV: add_vol("WTI 1M RV", RV["CL=F"]*100, "Realized")
 if "^VIX" in IV: add_vol("VIX", IV["^VIX"], "Implied")
 if "^OVX" in IV: add_vol("OVX", IV["^OVX"], "Implied")
 
-tbl = pd.DataFrame(rows, columns=["Series", "Class", "Level", "Δ w/w", "Percentile"])
+tbl = pd.DataFrame(rows, columns=["Series", "Class", "Level", "Delta w over w", "Percentile"])
 
 sty2 = (
     tbl.style
         .format({
             "Level": "{:.1f}",
-            "Δ w/w": lambda x: "" if pd.isna(x) else f"{x:+.1f}",
+            "Delta w over w": lambda x: "" if pd.isna(x) else f"{x:+.1f}",
             "Percentile": "{:.0f}%"
         })
-        .background_gradient(subset=["Δ w/w"], cmap="RdYlGn")
+        .background_gradient(subset=["Delta w over w"], cmap="RdYlGn")
 )
 
 st.dataframe(sty2, use_container_width=True, height=400)
