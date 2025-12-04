@@ -614,10 +614,10 @@ st.markdown(
     f"""
     <div style='text-align:center'>
         <span style='font-size:1.18em; font-weight:600; color:#218739'>
-            ⬆️ Best month (by mean): {best['label']} ({best['mean_total']:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
+            Best month: {best['label']} ({best['mean_total']:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
         </span>&nbsp;&nbsp;&nbsp;
         <span style='font-size:1.18em; font-weight:600; color:#c93535'>
-            ⬇️ Worst month (by mean): {worst['label']} ({worst['mean_total']:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
+            Worst month: {worst['label']} ({worst['mean_total']:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
         </span>
     </div>
     """,
