@@ -1,13 +1,18 @@
 ############################################################
-# Liquidity & Fed Policy Tracker (with NFCI)
-# Updated Lookback Options: 3m, 1y, 3y, 5y, 10y, Max (25y)
+# Liquidity, Financial Conditions & Market Overlay Dashboard
+# AD Fund Management LP
+# Includes: Net Liquidity, NFCI, Recessions, SPX Overlay,
+#           Rolling Beta (NetLiq -> SPX)
 ############################################################
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
+import yfinance as yf
+import statsmodels.api as sm
 
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
@@ -19,10 +24,6 @@ FRED = {
     "nfci": "NFCI"
 }
 
-DEFAULT_SMOOTH_DAYS = 5
-REBASE_BASE_WINDOW = 10
-RRP_BASE_FLOOR_B = 5.0
-
 LOOKBACK_OPTIONS = {
     "3 months": 0.25,
     "1 year": 1,
@@ -32,7 +33,17 @@ LOOKBACK_OPTIONS = {
     "Max (25 years)": 25
 }
 
+DEFAULT_SMOOTH_DAYS = 5
+REBASE_BASE_WINDOW = 10
+RRP_BASE_FLOOR_B = 5.0
 MAX_YEARS = 25
+
+# NBER recession list
+US_RECESSIONS = [
+    ("2001-03-01", "2001-11-30"),
+    ("2007-12-01", "2009-06-30"),
+    ("2020-02-01", "2020-04-30")
+]
 
 st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
@@ -43,8 +54,14 @@ with st.sidebar:
     st.markdown(
         """
         Net Liquidity = WALCL − RRP − TGA  
+
         NFCI = Chicago Fed National Financial Conditions Index  
-        NFCI > 0 indicates tighter-than-average financial conditions.
+        Values above zero indicate tighter-than-average conditions.
+
+        New Panels Added:  
+        • SPX overlay with Net Liquidity  
+        • Rolling 90-day beta of Net Liquidity vs SPX  
+        • Recession shading (NBER)
         """
     )
     st.markdown("---")
@@ -53,7 +70,7 @@ with st.sidebar:
     lookback_label = st.selectbox(
         "Lookback",
         list(LOOKBACK_OPTIONS.keys()),
-        index=5  # defaults to Max (25y)
+        index=5
     )
     lookback_years = LOOKBACK_OPTIONS[lookback_label]
 
@@ -76,15 +93,15 @@ def fred_series(series, start, end):
 today = pd.Timestamp.today().normalize()
 start_all = today - pd.DateOffset(years=MAX_YEARS)
 
-# Handle lookback logic
-if lookback_label == "3m":
+# Lookback logic
+if lookback_label == "3 months":
     start_lb = today - pd.DateOffset(months=3)
-elif lookback_label == "Max (25y)":
+elif lookback_label == "Max (25 years)":
     start_lb = start_all
 else:
     start_lb = today - pd.DateOffset(years=int(lookback_years))
 
-# Fetch FRED series
+# Fetch FRED data
 fed_bs = fred_series(FRED["fed_bs"], start_all, today)
 rrp    = fred_series(FRED["rrp"],    start_all, today)
 tga    = fred_series(FRED["tga"],    start_all, today)
@@ -122,19 +139,40 @@ def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
     s = series.copy()
     head = s.dropna().iloc[:max(1, base_window)]
     base = head.median() if not head.empty else s.dropna().iloc[0]
-
     if min_base is not None:
         base = max(base, float(min_base))
-
     if base == 0 or pd.isna(base):
         return s * 0 + 100
-
     return (s / base) * 100
 
 reb = pd.DataFrame(index=df.index)
 reb["WALCL_idx"] = rebase(df["WALCL_b"])
 reb["RRP_idx"]   = rebase(df["RRP_b"], min_base=RRP_BASE_FLOOR_B)
 reb["TGA_idx"]   = rebase(df["TGA_b"])
+
+# ---------------- SPX + Rolling Beta ----------------
+spx = yf.download("^GSPC", start=start_lb, end=today)["Adj Close"].ffill()
+spx.name = "SPX"
+
+combo = pd.concat([df["NetLiq"], spx], axis=1).dropna()
+
+# Daily returns
+combo["spx_ret"] = combo["SPX"].pct_change()
+combo["nl_ret"]  = combo["NetLiq"].pct_change()
+
+# Rolling regression beta (90-day)
+window = 90
+betas = []
+
+for i in range(window, len(combo)):
+    y = combo["spx_ret"].iloc[i-window:i]
+    x = combo["nl_ret"].iloc[i-window:i]
+    x = sm.add_constant(x)
+    model = sm.OLS(y, x).fit()
+    betas.append(model.params["nl_ret"])
+
+combo = combo.iloc[window:].copy()
+combo["beta"] = betas
 
 # ---------------- Metrics ----------------
 def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
@@ -149,9 +187,9 @@ m2.metric("WALCL", fmt_b(latest["WALCL_b"]))
 m3.metric("RRP", fmt_b(latest["RRP_b"]))
 m4.metric("TGA", fmt_b(latest["TGA_b"]))
 m5.metric("EFFR", fmt_pct(latest["EFFR"]))
-m6.metric("NFCI", fmt_nfci(latest["NFCI"]), help="Values above zero = tighter financial conditions")
+m6.metric("NFCI", fmt_nfci(latest["NFCI"]), help=">0 = tighter conditions")
 
-# ---------------- Charts ----------------
+# ---------------- Main Liquidity Figure ----------------
 fig = make_subplots(
     rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05,
     subplot_titles=(
@@ -193,8 +231,53 @@ fig.update_layout(
 )
 
 fig.update_xaxes(tickformat="%b-%y", row=4, col=1, title="Date")
-
 st.plotly_chart(fig, use_container_width=True)
+
+# ---------------- SPX Overlay Panel ----------------
+fig2 = make_subplots(
+    rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+    subplot_titles=(
+        "SPX vs Net Liquidity",
+        "Rolling 90-Day Beta (Net Liquidity → SPX)",
+        "Recession Periods (NBER)"
+    )
+)
+
+# Row 1: SPX and Net Liquidity
+fig2.add_trace(go.Scatter(
+    x=combo.index, y=combo["SPX"], name="SPX", line=dict(color="#1f77b4")
+), row=1, col=1)
+fig2.add_trace(go.Scatter(
+    x=combo.index, y=combo["NetLiq"], name="Net Liquidity", line=dict(color="#000000")
+), row=1, col=1)
+
+# Row 2: Beta
+fig2.add_trace(go.Scatter(
+    x=combo.index, y=combo["beta"],
+    name="Beta (NetLiq → SPX)", line=dict(color="#ff7f0e")
+), row=2, col=1)
+
+# Row 3: recession shading
+fig2.add_trace(go.Scatter(
+    x=combo.index, y=[0]*len(combo), showlegend=False
+), row=3, col=1)
+
+for start_rec, end_rec in US_RECESSIONS:
+    fig2.add_vrect(
+        x0=start_rec, x1=end_rec,
+        fillcolor="gray", opacity=0.25, line_width=0,
+        row=3, col=1
+    )
+
+fig2.update_layout(
+    template="plotly_white",
+    height=950,
+    legend=dict(orientation="h", x=0, y=1.15),
+    margin=dict(l=60, r=40, t=60, b=60)
+)
+
+fig2.update_xaxes(tickformat="%b-%y", row=3, col=1, title="Date")
+st.plotly_chart(fig2, use_container_width=True)
 
 # ---------------- Download ----------------
 with st.expander("Download Data"):
