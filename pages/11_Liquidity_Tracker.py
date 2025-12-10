@@ -15,6 +15,7 @@ import yfinance as yf
 
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
+
 FRED = {
     "fed_bs": "WALCL",
     "rrp": "RRPONTSYD",
@@ -37,7 +38,7 @@ REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B = 5.0
 MAX_YEARS = 25
 
-# NBER recession list
+# NBER recessions
 US_RECESSIONS = [
     ("2001-03-01", "2001-11-30"),
     ("2007-12-01", "2009-06-30"),
@@ -45,13 +46,9 @@ US_RECESSIONS = [
 ]
 
 # ----------------------------------------------------------
-# Rolling Beta Function (NumPy-based OLS)
+# Rolling Beta Function (NumPy OLS)
 # ----------------------------------------------------------
 def rolling_beta(x, y, window):
-    """
-    Compute rolling beta of y ~ x using simple OLS:
-        y = alpha + beta * x
-    """
     betas = []
     idx = []
 
@@ -72,8 +69,8 @@ def rolling_beta(x, y, window):
             if np.var(x_arr) == 0:
                 betas.append(np.nan)
             else:
-                b = np.cov(x_arr, y_arr)[0, 1] / np.var(x_arr)
-                betas.append(b)
+                beta_val = np.cov(x_arr, y_arr)[0, 1] / np.var(x_arr)
+                betas.append(beta_val)
 
         idx.append(x.index[i])
 
@@ -90,20 +87,29 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Net Liquidity = WALCL − RRP − TGA  
-        NFCI = Chicago Fed National Financial Conditions Index  
+        This dashboard tracks how **Federal Reserve balance sheet flows**,  
+        the **Treasury General Account**, **Reverse Repo usage**,  
+        and **financial conditions** feed into **market liquidity**.
 
-        New Panels Added:  
-        • SPX overlay with Net Liquidity  
-        • Rolling 90-day beta (Net Liquidity → SPX)  
-        • NBER recession shading  
+        **Net Liquidity = WALCL − RRP − TGA**  
+        Higher Net Liquidity often coincides with stronger risk asset performance.
+
+        **NFCI** (Chicago Fed Financial Conditions Index) provides a  
+        wider lens on stress across credit, funding, and leverage markets.  
+        Values **above zero** indicate tighter-than-average conditions.
+
+        The **Market Overlay** panel includes:  
+        • SPX vs Net Liquidity  
+        • Rolling 90-day beta (how much SPX depends on liquidity)  
+        • NBER recession shading for regime context
         """
     )
+
     st.markdown("---")
     st.header("Settings")
 
     lookback_label = st.selectbox(
-        "Lookback",
+        "Lookback window",
         list(LOOKBACK_OPTIONS.keys()),
         index=5
     )
@@ -128,7 +134,7 @@ def fred_series(series, start, end):
 today = pd.Timestamp.today().normalize()
 start_all = today - pd.DateOffset(years=MAX_YEARS)
 
-# Lookback logic
+# Lookback selection
 if lookback_label == "3 months":
     start_lb = today - pd.DateOffset(months=3)
 elif lookback_label == "Max (25 years)":
@@ -168,7 +174,7 @@ for col in ["WALCL_b", "RRP_b", "TGA_b", "NetLiq", "EFFR", "NFCI"]:
         df[col].rolling(smooth, min_periods=1).mean() if smooth > 1 else df[col]
     )
 
-# Rebased components
+# Rebase
 def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
     s = series.copy()
     head = s.dropna().iloc[:max(1, base_window)]
@@ -184,16 +190,25 @@ reb["WALCL_idx"] = rebase(df["WALCL_b"])
 reb["RRP_idx"]   = rebase(df["RRP_b"], min_base=RRP_BASE_FLOOR_B)
 reb["TGA_idx"]   = rebase(df["TGA_b"])
 
-# ---------------- SPX & Rolling Beta ----------------
-spx = yf.download("^GSPC", start=start_lb, end=today)["Adj Close"].ffill()
-spx.name = "SPX"
+# ---------------- SPX Download (Robust) ----------------
+spx_raw = yf.download("^GSPC", start=start_lb, end=today)
+
+if isinstance(spx_raw.columns, pd.MultiIndex):
+    spx = spx_raw["Adj Close"]["^GSPC"].rename("SPX").ffill()
+else:
+    if "Adj Close" in spx_raw.columns:
+        spx = spx_raw["Adj Close"].rename("SPX").ffill()
+    elif "Close" in spx_raw.columns:
+        spx = spx_raw["Close"].rename("SPX").ffill()
+    else:
+        st.error("SPX price column not found in data.")
+        st.stop()
 
 combo = pd.concat([df["NetLiq"], spx], axis=1).dropna()
-
 combo["spx_ret"] = combo["SPX"].pct_change()
 combo["nl_ret"]  = combo["NetLiq"].pct_change()
 
-# Compute rolling beta
+# Rolling beta
 window = 90
 beta_series = rolling_beta(combo["nl_ret"], combo["spx_ret"], window)
 
@@ -201,9 +216,9 @@ combo = combo.iloc[window:].copy()
 combo["beta"] = beta_series
 
 # ---------------- Metrics ----------------
-def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
-def fmt_pct(x): return "N/A" if pd.isna(x) else f"{x:.2f}%"
-def fmt_nfci(x): return "N/A" if pd.isna(x) else f"{x:.3f}"
+def fmt_b(x):   return f"{x:,.0f} B" if pd.notna(x) else "N/A"
+def fmt_pct(x): return f"{x:.2f}%" if pd.notna(x) else "N/A"
+def fmt_nfci(x): return f"{x:.3f}" if pd.notna(x) else "N/A"
 
 latest = df.iloc[-1]
 
@@ -213,7 +228,7 @@ m2.metric("WALCL", fmt_b(latest["WALCL_b"]))
 m3.metric("RRP", fmt_b(latest["RRP_b"]))
 m4.metric("TGA", fmt_b(latest["TGA_b"]))
 m5.metric("EFFR", fmt_pct(latest["EFFR"]))
-m6.metric("NFCI", fmt_nfci(latest["NFCI"]), help=">0 = tighter financial conditions")
+m6.metric("NFCI", fmt_nfci(latest["NFCI"]), help=">0 = tighter conditions")
 
 # ---------------- Main Liquidity Chart ----------------
 fig = make_subplots(
@@ -265,32 +280,31 @@ fig2 = make_subplots(
     )
 )
 
+# Row 1
 fig2.add_trace(go.Scatter(
-    x=combo.index, y=combo["SPX"],
-    name="SPX", line=dict(color="#1f77b4")
+    x=combo.index, y=combo["SPX"], name="SPX", line=dict(color="#1f77b4")
 ), row=1, col=1)
 
 fig2.add_trace(go.Scatter(
-    x=combo.index, y=combo["NetLiq"],
-    name="Net Liquidity", line=dict(color="#000000")
+    x=combo.index, y=combo["NetLiq"], name="Net Liquidity", line=dict(color="#000000")
 ), row=1, col=1)
 
+# Row 2
 fig2.add_trace(go.Scatter(
     x=combo.index, y=combo["beta"],
     name="Beta (NetLiq → SPX)", line=dict(color="#ff7f0e")
 ), row=2, col=1)
 
-# Recession shading
+# Row 3: recession shading
 fig2.add_trace(go.Scatter(
-    x=combo.index, y=[0]*len(combo),
-    showlegend=False
+    x=combo.index, y=[0]*len(combo), showlegend=False
 ), row=3, col=1)
 
 for start_rec, end_rec in US_RECESSIONS:
     fig2.add_vrect(
         x0=start_rec, x1=end_rec,
-        fillcolor="gray", opacity=0.25,
-        line_width=0, row=3, col=1
+        fillcolor="gray", opacity=0.25, line_width=0,
+        row=3, col=1
     )
 
 fig2.update_layout(
@@ -303,7 +317,7 @@ fig2.update_layout(
 fig2.update_xaxes(tickformat="%b-%y", title="Date", row=3, col=1)
 st.plotly_chart(fig2, use_container_width=True)
 
-# ---------------- Download ----------------
+# ---------------- Download Data ----------------
 with st.expander("Download Data"):
     out = pd.DataFrame(index=df.index)
     out["WALCL_B"]  = df["WALCL_b"]
