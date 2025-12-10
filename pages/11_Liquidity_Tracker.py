@@ -1,8 +1,8 @@
 ############################################################
-# Liquidity, Financial Conditions & Market Overlay Dashboard
+# Liquidity, Fed Policy & Financial Conditions Tracker
 # AD Fund Management LP
-# Includes: Net Liquidity, NFCI, Recessions, SPX Overlay,
-#           Rolling Beta (NetLiq → SPX) [NumPy OLS]
+# Includes: Net Liquidity, NFCI, Recession Shading
+# Clean version with no SPX overlays or rolling beta
 ############################################################
 
 import streamlit as st
@@ -11,7 +11,6 @@ import numpy as np
 from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-import yfinance as yf
 
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
@@ -46,37 +45,6 @@ US_RECESSIONS = [
 ]
 
 # ----------------------------------------------------------
-# Rolling Beta Function (NumPy OLS)
-# ----------------------------------------------------------
-def rolling_beta(x, y, window):
-    betas = []
-    idx = []
-
-    for i in range(window, len(x)):
-        xw = x.iloc[i-window:i]
-        yw = y.iloc[i-window:i]
-
-        mask = xw.notna() & yw.notna()
-        xw = xw[mask]
-        yw = yw[mask]
-
-        if len(xw) < 5:
-            betas.append(np.nan)
-        else:
-            x_arr = xw.values
-            y_arr = yw.values
-
-            if np.var(x_arr) == 0:
-                betas.append(np.nan)
-            else:
-                beta_val = np.cov(x_arr, y_arr)[0, 1] / np.var(x_arr)
-                betas.append(beta_val)
-
-        idx.append(x.index[i])
-
-    return pd.Series(betas, index=idx)
-
-# ----------------------------------------------------------
 # Streamlit App
 # ----------------------------------------------------------
 st.set_page_config(page_title=TITLE, layout="wide")
@@ -87,21 +55,23 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This dashboard tracks how **Federal Reserve balance sheet flows**,  
-        the **Treasury General Account**, **Reverse Repo usage**,  
-        and **financial conditions** feed into **market liquidity**.
+        This dashboard tracks how the Federal Reserve and Treasury  
+        influence system liquidity and broader financial conditions.
 
         **Net Liquidity = WALCL − RRP − TGA**  
-        Higher Net Liquidity often coincides with stronger risk asset performance.
+        Higher liquidity often reflects easier conditions for risk markets.
 
-        **NFCI** (Chicago Fed Financial Conditions Index) provides a  
-        wider lens on stress across credit, funding, and leverage markets.  
-        Values **above zero** indicate tighter-than-average conditions.
+        **Inputs:**  
+        • **WALCL** – Federal Reserve balance sheet  
+        • **RRP** – Reverse Repo usage  
+        • **TGA** – Treasury's cash balance  
+        • **EFFR** – Effective Fed Funds Rate  
+        • **NFCI** – Chicago Fed Financial Conditions Index  
 
-        The **Market Overlay** panel includes:  
-        • SPX vs Net Liquidity  
-        • Rolling 90-day beta (how much SPX depends on liquidity)  
-        • NBER recession shading for regime context
+        **Interpretation:**  
+        • Rising Net Liquidity generally reflects policy easing or liquidity injections.  
+        • NFCI above zero signals tighter-than-average financial conditions.  
+        • Recession shading highlights major regime shifts.
         """
     )
 
@@ -190,31 +160,6 @@ reb["WALCL_idx"] = rebase(df["WALCL_b"])
 reb["RRP_idx"]   = rebase(df["RRP_b"], min_base=RRP_BASE_FLOOR_B)
 reb["TGA_idx"]   = rebase(df["TGA_b"])
 
-# ---------------- SPX Download (Robust) ----------------
-spx_raw = yf.download("^GSPC", start=start_lb, end=today)
-
-if isinstance(spx_raw.columns, pd.MultiIndex):
-    spx = spx_raw["Adj Close"]["^GSPC"].rename("SPX").ffill()
-else:
-    if "Adj Close" in spx_raw.columns:
-        spx = spx_raw["Adj Close"].rename("SPX").ffill()
-    elif "Close" in spx_raw.columns:
-        spx = spx_raw["Close"].rename("SPX").ffill()
-    else:
-        st.error("SPX price column not found in data.")
-        st.stop()
-
-combo = pd.concat([df["NetLiq"], spx], axis=1).dropna()
-combo["spx_ret"] = combo["SPX"].pct_change()
-combo["nl_ret"]  = combo["NetLiq"].pct_change()
-
-# Rolling beta
-window = 90
-beta_series = rolling_beta(combo["nl_ret"], combo["spx_ret"], window)
-
-combo = combo.iloc[window:].copy()
-combo["beta"] = beta_series
-
 # ---------------- Metrics ----------------
 def fmt_b(x):   return f"{x:,.0f} B" if pd.notna(x) else "N/A"
 def fmt_pct(x): return f"{x:.2f}%" if pd.notna(x) else "N/A"
@@ -270,52 +215,31 @@ fig.update_layout(
 fig.update_xaxes(tickformat="%b-%y", title="Date", row=4, col=1)
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- SPX Overlay Panel ----------------
-fig2 = make_subplots(
-    rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-    subplot_titles=(
-        "SPX vs Net Liquidity",
-        "Rolling 90-Day Beta (NetLiq → SPX)",
-        "Recession Periods (NBER)"
-    )
+# ---------------- Recession Panel ----------------
+fig_rec = make_subplots(
+    rows=1, cols=1, shared_xaxes=True,
+    subplot_titles=("NBER Recessions",)
 )
 
-# Row 1
-fig2.add_trace(go.Scatter(
-    x=combo.index, y=combo["SPX"], name="SPX", line=dict(color="#1f77b4")
-), row=1, col=1)
-
-fig2.add_trace(go.Scatter(
-    x=combo.index, y=combo["NetLiq"], name="Net Liquidity", line=dict(color="#000000")
-), row=1, col=1)
-
-# Row 2
-fig2.add_trace(go.Scatter(
-    x=combo.index, y=combo["beta"],
-    name="Beta (NetLiq → SPX)", line=dict(color="#ff7f0e")
-), row=2, col=1)
-
-# Row 3: recession shading
-fig2.add_trace(go.Scatter(
-    x=combo.index, y=[0]*len(combo), showlegend=False
-), row=3, col=1)
+fig_rec.add_trace(go.Scatter(
+    x=df.index, y=[0]*len(df),
+    showlegend=False
+))
 
 for start_rec, end_rec in US_RECESSIONS:
-    fig2.add_vrect(
+    fig_rec.add_vrect(
         x0=start_rec, x1=end_rec,
-        fillcolor="gray", opacity=0.25, line_width=0,
-        row=3, col=1
+        fillcolor="gray", opacity=0.25, line_width=0
     )
 
-fig2.update_layout(
+fig_rec.update_layout(
     template="plotly_white",
-    height=950,
-    legend=dict(orientation="h", x=0, y=1.15),
+    height=300,
     margin=dict(l=60, r=40, t=60, b=60)
 )
 
-fig2.update_xaxes(tickformat="%b-%y", title="Date", row=3, col=1)
-st.plotly_chart(fig2, use_container_width=True)
+fig_rec.update_xaxes(tickformat="%b-%y", title="Date")
+st.plotly_chart(fig_rec, use_container_width=True)
 
 # ---------------- Download Data ----------------
 with st.expander("Download Data"):
