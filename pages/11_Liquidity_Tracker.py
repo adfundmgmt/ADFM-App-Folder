@@ -37,12 +37,7 @@ REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B = 5.0
 MAX_YEARS = 25
 
-# NBER recessions
-US_RECESSIONS = [
-    ("2001-03-01", "2001-11-30"),
-    ("2007-12-01", "2009-06-30"),
-    ("2020-02-01", "2020-04-30")
-]
+
 
 # ----------------------------------------------------------
 # Streamlit App
@@ -215,31 +210,7 @@ fig.update_layout(
 fig.update_xaxes(tickformat="%b-%y", title="Date", row=4, col=1)
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Recession Panel ----------------
-fig_rec = make_subplots(
-    rows=1, cols=1, shared_xaxes=True,
-    subplot_titles=("NBER Recessions",)
-)
 
-fig_rec.add_trace(go.Scatter(
-    x=df.index, y=[0]*len(df),
-    showlegend=False
-))
-
-for start_rec, end_rec in US_RECESSIONS:
-    fig_rec.add_vrect(
-        x0=start_rec, x1=end_rec,
-        fillcolor="gray", opacity=0.25, line_width=0
-    )
-
-fig_rec.update_layout(
-    template="plotly_white",
-    height=300,
-    margin=dict(l=60, r=40, t=60, b=60)
-)
-
-fig_rec.update_xaxes(tickformat="%b-%y", title="Date")
-st.plotly_chart(fig_rec, use_container_width=True)
 
 # ---------------- Download Data ----------------
 with st.expander("Download Data"):
