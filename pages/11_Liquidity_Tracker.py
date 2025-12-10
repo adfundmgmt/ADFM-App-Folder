@@ -24,12 +24,12 @@ REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B = 5.0
 
 LOOKBACK_OPTIONS = {
-    "3m": 0.25,
-    "1y": 1,
-    "3y": 3,
-    "5y": 5,
-    "10y": 10,
-    "Max (25y)": 25
+    "3 months": 0.25,
+    "1 year": 1,
+    "3 years": 3,
+    "5 years": 5,
+    "10 years": 10,
+    "Max (25 years)": 25
 }
 
 MAX_YEARS = 25
