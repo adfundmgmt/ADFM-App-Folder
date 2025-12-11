@@ -21,50 +21,51 @@ st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
 
 # ---------------- Sidebar ----------------
-with st.sidebar():
-    st.header("About This Tool")
-    st.markdown(
-        """
-        Tracks systemic liquidity and policy stance using five core series.
+sidebar = st.sidebar
 
-        **Net Liquidity = WALCL − RRP − TGA**
+sidebar.header("About This Tool")
+sidebar.markdown(
+    """
+    Tracks systemic liquidity and policy stance using five core series.
 
-        **Series**
-        • WALCL Fed balance sheet  
-        • RRPONTSYD reverse repo  
-        • TGA Treasury General Account  
-        • EFFR effective fed funds rate  
-        • NFCI Chicago Fed financial conditions index  
+    **Net Liquidity = WALCL − RRP − TGA**
 
-        **Panels**
-        • Net Liquidity  
-        • Rebased components  
-        • Fed Funds Rate  
-        • Financial conditions (NFCI)
-        """
-    )
+    **Series**
+    • WALCL Fed balance sheet  
+    • RRPONTSYD reverse repo  
+    • TGA Treasury General Account  
+    • EFFR effective fed funds rate  
+    • NFCI Chicago Fed financial conditions index  
 
-    st.markdown("---")
-    st.header("Settings")
+    **Panels**
+    • Net Liquidity  
+    • Rebased components  
+    • Fed Funds Rate  
+    • Financial conditions (NFCI)
+    """
+)
 
-    LOOKBACK_MAP = {
-        "1 year": 1,
-        "2 years": 2,
-        "3 years": 3,
-        "10 years": 10,
-        "25 years": 25
-    }
+sidebar.markdown("---")
+sidebar.header("Settings")
 
-    lookback = st.selectbox(
-        "Lookback",
-        list(LOOKBACK_MAP.keys()),
-        index=4
-    )
+LOOKBACK_MAP = {
+    "1 year": 1,
+    "2 years": 2,
+    "3 years": 3,
+    "10 years": 10,
+    "25 years": 25,
+}
 
-    years = LOOKBACK_MAP[lookback]
+lookback = sidebar.selectbox(
+    "Lookback",
+    list(LOOKBACK_MAP.keys()),
+    index=4
+)
 
-    smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
-    st.caption("Data source: FRED via pandas-datareader")
+years = LOOKBACK_MAP[lookback]
+
+smooth = sidebar.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
+sidebar.caption("Data source: FRED via pandas-datareader")
 
 # ---------------- Data ----------------
 @st.cache_data(ttl=24*60*60, show_spinner=False)
