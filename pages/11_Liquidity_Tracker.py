@@ -12,15 +12,13 @@ import plotly.graph_objects as go
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
 FRED = {
-    "fed_bs": "WALCL",        # Fed total assets (millions)
-    "rrp": "RRPONTSYD",       # ON RRP (billions)
-    "tga": "WDTGAL",          # Treasury General Account (millions)
-    "effr": "EFFR",           # Effective Fed Funds Rate (percent)
-    "nfci": "NFCI",           # Chicago Fed National Financial Conditions Index
+    "fed_bs": "WALCL",
+    "rrp": "RRPONTSYD",
+    "tga": "WDTGAL",
+    "effr": "EFFR",
+    "nfci": "NFCI",
 }
 DEFAULT_SMOOTH_DAYS = 5
-
-# Robust rebase parameters
 REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B   = 5.0
 
@@ -32,25 +30,25 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Goal: track Net Liquidity and policy stance.
+        Tracks systemic liquidity and policy stance using five core series.
 
-        Net Liquidity = WALCL − RRP − TGA
+        **Net Liquidity = WALCL − RRP − TGA**
 
-        Series  
-        • WALCL: Fed balance sheet  
-        • RRPONTSYD: reverse repo  
-        • TGA: Treasury General Account  
-        • EFFR: fed funds rate  
-        • NFCI: Chicago Fed National Financial Conditions Index  
-          Values > 0 mean tighter-than-average financial conditions.
+        **Series**
+        • WALCL Fed balance sheet  
+        • RRPONTSYD reverse repo  
+        • TGA Treasury General Account  
+        • EFFR effective fed funds rate  
+        • NFCI Chicago Fed financial conditions index  
 
-        Panels  
-        1) Net Liquidity  
-        2) Components rebased  
-        3) EFFR  
-        4) NFCI (financial conditions)
+        **Panels**
+        • Net Liquidity  
+        • Rebased components  
+        • Fed Funds Rate  
+        • Financial conditions (NFCI)
         """
     )
+
     st.markdown("---")
     st.header("Settings")
     lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "10y"], index=2)
@@ -98,7 +96,10 @@ df["NetLiq"]  = df["WALCL_b"] - df["RRP_b"] - df["TGA_b"]
 # Apply smoothing
 cols = ["WALCL_b", "RRP_b", "TGA_b", "NetLiq", "EFFR", "NFCI"]
 for col in cols:
-    df[f"{col}_s"] = df[col].rolling(smooth, min_periods=1).mean() if smooth > 1 else df[col]
+    df[f"{col}_s"] = (
+        df[col].rolling(smooth, min_periods=1).mean()
+        if smooth > 1 else df[col]
+    )
 
 # Rebase
 def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
@@ -117,8 +118,8 @@ reb["RRP_idx"]   = rebase(df["RRP_b"], min_base=RRP_BASE_FLOOR_B)
 reb["TGA_idx"]   = rebase(df["TGA_b"])
 
 # ---------------- Metrics ----------------
-def fmt_b(x):   return "N/A" if pd.isna(x) else f"{x:,.0f} B"
-def fmt_pct(x): return "N/A" if pd.isna(x) else f"{x:.2f}%"
+def fmt_b(x):    return "N/A" if pd.isna(x) else f"{x:,.0f} B"
+def fmt_pct(x):  return "N/A" if pd.isna(x) else f"{x:.2f}%"
 def fmt_nfci(x): return "N/A" if pd.isna(x) else f"{x:.3f}"
 
 latest = {
@@ -140,7 +141,7 @@ m6.metric("NFCI", fmt_nfci(latest["nfci"]), help=">0 = tighter conditions")
 
 # ---------------- Charts ----------------
 fig = make_subplots(
-    rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+    rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.06,
     subplot_titles=(
         "Net Liquidity (Billions)",
         "Components Rebased to 100",
@@ -181,13 +182,15 @@ fig.add_trace(go.Scatter(
     line=dict(color="#1f1f1f", width=2)
 ), row=4, col=1)
 
+# Layout improvements
 fig.update_layout(
     template="plotly_white",
     height=1080,
-    legend=dict(orientation="h", x=0, y=1.15),
-    margin=dict(l=60, r=40, t=60, b=60)
+    hovermode="x unified",
+    legend=dict(orientation="h", x=0, y=1.16),
+    margin=dict(l=60, r=40, t=70, b=60),
 )
-fig.update_xaxes(tickformat="%b-%y", row=4, col=1, title="Date")
+fig.update_xaxes(tickformat="%b-%y")
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -213,12 +216,12 @@ with st.expander("Download Data"):
 with st.expander("Methodology"):
     st.markdown(
         f"""
-        Net Liquidity = WALCL − RRP − TGA
+        **Net Liquidity = WALCL − RRP − TGA**
 
-        NFCI interpretation  
+        **NFCI interpretation**
         • Combined measure of credit, leverage, and funding markets  
         • Values above zero imply tighter financial conditions relative to history  
-        • Useful complement to net liquidity and EFFR
+        • Useful complement to net liquidity and EFFR  
 
         Smoothing uses {smooth}-day averages.  
         Rebase uses median of first {REBASE_BASE_WINDOW} observations.
