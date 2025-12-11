@@ -1,8 +1,8 @@
 ############################################################
 # Liquidity, Fed Policy & Financial Conditions Tracker
 # AD Fund Management LP
-# Includes: Net Liquidity, NFCI, Recession Shading
-# Clean version with no SPX overlays or rolling beta
+# Includes: Net Liquidity + NFCI
+# Clean version with no recession shading or SPX overlays
 ############################################################
 
 import streamlit as st
@@ -24,7 +24,6 @@ FRED = {
 }
 
 LOOKBACK_OPTIONS = {
-    "3 months": 0.25,
     "1 year": 1,
     "3 years": 3,
     "5 years": 5,
@@ -36,8 +35,6 @@ DEFAULT_SMOOTH_DAYS = 5
 REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B = 5.0
 MAX_YEARS = 25
-
-
 
 # ----------------------------------------------------------
 # Streamlit App
@@ -51,10 +48,10 @@ with st.sidebar:
     st.markdown(
         """
         This dashboard tracks how the Federal Reserve and Treasury  
-        influence system liquidity and broader financial conditions.
+        influence system liquidity and financial conditions.
 
         **Net Liquidity = WALCL − RRP − TGA**  
-        Higher liquidity often reflects easier conditions for risk markets.
+        Higher liquidity often reflects easier conditions for risk-taking.
 
         **Inputs:**  
         • **WALCL** – Federal Reserve balance sheet  
@@ -64,9 +61,8 @@ with st.sidebar:
         • **NFCI** – Chicago Fed Financial Conditions Index  
 
         **Interpretation:**  
-        • Rising Net Liquidity generally reflects policy easing or liquidity injections.  
-        • NFCI above zero signals tighter-than-average financial conditions.  
-        • Recession shading highlights major regime shifts.
+        • Rising Net Liquidity often signals a supportive policy environment.  
+        • NFCI above zero reflects tighter-than-average conditions.  
         """
     )
 
@@ -76,7 +72,7 @@ with st.sidebar:
     lookback_label = st.selectbox(
         "Lookback window",
         list(LOOKBACK_OPTIONS.keys()),
-        index=5
+        index=4  # Default: Max (25 years)
     )
     lookback_years = LOOKBACK_OPTIONS[lookback_label]
 
@@ -99,10 +95,8 @@ def fred_series(series, start, end):
 today = pd.Timestamp.today().normalize()
 start_all = today - pd.DateOffset(years=MAX_YEARS)
 
-# Lookback selection
-if lookback_label == "3 months":
-    start_lb = today - pd.DateOffset(months=3)
-elif lookback_label == "Max (25 years)":
+# Lookback logic
+if lookback_label == "Max (25 years)":
     start_lb = start_all
 else:
     start_lb = today - pd.DateOffset(years=int(lookback_years))
@@ -139,7 +133,7 @@ for col in ["WALCL_b", "RRP_b", "TGA_b", "NetLiq", "EFFR", "NFCI"]:
         df[col].rolling(smooth, min_periods=1).mean() if smooth > 1 else df[col]
     )
 
-# Rebase
+# Rebased indices
 def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
     s = series.copy()
     head = s.dropna().iloc[:max(1, base_window)]
@@ -208,9 +202,8 @@ fig.update_layout(
 )
 
 fig.update_xaxes(tickformat="%b-%y", title="Date", row=4, col=1)
+
 st.plotly_chart(fig, use_container_width=True)
-
-
 
 # ---------------- Download Data ----------------
 with st.expander("Download Data"):
