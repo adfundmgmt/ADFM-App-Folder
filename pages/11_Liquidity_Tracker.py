@@ -1,9 +1,3 @@
-############################################################
-# Liquidity, Fed Policy & Financial Conditions Tracker
-# AD Fund Management LP
-# Improved UI + Theming + Layout Polish
-############################################################
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -36,61 +30,32 @@ RRP_BASE_FLOOR_B = 5.0
 MAX_YEARS = 25
 
 # ----------------------------------------------------------
-# Streamlit Config
+# Streamlit App
 # ----------------------------------------------------------
 st.set_page_config(page_title=TITLE, layout="wide")
-
-# Add soft CSS improvements
-st.markdown(
-    """
-    <style>
-        /* Cleaner font and spacing */
-        html, body, [class*="css"]  {
-            font-family: 'Inter', sans-serif;
-        }
-
-        /* Metric cards spacing */
-        .element-container div[data-testid="metric-container"] {
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
-            background-color: #f8f9fa;
-            border: 1px solid #eaeaea;
-        }
-
-        /* Sidebar width + padding */
-        section[data-testid="stSidebar"] {
-            width: 340px !important;
-            padding-left: 10px;
-            padding-right: 10px;
-        }
-
-        h1 {
-            padding-bottom: 0.3em;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
 st.title(TITLE)
-st.caption("Federal Reserve balance sheet, Treasury operations, liquidity flow, and financial conditions")
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
-    st.header("About This Dashboard")
+    st.header("About This Tool")
     st.markdown(
         """
-        This tool measures how Federal Reserve and Treasury flows shape **system liquidity** and **financial conditions**.
+        This dashboard tracks how the Federal Reserve and Treasury  
+        influence system liquidity and financial conditions.
 
         **Net Liquidity = WALCL − RRP − TGA**  
-        Higher readings often correspond to an easier risk environment.
+        Higher liquidity often reflects easier conditions for risk-taking.
 
-        **Inputs monitored:**
-        • WALCL – Fed balance sheet  
-        • RRP – Reverse repo facility  
-        • TGA – Treasury General Account  
-        • EFFR – Effective Fed Funds Rate  
-        • NFCI – Chicago Fed Financial Conditions Index  
+        **Inputs:**  
+        • **WALCL** – Federal Reserve balance sheet  
+        • **RRP** – Reverse Repo usage  
+        • **TGA** – Treasury's cash balance  
+        • **EFFR** – Effective Fed Funds Rate  
+        • **NFCI** – Chicago Fed Financial Conditions Index  
+
+        **Interpretation:**  
+        • Rising Net Liquidity often signals a supportive policy environment.  
+        • NFCI above zero reflects tighter-than-average conditions.  
         """
     )
 
@@ -100,9 +65,8 @@ with st.sidebar:
     lookback_label = st.selectbox(
         "Lookback window",
         list(LOOKBACK_OPTIONS.keys()),
-        index=4
+        index=4  # Default: Max (25 years)
     )
-
     lookback_years = LOOKBACK_OPTIONS[lookback_label]
 
     smooth = st.number_input(
@@ -111,7 +75,6 @@ with st.sidebar:
     )
 
     st.caption("Data source: FRED via pandas-datareader")
-
 
 # ---------------- Data Fetch ----------------
 @st.cache_data(ttl=24*60*60, show_spinner=False)
@@ -125,12 +88,13 @@ def fred_series(series, start, end):
 today = pd.Timestamp.today().normalize()
 start_all = today - pd.DateOffset(years=MAX_YEARS)
 
+# Lookback logic
 if lookback_label == "Max (25 years)":
     start_lb = start_all
 else:
     start_lb = today - pd.DateOffset(years=int(lookback_years))
 
-# Fetch series
+# Fetch FRED series
 fed_bs = fred_series(FRED["fed_bs"], start_all, today)
 rrp    = fred_series(FRED["rrp"],    start_all, today)
 tga    = fred_series(FRED["tga"],    start_all, today)
@@ -147,7 +111,7 @@ df = df.dropna(subset=["WALCL", "RRP", "TGA"])
 df = df[df.index >= start_lb]
 
 if df.empty:
-    st.error("No data available for selected lookback window.")
+    st.error("No data for selected lookback.")
     st.stop()
 
 # ---------------- Transformations ----------------
@@ -158,7 +122,9 @@ df["NetLiq"]  = df["WALCL_b"] - df["RRP_b"] - df["TGA_b"]
 
 # Smoothing
 for col in ["WALCL_b", "RRP_b", "TGA_b", "NetLiq", "EFFR", "NFCI"]:
-    df[f"{col}_s"] = df[col].rolling(smooth, min_periods=1).mean() if smooth > 1 else df[col]
+    df[f"{col}_s"] = (
+        df[col].rolling(smooth, min_periods=1).mean() if smooth > 1 else df[col]
+    )
 
 # Rebased indices
 def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
@@ -183,21 +149,17 @@ def fmt_nfci(x): return f"{x:.3f}" if pd.notna(x) else "N/A"
 
 latest = df.iloc[-1]
 
-st.subheader("Current Liquidity Profile")
-
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Net Liquidity", fmt_b(latest["NetLiq"]))
 m2.metric("WALCL", fmt_b(latest["WALCL_b"]))
 m3.metric("RRP", fmt_b(latest["RRP_b"]))
 m4.metric("TGA", fmt_b(latest["TGA_b"]))
 m5.metric("EFFR", fmt_pct(latest["EFFR"]))
-m6.metric("NFCI", fmt_nfci(latest["NFCI"]))
+m6.metric("NFCI", fmt_nfci(latest["NFCI"]), help=">0 = tighter conditions")
 
-st.markdown("---")
-
-# ---------------- Main Chart ----------------
+# ---------------- Main Liquidity Chart ----------------
 fig = make_subplots(
-    rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+    rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05,
     subplot_titles=(
         "Net Liquidity (Billions)",
         "Components Rebased to 100",
@@ -211,13 +173,13 @@ fig.add_trace(go.Scatter(
     name="Net Liquidity", line=dict(color="#000000", width=2)
 ), row=1, col=1)
 
-fig.add_trace(go.Scatter(x=reb.index, y=reb["WALCL_idx"], name="WALCL idx", line=dict(width=2)), row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"],   name="RRP idx",   line=dict(width=2)), row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"],   name="TGA idx",   line=dict(width=2)), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["WALCL_idx"], name="WALCL idx"), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"], name="RRP idx"), row=2, col=1)
+fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"], name="TGA idx"), row=2, col=1)
 
 fig.add_trace(go.Scatter(
     x=df.index, y=df["EFFR_s"],
-    name="EFFR", line=dict(color="#ff7f0e", width=2)
+    name="EFFR", line=dict(color="#ff7f0e")
 ), row=3, col=1)
 
 fig.add_trace(go.Scatter(
@@ -228,15 +190,15 @@ fig.add_trace(go.Scatter(
 fig.update_layout(
     template="plotly_white",
     height=1100,
-    legend=dict(orientation="h", x=0, y=1.18),
-    margin=dict(l=60, r=40, t=80, b=60)
+    legend=dict(orientation="h", x=0, y=1.14),
+    margin=dict(l=60, r=40, t=60, b=60)
 )
 
 fig.update_xaxes(tickformat="%b-%y", title="Date", row=4, col=1)
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Download Panel ----------------
+# ---------------- Download Data ----------------
 with st.expander("Download Data"):
     out = pd.DataFrame(index=df.index)
     out["WALCL_B"]  = df["WALCL_b"]
