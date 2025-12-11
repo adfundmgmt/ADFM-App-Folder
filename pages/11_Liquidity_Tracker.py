@@ -1,10 +1,3 @@
-I am trying to change the naming convention of years, and make the base output be 25 years
-
-############################################################
-# Liquidity & Fed Policy Tracker - clean metrics, no deltas
-# Built by AD Fund Management LP
-############################################################
-
 import streamlit as st
 import pandas as pd
 from pandas_datareader import data as pdr
@@ -28,7 +21,7 @@ st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
 
 # ---------------- Sidebar ----------------
-with st.sidebar:
+with st.sidebar():
     st.header("About This Tool")
     st.markdown(
         """
@@ -65,13 +58,14 @@ with st.sidebar:
     lookback = st.selectbox(
         "Lookback",
         list(LOOKBACK_MAP.keys()),
-        index=4   # default to 25 years
+        index=4
     )
 
     years = LOOKBACK_MAP[lookback]
 
     smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
     st.caption("Data source: FRED via pandas-datareader")
+
 
 # ---------------- Data ----------------
 @st.cache_data(ttl=24*60*60, show_spinner=False)
