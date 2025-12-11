@@ -52,7 +52,7 @@ with st.sidebar():
         "2 years": 2,
         "3 years": 3,
         "10 years": 10,
-        "25 years": 25,
+        "25 years": 25
     }
 
     lookback = st.selectbox(
@@ -65,7 +65,6 @@ with st.sidebar():
 
     smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
     st.caption("Data source: FRED via pandas-datareader")
-
 
 # ---------------- Data ----------------
 @st.cache_data(ttl=24*60*60, show_spinner=False)
