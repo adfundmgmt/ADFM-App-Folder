@@ -51,7 +51,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("Settings")
-    lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "10y"], index=2)
+    lookback = st.selectbox("Lookback", ["1 year", "2 years", "3 years", "10 years", "25 years"], index=5)
     years = int(lookback[:-1])
     smooth = st.number_input("Smoothing window (days)", 1, 30, DEFAULT_SMOOTH_DAYS, 1)
     st.caption("Data source: FRED via pandas-datareader")
