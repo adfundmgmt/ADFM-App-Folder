@@ -1,3 +1,5 @@
+I am trying to change the naming convention of years, and make the base output be 25 years
+
 ############################################################
 # Liquidity & Fed Policy Tracker - clean metrics, no deltas
 # Built by AD Fund Management LP
@@ -18,7 +20,6 @@ FRED = {
     "effr": "EFFR",
     "nfci": "NFCI",
 }
-
 DEFAULT_SMOOTH_DAYS = 5
 REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B   = 5.0
@@ -64,7 +65,7 @@ with st.sidebar:
     lookback = st.selectbox(
         "Lookback",
         list(LOOKBACK_MAP.keys()),
-        index=4  # default = 25 years
+        index=4   # default to 25 years
     )
 
     years = LOOKBACK_MAP[lookback]
@@ -82,8 +83,6 @@ def fred_series(series, start, end):
         return pd.Series(dtype=float)
 
 today = pd.Timestamp.today().normalize()
-
-# pull 25 years of raw historical data (expanded from 15)
 start_all = today - pd.DateOffset(years=25)
 start_lb  = today - pd.DateOffset(years=years)
 
@@ -101,18 +100,17 @@ df = pd.concat(
 
 df = df.dropna(subset=["WALCL", "RRP", "TGA"])
 df = df[df.index >= start_lb]
-
 if df.empty:
     st.error("No data for selected lookback.")
     st.stop()
 
-# ---------------- Net Liquidity ----------------
+# Net Liquidity (billions)
 df["WALCL_b"] = df["WALCL"] / 1000.0
 df["RRP_b"]   = df["RRP"]
 df["TGA_b"]   = df["TGA"] / 1000.0
 df["NetLiq"]  = df["WALCL_b"] - df["RRP_b"] - df["TGA_b"]
 
-# ---------------- Smoothing ----------------
+# Apply smoothing
 cols = ["WALCL_b", "RRP_b", "TGA_b", "NetLiq", "EFFR", "NFCI"]
 for col in cols:
     df[f"{col}_s"] = (
@@ -120,18 +118,15 @@ for col in cols:
         if smooth > 1 else df[col]
     )
 
-# ---------------- Rebase ----------------
+# Rebase
 def rebase(series, base_window=REBASE_BASE_WINDOW, min_base=None):
     s = series.copy()
     if s.isna().all():
         return s * 0 + 100
-
     head = s.dropna().iloc[:max(1, base_window)]
     base = head.median() if not head.empty else s.dropna().iloc[0]
-
     if min_base is not None:
         base = max(base, float(min_base))
-
     return (s / base) * 100 if base else s * 0 + 100
 
 reb = pd.DataFrame(index=df.index)
@@ -180,9 +175,15 @@ fig.add_trace(go.Scatter(
 ), row=1, col=1)
 
 # Row 2
-fig.add_trace(go.Scatter(x=reb.index, y=reb["WALCL_idx"], name="WALCL idx"), row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["RRP_idx"],   name="RRP idx"),   row=2, col=1)
-fig.add_trace(go.Scatter(x=reb.index, y=reb["TGA_idx"],   name="TGA idx"),   row=2, col=1)
+fig.add_trace(go.Scatter(
+    x=reb.index, y=reb["WALCL_idx"], name="WALCL idx"
+), row=2, col=1)
+fig.add_trace(go.Scatter(
+    x=reb.index, y=reb["RRP_idx"], name="RRP idx"
+), row=2, col=1)
+fig.add_trace(go.Scatter(
+    x=reb.index, y=reb["TGA_idx"], name="TGA idx"
+), row=2, col=1)
 
 # Row 3
 fig.add_trace(go.Scatter(
@@ -191,14 +192,14 @@ fig.add_trace(go.Scatter(
     line=dict(color="#ff7f0e")
 ), row=3, col=1)
 
-# Row 4
+# Row 4 (NFCI)
 fig.add_trace(go.Scatter(
     x=df.index, y=df["NFCI_s"],
     name="NFCI",
     line=dict(color="#1f1f1f", width=2)
 ), row=4, col=1)
 
-# Layout
+# Layout improvements
 fig.update_layout(
     template="plotly_white",
     height=1080,
@@ -206,7 +207,6 @@ fig.update_layout(
     legend=dict(orientation="h", x=0, y=1.16),
     margin=dict(l=60, r=40, t=70, b=60),
 )
-
 fig.update_xaxes(tickformat="%b-%y")
 
 st.plotly_chart(fig, use_container_width=True)
@@ -237,7 +237,7 @@ with st.expander("Methodology"):
 
         **NFCI interpretation**
         • Combined measure of credit, leverage, and funding markets  
-        • Values above zero imply tighter financial conditions than average  
+        • Values above zero imply tighter financial conditions relative to history  
         • Useful complement to net liquidity and EFFR  
 
         Smoothing uses {smooth}-day averages.  
