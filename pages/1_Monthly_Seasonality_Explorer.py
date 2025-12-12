@@ -1,8 +1,7 @@
 import datetime as dt
 import io
-import time
 import warnings
-from typing import Optional, Tuple
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,100 +11,74 @@ import yfinance as yf
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter, MaxNLocator
 from matplotlib import gridspec
-import calendar
 
 plt.style.use("default")
-warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
+warnings.filterwarnings("ignore", category=FutureWarning)
 
-try:
-    from pandas_datareader import data as pdr
-except ImportError:
-    pdr = None
-
-FALLBACK_MAP = {"^GSPC": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
-# -------------------------- Streamlit UI -------------------------- #
-st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
+# ========================== Streamlit UI ========================== #
+st.set_page_config(page_title="Monthly Seasonality Explorer", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Monthly and intra-month seasonality analysis.
+        Monthly seasonality analysis using trading-day aligned data.
 
         • Returns anchored to prior month-end  
         • First half = first ceil(N/2) trading days  
-        • Second half shown as contribution so totals reconcile  
+        • Second half shown as contribution (totals reconcile exactly)  
         • Error bars = historical min / max outcomes  
         """,
         unsafe_allow_html=True,
     )
 
-# -------------------------- Data helpers -------------------------- #
-def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> Optional[pd.Series]:
-    for n in range(retries):
-        try:
-            df = yf.download(
-                symbol,
-                start=start,
-                end=end,
-                auto_adjust=True,
-                progress=False,
-                threads=False,
-            )
-        except Exception:
-            df = None
-
-        if isinstance(df, pd.Series):
-            if df.notna().any():
-                return df.rename("Close")
-
-        if isinstance(df, pd.DataFrame):
-            if not df.empty and "Close" in df.columns and df["Close"].notna().any():
-                return df["Close"]
-
-        time.sleep(2 * (n + 1))
-
-    return None
-
+# ========================== Data layer ========================== #
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_prices(symbol: str, start_year: int, end_year: int) -> Optional[pd.Series]:
     symbol = symbol.strip().upper()
 
+    start = f"{start_year}-01-01"
     end = min(
         pd.Timestamp(f"{end_year}-12-31"),
         pd.Timestamp.today(),
     ).strftime("%Y-%m-%d")
 
-    start_pad = (pd.Timestamp(f"{start_year}-01-01") - pd.DateOffset(days=45)).strftime("%Y-%m-%d")
+    df = yf.download(
+        symbol,
+        start=start,
+        end=end,
+        auto_adjust=True,
+        progress=False,
+        threads=False,
+    )
 
-    series = _yf_download(symbol, start_pad, end)
-    if series is not None:
-        return series
+    if df is None or len(df) == 0:
+        return None
 
-    if symbol == "SPY":
-        series = _yf_download("^GSPC", start_pad, end)
-        if series is not None:
-            return series
+    # yfinance can return Series or DataFrame
+    if isinstance(df, pd.Series):
+        s = df.dropna()
+        return s.rename("Close") if not s.empty else None
 
-    if pdr and symbol in FALLBACK_MAP:
-        try:
-            fred_tk = FALLBACK_MAP[symbol]
-            df_fred = pdr.DataReader(fred_tk, "fred", start_pad, end)
-            if (
-                isinstance(df_fred, pd.DataFrame)
-                and fred_tk in df_fred.columns
-                and df_fred[fred_tk].notna().any()
-            ):
-                return df_fred[fred_tk].rename("Close")
-        except Exception:
-            pass
+    if isinstance(df, pd.DataFrame):
+        if "Close" not in df.columns:
+            return None
+
+        close = df["Close"]
+
+        # Handle MultiIndex columns safely
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+
+        close = close.dropna()
+        return close.rename("Close") if not close.empty else None
 
     return None
 
-# -------------------------- Monthly decomposition -------------------------- #
+# ========================== Monthly decomposition ========================== #
 def intra_month_decomposition(prices: pd.Series) -> pd.DataFrame:
     rows = []
 
@@ -171,11 +144,11 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
 
     return stats
 
-# -------------------------- Plotting -------------------------- #
+# ========================== Plot ========================== #
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
-    df = stats.dropna(subset=["mean_h1", "mean_h2_contrib", "mean_total"]).copy()
-
+    df = stats.dropna(subset=["mean_h1", "mean_h2_contrib", "mean_total"])
     labels = df["label"].tolist()
+
     h1 = df["mean_h1"].values
     h2 = df["mean_h2_contrib"].values
     tot = df["mean_total"].values
@@ -189,7 +162,13 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     gs = gridspec.GridSpec(2, 1, height_ratios=[3.2, 1.1], hspace=0.25)
     ax = fig.add_subplot(gs[0])
 
-    ax.bar(x, h1, color=np.where(h1 >= 0, "#62c38e", "#e07a73"), edgecolor="black")
+    ax.bar(
+        x,
+        h1,
+        color=np.where(h1 >= 0, "#62c38e", "#e07a73"),
+        edgecolor="black",
+        linewidth=1,
+    )
 
     for i in range(len(x)):
         base = h1[i] if np.sign(h1[i]) == np.sign(h2[i]) else 0.0
@@ -206,14 +185,15 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     ax.errorbar(x, tot, yerr=yerr, fmt="none", ecolor="gray", capsize=6)
 
     ax.set_xticks(x, labels)
-    ax.set_ylabel("Mean return (%)")
+    ax.set_ylabel("Mean return (%)", weight="bold")
     ax.yaxis.set_major_formatter(PercentFormatter(100))
+    ax.yaxis.set_major_locator(MaxNLocator(8))
     ax.grid(axis="y", linestyle="--", alpha=0.6)
 
     ax2 = ax.twinx()
     ax2.scatter(x, hit, marker="D", color="black")
     ax2.set_ylim(0, 100)
-    ax2.set_ylabel("Hit rate")
+    ax2.set_ylabel("Hit rate", weight="bold")
     ax2.yaxis.set_major_formatter(PercentFormatter(100))
 
     ax.legend(
@@ -222,6 +202,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
             Patch(facecolor="#bbbbbb", edgecolor="black", hatch="///", label="Second half contribution"),
         ],
         frameon=False,
+        loc="upper left",
     )
 
     fig.suptitle(title, fontsize=17, weight="bold")
@@ -233,16 +214,24 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     buf.seek(0)
     return buf
 
-# -------------------------- Controls -------------------------- #
+# ========================== Controls ========================== #
 col1, col2, col3 = st.columns([2, 1, 1])
+
 with col1:
     symbol = st.text_input("Ticker", value="^GSPC").upper()
+
 with col2:
     start_year = st.number_input("Start year", value=2020, min_value=1900)
-with col3:
-    end_year = st.number_input("End year", value=dt.datetime.today().year, min_value=start_year)
 
-with st.spinner("Fetching data..."):
+with col3:
+    end_year = st.number_input(
+        "End year",
+        value=dt.datetime.today().year,
+        min_value=int(start_year),
+        max_value=dt.datetime.today().year,
+    )
+
+with st.spinner("Loading data..."):
     prices = fetch_prices(symbol, int(start_year), int(end_year))
 
 if prices is None or prices.empty:
