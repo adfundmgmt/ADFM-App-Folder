@@ -1,7 +1,7 @@
 # streamlit run adfm_basket_panels_by_category.py
-# ADFM Public Equities Baskets- Expanded universes per basket (incl. ADRs where practical)
+# ADFM Public Equities Baskets
+# - Expanded universes per basket (incl. ADRs where practical)
 # - No modes, no options to toggle universes
-# - Expanded lists only, designed for broader signal quality
 # - Chunked yfinance downloads with validation
 # - Equal-weight basket construction
 # - No em dashes anywhere
@@ -13,7 +13,6 @@ import yfinance as yf
 from datetime import date, timedelta
 import plotly.graph_objects as go
 from typing import Dict, List, Optional
-import math
 
 # -----------------------------
 # Page and theme
@@ -34,7 +33,6 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 TITLE = "ADFM Basket Panels"
 SUBTITLE = "Consolidated panel for all baskets, plus per-category panels with aligned business-day dates."
 
-# Pastel palette for lines
 PASTEL = [
     "#AEC6CF","#FFB347","#B39EB5","#77DD77","#F49AC2",
     "#CFCFC4","#DEA5A4","#C6E2FF","#FFDAC1","#E2F0CB",
@@ -42,163 +40,233 @@ PASTEL = [
     "#F1E3DD","#B0E0E6","#E0BBE4","#F3E5AB","#D5E8D4"
 ]
 
-# Minimum market cap filter for constituents (in USD)
 MIN_MARKET_CAP = 1_000_000_000
 
-# If you want to force-include some sub-1bn names, add tickers here (upper case)
 MARKET_CAP_EXCEPTIONS = set([
     # Example: "UUUU","UEC","URG","UROY","DNN","NXE","LEU"
 ])
 
 # -----------------------------
-# CATEGORY -> BASKETS -> TICKERS  (Expanded lists)
-# Notes:
-# - Focus on liquid US lines and ADRs available via yfinance
-# - Avoid known delisted tickers
-# - Some ETFs included where they improve coverage
+# CATEGORY -> BASKETS -> TICKERS
 # -----------------------------
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
-        "Semiconductors": [
-            "SMH","SOXX",
-            "NVDA","AMD","AVGO","TSM","ASML","AMAT","LRCX","KLAC","TER",
-            "MU","WDC","TXN","QCOM","ADI","NXPI","MCHP","MPWR","MRVL",
-            "SWKS","QRVO","STM","ON","ASX","UCTT","COHU","ONTO","AEIS","DIOD","PLAB","UMC","HIMX"
+        # Semis split into actionable sub-baskets (less overlap, cleaner signals)
+        "Semis ETFs": [
+            "SMH","SOXX","XSD"
         ],
+        "Semis Compute and Accelerators": [
+            "NVDA","AMD","INTC","ARM","AVGO","MRVL"
+        ],
+        "Semis Analog and Power": [
+            "TXN","ADI","MCHP","NXPI","MPWR","ON","STM","IFNNY","WOLF"
+        ],
+        "Semis RF and Connectivity": [
+            "QCOM","SWKS","QRVO","MTSI","AVNW"
+        ],
+        "Semis Memory and Storage": [
+            "MU","WDC","STX","SKM"
+        ],
+        "Semis Foundry and OSAT": [
+            "TSM","UMC","GFS","ASX"
+        ],
+        "Semis Equipment": [
+            "ASML","AMAT","LRCX","KLAC","TER","ONTO","AEIS","ACMR"
+        ],
+        "Semis EDA and IP": [
+            "SNPS","CDNS","ANSS","ARM"
+        ],
+        "Semis China and HK ADRs": [
+            "SMIC","HIMX","ASX","TSM","UMC"
+        ],
+
         "AI Infrastructure Leaders": [
-            "NVDA","AMD","AVGO","TSM","ASML","ANET","MU","SMCI",
-            "DELL","HPE","IBM","ACN","ORCL","AMAT","LRCX","KLAC","TER","MRVL",
-            "WDC","NTAP","STX","DDOG"
+            "NVDA","AMD","AVGO","TSM","ASML",
+            "ANET","SMCI","DELL","HPE",
+            "AMAT","LRCX","KLAC","TER",
+            "MRVL","MU","WDC","STX","NTAP",
+            "ORCL","MSFT","AMZN","GOOGL"
         ],
-        "Hyperscalers & Cloud": [
-            "MSFT","AMZN","GOOGL","META","ORCL","IBM","NOW","CRM","DDOG","SNOW","MDB","NET","ZS","OKTA"
+        "Hyperscalers and Cloud": [
+            "MSFT","AMZN","GOOGL","META","ORCL","IBM",
+            "NOW","CRM","DDOG","SNOW","MDB","NET","ZS","OKTA"
         ],
         "Quality SaaS": [
-            "ADBE","CRM","NOW","INTU","SNOW","MDB","TEAM","HUBS","DDOG","NET","OKTA"  # removed ZNGA legacy
+            "ADBE","CRM","NOW","INTU","TEAM","HUBS",
+            "DDOG","NET","MDB","SNOW"
         ],
         "Cybersecurity": [
-            "PANW","FTNT","CRWD","ZS","OKTA","TENB","S","CYBR","CHKP","VRSN","NET"
+            "PANW","FTNT","CRWD","ZS","OKTA","TENB","S","CYBR","CHKP","NET"
         ],
         "Digital Payments": [
             "V","MA","PYPL","SQ","FI","FIS","GPN","AXP","COF","DFS","ADYEY","MELI"
         ],
         "E-Commerce Platforms": [
-            "AMZN","SHOP","MELI","ETSY","PDD","BABA","JD","SE","W"
+            "AMZN","SHOP","MELI","ETSY","PDD","BABA","JD","SE"
         ],
-        "Social & Consumer Internet": [
-            "META","SNAP","PINS","MTCH","GOOGL","BILI","BIDU","YY","RBLX","COUR"
+        "Social and Consumer Internet": [
+            "META","SNAP","PINS","MTCH","GOOGL","BILI","BIDU","RBLX"
         ],
-        "Streaming & Media": [
-            "NFLX","DIS","WBD","PARA","ROKU","SPOT","LYV","IMAX","CHTR","CMCSA"
+        "Streaming and Media": [
+            "NFLX","DIS","WBD","PARA","ROKU","SPOT","LYV","CHTR","CMCSA"
         ],
-        "Fintech & Neobanks": [
-            "SQ","PYPL","AFRM","HOOD","SOFI","UPST","LC","ALLY","AXP","COF","DFS"
+        "Fintech and Neobanks": [
+            "SQ","PYPL","AFRM","HOOD","SOFI","UPST","LC","ALLY","COF","DFS"
         ],
     },
-    "AI & Next-Gen Compute": {
-        "5G & Networking Infra": [
-            "AMT","CCI","SBAC","ANET","CSCO","JNPR","HPE","ERIC","NOK","FIVN","FFIV"
+
+    "AI and Data Center Stack": {
+        "Data Center Networking": [
+            "ANET","CSCO","JNPR","MRVL","AVGO","CIEN","LITE","INFN"
+        ],
+        "Optical and Coherent": [
+            "CIEN","LITE","INFN","COHR","AAOI"
+        ],
+        "Data Center Power and Cooling": [
+            "VRT","ETN","TT","JCI","CARR","ABB","POWL"
+        ],
+        "Data Center REITs": [
+            "EQIX","DLR","AMT","SBAC","CCI"
+        ],
+        "Servers and Storage": [
+            "SMCI","DELL","HPE","NTAP","WDC","STX","IBM"
+        ],
+        "IT Services and Systems Integrators": [
+            "ACN","IBM","CTSH","EPAM"
+        ],
+    },
+
+    "Connectivity and Industrial Tech": {
+        "5G and Networking Infra": [
+            "AMT","CCI","SBAC","ANET","CSCO","JNPR","HPE","ERIC","NOK","FFIV"
         ],
         "Industrial Automation": [
-            "ROK","ETN","EMR","AME","PH","ABB","FANUY","KEYS","TRMB","CGNX","IEX","ITW","ROK","GWW"
+            "ROK","ETN","EMR","AME","PH","ABB","FANUY","KEYS","TRMB","CGNX","IEX","ITW","GWW"
         ],
-        "Space Economy": [
-            "ARKX","RKLB","IRDM","ASTS","LLAP","SPIR","SATL","LHX","LMT"
+        "Aerospace Tech and Space": [
+            "RKLB","IRDM","ASTS","LHX","LMT","NOC","RTX"
+        ],
+        "Defense Software and ISR": [
+            "PLTR","KTOS","AVAV","LHX","LDOS","BAH"
         ],
     },
-    "Energy & Hard Assets": {
+
+    "Energy and Hard Assets": {
         "Energy Majors": [
             "XOM","CVX","COP","SHEL","BP","TTE","EQNR","ENB","PBR"
         ],
-        "US Shale & E&Ps": [
-            "EOG","DVN","FANG","MRO","OXY","PXD","APA","AR","RRC","SWN","CHK","CTRA"
+        "US Shale and E&Ps": [
+            "EOG","DVN","FANG","MRO","OXY","APA","AR","RRC","SWN","CHK","CTRA"
+        ],
+        "Natural Gas and LNG": [
+            "LNG","EQNR","KMI","WMB","EPD","ET","TELL"
         ],
         "Oilfield Services": [
-            "SLB","HAL","BKR","NOV","CHX","FTI","PTEN","HP","NBR","OII","DRQ","WHD"
+            "SLB","HAL","BKR","NOV","CHX","FTI","PTEN","HP","NBR","OII"
         ],
-        "Uranium & Fuel Cycle": [
+        "Uranium and Fuel Cycle": [
             "CCJ","UUUU","UEC","URG","UROY","DNN","NXE","LEU","URA","URNM"
         ],
-        "Battery & Materials": [
-            "ALB","SQM","LTHM","PLL","LAC","SGML","SIL","SIVR"
+        "Nuclear and Grid Buildout": [
+            "VST","CEG","BWXT","LEU","ETN","VRT"
         ],
-        "Metals & Mining": [
+        "Metals and Mining": [
             "BHP","RIO","VALE","FCX","NEM","TECK","SCCO","AA"
         ],
-        "Gold & Silver Miners": [
+        "Gold and Silver Miners": [
             "GDX","GDXJ","NEM","AEM","GOLD","KGC","AG","PAAS","WPM"
         ],
     },
+
     "Clean Energy Transition": {
-        "Solar & Inverters": [
+        "Solar and Inverters": [
             "TAN","FSLR","ENPH","SEDG","RUN","CSIQ","JKS","SPWR"
         ],
-        "Wind & Renewables": [
-            "ICLN","FAN","AY","NEP","FSLR","ENPH","SEDG"
+        "Wind and Renewables": [
+            "ICLN","FAN","AY","NEP","FSLR"
         ],
         "Hydrogen": [
             "PLUG","BE","BLDP"
         ],
-        "Utilities & Power": [
+        "Utilities and Power": [
             "VST","CEG","NEE","DUK","SO","AEP","XEL","EXC","PCG","EIX","ED"
         ],
+        "Grid Equipment": [
+            "ETN","VRT","ABB","PWR","MYRG","POWL"
+        ],
     },
-    "Health & Longevity": {
+
+    "Health and Longevity": {
         "Large-Cap Biotech": [
             "AMGN","GILD","REGN","BIIB","VRTX","ILMN"
         ],
-        "GLP-1 & Metabolic": [
-            "NVO","LLY","PFE","AZN","MRK"
+        "GLP-1 and Metabolic": [
+            "NVO","LLY","AZN","MRK","PFE"
         ],
         "MedTech Devices": [
             "MDT","SYK","ISRG","BSX","ZBH","EW","PEN"
+        ],
+        "Diagnostics and Tools": [
+            "TMO","DHR","A","RGEN","ILMN"
         ],
         "Healthcare Payers": [
             "UNH","HUM","CI","ELV","CNC","MOH"
         ],
     },
-    "Financials & Credit": {
-        "Money-Center & IBs": [
+
+    "Financials and Credit": {
+        "Money-Center and IBs": [
             "JPM","BAC","C","WFC","GS","MS"
         ],
         "Regional Banks": [
             "KRE","TFC","FITB","CFG","RF","KEY","PNC","USB","MTB"
         ],
-        "Brokers & Exchanges": [
-            "IBKR","SCHW","HOOD","CME","ICE","NDAQ","CBOE","MKTX","TW"
+        "Brokers and Exchanges": [
+            "IBKR","SCHW","HOOD","CME","ICE","NDAQ","CBOE","MKTX"
         ],
-        "Alt Managers & PE": [
+        "Alt Managers and PE": [
             "BX","KKR","APO","CG","ARES","OWL","TPG"
+        ],
+        "Credit and Specialty Finance": [
+            "MS","GS","BX","KKR","ARES","MAIN","ARCC"
         ],
         "Mortgage Finance": [
             "RKT","UWMC","COOP","FNF","NMIH","ESNT"
         ],
+        "Insurers": [
+            "BRK-B","CB","TRV","PGR","AIG","MET"
+        ],
     },
-    "Real Assets & Inflation Beneficiaries": {
+
+    "Real Assets and Inflation Beneficiaries": {
         "Homebuilders": [
             "ITB","DHI","LEN","NVR","PHM","TOL","KBH","MTH"
         ],
         "REITs Core": [
-            "VNQ","PLD","AMT","EQIX","SPG","O","PSA","DLR","ARE","VTR","WELL"
+            "VNQ","PLD","EQIX","SPG","O","PSA","DLR","ARE","VTR","WELL"
         ],
-        "Shipping & Logistics": [
+        "Industrials and Infrastructure": [
+            "CAT","DE","URI","PWR","VMC","MLM","NUE"
+        ],
+        "Shipping and Logistics": [
             "FDX","UPS","GXO","XPO","ZIM","MATX","DAC"
         ],
-        "Agriculture & Machinery": [
-            "MOS","NTR","DE","CNHI","ADM","BG","CF","CAT","AGCO"
+        "Agriculture and Machinery": [
+            "MOS","NTR","DE","CNHI","ADM","BG","CF","AGCO"
         ],
     },
+
     "Consumer Cyclicals": {
         "Retail Discretionary": [
-            "HD","LOW","M","GPS","BBY","TJX","TGT","ROST","KSS"
+            "HD","LOW","M","GPS","BBY","TJX","TGT","ROST"
         ],
         "Restaurants": [
             "MCD","SBUX","YUM","CMG","DRI","DPZ","WING","QSR"
         ],
-        "Travel & Booking": [
-            "BKNG","EXPE","ABNB","TRIP","SABR"
+        "Travel and Booking": [
+            "BKNG","EXPE","ABNB","TRIP"
         ],
-        "Hotels & Casinos": [
+        "Hotels and Casinos": [
             "MAR","HLT","IHG","MGM","LVS","WYNN","MLCO","CZR","PENN"
         ],
         "Airlines": [
@@ -210,24 +278,38 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Electric Vehicles": [
             "TSLA","RIVN","LCID","NIO","LI","XPEV"
         ],
+        "Luxury and Apparel": [
+            "TPR","RL","CPRI","LVMUY","KER.PA"
+        ],
     },
-    "Defensives & Staples": {
+
+    "Defensives and Staples": {
         "Retail Staples": [
             "WMT","COST","TGT","DG","KR","WBA"
         ],
-        "Telecom & Cable": [
+        "Staples and Beverages": [
+            "PG","KO","PEP","PM","MO","MDLZ"
+        ],
+        "Telecom and Cable": [
             "T","VZ","TMUS","CHTR","CMCSA"
         ],
-        "Aerospace & Defense": [
+        "Aerospace and Defense": [
             "LMT","NOC","RTX","GD","HII","TDG","HEI"
         ],
+        "Utilities Defensive": [
+            "DUK","SO","AEP","XEL","EXC","ED"
+        ],
     },
-    "Defensives & Alt": {
+
+    "Alt and Global Risk": {
         "Crypto Proxies": [
             "COIN","MSTR","MARA","RIOT","BITO"
         ],
         "China Tech ADRs": [
             "BABA","BIDU","JD","PDD","BILI","NTES","TCEHY"
+        ],
+        "EM Internet and Commerce": [
+            "MELI","SE","NU","STNE"
         ],
     }
 }
@@ -253,9 +335,7 @@ def fetch_daily_levels(tickers, start, end, chunk_size: int = 40) -> pd.DataFram
     if not frames:
         return pd.DataFrame()
     wide = pd.concat(frames, axis=1)
-    # drop duplicate columns created by concat of overlapping tickers
     wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
-    # Align to business days for consistent x-axes
     if wide.empty:
         return wide
     bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
@@ -263,15 +343,10 @@ def fetch_daily_levels(tickers, start, end, chunk_size: int = 40) -> pd.DataFram
 
 @st.cache_data(show_spinner=False)
 def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
-    """
-    Fetch market caps for a list of tickers using yfinance fast_info if available.
-    Returns a dict mapping UPPERCASE ticker -> market cap (float).
-    """
     uniq = sorted(list({t.upper() for t in tickers}))
     if not uniq:
         return {}
     caps: Dict[str, float] = {}
-    # yfinance Tickers can take a space separated string
     tk_obj = yf.Tickers(" ".join(uniq))
     for sym, tk in tk_obj.tickers.items():
         try:
@@ -299,12 +374,6 @@ def ew_rets_from_levels(
     min_market_cap: Optional[float] = None,
     stale_days: int = 30
 ) -> pd.DataFrame:
-    """
-    Equal weight basket returns with data quality filters:
-    - drop tickers with no data
-    - drop stale tickers whose last price is older than stale_days vs global last date
-    - optionally drop tickers with market cap below min_market_cap unless in MARKET_CAP_EXCEPTIONS
-    """
     rets = levels.pct_change()
     out = {}
     if levels.empty:
@@ -313,16 +382,14 @@ def ew_rets_from_levels(
     for b, tks in baskets.items():
         cols = []
         for c in tks:
-            c_u = c.upper()
+            c_u = str(c).upper()
             if c_u not in rets.columns:
                 continue
             s = levels[c_u].dropna()
             if s.empty:
                 continue
-            # stale filter
             if s.index.max() < last_idx - pd.Timedelta(days=stale_days):
                 continue
-            # market cap filter
             if min_market_cap is not None and market_caps is not None:
                 if c_u not in MARKET_CAP_EXCEPTIONS:
                     mc = market_caps.get(c_u)
@@ -576,7 +643,7 @@ def plot_cumulative_chart(basket_returns: pd.DataFrame, title: str, benchmark_se
             mode="lines",
             line=dict(width=2, color=PASTEL[i % len(PASTEL)]),
             name=b,
-            hovertemplate=f"{b}<br>% Cum: %{ '{y:.1f}' }%<extra></extra>"
+            hovertemplate=f"{b}<br>% Cum: %{{y:.1f}}%<extra></extra>"
         ))
     fig.add_trace(go.Scatter(
         x=bm_cum.index,
@@ -637,7 +704,7 @@ DYNAMIC_LABEL = LABEL_MAP.get(preset, "YTD")
 bench = "SPY"
 need = {bench}
 for tks in ALL_BASKETS.values():
-    need.update([t.upper() for t in tks])
+    need.update([str(t).upper() for t in tks])
 
 levels = fetch_daily_levels(
     sorted(list(need)),
@@ -682,15 +749,6 @@ plot_cumulative_chart(
     benchmark_series=bench_rets
 )
 
-col_a, col_b = st.columns([1,3])
-with col_a:
-    st.download_button(
-        "Download consolidated panel CSV",
-        all_panel_df.to_csv().encode("utf-8"),
-        file_name="adfm_baskets_panel.csv",
-        mime="text/csv"
-    )
-
 # -----------------------------
 # Per-category sections
 # -----------------------------
@@ -713,12 +771,6 @@ for category, baskets in CATEGORIES.items():
         title=f"{category} - Cumulative Performance vs SPY",
         benchmark_series=bench_rets
     )
-    st.download_button(
-        f"Download {category} panel CSV",
-        cat_panel.to_csv().encode("utf-8"),
-        file_name=f"{category.lower().replace(' ','_')}_panel.csv",
-        mime="text/csv"
-    )
 
 # -----------------------------
 # Basket constituents
@@ -727,4 +779,4 @@ with st.expander("Basket Constituents"):
     for cat, groups in CATEGORIES.items():
         st.markdown(f"**{cat}**")
         for name, tks in groups.items():
-            st.write(f"- {name}: {', '.join(sorted(set(t.upper() for t in tks)))}")
+            st.write(f"- {name}: {', '.join(sorted(set(str(t).upper() for t in tks)))}")
