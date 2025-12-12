@@ -2,69 +2,220 @@ import json
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Neon Market Arena", layout="wide")
-st.title("Neon Market Arena")
+st.set_page_config(page_title="Mini Classic RPG", layout="wide")
+st.title("Mini Classic RPG")
 
 with st.sidebar:
-    st.subheader("Game Settings")
-    quality = st.selectbox("Graphics quality", ["Ultra", "High", "Medium", "Low"], index=1)
+    st.subheader("Settings")
+    player_class = st.selectbox("Class", ["Warrior", "Mage", "Rogue"], index=0)
     difficulty = st.selectbox("Difficulty", ["Chill", "Normal", "Hard"], index=1)
-    reduce_motion = st.toggle("Reduce motion (less shake, less blur)", value=False)
+    quality = st.selectbox("Graphics", ["Ultra", "High", "Medium", "Low"], index=1)
     show_fps = st.toggle("Show FPS", value=False)
-    seed = st.number_input("Seed", min_value=1, max_value=999999999, value=42069, step=1)
+    reduce_motion = st.toggle("Reduce motion", value=False)
+    seed = st.number_input("Seed", min_value=1, max_value=999999999, value=1337, step=1)
+    reset_save = st.button("Reset save")
 
 cfg = {
-    "quality": quality,
+    "player_class": player_class,
     "difficulty": difficulty,
-    "reduce_motion": reduce_motion,
+    "quality": quality,
     "show_fps": show_fps,
+    "reduce_motion": reduce_motion,
     "seed": int(seed),
+    "reset_save": bool(reset_save),
 }
 
-st.caption("WASD move | Mouse aim | Click shoot | Space dash | P pause | R restart | Click canvas to focus")
+st.caption("WASD move | Click to target | Space to interact/loot | 1-4 abilities | I inventory | Q quest log | R respawn | P pause")
 
 html = r"""
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8"/>
   <style>
     html, body { margin:0; padding:0; background: transparent; }
-    .wrap { width:100%; display:flex; justify-content:center; align-items:center; }
-    .frame { position: relative; width: min(1320px, 98vw); }
+    .wrap { width:100%; display:flex; justify-content:center; }
+    .frame { position: relative; width: min(1400px, 98vw); }
     canvas {
       width: 100%;
       height: auto;
       display:block;
-      border-radius: 22px;
+      border-radius: 20px;
       border: 1px solid rgba(255,255,255,0.10);
-      background: radial-gradient(1200px 700px at 30% 20%, rgba(110,160,255,0.16), transparent),
-                  radial-gradient(1000px 650px at 78% 22%, rgba(255,110,210,0.12), transparent),
-                  linear-gradient(180deg, rgba(9,10,16,1), rgba(6,7,10,1));
+      background: radial-gradient(1100px 700px at 30% 20%, rgba(120,170,255,0.14), transparent),
+                  radial-gradient(1000px 650px at 78% 22%, rgba(255,120,200,0.10), transparent),
+                  linear-gradient(180deg, rgba(8,10,14,1), rgba(4,5,7,1));
       box-shadow: 0 18px 60px rgba(0,0,0,0.55);
-      outline: none;
+      outline:none;
     }
-    .hud {
+
+    .hudTop {
       position:absolute;
-      inset: 14px 14px auto 14px;
+      left: 14px;
+      right: 14px;
+      top: 14px;
       display:flex;
       justify-content:space-between;
       gap: 10px;
       pointer-events:none;
+      z-index: 10;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       color: rgba(245,245,250,0.92);
       font-size: 13px;
-      z-index: 5;
     }
     .pill {
       padding: 10px 12px;
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.10);
       background: rgba(255,255,255,0.06);
-      backdrop-filter: blur(7px);
+      backdrop-filter: blur(8px);
       box-shadow: 0 10px 30px rgba(0,0,0,0.30);
       white-space: nowrap;
     }
+
+    .unitFrames {
+      position:absolute;
+      left: 14px;
+      top: 56px;
+      display:flex;
+      gap: 10px;
+      z-index: 11;
+      pointer-events:none;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      color: rgba(245,245,250,0.92);
+    }
+    .frameCard {
+      width: 280px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(10px);
+      padding: 10px 10px 8px 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    .frameRow { display:flex; justify-content:space-between; align-items:center; gap: 10px; }
+    .name { font-weight: 760; font-size: 13.5px; }
+    .lvl { opacity: 0.82; font-size: 12.5px; }
+    .barWrap { margin-top: 7px; height: 10px; border-radius: 999px; background: rgba(0,0,0,0.30); border: 1px solid rgba(255,255,255,0.10); overflow:hidden; }
+    .bar { height: 100%; width: 50%; border-radius: 999px; }
+
+    .xp {
+      position:absolute;
+      left: 14px;
+      right: 14px;
+      bottom: 14px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.38);
+      border: 1px solid rgba(255,255,255,0.12);
+      overflow:hidden;
+      z-index: 12;
+      pointer-events:none;
+    }
+    .xpFill { height:100%; width: 0%; background: linear-gradient(90deg, rgba(92,255,176,0.92), rgba(120,170,255,0.80)); }
+
+    .hotbar {
+      position:absolute;
+      left: 50%;
+      bottom: 28px;
+      transform: translateX(-50%);
+      display:flex;
+      gap: 10px;
+      z-index: 13;
+      pointer-events:none;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    .slot {
+      width: 54px; height: 54px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      position:relative;
+      overflow:hidden;
+    }
+    .slotKey {
+      position:absolute; left: 8px; top: 6px;
+      font-size: 12px; opacity: 0.88;
+    }
+    .slotName {
+      position:absolute; left: 8px; bottom: 6px;
+      font-size: 10.5px; opacity: 0.86;
+    }
+    .cd {
+      position:absolute; inset:0;
+      background: rgba(0,0,0,0.55);
+      transform: translateY(0%);
+    }
+
+    .panel {
+      position:absolute;
+      right: 14px;
+      top: 56px;
+      width: 360px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(8,10,14,0.70);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 16px 50px rgba(0,0,0,0.55);
+      padding: 12px 12px 10px 12px;
+      z-index: 14;
+      color: rgba(245,245,250,0.92);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      display:none;
+      pointer-events:auto;
+    }
+    .panelTitle { font-size: 15px; font-weight: 780; margin-bottom: 8px; }
+    .panelSub { opacity:0.82; font-size: 13px; line-height:1.35; }
+    .invGrid { display:grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+    .invItem {
+      height: 58px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      padding: 8px;
+      font-size: 12px;
+      display:flex; flex-direction:column; justify-content:space-between;
+      user-select:none;
+    }
+    .invItem span { opacity:0.82; font-size: 11.5px; }
+
+    .chat {
+      position:absolute;
+      left: 14px;
+      bottom: 44px;
+      width: 420px;
+      max-height: 200px;
+      overflow:hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(8,10,14,0.62);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 16px 50px rgba(0,0,0,0.45);
+      padding: 10px 10px 8px 10px;
+      z-index: 14;
+      color: rgba(245,245,250,0.92);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      pointer-events:none;
+    }
+    .line { opacity:0.92; margin-bottom: 4px; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+
+    .minimap {
+      position:absolute;
+      right: 14px;
+      bottom: 44px;
+      width: 180px;
+      height: 180px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 16px 50px rgba(0,0,0,0.55);
+      z-index: 14;
+      pointer-events:none;
+    }
+
     .overlay {
       position:absolute;
       inset:0;
@@ -72,22 +223,21 @@ html = r"""
       align-items:center;
       justify-content:center;
       pointer-events:none;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      z-index: 20;
       color: rgba(245,245,250,0.92);
-      z-index: 6;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
     }
     .card {
-      width: min(760px, 92%);
+      width: min(820px, 92%);
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,0.14);
       background: rgba(255,255,255,0.07);
       padding: 18px 18px 16px 18px;
       box-shadow: 0 18px 70px rgba(0,0,0,0.60);
       text-align:left;
-      pointer-events:none;
     }
-    .title { font-size: 22px; font-weight: 820; margin: 0 0 8px 0; letter-spacing: 0.2px; }
-    .sub { opacity: 0.90; margin: 0 0 10px 0; line-height: 1.42; }
+    .title { font-size: 22px; font-weight: 820; margin:0 0 8px 0; }
+    .sub { opacity:0.90; margin:0 0 10px 0; line-height:1.45; }
     .kbd {
       display:inline-block;
       padding: 2px 8px;
@@ -98,98 +248,84 @@ html = r"""
       font-size: 12px;
       margin-right: 6px;
     }
-    .shop {
-      position:absolute;
-      left: 50%;
-      bottom: 18px;
-      transform: translateX(-50%);
-      width: min(980px, 94%);
-      border-radius: 18px;
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(8,10,14,0.70);
-      backdrop-filter: blur(10px);
-      box-shadow: 0 16px 50px rgba(0,0,0,0.55);
-      padding: 14px 14px 12px 14px;
-      display:none;
-      z-index: 7;
-      pointer-events:auto;
-      color: rgba(245,245,250,0.92);
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-    }
-    .shopTop { display:flex; justify-content:space-between; align-items:center; gap: 10px; }
-    .shopTitle { font-size: 16px; font-weight: 760; }
-    .shopHint { opacity: 0.78; font-size: 13px; }
-    .opts { display:grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
-    .opt {
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.06);
-      padding: 12px 12px 10px 12px;
-      cursor: pointer;
-      transition: transform 120ms ease, background 120ms ease;
-      user-select:none;
-    }
-    .opt:hover { transform: translateY(-2px); background: rgba(255,255,255,0.08); }
-    .optName { font-weight: 750; margin-bottom: 4px; }
-    .optDesc { opacity: 0.84; font-size: 12.5px; line-height: 1.35; }
-    .optCost { margin-top: 8px; opacity: 0.90; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="frame">
-      <div class="hud">
-        <div class="pill" id="hudL">Score: 0 | Alpha: 0 | Wave: 1</div>
-        <div class="pill" id="hudM">HP: 100 | Heat: 0 | Regime: Risk-On</div>
-        <div class="pill" id="hudR">High: 0</div>
+
+      <div class="hudTop">
+        <div class="pill" id="pillL">Zone: Greenhollow | Gold: 0 | Bags: 0/16</div>
+        <div class="pill" id="pillM">Quest: Boar Cleanup (0/6)</div>
+        <div class="pill" id="pillR">Ping: 12ms</div>
       </div>
 
-      <canvas id="game" width="1320" height="760" tabindex="0"></canvas>
+      <div class="unitFrames">
+        <div class="frameCard">
+          <div class="frameRow">
+            <div class="name" id="pName">Adventurer</div>
+            <div class="lvl" id="pLvl">Lv 1</div>
+          </div>
+          <div class="barWrap"><div class="bar" id="pHP" style="background: linear-gradient(90deg, rgba(92,255,176,0.92), rgba(92,255,176,0.55)); width: 100%;"></div></div>
+          <div class="barWrap" style="margin-top:6px;"><div class="bar" id="pMP" style="background: linear-gradient(90deg, rgba(120,170,255,0.90), rgba(120,170,255,0.55)); width: 100%;"></div></div>
+        </div>
+
+        <div class="frameCard" id="tFrame" style="display:none;">
+          <div class="frameRow">
+            <div class="name" id="tName">Target</div>
+            <div class="lvl" id="tLvl">Lv 1</div>
+          </div>
+          <div class="barWrap"><div class="bar" id="tHP" style="background: linear-gradient(90deg, rgba(255,110,110,0.92), rgba(255,110,110,0.55)); width: 100%;"></div></div>
+          <div class="panelSub" id="tNote" style="margin-top:7px;">Click to target. Get in range to fight.</div>
+        </div>
+      </div>
+
+      <canvas id="game" width="1400" height="780" tabindex="0"></canvas>
+
+      <div class="xp"><div class="xpFill" id="xpFill"></div></div>
+
+      <div class="hotbar">
+        <div class="slot"><div class="slotKey">1</div><div class="slotName" id="a1n">Ability</div><div class="cd" id="a1cd"></div></div>
+        <div class="slot"><div class="slotKey">2</div><div class="slotName" id="a2n">Ability</div><div class="cd" id="a2cd"></div></div>
+        <div class="slot"><div class="slotKey">3</div><div class="slotName" id="a3n">Ability</div><div class="cd" id="a3cd"></div></div>
+        <div class="slot"><div class="slotKey">4</div><div class="slotName" id="a4n">Ability</div><div class="cd" id="a4cd"></div></div>
+      </div>
+
+      <div class="chat" id="chat"></div>
+      <canvas class="minimap" id="minimap" width="180" height="180"></canvas>
+
+      <div class="panel" id="invPanel">
+        <div class="panelTitle">Inventory</div>
+        <div class="panelSub" id="invSub">Click loot on the ground with Space.</div>
+        <div class="invGrid" id="invGrid"></div>
+      </div>
+
+      <div class="panel" id="questPanel">
+        <div class="panelTitle">Quest Log</div>
+        <div class="panelSub" id="questText"></div>
+      </div>
 
       <div class="overlay" id="overlay" style="display:flex;">
         <div class="card">
-          <div class="title">Neon Market Arena</div>
+          <div class="title">Mini Classic RPG</div>
           <p class="sub">
-            Delta-time physics, bloom downsampling, and proper waves and intermissions.<br/>
-            Survive. Farm alpha. Upgrade. Regimes shift.
+            A WoW Classic inspired mini-zone built for Streamlit. Original assets and names, familiar loop.<br/>
+            Target mobs, manage cooldowns, loot, level, finish the quest, then the zone ramps.
           </p>
           <p class="sub">
             <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> move |
-            Aim with mouse |
-            <span class="kbd">Click</span> shoot |
-            <span class="kbd">Space</span> dash |
+            <span class="kbd">Click</span> target |
+            <span class="kbd">Space</span> interact/loot |
+            <span class="kbd">1-4</span> abilities |
+            <span class="kbd">I</span> inventory |
+            <span class="kbd">Q</span> quest |
             <span class="kbd">P</span> pause |
-            <span class="kbd">R</span> restart
+            <span class="kbd">R</span> respawn
           </p>
-          <p class="sub" style="opacity:0.78; margin:0;">
-            Click the game area, then click to begin.
-          </p>
+          <p class="sub" style="opacity:0.78; margin:0;">Click the game area, then press 1 to begin pulling.</p>
         </div>
       </div>
 
-      <div class="shop" id="shop">
-        <div class="shopTop">
-          <div class="shopTitle">Upgrade Terminal</div>
-          <div class="shopHint">Click an upgrade. Intermission ends automatically.</div>
-        </div>
-        <div class="opts">
-          <div class="opt" id="opt1">
-            <div class="optName">Pulse Cannon</div>
-            <div class="optDesc">Higher fire rate and tighter spread, plus a small damage bump.</div>
-            <div class="optCost">Cost: 40 alpha</div>
-          </div>
-          <div class="opt" id="opt2">
-            <div class="optName">Phase Shield</div>
-            <div class="optDesc">Adds a damage buffer. Recharges slowly over time.</div>
-            <div class="optCost">Cost: 60 alpha</div>
-          </div>
-          <div class="opt" id="opt3">
-            <div class="optName">Volatility Engine</div>
-            <div class="optDesc">Dash cooldown down and stronger dash impulse.</div>
-            <div class="optCost">Cost: 55 alpha</div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -199,21 +335,48 @@ html = r"""
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
-  const hudL = document.getElementById("hudL");
-  const hudM = document.getElementById("hudM");
-  const hudR = document.getElementById("hudR");
-  const overlay = document.getElementById("overlay");
-  const shop = document.getElementById("shop");
+  const mm = document.getElementById("minimap");
+  const mctx = mm.getContext("2d");
 
-  const opt1 = document.getElementById("opt1");
-  const opt2 = document.getElementById("opt2");
-  const opt3 = document.getElementById("opt3");
+  const overlay = document.getElementById("overlay");
+
+  const pillL = document.getElementById("pillL");
+  const pillM = document.getElementById("pillM");
+  const pillR = document.getElementById("pillR");
+
+  const pName = document.getElementById("pName");
+  const pLvl  = document.getElementById("pLvl");
+  const pHP   = document.getElementById("pHP");
+  const pMP   = document.getElementById("pMP");
+
+  const tFrame = document.getElementById("tFrame");
+  const tName  = document.getElementById("tName");
+  const tLvl   = document.getElementById("tLvl");
+  const tHP    = document.getElementById("tHP");
+  const tNote  = document.getElementById("tNote");
+
+  const xpFill = document.getElementById("xpFill");
+
+  const a1n = document.getElementById("a1n");
+  const a2n = document.getElementById("a2n");
+  const a3n = document.getElementById("a3n");
+  const a4n = document.getElementById("a4n");
+  const a1cd = document.getElementById("a1cd");
+  const a2cd = document.getElementById("a2cd");
+  const a3cd = document.getElementById("a3cd");
+  const a4cd = document.getElementById("a4cd");
+
+  const chatEl = document.getElementById("chat");
+  const invPanel = document.getElementById("invPanel");
+  const questPanel = document.getElementById("questPanel");
+  const invGrid = document.getElementById("invGrid");
+  const questText = document.getElementById("questText");
 
   const W = canvas.width;
   const H = canvas.height;
 
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
-  const lerp = (a, b, t) => a + (b - a) * t;
+  const lerp  = (a, b, t) => a + (b - a) * t;
 
   function mulberry32(a) {
     return function() {
@@ -224,31 +387,20 @@ html = r"""
     }
   }
 
-  function loadHigh() {
-    const v = localStorage.getItem("neon_market_arena_high_v2");
-    const n = v ? parseInt(v, 10) : 0;
-    return Number.isFinite(n) ? n : 0;
-  }
-  function saveHigh(v) {
-    localStorage.setItem("neon_market_arena_high_v2", String(v));
-  }
-
-  let highScore = loadHigh();
-
   const Q = (() => {
     const rm = !!CONFIG.reduce_motion;
     const q = (CONFIG.quality || "High").toLowerCase();
-    if (q === "ultra") return { bloomScale: 0.5, blur1: rm ? 8 : 12, blur2: rm ? 16 : 26, stars: 160, noise: 160, scanlines: true, shakeMul: rm ? 0.55 : 1.0 };
-    if (q === "high")  return { bloomScale: 0.5, blur1: rm ? 7 : 10, blur2: rm ? 14 : 22, stars: 140, noise: 140, scanlines: true, shakeMul: rm ? 0.55 : 1.0 };
-    if (q === "medium")return { bloomScale: 0.66, blur1: rm ? 6 : 8,  blur2: rm ? 12 : 18, stars: 110, noise: 90,  scanlines: true, shakeMul: rm ? 0.50 : 0.90 };
-    return               { bloomScale: 0.75, blur1: rm ? 5 : 6,  blur2: rm ? 10 : 12, stars: 80,  noise: 60,  scanlines: false, shakeMul: rm ? 0.40 : 0.75 };
+    if (q === "ultra") return { bloomScale: 0.5, blur1: rm ? 7 : 10, blur2: rm ? 14 : 20, grass: 900, trees: 44, shakeMul: rm ? 0.55 : 1.0 };
+    if (q === "high")  return { bloomScale: 0.6, blur1: rm ? 6 : 8,  blur2: rm ? 12 : 16, grass: 700, trees: 38, shakeMul: rm ? 0.55 : 1.0 };
+    if (q === "medium")return { bloomScale: 0.7, blur1: rm ? 5 : 6,  blur2: rm ? 10 : 12, grass: 520, trees: 30, shakeMul: rm ? 0.45 : 0.85 };
+    return               { bloomScale: 0.8, blur1: rm ? 4 : 5,  blur2: rm ? 8  : 10, grass: 360, trees: 22, shakeMul: rm ? 0.40 : 0.75 };
   })();
 
   const D = (() => {
     const d = (CONFIG.difficulty || "Normal").toLowerCase();
-    if (d === "chill")  return { enemyHpMul: 0.85, enemySpMul: 0.90, spawnMul: 0.82, dmgMul: 0.85, alphaMul: 1.10 };
-    if (d === "hard")   return { enemyHpMul: 1.18, enemySpMul: 1.12, spawnMul: 1.18, dmgMul: 1.15, alphaMul: 0.95 };
-    return               { enemyHpMul: 1.00, enemySpMul: 1.00, spawnMul: 1.00, dmgMul: 1.00, alphaMul: 1.00 };
+    if (d === "chill")  return { mobHp: 0.85, mobDmg: 0.85, mobSp: 0.92, xp: 1.10, gold: 1.05 };
+    if (d === "hard")   return { mobHp: 1.18, mobDmg: 1.18, mobSp: 1.08, xp: 0.95, gold: 0.95 };
+    return               { mobHp: 1.00, mobDmg: 1.00, mobSp: 1.00, xp: 1.00, gold: 1.00 };
   })();
 
   const scene = document.createElement("canvas");
@@ -260,8 +412,37 @@ html = r"""
   bloom.height = Math.floor(H * Q.bloomScale);
   const bctx = bloom.getContext("2d");
 
+  const SAVE_KEY = "mini_classic_rpg_save_v1";
+
+  function loadSave() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  function saveGame() {
+    try {
+      const payload = {
+        gold: state.gold,
+        lvl: player.lvl,
+        xp: player.xp,
+        xpNeed: player.xpNeed,
+        inv: inventory.slice(0, 16),
+        quest: { kills: quest.kills, done: quest.done },
+        seed: state.seed
+      };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+    } catch {}
+  }
+  function clearSave() {
+    try { localStorage.removeItem(SAVE_KEY); } catch {}
+  }
+
   const keys = new Set();
-  let mouse = { x: W * 0.5, y: H * 0.5, down: false };
+  let mouse = { x: W * 0.5, y: H * 0.5 };
 
   function canvasToLocal(e) {
     const r = canvas.getBoundingClientRect();
@@ -270,563 +451,843 @@ html = r"""
     return { x, y };
   }
 
-  const palettes = {
-    riskOn: {
-      bgA: "rgba(110,160,255,0.18)",
-      bgB: "rgba(255,110,210,0.14)",
-      neon1: "rgba(92,255,176,0.92)",
-      neon2: "rgba(120,170,255,0.86)",
-      neon3: "rgba(255,140,230,0.70)",
-      enemy: "rgba(255,92,92,0.92)",
-      bullet: "rgba(255,140,230,0.90)",
-      alpha: "rgba(255,212,92,0.96)"
-    },
-    riskOff: {
-      bgA: "rgba(60,220,255,0.10)",
-      bgB: "rgba(255,120,80,0.10)",
-      neon1: "rgba(120,210,255,0.88)",
-      neon2: "rgba(255,170,110,0.80)",
-      neon3: "rgba(255,110,110,0.62)",
-      enemy: "rgba(255,140,90,0.92)",
-      bullet: "rgba(120,210,255,0.88)",
-      alpha: "rgba(255,212,92,0.96)"
-    }
-  };
+  function chat(line) {
+    chatLines.unshift(line);
+    if (chatLines.length > 9) chatLines.pop();
+    chatEl.innerHTML = chatLines.map(s => `<div class="line">${s}</div>`).join("");
+  }
 
   const state = {
-    seed: CONFIG.seed || 42069,
-    rng: mulberry32(CONFIG.seed || 42069),
-
+    seed: CONFIG.seed || 1337,
+    rng: mulberry32(CONFIG.seed || 1337),
     running: false,
     paused: false,
-    over: false,
-
     t: 0,
-
-    score: 0,
-    alpha: 0,
-
-    wave: 1,
-    waveTime: 0,
-    waveDuration: 35.0,
-    intermission: false,
-    intermissionTime: 0,
-    intermissionDuration: 8.0,
-
-    heat: 0,
-
-    regime: "riskOn",
-    regimeTime: 0,
-    regimeEvery: 55.0,
-
-    enemyTimer: 0,
-    pickupTimer: 0,
-
     shake: 0,
-    hitStop: 0
+    gold: 0,
+    zone: "Greenhollow",
+    ping: 12
   };
 
   const player = {
-    x: W * 0.5,
-    y: H * 0.62,
+    cls: (CONFIG.player_class || "Warrior"),
+    name: "Adventurer",
+    x: 2200,
+    y: 2100,
     vx: 0,
     vy: 0,
-    r: 16,
+    r: 18,
+
+    lvl: 1,
+    xp: 0,
+    xpNeed: 120,
 
     hp: 100,
-    maxHp: 100,
+    hpMax: 100,
 
-    shield: 0,
-    shieldMax: 0,
-    shieldRegen: 0,
+    mp: 60,
+    mpMax: 60,
 
-    dashCd: 0,
-    dashCdMax: 2.3,
-    dashTime: 0,
+    ap: 10,
+    sp: 10,
 
-    fireCd: 0,
-    fireCdMax: 0.11,
-    spread: 0.06,
-    bulletSpeed: 780,
-    bulletDmg: 12,
+    armor: 0.10,
 
-    trail: []
+    gcd: 0,
+    aaCd: 0,
+    aaSpeed: 1.8,
+    range: 62,
+
+    targetId: null,
+
+    a1: 0, a2: 0, a3: 0, a4: 0
   };
 
-  let bullets = [];
-  let enemies = [];
-  let pickups = [];
+  const quest = {
+    name: "Boar Cleanup",
+    need: 6,
+    kills: 0,
+    done: false,
+    rewardGold: 55,
+    rewardXP: 180
+  };
+
+  const abilitiesByClass = {
+    Warrior: [
+      { key:"1", name:"Strike", cd: 3.5, cost: 0,  dmg: 22, type:"melee", color:"rgba(255,140,230,0.90)" },
+      { key:"2", name:"Sunder", cd: 8.0, cost: 0,  dmg: 14, type:"melee", debuff:"armor", color:"rgba(120,170,255,0.90)" },
+      { key:"3", name:"Shout",  cd: 20,  cost: 0,  buff:"armor", color:"rgba(92,255,176,0.90)" },
+      { key:"4", name:"Charge", cd: 14,  cost: 0,  dash:true, dmg: 10, type:"melee", color:"rgba(255,212,92,0.92)" }
+    ],
+    Mage: [
+      { key:"1", name:"Frostbolt", cd: 2.2, cost: 12, dmg: 20, type:"ranged", slow:true, color:"rgba(120,210,255,0.92)" },
+      { key:"2", name:"Fireball",  cd: 3.8, cost: 16, dmg: 28, type:"ranged", dot:true, color:"rgba(255,170,110,0.92)" },
+      { key:"3", name:"Nova",      cd: 16,  cost: 18, dmg: 14, aoe:true, root:true, color:"rgba(255,140,230,0.75)" },
+      { key:"4", name:"Blink",     cd: 12,  cost: 10, blink:true, color:"rgba(92,255,176,0.85)" }
+    ],
+    Rogue: [
+      { key:"1", name:"Stab",    cd: 2.6, cost: 0,  dmg: 20, type:"melee", color:"rgba(255,140,230,0.90)" },
+      { key:"2", name:"Poison",  cd: 10,  cost: 0,  dmg: 10, type:"melee", dot:true, color:"rgba(92,255,176,0.88)" },
+      { key:"3", name:"Vanish",  cd: 22,  cost: 0,  stealth:true, color:"rgba(120,170,255,0.80)" },
+      { key:"4", name:"Dash",    cd: 14,  cost: 0,  speed:true, color:"rgba(255,212,92,0.92)" }
+    ]
+  };
+
+  let mobs = [];
+  let loot = [];
   let particles = [];
-  let city = [];
-  let stars = [];
+  let grass = [];
+  let trees = [];
+  let chatLines = [];
 
-  function initBackground() {
-    stars = [];
-    for (let i = 0; i < Q.stars; i++) {
-      stars.push({
-        x: state.rng() * W,
-        y: state.rng() * H,
-        r: 0.6 + state.rng() * 1.7,
-        a: 0.12 + state.rng() * 0.35,
-        s: 0.15 + state.rng() * 0.85
+  const world = {
+    w: 4200,
+    h: 3600
+  };
+
+  function initDecor() {
+    grass = [];
+    trees = [];
+    for (let i = 0; i < Q.grass; i++) {
+      grass.push({
+        x: state.rng() * world.w,
+        y: state.rng() * world.h,
+        s: 0.6 + state.rng() * 1.3,
+        a: 0.06 + state.rng() * 0.10
       });
     }
-
-    city = [];
-    for (let i = 0; i < 48; i++) {
-      const baseX = (i / 48) * W;
-      const w = 26 + state.rng() * 70;
-      const h = 60 + state.rng() * 220;
-      const layer = state.rng() < 0.55 ? 1 : 2;
-      city.push({
-        x: baseX + (state.rng() * 50 - 25),
-        w, h,
-        y: H * (layer === 1 ? 0.38 : 0.30),
-        layer
+    for (let i = 0; i < Q.trees; i++) {
+      trees.push({
+        x: 260 + state.rng() * (world.w - 520),
+        y: 260 + state.rng() * (world.h - 520),
+        r: 28 + state.rng() * 46,
+        hue: state.rng() < 0.65 ? 1 : 2
       });
     }
   }
 
-  function updateHud(fps=0) {
-    const regimeName = (state.regime === "riskOn") ? "Risk-On" : "Risk-Off";
-    const hp = Math.max(0, Math.floor(player.hp));
-    const heat = Math.floor(state.heat);
-    const extra = CONFIG.show_fps ? ` | FPS: ${fps.toFixed(0)}` : "";
-    hudL.textContent = `Score: ${state.score} | Alpha: ${state.alpha} | Wave: ${state.wave}`;
-    hudM.textContent = `HP: ${hp} | Heat: ${heat} | Regime: ${regimeName}${extra}`;
-    hudR.textContent = `High: ${highScore}`;
-  }
-
-  function reset(seed=42069) {
-    state.seed = seed;
-    state.rng = mulberry32(seed);
-
-    state.running = false;
-    state.paused = false;
-    state.over = false;
-
-    state.t = 0;
-    state.score = 0;
-    state.alpha = 0;
-
-    state.wave = 1;
-    state.waveTime = 0;
-    state.intermission = false;
-    state.intermissionTime = 0;
-
-    state.heat = 0;
-    state.regime = "riskOn";
-    state.regimeTime = 0;
-
-    state.enemyTimer = 0.6;
-    state.pickupTimer = 2.8;
-
-    state.shake = 0;
-    state.hitStop = 0;
-
-    player.x = W * 0.5;
-    player.y = H * 0.62;
-    player.vx = 0;
-    player.vy = 0;
-
-    player.hp = 100;
-    player.maxHp = 100;
-
-    player.shield = 0;
-    player.shieldMax = 0;
-    player.shieldRegen = 0;
-
-    player.dashCd = 0;
-    player.dashCdMax = 2.3;
-    player.dashTime = 0;
-
-    player.fireCd = 0;
-    player.fireCdMax = 0.11;
-    player.spread = 0.06;
-    player.bulletSpeed = 780;
-    player.bulletDmg = 12;
-
-    player.trail = [];
-
-    bullets = [];
-    enemies = [];
-    pickups = [];
-    particles = [];
-
-    initBackground();
-
-    shop.style.display = "none";
-    overlay.style.display = "flex";
-    overlay.innerHTML = `
-      <div class="card">
-        <div class="title">Neon Market Arena</div>
-        <p class="sub">
-          Quality: <b>${CONFIG.quality}</b> | Difficulty: <b>${CONFIG.difficulty}</b><br/>
-          Survive waves. Intermission each wave. Regimes shift.
-        </p>
-        <p class="sub">
-          <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> move |
-          Aim with mouse |
-          <span class="kbd">Click</span> shoot |
-          <span class="kbd">Space</span> dash |
-          <span class="kbd">P</span> pause |
-          <span class="kbd">R</span> restart
-        </p>
-        <p class="sub" style="opacity:0.78; margin:0;">Click the game area, then click to begin.</p>
-      </div>
-    `;
-    updateHud();
-  }
-
-  function start() {
-    if (state.over) return;
-    state.running = true;
-    state.paused = false;
-    overlay.style.display = "none";
-    canvas.focus();
-  }
-
-  function gameOver() {
-    state.running = false;
-    state.over = true;
-    state.paused = false;
-    shop.style.display = "none";
-
-    if (state.score > highScore) {
-      highScore = state.score;
-      saveHigh(highScore);
-    }
-
-    overlay.style.display = "flex";
-    overlay.innerHTML = `
-      <div class="card">
-        <div class="title">Liquidated</div>
-        <p class="sub">
-          Score: <b>${state.score}</b> | Alpha: <b>${state.alpha}</b> | Wave: <b>${state.wave}</b> | High: <b>${highScore}</b><br/>
-          Press <span class="kbd">R</span> to restart.
-        </p>
-      </div>
-    `;
-  }
-
-  function addParticles(x, y, color, n=14, spread=1.0) {
+  function addParticles(x, y, color, n=18, spread=1.0) {
     for (let i = 0; i < n; i++) {
-      const a = (state.rng() * Math.PI * 2);
+      const a = state.rng() * Math.PI * 2;
       const sp = (40 + state.rng() * 260) * spread;
       particles.push({
         x, y,
         vx: Math.cos(a) * sp,
         vy: Math.sin(a) * sp,
         life: 0.35 + state.rng() * 0.35,
-        r: 1.3 + state.rng() * 3.1,
-        c: color,
+        r: 1.2 + state.rng() * 3.2,
+        c: color
       });
     }
   }
 
-  function circleHit(ax, ay, ar, bx, by, br) {
+  function dist(ax, ay, bx, by) {
     const dx = ax - bx, dy = ay - by;
-    const rr = ar + br;
-    return (dx*dx + dy*dy) <= rr*rr;
+    return Math.hypot(dx, dy);
   }
 
-  function spawnEnemy() {
-    const side = Math.floor(state.rng() * 4);
-    let x, y;
-    if (side === 0) { x = -40; y = state.rng() * H; }
-    else if (side === 1) { x = W + 40; y = state.rng() * H; }
-    else if (side === 2) { x = state.rng() * W; y = -40; }
-    else { x = state.rng() * W; y = H + 40; }
-
-    const tierRoll = 0.14 + state.wave * 0.01 + (state.regime === "riskOff" ? 0.05 : 0.0);
-    const tier = (state.rng() < tierRoll) ? 2 : 1;
-
-    const hpBase = tier === 2 ? (44 + state.wave * 5) : (24 + state.wave * 3.2);
-    const hp = Math.floor(hpBase * D.enemyHpMul);
-    const r = tier === 2 ? 20 : 16;
-
-    enemies.push({ x, y, vx: 0, vy: 0, r, hp, maxHp: hp, tier, hit: 0 });
+  function clampWorld(x, y) {
+    return {
+      x: clamp(x, 40, world.w - 40),
+      y: clamp(y, 40, world.h - 40)
+    };
   }
 
-  function spawnPickup() {
-    const p = (state.rng() < 0.72) ? "alpha" : "med";
-    pickups.push({
-      x: 60 + state.rng() * (W - 120),
-      y: 90 + state.rng() * (H - 160),
-      r: 12,
-      kind: p,
+  function newMob(kind, lvl, x, y) {
+    const base = (kind === "Boar") ? { hp: 58, dmg: 8, sp: 105 } : { hp: 78, dmg: 10, sp: 95 };
+    const hp = Math.floor((base.hp + lvl * 10) * D.mobHp);
+    return {
+      id: "m" + Math.floor(state.rng() * 1e9),
+      kind,
+      lvl,
+      x, y,
+      vx: 0, vy: 0,
+      r: kind === "Boar" ? 18 : 20,
+      hp, hpMax: hp,
+      dmg: Math.floor((base.dmg + lvl * 1.6) * D.mobDmg),
+      sp: (base.sp + lvl * 3.0) * D.mobSp,
+      aggro: false,
+      leashX: x,
+      leashY: y,
+      leash: 360,
+      hit: 0,
+      slow: 0,
+      root: 0,
+      dot: 0,
+      dotT: 0,
+      armorDown: 0,
+      target: false
+    };
+  }
+
+  function spawnPack() {
+    const packs = 10 + Math.floor(state.rng() * 10);
+    mobs = [];
+    for (let i = 0; i < packs; i++) {
+      const kind = (state.rng() < 0.82) ? "Boar" : "Wolf";
+      const lvl = clamp(1 + Math.floor(i/4) + Math.floor(state.rng() * 2), 1, 8);
+      const x = 400 + state.rng() * (world.w - 800);
+      const y = 400 + state.rng() * (world.h - 800);
+      mobs.push(newMob(kind, lvl, x, y));
+    }
+  }
+
+  let inventory = [];
+  function invInit() {
+    inventory = [];
+    for (let i = 0; i < 16; i++) inventory.push(null);
+  }
+  function invAdd(item) {
+    for (let i = 0; i < inventory.length; i++) {
+      if (!inventory[i]) { inventory[i] = item; return true; }
+    }
+    return false;
+  }
+  function invCount() {
+    let n = 0;
+    for (const it of inventory) if (it) n++;
+    return n;
+  }
+  function invRender() {
+    invGrid.innerHTML = "";
+    for (let i = 0; i < 16; i++) {
+      const it = inventory[i];
+      const div = document.createElement("div");
+      div.className = "invItem";
+      if (!it) {
+        div.innerHTML = `<div>Empty</div><span>Slot ${i+1}</span>`;
+      } else {
+        div.innerHTML = `<div>${it.name}</div><span>Value ${it.value}g</span>`;
+      }
+      invGrid.appendChild(div);
+    }
+    document.getElementById("invSub").textContent = `Bags: ${invCount()}/16 | Space to loot nearby`;
+  }
+
+  function abilitiesSetup() {
+    const a = abilitiesByClass[player.cls];
+    a1n.textContent = a[0].name;
+    a2n.textContent = a[1].name;
+    a3n.textContent = a[2].name;
+    a4n.textContent = a[3].name;
+
+    if (player.cls === "Warrior") { player.hpMax = 115; player.mpMax = 40; player.aaSpeed = 1.9; player.range = 62; player.armor = 0.16; }
+    if (player.cls === "Mage")    { player.hpMax = 90;  player.mpMax = 90; player.aaSpeed = 2.1; player.range = 210; player.armor = 0.06; }
+    if (player.cls === "Rogue")   { player.hpMax = 100; player.mpMax = 55; player.aaSpeed = 1.6; player.range = 62; player.armor = 0.10; }
+    player.hp = player.hpMax;
+    player.mp = player.mpMax;
+  }
+
+  function uiUpdate(fps=0) {
+    pName.textContent = `${player.name} (${player.cls})`;
+    pLvl.textContent = `Lv ${player.lvl}`;
+    pHP.style.width = `${clamp(player.hp / player.hpMax, 0, 1) * 100}%`;
+    pMP.style.width = `${clamp(player.mp / player.mpMax, 0, 1) * 100}%`;
+
+    const xpT = clamp(player.xp / player.xpNeed, 0, 1) * 100;
+    xpFill.style.width = `${xpT}%`;
+
+    pillL.textContent = `Zone: ${state.zone} | Gold: ${state.gold} | Bags: ${invCount()}/16`;
+    pillM.textContent = quest.done ? `Quest: ${quest.name} (Complete) | Return for reward` : `Quest: ${quest.name} (${quest.kills}/${quest.need})`;
+    const extra = CONFIG.show_fps ? ` | FPS ${fps.toFixed(0)}` : "";
+    pillR.textContent = `Ping: ${state.ping}ms${extra}`;
+
+    const a = abilitiesByClass[player.cls];
+
+    const cds = [
+      { el: a1cd, v: player.a1, max: a[0].cd },
+      { el: a2cd, v: player.a2, max: a[1].cd },
+      { el: a3cd, v: player.a3, max: a[2].cd },
+      { el: a4cd, v: player.a4, max: a[3].cd }
+    ];
+
+    for (const c of cds) {
+      const t = clamp(c.v / c.max, 0, 1);
+      c.el.style.transform = `translateY(${t * 100}%)`;
+      c.el.style.display = (c.v > 0) ? "block" : "none";
+    }
+
+    if (player.targetId) {
+      const m = mobs.find(z => z.id === player.targetId);
+      if (m) {
+        tFrame.style.display = "block";
+        tName.textContent = `${m.kind}`;
+        tLvl.textContent = `Lv ${m.lvl}`;
+        tHP.style.width = `${clamp(m.hp / m.hpMax, 0, 1) * 100}%`;
+        const d = dist(player.x, player.y, m.x, m.y);
+        tNote.textContent = d <= player.range ? "In range. Fight." : "Out of range. Move closer.";
+      } else {
+        tFrame.style.display = "none";
+      }
+    } else {
+      tFrame.style.display = "none";
+    }
+
+    questText.textContent = quest.done
+      ? `Return to the campfire (center of zone) to claim ${quest.rewardGold}g and ${quest.rewardXP} XP.`
+      : `Kill ${quest.need} boars in Greenhollow. You have ${quest.kills}/${quest.need}.`;
+  }
+
+  function levelUp() {
+    player.lvl += 1;
+    player.xp -= player.xpNeed;
+    player.xpNeed = Math.floor(player.xpNeed * 1.28 + 40);
+
+    player.hpMax = Math.floor(player.hpMax * 1.10 + 12);
+    player.mpMax = Math.floor(player.mpMax * 1.07 + 8);
+    player.hp = player.hpMax;
+    player.mp = player.mpMax;
+
+    chat(`<span style="color:rgba(92,255,176,0.92)">DING</span> You reached level ${player.lvl}.`);
+    addParticles(player.x, player.y, "rgba(92,255,176,0.92)", 70, 1.4);
+    state.shake = Math.min(18, state.shake + 10);
+  }
+
+  function giveXP(n) {
+    player.xp += Math.floor(n * D.xp);
+    while (player.xp >= player.xpNeed) levelUp();
+  }
+
+  function awardQuest() {
+    if (quest.done && dist(player.x, player.y, world.w * 0.5, world.h * 0.5) < 120) {
+      quest.done = false;
+      quest.kills = 0;
+      state.gold += quest.rewardGold;
+      giveXP(quest.rewardXP);
+      chat(`<span style="color:rgba(255,212,92,0.95)">Quest</span> Reward claimed. The zone stirs...`);
+      quest.rewardGold = Math.floor(quest.rewardGold * 1.18 + 12);
+      quest.rewardXP = Math.floor(quest.rewardXP * 1.15 + 18);
+      spawnPack();
+      saveGame();
+    }
+  }
+
+  function dropLoot(m) {
+    const roll = state.rng();
+    const items = [
+      { name: "Torn Hide", value: 2 },
+      { name: "Boar Tusk", value: 3 },
+      { name: "Worn Fang", value: 2 },
+      { name: "Frayed Pelt", value: 2 },
+      { name: "Shiny Trinket", value: 6 }
+    ];
+
+    let it = items[Math.floor(state.rng() * items.length)];
+    if (roll > 0.92) it = { name: "Green Charm", value: 12 };
+
+    loot.push({
+      x: m.x,
+      y: m.y,
+      r: 14,
+      item: it,
       t: state.rng() * Math.PI * 2
     });
   }
 
-  function shoot() {
-    if (!state.running || state.paused || state.intermission) return;
-    if (player.fireCd > 0) return;
-
-    const dx = mouse.x - player.x;
-    const dy = mouse.y - player.y;
-    const ang = Math.atan2(dy, dx);
-
-    const spread = player.spread * (0.80 + state.heat * 0.0035);
-    const a = ang + (state.rng() * spread - spread * 0.5);
-
-    bullets.push({
-      x: player.x + Math.cos(a) * (player.r + 7),
-      y: player.y + Math.sin(a) * (player.r + 7),
-      vx: Math.cos(a) * player.bulletSpeed,
-      vy: Math.sin(a) * player.bulletSpeed,
-      r: 5.2,
-      life: 0.95,
-      dmg: player.bulletDmg
-    });
-
-    player.fireCd = player.fireCdMax;
-    state.heat = Math.min(240, state.heat + 2.0);
-  }
-
-  function dash() {
-    if (!state.running || state.paused) return;
-    if (player.dashCd > 0) return;
-
-    const dx = mouse.x - player.x;
-    const dy = mouse.y - player.y;
-    const ang = Math.atan2(dy, dx);
-
-    const impulse = 980;
-    player.vx += Math.cos(ang) * impulse;
-    player.vy += Math.sin(ang) * impulse;
-
-    player.dashCd = player.dashCdMax;
-    player.dashTime = 0.10;
-
-    state.shake = Math.min(18, state.shake + 10);
-
-    const pal = palettes[state.regime];
-    addParticles(player.x, player.y, pal.neon2, 28, 1.1);
-  }
-
-  function buy(kind) {
-    if (!state.running || !state.intermission) return;
-
-    if (kind === 1) {
-      const cost = 40;
-      if (state.alpha < cost) return;
-      state.alpha -= cost;
-      player.fireCdMax = Math.max(0.05, player.fireCdMax - 0.01);
-      player.spread = Math.max(0.018, player.spread * 0.88);
-      player.bulletDmg += 2;
-      addParticles(player.x, player.y, palettes[state.regime].neon3, 32, 1.2);
-    } else if (kind === 2) {
-      const cost = 60;
-      if (state.alpha < cost) return;
-      state.alpha -= cost;
-      player.shieldMax = Math.min(140, player.shieldMax + 40);
-      player.shield = Math.min(player.shieldMax, player.shield + 50);
-      player.shieldRegen = Math.min(32, player.shieldRegen + 10);
-      addParticles(player.x, player.y, palettes[state.regime].neon2, 32, 1.2);
-    } else if (kind === 3) {
-      const cost = 55;
-      if (state.alpha < cost) return;
-      state.alpha -= cost;
-      player.dashCdMax = Math.max(1.1, player.dashCdMax * 0.86);
-      addParticles(player.x, player.y, palettes[state.regime].neon1, 32, 1.2);
+  function lootNearby() {
+    let picked = false;
+    for (let i = loot.length - 1; i >= 0; i--) {
+      const l = loot[i];
+      if (dist(player.x, player.y, l.x, l.y) < 70) {
+        if (invAdd(l.item)) {
+          loot.splice(i, 1);
+          chat(`Looted <span style="color:rgba(255,212,92,0.95)">${l.item.name}</span>.`);
+          addParticles(l.x, l.y, "rgba(255,212,92,0.90)", 26, 1.1);
+          picked = true;
+        } else {
+          chat(`<span style="color:rgba(255,110,110,0.95)">Bags full</span>.`);
+          break;
+        }
+      }
     }
-    updateHud();
+    if (picked) { invRender(); saveGame(); }
   }
 
-  opt1.addEventListener("click", () => buy(1));
-  opt2.addEventListener("click", () => buy(2));
-  opt3.addEventListener("click", () => buy(3));
+  function sellJunk() {
+    let gold = 0;
+    for (let i = 0; i < inventory.length; i++) {
+      const it = inventory[i];
+      if (it) { gold += it.value; inventory[i] = null; }
+    }
+    if (gold > 0) {
+      state.gold += Math.floor(gold * D.gold);
+      chat(`Sold junk for <span style="color:rgba(255,212,92,0.95)">${Math.floor(gold * D.gold)}g</span>.`);
+      invRender();
+      saveGame();
+    }
+  }
 
-  function drawBackground(pal, dt) {
+  function useAbility(slot) {
+    if (!state.running || state.paused) return;
+    const a = abilitiesByClass[player.cls][slot - 1];
+
+    if (player.gcd > 0) return;
+    const cdKey = "a" + slot;
+    if (player[cdKey] > 0) return;
+
+    if (a.cost && player.mp < a.cost) {
+      chat(`<span style="color:rgba(255,110,110,0.95)">Not enough mana</span>.`);
+      return;
+    }
+
+    if (a.blink) {
+      player.mp -= a.cost;
+      player[cdKey] = a.cd;
+      player.gcd = 0.35;
+      const ang = Math.atan2(mouse.y - (H*0.5), mouse.x - (W*0.5));
+      player.x += Math.cos(ang) * 240;
+      player.y += Math.sin(ang) * 240;
+      const p = clampWorld(player.x, player.y);
+      player.x = p.x; player.y = p.y;
+      addParticles(player.x, player.y, a.color, 40, 1.2);
+      state.shake = Math.min(16, state.shake + 8);
+      chat(`Cast <span style="color:${a.color}">${a.name}</span>.`);
+      return;
+    }
+
+    if (a.stealth) {
+      player[cdKey] = a.cd;
+      player.gcd = 0.35;
+      player.armor = Math.min(0.35, player.armor + 0.08);
+      addParticles(player.x, player.y, a.color, 36, 1.1);
+      chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
+      return;
+    }
+
+    if (a.speed) {
+      player[cdKey] = a.cd;
+      player.gcd = 0.35;
+      speedBuffT = 5.0;
+      addParticles(player.x, player.y, a.color, 36, 1.1);
+      chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
+      return;
+    }
+
+    if (a.buff === "armor") {
+      player[cdKey] = a.cd;
+      player.gcd = 0.35;
+      armorBuffT = 10.0;
+      addParticles(player.x, player.y, a.color, 42, 1.15);
+      chat(`Cast <span style="color:${a.color}">${a.name}</span>.`);
+      return;
+    }
+
+    if (a.dash) {
+      if (!player.targetId) { chat("No target."); return; }
+      const m = mobs.find(z => z.id === player.targetId);
+      if (!m) return;
+      player[cdKey] = a.cd;
+      player.gcd = 0.35;
+      const dx = m.x - player.x;
+      const dy = m.y - player.y;
+      const d = Math.hypot(dx, dy) + 1e-6;
+      player.x += (dx / d) * 200;
+      player.y += (dy / d) * 200;
+      addParticles(player.x, player.y, a.color, 40, 1.25);
+      hitMob(m, a.dmg, { slow:false, root:false, dot:false, armorDown:false }, a.color);
+      chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
+      return;
+    }
+
+    if (a.aoe) {
+      player.mp -= a.cost;
+      player[cdKey] = a.cd;
+      player.gcd = 0.45;
+      addParticles(player.x, player.y, a.color, 60, 1.4);
+
+      for (const m of mobs) {
+        const d = dist(player.x, player.y, m.x, m.y);
+        if (d < 170) {
+          hitMob(m, a.dmg, { slow:false, root: !!a.root, dot:false, armorDown:false }, a.color);
+        }
+      }
+      chat(`Cast <span style="color:${a.color}">${a.name}</span>.`);
+      return;
+    }
+
+    if (!player.targetId) { chat("No target."); return; }
+    const m = mobs.find(z => z.id === player.targetId);
+    if (!m) return;
+
+    const d = dist(player.x, player.y, m.x, m.y);
+    if (d > player.range) {
+      chat("Out of range.");
+      return;
+    }
+
+    player.mp -= (a.cost || 0);
+    player[cdKey] = a.cd;
+    player.gcd = 0.35;
+
+    hitMob(m, a.dmg, { slow: !!a.slow, root: !!a.root, dot: !!a.dot, armorDown: (a.debuff === "armor") }, a.color);
+    chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
+  }
+
+  function hitMob(m, dmg, fx, color) {
+    m.aggro = true;
+    m.hit = 1.0;
+    const armorMul = (m.armorDown > 0) ? 1.12 : 1.0;
+    m.hp -= Math.floor(dmg * armorMul);
+
+    addParticles(m.x, m.y, color, 20, 1.0);
+    state.shake = Math.min(16, state.shake + 6);
+
+    if (fx.slow) m.slow = Math.max(m.slow, 2.5);
+    if (fx.root) m.root = Math.max(m.root, 1.4);
+    if (fx.dot)  m.dot  = Math.max(m.dot, 6.0);
+    if (fx.armorDown) m.armorDown = Math.max(m.armorDown, 6.0);
+
+    if (m.hp <= 0) mobDie(m);
+  }
+
+  function mobDie(m) {
+    mobs = mobs.filter(z => z.id !== m.id);
+    addParticles(m.x, m.y, "rgba(255,110,110,0.80)", 52, 1.35);
+
+    giveXP(34 + m.lvl * 12);
+
+    if (m.kind === "Boar" && !quest.done) {
+      quest.kills += 1;
+      if (quest.kills >= quest.need) {
+        quest.done = true;
+        chat(`<span style="color:rgba(255,212,92,0.95)">Quest</span> Objective complete.`);
+        addParticles(player.x, player.y, "rgba(255,212,92,0.90)", 70, 1.4);
+      }
+    }
+
+    dropLoot(m);
+    if (player.targetId === m.id) player.targetId = null;
+
+    saveGame();
+  }
+
+  function autoAttack(dt) {
+    if (!player.targetId) return;
+    const m = mobs.find(z => z.id === player.targetId);
+    if (!m) return;
+
+    const d = dist(player.x, player.y, m.x, m.y);
+    if (d > player.range) return;
+
+    player.aaCd -= dt;
+    if (player.aaCd <= 0) {
+      player.aaCd = player.aaSpeed;
+      const base = (player.cls === "Mage") ? 10 : 14;
+      hitMob(m, base + Math.floor(player.lvl * 1.6), { slow:false, root:false, dot:false, armorDown:false }, "rgba(255,255,255,0.70)");
+    }
+  }
+
+  function mobAI(dt) {
+    for (const m of mobs) {
+      m.hit = Math.max(0, m.hit - 3.2 * dt);
+      m.slow = Math.max(0, m.slow - dt);
+      m.root = Math.max(0, m.root - dt);
+      m.dot = Math.max(0, m.dot - dt);
+      m.armorDown = Math.max(0, m.armorDown - dt);
+
+      if (m.dot > 0) {
+        m.dotT -= dt;
+        if (m.dotT <= 0) {
+          m.dotT = 1.0;
+          m.hp -= 6 + Math.floor(player.lvl * 0.6);
+          addParticles(m.x, m.y, "rgba(92,255,176,0.70)", 10, 0.9);
+          if (m.hp <= 0) { mobDie(m); continue; }
+        }
+      }
+
+      const leashD = dist(m.x, m.y, m.leashX, m.leashY);
+      const aggroD = dist(player.x, player.y, m.x, m.y);
+
+      if (!m.aggro && aggroD < 220) m.aggro = true;
+
+      let tx = m.leashX, ty = m.leashY;
+      if (m.aggro) { tx = player.x; ty = player.y; }
+
+      if (m.aggro && leashD > m.leash) {
+        m.aggro = false;
+        tx = m.leashX; ty = m.leashY;
+      }
+
+      const dx = tx - m.x;
+      const dy = ty - m.y;
+      const d = Math.hypot(dx, dy) + 1e-6;
+
+      const slowMul = (m.slow > 0) ? 0.62 : 1.0;
+      const rootMul = (m.root > 0) ? 0.0 : 1.0;
+
+      const sp = m.sp * slowMul * rootMul;
+      m.vx = lerp(m.vx, (dx / d) * sp, 0.08);
+      m.vy = lerp(m.vy, (dy / d) * sp, 0.08);
+
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+
+      if (m.aggro && aggroD < 52) {
+        mobAttack(dt, m);
+      }
+    }
+  }
+
+  let mobHitCd = 0;
+  function mobAttack(dt, m) {
+    mobHitCd -= dt;
+    if (mobHitCd > 0) return;
+    mobHitCd = 1.25;
+
+    const armor = clamp(player.armor + (armorBuffT > 0 ? 0.06 : 0), 0, 0.45);
+    const dmg = Math.floor(m.dmg * (1 - armor));
+    player.hp -= dmg;
+
+    addParticles(player.x, player.y, "rgba(255,110,110,0.72)", 26, 1.1);
+    state.shake = Math.min(20, state.shake + 10);
+    chat(`${m.kind} hits you for <span style="color:rgba(255,110,110,0.95)">${dmg}</span>.`);
+
+    if (player.hp <= 0) {
+      player.hp = 0;
+      state.running = false;
+      overlay.style.display = "flex";
+      overlay.innerHTML = `
+        <div class="card">
+          <div class="title">You died</div>
+          <p class="sub">Press <span class="kbd">R</span> to respawn at the campfire.</p>
+          <p class="sub" style="opacity:0.78; margin:0;">Tip: loot with Space, sell at campfire with Space, then turn in quest.</p>
+        </div>
+      `;
+      saveGame();
+    }
+  }
+
+  function respawn() {
+    player.x = world.w * 0.5;
+    player.y = world.h * 0.5;
+    player.hp = player.hpMax;
+    player.mp = player.mpMax;
+    player.targetId = null;
+    state.running = true;
+    overlay.style.display = "none";
+    chat("You feel the warmth of the campfire.");
+  }
+
+  function drawWorld(dt) {
     sctx.clearRect(0,0,W,H);
 
-    const g = sctx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, "rgba(10,12,18,1)");
-    g.addColorStop(1, "rgba(5,6,9,1)");
+    const camX = clamp(player.x - W * 0.5, 0, world.w - W);
+    const camY = clamp(player.y - H * 0.5, 0, world.h - H);
+
+    // background
+    const g = sctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "rgba(10,14,12,1)");
+    g.addColorStop(1, "rgba(6,9,8,1)");
     sctx.fillStyle = g;
     sctx.fillRect(0,0,W,H);
 
-    const g1 = sctx.createRadialGradient(W*0.24, H*0.20, 20, W*0.24, H*0.20, 920);
-    g1.addColorStop(0, pal.bgA);
-    g1.addColorStop(1, "rgba(0,0,0,0)");
-    sctx.fillStyle = g1; sctx.fillRect(0,0,W,H);
+    // soft zone glows
+    const rg1 = sctx.createRadialGradient(W*0.30, H*0.22, 50, W*0.30, H*0.22, 820);
+    rg1.addColorStop(0, "rgba(92,255,176,0.10)");
+    rg1.addColorStop(1, "rgba(0,0,0,0)");
+    sctx.fillStyle = rg1; sctx.fillRect(0,0,W,H);
 
-    const g2 = sctx.createRadialGradient(W*0.80, H*0.22, 20, W*0.80, H*0.22, 860);
-    g2.addColorStop(0, pal.bgB);
-    g2.addColorStop(1, "rgba(0,0,0,0)");
-    sctx.fillStyle = g2; sctx.fillRect(0,0,W,H);
+    const rg2 = sctx.createRadialGradient(W*0.78, H*0.20, 50, W*0.78, H*0.20, 820);
+    rg2.addColorStop(0, "rgba(120,170,255,0.10)");
+    rg2.addColorStop(1, "rgba(0,0,0,0)");
+    sctx.fillStyle = rg2; sctx.fillRect(0,0,W,H);
 
-    for (const st of stars) {
-      st.y += st.s * (50 * dt);
-      if (st.y > H + 10) { st.y = -10; st.x = state.rng() * W; }
+    // ground tiles
+    const tile = 70;
+    sctx.save();
+    sctx.globalAlpha = 0.10;
+    sctx.strokeStyle = "rgba(255,255,255,0.10)";
+    for (let x = -((camX % tile)); x < W + tile; x += tile) {
+      sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, H); sctx.stroke();
+    }
+    for (let y = -((camY % tile)); y < H + tile; y += tile) {
+      sctx.beginPath(); sctx.moveTo(0, y); sctx.lineTo(W, y); sctx.stroke();
+    }
+    sctx.restore();
+
+    // grass
+    sctx.save();
+    for (const gr of grass) {
+      const x = gr.x - camX;
+      const y = gr.y - camY;
+      if (x < -30 || y < -30 || x > W + 30 || y > H + 30) continue;
+      sctx.globalAlpha = gr.a;
+      sctx.fillStyle = "rgba(92,255,176,0.55)";
+      sctx.fillRect(x, y, 2.0 * gr.s, 10.0 * gr.s);
+    }
+    sctx.restore();
+
+    // trees
+    for (const tr of trees) {
+      const x = tr.x - camX;
+      const y = tr.y - camY;
+      if (x < -160 || y < -160 || x > W + 160 || y > H + 160) continue;
+
+      const col = tr.hue === 1 ? "rgba(92,255,176,0.14)" : "rgba(120,170,255,0.12)";
+      sctx.save();
+      sctx.shadowColor = col;
+      sctx.shadowBlur = 20;
       sctx.beginPath();
-      sctx.arc(st.x, st.y, st.r, 0, Math.PI*2);
-      sctx.fillStyle = `rgba(255,255,255,${st.a})`;
+      sctx.arc(x, y, tr.r, 0, Math.PI*2);
+      sctx.fillStyle = "rgba(0,0,0,0.22)";
       sctx.fill();
-    }
+      sctx.restore();
 
-    sctx.save();
-    const drift = (state.t * 40) % W;
-    sctx.globalAlpha = 0.70;
-    for (const b of city) {
-      const layerMul = (b.layer === 1) ? 0.7 : 0.45;
-      const x = (b.x - drift * layerMul + W) % (W + 100) - 50;
-      const y = b.y;
-      const h = b.h * (b.layer === 1 ? 1.0 : 1.15);
-
-      sctx.fillStyle = "rgba(0,0,0,0.34)";
-      sctx.fillRect(x, y, b.w, h);
-
-      sctx.globalAlpha = 0.10 + (b.layer === 1 ? 0.07 : 0.04);
-      sctx.fillStyle = (state.regime === "riskOn") ? "rgba(120,170,255,0.22)" : "rgba(255,170,110,0.18)";
-      for (let k = 0; k < 8; k++) {
-        const wx = x + 6 + (k * 6);
-        const wy = y + 10 + ((k * 17) % 70);
-        sctx.fillRect(wx, wy, 2, 8);
-      }
-      sctx.globalAlpha = 0.70;
-    }
-    sctx.restore();
-
-    sctx.save();
-    const horizonY = H * 0.40;
-
-    for (let i = 0; i < 34; i++) {
-      const p = i / 34;
-      const y = lerp(horizonY, H, p);
-      const w = lerp(W * 0.15, W * 1.30, p);
-      const x0 = W*0.5 - w*0.5;
-      const x1 = W*0.5 + w*0.5;
-
-      sctx.strokeStyle = "rgba(255,255,255,0.04)";
-      sctx.lineWidth = 1;
+      sctx.save();
+      sctx.shadowColor = col;
+      sctx.shadowBlur = 24;
       sctx.beginPath();
-      sctx.moveTo(x0, y);
-      sctx.lineTo(x1, y);
-      sctx.stroke();
-    }
-
-    const cols = 22;
-    for (let c = -cols; c <= cols; c++) {
-      const p = (c / cols) * 0.5;
-      const xTop = W*0.5 + p * (W*0.22);
-      const xBot = W*0.5 + p * (W*1.1);
-
-      sctx.strokeStyle = "rgba(255,255,255,0.05)";
-      sctx.lineWidth = 1;
-      sctx.beginPath();
-      sctx.moveTo(xTop, horizonY);
-      sctx.lineTo(xBot, H);
-      sctx.stroke();
-    }
-    sctx.restore();
-  }
-
-  function drawEntities(pal) {
-    player.trail.unshift({x: player.x, y: player.y});
-    if (player.trail.length > 18) player.trail.pop();
-
-    sctx.save();
-    sctx.globalAlpha = 0.55;
-    for (let i = 0; i < player.trail.length; i++) {
-      const t = i / player.trail.length;
-      const p = player.trail[i];
-      sctx.beginPath();
-      sctx.arc(p.x, p.y, player.r * (0.65 + t*0.35), 0, Math.PI*2);
-      sctx.fillStyle = `rgba(92,255,176,${0.18 * (1 - t)})`;
+      sctx.arc(x, y, tr.r * 0.82, 0, Math.PI*2);
+      sctx.fillStyle = col;
       sctx.fill();
+      sctx.restore();
     }
-    sctx.restore();
 
+    // campfire at center
+    const cx = world.w * 0.5 - camX;
+    const cy = world.h * 0.5 - camY;
     sctx.save();
-    sctx.shadowColor = pal.neon1;
+    sctx.shadowColor = "rgba(255,212,92,0.30)";
     sctx.shadowBlur = 26;
     sctx.beginPath();
-    sctx.arc(player.x, player.y, player.r + 3, 0, Math.PI*2);
-    const pg = sctx.createRadialGradient(player.x - 8, player.y - 10, 2, player.x, player.y, player.r * 2.6);
+    sctx.arc(cx, cy, 26, 0, Math.PI*2);
+    sctx.fillStyle = "rgba(255,212,92,0.18)";
+    sctx.fill();
+    sctx.restore();
+
+    sctx.save();
+    sctx.globalAlpha = 0.65;
+    sctx.fillStyle = "rgba(255,212,92,0.30)";
+    sctx.fillRect(cx - 2, cy - 20, 4, 10);
+    sctx.fillRect(cx - 8, cy - 8, 16, 6);
+    sctx.restore();
+
+    // loot
+    for (const l of loot) {
+      l.t += dt * 2.2;
+      const bob = Math.sin(l.t) * 4.5;
+      const x = l.x - camX;
+      const y = l.y - camY + bob;
+      if (x < -50 || y < -50 || x > W + 50 || y > H + 50) continue;
+
+      sctx.save();
+      sctx.shadowColor = "rgba(255,212,92,0.70)";
+      sctx.shadowBlur = 18;
+      sctx.beginPath();
+      sctx.arc(x, y, l.r, 0, Math.PI*2);
+      sctx.fillStyle = "rgba(255,212,92,0.78)";
+      sctx.fill();
+      sctx.strokeStyle = "rgba(255,255,255,0.14)";
+      sctx.lineWidth = 2;
+      sctx.stroke();
+      sctx.restore();
+    }
+
+    // mobs
+    for (const m of mobs) {
+      const x = m.x - camX;
+      const y = m.y - camY;
+      if (x < -80 || y < -80 || x > W + 80 || y > H + 80) continue;
+
+      const hostile = m.aggro ? "rgba(255,110,110,0.90)" : "rgba(255,170,110,0.72)";
+      sctx.save();
+      sctx.shadowColor = hostile;
+      sctx.shadowBlur = 18 + m.hit * 12;
+      sctx.beginPath();
+      sctx.arc(x, y, m.r, 0, Math.PI*2);
+      const eg = sctx.createRadialGradient(x - 6, y - 8, 2, x, y, m.r * 2.2);
+      eg.addColorStop(0, "rgba(255,255,255,0.70)");
+      eg.addColorStop(0.35, hostile);
+      eg.addColorStop(1, "rgba(0,0,0,0)");
+      sctx.fillStyle = eg;
+      sctx.fill();
+      sctx.restore();
+
+      // hp ring
+      const hpT = clamp(m.hp / m.hpMax, 0, 1);
+      sctx.save();
+      sctx.beginPath();
+      sctx.arc(x, y, m.r + 9, -Math.PI/2, -Math.PI/2 + Math.PI*2*hpT);
+      sctx.strokeStyle = `rgba(255,255,255,${0.10 + 0.20*hpT})`;
+      sctx.lineWidth = 2;
+      sctx.stroke();
+      sctx.restore();
+
+      // target marker
+      if (player.targetId === m.id) {
+        sctx.save();
+        sctx.globalAlpha = 0.65;
+        sctx.strokeStyle = "rgba(255,255,255,0.25)";
+        sctx.lineWidth = 2;
+        sctx.beginPath();
+        sctx.arc(x, y, m.r + 16, 0, Math.PI*2);
+        sctx.stroke();
+        sctx.restore();
+      }
+    }
+
+    // player
+    const px = player.x - camX;
+    const py = player.y - camY;
+
+    sctx.save();
+    sctx.shadowColor = "rgba(92,255,176,0.70)";
+    sctx.shadowBlur = 24;
+    sctx.beginPath();
+    sctx.arc(px, py, player.r + 3, 0, Math.PI*2);
+    const pg = sctx.createRadialGradient(px - 8, py - 10, 2, px, py, player.r * 2.6);
     pg.addColorStop(0, "rgba(255,255,255,0.92)");
-    pg.addColorStop(0.35, pal.neon1);
+    pg.addColorStop(0.35, "rgba(92,255,176,0.86)");
     pg.addColorStop(1, "rgba(0,0,0,0)");
     sctx.fillStyle = pg;
     sctx.fill();
     sctx.restore();
 
-    for (const b of bullets) {
-      sctx.save();
-      sctx.shadowColor = pal.bullet;
-      sctx.shadowBlur = 18;
-      sctx.beginPath();
-      sctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
-      sctx.fillStyle = pal.bullet;
-      sctx.fill();
-      sctx.restore();
-    }
-
-    for (const e of enemies) {
-      const hpT = e.hp / Math.max(1, e.maxHp);
-      sctx.save();
-      sctx.shadowColor = pal.enemy;
-      sctx.shadowBlur = 20 + e.hit * 12;
-      sctx.beginPath();
-      sctx.arc(e.x, e.y, e.r, 0, Math.PI*2);
-      const eg = sctx.createRadialGradient(e.x - 6, e.y - 8, 2, e.x, e.y, e.r * 2.2);
-      eg.addColorStop(0, "rgba(255,255,255,0.75)");
-      eg.addColorStop(0.35, pal.enemy);
-      eg.addColorStop(1, "rgba(0,0,0,0)");
-      sctx.fillStyle = eg;
-      sctx.fill();
-
-      sctx.shadowBlur = 0;
-      sctx.beginPath();
-      sctx.arc(e.x, e.y, e.r + 8, -Math.PI/2, -Math.PI/2 + Math.PI*2*hpT);
-      sctx.strokeStyle = `rgba(255,255,255,${0.08 + 0.20*hpT})`;
-      sctx.lineWidth = 2;
-      sctx.stroke();
-      sctx.restore();
-    }
-
-    for (const p of pickups) {
-      p.t += 2.6 / 60.0;
-      const bob = Math.sin(p.t) * 4.5;
-      sctx.save();
-      sctx.shadowColor = pal.alpha;
-      sctx.shadowBlur = 18;
-      sctx.beginPath();
-      sctx.arc(p.x, p.y + bob, p.r, 0, Math.PI*2);
-      sctx.fillStyle = (p.kind === "alpha") ? pal.alpha : "rgba(92,255,176,0.90)";
-      sctx.fill();
-      sctx.strokeStyle = "rgba(255,255,255,0.16)";
-      sctx.lineWidth = 2;
-      sctx.stroke();
-      sctx.restore();
-    }
-
+    // particles
     for (const p of particles) {
+      const x = p.x - camX;
+      const y = p.y - camY;
+      if (x < -80 || y < -80 || x > W + 80 || y > H + 80) continue;
       sctx.save();
       sctx.globalAlpha = clamp(p.life / 0.6, 0, 1);
       sctx.shadowColor = p.c;
       sctx.shadowBlur = 14;
       sctx.beginPath();
-      sctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      sctx.arc(x, y, p.r, 0, Math.PI*2);
       sctx.fillStyle = p.c;
       sctx.fill();
       sctx.restore();
     }
 
+    // interaction prompt
+    const nearCamp = dist(player.x, player.y, world.w * 0.5, world.h * 0.5) < 120;
+    const nearLoot = loot.some(l => dist(player.x, player.y, l.x, l.y) < 70);
+
     sctx.save();
-    if (Q.scanlines) {
-      sctx.globalAlpha = 0.10;
-      sctx.fillStyle = "rgba(0,0,0,0.18)";
-      for (let y = 0; y < H; y += 3) sctx.fillRect(0, y, W, 1);
-    }
-    sctx.globalAlpha = 0.055;
-    for (let i = 0; i < Q.noise; i++) {
-      const x = state.rng() * W;
-      const y = state.rng() * H;
-      sctx.fillStyle = "rgba(255,255,255,0.07)";
-      sctx.fillRect(x, y, 1.2, 1.2);
-    }
+    sctx.globalAlpha = 0.88;
+    sctx.fillStyle = "rgba(0,0,0,0.35)";
+    sctx.fillRect(W*0.5 - 240, H - 118, 480, 44);
+    sctx.strokeStyle = "rgba(255,255,255,0.12)";
+    sctx.strokeRect(W*0.5 - 240, H - 118, 480, 44);
+    sctx.fillStyle = "rgba(255,255,255,0.86)";
+    sctx.font = "700 13px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial";
+    sctx.textAlign = "center";
+    sctx.textBaseline = "middle";
+
+    let msg = "Click a mob to target. Use 1-4 abilities.";
+    if (nearLoot) msg = "Press Space to loot nearby items.";
+    if (nearCamp) msg = "At campfire: Space sells junk. Turn in quest by standing here.";
+    sctx.fillText(msg, W*0.5, H - 96);
+    sctx.restore();
+
+    // camera reticle
+    sctx.save();
+    sctx.globalAlpha = 0.55;
+    sctx.strokeStyle = "rgba(255,255,255,0.18)";
+    sctx.lineWidth = 1.5;
+    sctx.beginPath();
+    sctx.arc(W*0.5 + (mouse.x - W*0.5)*0.0, H*0.5 + (mouse.y - H*0.5)*0.0, 10, 0, Math.PI*2);
+    sctx.stroke();
     sctx.restore();
   }
 
@@ -858,175 +1319,69 @@ html = r"""
     ctx.globalAlpha = 0.75;
     ctx.drawImage(bloom, 0, 0, W, H);
     ctx.restore();
-
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    ctx.globalAlpha = 0.10;
-    ctx.drawImage(scene, 1.5, 0.0);
-    ctx.drawImage(scene, -1.0, 0.8);
-    ctx.restore();
   }
 
-  function setIntermission(on) {
-    state.intermission = on;
-    state.intermissionTime = 0;
-    shop.style.display = on ? "block" : "none";
+  function minimapDraw() {
+    mctx.clearRect(0,0,mm.width,mm.height);
+    mctx.save();
+    mctx.fillStyle = "rgba(0,0,0,0.28)";
+    mctx.fillRect(0,0,mm.width,mm.height);
+
+    const sx = mm.width / world.w;
+    const sy = mm.height / world.h;
+
+    // camp
+    mctx.fillStyle = "rgba(255,212,92,0.85)";
+    mctx.beginPath();
+    mctx.arc(world.w*0.5*sx, world.h*0.5*sy, 4, 0, Math.PI*2);
+    mctx.fill();
+
+    // mobs
+    for (const m of mobs) {
+      mctx.fillStyle = m.aggro ? "rgba(255,110,110,0.80)" : "rgba(255,170,110,0.65)";
+      mctx.fillRect(m.x*sx, m.y*sy, 2.2, 2.2);
+    }
+
+    // loot
+    for (const l of loot) {
+      mctx.fillStyle = "rgba(255,212,92,0.85)";
+      mctx.fillRect(l.x*sx, l.y*sy, 2.2, 2.2);
+    }
+
+    // player
+    mctx.fillStyle = "rgba(92,255,176,0.92)";
+    mctx.beginPath();
+    mctx.arc(player.x*sx, player.y*sy, 3.5, 0, Math.PI*2);
+    mctx.fill();
+
+    mctx.restore();
   }
 
-  window.addEventListener("keydown", (e) => {
-    const k = e.key.toLowerCase();
-    keys.add(k);
-
-    if (k === "p") {
-      e.preventDefault();
-      if (!state.running || state.over) return;
-      state.paused = !state.paused;
-      if (state.paused) {
-        shop.style.display = "none";
-        overlay.style.display = "flex";
-        overlay.innerHTML = `
-          <div class="card">
-            <div class="title">Paused</div>
-            <p class="sub">
-              Press <span class="kbd">P</span> to resume. Press <span class="kbd">R</span> to restart.
-            </p>
-          </div>
-        `;
-      } else {
-        overlay.style.display = "none";
-      }
-      return;
-    }
-
-    if (k === "r") {
-      e.preventDefault();
-      reset(state.seed);
-      return;
-    }
-
-    if (k === " ") {
-      e.preventDefault();
-      if (!state.running) start();
-      if (state.paused || state.over) return;
-      dash();
-      return;
-    }
-  });
-
-  window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
-
-  canvas.addEventListener("mousemove", (e) => {
-    const p = canvasToLocal(e);
-    mouse.x = p.x; mouse.y = p.y;
-  });
-
-  canvas.addEventListener("mousedown", (e) => {
-    canvas.focus();
-    const p = canvasToLocal(e);
-    mouse.x = p.x; mouse.y = p.y;
-    mouse.down = true;
-    if (!state.running && !state.over) start();
-  });
-
-  window.addEventListener("mouseup", () => mouse.down = false);
-
-  canvas.addEventListener("click", () => {
-    canvas.focus();
-    if (!state.running && !state.over) start();
-  });
-
-  let last = performance.now();
-  let fps = 60;
-  let fpsAcc = 0, fpsN = 0, fpsT = 0;
-
-  function frame(now) {
-    requestAnimationFrame(frame);
-
-    let dtMs = now - last;
-    last = now;
-    dtMs = Math.min(dtMs, 50);
-    let dt = dtMs / 1000.0;
-
-    fpsT += dtMs;
-    fpsAcc += 1000.0 / Math.max(1, dtMs);
-    fpsN += 1;
-    if (fpsT > 350) {
-      fps = fpsAcc / fpsN;
-      fpsAcc = 0; fpsN = 0; fpsT = 0;
-    }
-
-    const pal = palettes[state.regime];
-
-    if (!state.running || state.paused || state.over) {
-      drawBackground(pal, dt);
-      drawEntities(pal);
-      compositeBloom();
-      updateHud(fps);
-      return;
-    }
-
-    if (state.hitStop > 0) {
-      state.hitStop = Math.max(0, state.hitStop - dt);
-      dt *= 0.18;
-    }
+  function tick(dt) {
+    if (!state.running || state.paused) return;
 
     state.t += dt;
+    state.ping = 10 + Math.floor(6 * (0.5 + Math.sin(state.t * 0.3) * 0.5));
 
-    state.regimeTime += dt;
-    if (state.regimeTime >= state.regimeEvery) {
-      state.regimeTime = 0;
-      state.regime = (state.regime === "riskOn") ? "riskOff" : "riskOn";
-      state.shake = Math.min(18, state.shake + 12);
-      const col = (state.regime === "riskOn") ? "rgba(255,140,230,0.40)" : "rgba(120,210,255,0.35)";
-      addParticles(W*0.5, H*0.40, col, 70, 1.6);
-    }
+    // timers
+    player.gcd = Math.max(0, player.gcd - dt);
+    player.a1 = Math.max(0, player.a1 - dt);
+    player.a2 = Math.max(0, player.a2 - dt);
+    player.a3 = Math.max(0, player.a3 - dt);
+    player.a4 = Math.max(0, player.a4 - dt);
 
-    if (!state.intermission) {
-      state.waveTime += dt;
-      if (state.waveTime >= state.waveDuration) {
-        state.wave += 1;
-        state.waveTime = 0;
-        setIntermission(true);
-      }
-    } else {
-      state.intermissionTime += dt;
-      if (enemies.length === 0 && state.intermissionTime >= state.intermissionDuration) setIntermission(false);
-    }
+    // regen
+    player.mp = Math.min(player.mpMax, player.mp + 6.5 * dt);
 
-    state.heat = Math.max(0, state.heat - 18 * dt);
+    // buffs
+    armorBuffT = Math.max(0, armorBuffT - dt);
+    speedBuffT = Math.max(0, speedBuffT - dt);
 
-    player.fireCd = Math.max(0, player.fireCd - dt);
-    player.dashCd = Math.max(0, player.dashCd - dt);
-
-    if (player.shieldMax > 0 && player.shieldRegen > 0) {
-      player.shield = Math.min(player.shieldMax, player.shield + player.shieldRegen * dt);
-    }
-
-    const basePressure = 0.65 + state.wave * 0.09;
-    const regimeMul = (state.regime === "riskOff") ? 1.12 : 0.98;
-    const pressure = basePressure * regimeMul * D.spawnMul;
-
-    state.enemyTimer -= dt;
-    state.pickupTimer -= dt;
-
-    if (!state.intermission) {
-      const enemyEvery = clamp(1.05 - pressure * 0.12, 0.35, 0.95);
-      if (state.enemyTimer <= 0) {
-        spawnEnemy();
-        if (state.rng() < 0.10 + state.wave * 0.01) spawnEnemy();
-        state.enemyTimer = enemyEvery;
-        state.heat = Math.min(240, state.heat + 10);
-      }
-
-      const pickupEvery = clamp(4.2 - state.wave * 0.15, 1.8, 3.8);
-      if (state.pickupTimer <= 0) {
-        spawnPickup();
-        state.pickupTimer = pickupEvery;
-      }
-    }
-
-    const accel = 2100;
-    const maxV = 520 + state.wave * 7;
+    // movement
+    const accel = 1900;
+    const maxVBase = 410;
+    const speedMul = speedBuffT > 0 ? 1.35 : 1.0;
+    const maxV = maxVBase * speedMul;
     const friction = 0.86;
 
     let ax = 0, ay = 0;
@@ -1047,100 +1402,14 @@ html = r"""
     player.vx *= Math.pow(friction, dt * 60);
     player.vy *= Math.pow(friction, dt * 60);
 
-    player.x = clamp(player.x, 40, W - 40);
-    player.y = clamp(player.y, 70, H - 60);
+    const p = clampWorld(player.x, player.y);
+    player.x = p.x; player.y = p.y;
 
-    if (mouse.down) shoot();
+    // combat
+    autoAttack(dt);
+    mobAI(dt);
 
-    for (let i = bullets.length - 1; i >= 0; i--) {
-      const b = bullets[i];
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      b.life -= dt;
-      if (b.life <= 0 || b.x < -60 || b.x > W+60 || b.y < -60 || b.y > H+60) bullets.splice(i, 1);
-    }
-
-    for (const e of enemies) {
-      const dx = player.x - e.x;
-      const dy = player.y - e.y;
-      const d = Math.hypot(dx, dy) + 1e-6;
-
-      const baseSp = (e.tier === 2 ? 170 : 205) + state.wave * 6;
-      const sp = baseSp * D.enemySpMul + (state.regime === "riskOff" ? 18 : 0);
-
-      e.vx = lerp(e.vx, (dx / d) * sp, 0.08);
-      e.vy = lerp(e.vy, (dy / d) * sp, 0.08);
-      e.x += e.vx * dt;
-      e.y += e.vy * dt;
-      e.hit = Math.max(0, e.hit - 3.8 * dt);
-    }
-
-    for (let i = enemies.length - 1; i >= 0; i--) {
-      const e = enemies[i];
-      for (let j = bullets.length - 1; j >= 0; j--) {
-        const b = bullets[j];
-        if (circleHit(e.x, e.y, e.r, b.x, b.y, b.r)) {
-          e.hp -= b.dmg;
-          e.hit = 1.0;
-          bullets.splice(j, 1);
-
-          addParticles(b.x, b.y, pal.bullet, 10, 0.9);
-
-          if (e.hp <= 0) {
-            enemies.splice(i, 1);
-            addParticles(e.x, e.y, pal.enemy, 44, 1.35);
-            state.shake = Math.min(22, state.shake + 10);
-            state.score += (e.tier === 2 ? 460 : 240) + state.wave * 10;
-            state.alpha += Math.floor((e.tier === 2 ? 10 : 6) * D.alphaMul);
-            state.hitStop = Math.min(0.05, state.hitStop + 0.020);
-            if (state.rng() < 0.18) pickups.push({ x: e.x, y: e.y, r: 12, kind: "alpha", t: 0 });
-          }
-          break;
-        }
-      }
-    }
-
-    for (let i = enemies.length - 1; i >= 0; i--) {
-      const e = enemies[i];
-      if (circleHit(e.x, e.y, e.r, player.x, player.y, player.r + 4)) {
-        enemies.splice(i, 1);
-        const dmgBase = (e.tier === 2 ? 22 : 14) + Math.floor(state.wave * 0.8);
-        let remaining = Math.floor(dmgBase * D.dmgMul);
-
-        if (player.shield > 0) {
-          const sTake = Math.min(player.shield, remaining);
-          player.shield -= sTake;
-          remaining -= sTake;
-        }
-        player.hp -= remaining;
-
-        addParticles(player.x, player.y, pal.enemy, 56, 1.5);
-        state.shake = Math.min(28, state.shake + 16);
-        state.heat = Math.min(240, state.heat + 40);
-
-        if (player.hp <= 0) {
-          gameOver();
-          break;
-        }
-      }
-    }
-
-    for (let i = pickups.length - 1; i >= 0; i--) {
-      const p = pickups[i];
-      if (circleHit(p.x, p.y, p.r, player.x, player.y, player.r + 8)) {
-        pickups.splice(i, 1);
-        if (p.kind === "alpha") {
-          state.alpha += Math.floor(12 * D.alphaMul);
-          state.score += 190;
-          addParticles(p.x, p.y, pal.alpha, 26, 1.2);
-        } else {
-          player.hp = Math.min(player.maxHp, player.hp + 26);
-          state.score += 120;
-          addParticles(p.x, p.y, pal.neon1, 26, 1.2);
-        }
-      }
-    }
-
+    // particles
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx * dt;
@@ -1151,43 +1420,213 @@ html = r"""
       if (p.life <= 0) particles.splice(i, 1);
     }
 
-    state.shake = Math.max(0, state.shake * Math.pow(0.88, dt * 60));
-    state.score += Math.floor(2 * dt * 60);
-
-    if (state.score > highScore) { highScore = state.score; saveHigh(highScore); }
-
-    drawBackground(palettes[state.regime], dt);
-
-    const shMag = state.shake * Q.shakeMul;
-    const dx = (state.rng() * 2 - 1) * shMag;
-    const dy = (state.rng() * 2 - 1) * shMag;
-
-    sctx.save();
-    sctx.translate(dx, dy);
-    drawEntities(palettes[state.regime]);
-    sctx.restore();
-
-    if (state.intermission) {
-      sctx.save();
-      sctx.globalAlpha = 0.92;
-      sctx.fillStyle = "rgba(0,0,0,0.32)";
-      sctx.fillRect(W*0.5 - 160, 18, 320, 34);
-      sctx.strokeStyle = "rgba(255,255,255,0.12)";
-      sctx.strokeRect(W*0.5 - 160, 18, 320, 34);
-      sctx.fillStyle = "rgba(255,255,255,0.86)";
-      sctx.font = "700 14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial";
-      sctx.textAlign = "center";
-      sctx.textBaseline = "middle";
-      sctx.fillText("INTERMISSION: BUY UPGRADES", W*0.5, 35);
-      sctx.restore();
-    }
-
-    compositeBloom();
-    updateHud(fps);
+    // campfire interactions
+    awardQuest();
   }
 
-  hudR.textContent = `High: ${highScore}`;
-  reset(CONFIG.seed || 42069);
+  let armorBuffT = 0;
+  let speedBuffT = 0;
+
+  function start() {
+    state.running = true;
+    overlay.style.display = "none";
+    canvas.focus();
+  }
+
+  function resetAll() {
+    state.rng = mulberry32(state.seed);
+    state.gold = 0;
+    player.lvl = 1;
+    player.xp = 0;
+    player.xpNeed = 120;
+    player.targetId = null;
+
+    abilitiesSetup();
+    invInit();
+    invRender();
+
+    quest.kills = 0;
+    quest.done = false;
+    quest.rewardGold = 55;
+    quest.rewardXP = 180;
+
+    loot = [];
+    particles = [];
+    chatLines = [];
+    chatEl.innerHTML = "";
+
+    initDecor();
+    spawnPack();
+
+    player.x = world.w * 0.5;
+    player.y = world.h * 0.5;
+
+    chat("Welcome to Greenhollow.");
+    chat("Pull boars. Loot with Space. Sell at campfire.");
+    saveGame();
+    uiUpdate();
+  }
+
+  function tryLoad() {
+    if (CONFIG.reset_save) clearSave();
+    const s = loadSave();
+    if (!s) return false;
+
+    state.gold = s.gold ?? 0;
+    player.lvl = s.lvl ?? 1;
+    player.xp = s.xp ?? 0;
+    player.xpNeed = s.xpNeed ?? 120;
+
+    invInit();
+    if (Array.isArray(s.inv)) {
+      for (let i = 0; i < 16; i++) inventory[i] = s.inv[i] ?? null;
+    }
+
+    quest.kills = s.quest?.kills ?? 0;
+    quest.done = s.quest?.done ?? false;
+
+    abilitiesSetup();
+    initDecor();
+    spawnPack();
+
+    player.x = world.w * 0.5;
+    player.y = world.h * 0.5;
+
+    invRender();
+    chat("Save loaded.");
+    uiUpdate();
+    return true;
+  }
+
+  // Input
+  window.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+
+    if (k === "p") {
+      e.preventDefault();
+      if (!state.running) return;
+      state.paused = !state.paused;
+      if (state.paused) {
+        overlay.style.display = "flex";
+        overlay.innerHTML = `
+          <div class="card">
+            <div class="title">Paused</div>
+            <p class="sub">Press <span class="kbd">P</span> to resume. Press <span class="kbd">R</span> to respawn if dead.</p>
+            <p class="sub" style="opacity:0.78; margin:0;">Press <span class="kbd">I</span> for inventory and <span class="kbd">Q</span> for quest log.</p>
+          </div>
+        `;
+      } else {
+        overlay.style.display = "none";
+      }
+      return;
+    }
+
+    if (k === "r") {
+      e.preventDefault();
+      respawn();
+      return;
+    }
+
+    if (k === "i") {
+      e.preventDefault();
+      invPanel.style.display = (invPanel.style.display === "block") ? "none" : "block";
+      questPanel.style.display = "none";
+      invRender();
+      return;
+    }
+
+    if (k === "q") {
+      e.preventDefault();
+      questPanel.style.display = (questPanel.style.display === "block") ? "none" : "block";
+      invPanel.style.display = "none";
+      return;
+    }
+
+    if (k === " ") {
+      e.preventDefault();
+      if (!state.running) start();
+      if (!state.running || state.paused) return;
+      // campfire sells
+      const nearCamp = dist(player.x, player.y, world.w * 0.5, world.h * 0.5) < 120;
+      if (nearCamp) sellJunk();
+      lootNearby();
+      return;
+    }
+
+    if (k === "1") { e.preventDefault(); useAbility(1); return; }
+    if (k === "2") { e.preventDefault(); useAbility(2); return; }
+    if (k === "3") { e.preventDefault(); useAbility(3); return; }
+    if (k === "4") { e.preventDefault(); useAbility(4); return; }
+
+    keys.add(k);
+  });
+
+  window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+
+  canvas.addEventListener("mousemove", (e) => {
+    const p = canvasToLocal(e);
+    mouse.x = p.x;
+    mouse.y = p.y;
+  });
+
+  canvas.addEventListener("mousedown", (e) => {
+    canvas.focus();
+    if (!state.running) start();
+    const p = canvasToLocal(e);
+    mouse.x = p.x;
+    mouse.y = p.y;
+
+    // clicking targets nearest mob under cursor in screen space
+    const camX = clamp(player.x - W * 0.5, 0, world.w - W);
+    const camY = clamp(player.y - H * 0.5, 0, world.h - H);
+
+    let best = null;
+    let bestD = 999999;
+
+    for (const m of mobs) {
+      const sx = m.x - camX;
+      const sy = m.y - camY;
+      const d = dist(sx, sy, mouse.x, mouse.y);
+      if (d < m.r + 18 && d < bestD) { bestD = d; best = m; }
+    }
+
+    if (best) {
+      player.targetId = best.id;
+      chat(`Targeting ${best.kind} (Lv ${best.lvl}).`);
+    } else {
+      player.targetId = null;
+    }
+  });
+
+  // Main loop
+  let last = performance.now();
+  let fps = 60;
+  let fpsAcc = 0, fpsN = 0, fpsT = 0;
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+
+    let dtMs = now - last;
+    last = now;
+    dtMs = Math.min(dtMs, 50);
+    const dt = dtMs / 1000.0;
+
+    fpsT += dtMs;
+    fpsAcc += 1000.0 / Math.max(1, dtMs);
+    fpsN += 1;
+    if (fpsT > 350) { fps = fpsAcc / fpsN; fpsAcc = 0; fpsN = 0; fpsT = 0; }
+
+    tick(dt);
+    drawWorld(dt);
+    compositeBloom();
+    minimapDraw();
+    uiUpdate(fps);
+  }
+
+  // boot
+  if (!tryLoad()) resetAll();
+
+  overlay.style.display = "flex";
   requestAnimationFrame(frame);
 })();
 </script>
@@ -1196,5 +1635,4 @@ html = r"""
 """
 
 html = html.replace("__CONFIG_JSON__", json.dumps(cfg))
-
-components.html(html, height=860, scrolling=False)
+components.html(html, height=910, scrolling=False)
