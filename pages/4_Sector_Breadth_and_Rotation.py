@@ -1,6 +1,6 @@
-# sp_sector_rotation_clean_v6.py
+# sp_sector_rotation_clean_v5.py
 # ADFM — S&P 500 Sector Breadth & Rotation Monitor
-# Geometry-correct rotation with volatility-normalized axes
+# Improved rotation scatter: labels above points, no toggles.
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -30,13 +30,11 @@ SECTORS = {
     "XLK": "Technology",
     "XLU": "Utilities",
 }
-
 LOOKBACK_PERIOD = "1y"
 INTERVAL = "1d"
 DAYS_1M = 21
 DAYS_3M = 63
-MIN_OBS = DAYS_3M
-
+MIN_OBS_FOR_RETURNS = DAYS_3M
 PASTELS = [
     "#a6cee3", "#b2df8a", "#fb9a99", "#fdbf6f", "#cab2d6", "#ffff99",
     "#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a"
@@ -45,45 +43,54 @@ PASTELS = [
 # ------------------------------- Data fetch --------------------------------
 @st.cache_data(ttl=3600)
 def robust_fetch_batch(tickers, period="1y", interval="1d") -> pd.DataFrame:
-    data = yf.download(
-        tickers,
-        period=period,
-        interval=interval,
-        progress=False,
-        group_by="ticker",
-        auto_adjust=False,
-    )
+    try:
+        data = yf.download(
+            tickers,
+            period=period,
+            interval=interval,
+            progress=False,
+            group_by="ticker",
+            auto_adjust=False,
+        )
+    except Exception:
+        return pd.DataFrame()
 
     out = {}
     if isinstance(data.columns, pd.MultiIndex):
         for t in tickers:
-            if (t, "Adj Close") in data.columns:
+            try:
                 s = data[(t, "Adj Close")].dropna()
                 if not s.empty:
                     out[t] = s
+            except Exception:
+                continue
     else:
         if "Adj Close" in data.columns:
-            out[tickers[0]] = data["Adj Close"].dropna()
+            name = tickers[0] if isinstance(tickers, list) and len(tickers) == 1 else "TICKER"
+            out[name] = data["Adj Close"].dropna()
 
-    return pd.DataFrame(out).sort_index()
+    if not out:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(out).sort_index()
+    return df.dropna(how="all")
 
 # ------------------------------- Load prices -------------------------------
 tickers = list(SECTORS.keys()) + ["SPY"]
-prices = robust_fetch_batch(tickers, LOOKBACK_PERIOD, INTERVAL)
+prices = robust_fetch_batch(tickers, period=LOOKBACK_PERIOD, interval=INTERVAL)
 
-if prices.empty or "SPY" not in prices:
+if prices.empty or "SPY" not in prices.columns:
     st.error("Data unavailable or incomplete.")
     st.stop()
 
 prices["SPY"] = prices["SPY"].ffill()
-prices = prices.loc[prices["SPY"].notna()]
+prices = prices[prices["SPY"].notna()]
+enough_history_cols = [c for c in prices.columns if prices[c].dropna().shape[0] >= MIN_OBS_FOR_RETURNS]
+prices = prices[enough_history_cols]
 
-valid_cols = [c for c in prices if prices[c].dropna().shape[0] >= MIN_OBS]
-prices = prices[valid_cols]
-
-sector_tickers = [t for t in SECTORS if t in prices.columns]
-if not sector_tickers:
-    st.error("No valid sector data.")
+available_sector_tickers = [t for t in SECTORS.keys() if t in prices.columns]
+if not available_sector_tickers:
+    st.error("No valid sector tickers found.")
     st.stop()
 
 # ------------------------------- Sidebar -----------------------------------
@@ -91,21 +98,25 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Track S&P 500 sector leadership and rotation.
+        Track S&P 500 sector leadership, breadth, and rotation on a consistent template.
 
-        • Relative strength vs SPY  
-        • 1M vs 3M rotation, volatility-normalized  
-        • Speed and angle quantify momentum and trend change  
+        • Uses SPDR sector ETFs with SPY as the benchmark  
+        • Relative strength panel shows how each sector is trending vs the index  
+        • 1M vs 3M scatter maps rotation speed and direction by quadrant  
+        • Rotation snapshot table ranks sectors by speed and summarizes quadrant, angle, and returns  
+
+        Data source: Yahoo Finance, refreshed up to once per hour.
         """,
         unsafe_allow_html=True,
     )
 
 # ------------------------------- Relative strength -------------------------
-relative_strength = prices[sector_tickers].div(prices["SPY"], axis=0)
+relative_strength = prices[available_sector_tickers].div(prices["SPY"], axis=0)
 
 selected_sector = st.selectbox(
     "Select sector to compare with S&P 500 (SPY):",
-    options=sector_tickers,
+    options=available_sector_tickers,
+    index=0,
     format_func=lambda x: SECTORS[x],
 )
 
@@ -118,93 +129,101 @@ fig_rs.update_layout(height=360, margin=dict(l=20, r=20, t=50, b=30))
 st.plotly_chart(fig_rs, use_container_width=True)
 
 # ------------------------------- Returns snapshot --------------------------
-rets_1m = prices[sector_tickers].pct_change(DAYS_1M)
-rets_3m = prices[sector_tickers].pct_change(DAYS_3M)
-
-r1 = rets_1m.iloc[-1]
-r3 = rets_3m.iloc[-1]
+rets_1m_df = prices[available_sector_tickers].pct_change(DAYS_1M)
+rets_3m_df = prices[available_sector_tickers].pct_change(DAYS_3M)
+returns_1m_latest = rets_1m_df.iloc[-1]
+returns_3m_latest = rets_3m_df.iloc[-1]
 
 snap = pd.DataFrame({
-    "Sector": [SECTORS[t] for t in sector_tickers],
-    "Ticker": sector_tickers,
-    "1M": r1.values,
-    "3M": r3.values,
-}).dropna()
-
-# Vol-normalize for geometry
-vol_1m = snap["1M"].std()
-vol_3m = snap["3M"].std()
-
-snap["x"] = snap["3M"] / vol_3m
-snap["y"] = snap["1M"] / vol_1m
-
-snap["Angle (deg)"] = np.degrees(np.arctan2(snap["y"], snap["x"]))
-snap["Speed"] = np.sqrt(snap["x"]**2 + snap["y"]**2)
-
+    "Sector": [SECTORS[t] for t in available_sector_tickers],
+    "Ticker": available_sector_tickers,
+    "1M": [returns_1m_latest.get(t, np.nan) for t in available_sector_tickers],
+    "3M": [returns_3m_latest.get(t, np.nan) for t in available_sector_tickers],
+})
+snap["Angle (deg)"] = np.degrees(np.arctan2(snap["1M"], snap["3M"]))
+snap["Speed"] = np.sqrt(snap["1M"]**2 + snap["3M"]**2)
 snap["Quadrant"] = np.select(
     [
-        (snap["x"] > 0) & (snap["y"] > 0),
-        (snap["x"] < 0) & (snap["y"] > 0),
-        (snap["x"] < 0) & (snap["y"] < 0),
-        (snap["x"] > 0) & (snap["y"] < 0),
+        (snap["3M"] > 0) & (snap["1M"] > 0),
+        (snap["3M"] < 0) & (snap["1M"] > 0),
+        (snap["3M"] < 0) & (snap["1M"] < 0),
+        (snap["3M"] > 0) & (snap["1M"] < 0),
     ],
-    ["Q1: Leading", "Q2: Improving", "Q3: Weak", "Q4: Fading"],
+    ["Q1 ++", "Q2 -+", "Q3 --", "Q4 +-"],
+    default="",
 )
-
 snap["Rank (Speed)"] = snap["Speed"].rank(ascending=False, method="min").astype(int)
 
 color_map = {sec: PASTELS[i % len(PASTELS)] for i, sec in enumerate(snap["Sector"])}
 
 # ------------------------------- Rotation Scatter --------------------------
-st.subheader("Current rotation scatter (vol-normalized)")
+st.subheader("Current rotation scatter")
 
 fig_xy = go.Figure()
+
+# Add quadrant guides (light, fixed)
 fig_xy.add_hline(y=0, line_width=1, opacity=0.5)
 fig_xy.add_vline(x=0, line_width=1, opacity=0.5)
 
-lim = max(snap["x"].abs().max(), snap["y"].abs().max()) * 1.15
-fig_xy.update_xaxes(range=[-lim, lim], title="3M (normalized)")
-fig_xy.update_yaxes(range=[-lim, lim], title="1M (normalized)")
-
+# Scatter points
 for _, r in snap.iterrows():
     fig_xy.add_trace(go.Scatter(
-        x=[r["x"]], y=[r["y"]],
+        x=[r["3M"]], y=[r["1M"]],
         mode="markers+text",
-        marker=dict(size=14, color=color_map[r["Sector"]]),
+        marker=dict(
+            size=14,
+            color=color_map[r["Sector"]],
+            line=dict(width=0.5, color="rgba(0,0,0,0.4)")
+        ),
         text=[r["Sector"]],
-        textposition="top center",
+        textposition="top center",  # Label above the dot
+        textfont=dict(size=13),
         hovertemplate=(
-            f"<b>{r['Sector']}</b><br>"
-            f"1M: {r['1M']:.2%}<br>"
-            f"3M: {r['3M']:.2%}<br>"
-            f"Speed: {r['Speed']:.2f}<br>"
+            f"<b>{r['Sector']}</b><br>1M: {r['1M']:.2%}<br>"
+            f"3M: {r['3M']:.2%}<br>Speed: {r['Speed']:.2%}<br>"
             f"Angle: {r['Angle (deg)']:.1f}°<extra></extra>"
         ),
         showlegend=False
     ))
 
-fig_xy.update_layout(height=520, margin=dict(l=40, r=40, t=60, b=40))
+fig_xy.update_layout(
+    title="1M vs 3M total return",
+    xaxis_title="3M return",
+    yaxis_title="1M return",
+    height=520,
+    margin=dict(l=40, r=40, t=60, b=40),
+)
 st.plotly_chart(fig_xy, use_container_width=True)
 
-# ------------------------------- Table -------------------------------------
+# ------------------------------- Polished table ----------------------------
 st.subheader("Rotation snapshot table")
-
-st.dataframe(
-    snap[["Sector", "Ticker", "Quadrant", "1M", "3M", "Angle (deg)", "Speed", "Rank (Speed)"]]
-    .sort_values("Rank (Speed)")
-    .style.format({
-        "1M": "{:.2%}", "3M": "{:.2%}", "Angle (deg)": "{:.1f}", "Speed": "{:.2f}"
-    }),
-    use_container_width=True,
-    height=520
+sort_col = st.selectbox(
+    "Sort by", options=["Speed", "1M", "3M", "Angle (deg)", "Sector", "Quadrant", "Rank (Speed)"], index=0
 )
+ascending = st.toggle("Ascending", value=False)
+snap_sorted = snap.sort_values(sort_col, ascending=ascending).reset_index(drop=True)
 
+styler = (
+    snap_sorted[["Sector", "Ticker", "Quadrant", "1M", "3M", "Angle (deg)", "Speed", "Rank (Speed)"]]
+    .style.format({
+        "1M": "{:.2%}", "3M": "{:.2%}", "Angle (deg)": "{:.1f}",
+        "Speed": "{:.2%}", "Rank (Speed)": "{:d}",
+    })
+    .set_properties(subset=["Sector", "Ticker", "Quadrant"], **{"text-align": "left"})
+    .set_properties(subset=["Angle (deg)", "Speed", "Rank (Speed)"], **{"text-align": "right"})
+    .bar(subset=["1M", "3M"], align="mid")
+    .background_gradient(subset=["Speed"], cmap="PuBuGn")
+)
+st.dataframe(styler, use_container_width=True, height=520)
+
+csv = snap_sorted.to_csv(index=False).encode()
 st.download_button(
-    "Download snapshot as CSV",
-    data=snap.to_csv(index=False),
+    label="Download snapshot as CSV",
+    data=csv,
     file_name="sector_rotation_snapshot.csv",
     mime="text/csv"
 )
 
+# ------------------------------- Footer ------------------------------------
 st.caption(f"Data through: {prices.index.max().date()}")
 st.caption("© 2025 AD Fund Management LP")
