@@ -1,538 +1,604 @@
-# app.py
-# Visual Reflexivity Arena (Streamlit financial game)
-# Run: streamlit run app.py
-
-import math
-import numpy as np
-import pandas as pd
 import streamlit as st
-import plotly.graph_objects as go
+import streamlit.components.v1 as components
 
-# ----------------------------
-# Config
-# ----------------------------
-st.set_page_config(page_title="Reflexivity Arena", layout="wide")
+st.set_page_config(page_title="Runner Rush", layout="wide")
 
-ASSETS = ["SPX", "SEMIS", "BONDS", "GOLD", "BTC", "USD"]
-BASE_VOL_W = pd.Series({"SPX": 0.020, "SEMIS": 0.030, "BONDS": 0.015, "GOLD": 0.015, "BTC": 0.055, "USD": 0.010})
+st.title("Runner Rush")
+st.caption("Arrow keys or A/D to change lanes. Space or W to jump. R to restart.")
 
-# Factor betas: growth, inflation, liquidity, risk_aversion, usd_strength
-BETA = pd.DataFrame(
-    {
-        "growth":     [ 0.70,  1.10, -0.45,  0.10,  1.00,  0.10],
-        "inflation":  [ 0.10,  0.05, -0.55,  0.70,  0.20,  0.25],
-        "liquidity":  [ 0.85,  1.25,  0.15,  0.10,  1.35, -0.10],
-        "risk_av":    [-0.95, -1.35,  0.65,  0.25, -1.55,  0.55],
-        "usd":        [-0.20, -0.30,  0.10, -0.25, -0.70,  1.00],
-    },
-    index=ASSETS,
-)
+html = r"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin:0; padding:0; background: transparent; }
+    .wrap {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    canvas {
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: linear-gradient(180deg, rgba(10,12,18,1), rgba(8,10,14,1));
+      box-shadow: 0 12px 34px rgba(0,0,0,0.45);
+      outline: none;
+    }
+    .hud {
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      right: 18px;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      color: rgba(245,245,250,0.92);
+      font-size: 14px;
+    }
+    .pill {
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(6px);
+    }
+    .centerOverlay {
+      position:absolute;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      pointer-events:none;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      color: rgba(245,245,250,0.92);
+    }
+    .card {
+      width: min(520px, 92%);
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      padding: 18px 18px 16px 18px;
+      box-shadow: 0 16px 44px rgba(0,0,0,0.50);
+      text-align:left;
+    }
+    .title {
+      font-size: 20px;
+      font-weight: 750;
+      margin: 0 0 8px 0;
+    }
+    .sub {
+      opacity: 0.88;
+      margin: 0 0 12px 0;
+      line-height: 1.35;
+    }
+    .kbd {
+      display:inline-block;
+      padding: 2px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(0,0,0,0.22);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap" style="position:relative;">
+    <div class="hud">
+      <div class="pill" id="hudLeft">Score: 0 | Coins: 0</div>
+      <div class="pill" id="hudRight">High: 0</div>
+    </div>
 
-EVENTS = [
-    ("Fed hawkish surprise", {"growth": -0.25, "inflation": -0.05, "liquidity": -0.55, "risk_av": +0.55, "usd": +0.35},
-     "Rates reprice higher. Financial conditions tighten. Crowds cut beta."),
-    ("Fed dovish leak", {"growth": +0.15, "inflation":  0.00, "liquidity": +0.65, "risk_av": -0.55, "usd": -0.30},
-     "Liquidity impulse improves. Risk premia compress. Momentum re-ignites."),
-    ("Hot CPI", {"growth": -0.05, "inflation": +0.60, "liquidity": -0.25, "risk_av": +0.35, "usd": +0.20},
-     "Inflation risk returns. Duration gets hit. Cross-asset correlations jump."),
-    ("Growth scare", {"growth": -0.70, "inflation": -0.30, "liquidity": +0.10, "risk_av": +0.80, "usd": +0.05},
-     "Forward expectations crack. Defensive flows dominate. Leaders get sold."),
-    ("AI capex boom", {"growth": +0.55, "inflation": +0.10, "liquidity": +0.20, "risk_av": -0.30, "usd": -0.10},
-     "Narrative bids up beta with a SEMIS tilt. Price action pulls flows in."),
-    ("Geopolitical shock", {"growth": -0.30, "inflation": +0.30, "liquidity": -0.15, "risk_av": +0.95, "usd": +0.30},
-     "Risk off. Liquidity thins. Correlations go to one at the worst moment."),
-    ("Credit accident rumor", {"growth": -0.45, "inflation": -0.05, "liquidity": -0.40, "risk_av": +1.00, "usd": +0.20},
-     "Tails get priced. Spreads widen. Crowds stop believing the soft landing story."),
-    ("Disinflation resumes", {"growth": +0.10, "inflation": -0.65, "liquidity": +0.30, "risk_av": -0.45, "usd": -0.20},
-     "Rates pressure eases. Duration breathes. Risk premia compress again."),
-]
+    <canvas id="game" width="980" height="560" tabindex="0"></canvas>
 
-DIFFICULTY = {
-    "Classic": {"event_prob": 0.65, "flow_impact": 0.10, "crowd_chase": 0.45, "tail_prob": 0.020},
-    "Hard":    {"event_prob": 0.75, "flow_impact": 0.13, "crowd_chase": 0.60, "tail_prob": 0.030},
-    "Chaos":   {"event_prob": 0.85, "flow_impact": 0.16, "crowd_chase": 0.75, "tail_prob": 0.045},
-}
+    <div class="centerOverlay" id="overlay" style="display:flex;">
+      <div class="card">
+        <div class="title">Runner Rush</div>
+        <p class="sub">
+          Three lanes. Rising speed. Reflexes. Stay alive.<br/>
+          <span class="kbd">←</span><span class="kbd">→</span> or <span class="kbd">A</span><span class="kbd">D</span> to change lanes,
+          <span class="kbd">Space</span> or <span class="kbd">W</span> to jump,
+          <span class="kbd">R</span> to restart.
+        </p>
+        <p class="sub" style="opacity:0.78; margin:0;">
+          Click the game area, then press <span class="kbd">Space</span> to start.
+        </p>
+      </div>
+    </div>
+  </div>
 
-ACTIONS = {
-    "Risk On":  {"SPX": 0.70, "SEMIS": 0.70, "BTC": 0.25, "BONDS": -0.20, "GOLD": 0.05, "USD": -0.10},
-    "Risk Off": {"SPX": -0.25, "SEMIS": -0.30, "BTC": -0.10, "BONDS": 0.90, "GOLD": 0.35, "USD": 0.20},
-    "Barbell":  {"SPX": 0.35, "SEMIS": 0.20, "BTC": 0.10, "BONDS": 0.45, "GOLD": 0.20, "USD": 0.00},
-    "Fade Crowd": None,  # computed from crowd
-    "Flat":     {"SPX": 0.00, "SEMIS": 0.00, "BTC": 0.00, "BONDS": 0.00, "GOLD": 0.00, "USD": 0.00},
-}
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const hudLeft = document.getElementById("hudLeft");
+  const hudRight = document.getElementById("hudRight");
+  const overlay = document.getElementById("overlay");
 
-# ----------------------------
-# Styling (visual game UI)
-# ----------------------------
-st.markdown(
-    """
-    <style>
-      .appview-container { background: radial-gradient(1200px 600px at 20% 0%, rgba(40,80,180,0.22), transparent 60%),
-                                        radial-gradient(1000px 600px at 80% 20%, rgba(220,120,60,0.14), transparent 55%),
-                                        linear-gradient(180deg, rgba(10,12,18,1) 0%, rgba(8,10,14,1) 100%) !important; }
-      h1, h2, h3, p, div, span { color: rgba(245,245,250,0.92); }
-      .panel {
-        border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(255,255,255,0.05);
-        border-radius: 18px;
-        padding: 14px 14px 12px 14px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-      }
-      .ticker {
-        white-space: nowrap;
-        overflow: hidden;
-        border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(0,0,0,0.25);
-        border-radius: 14px;
-        padding: 10px 12px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-        font-size: 13px;
-      }
-      .ticker span {
-        display: inline-block;
-        padding-left: 100%;
-        animation: scroll 18s linear infinite;
-      }
-      @keyframes scroll {
-        0% { transform: translateX(0); }
-        100% { transform: translateX(-100%); }
-      }
-      .bigbtn button {
-        height: 58px !important;
-        border-radius: 16px !important;
-        font-weight: 700 !important;
-        border: 1px solid rgba(255,255,255,0.12) !important;
-        background: rgba(255,255,255,0.06) !important;
-      }
-      .bigbtn button:hover { background: rgba(255,255,255,0.10) !important; }
-      .danger { color: #ff6b6b; font-weight: 700; }
-      .good { color: #5CFFB0; font-weight: 700; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+  const W = canvas.width, H = canvas.height;
 
-# ----------------------------
-# Helpers
-# ----------------------------
-def clamp(x, lo, hi):
-    return max(lo, min(hi, x))
+  const lanes = [-1, 0, 1];
+  const laneX = (lane) => (W * 0.5) + lane * (W * 0.17);
 
-def normalize_to_gross(w: pd.Series, max_gross: float) -> pd.Series:
-    w = w.reindex(ASSETS).fillna(0.0).astype(float)
-    g = float(np.abs(w).sum())
-    if g <= max_gross + 1e-12 or g == 0:
-        return w
-    return w * (max_gross / g)
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-def dd_series(nav: pd.Series) -> pd.Series:
-    peak = nav.cummax()
-    return nav / peak - 1.0
+  const loadHigh = () => {
+    const v = localStorage.getItem("runner_rush_high");
+    const n = v ? parseInt(v, 10) : 0;
+    return Number.isFinite(n) ? n : 0;
+  };
+  const saveHigh = (v) => localStorage.setItem("runner_rush_high", String(v));
 
-def make_arena_chart(df_prices: pd.DataFrame, nav: pd.Series):
-    fig = go.Figure()
-    for c in df_prices.columns:
-        fig.add_trace(go.Scatter(x=df_prices.index, y=df_prices[c], mode="lines", name=c))
-    fig.update_layout(
-        height=440,
-        margin=dict(l=12, r=12, t=30, b=10),
-        xaxis_title="Week",
-        yaxis_title="Index",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0.03)",
-        font=dict(color="rgba(245,245,250,0.92)"),
-    )
+  let highScore = loadHigh();
 
-    nav_norm = 100.0 * nav / nav.iloc[0]
-    fig.add_trace(go.Scatter(x=nav_norm.index, y=nav_norm.values, mode="lines", name="YOU (NAV)", line=dict(width=4)))
-    return fig
+  const state = {
+    running: false,
+    gameOver: false,
+    t: 0,
+    score: 0,
+    coins: 0,
+    speed: 7.0,
+    spawnTimer: 0,
+    coinTimer: 0,
+    rng: mulberry32(42069),
+  };
 
-def score_snapshot(nav: pd.Series, rets: pd.Series):
-    total = float(nav.iloc[-1] / nav.iloc[0] - 1.0)
-    dd = dd_series(nav)
-    max_dd = float(dd.min()) if len(dd) else 0.0
-    if rets.std(ddof=0) == 0:
-        sh = 0.0
-    else:
-        sh = float((rets.mean() / rets.std(ddof=0)) * math.sqrt(52)) if len(rets) > 6 else 0.0
-    score = (total * 100.0) + (sh * 7.0) + (max_dd * 160.0)
-    return total, max_dd, sh, score
+  const player = {
+    lane: 0,
+    y: H * 0.80,
+    vy: 0,
+    onGround: true,
+    jumpStrength: 16.5,
+    gravity: 0.95,
+    w: 56,
+    h: 70,
+    slide: 0,
+  };
 
-# ----------------------------
-# Game state
-# ----------------------------
-def init_game(seed: int, weeks: int, max_gross: float, tc_bps: int, difficulty: str):
-    rng = np.random.default_rng(int(seed))
-    prices = pd.DataFrame(index=[0], data={a: 100.0 for a in ASSETS})
-    nav = pd.Series(index=[0], data=[1_000_000.0], dtype=float)
-    rets = pd.Series(index=[0], data=[0.0], dtype=float)
+  let obstacles = [];
+  let coins = [];
 
-    crowd = pd.Series(index=ASSETS, data=0.0, dtype=float)
-    crowd["SPX"] = 0.35
-    crowd["SEMIS"] = 0.25
-    crowd["BTC"] = 0.10
-    crowd["BONDS"] = -0.05
-    crowd = normalize_to_gross(crowd, max_gross=1.2)
+  function mulberry32(a) {
+    return function() {
+      let t = a += 0x6D2B79F5;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+  }
 
-    macro = {"growth": 0.15, "inflation": 0.05, "liquidity": 0.10, "risk_av": 0.10, "usd": 0.10, "vix": 18.0, "ust10y": 4.25}
+  function reset(runSeed = 42069) {
+    state.running = false;
+    state.gameOver = false;
+    state.t = 0;
+    state.score = 0;
+    state.coins = 0;
+    state.speed = 7.0;
+    state.spawnTimer = 0;
+    state.coinTimer = 0;
+    state.rng = mulberry32(runSeed);
 
-    st.session_state.G = {
-        "rng": rng,
-        "t": 0,
-        "weeks": int(weeks),
-        "max_gross": float(max_gross),
-        "tc_bps": int(tc_bps),
-        "difficulty": difficulty,
-        "prices": prices,
-        "nav": nav,
-        "rets": rets,
-        "crowd": crowd,
-        "macro": macro,
-        "last_event": None,
-        "last_event_text": None,
-        "last_asset_rets": pd.Series(index=ASSETS, data=0.0),
-        "last_action": "Flat",
-        "log": [],
+    player.lane = 0;
+    player.y = H * 0.80;
+    player.vy = 0;
+    player.onGround = true;
+
+    obstacles = [];
+    coins = [];
+
+    overlay.style.display = "flex";
+    updateHud();
+  }
+
+  function updateHud() {
+    hudLeft.textContent = `Score: ${state.score} | Coins: ${state.coins}`;
+    hudRight.textContent = `High: ${highScore}`;
+  }
+
+  function start() {
+    if (state.gameOver) return;
+    state.running = true;
+    overlay.style.display = "none";
+    canvas.focus();
+  }
+
+  function endGame() {
+    state.running = false;
+    state.gameOver = true;
+    if (state.score > highScore) {
+      highScore = state.score;
+      saveHigh(highScore);
+    }
+    updateHud();
+
+    overlay.innerHTML = `
+      <div class="card">
+        <div class="title">Game Over</div>
+        <p class="sub">
+          Score: <b>${state.score}</b> | Coins: <b>${state.coins}</b> | High: <b>${highScore}</b><br/>
+          Press <span class="kbd">R</span> to restart or <span class="kbd">Space</span> to replay.
+        </p>
+        <p class="sub" style="opacity:0.78; margin:0;">
+          Tip: lane changes are cheaper than late jumps. Don’t drift into crowded lanes.
+        </p>
+      </div>
+    `;
+    overlay.style.display = "flex";
+  }
+
+  function spawnObstacle() {
+    const lane = lanes[Math.floor(state.rng() * lanes.length)];
+    const kindRoll = state.rng();
+    const kind = kindRoll < 0.72 ? "barrier" : "train";
+    const w = kind === "barrier" ? 62 : 78;
+    const h = kind === "barrier" ? 58 : 120;
+
+    obstacles.push({
+      lane,
+      x: laneX(lane),
+      y: -140,
+      w,
+      h,
+      kind,
+    });
+  }
+
+  function spawnCoin() {
+    const lane = lanes[Math.floor(state.rng() * lanes.length)];
+    coins.push({
+      lane,
+      x: laneX(lane),
+      y: -80,
+      r: 14,
+    });
+  }
+
+  function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  function tick() {
+    requestAnimationFrame(tick);
+
+    const dt = 1.0; // fixed timestep
+
+    drawBackground();
+
+    if (!state.running) {
+      drawScene();
+      return;
     }
 
-def simulate_week(action_name: str):
-    G = st.session_state.G
-    rng = G["rng"]
-    diff = DIFFICULTY[G["difficulty"]]
-    t = G["t"]
-    max_gross = G["max_gross"]
-    tc = G["tc_bps"] / 10_000.0
+    state.t += dt;
+    state.speed = Math.min(18.0, state.speed + 0.0028 * dt);
+    state.score = Math.floor(state.score + (state.speed * 0.45));
+    state.spawnTimer -= dt;
+    state.coinTimer -= dt;
 
-    # Build player weights
-    if action_name == "Fade Crowd":
-        w = -0.95 * G["crowd"].copy()
-        w["BONDS"] += 0.20
-    else:
-        w = pd.Series(ACTIONS[action_name], dtype=float)
-    w = normalize_to_gross(w, max_gross=max_gross)
+    const spawnEvery = clamp(34 - state.speed * 1.25, 14, 30);
+    const coinEvery = clamp(42 - state.speed * 1.1, 18, 36);
 
-    # Simple transaction costs vs prior action weights (tracked in log)
-    prev_w = pd.Series(G["log"][-1]["weights"], index=ASSETS) if len(G["log"]) else pd.Series(index=ASSETS, data=0.0)
-    turnover = float(np.abs(w - prev_w).sum())
-    tc_cost = turnover * tc
+    if (state.spawnTimer <= 0) {
+      spawnObstacle();
+      if (state.rng() < 0.25) spawnObstacle();
+      state.spawnTimer = spawnEvery;
+    }
+    if (state.coinTimer <= 0) {
+      spawnCoin();
+      if (state.rng() < 0.20) spawnCoin();
+      state.coinTimer = coinEvery;
+    }
 
-    # Macro evolves (mean reversion + noise)
-    m = G["macro"].copy()
-    for k in ["growth", "inflation", "liquidity", "risk_av", "usd"]:
-        m[k] = float(0.85 * m[k] + 0.15 * rng.normal(0, 0.20))
+    // Player physics
+    if (!player.onGround) {
+      player.vy += player.gravity;
+      player.y += player.vy;
+      const groundY = H * 0.80;
+      if (player.y >= groundY) {
+        player.y = groundY;
+        player.vy = 0;
+        player.onGround = true;
+      }
+    }
 
-    # Headline event
-    event_name, event_shock, event_text = (None, None, None)
-    if rng.uniform() < diff["event_prob"]:
-        e = EVENTS[int(rng.integers(0, len(EVENTS)))]
-        event_name, event_shock, event_text = e
-        for k, v in event_shock.items():
-            m[k] = float(m[k] + v)
+    // Move obstacles and coins
+    const moveY = state.speed * 1.9;
+    for (const o of obstacles) o.y += moveY;
+    for (const c of coins) c.y += moveY;
 
-    # Market observables
-    m["vix"] = float(clamp(16.0 + 10.0 * m["risk_av"] - 5.0 * m["liquidity"] + rng.normal(0, 1.5), 10.0, 70.0))
-    m["ust10y"] = float(clamp(3.75 + 0.45 * m["growth"] + 0.55 * m["inflation"] - 0.30 * m["risk_av"] + rng.normal(0, 0.08), 0.5, 8.0))
+    obstacles = obstacles.filter(o => o.y < H + 180);
+    coins = coins.filter(c => c.y < H + 120);
 
-    # Crowd chases winners, then panics as risk_av rises
-    prices = G["prices"]
-    last_ret = pd.Series(index=ASSETS, data=0.0)
-    if t > 0:
-        last_ret = prices.loc[t, ASSETS] / prices.loc[t - 1, ASSETS] - 1.0
+    // Collisions
+    const px = laneX(player.lane) - player.w / 2;
+    const py = player.y - player.h;
+    for (const o of obstacles) {
+      const ox = o.x - o.w / 2;
+      const oy = o.y - o.h / 2;
+      if (rectsOverlap(px, py, player.w, player.h, ox, oy, o.w, o.h)) {
+        endGame();
+        break;
+      }
+    }
 
-    crowd = G["crowd"].copy()
-    std = float(last_ret.std()) if float(last_ret.std()) > 1e-9 else 1e-9
-    chase_signal = (last_ret / std).clip(-2, 2)
-    crowd_target = 0.75 * crowd + diff["crowd_chase"] * chase_signal
+    // Coin pickups
+    for (let i = coins.length - 1; i >= 0; i--) {
+      const c = coins[i];
+      if (c.lane !== player.lane) continue;
+      const cx = c.x, cy = c.y;
+      const dx = (laneX(player.lane) - cx);
+      const dy = (player.y - 30 - cy);
+      if ((dx*dx + dy*dy) < (c.r + 30) * (c.r + 30)) {
+        state.coins += 1;
+        state.score += 250;
+        coins.splice(i, 1);
+      }
+    }
 
-    panic = clamp(m["risk_av"], 0.0, 2.0)
-    crowd_target["SPX"] -= 0.20 * panic
-    crowd_target["SEMIS"] -= 0.28 * panic
-    crowd_target["BTC"] -= 0.30 * panic
-    crowd_target["BONDS"] += 0.22 * panic
-    crowd_target["GOLD"] += 0.12 * panic
-    crowd_target["USD"] += 0.14 * panic
-    crowd_target = normalize_to_gross(crowd_target, max_gross=1.4)
+    updateHud();
+    drawScene();
+  }
 
-    # Reflexive flow term
-    flow = crowd_target - crowd
-    flow_term = flow * diff["flow_impact"]
+  function drawBackground() {
+    ctx.clearRect(0,0,W,H);
 
-    # Base returns from factors
-    macro_vec = np.array([m["growth"], m["inflation"], m["liquidity"], m["risk_av"], m["usd"]], dtype=float)
-    base = (BETA.values @ macro_vec) * 0.010
-    base = pd.Series(base, index=ASSETS)
+    // glow bands
+    const g1 = ctx.createRadialGradient(W*0.2, H*0.15, 30, W*0.2, H*0.15, 800);
+    g1.addColorStop(0, "rgba(70,130,255,0.18)");
+    g1.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g1;
+    ctx.fillRect(0,0,W,H);
 
-    # Tail shock
-    crash = 0.0
-    if rng.uniform() < diff["tail_prob"]:
-        crash = float(abs(rng.normal(0.09, 0.03)))
-        base["SPX"] -= 0.55 * crash
-        base["SEMIS"] -= 0.85 * crash
-        base["BTC"] -= 1.10 * crash
+    const g2 = ctx.createRadialGradient(W*0.85, H*0.20, 30, W*0.85, H*0.20, 700);
+    g2.addColorStop(0, "rgba(255,160,70,0.12)");
+    g2.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g2;
+    ctx.fillRect(0,0,W,H);
 
-    eps = pd.Series(rng.normal(0, 1.0, size=len(ASSETS)), index=ASSETS)
-    asset_rets = base + flow_term + eps * BASE_VOL_W
+    // track perspective
+    ctx.save();
+    ctx.translate(W/2, H*0.12);
 
-    # Portfolio return
-    port_ret = float((w * asset_rets).sum()) - tc_cost
-    new_nav = float(G["nav"].iloc[-1] * (1.0 + port_ret))
+    const topW = W * 0.20;
+    const botW = W * 0.58;
+    const topY = 0;
+    const botY = H * 0.95;
 
-    # Update time series
-    new_t = t + 1
-    new_prices = (prices.loc[t, ASSETS] * (1.0 + asset_rets)).to_frame().T
-    new_prices.index = [new_t]
+    ctx.beginPath();
+    ctx.moveTo(-topW/2, topY);
+    ctx.lineTo(topW/2, topY);
+    ctx.lineTo(botW/2, botY);
+    ctx.lineTo(-botW/2, botY);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,255,255,0.03)";
+    ctx.fill();
 
-    G["prices"] = pd.concat([prices, new_prices], axis=0)
-    G["nav"] = pd.concat([G["nav"], pd.Series([new_nav], index=[new_t], dtype=float)], axis=0)
-    G["rets"] = pd.concat([G["rets"], pd.Series([port_ret], index=[new_t], dtype=float)], axis=0)
+    // lane lines
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 2;
 
-    G["crowd"] = crowd_target
-    G["macro"] = m
-    G["t"] = new_t
-    G["last_event"] = event_name
-    G["last_event_text"] = event_text
-    G["last_asset_rets"] = asset_rets
-    G["last_action"] = action_name
+    for (let i = -1; i <= 1; i++) {
+      const xTop = i * (topW/3);
+      const xBot = i * (botW/3);
+      ctx.beginPath();
+      ctx.moveTo(xTop, topY);
+      ctx.lineTo(xBot, botY);
+      ctx.stroke();
+    }
 
-    G["log"].append(
-        {
-            "week": new_t,
-            "action": action_name,
-            "event": event_name,
-            "turnover": turnover,
-            "tc_cost": tc_cost,
-            "port_ret": port_ret,
-            "nav": new_nav,
-            "crash": crash,
-            "weights": {a: float(w[a]) for a in ASSETS},
-            "asset_rets": {a: float(asset_rets[a]) for a in ASSETS},
-            "macro": {k: float(m[k]) for k in m},
-            "crowd": {a: float(crowd_target[a]) for a in ASSETS},
-        }
-    )
+    // motion dashes
+    const dashCount = 22;
+    for (let k = 0; k < dashCount; k++) {
+      const p = (k / dashCount);
+      const y = topY + p * botY;
+      const width = topW + p * (botW - topW);
+      const dashW = 14 + p * 22;
+      const dashH = 6 + p * 6;
 
-# ----------------------------
-# Sidebar settings
-# ----------------------------
-with st.sidebar:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
-    st.subheader("Run setup")
-    seed = st.number_input("Seed", min_value=1, max_value=999999, value=42069, step=1)
-    weeks = st.slider("Weeks", min_value=12, max_value=60, value=26, step=1)
-    difficulty = st.selectbox("Difficulty", list(DIFFICULTY.keys()), index=0)
-    max_gross = st.slider("Max gross (x NAV)", 0.5, 4.0, 2.0, 0.1)
-    tc_bps = st.slider("Transaction cost (bps per $ traded)", 0, 50, 8, 1)
-    colA, colB = st.columns(2)
-    new_run = colA.button("New run", use_container_width=True)
-    autoplay = colB.button("Auto-play", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+      const scroll = (state.t * state.speed * 0.06) % 1.0;
+      const shift = (scroll * botY);
 
-if new_run or "G" not in st.session_state:
-    init_game(seed=seed, weeks=weeks, max_gross=max_gross, tc_bps=tc_bps, difficulty=difficulty)
+      const yy = (y + shift) % botY;
 
-# Keep limits live without corrupting history
-st.session_state.G["max_gross"] = float(max_gross)
-st.session_state.G["tc_bps"] = int(tc_bps)
-st.session_state.G["difficulty"] = difficulty
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(-dashW/2, yy, dashW, dashH);
+    }
 
-G = st.session_state.G
+    ctx.restore();
+  }
 
-# ----------------------------
-# Top status bar (visual)
-# ----------------------------
-t = G["t"]
-wks = G["weeks"]
-nav_now = float(G["nav"].iloc[-1])
+  function drawScene() {
+    // coins
+    for (const c of coins) {
+      const x = c.x;
+      const y = c.y;
+      ctx.beginPath();
+      ctx.arc(x, y, c.r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 212, 92, 0.95)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.20)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, c.r*0.45, 0, Math.PI*2);
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
 
-rets_live = G["rets"].iloc[1:] if len(G["rets"]) > 1 else G["rets"]
-total, max_dd, sh, score = score_snapshot(G["nav"], rets_live)
+    // obstacles
+    for (const o of obstacles) {
+      const x = o.x;
+      const y = o.y;
+      const w = o.w;
+      const h = o.h;
 
-ticker_parts = []
-last = G["last_asset_rets"]
-for a in ASSETS:
-    r = float(last.get(a, 0.0))
-    tag = "good" if r >= 0 else "danger"
-    ticker_parts.append(f"{a} {r*100:+.2f}%")
+      const rx = x - w/2;
+      const ry = y - h/2;
 
-ticker = "   |   ".join(ticker_parts) if t > 0 else "Make a move. Pick an action. Advance the tape."
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.55)";
+      ctx.shadowBlur = 18;
 
-st.markdown(
-    f"<div class='ticker'><span>WEEK {t}/{wks}   |   NAV ${nav_now:,.0f}   |   TOTAL {total*100:+.2f}%   |   MAX DD {max_dd*100:.2f}%   |   SHARPE {sh:.2f}   |   {ticker}</span></div>",
-    unsafe_allow_html=True,
-)
+      if (o.kind === "barrier") {
+        roundRect(rx, ry, w, h, 12);
+        ctx.fillStyle = "rgba(255, 92, 92, 0.92)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
 
-# Survival / end checks
-start_nav = float(G["nav"].iloc[0])
-if nav_now <= 0.55 * start_nav:
-    st.error("Margin call. You are out. New run and tighten leverage into high-risk regimes.")
-    st.stop()
-if t >= wks:
-    st.success("Run complete. Hit New run to replay the same seed or change it to see a different market.")
-    st.stop()
+        ctx.fillStyle = "rgba(0,0,0,0.22)";
+        ctx.fillRect(rx + 10, ry + 12, w - 20, 10);
+      } else {
+        roundRect(rx, ry, w, h, 14);
+        ctx.fillStyle = "rgba(135, 180, 255, 0.85)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
 
-# ----------------------------
-# Main layout
-# ----------------------------
-left, center, right = st.columns([0.9, 1.8, 0.9])
+        ctx.fillStyle = "rgba(0,0,0,0.22)";
+        ctx.fillRect(rx + 12, ry + 18, w - 24, h - 36);
+      }
 
-with left:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
-    st.subheader("Boss event")
-    if G["last_event"] is None and t == 0:
-        st.write("No tape yet. First decision sets your process.")
-    elif G["last_event"] is None:
-        st.write("No headline this week. The crowd still moves the tape.")
-    else:
-        st.write(f"**{G['last_event']}**")
-        st.caption(G["last_event_text"])
+      ctx.restore();
+    }
 
-    st.divider()
-    st.subheader("Crowd heat")
-    crowd_gross = float(np.abs(G["crowd"]).sum())
-    heat = clamp(crowd_gross / 1.4, 0.0, 1.0)
-    st.progress(heat, text=f"Crowd gross: {crowd_gross:.2f}x")
+    // player
+    const px = laneX(player.lane);
+    const py = player.y;
 
-    st.subheader("Your drawdown")
-    dd = float(dd_series(G["nav"]).iloc[-1])
-    dd_bar = clamp(abs(dd) / 0.35, 0.0, 1.0)
-    st.progress(dd_bar, text=f"DD: {dd*100:.2f}%")
-    st.markdown("</div>", unsafe_allow_html=True)
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 18;
 
-with center:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
-    st.subheader("Market arena")
-    fig = make_arena_chart(G["prices"][ASSETS], G["nav"])
-    st.plotly_chart(fig, use_container_width=True)
+    // body
+    roundRect(px - player.w/2, py - player.h, player.w, player.h, 18);
+    ctx.fillStyle = "rgba(92, 255, 176, 0.90)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
-    st.caption("The tape is reflexive: prices pull flows, flows push prices, and regime shifts change correlations.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    // visor
+    roundRect(px - player.w/2 + 10, py - player.h + 14, player.w - 20, 18, 10);
+    ctx.fillStyle = "rgba(0,0,0,0.28)";
+    ctx.fill();
 
-with right:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
-    st.subheader("Meters")
-    m = G["macro"]
-    st.metric("VIX", f"{m['vix']:.1f}")
-    st.metric("10Y", f"{m['ust10y']:.2f}%")
+    // jet trail
+    ctx.beginPath();
+    ctx.moveTo(px, py + 10);
+    ctx.lineTo(px - 12, py + 40);
+    ctx.lineTo(px + 12, py + 40);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fill();
 
-    # Liquidity meter is a function of macro liquidity state
-    liq_meter = clamp((m["liquidity"] + 1.2) / 2.4, 0.0, 1.0)
-    st.progress(liq_meter, text=f"Liquidity: {m['liquidity']:+.2f}")
+    ctx.restore();
 
-    risk_meter = clamp((m["risk_av"] + 1.2) / 2.4, 0.0, 1.0)
-    st.progress(risk_meter, text=f"Risk aversion: {m['risk_av']:+.2f}")
+    // small footer hint
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = "rgba(245,245,250,0.86)";
+    ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+    ctx.fillText("Lane runner | Dodge red barriers, blue trains | Collect coins", 18, H - 16);
+    ctx.restore();
+  }
 
-    usd_meter = clamp((m["usd"] + 1.2) / 2.4, 0.0, 1.0)
-    st.progress(usd_meter, text=f"USD strength: {m['usd']:+.2f}")
+  function roundRect(x, y, w, h, r) {
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
 
-    st.divider()
-    st.subheader("Score")
-    st.metric("Total", f"{total*100:+.2f}%")
-    st.metric("Max DD", f"{max_dd*100:.2f}%")
-    st.metric("Sharpe", f"{sh:.2f}")
-    st.metric("Score", f"{score:.1f}")
-    st.markdown("</div>", unsafe_allow_html=True)
+  // Controls
+  const keyDown = (e) => {
+    const k = e.key.toLowerCase();
 
-# ----------------------------
-# Action buttons (game controls)
-# ----------------------------
-st.markdown("### Choose your move")
-b1, b2, b3, b4, b5 = st.columns(5)
+    if (k === " " || k === "w") {
+      e.preventDefault();
+      if (!state.running && !state.gameOver) start();
+      else if (state.gameOver) { reset(42069); start(); }
+      else jump();
+      return;
+    }
 
-def big_button(col, label):
-    with col:
-        st.markdown("<div class='bigbtn'>", unsafe_allow_html=True)
-        clicked = st.button(label, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-    return clicked
+    if (k === "r") {
+      e.preventDefault();
+      reset(42069);
+      return;
+    }
 
-clicked = None
-if big_button(b1, "Risk On"):
-    clicked = "Risk On"
-if big_button(b2, "Risk Off"):
-    clicked = "Risk Off"
-if big_button(b3, "Barbell"):
-    clicked = "Barbell"
-if big_button(b4, "Fade Crowd"):
-    clicked = "Fade Crowd"
-if big_button(b5, "Flat"):
-    clicked = "Flat"
+    if (!state.running) return;
 
-colX, colY = st.columns([1.2, 1.0])
-with colX:
-    st.caption(f"Last action: {G['last_action']}")
-with colY:
-    debug = st.toggle("Diagnostics", value=False)
+    if (k === "arrowleft" || k === "a") {
+      e.preventDefault();
+      player.lane = clamp(player.lane - 1, -1, 1);
+    } else if (k === "arrowright" || k === "d") {
+      e.preventDefault();
+      player.lane = clamp(player.lane + 1, -1, 1);
+    }
+  };
 
-# Advance one week if clicked
-if clicked is not None:
-    try:
-        simulate_week(clicked)
-        st.rerun()
-    except Exception as e:
-        st.error("Simulation error. Expand Diagnostics to see details.")
-        st.session_state._last_exception = str(e)
+  function jump() {
+    if (!player.onGround) return;
+    player.onGround = false;
+    player.vy = -player.jumpStrength;
+  }
 
-# Auto-play
-if autoplay:
-    try:
-        # keep it bounded so Streamlit does not feel stuck
-        steps = int(clamp(G["weeks"] - G["t"], 0, 60))
-        for _ in range(steps):
-            if G["t"] >= G["weeks"]:
-                break
-            if float(G["nav"].iloc[-1]) <= 0.55 * float(G["nav"].iloc[0]):
-                break
-            simulate_week("Barbell")
-        st.rerun()
-    except Exception as e:
-        st.error("Autoplay error. Expand Diagnostics to see details.")
-        st.session_state._last_exception = str(e)
+  canvas.addEventListener("keydown", keyDown);
+  canvas.addEventListener("click", () => {
+    canvas.focus();
+    if (!state.running && !state.gameOver) start();
+  });
 
-# ----------------------------
-# Bottom: last week recap (visual)
-# ----------------------------
-st.markdown("### Last week recap")
-if t == 0:
-    st.write("No recap yet. Pick a move.")
-else:
-    last_log = G["log"][-1]
-    a = last_log["action"]
-    ev = last_log["event"] or "No headline"
-    pr = last_log["port_ret"]
-    crash = last_log["crash"]
-    badge = "good" if pr >= 0 else "danger"
-    crash_txt = f" | Tail shock: {crash*100:.1f}%" if crash and crash > 0 else ""
+  // Touch support: swipe left/right, tap to jump
+  let touchStartX = null;
+  let touchStartY = null;
+  canvas.addEventListener("touchstart", (e) => {
+    const t0 = e.touches[0];
+    touchStartX = t0.clientX;
+    touchStartY = t0.clientY;
+    if (!state.running && !state.gameOver) start();
+  }, {passive:true});
 
-    st.markdown(
-        f"<div class='panel'>"
-        f"<div><b>Action:</b> {a} &nbsp;&nbsp; <b>Headline:</b> {ev} &nbsp;&nbsp; "
-        f"<b>Week PnL:</b> <span class='{badge}'>{pr*100:+.2f}%</span>{crash_txt}</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+  canvas.addEventListener("touchend", (e) => {
+    if (touchStartX == null) return;
+    const t0 = e.changedTouches[0];
+    const dx = t0.clientX - touchStartX;
+    const dy = t0.clientY - touchStartY;
+    touchStartX = null;
+    touchStartY = null;
 
-# ----------------------------
-# Diagnostics
-# ----------------------------
-if debug:
-    with st.expander("Diagnostics", expanded=True):
-        st.write("If something breaks, this is what I need to fix it in one pass.")
-        st.write("Last exception:", st.session_state.get("_last_exception", "None"))
-        st.write("State snapshot:")
-        st.json(
-            {
-                "week": G["t"],
-                "weeks": G["weeks"],
-                "difficulty": G["difficulty"],
-                "max_gross": G["max_gross"],
-                "tc_bps": G["tc_bps"],
-                "nav": float(G["nav"].iloc[-1]),
-                "last_event": G["last_event"],
-                "last_action": G["last_action"],
-            }
-        )
-        if len(G["log"]):
-            st.write("Last log row:")
-            st.json(G["log"][-1])
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+
+    if (ax > 35 && ax > ay) {
+      if (dx < 0) player.lane = clamp(player.lane - 1, -1, 1);
+      else player.lane = clamp(player.lane + 1, -1, 1);
+    } else {
+      jump();
+    }
+  }, {passive:true});
+
+  // Boot
+  hudRight.textContent = `High: ${highScore}`;
+  reset(42069);
+  tick();
+})();
+</script>
+</body>
+</html>
+"""
+
+components.html(html, height=620, scrolling=False)
