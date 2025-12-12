@@ -23,16 +23,16 @@ cfg = {
 
 st.caption("WASD move | Mouse aim | Click shoot | Space dash | P pause | R restart | Click canvas to focus")
 
-html = f"""
+html = r"""
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <style>
-    html, body {{ margin:0; padding:0; background: transparent; }}
-    .wrap {{ width:100%; display:flex; justify-content:center; align-items:center; }}
-    .frame {{ position: relative; width: min(1320px, 98vw); }}
-    canvas {{
+    html, body { margin:0; padding:0; background: transparent; }
+    .wrap { width:100%; display:flex; justify-content:center; align-items:center; }
+    .frame { position: relative; width: min(1320px, 98vw); }
+    canvas {
       width: 100%;
       height: auto;
       display:block;
@@ -43,8 +43,8 @@ html = f"""
                   linear-gradient(180deg, rgba(9,10,16,1), rgba(6,7,10,1));
       box-shadow: 0 18px 60px rgba(0,0,0,0.55);
       outline: none;
-    }}
-    .hud {{
+    }
+    .hud {
       position:absolute;
       inset: 14px 14px auto 14px;
       display:flex;
@@ -55,8 +55,8 @@ html = f"""
       color: rgba(245,245,250,0.92);
       font-size: 13px;
       z-index: 5;
-    }}
-    .pill {{
+    }
+    .pill {
       padding: 10px 12px;
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.10);
@@ -64,8 +64,8 @@ html = f"""
       backdrop-filter: blur(7px);
       box-shadow: 0 10px 30px rgba(0,0,0,0.30);
       white-space: nowrap;
-    }}
-    .overlay {{
+    }
+    .overlay {
       position:absolute;
       inset:0;
       display:flex;
@@ -75,8 +75,8 @@ html = f"""
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
       color: rgba(245,245,250,0.92);
       z-index: 6;
-    }}
-    .card {{
+    }
+    .card {
       width: min(760px, 92%);
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,0.14);
@@ -85,10 +85,10 @@ html = f"""
       box-shadow: 0 18px 70px rgba(0,0,0,0.60);
       text-align:left;
       pointer-events:none;
-    }}
-    .title {{ font-size: 22px; font-weight: 820; margin: 0 0 8px 0; letter-spacing: 0.2px; }}
-    .sub {{ opacity: 0.90; margin: 0 0 10px 0; line-height: 1.42; }}
-    .kbd {{
+    }
+    .title { font-size: 22px; font-weight: 820; margin: 0 0 8px 0; letter-spacing: 0.2px; }
+    .sub { opacity: 0.90; margin: 0 0 10px 0; line-height: 1.42; }
+    .kbd {
       display:inline-block;
       padding: 2px 8px;
       border-radius: 9px;
@@ -97,8 +97,8 @@ html = f"""
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 12px;
       margin-right: 6px;
-    }}
-    .shop {{
+    }
+    .shop {
       position:absolute;
       left: 50%;
       bottom: 18px;
@@ -115,12 +115,12 @@ html = f"""
       pointer-events:auto;
       color: rgba(245,245,250,0.92);
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-    }}
-    .shopTop {{ display:flex; justify-content:space-between; align-items:center; gap: 10px; }}
-    .shopTitle {{ font-size: 16px; font-weight: 760; }}
-    .shopHint {{ opacity: 0.78; font-size: 13px; }}
-    .opts {{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }}
-    .opt {{
+    }
+    .shopTop { display:flex; justify-content:space-between; align-items:center; gap: 10px; }
+    .shopTitle { font-size: 16px; font-weight: 760; }
+    .shopHint { opacity: 0.78; font-size: 13px; }
+    .opts { display:grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+    .opt {
       border-radius: 16px;
       border: 1px solid rgba(255,255,255,0.12);
       background: rgba(255,255,255,0.06);
@@ -128,11 +128,11 @@ html = f"""
       cursor: pointer;
       transition: transform 120ms ease, background 120ms ease;
       user-select:none;
-    }}
-    .opt:hover {{ transform: translateY(-2px); background: rgba(255,255,255,0.08); }}
-    .optName {{ font-weight: 750; margin-bottom: 4px; }}
-    .optDesc {{ opacity: 0.84; font-size: 12.5px; line-height: 1.35; }}
-    .optCost {{ margin-top: 8px; opacity: 0.90; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }}
+    }
+    .opt:hover { transform: translateY(-2px); background: rgba(255,255,255,0.08); }
+    .optName { font-weight: 750; margin-bottom: 4px; }
+    .optDesc { opacity: 0.84; font-size: 12.5px; line-height: 1.35; }
+    .optCost { margin-top: 8px; opacity: 0.90; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   </style>
 </head>
 <body>
@@ -150,7 +150,7 @@ html = f"""
         <div class="card">
           <div class="title">Neon Market Arena</div>
           <p class="sub">
-            Delta-time physics, bloom downsampling, proper waves and intermissions, and sidebar-tunable graphics.<br/>
+            Delta-time physics, bloom downsampling, and proper waves and intermissions.<br/>
             Survive. Farm alpha. Upgrade. Regimes shift.
           </p>
           <p class="sub">
@@ -170,7 +170,7 @@ html = f"""
       <div class="shop" id="shop">
         <div class="shopTop">
           <div class="shopTitle">Upgrade Terminal</div>
-          <div class="shopHint">Click an upgrade. Press P to resume. Intermission ends automatically.</div>
+          <div class="shopHint">Click an upgrade. Intermission ends automatically.</div>
         </div>
         <div class="opts">
           <div class="opt" id="opt1">
@@ -194,8 +194,8 @@ html = f"""
   </div>
 
 <script>
-(() => {{
-  const CONFIG = {json.dumps(cfg)};
+(() => {
+  const CONFIG = __CONFIG_JSON__;
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
@@ -215,45 +215,42 @@ html = f"""
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const lerp = (a, b, t) => a + (b - a) * t;
 
-  function mulberry32(a) {{
-    return function() {{
+  function mulberry32(a) {
+    return function() {
       let t = a += 0x6D2B79F5;
       t = Math.imul(t ^ t >>> 15, t | 1);
       t ^= t + Math.imul(t ^ t >>> 7, t | 61);
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
-    }}
-  }}
+    }
+  }
 
-  function loadHigh() {{
+  function loadHigh() {
     const v = localStorage.getItem("neon_market_arena_high_v2");
     const n = v ? parseInt(v, 10) : 0;
     return Number.isFinite(n) ? n : 0;
-  }}
-  function saveHigh(v) {{
+  }
+  function saveHigh(v) {
     localStorage.setItem("neon_market_arena_high_v2", String(v));
-  }}
+  }
 
   let highScore = loadHigh();
 
-  // Quality tuning
-  const Q = (() => {{
+  const Q = (() => {
     const rm = !!CONFIG.reduce_motion;
     const q = (CONFIG.quality || "High").toLowerCase();
-    if (q === "ultra") return {{ bloomScale: 0.5, blur1: rm ? 8 : 12, blur2: rm ? 16 : 26, stars: 160, noise: 160, scanlines: true, shakeMul: rm ? 0.55 : 1.0 }};
-    if (q === "high")  return {{ bloomScale: 0.5, blur1: rm ? 7 : 10, blur2: rm ? 14 : 22, stars: 140, noise: 140, scanlines: true, shakeMul: rm ? 0.55 : 1.0 }};
-    if (q === "medium")return {{ bloomScale: 0.66, blur1: rm ? 6 : 8,  blur2: rm ? 12 : 18, stars: 110, noise: 90,  scanlines: true, shakeMul: rm ? 0.50 : 0.90 }};
-    return                 {{ bloomScale: 0.75, blur1: rm ? 5 : 6,  blur2: rm ? 10 : 12, stars: 80,  noise: 60,  scanlines: false, shakeMul: rm ? 0.40 : 0.75 }};
-  }})();
+    if (q === "ultra") return { bloomScale: 0.5, blur1: rm ? 8 : 12, blur2: rm ? 16 : 26, stars: 160, noise: 160, scanlines: true, shakeMul: rm ? 0.55 : 1.0 };
+    if (q === "high")  return { bloomScale: 0.5, blur1: rm ? 7 : 10, blur2: rm ? 14 : 22, stars: 140, noise: 140, scanlines: true, shakeMul: rm ? 0.55 : 1.0 };
+    if (q === "medium")return { bloomScale: 0.66, blur1: rm ? 6 : 8,  blur2: rm ? 12 : 18, stars: 110, noise: 90,  scanlines: true, shakeMul: rm ? 0.50 : 0.90 };
+    return               { bloomScale: 0.75, blur1: rm ? 5 : 6,  blur2: rm ? 10 : 12, stars: 80,  noise: 60,  scanlines: false, shakeMul: rm ? 0.40 : 0.75 };
+  })();
 
-  // Difficulty tuning
-  const D = (() => {{
+  const D = (() => {
     const d = (CONFIG.difficulty || "Normal").toLowerCase();
-    if (d === "chill")  return {{ enemyHpMul: 0.85, enemySpMul: 0.90, spawnMul: 0.82, dmgMul: 0.85, alphaMul: 1.10 }};
-    if (d === "hard")   return {{ enemyHpMul: 1.18, enemySpMul: 1.12, spawnMul: 1.18, dmgMul: 1.15, alphaMul: 0.95 }};
-    return               {{ enemyHpMul: 1.00, enemySpMul: 1.00, spawnMul: 1.00, dmgMul: 1.00, alphaMul: 1.00 }};
-  }})();
+    if (d === "chill")  return { enemyHpMul: 0.85, enemySpMul: 0.90, spawnMul: 0.82, dmgMul: 0.85, alphaMul: 1.10 };
+    if (d === "hard")   return { enemyHpMul: 1.18, enemySpMul: 1.12, spawnMul: 1.18, dmgMul: 1.15, alphaMul: 0.95 };
+    return               { enemyHpMul: 1.00, enemySpMul: 1.00, spawnMul: 1.00, dmgMul: 1.00, alphaMul: 1.00 };
+  })();
 
-  // Offscreen buffers
   const scene = document.createElement("canvas");
   scene.width = W; scene.height = H;
   const sctx = scene.getContext("2d");
@@ -264,16 +261,17 @@ html = f"""
   const bctx = bloom.getContext("2d");
 
   const keys = new Set();
-  let mouse = {{ x: W * 0.5, y: H * 0.5, down: false }};
-  function canvasToLocal(e) {{
+  let mouse = { x: W * 0.5, y: H * 0.5, down: false };
+
+  function canvasToLocal(e) {
     const r = canvas.getBoundingClientRect();
     const x = (e.clientX - r.left) * (W / r.width);
     const y = (e.clientY - r.top) * (H / r.height);
-    return {{ x, y }};
-  }}
+    return { x, y };
+  }
 
-  const palettes = {{
-    riskOn: {{
+  const palettes = {
+    riskOn: {
       bgA: "rgba(110,160,255,0.18)",
       bgB: "rgba(255,110,210,0.14)",
       neon1: "rgba(92,255,176,0.92)",
@@ -282,8 +280,8 @@ html = f"""
       enemy: "rgba(255,92,92,0.92)",
       bullet: "rgba(255,140,230,0.90)",
       alpha: "rgba(255,212,92,0.96)"
-    }},
-    riskOff: {{
+    },
+    riskOff: {
       bgA: "rgba(60,220,255,0.10)",
       bgB: "rgba(255,120,80,0.10)",
       neon1: "rgba(120,210,255,0.88)",
@@ -292,10 +290,10 @@ html = f"""
       enemy: "rgba(255,140,90,0.92)",
       bullet: "rgba(120,210,255,0.88)",
       alpha: "rgba(255,212,92,0.96)"
-    }}
-  }};
+    }
+  };
 
-  const state = {{
+  const state = {
     seed: CONFIG.seed || 42069,
     rng: mulberry32(CONFIG.seed || 42069),
 
@@ -303,30 +301,32 @@ html = f"""
     paused: false,
     over: false,
 
-    t: 0,         // seconds
+    t: 0,
+
     score: 0,
     alpha: 0,
 
     wave: 1,
-    waveTime: 0,          // seconds
-    waveDuration: 35.0,   // seconds of combat
+    waveTime: 0,
+    waveDuration: 35.0,
     intermission: false,
     intermissionTime: 0,
     intermissionDuration: 8.0,
 
     heat: 0,
+
     regime: "riskOn",
     regimeTime: 0,
-    regimeEvery: 55.0,    // seconds
+    regimeEvery: 55.0,
 
     enemyTimer: 0,
     pickupTimer: 0,
 
     shake: 0,
-    hitStop: 0, // small hit pause in seconds
-  }};
+    hitStop: 0
+  };
 
-  const player = {{
+  const player = {
     x: W * 0.5,
     y: H * 0.62,
     vx: 0,
@@ -341,17 +341,17 @@ html = f"""
     shieldRegen: 0,
 
     dashCd: 0,
-    dashCdMax: 2.3,   // seconds
+    dashCdMax: 2.3,
     dashTime: 0,
 
     fireCd: 0,
-    fireCdMax: 0.11,  // seconds
+    fireCdMax: 0.11,
     spread: 0.06,
-    bulletSpeed: 780, // px/sec
+    bulletSpeed: 780,
     bulletDmg: 12,
 
     trail: []
-  }};
+  };
 
   let bullets = [];
   let enemies = [];
@@ -360,34 +360,34 @@ html = f"""
   let city = [];
   let stars = [];
 
-  function initBackground() {{
+  function initBackground() {
     stars = [];
-    for (let i = 0; i < Q.stars; i++) {{
-      stars.push({{
+    for (let i = 0; i < Q.stars; i++) {
+      stars.push({
         x: state.rng() * W,
         y: state.rng() * H,
         r: 0.6 + state.rng() * 1.7,
         a: 0.12 + state.rng() * 0.35,
         s: 0.15 + state.rng() * 0.85
-      }});
-    }}
+      });
+    }
 
     city = [];
-    for (let i = 0; i < 48; i++) {{
+    for (let i = 0; i < 48; i++) {
       const baseX = (i / 48) * W;
       const w = 26 + state.rng() * 70;
       const h = 60 + state.rng() * 220;
       const layer = state.rng() < 0.55 ? 1 : 2;
-      city.push({{
+      city.push({
         x: baseX + (state.rng() * 50 - 25),
         w, h,
         y: H * (layer === 1 ? 0.38 : 0.30),
         layer
-      }});
-    }}
-  }}
+      });
+    }
+  }
 
-  function updateHud(fps=0) {{
+  function updateHud(fps=0) {
     const regimeName = (state.regime === "riskOn") ? "Risk-On" : "Risk-Off";
     const hp = Math.max(0, Math.floor(player.hp));
     const heat = Math.floor(state.heat);
@@ -395,9 +395,9 @@ html = f"""
     hudL.textContent = `Score: ${state.score} | Alpha: ${state.alpha} | Wave: ${state.wave}`;
     hudM.textContent = `HP: ${hp} | Heat: ${heat} | Regime: ${regimeName}${extra}`;
     hudR.textContent = `High: ${highScore}`;
-  }}
+  }
 
-  function reset(seed=42069) {{
+  function reset(seed=42069) {
     state.seed = seed;
     state.rng = mulberry32(seed);
 
@@ -462,7 +462,7 @@ html = f"""
         <div class="title">Neon Market Arena</div>
         <p class="sub">
           Quality: <b>${CONFIG.quality}</b> | Difficulty: <b>${CONFIG.difficulty}</b><br/>
-          Survive waves. Intermission every wave. Regimes shift every ~${state.regimeEvery.toFixed(0)}s.
+          Survive waves. Intermission each wave. Regimes shift.
         </p>
         <p class="sub">
           <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> move |
@@ -476,26 +476,26 @@ html = f"""
       </div>
     `;
     updateHud();
-  }}
+  }
 
-  function start() {{
+  function start() {
     if (state.over) return;
     state.running = true;
     state.paused = false;
     overlay.style.display = "none";
     canvas.focus();
-  }}
+  }
 
-  function gameOver() {{
+  function gameOver() {
     state.running = false;
     state.over = true;
     state.paused = false;
     shop.style.display = "none";
 
-    if (state.score > highScore) {{
+    if (state.score > highScore) {
       highScore = state.score;
       saveHigh(highScore);
-    }}
+    }
 
     overlay.style.display = "flex";
     overlay.innerHTML = `
@@ -505,41 +505,38 @@ html = f"""
           Score: <b>${state.score}</b> | Alpha: <b>${state.alpha}</b> | Wave: <b>${state.wave}</b> | High: <b>${highScore}</b><br/>
           Press <span class="kbd">R</span> to restart.
         </p>
-        <p class="sub" style="opacity:0.78; margin:0;">
-          Tune graphics in the sidebar. Delta-time pacing should feel consistent across machines.
-        </p>
       </div>
     `;
-  }}
+  }
 
-  function addParticles(x, y, color, n=14, spread=1.0) {{
-    for (let i = 0; i < n; i++) {{
+  function addParticles(x, y, color, n=14, spread=1.0) {
+    for (let i = 0; i < n; i++) {
       const a = (state.rng() * Math.PI * 2);
-      const sp = (40 + state.rng() * 260) * spread; // px/sec
-      particles.push({{
+      const sp = (40 + state.rng() * 260) * spread;
+      particles.push({
         x, y,
         vx: Math.cos(a) * sp,
         vy: Math.sin(a) * sp,
-        life: 0.35 + state.rng() * 0.35, // seconds
+        life: 0.35 + state.rng() * 0.35,
         r: 1.3 + state.rng() * 3.1,
         c: color,
-      }});
-    }}
-  }}
+      });
+    }
+  }
 
-  function circleHit(ax, ay, ar, bx, by, br) {{
+  function circleHit(ax, ay, ar, bx, by, br) {
     const dx = ax - bx, dy = ay - by;
     const rr = ar + br;
     return (dx*dx + dy*dy) <= rr*rr;
-  }}
+  }
 
-  function spawnEnemy() {{
+  function spawnEnemy() {
     const side = Math.floor(state.rng() * 4);
     let x, y;
-    if (side === 0) {{ x = -40; y = state.rng() * H; }}
-    else if (side === 1) {{ x = W + 40; y = state.rng() * H; }}
-    else if (side === 2) {{ x = state.rng() * W; y = -40; }}
-    else {{ x = state.rng() * W; y = H + 40; }}
+    if (side === 0) { x = -40; y = state.rng() * H; }
+    else if (side === 1) { x = W + 40; y = state.rng() * H; }
+    else if (side === 2) { x = state.rng() * W; y = -40; }
+    else { x = state.rng() * W; y = H + 40; }
 
     const tierRoll = 0.14 + state.wave * 0.01 + (state.regime === "riskOff" ? 0.05 : 0.0);
     const tier = (state.rng() < tierRoll) ? 2 : 1;
@@ -548,29 +545,21 @@ html = f"""
     const hp = Math.floor(hpBase * D.enemyHpMul);
     const r = tier === 2 ? 20 : 16;
 
-    enemies.push({{
-      x, y,
-      vx: 0, vy: 0,
-      r,
-      hp,
-      maxHp: hp,
-      tier,
-      hit: 0
-    }});
-  }}
+    enemies.push({ x, y, vx: 0, vy: 0, r, hp, maxHp: hp, tier, hit: 0 });
+  }
 
-  function spawnPickup() {{
+  function spawnPickup() {
     const p = (state.rng() < 0.72) ? "alpha" : "med";
-    pickups.push({{
+    pickups.push({
       x: 60 + state.rng() * (W - 120),
       y: 90 + state.rng() * (H - 160),
       r: 12,
       kind: p,
       t: state.rng() * Math.PI * 2
-    }});
-  }}
+    });
+  }
 
-  function shoot() {{
+  function shoot() {
     if (!state.running || state.paused || state.intermission) return;
     if (player.fireCd > 0) return;
 
@@ -581,21 +570,21 @@ html = f"""
     const spread = player.spread * (0.80 + state.heat * 0.0035);
     const a = ang + (state.rng() * spread - spread * 0.5);
 
-    bullets.push({{
+    bullets.push({
       x: player.x + Math.cos(a) * (player.r + 7),
       y: player.y + Math.sin(a) * (player.r + 7),
       vx: Math.cos(a) * player.bulletSpeed,
       vy: Math.sin(a) * player.bulletSpeed,
       r: 5.2,
-      life: 0.95, // seconds
+      life: 0.95,
       dmg: player.bulletDmg
-    }});
+    });
 
     player.fireCd = player.fireCdMax;
     state.heat = Math.min(240, state.heat + 2.0);
-  }}
+  }
 
-  function dash() {{
+  function dash() {
     if (!state.running || state.paused) return;
     if (player.dashCd > 0) return;
 
@@ -603,7 +592,7 @@ html = f"""
     const dy = mouse.y - player.y;
     const ang = Math.atan2(dy, dx);
 
-    const impulse = 980; // px/sec impulse
+    const impulse = 980;
     player.vx += Math.cos(ang) * impulse;
     player.vy += Math.sin(ang) * impulse;
 
@@ -614,45 +603,42 @@ html = f"""
 
     const pal = palettes[state.regime];
     addParticles(player.x, player.y, pal.neon2, 28, 1.1);
-  }}
+  }
 
-  function buy(kind) {{
+  function buy(kind) {
     if (!state.running || !state.intermission) return;
 
-    if (kind === 1) {{
+    if (kind === 1) {
       const cost = 40;
       if (state.alpha < cost) return;
       state.alpha -= cost;
       player.fireCdMax = Math.max(0.05, player.fireCdMax - 0.01);
       player.spread = Math.max(0.018, player.spread * 0.88);
       player.bulletDmg += 2;
-      const pal = palettes[state.regime];
-      addParticles(player.x, player.y, pal.neon3, 32, 1.2);
-    }} else if (kind === 2) {{
+      addParticles(player.x, player.y, palettes[state.regime].neon3, 32, 1.2);
+    } else if (kind === 2) {
       const cost = 60;
       if (state.alpha < cost) return;
       state.alpha -= cost;
       player.shieldMax = Math.min(140, player.shieldMax + 40);
       player.shield = Math.min(player.shieldMax, player.shield + 50);
-      player.shieldRegen = Math.min(32, player.shieldRegen + 10); // per second
-      const pal = palettes[state.regime];
-      addParticles(player.x, player.y, pal.neon2, 32, 1.2);
-    }} else if (kind === 3) {{
+      player.shieldRegen = Math.min(32, player.shieldRegen + 10);
+      addParticles(player.x, player.y, palettes[state.regime].neon2, 32, 1.2);
+    } else if (kind === 3) {
       const cost = 55;
       if (state.alpha < cost) return;
       state.alpha -= cost;
       player.dashCdMax = Math.max(1.1, player.dashCdMax * 0.86);
-      const pal = palettes[state.regime];
-      addParticles(player.x, player.y, pal.neon1, 32, 1.2);
-    }}
+      addParticles(player.x, player.y, palettes[state.regime].neon1, 32, 1.2);
+    }
     updateHud();
-  }}
+  }
 
   opt1.addEventListener("click", () => buy(1));
   opt2.addEventListener("click", () => buy(2));
   opt3.addEventListener("click", () => buy(3));
 
-  function drawBackground(pal, dt) {{
+  function drawBackground(pal, dt) {
     sctx.clearRect(0,0,W,H);
 
     const g = sctx.createLinearGradient(0,0,0,H);
@@ -671,21 +657,19 @@ html = f"""
     g2.addColorStop(1, "rgba(0,0,0,0)");
     sctx.fillStyle = g2; sctx.fillRect(0,0,W,H);
 
-    // stars
-    for (const st of stars) {{
-      st.y += st.s * (50 * dt); // px/sec scaled
-      if (st.y > H + 10) {{ st.y = -10; st.x = state.rng() * W; }}
+    for (const st of stars) {
+      st.y += st.s * (50 * dt);
+      if (st.y > H + 10) { st.y = -10; st.x = state.rng() * W; }
       sctx.beginPath();
       sctx.arc(st.x, st.y, st.r, 0, Math.PI*2);
-      sctx.fillStyle = `rgba(255,255,255,${{st.a}})`;
+      sctx.fillStyle = `rgba(255,255,255,${st.a})`;
       sctx.fill();
-    }}
+    }
 
-    // skyline
     sctx.save();
     const drift = (state.t * 40) % W;
     sctx.globalAlpha = 0.70;
-    for (const b of city) {{
+    for (const b of city) {
       const layerMul = (b.layer === 1) ? 0.7 : 0.45;
       const x = (b.x - drift * layerMul + W) % (W + 100) - 50;
       const y = b.y;
@@ -696,20 +680,19 @@ html = f"""
 
       sctx.globalAlpha = 0.10 + (b.layer === 1 ? 0.07 : 0.04);
       sctx.fillStyle = (state.regime === "riskOn") ? "rgba(120,170,255,0.22)" : "rgba(255,170,110,0.18)";
-      for (let k = 0; k < 8; k++) {{
+      for (let k = 0; k < 8; k++) {
         const wx = x + 6 + (k * 6);
         const wy = y + 10 + ((k * 17) % 70);
         sctx.fillRect(wx, wy, 2, 8);
-      }}
+      }
       sctx.globalAlpha = 0.70;
-    }}
+    }
     sctx.restore();
 
-    // synth grid
     sctx.save();
     const horizonY = H * 0.40;
 
-    for (let i = 0; i < 34; i++) {{
+    for (let i = 0; i < 34; i++) {
       const p = i / 34;
       const y = lerp(horizonY, H, p);
       const w = lerp(W * 0.15, W * 1.30, p);
@@ -722,10 +705,10 @@ html = f"""
       sctx.moveTo(x0, y);
       sctx.lineTo(x1, y);
       sctx.stroke();
-    }}
+    }
 
     const cols = 22;
-    for (let c = -cols; c <= cols; c++) {{
+    for (let c = -cols; c <= cols; c++) {
       const p = (c / cols) * 0.5;
       const xTop = W*0.5 + p * (W*0.22);
       const xBot = W*0.5 + p * (W*1.1);
@@ -736,83 +719,26 @@ html = f"""
       sctx.moveTo(xTop, horizonY);
       sctx.lineTo(xBot, H);
       sctx.stroke();
-    }}
+    }
     sctx.restore();
-  }}
+  }
 
-  function drawBarsAndReticle(pal) {{
-    // HP bar
-    const hpT = clamp(player.hp / player.maxHp, 0, 1);
-    sctx.save();
-    sctx.globalAlpha = 0.92;
-    sctx.fillStyle = "rgba(0,0,0,0.35)";
-    sctx.fillRect(22, H - 26, 240, 10);
-    sctx.fillStyle = pal.neon1;
-    sctx.fillRect(22, H - 26, 240 * hpT, 10);
-    sctx.strokeStyle = "rgba(255,255,255,0.12)";
-    sctx.strokeRect(22, H - 26, 240, 10);
-
-    // Shield bar
-    if (player.shieldMax > 0) {{
-      const shT = clamp(player.shield / player.shieldMax, 0, 1);
-      sctx.fillStyle = "rgba(0,0,0,0.35)";
-      sctx.fillRect(22, H - 42, 240, 10);
-      sctx.fillStyle = pal.neon2;
-      sctx.fillRect(22, H - 42, 240 * shT, 10);
-      sctx.strokeStyle = "rgba(255,255,255,0.12)";
-      sctx.strokeRect(22, H - 42, 240, 10);
-    }}
-
-    // Dash cooldown ring
-    const cdT = clamp(1 - (player.dashCd / player.dashCdMax), 0, 1);
-    sctx.shadowColor = pal.neon2;
-    sctx.shadowBlur = 16;
-    sctx.beginPath();
-    sctx.arc(player.x, player.y, player.r + 18, -Math.PI/2, -Math.PI/2 + Math.PI*2*cdT);
-    sctx.strokeStyle = `rgba(255,255,255,${0.10 + 0.22*cdT})`;
-    sctx.lineWidth = 2;
-    sctx.stroke();
-    sctx.shadowBlur = 0;
-
-    // Crosshair
-    sctx.globalAlpha = 0.7;
-    sctx.strokeStyle = "rgba(255,255,255,0.22)";
-    sctx.lineWidth = 1.5;
-    sctx.beginPath();
-    sctx.arc(mouse.x, mouse.y, 10, 0, Math.PI*2);
-    sctx.stroke();
-    sctx.beginPath();
-    sctx.moveTo(mouse.x - 16, mouse.y);
-    sctx.lineTo(mouse.x - 8, mouse.y);
-    sctx.moveTo(mouse.x + 8, mouse.y);
-    sctx.lineTo(mouse.x + 16, mouse.y);
-    sctx.moveTo(mouse.x, mouse.y - 16);
-    sctx.lineTo(mouse.x, mouse.y - 8);
-    sctx.moveTo(mouse.x, mouse.y + 8);
-    sctx.lineTo(mouse.x, mouse.y + 16);
-    sctx.stroke();
-
-    sctx.restore();
-  }}
-
-  function drawEntities(pal) {{
-    // player trail
-    player.trail.unshift({{x: player.x, y: player.y}});
+  function drawEntities(pal) {
+    player.trail.unshift({x: player.x, y: player.y});
     if (player.trail.length > 18) player.trail.pop();
 
     sctx.save();
     sctx.globalAlpha = 0.55;
-    for (let i = 0; i < player.trail.length; i++) {{
+    for (let i = 0; i < player.trail.length; i++) {
       const t = i / player.trail.length;
       const p = player.trail[i];
       sctx.beginPath();
       sctx.arc(p.x, p.y, player.r * (0.65 + t*0.35), 0, Math.PI*2);
       sctx.fillStyle = `rgba(92,255,176,${0.18 * (1 - t)})`;
       sctx.fill();
-    }}
+    }
     sctx.restore();
 
-    // player core
     sctx.save();
     sctx.shadowColor = pal.neon1;
     sctx.shadowBlur = 26;
@@ -826,8 +752,7 @@ html = f"""
     sctx.fill();
     sctx.restore();
 
-    // bullets
-    for (const b of bullets) {{
+    for (const b of bullets) {
       sctx.save();
       sctx.shadowColor = pal.bullet;
       sctx.shadowBlur = 18;
@@ -836,10 +761,9 @@ html = f"""
       sctx.fillStyle = pal.bullet;
       sctx.fill();
       sctx.restore();
-    }}
+    }
 
-    // enemies
-    for (const e of enemies) {{
+    for (const e of enemies) {
       const hpT = e.hp / Math.max(1, e.maxHp);
       sctx.save();
       sctx.shadowColor = pal.enemy;
@@ -860,10 +784,9 @@ html = f"""
       sctx.lineWidth = 2;
       sctx.stroke();
       sctx.restore();
-    }}
+    }
 
-    // pickups
-    for (const p of pickups) {{
+    for (const p of pickups) {
       p.t += 2.6 / 60.0;
       const bob = Math.sin(p.t) * 4.5;
       sctx.save();
@@ -877,10 +800,9 @@ html = f"""
       sctx.lineWidth = 2;
       sctx.stroke();
       sctx.restore();
-    }}
+    }
 
-    // particles
-    for (const p of particles) {{
+    for (const p of particles) {
       sctx.save();
       sctx.globalAlpha = clamp(p.life / 0.6, 0, 1);
       sctx.shadowColor = p.c;
@@ -890,38 +812,25 @@ html = f"""
       sctx.fillStyle = p.c;
       sctx.fill();
       sctx.restore();
-    }}
+    }
 
-    // vignette
     sctx.save();
-    const vg = sctx.createRadialGradient(W*0.5, H*0.5, H*0.18, W*0.5, H*0.5, H*0.62);
-    vg.addColorStop(0, "rgba(0,0,0,0)");
-    vg.addColorStop(1, "rgba(0,0,0,0.40)");
-    sctx.fillStyle = vg;
-    sctx.fillRect(0,0,W,H);
-    sctx.restore();
-
-    // scanlines + noise
-    sctx.save();
-    if (Q.scanlines) {{
+    if (Q.scanlines) {
       sctx.globalAlpha = 0.10;
       sctx.fillStyle = "rgba(0,0,0,0.18)";
       for (let y = 0; y < H; y += 3) sctx.fillRect(0, y, W, 1);
-    }}
+    }
     sctx.globalAlpha = 0.055;
-    for (let i = 0; i < Q.noise; i++) {{
+    for (let i = 0; i < Q.noise; i++) {
       const x = state.rng() * W;
       const y = state.rng() * H;
       sctx.fillStyle = "rgba(255,255,255,0.07)";
       sctx.fillRect(x, y, 1.2, 1.2);
-    }}
+    }
     sctx.restore();
+  }
 
-    drawBarsAndReticle(pal);
-  }}
-
-  function compositeBloom() {{
-    // draw full scene to ctx later, but glow at reduced resolution
+  function compositeBloom() {
     bctx.clearRect(0,0,bloom.width,bloom.height);
     bctx.save();
     bctx.scale(bloom.width / W, bloom.height / H);
@@ -956,24 +865,23 @@ html = f"""
     ctx.drawImage(scene, 1.5, 0.0);
     ctx.drawImage(scene, -1.0, 0.8);
     ctx.restore();
-  }}
+  }
 
-  function setIntermission(on) {{
+  function setIntermission(on) {
     state.intermission = on;
     state.intermissionTime = 0;
     shop.style.display = on ? "block" : "none";
-  }}
+  }
 
-  // Input
-  window.addEventListener("keydown", (e) => {{
+  window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
     keys.add(k);
 
-    if (k === "p") {{
+    if (k === "p") {
       e.preventDefault();
       if (!state.running || state.over) return;
       state.paused = !state.paused;
-      if (state.paused) {{
+      if (state.paused) {
         shop.style.display = "none";
         overlay.style.display = "flex";
         overlay.innerHTML = `
@@ -982,139 +890,118 @@ html = f"""
             <p class="sub">
               Press <span class="kbd">P</span> to resume. Press <span class="kbd">R</span> to restart.
             </p>
-            <p class="sub" style="opacity:0.78; margin:0;">
-              Intermission shop opens after each wave. Buy survivability early.
-            </p>
           </div>
         `;
-      }} else {{
+      } else {
         overlay.style.display = "none";
-      }}
+      }
       return;
-    }}
+    }
 
-    if (k === "r") {{
+    if (k === "r") {
       e.preventDefault();
       reset(state.seed);
       return;
-    }}
+    }
 
-    if (k === " ") {{
+    if (k === " ") {
       e.preventDefault();
       if (!state.running) start();
       if (state.paused || state.over) return;
       dash();
       return;
-    }}
-  }});
+    }
+  });
 
-  window.addEventListener("keyup", (e) => {{
-    keys.delete(e.key.toLowerCase());
-  }});
+  window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
-  canvas.addEventListener("mousemove", (e) => {{
+  canvas.addEventListener("mousemove", (e) => {
     const p = canvasToLocal(e);
     mouse.x = p.x; mouse.y = p.y;
-  }});
+  });
 
-  canvas.addEventListener("mousedown", (e) => {{
+  canvas.addEventListener("mousedown", (e) => {
     canvas.focus();
     const p = canvasToLocal(e);
     mouse.x = p.x; mouse.y = p.y;
     mouse.down = true;
     if (!state.running && !state.over) start();
-  }});
+  });
 
-  window.addEventListener("mouseup", () => {{
-    mouse.down = false;
-  }});
+  window.addEventListener("mouseup", () => mouse.down = false);
 
-  canvas.addEventListener("click", () => {{
+  canvas.addEventListener("click", () => {
     canvas.focus();
     if (!state.running && !state.over) start();
-  }});
+  });
 
-  // Main loop with delta-time
   let last = performance.now();
   let fps = 60;
   let fpsAcc = 0, fpsN = 0, fpsT = 0;
 
-  function frame(now) {{
+  function frame(now) {
     requestAnimationFrame(frame);
 
     let dtMs = now - last;
     last = now;
-
-    // cap dt so tab switching does not explode the sim
     dtMs = Math.min(dtMs, 50);
     let dt = dtMs / 1000.0;
 
     fpsT += dtMs;
     fpsAcc += 1000.0 / Math.max(1, dtMs);
     fpsN += 1;
-    if (fpsT > 350) {{
+    if (fpsT > 350) {
       fps = fpsAcc / fpsN;
       fpsAcc = 0; fpsN = 0; fpsT = 0;
-    }}
+    }
 
     const pal = palettes[state.regime];
 
-    // idle render for menu and pause
-    if (!state.running || state.paused || state.over) {{
+    if (!state.running || state.paused || state.over) {
       drawBackground(pal, dt);
       drawEntities(pal);
       compositeBloom();
       updateHud(fps);
       return;
-    }}
+    }
 
-    // hit stop micro-pause
-    if (state.hitStop > 0) {{
+    if (state.hitStop > 0) {
       state.hitStop = Math.max(0, state.hitStop - dt);
       dt *= 0.18;
-    }}
+    }
 
     state.t += dt;
 
-    // regime shift
     state.regimeTime += dt;
-    if (state.regimeTime >= state.regimeEvery) {{
+    if (state.regimeTime >= state.regimeEvery) {
       state.regimeTime = 0;
       state.regime = (state.regime === "riskOn") ? "riskOff" : "riskOn";
       state.shake = Math.min(18, state.shake + 12);
       const col = (state.regime === "riskOn") ? "rgba(255,140,230,0.40)" : "rgba(120,210,255,0.35)";
       addParticles(W*0.5, H*0.40, col, 70, 1.6);
-    }}
+    }
 
-    // wave logic
-    if (!state.intermission) {{
+    if (!state.intermission) {
       state.waveTime += dt;
-      if (state.waveTime >= state.waveDuration) {{
+      if (state.waveTime >= state.waveDuration) {
         state.wave += 1;
         state.waveTime = 0;
         setIntermission(true);
-      }}
-    }} else {{
+      }
+    } else {
       state.intermissionTime += dt;
-      // clear battlefield slowly during intermission
-      if (enemies.length === 0 && state.intermissionTime >= state.intermissionDuration) {{
-        setIntermission(false);
-      }}
-    }}
+      if (enemies.length === 0 && state.intermissionTime >= state.intermissionDuration) setIntermission(false);
+    }
 
-    // heat decay
     state.heat = Math.max(0, state.heat - 18 * dt);
 
-    // cooldowns
     player.fireCd = Math.max(0, player.fireCd - dt);
     player.dashCd = Math.max(0, player.dashCd - dt);
 
-    // shield regen
-    if (player.shieldMax > 0 && player.shieldRegen > 0) {{
+    if (player.shieldMax > 0 && player.shieldRegen > 0) {
       player.shield = Math.min(player.shieldMax, player.shield + player.shieldRegen * dt);
-    }}
+    }
 
-    // spawners (disabled during intermission, but enemies can finish)
     const basePressure = 0.65 + state.wave * 0.09;
     const regimeMul = (state.regime === "riskOff") ? 1.12 : 0.98;
     const pressure = basePressure * regimeMul * D.spawnMul;
@@ -1122,24 +1009,23 @@ html = f"""
     state.enemyTimer -= dt;
     state.pickupTimer -= dt;
 
-    if (!state.intermission) {{
+    if (!state.intermission) {
       const enemyEvery = clamp(1.05 - pressure * 0.12, 0.35, 0.95);
-      if (state.enemyTimer <= 0) {{
+      if (state.enemyTimer <= 0) {
         spawnEnemy();
         if (state.rng() < 0.10 + state.wave * 0.01) spawnEnemy();
         state.enemyTimer = enemyEvery;
         state.heat = Math.min(240, state.heat + 10);
-      }}
+      }
 
       const pickupEvery = clamp(4.2 - state.wave * 0.15, 1.8, 3.8);
-      if (state.pickupTimer <= 0) {{
+      if (state.pickupTimer <= 0) {
         spawnPickup();
         state.pickupTimer = pickupEvery;
-      }}
-    }}
+      }
+    }
 
-    // movement
-    const accel = 2100; // px/sec^2
+    const accel = 2100;
     const maxV = 520 + state.wave * 7;
     const friction = 0.86;
 
@@ -1152,7 +1038,6 @@ html = f"""
     player.vx += ax * accel * dt;
     player.vy += ay * accel * dt;
 
-    // clamp speed
     player.vx = clamp(player.vx, -maxV, maxV);
     player.vy = clamp(player.vy, -maxV, maxV);
 
@@ -1165,20 +1050,17 @@ html = f"""
     player.x = clamp(player.x, 40, W - 40);
     player.y = clamp(player.y, 70, H - 60);
 
-    // shoot
     if (mouse.down) shoot();
 
-    // bullets update
-    for (let i = bullets.length - 1; i >= 0; i--) {{
+    for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       b.life -= dt;
       if (b.life <= 0 || b.x < -60 || b.x > W+60 || b.y < -60 || b.y > H+60) bullets.splice(i, 1);
-    }}
+    }
 
-    // enemies seek
-    for (const e of enemies) {{
+    for (const e of enemies) {
       const dx = player.x - e.x;
       const dy = player.y - e.y;
       const d = Math.hypot(dx, dy) + 1e-6;
@@ -1191,82 +1073,75 @@ html = f"""
       e.x += e.vx * dt;
       e.y += e.vy * dt;
       e.hit = Math.max(0, e.hit - 3.8 * dt);
-    }}
+    }
 
-    // bullets vs enemies
-    for (let i = enemies.length - 1; i >= 0; i--) {{
+    for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
-      for (let j = bullets.length - 1; j >= 0; j--) {{
+      for (let j = bullets.length - 1; j >= 0; j--) {
         const b = bullets[j];
-        if (circleHit(e.x, e.y, e.r, b.x, b.y, b.r)) {{
+        if (circleHit(e.x, e.y, e.r, b.x, b.y, b.r)) {
           e.hp -= b.dmg;
           e.hit = 1.0;
           bullets.splice(j, 1);
 
           addParticles(b.x, b.y, pal.bullet, 10, 0.9);
 
-          if (e.hp <= 0) {{
+          if (e.hp <= 0) {
             enemies.splice(i, 1);
             addParticles(e.x, e.y, pal.enemy, 44, 1.35);
             state.shake = Math.min(22, state.shake + 10);
             state.score += (e.tier === 2 ? 460 : 240) + state.wave * 10;
             state.alpha += Math.floor((e.tier === 2 ? 10 : 6) * D.alphaMul);
-
             state.hitStop = Math.min(0.05, state.hitStop + 0.020);
-
-            if (state.rng() < 0.18) pickups.push({{ x: e.x, y: e.y, r: 12, kind: "alpha", t: 0 }});
-          }}
+            if (state.rng() < 0.18) pickups.push({ x: e.x, y: e.y, r: 12, kind: "alpha", t: 0 });
+          }
           break;
-        }}
-      }}
-    }}
+        }
+      }
+    }
 
-    // enemies vs player
-    for (let i = enemies.length - 1; i >= 0; i--) {{
+    for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
-      if (circleHit(e.x, e.y, e.r, player.x, player.y, player.r + 4)) {{
+      if (circleHit(e.x, e.y, e.r, player.x, player.y, player.r + 4)) {
         enemies.splice(i, 1);
-
         const dmgBase = (e.tier === 2 ? 22 : 14) + Math.floor(state.wave * 0.8);
         let remaining = Math.floor(dmgBase * D.dmgMul);
 
-        if (player.shield > 0) {{
+        if (player.shield > 0) {
           const sTake = Math.min(player.shield, remaining);
           player.shield -= sTake;
           remaining -= sTake;
-        }}
+        }
         player.hp -= remaining;
 
         addParticles(player.x, player.y, pal.enemy, 56, 1.5);
         state.shake = Math.min(28, state.shake + 16);
         state.heat = Math.min(240, state.heat + 40);
 
-        if (player.hp <= 0) {{
+        if (player.hp <= 0) {
           gameOver();
           break;
-        }}
-      }}
-    }}
+        }
+      }
+    }
 
-    // pickups
-    for (let i = pickups.length - 1; i >= 0; i--) {{
+    for (let i = pickups.length - 1; i >= 0; i--) {
       const p = pickups[i];
-      if (circleHit(p.x, p.y, p.r, player.x, player.y, player.r + 8)) {{
+      if (circleHit(p.x, p.y, p.r, player.x, player.y, player.r + 8)) {
         pickups.splice(i, 1);
-        if (p.kind === "alpha") {{
+        if (p.kind === "alpha") {
           state.alpha += Math.floor(12 * D.alphaMul);
           state.score += 190;
           addParticles(p.x, p.y, pal.alpha, 26, 1.2);
-        }} else {{
+        } else {
           player.hp = Math.min(player.maxHp, player.hp + 26);
           state.score += 120;
           addParticles(p.x, p.y, pal.neon1, 26, 1.2);
-        }}
-      }}
-    }}
+        }
+      }
+    }
 
-    // particles update
-    for (let i = particles.length - 1; i >= 0; i--) {{
+    for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx * dt;
       p.y += p.vy * dt;
@@ -1274,20 +1149,13 @@ html = f"""
       p.vy *= Math.pow(0.97, dt * 60);
       p.life -= dt;
       if (p.life <= 0) particles.splice(i, 1);
-    }}
+    }
 
-    // shake decay
     state.shake = Math.max(0, state.shake * Math.pow(0.88, dt * 60));
-
-    // score drift
     state.score += Math.floor(2 * dt * 60);
 
-    if (state.score > highScore) {{
-      highScore = state.score;
-      saveHigh(highScore);
-    }}
+    if (state.score > highScore) { highScore = state.score; saveHigh(highScore); }
 
-    // draw with shake
     drawBackground(palettes[state.regime], dt);
 
     const shMag = state.shake * Q.shakeMul;
@@ -1299,8 +1167,7 @@ html = f"""
     drawEntities(palettes[state.regime]);
     sctx.restore();
 
-    // intermission overlay indicator
-    if (state.intermission) {{
+    if (state.intermission) {
       sctx.save();
       sctx.globalAlpha = 0.92;
       sctx.fillStyle = "rgba(0,0,0,0.32)";
@@ -1313,55 +1180,21 @@ html = f"""
       sctx.textBaseline = "middle";
       sctx.fillText("INTERMISSION: BUY UPGRADES", W*0.5, 35);
       sctx.restore();
-    }}
+    }
 
     compositeBloom();
     updateHud(fps);
-  }}
-
-  // mouse
-  canvas.addEventListener("mousemove", (e) => {{
-    const p = canvasToLocal(e);
-    mouse.x = p.x; mouse.y = p.y;
-  }});
-  canvas.addEventListener("mousedown", (e) => {{
-    canvas.focus();
-    const p = canvasToLocal(e);
-    mouse.x = p.x; mouse.y = p.y;
-    mouse.down = true;
-    if (!state.running && !state.over) start();
-  }});
-  window.addEventListener("mouseup", () => mouse.down = false);
-
-  // touch
-  let lastTap = 0;
-  canvas.addEventListener("touchstart", (e) => {{
-    canvas.focus();
-    if (!state.running && !state.over) start();
-    const t0 = e.touches[0];
-    const r = canvas.getBoundingClientRect();
-    mouse.x = (t0.clientX - r.left) * (W / r.width);
-    mouse.y = (t0.clientY - r.top) * (H / r.height);
-    mouse.down = true;
-    const now = performance.now();
-    if (now - lastTap < 260) dash();
-    lastTap = now;
-  }}, {{passive:true}});
-  canvas.addEventListener("touchmove", (e) => {{
-    const t0 = e.touches[0];
-    const r = canvas.getBoundingClientRect();
-    mouse.x = (t0.clientX - r.left) * (W / r.width);
-    mouse.y = (t0.clientY - r.top) * (H / r.height);
-  }}, {{passive:true}});
-  canvas.addEventListener("touchend", () => mouse.down = false, {{passive:true}});
+  }
 
   hudR.textContent = `High: ${highScore}`;
   reset(CONFIG.seed || 42069);
   requestAnimationFrame(frame);
-}})();
+})();
 </script>
 </body>
 </html>
 """
+
+html = html.replace("__CONFIG_JSON__", json.dumps(cfg))
 
 components.html(html, height=860, scrolling=False)
