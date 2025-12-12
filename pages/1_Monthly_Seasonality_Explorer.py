@@ -2,7 +2,7 @@ import datetime as dt
 import io
 import time
 import warnings
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,13 +33,12 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This dashboard analyzes monthly and intra-month seasonality using trading-day aligned data.
+        Monthly and intra-month seasonality analysis.
 
-        • Returns are anchored to the prior month-end  
+        • Returns anchored to prior month-end  
         • First half = first ceil(N/2) trading days  
-        • Second half is shown as a *contribution* so totals reconcile exactly  
-        • Error bars show min/max historical outcomes  
-        • Intra-month curves show the average trading-day path with dispersion  
+        • Second half shown as contribution so totals reconcile  
+        • Error bars = historical min / max outcomes  
         """,
         unsafe_allow_html=True,
     )
@@ -47,18 +46,28 @@ with st.sidebar:
 # -------------------------- Data helpers -------------------------- #
 def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> Optional[pd.Series]:
     for n in range(retries):
-        df = yf.download(
-            symbol,
-            start=start,
-            end=end,
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-            group_by="column",
-        )
-        if not df.empty and "Close" in df and df["Close"].notna().any():
-            return df["Close"]
+        try:
+            df = yf.download(
+                symbol,
+                start=start,
+                end=end,
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+        except Exception:
+            df = None
+
+        if isinstance(df, pd.Series):
+            if df.notna().any():
+                return df.rename("Close")
+
+        if isinstance(df, pd.DataFrame):
+            if not df.empty and "Close" in df.columns and df["Close"].notna().any():
+                return df["Close"]
+
         time.sleep(2 * (n + 1))
+
     return None
 
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -85,7 +94,11 @@ def fetch_prices(symbol: str, start_year: int, end_year: int) -> Optional[pd.Ser
         try:
             fred_tk = FALLBACK_MAP[symbol]
             df_fred = pdr.DataReader(fred_tk, "fred", start_pad, end)
-            if fred_tk in df_fred and df_fred[fred_tk].notna().any():
+            if (
+                isinstance(df_fred, pd.DataFrame)
+                and fred_tk in df_fred.columns
+                and df_fred[fred_tk].notna().any()
+            ):
                 return df_fred[fred_tk].rename("Close")
         except Exception:
             pass
@@ -94,18 +107,7 @@ def fetch_prices(symbol: str, start_year: int, end_year: int) -> Optional[pd.Ser
 
 # -------------------------- Monthly decomposition -------------------------- #
 def intra_month_decomposition(prices: pd.Series) -> pd.DataFrame:
-    """
-    For each month:
-      prev_eom = previous month-end close
-      mid_idx  = ceil(N/2)
-      total    = total arithmetic return (%)
-      h1       = return to mid-point (%)
-      h2_contrib = total − h1  (pure contribution, not standalone return)
-    """
     rows = []
-
-    if prices.empty:
-        return pd.DataFrame()
 
     months = pd.period_range(
         prices.index.min().to_period("M"),
@@ -155,7 +157,6 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
         return pd.DataFrame(index=range(1, 13))
 
     df = df[(df["year"] >= start_year) & (df["year"] <= end_year)]
-
     grouped = df.groupby("month")
 
     stats = pd.DataFrame(index=range(1, 13))
@@ -170,24 +171,11 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
 
     return stats
 
-# -------------------------- Plot helpers -------------------------- #
-def _format_pct(x):
-    return f"{x:+.1f}%" if pd.notna(x) else "n/a"
-
-def _cell_colors(values):
-    pos, neg, neu = "#d9f2e4", "#f7d9d7", "#f2f2f2"
-    out = []
-    for row in values:
-        out.append(
-            [pos if v > 0 else neg if v < 0 else neu if pd.notna(v) else neu for v in row]
-        )
-    return out
-
-# -------------------------- Seasonality bar chart -------------------------- #
+# -------------------------- Plotting -------------------------- #
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     df = stats.dropna(subset=["mean_h1", "mean_h2_contrib", "mean_total"]).copy()
-    labels = df["label"].tolist()
 
+    labels = df["label"].tolist()
     h1 = df["mean_h1"].values
     h2 = df["mean_h2_contrib"].values
     tot = df["mean_total"].values
@@ -201,17 +189,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     gs = gridspec.GridSpec(2, 1, height_ratios=[3.2, 1.1], hspace=0.25)
     ax = fig.add_subplot(gs[0])
 
-    # First half
-    ax.bar(
-        x,
-        h1,
-        color=np.where(h1 >= 0, "#62c38e", "#e07a73"),
-        edgecolor="black",
-        linewidth=1,
-        zorder=2,
-    )
+    ax.bar(x, h1, color=np.where(h1 >= 0, "#62c38e", "#e07a73"), edgecolor="black")
 
-    # Second half contribution plotted correctly by sign
     for i in range(len(x)):
         base = h1[i] if np.sign(h1[i]) == np.sign(h2[i]) else 0.0
         ax.bar(
@@ -220,61 +199,30 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
             bottom=base,
             color="#bbbbbb",
             edgecolor="black",
-            linewidth=1,
             hatch="///",
-            zorder=2,
         )
 
     yerr = np.abs(np.vstack([tot - min_r, max_r - tot]))
-    ax.errorbar(x, tot, yerr=yerr, fmt="none", ecolor="gray", capsize=6, zorder=3)
+    ax.errorbar(x, tot, yerr=yerr, fmt="none", ecolor="gray", capsize=6)
 
     ax.set_xticks(x, labels)
-    ax.set_ylabel("Mean return (%)", weight="bold")
+    ax.set_ylabel("Mean return (%)")
     ax.yaxis.set_major_formatter(PercentFormatter(100))
-    ax.yaxis.set_major_locator(MaxNLocator(8))
     ax.grid(axis="y", linestyle="--", alpha=0.6)
 
     ax2 = ax.twinx()
-    ax2.scatter(x, hit, marker="D", color="black", zorder=4)
+    ax2.scatter(x, hit, marker="D", color="black")
     ax2.set_ylim(0, 100)
-    ax2.set_ylabel("Hit rate", weight="bold")
+    ax2.set_ylabel("Hit rate")
     ax2.yaxis.set_major_formatter(PercentFormatter(100))
 
-    legend = [
-        Patch(facecolor="#62c38e", edgecolor="black", label="First half"),
-        Patch(facecolor="#bbbbbb", edgecolor="black", hatch="///", label="Second half contribution"),
-    ]
-    ax.legend(handles=legend, frameon=False)
-
-    # Table
-    ax_tbl = fig.add_subplot(gs[1])
-    ax_tbl.axis("off")
-
-    rows = [
-        list(h1),
-        list(h2),
-        list(tot),
-    ]
-    txt = [[_format_pct(v) for v in r] for r in rows]
-    colors = _cell_colors(rows)
-
-    table = ax_tbl.table(
-        cellText=txt,
-        rowLabels=["1H %", "2H contrib %", "Total %"],
-        colLabels=labels,
-        loc="center",
-        cellLoc="center",
+    ax.legend(
+        handles=[
+            Patch(facecolor="#62c38e", edgecolor="black", label="First half"),
+            Patch(facecolor="#bbbbbb", edgecolor="black", hatch="///", label="Second half contribution"),
+        ],
+        frameon=False,
     )
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-
-    for (r, c), cell in table.get_celld().items():
-        if r == 0 or c == -1:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
-        else:
-            cell.set_facecolor(colors[r - 1][c])
-            cell.set_edgecolor("black")
 
     fig.suptitle(title, fontsize=17, weight="bold")
     fig.tight_layout(pad=1.5)
