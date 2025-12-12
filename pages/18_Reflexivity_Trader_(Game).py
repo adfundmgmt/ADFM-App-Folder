@@ -3,7 +3,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Neon Runout", layout="wide")
 st.title("Neon Runout")
-st.caption("Controls: A/D or ←/→ to change lanes. F or Click to fire. Space to multi-fire (cooldown). R to restart. Click the game to focus.")
+st.caption("Controls: A/D or ←/→ to change lanes. F or Click to fire. Space to burst fire (cooldown). R to restart. Click the game to focus.")
 
 html = r"""
 <!doctype html>
@@ -118,9 +118,6 @@ html = r"""
   const hudRight = document.getElementById("hudRight");
   const overlay = document.getElementById("overlay");
 
-  const DPR = Math.max(1, Math.min(2.0, window.devicePixelRatio || 1));
-
-  // Internal resolution stays stable. CSS scales it to container.
   const W = canvas.width;
   const H = canvas.height;
 
@@ -157,34 +154,36 @@ html = r"""
 
   const lanes = [-1, 0, 1];
   function laneX(lane, y) {
-    // perspective: width grows with y
     const p = clamp((y - track.topY) / (track.botY - track.topY), 0, 1);
     const w = lerp(track.topW, track.botW, p);
     const laneGap = w / 3;
     return W * 0.5 + lane * laneGap;
   }
 
-  // Visual palette
   const palette = {
-    bg1: "rgba(8,10,14,1)",
-    bg2: "rgba(4,5,7,1)",
-    neonA: "rgba(92,255,176,0.92)",
-    neonB: "rgba(120,170,255,0.85)",
-    neonC: "rgba(255,120,210,0.75)",
-    danger: "rgba(255,92,92,0.92)",
     coin: "rgba(255,212,92,0.95)",
-    line: "rgba(255,255,255,0.08)",
-    glow: "rgba(255,255,255,0.05)",
   };
 
-  // Game state
+  // ---------------------------
+  // SPEED TUNING (SLOWED DOWN)
+  // ---------------------------
+  const SPEED = {
+    baseSpeed: 4.6,           // was ~7.0
+    maxSpeedMult: 2.15,       // was 2.75
+    speedMultRamp: 0.00075,   // was 0.0014 (how fast it accelerates over time)
+    worldScrollMul: 1.32,     // was 1.85 (how fast bricks/coins move toward you)
+    dashScrollMul: 0.018,     // was ~0.028 (lane dashes scroll slower)
+    ballBaseV: 9.2,           // was ~10.8-12.0 (ball speed slower)
+    ballTargetBase: 10.8,     // clamp target speed lower on rebounds
+  };
+
   const state = {
     seed: 42069,
     rng: mulberry32(42069),
     running: false,
     gameOver: false,
     t: 0,
-    speed: 7.0,
+    speed: SPEED.baseSpeed,
     speedMult: 1.0,
     score: 0,
     coins: 0,
@@ -233,15 +232,15 @@ html = r"""
     state.running = false;
     state.gameOver = false;
     state.t = 0;
-    state.speed = 7.0;
+    state.speed = SPEED.baseSpeed;
     state.speedMult = 1.0;
     state.score = 0;
     state.coins = 0;
     state.combo = 0;
     state.comboTimer = 0;
     state.shake = 0;
-    state.spawnWallTimer = 10;
-    state.spawnCoinTimer = 20;
+    state.spawnWallTimer = 18;  // was 10, slower first wave
+    state.spawnCoinTimer = 26;  // was 20
     state.fireCooldown = 0;
     state.burstCooldown = 0;
     state.ballsOwned = 1;
@@ -284,9 +283,7 @@ html = r"""
     state.running = true;
     overlay.style.display = "none";
     canvas.focus();
-    if (balls.length === 0) {
-      spawnBall(true);
-    }
+    if (balls.length === 0) spawnBall(true);
   }
 
   function endGame() {
@@ -306,7 +303,7 @@ html = r"""
           Press <span class="kbd">R</span> to restart, or <span class="kbd">F</span> to play again.
         </p>
         <p class="sub" style="opacity:0.78; margin:0;">
-          Tip: you can dodge walls, but breaking the “full-width” walls early is cheaper than panic lane changes.
+          Tip: start breaking full-width walls early. Late lane changes are where runs die.
         </p>
       </div>
     `;
@@ -347,8 +344,9 @@ html = r"""
   function spawnBall(attach=false) {
     const y = player.y - player.h * 0.55;
     const x = laneX(player.lane, player.y);
-    const baseV = 10.8;
-    const ang = (-Math.PI/2) + (state.rng() * 0.38 - 0.19); // mostly up
+
+    const baseV = SPEED.ballBaseV;
+    const ang = (-Math.PI/2) + (state.rng() * 0.40 - 0.20);
     const vx = Math.cos(ang) * baseV;
     const vy = Math.sin(ang) * baseV;
 
@@ -365,15 +363,13 @@ html = r"""
 
   function fireBall(single=true) {
     if (!state.running) start();
-
     if (state.fireCooldown > 0) return;
 
-    // If we have attached balls, launch them. Else create a new ball if allowed.
     let launched = 0;
     for (const b of balls) {
       if (b.attached) {
-        const baseV = 12.0;
-        const ang = (-Math.PI/2) + (state.rng() * 0.32 - 0.16);
+        const baseV = SPEED.ballBaseV + 1.0;
+        const ang = (-Math.PI/2) + (state.rng() * 0.34 - 0.17);
         b.vx = Math.cos(ang) * baseV;
         b.vy = Math.sin(ang) * baseV;
         b.attached = false;
@@ -382,27 +378,21 @@ html = r"""
       }
     }
     if (launched === 0) {
-      // Add a new ball if we have capacity
       if (balls.length < state.ballsOwned) {
         spawnBall(false);
         launched++;
       }
     }
-
-    if (launched > 0) {
-      state.fireCooldown = 10;
-    }
+    if (launched > 0) state.fireCooldown = 12; // slightly slower refire cadence
   }
 
   function burstFire() {
     if (!state.running) start();
     if (state.burstCooldown > 0) return;
 
-    // temporary multi-fire
     const shots = Math.min(3, state.ballsOwned + 1);
     for (let i = 0; i < shots; i++) {
-      // attach -> launch for consistent starting position
-      const b = {
+      balls.push({
         x: laneX(player.lane, player.y),
         y: player.y - player.h * 0.55,
         vx: 0,
@@ -410,18 +400,16 @@ html = r"""
         r: 10,
         attached: true,
         trail: [],
-        ttl: 260, // expires
-      };
-      balls.push(b);
+        ttl: 300, // slightly longer but still temporary
+      });
     }
-    state.burstCooldown = 160;
+    state.burstCooldown = 190; // slower bursts
     fireBall(false);
   }
 
   function spawnCoinLine() {
     const y = track.topY - 60;
     const lane = lanes[Math.floor(state.rng() * lanes.length)];
-    // small arc line
     const count = 5 + Math.floor(state.rng() * 5);
     for (let i = 0; i < count; i++) {
       coins.push({
@@ -434,28 +422,19 @@ html = r"""
   }
 
   function spawnBrickWall() {
-    // A "wall" is a set of bricks placed across lanes with potential gaps.
-    // Some walls are full-width "must break or dodge perfectly" depending on pattern.
     const y = track.topY - 140;
-    const p = clamp((state.speedMult - 1.0) / 2.5, 0, 1);
+    const p = clamp((state.speedMult - 1.0) / 2.2, 0, 1);
 
-    // hp scales with time
-    const baseHp = 1 + Math.floor(p * 3.0) + (state.rng() < 0.20 ? 1 : 0);
+    const baseHp = 1 + Math.floor(p * 3.0) + (state.rng() < 0.18 ? 1 : 0);
 
-    // Pattern types:
-    // 0: three bricks, one per lane
-    // 1: two bricks (one gap)
-    // 2: full-width slab (3 bricks with higher hp)
-    // 3: staggered double row
     const roll = state.rng();
     let type = 0;
-    if (roll < 0.38) type = 0;
-    else if (roll < 0.68) type = 1;
-    else if (roll < 0.86) type = 2;
+    if (roll < 0.40) type = 0;
+    else if (roll < 0.72) type = 1;
+    else if (roll < 0.88) type = 2;
     else type = 3;
 
     const makeBrick = (lane, yy, hp, wMul=1.0) => {
-      // dimensions depend on perspective at that y
       const x = laneX(lane, yy);
       const laneW = (laneX(1, yy) - laneX(0, yy));
       const bw = laneW * 0.72 * wMul;
@@ -469,25 +448,18 @@ html = r"""
         hp,
         maxHp: hp,
         glow: 0,
-        kind: "brick",
       });
     };
 
     if (type === 0) {
       for (const lane of lanes) makeBrick(lane, y, baseHp);
     } else if (type === 1) {
-      // pick a gap lane
       const gap = lanes[Math.floor(state.rng() * 3)];
-      for (const lane of lanes) {
-        if (lane === gap) continue;
-        makeBrick(lane, y, baseHp);
-      }
+      for (const lane of lanes) if (lane !== gap) makeBrick(lane, y, baseHp);
     } else if (type === 2) {
-      // full width, slightly higher hp
       const hp = baseHp + 1;
       for (const lane of lanes) makeBrick(lane, y, hp);
     } else {
-      // staggered: two rows, first has a gap, second has different gap
       const gap1 = lanes[Math.floor(state.rng() * 3)];
       const gap2 = lanes[Math.floor(state.rng() * 3)];
       for (const lane of lanes) if (lane !== gap1) makeBrick(lane, y, baseHp);
@@ -504,7 +476,6 @@ html = r"""
   }
 
   function reflectBallOnRect(ball, rx, ry, rw, rh) {
-    // Find penetration axis by comparing distances to sides
     const cx = ball.x, cy = ball.y;
     const left = Math.abs(cx - rx);
     const right = Math.abs(cx - (rx + rw));
@@ -515,13 +486,11 @@ html = r"""
     if (m === left || m === right) ball.vx *= -1;
     else ball.vy *= -1;
 
-    // add a little randomness for feel
-    ball.vx += (state.rng() * 0.6 - 0.3);
-    ball.vy += (state.rng() * 0.4 - 0.2);
+    ball.vx += (state.rng() * 0.5 - 0.25);
+    ball.vy += (state.rng() * 0.35 - 0.175);
 
-    // clamp speed
     const sp = Math.hypot(ball.vx, ball.vy);
-    const target = 12.5 + state.speedMult * 1.1;
+    const target = SPEED.ballTargetBase + state.speedMult * 0.9;
     const k = target / Math.max(6.0, sp);
     ball.vx *= k;
     ball.vy *= k;
@@ -530,14 +499,12 @@ html = r"""
   function drawBackground() {
     ctx.clearRect(0, 0, W, H);
 
-    // Deep gradient
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, "rgba(10,12,18,1)");
     g.addColorStop(1, "rgba(5,6,9,1)");
     ctx.fillStyle = g;
     ctx.fillRect(0,0,W,H);
 
-    // Nebula glows
     const g1 = ctx.createRadialGradient(W*0.22, H*0.18, 20, W*0.22, H*0.18, 840);
     g1.addColorStop(0, "rgba(110,160,255,0.20)");
     g1.addColorStop(1, "rgba(0,0,0,0)");
@@ -550,9 +517,8 @@ html = r"""
     ctx.fillStyle = g2;
     ctx.fillRect(0,0,W,H);
 
-    // Stars
     for (const s of stars) {
-      s.y += s.s * (0.7 + state.speedMult * 0.35);
+      s.y += s.s * (0.45 + state.speedMult * 0.22); // slower star drift
       if (s.y > H) { s.y = -5; s.x = state.rng() * W; }
       ctx.beginPath();
       ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
@@ -560,10 +526,7 @@ html = r"""
       ctx.fill();
     }
 
-    // Track
     ctx.save();
-    ctx.globalAlpha = 1.0;
-
     const topY = track.topY;
     const botY = track.botY;
     const topW = track.topW;
@@ -578,7 +541,6 @@ html = r"""
     ctx.fillStyle = "rgba(255,255,255,0.035)";
     ctx.fill();
 
-    // Lane lines
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
     ctx.lineWidth = 2;
     for (let i = -1; i <= 1; i++) {
@@ -590,9 +552,8 @@ html = r"""
       ctx.stroke();
     }
 
-    // Motion dashes
     const dashCount = 28;
-    const scroll = (state.t * (0.028 * state.speedMult)) % 1.0;
+    const scroll = (state.t * (SPEED.dashScrollMul * state.speedMult)) % 1.0;
     for (let k = 0; k < dashCount; k++) {
       const p = k / dashCount;
       const yy = lerp(topY, botY, (p + scroll) % 1.0);
@@ -614,13 +575,11 @@ html = r"""
     ctx.shadowColor = "rgba(0,0,0,0.55)";
     ctx.shadowBlur = 18;
 
-    // neon glow under
     ctx.beginPath();
     ctx.ellipse(x, y + 18, 52, 12, 0, 0, Math.PI*2);
     ctx.fillStyle = "rgba(92,255,176,0.18)";
     ctx.fill();
 
-    // body
     const px = x - player.w/2;
     const py = y - player.h;
     roundRect(px, py, player.w, player.h, 22);
@@ -635,12 +594,10 @@ html = r"""
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // visor
     roundRect(px + 10, py + 14, player.w - 20, 18, 10);
     ctx.fillStyle = "rgba(0,0,0,0.30)";
     ctx.fill();
 
-    // accents
     ctx.globalAlpha = 0.9;
     ctx.fillStyle = "rgba(255,110,210,0.22)";
     ctx.fillRect(px + 12, py + player.h - 18, player.w - 24, 6);
@@ -650,7 +607,6 @@ html = r"""
 
   function brickColor(hp, maxHp) {
     const t = hp / Math.max(1, maxHp);
-    // high hp -> more purple/pink, low hp -> more blue/teal
     const a = 0.86;
     const r = Math.floor(lerp(110, 255, 1 - t));
     const g = Math.floor(lerp(170, 120, 1 - t));
@@ -683,7 +639,6 @@ html = r"""
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // hp text
       ctx.shadowBlur = 0;
       ctx.fillStyle = "rgba(10,12,18,0.68)";
       ctx.font = "bold 16px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
@@ -724,7 +679,6 @@ html = r"""
 
   function drawBalls() {
     for (const b of balls) {
-      // trail
       ctx.save();
       ctx.globalAlpha = 0.65;
       for (let i = 0; i < b.trail.length; i++) {
@@ -771,10 +725,7 @@ html = r"""
   function screenShake() {
     if (state.shake <= 0) return {dx: 0, dy: 0};
     const mag = state.shake;
-    return {
-      dx: (state.rng() * 2 - 1) * mag,
-      dy: (state.rng() * 2 - 1) * mag
-    };
+    return { dx: (state.rng() * 2 - 1) * mag, dy: (state.rng() * 2 - 1) * mag };
   }
 
   function tick() {
@@ -783,7 +734,6 @@ html = r"""
     const dt = 1.0;
     state.t += dt;
 
-    // cool downs
     state.fireCooldown = Math.max(0, state.fireCooldown - dt);
     state.burstCooldown = Math.max(0, state.burstCooldown - dt);
     player.invuln = Math.max(0, player.invuln - dt);
@@ -793,7 +743,6 @@ html = r"""
 
     drawBackground();
 
-    // When idle, still render scene
     if (!state.running) {
       ctx.save();
       const sh = screenShake();
@@ -808,20 +757,20 @@ html = r"""
       return;
     }
 
-    // Difficulty curve
-    state.speedMult = Math.min(2.75, 1.0 + state.t * 0.0014);
+    // Slower acceleration curve
+    state.speedMult = Math.min(SPEED.maxSpeedMult, 1.0 + state.t * SPEED.speedMultRamp);
     const speed = state.speed * state.speedMult;
 
-    // Spawning cadence
     state.spawnWallTimer -= dt;
     state.spawnCoinTimer -= dt;
 
-    const wallEvery = clamp(44 - state.speedMult * 14, 18, 40);
-    const coinEvery = clamp(60 - state.speedMult * 18, 26, 54);
+    // Spawn less frequently early, scale gently
+    const wallEvery = clamp(66 - state.speedMult * 16, 28, 62);  // was 44 - ...
+    const coinEvery = clamp(78 - state.speedMult * 18, 34, 70);  // was 60 - ...
 
     if (state.spawnWallTimer <= 0) {
       spawnBrickWall();
-      if (state.rng() < 0.16 + state.speedMult * 0.05) spawnBrickWall();
+      if (state.rng() < 0.10 + state.speedMult * 0.03) spawnBrickWall(); // fewer doubles
       state.spawnWallTimer = wallEvery;
     }
 
@@ -830,19 +779,16 @@ html = r"""
       state.spawnCoinTimer = coinEvery;
     }
 
-    // Smooth lane movement
-    player.lane = lerp(player.lane, player.laneTarget, 0.22);
+    player.lane = lerp(player.lane, player.laneTarget, 0.20);
 
-    // Move world down (runner illusion)
-    const worldDy = speed * 1.85;
+    // World scroll slowed
+    const worldDy = speed * SPEED.worldScrollMul;
     for (const br of bricks) br.y += worldDy;
     for (const c of coins) c.y += worldDy;
 
-    // Cull off-screen
     bricks = bricks.filter(br => br.y < H + 200 && br.hp > 0);
     coins = coins.filter(c => c.y < H + 140);
 
-    // Ball update
     const leftWallX = (y) => laneX(-1, y) - (laneX(0, y) - laneX(-1, y)) * 0.52;
     const rightWallX = (y) => laneX(1, y) + (laneX(1, y) - laneX(0, y)) * 0.52;
 
@@ -856,43 +802,38 @@ html = r"""
         b.x += b.vx;
         b.y += b.vy;
 
-        // trail
         b.trail.unshift({x: b.x, y: b.y});
         if (b.trail.length > 10) b.trail.pop();
 
-        // Bounce side walls based on local track width at that y
         const lx = leftWallX(b.y);
         const rx = rightWallX(b.y);
+
         if (b.x - b.r < lx) { b.x = lx + b.r; b.vx *= -1; addParticles(b.x, b.y, "rgba(120,170,255,0.30)", 6, 0.8); }
         if (b.x + b.r > rx) { b.x = rx - b.r; b.vx *= -1; addParticles(b.x, b.y, "rgba(120,170,255,0.30)", 6, 0.8); }
 
-        // Bounce top (keep ball in arena)
         if (b.y - b.r < track.topY - 120) {
           b.y = track.topY - 120 + b.r;
           b.vy *= -1;
         }
 
-        // Bounce off player (acts like paddle)
         const px = laneX(player.lane, player.y) - player.w/2;
         const py = player.y - player.h;
-        const rxp = px, ryp = py, rwp = player.w, rhp = player.h;
-        if (circleRectHit(b.x, b.y, b.r, rxp, ryp, rwp, rhp) && b.vy > 0) {
-          // angle based on horizontal offset
+        if (circleRectHit(b.x, b.y, b.r, px, py, player.w, player.h) && b.vy > 0) {
           const center = laneX(player.lane, player.y);
           const off = clamp((b.x - center) / (player.w * 0.55), -1, 1);
-          const sp = 13.0 + state.speedMult * 1.25;
+          const sp = (SPEED.ballTargetBase + 0.8) + state.speedMult * 0.9;
           b.vx = off * sp * 0.85;
           b.vy = -Math.sqrt(Math.max(1.0, sp*sp - b.vx*b.vx));
           state.combo = Math.min(99, state.combo + 1);
-          state.comboTimer = 70;
+          state.comboTimer = 80;
           addParticles(b.x, b.y, "rgba(92,255,176,0.35)", 10, 1.0);
         }
 
-        // Brick collisions
         for (const br of bricks) {
           if (br.hp <= 0) continue;
           const rxB = br.x - br.w/2;
           const ryB = br.y - br.h/2;
+
           if (circleRectHit(b.x, b.y, b.r, rxB, ryB, br.w, br.h)) {
             br.hp -= 1;
             br.glow = 1.0;
@@ -903,7 +844,6 @@ html = r"""
             state.shake = Math.min(10, state.shake + (pop ? 5 : 2));
             addParticles(br.x, br.y, pop ? "rgba(255,110,210,0.45)" : "rgba(120,170,255,0.35)", pop ? 22 : 12, pop ? 1.35 : 1.0);
 
-            // reward: occasional extra ball
             if (pop && state.rng() < 0.06 && state.ballsOwned < state.ballsMax) {
               state.ballsOwned += 1;
               state.score += 180;
@@ -913,25 +853,16 @@ html = r"""
           }
         }
 
-        // TTL and cull
         b.ttl -= dt;
-        if (b.ttl <= 0 || b.y > H + 200) {
-          balls.splice(i, 1);
-        }
+        if (b.ttl <= 0 || b.y > H + 200) balls.splice(i, 1);
       }
     }
 
-    // If we have fewer balls than owned, keep one attached as reload
     const attachedCount = balls.filter(b => b.attached).length;
-    const totalCount = balls.length;
-    if (totalCount < state.ballsOwned && attachedCount === 0) {
-      spawnBall(true);
-    }
+    if (balls.length < state.ballsOwned && attachedCount === 0) spawnBall(true);
 
-    // Brick glow decay
     for (const br of bricks) br.glow = Math.max(0, br.glow - 0.06);
 
-    // Coin pickup
     const plx = laneX(player.lane, player.y);
     const ply = player.y - 32;
     for (let i = coins.length - 1; i >= 0; i--) {
@@ -948,7 +879,6 @@ html = r"""
       }
     }
 
-    // Player collision with bricks (death)
     const pX = laneX(player.lane, player.y);
     const pxr = pX - player.w/2;
     const pyr = player.y - player.h;
@@ -959,7 +889,6 @@ html = r"""
       const ryB = br.y - br.h/2;
       const hit = (pxr < rxB + br.w && pxr + player.w > rxB && pyr < ryB + br.h && pyr + player.h > ryB);
       if (hit) {
-        // small mercy: if invuln, ignore; else die
         if (player.invuln <= 0) {
           state.shake = 14;
           addParticles(pX, player.y - 40, "rgba(255,92,92,0.55)", 44, 1.5);
@@ -969,7 +898,6 @@ html = r"""
       }
     }
 
-    // Particles
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx;
@@ -980,13 +908,11 @@ html = r"""
       if (p.life <= 0) particles.splice(i, 1);
     }
 
-    // score tick
-    state.score += Math.floor(1 + state.speedMult * 2);
+    // Score tick slightly reduced so pacing feels slower
+    state.score += Math.floor(1 + state.speedMult * 1.6);
 
-    // shake decay
     state.shake = Math.max(0, state.shake * 0.88);
 
-    // Render with shake
     ctx.save();
     const sh = screenShake();
     ctx.translate(sh.dx, sh.dy);
@@ -999,21 +925,12 @@ html = r"""
 
     ctx.restore();
 
-    // Update HUD and high score live
-    if (state.score > highScore) {
-      highScore = state.score;
-      saveHigh(highScore);
-    }
+    if (state.score > highScore) { highScore = state.score; saveHigh(highScore); }
     updateHud();
   }
 
-  // Controls
-  function moveLeft() {
-    player.laneTarget = clamp(player.laneTarget - 1, -1, 1);
-  }
-  function moveRight() {
-    player.laneTarget = clamp(player.laneTarget + 1, -1, 1);
-  }
+  function moveLeft() { player.laneTarget = clamp(player.laneTarget - 1, -1, 1); }
+  function moveRight() { player.laneTarget = clamp(player.laneTarget + 1, -1, 1); }
 
   function onKeyDown(e) {
     const k = e.key.toLowerCase();
@@ -1042,13 +959,8 @@ html = r"""
 
     if (!state.running) return;
 
-    if (k === "arrowleft" || k === "a") {
-      e.preventDefault();
-      moveLeft();
-    } else if (k === "arrowright" || k === "d") {
-      e.preventDefault();
-      moveRight();
-    }
+    if (k === "arrowleft" || k === "a") { e.preventDefault(); moveLeft(); }
+    else if (k === "arrowright" || k === "d") { e.preventDefault(); moveRight(); }
   }
 
   canvas.addEventListener("keydown", onKeyDown);
@@ -1060,7 +972,6 @@ html = r"""
     else fireBall(true);
   });
 
-  // Touch: swipe lane, tap to fire
   let tStartX = null, tStartY = null, tLastTap = 0;
   canvas.addEventListener("touchstart", (e) => {
     const t0 = e.touches[0];
@@ -1086,15 +997,11 @@ html = r"""
     }
 
     const now = performance.now();
-    if (now - tLastTap < 260) {
-      burstFire();
-    } else {
-      fireBall(true);
-    }
+    if (now - tLastTap < 260) burstFire();
+    else fireBall(true);
     tLastTap = now;
   }, {passive:true});
 
-  // Boot
   hudRight.textContent = `High: ${highScore}`;
   reset(42069);
   tick();
