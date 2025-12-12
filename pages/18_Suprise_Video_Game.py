@@ -12,6 +12,8 @@ with st.sidebar:
     quality = st.selectbox("Graphics", ["Ultra", "High", "Medium", "Low"], index=1)
     show_fps = st.toggle("Show FPS", value=False)
     reduce_motion = st.toggle("Reduce motion", value=False)
+    sound = st.toggle("Sound", value=True)
+    screen_shake = st.slider("Screen shake", 0.0, 1.0, 0.75, 0.05)
     seed = st.number_input("Seed", min_value=1, max_value=999999999, value=1337, step=1)
     reset_save = st.button("Reset save")
 
@@ -21,11 +23,13 @@ cfg = {
     "quality": quality,
     "show_fps": show_fps,
     "reduce_motion": reduce_motion,
+    "sound": sound,
+    "shake_scale": float(screen_shake),
     "seed": int(seed),
     "reset_save": bool(reset_save),
 }
 
-st.caption("WASD move | Click to target | Space to interact/loot | 1-4 abilities | I inventory | Q quest log | R respawn | P pause")
+st.caption("WASD move | Click to target | Space interact/loot | 1-4 abilities | I inventory | Q quest log | R respawn | P pause")
 
 html = r"""
 <!doctype html>
@@ -98,6 +102,28 @@ html = r"""
     .lvl { opacity: 0.82; font-size: 12.5px; }
     .barWrap { margin-top: 7px; height: 10px; border-radius: 999px; background: rgba(0,0,0,0.30); border: 1px solid rgba(255,255,255,0.10); overflow:hidden; }
     .bar { height: 100%; width: 50%; border-radius: 999px; }
+
+    .castWrap {
+      position:absolute;
+      left: 14px;
+      top: 150px;
+      width: 280px;
+      height: 44px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(8,10,14,0.70);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      padding: 10px 10px 8px 10px;
+      z-index: 11;
+      display:none;
+      pointer-events:none;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      color: rgba(245,245,250,0.92);
+    }
+    .castName { font-weight: 780; font-size: 13px; opacity:0.92; }
+    .castBar { margin-top: 7px; height: 10px; border-radius: 999px; background: rgba(0,0,0,0.30); border: 1px solid rgba(255,255,255,0.10); overflow:hidden; }
+    .castFill { height:100%; width:0%; border-radius:999px; background: linear-gradient(90deg, rgba(120,170,255,0.92), rgba(255,140,230,0.70)); }
 
     .xp {
       position:absolute;
@@ -177,8 +203,10 @@ html = r"""
       font-size: 12px;
       display:flex; flex-direction:column; justify-content:space-between;
       user-select:none;
+      cursor: pointer;
     }
     .invItem span { opacity:0.82; font-size: 11.5px; }
+    .invItem:hover { border-color: rgba(255,255,255,0.20); }
 
     .chat {
       position:absolute;
@@ -280,6 +308,11 @@ html = r"""
         </div>
       </div>
 
+      <div class="castWrap" id="castWrap">
+        <div class="castName" id="castName">Casting</div>
+        <div class="castBar"><div class="castFill" id="castFill"></div></div>
+      </div>
+
       <canvas id="game" width="1400" height="780" tabindex="0"></canvas>
 
       <div class="xp"><div class="xpFill" id="xpFill"></div></div>
@@ -296,8 +329,9 @@ html = r"""
 
       <div class="panel" id="invPanel">
         <div class="panelTitle">Inventory</div>
-        <div class="panelSub" id="invSub">Click loot on the ground with Space.</div>
+        <div class="panelSub" id="invSub">Click items to equip if possible.</div>
         <div class="invGrid" id="invGrid"></div>
+        <div class="panelSub" id="equipSub" style="margin-top:10px; opacity:0.86;"></div>
       </div>
 
       <div class="panel" id="questPanel">
@@ -309,8 +343,7 @@ html = r"""
         <div class="card">
           <div class="title">Mini Classic RPG</div>
           <p class="sub">
-            A WoW Classic inspired mini-zone built for Streamlit. Original assets and names, familiar loop.<br/>
-            Target mobs, manage cooldowns, loot, level, finish the quest, then the zone ramps.
+            A classic zone loop with casts, projectiles, windups, collision, and combat text.
           </p>
           <p class="sub">
             <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> move |
@@ -322,7 +355,7 @@ html = r"""
             <span class="kbd">P</span> pause |
             <span class="kbd">R</span> respawn
           </p>
-          <p class="sub" style="opacity:0.78; margin:0;">Click the game area, then press 1 to begin pulling.</p>
+          <p class="sub" style="opacity:0.78; margin:0;">Click the game area, then press Space to start.</p>
         </div>
       </div>
 
@@ -355,6 +388,10 @@ html = r"""
   const tHP    = document.getElementById("tHP");
   const tNote  = document.getElementById("tNote");
 
+  const castWrap = document.getElementById("castWrap");
+  const castName = document.getElementById("castName");
+  const castFill = document.getElementById("castFill");
+
   const xpFill = document.getElementById("xpFill");
 
   const a1n = document.getElementById("a1n");
@@ -371,12 +408,14 @@ html = r"""
   const questPanel = document.getElementById("questPanel");
   const invGrid = document.getElementById("invGrid");
   const questText = document.getElementById("questText");
+  const equipSub = document.getElementById("equipSub");
 
   const W = canvas.width;
   const H = canvas.height;
 
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const lerp  = (a, b, t) => a + (b - a) * t;
+  const TAU = Math.PI * 2;
 
   function mulberry32(a) {
     return function() {
@@ -390,10 +429,10 @@ html = r"""
   const Q = (() => {
     const rm = !!CONFIG.reduce_motion;
     const q = (CONFIG.quality || "High").toLowerCase();
-    if (q === "ultra") return { bloomScale: 0.5, blur1: rm ? 7 : 10, blur2: rm ? 14 : 20, grass: 900, trees: 44, shakeMul: rm ? 0.55 : 1.0 };
-    if (q === "high")  return { bloomScale: 0.6, blur1: rm ? 6 : 8,  blur2: rm ? 12 : 16, grass: 700, trees: 38, shakeMul: rm ? 0.55 : 1.0 };
-    if (q === "medium")return { bloomScale: 0.7, blur1: rm ? 5 : 6,  blur2: rm ? 10 : 12, grass: 520, trees: 30, shakeMul: rm ? 0.45 : 0.85 };
-    return               { bloomScale: 0.8, blur1: rm ? 4 : 5,  blur2: rm ? 8  : 10, grass: 360, trees: 22, shakeMul: rm ? 0.40 : 0.75 };
+    if (q === "ultra") return { bloomScale: 0.5, blur1: rm ? 7 : 10, blur2: rm ? 14 : 20, grass: 900, trees: 44, rocks: 26, shakeMul: rm ? 0.55 : 1.0 };
+    if (q === "high")  return { bloomScale: 0.6, blur1: rm ? 6 : 8,  blur2: rm ? 12 : 16, grass: 700, trees: 38, rocks: 22, shakeMul: rm ? 0.55 : 1.0 };
+    if (q === "medium")return { bloomScale: 0.7, blur1: rm ? 5 : 6,  blur2: rm ? 10 : 12, grass: 520, trees: 30, rocks: 18, shakeMul: rm ? 0.45 : 0.85 };
+    return               { bloomScale: 0.8, blur1: rm ? 4 : 5,  blur2: rm ? 8  : 10, grass: 360, trees: 22, rocks: 14, shakeMul: rm ? 0.40 : 0.75 };
   })();
 
   const D = (() => {
@@ -402,6 +441,8 @@ html = r"""
     if (d === "hard")   return { mobHp: 1.18, mobDmg: 1.18, mobSp: 1.08, xp: 0.95, gold: 0.95 };
     return               { mobHp: 1.00, mobDmg: 1.00, mobSp: 1.00, xp: 1.00, gold: 1.00 };
   })();
+
+  const SHAKE_SCALE = clamp((CONFIG.shake_scale ?? 0.75), 0, 1);
 
   const scene = document.createElement("canvas");
   scene.width = W; scene.height = H;
@@ -412,16 +453,38 @@ html = r"""
   bloom.height = Math.floor(H * Q.bloomScale);
   const bctx = bloom.getContext("2d");
 
-  const SAVE_KEY = "mini_classic_rpg_save_v1";
+  // Audio (WebAudio) gated behind first gesture
+  let audioCtx = null;
+  function audioInit() {
+    if (!CONFIG.sound) return;
+    if (audioCtx) return;
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { audioCtx = null; }
+  }
+  function beep(freq=220, dur=0.07, type="sine", gain=0.05) {
+    if (!CONFIG.sound) return;
+    if (!audioCtx) return;
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start(t0);
+    o.stop(t0 + dur + 0.01);
+  }
+
+  const SAVE_KEY = "mini_classic_rpg_save_v2";
 
   function loadSave() {
     try {
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) return null;
       return JSON.parse(raw);
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
   function saveGame() {
     try {
@@ -432,14 +495,13 @@ html = r"""
         xpNeed: player.xpNeed,
         inv: inventory.slice(0, 16),
         quest: { kills: quest.kills, done: quest.done },
-        seed: state.seed
+        seed: state.seed,
+        gear: gear
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
     } catch {}
   }
-  function clearSave() {
-    try { localStorage.removeItem(SAVE_KEY); } catch {}
-  }
+  function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch {} }
 
   const keys = new Set();
   let mouse = { x: W * 0.5, y: H * 0.5 };
@@ -469,27 +531,182 @@ html = r"""
     ping: 12
   };
 
+  const world = { w: 4200, h: 3600 };
+
+  function dist(ax, ay, bx, by) {
+    const dx = ax - bx, dy = ay - by;
+    return Math.hypot(dx, dy);
+  }
+
+  function clampWorld(x, y) {
+    return { x: clamp(x, 50, world.w - 50), y: clamp(y, 50, world.h - 50) };
+  }
+
+  // Decor + obstacles
+  let grass = [];
+  let trees = [];
+  let rocks = [];
+
+  function initDecor() {
+    grass = [];
+    trees = [];
+    rocks = [];
+
+    for (let i = 0; i < Q.grass; i++) {
+      grass.push({
+        x: state.rng() * world.w,
+        y: state.rng() * world.h,
+        s: 0.6 + state.rng() * 1.3,
+        a: 0.06 + state.rng() * 0.10
+      });
+    }
+
+    for (let i = 0; i < Q.trees; i++) {
+      trees.push({
+        x: 260 + state.rng() * (world.w - 520),
+        y: 260 + state.rng() * (world.h - 520),
+        r: 28 + state.rng() * 46,
+        hue: state.rng() < 0.65 ? 1 : 2
+      });
+    }
+
+    // Rocks as solid obstacles, keep away from campfire center
+    const cx = world.w * 0.5, cy = world.h * 0.5;
+    for (let i = 0; i < Q.rocks; i++) {
+      let tries = 0;
+      while (tries++ < 30) {
+        const r = 26 + state.rng() * 46;
+        const x = 240 + state.rng() * (world.w - 480);
+        const y = 240 + state.rng() * (world.h - 480);
+        if (dist(x, y, cx, cy) < 280) continue;
+        rocks.push({ x, y, r, t: state.rng() * TAU });
+        break;
+      }
+    }
+  }
+
+  function pushOutCircle(px, py, pr, ox, oy, or) {
+    const dx = px - ox;
+    const dy = py - oy;
+    const d = Math.hypot(dx, dy) + 1e-6;
+    const minD = pr + or;
+    if (d >= minD) return { x: px, y: py, hit: false };
+    const n = (minD - d) + 0.2;
+    return { x: px + (dx / d) * n, y: py + (dy / d) * n, hit: true };
+  }
+
+  function collideWithRocks(entity) {
+    let hit = false;
+    for (const rk of rocks) {
+      const out = pushOutCircle(entity.x, entity.y, entity.r, rk.x, rk.y, rk.r);
+      if (out.hit) { entity.x = out.x; entity.y = out.y; hit = true; }
+    }
+    return hit;
+  }
+
+  function addParticles(x, y, color, n=18, spread=1.0) {
+    for (let i = 0; i < n; i++) {
+      const a = state.rng() * TAU;
+      const sp = (40 + state.rng() * 260) * spread;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 0.35 + state.rng() * 0.35,
+        r: 1.2 + state.rng() * 3.2,
+        c: color
+      });
+    }
+  }
+
+  // Floating combat text
+  let floaters = [];
+  function floater(x, y, text, color="rgba(255,255,255,0.9)", big=false) {
+    floaters.push({
+      x, y, vy: -40 - state.rng()*30,
+      t: 0,
+      life: 0.9,
+      text,
+      color,
+      big
+    });
+  }
+
+  // Inventory + gear
+  let inventory = [];
+  const gear = { weapon: null, charm: null }; // simple two-slot gear to keep it lightweight
+
+  function invInit() {
+    inventory = [];
+    for (let i = 0; i < 16; i++) inventory.push(null);
+  }
+  function invCount() {
+    let n = 0;
+    for (const it of inventory) if (it) n++;
+    return n;
+  }
+  function invAdd(item) {
+    for (let i = 0; i < inventory.length; i++) {
+      if (!inventory[i]) { inventory[i] = item; return true; }
+    }
+    return false;
+  }
+
+  function effectiveStats() {
+    let apBonus = 0;
+    let armorBonus = 0;
+    if (gear.weapon?.ap) apBonus += gear.weapon.ap;
+    if (gear.charm?.ap) apBonus += gear.charm.ap;
+    if (gear.charm?.armor) armorBonus += gear.charm.armor;
+    return { apBonus, armorBonus };
+  }
+
+  function invRender() {
+    invGrid.innerHTML = "";
+    const stt = effectiveStats();
+    equipSub.textContent =
+      `Equipped: Weapon ${gear.weapon ? gear.weapon.name : "None"} | Charm ${gear.charm ? gear.charm.name : "None"} | AP +${stt.apBonus} | Armor +${Math.floor(stt.armorBonus*100)}%`;
+
+    for (let i = 0; i < 16; i++) {
+      const it = inventory[i];
+      const div = document.createElement("div");
+      div.className = "invItem";
+      if (!it) {
+        div.innerHTML = `<div>Empty</div><span>Slot ${i+1}</span>`;
+        div.onclick = null;
+      } else {
+        const tag = it.slot ? `${it.slot.toUpperCase()} ` : "";
+        const rarity = it.rare ? "Rare " : "";
+        div.innerHTML = `<div>${rarity}${tag}${it.name}</div><span>${it.slot ? "Click to equip" : "Value " + it.value + "g"}</span>`;
+        div.onclick = () => {
+          if (!it.slot) return;
+          if (it.slot === "weapon") gear.weapon = it;
+          if (it.slot === "charm") gear.charm = it;
+          chat(`Equipped <span style="color:rgba(120,170,255,0.92)">${it.name}</span>.`);
+          beep(330, 0.06, "triangle", 0.04);
+          invRender();
+          saveGame();
+        };
+      }
+      invGrid.appendChild(div);
+    }
+    document.getElementById("invSub").textContent = `Bags: ${invCount()}/16 | Space loots nearby | Campfire Space sells junk`;
+  }
+
+  // Player
   const player = {
     cls: (CONFIG.player_class || "Warrior"),
     name: "Adventurer",
-    x: 2200,
-    y: 2100,
-    vx: 0,
-    vy: 0,
+    x: 2200, y: 2100,
+    vx: 0, vy: 0,
     r: 18,
 
     lvl: 1,
     xp: 0,
     xpNeed: 120,
 
-    hp: 100,
-    hpMax: 100,
-
-    mp: 60,
-    mpMax: 60,
-
-    ap: 10,
-    sp: 10,
+    hp: 100, hpMax: 100,
+    mp: 60, mpMax: 60,
 
     armor: 0.10,
 
@@ -500,7 +717,11 @@ html = r"""
 
     targetId: null,
 
-    a1: 0, a2: 0, a3: 0, a4: 0
+    a1: 0, a2: 0, a3: 0, a4: 0,
+
+    // casting
+    casting: null, // { slot, t, dur, name, color }
+    castSlowMul: 1.0
   };
 
   const quest = {
@@ -514,84 +735,31 @@ html = r"""
 
   const abilitiesByClass = {
     Warrior: [
-      { key:"1", name:"Strike", cd: 3.5, cost: 0,  dmg: 22, type:"melee", color:"rgba(255,140,230,0.90)" },
-      { key:"2", name:"Sunder", cd: 8.0, cost: 0,  dmg: 14, type:"melee", debuff:"armor", color:"rgba(120,170,255,0.90)" },
-      { key:"3", name:"Shout",  cd: 20,  cost: 0,  buff:"armor", color:"rgba(92,255,176,0.90)" },
-      { key:"4", name:"Charge", cd: 14,  cost: 0,  dash:true, dmg: 10, type:"melee", color:"rgba(255,212,92,0.92)" }
+      { key:"1", name:"Strike", cd: 3.5, cost: 0,  dmg: 22, type:"melee", cast: 0.0, color:"rgba(255,140,230,0.90)" },
+      { key:"2", name:"Sunder", cd: 8.0, cost: 0,  dmg: 14, type:"melee", cast: 0.0, debuff:"armor", color:"rgba(120,170,255,0.90)" },
+      { key:"3", name:"Shout",  cd: 20,  cost: 0,  dmg: 0,  type:"buff",  cast: 0.0, buff:"armor", color:"rgba(92,255,176,0.90)" },
+      { key:"4", name:"Charge", cd: 14,  cost: 0,  dmg: 10, type:"melee", cast: 0.0, dash:true, color:"rgba(255,212,92,0.92)" }
     ],
     Mage: [
-      { key:"1", name:"Frostbolt", cd: 2.2, cost: 12, dmg: 20, type:"ranged", slow:true, color:"rgba(120,210,255,0.92)" },
-      { key:"2", name:"Fireball",  cd: 3.8, cost: 16, dmg: 28, type:"ranged", dot:true, color:"rgba(255,170,110,0.92)" },
-      { key:"3", name:"Nova",      cd: 16,  cost: 18, dmg: 14, aoe:true, root:true, color:"rgba(255,140,230,0.75)" },
-      { key:"4", name:"Blink",     cd: 12,  cost: 10, blink:true, color:"rgba(92,255,176,0.85)" }
+      { key:"1", name:"Frostbolt", cd: 2.2, cost: 12, dmg: 20, type:"ranged", cast: 0.65, slow:true, proj:true, color:"rgba(120,210,255,0.92)" },
+      { key:"2", name:"Fireball",  cd: 3.8, cost: 16, dmg: 28, type:"ranged", cast: 0.90, dot:true,  proj:true, color:"rgba(255,170,110,0.92)" },
+      { key:"3", name:"Nova",      cd: 16,  cost: 18, dmg: 14, type:"aoe",   cast: 0.10, aoe:true, root:true, color:"rgba(255,140,230,0.75)" },
+      { key:"4", name:"Blink",     cd: 12,  cost: 10, dmg: 0,  type:"move",  cast: 0.0,  blink:true, color:"rgba(92,255,176,0.85)" }
     ],
     Rogue: [
-      { key:"1", name:"Stab",    cd: 2.6, cost: 0,  dmg: 20, type:"melee", color:"rgba(255,140,230,0.90)" },
-      { key:"2", name:"Poison",  cd: 10,  cost: 0,  dmg: 10, type:"melee", dot:true, color:"rgba(92,255,176,0.88)" },
-      { key:"3", name:"Vanish",  cd: 22,  cost: 0,  stealth:true, color:"rgba(120,170,255,0.80)" },
-      { key:"4", name:"Dash",    cd: 14,  cost: 0,  speed:true, color:"rgba(255,212,92,0.92)" }
+      { key:"1", name:"Stab",    cd: 2.6, cost: 0,  dmg: 20, type:"melee", cast: 0.0, color:"rgba(255,140,230,0.90)" },
+      { key:"2", name:"Poison",  cd: 10,  cost: 0,  dmg: 10, type:"melee", cast: 0.0, dot:true, color:"rgba(92,255,176,0.88)" },
+      { key:"3", name:"Vanish",  cd: 22,  cost: 0,  dmg: 0,  type:"buff",  cast: 0.0, stealth:true, color:"rgba(120,170,255,0.80)" },
+      { key:"4", name:"Dash",    cd: 14,  cost: 0,  dmg: 0,  type:"move",  cast: 0.0, speed:true, color:"rgba(255,212,92,0.92)" }
     ]
   };
 
+  // Enemies, loot, particles, projectiles
   let mobs = [];
   let loot = [];
   let particles = [];
-  let grass = [];
-  let trees = [];
+  let projectiles = [];
   let chatLines = [];
-
-  const world = {
-    w: 4200,
-    h: 3600
-  };
-
-  function initDecor() {
-    grass = [];
-    trees = [];
-    for (let i = 0; i < Q.grass; i++) {
-      grass.push({
-        x: state.rng() * world.w,
-        y: state.rng() * world.h,
-        s: 0.6 + state.rng() * 1.3,
-        a: 0.06 + state.rng() * 0.10
-      });
-    }
-    for (let i = 0; i < Q.trees; i++) {
-      trees.push({
-        x: 260 + state.rng() * (world.w - 520),
-        y: 260 + state.rng() * (world.h - 520),
-        r: 28 + state.rng() * 46,
-        hue: state.rng() < 0.65 ? 1 : 2
-      });
-    }
-  }
-
-  function addParticles(x, y, color, n=18, spread=1.0) {
-    for (let i = 0; i < n; i++) {
-      const a = state.rng() * Math.PI * 2;
-      const sp = (40 + state.rng() * 260) * spread;
-      particles.push({
-        x, y,
-        vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp,
-        life: 0.35 + state.rng() * 0.35,
-        r: 1.2 + state.rng() * 3.2,
-        c: color
-      });
-    }
-  }
-
-  function dist(ax, ay, bx, by) {
-    const dx = ax - bx, dy = ay - by;
-    return Math.hypot(dx, dy);
-  }
-
-  function clampWorld(x, y) {
-    return {
-      x: clamp(x, 40, world.w - 40),
-      y: clamp(y, 40, world.h - 40)
-    };
-  }
 
   function newMob(kind, lvl, x, y) {
     const base = (kind === "Boar") ? { hp: 58, dmg: 8, sp: 105 } : { hp: 78, dmg: 10, sp: 95 };
@@ -616,7 +784,8 @@ html = r"""
       dot: 0,
       dotT: 0,
       armorDown: 0,
-      target: false
+      windup: 0, // attack windup timer
+      atkCd: 0,  // personal attack cooldown
     };
   }
 
@@ -625,43 +794,18 @@ html = r"""
     mobs = [];
     for (let i = 0; i < packs; i++) {
       const kind = (state.rng() < 0.82) ? "Boar" : "Wolf";
-      const lvl = clamp(1 + Math.floor(i/4) + Math.floor(state.rng() * 2), 1, 8);
+      const lvl = clamp(1 + Math.floor(i/4) + Math.floor(state.rng() * 2), 1, 9);
       const x = 400 + state.rng() * (world.w - 800);
       const y = 400 + state.rng() * (world.h - 800);
-      mobs.push(newMob(kind, lvl, x, y));
-    }
-  }
-
-  let inventory = [];
-  function invInit() {
-    inventory = [];
-    for (let i = 0; i < 16; i++) inventory.push(null);
-  }
-  function invAdd(item) {
-    for (let i = 0; i < inventory.length; i++) {
-      if (!inventory[i]) { inventory[i] = item; return true; }
-    }
-    return false;
-  }
-  function invCount() {
-    let n = 0;
-    for (const it of inventory) if (it) n++;
-    return n;
-  }
-  function invRender() {
-    invGrid.innerHTML = "";
-    for (let i = 0; i < 16; i++) {
-      const it = inventory[i];
-      const div = document.createElement("div");
-      div.className = "invItem";
-      if (!it) {
-        div.innerHTML = `<div>Empty</div><span>Slot ${i+1}</span>`;
-      } else {
-        div.innerHTML = `<div>${it.name}</div><span>Value ${it.value}g</span>`;
+      const m = newMob(kind, lvl, x, y);
+      // avoid spawning inside rocks
+      for (let k = 0; k < 12; k++) {
+        collideWithRocks(m);
+        m.x += (state.rng() - 0.5) * 10;
+        m.y += (state.rng() - 0.5) * 10;
       }
-      invGrid.appendChild(div);
+      mobs.push(m);
     }
-    document.getElementById("invSub").textContent = `Bags: ${invCount()}/16 | Space to loot nearby`;
   }
 
   function abilitiesSetup() {
@@ -672,13 +816,15 @@ html = r"""
     a4n.textContent = a[3].name;
 
     if (player.cls === "Warrior") { player.hpMax = 115; player.mpMax = 40; player.aaSpeed = 1.9; player.range = 62; player.armor = 0.16; }
-    if (player.cls === "Mage")    { player.hpMax = 90;  player.mpMax = 90; player.aaSpeed = 2.1; player.range = 210; player.armor = 0.06; }
+    if (player.cls === "Mage")    { player.hpMax = 90;  player.mpMax = 90; player.aaSpeed = 2.1; player.range = 260; player.armor = 0.06; }
     if (player.cls === "Rogue")   { player.hpMax = 100; player.mpMax = 55; player.aaSpeed = 1.6; player.range = 62; player.armor = 0.10; }
+
     player.hp = player.hpMax;
     player.mp = player.mpMax;
   }
 
   function uiUpdate(fps=0) {
+    const stt = effectiveStats();
     pName.textContent = `${player.name} (${player.cls})`;
     pLvl.textContent = `Lv ${player.lvl}`;
     pHP.style.width = `${clamp(player.hp / player.hpMax, 0, 1) * 100}%`;
@@ -687,20 +833,18 @@ html = r"""
     const xpT = clamp(player.xp / player.xpNeed, 0, 1) * 100;
     xpFill.style.width = `${xpT}%`;
 
-    pillL.textContent = `Zone: ${state.zone} | Gold: ${state.gold} | Bags: ${invCount()}/16`;
-    pillM.textContent = quest.done ? `Quest: ${quest.name} (Complete) | Return for reward` : `Quest: ${quest.name} (${quest.kills}/${quest.need})`;
+    pillL.textContent = `Zone: ${state.zone} | Gold: ${state.gold} | Bags: ${invCount()}/16 | AP +${stt.apBonus}`;
+    pillM.textContent = quest.done ? `Quest: ${quest.name} (Complete) | Return` : `Quest: ${quest.name} (${quest.kills}/${quest.need})`;
     const extra = CONFIG.show_fps ? ` | FPS ${fps.toFixed(0)}` : "";
     pillR.textContent = `Ping: ${state.ping}ms${extra}`;
 
     const a = abilitiesByClass[player.cls];
-
     const cds = [
       { el: a1cd, v: player.a1, max: a[0].cd },
       { el: a2cd, v: player.a2, max: a[1].cd },
       { el: a3cd, v: player.a3, max: a[2].cd },
       { el: a4cd, v: player.a4, max: a[3].cd }
     ];
-
     for (const c of cds) {
       const t = clamp(c.v / c.max, 0, 1);
       c.el.style.transform = `translateY(${t * 100}%)`;
@@ -715,7 +859,7 @@ html = r"""
         tLvl.textContent = `Lv ${m.lvl}`;
         tHP.style.width = `${clamp(m.hp / m.hpMax, 0, 1) * 100}%`;
         const d = dist(player.x, player.y, m.x, m.y);
-        tNote.textContent = d <= player.range ? "In range. Fight." : "Out of range. Move closer.";
+        tNote.textContent = d <= player.range ? (m.windup > 0 ? "Enemy winding up..." : "In range. Fight.") : "Out of range. Move closer.";
       } else {
         tFrame.style.display = "none";
       }
@@ -723,9 +867,18 @@ html = r"""
       tFrame.style.display = "none";
     }
 
+    if (player.casting) {
+      castWrap.style.display = "block";
+      castName.textContent = player.casting.name;
+      castFill.style.width = `${clamp(player.casting.t / player.casting.dur, 0, 1) * 100}%`;
+    } else {
+      castWrap.style.display = "none";
+      castFill.style.width = "0%";
+    }
+
     questText.textContent = quest.done
-      ? `Return to the campfire (center of zone) to claim ${quest.rewardGold}g and ${quest.rewardXP} XP.`
-      : `Kill ${quest.need} boars in Greenhollow. You have ${quest.kills}/${quest.need}.`;
+      ? `Return to the campfire to claim ${quest.rewardGold}g and ${quest.rewardXP} XP.`
+      : `Kill ${quest.need} boars. You have ${quest.kills}/${quest.need}.`;
   }
 
   function levelUp() {
@@ -740,7 +893,10 @@ html = r"""
 
     chat(`<span style="color:rgba(92,255,176,0.92)">DING</span> You reached level ${player.lvl}.`);
     addParticles(player.x, player.y, "rgba(92,255,176,0.92)", 70, 1.4);
+    floater(player.x, player.y - 30, `Level ${player.lvl}`, "rgba(92,255,176,0.92)", true);
     state.shake = Math.min(18, state.shake + 10);
+    beep(660, 0.07, "sine", 0.05);
+    beep(880, 0.06, "triangle", 0.04);
   }
 
   function giveXP(n) {
@@ -755,6 +911,7 @@ html = r"""
       state.gold += quest.rewardGold;
       giveXP(quest.rewardXP);
       chat(`<span style="color:rgba(255,212,92,0.95)">Quest</span> Reward claimed. The zone stirs...`);
+      beep(520, 0.05, "square", 0.04);
       quest.rewardGold = Math.floor(quest.rewardGold * 1.18 + 12);
       quest.rewardXP = Math.floor(quest.rewardXP * 1.15 + 18);
       spawnPack();
@@ -773,15 +930,12 @@ html = r"""
     ];
 
     let it = items[Math.floor(state.rng() * items.length)];
-    if (roll > 0.92) it = { name: "Green Charm", value: 12 };
 
-    loot.push({
-      x: m.x,
-      y: m.y,
-      r: 14,
-      item: it,
-      t: state.rng() * Math.PI * 2
-    });
+    // rare gear drops
+    if (roll > 0.94) it = { name: "Apprentice Wand", slot: "weapon", ap: 3, rare: true };
+    if (roll > 0.975) it = { name: "Green Charm", slot: "charm", ap: 2, armor: 0.03, rare: true };
+
+    loot.push({ x: m.x, y: m.y, r: 14, item: it, t: state.rng() * TAU });
   }
 
   function lootNearby() {
@@ -793,9 +947,12 @@ html = r"""
           loot.splice(i, 1);
           chat(`Looted <span style="color:rgba(255,212,92,0.95)">${l.item.name}</span>.`);
           addParticles(l.x, l.y, "rgba(255,212,92,0.90)", 26, 1.1);
+          floater(l.x, l.y - 10, `+${l.item.name}`, "rgba(255,212,92,0.95)");
+          beep(880, 0.04, "triangle", 0.03);
           picked = true;
         } else {
           chat(`<span style="color:rgba(255,110,110,0.95)">Bags full</span>.`);
+          beep(160, 0.06, "sawtooth", 0.03);
           break;
         }
       }
@@ -807,23 +964,76 @@ html = r"""
     let gold = 0;
     for (let i = 0; i < inventory.length; i++) {
       const it = inventory[i];
-      if (it) { gold += it.value; inventory[i] = null; }
+      if (it && !it.slot) { gold += it.value; inventory[i] = null; }
     }
     if (gold > 0) {
-      state.gold += Math.floor(gold * D.gold);
-      chat(`Sold junk for <span style="color:rgba(255,212,92,0.95)">${Math.floor(gold * D.gold)}g</span>.`);
+      const g = Math.floor(gold * D.gold);
+      state.gold += g;
+      chat(`Sold junk for <span style="color:rgba(255,212,92,0.95)">${g}g</span>.`);
+      beep(620, 0.05, "square", 0.03);
       invRender();
       saveGame();
     }
   }
 
-  function useAbility(slot) {
-    if (!state.running || state.paused) return;
-    const a = abilitiesByClass[player.cls][slot - 1];
+  // Combat tables
+  function hitChance(attLvl, defLvl) {
+    const diff = defLvl - attLvl;
+    if (diff <= 0) return 0.94;
+    return clamp(0.94 - diff * 0.06, 0.65, 0.94);
+  }
+  function critChance(attLvl, defLvl) {
+    const base = 0.10;
+    const diff = attLvl - defLvl;
+    return clamp(base + diff * 0.01, 0.05, 0.22);
+  }
 
-    if (player.gcd > 0) return;
+  // Projectiles
+  function spawnProjectile(fromX, fromY, toMob, speed, dmg, fx, color, label) {
+    const dx = toMob.x - fromX;
+    const dy = toMob.y - fromY;
+    const d = Math.hypot(dx, dy) + 1e-6;
+    const vx = (dx / d) * speed;
+    const vy = (dy / d) * speed;
+    projectiles.push({
+      x: fromX,
+      y: fromY,
+      vx, vy,
+      r: 7,
+      t: 0,
+      life: 1.6,
+      color,
+      dmg,
+      fx,
+      targetId: toMob.id,
+      label
+    });
+  }
+
+  // Abilities flow: cast -> resolve
+  function startCast(slot) {
+    const a = abilitiesByClass[player.cls][slot - 1];
+    if (a.cast <= 0) return false;
+    if (!player.targetId && (a.type === "ranged" || a.proj)) { chat("No target."); return false; }
+    const m = mobs.find(z => z.id === player.targetId);
+    if (!m) { chat("No target."); return false; }
+
+    const d = dist(player.x, player.y, m.x, m.y);
+    if (d > player.range) { chat("Out of range."); return false; }
+
+    player.casting = { slot, t: 0, dur: a.cast, name: a.name, color: a.color };
+    player.castSlowMul = 0.6;
+    castName.textContent = a.name;
+    castFill.style.width = "0%";
+    castWrap.style.display = "block";
+    chat(`Casting <span style="color:${a.color}">${a.name}</span>...`);
+    beep(280, 0.05, "sine", 0.02);
+    return true;
+  }
+
+  function resolveAbility(slot) {
+    const a = abilitiesByClass[player.cls][slot - 1];
     const cdKey = "a" + slot;
-    if (player[cdKey] > 0) return;
 
     if (a.cost && player.mp < a.cost) {
       chat(`<span style="color:rgba(255,110,110,0.95)">Not enough mana</span>.`);
@@ -839,8 +1049,10 @@ html = r"""
       player.y += Math.sin(ang) * 240;
       const p = clampWorld(player.x, player.y);
       player.x = p.x; player.y = p.y;
+      collideWithRocks(player);
       addParticles(player.x, player.y, a.color, 40, 1.2);
       state.shake = Math.min(16, state.shake + 8);
+      beep(520, 0.05, "triangle", 0.03);
       chat(`Cast <span style="color:${a.color}">${a.name}</span>.`);
       return;
     }
@@ -848,8 +1060,9 @@ html = r"""
     if (a.stealth) {
       player[cdKey] = a.cd;
       player.gcd = 0.35;
-      player.armor = Math.min(0.35, player.armor + 0.08);
+      stealthT = 5.5;
       addParticles(player.x, player.y, a.color, 36, 1.1);
+      beep(390, 0.05, "sine", 0.02);
       chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
       return;
     }
@@ -859,6 +1072,7 @@ html = r"""
       player.gcd = 0.35;
       speedBuffT = 5.0;
       addParticles(player.x, player.y, a.color, 36, 1.1);
+      beep(520, 0.05, "triangle", 0.03);
       chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
       return;
     }
@@ -868,6 +1082,7 @@ html = r"""
       player.gcd = 0.35;
       armorBuffT = 10.0;
       addParticles(player.x, player.y, a.color, 42, 1.15);
+      beep(310, 0.06, "square", 0.02);
       chat(`Cast <span style="color:${a.color}">${a.name}</span>.`);
       return;
     }
@@ -883,8 +1098,10 @@ html = r"""
       const d = Math.hypot(dx, dy) + 1e-6;
       player.x += (dx / d) * 200;
       player.y += (dy / d) * 200;
+      collideWithRocks(player);
       addParticles(player.x, player.y, a.color, 40, 1.25);
-      hitMob(m, a.dmg, { slow:false, root:false, dot:false, armorDown:false }, a.color);
+      hitMob(m, a.dmg, { slow:false, root:false, dot:false, armorDown:false }, a.color, a.name);
+      beep(240, 0.05, "sawtooth", 0.03);
       chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
       return;
     }
@@ -894,11 +1111,12 @@ html = r"""
       player[cdKey] = a.cd;
       player.gcd = 0.45;
       addParticles(player.x, player.y, a.color, 60, 1.4);
+      beep(420, 0.06, "triangle", 0.03);
 
       for (const m of mobs) {
         const d = dist(player.x, player.y, m.x, m.y);
         if (d < 170) {
-          hitMob(m, a.dmg, { slow:false, root: !!a.root, dot:false, armorDown:false }, a.color);
+          hitMob(m, a.dmg, { slow:false, root: !!a.root, dot:false, armorDown:false }, a.color, a.name);
         }
       }
       chat(`Cast <span style="color:${a.color}">${a.name}</span>.`);
@@ -910,27 +1128,86 @@ html = r"""
     if (!m) return;
 
     const d = dist(player.x, player.y, m.x, m.y);
-    if (d > player.range) {
-      chat("Out of range.");
-      return;
-    }
+    if (d > player.range) { chat("Out of range."); return; }
 
     player.mp -= (a.cost || 0);
     player[cdKey] = a.cd;
     player.gcd = 0.35;
 
-    hitMob(m, a.dmg, { slow: !!a.slow, root: !!a.root, dot: !!a.dot, armorDown: (a.debuff === "armor") }, a.color);
-    chat(`Used <span style="color:${a.color}">${a.name}</span>.`);
+    if (a.proj) {
+      spawnProjectile(player.x, player.y, m, 780, a.dmg, { slow: !!a.slow, root:false, dot: !!a.dot, armorDown:false }, a.color, a.name);
+      beep(a.name === "Fireball" ? 300 : 360, 0.06, "sine", 0.02);
+      return;
+    }
+
+    hitMob(m, a.dmg, { slow: !!a.slow, root:false, dot: !!a.dot, armorDown: (a.debuff === "armor") }, a.color, a.name);
+    beep(240, 0.05, "triangle", 0.02);
   }
 
-  function hitMob(m, dmg, fx, color) {
+  function useAbility(slot) {
+    if (!state.running || state.paused) return;
+    const a = abilitiesByClass[player.cls][slot - 1];
+
+    if (player.gcd > 0) return;
+    const cdKey = "a" + slot;
+    if (player[cdKey] > 0) return;
+
+    if (a.cost && player.mp < a.cost) {
+      chat(`<span style="color:rgba(255,110,110,0.95)">Not enough mana</span>.`);
+      return;
+    }
+
+    if (a.cast > 0) {
+      if (player.casting) return;
+      if (startCast(slot)) {
+        player[cdKey] = a.cd;
+        player.gcd = 0.35;
+      }
+      return;
+    }
+
+    resolveAbility(slot);
+  }
+
+  function applyDamageRoll(attLvl, defLvl, baseDmg) {
+    const hc = hitChance(attLvl, defLvl);
+    const roll = state.rng();
+    if (roll > hc) return { hit: false, crit: false, dmg: 0 };
+
+    const cc = critChance(attLvl, defLvl);
+    const isCrit = (state.rng() < cc);
+    const variance = 0.92 + state.rng() * 0.16;
+    let dmg = Math.floor(baseDmg * variance * (isCrit ? 1.75 : 1.0));
+    dmg = Math.max(1, dmg);
+    return { hit: true, crit: isCrit, dmg };
+  }
+
+  function hitMob(m, dmg, fx, color, label="Hit") {
     m.aggro = true;
     m.hit = 1.0;
+
+    const stt = effectiveStats();
+    const rolled = applyDamageRoll(player.lvl, m.lvl, dmg + stt.apBonus);
+    if (!rolled.hit) {
+      floater(m.x, m.y - 26, "MISS", "rgba(255,255,255,0.75)");
+      beep(140, 0.04, "square", 0.015);
+      return;
+    }
+
     const armorMul = (m.armorDown > 0) ? 1.12 : 1.0;
-    m.hp -= Math.floor(dmg * armorMul);
+    const finalDmg = Math.floor(rolled.dmg * armorMul);
+    m.hp -= finalDmg;
 
     addParticles(m.x, m.y, color, 20, 1.0);
-    state.shake = Math.min(16, state.shake + 6);
+    state.shake = Math.min(16, state.shake + (rolled.crit ? 9 : 6));
+
+    floater(
+      m.x + (state.rng() - 0.5) * 18,
+      m.y - 26,
+      `${finalDmg}${rolled.crit ? "!" : ""}`,
+      rolled.crit ? "rgba(255,212,92,0.95)" : "rgba(255,255,255,0.90)",
+      rolled.crit
+    );
 
     if (fx.slow) m.slow = Math.max(m.slow, 2.5);
     if (fx.root) m.root = Math.max(m.root, 1.4);
@@ -943,6 +1220,7 @@ html = r"""
   function mobDie(m) {
     mobs = mobs.filter(z => z.id !== m.id);
     addParticles(m.x, m.y, "rgba(255,110,110,0.80)", 52, 1.35);
+    beep(210, 0.05, "sawtooth", 0.02);
 
     giveXP(34 + m.lvl * 12);
 
@@ -952,15 +1230,16 @@ html = r"""
         quest.done = true;
         chat(`<span style="color:rgba(255,212,92,0.95)">Quest</span> Objective complete.`);
         addParticles(player.x, player.y, "rgba(255,212,92,0.90)", 70, 1.4);
+        beep(740, 0.06, "triangle", 0.03);
       }
     }
 
     dropLoot(m);
     if (player.targetId === m.id) player.targetId = null;
-
     saveGame();
   }
 
+  // Player AA: melee direct, mage as small projectile
   function autoAttack(dt) {
     if (!player.targetId) return;
     const m = mobs.find(z => z.id === player.targetId);
@@ -973,10 +1252,22 @@ html = r"""
     if (player.aaCd <= 0) {
       player.aaCd = player.aaSpeed;
       const base = (player.cls === "Mage") ? 10 : 14;
-      hitMob(m, base + Math.floor(player.lvl * 1.6), { slow:false, root:false, dot:false, armorDown:false }, "rgba(255,255,255,0.70)");
+      if (player.cls === "Mage") {
+        spawnProjectile(player.x, player.y, m, 900, base + Math.floor(player.lvl * 1.3), { slow:false, root:false, dot:false, armorDown:false }, "rgba(255,255,255,0.65)", "Wand");
+        beep(320, 0.03, "sine", 0.015);
+      } else {
+        hitMob(m, base + Math.floor(player.lvl * 1.6), { slow:false, root:false, dot:false, armorDown:false }, "rgba(255,255,255,0.70)", "AA");
+        beep(220, 0.03, "triangle", 0.015);
+      }
     }
   }
 
+  // Buff timers
+  let armorBuffT = 0;
+  let speedBuffT = 0;
+  let stealthT = 0;
+
+  // Mob AI with avoidance and windup
   function mobAI(dt) {
     for (const m of mobs) {
       m.hit = Math.max(0, m.hit - 3.2 * dt);
@@ -984,6 +1275,8 @@ html = r"""
       m.root = Math.max(0, m.root - dt);
       m.dot = Math.max(0, m.dot - dt);
       m.armorDown = Math.max(0, m.armorDown - dt);
+      m.windup = Math.max(0, m.windup - dt);
+      m.atkCd = Math.max(0, m.atkCd - dt);
 
       if (m.dot > 0) {
         m.dotT -= dt;
@@ -1008,8 +1301,22 @@ html = r"""
         tx = m.leashX; ty = m.leashY;
       }
 
-      const dx = tx - m.x;
-      const dy = ty - m.y;
+      // steer away from rocks
+      let rx = 0, ry = 0;
+      for (const rk of rocks) {
+        const d = dist(m.x, m.y, rk.x, rk.y);
+        const reach = rk.r + 70;
+        if (d < reach) {
+          const dx = m.x - rk.x;
+          const dy = m.y - rk.y;
+          const s = (reach - d) / reach;
+          rx += (dx / (d + 1e-6)) * s * 220;
+          ry += (dy / (d + 1e-6)) * s * 220;
+        }
+      }
+
+      const dx = tx - m.x + rx;
+      const dy = ty - m.y + ry;
       const d = Math.hypot(dx, dy) + 1e-6;
 
       const slowMul = (m.slow > 0) ? 0.62 : 1.0;
@@ -1022,25 +1329,35 @@ html = r"""
       m.x += m.vx * dt;
       m.y += m.vy * dt;
 
-      if (m.aggro && aggroD < 52) {
-        mobAttack(dt, m);
+      collideWithRocks(m);
+
+      // windup then hit
+      if (m.aggro && aggroD < 58 && m.atkCd <= 0 && m.windup <= 0) {
+        m.windup = 0.35;
+        m.atkCd = 1.25;
+      }
+      if (m.windup > 0 && m.windup <= 0.07 && m.aggro && aggroD < 58) {
+        mobHit(m);
       }
     }
   }
 
-  let mobHitCd = 0;
-  function mobAttack(dt, m) {
-    mobHitCd -= dt;
-    if (mobHitCd > 0) return;
-    mobHitCd = 1.25;
-
-    const armor = clamp(player.armor + (armorBuffT > 0 ? 0.06 : 0), 0, 0.45);
-    const dmg = Math.floor(m.dmg * (1 - armor));
+  function mobHit(m) {
+    const armor = clamp(player.armor + (armorBuffT > 0 ? 0.06 : 0) + (gear.charm?.armor || 0) + (stealthT > 0 ? 0.03 : 0), 0, 0.50);
+    const rolled = applyDamageRoll(m.lvl, player.lvl, m.dmg);
+    if (!rolled.hit) {
+      floater(player.x, player.y - 26, "DODGE", "rgba(120,170,255,0.9)");
+      beep(180, 0.03, "triangle", 0.015);
+      return;
+    }
+    const dmg = Math.floor(rolled.dmg * (1 - armor));
     player.hp -= dmg;
 
     addParticles(player.x, player.y, "rgba(255,110,110,0.72)", 26, 1.1);
-    state.shake = Math.min(20, state.shake + 10);
+    state.shake = Math.min(20, state.shake + (rolled.crit ? 12 : 10));
     chat(`${m.kind} hits you for <span style="color:rgba(255,110,110,0.95)">${dmg}</span>.`);
+    floater(player.x + (state.rng()-0.5)*18, player.y - 28, `-${dmg}`, "rgba(255,110,110,0.92)", rolled.crit);
+    beep(120, 0.05, "sawtooth", 0.02);
 
     if (player.hp <= 0) {
       player.hp = 0;
@@ -1050,9 +1367,10 @@ html = r"""
         <div class="card">
           <div class="title">You died</div>
           <p class="sub">Press <span class="kbd">R</span> to respawn at the campfire.</p>
-          <p class="sub" style="opacity:0.78; margin:0;">Tip: loot with Space, sell at campfire with Space, then turn in quest.</p>
+          <p class="sub" style="opacity:0.78; margin:0;">Tip: kite around rocks, cast Frostbolt, then loot and sell at campfire.</p>
         </div>
       `;
+      beep(90, 0.12, "square", 0.03);
       saveGame();
     }
   }
@@ -1063,16 +1381,23 @@ html = r"""
     player.hp = player.hpMax;
     player.mp = player.mpMax;
     player.targetId = null;
+    player.casting = null;
     state.running = true;
     overlay.style.display = "none";
     chat("You feel the warmth of the campfire.");
+    beep(520, 0.05, "sine", 0.02);
   }
 
+  // Rendering
   function drawWorld(dt) {
     sctx.clearRect(0,0,W,H);
 
     const camX = clamp(player.x - W * 0.5, 0, world.w - W);
     const camY = clamp(player.y - H * 0.5, 0, world.h - H);
+
+    // day-night tint
+    const day = 0.5 + 0.5 * Math.sin(state.t * 0.08);
+    const nightShade = clamp(0.10 + (1 - day) * 0.32, 0.10, 0.42);
 
     // background
     const g = sctx.createLinearGradient(0, 0, 0, H);
@@ -1081,7 +1406,7 @@ html = r"""
     sctx.fillStyle = g;
     sctx.fillRect(0,0,W,H);
 
-    // soft zone glows
+    // soft glows
     const rg1 = sctx.createRadialGradient(W*0.30, H*0.22, 50, W*0.30, H*0.22, 820);
     rg1.addColorStop(0, "rgba(92,255,176,0.10)");
     rg1.addColorStop(1, "rgba(0,0,0,0)");
@@ -1092,7 +1417,7 @@ html = r"""
     rg2.addColorStop(1, "rgba(0,0,0,0)");
     sctx.fillStyle = rg2; sctx.fillRect(0,0,W,H);
 
-    // ground tiles
+    // tiles
     const tile = 70;
     sctx.save();
     sctx.globalAlpha = 0.10;
@@ -1128,7 +1453,7 @@ html = r"""
       sctx.shadowColor = col;
       sctx.shadowBlur = 20;
       sctx.beginPath();
-      sctx.arc(x, y, tr.r, 0, Math.PI*2);
+      sctx.arc(x, y, tr.r, 0, TAU);
       sctx.fillStyle = "rgba(0,0,0,0.22)";
       sctx.fill();
       sctx.restore();
@@ -1137,8 +1462,31 @@ html = r"""
       sctx.shadowColor = col;
       sctx.shadowBlur = 24;
       sctx.beginPath();
-      sctx.arc(x, y, tr.r * 0.82, 0, Math.PI*2);
+      sctx.arc(x, y, tr.r * 0.82, 0, TAU);
       sctx.fillStyle = col;
+      sctx.fill();
+      sctx.restore();
+    }
+
+    // rocks (obstacles)
+    for (const rk of rocks) {
+      rk.t += dt * 0.4;
+      const x = rk.x - camX;
+      const y = rk.y - camY;
+      if (x < -140 || y < -140 || x > W + 140 || y > H + 140) continue;
+      sctx.save();
+      sctx.shadowColor = "rgba(255,255,255,0.08)";
+      sctx.shadowBlur = 18;
+      sctx.beginPath();
+      sctx.arc(x, y, rk.r, 0, TAU);
+      sctx.fillStyle = "rgba(0,0,0,0.32)";
+      sctx.fill();
+      sctx.restore();
+
+      sctx.save();
+      sctx.beginPath();
+      sctx.arc(x - rk.r*0.18, y - rk.r*0.12, rk.r*0.82, 0, TAU);
+      sctx.fillStyle = "rgba(255,255,255,0.05)";
       sctx.fill();
       sctx.restore();
     }
@@ -1150,7 +1498,7 @@ html = r"""
     sctx.shadowColor = "rgba(255,212,92,0.30)";
     sctx.shadowBlur = 26;
     sctx.beginPath();
-    sctx.arc(cx, cy, 26, 0, Math.PI*2);
+    sctx.arc(cx, cy, 26, 0, TAU);
     sctx.fillStyle = "rgba(255,212,92,0.18)";
     sctx.fill();
     sctx.restore();
@@ -1174,7 +1522,7 @@ html = r"""
       sctx.shadowColor = "rgba(255,212,92,0.70)";
       sctx.shadowBlur = 18;
       sctx.beginPath();
-      sctx.arc(x, y, l.r, 0, Math.PI*2);
+      sctx.arc(x, y, l.r, 0, TAU);
       sctx.fillStyle = "rgba(255,212,92,0.78)";
       sctx.fill();
       sctx.strokeStyle = "rgba(255,255,255,0.14)";
@@ -1194,7 +1542,7 @@ html = r"""
       sctx.shadowColor = hostile;
       sctx.shadowBlur = 18 + m.hit * 12;
       sctx.beginPath();
-      sctx.arc(x, y, m.r, 0, Math.PI*2);
+      sctx.arc(x, y, m.r, 0, TAU);
       const eg = sctx.createRadialGradient(x - 6, y - 8, 2, x, y, m.r * 2.2);
       eg.addColorStop(0, "rgba(255,255,255,0.70)");
       eg.addColorStop(0.35, hostile);
@@ -1203,11 +1551,24 @@ html = r"""
       sctx.fill();
       sctx.restore();
 
+      // windup ring
+      if (m.windup > 0) {
+        const t = clamp(m.windup / 0.35, 0, 1);
+        sctx.save();
+        sctx.globalAlpha = 0.55;
+        sctx.strokeStyle = "rgba(255,110,110,0.35)";
+        sctx.lineWidth = 3;
+        sctx.beginPath();
+        sctx.arc(x, y, m.r + 12, -Math.PI/2, -Math.PI/2 + TAU*(1 - t));
+        sctx.stroke();
+        sctx.restore();
+      }
+
       // hp ring
       const hpT = clamp(m.hp / m.hpMax, 0, 1);
       sctx.save();
       sctx.beginPath();
-      sctx.arc(x, y, m.r + 9, -Math.PI/2, -Math.PI/2 + Math.PI*2*hpT);
+      sctx.arc(x, y, m.r + 9, -Math.PI/2, -Math.PI/2 + TAU*hpT);
       sctx.strokeStyle = `rgba(255,255,255,${0.10 + 0.20*hpT})`;
       sctx.lineWidth = 2;
       sctx.stroke();
@@ -1220,10 +1581,25 @@ html = r"""
         sctx.strokeStyle = "rgba(255,255,255,0.25)";
         sctx.lineWidth = 2;
         sctx.beginPath();
-        sctx.arc(x, y, m.r + 16, 0, Math.PI*2);
+        sctx.arc(x, y, m.r + 16, 0, TAU);
         sctx.stroke();
         sctx.restore();
       }
+    }
+
+    // projectiles
+    for (const pr of projectiles) {
+      const x = pr.x - camX;
+      const y = pr.y - camY;
+      if (x < -60 || y < -60 || x > W + 60 || y > H + 60) continue;
+      sctx.save();
+      sctx.shadowColor = pr.color;
+      sctx.shadowBlur = 18;
+      sctx.beginPath();
+      sctx.arc(x, y, pr.r, 0, TAU);
+      sctx.fillStyle = pr.color;
+      sctx.fill();
+      sctx.restore();
     }
 
     // player
@@ -1231,13 +1607,13 @@ html = r"""
     const py = player.y - camY;
 
     sctx.save();
-    sctx.shadowColor = "rgba(92,255,176,0.70)";
+    sctx.shadowColor = stealthT > 0 ? "rgba(120,170,255,0.70)" : "rgba(92,255,176,0.70)";
     sctx.shadowBlur = 24;
     sctx.beginPath();
-    sctx.arc(px, py, player.r + 3, 0, Math.PI*2);
+    sctx.arc(px, py, player.r + 3, 0, TAU);
     const pg = sctx.createRadialGradient(px - 8, py - 10, 2, px, py, player.r * 2.6);
     pg.addColorStop(0, "rgba(255,255,255,0.92)");
-    pg.addColorStop(0.35, "rgba(92,255,176,0.86)");
+    pg.addColorStop(0.35, stealthT > 0 ? "rgba(120,170,255,0.86)" : "rgba(92,255,176,0.86)");
     pg.addColorStop(1, "rgba(0,0,0,0)");
     sctx.fillStyle = pg;
     sctx.fill();
@@ -1253,9 +1629,24 @@ html = r"""
       sctx.shadowColor = p.c;
       sctx.shadowBlur = 14;
       sctx.beginPath();
-      sctx.arc(x, y, p.r, 0, Math.PI*2);
+      sctx.arc(x, y, p.r, 0, TAU);
       sctx.fillStyle = p.c;
       sctx.fill();
+      sctx.restore();
+    }
+
+    // floaters (combat text)
+    for (const f of floaters) {
+      const x = f.x - camX;
+      const y = f.y - camY;
+      sctx.save();
+      const a = clamp(f.life / 0.9, 0, 1);
+      sctx.globalAlpha = a;
+      sctx.fillStyle = f.color;
+      sctx.font = (f.big ? "800 18px" : "800 14px") + " system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial";
+      sctx.textAlign = "center";
+      sctx.textBaseline = "middle";
+      sctx.fillText(f.text, x, y);
       sctx.restore();
     }
 
@@ -1276,18 +1667,15 @@ html = r"""
 
     let msg = "Click a mob to target. Use 1-4 abilities.";
     if (nearLoot) msg = "Press Space to loot nearby items.";
-    if (nearCamp) msg = "At campfire: Space sells junk. Turn in quest by standing here.";
+    if (nearCamp) msg = quest.done ? "Campfire: Space sells junk and turns in quest." : "Campfire: Space sells junk.";
     sctx.fillText(msg, W*0.5, H - 96);
     sctx.restore();
 
-    // camera reticle
+    // night shade overlay
     sctx.save();
-    sctx.globalAlpha = 0.55;
-    sctx.strokeStyle = "rgba(255,255,255,0.18)";
-    sctx.lineWidth = 1.5;
-    sctx.beginPath();
-    sctx.arc(W*0.5 + (mouse.x - W*0.5)*0.0, H*0.5 + (mouse.y - H*0.5)*0.0, 10, 0, Math.PI*2);
-    sctx.stroke();
+    sctx.globalAlpha = nightShade;
+    sctx.fillStyle = "rgba(0,0,0,1)";
+    sctx.fillRect(0,0,W,H);
     sctx.restore();
   }
 
@@ -1330,10 +1718,18 @@ html = r"""
     const sx = mm.width / world.w;
     const sy = mm.height / world.h;
 
+    // rocks
+    mctx.fillStyle = "rgba(255,255,255,0.08)";
+    for (const rk of rocks) {
+      mctx.beginPath();
+      mctx.arc(rk.x*sx, rk.y*sy, Math.max(2.0, rk.r*sx), 0, TAU);
+      mctx.fill();
+    }
+
     // camp
     mctx.fillStyle = "rgba(255,212,92,0.85)";
     mctx.beginPath();
-    mctx.arc(world.w*0.5*sx, world.h*0.5*sy, 4, 0, Math.PI*2);
+    mctx.arc(world.w*0.5*sx, world.h*0.5*sy, 4, 0, TAU);
     mctx.fill();
 
     // mobs
@@ -1351,11 +1747,16 @@ html = r"""
     // player
     mctx.fillStyle = "rgba(92,255,176,0.92)";
     mctx.beginPath();
-    mctx.arc(player.x*sx, player.y*sy, 3.5, 0, Math.PI*2);
+    mctx.arc(player.x*sx, player.y*sy, 3.5, 0, TAU);
     mctx.fill();
 
     mctx.restore();
   }
+
+  // Fixed-step simulation for consistent feel
+  let armorBuffT = 0;
+  let speedBuffT = 0;
+  let stealthT = 0;
 
   function tick(dt) {
     if (!state.running || state.paused) return;
@@ -1376,11 +1777,23 @@ html = r"""
     // buffs
     armorBuffT = Math.max(0, armorBuffT - dt);
     speedBuffT = Math.max(0, speedBuffT - dt);
+    stealthT = Math.max(0, stealthT - dt);
+
+    // casting
+    if (player.casting) {
+      player.casting.t += dt;
+      if (player.casting.t >= player.casting.dur) {
+        const slot = player.casting.slot;
+        player.casting = null;
+        player.castSlowMul = 1.0;
+        resolveAbility(slot);
+      }
+    }
 
     // movement
     const accel = 1900;
     const maxVBase = 410;
-    const speedMul = speedBuffT > 0 ? 1.35 : 1.0;
+    const speedMul = (speedBuffT > 0 ? 1.35 : 1.0) * (player.castSlowMul || 1.0);
     const maxV = maxVBase * speedMul;
     const friction = 0.86;
 
@@ -1405,9 +1818,31 @@ html = r"""
     const p = clampWorld(player.x, player.y);
     player.x = p.x; player.y = p.y;
 
+    collideWithRocks(player);
+
     // combat
     autoAttack(dt);
     mobAI(dt);
+
+    // projectiles
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const pr = projectiles[i];
+      pr.t += dt;
+      pr.life -= dt;
+      pr.x += pr.vx * dt;
+      pr.y += pr.vy * dt;
+
+      if (pr.life <= 0) { projectiles.splice(i, 1); continue; }
+
+      const m = mobs.find(z => z.id === pr.targetId);
+      if (!m) { projectiles.splice(i, 1); continue; }
+
+      if (dist(pr.x, pr.y, m.x, m.y) < (m.r + pr.r + 4)) {
+        hitMob(m, pr.dmg, pr.fx, pr.color, pr.label || "Spell");
+        addParticles(pr.x, pr.y, pr.color, 18, 1.0);
+        projectiles.splice(i, 1);
+      }
+    }
 
     // particles
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -1420,12 +1855,19 @@ html = r"""
       if (p.life <= 0) particles.splice(i, 1);
     }
 
-    // campfire interactions
+    // floaters
+    for (let i = floaters.length - 1; i >= 0; i--) {
+      const f = floaters[i];
+      f.t += dt;
+      f.y += f.vy * dt;
+      f.vy *= Math.pow(0.90, dt * 60);
+      f.life -= dt;
+      if (f.life <= 0) floaters.splice(i, 1);
+    }
+
+    // quest turn-in
     awardQuest();
   }
-
-  let armorBuffT = 0;
-  let speedBuffT = 0;
 
   function start() {
     state.running = true;
@@ -1440,6 +1882,10 @@ html = r"""
     player.xp = 0;
     player.xpNeed = 120;
     player.targetId = null;
+    player.casting = null;
+
+    gear.weapon = null;
+    gear.charm = null;
 
     abilitiesSetup();
     invInit();
@@ -1452,6 +1898,8 @@ html = r"""
 
     loot = [];
     particles = [];
+    projectiles = [];
+    floaters = [];
     chatLines = [];
     chatEl.innerHTML = "";
 
@@ -1462,7 +1910,8 @@ html = r"""
     player.y = world.h * 0.5;
 
     chat("Welcome to Greenhollow.");
-    chat("Pull boars. Loot with Space. Sell at campfire.");
+    chat("Rocks block movement. Kite around them.");
+    chat("Pull boars. Casts and windups make timing matter.");
     saveGame();
     uiUpdate();
   }
@@ -1480,6 +1929,11 @@ html = r"""
     invInit();
     if (Array.isArray(s.inv)) {
       for (let i = 0; i < 16; i++) inventory[i] = s.inv[i] ?? null;
+    }
+
+    if (s.gear) {
+      gear.weapon = s.gear.weapon ?? null;
+      gear.charm = s.gear.charm ?? null;
     }
 
     quest.kills = s.quest?.kills ?? 0;
@@ -1521,11 +1975,7 @@ html = r"""
       return;
     }
 
-    if (k === "r") {
-      e.preventDefault();
-      respawn();
-      return;
-    }
+    if (k === "r") { e.preventDefault(); respawn(); return; }
 
     if (k === "i") {
       e.preventDefault();
@@ -1546,9 +1996,14 @@ html = r"""
       e.preventDefault();
       if (!state.running) start();
       if (!state.running || state.paused) return;
-      // campfire sells
+
       const nearCamp = dist(player.x, player.y, world.w * 0.5, world.h * 0.5) < 120;
-      if (nearCamp) sellJunk();
+      if (nearCamp) {
+        sellJunk();
+        if (quest.done) awardQuest();
+        player.hp = player.hpMax;
+        player.mp = player.mpMax;
+      }
       lootNearby();
       return;
     }
@@ -1570,13 +2025,15 @@ html = r"""
   });
 
   canvas.addEventListener("mousedown", (e) => {
+    audioInit();
     canvas.focus();
     if (!state.running) start();
+
     const p = canvasToLocal(e);
     mouse.x = p.x;
     mouse.y = p.y;
 
-    // clicking targets nearest mob under cursor in screen space
+    // click target
     const camX = clamp(player.x - W * 0.5, 0, world.w - W);
     const camY = clamp(player.y - H * 0.5, 0, world.h - H);
 
@@ -1593,15 +2050,19 @@ html = r"""
     if (best) {
       player.targetId = best.id;
       chat(`Targeting ${best.kind} (Lv ${best.lvl}).`);
+      beep(260, 0.03, "triangle", 0.015);
     } else {
       player.targetId = null;
     }
   });
 
-  // Main loop
+  // Main loop with fixed timestep
   let last = performance.now();
   let fps = 60;
   let fpsAcc = 0, fpsN = 0, fpsT = 0;
+
+  let acc = 0;
+  const STEP = 1/120;
 
   function frame(now) {
     requestAnimationFrame(frame);
@@ -1609,23 +2070,44 @@ html = r"""
     let dtMs = now - last;
     last = now;
     dtMs = Math.min(dtMs, 50);
-    const dt = dtMs / 1000.0;
 
     fpsT += dtMs;
     fpsAcc += 1000.0 / Math.max(1, dtMs);
     fpsN += 1;
     if (fpsT > 350) { fps = fpsAcc / fpsN; fpsAcc = 0; fpsN = 0; fpsT = 0; }
 
-    tick(dt);
-    drawWorld(dt);
+    acc += dtMs / 1000.0;
+    acc = Math.min(acc, 0.25);
+
+    while (acc >= STEP) {
+      tick(STEP);
+      acc -= STEP;
+    }
+
+    // screen shake applied at composite stage
+    drawWorld(STEP);
+
+    // draw to scene, then composite with shake
+    // Copy scene to ctx with bloom and shake
+    const shakeAmt = (state.shake * Q.shakeMul * SHAKE_SCALE);
+    state.shake = Math.max(0, state.shake - 28 * STEP);
+
     compositeBloom();
+
+    if (shakeAmt > 0.01) {
+      const sx = (state.rng() - 0.5) * shakeAmt * 2.0;
+      const sy = (state.rng() - 0.5) * shakeAmt * 2.0;
+      const snap = ctx.getImageData(0,0,W,H);
+      ctx.clearRect(0,0,W,H);
+      ctx.putImageData(snap, sx, sy);
+    }
+
     minimapDraw();
     uiUpdate(fps);
   }
 
   // boot
   if (!tryLoad()) resetAll();
-
   overlay.style.display = "flex";
   requestAnimationFrame(frame);
 })();
