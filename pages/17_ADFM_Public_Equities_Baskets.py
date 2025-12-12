@@ -1,11 +1,3 @@
-# streamlit run adfm_basket_panels_by_category.py
-# ADFM Public Equities Baskets
-# - Expanded universes per basket (incl. ADRs where practical)
-# - No modes, no options to toggle universes
-# - Chunked yfinance downloads with validation
-# - Equal-weight basket construction
-# - No em dashes anywhere
-
 import streamlit as st
 import pandas as pd
 import numpy as np
