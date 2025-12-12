@@ -1,5 +1,3 @@
-can you make this look visually appealing and professional
-
 import streamlit as st
 import pandas as pd
 from pandas_datareader import data as pdr
