@@ -1,5 +1,5 @@
 # app.py
-# Reflexivity Trader: a market micro-sim game for Streamlit
+# Visual Reflexivity Arena (Streamlit financial game)
 # Run: streamlit run app.py
 
 import math
@@ -8,624 +8,531 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
-# ---------------------------
-# Page
-# ---------------------------
-st.set_page_config(page_title="Reflexivity Trader", layout="wide")
-st.title("Reflexivity Trader")
-st.caption("A reflexivity-driven trading game: macro regime, narrative, flows, and feedback loops.")
+# ----------------------------
+# Config
+# ----------------------------
+st.set_page_config(page_title="Reflexivity Arena", layout="wide")
 
-# ---------------------------
+ASSETS = ["SPX", "SEMIS", "BONDS", "GOLD", "BTC", "USD"]
+BASE_VOL_W = pd.Series({"SPX": 0.020, "SEMIS": 0.030, "BONDS": 0.015, "GOLD": 0.015, "BTC": 0.055, "USD": 0.010})
+
+# Factor betas: growth, inflation, liquidity, risk_aversion, usd_strength
+BETA = pd.DataFrame(
+    {
+        "growth":     [ 0.70,  1.10, -0.45,  0.10,  1.00,  0.10],
+        "inflation":  [ 0.10,  0.05, -0.55,  0.70,  0.20,  0.25],
+        "liquidity":  [ 0.85,  1.25,  0.15,  0.10,  1.35, -0.10],
+        "risk_av":    [-0.95, -1.35,  0.65,  0.25, -1.55,  0.55],
+        "usd":        [-0.20, -0.30,  0.10, -0.25, -0.70,  1.00],
+    },
+    index=ASSETS,
+)
+
+EVENTS = [
+    ("Fed hawkish surprise", {"growth": -0.25, "inflation": -0.05, "liquidity": -0.55, "risk_av": +0.55, "usd": +0.35},
+     "Rates reprice higher. Financial conditions tighten. Crowds cut beta."),
+    ("Fed dovish leak", {"growth": +0.15, "inflation":  0.00, "liquidity": +0.65, "risk_av": -0.55, "usd": -0.30},
+     "Liquidity impulse improves. Risk premia compress. Momentum re-ignites."),
+    ("Hot CPI", {"growth": -0.05, "inflation": +0.60, "liquidity": -0.25, "risk_av": +0.35, "usd": +0.20},
+     "Inflation risk returns. Duration gets hit. Cross-asset correlations jump."),
+    ("Growth scare", {"growth": -0.70, "inflation": -0.30, "liquidity": +0.10, "risk_av": +0.80, "usd": +0.05},
+     "Forward expectations crack. Defensive flows dominate. Leaders get sold."),
+    ("AI capex boom", {"growth": +0.55, "inflation": +0.10, "liquidity": +0.20, "risk_av": -0.30, "usd": -0.10},
+     "Narrative bids up beta with a SEMIS tilt. Price action pulls flows in."),
+    ("Geopolitical shock", {"growth": -0.30, "inflation": +0.30, "liquidity": -0.15, "risk_av": +0.95, "usd": +0.30},
+     "Risk off. Liquidity thins. Correlations go to one at the worst moment."),
+    ("Credit accident rumor", {"growth": -0.45, "inflation": -0.05, "liquidity": -0.40, "risk_av": +1.00, "usd": +0.20},
+     "Tails get priced. Spreads widen. Crowds stop believing the soft landing story."),
+    ("Disinflation resumes", {"growth": +0.10, "inflation": -0.65, "liquidity": +0.30, "risk_av": -0.45, "usd": -0.20},
+     "Rates pressure eases. Duration breathes. Risk premia compress again."),
+]
+
+DIFFICULTY = {
+    "Classic": {"event_prob": 0.65, "flow_impact": 0.10, "crowd_chase": 0.45, "tail_prob": 0.020},
+    "Hard":    {"event_prob": 0.75, "flow_impact": 0.13, "crowd_chase": 0.60, "tail_prob": 0.030},
+    "Chaos":   {"event_prob": 0.85, "flow_impact": 0.16, "crowd_chase": 0.75, "tail_prob": 0.045},
+}
+
+ACTIONS = {
+    "Risk On":  {"SPX": 0.70, "SEMIS": 0.70, "BTC": 0.25, "BONDS": -0.20, "GOLD": 0.05, "USD": -0.10},
+    "Risk Off": {"SPX": -0.25, "SEMIS": -0.30, "BTC": -0.10, "BONDS": 0.90, "GOLD": 0.35, "USD": 0.20},
+    "Barbell":  {"SPX": 0.35, "SEMIS": 0.20, "BTC": 0.10, "BONDS": 0.45, "GOLD": 0.20, "USD": 0.00},
+    "Fade Crowd": None,  # computed from crowd
+    "Flat":     {"SPX": 0.00, "SEMIS": 0.00, "BTC": 0.00, "BONDS": 0.00, "GOLD": 0.00, "USD": 0.00},
+}
+
+# ----------------------------
+# Styling (visual game UI)
+# ----------------------------
+st.markdown(
+    """
+    <style>
+      .appview-container { background: radial-gradient(1200px 600px at 20% 0%, rgba(40,80,180,0.22), transparent 60%),
+                                        radial-gradient(1000px 600px at 80% 20%, rgba(220,120,60,0.14), transparent 55%),
+                                        linear-gradient(180deg, rgba(10,12,18,1) 0%, rgba(8,10,14,1) 100%) !important; }
+      h1, h2, h3, p, div, span { color: rgba(245,245,250,0.92); }
+      .panel {
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(255,255,255,0.05);
+        border-radius: 18px;
+        padding: 14px 14px 12px 14px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      }
+      .ticker {
+        white-space: nowrap;
+        overflow: hidden;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(0,0,0,0.25);
+        border-radius: 14px;
+        padding: 10px 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 13px;
+      }
+      .ticker span {
+        display: inline-block;
+        padding-left: 100%;
+        animation: scroll 18s linear infinite;
+      }
+      @keyframes scroll {
+        0% { transform: translateX(0); }
+        100% { transform: translateX(-100%); }
+      }
+      .bigbtn button {
+        height: 58px !important;
+        border-radius: 16px !important;
+        font-weight: 700 !important;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        background: rgba(255,255,255,0.06) !important;
+      }
+      .bigbtn button:hover { background: rgba(255,255,255,0.10) !important; }
+      .danger { color: #ff6b6b; font-weight: 700; }
+      .good { color: #5CFFB0; font-weight: 700; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ----------------------------
 # Helpers
-# ---------------------------
+# ----------------------------
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
-def fmt_pct(x):
-    return f"{x*100:.2f}%"
-
-def fmt_money(x):
-    sign = "-" if x < 0 else ""
-    x = abs(x)
-    return f"{sign}${x:,.0f}"
+def normalize_to_gross(w: pd.Series, max_gross: float) -> pd.Series:
+    w = w.reindex(ASSETS).fillna(0.0).astype(float)
+    g = float(np.abs(w).sum())
+    if g <= max_gross + 1e-12 or g == 0:
+        return w
+    return w * (max_gross / g)
 
 def dd_series(nav: pd.Series) -> pd.Series:
     peak = nav.cummax()
     return nav / peak - 1.0
 
-def sharpe(returns: pd.Series, periods_per_year=52):
-    if returns.std(ddof=0) == 0:
-        return 0.0
-    return (returns.mean() / returns.std(ddof=0)) * math.sqrt(periods_per_year)
-
-def softmax(x):
-    x = np.asarray(x, dtype=float)
-    x = x - np.max(x)
-    ex = np.exp(x)
-    return ex / (ex.sum() + 1e-12)
-
-def normalize_to_gross(weights: pd.Series, max_gross: float) -> pd.Series:
-    gross = float(np.abs(weights).sum())
-    if gross <= max_gross + 1e-12:
-        return weights
-    if gross == 0:
-        return weights
-    return weights * (max_gross / gross)
-
-def make_equity_curve_chart(nav: pd.Series):
+def make_arena_chart(df_prices: pd.DataFrame, nav: pd.Series):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=nav.index, y=nav.values, mode="lines", name="NAV"))
+    for c in df_prices.columns:
+        fig.add_trace(go.Scatter(x=df_prices.index, y=df_prices[c], mode="lines", name=c))
     fig.update_layout(
-        height=320,
-        margin=dict(l=10, r=10, t=30, b=10),
+        height=440,
+        margin=dict(l=12, r=12, t=30, b=10),
         xaxis_title="Week",
-        yaxis_title="NAV",
-        hovermode="x unified",
-    )
-    return fig
-
-def make_drawdown_chart(nav: pd.Series):
-    dd = dd_series(nav)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=dd.index, y=dd.values, mode="lines", name="Drawdown"))
-    fig.update_layout(
-        height=260,
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis_title="Week",
-        yaxis_title="Drawdown",
-        hovermode="x unified",
-    )
-    return fig
-
-def make_prices_chart(prices: pd.DataFrame):
-    fig = go.Figure()
-    for c in prices.columns:
-        fig.add_trace(go.Scatter(x=prices.index, y=prices[c], mode="lines", name=c))
-    fig.update_layout(
-        height=360,
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis_title="Week",
-        yaxis_title="Price Index",
+        yaxis_title="Index",
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.03)",
+        font=dict(color="rgba(245,245,250,0.92)"),
     )
+
+    nav_norm = 100.0 * nav / nav.iloc[0]
+    fig.add_trace(go.Scatter(x=nav_norm.index, y=nav_norm.values, mode="lines", name="YOU (NAV)", line=dict(width=4)))
     return fig
 
-def make_positions_chart(weights: pd.Series):
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=weights.index.tolist(), y=weights.values.tolist(), name="Target weight"))
-    fig.update_layout(
-        height=260,
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis_title="Asset",
-        yaxis_title="Weight (x NAV)",
-    )
-    return fig
+def score_snapshot(nav: pd.Series, rets: pd.Series):
+    total = float(nav.iloc[-1] / nav.iloc[0] - 1.0)
+    dd = dd_series(nav)
+    max_dd = float(dd.min()) if len(dd) else 0.0
+    if rets.std(ddof=0) == 0:
+        sh = 0.0
+    else:
+        sh = float((rets.mean() / rets.std(ddof=0)) * math.sqrt(52)) if len(rets) > 6 else 0.0
+    score = (total * 100.0) + (sh * 7.0) + (max_dd * 160.0)
+    return total, max_dd, sh, score
 
-# ---------------------------
-# Game configuration
-# ---------------------------
-ASSETS = [
-    "US Equities",
-    "Semis",
-    "Long Bonds",
-    "Credit",
-    "Gold",
-    "Oil",
-    "USDJPY",
-    "BTC",
-]
-
-# Weekly vol assumptions (roughly)
-BASE_VOL = pd.Series(
-    {
-        "US Equities": 0.020,
-        "Semis": 0.030,
-        "Long Bonds": 0.015,
-        "Credit": 0.010,
-        "Gold": 0.015,
-        "Oil": 0.035,
-        "USDJPY": 0.010,
-        "BTC": 0.050,
-    }
-)
-
-# Macro betas (how each asset reacts to macro factors)
-# Factors: growth, inflation, liquidity, risk_aversion, usd_strength
-BETA = pd.DataFrame(
-    {
-        "growth":     [ 0.70,  1.10, -0.50,  0.40,  0.10,  0.60,  0.10,  1.00],
-        "inflation":  [ 0.10,  0.10, -0.60, -0.10,  0.70,  0.80,  0.20,  0.20],
-        "liquidity":  [ 0.80,  1.20,  0.20,  0.40,  0.10,  0.20, -0.10,  1.30],
-        "risk_av":    [-0.90, -1.30,  0.60, -0.60,  0.30, -0.80,  0.50, -1.40],
-        "usd":        [-0.20, -0.30,  0.10,  0.05, -0.30, -0.15,  1.00, -0.60],
-    },
-    index=ASSETS
-)
-
-# Narrative events library
-EVENTS = [
-    {
-        "name": "Fed: hawkish surprise",
-        "shock": {"growth": -0.3, "inflation": -0.1, "liquidity": -0.6, "risk_av": +0.5, "usd": +0.4},
-        "text": "Rates repriced higher. Financial conditions tighten. The crowd scrambles to de-risk."
-    },
-    {
-        "name": "Fed: dovish pivot tease",
-        "shock": {"growth": +0.2, "inflation":  0.0, "liquidity": +0.7, "risk_av": -0.5, "usd": -0.3},
-        "text": "Liquidity impulse improves. Risk premia compress. Momentum gets oxygen."
-    },
-    {
-        "name": "Hot CPI print",
-        "shock": {"growth": -0.1, "inflation": +0.6, "liquidity": -0.3, "risk_av": +0.4, "usd": +0.2},
-        "text": "Inflation narrative returns. Bonds wobble. Real rates matter again."
-    },
-    {
-        "name": "Growth scare",
-        "shock": {"growth": -0.7, "inflation": -0.3, "liquidity": +0.1, "risk_av": +0.8, "usd": +0.1},
-        "text": "Forward expectations crack. Defensive flows dominate. The crowd sells what worked."
-    },
-    {
-        "name": "AI capex boom headline",
-        "shock": {"growth": +0.5, "inflation": +0.1, "liquidity": +0.2, "risk_av": -0.3, "usd": -0.1},
-        "text": "Narrative bids up beta with a semi tilt. Reflexivity kicks in through price chasing."
-    },
-    {
-        "name": "Geopolitical shock",
-        "shock": {"growth": -0.3, "inflation": +0.3, "liquidity": -0.2, "risk_av": +0.9, "usd": +0.3},
-        "text": "Risk off. Correlations go to one. Liquidity thins at the worst time."
-    },
-    {
-        "name": "Credit accident rumor",
-        "shock": {"growth": -0.4, "inflation": -0.1, "liquidity": -0.4, "risk_av": +1.0, "usd": +0.2},
-        "text": "Tails get priced. Spreads widen. The crowd stops believing the soft landing story."
-    },
-    {
-        "name": "Disinflation resumes",
-        "shock": {"growth": +0.1, "inflation": -0.6, "liquidity": +0.3, "risk_av": -0.4, "usd": -0.2},
-        "text": "Rates pressure eases. Duration breathes. Risk premia compress again."
-    },
-]
-
-# Difficulty presets
-DIFFICULTY = {
-    "Classic": {"event_prob": 0.65, "crowd_alpha": 0.45, "flow_impact": 0.08, "crash_tail": 0.020},
-    "Hard":    {"event_prob": 0.75, "crowd_alpha": 0.60, "flow_impact": 0.11, "crash_tail": 0.030},
-    "Chaos":   {"event_prob": 0.85, "crowd_alpha": 0.75, "flow_impact": 0.14, "crash_tail": 0.045},
-}
-
-# ---------------------------
-# Sidebar controls
-# ---------------------------
-with st.sidebar:
-    st.subheader("Game settings")
-    colA, colB = st.columns(2)
-    with colA:
-        rounds = st.number_input("Weeks", min_value=12, max_value=60, value=26, step=1)
-        max_gross = st.slider("Max gross (x NAV)", 0.5, 4.0, 2.0, 0.1)
-    with colB:
-        tc_bps = st.slider("Transaction cost (bps per $ traded)", 0, 50, 8, 1)
-        difficulty = st.selectbox("Difficulty", list(DIFFICULTY.keys()), index=0)
-
-    seed = st.number_input("Seed", min_value=1, max_value=999999, value=42069, step=1)
-    st.caption("Tip: keep the seed stable to replay the same path and iterate your process.")
-
-    c1, c2 = st.columns(2)
-    reset = c1.button("Restart run", use_container_width=True)
-    fast_forward = c2.button("Auto-play to end", use_container_width=True)
-
-# ---------------------------
-# Session state init / reset
-# ---------------------------
-def init_game():
+# ----------------------------
+# Game state
+# ----------------------------
+def init_game(seed: int, weeks: int, max_gross: float, tc_bps: int, difficulty: str):
     rng = np.random.default_rng(int(seed))
-    start_nav = 1_000_000.0
+    prices = pd.DataFrame(index=[0], data={a: 100.0 for a in ASSETS})
+    nav = pd.Series(index=[0], data=[1_000_000.0], dtype=float)
+    rets = pd.Series(index=[0], data=[0.0], dtype=float)
 
-    prices = pd.DataFrame(index=[0], columns=ASSETS, data=100.0)
-    nav = pd.Series(index=[0], data=start_nav, dtype=float)
-    port_rets = pd.Series(index=[0], data=0.0, dtype=float)
-
-    # Player weights (x NAV)
-    w0 = pd.Series(index=ASSETS, data=0.0, dtype=float)
-
-    # Crowd positioning (x NAV equivalent), starts light risk-on
     crowd = pd.Series(index=ASSETS, data=0.0, dtype=float)
-    crowd["US Equities"] = 0.35
-    crowd["Semis"] = 0.25
-    crowd["Long Bonds"] = -0.05
+    crowd["SPX"] = 0.35
+    crowd["SEMIS"] = 0.25
     crowd["BTC"] = 0.10
+    crowd["BONDS"] = -0.05
     crowd = normalize_to_gross(crowd, max_gross=1.2)
 
-    # Macro state
-    macro = {
-        "growth": 0.15,
-        "inflation": 0.05,
-        "liquidity": 0.10,
-        "risk_av": 0.10,
-        "usd": 0.10,
-        "vix": 18.0,
-        "ust10y": 4.25,
-        "fc": -0.10,  # financial conditions proxy (lower is easier)
-    }
+    macro = {"growth": 0.15, "inflation": 0.05, "liquidity": 0.10, "risk_av": 0.10, "usd": 0.10, "vix": 18.0, "ust10y": 4.25}
 
-    log = []
-
-    st.session_state.game = {
+    st.session_state.G = {
         "rng": rng,
         "t": 0,
-        "rounds": int(rounds),
-        "start_nav": float(start_nav),
-        "nav": nav,
-        "port_rets": port_rets,
-        "prices": prices,
-        "weights": w0,
-        "prev_weights": w0.copy(),
-        "crowd": crowd,
-        "macro": macro,
-        "last_event": None,
-        "log": log,
+        "weeks": int(weeks),
         "max_gross": float(max_gross),
         "tc_bps": int(tc_bps),
         "difficulty": difficulty,
+        "prices": prices,
+        "nav": nav,
+        "rets": rets,
+        "crowd": crowd,
+        "macro": macro,
+        "last_event": None,
+        "last_event_text": None,
+        "last_asset_rets": pd.Series(index=ASSETS, data=0.0),
+        "last_action": "Flat",
+        "log": [],
     }
 
-if reset or "game" not in st.session_state:
-    init_game()
-
-G = st.session_state.game
-
-# If user changes settings mid-run, keep the current run stable and only apply max gross dynamically
-G["max_gross"] = float(max_gross)
-G["tc_bps"] = int(tc_bps)
-G["difficulty"] = difficulty
-
-# ---------------------------
-# Core simulation
-# ---------------------------
-def simulate_one_step(target_weights: pd.Series):
+def simulate_week(action_name: str):
+    G = st.session_state.G
     rng = G["rng"]
-    t = G["t"]
-    max_g = G["max_gross"]
-    tc = G["tc_bps"] / 10_000.0
     diff = DIFFICULTY[G["difficulty"]]
+    t = G["t"]
+    max_gross = G["max_gross"]
+    tc = G["tc_bps"] / 10_000.0
 
-    target_weights = target_weights.reindex(ASSETS).fillna(0.0).astype(float)
-    target_weights = normalize_to_gross(target_weights, max_gross=max_g)
+    # Build player weights
+    if action_name == "Fade Crowd":
+        w = -0.95 * G["crowd"].copy()
+        w["BONDS"] += 0.20
+    else:
+        w = pd.Series(ACTIONS[action_name], dtype=float)
+    w = normalize_to_gross(w, max_gross=max_gross)
 
-    prev_w = G["weights"].copy()
-
-    # Transaction costs based on turnover in gross notional terms
-    turnover = float(np.abs(target_weights - prev_w).sum())
+    # Simple transaction costs vs prior action weights (tracked in log)
+    prev_w = pd.Series(G["log"][-1]["weights"], index=ASSETS) if len(G["log"]) else pd.Series(index=ASSETS, data=0.0)
+    turnover = float(np.abs(w - prev_w).sum())
     tc_cost = turnover * tc
 
-    # Macro mean reversion with noise
+    # Macro evolves (mean reversion + noise)
     m = G["macro"].copy()
     for k in ["growth", "inflation", "liquidity", "risk_av", "usd"]:
-        m[k] = 0.85 * m[k] + 0.15 * float(rng.normal(0, 0.20))
+        m[k] = float(0.85 * m[k] + 0.15 * rng.normal(0, 0.20))
 
-    # Event draw
-    event = None
+    # Headline event
+    event_name, event_shock, event_text = (None, None, None)
     if rng.uniform() < diff["event_prob"]:
-        event = EVENTS[int(rng.integers(0, len(EVENTS)))]
-        for k, v in event["shock"].items():
+        e = EVENTS[int(rng.integers(0, len(EVENTS)))]
+        event_name, event_shock, event_text = e
+        for k, v in event_shock.items():
             m[k] = float(m[k] + v)
 
-    # Derive market observables
-    # VIX up with risk aversion, down with liquidity
-    m["vix"] = float(clamp(16.0 + 10.0 * m["risk_av"] - 5.0 * m["liquidity"] + rng.normal(0, 1.5), 10.0, 60.0))
-    # 10y yield rises with growth and inflation, falls with risk aversion
+    # Market observables
+    m["vix"] = float(clamp(16.0 + 10.0 * m["risk_av"] - 5.0 * m["liquidity"] + rng.normal(0, 1.5), 10.0, 70.0))
     m["ust10y"] = float(clamp(3.75 + 0.45 * m["growth"] + 0.55 * m["inflation"] - 0.30 * m["risk_av"] + rng.normal(0, 0.08), 0.5, 8.0))
-    # Financial conditions proxy: tighter with higher VIX and stronger USD, easier with liquidity
-    m["fc"] = float(clamp(0.05 * (m["vix"] - 18) + 0.8 * m["usd"] - 0.9 * m["liquidity"], -3.0, 3.0))
 
-    # Crowd behavior: chases last week winners but panics when risk av rises
+    # Crowd chases winners, then panics as risk_av rises
     prices = G["prices"]
     last_ret = pd.Series(index=ASSETS, data=0.0)
     if t > 0:
         last_ret = prices.loc[t, ASSETS] / prices.loc[t - 1, ASSETS] - 1.0
 
     crowd = G["crowd"].copy()
-    chase = softmax(last_ret.values / (last_ret.std() + 1e-6))
-    chase = pd.Series(chase, index=ASSETS)
+    std = float(last_ret.std()) if float(last_ret.std()) > 1e-9 else 1e-9
+    chase_signal = (last_ret / std).clip(-2, 2)
+    crowd_target = 0.75 * crowd + diff["crowd_chase"] * chase_signal
 
-    crowd_alpha = diff["crowd_alpha"]
     panic = clamp(m["risk_av"], 0.0, 2.0)
-    crowd_target = 0.7 * crowd + crowd_alpha * (chase - chase.mean())
-
-    # Panic rotation: crowd cuts beta and adds duration/gold/usd
-    crowd_target["US Equities"] -= 0.25 * panic
-    crowd_target["Semis"] -= 0.30 * panic
+    crowd_target["SPX"] -= 0.20 * panic
+    crowd_target["SEMIS"] -= 0.28 * panic
     crowd_target["BTC"] -= 0.30 * panic
-    crowd_target["Long Bonds"] += 0.20 * panic
-    crowd_target["Gold"] += 0.15 * panic
-    crowd_target["USDJPY"] += 0.12 * panic  # stronger USD vs JPY in risk off
+    crowd_target["BONDS"] += 0.22 * panic
+    crowd_target["GOLD"] += 0.12 * panic
+    crowd_target["USD"] += 0.14 * panic
     crowd_target = normalize_to_gross(crowd_target, max_gross=1.4)
 
-    # Reflexive flow impact: crowd changes push prices, which then feed back
-    flow = (crowd_target - crowd)
-    flow_impact = diff["flow_impact"]
-    flow_term = flow * flow_impact
+    # Reflexive flow term
+    flow = crowd_target - crowd
+    flow_term = flow * diff["flow_impact"]
 
-    # Base returns from macro factors + idiosyncratic vol
+    # Base returns from factors
     macro_vec = np.array([m["growth"], m["inflation"], m["liquidity"], m["risk_av"], m["usd"]], dtype=float)
-    base = (BETA.values @ macro_vec) * 0.010  # scale to weekly
+    base = (BETA.values @ macro_vec) * 0.010
     base = pd.Series(base, index=ASSETS)
 
-    eps = pd.Series(rng.normal(0, 1.0, size=len(ASSETS)), index=ASSETS)
-    vol = BASE_VOL.copy()
-
-    # Tail risk: occasional crash that hits crowded beta
+    # Tail shock
     crash = 0.0
-    if rng.uniform() < diff["crash_tail"]:
-        crash = float(abs(rng.normal(0.08, 0.03)))
-        base["US Equities"] -= 0.6 * crash
-        base["Semis"] -= 0.9 * crash
-        base["BTC"] -= 1.1 * crash
-        base["Credit"] -= 0.7 * crash
-        base["Oil"] -= 0.5 * crash
+    if rng.uniform() < diff["tail_prob"]:
+        crash = float(abs(rng.normal(0.09, 0.03)))
+        base["SPX"] -= 0.55 * crash
+        base["SEMIS"] -= 0.85 * crash
+        base["BTC"] -= 1.10 * crash
 
-    asset_rets = base + flow_term + eps * vol
+    eps = pd.Series(rng.normal(0, 1.0, size=len(ASSETS)), index=ASSETS)
+    asset_rets = base + flow_term + eps * BASE_VOL_W
 
-    # Keep USDJPY return direction intuitive: positive means USD up vs JPY
-    # Already handled via usd factor and panic rotation; no extra adjustment here.
+    # Portfolio return
+    port_ret = float((w * asset_rets).sum()) - tc_cost
+    new_nav = float(G["nav"].iloc[-1] * (1.0 + port_ret))
 
-    # Portfolio return and NAV update
-    gross = float(np.abs(target_weights).sum())
-    if gross > max_g + 1e-9:
-        target_weights = normalize_to_gross(target_weights, max_gross=max_g)
-
-    port_ret = float((target_weights * asset_rets).sum()) - tc_cost
-    new_nav = float(G["nav"].loc[t] * (1.0 + port_ret))
-
-    # Update state series
+    # Update time series
     new_t = t + 1
-    new_prices_row = (prices.loc[t, ASSETS] * (1.0 + asset_rets)).to_frame().T
-    new_prices_row.index = [new_t]
+    new_prices = (prices.loc[t, ASSETS] * (1.0 + asset_rets)).to_frame().T
+    new_prices.index = [new_t]
 
-    G["prices"] = pd.concat([prices, new_prices_row], axis=0)
+    G["prices"] = pd.concat([prices, new_prices], axis=0)
+    G["nav"] = pd.concat([G["nav"], pd.Series([new_nav], index=[new_t], dtype=float)], axis=0)
+    G["rets"] = pd.concat([G["rets"], pd.Series([port_ret], index=[new_t], dtype=float)], axis=0)
 
-    new_nav_s = pd.Series(index=[new_t], data=[new_nav], dtype=float)
-    new_ret_s = pd.Series(index=[new_t], data=[port_ret], dtype=float)
-    G["nav"] = pd.concat([G["nav"], new_nav_s], axis=0)
-    G["port_rets"] = pd.concat([G["port_rets"], new_ret_s], axis=0)
-
-    G["prev_weights"] = prev_w
-    G["weights"] = target_weights
     G["crowd"] = crowd_target
     G["macro"] = m
     G["t"] = new_t
-    G["last_event"] = event
+    G["last_event"] = event_name
+    G["last_event_text"] = event_text
+    G["last_asset_rets"] = asset_rets
+    G["last_action"] = action_name
 
-    # Log
     G["log"].append(
         {
             "week": new_t,
-            "event": None if event is None else event["name"],
-            "vix": m["vix"],
-            "ust10y": m["ust10y"],
-            "fc": m["fc"],
+            "action": action_name,
+            "event": event_name,
             "turnover": turnover,
             "tc_cost": tc_cost,
             "port_ret": port_ret,
             "nav": new_nav,
             "crash": crash,
-            **{f"w_{a}": float(target_weights[a]) for a in ASSETS},
-            **{f"r_{a}": float(asset_rets[a]) for a in ASSETS},
-            **{f"crowd_{a}": float(crowd_target[a]) for a in ASSETS},
+            "weights": {a: float(w[a]) for a in ASSETS},
+            "asset_rets": {a: float(asset_rets[a]) for a in ASSETS},
+            "macro": {k: float(m[k]) for k in m},
+            "crowd": {a: float(crowd_target[a]) for a in ASSETS},
         }
     )
 
-def score_run():
-    nav = G["nav"]
-    rets = G["port_rets"].iloc[1:] if len(G["port_rets"]) > 1 else G["port_rets"]
-    dd = dd_series(nav)
-    max_dd = float(dd.min()) if len(dd) else 0.0
-    sh = float(sharpe(rets)) if len(rets) > 5 else 0.0
-    total = float(nav.iloc[-1] / nav.iloc[0] - 1.0)
+# ----------------------------
+# Sidebar settings
+# ----------------------------
+with st.sidebar:
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
+    st.subheader("Run setup")
+    seed = st.number_input("Seed", min_value=1, max_value=999999, value=42069, step=1)
+    weeks = st.slider("Weeks", min_value=12, max_value=60, value=26, step=1)
+    difficulty = st.selectbox("Difficulty", list(DIFFICULTY.keys()), index=0)
+    max_gross = st.slider("Max gross (x NAV)", 0.5, 4.0, 2.0, 0.1)
+    tc_bps = st.slider("Transaction cost (bps per $ traded)", 0, 50, 8, 1)
+    colA, colB = st.columns(2)
+    new_run = colA.button("New run", use_container_width=True)
+    autoplay = colB.button("Auto-play", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    # Scoring: reward return and risk-adjusted behavior, penalize deep drawdowns
-    # Score is intentionally simple and gamey
-    score = (total * 100.0) + (sh * 6.0) + (max_dd * 140.0)
-    return {
-        "total_return": total,
-        "sharpe": sh,
-        "max_dd": max_dd,
-        "score": score,
-        "end_nav": float(nav.iloc[-1]),
-    }
+if new_run or "G" not in st.session_state:
+    init_game(seed=seed, weeks=weeks, max_gross=max_gross, tc_bps=tc_bps, difficulty=difficulty)
 
-# ---------------------------
-# Game header status
-# ---------------------------
+# Keep limits live without corrupting history
+st.session_state.G["max_gross"] = float(max_gross)
+st.session_state.G["tc_bps"] = int(tc_bps)
+st.session_state.G["difficulty"] = difficulty
+
+G = st.session_state.G
+
+# ----------------------------
+# Top status bar (visual)
+# ----------------------------
 t = G["t"]
-R = G["rounds"]
+wks = G["weeks"]
+nav_now = float(G["nav"].iloc[-1])
 
-left, mid, right = st.columns([1.1, 1.3, 1.2])
-with left:
-    st.subheader(f"Week {t} of {R}")
-    nav_now = float(G["nav"].iloc[-1])
-    st.metric("NAV", fmt_money(nav_now), None)
+rets_live = G["rets"].iloc[1:] if len(G["rets"]) > 1 else G["rets"]
+total, max_dd, sh, score = score_snapshot(G["nav"], rets_live)
 
-with mid:
-    m = G["macro"]
-    st.subheader("Macro tape")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("VIX", f"{m['vix']:.1f}")
-    c2.metric("UST 10Y", f"{m['ust10y']:.2f}%")
-    c3.metric("Fin conditions", f"{m['fc']:+.2f}")
+ticker_parts = []
+last = G["last_asset_rets"]
+for a in ASSETS:
+    r = float(last.get(a, 0.0))
+    tag = "good" if r >= 0 else "danger"
+    ticker_parts.append(f"{a} {r*100:+.2f}%")
 
-with right:
-    s = score_run()
-    st.subheader("Risk and score")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total", fmt_pct(s["total_return"]))
-    c2.metric("Max DD", fmt_pct(s["max_dd"]))
-    c3.metric("Score", f"{s['score']:.1f}")
+ticker = "   |   ".join(ticker_parts) if t > 0 else "Make a move. Pick an action. Advance the tape."
 
-# Event box
-event = G["last_event"]
-if event is None and t == 0:
-    st.info("You start flat. Set positions, submit, then see the tape update. Prices move with macro, news, and crowd flows.")
-elif event is None:
-    st.info("No headline this week. Tape drifts. Flows still matter.")
-else:
-    st.warning(f"{event['name']}: {event['text']}")
-
-# End conditions
-start_nav = G["start_nav"]
-if nav_now <= 0.55 * start_nav:
-    st.error("Margin call. NAV fell below the survival threshold. Restart and try a different process.")
-    st.stop()
-
-if t >= R:
-    st.success("Run complete.")
-    st.write("Final stats update live as you replay. If you want a version with levels, options, or a full macro dashboard, tell me what style you want.")
-    st.stop()
-
-# ---------------------------
-# Position input
-# ---------------------------
-st.markdown("### Your book")
-st.caption("Weights are in x NAV. Positive is long, negative is short. Gross leverage is the sum of absolute weights.")
-
-preset_col1, preset_col2, preset_col3, preset_col4 = st.columns(4)
-
-def apply_preset(name):
-    w = pd.Series(index=ASSETS, data=0.0, dtype=float)
-    if name == "Risk on":
-        w["US Equities"] = 0.60
-        w["Semis"] = 0.55
-        w["BTC"] = 0.25
-        w["Credit"] = 0.35
-        w["Long Bonds"] = -0.15
-        w["USDJPY"] = -0.10
-    if name == "Risk off":
-        w["Long Bonds"] = 0.75
-        w["Gold"] = 0.40
-        w["USDJPY"] = 0.25
-        w["Credit"] = -0.25
-        w["Semis"] = -0.35
-    if name == "Balanced":
-        w["US Equities"] = 0.35
-        w["Semis"] = 0.20
-        w["Long Bonds"] = 0.25
-        w["Gold"] = 0.15
-        w["Credit"] = 0.20
-        w["USDJPY"] = 0.05
-    if name == "Mean reversion":
-        # Fade what the crowd owns
-        crowd = G["crowd"].copy()
-        w = -0.9 * crowd
-        # Add a small duration anchor
-        w["Long Bonds"] += 0.15
-    return normalize_to_gross(w, max_gross=G["max_gross"])
-
-if preset_col1.button("Risk on", use_container_width=True):
-    G["weights"] = apply_preset("Risk on")
-if preset_col2.button("Risk off", use_container_width=True):
-    G["weights"] = apply_preset("Risk off")
-if preset_col3.button("Balanced", use_container_width=True):
-    G["weights"] = apply_preset("Balanced")
-if preset_col4.button("Mean reversion", use_container_width=True):
-    G["weights"] = apply_preset("Mean reversion")
-
-w_in = G["weights"].copy()
-
-edit_df = pd.DataFrame({"asset": ASSETS, "weight_x_nav": [float(w_in[a]) for a in ASSETS]})
-edited = st.data_editor(
-    edit_df,
-    hide_index=True,
-    use_container_width=True,
-    column_config={
-        "asset": st.column_config.TextColumn("Asset", disabled=True),
-        "weight_x_nav": st.column_config.NumberColumn(
-            "Weight (x NAV)",
-            help="Example: 0.50 means 50% long. -0.50 means 50% short.",
-            step=0.05,
-            format="%.2f",
-        ),
-    },
+st.markdown(
+    f"<div class='ticker'><span>WEEK {t}/{wks}   |   NAV ${nav_now:,.0f}   |   TOTAL {total*100:+.2f}%   |   MAX DD {max_dd*100:.2f}%   |   SHARPE {sh:.2f}   |   {ticker}</span></div>",
+    unsafe_allow_html=True,
 )
 
-w_target = pd.Series(index=ASSETS, data=0.0, dtype=float)
-for _, row in edited.iterrows():
-    w_target[str(row["asset"])] = float(row["weight_x_nav"])
+# Survival / end checks
+start_nav = float(G["nav"].iloc[0])
+if nav_now <= 0.55 * start_nav:
+    st.error("Margin call. You are out. New run and tighten leverage into high-risk regimes.")
+    st.stop()
+if t >= wks:
+    st.success("Run complete. Hit New run to replay the same seed or change it to see a different market.")
+    st.stop()
 
-gross = float(np.abs(w_target).sum())
-net = float(w_target.sum())
-info_col1, info_col2, info_col3 = st.columns(3)
-info_col1.metric("Gross", f"{gross:.2f}x")
-info_col2.metric("Net", f"{net:.2f}x")
-est_tc = float(np.abs(w_target - G["weights"]).sum()) * (G["tc_bps"] / 10_000.0)
-info_col3.metric("Est TC", fmt_pct(est_tc))
+# ----------------------------
+# Main layout
+# ----------------------------
+left, center, right = st.columns([0.9, 1.8, 0.9])
 
-if gross > G["max_gross"] + 1e-9:
-    st.warning(f"Gross exceeds limit. It will be scaled down automatically to {G['max_gross']:.2f}x when you submit.")
+with left:
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
+    st.subheader("Boss event")
+    if G["last_event"] is None and t == 0:
+        st.write("No tape yet. First decision sets your process.")
+    elif G["last_event"] is None:
+        st.write("No headline this week. The crowd still moves the tape.")
+    else:
+        st.write(f"**{G['last_event']}**")
+        st.caption(G["last_event_text"])
 
-submit_col1, submit_col2, submit_col3 = st.columns([1.2, 1.0, 1.0])
-submit = submit_col1.button("Submit trades and advance 1 week", type="primary", use_container_width=True)
-peek = submit_col2.checkbox("Show crowd positioning", value=False)
-show_log = submit_col3.checkbox("Show run log", value=False)
+    st.divider()
+    st.subheader("Crowd heat")
+    crowd_gross = float(np.abs(G["crowd"]).sum())
+    heat = clamp(crowd_gross / 1.4, 0.0, 1.0)
+    st.progress(heat, text=f"Crowd gross: {crowd_gross:.2f}x")
 
-if submit:
-    simulate_one_step(w_target)
+    st.subheader("Your drawdown")
+    dd = float(dd_series(G["nav"]).iloc[-1])
+    dd_bar = clamp(abs(dd) / 0.35, 0.0, 1.0)
+    st.progress(dd_bar, text=f"DD: {dd*100:.2f}%")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with center:
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
+    st.subheader("Market arena")
+    fig = make_arena_chart(G["prices"][ASSETS], G["nav"])
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.caption("The tape is reflexive: prices pull flows, flows push prices, and regime shifts change correlations.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with right:
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
+    st.subheader("Meters")
+    m = G["macro"]
+    st.metric("VIX", f"{m['vix']:.1f}")
+    st.metric("10Y", f"{m['ust10y']:.2f}%")
+
+    # Liquidity meter is a function of macro liquidity state
+    liq_meter = clamp((m["liquidity"] + 1.2) / 2.4, 0.0, 1.0)
+    st.progress(liq_meter, text=f"Liquidity: {m['liquidity']:+.2f}")
+
+    risk_meter = clamp((m["risk_av"] + 1.2) / 2.4, 0.0, 1.0)
+    st.progress(risk_meter, text=f"Risk aversion: {m['risk_av']:+.2f}")
+
+    usd_meter = clamp((m["usd"] + 1.2) / 2.4, 0.0, 1.0)
+    st.progress(usd_meter, text=f"USD strength: {m['usd']:+.2f}")
+
+    st.divider()
+    st.subheader("Score")
+    st.metric("Total", f"{total*100:+.2f}%")
+    st.metric("Max DD", f"{max_dd*100:.2f}%")
+    st.metric("Sharpe", f"{sh:.2f}")
+    st.metric("Score", f"{score:.1f}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ----------------------------
+# Action buttons (game controls)
+# ----------------------------
+st.markdown("### Choose your move")
+b1, b2, b3, b4, b5 = st.columns(5)
+
+def big_button(col, label):
+    with col:
+        st.markdown("<div class='bigbtn'>", unsafe_allow_html=True)
+        clicked = st.button(label, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    return clicked
+
+clicked = None
+if big_button(b1, "Risk On"):
+    clicked = "Risk On"
+if big_button(b2, "Risk Off"):
+    clicked = "Risk Off"
+if big_button(b3, "Barbell"):
+    clicked = "Barbell"
+if big_button(b4, "Fade Crowd"):
+    clicked = "Fade Crowd"
+if big_button(b5, "Flat"):
+    clicked = "Flat"
+
+colX, colY = st.columns([1.2, 1.0])
+with colX:
+    st.caption(f"Last action: {G['last_action']}")
+with colY:
+    debug = st.toggle("Diagnostics", value=False)
+
+# Advance one week if clicked
+if clicked is not None:
+    try:
+        simulate_week(clicked)
+        st.rerun()
+    except Exception as e:
+        st.error("Simulation error. Expand Diagnostics to see details.")
+        st.session_state._last_exception = str(e)
 
 # Auto-play
-if fast_forward and G["t"] < G["rounds"]:
-    # Move quickly but safely: cap iterations to avoid UI lockups
-    # Streamlit reruns per click, so we just step to end here in one run
-    steps_left = G["rounds"] - G["t"]
-    steps_left = int(clamp(steps_left, 0, 80))
-    w_ff = normalize_to_gross(w_target, max_gross=G["max_gross"])
-    for _ in range(steps_left):
-        if float(G["nav"].iloc[-1]) <= 0.55 * G["start_nav"]:
-            break
-        if G["t"] >= G["rounds"]:
-            break
-        simulate_one_step(w_ff)
+if autoplay:
+    try:
+        # keep it bounded so Streamlit does not feel stuck
+        steps = int(clamp(G["weeks"] - G["t"], 0, 60))
+        for _ in range(steps):
+            if G["t"] >= G["weeks"]:
+                break
+            if float(G["nav"].iloc[-1]) <= 0.55 * float(G["nav"].iloc[0]):
+                break
+            simulate_week("Barbell")
+        st.rerun()
+    except Exception as e:
+        st.error("Autoplay error. Expand Diagnostics to see details.")
+        st.session_state._last_exception = str(e)
 
-# ---------------------------
-# Charts
-# ---------------------------
-st.markdown("### Tape")
-cL, cR = st.columns([1.2, 1.0])
-with cL:
-    st.plotly_chart(make_prices_chart(G["prices"]), use_container_width=True)
-with cR:
-    st.plotly_chart(make_equity_curve_chart(G["nav"]), use_container_width=True)
-    st.plotly_chart(make_drawdown_chart(G["nav"]), use_container_width=True)
+# ----------------------------
+# Bottom: last week recap (visual)
+# ----------------------------
+st.markdown("### Last week recap")
+if t == 0:
+    st.write("No recap yet. Pick a move.")
+else:
+    last_log = G["log"][-1]
+    a = last_log["action"]
+    ev = last_log["event"] or "No headline"
+    pr = last_log["port_ret"]
+    crash = last_log["crash"]
+    badge = "good" if pr >= 0 else "danger"
+    crash_txt = f" | Tail shock: {crash*100:.1f}%" if crash and crash > 0 else ""
 
-st.markdown("### Current exposures")
-st.plotly_chart(make_positions_chart(normalize_to_gross(w_target, max_gross=G["max_gross"])), use_container_width=True)
+    st.markdown(
+        f"<div class='panel'>"
+        f"<div><b>Action:</b> {a} &nbsp;&nbsp; <b>Headline:</b> {ev} &nbsp;&nbsp; "
+        f"<b>Week PnL:</b> <span class='{badge}'>{pr*100:+.2f}%</span>{crash_txt}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
-if peek:
-    st.markdown("### Crowd book (what the market is leaning into)")
-    st.plotly_chart(make_positions_chart(G["crowd"]), use_container_width=True)
-
-# ---------------------------
-# Stats + log
-# ---------------------------
-st.markdown("### Run stats")
-rets = G["port_rets"].iloc[1:] if len(G["port_rets"]) > 1 else G["port_rets"]
-dd = dd_series(G["nav"])
-stats = {
-    "End NAV": fmt_money(float(G["nav"].iloc[-1])),
-    "Total return": fmt_pct(float(G["nav"].iloc[-1] / G["nav"].iloc[0] - 1.0)),
-    "Max drawdown": fmt_pct(float(dd.min()) if len(dd) else 0.0),
-    "Weekly Sharpe (annualized)": f"{sharpe(rets):.2f}" if len(rets) > 5 else "0.00",
-    "Avg weekly return": fmt_pct(float(rets.mean()) if len(rets) else 0.0),
-    "Weekly vol": fmt_pct(float(rets.std(ddof=0)) if len(rets) else 0.0),
-    "Score": f"{score_run()['score']:.1f}",
-}
-st.dataframe(pd.DataFrame(stats, index=["Value"]).T, use_container_width=True)
-
-if show_log:
-    st.markdown("### Run log")
-    if len(G["log"]) == 0:
-        st.write("No steps yet.")
-    else:
-        df_log = pd.DataFrame(G["log"])
-        keep_cols = ["week", "event", "vix", "ust10y", "fc", "turnover", "tc_cost", "port_ret", "nav", "crash"]
-        st.dataframe(df_log[keep_cols].set_index("week"), use_container_width=True)
-
-st.caption("Design note: this game is built around feedback loops. If you want a version where you can trade options, set stops, or run a multi-strategy book with factor constraints, say what instruments you want and what rules you want enforced.")
+# ----------------------------
+# Diagnostics
+# ----------------------------
+if debug:
+    with st.expander("Diagnostics", expanded=True):
+        st.write("If something breaks, this is what I need to fix it in one pass.")
+        st.write("Last exception:", st.session_state.get("_last_exception", "None"))
+        st.write("State snapshot:")
+        st.json(
+            {
+                "week": G["t"],
+                "weeks": G["weeks"],
+                "difficulty": G["difficulty"],
+                "max_gross": G["max_gross"],
+                "tc_bps": G["tc_bps"],
+                "nav": float(G["nav"].iloc[-1]),
+                "last_event": G["last_event"],
+                "last_action": G["last_action"],
+            }
+        )
+        if len(G["log"]):
+            st.write("Last log row:")
+            st.json(G["log"][-1])
