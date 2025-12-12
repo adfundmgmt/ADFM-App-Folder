@@ -32,122 +32,81 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Explore seasonal patterns for any stock, index, or commodity.
-
-        • Yahoo Finance is primary source; optional FRED fallback for deep index history  
-        • Bars show mean 1H plus mean 2H contribution so totals reconcile  
-        • First half solid, second half hatched; each half colored by its own sign  
-        • Error bars show min and max monthly total returns; black diamonds show hit rate  
-        • Bottom table consolidates 1H, 2H contribution, Total per month  
-        • Intra-month curve shows average path by trading day relative to prior month-end
+        • Monthly seasonality decomposed into 1H + 2H contribution  
+        • Error bars show historical min / max outcomes  
+        • Hit rate shows frequency of positive full-month returns  
+        • Intra-month curve is **rebased to Day 1 = 0%** and shows
+          average cumulative performance trading-day by trading-day
         """,
         unsafe_allow_html=True,
     )
 
 # ========================== Data helpers ========================== #
-def _extract_close_series(df: object) -> Optional[pd.Series]:
-    """
-    yfinance can return:
-      - DataFrame with columns ['Open','High','Low','Close',...]
-      - DataFrame with MultiIndex columns (field, ticker)
-      - Series in some edge cases
-    This normalizes to a single Close Series.
-    """
+def _extract_close_series(df) -> Optional[pd.Series]:
     if df is None:
         return None
 
-    # Series
     if isinstance(df, pd.Series):
         s = df.dropna()
-        if s.empty:
-            return None
-        return s.rename("Close")
+        return s.rename("Close") if not s.empty else None
 
-    # DataFrame
     if isinstance(df, pd.DataFrame):
         if df.empty:
             return None
 
-        if "Close" not in df.columns:
-            # MultiIndex columns case: sometimes df.columns is MultiIndex
-            # In that case, "Close" might be in first level.
-            if isinstance(df.columns, pd.MultiIndex):
-                lvl0 = df.columns.get_level_values(0)
-                if "Close" in set(lvl0):
-                    close_df = df.loc[:, lvl0 == "Close"]
-                    # collapse: pick first remaining column
-                    if isinstance(close_df, pd.DataFrame) and close_df.shape[1] >= 1:
-                        s = close_df.iloc[:, 0].dropna().rename("Close")
-                        return None if s.empty else s
-            return None
+        if "Close" in df.columns:
+            close = df["Close"]
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+            s = close.dropna()
+            return s.rename("Close") if not s.empty else None
 
-        close = df["Close"]
-
-        # If Close is a DataFrame (MultiIndex collapse or duplicate columns)
-        if isinstance(close, pd.DataFrame):
-            if close.shape[1] < 1:
-                return None
-            close = close.iloc[:, 0]
-
-        s = close.dropna()
-        if s.empty:
-            return None
-        return s.rename("Close")
+        if isinstance(df.columns, pd.MultiIndex):
+            lvl0 = df.columns.get_level_values(0)
+            if "Close" in set(lvl0):
+                close_df = df.loc[:, lvl0 == "Close"]
+                if close_df.shape[1] >= 1:
+                    s = close_df.iloc[:, 0].dropna()
+                    return s.rename("Close") if not s.empty else None
 
     return None
 
-def _yf_download(symbol: str, start: str, end: str, retries: int = 2) -> Optional[pd.Series]:
-    """
-    Minimal retry with backoff, no user-facing "download option".
-    This exists because Yahoo occasionally returns empty frames transiently.
-    """
-    for n in range(retries + 1):
-        try:
-            df = yf.download(
-                symbol,
-                start=start,
-                end=end,
-                auto_adjust=True,
-                progress=False,
-                threads=False,
-            )
-            s = _extract_close_series(df)
-            if s is not None:
-                return s
-        except Exception:
-            s = None
-
-        if n < retries:
-            time.sleep(1.5 * (n + 1))
-
-    return None
+def _yf_download(symbol: str, start: str, end: str) -> Optional[pd.Series]:
+    try:
+        df = yf.download(
+            symbol,
+            start=start,
+            end=end,
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+        )
+        return _extract_close_series(df)
+    except Exception:
+        return None
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     symbol = symbol.strip().upper()
     end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
+    start_pad = (pd.Timestamp(start) - pd.DateOffset(days=45)).strftime("%Y-%m-%d")
 
-    # pad start to capture prior month-end
-    start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
-    start_pad = start_pad_dt.strftime("%Y-%m-%d")
-
-    series = _yf_download(symbol, start_pad, end)
-    if series is not None:
-        return series
+    s = _yf_download(symbol, start_pad, end)
+    if s is not None:
+        return s
 
     if symbol == "SPY":
-        series = _yf_download("^GSPC", start_pad, end)
-        if series is not None:
-            return series
+        s = _yf_download("^GSPC", start_pad, end)
+        if s is not None:
+            return s
 
     if pdr and symbol in FALLBACK_MAP:
         try:
-            fred_tk = FALLBACK_MAP[symbol]
-            df_fred = pdr.DataReader(fred_tk, "fred", start_pad, end)
-            if isinstance(df_fred, pd.DataFrame) and (fred_tk in df_fred.columns):
-                s = df_fred[fred_tk].dropna().rename("Close")
-                if not s.empty:
-                    return s
+            fred = FALLBACK_MAP[symbol]
+            df = pdr.DataReader(fred, "fred", start_pad, end)
+            if fred in df.columns:
+                s = df[fred].dropna()
+                return s.rename("Close") if not s.empty else None
         except Exception:
             pass
 
@@ -155,20 +114,8 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
 
 # ========================== Monthly decomposition ========================== #
 def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
-    """
-    For each month:
-      prev_eom   = previous month-end close
-      mid_close  = close at mid-point of trading days (first ceil(N/2) days)
-      last       = month-end close
+    rows = []
 
-    total_ret (%) = (last / prev_eom - 1) * 100
-    h1_ret   (%)  = (mid_close / prev_eom - 1) * 100
-    h2_contrib(%) = total_ret - h1_ret  (contribution so total = h1 + h2_contrib)
-    """
-    if prices.empty:
-        return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_contrib", "year", "month"])
-
-    out_rows = []
     months = pd.period_range(
         prices.index.min().to_period("M"),
         prices.index.max().to_period("M"),
@@ -176,555 +123,201 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     )
 
     for m in months:
-        month_days = prices.loc[prices.index.to_period("M") == m]
-        if month_days.shape[0] < 3:
+        m_px = prices.loc[prices.index.to_period("M") == m]
+        if len(m_px) < 3:
             continue
 
-        prev_month_days = prices.loc[prices.index.to_period("M") == (m - 1)]
-        if prev_month_days.empty:
+        prev_px = prices.loc[prices.index.to_period("M") == (m - 1)]
+        if prev_px.empty:
             continue
 
-        prev_eom = float(prev_month_days.iloc[-1])
-        if (not np.isfinite(prev_eom)) or prev_eom <= 0:
+        prev_eom = float(prev_px.iloc[-1])
+        if not np.isfinite(prev_eom) or prev_eom <= 0:
             continue
 
-        last = float(month_days.iloc[-1])
-
-        n = int(month_days.shape[0])
+        n = len(m_px)
         mid_idx = int(np.ceil(n / 2)) - 1
-        if mid_idx < 0:
-            continue
-        mid_close = float(month_days.iloc[mid_idx])
 
-        tot = (last / prev_eom - 1.0) * 100.0
-        h1 = (mid_close / prev_eom - 1.0) * 100.0
-        h2 = tot - h1
+        total = (float(m_px.iloc[-1]) / prev_eom - 1.0) * 100.0
+        h1 = (float(m_px.iloc[mid_idx]) / prev_eom - 1.0) * 100.0
+        h2 = total - h1
 
-        out_rows.append(
-            {
-                "period": m,
-                "total_ret": tot,
-                "h1_ret": h1,
-                "h2_contrib": h2,
-                "year": m.year,
-                "month": m.month,
-            }
+        rows.append(
+            dict(
+                year=m.year,
+                month=m.month,
+                total_ret=total,
+                h1_ret=h1,
+                h2_contrib=h2,
+            )
         )
 
-    df = pd.DataFrame(out_rows)
-    if df.empty:
-        return df
-
-    df.set_index(pd.PeriodIndex(df["period"], freq="M"), inplace=True)
-    df.drop(columns=["period"], inplace=True)
-    return df
+    return pd.DataFrame(rows)
 
 def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.DataFrame:
-    halves = _intra_month_halves(prices)
+    df = _intra_month_halves(prices)
+    df = df[(df["year"] >= start_year) & (df["year"] <= end_year)]
 
-    stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
+    stats = pd.DataFrame(index=range(1, 13))
     stats["label"] = MONTH_LABELS
 
-    if halves.empty:
-        stats[["hit_rate", "min_ret", "max_ret", "years_observed", "mean_h1", "mean_h2_contrib", "mean_total"]] = np.nan
-        return stats
-
-    halves = halves[(halves["year"] >= start_year) & (halves["year"] <= end_year)]
-    if halves.empty:
-        stats[["hit_rate", "min_ret", "max_ret", "years_observed", "mean_h1", "mean_h2_contrib", "mean_total"]] = np.nan
-        return stats
-
-    grouped = halves.groupby("month")
-
-    stats["hit_rate"] = grouped["total_ret"].apply(lambda x: float((x > 0).mean() * 100.0))
-    stats["min_ret"] = grouped["total_ret"].min()
-    stats["max_ret"] = grouped["total_ret"].max()
-    stats["years_observed"] = grouped["year"].nunique()
-    stats["mean_h1"] = grouped["h1_ret"].mean()
-    stats["mean_h2_contrib"] = grouped["h2_contrib"].mean()
-    stats["mean_total"] = grouped["total_ret"].mean()
+    g = df.groupby("month")
+    stats["mean_h1"] = g["h1_ret"].mean()
+    stats["mean_h2"] = g["h2_contrib"].mean()
+    stats["mean_total"] = g["total_ret"].mean()
+    stats["min_ret"] = g["total_ret"].min()
+    stats["max_ret"] = g["total_ret"].max()
+    stats["hit_rate"] = g["total_ret"].apply(lambda x: (x > 0).mean() * 100)
 
     return stats
 
-def _format_pct(x: float) -> str:
-    return f"{x:+.1f}%" if pd.notna(x) else "n/a"
-
-def _cell_colors(values: List[List[float]]) -> List[List[str]]:
-    pos = "#d9f2e4"
-    neg = "#f7d9d7"
-    neu = "#f2f2f2"
-    colors = []
-    for row in values:
-        colors.append([pos if (pd.notna(v) and v > 0) else neg if (pd.notna(v) and v < 0) else neu for v in row])
-    return colors
-
+# ========================== Seasonality plot ========================== #
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
-    plot_df = stats.dropna(subset=["mean_h1", "mean_h2_contrib", "min_ret", "max_ret", "hit_rate"]).copy()
+    df = stats.dropna(subset=["mean_h1", "mean_h2", "mean_total"])
 
-    labels = plot_df["label"].tolist()
-    mean_h1 = plot_df["mean_h1"].to_numpy(float)
-    mean_h2 = plot_df["mean_h2_contrib"].to_numpy(float)
-    totals  = plot_df["mean_total"].to_numpy(float)
-    hit     = plot_df["hit_rate"].to_numpy(float)
-    min_ret = plot_df["min_ret"].to_numpy(float)
-    max_ret = plot_df["max_ret"].to_numpy(float)
-
-    fig = plt.figure(figsize=(12.5, 7.8), dpi=200)
-    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[3.2, 1.1], hspace=0.25)
-    ax1 = fig.add_subplot(gs[0])
+    labels = df["label"].tolist()
+    h1 = df["mean_h1"].values
+    h2 = df["mean_h2"].values
+    tot = df["mean_total"].values
+    min_r = df["min_ret"].values
+    max_r = df["max_ret"].values
+    hit = df["hit_rate"].values
 
     x = np.arange(len(labels))
 
-    def seg_face(values):
-        return np.where(values >= 0, "#62c38e", "#e07a73")
+    fig = plt.figure(figsize=(12.5, 7.8), dpi=200)
+    gs = gridspec.GridSpec(2, 1, height_ratios=[3.2, 1.1])
+    ax = fig.add_subplot(gs[0])
 
-    def seg_edge(values):
-        return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
+    ax.bar(x, h1, color=np.where(h1 >= 0, "#62c38e", "#e07a73"), edgecolor="black")
 
-    # 1H bars
-    ax1.bar(
-        x,
-        mean_h1,
-        width=0.8,
-        color=seg_face(mean_h1),
-        edgecolor=seg_edge(mean_h1),
-        linewidth=1.0,
-        zorder=2,
-        alpha=0.95,
-    )
-
-    # 2H contribution bars, plotted correctly in mixed-sign cases
     for i in range(len(x)):
-        h1v = float(mean_h1[i])
-        h2v = float(mean_h2[i])
-        base = h1v if (np.sign(h1v) == np.sign(h2v) and h1v != 0 and h2v != 0) else 0.0
-        ax1.bar(
+        base = h1[i] if np.sign(h1[i]) == np.sign(h2[i]) else 0.0
+        ax.bar(
             x[i],
-            h2v,
-            width=0.8,
+            h2[i],
             bottom=base,
-            color=seg_face(np.array([h2v]))[0],
-            edgecolor=seg_edge(np.array([h2v]))[0],
-            linewidth=1.0,
-            zorder=2,
-            alpha=0.95,
+            color="#bbbbbb",
+            edgecolor="black",
             hatch="///",
         )
 
-    # Error bars around mean total
-    yerr = np.abs(np.vstack([totals - min_ret, max_ret - totals]))
-    ax1.errorbar(
-        x,
-        totals,
-        yerr=yerr,
-        fmt="none",
-        ecolor="gray",
-        elinewidth=1.6,
-        alpha=0.7,
-        capsize=6,
-        zorder=3,
-    )
+    yerr = np.abs(np.vstack([tot - min_r, max_r - tot]))
+    ax.errorbar(x, tot, yerr=yerr, fmt="none", ecolor="gray", capsize=6)
 
-    ax1.set_xticks(x, labels)
-    ax1.set_ylabel("Mean return (%)", weight="bold")
-    ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
-    ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
+    ax.set_xticks(x, labels)
+    ax.set_ylabel("Mean return (%)")
+    ax.yaxis.set_major_formatter(PercentFormatter(100))
+    ax.grid(axis="y", linestyle="--", alpha=0.6)
 
-    # Y limits with guardrails
-    abs_span = np.nanmax(np.abs(np.concatenate([min_ret, max_ret, totals, [0.0]])))
-    pad = 0.1 * abs_span if np.isfinite(abs_span) else 1.0
-    ymin = float(np.nanmin(np.concatenate([min_ret, totals, [0.0]])) - pad)
-    ymax = float(np.nanmax(np.concatenate([max_ret, totals, [0.0]])) + pad)
-    ax1.set_ylim(ymin, ymax)
-
-    ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
-
-    ax2 = ax1.twinx()
-    ax2.scatter(x, hit, marker="D", s=90, color="black", zorder=4)
-    ax2.set_ylabel("Hit rate of positive returns", weight="bold")
+    ax2 = ax.twinx()
+    ax2.scatter(x, hit, marker="D", color="black")
     ax2.set_ylim(0, 100)
-    ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
-    ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
+    ax2.set_ylabel("Hit rate (%)")
 
-    legend = [Patch(facecolor="white", edgecolor="black", hatch="///", label="Second half contribution (hatched)")]
-    ax1.legend(handles=legend, loc="upper left", frameon=False)
-
-    # Table
-    ax_tbl = fig.add_subplot(gs[1])
-    ax_tbl.axis("off")
-    row_labels = ["1H %", "2H contrib %", "Total %"]
-
-    row1, row2, row3 = list(map(list, [mean_h1, mean_h2, totals]))
-    cell_vals = [row1, row2, row3]
-    cell_txt = [[_format_pct(v) for v in row] for row in cell_vals]
-    cell_colors = _cell_colors(cell_vals)
-
-    table = ax_tbl.table(
-        cellText=cell_txt,
-        rowLabels=row_labels,
-        colLabels=labels,
-        loc="center",
-        cellLoc="center",
-        rowLoc="center",
+    ax.legend(
+        handles=[
+            Patch(facecolor="#62c38e", edgecolor="black", label="First half"),
+            Patch(facecolor="#bbbbbb", edgecolor="black", hatch="///", label="Second half contribution"),
+        ],
+        frameon=False,
     )
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-
-    for (row, col), cell in table.get_celld().items():
-        if row == 0:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
-        elif col == -1:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
-        else:
-            cell.set_facecolor(cell_colors[row - 1][col])
-            cell.set_edgecolor("black")
-            cell.set_linewidth(1)
 
     fig.suptitle(title, fontsize=17, weight="bold")
-    fig.tight_layout(pad=1.5)
+    fig.tight_layout()
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
+    fig.savefig(buf, dpi=200, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return buf
 
-# ========================== Intra-month curve ========================== #
-def _month_paths_prev_eom(
-    prices: pd.Series, month_int: int, start_year: int, end_year: int
+# ========================== REBASED intra-month paths ========================== #
+def _month_paths_rebased(
+    prices: pd.Series, month: int, start_year: int, end_year: int
 ) -> Tuple[pd.DataFrame, pd.Series]:
-    px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)].copy()
-    if px.empty:
-        return pd.DataFrame(), pd.Series(dtype=float)
 
+    px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)]
     paths = {}
+
     for y in sorted(px.index.year.unique()):
-        m = px.loc[(px.index.year == y) & (px.index.month == month_int)]
-        if m.shape[0] < 3:
+        m = px[(px.index.year == y) & (px.index.month == month)]
+        if len(m) < 3:
             continue
 
-        prev_year = y if month_int > 1 else y - 1
-        prev_month_num = month_int - 1 if month_int > 1 else 12
-        prev_mask = (px.index.year == prev_year) & (px.index.month == prev_month_num)
-        prev_month = px.loc[prev_mask]
-        if prev_month.empty:
+        first = float(m.iloc[0])
+        if not np.isfinite(first) or first <= 0:
             continue
 
-        prev_eom = float(prev_month.iloc[-1])
-        if (not np.isfinite(prev_eom)) or prev_eom <= 0:
-            continue
-
-        norm = (m / prev_eom) * 100.0
-        norm.index = pd.RangeIndex(start=1, stop=1 + len(norm), step=1)
+        norm = (m / first - 1.0) * 100.0
+        norm.index = pd.RangeIndex(1, len(norm) + 1)
         paths[y] = norm
 
     if not paths:
         return pd.DataFrame(), pd.Series(dtype=float)
 
-    max_days = max(len(s) for s in paths.values())
-    df = pd.DataFrame(index=pd.RangeIndex(1, max_days + 1))
+    max_len = max(len(v) for v in paths.values())
+    df = pd.DataFrame(index=pd.RangeIndex(1, max_len + 1))
     for y, s in paths.items():
         df[y] = s
 
-    avg_path = df.mean(axis=1, skipna=True)
-    return df, avg_path
+    return df, df.mean(axis=1)
 
-def _avg_calendar_day_for_ordinal(
-    prices: pd.Series, month_int: int, start_year: int, end_year: int, ordinal: int
-) -> Optional[int]:
-    px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)]
-    days = []
-    for y in sorted(px.index.year.unique()):
-        m = px.loc[(px.index.year == y) & (px.index.month == month_int)]
-        if len(m) >= ordinal:
-            days.append(m.index[ordinal - 1].day)
-    if not days:
-        return None
-    return int(round(float(np.mean(days))))
+# ========================== Intra-month plot ========================== #
+def plot_intra_month_curve(prices, month, start_year, end_year, symbol):
+    df, avg = _month_paths_rebased(prices, month, start_year, end_year)
 
-def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> int:
-    if month_index.empty:
-        return 1
-    idx = month_index.sort_values()
-    d = pd.Timestamp(when).normalize()
-    ord_ = int(np.searchsorted(idx.values, np.datetime64(d), side="right"))
-    return max(1, min(ord_, len(idx)))
+    fig, ax = plt.subplots(figsize=(12.5, 7.2), dpi=200)
 
-def plot_intra_month_curve(
-    prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str
-) -> io.BytesIO:
-    df_sel, avg_sel = _month_paths_prev_eom(prices, month_int, start_year, end_year)
-
-    fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="white")
-    ax = fig.add_subplot(111, facecolor="white")
-
-    if avg_sel.empty:
-        ax.text(
-            0.5, 0.5,
-            "Not enough data to compute intra-month curve",
-            ha="center", va="center",
-            fontsize=12, color="black",
-        )
+    if avg.empty:
+        ax.text(0.5, 0.5, "Not enough data", ha="center", va="center")
         ax.axis("off")
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
-        plt.close(fig)
-        buf.seek(0)
-        return buf
+    else:
+        std = df.std(axis=1)
 
-    # Convert from index level (prev month-end = 100) to return in %
-    df_ret = df_sel - 100.0
-    avg_ret = avg_sel - 100.0
-    std_ret = df_ret.std(axis=1, skipna=True)
+        ax.axhline(0, color="gray", linestyle=":")
+        ax.fill_between(avg.index, avg - std, avg + std, alpha=0.25)
 
-    x_vals = avg_ret.index.values
-    y_vals = avg_ret.values
-
-    ax.axhline(0.0, color="#999999", linestyle=":", linewidth=1.0, zorder=1)
-
-    ax.fill_between(
-        x_vals,
-        (avg_ret - std_ret).values,
-        (avg_ret + std_ret).values,
-        color="#d0d0d0",
-        alpha=0.3,
-        zorder=1.5,
-        label="±1σ",
-    )
-
-    ax.plot(
-        x_vals,
-        y_vals,
-        linewidth=2.6,
-        color="black",
-        linestyle="-",
-        label=f"Avg {MONTH_LABELS[month_int-1]} {start_year}–{end_year}",
-    )
-
-    today = pd.Timestamp.today()
-    cur_year = today.year
-
-    # Current year overlay if available
-    cur_norm_pct = None
-    m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
-    prev_mask = (
-        (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) &
-        (prices.index.month == (month_int - 1 if month_int > 1 else 12))
-    )
-    prev_month = prices.loc[prev_mask]
-
-    if (not m.empty) and (not prev_month.empty):
-        prev_eom = float(prev_month.iloc[-1])
-        if np.isfinite(prev_eom) and prev_eom > 0:
-            cur_norm = (m / prev_eom) * 100.0
-            cur_norm.index = pd.RangeIndex(start=1, stop=1 + len(cur_norm), step=1)
-            cur_norm_pct = cur_norm - 100.0
-            if len(cur_norm_pct) >= 2:
-                ax.plot(
-                    cur_norm_pct.index.values,
-                    cur_norm_pct.values,
-                    linewidth=2.0,
-                    color="black",
-                    alpha=0.45,
-                    linestyle="--",
-                    label=str(cur_year),
-                )
-
-    # Key points on selected-window average
-    low_idx = int(avg_ret.idxmin())
-    low_val = float(avg_ret.loc[low_idx])
-    high_idx = int(avg_ret.idxmax())
-    high_val = float(avg_ret.loc[high_idx])
-    ax.scatter([low_idx, high_idx], [low_val, high_val], s=45, color="black", zorder=3)
-
-    low_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
-    high_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
-
-    def _box(txt: str, xy, offset_xy):
-        ax.annotate(
-            txt,
-            xy=xy,
-            xytext=(xy[0] + offset_xy[0], xy[1] + offset_xy[1]),
-            textcoords="data",
-            arrowprops=dict(arrowstyle="-", color="black", lw=1.0, shrinkA=2, shrinkB=2),
-            fontsize=9.5,
-            color="black",
-            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="black", lw=0.8),
+        ax.plot(avg.index, avg, color="black", linewidth=2.6)
+        ax.set_title(
+            f"{symbol} {MONTH_LABELS[month-1]}: Intra-Month Performance (Day 1 = 0%)",
+            fontsize=16,
+            weight="bold",
         )
+        ax.set_xlabel("Trading day of month")
+        ax.set_ylabel("Return since first trading day (%)")
+        ax.grid(axis="y", linestyle="--", alpha=0.6)
+        ax.yaxis.set_major_formatter(PercentFormatter(100))
 
-    if low_dom is not None:
-        _box(
-            f"Avg low: Day {low_idx}\n~{MONTH_LABELS[month_int-1]} {low_dom}, {low_val:+.2f}%",
-            (low_idx, low_val),
-            (0.7, -0.9),
-        )
-    if high_dom is not None:
-        _box(
-            f"Avg high: Day {high_idx}\n~{MONTH_LABELS[month_int-1]} {high_dom}, {high_val:+.2f}%",
-            (high_idx, high_val),
-            (-3.0, 0.9),
-        )
-
-    ax.set_title(
-        f"{symbol_shown} {MONTH_LABELS[month_int-1]}: Intra-Month Performance by Trading Day",
-        color="black",
-        fontsize=16,
-        weight="bold",
-        pad=8,
-    )
-    ax.set_xlabel(f"Trading day of {MONTH_LABELS[month_int-1]}", color="black", fontsize=10, weight="bold")
-    ax.set_ylabel("Return from prior month-end (%)", color="black", fontsize=10, weight="bold")
-    ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0)
-    ax.tick_params(colors="black")
-    for sp in ax.spines.values():
-        sp.set_color("black")
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-
-    # Today marker and forward-to-EOM stats if selected month is current month
-    if (today.month == month_int) and (not df_ret.empty):
-        m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
-        if not m_cur.empty:
-            tday_ord = _trading_day_ordinal(m_cur.index, today)
-            if tday_ord in df_ret.index:
-                ax.axvline(tday_ord, color="#b0b0b0", linestyle=":", linewidth=1.2, zorder=2.0)
-
-                if tday_ord in avg_ret.index:
-                    ax.scatter(tday_ord, avg_ret.loc[tday_ord], s=35, color="black", zorder=4)
-
-                if (cur_norm_pct is not None) and (tday_ord in cur_norm_pct.index):
-                    ax.scatter(
-                        tday_ord,
-                        cur_norm_pct.loc[tday_ord],
-                        s=40,
-                        facecolors="white",
-                        edgecolors="black",
-                        linewidths=1.0,
-                        zorder=4,
-                    )
-
-                # Per-year forward move from this trading day to that year's month end
-                lvl_t = df_ret.loc[tday_ord]
-                lvl_end = df_ret.apply(
-                    lambda col: col.dropna().iloc[-1] if col.notna().any() else np.nan
-                )
-                fwd = (lvl_end - lvl_t).dropna()
-
-                if not fwd.empty:
-                    stats_text = (
-                        f"From today (Day {tday_ord}) to month-end across years:\n"
-                        f"• Mean: {fwd.mean():+.2f}%\n"
-                        f"• Median: {fwd.median():+.2f}%\n"
-                        f"• Hit rate >0: {(fwd > 0).mean()*100:0.0f}%  | N={fwd.shape[0]}"
-                    )
-                    ax.text(
-                        0.02,
-                        0.05,
-                        stats_text,
-                        transform=ax.transAxes,
-                        fontsize=9.0,
-                        color="black",
-                        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8),
-                    )
-
-    y_min = float((avg_ret - std_ret).min())
-    y_max = float((avg_ret + std_ret).max())
-    pad_y = 0.1 * max(abs(y_min), abs(y_max)) if np.isfinite(y_min) and np.isfinite(y_max) else 0.0
-    ax.set_ylim(y_min - pad_y, y_max + pad_y)
-
-    ax.legend(frameon=False, loc="upper left", title="Series", title_fontsize=10)
-
-    fig.tight_layout(pad=1.0)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
+    fig.savefig(buf, dpi=200, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return buf
 
-# ========================== Main controls ========================== #
+# ========================== Controls ========================== #
 col1, col2, col3 = st.columns([2, 1, 1])
+
 with col1:
-    symbol = st.text_input("Ticker symbol", value="^GSPC").upper()
+    symbol = st.text_input("Ticker", value="^GSPC").upper()
 with col2:
-    start_year = st.number_input("Start year", value=2020, min_value=1900, max_value=dt.datetime.today().year)
+    start_year = st.number_input("Start year", value=2020, min_value=1900)
 with col3:
-    end_year = st.number_input(
-        "End year",
-        value=dt.datetime.today().year,
-        min_value=int(start_year),
-        max_value=dt.datetime.today().year,
-    )
+    end_year = st.number_input("End year", value=dt.datetime.today().year, min_value=start_year)
 
-start_date = f"{int(start_year)}-01-01"
-end_date = f"{int(end_year)}-12-31"
+start = f"{start_year}-01-01"
+end = f"{end_year}-12-31"
 
-with st.spinner("Fetching and analyzing data..."):
-    used_symbol = symbol
-    prices = fetch_prices(symbol, start_date, end_date)
-    if prices is None and symbol == "SPY":
-        prices = fetch_prices("^GSPC", start_date, end_date)
-        if prices is not None:
-            used_symbol = "^GSPC"
-
-if prices is None or prices.empty:
-    st.error(f"No data found for '{symbol}' in the given date range. Try a different symbol or adjust the years.")
+prices = fetch_prices(symbol, start, end)
+if prices is None:
+    st.error("No data available")
     st.stop()
 
-first_valid = prices.first_valid_index()
-if first_valid is not None:
-    prices = prices.loc[first_valid:]
+stats = seasonal_stats(prices, start_year, end_year)
+st.image(plot_seasonality(stats, f"{symbol} Seasonality ({start_year}-{end_year})"), use_container_width=True)
 
-if used_symbol != symbol:
-    st.info("SPY data unavailable. Using S&P 500 index (^GSPC) fallback for seasonality.")
-
-stats = seasonal_stats(prices, int(start_year), int(end_year))
-if stats.dropna(subset=["mean_h1", "mean_h2_contrib"]).empty:
-    st.error("Insufficient data in the selected window to compute statistics.")
-    st.stop()
-
-# Best/worst display
-stats_valid = stats.dropna(subset=["mean_total"])
-best_idx = stats_valid["mean_total"].idxmax()
-worst_idx = stats_valid["mean_total"].idxmin()
-best = stats.loc[best_idx]
-worst = stats.loc[worst_idx]
-
-st.markdown(
-    f"""
-    <div style='text-align:center'>
-        <span style='font-size:1.18em; font-weight:600; color:#218739'>
-            Best month: {best['label']} ({best['mean_total']:.2f}% | High {best['max_ret']:.2f}% | Low {best['min_ret']:.2f}%)
-        </span>&nbsp;&nbsp;&nbsp;
-        <span style='font-size:1.18em; font-weight:600; color:#c93535'>
-            Worst month: {worst['label']} ({worst['mean_total']:.2f}% | High {worst['max_ret']:.2f}% | Low {worst['min_ret']:.2f}%)
-        </span>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Main chart
-buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({int(start_year)}-{int(end_year)})")
-st.image(buf, use_container_width=True)
-
-st.caption(
-    "Bars equal mean(1H) + mean(2H contribution). First half solid; second half hatched. "
-    "Error bars show min and max of total monthly returns."
-)
-
-# Intra-month curve
-st.subheader("Intra-Month Seasonality Curve")
-today_dt = dt.datetime.today()
-default_month_idx = max(0, min(today_dt.month - 1, 11))
-month_choice = st.selectbox(
-    "Month",
-    options=list(range(1, 13)),
-    index=default_month_idx,
-    format_func=lambda m: MONTH_LABELS[m - 1],
-)
-
-curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol)
-st.image(curve_buf, use_container_width=True)
+st.subheader("Intra-Month Seasonality (Rebased)")
+month = st.selectbox("Month", list(range(1,13)), format_func=lambda m: MONTH_LABELS[m-1])
+st.image(plot_intra_month_curve(prices, month, start_year, end_year, symbol), use_container_width=True)
 
 st.caption("© 2025 AD Fund Management LP")
