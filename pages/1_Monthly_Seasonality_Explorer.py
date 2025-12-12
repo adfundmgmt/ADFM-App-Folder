@@ -90,7 +90,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
 
     total_ret (%) = (last / prev_eom - 1)
     h1_ret   (%)  = (mid_close / prev_eom - 1)
-    h2_ret   (%)  = total_ret - h1_ret   (second-half *contribution* to total)
+    h2_ret   (%)  = total_ret - h1_ret   (second-half contribution to total)
     """
     if prices.empty:
         return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret", "year", "month"])
@@ -121,7 +121,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
 
         tot = (last / prev_eom - 1.0) * 100.0
         h1  = (mid_close / prev_eom - 1.0) * 100.0
-        h2  = tot - h1   # contribution from second half so that tot = h1 + h2
+        h2  = tot - h1
 
         out_rows.append(
             {
@@ -308,41 +308,57 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     buf.seek(0)
     return buf
 
-# -------- Intra-month path anchored to prior month-end -------- #
-def _month_paths_prev_eom(
+# -------- Intra-month path anchored to prior month-end, equal-weighted across years -------- #
+def _month_paths_prev_eom_equal_weight(
     prices: pd.Series, month_int: int, start_year: int, end_year: int
 ) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Build per-year cumulative return paths within a month, anchored to prior month-end.
+    Key detail: months have different trading-day counts across years.
+    To match the first panel's equal-weight monthly mean, we:
+      - align all years to a common 0..max_days grid (Day 0 = 0%)
+      - forward-fill each year's last available value to max_days
+    This ensures the curve endpoint equals the equal-weight mean of each year's month total return.
+    """
     px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)].copy()
     if px.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
 
-    paths = {}
-    for y in sorted(px.index.year.unique()):
+    raw_paths = {}
+    years = sorted(px.index.year.unique())
+    for y in years:
         m = px.loc[(px.index.year == y) & (px.index.month == month_int)]
         if m.shape[0] < 3:
             continue
 
         prev_year = y if month_int > 1 else y - 1
         prev_month_num = month_int - 1 if month_int > 1 else 12
-        prev_mask = (px.index.year == prev_year) & (px.index.month == prev_month_num)
-        prev_month = px.loc[prev_mask]
+        prev_month = px.loc[(px.index.year == prev_year) & (px.index.month == prev_month_num)]
         if prev_month.empty:
             continue
 
         prev_eom = float(prev_month.iloc[-1])
-        norm = (m / prev_eom) * 100.0
-        norm.index = pd.RangeIndex(start=1, stop=1 + len(norm), step=1)
-        paths[y] = norm
 
-    if not paths:
+        # cumulative return from prior month-end, in %
+        cum_ret = (m / prev_eom - 1.0) * 100.0
+        cum_ret.index = pd.RangeIndex(start=1, stop=1 + len(cum_ret), step=1)
+
+        # insert Day 0 = 0%
+        cum_ret.loc[0] = 0.0
+        cum_ret = cum_ret.sort_index()
+        raw_paths[y] = cum_ret
+
+    if not raw_paths:
         return pd.DataFrame(), pd.Series(dtype=float)
 
-    max_days = max(len(s) for s in paths.values())
-    df = pd.DataFrame(index=pd.RangeIndex(1, max_days))
-    for y, s in paths.items():
-        df[y] = s
+    max_days = max(int(s.index.max()) for s in raw_paths.values())
+    full_index = pd.RangeIndex(0, max_days + 1)
 
-    avg_path = df.mean(axis=1, skipna=True)
+    df = pd.DataFrame(index=full_index)
+    for y, s in raw_paths.items():
+        df[y] = s.reindex(full_index).ffill()
+
+    avg_path = df.mean(axis=1)
     return df, avg_path
 
 def _avg_calendar_day_for_ordinal(
@@ -352,6 +368,8 @@ def _avg_calendar_day_for_ordinal(
     days = []
     for y in sorted(px.index.year.unique()):
         m = px.loc[(px.index.year == y) & (px.index.month == month_int)]
+        if ordinal == 0:
+            continue
         if len(m) >= ordinal:
             days.append(m.index[ordinal - 1].day)
     if not days:
@@ -370,13 +388,12 @@ def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> i
 def plot_intra_month_curve(
     prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str
 ) -> io.BytesIO:
-    # Selected-window average (solid)
-    df_sel, avg_sel = _month_paths_prev_eom(prices, month_int, start_year, end_year)
+    df_sel, avg_sel = _month_paths_prev_eom_equal_weight(prices, month_int, start_year, end_year)
 
     fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="white")
     ax = fig.add_subplot(111, facecolor="white")
 
-    if avg_sel.empty:
+    if avg_sel.empty or df_sel.empty:
         ax.text(
             0.5,
             0.5,
@@ -393,18 +410,13 @@ def plot_intra_month_curve(
         buf.seek(0)
         return buf
 
-    # Convert from index level (prev month-end = 100) to return in %
-    df_sel = df_sel - 100.0
-    avg_sel = avg_sel - 100.0
-    std_sel = df_sel.std(axis=1, skipna=True)
+    std_sel = df_sel.std(axis=1)
 
     x_vals = avg_sel.index.values
     y_vals = avg_sel.values
 
-    # Zero line
     ax.axhline(0.0, color="#999999", linestyle=":", linewidth=1.0, zorder=1)
 
-    # ±1 standard deviation band
     ax.fill_between(
         x_vals,
         (avg_sel - std_sel).values,
@@ -415,7 +427,6 @@ def plot_intra_month_curve(
         label="±1σ",
     )
 
-    # Solid average path
     ax.plot(
         x_vals,
         y_vals,
@@ -428,21 +439,24 @@ def plot_intra_month_curve(
     today = pd.Timestamp.today()
     cur_year = today.year
 
-    # Current year overlay (dashed) if available
-    cur_norm_pct = None
+    # Current year overlay (dashed), also anchored to prior month-end and starting at Day 0 = 0%
+    cur_path = None
     m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
     prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
                 (prices.index.month == (month_int - 1 if month_int > 1 else 12))
     prev_month = prices.loc[prev_mask]
     if not m.empty and not prev_month.empty:
         prev_eom = float(prev_month.iloc[-1])
-        cur_norm = (m / prev_eom) * 100.0
-        cur_norm.index = pd.RangeIndex(start=1, stop=1 + len(cur_norm), step=1)
-        cur_norm_pct = cur_norm - 100.0
-        if len(cur_norm_pct) >= 2:
+        cur_cum = (m / prev_eom - 1.0) * 100.0
+        cur_cum.index = pd.RangeIndex(start=1, stop=1 + len(cur_cum), step=1)
+        cur_cum.loc[0] = 0.0
+        cur_cum = cur_cum.sort_index()
+        cur_path = cur_cum
+
+        if len(cur_path) >= 3:
             ax.plot(
-                cur_norm_pct.index.values,
-                cur_norm_pct.values,
+                cur_path.index.values,
+                cur_path.values,
                 linewidth=2.0,
                 color="black",
                 alpha=0.45,
@@ -450,11 +464,15 @@ def plot_intra_month_curve(
                 label=str(cur_year),
             )
 
-    # Key points on selected-window average
-    low_idx = int(avg_sel.idxmin())
-    low_val = float(avg_sel.loc[low_idx])
-    high_idx = int(avg_sel.idxmax())
-    high_val = float(avg_sel.loc[high_idx])
+    # Key points on average (ignore Day 0 for extrema labeling)
+    avg_ex = avg_sel.copy()
+    if 0 in avg_ex.index:
+        avg_ex = avg_ex.drop(index=0)
+
+    low_idx = int(avg_ex.idxmin())
+    low_val = float(avg_ex.loc[low_idx])
+    high_idx = int(avg_ex.idxmax())
+    high_val = float(avg_ex.loc[high_idx])
     ax.scatter([low_idx, high_idx], [low_val, high_val], s=45, color="black", zorder=3)
 
     low_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
@@ -485,7 +503,6 @@ def plot_intra_month_curve(
             (-3.0, 0.9),
         )
 
-    # Titles and axes
     ax.set_title(
         f"{symbol_shown} {MONTH_LABELS[month_int-1]}: Intra-Month Performance by Trading Day",
         color="black",
@@ -493,7 +510,7 @@ def plot_intra_month_curve(
         weight="bold",
         pad=8,
     )
-    ax.set_xlabel(f"Trading day of {MONTH_LABELS[month_int-1]}", color="black", fontsize=10, weight="bold")
+    ax.set_xlabel(f"Trading day of {MONTH_LABELS[month_int-1]} (Day 0 = prior month-end)", color="black", fontsize=10, weight="bold")
     ax.set_ylabel("Return from prior month-end (%)", color="black", fontsize=10, weight="bold")
     ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0)
     ax.tick_params(colors="black")
@@ -501,58 +518,53 @@ def plot_intra_month_curve(
         sp.set_color("black")
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-    # Forward-to-EOM stats and "today" marker if selected month is current month
+    # "today" marker if selected month is current month
     if (today.month == month_int) and not df_sel.empty:
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
         if not m_cur.empty:
             tday_ord = _trading_day_ordinal(m_cur.index, today)
-            if tday_ord in df_sel.index:
-                ax.axvline(tday_ord, color="#b0b0b0", linestyle=":", linewidth=1.2, zorder=2.0)
+            ax.axvline(tday_ord, color="#b0b0b0", linestyle=":", linewidth=1.2, zorder=2.0)
 
-                if tday_ord in avg_sel.index:
-                    ax.scatter(tday_ord, avg_sel.loc[tday_ord], s=35, color="black", zorder=4)
-                if cur_norm_pct is not None and tday_ord in cur_norm_pct.index:
-                    ax.scatter(
-                        tday_ord,
-                        cur_norm_pct.loc[tday_ord],
-                        s=40,
-                        facecolors="white",
-                        edgecolors="black",
-                        linewidths=1.0,
-                        zorder=4,
-                    )
-
-                # per-year forward move from this trading day to that year's own month end
-                lvl_t = df_sel.loc[tday_ord]
-                lvl_end = df_sel.apply(
-                    lambda col: col.dropna().iloc[-1] if col.notna().any() else np.nan
+            if tday_ord in avg_sel.index:
+                ax.scatter(tday_ord, avg_sel.loc[tday_ord], s=35, color="black", zorder=4)
+            if cur_path is not None and tday_ord in cur_path.index:
+                ax.scatter(
+                    tday_ord,
+                    cur_path.loc[tday_ord],
+                    s=40,
+                    facecolors="white",
+                    edgecolors="black",
+                    linewidths=1.0,
+                    zorder=4,
                 )
-                fwd = (lvl_end - lvl_t).dropna()
 
-                if not fwd.empty:
-                    stats_text = (
-                        f"From today (Day {tday_ord}) → month-end across years:\n"
-                        f"• Mean: {fwd.mean():+.2f}%\n"
-                        f"• Median: {fwd.median():+.2f}%\n"
-                        f"• Hit rate >0: {(fwd > 0).mean()*100:0.0f}%  | N={fwd.shape[0]}"
-                    )
-                    ax.text(
-                        0.02,
-                        0.05,
-                        stats_text,
-                        transform=ax.transAxes,
-                        fontsize=9.0,
-                        color="black",
-                        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8),
-                    )
+            # per-year forward move from this trading day to that year's month end (equal weight, since ffilled)
+            lvl_t = df_sel.loc[tday_ord]
+            lvl_end = df_sel.loc[df_sel.index.max()]
+            fwd = (lvl_end - lvl_t).dropna()
 
-    # Y limits with a bit of padding around the band
+            if not fwd.empty:
+                stats_text = (
+                    f"From today (Day {tday_ord}) → month-end across years:\n"
+                    f"• Mean: {fwd.mean():+.2f}%\n"
+                    f"• Median: {fwd.median():+.2f}%\n"
+                    f"• Hit rate >0: {(fwd > 0).mean()*100:0.0f}%  | N={fwd.shape[0]}"
+                )
+                ax.text(
+                    0.02,
+                    0.05,
+                    stats_text,
+                    transform=ax.transAxes,
+                    fontsize=9.0,
+                    color="black",
+                    bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8),
+                )
+
     y_min = float((avg_sel - std_sel).min())
     y_max = float((avg_sel + std_sel).max())
     pad_y = 0.1 * max(abs(y_min), abs(y_max)) if np.isfinite(y_min) and np.isfinite(y_max) else 0.0
     ax.set_ylim(y_min - pad_y, y_max + pad_y)
 
-    # Legend
     ax.legend(frameon=False, loc="upper left", title="Series", title_fontsize=10)
 
     fig.tight_layout(pad=1.0)
