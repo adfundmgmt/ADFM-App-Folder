@@ -11,7 +11,6 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 plt.style.use("default")
 
-TRADING_DAYS_FULL_YEAR = 253
 MIN_DAYS_REQUIRED = 30
 CACHE_TTL_SECONDS = 3600
 
@@ -34,8 +33,8 @@ with st.sidebar:
 
         • Pulls adjusted daily closes from Yahoo Finance  
         • Aligns each calendar year by trading day to build YTD paths  
-        • Computes correlations (ρ) between the current year and all past years  
-        • Overlays the highest-correlation analogue paths for visual comparison  
+        • Selects historical analogs using correlation to the current year so far  
+        • Displays full-year paths for selected analogs to show how similar setups resolved  
         """,
         unsafe_allow_html=True,
     )
@@ -108,6 +107,7 @@ if not paths:
     st.stop()
 
 ytd_df = pd.DataFrame(paths)
+
 this_year = dt.datetime.now().year
 if this_year not in ytd_df.columns:
     st.warning(f"No YTD data for {this_year}")
@@ -116,7 +116,7 @@ if this_year not in ytd_df.columns:
 current = ytd_df[this_year].dropna()
 n_days = len(current)
 
-# ── Correlations ─────────────────────────────────────────────────────────
+# ── Correlations (selection uses ONLY first n_days) ──────────────────────
 corrs = {}
 for yr, ser in ytd_df.items():
     if yr == this_year:
@@ -132,7 +132,7 @@ if not corrs:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-# ── Filters then Top-N ───────────────────────────────────────────────────
+# ── Filters ──────────────────────────────────────────────────────────────
 def keep_year(yr: int) -> bool:
     ser = ytd_df[yr].dropna()
     if len(ser) < n_days:
@@ -140,9 +140,8 @@ def keep_year(yr: int) -> bool:
 
     ret_n = ser.iloc[n_days - 1]
 
-    # correct daily return reconstruction from cumulative returns
     daily_ret = (1 + ser).div((1 + ser).shift(1)).sub(1)
-    max_d = daily_ret.abs().max()
+    max_d = daily_ret.iloc[:n_days].abs().max()
 
     if f_outliers and not (lo / 100 <= ret_n <= hi / 100):
         return False
@@ -159,7 +158,7 @@ top = sorted(eligible.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
 
 # ── Metrics ──────────────────────────────────────────────────────────────
 current_ret = float(current.iloc[-1])
-finals = [float(ytd_df[yr].dropna().iloc[n_days - 1]) for yr, _ in top]
+finals = [float(ytd_df[yr].dropna().iloc[-1]) for yr, _ in top]
 median_final = float(np.nanmedian(finals)) if finals else np.nan
 sigma_final = float(np.nanstd(finals)) if finals else np.nan
 
@@ -167,24 +166,31 @@ fmt = lambda x: "N/A" if np.isnan(x) else f"{x:.2%}"
 
 m1, m2, m3 = st.columns(3)
 m1.metric(f"{this_year} YTD", fmt(current_ret))
-m2.metric("Median Final Return", fmt(median_final))
+m2.metric("Median Full-Year Return (Analogs)", fmt(median_final))
 m3.metric("Analog Dispersion (σ)", fmt(sigma_final))
 
 st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
 
-# ── Plot ─────────────────────────────────────────────────────────────────
+# ── Plot (FULL YEAR FOR HISTORICAL ANALOGS) ──────────────────────────────
 palette = plt.cm.get_cmap("tab10" if len(top) <= 10 else "tab20")(np.linspace(0, 1, len(top)))
 fig, ax = plt.subplots(figsize=(14, 7))
 
 for idx, (yr, rho) in enumerate(top):
-    ser = ytd_df[yr].dropna().iloc[:n_days]
-    ax.plot(ser.index, ser.values, "--", lw=2, alpha=0.7,
-            color=palette[idx], label=f"{yr} (ρ={rho:.2f})")
+    ser_full = ytd_df[yr].dropna()
+    ax.plot(
+        ser_full.index,
+        ser_full.values,
+        "--",
+        lw=2,
+        alpha=0.7,
+        color=palette[idx],
+        label=f"{yr} (ρ={rho:.2f})",
+    )
 
 ax.plot(current.index, current.values, color="black", lw=3.2, label=f"{this_year} (YTD)")
-ax.axvline(current.index[-1], color="gray", ls=":", lw=1.3, alpha=0.7)
+ax.axvline(n_days, color="gray", ls=":", lw=1.3, alpha=0.8)
 
-ax.set_title(f"{ticker} - {this_year} vs Historical Analogs", fontsize=16, weight="bold")
+ax.set_title(f"{ticker} – {this_year} vs Historical Analogs", fontsize=16, weight="bold")
 ax.set_xlabel("Trading Day of Year", fontsize=13)
 ax.set_ylabel("Cumulative Return", fontsize=13)
 ax.axhline(0, color="gray", ls="--", lw=1)
@@ -209,31 +215,5 @@ ax.grid(True, ls=":", lw=0.7, color="#888")
 ax.legend(loc="best", frameon=False, ncol=2, fontsize=11)
 plt.tight_layout()
 st.pyplot(fig)
-
-# ── Downloads ────────────────────────────────────────────────────────────
-st.subheader("Downloads")
-paths_trunc = ytd_df.apply(lambda s: s.dropna().iloc[:n_days])
-st.download_button(
-    "Download YTD Paths (first n days)",
-    data=paths_trunc.to_csv(index_label="TradingDay"),
-    file_name=f"{ticker}_ytd_paths_first_{n_days}_days.csv",
-    mime="text/csv",
-)
-
-corr_df = pd.DataFrame(sorted(corrs.items(), key=lambda kv: kv[1], reverse=True),
-                       columns=["Year", "Corr"])
-top_df = pd.DataFrame(top, columns=["Year", "Corr"])
-
-c1, c2 = st.columns(2)
-with c1:
-    st.download_button("Download Correlations (all eligible)",
-                       data=corr_df.to_csv(index=False),
-                       file_name=f"{ticker}_correlations_all.csv",
-                       mime="text/csv")
-with c2:
-    st.download_button("Download Correlations (top shown)",
-                       data=top_df.to_csv(index=False),
-                       file_name=f"{ticker}_correlations_top.csv",
-                       mime="text/csv")
 
 st.caption("© 2025 AD Fund Management LP")
