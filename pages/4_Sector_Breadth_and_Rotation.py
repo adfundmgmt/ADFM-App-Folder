@@ -7,8 +7,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import plotly.express as px
 import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 
 # ------------------------------- Page config -------------------------------
@@ -17,6 +17,24 @@ st.set_page_config(
     layout="wide"
 )
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
+
+# ------------------------------- Sidebar -----------------------------------
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        Track S&P 500 sector leadership, breadth, and rotation using a consistent framework.
+
+        • Relative strength vs SPY  
+        • 1M vs 3M rotation scatter  
+        • Quadrant-based regime context  
+        • Ranked snapshot table  
+
+        Data source: Yahoo Finance  
+        Refresh cadence: hourly
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ------------------------------- Constants --------------------------------
 SECTORS = {
@@ -72,7 +90,24 @@ if prices.empty or "SPY" not in prices:
 
 prices = prices.ffill().dropna()
 
-# ------------------------------- Returns -----------------------------------
+# ------------------------------- Relative strength --------------------------
+relative_strength = prices[list(SECTORS)].div(prices["SPY"], axis=0)
+
+selected_sector = st.selectbox(
+    "Select sector to compare with SPY:",
+    options=list(SECTORS.keys()),
+    format_func=lambda x: SECTORS[x],
+)
+
+fig_rs = px.line(
+    relative_strength[selected_sector],
+    title=f"Relative Strength: {SECTORS[selected_sector]} vs SPY",
+    labels={"value": "Ratio", "index": "Date"},
+)
+fig_rs.update_layout(height=360)
+st.plotly_chart(fig_rs, use_container_width=True)
+
+# ------------------------------- Returns snapshot --------------------------
 rets_1m = prices[list(SECTORS)].pct_change(DAYS_1M).iloc[-1]
 rets_3m = prices[list(SECTORS)].pct_change(DAYS_3M).iloc[-1]
 
@@ -125,13 +160,13 @@ for i, r in snap.iterrows():
 fig.update_layout(
     title="1M vs 3M total return",
     xaxis=dict(
-        title="3M return (decimal)",
-        tickformat=".3f",
+        title="3M return",
+        tickformat=".1%",
         zeroline=False
     ),
     yaxis=dict(
-        title="1M return (decimal)",
-        tickformat=".3f",
+        title="1M return",
+        tickformat=".1%",
         zeroline=False
     ),
     height=520,
@@ -154,7 +189,6 @@ snap_sorted = (
     .reset_index(drop=True)
 )
 
-# Rank must start at 1
 snap_sorted.insert(0, "Rank", np.arange(1, len(snap_sorted) + 1))
 
 display_df = snap_sorted[
@@ -173,7 +207,6 @@ styler = (
     .background_gradient(subset=["Speed"], cmap="PuBuGn")
 )
 
-# Exact height: header + rows, no padding rows
 row_height = 35
 table_height = row_height * (len(display_df) + 1)
 
