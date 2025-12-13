@@ -1,6 +1,5 @@
-# sp_sector_rotation_clean_v5.py
+# sp_sector_rotation_clean_v6.py
 # ADFM — S&P 500 Sector Breadth & Rotation Monitor
-# Improved rotation scatter: labels above points, no toggles.
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -13,7 +12,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(page_title="S&P 500 Sector Breadth & Rotation Monitor", layout="wide")
+st.set_page_config(
+    page_title="S&P 500 Sector Breadth & Rotation Monitor",
+    layout="wide"
+)
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
 
 # ------------------------------- Constants --------------------------------
@@ -35,7 +37,6 @@ LOOKBACK_PERIOD = "1y"
 INTERVAL = "1d"
 DAYS_1M = 21
 DAYS_3M = 63
-MIN_OBS_FOR_RETURNS = DAYS_3M
 
 PASTELS = [
     "#a6cee3", "#b2df8a", "#fb9a99", "#fdbf6f", "#cab2d6",
@@ -44,93 +45,40 @@ PASTELS = [
 
 # ------------------------------- Data fetch --------------------------------
 @st.cache_data(ttl=3600)
-def robust_fetch_batch(tickers, period="1y", interval="1d") -> pd.DataFrame:
-    try:
-        data = yf.download(
-            tickers,
-            period=period,
-            interval=interval,
-            progress=False,
-            group_by="ticker",
-            auto_adjust=False,
-        )
-    except Exception:
-        return pd.DataFrame()
-
-    out = {}
-    if isinstance(data.columns, pd.MultiIndex):
-        for t in tickers:
-            try:
-                s = data[(t, "Adj Close")].dropna()
-                if not s.empty:
-                    out[t] = s
-            except Exception:
-                continue
-    else:
-        if "Adj Close" in data.columns:
-            out[tickers[0]] = data["Adj Close"].dropna()
-
-    if not out:
-        return pd.DataFrame()
-
-    return pd.DataFrame(out).sort_index().dropna(how="all")
-
-# ------------------------------- Load prices -------------------------------
-tickers = list(SECTORS.keys()) + ["SPY"]
-prices = robust_fetch_batch(tickers, LOOKBACK_PERIOD, INTERVAL)
-
-if prices.empty or "SPY" not in prices.columns:
-    st.error("Data unavailable or incomplete.")
-    st.stop()
-
-prices["SPY"] = prices["SPY"].ffill()
-prices = prices[prices["SPY"].notna()]
-
-available_sector_tickers = [t for t in SECTORS if t in prices.columns]
-if not available_sector_tickers:
-    st.error("No valid sector tickers.")
-    st.stop()
-
-# ------------------------------- Sidebar -----------------------------------
-with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        Track S&P 500 sector leadership, breadth, and rotation.
-
-        • Relative strength vs SPY  
-        • 1M vs 3M rotation scatter  
-        • Ranked snapshot table  
-
-        Data source: Yahoo Finance.
-        """,
-        unsafe_allow_html=True,
+def fetch_prices(tickers):
+    data = yf.download(
+        tickers,
+        period=LOOKBACK_PERIOD,
+        interval=INTERVAL,
+        progress=False,
+        group_by="ticker",
+        auto_adjust=False,
     )
+    out = {}
+    for t in tickers:
+        try:
+            out[t] = data[(t, "Adj Close")].dropna()
+        except Exception:
+            pass
+    return pd.DataFrame(out)
 
-# ------------------------------- Relative strength -------------------------
-relative_strength = prices[available_sector_tickers].div(prices["SPY"], axis=0)
+# ------------------------------- Load data ---------------------------------
+tickers = list(SECTORS.keys()) + ["SPY"]
+prices = fetch_prices(tickers)
 
-selected_sector = st.selectbox(
-    "Select sector:",
-    available_sector_tickers,
-    format_func=lambda x: SECTORS[x]
-)
+if prices.empty or "SPY" not in prices:
+    st.error("Data unavailable.")
+    st.stop()
 
-fig_rs = px.line(
-    relative_strength[selected_sector],
-    title=f"Relative Strength: {SECTORS[selected_sector]} vs SPY",
-    labels={"value": "Ratio", "index": "Date"},
-)
-fig_rs.update_layout(height=360)
-st.plotly_chart(fig_rs, use_container_width=True)
+prices = prices.ffill().dropna()
 
-# ------------------------------- Returns snapshot --------------------------
-rets_1m = prices[available_sector_tickers].pct_change(DAYS_1M).iloc[-1]
-rets_3m = prices[available_sector_tickers].pct_change(DAYS_3M).iloc[-1]
+# ------------------------------- Returns -----------------------------------
+rets_1m = prices[list(SECTORS)].pct_change(DAYS_1M).iloc[-1]
+rets_3m = prices[list(SECTORS)].pct_change(DAYS_3M).iloc[-1]
 
 snap = pd.DataFrame({
-    "Sector": [SECTORS[t] for t in available_sector_tickers],
-    "Ticker": available_sector_tickers,
+    "Sector": [SECTORS[t] for t in SECTORS],
+    "Ticker": list(SECTORS.keys()),
     "1M": rets_1m.values,
     "3M": rets_3m.values,
 })
@@ -149,23 +97,21 @@ snap["Quadrant"] = np.select(
     default="Neutral"
 )
 
-color_map = {s: PASTELS[i] for i, s in enumerate(snap["Sector"])}
-
 # ------------------------------- Rotation Scatter --------------------------
 st.subheader("Current rotation scatter")
 
-fig_xy = go.Figure()
-fig_xy.add_hline(y=0, line_width=1, opacity=0.5)
-fig_xy.add_vline(x=0, line_width=1, opacity=0.5)
+fig = go.Figure()
+fig.add_hline(y=0, line_width=1, opacity=0.5)
+fig.add_vline(x=0, line_width=1, opacity=0.5)
 
-for _, r in snap.iterrows():
-    fig_xy.add_trace(go.Scatter(
+for i, r in snap.iterrows():
+    fig.add_trace(go.Scatter(
         x=[r["3M"]],
         y=[r["1M"]],
         mode="markers+text",
         text=[r["Sector"]],
         textposition="top center",
-        marker=dict(size=14, color=color_map[r["Sector"]]),
+        marker=dict(size=14, color=PASTELS[i]),
         hovertemplate=(
             f"<b>{r['Sector']}</b><br>"
             f"1M: {r['1M']:.2%}<br>"
@@ -176,13 +122,22 @@ for _, r in snap.iterrows():
         showlegend=False
     ))
 
-fig_xy.update_layout(
+fig.update_layout(
     title="1M vs 3M total return",
-    xaxis=dict(title="3M return", tickformat=".3f"),
-    yaxis=dict(title="1M return", tickformat=".3f"),
+    xaxis=dict(
+        title="3M return (decimal)",
+        tickformat=".3f",
+        zeroline=False
+    ),
+    yaxis=dict(
+        title="1M return (decimal)",
+        tickformat=".3f",
+        zeroline=False
+    ),
     height=520,
 )
-st.plotly_chart(fig_xy, use_container_width=True)
+
+st.plotly_chart(fig, use_container_width=True)
 
 # ------------------------------- Table -------------------------------------
 st.subheader("Rotation snapshot table")
@@ -199,13 +154,16 @@ snap_sorted = (
     .reset_index(drop=True)
 )
 
-snap_sorted.insert(0, "Rank", snap_sorted.index + 1)
+# Rank must start at 1
+snap_sorted.insert(0, "Rank", np.arange(1, len(snap_sorted) + 1))
+
+display_df = snap_sorted[
+    ["Rank", "Sector", "Ticker", "Quadrant", "1M", "3M", "Angle (deg)", "Speed"]
+]
 
 styler = (
-    snap_sorted[
-        ["Rank", "Sector", "Ticker", "Quadrant", "1M", "3M", "Angle (deg)", "Speed"]
-    ]
-    .style.format({
+    display_df.style
+    .format({
         "1M": "{:.2%}",
         "3M": "{:.2%}",
         "Angle (deg)": "{:.1f}",
@@ -215,10 +173,15 @@ styler = (
     .background_gradient(subset=["Speed"], cmap="PuBuGn")
 )
 
+# Exact height: header + rows, no padding rows
+row_height = 35
+table_height = row_height * (len(display_df) + 1)
+
 st.dataframe(
     styler,
     use_container_width=True,
-    height=40 * len(snap_sorted) + 40
+    height=table_height,
+    hide_index=True
 )
 
 # ------------------------------- Footer ------------------------------------
