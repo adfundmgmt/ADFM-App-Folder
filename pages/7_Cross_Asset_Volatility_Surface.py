@@ -1,13 +1,20 @@
 # pages/18_Cross_Asset_Vol_Surface.py
 # Cross Asset Volatility Surface Monitor
-# Equity, commodity, credit, FX regime read with clean visuals and commentary.
+# Version: Vol-index-only (CBOE indices via Yahoo Finance)
+#
+# Core idea:
+# - Use only volatility indices (^VIX, ^VXN, ^VVIX, ^OVX, ^GVZ, ^RVX, ^VXD, ^TYVIX if available)
+# - Build a "surface" as percentile-of-level for rolling means across multiple horizons
+# - Add a second "surface" for "vol of vol" as percentile-of-rolling-stdev of daily returns across horizons
+# - Commentary: key drivers first, then conclusion
+# - Visuals: scorecard, surfaces, normalized time series (rebased to 0), ratios, diagnostics
 
 import warnings
 warnings.filterwarnings("ignore")
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -15,51 +22,44 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 
-# Optional FRED
-try:
-    from pandas_datareader import data as pdr
-    FRED_OK = True
-except Exception:
-    FRED_OK = False
-
 # -----------------------------
 # Page setup and style
 # -----------------------------
-st.set_page_config(page_title="Cross Asset Vol Surface", layout="wide")
+st.set_page_config(page_title="Volatility Surface Monitor", layout="wide")
 
 CUSTOM_CSS = """
 <style>
-.block-container {padding-top: 1.0rem; padding-bottom: 2.0rem; max-width: 1500px;}
+.block-container {padding-top: 1.0rem; padding-bottom: 2.0rem; max-width: 1550px;}
 h1, h2, h3 {font-weight: 650; letter-spacing: 0.2px;}
-.small-muted {color: rgba(0,0,0,0.55); font-size: 0.9rem;}
+.small-muted {color: rgba(0,0,0,0.55); font-size: 0.92rem;}
 .card {
     background: #ffffff;
     border: 1px solid rgba(0,0,0,0.08);
     border-radius: 16px;
     padding: 14px 16px;
-    box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+    box-shadow: 0 10px 26px rgba(0,0,0,0.06);
 }
 .kpi-title {font-size: 0.85rem; color: rgba(0,0,0,0.55); margin-bottom: 2px;}
-.kpi-value {font-size: 1.35rem; font-weight: 700; margin: 0;}
-.kpi-sub {font-size: 0.9rem; color: rgba(0,0,0,0.65); margin-top: 6px;}
-hr {border: none; border-top: 1px solid rgba(0,0,0,0.08); margin: 0.8rem 0;}
+.kpi-value {font-size: 1.35rem; font-weight: 750; margin: 0;}
+.kpi-sub {font-size: 0.92rem; color: rgba(0,0,0,0.65); margin-top: 6px; line-height: 1.25rem;}
+hr {border: none; border-top: 1px solid rgba(0,0,0,0.08); margin: 0.85rem 0;}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 st.title("Cross Asset Volatility Surface Monitor")
 st.markdown(
-    '<div class="small-muted">A tape-style regime read: where volatility is rising, where it is compressing, and what is driving cross-asset stress.</div>',
+    '<div class="small-muted">Vol indices only. Levels, moves, and where each index sits versus its own history across horizons.</div>',
     unsafe_allow_html=True
 )
 
 # -----------------------------
-# Configuration
+# Config
 # -----------------------------
 START_YEAR_OPTIONS = [2020, 2010, 2000, 1990, 1980]
 DEFAULT_START_YEAR = 2020
 
-VOL_WINDOWS = {
+HORIZONS = {
     "1W": 5,
     "1M": 21,
     "3M": 63,
@@ -67,28 +67,44 @@ VOL_WINDOWS = {
     "1Y": 252,
 }
 
-@dataclass
-class AssetUniverse:
-    name: str
-    tickers: Dict[str, str]  # label -> ticker
+CORE_INDICES: Dict[str, str] = {
+    "VIX (S&P 500 vol)": "^VIX",
+    "VXN (Nasdaq 100 vol)": "^VXN",
+    "VVIX (VIX vol of vol)": "^VVIX",
+    "OVX (Crude Oil vol)": "^OVX",
+    "GVZ (Gold vol)": "^GVZ",
+}
 
-def _safe_pct(x: Optional[float]) -> str:
-    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
-        return "n/a"
-    return f"{x:.2f}%"
+OPTIONAL_INDICES: Dict[str, str] = {
+    "RVX (Russell 2000 vol)": "^RVX",
+    "VXD (Dow vol)": "^VXD",
+    "TYVIX (10Y Treasury vol)": "^TYVIX",
+}
+
+CANONICAL_ORDER = list(CORE_INDICES.keys()) + list(OPTIONAL_INDICES.keys())
 
 def _safe_num(x: Optional[float], fmt: str = "{:.2f}") -> str:
     if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
         return "n/a"
     return fmt.format(x)
 
-def _annualized_realized_vol(px: pd.Series, window: int) -> pd.Series:
-    r = np.log(px).diff()
-    return r.rolling(window).std() * np.sqrt(252.0) * 100.0
+def _safe_pct(x: Optional[float]) -> str:
+    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
+        return "n/a"
+    return f"{x:.2f}%"
 
-def _percentile_rank(history: pd.Series, value: float) -> Optional[float]:
+def _normalize_to_zero(series: pd.Series) -> pd.Series:
+    s = series.dropna()
+    if s.empty:
+        return series * np.nan
+    base = float(s.iloc[0])
+    if base == 0:
+        return series * np.nan
+    return (series / base - 1.0) * 100.0
+
+def _percentile_of_value(history: pd.Series, value: float) -> Optional[float]:
     h = history.dropna().values
-    if len(h) < 30 or value is None or np.isnan(value):
+    if len(h) < 60 or value is None or np.isnan(value):
         return None
     return float((h < value).mean() * 100.0)
 
@@ -102,399 +118,183 @@ def _zscore(history: pd.Series, value: float) -> Optional[float]:
         return None
     return (float(value) - mu) / sd
 
-def _normalize_to_zero(series: pd.Series) -> pd.Series:
-    s = series.dropna()
-    if s.empty:
-        return series * np.nan
-    base = float(s.iloc[0])
-    if base == 0:
-        return series * np.nan
-    return (series / base - 1.0) * 100.0
-
-def _chunked(iterable: List[str], n: int) -> List[List[str]]:
-    return [iterable[i:i+n] for i in range(0, len(iterable), n)]
-
-# -----------------------------
-# Universes
-# -----------------------------
-EQUITY = AssetUniverse(
-    name="Equity",
-    tickers={
-        "SPY": "SPY",
-        "QQQ": "QQQ",
-        "IWM": "IWM",
-        "EEM": "EEM",
-        "EFA": "EFA",
-    }
-)
-
-COMMODITY = AssetUniverse(
-    name="Commodity",
-    tickers={
-        "WTI": "CL=F",
-        "Gold": "GC=F",
-        "Copper": "HG=F",
-        "NatGas": "NG=F",
-        "DBC": "DBC",
-    }
-)
-
-CREDIT = AssetUniverse(
-    name="Credit",
-    tickers={
-        "HYG": "HYG",
-        "LQD": "LQD",
-        "JNK": "JNK",
-        "EMB": "EMB",
-    }
-)
-
-FX = AssetUniverse(
-    name="FX",
-    tickers={
-        "DXY": "DX-Y.NYB",
-        "EURUSD": "EURUSD=X",
-        "USDJPY": "USDJPY=X",
-        "GBPUSD": "GBPUSD=X",
-        "AUDUSD": "AUDUSD=X",
-    }
-)
-
-IMPLIED_INDICES = {
-    "VIX": "^VIX",
-    "VXV (3M)": "^VXV",
-    "VXMT (6M)": "^VXMT",
-    "OVX (Oil Vol)": "^OVX",
-    "GVZ (Gold Vol)": "^GVZ",
-    "EVZ (EURUSD Vol)": "^EVZ",
-}
-
-FRED_SERIES = {
-    "HY OAS (bps)": "BAMLH0A0HYM2",
-    "IG OAS (bps)": "BAMLC0A0CM",
-}
-
-# -----------------------------
-# Sidebar controls
-# -----------------------------
-with st.sidebar:
-    st.header("About This Tool")
-    st.write(
-        "Maps realized volatility across equity, commodities, credit, and FX over multiple horizons, "
-        "then overlays implied vol indices where available. Commentary summarizes drivers first, then a regime conclusion."
-    )
-    st.divider()
-
-    start_year = st.selectbox("History start year", START_YEAR_OPTIONS, index=START_YEAR_OPTIONS.index(DEFAULT_START_YEAR))
-    end_date = st.date_input("End date", value=date.today())
-    vol_cap = st.slider("Heatmap cap (annualized vol, %)", min_value=15, max_value=120, value=70, step=5)
-    dl_chunk = st.slider("Download chunk size", min_value=4, max_value=40, value=18, step=2)
-
-    st.divider()
-    show_implied = st.checkbox("Show implied vol overlays (VIX, OVX, GVZ, EVZ)", value=True)
-    show_credit_spreads = st.checkbox("Try to pull credit spreads from FRED", value=True)
-
-# -----------------------------
-# Data fetch (robust yfinance parsing)
-# -----------------------------
 def _extract_close_matrix(df: pd.DataFrame) -> pd.DataFrame:
     """
-    yfinance can return:
-      - Single ticker: columns like ['Open','High','Low','Close',...]
-      - Multi ticker, group_by="column": MultiIndex (Field, Ticker)
-      - Multi ticker, group_by="ticker": MultiIndex (Ticker, Field)
-    This function returns a Close matrix with columns = tickers (uppercased).
+    Robust close extraction for yfinance outputs.
+    Handles:
+      - single ticker: columns include 'Close'
+      - multi tickers with MultiIndex in either (Field, Ticker) or (Ticker, Field)
+    Returns DataFrame with columns as tickers.
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Single ticker typical shape
     if not isinstance(df.columns, pd.MultiIndex):
         if "Close" in df.columns:
             out = df[["Close"]].copy()
-            # column name unknown here, leave as 'Close' and let caller rename if needed
             return out
         if "Adj Close" in df.columns:
             out = df[["Adj Close"]].copy()
             return out
         return pd.DataFrame()
 
-    # MultiIndex cases
     lvl0 = df.columns.get_level_values(0)
     lvl1 = df.columns.get_level_values(1)
 
-    # Case A: (Field, Ticker)
+    # (Field, Ticker)
     if "Close" in set(lvl0):
         close = df["Close"].copy()
-        close.columns = [str(c).upper() for c in close.columns]
+        close.columns = [str(c) for c in close.columns]
         return close
-
     if "Adj Close" in set(lvl0):
         close = df["Adj Close"].copy()
-        close.columns = [str(c).upper() for c in close.columns]
+        close.columns = [str(c) for c in close.columns]
         return close
 
-    # Case B: (Ticker, Field)
+    # (Ticker, Field)
     if "Close" in set(lvl1):
         close = df.xs("Close", axis=1, level=1).copy()
-        close.columns = [str(c).upper() for c in close.columns]
+        close.columns = [str(c) for c in close.columns]
         return close
-
     if "Adj Close" in set(lvl1):
         close = df.xs("Adj Close", axis=1, level=1).copy()
-        close.columns = [str(c).upper() for c in close.columns]
+        close.columns = [str(c) for c in close.columns]
         return close
 
     return pd.DataFrame()
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
-def load_yf_prices(tickers: List[str], start: str, end: str) -> pd.DataFrame:
-    df = yf.download(
+def load_vol_indices(tickers: List[str], start: str, end: str) -> pd.DataFrame:
+    raw = yf.download(
         tickers=tickers,
         start=start,
         end=end,
-        auto_adjust=True,
+        auto_adjust=False,
         progress=False,
-        group_by="ticker",   # keep as ticker, we now parse both layouts
+        group_by="ticker",
         threads=True,
     )
-    close = _extract_close_matrix(df)
+    close = _extract_close_matrix(raw)
 
-    # Fix single ticker return where _extract_close_matrix returns a single 'Close' column
+    # Fix single-column case naming
     if close.shape[1] == 1 and close.columns.tolist() in [["Close"], ["Adj Close"]]:
-        # rename that single column to the ticker we asked for
         if len(tickers) == 1:
-            close.columns = [tickers[0].upper()]
-        else:
-            # fallback: keep as-is
-            pass
-
+            close.columns = [tickers[0]]
+    close = close.loc[~close.index.duplicated(keep="last")].sort_index()
+    close.columns = [c.upper() for c in close.columns]
     return close
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)
-def load_fred_series(series_id: str, start: str, end: str) -> pd.Series:
-    if not FRED_OK:
-        return pd.Series(dtype=float)
-    s = pdr.DataReader(series_id, "fred", start, end)
-    if isinstance(s, pd.DataFrame) and s.shape[1] == 1:
-        return s.iloc[:, 0].rename(series_id)
-    if isinstance(s, pd.Series):
-        return s.rename(series_id)
-    return pd.Series(dtype=float)
-
-def fetch_all_prices(universes: List[AssetUniverse], implied: Dict[str, str], start: str, end: str, chunk_size: int) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    labels_to_tickers: Dict[str, str] = {}
-    for u in universes:
-        labels_to_tickers.update(u.tickers)
-    if show_implied:
-        labels_to_tickers.update(implied)
-
-    tickers = sorted(set([t.upper() for t in labels_to_tickers.values()]))
-    if not tickers:
-        return pd.DataFrame(), labels_to_tickers
-
-    chunks = _chunked(tickers, chunk_size)
-    out = []
-    progress = st.progress(0, text="Downloading market data...")
-    for i, ch in enumerate(chunks):
-        px_chunk = load_yf_prices(ch, start, end)
-        if not px_chunk.empty:
-            out.append(px_chunk)
-        progress.progress(int((i + 1) / len(chunks) * 100), text="Downloading market data...")
-    progress.empty()
-
-    if not out:
-        return pd.DataFrame(), labels_to_tickers
-
-    prices = pd.concat(out, axis=1)
-    prices = prices.loc[~prices.index.duplicated(keep="last")].sort_index()
-
-    # Deduplicate columns if any overlap and keep last non-null
-    prices = prices.groupby(level=0, axis=1).last()
-
-    return prices, labels_to_tickers
-
-# Dates
-start_str = f"{start_year}-01-01"
-# yfinance end is often exclusive, add 1 day buffer
-end_str = str(end_date + timedelta(days=1))
-
-universes = [EQUITY, COMMODITY, CREDIT, FX]
-prices, labels_to_tickers = fetch_all_prices(universes, IMPLIED_INDICES, start_str, end_str, dl_chunk)
-
-if prices.empty:
-    st.error("No price data returned. Check tickers, connectivity, or date range.")
-    st.stop()
-
-# -----------------------------
-# Build realized vol surface
-# -----------------------------
-surface_assets: List[Tuple[str, str, str]] = []
-for u in universes:
-    for label, tkr in u.tickers.items():
-        surface_assets.append((u.name, label, tkr.upper()))
-
-vol_rows = []
-for group, label, tkr in surface_assets:
-    if tkr not in prices.columns:
-        continue
-    s = prices[tkr].dropna()
-    if len(s) < 10:
-        continue
-
-    row = {"Group": group, "Asset": label, "Ticker": tkr}
-    for h, w in VOL_WINDOWS.items():
-        if len(s) >= (w + 2):
-            v = _annualized_realized_vol(s, w)
-            row[h] = float(v.dropna().iloc[-1]) if not v.dropna().empty else np.nan
-        else:
-            row[h] = np.nan
-    vol_rows.append(row)
-
-vol_df = pd.DataFrame(vol_rows)
-
-if vol_df.empty:
-    # Show helpful diagnostics instead of a dead end
-    missing = [f"{g}:{a} ({t})" for g, a, t in surface_assets if t not in prices.columns]
-    present = [f"{g}:{a} ({t})" for g, a, t in surface_assets if t in prices.columns]
-    st.error("Insufficient data to compute realized vol. This usually means the price matrix came back empty or missing key tickers.")
-    with st.expander("Diagnostics"):
-        st.write("Columns received:", list(prices.columns)[:50])
-        st.write("Assets present:", present)
-        st.write("Assets missing:", missing)
-        st.write("Date range:", start_str, "to", end_str)
-        st.write("Non-null counts (top):")
-        st.write(prices.notna().sum().sort_values(ascending=False).head(20))
-    st.stop()
-
-heat = vol_df[["Group", "Asset"] + list(VOL_WINDOWS.keys())].copy()
-heat = heat.sort_values(["Group", "Asset"]).reset_index(drop=True)
-heat_vals = heat[list(VOL_WINDOWS.keys())].clip(lower=0, upper=vol_cap)
-
-# -----------------------------
-# Implied overlays and FRED
-# -----------------------------
-def get_implied_last(label: str) -> Optional[float]:
-    tkr = IMPLIED_INDICES.get(label)
-    if not tkr:
+def _points_change(series: pd.Series, k: int) -> Optional[float]:
+    s = series.dropna()
+    if len(s) < k + 1:
         return None
-    t = tkr.upper()
-    if t not in prices.columns:
+    return float(s.iloc[-1] - s.iloc[-(k + 1)])
+
+def _pct_change(series: pd.Series, k: int) -> Optional[float]:
+    s = series.dropna()
+    if len(s) < k + 1:
         return None
-    s = prices[t].dropna()
-    if s.empty:
+    base = float(s.iloc[-(k + 1)])
+    if base == 0:
         return None
-    return float(s.iloc[-1])
+    return float((s.iloc[-1] / base - 1.0) * 100.0)
 
-fred_data = {}
-if show_credit_spreads and FRED_OK:
-    for nm, sid in FRED_SERIES.items():
-        try:
-            s = load_fred_series(sid, start_str, str(end_date))
-            if not s.empty:
-                fred_data[nm] = s
-        except Exception:
-            pass
+def _rolling_mean_surface(series: pd.Series, windows: Dict[str, int]) -> Dict[str, Optional[float]]:
+    out = {}
+    s = series.dropna()
+    for name, w in windows.items():
+        if len(s) < w + 10:
+            out[name] = None
+            continue
+        rm = s.rolling(w).mean()
+        cur = float(rm.dropna().iloc[-1]) if not rm.dropna().empty else np.nan
+        pr = _percentile_of_value(rm.dropna(), cur)
+        out[name] = pr
+    return out
 
-# -----------------------------
-# Commentary engine
-# -----------------------------
-def last_returns(ticker: str) -> Dict[str, Optional[float]]:
-    if ticker not in prices.columns:
-        return {"1D": None, "1W": None, "1M": None}
-    s = prices[ticker].dropna()
-    if len(s) < 30:
-        return {"1D": None, "1W": None, "1M": None}
-    r1d = (s.iloc[-1] / s.iloc[-2] - 1.0) * 100.0 if len(s) >= 2 else None
-    r1w = (s.iloc[-1] / s.iloc[-6] - 1.0) * 100.0 if len(s) >= 6 else None
-    r1m = (s.iloc[-1] / s.iloc[-22] - 1.0) * 100.0 if len(s) >= 22 else None
-    return {"1D": float(r1d) if r1d is not None else None,
-            "1W": float(r1w) if r1w is not None else None,
-            "1M": float(r1m) if r1m is not None else None}
+def _vol_of_vol_surface(series: pd.Series, windows: Dict[str, int]) -> Dict[str, Optional[float]]:
+    """
+    "Vol of vol" defined as rolling stdev of daily % changes in the vol index.
+    Surface cell is percentile of current rolling stdev vs its own history.
+    """
+    out = {}
+    s = series.dropna()
+    if len(s) < 40:
+        return {k: None for k in windows.keys()}
+    rets = s.pct_change() * 100.0
+    for name, w in windows.items():
+        if len(rets.dropna()) < w + 10:
+            out[name] = None
+            continue
+        rv = rets.rolling(w).std()
+        cur = float(rv.dropna().iloc[-1]) if not rv.dropna().empty else np.nan
+        pr = _percentile_of_value(rv.dropna(), cur)
+        out[name] = pr
+    return out
 
-def realized_vol_snapshot(ticker: str, window: int = 21) -> Optional[float]:
-    if ticker not in prices.columns:
-        return None
-    s = prices[ticker].dropna()
-    if len(s) < window + 2:
-        return None
-    v = _annualized_realized_vol(s, window).dropna()
-    if v.empty:
-        return None
-    return float(v.iloc[-1])
+def _build_scorecard(label_to_ticker: Dict[str, str], prices: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for label in CANONICAL_ORDER:
+        if label not in label_to_ticker:
+            continue
+        tkr = label_to_ticker[label].upper()
+        if tkr not in prices.columns:
+            continue
+        s = prices[tkr].dropna()
+        if len(s) < 20:
+            continue
 
-def build_commentary() -> str:
-    spy = "SPY"
-    hyg = "HYG"
-    dbc = "DBC"
-    dxy = "DX-Y.NYB"
+        level = float(s.iloc[-1])
+        pr = _percentile_of_value(s, level)
+        zs = _zscore(s, level)
 
-    vix = get_implied_last("VIX") if show_implied else None
-    evz = get_implied_last("EVZ (EURUSD Vol)") if show_implied else None
-    ovx = get_implied_last("OVX (Oil Vol)") if show_implied else None
+        d1 = _points_change(s, 1)
+        w1 = _points_change(s, 5)
+        m1 = _points_change(s, 21)
+        q1 = _points_change(s, 63)
 
-    spy_r = last_returns(spy)
-    hyg_r = last_returns(hyg)
-    dbc_r = last_returns(dbc)
-    dxy_r = last_returns(dxy)
+        d1p = _pct_change(s, 1)
+        w1p = _pct_change(s, 5)
+        m1p = _pct_change(s, 21)
+        q1p = _pct_change(s, 63)
 
-    spy_vol = realized_vol_snapshot(spy, 21)
-    hyg_vol = realized_vol_snapshot(hyg, 21)
-    dbc_vol = realized_vol_snapshot(dbc, 21)
-    dxy_vol = realized_vol_snapshot(dxy, 21)
+        # Current vol-of-vol snapshot (21d stdev of daily % changes)
+        rets = (s.pct_change() * 100.0).dropna()
+        vov21 = float(rets.rolling(21).std().dropna().iloc[-1]) if len(rets) >= 40 else np.nan
+        vov_pr = None
+        if len(rets) >= 100:
+            rv = rets.rolling(21).std().dropna()
+            if not rv.empty and not np.isnan(vov21):
+                vov_pr = _percentile_of_value(rv, vov21)
 
-    hy_oas = None
-    if "HY OAS (bps)" in fred_data:
-        s = fred_data["HY OAS (bps)"].dropna()
-        if not s.empty:
-            hy_oas = float(s.iloc[-1])
+        rows.append({
+            "Index": label,
+            "Ticker": tkr,
+            "Level": level,
+            "Level %ile": pr,
+            "Level z": zs,
+            "1D chg (pts)": d1,
+            "1W chg (pts)": w1,
+            "1M chg (pts)": m1,
+            "3M chg (pts)": q1,
+            "1D chg (%)": d1p,
+            "1W chg (%)": w1p,
+            "1M chg (%)": m1p,
+            "3M chg (%)": q1p,
+            "Vol-of-vol 21d": vov21,
+            "VoV %ile": vov_pr,
+        })
 
-    drivers = []
-    if vix is not None:
-        drivers.append(f"Equity implied vol is {vix:.1f}, with SPY {_safe_pct(spy_r['1W'])} over 1W and {_safe_pct(spy_r['1M'])} over 1M.")
-    else:
-        drivers.append(f"SPY is {_safe_pct(spy_r['1W'])} over 1W and {_safe_pct(spy_r['1M'])} over 1M; realized 1M vol is {_safe_num(spy_vol, '{:.1f}') }.")
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
 
-    if hy_oas is not None:
-        drivers.append(f"Credit stress is visible in HY OAS at {hy_oas:.0f} bps, with HYG {_safe_pct(hyg_r['1W'])} over 1W.")
-    else:
-        drivers.append(f"Credit proxy HYG is {_safe_pct(hyg_r['1W'])} over 1W; realized 1M vol is {_safe_num(hyg_vol, '{:.1f}') }.")
+    # Ordered presentation
+    df["__order"] = df["Index"].apply(lambda x: CANONICAL_ORDER.index(x) if x in CANONICAL_ORDER else 999)
+    df = df.sort_values("__order").drop(columns="__order").reset_index(drop=True)
+    return df
 
-    if ovx is not None:
-        drivers.append(f"Oil implied vol (OVX) is {ovx:.1f}; broad commodities (DBC) are {_safe_pct(dbc_r['1M'])} over 1M.")
-    else:
-        drivers.append(f"DBC is {_safe_pct(dbc_r['1M'])} over 1M; realized 1M vol is {_safe_num(dbc_vol, '{:.1f}') }.")
-
-    if evz is not None:
-        drivers.append(f"FX implied vol (EVZ) is {evz:.1f}; DXY is {_safe_pct(dxy_r['1M'])} over 1M.")
-    else:
-        drivers.append(f"DXY is {_safe_pct(dxy_r['1M'])} over 1M; realized 1M vol is {_safe_num(dxy_vol, '{:.1f}') }.")
-
-    risk_off_flags = 0
-    if spy_r["1W"] is not None and spy_r["1W"] < 0:
-        risk_off_flags += 1
-    if hyg_r["1W"] is not None and hyg_r["1W"] < 0:
-        risk_off_flags += 1
-    if dxy_r["1M"] is not None and dxy_r["1M"] > 0:
-        risk_off_flags += 1
-    if vix is not None and vix >= 18:
-        risk_off_flags += 1
-
-    if risk_off_flags >= 3:
-        conclusion = "Conclusion: the tape is leaning defensive, with stress showing up across at least three sleeves at once."
-    elif risk_off_flags == 2:
-        conclusion = "Conclusion: mixed regime. Stress is visible, but it is not yet broad enough to call systemic."
-    else:
-        conclusion = "Conclusion: constructive regime. Vol is contained and cross-asset confirmation of stress is limited."
-
-    return " ".join(drivers) + " " + conclusion
-
-commentary = build_commentary()
-
-# -----------------------------
-# KPI cards
-# -----------------------------
-def kpi_card(title: str, value: str, sub: str) -> None:
+def _kpi_card(title: str, value: str, sub: str) -> None:
     st.markdown(
         f"""
         <div class="card">
@@ -506,183 +306,417 @@ def kpi_card(title: str, value: str, sub: str) -> None:
         unsafe_allow_html=True
     )
 
-def implied_kpi(label: str) -> Tuple[str, str]:
-    tkr = IMPLIED_INDICES.get(label)
-    if not tkr:
-        return ("n/a", "Missing mapping")
-    col = tkr.upper()
-    if col not in prices.columns:
-        return ("n/a", "Unavailable on Yahoo")
-    s = prices[col].dropna()
-    if s.empty:
-        return ("n/a", "No data")
-    val = float(s.iloc[-1])
-    pr = _percentile_rank(s, val)
-    zs = _zscore(s, val)
-    return (f"{val:.1f}", f"Percentile {_safe_num(pr, '{:.0f}')}, z {_safe_num(zs, '{:.2f}')}")
+def _commentary_from_scorecard(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "No indices loaded. Check tickers and Yahoo availability."
 
-k1, s1 = implied_kpi("VIX") if show_implied else ("n/a", "Disabled")
-k2, s2 = implied_kpi("OVX (Oil Vol)") if show_implied else ("n/a", "Disabled")
-k3, s3 = implied_kpi("EVZ (EURUSD Vol)") if show_implied else ("n/a", "Disabled")
+    # Drivers: biggest 1D movers (absolute %), highest level percentiles, elevated vol-of-vol percentiles
+    tmp = df.copy()
 
-credit_value = "n/a"
-credit_sub = "Unavailable"
-if "HY OAS (bps)" in fred_data:
-    s = fred_data["HY OAS (bps)"].dropna()
-    if not s.empty:
-        v = float(s.iloc[-1])
-        pr = _percentile_rank(s, v)
-        zs = _zscore(s, v)
-        credit_value = f"{v:.0f} bps"
-        credit_sub = f"Percentile {_safe_num(pr, '{:.0f}')}, z {_safe_num(zs, '{:.2f}')}"
-else:
-    hv = realized_vol_snapshot("HYG", 21)
-    if hv is not None:
-        credit_value = f"{hv:.1f}%"
-        credit_sub = "HYG realized vol (1M)"
+    tmp["abs_1d"] = tmp["1D chg (%)"].abs()
+    movers = tmp.dropna(subset=["1D chg (%)"]).sort_values("abs_1d", ascending=False).head(3)
+
+    stress = tmp.dropna(subset=["Level %ile"]).sort_values("Level %ile", ascending=False).head(3)
+    vov_stress = tmp.dropna(subset=["VoV %ile"]).sort_values("VoV %ile", ascending=False).head(2)
+
+    def fmt_row(r, mode: str) -> str:
+        if mode == "move":
+            return f"{r['Index']} {r['Level']:.1f} ({r['1D chg (%)']:+.2f}% 1D, {r['1W chg (%)']:+.2f}% 1W)"
+        if mode == "stress":
+            return f"{r['Index']} {r['Level']:.1f} at {r['Level %ile']:.0f}%ile (z {r['Level z']:.2f})"
+        return f"{r['Index']} VoV {r['Vol-of-vol 21d']:.2f} at {r['VoV %ile']:.0f}%ile"
+
+    driver_bits = []
+    if not movers.empty:
+        driver_bits.append("Fast tape: " + "; ".join(fmt_row(r, "move") for _, r in movers.iterrows()) + ".")
+    if not stress.empty:
+        driver_bits.append("Level pressure: " + "; ".join(fmt_row(r, "stress") for _, r in stress.iterrows()) + ".")
+    if not vov_stress.empty:
+        driver_bits.append("Reflexive risk: " + "; ".join(fmt_row(r, "vov") for _, r in vov_stress.iterrows()) + ".")
+
+    # Conclusion: simple regime classifier
+    def get_level(label: str) -> Optional[float]:
+        x = tmp.loc[tmp["Index"] == label, "Level %ile"]
+        return float(x.iloc[0]) if len(x) else None
+
+    vix_p = get_level("VIX (S&P 500 vol)")
+    vxn_p = get_level("VXN (Nasdaq 100 vol)")
+    vvix_p = get_level("VVIX (VIX vol of vol)")
+    rvx_p = get_level("RVX (Russell 2000 vol)")
+    ovx_p = get_level("OVX (Crude Oil vol)")
+    gvz_p = get_level("GVZ (Gold vol)")
+    ty_p = get_level("TYVIX (10Y Treasury vol)")
+
+    flags = 0
+    for p in [vix_p, vxn_p, vvix_p, rvx_p]:
+        if p is not None and p >= 75:
+            flags += 1
+    if ovx_p is not None and ovx_p >= 80:
+        flags += 1
+    if gvz_p is not None and gvz_p >= 80:
+        flags += 1
+    if ty_p is not None and ty_p >= 80:
+        flags += 1
+
+    if flags >= 4:
+        conclusion = "Conclusion: broad vol regime. Equity vol is elevated and confirmed by vol-of-vol and at least one non-equity sleeve, which usually means positioning is fragile and gap risk is priced."
+    elif flags == 2 or flags == 3:
+        conclusion = "Conclusion: localized stress. The market is paying up for protection in specific areas, but the signal is not yet a full cross-index squeeze."
+    else:
+        conclusion = "Conclusion: contained regime. Vol is not screaming across the complex, so the base case is compression unless a catalyst pushes VVIX and VIX higher together."
+
+    return " ".join(driver_bits) + " " + conclusion
 
 # -----------------------------
-# Layout
+# Sidebar
 # -----------------------------
+with st.sidebar:
+    st.header("About This Tool")
+    st.write(
+        "This page monitors CBOE volatility indices available on Yahoo Finance. "
+        "The surfaces are percentile maps across rolling horizons: how elevated the index level is, and how unstable the index itself is."
+    )
+    st.divider()
+
+    start_year = st.selectbox("History start year", START_YEAR_OPTIONS, index=START_YEAR_OPTIONS.index(DEFAULT_START_YEAR))
+    end_date = st.date_input("End date", value=date.today())
+
+    st.divider()
+    include_optional = st.checkbox("Include RVX, VXD, TYVIX if available", value=True)
+    heat_cap = st.slider("Surface color cap (percentile)", min_value=70, max_value=100, value=95, step=1)
+    dl_chunk = st.slider("Download chunk size", min_value=3, max_value=12, value=7, step=1)
+
+# -----------------------------
+# Build ticker set
+# -----------------------------
+label_to_ticker = dict(CORE_INDICES)
+if include_optional:
+    label_to_ticker.update(OPTIONAL_INDICES)
+
+tickers = [t.upper() for t in label_to_ticker.values()]
+
+# Dates: yfinance end often exclusive, add 1 day
+start_str = f"{start_year}-01-01"
+end_str = str(end_date + timedelta(days=1))
+
+# -----------------------------
+# Download
+# -----------------------------
+@st.cache_data(show_spinner=False, ttl=60 * 30)
+def _download_in_chunks(tickers: List[str], start: str, end: str, chunk_size: int) -> pd.DataFrame:
+    chunks = [tickers[i:i+chunk_size] for i in range(0, len(tickers), chunk_size)]
+    out = []
+    progress = st.progress(0, text="Downloading vol indices from Yahoo Finance...")
+    for i, ch in enumerate(chunks):
+        px = load_vol_indices(ch, start, end)
+        if not px.empty:
+            out.append(px)
+        progress.progress(int((i + 1) / len(chunks) * 100), text="Downloading vol indices from Yahoo Finance...")
+    progress.empty()
+    if not out:
+        return pd.DataFrame()
+    df = pd.concat(out, axis=1)
+    df = df.groupby(level=0, axis=1).last()
+    df = df.sort_index()
+    return df
+
+prices = _download_in_chunks(tickers, start_str, end_str, dl_chunk)
+
+if prices.empty:
+    st.error("No data returned from Yahoo Finance. Check connectivity and tickers.")
+    st.stop()
+
+# Filter to actually-available tickers
+available = [t for t in tickers if t.upper() in prices.columns and prices[t.upper()].dropna().shape[0] > 30]
+if not available:
+    st.error("Tickers downloaded, but none have enough data to display. Open Diagnostics to see what came back.")
+    with st.expander("Diagnostics"):
+        st.write("Columns received:", list(prices.columns))
+        st.write("Non-null counts:", prices.notna().sum().sort_values(ascending=False))
+    st.stop()
+
+# Update label map to only those that exist
+label_to_ticker_live = {lbl: tkr for lbl, tkr in label_to_ticker.items() if tkr.upper() in prices.columns}
+
+# -----------------------------
+# Scorecard + commentary
+# -----------------------------
+score = _build_scorecard(label_to_ticker_live, prices)
+commentary = _commentary_from_scorecard(score)
+
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.markdown("<b>Key drivers</b>", unsafe_allow_html=True)
 st.write(commentary)
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.write("")
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    kpi_card("Equity implied vol", k1, s1)
-with c2:
-    kpi_card("Commodity implied vol", k2, s2)
-with c3:
-    kpi_card("FX implied vol", k3, s3)
-with c4:
-    kpi_card("Credit stress", credit_value, credit_sub)
+st.markdown("<hr>", unsafe_allow_html=True)
+
+# -----------------------------
+# KPI row
+# -----------------------------
+def _get_row(idx_label: str) -> Optional[pd.Series]:
+    if score.empty:
+        return None
+    x = score.loc[score["Index"] == idx_label]
+    if x.empty:
+        return None
+    return x.iloc[0]
+
+kpi_cols = st.columns(4)
+
+vix_row = _get_row("VIX (S&P 500 vol)")
+vxn_row = _get_row("VXN (Nasdaq 100 vol)")
+vvix_row = _get_row("VVIX (VIX vol of vol)")
+ovx_row = _get_row("OVX (Crude Oil vol)")
+
+with kpi_cols[0]:
+    if vix_row is not None:
+        _kpi_card("VIX", f"{vix_row['Level']:.1f}", f"{vix_row['1D chg (pts)']:+.2f} pts 1D, {_safe_num(vix_row['Level %ile'], '{:.0f}')}%ile")
+    else:
+        _kpi_card("VIX", "n/a", "Unavailable")
+with kpi_cols[1]:
+    if vxn_row is not None:
+        _kpi_card("VXN", f"{vxn_row['Level']:.1f}", f"{vxn_row['1D chg (pts)']:+.2f} pts 1D, {_safe_num(vxn_row['Level %ile'], '{:.0f}')}%ile")
+    else:
+        _kpi_card("VXN", "n/a", "Unavailable")
+with kpi_cols[2]:
+    if vvix_row is not None:
+        _kpi_card("VVIX", f"{vvix_row['Level']:.1f}", f"{vvix_row['1D chg (%)']:+.2f}% 1D, {_safe_num(vvix_row['Level %ile'], '{:.0f}')}%ile")
+    else:
+        _kpi_card("VVIX", "n/a", "Unavailable")
+with kpi_cols[3]:
+    if ovx_row is not None:
+        _kpi_card("OVX", f"{ovx_row['Level']:.1f}", f"{ovx_row['1D chg (%)']:+.2f}% 1D, {_safe_num(ovx_row['Level %ile'], '{:.0f}')}%ile")
+    else:
+        _kpi_card("OVX", "n/a", "Unavailable")
 
 st.write("")
 st.markdown("<hr>", unsafe_allow_html=True)
 
 # -----------------------------
-# Heatmap
+# Surface 1: level percentile of rolling means
 # -----------------------------
-st.subheader("Realized Volatility Surface (annualized, %)")
-heatmap = go.Figure(
-    data=go.Heatmap(
-        z=heat_vals[list(VOL_WINDOWS.keys())].values,
-        x=list(VOL_WINDOWS.keys()),
-        y=[f"{g}: {a}" for g, a in zip(heat["Group"], heat["Asset"])],
-        zmin=0,
-        zmax=vol_cap,
-        hovertemplate="Horizon %{x}<br>%{y}<br>Vol %{z:.1f}%<extra></extra>",
-        colorbar=dict(title="Vol %"),
-    )
-)
-heatmap.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10))
-st.plotly_chart(heatmap, use_container_width=True)
-st.markdown('<div class="small-muted">Surface is capped for consistent scaling. Use the sidebar cap slider to adjust.</div>', unsafe_allow_html=True)
+st.subheader("Vol Level Surface (percentile of rolling mean vs history)")
 
-st.write("")
-st.markdown("<hr>", unsafe_allow_html=True)
+surface_rows = []
+for label in CANONICAL_ORDER:
+    if label not in label_to_ticker_live:
+        continue
+    tkr = label_to_ticker_live[label].upper()
+    s = prices[tkr].dropna()
+    surf = _rolling_mean_surface(s, HORIZONS)
+    surface_rows.append({"Index": label, **surf})
 
-# -----------------------------
-# Implied term structure
-# -----------------------------
-if show_implied:
-    st.subheader("Implied Vol Term Structure (equity)")
-    term_labels = ["VIX", "VXV (3M)", "VXMT (6M)"]
-    term_vals = [get_implied_last(lbl) for lbl in term_labels]
-
-    term_fig = go.Figure()
-    term_fig.add_trace(go.Scatter(
-        x=term_labels,
-        y=[v if v is not None else np.nan for v in term_vals],
-        mode="lines+markers",
-        hovertemplate="%{x}<br>%{y:.1f}<extra></extra>"
-    ))
-    term_fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="Index level")
-    st.plotly_chart(term_fig, use_container_width=True)
-
-    st.write("")
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-# -----------------------------
-# Normalized time series (rebased to 0)
-# -----------------------------
-st.subheader("Cross Asset Moves (rebased to 0 at start, %)")
-surface_choice = []
-for u in [EQUITY, COMMODITY, CREDIT, FX]:
-    for label, tkr in u.tickers.items():
-        surface_choice.append((f"{u.name}: {label}", tkr.upper()))
-
-choice_labels = [x[0] for x in surface_choice]
-choice_map = {x[0]: x[1] for x in surface_choice}
-
-defaults = []
-for want in ["Equity: SPY", "Credit: HYG", "Commodity: DBC", "FX: DXY"]:
-    if want in choice_map:
-        defaults.append(want)
-
-selected = st.multiselect("Select series", options=choice_labels, default=defaults)
-
-if not selected:
-    st.info("Select at least one series to plot.")
+surface_df = pd.DataFrame(surface_rows)
+if surface_df.empty:
+    st.info("Surface unavailable. Not enough data.")
 else:
+    z = surface_df[list(HORIZONS.keys())].values.astype(float)
+    z = np.clip(z, 0, heat_cap)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=list(HORIZONS.keys()),
+            y=surface_df["Index"].tolist(),
+            zmin=0,
+            zmax=heat_cap,
+            hovertemplate="%{y}<br>%{x}<br>%{z:.0f}%ile<extra></extra>",
+            colorbar=dict(title="%ile"),
+        )
+    )
+    fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+st.markdown('<div class="small-muted">Interpretation: higher percentiles mean the index is elevated relative to its own history. Rolling means reduce single-day noise.</div>', unsafe_allow_html=True)
+
+st.write("")
+st.markdown("<hr>", unsafe_allow_html=True)
+
+# -----------------------------
+# Surface 2: vol of vol percentile across horizons
+# -----------------------------
+st.subheader("Vol of Vol Surface (percentile of rolling stdev of daily % changes)")
+
+vov_rows = []
+for label in CANONICAL_ORDER:
+    if label not in label_to_ticker_live:
+        continue
+    tkr = label_to_ticker_live[label].upper()
+    s = prices[tkr].dropna()
+    surf = _vol_of_vol_surface(s, HORIZONS)
+    vov_rows.append({"Index": label, **surf})
+
+vov_df = pd.DataFrame(vov_rows)
+if vov_df.empty:
+    st.info("Vol of vol surface unavailable. Not enough data.")
+else:
+    z = vov_df[list(HORIZONS.keys())].values.astype(float)
+    z = np.clip(z, 0, heat_cap)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=list(HORIZONS.keys()),
+            y=vov_df["Index"].tolist(),
+            zmin=0,
+            zmax=heat_cap,
+            hovertemplate="%{y}<br>%{x}<br>%{z:.0f}%ile<extra></extra>",
+            colorbar=dict(title="%ile"),
+        )
+    )
+    fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+st.markdown('<div class="small-muted">Interpretation: higher percentiles mean the vol index itself is whipping around more than usual, which tends to coincide with fragile positioning.</div>', unsafe_allow_html=True)
+
+st.write("")
+st.markdown("<hr>", unsafe_allow_html=True)
+
+# -----------------------------
+# Time series: rebased to 0
+# -----------------------------
+st.subheader("Vol Indices Time Series (rebased to 0 at start, %)")
+
+choices = []
+for label in CANONICAL_ORDER:
+    if label in label_to_ticker_live:
+        choices.append(label)
+
+default_sel = [x for x in [
+    "VIX (S&P 500 vol)",
+    "VXN (Nasdaq 100 vol)",
+    "VVIX (VIX vol of vol)",
+    "OVX (Crude Oil vol)",
+    "GVZ (Gold vol)",
+] if x in choices]
+
+selected = st.multiselect("Select indices", options=choices, default=default_sel)
+
+if selected:
     plot_df = pd.DataFrame(index=prices.index)
-    for disp in selected:
-        tkr = choice_map.get(disp)
-        if tkr and tkr in prices.columns:
-            plot_df[disp] = _normalize_to_zero(prices[tkr])
+    for label in selected:
+        tkr = label_to_ticker_live[label].upper()
+        plot_df[label] = _normalize_to_zero(prices[tkr])
 
     plot_df = plot_df.dropna(how="all")
-    ts_fig = go.Figure()
+    fig = go.Figure()
     for col in plot_df.columns:
-        ts_fig.add_trace(go.Scatter(
+        fig.add_trace(go.Scatter(
             x=plot_df.index,
             y=plot_df[col],
             mode="lines",
             name=col,
-            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}%<extra></extra>",
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}%<extra></extra>"
         ))
-    ts_fig.update_layout(
-        height=520,
+    fig.update_layout(
+        height=560,
         margin=dict(l=10, r=10, t=10, b=10),
         yaxis_title="Move from start (%)",
         xaxis_title="Date",
     )
-    st.plotly_chart(ts_fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Select at least one index to plot.")
+
+st.write("")
+st.markdown("<hr>", unsafe_allow_html=True)
 
 # -----------------------------
-# Credit spreads (optional)
+# Ratios: VXN/VIX and VVIX/VIX
 # -----------------------------
-if show_credit_spreads:
-    st.write("")
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.subheader("Credit Spreads (FRED)")
+st.subheader("Key Ratios (relative stress and convexity)")
 
-    if not FRED_OK:
-        st.info("pandas_datareader not available in this environment. Install pandas_datareader or disable this section.")
-    elif len(fred_data) == 0:
-        st.info("No FRED series loaded (API blocked or series unavailable).")
-    else:
-        spread_df = pd.DataFrame({k: v for k, v in fred_data.items()}).dropna(how="all")
-        fig = go.Figure()
-        for col in spread_df.columns:
-            fig.add_trace(go.Scatter(
-                x=spread_df.index,
-                y=spread_df[col],
-                mode="lines",
-                name=col,
-                hovertemplate="%{x|%Y-%m-%d}<br>%{y:.0f}<extra></extra>"
-            ))
-        fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="bps", xaxis_title="Date")
-        st.plotly_chart(fig, use_container_width=True)
+def _series(tkr: str) -> Optional[pd.Series]:
+    t = tkr.upper()
+    if t not in prices.columns:
+        return None
+    s = prices[t].dropna()
+    return s if not s.empty else None
+
+vix = _series("^VIX")
+vxn = _series("^VXN")
+vvix = _series("^VVIX")
+
+ratio_df = pd.DataFrame(index=prices.index)
+
+if vix is not None and vxn is not None:
+    ratio_df["VXN / VIX"] = (vxn / vix).replace([np.inf, -np.inf], np.nan)
+if vix is not None and vvix is not None:
+    ratio_df["VVIX / VIX"] = (vvix / vix).replace([np.inf, -np.inf], np.nan)
+
+ratio_df = ratio_df.dropna(how="all")
+if ratio_df.empty:
+    st.info("Ratios unavailable. Requires VIX plus VXN and VVIX.")
+else:
+    fig = go.Figure()
+    for col in ratio_df.columns:
+        fig.add_trace(go.Scatter(
+            x=ratio_df.index,
+            y=ratio_df[col],
+            mode="lines",
+            name=col,
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.3f}<extra></extra>"
+        ))
+    fig.update_layout(
+        height=420,
+        margin=dict(l=10, r=10, t=10, b=10),
+        yaxis_title="Ratio",
+        xaxis_title="Date",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+st.write("")
+st.markdown("<hr>", unsafe_allow_html=True)
+
+# -----------------------------
+# Scorecard table + download
+# -----------------------------
+st.subheader("Vol Index Scorecard")
+
+if score.empty:
+    st.info("Scorecard unavailable.")
+else:
+    show_cols = [
+        "Index", "Ticker", "Level", "Level %ile", "Level z",
+        "1D chg (pts)", "1W chg (pts)", "1M chg (pts)", "3M chg (pts)",
+        "1D chg (%)", "1W chg (%)", "1M chg (%)", "3M chg (%)",
+        "Vol-of-vol 21d", "VoV %ile"
+    ]
+    out = score[show_cols].copy()
+
+    # Formatting for display
+    def _fmt(df: pd.DataFrame) -> pd.DataFrame:
+        d = df.copy()
+        for c in ["Level", "Vol-of-vol 21d"]:
+            d[c] = pd.to_numeric(d[c], errors="coerce").round(2)
+        for c in ["Level %ile", "VoV %ile"]:
+            d[c] = pd.to_numeric(d[c], errors="coerce").round(0)
+        for c in ["Level z"]:
+            d[c] = pd.to_numeric(d[c], errors="coerce").round(2)
+        for c in ["1D chg (pts)", "1W chg (pts)", "1M chg (pts)", "3M chg (pts)"]:
+            d[c] = pd.to_numeric(d[c], errors="coerce").round(2)
+        for c in ["1D chg (%)", "1W chg (%)", "1M chg (%)", "3M chg (%)"]:
+            d[c] = pd.to_numeric(d[c], errors="coerce").round(2)
+        return d
+
+    st.dataframe(_fmt(out), use_container_width=True, hide_index=True)
+
+    csv = out.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download scorecard as CSV",
+        data=csv,
+        file_name="vol_index_scorecard.csv",
+        mime="text/csv"
+    )
 
 # -----------------------------
 # Diagnostics
 # -----------------------------
 with st.expander("Diagnostics"):
     st.write("Date range:", start_str, "to", end_str)
-    st.write("Columns received (sample):", list(prices.columns)[:60])
-    st.write("Non-null counts (top):")
-    st.write(prices.notna().sum().sort_values(ascending=False).head(20))
+    st.write("Requested tickers:", tickers)
+    st.write("Returned columns:", list(prices.columns))
+    st.write("Non-null counts:")
+    st.write(prices.notna().sum().sort_values(ascending=False))
