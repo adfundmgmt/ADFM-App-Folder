@@ -146,6 +146,7 @@ snap["Quadrant"] = np.select(
         (snap["3M"] > 0) & (snap["1M"] < 0),
     ],
     ["Q1 ++", "Q2 -+", "Q3 --", "Q4 +-"],
+    default="Neutral"
 )
 
 color_map = {s: PASTELS[i] for i, s in enumerate(snap["Sector"])}
