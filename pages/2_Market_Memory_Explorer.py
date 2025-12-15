@@ -131,7 +131,6 @@ def distinct_palette(n: int):
         b = np.array(b, dtype=float)
         return float(np.sqrt(np.sum((a - b) ** 2)))
 
-    # Start with max saturation, then greedily maximize min distance
     def sat(rgb):
         return colorsys.rgb_to_hsv(*rgb)[1]
 
@@ -255,9 +254,9 @@ for idx, (yr, rho) in enumerate(top):
     ax.plot(
         ser_full.index,
         ser_full.values,
-        "-",                 # solid lines for analogs
+        "--",                # dashed analogs (as requested)
         lw=2.3,
-        alpha=0.95,          # more solid on white
+        alpha=0.95,
         color=palette[idx],
         label=f"{yr} (ρ={rho:.2f})",
     )
