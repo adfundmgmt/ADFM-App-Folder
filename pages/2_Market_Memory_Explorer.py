@@ -50,7 +50,7 @@ with st.sidebar:
     st.markdown("---")
 
 col1, col2, col3 = st.columns([2, 1, 1])
-ticker = col1.text_input("Ticker", "^GSPC").upper()
+ticker = col1.text_input("Ticker", "^SPX").upper()
 top_n = col2.slider("Top Analogs", 1, 10, 5)
 min_corr = col3.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
 
