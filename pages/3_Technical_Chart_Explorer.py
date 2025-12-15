@@ -23,7 +23,7 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 
-ticker = st.sidebar.text_input("Ticker", "^GSPC").upper()
+ticker = st.sidebar.text_input("Ticker", "^SPX").upper()
 period = st.sidebar.selectbox(
     "Period", ["1mo","3mo","6mo","1y","2y","3y","5y","10y","max"], index=3
 )
