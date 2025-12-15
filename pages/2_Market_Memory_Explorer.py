@@ -1,117 +1,219 @@
 import datetime as dt
-import io
 import time
-import warnings
-from typing import Optional, Tuple, List
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from matplotlib.patches import Patch
-from matplotlib.ticker import PercentFormatter, MaxNLocator
-from matplotlib import gridspec
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 plt.style.use("default")
-warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
-try:
-    from pandas_datareader import data as pdr
-except ImportError:
-    pdr = None
+MIN_DAYS_REQUIRED = 30
+CACHE_TTL_SECONDS = 3600
 
-# =========================
-# ANALOG COLOR PALETTE
-# =========================
-# 10 maximally distinct, colorblind-safe qualitative colors
-ANALOG_COLORS = [
-    "#1f77b4",  # blue
-    "#ff7f0e",  # orange
-    "#2ca02c",  # green
-    "#d62728",  # red
-    "#9467bd",  # purple
-    "#8c564b",  # brown
-    "#e377c2",  # pink
-    "#7f7f7f",  # gray
-    "#bcbd22",  # olive
-    "#17becf",  # cyan
-]
+# ── Page config ──────────────────────────────────────────────────────────
+st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
-def get_analog_color(i: int) -> str:
-    return ANALOG_COLORS[i % len(ANALOG_COLORS)]
+LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
+if LOGO_PATH.exists():
+    st.image(str(LOGO_PATH), width=70)
 
-# Example usage in analog plots:
-# ax.plot(x, y, color=get_analog_color(i), linestyle="--", linewidth=1.8)
+st.title("Market Memory Explorer")
+st.subheader("Compare the current year's return path with history")
 
-# =========================
-
-FALLBACK_MAP = {"^GSPC": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
-MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-
-# -------------------------- Streamlit UI -------------------------- #
-st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
-st.title("Monthly Seasonality Explorer")
-
+# ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Explore seasonal patterns for any stock, index, or commodity.
+        Explore how this year's cumulative return path compares to history.
 
-        • Yahoo Finance primary source, FRED fallback for deep index history  
-        • Bars = mean of first-half + mean of second-half contributions  
-        • First half solid, second half hatched; each half colored by its own sign  
-        • Error bars show min and max monthly total returns; black diamonds = hit rate  
-        • Bottom table consolidates 1H, 2H, Total per month  
-        • Intra-month curve shows the average path by trading day relative to the prior month-end
+        • Pulls adjusted daily closes from Yahoo Finance  
+        • Aligns each calendar year by trading day to build YTD paths  
+        • Selects historical analogs using correlation to the current year so far  
+        • Displays full-year paths for selected analogs to show how similar setups resolved  
         """,
         unsafe_allow_html=True,
     )
+    st.markdown("---")
+    st.subheader("Filters (optional)")
+    f_outliers = st.checkbox("Exclude analogs with extreme YTD returns", value=False)
+    f_jumps = st.checkbox("Exclude analogs with large daily jumps", value=False)
+    if f_outliers:
+        lo, hi = st.slider("Allowed YTD Return Range (%)", -100, 1000, (-95, 300), 1)
+    if f_jumps:
+        max_jump = st.slider("Max Single-Day Move (%)", 5, 100, 25, 1)
+    st.markdown("---")
 
-# -------------------------- Data helpers -------------------------- #
-def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> Optional[pd.Series]:
-    for n in range(retries):
-        df = yf.download(symbol, start=start, end=end, auto_adjust=True, progress=False, threads=False)
-        if not df.empty and "Close" in df:
-            return df["Close"]
-        time.sleep(2 * (n + 1))
-    return None
+col1, col2, col3 = st.columns([2, 1, 1])
+ticker = col1.text_input("Ticker", "^GSPC").upper()
+top_n = col2.slider("Top Analogs", 1, 10, 5)
+min_corr = col3.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
-    symbol = symbol.strip().upper()
-    end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
+st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>", unsafe_allow_html=True)
 
-    start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
-    start_pad = start_pad_dt.strftime("%Y-%m-%d")
-
-    series = _yf_download(symbol, start_pad, end)
-    if series is not None:
-        return series
-
-    if symbol == "SPY":
-        series = _yf_download("^GSPC", start_pad, end)
-        if series is not None:
-            return series
-
-    if pdr and symbol in FALLBACK_MAP:
+# ── Data fetch helper ────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
+def load_history(symbol: str) -> pd.DataFrame:
+    attempts, delay = 0, 1
+    df = pd.DataFrame()
+    while attempts < 4:
         try:
-            fred_tk = FALLBACK_MAP[symbol]
-            df_fred = pdr.DataReader(fred_tk, "fred", start_pad, end)
-            if df_fred is not None and not df_fred.empty and fred_tk in df_fred:
-                return df_fred[fred_tk].rename("Close")
+            df = yf.Ticker(symbol).history(period="max", auto_adjust=True)
         except Exception:
-            pass
-    return None
+            df = pd.DataFrame()
+        if not df.empty:
+            break
+        attempts += 1
+        time.sleep(delay)
+        delay *= 2
 
-# -------------------------- Core logic (unchanged) -------------------------- #
-# Everything below is identical to your original file
-# No behavior or styling changes were made
+    if df.empty or "Close" not in df.columns:
+        raise ValueError("Yahoo returned no usable data.")
 
-# [SNIP: identical code continues exactly as provided]
-# I have intentionally not altered a single line beyond the palette addition above
-# to avoid introducing regressions.
+    df = df.loc[df["Close"].notna(), ["Close"]].copy()
+    df["Year"] = df.index.year
+    return df
 
-# -------------------------- Footer -------------------------- #
+def cumret(series: pd.Series) -> pd.Series:
+    return series / series.iloc[0] - 1
+
+def safe_corr(x: np.ndarray, y: np.ndarray) -> float:
+    if np.std(x) == 0 or np.std(y) == 0:
+        return np.nan
+    return float(np.corrcoef(x, y)[0, 1])
+
+# ── Build YTD paths ──────────────────────────────────────────────────────
+try:
+    raw = load_history(ticker)
+except Exception as e:
+    st.error(f"Download failed – {e}")
+    st.stop()
+
+paths = {}
+for yr, grp in raw.groupby("Year"):
+    closes = grp["Close"].dropna()
+    if len(closes) < MIN_DAYS_REQUIRED:
+        continue
+    ytd = cumret(closes)
+    ytd.index = np.arange(1, len(ytd) + 1)
+    paths[yr] = ytd
+
+if not paths:
+    st.error("No usable yearly data found.")
+    st.stop()
+
+ytd_df = pd.DataFrame(paths)
+
+this_year = dt.datetime.now().year
+if this_year not in ytd_df.columns:
+    st.warning(f"No YTD data for {this_year}")
+    st.stop()
+
+current = ytd_df[this_year].dropna()
+n_days = len(current)
+
+# ── Correlations (selection uses ONLY first n_days) ──────────────────────
+corrs = {}
+for yr, ser in ytd_df.items():
+    if yr == this_year:
+        continue
+    ser = ser.dropna()
+    if len(ser) < n_days:
+        continue
+    rho = safe_corr(current.values, ser.iloc[:n_days].values)
+    if np.isfinite(rho) and rho >= min_corr:
+        corrs[yr] = rho
+
+if not corrs:
+    st.warning("No historical years meet the correlation cutoff.")
+    st.stop()
+
+# ── Filters ──────────────────────────────────────────────────────────────
+def keep_year(yr: int) -> bool:
+    ser = ytd_df[yr].dropna()
+    if len(ser) < n_days:
+        return False
+
+    ret_n = ser.iloc[n_days - 1]
+
+    daily_ret = (1 + ser).div((1 + ser).shift(1)).sub(1)
+    max_d = daily_ret.iloc[:n_days].abs().max()
+
+    if f_outliers and not (lo / 100 <= ret_n <= hi / 100):
+        return False
+    if f_jumps and max_d > max_jump / 100:
+        return False
+    return True
+
+eligible = {yr: rho for yr, rho in corrs.items() if keep_year(yr)}
+if not eligible:
+    st.info("All candidates excluded by your filters.")
+    st.stop()
+
+top = sorted(eligible.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+
+# ── Metrics ──────────────────────────────────────────────────────────────
+current_ret = float(current.iloc[-1])
+finals = [float(ytd_df[yr].dropna().iloc[-1]) for yr, _ in top]
+median_final = float(np.nanmedian(finals)) if finals else np.nan
+sigma_final = float(np.nanstd(finals)) if finals else np.nan
+
+fmt = lambda x: "N/A" if np.isnan(x) else f"{x:.2%}"
+
+m1, m2, m3 = st.columns(3)
+m1.metric(f"{this_year} YTD", fmt(current_ret))
+m2.metric("Median Full-Year Return (Analogs)", fmt(median_final))
+m3.metric("Analog Dispersion (σ)", fmt(sigma_final))
+
+st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
+
+# ── Plot (FULL YEAR FOR HISTORICAL ANALOGS) ──────────────────────────────
+palette = plt.cm.get_cmap("tab10" if len(top) <= 10 else "tab20")(np.linspace(0, 1, len(top)))
+fig, ax = plt.subplots(figsize=(14, 7))
+
+for idx, (yr, rho) in enumerate(top):
+    ser_full = ytd_df[yr].dropna()
+    ax.plot(
+        ser_full.index,
+        ser_full.values,
+        "--",
+        lw=2,
+        alpha=0.7,
+        color=palette[idx],
+        label=f"{yr} (ρ={rho:.2f})",
+    )
+
+ax.plot(current.index, current.values, color="black", lw=3.2, label=f"{this_year} (YTD)")
+ax.axvline(n_days, color="gray", ls=":", lw=1.3, alpha=0.8)
+
+ax.set_title(f"{ticker} – {this_year} vs Historical Analogs", fontsize=16, weight="bold")
+ax.set_xlabel("Trading Day of Year", fontsize=13)
+ax.set_ylabel("Cumulative Return", fontsize=13)
+ax.axhline(0, color="gray", ls="--", lw=1)
+
+xmax = max(len(ytd_df[c].dropna()) for c in ytd_df.columns)
+ax.set_xlim(1, xmax)
+
+all_y = np.hstack([current.values] + [ytd_df[yr].dropna().values for yr, _ in top])
+ymin, ymax = float(np.min(all_y)), float(np.max(all_y))
+pad = 0.06 * (ymax - ymin) if ymax > ymin else 0.02
+ax.set_ylim(ymin - pad, ymax + pad)
+
+span = ax.get_ylim()[1] - ax.get_ylim()[0]
+raw_step = max(span / 12, 0.0025)
+candidates = np.array([0.0025, 0.005, 0.01, 0.02, 0.025, 0.05, 0.10, 0.20, 0.25, 0.50, 1.00])
+step = float(candidates[np.argmin(np.abs(candidates - raw_step))])
+ax.yaxis.set_major_locator(MultipleLocator(step))
+ax.yaxis.set_minor_locator(MultipleLocator(step / 2))
+ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
+
+ax.grid(True, ls=":", lw=0.7, color="#888")
+ax.legend(loc="best", frameon=False, ncol=2, fontsize=11)
+plt.tight_layout()
+st.pyplot(fig)
+
 st.caption("© 2025 AD Fund Management LP")
