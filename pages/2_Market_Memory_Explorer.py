@@ -1,8 +1,10 @@
 import datetime as dt
 import time
 from pathlib import Path
+import colorsys
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -85,6 +87,65 @@ def safe_corr(x: np.ndarray, y: np.ndarray) -> float:
     if np.std(x) == 0 or np.std(y) == 0:
         return np.nan
     return float(np.corrcoef(x, y)[0, 1])
+
+def distinct_palette(n: int):
+    """
+    Greedy max-min selection from a large pool of qualitative matplotlib colors.
+    Goal: keep analog lines visually distinct on a white background.
+    """
+    if n <= 0:
+        return []
+
+    cmap_names = ["tab20", "tab20b", "tab20c", "Set3", "Set2", "Set1", "Dark2", "Paired", "Accent"]
+    candidates = []
+    for name in cmap_names:
+        cmap = plt.cm.get_cmap(name)
+        if hasattr(cmap, "colors"):
+            candidates.extend([tuple(c[:3]) for c in cmap.colors])
+        else:
+            candidates.extend([tuple(cmap(x)[:3]) for x in np.linspace(0, 1, 24)])
+
+    def luminance(rgb):
+        r, g, b = rgb
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    # Drop very light colors that wash out on white
+    candidates = [c for c in candidates if luminance(c) < 0.92]
+
+    # Deduplicate
+    uniq = []
+    seen = set()
+    for c in candidates:
+        key = tuple(int(round(x * 255)) for x in c)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(c)
+
+    if len(uniq) == 0:
+        return list(plt.cm.get_cmap("tab20")(np.linspace(0, 1, n)))  # fallback
+
+    def saturation(rgb):
+        h, s, v = colorsys.rgb_to_hsv(*rgb)
+        return s
+
+    chosen = [max(uniq, key=saturation)]
+    if n == 1:
+        return chosen
+
+    arr = np.array(uniq, dtype=float)
+    chosen_arr = np.array(chosen, dtype=float)
+
+    for _ in range(n - 1):
+        d = np.sqrt(((arr[:, None, :] - chosen_arr[None, :, :]) ** 2).sum(axis=2))
+        min_d = d.min(axis=1)
+        idx = int(np.argmax(min_d))
+        chosen.append(tuple(arr[idx]))
+        chosen_arr = np.array(chosen, dtype=float)
+        arr = np.delete(arr, idx, axis=0)
+        if arr.size == 0:
+            break
+
+    return chosen[:n]
 
 # ── Build YTD paths ──────────────────────────────────────────────────────
 try:
@@ -172,7 +233,7 @@ m3.metric("Analog Dispersion (σ)", fmt(sigma_final))
 st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
 
 # ── Plot (FULL YEAR FOR HISTORICAL ANALOGS) ──────────────────────────────
-palette = plt.cm.get_cmap("tab10" if len(top) <= 10 else "tab20")(np.linspace(0, 1, len(top)))
+palette = distinct_palette(len(top))
 fig, ax = plt.subplots(figsize=(14, 7))
 
 for idx, (yr, rho) in enumerate(top):
