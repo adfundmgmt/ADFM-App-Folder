@@ -4,7 +4,6 @@ from pathlib import Path
 import colorsys
 
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -90,13 +89,14 @@ def safe_corr(x: np.ndarray, y: np.ndarray) -> float:
 
 def distinct_palette(n: int):
     """
-    Greedy max-min selection from a large pool of qualitative matplotlib colors.
-    Goal: keep analog lines visually distinct on a white background.
+    Greedy max-min selection from a pool of strong, high-contrast qualitative colors.
+    Filters out pale/pastel candidates so analog lines stay easy to separate on white.
     """
     if n <= 0:
         return []
 
-    cmap_names = ["tab20", "tab20b", "tab20c", "Set3", "Set2", "Set1", "Dark2", "Paired", "Accent"]
+    cmap_names = ["tab10", "Dark2", "Set1", "tab20", "tab20b", "tab20c", "Paired", "Accent"]
+
     candidates = []
     for name in cmap_names:
         cmap = plt.cm.get_cmap(name)
@@ -105,45 +105,59 @@ def distinct_palette(n: int):
         else:
             candidates.extend([tuple(cmap(x)[:3]) for x in np.linspace(0, 1, 24)])
 
-    def luminance(rgb):
-        r, g, b = rgb
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-    # Drop very light colors that wash out on white
-    candidates = [c for c in candidates if luminance(c) < 0.92]
+    def key_255(rgb):
+        return tuple(int(round(x * 255)) for x in rgb)
 
     # Deduplicate
     uniq = []
     seen = set()
     for c in candidates:
-        key = tuple(int(round(x * 255)) for x in c)
-        if key not in seen:
-            seen.add(key)
+        k = key_255(c)
+        if k not in seen:
+            seen.add(k)
             uniq.append(c)
 
-    if len(uniq) == 0:
-        return list(plt.cm.get_cmap("tab20")(np.linspace(0, 1, n)))  # fallback
-
-    def saturation(rgb):
+    # Keep saturated, darker-ish colors (avoid pastels)
+    strong = []
+    for rgb in uniq:
         h, s, v = colorsys.rgb_to_hsv(*rgb)
-        return s
+        if s >= 0.55 and 0.25 <= v <= 0.85:
+            strong.append(rgb)
 
-    chosen = [max(uniq, key=saturation)]
+    pool = strong if len(strong) >= n else uniq
+
+    def dist(a, b):
+        a = np.array(a, dtype=float)
+        b = np.array(b, dtype=float)
+        return float(np.sqrt(np.sum((a - b) ** 2)))
+
+    # Start with max saturation, then greedily maximize min distance
+    def sat(rgb):
+        return colorsys.rgb_to_hsv(*rgb)[1]
+
+    chosen = [max(pool, key=sat)]
     if n == 1:
         return chosen
 
-    arr = np.array(uniq, dtype=float)
-    chosen_arr = np.array(chosen, dtype=float)
+    remaining = [c for c in pool if c != chosen[0]]
+    while len(chosen) < n and remaining:
+        best_i, best_min = None, -1.0
+        for i, c in enumerate(remaining):
+            dmin = min(dist(c, ch) for ch in chosen)
+            if dmin > best_min:
+                best_min = dmin
+                best_i = i
+        chosen.append(remaining.pop(best_i))
 
-    for _ in range(n - 1):
-        d = np.sqrt(((arr[:, None, :] - chosen_arr[None, :, :]) ** 2).sum(axis=2))
-        min_d = d.min(axis=1)
-        idx = int(np.argmax(min_d))
-        chosen.append(tuple(arr[idx]))
-        chosen_arr = np.array(chosen, dtype=float)
-        arr = np.delete(arr, idx, axis=0)
-        if arr.size == 0:
-            break
+    # Absolute fallback if pool is exhausted
+    if len(chosen) < n:
+        extra = list(plt.cm.get_cmap("tab20")(np.linspace(0, 1, n)))  # returns RGBA
+        for c in extra:
+            rgb = tuple(c[:3])
+            if rgb not in chosen:
+                chosen.append(rgb)
+            if len(chosen) == n:
+                break
 
     return chosen[:n]
 
@@ -241,9 +255,9 @@ for idx, (yr, rho) in enumerate(top):
     ax.plot(
         ser_full.index,
         ser_full.values,
-        "--",
-        lw=2,
-        alpha=0.7,
+        "-",                 # solid lines for analogs
+        lw=2.3,
+        alpha=0.95,          # more solid on white
         color=palette[idx],
         label=f"{yr} (ρ={rho:.2f})",
     )
