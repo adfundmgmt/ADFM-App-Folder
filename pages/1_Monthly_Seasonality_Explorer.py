@@ -21,7 +21,7 @@ try:
 except ImportError:
     pdr = None
 
-FALLBACK_MAP = {"^GSPC": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
+FALLBACK_MAP = {"^SPX": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
 # -------------------------- Streamlit UI -------------------------- #
@@ -67,7 +67,7 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
         return series
 
     if symbol == "SPY":
-        series = _yf_download("^GSPC", start_pad, end)
+        series = _yf_download("^SPX", start_pad, end)
         if series is not None:
             return series
 
@@ -577,7 +577,7 @@ def plot_intra_month_curve(
 # -------------------------- Main controls -------------------------- #
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
-    symbol = st.text_input("Ticker symbol", value="^GSPC").upper()
+    symbol = st.text_input("Ticker symbol", value="^SPX").upper()
 with col2:
     start_year = st.number_input("Start year", value=2020, min_value=1900, max_value=dt.datetime.today().year)
 with col3:
@@ -595,9 +595,9 @@ with st.spinner("Fetching and analyzing data..."):
     used_symbol = symbol
     prices = fetch_prices(symbol, start_date, end_date)
     if prices is None and symbol == "SPY":
-        prices = fetch_prices("^GSPC", start_date, end_date)
+        prices = fetch_prices("^SPX", start_date, end_date)
         if prices is not None:
-            used_symbol = "^GSPC"
+            used_symbol = "^SPX"
 
 if prices is None or prices.empty:
     st.error(f"No data found for '{symbol}' in the given date range. Try a different symbol or adjust the years.")
@@ -608,7 +608,7 @@ if first_valid is not None:
     prices = prices.loc[first_valid:]
 
 if used_symbol != symbol:
-    st.info("SPY data unavailable. Using S&P 500 index (^GSPC) fallback for seasonality.")
+    st.info("SPY data unavailable. Using S&P 500 index (^SPX) fallback for seasonality.")
 
 stats = seasonal_stats(prices, int(start_year), int(end_year))
 if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
