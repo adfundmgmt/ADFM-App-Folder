@@ -121,7 +121,7 @@ def distinct_palette(n: int):
     strong = []
     for rgb in uniq:
         h, s, v = colorsys.rgb_to_hsv(*rgb)
-        if s >= 0.55 and 0.25 <= v <= 0.65:
+        if s >= 0.55 and 0.25 <= v <= 0.95:
             strong.append(rgb)
 
     pool = strong if len(strong) >= n else uniq
