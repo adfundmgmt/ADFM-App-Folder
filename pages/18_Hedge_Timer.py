@@ -1,79 +1,91 @@
 # app.py
-# Streamlit: Hedge Timing Dashboard for SPY / QQQ
-# Data sources: Yahoo Finance (via yfinance) + optional Finviz snapshot (light scrape)
+# Hedge Timing v2: clean visuals + pre-drawdown signal design + built-in historical check
+#
+# Install:
+#   pip install streamlit yfinance pandas numpy plotly
 #
 # Run:
-#   pip install streamlit yfinance pandas numpy plotly requests
 #   streamlit run app.py
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="Hedge Timing: SPY / QQQ", layout="wide")
 
-# ----------------------------- Style (tight + clean) -----------------------------
+# ============================== Page + Style ==============================
+st.set_page_config(page_title="Hedge Timing (SPY / QQQ)", layout="wide")
+
 st.markdown(
     """
 <style>
-.block-container { padding-top: 1.1rem; padding-bottom: 1.2rem; }
-div[data-testid="stMetric"] { background: #0b1220; border: 1px solid rgba(255,255,255,0.08);
-  padding: 12px 12px 10px 12px; border-radius: 14px; }
-div[data-testid="stMetric"] > label { opacity: 0.85; }
-hr { margin: 0.8rem 0 0.6rem 0; opacity: 0.25; }
-.small { opacity: 0.85; font-size: 0.92rem; }
-.callout { border-radius: 16px; padding: 14px 16px; border: 1px solid rgba(255,255,255,0.10); }
-.good { background: rgba(16, 185, 129, 0.10); }
-.mid  { background: rgba(245, 158, 11, 0.10); }
-.bad  { background: rgba(239, 68, 68, 0.10); }
-.kv { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
-.kv > div { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
-  padding: 8px 10px; border-radius: 12px; font-size: 0.92rem; }
+.block-container { padding-top: 0.9rem; padding-bottom: 1.1rem; max-width: 1400px; }
+h1,h2,h3 { letter-spacing: -0.2px; }
+.small { opacity: 0.86; font-size: 0.92rem; }
+.card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+.badge {
+  display:inline-block; padding: 6px 10px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  font-weight: 700; font-size: 0.92rem;
+}
+.b_good { background: rgba(16,185,129,0.14); }
+.b_mid  { background: rgba(245,158,11,0.14); }
+.b_bad  { background: rgba(239,68,68,0.14); }
+.kv { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+.kv > div {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.09);
+  padding: 7px 10px; border-radius: 12px; font-size: 0.92rem;
+}
+hr { opacity: 0.22; margin: 0.8rem 0; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-# ----------------------------- Defaults -----------------------------
-RISK_BASKET = [
-    "SPY",
-    "QQQ",
-    "^VIX",
-    "^VIX9D",  # may be missing sometimes, code handles gracefully
-    "TLT",
-    "HYG",
-    "LQD",
-    "RSP",
-    "IWM",
-    "XLY",
-    "XLP",
-    "XLF",
-    "GLD",
-    "USO",
-    "UUP",  # USD proxy
-    "^TNX",  # 10Y yield index
-]
 
-PRICE_TICKERS = ["SPY", "QQQ", "TLT", "HYG", "LQD", "RSP", "IWM", "XLY", "XLP", "XLF", "GLD", "USO", "UUP"]
-INDEX_TICKERS = ["^VIX", "^VIX9D", "^TNX"]
+# ============================== Core Parameters ==============================
+DEFAULT_TICKERS = {
+    # Equity beta
+    "SPY": "SPY",
+    "QQQ": "QQQ",
+    "RSP": "RSP",
+    "IWM": "IWM",
+    "XLY": "XLY",
+    "XLP": "XLP",
+    # Credit
+    "HYG": "HYG",
+    "LQD": "LQD",
+    # Rates
+    "TLT": "TLT",
+    "^TNX": "^TNX",  # 10Y yield index (usually 10x the yield)
+    "^IRX": "^IRX",  # 13-week index (often 10x the yield)
+    # Vol regime
+    "^VIX": "^VIX",
+    "^VIX9D": "^VIX9D",   # may be missing sometimes
+    "^VIX3M": "^VIX3M",   # may be missing sometimes
+    "^VVIX": "^VVIX",     # may be missing sometimes
+}
 
-# ----------------------------- Helpers -----------------------------
+
+# ============================== Utilities ==============================
 def _today() -> date:
     return date.today()
 
-def _start_date(lookback_years: int) -> date:
-    # pad to reduce missing MA windows
-    return _today() - timedelta(days=int(lookback_years * 365.25) + 60)
+def _start_date(years: int) -> date:
+    return _today() - timedelta(days=int(years * 365.25) + 80)
 
 @st.cache_data(ttl=900, show_spinner=False)
 def yf_download(tickers: List[str], start: date) -> pd.DataFrame:
@@ -85,403 +97,513 @@ def yf_download(tickers: List[str], start: date) -> pd.DataFrame:
         group_by="ticker",
         threads=True,
     )
-    # yfinance returns multi-index columns when multiple tickers
     return df
 
 def extract_close(df_raw: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
-    if df_raw.empty:
+    if df_raw is None or df_raw.empty:
         return pd.DataFrame()
 
     if isinstance(df_raw.columns, pd.MultiIndex):
-        closes = {}
+        out = {}
         for t in tickers:
             if (t, "Close") in df_raw.columns:
-                closes[t] = df_raw[(t, "Close")]
+                out[t] = df_raw[(t, "Close")]
             elif (t, "Adj Close") in df_raw.columns:
-                closes[t] = df_raw[(t, "Adj Close")]
-        out = pd.DataFrame(closes)
-        out.index = pd.to_datetime(out.index)
-        return out.sort_index()
+                out[t] = df_raw[(t, "Adj Close")]
+        df = pd.DataFrame(out)
+        df.index = pd.to_datetime(df.index)
+        return df.sort_index()
     else:
         # single ticker
         if "Close" in df_raw.columns:
-            out = df_raw[["Close"]].rename(columns={"Close": tickers[0]})
+            df = df_raw[["Close"]].rename(columns={"Close": tickers[0]})
         elif "Adj Close" in df_raw.columns:
-            out = df_raw[["Adj Close"]].rename(columns={"Adj Close": tickers[0]})
+            df = df_raw[["Adj Close"]].rename(columns={"Adj Close": tickers[0]})
         else:
             return pd.DataFrame()
-        out.index = pd.to_datetime(out.index)
-        return out.sort_index()
+        df.index = pd.to_datetime(df.index)
+        return df.sort_index()
 
 def last_valid(s: pd.Series) -> float:
     s = s.dropna()
     return float(s.iloc[-1]) if len(s) else float("nan")
 
-def pct(x: float) -> str:
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+def fmt_pct(x: float) -> str:
+    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
         return "NA"
     return f"{x*100:.2f}%"
 
-def num(x: float, nd: int = 2) -> str:
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+def fmt_num(x: float, nd: int = 2) -> str:
+    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
         return "NA"
     return f"{x:.{nd}f}"
-
-def rolling_ma(s: pd.Series, w: int) -> pd.Series:
-    return s.rolling(w).mean()
-
-def rolling_vol(ret: pd.Series, w: int = 20) -> pd.Series:
-    return ret.rolling(w).std() * np.sqrt(252.0)
-
-def drawdown(px: pd.Series) -> pd.Series:
-    peak = px.cummax()
-    return px / peak - 1.0
-
-def slope(s: pd.Series, w: int = 20) -> float:
-    s = s.dropna()
-    if len(s) < w:
-        return float("nan")
-    y = s.iloc[-w:].values.astype(float)
-    x = np.arange(w, dtype=float)
-    x = (x - x.mean()) / (x.std() + 1e-12)
-    y = (y - y.mean()) / (y.std() + 1e-12)
-    b = np.polyfit(x, y, 1)[0]
-    return float(b)
 
 def safe_ratio(a: pd.Series, b: pd.Series) -> pd.Series:
     out = a / b
     out = out.replace([np.inf, -np.inf], np.nan)
     return out
 
-# Optional: lightweight Finviz snapshot (best effort)
-@st.cache_data(ttl=3600, show_spinner=False)
-def finviz_snapshot(ticker: str) -> Dict[str, str]:
-    url = f"https://finviz.com/quote.ashx?t={ticker}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://finviz.com/",
-    }
-    try:
-        r = requests.get(url, headers=headers, timeout=12)
-        r.raise_for_status()
-        tables = pd.read_html(r.text)
-        # Finviz quote page usually contains a 2-column key-value grid table
-        # Find the table that looks like [key, value, key, value, ...]
-        best = None
-        for t in tables:
-            if t.shape[1] >= 4 and t.shape[0] >= 8:
-                best = t
-                break
-        if best is None:
-            return {}
-        kv = {}
-        # Flatten rows: [k1, v1, k2, v2, ...]
-        for _, row in best.iterrows():
-            vals = [str(x) for x in row.values.tolist()]
-            for i in range(0, len(vals) - 1, 2):
-                k = vals[i].strip()
-                v = vals[i + 1].strip()
-                if k and k.lower() != "nan" and v.lower() != "nan":
-                    kv[k] = v
-        return kv
-    except Exception:
-        return {}
+def drawdown(px: pd.Series) -> pd.Series:
+    peak = px.cummax()
+    return px / peak - 1.0
+
+def ma(px: pd.Series, w: int) -> pd.Series:
+    return px.rolling(w).mean()
+
+def slope_z(px: pd.Series, w: int = 20) -> pd.Series:
+    # normalized slope proxy: rolling z-scored slope of prices (fast and stable)
+    x = np.arange(w, dtype=float)
+    x = (x - x.mean()) / (x.std() + 1e-12)
+
+    def _fit(y: np.ndarray) -> float:
+        if np.any(np.isnan(y)):
+            return np.nan
+        y = (y - y.mean()) / (y.std() + 1e-12)
+        b = np.polyfit(x, y, 1)[0]
+        return float(b)
+
+    return px.rolling(w).apply(lambda y: _fit(np.array(y, dtype=float)), raw=False)
+
+def forward_return(px: pd.Series, h: int) -> pd.Series:
+    return px.shift(-h) / px - 1.0
+
+def forward_min_return(px: pd.Series, h: int) -> pd.Series:
+    # worst forward move over next h sessions: min_future / today - 1
+    fut_min = px[::-1].rolling(h, min_periods=1).min()[::-1].shift(-1)
+    return fut_min / px - 1.0
+
+def pad_range(series: pd.Series, pad: float = 0.02) -> Tuple[float, float]:
+    s = series.dropna()
+    if len(s) < 10:
+        return (None, None)
+    lo = float(s.min())
+    hi = float(s.max())
+    span = max(hi - lo, 1e-9)
+    return lo - pad * span, hi + pad * span
+
+
+# ============================== Signal Model ==============================
+@dataclass
+class SignalComponent:
+    key: str
+    label: str
+    weight: int
 
 @dataclass
-class HedgeSignal:
-    score: int
+class SignalState:
+    score_series: pd.Series
+    score_today: int
+    coverage_today: int
     stance: str
-    tag: str
-    reasons: List[str]
-    invalidation: List[str]
-    preferred_hedge: str
+    badge_class: str
+    triggered: bool
+    reasons_today: List[str]
+    contrib_today: pd.DataFrame
 
-def build_hedge_signal(
-    px: pd.DataFrame,
-    idx: pd.DataFrame,
-    risk_mode: str,
-) -> HedgeSignal:
-    # Weights by risk mode: conservative hedges sooner; aggressive waits for alignment
-    if risk_mode == "Conservative":
-        w_trend_200 = 28
-        w_trend_50 = 18
-        w_vol = 16
-        w_term = 10
-        w_credit = 16
-        w_breadth = 12
-        w_defensive = 8
-    elif risk_mode == "Aggressive":
-        w_trend_200 = 30
-        w_trend_50 = 14
-        w_vol = 14
-        w_term = 10
-        w_credit = 18
-        w_breadth = 14
-        w_defensive = 6
-    else:
-        # Balanced
-        w_trend_200 = 30
-        w_trend_50 = 16
-        w_vol = 15
-        w_term = 10
-        w_credit = 17
-        w_breadth = 12
-        w_defensive = 6
 
-    spy = px["SPY"].dropna()
-    qqq = px["QQQ"].dropna()
+COMPONENTS: List[SignalComponent] = [
+    # Vol term structure and stress: tends to show up early when fragility rises
+    SignalComponent("vix_rising", "VIX above MA50 and rising", 14),
+    SignalComponent("vix9_invert", "VIX9D/VIX >= 1.00 (front stress)", 18),
+    SignalComponent("vix_term_invert", "VIX/VIX3M >= 1.00 (term inversion)", 14),
+    SignalComponent("vvix_spike", "VVIX elevated (vol of vol)", 6),
 
-    def _score_for_symbol(sym: str) -> Tuple[int, List[str], List[str]]:
-        s = px[sym].dropna()
-        ret = s.pct_change()
+    # Credit and breadth: these are the main early-warning layers
+    SignalComponent("credit_200", "HYG/LQD below 200d MA (credit risk-off)", 18),
+    SignalComponent("credit_down", "HYG/LQD trending down (30d slope < 0)", 8),
 
-        ma21 = rolling_ma(s, 21)
-        ma50 = rolling_ma(s, 50)
-        ma200 = rolling_ma(s, 200)
+    SignalComponent("rsp_200", "RSP/SPY below 200d MA (breadth weak)", 10),
+    SignalComponent("xly_xlp_200", "XLY/XLP below 200d MA (defensive tape)", 8),
+    SignalComponent("iwm_200", "IWM/SPY below 200d MA (small caps lag)", 4),
 
-        dd = drawdown(s)
-        rv20 = rolling_vol(ret, 20)
+    # Price confirmation: used as permission to size shorts, not as the early trigger
+    SignalComponent("trend_50", "Target below 50d MA", 8),
+    SignalComponent("trend_200", "Target below 200d MA", 10),
+    SignalComponent("mom_20", "Target 20d return < 0", 2),
+]
 
-        score = 0
-        reasons = []
-        invalid = []
+def compute_signal(px: pd.DataFrame, target: str) -> SignalState:
+    df = px.copy()
 
-        # Trend (primary)
-        if len(ma200.dropna()) and last_valid(s) < last_valid(ma200):
-            score += w_trend_200
-            reasons.append(f"{sym} below 200d MA (trend risk-on is broken).")
-            invalid.append(f"Cover hedge if {sym} closes back above its 200d MA for 3 sessions.")
-        if len(ma50.dropna()) and last_valid(s) < last_valid(ma50):
-            score += w_trend_50
-            reasons.append(f"{sym} below 50d MA (medium-term momentum weak).")
-            invalid.append(f"Reduce hedge if {sym} reclaims the 50d MA with breadth improving.")
+    # Convenience
+    tgt = df[target].dropna()
 
-        # Vol regime
-        vix = idx.get("^VIX", pd.Series(dtype=float)).dropna()
-        if len(vix):
-            vix_last = last_valid(vix)
-            if vix_last >= 20:
-                score += int(w_vol * 0.7)
-                reasons.append(f"VIX elevated ({vix_last:.2f}).")
-                invalid.append("De-escalate hedge if VIX holds below 18 for a week.")
-            if vix_last >= 25:
-                score += int(w_vol * 0.4)
+    # Build series we need (best effort, degrade gracefully)
+    vix = df.get("^VIX", pd.Series(index=df.index, dtype=float))
+    vix9 = df.get("^VIX9D", pd.Series(index=df.index, dtype=float))
+    vix3m = df.get("^VIX3M", pd.Series(index=df.index, dtype=float))
+    vvix = df.get("^VVIX", pd.Series(index=df.index, dtype=float))
 
-        # Front-end stress: VIX9D / VIX
-        vix9 = idx.get("^VIX9D", pd.Series(dtype=float)).dropna()
-        if len(vix) and len(vix9):
-            ratio = vix9 / vix
-            ratio_last = last_valid(ratio)
-            if ratio_last >= 1.0:
-                score += w_term
-                reasons.append(f"Near-term stress up (VIX9D/VIX = {ratio_last:.2f}).")
-                invalid.append("Ease hedges if VIX9D/VIX falls below 0.90 and stays there.")
+    hyg = df.get("HYG", pd.Series(index=df.index, dtype=float))
+    lqd = df.get("LQD", pd.Series(index=df.index, dtype=float))
 
-        # Credit risk: HYG/LQD
-        if "HYG" in px and "LQD" in px:
-            hyg_lqd = safe_ratio(px["HYG"], px["LQD"]).dropna()
-            if len(hyg_lqd) > 220:
-                hl_ma100 = rolling_ma(hyg_lqd, 100)
-                hl_ma200 = rolling_ma(hyg_lqd, 200)
-                if last_valid(hyg_lqd) < last_valid(hl_ma200):
-                    score += w_credit
-                    reasons.append("Credit risk-off (HYG/LQD below 200d MA).")
-                    invalid.append("Ease hedges if HYG/LQD reclaims its 200d MA.")
-                elif last_valid(hyg_lqd) < last_valid(hl_ma100):
-                    score += int(w_credit * 0.6)
-                    reasons.append("Credit softening (HYG/LQD below 100d MA).")
+    spy = df.get("SPY", pd.Series(index=df.index, dtype=float))
+    rsp = df.get("RSP", pd.Series(index=df.index, dtype=float))
+    iwm = df.get("IWM", pd.Series(index=df.index, dtype=float))
+    xly = df.get("XLY", pd.Series(index=df.index, dtype=float))
+    xlp = df.get("XLP", pd.Series(index=df.index, dtype=float))
 
-        # Breadth proxies: RSP/SPY and IWM/SPY
-        if "RSP" in px:
-            rsp_spy = safe_ratio(px["RSP"], px["SPY"]).dropna()
-            if len(rsp_spy) > 220:
-                rs_ma200 = rolling_ma(rsp_spy, 200)
-                if last_valid(rsp_spy) < last_valid(rs_ma200):
-                    score += w_breadth
-                    reasons.append("Breadth weak (RSP underperforming SPY on 200d basis).")
-                    invalid.append("Ease hedges if RSP/SPY turns up and reclaims its 200d MA.")
-        if "IWM" in px:
-            iwm_spy = safe_ratio(px["IWM"], px["SPY"]).dropna()
-            if len(iwm_spy) > 220:
-                rs_ma200 = rolling_ma(iwm_spy, 200)
-                if last_valid(iwm_spy) < last_valid(rs_ma200):
-                    score += int(w_breadth * 0.4)
-                    reasons.append("Small caps lagging (IWM/SPY below 200d MA).")
+    # Derived
+    vix_ma50 = ma(vix, 50)
+    vix_slope20 = slope_z(vix, 20)
 
-        # Defensive tape: XLY/XLP
-        if "XLY" in px and "XLP" in px:
-            xly_xlp = safe_ratio(px["XLY"], px["XLP"]).dropna()
-            if len(xly_xlp) > 220:
-                xx_ma200 = rolling_ma(xly_xlp, 200)
-                if last_valid(xly_xlp) < last_valid(xx_ma200):
-                    score += w_defensive
-                    reasons.append("Consumer discretionary lagging staples (risk-off behavior).")
+    vix9_ratio = safe_ratio(vix9, vix)
+    vix_term = safe_ratio(vix, vix3m)
 
-        # Cap score
-        score = int(max(0, min(100, score)))
+    credit = safe_ratio(hyg, lqd)
+    credit_ma200 = ma(credit, 200)
+    credit_slope30 = slope_z(credit, 30)
 
-        # Keep invalidation readable
-        invalid = list(dict.fromkeys(invalid))[:4]
-        reasons = list(dict.fromkeys(reasons))[:6]
-        return score, reasons, invalid
+    rsp_spy = safe_ratio(rsp, spy)
+    rsp_spy_ma200 = ma(rsp_spy, 200)
 
-    # Decide which hedge fits better today based on relative weakness (QQQ/SPY trend)
-    qqq_spy = safe_ratio(px["QQQ"], px["SPY"]).dropna()
-    pref = "SPY"
-    if len(qqq_spy) > 220:
-        rs_ma200 = rolling_ma(qqq_spy, 200)
-        if last_valid(qqq_spy) < last_valid(rs_ma200) and slope(qqq_spy, 30) < 0:
-            pref = "QQQ"
-        else:
-            pref = "SPY"
+    iwm_spy = safe_ratio(iwm, spy)
+    iwm_spy_ma200 = ma(iwm_spy, 200)
 
-    score_spy, reasons_spy, invalid_spy = _score_for_symbol("SPY")
-    score_qqq, reasons_qqq, invalid_qqq = _score_for_symbol("QQQ")
+    xly_xlp = safe_ratio(xly, xlp)
+    xly_xlp_ma200 = ma(xly_xlp, 200)
 
-    # Use the preferred hedge symbol's score for stance, but show both
-    chosen_score = score_qqq if pref == "QQQ" else score_spy
-    chosen_reasons = reasons_qqq if pref == "QQQ" else reasons_spy
-    chosen_invalid = invalid_qqq if pref == "QQQ" else invalid_spy
+    tgt_ma50 = ma(tgt, 50)
+    tgt_ma200 = ma(tgt, 200)
+    tgt_ret20 = tgt.pct_change(20)
 
-    if chosen_score >= 65:
-        stance = "HEDGE ON"
-        tag = "bad"
-    elif chosen_score >= 45:
+    # Conditions as series
+    cond: Dict[str, pd.Series] = {}
+
+    cond["vix_rising"] = (vix > vix_ma50) & (vix_slope20 > 0.10)
+    cond["vix9_invert"] = (vix9_ratio >= 1.00)
+    cond["vix_term_invert"] = (vix_term >= 1.00)
+    cond["vvix_spike"] = (vvix >= vvix.rolling(252).quantile(0.70))
+
+    cond["credit_200"] = (credit < credit_ma200)
+    cond["credit_down"] = (credit_slope30 < -0.05)
+
+    cond["rsp_200"] = (rsp_spy < rsp_spy_ma200)
+    cond["xly_xlp_200"] = (xly_xlp < xly_xlp_ma200)
+    cond["iwm_200"] = (iwm_spy < iwm_spy_ma200)
+
+    # Align to full index
+    cond["trend_50"] = (df[target] < df[target].rolling(50).mean())
+    cond["trend_200"] = (df[target] < df[target].rolling(200).mean())
+    cond["mom_20"] = (df[target].pct_change(20) < 0)
+
+    # Active weight coverage (handles missing series)
+    active_weights = []
+    for c in COMPONENTS:
+        s = cond.get(c.key)
+        if s is not None and s.dropna().shape[0] > 50:
+            active_weights.append(c.weight)
+    denom = max(1, int(sum(active_weights)))
+
+    score = pd.Series(index=df.index, dtype=float)
+    score[:] = 0.0
+
+    for c in COMPONENTS:
+        s = cond.get(c.key)
+        if s is None or s.dropna().shape[0] <= 50:
+            continue
+        score = score.add(s.astype(float) * c.weight, fill_value=0.0)
+
+    score = (score / denom) * 100.0
+    score = score.clip(lower=0, upper=100)
+
+    score_today = int(round(float(last_valid(score))))
+    coverage_today = int(round(denom))
+
+    # Stance mapping (tight, action-oriented)
+    if score_today >= 70:
+        stance = "SHORT ALLOWED"
+        badge_class = "b_bad"
+        triggered = True
+    elif score_today >= 55:
         stance = "HEDGE BIAS"
-        tag = "mid"
+        badge_class = "b_mid"
+        triggered = True
     else:
-        stance = "HEDGE OFF"
-        tag = "good"
+        stance = "STAND DOWN"
+        badge_class = "b_good"
+        triggered = False
 
-    return HedgeSignal(
-        score=chosen_score,
+    # Reasons today + contribution breakdown
+    today = score.dropna().index[-1]
+    rows = []
+    reasons = []
+    for c in COMPONENTS:
+        s = cond.get(c.key)
+        if s is None or s.dropna().shape[0] <= 50:
+            continue
+        is_on = bool(s.loc[today]) if today in s.index and pd.notna(s.loc[today]) else False
+        pts = (c.weight / denom) * 100.0 if is_on else 0.0
+        rows.append({"Signal": c.label, "On": is_on, "WeightPts": round((c.weight / denom) * 100.0, 1), "ContribPts": round(pts, 1)})
+        if is_on:
+            reasons.append(c.label)
+
+    contrib = pd.DataFrame(rows).sort_values("ContribPts", ascending=False)
+
+    return SignalState(
+        score_series=score,
+        score_today=score_today,
+        coverage_today=coverage_today,
         stance=stance,
-        tag=tag,
-        reasons=chosen_reasons,
-        invalidation=chosen_invalid,
-        preferred_hedge=pref,
+        badge_class=badge_class,
+        triggered=triggered,
+        reasons_today=reasons[:6],
+        contrib_today=contrib,
     )
 
-def plot_price_with_mas(px: pd.Series, title: str) -> go.Figure:
+
+# ============================== Drawdown Episode Finder ==============================
+@dataclass
+class DrawdownEpisode:
+    start: pd.Timestamp
+    trough: pd.Timestamp
+    end: pd.Timestamp
+    depth: float
+
+def find_drawdown_episodes(px: pd.Series, threshold: float = -0.08, recovery: float = -0.02) -> List[DrawdownEpisode]:
     s = px.dropna()
+    if len(s) < 260:
+        return []
+    dd = drawdown(s)
+
+    episodes: List[DrawdownEpisode] = []
+    i = 0
+    idx = dd.index
+
+    while i < len(dd):
+        if dd.iloc[i] <= threshold:
+            # start: last time drawdown was near 0 before this break
+            pre = dd.iloc[:i]
+            if len(pre) == 0:
+                start_i = i
+            else:
+                near0 = pre[pre >= -0.003]
+                start_i = dd.index.get_loc(near0.index[-1]) if len(near0) else max(0, i - 5)
+
+            # end: when we recover above recovery
+            j = i
+            while j < len(dd) and dd.iloc[j] <= recovery:
+                j += 1
+            end_i = min(len(dd) - 1, max(i, j - 1))
+
+            seg = dd.iloc[i:end_i + 1]
+            trough_ts = seg.idxmin()
+            depth = float(seg.min())
+
+            episodes.append(
+                DrawdownEpisode(
+                    start=idx[start_i],
+                    trough=trough_ts,
+                    end=idx[end_i],
+                    depth=depth,
+                )
+            )
+            i = end_i + 1
+        else:
+            i += 1
+
+    # Deduplicate overlapping (keep deeper one)
+    episodes_sorted = sorted(episodes, key=lambda e: e.start)
+    pruned: List[DrawdownEpisode] = []
+    for ep in episodes_sorted:
+        if not pruned:
+            pruned.append(ep)
+            continue
+        last = pruned[-1]
+        if ep.start <= last.end:
+            # overlap: keep deeper episode, extend end
+            if ep.depth < last.depth:
+                pruned[-1] = DrawdownEpisode(start=last.start, trough=ep.trough, end=max(last.end, ep.end), depth=ep.depth)
+            else:
+                pruned[-1] = DrawdownEpisode(start=last.start, trough=last.trough, end=max(last.end, ep.end), depth=last.depth)
+        else:
+            pruned.append(ep)
+
+    # Biggest first
+    pruned = sorted(pruned, key=lambda e: e.depth)  # more negative first
+    return pruned
+
+
+# ============================== Plotting (no grids, tight ranges) ==============================
+def fig_price_signals(
+    px: pd.Series,
+    score: pd.Series,
+    threshold: int,
+    episodes: List[DrawdownEpisode],
+    title: str,
+    lookback_days: int,
+) -> go.Figure:
+    s = px.dropna()
+    s = s.iloc[-lookback_days:] if len(s) > lookback_days else s
+
+    ma50 = s.rolling(50).mean()
+    ma200 = s.rolling(200).mean()
+
+    sc = score.reindex(s.index).dropna()
+    sig = sc >= threshold
+
+    ylo, yhi = pad_range(s, pad=0.015)
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=s.index, y=s, name="Price", mode="lines"))
-    for w in [21, 50, 200]:
-        ma = s.rolling(w).mean()
-        fig.add_trace(go.Scatter(x=ma.index, y=ma, name=f"MA{w}", mode="lines"))
-    fig.update_layout(
-        title=title,
-        height=360,
-        margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=False)
-    return fig
 
-def plot_indicator_lines(series_map: Dict[str, pd.Series], title: str, height: int = 320) -> go.Figure:
-    fig = go.Figure()
-    for name, s in series_map.items():
-        s = s.dropna()
-        if len(s):
-            fig.add_trace(go.Scatter(x=s.index, y=s, name=name, mode="lines"))
-    fig.update_layout(
-        title=title,
-        height=height,
-        margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=False)
-    return fig
+    fig.add_trace(go.Scatter(x=s.index, y=s, name="Price", mode="lines", line=dict(width=2.2)))
+    fig.add_trace(go.Scatter(x=ma50.index, y=ma50, name="MA50", mode="lines", line=dict(width=1.2)))
+    fig.add_trace(go.Scatter(x=ma200.index, y=ma200, name="MA200", mode="lines", line=dict(width=1.2)))
 
-def plot_corr_heatmap(rets: pd.DataFrame, title: str) -> go.Figure:
-    r = rets.dropna().copy()
-    if r.shape[0] < 40:
-        corr = r.corr()
-    else:
-        corr = r.iloc[-60:].corr()
-
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=corr.values,
-            x=corr.columns.tolist(),
-            y=corr.index.tolist(),
-            zmin=-1,
-            zmax=1,
-            hovertemplate="Corr %{y} vs %{x}: %{z:.2f}<extra></extra>",
+    # Signal markers
+    sig_idx = sc.index[sig.reindex(sc.index, fill_value=False)]
+    sig_idx = sig_idx[(sig_idx >= s.index.min()) & (sig_idx <= s.index.max())]
+    if len(sig_idx):
+        fig.add_trace(
+            go.Scatter(
+                x=sig_idx,
+                y=s.reindex(sig_idx),
+                name="Signal",
+                mode="markers",
+                marker=dict(symbol="triangle-down", size=9),
+                hovertemplate="Signal<br>%{x|%Y-%m-%d}<extra></extra>",
+            )
         )
-    )
+
+    # Shade drawdown episodes inside window
+    for ep in episodes:
+        if ep.end < s.index.min() or ep.start > s.index.max():
+            continue
+        x0 = max(ep.start, s.index.min())
+        x1 = min(ep.end, s.index.max())
+        fig.add_vrect(x0=x0, x1=x1, opacity=0.10, line_width=0)
+
     fig.update_layout(
         title=title,
-        height=360,
+        height=460,
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        hovermode="x unified",
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=False, range=[ylo, yhi] if (ylo is not None and yhi is not None) else None)
+    return fig
+
+def fig_score(score: pd.Series, threshold: int, lookback_days: int) -> go.Figure:
+    s = score.dropna()
+    s = s.iloc[-lookback_days:] if len(s) > lookback_days else s
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=s.index, y=s, name="Score", mode="lines", line=dict(width=2.0)))
+    fig.add_hline(y=threshold, line_width=1, opacity=0.45)
+
+    fig.update_layout(
+        title="Signal score (0 to 100) vs threshold",
+        height=260,
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        hovermode="x unified",
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=False, range=[0, 100])
+    return fig
+
+def fig_episode_bar(episodes: List[DrawdownEpisode], leads: List[int], title: str) -> go.Figure:
+    # Bar of drawdown depth with lead time in hover
+    labels = []
+    depths = []
+    hover = []
+    for ep, ld in zip(episodes, leads):
+        lbl = f"{ep.trough:%Y-%m}"
+        labels.append(lbl)
+        depths.append(ep.depth * 100)
+        hover.append(f"Start: {ep.start:%Y-%m-%d}<br>Trough: {ep.trough:%Y-%m-%d}<br>End: {ep.end:%Y-%m-%d}<br>Depth: {ep.depth*100:.2f}%<br>Lead time: {ld} sessions")
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=labels, y=depths, name="Depth (%)", hovertext=hover, hoverinfo="text"))
+    fig.update_layout(
+        title=title,
+        height=320,
         margin=dict(l=10, r=10, t=50, b=10),
     )
     fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=False)
+    fig.update_yaxes(showgrid=False, title="Drawdown depth (%)")
     return fig
 
-# ----------------------------- Sidebar -----------------------------
-with st.sidebar:
-    st.header("Hedge Timing")
-    st.caption("Actionable read on whether to short SPY / QQQ right now.")
 
-    lookback = st.slider("Lookback (years)", 1, 10, 5)
-    risk_mode = st.selectbox("Decision style", ["Balanced", "Conservative", "Aggressive"], index=0)
-    focus = st.selectbox("Focus", ["Both", "SPY", "QQQ"], index=0)
+# ============================== Sidebar ==============================
+with st.sidebar:
+    st.header("Hedge Timing v2")
+
+    target_mode = st.selectbox("Decision target", ["Auto (pick weaker)", "SPY", "QQQ"], index=0)
+    years = st.slider("History (years)", 2, 15, 7)
+    window_days = st.slider("Charts window (days)", 120, 1500, 540, step=30)
 
     st.divider()
-    show_finviz = st.toggle("Show Finviz snapshot (best effort)", value=False)
-    show_heatmap = st.toggle("Show correlation heatmap", value=True)
+    threshold = st.slider("Short threshold (score)", 40, 85, 65)
+    episode_thresh = st.slider("Define 'significant drawdown' as", 5, 20, 8)  # %
+    episode_recover = st.slider("Episode ends when drawdown recovers above", 0, 8, 2)  # %
+    lead_lookback = st.slider("Count lead time within prior sessions", 10, 90, 40)
 
-# ----------------------------- Load data -----------------------------
-start = _start_date(lookback)
+    st.divider()
+    show_contrib = st.toggle("Show score breakdown", value=True)
+    show_backtest = st.toggle("Show episode check", value=True)
 
-raw = yf_download(RISK_BASKET, start)
-close_all = extract_close(raw, RISK_BASKET)
 
-# Split price vs indices for readability
-px = close_all[[c for c in close_all.columns if c in PRICE_TICKERS]].copy()
-idx = close_all[[c for c in close_all.columns if c in INDEX_TICKERS]].copy()
+# ============================== Load Data ==============================
+st.title("SPY / QQQ Hedge Timing")
+st.caption("Goal: a clean, early-warning signal set that tends to turn on before big drawdowns, then uses trend as permission to size.")
 
-# Ensure core symbols exist
-missing = [t for t in ["SPY", "QQQ"] if t not in px.columns or px[t].dropna().empty]
-if missing:
-    st.error(f"Missing critical data for: {', '.join(missing)}. Try again later (Yahoo sometimes hiccups).")
+tickers = list(DEFAULT_TICKERS.values())
+start = _start_date(years)
+
+raw = yf_download(tickers, start)
+close = extract_close(raw, tickers)
+
+if close.empty or "SPY" not in close.columns or "QQQ" not in close.columns:
+    st.error("Yahoo feed failed for SPY/QQQ. Retry later.")
     st.stop()
 
-# Returns for correlation panel
-rets = px[["SPY", "QQQ"] + [t for t in ["TLT", "HYG", "LQD", "GLD", "USO", "UUP"] if t in px.columns]].pct_change()
+# Work on a unified panel with everything we can get
+df = close.copy()
 
-# ----------------------------- Build signals -----------------------------
-signal = build_hedge_signal(px=px, idx=idx, risk_mode=risk_mode)
+# Normalize yield indices if present (usually 10x)
+for ysym in ["^TNX", "^IRX"]:
+    if ysym in df.columns:
+        df[ysym] = df[ysym] / 10.0
 
-spy_last = last_valid(px["SPY"])
-qqq_last = last_valid(px["QQQ"])
-spy_dd = last_valid(drawdown(px["SPY"]))
-qqq_dd = last_valid(drawdown(px["QQQ"]))
-vix_last = last_valid(idx["^VIX"]) if "^VIX" in idx.columns else float("nan")
-tlt_last = last_valid(px["TLT"]) if "TLT" in px.columns else float("nan")
+# Decide target (auto picks weaker by relative trend)
+def pick_target(df_: pd.DataFrame) -> str:
+    if target_mode in ["SPY", "QQQ"]:
+        return target_mode
+    rs = safe_ratio(df_["QQQ"], df_["SPY"]).dropna()
+    if len(rs) < 260:
+        return "SPY"
+    rs_ma200 = rs.rolling(200).mean()
+    rs_slope30 = slope_z(rs, 30)
+    if last_valid(rs) < last_valid(rs_ma200) and last_valid(rs_slope30) < 0:
+        return "QQQ"
+    return "SPY"
 
-# ----------------------------- Header + decision box -----------------------------
-st.title("Hedge Timing Dashboard")
-st.caption("Objective: decide whether shorting SPY / QQQ is justified by trend + stress + credit + breadth proxies.")
+target = pick_target(df)
 
-callout_cls = signal.tag
+# ============================== Compute Signal ==============================
+sig = compute_signal(df, target=target)
+
+# Basic tape metrics
+tgt_px = df[target].dropna()
+tgt_dd = drawdown(tgt_px)
+vix_last = last_valid(df["^VIX"]) if "^VIX" in df.columns else float("nan")
+tgt_last = last_valid(tgt_px)
+
+# ============================== Decision Panel ==============================
+badge = f"<span class='badge {sig.badge_class}'>{sig.stance}</span>"
 st.markdown(
     f"""
-<div class="callout {callout_cls}">
-  <div style="display:flex; justify-content:space-between; align-items:baseline; gap:18px;">
-    <div style="font-size:1.25rem; font-weight:700;">{signal.stance}</div>
-    <div style="opacity:0.9;">Hedge score: <b>{signal.score}/100</b> | Preferred hedge: <b>{signal.preferred_hedge}</b></div>
+<div class="card">
+  <div style="display:flex; align-items:baseline; justify-content:space-between; gap:16px;">
+    <div style="font-size:1.25rem; font-weight:800;">{badge} <span class="small">Target: <b>{target}</b></span></div>
+    <div class="small">Score: <b>{sig.score_today}/100</b> | Data coverage: <b>{sig.coverage_today}</b> weight-points</div>
   </div>
-
   <div class="kv">
-    <div>SPY: <b>{num(spy_last,2)}</b> | DD: <b>{pct(spy_dd)}</b></div>
-    <div>QQQ: <b>{num(qqq_last,2)}</b> | DD: <b>{pct(qqq_dd)}</b></div>
-    <div>VIX: <b>{num(vix_last,2)}</b></div>
-    <div>TLT: <b>{num(tlt_last,2)}</b></div>
+    <div>{target} last: <b>{fmt_num(tgt_last,2)}</b></div>
+    <div>{target} drawdown: <b>{fmt_pct(last_valid(tgt_dd))}</b></div>
+    <div>VIX: <b>{fmt_num(vix_last,2)}</b></div>
   </div>
 </div>
 """,
@@ -489,91 +611,123 @@ st.markdown(
 )
 
 c1, c2 = st.columns([1, 1], gap="large")
-
 with c1:
-    st.subheader("Why this stance")
-    if signal.reasons:
-        st.markdown("\n".join([f"- {r}" for r in signal.reasons]))
+    st.subheader("Why it is on (today)")
+    if sig.reasons_today:
+        st.write("\n".join([f"• {r}" for r in sig.reasons_today]))
     else:
-        st.markdown("- NA (insufficient data for some indicators).")
-
+        st.write("• None. The early-warning layers are quiet.")
 with c2:
-    st.subheader("What flips it")
-    if signal.invalidation:
-        st.markdown("\n".join([f"- {x}" for x in signal.invalidation]))
+    st.subheader("How to execute (tight)")
+    if sig.score_today >= threshold:
+        st.write(
+            f"• You have permission to run an index short in {target}. If price is still above MA50, size smaller. If price is below MA50 and credit is weak, size can be larger.\n"
+            f"• Your first cover trigger is mechanical: score drops back below {threshold} and stays there for 3 sessions."
+        )
+    elif sig.score_today >= (threshold - 10):
+        st.write(
+            f"• You are in the gray zone. Keep it small or hedge with optionality. Demand confirmation from trend (below MA50) and credit (HYG/LQD down)."
+        )
     else:
-        st.markdown("- NA")
+        st.write("• Stand down. This is usually a tape that punishes premature shorts.")
 
-st.divider()
+st.markdown("<hr/>", unsafe_allow_html=True)
 
-# ----------------------------- Key charts -----------------------------
-left, right = st.columns([1, 1], gap="large")
-
-with left:
-    if focus in ["Both", "SPY"]:
-        st.plotly_chart(plot_price_with_mas(px["SPY"], "SPY price and key moving averages"), use_container_width=True)
-    if focus in ["Both", "QQQ"]:
-        st.plotly_chart(plot_price_with_mas(px["QQQ"], "QQQ price and key moving averages"), use_container_width=True)
-
-with right:
-    # Stress + credit + breadth proxies
-    series_map = {}
-    if "^VIX" in idx.columns:
-        series_map["VIX"] = idx["^VIX"]
-    if "^VIX9D" in idx.columns and "^VIX" in idx.columns:
-        series_map["VIX9D/VIX"] = (idx["^VIX9D"] / idx["^VIX"]).replace([np.inf, -np.inf], np.nan)
-
-    if "HYG" in px.columns and "LQD" in px.columns:
-        series_map["HYG/LQD"] = safe_ratio(px["HYG"], px["LQD"])
-    if "RSP" in px.columns and "SPY" in px.columns:
-        series_map["RSP/SPY"] = safe_ratio(px["RSP"], px["SPY"])
-    if "XLY" in px.columns and "XLP" in px.columns:
-        series_map["XLY/XLP"] = safe_ratio(px["XLY"], px["XLP"])
-
-    st.plotly_chart(plot_indicator_lines(series_map, "Stress, credit, breadth proxies (higher is better)"), use_container_width=True)
-
-st.divider()
-
-# ----------------------------- Correlations -----------------------------
-if show_heatmap:
-    st.subheader("Correlations (last ~60 trading days)")
-    st.caption("This helps you sanity-check whether your hedge is likely to behave as expected in the current tape.")
-    st.plotly_chart(plot_corr_heatmap(rets, "Rolling correlation heatmap"), use_container_width=True)
-
-# ----------------------------- Optional: Finviz snapshot -----------------------------
-if show_finviz:
-    st.divider()
-    st.subheader("Finviz snapshot (best effort)")
-    a, b = st.columns([1, 1], gap="large")
-
-    def show_kv(title: str, ticker: str):
-        kv = finviz_snapshot(ticker)
-        if not kv:
-            st.warning(f"Could not fetch Finviz for {ticker} (blocked or rate-limited).")
-            return
-        keys = ["ETF", "Index", "Perf Week", "Perf Month", "Perf YTD", "Volatility", "Avg Volume", "RSI (14)"]
-        shown = {k: kv.get(k) for k in keys if k in kv}
-        if not shown:
-            # fallback: show a compact selection of whatever exists
-            keep = list(kv.keys())[:18]
-            shown = {k: kv[k] for k in keep}
-        st.markdown(f"**{title} ({ticker})**")
-        st.write(pd.DataFrame(list(shown.items()), columns=["Metric", "Value"]))
-
-    with a:
-        show_kv("SPY", "SPY")
-    with b:
-        show_kv("QQQ", "QQQ")
-
-# ----------------------------- Final action rubric -----------------------------
-st.divider()
-st.subheader("How to use this (tight rubric)")
-st.markdown(
-    """
-- Treat the score as a permission slip. Above 65, you are allowed to carry an active index short. Between 45 and 65, you hedge smaller and demand confirmation (trend breaks plus credit or breadth weakness). Below 45, the tape is usually paying you to stay patient.
-- If Preferred hedge = QQQ, the Nasdaq is the stress center (QQQ/SPY relative strength is rolling over). If Preferred hedge = SPY, the hedge is broader market beta.
-- Your invalidation is mechanical. If the flip conditions hit, you stop debating and you reduce or cover.
-""".strip()
+# ============================== Charts ==============================
+episodes = find_drawdown_episodes(
+    tgt_px,
+    threshold=-(episode_thresh / 100.0),
+    recovery=-(episode_recover / 100.0),
 )
 
-st.caption("This is a decision aid, not investment advice. Data can be missing or stale on any given day; the app degrades gracefully when feeds fail.")
+st.plotly_chart(
+    fig_price_signals(
+        px=tgt_px,
+        score=sig.score_series,
+        threshold=threshold,
+        episodes=episodes,
+        title=f"{target} price with signals (triangles) and significant drawdown windows (shaded)",
+        lookback_days=window_days,
+    ),
+    use_container_width=True,
+)
+st.plotly_chart(fig_score(sig.score_series, threshold=threshold, lookback_days=window_days), use_container_width=True)
+
+# ============================== Score Breakdown ==============================
+if show_contrib:
+    st.subheader("Score breakdown (today)")
+    st.caption("This tells you exactly what is driving the short permission slip.")
+    if sig.contrib_today.empty:
+        st.write("No breakdown available (missing data in key inputs).")
+    else:
+        # Minimal, readable table (no grids in charts already; table is compact)
+        show = sig.contrib_today.copy()
+        show["On"] = show["On"].map(lambda x: "Yes" if x else "No")
+        show = show[["Signal", "On", "WeightPts", "ContribPts"]]
+        st.dataframe(show, use_container_width=True, hide_index=True)
+
+st.markdown("<hr/>", unsafe_allow_html=True)
+
+# ============================== Episode Check (this answers your Aug 2024, Mar/Apr 2025 request) ==============================
+if show_backtest:
+    st.subheader("Did this framework flip on before big drawdowns?")
+    st.caption(
+        "We detect significant drawdown episodes from price itself, then measure whether the score crossed the threshold before the episode."
+    )
+
+    # Compute lead times to episode start (first signal within lookback)
+    score = sig.score_series.dropna()
+    sig_on = score >= threshold
+
+    shown_eps = episodes[:10]  # biggest 10
+    leads = []
+    for ep in shown_eps:
+        # search for any signal in [start - lead_lookback, start]
+        start_loc = score.index.get_indexer([ep.start], method="nearest")[0]
+        lo = max(0, start_loc - lead_lookback)
+        hi = start_loc
+        window = sig_on.iloc[lo:hi + 1]
+        if window.any():
+            first_sig_idx = window[window].index[0]
+            lead = int((ep.start - first_sig_idx).days)  # calendar day proxy
+            # convert to sessions proxy using index positions
+            lead_sessions = int(score.index.get_loc(ep.start) - score.index.get_loc(first_sig_idx))
+            leads.append(max(0, lead_sessions))
+        else:
+            leads.append(-1)
+
+    if len(shown_eps) == 0:
+        st.write("No significant drawdown episodes found in this window. Increase history or lower episode threshold.")
+    else:
+        st.plotly_chart(
+            fig_episode_bar(shown_eps, leads, title="Largest drawdowns and how many sessions the signal led (if any)"),
+            use_container_width=True,
+        )
+
+        # Highlight specifically around Aug 2024 and Mar/Apr 2025 if present
+        def tag_episode(ep: DrawdownEpisode) -> Optional[str]:
+            m = ep.trough.strftime("%Y-%m")
+            if m == "2024-08":
+                return "Aug 2024"
+            if m in ["2025-03", "2025-04"]:
+                return "Mar/Apr 2025"
+            return None
+
+        hits = []
+        for ep, ld in zip(shown_eps, leads):
+            tag = tag_episode(ep)
+            if tag is None:
+                continue
+            hits.append((tag, ep.start, ep.trough, ep.depth, ld))
+
+        if hits:
+            st.markdown("**Your referenced episodes (if detected):**")
+            for tag, stt, tr, depth, ld in hits:
+                if ld >= 0:
+                    st.write(f"• {tag}: signal fired **{ld} sessions** before episode start; depth {depth*100:.2f}% (start {stt:%Y-%m-%d}, trough {tr:%Y-%m-%d}).")
+                else:
+                    st.write(f"• {tag}: no signal inside the prior {lead_lookback} sessions (start {stt:%Y-%m-%d}, trough {tr:%Y-%m-%d}, depth {depth*100:.2f}%).")
+        else:
+            st.write("Your specific months were not detected as top episodes under your drawdown definition. Raise history, lower episode threshold, or switch target.")
+
+st.caption("Reminder: Yahoo can miss VIX9D/VIX3M/VVIX on some days. The score automatically renormalizes around what is available.")
