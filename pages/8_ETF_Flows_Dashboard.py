@@ -71,16 +71,6 @@ period_days = int(lookback_dict[period_label])
 
 # --------------------------- ETF COVERAGE ---------------------------
 etf_info = {
-    # Core US beta
-    "SPY": ("US Large-Cap", "S&P 500"),
-    "IVV": ("US Large-Cap", "S&P 500"),
-    "VOO": ("US Large-Cap", "S&P 500"),
-    "QQQ": ("US Nasdaq", "Nasdaq-100"),
-    "DIA": ("US Dow", "Dow Jones Industrial Average"),
-    "IWM": ("US Small-Cap", "Russell 2000"),
-    "IJR": ("US Small-Cap", "S&P SmallCap 600"),
-    "MDY": ("US Mid-Cap", "S&P MidCap 400"),
-
     # Sectors (SPDR + comms)
     "XLB": ("US Materials", "S&P 500 materials sector"),
     "XLC": ("US Communication Services", "S&P 500 communication services sector"),
