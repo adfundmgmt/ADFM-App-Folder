@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -65,14 +65,16 @@ plt.rcParams["figure.dpi"] = 200
 
 # ============================== Sidebar ==============================
 with st.sidebar:
+    st.markdown("## Hedge Timer")
+    st.markdown("---")
     st.markdown("### About This Tool")
     st.markdown(
         """
-Daily metrics: credit and breadth ratios (HYG/LQD, RSP/SPY, XLY/XLP), volatility stress and term structure (VIX, VIX9D, VIX3M, VVIX when available), multi-timeframe RSI and MACD (daily, weekly, monthly), and trend confirmation on the target index.
+Daily metrics: credit and breadth ratios (HYG/LQD, RSP/SPY as breadth proxy, XLY/XLP), volatility stress and term structure (VIX, VIX9D, VIX3M, VVIX when available), multi-timeframe RSI and MACD (daily, weekly, monthly), and trend confirmation on the decision index.
 
 Decision output is a composite score (0 to 100). Thresholds are calibrated on the full sample since 2020-01-01 to balance early warning against over-trading.
 
-Assumptions: close-to-close data, weekly is Friday close, monthly is month-end close, no transaction costs or borrow costs, no execution model. If Yahoo misses VIX9D, VIX3M, or VVIX, the model renormalizes around the remaining layers.
+Assumptions: close-to-close data, weekly is Friday close, monthly is month-end close, no transaction costs, borrow costs, or execution model. If Yahoo misses VIX9D, VIX3M, or VVIX, the model renormalizes around the remaining layers. If ^SPX is unavailable from Yahoo in your region, the app uses ^GSPC as the data source but labels it ^SPX in the UI.
 """.strip()
     )
     st.markdown("---")
@@ -80,16 +82,29 @@ Assumptions: close-to-close data, weekly is Friday close, monthly is month-end c
     sanity_box = st.empty()
 
 
-# ============================== Data Universe ==============================
-TICKERS = [
-    "SPY",
-    "QQQ",
+# ============================== Targets + Data Universe ==============================
+CALIBRATION_START = "2020-01-01"
+DISPLAY_START = "2020-01-01"
+
+HORIZON_DAYS = 20
+LEAD_LOOKBACK = 40
+
+# Canonical decision instruments (what we show in headlines)
+CANON_SDX = "^SPX"
+CANON_NDX = "^NDX"
+
+# Yahoo reality: ^SPX may fail, ^GSPC usually works for S&P 500
+SPX_CANDIDATES = ["^SPX", "^GSPC"]
+NDX_CANDIDATES = ["^NDX"]
+
+AUX_TICKERS = [
+    "SPY",  # used only as breadth proxy denominator for RSP/SPY when available
     "RSP",
-    "IWM",
     "XLY",
     "XLP",
     "HYG",
     "LQD",
+    "IWM",
     "TLT",
     "^VIX",
     "^VIX9D",
@@ -97,11 +112,7 @@ TICKERS = [
     "^VVIX",
 ]
 
-CALIBRATION_START = "2020-01-01"
-DISPLAY_START = "2020-01-01"
-
-HORIZON_DAYS = 20
-LEAD_LOOKBACK = 40
+DOWNLOAD_TICKERS = list(dict.fromkeys(SPX_CANDIDATES + NDX_CANDIDATES + AUX_TICKERS))
 
 
 # ============================== Helpers ==============================
@@ -110,7 +121,7 @@ def _today() -> date:
 
 def _start_date() -> date:
     # enough history to compute MA200 and multi-timeframe indicators cleanly
-    return _today() - timedelta(days=int(10 * 365.25) + 180)
+    return _today() - timedelta(days=int(10 * 365.25) + 200)
 
 @st.cache_data(ttl=900, show_spinner=False)
 def yf_download(tickers: List[str], start: date) -> pd.DataFrame:
@@ -138,6 +149,7 @@ def extract_close(df_raw: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
         df.index = pd.to_datetime(df.index)
         return df.sort_index()
 
+    # single ticker fallback
     if "Close" in df_raw.columns:
         df = df_raw[["Close"]].rename(columns={"Close": tickers[0]})
     elif "Adj Close" in df_raw.columns:
@@ -146,6 +158,14 @@ def extract_close(df_raw: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
         return pd.DataFrame()
     df.index = pd.to_datetime(df.index)
     return df.sort_index()
+
+def choose_source(df: pd.DataFrame, candidates: List[str], min_obs: int = 800) -> Optional[str]:
+    for t in candidates:
+        if t in df.columns:
+            n = int(df[t].dropna().shape[0])
+            if n >= min_obs:
+                return t
+    return None
 
 def last_valid(s: pd.Series) -> float:
     s = s.dropna()
@@ -166,7 +186,6 @@ def safe_ratio(a: pd.Series, b: pd.Series) -> pd.Series:
     return out.replace([np.inf, -np.inf], np.nan)
 
 def rolling_ma(s: pd.Series, w: int) -> pd.Series:
-    # keeps lines continuous across the entire visible window
     return s.rolling(w, min_periods=1).mean()
 
 def ema(s: pd.Series, span: int) -> pd.Series:
@@ -202,13 +221,30 @@ def forward_min_return(px: pd.Series, h: int) -> pd.Series:
     fut_min = s[::-1].rolling(h, min_periods=1).min()[::-1].shift(-1)
     return fut_min / s - 1.0
 
-def find_drawdown_episodes(px: pd.Series, threshold: float = -0.08, recovery: float = -0.02) -> List[Tuple[pd.Timestamp, pd.Timestamp, float]]:
+def signal_events(score: pd.Series, t_short: int) -> pd.Series:
+    sc = score.copy()
+    evt = (sc >= t_short) & (sc.shift(1) < t_short)
+    evt = evt.fillna(False)
+    return evt
+
+def find_drawdown_episodes_full(
+    px: pd.Series,
+    threshold: float = -0.08,
+    recovery: float = -0.02
+) -> List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]]:
+    """
+    Returns episodes as (start, end, trough, depth) where:
+    start = first date drawdown <= threshold,
+    end = first date drawdown >= recovery after start,
+    trough = min drawdown date within episode,
+    depth = min drawdown value (negative).
+    """
     s = px.dropna()
     if len(s) < 260:
         return []
     dd = drawdown(s)
 
-    episodes = []
+    episodes: List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]] = []
     in_ep = False
     start = None
 
@@ -220,7 +256,8 @@ def find_drawdown_episodes(px: pd.Series, threshold: float = -0.08, recovery: fl
             seg = dd.loc[start:ts]
             trough = seg.idxmin()
             depth = float(seg.min())
-            episodes.append((start, trough, depth))
+            end = ts
+            episodes.append((start, end, trough, depth))
             in_ep = False
             start = None
 
@@ -228,9 +265,10 @@ def find_drawdown_episodes(px: pd.Series, threshold: float = -0.08, recovery: fl
         seg = dd.loc[start:]
         trough = seg.idxmin()
         depth = float(seg.min())
-        episodes.append((start, trough, depth))
+        end = seg.index[-1]
+        episodes.append((start, end, trough, depth))
 
-    return sorted(episodes, key=lambda x: x[2])  # deepest first
+    return sorted(episodes, key=lambda x: x[3])  # deepest first
 
 
 # ============================== Signal Model ==============================
@@ -249,10 +287,11 @@ COMPONENTS: List[Component] = [
     Component("trend_confirm", "Trend confirms", 18),
 ]
 
-def compute_components(df: pd.DataFrame, target: str) -> Tuple[Dict[str, pd.Series], int]:
+def compute_components(df: pd.DataFrame, target_col: str) -> Tuple[Dict[str, pd.Series], int]:
     idx = df.index
 
-    spy = df.get("SPY", pd.Series(index=idx, dtype=float))
+    # Breadth proxy denominator: prefer SPY for RSP/SPY, else fall back to target index
+    spx_proxy = df.get("SPY", df.get(CANON_SDX, pd.Series(index=idx, dtype=float)))
     rsp = df.get("RSP", pd.Series(index=idx, dtype=float))
     xly = df.get("XLY", pd.Series(index=idx, dtype=float))
     xlp = df.get("XLP", pd.Series(index=idx, dtype=float))
@@ -264,7 +303,7 @@ def compute_components(df: pd.DataFrame, target: str) -> Tuple[Dict[str, pd.Seri
     vix3m = df.get("^VIX3M", pd.Series(index=idx, dtype=float))
     vvix = df.get("^VVIX", pd.Series(index=idx, dtype=float))
 
-    tgt = df.get(target, pd.Series(index=idx, dtype=float))
+    tgt = df.get(target_col, pd.Series(index=idx, dtype=float))
 
     # Credit
     credit = safe_ratio(hyg, lqd)
@@ -273,10 +312,10 @@ def compute_components(df: pd.DataFrame, target: str) -> Tuple[Dict[str, pd.Seri
     credit_rollover = (credit < credit_ma200) & (credit_ma20 < rolling_ma(credit_ma200, 20))
 
     # Breadth
-    rsp_spy = safe_ratio(rsp, spy)
-    rsp_ma200 = rolling_ma(rsp_spy, 200)
-    rsp_ma20 = rolling_ma(rsp_spy, 20)
-    breadth_rollover = (rsp_spy < rsp_ma200) & (rsp_ma20 < rolling_ma(rsp_ma200, 20))
+    rsp_base = safe_ratio(rsp, spx_proxy)
+    rsp_ma200 = rolling_ma(rsp_base, 200)
+    rsp_ma20 = rolling_ma(rsp_base, 20)
+    breadth_rollover = (rsp_base < rsp_ma200) & (rsp_ma20 < rolling_ma(rsp_ma200, 20))
 
     # Defensive tape
     xly_xlp = safe_ratio(xly, xlp)
@@ -303,6 +342,7 @@ def compute_components(df: pd.DataFrame, target: str) -> Tuple[Dict[str, pd.Seri
     macd_w = mtf_to_daily(idx, macd_hist(w))
     macd_m = mtf_to_daily(idx, macd_hist(m))
 
+    # Rollover heuristics
     rsi_d_roll = ((rsi_d.shift(1) >= 70) & (rsi_d < 70)) | ((rsi_d >= 68) & (rsi_d.diff(5) < 0))
     rsi_w_roll = ((rsi_w.shift(1) >= 65) & (rsi_w < 65)) | ((rsi_w >= 62) & (rsi_w.diff(3) < 0))
     rsi_m_roll = ((rsi_m.shift(1) >= 60) & (rsi_m < 60)) | ((rsi_m >= 58) & (rsi_m.diff(2) < 0))
@@ -337,8 +377,8 @@ def compute_components(df: pd.DataFrame, target: str) -> Tuple[Dict[str, pd.Seri
 
     return cond, max(denom, 1)
 
-def compute_score(df: pd.DataFrame, target: str) -> pd.Series:
-    cond, denom = compute_components(df, target)
+def compute_score(df: pd.DataFrame, target_col: str) -> Tuple[pd.Series, int]:
+    cond, denom = compute_components(df, target_col)
     score = pd.Series(0.0, index=df.index)
     for c in COMPONENTS:
         s = cond.get(c.key)
@@ -346,15 +386,15 @@ def compute_score(df: pd.DataFrame, target: str) -> pd.Series:
             continue
         score = score.add(s.astype(float) * c.weight, fill_value=0.0)
     score = (score / denom) * 100.0
-    return score.clip(0, 100)
+    return score.clip(0, 100), denom
 
-def calibrate_threshold(score_spy: pd.Series, score_qqq: pd.Series, px_spy: pd.Series, px_qqq: pd.Series) -> int:
+def calibrate_threshold(score_spx: pd.Series, score_ndx: pd.Series, px_spx: pd.Series, px_ndx: pd.Series) -> int:
     s0 = pd.to_datetime(CALIBRATION_START)
-    best_t, best_obj = 65, -1e9
+    best_t, best_obj = 68, -1e9
 
-    for t in range(50, 81):
+    for t in range(50, 86):
         objs = []
-        for score, px in [(score_spy, px_spy), (score_qqq, px_qqq)]:
+        for score, px in [(score_spx, px_spx), (score_ndx, px_ndx)]:
             sc = score.loc[score.index >= s0].dropna()
             pr = px.loc[px.index >= s0].dropna()
             idx = sc.index.intersection(pr.index)
@@ -363,20 +403,22 @@ def calibrate_threshold(score_spy: pd.Series, score_qqq: pd.Series, px_spy: pd.S
             if len(sc) < 800:
                 continue
 
-            sig = sc >= t
-            rate = float(sig.mean())
-
+            evt = signal_events(sc, t)
+            rate = float(evt.mean())  # event-days as % of days
             fwd_min = forward_min_return(pr, HORIZON_DAYS).reindex(idx)
-            hit = fwd_min[sig].dropna()
-            if hit.shape[0] < 20:
+            hit = fwd_min[evt].dropna()
+
+            if hit.shape[0] < 18:
                 continue
 
             avg_worst = float(hit.mean())  # negative
-            obj = (-avg_worst * 100.0) - (rate * 100.0 * 0.9)
+            # objective: bigger negative forward risk after signal is good, too many signals is bad
+            obj = (-avg_worst * 100.0) - (rate * 100.0 * 4.5)
 
-            if rate < 0.03:
+            # mild preferences: avoid too rare or too frequent
+            if rate < 0.010:
                 obj -= 2.5
-            if rate > 0.22:
+            if rate > 0.085:
                 obj -= 3.5
 
             objs.append(obj)
@@ -400,31 +442,32 @@ def stance_from_score(x: float, t_short: int) -> Tuple[str, str]:
     return "STAND DOWN", "b_good"
 
 def pick_target_today(df: pd.DataFrame) -> str:
-    rs = safe_ratio(df["QQQ"], df["SPY"]).dropna()
+    # pick weaker: ^NDX vs ^SPX
+    rs = safe_ratio(df[CANON_NDX], df[CANON_SDX]).dropna()
     if len(rs) < 260:
-        return "SPY"
+        return CANON_SDX
     rs_ma200 = rolling_ma(rs, 200)
     rs_ma20 = rolling_ma(rs, 20)
     if (last_valid(rs) < last_valid(rs_ma200)) and (last_valid(rs_ma20) < last_valid(rolling_ma(rs_ma200, 20))):
-        return "QQQ"
-    return "SPY"
+        return CANON_NDX
+    return CANON_SDX
 
 def forward_stats(score: pd.Series, px: pd.Series, t_short: int) -> Dict[str, float]:
     idx = score.dropna().index.intersection(px.dropna().index)
     sc = score.reindex(idx)
     pr = px.reindex(idx)
 
-    sig = sc >= t_short
+    evt = signal_events(sc, t_short)
     fwd_min = forward_min_return(pr, HORIZON_DAYS).reindex(idx)
-    hit = fwd_min[sig].dropna()
-    miss = fwd_min[~sig].dropna()
+    hit = fwd_min[evt].dropna()
+    miss = fwd_min[~evt].dropna()
 
     def q(x: pd.Series, p: float) -> float:
         return float(np.nanquantile(x.values, p)) if len(x) else float("nan")
 
     return {
-        "signal_rate": float(sig.mean()),
-        "signals": float(sig.sum()),
+        "signal_rate": float(evt.mean()),
+        "signals": float(evt.sum()),
         "avg_worst_signal": float(hit.mean()) if len(hit) else float("nan"),
         "med_worst_signal": q(hit, 0.50),
         "avg_worst_nosig": float(miss.mean()) if len(miss) else float("nan"),
@@ -435,15 +478,21 @@ def lead_before_episode(score: pd.Series, start_ts: pd.Timestamp, t_short: int, 
     s = score.dropna()
     if len(s) == 0:
         return -1
+
+    # map start_ts onto nearest trading day in index
     if start_ts not in s.index:
         loc = s.index.get_indexer([start_ts], method="nearest")[0]
         start_ts = s.index[loc]
+
+    evt = signal_events(s, t_short)
+
     loc = s.index.get_loc(start_ts)
     lo = max(0, loc - lookback)
-    window = s.iloc[lo:loc + 1]
-    hits = window[window >= t_short]
+    window_evt = evt.iloc[lo:loc + 1]
+    hits = window_evt[window_evt]
     if hits.empty:
         return -1
+
     first = hits.index[0]
     return int(loc - s.index.get_loc(first))
 
@@ -453,10 +502,9 @@ def plot_price_and_score_image(
     price: pd.Series,
     score: pd.Series,
     t_short: int,
-    episodes: List[Tuple[pd.Timestamp, pd.Timestamp, float]],
+    episodes: List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]],
     title: str,
 ) -> plt.Figure:
-    # Align and restrict to display window
     dfp = pd.DataFrame({"price": price, "score": score}).dropna()
     dfp = dfp[dfp.index >= pd.Timestamp(DISPLAY_START)]
     if dfp.empty:
@@ -464,44 +512,43 @@ def plot_price_and_score_image(
         plt.text(0.5, 0.5, "Insufficient data", ha="center", va="center")
         return fig
 
-    # Integer x-axis removes weekend/holiday spacing automatically
+    # Integer x-axis removes weekend/holiday spacing
     x = np.arange(len(dfp))
     idx = dfp.index
 
-    # MAs computed on full series, then aligned
     ma50 = rolling_ma(price, 50).reindex(idx)
     ma200 = rolling_ma(price, 200).reindex(idx)
 
     t_bias = max(40, t_short - 12)
 
-    fig = plt.figure(figsize=(13.6, 7.4))
-    gs = fig.add_gridspec(2, 1, height_ratios=[3.0, 1.2], hspace=0.08)
+    fig = plt.figure(figsize=(13.6, 7.6))
+    gs = fig.add_gridspec(2, 1, height_ratios=[3.1, 1.25], hspace=0.08)
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
 
-    # Shade drawdown start->trough
-    for start, trough, depth in episodes[:10]:
-        if trough < idx.min() or start > idx.max():
+    # Shade drawdown start->end (recovery)
+    for start, end, trough, depth in episodes[:8]:
+        if end < idx.min() or start > idx.max():
             continue
         s_loc = idx.get_indexer([start], method="nearest")[0]
-        t_loc = idx.get_indexer([trough], method="nearest")[0]
-        if t_loc < s_loc:
-            s_loc, t_loc = t_loc, s_loc
-        ax1.axvspan(s_loc, t_loc, alpha=0.10)
+        e_loc = idx.get_indexer([end], method="nearest")[0]
+        if e_loc < s_loc:
+            s_loc, e_loc = e_loc, s_loc
+        ax1.axvspan(s_loc, e_loc, alpha=0.09)
 
     # Price lines
     ax1.plot(x, dfp["price"].values, linewidth=2.2, label="Price", color="#1f77b4")
-    ax1.plot(x, ma50.values, linewidth=1.4, label="MA50", color="#d62728")
-    ax1.plot(x, ma200.values, linewidth=1.4, label="MA200", color="#2ca02c")
+    ax1.plot(x, ma50.values, linewidth=1.5, label="MA50", color="#d62728")
+    ax1.plot(x, ma200.values, linewidth=1.5, label="MA200", color="#2ca02c")
 
-    # Short markers
-    sig_mask = dfp["score"].values >= t_short
-    if np.any(sig_mask):
+    # Signal markers: crossing events only
+    evt = signal_events(dfp["score"], t_short).values
+    if np.any(evt):
         ax1.scatter(
-            x[sig_mask],
-            dfp["price"].values[sig_mask],
+            x[evt],
+            dfp["price"].values[evt],
             marker="v",
-            s=55,
+            s=62,
             color="#9467bd",
             label="Short signal",
             zorder=5,
@@ -519,20 +566,23 @@ def plot_price_and_score_image(
     ax2.set_ylabel("Score (0-100)")
     ax2.grid(False)
 
-    # Quarter ticks (clean labels)
-    quarter_starts = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq="QS")
-    tick_pos = []
-    tick_lbl = []
-    for d in quarter_starts:
+    # Yearly ticks only (no collisions)
+    year_starts = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq="YS")
+    tick_pos: List[int] = []
+    tick_lbl: List[str] = []
+    for d in year_starts:
         loc = idx.get_indexer([d], method="nearest")[0]
         if 0 <= loc < len(idx):
-            tick_pos.append(int(loc))
-            tick_lbl.append(d.strftime("%b %Y"))
+            if len(tick_pos) == 0 or abs(loc - tick_pos[-1]) > 40:
+                tick_pos.append(int(loc))
+                tick_lbl.append(d.strftime("%Y"))
     ax2.set_xticks(tick_pos)
     ax2.set_xticklabels(tick_lbl)
+    ax2.tick_params(axis="x", labelsize=10)
 
-    # Title + legend (no overlap)
+    # Title + legend, clean spacing
     fig.suptitle(title, fontsize=14, fontweight="bold", y=0.985)
+
     handles1, labels1 = ax1.get_legend_handles_labels()
     handles2, labels2 = ax2.get_legend_handles_labels()
     handles = handles1 + handles2
@@ -552,58 +602,113 @@ def plot_price_and_score_image(
     return fig
 
 
+def render_table_image(df: pd.DataFrame, title: str) -> plt.Figure:
+    # simple static table figure
+    fig = plt.figure(figsize=(13.6, 4.2))
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
+
+    # build table
+    tbl = ax.table(
+        cellText=df.values,
+        colLabels=df.columns,
+        cellLoc="center",
+        colLoc="center",
+        loc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1.0, 1.35)
+
+    # header styling
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_linewidth(0.4)
+        if r == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_height(cell.get_height() * 1.15)
+
+    fig.tight_layout()
+    return fig
+
+
 # ============================== App ==============================
 st.title("Hedge Timer")
-st.caption("Decision slip for shorting SPY or QQQ based on early-warning stress plus multi-timeframe momentum and trend confirmation.")
+st.caption("Decision slip for hedging equity beta using ^SPX or ^NDX, with early-warning stress plus multi-timeframe momentum and trend confirmation.")
 
 start = _start_date()
-raw = yf_download(TICKERS, start)
-df = extract_close(raw, TICKERS)
+raw = yf_download(DOWNLOAD_TICKERS, start)
+df0 = extract_close(raw, DOWNLOAD_TICKERS)
 
-if df.empty or "SPY" not in df.columns or "QQQ" not in df.columns:
-    st.error("Yahoo feed failed for SPY/QQQ. Retry later.")
+if df0.empty:
+    st.error("Yahoo feed failed. Retry later.")
     st.stop()
 
-score_spy = compute_score(df, "SPY")
-score_qqq = compute_score(df, "QQQ")
+# Choose data sources for SPX and NDX, then canonicalize column names to ^SPX and ^NDX
+spx_src = choose_source(df0, SPX_CANDIDATES, min_obs=900)
+ndx_src = choose_source(df0, NDX_CANDIDATES, min_obs=900)
 
-t_short = calibrate_threshold(score_spy, score_qqq, df["SPY"], df["QQQ"])
+if spx_src is None:
+    st.error("Could not load ^SPX (or fallback ^GSPC) from Yahoo.")
+    st.stop()
+
+if ndx_src is None:
+    st.error("Could not load ^NDX from Yahoo.")
+    st.stop()
+
+df = df0.copy()
+if spx_src != CANON_SDX:
+    df[CANON_SDX] = df[spx_src]
+if ndx_src != CANON_NDX:
+    df[CANON_NDX] = df[ndx_src]
+
+# Ensure canonical cols exist
+if CANON_SDX not in df.columns or CANON_NDX not in df.columns:
+    st.error("Data load incomplete for ^SPX/^NDX.")
+    st.stop()
+
+# Score series and coverage denominators
+score_spx, denom_spx = compute_score(df, CANON_SDX)
+score_ndx, denom_ndx = compute_score(df, CANON_NDX)
+
+t_short = calibrate_threshold(score_spx, score_ndx, df[CANON_SDX], df[CANON_NDX])
 t_bias = max(40, t_short - 12)
 
 target = pick_target_today(df)
 
-spy_last = last_valid(df["SPY"])
-qqq_last = last_valid(df["QQQ"])
+spx_last = last_valid(df[CANON_SDX])
+ndx_last = last_valid(df[CANON_NDX])
 vix_last = last_valid(df["^VIX"]) if "^VIX" in df.columns else float("nan")
 
-dd_spy = last_valid(drawdown(df["SPY"]))
-dd_qqq = last_valid(drawdown(df["QQQ"]))
+dd_spx = last_valid(drawdown(df[CANON_SDX]))
+dd_ndx = last_valid(drawdown(df[CANON_NDX]))
 
-score_today_spy = float(last_valid(score_spy))
-score_today_qqq = float(last_valid(score_qqq))
+score_today_spx = float(last_valid(score_spx))
+score_today_ndx = float(last_valid(score_ndx))
 
-stance_spy, badge_spy = stance_from_score(score_today_spy, t_short)
-stance_qqq, badge_qqq = stance_from_score(score_today_qqq, t_short)
+stance_spx, badge_spx = stance_from_score(score_today_spx, t_short)
+stance_ndx, badge_ndx = stance_from_score(score_today_ndx, t_short)
 
-stance_target = stance_qqq if target == "QQQ" else stance_spy
-badge_target = badge_qqq if target == "QQQ" else badge_spy
-score_target = score_today_qqq if target == "QQQ" else score_today_spy
+stance_target = stance_ndx if target == CANON_NDX else stance_spx
+badge_target = badge_ndx if target == CANON_NDX else badge_spx
+score_target = score_today_ndx if target == CANON_NDX else score_today_spx
+coverage_target = denom_ndx if target == CANON_NDX else denom_spx
 
-# Sidebar sanity check block (below About This Tool)
-stats_spy = forward_stats(score_spy[score_spy.index >= CALIBRATION_START], df["SPY"][df.index >= CALIBRATION_START], t_short)
-stats_qqq = forward_stats(score_qqq[score_qqq.index >= CALIBRATION_START], df["QQQ"][df.index >= CALIBRATION_START], t_short)
+# Sidebar sanity check
+stats_spx = forward_stats(score_spx[score_spx.index >= CALIBRATION_START], df[CANON_SDX][df.index >= CALIBRATION_START], t_short)
+stats_ndx = forward_stats(score_ndx[score_ndx.index >= CALIBRATION_START], df[CANON_NDX][df.index >= CALIBRATION_START], t_short)
 
 sanity_box.markdown(
     f"""
-Forward risk stats (next {HORIZON_DAYS} sessions). The key number is worst forward move after a short signal versus when standing down.
+Forward risk stats (next {HORIZON_DAYS} sessions). The key number is worst forward move after a short signal event versus when standing down.
 
-**SPY** | signal rate: {stats_spy["signal_rate"]*100:.1f}% | signals: {int(stats_spy["signals"])}  
-Avg worst next {HORIZON_DAYS}d after signal: {stats_spy["avg_worst_signal"]*100:.2f}% | when no signal: {stats_spy["avg_worst_nosig"]*100:.2f}%  
-Median worst next {HORIZON_DAYS}d after signal: {stats_spy["med_worst_signal"]*100:.2f}% | when no signal: {stats_spy["med_worst_nosig"]*100:.2f}%  
+**{CANON_SDX}** | signal event rate: {stats_spx["signal_rate"]*100:.1f}% | events: {int(stats_spx["signals"])}  
+Avg worst next {HORIZON_DAYS}d after signal: {stats_spx["avg_worst_signal"]*100:.2f}% | when no signal: {stats_spx["avg_worst_nosig"]*100:.2f}%  
+Median worst next {HORIZON_DAYS}d after signal: {stats_spx["med_worst_signal"]*100:.2f}% | when no signal: {stats_spx["med_worst_nosig"]*100:.2f}%  
 
-**QQQ** | signal rate: {stats_qqq["signal_rate"]*100:.1f}% | signals: {int(stats_qqq["signals"])}  
-Avg worst next {HORIZON_DAYS}d after signal: {stats_qqq["avg_worst_signal"]*100:.2f}% | when no signal: {stats_qqq["avg_worst_nosig"]*100:.2f}%  
-Median worst next {HORIZON_DAYS}d after signal: {stats_qqq["med_worst_signal"]*100:.2f}% | when no signal: {stats_qqq["med_worst_nosig"]*100:.2f}%
+**{CANON_NDX}** | signal event rate: {stats_ndx["signal_rate"]*100:.1f}% | events: {int(stats_ndx["signals"])}  
+Avg worst next {HORIZON_DAYS}d after signal: {stats_ndx["avg_worst_signal"]*100:.2f}% | when no signal: {stats_ndx["avg_worst_nosig"]*100:.2f}%  
+Median worst next {HORIZON_DAYS}d after signal: {stats_ndx["med_worst_signal"]*100:.2f}% | when no signal: {stats_ndx["med_worst_nosig"]*100:.2f}%
 """.strip()
 )
 
@@ -615,12 +720,12 @@ st.markdown(
       <span class="badge {badge_target}">{stance_target}</span>
       <span class="small" style="margin-left:10px;">Decision target: <b>{target}</b></span>
     </div>
-    <div class="small">Score: <b>{int(round(score_target))}/100</b> | Short threshold: <b>{t_short}</b> | Hedge bias: <b>{t_bias}</b></div>
+    <div class="small">Score: <b>{int(round(score_target))}/100</b> | Threshold: <b>{t_short}</b> | Hedge bias: <b>{t_bias}</b> | Data coverage: <b>{coverage_target}</b> weight-points</div>
   </div>
 
   <div class="kv">
-    <div>SPY: <b>{fmt_num(spy_last,2)}</b> | DD: <b>{fmt_pct(dd_spy)}</b> | Stance: <b>{stance_spy}</b></div>
-    <div>QQQ: <b>{fmt_num(qqq_last,2)}</b> | DD: <b>{fmt_pct(dd_qqq)}</b> | Stance: <b>{stance_qqq}</b></div>
+    <div>{CANON_SDX}: <b>{fmt_num(spx_last,2)}</b> | DD: <b>{fmt_pct(dd_spx)}</b> | Stance: <b>{stance_spx}</b></div>
+    <div>{CANON_NDX}: <b>{fmt_num(ndx_last,2)}</b> | DD: <b>{fmt_pct(dd_ndx)}</b> | Stance: <b>{stance_ndx}</b></div>
     <div>VIX: <b>{fmt_num(vix_last,2)}</b></div>
   </div>
 </div>
@@ -635,22 +740,22 @@ with c1:
     st.subheader("How to execute")
     if stance_target == "SHORT ALLOWED":
         st.write(
-            f"Run the short in {target}. Cover discipline: if the score falls below {t_bias} and stays there for 3 sessions, start reducing. If it falls below {t_bias - 5} quickly, cover fast."
+            f"Short is permitted in {target}. Sizing: add when the score stays above {t_short} and price stays below MA50. Cover discipline: if the score falls below {t_bias} for 3 sessions, reduce. If it snaps below {t_bias - 5}, cover fast."
         )
     elif stance_target == "HEDGE BIAS":
         st.write(
-            f"Keep it smaller. If you need protection, use a partial short or options. Wait for score to clear {t_short} for full permission."
+            f"Keep it smaller. If you hedge, use partial size or options. Wait for score to clear {t_short} for full permission."
         )
     else:
         st.write("Stand down. If you hedge, keep it light and tactical.")
 with c2:
     st.subheader("What flips it")
-    st.write(f"Above {t_short}: short allowed. Between {t_bias} and {t_short}: hedge bias. Below {t_bias}: stand down.")
+    st.write(f"At or above {t_short}: short allowed. Between {t_bias} and {t_short}: hedge bias. Below {t_bias}: stand down.")
 
 st.markdown("<hr/>", unsafe_allow_html=True)
 
-episodes_target = find_drawdown_episodes(df[target], threshold=-0.08, recovery=-0.02)
-score_target_series = score_qqq if target == "QQQ" else score_spy
+episodes_target = find_drawdown_episodes_full(df[target], threshold=-0.08, recovery=-0.02)
+score_target_series = score_ndx if target == CANON_NDX else score_spx
 
 fig = plot_price_and_score_image(
     price=df[target],
@@ -664,16 +769,17 @@ st.pyplot(fig, use_container_width=True)
 st.markdown("<hr/>", unsafe_allow_html=True)
 st.subheader("Did it warn before major selloffs?")
 
-st.write(f"We look at the largest drawdowns and ask if score crossed {t_short} within the prior {LEAD_LOOKBACK} sessions.")
+st.write(f"We take the largest drawdowns and ask if the score crossed {t_short} within the prior {LEAD_LOOKBACK} sessions.")
 
-def summarize_eps(name: str, eps: List[Tuple[pd.Timestamp, pd.Timestamp, float]], score: pd.Series) -> pd.DataFrame:
+def summarize_eps(name: str, eps: List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]], score: pd.Series) -> pd.DataFrame:
     rows = []
-    for start_ts, trough_ts, depth in eps[:10]:
+    for start_ts, end_ts, trough_ts, depth in eps[:10]:
         lead = lead_before_episode(score, start_ts, t_short, LEAD_LOOKBACK)
         rows.append(
             {
                 "Index": name,
                 "Start": start_ts.date().isoformat(),
+                "End": end_ts.date().isoformat(),
                 "Trough": trough_ts.date().isoformat(),
                 "Depth": f"{depth*100:.2f}%",
                 "Lead (sessions)": lead if lead >= 0 else "No",
@@ -683,9 +789,11 @@ def summarize_eps(name: str, eps: List[Tuple[pd.Timestamp, pd.Timestamp, float]]
 
 tbl = pd.concat(
     [
-        summarize_eps("SPY", find_drawdown_episodes(df["SPY"]), score_spy),
-        summarize_eps("QQQ", find_drawdown_episodes(df["QQQ"]), score_qqq),
+        summarize_eps(CANON_SDX, find_drawdown_episodes_full(df[CANON_SDX]), score_spx),
+        summarize_eps(CANON_NDX, find_drawdown_episodes_full(df[CANON_NDX]), score_ndx),
     ],
     ignore_index=True,
 )
-st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+tbl_fig = render_table_image(tbl, "Largest drawdowns and whether the signal fired beforehand")
+st.pyplot(tbl_fig, use_container_width=True)
