@@ -310,11 +310,12 @@ def fetch_shares_series_parallel(
     return results
 
 
-def compute_daily_flows_with_stats(close: pd.Series, shares: pd.Series, window_index: pd.DatetimeIndex) -> Tuple[pd.Series, Dict[str, float]]:
-    stats = {
-        "shares_obs_window": 0,
-        "nonzero_delta_days": 0,
-    }
+def compute_daily_flows_with_stats(
+    close: pd.Series,
+    shares: pd.Series,
+    window_index: pd.DatetimeIndex
+) -> Tuple[pd.Series, Dict[str, float]]:
+    stats = {"shares_obs_window": 0, "nonzero_delta_days": 0}
 
     if close is None or shares is None or close.empty or shares.empty or window_index is None or len(window_index) == 0:
         return pd.Series(dtype="float64"), stats
@@ -333,18 +334,14 @@ def compute_daily_flows_with_stats(close: pd.Series, shares: pd.Series, window_i
     except Exception:
         pass
 
-    # Shares observations inside the window (raw, before any ffill)
     sh_in = sh.loc[(sh.index >= window_index.min()) & (sh.index <= window_index.max())]
     stats["shares_obs_window"] = int(sh_in.shape[0])
 
-    # Align shares to business days and compute delta
     idx = pd.DatetimeIndex(window_index)
     sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
     delta_shares = sh_daily.diff().fillna(0.0)
-
     stats["nonzero_delta_days"] = int((delta_shares != 0).sum())
 
-    # Flows in USD
     close_aligned = close.reindex(idx).ffill()
     flows = (delta_shares * close_aligned).astype(float)
     flows = flows.replace([np.inf, -np.inf], np.nan).dropna()
@@ -368,7 +365,6 @@ def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
 # --------------------------- BUILD TABLE ---------------------------
 @st.cache_data(show_spinner=True, ttl=300)
 def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as_of_dt_naive: pd.Timestamp) -> pd.DataFrame:
-    # reconstruct as-of in ET for start date calc (cache-safe)
     as_of_dt_local = as_of_dt_naive.to_pydatetime().replace(tzinfo=None)
     as_of_dt_et = TZ.localize(as_of_dt_local)
 
@@ -447,33 +443,60 @@ df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
 
 chart_df = df.dropna(subset=["Flow ($)"]).sort_values("Flow ($)", ascending=False).copy()
 vals = pd.to_numeric(chart_df["Flow ($)"], errors="coerce").fillna(0.0)
-abs_max = float(vals.abs().max()) if len(vals) else 0.0
 
-if not len(vals):
+if vals.empty:
     st.info("No values computed. Try a different period.")
 else:
+    # --- Dynamic x scaling: use actual min/max with a modest pad (less wasted horizontal space)
+    x_min = float(vals.min())
+    x_max = float(vals.max())
+    x_min = min(x_min, 0.0)
+    x_max = max(x_max, 0.0)
+    span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
+    pad = 0.08 * span
+
+    # --- Dynamic height: tighter baseline, still scales with rows
+    n = len(chart_df)
+    fig_h = max(6.0, min(20.0, 0.30 * n + 2.0))
+
     colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in vals]
 
-    fig, ax = plt.subplots(figsize=(15, max(7, len(chart_df) * 0.38)))
-    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9)
+    fig, ax = plt.subplots(figsize=(15, fig_h))
+    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9, height=0.82)
 
     ax.set_xlabel("Estimated Net Flow ($)")
     ax.set_title(f"ETF Net Flows - {period_label}")
-    ax.invert_yaxis()
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
 
-    buffer = 0.15 * abs_max if abs_max > 0 else 1.0
-    ax.set_xlim([-abs_max - buffer, abs_max + buffer])
+    # --- Remove grid completely (covers rcParams environments too)
+    ax.grid(False)
+    ax.xaxis.grid(False)
+    ax.yaxis.grid(False)
 
+    # --- Tighten vertical spacing: remove categorical margins and any top/bottom gap
+    ax.invert_yaxis()
+    ax.set_ylim(n - 0.5, -0.5)  # this is the key fix for the big gaps
+    ax.margins(y=0.0)
+
+    # --- Cleaner look
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    ax.set_xlim(x_min - pad, x_max + pad)
+
+    # Text labels with padding based on axis span (more stable than abs_max-based padding)
+    text_pad = 0.012 * (span if span > 0 else 1.0)
     for bar, raw in zip(bars, vals):
         label = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
         x = bar.get_width()
+
         if raw > 0:
-            x_text, ha = x + 0.01 * abs_max, "left"
+            x_text, ha = x + text_pad, "left"
         elif raw < 0:
-            x_text, ha = x - 0.01 * abs_max, "right"
+            x_text, ha = x - text_pad, "right"
         else:
-            x_text, ha = 0, "center"
+            x_text, ha = 0.0, "center"
+
         ax.text(
             x_text,
             bar.get_y() + bar.get_height() / 2,
@@ -485,7 +508,8 @@ else:
             clip_on=True,
         )
 
-    plt.tight_layout()
+    # Tight layout without adding extra whitespace
+    fig.tight_layout(pad=0.6)
     st.pyplot(fig)
     plt.close(fig)
 
