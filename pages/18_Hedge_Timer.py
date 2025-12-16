@@ -65,8 +65,6 @@ plt.rcParams["figure.dpi"] = 200
 
 # ============================== Sidebar ==============================
 with st.sidebar:
-    st.markdown("## Hedge Timer")
-    st.markdown("---")
     st.markdown("### About This Tool")
     st.markdown(
         """
