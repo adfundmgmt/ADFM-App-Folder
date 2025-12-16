@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, date
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 import numpy as np
@@ -21,13 +21,13 @@ with st.sidebar:
         Estimate primary market money moving in and out of key ETFs over a chosen window.
 
         Methodology
-        • First pass: true primary flows from Δ shares outstanding × daily close (close as NAV proxy)  
-        • Fallback: CMF-style turnover proxy when historical shares data are missing or incomplete  
-        • Sign convention: positive = net creations (inflows), negative = net redemptions (outflows)  
+        • First pass: primary flows from Δ shares outstanding × daily close (close as NAV proxy)
+        • Fallback: CMF-style turnover proxy when historical shares data are missing or incomplete
+        • Sign convention: positive = net creations (inflows), negative = net redemptions (outflows)
 
         Notes
-        • `get_shares_full` from Yahoo Finance is not available for every ETF or every date  
-        • Close is used as a proxy for daily NAV where needed  
+        • `get_shares_full` from Yahoo Finance is not available for every ETF or every date
+        • Close is used as a proxy for daily NAV where needed
         • All flows are aggregated over the selected lookback window and shown in USD
         """,
         unsafe_allow_html=True,
@@ -57,6 +57,7 @@ def ytd_days(as_of: datetime) -> int:
 
 as_of_dt = now_et()
 as_of_date = as_of_dt.date()
+as_of_dt_naive = as_naive_ts(as_of_dt)
 
 lookback_dict = {
     "1 Month": 30,
@@ -68,45 +69,95 @@ lookback_dict = {
 period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
 period_days = int(lookback_dict[period_label])
 
+# --------------------------- ETF COVERAGE ---------------------------
 etf_info = {
-    # US Equity
-    "XLK": ("US Technology", "S&P 500 technology sector"),
-    "XLF": ("US Financials", "S&P 500 financial sector"),
-    "XLE": ("US Energy", "S&P 500 energy sector"),
-    "XLV": ("US Healthcare", "S&P 500 healthcare sector"),
-    "XLI": ("US Industrials", "S&P 500 industrial sector"),
-    "XLB": ("US Materials", "S&P 500 materials sector"),
-    "XLRE": ("US Real Estate", "S&P 500 real estate sector"),
-    "SMH": ("Semiconductors", "VanEck Semiconductor ETF"),
+    # Core US beta
+    "SPY": ("US Large-Cap", "S&P 500"),
+    "IVV": ("US Large-Cap", "S&P 500"),
+    "VOO": ("US Large-Cap", "S&P 500"),
+    "QQQ": ("US Nasdaq", "Nasdaq-100"),
+    "DIA": ("US Dow", "Dow Jones Industrial Average"),
+    "IWM": ("US Small-Cap", "Russell 2000"),
+    "IJR": ("US Small-Cap", "S&P SmallCap 600"),
+    "MDY": ("US Mid-Cap", "S&P MidCap 400"),
 
-    # International Equity
-    "EFA": ("Developed ex-US", "Developed international equities"),
+    # Sectors (SPDR + comms)
+    "XLB": ("US Materials", "S&P 500 materials sector"),
+    "XLC": ("US Communication Services", "S&P 500 communication services sector"),
+    "XLE": ("US Energy", "S&P 500 energy sector"),
+    "XLF": ("US Financials", "S&P 500 financial sector"),
+    "XLI": ("US Industrials", "S&P 500 industrial sector"),
+    "XLK": ("US Technology", "S&P 500 technology sector"),
+    "XLP": ("US Staples", "S&P 500 consumer staples sector"),
+    "XLRE": ("US Real Estate", "S&P 500 real estate sector"),
+    "XLU": ("US Utilities", "S&P 500 utilities sector"),
+    "XLV": ("US Healthcare", "S&P 500 healthcare sector"),
+    "XLY": ("US Discretionary", "S&P 500 consumer discretionary sector"),
+
+    # Semis / software / AI plumbing
+    "SMH": ("Semiconductors", "VanEck Semiconductor ETF"),
+    "SOXX": ("Semiconductors", "iShares Semiconductor ETF"),
+    "IGV": ("Software", "iShares Expanded Tech-Software Sector ETF"),
+    "SKYY": ("Cloud", "First Trust Cloud Computing ETF"),
+
+    # Factors / styles
+    "VTV": ("US Value", "Vanguard Value ETF"),
+    "VUG": ("US Growth", "Vanguard Growth ETF"),
+    "IWD": ("US Value", "iShares Russell 1000 Value ETF"),
+    "IWF": ("US Growth", "iShares Russell 1000 Growth ETF"),
+    "MTUM": ("US Momentum", "Momentum factor US equities"),
+    "USMV": ("US Min Volatility", "Low volatility US equities"),
+    "QUAL": ("US Quality", "iShares MSCI USA Quality Factor ETF"),
+    "VLUE": ("US Value Factor", "Value factor US equities"),
+    "SCHD": ("US Dividends", "Schwab U.S. Dividend Equity ETF"),
+
+    # International equity
+    "ACWI": ("Global Equity", "MSCI ACWI"),
+    "VEA": ("Developed ex-US", "Vanguard FTSE Developed Markets ETF"),
+    "VXUS": ("Total ex-US", "Vanguard Total International Stock ETF"),
+    "VWO": ("Emerging Markets", "Vanguard FTSE Emerging Markets ETF"),
+    "EFA": ("Developed ex-US", "iShares MSCI EAFE ETF"),
+    "EEM": ("Emerging Markets", "iShares MSCI Emerging Markets ETF"),
     "VGK": ("Europe Large-Cap", "Developed Europe equities"),
     "EWJ": ("Japan", "Japanese equities"),
-    "EEM": ("Emerging Markets", "EM equities"),
     "FXI": ("China Large-Cap", "China mega-cap equities"),
+    "KWEB": ("China Internet", "China internet equities"),
     "INDA": ("India", "Indian equities"),
     "EWZ": ("Brazil", "Brazilian equities"),
+    "EWG": ("Germany", "German equities"),
+    "EWU": ("UK", "UK equities"),
 
-    # Factors / Styles
-    "USMV": ("US Min Volatility", "Low volatility US equities"),
-    "MTUM": ("US Momentum", "Momentum factor US equities"),
-    "VLUE": ("US Value", "Value factor US equities"),
+    # Fixed income (rates)
+    "BIL": ("T-Bills", "1-3 month T-Bills"),
+    "SGOV": ("T-Bills", "0-3 month T-Bills"),
+    "SHY": ("UST 1-3y", "Short-term US Treasuries"),
+    "IEI": ("UST 3-7y", "Intermediate US Treasuries"),
+    "IEF": ("UST 7-10y", "Intermediate US Treasuries"),
+    "TLT": ("UST 20y+", "Long-term US Treasuries"),
+    "TIP": ("TIPS", "Inflation-protected Treasuries"),
+    "LQD": ("US IG Credit", "Investment-grade corporates"),
+    "HYG": ("US High Yield", "High-yield corporate bonds"),
+    "JNK": ("US High Yield", "High-yield corporate bonds"),
+    "EMB": ("EM Debt", "USD-denominated EM debt"),
+    "BND": ("US Agg", "US Total Bond Market"),
 
     # Commodities
-    "GLD": ("Gold", "SPDR Gold Trust ETF"),
-    "SLV": ("Silver", "iShares Silver Trust ETF"),
+    "GLD": ("Gold", "SPDR Gold Trust"),
+    "IAU": ("Gold", "iShares Gold Trust"),
+    "SLV": ("Silver", "iShares Silver Trust"),
     "USO": ("Crude Oil", "US Oil Fund"),
+    "DBO": ("Crude Oil", "Invesco DB Oil Fund"),
     "DBC": ("Broad Commodities", "Invesco DB Commodity Index ETF"),
 
-    # Fixed Income
-    "BIL": ("1-3mo T-Bills", "Short-term US Treasuries"),
-    "SHY": ("1-3yr Treasuries", "Short-term US Treasuries"),
-    "IEF": ("7-10yr Treasuries", "Intermediate US Treasuries"),
-    "TLT": ("20+yr Treasuries", "Long-term US Treasuries"),
-    "LQD": ("US IG Corporate Bonds", "Investment-grade corporates"),
-    "HYG": ("US High Yield", "High-yield corporate bonds"),
-    "EMB": ("Emerging Market Bonds", "USD-denominated EM debt"),
+    # Volatility / hedging
+    "VXX": ("Equity Volatility", "Short-term VIX futures ETN/ETF wrapper"),
+    "SVXY": ("Equity Volatility", "Short VIX futures strategy wrapper"),
+
+    # Currency wrappers
+    "UUP": ("USD", "US Dollar Index bullish wrapper"),
+    "FXE": ("EURUSD", "Euro trust"),
+    "FXY": ("USDJPY", "Japanese yen trust"),
+    "FXB": ("GBPUSD", "British pound trust"),
 
     # Crypto ETFs
     "ETH": ("Spot ETH", "Grayscale Ethereum Mini Trust ETF"),
@@ -169,19 +220,25 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna(subset=["Close"])
 
 
-# --------------------------- DATA ---------------------------
 def _calc_start_date(days: int, as_of: datetime) -> date:
     padding = 7
     return (as_of - pd.Timedelta(days=days + padding)).date()
 
 
+def _quality_flag(method: str, shares_obs_window: int, nonzero_delta_days: int) -> str:
+    if method == "cmf_proxy":
+        return "Proxy"
+    if shares_obs_window >= 6 and nonzero_delta_days >= 2:
+        return "High"
+    if shares_obs_window >= 2:
+        return "Medium"
+    return "Low"
+
+
+# --------------------------- DATA ---------------------------
 @retry()
 @st.cache_data(show_spinner=False, ttl=300)
-def fetch_prices(
-    tickers: Tuple[str, ...],
-    start_date: date,
-    as_of_date: date,
-) -> Dict[str, pd.DataFrame]:
+def fetch_prices(tickers: Tuple[str, ...], start_date: date, as_of_date: date) -> Dict[str, pd.DataFrame]:
     data = yf.download(
         tickers=list(tickers),
         start=start_date,
@@ -238,11 +295,11 @@ def fetch_one_shares_series_cached(ticker: str, start_date: date) -> pd.Series:
 def fetch_shares_series_parallel(
     tickers: Tuple[str, ...],
     start_date: date,
-    timeout_sec: float = 8.0,
+    timeout_sec: float = 10.0,
 ) -> Dict[str, pd.Series]:
     results: Dict[str, pd.Series] = {tk: pd.Series(dtype="float64") for tk in tickers}
 
-    max_workers = min(8, max(1, len(tickers)))
+    max_workers = min(10, max(1, len(tickers)))
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(fetch_one_shares_series_cached, tk, start_date): tk for tk in tickers}
 
@@ -263,9 +320,14 @@ def fetch_shares_series_parallel(
     return results
 
 
-def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
-    if close is None or shares is None or close.empty or shares.empty:
-        return pd.Series(dtype="float64")
+def compute_daily_flows_with_stats(close: pd.Series, shares: pd.Series, window_index: pd.DatetimeIndex) -> Tuple[pd.Series, Dict[str, float]]:
+    stats = {
+        "shares_obs_window": 0,
+        "nonzero_delta_days": 0,
+    }
+
+    if close is None or shares is None or close.empty or shares.empty or window_index is None or len(window_index) == 0:
+        return pd.Series(dtype="float64"), stats
 
     close = pd.to_numeric(close, errors="coerce").dropna()
     close.index = pd.to_datetime(close.index, errors="coerce")
@@ -281,13 +343,22 @@ def compute_daily_flows(close: pd.Series, shares: pd.Series) -> pd.Series:
     except Exception:
         pass
 
-    idx = pd.DatetimeIndex(close.index)
-    sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
+    # Shares observations inside the window (raw, before any ffill)
+    sh_in = sh.loc[(sh.index >= window_index.min()) & (sh.index <= window_index.max())]
+    stats["shares_obs_window"] = int(sh_in.shape[0])
 
+    # Align shares to business days and compute delta
+    idx = pd.DatetimeIndex(window_index)
+    sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
     delta_shares = sh_daily.diff().fillna(0.0)
-    flows = (delta_shares * close).astype(float)
+
+    stats["nonzero_delta_days"] = int((delta_shares != 0).sum())
+
+    # Flows in USD
+    close_aligned = close.reindex(idx).ffill()
+    flows = (delta_shares * close_aligned).astype(float)
     flows = flows.replace([np.inf, -np.inf], np.nan).dropna()
-    return flows
+    return flows, stats
 
 
 def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
@@ -301,18 +372,20 @@ def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
     typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
     vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
 
-    v = float((mfm * typical * vol).sum())
-    return v
+    return float((mfm * typical * vol).sum())
 
 
 # --------------------------- BUILD TABLE ---------------------------
 @st.cache_data(show_spinner=True, ttl=300)
 def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as_of_dt_naive: pd.Timestamp) -> pd.DataFrame:
+    # reconstruct as-of in ET for start date calc (cache-safe)
     as_of_dt_local = as_of_dt_naive.to_pydatetime().replace(tzinfo=None)
-    start_date = _calc_start_date(period_days, TZ.localize(as_of_dt_local))
+    as_of_dt_et = TZ.localize(as_of_dt_local)
+
+    start_date = _calc_start_date(period_days, as_of_dt_et)
 
     price_map = fetch_prices(tuple(tickers), start_date, as_of_date)
-    shares_map = fetch_shares_series_parallel(tuple(tickers), start_date, timeout_sec=8.0)
+    shares_map = fetch_shares_series_parallel(tuple(tickers), start_date, timeout_sec=10.0)
 
     cutoff = as_of_dt_naive - pd.Timedelta(days=period_days)
 
@@ -324,17 +397,30 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
 
         flow_usd_sum = np.nan
         method = "flows"
+        quality = ""
+        shares_obs_window = 0
+        nonzero_delta_days = 0
 
         if not px.empty:
+            window_index = pd.DatetimeIndex(px.index)
             shares = shares_map.get(tk, pd.Series(dtype="float64"))
-            daily_flows = compute_daily_flows(px["Close"], shares) if not shares.empty else pd.Series(dtype="float64")
 
-            if not daily_flows.empty and daily_flows.replace(0.0, np.nan).dropna().size > 0:
-                flow_usd_sum = float(daily_flows.sum())
-                method = "flows"
+            if shares is not None and not shares.empty:
+                daily_flows, stats = compute_daily_flows_with_stats(px["Close"], shares, window_index)
+                shares_obs_window = int(stats.get("shares_obs_window", 0))
+                nonzero_delta_days = int(stats.get("nonzero_delta_days", 0))
+
+                if not daily_flows.empty and daily_flows.replace(0.0, np.nan).dropna().size > 0:
+                    flow_usd_sum = float(daily_flows.sum())
+                    method = "flows"
+                else:
+                    flow_usd_sum = compute_cmf_turnover_proxy(px)
+                    method = "cmf_proxy"
             else:
                 flow_usd_sum = compute_cmf_turnover_proxy(px)
                 method = "cmf_proxy"
+
+            quality = _quality_flag(method, shares_obs_window, nonzero_delta_days)
 
         cat, desc = etf_info.get(tk, ("", ""))
         rows.append(
@@ -343,6 +429,9 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
                 "Category": cat,
                 "Flow ($)": flow_usd_sum,
                 "Method": method,
+                "Quality": quality,
+                "Shares Obs (window)": shares_obs_window,
+                "Nonzero Δ days": nonzero_delta_days,
                 "Description": desc,
             }
         )
@@ -361,10 +450,9 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
 st.title("ETF Net Flows")
 st.caption(
     f"Estimated net creations/redemptions over: {period_label}. "
-    f"When shares history is unavailable, the chart still shows an estimate."
+    f"Quality uses shares-observations and nonzero share-change days when shares data exist."
 )
 
-as_of_dt_naive = as_naive_ts(as_of_dt)
 df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
 
 chart_df = df.dropna(subset=["Flow ($)"]).sort_values("Flow ($)", ascending=False).copy()
@@ -372,11 +460,11 @@ vals = pd.to_numeric(chart_df["Flow ($)"], errors="coerce").fillna(0.0)
 abs_max = float(vals.abs().max()) if len(vals) else 0.0
 
 if not len(vals):
-    st.info("No values computed. Try a different period or add ETFs like SPY, QQQ, IWM.")
+    st.info("No values computed. Try a different period.")
 else:
     colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in vals]
 
-    fig, ax = plt.subplots(figsize=(15, max(6, len(chart_df) * 0.42)))
+    fig, ax = plt.subplots(figsize=(15, max(7, len(chart_df) * 0.38)))
     bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9)
 
     ax.set_xlabel("Estimated Net Flow ($)")
@@ -411,6 +499,29 @@ else:
     st.pyplot(fig)
     plt.close(fig)
 
+# --------------------------- QUALITY TABLE ---------------------------
+st.markdown("#### Coverage and Data Quality")
+view = df.copy()
+view["Flow"] = pd.to_numeric(view["Flow ($)"], errors="coerce")
+view["Flow (fmt)"] = view["Flow"].apply(fmt_compact_cur)
+view = view.sort_values(["Quality", "Flow"], ascending=[True, False])
+
+show_cols = [
+    "Ticker",
+    "Category",
+    "Flow (fmt)",
+    "Method",
+    "Quality",
+    "Shares Obs (window)",
+    "Nonzero Δ days",
+    "Description",
+]
+st.dataframe(
+    view[show_cols],
+    use_container_width=True,
+    hide_index=True,
+)
+
 # --------------------------- TOP LISTS ---------------------------
 st.markdown("#### Top Inflows and Outflows")
 valid = df.dropna(subset=["Flow ($)"]).copy()
@@ -422,9 +533,9 @@ else:
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Top Inflows**")
-        st.table(valid[valid["Flow ($)"] > 0].nlargest(3, "Flow ($)").set_index("Label")[["Value"]])
+        st.table(valid[valid["Flow ($)"] > 0].nlargest(5, "Flow ($)").set_index("Label")[["Value", "Quality"]])
     with col2:
         st.write("**Top Outflows**")
-        st.table(valid[valid["Flow ($)"] < 0].nsmallest(3, "Flow ($)").set_index("Label")[["Value"]])
+        st.table(valid[valid["Flow ($)"] < 0].nsmallest(5, "Flow ($)").set_index("Label")[["Value", "Quality"]])
 
 st.caption(f"Last refresh: {as_of_dt_naive}  |  © 2025 AD Fund Management LP")
