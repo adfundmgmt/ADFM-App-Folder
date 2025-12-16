@@ -1,11 +1,10 @@
 # app.py
-# Hedge Timer (SPY / QQQ)
-# Clean, fixed UI. No toggles, no sliders. About This Tool lives in the sidebar.
-# Signals: credit + breadth + vol term structure + RSI/MACD (daily/weekly/monthly) + trend confirmation.
-# Threshold is calibrated using data since 2020-01-01 (computed each run, then held static on-page).
+# Hedge Timer
+# Static (image) charts, no toggles, no sliders.
+# Sidebar: About This Tool + Sanity check since 2020 (forward risk stats).
 #
 # Install:
-#   pip install streamlit yfinance pandas numpy plotly
+#   pip install streamlit yfinance pandas numpy matplotlib
 #
 # Run:
 #   streamlit run app.py
@@ -18,8 +17,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import matplotlib.pyplot as plt
 import streamlit as st
 import yfinance as yf
 
@@ -62,6 +60,8 @@ hr { opacity: 0.20; margin: 0.9rem 0; }
     unsafe_allow_html=True,
 )
 
+plt.rcParams["figure.dpi"] = 200
+
 
 # ============================== Sidebar ==============================
 with st.sidebar:
@@ -77,6 +77,9 @@ Decision output is a composite score (0 to 100). Thresholds are calibrated on th
 Assumptions: close-to-close data, weekly is Friday close, monthly is month-end close, no transaction costs or borrow costs, no execution model. If Yahoo misses VIX9D, VIX3M, or VVIX, the model renormalizes around the remaining layers.
 """.strip()
     )
+    st.markdown("---")
+    st.markdown("### Sanity check since 2020")
+    sanity_box = st.empty()
 
 
 # ============================== Data Universe ==============================
@@ -91,15 +94,16 @@ TICKERS = [
     "LQD",
     "TLT",
     "^VIX",
-    "^VIX9D",   # sometimes missing
-    "^VIX3M",   # sometimes missing
-    "^VVIX",    # sometimes missing
+    "^VIX9D",
+    "^VIX3M",
+    "^VVIX",
 ]
 
 CALIBRATION_START = "2020-01-01"
+DISPLAY_START = "2020-01-01"
+
 HORIZON_DAYS = 20
 LEAD_LOOKBACK = 40
-CHART_WINDOW_DAYS = 720
 
 
 # ============================== Helpers ==============================
@@ -107,8 +111,8 @@ def _today() -> date:
     return date.today()
 
 def _start_date() -> date:
-    # Enough history for MA200 and multi-timeframe indicators
-    return _today() - timedelta(days=int(9 * 365.25) + 120)
+    # enough history to compute MA200 and multi-timeframe indicators cleanly
+    return _today() - timedelta(days=int(10 * 365.25) + 180)
 
 @st.cache_data(ttl=900, show_spinner=False)
 def yf_download(tickers: List[str], start: date) -> pd.DataFrame:
@@ -163,13 +167,8 @@ def safe_ratio(a: pd.Series, b: pd.Series) -> pd.Series:
     out = a / b
     return out.replace([np.inf, -np.inf], np.nan)
 
-def drawdown(px: pd.Series) -> pd.Series:
-    s = px.dropna()
-    peak = s.cummax()
-    return s / peak - 1.0
-
 def rolling_ma(s: pd.Series, w: int) -> pd.Series:
-    # min_periods=1 keeps MAs visible across the whole chart window
+    # keeps lines continuous across the entire visible window
     return s.rolling(w, min_periods=1).mean()
 
 def ema(s: pd.Series, span: int) -> pd.Series:
@@ -194,6 +193,11 @@ def resample_last(s: pd.Series, rule: str) -> pd.Series:
 
 def mtf_to_daily(daily_index: pd.DatetimeIndex, mtf_series: pd.Series) -> pd.Series:
     return mtf_series.reindex(daily_index, method="ffill")
+
+def drawdown(px: pd.Series) -> pd.Series:
+    s = px.dropna()
+    peak = s.cummax()
+    return s / peak - 1.0
 
 def forward_min_return(px: pd.Series, h: int) -> pd.Series:
     s = px.dropna()
@@ -381,6 +385,7 @@ def calibrate_threshold(score_spy: pd.Series, score_qqq: pd.Series, px_spy: pd.S
 
         if not objs:
             continue
+
         obj_avg = float(np.mean(objs))
         if obj_avg > best_obj:
             best_obj = obj_avg
@@ -406,80 +411,6 @@ def pick_target_today(df: pd.DataFrame) -> str:
         return "QQQ"
     return "SPY"
 
-def fig_main(px: pd.Series, score: pd.Series, t_short: int, episodes: List[Tuple[pd.Timestamp, pd.Timestamp, float]], title: str) -> go.Figure:
-    s = px.dropna()
-    sc = score.reindex(s.index).dropna()
-    idx = s.index.intersection(sc.index)
-    s = s.reindex(idx)
-    sc = sc.reindex(idx)
-
-    if len(s) > CHART_WINDOW_DAYS:
-        s = s.iloc[-CHART_WINDOW_DAYS:]
-        sc = sc.reindex(s.index)
-
-    ma50 = rolling_ma(s, 50)
-    ma200 = rolling_ma(s, 200)
-    t_bias = max(40, t_short - 12)
-
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        vertical_spacing=0.06, row_heights=[0.70, 0.30]
-    )
-
-    fig.add_trace(go.Scatter(x=s.index, y=s, name="Price", mode="lines", line=dict(width=2.3)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=ma50.index, y=ma50, name="MA50", mode="lines", line=dict(width=1.3)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=ma200.index, y=ma200, name="MA200", mode="lines", line=dict(width=1.3)), row=1, col=1)
-
-    sig_idx = sc.index[sc >= t_short]
-    if len(sig_idx):
-        fig.add_trace(
-            go.Scatter(
-                x=sig_idx, y=s.reindex(sig_idx), name="Short signal",
-                mode="markers", marker=dict(symbol="triangle-down", size=10),
-                hovertemplate="Short allowed<br>%{x|%Y-%m-%d}<extra></extra>",
-            ),
-            row=1, col=1,
-        )
-
-    for start, trough, depth in episodes[:10]:
-        x0, x1 = start, trough
-        if x1 < s.index.min() or x0 > s.index.max():
-            continue
-        fig.add_vrect(x0=max(x0, s.index.min()), x1=min(x1, s.index.max()), opacity=0.10, line_width=0)
-
-    fig.add_trace(go.Scatter(x=sc.index, y=sc, name="Score", mode="lines", line=dict(width=2.0)), row=2, col=1)
-    fig.add_hline(y=t_short, line_width=1, opacity=0.55, row=2, col=1)
-    fig.add_hline(y=t_bias, line_width=1, opacity=0.35, row=2, col=1)
-
-    fig.update_layout(
-        title=title,
-        height=640,
-        margin=dict(l=10, r=10, t=55, b=10),
-        template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        hovermode="x unified",
-    )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=False, row=1, col=1)
-    fig.update_yaxes(showgrid=False, row=2, col=1, range=[0, 100], title_text="Score (0-100)")
-    return fig
-
-def lead_before_episode(score: pd.Series, start_ts: pd.Timestamp, t_short: int, lookback: int) -> int:
-    s = score.dropna()
-    if len(s) == 0:
-        return -1
-    if start_ts not in s.index:
-        loc = s.index.get_indexer([start_ts], method="nearest")[0]
-        start_ts = s.index[loc]
-    loc = s.index.get_loc(start_ts)
-    lo = max(0, loc - lookback)
-    window = s.iloc[lo:loc + 1]
-    hits = window[window >= t_short]
-    if hits.empty:
-        return -1
-    first = hits.index[0]
-    return int(loc - s.index.get_loc(first))
-
 def forward_stats(score: pd.Series, px: pd.Series, t_short: int) -> Dict[str, float]:
     idx = score.dropna().index.intersection(px.dropna().index)
     sc = score.reindex(idx)
@@ -502,6 +433,126 @@ def forward_stats(score: pd.Series, px: pd.Series, t_short: int) -> Dict[str, fl
         "med_worst_nosig": q(miss, 0.50),
     }
 
+def lead_before_episode(score: pd.Series, start_ts: pd.Timestamp, t_short: int, lookback: int) -> int:
+    s = score.dropna()
+    if len(s) == 0:
+        return -1
+    if start_ts not in s.index:
+        loc = s.index.get_indexer([start_ts], method="nearest")[0]
+        start_ts = s.index[loc]
+    loc = s.index.get_loc(start_ts)
+    lo = max(0, loc - lookback)
+    window = s.iloc[lo:loc + 1]
+    hits = window[window >= t_short]
+    if hits.empty:
+        return -1
+    first = hits.index[0]
+    return int(loc - s.index.get_loc(first))
+
+
+# ============================== Static Chart (no calendar gaps) ==============================
+def plot_price_and_score_image(
+    price: pd.Series,
+    score: pd.Series,
+    t_short: int,
+    episodes: List[Tuple[pd.Timestamp, pd.Timestamp, float]],
+    title: str,
+) -> plt.Figure:
+    # Align and restrict to display window
+    dfp = pd.DataFrame({"price": price, "score": score}).dropna()
+    dfp = dfp[dfp.index >= pd.Timestamp(DISPLAY_START)]
+    if dfp.empty:
+        fig = plt.figure(figsize=(13, 6))
+        plt.text(0.5, 0.5, "Insufficient data", ha="center", va="center")
+        return fig
+
+    # Integer x-axis removes weekend/holiday spacing automatically
+    x = np.arange(len(dfp))
+    idx = dfp.index
+
+    # MAs computed on full series, then aligned
+    ma50 = rolling_ma(price, 50).reindex(idx)
+    ma200 = rolling_ma(price, 200).reindex(idx)
+
+    t_bias = max(40, t_short - 12)
+
+    fig = plt.figure(figsize=(13.6, 7.4))
+    gs = fig.add_gridspec(2, 1, height_ratios=[3.0, 1.2], hspace=0.08)
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1], sharex=ax1)
+
+    # Shade drawdown start->trough
+    for start, trough, depth in episodes[:10]:
+        if trough < idx.min() or start > idx.max():
+            continue
+        s_loc = idx.get_indexer([start], method="nearest")[0]
+        t_loc = idx.get_indexer([trough], method="nearest")[0]
+        if t_loc < s_loc:
+            s_loc, t_loc = t_loc, s_loc
+        ax1.axvspan(s_loc, t_loc, alpha=0.10)
+
+    # Price lines
+    ax1.plot(x, dfp["price"].values, linewidth=2.2, label="Price", color="#1f77b4")
+    ax1.plot(x, ma50.values, linewidth=1.4, label="MA50", color="#d62728")
+    ax1.plot(x, ma200.values, linewidth=1.4, label="MA200", color="#2ca02c")
+
+    # Short markers
+    sig_mask = dfp["score"].values >= t_short
+    if np.any(sig_mask):
+        ax1.scatter(
+            x[sig_mask],
+            dfp["price"].values[sig_mask],
+            marker="v",
+            s=55,
+            color="#9467bd",
+            label="Short signal",
+            zorder=5,
+        )
+
+    ax1.grid(False)
+    ax1.set_ylabel("")
+    ax1.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+
+    # Score panel
+    ax2.plot(x, dfp["score"].values, linewidth=1.9, label="Score", color="#ff7f0e")
+    ax2.axhline(t_short, linewidth=1.0, alpha=0.70, color="#111827")
+    ax2.axhline(t_bias, linewidth=1.0, alpha=0.35, color="#111827")
+    ax2.set_ylim(0, 100)
+    ax2.set_ylabel("Score (0-100)")
+    ax2.grid(False)
+
+    # Quarter ticks (clean labels)
+    quarter_starts = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq="QS")
+    tick_pos = []
+    tick_lbl = []
+    for d in quarter_starts:
+        loc = idx.get_indexer([d], method="nearest")[0]
+        if 0 <= loc < len(idx):
+            tick_pos.append(int(loc))
+            tick_lbl.append(d.strftime("%b %Y"))
+    ax2.set_xticks(tick_pos)
+    ax2.set_xticklabels(tick_lbl)
+
+    # Title + legend (no overlap)
+    fig.suptitle(title, fontsize=14, fontweight="bold", y=0.985)
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    handles = handles1 + handles2
+    labels = labels1 + labels2
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.955),
+        ncol=5,
+        frameon=False,
+        fontsize=9,
+    )
+
+    fig.tight_layout(rect=[0.02, 0.02, 0.98, 0.92])
+    return fig
+
 
 # ============================== App ==============================
 st.title("Hedge Timer")
@@ -517,6 +568,7 @@ if df.empty or "SPY" not in df.columns or "QQQ" not in df.columns:
 
 score_spy = compute_score(df, "SPY")
 score_qqq = compute_score(df, "QQQ")
+
 t_short = calibrate_threshold(score_spy, score_qqq, df["SPY"], df["QQQ"])
 t_bias = max(40, t_short - 12)
 
@@ -538,6 +590,24 @@ stance_qqq, badge_qqq = stance_from_score(score_today_qqq, t_short)
 stance_target = stance_qqq if target == "QQQ" else stance_spy
 badge_target = badge_qqq if target == "QQQ" else badge_spy
 score_target = score_today_qqq if target == "QQQ" else score_today_spy
+
+# Sidebar sanity check block (below About This Tool)
+stats_spy = forward_stats(score_spy[score_spy.index >= CALIBRATION_START], df["SPY"][df.index >= CALIBRATION_START], t_short)
+stats_qqq = forward_stats(score_qqq[score_qqq.index >= CALIBRATION_START], df["QQQ"][df.index >= CALIBRATION_START], t_short)
+
+sanity_box.markdown(
+    f"""
+Forward risk stats (next {HORIZON_DAYS} sessions). The key number is worst forward move after a short signal versus when standing down.
+
+**SPY** | signal rate: {stats_spy["signal_rate"]*100:.1f}% | signals: {int(stats_spy["signals"])}  
+Avg worst next {HORIZON_DAYS}d after signal: {stats_spy["avg_worst_signal"]*100:.2f}% | when no signal: {stats_spy["avg_worst_nosig"]*100:.2f}%  
+Median worst next {HORIZON_DAYS}d after signal: {stats_spy["med_worst_signal"]*100:.2f}% | when no signal: {stats_spy["med_worst_nosig"]*100:.2f}%  
+
+**QQQ** | signal rate: {stats_qqq["signal_rate"]*100:.1f}% | signals: {int(stats_qqq["signals"])}  
+Avg worst next {HORIZON_DAYS}d after signal: {stats_qqq["avg_worst_signal"]*100:.2f}% | when no signal: {stats_qqq["avg_worst_nosig"]*100:.2f}%  
+Median worst next {HORIZON_DAYS}d after signal: {stats_qqq["med_worst_signal"]*100:.2f}% | when no signal: {stats_qqq["med_worst_nosig"]*100:.2f}%
+""".strip()
+)
 
 st.markdown(
     f"""
@@ -577,79 +647,47 @@ with c1:
         st.write("Stand down. If you hedge, keep it light and tactical.")
 with c2:
     st.subheader("What flips it")
-    st.write(
-        f"Above {t_short}: short allowed. Between {t_bias} and {t_short}: hedge bias. Below {t_bias}: stand down."
-    )
+    st.write(f"Above {t_short}: short allowed. Between {t_bias} and {t_short}: hedge bias. Below {t_bias}: stand down.")
 
 st.markdown("<hr/>", unsafe_allow_html=True)
 
 episodes_target = find_drawdown_episodes(df[target], threshold=-0.08, recovery=-0.02)
+score_target_series = score_qqq if target == "QQQ" else score_spy
 
-st.plotly_chart(
-    fig_main(
-        px=df[target],
-        score=score_qqq if target == "QQQ" else score_spy,
-        t_short=t_short,
-        episodes=episodes_target,
-        title=f"{target}: price, moving averages, short signals, and score",
-    ),
-    use_container_width=True,
+fig = plot_price_and_score_image(
+    price=df[target],
+    score=score_target_series,
+    t_short=t_short,
+    episodes=episodes_target,
+    title=f"{target}: price, moving averages, short signals, and score (from Jan 2020, no calendar gaps)",
 )
+st.pyplot(fig, use_container_width=True)
 
 st.markdown("<hr/>", unsafe_allow_html=True)
-st.subheader("Sanity check since 2020")
+st.subheader("Did it warn before major selloffs?")
 
-left, right = st.columns([1, 1], gap="large")
+st.write(f"We look at the largest drawdowns and ask if score crossed {t_short} within the prior {LEAD_LOOKBACK} sessions.")
 
-with left:
-    stats_spy = forward_stats(score_spy[score_spy.index >= CALIBRATION_START], df["SPY"][df.index >= CALIBRATION_START], t_short)
-    stats_qqq = forward_stats(score_qqq[score_qqq.index >= CALIBRATION_START], df["QQQ"][df.index >= CALIBRATION_START], t_short)
+def summarize_eps(name: str, eps: List[Tuple[pd.Timestamp, pd.Timestamp, float]], score: pd.Series) -> pd.DataFrame:
+    rows = []
+    for start_ts, trough_ts, depth in eps[:10]:
+        lead = lead_before_episode(score, start_ts, t_short, LEAD_LOOKBACK)
+        rows.append(
+            {
+                "Index": name,
+                "Start": start_ts.date().isoformat(),
+                "Trough": trough_ts.date().isoformat(),
+                "Depth": f"{depth*100:.2f}%",
+                "Lead (sessions)": lead if lead >= 0 else "No",
+            }
+        )
+    return pd.DataFrame(rows)
 
-    st.markdown(
-        f"""
-<div class="card">
-  <div class="small"><b>SPY</b> | signal rate: {stats_spy["signal_rate"]*100:.1f}% | signals: {int(stats_spy["signals"])}</div>
-  <div class="small" style="margin-top:6px;">Avg worst next {HORIZON_DAYS}d after signal: <b>{stats_spy["avg_worst_signal"]*100:.2f}%</b> | when no signal: <b>{stats_spy["avg_worst_nosig"]*100:.2f}%</b></div>
-  <div class="small" style="margin-top:6px;">Median worst next {HORIZON_DAYS}d after signal: <b>{stats_spy["med_worst_signal"]*100:.2f}%</b> | when no signal: <b>{stats_spy["med_worst_nosig"]*100:.2f}%</b></div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        f"""
-<div class="card" style="margin-top:10px;">
-  <div class="small"><b>QQQ</b> | signal rate: {stats_qqq["signal_rate"]*100:.1f}% | signals: {int(stats_qqq["signals"])}</div>
-  <div class="small" style="margin-top:6px;">Avg worst next {HORIZON_DAYS}d after signal: <b>{stats_qqq["avg_worst_signal"]*100:.2f}%</b> | when no signal: <b>{stats_qqq["avg_worst_nosig"]*100:.2f}%</b></div>
-  <div class="small" style="margin-top:6px;">Median worst next {HORIZON_DAYS}d after signal: <b>{stats_qqq["med_worst_signal"]*100:.2f}%</b> | when no signal: <b>{stats_qqq["med_worst_nosig"]*100:.2f}%</b></div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-with right:
-    st.write(f"Largest drawdowns and whether the score crossed {t_short} within the prior {LEAD_LOOKBACK} sessions.")
-
-    def summarize_eps(name: str, eps: List[Tuple[pd.Timestamp, pd.Timestamp, float]], score: pd.Series) -> pd.DataFrame:
-        rows = []
-        for start_ts, trough_ts, depth in eps[:8]:
-            lead = lead_before_episode(score, start_ts, t_short, LEAD_LOOKBACK)
-            rows.append(
-                {
-                    "Index": name,
-                    "Start": start_ts.date().isoformat(),
-                    "Trough": trough_ts.date().isoformat(),
-                    "Depth": f"{depth*100:.2f}%",
-                    "Lead (sessions)": lead if lead >= 0 else "No",
-                }
-            )
-        return pd.DataFrame(rows)
-
-    tbl = pd.concat(
-        [
-            summarize_eps("SPY", find_drawdown_episodes(df["SPY"]), score_spy),
-            summarize_eps("QQQ", find_drawdown_episodes(df["QQQ"]), score_qqq),
-        ],
-        ignore_index=True,
-    )
-    st.dataframe(tbl, use_container_width=True, hide_index=True)
+tbl = pd.concat(
+    [
+        summarize_eps("SPY", find_drawdown_episodes(df["SPY"]), score_spy),
+        summarize_eps("QQQ", find_drawdown_episodes(df["QQQ"]), score_qqq),
+    ],
+    ignore_index=True,
+)
+st.dataframe(tbl, use_container_width=True, hide_index=True)
