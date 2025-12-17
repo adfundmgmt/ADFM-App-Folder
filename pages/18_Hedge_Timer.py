@@ -374,7 +374,11 @@ def compute_components_and_meta(
 
     # We want rollover-from-strength, not "already nuked".
     # Daily: prefer crossing down from >= 60 or a clear loss of momentum while still > 45.
-    rsi_d_roll = ((rsi_d.shift(1) >= 60) & (rsi_d < 60)) | ((rsi_d >= 45) & (rsi_d.diff(5) < 0) & (rsi_d < rsi_d.rolling(10, min_periods=5).max() - 2))
+    rsi_d_roll = ((rsi_d.shift(1) >= 60) & (rsi_d < 60)) | (
+        (rsi_d >= 45)
+        & (rsi_d.diff(5) < 0)
+        & (rsi_d < rsi_d.rolling(10, min_periods=5).max() - 2)
+    )
     rsi_w_roll = ((rsi_w.shift(1) >= 58) & (rsi_w < 58)) | ((rsi_w >= 48) & (rsi_w.diff(3) < 0))
     rsi_m_roll = ((rsi_m.shift(1) >= 55) & (rsi_m < 55)) | ((rsi_m >= 50) & (rsi_m.diff(2) < 0))
 
@@ -659,6 +663,22 @@ def _display_name(ticker: str) -> str:
     return ticker
 
 
+def _apply_subtle_grid(ax: plt.Axes, y_only: bool = False) -> None:
+    ax.set_axisbelow(True)
+    ax.grid(
+        True,
+        which="major",
+        axis="y" if y_only else "both",
+        linestyle="-",
+        linewidth=0.7,
+        alpha=0.16,
+    )
+    for side in ["top", "right"]:
+        ax.spines[side].set_visible(False)
+    ax.spines["left"].set_alpha(0.30)
+    ax.spines["bottom"].set_alpha(0.30)
+
+
 def plot_price_and_score_image(
     price: pd.Series,
     score: pd.Series,
@@ -690,20 +710,14 @@ def plot_price_and_score_image(
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
 
-    # Shade 10%+ drawdown episodes within the visible window only
-    eps = find_drawdown_episodes(price, threshold=DD_MAJOR, recovery=-0.02, start_after=CALIBRATION_START)
-    for start, end, trough, depth in eps[:12]:
-        if end < idx.min() or start > idx.max():
-            continue
-        s_loc = idx.get_indexer([max(start, idx.min())], method="nearest")[0]
-        e_loc = idx.get_indexer([min(end, idx.max())], method="nearest")[0]
-        if e_loc <= s_loc:
-            continue
-        ax1.axvspan(s_loc, e_loc, alpha=0.08)
+    # Price + MAs (explicit colors to avoid default blue dominance)
+    price_c = "#111827"   # near-black
+    ma50_c = "#6B7280"    # mid gray
+    ma200_c = "#9CA3AF"   # light gray
 
-    ax1.plot(x, dfp["price"].values, linewidth=2.2, label="Price")
-    ax1.plot(x, ma50.values, linewidth=1.4, label="MA50")
-    ax1.plot(x, ma200.values, linewidth=1.4, label="MA200")
+    ax1.plot(x, dfp["price"].values, linewidth=2.3, color=price_c, label="Price")
+    ax1.plot(x, ma50.values, linewidth=1.5, color=ma50_c, label="MA50")
+    ax1.plot(x, ma200.values, linewidth=1.5, color=ma200_c, label="MA200")
 
     pmin = float(np.nanmin(dfp["price"].values))
     pmax = float(np.nanmax(dfp["price"].values))
@@ -711,27 +725,35 @@ def plot_price_and_score_image(
     ax1.set_ylim(pmin - pad, pmax + pad)
     ax1.set_xlim(-0.5, len(dfp) - 0.5)
 
-    # NEW short signal onsets (early-stage + not oversold)
+    # NEW short signal onsets (early-stage + not oversold) in RED
     sig_on = signal_onset(score.reindex(idx), {k: v.reindex(idx) for k, v in meta.items()}, t_short)
     if sig_on.any():
         ax1.scatter(
             x[sig_on.values],
             dfp["price"].values[sig_on.values],
             marker="v",
-            s=60,
+            s=72,
+            color="#DC2626",
+            edgecolors="white",
+            linewidths=0.8,
             label="Short signal (new)",
-            zorder=5,
+            zorder=6,
         )
 
-    ax1.grid(False)
+    _apply_subtle_grid(ax1, y_only=False)
     ax1.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
 
-    ax2.plot(x, dfp["score"].fillna(0.0).values, linewidth=1.9, label="Score")
-    ax2.axhline(t_short, linewidth=1.0, alpha=0.75)
-    ax2.axhline(t_bias, linewidth=1.0, alpha=0.35)
+    # Score panel (explicit styling; no blue dashed artifacts)
+    score_c = "#374151"
+    t_short_c = "#111827"
+    t_bias_c = "#9CA3AF"
+
+    ax2.plot(x, dfp["score"].fillna(0.0).values, linewidth=1.9, color=score_c, label="Score")
+    ax2.axhline(t_short, linewidth=1.1, color=t_short_c, alpha=0.70)
+    ax2.axhline(t_bias, linewidth=1.0, color=t_bias_c, alpha=0.55)
     ax2.set_ylim(0, 100)
     ax2.set_ylabel("Score (0-100)")
-    ax2.grid(False)
+    _apply_subtle_grid(ax2, y_only=True)
     ax2.set_xlim(-0.5, len(dfp) - 0.5)
 
     # Month ticks
@@ -774,9 +796,11 @@ def plot_episode_table_image(table_df: pd.DataFrame, title: str) -> plt.Figure:
         plt.text(0.5, 0.5, "No episodes found", ha="center", va="center")
         return fig
 
-    fig, ax = plt.subplots(figsize=(13.6, 5.4))
+    fig, ax = plt.subplots(figsize=(13.6, 5.2))
     ax.axis("off")
-    fig.suptitle(title, fontsize=13, fontweight="bold", y=0.98)
+
+    # Keep title close to the table (reduce top padding)
+    fig.suptitle(title, fontsize=13, fontweight="bold", y=0.975)
 
     cell_text = dfp.values.tolist()
     col_labels = dfp.columns.tolist()
@@ -786,19 +810,22 @@ def plot_episode_table_image(table_df: pd.DataFrame, title: str) -> plt.Figure:
         colLabels=col_labels,
         cellLoc="center",
         colLoc="center",
-        loc="center",
+        loc="upper center",
+        bbox=[0.0, 0.02, 1.0, 0.90],
     )
 
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(9)
-    tbl.scale(1.0, 1.25)
+    tbl.scale(1.0, 1.18)
 
     for (row, col), cell in tbl.get_celld().items():
+        cell.set_edgecolor((0, 0, 0, 0.08))
+        cell.set_linewidth(0.6)
         if row == 0:
             cell.set_text_props(weight="bold")
-            cell.set_facecolor((0.95, 0.95, 0.95, 1.0))
+            cell.set_facecolor((0.96, 0.96, 0.96, 1.0))
 
-    fig.tight_layout(rect=[0.01, 0.02, 0.99, 0.94])
+    fig.tight_layout(rect=[0.01, 0.01, 0.99, 0.965])
     return fig
 
 
@@ -938,6 +965,7 @@ st.markdown("<hr/>", unsafe_allow_html=True)
 st.subheader("Did it warn before major selloffs?")
 st.write(f"We look at 10%+ drawdowns and ask if a NEW short signal fired within the prior {LEAD_LOOKBACK} sessions. New signals are gated (early-stage) and oversold-blocked.")
 
+
 def summarize_eps(name_label: str, px: pd.Series, score: pd.Series, meta: Dict[str, pd.Series]) -> pd.DataFrame:
     eps = find_drawdown_episodes(px, threshold=DD_MAJOR, recovery=-0.02, start_after=CALIBRATION_START)
     sig_on = signal_onset(score, meta, t_short)
@@ -955,6 +983,7 @@ def summarize_eps(name_label: str, px: pd.Series, score: pd.Series, meta: Dict[s
             }
         )
     return pd.DataFrame(rows)
+
 
 tbl = pd.concat(
     [
