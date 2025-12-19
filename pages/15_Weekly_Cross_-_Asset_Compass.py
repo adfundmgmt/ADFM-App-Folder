@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import streamlit as st
+from ui_helpers import render_page_header
 
 # =========================
 # App config and style
@@ -28,8 +29,11 @@ plt.rcParams.update({
     "lines.linewidth": 2.0,
 })
 
-st.title("Weekly Cross-Asset Compass")
-st.caption("Data: Yahoo Finance via yfinance. Focus: correlations, regime, and weekly shifts you can act on.")
+render_page_header(
+    "Weekly Cross-Asset Compass",
+    subtitle="Weekly correlations, regimes, and actionable shifts.",
+    description="Data: Yahoo Finance via yfinance. Layout now matches the rest of the dashboards so you can move faster.",
+)
 
 # =========================
 # Universe

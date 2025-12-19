@@ -18,6 +18,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 import yfinance as yf
+from ui_helpers import render_page_header
 
 
 # ============================== Page + Style ==============================
@@ -830,8 +831,11 @@ def plot_episode_table_image(table_df: pd.DataFrame, title: str) -> plt.Figure:
 
 
 # ============================== App ==============================
-st.title("Hedge Timer")
-st.caption("Decision slip for shorting ^SPX or ^NDX based on early-warning stress plus multi-timeframe momentum and trend confirmation, with explicit early-stage gating to avoid bottom-shorting.")
+render_page_header(
+    "Hedge Timer",
+    subtitle="Decision slip for timing ^SPX/^NDX hedges.",
+    description="Early-warning stress plus multi-timeframe momentum with consistent header spacing across the suite.",
+)
 
 start = _start_date()
 raw = yf_download(TICKERS, start)

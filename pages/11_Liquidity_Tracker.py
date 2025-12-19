@@ -3,6 +3,7 @@ import pandas as pd
 from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
+from ui_helpers import render_page_header
 
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
@@ -20,7 +21,11 @@ REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B   = 5.0
 
 st.set_page_config(page_title=TITLE, layout="wide")
-st.title(TITLE)
+render_page_header(
+    TITLE,
+    subtitle="Net liquidity and policy stance with unified layout.",
+    description="Headers and section spacing now mirror the other dashboards for a faster read.",
+)
 
 # ---------------- Sidebar ----------------
 with st.sidebar:

@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
+from ui_helpers import render_page_header
 
 plt.style.use("default")
 
@@ -22,8 +23,11 @@ LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
 if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), width=70)
 
-st.title("Market Memory Explorer")
-st.subheader("Compare the current year's return path with history")
+render_page_header(
+    "Market Memory Explorer",
+    subtitle="Compare the current year's return path with history.",
+    description="Quickly identify the closest analog years, inspect how they resolved, and keep the controls and charts in a uniform layout.",
+)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
