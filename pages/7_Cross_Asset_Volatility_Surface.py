@@ -5,16 +5,10 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from datetime import datetime
-from ui_helpers import render_page_header
 
 # ---------------- Config ----------------
 st.set_page_config(page_title="Cross Asset Volatility Surface", layout="wide")
 plt.style.use("default")
-render_page_header(
-    "Cross Asset Volatility Surface Monitor",
-    subtitle="Spot implied vs realized volatility extremes at a glance.",
-    description="Consistent header and spacing across pages keeps the surface plots front and center.",
-)
 
 PASTEL = [
     "#A8DADC", "#F4A261", "#90BE6D", "#FFD6A5", "#BDE0FE",

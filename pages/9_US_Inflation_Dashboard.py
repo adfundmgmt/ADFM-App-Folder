@@ -3,14 +3,8 @@ import pandas as pd
 from pandas_datareader.data import DataReader
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-from ui_helpers import render_page_header
 
 st.set_page_config(page_title="US CPI Dashboard", layout="wide")
-render_page_header(
-    "US Inflation Dashboard",
-    subtitle="Recession-aware CPI trends with MoM and YoY context.",
-    description="Headers and sections now align with the rest of the suite for quicker scanning.",
-)
 
 # --- Config: FRED Series Codes ---
 FRED_SERIES = {

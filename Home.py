@@ -1,19 +1,17 @@
 # Home.py
 import streamlit as st
-
-from ui_helpers import render_page_header
-
 st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
 
-render_page_header(
-    "AD Fund Management LP - Analytics Suite",
-    subtitle="Internal dashboards for faster, more informed decisions.",
-    description="Use the sidebar to launch any tool. Each page follows the same streamlined layout so you can focus on the outputs without re-learning controls.",
-)
+st.title("AD Fund Management LP - Analytics Suite")
 
-st.markdown(
-    """
-### Tools Available
+st.markdown("""
+Welcome to the internal analytics dashboard for **AD Fund Management LP**.
+
+These are proprietary tools ADFM has built in-house to support daily decision-making. The goal is simple: make it easier to spot patterns, track shifts, and move faster with more context.
+
+---
+
+### Tools Available (use the sidebar to launch):
 
 - **Monthly Seasonality Explorer**  
   Looks at median monthly returns and hit rates for any stock, index, or commodity. Pulls from Yahoo Finance and FRED for deeper historical data. Helps us stay aware of recurring calendar trends and seasonality biases.
@@ -67,5 +65,4 @@ st.markdown(
   A consolidated dashboard that tracks daily, equal-weight performance and technicals across all ADFM baskets, benchmarked to SPY, with aligned business-day panels and category-level drilldowns.
 
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast moving markets. Always a work in progress, open to feedback or feature ideas.
-"""
-)
+""")

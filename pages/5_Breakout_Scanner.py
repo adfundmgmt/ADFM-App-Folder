@@ -7,17 +7,12 @@ import streamlit as st
 import yfinance as yf
 import numpy as np
 import matplotlib.pyplot as plt
-from ui_helpers import render_page_header
 
 plt.style.use("default")
 
 # ── Page Setup ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Breakout Scanner", layout="wide")
-render_page_header(
-    "Breakout Scanner",
-    subtitle="Identify fresh highs and RSI posture across your list.",
-    description="Controls, charts, and tables share the same spacing and dividers for quicker scanning.",
-)
+st.title("Breakout Scanner")
 
 with st.sidebar:
     st.header("About This Tool")
