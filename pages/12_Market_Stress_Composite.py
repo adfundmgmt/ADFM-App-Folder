@@ -26,16 +26,11 @@ from pandas_datareader import data as pdr
 import yfinance as yf
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-from ui_helpers import render_page_header
 
 # ---------------- App config ----------------
 TITLE = "Market Stress Composite"
 st.set_page_config(page_title=TITLE, layout="wide")
-render_page_header(
-    TITLE,
-    subtitle="Blended 8-factor stress gauge with aligned trading days.",
-    description="The composite now shares the same header treatment as the rest of the dashboards for quicker orientation.",
-)
+st.title(TITLE)
 
 # ---------------- Data maps -----------------
 FRED = {

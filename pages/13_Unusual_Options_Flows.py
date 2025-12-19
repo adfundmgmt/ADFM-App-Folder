@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from ui_helpers import render_page_header
 
 APP_TITLE = "Unusual Options Flow Tracker"
 DATA_DIR = "data"
@@ -21,11 +20,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(INGEST_DIR, exist_ok=True)
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
-render_page_header(
-    APP_TITLE,
-    subtitle="Premium-first tiers across the full S&P 500 universe.",
-    description="Standardized header styling keeps the filter controls and grids aligned with the rest of the suite.",
-)
+st.title(APP_TITLE)
 
 # -------------------------
 # Universe helpers

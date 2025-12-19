@@ -23,7 +23,6 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from ui_helpers import render_page_header
 
 # ── Constants ─────────────────────────────────────────────
 REAL_SERIES = "DFII10"
@@ -41,11 +40,7 @@ REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/1
 
 # ── Streamlit Setup ──────────────────────────────────────
 st.set_page_config(page_title="10-Year Yield Dashboard", layout="wide")
-render_page_header(
-    "10-Year Nominal and Real Yield Dashboard",
-    subtitle="Nominal vs real yields with regime overlays.",
-    description="Consistent header spacing keeps the macro overlays and charts readable across the suite.",
-)
+st.title("10-Year Nominal and Real Yield Dashboard")
 
 # ── Sidebar: Controls and Info ───────────────────────────
 with st.sidebar:

@@ -4,14 +4,6 @@ import yfinance as yf
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from datetime import datetime
-from ui_helpers import render_page_header
-
-st.set_page_config(page_title="Technical Chart Explorer", layout="wide")
-render_page_header(
-    "Technical Chart Explorer",
-    subtitle="Inspect price action and key indicators at speed.",
-    description="Unified layout keeps the chart, overlays, and RSI/MACD panels aligned across every ticker.",
-)
 
 # ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.header("About This Tool")

@@ -10,14 +10,8 @@ import streamlit as st
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-from ui_helpers import render_page_header
 
 st.set_page_config(page_title="ETF Net Flows", layout="wide")
-render_page_header(
-    "ETF Net Flows",
-    subtitle="Follow creations and redemptions with a cleaner layout.",
-    description="Standardized headers and compact dividers keep the flow tables and charts aligned across the suite.",
-)
 
 # --------------------------- SIDEBAR ---------------------------
 with st.sidebar:

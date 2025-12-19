@@ -5,7 +5,6 @@ import yfinance as yf
 from datetime import date, timedelta
 import plotly.graph_objects as go
 from typing import Dict, List, Optional
-from ui_helpers import render_page_header
 
 # -----------------------------
 # Page and theme
@@ -660,11 +659,8 @@ def plot_cumulative_chart(basket_returns: pd.DataFrame, title: str, benchmark_se
 # -----------------------------
 # Sidebar - presets
 # -----------------------------
-render_page_header(
-    TITLE,
-    subtitle=SUBTITLE,
-    description="Consistent header styling keeps the filters and panels aligned with the rest of the dashboards.",
-)
+st.title(TITLE)
+st.caption(SUBTITLE)
 
 with st.sidebar:
     st.markdown("### About This Tool")
