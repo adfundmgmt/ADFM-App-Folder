@@ -5,6 +5,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime, date
+from ui_helpers import render_page_header
 
 # ---------------- Config ----------------
 st.set_page_config(page_title="Factor Momentum and Leadership", layout="wide")
@@ -249,7 +250,11 @@ WINDOW_MAP_DAYS = {
 }
 
 # ---------------- Sidebar ----------------
-st.title("Factor Momentum and Leadership Dashboard")
+render_page_header(
+    "Factor Momentum and Leadership Dashboard",
+    subtitle="Style and macro factor leadership scored on momentum and structure.",
+    description="Page header and spacing now match the rest of the dashboards for a quicker scan.",
+)
 
 with st.sidebar:
     st.header("About This Tool")

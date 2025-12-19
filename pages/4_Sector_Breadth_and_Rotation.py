@@ -10,13 +10,18 @@ import yfinance as yf
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
+from ui_helpers import render_page_header
 
 # ------------------------------- Page config -------------------------------
 st.set_page_config(
     page_title="S&P 500 Sector Breadth & Rotation Monitor",
     layout="wide"
 )
-st.title("S&P 500 Sector Breadth & Rotation Monitor")
+render_page_header(
+    "S&P 500 Sector Breadth & Rotation Monitor",
+    subtitle="Track sector leadership, breadth, and rotation in one view.",
+    description="Inputs, plots, and tables now share a consistent spacing and divider treatment across the app.",
+)
 
 # ------------------------------- Sidebar -----------------------------------
 with st.sidebar:

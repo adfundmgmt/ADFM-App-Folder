@@ -5,13 +5,18 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import warnings
+from ui_helpers import render_page_header
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 plt.style.use("default")
 
 # -------------- Page config --------------
 st.set_page_config(layout="wide", page_title="Ratio Charts")
-st.title("Ratio Charts")
+render_page_header(
+    "Ratio Charts",
+    subtitle="Trace cyclical vs defensive leadership and custom pairs.",
+    description="Unified header spacing keeps ratio controls and plots tidy across the suite.",
+)
 
 # -------------- Sidebar --------------
 st.sidebar.header("About This Tool")

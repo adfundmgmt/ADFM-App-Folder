@@ -12,6 +12,7 @@ import yfinance as yf
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter, MaxNLocator
 from matplotlib import gridspec
+from ui_helpers import render_page_header
 
 plt.style.use("default")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
@@ -26,7 +27,11 @@ MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 
 # -------------------------- Streamlit UI -------------------------- #
 st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
-st.title("Monthly Seasonality Explorer")
+render_page_header(
+    "Monthly Seasonality Explorer",
+    subtitle="Seasonality at a glance for any index, stock, or commodity.",
+    description="Check half-month contributions, hit rates, and intra-month average paths without hunting for controls.",
+)
 
 with st.sidebar:
     st.header("About This Tool")

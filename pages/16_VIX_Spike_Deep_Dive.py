@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from datetime import datetime
 import streamlit as st
+from ui_helpers import render_page_header
 
 # ------------------------------- Page config -------------------------------
 st.set_page_config(page_title="ADFM | VIX Spike Deep Dive", layout="wide")
@@ -101,7 +102,11 @@ def card_box(inner_html):
     )
 
 # ------------------------------- Sidebar -----------------------------------
-st.title("VIX Spike Deep Dive")
+render_page_header(
+    "VIX Spike Deep Dive",
+    subtitle="Short-horizon SPX behavior after volatility shocks.",
+    description="Aligned header and spacing keeps the decision box and panels consistent with the rest of the suite.",
+)
 
 with st.sidebar:
     st.header("About This Tool")
