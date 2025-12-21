@@ -36,10 +36,12 @@ MIN_MARKET_CAP = 1_000_000_000
 
 MARKET_CAP_EXCEPTIONS = set([
     # Example: "UUUU","UEC","URG","UROY","DNN","NXE","LEU"
+    # Add exceptions here if you want smaller-cap baskets to pass the filter
 ])
 
 # -----------------------------
 # CATEGORY -> BASKETS -> TICKERS
+# Expanded per your diagnostic + sector additions
 # -----------------------------
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
@@ -51,7 +53,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Semis Foundry and OSAT": ["TSM","UMC","GFS","ASX"],
         "Semis Equipment": ["ASML","AMAT","LRCX","KLAC","TER","ONTO","AEIS","ACMR"],
         "Semis EDA and IP": ["SNPS","CDNS","ANSS","ARM"],
-        "Semis China and HK ADRs": ["SMIC","HIMX","ASX","TSM","UMC"],
+        "Semis China and HK ADRs": ["HIMX","TSM","UMC"],
 
         "AI Infrastructure Leaders": [
             "NVDA","AMD","AVGO","TSM","ASML",
@@ -79,12 +81,12 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Data Center Power and Cooling": ["VRT","ETN","TT","JCI","CARR","ABB","POWL"],
         "Data Center REITs": ["EQIX","DLR","AMT","SBAC","CCI"],
         "Servers and Storage": ["SMCI","DELL","HPE","NTAP","WDC","STX","IBM"],
-        "IT Services and Systems Integrators": ["ACN","IBM","CTSH","EPAM"],
+        "IT Services and Systems Integrators": ["ACN","IBM","CTSH","EPAM","GIB"],
     },
 
     "Connectivity and Industrial Tech": {
         "5G and Networking Infra": ["AMT","CCI","SBAC","ANET","CSCO","JNPR","HPE","ERIC","NOK","FFIV"],
-        "Industrial Automation": ["ROK","ETN","EMR","AME","PH","ABB","FANUY","KEYS","TRMB","CGNX","IEX","ITW","GWW"],
+        "Industrial Automation": ["ROK","ETN","EMR","AME","PH","ABB","FANUY","KEYS","TRMB","CGNX","IEX","ITW","GWW","SYM"],
         "Aerospace Tech and Space": ["RKLB","IRDM","ASTS","LHX","LMT","NOC","RTX"],
         "Defense Software and ISR": ["PLTR","KTOS","AVAV","LHX","LDOS","BAH"],
     },
@@ -98,6 +100,10 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Nuclear and Grid Buildout": ["VST","CEG","BWXT","LEU","ETN","VRT"],
         "Metals and Mining": ["BHP","RIO","VALE","FCX","NEM","TECK","SCCO","AA"],
         "Gold and Silver Miners": ["GDX","GDXJ","NEM","AEM","GOLD","KGC","AG","PAAS","WPM"],
+
+        # New: energy split (midstream, refining)
+        "Energy Midstream and Storage": ["KMI","WMB","EPD","ET","ENB","MPLX"],
+        "Refining and Downstream": ["MPC","VLO","PSX","DK","PBF"],
     },
 
     "Clean Energy Transition": {
@@ -114,6 +120,10 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "MedTech Devices": ["MDT","SYK","ISRG","BSX","ZBH","EW","PEN"],
         "Diagnostics and Tools": ["TMO","DHR","A","RGEN","ILMN"],
         "Healthcare Payers": ["UNH","HUM","CI","ELV","CNC","MOH"],
+
+        # New: healthcare services split
+        "Healthcare Providers and Hospitals": ["HCA","THC","UHS","CYH"],
+        "Healthcare Services and Outsourcing": ["LH","DGX","AMN","EHC"],
     },
 
     "Financials and Credit": {
@@ -124,6 +134,12 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Credit and Specialty Finance": ["MS","GS","BX","KKR","ARES","MAIN","ARCC"],
         "Mortgage Finance": ["RKT","UWMC","COOP","FNF","NMIH","ESNT"],
         "Insurers": ["BRK-B","CB","TRV","PGR","AIG","MET"],
+
+        # New: insurance sector lens (real-rate diagnostics)
+        "Insurance P&C": ["PGR","TRV","CB","ALL","CINF"],
+        "Insurance Life and Retirement": ["MET","PRU","LNC","AIG"],
+        "Reinsurers": ["RNR","RE","EG"],
+        "Insurance Brokers": ["AJG","BRO","MMC","AON","WTW"],
     },
 
     "Real Assets and Inflation Beneficiaries": {
@@ -132,6 +148,12 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Industrials and Infrastructure": ["CAT","DE","URI","PWR","VMC","MLM","NUE"],
         "Shipping and Logistics": ["FDX","UPS","GXO","XPO","ZIM","MATX","DAC"],
         "Agriculture and Machinery": ["MOS","NTR","DE","CNHI","ADM","BG","CF","AGCO"],
+
+        # New: housing and shelter plumbing
+        "Housing Home Improvement and Repair": ["HD","LOW","TSCO","POOL"],
+        "Housing Building Products and Materials": ["BLDR","TREX","MAS","VMC","MLM","SUM"],
+        "Housing Mortgage and Title": ["COOP","RKT","UWMC","FNF","FAF"],
+        "Housing Residential Transaction Proxies": ["RDFN","ZG","OPEN"],
     },
 
     "Consumer Cyclicals": {
@@ -142,7 +164,11 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Airlines": ["AAL","DAL","UAL","LUV","JBLU","ALK"],
         "Autos Legacy OEMs": ["TM","HMC","F","GM","STLA"],
         "Electric Vehicles": ["TSLA","RIVN","LCID","NIO","LI","XPEV"],
-        "Luxury and Apparel": ["TPR","RL","CPRI","LVMUY","KER.PA"],
+        "Luxury and Apparel": ["TPR","RL","CPRI","LVMUY"],
+
+        # New: retail structure split (inventory risk vs asset-light)
+        "Retail Asset-Heavy Inventory Risk": ["WMT","TGT","COST","BBY","M","GPS","KSS","BBWI"],
+        "Retail Asset-Light Platforms and Marketplaces": ["AMZN","EBAY","ETSY","SHOP","PDD","MELI"],
     },
 
     "Defensives and Staples": {
@@ -157,7 +183,66 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Crypto Proxies": ["COIN","MSTR","MARA","RIOT","BITO"],
         "China Tech ADRs": ["BABA","BIDU","JD","PDD","BILI","NTES","TCEHY"],
         "EM Internet and Commerce": ["MELI","SE","NU","STNE"],
-    }
+    },
+
+    # -----------------------------
+    # NEW: Regime Diagnostics (state coverage)
+    # -----------------------------
+    "Regime Diagnostics": {
+        # Rates and duration diagnostics
+        "Long-Duration Equities": ["ARKK","IPO","IGV","SNOW","NET","DDOG","MDB","SHOP"],
+        "Short-Duration Cash Flow": ["BRK-B","PGR","CB","ICE","CME","NDAQ","SPGI","MSCI"],
+        "Yield Proxies": ["XLU","VZ","T","KMI","EPD","ENB"],
+        "Rate-Sensitive Cyclicals": ["ITB","XHB","CVNA","COF","DFS","AXP","SYF"],
+
+        # Labor vs capital
+        "Labor-Intensive Services": ["SBUX","CMG","DRI","MAR","HLT","RCL","CCL"],
+        "Automation and Productivity Winners": ["ROK","ABB","ETN","PH","CGNX","ISRG","SYM","TER"],
+        "IT Services and Outsourcing": ["ACN","IBM","CTSH","EPAM","GIB"],
+        "Staffing and Wage-Sensitive Names": ["RHI","MAN","KFY","ASGN"],
+
+        # Credit and balance sheet
+        "Leveraged Cyclicals": ["CCL","RCL","NCLH","AAL","UAL","DAL","MGM","LVS"],
+        "Net-Cash Compounders": ["AAPL","MSFT","GOOGL","META","ORCL","ADBE","INTU","V"],
+        "Equity Credit Stress Proxies": ["HYG","JNK","LQD"],
+        "Financial Conditions Sensitive": ["IWM","XLY","KRE","HYG","ARKK"],
+
+        # Global and FX-sensitive
+        "Dollar-Up Winners": ["XLK","XLC","XLY","IYT"],     # domestic/services tilt
+        "Dollar-Down Beneficiaries": ["XME","GDX","EEM","EWZ"],
+        "Commodity FX Equities": ["EWC","EWA","EWZ","EWW"],
+        "EM Domestic Demand": ["EEM","INDA","EWW","EWZ","EIDO"],
+    },
+
+    # -----------------------------
+    # NEW: Sector Expansions (distinct transmission channels)
+    # -----------------------------
+    "Sector Expansions": {
+        # Transportation and freight
+        "Transportation Rails and Trucking": ["UNP","CSX","NSC","CNI","CP","JBHT","KNX"],
+        "Transportation Parcel and Last-Mile": ["FDX","UPS","GXO","XPO"],
+        "Air Cargo and Leasing": ["ATSG","AL","FTAI"],
+
+        # Chemicals and industrial inputs
+        "Commodity Chemicals": ["DOW","LYB","CE"],
+        "Specialty Chemicals": ["SHW","EMN","IFF","PPG"],
+        "Industrial Gases": ["LIN","APD"],
+
+        # Media, advertising, attention economy
+        "Digital Advertising Platforms": ["GOOGL","META","TTD","PINS","SNAP"],
+        "Traditional Media and Content": ["DIS","WBD","PARA","CHTR","CMCSA"],
+        "Marketing Services and Agencies": ["IPG","OMC","WPP"],
+
+        # Government-exposed services
+        "Gov IT and Services": ["SAIC","CACI","LDOS","BAH","PSN","G"],
+        "Public-Sector Systems Integration": ["ACN","IBM","CTSH","EPAM"],
+
+        # Policy and fiscal sensitivity
+        "Defense and Security Spending": ["LMT","NOC","RTX","GD","LHX","HII","TDG"],
+        "Infrastructure and Grid Spend": ["PWR","ETN","VRT","ABB","CAT","URI","VMC","MLM"],
+        "Healthcare Policy Sensitive": ["UNH","HUM","CI","ELV","CNC","CVS"],
+        "Energy Subsidy and Transition Plays": ["FSLR","ENPH","BE","PLUG","NEE","VST","ICLN"],
+    },
 }
 
 ALL_BASKETS = {bk: tks for cat in CATEGORIES.values() for bk, tks in cat.items()}
@@ -310,10 +395,9 @@ def color_ret(x):
         s = min(abs(x)/20.0, 1.0)
         g = int(255 - 90*s)
         return f"rgb({int(240-120*s)},{g},{int(240-120*s)})"
-    else:
-        s = min(abs(x)/20.0, 1.0)
-        r = int(255 - 90*s)
-        return f"rgb({r},{int(240-120*s)},{int(240-120*s)})"
+    s = min(abs(x)/20.0, 1.0)
+    r = int(255 - 90*s)
+    return f"rgb({r},{int(240-120*s)},{int(240-120*s)})"
 
 def color_rsi(x):
     if pd.isna(x):
@@ -398,15 +482,12 @@ def build_panel_df(
         if s.shape[0] < 10:
             continue
 
-        # Returns
         r5d = (s.iloc[-1] / s.iloc[-6]) - 1.0 if len(s) > 6 else np.nan
         r1m = pct_since(s, s.index.max() - pd.DateOffset(months=1))
 
-        # Dynamic window
         start_idx = s.index[s.index.get_indexer([pd.Timestamp(ref_start)], method="backfill")]
         r_dyn = pct_since(s, start_idx[0]) if len(start_idx) and start_idx[0] in s.index else np.nan
 
-        # Indicators (compute once)
         rsi_d = rsi(s, 14)
         rsi_14d = rsi_d.iloc[-1] if rsi_d.dropna().shape[0] > 0 else np.nan
 
@@ -421,13 +502,11 @@ def build_panel_df(
 
         ema_tag = ema_regime(s, 4, 9, 18)
 
-        # Vol
         rv = realized_vol(basket_returns[b], 63, 252)
         rv_rel = np.nan
         if pd.notna(rv) and pd.notna(spy_rv) and spy_rv != 0:
             rv_rel = rv / spy_rv
 
-        # Rolling corr to SPY (63D)
         corr_spy = np.nan
         if benchmark_series is not None:
             merged = pd.concat(
@@ -516,7 +595,6 @@ def plot_panel_table(panel_df: pd.DataFrame):
     values.append(vals)
     fill_colors.append([color_corr(v) for v in vals])
 
-    # widths sum ~1
     col_widths = [0.22, 0.06, 0.06, 0.085, 0.085, 0.145, 0.105, 0.075, 0.075, 0.075, 0.05]
 
     fig_tbl = go.Figure(data=[go.Table(
