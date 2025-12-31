@@ -69,91 +69,119 @@ lookback_dict = {
 period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
 period_days = int(lookback_dict[period_label])
 
-# --------------------------- ETF COVERAGE ---------------------------
+# --------------------------- ETF COVERAGE (GLOBAL + COUNTRY COMPLETE) ---------------------------
 etf_info = {
-    # Sectors (SPDR + comms)
-    "XLB": ("US Materials", "S&P 500 materials sector"),
-    "XLC": ("US Communication Services", "S&P 500 communication services sector"),
-    "XLE": ("US Energy", "S&P 500 energy sector"),
-    "XLF": ("US Financials", "S&P 500 financial sector"),
-    "XLI": ("US Industrials", "S&P 500 industrial sector"),
-    "XLK": ("US Technology", "S&P 500 technology sector"),
-    "XLP": ("US Staples", "S&P 500 consumer staples sector"),
-    "XLRE": ("US Real Estate", "S&P 500 real estate sector"),
-    "XLU": ("US Utilities", "S&P 500 utilities sector"),
-    "XLV": ("US Healthcare", "S&P 500 healthcare sector"),
-    "XLY": ("US Discretionary", "S&P 500 consumer discretionary sector"),
 
-    # Semis / software / AI plumbing
-    "SMH": ("Semiconductors", "VanEck Semiconductor ETF"),
-    "SOXX": ("Semiconductors", "iShares Semiconductor ETF"),
-    "IGV": ("Software", "iShares Expanded Tech-Software Sector ETF"),
-    "SKYY": ("Cloud", "First Trust Cloud Computing ETF"),
+    # ==================== US EQUITY CORE ====================
+    "VTI": ("US Total Market", "Total US equity market"),
+    "VUG": ("US Growth", "Large-cap growth"),
+    "VTV": ("US Value", "Large-cap value"),
+    "MTUM": ("US Momentum", "Momentum factor"),
+    "QUAL": ("US Quality", "Quality factor"),
+    "USMV": ("US Min Vol", "Minimum volatility"),
+    "SCHD": ("US Dividends", "Dividend growth and yield"),
 
-    # Factors / styles
-    "VTV": ("US Value", "Vanguard Value ETF"),
-    "VUG": ("US Growth", "Vanguard Growth ETF"),
-    "IWD": ("US Value", "iShares Russell 1000 Value ETF"),
-    "IWF": ("US Growth", "iShares Russell 1000 Growth ETF"),
-    "MTUM": ("US Momentum", "Momentum factor US equities"),
-    "USMV": ("US Min Volatility", "Low volatility US equities"),
-    "QUAL": ("US Quality", "iShares MSCI USA Quality Factor ETF"),
-    "VLUE": ("US Value Factor", "Value factor US equities"),
-    "SCHD": ("US Dividends", "Schwab U.S. Dividend Equity ETF"),
+    # ==================== US SECTORS ====================
+    "XLB": ("US Materials", "S&P 500 Materials"),
+    "XLC": ("US Communication Services", "S&P 500 Communication Services"),
+    "XLE": ("US Energy", "S&P 500 Energy"),
+    "XLF": ("US Financials", "S&P 500 Financials"),
+    "XLI": ("US Industrials", "S&P 500 Industrials"),
+    "XLK": ("US Technology", "S&P 500 Technology"),
+    "XLP": ("US Staples", "S&P 500 Consumer Staples"),
+    "XLRE": ("US Real Estate", "S&P 500 Real Estate"),
+    "XLU": ("US Utilities", "S&P 500 Utilities"),
+    "XLV": ("US Healthcare", "S&P 500 Healthcare"),
+    "XLY": ("US Discretionary", "S&P 500 Consumer Discretionary"),
 
-    # International equity
-    "ACWI": ("Global Equity", "MSCI ACWI"),
-    "VEA": ("Developed ex-US", "Vanguard FTSE Developed Markets ETF"),
-    "VXUS": ("Total ex-US", "Vanguard Total International Stock ETF"),
-    "VWO": ("Emerging Markets", "Vanguard FTSE Emerging Markets ETF"),
-    "EFA": ("Developed ex-US", "iShares MSCI EAFE ETF"),
-    "EEM": ("Emerging Markets", "iShares MSCI Emerging Markets ETF"),
-    "VGK": ("Europe Large-Cap", "Developed Europe equities"),
-    "EWJ": ("Japan", "Japanese equities"),
-    "FXI": ("China Large-Cap", "China mega-cap equities"),
-    "KWEB": ("China Internet", "China internet equities"),
-    "INDA": ("India", "Indian equities"),
-    "EWZ": ("Brazil", "Brazilian equities"),
-    "EWG": ("Germany", "German equities"),
-    "EWU": ("UK", "UK equities"),
+    # ==================== TECH / AI ====================
+    "SMH": ("Semiconductors", "Global semiconductor equities"),
+    "IGV": ("Software", "US application software"),
+    "SKYY": ("Cloud", "Cloud infrastructure and services"),
 
-    # Fixed income (rates)
-    "BIL": ("T-Bills", "1-3 month T-Bills"),
-    "SGOV": ("T-Bills", "0-3 month T-Bills"),
-    "SHY": ("UST 1-3y", "Short-term US Treasuries"),
-    "IEI": ("UST 3-7y", "Intermediate US Treasuries"),
-    "IEF": ("UST 7-10y", "Intermediate US Treasuries"),
-    "TLT": ("UST 20y+", "Long-term US Treasuries"),
-    "TIP": ("TIPS", "Inflation-protected Treasuries"),
-    "LQD": ("US IG Credit", "Investment-grade corporates"),
-    "HYG": ("US High Yield", "High-yield corporate bonds"),
-    "JNK": ("US High Yield", "High-yield corporate bonds"),
-    "EMB": ("EM Debt", "USD-denominated EM debt"),
-    "BND": ("US Agg", "US Total Bond Market"),
+    # ==================== GLOBAL EQUITY STRUCTURE ====================
+    "VT": ("Global Equity", "Total world equity market"),
+    "ACWI": ("Global Equity ex-Frontier", "All-country world equity"),
+    "VEA": ("Developed ex-US", "Developed markets ex-US"),
+    "VWO": ("Emerging Markets", "Emerging markets equity"),
+    "EXUS": ("Non-US Equity", "Global equity ex-US"),
 
-    # Commodities
-    "GLD": ("Gold", "SPDR Gold Trust"),
-    "IAU": ("Gold", "iShares Gold Trust"),
-    "SLV": ("Silver", "iShares Silver Trust"),
-    "USO": ("Crude Oil", "US Oil Fund"),
-    "DBO": ("Crude Oil", "Invesco DB Oil Fund"),
-    "DBC": ("Broad Commodities", "Invesco DB Commodity Index ETF"),
+    # ==================== EUROPE COUNTRY ETFS ====================
+    "EWG": ("Germany", "Germany equities"),
+    "EWQ": ("France", "France equities"),
+    "EWU": ("United Kingdom", "UK equities"),
+    "EWI": ("Italy", "Italy equities"),
+    "EWP": ("Spain", "Spain equities"),
+    "EWL": ("Switzerland", "Switzerland equities"),
+    "EWN": ("Netherlands", "Netherlands equities"),
+    "EWD": ("Sweden", "Sweden equities"),
+    "EWO": ("Austria", "Austria equities"),
+    "EWK": ("Belgium", "Belgium equities"),
 
-    # Volatility / hedging
-    "VXX": ("Equity Volatility", "Short-term VIX futures ETN/ETF wrapper"),
-    "SVXY": ("Equity Volatility", "Short VIX futures strategy wrapper"),
+    # ==================== ASIA COUNTRY ETFS ====================
+    "EWJ": ("Japan", "Japan equities"),
+    "EWY": ("South Korea", "Korea equities"),
+    "ASHR": ("China A-Shares", "Onshore China equities"),
+    "FXI": ("China Large-Cap", "China offshore large caps"),
+    "EWT": ("Taiwan", "Taiwan equities"),
+    "INDA": ("India", "India equities"),
+    "EWS": ("Singapore", "Singapore equities"),
+    "EWA": ("Australia", "Australia equities"),
+    "EWH": ("Hong Kong", "Hong Kong equities"),
+    "EPHE": ("Philippines", "Philippines equities"),
+    "EWM": ("Malaysia", "Malaysia equities"),
+    "IDX": ("Indonesia", "Indonesia equities"),
+    "THD": ("Thailand", "Thailand equities"),
+    "VNM": ("Vietnam", "Vietnam equities"),
 
-    # Currency wrappers
-    "UUP": ("USD", "US Dollar Index bullish wrapper"),
-    "FXE": ("EURUSD", "Euro trust"),
-    "FXY": ("USDJPY", "Japanese yen trust"),
-    "FXB": ("GBPUSD", "British pound trust"),
+    # ==================== LATAM COUNTRY ETFS ====================
+    "EWZ": ("Brazil", "Brazil equities"),
+    "EWW": ("Mexico", "Mexico equities"),
+    "EWC": ("Canada", "Canada equities"),
+    "EWA": ("Australia", "Australia equities"),
+    "EPU": ("Peru", "Peru equities"),
+    "ECH": ("Chile", "Chile equities"),
+    "ARGT": ("Argentina", "Argentina equities"),
+    "GXG": ("Colombia", "Colombia equities"),
 
-    # Crypto ETFs
-    "ETH": ("Spot ETH", "Grayscale Ethereum Mini Trust ETF"),
-    "IBIT": ("Spot BTC", "BlackRock Spot Bitcoin ETF"),
+    # ==================== FIXED INCOME / RATES ====================
+    "SGOV": ("UST Bills", "0-3 month Treasuries"),
+    "SHY": ("UST 1-3y", "Short-term Treasuries"),
+    "IEF": ("UST 7-10y", "Intermediate Treasuries"),
+    "TLT": ("UST 20y+", "Long-duration Treasuries"),
+    "TIP": ("TIPS", "Inflation-linked Treasuries"),
+    "LQD": ("IG Credit", "Investment-grade corporates"),
+    "VCIT": ("IG Credit Duration", "Intermediate IG corporates"),
+    "HYG": ("High Yield", "High-yield credit"),
+    "BKLN": ("Floating-Rate Credit", "Senior loans"),
+    "EMB": ("EM Debt", "USD EM sovereign debt"),
+    "BND": ("US Aggregate", "Total US bond market"),
+
+    # ==================== COMMODITIES / REAL ASSETS ====================
+    "GLD": ("Gold", "Gold bullion"),
+    "SLV": ("Silver", "Silver bullion"),
+    "CPER": ("Copper", "Industrial copper"),
+    "USO": ("Crude Oil", "WTI crude oil"),
+    "DBC": ("Broad Commodities", "Commodity basket"),
+    "PDBC": ("Broad Commodities Alt", "Rules-based commodities"),
+    "URA": ("Uranium", "Nuclear fuel cycle"),
+
+    # ==================== VOLATILITY / HEDGING ====================
+    "VXX": ("Equity Volatility", "Front-end VIX futures"),
+
+    # ==================== FX / FUNDING ====================
+    "UUP": ("USD", "US Dollar Index"),
+    "FXE": ("EURUSD", "Euro vs USD"),
+    "FXY": ("USDJPY", "Japanese Yen"),
+    "FXF": ("CHFUSD", "Swiss franc"),
+    "CEW": ("EM FX", "Emerging market currencies"),
+
+    # ==================== CRYPTO ====================
+    "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
+    "ETH": ("Ethereum", "Spot Ethereum ETF"),
 }
-etf_tickers: List[str] = list(etf_info.keys())
+
+etf_tickers = list(etf_info.keys())
 
 # --------------------------- HELPERS ---------------------------
 def fmt_compact_cur(x) -> str:
