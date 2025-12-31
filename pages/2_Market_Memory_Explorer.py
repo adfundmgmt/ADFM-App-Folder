@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from matplotlib.ticker import FuncFormatter, MultipleLocator
+from matplotlib.ticker import FuncFormatter, MultipleLocator, MaxNLocator
 
 plt.style.use("default")
 
@@ -88,16 +88,12 @@ def safe_corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(x, y)[0, 1])
 
 def distinct_palette(n: int):
-    """
-    Greedy max-min selection from a pool of strong, high-contrast qualitative colors.
-    Filters out pale/pastel candidates so analog lines stay easy to separate on white.
-    """
     if n <= 0:
         return []
 
     cmap_names = ["tab10", "Dark2", "Set1", "tab20", "tab20b", "tab20c", "Paired", "Accent"]
-
     candidates = []
+
     for name in cmap_names:
         cmap = plt.cm.get_cmap(name)
         if hasattr(cmap, "colors"):
@@ -105,19 +101,14 @@ def distinct_palette(n: int):
         else:
             candidates.extend([tuple(cmap(x)[:3]) for x in np.linspace(0, 1, 24)])
 
-    def key_255(rgb):
-        return tuple(int(round(x * 255)) for x in rgb)
-
-    # Deduplicate
     uniq = []
     seen = set()
     for c in candidates:
-        k = key_255(c)
+        k = tuple(int(round(x * 255)) for x in c)
         if k not in seen:
             seen.add(k)
             uniq.append(c)
 
-    # Keep saturated, darker-ish colors (avoid pastels)
     strong = []
     for rgb in uniq:
         h, s, v = colorsys.rgb_to_hsv(*rgb)
@@ -127,45 +118,20 @@ def distinct_palette(n: int):
     pool = strong if len(strong) >= n else uniq
 
     def dist(a, b):
-        a = np.array(a, dtype=float)
-        b = np.array(b, dtype=float)
-        return float(np.sqrt(np.sum((a - b) ** 2)))
+        return float(np.linalg.norm(np.array(a) - np.array(b)))
 
-    def sat(rgb):
-        return colorsys.rgb_to_hsv(*rgb)[1]
-
-    chosen = [max(pool, key=sat)]
-    if n == 1:
-        return chosen
-
+    chosen = [max(pool, key=lambda c: colorsys.rgb_to_hsv(*c)[1])]
     remaining = [c for c in pool if c != chosen[0]]
-    while len(chosen) < n and remaining:
-        best_i, best_min = None, -1.0
-        for i, c in enumerate(remaining):
-            dmin = min(dist(c, ch) for ch in chosen)
-            if dmin > best_min:
-                best_min = dmin
-                best_i = i
-        chosen.append(remaining.pop(best_i))
 
-    # Absolute fallback if pool is exhausted
-    if len(chosen) < n:
-        extra = list(plt.cm.get_cmap("tab20")(np.linspace(0, 1, n)))  # returns RGBA
-        for c in extra:
-            rgb = tuple(c[:3])
-            if rgb not in chosen:
-                chosen.append(rgb)
-            if len(chosen) == n:
-                break
+    while len(chosen) < n and remaining:
+        best = max(remaining, key=lambda c: min(dist(c, ch) for ch in chosen))
+        chosen.append(best)
+        remaining.remove(best)
 
     return chosen[:n]
 
 # ── Build YTD paths ──────────────────────────────────────────────────────
-try:
-    raw = load_history(ticker)
-except Exception as e:
-    st.error(f"Download failed – {e}")
-    st.stop()
+raw = load_history(ticker)
 
 paths = {}
 for yr, grp in raw.groupby("Year"):
@@ -176,21 +142,13 @@ for yr, grp in raw.groupby("Year"):
     ytd.index = np.arange(1, len(ytd) + 1)
     paths[yr] = ytd
 
-if not paths:
-    st.error("No usable yearly data found.")
-    st.stop()
-
 ytd_df = pd.DataFrame(paths)
 
 this_year = dt.datetime.now().year
-if this_year not in ytd_df.columns:
-    st.warning(f"No YTD data for {this_year}")
-    st.stop()
-
 current = ytd_df[this_year].dropna()
 n_days = len(current)
 
-# ── Correlations (selection uses ONLY first n_days) ──────────────────────
+# ── Correlations ─────────────────────────────────────────────────────────
 corrs = {}
 for yr, ser in ytd_df.items():
     if yr == this_year:
@@ -202,62 +160,21 @@ for yr, ser in ytd_df.items():
     if np.isfinite(rho) and rho >= min_corr:
         corrs[yr] = rho
 
-if not corrs:
-    st.warning("No historical years meet the correlation cutoff.")
-    st.stop()
+top = sorted(corrs.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
 
-# ── Filters ──────────────────────────────────────────────────────────────
-def keep_year(yr: int) -> bool:
-    ser = ytd_df[yr].dropna()
-    if len(ser) < n_days:
-        return False
-
-    ret_n = ser.iloc[n_days - 1]
-
-    daily_ret = (1 + ser).div((1 + ser).shift(1)).sub(1)
-    max_d = daily_ret.iloc[:n_days].abs().max()
-
-    if f_outliers and not (lo / 100 <= ret_n <= hi / 100):
-        return False
-    if f_jumps and max_d > max_jump / 100:
-        return False
-    return True
-
-eligible = {yr: rho for yr, rho in corrs.items() if keep_year(yr)}
-if not eligible:
-    st.info("All candidates excluded by your filters.")
-    st.stop()
-
-top = sorted(eligible.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-
-# ── Metrics ──────────────────────────────────────────────────────────────
-current_ret = float(current.iloc[-1])
-finals = [float(ytd_df[yr].dropna().iloc[-1]) for yr, _ in top]
-median_final = float(np.nanmedian(finals)) if finals else np.nan
-sigma_final = float(np.nanstd(finals)) if finals else np.nan
-
-fmt = lambda x: "N/A" if np.isnan(x) else f"{x:.2%}"
-
-m1, m2, m3 = st.columns(3)
-m1.metric(f"{this_year} YTD", fmt(current_ret))
-m2.metric("Median Full-Year Return (Analogs)", fmt(median_final))
-m3.metric("Analog Dispersion (σ)", fmt(sigma_final))
-
-st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
-
-# ── Plot (FULL YEAR FOR HISTORICAL ANALOGS) ──────────────────────────────
+# ── Plot ─────────────────────────────────────────────────────────────────
 palette = distinct_palette(len(top))
 fig, ax = plt.subplots(figsize=(14, 7))
 
-for idx, (yr, rho) in enumerate(top):
-    ser_full = ytd_df[yr].dropna()
+for i, (yr, rho) in enumerate(top):
+    ser = ytd_df[yr].dropna()
     ax.plot(
-        ser_full.index,
-        ser_full.values,
-        "--",                # dashed analogs (as requested)
+        ser.index,
+        ser.values,
+        "--",
         lw=2.3,
         alpha=0.95,
-        color=palette[idx],
+        color=palette[i],
         label=f"{yr} (ρ={rho:.2f})",
     )
 
@@ -272,15 +189,22 @@ ax.axhline(0, color="gray", ls="--", lw=1)
 xmax = max(len(ytd_df[c].dropna()) for c in ytd_df.columns)
 ax.set_xlim(1, xmax)
 
+# ✅ CLEAN, DYNAMIC X AXIS
+ax.xaxis.set_major_locator(MaxNLocator(nbins=7, integer=True))
+ax.xaxis.set_minor_locator(MultipleLocator(1e9))
+plt.setp(ax.get_xticklabels(), rotation=0, ha="center")
+
+# Y axis formatting
 all_y = np.hstack([current.values] + [ytd_df[yr].dropna().values for yr, _ in top])
 ymin, ymax = float(np.min(all_y)), float(np.max(all_y))
-pad = 0.06 * (ymax - ymin) if ymax > ymin else 0.02
+pad = 0.06 * (ymax - ymin)
 ax.set_ylim(ymin - pad, ymax + pad)
 
 span = ax.get_ylim()[1] - ax.get_ylim()[0]
 raw_step = max(span / 12, 0.0025)
 candidates = np.array([0.0025, 0.005, 0.01, 0.02, 0.025, 0.05, 0.10, 0.20, 0.25, 0.50, 1.00])
 step = float(candidates[np.argmin(np.abs(candidates - raw_step))])
+
 ax.yaxis.set_major_locator(MultipleLocator(step))
 ax.yaxis.set_minor_locator(MultipleLocator(step / 2))
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
@@ -288,6 +212,6 @@ ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
 ax.grid(True, ls=":", lw=0.7, color="#888")
 ax.legend(loc="best", frameon=False, ncol=2, fontsize=11)
 plt.tight_layout()
-st.pyplot(fig)
 
+st.pyplot(fig)
 st.caption("© 2025 AD Fund Management LP")
