@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from matplotlib.ticker import FuncFormatter, MultipleLocator, MaxNLocator
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 plt.style.use("default")
 
@@ -189,10 +189,12 @@ ax.axhline(0, color="gray", ls="--", lw=1)
 xmax = max(len(ytd_df[c].dropna()) for c in ytd_df.columns)
 ax.set_xlim(1, xmax)
 
-# ✅ CLEAN, DYNAMIC X AXIS
-ax.xaxis.set_major_locator(MaxNLocator(nbins=7, integer=True))
+# deterministic, sparse x axis
+xticks = np.linspace(1, xmax, 7, dtype=int)
+ax.set_xticks(xticks)
+ax.set_xticklabels([str(x) for x in xticks])
+ax.tick_params(axis="x", which="both", length=0)
 ax.xaxis.set_minor_locator(MultipleLocator(1e9))
-plt.setp(ax.get_xticklabels(), rotation=0, ha="center")
 
 # Y axis formatting
 all_y = np.hstack([current.values] + [ytd_df[yr].dropna().values for yr, _ in top])
@@ -209,7 +211,7 @@ ax.yaxis.set_major_locator(MultipleLocator(step))
 ax.yaxis.set_minor_locator(MultipleLocator(step / 2))
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
 
-ax.grid(True, ls=":", lw=0.7, color="#888")
+ax.grid(True, axis="y", ls=":", lw=0.7, color="#888")
 ax.legend(loc="best", frameon=False, ncol=2, fontsize=11)
 plt.tight_layout()
 
