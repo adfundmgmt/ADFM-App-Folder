@@ -35,13 +35,13 @@ PASTEL = [
 MIN_MARKET_CAP = 1_000_000_000
 
 MARKET_CAP_EXCEPTIONS = set([
-    # Example: "UUUU","UEC","URG","UROY","DNN","NXE","LEU"
     # Add exceptions here if you want smaller-cap baskets to pass the filter
+    # Examples: "UUUU","UEC","URG","UROY","DNN","NXE","LEU"
 ])
 
 # -----------------------------
 # CATEGORY -> BASKETS -> TICKERS
-# Expanded per your diagnostic + sector additions
+# Rule: every basket has at least 3 names
 # -----------------------------
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
@@ -100,8 +100,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Nuclear and Grid Buildout": ["VST","CEG","BWXT","LEU","ETN","VRT"],
         "Metals and Mining": ["BHP","RIO","VALE","FCX","NEM","TECK","SCCO","AA"],
         "Gold and Silver Miners": ["GDX","GDXJ","NEM","AEM","GOLD","KGC","AG","PAAS","WPM"],
-
-        # New: energy split (midstream, refining)
         "Energy Midstream and Storage": ["KMI","WMB","EPD","ET","ENB","MPLX"],
         "Refining and Downstream": ["MPC","VLO","PSX","DK","PBF"],
     },
@@ -120,8 +118,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "MedTech Devices": ["MDT","SYK","ISRG","BSX","ZBH","EW","PEN"],
         "Diagnostics and Tools": ["TMO","DHR","A","RGEN","ILMN"],
         "Healthcare Payers": ["UNH","HUM","CI","ELV","CNC","MOH"],
-
-        # New: healthcare services split
         "Healthcare Providers and Hospitals": ["HCA","THC","UHS","CYH"],
         "Healthcare Services and Outsourcing": ["LH","DGX","AMN","EHC"],
     },
@@ -134,8 +130,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Credit and Specialty Finance": ["MS","GS","BX","KKR","ARES","MAIN","ARCC"],
         "Mortgage Finance": ["RKT","UWMC","COOP","FNF","NMIH","ESNT"],
         "Insurers": ["BRK-B","CB","TRV","PGR","AIG","MET"],
-
-        # New: insurance sector lens (real-rate diagnostics)
         "Insurance P&C": ["PGR","TRV","CB","ALL","CINF"],
         "Insurance Life and Retirement": ["MET","PRU","LNC","AIG"],
         "Reinsurers": ["RNR","RE","EG"],
@@ -148,8 +142,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Industrials and Infrastructure": ["CAT","DE","URI","PWR","VMC","MLM","NUE"],
         "Shipping and Logistics": ["FDX","UPS","GXO","XPO","ZIM","MATX","DAC"],
         "Agriculture and Machinery": ["MOS","NTR","DE","CNHI","ADM","BG","CF","AGCO"],
-
-        # New: housing and shelter plumbing
         "Housing Home Improvement and Repair": ["HD","LOW","TSCO","POOL"],
         "Housing Building Products and Materials": ["BLDR","TREX","MAS","VMC","MLM","SUM"],
         "Housing Mortgage and Title": ["COOP","RKT","UWMC","FNF","FAF"],
@@ -165,8 +157,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Autos Legacy OEMs": ["TM","HMC","F","GM","STLA"],
         "Electric Vehicles": ["TSLA","RIVN","LCID","NIO","LI","XPEV"],
         "Luxury and Apparel": ["TPR","RL","CPRI","LVMUY"],
-
-        # New: retail structure split (inventory risk vs asset-light)
         "Retail Asset-Heavy Inventory Risk": ["WMT","TGT","COST","BBY","M","GPS","KSS","BBWI"],
         "Retail Asset-Light Platforms and Marketplaces": ["AMZN","EBAY","ETSY","SHOP","PDD","MELI"],
     },
@@ -185,63 +175,69 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "EM Internet and Commerce": ["MELI","SE","NU","STNE"],
     },
 
-    # -----------------------------
-    # NEW: Regime Diagnostics (state coverage)
-    # -----------------------------
     "Regime Diagnostics": {
-        # Rates and duration diagnostics
         "Long-Duration Equities": ["ARKK","IPO","IGV","SNOW","NET","DDOG","MDB","SHOP"],
         "Short-Duration Cash Flow": ["BRK-B","PGR","CB","ICE","CME","NDAQ","SPGI","MSCI"],
         "Yield Proxies": ["XLU","VZ","T","KMI","EPD","ENB"],
         "Rate-Sensitive Cyclicals": ["ITB","XHB","CVNA","COF","DFS","AXP","SYF"],
-
-        # Labor vs capital
         "Labor-Intensive Services": ["SBUX","CMG","DRI","MAR","HLT","RCL","CCL"],
         "Automation and Productivity Winners": ["ROK","ABB","ETN","PH","CGNX","ISRG","SYM","TER"],
         "IT Services and Outsourcing": ["ACN","IBM","CTSH","EPAM","GIB"],
         "Staffing and Wage-Sensitive Names": ["RHI","MAN","KFY","ASGN"],
-
-        # Credit and balance sheet
         "Leveraged Cyclicals": ["CCL","RCL","NCLH","AAL","UAL","DAL","MGM","LVS"],
         "Net-Cash Compounders": ["AAPL","MSFT","GOOGL","META","ORCL","ADBE","INTU","V"],
         "Equity Credit Stress Proxies": ["HYG","JNK","LQD"],
         "Financial Conditions Sensitive": ["IWM","XLY","KRE","HYG","ARKK"],
-
-        # Global and FX-sensitive
-        "Dollar-Up Winners": ["XLK","XLC","XLY","IYT"],     # domestic/services tilt
+        "Dollar-Up Winners": ["XLK","XLC","XLY","IYT"],
         "Dollar-Down Beneficiaries": ["XME","GDX","EEM","EWZ"],
         "Commodity FX Equities": ["EWC","EWA","EWZ","EWW"],
         "EM Domestic Demand": ["EEM","INDA","EWW","EWZ","EIDO"],
     },
 
-    # -----------------------------
-    # NEW: Sector Expansions (distinct transmission channels)
-    # -----------------------------
     "Sector Expansions": {
-        # Transportation and freight
         "Transportation Rails and Trucking": ["UNP","CSX","NSC","CNI","CP","JBHT","KNX"],
         "Transportation Parcel and Last-Mile": ["FDX","UPS","GXO","XPO"],
         "Air Cargo and Leasing": ["ATSG","AL","FTAI"],
-
-        # Chemicals and industrial inputs
         "Commodity Chemicals": ["DOW","LYB","CE"],
         "Specialty Chemicals": ["SHW","EMN","IFF","PPG"],
-        "Industrial Gases": ["LIN","APD"],
-
-        # Media, advertising, attention economy
+        "Industrial Gases": ["LIN","APD","AIQUY"],
         "Digital Advertising Platforms": ["GOOGL","META","TTD","PINS","SNAP"],
         "Traditional Media and Content": ["DIS","WBD","PARA","CHTR","CMCSA"],
         "Marketing Services and Agencies": ["IPG","OMC","WPP"],
-
-        # Government-exposed services
         "Gov IT and Services": ["SAIC","CACI","LDOS","BAH","PSN","G"],
         "Public-Sector Systems Integration": ["ACN","IBM","CTSH","EPAM"],
-
-        # Policy and fiscal sensitivity
         "Defense and Security Spending": ["LMT","NOC","RTX","GD","LHX","HII","TDG"],
         "Infrastructure and Grid Spend": ["PWR","ETN","VRT","ABB","CAT","URI","VMC","MLM"],
         "Healthcare Policy Sensitive": ["UNH","HUM","CI","ELV","CNC","CVS"],
         "Energy Subsidy and Transition Plays": ["FSLR","ENPH","BE","PLUG","NEE","VST","ICLN"],
+    },
+
+    # New: behavior-first economy baskets (like your attached image)
+    "Everyday Economy": {
+        "Recreation and Experiences": ["YETI","FOXF","ASO","DOO","PLAY","LYV","SIX","FUN","RICK"],
+        "Deferred Durables and Home": ["SGI","SNBR","WHR","POOL","LOW","TTC","LAD"],
+        "Deferred Healthcare": ["ALGN","EYE","WRBY","HSIC"],
+        "Debt and Credit Paydown": ["OMF","CACC","SYF","COF","OPFI","ENVA"],
+
+        "Trade-Down Retail and Off-Price": ["TJX","ROST","BURL","FIVE","OLLI"],
+        "Discount and Dollar": ["DG","DLTR","BURL"],
+        "Staple Volume and Clubs": ["WMT","COST","KR"],
+        "Value QSR": ["MCD","YUM","QSR","WEN","DPZ"],
+
+        "Auto Parts and Repair": ["AZO","ORLY","AAP","LKQ"],
+        "Home Repair and Maintenance": ["HD","LOW","POOL","TSCO"],
+        "Used Auto and Affordability": ["KMX","CVNA","LAD"],
+
+        "Shelter and Rent Economy": ["INVH","AMH","AVB","EQR","UDR","MAA","ESS"],
+        "Manufactured Housing Affordability": ["ELS","SUI","CUBE"],
+        "Storage and Mobility Stress": ["PSA","EXR","CUBE"],
+
+        "Freight and Parcels": ["UNP","CSX","NSC","JBHT","KNX","SAIA","ODFL","FDX","UPS","CHRW","XPO","GXO"],
+        "Consumer Credit Stress": ["SYF","COF","DFS","ALLY","OMF","ENVA"],
+        "Payroll and Staffing": ["ADP","PAYX","RHI","MAN","KFY","ASGN"],
+
+        "Budget Hotels and Value Travel": ["CHH","WH","RYAAY"],
+        "Chemicals Feedstock Sensitivity": ["DOW","LYB","WLK","OLN","CF","NTR","MOS"],
     },
 }
 
