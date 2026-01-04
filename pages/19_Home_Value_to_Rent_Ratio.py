@@ -1,5 +1,4 @@
 import io
-import time
 from pathlib import Path
 
 import numpy as np
@@ -29,11 +28,11 @@ with st.sidebar:
     st.markdown(
         """
         This tool recreates the **Home Value to Rent Ratio** using transparent,
-        publicly available macro housing data.
+        publicly available housing data and robust proxy stitching.
 
         What it shows:
 
-        • A valuation multiple for housing similar to a P/E ratio  
+        • A valuation multiple for housing analogous to a P/E ratio  
         • Historical housing bubbles and post-crisis resets  
         • Long-run mean reversion behavior across cycles  
 
@@ -53,8 +52,12 @@ with st.sidebar:
 st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>", unsafe_allow_html=True)
 
 # ── Helpers ───────────────────────────────────────────────────────────────
-def fetch_bytes(url: str) -> bytes:
-    r = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+def fetch_bytes(url: str, headers=None) -> bytes:
+    r = requests.get(
+        url,
+        headers=headers or {"User-Agent": "Mozilla/5.0"},
+        timeout=30,
+    )
     r.raise_for_status()
     return r.content
 
@@ -66,13 +69,65 @@ def fred_series(series_id: str) -> pd.Series:
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     return df.set_index("date")["value"].dropna()
 
-def zillow_national_series(url: str) -> pd.Series:
-    df = pd.read_csv(io.BytesIO(fetch_bytes(url)))
-    row = df.loc[df["RegionName"] == "United States"].iloc[0]
-    cols = [c for c in df.columns if c[:4].isdigit()]
-    s = row[cols].astype(float)
-    s.index = pd.to_datetime(cols)
-    return s.sort_index().dropna()
+def zillow_zhvi_with_fallback() -> pd.Series:
+    urls = [
+        "https://files.zillowstatic.com/research/public_csvs/zhvi/"
+        "Nation_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv",
+        "https://files.zillowstatic.com/research/public_csvs/zhvi/"
+        "Nation_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv?t=1",
+    ]
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/121.0 Safari/537.36"
+        )
+    }
+
+    for url in urls:
+        try:
+            df = pd.read_csv(io.BytesIO(fetch_bytes(url, headers=headers)))
+            row = df.loc[df["RegionName"] == "United States"].iloc[0]
+            cols = [c for c in df.columns if c[:4].isdigit()]
+            s = row[cols].astype(float)
+            s.index = pd.to_datetime(cols)
+            return s.sort_index().dropna()
+        except Exception:
+            continue
+
+    st.warning("Zillow ZHVI unavailable. Falling back to FRED ZHVI proxy.")
+    return fred_series("USAUCSFRCONDOSMSAMID")
+
+def zillow_zori_with_fallback() -> pd.Series:
+    urls = [
+        "https://files.zillowstatic.com/research/public_csvs/zori/"
+        "Nation_zori_uc_sfrcondomfr_sm_sa_month.csv",
+        "https://files.zillowstatic.com/research/public_csvs/zori/"
+        "Nation_zori_uc_sfrcondomfr_sm_sa_month.csv?t=1",
+    ]
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/121.0 Safari/537.36"
+        )
+    }
+
+    for url in urls:
+        try:
+            df = pd.read_csv(io.BytesIO(fetch_bytes(url, headers=headers)))
+            row = df.loc[df["RegionName"] == "United States"].iloc[0]
+            cols = [c for c in df.columns if c[:4].isdigit()]
+            s = row[cols].astype(float)
+            s.index = pd.to_datetime(cols)
+            return s.sort_index().dropna()
+        except Exception:
+            continue
+
+    st.warning("Zillow ZORI unavailable. Falling back to CPI Rent proxy only.")
+    return None
 
 def splice(left: pd.Series, right: pd.Series, start: str, end: str) -> pd.Series:
     overlap = pd.concat([left, right], axis=1).dropna().loc[start:end]
@@ -85,21 +140,17 @@ def splice(left: pd.Series, right: pd.Series, start: str, end: str) -> pd.Series
 def build_ratio():
     # Home prices
     case_shiller = fred_series("CSUSHPINSA")
-    zhvi = zillow_national_series(
-        "https://files.zillowstatic.com/research/public_csvs/zhvi/"
-        "Nation_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv"
-    )
-
+    zhvi = zillow_zhvi_with_fallback()
     home_level = splice(case_shiller, zhvi, "2000-01-01", "2002-12-01")
 
     # Rents
     cpi_rent = fred_series("CUSR0000SEHA")
-    zori = zillow_national_series(
-        "https://files.zillowstatic.com/research/public_csvs/zori/"
-        "Nation_zori_uc_sfrcondomfr_sm_sa_month.csv"
-    )
+    zori = zillow_zori_with_fallback()
 
-    rent_level = splice(cpi_rent, zori, "2015-01-01", "2017-12-01")
+    if zori is not None:
+        rent_level = splice(cpi_rent, zori, "2015-01-01", "2017-12-01")
+    else:
+        rent_level = cpi_rent.copy()
 
     df = pd.concat([home_level, rent_level], axis=1).dropna()
     df.columns = ["home", "rent"]
@@ -133,7 +184,11 @@ ax.text(
 ax.scatter([latest_year], [latest_val], s=90, zorder=5)
 ax.text(latest_year + 0.4, latest_val, "Now", weight="bold")
 
-ax.set_title("Home Value to Rent Ratio (Public Proxy Recreation)", fontsize=16, weight="bold")
+ax.set_title(
+    "Home Value to Rent Ratio (Public Proxy Recreation)",
+    fontsize=16,
+    weight="bold",
+)
 ax.set_ylabel("Home Value / Rent (x)", fontsize=13)
 ax.set_xlabel("")
 ax.set_ylim(12.3, 20.2)
