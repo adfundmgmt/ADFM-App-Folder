@@ -27,20 +27,13 @@ if LOGO_PATH.exists():
     st.image(str(LOGO_PATH), width=70)
 
 st.title("Home Value to Rent Ratio")
-st.subheader("Public proxy recreation (FRED)")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This panel recreates the **Home Value to Rent Ratio** using stable, public FRED series.
-
-        What it is:
-
-        • A valuation multiple for housing analogous to a P/E style lens  
-        • Elevated readings flag price outpacing rent fundamentals across cycles  
-        • Mean reversion can happen through prices, rents, or time  
+        This panel recreates the long-run **Home Value to Rent Ratio** using stable, public FRED series.
 
         Sources (FRED):
 
@@ -48,6 +41,11 @@ with st.sidebar:
         • Rents: CPI Rent of Primary Residence (CUSR0000SEHA)  
         • Recessions: NBER recession indicator (USREC)  
         • Mortgage rates: 30Y fixed (MORTGAGE30US)
+
+        Proxy note:
+
+        The ratio is built from indices. To make the output comparable to the “x multiple” framing,
+        the series is scaled so its long-run median equals 13.9x.
         """
     )
     st.markdown("---")
@@ -55,8 +53,9 @@ with st.sidebar:
     show_mortgage = st.checkbox("Overlay 30Y mortgage rate", value=True)
 
     st.markdown("---")
+    target_median = st.number_input("Target median (x)", value=13.9, step=0.1)
     downturn_floor = st.number_input("Downturn reference (x)", value=12.8, step=0.1)
-    show_median = st.checkbox("Show long-run median", value=True)
+    show_median = st.checkbox("Show median line", value=True)
 
 st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>", unsafe_allow_html=True)
 
@@ -121,80 +120,77 @@ def recession_spans(usrec_monthly: pd.Series) -> List[Tuple[pd.Timestamp, pd.Tim
 
 # ── Build series ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
-def build_all():
-    # Monthly series
+def build_all(target_median_local: float):
     cs_m = to_monthly(fred_series("CSUSHPINSA"), how="mean")
     rent_m = to_monthly(fred_series("CUSR0000SEHA"), how="mean")
 
-    # Ratio (monthly), then annual mean (Reventure-like annual points)
     df = pd.concat([cs_m, rent_m], axis=1, join="inner").dropna()
     df.columns = ["home_index", "rent_index"]
-    df["ratio"] = df["home_index"] / df["rent_index"]
+    df["ratio_raw"] = df["home_index"] / df["rent_index"]
 
-    ratio_y = df["ratio"].resample("Y").mean()
+    ratio_y = df["ratio_raw"].resample("Y").mean()
     ratio_y.index = ratio_y.index.year
 
-    # Recessions (monthly)
+    raw_median = float(ratio_y.median())
+    scale = float(target_median_local) / raw_median if np.isfinite(raw_median) and raw_median != 0 else 1.0
+    ratio_y_scaled = ratio_y * scale
+
     usrec_m = to_monthly(fred_series("USREC"), how="mean")
     usrec_m = usrec_m.reindex(df.index).ffill().dropna()
     spans = recession_spans(usrec_m)
 
-    # Mortgage (weekly -> monthly mean -> annual mean)
     mort = fred_series("MORTGAGE30US")
     mort_m = to_monthly(mort, how="mean")
     mort_y = mort_m.resample("Y").mean()
     mort_y.index = mort_y.index.year
 
-    return ratio_y, spans, mort_y, usrec_m
+    # YoY inflation chart inputs (annualized YoY from monthly indices)
+    home_yoy_m = df["home_index"].pct_change(12) * 100.0
+    rent_yoy_m = df["rent_index"].pct_change(12) * 100.0
 
-ratio_y, rec_spans, mort_y, usrec_m = build_all()
+    home_yoy_y = home_yoy_m.resample("Y").mean()
+    home_yoy_y.index = home_yoy_y.index.year
 
-# ── Metrics ──────────────────────────────────────────────────────────────
-median_val = float(ratio_y.median())
-latest_year = int(ratio_y.index.max())
-latest_ratio = float(ratio_y.loc[latest_year])
-latest_mort = float(mort_y.loc[latest_year]) if latest_year in mort_y.index else np.nan
-in_recession = bool(usrec_m.iloc[-1] > 0.5) if not usrec_m.empty else False
+    rent_yoy_y = rent_yoy_m.resample("Y").mean()
+    rent_yoy_y.index = rent_yoy_y.index.year
 
-m1, m2, m3 = st.columns(3)
-m1.metric(f"{latest_year} Ratio", f"{latest_ratio:.2f}x")
-m2.metric(f"{latest_year} 30Y Mortgage", "N/A" if np.isnan(latest_mort) else f"{latest_mort:.2f}%")
-m3.metric("Recession (USREC)", "Yes" if in_recession else "No")
+    spread_y = (home_yoy_y - rent_yoy_y).rename("Home YoY minus Rent YoY")
 
-st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
+    return ratio_y_scaled, spans, mort_y, home_yoy_y, rent_yoy_y, spread_y
 
-# ── Plot ─────────────────────────────────────────────────────────────────
+ratio_y, rec_spans, mort_y, home_yoy_y, rent_yoy_y, spread_y = build_all(float(target_median))
+
+# ── Chart 1: Ratio (dots + connecting line) ───────────────────────────────
 years = ratio_y.index.to_numpy(dtype=float)
 vals = ratio_y.values.astype(float)
 
-# Keep pixel dimensions sane to prevent Streamlit/PIL issues
-fig, ax = plt.subplots(figsize=(13.5, 6.2), dpi=110)
+latest_year = int(ratio_y.index.max())
+latest_ratio = float(ratio_y.loc[latest_year])
+median_val = float(ratio_y.median())
 
-# Shade recessions first (so points/line sit on top)
+fig1, ax = plt.subplots(figsize=(13.5, 6.2), dpi=110)
+
 if show_recessions and rec_spans:
     for start, end in rec_spans:
-        # annual axis, approximate span
         x0 = start.year + (start.month - 1) / 12.0
         x1 = end.year + (end.month - 1) / 12.0
         ax.axvspan(x0, x1, alpha=0.10, zorder=0)
 
-# Line + dots (your spec)
-ax.plot(years, vals, lw=2.4, alpha=0.95, zorder=2)
-ax.scatter(years, vals, s=28, zorder=3)
+# Ratio line and dots
+ax.plot(years, vals, lw=2.4, alpha=0.95, label="Home Value / Rent (lhs)", zorder=2)
+ax.scatter(years, vals, s=30, zorder=3)
 
-# Highlight latest point
-ax.scatter([latest_year], [latest_ratio], s=85, zorder=4)
+# Highlight latest
+ax.scatter([latest_year], [latest_ratio], s=90, zorder=4, label="Now")
 ax.text(latest_year + 0.35, latest_ratio, "Now", weight="bold", fontsize=10)
 
 # Reference lines
 if show_median:
-    ax.axhline(median_val, ls="--", lw=1.2, alpha=0.75, zorder=1)
-    ax.text(years.min() + 1, median_val + 0.05, f"Median: {median_val:.1f}x", alpha=0.85)
+    ax.axhline(median_val, ls="--", lw=1.2, alpha=0.75, label=f"Median ({median_val:.1f}x)", zorder=1)
 
-ax.axhline(downturn_floor, ls="--", lw=1.2, alpha=0.85, zorder=1)
-ax.text(years.min() + 1, downturn_floor - 0.35, f"Low in downturns: {downturn_floor:.1f}x", alpha=0.90)
+ax.axhline(downturn_floor, ls="--", lw=1.2, alpha=0.85, label=f"Downturn low ({downturn_floor:.1f}x)", zorder=1)
 
-# Mortgage overlay (rhs)
+# Mortgage overlay
 ax2 = None
 if show_mortgage:
     mort_common = mort_y.reindex(ratio_y.index).dropna()
@@ -206,13 +202,13 @@ if show_mortgage:
             ls=":",
             lw=2.0,
             alpha=0.9,
+            label="30Y Mortgage (rhs)",
         )
         ax2.set_ylabel("30Y Mortgage Rate (%)", fontsize=12)
         ax2.yaxis.set_major_locator(MultipleLocator(1.0))
         ax2.yaxis.set_minor_locator(MultipleLocator(0.5))
         ax2.spines["top"].set_visible(False)
 
-# Styling
 ax.set_title("Home Value to Rent Ratio (FRED proxy)", fontsize=16, weight="bold")
 ax.set_ylabel("Home Value / Rent (x)", fontsize=12)
 ax.set_xlabel("")
@@ -220,25 +216,69 @@ ax.grid(axis="y", ls=":", lw=0.7, alpha=0.55)
 ax.spines["top"].set_visible(False)
 ax.spines["right"].set_visible(False)
 
-# Limits with padding
 ymin, ymax = float(np.nanmin(vals)), float(np.nanmax(vals))
 pad = 0.06 * (ymax - ymin) if ymax > ymin else 0.5
 ax.set_ylim(ymin - pad, ymax + pad)
 
-# Tight layout without bbox hacks that can blow up canvas
-fig.tight_layout(pad=1.0)
+# Legend combining both axes
+handles1, labels1 = ax.get_legend_handles_labels()
+handles, labels = handles1, labels1
+if ax2 is not None:
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    handles = handles1 + handles2
+    labels = labels1 + labels2
 
-# Render to PNG ourselves (stable sizing), then st.image
-buf = io.BytesIO()
-fig.savefig(buf, format="png")  # no bbox_inches="tight"
-plt.close(fig)
-buf.seek(0)
+if handles:
+    ax.legend(handles, labels, loc="best", frameon=False, fontsize=10)
 
-st.image(buf.getvalue(), use_container_width=True)
+fig1.tight_layout(pad=1.0)
+
+buf1 = io.BytesIO()
+fig1.savefig(buf1, format="png")  # no bbox_inches="tight" to avoid whitespace explosions
+plt.close(fig1)
+buf1.seek(0)
+st.image(buf1.getvalue(), use_container_width=True)
+
+st.markdown("<hr style='margin-top:10px; margin-bottom:12px;'>", unsafe_allow_html=True)
+
+# ── Chart 2: What drives the ratio (home inflation vs rent inflation) ─────
+# This is the cleanest decomposition of why the multiple expands or compresses.
+common_years = sorted(set(home_yoy_y.dropna().index).intersection(rent_yoy_y.dropna().index))
+home_y = home_yoy_y.reindex(common_years)
+rent_y = rent_yoy_y.reindex(common_years)
+spr_y = spread_y.reindex(common_years)
+
+fig2, axb = plt.subplots(figsize=(13.5, 5.8), dpi=110)
+
+if show_recessions and rec_spans:
+    for start, end in rec_spans:
+        x0 = start.year + (start.month - 1) / 12.0
+        x1 = end.year + (end.month - 1) / 12.0
+        axb.axvspan(x0, x1, alpha=0.10, zorder=0)
+
+axb.plot(home_y.index.to_numpy(dtype=float), home_y.values.astype(float), lw=2.2, label="Home price YoY (%)", zorder=2)
+axb.plot(rent_y.index.to_numpy(dtype=float), rent_y.values.astype(float), lw=2.2, label="Rent inflation YoY (%)", zorder=2)
+
+# Spread as a dotted line
+axb.plot(spr_y.index.to_numpy(dtype=float), spr_y.values.astype(float), ls=":", lw=2.2, label="Spread: Home YoY minus Rent YoY", zorder=2)
+
+axb.axhline(0.0, lw=1.0, alpha=0.5)
+
+axb.set_title("Home vs Rent Inflation (YoY) and the Spread", fontsize=16, weight="bold")
+axb.set_ylabel("YoY %", fontsize=12)
+axb.set_xlabel("")
+axb.grid(axis="y", ls=":", lw=0.7, alpha=0.55)
+axb.spines["top"].set_visible(False)
+axb.spines["right"].set_visible(False)
+
+axb.legend(loc="best", frameon=False, fontsize=10)
+
+fig2.tight_layout(pad=1.0)
+
+buf2 = io.BytesIO()
+fig2.savefig(buf2, format="png")
+plt.close(fig2)
+buf2.seek(0)
+st.image(buf2.getvalue(), use_container_width=True)
+
 st.caption("© 2026 AD Fund Management LP")
-
-with st.expander("Diagnostics (data tail)"):
-    st.write("Annual ratio (tail):")
-    st.dataframe(ratio_y.tail(15))
-    st.write("Annual mortgage rate (tail):")
-    st.dataframe(mort_y.tail(15))
