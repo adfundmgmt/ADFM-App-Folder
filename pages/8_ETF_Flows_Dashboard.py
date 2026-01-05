@@ -580,4 +580,4 @@ else:
         st.write("**Top Outflows**")
         st.table(valid[valid["Flow ($)"] < 0].nsmallest(5, "Flow ($)").set_index("Label")[["Value", "Quality"]])
 
-st.caption(f"Last refresh: {as_of_dt_naive}  |  © 2025 AD Fund Management LP")
+st.caption(f"Last refresh: {as_of_dt_naive}  |  © 2026 AD Fund Management LP")
