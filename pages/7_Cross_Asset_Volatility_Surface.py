@@ -400,3 +400,5 @@ plt.tight_layout()
 st.pyplot(fig)
 
 st.caption("ADFM Volatility Surface Monitor")
+st.caption("© 2026 AD Fund Management LP")
+
