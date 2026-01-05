@@ -369,4 +369,4 @@ with st.expander("Methodology and Interpretation", expanded=False):
     • Recession bands: gray bands using NBER peaks and troughs  
     """)
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
