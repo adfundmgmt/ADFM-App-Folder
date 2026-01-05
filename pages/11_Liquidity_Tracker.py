@@ -220,4 +220,4 @@ with st.expander("Methodology"):
         """
     )
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
