@@ -659,4 +659,4 @@ month_choice = st.selectbox(
 curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol)
 st.image(curve_buf, use_container_width=True)
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
