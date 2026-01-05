@@ -785,3 +785,6 @@ with st.expander("Basket Constituents"):
         st.markdown(f"**{cat}**")
         for name, tks in groups.items():
             st.write(f"- {name}: {', '.join(sorted(set(str(t).upper() for t in tks)))}")
+
+st.caption("© 2026 AD Fund Management LP")
+
