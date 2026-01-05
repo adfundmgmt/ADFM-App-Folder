@@ -235,4 +235,4 @@ else:
     st.pyplot(fig, use_container_width=True)
 
 st.caption(f"Data through: {prices.index.max().date()}")
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
