@@ -241,3 +241,6 @@ if custom_t1 and custom_t2:
         st.pyplot(make_fig(r_c, f"{custom_t1}/{custom_t2}", f"{custom_t1}/{custom_t2}"), use_container_width=True)
     else:
         st.warning(f"Data not available for {custom_t1}/{custom_t2}.")
+
+st.caption("© 2026 AD Fund Management LP")
+
