@@ -577,4 +577,4 @@ else:
     else:
         st.info("No valid correlation pairs to show.")
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
