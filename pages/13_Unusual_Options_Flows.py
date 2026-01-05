@@ -546,4 +546,4 @@ with st.expander("External ingest (CSV)"):
         st.info("No external CSVs detected.")
 
 st.caption("Data: Yahoo Finance chains via yfinance. Premium-first Tier rules; snapshots saved daily for history.")
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
