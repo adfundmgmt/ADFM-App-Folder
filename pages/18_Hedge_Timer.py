@@ -998,3 +998,6 @@ fig_tbl = plot_episode_table_image(
     title="Largest drawdowns (10%+) and whether a NEW short signal fired beforehand",
 )
 st.pyplot(fig_tbl, use_container_width=True)
+
+st.caption("© 2026 AD Fund Management LP")
+
