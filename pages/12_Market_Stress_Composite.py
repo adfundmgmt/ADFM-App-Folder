@@ -677,4 +677,4 @@ with st.expander("Download Data"):
     out.index.name = "Date"
     st.download_button("Download CSV", out.to_csv(), file_name="market_stress_composite.csv", mime="text/csv")
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
