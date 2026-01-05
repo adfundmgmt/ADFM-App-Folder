@@ -290,4 +290,4 @@ ax.legend(loc="best", frameon=False, ncol=2, fontsize=11)
 plt.tight_layout()
 st.pyplot(fig)
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
