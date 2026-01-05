@@ -544,4 +544,4 @@ if not vol_tbl.empty:
     vol_style = hide_index_compat(vol_style)
     st.dataframe(vol_style, use_container_width=True, height=computed_height(min(5, vol_tbl.shape[0])))
 
-st.caption("© 2025 AD Fund Management LP")
+st.caption("© 2026 AD Fund Management LP")
