@@ -596,3 +596,5 @@ with st.expander("Show events table"):
 
 # ------------------------------- Footer ------------------------------------
 st.caption("ADFM Analytics Platform · VIX Spike Deep Dive · Data source: Yahoo Finance")
+st.caption("© 2026 AD Fund Management LP")
+
