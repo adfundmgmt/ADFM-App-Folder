@@ -47,6 +47,9 @@ def card_box(inner_html: str):
         unsafe_allow_html=True,
     )
 
+def _slug(s: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in str(s)).strip("_")
+
 # ---------------- Factor ETFs ----------------
 FACTOR_ETFS: Dict[str, Tuple[str, Optional[str]]] = {
     "Growth vs Value": ("VUG", "VTV"),
@@ -459,7 +462,7 @@ def color_corr(x):
         return "rgb(220,235,255)"
     return "rgb(230,240,255)"
 
-def plot_rotation_table(panel_df: pd.DataFrame, title: str):
+def plot_rotation_table(panel_df: pd.DataFrame, title: str, key: str):
     st.markdown(f"**{title}**")
     if panel_df.empty:
         st.info("No baskets passed the data checks for this window.")
@@ -507,9 +510,9 @@ def plot_rotation_table(panel_df: pd.DataFrame, title: str):
         )]
     )
     fig_tbl.update_layout(margin=dict(l=0, r=0, t=6, b=0), height=min(520, 64 + 26 * max(3, len(panel_df))))
-    st.plotly_chart(fig_tbl, use_container_width=True)
+    st.plotly_chart(fig_tbl, use_container_width=True, key=key)
 
-def plot_side_cumulative(basket_returns: pd.DataFrame, baskets: List[str], title: str, benchmark_rets: pd.Series):
+def plot_side_cumulative(basket_returns: pd.DataFrame, baskets: List[str], title: str, benchmark_rets: pd.Series, key: str):
     if basket_returns.empty or not baskets:
         st.info("Insufficient data to render chart.")
         return
@@ -555,7 +558,7 @@ def plot_side_cumulative(basket_returns: pd.DataFrame, baskets: List[str], title
         xaxis=dict(showspikes=True, spikemode="across", spikesnap="cursor", showgrid=True),
         yaxis=dict(zeroline=False, showgrid=True)
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=key)
 
 # ---------------- Sidebar ----------------
 st.title(TITLE)
@@ -858,6 +861,8 @@ def build_side_panel(baskets: List[str], ref_start: pd.Timestamp) -> pd.DataFram
 TOP_N = 6
 
 for factor_name in FACTOR_ETFS.keys():
+    factor_slug = _slug(factor_name)
+
     st.markdown(f"### {factor_name}")
 
     pro_list = _safe_basket_list(FACTOR_TO_BASKETS.get(factor_name, {}).get("pro", []))
@@ -872,14 +877,26 @@ for factor_name in FACTOR_ETFS.keys():
 
     c1, c2 = st.columns(2)
     with c1:
-        plot_rotation_table(pro_panel, "Pro side baskets")
+        plot_rotation_table(pro_panel, "Pro side baskets", key=f"rot_tbl_pro_{factor_slug}")
     with c2:
-        plot_rotation_table(anti_panel, "Anti side baskets")
+        plot_rotation_table(anti_panel, "Anti side baskets", key=f"rot_tbl_anti_{factor_slug}")
 
     c3, c4 = st.columns(2)
     with c3:
-        plot_side_cumulative(rot_df, pro_panel.index.tolist(), f"{factor_name} (Pro) vs SPY", bench_rets_win)
+        plot_side_cumulative(
+            rot_df,
+            pro_panel.index.tolist(),
+            f"{factor_name} (Pro) vs SPY",
+            bench_rets_win,
+            key=f"rot_ch_pro_{factor_slug}",
+        )
     with c4:
-        plot_side_cumulative(rot_df, anti_panel.index.tolist(), f"{factor_name} (Anti) vs SPY", bench_rets_win)
+        plot_side_cumulative(
+            rot_df,
+            anti_panel.index.tolist(),
+            f"{factor_name} (Anti) vs SPY",
+            bench_rets_win,
+            key=f"rot_ch_anti_{factor_slug}",
+        )
 
 st.caption("© 2026 AD Fund Management LP")
