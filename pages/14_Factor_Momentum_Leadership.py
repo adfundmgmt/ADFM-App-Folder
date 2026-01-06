@@ -15,6 +15,9 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Factor Momentum and Basket Rotation", layout="wide")
 plt.style.use("default")
 
+TITLE = "Factor Momentum and Basket Rotation"
+SUBTITLE = "Factor momentum dashboard with Pro vs Anti ADFM basket rotation views."
+
 PASTELS = [
     "#A8DADC", "#F4A261", "#90BE6D", "#FFD6A5", "#BDE0FE",
     "#CDB4DB", "#E2F0CB", "#F1C0E8", "#B9FBC0", "#F7EDE2"
@@ -95,6 +98,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Cybersecurity": ["PANW","FTNT","CRWD","ZS","OKTA","TENB","S","CYBR","CHKP","NET"],
         "Digital Payments": ["V","MA","PYPL","SQ","FI","FIS","GPN","AXP","COF","DFS","ADYEY","MELI"],
         "China Tech ADRs": ["BABA","BIDU","JD","PDD","BILI","NTES","TCEHY"],
+        "Net-Cash Compounders": ["AAPL","MSFT","GOOGL","META","ORCL","ADBE","INTU","V"],
     },
 
     "Energy and Hard Assets": {
@@ -132,7 +136,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 ALL_BASKETS = {bk: tks for cat in CATEGORIES.values() for bk, tks in cat.items()}
 
 # ---------------- Factor -> Basket mapping (editable) ----------------
-# This is where you tune the worldview. Engine below will just execute it.
 FACTOR_TO_BASKETS: Dict[str, Dict[str, List[str]]] = {
     "US vs World": {
         "pro": ["Hyperscalers and Cloud", "Net-Cash Compounders", "Cybersecurity", "Semis Compute and Accelerators"],
@@ -152,7 +155,7 @@ FACTOR_TO_BASKETS: Dict[str, Dict[str, List[str]]] = {
     },
     "High Beta vs Low Vol": {
         "pro": ["Long-Duration Equities", "Financial Conditions Sensitive", "AI Infrastructure Leaders"],
-        "anti": ["Low Vol Proxies", "Staples and Beverages", "Utilities Defensive"],
+        "anti": ["Staples and Beverages", "Utilities Defensive", "Yield Proxies"],
     },
     "Momentum": {
         "pro": ["AI Infrastructure Leaders", "Hyperscalers and Cloud", "Energy Majors", "Gold and Silver Miners"],
@@ -172,8 +175,6 @@ FACTOR_TO_BASKETS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
-# Some baskets referenced above exist in your full universe but not in the trimmed CATEGORIES snippet here.
-# Add them if you want them in the rotation view. For now we keep mapping safe by filtering to existing baskets.
 def _safe_basket_list(names: List[str]) -> List[str]:
     return [b for b in names if b in ALL_BASKETS]
 
@@ -315,7 +316,7 @@ def _download_close_batch(batch: List[str], start: pd.Timestamp, end: pd.Timesta
 
     if len(batch) == 1:
         t = batch[0]
-        df = yf.download(t, start=start, end=end, auto_adjust=True, progress=False, threads=True)
+        df = yf.download(t, start=start, end=end, auto_adjust=True, progress=False)
         if df is None or df.empty:
             return pd.DataFrame()
         col = "Close" if "Close" in df.columns else ("Adj Close" if "Adj Close" in df.columns else None)
@@ -325,7 +326,7 @@ def _download_close_batch(batch: List[str], start: pd.Timestamp, end: pd.Timesta
         s.name = t
         return s.to_frame()
 
-    df = yf.download(batch, start=start, end=end, auto_adjust=True, progress=False, threads=True, group_by="column")
+    df = yf.download(batch, start=start, end=end, auto_adjust=True, progress=False, group_by="column")
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -352,7 +353,7 @@ def fetch_daily_levels(tickers: List[str], start: pd.Timestamp, end: pd.Timestam
             out = _download_close_batch(batch, start, end)
             if not out.empty:
                 break
-            time.sleep(0.5)
+            time.sleep(0.35)
         if not out.empty:
             frames.append(out)
 
@@ -419,23 +420,6 @@ def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> st
 def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
     sub = levels[levels.index >= start_ts]
     return float((sub.iloc[-1] / sub.iloc[0]) - 1.0) if sub.shape[0] else np.nan
-
-def rolling_beta(y: pd.Series, x: pd.Series, window: int = 63) -> pd.Series:
-    df = pd.concat([y, x], axis=1).dropna()
-    if df.shape[0] < window + 5:
-        return pd.Series(index=df.index, dtype=float)
-    yv = df.iloc[:, 0]
-    xv = df.iloc[:, 1]
-    cov = yv.rolling(window).cov(xv)
-    var = xv.rolling(window).var()
-    beta = cov / var.replace(0, np.nan)
-    return beta
-
-def rolling_corr(y: pd.Series, x: pd.Series, window: int = 63) -> pd.Series:
-    df = pd.concat([y, x], axis=1).dropna()
-    if df.shape[0] < window + 5:
-        return pd.Series(index=df.index, dtype=float)
-    return df.iloc[:, 0].rolling(window).corr(df.iloc[:, 1])
 
 def color_ret(x):
     if pd.isna(x):
@@ -573,7 +557,7 @@ def plot_side_cumulative(basket_returns: pd.DataFrame, baskets: List[str], title
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Sidebar (minimal, keep original vibe) ----------------
+# ---------------- Sidebar ----------------
 st.title(TITLE)
 st.caption(SUBTITLE)
 
@@ -595,12 +579,11 @@ if window_choice == "YTD":
     window_start = pd.Timestamp(date(datetime.now().year, 1, 1))
 else:
     days = WINDOW_MAP_DAYS[window_choice]
-    # add a small buffer for rolling calcs and indicators
     window_start = pd.Timestamp(today) - pd.Timedelta(days=int(days * 1.35))
 
 window_end = pd.Timestamp(today) + pd.Timedelta(days=1)
 
-# ---------------- Build ticker universe (fast) ----------------
+# ---------------- Build ticker universe ----------------
 factor_tickers = sorted({t for pair in FACTOR_ETFS.values() for t in pair if t is not None} | {BENCH})
 
 mapped_baskets = []
@@ -627,12 +610,11 @@ if levels.empty:
     st.error("No data returned.")
     st.stop()
 
-# Hard check SPY
 if BENCH not in levels.columns or levels[BENCH].dropna().empty:
     st.error("SPY data missing or empty.")
     st.stop()
 
-# ---------------- Factor series (full history) ----------------
+# ---------------- Factor series ----------------
 factor_levels_full = {}
 for name, (up, down) in FACTOR_ETFS.items():
     up = up.upper()
@@ -651,7 +633,6 @@ if factor_df_full.empty:
     st.error("No factor series could be constructed.")
     st.stop()
 
-# Window slice for factor view
 if window_choice == "YTD":
     factor_df = factor_df_full[factor_df_full.index >= window_start].copy()
 else:
@@ -698,12 +679,12 @@ raw_score = (
 )
 regime_score = max(0.0, min(100.0, 50.0 + 50.0 * (raw_score / 5.0)))
 
-# ---------------- Factor tape summary ----------------
+# ---------------- Summary ----------------
 st.subheader(f"Factor Tape Summary ({window_choice})")
 summary_html = build_commentary(mom_df, breadth, regime_score)
 card_box(summary_html)
 
-# ---------------- Factor time series ----------------
+# ---------------- Time series ----------------
 st.subheader(f"Factor Time Series ({window_choice})")
 
 n_factors = len(factor_df.columns)
@@ -743,7 +724,7 @@ for j in range(i + 1, len(axes)):
 fig_ts.tight_layout()
 st.pyplot(fig_ts, clear_figure=True)
 
-# ---------------- Factor momentum snapshot table ----------------
+# ---------------- Snapshot table ----------------
 st.subheader("Factor Momentum Snapshot")
 
 display_df = mom_df.copy()
@@ -764,7 +745,7 @@ st.dataframe(
     use_container_width=True,
 )
 
-# ---------------- Leadership map (Short vs Long scatter) ----------------
+# ---------------- Leadership map ----------------
 st.subheader("Leadership Map (Short vs Long Momentum)")
 
 fig_lead, ax_lead = plt.subplots(figsize=(8, 6))
@@ -809,20 +790,18 @@ fig_lead.tight_layout()
 st.pyplot(fig_lead, clear_figure=True)
 
 # =====================================================================
-# Replacement section: Basket Rotation view (replaces crowding)
+# Basket Rotation view
 # =====================================================================
 st.subheader("Factor Rotation into ADFM Baskets (Pro vs Anti)")
 
-# Build basket returns only for mapped baskets
 mapped_basket_dict = {b: ALL_BASKETS[b] for b in mapped_baskets if b in ALL_BASKETS}
 basket_rets = ew_rets_from_levels(levels, mapped_basket_dict, stale_days=30)
 bench_rets = levels[BENCH].pct_change().dropna()
 
 if basket_rets.empty:
-    st.error("Basket return series not loaded. Check basket tickers and yfinance availability.")
+    st.error("Basket return series not loaded. Check basket tickers and Yahoo Finance availability.")
     st.stop()
 
-# Slice to factor window dates for consistency
 rot_df = basket_rets.copy()
 rot_df = rot_df[rot_df.index >= window_start].copy()
 bench_rets_win = bench_rets[bench_rets.index >= window_start].copy()
@@ -831,18 +810,16 @@ if rot_df.empty or bench_rets_win.empty:
     st.error("Window slice produced empty basket or SPY series. Try a longer window or earlier history start.")
     st.stop()
 
-# Precompute basket levels for MACD and dynamic returns
 basket_levels_100 = 100.0 * (1 + rot_df).cumprod()
 
 def build_side_panel(baskets: List[str], ref_start: pd.Timestamp) -> pd.DataFrame:
     use = [b for b in baskets if b in rot_df.columns]
-    if not use:
-        dyn = f"↓ %{window_choice}"
-        return pd.DataFrame(columns=["%5D", "%1M", dyn, "MACD Momentum", "Corr(63D)"])
-
-    rows = []
     dyn_col = f"↓ %{window_choice}"
 
+    if not use:
+        return pd.DataFrame(columns=["%5D", "%1M", dyn_col, "MACD Momentum", "Corr(63D)"])
+
+    rows = []
     for b in use:
         lvl = basket_levels_100[b].dropna()
         if lvl.shape[0] < 20:
@@ -851,7 +828,6 @@ def build_side_panel(baskets: List[str], ref_start: pd.Timestamp) -> pd.DataFram
         r5d = (lvl.iloc[-1] / lvl.iloc[-6]) - 1.0 if lvl.shape[0] > 6 else np.nan
         r1m = pct_since(lvl, lvl.index.max() - pd.DateOffset(months=1))
 
-        # dynamic return since window start (backfill to next available date)
         start_idx = lvl.index[lvl.index.get_indexer([pd.Timestamp(ref_start)], method="backfill")]
         r_dyn = pct_since(lvl, start_idx[0]) if len(start_idx) and start_idx[0] in lvl.index else np.nan
 
@@ -879,12 +855,7 @@ def build_side_panel(baskets: List[str], ref_start: pd.Timestamp) -> pd.DataFram
     df = df.sort_values(by=dyn_col, ascending=False)
     return df
 
-# Build factor returns used for beta sign
-factor_rets = factor_df.pct_change().dropna(how="all")
-
-# render each factor section, uncollapsed
 TOP_N = 6
-ROLL = 63
 
 for factor_name in FACTOR_ETFS.keys():
     st.markdown(f"### {factor_name}")
@@ -892,19 +863,10 @@ for factor_name in FACTOR_ETFS.keys():
     pro_list = _safe_basket_list(FACTOR_TO_BASKETS.get(factor_name, {}).get("pro", []))
     anti_list = _safe_basket_list(FACTOR_TO_BASKETS.get(factor_name, {}).get("anti", []))
 
-    # If mapping is empty, skip cleanly
     if not pro_list and not anti_list:
         st.info("No basket mapping defined for this factor yet.")
         continue
 
-    # Compute beta sign to the factor itself (optional refinement)
-    # We keep your mapping as the primary truth, and beta sign is informational
-    f_ret = factor_rets.get(factor_name)
-    if f_ret is None or f_ret.dropna().empty:
-        st.info("Factor return series missing for beta overlay.")
-        f_ret = None
-
-    # Build panels (lean columns)
     pro_panel = build_side_panel(pro_list, window_start).head(TOP_N)
     anti_panel = build_side_panel(anti_list, window_start).head(TOP_N)
 
