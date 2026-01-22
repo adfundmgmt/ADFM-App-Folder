@@ -212,7 +212,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Energy Subsidy and Transition Plays": ["FSLR","ENPH","BE","PLUG","NEE","VST","ICLN"],
     },
 
-    # New: behavior-first economy baskets (like your attached image)
     "Everyday Economy": {
         "Recreation and Experiences": ["YETI","FOXF","ASO","DOO","PLAY","LYV","SIX","FUN","RICK"],
         "Deferred Durables and Home": ["SGI","SNBR","WHR","POOL","LOW","TTC","LAD"],
@@ -250,23 +249,74 @@ def _chunk(lst: List[str], n: int) -> List[List[str]]:
     n = max(1, n)
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
+def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    """
+    Robustly return a DataFrame of adjusted close (auto_adjust=True) with columns named by ticker.
+    Handles yfinance's single-ticker shape (Close becomes a Series named 'Close').
+    """
+    if not batch:
+        return pd.DataFrame()
+
+    df = yf.download(
+        tickers=batch,
+        start=start,
+        end=end,
+        auto_adjust=True,
+        progress=False,
+        group_by="column",
+        threads=True
+    )
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Multi-ticker case: columns are MultiIndex OR single level with ticker columns (after selecting Close)
+    if isinstance(df.columns, pd.MultiIndex):
+        if "Close" not in df.columns.get_level_values(0):
+            return pd.DataFrame()
+        close = df["Close"].copy()
+        # Ensure columns are upper tickers
+        close.columns = [str(c).upper() for c in close.columns]
+        return close
+
+    # Single-ticker case: columns are like Open/High/Low/Close/Volume
+    if "Close" in df.columns:
+        sym = str(batch[0]).upper()
+        close = df[["Close"]].rename(columns={"Close": sym}).copy()
+        return close
+
+    return pd.DataFrame()
+
 @st.cache_data(show_spinner=False)
 def fetch_daily_levels(tickers, start, end, chunk_size: int = 40) -> pd.DataFrame:
-    uniq = sorted(list(set(tickers)))
+    uniq = sorted(list({str(t).upper() for t in tickers if str(t).strip()}))
     frames = []
     for batch in _chunk(uniq, chunk_size):
-        df = yf.download(batch, start=start, end=end, auto_adjust=True, progress=False)["Close"]
-        if isinstance(df, pd.Series):
-            df = df.to_frame()
-        frames.append(df)
+        close = _download_close(batch, start=start, end=end)
+        if not close.empty:
+            frames.append(close)
+
     if not frames:
         return pd.DataFrame()
+
     wide = pd.concat(frames, axis=1)
     wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
+
     if wide.empty:
         return wide
+
     bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
-    return wide.reindex(bidx).ffill()
+    wide = wide.reindex(bidx).ffill()
+
+    # Backstop: if SPY missing due to an upstream hiccup, fetch it alone and merge
+    if "SPY" not in wide.columns or wide["SPY"].dropna().empty:
+        spy_only = _download_close(["SPY"], start=start, end=end)
+        if not spy_only.empty:
+            spy_only = spy_only.reindex(bidx).ffill()
+            wide = pd.concat([wide.drop(columns=["SPY"], errors="ignore"), spy_only], axis=1)
+            wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
+
+    return wide
 
 @st.cache_data(show_spinner=False)
 def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
@@ -285,7 +335,7 @@ def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
                 else:
                     mc_val = getattr(fi, "market_cap", None)
             if mc_val is not None:
-                caps[sym.upper()] = float(mc_val)
+                caps[str(sym).upper()] = float(mc_val)
         except Exception:
             continue
     return caps
@@ -726,6 +776,7 @@ all_basket_rets = ew_rets_from_levels(
     stale_days=30
 )
 
+# At this point SPY should exist and be non-empty unless upstream returns nothing at all
 if bench not in levels.columns or levels[bench].dropna().empty:
     st.error("SPY data missing or empty for the selected range.")
     st.stop()
@@ -787,4 +838,3 @@ with st.expander("Basket Constituents"):
             st.write(f"- {name}: {', '.join(sorted(set(str(t).upper() for t in tks)))}")
 
 st.caption("© 2026 AD Fund Management LP")
-
