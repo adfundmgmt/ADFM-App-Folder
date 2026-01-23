@@ -21,7 +21,7 @@ st.sidebar.markdown(
 
     What this dashboard shows  
     • Cyclical vs Defensive regime trend using equal weight baskets  
-    • Preset macro ratios such as SMH/IGV, SMH/JPY, QQQ/IWM, HYG/LQD, HYG/IEF  
+    • Preset macro ratios such as SMH/IGV, SMH/JPY=X, QQQ/IWM, HYG/LQD, HYG/IEF  
     • Dynamic custom ratio between any two tickers  
     • Rolling 50 and 200 day averages to highlight trend direction  
     • RSI panel to assess momentum and exhaustion points
@@ -117,7 +117,7 @@ DEFENSIVES = ["XLP", "XLE", "XLV", "XLRE", "XLB", "XLU"]
 
 PRESETS = [
     ("SMH", "IGV"),
-    ("SMH", "JPY"),
+    ("SMH", "JPY=X"),
     ("QQQ", "IWM"),
     ("HYG", "LQD"),
     ("HYG", "IEF"),
