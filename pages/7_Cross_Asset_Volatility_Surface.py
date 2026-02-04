@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -536,4 +535,3 @@ with tab_ts:
                     st.plotly_chart(fig, use_container_width=True)
 
 st.caption("© 2026 AD Fund Management LP")
-```
