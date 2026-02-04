@@ -710,7 +710,7 @@ def plot_price_and_score_image(
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
 
-    # Price + MAs (explicit colors to avoid default blue dominance)
+    # Price + MAs
     price_c = "#111827"   # near-black
     ma50_c = "#6B7280"    # mid gray
     ma200_c = "#9CA3AF"   # light gray
@@ -725,7 +725,7 @@ def plot_price_and_score_image(
     ax1.set_ylim(pmin - pad, pmax + pad)
     ax1.set_xlim(-0.5, len(dfp) - 0.5)
 
-    # NEW short signal onsets (early-stage + not oversold) in RED
+    # NEW short signal onsets (early-stage + not oversold) in red
     sig_on = signal_onset(score.reindex(idx), {k: v.reindex(idx) for k, v in meta.items()}, t_short)
     if sig_on.any():
         ax1.scatter(
@@ -743,7 +743,7 @@ def plot_price_and_score_image(
     _apply_subtle_grid(ax1, y_only=False)
     ax1.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
 
-    # Score panel (explicit styling; no blue dashed artifacts)
+    # Score panel
     score_c = "#374151"
     t_short_c = "#111827"
     t_bias_c = "#9CA3AF"
@@ -768,7 +768,8 @@ def plot_price_and_score_image(
     ax2.set_xticks(tick_pos)
     ax2.set_xticklabels(tick_lbl, rotation=0, ha="center")
 
-    fig.suptitle(f"{title_prefix} (last 12 months, no calendar gaps)", fontsize=14, fontweight="bold", y=0.985)
+    # Title: clean, exactly what you asked for
+    fig.suptitle(f"{title_prefix} (Last 12 Months)", fontsize=14, fontweight="bold", y=0.985)
 
     handles1, labels1 = ax1.get_legend_handles_labels()
     handles2, labels2 = ax2.get_legend_handles_labels()
@@ -957,7 +958,7 @@ fig = plot_price_and_score_image(
     score=score_target_series,
     meta=meta_target_series,
     t_short=t_short,
-    title_prefix=f"{target_label}:
+    title_prefix=f"{target_label}",
 )
 st.pyplot(fig, use_container_width=True)
 
@@ -1000,4 +1001,3 @@ fig_tbl = plot_episode_table_image(
 st.pyplot(fig_tbl, use_container_width=True)
 
 st.caption("© 2026 AD Fund Management LP")
-
