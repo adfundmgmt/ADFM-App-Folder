@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -106,12 +107,10 @@ def normalize_spark(arr: np.ndarray) -> np.ndarray:
     mu = s.mean()
     sig = s.std(ddof=0)
     if sig == 0 or np.isnan(sig):
-        # fallback to min-max
         mn, mx = s.min(), s.max()
         if mx == mn:
             return np.zeros_like(arr)
-        out = (arr - mn) / (mx - mn)
-        return out
+        return (arr - mn) / (mx - mn)
     return (arr - mu) / sig
 
 def make_card(title: str, value: str, subtitle: str):
@@ -136,6 +135,13 @@ def fmt_z(x, d=2):
         return "NA"
     return f"{x:.{d}f}"
 
+def sleeve_color(sleeve: str) -> str:
+    return {
+        "Equity": PASTEL[0],
+        "Rates": PASTEL[4],
+        "Commodity": PASTEL[2],
+    }.get(sleeve, PASTEL[1])
+
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def load_close_series(tickers, start="2010-01-01"):
     data = yf.download(tickers, start=start, progress=False, auto_adjust=False, group_by="ticker")
@@ -156,14 +162,37 @@ st.title("Cross Asset Volatility Surface Monitor")
 st.caption("Cross-asset implied and realized volatility in one regime view. Data: Yahoo Finance.")
 
 with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **Purpose**
+
+        Monitor cross-asset volatility so you can quickly judge whether vol is a tailwind or headwind for risk
+        and where hedges are rich or cheap versus history.
+
+        **What it does**
+
+        - Pulls daily history for key implied vol indices and underlyings  
+        - Computes realized vol (selected horizons) for SPX, duration, gold, and oil proxies  
+        - Normalizes via a selectable trailing window and reports Z-scores + percentile ranks  
+        - Produces a sleeve-level composite so the regime read is not hostage to one ticker  
+        - Surfaces current outliers and heatmaps for fast scanning
+
+        **How to use**
+
+        - Start on *Overview* for the regime and top drivers  
+        - Use *Heatmap* as the fast scan across sleeves and horizons  
+        - Use *Details* when you need exact prints plus recent shape context  
+        - Use *Time Series* to sanity-check whether a move is a one-off spike or a persistent regime shift
+        """
+    )
+
+    st.divider()
     st.header("Controls")
     start_date = st.date_input("History start", datetime(2010, 1, 1))
     rv_windows = st.multiselect("Realized vol horizons (days)", [5, 21, 63], default=[21])
     norm_window = st.selectbox("Normalization window", ["1Y", "3Y", "5Y", "Max"], index=1)
     st.caption("Z-score and percentile are computed on the selected normalization window.")
-    st.divider()
-    st.caption("Display format")
-    show_raw_spark = st.checkbox("Raw sparklines (less readable)", value=False)
 
 norm_days = {"1Y": 365, "3Y": 365 * 3, "5Y": 365 * 5, "Max": 10_000}.get(norm_window, 365 * 3)
 
@@ -192,22 +221,18 @@ for t in VOL_IDX:
     label = IMPLIED_LABELS.get(t, t)
     sleeve = parse_sleeve(label)
 
-    # implied indices are read as "% vol"
-    level_display = float(s_full.iloc[-1])
-    spark_raw = s_full.tail(90).values
-
     rows.append({
         "Series": label,
         "Sleeve": sleeve,
         "Kind": "Implied",
         "Horizon": "Index",
         "Level": float(s_full.iloc[-1]),
-        "LevelDisplay": level_display,
+        "LevelDisplay": float(s_full.iloc[-1]),  # already in vol points read as %
         "LevelUnit": "%",
         "5D %": safe_5d_change(s_full),
         "Z": zscore_last(s_norm),
         "Percentile": pct_rank_last(s_norm),
-        "SparkRaw": spark_raw,
+        "SparkRaw": s_full.tail(90).values,
     })
 
 # Realized vols on underlyings
@@ -226,22 +251,18 @@ for u in PRICE_UNDERLYING:
 
         rv_norm = trailing_window(rv, norm_days)
 
-        # realized vol is decimal; convert to % for display
-        level_display = float(rv.iloc[-1]) * 100.0
-        spark_raw = (rv.tail(90).values * 100.0)
-
         rows.append({
             "Series": f"{base_label} | RV{w}",
             "Sleeve": sleeve,
             "Kind": "Realized",
             "Horizon": f"RV{w}",
             "Level": float(rv.iloc[-1]),
-            "LevelDisplay": level_display,
+            "LevelDisplay": float(rv.iloc[-1]) * 100.0,  # convert decimal -> %
             "LevelUnit": "%",
             "5D %": safe_5d_change(rv),
             "Z": zscore_last(rv_norm),
             "Percentile": pct_rank_last(rv_norm),
-            "SparkRaw": spark_raw,
+            "SparkRaw": (rv.tail(90).values * 100.0),
         })
 
 df = pd.DataFrame(rows)
@@ -253,17 +274,10 @@ df["AbsZ"] = df["Z"].abs()
 df["Sleeve"] = pd.Categorical(df["Sleeve"], categories=SLEEVE_ORDER, ordered=True)
 df = df.sort_values(["Sleeve", "Kind", "Series"]).reset_index(drop=True)
 
-# Sparklines: normalize per row so variance is visible
-spark_col = []
-for _, r in df.iterrows():
-    arr = r["SparkRaw"]
-    if show_raw_spark:
-        spark_col.append(arr)
-    else:
-        spark_col.append(normalize_spark(arr))
-df["Spark"] = spark_col
+# Normalize sparklines per row so variance is visible
+df["Spark"] = [normalize_spark(r["SparkRaw"]) for _, r in df.iterrows()]
 
-# ---------------- Sleeve composites + Regime (fixed) ----------------
+# ---------------- Sleeve composites + Regime ----------------
 def sleeve_composite(frame: pd.DataFrame, sleeve: str):
     sub = frame[frame["Sleeve"] == sleeve].copy()
     if sub.empty:
@@ -277,8 +291,6 @@ eq = sleeve_composite(df, "Equity")
 rt = sleeve_composite(df, "Rates")
 cmd = sleeve_composite(df, "Commodity")
 
-# Regime should be driven by equity + rates vol being elevated.
-# Commodity vol can be a modifier but should not flip the whole regime on its own.
 def pos(x):
     return 0.0 if (pd.isna(x) or x < 0) else float(x)
 
@@ -296,14 +308,6 @@ else:
     regime = "Neutral to constructive"
 
 top_outliers = df.dropna(subset=["Z"]).sort_values("AbsZ", ascending=False).head(5)
-
-# ---------------- Visual theme helpers ----------------
-def sleeve_color(sleeve: str) -> str:
-    return {
-        "Equity": PASTEL[0],
-        "Rates": PASTEL[4],
-        "Commodity": PASTEL[2],
-    }.get(sleeve, PASTEL[1])
 
 # ---------------- Tabs ----------------
 tab_overview, tab_heatmap, tab_details, tab_ts = st.tabs(["Overview", "Heatmap", "Details", "Time Series"])
@@ -410,12 +414,11 @@ with tab_heatmap:
     heat["Row"] = heat["Series"]
     heat["Col"] = heat.apply(lambda r: f"{r['Kind']} {r['Horizon']}", axis=1)
 
-    # Z heatmap (centered at 0)
     z_pivot = heat.pivot_table(index="Row", columns="Col", values="Z", aggfunc="last")
     z_pivot = z_pivot.loc[z_pivot.abs().max(axis=1).sort_values(ascending=False).index]
 
     zmax = float(np.nanmax(np.abs(z_pivot.values))) if np.isfinite(np.nanmax(np.abs(z_pivot.values))) else 2.0
-    zmax = max(2.0, min(6.0, zmax))  # keep it readable
+    zmax = max(2.0, min(6.0, zmax))
 
     fig_hm_z = px.imshow(
         z_pivot,
@@ -429,7 +432,6 @@ with tab_heatmap:
     fig_hm_z.update_layout(margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig_hm_z, use_container_width=True)
 
-    # Percentile heatmap (0-100, centered at 50)
     pct_pivot = heat.pivot_table(index="Row", columns="Col", values="Percentile", aggfunc="last")
     pct_pivot = pct_pivot.loc[pct_pivot.max(axis=1).sort_values(ascending=False).index]
 
@@ -447,7 +449,7 @@ with tab_heatmap:
 
 with tab_details:
     st.subheader("Details")
-    st.caption("Vol levels are formatted as % for digestibility. Sparklines are normalized per row by default to make variance visible.")
+    st.caption("Vol levels are formatted as % for digestibility. Sparklines are normalized per row to make variance visible.")
 
     view = df[["Series", "Sleeve", "Kind", "Horizon", "LevelDisplay", "5D %", "Z", "Percentile", "Spark"]].copy()
     view = view.rename(columns={"LevelDisplay": "Level", "Spark": "90D"})
@@ -463,10 +465,10 @@ with tab_details:
             "Percentile": st.column_config.NumberColumn(format="%.0f%%"),
             "90D": st.column_config.LineChartColumn(
                 "90D",
-                help="Last 90 observations. Normalized per row unless raw is selected.",
+                help="Last 90 observations, normalized per row.",
                 width="small",
-                y_min=-3.0 if not show_raw_spark else None,
-                y_max=3.0 if not show_raw_spark else None,
+                y_min=-3.0,
+                y_max=3.0,
             ),
         }
     )
@@ -476,19 +478,16 @@ with tab_details:
 
 with tab_ts:
     st.subheader("Time series")
-    st.caption("All series on one page, arranged as small multiples (3 per row). Pastel palette, consistent scaling per chart.")
+    st.caption("All series on one page, arranged as small multiples (3 per row). Pastel sleeve colors, consistent styling.")
 
-    # Build series for plotting: implied indices + realized vols you computed
     plot_items = []
 
-    # implied
     for t in VOL_IDX:
         if t in series and not series[t].dropna().empty:
             s = series[t].dropna()
             label = IMPLIED_LABELS.get(t, t)
             plot_items.append((label, "Implied", s))
 
-    # realized (recompute using selected rv_windows so the plots match your table)
     for u in PRICE_UNDERLYING:
         if u not in series or series[u].dropna().empty:
             continue
@@ -498,7 +497,6 @@ with tab_ts:
             rv = realized_vol(px_s, window=w).dropna()
             if rv.empty:
                 continue
-            # display in % for readability
             rv_disp = rv * 100.0
             plot_items.append((f"{base_label} | RV{w}", "Realized", rv_disp))
 
@@ -519,13 +517,13 @@ with tab_ts:
                     name, kind, s = row[j]
                     sleeve = parse_sleeve(name)
                     color = sleeve_color(sleeve)
-
-                    # normalization window overlay
                     s_norm = trailing_window(s, norm_days)
 
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", name="Level", line=dict(color=color, width=2)))
-                    fig.add_trace(go.Scatter(x=s_norm.index, y=s_norm.values, mode="lines", name=f"Norm ({norm_window})", line=dict(color=color, width=1, dash="dot")))
+                    fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", name="Level",
+                                             line=dict(color=color, width=2)))
+                    fig.add_trace(go.Scatter(x=s_norm.index, y=s_norm.values, mode="lines", name=f"Norm ({norm_window})",
+                                             line=dict(color=color, width=1, dash="dot")))
 
                     fig.update_layout(
                         height=320,
@@ -533,9 +531,9 @@ with tab_ts:
                         title=dict(text=name, x=0.02, xanchor="left", font=dict(size=14, color=TEXT)),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0, font=dict(size=10)),
                         xaxis=dict(title="", showgrid=False),
-                        yaxis=dict(title="%" if kind == "Realized" else "%", showgrid=True, gridcolor="#f0f0f0"),
+                        yaxis=dict(title="%", showgrid=True, gridcolor="#f0f0f0"),
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
-st.caption("ADFM Volatility Surface Monitor")
 st.caption("© 2026 AD Fund Management LP")
+```
