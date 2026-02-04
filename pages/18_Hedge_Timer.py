@@ -957,7 +957,7 @@ fig = plot_price_and_score_image(
     score=score_target_series,
     meta=meta_target_series,
     t_short=t_short,
-    title_prefix=f"{target_label}: price, moving averages, short signals, and score",
+    title_prefix=f"{target_label}:
 )
 st.pyplot(fig, use_container_width=True)
 
