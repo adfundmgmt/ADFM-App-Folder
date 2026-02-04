@@ -1,4 +1,4 @@
-import datetime as dt 
+import datetime as dt
 import time
 from pathlib import Path
 import colorsys
@@ -12,10 +12,11 @@ from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 plt.style.use("default")
 
-MIN_DAYS_REQUIRED = 30
+MIN_DAYS_REQUIRED = 30               # historical years
+MIN_DAYS_CURRENT_YEAR = 5            # allow early-year operation
+MIN_DAYS_FOR_CORR = 10               # avoid noisy correlations on tiny samples
 CACHE_TTL_SECONDS = 3600
 
-# ── Page config ──────────────────────────────────────────────────────────
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
 LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
@@ -25,7 +26,6 @@ if LOGO_PATH.exists():
 st.title("Market Memory Explorer")
 st.subheader("Compare the current year's return path with history")
 
-# ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
@@ -50,13 +50,18 @@ with st.sidebar:
     st.markdown("---")
 
 col1, col2, col3 = st.columns([2, 1, 1])
-ticker = col1.text_input("Ticker", "^SPX").upper()
+ticker_in = col1.text_input("Ticker", "^SPX").upper()
 top_n = col2.slider("Top Analogs", 1, 10, 5)
 min_corr = col3.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
 
+# Normalize a couple of common Yahoo quirks
+TICKER_ALIASES = {
+    "^SPX": "^GSPC",   # S&P 500
+}
+ticker = TICKER_ALIASES.get(ticker_in, ticker_in)
+
 st.markdown("<hr style='margin-top:2px; margin-bottom:15px;'>", unsafe_allow_html=True)
 
-# ── Data fetch helper ────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def load_history(symbol: str) -> pd.DataFrame:
     attempts, delay = 0, 1
@@ -88,10 +93,6 @@ def safe_corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(x, y)[0, 1])
 
 def distinct_palette(n: int):
-    """
-    Greedy max-min selection from a pool of strong, high-contrast qualitative colors.
-    Filters out pale/pastel candidates so analog lines stay easy to separate on white.
-    """
     if n <= 0:
         return []
 
@@ -108,7 +109,6 @@ def distinct_palette(n: int):
     def key_255(rgb):
         return tuple(int(round(x * 255)) for x in rgb)
 
-    # Deduplicate
     uniq = []
     seen = set()
     for c in candidates:
@@ -117,7 +117,6 @@ def distinct_palette(n: int):
             seen.add(k)
             uniq.append(c)
 
-    # Keep saturated, darker-ish colors (avoid pastels)
     strong = []
     for rgb in uniq:
         h, s, v = colorsys.rgb_to_hsv(*rgb)
@@ -148,9 +147,8 @@ def distinct_palette(n: int):
                 best_i = i
         chosen.append(remaining.pop(best_i))
 
-    # Absolute fallback if pool is exhausted
     if len(chosen) < n:
-        extra = list(plt.cm.get_cmap("tab20")(np.linspace(0, 1, n)))  # returns RGBA
+        extra = list(plt.cm.get_cmap("tab20")(np.linspace(0, 1, n)))
         for c in extra:
             rgb = tuple(c[:3])
             if rgb not in chosen:
@@ -160,21 +158,27 @@ def distinct_palette(n: int):
 
     return chosen[:n]
 
-# ── Build YTD paths ──────────────────────────────────────────────────────
 try:
     raw = load_history(ticker)
 except Exception as e:
-    st.error(f"Download failed – {e}")
+    st.error(f"Download failed: {e}")
     st.stop()
+
+this_year = dt.datetime.now().year
 
 paths = {}
 for yr, grp in raw.groupby("Year"):
     closes = grp["Close"].dropna()
-    if len(closes) < MIN_DAYS_REQUIRED:
-        continue
+    if yr == this_year:
+        if len(closes) < MIN_DAYS_CURRENT_YEAR:
+            continue
+    else:
+        if len(closes) < MIN_DAYS_REQUIRED:
+            continue
+
     ytd = cumret(closes)
     ytd.index = np.arange(1, len(ytd) + 1)
-    paths[yr] = ytd
+    paths[int(yr)] = ytd
 
 if not paths:
     st.error("No usable yearly data found.")
@@ -182,15 +186,34 @@ if not paths:
 
 ytd_df = pd.DataFrame(paths)
 
-this_year = dt.datetime.now().year
 if this_year not in ytd_df.columns:
-    st.warning(f"No YTD data for {this_year}")
+    st.warning(f"No YTD data for {this_year}. Try lowering MIN_DAYS_CURRENT_YEAR or verify the ticker.")
     st.stop()
 
 current = ytd_df[this_year].dropna()
 n_days = len(current)
 
-# ── Correlations (selection uses ONLY first n_days) ──────────────────────
+if n_days < MIN_DAYS_FOR_CORR:
+    st.info(
+        f"{this_year} has only {n_days} trading days so far. "
+        f"Correlations get noisy. Come back after {MIN_DAYS_FOR_CORR} days, or lower MIN_DAYS_FOR_CORR."
+    )
+    # Still plot just the current year so far
+    fig, ax = plt.subplots(figsize=(14, 7))
+    ax.plot(current.index, current.values, color="black", lw=3.2, label=f"{this_year} (YTD)")
+    ax.axvline(n_days, color="gray", ls=":", lw=1.3, alpha=0.8)
+    ax.set_title(f"{ticker} – {this_year} YTD", fontsize=16, weight="bold")
+    ax.set_xlabel("Trading Day of Year", fontsize=13)
+    ax.set_ylabel("Cumulative Return", fontsize=13)
+    ax.axhline(0, color="gray", ls="--", lw=1)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
+    ax.grid(True, ls=":", lw=0.7, color="#888")
+    ax.legend(loc="best", frameon=False, fontsize=11)
+    plt.tight_layout()
+    st.pyplot(fig)
+    st.caption("© 2026 AD Fund Management LP")
+    st.stop()
+
 corrs = {}
 for yr, ser in ytd_df.items():
     if yr == this_year:
@@ -200,20 +223,18 @@ for yr, ser in ytd_df.items():
         continue
     rho = safe_corr(current.values, ser.iloc[:n_days].values)
     if np.isfinite(rho) and rho >= min_corr:
-        corrs[yr] = rho
+        corrs[int(yr)] = rho
 
 if not corrs:
     st.warning("No historical years meet the correlation cutoff.")
     st.stop()
 
-# ── Filters ──────────────────────────────────────────────────────────────
 def keep_year(yr: int) -> bool:
     ser = ytd_df[yr].dropna()
     if len(ser) < n_days:
         return False
 
     ret_n = ser.iloc[n_days - 1]
-
     daily_ret = (1 + ser).div((1 + ser).shift(1)).sub(1)
     max_d = daily_ret.iloc[:n_days].abs().max()
 
@@ -230,7 +251,6 @@ if not eligible:
 
 top = sorted(eligible.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
 
-# ── Metrics ──────────────────────────────────────────────────────────────
 current_ret = float(current.iloc[-1])
 finals = [float(ytd_df[yr].dropna().iloc[-1]) for yr, _ in top]
 median_final = float(np.nanmedian(finals)) if finals else np.nan
@@ -245,7 +265,6 @@ m3.metric("Analog Dispersion (σ)", fmt(sigma_final))
 
 st.markdown("<hr style='margin-top:0; margin-bottom:6px;'>", unsafe_allow_html=True)
 
-# ── Plot (FULL YEAR FOR HISTORICAL ANALOGS) ──────────────────────────────
 palette = distinct_palette(len(top))
 fig, ax = plt.subplots(figsize=(14, 7))
 
@@ -254,7 +273,7 @@ for idx, (yr, rho) in enumerate(top):
     ax.plot(
         ser_full.index,
         ser_full.values,
-        "--",                # dashed analogs (as requested)
+        "--",
         lw=2.3,
         alpha=0.95,
         color=palette[idx],
