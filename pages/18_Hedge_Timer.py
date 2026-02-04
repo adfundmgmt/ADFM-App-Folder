@@ -18,6 +18,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 import yfinance as yf
+from matplotlib.collections import LineCollection
+from matplotlib.colors import LinearSegmentedColormap, Normalize
 
 
 # ============================== Page + Style ==============================
@@ -373,7 +375,6 @@ def compute_components_and_meta(
     macd_m = mtf_to_daily(idx, macd_hist(m))
 
     # We want rollover-from-strength, not "already nuked".
-    # Daily: prefer crossing down from >= 60 or a clear loss of momentum while still > 45.
     rsi_d_roll = ((rsi_d.shift(1) >= 60) & (rsi_d < 60)) | (
         (rsi_d >= 45)
         & (rsi_d.diff(5) < 0)
@@ -382,7 +383,6 @@ def compute_components_and_meta(
     rsi_w_roll = ((rsi_w.shift(1) >= 58) & (rsi_w < 58)) | ((rsi_w >= 48) & (rsi_w.diff(3) < 0))
     rsi_m_roll = ((rsi_m.shift(1) >= 55) & (rsi_m < 55)) | ((rsi_m >= 50) & (rsi_m.diff(2) < 0))
 
-    # MACD: look for histogram turning down, especially from positive to negative or steep deterioration.
     macd_d_bear = ((macd_d.shift(1) > 0) & (macd_d < 0)) | ((macd_d < macd_d.shift(3)) & (macd_d.diff(3) < 0))
     macd_w_bear = ((macd_w.shift(1) > 0) & (macd_w < 0)) | ((macd_w < macd_w.shift(2)) & (macd_w.diff(2) < 0))
     macd_m_bear = ((macd_m.shift(1) > 0) & (macd_m < 0)) | ((macd_m < macd_m.shift(2)) & (macd_m.diff(2) < 0))
@@ -398,7 +398,6 @@ def compute_components_and_meta(
         + macd_m_bear.fillna(False).astype(int)
     )
 
-    # Momentum block: require at least one timeframe rolling from strength, and a second confirm.
     mtf_momentum = (rsi_votes >= 2) | (macd_votes >= 2) | ((rsi_votes >= 1) & (macd_votes >= 1))
 
     # Short-term break: fast structure break
@@ -435,7 +434,6 @@ def compute_components_and_meta(
         "ma200": ma200,
     }
 
-    # Fill gaps as False to keep every trading session in the score series.
     cond = {k: v.reindex(idx).fillna(False).astype(bool) for k, v in cond.items()}
     meta = {k: v.reindex(idx) for k, v in meta.items()}
 
@@ -472,30 +470,18 @@ def pick_target_today(df: pd.DataFrame) -> str:
     rs_ma200 = rolling_ma(rs, 200)
     rs_ma20 = rolling_ma(rs, 20)
 
-    # If NDX is in persistent relative downtrend, hedge NDX. Else hedge SPX.
     if (last_valid(rs) < last_valid(rs_ma200)) and (last_valid(rs_ma20) < last_valid(rolling_ma(rs_ma200, 20))):
         return NDX_TICKER
     return SPX_TICKER
 
 
 def signal_series(score: pd.Series, meta: Dict[str, pd.Series], t_short: int) -> pd.Series:
-    """
-    Full "permission" series (can be True deep into a selloff).
-    New-signal gating (early-stage + not oversold) is applied when we plot/score 'signal_on'.
-    """
     idx = score.index
     s = (score >= t_short).reindex(idx).fillna(False)
     return s.astype(bool)
 
 
 def signal_onset(score: pd.Series, meta: Dict[str, pd.Series], t_short: int) -> pd.Series:
-    """
-    NEW signal only if:
-      - score >= threshold
-      - early_stage True (dd from 63-session high > -12%)
-      - oversold_block False
-    Once signaled, it can remain "allowed" even if tape falls further; we only care about onset markers.
-    """
     idx = score.index
     base = signal_series(score, meta, t_short)
 
@@ -603,12 +589,10 @@ def calibrate_threshold(
         sig_on_a = signal_onset(sc_a, meta_a, t)
         sig_on_b = signal_onset(sc_b, meta_b, t)
 
-        # Coverage of 10%+ drawdowns
         cov_a, n_a = episode_coverage_obj(pr_a, sig_on_a, DD_MAJOR, CALIBRATION_START, LEAD_LOOKBACK)
         cov_b, n_b = episode_coverage_obj(pr_b, sig_on_b, DD_MAJOR, CALIBRATION_START, LEAD_LOOKBACK)
         cov = 0.5 * (cov_a + cov_b)
 
-        # Forward risk usefulness (worst next N sessions AFTER a new signal)
         fwd_a = forward_min_return(pr_a, HORIZON_DAYS).reindex(idx_a)
         fwd_b = forward_min_return(pr_b, HORIZON_DAYS).reindex(idx_b)
         hit_a = fwd_a[sig_on_a].dropna()
@@ -616,9 +600,8 @@ def calibrate_threshold(
         if hit_a.shape[0] < 12 or hit_b.shape[0] < 12:
             continue
 
-        avg_worst = 0.5 * (float(hit_a.mean()) + float(hit_b.mean()))  # negative is good (warned before pain)
+        avg_worst = 0.5 * (float(hit_a.mean()) + float(hit_b.mean()))
 
-        # Penalties: over-trading and "late"
         rate = 0.5 * (float(sig_on_a.mean()) + float(sig_on_b.mean()))
         dd63_a = meta_a.get("dd63", pd.Series(index=idx_a, dtype=float))
         dd63_b = meta_b.get("dd63", pd.Series(index=idx_b, dtype=float))
@@ -626,10 +609,6 @@ def calibrate_threshold(
         late_b = float((dd63_b[sig_on_b] <= EARLY_STAGE_DD63).mean()) if sig_on_b.sum() else 0.0
         late = 0.5 * (late_a + late_b)
 
-        # Objective:
-        # - Primary: maximize coverage of 10%+ drawdowns
-        # - Secondary: reward negative avg_worst (signals that precede further downside)
-        # - Penalize signal rate and any late onsets
         obj = (
             cov * 1000.0
             + (-avg_worst * 100.0) * 3.0
@@ -637,13 +616,11 @@ def calibrate_threshold(
             - late * 400.0
         )
 
-        # Keep rate in a sane band; hard penalties if wildly off
         if rate < 0.02:
             obj -= 120.0
         if rate > 0.20:
             obj -= 180.0
 
-        # Prefer solutions with non-trivial episode counts present
         if (n_a + n_b) < 6:
             obj -= 80.0
 
@@ -679,6 +656,24 @@ def _apply_subtle_grid(ax: plt.Axes, y_only: bool = False) -> None:
     ax.spines["bottom"].set_alpha(0.30)
 
 
+def _plot_score_gradient(ax: plt.Axes, x: np.ndarray, y: np.ndarray) -> None:
+    # Color grade score: red -> yellow -> green
+    cmap = LinearSegmentedColormap.from_list("ryg", ["#DC2626", "#F59E0B", "#10B981"])
+    norm = Normalize(vmin=0, vmax=100)
+
+    pts = np.array([x, y]).T.reshape(-1, 1, 2)
+    segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
+
+    lc = LineCollection(segs, cmap=cmap, norm=norm)
+    lc.set_array(y[:-1])
+    lc.set_linewidth(2.2)
+    lc.set_alpha(0.95)
+    ax.add_collection(lc)
+
+    # Safety line on top for crispness
+    ax.plot(x, y, linewidth=0.7, color=(0, 0, 0, 0.10))
+
+
 def plot_price_and_score_image(
     price: pd.Series,
     score: pd.Series,
@@ -693,7 +688,6 @@ def plot_price_and_score_image(
         plt.text(0.5, 0.5, "Insufficient data", ha="center", va="center")
         return fig
 
-    # Rolling 12 months by sessions
     if len(dfp) > DISPLAY_SESSIONS:
         dfp = dfp.iloc[-DISPLAY_SESSIONS:].copy()
 
@@ -710,14 +704,14 @@ def plot_price_and_score_image(
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
 
-    # Price + MAs
-    price_c = "#111827"   # near-black
-    ma50_c = "#6B7280"    # mid gray
-    ma200_c = "#9CA3AF"   # light gray
+    # Price + pastel MAs
+    price_c = "#111827"
+    ma50_c = "#A8DADC"   # pastel teal
+    ma200_c = "#CDB4DB"  # pastel lavender
 
     ax1.plot(x, dfp["price"].values, linewidth=2.3, color=price_c, label="Price")
-    ax1.plot(x, ma50.values, linewidth=1.5, color=ma50_c, label="MA50")
-    ax1.plot(x, ma200.values, linewidth=1.5, color=ma200_c, label="MA200")
+    ax1.plot(x, ma50.values, linewidth=1.7, color=ma50_c, label="MA50")
+    ax1.plot(x, ma200.values, linewidth=1.7, color=ma200_c, label="MA200")
 
     pmin = float(np.nanmin(dfp["price"].values))
     pmax = float(np.nanmax(dfp["price"].values))
@@ -725,7 +719,7 @@ def plot_price_and_score_image(
     ax1.set_ylim(pmin - pad, pmax + pad)
     ax1.set_xlim(-0.5, len(dfp) - 0.5)
 
-    # NEW short signal onsets (early-stage + not oversold) in red
+    # NEW short signal onsets
     sig_on = signal_onset(score.reindex(idx), {k: v.reindex(idx) for k, v in meta.items()}, t_short)
     if sig_on.any():
         ax1.scatter(
@@ -743,12 +737,12 @@ def plot_price_and_score_image(
     _apply_subtle_grid(ax1, y_only=False)
     ax1.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
 
-    # Score panel
-    score_c = "#374151"
+    # Score panel with red->yellow->green grading, omit from legend
+    y_score = dfp["score"].fillna(0.0).values.astype(float)
+    _plot_score_gradient(ax2, x.astype(float), y_score)
+
     t_short_c = "#111827"
     t_bias_c = "#9CA3AF"
-
-    ax2.plot(x, dfp["score"].fillna(0.0).values, linewidth=1.9, color=score_c, label="Score")
     ax2.axhline(t_short, linewidth=1.1, color=t_short_c, alpha=0.70)
     ax2.axhline(t_bias, linewidth=1.0, color=t_bias_c, alpha=0.55)
     ax2.set_ylim(0, 100)
@@ -768,20 +762,16 @@ def plot_price_and_score_image(
     ax2.set_xticks(tick_pos)
     ax2.set_xticklabels(tick_lbl, rotation=0, ha="center")
 
-    # Title: clean, exactly what you asked for
     fig.suptitle(f"{title_prefix} (Last 12 Months)", fontsize=14, fontweight="bold", y=0.985)
 
+    # Legend: drop Score entirely
     handles1, labels1 = ax1.get_legend_handles_labels()
-    handles2, labels2 = ax2.get_legend_handles_labels()
-    handles = handles1 + handles2
-    labels = labels1 + labels2
-
     fig.legend(
-        handles,
-        labels,
+        handles1,
+        labels1,
         loc="upper center",
         bbox_to_anchor=(0.5, 0.952),
-        ncol=5,
+        ncol=4,
         frameon=False,
         fontsize=9,
     )
@@ -800,7 +790,6 @@ def plot_episode_table_image(table_df: pd.DataFrame, title: str) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(13.6, 5.2))
     ax.axis("off")
 
-    # Keep title close to the table (reduce top padding)
     fig.suptitle(title, fontsize=13, fontweight="bold", y=0.975)
 
     cell_text = dfp.values.tolist()
@@ -842,7 +831,6 @@ if df0.empty or SPX_TICKER not in df0.columns or NDX_TICKER not in df0.columns:
     st.error("Yahoo feed failed for ^SPX/^NDX. Retry later.")
     st.stop()
 
-# Align everything to the index trading calendar to avoid missing-session gaps from ancillary series.
 base_idx = df0[SPX_TICKER].dropna().index.intersection(df0[NDX_TICKER].dropna().index)
 df = df0.reindex(base_idx).ffill()
 
@@ -872,7 +860,6 @@ stance_target = stance_ndx if target == NDX_TICKER else stance_spx
 badge_target = badge_ndx if target == NDX_TICKER else badge_spx
 score_target = score_today_ndx if target == NDX_TICKER else score_today_spx
 
-# Sidebar sanity check block (below About This Tool)
 stats_spx = forward_stats(
     score_spx[score_spx.index >= CALIBRATION_START],
     df[SPX_TICKER][df.index >= CALIBRATION_START],
@@ -900,7 +887,6 @@ Median worst next {HORIZON_DAYS}d after signal: {stats_ndx["med_worst_signal"]*1
 """.strip()
 )
 
-# Extra transparency for the gating today on the decision target
 meta_target = meta_ndx if target == NDX_TICKER else meta_spx
 dd63_today = float(last_valid(meta_target["dd63"]))
 rsi_today = float(last_valid(meta_target["rsi_d"]))
@@ -928,25 +914,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-st.markdown("<hr/>", unsafe_allow_html=True)
-
-c1, c2 = st.columns([1, 1], gap="large")
-with c1:
-    st.subheader("How to execute")
-    if stance_target == "SHORT ALLOWED":
-        st.write(
-            f"Run the short in {target_label}. Cover discipline: if the score falls below {t_bias} and stays there for 3 sessions, start reducing. If it falls below {t_bias - 5} quickly, cover fast."
-        )
-    elif stance_target == "HEDGE BIAS":
-        st.write(
-            f"Keep it smaller. If you need protection, use a partial short or options. Wait for score to clear {t_short} for full permission."
-        )
-    else:
-        st.write("Stand down. If you hedge, keep it light and tactical.")
-with c2:
-    st.subheader("What flips it")
-    st.write(f"Above {t_short}: short allowed. Between {t_bias} and {t_short}: hedge bias. Below {t_bias}: stand down.")
 
 st.markdown("<hr/>", unsafe_allow_html=True)
 
