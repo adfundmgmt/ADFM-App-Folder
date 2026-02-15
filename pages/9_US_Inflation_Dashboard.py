@@ -1,11 +1,10 @@
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import pandas as pd
 from pandas_datareader.data import DataReader
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
-apply_terminal_theme(page_title="US CPI Dashboard", layout="wide")
+st.set_page_config(page_title="US CPI Dashboard", layout="wide")
 
 # --- Config: FRED Series Codes ---
 FRED_SERIES = {

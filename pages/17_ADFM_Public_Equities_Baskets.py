@@ -1,5 +1,4 @@
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -10,7 +9,7 @@ from typing import Dict, List, Optional
 # -----------------------------
 # Page and theme
 # -----------------------------
-apply_terminal_theme(page_title="Basket Panels", layout="wide")
+st.set_page_config(page_title="Basket Panels", layout="wide")
 
 CUSTOM_CSS = """
 <style>

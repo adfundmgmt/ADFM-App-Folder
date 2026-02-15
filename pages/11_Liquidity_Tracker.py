@@ -1,5 +1,4 @@
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import pandas as pd
 from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
@@ -20,7 +19,7 @@ DEFAULT_SMOOTH_DAYS = 5
 REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B   = 5.0
 
-apply_terminal_theme(page_title=TITLE, layout="wide")
+st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
 
 # ---------------- Sidebar ----------------

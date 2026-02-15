@@ -1,5 +1,4 @@
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -8,7 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # ---------------- Config ----------------
-apply_terminal_theme(page_title="Cross Asset Volatility Surface", layout="wide")
+st.set_page_config(page_title="Cross Asset Volatility Surface", layout="wide")
 
 TEXT = "#222222"
 SUBTLE = "#666666"
