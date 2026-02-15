@@ -54,6 +54,10 @@ TOOLS_BY_CATEGORY = {
             "Weekly Cross-Asset Compass",
             "Weekly cross-asset readout covering regime shifts, correlation changes, and volatility-driven trade framing.",
         ),
+        (
+            "Market Dashboard",
+            "Real-time cross-asset market monitor with breadth, macro stress, relative performance, and rolling-correlation diagnostics.",
+        ),
     ],
     "Positioning, Flows & Internal Coverage": [
         (
