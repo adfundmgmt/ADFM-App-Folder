@@ -1,4 +1,7 @@
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
+
+apply_terminal_theme(page_title="Technical Chart Explorer", layout="wide")
 import pandas as pd
 import numpy as np
 import yfinance as yf

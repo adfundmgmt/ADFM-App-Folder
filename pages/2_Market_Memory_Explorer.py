@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
@@ -17,7 +18,7 @@ MIN_DAYS_CURRENT_YEAR = 5            # allow early-year operation
 MIN_DAYS_FOR_CORR = 10               # avoid noisy correlations on tiny samples
 CACHE_TTL_SECONDS = 3600
 
-st.set_page_config(page_title="Market Memory Explorer", layout="wide")
+apply_terminal_theme(page_title="Market Memory Explorer", layout="wide")
 
 LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
 if LOGO_PATH.exists():

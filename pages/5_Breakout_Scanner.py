@@ -4,6 +4,7 @@ import pandas as pd
 pd.options.mode.chained_assignment = None
 
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import yfinance as yf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,7 +12,7 @@ import matplotlib.pyplot as plt
 plt.style.use("default")
 
 # ── Page Setup ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Breakout Scanner", layout="wide")
+apply_terminal_theme(page_title="Breakout Scanner", layout="wide")
 st.title("Breakout Scanner")
 
 with st.sidebar:

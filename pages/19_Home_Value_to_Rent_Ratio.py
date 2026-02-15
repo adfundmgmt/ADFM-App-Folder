@@ -8,6 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import requests
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 from matplotlib.ticker import MultipleLocator
 from PIL import Image
 
@@ -18,7 +19,7 @@ CACHE_TTL_SECONDS = 3600
 MAX_RETRIES = 4
 
 # ── Page config ──────────────────────────────────────────────────────────
-st.set_page_config(page_title="Home Value to Rent Ratio", layout="wide")
+apply_terminal_theme(page_title="Home Value to Rent Ratio", layout="wide")
 
 LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
 if LOGO_PATH.exists():
