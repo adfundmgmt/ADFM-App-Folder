@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import io
+import json
+import urllib.request
+from urllib.error import HTTPError, URLError
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -9,7 +14,6 @@ import requests
 import streamlit as st
 import yfinance as yf
 from bs4 import BeautifulSoup
-
 
 st.set_page_config(page_title="Market Dashboard", layout="wide")
 
@@ -26,7 +30,7 @@ with st.sidebar:
     auto_refresh = st.checkbox("Auto-refresh every 5 minutes", value=True)
     show_sp500_internals = st.checkbox("Compute S&P 500 internals (slower)", value=True)
 
-# Auto-refresh without extra dependencies
+# Auto-refresh without external dependencies
 if auto_refresh:
     st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
@@ -70,29 +74,26 @@ MEGA_CAPS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "
 def safe_pct_change(series: pd.Series, periods: int = 1) -> float:
     s = series.dropna()
     if len(s) <= periods:
-        return np.nan
+        return float("nan")
     return (s.iloc[-1] / s.iloc[-(periods + 1)] - 1.0) * 100.0
 
 
 def ytd_return(series: pd.Series) -> float:
     s = series.dropna()
     if s.empty:
-        return np.nan
+        return float("nan")
     curr_year = s.index[-1].year
     ytd = s[s.index.year == curr_year]
     if ytd.empty:
-        return np.nan
+        return float("nan")
     return (ytd.iloc[-1] / ytd.iloc[0] - 1.0) * 100.0
-
-
-def rolling_zscore(series: pd.Series, window: int = 126) -> pd.Series:
-    mean = series.rolling(window).mean()
-    std = series.rolling(window).std(ddof=0)
-    return (series - mean) / std
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_prices(tickers: list[str], start_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not tickers:
+        return pd.DataFrame(), pd.DataFrame()
+
     raw = yf.download(
         tickers=tickers,
         start=start_date,
@@ -115,7 +116,7 @@ def fetch_prices(tickers: list[str], start_date: str) -> tuple[pd.DataFrame, pd.
             if (t, "Volume") in raw.columns:
                 vol_df[t] = raw[(t, "Volume")]
     else:
-        # Single ticker case: columns are not MultiIndex
+        # Single ticker path
         if "Close" in raw.columns and len(tickers) == 1:
             close_df[tickers[0]] = raw["Close"]
         if "Volume" in raw.columns and len(tickers) == 1:
@@ -126,9 +127,55 @@ def fetch_prices(tickers: list[str], start_date: str) -> tuple[pd.DataFrame, pd.
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def fetch_sp500_symbols() -> list[str]:
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    table = pd.read_html(url)[0]
-    return table["Symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
+    """
+    Prefer stable non-HTML sources. If blocked, return [] so the app continues.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; ADFMStreamlit/1.0)"}
+
+    # 1) JSON (datahub)
+    try:
+        req = urllib.request.Request(
+            "https://datahub.io/core/s-and-p-500-companies/r/constituents.json",
+            headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        symbols = [str(r.get("Symbol", "")).strip() for r in data]
+        symbols = [s.replace(".", "-") for s in symbols if s and s.lower() != "nan"]
+        if symbols:
+            return symbols
+    except Exception:
+        pass
+
+    # 2) CSV (GitHub mirror)
+    try:
+        req = urllib.request.Request(
+            "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
+            headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            csv_bytes = resp.read()
+        df = pd.read_csv(io.BytesIO(csv_bytes))
+        symbols = df["Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False).tolist()
+        symbols = [s for s in symbols if s and s.lower() != "nan"]
+        if symbols:
+            return symbols
+    except Exception:
+        pass
+
+    # 3) Wikipedia fallback (fetch HTML yourself with headers, then parse)
+    try:
+        wiki_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        req = urllib.request.Request(wiki_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read()
+        tables = pd.read_html(io.BytesIO(html))
+        table = tables[0]
+        symbols = table["Symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
+        symbols = [s for s in symbols if s and s.lower() != "nan"]
+        return symbols
+    except (HTTPError, URLError, ValueError, Exception):
+        return []
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -145,14 +192,14 @@ def fetch_rss_headlines() -> list[dict]:
         "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
         "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EVIX&region=US&lang=en-US",
     ]
-    out: list[dict] = []
+    headlines: list[dict] = []
     for feed in feeds:
         try:
             r = requests.get(feed, timeout=10)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "xml")
             for item in soup.find_all("item")[:8]:
-                out.append(
+                headlines.append(
                     {
                         "title": item.title.text.strip() if item.title else "",
                         "source": "Yahoo Finance",
@@ -162,7 +209,7 @@ def fetch_rss_headlines() -> list[dict]:
                 )
         except Exception:
             continue
-    return out[:12]
+    return headlines[:12]
 
 
 def mini_chart(series: pd.Series, title: str) -> go.Figure:
@@ -177,14 +224,22 @@ def mini_chart(series: pd.Series, title: str) -> go.Figure:
             yaxis=dict(showgrid=True, gridcolor="rgba(120,120,120,0.2)", tickformat=".2f"),
         )
     else:
-        fig.update_layout(title=f"{title} (no intraday data)", height=170, margin=dict(l=10, r=10, t=30, b=10))
+        fig.update_layout(
+            title=f"{title} (no intraday data)",
+            height=170,
+            margin=dict(l=10, r=10, t=30, b=10),
+        )
     return fig
 
 
+# ---------- Data load ----------
 start = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 core_tickers = (
-    list(dict.fromkeys(list(RISK_ON.values()) + list(MACRO_DEFENSIVE.values()))) + list(SECTORS.keys()) + MEGA_CAPS
+    list(dict.fromkeys(list(RISK_ON.values()) + list(MACRO_DEFENSIVE.values())))
+    + list(SECTORS.keys())
+    + MEGA_CAPS
 )
+
 prices, volumes = fetch_prices(core_tickers, start)
 
 if prices.empty:
@@ -193,50 +248,56 @@ if prices.empty:
 
 returns = prices.pct_change()
 
-# ===== Index tape =====
+
+# ---------- Index tape ----------
 st.subheader("Index Tape")
 c1, c2, c3, c4 = st.columns(4)
 for col, (name, ticker) in zip([c1, c2, c3, c4], list(RISK_ON.items())[:4]):
     intraday = fetch_intraday(ticker)
     s = prices.get(ticker, pd.Series(dtype=float)).dropna()
-    last = s.iloc[-1] if not s.empty else np.nan
-    delta = safe_pct_change(s, 1) if not s.empty else np.nan
+    last = float(s.iloc[-1]) if not s.empty else float("nan")
+    delta = safe_pct_change(s, 1) if not s.empty else float("nan")
     col.metric(name, f"{last:,.2f}" if pd.notna(last) else "N/A", f"{delta:.2f}%" if pd.notna(delta) else "N/A")
     col.plotly_chart(mini_chart(intraday, " "), use_container_width=True)
 
-# ===== Internals =====
+
+# ---------- Internals ----------
 st.subheader("Market Internals")
 ibar1, ibar2, ibar3, ibar4 = st.columns(4)
 
 if show_sp500_internals:
     spx_symbols = fetch_sp500_symbols()
-    sample_symbols = spx_symbols[:220]
-    spx_prices, _ = fetch_prices(sample_symbols, start)
-
-    if spx_prices.empty:
-        ibar1.info("Internals unavailable (no constituent data).")
+    if not spx_symbols:
+        ibar1.info("S&P internals unavailable (constituent list fetch blocked).")
     else:
-        spx_ret = spx_prices.pct_change().iloc[-1] * 100.0
+        sample_symbols = spx_symbols[:220]
+        spx_prices, _ = fetch_prices(sample_symbols, start)
 
-        adv = int((spx_ret > 0).sum())
-        dec = int((spx_ret <= 0).sum())
+        if spx_prices.empty:
+            ibar1.info("S&P internals unavailable (no constituent quotes).")
+        else:
+            spx_ret = spx_prices.pct_change().iloc[-1] * 100.0
 
-        last_row = spx_prices.iloc[-1]
-        sma50_row = spx_prices.rolling(50).mean().iloc[-1]
-        sma200_row = spx_prices.rolling(200).mean().iloc[-1]
+            adv = int((spx_ret > 0).sum())
+            dec = int((spx_ret <= 0).sum())
 
-        sma50 = int((last_row > sma50_row).sum())
-        sma200 = int((last_row > sma200_row).sum())
-        total = int(last_row.count()) if int(last_row.count()) > 0 else 1
+            last_row = spx_prices.iloc[-1]
+            sma50_row = spx_prices.rolling(50).mean().iloc[-1]
+            sma200_row = spx_prices.rolling(200).mean().iloc[-1]
 
-        ibar1.metric("Advancing", f"{adv}", f"{(adv / total) * 100.0:.1f}%")
-        ibar2.metric("Declining", f"{dec}", f"{(dec / total) * 100.0:.1f}%")
-        ibar3.metric("Above SMA50", f"{sma50}", f"{(sma50 / total) * 100.0:.1f}%")
-        ibar4.metric("Above SMA200", f"{sma200}", f"{(sma200 / total) * 100.0:.1f}%")
+            sma50 = int((last_row > sma50_row).sum())
+            sma200 = int((last_row > sma200_row).sum())
+            total = int(last_row.count()) if int(last_row.count()) > 0 else 1
+
+            ibar1.metric("Advancing", f"{adv}", f"{(adv / total) * 100.0:.1f}%")
+            ibar2.metric("Declining", f"{dec}", f"{(dec / total) * 100.0:.1f}%")
+            ibar3.metric("Above SMA50", f"{sma50}", f"{(sma50 / total) * 100.0:.1f}%")
+            ibar4.metric("Above SMA200", f"{sma200}", f"{(sma200 / total) * 100.0:.1f}%")
 else:
     ibar1.info("Enable S&P internals in sidebar")
 
-# ===== Movers + heatmap =====
+
+# ---------- Movers + heatmap ----------
 left, right = st.columns([1.25, 1])
 
 with left:
@@ -246,6 +307,7 @@ with left:
         for t in (MEGA_CAPS + list(SECTORS.keys()) + ["SPY", "QQQ", "IWM", "DIA", "SMH", "XBI", "ARKK"])
         if t in prices.columns
     ]
+
     rows: list[dict] = []
     for t in universe:
         s = prices[t].dropna()
@@ -274,7 +336,9 @@ with left:
             st.dataframe(tape.sort_values("1D %", ascending=True).head(15), use_container_width=True, hide_index=True)
         with a:
             st.dataframe(
-                tape.sort_values("Volume", ascending=False).head(15), use_container_width=True, hide_index=True
+                tape.sort_values("Volume", ascending=False).head(15),
+                use_container_width=True,
+                hide_index=True,
             )
 
 with right:
@@ -314,7 +378,8 @@ with right:
         fig_tree.update_layout(margin=dict(t=20, b=10, l=10, r=10), height=450)
         st.plotly_chart(fig_tree, use_container_width=True)
 
-# ===== Advanced diagnostics =====
+
+# ---------- Advanced diagnostics ----------
 st.subheader("Advanced Diagnostics")
 a1, a2, a3 = st.columns(3)
 
@@ -356,7 +421,8 @@ with a3:
     else:
         st.info("Breadth proxy unavailable (missing sector data).")
 
-# ===== Headlines & macro table =====
+
+# ---------- Headlines & macro snapshot ----------
 st.subheader("Headlines & Macro Tape")
 n1, n2 = st.columns([1.8, 1])
 
@@ -365,8 +431,8 @@ with n1:
     headlines = fetch_rss_headlines()
     if headlines:
         for h in headlines[:10]:
-            title = h.get("title", "").strip()
-            link = h.get("link", "").strip()
+            title = (h.get("title") or "").strip()
+            link = (h.get("link") or "").strip()
             if title and link:
                 st.markdown(f"- [{title}]({link})")
     else:
@@ -385,6 +451,7 @@ with n2:
         "30Y": "^TYX",
     }
     macro_prices, _ = fetch_prices(list(macro_tickers.values()), start)
+
     macro_rows: list[dict] = []
     for label, t in macro_tickers.items():
         s = macro_prices.get(t, pd.Series(dtype=float)).dropna()
@@ -402,7 +469,7 @@ with st.expander("Data and update notes"):
         """
 - Primary feed: Yahoo Finance via `yfinance` (public, no key).
 - Headlines: Yahoo Finance RSS feeds.
-- S&P internals: Constituents from Wikipedia plus market data from Yahoo.
+- S&P internals: Constituents sourced from stable JSON/CSV feeds; Wikipedia HTML is a fallback.
 - Auto-update: browser refresh every 5 minutes when enabled.
 - Environment note: if this runtime blocks outbound quote requests, sections may show partial data.
         """.strip()
