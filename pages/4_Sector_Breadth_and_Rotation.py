@@ -10,12 +10,10 @@ import yfinance as yf
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(
-    page_title="S&P 500 Sector Breadth & Rotation Monitor",
-    layout="wide"
-)
+apply_terminal_theme(page_title="S&P 500 Sector Breadth & Rotation Monitor", layout="wide")
 st.title("S&P 500 Sector Breadth & Rotation Monitor")
 
 # ------------------------------- Sidebar -----------------------------------

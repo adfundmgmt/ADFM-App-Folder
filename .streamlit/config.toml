@@ -1,0 +1,10 @@
+[theme]
+base = "dark"
+primaryColor = "#4CC9F0"
+backgroundColor = "#060B16"
+secondaryBackgroundColor = "#0C1423"
+textColor = "#E5ECF6"
+font = "monospace"
+chartCategoricalColors = ["#4CC9F0", "#F72585", "#B8F35D", "#FF9F1C", "#9B5DE5", "#2EC4B6", "#FFD166", "#FF595E", "#7BDFF2", "#A0C4FF", "#C77DFF", "#80ED99"]
+chartSequentialColors = ["#081120", "#0C1B31", "#102747", "#15345E", "#1B4276", "#24528F", "#2F64A9", "#3D78C2", "#4C8FDA", "#67A9F0"]
+chartDivergingColors = ["#F72585", "#D93A93", "#B84E9D", "#9361A1", "#6E70A0", "#4A7B97", "#32858A", "#258F7C", "#40A977", "#80ED99"]

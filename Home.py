@@ -1,6 +1,7 @@
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 
-st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
+apply_terminal_theme(page_title="AD Fund Management Tools", layout="wide")
 
 TOOLS_BY_CATEGORY = {
     "Market Structure & Price Action": [

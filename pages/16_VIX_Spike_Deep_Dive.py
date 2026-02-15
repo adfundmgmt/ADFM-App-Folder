@@ -12,9 +12,10 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from datetime import datetime
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(page_title="ADFM | VIX Spike Deep Dive", layout="wide")
+apply_terminal_theme(page_title="ADFM | VIX Spike Deep Dive", layout="wide")
 plt.style.use("default")
 
 # ------------------------------- Pastel palette ----------------------------

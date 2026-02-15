@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import yfinance as yf
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter, MaxNLocator
@@ -25,7 +26,7 @@ FALLBACK_MAP = {"^SPX": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
 # -------------------------- Streamlit UI -------------------------- #
-st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
+apply_terminal_theme(page_title="Seasonality Dashboard", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
 with st.sidebar:

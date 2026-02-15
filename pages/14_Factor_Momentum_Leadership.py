@@ -6,13 +6,14 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import plotly.graph_objects as go
 
 # ---------------- Config ----------------
-st.set_page_config(page_title="Factor Momentum and Basket Rotation", layout="wide")
+apply_terminal_theme(page_title="Factor Momentum and Basket Rotation", layout="wide")
 plt.style.use("default")
 
 TITLE = "Factor Momentum and Basket Rotation"

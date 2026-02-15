@@ -11,11 +11,12 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 
 # =========================
 # App config and style
 # =========================
-st.set_page_config(page_title="Weekly Cross-Asset Compass", layout="wide")
+apply_terminal_theme(page_title="Weekly Cross-Asset Compass", layout="wide")
 
 plt.rcParams.update({
     "figure.figsize": (8, 3),

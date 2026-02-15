@@ -17,13 +17,14 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
+from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import yfinance as yf
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 
 
 # ============================== Page + Style ==============================
-st.set_page_config(page_title="Hedge Timer", layout="wide")
+apply_terminal_theme(page_title="Hedge Timer", layout="wide")
 
 st.markdown(
     """
