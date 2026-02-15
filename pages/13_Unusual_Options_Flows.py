@@ -11,7 +11,6 @@ from typing import List, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import yfinance as yf
 
 APP_TITLE = "Unusual Options Flow Tracker"
@@ -20,7 +19,7 @@ INGEST_DIR = "ingest"
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(INGEST_DIR, exist_ok=True)
 
-apply_terminal_theme(page_title=APP_TITLE, layout="wide")
+st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
 
 # -------------------------

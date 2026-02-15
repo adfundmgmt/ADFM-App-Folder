@@ -1,5 +1,4 @@
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -11,7 +10,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 plt.style.use("default")
 
 # -------------- Page config --------------
-apply_terminal_theme(page_title="Ratio Charts", layout="wide")
+st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
 
 # -------------- Sidebar --------------

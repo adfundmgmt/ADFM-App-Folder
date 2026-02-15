@@ -22,7 +22,6 @@ except Exception:
 import numpy as np
 import pandas as pd
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 from pandas_datareader import data as pdr
 import yfinance as yf
 from plotly.subplots import make_subplots
@@ -30,7 +29,7 @@ import plotly.graph_objects as go
 
 # ---------------- App config ----------------
 TITLE = "Market Stress Composite"
-apply_terminal_theme(page_title=TITLE, layout="wide")
+st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
 
 # ---------------- Data maps -----------------

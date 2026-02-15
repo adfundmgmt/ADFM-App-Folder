@@ -7,12 +7,11 @@ import numpy as np
 import pandas as pd
 import pytz
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
-apply_terminal_theme(page_title="ETF Net Flows", layout="wide")
+st.set_page_config(page_title="ETF Net Flows", layout="wide")
 
 # --------------------------- SIDEBAR ---------------------------
 with st.sidebar:

@@ -21,7 +21,6 @@ from pandas_datareader import data as pdr
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-from adfm_ui.theme import apply_terminal_theme, apply_plotly_terminal, apply_matplotlib_terminal
 import requests
 from bs4 import BeautifulSoup
 
@@ -40,7 +39,7 @@ SHOW_RECESSION = True
 REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/1.0)"}
 
 # ── Streamlit Setup ──────────────────────────────────────
-apply_terminal_theme(page_title="10-Year Yield Dashboard", layout="wide")
+st.set_page_config(page_title="10-Year Yield Dashboard", layout="wide")
 st.title("10-Year Nominal and Real Yield Dashboard")
 
 # ── Sidebar: Controls and Info ───────────────────────────
