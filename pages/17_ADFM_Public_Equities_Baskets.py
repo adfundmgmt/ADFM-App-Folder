@@ -41,7 +41,7 @@ MARKET_CAP_EXCEPTIONS = set([
 
 # -----------------------------
 # CATEGORY -> BASKETS -> TICKERS
-# Rule: every basket has at least 3 names
+# Rule: every basket has at least 3 names (post-cleanup)
 # -----------------------------
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
@@ -52,7 +52,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Semis Memory and Storage": ["MU","WDC","STX","SKM"],
         "Semis Foundry and OSAT": ["TSM","UMC","GFS","ASX"],
         "Semis Equipment": ["ASML","AMAT","LRCX","KLAC","TER","ONTO","AEIS","ACMR"],
-        "Semis EDA and IP": ["SNPS","CDNS","ANSS","ARM"],
+        "Semis EDA and IP": ["SNPS","CDNS","ARM"],  # removed ANSS (acquired/delisted)
         "Semis China and HK ADRs": ["HIMX","TSM","UMC"],
 
         "AI Infrastructure Leaders": [
@@ -105,7 +105,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     },
 
     "Clean Energy Transition": {
-        "Solar and Inverters": ["TAN","FSLR","ENPH","SEDG","RUN","CSIQ","JKS","SPWR"],
+        "Solar and Inverters": ["TAN","FSLR","ENPH","SEDG","RUN","CSIQ","JKS"],  # removed SPWR (delisted)
         "Wind and Renewables": ["ICLN","FAN","AY","NEP","FSLR"],
         "Hydrogen": ["PLUG","BE","BLDP"],
         "Utilities and Power": ["VST","CEG","NEE","DUK","SO","AEP","XEL","EXC","PCG","EIX","ED"],
@@ -197,7 +197,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Sector Expansions": {
         "Transportation Rails and Trucking": ["UNP","CSX","NSC","CNI","CP","JBHT","KNX"],
         "Transportation Parcel and Last-Mile": ["FDX","UPS","GXO","XPO"],
-        "Air Cargo and Leasing": ["ATSG","AL","FTAI"],
+        "Air Cargo and Leasing": ["AL","FTAI","AER"],  # removed ATSG (acquired), added AER to keep 3+
         "Commodity Chemicals": ["DOW","LYB","CE"],
         "Specialty Chemicals": ["SHW","EMN","IFF","PPG"],
         "Industrial Gases": ["LIN","APD","AIQUY"],
@@ -213,7 +213,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     },
 
     "Everyday Economy": {
-        "Recreation and Experiences": ["YETI","FOXF","ASO","DOO","PLAY","LYV","SIX","FUN","RICK"],
+        "Recreation and Experiences": ["YETI","FOXF","ASO","DOO","PLAY","LYV","FUN","RICK"],  # removed SIX (no longer listed)
         "Deferred Durables and Home": ["SGI","SNBR","WHR","POOL","LOW","TTC","LAD"],
         "Deferred Healthcare": ["ALGN","EYE","WRBY","HSIC"],
         "Debt and Credit Paydown": ["OMF","CACC","SYF","COF","OPFI","ENVA"],
@@ -270,16 +270,15 @@ def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) ->
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Multi-ticker case: columns are MultiIndex OR single level with ticker columns (after selecting Close)
+    # Multi-ticker case
     if isinstance(df.columns, pd.MultiIndex):
         if "Close" not in df.columns.get_level_values(0):
             return pd.DataFrame()
         close = df["Close"].copy()
-        # Ensure columns are upper tickers
         close.columns = [str(c).upper() for c in close.columns]
         return close
 
-    # Single-ticker case: columns are like Open/High/Low/Close/Volume
+    # Single-ticker case
     if "Close" in df.columns:
         sym = str(batch[0]).upper()
         close = df[["Close"]].rename(columns={"Close": sym}).copy()
@@ -308,7 +307,6 @@ def fetch_daily_levels(tickers, start, end, chunk_size: int = 40) -> pd.DataFram
     bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
     wide = wide.reindex(bidx).ffill()
 
-    # Backstop: if SPY missing due to an upstream hiccup, fetch it alone and merge
     if "SPY" not in wide.columns or wide["SPY"].dropna().empty:
         spy_only = _download_close(["SPY"], start=start, end=end)
         if not spy_only.empty:
@@ -776,7 +774,6 @@ all_basket_rets = ew_rets_from_levels(
     stale_days=30
 )
 
-# At this point SPY should exist and be non-empty unless upstream returns nothing at all
 if bench not in levels.columns or levels[bench].dropna().empty:
     st.error("SPY data missing or empty for the selected range.")
     st.stop()
