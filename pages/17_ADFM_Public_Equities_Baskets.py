@@ -4,7 +4,7 @@ import numpy as np
 import yfinance as yf
 from datetime import date, timedelta
 import plotly.graph_objects as go
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 # -----------------------------
 # Page and theme
@@ -36,97 +36,14 @@ MIN_MARKET_CAP = 1_000_000_000
 
 MARKET_CAP_EXCEPTIONS = set([
     # Add exceptions here if you want smaller-cap baskets to pass the filter
+    # Examples: "UUUU","UEC","URG","UROY","DNN","NXE","LEU"
 ])
-
-# -----------------------------
-# Ticker maintenance layer
-# -----------------------------
-# Canonical ticker normalization for corporate actions and symbol drift
-TICKER_CANON: Dict[str, str] = {
-    "TPX": "SGI",   # Tempur Sealy -> Somnigroup (example of drift)
-    "DOOO": "DOO",  # BRP ticker change
-}
-
-# Tickers removed because they are no longer public or invalid for watchlist use
-# AY acquired and delisted
-# ATSG acquired and delisted
-DELISTED_OR_INVALID = set([
-    "AY",
-    "ATSG",
-])
-
-CHANGELOG_REMOVED = sorted(list(DELISTED_OR_INVALID))
-CHANGELOG_ADDED = sorted(list(set([
-    "AER",  # Added to keep leasing basket at >=3 after ATSG removal
-    # Geography and macro expansion tickers are "added" via new baskets below
-    "ACWI","VT","URTH",
-    "EFA","EEM","EMXC","FM",
-    "VGK","FEZ","EZU","EWU","EWG","EWQ","EWI","EWP","EWL","EWN","EWD","ENOR","EIRL",
-    "AAXJ","EPP","VPL",
-    "EWJ","DXJ","HEWJ",
-    "MCHI","FXI","KWEB","ASHR",
-    "INDA","EPI","SMIN",
-    "EWY","FLKR","EWT",
-    "EWA","EWS","EWH",
-    "ILF","EWZ","EWW","ECH","EPU",
-    "KSA","UAE","QAT","EIS","ISRA","ITEQ",
-    "UUP","GLD","USO","UNG","DBC","TIP","SHY","IEF","TLT","HYG","JNK","LQD",
-    "MTUM","QUAL","USMV","VTV","VUG","IWM","RSP",
-    "VIXY","VXX","UVXY",
-])))
-CHANGELOG_NORMALIZED = sorted([f"{k}->{v}" for k, v in TICKER_CANON.items()])
-
-def normalize_ticker(t: str) -> str:
-    s = str(t).strip().upper()
-    return TICKER_CANON.get(s, s)
-
-def clean_baskets(categories: Dict[str, Dict[str, List[str]]]) -> Tuple[Dict[str, Dict[str, List[str]]], Dict[str, List[str]]]:
-    """
-    Cleans basket tickers:
-      - uppercases and normalizes tickers
-      - drops invalid/delisted tickers
-      - dedupes within each basket
-      - enforces >=3 names rule by dropping baskets that fail (rare, but keeps rule consistent)
-    Returns cleaned categories and an audit log.
-    """
-    audit = {
-        "normalized": [],
-        "removed_invalid": [],
-        "dropped_baskets_lt3": [],
-    }
-
-    cleaned: Dict[str, Dict[str, List[str]]] = {}
-    for cat, baskets in categories.items():
-        cleaned[cat] = {}
-        for bname, tks in baskets.items():
-            before = [str(x).strip().upper() for x in tks if str(x).strip()]
-            after = []
-            for x in before:
-                nx = normalize_ticker(x)
-                if nx != x:
-                    audit["normalized"].append(f"{x}->{nx}")
-                if nx in DELISTED_OR_INVALID:
-                    audit["removed_invalid"].append(nx)
-                    continue
-                after.append(nx)
-
-            after = sorted(list(dict.fromkeys(after)))
-            if len(after) < 3:
-                audit["dropped_baskets_lt3"].append(f"{cat} | {bname}")
-                continue
-
-            cleaned[cat][bname] = after
-
-    audit["normalized"] = sorted(list(dict.fromkeys(audit["normalized"])))
-    audit["removed_invalid"] = sorted(list(dict.fromkeys(audit["removed_invalid"])))
-    audit["dropped_baskets_lt3"] = sorted(list(dict.fromkeys(audit["dropped_baskets_lt3"])))
-    return cleaned, audit
 
 # -----------------------------
 # CATEGORY -> BASKETS -> TICKERS
 # Rule: every basket has at least 3 names
 # -----------------------------
-RAW_CATEGORIES: Dict[str, Dict[str, List[str]]] = {
+CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
         "Semis ETFs": ["SMH","SOXX","XSD"],
         "Semis Compute and Accelerators": ["NVDA","AMD","INTC","ARM","AVGO","MRVL"],
@@ -189,7 +106,7 @@ RAW_CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
     "Clean Energy Transition": {
         "Solar and Inverters": ["TAN","FSLR","ENPH","SEDG","RUN","CSIQ","JKS","SPWR"],
-        "Wind and Renewables": ["ICLN","FAN","NEP","FSLR"],
+        "Wind and Renewables": ["ICLN","FAN","AY","NEP","FSLR"],
         "Hydrogen": ["PLUG","BE","BLDP"],
         "Utilities and Power": ["VST","CEG","NEE","DUK","SO","AEP","XEL","EXC","PCG","EIX","ED"],
         "Grid Equipment": ["ETN","VRT","ABB","PWR","MYRG","POWL"],
@@ -280,7 +197,7 @@ RAW_CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Sector Expansions": {
         "Transportation Rails and Trucking": ["UNP","CSX","NSC","CNI","CP","JBHT","KNX"],
         "Transportation Parcel and Last-Mile": ["FDX","UPS","GXO","XPO"],
-        "Air Cargo and Leasing": ["AL","FTAI","AER"],
+        "Air Cargo and Leasing": ["ATSG","AL","FTAI"],
         "Commodity Chemicals": ["DOW","LYB","CE"],
         "Specialty Chemicals": ["SHW","EMN","IFF","PPG"],
         "Industrial Gases": ["LIN","APD","AIQUY"],
@@ -321,43 +238,7 @@ RAW_CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Budget Hotels and Value Travel": ["CHH","WH","RYAAY"],
         "Chemicals Feedstock Sensitivity": ["DOW","LYB","WLK","OLN","CF","NTR","MOS"],
     },
-
-    # -----------------------------
-    # NEW: Geography and Country ETFs
-    # -----------------------------
-    "Geography and Country ETFs": {
-        "Global Equity Beta": ["ACWI","VT","URTH"],
-        "DM vs EM vs EM ex China": ["EFA","EEM","EMXC"],
-        "Frontier and Africa": ["FM","AFK","EZA"],
-
-        "Europe Broad": ["VGK","FEZ","EZU"],
-        "Europe Key Countries": ["EWU","EWG","EWQ","EWI","EWP","EWL","EWN","EWD","ENOR","EIRL"],
-
-        "Asia ex Japan Broad": ["AAXJ","EPP","VPL"],
-        "Japan Equity and Currency Lens": ["EWJ","DXJ","HEWJ"],
-
-        "China Equity Lenses": ["MCHI","FXI","KWEB","ASHR"],
-        "India Equity Lenses": ["INDA","EPI","SMIN"],
-
-        "Korea and Taiwan": ["EWY","FLKR","EWT"],
-        "Australia and Singapore HK": ["EWA","EWS","EWH"],
-
-        "Latin America Broad and Core": ["ILF","EWZ","EWW","ECH","EPU"],
-
-        "Middle East and Israel": ["KSA","UAE","QAT","EIS","ISRA","ITEQ"],
-    },
-
-    # -----------------------------
-    # NEW: Macro Cross-Asset and Factors
-    # -----------------------------
-    "Macro Cross-Asset and Factors": {
-        "Macro Cross-Asset Proxies": ["UUP","GLD","USO","UNG","DBC","TIP","SHY","IEF","TLT","HYG","JNK","LQD"],
-        "Equity Factors and Breadth": ["MTUM","QUAL","USMV","VTV","VUG","IWM","RSP"],
-        "Volatility Proxies": ["VIXY","VXX","UVXY"],
-    },
 }
-
-CATEGORIES, audit_log = clean_baskets(RAW_CATEGORIES)
 
 ALL_BASKETS = {bk: tks for cat in CATEGORIES.values() for bk, tks in cat.items()}
 
@@ -389,13 +270,16 @@ def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) ->
     if df is None or df.empty:
         return pd.DataFrame()
 
+    # Multi-ticker case: columns are MultiIndex OR single level with ticker columns (after selecting Close)
     if isinstance(df.columns, pd.MultiIndex):
         if "Close" not in df.columns.get_level_values(0):
             return pd.DataFrame()
         close = df["Close"].copy()
+        # Ensure columns are upper tickers
         close.columns = [str(c).upper() for c in close.columns]
         return close
 
+    # Single-ticker case: columns are like Open/High/Low/Close/Volume
     if "Close" in df.columns:
         sym = str(batch[0]).upper()
         close = df[["Close"]].rename(columns={"Close": sym}).copy()
@@ -424,6 +308,7 @@ def fetch_daily_levels(tickers, start, end, chunk_size: int = 40) -> pd.DataFram
     bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
     wide = wide.reindex(bidx).ffill()
 
+    # Backstop: if SPY missing due to an upstream hiccup, fetch it alone and merge
     if "SPY" not in wide.columns or wide["SPY"].dropna().empty:
         spy_only = _download_close(["SPY"], start=start, end=end)
         if not spy_only.empty:
@@ -842,18 +727,6 @@ with st.sidebar:
     )
     st.write(f"Constituents are filtered for stale data and market cap ≥ {MIN_MARKET_CAP:,.0f} USD, with optional exceptions.")
     st.divider()
-
-    st.markdown("### Maintenance Log")
-    with st.expander("What changed and what was cleaned", expanded=False):
-        st.write("Removed (no longer public or invalid): " + (", ".join(CHANGELOG_REMOVED) if CHANGELOG_REMOVED else "None"))
-        st.write("Canonical normalizations: " + (", ".join(CHANGELOG_NORMALIZED) if CHANGELOG_NORMALIZED else "None"))
-        st.write("Added (expansion tickers and basket repair): " + (", ".join(CHANGELOG_ADDED) if CHANGELOG_ADDED else "None"))
-        if audit_log.get("dropped_baskets_lt3"):
-            st.write("Baskets dropped due to <3 valid tickers: " + ", ".join(audit_log["dropped_baskets_lt3"]))
-        else:
-            st.write("Baskets dropped due to <3 valid tickers: None")
-
-    st.divider()
     st.markdown("### Controls")
 
     today = date.today()
@@ -903,6 +776,7 @@ all_basket_rets = ew_rets_from_levels(
     stale_days=30
 )
 
+# At this point SPY should exist and be non-empty unless upstream returns nothing at all
 if bench not in levels.columns or levels[bench].dropna().empty:
     st.error("SPY data missing or empty for the selected range.")
     st.stop()
