@@ -222,21 +222,37 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Construction Chemicals and Adhesives": ["EMN","RPM","SHW"],
     },
 
-    "Country and Region ETFs": {
-        "Europe Core": ["VGK","IEUR","EZU"],
-        "UK": ["EWU","UL","AZN"],
-        "Japan": ["EWJ","DXJ","SONY"],
-        "China Broad": ["FXI","MCHI","KWEB"],
-        "India": ["INDA","EPI","HDFC"],
-        "Latin America": ["ILF","EWZ","EWW"],
-        "Brazil": ["EWZ","VALE","PBR"],
-        "Mexico": ["EWW","FMX","ASR"],
-        "Canada": ["EWC","SU","CNQ"],
-        "Australia": ["EWA","BHP","RIO"],
-        "Middle East Gulf": ["KSA","UAE","QAT"],
-        "Israel": ["EIS","TEVA","CHKP"],
-        "Emerging Markets Broad": ["EEM","VWO","IEMG"],
-    },
+"Country and Region ETFs": {
+    "Developed ex-US": ["VEA"],
+    "Europe Broad": ["VGK"],
+    "Eurozone": ["EZU"],
+    "UK": ["EWU"],
+    "Japan": ["EWJ"],
+    "Canada": ["EWC"],
+    "Australia": ["EWA"],
+
+    "China": ["MCHI"],
+    "Hong Kong": ["EWH"],
+    "Taiwan": ["EWT"],
+    "South Korea": ["EWY"],
+    "India": ["INDA"],
+    "Singapore": ["EWS"],
+
+    "Emerging Markets Broad": ["IEMG"],
+    "Frontier Markets": ["FM"],
+
+    "Latin America Broad": ["ILF"],
+    "Brazil": ["EWZ"],
+    "Mexico": ["EWW"],
+    "Chile": ["ECH"],
+    "Peru": ["EPU"],
+
+    "Israel": ["EIS"],
+    "Saudi Arabia": ["KSA"],
+    "UAE": ["UAE"],
+    "Qatar": ["QAT"],
+    "South Africa": ["EZA"],
+},
 
     "Alt and Global Risk": {
         "Crypto Proxies": ["COIN","MSTR","MARA","RIOT","BITO"],
