@@ -52,8 +52,11 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Semis Memory and Storage": ["MU","WDC","STX","SKM"],
         "Semis Foundry and OSAT": ["TSM","UMC","GFS","ASX"],
         "Semis Equipment": ["ASML","AMAT","LRCX","KLAC","TER","ONTO","AEIS","ACMR"],
-        "Semis EDA and IP": ["SNPS","CDNS","ARM"],  # removed ANSS (acquired/delisted)
+        "Semis EDA and IP": ["SNPS","CDNS","ARM"],
         "Semis China and HK ADRs": ["HIMX","TSM","UMC"],
+
+        "Semis Automotive and Industrial End-Markets": ["NXPI","ON","MCHP","STM","QCOM","ADI"],
+        "Semis Test, Assembly, and Packaging": ["AMKR","TER","ONTO","AEIS","KLAC"],
 
         "AI Infrastructure Leaders": [
             "NVDA","AMD","AVGO","TSM","ASML",
@@ -66,6 +69,11 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
             "MSFT","AMZN","GOOGL","META","ORCL","IBM",
             "NOW","CRM","DDOG","SNOW","MDB","NET","ZS","OKTA"
         ],
+
+        "Usage-Based and Consumption Software": ["SNOW","DDOG","MDB","NET","CRWD"],
+        "Developer Tools and DevOps": ["DT","GTLB","MDB","DDOG","NET","TEAM"],
+        "Observability and Data Tooling": ["DDOG","ESTC","SPLK","NEWR","MDB"],
+
         "Quality SaaS": ["ADBE","CRM","NOW","INTU","TEAM","HUBS","DDOG","NET","MDB","SNOW"],
         "Cybersecurity": ["PANW","FTNT","CRWD","ZS","OKTA","TENB","S","CYBR","CHKP","NET"],
         "Digital Payments": ["V","MA","PYPL","SQ","FI","FIS","GPN","AXP","COF","DFS","ADYEY","MELI"],
@@ -82,6 +90,9 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Data Center REITs": ["EQIX","DLR","AMT","SBAC","CCI"],
         "Servers and Storage": ["SMCI","DELL","HPE","NTAP","WDC","STX","IBM"],
         "IT Services and Systems Integrators": ["ACN","IBM","CTSH","EPAM","GIB"],
+
+        "Rack Power Delivery and Electrical Gear": ["ETN","VRT","ABB","POWL","JCI"],
+        "AI Data Center Capex Beneficiaries": ["ANET","AVGO","MRVL","ETN","VRT","SMCI","DELL","EQIX"],
     },
 
     "Connectivity and Industrial Tech": {
@@ -89,6 +100,9 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Industrial Automation": ["ROK","ETN","EMR","AME","PH","ABB","FANUY","KEYS","TRMB","CGNX","IEX","ITW","GWW","SYM"],
         "Aerospace Tech and Space": ["RKLB","IRDM","ASTS","LHX","LMT","NOC","RTX"],
         "Defense Software and ISR": ["PLTR","KTOS","AVAV","LHX","LDOS","BAH"],
+
+        "Aerospace Aftermarket and MRO Exposure": ["GE","RTX","LMT","HEI","TDG"],
+        "Electrification and Grid Modernization": ["ETN","ABB","PWR","MYRG","POWL","VRT"],
     },
 
     "Energy and Hard Assets": {
@@ -102,14 +116,21 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Gold and Silver Miners": ["GDX","GDXJ","NEM","AEM","GOLD","KGC","AG","PAAS","WPM"],
         "Energy Midstream and Storage": ["KMI","WMB","EPD","ET","ENB","MPLX"],
         "Refining and Downstream": ["MPC","VLO","PSX","DK","PBF"],
+
+        "Oil-Weighted E&Ps": ["EOG","FANG","OXY","DVN","MRO"],
+        "Gas-Weighted E&Ps": ["AR","RRC","SWN","CTRA","CHK"],
+        "LNG Export Levered": ["LNG","KMI","WMB","ET","EPD"],
     },
 
     "Clean Energy Transition": {
-        "Solar and Inverters": ["TAN","FSLR","ENPH","SEDG","RUN","CSIQ","JKS"],  # removed SPWR (delisted)
+        "Solar and Inverters": ["TAN","FSLR","ENPH","SEDG","RUN","CSIQ","JKS"],
         "Wind and Renewables": ["ICLN","FAN","AY","NEP","FSLR"],
         "Hydrogen": ["PLUG","BE","BLDP"],
         "Utilities and Power": ["VST","CEG","NEE","DUK","SO","AEP","XEL","EXC","PCG","EIX","ED"],
         "Grid Equipment": ["ETN","VRT","ABB","PWR","MYRG","POWL"],
+
+        "Regulated Utilities Core": ["DUK","SO","AEP","XEL","EXC","ED"],
+        "Merchant Power and Volatility": ["VST","CEG","NRG","AES","CWEN"],
     },
 
     "Health and Longevity": {
@@ -120,6 +141,10 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Healthcare Payers": ["UNH","HUM","CI","ELV","CNC","MOH"],
         "Healthcare Providers and Hospitals": ["HCA","THC","UHS","CYH"],
         "Healthcare Services and Outsourcing": ["LH","DGX","AMN","EHC"],
+
+        "Drug Channel and PBM Exposure": ["CVS","UNH","CI","ELV"],
+        "Life Science Tools and Supply Chain": ["TMO","DHR","A","RGEN","WAT"],
+        "CRO and Clinical Services": ["IQV","SYK","TMO","LH","DGX"],
     },
 
     "Financials and Credit": {
@@ -134,6 +159,11 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Insurance Life and Retirement": ["MET","PRU","LNC","AIG"],
         "Reinsurers": ["RNR","RE","EG"],
         "Insurance Brokers": ["AJG","BRO","MMC","AON","WTW"],
+
+        "Deposit Beta and Funding Sensitivity": ["WFC","BAC","USB","PNC","KEY"],
+        "CRE Sensitivity Banks": ["KEY","CFG","NYCB","ZION","WAL"],
+        "Card and Consumer Lenders": ["AXP","COF","DFS","SYF","ALLY"],
+        "Capital Markets Activity Proxies": ["GS","MS","CME","ICE","NDAQ"],
     },
 
     "Real Assets and Inflation Beneficiaries": {
@@ -146,6 +176,11 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Housing Building Products and Materials": ["BLDR","TREX","MAS","VMC","MLM","SUM"],
         "Housing Mortgage and Title": ["COOP","RKT","UWMC","FNF","FAF"],
         "Housing Residential Transaction Proxies": ["RDFN","ZG","OPEN"],
+
+        "Net Lease and Long Lease Duration REITs": ["O","NNN","ADC","WPC"],
+        "Multifamily REITs": ["AVB","EQR","UDR","ESS","MAA"],
+        "Office and Refi Wall Sensitive REITs": ["BXP","VNO","SLG","KRC"],
+        "Construction Materials and Aggregates": ["VMC","MLM","SUM","NUE","EXP"],
     },
 
     "Consumer Cyclicals": {
@@ -159,6 +194,11 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Luxury and Apparel": ["TPR","RL","CPRI","LVMUY"],
         "Retail Asset-Heavy Inventory Risk": ["WMT","TGT","COST","BBY","M","GPS","KSS","BBWI"],
         "Retail Asset-Light Platforms and Marketplaces": ["AMZN","EBAY","ETSY","SHOP","PDD","MELI"],
+
+        "Prime Consumer Discretionary": ["COST","HD","LOW","LULU","NKE"],
+        "Subprime and Credit-Sensitive Consumer": ["AFRM","UPST","COF","DFS","SYF"],
+        "Big Ticket Durables": ["WHR","TPX","BBY","RH","LOW"],
+        "Auto Parts and Service Tailwind": ["AZO","ORLY","LKQ","AAP"],
     },
 
     "Defensives and Staples": {
@@ -167,6 +207,35 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Telecom and Cable": ["T","VZ","TMUS","CHTR","CMCSA"],
         "Aerospace and Defense": ["LMT","NOC","RTX","GD","HII","TDG","HEI"],
         "Utilities Defensive": ["DUK","SO","AEP","XEL","EXC","ED"],
+
+        "Beverage Bottlers and Distributors": ["KOF","COKE","FIZZ","KO"],
+        "Pricing Power Staples": ["PG","KO","PEP","COST","MDLZ"],
+        "Volume Risk and Trade-Down Staples": ["WMT","DG","DLTR","KR"],
+    },
+
+    "Materials and Chemicals": {
+        "Fertilizers": ["CF","MOS","NTR"],
+        "Commodity Chemicals": ["DOW","LYB","CE"],
+        "Specialty Chemicals": ["SHW","EMN","IFF","PPG","RPM"],
+        "Industrial Gases": ["LIN","APD","AIQUY"],
+        "Packaging and Containers": ["IP","PKG","WRK"],
+        "Construction Chemicals and Adhesives": ["EMN","RPM","SHW"],
+    },
+
+    "Country and Region ETFs": {
+        "Europe Core": ["VGK","IEUR","EZU"],
+        "UK": ["EWU","UL","AZN"],
+        "Japan": ["EWJ","DXJ","SONY"],
+        "China Broad": ["FXI","MCHI","KWEB"],
+        "India": ["INDA","EPI","HDFC"],
+        "Latin America": ["ILF","EWZ","EWW"],
+        "Brazil": ["EWZ","VALE","PBR"],
+        "Mexico": ["EWW","FMX","ASR"],
+        "Canada": ["EWC","SU","CNQ"],
+        "Australia": ["EWA","BHP","RIO"],
+        "Middle East Gulf": ["KSA","UAE","QAT"],
+        "Israel": ["EIS","TEVA","CHKP"],
+        "Emerging Markets Broad": ["EEM","VWO","IEMG"],
     },
 
     "Alt and Global Risk": {
@@ -192,28 +261,39 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Dollar-Down Beneficiaries": ["XME","GDX","EEM","EWZ"],
         "Commodity FX Equities": ["EWC","EWA","EWZ","EWW"],
         "EM Domestic Demand": ["EEM","INDA","EWW","EWZ","EIDO"],
+
+        "High Multiple Duration Risk": ["SNOW","NET","DDOG","MDB","SHOP"],
+        "Buyback and Cash Yield Winners": ["AAPL","MSFT","BRK-B","XOM","META"],
+        "High Short Interest and Retail Flow": ["CVNA","UPST","RIVN","BYND"],
+        "Spread Beta Equities": ["COF","DFS","SYF","OMF","ENVA"],
+        "Inflation Pass-Through Winners": ["COST","HD","SHW","NUE","VMC"],
+        "Input Cost and Margin Pressure Risk": ["DAL","UAL","SBUX","DPZ","WHR"],
     },
 
     "Sector Expansions": {
         "Transportation Rails and Trucking": ["UNP","CSX","NSC","CNI","CP","JBHT","KNX"],
         "Transportation Parcel and Last-Mile": ["FDX","UPS","GXO","XPO"],
-        "Air Cargo and Leasing": ["AL","FTAI","AER"],  # removed ATSG (acquired), added AER to keep 3+
+        "Air Cargo and Leasing": ["AL","FTAI","AER"],
+
         "Commodity Chemicals": ["DOW","LYB","CE"],
         "Specialty Chemicals": ["SHW","EMN","IFF","PPG"],
         "Industrial Gases": ["LIN","APD","AIQUY"],
+
         "Digital Advertising Platforms": ["GOOGL","META","TTD","PINS","SNAP"],
         "Traditional Media and Content": ["DIS","WBD","PARA","CHTR","CMCSA"],
         "Marketing Services and Agencies": ["IPG","OMC","WPP"],
+
         "Gov IT and Services": ["SAIC","CACI","LDOS","BAH","PSN","G"],
         "Public-Sector Systems Integration": ["ACN","IBM","CTSH","EPAM"],
         "Defense and Security Spending": ["LMT","NOC","RTX","GD","LHX","HII","TDG"],
         "Infrastructure and Grid Spend": ["PWR","ETN","VRT","ABB","CAT","URI","VMC","MLM"],
+
         "Healthcare Policy Sensitive": ["UNH","HUM","CI","ELV","CNC","CVS"],
         "Energy Subsidy and Transition Plays": ["FSLR","ENPH","BE","PLUG","NEE","VST","ICLN"],
     },
 
     "Everyday Economy": {
-        "Recreation and Experiences": ["YETI","FOXF","ASO","DOO","PLAY","LYV","FUN","RICK"],  # removed SIX (no longer listed)
+        "Recreation and Experiences": ["YETI","FOXF","ASO","DOO","PLAY","LYV","FUN","RICK"],
         "Deferred Durables and Home": ["SGI","SNBR","WHR","POOL","LOW","TTC","LAD"],
         "Deferred Healthcare": ["ALGN","EYE","WRBY","HSIC"],
         "Debt and Credit Paydown": ["OMF","CACC","SYF","COF","OPFI","ENVA"],
