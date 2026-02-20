@@ -127,8 +127,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Wind and Renewables": ["ICLN","FAN","AY","NEP","FSLR"],
         "Hydrogen": ["PLUG","BE","BLDP"],
         "Utilities and Power": ["VST","CEG","NEE","DUK","SO","AEP","XEL","EXC","PCG","EIX","ED"],
-        "Grid Equipment": ["ETN","VRT","ABB","PWR","MYRG","POWL"],
-
         "Regulated Utilities Core": ["DUK","SO","AEP","XEL","EXC","ED"],
         "Merchant Power and Volatility": ["VST","CEG","NRG","AES","CWEN"],
     },
