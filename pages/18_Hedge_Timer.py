@@ -71,7 +71,7 @@ SPX_LABEL = "^SPX"
 NDX_LABEL = "^NDX"
 
 CALIBRATION_START = "2020-01-01"
-DISPLAY_START = CALIBRATION_START  # chart anchor
+DISPLAY_SESSIONS = 252  # ~12 months of trading sessions
 HORIZON_DAYS = 20
 LEAD_LOOKBACK = 40
 
@@ -129,14 +129,11 @@ def _today() -> date:
 
 
 def _start_date() -> date:
-    # enough history to compute MA200 and multi-timeframe indicators cleanly,
-    # while always covering the 2020 anchor with buffer.
-    anchor = pd.Timestamp(CALIBRATION_START).date()
-    # pull extra buffer for MA200 + RSI/MACD stability
-    return min(anchor, _today() - timedelta(days=int(10 * 365.25) + 180))
+    # enough history to compute MA200 and multi-timeframe indicators cleanly
+    return _today() - timedelta(days=int(10 * 365.25) + 180)
 
 
-@st.cache_data(ttl=21600, show_spinner=False)  # 6 hours; naturally updates daily as new closes arrive
+@st.cache_data(ttl=900, show_spinner=False)
 def yf_download(tickers: List[str], start: date) -> pd.DataFrame:
     return yf.download(
         tickers=tickers,
@@ -634,7 +631,7 @@ def calibrate_threshold(
     return int(best_t)
 
 
-# ============================== Static Chart (anchored at Jan 2020) ==============================
+# ============================== Static Chart (rolling 12 months, no calendar gaps) ==============================
 def _display_name(ticker: str) -> str:
     if ticker == SPX_TICKER:
         return SPX_LABEL
@@ -691,13 +688,8 @@ def plot_price_and_score_image(
         plt.text(0.5, 0.5, "Insufficient data", ha="center", va="center")
         return fig
 
-    # Anchor at Jan 2020 (and keep extending forward as new sessions arrive)
-    anchor = pd.Timestamp(DISPLAY_START)
-    dfp = dfp.loc[dfp.index >= anchor].copy()
-    if dfp.empty:
-        fig = plt.figure(figsize=(13, 6))
-        plt.text(0.5, 0.5, "No data since anchor date", ha="center", va="center")
-        return fig
+    if len(dfp) > DISPLAY_SESSIONS:
+        dfp = dfp.iloc[-DISPLAY_SESSIONS:].copy()
 
     x = np.arange(len(dfp))
     idx = dfp.index
@@ -745,7 +737,7 @@ def plot_price_and_score_image(
     _apply_subtle_grid(ax1, y_only=False)
     ax1.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
 
-    # Score panel with red->yellow->green grading
+    # Score panel with red->yellow->green grading, omit from legend
     y_score = dfp["score"].fillna(0.0).values.astype(float)
     _plot_score_gradient(ax2, x.astype(float), y_score)
 
@@ -758,19 +750,19 @@ def plot_price_and_score_image(
     _apply_subtle_grid(ax2, y_only=True)
     ax2.set_xlim(-0.5, len(dfp) - 0.5)
 
-    # Quarterly ticks (cleaner across multi-year windows)
-    quarters = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq="QS")
+    # Month ticks
+    months = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq="MS")
     tick_pos, tick_lbl = [], []
-    for d in quarters:
+    for d in months:
         loc = idx.get_indexer([d], method="nearest")[0]
         if 0 <= loc < len(idx):
-            if not tick_pos or loc - tick_pos[-1] >= 45:
+            if not tick_pos or loc - tick_pos[-1] >= 18:
                 tick_pos.append(int(loc))
                 tick_lbl.append(d.strftime("%b %Y"))
     ax2.set_xticks(tick_pos)
     ax2.set_xticklabels(tick_lbl, rotation=0, ha="center")
 
-    fig.suptitle(f"{title_prefix} (Since Jan 2020)", fontsize=14, fontweight="bold", y=0.985)
+    fig.suptitle(f"{title_prefix} (Last 12 Months)", fontsize=14, fontweight="bold", y=0.985)
 
     # Legend: drop Score entirely
     handles1, labels1 = ax1.get_legend_handles_labels()
