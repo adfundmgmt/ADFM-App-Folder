@@ -1,5 +1,4 @@
 # pages/20_S&P_500_Breakout_Scanner.py
-# S&P 500 Breakout Scanner (Streamlit, robust universe fetch + Cloud-safe SQLite + slider guards)
 
 from __future__ import annotations
 
@@ -18,8 +17,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
-
-# ============================== UI + CONFIG ==============================
 
 st.set_page_config(page_title="S&P 500 Breakout Scanner", layout="wide")
 st.title("S&P 500 Breakout Scanner")
@@ -41,15 +38,17 @@ WATCHLIST_VOL_THRESHOLD = float(SCANNER_SECRETS.get("watchlist_vol_threshold", D
 ROC_THRESHOLD_PCT = float(SCANNER_SECRETS.get("roc_threshold_pct", DEFAULT_ROC_THRESHOLD_PCT))
 MIN_DOLLAR_VOLUME = float(SCANNER_SECRETS.get("min_dollar_volume", DEFAULT_MIN_DOLLAR_VOLUME))
 
-# Streamlit Cloud-safe writable DB location
 DB_PATH = os.path.join(tempfile.gettempdir(), "scanner.db")
+
+def clamp_int(x: int, lo: int, hi: int) -> int:
+    if hi < lo:
+        return lo
+    return max(lo, min(int(x), int(hi)))
 
 # ============================== DB ==============================
 
 def db_connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-
-    # Make SQLite friendlier under Streamlit reruns
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=30000;")
@@ -99,55 +98,29 @@ def db_connect() -> sqlite3.Connection:
     conn.commit()
     return conn
 
-
 def db_cache_universe(conn: sqlite3.Connection, source: str, tickers: List[str]) -> None:
     if not tickers:
         return
     asof_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
     tickers_csv = ",".join(tickers)
-
-    # Defensive: if schema didn't exist for some reason, ensure it
     conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS universe_cache (
-            asof_utc TEXT NOT NULL,
-            source TEXT NOT NULL,
-            tickers_csv TEXT NOT NULL,
-            PRIMARY KEY (asof_utc, source)
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO universe_cache (asof_utc, source, tickers_csv)
-        VALUES (?, ?, ?)
-        """,
+        "INSERT INTO universe_cache (asof_utc, source, tickers_csv) VALUES (?, ?, ?)",
         (asof_utc, source, tickers_csv),
     )
     conn.commit()
 
-
 def db_load_last_universe(conn: sqlite3.Connection) -> Optional[List[str]]:
     try:
         row = conn.execute(
-            """
-            SELECT tickers_csv
-            FROM universe_cache
-            ORDER BY asof_utc DESC
-            LIMIT 1
-            """
+            "SELECT tickers_csv FROM universe_cache ORDER BY asof_utc DESC LIMIT 1"
         ).fetchone()
     except sqlite3.OperationalError:
         return None
-
     if not row:
         return None
-    tickers_csv = row[0]
-    tickers = [t.strip().upper() for t in tickers_csv.split(",") if t.strip()]
-    tickers = [t.replace(".", "-") for t in tickers]
+    tickers = [t.strip().upper().replace(".", "-") for t in row[0].split(",") if t.strip()]
     tickers = sorted(list(dict.fromkeys(tickers)))
     return tickers if tickers else None
-
 
 def db_upsert_signals(conn: sqlite3.Connection, df: pd.DataFrame) -> None:
     if df is None or df.empty:
@@ -158,7 +131,6 @@ def db_upsert_signals(conn: sqlite3.Connection, df: pd.DataFrame) -> None:
         "created_at"
     ]
     df2 = df[cols].copy()
-
     conn.executemany(
         """
         INSERT OR REPLACE INTO signals
@@ -169,7 +141,6 @@ def db_upsert_signals(conn: sqlite3.Connection, df: pd.DataFrame) -> None:
         df2.itertuples(index=False, name=None)
     )
     conn.commit()
-
 
 def db_upsert_forward_returns(conn: sqlite3.Connection, fr: pd.DataFrame) -> None:
     if fr is None or fr.empty:
@@ -185,17 +156,13 @@ def db_upsert_forward_returns(conn: sqlite3.Connection, fr: pd.DataFrame) -> Non
     )
     conn.commit()
 
-
 def db_read_forward_returns(conn: sqlite3.Connection) -> pd.DataFrame:
-    q = """
-    SELECT * FROM forward_returns
-    ORDER BY scan_date DESC, ticker ASC, day_n ASC
-    LIMIT 200000
-    """
-    return pd.read_sql_query(q, conn)
+    return pd.read_sql_query(
+        "SELECT * FROM forward_returns ORDER BY scan_date DESC, ticker ASC, day_n ASC LIMIT 200000",
+        conn
+    )
 
-
-# ============================== UNIVERSE (ROBUST) ==============================
+# ============================== UNIVERSE ==============================
 
 WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
@@ -215,22 +182,14 @@ def _http_get(url: str, timeout: int = 30) -> str:
         method="GET",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
-    return raw.decode("utf-8", errors="replace")
-
+        return resp.read().decode("utf-8", errors="replace")
 
 def _parse_sp500_from_html(html: str) -> List[str]:
     tables = pd.read_html(io.StringIO(html))
-    if not tables:
-        raise ValueError("No tables found on Wikipedia HTML")
     sp = tables[0]
-    if "Symbol" not in sp.columns:
-        raise ValueError("Wikipedia table did not contain a Symbol column")
     tickers = sp["Symbol"].astype(str).tolist()
     tickers = [t.strip().upper().replace(".", "-") for t in tickers if t and isinstance(t, str)]
-    tickers = sorted(list(dict.fromkeys(tickers)))
-    return tickers
-
+    return sorted(list(dict.fromkeys(tickers)))
 
 @st.cache_data(ttl=6 * 60 * 60)
 def fetch_sp500_tickers_robust() -> Tuple[List[str], str]:
@@ -247,21 +206,18 @@ def fetch_sp500_tickers_robust() -> Tuple[List[str], str]:
             time.sleep(1.5 * attempt)
     return [], f"Wikipedia failed: {type(last_err).__name__}: {last_err}"
 
-
 def parse_manual_tickers(text: str) -> List[str]:
     raw = text.replace("\n", ",").replace(" ", ",").split(",")
     tickers = [t.strip().upper() for t in raw if t.strip()]
     tickers = [t.replace(".", "-") for t in tickers]
-    tickers = sorted(list(dict.fromkeys(tickers)))
-    return tickers
+    return sorted(list(dict.fromkeys(tickers)))
 
-
-# ============================== DATA PULL ==============================
+# ============================== DATA ==============================
 
 @st.cache_data(ttl=60 * 60)
 def download_ohlcv(tickers: List[str], lookback_days: int) -> pd.DataFrame:
     period = "400d" if lookback_days <= 260 else "730d"
-    df = yf.download(
+    return yf.download(
         tickers=tickers,
         period=period,
         interval="1d",
@@ -270,8 +226,6 @@ def download_ohlcv(tickers: List[str], lookback_days: int) -> pd.DataFrame:
         threads=True,
         progress=False,
     )
-    return df
-
 
 def normalize_download(df: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.DataFrame]:
     out: Dict[str, pd.DataFrame] = {}
@@ -289,8 +243,6 @@ def normalize_download(df: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.Dat
                     continue
                 sub = df.loc[:, pd.IndexSlice[:, t]].copy()
                 sub.columns = [c[0] for c in sub.columns]
-                if "Adj Close" in sub.columns:
-                    sub = sub.rename(columns={"Adj Close": "AdjClose"})
                 sub = sub[["Open", "High", "Low", "Close", "Volume"]].dropna(how="any")
                 if len(sub) > 0:
                     out[t] = sub
@@ -299,23 +251,14 @@ def normalize_download(df: pd.DataFrame, tickers: List[str]) -> Dict[str, pd.Dat
                 if t not in lvl0:
                     continue
                 sub = df[t].copy()
-                if "Adj Close" in sub.columns:
-                    sub = sub.rename(columns={"Adj Close": "AdjClose"})
                 needed = ["Open", "High", "Low", "Close", "Volume"]
                 if all(c in sub.columns for c in needed):
                     sub = sub[needed].dropna(how="any")
                     if len(sub) > 0:
                         out[t] = sub
-    else:
-        needed = {"Open", "High", "Low", "Close", "Volume"}
-        if needed.issubset(set(df.columns)):
-            t = tickers[0] if tickers else "TICKER"
-            out[t] = df[list(needed)].dropna(how="any")
-
     return out
 
-
-# ============================== SCORING ==============================
+# ============================== SIGNAL LOGIC ==============================
 
 @dataclass
 class ConsolidationMetrics:
@@ -323,37 +266,26 @@ class ConsolidationMetrics:
     slope: float
     max_dev: float
 
-
 def compute_consolidation_metrics(prices: pd.Series) -> ConsolidationMetrics:
-    price_mean = float(prices.mean())
-    if price_mean <= 0:
+    mean = float(prices.mean())
+    if mean <= 0:
         return ConsolidationMetrics(std=np.nan, slope=np.nan, max_dev=np.nan)
-
-    price_std = float(prices.std(ddof=0) / price_mean)
+    std = float(prices.std(ddof=0) / mean)
     x = np.arange(len(prices), dtype=float)
     coeff = np.polyfit(x, prices.values.astype(float), 1)
-    slope = float(abs(coeff[0]) / price_mean)
-    dev = (prices - price_mean).abs() / price_mean
-    max_dev = float(dev.max())
-    return ConsolidationMetrics(std=price_std, slope=slope, max_dev=max_dev)
-
+    slope = float(abs(coeff[0]) / mean)
+    max_dev = float(((prices - mean).abs() / mean).max())
+    return ConsolidationMetrics(std=std, slope=slope, max_dev=max_dev)
 
 def is_consolidating(df: pd.DataFrame, consolidation_days: int) -> Tuple[bool, ConsolidationMetrics]:
     if df is None or len(df) < consolidation_days + 15:
         return False, ConsolidationMetrics(std=np.nan, slope=np.nan, max_dev=np.nan)
-
     window = df.iloc[-(consolidation_days + 1):-1]
     m = compute_consolidation_metrics(window["Close"])
-
-    low_volatility = m.std < 0.04
-    sideways = m.slope < 0.0006
-    near_mean = m.max_dev < 0.065
-
-    return bool(low_volatility and sideways and near_mean), m
-
+    return bool(m.std < 0.04 and m.slope < 0.0006 and m.max_dev < 0.065), m
 
 def rising_volume_ratio(df: pd.DataFrame) -> Tuple[bool, float]:
-    if df is None or len(df) < 3 + 10 + 5:
+    if df is None or len(df) < 18:
         return False, 0.0
     recent = float(df["Volume"].iloc[-3:].mean())
     base = float(df["Volume"].iloc[-13:-3].mean())
@@ -362,124 +294,47 @@ def rising_volume_ratio(df: pd.DataFrame) -> Tuple[bool, float]:
     ratio = recent / base
     return bool(ratio >= WATCHLIST_VOL_THRESHOLD), float(ratio)
 
-
 def dollar_volume_20d(df: pd.DataFrame) -> float:
     if df is None or len(df) < 25:
         return 0.0
-    px = df["Close"].iloc[-20:]
-    vol = df["Volume"].iloc[-20:]
-    return float((px * vol).mean())
+    return float((df["Close"].iloc[-20:] * df["Volume"].iloc[-20:]).mean())
 
+def inside_consolidation(df: pd.DataFrame, consolidation_days: int) -> bool:
+    cons = df.iloc[-(consolidation_days + 1):-1]
+    hi = float(cons["High"].max())
+    lo = float(cons["Low"].min())
+    close = float(df["Close"].iloc[-1])
+    return bool((close <= hi * (1.0 + BREAKOUT_BUFFER_PCT)) and (close >= lo * (1.0 - BREAKOUT_BUFFER_PCT)))
 
 def breakout_today(df: pd.DataFrame, consolidation_days: int) -> Tuple[bool, Dict[str, float]]:
-    if df is None or len(df) < consolidation_days + 20:
-        return False, {}
-
     cons = df.iloc[-(consolidation_days + 1):-1]
-    cons_high = float(cons["High"].max())
-    cons_low = float(cons["Low"].min())
+    hi = float(cons["High"].max())
+    lo = float(cons["Low"].min())
 
-    today = df.iloc[-1]
-    close = float(today["Close"])
-    vol = float(today["Volume"])
+    close = float(df["Close"].iloc[-1])
+    vol = float(df["Volume"].iloc[-1])
 
-    up = close > cons_high * (1.0 + BREAKOUT_BUFFER_PCT)
-    down = close < cons_low * (1.0 - BREAKOUT_BUFFER_PCT)
+    up = close > hi * (1.0 + BREAKOUT_BUFFER_PCT)
+    down = close < lo * (1.0 - BREAKOUT_BUFFER_PCT)
     direction = "UP" if up else "DOWN" if down else "NONE"
 
     vol_base = float(df["Volume"].iloc[-11:-1].mean())
-    if vol_base <= 0:
-        vol_ratio = 0.0
-        vol_ok = False
-    else:
-        vol_ratio = vol / vol_base
-        vol_ok = vol_ratio >= VOL_SURGE_THRESHOLD
+    vol_ratio = (vol / vol_base) if vol_base > 0 else 0.0
+    vol_ok = vol_ratio >= VOL_SURGE_THRESHOLD
 
     past_close = float(df["Close"].iloc[-11])
     roc = ((close - past_close) / past_close) * 100.0 if past_close > 0 else 0.0
-    if direction == "UP":
-        roc_ok = roc >= ROC_THRESHOLD_PCT
-    elif direction == "DOWN":
-        roc_ok = roc <= -ROC_THRESHOLD_PCT
-    else:
-        roc_ok = False
+    roc_ok = (roc >= ROC_THRESHOLD_PCT) if direction == "UP" else (roc <= -ROC_THRESHOLD_PCT) if direction == "DOWN" else False
 
     ok = bool(direction != "NONE" and vol_ok and roc_ok)
-    return ok, {
-        "direction": direction,
-        "volume_ratio": float(vol_ratio),
-        "roc": float(roc),
-        "cons_high": cons_high,
-        "cons_low": cons_low,
-    }
+    return ok, {"direction": direction, "volume_ratio": float(vol_ratio), "roc": float(roc)}
 
-
-def inside_consolidation(df: pd.DataFrame, consolidation_days: int) -> bool:
-    if df is None or len(df) < consolidation_days + 5:
-        return False
-    cons = df.iloc[-(consolidation_days + 1):-1]
-    cons_high = float(cons["High"].max())
-    cons_low = float(cons["Low"].min())
-    close = float(df["Close"].iloc[-1])
-    return bool((close <= cons_high * (1.0 + BREAKOUT_BUFFER_PCT)) and (close >= cons_low * (1.0 - BREAKOUT_BUFFER_PCT)))
-
-
-# ============================== FORWARD RETURNS ==============================
-
-def compute_forward_returns_for_signals(
-    data: Dict[str, pd.DataFrame],
-    breakouts: pd.DataFrame,
-    max_days: int = 10
-) -> pd.DataFrame:
-    if breakouts is None or breakouts.empty:
-        return pd.DataFrame()
-
-    rows = []
-    for _, r in breakouts.iterrows():
-        t = r["ticker"]
-        if t not in data:
-            continue
-        df = data[t]
-        if df is None or df.empty:
-            continue
-
-        entry_idx = len(df) - 1
-        entry_price = float(df["Close"].iloc[entry_idx])
-        direction = str(r.get("direction", "UP"))
-
-        for day_n in range(1, max_days + 1):
-            idx = entry_idx + day_n
-            if idx >= len(df):
-                break
-            px = float(df["Close"].iloc[idx])
-            ret = ((px - entry_price) / entry_price) * 100.0 if entry_price > 0 else np.nan
-            rows.append({
-                "scan_date": r["scan_date"],
-                "ticker": t,
-                "direction": direction,
-                "entry_price": entry_price,
-                "day_n": int(day_n),
-                "return_pct": float(ret),
-            })
-
-    return pd.DataFrame(rows)
-
-
-# ============================== CHARTING ==============================
+# ============================== CHARTS ==============================
 
 def plot_candles(df: pd.DataFrame, ticker: str, consolidation_days: int, title: str) -> go.Figure:
     d = df.tail(90).copy()
     fig = go.Figure()
-    fig.add_trace(
-        go.Candlestick(
-            x=d.index,
-            open=d["Open"],
-            high=d["High"],
-            low=d["Low"],
-            close=d["Close"],
-            name=ticker,
-        )
-    )
+    fig.add_trace(go.Candlestick(x=d.index, open=d["Open"], high=d["High"], low=d["Low"], close=d["Close"], name=ticker))
 
     if len(d) >= consolidation_days + 2:
         cons = d.iloc[-(consolidation_days + 1):-1]
@@ -499,14 +354,11 @@ def plot_candles(df: pd.DataFrame, ticker: str, consolidation_days: int, title: 
 
     fig.update_layout(
         title=title,
-        xaxis_title="Date",
-        yaxis_title="Price",
         height=520,
         margin=dict(l=10, r=10, t=40, b=10),
         xaxis_rangeslider_visible=False,
     )
     return fig
-
 
 # ============================== SCAN ==============================
 
@@ -525,13 +377,7 @@ def run_full_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[
     status = st.empty()
 
     for i, t in enumerate(tickers, start=1):
-        if t not in data:
-            if i % 25 == 0 or i == total:
-                prog.progress(int(i / total * 100))
-                status.write(f"Scanning {i}/{total} ...")
-            continue
-
-        df = data[t]
+        df = data.get(t)
         if df is None or df.empty or len(df) < CONSOLIDATION_DAYS + 25:
             if i % 25 == 0 or i == total:
                 prog.progress(int(i / total * 100))
@@ -596,95 +442,40 @@ def run_full_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[
     status.write("Scan complete.")
     prog.progress(100)
 
-    breakouts_df = pd.DataFrame(breakout_rows)
-    watch_df = pd.DataFrame(watch_rows)
+    bdf = pd.DataFrame(breakout_rows)
+    wdf = pd.DataFrame(watch_rows)
 
-    if not breakouts_df.empty:
-        breakouts_df["abs_roc"] = breakouts_df["roc"].abs()
-        breakouts_df = breakouts_df.sort_values(["abs_roc", "volume_ratio"], ascending=[False, False]).drop(columns=["abs_roc"])
+    if not bdf.empty:
+        bdf["abs_roc"] = bdf["roc"].abs()
+        bdf = bdf.sort_values(["abs_roc", "volume_ratio"], ascending=[False, False]).drop(columns=["abs_roc"])
+    if not wdf.empty:
+        wdf = wdf.sort_values(["volume_ratio", "dollar_volume_20d"], ascending=[False, False])
 
-    if not watch_df.empty:
-        watch_df = watch_df.sort_values(["volume_ratio", "dollar_volume_20d"], ascending=[False, False])
-
-    return breakouts_df, watch_df, data
-
-
-# ============================== EMAIL (OPTIONAL, SAFE DEFAULT OFF) ==============================
-
-def email_settings() -> Dict[str, object]:
-    e = st.secrets.get("email", {})
-    enabled = bool(e.get("enabled", False))
-    sender = str(e.get("sender_email", "")).strip()
-    password = str(e.get("sender_app_password", "")).strip()
-    recipients = e.get("recipients", [])
-    if isinstance(recipients, str):
-        recipients = [x.strip() for x in recipients.split(",") if x.strip()]
-    return {"enabled": enabled, "sender": sender, "password": password, "recipients": recipients}
-
-
-def format_report(breakouts: pd.DataFrame, watch: pd.DataFrame) -> str:
-    dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    nb = 0 if breakouts is None else len(breakouts)
-    nw = 0 if watch is None else len(watch)
-
-    lines = []
-    lines.append("S&P 500 Breakout Scanner Report")
-    lines.append(f"Run: {dt}")
-    lines.append("")
-    lines.append(f"Breakouts: {nb}")
-    lines.append(f"Watchlist: {nw}")
-    lines.append("")
-    if breakouts is not None and not breakouts.empty:
-        lines.append("BREAKOUTS")
-        for _, r in breakouts.iterrows():
-            lines.append(
-                f"{r['ticker']} | {r['direction']} | ${r['price']:.2f} | Vol {r['volume_ratio']:.2f}x | ROC {r['roc']:+.2f}% | $Vol20d {r['dollar_volume_20d'] / 1e6:.1f}M"
-            )
-        lines.append("")
-    if watch is not None and not watch.empty:
-        lines.append("WATCHLIST")
-        for _, r in watch.iterrows():
-            lines.append(
-                f"{r['ticker']} | ${r['price']:.2f} | VolTrend {r['volume_ratio']:.2f}x | $Vol20d {r['dollar_volume_20d'] / 1e6:.1f}M"
-            )
-        lines.append("")
-    return "\n".join(lines)
-
+    return bdf, wdf, data
 
 # ============================== SIDEBAR + UNIVERSE ==============================
 
 conn = db_connect()
-es = email_settings()
 
 with st.sidebar:
     st.header("Scanner Controls")
-
     st.write(f"DB path: {DB_PATH}")
-    st.subheader("Universe fallback (manual)")
+
     manual_text = st.text_area(
-        "Paste tickers (comma/space/newline separated). Leave blank to use Wikipedia/DB.",
+        "Manual tickers (comma/space/newline). Leave blank for Wikipedia/DB fallback.",
         value="",
         height=90,
     )
 
-    st.subheader("Filters")
     MIN_DOLLAR_VOLUME = float(
         st.number_input("Min avg daily $ volume (20d)", min_value=0.0, value=float(MIN_DOLLAR_VOLUME), step=5_000_000.0)
     )
 
-    st.subheader("Parameters")
     CONSOLIDATION_DAYS = st.slider("Consolidation window (sessions)", 20, 60, int(CONSOLIDATION_DAYS), 1)
     BREAKOUT_BUFFER_PCT = st.slider("Breakout buffer (%)", 0.0, 3.0, float(BREAKOUT_BUFFER_PCT * 100.0), 0.1) / 100.0
     VOL_SURGE_THRESHOLD = st.slider("Breakout volume threshold (x)", 1.0, 3.0, float(VOL_SURGE_THRESHOLD), 0.05)
     WATCHLIST_VOL_THRESHOLD = st.slider("Watchlist volume trend threshold (x)", 1.0, 2.0, float(WATCHLIST_VOL_THRESHOLD), 0.05)
     ROC_THRESHOLD_PCT = st.slider("ROC threshold (%)", 0.0, 5.0, float(ROC_THRESHOLD_PCT), 0.1)
-
-def parse_manual_tickers(text: str) -> List[str]:
-    raw = text.replace("\n", ",").replace(" ", ",").split(",")
-    tickers = [t.strip().upper() for t in raw if t.strip()]
-    tickers = [t.replace(".", "-") for t in tickers]
-    tickers = sorted(list(dict.fromkeys(tickers)))
-    return tickers
 
 def resolve_universe() -> Tuple[List[str], str]:
     manual = parse_manual_tickers(manual_text) if manual_text.strip() else []
@@ -695,9 +486,8 @@ def resolve_universe() -> Tuple[List[str], str]:
     if live:
         try:
             db_cache_universe(conn, "wikipedia", live)
-        except sqlite3.OperationalError as e:
-            # Still allow the app to run even if caching fails
-            live_source = f"{live_source} | cache failed: {type(e).__name__}"
+        except sqlite3.OperationalError:
+            pass
         return live, live_source
 
     cached = db_load_last_universe(conn)
@@ -709,7 +499,6 @@ def resolve_universe() -> Tuple[List[str], str]:
 tickers, universe_source = resolve_universe()
 st.caption(f"Universe source: {universe_source}")
 st.caption(f"Universe size: {len(tickers)}")
-
 if not tickers:
     st.error("No universe available. Paste a manual ticker list in the sidebar to proceed.")
     st.stop()
@@ -717,10 +506,8 @@ if not tickers:
 # ============================== MAIN ==============================
 
 colA, colB = st.columns([1, 1])
-with colA:
-    run_scan = st.button("Run Scan", type="primary")
-with colB:
-    clear_cache = st.button("Clear cached data (Streamlit cache)")
+run_scan = colA.button("Run Scan", type="primary")
+clear_cache = colB.button("Clear Streamlit cache")
 
 if clear_cache:
     st.cache_data.clear()
@@ -736,74 +523,13 @@ if "last_data" not in st.session_state:
 if run_scan:
     st.info("Downloading data and scanning the full universe.")
     breakouts_df, watch_df, data_map = run_full_scan(tickers)
-
     st.session_state["last_breakouts"] = breakouts_df
     st.session_state["last_watch"] = watch_df
     st.session_state["last_data"] = data_map
 
-    combined = (
-        pd.concat([breakouts_df, watch_df], ignore_index=True)
-        if (breakouts_df is not None and not breakouts_df.empty) or (watch_df is not None and not watch_df.empty)
-        else pd.DataFrame()
-    )
-    if not combined.empty:
-        db_upsert_signals(conn, combined)
-
-    if breakouts_df is not None and not breakouts_df.empty:
-        fr = compute_forward_returns_for_signals(data_map, breakouts_df, max_days=10)
-        if not fr.empty:
-            db_upsert_forward_returns(conn, fr)
-
-    report = format_report(breakouts_df, watch_df)
-    st.text_area("Run Report (copy/paste)", report, height=240)
-
 breakouts_df = st.session_state.get("last_breakouts", pd.DataFrame())
 watch_df = st.session_state.get("last_watch", pd.DataFrame())
 data_map = st.session_state.get("last_data", {})
-
-st.divider()
-
-left, right = st.columns([1, 1])
-
-with left:
-    st.subheader("Breakouts (last run)")
-    if breakouts_df is None or breakouts_df.empty:
-        st.write("No breakouts found in the last run.")
-    else:
-        st.dataframe(
-            breakouts_df[[
-                "ticker", "direction", "price", "volume_ratio", "roc",
-                "consolidation_std", "consolidation_slope", "consolidation_max_dev",
-                "dollar_volume_20d"
-            ]],
-            use_container_width=True
-        )
-        st.download_button(
-            "Download Breakouts CSV",
-            data=breakouts_df.to_csv(index=False).encode("utf-8"),
-            file_name="breakouts.csv",
-            mime="text/csv"
-        )
-
-with right:
-    st.subheader("Watchlist (last run)")
-    if watch_df is None or watch_df.empty:
-        st.write("No watchlist names in the last run.")
-    else:
-        st.dataframe(
-            watch_df[[
-                "ticker", "price", "volume_ratio",
-                "consolidation_std", "consolidation_slope", "consolidation_max_dev",
-                "dollar_volume_20d"
-            ]],
-            use_container_width=True
-        )
-        st.download_button(
-            "Download Watchlist CSV",
-            data=watch_df.to_csv(index=False).encode("utf-8"),
-            file_name="watchlist.csv",
-            mime="text/csv"
-        )
 
 st.divider()
 st.subheader("Charts")
@@ -812,64 +538,42 @@ c1, c2 = st.columns([1, 1])
 
 with c1:
     st.write("Breakout charts")
-    if breakouts_df is not None and not breakouts_df.empty:
+    if breakouts_df is None or breakouts_df.empty:
+        st.write("Run a scan to render charts.")
+    else:
         max_n = min(25, len(breakouts_df))
-        default_n = min(8, len(breakouts_df))
-        top_n = st.slider("Breakout charts to render", 1, max_n, default_n)
+        default_n = clamp_int(st.session_state.get("breakout_charts_n", min(8, max_n)), 1, max_n)
+        top_n = st.slider("Breakout charts to render", 1, max_n, default_n, key="breakout_charts_n")
         for _, r in breakouts_df.head(top_n).iterrows():
             t = r["ticker"]
-            if t in data_map:
-                fig = plot_candles(
-                    data_map[t],
-                    t,
-                    CONSOLIDATION_DAYS,
-                    title=f"{t} | {r['direction']} breakout | Close ${r['price']:.2f} | Vol {r['volume_ratio']:.2f}x | ROC {r['roc']:+.2f}%"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.write("Run a scan to render charts.")
+            df = data_map.get(t)
+            if df is None or df.empty:
+                continue
+            fig = plot_candles(
+                df,
+                t,
+                CONSOLIDATION_DAYS,
+                title=f"{t} | {r['direction']} breakout | Close ${r['price']:.2f} | Vol {r['volume_ratio']:.2f}x | ROC {r['roc']:+.2f}%"
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 with c2:
     st.write("Watchlist charts")
-    if watch_df is not None and not watch_df.empty:
+    if watch_df is None or watch_df.empty:
+        st.write("Run a scan to render charts.")
+    else:
         max_n2 = min(25, len(watch_df))
-        default_n2 = min(8, len(watch_df))
-        top_n2 = st.slider("Watchlist charts to render", 1, max_n2, default_n2)
+        default_n2 = clamp_int(st.session_state.get("watchlist_charts_n", min(8, max_n2)), 1, max_n2)
+        top_n2 = st.slider("Watchlist charts to render", 1, max_n2, default_n2, key="watchlist_charts_n")
         for _, r in watch_df.head(top_n2).iterrows():
             t = r["ticker"]
-            if t in data_map:
-                fig = plot_candles(
-                    data_map[t],
-                    t,
-                    CONSOLIDATION_DAYS,
-                    title=f"{t} | watchlist | Close ${r['price']:.2f} | VolTrend {r['volume_ratio']:.2f}x"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.write("Run a scan to render charts.")
-
-st.divider()
-st.subheader("Forward Return Tracking (Breakouts)")
-
-fr_db = db_read_forward_returns(conn)
-if fr_db is None or fr_db.empty:
-    st.write("No forward returns recorded yet. Run scans on multiple days to build history.")
-else:
-    fr_db["scan_date"] = pd.to_datetime(fr_db["scan_date"])
-    latest_dates = sorted(fr_db["scan_date"].dt.date.unique(), reverse=True)[:10]
-    pick_date = st.selectbox("Select scan date", latest_dates)
-    subset = fr_db[fr_db["scan_date"].dt.date == pick_date].copy()
-    st.dataframe(subset, use_container_width=True)
-
-    d10 = subset[(subset["day_n"] == 10) & subset["return_pct"].notna()]
-    if len(d10) > 0:
-        avg = float(d10["return_pct"].mean())
-        win = float((d10["return_pct"] > 0).mean() * 100.0)
-        st.write(f"Day 10 average return: {avg:+.2f}% | win rate: {win:.1f}% | sample: {len(d10)}")
-    else:
-        st.write("No Day 10 observations for that date yet.")
-
-st.caption(
-    "Breakout confirmation uses the close beyond the consolidation range with a buffer, plus volume surge and 10-session ROC filter. "
-    "Watchlist requires still inside the range and rising 3-session volume versus prior 10 sessions."
-)
+            df = data_map.get(t)
+            if df is None or df.empty:
+                continue
+            fig = plot_candles(
+                df,
+                t,
+                CONSOLIDATION_DAYS,
+                title=f"{t} | watchlist | Close ${r['price']:.2f} | VolTrend {r['volume_ratio']:.2f}x"
+            )
+            st.plotly_chart(fig, use_container_width=True)
