@@ -16,7 +16,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title="S&P 500 Breakout Scanner", layout="wide")
-st.title("S&P 500 Breakout Scanner (Minimal)")
+st.title("S&P 500 Breakout Scanner")
 
 # ----------------------------
 # Parameters
