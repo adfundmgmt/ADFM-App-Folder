@@ -1,12 +1,5 @@
 # pages/20_S&P_500_Breakout_Scanner.py
-# S&P 500 Breakout Scanner (Streamlit, robust universe fetch)
-#
-# Fixes:
-# - Wikipedia S&P 500 scrape now uses a proper User-Agent + retries
-# - Universe is cached in SQLite; app boots even if Wikipedia blocks
-# - Optional manual ticker input fallback
-#
-# pip install streamlit yfinance pandas numpy plotly lxml
+# S&P 500 Breakout Scanner (Streamlit, robust universe fetch + Cloud-safe SQLite + slider guards)
 
 from __future__ import annotations
 
@@ -14,6 +7,7 @@ import io
 import os
 import time
 import sqlite3
+import tempfile
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -47,12 +41,19 @@ WATCHLIST_VOL_THRESHOLD = float(SCANNER_SECRETS.get("watchlist_vol_threshold", D
 ROC_THRESHOLD_PCT = float(SCANNER_SECRETS.get("roc_threshold_pct", DEFAULT_ROC_THRESHOLD_PCT))
 MIN_DOLLAR_VOLUME = float(SCANNER_SECRETS.get("min_dollar_volume", DEFAULT_MIN_DOLLAR_VOLUME))
 
-DB_PATH = "scanner.db"
+# Streamlit Cloud-safe writable DB location
+DB_PATH = os.path.join(tempfile.gettempdir(), "scanner.db")
 
 # ============================== DB ==============================
 
 def db_connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+
+    # Make SQLite friendlier under Streamlit reruns
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS signals (
@@ -104,6 +105,18 @@ def db_cache_universe(conn: sqlite3.Connection, source: str, tickers: List[str])
         return
     asof_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
     tickers_csv = ",".join(tickers)
+
+    # Defensive: if schema didn't exist for some reason, ensure it
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS universe_cache (
+            asof_utc TEXT NOT NULL,
+            source TEXT NOT NULL,
+            tickers_csv TEXT NOT NULL,
+            PRIMARY KEY (asof_utc, source)
+        )
+        """
+    )
     conn.execute(
         """
         INSERT INTO universe_cache (asof_utc, source, tickers_csv)
@@ -115,14 +128,18 @@ def db_cache_universe(conn: sqlite3.Connection, source: str, tickers: List[str])
 
 
 def db_load_last_universe(conn: sqlite3.Connection) -> Optional[List[str]]:
-    row = conn.execute(
-        """
-        SELECT tickers_csv
-        FROM universe_cache
-        ORDER BY asof_utc DESC
-        LIMIT 1
-        """
-    ).fetchone()
+    try:
+        row = conn.execute(
+            """
+            SELECT tickers_csv
+            FROM universe_cache
+            ORDER BY asof_utc DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+
     if not row:
         return None
     tickers_csv = row[0]
@@ -141,6 +158,7 @@ def db_upsert_signals(conn: sqlite3.Connection, df: pd.DataFrame) -> None:
         "created_at"
     ]
     df2 = df[cols].copy()
+
     conn.executemany(
         """
         INSERT OR REPLACE INTO signals
@@ -216,24 +234,17 @@ def _parse_sp500_from_html(html: str) -> List[str]:
 
 @st.cache_data(ttl=6 * 60 * 60)
 def fetch_sp500_tickers_robust() -> Tuple[List[str], str]:
-    """
-    Returns (tickers, source_label)
-    Source label is used for UI transparency.
-    """
-    # Retry Wikipedia fetch a few times with backoff
     last_err = None
     for attempt in range(1, 4):
         try:
             html = _http_get(WIKI_URL, timeout=30)
             tickers = _parse_sp500_from_html(html)
             if len(tickers) < 450:
-                raise ValueError(f"Parsed unusually small universe ({len(tickers)}); likely blocked/changed page")
+                raise ValueError(f"Parsed unusually small universe ({len(tickers)})")
             return tickers, "Wikipedia (live)"
         except Exception as e:
             last_err = e
             time.sleep(1.5 * attempt)
-
-    # If Wikipedia fails, return empty; caller will fallback to DB/manual
     return [], f"Wikipedia failed: {type(last_err).__name__}: {last_err}"
 
 
@@ -319,14 +330,11 @@ def compute_consolidation_metrics(prices: pd.Series) -> ConsolidationMetrics:
         return ConsolidationMetrics(std=np.nan, slope=np.nan, max_dev=np.nan)
 
     price_std = float(prices.std(ddof=0) / price_mean)
-
     x = np.arange(len(prices), dtype=float)
     coeff = np.polyfit(x, prices.values.astype(float), 1)
     slope = float(abs(coeff[0]) / price_mean)
-
     dev = (prices - price_mean).abs() / price_mean
     max_dev = float(dev.max())
-
     return ConsolidationMetrics(std=price_std, slope=slope, max_dev=max_dev)
 
 
@@ -335,21 +343,18 @@ def is_consolidating(df: pd.DataFrame, consolidation_days: int) -> Tuple[bool, C
         return False, ConsolidationMetrics(std=np.nan, slope=np.nan, max_dev=np.nan)
 
     window = df.iloc[-(consolidation_days + 1):-1]
-    prices = window["Close"]
-    m = compute_consolidation_metrics(prices)
+    m = compute_consolidation_metrics(window["Close"])
 
     low_volatility = m.std < 0.04
     sideways = m.slope < 0.0006
     near_mean = m.max_dev < 0.065
 
-    ok = bool(low_volatility and sideways and near_mean)
-    return ok, m
+    return bool(low_volatility and sideways and near_mean), m
 
 
 def rising_volume_ratio(df: pd.DataFrame) -> Tuple[bool, float]:
     if df is None or len(df) < 3 + 10 + 5:
         return False, 0.0
-
     recent = float(df["Volume"].iloc[-3:].mean())
     base = float(df["Volume"].iloc[-13:-3].mean())
     if base <= 0:
@@ -399,9 +404,7 @@ def breakout_today(df: pd.DataFrame, consolidation_days: int) -> Tuple[bool, Dic
     else:
         roc_ok = False
 
-    price_ok = (direction != "NONE")
-    ok = bool(price_ok and vol_ok and roc_ok)
-
+    ok = bool(direction != "NONE" and vol_ok and roc_ok)
     return ok, {
         "direction": direction,
         "volume_ratio": float(vol_ratio),
@@ -467,7 +470,6 @@ def compute_forward_returns_for_signals(
 def plot_candles(df: pd.DataFrame, ticker: str, consolidation_days: int, title: str) -> go.Figure:
     d = df.tail(90).copy()
     fig = go.Figure()
-
     fig.add_trace(
         go.Candlestick(
             x=d.index,
@@ -483,15 +485,12 @@ def plot_candles(df: pd.DataFrame, ticker: str, consolidation_days: int, title: 
         cons = d.iloc[-(consolidation_days + 1):-1]
         cons_high = float(cons["High"].max())
         cons_low = float(cons["Low"].min())
-        x0 = cons.index[0]
-        x1 = cons.index[-1]
-
         fig.add_shape(
             type="rect",
             xref="x",
             yref="y",
-            x0=x0,
-            x1=x1,
+            x0=cons.index[0],
+            x1=cons.index[-1],
             y0=cons_low,
             y1=cons_high,
             line=dict(width=1),
@@ -610,7 +609,7 @@ def run_full_scan(tickers: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[
     return breakouts_df, watch_df, data
 
 
-# ============================== OPTIONAL EMAIL (SAFE DEFAULT OFF) ==============================
+# ============================== EMAIL (OPTIONAL, SAFE DEFAULT OFF) ==============================
 
 def email_settings() -> Dict[str, object]:
     e = st.secrets.get("email", {})
@@ -621,34 +620,6 @@ def email_settings() -> Dict[str, object]:
     if isinstance(recipients, str):
         recipients = [x.strip() for x in recipients.split(",") if x.strip()]
     return {"enabled": enabled, "sender": sender, "password": password, "recipients": recipients}
-
-
-def send_email_report(subject: str, body: str) -> Tuple[bool, str]:
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-
-    es = email_settings()
-    if not es["enabled"]:
-        return False, "Email disabled (enable it in secrets.toml)."
-    if not es["sender"] or not es["password"] or not es["recipients"]:
-        return False, "Email secrets missing."
-
-    msg = MIMEMultipart()
-    msg["From"] = es["sender"]
-    msg["To"] = ", ".join(es["recipients"])
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
-
-    try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(es["sender"], es["password"])
-        server.send_message(msg)
-        server.quit()
-        return True, "Email sent."
-    except Exception as ex:
-        return False, f"Email failed: {ex}"
 
 
 def format_report(breakouts: pd.DataFrame, watch: pd.DataFrame) -> str:
@@ -663,7 +634,6 @@ def format_report(breakouts: pd.DataFrame, watch: pd.DataFrame) -> str:
     lines.append(f"Breakouts: {nb}")
     lines.append(f"Watchlist: {nw}")
     lines.append("")
-
     if breakouts is not None and not breakouts.empty:
         lines.append("BREAKOUTS")
         for _, r in breakouts.iterrows():
@@ -671,7 +641,6 @@ def format_report(breakouts: pd.DataFrame, watch: pd.DataFrame) -> str:
                 f"{r['ticker']} | {r['direction']} | ${r['price']:.2f} | Vol {r['volume_ratio']:.2f}x | ROC {r['roc']:+.2f}% | $Vol20d {r['dollar_volume_20d'] / 1e6:.1f}M"
             )
         lines.append("")
-
     if watch is not None and not watch.empty:
         lines.append("WATCHLIST")
         for _, r in watch.iterrows():
@@ -679,21 +648,18 @@ def format_report(breakouts: pd.DataFrame, watch: pd.DataFrame) -> str:
                 f"{r['ticker']} | ${r['price']:.2f} | VolTrend {r['volume_ratio']:.2f}x | $Vol20d {r['dollar_volume_20d'] / 1e6:.1f}M"
             )
         lines.append("")
-
     return "\n".join(lines)
 
 
-# ============================== SIDEBAR ==============================
+# ============================== SIDEBAR + UNIVERSE ==============================
 
 conn = db_connect()
+es = email_settings()
 
 with st.sidebar:
     st.header("Scanner Controls")
 
-    st.write("Universe: current S&P 500 constituents (Wikipedia).")
-    st.write("Fallback: last cached universe in SQLite if Wikipedia blocks.")
-    st.write("Data: daily OHLCV from Yahoo via yfinance.")
-
+    st.write(f"DB path: {DB_PATH}")
     st.subheader("Universe fallback (manual)")
     manual_text = st.text_area(
         "Paste tickers (comma/space/newline separated). Leave blank to use Wikipedia/DB.",
@@ -713,15 +679,12 @@ with st.sidebar:
     WATCHLIST_VOL_THRESHOLD = st.slider("Watchlist volume trend threshold (x)", 1.0, 2.0, float(WATCHLIST_VOL_THRESHOLD), 0.05)
     ROC_THRESHOLD_PCT = st.slider("ROC threshold (%)", 0.0, 5.0, float(ROC_THRESHOLD_PCT), 0.1)
 
-    st.subheader("Email")
-    es = email_settings()
-    st.write(f"Enabled: {es['enabled']}")
-    if es["enabled"]:
-        st.write(f"Sender: {es['sender']}")
-        st.write(f"Recipients: {', '.join(es['recipients']) if es['recipients'] else '(none)'}")
-
-
-# ============================== UNIVERSE RESOLUTION ==============================
+def parse_manual_tickers(text: str) -> List[str]:
+    raw = text.replace("\n", ",").replace(" ", ",").split(",")
+    tickers = [t.strip().upper() for t in raw if t.strip()]
+    tickers = [t.replace(".", "-") for t in tickers]
+    tickers = sorted(list(dict.fromkeys(tickers)))
+    return tickers
 
 def resolve_universe() -> Tuple[List[str], str]:
     manual = parse_manual_tickers(manual_text) if manual_text.strip() else []
@@ -730,7 +693,11 @@ def resolve_universe() -> Tuple[List[str], str]:
 
     live, live_source = fetch_sp500_tickers_robust()
     if live:
-        db_cache_universe(conn, "wikipedia", live)
+        try:
+            db_cache_universe(conn, "wikipedia", live)
+        except sqlite3.OperationalError as e:
+            # Still allow the app to run even if caching fails
+            live_source = f"{live_source} | cache failed: {type(e).__name__}"
         return live, live_source
 
     cached = db_load_last_universe(conn)
@@ -739,16 +706,13 @@ def resolve_universe() -> Tuple[List[str], str]:
 
     return [], f"Universe unavailable. {live_source}"
 
-
 tickers, universe_source = resolve_universe()
-
 st.caption(f"Universe source: {universe_source}")
 st.caption(f"Universe size: {len(tickers)}")
 
 if not tickers:
     st.error("No universe available. Paste a manual ticker list in the sidebar to proceed.")
     st.stop()
-
 
 # ============================== MAIN ==============================
 
@@ -779,7 +743,7 @@ if run_scan:
 
     combined = (
         pd.concat([breakouts_df, watch_df], ignore_index=True)
-        if (not breakouts_df.empty or not watch_df.empty)
+        if (breakouts_df is not None and not breakouts_df.empty) or (watch_df is not None and not watch_df.empty)
         else pd.DataFrame()
     )
     if not combined.empty:
@@ -792,15 +756,6 @@ if run_scan:
 
     report = format_report(breakouts_df, watch_df)
     st.text_area("Run Report (copy/paste)", report, height=240)
-
-    if es["enabled"]:
-        if st.button("Send Email Report"):
-            subject = f"Breakout Scanner | {len(breakouts_df)} breakouts, {len(watch_df)} watchlist | {datetime.now().strftime('%Y-%m-%d')}"
-            ok, msg = send_email_report(subject, report)
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
 
 breakouts_df = st.session_state.get("last_breakouts", pd.DataFrame())
 watch_df = st.session_state.get("last_watch", pd.DataFrame())
@@ -816,13 +771,11 @@ with left:
         st.write("No breakouts found in the last run.")
     else:
         st.dataframe(
-            breakouts_df[
-                [
-                    "ticker", "direction", "price", "volume_ratio", "roc",
-                    "consolidation_std", "consolidation_slope", "consolidation_max_dev",
-                    "dollar_volume_20d"
-                ]
-            ],
+            breakouts_df[[
+                "ticker", "direction", "price", "volume_ratio", "roc",
+                "consolidation_std", "consolidation_slope", "consolidation_max_dev",
+                "dollar_volume_20d"
+            ]],
             use_container_width=True
         )
         st.download_button(
@@ -838,13 +791,11 @@ with right:
         st.write("No watchlist names in the last run.")
     else:
         st.dataframe(
-            watch_df[
-                [
-                    "ticker", "price", "volume_ratio",
-                    "consolidation_std", "consolidation_slope", "consolidation_max_dev",
-                    "dollar_volume_20d"
-                ]
-            ],
+            watch_df[[
+                "ticker", "price", "volume_ratio",
+                "consolidation_std", "consolidation_slope", "consolidation_max_dev",
+                "dollar_volume_20d"
+            ]],
             use_container_width=True
         )
         st.download_button(
@@ -862,7 +813,9 @@ c1, c2 = st.columns([1, 1])
 with c1:
     st.write("Breakout charts")
     if breakouts_df is not None and not breakouts_df.empty:
-        top_n = st.slider("Breakout charts to render", 1, min(25, len(breakouts_df)), min(8, len(breakouts_df)))
+        max_n = min(25, len(breakouts_df))
+        default_n = min(8, len(breakouts_df))
+        top_n = st.slider("Breakout charts to render", 1, max_n, default_n)
         for _, r in breakouts_df.head(top_n).iterrows():
             t = r["ticker"]
             if t in data_map:
@@ -879,7 +832,9 @@ with c1:
 with c2:
     st.write("Watchlist charts")
     if watch_df is not None and not watch_df.empty:
-        top_n2 = st.slider("Watchlist charts to render", 1, min(25, len(watch_df)), min(8, len(watch_df)))
+        max_n2 = min(25, len(watch_df))
+        default_n2 = min(8, len(watch_df))
+        top_n2 = st.slider("Watchlist charts to render", 1, max_n2, default_n2)
         for _, r in watch_df.head(top_n2).iterrows():
             t = r["ticker"]
             if t in data_map:
