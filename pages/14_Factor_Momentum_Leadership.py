@@ -19,8 +19,16 @@ TITLE = "Factor Momentum and Basket Rotation"
 SUBTITLE = "Factor momentum dashboard with Pro vs Anti ADFM basket rotation views."
 
 PASTELS = [
-    "#A8DADC", "#F4A261", "#90BE6D", "#FFD6A5", "#BDE0FE",
-    "#CDB4DB", "#E2F0CB", "#F1C0E8", "#B9FBC0", "#F7EDE2"
+    "#6FB9C3",  # darker A8DADC
+    "#E07A2F",  # darker F4A261
+    "#6FA85A",  # darker 90BE6D
+    "#F2B874",  # darker FFD6A5
+    "#8CC7F2",  # darker BDE0FE
+    "#A889C7",  # darker CDB4DB
+    "#C7E29E",  # darker E2F0CB
+    "#D89AD3",  # darker F1C0E8
+    "#8FE3A1",  # darker B9FBC0
+    "#E8CFC3"   # darker F7EDE2
 ]
 TEXT = "#222222"
 GRID = "#e6e6e6"
