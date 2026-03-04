@@ -1,5 +1,3 @@
-what would you recommend for improvement here?
-
 import datetime as dt
 import io
 import time
