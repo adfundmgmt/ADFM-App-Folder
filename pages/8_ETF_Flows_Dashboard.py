@@ -154,7 +154,6 @@ etf_info = {
     "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
     "ETH": ("Ethereum", "Spot Ethereum ETF"),
 }
-
 etf_tickers = list(etf_info.keys())
 
 # --------------------------- HELPERS ---------------------------
@@ -401,7 +400,7 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
     return df
 
 
-def compute_week_view_value(daily: pd.Series, view: str, as_of_ts: pd.Timestamp) -> float:
+def compute_week_view_value_from_daily(daily: pd.Series, view: str, as_of_ts: pd.Timestamp) -> float:
     daily = daily.copy()
     daily.index = pd.to_datetime(daily.index)
     daily = daily.sort_index()
@@ -414,10 +413,30 @@ def compute_week_view_value(daily: pd.Series, view: str, as_of_ts: pd.Timestamp)
         end = pd.Timestamp(as_of_ts).normalize()
         return float(daily.loc[(daily.index >= start) & (daily.index <= end)].sum())
 
-    # Last complete week
     last_week_end = this_week_end - pd.Timedelta(days=7)
     last_week_start = _week_start_monday(last_week_end)
     return float(daily.loc[(daily.index >= last_week_start) & (daily.index <= last_week_end)].sum())
+
+
+def slice_px_for_week(px: pd.DataFrame, view: str, as_of_ts: pd.Timestamp) -> pd.DataFrame:
+    if px is None or px.empty:
+        return pd.DataFrame()
+
+    px = px.copy()
+    px.index = pd.to_datetime(px.index)
+    px = px.sort_index()
+
+    this_week_end = _last_friday(as_of_ts)
+    this_week_start = _week_start_monday(this_week_end)
+
+    if view == "Week to date":
+        start = this_week_start
+        end = pd.Timestamp(as_of_ts).normalize()
+        return px.loc[(px.index >= start) & (px.index <= end)]
+
+    last_week_end = this_week_end - pd.Timedelta(days=7)
+    last_week_start = _week_start_monday(last_week_end)
+    return px.loc[(px.index >= last_week_start) & (px.index <= last_week_end)]
 
 
 # --------------------------- MAIN ---------------------------
@@ -426,9 +445,6 @@ st.caption(f"Estimated net creations/redemptions over: {period_label}.")
 
 df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
 
-# ================================================================
-# SECTION 1: HEADLINE BAR CHART WITH WEEKLY TOGGLE
-# ================================================================
 st.markdown("### Net Flows Snapshot")
 
 bar_view = st.radio(
@@ -438,29 +454,15 @@ bar_view = st.radio(
     key="bar_view",
 )
 
+include_proxy_weekly = False
+if bar_view != "Lookback total":
+    include_proxy_weekly = st.checkbox(
+        "Include proxy tickers in weekly view (labeled as proxy)",
+        value=True,
+        help="When shares data are missing, weekly values use the CMF-style turnover proxy on that week's OHLCV slice.",
+    )
+
 as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
-
-chart_rows = []
-for _, row in df.iterrows():
-    tk = row["Ticker"]
-    label = row["Label"]
-    method = row["Method"]
-    daily = row.get("_daily_flows", pd.Series(dtype="float64"))
-
-    if bar_view == "Lookback total":
-        v = row["Flow ($)"]
-        chart_rows.append({"Ticker": tk, "Label": label, "Value": v, "Method": method})
-    else:
-        # Weekly views require shares-based flow series
-        if method != "flows" or not isinstance(daily, pd.Series) or daily.empty:
-            continue
-        v = compute_week_view_value(daily, bar_view, as_of_ts)
-        chart_rows.append({"Ticker": tk, "Label": label, "Value": float(v), "Method": method})
-
-# Force schema so empty results never drop columns (prevents KeyError)
-chart_df = pd.DataFrame(chart_rows, columns=["Ticker", "Label", "Value", "Method"])
-chart_df["Value"] = pd.to_numeric(chart_df["Value"], errors="coerce")
-chart_df = chart_df.dropna(subset=["Value"]).sort_values("Value", ascending=False)
 
 if bar_view != "Lookback total":
     wk_end = _last_friday(as_of_ts)
@@ -470,11 +472,53 @@ if bar_view != "Lookback total":
         wk_start = _week_start_monday(wk_end)
     st.caption(f"{bar_view} window: {wk_start.date()} to {wk_end.date()} (week ends Friday)")
 
-vals = chart_df["Value"].fillna(0.0)
+# For proxy weekly we need OHLCV for the weekly window
+weekly_price_map: Dict[str, pd.DataFrame] = {}
+if bar_view != "Lookback total" and include_proxy_weekly:
+    # pull enough to cover last week + current week
+    weekly_start = (as_of_ts - pd.Timedelta(days=21)).date()
+    weekly_price_map = fetch_prices(tuple(etf_tickers), weekly_start, as_of_date)
+
+chart_rows = []
+eligible_flows = 0
+eligible_proxy = 0
+
+for _, row in df.iterrows():
+    tk = row["Ticker"]
+    label = row["Label"]
+    method = row["Method"]
+    daily = row.get("_daily_flows", pd.Series(dtype="float64"))
+
+    if bar_view == "Lookback total":
+        chart_rows.append({"Ticker": tk, "Label": label, "Value": row["Flow ($)"], "Method": method})
+        continue
+
+    if method == "flows" and isinstance(daily, pd.Series) and not daily.empty:
+        v = compute_week_view_value_from_daily(daily, bar_view, as_of_ts)
+        chart_rows.append({"Ticker": tk, "Label": label, "Value": float(v), "Method": "flows"})
+        eligible_flows += 1
+        continue
+
+    if include_proxy_weekly:
+        px = weekly_price_map.get(tk, pd.DataFrame())
+        wk_px = slice_px_for_week(px, bar_view, as_of_ts)
+        if wk_px is not None and not wk_px.empty:
+            v = compute_cmf_turnover_proxy(wk_px)
+            if pd.notna(v):
+                chart_rows.append({"Ticker": tk, "Label": label, "Value": float(v), "Method": "cmf_proxy_week"})
+                eligible_proxy += 1
+
+chart_df = pd.DataFrame(chart_rows, columns=["Ticker", "Label", "Value", "Method"])
+chart_df["Value"] = pd.to_numeric(chart_df["Value"], errors="coerce")
+chart_df = chart_df.dropna(subset=["Value"]).sort_values("Value", ascending=False)
+
+if bar_view != "Lookback total":
+    st.caption(f"Eligible in this view: {eligible_flows} shares-based, {eligible_proxy} proxy.")
 
 if chart_df.empty:
-    st.info("No eligible tickers for this view. Weekly views require shares-based flow series (Method = flows).")
+    st.info("No values available for this view. If weekly is selected, enable the proxy toggle or increase coverage.")
 else:
+    vals = chart_df["Value"].fillna(0.0)
     x_min = float(vals.min())
     x_max = float(vals.max())
     x_min = min(x_min, 0.0)
@@ -504,7 +548,7 @@ else:
 
     text_pad = 0.012 * (span if span > 0 else 1.0)
     for bar, raw in zip(bars, vals):
-        label = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
+        label_txt = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
         x = bar.get_width()
         if raw > 0:
             x_text, ha = x + text_pad, "left"
@@ -512,7 +556,7 @@ else:
             x_text, ha = x - text_pad, "right"
         else:
             x_text, ha = 0.0, "center"
-        ax.text(x_text, bar.get_y() + bar.get_height() / 2, label,
+        ax.text(x_text, bar.get_y() + bar.get_height() / 2, label_txt,
                 va="center", ha=ha, fontsize=10, color="black", clip_on=True)
 
     fig.tight_layout(pad=0.6)
@@ -520,7 +564,7 @@ else:
     plt.close(fig)
 
 # ================================================================
-# SECTION 2: TOP INFLOWS / OUTFLOWS (kept from your original)
+# TOP INFLOWS / OUTFLOWS (lookback total, same as original behavior)
 # ================================================================
 st.markdown("---")
 st.markdown("#### Top Inflows and Outflows")
