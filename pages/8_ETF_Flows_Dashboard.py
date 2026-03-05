@@ -10,20 +10,7 @@ import streamlit as st
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-
-# Plotly (used only for Section 2 to match your screenshot UI)
-try:
-    import plotly.graph_objects as go
-    HAS_PLOTLY = True
-except Exception:
-    HAS_PLOTLY = False
-
-# Optional: click events on Plotly charts
-try:
-    from streamlit_plotly_events import plotly_events  # pip install streamlit-plotly-events
-    HAS_PLOTLY_EVENTS = True
-except Exception:
-    HAS_PLOTLY_EVENTS = False
+import matplotlib.colors as mcolors
 
 st.set_page_config(page_title="ETF Net Flows", layout="wide")
 
@@ -83,14 +70,7 @@ period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.key
 period_days = int(lookback_dict[period_label])
 
 # --------------------------- ETF COVERAGE ---------------------------
-# Added: SPY, QQQ, IWM, EEM to match your screenshot set.
-# Also tightened some category labels to resemble the UI in the image.
 etf_info = {
-    "SPY": ("US Large Cap", "S&P 500"),
-    "QQQ": ("US Tech", "Nasdaq 100"),
-    "IWM": ("US Small Cap", "Russell 2000"),
-    "EEM": ("EM Equity", "Emerging markets equity"),
-
     "VTI": ("US Total Market", "Total US equity market"),
     "VUG": ("US Growth", "Large-cap growth"),
     "VTV": ("US Value", "Large-cap value"),
@@ -98,32 +78,28 @@ etf_info = {
     "QUAL": ("US Quality", "Quality factor"),
     "USMV": ("US Min Vol", "Minimum volatility"),
     "SCHD": ("US Dividends", "Dividend growth and yield"),
-
-    "XLB": ("Materials", "S&P 500 Materials"),
-    "XLC": ("Comm Services", "S&P 500 Communication Services"),
-    "XLE": ("Energy", "S&P 500 Energy"),
-    "XLF": ("Financials", "S&P 500 Financials"),
-    "XLI": ("Industrials", "S&P 500 Industrials"),
-    "XLK": ("Technology", "S&P 500 Technology"),
-    "XLP": ("Staples", "S&P 500 Consumer Staples"),
-    "XLRE": ("Real Estate", "S&P 500 Real Estate"),
-    "XLU": ("Utilities", "S&P 500 Utilities"),
-    "XLV": ("Healthcare", "S&P 500 Healthcare"),
-    "XLY": ("Discretionary", "S&P 500 Consumer Discretionary"),
-
-    "SMH": ("Semis", "Global semiconductor equities"),
+    "XLB": ("US Materials", "S&P 500 Materials"),
+    "XLC": ("US Communication Services", "S&P 500 Communication Services"),
+    "XLE": ("US Energy", "S&P 500 Energy"),
+    "XLF": ("US Financials", "S&P 500 Financials"),
+    "XLI": ("US Industrials", "S&P 500 Industrials"),
+    "XLK": ("US Technology", "S&P 500 Technology"),
+    "XLP": ("US Staples", "S&P 500 Consumer Staples"),
+    "XLRE": ("US Real Estate", "S&P 500 Real Estate"),
+    "XLU": ("US Utilities", "S&P 500 Utilities"),
+    "XLV": ("US Healthcare", "S&P 500 Healthcare"),
+    "XLY": ("US Discretionary", "S&P 500 Consumer Discretionary"),
+    "SMH": ("Semiconductors", "Global semiconductor equities"),
     "IGV": ("Software", "US application software"),
     "SKYY": ("Cloud", "Cloud infrastructure and services"),
-
     "VT": ("Global Equity", "Total world equity market"),
-    "ACWI": ("Global Equity", "All-country world equity"),
-    "VEA": ("Dev ex-US", "Developed markets ex-US"),
-    "VWO": ("EM Equity", "Emerging markets equity"),
+    "ACWI": ("Global Equity ex-Frontier", "All-country world equity"),
+    "VEA": ("Developed ex-US", "Developed markets ex-US"),
+    "VWO": ("Emerging Markets", "Emerging markets equity"),
     "EXUS": ("Non-US Equity", "Global equity ex-US"),
-
     "EWG": ("Germany", "Germany equities"),
     "EWQ": ("France", "France equities"),
-    "EWU": ("UK", "UK equities"),
+    "EWU": ("United Kingdom", "UK equities"),
     "EWI": ("Italy", "Italy equities"),
     "EWP": ("Spain", "Spain equities"),
     "EWL": ("Switzerland", "Switzerland equities"),
@@ -132,9 +108,9 @@ etf_info = {
     "EWO": ("Austria", "Austria equities"),
     "EWK": ("Belgium", "Belgium equities"),
     "EWJ": ("Japan", "Japan equities"),
-    "EWY": ("Korea", "Korea equities"),
-    "ASHR": ("China A", "Onshore China equities"),
-    "FXI": ("China", "China offshore large caps"),
+    "EWY": ("South Korea", "Korea equities"),
+    "ASHR": ("China A-Shares", "Onshore China equities"),
+    "FXI": ("China Large-Cap", "China offshore large caps"),
     "EWT": ("Taiwan", "Taiwan equities"),
     "INDA": ("India", "India equities"),
     "EWS": ("Singapore", "Singapore equities"),
@@ -152,40 +128,36 @@ etf_info = {
     "ECH": ("Chile", "Chile equities"),
     "ARGT": ("Argentina", "Argentina equities"),
     "GXG": ("Colombia", "Colombia equities"),
-
-    "SGOV": ("T-Bills", "0-3 month Treasuries"),
+    "SGOV": ("UST Bills", "0-3 month Treasuries"),
     "SHY": ("UST 1-3y", "Short-term Treasuries"),
     "IEF": ("UST 7-10y", "Intermediate Treasuries"),
-    "TLT": ("Long Bonds", "UST 20y+"),
+    "TLT": ("UST 20y+", "Long-duration Treasuries"),
     "TIP": ("TIPS", "Inflation-linked Treasuries"),
-
     "LQD": ("IG Credit", "Investment-grade corporates"),
-    "VCIT": ("IG Credit", "Intermediate IG corporates"),
+    "VCIT": ("IG Credit Duration", "Intermediate IG corporates"),
     "HYG": ("High Yield", "High-yield credit"),
-    "BKLN": ("Float Credit", "Senior loans"),
+    "BKLN": ("Floating-Rate Credit", "Senior loans"),
     "EMB": ("EM Debt", "USD EM sovereign debt"),
-    "BND": ("Agg Bonds", "Total US bond market"),
-
+    "BND": ("US Aggregate", "Total US bond market"),
     "GLD": ("Gold", "Gold bullion"),
     "SLV": ("Silver", "Silver bullion"),
     "CPER": ("Copper", "Industrial copper"),
     "USO": ("Crude Oil", "WTI crude oil"),
-    "DBC": ("Commodities", "Commodity basket"),
-    "PDBC": ("Commodities", "Rules-based commodities"),
+    "DBC": ("Broad Commodities", "Commodity basket"),
+    "PDBC": ("Broad Commodities Alt", "Rules-based commodities"),
     "URA": ("Uranium", "Nuclear fuel cycle"),
-
-    "VXX": ("Volatility", "Front-end VIX futures"),
+    "VXX": ("Equity Volatility", "Front-end VIX futures"),
     "UUP": ("USD", "US Dollar Index"),
     "FXE": ("EURUSD", "Euro vs USD"),
     "FXY": ("USDJPY", "Japanese Yen"),
     "FXF": ("CHFUSD", "Swiss franc"),
     "CEW": ("EM FX", "Emerging market currencies"),
-
     "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
     "ETH": ("Ethereum", "Spot Ethereum ETF"),
 }
 
 etf_tickers = list(etf_info.keys())
+
 
 # --------------------------- HELPERS ---------------------------
 def fmt_compact_cur(x) -> str:
@@ -202,22 +174,6 @@ def fmt_compact_cur(x) -> str:
     if ax >= 1e3:
         return f"${x/1e3:,.0f}K"
     return f"${x:,.0f}"
-
-
-def fmt_compact_flow(x) -> str:
-    """Heatmap/line labels like the screenshot: no $, allow 1dp in billions."""
-    if x is None or pd.isna(x):
-        return ""
-    x = float(x)
-    ax = abs(x)
-    sgn = "-" if x < 0 else ""
-    if ax >= 1e9:
-        return f"{sgn}{ax/1e9:.1f}B"
-    if ax >= 1e6:
-        return f"{sgn}{ax/1e6:.0f}M"
-    if ax >= 1e3:
-        return f"{sgn}{ax/1e3:.0f}K"
-    return f"{x:.0f}"
 
 
 def axis_fmt(x, _pos=None) -> str:
@@ -469,45 +425,30 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
 
 # --------------------------- PROGRESSION HELPERS ---------------------------
 def resample_flows(daily: pd.Series, granularity: str) -> pd.Series:
+    """Resample a daily flow series to weekly or monthly buckets."""
     if daily is None or daily.empty:
         return pd.Series(dtype="float64")
     daily = daily.copy()
     daily.index = pd.to_datetime(daily.index)
     if granularity == "Daily":
         return daily
-    if granularity == "Weekly":
+    elif granularity == "Weekly":
         return daily.resample("W-FRI").sum()
-    return daily.resample("ME").sum()
-
-
-def buckets_for_granularity(granularity: str) -> int:
-    if granularity == "Daily":
-        return 20
-    if granularity == "Weekly":
-        return 4
-    return 6
-
-
-def bucket_labels(granularity: str, n: int) -> List[str]:
-    if granularity == "Daily":
-        return [f"D-{k}" for k in range(n, 0, -1)]
-    if granularity == "Weekly":
-        return [f"Wk-{k}" for k in range(n, 0, -1)]
-    return [f"Mo-{k}" for k in range(n, 0, -1)]
+    else:  # Monthly
+        return daily.resample("ME").sum()
 
 
 def build_progression_matrix(df: pd.DataFrame, granularity: str) -> pd.DataFrame:
     """
-    rows=tickers, columns=bucket end timestamps, values=flow per bucket.
-    Only includes tickers with real daily flow data (Method == 'flows').
+    Returns a DataFrame: rows=tickers, columns=time buckets, values=flow per bucket.
+    Only includes tickers that have real daily flow data (method=flows).
     """
     rows = {}
     for _, row in df.iterrows():
         tk = row["Ticker"]
         daily = row.get("_daily_flows", pd.Series(dtype="float64"))
-        if isinstance(daily, pd.Series) and (not daily.empty) and row["Method"] == "flows":
+        if isinstance(daily, pd.Series) and not daily.empty and row["Method"] == "flows":
             bucketed = resample_flows(daily, granularity)
-            bucketed = bucketed.sort_index()
             if not bucketed.empty:
                 rows[tk] = bucketed
 
@@ -515,225 +456,200 @@ def build_progression_matrix(df: pd.DataFrame, granularity: str) -> pd.DataFrame
         return pd.DataFrame()
 
     mat = pd.DataFrame(rows).T
-    mat = mat.reindex(sorted(mat.columns), axis=1)
+    mat.columns = [str(c.date()) if hasattr(c, "date") else str(c) for c in mat.columns]
     mat = mat.fillna(0.0)
     return mat
 
 
-# --------------------------- SECTION 2 RENDERERS (Plotly) ---------------------------
-def _calc_vmax(vals: np.ndarray) -> float:
-    vals = vals.astype(float)
-    nonzero = np.abs(vals[vals != 0])
-    if nonzero.size == 0:
-        return 1.0
-    return float(np.nanpercentile(nonzero, 95))
+def format_bucket_label(col_str: str, granularity: str) -> str:
+    try:
+        d = pd.Timestamp(col_str)
+        if granularity == "Daily":
+            return d.strftime("%b %d")
+        elif granularity == "Weekly":
+            return d.strftime("W %b %d")
+        else:
+            return d.strftime("%b '%y")
+    except Exception:
+        return col_str
 
 
-def render_heatmap_plotly(mat: pd.DataFrame, granularity: str, selected_tickers: List[str]) -> "go.Figure":
-    n_rows = mat.shape[0]
-    n_cols = mat.shape[1]
+def flow_color(val: float, vmax: float):
+    """Returns an RGBA tuple for the heatmap cell."""
+    if vmax == 0 or np.isnan(val):
+        return (0.13, 0.14, 0.18, 1.0)
+    t = np.clip(val / vmax, -1, 1)
+    if t >= 0:
+        # white -> green
+        r = 1 - t * 0.82
+        g = 1 - t * 0.2
+        b = 1 - t * 0.46
+    else:
+        # white -> red
+        t = abs(t)
+        r = 1 - t * 0.09
+        g = 1 - t * 0.73
+        b = 1 - t * 0.65
+    return (r * 0.18 + (1 - 0.18) * r, g, b, 1.0)  # dark theme: blend toward bg
+
+
+def flow_color_dark(val: float, vmax: float):
+    """Dark-theme aware color for heatmap."""
+    if vmax == 0 or np.isnan(val):
+        return "#1a1e2a"
+    t = np.clip(val / vmax, -1, 1)
+    if t >= 0:
+        alpha = 0.12 + 0.73 * t
+        return f"rgba(46,204,138,{alpha:.2f})"
+    else:
+        alpha = 0.12 + 0.73 * abs(t)
+        return f"rgba(232,68,90,{alpha:.2f})"
+
+
+# --------------------------- HEATMAP CHART ---------------------------
+def render_heatmap(mat: pd.DataFrame, granularity: str, selected_tickers: List[str]) -> plt.Figure:
+    if mat.empty:
+        fig, ax = plt.subplots(figsize=(8, 2))
+        ax.text(0.5, 0.5, "No flow data available for heatmap", ha="center", va="center",
+                transform=ax.transAxes, color="gray")
+        ax.axis("off")
+        return fig
 
     tickers = mat.index.tolist()
-    col_labels = bucket_labels(granularity, n_cols)
+    cols = mat.columns.tolist()
+    labels = [format_bucket_label(c, granularity) for c in cols]
 
-    z = mat.values.astype(float)
-    vmax = _calc_vmax(z.flatten())
-    zmin, zmax = -vmax, vmax
+    n_rows = len(tickers)
+    n_cols = len(cols)
 
-    # Text labels in cells (compact, like screenshot)
-    text = np.empty_like(z, dtype=object)
-    for i in range(n_rows):
-        for j in range(n_cols):
-            v = z[i, j]
-            text[i, j] = "" if abs(v) < 1e-9 else fmt_compact_flow(v)
+    all_vals = mat.values.flatten()
+    vmax = np.nanpercentile(np.abs(all_vals[all_vals != 0]), 95) if np.any(all_vals != 0) else 1.0
 
-    y_vals = list(range(n_rows))
-    x_vals = list(range(n_cols))
+    cell_h = 0.32
+    cell_w_inch = max(0.55, min(1.1, 12.0 / max(n_cols, 1)))
+    fig_w = max(10, cell_w_inch * n_cols + 2.8)
+    fig_h = max(4, cell_h * n_rows + 1.2)
 
-    # Dark theme colorscale: red -> dark -> green
-    colorscale = [
-        [0.00, "rgba(232,68,90,0.90)"],
-        [0.50, "rgba(20,23,32,1.00)"],
-        [1.00, "rgba(46,204,138,0.90)"],
-    ]
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    fig.patch.set_facecolor("#0d0f14")
+    ax.set_facecolor("#0d0f14")
 
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=z,
-            x=x_vals,
-            y=y_vals,
-            zmin=zmin,
-            zmax=zmax,
-            colorscale=colorscale,
-            showscale=False,
-            text=text,
-            texttemplate="%{text}",
-            textfont={"size": 11, "color": "#e2e6f0"},
-            hovertemplate="%{y}<br>%{x}<br>%{z:.3e}<extra></extra>",
-        )
-    )
+    # Build color matrix
+    color_mat = np.zeros((n_rows, n_cols, 4))
+    for i, tk in enumerate(tickers):
+        for j, col in enumerate(cols):
+            v = mat.loc[tk, col]
+            t = np.clip(v / vmax, -1, 1)
+            if t >= 0:
+                alpha = 0.10 + 0.75 * t
+                color_mat[i, j] = (*mcolors.to_rgb("#2ecc8a"), alpha)
+            else:
+                alpha = 0.10 + 0.75 * abs(t)
+                color_mat[i, j] = (*mcolors.to_rgb("#e8445a"), alpha)
 
-    y_ticktext = [f"{etf_info.get(tk, ('', ''))[0]} ({tk})" for tk in tickers]
+    # Draw cells
+    for i, tk in enumerate(tickers):
+        for j, col in enumerate(cols):
+            v = mat.loc[tk, col]
+            rgba = color_mat[i, j]
+            rect = plt.Rectangle([j - 0.5, i - 0.5], 1, 1,
+                                   facecolor=rgba, edgecolor="#0d0f14", linewidth=0.5)
+            ax.add_patch(rect)
 
-    fig.update_xaxes(
-        tickmode="array",
-        tickvals=x_vals,
-        ticktext=col_labels,
-        tickfont={"color": "#6b7491", "size": 11},
-        showgrid=False,
-        zeroline=False,
-    )
-    fig.update_yaxes(
-        tickmode="array",
-        tickvals=y_vals,
-        ticktext=y_ticktext,
-        tickfont={"color": "#e2e6f0", "size": 11},
-        showgrid=False,
-        zeroline=False,
-    )
+            # Value label if large enough
+            if vmax > 0 and abs(v) / vmax > 0.25:
+                txt = fmt_compact_cur(v)
+                brightness = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
+                txt_color = "white" if brightness < 0.55 else "#0d0f14"
+                ax.text(j, i, txt, ha="center", va="center", fontsize=7,
+                        color=txt_color, fontweight="500")
 
-    # Blue row outline for selected tickers
-    for tk in selected_tickers:
-        if tk in tickers:
-            i = tickers.index(tk)
-            fig.add_shape(
-                type="rect",
-                x0=-0.5,
-                x1=n_cols - 0.5,
-                y0=i - 0.5,
-                y1=i + 0.5,
-                line={"color": "#4f7cff", "width": 2},
-                fillcolor="rgba(0,0,0,0)",
-                layer="above",
-            )
+        # Highlight selected tickers
+        if tk in selected_tickers:
+            rect_sel = plt.Rectangle([-0.5, i - 0.5], n_cols, 1,
+                                      facecolor="none", edgecolor="#4f7cff",
+                                      linewidth=1.5, zorder=5)
+            ax.add_patch(rect_sel)
 
-    fig.update_layout(
-        paper_bgcolor="#0d0f14",
-        plot_bgcolor="#141720",
-        margin={"l": 10, "r": 10, "t": 10, "b": 10},
-        height=max(380, 28 * n_rows + 110),
-    )
+    # Axes
+    ax.set_xlim(-0.5, n_cols - 0.5)
+    ax.set_ylim(-0.5, n_rows - 0.5)
+    ax.invert_yaxis()
+
+    ax.set_xticks(range(n_cols))
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8, color="#6b7491")
+    ax.set_yticks(range(n_rows))
+
+    y_labels = []
+    for tk in tickers:
+        cat = etf_info.get(tk, ("", ""))[0]
+        y_labels.append(f"{cat} ({tk})")
+    ax.set_yticklabels(y_labels, fontsize=8, color="#e2e6f0")
+
+    ax.tick_params(axis="both", length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_title(f"Flow Progression — {granularity}", color="#e2e6f0", fontsize=11,
+                 fontweight="600", pad=10, loc="left")
+
+    fig.tight_layout(pad=0.8)
     return fig
 
 
-def render_cumulative_lines_plotly(df: pd.DataFrame, tickers: List[str], granularity: str) -> "go.Figure":
-    palette = ["#4f7cff", "#2ecc8a", "#f5c842", "#e8445a", "#b57bff", "#4ecdc4"]
+# --------------------------- CUMULATIVE LINE CHART ---------------------------
+def render_cumulative_lines(df: pd.DataFrame, tickers: List[str], granularity: str) -> plt.Figure:
+    colors = ["#4f7cff", "#2ecc8a", "#f5c842", "#e8445a", "#b57bff", "#4ecdc4"]
 
-    n_buckets = buckets_for_granularity(granularity)
-    x_labels = bucket_labels(granularity, n_buckets)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    fig.patch.set_facecolor("#141720")
+    ax.set_facecolor("#141720")
 
-    fig = go.Figure()
     plotted = 0
-
-    y_all = []
-
     for i, tk in enumerate(tickers):
         row = df[df["Ticker"] == tk]
         if row.empty:
             continue
-        daily = row.iloc[0].get("_daily_flows", pd.Series(dtype="float64"))
+        daily = row.iloc[0]["_daily_flows"]
         if not isinstance(daily, pd.Series) or daily.empty:
             continue
 
-        bucketed = resample_flows(daily, granularity).sort_index()
-        if bucketed.empty:
-            continue
-
-        bucketed = bucketed.iloc[-n_buckets:]
+        bucketed = resample_flows(daily, granularity)
         if bucketed.empty:
             continue
 
         cumulative = bucketed.cumsum()
-        y = cumulative.values.astype(float)
-        y_all.append(y)
+        color = colors[i % len(colors)]
+        cat = etf_info.get(tk, ("", ""))[0]
 
-        color = palette[i % len(palette)]
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(y))),
-                y=y,
-                mode="lines+markers",
-                line={"color": color, "width": 3},
-                marker={"size": 7},
-                name=tk,
-                hovertemplate=f"{tk}<br>%{{y}}<extra></extra>",
-            )
-        )
+        ax.plot(range(len(cumulative)), cumulative.values,
+                color=color, linewidth=2, marker="o", markersize=3.5,
+                label=f"{cat} ({tk})", zorder=3)
         plotted += 1
 
     if plotted == 0:
-        fig.add_annotation(
-            x=0.5,
-            y=0.5,
-            xref="paper",
-            yref="paper",
-            text="Select ETFs with flow data (Method = flows)",
-            showarrow=False,
-            font={"color": "#6b7491", "size": 12},
-        )
-
-    # Compact y-axis tick labels
-    if y_all:
-        y_concat = np.concatenate(y_all) if len(y_all) > 1 else y_all[0]
-        y_min = float(np.nanmin(y_concat))
-        y_max = float(np.nanmax(y_concat))
-        if y_min == y_max:
-            y_min -= 1.0
-            y_max += 1.0
-        tickvals = np.linspace(y_min, y_max, 5)
-        ticktext = [fmt_compact_flow(v) for v in tickvals]
-        fig.update_yaxes(
-            tickmode="array",
-            tickvals=tickvals.tolist(),
-            ticktext=ticktext,
-            gridcolor="rgba(26,30,42,0.7)",
-            zeroline=True,
-            zerolinecolor="rgba(46,52,71,1)",
-            tickfont={"color": "#6b7491", "size": 11},
-        )
+        ax.text(0.5, 0.5, "Select ETFs with flow data\n(flows method only)",
+                ha="center", va="center", transform=ax.transAxes,
+                color="#6b7491", fontsize=9)
     else:
-        fig.update_yaxes(
-            gridcolor="rgba(26,30,42,0.7)",
-            tickfont={"color": "#6b7491", "size": 11},
-        )
+        ax.axhline(0, color="#2e3447", linewidth=1, zorder=1)
 
-    # X labels: show fewer ticks on daily for readability
-    if granularity == "Daily":
-        # map last N points to D-N .. D-1; show every 3rd tick
-        n = n_buckets
-        tickvals = list(range(n))
-        ticktext = x_labels[:n]
-        keep = set([0, n - 1] + list(range(3, n, 3)))
-        tickvals = [i for i in tickvals if i in keep]
-        ticktext = [ticktext[i] for i in tickvals]
-    else:
-        n = n_buckets
-        tickvals = list(range(n))
-        ticktext = x_labels[:n]
+        # Grid
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
+        ax.grid(axis="y", color="#1a1e2a", linewidth=0.8, zorder=0)
+        ax.grid(axis="x", color="#1a1e2a", linewidth=0.5, linestyle=":", zorder=0)
 
-    fig.update_xaxes(
-        tickmode="array",
-        tickvals=tickvals,
-        ticktext=ticktext,
-        tickfont={"color": "#6b7491", "size": 11},
-        gridcolor="rgba(26,30,42,0.45)",
-        zeroline=False,
-    )
+        ax.legend(fontsize=7.5, facecolor="#1a1e2a", edgecolor="#252a38",
+                  labelcolor="#e2e6f0", loc="upper left", framealpha=0.9)
 
-    fig.update_layout(
-        paper_bgcolor="#0d0f14",
-        plot_bgcolor="#141720",
-        margin={"l": 10, "r": 10, "t": 10, "b": 10},
-        height=380,
-        legend={
-            "orientation": "h",
-            "yanchor": "bottom",
-            "y": -0.22,
-            "xanchor": "left",
-            "x": 0.0,
-            "font": {"color": "#e2e6f0", "size": 11},
-        },
-    )
+    ax.set_title("Cumulative Flows", color="#e2e6f0", fontsize=10, fontweight="600",
+                 pad=8, loc="left")
+    ax.tick_params(colors="#6b7491", labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_color("#252a38")
+    ax.set_xlabel(granularity, color="#6b7491", fontsize=8)
+
+    fig.tight_layout(pad=0.8)
     return fig
 
 
@@ -800,50 +716,23 @@ else:
     plt.close(fig)
 
 # ================================================================
-# SECTION 2: HYBRID FLOW PROGRESSION (updated to match screenshot)
+# SECTION 2: HYBRID FLOW PROGRESSION
 # ================================================================
 st.markdown("---")
-
-st.markdown(
-    """
-<style>
-.fp-title {
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #6b7491;
-  margin: 0 0 6px 0;
-}
-.fp-rule { height: 1px; background: #252a38; margin: 2px 0 14px 0; }
-.fp-sub {
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: #6b7491;
-  margin: 0 0 8px 0;
-}
-.fp-card {
-  background: #141720;
-  border: 1px solid #252a38;
-  border-radius: 14px;
-  padding: 12px 12px 8px 12px;
-}
-</style>
-<div class="fp-title">Flow Progression · Hybrid View</div>
-<div class="fp-rule"></div>
-""",
-    unsafe_allow_html=True,
+st.markdown("#### Flow Progression")
+st.caption(
+    "Heatmap shows flow intensity per time bucket across all ETFs with shares data. "
+    "Select tickers from the heatmap rows to load cumulative curves on the right. "
+    "Toggle granularity to switch between daily, weekly, and monthly buckets."
 )
 
-# Granularity toggle (defaults to Weekly like your screenshot)
+# Granularity toggle
 gran_col, _ = st.columns([2, 6])
 with gran_col:
-    st.markdown('<div class="fp-sub">Granularity</div>', unsafe_allow_html=True)
     granularity = st.radio(
         "Granularity",
         ["Daily", "Weekly", "Monthly"],
         horizontal=True,
-        index=1,
         key="gran_toggle",
         label_visibility="collapsed",
     )
@@ -851,101 +740,48 @@ with gran_col:
 # Build progression matrix (only flows-method tickers)
 prog_matrix = build_progression_matrix(df, granularity)
 
-# Limit the matrix to the same fixed buckets as the screenshot-style view
-n_buckets = buckets_for_granularity(granularity)
-if not prog_matrix.empty:
-    prog_matrix = prog_matrix.iloc[:, -n_buckets:].copy()
-
-# Ticker multiselect defaults to top 4 inflow ETFs (flows method only)
+# Ticker multiselect — default to top 4 inflow/outflow tickers with real flows data
 flows_tickers = [
     row["Ticker"] for _, row in df.iterrows()
     if row["Method"] == "flows"
     and isinstance(row["_daily_flows"], pd.Series)
     and not row["_daily_flows"].empty
 ]
-
-if flows_tickers:
-    df_flows = df[df["Ticker"].isin(flows_tickers)].dropna(subset=["Flow ($)"]).copy()
-    top_default = df_flows.nlargest(4, "Flow ($)")["Ticker"].tolist()
-    top_default = top_default[:4] if top_default else flows_tickers[:4]
-else:
-    top_default = []
-
-if "hybrid_multiselect" not in st.session_state or not isinstance(st.session_state.get("hybrid_multiselect"), list):
-    st.session_state["hybrid_multiselect"] = top_default
+top_default = (
+    df[df["Ticker"].isin(flows_tickers)]
+    .dropna(subset=["Flow ($)"])
+    .reindex(df[df["Ticker"].isin(flows_tickers)].index)
+    .nlargest(4, "Flow ($)")["Ticker"]
+    .tolist()
+)
+top_default = top_default[:4] if top_default else flows_tickers[:4]
 
 selected_tickers = st.multiselect(
-    "Select ETFs for drill-down (flows data only)",
+    "Select ETFs for cumulative line chart (flows data only)",
     options=flows_tickers,
-    default=st.session_state["hybrid_multiselect"],
+    default=top_default,
     key="hybrid_multiselect",
 )
 
+# Two-column hybrid layout
 hm_col, line_col = st.columns([3, 2])
 
 with hm_col:
-    st.markdown('<div class="fp-sub">Overview · Heatmap</div>', unsafe_allow_html=True)
-    st.markdown('<div class="fp-card">', unsafe_allow_html=True)
-
     if prog_matrix.empty:
         st.info("No daily flow series available. Shares data needed for progression view.")
     else:
-        if HAS_PLOTLY:
-            hm_fig = render_heatmap_plotly(prog_matrix, granularity, selected_tickers)
-
-            # Click-to-select behavior (optional, matches screenshot instruction)
-            if HAS_PLOTLY_EVENTS:
-                clicks = plotly_events(
-                    hm_fig,
-                    click_event=True,
-                    hover_event=False,
-                    select_event=False,
-                    override_height=int(max(380, 28 * prog_matrix.shape[0] + 110)),
-                    key="heatmap_clicks",
-                )
-                if clicks:
-                    y_idx = clicks[0].get("y", None)
-                    if y_idx is not None:
-                        try:
-                            y_idx = int(y_idx)
-                            clicked_tk = prog_matrix.index.tolist()[y_idx]
-                            cur = list(st.session_state.get("hybrid_multiselect", []))
-
-                            if clicked_tk in cur:
-                                cur = [t for t in cur if t != clicked_tk]
-                            else:
-                                cur = [clicked_tk] + cur
-                                cur = cur[:6]
-
-                            st.session_state["hybrid_multiselect"] = cur
-                            st.rerun()
-                        except Exception:
-                            pass
-            else:
-                st.plotly_chart(hm_fig, use_container_width=True)
-
-                st.caption(
-                    "Tip: install streamlit-plotly-events to enable click-to-select on heatmap rows. "
-                    "Multiselect above still controls the drill-down."
-                )
-        else:
-            st.info("Plotly is required for the heatmap UI in Section 2.")
-    st.markdown("</div>", unsafe_allow_html=True)
+        hm_fig = render_heatmap(prog_matrix, granularity, selected_tickers)
+        st.pyplot(hm_fig)
+        plt.close(hm_fig)
+        st.caption("Blue border = selected in line chart")
 
 with line_col:
-    st.markdown('<div class="fp-sub">Drill-down · Click heatmap row to select</div>', unsafe_allow_html=True)
-    st.markdown('<div class="fp-card">', unsafe_allow_html=True)
-
     if not selected_tickers:
         st.info("Select at least one ETF above to view cumulative flows.")
     else:
-        if HAS_PLOTLY:
-            line_fig = render_cumulative_lines_plotly(df, selected_tickers, granularity)
-            st.plotly_chart(line_fig, use_container_width=True)
-        else:
-            st.info("Plotly is required for the drill-down line chart UI in Section 2.")
-
-    st.markdown("</div>", unsafe_allow_html=True)
+        line_fig = render_cumulative_lines(df, selected_tickers, granularity)
+        st.pyplot(line_fig)
+        plt.close(line_fig)
 
 # ================================================================
 # SECTION 3: QUALITY TABLE (original, unchanged)
