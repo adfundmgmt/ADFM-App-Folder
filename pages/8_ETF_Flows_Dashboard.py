@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, date
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 import numpy as np
@@ -10,7 +10,6 @@ import streamlit as st
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import matplotlib.colors as mcolors
 
 st.set_page_config(page_title="ETF Net Flows", layout="wide")
 
@@ -217,16 +216,6 @@ def _calc_start_date(days: int, as_of: datetime) -> date:
     return (as_of - pd.Timedelta(days=days + padding)).date()
 
 
-def _quality_flag(method: str, shares_obs_window: int, nonzero_delta_days: int) -> str:
-    if method == "cmf_proxy":
-        return "Proxy"
-    if shares_obs_window >= 6 and nonzero_delta_days >= 2:
-        return "High"
-    if shares_obs_window >= 2:
-        return "Medium"
-    return "Low"
-
-
 def _last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
     ts = pd.Timestamp(on_or_before).normalize()
     wd = ts.weekday()  # Mon=0 ... Sun=6
@@ -235,7 +224,6 @@ def _last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
 
 
 def _week_start_monday(week_ending_friday: pd.Timestamp) -> pd.Timestamp:
-    # Monday of that same week
     return (pd.Timestamp(week_ending_friday).normalize() - pd.tseries.offsets.BDay(4)).normalize()
 
 
@@ -316,14 +304,9 @@ def fetch_shares_series_parallel(
     return results
 
 
-def compute_daily_flows_with_stats(
-    close: pd.Series,
-    shares: pd.Series,
-    window_index: pd.DatetimeIndex
-) -> Tuple[pd.Series, Dict[str, float]]:
-    stats = {"shares_obs_window": 0, "nonzero_delta_days": 0}
+def compute_daily_flows(close: pd.Series, shares: pd.Series, window_index: pd.DatetimeIndex) -> pd.Series:
     if close is None or shares is None or close.empty or shares.empty or window_index is None or len(window_index) == 0:
-        return pd.Series(dtype="float64"), stats
+        return pd.Series(dtype="float64")
 
     close = pd.to_numeric(close, errors="coerce").dropna()
     close.index = pd.to_datetime(close.index, errors="coerce")
@@ -339,18 +322,14 @@ def compute_daily_flows_with_stats(
     except Exception:
         pass
 
-    sh_in = sh.loc[(sh.index >= window_index.min()) & (sh.index <= window_index.max())]
-    stats["shares_obs_window"] = int(sh_in.shape[0])
-
     idx = pd.DatetimeIndex(window_index)
     sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
     delta_shares = sh_daily.diff().fillna(0.0)
-    stats["nonzero_delta_days"] = int((delta_shares != 0).sum())
 
     close_aligned = close.reindex(idx).ffill()
     flows = (delta_shares * close_aligned).astype(float)
     flows = flows.replace([np.inf, -np.inf], np.nan).dropna()
-    return flows, stats
+    return flows
 
 
 def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
@@ -364,7 +343,6 @@ def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
     return float((mfm * typical * vol).sum())
 
 
-# --------------------------- BUILD TABLE ---------------------------
 @st.cache_data(show_spinner=True, ttl=300)
 def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as_of_dt_naive: pd.Timestamp) -> pd.DataFrame:
     as_of_dt_local = as_of_dt_naive.to_pydatetime().replace(tzinfo=None)
@@ -384,9 +362,6 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
 
         flow_usd_sum = np.nan
         method = "flows"
-        quality = ""
-        shares_obs_window = 0
-        nonzero_delta_days = 0
         daily_flows_series = pd.Series(dtype="float64")
 
         if not px.empty:
@@ -394,10 +369,7 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
             shares = shares_map.get(tk, pd.Series(dtype="float64"))
 
             if shares is not None and not shares.empty:
-                daily_flows, stats = compute_daily_flows_with_stats(px["Close"], shares, window_index)
-                shares_obs_window = int(stats.get("shares_obs_window", 0))
-                nonzero_delta_days = int(stats.get("nonzero_delta_days", 0))
-
+                daily_flows = compute_daily_flows(px["Close"], shares, window_index)
                 if not daily_flows.empty and daily_flows.replace(0.0, np.nan).dropna().size > 0:
                     flow_usd_sum = float(daily_flows.sum())
                     method = "flows"
@@ -409,17 +381,12 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
                 flow_usd_sum = compute_cmf_turnover_proxy(px)
                 method = "cmf_proxy"
 
-            quality = _quality_flag(method, shares_obs_window, nonzero_delta_days)
-
         cat, desc = etf_info.get(tk, ("", ""))
         rows.append({
             "Ticker": tk,
             "Category": cat,
             "Flow ($)": flow_usd_sum,
             "Method": method,
-            "Quality": quality,
-            "Shares Obs (window)": shares_obs_window,
-            "Nonzero Δ days": nonzero_delta_days,
             "Description": desc,
             "_daily_flows": daily_flows_series,
         })
@@ -434,282 +401,33 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
     return df
 
 
-# --------------------------- PROGRESSION HELPERS ---------------------------
-def resample_flows(daily: pd.Series, granularity: str) -> pd.Series:
-    if daily is None or daily.empty:
-        return pd.Series(dtype="float64")
-    daily = daily.copy()
-    daily.index = pd.to_datetime(daily.index)
-    if granularity == "Daily":
-        return daily
-    if granularity == "Weekly":
-        return daily.resample("W-FRI").sum()
-    return daily.resample("ME").sum()
-
-
-def build_progression_matrix(df: pd.DataFrame, granularity: str) -> pd.DataFrame:
-    rows = {}
-    for _, row in df.iterrows():
-        tk = row["Ticker"]
-        daily = row.get("_daily_flows", pd.Series(dtype="float64"))
-        if isinstance(daily, pd.Series) and not daily.empty and row["Method"] == "flows":
-            bucketed = resample_flows(daily, granularity)
-            if not bucketed.empty:
-                rows[tk] = bucketed
-
-    if not rows:
-        return pd.DataFrame()
-
-    mat = pd.DataFrame(rows).T
-    mat.columns = [str(c.date()) if hasattr(c, "date") else str(c) for c in mat.columns]
-    mat = mat.fillna(0.0)
-    return mat
-
-
-def format_bucket_label(col_str: str, granularity: str) -> str:
-    try:
-        d = pd.Timestamp(col_str)
-        if granularity == "Daily":
-            return d.strftime("%b %d")
-        if granularity == "Weekly":
-            return d.strftime("W %b %d")
-        return d.strftime("%b '%y")
-    except Exception:
-        return col_str
-
-
-# --------------------------- WEEKLY HELPERS ---------------------------
-def _weekly_endpoints_for_window(as_of_ts: pd.Timestamp, weeks: int) -> List[pd.Timestamp]:
-    end = _last_friday(as_of_ts)
-    endpoints = []
-    for i in range(weeks):
-        endpoints.append((end - pd.Timedelta(days=7 * i)).normalize())
-    endpoints = list(reversed(endpoints))
-    return endpoints
-
-
-def compute_week_view_value(
-    daily: pd.Series,
-    view: str,
-    as_of_ts: pd.Timestamp
-) -> Optional[float]:
-    if daily is None or daily.empty:
-        return None
-
+def compute_week_view_value(daily: pd.Series, view: str, as_of_ts: pd.Timestamp) -> float:
     daily = daily.copy()
     daily.index = pd.to_datetime(daily.index)
     daily = daily.sort_index()
 
-    if view == "Lookback total":
-        return float(daily.sum())
-
-    # Week framing uses week ending Friday.
     this_week_end = _last_friday(as_of_ts)
     this_week_start = _week_start_monday(this_week_end)
 
     if view == "Week to date":
-        # Mon -> as_of
         start = this_week_start
         end = pd.Timestamp(as_of_ts).normalize()
         return float(daily.loc[(daily.index >= start) & (daily.index <= end)].sum())
 
-    # Last complete week means prior Friday week if we are still inside the current week.
+    # Last complete week
     last_week_end = this_week_end - pd.Timedelta(days=7)
     last_week_start = _week_start_monday(last_week_end)
     return float(daily.loc[(daily.index >= last_week_start) & (daily.index <= last_week_end)].sum())
 
 
-def build_weekly_breakdown_table(
-    df: pd.DataFrame,
-    as_of_ts: pd.Timestamp,
-    weeks: int = 10
-) -> pd.DataFrame:
-    # Only flows-series tickers.
-    endpoints = _weekly_endpoints_for_window(as_of_ts, weeks=weeks)
-    cols = [e.strftime("%Y-%m-%d") for e in endpoints]
-    out_rows = []
-
-    for _, row in df.iterrows():
-        if row["Method"] != "flows":
-            continue
-        daily = row.get("_daily_flows", pd.Series(dtype="float64"))
-        if not isinstance(daily, pd.Series) or daily.empty:
-            continue
-
-        weekly = daily.copy()
-        weekly.index = pd.to_datetime(weekly.index)
-        weekly = weekly.resample("W-FRI").sum()
-
-        vals = []
-        for e in endpoints:
-            v = weekly.loc[weekly.index == e]
-            vals.append(float(v.iloc[0]) if not v.empty else 0.0)
-
-        out_rows.append({
-            "Ticker": row["Ticker"],
-            "Label": row["Label"],
-            **{c: v for c, v in zip(cols, vals)}
-        })
-
-    if not out_rows:
-        return pd.DataFrame()
-
-    mat = pd.DataFrame(out_rows).set_index("Label")
-    return mat
-
-
-# --------------------------- HEATMAP CHART ---------------------------
-def render_heatmap(mat: pd.DataFrame, granularity: str, selected_tickers: List[str]) -> plt.Figure:
-    if mat.empty:
-        fig, ax = plt.subplots(figsize=(8, 2))
-        ax.text(0.5, 0.5, "No flow data available for heatmap", ha="center", va="center",
-                transform=ax.transAxes, color="gray")
-        ax.axis("off")
-        return fig
-
-    tickers = mat.index.tolist()
-    cols = mat.columns.tolist()
-    labels = [format_bucket_label(c, granularity) for c in cols]
-
-    n_rows = len(tickers)
-    n_cols = len(cols)
-
-    all_vals = mat.values.flatten()
-    nonzero = np.abs(all_vals[all_vals != 0])
-    vmax = np.nanpercentile(nonzero, 95) if nonzero.size else 1.0
-
-    cell_h = 0.32
-    cell_w_inch = max(0.55, min(1.1, 12.0 / max(n_cols, 1)))
-    fig_w = max(10, cell_w_inch * n_cols + 2.8)
-    fig_h = max(4, cell_h * n_rows + 1.2)
-
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-    fig.patch.set_facecolor("#0d0f14")
-    ax.set_facecolor("#0d0f14")
-
-    color_mat = np.zeros((n_rows, n_cols, 4))
-    for i in range(n_rows):
-        for j in range(n_cols):
-            v = float(mat.iloc[i, j])
-            t = np.clip(v / vmax, -1, 1)
-            if t >= 0:
-                alpha = 0.10 + 0.75 * t
-                color_mat[i, j] = (*mcolors.to_rgb("#2ecc8a"), alpha)
-            else:
-                alpha = 0.10 + 0.75 * abs(t)
-                color_mat[i, j] = (*mcolors.to_rgb("#e8445a"), alpha)
-
-    for i, tk in enumerate(tickers):
-        for j in range(n_cols):
-            v = float(mat.iloc[i, j])
-            rgba = color_mat[i, j]
-            rect = plt.Rectangle([j - 0.5, i - 0.5], 1, 1,
-                                 facecolor=rgba, edgecolor="#0d0f14", linewidth=0.5)
-            ax.add_patch(rect)
-
-            if vmax > 0 and abs(v) / vmax > 0.25:
-                txt = fmt_compact_cur(v)
-                brightness = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
-                txt_color = "white" if brightness < 0.55 else "#0d0f14"
-                ax.text(j, i, txt, ha="center", va="center", fontsize=7,
-                        color=txt_color, fontweight="500")
-
-        if tk in selected_tickers:
-            rect_sel = plt.Rectangle([-0.5, i - 0.5], n_cols, 1,
-                                     facecolor="none", edgecolor="#4f7cff",
-                                     linewidth=1.5, zorder=5)
-            ax.add_patch(rect_sel)
-
-    ax.set_xlim(-0.5, n_cols - 0.5)
-    ax.set_ylim(-0.5, n_rows - 0.5)
-    ax.invert_yaxis()
-
-    ax.set_xticks(range(n_cols))
-    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8, color="#6b7491")
-    ax.set_yticks(range(n_rows))
-
-    y_labels = []
-    for tk in tickers:
-        cat = etf_info.get(tk, ("", ""))[0]
-        y_labels.append(f"{cat} ({tk})")
-    ax.set_yticklabels(y_labels, fontsize=8, color="#e2e6f0")
-
-    ax.tick_params(axis="both", length=0)
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    ax.set_title(f"Flow Progression, {granularity}", color="#e2e6f0", fontsize=11,
-                 fontweight="600", pad=10, loc="left")
-
-    fig.tight_layout(pad=0.8)
-    return fig
-
-
-# --------------------------- CUMULATIVE LINE CHART ---------------------------
-def render_cumulative_lines(df: pd.DataFrame, tickers: List[str], granularity: str) -> plt.Figure:
-    colors = ["#4f7cff", "#2ecc8a", "#f5c842", "#e8445a", "#b57bff", "#4ecdc4"]
-
-    fig, ax = plt.subplots(figsize=(7, 4))
-    fig.patch.set_facecolor("#141720")
-    ax.set_facecolor("#141720")
-
-    plotted = 0
-    for i, tk in enumerate(tickers):
-        row = df[df["Ticker"] == tk]
-        if row.empty:
-            continue
-        daily = row.iloc[0]["_daily_flows"]
-        if not isinstance(daily, pd.Series) or daily.empty:
-            continue
-
-        bucketed = resample_flows(daily, granularity)
-        if bucketed.empty:
-            continue
-
-        cumulative = bucketed.cumsum()
-        color = colors[i % len(colors)]
-        cat = etf_info.get(tk, ("", ""))[0]
-
-        ax.plot(range(len(cumulative)), cumulative.values,
-                color=color, linewidth=2, marker="o", markersize=3.5,
-                label=f"{cat} ({tk})", zorder=3)
-        plotted += 1
-
-    if plotted == 0:
-        ax.text(0.5, 0.5, "Select ETFs with flow data\n(flows method only)",
-                ha="center", va="center", transform=ax.transAxes,
-                color="#6b7491", fontsize=9)
-    else:
-        ax.axhline(0, color="#2e3447", linewidth=1, zorder=1)
-        ax.yaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
-        ax.grid(axis="y", color="#1a1e2a", linewidth=0.8, zorder=0)
-        ax.grid(axis="x", color="#1a1e2a", linewidth=0.5, linestyle=":", zorder=0)
-
-        ax.legend(fontsize=7.5, facecolor="#1a1e2a", edgecolor="#252a38",
-                  labelcolor="#e2e6f0", loc="upper left", framealpha=0.9)
-
-    ax.set_title("Cumulative Flows", color="#e2e6f0", fontsize=10, fontweight="600",
-                 pad=8, loc="left")
-    ax.tick_params(colors="#6b7491", labelsize=8)
-    for spine in ax.spines.values():
-        spine.set_color("#252a38")
-    ax.set_xlabel(granularity, color="#6b7491", fontsize=8)
-
-    fig.tight_layout(pad=0.8)
-    return fig
-
-
 # --------------------------- MAIN ---------------------------
 st.title("ETF Net Flows")
-st.caption(
-    f"Estimated net creations/redemptions over: {period_label}. "
-    f"Weekly views use tickers with real shares-based flow series only."
-)
+st.caption(f"Estimated net creations/redemptions over: {period_label}.")
 
 df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
 
 # ================================================================
-# SECTION 1: HEADLINE BAR CHART WITH WEEKLY VIEW TOGGLE
+# SECTION 1: HEADLINE BAR CHART WITH WEEKLY TOGGLE
 # ================================================================
 st.markdown("### Net Flows Snapshot")
 
@@ -720,10 +438,9 @@ bar_view = st.radio(
     key="bar_view",
 )
 
-# Build a chart frame based on selected view.
-chart_rows = []
 as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
 
+chart_rows = []
 for _, row in df.iterrows():
     tk = row["Ticker"]
     label = row["Label"]
@@ -734,15 +451,14 @@ for _, row in df.iterrows():
         v = row["Flow ($)"]
         chart_rows.append({"Ticker": tk, "Label": label, "Value": v, "Method": method})
     else:
-        # Weekly views require actual daily flows series.
+        # Weekly views require shares-based flow series
         if method != "flows" or not isinstance(daily, pd.Series) or daily.empty:
             continue
         v = compute_week_view_value(daily, bar_view, as_of_ts)
-        if v is None:
-            continue
         chart_rows.append({"Ticker": tk, "Label": label, "Value": float(v), "Method": method})
 
-chart_df = pd.DataFrame(chart_rows)
+# Force schema so empty results never drop columns (prevents KeyError)
+chart_df = pd.DataFrame(chart_rows, columns=["Ticker", "Label", "Value", "Method"])
 chart_df["Value"] = pd.to_numeric(chart_df["Value"], errors="coerce")
 chart_df = chart_df.dropna(subset=["Value"]).sort_values("Value", ascending=False)
 
@@ -752,12 +468,12 @@ if bar_view != "Lookback total":
     if bar_view == "Last complete week":
         wk_end = wk_end - pd.Timedelta(days=7)
         wk_start = _week_start_monday(wk_end)
-    st.caption(f"{bar_view} window: {wk_start.date()} to {wk_end.date()}")
+    st.caption(f"{bar_view} window: {wk_start.date()} to {wk_end.date()} (week ends Friday)")
 
 vals = chart_df["Value"].fillna(0.0)
 
-if vals.empty:
-    st.info("No values computed for this view. Weekly views require shares-based flow data.")
+if chart_df.empty:
+    st.info("No eligible tickers for this view. Weekly views require shares-based flow series (Method = flows).")
 else:
     x_min = float(vals.min())
     x_max = float(vals.max())
@@ -804,130 +520,9 @@ else:
     plt.close(fig)
 
 # ================================================================
-# SECTION 2: HYBRID FLOW PROGRESSION
+# SECTION 2: TOP INFLOWS / OUTFLOWS (kept from your original)
 # ================================================================
 st.markdown("---")
-st.markdown("#### Flow Progression")
-st.caption(
-    "Heatmap shows flow intensity per time bucket across ETFs with shares-based flows. "
-    "Select tickers from the heatmap rows to load cumulative curves on the right."
-)
-
-gran_col, _ = st.columns([2, 6])
-with gran_col:
-    granularity = st.radio(
-        "Granularity",
-        ["Daily", "Weekly", "Monthly"],
-        horizontal=True,
-        key="gran_toggle",
-        label_visibility="collapsed",
-    )
-
-prog_matrix = build_progression_matrix(df, granularity)
-
-flows_tickers = [
-    row["Ticker"] for _, row in df.iterrows()
-    if row["Method"] == "flows"
-    and isinstance(row["_daily_flows"], pd.Series)
-    and not row["_daily_flows"].empty
-]
-top_default = (
-    df[df["Ticker"].isin(flows_tickers)]
-    .dropna(subset=["Flow ($)"])
-    .reindex(df[df["Ticker"].isin(flows_tickers)].index)
-    .nlargest(4, "Flow ($)")["Ticker"]
-    .tolist()
-)
-top_default = top_default[:4] if top_default else flows_tickers[:4]
-
-selected_tickers = st.multiselect(
-    "Select ETFs for cumulative line chart (flows data only)",
-    options=flows_tickers,
-    default=top_default,
-    key="hybrid_multiselect",
-)
-
-hm_col, line_col = st.columns([3, 2])
-
-with hm_col:
-    if prog_matrix.empty:
-        st.info("No daily flow series available. Shares data needed for progression view.")
-    else:
-        hm_fig = render_heatmap(prog_matrix, granularity, selected_tickers)
-        st.pyplot(hm_fig)
-        plt.close(hm_fig)
-        st.caption("Blue border matches selected tickers in the line chart.")
-
-with line_col:
-    if not selected_tickers:
-        st.info("Select at least one ETF above to view cumulative flows.")
-    else:
-        line_fig = render_cumulative_lines(df, selected_tickers, granularity)
-        st.pyplot(line_fig)
-        plt.close(line_fig)
-
-# ================================================================
-# SECTION 3: WEEKLY BREAKDOWN (NEW)
-# ================================================================
-st.markdown("---")
-st.markdown("#### Weekly Breakdown")
-st.caption(
-    "This section is restricted to shares-based flow series. "
-    "It shows the weekly tape (week ending Friday) so you can separate structural creation from noise."
-)
-
-weeks_to_show = st.slider("Weeks to show", min_value=6, max_value=20, value=10, step=2)
-weekly_mat = build_weekly_breakdown_table(df, as_of_ts=as_of_ts, weeks=weeks_to_show)
-
-if weekly_mat.empty:
-    st.info("No weekly breakdown available. Weekly tape requires flows-series tickers.")
-else:
-    # Format view
-    fmt_weekly = weekly_mat.copy()
-    for c in fmt_weekly.columns:
-        fmt_weekly[c] = pd.to_numeric(fmt_weekly[c], errors="coerce").fillna(0.0).apply(fmt_compact_cur)
-
-    # Top movers for the most recent week in the matrix
-    last_col = weekly_mat.columns[-1]
-    snap = weekly_mat[[last_col]].copy()
-    snap["Flow"] = pd.to_numeric(snap[last_col], errors="coerce").fillna(0.0)
-    top_in = snap.sort_values("Flow", ascending=False).head(7)
-    top_out = snap.sort_values("Flow", ascending=True).head(7)
-
-    c1, c2 = st.columns([3, 2])
-    with c1:
-        st.dataframe(fmt_weekly, use_container_width=True)
-    with c2:
-        st.markdown("**Top weekly inflows**")
-        st.table(top_in["Flow"].apply(fmt_compact_cur).to_frame(name=last_col))
-        st.markdown("**Top weekly outflows**")
-        st.table(top_out["Flow"].apply(fmt_compact_cur).to_frame(name=last_col))
-
-# ================================================================
-# SECTION 4: QUALITY TABLE (original)
-# ================================================================
-st.markdown("---")
-st.markdown("#### Coverage and Data Quality")
-view = df.copy()
-view["Flow"] = pd.to_numeric(view["Flow ($)"], errors="coerce")
-view["Flow (fmt)"] = view["Flow"].apply(fmt_compact_cur)
-view = view.sort_values(["Quality", "Flow"], ascending=[True, False])
-
-show_cols = [
-    "Ticker",
-    "Category",
-    "Flow (fmt)",
-    "Method",
-    "Quality",
-    "Shares Obs (window)",
-    "Nonzero Δ days",
-    "Description",
-]
-st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
-
-# ================================================================
-# SECTION 5: TOP INFLOWS / OUTFLOWS (original)
-# ================================================================
 st.markdown("#### Top Inflows and Outflows")
 valid = df.dropna(subset=["Flow ($)"]).copy()
 
@@ -941,14 +536,14 @@ else:
         st.table(
             valid[valid["Flow ($)"] > 0]
             .nlargest(5, "Flow ($)")
-            .set_index("Label")[["Value", "Quality"]]
+            .set_index("Label")[["Value"]]
         )
     with col2:
         st.write("**Top Outflows**")
         st.table(
             valid[valid["Flow ($)"] < 0]
             .nsmallest(5, "Flow ($)")
-            .set_index("Label")[["Value", "Quality"]]
+            .set_index("Label")[["Value"]]
         )
 
 st.caption(f"Last refresh: {as_of_dt_naive}  |  © 2026 AD Fund Management LP")
