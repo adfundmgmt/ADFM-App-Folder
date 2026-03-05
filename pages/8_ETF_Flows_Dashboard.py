@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, date
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 import numpy as np
@@ -158,7 +158,6 @@ etf_info = {
 
 etf_tickers = list(etf_info.keys())
 
-
 # --------------------------- HELPERS ---------------------------
 def fmt_compact_cur(x) -> str:
     if x is None or pd.isna(x):
@@ -214,7 +213,7 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _calc_start_date(days: int, as_of: datetime) -> date:
-    padding = 7
+    padding = 12
     return (as_of - pd.Timedelta(days=days + padding)).date()
 
 
@@ -226,6 +225,18 @@ def _quality_flag(method: str, shares_obs_window: int, nonzero_delta_days: int) 
     if shares_obs_window >= 2:
         return "Medium"
     return "Low"
+
+
+def _last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(on_or_before).normalize()
+    wd = ts.weekday()  # Mon=0 ... Sun=6
+    days_back = wd - 4 if wd >= 4 else wd + 3
+    return ts - pd.Timedelta(days=int(days_back))
+
+
+def _week_start_monday(week_ending_friday: pd.Timestamp) -> pd.Timestamp:
+    # Monday of that same week
+    return (pd.Timestamp(week_ending_friday).normalize() - pd.tseries.offsets.BDay(4)).normalize()
 
 
 # --------------------------- DATA ---------------------------
@@ -425,24 +436,18 @@ def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as
 
 # --------------------------- PROGRESSION HELPERS ---------------------------
 def resample_flows(daily: pd.Series, granularity: str) -> pd.Series:
-    """Resample a daily flow series to weekly or monthly buckets."""
     if daily is None or daily.empty:
         return pd.Series(dtype="float64")
     daily = daily.copy()
     daily.index = pd.to_datetime(daily.index)
     if granularity == "Daily":
         return daily
-    elif granularity == "Weekly":
+    if granularity == "Weekly":
         return daily.resample("W-FRI").sum()
-    else:  # Monthly
-        return daily.resample("ME").sum()
+    return daily.resample("ME").sum()
 
 
 def build_progression_matrix(df: pd.DataFrame, granularity: str) -> pd.DataFrame:
-    """
-    Returns a DataFrame: rows=tickers, columns=time buckets, values=flow per bucket.
-    Only includes tickers that have real daily flow data (method=flows).
-    """
     rows = {}
     for _, row in df.iterrows():
         tk = row["Ticker"]
@@ -466,44 +471,91 @@ def format_bucket_label(col_str: str, granularity: str) -> str:
         d = pd.Timestamp(col_str)
         if granularity == "Daily":
             return d.strftime("%b %d")
-        elif granularity == "Weekly":
+        if granularity == "Weekly":
             return d.strftime("W %b %d")
-        else:
-            return d.strftime("%b '%y")
+        return d.strftime("%b '%y")
     except Exception:
         return col_str
 
 
-def flow_color(val: float, vmax: float):
-    """Returns an RGBA tuple for the heatmap cell."""
-    if vmax == 0 or np.isnan(val):
-        return (0.13, 0.14, 0.18, 1.0)
-    t = np.clip(val / vmax, -1, 1)
-    if t >= 0:
-        # white -> green
-        r = 1 - t * 0.82
-        g = 1 - t * 0.2
-        b = 1 - t * 0.46
-    else:
-        # white -> red
-        t = abs(t)
-        r = 1 - t * 0.09
-        g = 1 - t * 0.73
-        b = 1 - t * 0.65
-    return (r * 0.18 + (1 - 0.18) * r, g, b, 1.0)  # dark theme: blend toward bg
+# --------------------------- WEEKLY HELPERS ---------------------------
+def _weekly_endpoints_for_window(as_of_ts: pd.Timestamp, weeks: int) -> List[pd.Timestamp]:
+    end = _last_friday(as_of_ts)
+    endpoints = []
+    for i in range(weeks):
+        endpoints.append((end - pd.Timedelta(days=7 * i)).normalize())
+    endpoints = list(reversed(endpoints))
+    return endpoints
 
 
-def flow_color_dark(val: float, vmax: float):
-    """Dark-theme aware color for heatmap."""
-    if vmax == 0 or np.isnan(val):
-        return "#1a1e2a"
-    t = np.clip(val / vmax, -1, 1)
-    if t >= 0:
-        alpha = 0.12 + 0.73 * t
-        return f"rgba(46,204,138,{alpha:.2f})"
-    else:
-        alpha = 0.12 + 0.73 * abs(t)
-        return f"rgba(232,68,90,{alpha:.2f})"
+def compute_week_view_value(
+    daily: pd.Series,
+    view: str,
+    as_of_ts: pd.Timestamp
+) -> Optional[float]:
+    if daily is None or daily.empty:
+        return None
+
+    daily = daily.copy()
+    daily.index = pd.to_datetime(daily.index)
+    daily = daily.sort_index()
+
+    if view == "Lookback total":
+        return float(daily.sum())
+
+    # Week framing uses week ending Friday.
+    this_week_end = _last_friday(as_of_ts)
+    this_week_start = _week_start_monday(this_week_end)
+
+    if view == "Week to date":
+        # Mon -> as_of
+        start = this_week_start
+        end = pd.Timestamp(as_of_ts).normalize()
+        return float(daily.loc[(daily.index >= start) & (daily.index <= end)].sum())
+
+    # Last complete week means prior Friday week if we are still inside the current week.
+    last_week_end = this_week_end - pd.Timedelta(days=7)
+    last_week_start = _week_start_monday(last_week_end)
+    return float(daily.loc[(daily.index >= last_week_start) & (daily.index <= last_week_end)].sum())
+
+
+def build_weekly_breakdown_table(
+    df: pd.DataFrame,
+    as_of_ts: pd.Timestamp,
+    weeks: int = 10
+) -> pd.DataFrame:
+    # Only flows-series tickers.
+    endpoints = _weekly_endpoints_for_window(as_of_ts, weeks=weeks)
+    cols = [e.strftime("%Y-%m-%d") for e in endpoints]
+    out_rows = []
+
+    for _, row in df.iterrows():
+        if row["Method"] != "flows":
+            continue
+        daily = row.get("_daily_flows", pd.Series(dtype="float64"))
+        if not isinstance(daily, pd.Series) or daily.empty:
+            continue
+
+        weekly = daily.copy()
+        weekly.index = pd.to_datetime(weekly.index)
+        weekly = weekly.resample("W-FRI").sum()
+
+        vals = []
+        for e in endpoints:
+            v = weekly.loc[weekly.index == e]
+            vals.append(float(v.iloc[0]) if not v.empty else 0.0)
+
+        out_rows.append({
+            "Ticker": row["Ticker"],
+            "Label": row["Label"],
+            **{c: v for c, v in zip(cols, vals)}
+        })
+
+    if not out_rows:
+        return pd.DataFrame()
+
+    mat = pd.DataFrame(out_rows).set_index("Label")
+    return mat
 
 
 # --------------------------- HEATMAP CHART ---------------------------
@@ -523,7 +575,8 @@ def render_heatmap(mat: pd.DataFrame, granularity: str, selected_tickers: List[s
     n_cols = len(cols)
 
     all_vals = mat.values.flatten()
-    vmax = np.nanpercentile(np.abs(all_vals[all_vals != 0]), 95) if np.any(all_vals != 0) else 1.0
+    nonzero = np.abs(all_vals[all_vals != 0])
+    vmax = np.nanpercentile(nonzero, 95) if nonzero.size else 1.0
 
     cell_h = 0.32
     cell_w_inch = max(0.55, min(1.1, 12.0 / max(n_cols, 1)))
@@ -534,11 +587,10 @@ def render_heatmap(mat: pd.DataFrame, granularity: str, selected_tickers: List[s
     fig.patch.set_facecolor("#0d0f14")
     ax.set_facecolor("#0d0f14")
 
-    # Build color matrix
     color_mat = np.zeros((n_rows, n_cols, 4))
-    for i, tk in enumerate(tickers):
-        for j, col in enumerate(cols):
-            v = mat.loc[tk, col]
+    for i in range(n_rows):
+        for j in range(n_cols):
+            v = float(mat.iloc[i, j])
             t = np.clip(v / vmax, -1, 1)
             if t >= 0:
                 alpha = 0.10 + 0.75 * t
@@ -547,16 +599,14 @@ def render_heatmap(mat: pd.DataFrame, granularity: str, selected_tickers: List[s
                 alpha = 0.10 + 0.75 * abs(t)
                 color_mat[i, j] = (*mcolors.to_rgb("#e8445a"), alpha)
 
-    # Draw cells
     for i, tk in enumerate(tickers):
-        for j, col in enumerate(cols):
-            v = mat.loc[tk, col]
+        for j in range(n_cols):
+            v = float(mat.iloc[i, j])
             rgba = color_mat[i, j]
             rect = plt.Rectangle([j - 0.5, i - 0.5], 1, 1,
-                                   facecolor=rgba, edgecolor="#0d0f14", linewidth=0.5)
+                                 facecolor=rgba, edgecolor="#0d0f14", linewidth=0.5)
             ax.add_patch(rect)
 
-            # Value label if large enough
             if vmax > 0 and abs(v) / vmax > 0.25:
                 txt = fmt_compact_cur(v)
                 brightness = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
@@ -564,14 +614,12 @@ def render_heatmap(mat: pd.DataFrame, granularity: str, selected_tickers: List[s
                 ax.text(j, i, txt, ha="center", va="center", fontsize=7,
                         color=txt_color, fontweight="500")
 
-        # Highlight selected tickers
         if tk in selected_tickers:
             rect_sel = plt.Rectangle([-0.5, i - 0.5], n_cols, 1,
-                                      facecolor="none", edgecolor="#4f7cff",
-                                      linewidth=1.5, zorder=5)
+                                     facecolor="none", edgecolor="#4f7cff",
+                                     linewidth=1.5, zorder=5)
             ax.add_patch(rect_sel)
 
-    # Axes
     ax.set_xlim(-0.5, n_cols - 0.5)
     ax.set_ylim(-0.5, n_rows - 0.5)
     ax.invert_yaxis()
@@ -590,7 +638,7 @@ def render_heatmap(mat: pd.DataFrame, granularity: str, selected_tickers: List[s
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.set_title(f"Flow Progression — {granularity}", color="#e2e6f0", fontsize=11,
+    ax.set_title(f"Flow Progression, {granularity}", color="#e2e6f0", fontsize=11,
                  fontweight="600", pad=10, loc="left")
 
     fig.tight_layout(pad=0.8)
@@ -633,8 +681,6 @@ def render_cumulative_lines(df: pd.DataFrame, tickers: List[str], granularity: s
                 color="#6b7491", fontsize=9)
     else:
         ax.axhline(0, color="#2e3447", linewidth=1, zorder=1)
-
-        # Grid
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
         ax.grid(axis="y", color="#1a1e2a", linewidth=0.8, zorder=0)
         ax.grid(axis="x", color="#1a1e2a", linewidth=0.5, linestyle=":", zorder=0)
@@ -657,19 +703,61 @@ def render_cumulative_lines(df: pd.DataFrame, tickers: List[str], granularity: s
 st.title("ETF Net Flows")
 st.caption(
     f"Estimated net creations/redemptions over: {period_label}. "
-    f"Quality uses shares-observations and nonzero share-change days when shares data exist."
+    f"Weekly views use tickers with real shares-based flow series only."
 )
 
 df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
 
 # ================================================================
-# SECTION 1: ORIGINAL BAR CHART (unchanged)
+# SECTION 1: HEADLINE BAR CHART WITH WEEKLY VIEW TOGGLE
 # ================================================================
-chart_df = df.dropna(subset=["Flow ($)"]).sort_values("Flow ($)", ascending=False).copy()
-vals = pd.to_numeric(chart_df["Flow ($)"], errors="coerce").fillna(0.0)
+st.markdown("### Net Flows Snapshot")
+
+bar_view = st.radio(
+    "Bar chart view",
+    ["Lookback total", "Last complete week", "Week to date"],
+    horizontal=True,
+    key="bar_view",
+)
+
+# Build a chart frame based on selected view.
+chart_rows = []
+as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
+
+for _, row in df.iterrows():
+    tk = row["Ticker"]
+    label = row["Label"]
+    method = row["Method"]
+    daily = row.get("_daily_flows", pd.Series(dtype="float64"))
+
+    if bar_view == "Lookback total":
+        v = row["Flow ($)"]
+        chart_rows.append({"Ticker": tk, "Label": label, "Value": v, "Method": method})
+    else:
+        # Weekly views require actual daily flows series.
+        if method != "flows" or not isinstance(daily, pd.Series) or daily.empty:
+            continue
+        v = compute_week_view_value(daily, bar_view, as_of_ts)
+        if v is None:
+            continue
+        chart_rows.append({"Ticker": tk, "Label": label, "Value": float(v), "Method": method})
+
+chart_df = pd.DataFrame(chart_rows)
+chart_df["Value"] = pd.to_numeric(chart_df["Value"], errors="coerce")
+chart_df = chart_df.dropna(subset=["Value"]).sort_values("Value", ascending=False)
+
+if bar_view != "Lookback total":
+    wk_end = _last_friday(as_of_ts)
+    wk_start = _week_start_monday(wk_end)
+    if bar_view == "Last complete week":
+        wk_end = wk_end - pd.Timedelta(days=7)
+        wk_start = _week_start_monday(wk_end)
+    st.caption(f"{bar_view} window: {wk_start.date()} to {wk_end.date()}")
+
+vals = chart_df["Value"].fillna(0.0)
 
 if vals.empty:
-    st.info("No values computed. Try a different period.")
+    st.info("No values computed for this view. Weekly views require shares-based flow data.")
 else:
     x_min = float(vals.min())
     x_max = float(vals.max())
@@ -686,7 +774,7 @@ else:
     bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9, height=0.82)
 
     ax.set_xlabel("Estimated Net Flow ($)")
-    ax.set_title(f"ETF Net Flows - {period_label}")
+    ax.set_title(f"ETF Net Flows, {bar_view} ({period_label} context)")
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
     ax.grid(False)
     ax.xaxis.grid(False)
@@ -721,12 +809,10 @@ else:
 st.markdown("---")
 st.markdown("#### Flow Progression")
 st.caption(
-    "Heatmap shows flow intensity per time bucket across all ETFs with shares data. "
-    "Select tickers from the heatmap rows to load cumulative curves on the right. "
-    "Toggle granularity to switch between daily, weekly, and monthly buckets."
+    "Heatmap shows flow intensity per time bucket across ETFs with shares-based flows. "
+    "Select tickers from the heatmap rows to load cumulative curves on the right."
 )
 
-# Granularity toggle
 gran_col, _ = st.columns([2, 6])
 with gran_col:
     granularity = st.radio(
@@ -737,10 +823,8 @@ with gran_col:
         label_visibility="collapsed",
     )
 
-# Build progression matrix (only flows-method tickers)
 prog_matrix = build_progression_matrix(df, granularity)
 
-# Ticker multiselect — default to top 4 inflow/outflow tickers with real flows data
 flows_tickers = [
     row["Ticker"] for _, row in df.iterrows()
     if row["Method"] == "flows"
@@ -763,7 +847,6 @@ selected_tickers = st.multiselect(
     key="hybrid_multiselect",
 )
 
-# Two-column hybrid layout
 hm_col, line_col = st.columns([3, 2])
 
 with hm_col:
@@ -773,7 +856,7 @@ with hm_col:
         hm_fig = render_heatmap(prog_matrix, granularity, selected_tickers)
         st.pyplot(hm_fig)
         plt.close(hm_fig)
-        st.caption("Blue border = selected in line chart")
+        st.caption("Blue border matches selected tickers in the line chart.")
 
 with line_col:
     if not selected_tickers:
@@ -784,7 +867,44 @@ with line_col:
         plt.close(line_fig)
 
 # ================================================================
-# SECTION 3: QUALITY TABLE (original, unchanged)
+# SECTION 3: WEEKLY BREAKDOWN (NEW)
+# ================================================================
+st.markdown("---")
+st.markdown("#### Weekly Breakdown")
+st.caption(
+    "This section is restricted to shares-based flow series. "
+    "It shows the weekly tape (week ending Friday) so you can separate structural creation from noise."
+)
+
+weeks_to_show = st.slider("Weeks to show", min_value=6, max_value=20, value=10, step=2)
+weekly_mat = build_weekly_breakdown_table(df, as_of_ts=as_of_ts, weeks=weeks_to_show)
+
+if weekly_mat.empty:
+    st.info("No weekly breakdown available. Weekly tape requires flows-series tickers.")
+else:
+    # Format view
+    fmt_weekly = weekly_mat.copy()
+    for c in fmt_weekly.columns:
+        fmt_weekly[c] = pd.to_numeric(fmt_weekly[c], errors="coerce").fillna(0.0).apply(fmt_compact_cur)
+
+    # Top movers for the most recent week in the matrix
+    last_col = weekly_mat.columns[-1]
+    snap = weekly_mat[[last_col]].copy()
+    snap["Flow"] = pd.to_numeric(snap[last_col], errors="coerce").fillna(0.0)
+    top_in = snap.sort_values("Flow", ascending=False).head(7)
+    top_out = snap.sort_values("Flow", ascending=True).head(7)
+
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        st.dataframe(fmt_weekly, use_container_width=True)
+    with c2:
+        st.markdown("**Top weekly inflows**")
+        st.table(top_in["Flow"].apply(fmt_compact_cur).to_frame(name=last_col))
+        st.markdown("**Top weekly outflows**")
+        st.table(top_out["Flow"].apply(fmt_compact_cur).to_frame(name=last_col))
+
+# ================================================================
+# SECTION 4: QUALITY TABLE (original)
 # ================================================================
 st.markdown("---")
 st.markdown("#### Coverage and Data Quality")
@@ -806,7 +926,7 @@ show_cols = [
 st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
 
 # ================================================================
-# SECTION 4: TOP INFLOWS / OUTFLOWS (original, unchanged)
+# SECTION 5: TOP INFLOWS / OUTFLOWS (original)
 # ================================================================
 st.markdown("#### Top Inflows and Outflows")
 valid = df.dropna(subset=["Flow ($)"]).copy()
