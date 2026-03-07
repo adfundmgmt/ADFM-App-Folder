@@ -144,8 +144,6 @@ PRESET_GROUPS: Dict[str, List[Tuple[str, str, str]]] = {
         ("SMH", "QQQ", "Semis / Nasdaq 100"),
         ("QQQ", "XLV", "Nasdaq 100 / Healthcare"),
         ("NVDA", "SMH", "NVIDIA / Semis ETF"),
-        ("META", "QQQ", "Meta / Nasdaq 100"),
-        ("SOXX", "SPY", "Semis ETF / S&P 500"),
     ],
 }
 
