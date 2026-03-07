@@ -14,7 +14,7 @@ st.sidebar.markdown(
     A technical chart built in Streamlit with Plotly.
 
     What it does
-    • Real datetime x-axis for better spacing, zooming, and hover behavior
+    • Real datetime x-axis with trading-session gap removal
     • Candlesticks with cleaner visual hierarchy
     • 8 / 20 / 50 / 100 / 200 day moving averages
     • Volume bars with muted up / down coloring
@@ -383,6 +383,22 @@ def volume_nticks(series: pd.Series) -> int:
     return 5
 
 
+def build_rangebreaks(index: pd.DatetimeIndex, intrvl: str) -> list[dict]:
+    if intrvl != "1d" or len(index) == 0:
+        return []
+
+    normalized = pd.DatetimeIndex(index).normalize().unique().sort_values()
+    full_bdays = pd.date_range(start=normalized.min(), end=normalized.max(), freq="B")
+    missing_bdays = full_bdays.difference(normalized)
+
+    rangebreaks = [dict(bounds=["sat", "mon"])]
+
+    if len(missing_bdays) > 0:
+        rangebreaks.append(dict(values=missing_bdays.strftime("%Y-%m-%d").tolist()))
+
+    return rangebreaks
+
+
 # --------------------------- Data Fetch ---------------------------
 df_full = get_full_history(ticker, interval, auto_adjust)
 
@@ -447,6 +463,8 @@ else:
 if df_display.empty:
     st.error("No display data available after filtering.")
     st.stop()
+
+rangebreaks = build_rangebreaks(df_display.index, interval)
 
 # --------------------------- Header ---------------------------
 header_suffix = "Adjusted ADFM Technical Chart" if auto_adjust else "ADFM Technical Chart"
@@ -829,7 +847,7 @@ fig.update_xaxes(
     gridwidth=1,
     showline=False,
     rangeslider_visible=False,
-    rangebreaks=[dict(bounds=["sat", "mon"])] if interval == "1d" else [],
+    rangebreaks=rangebreaks,
     tickformat="%b '%y" if interval in ["1wk", "1mo"] else "%b %d\n%Y",
 )
 
@@ -852,10 +870,9 @@ fig.update_layout(
         font=dict(size=11),
         traceorder="normal",
     ),
-    bargap=0.05,
+    bargap=0.08,
 )
 
-# Clean legend defensively in case Plotly still injects an empty entry
 for trace in fig.data:
     trace_name = getattr(trace, "name", None)
     if trace.showlegend and (trace_name is None or str(trace_name).strip().lower() in {"", "undefined", "none"}):
