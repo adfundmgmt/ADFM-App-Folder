@@ -5,23 +5,22 @@ import yfinance as yf
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="TradingView-Style Chart", layout="wide")
+st.set_page_config(page_title="Technical Chart", layout="wide")
 
 # --------------------------- Sidebar ---------------------------
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     """
-    A cleaner, more TradingView-like technical chart built in Streamlit with Plotly.
+    Clean technical charting with a tighter, more TradingView-like layout.
 
     What it does
-    • Real OHLC chart with reduced visual clutter
-    • 8 / 20 / 50 / 200 day moving averages
-    • Volume, RSI, and MACD restored by default
-    • Optional Bollinger Bands and Elliott-style pivot overlay
-    • Optional volume-by-price panel below RSI and MACD
-    • Daily x-axis removes weekends and market-closed dates to avoid dead gaps
-    """,
-    unsafe_allow_html=True,
+    • Candlesticks with 8 / 20 / 50 / 200 day moving averages
+    • Volume, RSI (14), and MACD (12, 26, 9)
+    • Optional Bollinger Bands (20, 2.0)
+    • Optional Elliott-style pivot overlay
+    • Session-aware x-axis gap removal for weekends and market-closed weekdays
+    • Separate volume-by-price panel below the main chart
+    """
 )
 
 ticker = st.sidebar.text_input("Ticker", "^SPX").upper().strip()
@@ -41,21 +40,10 @@ interval = st.sidebar.selectbox(
 auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
 
 st.sidebar.subheader("Overlays")
-show_ma8 = st.sidebar.checkbox("Show MA 8", value=True)
-show_ma20 = st.sidebar.checkbox("Show MA 20", value=True)
-show_ma50 = st.sidebar.checkbox("Show MA 50", value=True)
-show_ma100 = st.sidebar.checkbox("Show MA 100", value=False)
-show_ma200 = st.sidebar.checkbox("Show MA 200", value=True)
 show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=False)
 show_last_price = st.sidebar.checkbox("Show last price line", value=True)
 show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=True)
-
-st.sidebar.subheader("Indicators")
-show_volume = st.sidebar.checkbox("Show Volume", value=True)
-show_rsi = st.sidebar.checkbox("Show RSI (14)", value=True)
-show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=True)
-show_volume_profile = st.sidebar.checkbox("Show Volume by Price", value=True)
-volume_profile_bins = st.sidebar.slider("Volume by Price bins", 20, 120, 48, 4)
+show_volume_profile = st.sidebar.checkbox("Show volume-by-price panel", value=True)
 
 st.sidebar.subheader("Elliott Overlay (Heuristic)")
 show_elliott = st.sidebar.checkbox("Show Elliott wave overlay", value=False)
@@ -69,18 +57,15 @@ elliott_mode = st.sidebar.selectbox(
     index=0,
 )
 
-
 # --------------------------- Helpers ---------------------------
 def start_date_from_period(p: str) -> pd.Timestamp | None:
     today = pd.Timestamp.today().normalize()
     if p == "max":
         return None
     if p.endswith("mo"):
-        months = int(p[:-2])
-        return today - pd.DateOffset(months=months)
+        return today - pd.DateOffset(months=int(p[:-2]))
     if p.endswith("y"):
-        years = int(p[:-1])
-        return today - pd.DateOffset(years=years)
+        return today - pd.DateOffset(years=int(p[:-1]))
     return None
 
 
@@ -122,58 +107,33 @@ def compute_bbands(close: pd.Series, window: int = 20, mult: float = 2.0):
     return ma, upper, lower
 
 
-def compute_missing_trading_days(idx: pd.DatetimeIndex) -> list[pd.Timestamp]:
+def compute_missing_market_days(idx: pd.DatetimeIndex) -> list[str]:
     """
-    Remove non-trading weekday gaps from the daily chart.
-    This catches holidays and other market-closed weekdays.
-    Weekends are handled separately with a standard rangebreak.
+    For daily charts, remove weekdays where the market was closed
+    by detecting missing weekdays in the visible range.
     """
     if len(idx) == 0:
         return []
-    normalized = pd.DatetimeIndex(pd.to_datetime(idx).normalize().unique()).sort_values()
-    all_bdays = pd.date_range(normalized.min(), normalized.max(), freq="B")
-    missing = all_bdays.difference(normalized)
-    return list(missing)
+
+    start = idx.min().normalize()
+    end = idx.max().normalize()
+    all_weekdays = pd.date_range(start=start, end=end, freq="B")
+    actual_days = pd.DatetimeIndex(pd.Series(idx.normalize().unique()).sort_values())
+    missing = all_weekdays.difference(actual_days)
+    return [d.strftime("%Y-%m-%d") for d in missing]
 
 
-def compute_volume_profile(
-    df: pd.DataFrame,
-    bins: int = 48,
-) -> pd.DataFrame:
-    """
-    Build a simple visible-range volume-by-price profile using bar midpoint price and total bar volume.
-    """
-    if df.empty or "Volume" not in df.columns:
-        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
+def build_rangebreaks(idx: pd.DatetimeIndex, intrvl: str) -> list[dict]:
+    if intrvl != "1d":
+        return []
 
-    work = df[["High", "Low", "Close", "Volume"]].dropna().copy()
-    if work.empty:
-        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
+    missing_market_days = compute_missing_market_days(idx)
+    breaks = [dict(bounds=["sat", "mon"])]
 
-    price_low = float(work["Low"].min())
-    price_high = float(work["High"].max())
-    if not np.isfinite(price_low) or not np.isfinite(price_high) or price_high <= price_low:
-        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
+    if missing_market_days:
+        breaks.append(dict(values=missing_market_days))
 
-    typical_price = (work["High"] + work["Low"] + work["Close"]) / 3.0
-    edges = np.linspace(price_low, price_high, bins + 1)
-    bucket = pd.cut(typical_price, bins=edges, include_lowest=True, labels=False)
-
-    profile = (
-        pd.DataFrame({"bucket": bucket, "volume": work["Volume"].astype(float)})
-        .dropna()
-        .groupby("bucket", as_index=False)["volume"]
-        .sum()
-    )
-
-    if profile.empty:
-        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
-
-    profile["bucket"] = profile["bucket"].astype(int)
-    profile["price_low"] = edges[profile["bucket"]]
-    profile["price_high"] = edges[profile["bucket"] + 1]
-    profile["price_mid"] = (profile["price_low"] + profile["price_high"]) / 2.0
-    return profile.sort_values("price_mid").reset_index(drop=True)
+    return breaks
 
 
 def _is_pivot_high(values: np.ndarray, i: int, w: int) -> bool:
@@ -369,7 +329,7 @@ def add_elliott_overlay(
             x=x_line,
             y=y_line,
             mode="lines",
-            line=dict(width=1.5, color="rgba(30,30,30,0.60)"),
+            line=dict(width=1.5, color="rgba(35,35,35,0.65)"),
             name="ZigZag",
             hoverinfo="skip",
         ),
@@ -386,7 +346,7 @@ def add_elliott_overlay(
                 x=[p["ts"]],
                 y=[p["px"]],
                 mode="markers+text",
-                marker=dict(size=size, symbol=symbol, color="rgba(20,20,20,0.88)"),
+                marker=dict(size=size, symbol=symbol, color="rgba(20,20,20,0.92)"),
                 text=[text],
                 textposition="top center",
                 showlegend=False,
@@ -422,6 +382,46 @@ def add_horizontal_price_line(fig: go.Figure, y: float, label: str, color: str, 
     )
 
 
+def build_volume_profile(df: pd.DataFrame, bins: int | None = None) -> pd.DataFrame:
+    """
+    Simple visible-range volume-by-price model.
+    Volume is allocated into dynamic close-based bins.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["price_mid", "volume"])
+
+    price_min = float(df["Low"].min())
+    price_max = float(df["High"].max())
+
+    if not np.isfinite(price_min) or not np.isfinite(price_max) or price_max <= price_min:
+        return pd.DataFrame(columns=["price_mid", "volume"])
+
+    n = len(df)
+    if bins is None:
+        if n <= 60:
+            bins = 18
+        elif n <= 130:
+            bins = 24
+        elif n <= 260:
+            bins = 30
+        else:
+            bins = 36
+
+    edges = np.linspace(price_min, price_max, bins + 1)
+    mids = (edges[:-1] + edges[1:]) / 2
+
+    close_vals = df["Close"].values.astype(float)
+    vol_vals = df["Volume"].fillna(0).values.astype(float)
+
+    bucket = np.clip(np.digitize(close_vals, edges) - 1, 0, bins - 1)
+    vol_profile = np.zeros(bins, dtype=float)
+    np.add.at(vol_profile, bucket, vol_vals)
+
+    out = pd.DataFrame({"price_mid": mids, "volume": vol_profile})
+    out = out[out["volume"] > 0].copy()
+    return out
+
+
 # --------------------------- Data Fetch ---------------------------
 df_full = get_full_history(ticker, interval, auto_adjust)
 
@@ -438,6 +438,9 @@ df_full = df_full.copy()
 
 if df_full.index.tz is not None:
     df_full.index = df_full.index.tz_localize(None)
+
+if interval == "1d":
+    df_full = df_full[df_full.index.weekday < 5]
 
 df_full = df_full.sort_index()
 df_full = df_full[~df_full.index.duplicated(keep="last")]
@@ -457,7 +460,7 @@ else:
     df_ind = df_full.copy()
 
 # --------------------------- Indicators ---------------------------
-for w in (8, 20, 50, 100, 200):
+for w in (8, 20, 50, 200):
     df_ind[f"MA{w}"] = df_ind["Close"].rolling(w).mean()
 
 df_ind["RSI14"] = compute_rsi(df_ind["Close"], 14)
@@ -484,52 +487,7 @@ if df_display.empty:
     st.error("No display data available after filtering.")
     st.stop()
 
-volume_profile_df = compute_volume_profile(df_display, volume_profile_bins) if show_volume_profile else pd.DataFrame()
-
-# --------------------------- Panel Setup ---------------------------
-panel_flags = {
-    "volume": show_volume,
-    "rsi": show_rsi,
-    "macd": show_macd,
-    "vbp": show_volume_profile and not volume_profile_df.empty,
-}
-active_panels = [k for k, v in panel_flags.items() if v]
-
-row_count = 1 + len(active_panels)
-
-row_heights = [0.56]
-for panel in active_panels:
-    if panel == "volume":
-        row_heights.append(0.11)
-    elif panel in ("rsi", "macd"):
-        row_heights.append(0.13)
-    elif panel == "vbp":
-        row_heights.append(0.17)
-
-height_map = {1: 720, 2: 840, 3: 960, 4: 1080, 5: 1200}
-fig_height = height_map.get(row_count, 1200)
-
-specs = [[{"type": "candlestick"}]]
-for panel in active_panels:
-    if panel in ("volume", "macd", "vbp"):
-        specs.append([{"type": "bar"}])
-    else:
-        specs.append([{"type": "scatter"}])
-
-fig = make_subplots(
-    rows=row_count,
-    cols=1,
-    shared_xaxes=True,
-    vertical_spacing=0.02,
-    row_heights=row_heights,
-    specs=specs,
-)
-
-row_map = {"price": 1}
-current_row = 2
-for panel in active_panels:
-    row_map[panel] = current_row
-    current_row += 1
+rangebreaks = build_rangebreaks(df_display.index, interval)
 
 # --------------------------- Styling ---------------------------
 COLORS = {
@@ -538,10 +496,9 @@ COLORS = {
     "ma8": "#00ACC1",
     "ma20": "#2962FF",
     "ma50": "#7E57C2",
-    "ma100": "#8D6E63",
-    "ma200": "#F39C12",
+    "ma200": "#FB8C00",
     "bb": "#9E9E9E",
-    "grid": "rgba(120,120,120,0.12)",
+    "grid": "rgba(120,120,120,0.11)",
     "text": "#222222",
     "volume_up": "rgba(38,166,154,0.55)",
     "volume_down": "rgba(239,83,80,0.55)",
@@ -552,10 +509,21 @@ COLORS = {
     "hist_down": "rgba(239,83,80,0.65)",
     "range": "rgba(80,80,80,0.55)",
     "last": "#1565C0",
-    "vbp": "rgba(100,100,100,0.62)",
+    "vpoc": "#C62828",
+    "vpbar": "rgba(41,98,255,0.75)",
 }
 
-# --------------------------- Price Panel ---------------------------
+# --------------------------- Main Figure ---------------------------
+fig = make_subplots(
+    rows=4,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.025,
+    row_heights=[0.60, 0.14, 0.13, 0.13],
+    specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}], [{"type": "scatter"}]],
+)
+
+# Price
 fig.add_trace(
     go.Candlestick(
         x=df_display.index,
@@ -577,33 +545,11 @@ fig.add_trace(
             "Close: %{close:.2f}<extra></extra>"
         ),
     ),
-    row=row_map["price"],
+    row=1,
     col=1,
 )
 
-ma_config = [
-    (8, COLORS["ma8"], show_ma8),
-    (20, COLORS["ma20"], show_ma20),
-    (50, COLORS["ma50"], show_ma50),
-    (100, COLORS["ma100"], show_ma100),
-    (200, COLORS["ma200"], show_ma200),
-]
-
-for w, color, enabled in ma_config:
-    if enabled and f"MA{w}" in df_display.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df_display.index,
-                y=df_display[f"MA{w}"],
-                mode="lines",
-                line=dict(color=color, width=1.5),
-                name=f"MA {w}",
-                hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
-            ),
-            row=row_map["price"],
-            col=1,
-        )
-
+# Bollinger Bands
 if show_bbands:
     fig.add_trace(
         go.Scatter(
@@ -614,7 +560,7 @@ if show_bbands:
             name="BB Upper",
             hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
         ),
-        row=row_map["price"],
+        row=1,
         col=1,
     )
     fig.add_trace(
@@ -628,7 +574,7 @@ if show_bbands:
             name="BB Lower",
             hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
         ),
-        row=row_map["price"],
+        row=1,
         col=1,
     )
     fig.add_trace(
@@ -640,10 +586,26 @@ if show_bbands:
             name="BB Mid",
             hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
         ),
-        row=row_map["price"],
+        row=1,
         col=1,
     )
 
+# Moving averages
+for w, color in [(8, COLORS["ma8"]), (20, COLORS["ma20"]), (50, COLORS["ma50"]), (200, COLORS["ma200"])]:
+    fig.add_trace(
+        go.Scatter(
+            x=df_display.index,
+            y=df_display[f"MA{w}"],
+            mode="lines",
+            line=dict(color=color, width=1.5),
+            name=f"MA {w}",
+            hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+# Elliott
 if show_elliott:
     close_for_pivots = df_display["Close"].dropna()
     if len(close_for_pivots) >= (pivot_window * 2 + 5):
@@ -664,8 +626,7 @@ if show_elliott:
                 else "No valid impulse found in lookback."
             )
             if impulse:
-                types = "".join(p["type"] for p in impulse)
-                st.write(f"Impulse pivot pattern: {types}")
+                st.write(f"Impulse pivot pattern: {''.join(p['type'] for p in impulse)}")
             if abc:
                 st.write("ABC found after impulse.")
             elif elliott_mode == "Impulse + ABC (best fit)" and impulse:
@@ -673,6 +634,7 @@ if show_elliott:
     else:
         st.sidebar.warning("Not enough visible bars for the Elliott overlay with this pivot sensitivity.")
 
+# Price reference lines
 last_close = float(df_display["Close"].iloc[-1])
 prev_close = float(df_display["Close"].iloc[-2]) if len(df_display) >= 2 else last_close
 chg_pct = ((last_close / prev_close) - 1.0) * 100 if prev_close != 0 else 0.0
@@ -683,7 +645,7 @@ if show_last_price:
         y=last_close,
         label=f"Last {last_close:,.2f} ({chg_pct:+.2f}%)",
         color=COLORS["last"],
-        row=row_map["price"],
+        row=1,
     )
 
 if show_range_levels:
@@ -695,7 +657,7 @@ if show_range_levels:
         line_width=1,
         line_dash="dot",
         line_color=COLORS["range"],
-        row=row_map["price"],
+        row=1,
         col=1,
         annotation_text=f"Range High {visible_high:,.2f}",
         annotation_position="top left",
@@ -706,133 +668,97 @@ if show_range_levels:
         line_width=1,
         line_dash="dot",
         line_color=COLORS["range"],
-        row=row_map["price"],
+        row=1,
         col=1,
         annotation_text=f"Range Low {visible_low:,.2f}",
         annotation_position="bottom left",
         annotation_font=dict(color=COLORS["range"], size=10),
     )
 
-# --------------------------- Volume Panel ---------------------------
-if show_volume:
-    vol_colors = []
-    closes = df_display["Close"].values
-    for i in range(len(df_display)):
-        if i == 0:
-            vol_colors.append("rgba(160,160,160,0.45)")
-        else:
-            vol_colors.append(
-                COLORS["volume_up"] if closes[i] >= closes[i - 1] else COLORS["volume_down"]
-            )
+# Volume
+vol_colors = []
+closes = df_display["Close"].values
+for i in range(len(df_display)):
+    if i == 0:
+        vol_colors.append("rgba(160,160,160,0.45)")
+    else:
+        vol_colors.append(COLORS["volume_up"] if closes[i] >= closes[i - 1] else COLORS["volume_down"])
 
-    fig.add_trace(
-        go.Bar(
-            x=df_display.index,
-            y=df_display["Volume"],
-            marker_color=vol_colors,
-            name="Volume",
-            hovertemplate="Volume: %{y:,.0f}<extra></extra>",
-            showlegend=False,
-        ),
-        row=row_map["volume"],
-        col=1,
-    )
+fig.add_trace(
+    go.Bar(
+        x=df_display.index,
+        y=df_display["Volume"],
+        marker_color=vol_colors,
+        name="Volume",
+        hovertemplate="Volume: %{y:,.0f}<extra></extra>",
+        showlegend=False,
+    ),
+    row=2,
+    col=1,
+)
 
-# --------------------------- RSI Panel ---------------------------
-if show_rsi:
-    fig.add_trace(
-        go.Scatter(
-            x=df_display.index,
-            y=df_display["RSI14"],
-            mode="lines",
-            line=dict(width=1.6, color=COLORS["rsi"]),
-            name="RSI 14",
-            hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
-        ),
-        row=row_map["rsi"],
-        col=1,
-    )
-    fig.add_hline(y=70, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=row_map["rsi"], col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=row_map["rsi"], col=1)
-    fig.update_yaxes(range=[0, 100], row=row_map["rsi"], col=1)
+# RSI
+fig.add_trace(
+    go.Scatter(
+        x=df_display.index,
+        y=df_display["RSI14"],
+        mode="lines",
+        line=dict(width=1.6, color=COLORS["rsi"]),
+        name="RSI 14",
+        hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
+        showlegend=False,
+    ),
+    row=3,
+    col=1,
+)
+fig.add_hline(y=70, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=3, col=1)
+fig.add_hline(y=30, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=3, col=1)
+fig.update_yaxes(range=[0, 100], row=3, col=1)
 
-# --------------------------- MACD Panel ---------------------------
-if show_macd:
-    hist_colors = [
-        COLORS["hist_up"] if h >= 0 else COLORS["hist_down"]
-        for h in df_display["Hist"].fillna(0.0)
-    ]
-    fig.add_trace(
-        go.Bar(
-            x=df_display.index,
-            y=df_display["Hist"],
-            marker_color=hist_colors,
-            name="MACD Hist",
-            hovertemplate="Hist: %{y:.2f}<extra></extra>",
-            showlegend=False,
-        ),
-        row=row_map["macd"],
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=df_display.index,
-            y=df_display["MACD"],
-            mode="lines",
-            line=dict(width=1.5, color=COLORS["macd"]),
-            name="MACD",
-            hovertemplate="MACD: %{y:.2f}<extra></extra>",
-        ),
-        row=row_map["macd"],
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=df_display.index,
-            y=df_display["Signal"],
-            mode="lines",
-            line=dict(width=1.3, color=COLORS["signal"]),
-            name="Signal",
-            hovertemplate="Signal: %{y:.2f}<extra></extra>",
-        ),
-        row=row_map["macd"],
-        col=1,
-    )
-    fig.add_hline(y=0, line_dash="solid", line_color="rgba(120,120,120,0.25)", row=row_map["macd"], col=1)
+# MACD
+hist_colors = [COLORS["hist_up"] if h >= 0 else COLORS["hist_down"] for h in df_display["Hist"].fillna(0.0)]
+fig.add_trace(
+    go.Bar(
+        x=df_display.index,
+        y=df_display["Hist"],
+        marker_color=hist_colors,
+        name="MACD Hist",
+        hovertemplate="Hist: %{y:.2f}<extra></extra>",
+        showlegend=False,
+    ),
+    row=4,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(
+        x=df_display.index,
+        y=df_display["MACD"],
+        mode="lines",
+        line=dict(width=1.5, color=COLORS["macd"]),
+        name="MACD",
+        hovertemplate="MACD: %{y:.2f}<extra></extra>",
+        showlegend=False,
+    ),
+    row=4,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(
+        x=df_display.index,
+        y=df_display["Signal"],
+        mode="lines",
+        line=dict(width=1.3, color=COLORS["signal"]),
+        name="Signal",
+        hovertemplate="Signal: %{y:.2f}<extra></extra>",
+        showlegend=False,
+    ),
+    row=4,
+    col=1,
+)
+fig.add_hline(y=0, line_dash="solid", line_color="rgba(120,120,120,0.25)", row=4, col=1)
 
-# --------------------------- Volume by Price Panel ---------------------------
-if panel_flags["vbp"]:
-    poc_idx = volume_profile_df["volume"].idxmax()
-    poc_price = float(volume_profile_df.loc[poc_idx, "price_mid"])
-
-    fig.add_trace(
-        go.Bar(
-            x=volume_profile_df["volume"],
-            y=volume_profile_df["price_mid"],
-            orientation="h",
-            marker_color=COLORS["vbp"],
-            name="Volume by Price",
-            showlegend=False,
-            hovertemplate="Price: %{y:.2f}<br>Volume: %{x:,.0f}<extra></extra>",
-        ),
-        row=row_map["vbp"],
-        col=1,
-    )
-
-    fig.add_hline(
-        y=poc_price,
-        line_width=1,
-        line_dash="dot",
-        line_color=COLORS["last"],
-        row=row_map["vbp"],
-        col=1,
-        annotation_text=f"POC {poc_price:,.2f}",
-        annotation_position="top right",
-        annotation_font=dict(color=COLORS["last"], size=10),
-    )
-
-# --------------------------- Axes / Layout ---------------------------
-for r in range(1, row_count + 1):
+# Axes
+for r in range(1, 5):
     fig.update_yaxes(
         showgrid=True,
         gridcolor=COLORS["grid"],
@@ -842,13 +768,6 @@ for r in range(1, row_count + 1):
         row=r,
         col=1,
     )
-
-rangebreaks = []
-if interval == "1d":
-    rangebreaks.append(dict(bounds=["sat", "mon"]))
-    missing_days = compute_missing_trading_days(df_display.index)
-    if missing_days:
-        rangebreaks.append(dict(values=missing_days))
 
 fig.update_xaxes(
     type="date",
@@ -860,31 +779,27 @@ fig.update_xaxes(
     tickformat="%b '%y" if interval in ["1wk", "1mo"] else "%b %d\n%Y",
 )
 
-title_parts = [f"{ticker}"]
-if auto_adjust:
-    title_parts.append("Adjusted")
-title_parts.append("Technical Chart")
-
 fig.update_layout(
-    height=fig_height,
+    height=1050,
     title=dict(
-        text=" | ".join(title_parts),
-        x=0.012,
+        text=f"{ticker} | Technical Chart",
+        x=0.01,
         xanchor="left",
+        y=0.985,
         font=dict(size=22, color=COLORS["text"]),
     ),
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=24, t=90, b=25),
+    margin=dict(l=40, r=20, t=95, b=25),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     legend=dict(
         orientation="h",
-        y=1.065,
-        x=0.012,
+        y=1.055,
+        x=0.01,
         xanchor="left",
-        yanchor="top",
-        bgcolor="rgba(255,255,255,0.92)",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.82)",
         borderwidth=0,
         font=dict(size=11),
         traceorder="normal",
@@ -894,29 +809,75 @@ fig.update_layout(
     bargap=0.05,
 )
 
-for r in range(2, row_count + 1):
-    fig.update_xaxes(showticklabels=False, row=r - 1, col=1)
+fig.update_yaxes(title_text="Price", row=1, col=1)
+fig.update_yaxes(title_text="Vol", row=2, col=1)
+fig.update_yaxes(title_text="RSI", row=3, col=1)
+fig.update_yaxes(title_text="MACD", row=4, col=1)
 
-# Panel labels
-fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
-if show_volume:
-    fig.update_yaxes(title_text="Vol", row=row_map["volume"], col=1)
-if show_rsi:
-    fig.update_yaxes(title_text="RSI", row=row_map["rsi"], col=1)
-if show_macd:
-    fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
-if panel_flags["vbp"]:
-    fig.update_yaxes(title_text="Price", row=row_map["vbp"], col=1)
-    fig.update_xaxes(title_text="Volume", row=row_map["vbp"], col=1, showticklabels=True)
+st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
-# --------------------------- Render ---------------------------
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-    config={
-        "displaylogo": False,
-        "responsive": True,
-    },
-)
+# --------------------------- Volume-by-Price ---------------------------
+if show_volume_profile:
+    vp = build_volume_profile(df_display)
+
+    if not vp.empty:
+        vpoc_idx = vp["volume"].idxmax()
+        vpoc_price = float(vp.loc[vpoc_idx, "price_mid"])
+        vpoc_volume = float(vp.loc[vpoc_idx, "volume"])
+
+        vp_fig = go.Figure()
+
+        vp_fig.add_trace(
+            go.Bar(
+                x=vp["price_mid"],
+                y=vp["volume"],
+                marker_color=COLORS["vpbar"],
+                name="Volume by Price",
+                hovertemplate="Price: %{x:,.2f}<br>Volume: %{y:,.0f}<extra></extra>",
+                showlegend=False,
+            )
+        )
+
+        vp_fig.add_vline(
+            x=vpoc_price,
+            line_width=1.3,
+            line_dash="dot",
+            line_color=COLORS["vpoc"],
+            annotation_text=f"VPOC {vpoc_price:,.2f}",
+            annotation_position="top right",
+            annotation_font=dict(color=COLORS["vpoc"], size=11),
+        )
+
+        vp_fig.update_xaxes(
+            title_text="Price Level",
+            showgrid=True,
+            gridcolor=COLORS["grid"],
+            zeroline=False,
+            showline=False,
+        )
+        vp_fig.update_yaxes(
+            title_text="Volume",
+            showgrid=True,
+            gridcolor=COLORS["grid"],
+            zeroline=False,
+            showline=False,
+        )
+
+        vp_fig.update_layout(
+            height=280,
+            title=dict(
+                text="Volume by Price",
+                x=0.01,
+                xanchor="left",
+                font=dict(size=18, color=COLORS["text"]),
+            ),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            margin=dict(l=40, r=20, t=45, b=30),
+            font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
+            bargap=0.08,
+        )
+
+        st.plotly_chart(vp_fig, use_container_width=True, config={"displaylogo": False})
 
 st.caption("© 2026 AD Fund Management LP")
