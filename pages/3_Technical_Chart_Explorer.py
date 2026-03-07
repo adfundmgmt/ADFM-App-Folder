@@ -18,7 +18,7 @@ st.sidebar.markdown(
     • Candlesticks with cleaner visual hierarchy  
     • 8 / 20 / 50 / 100 / 200 day moving averages  
     • Volume bars with muted up / down coloring  
-    • RSI (14) and MACD (12, 26, 9) shown by default  
+    • Optional RSI (14) and MACD (12, 26, 9)  
     • Optional Bollinger Bands (20, 2.0)  
     • Optional Elliott-style pivot overlay using a heuristic swing model  
 
@@ -44,16 +44,16 @@ interval = st.sidebar.selectbox(
 auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
 
 st.sidebar.subheader("Overlays")
-show_ma8 = st.sidebar.checkbox("Show MA 8", value=True, disabled=True)
-show_ma100 = st.sidebar.checkbox("Show MA 100", value=True, disabled=True)
+show_ma8 = st.sidebar.checkbox("Show MA 8", value=True)
+show_ma100 = st.sidebar.checkbox("Show MA 100", value=True)
 show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=False)
-show_last_price = st.sidebar.checkbox("Show last price line", value=False, disabled=True)
-show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=False, disabled=True)
+show_last_price = st.sidebar.checkbox("Show last price line", value=False)
+show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=False)
 
 st.sidebar.subheader("Indicators")
 show_volume = st.sidebar.checkbox("Show Volume", value=True)
-show_rsi = st.sidebar.checkbox("Show RSI (14)", value=True, disabled=True)
-show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=True, disabled=True)
+show_rsi = st.sidebar.checkbox("Show RSI (14)", value=True)
+show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=True)
 
 st.sidebar.subheader("Elliott Overlay (Heuristic)")
 show_elliott = st.sidebar.checkbox("Show Elliott wave overlay", value=False)
@@ -315,6 +315,7 @@ def add_elliott_overlay(
             line=dict(width=1.6, color="rgba(30,30,30,0.65)"),
             name="ZigZag",
             hoverinfo="skip",
+            showlegend=True,
         ),
         row=1,
         col=1,
@@ -339,17 +340,6 @@ def add_elliott_overlay(
             col=1,
         )
 
-    if impulse:
-        for p, lab in zip(impulse, ["0", "1", "2", "3", "4", "5"]):
-            _add_label(p, lab, symbol="circle", size=10)
-
-    if mode == "Impulse only (best fit)":
-        return
-
-    if abc:
-        for p, lab in zip(abc, ["A", "B", "C"]):
-            _add_label(p, lab, symbol="square", size=9)
-
 
 def add_horizontal_price_line(fig: go.Figure, y: float, label: str, color: str, row: int = 1):
     fig.add_hline(
@@ -363,6 +353,15 @@ def add_horizontal_price_line(fig: go.Figure, y: float, label: str, color: str, 
         annotation_position="top right",
         annotation_font=dict(color=color, size=11),
     )
+
+
+def volume_nticks(series: pd.Series) -> int:
+    vmax = float(series.max()) if len(series) else 0.0
+    if vmax >= 1e10:
+        return 7
+    if vmax >= 1e9:
+        return 6
+    return 5
 
 
 # --------------------------- Data Fetch ---------------------------
@@ -453,15 +452,17 @@ active_panels = [k for k, v in panel_flags.items() if v]
 
 row_count = 1 + len(active_panels)
 
-row_heights = [0.68]
-for panel in active_panels:
-    if panel == "volume":
-        row_heights.append(0.12)
-    else:
-        row_heights.append(0.16)
+if row_count == 1:
+    row_heights = [1.0]
+elif row_count == 2:
+    row_heights = [0.78, 0.22]
+elif row_count == 3:
+    row_heights = [0.68, 0.14, 0.18]
+else:
+    row_heights = [0.60, 0.14, 0.13, 0.13]
 
-height_map = {1: 700, 2: 830, 3: 980, 4: 1120}
-fig_height = height_map.get(row_count, 1120)
+height_map = {1: 650, 2: 780, 3: 930, 4: 1080}
+fig_height = height_map.get(row_count, 1080)
 
 specs = [[{"type": "candlestick"}]]
 for panel in active_panels:
@@ -474,7 +475,7 @@ fig = make_subplots(
     rows=row_count,
     cols=1,
     shared_xaxes=True,
-    vertical_spacing=0.025,
+    vertical_spacing=0.02,
     row_heights=row_heights,
     specs=specs,
 )
@@ -495,7 +496,7 @@ COLORS = {
     "ma8": "#00ACC1",
     "ma100": "#8D6E63",
     "bb": "#9E9E9E",
-    "grid": "rgba(120,120,120,0.12)",
+    "grid": "rgba(120,120,120,0.18)",
     "text": "#222222",
     "volume_up": "rgba(38,166,154,0.55)",
     "volume_down": "rgba(239,83,80,0.55)",
@@ -552,6 +553,7 @@ for w, color, enabled in ma_config:
                 line=dict(color=color, width=1.5),
                 name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
+                showlegend=True,
             ),
             row=row_map["price"],
             col=1,
@@ -566,6 +568,7 @@ if show_bbands:
             line=dict(width=1, color=COLORS["bb"]),
             name="BB Upper",
             hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
+            showlegend=True,
         ),
         row=row_map["price"],
         col=1,
@@ -580,6 +583,7 @@ if show_bbands:
             fillcolor="rgba(158,158,158,0.10)",
             name="BB Lower",
             hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
+            showlegend=True,
         ),
         row=row_map["price"],
         col=1,
@@ -592,6 +596,7 @@ if show_bbands:
             line=dict(width=1, color="rgba(100,100,100,0.7)", dash="dot"),
             name="BB Mid",
             hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
+            showlegend=True,
         ),
         row=row_map["price"],
         col=1,
@@ -608,6 +613,40 @@ if show_elliott:
             abc = try_abc_after_impulse(pivots, impulse)
 
         add_elliott_overlay(fig, pivots, impulse, abc, elliott_mode)
+
+        if impulse:
+            for p, lab in zip(impulse, ["0", "1", "2", "3", "4", "5"]):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[p["ts"]],
+                        y=[p["px"]],
+                        mode="markers+text",
+                        marker=dict(size=10, symbol="circle", color="rgba(20,20,20,0.9)"),
+                        text=[lab],
+                        textposition="top center",
+                        showlegend=False,
+                        hovertemplate=f"{lab}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+        if abc:
+            for p, lab in zip(abc, ["A", "B", "C"]):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[p["ts"]],
+                        y=[p["px"]],
+                        mode="markers+text",
+                        marker=dict(size=9, symbol="square", color="rgba(20,20,20,0.9)"),
+                        text=[lab],
+                        textposition="top center",
+                        showlegend=False,
+                        hovertemplate=f"{lab}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
+                    ),
+                    row=1,
+                    col=1,
+                )
 
         with st.sidebar.expander("Elliott diagnostics", expanded=False):
             st.write(f"Pivot count drawn: {len(pivots)}")
@@ -701,6 +740,7 @@ if show_rsi:
             line=dict(width=1.6, color=COLORS["rsi"]),
             name="RSI 14",
             hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
+            showlegend=False,
         ),
         row=row_map["rsi"],
         col=1,
@@ -719,7 +759,7 @@ if show_rsi:
         row=row_map["rsi"],
         col=1,
     )
-    fig.update_yaxes(range=[0, 100], row=row_map["rsi"], col=1)
+    fig.update_yaxes(range=[0, 100], nticks=7, row=row_map["rsi"], col=1)
 
 # --------------------------- MACD Panel ---------------------------
 if show_macd:
@@ -747,6 +787,7 @@ if show_macd:
             line=dict(width=1.5, color=COLORS["macd"]),
             name="MACD",
             hovertemplate="MACD: %{y:.2f}<extra></extra>",
+            showlegend=False,
         ),
         row=row_map["macd"],
         col=1,
@@ -759,6 +800,7 @@ if show_macd:
             line=dict(width=1.3, color=COLORS["signal"]),
             name="Signal",
             hovertemplate="Signal: %{y:.2f}<extra></extra>",
+            showlegend=False,
         ),
         row=row_map["macd"],
         col=1,
@@ -776,17 +818,26 @@ for r in range(1, row_count + 1):
     fig.update_yaxes(
         showgrid=True,
         gridcolor=COLORS["grid"],
+        gridwidth=1,
         zeroline=False,
         showline=False,
         fixedrange=False,
+        automargin=True,
         row=r,
         col=1,
     )
+
+fig.update_yaxes(nticks=10, row=row_map["price"], col=1)
+if show_volume:
+    fig.update_yaxes(nticks=volume_nticks(df_display["Volume"]), row=row_map["volume"], col=1)
+if show_macd:
+    fig.update_yaxes(nticks=7, row=row_map["macd"], col=1)
 
 fig.update_xaxes(
     type="date",
     showgrid=True,
     gridcolor=COLORS["grid"],
+    gridwidth=1,
     showline=False,
     rangeslider_visible=False,
     rangebreaks=[dict(bounds=["sat", "mon"])] if interval == "1d" else [],
@@ -799,7 +850,7 @@ fig.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=20, b=25),
+    margin=dict(l=40, r=20, t=20, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     legend=dict(
         orientation="h",
@@ -825,4 +876,11 @@ if show_macd:
 # --------------------------- Render ---------------------------
 st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
-st.caption("© 2026 AD Fund Management LP")
+st.markdown(
+    """
+    <div style="margin-top: 2px; color: #7a7a7a; font-size: 13px;">
+        © 2026 AD Fund Management LP
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
