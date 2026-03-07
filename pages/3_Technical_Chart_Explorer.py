@@ -14,15 +14,12 @@ st.sidebar.markdown(
     A cleaner, more TradingView-like technical chart built in Streamlit with Plotly.
 
     What it does
-    • Real datetime x-axis for better spacing, zooming, and hover behavior  
-    • Candlesticks with cleaner visual hierarchy  
-    • 20 / 50 / 200 day moving averages by default, with optional 8 / 100 day lines  
-    • Volume bars with muted up / down coloring  
-    • Optional RSI (14), MACD (12, 26, 9), and Bollinger Bands (20, 2.0)  
-    • Optional Elliott-style pivot overlay using a heuristic swing model  
-    • Price line, visible-range high / low, and better hover labels  
-
-    Use the controls below to change ticker, period, interval, and overlays.
+    • Real OHLC chart with reduced visual clutter
+    • 8 / 20 / 50 / 200 day moving averages
+    • Volume, RSI, and MACD restored by default
+    • Optional Bollinger Bands and Elliott-style pivot overlay
+    • Optional volume-by-price panel below RSI and MACD
+    • Daily x-axis removes weekends and market-closed dates to avoid dead gaps
     """,
     unsafe_allow_html=True,
 )
@@ -44,16 +41,21 @@ interval = st.sidebar.selectbox(
 auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
 
 st.sidebar.subheader("Overlays")
-show_ma8 = st.sidebar.checkbox("Show MA 8", value=False)
+show_ma8 = st.sidebar.checkbox("Show MA 8", value=True)
+show_ma20 = st.sidebar.checkbox("Show MA 20", value=True)
+show_ma50 = st.sidebar.checkbox("Show MA 50", value=True)
 show_ma100 = st.sidebar.checkbox("Show MA 100", value=False)
+show_ma200 = st.sidebar.checkbox("Show MA 200", value=True)
 show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=False)
 show_last_price = st.sidebar.checkbox("Show last price line", value=True)
 show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=True)
 
 st.sidebar.subheader("Indicators")
 show_volume = st.sidebar.checkbox("Show Volume", value=True)
-show_rsi = st.sidebar.checkbox("Show RSI (14)", value=False)
-show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=False)
+show_rsi = st.sidebar.checkbox("Show RSI (14)", value=True)
+show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=True)
+show_volume_profile = st.sidebar.checkbox("Show Volume by Price", value=True)
+volume_profile_bins = st.sidebar.slider("Volume by Price bins", 20, 120, 48, 4)
 
 st.sidebar.subheader("Elliott Overlay (Heuristic)")
 show_elliott = st.sidebar.checkbox("Show Elliott wave overlay", value=False)
@@ -66,6 +68,7 @@ elliott_mode = st.sidebar.selectbox(
     ["Impulse + ABC (best fit)", "Impulse only (best fit)", "ZigZag only (no labels)"],
     index=0,
 )
+
 
 # --------------------------- Helpers ---------------------------
 def start_date_from_period(p: str) -> pd.Timestamp | None:
@@ -117,6 +120,60 @@ def compute_bbands(close: pd.Series, window: int = 20, mult: float = 2.0):
     upper = ma + mult * std
     lower = ma - mult * std
     return ma, upper, lower
+
+
+def compute_missing_trading_days(idx: pd.DatetimeIndex) -> list[pd.Timestamp]:
+    """
+    Remove non-trading weekday gaps from the daily chart.
+    This catches holidays and other market-closed weekdays.
+    Weekends are handled separately with a standard rangebreak.
+    """
+    if len(idx) == 0:
+        return []
+    normalized = pd.DatetimeIndex(pd.to_datetime(idx).normalize().unique()).sort_values()
+    all_bdays = pd.date_range(normalized.min(), normalized.max(), freq="B")
+    missing = all_bdays.difference(normalized)
+    return list(missing)
+
+
+def compute_volume_profile(
+    df: pd.DataFrame,
+    bins: int = 48,
+) -> pd.DataFrame:
+    """
+    Build a simple visible-range volume-by-price profile using bar midpoint price and total bar volume.
+    """
+    if df.empty or "Volume" not in df.columns:
+        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
+
+    work = df[["High", "Low", "Close", "Volume"]].dropna().copy()
+    if work.empty:
+        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
+
+    price_low = float(work["Low"].min())
+    price_high = float(work["High"].max())
+    if not np.isfinite(price_low) or not np.isfinite(price_high) or price_high <= price_low:
+        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
+
+    typical_price = (work["High"] + work["Low"] + work["Close"]) / 3.0
+    edges = np.linspace(price_low, price_high, bins + 1)
+    bucket = pd.cut(typical_price, bins=edges, include_lowest=True, labels=False)
+
+    profile = (
+        pd.DataFrame({"bucket": bucket, "volume": work["Volume"].astype(float)})
+        .dropna()
+        .groupby("bucket", as_index=False)["volume"]
+        .sum()
+    )
+
+    if profile.empty:
+        return pd.DataFrame(columns=["price_mid", "volume", "price_low", "price_high"])
+
+    profile["bucket"] = profile["bucket"].astype(int)
+    profile["price_low"] = edges[profile["bucket"]]
+    profile["price_high"] = edges[profile["bucket"] + 1]
+    profile["price_mid"] = (profile["price_low"] + profile["price_high"]) / 2.0
+    return profile.sort_values("price_mid").reset_index(drop=True)
 
 
 def _is_pivot_high(values: np.ndarray, i: int, w: int) -> bool:
@@ -312,7 +369,7 @@ def add_elliott_overlay(
             x=x_line,
             y=y_line,
             mode="lines",
-            line=dict(width=1.6, color="rgba(30,30,30,0.65)"),
+            line=dict(width=1.5, color="rgba(30,30,30,0.60)"),
             name="ZigZag",
             hoverinfo="skip",
         ),
@@ -329,7 +386,7 @@ def add_elliott_overlay(
                 x=[p["ts"]],
                 y=[p["px"]],
                 mode="markers+text",
-                marker=dict(size=size, symbol=symbol, color="rgba(20,20,20,0.9)"),
+                marker=dict(size=size, symbol=symbol, color="rgba(20,20,20,0.88)"),
                 text=[text],
                 textposition="top center",
                 showlegend=False,
@@ -382,9 +439,6 @@ df_full = df_full.copy()
 if df_full.index.tz is not None:
     df_full.index = df_full.index.tz_localize(None)
 
-if interval == "1d":
-    df_full = df_full[df_full.index.weekday < 5]
-
 df_full = df_full.sort_index()
 df_full = df_full[~df_full.index.duplicated(keep="last")]
 
@@ -430,29 +484,34 @@ if df_display.empty:
     st.error("No display data available after filtering.")
     st.stop()
 
+volume_profile_df = compute_volume_profile(df_display, volume_profile_bins) if show_volume_profile else pd.DataFrame()
+
 # --------------------------- Panel Setup ---------------------------
 panel_flags = {
     "volume": show_volume,
     "rsi": show_rsi,
     "macd": show_macd,
+    "vbp": show_volume_profile and not volume_profile_df.empty,
 }
 active_panels = [k for k, v in panel_flags.items() if v]
 
 row_count = 1 + len(active_panels)
 
-row_heights = [0.72]
+row_heights = [0.56]
 for panel in active_panels:
     if panel == "volume":
-        row_heights.append(0.12)
-    else:
-        row_heights.append(0.16)
+        row_heights.append(0.11)
+    elif panel in ("rsi", "macd"):
+        row_heights.append(0.13)
+    elif panel == "vbp":
+        row_heights.append(0.17)
 
-height_map = {1: 700, 2: 820, 3: 940, 4: 1060}
-fig_height = height_map.get(row_count, 1060)
+height_map = {1: 720, 2: 840, 3: 960, 4: 1080, 5: 1200}
+fig_height = height_map.get(row_count, 1200)
 
 specs = [[{"type": "candlestick"}]]
 for panel in active_panels:
-    if panel == "volume":
+    if panel in ("volume", "macd", "vbp"):
         specs.append([{"type": "bar"}])
     else:
         specs.append([{"type": "scatter"}])
@@ -461,7 +520,7 @@ fig = make_subplots(
     rows=row_count,
     cols=1,
     shared_xaxes=True,
-    vertical_spacing=0.025,
+    vertical_spacing=0.02,
     row_heights=row_heights,
     specs=specs,
 )
@@ -476,11 +535,11 @@ for panel in active_panels:
 COLORS = {
     "up": "#26A69A",
     "down": "#EF5350",
+    "ma8": "#00ACC1",
     "ma20": "#2962FF",
     "ma50": "#7E57C2",
-    "ma200": "#FF9800",
-    "ma8": "#00ACC1",
     "ma100": "#8D6E63",
+    "ma200": "#F39C12",
     "bb": "#9E9E9E",
     "grid": "rgba(120,120,120,0.12)",
     "text": "#222222",
@@ -493,6 +552,7 @@ COLORS = {
     "hist_down": "rgba(239,83,80,0.65)",
     "range": "rgba(80,80,80,0.55)",
     "last": "#1565C0",
+    "vbp": "rgba(100,100,100,0.62)",
 }
 
 # --------------------------- Price Panel ---------------------------
@@ -521,13 +581,12 @@ fig.add_trace(
     col=1,
 )
 
-# Moving averages
 ma_config = [
-    (20, COLORS["ma20"], True),
-    (50, COLORS["ma50"], True),
-    (200, COLORS["ma200"], True),
     (8, COLORS["ma8"], show_ma8),
+    (20, COLORS["ma20"], show_ma20),
+    (50, COLORS["ma50"], show_ma50),
     (100, COLORS["ma100"], show_ma100),
+    (200, COLORS["ma200"], show_ma200),
 ]
 
 for w, color, enabled in ma_config:
@@ -545,7 +604,6 @@ for w, color, enabled in ma_config:
             col=1,
         )
 
-# Bollinger Bands
 if show_bbands:
     fig.add_trace(
         go.Scatter(
@@ -586,7 +644,6 @@ if show_bbands:
         col=1,
     )
 
-# Elliott overlay
 if show_elliott:
     close_for_pivots = df_display["Close"].dropna()
     if len(close_for_pivots) >= (pivot_window * 2 + 5):
@@ -616,7 +673,6 @@ if show_elliott:
     else:
         st.sidebar.warning("Not enough visible bars for the Elliott overlay with this pivot sensitivity.")
 
-# Last price line
 last_close = float(df_display["Close"].iloc[-1])
 prev_close = float(df_display["Close"].iloc[-2]) if len(df_display) >= 2 else last_close
 chg_pct = ((last_close / prev_close) - 1.0) * 100 if prev_close != 0 else 0.0
@@ -630,7 +686,6 @@ if show_last_price:
         row=row_map["price"],
     )
 
-# Visible range high / low
 if show_range_levels:
     visible_high = float(df_display["High"].max())
     visible_low = float(df_display["Low"].min())
@@ -745,6 +800,37 @@ if show_macd:
     )
     fig.add_hline(y=0, line_dash="solid", line_color="rgba(120,120,120,0.25)", row=row_map["macd"], col=1)
 
+# --------------------------- Volume by Price Panel ---------------------------
+if panel_flags["vbp"]:
+    poc_idx = volume_profile_df["volume"].idxmax()
+    poc_price = float(volume_profile_df.loc[poc_idx, "price_mid"])
+
+    fig.add_trace(
+        go.Bar(
+            x=volume_profile_df["volume"],
+            y=volume_profile_df["price_mid"],
+            orientation="h",
+            marker_color=COLORS["vbp"],
+            name="Volume by Price",
+            showlegend=False,
+            hovertemplate="Price: %{y:.2f}<br>Volume: %{x:,.0f}<extra></extra>",
+        ),
+        row=row_map["vbp"],
+        col=1,
+    )
+
+    fig.add_hline(
+        y=poc_price,
+        line_width=1,
+        line_dash="dot",
+        line_color=COLORS["last"],
+        row=row_map["vbp"],
+        col=1,
+        annotation_text=f"POC {poc_price:,.2f}",
+        annotation_position="top right",
+        annotation_font=dict(color=COLORS["last"], size=10),
+    )
+
 # --------------------------- Axes / Layout ---------------------------
 for r in range(1, row_count + 1):
     fig.update_yaxes(
@@ -757,13 +843,20 @@ for r in range(1, row_count + 1):
         col=1,
     )
 
+rangebreaks = []
+if interval == "1d":
+    rangebreaks.append(dict(bounds=["sat", "mon"]))
+    missing_days = compute_missing_trading_days(df_display.index)
+    if missing_days:
+        rangebreaks.append(dict(values=missing_days))
+
 fig.update_xaxes(
     type="date",
     showgrid=True,
     gridcolor=COLORS["grid"],
     showline=False,
     rangeslider_visible=False,
-    rangebreaks=[dict(bounds=["sat", "mon"])] if interval == "1d" else [],
+    rangebreaks=rangebreaks,
     tickformat="%b '%y" if interval in ["1wk", "1mo"] else "%b %d\n%Y",
 )
 
@@ -776,27 +869,33 @@ fig.update_layout(
     height=fig_height,
     title=dict(
         text=" | ".join(title_parts),
-        x=0.01,
+        x=0.012,
         xanchor="left",
         font=dict(size=22, color=COLORS["text"]),
     ),
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=55, b=25),
+    margin=dict(l=40, r=24, t=90, b=25),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     legend=dict(
         orientation="h",
-        y=1.01,
-        x=0.0,
+        y=1.065,
+        x=0.012,
         xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.80)",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.92)",
         borderwidth=0,
         font=dict(size=11),
+        traceorder="normal",
+        itemclick="toggleothers",
+        itemdoubleclick="toggle",
     ),
     bargap=0.05,
 )
+
+for r in range(2, row_count + 1):
+    fig.update_xaxes(showticklabels=False, row=r - 1, col=1)
 
 # Panel labels
 fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
@@ -806,23 +905,18 @@ if show_rsi:
     fig.update_yaxes(title_text="RSI", row=row_map["rsi"], col=1)
 if show_macd:
     fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
-
-# --------------------------- Header Metrics ---------------------------
-last_open = float(df_display["Open"].iloc[-1])
-last_high = float(df_display["High"].iloc[-1])
-last_low = float(df_display["Low"].iloc[-1])
-last_volume = float(df_display["Volume"].iloc[-1]) if "Volume" in df_display.columns else np.nan
-period_return = ((last_close / float(df_display["Close"].iloc[0])) - 1.0) * 100 if len(df_display) > 1 else 0.0
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Last", f"{last_close:,.2f}")
-c2.metric("Day %", f"{chg_pct:+.2f}%")
-c3.metric("Period %", f"{period_return:+.2f}%")
-c4.metric("High", f"{last_high:,.2f}")
-c5.metric("Low", f"{last_low:,.2f}")
-c6.metric("Volume", f"{last_volume:,.0f}" if pd.notna(last_volume) else "N/A")
+if panel_flags["vbp"]:
+    fig.update_yaxes(title_text="Price", row=row_map["vbp"], col=1)
+    fig.update_xaxes(title_text="Volume", row=row_map["vbp"], col=1, showticklabels=True)
 
 # --------------------------- Render ---------------------------
-st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "displaylogo": False,
+        "responsive": True,
+    },
+)
 
 st.caption("© 2026 AD Fund Management LP")
