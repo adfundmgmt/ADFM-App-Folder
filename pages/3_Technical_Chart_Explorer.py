@@ -16,11 +16,11 @@ st.sidebar.markdown(
     What it does
     • Real datetime x-axis for better spacing, zooming, and hover behavior  
     • Candlesticks with cleaner visual hierarchy  
-    • 20 / 50 / 200 day moving averages by default, with optional 8 / 100 day lines  
+    • 8 / 20 / 50 / 100 / 200 day moving averages  
     • Volume bars with muted up / down coloring  
-    • Optional RSI (14), MACD (12, 26, 9), and Bollinger Bands (20, 2.0)  
+    • RSI (14) and MACD (12, 26, 9) shown by default  
+    • Optional Bollinger Bands (20, 2.0)  
     • Optional Elliott-style pivot overlay using a heuristic swing model  
-    • Price line, visible-range high / low, and better hover labels  
 
     Use the controls below to change ticker, period, interval, and overlays.
     """,
@@ -44,16 +44,16 @@ interval = st.sidebar.selectbox(
 auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
 
 st.sidebar.subheader("Overlays")
-show_ma8 = st.sidebar.checkbox("Show MA 8", value=False)
-show_ma100 = st.sidebar.checkbox("Show MA 100", value=False)
+show_ma8 = st.sidebar.checkbox("Show MA 8", value=True, disabled=True)
+show_ma100 = st.sidebar.checkbox("Show MA 100", value=True, disabled=True)
 show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=False)
-show_last_price = st.sidebar.checkbox("Show last price line", value=True)
-show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=True)
+show_last_price = st.sidebar.checkbox("Show last price line", value=False, disabled=True)
+show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=False, disabled=True)
 
 st.sidebar.subheader("Indicators")
 show_volume = st.sidebar.checkbox("Show Volume", value=True)
-show_rsi = st.sidebar.checkbox("Show RSI (14)", value=False)
-show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=False)
+show_rsi = st.sidebar.checkbox("Show RSI (14)", value=True, disabled=True)
+show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=True, disabled=True)
 
 st.sidebar.subheader("Elliott Overlay (Heuristic)")
 show_elliott = st.sidebar.checkbox("Show Elliott wave overlay", value=False)
@@ -430,6 +430,19 @@ if df_display.empty:
     st.error("No display data available after filtering.")
     st.stop()
 
+# --------------------------- Header ---------------------------
+header_suffix = "Adjusted ADFM Technical Chart" if auto_adjust else "ADFM Technical Chart"
+st.markdown(
+    f"""
+    <div style="margin-bottom: 10px;">
+        <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
+            {ticker} | {header_suffix}
+        </h2>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 # --------------------------- Panel Setup ---------------------------
 panel_flags = {
     "volume": show_volume,
@@ -440,15 +453,15 @@ active_panels = [k for k, v in panel_flags.items() if v]
 
 row_count = 1 + len(active_panels)
 
-row_heights = [0.72]
+row_heights = [0.68]
 for panel in active_panels:
     if panel == "volume":
         row_heights.append(0.12)
     else:
         row_heights.append(0.16)
 
-height_map = {1: 700, 2: 820, 3: 940, 4: 1060}
-fig_height = height_map.get(row_count, 1060)
+height_map = {1: 700, 2: 830, 3: 980, 4: 1120}
+fig_height = height_map.get(row_count, 1120)
 
 specs = [[{"type": "candlestick"}]]
 for panel in active_panels:
@@ -521,13 +534,12 @@ fig.add_trace(
     col=1,
 )
 
-# Moving averages
 ma_config = [
+    (8, COLORS["ma8"], show_ma8),
     (20, COLORS["ma20"], True),
     (50, COLORS["ma50"], True),
-    (200, COLORS["ma200"], True),
-    (8, COLORS["ma8"], show_ma8),
     (100, COLORS["ma100"], show_ma100),
+    (200, COLORS["ma200"], True),
 ]
 
 for w, color, enabled in ma_config:
@@ -545,7 +557,6 @@ for w, color, enabled in ma_config:
             col=1,
         )
 
-# Bollinger Bands
 if show_bbands:
     fig.add_trace(
         go.Scatter(
@@ -586,7 +597,6 @@ if show_bbands:
         col=1,
     )
 
-# Elliott overlay
 if show_elliott:
     close_for_pivots = df_display["Close"].dropna()
     if len(close_for_pivots) >= (pivot_window * 2 + 5):
@@ -616,7 +626,6 @@ if show_elliott:
     else:
         st.sidebar.warning("Not enough visible bars for the Elliott overlay with this pivot sensitivity.")
 
-# Last price line
 last_close = float(df_display["Close"].iloc[-1])
 prev_close = float(df_display["Close"].iloc[-2]) if len(df_display) >= 2 else last_close
 chg_pct = ((last_close / prev_close) - 1.0) * 100 if prev_close != 0 else 0.0
@@ -630,7 +639,6 @@ if show_last_price:
         row=row_map["price"],
     )
 
-# Visible range high / low
 if show_range_levels:
     visible_high = float(df_display["High"].max())
     visible_low = float(df_display["Low"].min())
@@ -697,8 +705,20 @@ if show_rsi:
         row=row_map["rsi"],
         col=1,
     )
-    fig.add_hline(y=70, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=row_map["rsi"], col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=row_map["rsi"], col=1)
+    fig.add_hline(
+        y=70,
+        line_dash="dash",
+        line_color="rgba(120,120,120,0.55)",
+        row=row_map["rsi"],
+        col=1,
+    )
+    fig.add_hline(
+        y=30,
+        line_dash="dash",
+        line_color="rgba(120,120,120,0.55)",
+        row=row_map["rsi"],
+        col=1,
+    )
     fig.update_yaxes(range=[0, 100], row=row_map["rsi"], col=1)
 
 # --------------------------- MACD Panel ---------------------------
@@ -743,7 +763,13 @@ if show_macd:
         row=row_map["macd"],
         col=1,
     )
-    fig.add_hline(y=0, line_dash="solid", line_color="rgba(120,120,120,0.25)", row=row_map["macd"], col=1)
+    fig.add_hline(
+        y=0,
+        line_dash="solid",
+        line_color="rgba(120,120,120,0.25)",
+        row=row_map["macd"],
+        col=1,
+    )
 
 # --------------------------- Axes / Layout ---------------------------
 for r in range(1, row_count + 1):
@@ -767,27 +793,17 @@ fig.update_xaxes(
     tickformat="%b '%y" if interval in ["1wk", "1mo"] else "%b %d\n%Y",
 )
 
-title_parts = [f"{ticker}"]
-if auto_adjust:
-    title_parts.append("Adjusted")
-title_parts.append("Technical Chart")
-
 fig.update_layout(
     height=fig_height,
-    title=dict(
-        text=" | ".join(title_parts),
-        x=0.01,
-        xanchor="left",
-        font=dict(size=22, color=COLORS["text"]),
-    ),
+    title=None,
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=55, b=25),
+    margin=dict(l=40, r=20, t=20, b=25),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     legend=dict(
         orientation="h",
-        y=1.01,
+        y=1.02,
         x=0.0,
         xanchor="left",
         yanchor="bottom",
@@ -798,7 +814,6 @@ fig.update_layout(
     bargap=0.05,
 )
 
-# Panel labels
 fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
 if show_volume:
     fig.update_yaxes(title_text="Vol", row=row_map["volume"], col=1)
@@ -806,21 +821,6 @@ if show_rsi:
     fig.update_yaxes(title_text="RSI", row=row_map["rsi"], col=1)
 if show_macd:
     fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
-
-# --------------------------- Header Metrics ---------------------------
-last_open = float(df_display["Open"].iloc[-1])
-last_high = float(df_display["High"].iloc[-1])
-last_low = float(df_display["Low"].iloc[-1])
-last_volume = float(df_display["Volume"].iloc[-1]) if "Volume" in df_display.columns else np.nan
-period_return = ((last_close / float(df_display["Close"].iloc[0])) - 1.0) * 100 if len(df_display) > 1 else 0.0
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Last", f"{last_close:,.2f}")
-c2.metric("Day %", f"{chg_pct:+.2f}%")
-c3.metric("Period %", f"{period_return:+.2f}%")
-c4.metric("High", f"{last_high:,.2f}")
-c5.metric("Low", f"{last_low:,.2f}")
-c6.metric("Volume", f"{last_volume:,.0f}" if pd.notna(last_volume) else "N/A")
 
 # --------------------------- Render ---------------------------
 st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
