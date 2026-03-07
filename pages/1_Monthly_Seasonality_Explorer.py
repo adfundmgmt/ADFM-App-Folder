@@ -1,9 +1,7 @@
-
 import datetime as dt
 import io
 import time
 import warnings
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
@@ -22,12 +20,10 @@ try:
 except ImportError:
     pdr = None
 
-# ----------------------------- App config ----------------------------- #
 st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
 
 FALLBACK_MAP = {"^SPX": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
-MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 PRESET_WINDOWS = {
     "Custom": None,
     "10Y": 10,
@@ -35,6 +31,7 @@ PRESET_WINDOWS = {
     "30Y": 30,
     "Full history": "full",
 }
+POPULAR_SYMBOLS = ["^SPX", "QQQ", "IWM", "TLT", "GLD", "USO", "CL=F", "GC=F"]
 
 COLORS: Dict[str, str] = {
     "green_fill": "#62c38e",
@@ -50,20 +47,35 @@ COLORS: Dict[str, str] = {
     "today": "#b0b0b0",
 }
 
-POPULAR_SYMBOLS = ["^SPX", "QQQ", "IWM", "TLT", "GLD", "USO", "CL=F", "GC=F"]
+
+def _meta_dict(
+    requested_symbol: str,
+    source_symbol: str,
+    source_name: str,
+    proxy_used: bool,
+    adjusted: bool,
+    coverage_start: Optional[pd.Timestamp],
+    coverage_end: Optional[pd.Timestamp],
+    rows: int,
+    notes: List[str],
+) -> Dict[str, object]:
+    return {
+        "requested_symbol": requested_symbol,
+        "source_symbol": source_symbol,
+        "source_name": source_name,
+        "proxy_used": proxy_used,
+        "adjusted": adjusted,
+        "coverage_start": coverage_start.isoformat() if coverage_start is not None else None,
+        "coverage_end": coverage_end.isoformat() if coverage_end is not None else None,
+        "rows": int(rows),
+        "notes": list(notes),
+    }
 
 
-@dataclass(frozen=True)
-class FetchMeta:
-    requested_symbol: str
-    source_symbol: str
-    source_name: str
-    proxy_used: bool
-    adjusted: bool
-    coverage_start: Optional[pd.Timestamp]
-    coverage_end: Optional[pd.Timestamp]
-    rows: int
-    warnings: Tuple[str, ...]
+def _meta_ts(value: Optional[str]) -> Optional[pd.Timestamp]:
+    if value is None:
+        return None
+    return pd.Timestamp(value)
 
 
 # ----------------------------- Data layer ----------------------------- #
@@ -75,7 +87,9 @@ def _clean_close_series(df: pd.DataFrame) -> Optional[pd.Series]:
         if ("Close", "") in df.columns:
             series = df[("Close", "")]
         elif "Close" in df.columns.get_level_values(0):
-            close_cols = [c for c in df.columns if c[0] == "Close"]
+            close_cols = [col for col in df.columns if col[0] == "Close"]
+            if not close_cols:
+                return None
             series = df[close_cols[0]]
         else:
             return None
@@ -122,6 +136,7 @@ def _yf_download(symbol: str, start: str, end: str, retries: int = 3, pause_seco
 def _fred_download(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     if pdr is None or symbol not in FALLBACK_MAP:
         return None
+
     try:
         fred_symbol = FALLBACK_MAP[symbol]
         df = pdr.DataReader(fred_symbol, "fred", start, end)
@@ -139,16 +154,16 @@ def _fred_download(symbol: str, start: str, end: str) -> Optional[pd.Series]:
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def fetch_prices_with_meta(symbol: str, start: str, end: str) -> Tuple[Optional[pd.Series], FetchMeta]:
+def fetch_prices_with_meta(symbol: str, start: str, end: str) -> Tuple[Optional[pd.Series], Dict[str, object]]:
     symbol = symbol.strip().upper()
     end_ts = min(pd.Timestamp(end), pd.Timestamp.today().normalize())
     start_pad = (pd.Timestamp(start) - pd.DateOffset(days=45)).strftime("%Y-%m-%d")
     end_str = end_ts.strftime("%Y-%m-%d")
-    warnings_list: List[str] = []
+    notes: List[str] = []
 
     series = _yf_download(symbol, start_pad, end_str)
     if series is not None:
-        meta = FetchMeta(
+        return series, _meta_dict(
             requested_symbol=symbol,
             source_symbol=symbol,
             source_name="Yahoo Finance",
@@ -156,18 +171,17 @@ def fetch_prices_with_meta(symbol: str, start: str, end: str) -> Tuple[Optional[
             adjusted=True,
             coverage_start=series.index.min(),
             coverage_end=series.index.max(),
-            rows=int(series.shape[0]),
-            warnings=tuple(warnings_list),
+            rows=series.shape[0],
+            notes=notes,
         )
-        return series, meta
 
-    warnings_list.append(f"Yahoo Finance returned no usable close series for {symbol}.")
+    notes.append(f"Yahoo Finance returned no usable close series for {symbol}.")
 
     if symbol == "SPY":
         proxy = _yf_download("^SPX", start_pad, end_str)
         if proxy is not None:
-            warnings_list.append("SPY unavailable from Yahoo Finance. Using ^SPX price index proxy.")
-            meta = FetchMeta(
+            notes.append("SPY was unavailable, so the app used ^SPX as a price index proxy.")
+            return proxy, _meta_dict(
                 requested_symbol=symbol,
                 source_symbol="^SPX",
                 source_name="Yahoo Finance",
@@ -175,15 +189,14 @@ def fetch_prices_with_meta(symbol: str, start: str, end: str) -> Tuple[Optional[
                 adjusted=True,
                 coverage_start=proxy.index.min(),
                 coverage_end=proxy.index.max(),
-                rows=int(proxy.shape[0]),
-                warnings=tuple(warnings_list),
+                rows=proxy.shape[0],
+                notes=notes,
             )
-            return proxy, meta
 
     fred_series = _fred_download(symbol, start_pad, end_str)
     if fred_series is not None:
-        warnings_list.append(f"Yahoo Finance unavailable. Using FRED fallback for {symbol}.")
-        meta = FetchMeta(
+        notes.append(f"Yahoo Finance was unavailable, so the app used the FRED fallback for {symbol}.")
+        return fred_series, _meta_dict(
             requested_symbol=symbol,
             source_symbol=symbol,
             source_name="FRED",
@@ -191,12 +204,11 @@ def fetch_prices_with_meta(symbol: str, start: str, end: str) -> Tuple[Optional[
             adjusted=False,
             coverage_start=fred_series.index.min(),
             coverage_end=fred_series.index.max(),
-            rows=int(fred_series.shape[0]),
-            warnings=tuple(warnings_list),
+            rows=fred_series.shape[0],
+            notes=notes,
         )
-        return fred_series, meta
 
-    meta = FetchMeta(
+    return None, _meta_dict(
         requested_symbol=symbol,
         source_symbol=symbol,
         source_name="Unavailable",
@@ -205,9 +217,8 @@ def fetch_prices_with_meta(symbol: str, start: str, end: str) -> Tuple[Optional[
         coverage_start=None,
         coverage_end=None,
         rows=0,
-        warnings=tuple(warnings_list),
+        notes=notes,
     )
-    return None, meta
 
 
 # ----------------------------- Domain layer ----------------------------- #
@@ -224,21 +235,15 @@ def _intra_month_halves(prices: pd.Series, include_partial_last_month: bool = Fa
     if prices.empty:
         return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret", "year", "month", "complete"])
 
-    months = pd.period_range(
-        prices.index.min().to_period("M"),
-        prices.index.max().to_period("M"),
-        freq="M",
-    )
-
+    months = pd.period_range(prices.index.min().to_period("M"), prices.index.max().to_period("M"), freq="M")
     out_rows: List[Dict[str, object]] = []
+
     for period in months:
-        month_mask = prices.index.to_period("M") == period
-        month_days = prices.loc[month_mask]
+        month_days = prices.loc[prices.index.to_period("M") == period]
         if month_days.shape[0] < 3:
             continue
 
-        prev_mask = prices.index.to_period("M") == (period - 1)
-        prev_month_days = prices.loc[prev_mask]
+        prev_month_days = prices.loc[prices.index.to_period("M") == (period - 1)]
         if prev_month_days.empty:
             continue
 
@@ -285,19 +290,20 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int, include_pa
     stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
     stats["label"] = MONTH_LABELS
 
+    base_cols = ["hit_rate", "min_ret", "max_ret", "years_observed", "mean_h1", "mean_h2", "mean_total", "median_total"]
     if halves.empty:
-        for col in ["hit_rate", "min_ret", "max_ret", "years_observed", "mean_h1", "mean_h2", "mean_total", "median_total"]:
+        for col in base_cols:
             stats[col] = np.nan
         return stats
 
     halves = halves[(halves["year"] >= start_year) & (halves["year"] <= end_year)]
     if halves.empty:
-        for col in ["hit_rate", "min_ret", "max_ret", "years_observed", "mean_h1", "mean_h2", "mean_total", "median_total"]:
+        for col in base_cols:
             stats[col] = np.nan
         return stats
 
     grouped = halves.groupby("month")
-    stats["hit_rate"] = grouped["total_ret"].apply(lambda x: (x > 0).mean() * 100)
+    stats["hit_rate"] = grouped["total_ret"].apply(lambda x: (x > 0).mean() * 100.0)
     stats["min_ret"] = grouped["total_ret"].min()
     stats["max_ret"] = grouped["total_ret"].max()
     stats["years_observed"] = grouped["year"].nunique()
@@ -308,12 +314,7 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int, include_pa
     return stats
 
 
-def _month_paths_prev_eom_equal_weight(
-    prices: pd.Series,
-    month_int: int,
-    start_year: int,
-    end_year: int,
-) -> Tuple[pd.DataFrame, pd.Series]:
+def _month_paths_prev_eom_equal_weight(prices: pd.Series, month_int: int, start_year: int, end_year: int) -> Tuple[pd.DataFrame, pd.Series]:
     px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)].copy()
     if px.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
@@ -340,7 +341,7 @@ def _month_paths_prev_eom_equal_weight(
     if not raw_paths:
         return pd.DataFrame(), pd.Series(dtype=float)
 
-    max_days = max(int(s.index.max()) for s in raw_paths.values())
+    max_days = max(int(series.index.max()) for series in raw_paths.values())
     full_index = pd.RangeIndex(0, max_days + 1)
     df = pd.DataFrame(index=full_index)
 
@@ -351,13 +352,7 @@ def _month_paths_prev_eom_equal_weight(
     return df, avg_path
 
 
-def _avg_calendar_day_for_ordinal(
-    prices: pd.Series,
-    month_int: int,
-    start_year: int,
-    end_year: int,
-    ordinal: int,
-) -> Optional[int]:
+def _avg_calendar_day_for_ordinal(prices: pd.Series, month_int: int, start_year: int, end_year: int, ordinal: int) -> Optional[int]:
     px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)]
     if px.empty or ordinal <= 0:
         return None
@@ -367,6 +362,7 @@ def _avg_calendar_day_for_ordinal(
         month_slice = px.loc[(px.index.year == year) & (px.index.month == month_int)]
         if len(month_slice) >= ordinal:
             day_values.append(int(month_slice.index[ordinal - 1].day))
+
     if not day_values:
         return None
     return int(round(np.mean(day_values)))
@@ -383,7 +379,7 @@ def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> i
 
 def build_month_table(stats: pd.DataFrame) -> pd.DataFrame:
     df = stats.copy().reset_index(drop=True)
-    out = pd.DataFrame(
+    return pd.DataFrame(
         {
             "Month": df["label"],
             "1H %": df["mean_h1"],
@@ -396,7 +392,6 @@ def build_month_table(stats: pd.DataFrame) -> pd.DataFrame:
             "Years": df["years_observed"],
         }
     )
-    return out
 
 
 # ----------------------------- Chart layer ----------------------------- #
@@ -494,13 +489,7 @@ def plot_seasonality_figure(stats: pd.DataFrame, title: str) -> plt.Figure:
     return fig
 
 
-def plot_intra_month_curve_figure(
-    prices: pd.Series,
-    month_int: int,
-    start_year: int,
-    end_year: int,
-    symbol_shown: str,
-) -> Tuple[plt.Figure, Optional[pd.Series]]:
+def plot_intra_month_curve_figure(prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str) -> Tuple[plt.Figure, Optional[pd.Series]]:
     df_sel, avg_sel = _month_paths_prev_eom_equal_weight(prices, month_int, start_year, end_year)
 
     fig = plt.figure(figsize=(13.2, 7.2), dpi=200, facecolor="white")
@@ -508,15 +497,7 @@ def plot_intra_month_curve_figure(
     stats_box = None
 
     if avg_sel.empty or df_sel.empty:
-        ax.text(
-            0.5,
-            0.5,
-            "Not enough data to compute intra-month curve",
-            ha="center",
-            va="center",
-            fontsize=12,
-            color=COLORS["line"],
-        )
+        ax.text(0.5, 0.5, "Not enough data to compute intra-month curve", ha="center", va="center", fontsize=12, color=COLORS["line"])
         ax.axis("off")
         fig.tight_layout()
         return fig, stats_box
@@ -526,7 +507,6 @@ def plot_intra_month_curve_figure(
     y_vals = avg_sel.values
 
     ax.axhline(0.0, color=COLORS["muted"], linestyle=":", linewidth=1.0, zorder=1)
-
     ax.fill_between(
         x_vals,
         (avg_sel - std_sel).values,
@@ -537,19 +517,12 @@ def plot_intra_month_curve_figure(
         label="±1σ",
     )
 
-    ax.plot(
-        x_vals,
-        y_vals,
-        linewidth=2.5,
-        color=COLORS["line"],
-        linestyle="-",
-        label=f"Average {MONTH_LABELS[month_int - 1]} path",
-    )
+    ax.plot(x_vals, y_vals, linewidth=2.5, color=COLORS["line"], linestyle="-", label=f"Average {MONTH_LABELS[month_int - 1]} path")
 
     today = pd.Timestamp.today().normalize()
     current_year = today.year
-
     cur_path = None
+
     current_month_slice = prices.loc[(prices.index.year == current_year) & (prices.index.month == month_int)]
     prev_mask = (
         (prices.index.year == (current_year if month_int > 1 else current_year - 1))
@@ -566,15 +539,7 @@ def plot_intra_month_curve_figure(
         cur_path = cur_cum
 
         if len(cur_path) >= 3:
-            ax.plot(
-                cur_path.index.values,
-                cur_path.values,
-                linewidth=2.0,
-                color=COLORS["current"],
-                alpha=0.45,
-                linestyle="--",
-                label=str(current_year),
-            )
+            ax.plot(cur_path.index.values, cur_path.values, linewidth=2.0, color=COLORS["current"], alpha=0.45, linestyle="--", label=str(current_year))
 
     avg_ex = avg_sel.drop(index=0, errors="ignore")
     if not avg_ex.empty:
@@ -613,12 +578,7 @@ def plot_intra_month_curve_figure(
                 (-3.0, 0.9),
             )
 
-    ax.set_title(
-        f"{symbol_shown} {MONTH_LABELS[month_int - 1]} intra-month path",
-        fontsize=16,
-        weight="bold",
-        pad=10,
-    )
+    ax.set_title(f"{symbol_shown} {MONTH_LABELS[month_int - 1]} intra-month path", fontsize=16, weight="bold", pad=10)
     ax.set_xlabel(f"Trading day of {MONTH_LABELS[month_int - 1]} (Day 0 = prior month-end)", fontsize=10, weight="bold")
     ax.set_ylabel("Return from prior month-end (%)", fontsize=10, weight="bold")
     ax.grid(axis="y", linestyle="--", color=COLORS["grid"], alpha=0.9)
@@ -714,10 +674,12 @@ def style_month_table(df: pd.DataFrame):
     return styler
 
 
-def coverage_text(meta: FetchMeta) -> str:
-    if meta.coverage_start is None or meta.coverage_end is None:
+def coverage_text(meta: Dict[str, object]) -> str:
+    start = _meta_ts(meta.get("coverage_start"))
+    end = _meta_ts(meta.get("coverage_end"))
+    if start is None or end is None:
         return "Coverage unavailable"
-    return f"{meta.coverage_start.date()} to {meta.coverage_end.date()}"
+    return f"{start.date()} to {end.date()}"
 
 
 def years_from_preset(prices: pd.Series, preset: str, custom_start_year: int, custom_end_year: int) -> Tuple[int, int]:
@@ -728,95 +690,116 @@ def years_from_preset(prices: pd.Series, preset: str, custom_start_year: int, cu
     earliest_year = int(prices.index.min().year)
     if preset == "Full history":
         return earliest_year, latest_year
+
     window = PRESET_WINDOWS.get(preset)
     if isinstance(window, int):
         return max(earliest_year, latest_year - window + 1), latest_year
+
     return custom_start_year, custom_end_year
 
 
 # ----------------------------- App ----------------------------- #
+if "seasonality_symbol" not in st.session_state:
+    st.session_state["seasonality_symbol"] = "^SPX"
+if "seasonality_start_year" not in st.session_state:
+    st.session_state["seasonality_start_year"] = 2020
+if "seasonality_end_year" not in st.session_state:
+    st.session_state["seasonality_end_year"] = dt.datetime.today().year
+if "seasonality_preset" not in st.session_state:
+    st.session_state["seasonality_preset"] = "Custom"
+if "seasonality_month_choice" not in st.session_state:
+    st.session_state["seasonality_month_choice"] = pd.Timestamp.today().month
+if "seasonality_include_partial" not in st.session_state:
+    st.session_state["seasonality_include_partial"] = False
+
 st.title("Monthly Seasonality Explorer")
 
 with st.sidebar:
-    st.subheader("About")
+    st.subheader("About This Tool")
     st.markdown(
         """
-Explore seasonal patterns for stocks, indexes, ETFs, and liquid commodities.
+This dashboard shows how a symbol tends to behave by calendar month and within each month.
 
-This version is built around cleaner boundaries:
-- cached raw prices with source diagnostics
-- explicit proxy and fallback handling
-- historical averages that exclude incomplete months by default
-- static matplotlib image output for easy export
-- a separate data table instead of embedding the table inside the chart
+The top chart splits every month into first-half and second-half return contributions, overlays the full observed monthly range, and shows hit rate so you can see both direction and consistency.
+
+The intra-month chart anchors each year to the prior month-end and builds an equal-weight average path by trading day, which helps frame where a month usually strengthens or weakens.
+
+The app uses Yahoo Finance as the primary source, falls back to FRED for selected index history, flags proxy usage when needed, and excludes incomplete months from historical averages unless you explicitly include them.
         """
     )
     st.subheader("Quick symbols")
-    st.caption("Tap a preset, then hit Run.")
-    preset_cols = st.columns(2)
-    for i, preset_symbol in enumerate(POPULAR_SYMBOLS):
-        if preset_cols[i % 2].button(preset_symbol, use_container_width=True):
+    st.caption("Click a preset to update the dashboard.")
+    sidebar_cols = st.columns(2)
+    for idx, preset_symbol in enumerate(POPULAR_SYMBOLS):
+        if sidebar_cols[idx % 2].button(preset_symbol, use_container_width=True):
             st.session_state["seasonality_symbol"] = preset_symbol
 
-default_symbol = st.session_state.get("seasonality_symbol", "^SPX")
 current_year = dt.datetime.today().year
 
-with st.form("seasonality_controls", clear_on_submit=False):
-    top1, top2, top3, top4 = st.columns([2.2, 1.2, 1.0, 1.0])
+control_1, control_2, control_3, control_4 = st.columns([2.3, 1.2, 1.0, 1.0])
+with control_1:
+    symbol = st.text_input("Ticker symbol", key="seasonality_symbol").strip().upper()
+with control_2:
+    preset = st.selectbox(
+        "History window",
+        options=list(PRESET_WINDOWS.keys()),
+        key="seasonality_preset",
+    )
+with control_3:
+    start_year_input = st.number_input(
+        "Start year",
+        min_value=1900,
+        max_value=current_year,
+        key="seasonality_start_year",
+        disabled=st.session_state["seasonality_preset"] != "Custom",
+    )
+with control_4:
+    end_year_input = st.number_input(
+        "End year",
+        min_value=int(st.session_state["seasonality_start_year"]),
+        max_value=current_year,
+        key="seasonality_end_year",
+        disabled=st.session_state["seasonality_preset"] != "Custom",
+    )
 
-    with top1:
-        symbol = st.text_input("Ticker symbol", value=default_symbol, key="seasonality_symbol").strip().upper()
-    with top2:
-        preset = st.selectbox("History window", options=list(PRESET_WINDOWS.keys()), index=1)
-    with top3:
-        custom_start_year = st.number_input("Start year", value=max(1900, current_year - 9), min_value=1900, max_value=current_year)
-    with top4:
-        custom_end_year = st.number_input("End year", value=current_year, min_value=int(custom_start_year), max_value=current_year)
+sub_1, sub_2, sub_3 = st.columns([1.25, 1.1, 2.65])
+with sub_1:
+    include_partial_last_month = st.checkbox(
+        "Include incomplete current month in history",
+        key="seasonality_include_partial",
+    )
+with sub_2:
+    month_choice = st.selectbox(
+        "Intra-month chart",
+        options=list(range(1, 13)),
+        key="seasonality_month_choice",
+        format_func=lambda m: MONTH_LABELS[m - 1],
+    )
+with sub_3:
+    st.caption("Changing any input reruns the dashboard. Press Enter in the ticker box after editing the symbol.")
 
-    low1, low2, low3 = st.columns([1.2, 1.2, 2.6])
-    with low1:
-        include_partial_last_month = st.checkbox("Include incomplete current month in history", value=False)
-    with low2:
-        default_month_idx = max(0, min(pd.Timestamp.today().month - 1, 11))
-        month_choice = st.selectbox(
-            "Intra-month chart",
-            options=list(range(1, 13)),
-            index=default_month_idx,
-            format_func=lambda m: MONTH_LABELS[m - 1],
-        )
-    with low3:
-        st.caption("Current month stays visible as a dashed overlay in the intra-month chart when data are available.")
-
-    submitted = st.form_submit_button("Run analysis", use_container_width=True)
-
-if not submitted and "seasonality_ran" not in st.session_state:
-    st.info("Set your inputs and click Run analysis.")
-    st.stop()
-
-if submitted:
-    st.session_state["seasonality_ran"] = True
-
-requested_start = f"{int(custom_start_year)}-01-01"
-requested_end = f"{int(custom_end_year)}-12-31"
+requested_start = f"{int(start_year_input)}-01-01"
+requested_end = f"{int(end_year_input)}-12-31"
 
 with st.spinner("Fetching and analyzing data..."):
     prices, meta = fetch_prices_with_meta(symbol, requested_start, requested_end)
 
 if prices is None or prices.empty:
     st.error(f"No usable data found for '{symbol}' in the requested range.")
-    if meta.warnings:
-        for warning_text in meta.warnings:
-            st.warning(warning_text)
+    notes = meta.get("notes", [])
+    if notes:
+        for note in notes:
+            st.warning(note)
     st.stop()
 
 first_valid = prices.first_valid_index()
 if first_valid is not None:
     prices = prices.loc[first_valid:]
 
-start_year, end_year = years_from_preset(prices, preset, int(custom_start_year), int(custom_end_year))
+start_year, end_year = years_from_preset(prices, preset, int(start_year_input), int(end_year_input))
 stats = seasonal_stats(prices, start_year, end_year, include_partial_last_month)
-
 valid_stats = stats.dropna(subset=["mean_total"])
+
 if valid_stats.empty:
     st.error("Insufficient data in the selected window to compute seasonality.")
     st.stop()
@@ -826,48 +809,43 @@ worst_idx = valid_stats["mean_total"].idxmin()
 best = stats.loc[best_idx]
 worst = stats.loc[worst_idx]
 
-diag1, diag2, diag3, diag4 = st.columns(4)
-diag1.metric("Source", f"{meta.source_name} | {meta.source_symbol}")
-diag2.metric("Coverage", coverage_text(meta))
-diag3.metric("Best month", f"{best['label']} {_format_pct(best['mean_total'], 2)}")
-diag4.metric("Worst month", f"{worst['label']} {_format_pct(worst['mean_total'], 2)}")
+info_1, info_2, info_3, info_4 = st.columns(4)
+info_1.metric("Source", f"{meta['source_name']} | {meta['source_symbol']}")
+info_2.metric("Coverage", coverage_text(meta))
+info_3.metric("Best month", f"{best['label']} {_format_pct(best['mean_total'], 2)}")
+info_4.metric("Worst month", f"{worst['label']} {_format_pct(worst['mean_total'], 2)}")
 
-subdiag1, subdiag2, subdiag3, subdiag4 = st.columns(4)
-subdiag1.metric("Best hit rate", f"{stats['hit_rate'].max():.0f}%")
-subdiag2.metric("Worst hit rate", f"{stats['hit_rate'].min():.0f}%")
-subdiag3.metric("Years used", f"{int(valid_stats['years_observed'].max())}")
-subdiag4.metric("Partial month in history", "Yes" if include_partial_last_month else "No")
+info_5, info_6, info_7, info_8 = st.columns(4)
+info_5.metric("Best hit rate", f"{stats['hit_rate'].max():.0f}%")
+info_6.metric("Worst hit rate", f"{stats['hit_rate'].min():.0f}%")
+info_7.metric("Years used", f"{start_year} to {end_year}")
+info_8.metric("Rows", f"{int(meta['rows'])}")
 
-if meta.proxy_used:
+if bool(meta.get("proxy_used", False)):
     st.warning(
-        f"Requested {meta.requested_symbol}, but the app used {meta.source_symbol} as a proxy. "
-        "Treat cross-instrument comparisons carefully."
+        f"You asked for {meta['requested_symbol']}, but the app used {meta['source_symbol']} as a proxy. "
+        "Cross-instrument comparisons need extra care."
     )
-if meta.warnings:
-    with st.expander("Data source notes", expanded=False):
-        for warning_text in meta.warnings:
-            st.write(f"- {warning_text}")
 
-overview_tab, intramonth_tab, data_tab, methodology_tab = st.tabs(
-    ["Overview", "Intra-month", "Data table", "Methodology"]
-)
+notes = meta.get("notes", [])
+if notes:
+    with st.expander("Data source notes", expanded=False):
+        for note in notes:
+            st.write(f"- {note}")
+
+overview_tab, intramonth_tab, data_tab, methodology_tab = st.tabs(["Overview", "Intra-month", "Data table", "Methodology"])
 
 with overview_tab:
-    seasonality_fig = plot_seasonality_figure(
-        stats,
-        f"{meta.source_symbol} seasonality | {start_year}-{end_year}",
-    )
+    seasonality_fig = plot_seasonality_figure(stats, f"{meta['source_symbol']} seasonality | {start_year}-{end_year}")
     seasonality_png = figure_to_png_bytes(seasonality_fig)
     st.image(seasonality_png, use_container_width=True)
     st.caption(
-        "Bars show average first-half and second-half contributions. "
-        "Whiskers show full observed range for total monthly returns. "
-        "Diamonds show hit rate."
+        "Bars show average first-half and second-half contributions. Whiskers show the full observed monthly range. Diamonds show hit rate."
     )
     st.download_button(
         "Download overview PNG",
         data=seasonality_png,
-        file_name=f"{meta.source_symbol}_seasonality_{start_year}_{end_year}.png",
+        file_name=f"{meta['source_symbol']}_seasonality_{start_year}_{end_year}.png",
         mime="image/png",
     )
 
@@ -877,20 +855,22 @@ with intramonth_tab:
         month_int=month_choice,
         start_year=start_year,
         end_year=end_year,
-        symbol_shown=meta.source_symbol,
+        symbol_shown=str(meta["source_symbol"]),
     )
     curve_png = figure_to_png_bytes(curve_fig)
     st.image(curve_png, use_container_width=True)
+
     if forward_stats is not None:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Mean fwd to month-end", _format_pct(float(forward_stats["Mean"]), 2))
-        c2.metric("Median fwd to month-end", _format_pct(float(forward_stats["Median"]), 2))
-        c3.metric("Hit rate", f"{float(forward_stats['Hit Rate']):.0f}%")
-        c4.metric("Observations", f"{int(forward_stats['N'])}")
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric("Mean fwd to month-end", _format_pct(float(forward_stats["Mean"]), 2))
+        f2.metric("Median fwd to month-end", _format_pct(float(forward_stats["Median"]), 2))
+        f3.metric("Hit rate", f"{float(forward_stats['Hit Rate']):.0f}%")
+        f4.metric("Observations", f"{int(forward_stats['N'])}")
+
     st.download_button(
         "Download intra-month PNG",
         data=curve_png,
-        file_name=f"{meta.source_symbol}_{MONTH_LABELS[month_choice - 1].lower()}_intramonth_{start_year}_{end_year}.png",
+        file_name=f"{meta['source_symbol']}_{MONTH_LABELS[month_choice - 1].lower()}_intramonth_{start_year}_{end_year}.png",
         mime="image/png",
     )
 
@@ -901,7 +881,7 @@ with data_tab:
     st.download_button(
         "Download CSV",
         data=csv_bytes,
-        file_name=f"{meta.source_symbol}_seasonality_table_{start_year}_{end_year}.csv",
+        file_name=f"{meta['source_symbol']}_seasonality_table_{start_year}_{end_year}.csv",
         mime="text/csv",
     )
 
@@ -913,18 +893,18 @@ with methodology_tab:
 **Seasonality logic**
 - Monthly returns are anchored to the prior month-end.
 - First half uses the midpoint trading day of the month.
-- Second half is defined as total month return minus first-half return.
-- Historical averages exclude incomplete months unless you explicitly include them.
+- Second half equals total month return less first-half return.
+- Historical averages exclude incomplete months unless you include them.
 
 **Intra-month curve**
-- Each year is anchored to the prior month-end at Day 0.
-- Paths are aligned on a common trading-day grid.
+- Each year starts at Day 0, which is the prior month-end.
+- Paths are aligned to a common trading-day grid.
 - Shorter months are forward-filled so the endpoint matches the equal-weight average month return across years.
 
-**Important caveats**
-- A proxy can be used when the requested instrument is unavailable.
-- A price index and a total-return ETF are different economic objects.
-- Min and max whiskers show extremes, which can be shaped by outliers.
+**Caveats**
+- A proxy can be used if the requested instrument is unavailable.
+- A price index and a total-return ETF are different instruments.
+- Min and max whiskers show extremes, so outliers can matter a lot.
         """
     )
 
