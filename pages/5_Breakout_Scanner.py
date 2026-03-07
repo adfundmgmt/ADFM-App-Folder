@@ -1,14 +1,17 @@
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
-import pandas as pd
-pd.options.mode.chained_assignment = None
 
+from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
 import streamlit as st
 import yfinance as yf
-import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 plt.style.use("default")
+pd.options.mode.chained_assignment = None
 
 # ── Page Setup ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Breakout Scanner", layout="wide")
@@ -18,221 +21,440 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Screen a custom ticker list for fresh price breakouts and multi-period RSI levels.
+        Screen a custom ticker list for fresh price breakouts, momentum context, and RSI regime.
 
         • Uses Yahoo Finance daily data over a fixed 2 year lookback  
-        • Checks for closes at or above rolling 20 / 50 / 100 / 200 day highs  
-        • Computes daily RSI(7 / 14 / 21) from Typical Price ((H+L+C)/3)  
-        • Smooths each RSI line with a 3 period EMA for cleaner signals  
-        • Ranks and displays tickers in a breakout table with quick download  
+        • Detects true breakouts versus prior 20 / 50 / 100 / 200 day highs using a 1 day shift  
+        • Computes RSI(7 / 14 / 21) from Typical Price ((H+L+C)/3)  
+        • Smooths each RSI line with a 3 period EMA for cleaner reads  
+        • Adds breakout distance, 200DMA distance, and volume confirmation  
+        • Includes a per-ticker chart for price, prior highs, moving averages, and RSI  
 
-        Use the per-ticker chart at the bottom to inspect rolling highs and RSI in more detail.
+        Notes  
+        • Breakout logic uses adjusted close when available  
+        • RSI uses raw High / Low / Close typical price  
+        • Volume confirmation = latest volume / 20 day average volume
         """,
         unsafe_allow_html=True,
     )
 
-# ── Inputs ─────────────────────────────────────────────────────────────────
+# ── Inputs ──────────────────────────────────────────────────────────────────
 tickers_input = st.sidebar.text_input(
     "Tickers (comma separated):",
     "NVDA, MSFT, AAPL, AMZN, GOOGL, META, TSLA, AVGO, TSM"
 ).upper()
 
-tickers = [t.strip() for t in tickers_input.split(",") if t.strip()]
+def normalize_tickers(raw: str) -> List[str]:
+    seen = set()
+    cleaned = []
+    for x in raw.split(","):
+        t = x.strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            cleaned.append(t)
+    return cleaned
+
+tickers = normalize_tickers(tickers_input)
 if not tickers:
     st.warning("Please enter at least one ticker.")
     st.stop()
 
 # Fixed parameters
-RSI_WINDOWS = [7, 14, 21]   # fixed RSI periods
-RSI_SMOOTH_SPAN = 3         # smoothing span
-MIN_BARS = 200
+RSI_WINDOWS = [7, 14, 21]
+RSI_SMOOTH_SPAN = 3
 LOOKBACK_PERIOD = "2y"
 INTERVAL = "1d"
+MIN_BARS = 200
+BREAKOUT_WINDOWS = (20, 50, 100, 200)
+MA_WINDOWS = (20, 50, 200)
 
-# ── Data Fetch (Batch + Cached) ─────────────────────────────────────────────
-@st.cache_data(ttl=1800)
-def fetch_batch(ticks, period=LOOKBACK_PERIOD, interval=INTERVAL):
+# ── Data Fetch ──────────────────────────────────────────────────────────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_ohlcv_batch(symbols: Tuple[str, ...], period: str, interval: str) -> Tuple[Dict[str, pd.DataFrame], List[str]]:
+    """
+    Returns:
+        frames: {ticker: DataFrame[Open, High, Low, Close, Adj Close, Volume]}
+        failed: [tickers with no usable data]
+    """
+    frames: Dict[str, pd.DataFrame] = {}
+    failed: List[str] = []
+
     try:
         raw = yf.download(
-            ticks, period=period, interval=interval,
-            progress=False, group_by="ticker", auto_adjust=False
+            list(symbols),
+            period=period,
+            interval=interval,
+            progress=False,
+            auto_adjust=False,
+            group_by="ticker",
+            threads=True,
         )
     except Exception:
-        return {}
+        return {}, list(symbols)
 
-    def extract(field):
-        out = {}
-        if isinstance(raw.columns, pd.MultiIndex):
-            for t in ticks:
-                try:
-                    s = raw[(t, field)].dropna()
-                    if not s.empty:
-                        out[t] = s
-                except Exception:
+    required_cols = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+
+    if raw.empty:
+        return {}, list(symbols)
+
+    # Multi-ticker path
+    if isinstance(raw.columns, pd.MultiIndex):
+        level0 = list(raw.columns.get_level_values(0).unique())
+        level1 = list(raw.columns.get_level_values(1).unique())
+
+        # yfinance can return either [ticker, field] or [field, ticker]
+        ticker_first = any(sym in level0 for sym in symbols)
+
+        for sym in symbols:
+            try:
+                if ticker_first and sym in level0:
+                    sub = raw[sym].copy()
+                elif sym in level1:
+                    sub = raw.xs(sym, axis=1, level=1).copy()
+                else:
+                    failed.append(sym)
                     continue
+
+                keep = [c for c in required_cols if c in sub.columns]
+                sub = sub[keep].copy()
+                sub = sub.dropna(how="all")
+                if sub.empty or "Close" not in sub.columns:
+                    failed.append(sym)
+                    continue
+
+                for col in required_cols:
+                    if col not in sub.columns:
+                        sub[col] = np.nan
+
+                sub = sub[required_cols].sort_index()
+                frames[sym] = sub
+            except Exception:
+                failed.append(sym)
+
+    # Single-ticker flat-column path
+    else:
+        sym = symbols[0]
+        sub = raw.copy()
+        keep = [c for c in required_cols if c in sub.columns]
+        sub = sub[keep].copy().dropna(how="all")
+        if sub.empty or "Close" not in sub.columns:
+            failed.append(sym)
         else:
-            if field in raw.columns:
-                t0 = ticks[0] if isinstance(ticks, list) and len(ticks) == 1 else "TICKER"
-                out[t0] = raw[field].dropna()
-        if not out:
-            return pd.DataFrame()
-        return pd.DataFrame(out).sort_index().dropna(how="all")
+            for col in required_cols:
+                if col not in sub.columns:
+                    sub[col] = np.nan
+            sub = sub[required_cols].sort_index()
+            frames[sym] = sub
 
-    adj_close = extract("Adj Close")
-    close = extract("Close")
-    high = extract("High")
-    low = extract("Low")
-    return {"Adj Close": adj_close, "Close": close, "High": high, "Low": low}
+        for other in symbols[1:]:
+            failed.append(other)
 
-data = fetch_batch(tickers)
+    # Final validation
+    final_frames = {}
+    for sym, df_ in frames.items():
+        usable = df_.dropna(subset=["Close"], how="all")
+        if usable.empty:
+            failed.append(sym)
+        else:
+            final_frames[sym] = usable
 
-# Fallback to Close if Adj Close missing
-prices = data.get("Adj Close", pd.DataFrame())
-if prices.empty:
-    prices = data.get("Close", pd.DataFrame())
+    failed = sorted(list(set(failed) - set(final_frames.keys())))
+    return final_frames, failed
 
-if prices.empty:
-    st.error("No valid price data. Check tickers or connectivity.")
+data_map, failed_tickers = fetch_ohlcv_batch(tuple(sorted(tickers)), LOOKBACK_PERIOD, INTERVAL)
+
+if not data_map:
+    st.error("No valid price data returned. Check symbols or connectivity.")
     st.stop()
 
-# Ensure enough bars
-sufficient_len = [c for c in prices.columns if prices[c].dropna().shape[0] >= MIN_BARS]
-prices = prices[sufficient_len]
-if prices.empty:
+# Keep only names with enough history
+valid_map = {}
+insufficient = []
+for sym, df_sym in data_map.items():
+    px = df_sym["Adj Close"].copy()
+    if px.isna().all():
+        px = df_sym["Close"].copy()
+    px = px.dropna()
+    if len(px) >= MIN_BARS:
+        valid_map[sym] = df_sym
+    else:
+        insufficient.append(sym)
+
+data_map = valid_map
+
+if not data_map:
     st.info("No tickers have at least 200 daily observations.")
     st.stop()
 
-prices = prices.dropna(how="all").copy()
+# ── Helpers ─────────────────────────────────────────────────────────────────
+def get_price_series(df_sym: pd.DataFrame) -> pd.Series:
+    s = df_sym["Adj Close"].copy()
+    if s.isna().all():
+        s = df_sym["Close"].copy()
+    return s.dropna()
 
-# ── RSI (Wilder) ────────────────────────────────────────────────────────────
+def typical_price(df_sym: pd.DataFrame) -> pd.Series:
+    cols = ["High", "Low", "Close"]
+    base = df_sym[cols].copy().dropna()
+    if base.empty:
+        return get_price_series(df_sym)
+    return (base["High"] + base["Low"] + base["Close"]) / 3.0
+
 def rsi_wilder(series: pd.Series, window: int) -> pd.Series:
     delta = series.diff()
     up = delta.clip(lower=0)
     down = -delta.clip(upper=0)
-    roll_up = up.ewm(alpha=1/window, adjust=False, min_periods=window).mean()
-    roll_down = down.ewm(alpha=1/window, adjust=False, min_periods=window).mean()
+
+    roll_up = up.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+    roll_down = down.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+
     rs = roll_up / roll_down.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-# Always Typical Price for RSI
-def typical_price(sym: str) -> pd.Series:
-    H = data["High"].get(sym)
-    L = data["Low"].get(sym)
-    C = data["Close"].get(sym)
-    if H is None or L is None or C is None:
-        return prices[sym]
-    tp = (H.align(L, join="inner")[0]
-          + L.align(C, join="inner")[0]
-          + C.align(H, join="inner")[0]) / 3.0
-    return tp.dropna()
+def pct_diff(current: float, reference: float) -> float:
+    if pd.isna(current) or pd.isna(reference) or reference == 0:
+        return np.nan
+    return (current / reference - 1.0) * 100.0
 
-# ── Build Signal Table ──────────────────────────────────────────────────────
-WINDOWS_HI = (20, 50, 100, 200)
-records = []
+def build_signal_table(frames: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    records = []
 
-for sym in prices.columns:
-    s = prices[sym].dropna()
-    if s.shape[0] < MIN_BARS:
-        continue
+    for sym, df_sym in frames.items():
+        price = get_price_series(df_sym)
+        if len(price) < MIN_BARS:
+            continue
 
-    latest = float(s.iloc[-1])
-    highs = {w: float(s.rolling(w).max().iloc[-1]) for w in WINDOWS_HI}
+        latest = float(price.iloc[-1])
 
-    base = typical_price(sym).dropna()
-    rsi_vals = {w: float(rsi_wilder(base, w).ewm(span=RSI_SMOOTH_SPAN, adjust=False).mean().iloc[-1])
-                for w in RSI_WINDOWS if base.shape[0] >= w}
+        prior_highs = {}
+        breakout_flags = {}
+        breakout_distances = {}
 
-    rec = {"Ticker": sym, "Price": round(latest, 2)}
-    for w in WINDOWS_HI:
-        rec[f"{w}D High"] = round(highs[w], 2)
-        rec[f"Breakout {w}D"] = latest >= highs[w]
-    for w in RSI_WINDOWS:
-        rec[f"RSI ({w})"] = round(rsi_vals.get(w, np.nan), 1)
-    records.append(rec)
+        for w in BREAKOUT_WINDOWS:
+            prior_high = price.rolling(w).max().shift(1).iloc[-1]
+            prior_highs[w] = float(prior_high) if pd.notna(prior_high) else np.nan
+            breakout_flags[w] = bool(pd.notna(prior_high) and latest >= prior_high)
+            breakout_distances[w] = pct_diff(latest, prior_high)
 
-df = pd.DataFrame(records)
+        tp = typical_price(df_sym).dropna()
+        rsi_vals = {}
+        for w in RSI_WINDOWS:
+            if len(tp) >= w:
+                r = rsi_wilder(tp, w).ewm(span=RSI_SMOOTH_SPAN, adjust=False).mean()
+                rsi_vals[w] = float(r.iloc[-1]) if pd.notna(r.iloc[-1]) else np.nan
+            else:
+                rsi_vals[w] = np.nan
+
+        ma_20 = price.rolling(20).mean().iloc[-1]
+        ma_50 = price.rolling(50).mean().iloc[-1]
+        ma_200 = price.rolling(200).mean().iloc[-1]
+
+        vol = df_sym["Volume"].dropna()
+        latest_vol = float(vol.iloc[-1]) if not vol.empty else np.nan
+        avg_vol_20 = float(vol.rolling(20).mean().iloc[-1]) if len(vol) >= 20 else np.nan
+        vol_ratio = latest_vol / avg_vol_20 if pd.notna(latest_vol) and pd.notna(avg_vol_20) and avg_vol_20 != 0 else np.nan
+
+        rec = {
+            "Ticker": sym,
+            "Price": latest,
+            "20DMA": ma_20,
+            "50DMA": ma_50,
+            "200DMA": ma_200,
+            "% vs 200DMA": pct_diff(latest, ma_200),
+            "Volume": latest_vol,
+            "20D Avg Vol": avg_vol_20,
+            "Vol Ratio": vol_ratio,
+        }
+
+        for w in BREAKOUT_WINDOWS:
+            rec[f"Prior {w}D High"] = prior_highs[w]
+            rec[f"Breakout {w}D"] = breakout_flags[w]
+            rec[f"% vs Prior {w}D High"] = breakout_distances[w]
+
+        for w in RSI_WINDOWS:
+            rec[f"RSI ({w})"] = rsi_vals[w]
+
+        # Composite ranking
+        breakout_score = (
+            1.0 * int(rec["Breakout 20D"]) +
+            1.5 * int(rec["Breakout 50D"]) +
+            2.0 * int(rec["Breakout 100D"]) +
+            3.0 * int(rec["Breakout 200D"])
+        )
+
+        momentum_score = 0.0
+        for w in BREAKOUT_WINDOWS:
+            v = rec.get(f"% vs Prior {w}D High", np.nan)
+            if pd.notna(v):
+                momentum_score += max(v, 0)
+
+        rsi_score = 0.0
+        r14 = rec.get("RSI (14)", np.nan)
+        if pd.notna(r14):
+            rsi_score = max(min(r14 - 50, 30), -30)
+
+        volume_score = 0.0
+        if pd.notna(vol_ratio):
+            volume_score = min(vol_ratio, 3.0)
+
+        rec["Signal Score"] = breakout_score * 10 + momentum_score + 0.4 * rsi_score + 2.0 * volume_score
+        records.append(rec)
+
+    out = pd.DataFrame(records)
+    if out.empty:
+        return out
+
+    out = out.sort_values(
+        by=["Signal Score", "Breakout 200D", "Breakout 100D", "Breakout 50D", "Breakout 20D", "Vol Ratio"],
+        ascending=[False, False, False, False, False, False]
+    ).reset_index(drop=True)
+
+    return out
+
+df = build_signal_table(data_map)
+
 if df.empty:
-    st.info("No breakouts detected or insufficient data.")
+    st.info("No valid signals found.")
     st.stop()
 
-break_cols = [c for c in df.columns if c.startswith("Breakout ")]
-df = df.sort_values(by=break_cols + ["Price"], ascending=False).reset_index(drop=True)
+# ── Status Messages ─────────────────────────────────────────────────────────
+if failed_tickers:
+    st.caption(f"Failed to retrieve usable data for: {', '.join(sorted(failed_tickers))}")
+if insufficient:
+    st.caption(f"Insufficient history (< {MIN_BARS} bars): {', '.join(sorted(insufficient))}")
 
-# ── Table Styling ───────────────────────────────────────────────────────────
-def styled_table(dfin: pd.DataFrame):
-    df_disp = dfin.copy()
-    for col in break_cols:
-        df_disp[col] = df_disp[col].map(lambda x: "✅" if bool(x) else "")
-    float_cols = [c for c in df_disp.columns if "High" in c or c == "Price"]
-    rsi_cols = [c for c in df_disp.columns if c.startswith("RSI")]
-    for c in float_cols:
-        df_disp[c] = df_disp[c].map(lambda x: f"{x:,.2f}")
-    for c in rsi_cols:
-        df_disp[c] = df_disp[c].map(lambda x: f"{x:.1f}" if pd.notna(x) else "")
-    def color_rsi(val):
-        try:
-            v = float(val)
-        except Exception:
-            return ""
-        if v >= 80:
-            return "color: #d62728; font-weight: bold;"
-        if v <= 20:
-            return "color: #1f77b4; font-weight: bold;"
-        return ""
-    styled = (
-        df_disp.style
-        .set_table_styles([
-            {"selector": "th", "props": [("font-size", "13px"), ("text-align", "center"), ("font-weight", "bold")]},
-            {"selector": "td", "props": [("font-size", "13px"), ("text-align", "center")]},
-        ])
-        .applymap(color_rsi, subset=rsi_cols)
-        .set_properties(**{"background-color": "#f8fafc"}, subset=pd.IndexSlice[:, ["Price"]])
-        .set_properties(**{"border": "1.5px solid #e0e0e0"})
-    )
-    return styled
-
+# ── Display Table ───────────────────────────────────────────────────────────
 st.markdown("### Breakout & RSI Signals")
-st.dataframe(styled_table(df), use_container_width=True)
-st.download_button("Download as CSV", df.to_csv(index=False), file_name="breakout_signals.csv")
 
-# ── Per-Ticker Charts ───────────────────────────────────────────────────────
-from datetime import timedelta
-sel = st.selectbox("Select ticker to chart:", df["Ticker"], index=0)
-s_close = prices[sel].dropna()
+break_cols = [c for c in df.columns if c.startswith("Breakout ")]
+pct_cols = [c for c in df.columns if c.startswith("% vs")]
+rsi_cols = [c for c in df.columns if c.startswith("RSI")]
+price_cols = ["Price", "20DMA", "50DMA", "200DMA"] + [c for c in df.columns if c.startswith("Prior ")]
+vol_cols = ["Volume", "20D Avg Vol", "Vol Ratio", "Signal Score"]
 
-if s_close.shape[0] < MIN_BARS:
-    st.info(f"{sel} does not have enough data to draw rolling highs.")
+display_df = df.copy()
+
+for col in break_cols:
+    display_df[col] = display_df[col].map(lambda x: "✅" if bool(x) else "")
+
+for col in price_cols:
+    if col in display_df.columns:
+        display_df[col] = display_df[col].map(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+
+for col in pct_cols:
+    if col in display_df.columns:
+        display_df[col] = display_df[col].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
+
+for col in rsi_cols:
+    if col in display_df.columns:
+        display_df[col] = display_df[col].map(lambda x: f"{x:.1f}" if pd.notna(x) else "")
+
+for col in ["Volume", "20D Avg Vol"]:
+    if col in display_df.columns:
+        display_df[col] = display_df[col].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
+
+for col in ["Vol Ratio", "Signal Score"]:
+    if col in display_df.columns:
+        display_df[col] = display_df[col].map(lambda x: f"{x:.2f}" if pd.notna(x) else "")
+
+st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+st.download_button(
+    "Download as CSV",
+    df.to_csv(index=False),
+    file_name="breakout_signals.csv",
+    mime="text/csv"
+)
+
+# ── Per-Ticker Chart ────────────────────────────────────────────────────────
+st.markdown("### Per-Ticker Inspection")
+
+selected = st.selectbox("Select ticker to chart:", df["Ticker"].tolist(), index=0)
+df_sel = data_map[selected].copy()
+price_sel = get_price_series(df_sel)
+tp_sel = typical_price(df_sel).dropna()
+
+if len(price_sel) < MIN_BARS:
+    st.info(f"{selected} does not have enough data to draw rolling highs.")
 else:
-    base = typical_price(sel).dropna()
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=False, constrained_layout=True)
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1,
+        figsize=(12, 8),
+        sharex=True,
+        gridspec_kw={"height_ratios": [2.3, 1]},
+        constrained_layout=True
+    )
 
-    # Price and rolling highs
-    ax1.plot(s_close.index, s_close, label="Close", color="black", linewidth=2)
-    for w, col in zip(WINDOWS_HI, ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")):
-        ax1.plot(s_close.index, s_close.rolling(w).max(), lw=1.1, color=col, label=f"{w}D High")
-    ax1.set_title(f"{sel} Price & Rolling Highs", fontweight="bold")
-    ax1.legend(fontsize=8)
-    ax1.grid(alpha=0.3)
+    # Price panel
+    ax1.plot(price_sel.index, price_sel, label="Adj Close / Close", color="black", linewidth=2.0)
+
+    for w, color in zip(MA_WINDOWS, ["#1f77b4", "#9467bd", "#2ca02c"]):
+        ma = price_sel.rolling(w).mean()
+        ax1.plot(price_sel.index, ma, label=f"{w}DMA", color=color, linewidth=1.2)
+
+    for w, color in zip(BREAKOUT_WINDOWS, ["#9ecae1", "#fdae6b", "#a1d99b", "#fcae91"]):
+        prior_high = price_sel.rolling(w).max().shift(1)
+        ax1.plot(
+            price_sel.index,
+            prior_high,
+            linestyle="--",
+            linewidth=1.0,
+            color=color,
+            alpha=0.95,
+            label=f"Prior {w}D High"
+        )
+
+    latest_px = float(price_sel.iloc[-1])
+    ax1.axhline(latest_px, color="#444444", linestyle=":", linewidth=1.0, alpha=0.8)
+
+    ax1.set_title(f"{selected} Price, Prior Highs, and Moving Averages", fontweight="bold")
     ax1.set_ylabel("Price")
-    ax1.margins(x=0)
-    ax1.set_xlim(s_close.index.min(), s_close.index.max() + timedelta(days=4))
+    ax1.grid(alpha=0.25)
+    ax1.legend(fontsize=8, ncol=3, frameon=False)
+    ax1.margins(x=0.01)
 
-    # RSI panel (daily)
-    for w in RSI_WINDOWS:
-        r = rsi_wilder(base, w).ewm(span=RSI_SMOOTH_SPAN, adjust=False).mean()
-        ax2.plot(r.index, r, label=f"RSI({w})", linewidth=1.4)
-    ax2.axhline(80, ls="--", color="gray", lw=0.9)
-    ax2.axhline(20, ls="--", color="gray", lw=0.9)
-    ax2.set_title(f"{sel} RSI Indicators", fontweight="bold")
-    ax2.legend(fontsize=8)
-    ax2.grid(alpha=0.3)
+    # RSI panel
+    for w, color in zip(RSI_WINDOWS, ["#1f77b4", "#ff7f0e", "#2ca02c"]):
+        r = rsi_wilder(tp_sel, w).ewm(span=RSI_SMOOTH_SPAN, adjust=False).mean()
+        ax2.plot(r.index, r, label=f"RSI({w})", linewidth=1.5, color=color)
+
+    ax2.axhline(80, linestyle="--", color="gray", linewidth=0.9)
+    ax2.axhline(50, linestyle=":", color="gray", linewidth=0.9)
+    ax2.axhline(20, linestyle="--", color="gray", linewidth=0.9)
+    ax2.set_ylim(0, 100)
     ax2.set_ylabel("RSI")
     ax2.set_xlabel("Date")
-    ax2.margins(x=0)
-    ax2.set_xlim(base.index.min(), base.index.max() + timedelta(days=4))
-    ax2.set_ylim(0, 100)
+    ax2.set_title(f"{selected} RSI on Typical Price", fontweight="bold")
+    ax2.grid(alpha=0.25)
+    ax2.legend(fontsize=8, frameon=False)
+    ax2.margins(x=0.01)
+
+    locator = mdates.AutoDateLocator(minticks=6, maxticks=10)
+    formatter = mdates.ConciseDateFormatter(locator)
+    ax2.xaxis.set_major_locator(locator)
+    ax2.xaxis.set_major_formatter(formatter)
 
     st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
 
-st.caption(f"Data through: {prices.index.max().date()}")
+    # Quick diagnostic strip
+    latest_row = df[df["Ticker"] == selected].iloc[0]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Signal Score", f"{latest_row['Signal Score']:.2f}")
+    c2.metric("% vs Prior 50D High", f"{latest_row['% vs Prior 50D High']:.2f}%" if pd.notna(latest_row["% vs Prior 50D High"]) else "N/A")
+    c3.metric("% vs 200DMA", f"{latest_row['% vs 200DMA']:.2f}%" if pd.notna(latest_row["% vs 200DMA"]) else "N/A")
+    c4.metric("Vol Ratio", f"{latest_row['Vol Ratio']:.2f}" if pd.notna(latest_row["Vol Ratio"]) else "N/A")
+
+# ── Footer ──────────────────────────────────────────────────────────────────
+latest_dates = []
+for _, df_sym in data_map.items():
+    px = get_price_series(df_sym)
+    if not px.empty:
+        latest_dates.append(px.index.max())
+
+if latest_dates:
+    data_through = max(latest_dates).date()
+    st.caption(f"Data through: {data_through}")
+
 st.caption("© 2026 AD Fund Management LP")
