@@ -28,8 +28,7 @@ with st.sidebar:
         • Global macro preset ratios across growth, duration, inflation, credit, FX, energy, and international markets  
         • Dynamic custom ratio between any two tickers  
         • Rolling 50 and 200 day averages to frame trend direction  
-        • RSI panel to assess momentum and exhaustion points  
-        • Compact stat strip above each chart for current level, 1M change, DMA spread, and RSI
+        • RSI panel to assess momentum and exhaustion points
 
         Framework  
         • Preset and custom ratios use raw adjusted price ratios, then rebase to 100 at the selected display start  
@@ -177,13 +176,11 @@ def fetch_closes(tickers: List[str], start: datetime, end: datetime) -> pd.DataF
         if isinstance(raw.columns, pd.MultiIndex):
             for t in tickers_list:
                 try:
-                    # group_by="ticker" gives (ticker, field)
                     s = raw[(t, "Close")].copy()
                     s.name = t
                     out[t] = s
                 except Exception:
                     try:
-                        # fallback shape
                         s = raw[("Close", t)].copy()
                         s.name = t
                         out[t] = s
@@ -295,49 +292,11 @@ def rsi_wilder(series: pd.Series, window: int = 14) -> pd.Series:
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def pct_change_period(series: pd.Series, periods: int) -> float:
-    s = series.dropna()
-    if len(s) <= periods:
-        return np.nan
-    old = s.iloc[-(periods + 1)]
-    new = s.iloc[-1]
-    if old == 0 or not np.isfinite(old) or not np.isfinite(new):
-        return np.nan
-    return (new / old - 1.0) * 100.0
-
-def format_num(x: float, decimals: int = 2, suffix: str = "") -> str:
-    if x is None or not np.isfinite(x):
-        return "N/A"
-    return f"{x:,.{decimals}f}{suffix}"
-
-def show_stats_strip(ratio: pd.Series, title: str, rsi_len: int) -> None:
-    s = ratio.dropna()
-    if s.empty:
-        return
-
-    ma50 = s.rolling(50, min_periods=1).mean()
-    ma200 = s.rolling(200, min_periods=1).mean()
-    rsi = rsi_wilder(s, window=rsi_len)
-
-    current = s.iloc[-1]
-    one_month = pct_change_period(s, periods=21)
-    vs_ma50 = (current / ma50.iloc[-1] - 1.0) * 100.0 if np.isfinite(ma50.iloc[-1]) and ma50.iloc[-1] != 0 else np.nan
-    vs_ma200 = (current / ma200.iloc[-1] - 1.0) * 100.0 if np.isfinite(ma200.iloc[-1]) and ma200.iloc[-1] != 0 else np.nan
-    rsi_now = rsi.iloc[-1] if not rsi.dropna().empty else np.nan
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric(f"{title} | Last", format_num(current, 2))
-    c2.metric("1M %", format_num(one_month, 1, "%"))
-    c3.metric("vs 50 DMA", format_num(vs_ma50, 1, "%"))
-    c4.metric("vs 200 DMA", format_num(vs_ma200, 1, "%"))
-    c5.metric(f"RSI {rsi_len}", format_num(rsi_now, 1))
-
 def make_fig(
     ratio: pd.Series,
     title: str,
     y_label: str,
     display_start: pd.Timestamp,
-    now_ts: pd.Timestamp,
     show_ma50_flag: bool,
     show_ma200_flag: bool,
     show_rsi_flag: bool,
@@ -346,7 +305,7 @@ def make_fig(
     ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
 
     if ratio.empty:
-        fig, ax = plt.subplots(figsize=(12, 2.5))
+        fig, ax = plt.subplots(figsize=(16, 2.5))
         ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=11)
         ax.axis("off")
         return fig
@@ -359,16 +318,15 @@ def make_fig(
     ma200 = ratio.rolling(200, min_periods=1).mean()
     rsi = rsi_wilder(ratio, window=rsi_len)
 
-    height_ratios = [4, 1.2] if show_rsi_flag else [1]
     nrows = 2 if show_rsi_flag else 1
+    height_ratios = [4, 1.2] if show_rsi_flag else [1]
 
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=1,
         sharex=True,
-        figsize=(13, 4.8 if show_rsi_flag else 3.4),
+        figsize=(18, 5.3 if show_rsi_flag else 3.6),
         gridspec_kw={"height_ratios": height_ratios},
-        constrained_layout=True,
     )
 
     if show_rsi_flag:
@@ -377,36 +335,30 @@ def make_fig(
         ax1 = axes
         ax2 = None
 
-    ax1.plot(ratio_view.index, ratio_view, color="black", lw=1.35, label=title)
+    x_start = ratio_view.index.min()
+    x_end = ratio_view.index.max()
+
+    ax1.plot(ratio_view.index, ratio_view, color="black", lw=1.4, label=title)
 
     if show_ma50_flag:
-        ax1.plot(
-            ma50.loc[ratio_view.index.min():].index,
-            ma50.loc[ratio_view.index.min():],
-            color="#1f77b4",
-            lw=1.0,
-            label="50 DMA",
-        )
+        ma50_view = ma50.loc[x_start:x_end].dropna()
+        ax1.plot(ma50_view.index, ma50_view, color="#1f77b4", lw=1.0, label="50 DMA")
 
     if show_ma200_flag:
-        ax1.plot(
-            ma200.loc[ratio_view.index.min():].index,
-            ma200.loc[ratio_view.index.min():],
-            color="#d62728",
-            lw=1.0,
-            label="200 DMA",
-        )
+        ma200_view = ma200.loc[x_start:x_end].dropna()
+        ax1.plot(ma200_view.index, ma200_view, color="#d62728", lw=1.0, label="200 DMA")
 
     ax1.set_title(title, fontsize=12)
     ax1.set_ylabel(y_label)
     ax1.grid(True, linestyle="--", alpha=0.25)
+    ax1.set_xlim(x_start, x_end)
     ax1.margins(x=0)
 
     y_parts = [ratio_view]
     if show_ma50_flag:
-        y_parts.append(ma50.loc[ratio_view.index.min():])
+        y_parts.append(ma50.loc[x_start:x_end])
     if show_ma200_flag:
-        y_parts.append(ma200.loc[ratio_view.index.min():])
+        y_parts.append(ma200.loc[x_start:x_end])
 
     y_all = pd.concat(y_parts).replace([np.inf, -np.inf], np.nan).dropna()
     if not y_all.empty:
@@ -417,7 +369,7 @@ def make_fig(
     ax1.legend(loc="upper left", fontsize=8, frameon=False)
 
     if show_rsi_flag and ax2 is not None:
-        rsi_view = rsi.loc[ratio_view.index.min():].dropna()
+        rsi_view = rsi.loc[x_start:x_end].dropna()
         ax2.axhspan(30, 70, alpha=0.08, color="gray")
         ax2.plot(rsi_view.index, rsi_view, color="black", lw=1.0)
         ax2.axhline(70, ls=":", lw=0.9, color="red")
@@ -427,14 +379,16 @@ def make_fig(
         ax2.set_ylim(0, 100)
         ax2.set_ylabel("RSI")
         ax2.grid(True, linestyle="--", alpha=0.25)
+        ax2.set_xlim(x_start, x_end)
+        ax2.margins(x=0)
 
+    fig.subplots_adjust(left=0.06, right=0.995, top=0.92, bottom=0.08, hspace=0.10)
     return fig
 
 def render_ratio_block(
     ratio: pd.Series,
     title: str,
     display_start: pd.Timestamp,
-    now_ts: pd.Timestamp,
     rsi_len: int,
 ):
     ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
@@ -442,19 +396,18 @@ def render_ratio_block(
         st.warning(f"No usable data for {title}.")
         return
 
-    show_stats_strip(ratio.loc[display_start:], title, rsi_len)
     fig = make_fig(
         ratio=ratio,
         title=title,
         y_label="Ratio Index",
         display_start=display_start,
-        now_ts=now_ts,
         show_ma50_flag=show_ma50,
         show_ma200_flag=show_ma200,
         show_rsi_flag=show_rsi,
         rsi_len=rsi_len,
     )
     st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
     st.markdown("---")
 
 # ------------------------------ Fetch static data -------------------------
@@ -479,7 +432,6 @@ if available_cyc and available_def:
         cyc_def_ratio,
         "Cyclicals / Defensives (Equal Weight)",
         disp_start,
-        pd.Timestamp(now),
         rsi_window,
     )
 else:
@@ -514,7 +466,6 @@ else:
                 ratio,
                 label,
                 disp_start,
-                pd.Timestamp(now),
                 rsi_window,
             )
         else:
@@ -548,7 +499,6 @@ if custom_t1 and custom_t2:
                 custom_ratio,
                 f"{custom_t1} / {custom_t2}",
                 disp_start,
-                pd.Timestamp(now),
                 rsi_window,
             )
     else:
