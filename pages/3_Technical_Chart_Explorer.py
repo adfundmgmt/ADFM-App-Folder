@@ -14,13 +14,13 @@ st.sidebar.markdown(
     A technical chart built in Streamlit with Plotly.
 
     What it does
-    • Real datetime x-axis for better spacing, zooming, and hover behavior  
-    • Candlesticks with cleaner visual hierarchy  
-    • 8 / 20 / 50 / 100 / 200 day moving averages  
-    • Volume bars with muted up / down coloring  
-    • Optional RSI (14) and MACD (12, 26, 9)  
-    • Optional Bollinger Bands (20, 2.0)  
-    • Optional Elliott-style pivot overlay using a heuristic swing model  
+    • Real datetime x-axis for better spacing, zooming, and hover behavior
+    • Candlesticks with cleaner visual hierarchy
+    • 8 / 20 / 50 / 100 / 200 day moving averages
+    • Volume bars with muted up / down coloring
+    • Optional RSI (14) and MACD (12, 26, 9)
+    • Optional Bollinger Bands (20, 2.0)
+    • Optional Elliott-style pivot overlay using a heuristic swing model
 
     Use the controls below to change ticker, period, interval, and overlays.
     """,
@@ -46,7 +46,7 @@ auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
 st.sidebar.subheader("Overlays")
 show_ma8 = st.sidebar.checkbox("Show MA 8", value=True)
 show_ma100 = st.sidebar.checkbox("Show MA 100", value=True)
-show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=False)
+show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=True)
 show_last_price = st.sidebar.checkbox("Show last price line", value=False)
 show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=False)
 
@@ -316,6 +316,7 @@ def add_elliott_overlay(
             name="ZigZag",
             hoverinfo="skip",
             showlegend=True,
+            legendgroup="price_overlays",
         ),
         row=1,
         col=1,
@@ -324,21 +325,39 @@ def add_elliott_overlay(
     if mode == "ZigZag only (no labels)":
         return
 
-    def _add_label(p: dict, text: str, symbol: str = "circle", size: int = 9):
-        fig.add_trace(
-            go.Scatter(
-                x=[p["ts"]],
-                y=[p["px"]],
-                mode="markers+text",
-                marker=dict(size=size, symbol=symbol, color="rgba(20,20,20,0.9)"),
-                text=[text],
-                textposition="top center",
-                showlegend=False,
-                hovertemplate=f"{text}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
-            ),
-            row=1,
-            col=1,
-        )
+    if impulse:
+        for p, lab in zip(impulse, ["0", "1", "2", "3", "4", "5"]):
+            fig.add_trace(
+                go.Scatter(
+                    x=[p["ts"]],
+                    y=[p["px"]],
+                    mode="markers+text",
+                    marker=dict(size=10, symbol="circle", color="rgba(20,20,20,0.9)"),
+                    text=[lab],
+                    textposition="top center",
+                    showlegend=False,
+                    hovertemplate=f"{lab}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+
+    if abc:
+        for p, lab in zip(abc, ["A", "B", "C"]):
+            fig.add_trace(
+                go.Scatter(
+                    x=[p["ts"]],
+                    y=[p["px"]],
+                    mode="markers+text",
+                    marker=dict(size=9, symbol="square", color="rgba(20,20,20,0.9)"),
+                    text=[lab],
+                    textposition="top center",
+                    showlegend=False,
+                    hovertemplate=f"{lab}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
 
 
 def add_horizontal_price_line(fig: go.Figure, y: float, label: str, color: str, row: int = 1):
@@ -490,11 +509,11 @@ for panel in active_panels:
 COLORS = {
     "up": "#26A69A",
     "down": "#EF5350",
+    "ma8": "#6EC6FF",
     "ma20": "#2962FF",
     "ma50": "#7E57C2",
-    "ma200": "#FF9800",
-    "ma8": "#00ACC1",
-    "ma100": "#8D6E63",
+    "ma100": "#C49A00",
+    "ma200": "#111111",
     "bb": "#9E9E9E",
     "grid": "rgba(120,120,120,0.18)",
     "text": "#222222",
@@ -550,10 +569,11 @@ for w, color, enabled in ma_config:
                 x=df_display.index,
                 y=df_display[f"MA{w}"],
                 mode="lines",
-                line=dict(color=color, width=1.5),
+                line=dict(color=color, width=1.6),
                 name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
                 showlegend=True,
+                legendgroup="price_overlays",
             ),
             row=row_map["price"],
             col=1,
@@ -565,10 +585,11 @@ if show_bbands:
             x=df_display.index,
             y=df_display["BB_UPPER"],
             mode="lines",
-            line=dict(width=1, color=COLORS["bb"]),
+            line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
             name="BB Upper",
             hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
             showlegend=True,
+            legendgroup="price_overlays",
         ),
         row=row_map["price"],
         col=1,
@@ -578,12 +599,13 @@ if show_bbands:
             x=df_display.index,
             y=df_display["BB_LOWER"],
             mode="lines",
-            line=dict(width=1, color=COLORS["bb"]),
+            line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
             fill="tonexty",
             fillcolor="rgba(158,158,158,0.10)",
             name="BB Lower",
             hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
             showlegend=True,
+            legendgroup="price_overlays",
         ),
         row=row_map["price"],
         col=1,
@@ -593,10 +615,11 @@ if show_bbands:
             x=df_display.index,
             y=df_display["BB_MA"],
             mode="lines",
-            line=dict(width=1, color="rgba(100,100,100,0.7)", dash="dot"),
+            line=dict(width=1.0, color="rgba(100,100,100,0.7)", dash="dot"),
             name="BB Mid",
             hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
             showlegend=True,
+            legendgroup="price_overlays",
         ),
         row=row_map["price"],
         col=1,
@@ -613,40 +636,6 @@ if show_elliott:
             abc = try_abc_after_impulse(pivots, impulse)
 
         add_elliott_overlay(fig, pivots, impulse, abc, elliott_mode)
-
-        if impulse:
-            for p, lab in zip(impulse, ["0", "1", "2", "3", "4", "5"]):
-                fig.add_trace(
-                    go.Scatter(
-                        x=[p["ts"]],
-                        y=[p["px"]],
-                        mode="markers+text",
-                        marker=dict(size=10, symbol="circle", color="rgba(20,20,20,0.9)"),
-                        text=[lab],
-                        textposition="top center",
-                        showlegend=False,
-                        hovertemplate=f"{lab}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
-                    ),
-                    row=1,
-                    col=1,
-                )
-
-        if abc:
-            for p, lab in zip(abc, ["A", "B", "C"]):
-                fig.add_trace(
-                    go.Scatter(
-                        x=[p["ts"]],
-                        y=[p["px"]],
-                        mode="markers+text",
-                        marker=dict(size=9, symbol="square", color="rgba(20,20,20,0.9)"),
-                        text=[lab],
-                        textposition="top center",
-                        showlegend=False,
-                        hovertemplate=f"{lab}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
-                    ),
-                    row=1,
-                    col=1,
-                )
 
         with st.sidebar.expander("Elliott diagnostics", expanded=False):
             st.write(f"Pivot count drawn: {len(pivots)}")
@@ -858,12 +847,19 @@ fig.update_layout(
         x=0.0,
         xanchor="left",
         yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.80)",
+        bgcolor="rgba(255,255,255,0.85)",
         borderwidth=0,
         font=dict(size=11),
+        traceorder="normal",
     ),
     bargap=0.05,
 )
+
+# Clean legend defensively in case Plotly still injects an empty entry
+for trace in fig.data:
+    trace_name = getattr(trace, "name", None)
+    if trace.showlegend and (trace_name is None or str(trace_name).strip().lower() in {"", "undefined", "none"}):
+        trace.showlegend = False
 
 fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
 if show_volume:
