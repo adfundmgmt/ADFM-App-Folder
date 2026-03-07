@@ -40,11 +40,11 @@ with st.sidebar:
         • Selects historical analogs using correlation to the current year so far  
         • Displays full-year paths for selected analogs to show how similar setups resolved  
 
-        Additional output below:
+        Additional signal output below:
         • Scans every rolling 252-day historical window  
         • Finds the highest correlating windows versus the current trailing 252 trading days  
-        • Keeps years whose best rolling match clears 0.90 correlation  
-        • Displays a second overlay chart and a match table  
+        • Uses those matches only as selectors  
+        • Then shows what happened over the next 252 trading days after each signal  
         """,
         unsafe_allow_html=True,
     )
@@ -63,9 +63,8 @@ ticker_in = col1.text_input("Ticker", "^SPX").upper()
 top_n = col2.slider("Top Analogs", 1, 10, 5)
 min_corr = col3.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
 
-# Normalize a couple of common Yahoo quirks
 TICKER_ALIASES = {
-    "^SPX": "^GSPC",   # S&P 500
+    "^SPX": "^GSPC",
 }
 ticker = TICKER_ALIASES.get(ticker_in, ticker_in)
 
@@ -167,15 +166,27 @@ def distinct_palette(n: int):
 
     return chosen[:n]
 
-def forward_ret_from_last_day(series: pd.Series, last_day_loc: int, horizon: int) -> float:
-    future_loc = last_day_loc + horizon
-    if future_loc >= len(series):
+def forward_path_from_signal(series: pd.Series, signal_loc: int, horizon: int) -> pd.Series | None:
+    end_loc = signal_loc + horizon
+    if end_loc >= len(series):
+        return None
+    window = series.iloc[signal_loc:end_loc + 1].copy()
+    if len(window) != horizon + 1 or window.isna().any():
+        return None
+    out = window / window.iloc[0] - 1
+    out.index = np.arange(0, len(out))
+    return out
+
+def forward_ret_from_signal(series: pd.Series, signal_loc: int, horizon: int) -> float:
+    path = forward_path_from_signal(series, signal_loc, horizon)
+    if path is None:
         return np.nan
-    start_px = float(series.iloc[last_day_loc])
-    end_px = float(series.iloc[future_loc])
-    if start_px == 0:
-        return np.nan
-    return end_px / start_px - 1
+    return float(path.iloc[-1])
+
+def max_drawdown_from_path(path: pd.Series) -> float:
+    wealth = 1 + path
+    dd = wealth / wealth.cummax() - 1
+    return float(dd.min())
 
 try:
     raw = load_history(ticker)
@@ -331,36 +342,37 @@ st.caption("© 2026 AD Fund Management LP")
 
 # =========================
 # SECOND OUTPUT
-# Trailing 252-day rolling analogs
+# Rolling analogs used as a signal, then show next 252 trading days
 # =========================
 
 st.markdown("<hr style='margin-top:18px; margin-bottom:12px;'>", unsafe_allow_html=True)
-st.subheader(f"Trailing {TRAILING_DAYS}-Day Rolling Analog Overlay")
+st.subheader(f"Forward {TRAILING_DAYS}-Day Signal from Rolling Historical Analogs")
 
 close_px = raw["Close"].dropna().copy()
+current_start_loc = len(close_px) - TRAILING_DAYS
 
-if len(close_px) < TRAILING_DAYS * 2:
+if len(close_px) < TRAILING_DAYS * 3:
     st.info(
-        f"Need at least {TRAILING_DAYS * 2} trading days of history "
-        f"to compare the current trailing {TRAILING_DAYS}-day window against prior rolling windows."
+        f"Need at least {TRAILING_DAYS * 3} trading days of history to run a clean "
+        f"{TRAILING_DAYS}-day match plus a full {TRAILING_DAYS}-day forward signal window."
     )
 else:
     current_trailing = close_px.iloc[-TRAILING_DAYS:].copy()
     current_trailing_path = cumret(current_trailing)
     current_trailing_path.index = np.arange(1, len(current_trailing_path) + 1)
 
-    current_start_ts = current_trailing.index[0]
-
     rolling_matches = []
 
     for start_loc in range(0, len(close_px) - TRAILING_DAYS + 1):
         end_loc = start_loc + TRAILING_DAYS
-        hist_window = close_px.iloc[start_loc:end_loc].copy()
+        signal_loc = end_loc - 1
 
-        if len(hist_window) != TRAILING_DAYS:
+        hist_window = close_px.iloc[start_loc:end_loc].copy()
+        if len(hist_window) != TRAILING_DAYS or hist_window.isna().any():
             continue
 
-        if hist_window.index[-1] >= current_start_ts:
+        # Keep the entire forward outcome window fully out of the current live period
+        if end_loc + TRAILING_DAYS > current_start_loc:
             continue
 
         hist_path = cumret(hist_window)
@@ -370,28 +382,39 @@ else:
         if not np.isfinite(rho) or rho < ROLLING_MIN_CORR:
             continue
 
+        fwd_path = forward_path_from_signal(close_px, signal_loc, TRAILING_DAYS)
+        if fwd_path is None:
+            continue
+
         rolling_matches.append(
             {
                 "Year": int(hist_window.index[-1].year),
-                "Start Date": pd.Timestamp(hist_window.index[0]),
-                "End Date": pd.Timestamp(hist_window.index[-1]),
+                "Match Start": pd.Timestamp(hist_window.index[0]),
+                "Match End": pd.Timestamp(hist_window.index[-1]),
+                "Signal Date": pd.Timestamp(hist_window.index[-1]),
                 "Correlation": float(rho),
-                "252D Return": float(hist_path.iloc[-1]),
-                "Next 21D": forward_ret_from_last_day(close_px, end_loc - 1, 21),
-                "Next 63D": forward_ret_from_last_day(close_px, end_loc - 1, 63),
-                "Next 126D": forward_ret_from_last_day(close_px, end_loc - 1, 126),
+                "Next 21D": float(fwd_path.iloc[min(21, len(fwd_path) - 1)]),
+                "Next 63D": float(fwd_path.iloc[min(63, len(fwd_path) - 1)]),
+                "Next 126D": float(fwd_path.iloc[min(126, len(fwd_path) - 1)]),
+                "Next 252D": float(fwd_path.iloc[-1]),
+                "Max DD Next 252D": max_drawdown_from_path(fwd_path),
                 "_start_loc": int(start_loc),
                 "_end_loc": int(end_loc),
+                "_signal_loc": int(signal_loc),
             }
         )
 
     if not rolling_matches:
-        st.warning(f"No rolling {TRAILING_DAYS}-day windows found with correlation above {ROLLING_MIN_CORR:.2f}.")
+        st.warning(
+            f"No rolling {TRAILING_DAYS}-day windows found with correlation above {ROLLING_MIN_CORR:.2f} "
+            f"and a clean forward {TRAILING_DAYS}-day history."
+        )
     else:
         rolling_df = pd.DataFrame(rolling_matches)
 
+        # Keep only the single best signal per year
         best_by_year = (
-            rolling_df.sort_values(["Year", "Correlation", "End Date"], ascending=[True, False, True])
+            rolling_df.sort_values(["Year", "Correlation", "Signal Date"], ascending=[True, False, True])
             .drop_duplicates(subset=["Year"], keep="first")
             .sort_values("Correlation", ascending=False)
             .reset_index(drop=True)
@@ -399,95 +422,129 @@ else:
 
         overlay_df = best_by_year.head(top_n).copy()
 
-        m4, m5, m6 = st.columns(3)
-        m4.metric("Years Above 0.90", f"{len(best_by_year)}")
-        m5.metric("Best Rolling ρ", f"{best_by_year['Correlation'].max():.2f}")
-        m6.metric(f"Current {TRAILING_DAYS}D Return", f"{current_trailing_path.iloc[-1]:.2%}")
+        forward_paths = []
+        for _, row in best_by_year.iterrows():
+            fwd_path = forward_path_from_signal(close_px, int(row["_signal_loc"]), TRAILING_DAYS)
+            if fwd_path is not None and len(fwd_path) == TRAILING_DAYS + 1:
+                forward_paths.append(fwd_path.values)
 
-        palette2 = distinct_palette(len(overlay_df))
-        fig2, ax2 = plt.subplots(figsize=(14, 7))
+        if not forward_paths:
+            st.warning("No forward signal paths were available after filtering.")
+        else:
+            forward_matrix = np.vstack(forward_paths)
+            median_path = np.nanmedian(forward_matrix, axis=0)
+            p25_path = np.nanpercentile(forward_matrix, 25, axis=0)
+            p75_path = np.nanpercentile(forward_matrix, 75, axis=0)
+            p10_path = np.nanpercentile(forward_matrix, 10, axis=0)
+            p90_path = np.nanpercentile(forward_matrix, 90, axis=0)
 
-        for idx, row in overlay_df.reset_index(drop=True).iterrows():
-            hist_window = close_px.iloc[int(row["_start_loc"]):int(row["_end_loc"])].copy()
-            hist_path = cumret(hist_window)
-            hist_path.index = np.arange(1, len(hist_path) + 1)
+            hit_rate_252 = float(np.mean(best_by_year["Next 252D"] > 0)) if len(best_by_year) else np.nan
+            median_252 = float(np.nanmedian(best_by_year["Next 252D"])) if len(best_by_year) else np.nan
+            median_dd = float(np.nanmedian(best_by_year["Max DD Next 252D"])) if len(best_by_year) else np.nan
 
-            ax2.plot(
-                hist_path.index,
-                hist_path.values,
-                "--",
-                lw=2.3,
-                alpha=0.95,
-                color=palette2[idx],
-                label=f"{int(row['Year'])} (ρ={row['Correlation']:.2f})",
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Qualifying Years", f"{len(best_by_year)}")
+            s2.metric("Median Next 252D", fmt(median_252))
+            s3.metric("Positive 252D Hit Rate", fmt(hit_rate_252))
+
+            fig2, ax2 = plt.subplots(figsize=(14, 7))
+            palette2 = distinct_palette(len(overlay_df))
+
+            x_fwd = np.arange(0, TRAILING_DAYS + 1)
+
+            ax2.fill_between(x_fwd, p10_path, p90_path, color="lightgray", alpha=0.35, label="10th-90th %ile")
+            ax2.fill_between(x_fwd, p25_path, p75_path, color="silver", alpha=0.45, label="25th-75th %ile")
+            ax2.plot(x_fwd, median_path, color="black", lw=3.0, label="Median Forecast")
+
+            for idx, row in overlay_df.reset_index(drop=True).iterrows():
+                fwd_path = forward_path_from_signal(close_px, int(row["_signal_loc"]), TRAILING_DAYS)
+                if fwd_path is None:
+                    continue
+
+                ax2.plot(
+                    fwd_path.index,
+                    fwd_path.values,
+                    "--",
+                    lw=2.2,
+                    alpha=0.95,
+                    color=palette2[idx],
+                    label=f"{int(row['Year'])} (ρ={row['Correlation']:.2f})",
+                )
+
+            ax2.axhline(0, color="gray", ls="--", lw=1)
+            ax2.axvline(0, color="gray", ls=":", lw=1.1, alpha=0.9)
+
+            ax2.set_title(
+                f"{ticker} - What Happened Next After Similar {TRAILING_DAYS}-Day Setups",
+                fontsize=16,
+                weight="bold",
+            )
+            ax2.set_xlabel("Trading Days After Signal", fontsize=13)
+            ax2.set_ylabel("Forward Cumulative Return", fontsize=13)
+            ax2.set_xlim(0, TRAILING_DAYS)
+
+            all_y2 = [median_path, p10_path, p90_path]
+            for _, row in overlay_df.iterrows():
+                fwd_path = forward_path_from_signal(close_px, int(row["_signal_loc"]), TRAILING_DAYS)
+                if fwd_path is not None:
+                    all_y2.append(fwd_path.values)
+
+            all_y2 = np.hstack(all_y2)
+            ymin2, ymax2 = float(np.min(all_y2)), float(np.max(all_y2))
+            pad2 = 0.06 * (ymax2 - ymin2) if ymax2 > ymin2 else 0.02
+            ax2.set_ylim(ymin2 - pad2, ymax2 + pad2)
+
+            span2 = ax2.get_ylim()[1] - ax2.get_ylim()[0]
+            raw_step2 = max(span2 / 12, 0.0025)
+            candidates2 = np.array([0.0025, 0.005, 0.01, 0.02, 0.025, 0.05, 0.10, 0.20, 0.25, 0.50, 1.00])
+            step2 = float(candidates2[np.argmin(np.abs(candidates2 - raw_step2))])
+
+            ax2.yaxis.set_major_locator(MultipleLocator(step2))
+            ax2.yaxis.set_minor_locator(MultipleLocator(step2 / 2))
+            ax2.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
+            ax2.grid(True, ls=":", lw=0.7, color="#888")
+            ax2.legend(loc="best", frameon=False, ncol=2, fontsize=10)
+
+            plt.tight_layout()
+            st.pyplot(fig2)
+
+            st.caption(
+                f"Signal logic: match the current trailing {TRAILING_DAYS}-day path to prior rolling "
+                f"{TRAILING_DAYS}-day windows, then plot the next {TRAILING_DAYS} trading days after those matches."
             )
 
-        ax2.plot(
-            current_trailing_path.index,
-            current_trailing_path.values,
-            color="black",
-            lw=3.2,
-            label=f"Current Trailing {TRAILING_DAYS}D",
-        )
+            table_df = best_by_year.copy()
+            table_df["Match Start"] = pd.to_datetime(table_df["Match Start"]).dt.strftime("%Y-%m-%d")
+            table_df["Match End"] = pd.to_datetime(table_df["Match End"]).dt.strftime("%Y-%m-%d")
+            table_df["Signal Date"] = pd.to_datetime(table_df["Signal Date"]).dt.strftime("%Y-%m-%d")
+            table_df["Correlation"] = table_df["Correlation"].map(lambda x: f"{x:.3f}")
+            table_df["Next 21D"] = table_df["Next 21D"].map(lambda x: f"{x:.2%}")
+            table_df["Next 63D"] = table_df["Next 63D"].map(lambda x: f"{x:.2%}")
+            table_df["Next 126D"] = table_df["Next 126D"].map(lambda x: f"{x:.2%}")
+            table_df["Next 252D"] = table_df["Next 252D"].map(lambda x: f"{x:.2%}")
+            table_df["Max DD Next 252D"] = table_df["Max DD Next 252D"].map(lambda x: f"{x:.2%}")
 
-        ax2.set_title(
-            f"{ticker} - Current Trailing {TRAILING_DAYS}D vs Highest Correlating Historical Windows",
-            fontsize=16,
-            weight="bold",
-        )
-        ax2.set_xlabel(f"Trading Day in {TRAILING_DAYS}-Day Window", fontsize=13)
-        ax2.set_ylabel("Cumulative Return", fontsize=13)
-        ax2.axhline(0, color="gray", ls="--", lw=1)
-        ax2.set_xlim(1, TRAILING_DAYS)
-
-        all_y2 = [current_trailing_path.values]
-        for _, row in overlay_df.iterrows():
-            hist_window = close_px.iloc[int(row["_start_loc"]):int(row["_end_loc"])].copy()
-            hist_path = cumret(hist_window)
-            all_y2.append(hist_path.values)
-
-        all_y2 = np.hstack(all_y2)
-        ymin2, ymax2 = float(np.min(all_y2)), float(np.max(all_y2))
-        pad2 = 0.06 * (ymax2 - ymin2) if ymax2 > ymin2 else 0.02
-        ax2.set_ylim(ymin2 - pad2, ymax2 + pad2)
-
-        span2 = ax2.get_ylim()[1] - ax2.get_ylim()[0]
-        raw_step2 = max(span2 / 12, 0.0025)
-        candidates2 = np.array([0.0025, 0.005, 0.01, 0.02, 0.025, 0.05, 0.10, 0.20, 0.25, 0.50, 1.00])
-        step2 = float(candidates2[np.argmin(np.abs(candidates2 - raw_step2))])
-
-        ax2.yaxis.set_major_locator(MultipleLocator(step2))
-        ax2.yaxis.set_minor_locator(MultipleLocator(step2 / 2))
-        ax2.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
-
-        ax2.grid(True, ls=":", lw=0.7, color="#888")
-        ax2.legend(loc="best", frameon=False, ncol=2, fontsize=11)
-        plt.tight_layout()
-        st.pyplot(fig2)
-
-        table_df = best_by_year.copy()
-        table_df["Start Date"] = pd.to_datetime(table_df["Start Date"]).dt.strftime("%Y-%m-%d")
-        table_df["End Date"] = pd.to_datetime(table_df["End Date"]).dt.strftime("%Y-%m-%d")
-        table_df["Correlation"] = table_df["Correlation"].map(lambda x: f"{x:.3f}")
-        table_df["252D Return"] = table_df["252D Return"].map(lambda x: f"{x:.2%}")
-        table_df["Next 21D"] = table_df["Next 21D"].map(lambda x: "N/A" if pd.isna(x) else f"{x:.2%}")
-        table_df["Next 63D"] = table_df["Next 63D"].map(lambda x: "N/A" if pd.isna(x) else f"{x:.2%}")
-        table_df["Next 126D"] = table_df["Next 126D"].map(lambda x: "N/A" if pd.isna(x) else f"{x:.2%}")
-
-        table_df = table_df[
-            [
-                "Year",
-                "Start Date",
-                "End Date",
-                "Correlation",
-                "252D Return",
-                "Next 21D",
-                "Next 63D",
-                "Next 126D",
+            table_df = table_df[
+                [
+                    "Year",
+                    "Match Start",
+                    "Match End",
+                    "Signal Date",
+                    "Correlation",
+                    "Next 21D",
+                    "Next 63D",
+                    "Next 126D",
+                    "Next 252D",
+                    "Max DD Next 252D",
+                ]
             ]
-        ]
 
-        st.markdown(f"**Best rolling {TRAILING_DAYS}-day match per year with ρ >= {ROLLING_MIN_CORR:.2f}**")
-        st.dataframe(table_df, use_container_width=True, hide_index=True)
+            st.markdown(f"**Best forward signal per year with rolling ρ >= {ROLLING_MIN_CORR:.2f}**")
+            st.dataframe(table_df, use_container_width=True, hide_index=True)
 
-        st.caption("Second output: trailing 252-day analog scan")
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Median Max Drawdown", fmt(median_dd))
+            d2.metric("Median Next 63D", fmt(float(np.nanmedian(best_by_year['Next 63D']))))
+            d3.metric("Median Next 126D", fmt(float(np.nanmedian(best_by_year['Next 126D']))))
+
+            st.caption("Second output: forward 252-day signal from rolling analogs")
