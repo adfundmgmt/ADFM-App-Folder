@@ -202,7 +202,7 @@ def explain_pair_signal(pair_row):
     title = pair_row["Pair"]
     rho = pair_row["rho_now"]
     delta = pair_row["rho_delta_w"]
-    strength = pair_row["Signal strength"]
+    bucket = str(pair_row.get("Signal bucket", "Low")).lower()
 
     if title == "SPX vs 10Y":
         if rho >= 0.30:
@@ -308,7 +308,7 @@ def explain_pair_signal(pair_row):
         )
 
     return (
-        f"Cross-asset linkage is moving with {strength.lower()} conviction.",
+        f"Cross-asset linkage is moving with {bucket} conviction.",
         "Use it as a portfolio context signal and confirm it with price action and positioning.",
     )
 
@@ -345,16 +345,20 @@ def action_bias_from_states(vol_state, hedge_state, credit_state, vix_rv_z):
 # =========================
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def fetch_prices(tickers, start, end):
-    data = yf.download(
-        tickers=tickers,
-        start=start,
-        end=end,
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        group_by="ticker",
-        threads=True,
-    )
+    try:
+        data = yf.download(
+            tickers=tickers,
+            start=start,
+            end=end,
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
+            threads=True,
+        )
+    except Exception as e:
+        st.error(f"Yahoo Finance download failed: {e}")
+        return pd.DataFrame()
 
     if data is None or len(data) == 0:
         return pd.DataFrame()
@@ -374,6 +378,8 @@ def fetch_prices(tickers, start, end):
         out = pd.concat(frames, axis=1)
     else:
         col = "Adj Close" if "Adj Close" in data.columns else "Close"
+        if col not in data.columns:
+            return pd.DataFrame()
         out = data[[col]].rename(columns={col: tickers[0]})
 
     out.index.name = "Date"
@@ -395,6 +401,9 @@ def build_transformed_returns(price_df, asset_meta):
     return out.dropna(how="all")
 
 def build_pct_returns(price_df, tickers):
+    tickers = [t for t in tickers if t in price_df.columns]
+    if not tickers:
+        return pd.DataFrame()
     out = price_df[tickers].pct_change().replace([np.inf, -np.inf], np.nan)
     return out.dropna(how="all")
 
@@ -431,6 +440,7 @@ def build_pair_feature_table(transformed_ret, pair_specs, corr_window, week_back
         persistence_score = (persist / 100.0) * 10 if not np.isnan(persist) else 0
 
         signal_strength = round(level_score + delta_score + extremity_score + persistence_score, 1)
+        bucket = signal_bucket(signal_strength)
 
         rows.append({
             "Pair": title,
@@ -444,7 +454,7 @@ def build_pair_feature_table(transformed_ret, pair_specs, corr_window, week_back
             "pctile_2y": pctile_2y,
             "persistence_5d": persist,
             "Signal strength": signal_strength,
-            "Signal bucket": signal_bucket(signal_strength),
+            "Signal bucket": bucket,
             "Series": rc,
         })
 
@@ -549,10 +559,14 @@ def build_asset_stress_table(pct_ret, prices, week_back):
         daily_ret = pct_ret[t].dropna() if t in pct_ret.columns else pd.Series(dtype=float)
         rv = annualized_realized_vol(daily_ret, window=21) * 100 if not daily_ret.empty else pd.Series(dtype=float)
 
+        one_w_pct = np.nan
+        if len(series) > week_back + 1:
+            one_w_pct = float((series.iloc[-1] / series.iloc[-week_back-1] - 1.0) * 100.0)
+
         rows.append({
             "Asset": label,
             "Last": safe_last(series),
-            "1W %": week_delta(series.pct_change(), week_back) * 100 if len(series) > week_back + 1 else np.nan,
+            "1W %": one_w_pct,
             "1M RV": safe_last(rv),
             "RV z": zscore_last(rv, window=504),
             "RV pctile": pct_rank_last(rv),
@@ -580,7 +594,10 @@ prices = prices[[c for c in prices.columns if c in ALL_TICKERS]].copy()
 prices = prices.dropna(how="all", axis=1)
 
 transformed_ret = build_transformed_returns(prices, ASSET_META)
-pct_ret = build_pct_returns(prices, [t for t, meta in ASSET_META.items() if meta["transform"] == "pct" and t in prices.columns])
+pct_ret = build_pct_returns(
+    prices,
+    [t for t, meta in ASSET_META.items() if meta["transform"] == "pct" and t in prices.columns]
+)
 
 pair_tbl = build_pair_feature_table(transformed_ret, PAIR_SPECS, corr_window, week_back)
 regime_features = build_regime_features(prices, pct_ret, transformed_ret, corr_window, week_back)
@@ -710,26 +727,30 @@ st.subheader(f"Current {corr_window}-day cross-asset correlation map")
 
 heatmap_assets = [t for t in CORE_HEATMAP if t in transformed_ret.columns]
 if len(heatmap_assets) >= 3:
-    hm = transformed_ret[heatmap_assets].dropna().tail(corr_window).corr()
-    labels = [ASSET_META[t]["label"] for t in hm.index]
+    hm_data = transformed_ret[heatmap_assets].dropna()
+    if len(hm_data) >= corr_window:
+        hm = hm_data.tail(corr_window).corr()
+        labels = [ASSET_META[t]["label"] for t in hm.index]
 
-    fig, ax = plt.subplots(figsize=(9.5, 6.5))
-    im = ax.imshow(hm.values, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
-    ax.set_xticks(range(len(labels)))
-    ax.set_yticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.set_yticklabels(labels)
+        fig, ax = plt.subplots(figsize=(9.5, 6.5))
+        im = ax.imshow(hm.values, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticklabels(labels)
 
-    for i in range(len(labels)):
-        for j in range(len(labels)):
-            val = hm.values[i, j]
-            ax.text(j, i, f"{val:+.2f}", ha="center", va="center", fontsize=8)
+        for i in range(len(labels)):
+            for j in range(len(labels)):
+                val = hm.values[i, j]
+                ax.text(j, i, f"{val:+.2f}", ha="center", va="center", fontsize=8)
 
-    cbar = plt.colorbar(im, ax=ax, shrink=0.85)
-    cbar.set_label("Correlation")
-    ax.set_title(f"{corr_window}-day correlation matrix")
-    plt.tight_layout()
-    st.pyplot(fig, use_container_width=True)
+        cbar = plt.colorbar(im, ax=ax, shrink=0.85)
+        cbar.set_label("Correlation")
+        ax.set_title(f"{corr_window}-day correlation matrix")
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+    else:
+        st.info("Not enough history for the selected rolling window.")
 else:
     st.info("Not enough assets available for the heatmap.")
 
