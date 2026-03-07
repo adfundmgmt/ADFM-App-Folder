@@ -5,34 +5,56 @@ import yfinance as yf
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
-# ── Sidebar ────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="TradingView-Style Chart", layout="wide")
+
+# --------------------------- Sidebar ---------------------------
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     """
-    Quickly inspect price action and key technical indicators for any stock, ETF, or index.
+    A cleaner, more TradingView-like technical chart built in Streamlit with Plotly.
 
-    • Interactive OHLC candlesticks using Yahoo Finance data
-    • 8 / 20 / 50 / 100 / 200 day moving averages with full history continuity
-    • Volume bars color coded by up / down days
-    • RSI (14 day) with Wilder style smoothing
-    • MACD (12, 26, 9) with histogram for momentum inflections
-    • Optional Bollinger Bands (20, 2.0) to frame short term ranges
-    • Optional Elliott-style wave overlay (heuristic) built from swing pivots
+    What it does
+    • Real datetime x-axis for better spacing, zooming, and hover behavior  
+    • Candlesticks with cleaner visual hierarchy  
+    • 20 / 50 / 200 day moving averages by default, with optional 8 / 100 day lines  
+    • Volume bars with muted up / down coloring  
+    • Optional RSI (14), MACD (12, 26, 9), and Bollinger Bands (20, 2.0)  
+    • Optional Elliott-style pivot overlay using a heuristic swing model  
+    • Price line, visible-range high / low, and better hover labels  
 
-    Use the controls below to adjust the time window, sampling interval, and overlays.
+    Use the controls below to change ticker, period, interval, and overlays.
     """,
     unsafe_allow_html=True,
 )
 
-ticker = st.sidebar.text_input("Ticker", "^SPX").upper()
+ticker = st.sidebar.text_input("Ticker", "^SPX").upper().strip()
+
 period = st.sidebar.selectbox(
-    "Period", ["1mo", "3mo", "6mo", "1y", "2y", "3y", "5y", "10y", "max"], index=3
+    "Period",
+    ["1mo", "3mo", "6mo", "1y", "2y", "3y", "5y", "10y", "max"],
+    index=3,
 )
-interval = st.sidebar.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
 
-show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=True)
+interval = st.sidebar.selectbox(
+    "Interval",
+    ["1d", "1wk", "1mo"],
+    index=0,
+)
 
-# Elliott overlay controls
+auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
+
+st.sidebar.subheader("Overlays")
+show_ma8 = st.sidebar.checkbox("Show MA 8", value=False)
+show_ma100 = st.sidebar.checkbox("Show MA 100", value=False)
+show_bbands = st.sidebar.checkbox("Show Bollinger Bands (20, 2.0)", value=False)
+show_last_price = st.sidebar.checkbox("Show last price line", value=True)
+show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=True)
+
+st.sidebar.subheader("Indicators")
+show_volume = st.sidebar.checkbox("Show Volume", value=True)
+show_rsi = st.sidebar.checkbox("Show RSI (14)", value=False)
+show_macd = st.sidebar.checkbox("Show MACD (12, 26, 9)", value=False)
+
 st.sidebar.subheader("Elliott Overlay (Heuristic)")
 show_elliott = st.sidebar.checkbox("Show Elliott wave overlay", value=False)
 pivot_window = st.sidebar.slider("Pivot sensitivity (bars left/right)", 2, 20, 8)
@@ -45,7 +67,7 @@ elliott_mode = st.sidebar.selectbox(
     index=0,
 )
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+# --------------------------- Helpers ---------------------------
 def start_date_from_period(p: str) -> pd.Timestamp | None:
     today = pd.Timestamp.today().normalize()
     if p == "max":
@@ -58,13 +80,44 @@ def start_date_from_period(p: str) -> pd.Timestamp | None:
         return today - pd.DateOffset(years=years)
     return None
 
-@st.cache_data(ttl=3600)
-def get_full_history(tkr: str, intrvl: str) -> pd.DataFrame:
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_full_history(tkr: str, intrvl: str, adjusted: bool) -> pd.DataFrame:
     try:
-        return yf.Ticker(tkr).history(period="max", interval=intrvl, auto_adjust=False)
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        df = yf.Ticker(tkr).history(period="max", interval=intrvl, auto_adjust=adjusted)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df
+    except Exception:
         return pd.DataFrame()
+
+
+def compute_rsi(close: pd.Series, length: int = 14) -> pd.Series:
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / length, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def compute_macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    hist = macd - signal_line
+    return macd, signal_line, hist
+
+
+def compute_bbands(close: pd.Series, window: int = 20, mult: float = 2.0):
+    ma = close.rolling(window).mean()
+    std = close.rolling(window).std()
+    upper = ma + mult * std
+    lower = ma - mult * std
+    return ma, upper, lower
+
 
 def _is_pivot_high(values: np.ndarray, i: int, w: int) -> bool:
     left = values[i - w : i]
@@ -73,6 +126,7 @@ def _is_pivot_high(values: np.ndarray, i: int, w: int) -> bool:
         return False
     return (values[i] >= left.max()) and (values[i] >= right.max())
 
+
 def _is_pivot_low(values: np.ndarray, i: int, w: int) -> bool:
     left = values[i - w : i]
     right = values[i + 1 : i + w + 1]
@@ -80,11 +134,8 @@ def _is_pivot_low(values: np.ndarray, i: int, w: int) -> bool:
         return False
     return (values[i] <= left.min()) and (values[i] <= right.min())
 
+
 def compute_pivots(close: pd.Series, w: int) -> list[dict]:
-    """
-    Returns a list of pivot dicts: {"i": int, "ts": timestamp, "px": float, "type": "H"|"L"}.
-    Pivot is a fractal-style local extremum with w bars on both sides.
-    """
     values = close.values.astype(float)
     idx = close.index
     pivots: list[dict] = []
@@ -96,37 +147,25 @@ def compute_pivots(close: pd.Series, w: int) -> list[dict]:
     pivots.sort(key=lambda x: x["i"])
     return pivots
 
-def compress_pivots(
-    pivots: list[dict],
-    min_pct: float,
-    max_points: int,
-) -> list[dict]:
-    """
-    1) Merge consecutive same-type pivots, keep the most extreme.
-    2) Enforce a minimum percent move between pivots.
-    3) Cap the number of pivots to the most recent max_points.
-    """
+
+def compress_pivots(pivots: list[dict], min_pct: float, max_points: int) -> list[dict]:
     if not pivots:
         return []
 
-    # Step 1: merge consecutive same-type, keep extreme
     merged: list[dict] = [pivots[0].copy()]
     for p in pivots[1:]:
         last = merged[-1]
         if p["type"] == last["type"]:
-            if p["type"] == "H":
-                if p["px"] >= last["px"]:
-                    merged[-1] = p.copy()
-            else:
-                if p["px"] <= last["px"]:
-                    merged[-1] = p.copy()
+            if p["type"] == "H" and p["px"] >= last["px"]:
+                merged[-1] = p.copy()
+            elif p["type"] == "L" and p["px"] <= last["px"]:
+                merged[-1] = p.copy()
         else:
             merged.append(p.copy())
 
     if len(merged) <= 2:
         return merged[-max_points:]
 
-    # Step 2: min swing filter
     filtered: list[dict] = [merged[0]]
     min_frac = min_pct / 100.0
     for p in merged[1:]:
@@ -136,89 +175,65 @@ def compress_pivots(
         if (move / denom) >= min_frac:
             filtered.append(p)
         else:
-            # If we skip due to threshold, we still want the most extreme continuation in same direction
-            # Replace last pivot if p extends it (helps avoid "stair-step noise")
             if p["type"] == last["type"]:
                 if p["type"] == "H" and p["px"] > last["px"]:
                     filtered[-1] = p
-                if p["type"] == "L" and p["px"] < last["px"]:
+                elif p["type"] == "L" and p["px"] < last["px"]:
                     filtered[-1] = p
 
-    # Step 3: cap
     return filtered[-max_points:]
 
+
 def _impulse_score(seq: list[dict]) -> float:
-    """
-    Score a 6-pivot impulse candidate (0..5). Higher is better.
-    Works for both up and down depending on pivot types.
-    Relaxed Elliott constraints, aiming for a usable map.
-    """
     if len(seq) != 6:
         return -1e9
 
-    # Determine direction from types
     types = "".join(p["type"] for p in seq)
-    is_up = types in ("LHLHLH",)
-    is_down = types in ("HLHLHL",)
+    is_up = types == "LHLHLH"
+    is_down = types == "HLHLHL"
     if not (is_up or is_down):
         return -1e9
 
     px = np.array([p["px"] for p in seq], dtype=float)
 
-    # wave lengths (absolute)
     w1 = abs(px[1] - px[0])
     w3 = abs(px[3] - px[2])
     w5 = abs(px[5] - px[4])
     if min(w1, w3, w5) <= 0:
         return -1e9
 
-    # Retrace ratios
-    # For up: 2 retraces 1, 4 retraces 3.
-    # For down: same math on absolute lengths.
     retr2 = abs(px[2] - px[1]) / max(w1, 1e-9)
     retr4 = abs(px[4] - px[3]) / max(w3, 1e-9)
 
-    # Basic rules / preferences
     score = 0.0
-
-    # Prefer wave 3 to be strong
     score += 2.0 if w3 >= w1 else -1.0
     score += 1.5 if w3 >= w5 else 0.0
+    score += 2.0 if w3 >= min(w1, w5) else -3.0
 
-    # Prefer wave 3 not to be the shortest (classic rule)
-    score += 2.0 if (w3 >= min(w1, w5)) else -3.0
-
-    # Prefer reasonable retracements
-    def band_bonus(x: float, lo: float, hi: float, w: float = 1.0) -> float:
+    def band_bonus(x: float, lo: float, hi: float, weight: float = 1.0) -> float:
         if lo <= x <= hi:
-            return 2.0 * w
+            return 2.0 * weight
         if (lo - 0.15) <= x <= (hi + 0.15):
-            return 1.0 * w
-        return -1.0 * w
+            return 1.0 * weight
+        return -1.0 * weight
 
     score += band_bonus(retr2, 0.35, 0.80, 1.0)
     score += band_bonus(retr4, 0.20, 0.60, 0.8)
 
-    # Prefer progression (impulse makes new extreme at 3 and 5)
     if is_up:
-        score += 2.0 if (px[3] > px[1]) else -2.0
-        score += 2.0 if (px[5] > px[3]) else -1.0
-        # Overlap check (relaxed)
-        score += 0.5 if (px[4] > px[1]) else -0.5
+        score += 2.0 if px[3] > px[1] else -2.0
+        score += 2.0 if px[5] > px[3] else -1.0
+        score += 0.5 if px[4] > px[1] else -0.5
     else:
-        score += 2.0 if (px[3] < px[1]) else -2.0
-        score += 2.0 if (px[5] < px[3]) else -1.0
-        score += 0.5 if (px[4] < px[1]) else -0.5
+        score += 2.0 if px[3] < px[1] else -2.0
+        score += 2.0 if px[5] < px[3] else -1.0
+        score += 0.5 if px[4] < px[1] else -0.5
 
-    # Prefer later pivots (recent structure)
     score += seq[-1]["i"] / 100000.0
-
     return score
 
+
 def find_best_impulse(pivots: list[dict], lookback: int) -> tuple[list[dict] | None, float]:
-    """
-    Search over the most recent 'lookback' pivots for best 6-pivot impulse candidate.
-    """
     if len(pivots) < 6:
         return None, -1e9
 
@@ -235,21 +250,18 @@ def find_best_impulse(pivots: list[dict], lookback: int) -> tuple[list[dict] | N
 
     return best_seq, best_score
 
+
 def try_abc_after_impulse(pivots: list[dict], impulse: list[dict]) -> list[dict] | None:
-    """
-    Given impulse seq (6 pivots), attempt to take the next 4 alternating pivots as A-B-C.
-    Returns [A,B,C] pivots if plausible, else None.
-    """
     if impulse is None or len(impulse) != 6:
         return None
 
-    # find where impulse ends in pivots list
     end_i = impulse[-1]["i"]
-    # find the pivot with same index
     pos = None
     for k, p in enumerate(pivots):
         if p["i"] == end_i and p["type"] == impulse[-1]["type"]:
             pos = k
+            break
+
     if pos is None:
         return None
 
@@ -257,7 +269,6 @@ def try_abc_after_impulse(pivots: list[dict], impulse: list[dict]) -> list[dict]
     if len(tail) < 3:
         return None
 
-    # Build A,B,C using next alternating pivots
     abc: list[dict] = []
     last_type = impulse[-1]["type"]
     for p in tail:
@@ -270,56 +281,40 @@ def try_abc_after_impulse(pivots: list[dict], impulse: list[dict]) -> list[dict]
     if len(abc) < 3:
         return None
 
-    # Plausibility: A should move away from 5, B should retrace A, C should extend A in same direction as A.
     p5 = impulse[-1]["px"]
     a, b, c = abc[0]["px"], abc[1]["px"], abc[2]["px"]
     dir_a = np.sign(a - p5)
     if dir_a == 0:
         return None
-    # B should pull back against A
     if np.sign(b - a) == dir_a:
         return None
-    # C should go in direction of A from B
     if np.sign(c - b) != dir_a:
         return None
 
     return abc
 
+
 def add_elliott_overlay(
     fig: go.Figure,
-    df_disp: pd.DataFrame,
     pivots: list[dict],
     impulse: list[dict] | None,
     abc: list[dict] | None,
     mode: str,
 ):
-    """
-    Draw ZigZag line and optional labels on row=1 price panel.
-    """
     if not pivots:
         return
 
-    # Map timestamps to DateStr for plotly
-    ts_to_datestr = {ts: ds for ts, ds in zip(df_disp.index, df_disp["DateStr"])}
-
-    # ZigZag line
-    x_line = []
-    y_line = []
-    for p in pivots:
-        ds = ts_to_datestr.get(p["ts"])
-        if ds is None:
-            continue
-        x_line.append(ds)
-        y_line.append(p["px"])
+    x_line = [p["ts"] for p in pivots]
+    y_line = [p["px"] for p in pivots]
 
     fig.add_trace(
         go.Scatter(
             x=x_line,
             y=y_line,
             mode="lines",
-            line=dict(width=2, color="black"),
+            line=dict(width=1.6, color="rgba(30,30,30,0.65)"),
             name="ZigZag",
-            opacity=0.65,
+            hoverinfo="skip",
         ),
         row=1,
         col=1,
@@ -328,86 +323,102 @@ def add_elliott_overlay(
     if mode == "ZigZag only (no labels)":
         return
 
-    def _add_label(p: dict, text: str, symbol: str = "circle", size: int = 10):
-        ds = ts_to_datestr.get(p["ts"])
-        if ds is None:
-            return
+    def _add_label(p: dict, text: str, symbol: str = "circle", size: int = 9):
         fig.add_trace(
             go.Scatter(
-                x=[ds],
+                x=[p["ts"]],
                 y=[p["px"]],
                 mode="markers+text",
-                marker=dict(size=size, symbol=symbol, color="black"),
+                marker=dict(size=size, symbol=symbol, color="rgba(20,20,20,0.9)"),
                 text=[text],
                 textposition="top center",
-                name=text,
                 showlegend=False,
+                hovertemplate=f"{text}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
             ),
             row=1,
             col=1,
         )
 
     if impulse:
-        labels = ["0", "1", "2", "3", "4", "5"]
-        for p, lab in zip(impulse, labels):
-            _add_label(p, lab, symbol="circle", size=12)
+        for p, lab in zip(impulse, ["0", "1", "2", "3", "4", "5"]):
+            _add_label(p, lab, symbol="circle", size=10)
 
     if mode == "Impulse only (best fit)":
         return
 
     if abc:
         for p, lab in zip(abc, ["A", "B", "C"]):
-            _add_label(p, lab, symbol="square", size=11)
+            _add_label(p, lab, symbol="square", size=9)
 
-# ── Fetch full history ────────────────────────────────────────────────────
-df_full = get_full_history(ticker, interval)
+
+def add_horizontal_price_line(fig: go.Figure, y: float, label: str, color: str, row: int = 1):
+    fig.add_hline(
+        y=y,
+        line_width=1,
+        line_dash="dot",
+        line_color=color,
+        row=row,
+        col=1,
+        annotation_text=label,
+        annotation_position="top right",
+        annotation_font=dict(color=color, size=11),
+    )
+
+
+# --------------------------- Data Fetch ---------------------------
+df_full = get_full_history(ticker, interval, auto_adjust)
+
 if df_full.empty:
-    st.error("No data returned. Check symbol or internet.")
+    st.error("No data returned. Check the symbol or data source.")
     st.stop()
+
+required_cols = {"Open", "High", "Low", "Close", "Volume"}
+if not required_cols.issubset(set(df_full.columns)):
+    st.error("Returned data is missing one or more required OHLCV columns.")
+    st.stop()
+
+df_full = df_full.copy()
 
 if df_full.index.tz is not None:
     df_full.index = df_full.index.tz_localize(None)
+
 if interval == "1d":
     df_full = df_full[df_full.index.weekday < 5]
+
+df_full = df_full.sort_index()
+df_full = df_full[~df_full.index.duplicated(keep="last")]
 
 CAP_MAX_ROWS = 200000
 if len(df_full) > CAP_MAX_ROWS:
     df_full = df_full.tail(CAP_MAX_ROWS)
 
-# ── Date-based windowing with warmup ──────────────────────────────────────
+# --------------------------- Windowing ---------------------------
 start_dt = start_date_from_period(period)
-BUFFER_YEARS = 50
+buffer_years = 10
+
 if start_dt is not None:
-    warmup_start = start_dt - pd.DateOffset(years=BUFFER_YEARS)
+    warmup_start = start_dt - pd.DateOffset(years=buffer_years)
     df_ind = df_full[df_full.index >= warmup_start].copy()
 else:
     df_ind = df_full.copy()
 
-# ── Indicators ───────────────────────────────────────────────────────────
+# --------------------------- Indicators ---------------------------
 for w in (8, 20, 50, 100, 200):
     df_ind[f"MA{w}"] = df_ind["Close"].rolling(w).mean()
 
-delta = df_ind["Close"].diff()
-gain = delta.clip(lower=0)
-loss = -delta.clip(upper=0)
-avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
-avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
-rs = avg_gain / avg_loss
-df_ind["RSI14"] = 100 - (100 / (1 + rs))
+df_ind["RSI14"] = compute_rsi(df_ind["Close"], 14)
 
-df_ind["EMA12"] = df_ind["Close"].ewm(span=12, adjust=False).mean()
-df_ind["EMA26"] = df_ind["Close"].ewm(span=26, adjust=False).mean()
-df_ind["MACD"] = df_ind["EMA12"] - df_ind["EMA26"]
-df_ind["Signal"] = df_ind["MACD"].ewm(span=9, adjust=False).mean()
-df_ind["Hist"] = df_ind["MACD"] - df_ind["Signal"]
+macd, signal, hist = compute_macd(df_ind["Close"], 12, 26, 9)
+df_ind["MACD"] = macd
+df_ind["Signal"] = signal
+df_ind["Hist"] = hist
 
-bb_window, bb_mult = 20, 2.0
-df_ind["BB_MA"] = df_ind["Close"].rolling(bb_window).mean()
-df_ind["BB_STD"] = df_ind["Close"].rolling(bb_window).std()
-df_ind["BB_UPPER"] = df_ind["BB_MA"] + bb_mult * df_ind["BB_STD"]
-df_ind["BB_LOWER"] = df_ind["BB_MA"] - bb_mult * df_ind["BB_STD"]
+bb_ma, bb_upper, bb_lower = compute_bbands(df_ind["Close"], 20, 2.0)
+df_ind["BB_MA"] = bb_ma
+df_ind["BB_UPPER"] = bb_upper
+df_ind["BB_LOWER"] = bb_lower
 
-# ── Final slice ──────────────────────────────────────────────────────────
+# --------------------------- Display Slice ---------------------------
 if start_dt is not None:
     df_display = df_ind[df_ind.index >= start_dt].copy()
     if df_display.empty:
@@ -415,93 +426,165 @@ if start_dt is not None:
 else:
     df_display = df_ind.copy()
 
-# ── Plotly Interactive Plot ──────────────────────────────────────────────
-df_display["DateStr"] = df_display.index.strftime("%Y-%m-%d")
-available_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) >= w]
-missing_mas = [w for w in (8, 20, 50, 100, 200) if len(df_display) < w]
-if missing_mas:
-    st.warning(
-        "Some MAs may appear choppy due to limited visible data: "
-        + ", ".join(f"MA{w}" for w in missing_mas)
-    )
+if df_display.empty:
+    st.error("No display data available after filtering.")
+    st.stop()
+
+# --------------------------- Panel Setup ---------------------------
+panel_flags = {
+    "volume": show_volume,
+    "rsi": show_rsi,
+    "macd": show_macd,
+}
+active_panels = [k for k, v in panel_flags.items() if v]
+
+row_count = 1 + len(active_panels)
+
+row_heights = [0.72]
+for panel in active_panels:
+    if panel == "volume":
+        row_heights.append(0.12)
+    else:
+        row_heights.append(0.16)
+
+height_map = {1: 700, 2: 820, 3: 940, 4: 1060}
+fig_height = height_map.get(row_count, 1060)
+
+specs = [[{"type": "candlestick"}]]
+for panel in active_panels:
+    if panel == "volume":
+        specs.append([{"type": "bar"}])
+    else:
+        specs.append([{"type": "scatter"}])
 
 fig = make_subplots(
-    rows=4,
+    rows=row_count,
     cols=1,
     shared_xaxes=True,
-    row_heights=[0.60, 0.14, 0.13, 0.13],
-    vertical_spacing=0.04,
-    specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}], [{"type": "scatter"}]],
+    vertical_spacing=0.025,
+    row_heights=row_heights,
+    specs=specs,
 )
 
-# Candlesticks
+row_map = {"price": 1}
+current_row = 2
+for panel in active_panels:
+    row_map[panel] = current_row
+    current_row += 1
+
+# --------------------------- Styling ---------------------------
+COLORS = {
+    "up": "#26A69A",
+    "down": "#EF5350",
+    "ma20": "#2962FF",
+    "ma50": "#7E57C2",
+    "ma200": "#FF9800",
+    "ma8": "#00ACC1",
+    "ma100": "#8D6E63",
+    "bb": "#9E9E9E",
+    "grid": "rgba(120,120,120,0.12)",
+    "text": "#222222",
+    "volume_up": "rgba(38,166,154,0.55)",
+    "volume_down": "rgba(239,83,80,0.55)",
+    "rsi": "#5E35B1",
+    "macd": "#1E88E5",
+    "signal": "#FB8C00",
+    "hist_up": "rgba(38,166,154,0.65)",
+    "hist_down": "rgba(239,83,80,0.65)",
+    "range": "rgba(80,80,80,0.55)",
+    "last": "#1565C0",
+}
+
+# --------------------------- Price Panel ---------------------------
 fig.add_trace(
     go.Candlestick(
-        x=df_display["DateStr"],
+        x=df_display.index,
         open=df_display["Open"],
         high=df_display["High"],
         low=df_display["Low"],
         close=df_display["Close"],
-        increasing_line_color="#43A047",
-        decreasing_line_color="#E53935",
+        increasing_line_color=COLORS["up"],
+        increasing_fillcolor=COLORS["up"],
+        decreasing_line_color=COLORS["down"],
+        decreasing_fillcolor=COLORS["down"],
         name="Price",
+        showlegend=False,
+        hovertemplate=(
+            "Date: %{x|%Y-%m-%d}<br>"
+            "Open: %{open:.2f}<br>"
+            "High: %{high:.2f}<br>"
+            "Low: %{low:.2f}<br>"
+            "Close: %{close:.2f}<extra></extra>"
+        ),
     ),
-    row=1,
+    row=row_map["price"],
     col=1,
 )
+
+# Moving averages
+ma_config = [
+    (20, COLORS["ma20"], True),
+    (50, COLORS["ma50"], True),
+    (200, COLORS["ma200"], True),
+    (8, COLORS["ma8"], show_ma8),
+    (100, COLORS["ma100"], show_ma100),
+]
+
+for w, color, enabled in ma_config:
+    if enabled and f"MA{w}" in df_display.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df_display.index,
+                y=df_display[f"MA{w}"],
+                mode="lines",
+                line=dict(color=color, width=1.5),
+                name=f"MA {w}",
+                hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
+            ),
+            row=row_map["price"],
+            col=1,
+        )
 
 # Bollinger Bands
 if show_bbands:
     fig.add_trace(
         go.Scatter(
-            x=df_display["DateStr"],
+            x=df_display.index,
             y=df_display["BB_UPPER"],
             mode="lines",
-            line=dict(width=1, color="#cfc61f"),
+            line=dict(width=1, color=COLORS["bb"]),
             name="BB Upper",
+            hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
         ),
-        row=1,
+        row=row_map["price"],
         col=1,
     )
     fig.add_trace(
         go.Scatter(
-            x=df_display["DateStr"],
+            x=df_display.index,
             y=df_display["BB_LOWER"],
             mode="lines",
-            line=dict(width=1, color="#cfc61f"),
+            line=dict(width=1, color=COLORS["bb"]),
             fill="tonexty",
-            fillcolor="rgba(250,245,147,0.15)",
+            fillcolor="rgba(158,158,158,0.10)",
             name="BB Lower",
+            hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
         ),
-        row=1,
+        row=row_map["price"],
         col=1,
     )
     fig.add_trace(
         go.Scatter(
-            x=df_display["DateStr"],
+            x=df_display.index,
             y=df_display["BB_MA"],
             mode="lines",
-            line=dict(width=1, color="#faf593", dash="dot"),
+            line=dict(width=1, color="rgba(100,100,100,0.7)", dash="dot"),
             name="BB Mid",
+            hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
         ),
-        row=1,
+        row=row_map["price"],
         col=1,
     )
-
-# Moving Averages
-for w, color in zip(available_mas, ("#7CB342", "#8E44AD", "#1565C0", "#F39C12", "#607D8B")):
-    fig.add_trace(
-        go.Scatter(
-            x=df_display["DateStr"],
-            y=df_display[f"MA{w}"],
-            mode="lines",
-            line=dict(color=color, width=1.3),
-            name=f"MA{w}",
-        ),
-        row=1,
-        col=1,
-    )
-fig.update_yaxes(title_text="Price", row=1, col=1)
 
 # Elliott overlay
 if show_elliott:
@@ -509,134 +592,237 @@ if show_elliott:
     if len(close_for_pivots) >= (pivot_window * 2 + 5):
         pivots_raw = compute_pivots(close_for_pivots, pivot_window)
         pivots = compress_pivots(pivots_raw, min_swing_pct, max_pivots)
-
         impulse, score = find_best_impulse(pivots, elliott_lookback_pivots)
         abc = None
         if elliott_mode == "Impulse + ABC (best fit)" and impulse:
             abc = try_abc_after_impulse(pivots, impulse)
 
-        add_elliott_overlay(fig, df_display, pivots, impulse, abc, elliott_mode)
+        add_elliott_overlay(fig, pivots, impulse, abc, elliott_mode)
 
         with st.sidebar.expander("Elliott diagnostics", expanded=False):
             st.write(f"Pivot count drawn: {len(pivots)}")
-            st.write(f"Best impulse score: {score:.2f}" if impulse else "No valid impulse found in lookback.")
+            st.write(
+                f"Best impulse score: {score:.2f}"
+                if impulse
+                else "No valid impulse found in lookback."
+            )
             if impulse:
                 types = "".join(p["type"] for p in impulse)
                 st.write(f"Impulse pivot pattern: {types}")
             if abc:
                 st.write("ABC found after impulse.")
             elif elliott_mode == "Impulse + ABC (best fit)" and impulse:
-                st.write("ABC not found with the current pivot settings. Try lowering min swing % or pivot sensitivity.")
+                st.write("ABC not found with current settings.")
     else:
-        st.sidebar.warning("Not enough data in the visible window for the Elliott overlay with this pivot sensitivity.")
+        st.sidebar.warning("Not enough visible bars for the Elliott overlay with this pivot sensitivity.")
 
-# Volume
-vol_colors = [
-    "#B0BEC5"
-    if i == 0
-    else ("#43A047" if df_display["Close"].iat[i] > df_display["Close"].iat[i - 1] else "#E53935")
-    for i in range(len(df_display))
-]
-fig.add_trace(
-    go.Bar(
-        x=df_display["DateStr"],
-        y=df_display["Volume"],
-        width=0.4,
-        marker_color=vol_colors,
-        opacity=0.7,
-        name="Volume",
-    ),
-    row=2,
-    col=1,
-)
-fig.update_yaxes(title_text="Volume", row=2, col=1)
+# Last price line
+last_close = float(df_display["Close"].iloc[-1])
+prev_close = float(df_display["Close"].iloc[-2]) if len(df_display) >= 2 else last_close
+chg_pct = ((last_close / prev_close) - 1.0) * 100 if prev_close != 0 else 0.0
 
-# RSI
-fig.add_trace(
-    go.Scatter(
-        x=df_display["DateStr"],
-        y=df_display["RSI14"],
-        mode="lines",
-        line=dict(width=1.5, color="purple"),
-        name="RSI (14)",
-    ),
-    row=3,
-    col=1,
-)
-fig.update_yaxes(range=[0, 100], title_text="RSI", row=3, col=1)
-fig.add_hline(y=80, line_dash="dash", line_color="gray", row=3, col=1)
-fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
+if show_last_price:
+    add_horizontal_price_line(
+        fig,
+        y=last_close,
+        label=f"Last {last_close:,.2f} ({chg_pct:+.2f}%)",
+        color=COLORS["last"],
+        row=row_map["price"],
+    )
 
-# MACD
-hist_colors = ["#43A047" if h > 0 else "#E53935" for h in df_display["Hist"]]
-fig.add_trace(
-    go.Bar(
-        x=df_display["DateStr"],
-        y=df_display["Hist"],
-        marker_color=hist_colors,
-        opacity=0.6,
-        width=0.4,
-        name="MACD Hist",
-    ),
-    row=4,
-    col=1,
-)
-fig.add_trace(
-    go.Scatter(
-        x=df_display["DateStr"],
-        y=df_display["MACD"],
-        mode="lines",
-        line=dict(width=1.5, color="blue"),
-        name="MACD",
-    ),
-    row=4,
-    col=1,
-)
-fig.add_trace(
-    go.Scatter(
-        x=df_display["DateStr"],
-        y=df_display["Signal"],
-        mode="lines",
-        line=dict(width=1.2, color="orange"),
-        name="Signal",
-    ),
-    row=4,
-    col=1,
-)
-fig.update_yaxes(title_text="MACD", row=4, col=1)
+# Visible range high / low
+if show_range_levels:
+    visible_high = float(df_display["High"].max())
+    visible_low = float(df_display["Low"].min())
 
-# Month ticks
-month_starts = df_display.index.to_series().groupby(df_display.index.to_period("M")).first()
-tickvals = month_starts.dt.strftime("%Y-%m-%d").tolist()
-ticktext = month_starts.dt.strftime("%b-%y").tolist()
+    fig.add_hline(
+        y=visible_high,
+        line_width=1,
+        line_dash="dot",
+        line_color=COLORS["range"],
+        row=row_map["price"],
+        col=1,
+        annotation_text=f"Range High {visible_high:,.2f}",
+        annotation_position="top left",
+        annotation_font=dict(color=COLORS["range"], size=10),
+    )
+    fig.add_hline(
+        y=visible_low,
+        line_width=1,
+        line_dash="dot",
+        line_color=COLORS["range"],
+        row=row_map["price"],
+        col=1,
+        annotation_text=f"Range Low {visible_low:,.2f}",
+        annotation_position="bottom left",
+        annotation_font=dict(color=COLORS["range"], size=10),
+    )
+
+# --------------------------- Volume Panel ---------------------------
+if show_volume:
+    vol_colors = []
+    closes = df_display["Close"].values
+    for i in range(len(df_display)):
+        if i == 0:
+            vol_colors.append("rgba(160,160,160,0.45)")
+        else:
+            vol_colors.append(
+                COLORS["volume_up"] if closes[i] >= closes[i - 1] else COLORS["volume_down"]
+            )
+
+    fig.add_trace(
+        go.Bar(
+            x=df_display.index,
+            y=df_display["Volume"],
+            marker_color=vol_colors,
+            name="Volume",
+            hovertemplate="Volume: %{y:,.0f}<extra></extra>",
+            showlegend=False,
+        ),
+        row=row_map["volume"],
+        col=1,
+    )
+
+# --------------------------- RSI Panel ---------------------------
+if show_rsi:
+    fig.add_trace(
+        go.Scatter(
+            x=df_display.index,
+            y=df_display["RSI14"],
+            mode="lines",
+            line=dict(width=1.6, color=COLORS["rsi"]),
+            name="RSI 14",
+            hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
+        ),
+        row=row_map["rsi"],
+        col=1,
+    )
+    fig.add_hline(y=70, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=row_map["rsi"], col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="rgba(120,120,120,0.55)", row=row_map["rsi"], col=1)
+    fig.update_yaxes(range=[0, 100], row=row_map["rsi"], col=1)
+
+# --------------------------- MACD Panel ---------------------------
+if show_macd:
+    hist_colors = [
+        COLORS["hist_up"] if h >= 0 else COLORS["hist_down"]
+        for h in df_display["Hist"].fillna(0.0)
+    ]
+    fig.add_trace(
+        go.Bar(
+            x=df_display.index,
+            y=df_display["Hist"],
+            marker_color=hist_colors,
+            name="MACD Hist",
+            hovertemplate="Hist: %{y:.2f}<extra></extra>",
+            showlegend=False,
+        ),
+        row=row_map["macd"],
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df_display.index,
+            y=df_display["MACD"],
+            mode="lines",
+            line=dict(width=1.5, color=COLORS["macd"]),
+            name="MACD",
+            hovertemplate="MACD: %{y:.2f}<extra></extra>",
+        ),
+        row=row_map["macd"],
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df_display.index,
+            y=df_display["Signal"],
+            mode="lines",
+            line=dict(width=1.3, color=COLORS["signal"]),
+            name="Signal",
+            hovertemplate="Signal: %{y:.2f}<extra></extra>",
+        ),
+        row=row_map["macd"],
+        col=1,
+    )
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(120,120,120,0.25)", row=row_map["macd"], col=1)
+
+# --------------------------- Axes / Layout ---------------------------
+for r in range(1, row_count + 1):
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        zeroline=False,
+        showline=False,
+        fixedrange=False,
+        row=r,
+        col=1,
+    )
+
 fig.update_xaxes(
-    type="category",
-    tickmode="array",
-    tickvals=tickvals,
-    ticktext=ticktext,
-    tickangle=-45,
+    type="date",
     showgrid=True,
-    gridwidth=0.5,
-    gridcolor="#e1e5ed",
+    gridcolor=COLORS["grid"],
+    showline=False,
+    rangeslider_visible=False,
+    rangebreaks=[dict(bounds=["sat", "mon"])] if interval == "1d" else [],
+    tickformat="%b '%y" if interval in ["1wk", "1mo"] else "%b %d\n%Y",
 )
+
+title_parts = [f"{ticker}"]
+if auto_adjust:
+    title_parts.append("Adjusted")
+title_parts.append("Technical Chart")
 
 fig.update_layout(
-    height=950,
+    height=fig_height,
     title=dict(
-        text=f"{ticker} - OHLC + RSI & MACD"
-        + (" + Bollinger Bands" if show_bbands else "")
-        + (" + Elliott Overlay" if show_elliott else ""),
-        x=0.5,
+        text=" | ".join(title_parts),
+        x=0.01,
+        xanchor="left",
+        font=dict(size=22, color=COLORS["text"]),
     ),
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=60, r=20, t=60, b=40),
-    xaxis=dict(rangeslider_visible=False, showline=True, linewidth=1, linecolor="black"),
-    legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center"),
-    font=dict(family="Arial, sans-serif", size=12),
+    margin=dict(l=40, r=20, t=55, b=25),
+    font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
+    legend=dict(
+        orientation="h",
+        y=1.01,
+        x=0.0,
+        xanchor="left",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.80)",
+        borderwidth=0,
+        font=dict(size=11),
+    ),
+    bargap=0.05,
 )
 
-st.plotly_chart(fig, use_container_width=True)
+# Panel labels
+fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
+if show_volume:
+    fig.update_yaxes(title_text="Vol", row=row_map["volume"], col=1)
+if show_rsi:
+    fig.update_yaxes(title_text="RSI", row=row_map["rsi"], col=1)
+if show_macd:
+    fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
+
+# --------------------------- Header Metrics ---------------------------
+last_open = float(df_display["Open"].iloc[-1])
+last_high = float(df_display["High"].iloc[-1])
+last_low = float(df_display["Low"].iloc[-1])
+last_volume = float(df_display["Volume"].iloc[-1]) if "Volume" in df_display.columns else np.nan
+period_return = ((last_close / float(df_display["Close"].iloc[0])) - 1.0) * 100 if len(df_display) > 1 else 0.0
+
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Last", f"{last_close:,.2f}")
+c2.metric("Day %", f"{chg_pct:+.2f}%")
+c3.metric("Period %", f"{period_return:+.2f}%")
+c4.metric("High", f"{last_high:,.2f}")
+c5.metric("Low", f"{last_low:,.2f}")
+c6.metric("Volume", f"{last_volume:,.0f}" if pd.notna(last_volume) else "N/A")
+
+# --------------------------- Render ---------------------------
+st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
 st.caption("© 2026 AD Fund Management LP")
