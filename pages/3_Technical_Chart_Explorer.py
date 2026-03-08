@@ -627,10 +627,11 @@ for w, color, enabled in ma_config:
                 x=df_display.index,
                 y=df_display[f"MA{w}"],
                 mode="lines",
-                line=dict(color=color, width=1.8),
-                name=f"MA {w}",
+                line=dict(color=color, width=1.6),
+                name=f"_ma_real_{w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
                 showlegend=False,
+                legendgroup=None,
             ),
             row=row_map["price"],
             col=1,
@@ -896,20 +897,55 @@ fig.update_layout(
     hovermode="x unified",
     margin=dict(l=40, r=20, t=20, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
-    showlegend=False,
+    showlegend=True,
+    legend=dict(
+        orientation="h",
+        y=1.02,
+        x=0.0,
+        xanchor="left",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.85)",
+        borderwidth=0,
+        font=dict(size=11),
+        traceorder="normal",
+        itemclick=False,
+        itemdoubleclick=False,
+    ),
     bargap=0.08,
+)
 )
 
 # --------------------------- Custom In-Chart MA Legend ---------------------------
-add_custom_ma_legend(fig, legend_items)
+# --------------------------- Legend (ultimate fix) ---------------------------
+# 1) Force every real trace out of the legend
+for trace in fig.data:
+    trace.showlegend = False
+    trace.legendgroup = None
 
-fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
-if show_volume:
-    fig.update_yaxes(title_text="Vol", row=row_map["volume"], col=1)
-if show_rsi:
-    fig.update_yaxes(title_text="RSI", row=row_map["rsi"], col=1)
-if show_macd:
-    fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
+# 2) Add legend-only dummy traces for MAs
+legend_specs = [
+    ("MA 8", COLORS["ma8"], show_ma8),
+    ("MA 20", COLORS["ma20"], True),
+    ("MA 50", COLORS["ma50"], True),
+    ("MA 100", COLORS["ma100"], show_ma100),
+    ("MA 200", COLORS["ma200"], True),
+]
+
+for label, color, enabled in legend_specs:
+    if enabled:
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                line=dict(color=color, width=3),
+                name=label,
+                showlegend=True,
+                hoverinfo="skip",
+            ),
+            row=row_map["price"],
+            col=1,
+        )
 
 # --------------------------- Render ---------------------------
 st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
