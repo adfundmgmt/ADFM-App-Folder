@@ -51,7 +51,7 @@ def as_naive_ts(dt: datetime) -> pd.Timestamp:
 
 def ytd_days(as_of: datetime) -> int:
     start_ytd = TZ.localize(datetime(as_of.year, 1, 1))
-    return (as_of - start_ytd).days
+    return max((as_of - start_ytd).days, 1)
 
 
 as_of_dt = now_et()
@@ -207,7 +207,7 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         pass
     df.index = idx
-    return df.dropna(subset=["Close"])
+    return df.dropna(subset=["Close"]).sort_index()
 
 
 def _calc_start_date(days: int, as_of: datetime) -> date:
@@ -217,7 +217,7 @@ def _calc_start_date(days: int, as_of: datetime) -> date:
 
 def _last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
     ts = pd.Timestamp(on_or_before).normalize()
-    wd = ts.weekday()  # Mon=0 ... Sun=6
+    wd = ts.weekday()
     days_back = wd - 4 if wd >= 4 else wd + 3
     return ts - pd.Timedelta(days=int(days_back))
 
@@ -275,7 +275,7 @@ def fetch_one_shares_series_cached(ticker: str, start_date: date) -> pd.Series:
     except Exception:
         pass
     s.index = idx
-    return s.dropna()
+    return s.dropna().sort_index()
 
 
 @st.cache_data(show_spinner=False, ttl=900)
@@ -441,10 +441,10 @@ def slice_px_for_week(px: pd.DataFrame, view: str, as_of_ts: pd.Timestamp) -> pd
 
 # --------------------------- MAIN ---------------------------
 st.title("ETF Net Flows")
-st.caption(f"Estimated net creations/redemptions over: {period_label}.")
 
 df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
 
+st.markdown(f"**Lookback:** {period_label}")
 st.markdown("### Net Flows Snapshot")
 
 bar_view = st.radio(
@@ -472,10 +472,8 @@ if bar_view != "Lookback total":
         wk_start = _week_start_monday(wk_end)
     st.caption(f"{bar_view} window: {wk_start.date()} to {wk_end.date()} (week ends Friday)")
 
-# For proxy weekly we need OHLCV for the weekly window
 weekly_price_map: Dict[str, pd.DataFrame] = {}
 if bar_view != "Lookback total" and include_proxy_weekly:
-    # pull enough to cover last week + current week
     weekly_start = (as_of_ts - pd.Timedelta(days=21)).date()
     weekly_price_map = fetch_prices(tuple(etf_tickers), weekly_start, as_of_date)
 
@@ -556,15 +554,23 @@ else:
             x_text, ha = x - text_pad, "right"
         else:
             x_text, ha = 0.0, "center"
-        ax.text(x_text, bar.get_y() + bar.get_height() / 2, label_txt,
-                va="center", ha=ha, fontsize=10, color="black", clip_on=True)
+        ax.text(
+            x_text,
+            bar.get_y() + bar.get_height() / 2,
+            label_txt,
+            va="center",
+            ha=ha,
+            fontsize=10,
+            color="black",
+            clip_on=True,
+        )
 
     fig.tight_layout(pad=0.6)
     st.pyplot(fig)
     plt.close(fig)
 
 # ================================================================
-# TOP INFLOWS / OUTFLOWS (lookback total, same as original behavior)
+# TOP INFLOWS / OUTFLOWS
 # ================================================================
 st.markdown("---")
 st.markdown("#### Top Inflows and Outflows")
