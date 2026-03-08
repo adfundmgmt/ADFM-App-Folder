@@ -391,50 +391,11 @@ def build_rangebreaks(index: pd.DatetimeIndex, intrvl: str) -> list[dict]:
     missing_bdays = full_bdays.difference(normalized)
 
     rangebreaks = [dict(bounds=["sat", "mon"])]
+
     if len(missing_bdays) > 0:
         rangebreaks.append(dict(values=missing_bdays.strftime("%Y-%m-%d").tolist()))
+
     return rangebreaks
-
-
-def add_custom_ma_legend(fig: go.Figure, items: list[tuple[str, str]]):
-    """
-    Draw a custom legend inside the chart using paper coordinates.
-    items: list of (label, color)
-    """
-    if not items:
-        return
-
-    x = 0.012
-    y = 0.988
-    line_len = 0.02
-    gap_after_line = 0.004
-    gap_between_items = 0.012
-
-    for label, color in items:
-        fig.add_shape(
-            type="line",
-            xref="paper",
-            yref="paper",
-            x0=x,
-            x1=x + line_len,
-            y0=y,
-            y1=y,
-            line=dict(color=color, width=3),
-        )
-        fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=x + line_len + gap_after_line,
-            y=y,
-            text=label,
-            showarrow=False,
-            xanchor="left",
-            yanchor="middle",
-            font=dict(size=11, color="#222222"),
-            bgcolor="rgba(255,255,255,0.0)",
-        )
-        est_text_width = 0.0065 * len(label)
-        x += line_len + gap_after_line + est_text_width + gap_between_items
 
 
 # --------------------------- Data Fetch ---------------------------
@@ -618,8 +579,6 @@ ma_config = [
     (200, COLORS["ma200"], True),
 ]
 
-legend_items = []
-
 for w, color, enabled in ma_config:
     if enabled and f"MA{w}" in df_display.columns:
         fig.add_trace(
@@ -636,7 +595,6 @@ for w, color, enabled in ma_config:
             row=row_map["price"],
             col=1,
         )
-        legend_items.append((f"MA {w}", color))
 
 if show_bbands:
     fig.add_trace(
@@ -913,16 +871,12 @@ fig.update_layout(
     ),
     bargap=0.08,
 )
-)
 
-# --------------------------- Custom In-Chart MA Legend ---------------------------
-# --------------------------- Legend (ultimate fix) ---------------------------
-# 1) Force every real trace out of the legend
+# --------------------------- Legend Fix ---------------------------
 for trace in fig.data:
     trace.showlegend = False
     trace.legendgroup = None
 
-# 2) Add legend-only dummy traces for MAs
 legend_specs = [
     ("MA 8", COLORS["ma8"], show_ma8),
     ("MA 20", COLORS["ma20"], True),
@@ -946,6 +900,14 @@ for label, color, enabled in legend_specs:
             row=row_map["price"],
             col=1,
         )
+
+fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
+if show_volume:
+    fig.update_yaxes(title_text="Vol", row=row_map["volume"], col=1)
+if show_rsi:
+    fig.update_yaxes(title_text="RSI", row=row_map["rsi"], col=1)
+if show_macd:
+    fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
 
 # --------------------------- Render ---------------------------
 st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
