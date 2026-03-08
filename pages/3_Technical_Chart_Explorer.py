@@ -98,7 +98,7 @@ def compute_rsi(close: pd.Series, length: int = 14) -> pd.Series:
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(alpha=1 / length, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / length, adjust=False).mean()
-    rs = avg_gain / avg_loss
+    rs = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
 
@@ -315,8 +315,8 @@ def add_elliott_overlay(
             line=dict(width=1.6, color="rgba(30,30,30,0.65)"),
             name="ZigZag",
             hoverinfo="skip",
-            showlegend=True,
-            legendgroup="price_overlays",
+            showlegend=False,
+            legendgroup="non_ma",
         ),
         row=1,
         col=1,
@@ -591,7 +591,7 @@ for w, color, enabled in ma_config:
                 name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
                 showlegend=True,
-                legendgroup="price_overlays",
+                legendgroup="ma_only",
             ),
             row=row_map["price"],
             col=1,
@@ -606,8 +606,8 @@ if show_bbands:
             line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
             name="BB Upper",
             hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
-            showlegend=True,
-            legendgroup="price_overlays",
+            showlegend=False,
+            legendgroup="non_ma",
         ),
         row=row_map["price"],
         col=1,
@@ -622,8 +622,8 @@ if show_bbands:
             fillcolor="rgba(158,158,158,0.10)",
             name="BB Lower",
             hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
-            showlegend=True,
-            legendgroup="price_overlays",
+            showlegend=False,
+            legendgroup="non_ma",
         ),
         row=row_map["price"],
         col=1,
@@ -636,8 +636,8 @@ if show_bbands:
             line=dict(width=1.0, color="rgba(100,100,100,0.7)", dash="dot"),
             name="BB Mid",
             hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
-            showlegend=True,
-            legendgroup="price_overlays",
+            showlegend=False,
+            legendgroup="non_ma",
         ),
         row=row_map["price"],
         col=1,
@@ -873,9 +873,22 @@ fig.update_layout(
     bargap=0.08,
 )
 
+# --------------------------- Hard Legend Cleanup ---------------------------
+# Only MA traces are allowed in the legend. Everything else is forced off.
+allowed_legend_names = {"MA 8", "MA 20", "MA 50", "MA 100", "MA 200"}
+
 for trace in fig.data:
-    trace_name = getattr(trace, "name", None)
-    if trace.showlegend and (trace_name is None or str(trace_name).strip().lower() in {"", "undefined", "none"}):
+    trace_name = str(getattr(trace, "name", "") or "").strip()
+
+    if trace_name not in allowed_legend_names:
+        trace.showlegend = False
+    else:
+        trace.showlegend = True
+
+    if trace_name.lower() in {"", "undefined", "none", "price", "volume"}:
+        trace.showlegend = False
+
+    if getattr(trace, "type", "") in {"candlestick", "ohlc", "bar"} and trace_name not in allowed_legend_names:
         trace.showlegend = False
 
 fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
