@@ -1,1124 +1,1014 @@
 # streamlit_app.py
-# Unusual Options Flow Tracker
-# Hardened build with graceful degradation, partial-result retention, and batch scanning
+# ADFM | Unusual Options Flow Tracker
+# Full-universe S&P 500 options scanner using public Yahoo chain data
+# Closest public-data approximation of a tape-first unusual flow workflow
 
 import os
-import io
-import glob
+import re
 import math
 import time
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Tuple, Dict
+import json
+import queue
+import pickle
+import requests
+import warnings
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+import plotly.express as px
+import plotly.graph_objects as go
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# -----------------------------------------------------------------------------
+# Page config
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="Unusual Options Flow Tracker",
+    layout="wide",
+)
 
 APP_TITLE = "Unusual Options Flow Tracker"
-DATA_DIR = "data"
-INGEST_DIR = "ingest"
-SCAN_CACHE_BASENAME = "last_good_scan"
+APP_SUBTITLE = (
+    "Full S&P 500 scan every run. All symbols. All expiries that Yahoo returns. "
+    "Built to approximate a tape-first unusual-flow workflow with public data."
+)
 
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(INGEST_DIR, exist_ok=True)
+# -----------------------------------------------------------------------------
+# Style
+# -----------------------------------------------------------------------------
+CUSTOM_CSS = """
+<style>
+    .block-container {padding-top: 1.0rem; padding-bottom: 1.5rem; max-width: 1600px;}
+    h1, h2, h3 {font-weight: 700; letter-spacing: 0.1px;}
+    .stMetric {background: #fafafa; border: 1px solid #ececec; border-radius: 14px; padding: 10px 14px;}
+    .stDataFrame, .stPlotlyChart {border-radius: 14px;}
+    div[data-testid="stSidebarContent"] {padding-top: 0.6rem;}
+    .small-note {color: #6b7280; font-size: 0.88rem; line-height: 1.4;}
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
+st.caption(APP_SUBTITLE)
 
 # -----------------------------------------------------------------------------
-# File helpers
+# Constants
 # -----------------------------------------------------------------------------
-def _safe_write_table(df: pd.DataFrame, path_no_ext: str) -> str:
-    parquet_path = f"{path_no_ext}.parquet"
-    csv_path = f"{path_no_ext}.csv"
+CACHE_DIR = Path(".uw_cache")
+CACHE_DIR.mkdir(exist_ok=True)
+
+SP500_LIST_CACHE = CACHE_DIR / "sp500_symbols.pkl"
+LAST_GOOD_SCAN = CACHE_DIR / "last_good_flow.pkl"
+LAST_GOOD_META = CACHE_DIR / "last_good_meta.json"
+
+WIKI_SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+DATAHUB_SP500_URL = "https://pkgstore.datahub.io/core/s-and-p-500-companies/constituents_csv/data/constituents_csv.csv"
+
+DEFAULT_MIN_PREMIUM = 25_000.0
+DEFAULT_MIN_VOLUME = 50
+DEFAULT_MIN_VOL_OI = 1.0
+DEFAULT_MAX_SPREAD_PCT = 35.0
+DEFAULT_TOP_N = 200
+DEFAULT_MAX_WORKERS = 24
+DEFAULT_DTE_MIN = 0
+DEFAULT_DTE_MAX = 365
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+def human_money(x: float) -> str:
+    x = 0.0 if pd.isna(x) else float(x)
+    abs_x = abs(x)
+    if abs_x >= 1_000_000_000:
+        return f"${x/1_000_000_000:.2f}B"
+    if abs_x >= 1_000_000:
+        return f"${x/1_000_000:.2f}M"
+    if abs_x >= 1_000:
+        return f"${x/1_000:.1f}K"
+    return f"${x:,.0f}"
+
+def human_num(x: float) -> str:
+    x = 0.0 if pd.isna(x) else float(x)
+    abs_x = abs(x)
+    if abs_x >= 1_000_000_000:
+        return f"{x/1_000_000_000:.2f}B"
+    if abs_x >= 1_000_000:
+        return f"{x/1_000_000:.2f}M"
+    if abs_x >= 1_000:
+        return f"{x/1_000:.1f}K"
+    return f"{x:,.0f}"
+
+def to_yahoo_symbol(symbol: str) -> str:
+    # Yahoo uses hyphens for dot-class shares
+    return symbol.replace(".", "-").strip().upper()
+
+def midpoint(bid: float, ask: float) -> float:
+    bid = 0.0 if pd.isna(bid) else float(bid)
+    ask = 0.0 if pd.isna(ask) else float(ask)
+    if bid > 0 and ask > 0:
+        return (bid + ask) / 2.0
+    if ask > 0:
+        return ask
+    if bid > 0:
+        return bid
+    return 0.0
+
+def estimate_fill_price(last_price: float, bid: float, ask: float) -> float:
+    lp = 0.0 if pd.isna(last_price) else float(last_price)
+    bid = 0.0 if pd.isna(bid) else float(bid)
+    ask = 0.0 if pd.isna(ask) else float(ask)
+    mid = midpoint(bid, ask)
+
+    if lp > 0:
+        return lp
+    if mid > 0:
+        return mid
+    if ask > 0:
+        return ask
+    if bid > 0:
+        return bid
+    return 0.0
+
+def classify_side(fill: float, bid: float, ask: float) -> str:
+    bid = 0.0 if pd.isna(bid) else float(bid)
+    ask = 0.0 if pd.isna(ask) else float(ask)
+    fill = 0.0 if pd.isna(fill) else float(fill)
+
+    if bid <= 0 and ask <= 0:
+        return "UNKNOWN"
+    if ask <= 0:
+        return "BID"
+    if bid <= 0:
+        return "ASK"
+
+    spread = ask - bid
+    if spread <= 0:
+        return "MID"
+
+    near_bid = abs(fill - bid)
+    near_ask = abs(fill - ask)
+    tol = max(spread * 0.2, 0.02)
+
+    if near_ask <= tol and near_ask <= near_bid:
+        return "ASK"
+    if near_bid <= tol and near_bid < near_ask:
+        return "BID"
+    return "MID"
+
+def classify_direction(option_type: str, side: str) -> str:
+    option_type = option_type.upper()
+    side = side.upper()
+    if option_type == "CALL":
+        if side in ("ASK", "MID"):
+            return "BULLISH"
+        if side == "BID":
+            return "BEARISH"
+    if option_type == "PUT":
+        if side == "BID":
+            return "BULLISH"
+        if side in ("ASK", "MID"):
+            return "BEARISH"
+    return "NEUTRAL"
+
+def safe_float(x, default=0.0) -> float:
     try:
-        df.to_parquet(parquet_path, index=False)
-        return parquet_path
+        if pd.isna(x):
+            return float(default)
+        return float(x)
     except Exception:
-        df.to_csv(csv_path, index=False)
-        return csv_path
+        return float(default)
 
-
-def _safe_read_table(path: str) -> pd.DataFrame:
+def load_pickle(path: Path):
+    if not path.exists():
+        return None
     try:
-        if path.endswith(".parquet"):
-            return pd.read_parquet(path)
-        return pd.read_csv(path)
+        with open(path, "rb") as f:
+            return pickle.load(f)
     except Exception:
-        return pd.DataFrame()
+        return None
 
+def save_pickle(obj, path: Path):
+    try:
+        with open(path, "wb") as f:
+            pickle.dump(obj, f)
+    except Exception:
+        pass
 
-def list_snapshot_files() -> List[str]:
-    parquet_files = glob.glob(os.path.join(DATA_DIR, "options_snapshot_*.parquet"))
-    csv_files = glob.glob(os.path.join(DATA_DIR, "options_snapshot_*.csv"))
-    return sorted(parquet_files + csv_files)
+def save_json(obj: dict, path: Path):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
-
-def save_snapshot(df: pd.DataFrame) -> str:
-    tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = os.path.join(DATA_DIR, f"options_snapshot_{tag}")
-    return _safe_write_table(df, base)
-
-
-def load_latest_snapshot() -> pd.DataFrame:
-    files = list_snapshot_files()
-    if not files:
-        return pd.DataFrame()
-    return _safe_read_table(files[-1])
-
-
-def save_last_good_scan(df: pd.DataFrame) -> str:
-    base = os.path.join(DATA_DIR, SCAN_CACHE_BASENAME)
-    return _safe_write_table(df, base)
-
-
-def load_last_good_scan() -> pd.DataFrame:
-    parquet_path = os.path.join(DATA_DIR, f"{SCAN_CACHE_BASENAME}.parquet")
-    csv_path = os.path.join(DATA_DIR, f"{SCAN_CACHE_BASENAME}.csv")
-    if os.path.exists(parquet_path):
-        return _safe_read_table(parquet_path)
-    if os.path.exists(csv_path):
-        return _safe_read_table(csv_path)
-    return pd.DataFrame()
-
-
-def load_history(max_files: int = 80) -> pd.DataFrame:
-    files = list_snapshot_files()
-    if not files:
-        return pd.DataFrame()
-
-    files = files[-max_files:]
-    out = []
-    for f in files:
-        df = _safe_read_table(f)
-        if df.empty:
-            continue
-        tag = os.path.splitext(os.path.basename(f))[0].replace("options_snapshot_", "")
-        df["snapshot_date"] = tag
-        out.append(df)
-
-    if not out:
-        return pd.DataFrame()
-
-    hist = pd.concat(out, ignore_index=True)
-    needed = [
-        "ticker", "contractSymbol", "side", "expiration", "strike",
-        "underlying_price", "volume", "openInterest", "vol_oi",
-        "impliedVolatility", "delta", "moneyness", "notional_usd",
-        "premium_usd", "ttm_years"
-    ]
-    for c in needed:
-        if c not in hist.columns:
-            hist[c] = np.nan
-
-    hist["expiration"] = pd.to_datetime(hist["expiration"], errors="coerce")
-    hist["DTE"] = np.floor(pd.to_numeric(hist["ttm_years"], errors="coerce") * 365.0)
-    hist["moneyness_band"] = hist["moneyness"].apply(moneyness_band_from_ratio)
-    hist["dte_band"] = hist["DTE"].apply(dte_band_from_days)
-    return hist
-
+def load_json(path: Path):
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 # -----------------------------------------------------------------------------
-# Universe helpers
+# Universe
 # -----------------------------------------------------------------------------
-LIQUID_FALLBACK_UNIVERSE = [
-    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AMD","AVGO","NFLX",
-    "SPY","QQQ","IWM","DIA","XLF","SMH","TLT","GLD","SLV","XLE",
-    "JPM","BAC","GS","MS","WMT","COST","HD","UNH","LLY","XOM",
-    "CVX","ORCL","CRM","INTC","MU","SHOP","PLTR","UBER","PANW","ADBE"
-]
-
-
-def _normalize_symbols(symbols: List[str]) -> List[str]:
-    out = []
-    seen = set()
-    for s in symbols:
-        if not isinstance(s, str):
-            continue
-        x = s.replace(".", "-").upper().strip()
-        if not x or x in seen:
-            continue
-        seen.add(x)
-        out.append(x)
-    return out
-
-
 @st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
-def get_sp500_symbols() -> List[str]:
+def fetch_sp500_symbols() -> pd.DataFrame:
+    """
+    Robust S&P 500 constituent fetch with multi-source fallbacks.
+    Returns columns: Symbol, Security, GICS Sector, GICS Sub-Industry
+    """
+    frames = []
+
+    # Wikipedia
     try:
-        import requests
-        r = requests.get(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        tables = pd.read_html(r.text)
-        for t in tables:
-            cols = [str(c).strip().lower() for c in t.columns]
-            if "symbol" in cols:
-                colname = t.columns[cols.index("symbol")]
-                syms = _normalize_symbols(t[colname].astype(str).tolist())
-                if syms:
-                    return syms
+        tables = pd.read_html(WIKI_SP500_URL)
+        if tables:
+            df = tables[0].copy()
+            if "Symbol" in df.columns:
+                keep_cols = [c for c in ["Symbol", "Security", "GICS Sector", "GICS Sub-Industry"] if c in df.columns]
+                df = df[keep_cols].copy()
+                frames.append(df)
     except Exception:
         pass
 
+    # DataHub fallback
     try:
-        import requests
-        url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        df = pd.read_csv(io.StringIO(r.text))
-        for c in df.columns:
-            if str(c).strip().lower() in ("symbol", "ticker"):
-                syms = _normalize_symbols(df[c].astype(str).tolist())
-                if syms:
-                    return syms
+        df2 = pd.read_csv(DATAHUB_SP500_URL)
+        rename_map = {
+            "Symbol": "Symbol",
+            "Name": "Security",
+            "Sector": "GICS Sector",
+            "Sub-Industry": "GICS Sub-Industry",
+        }
+        cols = [c for c in rename_map if c in df2.columns]
+        if cols:
+            df2 = df2[cols].rename(columns=rename_map).copy()
+            frames.append(df2)
     except Exception:
         pass
 
-    try:
-        local = os.path.join(INGEST_DIR, "sp500_symbols.csv")
-        if os.path.exists(local):
-            df = pd.read_csv(local)
-            for c in df.columns:
-                if str(c).strip().lower() in ("symbol", "ticker"):
-                    syms = _normalize_symbols(df[c].astype(str).tolist())
-                    if syms:
-                        return syms
-    except Exception:
-        pass
+    for df in frames:
+        if not df.empty and "Symbol" in df.columns:
+            df["Symbol"] = df["Symbol"].astype(str).str.upper().str.strip()
+            df["YahooSymbol"] = df["Symbol"].map(to_yahoo_symbol)
+            df = df.drop_duplicates(subset=["YahooSymbol"]).reset_index(drop=True)
+            return df
 
-    return _normalize_symbols(LIQUID_FALLBACK_UNIVERSE)
-
+    raise RuntimeError("Unable to fetch S&P 500 constituents from public sources.")
 
 # -----------------------------------------------------------------------------
-# Math helpers
+# Market snapshot
 # -----------------------------------------------------------------------------
-def norm_cdf(x: float) -> float:
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+@st.cache_data(ttl=15 * 60, show_spinner=False)
+def fetch_spot_snapshot(symbols: List[str]) -> pd.DataFrame:
+    """
+    Batch price/volume snapshot for the full universe.
+    """
+    data = yf.download(
+        tickers=symbols,
+        period="10d",
+        interval="1d",
+        auto_adjust=False,
+        progress=False,
+        threads=True,
+        group_by="ticker",
+    )
 
+    rows = []
+    if data is None or len(data) == 0:
+        return pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume"])
 
-def bs_delta_scalar(S: float, K: float, T: float, r: float, q: float, iv: float, is_call: bool) -> float:
-    try:
-        if any(pd.isna(v) for v in [S, K, T, r, q, iv]):
-            return np.nan
-        if T <= 0 or iv <= 0 or S <= 0 or K <= 0:
-            return np.nan
-        d1 = (math.log(S / K) + (r - q + 0.5 * iv * iv) * T) / (iv * math.sqrt(T))
-        if is_call:
-            return math.exp(-q * T) * norm_cdf(d1)
-        return math.exp(-q * T) * (norm_cdf(d1) - 1.0)
-    except Exception:
-        return np.nan
+    multi = isinstance(data.columns, pd.MultiIndex)
 
-
-def compute_vol_oi(volume: pd.Series, open_interest: pd.Series) -> pd.Series:
-    vol = pd.to_numeric(volume, errors="coerce")
-    oi = pd.to_numeric(open_interest, errors="coerce")
-    out = vol / oi
-    out = out.where(oi > 0, np.nan)
-    return out
-
-
-def safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
-    out = a / b
-    return out.replace([np.inf, -np.inf], np.nan)
-
-
-def moneyness_band_from_ratio(m: float) -> str:
-    try:
-        d = abs(float(m) - 1.0)
-    except Exception:
-        return "unknown"
-    if d <= 0.05:
-        return "ATM"
-    if d <= 0.10:
-        return "Near-OTM"
-    if d <= 0.20:
-        return "OTM"
-    return "Deep-OTM"
-
-
-def dte_band_from_days(d: float) -> str:
-    try:
-        x = float(d)
-    except Exception:
-        return "unknown"
-    if x <= 7:
-        return "0-7d"
-    if x <= 30:
-        return "8-30d"
-    if x <= 90:
-        return "31-90d"
-    return ">90d"
-
-
-# -----------------------------------------------------------------------------
-# Option-chain fetch
-# -----------------------------------------------------------------------------
-def get_spot_price(tk: yf.Ticker) -> float:
-    try:
-        fi = getattr(tk, "fast_info", {}) or {}
-        spot = fi.get("last_price")
-        if spot is not None and pd.notna(spot):
-            return float(spot)
-    except Exception:
-        pass
-
-    try:
-        info = getattr(tk, "info", {}) or {}
-        spot = info.get("regularMarketPrice")
-        if spot is not None and pd.notna(spot):
-            return float(spot)
-    except Exception:
-        pass
-
-    try:
-        hist = tk.history(period="5d", auto_adjust=False)
-        if not hist.empty:
-            return float(hist["Close"].dropna().iloc[-1])
-    except Exception:
-        pass
-
-    return np.nan
-
-
-def fetch_chain_raw(ticker: str, max_expiries: int) -> Tuple[pd.DataFrame, float, str]:
-    try:
-        tk = yf.Ticker(ticker)
-        spot = get_spot_price(tk)
-
+    for sym in symbols:
         try:
-            expirations = list(tk.options or [])
-        except Exception:
-            expirations = []
+            if multi:
+                if sym not in data.columns.get_level_values(0):
+                    continue
+                sub = data[sym].copy()
+            else:
+                sub = data.copy()
 
-        if not expirations:
-            return pd.DataFrame(), spot, "no_expirations"
-
-        rows = []
-        for exp in expirations[:max_expiries]:
-            try:
-                oc = tk.option_chain(exp)
-                for side, df in (("call", oc.calls), ("put", oc.puts)):
-                    if df is None or df.empty:
-                        continue
-                    tmp = df.copy()
-                    tmp["ticker"] = ticker
-                    tmp["side"] = side
-                    tmp["expiration"] = pd.to_datetime(exp)
-                    rows.append(tmp)
-            except Exception:
+            sub = sub.dropna(how="all")
+            if sub.empty or "Close" not in sub.columns:
                 continue
 
-        if not rows:
-            return pd.DataFrame(), spot, "empty_chain"
+            close = sub["Close"].dropna()
+            vol = sub["Volume"].dropna() if "Volume" in sub.columns else pd.Series(dtype=float)
 
-        return pd.concat(rows, ignore_index=True), spot, ""
-    except Exception as e:
-        return pd.DataFrame(), np.nan, str(e)
+            if close.empty:
+                continue
 
+            spot = float(close.iloc[-1])
+            prev_close = float(close.iloc[-2]) if len(close) >= 2 else spot
+            avg_20d_vol = float(vol.tail(20).mean()) if len(vol) > 0 else np.nan
+            day_volume = float(vol.iloc[-1]) if len(vol) > 0 else np.nan
 
-def enrich_chain(df: pd.DataFrame, spot: float, r: float, q: float) -> pd.DataFrame:
+            rows.append(
+                {
+                    "symbol": sym,
+                    "spot": spot,
+                    "prev_close": prev_close,
+                    "avg_20d_vol": avg_20d_vol,
+                    "day_volume": day_volume,
+                }
+            )
+        except Exception:
+            continue
+
+    return pd.DataFrame(rows)
+
+# -----------------------------------------------------------------------------
+# Scoring
+# -----------------------------------------------------------------------------
+def compute_unusual_score(
+    premium: float,
+    volume: float,
+    open_interest: float,
+    spread_pct: float,
+    pct_otm: float,
+    dte: int,
+    side: str,
+) -> float:
+    """
+    Cross-contract heuristic score from 0 to 100.
+    """
+    premium = max(0.0, float(premium))
+    volume = max(0.0, float(volume))
+    open_interest = max(0.0, float(open_interest))
+    spread_pct = max(0.0, float(spread_pct))
+    pct_otm = max(0.0, float(pct_otm))
+    dte = max(0, int(dte))
+
+    premium_score = min(math.log10(premium + 1.0) / 6.5, 1.0)
+    abs_size_score = min(volume / 2000.0, 1.0)
+    voi_score = min((volume / max(open_interest, 1.0)) / 5.0, 1.0)
+    otm_score = min(pct_otm / 0.12, 1.0)
+    dte_score = 1.0 if dte <= 45 else max(0.2, 1.0 - ((dte - 45) / 365.0))
+    spread_penalty = min(spread_pct / 100.0, 1.0)
+    side_bonus = 0.08 if side in ("ASK", "BID") else 0.03 if side == "MID" else 0.0
+
+    raw = (
+        0.38 * premium_score
+        + 0.20 * abs_size_score
+        + 0.22 * voi_score
+        + 0.10 * otm_score
+        + 0.10 * dte_score
+        + side_bonus
+        - 0.18 * spread_penalty
+    )
+    return float(np.clip(raw, 0.0, 1.0) * 100.0)
+
+# -----------------------------------------------------------------------------
+# Option scan
+# -----------------------------------------------------------------------------
+def scan_one_symbol(
+    symbol: str,
+    spot_map: Dict[str, float],
+    min_premium: float,
+    min_volume: int,
+    min_vol_oi: float,
+    max_spread_pct: float,
+    dte_min: int,
+    dte_max: int,
+) -> Tuple[List[dict], dict]:
+    """
+    Scan all expiries for one symbol.
+    Returns contract rows + diagnostics.
+    """
+    diagnostics = {
+        "symbol": symbol,
+        "expiries_seen": 0,
+        "contracts_kept": 0,
+        "errors": 0,
+    }
+    rows: List[dict] = []
+
+    try:
+        tkr = yf.Ticker(symbol)
+        expiries = list(tkr.options or [])
+    except Exception:
+        diagnostics["errors"] += 1
+        return rows, diagnostics
+
+    if not expiries:
+        return rows, diagnostics
+
+    spot = safe_float(spot_map.get(symbol, np.nan), np.nan)
+    if pd.isna(spot) or spot <= 0:
+        try:
+            hist = tkr.history(period="5d", interval="1d", auto_adjust=False)
+            if hist is not None and not hist.empty and "Close" in hist.columns:
+                spot = safe_float(hist["Close"].dropna().iloc[-1], np.nan)
+        except Exception:
+            pass
+
+    if pd.isna(spot) or spot <= 0:
+        return rows, diagnostics
+
+    today = pd.Timestamp.utcnow().normalize()
+
+    for exp in expiries:
+        diagnostics["expiries_seen"] += 1
+        try:
+            chain = tkr.option_chain(exp)
+            chain_parts = [("CALL", chain.calls), ("PUT", chain.puts)]
+        except Exception:
+            diagnostics["errors"] += 1
+            continue
+
+        try:
+            expiry_ts = pd.Timestamp(exp)
+            dte = int((expiry_ts.normalize() - today.tz_localize(None)).days)
+        except Exception:
+            dte = np.nan
+
+        if pd.isna(dte) or dte < dte_min or dte > dte_max:
+            continue
+
+        for option_type, df in chain_parts:
+            if df is None or df.empty:
+                continue
+
+            local = df.copy()
+
+            needed = ["contractSymbol", "strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
+            for col in needed:
+                if col not in local.columns:
+                    local[col] = np.nan
+
+            local = local[needed].copy()
+
+            for _, r in local.iterrows():
+                strike = safe_float(r["strike"], np.nan)
+                if pd.isna(strike) or strike <= 0:
+                    continue
+
+                last_price = safe_float(r["lastPrice"], 0.0)
+                bid = safe_float(r["bid"], 0.0)
+                ask = safe_float(r["ask"], 0.0)
+                volume = safe_float(r["volume"], 0.0)
+                oi = safe_float(r["openInterest"], 0.0)
+                iv = safe_float(r["impliedVolatility"], np.nan)
+
+                if volume < min_volume:
+                    continue
+
+                fill = estimate_fill_price(last_price, bid, ask)
+                if fill <= 0:
+                    continue
+
+                premium = fill * volume * 100.0
+                if premium < min_premium:
+                    continue
+
+                vol_oi = volume / max(oi, 1.0)
+                if vol_oi < min_vol_oi:
+                    continue
+
+                mid = midpoint(bid, ask)
+                spread_pct = ((ask - bid) / mid * 100.0) if mid > 0 and ask >= bid and bid > 0 else np.nan
+                if not pd.isna(spread_pct) and spread_pct > max_spread_pct:
+                    continue
+
+                side = classify_side(fill, bid, ask)
+                direction = classify_direction(option_type, side)
+
+                if option_type == "CALL":
+                    pct_otm = max((strike - spot) / spot, 0.0)
+                    moneyness = "OTM" if strike > spot else "ITM" if strike < spot else "ATM"
+                else:
+                    pct_otm = max((spot - strike) / spot, 0.0)
+                    moneyness = "OTM" if strike < spot else "ITM" if strike > spot else "ATM"
+
+                score = compute_unusual_score(
+                    premium=premium,
+                    volume=volume,
+                    open_interest=oi,
+                    spread_pct=0.0 if pd.isna(spread_pct) else spread_pct,
+                    pct_otm=pct_otm,
+                    dte=dte,
+                    side=side,
+                )
+
+                row = {
+                    "symbol": symbol,
+                    "contract_symbol": r["contractSymbol"],
+                    "type": option_type,
+                    "expiry": exp,
+                    "dte": int(dte),
+                    "spot": float(spot),
+                    "strike": float(strike),
+                    "moneyness": moneyness,
+                    "pct_otm": float(pct_otm * 100.0),
+                    "side": side,
+                    "direction": direction,
+                    "bid": float(bid),
+                    "ask": float(ask),
+                    "mid": float(mid),
+                    "fill_est": float(fill),
+                    "volume": float(volume),
+                    "open_interest": float(oi),
+                    "vol_oi": float(vol_oi),
+                    "premium": float(premium),
+                    "spread_pct": float(spread_pct) if not pd.isna(spread_pct) else np.nan,
+                    "iv": float(iv) if not pd.isna(iv) else np.nan,
+                    "unusual_score": float(score),
+                }
+                rows.append(row)
+                diagnostics["contracts_kept"] += 1
+
+    return rows, diagnostics
+
+def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
     out = df.copy()
-
-    numeric_cols = ["volume", "openInterest", "impliedVolatility", "strike", "lastPrice", "bid", "ask"]
-    for c in numeric_cols:
-        if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce")
-        else:
-            out[c] = np.nan
-
-    out["underlying_price"] = pd.to_numeric(spot, errors="coerce")
-    out["expiration"] = pd.to_datetime(out["expiration"], errors="coerce")
-    now_utc = pd.Timestamp.now(tz="UTC")
-    exp_utc = pd.to_datetime(out["expiration"], utc=True, errors="coerce")
-
-    out["ttm_years"] = (exp_utc - now_utc).dt.total_seconds() / (365.0 * 24.0 * 3600.0)
-    out["ttm_years"] = out["ttm_years"].clip(lower=0.0)
-
-    today_utc = pd.Timestamp.now(tz="UTC").normalize()
-    out["days_to_exp"] = (exp_utc.dt.normalize() - today_utc).dt.days
-
-    out["notional_usd"] = out["volume"].fillna(0.0) * out["underlying_price"].fillna(0.0) * 100.0
-    out["premium_usd"] = out["volume"].fillna(0.0) * out["lastPrice"].fillna(0.0) * 100.0
-    out["vol_oi"] = compute_vol_oi(out["volume"], out["openInterest"])
-    out["moneyness"] = safe_div(out["underlying_price"], out["strike"])
-
-    out["mid"] = ((out["bid"].fillna(0.0) + out["ask"].fillna(0.0)) / 2.0).where(
-        out["bid"].notna() & out["ask"].notna(), np.nan
+    out["cluster_key"] = (
+        out["symbol"].astype(str)
+        + "|"
+        + out["expiry"].astype(str)
+        + "|"
+        + out["type"].astype(str)
+        + "|"
+        + out["direction"].astype(str)
     )
-    out["spread"] = (out["ask"] - out["bid"]).where(out["bid"].notna() & out["ask"].notna(), np.nan)
-    out["spread_pct_mid"] = safe_div(out["spread"], out["mid"])
-    out["last_vs_mid"] = out["lastPrice"] - out["mid"]
 
-    def execution_bias(last_price, bid, ask):
-        if pd.isna(last_price) or pd.isna(bid) or pd.isna(ask) or ask <= bid:
-            return np.nan
-        return (last_price - bid) / (ask - bid)
-
-    out["exec_bias"] = [
-        execution_bias(lp, b, a)
-        for lp, b, a in zip(out["lastPrice"], out["bid"], out["ask"])
-    ]
-
-    out["delta"] = [
-        bs_delta_scalar(
-            S=float(s) if pd.notna(s) else np.nan,
-            K=float(k) if pd.notna(k) else np.nan,
-            T=max(float(t), 1e-6) if pd.notna(t) else np.nan,
-            r=r / 100.0,
-            q=q / 100.0,
-            iv=float(iv) if pd.notna(iv) else np.nan,
-            is_call=(side == "call"),
-        )
-        for s, k, t, iv, side in zip(
-            out["underlying_price"], out["strike"], out["ttm_years"], out["impliedVolatility"], out["side"]
-        )
-    ]
-
-    out["delta_abs"] = out["delta"].abs()
-    out["delta_notional_usd"] = out["notional_usd"] * out["delta_abs"].fillna(0.0)
-
-    keep = [
-        "ticker", "contractSymbol", "side", "expiration", "days_to_exp",
-        "strike", "lastPrice", "bid", "ask", "mid", "spread", "spread_pct_mid",
-        "last_vs_mid", "exec_bias", "volume", "openInterest", "impliedVolatility",
-        "delta", "delta_abs", "moneyness", "underlying_price",
-        "notional_usd", "delta_notional_usd", "premium_usd", "vol_oi", "ttm_years"
-    ]
-    for c in keep:
-        if c not in out.columns:
-            out[c] = np.nan
-
-    return out[keep]
-
-
-# -----------------------------------------------------------------------------
-# Batch scanner with graceful degradation
-# -----------------------------------------------------------------------------
-def chunked(seq: List[str], n: int) -> List[List[str]]:
-    return [seq[i:i + n] for i in range(0, len(seq), n)]
-
-
-def scan_universe_partial(
-    tickers: List[str],
-    max_expiries: int,
-    max_workers: int,
-    risk_free_rate: float,
-    dividend_yield: float,
-    batch_size: int = 30,
-    pause_between_batches: float = 0.35,
-    progress_bar=None,
-    progress_label=None,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, int]]:
-    batches = chunked(tickers, batch_size)
-    collected = []
-    failures = []
-    success_count = 0
-    done_count = 0
-    total = len(tickers)
-
-    for bi, batch in enumerate(batches):
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = {ex.submit(fetch_chain_raw, tk, max_expiries): tk for tk in batch}
-            for fut in as_completed(futures):
-                ticker = futures[fut]
-                done_count += 1
-                try:
-                    chain_df, spot, err = fut.result()
-                    if err:
-                        failures.append({"ticker": ticker, "error": err})
-                    elif chain_df.empty:
-                        failures.append({"ticker": ticker, "error": "empty_chain"})
-                    else:
-                        enriched = enrich_chain(chain_df, spot, risk_free_rate, dividend_yield)
-                        if enriched.empty:
-                            failures.append({"ticker": ticker, "error": "enrich_empty"})
-                        else:
-                            collected.append(enriched)
-                            success_count += 1
-                except Exception as e:
-                    failures.append({"ticker": ticker, "error": str(e)})
-
-                if progress_bar is not None:
-                    frac = done_count / max(1, total)
-                    text = f"{progress_label} {done_count}/{total} | successes: {success_count} | failures: {len(failures)}"
-                    progress_bar.progress(min(frac, 1.0), text=text)
-
-        if bi < len(batches) - 1 and pause_between_batches > 0:
-            time.sleep(pause_between_batches)
-
-    result_df = pd.concat(collected, ignore_index=True) if collected else pd.DataFrame()
-    fail_df = pd.DataFrame(failures)
-
-    stats = {
-        "requested": total,
-        "completed": done_count,
-        "successes": success_count,
-        "failures": len(failures),
-    }
-    return result_df, fail_df, stats
-
-
-@st.cache_data(ttl=15 * 60, show_spinner=False)
-def run_scan_cached(
-    tickers: Tuple[str, ...],
-    max_expiries: int,
-    max_workers: int,
-    risk_free_rate: float,
-    dividend_yield: float,
-    batch_size: int,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, int]]:
-    result_df, fail_df, stats = scan_universe_partial(
-        tickers=list(tickers),
-        max_expiries=max_expiries,
-        max_workers=max_workers,
-        risk_free_rate=risk_free_rate,
-        dividend_yield=dividend_yield,
-        batch_size=batch_size,
-        pause_between_batches=0.0,
-        progress_bar=None,
-        progress_label="Scanning",
+    grp = out.groupby("cluster_key", as_index=False).agg(
+        cluster_contracts=("contract_symbol", "count"),
+        cluster_premium=("premium", "sum"),
+        cluster_volume=("volume", "sum"),
+        cluster_score=("unusual_score", "mean"),
     )
-    return result_df, fail_df, stats
+    out = out.merge(grp, on="cluster_key", how="left")
 
-
-def resilient_market_scan(
-    tickers: List[str],
-    max_expiries: int,
-    max_workers: int,
-    risk_free_rate: float,
-    dividend_yield: float,
-    batch_size: int,
-    enable_live_progress: bool,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, int], str]:
-    progress = st.progress(0.0, text="Initializing scan...") if enable_live_progress else None
-
-    # Try cached full-universe scan first
-    try:
-        raw_scan, fail_df, stats = run_scan_cached(
-            tuple(tickers),
-            int(max_expiries),
-            int(max_workers),
-            float(risk_free_rate),
-            float(dividend_yield),
-            int(batch_size),
-        )
-        if progress is not None:
-            progress.progress(1.0, text=f"Full-universe cached scan complete | successes: {stats['successes']} | failures: {stats['failures']}")
-        if not raw_scan.empty:
-            save_last_good_scan(raw_scan)
-            if progress is not None:
-                progress.empty()
-            return raw_scan, fail_df, stats, "full_universe"
-    except Exception:
-        pass
-
-    # Then try live partial full-universe scan
-    try:
-        if progress is not None:
-            progress.progress(0.0, text="Retrying with live partial scan...")
-        raw_scan, fail_df, stats = scan_universe_partial(
-            tickers=tickers,
-            max_expiries=int(max_expiries),
-            max_workers=int(max_workers),
-            risk_free_rate=float(risk_free_rate),
-            dividend_yield=float(dividend_yield),
-            batch_size=int(batch_size),
-            pause_between_batches=0.35,
-            progress_bar=progress,
-            progress_label="Full universe live scan",
-        )
-        if not raw_scan.empty:
-            save_last_good_scan(raw_scan)
-            if progress is not None:
-                progress.empty()
-            return raw_scan, fail_df, stats, "full_universe_live_partial"
-    except Exception:
-        pass
-
-    # Then try liquid fallback universe
-    fallback = _normalize_symbols(LIQUID_FALLBACK_UNIVERSE)
-    try:
-        if progress is not None:
-            progress.progress(0.0, text="Falling back to liquid core universe...")
-        raw_scan, fail_df, stats = scan_universe_partial(
-            tickers=fallback,
-            max_expiries=min(int(max_expiries), 4),
-            max_workers=min(int(max_workers), 8),
-            risk_free_rate=float(risk_free_rate),
-            dividend_yield=float(dividend_yield),
-            batch_size=min(int(batch_size), 20),
-            pause_between_batches=0.25,
-            progress_bar=progress,
-            progress_label="Liquid fallback scan",
-        )
-        if not raw_scan.empty:
-            save_last_good_scan(raw_scan)
-            if progress is not None:
-                progress.empty()
-            return raw_scan, fail_df, stats, "liquid_fallback"
-    except Exception:
-        pass
-
-    # Then try last-good local cache
-    last_good = load_last_good_scan()
-    if progress is not None:
-        progress.empty()
-    if not last_good.empty:
-        stats = {
-            "requested": 0,
-            "completed": 0,
-            "successes": int(last_good["ticker"].nunique()) if "ticker" in last_good.columns else 0,
-            "failures": 0,
-        }
-        return last_good, pd.DataFrame(), stats, "last_good_cache"
-
-    return pd.DataFrame(), pd.DataFrame(), {"requested": 0, "completed": 0, "successes": 0, "failures": 0}, "none"
-
-
-# -----------------------------------------------------------------------------
-# Historical features
-# -----------------------------------------------------------------------------
-def merge_prev_oi(curr: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
-    if curr.empty:
-        return curr.copy()
-
-    key = ["ticker", "contractSymbol"]
-    prev_cols = key + ["openInterest"]
-    prev_s = pd.DataFrame(columns=key + ["openInterest_prev"])
-    if not prev.empty and all(c in prev.columns for c in prev_cols):
-        prev_s = prev[prev_cols].copy().rename(columns={"openInterest": "openInterest_prev"})
-
-    out = curr.merge(prev_s, on=key, how="left")
-    out["oi_change"] = pd.to_numeric(out["openInterest"], errors="coerce") - pd.to_numeric(out["openInterest_prev"], errors="coerce")
-    out["oi_change_pct"] = np.where(
-        pd.to_numeric(out["openInterest_prev"], errors="coerce").fillna(0) > 0,
-        out["oi_change"] / pd.to_numeric(out["openInterest_prev"], errors="coerce"),
-        np.nan
+    out["cluster_flag"] = np.where(
+        (out["cluster_contracts"] >= 3) & (out["cluster_premium"] >= 250_000),
+        "CLUSTER",
+        "",
     )
     return out
 
-
-def attach_history_stats(curr: pd.DataFrame, hist: pd.DataFrame) -> pd.DataFrame:
-    out = curr.copy()
-    if out.empty:
-        return out
-
-    out["moneyness_band"] = out["moneyness"].apply(moneyness_band_from_ratio)
-    out["dte_band"] = out["days_to_exp"].apply(dte_band_from_days)
-
-    if hist.empty:
-        out["mean_notional"] = np.nan
-        out["std_notional"] = np.nan
-        out["mean_premium"] = np.nan
-        out["std_premium"] = np.nan
-        out["z_notional"] = np.nan
-        out["z_premium"] = np.nan
-        return out
-
-    grp = ["ticker", "side", "moneyness_band", "dte_band"]
-    stats = (
-        hist.groupby(grp, dropna=False)
-        .agg(
-            mean_notional=("notional_usd", "mean"),
-            std_notional=("notional_usd", "std"),
-            mean_premium=("premium_usd", "mean"),
-            std_premium=("premium_usd", "std"),
-        )
-        .reset_index()
-    )
-
-    out = out.merge(stats, on=grp, how="left")
-    out["z_notional"] = (out["notional_usd"] - out["mean_notional"]) / out["std_notional"]
-    out["z_premium"] = (out["premium_usd"] - out["mean_premium"]) / out["std_premium"]
-    out.loc[~np.isfinite(out["z_notional"]), "z_notional"] = np.nan
-    out.loc[~np.isfinite(out["z_premium"]), "z_premium"] = np.nan
-    return out
-
-
-# -----------------------------------------------------------------------------
-# Signal engine
-# -----------------------------------------------------------------------------
-def add_side_aware_otm_fields(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    out["otm_pct"] = np.nan
-
-    call_mask = out["side"].eq("call") & out["underlying_price"].gt(0)
-    put_mask = out["side"].eq("put") & out["underlying_price"].gt(0)
-
-    out.loc[call_mask, "otm_pct"] = (out.loc[call_mask, "strike"] / out.loc[call_mask, "underlying_price"]) - 1.0
-    out.loc[put_mask, "otm_pct"] = 1.0 - (out.loc[put_mask, "strike"] / out.loc[put_mask, "underlying_price"])
-    out["is_otm"] = out["otm_pct"].fillna(-999.0) >= 0
-    return out
-
-
-def apply_uoa_screen(
-    df: pd.DataFrame,
-    min_notional: float,
+def run_full_scan(
+    symbols: List[str],
+    spot_snapshot: pd.DataFrame,
     min_premium: float,
-    rule_otm_pct: float,
-    rule_max_dte: int,
-    extra_min_vol_oi: float,
-    require_exec_bias: bool,
-) -> pd.DataFrame:
-    out = add_side_aware_otm_fields(df)
+    min_volume: int,
+    min_vol_oi: float,
+    max_spread_pct: float,
+    dte_min: int,
+    dte_max: int,
+    max_workers: int,
+):
+    spot_map = {}
+    if spot_snapshot is not None and not spot_snapshot.empty:
+        spot_map = dict(zip(spot_snapshot["symbol"], spot_snapshot["spot"]))
 
-    otm_req = rule_otm_pct / 100.0
-    mask = (
-        (out["notional_usd"] >= min_notional) &
-        (out["premium_usd"] >= min_premium) &
-        (pd.to_numeric(out["volume"], errors="coerce").fillna(0) >= pd.to_numeric(out["openInterest"], errors="coerce").fillna(0)) &
-        (out["days_to_exp"].between(0, rule_max_dte)) &
-        (out["otm_pct"].fillna(-999.0) >= otm_req)
-    )
+    all_rows = []
+    all_diags = []
 
-    if extra_min_vol_oi > 0:
-        mask &= out["vol_oi"].fillna(0.0) >= extra_min_vol_oi
+    progress_bar = st.progress(0.0)
+    status = st.empty()
 
-    if require_exec_bias:
-        mask &= out["exec_bias"].fillna(0.5) >= 0.60
+    total = len(symbols)
+    completed = 0
 
-    return out.loc[mask].copy()
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {
+            ex.submit(
+                scan_one_symbol,
+                sym,
+                spot_map,
+                min_premium,
+                min_volume,
+                min_vol_oi,
+                max_spread_pct,
+                dte_min,
+                dte_max,
+            ): sym
+            for sym in symbols
+        }
 
+        for fut in as_completed(futures):
+            sym = futures[fut]
+            try:
+                rows, diag = fut.result()
+                if rows:
+                    all_rows.extend(rows)
+                all_diags.append(diag)
+            except Exception:
+                all_diags.append(
+                    {"symbol": sym, "expiries_seen": 0, "contracts_kept": 0, "errors": 1}
+                )
 
-def classify_tier(row: pd.Series) -> str:
-    prem = float(row.get("premium_usd", np.nan))
-    voi = float(row.get("vol_oi", np.nan))
-    dte = float(row.get("days_to_exp", np.nan))
-    zprem = float(row.get("z_premium", np.nan))
-    exec_bias = float(row.get("exec_bias", np.nan))
+            completed += 1
+            progress = completed / max(total, 1)
+            progress_bar.progress(progress)
+            status.caption(f"Scanning options chains... {completed:,}/{total:,} symbols completed")
 
-    if all(pd.notna(v) for v in [prem, voi, dte]):
-        if prem >= 10_000_000 and voi >= 3 and dte <= 21:
-            if pd.isna(exec_bias) or exec_bias >= 0.60:
-                return "Tier 1"
-        if prem >= 2_000_000 and voi >= 2 and dte <= 45:
-            if pd.isna(exec_bias) or exec_bias >= 0.55:
-                return "Tier 2"
+    progress_bar.empty()
+    status.empty()
 
-    if pd.notna(zprem) and zprem >= 3 and prem >= 1_000_000 and voi >= 1:
-        return "Tier 2"
+    flow = pd.DataFrame(all_rows)
+    diags = pd.DataFrame(all_diags)
 
-    return "Contextual Flow"
+    if not flow.empty:
+        flow = build_cluster_flags(flow)
+        flow = flow.sort_values(
+            ["unusual_score", "premium", "vol_oi", "volume"],
+            ascending=[False, False, False, False],
+        ).reset_index(drop=True)
 
+    return flow, diags
 
-def build_bucket_summary(df: pd.DataFrame) -> pd.DataFrame:
+# -----------------------------------------------------------------------------
+# Commentary helpers
+# -----------------------------------------------------------------------------
+def summarize_tape(df: pd.DataFrame) -> str:
     if df.empty:
-        return pd.DataFrame()
+        return "No qualifying flow made it through the current filters."
 
-    x = df.copy()
-    x["strike_bucket"] = (pd.to_numeric(x["strike"], errors="coerce") / 5.0).round() * 5.0
+    bullish = df.loc[df["direction"] == "BULLISH", "premium"].sum()
+    bearish = df.loc[df["direction"] == "BEARISH", "premium"].sum()
+    total = df["premium"].sum()
 
-    grp = ["ticker", "side", "expiration", "strike_bucket", "tier"]
-    bucket = (
-        x.groupby(grp, dropna=False)
-        .agg(
-            lines=("contractSymbol", "count"),
-            total_premium=("premium_usd", "sum"),
-            total_notional=("notional_usd", "sum"),
-            total_delta_notional=("delta_notional_usd", "sum"),
-            max_vol_oi=("vol_oi", "max"),
-            avg_exec_bias=("exec_bias", "mean"),
-            avg_otm_pct=("otm_pct", "mean"),
-        )
-        .reset_index()
-        .sort_values(["total_premium", "total_notional"], ascending=[False, False])
-    )
-    return bucket
-
-
-def build_priority_summary(signal: pd.DataFrame, ranking_mode: str) -> pd.DataFrame:
-    if signal.empty:
-        return pd.DataFrame()
-
-    league = (
-        signal.groupby("ticker", as_index=False)
-        .agg(
-            tier1_trades=("tier", lambda s: int((s == "Tier 1").sum())),
-            tier2_trades=("tier", lambda s: int((s == "Tier 2").sum())),
-            total_premium=("premium_usd", "sum"),
-            total_notional=("notional_usd", "sum"),
-            total_delta_notional=("delta_notional_usd", "sum"),
-            max_premium=("premium_usd", "max"),
-            best_z_premium=("z_premium", "max"),
-            avg_exec_bias=("exec_bias", "mean"),
-        )
+    top = df.iloc[0]
+    leader = (
+        f"The tape is led by {top['symbol']} {top['type'].lower()} flow into "
+        f"{top['expiry']} {top['strike']:.0f}s, estimated premium {human_money(top['premium'])}, "
+        f"volume/OI {top['vol_oi']:.2f}x, score {top['unusual_score']:.1f}."
     )
 
-    if ranking_mode == "Premium":
-        league = league.sort_values(["total_premium", "tier1_trades", "max_premium"], ascending=[False, False, False])
-    elif ranking_mode == "Notional":
-        league = league.sort_values(["total_notional", "total_premium", "tier1_trades"], ascending=[False, False, False])
-    elif ranking_mode == "Delta-adjusted":
-        league = league.sort_values(["total_delta_notional", "total_premium", "tier1_trades"], ascending=[False, False, False])
+    if bullish > bearish * 1.2:
+        tilt = (
+            f"Aggregate directional premium is net bullish, with {human_money(bullish)} "
+            f"bullish versus {human_money(bearish)} bearish."
+        )
+    elif bearish > bullish * 1.2:
+        tilt = (
+            f"Aggregate directional premium is net bearish, with {human_money(bearish)} "
+            f"bearish versus {human_money(bullish)} bullish."
+        )
     else:
-        league = league.sort_values(["best_z_premium", "total_premium", "tier1_trades"], ascending=[False, False, False])
+        tilt = (
+            f"Directional premium is relatively balanced, with {human_money(bullish)} "
+            f"bullish versus {human_money(bearish)} bearish."
+        )
 
-    return league.reset_index(drop=True)
+    clusters = int((df["cluster_flag"] == "CLUSTER").sum()) if "cluster_flag" in df.columns else 0
+    cluster_line = (
+        f"There are {clusters} contracts sitting inside same-expiry directional clusters, "
+        f"which usually matters more than isolated prints."
+        if clusters > 0
+        else "The scan is more single-print than cluster-driven right now."
+    )
 
+    return f"{leader} {tilt} {cluster_line}"
 
-# -----------------------------------------------------------------------------
-# External ingest
-# -----------------------------------------------------------------------------
-def read_external() -> pd.DataFrame:
-    files = sorted(glob.glob(os.path.join(INGEST_DIR, "*.csv")))
-    acc = []
-    for f in files:
-        try:
-            df = pd.read_csv(f)
-            if "ticker" in df.columns and "expiration" in df.columns:
-                df["expiration"] = pd.to_datetime(df["expiration"], errors="coerce")
-                df["source_file"] = os.path.basename(f)
-                acc.append(df)
-        except Exception:
-            continue
-    return pd.concat(acc, ignore_index=True) if acc else pd.DataFrame()
+def prep_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
 
-
-# -----------------------------------------------------------------------------
-# Formatting
-# -----------------------------------------------------------------------------
-def fmt_money(x):
-    return "" if pd.isna(x) else f"${x:,.0f}"
-
-
-def fmt_money_2(x):
-    return "" if pd.isna(x) else f"${x:,.2f}"
-
-
-def fmt_pct(x, mult=100.0, decimals=1):
-    return "" if pd.isna(x) else f"{x * mult:.{decimals}f}%"
-
-
-def fmt_num(x, decimals=2):
-    return "" if pd.isna(x) else f"{x:.{decimals}f}"
-
-
-def fmt_int(x):
-    return "" if pd.isna(x) else f"{int(x):,}"
-
+    out = df.copy()
+    out["Premium"] = out["premium"].map(human_money)
+    out["Vol"] = out["volume"].map(human_num)
+    out["OI"] = out["open_interest"].map(human_num)
+    out["Vol/OI"] = out["vol_oi"].map(lambda x: f"{x:.2f}x")
+    out["Fill"] = out["fill_est"].map(lambda x: f"{x:.2f}")
+    out["Bid"] = out["bid"].map(lambda x: f"{x:.2f}")
+    out["Ask"] = out["ask"].map(lambda x: f"{x:.2f}")
+    out["Spread %"] = out["spread_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
+    out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}")
+    out["OTM %"] = out["pct_otm"].map(lambda x: f"{x:.1f}%")
+    out["Score"] = out["unusual_score"].map(lambda x: f"{x:.1f}")
+    keep = [
+        "symbol", "type", "expiry", "dte", "direction", "side", "strike", "spot",
+        "moneyness", "OTM %", "Fill", "Bid", "Ask", "Spread %", "Vol", "OI",
+        "Vol/OI", "Premium", "IV", "Score", "cluster_flag", "contract_symbol"
+    ]
+    keep = [c for c in keep if c in out.columns]
+    return out[keep].copy()
 
 # -----------------------------------------------------------------------------
-# Sidebar
+# Sidebar controls
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Objective: detect unusual options activity across a broad liquid universe with graceful fallback behavior.
+        This scanner is designed to mimic how a flow trader triages large options activity using public data.
 
-        This build is hardened to avoid all-or-nothing failure.
-        • Full S&P 500 attempt first
-        • Partial successes are retained
-        • Automatic liquid-universe fallback if the full scan degrades
-        • Last-good cache used if live data is weak
-        • Threshold changes rerank locally
+        What it does
+        • Pulls the current S&P 500 constituent list
+        • Checks every symbol every run
+        • Walks every listed expiry Yahoo exposes for that symbol
+        • Scores contracts by premium, volume/OI, side estimate, DTE, OTM distance, and spread quality
+        • Flags directional clusters across the same symbol, expiry, and contract side
+
+        What it cannot do
+        • True exchange-level time-and-sales
+        • Official sweep / split / multi-leg flags
+        • Exact opening-versus-closing print classification
         """
     )
 
-    st.markdown("### Universe")
-    st.caption("Full S&P 500 with automatic fallback to a liquid core universe.")
-    uploaded = st.file_uploader("Upload sp500_symbols.csv (optional)", type=["csv"], accept_multiple_files=False)
-    if uploaded is not None:
+    st.subheader("Filters")
+    min_premium = st.number_input("Minimum premium ($)", min_value=0.0, value=float(DEFAULT_MIN_PREMIUM), step=25_000.0, format="%.0f")
+    min_volume = st.number_input("Minimum contract volume", min_value=1, value=int(DEFAULT_MIN_VOLUME), step=10)
+    min_vol_oi = st.number_input("Minimum volume / OI", min_value=0.0, value=float(DEFAULT_MIN_VOL_OI), step=0.25, format="%.2f")
+    max_spread_pct = st.number_input("Maximum spread %", min_value=0.0, value=float(DEFAULT_MAX_SPREAD_PCT), step=5.0, format="%.1f")
+    dte_range = st.slider("DTE range", min_value=0, max_value=1095, value=(DEFAULT_DTE_MIN, DEFAULT_DTE_MAX), step=1)
+    top_n = st.slider("Rows to display", min_value=25, max_value=500, value=DEFAULT_TOP_N, step=25)
+
+    st.subheader("Engine")
+    max_workers = st.slider("Concurrent workers", min_value=4, max_value=48, value=DEFAULT_MAX_WORKERS, step=2)
+    allow_cached_fallback = st.toggle("Use last-good cached scan if live scan returns nothing", value=True)
+
+    st.markdown(
+        '<div class="small-note">This is intentionally set up as a full-universe scan rather than a watchlist scanner.</div>',
+        unsafe_allow_html=True,
+    )
+
+# -----------------------------------------------------------------------------
+# Main run
+# -----------------------------------------------------------------------------
+live_scan_used = True
+scan_started = time.time()
+
+try:
+    universe = fetch_sp500_symbols()
+    symbols = universe["YahooSymbol"].dropna().astype(str).unique().tolist()
+except Exception as e:
+    universe = pd.DataFrame(columns=["Symbol", "Security", "GICS Sector", "GICS Sub-Industry", "YahooSymbol"])
+    symbols = []
+    st.error(f"Unable to load S&P 500 constituents: {e}")
+
+spot_snapshot = pd.DataFrame()
+if symbols:
+    with st.spinner(f"Loading spot snapshot for {len(symbols):,} symbols..."):
         try:
-            df_up = pd.read_csv(uploaded)
-            df_up.to_csv(os.path.join(INGEST_DIR, "sp500_symbols.csv"), index=False)
-            st.success("Saved to ./ingest/sp500_symbols.csv. Reload to use it.")
+            spot_snapshot = fetch_spot_snapshot(symbols)
+        except Exception:
+            spot_snapshot = pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume"])
+
+flow = pd.DataFrame()
+diags = pd.DataFrame()
+
+if symbols:
+    with st.spinner(
+        f"Running full options scan across {len(symbols):,} S&P 500 symbols and all listed expiries..."
+    ):
+        try:
+            flow, diags = run_full_scan(
+                symbols=symbols,
+                spot_snapshot=spot_snapshot,
+                min_premium=min_premium,
+                min_volume=min_volume,
+                min_vol_oi=min_vol_oi,
+                max_spread_pct=max_spread_pct,
+                dte_min=dte_range[0],
+                dte_max=dte_range[1],
+                max_workers=max_workers,
+            )
         except Exception as e:
-            st.warning(f"Upload failed: {e}")
-
-    tickers = get_sp500_symbols()
-    st.caption(f"Primary universe size: {len(tickers)}")
-
-    st.markdown("### Data")
-    max_expiries = st.number_input("Max expirations per ticker", min_value=1, max_value=12, value=4, step=1)
-    max_workers = st.number_input("Concurrent workers", min_value=2, max_value=20, value=8, step=1)
-    batch_size = st.number_input("Batch size", min_value=10, max_value=100, value=30, step=5)
-    enable_live_progress = st.checkbox("Show live scan progress", value=True)
-
-    st.markdown("### UOA Thresholds")
-    min_notional = st.number_input("Min notional per line, USD", min_value=0, max_value=250_000_000, value=500_000, step=100_000)
-    min_premium = st.number_input("Min premium per line, USD", min_value=0, max_value=250_000_000, value=0, step=100_000)
-    rule_otm_pct = st.number_input("OTM threshold %", min_value=0.0, max_value=200.0, value=10.0, step=1.0)
-    rule_max_dte = st.number_input("Max DTE (days)", min_value=1, max_value=365, value=30, step=1)
-    extra_min_vol_oi = st.number_input("Extra floor for Vol/OI", min_value=0.0, max_value=50.0, value=0.0, step=0.1)
-    require_exec_bias = st.checkbox("Require last trade to lean toward ask", value=False)
-
-    st.markdown("### Greeks Setup")
-    risk_free_rate = st.number_input("Risk-free rate %", min_value=-1.0, max_value=15.0, value=4.25, step=0.05)
-    dividend_yield = st.number_input("Dividend yield %", min_value=0.0, max_value=20.0, value=0.0, step=0.1)
-
-    st.markdown("### Ranking")
-    ranking_mode = st.selectbox("Priority ranking", ["Premium", "Notional", "Delta-adjusted", "Z-score"])
-
-    st.markdown("### History")
-    history_files = st.number_input("History files for z-scores", min_value=10, max_value=200, value=80, step=10)
-
+            st.warning(f"Live scan hit an error: {e}")
+            flow = pd.DataFrame()
+            diags = pd.DataFrame()
 
 # -----------------------------------------------------------------------------
-# Scan
+# Cached fallback
 # -----------------------------------------------------------------------------
-raw_scan, fail_df, scan_stats, scan_source = resilient_market_scan(
-    tickers=tickers,
-    max_expiries=int(max_expiries),
-    max_workers=int(max_workers),
-    risk_free_rate=float(risk_free_rate),
-    dividend_yield=float(dividend_yield),
-    batch_size=int(batch_size),
-    enable_live_progress=bool(enable_live_progress),
-)
-
-if raw_scan.empty:
-    st.error("Live scan, fallback scan, and local cache all returned zero usable option-chain rows.")
-    st.caption("This is a data-source problem from Yahoo/yfinance, not a threshold problem inside the dashboard.")
-    st.stop()
-
-saved_path = save_snapshot(raw_scan)
-
-# -----------------------------------------------------------------------------
-# Build local features only
-# -----------------------------------------------------------------------------
-previous = load_latest_snapshot()
-hist = load_history(max_files=int(history_files))
-
-aug = merge_prev_oi(raw_scan, previous)
-aug = attach_history_stats(aug, hist)
-
-unusual = apply_uoa_screen(
-    aug,
-    min_notional=float(min_notional),
-    min_premium=float(min_premium),
-    rule_otm_pct=float(rule_otm_pct),
-    rule_max_dte=int(rule_max_dte),
-    extra_min_vol_oi=float(extra_min_vol_oi),
-    require_exec_bias=bool(require_exec_bias),
-)
-
-if not unusual.empty:
-    unusual["tier"] = unusual.apply(classify_tier, axis=1)
-else:
-    unusual["tier"] = pd.Series(dtype="object")
-
-signal = unusual[unusual["tier"].isin(["Tier 1", "Tier 2"])].copy() if not unusual.empty else pd.DataFrame()
-
-# -----------------------------------------------------------------------------
-# Header metrics
-# -----------------------------------------------------------------------------
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Scan source", scan_source.replace("_", " ").title())
-c2.metric("Universe requested", f"{scan_stats.get('requested', 0):,}")
-c3.metric("Successful tickers", f"{scan_stats.get('successes', 0):,}")
-c4.metric("Contracts scanned", f"{len(raw_scan):,}")
-c5.metric("UOA lines", f"{len(unusual):,}")
-c6.metric("Tier 1 / 2 lines", f"{len(signal):,}")
-
-if not fail_df.empty:
-    with st.expander("Fetch failures and empty chains"):
-        st.dataframe(
-            fail_df.sort_values(["error", "ticker"]).reset_index(drop=True),
-            use_container_width=True,
-            hide_index=True
+if (flow is None or flow.empty) and allow_cached_fallback:
+    cached_flow = load_pickle(LAST_GOOD_SCAN)
+    cached_meta = load_json(LAST_GOOD_META)
+    if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
+        flow = cached_flow.copy()
+        live_scan_used = False
+        st.warning(
+            f"Live scan returned no qualifying rows. Showing last-good cached snapshot from "
+            f"{cached_meta.get('saved_at', 'unknown time')}."
         )
 
+if flow is not None and not flow.empty and live_scan_used:
+    save_pickle(flow, LAST_GOOD_SCAN)
+    save_json(
+        {
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": int(len(flow)),
+            "symbols_requested": int(len(symbols)),
+        },
+        LAST_GOOD_META,
+    )
+
 # -----------------------------------------------------------------------------
-# If no signals, still show usable output
+# Universe join
 # -----------------------------------------------------------------------------
-if unusual.empty:
-    st.warning("The scan returned option-chain data, but nothing met the current UOA screen.")
-    st.caption("Try lowering the notional threshold, the OTM threshold, or the Vol/OI floor.")
-    with st.expander("Raw scan sample"):
-        raw_sample = raw_scan.head(200).copy()
-        if "expiration" in raw_sample.columns:
-            raw_sample["expiration"] = pd.to_datetime(raw_sample["expiration"], errors="coerce").dt.date.astype(str)
-        st.dataframe(raw_sample, use_container_width=True, hide_index=True)
-    st.caption(f"Latest snapshot saved: {saved_path}")
-    st.caption("© 2026 AD Fund Management LP")
+if flow is not None and not flow.empty and universe is not None and not universe.empty:
+    meta = universe.rename(columns={"YahooSymbol": "symbol"})
+    flow = flow.merge(
+        meta[["symbol", "Symbol", "Security", "GICS Sector", "GICS Sub-Industry"]],
+        on="symbol",
+        how="left",
+    )
+
+# -----------------------------------------------------------------------------
+# Top-level KPIs
+# -----------------------------------------------------------------------------
+scan_seconds = time.time() - scan_started
+
+if flow is None:
+    flow = pd.DataFrame()
+if diags is None:
+    diags = pd.DataFrame()
+
+qualifying_rows = int(len(flow))
+symbols_requested = int(len(symbols))
+symbols_completed = int(diags["symbol"].nunique()) if not diags.empty else 0
+expiries_seen = int(diags["expiries_seen"].sum()) if not diags.empty else 0
+scan_errors = int(diags["errors"].sum()) if not diags.empty else 0
+
+bullish_premium = float(flow.loc[flow["direction"] == "BULLISH", "premium"].sum()) if not flow.empty else 0.0
+bearish_premium = float(flow.loc[flow["direction"] == "BEARISH", "premium"].sum()) if not flow.empty else 0.0
+total_premium = float(flow["premium"].sum()) if not flow.empty else 0.0
+
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Symbols requested", f"{symbols_requested:,}")
+c2.metric("Symbols completed", f"{symbols_completed:,}")
+c3.metric("Expiries checked", f"{expiries_seen:,}")
+c4.metric("Qualifying rows", f"{qualifying_rows:,}")
+c5.metric("Bullish premium", human_money(bullish_premium))
+c6.metric("Bearish premium", human_money(bearish_premium))
+
+st.caption(
+    f"Scan mode: {'Live' if live_scan_used else 'Cached fallback'} | "
+    f"Total qualifying premium: {human_money(total_premium)} | "
+    f"Errors: {scan_errors:,} | "
+    f"Elapsed: {scan_seconds:.1f}s"
+)
+
+# -----------------------------------------------------------------------------
+# Empty state
+# -----------------------------------------------------------------------------
+if flow.empty:
+    st.info(
+        "No rows passed the current filters. Lower premium, volume, volume/OI, or spread thresholds and rerun."
+    )
     st.stop()
 
 # -----------------------------------------------------------------------------
-# Priority Summary
+# Derived views
 # -----------------------------------------------------------------------------
-st.subheader("Priority Summary")
+flow["rank"] = np.arange(1, len(flow) + 1)
 
-league = build_priority_summary(signal if not signal.empty else unusual, ranking_mode=ranking_mode)
+overall = flow.nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
+bullish = flow[flow["direction"] == "BULLISH"].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
+bearish = flow[flow["direction"] == "BEARISH"].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
+zero_dte = flow[flow["dte"] == 0].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
 
-if not league.empty:
-    league_display = league.copy()
-    league_display["total_premium"] = league_display["total_premium"].map(fmt_money)
-    league_display["total_notional"] = league_display["total_notional"].map(fmt_money)
-    league_display["total_delta_notional"] = league_display["total_delta_notional"].map(fmt_money)
-    league_display["max_premium"] = league_display["max_premium"].map(fmt_money)
-    league_display["best_z_premium"] = league_display["best_z_premium"].map(lambda x: fmt_num(x, 2))
-    league_display["avg_exec_bias"] = league_display["avg_exec_bias"].map(lambda x: fmt_num(x, 2))
-    league_display["tier1_trades"] = league_display["tier1_trades"].map(fmt_int)
-    league_display["tier2_trades"] = league_display["tier2_trades"].map(fmt_int)
-    st.dataframe(league_display, use_container_width=True, hide_index=True)
-
-# -----------------------------------------------------------------------------
-# Top contracts per ticker
-# -----------------------------------------------------------------------------
-st.subheader("Top Contracts Per Ticker")
-
-top_source = signal if not signal.empty else unusual
-top_raw = (
-    top_source.sort_values(["ticker", "premium_usd"], ascending=[True, False])
-    .groupby("ticker", as_index=False, sort=False)
-    .head(3)
-    .copy()
+ticker_summary = (
+    flow.groupby(["symbol", "Security", "GICS Sector"], dropna=False, as_index=False)
+    .agg(
+        rows=("contract_symbol", "count"),
+        total_premium=("premium", "sum"),
+        bullish_premium=("premium", lambda s: flow.loc[s.index, :].query("direction == 'BULLISH'")["premium"].sum()),
+        bearish_premium=("premium", lambda s: flow.loc[s.index, :].query("direction == 'BEARISH'")["premium"].sum()),
+        avg_score=("unusual_score", "mean"),
+        max_score=("unusual_score", "max"),
+    )
 )
 
-top_display = top_raw[[
-    "ticker", "tier", "side", "expiration", "days_to_exp", "strike",
-    "underlying_price", "lastPrice", "volume", "openInterest", "vol_oi",
-    "impliedVolatility", "delta", "premium_usd", "notional_usd",
-    "delta_notional_usd", "z_premium", "exec_bias"
-]].copy()
-
-top_display["expiration"] = pd.to_datetime(top_display["expiration"], errors="coerce").dt.date.astype(str)
-top_display["strike"] = top_raw["strike"].map(fmt_money_2)
-top_display["underlying_price"] = top_raw["underlying_price"].map(fmt_money_2)
-top_display["lastPrice"] = top_raw["lastPrice"].map(fmt_money_2)
-top_display["volume"] = top_raw["volume"].map(fmt_int)
-top_display["openInterest"] = top_raw["openInterest"].map(fmt_int)
-top_display["vol_oi"] = top_raw["vol_oi"].map(lambda x: fmt_num(x, 2))
-top_display["impliedVolatility"] = top_raw["impliedVolatility"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-top_display["delta"] = top_raw["delta"].map(lambda x: fmt_num(x, 2))
-top_display["premium_usd"] = top_raw["premium_usd"].map(fmt_money)
-top_display["notional_usd"] = top_raw["notional_usd"].map(fmt_money)
-top_display["delta_notional_usd"] = top_raw["delta_notional_usd"].map(fmt_money)
-top_display["z_premium"] = top_raw["z_premium"].map(lambda x: fmt_num(x, 2))
-top_display["exec_bias"] = top_raw["exec_bias"].map(lambda x: fmt_num(x, 2))
-
-st.dataframe(top_display, use_container_width=True, hide_index=True)
+ticker_summary["net_premium"] = ticker_summary["bullish_premium"] - ticker_summary["bearish_premium"]
+ticker_summary["flow_bias"] = np.where(
+    ticker_summary["net_premium"] > 0, "BULLISH",
+    np.where(ticker_summary["net_premium"] < 0, "BEARISH", "BALANCED")
+)
+ticker_summary = ticker_summary.sort_values(
+    ["total_premium", "max_score", "rows"], ascending=[False, False, False]
+).reset_index(drop=True)
 
 # -----------------------------------------------------------------------------
-# Bucket Summary
+# Commentary
 # -----------------------------------------------------------------------------
-st.subheader("Clustered Flow Buckets")
+st.subheader("Tape Commentary")
+st.write(summarize_tape(overall))
 
-bucket = build_bucket_summary(signal if not signal.empty else unusual)
-if not bucket.empty:
-    bucket_display = bucket.head(250).copy()
-    bucket_display["expiration"] = pd.to_datetime(bucket_display["expiration"], errors="coerce").dt.date.astype(str)
-    bucket_display["strike_bucket"] = bucket_display["strike_bucket"].map(fmt_money_2)
-    bucket_display["lines"] = bucket_display["lines"].map(fmt_int)
-    bucket_display["total_premium"] = bucket_display["total_premium"].map(fmt_money)
-    bucket_display["total_notional"] = bucket_display["total_notional"].map(fmt_money)
-    bucket_display["total_delta_notional"] = bucket_display["total_delta_notional"].map(fmt_money)
-    bucket_display["max_vol_oi"] = bucket_display["max_vol_oi"].map(lambda x: fmt_num(x, 2))
-    bucket_display["avg_exec_bias"] = bucket_display["avg_exec_bias"].map(lambda x: fmt_num(x, 2))
-    bucket_display["avg_otm_pct"] = bucket_display["avg_otm_pct"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-    st.dataframe(bucket_display, use_container_width=True, hide_index=True)
+leaderboard_cols = st.columns([1.2, 1.2, 1.1, 1.1])
+top_symbol = overall.iloc[0]["symbol"]
+top_contract = f"{overall.iloc[0]['symbol']} {overall.iloc[0]['expiry']} {overall.iloc[0]['type']} {overall.iloc[0]['strike']:.0f}"
+leaderboard_cols[0].metric("Top ticker by premium", str(ticker_summary.iloc[0]["symbol"]))
+leaderboard_cols[1].metric("Top contract", top_contract)
+leaderboard_cols[2].metric("0DTE rows", f"{len(zero_dte):,}")
+leaderboard_cols[3].metric("Cluster flags", f"{int((flow['cluster_flag'] == 'CLUSTER').sum()):,}")
 
 # -----------------------------------------------------------------------------
-# Flow Summary
+# Charts
 # -----------------------------------------------------------------------------
-st.subheader("Flow Summary")
+chart_left, chart_right = st.columns(2)
 
-view_raw = (signal if not signal.empty else unusual)[[
-    "ticker", "tier", "side", "expiration", "days_to_exp", "strike",
-    "underlying_price", "lastPrice", "volume", "openInterest", "vol_oi",
-    "oi_change", "oi_change_pct", "impliedVolatility", "delta", "delta_abs",
-    "premium_usd", "notional_usd", "delta_notional_usd", "moneyness",
-    "otm_pct", "z_premium", "z_notional", "exec_bias"
-]].copy()
+with chart_left:
+    sector_premium = (
+        flow.groupby("GICS Sector", dropna=False)["premium"].sum().sort_values(ascending=False).reset_index()
+    )
+    sector_premium["GICS Sector"] = sector_premium["GICS Sector"].fillna("Unknown")
+    fig_sector = px.bar(
+        sector_premium.head(12),
+        x="GICS Sector",
+        y="premium",
+        title="Premium by Sector",
+        labels={"premium": "Premium ($)", "GICS Sector": ""},
+    )
+    fig_sector.update_layout(height=420, xaxis_tickangle=-35, margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig_sector, use_container_width=True)
 
-sort_col = {
-    "Premium": "premium_usd",
-    "Notional": "notional_usd",
-    "Delta-adjusted": "delta_notional_usd",
-    "Z-score": "z_premium",
-}[ranking_mode]
-
-view_raw = view_raw.sort_values(sort_col, ascending=False)
-
-view = view_raw.copy()
-view["expiration"] = pd.to_datetime(view["expiration"], errors="coerce").dt.date.astype(str)
-view["strike"] = view_raw["strike"].map(fmt_money_2)
-view["underlying_price"] = view_raw["underlying_price"].map(fmt_money_2)
-view["lastPrice"] = view_raw["lastPrice"].map(fmt_money_2)
-view["volume"] = view_raw["volume"].map(fmt_int)
-view["openInterest"] = view_raw["openInterest"].map(fmt_int)
-view["vol_oi"] = view_raw["vol_oi"].map(lambda x: fmt_num(x, 2))
-view["oi_change"] = view_raw["oi_change"].map(lambda x: fmt_num(x, 0))
-view["oi_change_pct"] = view_raw["oi_change_pct"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-view["impliedVolatility"] = view_raw["impliedVolatility"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-view["delta"] = view_raw["delta"].map(lambda x: fmt_num(x, 2))
-view["delta_abs"] = view_raw["delta_abs"].map(lambda x: fmt_num(x, 2))
-view["premium_usd"] = view_raw["premium_usd"].map(fmt_money)
-view["notional_usd"] = view_raw["notional_usd"].map(fmt_money)
-view["delta_notional_usd"] = view_raw["delta_notional_usd"].map(fmt_money)
-view["moneyness"] = view_raw["moneyness"].map(lambda x: fmt_num(x, 3))
-view["otm_pct"] = view_raw["otm_pct"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-view["z_premium"] = view_raw["z_premium"].map(lambda x: fmt_num(x, 2))
-view["z_notional"] = view_raw["z_notional"].map(lambda x: fmt_num(x, 2))
-view["exec_bias"] = view_raw["exec_bias"].map(lambda x: fmt_num(x, 2))
-
-st.dataframe(view, use_container_width=True, hide_index=True)
-
-# -----------------------------------------------------------------------------
-# Ticker Drilldown
-# -----------------------------------------------------------------------------
-st.subheader("Ticker Drilldown")
-
-candidate_names = league["ticker"].tolist() if not league.empty else sorted((signal if not signal.empty else unusual)["ticker"].dropna().unique().tolist())
-if candidate_names:
-    selected_ticker = st.selectbox("Select ticker", candidate_names)
-    ticker_df = (signal if not signal.empty else unusual).loc[(signal if not signal.empty else unusual)["ticker"] == selected_ticker].copy()
-
-    if not ticker_df.empty:
-        t1, t2, t3, t4 = st.columns(4)
-        t1.metric("Lines", f"{len(ticker_df):,}")
-        t2.metric("Premium", fmt_money(ticker_df["premium_usd"].sum()))
-        t3.metric("Notional", fmt_money(ticker_df["notional_usd"].sum()))
-        t4.metric("Delta-adjusted", fmt_money(ticker_df["delta_notional_usd"].sum()))
-
-        ticker_view_raw = ticker_df.sort_values(["premium_usd", "notional_usd"], ascending=False).copy()
-        ticker_view = ticker_view_raw[[
-            "tier", "side", "expiration", "days_to_exp", "contractSymbol", "strike",
-            "underlying_price", "lastPrice", "volume", "openInterest", "vol_oi",
-            "impliedVolatility", "delta", "premium_usd", "notional_usd",
-            "delta_notional_usd", "otm_pct", "z_premium", "exec_bias"
-        ]].copy()
-
-        ticker_view["expiration"] = pd.to_datetime(ticker_view["expiration"], errors="coerce").dt.date.astype(str)
-        ticker_view["strike"] = ticker_view_raw["strike"].map(fmt_money_2)
-        ticker_view["underlying_price"] = ticker_view_raw["underlying_price"].map(fmt_money_2)
-        ticker_view["lastPrice"] = ticker_view_raw["lastPrice"].map(fmt_money_2)
-        ticker_view["volume"] = ticker_view_raw["volume"].map(fmt_int)
-        ticker_view["openInterest"] = ticker_view_raw["openInterest"].map(fmt_int)
-        ticker_view["vol_oi"] = ticker_view_raw["vol_oi"].map(lambda x: fmt_num(x, 2))
-        ticker_view["impliedVolatility"] = ticker_view_raw["impliedVolatility"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-        ticker_view["delta"] = ticker_view_raw["delta"].map(lambda x: fmt_num(x, 2))
-        ticker_view["premium_usd"] = ticker_view_raw["premium_usd"].map(fmt_money)
-        ticker_view["notional_usd"] = ticker_view_raw["notional_usd"].map(fmt_money)
-        ticker_view["delta_notional_usd"] = ticker_view_raw["delta_notional_usd"].map(fmt_money)
-        ticker_view["otm_pct"] = ticker_view_raw["otm_pct"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-        ticker_view["z_premium"] = ticker_view_raw["z_premium"].map(lambda x: fmt_num(x, 2))
-        ticker_view["exec_bias"] = ticker_view_raw["exec_bias"].map(lambda x: fmt_num(x, 2))
-
-        st.dataframe(ticker_view, use_container_width=True, hide_index=True)
+with chart_right:
+    bubble = overall.copy()
+    bubble["label"] = bubble["symbol"] + " " + bubble["type"] + " " + bubble["expiry"]
+    fig_bubble = px.scatter(
+        bubble.head(300),
+        x="vol_oi",
+        y="premium",
+        size="unusual_score",
+        color="direction",
+        hover_name="label",
+        hover_data={
+            "strike": True,
+            "dte": True,
+            "side": True,
+            "pct_otm": ":.1f",
+            "spread_pct": ":.1f",
+            "unusual_score": ":.1f",
+            "vol_oi": ":.2f",
+            "premium": ":,.0f",
+        },
+        title="Flow Map: Premium vs Volume/OI",
+    )
+    fig_bubble.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig_bubble, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# External ingest
+# Tabs
 # -----------------------------------------------------------------------------
-with st.expander("External ingest (CSV)"):
-    st.write("Drop CSV files into ./ingest with columns such as datetime, ticker, side, strike, expiration, size, price, notional, exchange.")
-    ext = read_external()
-    if not ext.empty:
-        st.dataframe(ext, use_container_width=True, hide_index=True)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["Top Flow", "Bullish", "Bearish", "0DTE", "By Ticker", "Download"]
+)
+
+with tab1:
+    st.dataframe(prep_display(overall), use_container_width=True, hide_index=True)
+
+with tab2:
+    st.dataframe(prep_display(bullish), use_container_width=True, hide_index=True)
+
+with tab3:
+    st.dataframe(prep_display(bearish), use_container_width=True, hide_index=True)
+
+with tab4:
+    if zero_dte.empty:
+        st.info("No 0DTE rows passed the current filters.")
     else:
-        st.info("No external CSVs detected.")
+        st.dataframe(prep_display(zero_dte), use_container_width=True, hide_index=True)
 
-st.caption("Data source: Yahoo Finance option chains via yfinance. Output quality is constrained by source granularity and OI update cadence.")
-st.caption(f"Latest snapshot saved: {saved_path}")
-st.caption("© 2026 AD Fund Management LP")
+with tab5:
+    display_ticker = ticker_summary.copy()
+    display_ticker["Total Premium"] = display_ticker["total_premium"].map(human_money)
+    display_ticker["Bullish Premium"] = display_ticker["bullish_premium"].map(human_money)
+    display_ticker["Bearish Premium"] = display_ticker["bearish_premium"].map(human_money)
+    display_ticker["Net Premium"] = display_ticker["net_premium"].map(human_money)
+    display_ticker["Avg Score"] = display_ticker["avg_score"].map(lambda x: f"{x:.1f}")
+    display_ticker["Max Score"] = display_ticker["max_score"].map(lambda x: f"{x:.1f}")
+    display_ticker = display_ticker[
+        ["symbol", "Security", "GICS Sector", "rows", "Total Premium", "Bullish Premium", "Bearish Premium", "Net Premium", "flow_bias", "Avg Score", "Max Score"]
+    ]
+    st.dataframe(display_ticker.head(300), use_container_width=True, hide_index=True)
+
+    ticker_pick = st.selectbox("Inspect ticker", options=ticker_summary["symbol"].tolist(), index=0)
+    ticker_rows = flow[flow["symbol"] == ticker_pick].nlargest(200, ["unusual_score", "premium", "vol_oi"])
+    st.dataframe(prep_display(ticker_rows), use_container_width=True, hide_index=True)
+
+with tab6:
+    csv_bytes = flow.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download full scan CSV",
+        data=csv_bytes,
+        file_name=f"unusual_options_flow_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    )
+    if not diags.empty:
+        st.dataframe(diags.sort_values(["errors", "expiries_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
+
+# -----------------------------------------------------------------------------
+# Footer note
+# -----------------------------------------------------------------------------
+st.caption(
+    "Method note: this app approximates unusual flow from chain snapshots. "
+    "For true tape, sweeps, split routing, and multileg prints, you need an exchange-level options flow feed."
+)
