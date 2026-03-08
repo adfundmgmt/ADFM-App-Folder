@@ -316,7 +316,6 @@ def add_elliott_overlay(
             name="ZigZag",
             hoverinfo="skip",
             showlegend=False,
-            legendgroup="non_ma",
         ),
         row=1,
         col=1,
@@ -392,11 +391,50 @@ def build_rangebreaks(index: pd.DatetimeIndex, intrvl: str) -> list[dict]:
     missing_bdays = full_bdays.difference(normalized)
 
     rangebreaks = [dict(bounds=["sat", "mon"])]
-
     if len(missing_bdays) > 0:
         rangebreaks.append(dict(values=missing_bdays.strftime("%Y-%m-%d").tolist()))
-
     return rangebreaks
+
+
+def add_custom_ma_legend(fig: go.Figure, items: list[tuple[str, str]]):
+    """
+    Draw a custom legend inside the chart using paper coordinates.
+    items: list of (label, color)
+    """
+    if not items:
+        return
+
+    x = 0.012
+    y = 0.988
+    line_len = 0.02
+    gap_after_line = 0.004
+    gap_between_items = 0.012
+
+    for label, color in items:
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            yref="paper",
+            x0=x,
+            x1=x + line_len,
+            y0=y,
+            y1=y,
+            line=dict(color=color, width=3),
+        )
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=x + line_len + gap_after_line,
+            y=y,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="middle",
+            font=dict(size=11, color="#222222"),
+            bgcolor="rgba(255,255,255,0.0)",
+        )
+        est_text_width = 0.0065 * len(label)
+        x += line_len + gap_after_line + est_text_width + gap_between_items
 
 
 # --------------------------- Data Fetch ---------------------------
@@ -558,7 +596,7 @@ fig.add_trace(
         increasing_fillcolor=COLORS["up"],
         decreasing_line_color=COLORS["down"],
         decreasing_fillcolor=COLORS["down"],
-        name="Price",
+        name="",
         showlegend=False,
         hovertemplate=(
             "Date: %{x|%Y-%m-%d}<br>"
@@ -580,6 +618,8 @@ ma_config = [
     (200, COLORS["ma200"], True),
 ]
 
+legend_items = []
+
 for w, color, enabled in ma_config:
     if enabled and f"MA{w}" in df_display.columns:
         fig.add_trace(
@@ -587,15 +627,15 @@ for w, color, enabled in ma_config:
                 x=df_display.index,
                 y=df_display[f"MA{w}"],
                 mode="lines",
-                line=dict(color=color, width=1.6),
+                line=dict(color=color, width=1.8),
                 name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
-                showlegend=True,
-                legendgroup="ma_only",
+                showlegend=False,
             ),
             row=row_map["price"],
             col=1,
         )
+        legend_items.append((f"MA {w}", color))
 
 if show_bbands:
     fig.add_trace(
@@ -604,10 +644,9 @@ if show_bbands:
             y=df_display["BB_UPPER"],
             mode="lines",
             line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
-            name="BB Upper",
+            name="",
             hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
             showlegend=False,
-            legendgroup="non_ma",
         ),
         row=row_map["price"],
         col=1,
@@ -620,10 +659,9 @@ if show_bbands:
             line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
             fill="tonexty",
             fillcolor="rgba(158,158,158,0.10)",
-            name="BB Lower",
+            name="",
             hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
             showlegend=False,
-            legendgroup="non_ma",
         ),
         row=row_map["price"],
         col=1,
@@ -634,10 +672,9 @@ if show_bbands:
             y=df_display["BB_MA"],
             mode="lines",
             line=dict(width=1.0, color="rgba(100,100,100,0.7)", dash="dot"),
-            name="BB Mid",
+            name="",
             hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
             showlegend=False,
-            legendgroup="non_ma",
         ),
         row=row_map["price"],
         col=1,
@@ -729,7 +766,7 @@ if show_volume:
             x=df_display.index,
             y=df_display["Volume"],
             marker_color=vol_colors,
-            name="Volume",
+            name="",
             hovertemplate="Volume: %{y:,.0f}<extra></extra>",
             showlegend=False,
         ),
@@ -745,7 +782,7 @@ if show_rsi:
             y=df_display["RSI14"],
             mode="lines",
             line=dict(width=1.6, color=COLORS["rsi"]),
-            name="RSI 14",
+            name="",
             hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -779,7 +816,7 @@ if show_macd:
             x=df_display.index,
             y=df_display["Hist"],
             marker_color=hist_colors,
-            name="MACD Hist",
+            name="",
             hovertemplate="Hist: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -792,7 +829,7 @@ if show_macd:
             y=df_display["MACD"],
             mode="lines",
             line=dict(width=1.5, color=COLORS["macd"]),
-            name="MACD",
+            name="",
             hovertemplate="MACD: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -805,7 +842,7 @@ if show_macd:
             y=df_display["Signal"],
             mode="lines",
             line=dict(width=1.3, color=COLORS["signal"]),
-            name="Signal",
+            name="",
             hovertemplate="Signal: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -859,37 +896,12 @@ fig.update_layout(
     hovermode="x unified",
     margin=dict(l=40, r=20, t=20, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
-    legend=dict(
-        orientation="h",
-        y=1.02,
-        x=0.0,
-        xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.85)",
-        borderwidth=0,
-        font=dict(size=11),
-        traceorder="normal",
-    ),
+    showlegend=False,
     bargap=0.08,
 )
 
-# --------------------------- Hard Legend Cleanup ---------------------------
-# Only MA traces are allowed in the legend. Everything else is forced off.
-allowed_legend_names = {"MA 8", "MA 20", "MA 50", "MA 100", "MA 200"}
-
-for trace in fig.data:
-    trace_name = str(getattr(trace, "name", "") or "").strip()
-
-    if trace_name not in allowed_legend_names:
-        trace.showlegend = False
-    else:
-        trace.showlegend = True
-
-    if trace_name.lower() in {"", "undefined", "none", "price", "volume"}:
-        trace.showlegend = False
-
-    if getattr(trace, "type", "") in {"candlestick", "ohlc", "bar"} and trace_name not in allowed_legend_names:
-        trace.showlegend = False
+# --------------------------- Custom In-Chart MA Legend ---------------------------
+add_custom_ma_legend(fig, legend_items)
 
 fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
 if show_volume:
