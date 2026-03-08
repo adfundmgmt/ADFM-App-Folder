@@ -54,9 +54,10 @@ def contiguous(mask: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
     start_dt: Optional[pd.Timestamp] = None
 
     for ts, flag in mask.items():
-        if bool(flag) and start_dt is None:
+        flag = bool(flag)
+        if flag and start_dt is None:
             start_dt = ts
-        elif not bool(flag) and start_dt is not None:
+        elif (not flag) and start_dt is not None:
             segments.append((start_dt, ts))
             start_dt = None
 
@@ -73,19 +74,47 @@ def fetch_fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) ->
         "cosd": start.strftime("%Y-%m-%d"),
         "coed": end.strftime("%Y-%m-%d"),
     }
+
     r = requests.get(FRED_BASE, params=params, headers=REQ_HEADERS, timeout=20)
     r.raise_for_status()
 
-    df = pd.read_csv(io.StringIO(r.text))
-    if "DATE" not in df.columns or series_id not in df.columns:
-        raise ValueError(f"Unexpected FRED response format for {series_id}")
+    text = r.text.strip()
+    if not text:
+        raise ValueError(f"Empty FRED response for {series_id}")
+
+    # Guard against HTML or non-CSV responses
+    lower_text = text[:200].lower()
+    if lower_text.startswith("<!doctype html") or lower_text.startswith("<html"):
+        raise ValueError(f"FRED returned HTML instead of CSV for {series_id}")
+
+    df = pd.read_csv(io.StringIO(text))
+    df.columns = [str(c).strip() for c in df.columns]
+
+    if "DATE" not in df.columns:
+        raise ValueError(
+            f"FRED response missing DATE column for {series_id}. Columns: {df.columns.tolist()}"
+        )
+
+    # Prefer exact series column, otherwise use the first non-DATE column
+    value_col = series_id if series_id in df.columns else None
+    if value_col is None:
+        non_date_cols = [c for c in df.columns if c != "DATE"]
+        if not non_date_cols:
+            raise ValueError(
+                f"FRED response missing value column for {series_id}. Columns: {df.columns.tolist()}"
+            )
+        value_col = non_date_cols[0]
 
     df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
-    df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
-    df = df.dropna(subset=["DATE"]).set_index("DATE").sort_index()
+    df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
 
-    s = df[series_id].ffill().dropna()
+    df = df.dropna(subset=["DATE"]).set_index("DATE").sort_index()
+    s = df[value_col].ffill().dropna()
     s.name = series_id
+
+    if s.empty:
+        raise ValueError(f"No usable observations returned for {series_id}")
+
     return s
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -130,7 +159,8 @@ def fetch_cpi_dates() -> List[pd.Timestamp]:
 def fetch_recession_bands(start: pd.Timestamp, end: pd.Timestamp) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
     try:
         rec = fetch_fred_series(REC_SERIES, start, end)
-        rec = rec.reindex(pd.date_range(rec.index.min(), rec.index.max(), freq="D")).ffill()
+        daily_index = pd.date_range(rec.index.min(), rec.index.max(), freq="D")
+        rec = rec.reindex(daily_index).ffill()
 
         mask = rec > 0.5
         bands = contiguous(mask)
@@ -160,6 +190,9 @@ def build_yield_dataframe(
     # Inverted real-yield momentum in bp
     mom = -(df["Real"] - df["Real"].shift(win)) * 100.0
     mom = mom.dropna()
+
+    if mom.empty:
+        return pd.DataFrame(), pd.Series(dtype=float)
 
     df = df.loc[mom.index].copy()
     df["InflationCompProxy"] = df["Nominal"] - df["Real"]
@@ -238,9 +271,14 @@ extended_start = start - pd.Timedelta(days=max(180, win * 3))
 
 try:
     nominal = fetch_fred_series(NOM_SERIES, extended_start, today)
+except Exception as e:
+    st.error(f"Failed loading {NOM_SERIES}: {e}")
+    st.stop()
+
+try:
     real = fetch_fred_series(REAL_SERIES, extended_start, today)
 except Exception as e:
-    st.error(f"Failed to load FRED data: {e}")
+    st.error(f"Failed loading {REAL_SERIES}: {e}")
     st.stop()
 
 df, mom = build_yield_dataframe(nominal=nominal, real=real, start=start, win=win)
