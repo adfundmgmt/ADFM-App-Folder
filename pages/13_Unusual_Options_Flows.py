@@ -1,11 +1,12 @@
 # streamlit_app.py
 # Unusual Options Flow Tracker
-# Full S&P 500 universe, premium-first signal engine, cached concurrent scan
+# Hardened build with graceful degradation, partial-result retention, and batch scanning
 
 import os
 import io
 import glob
 import math
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple, Dict
@@ -19,6 +20,7 @@ APP_TITLE = "Unusual Options Flow Tracker"
 DATA_DIR = "data"
 INGEST_DIR = "ingest"
 SCAN_CACHE_BASENAME = "last_good_scan"
+
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(INGEST_DIR, exist_ok=True)
 
@@ -26,7 +28,7 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
 
 # -----------------------------------------------------------------------------
-# Generic file helpers
+# File helpers
 # -----------------------------------------------------------------------------
 def _safe_write_table(df: pd.DataFrame, path_no_ext: str) -> str:
     parquet_path = f"{path_no_ext}.parquet"
@@ -67,6 +69,21 @@ def load_latest_snapshot() -> pd.DataFrame:
     return _safe_read_table(files[-1])
 
 
+def save_last_good_scan(df: pd.DataFrame) -> str:
+    base = os.path.join(DATA_DIR, SCAN_CACHE_BASENAME)
+    return _safe_write_table(df, base)
+
+
+def load_last_good_scan() -> pd.DataFrame:
+    parquet_path = os.path.join(DATA_DIR, f"{SCAN_CACHE_BASENAME}.parquet")
+    csv_path = os.path.join(DATA_DIR, f"{SCAN_CACHE_BASENAME}.csv")
+    if os.path.exists(parquet_path):
+        return _safe_read_table(parquet_path)
+    if os.path.exists(csv_path):
+        return _safe_read_table(csv_path)
+    return pd.DataFrame()
+
+
 def load_history(max_files: int = 80) -> pd.DataFrame:
     files = list_snapshot_files()
     if not files:
@@ -86,7 +103,6 @@ def load_history(max_files: int = 80) -> pd.DataFrame:
         return pd.DataFrame()
 
     hist = pd.concat(out, ignore_index=True)
-
     needed = [
         "ticker", "contractSymbol", "side", "expiration", "strike",
         "underlying_price", "volume", "openInterest", "vol_oi",
@@ -99,31 +115,22 @@ def load_history(max_files: int = 80) -> pd.DataFrame:
 
     hist["expiration"] = pd.to_datetime(hist["expiration"], errors="coerce")
     hist["DTE"] = np.floor(pd.to_numeric(hist["ttm_years"], errors="coerce") * 365.0)
-
     hist["moneyness_band"] = hist["moneyness"].apply(moneyness_band_from_ratio)
     hist["dte_band"] = hist["DTE"].apply(dte_band_from_days)
-
     return hist
-
-
-def save_last_good_scan(df: pd.DataFrame) -> str:
-    base = os.path.join(DATA_DIR, SCAN_CACHE_BASENAME)
-    return _safe_write_table(df, base)
-
-
-def load_last_good_scan() -> pd.DataFrame:
-    parquet_path = os.path.join(DATA_DIR, f"{SCAN_CACHE_BASENAME}.parquet")
-    csv_path = os.path.join(DATA_DIR, f"{SCAN_CACHE_BASENAME}.csv")
-    if os.path.exists(parquet_path):
-        return _safe_read_table(parquet_path)
-    if os.path.exists(csv_path):
-        return _safe_read_table(csv_path)
-    return pd.DataFrame()
 
 
 # -----------------------------------------------------------------------------
 # Universe helpers
 # -----------------------------------------------------------------------------
+LIQUID_FALLBACK_UNIVERSE = [
+    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AMD","AVGO","NFLX",
+    "SPY","QQQ","IWM","DIA","XLF","SMH","TLT","GLD","SLV","XLE",
+    "JPM","BAC","GS","MS","WMT","COST","HD","UNH","LLY","XOM",
+    "CVX","ORCL","CRM","INTC","MU","SHOP","PLTR","UBER","PANW","ADBE"
+]
+
+
 def _normalize_symbols(symbols: List[str]) -> List[str]:
     out = []
     seen = set()
@@ -153,7 +160,9 @@ def get_sp500_symbols() -> List[str]:
             cols = [str(c).strip().lower() for c in t.columns]
             if "symbol" in cols:
                 colname = t.columns[cols.index("symbol")]
-                return _normalize_symbols(t[colname].astype(str).tolist())
+                syms = _normalize_symbols(t[colname].astype(str).tolist())
+                if syms:
+                    return syms
     except Exception:
         pass
 
@@ -165,7 +174,9 @@ def get_sp500_symbols() -> List[str]:
         df = pd.read_csv(io.StringIO(r.text))
         for c in df.columns:
             if str(c).strip().lower() in ("symbol", "ticker"):
-                return _normalize_symbols(df[c].astype(str).tolist())
+                syms = _normalize_symbols(df[c].astype(str).tolist())
+                if syms:
+                    return syms
     except Exception:
         pass
 
@@ -175,14 +186,13 @@ def get_sp500_symbols() -> List[str]:
             df = pd.read_csv(local)
             for c in df.columns:
                 if str(c).strip().lower() in ("symbol", "ticker"):
-                    return _normalize_symbols(df[c].astype(str).tolist())
+                    syms = _normalize_symbols(df[c].astype(str).tolist())
+                    if syms:
+                        return syms
     except Exception:
         pass
 
-    return [
-        "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","LLY","AVGO","JPM","V","WMT",
-        "XOM","UNH","JNJ","PG","MA","COST","HD","ABBV","ORCL","BAC","MRK","PEP","KO","NFLX"
-    ]
+    return _normalize_symbols(LIQUID_FALLBACK_UNIVERSE)
 
 
 # -----------------------------------------------------------------------------
@@ -214,6 +224,11 @@ def compute_vol_oi(volume: pd.Series, open_interest: pd.Series) -> pd.Series:
     return out
 
 
+def safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
+    out = a / b
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
 def moneyness_band_from_ratio(m: float) -> str:
     try:
         d = abs(float(m) - 1.0)
@@ -242,14 +257,8 @@ def dte_band_from_days(d: float) -> str:
     return ">90d"
 
 
-def safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
-    out = a / b
-    out = out.replace([np.inf, -np.inf], np.nan)
-    return out
-
-
 # -----------------------------------------------------------------------------
-# Option chain fetch and enrich
+# Option-chain fetch
 # -----------------------------------------------------------------------------
 def get_spot_price(tk: yf.Ticker) -> float:
     try:
@@ -331,22 +340,22 @@ def enrich_chain(df: pd.DataFrame, spot: float, r: float, q: float) -> pd.DataFr
     out["expiration"] = pd.to_datetime(out["expiration"], errors="coerce")
     now_utc = pd.Timestamp.now(tz="UTC")
     exp_utc = pd.to_datetime(out["expiration"], utc=True, errors="coerce")
+
     out["ttm_years"] = (exp_utc - now_utc).dt.total_seconds() / (365.0 * 24.0 * 3600.0)
     out["ttm_years"] = out["ttm_years"].clip(lower=0.0)
 
-    out["days_to_exp"] = (
-        pd.to_datetime(out["expiration"]).dt.normalize() - pd.Timestamp.utcnow().normalize()
-    ).dt.days
+    today_utc = pd.Timestamp.now(tz="UTC").normalize()
+    out["days_to_exp"] = (exp_utc.dt.normalize() - today_utc).dt.days
 
     out["notional_usd"] = out["volume"].fillna(0.0) * out["underlying_price"].fillna(0.0) * 100.0
     out["premium_usd"] = out["volume"].fillna(0.0) * out["lastPrice"].fillna(0.0) * 100.0
     out["vol_oi"] = compute_vol_oi(out["volume"], out["openInterest"])
     out["moneyness"] = safe_div(out["underlying_price"], out["strike"])
 
-    mids = (out["bid"].fillna(0.0) + out["ask"].fillna(0.0)) / 2.0
-    spreads = out["ask"] - out["bid"]
-    out["mid"] = mids.where((out["bid"].notna()) & (out["ask"].notna()), np.nan)
-    out["spread"] = spreads.where((out["bid"].notna()) & (out["ask"].notna()), np.nan)
+    out["mid"] = ((out["bid"].fillna(0.0) + out["ask"].fillna(0.0)) / 2.0).where(
+        out["bid"].notna() & out["ask"].notna(), np.nan
+    )
+    out["spread"] = (out["ask"] - out["bid"]).where(out["bid"].notna() & out["ask"].notna(), np.nan)
     out["spread_pct_mid"] = safe_div(out["spread"], out["mid"])
     out["last_vs_mid"] = out["lastPrice"] - out["mid"]
 
@@ -388,52 +397,192 @@ def enrich_chain(df: pd.DataFrame, spot: float, r: float, q: float) -> pd.DataFr
     for c in keep:
         if c not in out.columns:
             out[c] = np.nan
+
     return out[keep]
 
 
+# -----------------------------------------------------------------------------
+# Batch scanner with graceful degradation
+# -----------------------------------------------------------------------------
+def chunked(seq: List[str], n: int) -> List[List[str]]:
+    return [seq[i:i + n] for i in range(0, len(seq), n)]
+
+
+def scan_universe_partial(
+    tickers: List[str],
+    max_expiries: int,
+    max_workers: int,
+    risk_free_rate: float,
+    dividend_yield: float,
+    batch_size: int = 30,
+    pause_between_batches: float = 0.35,
+    progress_bar=None,
+    progress_label=None,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, int]]:
+    batches = chunked(tickers, batch_size)
+    collected = []
+    failures = []
+    success_count = 0
+    done_count = 0
+    total = len(tickers)
+
+    for bi, batch in enumerate(batches):
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(fetch_chain_raw, tk, max_expiries): tk for tk in batch}
+            for fut in as_completed(futures):
+                ticker = futures[fut]
+                done_count += 1
+                try:
+                    chain_df, spot, err = fut.result()
+                    if err:
+                        failures.append({"ticker": ticker, "error": err})
+                    elif chain_df.empty:
+                        failures.append({"ticker": ticker, "error": "empty_chain"})
+                    else:
+                        enriched = enrich_chain(chain_df, spot, risk_free_rate, dividend_yield)
+                        if enriched.empty:
+                            failures.append({"ticker": ticker, "error": "enrich_empty"})
+                        else:
+                            collected.append(enriched)
+                            success_count += 1
+                except Exception as e:
+                    failures.append({"ticker": ticker, "error": str(e)})
+
+                if progress_bar is not None:
+                    frac = done_count / max(1, total)
+                    text = f"{progress_label} {done_count}/{total} | successes: {success_count} | failures: {len(failures)}"
+                    progress_bar.progress(min(frac, 1.0), text=text)
+
+        if bi < len(batches) - 1 and pause_between_batches > 0:
+            time.sleep(pause_between_batches)
+
+    result_df = pd.concat(collected, ignore_index=True) if collected else pd.DataFrame()
+    fail_df = pd.DataFrame(failures)
+
+    stats = {
+        "requested": total,
+        "completed": done_count,
+        "successes": success_count,
+        "failures": len(failures),
+    }
+    return result_df, fail_df, stats
+
+
 @st.cache_data(ttl=15 * 60, show_spinner=False)
-def load_market_scan(
+def run_scan_cached(
     tickers: Tuple[str, ...],
     max_expiries: int,
     max_workers: int,
     risk_free_rate: float,
     dividend_yield: float,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    collected = []
-    failures = []
+    batch_size: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, int]]:
+    result_df, fail_df, stats = scan_universe_partial(
+        tickers=list(tickers),
+        max_expiries=max_expiries,
+        max_workers=max_workers,
+        risk_free_rate=risk_free_rate,
+        dividend_yield=dividend_yield,
+        batch_size=batch_size,
+        pause_between_batches=0.0,
+        progress_bar=None,
+        progress_label="Scanning",
+    )
+    return result_df, fail_df, stats
 
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {
-            ex.submit(fetch_chain_raw, ticker, max_expiries): ticker
-            for ticker in tickers
+
+def resilient_market_scan(
+    tickers: List[str],
+    max_expiries: int,
+    max_workers: int,
+    risk_free_rate: float,
+    dividend_yield: float,
+    batch_size: int,
+    enable_live_progress: bool,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, int], str]:
+    progress = st.progress(0.0, text="Initializing scan...") if enable_live_progress else None
+
+    # Try cached full-universe scan first
+    try:
+        raw_scan, fail_df, stats = run_scan_cached(
+            tuple(tickers),
+            int(max_expiries),
+            int(max_workers),
+            float(risk_free_rate),
+            float(dividend_yield),
+            int(batch_size),
+        )
+        if progress is not None:
+            progress.progress(1.0, text=f"Full-universe cached scan complete | successes: {stats['successes']} | failures: {stats['failures']}")
+        if not raw_scan.empty:
+            save_last_good_scan(raw_scan)
+            if progress is not None:
+                progress.empty()
+            return raw_scan, fail_df, stats, "full_universe"
+    except Exception:
+        pass
+
+    # Then try live partial full-universe scan
+    try:
+        if progress is not None:
+            progress.progress(0.0, text="Retrying with live partial scan...")
+        raw_scan, fail_df, stats = scan_universe_partial(
+            tickers=tickers,
+            max_expiries=int(max_expiries),
+            max_workers=int(max_workers),
+            risk_free_rate=float(risk_free_rate),
+            dividend_yield=float(dividend_yield),
+            batch_size=int(batch_size),
+            pause_between_batches=0.35,
+            progress_bar=progress,
+            progress_label="Full universe live scan",
+        )
+        if not raw_scan.empty:
+            save_last_good_scan(raw_scan)
+            if progress is not None:
+                progress.empty()
+            return raw_scan, fail_df, stats, "full_universe_live_partial"
+    except Exception:
+        pass
+
+    # Then try liquid fallback universe
+    fallback = _normalize_symbols(LIQUID_FALLBACK_UNIVERSE)
+    try:
+        if progress is not None:
+            progress.progress(0.0, text="Falling back to liquid core universe...")
+        raw_scan, fail_df, stats = scan_universe_partial(
+            tickers=fallback,
+            max_expiries=min(int(max_expiries), 4),
+            max_workers=min(int(max_workers), 8),
+            risk_free_rate=float(risk_free_rate),
+            dividend_yield=float(dividend_yield),
+            batch_size=min(int(batch_size), 20),
+            pause_between_batches=0.25,
+            progress_bar=progress,
+            progress_label="Liquid fallback scan",
+        )
+        if not raw_scan.empty:
+            save_last_good_scan(raw_scan)
+            if progress is not None:
+                progress.empty()
+            return raw_scan, fail_df, stats, "liquid_fallback"
+    except Exception:
+        pass
+
+    # Then try last-good local cache
+    last_good = load_last_good_scan()
+    if progress is not None:
+        progress.empty()
+    if not last_good.empty:
+        stats = {
+            "requested": 0,
+            "completed": 0,
+            "successes": int(last_good["ticker"].nunique()) if "ticker" in last_good.columns else 0,
+            "failures": 0,
         }
-        for fut in as_completed(futures):
-            ticker = futures[fut]
-            try:
-                chain_df, spot, err = fut.result()
-                if err:
-                    failures.append({"ticker": ticker, "error": err})
-                    continue
-                if chain_df.empty:
-                    failures.append({"ticker": ticker, "error": "empty"})
-                    continue
-                enriched = enrich_chain(chain_df, spot, risk_free_rate, dividend_yield)
-                if enriched.empty:
-                    failures.append({"ticker": ticker, "error": "enrich_empty"})
-                    continue
-                collected.append(enriched)
-            except Exception as e:
-                failures.append({"ticker": ticker, "error": str(e)})
+        return last_good, pd.DataFrame(), stats, "last_good_cache"
 
-    fail_df = pd.DataFrame(failures)
-
-    if collected:
-        full = pd.concat(collected, ignore_index=True)
-        save_last_good_scan(full)
-        return full, fail_df
-
-    fallback = load_last_good_scan()
-    return fallback, fail_df
+    return pd.DataFrame(), pd.DataFrame(), {"requested": 0, "completed": 0, "successes": 0, "failures": 0}, "none"
 
 
 # -----------------------------------------------------------------------------
@@ -508,7 +657,6 @@ def add_side_aware_otm_fields(df: pd.DataFrame) -> pd.DataFrame:
 
     out.loc[call_mask, "otm_pct"] = (out.loc[call_mask, "strike"] / out.loc[call_mask, "underlying_price"]) - 1.0
     out.loc[put_mask, "otm_pct"] = 1.0 - (out.loc[put_mask, "strike"] / out.loc[put_mask, "underlying_price"])
-
     out["is_otm"] = out["otm_pct"].fillna(-999.0) >= 0
     return out
 
@@ -607,25 +755,13 @@ def build_priority_summary(signal: pd.DataFrame, ranking_mode: str) -> pd.DataFr
     )
 
     if ranking_mode == "Premium":
-        league = league.sort_values(
-            ["total_premium", "tier1_trades", "max_premium"],
-            ascending=[False, False, False]
-        )
+        league = league.sort_values(["total_premium", "tier1_trades", "max_premium"], ascending=[False, False, False])
     elif ranking_mode == "Notional":
-        league = league.sort_values(
-            ["total_notional", "total_premium", "tier1_trades"],
-            ascending=[False, False, False]
-        )
+        league = league.sort_values(["total_notional", "total_premium", "tier1_trades"], ascending=[False, False, False])
     elif ranking_mode == "Delta-adjusted":
-        league = league.sort_values(
-            ["total_delta_notional", "total_premium", "tier1_trades"],
-            ascending=[False, False, False]
-        )
+        league = league.sort_values(["total_delta_notional", "total_premium", "tier1_trades"], ascending=[False, False, False])
     else:
-        league = league.sort_values(
-            ["best_z_premium", "total_premium", "tier1_trades"],
-            ascending=[False, False, False]
-        )
+        league = league.sort_values(["best_z_premium", "total_premium", "tier1_trades"], ascending=[False, False, False])
 
     return league.reset_index(drop=True)
 
@@ -649,7 +785,7 @@ def read_external() -> pd.DataFrame:
 
 
 # -----------------------------------------------------------------------------
-# Formatting helpers
+# Formatting
 # -----------------------------------------------------------------------------
 def fmt_money(x):
     return "" if pd.isna(x) else f"${x:,.0f}"
@@ -678,23 +814,19 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Objective: detect institutional-grade unusual options activity using the full S&P 500.
+        Objective: detect unusual options activity across a broad liquid universe with graceful fallback behavior.
 
-        Philosophy: premium first, intensity second. Focus on flows large enough to matter,
-        filtered by moneyness, expiration window, volume versus open interest, and basic execution quality.
-
-        Improvements in this build
-        • Concurrent option-chain fetch across the full universe
-        • Cached raw scan so threshold changes do not hit the network
-        • Timestamped snapshots for richer history
-        • Last-good scan fallback when live fetch degrades
-        • History-aware z-scores by ticker, side, moneyness band, and DTE band
-        • Bucket summaries that cluster related contracts
+        This build is hardened to avoid all-or-nothing failure.
+        • Full S&P 500 attempt first
+        • Partial successes are retained
+        • Automatic liquid-universe fallback if the full scan degrades
+        • Last-good cache used if live data is weak
+        • Threshold changes rerank locally
         """
     )
 
     st.markdown("### Universe")
-    st.caption("Using full S&P 500 universe with public-source fallback to local CSV.")
+    st.caption("Full S&P 500 with automatic fallback to a liquid core universe.")
     uploaded = st.file_uploader("Upload sp500_symbols.csv (optional)", type=["csv"], accept_multiple_files=False)
     if uploaded is not None:
         try:
@@ -705,11 +837,13 @@ with st.sidebar:
             st.warning(f"Upload failed: {e}")
 
     tickers = get_sp500_symbols()
-    st.caption(f"Loaded {len(tickers)} symbols.")
+    st.caption(f"Primary universe size: {len(tickers)}")
 
     st.markdown("### Data")
     max_expiries = st.number_input("Max expirations per ticker", min_value=1, max_value=12, value=4, step=1)
-    max_workers = st.number_input("Concurrent workers", min_value=2, max_value=24, value=10, step=1)
+    max_workers = st.number_input("Concurrent workers", min_value=2, max_value=20, value=8, step=1)
+    batch_size = st.number_input("Batch size", min_value=10, max_value=100, value=30, step=5)
+    enable_live_progress = st.checkbox("Show live scan progress", value=True)
 
     st.markdown("### UOA Thresholds")
     min_notional = st.number_input("Min notional per line, USD", min_value=0, max_value=250_000_000, value=500_000, step=100_000)
@@ -731,30 +865,27 @@ with st.sidebar:
 
 
 # -----------------------------------------------------------------------------
-# Load raw market scan
+# Scan
 # -----------------------------------------------------------------------------
-with st.status("Scanning option chains...", expanded=False) as status:
-    raw_scan, fail_df = load_market_scan(
-        tuple(tickers),
-        int(max_expiries),
-        int(max_workers),
-        float(risk_free_rate),
-        float(dividend_yield),
-    )
-    if raw_scan.empty:
-        status.update(label="Live scan unavailable. No last-good scan found.", state="error")
-    else:
-        status.update(label="Scan completed.", state="complete")
+raw_scan, fail_df, scan_stats, scan_source = resilient_market_scan(
+    tickers=tickers,
+    max_expiries=int(max_expiries),
+    max_workers=int(max_workers),
+    risk_free_rate=float(risk_free_rate),
+    dividend_yield=float(dividend_yield),
+    batch_size=int(batch_size),
+    enable_live_progress=bool(enable_live_progress),
+)
 
 if raw_scan.empty:
-    st.error("No option-chain data available. Live scan failed and no last-good dataset was found.")
+    st.error("Live scan, fallback scan, and local cache all returned zero usable option-chain rows.")
+    st.caption("This is a data-source problem from Yahoo/yfinance, not a threshold problem inside the dashboard.")
     st.stop()
 
-# Persist latest timestamped snapshot after a successful or fallback scan
 saved_path = save_snapshot(raw_scan)
 
 # -----------------------------------------------------------------------------
-# Build signal table locally only
+# Build local features only
 # -----------------------------------------------------------------------------
 previous = load_latest_snapshot()
 hist = load_history(max_files=int(history_files))
@@ -772,43 +903,55 @@ unusual = apply_uoa_screen(
     require_exec_bias=bool(require_exec_bias),
 )
 
-if unusual.empty:
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Universe", f"{len(tickers):,}")
-    c2.metric("Contracts scanned", f"{len(raw_scan):,}")
-    c3.metric("Fetch failures", f"{len(fail_df):,}")
-    st.info("No contracts matched the current UOA screen.")
-    st.caption(f"Latest snapshot saved: {saved_path}")
-    st.stop()
+if not unusual.empty:
+    unusual["tier"] = unusual.apply(classify_tier, axis=1)
+else:
+    unusual["tier"] = pd.Series(dtype="object")
 
-unusual["tier"] = unusual.apply(classify_tier, axis=1)
-signal = unusual[unusual["tier"].isin(["Tier 1", "Tier 2"])].copy()
+signal = unusual[unusual["tier"].isin(["Tier 1", "Tier 2"])].copy() if not unusual.empty else pd.DataFrame()
 
 # -----------------------------------------------------------------------------
-# Top status row
+# Header metrics
 # -----------------------------------------------------------------------------
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Universe", f"{len(tickers):,}")
-c2.metric("Contracts scanned", f"{len(raw_scan):,}")
-c3.metric("UOA lines", f"{len(unusual):,}")
-c4.metric("Tier 1 / 2 lines", f"{len(signal):,}")
-c5.metric("Fetch failures", f"{len(fail_df):,}")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Scan source", scan_source.replace("_", " ").title())
+c2.metric("Universe requested", f"{scan_stats.get('requested', 0):,}")
+c3.metric("Successful tickers", f"{scan_stats.get('successes', 0):,}")
+c4.metric("Contracts scanned", f"{len(raw_scan):,}")
+c5.metric("UOA lines", f"{len(unusual):,}")
+c6.metric("Tier 1 / 2 lines", f"{len(signal):,}")
 
 if not fail_df.empty:
     with st.expander("Fetch failures and empty chains"):
-        fail_show = fail_df.copy()
-        st.dataframe(fail_show.sort_values(["error", "ticker"]), use_container_width=True, hide_index=True)
+        st.dataframe(
+            fail_df.sort_values(["error", "ticker"]).reset_index(drop=True),
+            use_container_width=True,
+            hide_index=True
+        )
 
 # -----------------------------------------------------------------------------
-# Priority summary
+# If no signals, still show usable output
+# -----------------------------------------------------------------------------
+if unusual.empty:
+    st.warning("The scan returned option-chain data, but nothing met the current UOA screen.")
+    st.caption("Try lowering the notional threshold, the OTM threshold, or the Vol/OI floor.")
+    with st.expander("Raw scan sample"):
+        raw_sample = raw_scan.head(200).copy()
+        if "expiration" in raw_sample.columns:
+            raw_sample["expiration"] = pd.to_datetime(raw_sample["expiration"], errors="coerce").dt.date.astype(str)
+        st.dataframe(raw_sample, use_container_width=True, hide_index=True)
+    st.caption(f"Latest snapshot saved: {saved_path}")
+    st.caption("© 2026 AD Fund Management LP")
+    st.stop()
+
+# -----------------------------------------------------------------------------
+# Priority Summary
 # -----------------------------------------------------------------------------
 st.subheader("Priority Summary")
 
-if signal.empty:
-    st.info("No Tier 1 or Tier 2 contracts matched today in the selected universe.")
-else:
-    league = build_priority_summary(signal, ranking_mode=ranking_mode)
+league = build_priority_summary(signal if not signal.empty else unusual, ranking_mode=ranking_mode)
 
+if not league.empty:
     league_display = league.copy()
     league_display["total_premium"] = league_display["total_premium"].map(fmt_money)
     league_display["total_notional"] = league_display["total_notional"].map(fmt_money)
@@ -818,52 +961,54 @@ else:
     league_display["avg_exec_bias"] = league_display["avg_exec_bias"].map(lambda x: fmt_num(x, 2))
     league_display["tier1_trades"] = league_display["tier1_trades"].map(fmt_int)
     league_display["tier2_trades"] = league_display["tier2_trades"].map(fmt_int)
-
     st.dataframe(league_display, use_container_width=True, hide_index=True)
 
-    st.subheader("Top contracts per ticker")
-    top_raw = (
-        signal.sort_values(["ticker", "premium_usd"], ascending=[True, False])
-        .groupby("ticker", as_index=False, sort=False)
-        .head(3)
-        .copy()
-    )
+# -----------------------------------------------------------------------------
+# Top contracts per ticker
+# -----------------------------------------------------------------------------
+st.subheader("Top Contracts Per Ticker")
 
-    top_display = top_raw[[
-        "ticker", "tier", "side", "expiration", "days_to_exp", "strike",
-        "underlying_price", "lastPrice", "volume", "openInterest", "vol_oi",
-        "impliedVolatility", "delta", "premium_usd", "notional_usd",
-        "delta_notional_usd", "z_premium", "exec_bias"
-    ]].copy()
+top_source = signal if not signal.empty else unusual
+top_raw = (
+    top_source.sort_values(["ticker", "premium_usd"], ascending=[True, False])
+    .groupby("ticker", as_index=False, sort=False)
+    .head(3)
+    .copy()
+)
 
-    top_display["expiration"] = pd.to_datetime(top_display["expiration"]).dt.date.astype(str)
-    top_display["strike"] = top_display["strike"].map(fmt_money_2)
-    top_display["underlying_price"] = top_display["underlying_price"].map(fmt_money_2)
-    top_display["lastPrice"] = top_display["lastPrice"].map(fmt_money_2)
-    top_display["volume"] = top_raw["volume"].map(fmt_int)
-    top_display["openInterest"] = top_raw["openInterest"].map(fmt_int)
-    top_display["vol_oi"] = top_raw["vol_oi"].map(lambda x: fmt_num(x, 2))
-    top_display["impliedVolatility"] = top_raw["impliedVolatility"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
-    top_display["delta"] = top_raw["delta"].map(lambda x: fmt_num(x, 2))
-    top_display["premium_usd"] = top_raw["premium_usd"].map(fmt_money)
-    top_display["notional_usd"] = top_raw["notional_usd"].map(fmt_money)
-    top_display["delta_notional_usd"] = top_raw["delta_notional_usd"].map(fmt_money)
-    top_display["z_premium"] = top_raw["z_premium"].map(lambda x: fmt_num(x, 2))
-    top_display["exec_bias"] = top_raw["exec_bias"].map(lambda x: fmt_num(x, 2))
+top_display = top_raw[[
+    "ticker", "tier", "side", "expiration", "days_to_exp", "strike",
+    "underlying_price", "lastPrice", "volume", "openInterest", "vol_oi",
+    "impliedVolatility", "delta", "premium_usd", "notional_usd",
+    "delta_notional_usd", "z_premium", "exec_bias"
+]].copy()
 
-    st.dataframe(top_display, use_container_width=True, hide_index=True)
+top_display["expiration"] = pd.to_datetime(top_display["expiration"], errors="coerce").dt.date.astype(str)
+top_display["strike"] = top_raw["strike"].map(fmt_money_2)
+top_display["underlying_price"] = top_raw["underlying_price"].map(fmt_money_2)
+top_display["lastPrice"] = top_raw["lastPrice"].map(fmt_money_2)
+top_display["volume"] = top_raw["volume"].map(fmt_int)
+top_display["openInterest"] = top_raw["openInterest"].map(fmt_int)
+top_display["vol_oi"] = top_raw["vol_oi"].map(lambda x: fmt_num(x, 2))
+top_display["impliedVolatility"] = top_raw["impliedVolatility"].map(lambda x: fmt_pct(x, mult=100.0, decimals=1))
+top_display["delta"] = top_raw["delta"].map(lambda x: fmt_num(x, 2))
+top_display["premium_usd"] = top_raw["premium_usd"].map(fmt_money)
+top_display["notional_usd"] = top_raw["notional_usd"].map(fmt_money)
+top_display["delta_notional_usd"] = top_raw["delta_notional_usd"].map(fmt_money)
+top_display["z_premium"] = top_raw["z_premium"].map(lambda x: fmt_num(x, 2))
+top_display["exec_bias"] = top_raw["exec_bias"].map(lambda x: fmt_num(x, 2))
+
+st.dataframe(top_display, use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
-# Bucket summary
+# Bucket Summary
 # -----------------------------------------------------------------------------
 st.subheader("Clustered Flow Buckets")
-bucket = build_bucket_summary(signal if not signal.empty else unusual)
 
-if bucket.empty:
-    st.info("No grouped buckets available.")
-else:
-    bucket_display = bucket.head(200).copy()
-    bucket_display["expiration"] = pd.to_datetime(bucket_display["expiration"]).dt.date.astype(str)
+bucket = build_bucket_summary(signal if not signal.empty else unusual)
+if not bucket.empty:
+    bucket_display = bucket.head(250).copy()
+    bucket_display["expiration"] = pd.to_datetime(bucket_display["expiration"], errors="coerce").dt.date.astype(str)
     bucket_display["strike_bucket"] = bucket_display["strike_bucket"].map(fmt_money_2)
     bucket_display["lines"] = bucket_display["lines"].map(fmt_int)
     bucket_display["total_premium"] = bucket_display["total_premium"].map(fmt_money)
@@ -875,12 +1020,11 @@ else:
     st.dataframe(bucket_display, use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
-# Signal table
+# Flow Summary
 # -----------------------------------------------------------------------------
 st.subheader("Flow Summary")
 
-signal_base = signal if not signal.empty else unusual
-view_raw = signal_base[[
+view_raw = (signal if not signal.empty else unusual)[[
     "ticker", "tier", "side", "expiration", "days_to_exp", "strike",
     "underlying_price", "lastPrice", "volume", "openInterest", "vol_oi",
     "oi_change", "oi_change_pct", "impliedVolatility", "delta", "delta_abs",
@@ -898,10 +1042,10 @@ sort_col = {
 view_raw = view_raw.sort_values(sort_col, ascending=False)
 
 view = view_raw.copy()
-view["expiration"] = pd.to_datetime(view["expiration"]).dt.date.astype(str)
-view["strike"] = view["strike"].map(fmt_money_2)
-view["underlying_price"] = view["underlying_price"].map(fmt_money_2)
-view["lastPrice"] = view["lastPrice"].map(fmt_money_2)
+view["expiration"] = pd.to_datetime(view["expiration"], errors="coerce").dt.date.astype(str)
+view["strike"] = view_raw["strike"].map(fmt_money_2)
+view["underlying_price"] = view_raw["underlying_price"].map(fmt_money_2)
+view["lastPrice"] = view_raw["lastPrice"].map(fmt_money_2)
 view["volume"] = view_raw["volume"].map(fmt_int)
 view["openInterest"] = view_raw["openInterest"].map(fmt_int)
 view["vol_oi"] = view_raw["vol_oi"].map(lambda x: fmt_num(x, 2))
@@ -922,13 +1066,14 @@ view["exec_bias"] = view_raw["exec_bias"].map(lambda x: fmt_num(x, 2))
 st.dataframe(view, use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
-# Ticker drilldown
+# Ticker Drilldown
 # -----------------------------------------------------------------------------
 st.subheader("Ticker Drilldown")
-candidate_names = league["ticker"].tolist() if not signal.empty else sorted(signal_base["ticker"].dropna().unique().tolist())
+
+candidate_names = league["ticker"].tolist() if not league.empty else sorted((signal if not signal.empty else unusual)["ticker"].dropna().unique().tolist())
 if candidate_names:
     selected_ticker = st.selectbox("Select ticker", candidate_names)
-    ticker_df = signal_base[signal_base["ticker"] == selected_ticker].copy()
+    ticker_df = (signal if not signal.empty else unusual).loc[(signal if not signal.empty else unusual)["ticker"] == selected_ticker].copy()
 
     if not ticker_df.empty:
         t1, t2, t3, t4 = st.columns(4)
@@ -945,7 +1090,7 @@ if candidate_names:
             "delta_notional_usd", "otm_pct", "z_premium", "exec_bias"
         ]].copy()
 
-        ticker_view["expiration"] = pd.to_datetime(ticker_view["expiration"]).dt.date.astype(str)
+        ticker_view["expiration"] = pd.to_datetime(ticker_view["expiration"], errors="coerce").dt.date.astype(str)
         ticker_view["strike"] = ticker_view_raw["strike"].map(fmt_money_2)
         ticker_view["underlying_price"] = ticker_view_raw["underlying_price"].map(fmt_money_2)
         ticker_view["lastPrice"] = ticker_view_raw["lastPrice"].map(fmt_money_2)
@@ -974,6 +1119,6 @@ with st.expander("External ingest (CSV)"):
     else:
         st.info("No external CSVs detected.")
 
-st.caption("Data source: Yahoo Finance option chains via yfinance. Signal quality is limited by source granularity and OI update cadence.")
+st.caption("Data source: Yahoo Finance option chains via yfinance. Output quality is constrained by source granularity and OI update cadence.")
 st.caption(f"Latest snapshot saved: {saved_path}")
 st.caption("© 2026 AD Fund Management LP")
