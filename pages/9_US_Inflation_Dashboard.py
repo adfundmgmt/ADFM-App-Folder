@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from pandas_datareader.data import DataReader
+from io import StringIO
+from urllib.request import urlopen
+from urllib.error import URLError, HTTPError
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
@@ -53,7 +55,7 @@ with st.sidebar:
         • A latest-print regime strip to show whether inflation is cooling, sticky, or reheating  
 
         Under the hood  
-        • FRED series pulled via `pandas-datareader`  
+        • FRED series pulled directly from the St. Louis Fed CSV endpoint  
         • Monthly data standardised to month start and aligned into one dataset  
         • Preset windows plus custom month-aware range selection  
         • Clean export of the same prepared dataset used by the charts
@@ -110,10 +112,6 @@ def fmt_pct(x: float) -> str:
     return "N/A" if pd.isna(x) else f"{x:.2f}%"
 
 
-def fmt_level(x: float) -> str:
-    return "N/A" if pd.isna(x) else f"{x:.2f}"
-
-
 def safe_delta_text(curr: float, prev: float) -> str:
     if pd.isna(curr) or pd.isna(prev):
         return "vs prior print: N/A"
@@ -132,7 +130,7 @@ def classify_inflation_regime(core_yoy: float, core_3m_ann: float) -> str:
 
 
 def month_start(ts) -> pd.Timestamp:
-    return pd.Timestamp(ts).to_period("M").to_timestamp("MS")
+    return pd.Timestamp(ts).to_period("M").to_timestamp(how="start")
 
 
 def period_to_start_date(period_label: str, end_date: pd.Timestamp) -> pd.Timestamp:
@@ -142,7 +140,7 @@ def period_to_start_date(period_label: str, end_date: pd.Timestamp) -> pd.Timest
         return month_start(pd.Timestamp(START_DATE_FULL))
 
     mapping = {
-        "1M": 3,   # buffer for context
+        "1M": 3,
         "3M": 6,
         "6M": 9,
         "9M": 12,
@@ -163,7 +161,7 @@ def build_custom_month_range(
     default_end: pd.Timestamp,
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     month_index = pd.period_range(min_date, max_date, freq="M")
-    month_labels = [p.strftime("%Y-%m") for p in month_index]
+    month_labels = [str(p) for p in month_index]
 
     default_start_period = pd.Period(default_start, freq="M")
     default_end_period = pd.Period(default_end, freq="M")
@@ -181,17 +179,38 @@ def build_custom_month_range(
         options=month_labels,
         value=(month_labels[default_value[0]], month_labels[default_value[1]]),
     )
-    start = pd.Period(sel[0], freq="M").to_timestamp("MS")
-    end = pd.Period(sel[1], freq="M").to_timestamp("MS")
+    start = pd.Period(sel[0], freq="M").to_timestamp(how="start")
+    end = pd.Period(sel[1], freq="M").to_timestamp(how="start")
     return start, end
 
 
+def fetch_fred_csv(series_id: str) -> pd.DataFrame:
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    try:
+        with urlopen(url, timeout=20) as response:
+            csv_data = response.read().decode("utf-8")
+        df = pd.read_csv(StringIO(csv_data))
+        return df
+    except (URLError, HTTPError) as e:
+        raise RuntimeError(f"Failed to fetch FRED series {series_id}: {e}") from e
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error fetching FRED series {series_id}: {e}") from e
+
+
 def load_fred_series(series_id: str, start: str) -> pd.Series:
-    df = DataReader(series_id, "fred", start)
-    s = df[series_id].copy()
-    s = s.sort_index()
+    df = fetch_fred_csv(series_id)
+
+    if "DATE" not in df.columns or series_id not in df.columns:
+        raise ValueError(f"Unexpected FRED response format for {series_id}")
+
+    df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+    df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
+    df = df.dropna(subset=["DATE"]).copy()
+    df = df[df["DATE"] >= pd.Timestamp(start)].copy()
+
+    s = df.set_index("DATE")[series_id].sort_index()
     s = s[~s.index.duplicated(keep="last")]
-    s.index = pd.to_datetime(s.index).to_period("M").to_timestamp("MS")
+    s.index = s.index.to_period("M").to_timestamp(how="start")
     s.name = series_id
     return s
 
@@ -229,7 +248,7 @@ def prepare_cpi_dataset(raw: pd.DataFrame) -> pd.DataFrame:
         )
         mean = valid_hist.mean()
         std = valid_hist.std(ddof=0)
-        if std and not np.isclose(std, 0):
+        if pd.notna(std) and not np.isclose(std, 0):
             df["core_3m_ann_zscore"] = (df["core_3m_ann"] - mean) / std
         else:
             df["core_3m_ann_zscore"] = np.nan
@@ -243,8 +262,7 @@ def prepare_cpi_dataset(raw: pd.DataFrame) -> pd.DataFrame:
 def filter_window(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     start_date = month_start(start_date)
     end_date = month_start(end_date)
-    out = df.loc[(df.index >= start_date) & (df.index <= end_date)].copy()
-    return out
+    return df.loc[(df.index >= start_date) & (df.index <= end_date)].copy()
 
 
 def get_recession_periods(flag: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -531,7 +549,7 @@ m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Headline CPI YoY", fmt_pct(headline_yoy_latest), safe_delta_text(headline_yoy_latest, headline_yoy_prev))
 m2.metric("Core CPI YoY", fmt_pct(core_yoy_latest), safe_delta_text(core_yoy_latest, core_yoy_prev))
 m3.metric("Core 3M Ann.", fmt_pct(core_3m_latest), safe_delta_text(core_3m_latest, core_3m_prev))
-m4.metric("Headline 3M Ann.", fmt_pct(headline_3m_latest), None)
+m4.metric("Headline 3M Ann.", fmt_pct(headline_3m_latest))
 m5.metric("Core 3M vs YoY Gap", "N/A" if pd.isna(gap_latest) else f"{gap_latest:+.2f} pp", regime_label)
 
 c1, c2, c3 = st.columns(3)
@@ -636,7 +654,8 @@ with st.expander("Download Data"):
 
     export_df = window_df[export_cols].copy()
     export_df.index.name = "Date"
-    export_df.columns = [
+
+    export_names = [
         "Headline CPI",
         "Core CPI",
         "Headline YoY (%)",
@@ -648,7 +667,11 @@ with st.expander("Download Data"):
         "Core 3M Ann. - YoY Gap (pp)",
         "Core 3M Ann. Percentile",
         "Core 3M Ann. Z-Score",
-    ] + (["Recession Flag"] if include_recession_flag else [])
+    ]
+    if include_recession_flag:
+        export_names.append("Recession Flag")
+
+    export_df.columns = export_names
 
     st.download_button(
         "Download CSV",
@@ -664,7 +687,7 @@ with st.expander("Methodology & Sources", expanded=False):
     st.markdown(
         """
         **Data source**  
-        FRED via `pandas-datareader`
+        FRED direct CSV endpoint from the St. Louis Fed
 
         **Series used**  
         • Headline CPI: `CPIAUCNS`  
