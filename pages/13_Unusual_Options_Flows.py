@@ -1,7 +1,7 @@
 # streamlit_app.py
 # ADFM | Unusual Options Flow Tracker
 # Full-universe S&P 500 options scanner using public Yahoo chain data
-# Hardened universe loader with built-in 503-stock fallback
+# Hardened for Streamlit Cloud and repeat-safe cluster logic
 
 import json
 import math
@@ -61,14 +61,12 @@ DEFAULT_MIN_VOLUME = 50
 DEFAULT_MIN_VOL_OI = 1.0
 DEFAULT_MAX_SPREAD_PCT = 35.0
 DEFAULT_TOP_N = 200
-DEFAULT_MAX_WORKERS = 24
+DEFAULT_MAX_WORKERS = 20
 DEFAULT_DTE_MIN = 0
 DEFAULT_DTE_MAX = 365
 
 # -----------------------------------------------------------------------------
-# Built-in fallback S&P 500 symbol universe
-# This keeps the app alive even when public constituent pages fail.
-# It is intentionally deterministic and local.
+# Built-in fallback S&P 500 universe
 # -----------------------------------------------------------------------------
 SP500_FALLBACK_SYMBOLS = sorted([
     "MMM","AOS","ABT","ABBV","ACN","ADBE","AMD","AES","AFL","A","APD","ABNB","AKAM","ALB","ARE","ALGN","ALLE",
@@ -267,12 +265,6 @@ def load_json(path: Path):
 # Deterministic universe loader
 # -----------------------------------------------------------------------------
 def get_sp500_universe() -> pd.DataFrame:
-    """
-    Never fail on constituent fetch.
-    Priority:
-    1) locally cached enriched universe
-    2) built-in 503-stock fallback
-    """
     cached = load_pickle(SP500_META_CACHE)
     if isinstance(cached, pd.DataFrame) and not cached.empty and "symbol" in cached.columns:
         cached = cached.copy()
@@ -350,7 +342,7 @@ def fetch_spot_snapshot(symbols: List[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 # -----------------------------------------------------------------------------
-# One-symbol chain scan
+# Option scan
 # -----------------------------------------------------------------------------
 def scan_one_symbol(
     symbol: str,
@@ -504,10 +496,34 @@ def scan_one_symbol(
     return rows, diagnostics
 
 def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
+    """
+    Idempotent and safe to call multiple times.
+    Rebuilds cluster columns from scratch every time.
+    """
+    if df is None or df.empty:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
     out = df.copy()
+
+    stale_cols = [
+        "cluster_key",
+        "cluster_contracts",
+        "cluster_premium",
+        "cluster_volume",
+        "cluster_score",
+        "cluster_flag",
+    ]
+    existing_stale = [c for c in stale_cols if c in out.columns]
+    if existing_stale:
+        out = out.drop(columns=existing_stale, errors="ignore")
+
+    required = ["symbol", "expiry", "type", "direction", "contract_symbol", "premium", "volume", "unusual_score"]
+    missing = [c for c in required if c not in out.columns]
+    if missing:
+        for c in ["cluster_contracts", "cluster_premium", "cluster_volume", "cluster_score", "cluster_flag"]:
+            out[c] = np.nan if c != "cluster_flag" else ""
+        return out
+
     out["cluster_key"] = (
         out["symbol"].astype(str) + "|" +
         out["expiry"].astype(str) + "|" +
@@ -515,13 +531,37 @@ def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
         out["direction"].astype(str)
     )
 
-    grp = out.groupby("cluster_key", as_index=False).agg(
-        cluster_contracts=("contract_symbol", "count"),
-        cluster_premium=("premium", "sum"),
-        cluster_volume=("volume", "sum"),
-        cluster_score=("unusual_score", "mean"),
+    grp = (
+        out.groupby("cluster_key", dropna=False)
+        .agg(
+            cluster_contracts=("contract_symbol", "count"),
+            cluster_premium=("premium", "sum"),
+            cluster_volume=("volume", "sum"),
+            cluster_score=("unusual_score", "mean"),
+        )
+        .reset_index()
     )
-    out = out.merge(grp, on="cluster_key", how="left")
+
+    if grp.empty:
+        out["cluster_contracts"] = 1
+        out["cluster_premium"] = out["premium"]
+        out["cluster_volume"] = out["volume"]
+        out["cluster_score"] = out["unusual_score"]
+        out["cluster_flag"] = ""
+        return out
+
+    out = out.merge(grp, on="cluster_key", how="left", validate="many_to_one")
+
+    for col, fill in {
+        "cluster_contracts": 1,
+        "cluster_premium": 0.0,
+        "cluster_volume": 0.0,
+        "cluster_score": 0.0,
+    }.items():
+        if col not in out.columns:
+            out[col] = fill
+        out[col] = out[col].fillna(fill)
+
     out["cluster_flag"] = np.where(
         (out["cluster_contracts"] >= 3) & (out["cluster_premium"] >= 250_000),
         "CLUSTER",
@@ -541,7 +581,7 @@ def run_full_scan(
     max_workers: int,
 ):
     spot_map = {}
-    if spot_snapshot is not None and not spot_snapshot.empty:
+    if spot_snapshot is not None and not spot_snapshot.empty and "symbol" in spot_snapshot.columns and "spot" in spot_snapshot.columns:
         spot_map = dict(zip(spot_snapshot["symbol"], spot_snapshot["spot"]))
 
     all_rows = []
@@ -591,19 +631,18 @@ def run_full_scan(
 
     if not flow.empty:
         flow = build_cluster_flags(flow)
-        flow = flow.sort_values(
-            ["unusual_score", "premium", "vol_oi", "volume"],
-            ascending=[False, False, False, False],
-        ).reset_index(drop=True)
+        sort_cols = [c for c in ["unusual_score", "premium", "vol_oi", "volume"] if c in flow.columns]
+        if sort_cols:
+            flow = flow.sort_values(sort_cols, ascending=[False] * len(sort_cols)).reset_index(drop=True)
 
     return flow, diags
 
 def summarize_tape(df: pd.DataFrame) -> str:
-    if df.empty:
+    if df is None or df.empty:
         return "No qualifying flow made it through the current filters."
 
-    bullish = df.loc[df["direction"] == "BULLISH", "premium"].sum()
-    bearish = df.loc[df["direction"] == "BEARISH", "premium"].sum()
+    bullish = df.loc[df["direction"] == "BULLISH", "premium"].sum() if "direction" in df.columns else 0.0
+    bearish = df.loc[df["direction"] == "BEARISH", "premium"].sum() if "direction" in df.columns else 0.0
     top = df.iloc[0]
 
     leader = (
@@ -628,21 +667,32 @@ def summarize_tape(df: pd.DataFrame) -> str:
     return f"{leader} {tilt} {cluster_line}"
 
 def prep_display(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
+    if df is None or df.empty:
+        return pd.DataFrame()
 
     out = df.copy()
-    out["Premium"] = out["premium"].map(human_money)
-    out["Vol"] = out["volume"].map(human_num)
-    out["OI"] = out["open_interest"].map(human_num)
-    out["Vol/OI"] = out["vol_oi"].map(lambda x: f"{x:.2f}x")
-    out["Fill"] = out["fill_est"].map(lambda x: f"{x:.2f}")
-    out["Bid"] = out["bid"].map(lambda x: f"{x:.2f}")
-    out["Ask"] = out["ask"].map(lambda x: f"{x:.2f}")
-    out["Spread %"] = out["spread_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
-    out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}")
-    out["OTM %"] = out["pct_otm"].map(lambda x: f"{x:.1f}%")
-    out["Score"] = out["unusual_score"].map(lambda x: f"{x:.1f}")
+    if "premium" in out.columns:
+        out["Premium"] = out["premium"].map(human_money)
+    if "volume" in out.columns:
+        out["Vol"] = out["volume"].map(human_num)
+    if "open_interest" in out.columns:
+        out["OI"] = out["open_interest"].map(human_num)
+    if "vol_oi" in out.columns:
+        out["Vol/OI"] = out["vol_oi"].map(lambda x: f"{x:.2f}x")
+    if "fill_est" in out.columns:
+        out["Fill"] = out["fill_est"].map(lambda x: f"{x:.2f}")
+    if "bid" in out.columns:
+        out["Bid"] = out["bid"].map(lambda x: f"{x:.2f}")
+    if "ask" in out.columns:
+        out["Ask"] = out["ask"].map(lambda x: f"{x:.2f}")
+    if "spread_pct" in out.columns:
+        out["Spread %"] = out["spread_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
+    if "iv" in out.columns:
+        out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}")
+    if "pct_otm" in out.columns:
+        out["OTM %"] = out["pct_otm"].map(lambda x: f"{x:.1f}%")
+    if "unusual_score" in out.columns:
+        out["Score"] = out["unusual_score"].map(lambda x: f"{x:.1f}")
 
     keep = [
         "symbol", "type", "expiry", "dte", "direction", "side", "strike", "spot",
@@ -684,11 +734,11 @@ with st.sidebar:
     top_n = st.slider("Rows to display", min_value=25, max_value=500, value=DEFAULT_TOP_N, step=25)
 
     st.subheader("Engine")
-    max_workers = st.slider("Concurrent workers", min_value=4, max_value=48, value=DEFAULT_MAX_WORKERS, step=2)
+    max_workers = st.slider("Concurrent workers", min_value=4, max_value=40, value=DEFAULT_MAX_WORKERS, step=2)
     allow_cached_fallback = st.toggle("Use last-good cached scan if live scan returns nothing", value=True)
 
     st.markdown(
-        '<div class="small-note">Universe loader is local-first and deterministic now, so constituent fetch failures should be gone.</div>',
+        '<div class="small-note">Cluster logic is now rebuild-safe, so reruns and cached frames should not throw merge-related KeyErrors.</div>',
         unsafe_allow_html=True,
     )
 
@@ -726,14 +776,15 @@ if (flow is None or flow.empty) and allow_cached_fallback:
     cached_flow = load_pickle(LAST_GOOD_SCAN)
     cached_meta = load_json(LAST_GOOD_META)
     if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
-        flow = cached_flow.copy()
+        flow = build_cluster_flags(cached_flow.copy())
         live_scan_used = False
         st.warning(
             f"Live scan returned no qualifying rows. Showing last-good cached snapshot from "
-            f"{cached_meta.get('saved_at', 'unknown time')}."
+            f"{cached_meta.get('saved_at', 'unknown time') if isinstance(cached_meta, dict) else 'unknown time'}."
         )
 
 if flow is not None and not flow.empty and live_scan_used:
+    flow = build_cluster_flags(flow)
     save_pickle(flow, LAST_GOOD_SCAN)
     save_json(
         {
@@ -751,15 +802,18 @@ if flow is None:
 if diags is None:
     diags = pd.DataFrame()
 
+if not flow.empty:
+    flow = build_cluster_flags(flow)
+
 qualifying_rows = int(len(flow))
 symbols_requested = int(len(symbols))
-symbols_completed = int(diags["symbol"].nunique()) if not diags.empty else 0
-expiries_seen = int(diags["expiries_seen"].sum()) if not diags.empty else 0
-scan_errors = int(diags["errors"].sum()) if not diags.empty else 0
+symbols_completed = int(diags["symbol"].nunique()) if not diags.empty and "symbol" in diags.columns else 0
+expiries_seen = int(diags["expiries_seen"].sum()) if not diags.empty and "expiries_seen" in diags.columns else 0
+scan_errors = int(diags["errors"].sum()) if not diags.empty and "errors" in diags.columns else 0
 
-bullish_premium = float(flow.loc[flow["direction"] == "BULLISH", "premium"].sum()) if not flow.empty else 0.0
-bearish_premium = float(flow.loc[flow["direction"] == "BEARISH", "premium"].sum()) if not flow.empty else 0.0
-total_premium = float(flow["premium"].sum()) if not flow.empty else 0.0
+bullish_premium = float(flow.loc[flow["direction"] == "BULLISH", "premium"].sum()) if not flow.empty and "direction" in flow.columns else 0.0
+bearish_premium = float(flow.loc[flow["direction"] == "BEARISH", "premium"].sum()) if not flow.empty and "direction" in flow.columns else 0.0
+total_premium = float(flow["premium"].sum()) if not flow.empty and "premium" in flow.columns else 0.0
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Symbols requested", f"{symbols_requested:,}")
@@ -780,7 +834,6 @@ if flow.empty:
     st.info("No rows passed the current filters. Lower premium, volume, volume/OI, or spread thresholds and rerun.")
     st.stop()
 
-flow = build_cluster_flags(flow)
 flow["rank"] = np.arange(1, len(flow) + 1)
 
 overall = flow.nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
@@ -788,16 +841,22 @@ bullish = flow[flow["direction"] == "BULLISH"].nlargest(top_n, ["unusual_score",
 bearish = flow[flow["direction"] == "BEARISH"].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
 zero_dte = flow[flow["dte"] == 0].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
 
+def sum_where(group_df: pd.DataFrame, direction: str) -> float:
+    if group_df.empty:
+        return 0.0
+    return float(group_df.loc[group_df["direction"] == direction, "premium"].sum())
+
 ticker_summary = (
     flow.groupby("symbol", dropna=False, as_index=False)
-    .agg(
-        rows=("contract_symbol", "count"),
-        total_premium=("premium", "sum"),
-        bullish_premium=("premium", lambda s: flow.loc[s.index, :].query("direction == 'BULLISH'")["premium"].sum()),
-        bearish_premium=("premium", lambda s: flow.loc[s.index, :].query("direction == 'BEARISH'")["premium"].sum()),
-        avg_score=("unusual_score", "mean"),
-        max_score=("unusual_score", "max"),
-    )
+    .apply(lambda g: pd.Series({
+        "rows": int(len(g)),
+        "total_premium": float(g["premium"].sum()),
+        "bullish_premium": sum_where(g, "BULLISH"),
+        "bearish_premium": sum_where(g, "BEARISH"),
+        "avg_score": float(g["unusual_score"].mean()),
+        "max_score": float(g["unusual_score"].max()),
+    }))
+    .reset_index(drop=True)
 )
 
 ticker_summary["net_premium"] = ticker_summary["bullish_premium"] - ticker_summary["bearish_premium"]
@@ -817,7 +876,7 @@ top_contract = f"{overall.iloc[0]['symbol']} {overall.iloc[0]['expiry']} {overal
 leaderboard_cols[0].metric("Top ticker by premium", str(ticker_summary.iloc[0]["symbol"]))
 leaderboard_cols[1].metric("Top contract", top_contract)
 leaderboard_cols[2].metric("0DTE rows", f"{len(zero_dte):,}")
-leaderboard_cols[3].metric("Cluster flags", f"{int((flow['cluster_flag'] == 'CLUSTER').sum()):,}")
+leaderboard_cols[3].metric("Cluster flags", f"{int((flow['cluster_flag'] == 'CLUSTER').sum()) if 'cluster_flag' in flow.columns else 0:,}")
 
 left, right = st.columns(2)
 
@@ -899,4 +958,4 @@ with tab6:
     if not diags.empty:
         st.dataframe(diags.sort_values(["errors", "expiries_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
 
-st.caption("Universe loader is now local-first and deterministic. The public constituent fetch failure should be eliminated.")
+st.caption("Cluster logic is now idempotent and safe on reruns, cached frames, and repeated post-processing.")
