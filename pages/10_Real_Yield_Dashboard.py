@@ -1,372 +1,544 @@
 ############################################################
-# Built by AD Fund Management LP. Clean Final Version.
+# Built by AD Fund Management LP
+# 10-Year Nominal and Real Yield Dashboard
 ############################################################
 
-import sys, types
-from typing import List, Tuple
-import pandas as pd
-import matplotlib.pyplot as plt
-plt.style.use("default")
-import packaging.version
-try:
-    import distutils.version
-except ImportError:
-    _d = types.ModuleType("distutils")
-    _dv = types.ModuleType("distutils.version")
-    _dv.LooseVersion = packaging.version.Version
-    _d.version = _dv
-    sys.modules.update({"distutils": _d, "distutils.version": _dv})
+from __future__ import annotations
 
-from pandas_datareader import data as pdr
+from typing import List, Tuple, Optional
+import io
+
+import pandas as pd
+import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-import requests
 from bs4 import BeautifulSoup
 
 # ── Constants ─────────────────────────────────────────────
+FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 REAL_SERIES = "DFII10"
-NOM_SERIES  = "DGS10"
-DEFAULT_WIN = 63         # trading days
-DEFAULT_EASE_BP  = 40
+NOM_SERIES = "DGS10"
+REC_SERIES = "USREC"
+
+DEFAULT_WIN = 63
+DEFAULT_EASE_BP = 40
 DEFAULT_TIGHT_BP = -40
 
-# Macro overlays: always-on defaults
-SHOW_FOMC = True
-SHOW_CPI = False
-SHOW_RECESSION = True
-
-REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/1.0)"}
+REQ_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/2.0)"
+}
 
 # ── Streamlit Setup ──────────────────────────────────────
 st.set_page_config(page_title="10-Year Yield Dashboard", layout="wide")
 st.title("10-Year Nominal and Real Yield Dashboard")
 
-# ── Sidebar: Controls and Info ───────────────────────────
+# ── Helper Functions ─────────────────────────────────────
+def fmt_pct(x: Optional[float], decimals: int = 2) -> str:
+    if pd.isna(x):
+        return "N/A"
+    return f"{x:.{decimals}f}%"
+
+def fmt_bp(x: Optional[float], decimals: int = 0) -> str:
+    if pd.isna(x):
+        return "N/A"
+    return f"{x:+.{decimals}f} bp"
+
+def last_delta(series: pd.Series) -> float:
+    if len(series) < 2:
+        return pd.NA
+    return series.iloc[-1] - series.iloc[-2]
+
+def contiguous(mask: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
+    segments: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
+    start_dt: Optional[pd.Timestamp] = None
+
+    for ts, flag in mask.items():
+        if bool(flag) and start_dt is None:
+            start_dt = ts
+        elif not bool(flag) and start_dt is not None:
+            segments.append((start_dt, ts))
+            start_dt = None
+
+    if start_dt is not None:
+        segments.append((start_dt, mask.index[-1]))
+
+    return segments
+
+# ── Data Fetching ────────────────────────────────────────
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    params = {
+        "id": series_id,
+        "cosd": start.strftime("%Y-%m-%d"),
+        "coed": end.strftime("%Y-%m-%d"),
+    }
+    r = requests.get(FRED_BASE, params=params, headers=REQ_HEADERS, timeout=20)
+    r.raise_for_status()
+
+    df = pd.read_csv(io.StringIO(r.text))
+    if "DATE" not in df.columns or series_id not in df.columns:
+        raise ValueError(f"Unexpected FRED response format for {series_id}")
+
+    df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+    df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
+    df = df.dropna(subset=["DATE"]).set_index("DATE").sort_index()
+
+    s = df[series_id].ffill().dropna()
+    s.name = series_id
+    return s
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_fomc_dates() -> List[pd.Timestamp]:
+    url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+    try:
+        r = requests.get(url, headers=REQ_HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        dates: List[pd.Timestamp] = []
+        for td in soup.select("td.eventdate"):
+            txt = td.get_text(" ", strip=True)
+            dt = pd.to_datetime(txt, errors="coerce")
+            if pd.notnull(dt):
+                dates.append(pd.Timestamp(dt).normalize())
+
+        return sorted(set(dates))
+    except Exception:
+        return []
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_cpi_dates() -> List[pd.Timestamp]:
+    url = "https://www.bls.gov/schedule/news_release/cpi.htm"
+    try:
+        r = requests.get(url, headers=REQ_HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        dates: List[pd.Timestamp] = []
+        for td in soup.select("table.nrtable tbody tr td"):
+            txt = td.get_text(" ", strip=True)
+            dt = pd.to_datetime(txt, errors="coerce")
+            if pd.notnull(dt):
+                dates.append(pd.Timestamp(dt).normalize())
+
+        return sorted(set(dates))
+    except Exception:
+        return []
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_recession_bands(start: pd.Timestamp, end: pd.Timestamp) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
+    try:
+        rec = fetch_fred_series(REC_SERIES, start, end)
+        rec = rec.reindex(pd.date_range(rec.index.min(), rec.index.max(), freq="D")).ffill()
+
+        mask = rec > 0.5
+        bands = contiguous(mask)
+        return [(s.normalize(), e.normalize()) for s, e in bands]
+    except Exception:
+        return []
+
+# ── Transform Layer ──────────────────────────────────────
+def build_yield_dataframe(
+    nominal: pd.Series,
+    real: pd.Series,
+    start: pd.Timestamp,
+    win: int,
+) -> tuple[pd.DataFrame, pd.Series]:
+    df = pd.concat(
+        [
+            nominal.rename("Nominal"),
+            real.rename("Real"),
+        ],
+        axis=1,
+    ).dropna()
+
+    df = df[df.index >= start].copy()
+    if df.empty:
+        return pd.DataFrame(), pd.Series(dtype=float)
+
+    # Inverted real-yield momentum in bp
+    mom = -(df["Real"] - df["Real"].shift(win)) * 100.0
+    mom = mom.dropna()
+
+    df = df.loc[mom.index].copy()
+    df["InflationCompProxy"] = df["Nominal"] - df["Real"]
+
+    return df, mom
+
+def classify_regime(mom_value: float, ease_bp: int, tight_bp: int) -> tuple[str, str]:
+    if mom_value > ease_bp:
+        return "Easing", "#16a34a"
+    if mom_value < tight_bp:
+        return "Tightening", "#dc2626"
+    return "Neutral", "#6b7280"
+
+# ── Sidebar ──────────────────────────────────────────────
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Track the 10-year nominal and real Treasury curve with a simple, regime-focused lens.
+        Track the 10-year nominal Treasury yield against the 10-year TIPS-implied real yield with a regime-focused lens.
 
-        What it shows
-        • Nominal vs TIPS-implied real 10-year yields  
-        • Inverted rolling real-yield momentum in bp as a crude easing or tightening gauge  
-        • Optional 10-year nominal minus real spread panel and regime shading  
+        What it shows  
+        • Nominal vs real 10-year yields  
+        • Inverted rolling real-yield momentum in bp as a simple market-rate easing or tightening gauge  
+        • Optional inflation-compensation proxy panel and recession shading  
+        • Optional FOMC and CPI event markers
 
-        Under the hood
-        • FRED DGS10 and DFII10 via pandas-datareader  
-        • Momentum computed on a configurable trading-day window  
-        • Macro overlays include FOMC dates, CPI prints, and NBER recessions (where available)
+        Data  
+        • FRED DGS10 for nominal 10Y  
+        • FRED DFII10 for real 10Y  
+        • FRED USREC for recession shading
         """
     )
     st.markdown("---")
+
     st.header("Settings")
     lookback = st.selectbox("Lookback Window", ["2y", "3y", "5y", "10y"], index=2)
     start_years = int(lookback[:-1])
-    win = st.number_input("Momentum Window (trading days)", min_value=21, max_value=252, value=DEFAULT_WIN, step=1)
-    ease_bp = st.number_input("Easing Threshold (bp)", min_value=10, max_value=200, value=DEFAULT_EASE_BP, step=5)
-    tight_bp = st.number_input("Tightening Threshold (bp)", min_value=-200, max_value=-10, value=DEFAULT_TIGHT_BP, step=5)
-    show_regime = st.checkbox("Show Regime Shading", value=True)
-    show_spread = st.checkbox("Show Yield Spread (Nominal - Real)", value=False)
+
+    win = st.number_input(
+        "Momentum Window (trading days)",
+        min_value=21,
+        max_value=252,
+        value=DEFAULT_WIN,
+        step=1,
+    )
+    ease_bp = st.number_input(
+        "Easing Threshold (bp)",
+        min_value=10,
+        max_value=200,
+        value=DEFAULT_EASE_BP,
+        step=5,
+    )
+    tight_bp = st.number_input(
+        "Tightening Threshold (bp)",
+        min_value=-200,
+        max_value=-10,
+        value=DEFAULT_TIGHT_BP,
+        step=5,
+    )
+
     st.markdown("---")
-    st.caption("Yields: FRED DGS10 (nominal), DFII10 (real)")
+    st.subheader("Overlays")
+    show_regime = st.checkbox("Show Regime Shading", value=True)
+    show_spread = st.checkbox("Show Inflation Compensation Proxy", value=False)
+    show_fomc = st.checkbox("Show FOMC Markers", value=True)
+    show_cpi = st.checkbox("Show CPI Markers", value=False)
+    show_recession = st.checkbox("Show Recession Shading", value=True)
 
-# ── Data Download Helper ────────────────────────────────
-@st.cache_data(ttl=86400, show_spinner=False)
-def fred(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    try:
-        s = pdr.DataReader(series, "fred", start, end)[series]
-        s = s.ffill().dropna()
-        return s
-    except Exception:
-        return pd.Series(dtype=float)
+    st.markdown("---")
+    st.caption("Source: FRED and official public event calendars")
 
-def contiguous(mask: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
-    segs, start_dt = [], None
-    for ts, flag in mask.items():
-        if flag and start_dt is None:
-            start_dt = ts
-        elif not flag and start_dt is not None:
-            segs.append((start_dt, ts))
-            start_dt = None
-    if start_dt is not None:
-        segs.append((start_dt, mask.index[-1]))
-    return segs
-
-# ── Macro Data Overlays (Silent Fail) ───────────────────
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_fomc_dates():
-    url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-    try:
-        r = requests.get(url, headers=REQ_HEADERS, timeout=10)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        dates = []
-        for td in soup.select("td.eventdate"):
-            txt = td.get_text(strip=True)
-            try:
-                dt = pd.to_datetime(txt, errors="coerce")
-                if pd.notnull(dt):
-                    dates.append(dt.normalize())
-            except Exception:
-                continue
-        return sorted(set(dates))
-    except Exception:
-        return []
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_cpi_dates():
-    url = "https://www.bls.gov/schedule/news_release/cpi.htm"
-    try:
-        r = requests.get(url, headers=REQ_HEADERS, timeout=10)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        dates = []
-        for td in soup.select("table.nrtable tbody tr td"):
-            text = td.get_text(strip=True)
-            try:
-                dt = pd.to_datetime(text, errors="coerce")
-                if pd.notnull(dt):
-                    dates.append(dt.normalize())
-            except Exception:
-                continue
-        return sorted(set(dates))
-    except Exception:
-        return []
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_recession_bands():
-    url = "https://www.nber.org/releases.csv"
-    try:
-        df = pd.read_csv(url)
-        starts = pd.to_datetime(df["Peak"], errors="coerce").dropna()
-        ends   = pd.to_datetime(df["Trough"], errors="coerce").dropna()
-        bands = [(s.normalize(), e.normalize()) for s, e in zip(starts, ends)]
-        return bands
-    except Exception:
-        return []
-
-# ── Main Analysis ───────────────────────────────────────
+# ── Load Data ────────────────────────────────────────────
 today = pd.Timestamp.today().normalize()
 start = today - pd.DateOffset(years=start_years)
-ext = start - pd.Timedelta(days=DEFAULT_WIN * 2)
+extended_start = start - pd.Timedelta(days=max(180, win * 3))
 
-real = fred(REAL_SERIES, ext, today)
-nom  = fred(NOM_SERIES,  ext, today)
-
-if real.empty or nom.empty:
-    st.warning("Failed to load yield data from FRED.")
+try:
+    nominal = fetch_fred_series(NOM_SERIES, extended_start, today)
+    real = fetch_fred_series(REAL_SERIES, extended_start, today)
+except Exception as e:
+    st.error(f"Failed to load FRED data: {e}")
     st.stop()
 
-df = pd.DataFrame({"Nominal": nom, "Real": real}).dropna()
-df = df[df.index >= start]
-if df.empty:
+df, mom = build_yield_dataframe(nominal=nominal, real=real, start=start, win=win)
+
+if df.empty or mom.empty:
     st.warning("No overlapping yield data for the selected lookback.")
     st.stop()
 
-# Inverted momentum in basis points over win observations
-mom = -(df["Real"] - df["Real"].shift(win)) * 100
-mom = mom.dropna()
-df = df.loc[mom.index]
-df["Spread"] = df["Nominal"] - df["Real"]
+latest = {
+    "date": df.index[-1],
+    "nominal": df["Nominal"].iloc[-1],
+    "real": df["Real"].iloc[-1],
+    "spread": df["InflationCompProxy"].iloc[-1],
+    "mom": mom.iloc[-1],
+    "mom_prev": mom.iloc[-2] if len(mom) > 1 else pd.NA,
+    "d_nominal": last_delta(df["Nominal"]),
+    "d_real": last_delta(df["Real"]),
+    "d_spread": last_delta(df["InflationCompProxy"]),
+}
 
-# Latest snapshot with guards
-def last_delta(series: pd.Series):
-    if series.size >= 2:
-        return series.iloc[-1] - series.iloc[-2]
-    return pd.NA
+regime_label, regime_color = classify_regime(latest["mom"], ease_bp, tight_bp)
 
-latest = dict(
-    date=df.index[-1],
-    real=df["Real"].iloc[-1],
-    nom=df["Nominal"].iloc[-1],
-    spread=df["Spread"].iloc[-1],
-    mom=mom.iloc[-1],
-    mom_prev=mom.iloc[-2] if mom.size > 1 else pd.NA,
-    d_nom=last_delta(df["Nominal"]),
-    d_real=last_delta(df["Real"]),
+# ── Metrics Row ──────────────────────────────────────────
+c1, c2, c3, c4, c5 = st.columns([2, 2, 2.2, 2, 2.2])
+
+c1.metric(
+    "Nominal 10Y Yield",
+    fmt_pct(latest["nominal"]),
+    fmt_pct(latest["d_nominal"]),
 )
 
-regime = (
-    "🟢 Easing" if latest["mom"] > ease_bp else
-    "🔴 Tightening" if latest["mom"] < tight_bp else
-    "⚪️ Neutral"
+c2.metric(
+    "Real 10Y Yield",
+    fmt_pct(latest["real"]),
+    fmt_pct(latest["d_real"]),
 )
 
-# ── Metrics Box ─────────────────────────────────────────
-def fmt_pct(x):
-    return "N/A" if pd.isna(x) else f"{x:.2f}%"
-
-def fmt_bp(x):
-    return "N/A" if pd.isna(x) else f"{x:+.0f} bp"
-
-c1, c2, c3, c4, c5 = st.columns([2,2,2,2,3])
-c1.metric("Nominal 10Y Yield", fmt_pct(latest["nom"]), fmt_pct(latest["d_nom"]))
-c2.metric("Real 10Y Yield", fmt_pct(latest["real"]), fmt_pct(latest["d_real"]))
 c3.metric(
-    f"Inverted {win}-Trading-Day Real Momentum",
-    f"{latest['mom']:+.0f} bp",
+    f"Inverted {win}-Day Real Yield Momentum",
+    fmt_bp(latest["mom"]),
     fmt_bp(latest["mom"] - latest["mom_prev"]) if pd.notna(latest["mom_prev"]) else "N/A",
-    help=f"-(Current real yield - real yield {win} observations ago) × 100"
+    help=f"-(Current real yield - real yield {win} observations ago) × 100",
 )
-c4.metric("10Y Yield Spread", fmt_pct(latest["spread"]), help="Nominal minus real yield")
-c5.markdown(f"<h3>{regime}</h3><small>as of {latest['date'].date()}</small>", unsafe_allow_html=True)
 
-# ── Chart Setup ─────────────────────────────────────────
+c4.metric(
+    "Inflation Compensation Proxy",
+    fmt_pct(latest["spread"]),
+    fmt_pct(latest["d_spread"]),
+    help="Nominal 10Y minus real 10Y",
+)
+
+c5.markdown(
+    f"""
+    <div style="padding-top:0.35rem;">
+        <div style="
+            display:inline-block;
+            padding:0.35rem 0.7rem;
+            border-radius:999px;
+            background:{regime_color};
+            color:white;
+            font-weight:600;
+            font-size:0.95rem;
+        ">{regime_label}</div>
+        <div style="margin-top:0.45rem; color:#6b7280; font-size:0.9rem;">
+            as of {latest["date"].date()}
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ── Figure Builder ───────────────────────────────────────
 nrows = 3 if show_spread else 2
+row_heights = [0.42, 0.33, 0.25] if show_spread else [0.58, 0.42]
+
+subplot_titles = [
+    "Nominal vs Real 10-Year Yield",
+    f"{win}-Day Inverted Real Yield Momentum",
+]
+if show_spread:
+    subplot_titles.append("10Y Inflation Compensation Proxy")
+
 fig = make_subplots(
     rows=nrows,
     cols=1,
     shared_xaxes=True,
-    row_heights=[0.40, 0.35] + ([0.25] if show_spread else []),
     vertical_spacing=0.05,
-    subplot_titles=(
-        "Nominal vs Real 10-Year Yield",
-        f"{win}-Trading-Day Inverted Real Yield Momentum (bp)",
-        "10Y Yield Spread (Nominal - Real)" if show_spread else None,
-    )[:nrows]
+    row_heights=row_heights,
+    subplot_titles=subplot_titles,
 )
 
 # Top panel
 fig.add_trace(
     go.Scatter(
-        x=df.index, y=df["Nominal"], name="Nominal Yield",
-        line=dict(color="#1f77b4", width=2)
+        x=df.index,
+        y=df["Nominal"],
+        name="Nominal 10Y",
+        mode="lines",
+        line=dict(color="#2563eb", width=2.2),
+        hovertemplate="%{x|%Y-%m-%d}<br>Nominal 10Y: %{y:.2f}%<extra></extra>",
     ),
-    row=1, col=1
+    row=1,
+    col=1,
 )
+
 fig.add_trace(
     go.Scatter(
-        x=df.index, y=df["Real"], name="Real Yield",
-        line=dict(color="#ff7f0e", width=2)
+        x=df.index,
+        y=df["Real"],
+        name="Real 10Y",
+        mode="lines",
+        line=dict(color="#f59e0b", width=2.2),
+        hovertemplate="%{x|%Y-%m-%d}<br>Real 10Y: %{y:.2f}%<extra></extra>",
     ),
-    row=1, col=1
+    row=1,
+    col=1,
 )
-fig.update_yaxes(title="Yield (%)", tickformat=".2f", row=1, col=1)
 
 # Momentum panel
 fig.add_trace(
     go.Scatter(
-        x=mom.index, y=mom, name=f"Momentum ({win})",
-        line=dict(color="#d62728", dash="dash", width=1.8)
+        x=mom.index,
+        y=mom,
+        name="Inverted Real Yield Momentum",
+        mode="lines",
+        line=dict(color="#dc2626", width=1.9, dash="dash"),
+        hovertemplate="%{x|%Y-%m-%d}<br>Momentum: %{y:.0f} bp<extra></extra>",
     ),
-    row=2, col=1
+    row=2,
+    col=1,
 )
 
-def add_hline_shape(y, row, col, color="grey", dash="dot", width=1, text=None):
-    xref = f"x{row}" if row > 1 else "x"
-    fig.add_shape(
-        type="line",
-        xref=xref, yref=f"y{row}" if row > 1 else "y",
-        x0=df.index.min(), x1=df.index.max(), y0=y, y1=y,
-        line=dict(color=color, width=width, dash=dash),
-        row=row, col=col
+for level, label in [
+    (ease_bp, f"+{ease_bp} bp"),
+    (0, "0 bp"),
+    (tight_bp, f"{tight_bp} bp"),
+]:
+    fig.add_hline(
+        y=level,
+        line_width=1,
+        line_dash="dot",
+        line_color="rgba(100,100,100,0.7)",
+        row=2,
+        col=1,
     )
-    if text:
-        fig.add_annotation(
-            x=df.index.max(), y=y, xref=xref, yref=f"y{row}" if row > 1 else "y",
-            text=text, showarrow=False, xanchor="right", yanchor="bottom",
-            font=dict(size=10), row=row, col=col
-        )
-
-add_hline_shape(ease_bp, 2, 1, color="grey", dash="dot", width=1, text=f"+{ease_bp} bp")
-add_hline_shape(0,       2, 1, color="grey", dash="dot", width=1, text="zero")
-add_hline_shape(tight_bp,2, 1, color="grey", dash="dot", width=1, text=f"{tight_bp} bp")
+    fig.add_annotation(
+        x=df.index.max(),
+        y=level,
+        xref="x2" if nrows >= 2 else "x",
+        yref="y2",
+        text=label,
+        showarrow=False,
+        xanchor="right",
+        yanchor="bottom",
+        font=dict(size=10, color="rgba(80,80,80,0.9)"),
+    )
 
 # Regime shading
 if show_regime:
-    for s, e in contiguous(mom > ease_bp):
-        fig.add_vrect(x0=s, x1=e, fillcolor="rgba(0,128,0,0.12)", line_width=0, row=2, col=1)
-    for s, e in contiguous(mom < tight_bp):
-        fig.add_vrect(x0=s, x1=e, fillcolor="rgba(255,0,0,0.12)", line_width=0, row=2, col=1)
+    easing_mask = mom > ease_bp
+    tightening_mask = mom < tight_bp
 
-fig.update_yaxes(title="bp", tickformat=".0f", row=2, col=1)
-fig.update_xaxes(tickformat="%b-%y", row=nrows, col=1, title="Date")
+    for s, e in contiguous(easing_mask):
+        fig.add_vrect(
+            x0=s,
+            x1=e,
+            fillcolor="rgba(22,163,74,0.10)",
+            line_width=0,
+            row=2,
+            col=1,
+        )
+
+    for s, e in contiguous(tightening_mask):
+        fig.add_vrect(
+            x0=s,
+            x1=e,
+            fillcolor="rgba(220,38,38,0.10)",
+            line_width=0,
+            row=2,
+            col=1,
+        )
 
 # Spread panel
 if show_spread:
     fig.add_trace(
         go.Scatter(
-            x=df.index, y=df["Spread"], name="10Y Spread",
-            line=dict(color="#2ca02c", width=2)
+            x=df.index,
+            y=df["InflationCompProxy"],
+            name="Inflation Compensation Proxy",
+            mode="lines",
+            line=dict(color="#16a34a", width=2.0),
+            hovertemplate="%{x|%Y-%m-%d}<br>Proxy: %{y:.2f}%<extra></extra>",
         ),
-        row=3, col=1
+        row=3,
+        col=1,
     )
-    fig.update_yaxes(title="Spread (%)", tickformat=".2f", row=3, col=1)
 
-# Macro overlays (always-on per constants above)
-def add_vline_shape(x_dt, row, col, color, dash, width, text=None):
-    xref = f"x{row}" if row > 1 else "x"
-    fig.add_shape(
-        type="line", xref=xref, yref="paper",
-        x0=x_dt, x1=x_dt, y0=0, y1=1,
-        line=dict(color=color, dash=dash, width=width),
-        row=row, col=col
-    )
-    if text:
-        fig.add_annotation(
-            x=x_dt, xref=xref, yref="paper", y=1.0,
-            text=text, showarrow=False, yanchor="bottom",
-            font=dict(size=9), row=row, col=col
-        )
-
-if SHOW_FOMC:
-    for dt in fetch_fomc_dates():
-        if df.index[0] <= dt <= df.index[-1]:
-            add_vline_shape(dt, 1, 1, color="rgba(44,160,44,0.7)", dash="dashdot", width=1.2, text="FOMC")
-
-if SHOW_CPI:
-    for dt in fetch_cpi_dates():
-        if df.index[0] <= dt <= df.index[-1]:
-            add_vline_shape(dt, 1, 1, color="rgba(255,127,14,0.3)", dash="dot", width=1.0, text="CPI")
-
-if SHOW_RECESSION:
-    for rs, re in fetch_recession_bands():
-        if re >= df.index[0] and rs <= df.index[-1]:
+# Overlays
+if show_recession:
+    recession_bands = fetch_recession_bands(df.index.min(), df.index.max())
+    for rs, re in recession_bands:
+        if re >= df.index.min() and rs <= df.index.max():
             fig.add_vrect(
-                x0=max(rs, df.index[0]), x1=min(re, df.index[-1]),
-                fillcolor="rgba(128,128,128,0.18)", line_width=0
+                x0=max(rs, df.index.min()),
+                x1=min(re, df.index.max()),
+                fillcolor="rgba(120,120,120,0.15)",
+                line_width=0,
             )
+
+if show_fomc:
+    for dt in fetch_fomc_dates():
+        if df.index.min() <= dt <= df.index.max():
+            fig.add_vline(
+                x=dt,
+                line_width=1,
+                line_dash="dashdot",
+                line_color="rgba(37,99,235,0.25)",
+            )
+
+if show_cpi:
+    for dt in fetch_cpi_dates():
+        if df.index.min() <= dt <= df.index.max():
+            fig.add_vline(
+                x=dt,
+                line_width=1,
+                line_dash="dot",
+                line_color="rgba(245,158,11,0.25)",
+            )
+
+# Axis and layout
+fig.update_yaxes(title_text="Yield (%)", tickformat=".2f", row=1, col=1)
+fig.update_yaxes(title_text="bp", tickformat=".0f", row=2, col=1)
+if show_spread:
+    fig.update_yaxes(title_text="Spread (%)", tickformat=".2f", row=3, col=1)
+
+fig.update_xaxes(
+    title_text="Date",
+    tickformat="%b-%y",
+    showgrid=False,
+    row=nrows,
+    col=1,
+)
 
 fig.update_layout(
     template="plotly_white",
-    height=820 if show_spread else 720,
-    margin=dict(l=60, r=40, t=60, b=60),
-    legend=dict(orientation="h", x=0, y=1.12, xanchor="left"),
+    height=840 if show_spread else 720,
+    margin=dict(l=60, r=30, t=70, b=50),
+    hovermode="x unified",
+    legend=dict(
+        orientation="h",
+        x=0,
+        y=1.08,
+        xanchor="left",
+        bgcolor="rgba(255,255,255,0.7)",
+    ),
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ── Download and Methodology ────────────────────────────
+# ── Download Section ─────────────────────────────────────
 with st.expander("Download Data"):
     df_out = df.copy()
-    df_out[f"Inverted {win}-Trading-Day Real Yield Momentum (bp)"] = mom
+    df_out[f"Inverted_{win}d_Real_Yield_Momentum_bp"] = mom
     st.download_button(
-        "Download Yield Data (CSV)",
-        df_out.to_csv(index=True, index_label="Date"),
+        label="Download Yield Data (CSV)",
+        data=df_out.to_csv(index=True, index_label="Date"),
         file_name="10yr_yield_dashboard.csv",
-        mime="text/csv"
+        mime="text/csv",
     )
 
+# ── Methodology ──────────────────────────────────────────
 with st.expander("Methodology and Interpretation", expanded=False):
-    st.markdown(f"""
-    Yield Sources:
-    • Nominal: FRED DGS10  
-    • Real: FRED DFII10  
+    st.markdown(
+        f"""
+**Series**  
+• Nominal 10Y: FRED `{NOM_SERIES}`  
+• Real 10Y: FRED `{REAL_SERIES}`  
+• Recessions: FRED `{REC_SERIES}`  
 
-    Inverted Momentum:
-    • (Current real yield - real yield {win} observations ago) × 100  
+**Inverted real-yield momentum**  
+• Formula: `-(current real yield - real yield {win} observations ago) × 100`  
+• Units: basis points  
+• Higher readings imply real yields have fallen over the lookback window  
+• Lower readings imply real yields have risen over the lookback window  
 
-    Regime Definition:
-    • 🟢 Easing: momentum > {ease_bp} bp  
-    • ⚪️ Neutral: between thresholds  
-    • 🔴 Tightening: momentum < {tight_bp} bp  
+**Regime thresholds**  
+• Easing: momentum greater than {ease_bp} bp  
+• Neutral: between {tight_bp} bp and {ease_bp} bp  
+• Tightening: momentum below {tight_bp} bp  
 
-    Macro Overlays:
-    • FOMC dates: green dashed verticals  
-    • CPI prints: orange dotted verticals (if enabled)  
-    • Recession bands: gray bands using NBER peaks and troughs  
-    """)
+**Inflation compensation proxy**  
+• Nominal 10Y minus real 10Y  
+• This is a rough market-implied inflation compensation measure, not a perfect breakeven series  
+
+**Overlay notes**  
+• FOMC and CPI markers come from public official calendars and may occasionally fail if source page structure changes  
+• Recession shading is derived from FRED `USREC`
+"""
+    )
 
 st.caption("© 2026 AD Fund Management LP")
