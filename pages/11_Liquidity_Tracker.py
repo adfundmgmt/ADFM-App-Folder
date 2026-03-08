@@ -1,9 +1,14 @@
 import io
-from datetime import timedelta
+import os
+import time
+from pathlib import Path
+from urllib.parse import urlencode
 
 import pandas as pd
 import requests
 import streamlit as st
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
@@ -62,6 +67,10 @@ REBASE_BASE_WINDOW = 10
 RRP_BASE_FLOOR_B = 5.0
 CACHE_TTL_SECONDS = 12 * 60 * 60
 
+# Local on-disk backup cache for last-good FRED pulls
+LOCAL_CACHE_DIR = Path(".adfm_fred_cache")
+LOCAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ==============================
 # Sidebar
@@ -117,11 +126,11 @@ with st.sidebar:
     show_raw = st.checkbox("Show raw lines alongside smoothed lines", value=False)
     show_rebased = st.checkbox("Show rebased components panel", value=True)
 
-    st.caption("Data source: FRED CSV endpoint")
+    st.caption("Data source: FRED public CSV endpoints with local backup cache")
 
 
 # ==============================
-# Helpers
+# Formatting helpers
 # ==============================
 def fmt_b(x):
     return "N/A" if pd.isna(x) else f"{x:,.0f} B"
@@ -160,6 +169,167 @@ def fmt_delta_idx(x):
     return f"{sign}{x:.3f}"
 
 
+# ==============================
+# FRED fetch infrastructure
+# ==============================
+def make_http_session() -> requests.Session:
+    session = requests.Session()
+
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=0.8,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (compatible; ADFM-Liquidity-Tracker/1.0; +https://fred.stlouisfed.org/)",
+            "Accept": "text/csv,text/plain,application/octet-stream,*/*",
+            "Connection": "keep-alive",
+        }
+    )
+    return session
+
+
+def build_fred_candidate_urls(series_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> list[str]:
+    start_str = pd.Timestamp(start_date).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end_date).strftime("%Y-%m-%d")
+
+    urls = []
+
+    # Most reliable general endpoint
+    urls.append(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_code}")
+
+    # Explicit date-bounded variant
+    params = urlencode(
+        {
+            "id": series_code,
+            "cosd": start_str,
+            "coed": end_str,
+        }
+    )
+    urls.append(f"https://fred.stlouisfed.org/graph/fredgraph.csv?{params}")
+
+    # Alternate host pattern used by FRED chart exports
+    urls.append(f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={start_str}&coed={end_str}&id={series_code}")
+
+    return urls
+
+
+def parse_fred_csv_text(text: str, series_code: str) -> pd.Series:
+    df = pd.read_csv(io.StringIO(text))
+
+    if "DATE" not in df.columns:
+        possible_date_cols = [c for c in df.columns if c.lower() in {"date", "observation_date"}]
+        if possible_date_cols:
+            df = df.rename(columns={possible_date_cols[0]: "DATE"})
+
+    if series_code not in df.columns:
+        other_cols = [c for c in df.columns if c != "DATE"]
+        if len(other_cols) == 1:
+            df = df.rename(columns={other_cols[0]: series_code})
+
+    if "DATE" not in df.columns or series_code not in df.columns:
+        raise ValueError(f"Unexpected FRED response format for {series_code}. Columns: {list(df.columns)}")
+
+    df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+    df[series_code] = pd.to_numeric(df[series_code], errors="coerce")
+    df = df.dropna(subset=["DATE"]).sort_values("DATE")
+
+    s = df.set_index("DATE")[series_code]
+    s.name = series_code
+    return s
+
+
+def local_cache_path(series_code: str) -> Path:
+    return LOCAL_CACHE_DIR / f"{series_code}.csv"
+
+
+def save_series_to_local_cache(series: pd.Series, series_code: str) -> None:
+    cache_file = local_cache_path(series_code)
+    out = series.reset_index()
+    out.columns = ["DATE", series_code]
+    out.to_csv(cache_file, index=False)
+
+
+def load_series_from_local_cache(series_code: str) -> pd.Series | None:
+    cache_file = local_cache_path(series_code)
+    if not cache_file.exists():
+        return None
+
+    try:
+        df = pd.read_csv(cache_file)
+        if "DATE" not in df.columns or series_code not in df.columns:
+            return None
+        df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+        df[series_code] = pd.to_numeric(df[series_code], errors="coerce")
+        df = df.dropna(subset=["DATE"]).sort_values("DATE")
+        s = df.set_index("DATE")[series_code]
+        s.name = series_code
+        return s
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_fred_series(series_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> tuple[pd.Series, str]:
+    """
+    Returns:
+        series, source_label
+    source_label is one of:
+        'live'
+        'local_cache'
+    """
+    session = make_http_session()
+    urls = build_fred_candidate_urls(series_code, start_date, end_date)
+
+    last_error = None
+
+    for url in urls:
+        try:
+            resp = session.get(url, timeout=30)
+            if resp.status_code == 200 and resp.text and "DATE" in resp.text:
+                s = parse_fred_csv_text(resp.text, series_code)
+                s = s[(s.index >= start_date) & (s.index <= end_date)]
+                if not s.dropna().empty:
+                    save_series_to_local_cache(s, series_code)
+                    return s, "live"
+            else:
+                last_error = f"HTTP {resp.status_code}"
+        except Exception as e:
+            last_error = str(e)
+
+    cached = load_series_from_local_cache(series_code)
+    if cached is not None and not cached.dropna().empty:
+        cached = cached[(cached.index >= start_date) & (cached.index <= end_date)]
+        if not cached.dropna().empty:
+            return cached, "local_cache"
+
+    raise RuntimeError(f"Failed to fetch {series_code}. Last error: {last_error}")
+
+
+# ==============================
+# Data prep
+# ==============================
+def convert_display_units(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    if "WALCL" in out.columns:
+        out["WALCL"] = out["WALCL"] / 1000.0
+    if "TGA" in out.columns:
+        out["TGA"] = out["TGA"] / 1000.0
+
+    return out
+
+
 def rebase(series: pd.Series, base_window: int = REBASE_BASE_WINDOW, min_base: float | None = None) -> pd.Series:
     s = pd.to_numeric(series, errors="coerce").copy()
 
@@ -176,6 +346,72 @@ def rebase(series: pd.Series, base_window: int = REBASE_BASE_WINDOW, min_base: f
         return pd.Series(index=s.index, data=100.0)
 
     return (s / base) * 100.0
+
+
+def build_master_dataframe(start_all: pd.Timestamp, end_date: pd.Timestamp) -> tuple[pd.DataFrame, dict, dict]:
+    errors = {}
+    sources = {}
+    series_map = {}
+
+    for name, meta in FRED_SERIES.items():
+        code = meta["code"]
+        try:
+            s, src = fetch_fred_series(code, start_all, end_date)
+            s.name = name
+            series_map[name] = s
+            sources[name] = src
+        except Exception as e:
+            errors[name] = str(e)
+
+    if not series_map:
+        # As a final fallback, try loading directly from local cache even if cache function failed above.
+        for name, meta in FRED_SERIES.items():
+            code = meta["code"]
+            cached = load_series_from_local_cache(code)
+            if cached is not None and not cached.dropna().empty:
+                cached = cached[(cached.index >= start_all) & (cached.index <= end_date)]
+                if not cached.dropna().empty:
+                    cached.name = name
+                    series_map[name] = cached
+                    sources[name] = "local_cache"
+
+    if not series_map:
+        raise RuntimeError("No live FRED data and no local backup cache found yet.")
+
+    full_idx = pd.date_range(start=start_all, end=end_date, freq="D")
+    df = pd.concat(series_map.values(), axis=1).reindex(full_idx).sort_index().ffill()
+    df.index.name = "Date"
+
+    df = convert_display_units(df)
+    return df, errors, sources
+
+
+def add_derived_series(df: pd.DataFrame, smoothing_days: int, change_window: int) -> pd.DataFrame:
+    out = df.copy()
+
+    required = ["WALCL", "RRP", "TGA"]
+    present_required = [c for c in required if c in out.columns]
+
+    if len(present_required) < 3:
+        raise ValueError(f"Missing required liquidity components. Present: {present_required}")
+
+    out = out.dropna(subset=required).copy()
+    out["NetLiq"] = out["WALCL"] - out["RRP"] - out["TGA"]
+
+    for col in ["WALCL", "RRP", "TGA", "NetLiq", "EFFR", "NFCI"]:
+        if col in out.columns:
+            out[f"{col}_s"] = (
+                out[col].rolling(smoothing_days, min_periods=1).mean()
+                if smoothing_days > 1
+                else out[col]
+            )
+            out[f"{col}_{change_window}d_chg"] = out[col].diff(change_window)
+
+    out["WALCL_idx"] = rebase(out["WALCL"])
+    out["RRP_idx"] = rebase(out["RRP"], min_base=RRP_BASE_FLOOR_B)
+    out["TGA_idx"] = rebase(out["TGA"])
+
+    return out
 
 
 def classify_regime(netliq_roc: float, effr_roc: float, nfci_level: float, nfci_roc: float) -> str:
@@ -199,7 +435,7 @@ def series_commentary(latest_row: pd.Series, roc_days: int) -> list[str]:
         comments.append(f"Net liquidity {direction} over the last {roc_days} trading days by {fmt_delta_b(netliq_roc)}.")
 
     if pd.notna(effr_roc):
-        if abs(effr_roc) < 1e-9:
+        if abs(effr_roc) < 1e-12:
             comments.append(f"EFFR was unchanged over the last {roc_days} trading days.")
         else:
             direction = "up" if effr_roc > 0 else "down"
@@ -217,119 +453,40 @@ def series_commentary(latest_row: pd.Series, roc_days: int) -> list[str]:
 
 
 # ==============================
-# Data fetch
-# ==============================
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def fetch_fred_series_csv(series_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.Series:
-    """
-    Fetch a FRED series from the public CSV endpoint.
-    Returns a pandas Series indexed by datetime with float values.
-    """
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_code}"
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-
-    text = response.text
-    df = pd.read_csv(io.StringIO(text))
-
-    if "DATE" not in df.columns or series_code not in df.columns:
-        raise ValueError(
-            f"Unexpected FRED response format for {series_code}. "
-            f"Columns received: {list(df.columns)}"
-        )
-
-    df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
-    df[series_code] = pd.to_numeric(df[series_code], errors="coerce")
-
-    df = df.dropna(subset=["DATE"])
-    df = df[(df["DATE"] >= start_date) & (df["DATE"] <= end_date)].copy()
-    df = df.sort_values("DATE")
-
-    s = df.set_index("DATE")[series_code]
-    return s
-
-
-def convert_display_units(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-
-    if "WALCL" in out.columns:
-        out["WALCL"] = out["WALCL"] / 1000.0
-    if "TGA" in out.columns:
-        out["TGA"] = out["TGA"] / 1000.0
-
-    return out
-
-
-def build_master_dataframe(start_all: pd.Timestamp, end_date: pd.Timestamp) -> tuple[pd.DataFrame, dict]:
-    errors = {}
-    series_map = {}
-
-    for name, meta in FRED_SERIES.items():
-        code = meta["code"]
-        try:
-            s = fetch_fred_series_csv(code, start_all, end_date)
-            s.name = name
-            series_map[name] = s
-        except Exception as e:
-            errors[name] = str(e)
-
-    if not series_map:
-        raise RuntimeError("All FRED series failed to load.")
-
-    full_idx = pd.date_range(start=start_all, end=end_date, freq="D")
-    df = pd.concat(series_map.values(), axis=1).reindex(full_idx).sort_index().ffill()
-    df.index.name = "Date"
-
-    df = convert_display_units(df)
-    return df, errors
-
-
-def add_derived_series(df: pd.DataFrame, smoothing_days: int, change_window: int) -> pd.DataFrame:
-    out = df.copy()
-
-    required = ["WALCL", "RRP", "TGA"]
-    missing_required = [c for c in required if c not in out.columns]
-    if missing_required:
-        raise ValueError(f"Missing required liquidity components: {missing_required}")
-
-    out = out.dropna(subset=required).copy()
-
-    out["NetLiq"] = out["WALCL"] - out["RRP"] - out["TGA"]
-
-    for col in ["WALCL", "RRP", "TGA", "NetLiq", "EFFR", "NFCI"]:
-        if col in out.columns:
-            out[f"{col}_s"] = (
-                out[col].rolling(smoothing_days, min_periods=1).mean()
-                if smoothing_days > 1
-                else out[col]
-            )
-            out[f"{col}_{change_window}d_chg"] = out[col].diff(change_window)
-
-    out["WALCL_idx"] = rebase(out["WALCL"])
-    out["RRP_idx"] = rebase(out["RRP"], min_base=RRP_BASE_FLOOR_B)
-    out["TGA_idx"] = rebase(out["TGA"])
-
-    return out
-
-
-# ==============================
 # Load data
 # ==============================
 today = pd.Timestamp.today().normalize()
 start_all = today - pd.DateOffset(years=15)
 start_lb = today - pd.DateOffset(years=years)
 
+df = None
+load_errors = {}
+load_sources = {}
+
 try:
-    raw_df, load_errors = build_master_dataframe(start_all=start_all, end_date=today)
+    raw_df, load_errors, load_sources = build_master_dataframe(start_all=start_all, end_date=today)
     df = add_derived_series(raw_df, smoothing_days=smooth, change_window=roc_window)
     df = df[df.index >= start_lb].copy()
 except Exception as e:
-    st.error(f"Failed to load dashboard data: {e}")
+    # Soft failure mode. Do not hard-stop the app with the old generic fatal error.
+    st.warning(
+        "Live FRED data is temporarily unavailable and there is no usable local backup cache yet. "
+        "The app is loaded, but data cannot be displayed on this first failed run."
+    )
+    st.caption(f"Diagnostic detail: {e}")
+
+if df is None or df.empty:
+    st.info(
+        "Once the app gets one successful live pull, it will keep a local backup and future transient FRED outages will fall back automatically."
+    )
     st.stop()
 
-if df.empty:
-    st.error("No data available for the selected lookback.")
-    st.stop()
+# Show source health without scaring the user
+live_count = sum(1 for v in load_sources.values() if v == "live")
+cache_count = sum(1 for v in load_sources.values() if v == "local_cache")
+
+if cache_count > 0:
+    st.caption(f"Source status: {live_count} live FRED series, {cache_count} local backup series.")
 
 if load_errors:
     with st.expander("Series load warnings"):
@@ -338,7 +495,7 @@ if load_errors:
 
 
 # ==============================
-# Latest snapshot
+# Top snapshot
 # ==============================
 latest = df.iloc[-1]
 regime_text = classify_regime(
@@ -389,7 +546,7 @@ with st.expander("Tape read", expanded=True):
 
 
 # ==============================
-# Chart setup
+# Chart
 # ==============================
 rows = 4 if show_rebased else 3
 subplot_titles = [
@@ -409,7 +566,7 @@ fig = make_subplots(
     specs=[[{"secondary_y": False}]] * (rows - 1) + [[{"secondary_y": True}]],
 )
 
-# Row 1: Net liquidity + change bars
+# Row 1
 fig.add_trace(
     go.Scatter(
         x=df.index,
@@ -429,6 +586,7 @@ if show_raw:
             y=df["NetLiq"],
             name="Net Liquidity Raw",
             line=dict(color="rgba(17,17,17,0.25)", width=1),
+            showlegend=False,
             hovertemplate="%{x|%Y-%m-%d}<br>Raw Net Liquidity: %{y:,.1f}B<extra></extra>",
         ),
         row=1,
@@ -451,7 +609,7 @@ fig.add_trace(
     col=1,
 )
 
-# Row 2: Absolute levels
+# Row 2
 abs_row = 2
 for col, name in [("WALCL", "WALCL"), ("RRP", "RRP"), ("TGA", "TGA")]:
     fig.add_trace(
@@ -465,6 +623,7 @@ for col, name in [("WALCL", "WALCL"), ("RRP", "RRP"), ("TGA", "TGA")]:
         row=abs_row,
         col=1,
     )
+
     if show_raw:
         fig.add_trace(
             go.Scatter(
@@ -479,8 +638,9 @@ for col, name in [("WALCL", "WALCL"), ("RRP", "RRP"), ("TGA", "TGA")]:
             col=1,
         )
 
-# Row 3: Rebased components
 policy_row = 3
+
+# Row 3 optional rebased
 if show_rebased:
     rebase_row = 3
     fig.add_trace(
@@ -519,7 +679,7 @@ if show_rebased:
     fig.add_hline(y=100, line_width=1, line_dash="dot", line_color="gray", row=rebase_row, col=1)
     policy_row = 4
 
-# Final row: EFFR + NFCI on secondary axis
+# Final row
 fig.add_trace(
     go.Scatter(
         x=df.index,
@@ -576,7 +736,6 @@ if show_raw:
 
 fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray", row=policy_row, col=1, secondary_y=True)
 
-# Layout
 fig.update_layout(
     template="plotly_white",
     height=1200 if show_rebased else 980,
@@ -620,7 +779,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 
 # ==============================
-# Data table and download
+# Export
 # ==============================
 with st.expander("Download Data"):
     export_cols = [
@@ -677,29 +836,29 @@ with st.expander("Methodology"):
         **Unit handling**
 
         • WALCL and TGA are converted from millions to billions  
-        • RRP is already treated in billions  
+        • RRP is treated in billions  
         • EFFR remains in %  
         • NFCI remains as an index level  
 
         **Alignment**
 
-        Series are fetched individually from FRED, aligned onto a daily calendar, and forward-filled to harmonize reporting frequencies.
+        Series are fetched individually from FRED public CSV endpoints, aligned onto a daily calendar, and forward-filled to harmonize reporting frequencies.
+
+        **Resilience layer**
+
+        • Multiple FRED URL patterns are tried for each series  
+        • HTTP requests use retries with backoff  
+        • Every successful pull is stored in a local last-good cache  
+        • If live FRED later fails, the app falls back to the local cache automatically
 
         **Smoothing**
 
-        The dashboard currently applies a {smooth}-day rolling average to smooth day-to-day noise in displayed lines.
+        The dashboard applies a {smooth}-day rolling average to smooth displayed lines.
 
         **Rebasing**
 
         Rebased charts use the median of the first {REBASE_BASE_WINDOW} non-null observations in the selected window.  
         RRP uses a minimum base floor of {RRP_BASE_FLOOR_B:.1f}B to avoid distorted index behavior when the starting level is extremely small.
-
-        **Interpretation guide**
-
-        • Rising net liquidity generally points to a more supportive backdrop for risk assets  
-        • Higher EFFR reflects tighter policy settings  
-        • NFCI above zero implies tighter-than-average financial conditions  
-        • The interaction between liquidity, rates, and conditions matters more than any single panel in isolation
         """
     )
 
