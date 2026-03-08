@@ -1,64 +1,71 @@
+import os
 import time
 from datetime import datetime, date
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
-
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# ---------------- Config ----------------
+# =========================================================
+# Page config and styling
+# =========================================================
 st.set_page_config(page_title="Factor Momentum and Basket Rotation", layout="wide")
-plt.style.use("default")
 
 TITLE = "Factor Momentum and Basket Rotation"
 SUBTITLE = "Factor momentum dashboard with Pro vs Anti ADFM basket rotation views."
 
-PASTELS = [
-    "#6FB9C3",  # darker A8DADC
-    "#E07A2F",  # darker F4A261
-    "#6FA85A",  # darker 90BE6D
-    "#F2B874",  # darker FFD6A5
-    "#8CC7F2",  # darker BDE0FE
-    "#A889C7",  # darker CDB4DB
-    "#C7E29E",  # darker E2F0CB
-    "#D89AD3",  # darker F1C0E8
-    "#8FE3A1",  # darker B9FBC0
-    "#E8CFC3"   # darker F7EDE2
-]
 TEXT = "#222222"
+SUBTLE = "#666666"
 GRID = "#e6e6e6"
+BORDER = "#dddddd"
+BG = "#ffffff"
+CARD_BG = "#fafafa"
+
+PASTELS = [
+    "#6FB9C3",
+    "#E07A2F",
+    "#6FA85A",
+    "#F2B874",
+    "#8CC7F2",
+    "#A889C7",
+    "#C7E29E",
+    "#D89AD3",
+    "#8FE3A1",
+    "#E8CFC3",
+]
 
 CUSTOM_CSS = """
 <style>
-    .block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px;}
-    h1, h2, h3 {font-weight: 600; letter-spacing: 0.15px;}
-    .stPlotlyChart {background: #ffffff;}
-    .js-plotly-plot .table .cell {font-size: 12px;}
+    .block-container {
+        padding-top: 1.1rem;
+        padding-bottom: 2rem;
+        max-width: 1550px;
+    }
+    h1, h2, h3 {
+        font-weight: 600;
+        letter-spacing: 0.1px;
+    }
+    .stPlotlyChart {
+        background: #ffffff;
+    }
+    .js-plotly-plot .table .cell {
+        font-size: 12px;
+    }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-def card_box(inner_html: str):
-    st.markdown(
-        f"""
-        <div style="border:1px solid #e0e0e0; border-radius:10px;
-                    padding:14px; background:#fafafa; color:{TEXT};
-                    font-size:14px; line-height:1.35;">
-          {inner_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+CACHE_DIR = Path("data_cache_factor_rotation")
+CACHE_DIR.mkdir(exist_ok=True)
 
-def _slug(s: str) -> str:
-    return "".join(ch if ch.isalnum() else "_" for ch in str(s)).strip("_")
-
-# ---------------- Factor ETFs ----------------
+# =========================================================
+# Config
+# =========================================================
 FACTOR_ETFS: Dict[str, Tuple[str, Optional[str]]] = {
     "Growth vs Value": ("VUG", "VTV"),
     "Quality vs Junk": ("QUAL", "JNK"),
@@ -82,71 +89,64 @@ WINDOW_MAP_DAYS = {
     "10Y": 252 * 10,
 }
 
-# ---------------- Basket Engine (your baskets) ----------------
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
-        "Semis ETFs": ["SMH","SOXX","XSD"],
-        "Semis Compute and Accelerators": ["NVDA","AMD","INTC","ARM","AVGO","MRVL"],
-        "Semis Analog and Power": ["TXN","ADI","MCHP","NXPI","MPWR","ON","STM","IFNNY","WOLF"],
-        "Semis RF and Connectivity": ["QCOM","SWKS","QRVO","MTSI","AVNW"],
-        "Semis Memory and Storage": ["MU","WDC","STX","SKM"],
-        "Semis Foundry and OSAT": ["TSM","UMC","GFS","ASX"],
-        "Semis Equipment": ["ASML","AMAT","LRCX","KLAC","TER","ONTO","AEIS","ACMR"],
-        "Semis EDA and IP": ["SNPS","CDNS","ANSS","ARM"],
-
+        "Semis ETFs": ["SMH", "SOXX", "XSD"],
+        "Semis Compute and Accelerators": ["NVDA", "AMD", "INTC", "ARM", "AVGO", "MRVL"],
+        "Semis Analog and Power": ["TXN", "ADI", "MCHP", "NXPI", "MPWR", "ON", "STM", "IFNNY", "WOLF"],
+        "Semis RF and Connectivity": ["QCOM", "SWKS", "QRVO", "MTSI", "AVNW"],
+        "Semis Memory and Storage": ["MU", "WDC", "STX", "SKM"],
+        "Semis Foundry and OSAT": ["TSM", "UMC", "GFS", "ASX"],
+        "Semis Equipment": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ONTO", "AEIS", "ACMR"],
+        "Semis EDA and IP": ["SNPS", "CDNS", "ANSS", "ARM"],
         "AI Infrastructure Leaders": [
-            "NVDA","AMD","AVGO","TSM","ASML",
-            "ANET","SMCI","DELL","HPE",
-            "AMAT","LRCX","KLAC","TER",
-            "MRVL","MU","WDC","STX","NTAP",
-            "ORCL","MSFT","AMZN","GOOGL"
+            "NVDA", "AMD", "AVGO", "TSM", "ASML",
+            "ANET", "SMCI", "DELL", "HPE",
+            "AMAT", "LRCX", "KLAC", "TER",
+            "MRVL", "MU", "WDC", "STX", "NTAP",
+            "ORCL", "MSFT", "AMZN", "GOOGL"
         ],
         "Hyperscalers and Cloud": [
-            "MSFT","AMZN","GOOGL","META","ORCL","IBM",
-            "NOW","CRM","DDOG","SNOW","MDB","NET","ZS","OKTA"
+            "MSFT", "AMZN", "GOOGL", "META", "ORCL", "IBM",
+            "NOW", "CRM", "DDOG", "SNOW", "MDB", "NET", "ZS", "OKTA"
         ],
-        "Quality SaaS": ["ADBE","CRM","NOW","INTU","TEAM","HUBS","DDOG","NET","MDB","SNOW"],
-        "Cybersecurity": ["PANW","FTNT","CRWD","ZS","OKTA","TENB","S","CYBR","CHKP","NET"],
-        "Digital Payments": ["V","MA","PYPL","SQ","FI","FIS","GPN","AXP","COF","DFS","ADYEY","MELI"],
-        "China Tech ADRs": ["BABA","BIDU","JD","PDD","BILI","NTES","TCEHY"],
-        "Net-Cash Compounders": ["AAPL","MSFT","GOOGL","META","ORCL","ADBE","INTU","V"],
+        "Quality SaaS": ["ADBE", "CRM", "NOW", "INTU", "TEAM", "HUBS", "DDOG", "NET", "MDB", "SNOW"],
+        "Cybersecurity": ["PANW", "FTNT", "CRWD", "ZS", "OKTA", "TENB", "S", "CYBR", "CHKP", "NET"],
+        "Digital Payments": ["V", "MA", "PYPL", "SQ", "FI", "FIS", "GPN", "AXP", "COF", "DFS", "ADYEY", "MELI"],
+        "China Tech ADRs": ["BABA", "BIDU", "JD", "PDD", "BILI", "NTES", "TCEHY"],
+        "Net-Cash Compounders": ["AAPL", "MSFT", "GOOGL", "META", "ORCL", "ADBE", "INTU", "V"],
     },
-
     "Energy and Hard Assets": {
-        "Energy Majors": ["XOM","CVX","COP","SHEL","BP","TTE","EQNR","ENB","PBR"],
-        "US Shale and E&Ps": ["EOG","DVN","FANG","MRO","OXY","APA","AR","RRC","SWN","CHK","CTRA"],
-        "Natural Gas and LNG": ["LNG","EQNR","KMI","WMB","EPD","ET"],
-        "Oilfield Services": ["SLB","HAL","BKR","NOV"],
-        "Gold and Silver Miners": ["GDX","GDXJ","NEM","AEM","GOLD","KGC","AG","PAAS","WPM"],
-        "Metals and Mining": ["BHP","RIO","VALE","FCX","NEM","TECK","SCCO","AA"],
+        "Energy Majors": ["XOM", "CVX", "COP", "SHEL", "BP", "TTE", "EQNR", "ENB", "PBR"],
+        "US Shale and E&Ps": ["EOG", "DVN", "FANG", "MRO", "OXY", "APA", "AR", "RRC", "SWN", "CHK", "CTRA"],
+        "Natural Gas and LNG": ["LNG", "EQNR", "KMI", "WMB", "EPD", "ET"],
+        "Oilfield Services": ["SLB", "HAL", "BKR", "NOV"],
+        "Gold and Silver Miners": ["GDX", "GDXJ", "NEM", "AEM", "GOLD", "KGC", "AG", "PAAS", "WPM"],
+        "Metals and Mining": ["BHP", "RIO", "VALE", "FCX", "NEM", "TECK", "SCCO", "AA"],
     },
-
     "Regime Diagnostics": {
-        "Long-Duration Equities": ["ARKK","IPO","IGV","SNOW","NET","DDOG","MDB","SHOP"],
-        "Short-Duration Cash Flow": ["BRK-B","PGR","CB","ICE","CME","NDAQ","SPGI","MSCI"],
-        "Yield Proxies": ["XLU","VZ","T","KMI","EPD","ENB"],
-        "Financial Conditions Sensitive": ["IWM","XLY","KRE","HYG","ARKK"],
-        "Dollar-Down Beneficiaries": ["XME","GDX","EEM","EWZ"],
-        "Commodity FX Equities": ["EWC","EWA","EWZ","EWW"],
-        "EM Domestic Demand": ["EEM","INDA","EWW","EWZ","EIDO"],
-        "Equity Credit Stress Proxies": ["HYG","JNK","LQD"],
+        "Long-Duration Equities": ["ARKK", "IPO", "IGV", "SNOW", "NET", "DDOG", "MDB", "SHOP"],
+        "Short-Duration Cash Flow": ["BRK-B", "PGR", "CB", "ICE", "CME", "NDAQ", "SPGI", "MSCI"],
+        "Yield Proxies": ["XLU", "VZ", "T", "KMI", "EPD", "ENB"],
+        "Financial Conditions Sensitive": ["IWM", "XLY", "KRE", "HYG", "ARKK"],
+        "Dollar-Down Beneficiaries": ["XME", "GDX", "EEM", "EWZ"],
+        "Commodity FX Equities": ["EWC", "EWA", "EWZ", "EWW"],
+        "EM Domestic Demand": ["EEM", "INDA", "EWW", "EWZ", "EIDO"],
+        "Equity Credit Stress Proxies": ["HYG", "JNK", "LQD"],
     },
-
     "Defensives and Staples": {
-        "Staples and Beverages": ["PG","KO","PEP","PM","MO","MDLZ"],
-        "Telecom and Cable": ["T","VZ","TMUS","CHTR","CMCSA"],
-        "Utilities Defensive": ["DUK","SO","AEP","XEL","EXC","ED"],
+        "Staples and Beverages": ["PG", "KO", "PEP", "PM", "MO", "MDLZ"],
+        "Telecom and Cable": ["T", "VZ", "TMUS", "CHTR", "CMCSA"],
+        "Utilities Defensive": ["DUK", "SO", "AEP", "XEL", "EXC", "ED"],
     },
-
     "Financials and Credit": {
-        "Money-Center and IBs": ["JPM","BAC","C","WFC","GS","MS"],
-        "Regional Banks": ["KRE","TFC","FITB","CFG","RF","KEY","PNC","USB","MTB"],
+        "Money-Center and IBs": ["JPM", "BAC", "C", "WFC", "GS", "MS"],
+        "Regional Banks": ["KRE", "TFC", "FITB", "CFG", "RF", "KEY", "PNC", "USB", "MTB"],
     },
 }
 
 ALL_BASKETS = {bk: tks for cat in CATEGORIES.values() for bk, tks in cat.items()}
 
-# ---------------- Factor -> Basket mapping (editable) ----------------
 FACTOR_TO_BASKETS: Dict[str, Dict[str, List[str]]] = {
     "US vs World": {
         "pro": ["Hyperscalers and Cloud", "Net-Cash Compounders", "Cybersecurity", "Semis Compute and Accelerators"],
@@ -186,38 +186,92 @@ FACTOR_TO_BASKETS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+# =========================================================
+# UI helpers
+# =========================================================
+def card_box(inner_html: str) -> None:
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid {BORDER};
+            border-radius:10px;
+            padding:14px;
+            background:{CARD_BG};
+            color:{TEXT};
+            font-size:14px;
+            line-height:1.4;">
+            {inner_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def metric_card(label: str, value: str, help_text: Optional[str] = None) -> None:
+    extra = f'<div style="margin-top:4px; color:{SUBTLE}; font-size:12px;">{help_text}</div>' if help_text else ""
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid {BORDER};
+            border-radius:12px;
+            padding:12px 14px;
+            background:{BG};
+            min-height:84px;">
+            <div style="font-size:12px; color:{SUBTLE}; margin-bottom:6px;">{label}</div>
+            <div style="font-size:26px; color:{TEXT}; font-weight:700;">{value}</div>
+            {extra}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def _slug(s: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in str(s)).strip("_")
+
 def _safe_basket_list(names: List[str]) -> List[str]:
     return [b for b in names if b in ALL_BASKETS]
 
-# ---------------- Helpers (factor) ----------------
+def _chunk(lst: List[str], n: int) -> List[List[str]]:
+    n = max(1, int(n))
+    return [lst[i:i + n] for i in range(0, len(lst), n)]
+
+def cache_path_for_tickers(tickers: List[str]) -> Path:
+    key = "_".join(sorted(set([str(t).upper() for t in tickers if t])))
+    safe_key = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in key)
+    return CACHE_DIR / f"{safe_key[:220]}.parquet"
+
+# =========================================================
+# Math helpers
+# =========================================================
 def pct_change_window(series: pd.Series, days: int) -> float:
-    if len(series) <= 1:
+    s = series.dropna()
+    if len(s) <= days:
         return np.nan
-    days = int(min(days, len(series) - 1))
-    return float(series.iloc[-1] / series.iloc[-days] - 1.0)
+    return float(s.iloc[-1] / s.iloc[-(days + 1)] - 1.0)
 
 def momentum(series: pd.Series, win: int = 20) -> float:
     r = series.pct_change().dropna()
-    if len(r) < 2:
+    if len(r) < max(2, win):
         return np.nan
-    win = int(min(win, len(r)))
     return float(r.rolling(win).mean().iloc[-1])
 
 def rs(series_a: pd.Series, series_b: pd.Series) -> pd.Series:
     aligned = pd.concat([series_a, series_b], axis=1).dropna()
     if aligned.empty:
         return pd.Series(dtype=float)
-    return aligned.iloc[:, 0] / aligned.iloc[:, 1]
+    out = aligned.iloc[:, 0] / aligned.iloc[:, 1]
+    out.name = f"{series_a.name}_vs_{series_b.name}"
+    return out
 
 def ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
 
 def trend_class(series: pd.Series) -> str:
-    if len(series) < 50:
+    s = series.dropna()
+    if len(s) < 50:
         return "Neutral"
-    e1 = ema(series, 10).iloc[-1]
-    e2 = ema(series, 20).iloc[-1]
-    e3 = ema(series, 40).iloc[-1]
+    e1 = ema(s, 10).iloc[-1]
+    e2 = ema(s, 20).iloc[-1]
+    e3 = ema(s, 40).iloc[-1]
     if e1 > e2 > e3:
         return "Up"
     if e1 < e2 < e3:
@@ -235,6 +289,52 @@ def inflection(short_mom: float, long_mom: float) -> str:
         return "Strengthening"
     return "Weakening"
 
+def normalize_to_100(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for c in out.columns:
+        s = out[c].dropna()
+        if s.empty:
+            out[c] = np.nan
+        else:
+            out[c] = out[c] / s.iloc[0] * 100.0
+    return out
+
+def macd_hist(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
+    s = series.dropna()
+    ema_f = s.ewm(span=fast, adjust=False).mean()
+    ema_s = s.ewm(span=slow, adjust=False).mean()
+    macd = ema_f - ema_s
+    sig = macd.ewm(span=signal, adjust=False).mean()
+    return macd - sig
+
+def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> str:
+    h = hist.dropna()
+    if h.shape[0] < max(lookback + 1, z_window):
+        return "Neutral"
+    latest = float(h.iloc[-1])
+    ref = float(h.iloc[-(lookback + 1)])
+    base = "Positive" if latest > 0 else ("Negative" if latest < 0 else "Neutral")
+    if base == "Neutral":
+        return "Neutral"
+    window = h.iloc[-z_window:]
+    std = float(window.std(ddof=0))
+    z = (latest - float(window.mean())) / std if std and not np.isnan(std) else 0.0
+    accel = "Accelerating" if (latest - ref) > 0 else "Decelerating"
+    strength = "Strong" if abs(z) > 1 else "Weak"
+    return f"{base} | {accel} | {strength}"
+
+def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
+    s = levels.dropna()
+    if s.empty:
+        return np.nan
+    sub = s[s.index >= start_ts]
+    if sub.shape[0] < 2:
+        return np.nan
+    return float(sub.iloc[-1] / sub.iloc[0] - 1.0)
+
+# =========================================================
+# Commentary helpers
+# =========================================================
 def bucket_breadth(breadth: float) -> str:
     if breadth < 10:
         return "extremely narrow"
@@ -257,14 +357,16 @@ def bucket_regime(regime_score: float) -> str:
         return "roughly neutral with a mild defensive lean"
     if regime_score < 70:
         return "constructive and risk friendly"
-    return "high beta, late-cycle risk on"
+    return "high beta and aggressively risk on"
 
 def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) -> str:
     trend_counts = mom_df["Trend"].value_counts()
     up_count = int(trend_counts.get("Up", 0))
     down_count = int(trend_counts.get("Down", 0))
 
-    established_leaders = mom_df[(mom_df["Short"] > 0) & (mom_df["Long"] > 0)].sort_values("Short", ascending=False).index.tolist()
+    established_leaders = mom_df[
+        (mom_df["Short"] > 0) & (mom_df["Long"] > 0)
+    ].sort_values("Short", ascending=False).index.tolist()
     new_rotations = mom_df[mom_df["Inflection"] == "Turning Up"].index.tolist()
     fading_leaders = mom_df[mom_df["Inflection"] == "Turning Down"].index.tolist()
 
@@ -272,176 +374,239 @@ def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) 
     rotations_text = ", ".join(new_rotations[:4]) if new_rotations else "no factor is clearly turning up yet"
     fading_text = ", ".join(fading_leaders[:4]) if fading_leaders else "no obvious factor is rolling over from strength"
 
-    breadth_desc = bucket_breadth(breadth)
-    regime_desc = bucket_regime(regime_score)
-
     conclusion = (
-        f"Factor tape is {breadth_desc} and currently {regime_desc}. "
-        f"Leadership is anchored in {leaders_text}, with rotations starting to show up in "
-        f"{rotations_text}, and pressure building in {fading_text}."
+        f"Factor tape is {bucket_breadth(breadth)} and currently {bucket_regime(regime_score)}. "
+        f"Leadership is anchored in {leaders_text}, with emerging rotation showing up in {rotations_text}, "
+        f"while pressure is building in {fading_text}."
     )
 
     why_matters = (
-        "This grid is the style map for the equity tape. It tells you which buckets the market is paying for, "
-        "how persistent that preference is across short and long windows, and whether you should lean into "
-        "existing trends or hunt for rotations."
+        "This grid is the style map for the equity tape. It shows which factors are being rewarded, "
+        "how durable that preference looks across short and long windows, and whether the market is pressing existing leadership or searching for a new one."
     )
 
-    drivers = []
-    drivers.append(
-        f"{up_count} factors are in up trends and {down_count} are in down trends based on the 10/20/40-day moving average stack."
-    )
-    drivers.append(
-        f"Short horizon strength is concentrated in {', '.join(mom_df.sort_values('Short', ascending=False).index.tolist()[:5])}."
-    )
+    top_short = ", ".join(mom_df.sort_values("Short", ascending=False).index.tolist()[:5])
+
+    drivers = [
+        f"{up_count} factors are in uptrends and {down_count} are in downtrends using the 10, 20, and 40-day EMA stack.",
+        f"Short-window strength is concentrated in {top_short}.",
+    ]
     if new_rotations:
         drivers.append(f"Inflection signals flag {', '.join(new_rotations)} as turning up.")
     if fading_leaders:
-        drivers.append(f"{', '.join(fading_leaders)} are turning down against still-positive long windows.")
+        drivers.append(f"{', '.join(fading_leaders)} are turning down against stronger long-window history.")
 
-    key_stats = f"Breadth index {breadth:.1f}%. Regime score {regime_score:.1f} on a 0-100 scale (50 neutral)."
+    key_stats = f"Breadth index {breadth:.1f}%. Regime score {regime_score:.1f} on a 0 to 100 scale."
 
     body = (
         '<div style="font-weight:700; margin-bottom:6px;">Conclusion</div>'
-        f'<div>{conclusion}</div>'
+        f"<div>{conclusion}</div>"
         '<div style="font-weight:700; margin:10px 0 6px;">Why it matters</div>'
-        f'<div>{why_matters}</div>'
+        f"<div>{why_matters}</div>"
         '<div style="font-weight:700; margin:10px 0 6px;">Key drivers</div>'
         '<ul style="margin-top:4px; margin-bottom:4px;">'
         + "".join(f"<li>{d}</li>" for d in drivers)
         + "</ul>"
         '<div style="font-weight:700; margin:10px 0 6px;">Key stats</div>'
-        f'<div>{key_stats}</div>'
+        f"<div>{key_stats}</div>"
     )
     return body
 
-# ---------------- Helpers (basket rotation) ----------------
-def _chunk(lst: List[str], n: int) -> List[List[str]]:
-    n = max(1, int(n))
-    return [lst[i:i+n] for i in range(0, len(lst), n)]
-
+# =========================================================
+# Data fetching
+# =========================================================
 def _download_close_batch(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     batch = [str(x).upper() for x in batch if x]
     if not batch:
         return pd.DataFrame()
 
-    if len(batch) == 1:
-        t = batch[0]
-        df = yf.download(t, start=start, end=end, auto_adjust=True, progress=False)
+    try:
+        if len(batch) == 1:
+            t = batch[0]
+            df = yf.download(
+                t,
+                start=start,
+                end=end,
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+            if df is None or df.empty:
+                return pd.DataFrame()
+            col = "Close" if "Close" in df.columns else ("Adj Close" if "Adj Close" in df.columns else None)
+            if col is None:
+                return pd.DataFrame()
+            s = df[col].copy()
+            s.name = t
+            return s.to_frame()
+
+        df = yf.download(
+            batch,
+            start=start,
+            end=end,
+            auto_adjust=True,
+            progress=False,
+            group_by="column",
+            threads=True,
+        )
         if df is None or df.empty:
             return pd.DataFrame()
-        col = "Close" if "Close" in df.columns else ("Adj Close" if "Adj Close" in df.columns else None)
-        if col is None:
-            return pd.DataFrame()
-        s = df[col].copy()
-        s.name = t
-        return s.to_frame()
 
-    df = yf.download(batch, start=start, end=end, auto_adjust=True, progress=False, group_by="column")
-    if df is None or df.empty:
+        if isinstance(df.columns, pd.MultiIndex):
+            lvl0 = set(df.columns.get_level_values(0))
+            if "Close" in lvl0:
+                close = df["Close"].copy()
+            elif "Adj Close" in lvl0:
+                close = df["Adj Close"].copy()
+            else:
+                return pd.DataFrame()
+            close.columns = [str(c).upper() for c in close.columns]
+            return close
+
+    except Exception:
         return pd.DataFrame()
-
-    if isinstance(df.columns, pd.MultiIndex):
-        level0 = set(df.columns.get_level_values(0))
-        if "Close" in level0:
-            close = df["Close"].copy()
-        elif "Adj Close" in level0:
-            close = df["Adj Close"].copy()
-        else:
-            return pd.DataFrame()
-        close.columns = [str(c).upper() for c in close.columns]
-        return close
 
     return pd.DataFrame()
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def fetch_daily_levels(tickers: List[str], start: pd.Timestamp, end: pd.Timestamp, chunk_size: int = 60) -> pd.DataFrame:
-    uniq = sorted(list({str(t).upper() for t in tickers if t}))
-    frames = []
+def fetch_daily_levels(tickers: List[str], start: pd.Timestamp, end: pd.Timestamp, chunk_size: int = 40) -> pd.DataFrame:
+    uniq = sorted({str(t).upper() for t in tickers if t})
+    cache_file = cache_path_for_tickers(uniq)
+
+    frames: List[pd.DataFrame] = []
+
     for batch in _chunk(uniq, chunk_size):
         out = pd.DataFrame()
-        for _ in range(2):
+        for _ in range(3):
             out = _download_close_batch(batch, start, end)
             if not out.empty:
                 break
-            time.sleep(0.35)
+            time.sleep(0.5)
         if not out.empty:
             frames.append(out)
 
-    if not frames:
-        return pd.DataFrame()
+    if frames:
+        wide = pd.concat(frames, axis=1)
+        wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
 
-    wide = pd.concat(frames, axis=1)
-    wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
-    if wide.empty:
-        return wide
+        if not wide.empty:
+            bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
+            wide = wide.reindex(bidx).ffill()
 
-    bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
-    return wide.reindex(bidx).ffill()
+            try:
+                wide.to_parquet(cache_file)
+            except Exception:
+                pass
 
+            return wide
+
+    if cache_file.exists():
+        try:
+            cached = pd.read_parquet(cache_file)
+            cached.index = pd.to_datetime(cached.index)
+            cached = cached.sort_index()
+            cached = cached[(cached.index >= start) & (cached.index <= end)]
+            if not cached.empty:
+                return cached
+        except Exception:
+            pass
+
+    return pd.DataFrame()
+
+# =========================================================
+# Basket engine
+# =========================================================
 def ew_rets_from_levels(levels: pd.DataFrame, baskets: Dict[str, List[str]], stale_days: int = 30) -> pd.DataFrame:
     if levels.empty:
         return pd.DataFrame()
+
     rets = levels.pct_change()
     out = {}
     last_idx = levels.index.max()
 
-    for b, tks in baskets.items():
-        cols = []
-        for c in tks:
-            c_u = str(c).upper()
-            if c_u not in rets.columns:
+    for basket_name, tickers in baskets.items():
+        valid_cols = []
+        for t in tickers:
+            t_u = str(t).upper()
+            if t_u not in rets.columns:
                 continue
-            s = levels[c_u].dropna()
+            s = levels[t_u].dropna()
             if s.empty:
                 continue
             if s.index.max() < last_idx - pd.Timedelta(days=int(stale_days)):
                 continue
-            cols.append(c_u)
+            valid_cols.append(t_u)
 
-        if not cols:
+        if not valid_cols:
             continue
-        out[b] = rets[cols].mean(axis=1, skipna=True) if len(cols) > 1 else rets[cols[0]]
+
+        if len(valid_cols) == 1:
+            out[basket_name] = rets[valid_cols[0]]
+        else:
+            out[basket_name] = rets[valid_cols].mean(axis=1, skipna=True)
 
     return pd.DataFrame(out).dropna(how="all")
 
-def macd_hist(series: pd.Series, fast=12, slow=26, signal=9) -> pd.Series:
-    ema_f = series.ewm(span=fast, adjust=False).mean()
-    ema_s = series.ewm(span=slow, adjust=False).mean()
-    macd = ema_f - ema_s
-    sig = macd.ewm(span=signal, adjust=False).mean()
-    return macd - sig
+def build_all_basket_panels(
+    basket_returns: pd.DataFrame,
+    bench_rets: pd.Series,
+    window_start: pd.Timestamp,
+    window_label: str,
+) -> pd.DataFrame:
+    if basket_returns.empty or bench_rets.empty:
+        return pd.DataFrame()
 
-def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> str:
-    h = hist.dropna()
-    if h.shape[0] < max(lookback + 1, z_window):
-        return "Neutral"
-    latest = float(h.iloc[-1])
-    ref = float(h.iloc[-(lookback + 1)])
-    base = "Positive" if latest > 0 else ("Negative" if latest < 0 else "Neutral")
-    if base == "Neutral":
-        return "Neutral"
-    window = h.iloc[-z_window:]
-    std = float(window.std(ddof=0))
-    z = (latest - float(window.mean())) / std if std and not np.isnan(std) else 0.0
-    accel = "Accelerating" if (latest - ref) > 0 else "Decelerating"
-    strength = "Strong" if abs(z) > 1 else "Weak"
-    return f"{base} | {accel} | {strength}"
+    bench_rets = bench_rets.dropna()
+    basket_returns = basket_returns.copy().dropna(how="all")
 
-def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
-    sub = levels[levels.index >= start_ts]
-    return float((sub.iloc[-1] / sub.iloc[0]) - 1.0) if sub.shape[0] else np.nan
+    basket_levels = 100.0 * (1.0 + basket_returns).cumprod()
+    dyn_col = f"↓ %{window_label}"
+    rows = []
 
+    for b in basket_levels.columns:
+        lvl = basket_levels[b].dropna()
+        if lvl.shape[0] < 20:
+            continue
+
+        r5d = pct_change_window(lvl, 5)
+        r1m = pct_since(lvl, lvl.index.max() - pd.DateOffset(months=1))
+        r_dyn = pct_since(lvl, window_start)
+
+        hist = macd_hist(lvl, 12, 26, 9)
+        macd_m = momentum_label(hist, lookback=5, z_window=63)
+
+        corr_spy = np.nan
+        merged = pd.concat([basket_returns[b], bench_rets], axis=1, join="inner").dropna()
+        if merged.shape[0] >= 63:
+            corr_spy = float(merged.iloc[:, 0].rolling(63).corr(merged.iloc[:, 1]).iloc[-1])
+
+        rows.append({
+            "Basket": b,
+            "%5D": round(r5d * 100, 1) if pd.notna(r5d) else np.nan,
+            "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
+            dyn_col: round(r_dyn * 100, 1) if pd.notna(r_dyn) else np.nan,
+            "MACD Momentum": macd_m,
+            "Corr(63D)": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["Basket", "%5D", "%1M", dyn_col, "MACD Momentum", "Corr(63D)"]).set_index("Basket")
+
+    return pd.DataFrame(rows).set_index("Basket").sort_values(dyn_col, ascending=False)
+
+# =========================================================
+# Coloring for tables
+# =========================================================
 def color_ret(x):
     if pd.isna(x):
         return "white"
     if x >= 0:
-        s = min(abs(x)/20.0, 1.0)
-        g = int(255 - 90*s)
-        return f"rgb({int(240-120*s)},{g},{int(240-120*s)})"
-    s = min(abs(x)/20.0, 1.0)
-    r = int(255 - 90*s)
-    return f"rgb({r},{int(240-120*s)},{int(240-120*s)})"
+        s = min(abs(x) / 20.0, 1.0)
+        g = int(255 - 90 * s)
+        return f"rgb({int(240 - 120 * s)},{g},{int(240 - 120 * s)})"
+    s = min(abs(x) / 20.0, 1.0)
+    r = int(255 - 90 * s)
+    return f"rgb({r},{int(240 - 120 * s)},{int(240 - 120 * s)})"
 
 def color_macd(tag):
     if not isinstance(tag, str):
@@ -470,18 +635,22 @@ def color_corr(x):
         return "rgb(220,235,255)"
     return "rgb(230,240,255)"
 
+# =========================================================
+# Plot helpers
+# =========================================================
 def plot_rotation_table(panel_df: pd.DataFrame, title: str, key: str):
     st.markdown(f"**{title}**")
     if panel_df.empty:
         st.info("No baskets passed the data checks for this window.")
         return
 
-    headers = ["Basket", "%5D", "%1M", panel_df.columns[2], "MACD Momentum", "Corr(63D)"]
+    dyn_col = panel_df.columns[2]
+    headers = ["Basket", "%5D", "%1M", dyn_col, "MACD Momentum", "Corr(63D)"]
     values = [
         panel_df.index.tolist(),
         panel_df["%5D"].tolist(),
         panel_df["%1M"].tolist(),
-        panel_df.iloc[:, 2].tolist(),
+        panel_df[dyn_col].tolist(),
         panel_df["MACD Momentum"].tolist(),
         panel_df["Corr(63D)"].tolist(),
     ]
@@ -489,15 +658,14 @@ def plot_rotation_table(panel_df: pd.DataFrame, title: str, key: str):
         ["white"] * len(panel_df),
         [color_ret(v) for v in panel_df["%5D"].tolist()],
         [color_ret(v) for v in panel_df["%1M"].tolist()],
-        [color_ret(v) for v in panel_df.iloc[:, 2].tolist()],
+        [color_ret(v) for v in panel_df[dyn_col].tolist()],
         [color_macd(v) for v in panel_df["MACD Momentum"].tolist()],
         [color_corr(v) for v in panel_df["Corr(63D)"].tolist()],
     ]
 
-    col_widths = [0.34, 0.09, 0.09, 0.11, 0.26, 0.11]
     fig_tbl = go.Figure(
         data=[go.Table(
-            columnwidth=[int(w*1000) for w in col_widths],
+            columnwidth=[340, 90, 90, 110, 260, 110],
             header=dict(
                 values=headers,
                 fill_color="white",
@@ -517,13 +685,23 @@ def plot_rotation_table(panel_df: pd.DataFrame, title: str, key: str):
             )
         )]
     )
-    fig_tbl.update_layout(margin=dict(l=0, r=0, t=6, b=0), height=min(520, 64 + 26 * max(3, len(panel_df))))
+    fig_tbl.update_layout(
+        margin=dict(l=0, r=0, t=6, b=0),
+        height=min(520, 64 + 26 * max(3, len(panel_df)))
+    )
     st.plotly_chart(fig_tbl, use_container_width=True, key=key)
 
-def plot_side_cumulative(basket_returns: pd.DataFrame, baskets: List[str], title: str, benchmark_rets: pd.Series, key: str):
+def plot_side_cumulative(
+    basket_returns: pd.DataFrame,
+    baskets: List[str],
+    title: str,
+    benchmark_rets: pd.Series,
+    key: str,
+):
     if basket_returns.empty or not baskets:
         st.info("Insufficient data to render chart.")
         return
+
     common = basket_returns.index.intersection(benchmark_rets.index)
     if common.empty:
         st.info("No overlapping dates.")
@@ -545,30 +723,108 @@ def plot_side_cumulative(basket_returns: pd.DataFrame, baskets: List[str], title
             mode="lines",
             line=dict(width=2, color=PASTELS[i % len(PASTELS)]),
             name=b,
-            hovertemplate=f"{b}<br>% Cum: %{{y:.1f}}%<extra></extra>"
+            hovertemplate=f"{b}<br>Cumulative: %{{y:.1f}}%<extra></extra>"
         ))
 
     fig.add_trace(go.Scatter(
         x=bm_cum.index,
         y=bm_cum.values,
         mode="lines",
-        line=dict(width=2, dash="dash", color="#888"),
+        line=dict(width=2, dash="dash", color="#888888"),
         name="SPY",
-        hovertemplate="SPY<br>% Cum: %{y:.1f}%<extra></extra>"
+        hovertemplate="SPY<br>Cumulative: %{y:.1f}%<extra></extra>"
     ))
 
     fig.update_layout(
         showlegend=True,
         hovermode="x unified",
-        yaxis_title="Cumulative return, %",
-        title=dict(text=title, x=0, xanchor="left", y=0.95),
+        title=dict(text=title, x=0, xanchor="left"),
         margin=dict(l=10, r=10, t=35, b=10),
-        xaxis=dict(showspikes=True, spikemode="across", spikesnap="cursor", showgrid=True),
-        yaxis=dict(zeroline=False, showgrid=True)
+        yaxis_title="Cumulative return, %",
+        xaxis=dict(showgrid=True, gridcolor=GRID),
+        yaxis=dict(showgrid=True, gridcolor=GRID, zeroline=False),
     )
     st.plotly_chart(fig, use_container_width=True, key=key)
 
-# ---------------- Sidebar ----------------
+def plot_factor_timeseries_plotly(factor_df: pd.DataFrame):
+    norm = normalize_to_100(factor_df)
+    fig = go.Figure()
+
+    for i, col in enumerate(norm.columns):
+        s = norm[col].dropna()
+        if s.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=s.index,
+            y=s.values,
+            mode="lines",
+            name=col,
+            line=dict(width=2, color=PASTELS[i % len(PASTELS)]),
+            hovertemplate=f"{col}<br>Index: %{{y:.1f}}<extra></extra>"
+        ))
+
+    fig.update_layout(
+        title=dict(text="Normalized factor relative-strength series, start = 100", x=0, xanchor="left"),
+        hovermode="x unified",
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis=dict(showgrid=True, gridcolor=GRID),
+        yaxis=dict(showgrid=True, gridcolor=GRID, zeroline=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+def plot_leadership_map_plotly(mom_df: pd.DataFrame):
+    short_vals = mom_df["Short"] * 100.0
+    long_vals = mom_df["Long"] * 100.0
+
+    x_max = max(abs(short_vals.min()), abs(short_vals.max()), 1.0)
+    y_max = max(abs(long_vals.min()), abs(long_vals.max()), 1.0)
+    pad_x = x_max * 0.18
+    pad_y = y_max * 0.18
+
+    x0, x1 = -x_max - pad_x, x_max + pad_x
+    y0, y1 = -y_max - pad_y, y_max + pad_y
+
+    fig = go.Figure()
+
+    fig.add_shape(type="rect", x0=0, x1=x1, y0=0, y1=y1, fillcolor="rgba(225,245,224,0.55)", line=dict(width=0), layer="below")
+    fig.add_shape(type="rect", x0=x0, x1=0, y0=0, y1=y1, fillcolor="rgba(255,249,196,0.55)", line=dict(width=0), layer="below")
+    fig.add_shape(type="rect", x0=x0, x1=0, y0=y0, y1=0, fillcolor="rgba(253,224,220,0.55)", line=dict(width=0), layer="below")
+    fig.add_shape(type="rect", x0=0, x1=x1, y0=y0, y1=0, fillcolor="rgba(255,233,179,0.55)", line=dict(width=0), layer="below")
+
+    fig.add_shape(type="line", x0=0, x1=0, y0=y0, y1=y1, line=dict(color="#888888", width=1))
+    fig.add_shape(type="line", x0=x0, x1=x1, y0=0, y1=0, line=dict(color="#888888", width=1))
+
+    for i, factor in enumerate(mom_df.index):
+        fig.add_trace(go.Scatter(
+            x=[short_vals.loc[factor]],
+            y=[long_vals.loc[factor]],
+            mode="markers+text",
+            text=[factor],
+            textposition="top center",
+            marker=dict(size=13, color=PASTELS[i % len(PASTELS)], line=dict(color="#444444", width=1)),
+            name=factor,
+            hovertemplate=f"{factor}<br>Short: %{{x:.1f}}%<br>Long: %{{y:.1f}}%<extra></extra>",
+            showlegend=False
+        ))
+
+    fig.add_annotation(x=x1 * 0.62, y=y1 * 0.72, text="Established leaders", showarrow=False, font=dict(size=12, color="#333333"))
+    fig.add_annotation(x=x0 * 0.62, y=y1 * 0.72, text="Mean reversion", showarrow=False, font=dict(size=12, color="#333333"))
+    fig.add_annotation(x=x0 * 0.62, y=y0 * 0.72, text="Persistent laggards", showarrow=False, font=dict(size=12, color="#333333"))
+    fig.add_annotation(x=x1 * 0.62, y=y0 * 0.72, text="New rotations", showarrow=False, font=dict(size=12, color="#333333"))
+
+    fig.update_layout(
+        title=dict(text="Leadership map: short vs long momentum", x=0, xanchor="left"),
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis=dict(title="Short window return %", range=[x0, x1], showgrid=True, gridcolor=GRID, zeroline=False),
+        yaxis=dict(title="Long window return %", range=[y0, y1], showgrid=True, gridcolor=GRID, zeroline=False),
+        hovermode="closest",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# =========================================================
+# Sidebar
+# =========================================================
 st.title(TITLE)
 st.caption(SUBTITLE)
 
@@ -582,50 +838,61 @@ with st.sidebar:
     )
     lookback_short = st.slider("Short momentum window (days)", 10, 60, 20)
     lookback_long = st.slider("Long momentum window (days)", 30, 180, 60)
+    top_n = st.slider("Top baskets per side", 3, 10, 6)
+    expand_all = st.checkbox("Expand all factor sections", value=False)
     st.caption("Data source: Yahoo Finance. Internal use only.")
 
-# ---------------- Compute window start/end ----------------
+# =========================================================
+# Window selection
+# =========================================================
 today = date.today()
-if window_choice == "YTD":
-    window_start = pd.Timestamp(date(datetime.now().year, 1, 1))
-else:
-    days = WINDOW_MAP_DAYS[window_choice]
-    window_start = pd.Timestamp(today) - pd.Timedelta(days=int(days * 1.35))
-
 window_end = pd.Timestamp(today) + pd.Timedelta(days=1)
 
-# ---------------- Build ticker universe ----------------
+if window_choice == "YTD":
+    window_start = pd.Timestamp(date(datetime.now().year, 1, 1))
+    requested_trading_days = None
+else:
+    requested_trading_days = WINDOW_MAP_DAYS[window_choice]
+    window_start = pd.Timestamp(today) - pd.Timedelta(days=int(requested_trading_days * 1.6))
+
+# =========================================================
+# Build ticker universe
+# =========================================================
 factor_tickers = sorted({t for pair in FACTOR_ETFS.values() for t in pair if t is not None} | {BENCH})
 
 mapped_baskets = []
-for f in FACTOR_ETFS.keys():
-    if f in FACTOR_TO_BASKETS:
-        mapped_baskets.extend(_safe_basket_list(FACTOR_TO_BASKETS[f].get("pro", [])))
-        mapped_baskets.extend(_safe_basket_list(FACTOR_TO_BASKETS[f].get("anti", [])))
-mapped_baskets = sorted(list(set(mapped_baskets)))
+for factor_name in FACTOR_ETFS.keys():
+    mapping = FACTOR_TO_BASKETS.get(factor_name, {})
+    mapped_baskets.extend(_safe_basket_list(mapping.get("pro", [])))
+    mapped_baskets.extend(_safe_basket_list(mapping.get("anti", [])))
+mapped_baskets = sorted(set(mapped_baskets))
 
 basket_tickers = set()
 for b in mapped_baskets:
     basket_tickers.update([str(x).upper() for x in ALL_BASKETS.get(b, [])])
 
-need = sorted(list(set(factor_tickers) | set(basket_tickers) | {BENCH}))
+need = sorted(set(factor_tickers) | set(basket_tickers) | {BENCH})
 
-# ---------------- Fetch once ----------------
+# =========================================================
+# Fetch
+# =========================================================
 levels = fetch_daily_levels(
     need,
     start=pd.Timestamp(history_start),
-    end=window_end
+    end=window_end,
 )
 
 if levels.empty:
-    st.error("No data returned.")
+    st.error("No data returned from Yahoo Finance or local cache.")
     st.stop()
 
 if BENCH not in levels.columns or levels[BENCH].dropna().empty:
     st.error("SPY data missing or empty.")
     st.stop()
 
-# ---------------- Factor series ----------------
+# =========================================================
+# Factor construction
+# =========================================================
 factor_levels_full = {}
 for name, (up, down) in FACTOR_ETFS.items():
     up = up.upper()
@@ -637,35 +904,42 @@ for name, (up, down) in FACTOR_ETFS.items():
         continue
 
     if up in levels.columns and down_u in levels.columns:
-        factor_levels_full[name] = rs(levels[up], levels[down_u])
+        rel = rs(levels[up], levels[down_u])
+        if not rel.empty:
+            factor_levels_full[name] = rel
 
 factor_df_full = pd.DataFrame(factor_levels_full).dropna(how="all")
 if factor_df_full.empty:
     st.error("No factor series could be constructed.")
     st.stop()
 
-if window_choice == "YTD":
-    factor_df = factor_df_full[factor_df_full.index >= window_start].copy()
+if requested_trading_days is not None:
+    factor_df = factor_df_full.tail(min(requested_trading_days, len(factor_df_full))).copy()
+    if not factor_df.empty:
+        window_start = factor_df.index.min()
 else:
-    days = WINDOW_MAP_DAYS[window_choice]
-    factor_df = factor_df_full.iloc[-min(days, len(factor_df_full)):].copy()
+    factor_df = factor_df_full[factor_df_full.index >= window_start].copy()
 
 if factor_df.empty:
     st.error("No data available for the selected window.")
     st.stop()
 
-# ---------------- Momentum snapshot data ----------------
+# =========================================================
+# Momentum snapshot
+# =========================================================
 rows = []
 for f in factor_df.columns:
     s = factor_df[f].dropna()
-    if len(s) < 10:
+    if len(s) < max(lookback_long + 1, 15):
         continue
+
     r5 = pct_change_window(s, 5)
     r_short = pct_change_window(s, lookback_short)
     r_long = pct_change_window(s, lookback_long)
     mom_val = momentum(s, win=lookback_short)
     tclass = trend_class(s)
     infl = inflection(r_short, r_long)
+
     rows.append([f, r5, r_short, r_long, mom_val, tclass, infl])
 
 mom_df = pd.DataFrame(
@@ -681,6 +955,7 @@ mom_df = mom_df.sort_values("Short", ascending=False)
 
 trend_counts = mom_df["Trend"].value_counts()
 num_up = int(trend_counts.get("Up", 0))
+num_down = int(trend_counts.get("Down", 0))
 breadth = num_up / len(mom_df) * 100.0
 
 raw_score = (
@@ -690,52 +965,33 @@ raw_score = (
 )
 regime_score = max(0.0, min(100.0, 50.0 + 50.0 * (raw_score / 5.0)))
 
-# ---------------- Summary ----------------
+# =========================================================
+# Summary cards
+# =========================================================
 st.subheader(f"Factor Tape Summary ({window_choice})")
+
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    metric_card("Breadth", f"{breadth:.1f}%")
+with c2:
+    metric_card("Regime score", f"{regime_score:.1f}")
+with c3:
+    metric_card("Uptrends", str(num_up))
+with c4:
+    metric_card("Downtrends", str(num_down))
+
 summary_html = build_commentary(mom_df, breadth, regime_score)
 card_box(summary_html)
 
-# ---------------- Time series ----------------
+# =========================================================
+# Factor charts
+# =========================================================
 st.subheader(f"Factor Time Series ({window_choice})")
+plot_factor_timeseries_plotly(factor_df)
 
-n_factors = len(factor_df.columns)
-ncols = 3
-nrows = int(np.ceil(n_factors / ncols))
-
-fig_ts, axes = plt.subplots(nrows, ncols, figsize=(15, 4 * nrows), squeeze=False)
-axes = axes.ravel()
-
-if len(factor_df.index) > 1:
-    span_days = (factor_df.index[-1] - factor_df.index[0]).days
-else:
-    span_days = 0
-
-if span_days <= 370:
-    locator = mdates.MonthLocator()
-    formatter = mdates.DateFormatter("%b")
-else:
-    locator = mdates.YearLocator()
-    formatter = mdates.DateFormatter("%Y")
-
-for i, f in enumerate(factor_df.columns):
-    ax = axes[i]
-    s = factor_df[f].dropna()
-    ax.plot(s.index, s.values, color=PASTELS[i % len(PASTELS)], linewidth=2)
-    ax.set_title(f, color=TEXT)
-    ax.grid(color=GRID, linewidth=0.5)
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(formatter)
-    for label in ax.get_xticklabels():
-        label.set_rotation(0)
-        label.set_fontsize(8)
-
-for j in range(i + 1, len(axes)):
-    axes[j].axis("off")
-
-fig_ts.tight_layout()
-st.pyplot(fig_ts, clear_figure=True)
-
-# ---------------- Snapshot table ----------------
+# =========================================================
+# Snapshot table
+# =========================================================
 st.subheader("Factor Momentum Snapshot")
 
 display_df = mom_df.copy()
@@ -756,53 +1012,15 @@ st.dataframe(
     use_container_width=True,
 )
 
-# ---------------- Leadership map ----------------
+# =========================================================
+# Leadership map
+# =========================================================
 st.subheader("Leadership Map (Short vs Long Momentum)")
+plot_leadership_map_plotly(mom_df)
 
-fig_lead, ax_lead = plt.subplots(figsize=(8, 6))
-short_vals = mom_df["Short"] * 100.0
-long_vals = mom_df["Long"] * 100.0
-
-x_max = max(abs(short_vals.min()), abs(short_vals.max()))
-y_max = max(abs(long_vals.min()), abs(long_vals.max()))
-pad_x = x_max * 0.15 if x_max > 0 else 1.0
-pad_y = y_max * 0.15 if y_max > 0 else 1.0
-
-ax_lead.set_xlim(-x_max - pad_x, x_max + pad_x)
-ax_lead.set_ylim(-y_max - pad_y, y_max + pad_y)
-
-x_min, x_max_lim = ax_lead.get_xlim()
-y_min, y_max_lim = ax_lead.get_ylim()
-
-ax_lead.fill_between([0, x_max_lim], 0, y_max_lim, color="#e1f5e0", alpha=0.55)
-ax_lead.fill_between([x_min, 0], 0, y_max_lim, color="#fff9c4", alpha=0.55)
-ax_lead.fill_between([x_min, 0], y_min, 0, color="#fde0dc", alpha=0.55)
-ax_lead.fill_between([0, x_max_lim], y_min, 0, color="#ffe9b3", alpha=0.55)
-
-ax_lead.axvline(0, color="#888888", linewidth=1)
-ax_lead.axhline(0, color="#888888", linewidth=1)
-
-ax_lead.text(x_max_lim * 0.65, y_max_lim * 0.75, "Short ↑ / Long ↑\nEstablished leaders", fontsize=9, ha="center", va="center", color="#333333")
-ax_lead.text(x_min * 0.65, y_max_lim * 0.75, "Short ↓ / Long ↑\nMean reversion", fontsize=9, ha="center", va="center", color="#333333")
-ax_lead.text(x_min * 0.65, y_min * 0.75, "Short ↓ / Long ↓\nPersistent laggards", fontsize=9, ha="center", va="center", color="#333333")
-ax_lead.text(x_max_lim * 0.65, y_min * 0.75, "Short ↑ / Long ↓\nNew rotations", fontsize=9, ha="center", va="center", color="#333333")
-
-for k, factor in enumerate(mom_df.index):
-    x = short_vals.loc[factor]
-    y = long_vals.loc[factor]
-    ax_lead.scatter(x, y, s=70, color=PASTELS[k % len(PASTELS)], edgecolor="#444444", linewidth=0.6, zorder=3)
-    ax_lead.annotate(factor, xy=(x, y), xytext=(4, 3), textcoords="offset points", fontsize=9, va="center", color="#111111")
-
-ax_lead.set_xlabel("Short window return %", color=TEXT)
-ax_lead.set_ylabel("Long window return %", color=TEXT)
-ax_lead.set_title("Factors by Short vs Long Momentum", color=TEXT, pad=10)
-ax_lead.grid(color=GRID, linewidth=0.6, alpha=0.6)
-fig_lead.tight_layout()
-st.pyplot(fig_lead, clear_figure=True)
-
-# =====================================================================
-# Basket Rotation view
-# =====================================================================
+# =========================================================
+# Basket rotation
+# =========================================================
 st.subheader("Factor Rotation into ADFM Baskets (Pro vs Anti)")
 
 mapped_basket_dict = {b: ALL_BASKETS[b] for b in mapped_baskets if b in ALL_BASKETS}
@@ -813,98 +1031,59 @@ if basket_rets.empty:
     st.error("Basket return series not loaded. Check basket tickers and Yahoo Finance availability.")
     st.stop()
 
-rot_df = basket_rets.copy()
-rot_df = rot_df[rot_df.index >= window_start].copy()
+rot_df = basket_rets[basket_rets.index >= window_start].copy()
 bench_rets_win = bench_rets[bench_rets.index >= window_start].copy()
 
 if rot_df.empty or bench_rets_win.empty:
     st.error("Window slice produced empty basket or SPY series. Try a longer window or earlier history start.")
     st.stop()
 
-basket_levels_100 = 100.0 * (1 + rot_df).cumprod()
+all_panel_stats = build_all_basket_panels(
+    basket_returns=rot_df,
+    bench_rets=bench_rets_win,
+    window_start=window_start,
+    window_label=window_choice,
+)
 
-def build_side_panel(baskets: List[str], ref_start: pd.Timestamp) -> pd.DataFrame:
-    use = [b for b in baskets if b in rot_df.columns]
-    dyn_col = f"↓ %{window_choice}"
+if all_panel_stats.empty:
+    st.error("Basket panel statistics could not be built.")
+    st.stop()
 
-    if not use:
-        return pd.DataFrame(columns=["%5D", "%1M", dyn_col, "MACD Momentum", "Corr(63D)"])
-
-    rows = []
-    for b in use:
-        lvl = basket_levels_100[b].dropna()
-        if lvl.shape[0] < 20:
-            continue
-
-        r5d = (lvl.iloc[-1] / lvl.iloc[-6]) - 1.0 if lvl.shape[0] > 6 else np.nan
-        r1m = pct_since(lvl, lvl.index.max() - pd.DateOffset(months=1))
-
-        start_idx = lvl.index[lvl.index.get_indexer([pd.Timestamp(ref_start)], method="backfill")]
-        r_dyn = pct_since(lvl, start_idx[0]) if len(start_idx) and start_idx[0] in lvl.index else np.nan
-
-        hist = macd_hist(lvl, 12, 26, 9)
-        macd_m = momentum_label(hist, lookback=5, z_window=63)
-
-        corr_spy = np.nan
-        merged = pd.concat([rot_df[b].dropna(), bench_rets_win.dropna()], axis=1, join="inner").dropna()
-        if merged.shape[0] >= 80:
-            corr_spy = float(merged.iloc[:, 0].rolling(63).corr(merged.iloc[:, 1]).iloc[-1])
-
-        rows.append({
-            "Basket": b,
-            "%5D": round(r5d * 100, 1) if pd.notna(r5d) else np.nan,
-            "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
-            dyn_col: round(r_dyn * 100, 1) if pd.notna(r_dyn) else np.nan,
-            "MACD Momentum": macd_m,
-            "Corr(63D)": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan,
-        })
-
-    if not rows:
-        return pd.DataFrame(columns=["%5D", "%1M", dyn_col, "MACD Momentum", "Corr(63D)"])
-
-    df = pd.DataFrame(rows).set_index("Basket")
-    df = df.sort_values(by=dyn_col, ascending=False)
-    return df
-
-TOP_N = 6
-
-for factor_name in FACTOR_ETFS.keys():
+for i, factor_name in enumerate(FACTOR_ETFS.keys()):
     factor_slug = _slug(factor_name)
-
-    st.markdown(f"### {factor_name}")
-
     pro_list = _safe_basket_list(FACTOR_TO_BASKETS.get(factor_name, {}).get("pro", []))
     anti_list = _safe_basket_list(FACTOR_TO_BASKETS.get(factor_name, {}).get("anti", []))
 
-    if not pro_list and not anti_list:
-        st.info("No basket mapping defined for this factor yet.")
-        continue
+    with st.expander(factor_name, expanded=expand_all if i > 0 else True):
+        if not pro_list and not anti_list:
+            st.info("No basket mapping defined for this factor yet.")
+            continue
 
-    pro_panel = build_side_panel(pro_list, window_start).head(TOP_N)
-    anti_panel = build_side_panel(anti_list, window_start).head(TOP_N)
+        pro_panel = all_panel_stats.loc[all_panel_stats.index.intersection(pro_list)].head(top_n)
+        anti_panel = all_panel_stats.loc[all_panel_stats.index.intersection(anti_list)].head(top_n)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        plot_rotation_table(pro_panel, "Pro side baskets", key=f"rot_tbl_pro_{factor_slug}")
-    with c2:
-        plot_rotation_table(anti_panel, "Anti side baskets", key=f"rot_tbl_anti_{factor_slug}")
+        c1, c2 = st.columns(2)
+        with c1:
+            plot_rotation_table(pro_panel, "Pro side baskets", key=f"rot_tbl_pro_{factor_slug}")
+        with c2:
+            plot_rotation_table(anti_panel, "Anti side baskets", key=f"rot_tbl_anti_{factor_slug}")
 
-    c3, c4 = st.columns(2)
-    with c3:
-        plot_side_cumulative(
-            rot_df,
-            pro_panel.index.tolist(),
-            f"{factor_name} (Pro) vs SPY",
-            bench_rets_win,
-            key=f"rot_ch_pro_{factor_slug}",
-        )
-    with c4:
-        plot_side_cumulative(
-            rot_df,
-            anti_panel.index.tolist(),
-            f"{factor_name} (Anti) vs SPY",
-            bench_rets_win,
-            key=f"rot_ch_anti_{factor_slug}",
-        )
+        c3, c4 = st.columns(2)
+        with c3:
+            plot_side_cumulative(
+                rot_df,
+                pro_panel.index.tolist(),
+                f"{factor_name} (Pro) vs SPY",
+                bench_rets_win,
+                key=f"rot_ch_pro_{factor_slug}",
+            )
+        with c4:
+            plot_side_cumulative(
+                rot_df,
+                anti_panel.index.tolist(),
+                f"{factor_name} (Anti) vs SPY",
+                bench_rets_win,
+                key=f"rot_ch_anti_{factor_slug}",
+            )
 
 st.caption("© 2026 AD Fund Management LP")
