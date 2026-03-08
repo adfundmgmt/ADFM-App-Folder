@@ -1,286 +1,690 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from pandas_datareader.data import DataReader
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
+# -----------------------------------------------------------------------------
+# Page config
+# -----------------------------------------------------------------------------
 st.set_page_config(page_title="US CPI Dashboard", layout="wide")
 
-# --- Config: FRED Series Codes ---
+# -----------------------------------------------------------------------------
+# Constants
+# -----------------------------------------------------------------------------
 FRED_SERIES = {
     "headline": "CPIAUCNS",
-    "core":     "CPILFESL",
-    "recess":   "USREC"
+    "core": "CPILFESL",
+    "recession": "USREC",
 }
-START_DATE_FULL = "1990-01-01"
 
-# --- Sidebar ---
+START_DATE_FULL = "1990-01-01"
+APP_TITLE = "US Inflation Dashboard"
+
+THEME = {
+    "headline": "#2563eb",
+    "core": "#f59e0b",
+    "recession_fill": "rgba(60, 60, 60, 0.16)",
+    "text": "#1f2937",
+    "subtle_text": "#6b7280",
+    "grid": "rgba(120, 120, 120, 0.16)",
+    "zero": "rgba(30, 41, 59, 0.35)",
+    "paper_bg": "white",
+    "plot_bg": "white",
+    "border": "rgba(31, 41, 55, 0.10)",
+}
+
+PERIOD_OPTIONS = ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"]
+
+# -----------------------------------------------------------------------------
+# Sidebar
+# -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Track US inflation with a clean, recession-aware view of the CPI data direct from FRED.
+        Track US inflation through a cleaner macro dashboard built on FRED CPI data.
 
-        What it shows
-        • Headline and core CPI levels, YoY and MoM changes  
+        What it shows  
+        • Headline and core CPI levels, YoY, and MoM changes  
         • 3 month annualised core inflation as a short-horizon signal  
-        • NBER recession shading over every chart for macro context  
+        • NBER recession shading across the visual set for regime context  
+        • A latest-print regime strip to show whether inflation is cooling, sticky, or reheating  
 
-        Under the hood
-        • FRED series via `pandas-datareader`  
-        • Monthly frequency aligned to month start where needed  
-        • All rates expressed in % terms, with simple CSV export
+        Under the hood  
+        • FRED series pulled via `pandas-datareader`  
+        • Monthly data standardised to month start and aligned into one dataset  
+        • Preset windows plus custom month-aware range selection  
+        • Clean export of the same prepared dataset used by the charts
         """
     )
     st.markdown("---")
     st.subheader("Time Range")
-    period = st.selectbox(
-        "Select period:",
-        ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"],
-        index=7
+    period = st.selectbox("Select period:", PERIOD_OPTIONS, index=7)
+    use_custom_range = st.checkbox("Custom date range", value=False)
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+def apply_base_layout(fig: go.Figure, title: str | None = None, height: int = 460) -> go.Figure:
+    fig.update_layout(
+        title=title,
+        height=height,
+        paper_bgcolor=THEME["paper_bg"],
+        plot_bgcolor=THEME["plot_bg"],
+        font=dict(color=THEME["text"], size=13),
+        margin=dict(l=24, r=24, t=70 if title else 24, b=24),
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1.0,
+            bgcolor="rgba(255,255,255,0.75)",
+            bordercolor=THEME["border"],
+            borderwidth=1,
+        ),
+    )
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=THEME["grid"],
+        showline=True,
+        linecolor=THEME["border"],
+        rangeslider=dict(visible=False),
+        tickformat="%Y-%m",
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=THEME["grid"],
+        zeroline=True,
+        zerolinecolor=THEME["zero"],
+        showline=True,
+        linecolor=THEME["border"],
+    )
+    return fig
+
+
+def fmt_pct(x: float) -> str:
+    return "N/A" if pd.isna(x) else f"{x:.2f}%"
+
+
+def fmt_level(x: float) -> str:
+    return "N/A" if pd.isna(x) else f"{x:.2f}"
+
+
+def safe_delta_text(curr: float, prev: float) -> str:
+    if pd.isna(curr) or pd.isna(prev):
+        return "vs prior print: N/A"
+    return f"vs prior print: {curr - prev:+.2f} pp"
+
+
+def classify_inflation_regime(core_yoy: float, core_3m_ann: float) -> str:
+    if pd.isna(core_yoy) or pd.isna(core_3m_ann):
+        return "Insufficient data"
+    gap = core_3m_ann - core_yoy
+    if gap <= -0.35:
+        return "Disinflationary"
+    if gap >= 0.35:
+        return "Reheating"
+    return "Sticky"
+
+
+def month_start(ts) -> pd.Timestamp:
+    return pd.Timestamp(ts).to_period("M").to_timestamp("MS")
+
+
+def period_to_start_date(period_label: str, end_date: pd.Timestamp) -> pd.Timestamp:
+    end_date = month_start(end_date)
+
+    if period_label == "All":
+        return month_start(pd.Timestamp(START_DATE_FULL))
+
+    mapping = {
+        "1M": 3,   # buffer for context
+        "3M": 6,
+        "6M": 9,
+        "9M": 12,
+        "1Y": 18,
+        "3Y": 42,
+        "5Y": 66,
+    }
+    months_back = mapping.get(period_label)
+    if months_back is None:
+        raise ValueError(f"Invalid period selected: {period_label}")
+    return month_start(end_date - pd.DateOffset(months=months_back))
+
+
+def build_custom_month_range(
+    min_date: pd.Timestamp,
+    max_date: pd.Timestamp,
+    default_start: pd.Timestamp,
+    default_end: pd.Timestamp,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    month_index = pd.period_range(min_date, max_date, freq="M")
+    month_labels = [p.strftime("%Y-%m") for p in month_index]
+
+    default_start_period = pd.Period(default_start, freq="M")
+    default_end_period = pd.Period(default_end, freq="M")
+
+    try:
+        default_value = (
+            month_labels.index(str(default_start_period)),
+            month_labels.index(str(default_end_period)),
+        )
+    except ValueError:
+        default_value = (0, len(month_labels) - 1)
+
+    sel = st.sidebar.select_slider(
+        "Select month range:",
+        options=month_labels,
+        value=(month_labels[default_value[0]], month_labels[default_value[1]]),
+    )
+    start = pd.Period(sel[0], freq="M").to_timestamp("MS")
+    end = pd.Period(sel[1], freq="M").to_timestamp("MS")
+    return start, end
+
+
+def load_fred_series(series_id: str, start: str) -> pd.Series:
+    df = DataReader(series_id, "fred", start)
+    s = df[series_id].copy()
+    s = s.sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    s.index = pd.to_datetime(s.index).to_period("M").to_timestamp("MS")
+    s.name = series_id
+    return s
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
+def fetch_fred_dataset(start: str = START_DATE_FULL) -> pd.DataFrame:
+    series_map = {}
+    for key, series_id in FRED_SERIES.items():
+        series_map[key] = load_fred_series(series_id, start)
+
+    df = pd.concat(series_map.values(), axis=1)
+    df.columns = list(series_map.keys())
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep="last")]
+    df = df.resample("MS").last()
+
+    return df
+
+
+def prepare_cpi_dataset(raw: pd.DataFrame) -> pd.DataFrame:
+    df = raw.copy()
+
+    df["headline_yoy"] = df["headline"].pct_change(12) * 100
+    df["core_yoy"] = df["core"].pct_change(12) * 100
+    df["headline_mom"] = df["headline"].pct_change(1) * 100
+    df["core_mom"] = df["core"].pct_change(1) * 100
+    df["core_3m_ann"] = ((df["core"] / df["core"].shift(3)) ** 4 - 1) * 100
+    df["headline_3m_ann"] = ((df["headline"] / df["headline"].shift(3)) ** 4 - 1) * 100
+    df["core_3m_vs_yoy_gap"] = df["core_3m_ann"] - df["core_yoy"]
+
+    valid_hist = df["core_3m_ann"].dropna()
+    if not valid_hist.empty:
+        df["core_3m_ann_percentile"] = df["core_3m_ann"].apply(
+            lambda x: np.nan if pd.isna(x) else valid_hist.le(x).mean() * 100
+        )
+        mean = valid_hist.mean()
+        std = valid_hist.std(ddof=0)
+        if std and not np.isclose(std, 0):
+            df["core_3m_ann_zscore"] = (df["core_3m_ann"] - mean) / std
+        else:
+            df["core_3m_ann_zscore"] = np.nan
+    else:
+        df["core_3m_ann_percentile"] = np.nan
+        df["core_3m_ann_zscore"] = np.nan
+
+    return df
+
+
+def filter_window(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    start_date = month_start(start_date)
+    end_date = month_start(end_date)
+    out = df.loc[(df.index >= start_date) & (df.index <= end_date)].copy()
+    return out
+
+
+def get_recession_periods(flag: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    f = flag.dropna().fillna(0).astype(int)
+    if f.empty:
+        return []
+
+    starts = f.index[(f.eq(1)) & (f.shift(1, fill_value=0).eq(0))]
+    ends = f.index[(f.eq(0)) & (f.shift(1, fill_value=0).eq(1))]
+
+    if not f.empty and f.iloc[-1] == 1:
+        ends = ends.append(pd.Index([f.index[-1]]))
+
+    periods = []
+    for s, e in zip(starts, ends):
+        if e >= s:
+            periods.append((pd.Timestamp(s), pd.Timestamp(e)))
+    return periods
+
+
+def trim_recession_periods(
+    periods: list[tuple[pd.Timestamp, pd.Timestamp]],
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    out = []
+    for s, e in periods:
+        if e < start_date or s > end_date:
+            continue
+        out.append((max(s, start_date), min(e, end_date)))
+    return out
+
+
+def add_recession_shapes(fig: go.Figure, periods: list[tuple[pd.Timestamp, pd.Timestamp]], rows: list[int]) -> None:
+    for row in rows:
+        xref = "x" if row == 1 else f"x{row}"
+        yref = "y domain" if row == 1 else f"y{row} domain"
+        for s, e in periods:
+            fig.add_shape(
+                type="rect",
+                xref=xref,
+                yref=yref,
+                x0=s,
+                x1=e,
+                y0=0,
+                y1=1,
+                fillcolor=THEME["recession_fill"],
+                line_width=0,
+                layer="below",
+            )
+
+
+def latest_valid(series: pd.Series) -> float:
+    s = series.dropna()
+    return float("nan") if s.empty else float(s.iloc[-1])
+
+
+def prev_valid(series: pd.Series) -> float:
+    s = series.dropna()
+    return float("nan") if len(s) < 2 else float(s.iloc[-2])
+
+
+def build_latest_table(df: pd.DataFrame, rows: int = 12) -> pd.DataFrame:
+    cols = [
+        "headline",
+        "core",
+        "headline_yoy",
+        "core_yoy",
+        "headline_mom",
+        "core_mom",
+        "core_3m_ann",
+        "core_3m_vs_yoy_gap",
+    ]
+    tbl = df[cols].dropna(how="all").tail(rows).copy()
+    tbl.index.name = "Date"
+    tbl.columns = [
+        "Headline CPI",
+        "Core CPI",
+        "Headline YoY (%)",
+        "Core YoY (%)",
+        "Headline MoM (%)",
+        "Core MoM (%)",
+        "Core 3M Ann. (%)",
+        "Core 3M Ann. - YoY Gap (pp)",
+    ]
+    return tbl
+
+
+# -----------------------------------------------------------------------------
+# Charts
+# -----------------------------------------------------------------------------
+def plot_yoy(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["headline_yoy"],
+            name="Headline CPI YoY",
+            mode="lines",
+            line=dict(color=THEME["headline"], width=2.5),
+            hovertemplate="%{x|%Y-%m}<br>Headline YoY: %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["core_yoy"],
+            name="Core CPI YoY",
+            mode="lines",
+            line=dict(color=THEME["core"], width=2.5),
+            hovertemplate="%{x|%Y-%m}<br>Core YoY: %{y:.2f}%<extra></extra>",
+        )
     )
 
-# --- Data Loader ---
-@st.cache_data(show_spinner=False, ttl=24*60*60)
-def load_series(series_id: str, start: str = "1990-01-01") -> pd.Series:
-    try:
-        df = DataReader(series_id, "fred", start)
-        s = df[series_id].copy()
+    add_recession_shapes(fig, recession_periods, rows=[1])
+    fig.update_yaxes(title_text="% YoY")
+    apply_base_layout(fig, title="US CPI YoY | Headline vs Core", height=430)
+    return fig
 
-        # Ensure monthly frequency aligned to MS without backfilling pre-history
-        # Many FRED CPI series already arrive as MS; resample defensively if needed
-        try:
-            freqstr = s.index.freqstr
-        except Exception:
-            freqstr = None
-        if freqstr != "MS":
-            s = s.resample("MS").ffill()
 
-        return s
-    except Exception as e:
-        st.warning(f"Failed to load series {series_id}: {e}")
-        return pd.Series(dtype=float)
+def plot_mom(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=("Headline CPI MoM", "Core CPI MoM"),
+    )
 
-headline = load_series(FRED_SERIES["headline"], START_DATE_FULL)
-core     = load_series(FRED_SERIES["core"],     START_DATE_FULL)
-recess   = load_series(FRED_SERIES["recess"],   START_DATE_FULL)
+    fig.add_trace(
+        go.Bar(
+            x=df.index,
+            y=df["headline_mom"],
+            name="Headline MoM",
+            marker_color=THEME["headline"],
+            hovertemplate="%{x|%Y-%m}<br>Headline MoM: %{y:.2f}%<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=df.index,
+            y=df["core_mom"],
+            name="Core MoM",
+            marker_color=THEME["core"],
+            hovertemplate="%{x|%Y-%m}<br>Core MoM: %{y:.2f}%<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
 
-if headline.empty or core.empty or recess.empty:
+    add_recession_shapes(fig, recession_periods, rows=[1, 2])
+
+    fig.update_yaxes(title_text="% MoM", row=1, col=1)
+    fig.update_yaxes(title_text="% MoM", row=2, col=1)
+    fig.update_layout(showlegend=False)
+    apply_base_layout(fig, title="US CPI MoM Prints", height=560)
+    return fig
+
+
+def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=("Core CPI Index", "Core CPI 3M Annualised"),
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["core"],
+            name="Core CPI Index",
+            mode="lines",
+            line=dict(color=THEME["core"], width=2.5),
+            hovertemplate="%{x|%Y-%m}<br>Core Index: %{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["core_3m_ann"],
+            name="Core 3M Annualised",
+            mode="lines",
+            line=dict(color=THEME["headline"], width=2.5),
+            hovertemplate="%{x|%Y-%m}<br>Core 3M Ann.: %{y:.2f}%<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+
+    add_recession_shapes(fig, recession_periods, rows=[1, 2])
+
+    fig.update_yaxes(title_text="Index", row=1, col=1)
+    fig.update_yaxes(title_text="% Ann.", row=2, col=1)
+    apply_base_layout(fig, title="Core CPI Level and Short-Horizon Inflation Signal", height=560)
+    return fig
+
+
+# -----------------------------------------------------------------------------
+# Data load and prep
+# -----------------------------------------------------------------------------
+try:
+    raw_df = fetch_fred_dataset(START_DATE_FULL)
+except Exception as e:
+    st.error(f"Failed to load FRED data: {e}")
+    st.stop()
+
+if raw_df.empty:
     st.error("Critical FRED data failed to load. Please refresh or check your connection.")
     st.stop()
 
-# --- Calculations ---
-headline_yoy = headline.pct_change(12) * 100
-core_yoy     = core.pct_change(12)     * 100
-headline_mom = headline.pct_change(1)  * 100
-core_mom     = core.pct_change(1)      * 100
-core_3m_ann  = ((core / core.shift(3)) ** 4 - 1) * 100  # 3-month annualized
+df = prepare_cpi_dataset(raw_df)
 
-end_date = headline.index.max()
-if period == "All":
-    start_date = headline.index.min()
-elif period.endswith("M"):
-    months = int(period[:-1])
-    start_date = end_date - pd.DateOffset(months=months)
-elif period.endswith("Y"):
-    years = int(period[:-1])
-    start_date = end_date - pd.DateOffset(years=years)
-else:
-    st.error("Invalid period selected.")
+required_cols = ["headline", "core", "recession", "headline_yoy", "core_yoy", "headline_mom", "core_mom"]
+if df[required_cols].dropna(how="all").empty:
+    st.error("The dataset loaded, but the required CPI fields are missing or empty.")
     st.stop()
 
-manual_range = st.sidebar.checkbox("Custom date range")
-if manual_range:
-    slider = st.sidebar.slider(
-        "Select date range:",
-        min_value=headline.index.min().to_pydatetime().date(),
-        max_value=headline.index.max().to_pydatetime().date(),
-        value=(start_date.to_pydatetime().date(), end_date.to_pydatetime().date()),
-        format="YYYY-MM"
+# -----------------------------------------------------------------------------
+# Date window handling
+# -----------------------------------------------------------------------------
+latest_data_date = month_start(df.index.max())
+default_start_date = period_to_start_date(period, latest_data_date)
+default_end_date = latest_data_date
+
+if use_custom_range:
+    start_date, end_date = build_custom_month_range(
+        min_date=month_start(df.index.min()),
+        max_date=latest_data_date,
+        default_start=default_start_date,
+        default_end=default_end_date,
     )
-    start_date = pd.Timestamp(slider[0])
-    end_date = pd.Timestamp(slider[1])
+else:
+    start_date, end_date = default_start_date, default_end_date
 
-idx = (headline.index >= start_date) & (headline.index <= end_date)
-h_yoy = headline_yoy.loc[idx]
-c_yoy = core_yoy.loc[idx]
-h_mom = headline_mom.loc[idx]
-c_mom = core_mom.loc[idx]
-c_3m  = core_3m_ann.loc[idx]
+window_df = filter_window(df, start_date, end_date)
 
-# --- Edge Case Guarding ---
-if h_yoy.empty or c_yoy.empty or h_mom.empty or c_mom.empty:
+if window_df.empty:
     st.warning("No data is available for the selected range.")
     st.stop()
 
-# --- Recessions ---
-def within_window(rec_list, start, end):
-    out = []
-    for s, e in rec_list:
-        if e < start or s > end:
-            continue
-        out.append((max(s, start), min(e, end)))
-    return out
+if window_df[["headline_yoy", "core_yoy", "headline_mom", "core_mom"]].dropna(how="all").empty:
+    st.warning("The selected window does not contain enough observations to compute inflation rates.")
+    st.stop()
 
-def get_recessions(flag: pd.Series):
-    f = flag.dropna().astype(int)
-    if f.empty:
-        return []
-    dif = f.diff()
-    starts = f[(f == 1) & (dif == 1)].index
-    if f.iloc[0] == 1:
-        starts = starts.insert(0, f.index[0])
-    ends = f[(f == 0) & (dif == -1)].index
-    if len(ends) < len(starts):
-        ends = ends.insert(len(ends), f.index[-1])
-    return [(s, e) for s, e in zip(starts, ends) if e >= s]
+recession_periods = get_recession_periods(df["recession"])
+recession_periods_window = trim_recession_periods(recession_periods, start_date, end_date)
 
-recs = get_recessions(recess)
-recs_window = within_window(recs, start_date, end_date)
+# -----------------------------------------------------------------------------
+# Header and regime strip
+# -----------------------------------------------------------------------------
+st.title(APP_TITLE)
 
-# --- Plotting Helpers ---
-def _add_recession_shapes_single_axis(fig, recs_window):
-    # For single-axis figures
-    for s, e in recs_window:
-        fig.add_shape(
-            type="rect", xref="x", yref="paper",
-            x0=s, x1=e, y0=0, y1=1,
-            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0
-        )
+latest_row = df.dropna(subset=["headline", "core"], how="all").iloc[-1]
+latest_print_date = latest_row.name
 
-def _add_recession_shapes_two_rows(fig, recs_window):
-    # For two-row subplots where each row has its own x-axis
-    for s, e in recs_window:
-        fig.add_shape(
-            type="rect", xref="x", yref="paper",
-            x0=s, x1=e, y0=0, y1=0.5,
-            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0
-        )
-        fig.add_shape(
-            type="rect", xref="x2", yref="paper",
-            x0=s, x1=e, y0=0.5, y1=1,
-            fillcolor="rgba(40,40,40,0.35)", opacity=0.35, layer="below", line_width=0
-        )
+headline_yoy_latest = latest_valid(window_df["headline_yoy"])
+headline_yoy_prev = prev_valid(window_df["headline_yoy"])
 
-hover_pct = dict(hovertemplate='%{y:.2f}%')
+core_yoy_latest = latest_valid(window_df["core_yoy"])
+core_yoy_prev = prev_valid(window_df["core_yoy"])
 
-def plot_yoy(h_yoy, c_yoy, recs_window):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=h_yoy.index, y=h_yoy, name="Headline CPI YoY", line_color="#1f77b4", **hover_pct))
-    fig.add_trace(go.Scatter(
-        x=c_yoy.index, y=c_yoy, name="Core CPI YoY",     line_color="#ff7f0e", **hover_pct))
-    _add_recession_shapes_single_axis(fig, recs_window)
-    fig.update_layout(
-        title="US CPI YoY - Headline vs Core",
-        yaxis_title="% YoY",
-        hovermode="x unified",
-        margin=dict(t=80),
-        xaxis=dict(rangeslider=dict(visible=False), showline=True, linewidth=1),
-        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1)
+core_3m_latest = latest_valid(window_df["core_3m_ann"])
+core_3m_prev = prev_valid(window_df["core_3m_ann"])
+
+headline_3m_latest = latest_valid(window_df["headline_3m_ann"])
+gap_latest = latest_valid(window_df["core_3m_vs_yoy_gap"])
+percentile_latest = latest_valid(window_df["core_3m_ann_percentile"])
+
+regime_label = classify_inflation_regime(core_yoy_latest, core_3m_latest)
+
+st.caption(
+    f"Latest available print: {latest_print_date.strftime('%B %Y')} | "
+    f"Window: {start_date.strftime('%Y-%m')} to {end_date.strftime('%Y-%m')}"
+)
+
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Headline CPI YoY", fmt_pct(headline_yoy_latest), safe_delta_text(headline_yoy_latest, headline_yoy_prev))
+m2.metric("Core CPI YoY", fmt_pct(core_yoy_latest), safe_delta_text(core_yoy_latest, core_yoy_prev))
+m3.metric("Core 3M Ann.", fmt_pct(core_3m_latest), safe_delta_text(core_3m_latest, core_3m_prev))
+m4.metric("Headline 3M Ann.", fmt_pct(headline_3m_latest), None)
+m5.metric("Core 3M vs YoY Gap", "N/A" if pd.isna(gap_latest) else f"{gap_latest:+.2f} pp", regime_label)
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.markdown(
+        f"""
+        <div style="
+            padding:14px 16px;
+            border:1px solid {THEME["border"]};
+            border-radius:12px;
+            background:#ffffff;">
+            <div style="font-size:12px; color:{THEME["subtle_text"]};">Inflation regime</div>
+            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{regime_label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    return fig
-
-def plot_mom(h_mom, c_mom, recs_window):
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=False, vertical_spacing=0.02,
-        subplot_titles=("Headline CPI MoM %", "Core CPI MoM %"))
-    fig.add_trace(go.Bar(
-        x=h_mom.index, y=h_mom, name="Headline MoM", marker_color="#1f77b4", **hover_pct), row=1, col=1)
-    fig.add_trace(go.Bar(
-        x=c_mom.index, y=c_mom, name="Core MoM",     marker_color="#ff7f0e", **hover_pct), row=2, col=1)
-
-    _add_recession_shapes_two_rows(fig, recs_window)
-
-    fig.update_yaxes(title_text="% MoM", zeroline=True, zerolinewidth=1, row=1, col=1)
-    fig.update_yaxes(title_text="% MoM", zeroline=True, zerolinewidth=1, row=2, col=1)
-    fig.update_layout(
-        showlegend=False,
-        hovermode="x unified",
-        margin=dict(t=80),
-        xaxis=dict(rangeslider=dict(visible=False)),
-        xaxis2=dict(rangeslider=dict(visible=False))
+with c2:
+    zscore_latest = latest_valid(window_df["core_3m_ann_zscore"])
+    zscore_text = "N/A" if pd.isna(zscore_latest) else f"{zscore_latest:.2f}σ"
+    st.markdown(
+        f"""
+        <div style="
+            padding:14px 16px;
+            border:1px solid {THEME["border"]};
+            border-radius:12px;
+            background:#ffffff;">
+            <div style="font-size:12px; color:{THEME["subtle_text"]};">Core 3M annualised z-score</div>
+            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{zscore_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    return fig
-
-def plot_core(core_idx, c_3m):
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-        subplot_titles=("Core CPI Index", "3 Mo Annualised Core CPI %"))
-    fig.add_trace(go.Scatter(
-        x=core_idx.index, y=core_idx, name="Core Index", line_color="#ff7f0e",
-        mode="lines+markers", hovertemplate='%{y:.2f}'), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        x=c_3m.index, y=c_3m, name="3M Ann.", line_color="#1f77b4",
-        mode="lines+markers", **hover_pct), row=2, col=1)
-    fig.update_yaxes(title_text="Index Level", row=1, col=1)
-    fig.update_yaxes(title_text="% (annualised)", zeroline=True, zerolinewidth=1, row=2, col=1)
-    fig.update_layout(
-        hovermode="x unified",
-        margin=dict(t=80),
-        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
-        xaxis=dict(rangeslider=dict(visible=False)),
-        xaxis2=dict(rangeslider=dict(visible=False))
+with c3:
+    pct_text = "N/A" if pd.isna(percentile_latest) else f"{percentile_latest:.1f}th pct"
+    st.markdown(
+        f"""
+        <div style="
+            padding:14px 16px;
+            border:1px solid {THEME["border"]};
+            border-radius:12px;
+            background:#ffffff;">
+            <div style="font-size:12px; color:{THEME["subtle_text"]};">Core 3M annualised historical percentile</div>
+            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{pct_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    return fig
 
-# --- Render UI ---
-st.title("US Inflation Dashboard")
+st.markdown("")
 
-# Clean metric handling to avoid NaN display on short windows
-def fmt_pct(x):
-    return "N/A" if pd.isna(x) else f"{x:.2f}%"
+# -----------------------------------------------------------------------------
+# Charts
+# -----------------------------------------------------------------------------
+st.plotly_chart(plot_yoy(window_df, recession_periods_window), use_container_width=True)
+st.plotly_chart(plot_mom(window_df, recession_periods_window), use_container_width=True)
+st.plotly_chart(plot_core_panel(window_df, recession_periods_window), use_container_width=True)
 
-def safe_delta(curr, prev):
-    if pd.isna(curr) or pd.isna(prev):
-        return "N/A"
-    return f"{curr - prev:+.2f}%"
+# -----------------------------------------------------------------------------
+# Latest prints table
+# -----------------------------------------------------------------------------
+st.subheader("Latest Prints")
+latest_tbl = build_latest_table(window_df, rows=12)
 
-h_yoy_disp = h_yoy.dropna()
-c_yoy_disp = c_yoy.dropna()
+fmt_cols = {
+    "Headline CPI": "{:.2f}",
+    "Core CPI": "{:.2f}",
+    "Headline YoY (%)": "{:.2f}",
+    "Core YoY (%)": "{:.2f}",
+    "Headline MoM (%)": "{:.2f}",
+    "Core MoM (%)": "{:.2f}",
+    "Core 3M Ann. (%)": "{:.2f}",
+    "Core 3M Ann. - YoY Gap (pp)": "{:.2f}",
+}
 
-headline_latest = h_yoy_disp.iloc[-1] if not h_yoy_disp.empty else float("nan")
-headline_prev   = h_yoy_disp.iloc[-2] if h_yoy_disp.size > 1 else float("nan")
-core_latest     = c_yoy_disp.iloc[-1] if not c_yoy_disp.empty else float("nan")
-core_prev       = c_yoy_disp.iloc[-2] if c_yoy_disp.size > 1 else float("nan")
+st.dataframe(
+    latest_tbl.style.format(fmt_cols),
+    use_container_width=True,
+)
 
-cols = st.columns(2)
-cols[0].metric("Headline CPI YoY", fmt_pct(headline_latest), safe_delta(headline_latest, headline_prev))
-cols[1].metric("Core CPI YoY",     fmt_pct(core_latest),     safe_delta(core_latest, core_prev))
-
-st.plotly_chart(plot_yoy(h_yoy, c_yoy, recs_window),  use_container_width=True)
-st.plotly_chart(plot_mom(h_mom, c_mom, recs_window),  use_container_width=True)
-st.plotly_chart(plot_core(core.loc[idx], c_3m), use_container_width=True)
-
-# --- Download ---
+# -----------------------------------------------------------------------------
+# Download
+# -----------------------------------------------------------------------------
 with st.expander("Download Data"):
-    include_rec = st.checkbox("Include recession flag", value=False)
-    recession_aligned = recess.reindex(headline.index)
-    data_dict = {
-        "Headline CPI": headline.loc[idx],
-        "Core CPI": core.loc[idx],
-        "Headline YoY (%)": h_yoy,
-        "Core YoY (%)": c_yoy,
-        "Headline MoM (%)": h_mom,
-        "Core MoM (%)": c_mom,
-        "Core 3M Ann. (%)": c_3m,
-    }
-    if include_rec:
-        data_dict["Recession Flag"] = recession_aligned.loc[idx]
-    combined = pd.DataFrame(data_dict)
+    include_recession_flag = st.checkbox("Include recession flag", value=False)
+
+    export_cols = [
+        "headline",
+        "core",
+        "headline_yoy",
+        "core_yoy",
+        "headline_mom",
+        "core_mom",
+        "headline_3m_ann",
+        "core_3m_ann",
+        "core_3m_vs_yoy_gap",
+        "core_3m_ann_percentile",
+        "core_3m_ann_zscore",
+    ]
+    if include_recession_flag:
+        export_cols.append("recession")
+
+    export_df = window_df[export_cols].copy()
+    export_df.index.name = "Date"
+    export_df.columns = [
+        "Headline CPI",
+        "Core CPI",
+        "Headline YoY (%)",
+        "Core YoY (%)",
+        "Headline MoM (%)",
+        "Core MoM (%)",
+        "Headline 3M Ann. (%)",
+        "Core 3M Ann. (%)",
+        "Core 3M Ann. - YoY Gap (pp)",
+        "Core 3M Ann. Percentile",
+        "Core 3M Ann. Z-Score",
+    ] + (["Recession Flag"] if include_recession_flag else [])
+
     st.download_button(
         "Download CSV",
-        combined.to_csv(index=True, index_label="Date"),
-        file_name="us_cpi_data.csv",
-        mime="text/csv"
+        export_df.to_csv(index=True, index_label="Date"),
+        file_name="us_cpi_dashboard_data.csv",
+        mime="text/csv",
     )
 
+# -----------------------------------------------------------------------------
+# Methodology
+# -----------------------------------------------------------------------------
 with st.expander("Methodology & Sources", expanded=False):
     st.markdown(
         """
-        **Data:** FRED via pandas-datareader  
-        **Series:** Headline CPI (CPIAUCNS), Core CPI (CPILFESL), Recessions (USREC)  
-        **3 Mo annualised formula:** ((CPI_t / CPI_{t-3}) ** 4 - 1) × 100
+        **Data source**  
+        FRED via `pandas-datareader`
+
+        **Series used**  
+        • Headline CPI: `CPIAUCNS`  
+        • Core CPI: `CPILFESL`  
+        • Recession indicator: `USREC`
+
+        **Transformations**  
+        • YoY = `(CPI_t / CPI_{t-12} - 1) × 100`  
+        • MoM = `(CPI_t / CPI_{t-1} - 1) × 100`  
+        • 3M annualised = `((CPI_t / CPI_{t-3})^4 - 1) × 100`  
+        • Core 3M vs YoY gap = `Core 3M annualised - Core YoY`
+
+        **Interpretation layer**  
+        The dashboard labels the current inflation regime using the gap between core 3M annualised inflation and core YoY inflation:  
+        • materially below YoY = disinflationary  
+        • near YoY = sticky  
+        • materially above YoY = reheating
+
+        **Notes**  
+        All series are standardised to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
         """
     )
 
