@@ -444,14 +444,12 @@ st.title("ETF Net Flows")
 
 df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
 
-st.markdown(f"**Lookback:** {period_label}")
-st.markdown("### Net Flows Snapshot")
-
 bar_view = st.radio(
-    "Bar chart view",
-    ["Lookback total", "Last complete week", "Week to date"],
+    label="",
+    options=["Lookback total", "Last complete week", "Week to date"],
     horizontal=True,
     key="bar_view",
+    label_visibility="collapsed",
 )
 
 include_proxy_weekly = False
@@ -463,14 +461,6 @@ if bar_view != "Lookback total":
     )
 
 as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
-
-if bar_view != "Lookback total":
-    wk_end = _last_friday(as_of_ts)
-    wk_start = _week_start_monday(wk_end)
-    if bar_view == "Last complete week":
-        wk_end = wk_end - pd.Timedelta(days=7)
-        wk_start = _week_start_monday(wk_end)
-    st.caption(f"{bar_view} window: {wk_start.date()} to {wk_end.date()} (week ends Friday)")
 
 weekly_price_map: Dict[str, pd.DataFrame] = {}
 if bar_view != "Lookback total" and include_proxy_weekly:
