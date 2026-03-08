@@ -1,28 +1,31 @@
 ############################################################
-# Market Stress Composite - trading-day aligned, hardened
+# Market Stress Composite
 # AD Fund Management LP
-# - Canonical trading-day index shared by all plots
-# - Combined figure: SPX+Drawdown (top), Composite (bottom)
-# - Close-only: no intraday nowcast, end-of-day data only
-# - 8-factor composite with mask-based renorm of weights
+#
+# Upgrades in this version
+# - True trading-session alignment using SPY sessions, not business days
+# - Hardened FRED loader with retries, multi-endpoint fallback, and last-good cache
+# - Graceful degradation when one or more series fail
+# - Factor contribution table and confidence metrics
+# - Cleaner diagnostics with stale-day tracking
+# - Audit-friendly CSV export with masks and active weights
 ############################################################
 
-# Py3.12 compat shim for pandas_datareader
-import sys, types
-import packaging.version
-try:
-    import distutils.version
-except Exception:
-    _d = types.ModuleType("distutils")
-    _dv = types.ModuleType("distutils.version")
-    _dv.LooseVersion = packaging.version.Version
-    _d.version = _dv
-    sys.modules.update({"distutils": _d, "distutils.version": _dv})
+from __future__ import annotations
+
+import io
+import json
+import math
+import time
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
-from pandas_datareader import data as pdr
 import yfinance as yf
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
@@ -32,7 +35,11 @@ TITLE = "Market Stress Composite"
 st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
 
-# ---------------- Data maps -----------------
+# ---------------- Constants ----------------
+NY_TZ = "America/New_York"
+CACHE_DIR = Path(".cache_market_stress")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 FRED = {
     "vix": "VIXCLS",           # VIX close (daily)
     "yc_10y_3m": "T10Y3M",     # 10Y minus 3M (daily)
@@ -42,352 +49,292 @@ FRED = {
     "spx": "SP500",            # S&P 500 Index
 }
 
-# ---------------- Parameters ----------------
 DEFAULT_LOOKBACK = "3y"
 PCTL_WINDOW_YEARS = 3
 DEFAULT_SMOOTH = 1
-REGIME_HI, REGIME_LO = 70, 30
+REGIME_HI = 70
+REGIME_LO = 30
 
-# Allow macro data to be stale for a few sessions before dropping
-MAX_STALE_BDAYS = 3
+# Factor-specific stale tolerances in trading sessions
+STALE_LIMITS = {
+    "VIX": 1,
+    "HY_OAS": 5,
+    "HY_LQD": 2,
+    "T10Y3M": 3,
+    "FUND": 3,
+    "DD": 1,
+    "RV21": 1,
+    "SPY_RSP": 2,
+    "SPX": 1,
+}
 
-# Weights for 8-factor composite
-W_VIX      = 0.20  # implied vol
-W_HY_OAS   = 0.15  # HY OAS (FRED)
-W_HY_LQD   = 0.15  # HYG/LQD spread
-W_CURVE    = 0.10  # 10Y-3M inversion
-W_FUND     = 0.10  # CP - TBill funding stress
-W_DD       = 0.15  # SPX drawdown
-W_RV       = 0.10  # SPX 21d realized vol
-W_BREADTH  = 0.05  # SPY/RSP breadth
+# Fixed weights for 8-factor composite
+W_VIX = 0.20
+W_HY_OAS = 0.15
+W_HY_LQD = 0.15
+W_CURVE = 0.10
+W_FUND = 0.10
+W_DD = 0.15
+W_RV = 0.10
+W_BREADTH = 0.05
 
-WEIGHTS_VEC = np.array(
-    [W_VIX, W_HY_OAS, W_HY_LQD, W_CURVE, W_FUND, W_DD, W_RV, W_BREADTH],
-    dtype=float
-)
+WEIGHTS = {
+    "VIX_p": W_VIX,
+    "HY_OAS_p": W_HY_OAS,
+    "HY_LQD_p": W_HY_LQD,
+    "CurveInv_p": W_CURVE,
+    "Fund_p": W_FUND,
+    "DD_p": W_DD,
+    "RV21_p": W_RV,
+    "Breadth_p": W_BREADTH,
+}
+WEIGHTS_VEC = np.array(list(WEIGHTS.values()), dtype=float)
 WEIGHTS_VEC = WEIGHTS_VEC / WEIGHTS_VEC.sum()
 
-weights_text = (
+WEIGHTS_TEXT = (
     f"VIX {W_VIX:.2f}, HY_OAS {W_HY_OAS:.2f}, HY_LQD {W_HY_LQD:.2f}, "
     f"Curve {W_CURVE:.2f}, Funding {W_FUND:.2f}, Drawdown {W_DD:.2f}, "
     f"RV21 {W_RV:.2f}, Breadth {W_BREADTH:.2f}"
 )
 
-# ---------------- Sidebar -------------------
+REQUEST_TIMEOUT = 20
+REQUEST_RETRIES = 3
+REQUEST_BACKOFF = 1.25
+
+# ---------------- Sidebar ----------------
 with st.sidebar:
     st.header("Settings")
-    lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "5y", "10y"],
-                            index=["1y", "2y", "3y", "5y", "10y"].index(DEFAULT_LOOKBACK))
+    lookback = st.selectbox(
+        "Lookback",
+        ["1y", "2y", "3y", "5y", "10y"],
+        index=["1y", "2y", "3y", "5y", "10y"].index(DEFAULT_LOOKBACK),
+    )
     years = int(lookback[:-1])
 
+    smooth_days = st.slider("Composite smoothing", 1, 10, DEFAULT_SMOOTH, 1)
+
     st.subheader("Weights (fixed)")
-    st.caption(weights_text)
+    st.caption(WEIGHTS_TEXT)
 
     st.markdown("---")
     st.subheader("About this tool")
     st.markdown(
-        "- Purpose: a single risk dial blending volatility, credit, curve inversion, funding, equity drawdown, "
-        "realized volatility, ETF credit spread, and breadth into a 0-100 score.\n"
-        "- Data: FRED for macro series, Yahoo Finance for ETF and equity breadth series.\n"
-        "- Method: rolling percentiles over a 3-year window, fixed weights, mask-based renormalization.\n"
-        "- Alignment: all factors evaluated on SPX trading days only, close-only (end-of-day data).\n"
-        "- When a factor is stale beyond the allowed lag, it is dropped and weights re-normalize across active factors.\n"
-        f"- Current weights: {weights_text}"
+        "- Purpose: a single 0-100 risk dial blending implied vol, credit, credit ETF spread, curve inversion, funding stress, equity drawdown, realized vol, and concentration/breadth.\n"
+        "- Calendar: all factors are aligned to actual SPY trading sessions.\n"
+        "- Data: FRED for macro series and Yahoo Finance for market series.\n"
+        "- Method: rolling percentiles over a 3-year trading-session window, with mask-based weight renormalization when a factor is stale or unavailable.\n"
+        "- Freshness: each factor has its own stale threshold, and the composite exposes active factor count and active weight.\n"
+        f"- Current weights: {WEIGHTS_TEXT}"
     )
 
-# ---------------- Time helpers --------------
-NY_TZ = "America/New_York"
-
+# ---------------- Helpers ----------------
 def today_naive() -> pd.Timestamp:
     return pd.Timestamp(pd.Timestamp.now(tz=NY_TZ).date())
-
-def to_naive_date_index(obj):
-    if isinstance(obj, (pd.Series, pd.DataFrame)):
-        idx = pd.to_datetime(obj.index)
-        obj.index = pd.DatetimeIndex(idx.date)
-    return obj
 
 def as_naive_date(ts_like) -> pd.Timestamp:
     t = pd.to_datetime(ts_like)
     return pd.Timestamp(t.date())
 
-# ---------------- Loaders -------------------
-@st.cache_data(ttl=900, show_spinner=False)
-def fred_series(series: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+def to_naive_date_index(obj: pd.Series | pd.DataFrame) -> pd.Series | pd.DataFrame:
+    if isinstance(obj, (pd.Series, pd.DataFrame)):
+        idx = pd.to_datetime(obj.index)
+        obj = obj.copy()
+        obj.index = pd.DatetimeIndex(idx.date)
+    return obj
+
+def safe_float(x) -> float:
     try:
-        s = pdr.DataReader(series, "fred", start, end)[series]
-        return to_naive_date_index(s.ffill().dropna())
+        return float(x)
     except Exception:
+        return np.nan
+
+def cache_key(*parts: str) -> str:
+    raw = "||".join(parts)
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+def cache_path(name: str) -> Path:
+    return CACHE_DIR / name
+
+def save_series_cache(series_id: str, s: pd.Series) -> None:
+    try:
+        payload = pd.DataFrame({"date": pd.to_datetime(s.index).astype(str), "value": s.values})
+        payload.to_csv(cache_path(f"{series_id}.csv"), index=False)
+    except Exception:
+        pass
+
+def load_series_cache(series_id: str) -> pd.Series:
+    p = cache_path(f"{series_id}.csv")
+    if not p.exists():
         return pd.Series(dtype=float)
-
-@st.cache_data(ttl=900, show_spinner=False)
-def yf_history_daily(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     try:
-        data = yf.download(
-            tickers,
-            start=start,
-            end=end,
-            progress=False,
-            auto_adjust=False
-        )
-        if isinstance(data, pd.Series):
-            data = data.to_frame()
-        # Prefer Adj Close if present, then Close
-        if isinstance(data.columns, pd.MultiIndex):
-            if ("Adj Close" in data.columns.get_level_values(0)):
-                px = data["Adj Close"].copy()
-            elif ("Close" in data.columns.get_level_values(0)):
-                px = data["Close"].copy()
-            else:
-                first_field = data.columns.levels[0][0]
-                px = data[first_field].copy()
-        else:
-            px = data.copy()
-
-        if isinstance(px, pd.Series):
-            px = px.to_frame()
-
-        px = px.ffill().dropna(how="all")
-        return to_naive_date_index(px)
+        df = pd.read_csv(p)
+        if {"date", "value"}.issubset(df.columns):
+            s = pd.Series(df["value"].values, index=pd.to_datetime(df["date"]))
+            s = pd.to_numeric(s, errors="coerce")
+            return to_naive_date_index(s.dropna())
     except Exception:
+        pass
+    return pd.Series(dtype=float)
+
+def robust_request(url: str, params: Optional[dict] = None) -> Optional[requests.Response]:
+    last_exc = None
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for attempt in range(REQUEST_RETRIES):
+        try:
+            r = requests.get(url, params=params, timeout=REQUEST_TIMEOUT, headers=headers)
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            last_exc = e
+            if attempt < REQUEST_RETRIES - 1:
+                time.sleep(REQUEST_BACKOFF ** attempt)
+    return None
+
+def parse_fred_text_csv(text: str, series_id: str) -> pd.Series:
+    df = pd.read_csv(io.StringIO(text))
+    cols = {c.lower(): c for c in df.columns}
+    date_col = cols.get("date") or cols.get("observation_date")
+    val_col = cols.get(series_id.lower()) or cols.get("value")
+    if date_col is None or val_col is None:
+        raise ValueError(f"Unexpected FRED CSV format for {series_id}. Columns: {list(df.columns)}")
+    s = pd.Series(pd.to_numeric(df[val_col], errors="coerce").values, index=pd.to_datetime(df[date_col]))
+    s = s.replace(".", np.nan)
+    s = pd.to_numeric(s, errors="coerce")
+    return to_naive_date_index(s.dropna())
+
+def parse_fred_json_observations(payload: dict) -> pd.Series:
+    obs = payload.get("observations", [])
+    if not obs:
+        return pd.Series(dtype=float)
+    df = pd.DataFrame(obs)
+    date_col = "date" if "date" in df.columns else "observation_date"
+    val_col = "value"
+    s = pd.Series(pd.to_numeric(df[val_col], errors="coerce").values, index=pd.to_datetime(df[date_col]))
+    return to_naive_date_index(s.dropna())
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    start_str = pd.Timestamp(start).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+
+    urls = [
+        (
+            "csv",
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start_str}&coed={end_str}",
+        ),
+        (
+            "csv",
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
+        ),
+        (
+            "json",
+            "https://api.stlouisfed.org/fred/series/observations",
+        ),
+    ]
+
+    for kind, url in urls:
+        try:
+            if kind == "csv":
+                r = robust_request(url)
+                if r is None or not r.text.strip():
+                    continue
+                s = parse_fred_text_csv(r.text, series_id)
+                if not s.empty:
+                    s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
+                    save_series_cache(series_id, s)
+                    return s
+            else:
+                # Public API often needs a key. Some environments have it. If not, this quietly fails.
+                api_key = st.secrets.get("FRED_API_KEY", None) if hasattr(st, "secrets") else None
+                params = {
+                    "series_id": series_id,
+                    "file_type": "json",
+                    "observation_start": start_str,
+                    "observation_end": end_str,
+                }
+                if api_key:
+                    params["api_key"] = api_key
+                r = robust_request(url, params=params)
+                if r is None:
+                    continue
+                payload = r.json()
+                s = parse_fred_json_observations(payload)
+                if not s.empty:
+                    s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
+                    save_series_cache(series_id, s)
+                    return s
+        except Exception:
+            continue
+
+    cached = load_series_cache(series_id)
+    if not cached.empty:
+        return cached.loc[(cached.index >= start) & (cached.index <= end)].sort_index().ffill().dropna()
+
+    return pd.Series(dtype=float)
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def yf_history_raw(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    tickers_list = [tickers] if isinstance(tickers, str) else list(tickers)
+    frames = []
+
+    for t in tickers_list:
+        try:
+            df = yf.download(
+                t,
+                start=start,
+                end=end + pd.Timedelta(days=1),
+                progress=False,
+                auto_adjust=False,
+                actions=False,
+                threads=False,
+            )
+            if df is None or df.empty:
+                continue
+
+            df = df.copy()
+            df.columns = [str(c) for c in df.columns]
+            preferred = "Adj Close" if "Adj Close" in df.columns else "Close"
+            if preferred not in df.columns:
+                continue
+
+            s = df[preferred].rename(t)
+            s.index = pd.to_datetime(s.index)
+            frames.append(s)
+        except Exception:
+            continue
+
+    if not frames:
         return pd.DataFrame()
 
-# Rolling percentile on trading days, NaN-safe
+    out = pd.concat(frames, axis=1).sort_index().ffill()
+    return to_naive_date_index(out)
+
 def rolling_percentile_trading(values: pd.Series, idx: pd.DatetimeIndex, window_trading_days: int) -> pd.Series:
     s = to_naive_date_index(values).reindex(idx)
+
     def _last_percentile(x):
         arr = pd.Series(x).dropna()
         if arr.empty:
             return np.nan
         return arr.rank(pct=True).iloc[-1]
+
     out = s.rolling(
         window_trading_days,
-        min_periods=max(40, window_trading_days // 6)
+        min_periods=max(40, window_trading_days // 6),
     ).apply(_last_percentile, raw=False)
+
     return to_naive_date_index(out)
 
-# ---------------- Load history --------------
-today = today_naive()
-start_all = as_naive_date(today - pd.DateOffset(years=12))
-
-# FRED series
-vix_f   = fred_series(FRED["vix"],       start_all, today)
-hy_f    = fred_series(FRED["hy_oas"],    start_all, today)
-yc_f    = fred_series(FRED["yc_10y_3m"], start_all, today)
-cp3m_f  = fred_series(FRED["cp_3m"],     start_all, today)
-tb3m_f  = fred_series(FRED["tbill_3m"],  start_all, today)
-spx_f   = fred_series(FRED["spx"],       start_all, today)
-
-fund_f = to_naive_date_index(cp3m_f - tb3m_f)  # higher = tighter
-
-if all(s.dropna().empty for s in [vix_f, hy_f, yc_f, fund_f, spx_f]):
-    st.error("FRED series unavailable. Check network.")
-    st.stop()
-
-# ETF and breadth series (HYG, LQD, SPY, RSP)
-px_eq_credit = yf_history_daily(["HYG", "LQD", "SPY", "RSP"], start_all, today)
-hy_lqd_s = pd.Series(dtype=float)
-breadth_s = pd.Series(dtype=float)
-
-if not px_eq_credit.empty:
-    cols = list(px_eq_credit.columns)
-    colset = set(cols)
-    if "HYG" in colset and "LQD" in colset:
-        hy_lqd_s = -np.log(px_eq_credit["HYG"] / px_eq_credit["LQD"])
-    if "SPY" in colset and "RSP" in colset:
-        breadth_s = px_eq_credit["SPY"] / px_eq_credit["RSP"]
-
-# ---------------- Build BD index and align --------------
-bidx_start_candidates = [s.index.min() for s in [vix_f, hy_f, yc_f, fund_f, spx_f] if not s.dropna().empty]
-if bidx_start_candidates:
-    bidx_start = min(bidx_start_candidates)
-else:
-    bidx_start = start_all
-
-bidx = pd.bdate_range(as_naive_date(bidx_start), today)
-
-def to_bidx(s):
-    s = to_naive_date_index(s)
-    return s.reindex(bidx).ffill()
-
-panel_dict = {
-    "VIX":    to_bidx(vix_f),
-    "HY_OAS": to_bidx(hy_f),
-    "T10Y3M": to_bidx(yc_f),
-    "FUND":   to_bidx(fund_f),
-    "SPX":    to_bidx(spx_f),
-}
-
-if not hy_lqd_s.dropna().empty:
-    panel_dict["HY_LQD"] = to_bidx(hy_lqd_s)
-
-if not breadth_s.dropna().empty:
-    panel_dict["SPY_RSP"] = to_bidx(breadth_s)
-
-panel = pd.DataFrame(panel_dict).dropna(how="all")
-panel = to_naive_date_index(panel)
-
-# ---------------- Freshness masks ----------- 
-def fresh_mask(original: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
+def compute_stale_info(original: pd.Series, idx: pd.DatetimeIndex, max_stale: int) -> Tuple[pd.Series, pd.Series]:
     original = to_naive_date_index(original).reindex(idx)
     pos = np.arange(len(idx))
     has = original.notna().values
     last_pos = pd.Series(np.where(has, pos, np.nan), index=idx).ffill().values
     age = pos - last_pos
-    return pd.Series((~np.isnan(age)) & (age <= MAX_STALE_BDAYS), index=idx)
+    age_s = pd.Series(age, index=idx).astype(float)
+    mask = pd.Series((~np.isnan(age)) & (age <= max_stale), index=idx)
+    return mask, age_s
 
-m_vix    = fresh_mask(vix_f,    panel.index)
-m_hy     = fresh_mask(hy_f,     panel.index)
-m_yc     = fresh_mask(yc_f,     panel.index)
-m_fund   = fresh_mask(fund_f,   panel.index)
-m_dd     = fresh_mask(spx_f,    panel.index)
-m_hy_lqd = fresh_mask(hy_lqd_s, panel.index) if not hy_lqd_s.dropna().empty else pd.Series(False, index=panel.index)
-m_breadth = fresh_mask(breadth_s, panel.index) if not breadth_s.dropna().empty else pd.Series(False, index=panel.index)
-
-# ---------------- Trading-day index ---------
-trade_idx = panel.index[panel["SPX"].notna()].unique()
-panel_tr = panel.reindex(trade_idx).ffill()
-
-# ---------------- Derived series and percentiles ---------
-window_td = int(PCTL_WINDOW_YEARS * 252)
-
-# Inverted curve and drawdown-based stress
-inv_curve = -panel_tr["T10Y3M"]
-roll_max = panel_tr["SPX"].dropna().cummax()
-dd_all = 100.0 * (panel_tr["SPX"] / roll_max - 1.0)
-stress_dd = -dd_all.clip(upper=0)
-
-# Realized volatility (21d annualized)
-ret_spx = panel_tr["SPX"].pct_change()
-rv_21 = np.sqrt(252.0) * ret_spx.rolling(21, min_periods=10).std()
-panel_tr["RV21"] = rv_21
-
-# Percentiles for original 5
-pct_vix    = rolling_percentile_trading(panel_tr["VIX"],     trade_idx, window_td)
-pct_hy     = rolling_percentile_trading(panel_tr["HY_OAS"],  trade_idx, window_td)
-pct_curve  = rolling_percentile_trading(inv_curve,           trade_idx, window_td)
-pct_fund   = rolling_percentile_trading(panel_tr["FUND"],    trade_idx, window_td)
-pct_dd     = rolling_percentile_trading(stress_dd,           trade_idx, window_td)
-
-# Percentiles for new signals
-if "HY_LQD" in panel_tr.columns:
-    pct_hy_lqd = rolling_percentile_trading(panel_tr["HY_LQD"], trade_idx, window_td)
-else:
-    pct_hy_lqd = pd.Series(index=trade_idx, dtype=float)
-
-pct_rv = rolling_percentile_trading(panel_tr["RV21"], trade_idx, window_td)
-
-if "SPY_RSP" in panel_tr.columns:
-    pct_breadth = rolling_percentile_trading(panel_tr["SPY_RSP"], trade_idx, window_td)
-else:
-    pct_breadth = pd.Series(index=trade_idx, dtype=float)
-
-# Masks on trading index
-m_hy_tr       = m_hy.reindex(trade_idx).fillna(False)
-m_vix_tr      = m_vix.reindex(trade_idx).fillna(False)
-m_yc_tr       = m_yc.reindex(trade_idx).fillna(False)
-m_fund_tr     = m_fund.reindex(trade_idx).fillna(False)
-m_dd_tr       = m_dd.reindex(trade_idx).fillna(False)
-m_hy_lqd_tr   = m_hy_lqd.reindex(trade_idx).fillna(False)
-m_breadth_tr  = m_breadth.reindex(trade_idx).fillna(False)
-m_rv_tr       = panel_tr["RV21"].reindex(trade_idx).notna()
-
-# ---------------- Scores and composite base ----------------
-scores_all = pd.concat(
-    [
-        pct_vix,
-        pct_hy,
-        pct_hy_lqd,
-        pct_curve,
-        pct_fund,
-        pct_dd,
-        pct_rv,
-        pct_breadth,
-    ],
-    axis=1
-)
-scores_all.columns = [
-    "VIX_p",
-    "HY_OAS_p",
-    "HY_LQD_p",
-    "CurveInv_p",
-    "Fund_p",
-    "DD_p",
-    "RV21_p",
-    "Breadth_p",
-]
-scores_all = to_naive_date_index(scores_all)
-
-# ---------------- Composite -----------------
-start_lb = as_naive_date(today - pd.DateOffset(years=years))
-scores = scores_all.loc[start_lb:].copy()
-if DEFAULT_SMOOTH > 1:
-    scores = to_naive_date_index(scores.rolling(DEFAULT_SMOOTH, min_periods=1).mean())
-
-def _align(m):
-    return to_naive_date_index(m).reindex(scores.index).astype(float).fillna(0.0)
-
-# Rebuild masks on scores index
-m_vix_s      = m_vix_tr.reindex(scores.index).fillna(False)
-m_hy_oas_s   = m_hy_tr.reindex(scores.index).fillna(False)
-m_hy_lqd_s   = m_hy_lqd_tr.reindex(scores.index).fillna(False)
-m_yc_s       = m_yc_tr.reindex(scores.index).fillna(False)
-m_fund_s     = m_fund_tr.reindex(scores.index).fillna(False)
-m_dd_s       = m_dd_tr.reindex(scores.index).fillna(False)
-m_rv_s       = m_rv_tr.reindex(scores.index).fillna(False)
-m_breadth_s  = m_breadth_tr.reindex(scores.index).fillna(False)
-
-masks = pd.concat(
-    [
-        _align(m_vix_s),
-        _align(m_hy_oas_s),
-        _align(m_hy_lqd_s),
-        _align(m_yc_s),
-        _align(m_fund_s),
-        _align(m_dd_s),
-        _align(m_rv_s),
-        _align(m_breadth_s),
-    ],
-    axis=1
-)
-masks.columns = [
-    "VIX_m",
-    "HY_OAS_m",
-    "HY_LQD_m",
-    "Curve_m",
-    "Fund_m",
-    "DD_m",
-    "RV21_m",
-    "Breadth_m",
-]
-
-W = WEIGHTS_VEC.reshape(1, -1)
-X = scores[
-    [
-        "VIX_p",
-        "HY_OAS_p",
-        "HY_LQD_p",
-        "CurveInv_p",
-        "Fund_p",
-        "DD_p",
-        "RV21_p",
-        "Breadth_p",
-    ]
-].values
-M = masks.values
-
-X_masked = np.nan_to_num(X) * M
-weight_mask = (W * M)
-active_w = weight_mask.sum(axis=1)
-num = (X_masked * W).sum(axis=1)
-comp = np.where(active_w > 0, 100.0 * num / active_w, np.nan)
-comp_s = pd.Series(comp, index=scores.index, name="Composite").dropna()
-
-if comp_s.empty:
-    st.error("Composite has no valid points for the selected window.")
-    st.stop()
-
-# ---------------- Helpers -------------------
 def regime_label(x: float) -> str:
     if pd.isna(x):
         return "N/A"
@@ -396,12 +343,6 @@ def regime_label(x: float) -> str:
     if x <= REGIME_LO:
         return "Low stress"
     return "Neutral"
-
-def mean_last(series: pd.Series, n: int) -> float:
-    ser = series.dropna()
-    if ser.empty:
-        return np.nan
-    return float(ser.tail(n).mean())
 
 def regime_bucket(x: float) -> str:
     if pd.isna(x):
@@ -413,7 +354,6 @@ def regime_bucket(x: float) -> str:
     return "neutral"
 
 def dd_bucket(dd: float) -> str:
-    # dd is positive drawdown: 0 = at peak, higher = deeper drawdown
     if pd.isna(dd):
         return "na"
     if dd < 5:
@@ -422,259 +362,534 @@ def dd_bucket(dd: float) -> str:
         return "medium"
     return "deep"
 
+def mean_last(series: pd.Series, n: int) -> float:
+    ser = series.dropna()
+    if ser.empty:
+        return np.nan
+    return float(ser.tail(n).mean())
+
 def generate_commentary(
     as_of_date: pd.Timestamp,
     daily_val: float,
     weekly_val: float,
     monthly_val: float,
     spx_level: float,
-    dd_val: float
+    dd_val: float,
+    contrib_table: pd.DataFrame,
+    active_weight: float,
+    active_factors: int,
 ) -> str:
     d_reg = regime_bucket(daily_val)
     w_reg = regime_bucket(weekly_val)
     m_reg = regime_bucket(monthly_val)
-    dd_b  = dd_bucket(dd_val)
+    dd_b = dd_bucket(dd_val)
 
     date_str = as_of_date.date().isoformat()
     dd_pct = f"{dd_val:.1f}" if not pd.isna(dd_val) else "N/A"
     spx_str = f"{spx_level:,.1f}" if not pd.isna(spx_level) else "N/A"
 
-    daily_map = {
-        "low": (
-            "The composite is signaling a low-stress tape on a daily basis, "
-            "which usually lines up with constructive liquidity and tame risk premia."
-        ),
-        "neutral": (
-            "The daily composite sits in a neutral zone, pointing to a market that is balancing "
-            "local shocks against still-functioning liquidity and credit conditions."
-        ),
-        "high": (
-            "The daily composite is in high-stress territory, which tells you that volatility, "
-            "credit and curve dynamics are collectively skewed toward defense."
-        ),
-        "na": (
-            "The daily composite cannot be interpreted cleanly today because too many inputs are missing, "
-            "so the risk read has to lean more on trend and drawdown context."
-        ),
-    }
-
-    weekly_map = {
-        "low": (
-            "On a weekly basis the regime remains calm, suggesting that the short-term shocks we see in the tape "
-            "have not yet hardened into a persistent stress regime."
-        ),
-        "neutral": (
-            "The weekly profile is neutral, which fits with a market that grinds between fear and relief "
-            "without a clear directional stress trend."
-        ),
-        "high": (
-            "The weekly composite is elevated, which means stress has been persistent rather than a single-day flare-up, "
-            "often a sign to respect the trend in risk reduction rather than fade it aggressively."
-        ),
-        "na": (
-            "The weekly regime flag is unclear, so you should lean more on the daily and monthly structure "
-            "to anchor your risk-taking."
-        ),
-    }
-
-    monthly_map = {
-        "low": (
-            "At the monthly horizon the regime is still low, telling you that the bigger backdrop remains benign "
-            "even if the nearer term feels noisy."
-        ),
-        "neutral": (
-            "At the monthly horizon the signal is neutral, which usually corresponds to a mid-cycle environment where "
-            "positioning and narratives swing around a relatively stable macro core."
-        ),
-        "high": (
-            "At the monthly horizon the composite is high, which is the kind of backdrop where deleveraging waves, "
-            "risk parity de-risking and tighter financial conditions can feed on each other."
-        ),
-        "na": (
-            "The monthly regime cannot be pinned down cleanly, so longer-term conclusions need to be made with some humility "
-            "around the state of the macro regime."
-        ),
-    }
-
-    dd_map = {
-        "shallow": (
-            f"SPX is sitting around {spx_str} with only about {dd_pct}% drawdown from the local peak, "
-            "which says price has not yet delivered the kind of cleansing air-pocket that usually resets risk appetite."
-        ),
-        "medium": (
-            f"SPX trades near {spx_str} with a mid-teens drawdown of roughly {dd_pct}%, "
-            "a zone where forced selling begins to slow and new money debates whether this is a range or the start of a larger break."
-        ),
-        "deep": (
-            f"SPX is down near {spx_str} with a deep drawdown of roughly {dd_pct}%, "
-            "the kind of damage that tends to flush weak hands, create forced rebalancing and set the stage for reflexive turns "
-            "if policy or data surprise positively."
-        ),
-        "na": (
-            "The drawdown profile is not well defined here, so the composite should be read more as a cross-asset risk barometer "
-            "than a precise timing tool."
-        ),
-    }
-
-    daily_sentence = daily_map.get(d_reg, daily_map["na"])
-    weekly_sentence = weekly_map.get(w_reg, weekly_map["na"])
-    monthly_sentence = monthly_map.get(m_reg, monthly_map["na"])
-    dd_sentence = dd_map.get(dd_b, dd_map["na"])
-
-    commentary = (
-        f"As of {date_str}, {daily_sentence} "
-        f"{weekly_sentence} "
-        f"{monthly_sentence} "
-        f"{dd_sentence}"
+    top = contrib_table.sort_values("weighted_contribution", ascending=False).head(3)
+    drivers = ", ".join(
+        [
+            f"{row['factor']} ({row['weighted_contribution']:.1f} pts)"
+            for _, row in top.iterrows()
+            if pd.notna(row["weighted_contribution"]) and row["weighted_contribution"] > 0
+        ]
     )
-    return commentary
+    if not drivers:
+        drivers = "no single factor is dominating the tape"
 
+    daily_map = {
+        "low": "The composite is signaling a low-stress daily tape, which lines up with contained vol and benign cross-asset spillover.",
+        "neutral": "The daily composite sits in neutral territory, pointing to a market that is absorbing local shocks without broad stress transmission.",
+        "high": "The daily composite is in high-stress territory, telling you that volatility, credit, funding, and equity internals are leaning defensive.",
+        "na": "The daily read is incomplete because too many inputs are missing, so the tape should be interpreted with caution.",
+    }
+    weekly_map = {
+        "low": "On a weekly basis the regime still looks calm, which suggests the market has not yet rolled into a sustained de-risking phase.",
+        "neutral": "The weekly profile is neutral, which fits a market oscillating between fear and relief without a stable stress trend.",
+        "high": "The weekly composite is elevated, which means the stress is persisting rather than flashing for a single session.",
+        "na": "The weekly regime is not fully clean, so the higher-frequency signal deserves more weight than usual.",
+    }
+    monthly_map = {
+        "low": "At the monthly horizon the broader backdrop still looks benign.",
+        "neutral": "At the monthly horizon the signal is neutral, which is usually what you see in a mid-cycle market with unstable narratives but no systemic break.",
+        "high": "At the monthly horizon the backdrop is elevated, which is where deleveraging feedback loops can start to matter more.",
+        "na": "The monthly state is blurred by missing data, so longer-horizon judgment should stay conditional.",
+    }
+    dd_map = {
+        "shallow": f"SPX is near {spx_str} with a shallow drawdown of about {dd_pct}%, so price damage itself has not yet delivered a full reset.",
+        "medium": f"SPX is near {spx_str} with a drawdown of about {dd_pct}%, which is usually where the market starts debating whether weakness is cyclical or systemic.",
+        "deep": f"SPX is near {spx_str} with a deep drawdown of about {dd_pct}%, the kind of damage that can create reflexive turning points if policy or data improve.",
+        "na": "The drawdown context is unclear, so the composite should be read primarily as a cross-asset stress barometer.",
+    }
+
+    return (
+        f"As of {date_str}, {daily_map[d_reg]} {weekly_map[w_reg]} {monthly_map[m_reg]} "
+        f"{dd_map[dd_b]} The main drivers right now are {drivers}. "
+        f"Composite confidence is moderate to high with {active_factors} active factors and {active_weight:.0%} active weight."
+    )
+
+def normalize_price_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    df.columns = [str(c) for c in df.columns]
+    return to_naive_date_index(df.sort_index().ffill())
+
+# ---------------- Load history ----------------
+today = today_naive()
+start_all = as_naive_date(today - pd.DateOffset(years=12))
+
+# Use actual SPY sessions as canonical trading calendar
+spy_calendar = yf_history_raw("SPY", start_all, today)
+if spy_calendar.empty or "SPY" not in spy_calendar.columns:
+    st.error("Unable to load SPY session history. This dashboard needs a valid trading-session calendar.")
+    st.stop()
+
+trade_idx_all = pd.DatetimeIndex(spy_calendar.index.unique()).sort_values()
+
+# FRED series
+vix_f = fred_series(FRED["vix"], start_all, today)
+hy_f = fred_series(FRED["hy_oas"], start_all, today)
+yc_f = fred_series(FRED["yc_10y_3m"], start_all, today)
+cp3m_f = fred_series(FRED["cp_3m"], start_all, today)
+tb3m_f = fred_series(FRED["tbill_3m"], start_all, today)
+spx_f = fred_series(FRED["spx"], start_all, today)
+
+fund_f = to_naive_date_index(cp3m_f - tb3m_f)
+
+# Yahoo series
+px_eq_credit = yf_history_raw(["HYG", "LQD", "SPY", "RSP"], start_all, today)
+
+hy_lqd_s = pd.Series(dtype=float)
+spy_rsp_s = pd.Series(dtype=float)
+
+if not px_eq_credit.empty:
+    cols = set(px_eq_credit.columns)
+    if "HYG" in cols and "LQD" in cols:
+        ratio = px_eq_credit["HYG"] / px_eq_credit["LQD"]
+        hy_lqd_s = -np.log(ratio.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan).dropna()
+    if "SPY" in cols and "RSP" in cols:
+        spy_rsp_s = (px_eq_credit["SPY"] / px_eq_credit["RSP"]).replace([np.inf, -np.inf], np.nan).dropna()
+
+if all(s.dropna().empty for s in [vix_f, hy_f, yc_f, fund_f, spx_f]):
+    st.error("No FRED series were available, and no cached fallback could be loaded.")
+    st.stop()
+
+def to_trade_idx(s: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
+    if s is None or s.empty:
+        return pd.Series(index=idx, dtype=float)
+    s = to_naive_date_index(s)
+    return s.reindex(idx).ffill()
+
+panel = pd.DataFrame(index=trade_idx_all)
+panel["SPY"] = to_trade_idx(spy_calendar["SPY"], trade_idx_all)
+
+if not spx_f.empty:
+    panel["SPX"] = to_trade_idx(spx_f, trade_idx_all)
+else:
+    panel["SPX"] = np.nan
+
+if not vix_f.empty:
+    panel["VIX"] = to_trade_idx(vix_f, trade_idx_all)
+
+if not hy_f.empty:
+    panel["HY_OAS"] = to_trade_idx(hy_f, trade_idx_all)
+
+if not yc_f.empty:
+    panel["T10Y3M"] = to_trade_idx(yc_f, trade_idx_all)
+
+if not fund_f.empty:
+    panel["FUND"] = to_trade_idx(fund_f, trade_idx_all)
+
+if not hy_lqd_s.empty:
+    panel["HY_LQD"] = to_trade_idx(hy_lqd_s, trade_idx_all)
+
+if not spy_rsp_s.empty:
+    panel["SPY_RSP"] = to_trade_idx(spy_rsp_s, trade_idx_all)
+
+panel = normalize_price_frame(panel)
+
+# If SPX from FRED is missing, fall back to SPY-scaled proxy for plotting and DD
+if panel["SPX"].dropna().empty and panel["SPY"].notna().any():
+    base_spy = panel["SPY"].dropna().iloc[0]
+    panel["SPX"] = panel["SPY"] / base_spy * 100.0
+
+# ---------------- Derived series ----------------
+panel["CurveInv"] = -panel["T10Y3M"] if "T10Y3M" in panel.columns else np.nan
+
+spx_ret = panel["SPX"].pct_change()
+panel["RV21"] = np.sqrt(252.0) * spx_ret.rolling(21, min_periods=10).std()
+
+spx_roll_max = panel["SPX"].cummax()
+panel["DD_stress"] = -(100.0 * (panel["SPX"] / spx_roll_max - 1.0).clip(upper=0))
+
+# ---------------- Freshness masks ----------------
+mask_map = {}
+age_map = {}
+
+series_lookup = {
+    "VIX": vix_f,
+    "HY_OAS": hy_f,
+    "HY_LQD": hy_lqd_s,
+    "T10Y3M": yc_f,
+    "FUND": fund_f,
+    "SPX": spx_f if not spx_f.empty else panel["SPX"].dropna(),
+    "SPY_RSP": spy_rsp_s,
+}
+
+for name, raw_s in series_lookup.items():
+    max_stale = STALE_LIMITS.get(name, 2)
+    m, age = compute_stale_info(raw_s, panel.index, max_stale)
+    mask_map[name] = m
+    age_map[name] = age
+
+mask_map["DD"] = mask_map["SPX"].copy()
+age_map["DD"] = age_map["SPX"].copy()
+
+mask_map["RV21"] = panel["RV21"].notna()
+age_map["RV21"] = pd.Series(np.where(panel["RV21"].notna(), 0, np.nan), index=panel.index)
+
+# ---------------- Percentiles ----------------
+window_td = int(PCTL_WINDOW_YEARS * 252)
+
+scores_all = pd.DataFrame(index=panel.index)
+
+if "VIX" in panel.columns:
+    scores_all["VIX_p"] = rolling_percentile_trading(panel["VIX"], panel.index, window_td)
+else:
+    scores_all["VIX_p"] = np.nan
+
+if "HY_OAS" in panel.columns:
+    scores_all["HY_OAS_p"] = rolling_percentile_trading(panel["HY_OAS"], panel.index, window_td)
+else:
+    scores_all["HY_OAS_p"] = np.nan
+
+if "HY_LQD" in panel.columns:
+    scores_all["HY_LQD_p"] = rolling_percentile_trading(panel["HY_LQD"], panel.index, window_td)
+else:
+    scores_all["HY_LQD_p"] = np.nan
+
+if "CurveInv" in panel.columns:
+    scores_all["CurveInv_p"] = rolling_percentile_trading(panel["CurveInv"], panel.index, window_td)
+else:
+    scores_all["CurveInv_p"] = np.nan
+
+if "FUND" in panel.columns:
+    scores_all["Fund_p"] = rolling_percentile_trading(panel["FUND"], panel.index, window_td)
+else:
+    scores_all["Fund_p"] = np.nan
+
+scores_all["DD_p"] = rolling_percentile_trading(panel["DD_stress"], panel.index, window_td)
+scores_all["RV21_p"] = rolling_percentile_trading(panel["RV21"], panel.index, window_td)
+
+if "SPY_RSP" in panel.columns:
+    scores_all["Breadth_p"] = rolling_percentile_trading(panel["SPY_RSP"], panel.index, window_td)
+else:
+    scores_all["Breadth_p"] = np.nan
+
+scores_all = normalize_price_frame(scores_all)
+
+# ---------------- Lookback slice ----------------
+start_lb = as_naive_date(today - pd.DateOffset(years=years))
+panel_lb = panel.loc[panel.index >= start_lb].copy()
+scores = scores_all.loc[scores_all.index >= start_lb].copy()
+
+if smooth_days > 1:
+    scores = scores.rolling(smooth_days, min_periods=1).mean()
+
+# ---------------- Masks aligned to score index ----------------
+masks = pd.DataFrame(index=scores.index)
+masks["VIX_m"] = mask_map["VIX"].reindex(scores.index).fillna(False).astype(float)
+masks["HY_OAS_m"] = mask_map["HY_OAS"].reindex(scores.index).fillna(False).astype(float)
+masks["HY_LQD_m"] = mask_map["HY_LQD"].reindex(scores.index).fillna(False).astype(float)
+masks["Curve_m"] = mask_map["T10Y3M"].reindex(scores.index).fillna(False).astype(float)
+masks["Fund_m"] = mask_map["FUND"].reindex(scores.index).fillna(False).astype(float)
+masks["DD_m"] = mask_map["DD"].reindex(scores.index).fillna(False).astype(float)
+masks["RV21_m"] = mask_map["RV21"].reindex(scores.index).fillna(False).astype(float)
+masks["Breadth_m"] = mask_map["SPY_RSP"].reindex(scores.index).fillna(False).astype(float)
+
+score_cols = ["VIX_p", "HY_OAS_p", "HY_LQD_p", "CurveInv_p", "Fund_p", "DD_p", "RV21_p", "Breadth_p"]
+mask_cols = ["VIX_m", "HY_OAS_m", "HY_LQD_m", "Curve_m", "Fund_m", "DD_m", "RV21_m", "Breadth_m"]
+
+X = scores[score_cols].values
+M = masks[mask_cols].values
+W = WEIGHTS_VEC.reshape(1, -1)
+
+X_masked = np.nan_to_num(X, nan=0.0) * M
+weight_mask = W * M
+active_w = weight_mask.sum(axis=1)
+weighted_contrib = np.where(active_w[:, None] > 0, 100.0 * (X_masked * W) / active_w[:, None], np.nan)
+comp = np.where(active_w > 0, weighted_contrib.sum(axis=1), np.nan)
+
+comp_s = pd.Series(comp, index=scores.index, name="Composite").dropna()
+active_weight_s = pd.Series(active_w, index=scores.index, name="active_weight").reindex(comp_s.index)
+active_factors_s = pd.Series(M.sum(axis=1), index=scores.index, name="active_factors").reindex(comp_s.index)
+
+if comp_s.empty:
+    st.error("Composite has no valid points for the selected lookback.")
+    st.stop()
+
+# ---------------- Latest statistics ----------------
 latest_idx = comp_s.index[-1]
 latest_val = float(comp_s.iloc[-1])
 weekly_val = mean_last(comp_s, 5)
 monthly_val = mean_last(comp_s, 21)
 
-# ---------------- Unified plotting index ----------------
-plot_idx = comp_s.index.copy()                 # canonical x-axis for both panes
-panel_plot = panel_tr.reindex(plot_idx).ffill()
+plot_idx = comp_s.index.copy()
+panel_plot = panel_lb.reindex(plot_idx).ffill()
 
 spx = panel_plot["SPX"].dropna()
 base = spx.iloc[0] if len(spx) else np.nan
-spx_rebased = (panel_plot["SPX"] / base) * 100.0
+spx_rebased = (panel_plot["SPX"] / base) * 100.0 if pd.notna(base) and base != 0 else pd.Series(index=plot_idx, dtype=float)
 dd_series = -100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)
 
-y_spx = spx_rebased.reindex(plot_idx).values
-y_dd  = dd_series.reindex(plot_idx).values
-y_comp = comp_s.reindex(plot_idx).values
+latest_spx_level = safe_float(panel_plot["SPX"].iloc[-1]) if len(panel_plot) else np.nan
+latest_dd_val = safe_float(dd_series.iloc[-1]) if len(dd_series) else np.nan
+latest_active_weight = safe_float(active_weight_s.iloc[-1]) if not active_weight_s.empty else np.nan
+latest_active_factors = int(active_factors_s.iloc[-1]) if not active_factors_s.empty and pd.notna(active_factors_s.iloc[-1]) else 0
 
-latest_spx_level = float(panel_plot["SPX"].reindex(plot_idx).iloc[-1]) if len(plot_idx) > 0 else np.nan
-latest_dd_val = float(dd_series.reindex(plot_idx).iloc[-1]) if len(plot_idx) > 0 else np.nan
+# ---------------- Contribution table ----------------
+latest_contrib = pd.DataFrame(
+    {
+        "factor": ["VIX", "HY_OAS", "HY_LQD", "Curve", "Funding", "Drawdown", "RV21", "Breadth"],
+        "percentile": scores.loc[latest_idx, score_cols].values * 100.0,
+        "mask": masks.loc[latest_idx, mask_cols].values.astype(bool),
+        "base_weight": WEIGHTS_VEC,
+        "effective_weight": np.where(
+            latest_active_weight > 0,
+            (WEIGHTS_VEC * masks.loc[latest_idx, mask_cols].values) / latest_active_weight,
+            np.nan,
+        ),
+        "weighted_contribution": weighted_contrib[scores.index.get_loc(latest_idx), :],
+    }
+).sort_values("weighted_contribution", ascending=False)
 
-# ---------------- Header commentary --------------------
+# ---------------- Commentary and header ----------------
 commentary_text = generate_commentary(
     as_of_date=latest_idx,
     daily_val=latest_val,
     weekly_val=weekly_val,
     monthly_val=monthly_val,
     spx_level=latest_spx_level,
-    dd_val=latest_dd_val
+    dd_val=latest_dd_val,
+    contrib_table=latest_contrib,
+    active_weight=latest_active_weight,
+    active_factors=latest_active_factors,
 )
 st.info(commentary_text)
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Daily regime", regime_label(latest_val), f"{latest_val:.0f}")
 c2.metric("Weekly regime", regime_label(weekly_val), f"{weekly_val:.0f}" if not pd.isna(weekly_val) else "N/A")
 c3.metric("Monthly regime", regime_label(monthly_val), f"{monthly_val:.0f}" if not pd.isna(monthly_val) else "N/A")
+c4.metric("Active factors", f"{latest_active_factors}/8")
+c5.metric("Active weight", f"{latest_active_weight:.0%}" if pd.notna(latest_active_weight) else "N/A")
 
 # ---------------- Combined figure ----------------
 fig = make_subplots(
-    rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06,
-    row_heights=[0.65, 0.35], specs=[[{"secondary_y": True}], [{}]],
-    subplot_titles=("SPX and Drawdown (daily)", "Market Stress Composite")
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.06,
+    row_heights=[0.62, 0.38],
+    specs=[[{"secondary_y": True}], [{}]],
+    subplot_titles=("SPX and Drawdown", "Market Stress Composite"),
 )
 
-# Row 1: SPX + Drawdown
 fig.add_trace(
-    go.Scatter(x=plot_idx, y=y_spx, name="SPX (rebased=100)", line=dict(width=2)),
-    row=1, col=1, secondary_y=False
-)
-fig.add_trace(
-    go.Scatter(x=plot_idx, y=y_dd, name="Drawdown (%)", line=dict(width=1.5)),
-    row=1, col=1, secondary_y=True
+    go.Scatter(
+        x=plot_idx,
+        y=spx_rebased.reindex(plot_idx),
+        name="SPX (rebased=100)",
+        line=dict(width=2, color="#1f77b4"),
+    ),
+    row=1,
+    col=1,
+    secondary_y=False,
 )
 
-# Row 2: Composite with regime bands
 fig.add_trace(
-    go.Scatter(x=plot_idx, y=y_comp, name="Composite", line=dict(width=2, color="#111111")),
+    go.Scatter(
+        x=plot_idx,
+        y=dd_series.reindex(plot_idx),
+        name="Drawdown (%)",
+        line=dict(width=1.5, color="#d62728"),
+    ),
+    row=1,
+    col=1,
+    secondary_y=True,
+)
+
+fig.add_trace(
+    go.Scatter(
+        x=plot_idx,
+        y=comp_s.reindex(plot_idx),
+        name="Composite",
+        line=dict(width=2.3, color="#111111"),
+    ),
+    row=2,
+    col=1,
+)
+
+fig.add_trace(
+    go.Scatter(
+        x=plot_idx,
+        y=comp_s.reindex(plot_idx).rolling(21, min_periods=1).mean(),
+        name="Composite 21D MA",
+        line=dict(width=1.4, color="#7f7f7f", dash="dot"),
+    ),
+    row=2,
+    col=1,
+)
+
+fig.add_hrect(
+    y0=REGIME_HI, y1=100,
+    line_width=0, fillcolor="rgba(214,39,40,0.10)",
     row=2, col=1
 )
-fig.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10)", row=2, col=1)
-fig.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)", row=2, col=1)
+fig.add_hrect(
+    y0=0, y1=REGIME_LO,
+    line_width=0, fillcolor="rgba(44,160,44,0.10)",
+    row=2, col=1
+)
 
-# Axes and layout
-dd_max = np.nanmax(y_dd) if np.isfinite(np.nanmax(y_dd)) else 5.0
+finite_dd = dd_series.replace([np.inf, -np.inf], np.nan).dropna()
+dd_max = float(finite_dd.max()) if not finite_dd.empty else 5.0
+dd_max = max(5.0, dd_max * 1.1)
+
 fig.update_yaxes(title_text="Rebased", row=1, col=1, secondary_y=False)
-fig.update_yaxes(title_text="Drawdown %", row=1, col=1, secondary_y=True, range=[0, max(5, dd_max * 1.1)])
+fig.update_yaxes(title_text="Drawdown %", row=1, col=1, secondary_y=True, range=[0, dd_max])
 fig.update_yaxes(title_text="Score", row=2, col=1, range=[0, 100])
-fig.update_xaxes(tickformat="%b-%d-%y", title_text="Date", row=2, col=1)
+fig.update_xaxes(title_text="Date", row=2, col=1, tickformat="%b-%d-%y")
 
 fig.update_layout(
-    template="plotly_white", height=760,
-    legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
-    margin=dict(l=60, r=40, t=60, b=60)
+    template="plotly_white",
+    height=780,
+    margin=dict(l=50, r=30, t=60, b=50),
+    legend=dict(orientation="h", x=0, y=1.07, xanchor="left"),
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
+# ---------------- Current factor contribution table ----------------
+st.subheader("Current factor contributions")
+show_contrib = latest_contrib.copy()
+show_contrib["percentile"] = show_contrib["percentile"].round(1)
+show_contrib["base_weight"] = (show_contrib["base_weight"] * 100).round(1)
+show_contrib["effective_weight"] = (show_contrib["effective_weight"] * 100).round(1)
+show_contrib["weighted_contribution"] = show_contrib["weighted_contribution"].round(1)
+show_contrib.columns = ["Factor", "Percentile", "Active", "Base Weight %", "Effective Weight %", "Contribution (pts)"]
+st.dataframe(show_contrib, use_container_width=True, hide_index=True)
+
 # ---------------- Diagnostics ----------------
 with st.expander("Diagnostics"):
     latest = plot_idx[-1]
-    # Get helper series with safe defaults
-    hy_lqd_plot = panel_plot.get("HY_LQD", pd.Series(index=plot_idx))
-    spy_rsp_plot = panel_plot.get("SPY_RSP", pd.Series(index=plot_idx))
-    rv_plot = panel_plot.get("RV21", pd.Series(index=plot_idx))
 
-    scores_all_plot = scores_all.reindex(plot_idx)
+    diag = pd.DataFrame(
+        {
+            "factor": ["VIX", "HY_OAS", "HY_LQD", "Curve", "Funding", "Drawdown", "RV21", "Breadth"],
+            "raw_value": [
+                panel_plot["VIX"].loc[latest] if "VIX" in panel_plot.columns else np.nan,
+                panel_plot["HY_OAS"].loc[latest] if "HY_OAS" in panel_plot.columns else np.nan,
+                panel_plot["HY_LQD"].loc[latest] if "HY_LQD" in panel_plot.columns else np.nan,
+                panel_plot["CurveInv"].loc[latest] if "CurveInv" in panel_plot.columns else np.nan,
+                panel_plot["FUND"].loc[latest] if "FUND" in panel_plot.columns else np.nan,
+                panel_plot["DD_stress"].loc[latest],
+                panel_plot["RV21"].loc[latest],
+                panel_plot["SPY_RSP"].loc[latest] if "SPY_RSP" in panel_plot.columns else np.nan,
+            ],
+            "percentile": [
+                scores.loc[latest, "VIX_p"] * 100.0 if "VIX_p" in scores.columns else np.nan,
+                scores.loc[latest, "HY_OAS_p"] * 100.0 if "HY_OAS_p" in scores.columns else np.nan,
+                scores.loc[latest, "HY_LQD_p"] * 100.0 if "HY_LQD_p" in scores.columns else np.nan,
+                scores.loc[latest, "CurveInv_p"] * 100.0 if "CurveInv_p" in scores.columns else np.nan,
+                scores.loc[latest, "Fund_p"] * 100.0 if "Fund_p" in scores.columns else np.nan,
+                scores.loc[latest, "DD_p"] * 100.0 if "DD_p" in scores.columns else np.nan,
+                scores.loc[latest, "RV21_p"] * 100.0 if "RV21_p" in scores.columns else np.nan,
+                scores.loc[latest, "Breadth_p"] * 100.0 if "Breadth_p" in scores.columns else np.nan,
+            ],
+            "active": latest_contrib.sort_values("factor")["mask"].values,
+            "days_since_update": [
+                age_map["VIX"].reindex(plot_idx).loc[latest] if "VIX" in age_map else np.nan,
+                age_map["HY_OAS"].reindex(plot_idx).loc[latest] if "HY_OAS" in age_map else np.nan,
+                age_map["HY_LQD"].reindex(plot_idx).loc[latest] if "HY_LQD" in age_map else np.nan,
+                age_map["T10Y3M"].reindex(plot_idx).loc[latest] if "T10Y3M" in age_map else np.nan,
+                age_map["FUND"].reindex(plot_idx).loc[latest] if "FUND" in age_map else np.nan,
+                age_map["DD"].reindex(plot_idx).loc[latest] if "DD" in age_map else np.nan,
+                age_map["RV21"].reindex(plot_idx).loc[latest] if "RV21" in age_map else np.nan,
+                age_map["SPY_RSP"].reindex(plot_idx).loc[latest] if "SPY_RSP" in age_map else np.nan,
+            ],
+            "stale_limit": [
+                STALE_LIMITS["VIX"],
+                STALE_LIMITS["HY_OAS"],
+                STALE_LIMITS["HY_LQD"],
+                STALE_LIMITS["T10Y3M"],
+                STALE_LIMITS["FUND"],
+                STALE_LIMITS["DD"],
+                STALE_LIMITS["RV21"],
+                STALE_LIMITS["SPY_RSP"],
+            ],
+        }
+    )
+    diag["percentile"] = diag["percentile"].round(1)
+    diag["days_since_update"] = pd.to_numeric(diag["days_since_update"], errors="coerce").round(0)
+    st.dataframe(diag, use_container_width=True, hide_index=True)
 
-    last_masks = masks.reindex(plot_idx).iloc[-1]
-
-    diag = pd.DataFrame({
-        "raw_VIX": [panel_plot.loc[latest, "VIX"]],
-        "raw_HY_OAS": [panel_plot.get("HY_OAS", pd.Series(index=plot_idx)).reindex(plot_idx).loc[latest]],
-        "raw_HY_LQD(-log(HYG/LQD))": [hy_lqd_plot.loc[latest]],
-        "raw_curve_inv(-T10Y3M)": [(-panel_plot["T10Y3M"]).loc[latest]],
-        "raw_fund(CP-TBill)": [panel_plot.loc[latest, "FUND"]],
-        "raw_dd_stress": [(-100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)).loc[latest]],
-        "raw_RV21": [rv_plot.loc[latest]],
-        "raw_SPY_RSP(SPY/RSP)": [spy_rsp_plot.loc[latest]],
-        "pct_VIX": [scores_all_plot.loc[latest, "VIX_p"]],
-        "pct_HY_OAS": [scores_all_plot.loc[latest, "HY_OAS_p"]],
-        "pct_HY_LQD": [scores_all_plot.loc[latest, "HY_LQD_p"]],
-        "pct_CurveInv": [scores_all_plot.loc[latest, "CurveInv_p"]],
-        "pct_Fund": [scores_all_plot.loc[latest, "Fund_p"]],
-        "pct_DD": [scores_all_plot.loc[latest, "DD_p"]],
-        "pct_RV21": [scores_all_plot.loc[latest, "RV21_p"]],
-        "pct_Breadth": [scores_all_plot.loc[latest, "Breadth_p"]],
-        "mask_VIX": [bool(last_masks["VIX_m"])],
-        "mask_HY_OAS": [bool(last_masks["HY_OAS_m"])],
-        "mask_HY_LQD": [bool(last_masks["HY_LQD_m"])],
-        "mask_Curve": [bool(last_masks["Curve_m"])],
-        "mask_Fund": [bool(last_masks["Fund_m"])],
-        "mask_DD": [bool(last_masks["DD_m"])],
-        "mask_RV21": [bool(last_masks["RV21_m"])],
-        "mask_Breadth": [bool(last_masks["Breadth_m"])],
-        "active_weight_sum": [float((WEIGHTS_VEC * last_masks.values).sum())],
-        "Composite": [latest_val],
-    })
-    st.dataframe(diag.T, use_container_width=True)
-
-# ---------------- Download ------------------
+# ---------------- Download ----------------
 with st.expander("Download Data"):
     export_idx = plot_idx
-    export_scores = (100.0 * scores.reindex(export_idx).rename(columns={
-        "VIX_p": "VIX_pct",
-        "HY_OAS_p": "HY_OAS_pct",
-        "HY_LQD_p": "HY_LQD_pct",
-        "CurveInv_p": "CurveInv_pct",
-        "Fund_p": "Fund_pct",
-        "DD_p": "DD_pct",
-        "RV21_p": "RV21_pct",
-        "Breadth_p": "Breadth_pct",
-    }))
 
-    cols = ["VIX", "HY_OAS", "T10Y3M", "FUND", "SPX"]
-    if "HY_LQD" in panel_tr.columns:
-        cols.append("HY_LQD")
-    if "SPY_RSP" in panel_tr.columns:
-        cols.append("SPY_RSP")
-    if "RV21" in panel_tr.columns:
-        cols.append("RV21")
+    export_panel_cols = [c for c in ["SPX", "VIX", "HY_OAS", "HY_LQD", "T10Y3M", "CurveInv", "FUND", "DD_stress", "RV21", "SPY_RSP"] if c in panel.columns]
+    export_panel = panel.reindex(export_idx)[export_panel_cols].copy()
 
-    out = pd.concat(
-        [panel_tr.reindex(export_idx)[cols], export_scores, comp_s.reindex(export_idx).rename("Composite")],
-        axis=1
+    export_scores = (scores.reindex(export_idx) * 100.0).rename(
+        columns={
+            "VIX_p": "VIX_pct",
+            "HY_OAS_p": "HY_OAS_pct",
+            "HY_LQD_p": "HY_LQD_pct",
+            "CurveInv_p": "CurveInv_pct",
+            "Fund_p": "Fund_pct",
+            "DD_p": "DD_pct",
+            "RV21_p": "RV21_pct",
+            "Breadth_p": "Breadth_pct",
+        }
     )
+
+    export_masks = masks.reindex(export_idx).copy()
+    export_contrib = pd.DataFrame(
+        weighted_contrib,
+        index=scores.index,
+        columns=[
+            "VIX_contrib",
+            "HY_OAS_contrib",
+            "HY_LQD_contrib",
+            "Curve_contrib",
+            "Fund_contrib",
+            "DD_contrib",
+            "RV21_contrib",
+            "Breadth_contrib",
+        ],
+    ).reindex(export_idx)
+
+    export_meta = pd.concat(
+        [
+            active_weight_s.reindex(export_idx),
+            active_factors_s.reindex(export_idx),
+            comp_s.reindex(export_idx),
+        ],
+        axis=1,
+    )
+
+    out = pd.concat([export_panel, export_scores, export_masks, export_contrib, export_meta], axis=1)
     out.index.name = "Date"
-    st.download_button("Download CSV", out.to_csv(), file_name="market_stress_composite.csv", mime="text/csv")
+
+    st.download_button(
+        "Download CSV",
+        out.to_csv(),
+        file_name="market_stress_composite.csv",
+        mime="text/csv",
+    )
 
 st.caption("© 2026 AD Fund Management LP")
