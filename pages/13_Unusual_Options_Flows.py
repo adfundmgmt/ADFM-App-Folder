@@ -1,7 +1,7 @@
 # streamlit_app.py
 # ADFM | Unusual Options Flow Tracker
 # Public-data S&P 500 options anomaly scanner using Wikipedia + Yahoo Finance
-# Streamlit-safe architecture: explicit scan step, session-state persistence, last-good fallback
+# Streamlit-safe architecture with explicit scan step, cached fallback, and schema-tolerant display logic
 
 import json
 import math
@@ -9,7 +9,7 @@ import pickle
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -86,7 +86,6 @@ DEFAULT_MAX_EXPIRIES_PER_SYMBOL = 8
 DEFAULT_MIN_UNUSUAL_SCORE = 55.0
 DEFAULT_MIN_UNDERLYING_DOLLAR_VOL_MM = 100.0
 
-# Hard fallback list in case Wikipedia is unavailable
 SP500_FALLBACK_SYMBOLS = sorted([
     "MMM","AOS","ABT","ABBV","ACN","ADBE","AMD","AES","AFL","A","APD","ABNB","AKAM","ALB","ARE","ALGN","ALLE",
     "LNT","ALL","GOOGL","GOOG","MO","AMZN","AMCR","AEE","AEP","AXP","AIG","AMT","AWK","AMP","AME","AMGN","APH",
@@ -289,13 +288,8 @@ def dte_bucket(dte: int) -> str:
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
 def fetch_sp500_from_wikipedia() -> pd.DataFrame:
-    """
-    Pull S&P 500 constituents from Wikipedia. Falls back to cached data or hardcoded list.
-    """
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(WIKI_URL, headers=headers, timeout=20)
         r.raise_for_status()
         tables = pd.read_html(r.text)
@@ -356,9 +350,6 @@ def fetch_sp500_from_wikipedia() -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=15 * 60, show_spinner=False)
 def fetch_spot_snapshot(symbols: List[str]) -> pd.DataFrame:
-    """
-    Batch price and volume snapshot using yfinance download.
-    """
     if not symbols:
         return pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume", "avg_dollar_vol"])
 
@@ -439,7 +430,6 @@ def compute_unusual_score(
     if pd.isna(avg_dollar_vol) or avg_dollar_vol <= 0:
         liquidity_score = 0.4
     else:
-        # Higher score for names where the tape matters relative to a liquid underlying
         liquidity_score = min(math.log10(avg_dollar_vol + 1.0) / 9.0, 1.0)
 
     raw = (
@@ -543,7 +533,6 @@ def scan_one_symbol(
             local = local[["contractSymbol", "strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]].copy()
             diagnostics["contracts_seen"] += len(local)
 
-            # Vectorized cleanup
             local["strike"] = pd.to_numeric(local["strike"], errors="coerce")
             local["lastPrice"] = pd.to_numeric(local["lastPrice"], errors="coerce").fillna(0.0)
             local["bid"] = pd.to_numeric(local["bid"], errors="coerce").fillna(0.0)
@@ -591,7 +580,6 @@ def scan_one_symbol(
             if local.empty:
                 continue
 
-            # Rowwise classifications where needed
             local["side"] = [
                 classify_side(f, b, a)
                 for f, b, a in zip(local["fill_est"], local["bid"], local["ask"])
@@ -669,10 +657,6 @@ def scan_one_symbol(
 # Cluster logic
 # -----------------------------------------------------------------------------
 def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Safe, idempotent cluster builder.
-    Cluster is tighter than before: symbol + expiry + type + direction + strike bucket.
-    """
     if df is None or df.empty:
         return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
@@ -699,9 +683,7 @@ def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
         out["cluster_flag"] = ""
         return out
 
-    out["strike_bucket"] = [
-        strike_bucket(k, s) for k, s in zip(out["strike"], out["spot"])
-    ]
+    out["strike_bucket"] = [strike_bucket(k, s) for k, s in zip(out["strike"], out["spot"])]
 
     out["cluster_key"] = (
         out["symbol"].astype(str) + "|" +
@@ -723,7 +705,6 @@ def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     out = out.merge(grp, on="cluster_key", how="left", validate="many_to_one")
-
     out["cluster_contracts"] = out["cluster_contracts"].fillna(1)
     out["cluster_premium"] = out["cluster_premium"].fillna(0.0)
     out["cluster_volume"] = out["cluster_volume"].fillna(0.0)
@@ -884,26 +865,64 @@ def summarize_tape(df: pd.DataFrame) -> str:
     return " ".join([leader, tilt, breadth, tenor, cluster_line])
 
 # -----------------------------------------------------------------------------
+# Schema guards
+# -----------------------------------------------------------------------------
+def ensure_flow_schema(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+    defaults = {
+        "avg_dollar_vol": np.nan,
+        "iv": np.nan,
+        "spread_pct": np.nan,
+        "pct_otm": np.nan,
+        "cluster_flag": "",
+        "cluster_contracts": np.nan,
+        "cluster_premium": np.nan,
+        "cluster_volume": np.nan,
+        "cluster_score": np.nan,
+    }
+    for col, default in defaults.items():
+        if col not in out.columns:
+            out[col] = default
+    return out
+
+# -----------------------------------------------------------------------------
 # Display prep
 # -----------------------------------------------------------------------------
 def prep_display(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
-    out = df.copy()
+    out = ensure_flow_schema(df)
 
-    out["Premium"] = out["premium"].map(human_money)
-    out["Vol"] = out["volume"].map(human_num)
-    out["OI"] = out["open_interest"].map(human_num)
-    out["Vol/OI"] = out["vol_oi"].map(lambda x: f"{x:.2f}x")
-    out["Fill"] = out["fill_est"].map(lambda x: f"{x:.2f}")
-    out["Bid"] = out["bid"].map(lambda x: f"{x:.2f}")
-    out["Ask"] = out["ask"].map(lambda x: f"{x:.2f}")
-    out["Spread %"] = out["spread_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
-    out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}")
-    out["OTM %"] = out["pct_otm"].map(lambda x: f"{x:.1f}%")
-    out["Score"] = out["unusual_score"].map(lambda x: f"{x:.1f}")
-    out["ADV"] = out["avg_dollar_vol"].map(lambda x: "" if pd.isna(x) else human_money(x))
+    if "premium" in out.columns:
+        out["Premium"] = out["premium"].map(human_money)
+    if "volume" in out.columns:
+        out["Vol"] = out["volume"].map(human_num)
+    if "open_interest" in out.columns:
+        out["OI"] = out["open_interest"].map(human_num)
+    if "vol_oi" in out.columns:
+        out["Vol/OI"] = out["vol_oi"].map(lambda x: f"{x:.2f}x")
+    if "fill_est" in out.columns:
+        out["Fill"] = out["fill_est"].map(lambda x: f"{x:.2f}")
+    if "bid" in out.columns:
+        out["Bid"] = out["bid"].map(lambda x: f"{x:.2f}")
+    if "ask" in out.columns:
+        out["Ask"] = out["ask"].map(lambda x: f"{x:.2f}")
+    if "spread_pct" in out.columns:
+        out["Spread %"] = out["spread_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
+    if "iv" in out.columns:
+        out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}")
+    if "pct_otm" in out.columns:
+        out["OTM %"] = out["pct_otm"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
+    if "unusual_score" in out.columns:
+        out["Score"] = out["unusual_score"].map(lambda x: f"{x:.1f}")
+    if "avg_dollar_vol" in out.columns:
+        out["ADV"] = out["avg_dollar_vol"].map(lambda x: "" if pd.isna(x) else human_money(x))
+    else:
+        out["ADV"] = ""
 
     keep = [
         "symbol", "type", "expiry", "dte", "direction", "side", "strike", "spot",
@@ -912,6 +931,72 @@ def prep_display(df: pd.DataFrame) -> pd.DataFrame:
     ]
     keep = [c for c in keep if c in out.columns]
     return out[keep].copy()
+
+# -----------------------------------------------------------------------------
+# Top flow non-table view
+# -----------------------------------------------------------------------------
+def render_top_flow_dashboard(df: pd.DataFrame):
+    if df is None or df.empty:
+        st.info("No top-flow rows to show.")
+        return
+
+    df = ensure_flow_schema(df).copy().head(30)
+    df["label"] = (
+        df["symbol"].astype(str) + " | " +
+        df["type"].astype(str) + " | " +
+        df["expiry"].astype(str) + " | " +
+        df["strike"].round(0).astype(int).astype(str)
+    )
+
+    fig = px.bar(
+        df.sort_values(["premium", "unusual_score"], ascending=[True, True]),
+        x="premium",
+        y="label",
+        color="direction",
+        orientation="h",
+        hover_data={
+            "symbol": True,
+            "type": True,
+            "expiry": True,
+            "strike": ":.2f",
+            "dte": True,
+            "vol_oi": ":.2f",
+            "spread_pct": ":.1f",
+            "unusual_score": ":.1f",
+            "premium": ":,.0f",
+        },
+        title="Top Flow Leaderboard"
+    )
+    fig.update_layout(height=780, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
+    st.plotly_chart(fig, use_container_width=True)
+
+    inspect_choice = st.selectbox(
+        "Inspect contract",
+        options=df["label"].tolist(),
+        index=0,
+        key="top_flow_inspect_choice"
+    )
+    row = df.loc[df["label"] == inspect_choice].iloc[0]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Premium", human_money(row["premium"]))
+    c2.metric("Vol/OI", f"{row['vol_oi']:.2f}x")
+    c3.metric("Score", f"{row['unusual_score']:.1f}")
+    c4.metric("Spread %", "" if pd.isna(row["spread_pct"]) else f"{row['spread_pct']:.1f}%")
+
+    st.markdown(
+        f"""
+        **{row['symbol']} {row['type']} {int(round(row['strike']))} {row['expiry']}**
+
+        Direction: **{row['direction']}**  
+        Side estimate: **{row['side']}**  
+        DTE: **{int(row['dte'])}**  
+        Spot: **{row['spot']:.2f}**  
+        Moneyness: **{row['moneyness']}**  
+        OTM distance: **{row['pct_otm']:.1f}%**  
+        Cluster flag: **{row['cluster_flag'] if str(row['cluster_flag']).strip() else 'None'}**
+        """
+    )
 
 # -----------------------------------------------------------------------------
 # Session-state helpers
@@ -977,7 +1062,7 @@ with st.sidebar:
     run_scan = st.button("Run Live Scan", use_container_width=True, type="primary")
 
     st.markdown(
-        '<div class="small-note">The live scan only runs when you click the button. Filtering, ranking, and browsing operate off the most recent completed raw scan.</div>',
+        '<div class="small-note">The live scan only runs when you click the button. Filtering and browsing operate off the most recent completed raw scan. Cached frames from older versions are now schema-safe.</div>',
         unsafe_allow_html=True,
     )
 
@@ -986,7 +1071,6 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 universe = fetch_sp500_from_wikipedia()
 symbols = universe["symbol"].dropna().astype(str).map(normalize_symbol).unique().tolist()
-
 spot_snapshot = fetch_spot_snapshot(symbols)
 
 # -----------------------------------------------------------------------------
@@ -994,7 +1078,6 @@ spot_snapshot = fetch_spot_snapshot(symbols)
 # -----------------------------------------------------------------------------
 if run_scan:
     scan_started = time.time()
-    live_scan_used = True
 
     with st.spinner(f"Running live options scan across {len(symbols):,} S&P 500 symbols..."):
         try:
@@ -1016,9 +1099,7 @@ if run_scan:
             st.warning(f"Live scan hit an error: {e}")
             flow_live = pd.DataFrame()
             diags_live = pd.DataFrame()
-            live_scan_used = False
 
-    # Health check
     success_ratio = 0.0
     raw_contracts = 0
     if diags_live is not None and not diags_live.empty:
@@ -1038,7 +1119,7 @@ if run_scan:
         cached_meta = load_json(LAST_GOOD_META)
 
         if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
-            st.session_state["flow_raw"] = build_cluster_flags(cached_flow.copy())
+            st.session_state["flow_raw"] = ensure_flow_schema(build_cluster_flags(cached_flow.copy()))
             st.session_state["diags_raw"] = cached_diags if isinstance(cached_diags, pd.DataFrame) else pd.DataFrame()
             st.session_state["scan_meta"] = {
                 "mode": "Cached fallback",
@@ -1050,7 +1131,7 @@ if run_scan:
             st.session_state["scan_ran"] = True
             st.warning("Live scan looked degraded, so the app loaded the last-good cached snapshot.")
         else:
-            st.session_state["flow_raw"] = flow_live
+            st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
             st.session_state["diags_raw"] = diags_live
             st.session_state["scan_meta"] = {
                 "mode": "Live",
@@ -1061,7 +1142,7 @@ if run_scan:
             }
             st.session_state["scan_ran"] = True
     else:
-        st.session_state["flow_raw"] = flow_live
+        st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
         st.session_state["diags_raw"] = diags_live
         st.session_state["scan_meta"] = {
             "mode": "Live",
@@ -1087,7 +1168,7 @@ if run_scan:
             )
 
 # -----------------------------------------------------------------------------
-# If no live run yet, try loading cache automatically
+# Startup load from cache
 # -----------------------------------------------------------------------------
 if not st.session_state["scan_ran"]:
     cached_flow = load_pickle(LAST_GOOD_SCAN)
@@ -1095,7 +1176,7 @@ if not st.session_state["scan_ran"]:
     cached_meta = load_json(LAST_GOOD_META)
 
     if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
-        st.session_state["flow_raw"] = build_cluster_flags(cached_flow.copy())
+        st.session_state["flow_raw"] = ensure_flow_schema(build_cluster_flags(cached_flow.copy()))
         st.session_state["diags_raw"] = cached_diags if isinstance(cached_diags, pd.DataFrame) else pd.DataFrame()
         st.session_state["scan_meta"] = {
             "mode": "Cached startup snapshot",
@@ -1106,7 +1187,7 @@ if not st.session_state["scan_ran"]:
         }
 
 # -----------------------------------------------------------------------------
-# Main analysis frame from stored raw scan
+# Main analysis frame
 # -----------------------------------------------------------------------------
 flow = st.session_state["flow_raw"]
 diags = st.session_state["diags_raw"]
@@ -1118,10 +1199,10 @@ if diags is None:
     diags = pd.DataFrame()
 
 if flow is not None and not flow.empty:
-    flow = build_cluster_flags(flow.copy())
+    flow = ensure_flow_schema(build_cluster_flags(flow.copy()))
 
 # -----------------------------------------------------------------------------
-# Header metrics
+# Metrics
 # -----------------------------------------------------------------------------
 symbols_requested = int(len(symbols))
 symbols_completed = int(diags["symbol"].nunique()) if not diags.empty and "symbol" in diags.columns else 0
@@ -1166,7 +1247,7 @@ if flow.empty:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# Secondary derived tables
+# Derived views
 # -----------------------------------------------------------------------------
 flow = flow.copy()
 flow["rank"] = np.arange(1, len(flow) + 1)
@@ -1177,25 +1258,35 @@ bearish = flow[flow["direction"] == "BEARISH"].nlargest(top_n, ["unusual_score",
 zero_dte = flow[flow["dte"] == 0].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
 clusters_only = flow[flow["cluster_flag"] == "CLUSTER"].nlargest(top_n, ["cluster_premium", "unusual_score", "premium"])
 
+bullish_prem_by_symbol = (
+    flow.loc[flow["direction"] == "BULLISH"]
+    .groupby("symbol")["premium"]
+    .sum()
+)
+bearish_prem_by_symbol = (
+    flow.loc[flow["direction"] == "BEARISH"]
+    .groupby("symbol")["premium"]
+    .sum()
+)
+
 ticker_summary = (
     flow.groupby("symbol", as_index=False)
     .agg(
         rows=("symbol", "size"),
         total_premium=("premium", "sum"),
-        bullish_premium=("premium", lambda s: float(flow.loc[s.index][flow.loc[s.index, "direction"] == "BULLISH"]["premium"].sum())),
-        bearish_premium=("premium", lambda s: float(flow.loc[s.index][flow.loc[s.index, "direction"] == "BEARISH"]["premium"].sum())),
         avg_score=("unusual_score", "mean"),
         max_score=("unusual_score", "max"),
         avg_dte=("dte", "mean"),
     )
 )
 
+ticker_summary["bullish_premium"] = ticker_summary["symbol"].map(bullish_prem_by_symbol).fillna(0.0)
+ticker_summary["bearish_premium"] = ticker_summary["symbol"].map(bearish_prem_by_symbol).fillna(0.0)
 ticker_summary["net_premium"] = ticker_summary["bullish_premium"] - ticker_summary["bearish_premium"]
 ticker_summary["flow_bias"] = np.where(
     ticker_summary["net_premium"] > 0, "BULLISH",
     np.where(ticker_summary["net_premium"] < 0, "BEARISH", "BALANCED")
 )
-
 ticker_summary = ticker_summary.sort_values(
     ["total_premium", "max_score", "rows"],
     ascending=[False, False, False]
@@ -1281,6 +1372,12 @@ with heat_left:
     )
     hm = hm.reindex(["0DTE", "1-7D", "8-30D", "31-60D", "61-120D", "120D+"], fill_value=0.0)
 
+    # Ensure columns exist in stable order
+    for col in ["ITM", "ATM", "OTM"]:
+        if col not in hm.columns:
+            hm[col] = 0.0
+    hm = hm[["ITM", "ATM", "OTM"]]
+
     fig_heat = go.Figure(
         data=go.Heatmap(
             z=hm.values,
@@ -1298,31 +1395,31 @@ with heat_left:
     st.plotly_chart(fig_heat, use_container_width=True)
 
 with heat_right:
-    top_clusters = (
+    cluster_roll = (
         flow[flow["cluster_flag"] == "CLUSTER"]
-        .groupby(["symbol", "expiry", "type", "direction", "strike_bucket"], as_index=False)
+        .groupby(["symbol", "direction"], as_index=False)
         .agg(
             cluster_premium=("premium", "sum"),
-            cluster_volume=("volume", "sum"),
-            cluster_contracts=("contract_symbol", "count"),
-            cluster_score=("unusual_score", "mean"),
+            cluster_rows=("symbol", "size"),
+            avg_score=("unusual_score", "mean"),
         )
-        .sort_values(["cluster_premium", "cluster_score"], ascending=[False, False])
+        .sort_values(["cluster_premium", "avg_score"], ascending=[False, False])
         .head(20)
     )
 
-    if top_clusters.empty:
-        st.info("No directional strike-band clusters passed the current thresholds.")
+    if cluster_roll.empty:
+        st.info("No directional clusters passed the current thresholds.")
     else:
         fig_cluster = px.bar(
-            top_clusters.head(15),
-            x="symbol",
-            y="cluster_premium",
+            cluster_roll.sort_values("cluster_premium", ascending=True),
+            x="cluster_premium",
+            y="symbol",
             color="direction",
-            hover_data=["expiry", "type", "strike_bucket", "cluster_contracts", "cluster_volume", "cluster_score"],
-            title="Top Directional Clusters"
+            orientation="h",
+            hover_data={"cluster_rows": True, "avg_score": ":.1f", "cluster_premium": ":,.0f"},
+            title="Cluster Concentration by Ticker"
         )
-        fig_cluster.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20))
+        fig_cluster.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
         st.plotly_chart(fig_cluster, use_container_width=True)
 
 # -----------------------------------------------------------------------------
@@ -1333,7 +1430,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
 )
 
 with tab1:
-    st.dataframe(prep_display(overall), use_container_width=True, hide_index=True)
+    render_top_flow_dashboard(overall)
 
 with tab2:
     st.dataframe(prep_display(bullish), use_container_width=True, hide_index=True)
@@ -1351,7 +1448,37 @@ with tab5:
     if clusters_only.empty:
         st.info("No cluster anomalies passed the current filters.")
     else:
-        st.dataframe(prep_display(clusters_only), use_container_width=True, hide_index=True)
+        cluster_detail = (
+            clusters_only.groupby(["symbol", "expiry", "type", "direction", "strike_bucket"], as_index=False)
+            .agg(
+                cluster_premium=("premium", "sum"),
+                cluster_volume=("volume", "sum"),
+                cluster_contracts=("contract_symbol", "count"),
+                cluster_score=("unusual_score", "mean"),
+            )
+            .sort_values(["cluster_premium", "cluster_score"], ascending=[False, False])
+            .head(50)
+        )
+
+        fig_cluster_detail = px.scatter(
+            cluster_detail,
+            x="cluster_contracts",
+            y="cluster_premium",
+            size="cluster_score",
+            color="direction",
+            hover_data={
+                "symbol": True,
+                "expiry": True,
+                "type": True,
+                "strike_bucket": True,
+                "cluster_volume": ":,.0f",
+                "cluster_premium": ":,.0f",
+                "cluster_score": ":.1f",
+            },
+            title="Cluster Detail Map"
+        )
+        fig_cluster_detail.update_layout(height=520, margin=dict(l=20, r=20, t=55, b=20))
+        st.plotly_chart(fig_cluster_detail, use_container_width=True)
 
 with tab6:
     display_ticker = ticker_summary.copy()
@@ -1363,14 +1490,36 @@ with tab6:
     display_ticker["Max Score"] = display_ticker["max_score"].map(lambda x: f"{x:.1f}")
     display_ticker["Avg DTE"] = display_ticker["avg_dte"].map(lambda x: f"{x:.1f}")
 
-    st.dataframe(
-        display_ticker[[
-            "symbol", "rows", "Total Premium", "Bullish Premium", "Bearish Premium",
-            "Net Premium", "flow_bias", "Avg Score", "Max Score", "Avg DTE"
-        ]].head(300),
-        use_container_width=True,
-        hide_index=True
-    )
+    left_ticker, right_ticker = st.columns([1.15, 1.0])
+
+    with left_ticker:
+        fig_ticker = px.bar(
+            ticker_summary.head(25).sort_values("total_premium", ascending=True),
+            x="total_premium",
+            y="symbol",
+            color="flow_bias",
+            orientation="h",
+            hover_data={
+                "rows": True,
+                "bullish_premium": ":,.0f",
+                "bearish_premium": ":,.0f",
+                "avg_score": ":.1f",
+                "max_score": ":.1f",
+            },
+            title="Top Tickers by Total Premium"
+        )
+        fig_ticker.update_layout(height=760, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
+        st.plotly_chart(fig_ticker, use_container_width=True)
+
+    with right_ticker:
+        st.dataframe(
+            display_ticker[[
+                "symbol", "rows", "Total Premium", "Bullish Premium", "Bearish Premium",
+                "Net Premium", "flow_bias", "Avg Score", "Max Score", "Avg DTE"
+            ]].head(100),
+            use_container_width=True,
+            hide_index=True
+        )
 
     ticker_pick = st.selectbox("Inspect ticker", options=ticker_summary["symbol"].tolist(), index=0)
     ticker_rows = flow[flow["symbol"] == ticker_pick].nlargest(200, ["unusual_score", "premium", "vol_oi"])
@@ -1392,4 +1541,4 @@ with tab7:
             diag_show = diag_show.sort_values(["errors", "contracts_seen", "expiries_seen"], ascending=[False, False, False])
         st.dataframe(diag_show, use_container_width=True, hide_index=True)
 
-st.caption("The live scan is explicit, cluster logic is rebuild-safe, and the anomaly board is built for public-data triage rather than pretending to be exchange-level tape.")
+st.caption("Cached frames from older runs are now schema-safe, the ADV KeyError is fixed, and the top-flow table has been replaced with a chart-driven inspector.")
