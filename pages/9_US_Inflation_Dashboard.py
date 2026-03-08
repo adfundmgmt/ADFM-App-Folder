@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import StringIO
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
@@ -184,27 +184,109 @@ def build_custom_month_range(
     return start, end
 
 
+def fetch_url_text(url: str, timeout: int = 20) -> str:
+    req = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/csv,text/plain,application/octet-stream,*/*",
+        },
+    )
+    with urlopen(req, timeout=timeout) as response:
+        raw = response.read()
+        return raw.decode("utf-8", errors="replace")
+
+
+def detect_fred_error_payload(text: str, series_id: str) -> None:
+    preview = text[:500].lower()
+    if "<html" in preview or "<!doctype html" in preview:
+        raise RuntimeError(
+            f"FRED returned HTML instead of CSV for {series_id}. "
+            f"This usually means a temporary upstream error or rate-limit page."
+        )
+    if "error" in preview and "date" not in preview:
+        raise RuntimeError(
+            f"FRED returned an error payload instead of data for {series_id}."
+        )
+
+
+def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
+    original_cols = list(df.columns)
+    normalized_map = {c: str(c).strip() for c in df.columns}
+    df = df.rename(columns=normalized_map)
+
+    lower_map = {str(c).strip().lower(): c for c in df.columns}
+
+    date_col = None
+    for candidate in ["date", "observation_date"]:
+        if candidate in lower_map:
+            date_col = lower_map[candidate]
+            break
+
+    value_col = None
+    for candidate in [
+        series_id.lower(),
+        "value",
+        "observation_value",
+        "cpi",
+        "usrec",
+    ]:
+        if candidate in lower_map:
+            value_col = lower_map[candidate]
+            break
+
+    if value_col is None:
+        non_date_cols = [c for c in df.columns if c != date_col]
+        if len(non_date_cols) == 1:
+            value_col = non_date_cols[0]
+
+    if date_col is None or value_col is None:
+        raise ValueError(
+            f"Unexpected FRED response format for {series_id}. "
+            f"Columns received: {original_cols}"
+        )
+
+    out = df[[date_col, value_col]].copy()
+    out.columns = ["DATE", series_id]
+    return out
+
+
 def fetch_fred_csv(series_id: str) -> pd.DataFrame:
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    try:
-        with urlopen(url, timeout=20) as response:
-            csv_data = response.read().decode("utf-8")
-        df = pd.read_csv(StringIO(csv_data))
-        return df
-    except (URLError, HTTPError) as e:
-        raise RuntimeError(f"Failed to fetch FRED series {series_id}: {e}") from e
-    except Exception as e:
-        raise RuntimeError(f"Unexpected error fetching FRED series {series_id}: {e}") from e
+    urls = [
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={START_DATE_FULL}&id={series_id}",
+    ]
+
+    last_error = None
+
+    for url in urls:
+        try:
+            text = fetch_url_text(url, timeout=20)
+            detect_fred_error_payload(text, series_id)
+
+            df = pd.read_csv(StringIO(text))
+            if df.empty:
+                raise RuntimeError(f"Empty CSV returned for {series_id}")
+
+            df = normalize_fred_columns(df, series_id)
+            return df
+
+        except (URLError, HTTPError) as e:
+            last_error = f"Network error for {series_id}: {e}"
+        except pd.errors.EmptyDataError:
+            last_error = f"Empty CSV payload for {series_id}"
+        except Exception as e:
+            last_error = str(e)
+
+    raise RuntimeError(f"Failed to fetch FRED series {series_id}: {last_error}")
 
 
 def load_fred_series(series_id: str, start: str) -> pd.Series:
     df = fetch_fred_csv(series_id)
 
-    if "DATE" not in df.columns or series_id not in df.columns:
-        raise ValueError(f"Unexpected FRED response format for {series_id}")
-
     df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
     df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
+
     df = df.dropna(subset=["DATE"]).copy()
     df = df[df["DATE"] >= pd.Timestamp(start)].copy()
 
@@ -266,7 +348,7 @@ def filter_window(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Times
 
 
 def get_recession_periods(flag: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    f = flag.dropna().fillna(0).astype(int)
+    f = flag.fillna(0).astype(int)
     if f.empty:
         return []
 
