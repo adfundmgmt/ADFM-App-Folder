@@ -26,7 +26,7 @@ DEFAULT_EASE_BP = 40
 DEFAULT_TIGHT_BP = -40
 
 REQ_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/2.0)"
+    "User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/2.1)"
 }
 
 # ── Streamlit Setup ──────────────────────────────────────
@@ -82,7 +82,6 @@ def fetch_fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) ->
     if not text:
         raise ValueError(f"Empty FRED response for {series_id}")
 
-    # Guard against HTML or non-CSV responses
     lower_text = text[:200].lower()
     if lower_text.startswith("<!doctype html") or lower_text.startswith("<html"):
         raise ValueError(f"FRED returned HTML instead of CSV for {series_id}")
@@ -90,25 +89,30 @@ def fetch_fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) ->
     df = pd.read_csv(io.StringIO(text))
     df.columns = [str(c).strip() for c in df.columns]
 
-    if "DATE" not in df.columns:
+    date_col = None
+    for candidate in ["DATE", "observation_date", "date"]:
+        if candidate in df.columns:
+            date_col = candidate
+            break
+
+    if date_col is None:
         raise ValueError(
-            f"FRED response missing DATE column for {series_id}. Columns: {df.columns.tolist()}"
+            f"FRED response missing date column for {series_id}. Columns: {df.columns.tolist()}"
         )
 
-    # Prefer exact series column, otherwise use the first non-DATE column
     value_col = series_id if series_id in df.columns else None
     if value_col is None:
-        non_date_cols = [c for c in df.columns if c != "DATE"]
+        non_date_cols = [c for c in df.columns if c != date_col]
         if not non_date_cols:
             raise ValueError(
                 f"FRED response missing value column for {series_id}. Columns: {df.columns.tolist()}"
             )
         value_col = non_date_cols[0]
 
-    df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
 
-    df = df.dropna(subset=["DATE"]).set_index("DATE").sort_index()
+    df = df.dropna(subset=[date_col]).set_index(date_col).sort_index()
     s = df[value_col].ffill().dropna()
     s.name = series_id
 
@@ -187,7 +191,6 @@ def build_yield_dataframe(
     if df.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
 
-    # Inverted real-yield momentum in bp
     mom = -(df["Real"] - df["Real"].shift(win)) * 100.0
     mom = mom.dropna()
 
@@ -370,7 +373,6 @@ fig = make_subplots(
     subplot_titles=subplot_titles,
 )
 
-# Top panel
 fig.add_trace(
     go.Scatter(
         x=df.index,
@@ -397,7 +399,6 @@ fig.add_trace(
     col=1,
 )
 
-# Momentum panel
 fig.add_trace(
     go.Scatter(
         x=mom.index,
@@ -436,7 +437,6 @@ for level, label in [
         font=dict(size=10, color="rgba(80,80,80,0.9)"),
     )
 
-# Regime shading
 if show_regime:
     easing_mask = mom > ease_bp
     tightening_mask = mom < tight_bp
@@ -461,7 +461,6 @@ if show_regime:
             col=1,
         )
 
-# Spread panel
 if show_spread:
     fig.add_trace(
         go.Scatter(
@@ -476,7 +475,6 @@ if show_spread:
         col=1,
     )
 
-# Overlays
 if show_recession:
     recession_bands = fetch_recession_bands(df.index.min(), df.index.max())
     for rs, re in recession_bands:
@@ -508,7 +506,6 @@ if show_cpi:
                 line_color="rgba(245,158,11,0.25)",
             )
 
-# Axis and layout
 fig.update_yaxes(title_text="Yield (%)", tickformat=".2f", row=1, col=1)
 fig.update_yaxes(title_text="bp", tickformat=".0f", row=2, col=1)
 if show_spread:
