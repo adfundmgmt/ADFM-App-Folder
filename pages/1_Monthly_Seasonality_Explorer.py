@@ -2,7 +2,7 @@ import datetime as dt
 import io
 import time
 import warnings
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,7 +22,7 @@ except ImportError:
     pdr = None
 
 FALLBACK_MAP = {"^SPX": "SP500", "^DJI": "DJIA", "^IXIC": "NASDAQCOM"}
-MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 # -------------------------- Streamlit UI -------------------------- #
 st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
@@ -44,12 +44,74 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+st.markdown(
+    """
+    <style>
+    .adfm-card-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 0.35rem 0 0.85rem 0;
+    }
+    .adfm-card {
+        border: 1px solid #e6e6e6;
+        border-radius: 12px;
+        background: #fafaf8;
+        padding: 12px 14px;
+    }
+    .adfm-card-label {
+        font-size: 0.78rem;
+        color: #666666;
+        margin-bottom: 6px;
+        line-height: 1.15;
+    }
+    .adfm-card-value {
+        font-size: 1.12rem;
+        font-weight: 700;
+        color: #111111;
+        line-height: 1.15;
+    }
+    .adfm-card-sub {
+        font-size: 0.80rem;
+        color: #666666;
+        margin-top: 6px;
+        line-height: 1.25;
+    }
+    .adfm-note {
+        border: 1px solid #e6e6e6;
+        border-radius: 12px;
+        background: #fcfcfb;
+        padding: 14px 16px;
+        margin: 0.35rem 0 1rem 0;
+        line-height: 1.55;
+        color: #161616;
+    }
+    .adfm-note-title {
+        font-size: 0.80rem;
+        color: #666666;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        margin-bottom: 7px;
+    }
+    @media (max-width: 900px) {
+        .adfm-card-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # -------------------------- Data helpers -------------------------- #
 def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> Optional[pd.Series]:
     for n in range(retries):
         df = yf.download(symbol, start=start, end=end, auto_adjust=True, progress=False, threads=False)
         if not df.empty and "Close" in df:
-            return df["Close"]
+            ser = df["Close"]
+            if isinstance(ser, pd.DataFrame):
+                ser = ser.iloc[:, 0]
+            return pd.to_numeric(ser, errors="coerce").dropna()
         time.sleep(2 * (n + 1))
     return None
 
@@ -58,7 +120,6 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     symbol = symbol.strip().upper()
     end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
 
-    # pad start to capture prior month-end
     start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
     start_pad = start_pad_dt.strftime("%Y-%m-%d")
 
@@ -76,7 +137,8 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
             fred_tk = FALLBACK_MAP[symbol]
             df_fred = pdr.DataReader(fred_tk, "fred", start_pad, end)
             if df_fred is not None and not df_fred.empty and fred_tk in df_fred:
-                return df_fred[fred_tk].rename("Close")
+                ser = pd.to_numeric(df_fred[fred_tk], errors="coerce").dropna()
+                return ser.rename("Close")
         except Exception:
             pass
     return None
@@ -90,7 +152,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
 
     total_ret (%) = (last / prev_eom - 1)
     h1_ret   (%)  = (mid_close / prev_eom - 1)
-    h2_ret   (%)  = total_ret - h1_ret   (second-half contribution to total)
+    h2_ret   (%)  = total_ret - h1_ret
     """
     if prices.empty:
         return pd.DataFrame(columns=["total_ret", "h1_ret", "h2_ret", "year", "month"])
@@ -120,8 +182,8 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
         mid_close = float(month_days.iloc[mid_idx])
 
         tot = (last / prev_eom - 1.0) * 100.0
-        h1  = (mid_close / prev_eom - 1.0) * 100.0
-        h2  = tot - h1
+        h1 = (mid_close / prev_eom - 1.0) * 100.0
+        h2 = tot - h1
 
         out_rows.append(
             {
@@ -142,10 +204,6 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     return df
 
 def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.DataFrame:
-    """
-    Compute all seasonality stats from the same monthly set produced by _intra_month_halves,
-    so that mean_total == mean_h1 + mean_h2 (up to rounding).
-    """
     halves = _intra_month_halves(prices)
     stats = pd.DataFrame(index=pd.Index(range(1, 13), name="month"))
     stats["label"] = MONTH_LABELS
@@ -168,13 +226,13 @@ def seasonal_stats(prices: pd.Series, start_year: int, end_year: int) -> pd.Data
 
     grouped = halves.groupby("month")
 
-    stats["hit_rate"]       = grouped["total_ret"].apply(lambda x: (x > 0).mean() * 100)
-    stats["min_ret"]        = grouped["total_ret"].min()
-    stats["max_ret"]        = grouped["total_ret"].max()
+    stats["hit_rate"] = grouped["total_ret"].apply(lambda x: (x > 0).mean() * 100)
+    stats["min_ret"] = grouped["total_ret"].min()
+    stats["max_ret"] = grouped["total_ret"].max()
     stats["years_observed"] = grouped["year"].nunique()
-    stats["mean_h1"]        = grouped["h1_ret"].mean()
-    stats["mean_h2"]        = grouped["h2_ret"].mean()
-    stats["mean_total"]     = grouped["total_ret"].mean()
+    stats["mean_h1"] = grouped["h1_ret"].mean()
+    stats["mean_h2"] = grouped["h2_ret"].mean()
+    stats["mean_total"] = grouped["total_ret"].mean()
 
     return stats
 
@@ -196,8 +254,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     labels = plot_df["label"].tolist()
     mean_h1 = plot_df["mean_h1"].to_numpy(float)
     mean_h2 = plot_df["mean_h2"].to_numpy(float)
-    totals  = plot_df["mean_total"].to_numpy(float)
-    hit     = plot_df["hit_rate"].to_numpy(float)
+    totals = plot_df["mean_total"].to_numpy(float)
+    hit = plot_df["hit_rate"].to_numpy(float)
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
 
@@ -312,14 +370,6 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
 def _month_paths_prev_eom_equal_weight(
     prices: pd.Series, month_int: int, start_year: int, end_year: int
 ) -> Tuple[pd.DataFrame, pd.Series]:
-    """
-    Build per-year cumulative return paths within a month, anchored to prior month-end.
-    Key detail: months have different trading-day counts across years.
-    To match the first panel's equal-weight monthly mean, we:
-      - align all years to a common 0..max_days grid (Day 0 = 0%)
-      - forward-fill each year's last available value to max_days
-    This ensures the curve endpoint equals the equal-weight mean of each year's month total return.
-    """
     px = prices[(prices.index.year >= start_year) & (prices.index.year <= end_year)].copy()
     if px.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
@@ -338,12 +388,8 @@ def _month_paths_prev_eom_equal_weight(
             continue
 
         prev_eom = float(prev_month.iloc[-1])
-
-        # cumulative return from prior month-end, in %
         cum_ret = (m / prev_eom - 1.0) * 100.0
         cum_ret.index = pd.RangeIndex(start=1, stop=1 + len(cum_ret), step=1)
-
-        # insert Day 0 = 0%
         cum_ret.loc[0] = 0.0
         cum_ret = cum_ret.sort_index()
         raw_paths[y] = cum_ret
@@ -376,7 +422,6 @@ def _avg_calendar_day_for_ordinal(
         return None
     return int(round(np.mean(days)))
 
-# ---- Robust trading-day ordinal (handles weekends/holidays/out-of-range) ---- #
 def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> int:
     if month_index.empty:
         return 1
@@ -385,13 +430,313 @@ def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> i
     ord_ = int(np.searchsorted(idx.values, np.datetime64(d), side="right"))
     return max(1, min(ord_, len(idx)))
 
+def build_intra_month_summary(
+    prices: pd.Series,
+    month_int: int,
+    start_year: int,
+    end_year: int,
+    symbol_shown: str,
+) -> Dict[str, Any]:
+    df_sel, avg_sel = _month_paths_prev_eom_equal_weight(prices, month_int, start_year, end_year)
+
+    summary: Dict[str, Any] = {
+        "ok": False,
+        "symbol": symbol_shown,
+        "month_int": month_int,
+        "month_label": MONTH_LABELS[month_int - 1],
+        "sample_years": 0,
+        "avg_month_end": np.nan,
+        "avg_low_day": None,
+        "avg_low_val": np.nan,
+        "avg_low_dom": None,
+        "avg_high_day": None,
+        "avg_high_val": np.nan,
+        "avg_high_dom": None,
+        "day5_val": np.nan,
+        "day10_val": np.nan,
+        "day15_val": np.nan,
+        "day20_val": np.nan,
+        "front_loaded": None,
+        "recovery_strength": np.nan,
+        "current_year": pd.Timestamp.today().year,
+        "current_year_month_available": False,
+        "today_ord": None,
+        "today_avg_level": np.nan,
+        "today_cur_level": np.nan,
+        "live_gap_vs_avg": np.nan,
+        "fwd_mean": np.nan,
+        "fwd_median": np.nan,
+        "fwd_hit_rate": np.nan,
+        "fwd_n": 0,
+        "current_year_end": np.nan,
+        "current_vs_hist_end_gap": np.nan,
+        "avg_path": avg_sel,
+        "df_paths": df_sel,
+    }
+
+    if avg_sel.empty or df_sel.empty:
+        return summary
+
+    summary["ok"] = True
+    summary["sample_years"] = int(df_sel.shape[1])
+    summary["avg_month_end"] = float(avg_sel.iloc[-1])
+
+    avg_ex = avg_sel.copy()
+    if 0 in avg_ex.index:
+        avg_ex = avg_ex.drop(index=0)
+
+    if not avg_ex.empty:
+        low_idx = int(avg_ex.idxmin())
+        high_idx = int(avg_ex.idxmax())
+        summary["avg_low_day"] = low_idx
+        summary["avg_low_val"] = float(avg_ex.loc[low_idx])
+        summary["avg_low_dom"] = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
+        summary["avg_high_day"] = high_idx
+        summary["avg_high_val"] = float(avg_ex.loc[high_idx])
+        summary["avg_high_dom"] = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
+
+    for k in [5, 10, 15, 20]:
+        if k in avg_sel.index:
+            summary[f"day{k}_val"] = float(avg_sel.loc[k])
+
+    d10 = summary["day10_val"]
+    month_end = summary["avg_month_end"]
+    summary["front_loaded"] = bool(pd.notna(d10) and pd.notna(month_end) and abs(d10) >= 0.6 * abs(month_end))
+    if summary["avg_low_day"] is not None and pd.notna(month_end):
+        summary["recovery_strength"] = float(month_end - summary["avg_low_val"])
+
+    today = pd.Timestamp.today()
+    cur_year = today.year
+    m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
+    prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & (
+        prices.index.month == (month_int - 1 if month_int > 1 else 12)
+    )
+    prev_month = prices.loc[prev_mask]
+
+    if not m.empty and not prev_month.empty:
+        summary["current_year_month_available"] = True
+        prev_eom = float(prev_month.iloc[-1])
+        cur_cum = (m / prev_eom - 1.0) * 100.0
+        cur_cum.index = pd.RangeIndex(start=1, stop=1 + len(cur_cum), step=1)
+        cur_cum.loc[0] = 0.0
+        cur_cum = cur_cum.sort_index()
+
+        summary["current_year_end"] = float(cur_cum.iloc[-1])
+        if pd.notna(summary["avg_month_end"]):
+            summary["current_vs_hist_end_gap"] = float(summary["current_year_end"] - summary["avg_month_end"])
+
+        if today.month == month_int:
+            tday_ord = _trading_day_ordinal(m.index, today)
+            summary["today_ord"] = tday_ord
+
+            if tday_ord in avg_sel.index:
+                summary["today_avg_level"] = float(avg_sel.loc[tday_ord])
+            if tday_ord in cur_cum.index:
+                summary["today_cur_level"] = float(cur_cum.loc[tday_ord])
+
+            if pd.notna(summary["today_avg_level"]) and pd.notna(summary["today_cur_level"]):
+                summary["live_gap_vs_avg"] = float(summary["today_cur_level"] - summary["today_avg_level"])
+
+            if tday_ord in df_sel.index:
+                lvl_t = df_sel.loc[tday_ord]
+                lvl_end = df_sel.loc[df_sel.index.max()]
+                fwd = (lvl_end - lvl_t).dropna()
+                if not fwd.empty:
+                    summary["fwd_mean"] = float(fwd.mean())
+                    summary["fwd_median"] = float(fwd.median())
+                    summary["fwd_hit_rate"] = float((fwd > 0).mean() * 100.0)
+                    summary["fwd_n"] = int(fwd.shape[0])
+
+    return summary
+
+def _signed_html_text(x: float, decimals: int = 2, suffix: str = "%") -> str:
+    if pd.isna(x):
+        return "n/a"
+    color = "#1f7a4f" if x > 0 else "#8b1e1a" if x < 0 else "#555555"
+    return f"<span style='color:{color}'>{x:+.{decimals}f}{suffix}</span>"
+
+def render_intra_month_cards(summary: Dict[str, Any]) -> None:
+    if not summary.get("ok", False):
+        return
+
+    month_label = summary["month_label"]
+    low_day = summary["avg_low_day"]
+    high_day = summary["avg_high_day"]
+    low_dom = summary["avg_low_dom"]
+    high_dom = summary["avg_high_dom"]
+
+    low_txt = "n/a"
+    if low_day is not None and pd.notna(summary["avg_low_val"]):
+        low_txt = f"Day {low_day} | {summary['avg_low_val']:+.2f}%"
+        if low_dom is not None:
+            low_txt += f"<div class='adfm-card-sub'>~ {month_label} {low_dom}</div>"
+        else:
+            low_txt += "<div class='adfm-card-sub'>Average trough</div>"
+
+    high_txt = "n/a"
+    if high_day is not None and pd.notna(summary["avg_high_val"]):
+        high_txt = f"Day {high_day} | {summary['avg_high_val']:+.2f}%"
+        if high_dom is not None:
+            high_txt += f"<div class='adfm-card-sub'>~ {month_label} {high_dom}</div>"
+        else:
+            high_txt += "<div class='adfm-card-sub'>Average peak</div>"
+
+    if summary.get("today_ord") is not None and summary.get("fwd_n", 0) > 0:
+        live_title = f"From Day {summary['today_ord']} to month-end"
+        live_val = f"{summary['fwd_mean']:+.2f}%"
+        live_sub = (
+            f"Median {summary['fwd_median']:+.2f}% | "
+            f"Hit rate {summary['fwd_hit_rate']:.0f}% | "
+            f"N={summary['fwd_n']}"
+        )
+    else:
+        live_title = "Path profile"
+        if summary.get("front_loaded") is True:
+            live_val = "Front-half weighted"
+            live_sub = "A large share of the month is usually realized by Day 10."
+        elif summary.get("front_loaded") is False:
+            live_val = "Back-half weighted"
+            live_sub = "A meaningful share of the move tends to arrive after Day 10."
+        else:
+            live_val = "n/a"
+            live_sub = "Not enough data."
+
+    html = f"""
+    <div class="adfm-card-row">
+        <div class="adfm-card">
+            <div class="adfm-card-label">Average month-end return</div>
+            <div class="adfm-card-value">{summary['avg_month_end']:+.2f}%</div>
+            <div class="adfm-card-sub">Equal-weighted across {summary['sample_years']} years</div>
+        </div>
+        <div class="adfm-card">
+            <div class="adfm-card-label">Average trough</div>
+            <div class="adfm-card-value">{low_txt}</div>
+        </div>
+        <div class="adfm-card">
+            <div class="adfm-card-label">Average peak</div>
+            <div class="adfm-card-value">{high_txt}</div>
+        </div>
+        <div class="adfm-card">
+            <div class="adfm-card-label">{live_title}</div>
+            <div class="adfm-card-value">{live_val}</div>
+            <div class="adfm-card-sub">{live_sub}</div>
+        </div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_intra_month_commentary(summary: Dict[str, Any]) -> None:
+    if not summary.get("ok", False):
+        return
+
+    month_label = summary["month_label"]
+    avg_end = summary["avg_month_end"]
+    low_day = summary["avg_low_day"]
+    high_day = summary["avg_high_day"]
+    low_val = summary["avg_low_val"]
+    high_val = summary["avg_high_val"]
+    d5 = summary["day5_val"]
+    d10 = summary["day10_val"]
+    d15 = summary["day15_val"]
+    d20 = summary["day20_val"]
+    recovery = summary["recovery_strength"]
+
+    if pd.isna(d5):
+        open_shape = f"{month_label} does not have enough history in the chosen window to say much about the opening stretch."
+    elif d5 > 0.20:
+        open_shape = f"{month_label} has historically opened firm, with the average path already at {d5:+.2f}% by Day 5."
+    elif d5 < -0.20:
+        open_shape = f"{month_label} has historically opened soft, with the average path at {d5:+.2f}% by Day 5."
+    else:
+        open_shape = f"{month_label} has historically opened close to flat, with the average path at {d5:+.2f}% by Day 5."
+
+    if low_day is not None and high_day is not None:
+        if low_day < high_day and pd.notna(recovery) and recovery > 0.25:
+            shape_core = (
+                f"The average tape usually finds its low around Day {low_day} at {low_val:+.2f}% and then works higher "
+                f"into a peak around Day {high_day} at {high_val:+.2f}%, which gives the month a dip-then-recovery shape."
+            )
+        elif high_day < low_day:
+            shape_core = (
+                f"The average path tends to peak early around Day {high_day} at {high_val:+.2f}% and then fade toward a later "
+                f"low near Day {low_day} at {low_val:+.2f}%, so strength has historically arrived earlier than the close."
+            )
+        else:
+            shape_core = (
+                f"The average path clusters its key turning points between Day {min(low_day, high_day)} and Day {max(low_day, high_day)}, "
+                f"which suggests a choppier month than the endpoint alone would imply."
+            )
+    else:
+        shape_core = "The average path is available, but the turning points are not stable enough in the selected sample to describe cleanly."
+
+    if pd.notna(d10) and pd.notna(avg_end):
+        if abs(d10) >= 0.6 * abs(avg_end):
+            timing = (
+                f"By Day 10, the average path has already reached {d10:+.2f}%, which means a large share of the typical "
+                f"monthly move is realized relatively early."
+            )
+        else:
+            timing = (
+                f"By Day 10, the average path sits at {d10:+.2f}% against a month-end average of {avg_end:+.2f}%, which suggests "
+                f"the back half matters more than the opening stretch."
+            )
+    else:
+        timing = "The month-end profile is clearer than the first-ten-day profile in this sample."
+
+    live_read = ""
+    if summary.get("today_ord") is not None and summary.get("fwd_n", 0) > 0:
+        gap = summary.get("live_gap_vs_avg", np.nan)
+        if pd.notna(gap):
+            if gap > 0.20:
+                rel = f"The current year is running ahead of the historical average by {gap:+.2f}% at the same trading-day mark."
+            elif gap < -0.20:
+                rel = f"The current year is running behind the historical average by {gap:+.2f}% at the same trading-day mark."
+            else:
+                rel = "The current year is tracking close to the historical average path at the same trading-day mark."
+        else:
+            rel = "The current year overlay is available, though the live gap versus average is not cleanly measurable."
+
+        live_read = (
+            f"{rel} From Day {summary['today_ord']} into month-end, the historical path has averaged "
+            f"{summary['fwd_mean']:+.2f}% with a median of {summary['fwd_median']:+.2f}% and a positive hit rate of "
+            f"{summary['fwd_hit_rate']:.0f}% across {summary['fwd_n']} observations."
+        )
+    elif summary.get("current_year_month_available", False) and pd.notna(summary.get("current_vs_hist_end_gap", np.nan)):
+        gap = summary["current_vs_hist_end_gap"]
+        if gap > 0.20:
+            live_read = (
+                f"The current year's completed {month_label} finished {gap:+.2f}% above the long-run average month-end path, "
+                f"so realized strength exceeded the historical template."
+            )
+        elif gap < -0.20:
+            live_read = (
+                f"The current year's completed {month_label} finished {gap:+.2f}% below the long-run average month-end path, "
+                f"so realized performance lagged the historical template."
+            )
+        else:
+            live_read = (
+                f"The current year's completed {month_label} finished broadly in line with the long-run average month-end path."
+            )
+
+    commentary = f"""
+    <div class="adfm-note">
+        <div class="adfm-note-title">INTRA-MONTH READ</div>
+        <div>{open_shape} {shape_core} {timing} {live_read}</div>
+    </div>
+    """
+    st.markdown(commentary, unsafe_allow_html=True)
+
 def plot_intra_month_curve(
-    prices: pd.Series, month_int: int, start_year: int, end_year: int, symbol_shown: str
+    prices: pd.Series,
+    month_int: int,
+    start_year: int,
+    end_year: int,
+    symbol_shown: str,
 ) -> io.BytesIO:
     df_sel, avg_sel = _month_paths_prev_eom_equal_weight(prices, month_int, start_year, end_year)
 
-    fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="white")
-    ax = fig.add_subplot(111, facecolor="white")
+    fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="#fcfcfb")
+    ax = fig.add_subplot(111, facecolor="#fcfcfb")
 
     if avg_sel.empty or df_sel.empty:
         ax.text(
@@ -405,7 +750,7 @@ def plot_intra_month_curve(
         )
         ax.axis("off")
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="#fcfcfb")
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -415,31 +760,31 @@ def plot_intra_month_curve(
     x_vals = avg_sel.index.values
     y_vals = avg_sel.values
 
-    ax.axhline(0.0, color="#999999", linestyle=":", linewidth=1.0, zorder=1)
+    ax.axhline(0.0, color="#9b9b9b", linestyle=":", linewidth=1.0, zorder=1)
 
     ax.fill_between(
         x_vals,
         (avg_sel - std_sel).values,
         (avg_sel + std_sel).values,
-        color="#d0d0d0",
-        alpha=0.3,
-        zorder=1.5,
-        label="±1σ",
+        color="#d8d8d8",
+        alpha=0.35,
+        zorder=1.3,
+        label="1σ range",
     )
 
     ax.plot(
         x_vals,
         y_vals,
-        linewidth=2.6,
-        color="black",
+        linewidth=2.8,
+        color="#111111",
         linestyle="-",
-        label=f"Avg {MONTH_LABELS[month_int-1]} {start_year}–{end_year}",
+        label=f"Average path ({start_year}-{end_year})",
+        zorder=2.4,
     )
 
     today = pd.Timestamp.today()
     cur_year = today.year
 
-    # Current year overlay (dashed), also anchored to prior month-end and starting at Day 0 = 0%
     cur_path = None
     m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
     prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & \
@@ -458,13 +803,13 @@ def plot_intra_month_curve(
                 cur_path.index.values,
                 cur_path.values,
                 linewidth=2.0,
-                color="black",
-                alpha=0.45,
+                color="#333333",
+                alpha=0.55,
                 linestyle="--",
                 label=str(cur_year),
+                zorder=2.2,
             )
 
-    # Key points on average (ignore Day 0 for extrema labeling)
     avg_ex = avg_sel.copy()
     if 0 in avg_ex.index:
         avg_ex = avg_ex.drop(index=0)
@@ -473,103 +818,86 @@ def plot_intra_month_curve(
     low_val = float(avg_ex.loc[low_idx])
     high_idx = int(avg_ex.idxmax())
     high_val = float(avg_ex.loc[high_idx])
-    ax.scatter([low_idx, high_idx], [low_val, high_val], s=45, color="black", zorder=3)
+
+    ax.scatter([low_idx, high_idx], [low_val, high_val], s=34, color="#111111", zorder=3.2)
 
     low_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, low_idx)
     high_dom = _avg_calendar_day_for_ordinal(prices, month_int, start_year, end_year, high_idx)
 
-    def _box(txt: str, xy, offset_xy):
-        ax.annotate(
-            txt,
-            xy=xy,
-            xytext=(xy[0] + offset_xy[0], xy[1] + offset_xy[1]),
-            textcoords="data",
-            arrowprops=dict(arrowstyle="-", color="black", lw=1.0, shrinkA=2, shrinkB=2),
-            fontsize=9.5,
-            color="black",
-            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="black", lw=0.8),
-        )
+    for vline in [5, 10, 15, 20]:
+        if vline <= int(max(x_vals)):
+            ax.axvline(vline, color="#e5e5e5", linestyle="-", linewidth=0.8, zorder=0.8)
 
+    summary_note = [
+        f"Avg low: Day {low_idx} ({low_val:+.2f}%)",
+        f"Avg high: Day {high_idx} ({high_val:+.2f}%)",
+    ]
     if low_dom is not None:
-        _box(
-            f"Avg low: Day {low_idx}\n~{MONTH_LABELS[month_int-1]} {low_dom}, {low_val:+.2f}%",
-            (low_idx, low_val),
-            (0.7, -0.9),
-        )
+        summary_note[0] += f" ~ {MONTH_LABELS[month_int-1]} {low_dom}"
     if high_dom is not None:
-        _box(
-            f"Avg high: Day {high_idx}\n~{MONTH_LABELS[month_int-1]} {high_dom}, {high_val:+.2f}%",
-            (high_idx, high_val),
-            (-3.0, 0.9),
-        )
+        summary_note[1] += f" ~ {MONTH_LABELS[month_int-1]} {high_dom}"
+
+    ax.text(
+        0.985,
+        0.97,
+        "\n".join(summary_note),
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9.1,
+        color="#111111",
+        bbox=dict(boxstyle="round,pad=0.32", fc="white", ec="#d6d6d6", lw=0.9),
+    )
 
     ax.set_title(
-        f"{symbol_shown} {MONTH_LABELS[month_int-1]}: Intra-Month Performance by Trading Day",
+        f"{symbol_shown} {MONTH_LABELS[month_int-1]} | Intra-Month Seasonality Curve",
         color="black",
         fontsize=16,
         weight="bold",
-        pad=8,
+        pad=10,
     )
-    ax.set_xlabel(f"Trading day of {MONTH_LABELS[month_int-1]} (Day 0 = prior month-end)", color="black", fontsize=10, weight="bold")
+    ax.set_xlabel(
+        f"Trading day since prior month-end anchor",
+        color="black",
+        fontsize=10,
+        weight="bold",
+    )
     ax.set_ylabel("Return from prior month-end (%)", color="black", fontsize=10, weight="bold")
-    ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0)
+    ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0, linewidth=0.8)
     ax.tick_params(colors="black")
     for sp in ax.spines.values():
-        sp.set_color("black")
+        sp.set_color("#111111")
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-    # "today" marker if selected month is current month
     if (today.month == month_int) and not df_sel.empty:
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
         if not m_cur.empty:
             tday_ord = _trading_day_ordinal(m_cur.index, today)
-            ax.axvline(tday_ord, color="#b0b0b0", linestyle=":", linewidth=1.2, zorder=2.0)
+            ax.axvline(tday_ord, color="#9b9b9b", linestyle=":", linewidth=1.25, zorder=2.0)
 
             if tday_ord in avg_sel.index:
-                ax.scatter(tday_ord, avg_sel.loc[tday_ord], s=35, color="black", zorder=4)
+                ax.scatter(tday_ord, avg_sel.loc[tday_ord], s=28, color="#111111", zorder=4)
             if cur_path is not None and tday_ord in cur_path.index:
                 ax.scatter(
                     tday_ord,
                     cur_path.loc[tday_ord],
-                    s=40,
+                    s=36,
                     facecolors="white",
-                    edgecolors="black",
+                    edgecolors="#111111",
                     linewidths=1.0,
                     zorder=4,
                 )
 
-            # per-year forward move from this trading day to that year's month end (equal weight, since ffilled)
-            lvl_t = df_sel.loc[tday_ord]
-            lvl_end = df_sel.loc[df_sel.index.max()]
-            fwd = (lvl_end - lvl_t).dropna()
-
-            if not fwd.empty:
-                stats_text = (
-                    f"From today (Day {tday_ord}) → month-end across years:\n"
-                    f"• Mean: {fwd.mean():+.2f}%\n"
-                    f"• Median: {fwd.median():+.2f}%\n"
-                    f"• Hit rate >0: {(fwd > 0).mean()*100:0.0f}%  | N={fwd.shape[0]}"
-                )
-                ax.text(
-                    0.02,
-                    0.05,
-                    stats_text,
-                    transform=ax.transAxes,
-                    fontsize=9.0,
-                    color="black",
-                    bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", lw=0.8),
-                )
-
     y_min = float((avg_sel - std_sel).min())
     y_max = float((avg_sel + std_sel).max())
-    pad_y = 0.1 * max(abs(y_min), abs(y_max)) if np.isfinite(y_min) and np.isfinite(y_max) else 0.0
+    pad_y = 0.12 * max(abs(y_min), abs(y_max)) if np.isfinite(y_min) and np.isfinite(y_max) else 0.0
     ax.set_ylim(y_min - pad_y, y_max + pad_y)
 
-    ax.legend(frameon=False, loc="upper left", title="Series", title_fontsize=10)
-
+    ax.legend(frameon=False, loc="upper left", fontsize=9)
     fig.tight_layout(pad=1.0)
+
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="white")
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="#fcfcfb")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -647,16 +975,51 @@ st.caption(
 
 # -------------------------- Intra-month curve below -------------------------- #
 st.subheader("Intra-Month Seasonality Curve")
+
+month_mode_col1, month_mode_col2 = st.columns([1.15, 1.85])
+with month_mode_col1:
+    month_mode = st.radio(
+        "View preset",
+        options=["Current", "Best", "Worst", "Manual"],
+        horizontal=True,
+        index=0,
+    )
+
 today_dt = dt.datetime.today()
 default_month_idx = max(0, min(today_dt.month - 1, 11))
-month_choice = st.selectbox(
-    "Month",
-    options=list(range(1, 13)),
-    index=default_month_idx,
-    format_func=lambda m: MONTH_LABELS[m - 1],
-)
+
+if month_mode == "Current":
+    month_choice = today_dt.month
+elif month_mode == "Best":
+    month_choice = int(best_idx)
+elif month_mode == "Worst":
+    month_choice = int(worst_idx)
+else:
+    with month_mode_col2:
+        month_choice = st.selectbox(
+            "Month",
+            options=list(range(1, 13)),
+            index=default_month_idx,
+            format_func=lambda m: MONTH_LABELS[m - 1],
+        )
+
+if month_mode != "Manual":
+    st.caption(f"Selected month: {MONTH_LABELS[month_choice - 1]}")
+
+summary = build_intra_month_summary(prices, month_choice, int(start_year), int(end_year), used_symbol)
+render_intra_month_cards(summary)
+render_intra_month_commentary(summary)
 
 curve_buf = plot_intra_month_curve(prices, month_choice, int(start_year), int(end_year), used_symbol)
 st.image(curve_buf, use_container_width=True)
 
+if summary.get("ok", False):
+    extra_caption = (
+        f"Average path is equal-weighted across {summary['sample_years']} years and anchored to the prior month-end. "
+        f"Shaded band shows ±1 standard deviation. Current year is shown when available."
+    )
+else:
+    extra_caption = "Not enough history in the selected window to build the intra-month path."
+
+st.caption(extra_caption)
 st.caption("© 2026 AD Fund Management LP")
