@@ -21,21 +21,18 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Screen a custom ticker list for fresh price breakouts, momentum context, and RSI regime.
+        Purpose: Breakout scanner for multi-horizon highs with momentum and RSI confirmation context.
 
-        • Uses extra daily history so 20 / 50 / 200 day moving averages are fully formed across the visible chart window  
-        • Detects true breakouts versus prior 20 / 50 / 100 / 200 day highs using a 1 day shift  
-        • Computes RSI(7 / 14 / 21) from Typical Price ((H+L+C)/3)  
-        • Smooths each RSI line with a 3 period EMA for cleaner reads  
-        • Adds volume confirmation and distance-to-level context internally for ranking  
-        • Focuses the output on the per-ticker chart rather than a scanner table  
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Notes  
-        • Breakout logic uses adjusted close when available  
-        • RSI uses raw High / Low / Close typical price  
-        • Volume confirmation = latest volume / 20 day average volume
-        """,
+        Data source
+        • Public market and macro data feeds used throughout the app
+        ,
         unsafe_allow_html=True,
+        """
     )
 
 # ── Inputs ──────────────────────────────────────────────────────────────────

@@ -522,15 +522,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This monitor is built to answer four questions quickly: what volatility regime are we in, where stress is concentrated, whether hedges are rich or cheap versus delivered movement, and whether volatility is expanding or fading.
+        Purpose: Cross-asset volatility regime monitor for stress concentration and hedge richness.
 
-        What is included
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        - Implied volatility indices across equity, rates, and commodity sleeves
-        - Realized volatility on the underlying assets across selected horizons
-        - Relative-value signals such as VIX minus realized vol, MOVE minus TLT realized vol, term structure, and vol-of-vol ratio
-        - Cross-asset regime scoring, breadth, dispersion, and short-form commentary
-        - Heatmaps, detail tables, stale-data checks, and time-series panels with Z-score overlays
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
     st.divider()

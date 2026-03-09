@@ -214,18 +214,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Track the 10-year nominal Treasury yield against the 10-year TIPS-implied real yield with a regime-focused lens.
+        Purpose: Real-yield monitor comparing nominal and inflation-adjusted rate pressure.
 
-        What it shows  
-        • Nominal vs real 10-year yields  
-        • Inverted rolling real-yield momentum in bp as a simple market-rate easing or tightening gauge  
-        • Optional inflation-compensation proxy panel and recession shading  
-        • Optional FOMC and CPI event markers
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Data  
-        • FRED DGS10 for nominal 10Y  
-        • FRED DFII10 for real 10Y  
-        • FRED USREC for recession shading
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
     st.markdown("---")

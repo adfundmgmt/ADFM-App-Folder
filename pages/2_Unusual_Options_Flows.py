@@ -1021,20 +1021,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This app is built to surface options-chain anomalies across S&P 500 components using only public data.
+        Purpose: Unusual options-flow scanner for outsized listed-options activity across S&P 500 names.
 
-        What it does
-        • Pulls S&P 500 constituents from Wikipedia with local fallback
-        • Uses Yahoo Finance spot and options-chain data
-        • Scans front-end expiries by default to keep runtime practical
-        • Filters for larger, more unusual prints using premium, volume, volume/OI, spread quality, liquidity, and score
-        • Flags tighter directional clusters by symbol, expiry, type, direction, and strike band
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        What public data cannot tell you
-        • Exchange-level time and sales
-        • Official sweep or split routing flags
-        • Exact open versus close classification
-        • True multi-leg linkage
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
 

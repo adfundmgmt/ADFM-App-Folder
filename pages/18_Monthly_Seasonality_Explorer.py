@@ -32,16 +32,18 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Explore seasonal patterns for any stock, index, or commodity.
+        Purpose: Seasonality explorer for monthly return tendencies and hit-rate patterns.
 
-        • Yahoo Finance primary source, FRED fallback for deep index history  
-        • Bars = mean of first-half + mean of second-half contributions  
-        • First half solid, second half hatched; each half colored by its own sign  
-        • Error bars show min and max monthly total returns; black diamonds = hit rate  
-        • Bottom table consolidates 1H, 2H, Total per month  
-        • Intra-month curve shows the average path by trading day relative to the prior month-end
-        """,
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
+
+        Data source
+        • Public market and macro data feeds used throughout the app
+        ,
         unsafe_allow_html=True,
+        """
     )
 
 st.markdown(

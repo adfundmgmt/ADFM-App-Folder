@@ -38,22 +38,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Goal: track Net Liquidity and policy stance.
+        Purpose: Net-liquidity monitor tying Fed balance-sheet flows to macro risk backdrop.
 
-        Net Liquidity = WALCL − RRP − TGA
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Series
-        • WALCL: Fed balance sheet
-        • RRPONTSYD: reverse repo
-        • WDTGAL: Treasury General Account
-        • EFFR: effective fed funds rate
-        • NFCI: Chicago Fed National Financial Conditions Index
-
-        Panels
-        1. Net Liquidity
-        2. Components rebased
-        3. Effective fed funds rate
-        4. Financial conditions
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
     st.markdown("---")

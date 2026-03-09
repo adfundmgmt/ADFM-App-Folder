@@ -18,19 +18,18 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Estimate primary market money moving in and out of key ETFs over a chosen window.
+        Purpose: ETF flow monitor estimating creations and redemptions across major sleeves.
 
-        Methodology
-        • First pass: primary flows from Δ shares outstanding × daily close (close as NAV proxy)
-        • Fallback: CMF-style turnover proxy when historical shares data are missing or incomplete
-        • Sign convention: positive = net creations (inflows), negative = net redemptions (outflows)
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Notes
-        • `get_shares_full` from Yahoo Finance is not available for every ETF or every date
-        • Close is used as a proxy for daily NAV where needed
-        • All flows are aggregated over the selected lookback window and shown in USD
-        """,
+        Data source
+        • Public market and macro data feeds used throughout the app
+        ,
         unsafe_allow_html=True,
+        """
     )
     st.markdown("---")
     st.subheader("Lookback")

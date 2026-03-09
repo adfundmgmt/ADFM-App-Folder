@@ -97,17 +97,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Track S&P 500 sector leadership, regime change, and rotation using a consistent relative framework.
+        Purpose: Sector breadth and rotation monitor for leadership, participation, and regime shifts.
 
-        What it does
-        • Relative strength vs selected benchmark  
-        • Rotation map across multiple horizon presets  
-        • Short-term acceleration and RS slope  
-        • Rank change and quadrant migration  
-        • Rotation trails to show path, not just endpoint  
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Data source: Yahoo Finance  
-        Refresh cadence: hourly
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
 

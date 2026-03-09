@@ -25,41 +25,6 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize
 # ============================== Page + Style ==============================
 st.set_page_config(page_title="Hedge Timer", layout="wide")
 
-st.markdown(
-    """
-<style>
-.block-container { padding-top: 0.8rem; padding-bottom: 1.1rem; max-width: 1420px; }
-h1,h2,h3 { letter-spacing: -0.2px; }
-.small { opacity: 0.85; font-size: 0.92rem; }
-.card {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 16px;
-  padding: 14px 16px;
-}
-.row { display:flex; justify-content:space-between; gap:14px; align-items:baseline; flex-wrap:wrap; }
-.badge {
-  display:inline-block; padding: 6px 10px; border-radius: 999px;
-  border: 1px solid rgba(0,0,0,0.10);
-  font-weight: 800; font-size: 0.92rem;
-  background: rgba(0,0,0,0.03);
-}
-.b_good { background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.25); }
-.b_mid  { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.25); }
-.b_bad  { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.25); }
-
-.kv { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
-.kv > div {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.09);
-  padding: 7px 10px; border-radius: 12px; font-size: 0.92rem;
-}
-hr { opacity: 0.20; margin: 0.9rem 0; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
 plt.rcParams["figure.dpi"] = 200
 
 
@@ -106,17 +71,19 @@ TICKERS = [
 
 # ============================== Sidebar ==============================
 with st.sidebar:
-    st.markdown("### About This Tool")
+    st.header("About This Tool")
     st.markdown(
-        f"""
-Daily metrics: credit and breadth ratios (HYG/LQD, RSP/SPY, XLY/XLP), volatility stress and term structure (VIX, VIX9D, VIX3M, VVIX when available), multi-timeframe RSI and MACD (daily, weekly, monthly), short-term trend breaks, and longer trend confirmation on the target index.
+        """
+        Purpose: Hedge-timing dashboard combining trend, stress, and drawdown conditions.
 
-Decision output is a composite score (0 to 100). Thresholds are calibrated on the full sample since {CALIBRATION_START} with an explicit objective: maximize recall of 10%+ drawdowns while penalizing over-trading and late signals.
+        What it covers
+        • Composite hedge signal with explicit gating and oversold safeguards
+        • Multi-horizon regime checks plus sanity testing since 2020
+        • Practical readout for adding, holding, or reducing hedges
 
-Execution constraint: the model only allows NEW short signals in an "early-stage" window (drawdown from 63-session high above {EARLY_STAGE_DD63*100:.0f}%) and blocks NEW shorts in oversold/bounce conditions (RSI14 < {RSI_OVERSOLD:.0f} or RSI < {RSI_SOFT_OVERSOLD:.0f} and rising).
-
-Assumptions: close-to-close data, weekly is Friday close, monthly is month-end close, no transaction costs or borrow costs, no execution model. If Yahoo misses VIX9D, VIX3M, or VVIX, the model de-weights those layers inside the vol block.
-""".strip()
+        Data source
+        • Yahoo Finance and FRED market/regime inputs
+        """
     )
     st.markdown("---")
     st.markdown("### Sanity check since 2020")

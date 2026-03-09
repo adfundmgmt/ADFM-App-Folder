@@ -132,13 +132,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-This version is built for one job: tell you what the macro tape is doing right now and what changed enough this week to matter.
+        Purpose: Weekly cross-asset regime summary for positioning and risk framing.
 
-What it does:
-- Scores the current regime using volatility, rates transmission, credit stress, dollar pressure, and commodity impulse
-- Ranks the most important cross-asset linkages by current level and weekly change
-- Writes dynamic commentary that adapts to the state of the tape
-- Keeps the visual surface compact so the first screen gives you the answer
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
+
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
 

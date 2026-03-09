@@ -21,21 +21,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Track structural shifts across equities, rates, credit, commodities, FX, and risk appetite through normalized ratio charts.
+        Purpose: Ratio dashboard for risk-on/risk-off and cross-asset relative strength relationships.
 
-        What this dashboard shows  
-        • Cyclicals vs defensives using equal-weight sector baskets  
-        • Global macro preset ratios across growth, duration, inflation, credit, FX, energy, and international markets  
-        • Dynamic custom ratio between any two tickers  
-        • Rolling 50 and 200 day averages to frame trend direction  
-        • RSI panel to assess momentum and exhaustion points
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Framework  
-        • Preset and custom ratios use raw adjusted price ratios, then rebase to 100 at the selected display start  
-        • Basket ratios use equal-weight cumulative return baskets, then rebase the basket ratio to 100 at the selected display start
-
-        Data source: Yahoo Finance  
-        Refresh cadence: hourly
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
 

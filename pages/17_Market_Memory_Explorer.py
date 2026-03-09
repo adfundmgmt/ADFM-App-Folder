@@ -33,20 +33,18 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Explore how this year's cumulative return path compares to history.
+        Purpose: Historical analog explorer comparing current path versus prior market years.
 
-        • Pulls adjusted daily closes from Yahoo Finance  
-        • Aligns each calendar year by trading day to build YTD paths  
-        • Selects historical analogs using correlation to the current year so far  
-        • Displays full-year paths for selected analogs to show how similar setups resolved  
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Additional signal output below:
-        • Scans every rolling 252-day historical window  
-        • Finds the highest correlating windows versus the current trailing 252 trading days  
-        • Uses those matches only as selectors  
-        • Then shows what happened over the next 252 trading days after each signal  
-        """,
+        Data source
+        • Public market and macro data feeds used throughout the app
+        ,
         unsafe_allow_html=True,
+        """
     )
     st.markdown("---")
     st.subheader("Filters (optional)")
