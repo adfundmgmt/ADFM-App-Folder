@@ -1,6 +1,6 @@
 # streamlit_app.py
 # ADFM | Unusual Options Flow Tracker
-# Nasdaq 100 version with pre-scan underlying filters and lazy loading.
+# Nasdaq 100 version with pre-scan underlying filters, lazy loading, and hardened metrics/state handling.
 
 import json
 import math
@@ -139,6 +139,16 @@ def safe_float(x, default=0.0) -> float:
         return float(x)
     except Exception:
         return float(default)
+
+def safe_int(x, default=0) -> int:
+    try:
+        if x is None:
+            return int(default)
+        if isinstance(x, float) and pd.isna(x):
+            return int(default)
+        return int(x)
+    except Exception:
+        return int(default)
 
 def chunked(items: List[str], n: int) -> List[List[str]]:
     return [items[i:i + n] for i in range(0, len(items), n)]
@@ -953,6 +963,20 @@ def render_top_flow_dashboard(df: pd.DataFrame):
     c3.metric("Score", f"{row['unusual_score']:.1f}")
     c4.metric("Spread %", "" if pd.isna(row["spread_pct"]) else f"{row['spread_pct']:.1f}%")
 
+    st.markdown(
+        f"""
+        **{row['symbol']} {row['type']} {int(round(row['strike']))} {row['expiry']}**
+
+        Direction: **{row['direction']}**  
+        Side estimate: **{row['side']}**  
+        DTE: **{int(row['dte'])}**  
+        Spot: **{row['spot']:.2f}**  
+        Moneyness: **{row['moneyness']}**  
+        OTM distance: **{row['pct_otm']:.1f}%**  
+        Cluster flag: **{row['cluster_flag'] if str(row['cluster_flag']).strip() else 'None'}**
+        """
+    )
+
 # -----------------------------------------------------------------------------
 # Session state
 # -----------------------------------------------------------------------------
@@ -1042,8 +1066,8 @@ if not st.session_state["scan_ran"]:
             "elapsed": None,
             "success_ratio": cached_meta.get("success_ratio", None) if isinstance(cached_meta, dict) else None,
             "raw_contracts": cached_meta.get("raw_contracts", None) if isinstance(cached_meta, dict) else None,
-            "symbols_requested": cached_meta.get("symbols_requested", None) if isinstance(cached_meta, dict) else None,
-            "symbols_scanned": cached_meta.get("symbols_scanned", None) if isinstance(cached_meta, dict) else None,
+            "symbols_requested": safe_int(cached_meta.get("symbols_requested", len(symbols_all))) if isinstance(cached_meta, dict) else len(symbols_all),
+            "symbols_scanned": safe_int(cached_meta.get("symbols_scanned", 0)) if isinstance(cached_meta, dict) else 0,
         }
     else:
         st.session_state["flow_raw"] = pd.DataFrame()
@@ -1055,7 +1079,7 @@ if not st.session_state["scan_ran"]:
             "success_ratio": None,
             "raw_contracts": None,
             "symbols_requested": len(symbols_all),
-            "symbols_scanned": None,
+            "symbols_scanned": 0,
         }
 
 # -----------------------------------------------------------------------------
@@ -1073,14 +1097,15 @@ if run_scan:
         min_avg_dollar_vol_mm=min_underlying_dollar_vol_mm,
         min_avg_20d_vol=min_avg_20d_vol,
     )
-    symbols_scanned = filtered_snapshot["symbol"].dropna().astype(str).tolist()
+    symbols_scanned_list = filtered_snapshot["symbol"].dropna().astype(str).tolist()
+    symbols_scanned_count = len(symbols_scanned_list)
 
     st.session_state["filtered_snapshot"] = filtered_snapshot.copy()
 
-    with st.spinner(f"Running live options scan across {len(symbols_scanned):,} filtered Nasdaq 100 symbols..."):
+    with st.spinner(f"Running live options scan across {symbols_scanned_count:,} filtered Nasdaq 100 symbols..."):
         try:
             flow_live, diags_live = run_full_scan(
-                symbols=symbols_scanned,
+                symbols=symbols_scanned_list,
                 spot_snapshot=filtered_snapshot,
                 min_premium=min_premium,
                 min_volume=min_volume,
@@ -1125,7 +1150,7 @@ if run_scan:
                 "success_ratio": success_ratio,
                 "raw_contracts": raw_contracts,
                 "symbols_requested": len(symbols_all),
-                "symbols_scanned": len(symbols_scanned),
+                "symbols_scanned": symbols_scanned_count,
             }
             st.session_state["scan_ran"] = True
             st.warning("Live scan looked degraded, so the app loaded the last-good cached snapshot.")
@@ -1139,7 +1164,7 @@ if run_scan:
                 "success_ratio": success_ratio,
                 "raw_contracts": raw_contracts,
                 "symbols_requested": len(symbols_all),
-                "symbols_scanned": len(symbols_scanned),
+                "symbols_scanned": symbols_scanned_count,
             }
             st.session_state["scan_ran"] = True
     else:
@@ -1152,7 +1177,7 @@ if run_scan:
             "success_ratio": success_ratio,
             "raw_contracts": raw_contracts,
             "symbols_requested": len(symbols_all),
-            "symbols_scanned": len(symbols_scanned),
+            "symbols_scanned": symbols_scanned_count,
         }
         st.session_state["scan_ran"] = True
 
@@ -1164,7 +1189,7 @@ if run_scan:
                     "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "rows": int(len(flow_live)),
                     "symbols_requested": int(len(symbols_all)),
-                    "symbols_scanned": int(len(symbols_scanned)),
+                    "symbols_scanned": int(symbols_scanned_count),
                     "raw_contracts": raw_contracts,
                     "success_ratio": success_ratio,
                 },
@@ -1185,18 +1210,12 @@ if flow is not None and not flow.empty:
 # -----------------------------------------------------------------------------
 # Metrics
 # -----------------------------------------------------------------------------
-symbols_requested = int(len(symbols_all))
-
-raw_symbols_scanned = scan_meta.get("symbols_scanned", 0) if isinstance(scan_meta, dict) else 0
-try:
-    symbols_scanned = int(raw_symbols_scanned) if raw_symbols_scanned is not None else 0
-except Exception:
-    symbols_scanned = 0
-
-symbols_completed = int(diags["symbol"].nunique()) if not diags.empty and "symbol" in diags.columns else 0
-contracts_seen = int(diags["contracts_seen"].sum()) if not diags.empty and "contracts_seen" in diags.columns else 0
-scan_errors = int(diags["errors"].sum()) if not diags.empty and "errors" in diags.columns else 0
-qualifying_rows = int(len(flow)) if flow is not None and not flow.empty else 0
+symbols_requested = safe_int(len(symbols_all))
+symbols_scanned = safe_int(scan_meta.get("symbols_scanned", 0) if isinstance(scan_meta, dict) else 0)
+symbols_completed = safe_int(diags["symbol"].nunique()) if not diags.empty and "symbol" in diags.columns else 0
+contracts_seen = safe_int(diags["contracts_seen"].sum()) if not diags.empty and "contracts_seen" in diags.columns else 0
+scan_errors = safe_int(diags["errors"].sum()) if not diags.empty and "errors" in diags.columns else 0
+qualifying_rows = safe_int(len(flow)) if flow is not None and not flow.empty else 0
 
 bullish_premium = float(flow.loc[flow["direction"] == "BULLISH", "premium"].sum()) if qualifying_rows > 0 else 0.0
 bearish_premium = float(flow.loc[flow["direction"] == "BEARISH", "premium"].sum()) if qualifying_rows > 0 else 0.0
@@ -1226,7 +1245,7 @@ if scan_meta:
     if success_ratio is not None:
         meta_text += f" | Success ratio: {success_ratio:.0%}"
     if raw_contracts is not None:
-        meta_text += f" | Raw contracts: {raw_contracts:,}"
+        meta_text += f" | Raw contracts: {safe_int(raw_contracts):,}"
     st.caption(meta_text)
 
 # -----------------------------------------------------------------------------
