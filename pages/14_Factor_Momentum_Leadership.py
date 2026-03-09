@@ -1,12 +1,12 @@
 import time
 from datetime import datetime, date
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
-
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
@@ -37,6 +37,9 @@ GRID = "#E6E6E6"
 BORDER = "#E0E0E0"
 CARD_BG = "#FAFAFA"
 
+CACHE_DIR = Path(".adfm_factor_cache")
+CACHE_DIR.mkdir(exist_ok=True)
+
 CUSTOM_CSS = """
 <style>
     .block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px;}
@@ -48,7 +51,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # =========================================================
 # Helpers
 # =========================================================
-def card_box(inner_html: str):
+def card_box(inner_html: str) -> None:
     st.markdown(
         f"""
         <div style="border:1px solid {BORDER}; border-radius:10px;
@@ -60,8 +63,11 @@ def card_box(inner_html: str):
         unsafe_allow_html=True,
     )
 
-def metric_box(label: str, value: str, sub: Optional[str] = None):
-    sub_html = f'<div style="font-size:11px; color:{SUBTLE}; margin-top:4px;">{sub}</div>' if sub else ""
+def metric_box(label: str, value: str, sub: Optional[str] = None) -> None:
+    sub_html = (
+        f'<div style="font-size:11px; color:{SUBTLE}; margin-top:4px;">{sub}</div>'
+        if sub else ""
+    )
     st.markdown(
         f"""
         <div style="border:1px solid {BORDER}; border-radius:10px; padding:12px 14px; background:white;">
@@ -75,7 +81,35 @@ def metric_box(label: str, value: str, sub: Optional[str] = None):
 
 def _chunk(lst: List[str], n: int) -> List[List[str]]:
     n = max(1, int(n))
-    return [lst[i:i+n] for i in range(0, len(lst), n)]
+    return [lst[i:i + n] for i in range(0, len(lst), n)]
+
+def _safe_upper(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value).upper().strip()
+
+def _cache_path(name: str) -> Path:
+    safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name)
+    return CACHE_DIR / f"{safe_name}.parquet"
+
+def _load_last_good_cache(name: str) -> pd.DataFrame:
+    path = _cache_path(name)
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(path)
+        df.index = pd.to_datetime(df.index)
+        return df.sort_index()
+    except Exception:
+        return pd.DataFrame()
+
+def _save_last_good_cache(name: str, df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    try:
+        df.to_parquet(_cache_path(name))
+    except Exception:
+        pass
 
 # =========================================================
 # Factor ETFs
@@ -120,14 +154,6 @@ def momentum(series: pd.Series, win: int = 20) -> float:
     if win < 2:
         return np.nan
     return float(r.rolling(win).mean().iloc[-1])
-
-def rs(series_a: pd.Series, series_b: pd.Series) -> pd.Series:
-    aligned = pd.concat([series_a, series_b], axis=1).dropna()
-    if aligned.empty:
-        return pd.Series(dtype=float)
-    out = aligned.iloc[:, 0] / aligned.iloc[:, 1]
-    out.name = f"{series_a.name}_vs_{series_b.name}"
-    return out
 
 def ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
@@ -188,6 +214,29 @@ def normalized_series(series: pd.Series) -> pd.Series:
         return s
     return s / s.iloc[0] * 100.0
 
+def robust_z_cross_section(series: pd.Series) -> pd.Series:
+    s = series.astype(float).replace([np.inf, -np.inf], np.nan)
+    if s.dropna().empty:
+        return pd.Series(index=s.index, dtype=float)
+    median = s.median(skipna=True)
+    mad = (s - median).abs().median(skipna=True)
+    if pd.isna(mad) or mad == 0:
+        std = s.std(skipna=True, ddof=0)
+        if pd.isna(std) or std == 0:
+            return pd.Series(0.0, index=s.index)
+        z = (s - s.mean(skipna=True)) / std
+        return z.clip(-3, 3).fillna(0.0)
+    z = 0.6745 * (s - median) / mad
+    return z.clip(-3, 3).fillna(0.0)
+
+def build_relative_series(a: pd.Series, b: pd.Series, min_obs: int = 60) -> pd.Series:
+    aligned = pd.concat([a, b], axis=1).dropna()
+    if len(aligned) < min_obs:
+        return pd.Series(dtype=float)
+    out = aligned.iloc[:, 0] / aligned.iloc[:, 1]
+    out.name = f"{a.name}_vs_{b.name}"
+    return out
+
 # =========================================================
 # Commentary helpers
 # =========================================================
@@ -231,11 +280,22 @@ def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) 
     laggard_names = short_sorted.index.tolist()[-3:]
     long_leaders = long_sorted.index.tolist()[:3]
 
-    short_dispersion = float(short_sorted["Short"].max() - short_sorted["Short"].min()) if len(short_sorted) else np.nan
-    long_dispersion = float(long_sorted["Long"].max() - long_sorted["Long"].min()) if len(long_sorted) else np.nan
+    short_dispersion = (
+        float(short_sorted["Short"].max() - short_sorted["Short"].min())
+        if len(short_sorted) else np.nan
+    )
+    long_dispersion = (
+        float(long_sorted["Long"].max() - long_sorted["Long"].min())
+        if len(long_sorted) else np.nan
+    )
 
     alignment = float(((mom_df["Short"] > 0) & (mom_df["Long"] > 0)).mean())
-    conflict = float(((mom_df["Short"] > 0) & (mom_df["Long"] < 0) | (mom_df["Short"] < 0) & (mom_df["Long"] > 0)).mean())
+    conflict = float(
+        (
+            ((mom_df["Short"] > 0) & (mom_df["Long"] < 0))
+            | ((mom_df["Short"] < 0) & (mom_df["Long"] > 0))
+        ).mean()
+    )
 
     leadership_text = ", ".join(leadership_names) if leadership_names else "none"
     laggard_text = ", ".join(laggard_names) if laggard_names else "none"
@@ -271,7 +331,7 @@ def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) 
     risk_message = (
         f"Short-window dispersion is {short_dispersion * 100:.1f}% and long-window dispersion is {long_dispersion * 100:.1f}%, "
         f"which tells you how concentrated the relative-strength trade has become. The weakest groups right now are {laggard_text}. "
-        f"If that spread starts compressing while the leaders stall, the next move is usually rotation rather than straightforward continuation."
+        f"If that spread starts compressing while the leaders stall, the next move usually becomes rotation rather than straightforward continuation."
     )
 
     stats_message = (
@@ -293,79 +353,153 @@ def build_commentary(mom_df: pd.DataFrame, breadth: float, regime_score: float) 
     return body
 
 # =========================================================
-# Data download
+# Data download and normalization
 # =========================================================
-def _download_close_batch(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    batch = [str(x).upper() for x in batch if x]
+def _normalize_yf_download(df: pd.DataFrame, requested: List[str]) -> pd.DataFrame:
+    requested = [_safe_upper(x) for x in requested if x]
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out: Optional[pd.DataFrame] = None
+
+    # Flat columns, typically single ticker
+    if not isinstance(df.columns, pd.MultiIndex):
+        cols_lower = {str(c).lower(): c for c in df.columns}
+        price_col = None
+        for candidate in ("close", "adj close"):
+            if candidate in cols_lower:
+                price_col = cols_lower[candidate]
+                break
+        if price_col is not None:
+            s = df[price_col].copy()
+            ticker = requested[0] if requested else "TICKER"
+            s.name = ticker
+            out = s.to_frame()
+
+    # MultiIndex columns
+    if out is None and isinstance(df.columns, pd.MultiIndex):
+        level0 = [str(x) for x in df.columns.get_level_values(0)]
+        level1 = [str(x) for x in df.columns.get_level_values(1)]
+
+        # Case: first level is field, second level is ticker
+        if "Close" in level0 or "Adj Close" in level0:
+            field = "Close" if "Close" in level0 else "Adj Close"
+            try:
+                tmp = df[field].copy()
+                if isinstance(tmp, pd.Series):
+                    tmp = tmp.to_frame()
+                tmp.columns = [_safe_upper(c) for c in tmp.columns]
+                out = tmp
+            except Exception:
+                out = None
+
+        # Case: first level is ticker, second level is field
+        if out is None:
+            candidate_fields = {"Close", "Adj Close"}
+            if any(f in level1 for f in candidate_fields):
+                frames = {}
+                for t in requested:
+                    for fld in ("Close", "Adj Close"):
+                        key = (t, fld)
+                        if key in df.columns:
+                            frames[t] = df[key]
+                            break
+                if frames:
+                    out = pd.DataFrame(frames)
+
+    if out is None or out.empty:
+        return pd.DataFrame()
+
+    out = out.copy()
+    out.index = pd.to_datetime(out.index).normalize()
+    out = out.sort_index()
+    out = out.loc[:, ~out.columns.duplicated()]
+    valid_cols = [c for c in requested if c in out.columns]
+    out = out[valid_cols]
+    return out
+
+def _download_batch_once(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    batch = [_safe_upper(x) for x in batch if x]
     if not batch:
         return pd.DataFrame()
 
     try:
-        if len(batch) == 1:
-            t = batch[0]
-            df = yf.download(t, start=start, end=end, auto_adjust=True, progress=False, threads=False)
-            if df is None or df.empty:
-                return pd.DataFrame()
-            col = "Close" if "Close" in df.columns else ("Adj Close" if "Adj Close" in df.columns else None)
-            if col is None:
-                return pd.DataFrame()
-            s = df[col].copy()
-            s.name = t
-            return s.to_frame()
-
-        df = yf.download(
-            batch,
+        data = yf.download(
+            tickers=batch if len(batch) > 1 else batch[0],
             start=start,
             end=end,
             auto_adjust=True,
             progress=False,
+            threads=False,
             group_by="column",
-            threads=True,
         )
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        if isinstance(df.columns, pd.MultiIndex):
-            lvl0 = set(df.columns.get_level_values(0))
-            if "Close" in lvl0:
-                close = df["Close"].copy()
-            elif "Adj Close" in lvl0:
-                close = df["Adj Close"].copy()
-            else:
-                return pd.DataFrame()
-            close.columns = [str(c).upper() for c in close.columns]
-            return close
-
+        return _normalize_yf_download(data, batch)
     except Exception:
         return pd.DataFrame()
 
-    return pd.DataFrame()
+def _download_one_by_one(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    frames = []
+    for ticker in batch:
+        out = pd.DataFrame()
+        for _ in range(3):
+            out = _download_batch_once([ticker], start, end)
+            if not out.empty and ticker in out.columns and out[ticker].dropna().shape[0] > 0:
+                break
+            time.sleep(0.5)
+        if not out.empty:
+            frames.append(out)
+    if not frames:
+        return pd.DataFrame()
+    wide = pd.concat(frames, axis=1)
+    wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
+    return wide
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def fetch_daily_levels(tickers: List[str], start: pd.Timestamp, end: pd.Timestamp, chunk_size: int = 50) -> pd.DataFrame:
-    uniq = sorted(list({str(t).upper() for t in tickers if t}))
-    frames = []
+def fetch_daily_levels(
+    tickers: List[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    chunk_size: int = 25
+) -> pd.DataFrame:
+    uniq = sorted({_safe_upper(t) for t in tickers if t})
+    if not uniq:
+        return pd.DataFrame()
+
+    cache_key = f"levels_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}_{'_'.join(uniq)}"
+
+    frames: List[pd.DataFrame] = []
+    found: set = set()
 
     for batch in _chunk(uniq, chunk_size):
         out = pd.DataFrame()
         for _ in range(3):
-            out = _download_close_batch(batch, start, end)
+            out = _download_batch_once(batch, start, end)
             if not out.empty:
                 break
-            time.sleep(0.4)
+            time.sleep(0.5)
         if not out.empty:
             frames.append(out)
+            found.update(out.columns.tolist())
+
+    missing = [t for t in uniq if t not in found]
+    if missing:
+        rescue = _download_one_by_one(missing, start, end)
+        if not rescue.empty:
+            frames.append(rescue)
+            found.update(rescue.columns.tolist())
 
     if not frames:
-        return pd.DataFrame()
+        return _load_last_good_cache(cache_key)
 
     wide = pd.concat(frames, axis=1)
-    wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
-    if wide.empty:
-        return wide
+    wide = wide.loc[:, ~wide.columns.duplicated()]
+    wide = wide.sort_index()
+    wide = wide[[c for c in uniq if c in wide.columns]]
+    wide = wide.ffill(limit=3)
 
-    bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
-    wide = wide.reindex(bidx).ffill()
+    if not wide.empty:
+        _save_last_good_cache(cache_key, wide)
+
     return wide
 
 # =========================================================
@@ -385,6 +519,7 @@ with st.sidebar:
     lookback_short = st.slider("Short momentum window (days)", 10, 60, 20)
     lookback_long = st.slider("Long momentum window (days)", 30, 180, 60)
     normalize_charts = st.checkbox("Normalize factor charts to 100", value=False)
+    min_overlap_obs = st.slider("Minimum overlap observations per factor pair", 40, 252, 60, 5)
     st.caption("Data source: Yahoo Finance. Internal use only.")
 
 # =========================================================
@@ -409,38 +544,75 @@ factor_tickers = sorted({t for pair in FACTOR_ETFS.values() for t in pair if t i
 levels = fetch_daily_levels(
     factor_tickers,
     start=pd.Timestamp(history_start),
-    end=window_end
+    end=window_end,
 )
 
 if levels.empty:
-    st.error("No data returned.")
+    st.error("Price download failed for all requested ETFs. Yahoo returned no usable close data and no last-good cache was available.")
     st.stop()
 
 if BENCH not in levels.columns or levels[BENCH].dropna().empty:
-    st.error("SPY data missing or empty.")
+    st.error("SPY data missing or empty after fetch normalization.")
     st.stop()
 
 # =========================================================
-# Factor series
+# Factor series with diagnostics
 # =========================================================
-factor_levels_full = {}
-for name, (up, down) in FACTOR_ETFS.items():
-    up = up.upper()
-    down_u = down.upper() if down is not None else None
+factor_levels_full: Dict[str, pd.Series] = {}
+pair_diagnostics: List[Dict[str, str]] = []
 
-    if down_u is None:
-        if up in levels.columns:
-            factor_levels_full[name] = levels[up]
+for name, (up, down) in FACTOR_ETFS.items():
+    up_u = _safe_upper(up)
+    down_u = _safe_upper(down)
+
+    if up_u not in levels.columns or levels[up_u].dropna().empty:
+        pair_diagnostics.append({
+            "Factor": name,
+            "Status": "Skipped",
+            "Reason": f"Missing usable data for {up_u}",
+        })
         continue
 
-    if up in levels.columns and down_u in levels.columns:
-        rel = rs(levels[up], levels[down_u])
-        if not rel.empty:
-            factor_levels_full[name] = rel
+    if down_u is None:
+        factor_levels_full[name] = levels[up_u].dropna().copy()
+        pair_diagnostics.append({
+            "Factor": name,
+            "Status": "OK",
+            "Reason": f"Using standalone series {up_u}",
+        })
+        continue
+
+    if down_u not in levels.columns or levels[down_u].dropna().empty:
+        pair_diagnostics.append({
+            "Factor": name,
+            "Status": "Skipped",
+            "Reason": f"Missing usable data for {down_u}",
+        })
+        continue
+
+    rel = build_relative_series(levels[up_u], levels[down_u], min_obs=min_overlap_obs)
+    if rel.empty:
+        overlap = pd.concat([levels[up_u], levels[down_u]], axis=1).dropna().shape[0]
+        pair_diagnostics.append({
+            "Factor": name,
+            "Status": "Skipped",
+            "Reason": f"Overlap too short: {overlap} observations",
+        })
+        continue
+
+    factor_levels_full[name] = rel
+    pair_diagnostics.append({
+        "Factor": name,
+        "Status": "OK",
+        "Reason": f"{up_u} / {down_u}",
+    })
 
 factor_df_full = pd.DataFrame(factor_levels_full).dropna(how="all")
+
 if factor_df_full.empty:
-    st.error("No factor series could be constructed.")
+    st.error("No factor series could be constructed from the available ETF data.")
+    with st.expander("Diagnostics", expanded=True):
+        st.dataframe(pd.DataFrame(pair_diagnostics), use_container_width=True, hide_index=True)
     st.stop()
 
 if requested_days is None:
@@ -452,14 +624,16 @@ else:
 
 if factor_df.empty:
     st.error("No data available for the selected window.")
+    with st.expander("Diagnostics", expanded=True):
+        st.dataframe(pd.DataFrame(pair_diagnostics), use_container_width=True, hide_index=True)
     st.stop()
 
 # =========================================================
 # Momentum snapshot
 # =========================================================
 rows = []
-for f in factor_df.columns:
-    s = factor_df[f].dropna()
+for factor_name in factor_df.columns:
+    s = factor_df[factor_name].dropna()
     if len(s) < 15:
         continue
 
@@ -479,7 +653,7 @@ for f in factor_df.columns:
     t_strength = trend_strength(s)
 
     rows.append([
-        f,
+        factor_name,
         r5,
         r_short,
         r_long,
@@ -510,9 +684,9 @@ mom_df = pd.DataFrame(
 ).set_index("Factor")
 
 if mom_df.empty:
-    st.error(
-        "No factors passed data checks for this window. Try a longer analysis window or reduce the short and long lookbacks."
-    )
+    st.error("No factors passed data checks for this window. Try a longer analysis window or reduce the short and long lookbacks.")
+    with st.expander("Diagnostics", expanded=True):
+        st.dataframe(pd.DataFrame(pair_diagnostics), use_container_width=True, hide_index=True)
     st.stop()
 
 mom_df = mom_df.sort_values("Short", ascending=False)
@@ -527,14 +701,28 @@ num_neutral = int(trend_counts.get("Neutral", 0))
 
 breadth = num_up / len(mom_df) * 100.0
 
-raw_score = (
-    0.30 * mom_df["Short"].mean()
-    + 0.20 * mom_df["Long"].mean()
-    + 0.20 * ((mom_df["Inflection"] == "Turning Up").mean() - (mom_df["Inflection"] == "Turning Down").mean())
-    + 0.20 * ((mom_df["Trend"] == "Up").mean() - (mom_df["Trend"] == "Down").mean())
-    + 0.10 * mom_df["Slope Z"].fillna(0).mean()
+short_z = robust_z_cross_section(mom_df["Short"])
+long_z = robust_z_cross_section(mom_df["Long"])
+slope_z = robust_z_cross_section(mom_df["Slope Z"].fillna(0.0))
+
+turning_balance = (
+    (mom_df["Inflection"] == "Turning Up").mean()
+    - (mom_df["Inflection"] == "Turning Down").mean()
 )
-regime_score = max(0.0, min(100.0, 50.0 + 50.0 * (raw_score / 5.0)))
+trend_balance = (
+    (mom_df["Trend"] == "Up").mean()
+    - (mom_df["Trend"] == "Down").mean()
+)
+
+raw_score = (
+    0.30 * short_z.mean()
+    + 0.25 * long_z.mean()
+    + 0.15 * slope_z.mean()
+    + 0.15 * turning_balance * 3.0
+    + 0.15 * trend_balance * 3.0
+)
+
+regime_score = float(np.clip(50.0 + 15.0 * raw_score, 0.0, 100.0))
 
 # =========================================================
 # Summary
@@ -554,6 +742,13 @@ with c4:
 summary_html = build_commentary(mom_df, breadth, regime_score)
 card_box(summary_html)
 
+ok_pairs = [d for d in pair_diagnostics if d["Status"] == "OK"]
+skipped_pairs = [d for d in pair_diagnostics if d["Status"] != "OK"]
+
+diag_title = f"Diagnostics: {len(ok_pairs)} factors built, {len(skipped_pairs)} skipped"
+with st.expander(diag_title, expanded=False):
+    st.dataframe(pd.DataFrame(pair_diagnostics), use_container_width=True, hide_index=True)
+
 # =========================================================
 # Broken-out factor images
 # =========================================================
@@ -561,8 +756,8 @@ st.subheader(f"Factor Time Series ({window_choice})")
 
 plot_df = factor_df.copy()
 if normalize_charts:
-    for c in plot_df.columns:
-        plot_df[c] = normalized_series(plot_df[c])
+    for col in plot_df.columns:
+        plot_df[col] = normalized_series(plot_df[col])
 
 n_factors = len(plot_df.columns)
 ncols = 3
@@ -586,20 +781,28 @@ else:
     locator = mdates.YearLocator()
     formatter = mdates.DateFormatter("%Y")
 
-for i, f in enumerate(plot_df.columns):
+last_valid_i = -1
+for i, factor_name in enumerate(plot_df.columns):
+    last_valid_i = i
     ax = axes[i]
-    s = plot_df[f].dropna()
+    s = plot_df[factor_name].dropna()
     if s.empty:
         ax.axis("off")
         continue
 
-    ax.plot(s.index, s.values, color=PASTELS[i % len(PASTELS)], linewidth=2.1)
+    color = PASTELS[i % len(PASTELS)]
+    ax.plot(s.index, s.values, color=color, linewidth=2.1)
 
-    if len(s) >= 20:
+    if len(s) >= 20 and not normalize_charts:
         e20 = ema(s, 20)
         ax.plot(e20.index, e20.values, color="#888888", linewidth=1.1, alpha=0.9)
 
-    ax.set_title(f, color=TEXT, fontsize=11, pad=8)
+    latest = s.iloc[-1]
+    latest_short = mom_df.loc[factor_name, "Short"] * 100.0 if factor_name in mom_df.index else np.nan
+    latest_long = mom_df.loc[factor_name, "Long"] * 100.0 if factor_name in mom_df.index else np.nan
+
+    title = f"{factor_name}\nS {latest_short:.1f}% | L {latest_long:.1f}%"
+    ax.set_title(title, color=TEXT, fontsize=11, pad=8)
     ax.grid(color=GRID, linewidth=0.6, alpha=0.7)
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(formatter)
@@ -609,14 +812,14 @@ for i, f in enumerate(plot_df.columns):
     for spine in ["top", "right"]:
         ax.spines[spine].set_visible(False)
 
-    latest = s.iloc[-1]
-    ax.scatter(s.index[-1], latest, s=18, color=PASTELS[i % len(PASTELS)], zorder=3)
+    ax.scatter(s.index[-1], latest, s=18, color=color, zorder=3)
 
-for j in range(i + 1, len(axes)):
+for j in range(last_valid_i + 1, len(axes)):
     axes[j].axis("off")
 
 fig_ts.tight_layout()
 st.pyplot(fig_ts, clear_figure=True)
+plt.close(fig_ts)
 
 # =========================================================
 # Snapshot table
@@ -675,23 +878,42 @@ ax_lead.fill_between([0, x_max], y_min, 0, color="#FFE9B3", alpha=0.55)
 ax_lead.axvline(0, color="#888888", linewidth=1)
 ax_lead.axhline(0, color="#888888", linewidth=1)
 
-ax_lead.text(x_max * 0.62, y_max * 0.76, "Short ↑ / Long ↑\nEstablished leaders", fontsize=9, ha="center", va="center", color="#333333")
-ax_lead.text(x_min * 0.62, y_max * 0.76, "Short ↓ / Long ↑\nMean reversion", fontsize=9, ha="center", va="center", color="#333333")
-ax_lead.text(x_min * 0.62, y_min * 0.76, "Short ↓ / Long ↓\nPersistent laggards", fontsize=9, ha="center", va="center", color="#333333")
-ax_lead.text(x_max * 0.62, y_min * 0.76, "Short ↑ / Long ↓\nNew rotations", fontsize=9, ha="center", va="center", color="#333333")
+ax_lead.text(
+    x_max * 0.62, y_max * 0.76,
+    "Short ↑ / Long ↑\nEstablished leaders",
+    fontsize=9, ha="center", va="center", color="#333333"
+)
+ax_lead.text(
+    x_min * 0.62, y_max * 0.76,
+    "Short ↓ / Long ↑\nMean reversion",
+    fontsize=9, ha="center", va="center", color="#333333"
+)
+ax_lead.text(
+    x_min * 0.62, y_min * 0.76,
+    "Short ↓ / Long ↓\nPersistent laggards",
+    fontsize=9, ha="center", va="center", color="#333333"
+)
+ax_lead.text(
+    x_max * 0.62, y_min * 0.76,
+    "Short ↑ / Long ↓\nNew rotations",
+    fontsize=9, ha="center", va="center", color="#333333"
+)
 
-for k, factor in enumerate(mom_df.index):
-    x = short_vals.loc[factor]
-    y = long_vals.loc[factor]
-    ax_lead.scatter(x, y, s=75, color=PASTELS[k % len(PASTELS)], edgecolor="#444444", linewidth=0.6, zorder=3)
+for k, factor_name in enumerate(mom_df.index):
+    x = short_vals.loc[factor_name]
+    y = long_vals.loc[factor_name]
+    ax_lead.scatter(
+        x, y, s=75, color=PASTELS[k % len(PASTELS)],
+        edgecolor="#444444", linewidth=0.6, zorder=3
+    )
     ax_lead.annotate(
-        factor,
+        factor_name,
         xy=(x, y),
         xytext=(4, 3),
         textcoords="offset points",
         fontsize=9,
         va="center",
-        color="#111111"
+        color="#111111",
     )
 
 ax_lead.set_xlabel("Short window return %", color=TEXT)
@@ -704,5 +926,6 @@ for spine in ["top", "right"]:
 
 fig_lead.tight_layout()
 st.pyplot(fig_lead, clear_figure=True)
+plt.close(fig_lead)
 
 st.caption("© 2026 AD Fund Management LP")
