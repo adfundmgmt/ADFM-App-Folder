@@ -28,7 +28,7 @@ st.markdown(
     """
     <style>
     .block-container {
-        padding-top: 1.2rem;
+        padding-top: 1.6rem;
         padding-bottom: 1.2rem;
         max-width: 1500px;
     }
@@ -37,7 +37,11 @@ st.markdown(
         font-size: 2.2rem;
         font-weight: 700;
         letter-spacing: -0.02em;
+        line-height: 1.2;
+        margin-top: 0.15rem;
         margin-bottom: 0.2rem;
+        padding-top: 0.1rem;
+        overflow: visible;
     }
 
     .subtle {
@@ -207,13 +211,13 @@ def week_change(series, n=5):
     s = pd.Series(series).dropna()
     if len(s) <= n:
         return np.nan
-    return float(s.iloc[-1] - s.iloc[-n-1])
+    return float(s.iloc[-1] - s.iloc[-n - 1])
 
 def week_return(series, n=5):
     s = pd.Series(series).dropna()
     if len(s) <= n:
         return np.nan
-    base = s.iloc[-n-1]
+    base = s.iloc[-n - 1]
     if base == 0 or pd.isna(base):
         return np.nan
     return float((s.iloc[-1] / base - 1.0) * 100.0)
@@ -263,7 +267,7 @@ def bucket_from_score(score):
 def chip_class(label):
     if label in ["Constructive", "Supportive", "Working", "Contained"]:
         return "chip-green"
-    if label in ["Mixed", "Watchful", "Moderate"]:
+    if label in ["Mixed", "Watchful", "Moderate", "Relevant", "Balanced", "Hot", "Quiet", "Loose", "Unclear"]:
         return "chip-yellow"
     if label in ["Fragile", "Broken", "Elevated", "Tightening"]:
         return "chip-red"
@@ -497,7 +501,7 @@ def build_state_commentary():
         )
     elif regime == "Fragile":
         pieces.append(
-            "The tape screens fragile. The important point is not simply that volatility is higher, it is that the cross-asset plumbing is less helpful. If rates are trading like equity beta and credit is tightening at the same time, portfolios lose natural shock absorbers and gross has to earn its place."
+            "The tape screens fragile. The important point is that volatility is higher and the cross-asset plumbing is less helpful. If rates are trading like equity beta and credit is tightening at the same time, portfolios lose natural shock absorbers and gross has to earn its place."
         )
     else:
         pieces.append(
@@ -519,7 +523,7 @@ def build_state_commentary():
         )
     elif credit_state == "Contained":
         pieces.append(
-            "Credit is relatively contained. That does not mean the tape is safe, but it does mean the market is not yet broadcasting broader financing stress through HY, which keeps the burden of proof on equity weakness rather than assuming it spills everywhere."
+            "Credit is relatively contained. That still does not make the tape safe, but it does mean the market is not yet broadcasting broader financing stress through HY, which keeps the burden of proof on equity weakness rather than assuming it spills everywhere."
         )
 
     if dollar_state == "Tightening":
@@ -624,7 +628,10 @@ with right:
         ("VIX - RV z", f"{vix_rv_z:+.2f}" if pd.notna(vix_rv_z) else "NA"),
     ]
     score_html = "".join(
-        [f'<div style="display:flex; justify-content:space-between; padding:0.32rem 0; border-bottom:1px solid #f0f0f0;"><span style="color:#6b7280;">{k}</span><span style="font-weight:600;">{v}</span></div>' for k, v in score_rows]
+        [
+            f'<div style="display:flex; justify-content:space-between; padding:0.32rem 0; border-bottom:1px solid #f0f0f0;"><span style="color:#6b7280;">{k}</span><span style="font-weight:600;">{v}</span></div>'
+            for k, v in score_rows
+        ]
     )
     st.markdown('<div class="section-label" style="margin-top:1rem;">Diagnostic Snapshot</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="card">{score_html}</div>', unsafe_allow_html=True)
@@ -692,17 +699,19 @@ for spec in PAIR_SPECS:
         interp = "Cross-asset linkage is moving"
         action = "Use as context, then confirm elsewhere"
 
-    pair_rows.append({
-        "Pair": pair,
-        "ρ now": rho_now,
-        "Δρ w/w": rho_delta,
-        "2Y pctile": pctile,
-        "Signal score": score,
-        "Bucket": bucket,
-        "Interpretation": interp,
-        "Action": action,
-        "Series": rc,
-    })
+    pair_rows.append(
+        {
+            "Pair": pair,
+            "ρ now": rho_now,
+            "Δρ w/w": rho_delta,
+            "2Y pctile": pctile,
+            "Signal score": score,
+            "Bucket": bucket,
+            "Interpretation": interp,
+            "Action": action,
+            "Series": rc,
+        }
+    )
 
 pair_tbl = pd.DataFrame(pair_rows)
 if not pair_tbl.empty:
@@ -715,12 +724,14 @@ if pair_tbl.empty:
 else:
     top_tbl = pair_tbl.head(top_pairs_to_show).copy()
     st.dataframe(
-        top_tbl.drop(columns=["Series"]).style.format({
-            "ρ now": "{:+.2f}",
-            "Δρ w/w": "{:+.2f}",
-            "2Y pctile": "{:.0f}%",
-            "Signal score": "{:.1f}",
-        }),
+        top_tbl.drop(columns=["Series"]).style.format(
+            {
+                "ρ now": "{:+.2f}",
+                "Δρ w/w": "{:+.2f}",
+                "2Y pctile": "{:.0f}%",
+                "Signal score": "{:.1f}",
+            }
+        ),
         use_container_width=True,
         height=min(500, 40 * (len(top_tbl) + 1)),
     )
@@ -741,7 +752,7 @@ with h1:
         cmap = LinearSegmentedColormap.from_list(
             "soft_rwg",
             [(0.91, 0.55, 0.55), (1.0, 1.0, 1.0), (0.55, 0.82, 0.62)],
-            N=256
+            N=256,
         )
 
         fig, ax = plt.subplots(figsize=(9.2, 6.2))
@@ -780,22 +791,26 @@ with h2:
         rv_now = safe_last(rv)
         rv_z = zscore_last(rv)
 
-        asset_rows.append({
-            "Asset": label,
-            "1W %": one_w,
-            "1M RV": rv_now,
-            "RV z": rv_z,
-        })
+        asset_rows.append(
+            {
+                "Asset": label,
+                "1W %": one_w,
+                "1M RV": rv_now,
+                "RV z": rv_z,
+            }
+        )
 
     asset_tbl = pd.DataFrame(asset_rows)
     if not asset_tbl.empty:
         asset_tbl = asset_tbl.sort_values("RV z", ascending=False, na_position="last")
         st.dataframe(
-            asset_tbl.style.format({
-                "1W %": "{:+.2f}%",
-                "1M RV": "{:.1f}%",
-                "RV z": "{:+.2f}",
-            }),
+            asset_tbl.style.format(
+                {
+                    "1W %": "{:+.2f}%",
+                    "1M RV": "{:.1f}%",
+                    "RV z": "{:+.2f}",
+                }
+            ),
             use_container_width=True,
             height=min(420, 40 * (len(asset_tbl) + 1)),
         )
@@ -820,7 +835,7 @@ def plot_corr_chart(series, title):
         (mean6 - std6).values,
         (mean6 + std6).values,
         alpha=0.15,
-        label="6M band"
+        label="6M band",
     )
     ax.plot(rc.index, rc.values, label=f"{corr_window}D corr", linewidth=1.8)
     ax.plot(mean6.index, mean6.values, label="6M mean", linewidth=1.4)
@@ -842,7 +857,7 @@ else:
     chart_df = pair_tbl.head(show_detail_charts).copy()
     for i in range(0, len(chart_df), 2):
         cols = st.columns(2)
-        subset = chart_df.iloc[i:i+2]
+        subset = chart_df.iloc[i:i + 2]
         for col, (_, row) in zip(cols, subset.iterrows()):
             with col:
                 fig = plot_corr_chart(row["Series"], row["Pair"])
