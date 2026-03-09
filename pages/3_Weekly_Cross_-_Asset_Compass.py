@@ -38,7 +38,7 @@ st.markdown(
         font-weight: 700;
         letter-spacing: -0.02em;
         line-height: 1.2;
-        margin-top: 0.35rem;
+        margin-top: 0.55rem;
         margin-bottom: 0.2rem;
         padding-top: 0.1rem;
         overflow: visible;
