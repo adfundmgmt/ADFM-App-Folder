@@ -31,17 +31,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This tool recreates a Reventure-style **Home Value to Rent Ratio** using stable, public FRED series.
+        Purpose: Housing valuation monitor using home value-to-rent dynamics over time.
 
-        Sources (FRED):
-        • Case-Shiller U.S. National HPI (CSUSHPINSA)  
-        • CPI Rent of Primary Residence (CUSR0000SEHA)  
-        • NBER recession indicator (USREC)  
-        • 30Y fixed mortgage rate (MORTGAGE30US)
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Build notes:
-        • Ratio is built from indices; it is scaled so the long-run median matches the target median (default 13.9x).  
-        • All charts are plotted **per annum** as dots connected by lines.  
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
     st.markdown("---")

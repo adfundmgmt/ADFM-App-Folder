@@ -811,13 +811,20 @@ st.title(TITLE)
 st.caption(SUBTITLE)
 
 with st.sidebar:
-    st.markdown("### About This Tool")
-    st.write(
-        "Daily metrics: %5D, %1M, preset-matched %, RSI(14D)/(14W), MACD momentum, EMA 4/9/18, "
-        "3M RVOL, RVOL/SPY, and rolling 63D correlation to SPY. Equal-weight inside each basket. "
-        "Business-day alignment for consistent panels and hover."
+    st.header("About This Tool")
+    st.markdown(
+        """
+        Purpose: Internal basket monitor for equal-weight performance, trend, and SPY-relative context.
+
+        What it covers
+        • Daily basket return snapshots and relative performance versus SPY
+        • Trend, momentum, volatility, and correlation diagnostics by basket
+        • Constituent-level drill-down with stale-data and market-cap filters
+
+        Data source
+        • Internal basket definitions and Yahoo Finance market data
+        """
     )
-    st.write(f"Constituents are filtered for stale data and market cap ≥ {MIN_MARKET_CAP:,.0f} USD, with optional exceptions.")
     st.divider()
     st.markdown("### Controls")
 

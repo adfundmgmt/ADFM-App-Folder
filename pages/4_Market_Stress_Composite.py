@@ -111,14 +111,19 @@ with st.sidebar:
     st.caption(WEIGHTS_TEXT)
 
     st.markdown("---")
-    st.subheader("About this tool")
+    st.header("About This Tool")
     st.markdown(
-        "- Purpose: a single 0-100 risk dial blending implied vol, credit, credit ETF spread, curve inversion, funding stress, equity drawdown, realized vol, and concentration/breadth.\n"
-        "- Calendar: aligns to actual market sessions when available, with layered fallbacks.\n"
-        "- Data: FRED for macro series and Yahoo Finance for market series.\n"
-        "- Method: rolling percentiles over a 3-year trading-session window, with mask-based weight renormalization when a factor is stale or unavailable.\n"
-        "- Freshness: each factor has its own stale threshold, and the composite exposes active factor count and active weight.\n"
-        f"- Current weights: {WEIGHTS_TEXT}"
+        """
+        Purpose: Composite stress index blending volatility, credit, curve, funding, and breadth inputs.
+
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
+
+        Data source
+        • Public market and macro data feeds used throughout the app
+        """
     )
 
 # ---------------- Helpers ----------------

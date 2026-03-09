@@ -46,19 +46,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Track US inflation through a cleaner macro dashboard built on FRED CPI data.
+        Purpose: US CPI dashboard for inflation trend, momentum, and regime classification.
 
-        What it shows  
-        • Headline and core CPI levels, YoY, and MoM changes  
-        • 3 month annualised core inflation as a short-horizon signal  
-        • NBER recession shading across the visual set for regime context  
-        • A latest-print regime strip to show whether inflation is cooling, sticky, or reheating  
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
 
-        Under the hood  
-        • FRED series pulled directly from the St. Louis Fed CSV endpoint  
-        • Monthly data standardised to month start and aligned into one dataset  
-        • Preset windows plus custom month-aware range selection  
-        • Clean export of the same prepared dataset used by the charts
+        Data source
+        • Public market and macro data feeds used throughout the app
         """
     )
     st.markdown("---")

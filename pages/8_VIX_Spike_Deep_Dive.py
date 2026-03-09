@@ -105,32 +105,19 @@ st.title("VIX Spike Deep Dive")
 
 with st.sidebar:
     st.header("About This Tool")
-
-    st.markdown("**Purpose**")
     st.markdown(
-        "Evaluate short-horizon SPX behavior after a VIX spike. "
-        "Support sizing and timing of tactical bounce or fade setups."
-    )
+        """
+        Purpose: Evaluate post-spike equity behavior after volatility shocks.
 
-    st.markdown("**How it works**")
-    st.markdown(
-        "1. Detect days where VIX jumps by at least your threshold.\n"
-        "2. Bucket setups by VIX base level, spike magnitude, SPX regime vs chosen DMA, and RSI oversold.\n"
-        "3. Compute forward SPX returns for your horizon, with win rate, median, average, and p10, p50, p90 bands.\n"
-        "4. Summarize the setup in a Decision Box and score four lights based on tailwinds.\n"
-        "5. Render six panels: distributions, base × magnitude heatmap, regime ECDFs, base vs forward scatter, event study, yearly counts."
-    )
+        What it covers
+        • Forward SPX return distributions after configurable VIX spikes
+        • Hit-rate, tail-risk, and regime-conditioned outcome diagnostics
+        • Event-study and heatmap views to support tactical timing and sizing
 
-    st.markdown("**How to read**")
-    st.markdown(
-        "- Heatmap higher percentages indicate better hit rate for that base and magnitude.\n"
-        "- ECDF right shift indicates better outcomes in that regime.\n"
-        "- Scatter marker size reflects spike percent, color tags RSI oversold.\n"
-        "- Event study line shows average path after qualifying spikes, band is p10 to p90.\n"
-        "- Four lights is a simple composite of base, magnitude, regime, and RSI filters."
+        Data source
+        • Yahoo Finance VIX and SPX history
+        """
     )
-
-    st.caption("Data Yahoo Finance. Research utility only. Sample size changes with filters.")
     st.divider()
 
     st.header("Controls")

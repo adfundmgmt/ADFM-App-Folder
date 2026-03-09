@@ -509,6 +509,22 @@ st.title(TITLE)
 st.caption(SUBTITLE)
 
 with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        Purpose: Factor leadership monitor based on relative momentum, trend, and inflection signals.
+
+        What it covers
+        • Core signals and summary outputs for this dashboard
+        • Key context needed to interpret current regime or setup
+        • Practical view designed for quick internal decision support
+
+        Data source
+        • Public market and macro data feeds used throughout the app
+        """
+    )
+    st.markdown("---")
+with st.sidebar:
     st.header("Settings")
     history_start = st.date_input("History start", datetime(2018, 1, 1))
     window_choice = st.selectbox(

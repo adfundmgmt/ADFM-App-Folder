@@ -11,18 +11,15 @@ st.set_page_config(page_title="ADFM Chart Tool", layout="wide")
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     """
-    A technical chart built in Streamlit with Plotly.
+    Purpose: Technical chart workspace with trend, momentum, and optional Elliott diagnostics.
 
-    What it does
-    • Real datetime x-axis with trading-session gap removal
-    • Candlesticks with cleaner visual hierarchy
-    • 8 / 20 / 50 / 100 / 200 day moving averages
-    • Volume bars with muted up / down coloring
-    • Optional RSI (14) and MACD (12, 26, 9)
-    • Optional Bollinger Bands (20, 2.0)
-    • Optional Elliott-style pivot overlay using a heuristic swing model
+    What it covers
+    • Core signals and summary outputs for this dashboard
+    • Key context needed to interpret current regime or setup
+    • Practical view designed for quick internal decision support
 
-    Use the controls below to change ticker, period, interval, and overlays.
+    Data source
+    • Public market and macro data feeds used throughout the app
     """,
     unsafe_allow_html=True,
 )
