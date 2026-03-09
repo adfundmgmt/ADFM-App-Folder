@@ -1185,8 +1185,14 @@ if flow is not None and not flow.empty:
 # -----------------------------------------------------------------------------
 # Metrics
 # -----------------------------------------------------------------------------
-symbols_requested = len(symbols_all)
-symbols_scanned = scan_meta.get("symbols_scanned", 0) if isinstance(scan_meta, dict) else 0
+symbols_requested = int(len(symbols_all))
+
+raw_symbols_scanned = scan_meta.get("symbols_scanned", 0) if isinstance(scan_meta, dict) else 0
+try:
+    symbols_scanned = int(raw_symbols_scanned) if raw_symbols_scanned is not None else 0
+except Exception:
+    symbols_scanned = 0
+
 symbols_completed = int(diags["symbol"].nunique()) if not diags.empty and "symbol" in diags.columns else 0
 contracts_seen = int(diags["contracts_seen"].sum()) if not diags.empty and "contracts_seen" in diags.columns else 0
 scan_errors = int(diags["errors"].sum()) if not diags.empty and "errors" in diags.columns else 0
