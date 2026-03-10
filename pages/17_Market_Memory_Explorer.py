@@ -18,10 +18,8 @@ MIN_DAYS_FOR_CORR = 10
 CACHE_TTL_SECONDS = 3600
 
 TRAILING_DAYS = 252
-ROLLING_MIN_CORR = 0.5
-ROLLING_STEP = 5
-VOL_RATIO_LOW = 0.5
-VOL_RATIO_HIGH = 1.25
+ROLLING_MIN_CORR = 0.75
+ROLLING_STEP = 1
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
@@ -36,26 +34,27 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Historical analog explorer comparing the current market path versus prior periods.
+Purpose: Historical analog explorer comparing the current market path versus prior periods.
 
-        What the first chart does  
-        • Compares the current year-to-date cumulative return path against prior calendar years  
-        • Ranks analog years using correlation over the portion of the year completed so far  
-        • Helps frame where the current tape sits relative to past calendar-year paths
+What the first chart does
+• Compares the current year-to-date cumulative return path against prior calendar years
+• Ranks analog years using correlation over the portion of the year completed so far
+• Helps frame where the current tape sits relative to past calendar-year paths
 
-        What the second chart does  
-        • Compares the most recent trailing 252 trading days against all prior rolling 252-day windows  
-        • Matches on standardized daily return sequences rather than cumulative paths  
-        • Uses the matched historical windows to show what happened over the following 252 trading days  
-        • Adds a realized volatility screen so the setup shape and risk profile are closer
+What the second chart does
+• Takes the most recent trailing 252 trading day price path
+• Compares that path against all prior rolling 252 trading day historical price paths
+• Keeps historical windows with correlation at or above the selected threshold
+• Plots what happened in the next 252 trading days after those matched historical windows
+• Keeps the single best match per year to reduce duplicate windows from the same regime
 
-        Why this matters  
-        • Matching on cumulative paths can overstate similarity because smooth compounding boosts correlation  
-        • Matching on normalized daily returns is tougher and usually more honest  
-        • The second chart should be treated as scenario framing, not prediction
+How to read it
+• The second chart is a historical scenario tool based on similar trailing price action
+• It is matching normalized price paths, not fundamentals, macro backdrop, or valuation
+• It is best used as context for path framing rather than as a stand-alone forecast
 
-        Data source  
-        • Yahoo Finance adjusted close history
+Data source
+• Yahoo Finance adjusted close history
         """,
         unsafe_allow_html=False,
     )
@@ -71,7 +70,7 @@ with st.sidebar:
 
 col1, col2, col3 = st.columns([2, 1, 1])
 ticker_in = col1.text_input("Ticker", "^SPX").upper()
-top_n = col2.slider("Top Analogs", 1, 10, 5)
+top_n = col2.slider("Top Analogs", 1, 15, 8)
 min_corr = col3.slider("Min ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
 
 TICKER_ALIASES = {
@@ -111,6 +110,14 @@ def load_history(symbol: str) -> pd.DataFrame:
 
 def cumret(series: pd.Series) -> pd.Series:
     return series / series.iloc[0] - 1
+
+
+def normalized_price_path(series: pd.Series) -> pd.Series | None:
+    if len(series) < 2 or series.isna().any():
+        return None
+    out = series / series.iloc[0] - 1
+    out.index = np.arange(0, len(out))
+    return out
 
 
 def safe_corr(x: np.ndarray, y: np.ndarray) -> float:
@@ -202,42 +209,10 @@ def forward_path_from_signal(series: pd.Series, signal_loc: int, horizon: int) -
     return out
 
 
-def forward_ret_from_signal(series: pd.Series, signal_loc: int, horizon: int) -> float:
-    path = forward_path_from_signal(series, signal_loc, horizon)
-    if path is None:
-        return np.nan
-    return float(path.iloc[-1])
-
-
 def max_drawdown_from_path(path: pd.Series) -> float:
     wealth = 1 + path
     dd = wealth / wealth.cummax() - 1
     return float(dd.min())
-
-
-def pct_returns(series: pd.Series) -> pd.Series:
-    return series.pct_change().dropna()
-
-
-def standardized_return_feature(series: pd.Series) -> np.ndarray | None:
-    r = pct_returns(series)
-    if len(r) != len(series) - 1 or len(r) < 20:
-        return None
-
-    mu = float(r.mean())
-    sigma = float(r.std(ddof=0))
-    if not np.isfinite(sigma) or sigma == 0:
-        return None
-
-    z = (r - mu) / sigma
-    return z.to_numpy(dtype=float)
-
-
-def realized_vol(series: pd.Series) -> float:
-    r = pct_returns(series)
-    if len(r) == 0:
-        return np.nan
-    return float(r.std(ddof=0))
 
 
 try:
@@ -396,11 +371,11 @@ st.caption("© 2026 AD Fund Management LP")
 
 # =========================
 # SECOND OUTPUT
-# Rolling analogs used as a signal, then show next 252 trading days
+# Rolling trailing 252-day path match, then show next 252 trading days
 # =========================
 
 st.markdown("<hr style='margin-top:18px; margin-bottom:12px;'>", unsafe_allow_html=True)
-st.subheader(f"Forward {TRAILING_DAYS}-Day Signal from Rolling Historical Analogs")
+st.subheader(f"Forward {TRAILING_DAYS}-Day Signal from Rolling Historical Price Action")
 
 close_px = raw["Close"].dropna().copy()
 
@@ -412,17 +387,14 @@ if len(close_px) < TRAILING_DAYS * 3:
 else:
     current_start_loc = len(close_px) - TRAILING_DAYS
     current_trailing = close_px.iloc[-TRAILING_DAYS:].copy()
+    current_trailing_path = normalized_price_path(current_trailing)
 
-    current_feature = standardized_return_feature(current_trailing)
-    current_vol = realized_vol(current_trailing)
-
-    if current_feature is None or not np.isfinite(current_vol):
+    if current_trailing_path is None:
         st.warning("Current trailing window is not usable for the rolling analog signal.")
     else:
         rolling_matches = []
 
-        max_start = len(close_px) - TRAILING_DAYS + 1
-        for start_loc in range(0, max_start, ROLLING_STEP):
+        for start_loc in range(0, len(close_px) - TRAILING_DAYS + 1, ROLLING_STEP):
             end_loc = start_loc + TRAILING_DAYS
             signal_loc = end_loc - 1
 
@@ -430,20 +402,15 @@ else:
             if len(hist_window) != TRAILING_DAYS or hist_window.isna().any():
                 continue
 
-            # Keep the full forward outcome window outside the current live period
+            # ensure the full forward outcome sits outside the current live trailing window
             if end_loc + TRAILING_DAYS > current_start_loc:
                 continue
 
-            hist_feature = standardized_return_feature(hist_window)
-            hist_vol = realized_vol(hist_window)
-
-            if hist_feature is None or not np.isfinite(hist_vol):
+            hist_path = normalized_price_path(hist_window)
+            if hist_path is None or len(hist_path) != len(current_trailing_path):
                 continue
 
-            if not (VOL_RATIO_LOW * current_vol <= hist_vol <= VOL_RATIO_HIGH * current_vol):
-                continue
-
-            rho = safe_corr(current_feature, hist_feature)
+            rho = safe_corr(current_trailing_path.values, hist_path.values)
             if not np.isfinite(rho) or rho < ROLLING_MIN_CORR:
                 continue
 
@@ -458,9 +425,6 @@ else:
                     "Match End": pd.Timestamp(hist_window.index[-1]),
                     "Signal Date": pd.Timestamp(hist_window.index[-1]),
                     "Correlation": float(rho),
-                    "Window Vol": float(hist_vol),
-                    "Current Vol": float(current_vol),
-                    "Vol Ratio": float(hist_vol / current_vol) if current_vol != 0 else np.nan,
                     "Next 21D": float(fwd_path.iloc[min(21, len(fwd_path) - 1)]),
                     "Next 63D": float(fwd_path.iloc[min(63, len(fwd_path) - 1)]),
                     "Next 126D": float(fwd_path.iloc[min(126, len(fwd_path) - 1)]),
@@ -474,12 +438,12 @@ else:
 
         if not rolling_matches:
             st.warning(
-                f"No rolling {TRAILING_DAYS}-day windows found with correlation above {ROLLING_MIN_CORR:.2f} "
-                f"after matching on standardized daily returns and applying the volatility screen."
+                f"No rolling {TRAILING_DAYS}-day windows found with correlation above {ROLLING_MIN_CORR:.2f}."
             )
         else:
             rolling_df = pd.DataFrame(rolling_matches)
 
+            # keep only the best match per year
             best_by_year = (
                 rolling_df.sort_values(
                     ["Year", "Correlation", "Signal Date"],
@@ -579,10 +543,9 @@ else:
                 st.pyplot(fig2)
 
                 st.caption(
-                    f"Signal logic: the current trailing {TRAILING_DAYS}-day window is matched against prior rolling "
-                    f"{TRAILING_DAYS}-day windows using standardized daily return sequences, with a realized volatility "
-                    f"screen and a {ROLLING_STEP}-day search step. The chart then plots the next {TRAILING_DAYS} trading "
-                    f"days after those matched historical windows."
+                    f"Signal logic: take the current trailing {TRAILING_DAYS}-day normalized price path, compare it "
+                    f"with prior rolling {TRAILING_DAYS}-day historical price paths, keep matches with correlation "
+                    f"of at least {ROLLING_MIN_CORR:.2f}, then plot the next {TRAILING_DAYS} trading days after those signals."
                 )
 
                 table_df = best_by_year.copy()
@@ -590,7 +553,6 @@ else:
                 table_df["Match End"] = pd.to_datetime(table_df["Match End"]).dt.strftime("%Y-%m-%d")
                 table_df["Signal Date"] = pd.to_datetime(table_df["Signal Date"]).dt.strftime("%Y-%m-%d")
                 table_df["Correlation"] = table_df["Correlation"].map(lambda x: f"{x:.3f}")
-                table_df["Vol Ratio"] = table_df["Vol Ratio"].map(lambda x: "N/A" if pd.isna(x) else f"{x:.2f}x")
                 table_df["Next 21D"] = table_df["Next 21D"].map(lambda x: f"{x:.2%}")
                 table_df["Next 63D"] = table_df["Next 63D"].map(lambda x: f"{x:.2%}")
                 table_df["Next 126D"] = table_df["Next 126D"].map(lambda x: f"{x:.2%}")
@@ -604,7 +566,6 @@ else:
                         "Match End",
                         "Signal Date",
                         "Correlation",
-                        "Vol Ratio",
                         "Next 21D",
                         "Next 63D",
                         "Next 126D",
@@ -614,7 +575,7 @@ else:
                 ]
 
                 st.markdown(
-                    f"**Best forward signal per year with rolling ρ >= {ROLLING_MIN_CORR:.2f} after standardized return matching**"
+                    f"**Best forward signal per year with rolling {TRAILING_DAYS}-day path correlation >= {ROLLING_MIN_CORR:.2f}**"
                 )
                 st.dataframe(table_df, use_container_width=True, hide_index=True)
 
@@ -623,4 +584,4 @@ else:
                 d2.metric("Median Next 63D", fmt(float(np.nanmedian(best_by_year["Next 63D"]))))
                 d3.metric("Median Next 126D", fmt(float(np.nanmedian(best_by_year["Next 126D"]))))
 
-                st.caption("Second output: forward 252-day signal from rolling analogs")
+                st.caption("Second output: forward 252-day signal from rolling historical price action")
