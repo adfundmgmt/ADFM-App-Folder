@@ -20,7 +20,7 @@ CACHE_TTL_SECONDS = 3600
 TRAILING_DAYS = 252
 ROLLING_MIN_CORR = 0.75
 ROLLING_STEP = 5
-VOL_RATIO_LOW = 0.75
+VOL_RATIO_LOW = 0.5
 VOL_RATIO_HIGH = 1.25
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
