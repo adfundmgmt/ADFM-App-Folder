@@ -46,18 +46,6 @@ TOOLS_BY_CATEGORY = {
             "Sector Breadth and Rotation",
             "Tracks sector leadership and participation to identify rotation strength or deterioration.",
         ),
-        (
-            "Market Internals Breadth Monitor",
-            "Monitors participation breadth, new highs/lows, and concentration risk proxies like SPY/RSP and QQQ/SPY.",
-        ),
-        (
-            "Sentiment & Positioning Composite",
-            "Combines cross-asset risk appetite proxies into a single positioning and sentiment regime score.",
-        ),
-        (
-            "Cross-Asset Volume Dashboard",
-            "Volume-led monitor that scores cross-asset setups and weights chart paths by relative participation.",
-        ),
     ],
     "Supporting Research Tools": [
         (
@@ -95,10 +83,6 @@ TOOLS_BY_CATEGORY = {
         (
             "Home Value to Rent Ratio",
             "Tracks housing valuation pressure through home-price-to-rent dynamics.",
-        ),
-        (
-            "Event Risk Calendar",
-            "Maintains an editable catalyst calendar and quantifies SPY pre/post-event reaction windows.",
         ),
     ],
 }
