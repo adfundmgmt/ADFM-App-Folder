@@ -55,4 +55,14 @@ These are proprietary tools ADFM has built in-house to support daily decision-ma
 - **ADFM Public Equities Baskets**  
   A consolidated dashboard that tracks daily, equal-weight performance and technicals across all ADFM baskets, benchmarked to SPY, with aligned business-day panels and category-level drilldowns.
 
+
+- **Market Internals Breadth Monitor**  
+  Tracks participation breadth, 63-day new highs/lows, and concentration proxies (SPY/RSP, QQQ/SPY) to validate index strength.
+
+- **Event Risk Calendar**  
+  Maintains an editable catalyst calendar and evaluates SPY pre/post-event window behavior for tactical risk planning.
+
+- **Sentiment & Positioning Composite**  
+  Builds a composite risk-appetite score from beta appetite, growth-vs-defensive leadership, credit risk appetite, trend extension, and volatility aversion.
+
 These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast moving markets. Always a work in progress, open to feedback or feature ideas.
