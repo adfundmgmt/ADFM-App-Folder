@@ -54,6 +54,10 @@ TOOLS_BY_CATEGORY = {
             "Sentiment & Positioning Composite",
             "Combines cross-asset risk appetite proxies into a single positioning and sentiment regime score.",
         ),
+        (
+            "Cross-Asset Volume Dashboard",
+            "Volume-led monitor that scores cross-asset setups and weights chart paths by relative participation.",
+        ),
     ],
     "Supporting Research Tools": [
         (
