@@ -1,7 +1,7 @@
 # app.py
 # Hedge Timer
-# Static (image) charts, no toggles, no sliders.
-# Sidebar: About This Tool + Sanity check since 2020 (forward risk stats).
+# Static (image) charts with a sidebar lookback toggle for 1, 2, 3, 5, 10 years.
+# Sidebar: About This Tool + Chart lookback + Sanity check since 2020 (forward risk stats).
 #
 # Goal update:
 # - Avoid "short at the bottom" by adding (1) early-stage gating, (2) oversold block for NEW signals.
@@ -36,7 +36,7 @@ SPX_LABEL = "^SPX"
 NDX_LABEL = "^NDX"
 
 CALIBRATION_START = "2020-01-01"
-DISPLAY_SESSIONS = 252  # ~12 months of trading sessions
+DISPLAY_SESSIONS_DEFAULT = 252  # ~12 months of trading sessions
 HORIZON_DAYS = 20
 LEAD_LOOKBACK = 40
 
@@ -68,6 +68,8 @@ TICKERS = [
     "^VVIX",
 ]
 
+LOOKBACK_OPTIONS = [1, 2, 3, 5, 10]
+
 
 # ============================== Sidebar ==============================
 with st.sidebar:
@@ -80,11 +82,21 @@ with st.sidebar:
         • Composite hedge signal with explicit gating and oversold safeguards
         • Multi-horizon regime checks plus sanity testing since 2020
         • Practical readout for adding, holding, or reducing hedges
+        • Optional chart lookback window for 1, 2, 3, 5, or 10 years
 
         Data source
         • Yahoo Finance and FRED market/regime inputs
         """
     )
+
+    chart_years = st.radio(
+        "Chart lookback",
+        options=LOOKBACK_OPTIONS,
+        index=0,
+        horizontal=False,
+        format_func=lambda x: f"{x} year" if x == 1 else f"{x} years",
+    )
+
     st.markdown("---")
     st.markdown("### Sanity check since 2020")
     sanity_box = st.empty()
@@ -98,6 +110,10 @@ def _today() -> date:
 def _start_date() -> date:
     # enough history to compute MA200 and multi-timeframe indicators cleanly
     return _today() - timedelta(days=int(10 * 365.25) + 180)
+
+
+def sessions_for_years(years: int) -> int:
+    return int(round(252 * years))
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -598,7 +614,7 @@ def calibrate_threshold(
     return int(best_t)
 
 
-# ============================== Static Chart (rolling 12 months, no calendar gaps) ==============================
+# ============================== Static Chart Helpers ==============================
 def _display_name(ticker: str) -> str:
     if ticker == SPX_TICKER:
         return SPX_LABEL
@@ -623,7 +639,7 @@ def _apply_subtle_grid(ax: plt.Axes, y_only: bool = False) -> None:
     ax.spines["bottom"].set_alpha(0.30)
 
 
-def _plot_score_gradient(ax: plt.Axes, x: np.ndarray, y: np.ndarray) -> None:
+def _plot_score_gradient(ax: plt.Axes, x: np.ndarray, y: np.ndarray, lw: float = 2.2) -> None:
     # Color grade score: red -> yellow -> green
     cmap = LinearSegmentedColormap.from_list("ryg", ["#DC2626", "#F59E0B", "#10B981"])
     norm = Normalize(vmin=0, vmax=100)
@@ -633,20 +649,114 @@ def _plot_score_gradient(ax: plt.Axes, x: np.ndarray, y: np.ndarray) -> None:
 
     lc = LineCollection(segs, cmap=cmap, norm=norm)
     lc.set_array(y[:-1])
-    lc.set_linewidth(2.2)
+    lc.set_linewidth(lw)
     lc.set_alpha(0.95)
     ax.add_collection(lc)
 
     # Safety line on top for crispness
-    ax.plot(x, y, linewidth=0.7, color=(0, 0, 0, 0.10))
+    ax.plot(x, y, linewidth=max(0.55, lw * 0.30), color=(0, 0, 0, 0.10))
 
 
+def tick_rule_for_years(years: int) -> str:
+    if years <= 1:
+        return "MS"
+    if years == 2:
+        return "QS"
+    if years == 3:
+        return "4MS"
+    if years == 5:
+        return "2QS"
+    return "YS"
+
+
+def tick_label_for_years(d: pd.Timestamp, years: int) -> str:
+    if years <= 1:
+        return d.strftime("%b %Y")
+    if years <= 3:
+        return d.strftime("%b %Y")
+    return d.strftime("%Y")
+
+
+def chart_style_for_years(years: int) -> Dict[str, float]:
+    if years <= 1:
+        return {
+            "fig_w": 13.6,
+            "fig_h": 7.4,
+            "price_lw": 2.3,
+            "ma_lw": 1.7,
+            "score_lw": 2.2,
+            "marker_s": 72,
+            "marker_lw": 0.8,
+            "title_fs": 14,
+            "legend_fs": 9,
+            "label_fs": 10,
+            "xtick_fs": 9,
+        }
+    if years <= 2:
+        return {
+            "fig_w": 13.8,
+            "fig_h": 7.5,
+            "price_lw": 2.1,
+            "ma_lw": 1.55,
+            "score_lw": 2.0,
+            "marker_s": 58,
+            "marker_lw": 0.75,
+            "title_fs": 14,
+            "legend_fs": 9,
+            "label_fs": 10,
+            "xtick_fs": 9,
+        }
+    if years <= 3:
+        return {
+            "fig_w": 14.0,
+            "fig_h": 7.6,
+            "price_lw": 1.9,
+            "ma_lw": 1.45,
+            "score_lw": 1.9,
+            "marker_s": 50,
+            "marker_lw": 0.70,
+            "title_fs": 14,
+            "legend_fs": 9,
+            "label_fs": 10,
+            "xtick_fs": 8,
+        }
+    if years <= 5:
+        return {
+            "fig_w": 14.2,
+            "fig_h": 7.8,
+            "price_lw": 1.75,
+            "ma_lw": 1.30,
+            "score_lw": 1.75,
+            "marker_s": 38,
+            "marker_lw": 0.65,
+            "title_fs": 14,
+            "legend_fs": 8.5,
+            "label_fs": 10,
+            "xtick_fs": 8,
+        }
+    return {
+        "fig_w": 14.4,
+        "fig_h": 8.0,
+        "price_lw": 1.55,
+        "ma_lw": 1.15,
+        "score_lw": 1.55,
+        "marker_s": 30,
+        "marker_lw": 0.60,
+        "title_fs": 14,
+        "legend_fs": 8.5,
+        "label_fs": 10,
+        "xtick_fs": 8,
+    }
+
+
+# ============================== Static Chart (no calendar gaps) ==============================
 def plot_price_and_score_image(
     price: pd.Series,
     score: pd.Series,
     meta: Dict[str, pd.Series],
     t_short: int,
     title_prefix: str,
+    years: int = 1,
 ) -> plt.Figure:
     dfp = pd.DataFrame({"price": price, "score": score}).copy()
     dfp = dfp.dropna(subset=["price"])
@@ -655,8 +765,11 @@ def plot_price_and_score_image(
         plt.text(0.5, 0.5, "Insufficient data", ha="center", va="center")
         return fig
 
-    if len(dfp) > DISPLAY_SESSIONS:
-        dfp = dfp.iloc[-DISPLAY_SESSIONS:].copy()
+    display_sessions = sessions_for_years(years)
+    if len(dfp) > display_sessions:
+        dfp = dfp.iloc[-display_sessions:].copy()
+
+    style = chart_style_for_years(years)
 
     x = np.arange(len(dfp))
     idx = dfp.index
@@ -666,7 +779,7 @@ def plot_price_and_score_image(
 
     t_bias = max(40, t_short - 12)
 
-    fig = plt.figure(figsize=(13.6, 7.4))
+    fig = plt.figure(figsize=(style["fig_w"], style["fig_h"]))
     gs = fig.add_gridspec(2, 1, height_ratios=[3.0, 1.25], hspace=0.10)
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
@@ -676,9 +789,9 @@ def plot_price_and_score_image(
     ma50_c = "#A8DADC"   # pastel teal
     ma200_c = "#CDB4DB"  # pastel lavender
 
-    ax1.plot(x, dfp["price"].values, linewidth=2.3, color=price_c, label="Price")
-    ax1.plot(x, ma50.values, linewidth=1.7, color=ma50_c, label="MA50")
-    ax1.plot(x, ma200.values, linewidth=1.7, color=ma200_c, label="MA200")
+    ax1.plot(x, dfp["price"].values, linewidth=style["price_lw"], color=price_c, label="Price")
+    ax1.plot(x, ma50.values, linewidth=style["ma_lw"], color=ma50_c, label="MA50")
+    ax1.plot(x, ma200.values, linewidth=style["ma_lw"], color=ma200_c, label="MA200")
 
     pmin = float(np.nanmin(dfp["price"].values))
     pmax = float(np.nanmax(dfp["price"].values))
@@ -693,43 +806,64 @@ def plot_price_and_score_image(
             x[sig_on.values],
             dfp["price"].values[sig_on.values],
             marker="v",
-            s=72,
+            s=style["marker_s"],
             color="#DC2626",
             edgecolors="white",
-            linewidths=0.8,
+            linewidths=style["marker_lw"],
             label="Short signal (new)",
             zorder=6,
+            alpha=0.95 if years <= 3 else 0.90,
         )
 
     _apply_subtle_grid(ax1, y_only=False)
     ax1.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+    ax1.tick_params(axis="y", labelsize=style["label_fs"])
 
     # Score panel with red->yellow->green grading, omit from legend
     y_score = dfp["score"].fillna(0.0).values.astype(float)
-    _plot_score_gradient(ax2, x.astype(float), y_score)
+    _plot_score_gradient(ax2, x.astype(float), y_score, lw=style["score_lw"])
 
     t_short_c = "#111827"
     t_bias_c = "#9CA3AF"
     ax2.axhline(t_short, linewidth=1.1, color=t_short_c, alpha=0.70)
     ax2.axhline(t_bias, linewidth=1.0, color=t_bias_c, alpha=0.55)
     ax2.set_ylim(0, 100)
-    ax2.set_ylabel("Score (0-100)")
+    ax2.set_ylabel("Score (0-100)", fontsize=style["label_fs"])
+    ax2.tick_params(axis="y", labelsize=style["label_fs"])
     _apply_subtle_grid(ax2, y_only=True)
     ax2.set_xlim(-0.5, len(dfp) - 0.5)
 
-    # Month ticks
-    months = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq="MS")
+    # Adaptive date ticks
+    tick_freq = tick_rule_for_years(years)
+    ticks = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq=tick_freq)
     tick_pos, tick_lbl = [], []
-    for d in months:
+    min_spacing = {
+        1: 18,
+        2: 26,
+        3: 32,
+        5: 45,
+        10: 70,
+    }.get(years, 32)
+
+    for d in ticks:
         loc = idx.get_indexer([d], method="nearest")[0]
         if 0 <= loc < len(idx):
-            if not tick_pos or loc - tick_pos[-1] >= 18:
+            if not tick_pos or loc - tick_pos[-1] >= min_spacing:
                 tick_pos.append(int(loc))
-                tick_lbl.append(d.strftime("%b %Y"))
-    ax2.set_xticks(tick_pos)
-    ax2.set_xticklabels(tick_lbl, rotation=0, ha="center")
+                tick_lbl.append(tick_label_for_years(d, years))
 
-    fig.suptitle(f"{title_prefix} (Last 12 Months)", fontsize=14, fontweight="bold", y=0.985)
+    # Always ensure final point is represented
+    if len(idx) > 0:
+        last_loc = len(idx) - 1
+        if not tick_pos or last_loc - tick_pos[-1] >= max(10, min_spacing // 2):
+            tick_pos.append(last_loc)
+            tick_lbl.append(idx[-1].strftime("%b %Y") if years <= 3 else idx[-1].strftime("%Y"))
+
+    ax2.set_xticks(tick_pos)
+    ax2.set_xticklabels(tick_lbl, rotation=0, ha="center", fontsize=style["xtick_fs"])
+
+    yr_label = f"{years} Year" if years == 1 else f"{years} Years"
+    fig.suptitle(f"{title_prefix} ({yr_label})", fontsize=style["title_fs"], fontweight="bold", y=0.985)
 
     # Legend: drop Score entirely
     handles1, labels1 = ax1.get_legend_handles_labels()
@@ -740,7 +874,7 @@ def plot_price_and_score_image(
         bbox_to_anchor=(0.5, 0.952),
         ncol=4,
         frameon=False,
-        fontsize=9,
+        fontsize=style["legend_fs"],
     )
 
     fig.tight_layout(rect=[0.02, 0.02, 0.98, 0.90])
@@ -893,6 +1027,7 @@ fig = plot_price_and_score_image(
     meta=meta_target_series,
     t_short=t_short,
     title_prefix=f"{target_label}",
+    years=chart_years,
 )
 st.pyplot(fig, use_container_width=True)
 
