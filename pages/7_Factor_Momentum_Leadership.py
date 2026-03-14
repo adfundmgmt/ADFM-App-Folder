@@ -13,7 +13,7 @@ import matplotlib.dates as mdates
 # =========================================================
 # Config
 # =========================================================
-st.set_page_config(page_title="Factor Momentum", layout="wide")
+st.set_page_config(page_title="Factor Momentum Leadership", layout="wide")
 plt.style.use("default")
 
 TITLE = "Factor Momentum"
