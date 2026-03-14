@@ -63,22 +63,6 @@ def card_box(inner_html: str) -> None:
         unsafe_allow_html=True,
     )
 
-def metric_box(label: str, value: str, sub: Optional[str] = None) -> None:
-    sub_html = (
-        f'<div style="font-size:11px; color:{SUBTLE}; margin-top:4px;">{sub}</div>'
-        if sub else ""
-    )
-    st.markdown(
-        f"""
-        <div style="border:1px solid {BORDER}; border-radius:10px; padding:12px 14px; background:white;">
-            <div style="font-size:12px; color:{SUBTLE};">{label}</div>
-            <div style="font-size:25px; font-weight:700; color:{TEXT}; margin-top:4px;">{value}</div>
-            {sub_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 def _chunk(lst: List[str], n: int) -> List[List[str]]:
     n = max(1, int(n))
     return [lst[i:i + n] for i in range(0, len(lst), n)]
@@ -362,7 +346,6 @@ def _normalize_yf_download(df: pd.DataFrame, requested: List[str]) -> pd.DataFra
 
     out: Optional[pd.DataFrame] = None
 
-    # Flat columns, typically single ticker
     if not isinstance(df.columns, pd.MultiIndex):
         cols_lower = {str(c).lower(): c for c in df.columns}
         price_col = None
@@ -376,12 +359,10 @@ def _normalize_yf_download(df: pd.DataFrame, requested: List[str]) -> pd.DataFra
             s.name = ticker
             out = s.to_frame()
 
-    # MultiIndex columns
     if out is None and isinstance(df.columns, pd.MultiIndex):
         level0 = [str(x) for x in df.columns.get_level_values(0)]
         level1 = [str(x) for x in df.columns.get_level_values(1)]
 
-        # Case: first level is field, second level is ticker
         if "Close" in level0 or "Adj Close" in level0:
             field = "Close" if "Close" in level0 else "Adj Close"
             try:
@@ -393,7 +374,6 @@ def _normalize_yf_download(df: pd.DataFrame, requested: List[str]) -> pd.DataFra
             except Exception:
                 out = None
 
-        # Case: first level is ticker, second level is field
         if out is None:
             candidate_fields = {"Close", "Adj Close"}
             if any(f in level1 for f in candidate_fields):
@@ -524,6 +504,7 @@ with st.sidebar:
         """
     )
     st.markdown("---")
+
 with st.sidebar:
     st.header("Settings")
     history_start = st.date_input("History start", datetime(2018, 1, 1))
@@ -744,17 +725,6 @@ regime_score = float(np.clip(50.0 + 15.0 * raw_score, 0.0, 100.0))
 # Summary
 # =========================================================
 st.subheader(f"Factor Tape Summary ({window_choice})")
-
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    metric_box("Breadth", f"{breadth:.1f}%", "Share of factors in uptrends")
-with c2:
-    metric_box("Regime score", f"{regime_score:.1f}", "0 to 100 scale")
-with c3:
-    metric_box("Uptrends", str(num_up), "10 / 20 / 40 EMA stack")
-with c4:
-    metric_box("Downtrends", str(num_down), "10 / 20 / 40 EMA stack")
-
 summary_html = build_commentary(mom_df, breadth, regime_score)
 card_box(summary_html)
 
