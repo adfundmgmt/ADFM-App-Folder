@@ -16,7 +16,7 @@ import matplotlib.dates as mdates
 st.set_page_config(page_title="Factor Momentum Leadership", layout="wide")
 plt.style.use("default")
 
-TITLE = "Factor Momentum"
+TITLE = "Factor Momentum Leadership"
 SUBTITLE = "Factor momentum dashboard with broken-out factor charts and improved tape commentary."
 
 PASTELS = [
