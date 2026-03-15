@@ -3,6 +3,9 @@
 # AD Fund Management LP
 #
 # Revised / hardened version
+# - Fixes drawdown chart alignment by separating:
+#   1) positive drawdown stress for composite scoring
+#   2) negative drawdown series for plotting
 # - Safer Yahoo + FRED loaders with retries and shorter timeouts
 # - Safe secrets handling
 # - Graceful degradation when individual series fail
@@ -585,6 +588,7 @@ panel["CurveInv"] = -panel["T10Y3M"]
 spx_ret = panel["SPX"].pct_change()
 panel["RV21"] = np.sqrt(252.0) * spx_ret.rolling(21, min_periods=10).std()
 
+# Positive drawdown magnitude for scoring
 spx_roll_max = panel["SPX"].cummax()
 panel["DD_stress"] = -(100.0 * (panel["SPX"] / spx_roll_max - 1.0).clip(upper=0))
 
@@ -682,10 +686,12 @@ panel_plot = panel_lb.reindex(plot_idx).ffill()
 spx = panel_plot["SPX"].dropna()
 base = safe_float(spx.iloc[0]) if len(spx) else np.nan
 spx_rebased = (panel_plot["SPX"] / base) * 100.0 if pd.notna(base) and base != 0 else pd.Series(index=plot_idx, dtype=float)
-dd_series = -100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)
+
+# Negative drawdown series for plotting only
+dd_plot = (100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)).clip(upper=0)
 
 latest_spx_level = safe_float(panel_plot["SPX"].iloc[-1]) if len(panel_plot) else np.nan
-latest_dd_val = safe_float(dd_series.iloc[-1]) if len(dd_series) else np.nan
+latest_dd_val = safe_float(panel_plot["DD_stress"].iloc[-1]) if len(panel_plot) else np.nan
 latest_active_weight = safe_float(active_weight_s.iloc[-1]) if not active_weight_s.empty else np.nan
 latest_active_factors = int(active_factors_s.iloc[-1]) if not active_factors_s.empty and pd.notna(active_factors_s.iloc[-1]) else 0
 
@@ -730,7 +736,7 @@ fig = make_subplots(
     rows=2,
     cols=1,
     shared_xaxes=True,
-    vertical_spacing=0.06,
+    vertical_spacing=0.08,
     row_heights=[0.62, 0.38],
     specs=[[{"secondary_y": True}], [{}]],
     subplot_titles=("SPX and Drawdown", "Market Stress Composite"),
@@ -742,6 +748,7 @@ fig.add_trace(
         y=spx_rebased.reindex(plot_idx),
         name="SPX (rebased=100)",
         line=dict(width=2, color="#1f77b4"),
+        hovertemplate="%{x|%Y-%m-%d}<br>SPX rebased: %{y:.1f}<extra></extra>",
     ),
     row=1,
     col=1,
@@ -751,9 +758,10 @@ fig.add_trace(
 fig.add_trace(
     go.Scatter(
         x=plot_idx,
-        y=dd_series.reindex(plot_idx),
+        y=dd_plot.reindex(plot_idx),
         name="Drawdown (%)",
         line=dict(width=1.5, color="#d62728"),
+        hovertemplate="%{x|%Y-%m-%d}<br>Drawdown: %{y:.2f}%<extra></extra>",
     ),
     row=1,
     col=1,
@@ -766,6 +774,7 @@ fig.add_trace(
         y=comp_s.reindex(plot_idx),
         name="Composite",
         line=dict(width=2.3, color="#111111"),
+        hovertemplate="%{x|%Y-%m-%d}<br>Composite: %{y:.1f}<extra></extra>",
     ),
     row=2,
     col=1,
@@ -777,6 +786,7 @@ fig.add_trace(
         y=comp_s.reindex(plot_idx).rolling(21, min_periods=1).mean(),
         name="Composite 21D MA",
         line=dict(width=1.4, color="#7f7f7f", dash="dot"),
+        hovertemplate="%{x|%Y-%m-%d}<br>21D MA: %{y:.1f}<extra></extra>",
     ),
     row=2,
     col=1,
@@ -785,20 +795,31 @@ fig.add_trace(
 fig.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10)", row=2, col=1)
 fig.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)", row=2, col=1)
 
-finite_dd = dd_series.replace([np.inf, -np.inf], np.nan).dropna()
-dd_min = float(finite_dd.min()) if not finite_dd.empty else -5.0
-dd_min = min(-5.0, dd_min * 1.1)
+finite_dd = dd_plot.replace([np.inf, -np.inf], np.nan).dropna()
+if finite_dd.empty:
+    dd_floor = -5.0
+else:
+    dd_floor = min(-5.0, float(finite_dd.min()) * 1.1)
 
 fig.update_yaxes(title_text="Rebased", row=1, col=1, secondary_y=False)
-fig.update_yaxes(title_text="Drawdown %", row=1, col=1, secondary_y=True, range=[dd_min, 0])
+fig.update_yaxes(
+    title_text="Drawdown %",
+    row=1,
+    col=1,
+    secondary_y=True,
+    range=[dd_floor, 0],
+    tickformat=".1f",
+    zeroline=True,
+    zerolinewidth=1,
+)
 fig.update_yaxes(title_text="Score", row=2, col=1, range=[0, 100])
 fig.update_xaxes(title_text="Date", row=2, col=1, tickformat="%b-%d-%y")
 
 fig.update_layout(
     template="plotly_white",
     height=780,
-    margin=dict(l=50, r=30, t=60, b=50),
-    legend=dict(orientation="h", x=0, y=1.07, xanchor="left"),
+    margin=dict(l=50, r=30, t=80, b=50),
+    legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
 )
 
 st.plotly_chart(fig, use_container_width=True)
