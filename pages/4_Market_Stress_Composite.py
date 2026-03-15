@@ -2,19 +2,19 @@
 # Market Stress Composite
 # AD Fund Management LP
 #
-# Hardened version
-# - Layered trading calendar: SPY -> ^GSPC -> other market series -> bday fallback
-# - Hardened FRED loader with retries, fallback, and last-good cache
-# - Graceful degradation when one or more series fail
-# - Factor contribution table and confidence metrics
-# - Audit-friendly CSV export with masks and active weights
+# Revised / hardened version
+# - Safer Yahoo + FRED loaders with retries and shorter timeouts
+# - Safe secrets handling
+# - Graceful degradation when individual series fail
+# - Visible loading status so the app does not look blank
+# - More robust calendar and price extraction logic
+# - Export, diagnostics, contribution table preserved
 ############################################################
 
 from __future__ import annotations
 
 import io
 import time
-import hashlib
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -91,9 +91,11 @@ WEIGHTS_TEXT = (
     f"RV21 {W_RV:.2f}, Breadth {W_BREADTH:.2f}"
 )
 
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 12
 REQUEST_RETRIES = 3
-REQUEST_BACKOFF = 1.25
+REQUEST_BACKOFF = 1.35
+YF_TIMEOUT = 10
+YF_RETRIES = 2
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
@@ -114,15 +116,26 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Composite stress index blending volatility, credit, curve, funding, and breadth inputs.
+        Purpose: A cross-asset stress gauge that blends volatility, credit, funding, curve shape, realized volatility, drawdown pressure, and equity breadth into one normalized composite.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        What to look at
+        • Daily, weekly, and monthly regime reads  
+        • Which factors are actively driving the score today  
+        • Whether the composite is broad-based or being skewed by one or two inputs
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        How to use it
+        • High readings suggest stress is becoming systemic across assets  
+        • Low readings suggest a calmer tape with less cross-asset spillover  
+        • Neutral readings usually fit a market digesting shocks without full contagion
+
+        Construction notes
+        • Each factor is converted into a rolling percentile over a trailing trading-day window  
+        • Missing or stale inputs are masked out and weights are re-normalized across active factors  
+        • The diagnostics section shows freshness, activity, and raw inputs for auditability
+
+        Data sources
+        • FRED for macro and credit series  
+        • Yahoo Finance for ETFs and market proxies
         """
     )
 
@@ -136,9 +149,9 @@ def as_naive_date(ts_like) -> pd.Timestamp:
 
 def to_naive_date_index(obj):
     if isinstance(obj, (pd.Series, pd.DataFrame)):
-        obj = obj.copy()
-        idx = pd.to_datetime(obj.index)
-        obj.index = pd.DatetimeIndex(idx.date)
+        out = obj.copy()
+        out.index = pd.DatetimeIndex(pd.to_datetime(out.index)).tz_localize(None).normalize()
+        return out
     return obj
 
 def safe_float(x) -> float:
@@ -152,7 +165,9 @@ def cache_path(name: str) -> Path:
 
 def save_series_cache(series_id: str, s: pd.Series) -> None:
     try:
-        payload = pd.DataFrame({"date": pd.to_datetime(s.index).astype(str), "value": s.values})
+        payload = pd.DataFrame(
+            {"date": pd.to_datetime(s.index).astype(str), "value": pd.to_numeric(s.values, errors="coerce")}
+        )
         payload.to_csv(cache_path(f"{series_id}.csv"), index=False)
     except Exception:
         pass
@@ -164,8 +179,7 @@ def load_series_cache(series_id: str) -> pd.Series:
     try:
         df = pd.read_csv(p)
         if {"date", "value"}.issubset(df.columns):
-            s = pd.Series(df["value"].values, index=pd.to_datetime(df["date"]))
-            s = pd.to_numeric(s, errors="coerce")
+            s = pd.Series(pd.to_numeric(df["value"], errors="coerce").values, index=pd.to_datetime(df["date"]))
             return to_naive_date_index(s.dropna())
     except Exception:
         pass
@@ -183,16 +197,21 @@ def robust_request(url: str, params: Optional[dict] = None) -> Optional[requests
                 time.sleep(REQUEST_BACKOFF ** attempt)
     return None
 
+def get_fred_api_key() -> Optional[str]:
+    try:
+        return st.secrets.get("FRED_API_KEY", None)
+    except Exception:
+        return None
+
 def parse_fred_text_csv(text: str, series_id: str) -> pd.Series:
     df = pd.read_csv(io.StringIO(text))
-    cols = {c.lower(): c for c in df.columns}
+    cols = {str(c).lower(): c for c in df.columns}
     date_col = cols.get("date") or cols.get("observation_date")
     val_col = cols.get(series_id.lower()) or cols.get("value")
     if date_col is None or val_col is None:
         raise ValueError(f"Unexpected FRED CSV format for {series_id}. Columns: {list(df.columns)}")
-    s = pd.Series(pd.to_numeric(df[val_col], errors="coerce").values, index=pd.to_datetime(df[date_col]))
-    s = s.replace(".", np.nan)
-    s = pd.to_numeric(s, errors="coerce")
+    vals = pd.to_numeric(df[val_col].replace(".", np.nan), errors="coerce")
+    s = pd.Series(vals.values, index=pd.to_datetime(df[date_col]))
     return to_naive_date_index(s.dropna())
 
 def parse_fred_json_observations(payload: dict) -> pd.Series:
@@ -200,58 +219,62 @@ def parse_fred_json_observations(payload: dict) -> pd.Series:
     if not obs:
         return pd.Series(dtype=float)
     df = pd.DataFrame(obs)
-    date_col = "date" if "date" in df.columns else "observation_date"
-    val_col = "value"
-    s = pd.Series(pd.to_numeric(df[val_col], errors="coerce").values, index=pd.to_datetime(df[date_col]))
+    if "date" not in df.columns or "value" not in df.columns:
+        return pd.Series(dtype=float)
+    s = pd.Series(pd.to_numeric(df["value"].replace(".", np.nan), errors="coerce").values, index=pd.to_datetime(df["date"]))
     return to_naive_date_index(s.dropna())
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    start_str = pd.Timestamp(start).strftime("%Y-%m-%d")
-    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+    start = as_naive_date(start)
+    end = as_naive_date(end)
+    start_str = start.strftime("%Y-%m-%d")
+    end_str = end.strftime("%Y-%m-%d")
 
-    urls = [
-        ("csv", f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start_str}&coed={end_str}"),
-        ("csv", f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"),
-        ("json", "https://api.stlouisfed.org/fred/series/observations"),
+    csv_urls = [
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start_str}&coed={end_str}",
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
     ]
 
-    for kind, url in urls:
+    for url in csv_urls:
         try:
-            if kind == "csv":
-                r = robust_request(url)
-                if r is None or not r.text.strip():
-                    continue
-                s = parse_fred_text_csv(r.text, series_id)
-                if not s.empty:
-                    s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
-                    save_series_cache(series_id, s)
-                    return s
-            else:
-                api_key = st.secrets.get("FRED_API_KEY", None) if hasattr(st, "secrets") else None
-                params = {
-                    "series_id": series_id,
-                    "file_type": "json",
-                    "observation_start": start_str,
-                    "observation_end": end_str,
-                }
-                if api_key:
-                    params["api_key"] = api_key
-                r = robust_request(url, params=params)
-                if r is None:
-                    continue
-                payload = r.json()
-                s = parse_fred_json_observations(payload)
-                if not s.empty:
-                    s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
-                    save_series_cache(series_id, s)
-                    return s
+            r = robust_request(url)
+            if r is None or not r.text.strip():
+                continue
+            s = parse_fred_text_csv(r.text, series_id)
+            if not s.empty:
+                s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
+                save_series_cache(series_id, s)
+                return s
         except Exception:
             continue
 
+    try:
+        params = {
+            "series_id": series_id,
+            "file_type": "json",
+            "observation_start": start_str,
+            "observation_end": end_str,
+        }
+        api_key = get_fred_api_key()
+        if api_key:
+            params["api_key"] = api_key
+        r = robust_request("https://api.stlouisfed.org/fred/series/observations", params=params)
+        if r is not None:
+            payload = r.json()
+            s = parse_fred_json_observations(payload)
+            if not s.empty:
+                s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
+                save_series_cache(series_id, s)
+                return s
+    except Exception:
+        pass
+
     cached = load_series_cache(series_id)
     if not cached.empty:
-        return cached.loc[(cached.index >= start) & (cached.index <= end)].sort_index().ffill().dropna()
+        cached = cached.loc[(cached.index >= start) & (cached.index <= end)].sort_index().ffill().dropna()
+        if not cached.empty:
+            return cached
 
     return pd.Series(dtype=float)
 
@@ -261,61 +284,49 @@ def _extract_preferred_price(df: pd.DataFrame, ticker: str) -> pd.Series:
 
     data = df.copy()
 
-    # Flatten multi-index if present
     if isinstance(data.columns, pd.MultiIndex):
-        lvl0 = [str(x) for x in data.columns.get_level_values(0)]
-        lvl1 = [str(x) for x in data.columns.get_level_values(1)]
+        level0 = [str(x) for x in data.columns.get_level_values(0)]
+        level1 = [str(x) for x in data.columns.get_level_values(1)]
 
-        if ticker in lvl1:
-            sub = data.xs(ticker, axis=1, level=1, drop_level=True)
-            sub.columns = [str(c) for c in sub.columns]
-        elif ticker in lvl0:
+        if ticker in level1:
+            sub = data.xs(ticker, axis=1, level=1, drop_level=True).copy()
+        elif ticker in level0:
             sub = data[ticker].copy()
             if isinstance(sub, pd.Series):
                 sub = sub.to_frame(name=ticker)
         else:
-            try:
-                sub = data.xs("Adj Close", axis=1, level=0, drop_level=True)
-                if isinstance(sub, pd.Series):
-                    return to_naive_date_index(sub.rename(ticker).dropna())
-                if ticker in sub.columns:
-                    return to_naive_date_index(sub[ticker].dropna())
-            except Exception:
-                return pd.Series(dtype=float)
+            return pd.Series(dtype=float)
     else:
         sub = data.copy()
-        sub.columns = [str(c) for c in sub.columns]
 
     if isinstance(sub, pd.Series):
-        s = sub.rename(ticker)
+        s = pd.to_numeric(sub, errors="coerce").dropna().rename(ticker)
         s.index = pd.to_datetime(s.index)
-        return to_naive_date_index(pd.to_numeric(s, errors="coerce").dropna())
+        return to_naive_date_index(s)
 
-    preferred = None
-    for c in ["Adj Close", "Close", ticker]:
-        if c in sub.columns:
-            preferred = c
-            break
+    sub.columns = [str(c) for c in sub.columns]
 
-    if preferred is None:
+    preferred_cols = [c for c in ["Adj Close", "Close", ticker] if c in sub.columns]
+    if preferred_cols:
+        preferred = preferred_cols[0]
+    else:
         num_cols = sub.select_dtypes(include=[np.number]).columns.tolist()
         if not num_cols:
             return pd.Series(dtype=float)
         preferred = num_cols[0]
 
-    s = pd.to_numeric(sub[preferred], errors="coerce")
+    s = pd.to_numeric(sub[preferred], errors="coerce").dropna().rename(ticker)
     s.index = pd.to_datetime(sub.index)
-    return to_naive_date_index(s.dropna().rename(ticker))
+    return to_naive_date_index(s)
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def yf_history_raw(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    tickers_list = [tickers] if isinstance(tickers, str) else list(tickers)
-    series_list = []
+def yf_download_one(ticker: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    start = as_naive_date(start)
+    end = as_naive_date(end)
 
-    for t in tickers_list:
+    for attempt in range(YF_RETRIES):
         try:
             df = yf.download(
-                t,
+                ticker,
                 start=start,
                 end=end + pd.Timedelta(days=1),
                 progress=False,
@@ -323,12 +334,26 @@ def yf_history_raw(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFr
                 actions=False,
                 threads=False,
                 group_by="column",
+                timeout=YF_TIMEOUT,
             )
-            s = _extract_preferred_price(df, t)
+            s = _extract_preferred_price(df, ticker)
             if not s.empty:
-                series_list.append(s.rename(t))
+                return s
         except Exception:
-            continue
+            if attempt < YF_RETRIES - 1:
+                time.sleep(1.0 + attempt)
+
+    return pd.Series(dtype=float)
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def yf_history_raw(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    tickers_list = [tickers] if isinstance(tickers, str) else list(tickers)
+    series_list = []
+
+    for ticker in tickers_list:
+        s = yf_download_one(ticker, start, end)
+        if not s.empty:
+            series_list.append(s.rename(ticker))
 
     if not series_list:
         return pd.DataFrame()
@@ -471,7 +496,6 @@ def build_trading_calendar(start: pd.Timestamp, end: pd.Timestamp) -> Tuple[pd.D
         if not px.empty and ticker in px.columns and px[ticker].dropna().shape[0] > 100:
             return pd.DatetimeIndex(px.index.unique()).sort_values(), ticker
 
-    # Last resort fallback
     bidx = pd.bdate_range(start, end)
     return pd.DatetimeIndex(bidx), "Business-day fallback"
 
@@ -482,12 +506,16 @@ def to_trade_idx(s: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
     return s.reindex(idx).ffill()
 
 # ---------------- Load history ----------------
+status = st.status("Loading market and macro inputs...", expanded=False)
+
 today = today_naive()
 start_all = as_naive_date(today - pd.DateOffset(years=12))
 
+status.write("Building trading calendar...")
 trade_idx_all, calendar_source = build_trading_calendar(start_all, today)
 
 if len(trade_idx_all) == 0:
+    status.update(label="Failed to build trading calendar", state="error")
     st.error("Unable to construct any usable calendar.")
     st.stop()
 
@@ -496,7 +524,7 @@ if calendar_source == "Business-day fallback":
 else:
     st.caption(f"Calendar source: {calendar_source}")
 
-# FRED
+status.write("Loading FRED series...")
 vix_f = fred_series(FRED["vix"], start_all, today)
 hy_f = fred_series(FRED["hy_oas"], start_all, today)
 yc_f = fred_series(FRED["yc_10y_3m"], start_all, today)
@@ -504,9 +532,9 @@ cp3m_f = fred_series(FRED["cp_3m"], start_all, today)
 tb3m_f = fred_series(FRED["tbill_3m"], start_all, today)
 spx_f = fred_series(FRED["spx"], start_all, today)
 
-fund_f = to_naive_date_index(cp3m_f - tb3m_f)
+fund_f = to_naive_date_index(cp3m_f - tb3m_f) if not cp3m_f.empty and not tb3m_f.empty else pd.Series(dtype=float)
 
-# Yahoo
+status.write("Loading Yahoo market proxies...")
 px_eq_credit = yf_history_raw(["HYG", "LQD", "SPY", "RSP"], start_all, today)
 
 hy_lqd_s = pd.Series(dtype=float)
@@ -527,53 +555,28 @@ if not px_eq_credit.empty:
         spy_rsp_s = (px_eq_credit["SPY"] / px_eq_credit["RSP"]).replace([np.inf, -np.inf], np.nan).dropna()
 
 if all(s.dropna().empty for s in [vix_f, hy_f, yc_f, fund_f, spx_f]) and spy_price_s.empty:
+    status.update(label="No usable market or macro data could be loaded", state="error")
     st.error("No usable market or macro data could be loaded.")
     st.stop()
 
 panel = pd.DataFrame(index=trade_idx_all)
 
-if not spy_price_s.empty:
-    panel["SPY"] = to_trade_idx(spy_price_s, trade_idx_all)
-else:
-    panel["SPY"] = np.nan
+panel["SPY"] = to_trade_idx(spy_price_s, trade_idx_all) if not spy_price_s.empty else np.nan
 
 if not spx_f.empty:
     panel["SPX"] = to_trade_idx(spx_f, trade_idx_all)
 elif not spy_price_s.empty:
-    base_spy = spy_price_s.iloc[0]
-    panel["SPX"] = to_trade_idx(spy_price_s / base_spy * 100.0, trade_idx_all)
+    base_spy = safe_float(spy_price_s.iloc[0])
+    panel["SPX"] = to_trade_idx((spy_price_s / base_spy) * 100.0, trade_idx_all) if pd.notna(base_spy) and base_spy != 0 else np.nan
 else:
     panel["SPX"] = np.nan
 
-if not vix_f.empty:
-    panel["VIX"] = to_trade_idx(vix_f, trade_idx_all)
-else:
-    panel["VIX"] = np.nan
-
-if not hy_f.empty:
-    panel["HY_OAS"] = to_trade_idx(hy_f, trade_idx_all)
-else:
-    panel["HY_OAS"] = np.nan
-
-if not yc_f.empty:
-    panel["T10Y3M"] = to_trade_idx(yc_f, trade_idx_all)
-else:
-    panel["T10Y3M"] = np.nan
-
-if not fund_f.empty:
-    panel["FUND"] = to_trade_idx(fund_f, trade_idx_all)
-else:
-    panel["FUND"] = np.nan
-
-if not hy_lqd_s.empty:
-    panel["HY_LQD"] = to_trade_idx(hy_lqd_s, trade_idx_all)
-else:
-    panel["HY_LQD"] = np.nan
-
-if not spy_rsp_s.empty:
-    panel["SPY_RSP"] = to_trade_idx(spy_rsp_s, trade_idx_all)
-else:
-    panel["SPY_RSP"] = np.nan
+panel["VIX"] = to_trade_idx(vix_f, trade_idx_all) if not vix_f.empty else np.nan
+panel["HY_OAS"] = to_trade_idx(hy_f, trade_idx_all) if not hy_f.empty else np.nan
+panel["T10Y3M"] = to_trade_idx(yc_f, trade_idx_all) if not yc_f.empty else np.nan
+panel["FUND"] = to_trade_idx(fund_f, trade_idx_all) if not fund_f.empty else np.nan
+panel["HY_LQD"] = to_trade_idx(hy_lqd_s, trade_idx_all) if not hy_lqd_s.empty else np.nan
+panel["SPY_RSP"] = to_trade_idx(spy_rsp_s, trade_idx_all) if not spy_rsp_s.empty else np.nan
 
 panel = normalize_frame(panel)
 
@@ -661,8 +664,11 @@ active_weight_s = pd.Series(active_w, index=scores.index, name="active_weight").
 active_factors_s = pd.Series(M.sum(axis=1), index=scores.index, name="active_factors").reindex(comp_s.index)
 
 if comp_s.empty:
+    status.update(label="Composite has no valid points for the selected lookback", state="error")
     st.error("Composite has no valid points for the selected lookback.")
     st.stop()
+
+status.update(label="Data loaded", state="complete")
 
 # ---------------- Latest stats ----------------
 latest_idx = comp_s.index[-1]
@@ -674,7 +680,7 @@ plot_idx = comp_s.index.copy()
 panel_plot = panel_lb.reindex(plot_idx).ffill()
 
 spx = panel_plot["SPX"].dropna()
-base = spx.iloc[0] if len(spx) else np.nan
+base = safe_float(spx.iloc[0]) if len(spx) else np.nan
 spx_rebased = (panel_plot["SPX"] / base) * 100.0 if pd.notna(base) and base != 0 else pd.Series(index=plot_idx, dtype=float)
 dd_series = -100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)
 
@@ -780,11 +786,11 @@ fig.add_hrect(y0=REGIME_HI, y1=100, line_width=0, fillcolor="rgba(214,39,40,0.10
 fig.add_hrect(y0=0, y1=REGIME_LO, line_width=0, fillcolor="rgba(44,160,44,0.10)", row=2, col=1)
 
 finite_dd = dd_series.replace([np.inf, -np.inf], np.nan).dropna()
-dd_max = float(finite_dd.max()) if not finite_dd.empty else 5.0
-dd_max = max(5.0, dd_max * 1.1)
+dd_min = float(finite_dd.min()) if not finite_dd.empty else -5.0
+dd_min = min(-5.0, dd_min * 1.1)
 
 fig.update_yaxes(title_text="Rebased", row=1, col=1, secondary_y=False)
-fig.update_yaxes(title_text="Drawdown %", row=1, col=1, secondary_y=True, range=[0, dd_max])
+fig.update_yaxes(title_text="Drawdown %", row=1, col=1, secondary_y=True, range=[dd_min, 0])
 fig.update_yaxes(title_text="Score", row=2, col=1, range=[0, 100])
 fig.update_xaxes(title_text="Date", row=2, col=1, tickformat="%b-%d-%y")
 
@@ -820,21 +826,30 @@ with st.expander("Diagnostics"):
                 panel_plot["HY_LQD"].loc[latest] if "HY_LQD" in panel_plot.columns else np.nan,
                 panel_plot["CurveInv"].loc[latest] if "CurveInv" in panel_plot.columns else np.nan,
                 panel_plot["FUND"].loc[latest] if "FUND" in panel_plot.columns else np.nan,
-                panel_plot["DD_stress"].loc[latest],
-                panel_plot["RV21"].loc[latest],
+                panel_plot["DD_stress"].loc[latest] if "DD_stress" in panel_plot.columns else np.nan,
+                panel_plot["RV21"].loc[latest] if "RV21" in panel_plot.columns else np.nan,
                 panel_plot["SPY_RSP"].loc[latest] if "SPY_RSP" in panel_plot.columns else np.nan,
             ],
             "percentile": [
-                scores.loc[latest, "VIX_p"] * 100.0,
-                scores.loc[latest, "HY_OAS_p"] * 100.0,
-                scores.loc[latest, "HY_LQD_p"] * 100.0,
-                scores.loc[latest, "CurveInv_p"] * 100.0,
-                scores.loc[latest, "Fund_p"] * 100.0,
-                scores.loc[latest, "DD_p"] * 100.0,
-                scores.loc[latest, "RV21_p"] * 100.0,
-                scores.loc[latest, "Breadth_p"] * 100.0,
+                safe_float(scores.loc[latest, "VIX_p"] * 100.0) if "VIX_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, "HY_OAS_p"] * 100.0) if "HY_OAS_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, "HY_LQD_p"] * 100.0) if "HY_LQD_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, "CurveInv_p"] * 100.0) if "CurveInv_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, "Fund_p"] * 100.0) if "Fund_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, "DD_p"] * 100.0) if "DD_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, "RV21_p"] * 100.0) if "RV21_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, "Breadth_p"] * 100.0) if "Breadth_p" in scores.columns else np.nan,
             ],
-            "active": latest_contrib.sort_values("factor")["mask"].values,
+            "active": [
+                bool(masks.loc[latest, "VIX_m"]) if "VIX_m" in masks.columns else False,
+                bool(masks.loc[latest, "HY_OAS_m"]) if "HY_OAS_m" in masks.columns else False,
+                bool(masks.loc[latest, "HY_LQD_m"]) if "HY_LQD_m" in masks.columns else False,
+                bool(masks.loc[latest, "Curve_m"]) if "Curve_m" in masks.columns else False,
+                bool(masks.loc[latest, "Fund_m"]) if "Fund_m" in masks.columns else False,
+                bool(masks.loc[latest, "DD_m"]) if "DD_m" in masks.columns else False,
+                bool(masks.loc[latest, "RV21_m"]) if "RV21_m" in masks.columns else False,
+                bool(masks.loc[latest, "Breadth_m"]) if "Breadth_m" in masks.columns else False,
+            ],
             "days_since_update": [
                 age_map["VIX"].reindex(plot_idx).loc[latest] if "VIX" in age_map else np.nan,
                 age_map["HY_OAS"].reindex(plot_idx).loc[latest] if "HY_OAS" in age_map else np.nan,
@@ -857,7 +872,7 @@ with st.expander("Diagnostics"):
             ],
         }
     )
-    diag["percentile"] = diag["percentile"].round(1)
+    diag["percentile"] = pd.to_numeric(diag["percentile"], errors="coerce").round(1)
     diag["days_since_update"] = pd.to_numeric(diag["days_since_update"], errors="coerce").round(0)
     st.dataframe(diag, use_container_width=True, hide_index=True)
 
@@ -865,7 +880,10 @@ with st.expander("Diagnostics"):
 with st.expander("Download Data"):
     export_idx = plot_idx
 
-    export_panel_cols = [c for c in ["SPX", "VIX", "HY_OAS", "HY_LQD", "T10Y3M", "CurveInv", "FUND", "DD_stress", "RV21", "SPY_RSP"] if c in panel.columns]
+    export_panel_cols = [
+        c for c in ["SPX", "VIX", "HY_OAS", "HY_LQD", "T10Y3M", "CurveInv", "FUND", "DD_stress", "RV21", "SPY_RSP"]
+        if c in panel.columns
+    ]
     export_panel = panel.reindex(export_idx)[export_panel_cols].copy()
 
     export_scores = (scores.reindex(export_idx) * 100.0).rename(
