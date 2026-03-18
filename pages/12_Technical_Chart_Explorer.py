@@ -64,6 +64,18 @@ elliott_mode = st.sidebar.selectbox(
     index=0,
 )
 
+# --------------------------- Header ---------------------------
+header_suffix = "ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
+st.markdown(
+    f"""
+<div style="margin-bottom: 6px;">
+    <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
+        {ticker} | {header_suffix}
+    </h2>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 # --------------------------- Helpers ---------------------------
 def start_date_from_period(p: str) -> pd.Timestamp | None:
     today = pd.Timestamp.today().normalize()
@@ -507,10 +519,10 @@ if show_ma100:
     legend_items.append(("MA 100", COLORS["ma100"]))
 legend_items.append(("MA 200", COLORS["ma200"]))
 
-legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin:2px 0 10px 2px;">'
+legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin:2px 0 8px 2px;">'
 for label, color in legend_items:
-    legend_html += f'<div style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444444;">'
-    legend_html += f'<span style="display:inline-block; width:28px; height:0; border-top:3px solid {color};"></span>'
+    legend_html += f'<div style="display:flex; align-items:center; gap:8px; font-size:13px; color:#444444; line-height:1;">'
+    legend_html += f'<span style="display:inline-block; width:30px; height:0; border-top:3px solid {color};"></span>'
     legend_html += f'<span>{label}</span>'
     legend_html += '</div>'
 legend_html += '</div>'
@@ -872,6 +884,7 @@ fig.update_layout(
     margin=dict(l=40, r=20, t=10, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     showlegend=False,
+    legend_title_text="",
     bargap=0.08,
 )
 
