@@ -28,7 +28,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # ---------------- App config ----------------
-TITLE = "Cross-Asset RVOL Stress Composite"
+TITLE = "Market Stress Composite"
 st.set_page_config(page_title=TITLE, layout="wide")
 st.title(TITLE)
 
