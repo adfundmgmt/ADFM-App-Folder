@@ -1,6 +1,5 @@
 import time
 from io import StringIO
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -8,8 +7,6 @@ import requests
 import streamlit as st
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # -----------------------------------------------------------------------------
 # Page config
@@ -39,17 +36,10 @@ THEME = {
     "paper_bg": "white",
     "plot_bg": "white",
     "border": "rgba(31, 41, 55, 0.10)",
-    "card_bg": "#ffffff",
 }
 
 PERIOD_OPTIONS = ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"]
-
-CACHE_DIR = Path(".fred_cache")
-CACHE_DIR.mkdir(exist_ok=True)
-
-FRED_BASE_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-REQUEST_TIMEOUT = (10, 60)  # connect timeout, read timeout
-MAX_RETRIES = 4
+REQUEST_TIMEOUT = 20
 
 # -----------------------------------------------------------------------------
 # Styling
@@ -122,30 +112,6 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-def get_requests_session() -> requests.Session:
-    session = requests.Session()
-    retry = Retry(
-        total=MAX_RETRIES,
-        connect=MAX_RETRIES,
-        read=MAX_RETRIES,
-        backoff_factor=1.25,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "text/csv,text/plain,*/*",
-            "Cache-Control": "no-cache",
-        }
-    )
-    return session
-
-
 def apply_base_layout(fig: go.Figure, title: str | None = None, height: int = 460) -> go.Figure:
     fig.update_layout(
         title=title,
@@ -266,7 +232,7 @@ def detect_fred_error_payload(text: str, series_id: str) -> None:
     if "<html" in preview or "<!doctype html" in preview:
         raise RuntimeError(
             f"FRED returned HTML instead of CSV for {series_id}. "
-            f"This is usually a temporary upstream issue or rate-limit page."
+            f"This usually means a temporary upstream error or rate-limit page."
         )
     if "error" in preview and "date" not in preview:
         raise RuntimeError(f"FRED returned an error payload for {series_id}.")
@@ -306,55 +272,34 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     return out
 
 
-def cache_path_for_series(series_id: str) -> Path:
-    return CACHE_DIR / f"{series_id}.csv"
+def fetch_fred_csv(series_id: str) -> pd.DataFrame:
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/csv,text/plain,*/*",
+        "Cache-Control": "no-cache",
+    }
 
-
-def write_series_cache(series_id: str, text: str) -> None:
-    cache_path_for_series(series_id).write_text(text, encoding="utf-8")
-
-
-def read_series_cache(series_id: str) -> str | None:
-    p = cache_path_for_series(series_id)
-    if p.exists():
-        return p.read_text(encoding="utf-8")
-    return None
-
-
-def fetch_fred_csv_text(series_id: str) -> str:
-    url = FRED_BASE_URL.format(series_id=series_id)
-    session = get_requests_session()
     last_error = None
-
-    for attempt in range(1, MAX_RETRIES + 2):
+    for attempt in range(3):
         try:
-            response = session.get(url, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            text = response.text
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            text = resp.text
             detect_fred_error_payload(text, series_id)
-            if not text.strip():
-                raise RuntimeError(f"Empty CSV payload for {series_id}")
-            write_series_cache(series_id, text)
-            return text
+
+            df = pd.read_csv(StringIO(text))
+            if df.empty:
+                raise RuntimeError(f"Empty CSV returned for {series_id}")
+
+            df = normalize_fred_columns(df, series_id)
+            return df
+
         except Exception as e:
             last_error = e
-            if attempt < MAX_RETRIES + 1:
-                time.sleep(min(1.5 * attempt, 5))
-
-    cached = read_series_cache(series_id)
-    if cached:
-        return cached
+            time.sleep(1 + attempt)
 
     raise RuntimeError(f"Failed to fetch FRED series {series_id}: {last_error}")
-
-
-def fetch_fred_csv(series_id: str) -> pd.DataFrame:
-    text = fetch_fred_csv_text(series_id)
-    df = pd.read_csv(StringIO(text))
-    if df.empty:
-        raise RuntimeError(f"Empty dataframe returned for {series_id}")
-    df = normalize_fred_columns(df, series_id)
-    return df
 
 
 def load_fred_series(series_id: str, start: str) -> pd.Series:
@@ -585,6 +530,7 @@ def plot_mom(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Ti
     )
 
     add_recession_shapes(fig, recession_periods, rows=[1, 2])
+
     fig.update_yaxes(title_text="% MoM", row=1, col=1)
     fig.update_yaxes(title_text="% MoM", row=2, col=1)
     fig.update_layout(showlegend=False)
@@ -627,6 +573,7 @@ def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp
     )
 
     add_recession_shapes(fig, recession_periods, rows=[1, 2])
+
     fig.update_yaxes(title_text="Index", row=1, col=1)
     fig.update_yaxes(title_text="% Ann.", row=2, col=1)
     apply_base_layout(fig, title="Core CPI Level and Short-Horizon Inflation Signal", height=560)
@@ -635,9 +582,14 @@ def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp
 # -----------------------------------------------------------------------------
 # Data load and prep
 # -----------------------------------------------------------------------------
+status = st.empty()
+status.info("Loading FRED CPI data...")
+
 try:
     raw_df = fetch_fred_dataset(START_DATE_FULL)
+    status.empty()
 except Exception as e:
+    status.empty()
     st.error(f"Failed to load FRED data: {e}")
     st.stop()
 
@@ -839,15 +791,6 @@ with st.expander("Methodology & Sources", expanded=False):
         • materially below YoY = disinflationary  
         • near YoY = sticky  
         • materially above YoY = reheating
-
-        **Reliability changes in this version**  
-        • Replaced `urllib` with `requests.Session()`  
-        • Added retry and backoff logic for transient FRED/network issues  
-        • Increased read timeout materially  
-        • Added last-good local CSV cache fallback per series
-
-        **Notes**  
-        All series are standardised to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
         """
     )
 
