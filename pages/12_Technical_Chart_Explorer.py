@@ -881,6 +881,11 @@ fig.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
+    xaxis=dict(
+        unifiedhovertitle=dict(
+            text="<b>%{x|%b %d, %Y}</b>"
+        )
+    ),
     margin=dict(l=40, r=20, t=10, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     showlegend=False,
