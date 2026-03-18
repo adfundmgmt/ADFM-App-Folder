@@ -488,14 +488,14 @@ row_count = 1 + len(active_panels)
 if row_count == 1:
     row_heights = [1.0]
 elif row_count == 2:
-    row_heights = [0.78, 0.22]
+    row_heights = [0.80, 0.20]
 elif row_count == 3:
-    row_heights = [0.68, 0.14, 0.18]
+    row_heights = [0.72, 0.14, 0.14]
 else:
-    row_heights = [0.60, 0.14, 0.13, 0.13]
+    row_heights = [0.66, 0.12, 0.11, 0.11]
 
-height_map = {1: 650, 2: 780, 3: 930, 4: 1080}
-fig_height = height_map.get(row_count, 1080)
+height_map = {1: 620, 2: 740, 3: 840, 4: 920}
+fig_height = height_map.get(row_count, 920)
 
 specs = [[{"type": "candlestick"}]]
 for panel in active_panels:
@@ -508,7 +508,7 @@ fig = make_subplots(
     rows=row_count,
     cols=1,
     shared_xaxes=True,
-    vertical_spacing=0.02,
+    vertical_spacing=0.012,
     row_heights=row_heights,
     specs=specs,
 )
@@ -554,7 +554,7 @@ fig.add_trace(
         increasing_fillcolor=COLORS["up"],
         decreasing_line_color=COLORS["down"],
         decreasing_fillcolor=COLORS["down"],
-        name="",
+        name="Price",
         showlegend=False,
         hovertemplate=(
             "Date: %{x|%Y-%m-%d}<br>"
@@ -853,6 +853,7 @@ fig.update_layout(
     margin=dict(l=40, r=20, t=20, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     showlegend=True,
+    legend_title_text="",
     legend=dict(
         orientation="h",
         y=1.02,
@@ -907,6 +908,19 @@ if show_macd:
     fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
 
 # --------------------------- Render ---------------------------
+st.markdown(
+    """
+    <style>
+        .block-container {
+            padding-top: 0.55rem;
+            padding-bottom: 0.75rem;
+            max-width: 1650px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
 st.markdown(
