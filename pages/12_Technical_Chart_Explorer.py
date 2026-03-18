@@ -507,15 +507,14 @@ if show_ma100:
     legend_items.append(("MA 100", COLORS["ma100"]))
 legend_items.append(("MA 200", COLORS["ma200"]))
 
-legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin: 2px 0 10px 2px;">'
+legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin:2px 0 10px 2px;">'
 for label, color in legend_items:
-    legend_html += f"""
-        <div style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444444;">
-            <span style="display:inline-block; width:28px; height:0; border-top:3px solid {color};"></span>
-            <span>{label}</span>
-        </div>
-    """
-legend_html += "</div>"
+    legend_html += f'<div style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444444;">'
+    legend_html += f'<span style="display:inline-block; width:28px; height:0; border-top:3px solid {color};"></span>'
+    legend_html += f'<span>{label}</span>'
+    legend_html += '</div>'
+legend_html += '</div>'
+
 st.markdown(legend_html, unsafe_allow_html=True)
 
 # --------------------------- Panel Setup ---------------------------
