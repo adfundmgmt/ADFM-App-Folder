@@ -1,5 +1,3 @@
-fix this Failed to load FRED data: Failed to fetch FRED series CPIAUCNS: The read operation timed out
-
 import streamlit as st
 import pandas as pd
 import numpy as np
