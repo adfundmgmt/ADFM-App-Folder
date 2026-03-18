@@ -80,11 +80,12 @@ PRESET_GROUPS: Dict[str, List[Tuple[str, str, str]]] = {
     "Cross Asset": [
         ("SPY", "TLT", "Equities / Long Treasuries"),
         ("HYG", "LQD", "High Yield / Investment Grade Credit"),
-        ("GLD", "TLT", "Gold / Long Treasuries"),
         ("TIP", "TLT", "Inflation Linkers / Long Treasuries"),
         ("DBC", "TLT", "Broad Commodities / Long Treasuries"),
+        ("GLD", "TLT", "Gold / Long Treasuries"),
         ("UUP", "GLD", "Dollar / Gold"),
         ("XLE", "TLT", "Energy / Long Treasuries"),
+        ("IWM", "TLT", "Small Caps / Long Treasuries"),
     ],
     "US vs Ex-US": [
         ("VXUS", "SPY", "Ex-US Equities / US Equities"),
@@ -93,6 +94,7 @@ PRESET_GROUPS: Dict[str, List[Tuple[str, str, str]]] = {
         ("EZU", "SPY", "Europe / US Equities"),
         ("EEM", "SPY", "Emerging Markets / US Equities"),
         ("FXI", "SPY", "China Large Caps / US Equities"),
+        ("INDA", "SPY", "India / US Equities"),
     ],
     "Cross Sector / Cross Ticker": [
         ("XLY", "XLP", "Consumer Discretionary / Staples"),
@@ -101,16 +103,18 @@ PRESET_GROUPS: Dict[str, List[Tuple[str, str, str]]] = {
         ("QQQ", "IWM", "Large Growth / Small Caps"),
         ("SMH", "QQQ", "Semis / Nasdaq 100"),
         ("SMH", "IGV", "Semis / Software"),
+        ("XLK", "SPY", "Technology / S&P 500"),
         ("NVDA", "SMH", "NVIDIA / Semis ETF"),
         ("AMZN", "XLY", "Amazon / Consumer Discretionary"),
         ("META", "QQQ", "Meta / Nasdaq 100"),
+        ("MSFT", "QQQ", "Microsoft / Nasdaq 100"),
     ],
 }
 
 GROUP_DESCRIPTIONS = {
-    "Cross Asset": "Cross-asset regime relationships",
-    "US vs Ex-US": "Relative leadership between US and international markets",
-    "Cross Sector / Cross Ticker": "Equity internal leadership and sector rotation",
+    "Cross Asset": "Macro regime relationships across equities, credit, commodities, gold, dollar, and duration.",
+    "US vs Ex-US": "Relative performance of international equities versus the US, with regional and country-specific leadership lenses.",
+    "Cross Sector / Cross Ticker": "Equity internal leadership, sector rotation, and concentration within major market winners.",
 }
 
 ALL_PRESETS: List[Tuple[str, str, str, str]] = []
