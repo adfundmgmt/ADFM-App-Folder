@@ -18,25 +18,14 @@ st.set_page_config(page_title="ETF Net Flows", layout="wide")
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 1.05rem;
-        padding-bottom: 2rem;
-        max-width: 1650px;
+        padding-top: 0.85rem;
+        padding-bottom: 1.6rem;
+        max-width: 1700px;
     }
     h1, h2, h3 {
         letter-spacing: 0.1px;
         font-weight: 650;
-    }
-    .adfm-card {
-        background: #fafafa;
-        border: 1px solid #e9e9e9;
-        border-radius: 14px;
-        padding: 16px 18px;
-        margin-bottom: 12px;
-    }
-    .adfm-subtle {
-        color: #5f6368;
-        font-size: 0.93rem;
-        line-height: 1.45;
+        margin-bottom: 0.35rem;
     }
     div[data-testid="stMetric"] {
         background: #fafafa;
@@ -116,17 +105,17 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This dashboard keeps the original bar-chart workflow while making the data pipeline more stable.
+        This keeps the original horizontal bar-chart workflow while using a more stable data path.
 
-        The chart and table use a price-volume flow-pressure proxy built from OHLCV data from Yahoo Finance. That is intentional. Yahoo's ETF shares-outstanding history has become inconsistent, and that is what breaks many older ETF flow dashboards.
+        The chart and table use a price-volume flow-pressure proxy built from Yahoo Finance OHLCV data. That is deliberate because Yahoo ETF shares-outstanding history has become inconsistent, and that is what breaks many older ETF flow tools.
 
-        What you get here:
-        • A horizontal bar chart for the selected view
-        • One full table with every original ticker listed
-        • Lookback total, latest complete week, and week-to-date values in the same table
-        • Missing-data rows preserved so coverage is transparent
+        What is included here:
+        • A horizontal bar chart for the selected view  
+        • One full table with every original ticker listed  
+        • Lookback total, latest complete week, and week-to-date values together  
+        • Missing-data rows preserved so coverage stays transparent  
 
-        This is useful for directional tape reading and cross-asset relative ranking. It should be treated as a flow-pressure monitor rather than official issuer-reported creations and redemptions.
+        Treat this as a directional tape-reading and relative-ranking tool rather than official issuer-reported creations and redemptions.
         """
     )
     st.markdown("---")
@@ -265,6 +254,7 @@ def fmt_score(x) -> str:
 def axis_fmt(x, _pos=None) -> str:
     return fmt_compact_cur(x)
 
+
 # =========================================================
 # RETRY
 # =========================================================
@@ -386,8 +376,8 @@ def compute_pressure_score(df: pd.DataFrame) -> float:
         return np.nan
 
     traded_value = (
-        pd.to_numeric(df["Close"], errors="coerce") *
-        pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0)
+        pd.to_numeric(df["Close"], errors="coerce")
+        * pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0)
     ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
     denom = float(traded_value.sum())
@@ -444,7 +434,11 @@ def build_table(
         if px is not None and not px.empty:
             lookback_px = px.loc[px.index >= cutoff].copy()
 
-        full_daily_proxy = compute_money_flow_proxy(px) if px is not None and not px.empty else pd.Series(dtype="float64")
+        full_daily_proxy = (
+            compute_money_flow_proxy(px)
+            if px is not None and not px.empty
+            else pd.Series(dtype="float64")
+        )
 
         lookback_proxy = np.nan
         pressure_score = np.nan
@@ -464,8 +458,8 @@ def build_table(
                 last_price = float(close.iloc[-1])
 
             adv_series = (
-                pd.to_numeric(lookback_px["Close"], errors="coerce") *
-                pd.to_numeric(lookback_px["Volume"], errors="coerce").fillna(0.0)
+                pd.to_numeric(lookback_px["Close"], errors="coerce")
+                * pd.to_numeric(lookback_px["Volume"], errors="coerce").fillna(0.0)
             ).replace([np.inf, -np.inf], np.nan)
             if adv_series.notna().any():
                 adv = float(adv_series.mean())
@@ -507,18 +501,6 @@ def build_table(
 # =========================================================
 st.title("ETF Net Flows")
 
-st.markdown(
-    f"""
-    <div class="adfm-card">
-        <div><strong>Window:</strong> {period_label}</div>
-        <div class="adfm-subtle">
-            Original horizontal bar-chart workflow preserved. Full coverage table sits underneath with every original ticker listed.
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 # =========================================================
 # DATA BUILD
 # =========================================================
@@ -556,7 +538,6 @@ c5.metric("WTD Net", fmt_compact_cur(net_wtd) if pd.notna(net_wtd) else "")
 # BAR CHART
 # =========================================================
 st.markdown("---")
-st.subheader("Flow Bar Chart")
 
 chart_df = df[["Ticker", "Label", bar_view, "Data Status"]].copy()
 chart_df[bar_view] = pd.to_numeric(chart_df[bar_view], errors="coerce")
@@ -571,18 +552,26 @@ else:
     x_min = min(x_min, 0.0)
     x_max = max(x_max, 0.0)
     span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
-    pad = 0.08 * span
+    pad = 0.06 * span
 
     n = len(chart_df)
-    fig_h = max(10.0, 0.34 * n + 2.5)
-    colors = ["#1f7a1f" if v > 0 else "#b22222" if v < 0 else "#808080" for v in vals]
 
-    fig, ax = plt.subplots(figsize=(16, fig_h))
-    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.92, height=0.82)
+    # Tighter vertical packing so the full chart is easier to see without excessive scrolling
+    fig_h = max(7.8, min(18.0, 0.205 * n + 1.8))
+    bar_height = 0.64 if n >= 70 else 0.70
+    y_font = 7.8 if n >= 70 else 8.5
+    value_font = 7.2 if n >= 70 else 8.0
 
-    ax.set_xlabel("Estimated Flow Pressure ($)")
-    ax.set_title(f"ETF Net Flows | {bar_view}")
+    colors = ["#2e7d32" if v > 0 else "#c0392b" if v < 0 else "#808080" for v in vals]
+
+    fig, ax = plt.subplots(figsize=(15.2, fig_h))
+    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.94, height=bar_height)
+
+    ax.set_xlabel("Estimated Flow Pressure ($)", fontsize=9)
+    ax.set_title(bar_view, fontsize=10.5, pad=6)
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
+    ax.tick_params(axis="y", labelsize=y_font, pad=1.5)
+    ax.tick_params(axis="x", labelsize=8.5)
     ax.grid(False)
     ax.xaxis.grid(False)
     ax.yaxis.grid(False)
@@ -593,7 +582,7 @@ else:
     ax.spines["right"].set_visible(False)
     ax.set_xlim(x_min - pad, x_max + pad)
 
-    text_pad = 0.012 * span
+    text_pad = 0.008 * span
     for bar, raw in zip(bars, vals):
         label_txt = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
         x = bar.get_width()
@@ -610,13 +599,13 @@ else:
             label_txt,
             va="center",
             ha=ha,
-            fontsize=9,
-            color="black",
+            fontsize=value_font,
+            color="#333333",
             clip_on=True,
         )
 
-    fig.tight_layout(pad=0.8)
-    st.pyplot(fig)
+    fig.tight_layout(pad=0.45)
+    st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
 # =========================================================
