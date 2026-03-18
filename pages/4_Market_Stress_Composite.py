@@ -2,21 +2,19 @@
 # Market Stress Composite
 # AD Fund Management LP
 #
-# Revised / hardened version
-# - Fixes drawdown chart alignment by separating:
-#   1) positive drawdown stress for composite scoring
-#   2) negative drawdown series for plotting
-# - Safer Yahoo + FRED loaders with retries and shorter timeouts
-# - Safe secrets handling
-# - Graceful degradation when individual series fail
-# - Visible loading status so the app does not look blank
-# - More robust calendar and price extraction logic
-# - Export, diagnostics, contribution table preserved
+# Hardened FRED + Yahoo version
+# - FRED first via official observations API
+# - Retry-aware pooled HTTP session
+# - Last-good cache with metadata
+# - Live/cache merge to patch partial failures
+# - Manual refresh button for Streamlit cache busting
+# - Safer stale handling and diagnostics
 ############################################################
 
 from __future__ import annotations
 
 import io
+import json
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -28,6 +26,8 @@ import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ---------------- App config ----------------
 TITLE = "Market Stress Composite"
@@ -94,11 +94,12 @@ WEIGHTS_TEXT = (
     f"RV21 {W_RV:.2f}, Breadth {W_BREADTH:.2f}"
 )
 
-REQUEST_TIMEOUT = 12
-REQUEST_RETRIES = 3
-REQUEST_BACKOFF = 1.35
-YF_TIMEOUT = 10
-YF_RETRIES = 2
+REQUEST_TIMEOUT = 18
+REQUEST_RETRIES = 5
+REQUEST_BACKOFF = 1.6
+YF_TIMEOUT = 15
+YF_RETRIES = 3
+FRED_CACHE_MAX_AGE_HOURS = 18
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
@@ -114,6 +115,10 @@ with st.sidebar:
 
     st.subheader("Weights (fixed)")
     st.caption(WEIGHTS_TEXT)
+
+    if st.button("Refresh FRED now", use_container_width=True):
+        st.cache_data.clear()
+        st.success("Cleared cached data. The next run will force fresh FRED requests.")
 
     st.markdown("---")
     st.header("About This Tool")
@@ -166,43 +171,112 @@ def safe_float(x) -> float:
 def cache_path(name: str) -> Path:
     return CACHE_DIR / name
 
-def save_series_cache(series_id: str, s: pd.Series) -> None:
+def _series_cache_csv_path(series_id: str) -> Path:
+    return cache_path(f"{series_id}.csv")
+
+def _series_cache_meta_path(series_id: str) -> Path:
+    return cache_path(f"{series_id}.meta.json")
+
+def save_series_cache(series_id: str, s: pd.Series, source: str = "unknown") -> None:
     try:
+        s = to_naive_date_index(pd.to_numeric(s, errors="coerce").dropna()).sort_index()
         payload = pd.DataFrame(
             {"date": pd.to_datetime(s.index).astype(str), "value": pd.to_numeric(s.values, errors="coerce")}
         )
-        payload.to_csv(cache_path(f"{series_id}.csv"), index=False)
+        payload.to_csv(_series_cache_csv_path(series_id), index=False)
+
+        meta = {
+            "series_id": series_id,
+            "source": source,
+            "saved_at": pd.Timestamp.utcnow().isoformat(),
+            "rows": int(len(s)),
+            "min_date": str(s.index.min().date()) if len(s) else None,
+            "max_date": str(s.index.max().date()) if len(s) else None,
+        }
+        _series_cache_meta_path(series_id).write_text(json.dumps(meta, indent=2))
     except Exception:
         pass
 
 def load_series_cache(series_id: str) -> pd.Series:
-    p = cache_path(f"{series_id}.csv")
+    p = _series_cache_csv_path(series_id)
     if not p.exists():
         return pd.Series(dtype=float)
+
     try:
         df = pd.read_csv(p)
         if {"date", "value"}.issubset(df.columns):
-            s = pd.Series(pd.to_numeric(df["value"], errors="coerce").values, index=pd.to_datetime(df["date"]))
-            return to_naive_date_index(s.dropna())
+            s = pd.Series(
+                pd.to_numeric(df["value"], errors="coerce").values,
+                index=pd.to_datetime(df["date"]),
+                name=series_id,
+            )
+            s = to_naive_date_index(s.dropna()).sort_index()
+            s = s[~s.index.duplicated(keep="last")]
+            return s
     except Exception:
         pass
     return pd.Series(dtype=float)
 
+def load_series_cache_meta(series_id: str) -> dict:
+    p = _series_cache_meta_path(series_id)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+@st.cache_resource(show_spinner=False)
+def get_http_session() -> requests.Session:
+    session = requests.Session()
+
+    retry = Retry(
+        total=REQUEST_RETRIES,
+        connect=REQUEST_RETRIES,
+        read=REQUEST_RETRIES,
+        backoff_factor=REQUEST_BACKOFF,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+        respect_retry_after_header=True,
+    )
+
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Connection": "keep-alive",
+        }
+    )
+    return session
+
 def robust_request(url: str, params: Optional[dict] = None) -> Optional[requests.Response]:
-    headers = {"User-Agent": "Mozilla/5.0"}
+    session = get_http_session()
     for attempt in range(REQUEST_RETRIES):
         try:
-            r = requests.get(url, params=params, timeout=REQUEST_TIMEOUT, headers=headers)
+            r = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            if r.status_code in (429, 500, 502, 503, 504):
+                if attempt < REQUEST_RETRIES - 1:
+                    time.sleep((REQUEST_BACKOFF ** attempt) + 0.25 * attempt)
+                    continue
             r.raise_for_status()
             return r
         except Exception:
             if attempt < REQUEST_RETRIES - 1:
-                time.sleep(REQUEST_BACKOFF ** attempt)
+                time.sleep((REQUEST_BACKOFF ** attempt) + 0.25 * attempt)
     return None
 
 def get_fred_api_key() -> Optional[str]:
     try:
-        return st.secrets.get("FRED_API_KEY", None)
+        key = st.secrets.get("FRED_API_KEY", None)
+        if key is None:
+            return None
+        key = str(key).strip()
+        return key if key else None
     except Exception:
         return None
 
@@ -211,75 +285,134 @@ def parse_fred_text_csv(text: str, series_id: str) -> pd.Series:
     cols = {str(c).lower(): c for c in df.columns}
     date_col = cols.get("date") or cols.get("observation_date")
     val_col = cols.get(series_id.lower()) or cols.get("value")
+
     if date_col is None or val_col is None:
         raise ValueError(f"Unexpected FRED CSV format for {series_id}. Columns: {list(df.columns)}")
-    vals = pd.to_numeric(df[val_col].replace(".", np.nan), errors="coerce")
-    s = pd.Series(vals.values, index=pd.to_datetime(df[date_col]))
-    return to_naive_date_index(s.dropna())
 
-def parse_fred_json_observations(payload: dict) -> pd.Series:
+    vals = pd.to_numeric(df[val_col].replace(".", np.nan), errors="coerce")
+    s = pd.Series(vals.values, index=pd.to_datetime(df[date_col]), name=series_id)
+    s = to_naive_date_index(s.dropna()).sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    return s
+
+def parse_fred_json_observations(payload: dict, series_id: str) -> pd.Series:
     obs = payload.get("observations", [])
     if not obs:
-        return pd.Series(dtype=float)
+        return pd.Series(dtype=float, name=series_id)
+
     df = pd.DataFrame(obs)
     if "date" not in df.columns or "value" not in df.columns:
+        return pd.Series(dtype=float, name=series_id)
+
+    vals = pd.to_numeric(df["value"].replace(".", np.nan), errors="coerce")
+    s = pd.Series(vals.values, index=pd.to_datetime(df["date"]), name=series_id)
+    s = to_naive_date_index(s.dropna()).sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    return s
+
+def _slice_and_clean_series(s: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    if s is None or s.empty:
         return pd.Series(dtype=float)
-    s = pd.Series(pd.to_numeric(df["value"].replace(".", np.nan), errors="coerce").values, index=pd.to_datetime(df["date"]))
-    return to_naive_date_index(s.dropna())
+    s = to_naive_date_index(pd.to_numeric(s, errors="coerce").dropna()).sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    s = s.loc[(s.index >= start) & (s.index <= end)]
+    return s
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    start = as_naive_date(start)
-    end = as_naive_date(end)
-    start_str = start.strftime("%Y-%m-%d")
-    end_str = end.strftime("%Y-%m-%d")
+def _merge_live_and_cache(live: pd.Series, cached: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    live = _slice_and_clean_series(live, start, end)
+    cached = _slice_and_clean_series(cached, start, end)
 
-    csv_urls = [
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start_str}&coed={end_str}",
+    if live.empty and cached.empty:
+        return pd.Series(dtype=float)
+    if live.empty:
+        return cached
+    if cached.empty:
+        return live
+
+    out = pd.concat([cached, live])
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+    out = out.loc[(out.index >= start) & (out.index <= end)]
+    return out
+
+def _fred_api_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    params = {
+        "series_id": series_id,
+        "file_type": "json",
+        "observation_start": start.strftime("%Y-%m-%d"),
+        "observation_end": end.strftime("%Y-%m-%d"),
+        "sort_order": "asc",
+    }
+    api_key = get_fred_api_key()
+    if api_key:
+        params["api_key"] = api_key
+
+    r = robust_request("https://api.stlouisfed.org/fred/series/observations", params=params)
+    if r is None:
+        return pd.Series(dtype=float)
+
+    try:
+        payload = r.json()
+    except Exception:
+        return pd.Series(dtype=float)
+
+    return parse_fred_json_observations(payload, series_id)
+
+def _fred_graph_csv_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    urls = [
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start.strftime('%Y-%m-%d')}&coed={end.strftime('%Y-%m-%d')}",
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
     ]
 
-    for url in csv_urls:
+    for url in urls:
+        r = robust_request(url)
+        if r is None:
+            continue
+        text = (r.text or "").strip()
+        if not text:
+            continue
         try:
-            r = robust_request(url)
-            if r is None or not r.text.strip():
-                continue
-            s = parse_fred_text_csv(r.text, series_id)
+            s = parse_fred_text_csv(text, series_id)
+            s = _slice_and_clean_series(s, start, end)
             if not s.empty:
-                s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
-                save_series_cache(series_id, s)
                 return s
         except Exception:
             continue
 
-    try:
-        params = {
-            "series_id": series_id,
-            "file_type": "json",
-            "observation_start": start_str,
-            "observation_end": end_str,
-        }
-        api_key = get_fred_api_key()
-        if api_key:
-            params["api_key"] = api_key
-        r = robust_request("https://api.stlouisfed.org/fred/series/observations", params=params)
-        if r is not None:
-            payload = r.json()
-            s = parse_fred_json_observations(payload)
-            if not s.empty:
-                s = s.loc[(s.index >= start) & (s.index <= end)].sort_index().ffill().dropna()
-                save_series_cache(series_id, s)
-                return s
-    except Exception:
-        pass
+    return pd.Series(dtype=float)
+
+def _is_series_recent_enough(s: pd.Series, end: pd.Timestamp, max_gap_days: int = 45) -> bool:
+    if s is None or s.empty:
+        return False
+    latest = pd.Timestamp(s.index.max())
+    return (end - latest).days <= max_gap_days
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    start = as_naive_date(start)
+    end = as_naive_date(end)
 
     cached = load_series_cache(series_id)
-    if not cached.empty:
-        cached = cached.loc[(cached.index >= start) & (cached.index <= end)].sort_index().ffill().dropna()
-        if not cached.empty:
-            return cached
+    cached = _slice_and_clean_series(cached, start, end)
 
-    return pd.Series(dtype=float)
+    # Primary path: official FRED observations API
+    live_api = _fred_api_series(series_id, start, end)
+    if not live_api.empty:
+        merged = _merge_live_and_cache(live_api, cached, start, end)
+        save_series_cache(series_id, merged, source="fred_api")
+        return merged
+
+    # Secondary path: fredgraph CSV
+    live_csv = _fred_graph_csv_series(series_id, start, end)
+    if not live_csv.empty:
+        merged = _merge_live_and_cache(live_csv, cached, start, end)
+        save_series_cache(series_id, merged, source="fredgraph_csv")
+        return merged
+
+    # Final path: last-good cache
+    if not cached.empty and _is_series_recent_enough(cached, end, max_gap_days=90):
+        return cached
+
+    return pd.Series(dtype=float, name=series_id)
 
 def _extract_preferred_price(df: pd.DataFrame, ticker: str) -> pd.Series:
     if df is None or df.empty:
@@ -305,7 +438,9 @@ def _extract_preferred_price(df: pd.DataFrame, ticker: str) -> pd.Series:
     if isinstance(sub, pd.Series):
         s = pd.to_numeric(sub, errors="coerce").dropna().rename(ticker)
         s.index = pd.to_datetime(s.index)
-        return to_naive_date_index(s)
+        s = to_naive_date_index(s).sort_index()
+        s = s[~s.index.duplicated(keep="last")]
+        return s
 
     sub.columns = [str(c) for c in sub.columns]
 
@@ -320,7 +455,9 @@ def _extract_preferred_price(df: pd.DataFrame, ticker: str) -> pd.Series:
 
     s = pd.to_numeric(sub[preferred], errors="coerce").dropna().rename(ticker)
     s.index = pd.to_datetime(sub.index)
-    return to_naive_date_index(s)
+    s = to_naive_date_index(s).sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    return s
 
 def yf_download_one(ticker: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
     start = as_naive_date(start)
@@ -362,7 +499,9 @@ def yf_history_raw(tickers, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFr
         return pd.DataFrame()
 
     out = pd.concat(series_list, axis=1).sort_index().ffill()
-    return to_naive_date_index(out)
+    out = to_naive_date_index(out)
+    out = out.loc[~out.index.duplicated(keep="last")]
+    return out
 
 def rolling_percentile_trading(values: pd.Series, idx: pd.DatetimeIndex, window_trading_days: int) -> pd.Series:
     s = to_naive_date_index(values).reindex(idx)
@@ -490,7 +629,9 @@ def normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     out = df.copy()
     out.columns = [str(c) for c in out.columns]
-    return to_naive_date_index(out.sort_index().ffill())
+    out = to_naive_date_index(out.sort_index().ffill())
+    out = out.loc[~out.index.duplicated(keep="last")]
+    return out
 
 def build_trading_calendar(start: pd.Timestamp, end: pd.Timestamp) -> Tuple[pd.DatetimeIndex, str]:
     candidates = ["SPY", "^GSPC", "QQQ", "IWM"]
@@ -838,6 +979,21 @@ st.dataframe(show_contrib, use_container_width=True, hide_index=True)
 with st.expander("Diagnostics"):
     latest = plot_idx[-1]
 
+    fred_cache_rows = []
+    for key, series_id in FRED.items():
+        meta = load_series_cache_meta(series_id)
+        fred_cache_rows.append(
+            {
+                "fred_key": key,
+                "series_id": series_id,
+                "cache_source": meta.get("source"),
+                "cache_saved_at": meta.get("saved_at"),
+                "cache_rows": meta.get("rows"),
+                "cache_min_date": meta.get("min_date"),
+                "cache_max_date": meta.get("max_date"),
+            }
+        )
+
     diag = pd.DataFrame(
         {
             "factor": ["VIX", "HY_OAS", "HY_LQD", "Curve", "Funding", "Drawdown", "RV21", "Breadth"],
@@ -896,6 +1052,9 @@ with st.expander("Diagnostics"):
     diag["percentile"] = pd.to_numeric(diag["percentile"], errors="coerce").round(1)
     diag["days_since_update"] = pd.to_numeric(diag["days_since_update"], errors="coerce").round(0)
     st.dataframe(diag, use_container_width=True, hide_index=True)
+
+    st.markdown("**FRED cache diagnostics**")
+    st.dataframe(pd.DataFrame(fred_cache_rows), use_container_width=True, hide_index=True)
 
 # ---------------- Download ----------------
 with st.expander("Download Data"):
