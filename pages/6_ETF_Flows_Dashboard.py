@@ -1,6 +1,7 @@
 import time
 from datetime import datetime, date
 from typing import Dict, Tuple, List
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,12 @@ CUSTOM_CSS = """
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+# Slightly crisper global Matplotlib defaults
+plt.rcParams["figure.dpi"] = 160
+plt.rcParams["savefig.dpi"] = 260
+plt.rcParams["text.antialiased"] = True
+plt.rcParams["font.size"] = 9
 
 # =========================================================
 # GLOBALS
@@ -497,6 +504,24 @@ def build_table(
 
 
 # =========================================================
+# HIGH-RES IMAGE RENDER
+# =========================================================
+def render_matplotlib_high_res(fig) -> bytes:
+    buf = BytesIO()
+    fig.savefig(
+        buf,
+        format="png",
+        dpi=280,
+        bbox_inches="tight",
+        pad_inches=0.04,
+        facecolor="white",
+        edgecolor="white",
+    )
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# =========================================================
 # HEADER
 # =========================================================
 st.title("ETF Net Flows")
@@ -552,26 +577,34 @@ else:
     x_min = min(x_min, 0.0)
     x_max = max(x_max, 0.0)
     span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
-    pad = 0.06 * span
+    pad = 0.055 * span
 
     n = len(chart_df)
 
-    # Tighter vertical packing so the full chart is easier to see without excessive scrolling
-    fig_h = max(7.8, min(18.0, 0.205 * n + 1.8))
-    bar_height = 0.64 if n >= 70 else 0.70
-    y_font = 7.8 if n >= 70 else 8.5
-    value_font = 7.2 if n >= 70 else 8.0
+    # Harder packing: less height per row, taller bars, smaller gaps
+    fig_h = max(6.9, min(15.2, 0.165 * n + 1.2))
+    bar_height = 0.88 if n >= 60 else 0.84
+    y_font = 7.1 if n >= 70 else 7.8
+    value_font = 6.8 if n >= 70 else 7.5
 
     colors = ["#2e7d32" if v > 0 else "#c0392b" if v < 0 else "#808080" for v in vals]
 
-    fig, ax = plt.subplots(figsize=(15.2, fig_h))
-    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.94, height=bar_height)
+    fig, ax = plt.subplots(figsize=(16.2, fig_h), dpi=220)
+
+    bars = ax.barh(
+        chart_df["Label"],
+        vals,
+        color=colors,
+        alpha=0.97,
+        height=bar_height,
+        linewidth=0,
+    )
 
     ax.set_xlabel("Estimated Flow Pressure ($)", fontsize=9)
-    ax.set_title(bar_view, fontsize=10.5, pad=6)
+    ax.set_title(bar_view, fontsize=10.5, pad=5)
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
-    ax.tick_params(axis="y", labelsize=y_font, pad=1.5)
-    ax.tick_params(axis="x", labelsize=8.5)
+    ax.tick_params(axis="y", labelsize=y_font, pad=0.6, length=0)
+    ax.tick_params(axis="x", labelsize=8.2)
     ax.grid(False)
     ax.xaxis.grid(False)
     ax.yaxis.grid(False)
@@ -582,10 +615,11 @@ else:
     ax.spines["right"].set_visible(False)
     ax.set_xlim(x_min - pad, x_max + pad)
 
-    text_pad = 0.008 * span
+    text_pad = 0.0065 * span
     for bar, raw in zip(bars, vals):
         label_txt = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
         x = bar.get_width()
+
         if raw > 0:
             x_text, ha = x + text_pad, "left"
         elif raw < 0:
@@ -604,8 +638,10 @@ else:
             clip_on=True,
         )
 
-    fig.tight_layout(pad=0.45)
-    st.pyplot(fig, use_container_width=True)
+    fig.subplots_adjust(left=0.26, right=0.985, top=0.94, bottom=0.085)
+
+    chart_png = render_matplotlib_high_res(fig)
+    st.image(chart_png, use_container_width=True)
     plt.close(fig)
 
 # =========================================================
