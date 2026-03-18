@@ -1,23 +1,26 @@
 # streamlit_app.py
 # ADFM | Unusual Options Flow Tracker
-# Nasdaq 100 version with pre-scan underlying filters, lazy loading, and hardened metrics/state handling.
+# Revised version with safer Yahoo handling, retries, better diagnostics,
+# gentler concurrency, and explicit empty-board reasons.
+
+from __future__ import annotations
 
 import json
 import math
 import pickle
+import random
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -77,6 +80,7 @@ UNIVERSE_META_CACHE = CACHE_DIR / "ndx100_meta.pkl"
 LAST_GOOD_SCAN = CACHE_DIR / "last_good_flow.pkl"
 LAST_GOOD_DIAGS = CACHE_DIR / "last_good_diags.pkl"
 LAST_GOOD_META = CACHE_DIR / "last_good_meta.json"
+LAST_GOOD_SNAPSHOT = CACHE_DIR / "last_good_snapshot.pkl"
 
 NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 
@@ -85,16 +89,20 @@ DEFAULT_MIN_VOLUME = 100
 DEFAULT_MIN_VOL_OI = 1.5
 DEFAULT_MAX_SPREAD_PCT = 30.0
 DEFAULT_TOP_N = 200
-DEFAULT_MAX_WORKERS = 10
+DEFAULT_MAX_WORKERS = 4
 DEFAULT_DTE_MIN = 0
 DEFAULT_DTE_MAX = 60
-DEFAULT_MAX_EXPIRIES_PER_SYMBOL = 8
+DEFAULT_MAX_EXPIRIES_PER_SYMBOL = 6
 DEFAULT_MIN_UNUSUAL_SCORE = 55.0
 DEFAULT_MIN_UNDERLYING_DOLLAR_VOL_MM = 100.0
-DEFAULT_BATCH_SIZE = 40
+DEFAULT_BATCH_SIZE = 25
 
 DEFAULT_MIN_PRICE = 10.0
 DEFAULT_MIN_20D_VOL = 1_000_000
+
+RETRY_ATTEMPTS = 3
+RETRY_SLEEP_BASE = 0.9
+CHAIN_JITTER_MAX = 0.35
 
 NASDAQ100_FALLBACK_SYMBOLS = sorted([
     "AAPL","ABNB","ADBE","ADI","ADP","ADSK","AEP","AMAT","AMD","AMGN","AMZN","ANSS","APP","ARM",
@@ -259,6 +267,9 @@ def dte_bucket(dte: int) -> str:
         return "61-120D"
     return "120D+"
 
+def with_retry_sleep(attempt: int):
+    time.sleep(RETRY_SLEEP_BASE * attempt + random.uniform(0.0, CHAIN_JITTER_MAX))
+
 # -----------------------------------------------------------------------------
 # Universe loader
 # -----------------------------------------------------------------------------
@@ -382,32 +393,71 @@ def _extract_snapshot_from_download(data: pd.DataFrame, symbols: List[str]) -> L
 
     return rows
 
-def fetch_spot_snapshot(symbols: List[str], batch_size: int = DEFAULT_BATCH_SIZE) -> pd.DataFrame:
+def fetch_spot_snapshot(symbols: List[str], batch_size: int = DEFAULT_BATCH_SIZE) -> Tuple[pd.DataFrame, dict]:
     if not symbols:
-        return pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume", "avg_dollar_vol"])
+        return pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume", "avg_dollar_vol"]), {
+            "batches": 0,
+            "rows": 0,
+            "failures": 0,
+        }
 
     all_rows: List[dict] = []
+    failures = 0
+    batches = 0
 
     for batch in chunked(symbols, batch_size):
-        try:
-            data = yf.download(
-                tickers=batch,
-                period="3mo",
-                interval="1d",
-                auto_adjust=False,
-                progress=False,
-                threads=True,
-                group_by="ticker",
-            )
-            rows = _extract_snapshot_from_download(data, batch)
-            all_rows.extend(rows)
-        except Exception:
-            continue
+        batches += 1
+        batch_rows = []
+        batch_success = False
+
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
+            try:
+                data = yf.download(
+                    tickers=batch,
+                    period="3mo",
+                    interval="1d",
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                    group_by="ticker",
+                )
+                batch_rows = _extract_snapshot_from_download(data, batch)
+                if batch_rows:
+                    batch_success = True
+                    break
+            except Exception:
+                pass
+            with_retry_sleep(attempt)
+
+        if not batch_success:
+            failures += 1
+
+        all_rows.extend(batch_rows)
 
     if not all_rows:
-        return pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume", "avg_dollar_vol"])
+        cached = load_pickle(LAST_GOOD_SNAPSHOT)
+        if isinstance(cached, pd.DataFrame) and not cached.empty:
+            return cached.copy(), {
+                "batches": batches,
+                "rows": len(cached),
+                "failures": failures,
+                "used_cached_snapshot": True,
+            }
+        return pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume", "avg_dollar_vol"]), {
+            "batches": batches,
+            "rows": 0,
+            "failures": failures,
+            "used_cached_snapshot": False,
+        }
 
-    return pd.DataFrame(all_rows).drop_duplicates("symbol", keep="last").reset_index(drop=True)
+    out = pd.DataFrame(all_rows).drop_duplicates("symbol", keep="last").reset_index(drop=True)
+    save_pickle(out, LAST_GOOD_SNAPSHOT)
+    return out, {
+        "batches": batches,
+        "rows": len(out),
+        "failures": failures,
+        "used_cached_snapshot": False,
+    }
 
 def filter_underlyings(
     snapshot: pd.DataFrame,
@@ -463,6 +513,38 @@ def compute_unusual_score(
     return float(np.clip(raw, 0.0, 1.0) * 100.0)
 
 # -----------------------------------------------------------------------------
+# Yahoo helpers
+# -----------------------------------------------------------------------------
+def get_ticker_with_retries(symbol: str) -> Optional[yf.Ticker]:
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            return yf.Ticker(symbol)
+        except Exception:
+            with_retry_sleep(attempt)
+    return None
+
+def get_options_dates(tkr: yf.Ticker) -> Tuple[List[str], Optional[str]]:
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            expiries = list(tkr.options or [])
+            if expiries:
+                return expiries, None
+            return [], "no_listed_options"
+        except Exception as e:
+            last_error = str(e)
+            with_retry_sleep(attempt)
+    return [], f"options_load_failed"
+
+def get_option_chain(tkr: yf.Ticker, expiry: str):
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            return tkr.option_chain(expiry), None
+        except Exception as e:
+            last_error = str(e)
+            with_retry_sleep(attempt)
+    return None, "chain_load_failed"
+
+# -----------------------------------------------------------------------------
 # One-symbol scan
 # -----------------------------------------------------------------------------
 def scan_one_symbol(
@@ -485,19 +567,20 @@ def scan_one_symbol(
         "contracts_kept": 0,
         "errors": 0,
         "reason": "",
+        "detail": "",
     }
     rows: List[dict] = []
 
-    try:
-        tkr = yf.Ticker(symbol)
-        expiries = list(tkr.options or [])
-    except Exception:
+    tkr = get_ticker_with_retries(symbol)
+    if tkr is None:
         diagnostics["errors"] = 1
-        diagnostics["reason"] = "options_load_failed"
+        diagnostics["reason"] = "ticker_init_failed"
         return rows, diagnostics
 
-    if not expiries:
-        diagnostics["reason"] = "no_listed_options"
+    expiries, expiry_err = get_options_dates(tkr)
+    if expiry_err is not None:
+        diagnostics["errors"] = 1 if expiry_err == "options_load_failed" else 0
+        diagnostics["reason"] = expiry_err
         return rows, diagnostics
 
     spot = safe_float(spot_map.get(symbol, np.nan), np.nan)
@@ -507,7 +590,7 @@ def scan_one_symbol(
         diagnostics["reason"] = "spot_missing"
         return rows, diagnostics
 
-    today = pd.Timestamp.utcnow().date()
+    today = pd.Timestamp.now(tz="UTC").date()
 
     parsed_expiries = []
     for exp in expiries:
@@ -525,14 +608,19 @@ def scan_one_symbol(
         diagnostics["reason"] = "no_expiry_in_range"
         return rows, diagnostics
 
+    time.sleep(random.uniform(0.02, CHAIN_JITTER_MAX))
+
     for exp, dte in parsed_expiries:
         diagnostics["expiries_seen"] += 1
-        try:
-            chain = tkr.option_chain(exp)
-            chain_parts = [("CALL", chain.calls), ("PUT", chain.puts)]
-        except Exception:
+        chain, chain_err = get_option_chain(tkr, exp)
+
+        if chain_err is not None or chain is None:
             diagnostics["errors"] += 1
+            if diagnostics["reason"] == "":
+                diagnostics["reason"] = chain_err
             continue
+
+        chain_parts = [("CALL", getattr(chain, "calls", pd.DataFrame())), ("PUT", getattr(chain, "puts", pd.DataFrame()))]
 
         for option_type, df in chain_parts:
             if df is None or df.empty:
@@ -564,7 +652,8 @@ def scan_one_symbol(
                 np.where(local["ask"] > 0, local["ask"], np.where(local["bid"] > 0, local["bid"], 0.0))
             )
             fills = np.where(
-                local["lastPrice"] > 0, local["lastPrice"],
+                local["lastPrice"] > 0,
+                local["lastPrice"],
                 np.where(mids > 0, mids, np.where(local["ask"] > 0, local["ask"], local["bid"]))
             )
 
@@ -662,7 +751,10 @@ def scan_one_symbol(
             diagnostics["contracts_kept"] += len(local)
 
     if diagnostics["contracts_kept"] == 0 and diagnostics["reason"] == "":
-        diagnostics["reason"] = "all_filtered_out"
+        if diagnostics["contracts_seen"] == 0:
+            diagnostics["reason"] = "empty_chains"
+        else:
+            diagnostics["reason"] = "all_filtered_out"
 
     return rows, diagnostics
 
@@ -754,6 +846,11 @@ def run_full_scan(
     total = len(symbols)
     completed = 0
 
+    if total == 0:
+        progress_bar.empty()
+        status.empty()
+        return pd.DataFrame(), pd.DataFrame()
+
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {
             ex.submit(
@@ -780,7 +877,7 @@ def run_full_scan(
                 if rows:
                     all_rows.extend(rows)
                 all_diags.append(diag)
-            except Exception:
+            except Exception as e:
                 all_diags.append({
                     "symbol": sym,
                     "expiries_seen": 0,
@@ -788,6 +885,7 @@ def run_full_scan(
                     "contracts_kept": 0,
                     "errors": 1,
                     "reason": "worker_exception",
+                    "detail": str(e),
                 })
 
             completed += 1
@@ -987,6 +1085,7 @@ def init_state():
         "scan_meta": None,
         "scan_ran": False,
         "filtered_snapshot": None,
+        "spot_snapshot_meta": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1014,6 +1113,7 @@ with st.sidebar:
         • pre-scan underlying filters
         • lazy loading of heavy data
         • chart-driven review
+        • safer Yahoo retry logic
         """
     )
 
@@ -1038,14 +1138,14 @@ with st.sidebar:
 
     st.subheader("Scan Engine")
     max_expiries_per_symbol = st.slider("Max expiries per symbol", min_value=1, max_value=16, value=DEFAULT_MAX_EXPIRIES_PER_SYMBOL, step=1)
-    max_workers = st.slider("Concurrent workers", min_value=2, max_value=24, value=DEFAULT_MAX_WORKERS, step=2)
+    max_workers = st.slider("Concurrent workers", min_value=1, max_value=12, value=DEFAULT_MAX_WORKERS, step=1)
     top_n = st.slider("Rows to display", min_value=25, max_value=300, value=DEFAULT_TOP_N, step=25)
     allow_cached_fallback = st.toggle("Use last-good cached scan when live scan is degraded", value=True)
 
     run_scan = st.button("Run Live Scan", use_container_width=True, type="primary")
 
     st.markdown(
-        '<div class="small-note">This version fetches the Nasdaq 100 universe quickly, then only pulls spot data and option chains after you click Run Live Scan. It also filters underlyings before scanning options.</div>',
+        '<div class="small-note">This version fetches the Nasdaq 100 universe quickly, then only pulls spot data and option chains after you click Run Live Scan. Concurrency was reduced and retries were added because Yahoo option-chain endpoints degrade under load.</div>',
         unsafe_allow_html=True,
     )
 
@@ -1089,7 +1189,9 @@ if run_scan:
     scan_started = time.time()
 
     with st.spinner(f"Fetching Nasdaq 100 spot data for {len(symbols_all):,} symbols..."):
-        snapshot = fetch_spot_snapshot(symbols_all, batch_size=DEFAULT_BATCH_SIZE)
+        snapshot, spot_meta = fetch_spot_snapshot(symbols_all, batch_size=DEFAULT_BATCH_SIZE)
+
+    st.session_state["spot_snapshot_meta"] = spot_meta
 
     filtered_snapshot = filter_underlyings(
         snapshot=snapshot,
@@ -1102,58 +1204,89 @@ if run_scan:
 
     st.session_state["filtered_snapshot"] = filtered_snapshot.copy()
 
-    with st.spinner(f"Running live options scan across {symbols_scanned_count:,} filtered Nasdaq 100 symbols..."):
-        try:
-            flow_live, diags_live = run_full_scan(
-                symbols=symbols_scanned_list,
-                spot_snapshot=filtered_snapshot,
-                min_premium=min_premium,
-                min_volume=min_volume,
-                min_vol_oi=min_vol_oi,
-                max_spread_pct=max_spread_pct,
-                dte_min=dte_range[0],
-                dte_max=dte_range[1],
-                max_workers=max_workers,
-                max_expiries_per_symbol=max_expiries_per_symbol,
-                min_unusual_score=min_unusual_score,
-            )
-        except Exception as e:
-            st.warning(f"Live scan hit an error: {e}")
-            flow_live = pd.DataFrame()
-            diags_live = pd.DataFrame()
+    if symbols_scanned_count == 0:
+        st.session_state["flow_raw"] = pd.DataFrame()
+        st.session_state["diags_raw"] = pd.DataFrame()
+        st.session_state["scan_meta"] = {
+            "mode": "Live",
+            "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "elapsed": round(time.time() - scan_started, 1),
+            "success_ratio": None,
+            "raw_contracts": 0,
+            "symbols_requested": len(symbols_all),
+            "symbols_scanned": 0,
+            "empty_reason": "All underlyings failed the pre-scan filters.",
+        }
+        st.session_state["scan_ran"] = True
+    else:
+        with st.spinner(f"Running live options scan across {symbols_scanned_count:,} filtered Nasdaq 100 symbols..."):
+            try:
+                flow_live, diags_live = run_full_scan(
+                    symbols=symbols_scanned_list,
+                    spot_snapshot=filtered_snapshot,
+                    min_premium=min_premium,
+                    min_volume=min_volume,
+                    min_vol_oi=min_vol_oi,
+                    max_spread_pct=max_spread_pct,
+                    dte_min=dte_range[0],
+                    dte_max=dte_range[1],
+                    max_workers=max_workers,
+                    max_expiries_per_symbol=max_expiries_per_symbol,
+                    min_unusual_score=min_unusual_score,
+                )
+            except Exception as e:
+                st.warning(f"Live scan hit an error: {e}")
+                flow_live = pd.DataFrame()
+                diags_live = pd.DataFrame()
 
-    success_ratio = 0.0
-    raw_contracts = 0
-    if diags_live is not None and not diags_live.empty:
-        raw_contracts = int(diags_live["contracts_seen"].sum()) if "contracts_seen" in diags_live.columns else 0
-        successes = int((diags_live["errors"].fillna(0) == 0).sum()) if "errors" in diags_live.columns else 0
-        success_ratio = successes / max(len(diags_live), 1)
+        success_ratio = 0.0
+        raw_contracts = 0
+        if diags_live is not None and not diags_live.empty:
+            raw_contracts = int(diags_live["contracts_seen"].sum()) if "contracts_seen" in diags_live.columns else 0
+            non_error_rows = int((diags_live["errors"].fillna(0) == 0).sum()) if "errors" in diags_live.columns else 0
+            success_ratio = non_error_rows / max(len(diags_live), 1)
 
-    degraded = (
-        diags_live is None or diags_live.empty or
-        success_ratio < 0.50 or
-        raw_contracts < 1_000
-    )
+        degraded = (
+            diags_live is None
+            or diags_live.empty
+            or success_ratio < 0.35
+            or raw_contracts < 250
+        )
 
-    if degraded and allow_cached_fallback:
-        cached_flow = load_pickle(LAST_GOOD_SCAN)
-        cached_diags = load_pickle(LAST_GOOD_DIAGS)
-        cached_meta = load_json(LAST_GOOD_META)
+        if degraded and allow_cached_fallback:
+            cached_flow = load_pickle(LAST_GOOD_SCAN)
+            cached_diags = load_pickle(LAST_GOOD_DIAGS)
+            cached_meta = load_json(LAST_GOOD_META)
 
-        if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
-            st.session_state["flow_raw"] = ensure_flow_schema(build_cluster_flags(cached_flow.copy()))
-            st.session_state["diags_raw"] = cached_diags if isinstance(cached_diags, pd.DataFrame) else pd.DataFrame()
-            st.session_state["scan_meta"] = {
-                "mode": "Cached fallback",
-                "saved_at": cached_meta.get("saved_at", "unknown") if isinstance(cached_meta, dict) else "unknown",
-                "elapsed": round(time.time() - scan_started, 1),
-                "success_ratio": success_ratio,
-                "raw_contracts": raw_contracts,
-                "symbols_requested": len(symbols_all),
-                "symbols_scanned": symbols_scanned_count,
-            }
-            st.session_state["scan_ran"] = True
-            st.warning("Live scan looked degraded, so the app loaded the last-good cached snapshot.")
+            if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
+                st.session_state["flow_raw"] = ensure_flow_schema(build_cluster_flags(cached_flow.copy()))
+                st.session_state["diags_raw"] = cached_diags if isinstance(cached_diags, pd.DataFrame) else pd.DataFrame()
+                st.session_state["scan_meta"] = {
+                    "mode": "Cached fallback",
+                    "saved_at": cached_meta.get("saved_at", "unknown") if isinstance(cached_meta, dict) else "unknown",
+                    "elapsed": round(time.time() - scan_started, 1),
+                    "success_ratio": success_ratio,
+                    "raw_contracts": raw_contracts,
+                    "symbols_requested": len(symbols_all),
+                    "symbols_scanned": symbols_scanned_count,
+                    "empty_reason": "Live scan looked degraded, so cached data was loaded.",
+                }
+                st.session_state["scan_ran"] = True
+                st.warning("Live scan looked degraded, so the app loaded the last-good cached snapshot.")
+            else:
+                st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
+                st.session_state["diags_raw"] = diags_live
+                st.session_state["scan_meta"] = {
+                    "mode": "Live",
+                    "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "elapsed": round(time.time() - scan_started, 1),
+                    "success_ratio": success_ratio,
+                    "raw_contracts": raw_contracts,
+                    "symbols_requested": len(symbols_all),
+                    "symbols_scanned": symbols_scanned_count,
+                    "empty_reason": "Live scan returned weak chain coverage and no cached snapshot was strong enough to use.",
+                }
+                st.session_state["scan_ran"] = True
         else:
             st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
             st.session_state["diags_raw"] = diags_live
@@ -1167,42 +1300,30 @@ if run_scan:
                 "symbols_scanned": symbols_scanned_count,
             }
             st.session_state["scan_ran"] = True
-    else:
-        st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
-        st.session_state["diags_raw"] = diags_live
-        st.session_state["scan_meta"] = {
-            "mode": "Live",
-            "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "elapsed": round(time.time() - scan_started, 1),
-            "success_ratio": success_ratio,
-            "raw_contracts": raw_contracts,
-            "symbols_requested": len(symbols_all),
-            "symbols_scanned": symbols_scanned_count,
-        }
-        st.session_state["scan_ran"] = True
 
-        if flow_live is not None and not flow_live.empty:
-            save_pickle(flow_live, LAST_GOOD_SCAN)
-            save_pickle(diags_live, LAST_GOOD_DIAGS)
-            save_json(
-                {
-                    "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "rows": int(len(flow_live)),
-                    "symbols_requested": int(len(symbols_all)),
-                    "symbols_scanned": int(symbols_scanned_count),
-                    "raw_contracts": raw_contracts,
-                    "success_ratio": success_ratio,
-                },
-                LAST_GOOD_META,
-            )
+            if flow_live is not None and not flow_live.empty:
+                save_pickle(flow_live, LAST_GOOD_SCAN)
+                save_pickle(diags_live, LAST_GOOD_DIAGS)
+                save_json(
+                    {
+                        "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "rows": int(len(flow_live)),
+                        "symbols_requested": int(len(symbols_all)),
+                        "symbols_scanned": int(symbols_scanned_count),
+                        "raw_contracts": raw_contracts,
+                        "success_ratio": success_ratio,
+                    },
+                    LAST_GOOD_META,
+                )
 
 # -----------------------------------------------------------------------------
 # Main frames
 # -----------------------------------------------------------------------------
 flow = st.session_state["flow_raw"] if st.session_state["flow_raw"] is not None else pd.DataFrame()
 diags = st.session_state["diags_raw"] if st.session_state["diags_raw"] is not None else pd.DataFrame()
-scan_meta = st.session_state["scan_meta"]
+scan_meta = st.session_state["scan_meta"] or {}
 filtered_snapshot = st.session_state["filtered_snapshot"]
+spot_snapshot_meta = st.session_state["spot_snapshot_meta"] or {}
 
 if flow is not None and not flow.empty:
     flow = ensure_flow_schema(build_cluster_flags(flow.copy()))
@@ -1211,7 +1332,7 @@ if flow is not None and not flow.empty:
 # Metrics
 # -----------------------------------------------------------------------------
 symbols_requested = safe_int(len(symbols_all))
-symbols_scanned = safe_int(scan_meta.get("symbols_scanned", 0) if isinstance(scan_meta, dict) else 0)
+symbols_scanned = safe_int(scan_meta.get("symbols_scanned", 0))
 symbols_completed = safe_int(diags["symbol"].nunique()) if not diags.empty and "symbol" in diags.columns else 0
 contracts_seen = safe_int(diags["contracts_seen"].sum()) if not diags.empty and "contracts_seen" in diags.columns else 0
 scan_errors = safe_int(diags["errors"].sum()) if not diags.empty and "errors" in diags.columns else 0
@@ -1229,24 +1350,28 @@ c4.metric("Contracts seen", f"{contracts_seen:,}")
 c5.metric("Qualifying rows", f"{qualifying_rows:,}")
 c6.metric("Total premium", human_money(total_premium))
 
-if scan_meta:
-    mode = scan_meta.get("mode", "Unknown")
-    saved_at = scan_meta.get("saved_at", "Unknown")
-    elapsed = scan_meta.get("elapsed", None)
-    success_ratio = scan_meta.get("success_ratio", None)
-    raw_contracts = scan_meta.get("raw_contracts", None)
+mode = scan_meta.get("mode", "Unknown")
+saved_at = scan_meta.get("saved_at", "Unknown")
+elapsed = scan_meta.get("elapsed", None)
+success_ratio = scan_meta.get("success_ratio", None)
+raw_contracts = scan_meta.get("raw_contracts", None)
 
-    meta_text = f"Scan mode: {mode}"
-    if saved_at:
-        meta_text += f" | Snapshot: {saved_at}"
-    meta_text += f" | Bullish premium: {human_money(bullish_premium)} | Bearish premium: {human_money(bearish_premium)} | Errors: {scan_errors:,}"
-    if elapsed is not None:
-        meta_text += f" | Elapsed: {elapsed:.1f}s"
-    if success_ratio is not None:
-        meta_text += f" | Success ratio: {success_ratio:.0%}"
-    if raw_contracts is not None:
-        meta_text += f" | Raw contracts: {safe_int(raw_contracts):,}"
-    st.caption(meta_text)
+meta_text = f"Scan mode: {mode}"
+if saved_at:
+    meta_text += f" | Snapshot: {saved_at}"
+meta_text += f" | Bullish premium: {human_money(bullish_premium)} | Bearish premium: {human_money(bearish_premium)} | Errors: {scan_errors:,}"
+if elapsed is not None:
+    meta_text += f" | Elapsed: {elapsed:.1f}s"
+if success_ratio is not None:
+    meta_text += f" | Success ratio: {success_ratio:.0%}"
+if raw_contracts is not None:
+    meta_text += f" | Raw contracts: {safe_int(raw_contracts):,}"
+if spot_snapshot_meta:
+    meta_text += f" | Spot rows: {safe_int(spot_snapshot_meta.get('rows', 0)):,}"
+    meta_text += f" | Spot batch failures: {safe_int(spot_snapshot_meta.get('failures', 0)):,}"
+    if spot_snapshot_meta.get("used_cached_snapshot", False):
+        meta_text += " | Spot source: cached"
+st.caption(meta_text)
 
 # -----------------------------------------------------------------------------
 # No-scan and empty states
@@ -1267,6 +1392,10 @@ if flow.empty:
 
     with left:
         st.subheader("Why the board is empty")
+
+        if scan_meta.get("empty_reason"):
+            st.warning(scan_meta["empty_reason"])
+
         if diags.empty:
             st.info("No diagnostics yet. Run the live scan first.")
         else:
@@ -1288,6 +1417,10 @@ if flow.empty:
             fig_reason.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
             st.plotly_chart(fig_reason, use_container_width=True)
 
+            show_diag = diags.copy()
+            if "detail" in show_diag.columns:
+                st.dataframe(show_diag.sort_values(["errors", "contracts_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
+
     with right:
         st.subheader("Practical fixes")
         st.markdown(
@@ -1300,6 +1433,8 @@ if flow.empty:
             • lower minimum unusual score
             • expand DTE range
             • loosen pre-scan underlying filters
+            • reduce concurrent workers
+            • try cached fallback
             """
         )
         if filtered_snapshot is not None and isinstance(filtered_snapshot, pd.DataFrame) and not filtered_snapshot.empty:
@@ -1518,6 +1653,25 @@ with tab7:
     if filtered_snapshot is not None and isinstance(filtered_snapshot, pd.DataFrame) and not filtered_snapshot.empty:
         st.caption(f"Underlying pre-filters reduced the universe from {len(symbols_all):,} names to {len(filtered_snapshot):,} names before option-chain scanning.")
     if not diags.empty:
-        st.dataframe(diags.sort_values(["errors", "contracts_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
+        diag_show = diags.copy()
+        st.dataframe(diag_show.sort_values(["errors", "contracts_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
+
+        reason_counts = (
+            diag_show["reason"]
+            .fillna("unknown")
+            .replace("", "blank")
+            .value_counts()
+            .rename_axis("reason")
+            .reset_index(name="count")
+        )
+        fig_diag_reason = px.bar(
+            reason_counts.sort_values("count", ascending=True),
+            x="count",
+            y="reason",
+            orientation="h",
+            title="Reason Breakdown"
+        )
+        fig_diag_reason.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
+        st.plotly_chart(fig_diag_reason, use_container_width=True)
     else:
         st.info("No diagnostic frame loaded yet. Run the live scan first.")
