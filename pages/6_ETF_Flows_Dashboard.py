@@ -1,14 +1,12 @@
 import time
 from datetime import datetime, date
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import numpy as np
 import pandas as pd
 import pytz
 import streamlit as st
 import yfinance as yf
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 
 # =========================================================
 # PAGE SETUP
@@ -18,35 +16,43 @@ st.set_page_config(page_title="ETF Net Flows", layout="wide")
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 1.1rem;
+        padding-top: 1.05rem;
         padding-bottom: 2rem;
-        max-width: 1600px;
+        max-width: 1650px;
     }
     h1, h2, h3 {
         letter-spacing: 0.1px;
         font-weight: 650;
     }
-    .stMetric {
-        background: #fafafa;
-        border: 1px solid #ececec;
-        border-radius: 12px;
-        padding: 12px 14px;
-    }
     .adfm-card {
         background: #fafafa;
-        border: 1px solid #ececec;
+        border: 1px solid #e9e9e9;
         border-radius: 14px;
         padding: 16px 18px;
         margin-bottom: 12px;
     }
-    .adfm-muted {
-        color: #666;
-        font-size: 0.92rem;
+    .adfm-subtle {
+        color: #5f6368;
+        font-size: 0.93rem;
+        line-height: 1.45;
+    }
+    div[data-testid="stMetric"] {
+        background: #fafafa;
+        border: 1px solid #ececec;
+        border-radius: 12px;
+        padding: 10px 12px;
+    }
+    .small-note {
+        color: #6b7280;
+        font-size: 0.84rem;
     }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
+# =========================================================
+# GLOBALS
+# =========================================================
 TZ = pytz.timezone("US/Eastern")
 
 
@@ -70,7 +76,8 @@ def ytd_days(as_of: datetime) -> int:
 
 
 def calc_start_date(days: int, as_of: datetime) -> date:
-    padding = 15
+    # Extra buffer so week slicing still works cleanly
+    padding = 21
     return (as_of - pd.Timedelta(days=days + padding)).date()
 
 
@@ -86,11 +93,12 @@ def week_start_monday(week_ending_friday: pd.Timestamp) -> pd.Timestamp:
 
 
 # =========================================================
-# SIDEBAR
+# RUNTIME
 # =========================================================
 as_of_dt = now_et()
 as_of_date = as_of_dt.date()
 as_of_dt_naive = as_naive_ts(as_of_dt)
+as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
 
 lookback_dict = {
     "1 Month": 30,
@@ -100,31 +108,37 @@ lookback_dict = {
     "YTD": ytd_days(as_of_dt),
 }
 
+# =========================================================
+# SIDEBAR
+# =========================================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This dashboard tracks ETF flow pressure across major equity, rates, credit, commodity, FX, and crypto sleeves using public Yahoo Finance OHLCV data.
+        This dashboard shows a single full-coverage table for the original ETF list, with no sampling, trimming, or chart-based filtering.
 
-        It does not rely on Yahoo shares outstanding history, which has become inconsistent for ETFs and is the main reason many older ETF flow scripts stopped working.
+        The values are **flow-pressure proxies** derived from price and volume, because Yahoo Finance's ETF shares-outstanding history has become unreliable and that is what breaks many older ETF flow dashboards.
 
-        The output here is a flow-pressure proxy, built from money flow mechanics using price and volume. It is useful for relative ranking, trend detection, and tape reading, but it is not the same thing as official issuer-reported creations and redemptions.
+        You get three practical windows in one place:
+        
+        - **Lookback Total** for the selected horizon  
+        - **Latest Complete Week** using the most recent fully finished Monday to Friday window  
+        - **Week to Date** for the current week so far  
+
+        This is designed for tape reading and cross-asset relative ranking. It is useful directionally, but it is **not** the same thing as official issuer-reported ETF creations and redemptions.
         """
     )
     st.markdown("---")
-    period_label = st.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
+    period_label = st.radio("Lookback Window", list(lookback_dict.keys()), index=0)
+    show_only_missing = st.checkbox("Show only tickers with missing data", value=False)
     st.caption(f"As of: {as_of_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
 period_days = int(lookback_dict[period_label])
-
 
 # =========================================================
 # ETF COVERAGE
 # =========================================================
 etf_info = {
-    "VTI": ("US Total Market", "Total US equity market"),
-    "VUG": ("US Growth", "Large-cap growth"),
-    "VTV": ("US Value", "Large-cap value"),
     "MTUM": ("US Momentum", "Momentum factor"),
     "QUAL": ("US Quality", "Quality factor"),
     "USMV": ("US Min Vol", "Minimum volatility"),
@@ -198,16 +212,10 @@ etf_info = {
     "PDBC": ("Broad Commodities Alt", "Rules-based commodities"),
     "URA": ("Uranium", "Nuclear fuel cycle"),
     "VXX": ("Equity Volatility", "Front-end VIX futures"),
-    "UUP": ("USD", "US Dollar Index"),
-    "FXE": ("EURUSD", "Euro vs USD"),
-    "FXY": ("JPYUSD", "Japanese yen vs USD"),
-    "FXF": ("CHFUSD", "Swiss franc vs USD"),
-    "CEW": ("EM FX", "Emerging market currencies"),
     "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
-    "ETHA": ("Ethereum", "Spot Ethereum ETF"),
+    "ETH": ("Ethereum", "Ethereum proxy ticker as originally listed"),
 }
 etf_tickers = tuple(etf_info.keys())
-
 
 # =========================================================
 # FORMATTERS
@@ -218,24 +226,32 @@ def fmt_compact_cur(x) -> str:
     x = float(x)
     ax = abs(x)
     if ax >= 1e12:
-        return f"${x/1e12:,.2f}T"
+        return f"${x / 1e12:,.2f}T"
     if ax >= 1e9:
-        return f"${x/1e9:,.2f}B"
+        return f"${x / 1e9:,.2f}B"
     if ax >= 1e6:
-        return f"${x/1e6:,.2f}M"
+        return f"${x / 1e6:,.2f}M"
     if ax >= 1e3:
-        return f"${x/1e3:,.0f}K"
+        return f"${x / 1e3:,.0f}K"
     return f"${x:,.0f}"
 
 
-def fmt_num(x) -> str:
+def fmt_pct(x) -> str:
     if x is None or pd.isna(x):
         return ""
-    return f"{float(x):,.2f}"
+    return f"{float(x):,.2f}%"
 
 
-def axis_fmt(x, _pos=None) -> str:
-    return fmt_compact_cur(x)
+def fmt_price(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"${float(x):,.2f}"
+
+
+def fmt_score(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"{float(x):.4f}"
 
 
 # =========================================================
@@ -269,8 +285,8 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(out.columns, pd.MultiIndex):
         out.columns = [c[0] if isinstance(c, tuple) else c for c in out.columns]
 
-    need = ["Open", "High", "Low", "Close", "Volume"]
-    for c in need:
+    needed = ["Open", "High", "Low", "Close", "Volume"]
+    for c in needed:
         if c not in out.columns:
             out[c] = np.nan
         out[c] = pd.to_numeric(out[c], errors="coerce")
@@ -370,6 +386,22 @@ def compute_pressure_score(df: pd.DataFrame) -> float:
     return float(mfv.sum() / denom)
 
 
+def compute_window_sum(daily: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> float:
+    if daily is None or daily.empty:
+        return np.nan
+
+    s = daily.copy()
+    s.index = pd.to_datetime(s.index, errors="coerce")
+    s = s.sort_index()
+    window = s.loc[(s.index >= start) & (s.index <= end)]
+    if window.empty:
+        return np.nan
+    return float(window.sum())
+
+
+# =========================================================
+# BUILD TABLE
+# =========================================================
 @st.cache_data(show_spinner=True, ttl=300)
 def build_table(
     tickers: Tuple[str, ...],
@@ -382,272 +414,186 @@ def build_table(
     start_date = calc_start_date(period_days, as_of_dt_et)
 
     price_map = fetch_prices(tickers, start_date, as_of_date)
+
     cutoff = as_of_dt_naive - pd.Timedelta(days=period_days)
 
-    rows = []
+    latest_complete_week_end = last_friday(as_of_dt_naive - pd.Timedelta(days=1))
+    latest_complete_week_start = week_start_monday(latest_complete_week_end)
+
+    current_week_anchor = last_friday(as_of_dt_naive)
+    current_week_start = week_start_monday(current_week_anchor)
+    current_day_end = pd.Timestamp(as_of_dt_naive).normalize()
+
+    rows: List[Dict] = []
+
     for tk in tickers:
+        cat, desc = etf_info.get(tk, ("", ""))
         px = price_map.get(tk, pd.DataFrame()).copy()
-        if not px.empty:
-            px = px.loc[px.index >= cutoff]
 
-        if px.empty:
-            rows.append(
-                {
-                    "Ticker": tk,
-                    "Category": etf_info.get(tk, ("", ""))[0],
-                    "Description": etf_info.get(tk, ("", ""))[1],
-                    "Proxy Flow ($)": np.nan,
-                    "Pressure Score": np.nan,
-                    "Last Price": np.nan,
-                    "Return %": np.nan,
-                    "Avg Daily Dollar Vol": np.nan,
-                    "_daily_proxy": pd.Series(dtype="float64"),
-                }
-            )
-            continue
+        # Full lookback slice
+        lookback_px = pd.DataFrame()
+        if px is not None and not px.empty:
+            lookback_px = px.loc[px.index >= cutoff].copy()
 
-        daily_proxy = compute_money_flow_proxy(px)
-        proxy_flow = float(daily_proxy.sum()) if not daily_proxy.empty else np.nan
-        pressure_score = compute_pressure_score(px)
+        # Full daily proxy across fetched history, used for weekly windows
+        full_daily_proxy = compute_money_flow_proxy(px) if px is not None and not px.empty else pd.Series(dtype="float64")
 
-        close = pd.to_numeric(px["Close"], errors="coerce").dropna()
+        lookback_proxy = np.nan
+        pressure_score = np.nan
         ret = np.nan
-        if len(close) >= 2 and close.iloc[0] != 0:
-            ret = float((close.iloc[-1] / close.iloc[0] - 1.0) * 100.0)
+        last_price = np.nan
+        adv = np.nan
 
-        adv = (
-            pd.to_numeric(px["Close"], errors="coerce") *
-            pd.to_numeric(px["Volume"], errors="coerce").fillna(0.0)
-        ).replace([np.inf, -np.inf], np.nan)
+        if not lookback_px.empty:
+            lookback_daily_proxy = compute_money_flow_proxy(lookback_px)
+            lookback_proxy = float(lookback_daily_proxy.sum()) if not lookback_daily_proxy.empty else np.nan
+            pressure_score = compute_pressure_score(lookback_px)
 
+            close = pd.to_numeric(lookback_px["Close"], errors="coerce").dropna()
+            if len(close) >= 2 and close.iloc[0] != 0:
+                ret = float((close.iloc[-1] / close.iloc[0] - 1.0) * 100.0)
+            if len(close) >= 1:
+                last_price = float(close.iloc[-1])
+
+            adv_series = (
+                pd.to_numeric(lookback_px["Close"], errors="coerce") *
+                pd.to_numeric(lookback_px["Volume"], errors="coerce").fillna(0.0)
+            ).replace([np.inf, -np.inf], np.nan)
+            if adv_series.notna().any():
+                adv = float(adv_series.mean())
+
+        latest_complete_week_proxy = compute_window_sum(
+            full_daily_proxy,
+            latest_complete_week_start,
+            latest_complete_week_end,
+        )
+
+        week_to_date_proxy = compute_window_sum(
+            full_daily_proxy,
+            current_week_start,
+            current_day_end,
+        )
+
+        has_data = not px.empty
         rows.append(
             {
                 "Ticker": tk,
-                "Category": etf_info.get(tk, ("", ""))[0],
-                "Description": etf_info.get(tk, ("", ""))[1],
-                "Proxy Flow ($)": proxy_flow,
+                "Category": cat,
+                "Description": desc,
+                "Last Price": last_price,
+                f"{period_label} Flow Pressure": lookback_proxy,
+                "Latest Complete Week": latest_complete_week_proxy,
+                "Week to Date": week_to_date_proxy,
                 "Pressure Score": pressure_score,
-                "Last Price": float(close.iloc[-1]) if not close.empty else np.nan,
-                "Return %": ret,
-                "Avg Daily Dollar Vol": float(adv.mean()) if adv.notna().any() else np.nan,
-                "_daily_proxy": daily_proxy,
+                f"{period_label} Return %": ret,
+                "Avg Daily Dollar Vol": adv,
+                "Data Status": "OK" if has_data else "Missing",
             }
         )
 
-    df = pd.DataFrame(rows)
-    df["Label"] = df["Category"] + " (" + df["Ticker"] + ")"
-    return df
-
-
-def compute_week_view_value_from_daily(daily: pd.Series, view: str, as_of_ts: pd.Timestamp) -> float:
-    if daily is None or daily.empty:
-        return np.nan
-
-    daily = daily.copy()
-    daily.index = pd.to_datetime(daily.index)
-    daily = daily.sort_index()
-
-    this_week_end = last_friday(as_of_ts)
-    this_week_start = week_start_monday(this_week_end)
-
-    if view == "Week to date":
-        start = this_week_start
-        end = pd.Timestamp(as_of_ts).normalize()
-        return float(daily.loc[(daily.index >= start) & (daily.index <= end)].sum())
-
-    last_week_end = this_week_end - pd.Timedelta(days=7)
-    last_week_start = week_start_monday(last_week_end)
-    return float(daily.loc[(daily.index >= last_week_start) & (daily.index <= last_week_end)].sum())
+    return pd.DataFrame(rows)
 
 
 # =========================================================
-# BUILD DATA
+# HEADER
 # =========================================================
 st.title("ETF Net Flows")
+
 st.markdown(
     f"""
     <div class="adfm-card">
-        <div><strong>Selected window:</strong> {period_label}</div>
-        <div class="adfm-muted">This version plots every ticker you listed. Nothing is trimmed, sampled, or hidden.</div>
+        <div><strong>Window:</strong> {period_label}</div>
+        <div class="adfm-subtle">
+            One table, every original ticker, plus lookback total, latest complete week, and week to date in the same output.
+            Nothing is hidden.
+        </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
+# =========================================================
+# DATA BUILD
+# =========================================================
 df = build_table(etf_tickers, period_days, as_of_date, as_of_dt_naive)
 
-bar_view = st.radio(
-    label="",
-    options=["Lookback total", "Last complete week", "Week to date"],
-    horizontal=True,
-    key="bar_view",
-    label_visibility="collapsed",
+# =========================================================
+# SUMMARY
+# =========================================================
+missing_count = int((df["Data Status"] == "Missing").sum())
+ok_count = int((df["Data Status"] == "OK").sum())
+
+net_lookback = pd.to_numeric(df[f"{period_label} Flow Pressure"], errors="coerce").sum(min_count=1)
+net_lcw = pd.to_numeric(df["Latest Complete Week"], errors="coerce").sum(min_count=1)
+net_wtd = pd.to_numeric(df["Week to Date"], errors="coerce").sum(min_count=1)
+
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Tickers Listed", f"{len(df)}")
+c2.metric("Data Returned", f"{ok_count}")
+c3.metric("Missing", f"{missing_count}")
+c4.metric(f"{period_label} Net", fmt_compact_cur(net_lookback) if pd.notna(net_lookback) else "")
+c5.metric("WTD Net", fmt_compact_cur(net_wtd) if pd.notna(net_wtd) else "")
+
+st.markdown(
+    f"""
+    <div class="small-note">
+        Latest complete week is computed from <strong>{pd.Timestamp(last_friday(as_of_dt_naive - pd.Timedelta(days=1))).strftime("%Y-%m-%d")}</strong> week-ending Friday logic. 
+        Week to date runs from this week's Monday through the latest available trading day in the pulled data window.
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
-
-chart_rows = []
-for _, row in df.iterrows():
-    daily = row.get("_daily_proxy", pd.Series(dtype="float64"))
-
-    if bar_view == "Lookback total":
-        value = row["Proxy Flow ($)"]
-    else:
-        value = compute_week_view_value_from_daily(daily, bar_view, as_of_ts)
-
-    chart_rows.append(
-        {
-            "Ticker": row["Ticker"],
-            "Label": row["Label"],
-            "Value": value,
-            "Pressure Score": row["Pressure Score"],
-        }
-    )
-
-chart_df = pd.DataFrame(chart_rows)
-chart_df["Value"] = pd.to_numeric(chart_df["Value"], errors="coerce")
-chart_df = chart_df.dropna(subset=["Value"]).sort_values("Value", ascending=False)
-
-if chart_df.empty:
-    st.info("No values available for this view.")
-else:
-    vals = chart_df["Value"].fillna(0.0)
-    x_min = float(vals.min())
-    x_max = float(vals.max())
-    x_min = min(x_min, 0.0)
-    x_max = max(x_max, 0.0)
-    span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
-    pad = 0.08 * span
-
-    n = len(chart_df)
-    fig_h = max(10.0, 0.34 * n + 2.5)
-
-    colors = ["#1f7a1f" if v > 0 else "#b22222" if v < 0 else "#808080" for v in vals]
-
-    fig, ax = plt.subplots(figsize=(16, fig_h))
-    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.92, height=0.82)
-
-    ax.set_xlabel("Estimated Net Flow Pressure ($)")
-    ax.set_title(f"ETF Flow Pressure Proxy | {bar_view} | {period_label}")
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
-    ax.grid(False)
-    ax.xaxis.grid(False)
-    ax.yaxis.grid(False)
-    ax.invert_yaxis()
-    ax.set_ylim(n - 0.5, -0.5)
-    ax.margins(y=0.0)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.set_xlim(x_min - pad, x_max + pad)
-
-    text_pad = 0.012 * span
-    for bar, raw in zip(bars, vals):
-        label_txt = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
-        x = bar.get_width()
-        if raw > 0:
-            x_text, ha = x + text_pad, "left"
-        elif raw < 0:
-            x_text, ha = x - text_pad, "right"
-        else:
-            x_text, ha = 0.0, "center"
-
-        ax.text(
-            x_text,
-            bar.get_y() + bar.get_height() / 2,
-            label_txt,
-            va="center",
-            ha=ha,
-            fontsize=9,
-            color="black",
-            clip_on=True,
-        )
-
-    fig.tight_layout(pad=0.8)
-    st.pyplot(fig)
-    plt.close(fig)
-
 # =========================================================
-# SUMMARY METRICS
+# TABLE PREP
 # =========================================================
-valid = df.dropna(subset=["Proxy Flow ($)"]).copy()
+display_df = df.copy()
 
-if not valid.empty:
-    total_proxy = float(valid["Proxy Flow ($)"].sum())
-    pos_count = int((valid["Proxy Flow ($)"] > 0).sum())
-    neg_count = int((valid["Proxy Flow ($)"] < 0).sum())
-    median_score = float(valid["Pressure Score"].median()) if valid["Pressure Score"].notna().any() else np.nan
+if show_only_missing:
+    display_df = display_df[display_df["Data Status"] == "Missing"].copy()
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Net Flow Pressure", fmt_compact_cur(total_proxy))
-    c2.metric("Positive Sleeves", f"{pos_count}")
-    c3.metric("Negative Sleeves", f"{neg_count}")
-    c4.metric("Median Pressure Score", fmt_num(median_score))
-
-# =========================================================
-# TOP INFLOWS / OUTFLOWS
-# =========================================================
-st.markdown("---")
-st.markdown("#### Top Inflows and Outflows")
-
-if valid.empty:
-    st.write("No ETFs with computable values in the selected period.")
-else:
-    valid["Value"] = valid["Proxy Flow ($)"].apply(fmt_compact_cur)
-    show_cols = ["Value", "Return %", "Avg Daily Dollar Vol"]
-    valid["Return %"] = valid["Return %"].map(lambda x: f"{x:,.2f}%" if pd.notna(x) else "")
-    valid["Avg Daily Dollar Vol"] = valid["Avg Daily Dollar Vol"].apply(fmt_compact_cur)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.write("**Top Inflows**")
-        inflows = (
-            valid[valid["Proxy Flow ($)"] > 0]
-            .nlargest(5, "Proxy Flow ($)")
-            .set_index("Label")[show_cols]
-        )
-        st.table(inflows)
-
-    with col2:
-        st.write("**Top Outflows**")
-        outflows = (
-            valid[valid["Proxy Flow ($)"] < 0]
-            .nsmallest(5, "Proxy Flow ($)")
-            .set_index("Label")[show_cols]
-        )
-        st.table(outflows)
-
-# =========================================================
-# DETAIL TABLE
-# =========================================================
-st.markdown("---")
-st.markdown("#### Full Coverage Table")
-
-table_df = valid[
+display_df = display_df[
     [
         "Ticker",
         "Category",
         "Description",
-        "Proxy Flow ($)",
-        "Pressure Score",
-        "Return %",
         "Last Price",
+        f"{period_label} Flow Pressure",
+        "Latest Complete Week",
+        "Week to Date",
+        "Pressure Score",
+        f"{period_label} Return %",
         "Avg Daily Dollar Vol",
+        "Data Status",
     ]
 ].copy()
 
-table_df["Proxy Flow ($)"] = table_df["Proxy Flow ($)"].apply(fmt_compact_cur)
-table_df["Pressure Score"] = table_df["Pressure Score"].map(lambda x: f"{x:.4f}" if pd.notna(x) else "")
-table_df["Return %"] = table_df["Return %"].map(lambda x: f"{x:,.2f}%" if pd.notna(x) else "")
-table_df["Last Price"] = table_df["Last Price"].map(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
-table_df["Avg Daily Dollar Vol"] = table_df["Avg Daily Dollar Vol"].apply(fmt_compact_cur)
+display_df["Last Price"] = display_df["Last Price"].apply(fmt_price)
+display_df[f"{period_label} Flow Pressure"] = display_df[f"{period_label} Flow Pressure"].apply(fmt_compact_cur)
+display_df["Latest Complete Week"] = display_df["Latest Complete Week"].apply(fmt_compact_cur)
+display_df["Week to Date"] = display_df["Week to Date"].apply(fmt_compact_cur)
+display_df["Pressure Score"] = display_df["Pressure Score"].apply(fmt_score)
+display_df[f"{period_label} Return %"] = display_df[f"{period_label} Return %"].apply(fmt_pct)
+display_df["Avg Daily Dollar Vol"] = display_df["Avg Daily Dollar Vol"].apply(fmt_compact_cur)
 
-st.dataframe(table_df, use_container_width=True, hide_index=True)
+# =========================================================
+# OUTPUT TABLE
+# =========================================================
+st.markdown("---")
+st.subheader("Full Coverage Table")
+
+st.dataframe(
+    display_df,
+    use_container_width=True,
+    hide_index=True,
+    height=900,
+)
 
 # =========================================================
 # FOOTNOTE
 # =========================================================
 st.caption(
     f"Last refresh: {as_of_dt_naive} | Source: Yahoo Finance OHLCV via yfinance | "
-    f"Method: money-flow proxy based on price and volume, not issuer-reported ETF creations/redemptions | © 2026 AD Fund Management LP"
+    f"Method: price-volume flow-pressure proxy, not issuer-reported ETF creations/redemptions | "
+    f"© 2026 AD Fund Management LP"
 )
