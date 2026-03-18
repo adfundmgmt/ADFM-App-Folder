@@ -7,20 +7,6 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="ADFM Chart Tool", layout="wide")
 
-# --------------------------- Page CSS ---------------------------
-st.markdown(
-    """
-    <style>
-        .block-container {
-            padding-top: 0.55rem;
-            padding-bottom: 0.75rem;
-            max-width: 1650px;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 # --------------------------- Sidebar ---------------------------
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
@@ -78,6 +64,18 @@ elliott_mode = st.sidebar.selectbox(
     index=0,
 )
 
+# --------------------------- Header ---------------------------
+header_suffix = "ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
+st.markdown(
+    f"""
+<div style="margin-bottom: 6px;">
+    <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
+        {ticker} | {header_suffix}
+    </h2>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 # --------------------------- Helpers ---------------------------
 def start_date_from_period(p: str) -> pd.Timestamp | None:
     today = pd.Timestamp.today().normalize()
@@ -477,7 +475,7 @@ if df_display.empty:
 rangebreaks = build_rangebreaks(df_display.index, interval)
 
 # --------------------------- Header ---------------------------
-header_suffix = "ADFM Chart Tool"
+header_suffix = "Adjusted ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
 st.markdown(
     f"""
     <div style="margin-bottom: 4px;">
@@ -521,17 +519,13 @@ if show_ma100:
     legend_items.append(("MA 100", COLORS["ma100"]))
 legend_items.append(("MA 200", COLORS["ma200"]))
 
-legend_html = """
-<div style="display:flex; flex-wrap:nowrap; align-items:center; gap:18px; margin:2px 0 8px 2px; overflow-x:auto; white-space:nowrap;">
-"""
+legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin:2px 0 8px 2px;">'
 for label, color in legend_items:
-    legend_html += f"""
-    <div style="display:flex; align-items:center; gap:8px; font-size:13px; color:#444444; line-height:1; flex:0 0 auto;">
-        <span style="display:inline-block; width:30px; height:0; border-top:3px solid {color};"></span>
-        <span>{label}</span>
-    </div>
-    """
-legend_html += "</div>"
+    legend_html += f'<div style="display:flex; align-items:center; gap:8px; font-size:13px; color:#444444; line-height:1;">'
+    legend_html += f'<span style="display:inline-block; width:30px; height:0; border-top:3px solid {color};"></span>'
+    legend_html += f'<span>{label}</span>'
+    legend_html += '</div>'
+legend_html += '</div>'
 
 st.markdown(legend_html, unsafe_allow_html=True)
 
@@ -887,11 +881,6 @@ fig.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    xaxis=dict(
-        unifiedhovertitle=dict(
-            text="<b>%{x|%b %d, %Y}</b>"
-        )
-    ),
     margin=dict(l=40, r=20, t=10, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     showlegend=False,
@@ -908,6 +897,19 @@ if show_macd:
     fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
 
 # --------------------------- Render ---------------------------
+st.markdown(
+    """
+    <style>
+        .block-container {
+            padding-top: 0.55rem;
+            padding-bottom: 0.75rem;
+            max-width: 1650px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
 st.markdown(
