@@ -7,6 +7,8 @@ import pandas as pd
 import pytz
 import streamlit as st
 import yfinance as yf
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 # =========================================================
 # PAGE SETUP
@@ -76,7 +78,6 @@ def ytd_days(as_of: datetime) -> int:
 
 
 def calc_start_date(days: int, as_of: datetime) -> date:
-    # Extra buffer so week slicing still works cleanly
     padding = 21
     return (as_of - pd.Timedelta(days=days + padding)).date()
 
@@ -115,22 +116,21 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This dashboard shows a single full-coverage table for the original ETF list, with no sampling, trimming, or chart-based filtering.
+        This dashboard keeps the original bar-chart workflow while making the data pipeline more stable.
 
-        The values are **flow-pressure proxies** derived from price and volume, because Yahoo Finance's ETF shares-outstanding history has become unreliable and that is what breaks many older ETF flow dashboards.
+        The chart and table use a price-volume flow-pressure proxy built from OHLCV data from Yahoo Finance. That is intentional. Yahoo's ETF shares-outstanding history has become inconsistent, and that is what breaks many older ETF flow dashboards.
 
-        You get three practical windows in one place:
-        
-        - **Lookback Total** for the selected horizon  
-        - **Latest Complete Week** using the most recent fully finished Monday to Friday window  
-        - **Week to Date** for the current week so far  
+        What you get here:
+        • A horizontal bar chart for the selected view
+        • One full table with every original ticker listed
+        • Lookback total, latest complete week, and week-to-date values in the same table
+        • Missing-data rows preserved so coverage is transparent
 
-        This is designed for tape reading and cross-asset relative ranking. It is useful directionally, but it is **not** the same thing as official issuer-reported ETF creations and redemptions.
+        This is useful for directional tape reading and cross-asset relative ranking. It should be treated as a flow-pressure monitor rather than official issuer-reported creations and redemptions.
         """
     )
     st.markdown("---")
     period_label = st.radio("Lookback Window", list(lookback_dict.keys()), index=0)
-    show_only_missing = st.checkbox("Show only tickers with missing data", value=False)
     st.caption(f"As of: {as_of_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
 period_days = int(lookback_dict[period_label])
@@ -139,6 +139,9 @@ period_days = int(lookback_dict[period_label])
 # ETF COVERAGE
 # =========================================================
 etf_info = {
+    "VTI": ("US Total Market", "Total US equity market"),
+    "VUG": ("US Growth", "Large-cap growth"),
+    "VTV": ("US Value", "Large-cap value"),
     "MTUM": ("US Momentum", "Momentum factor"),
     "QUAL": ("US Quality", "Quality factor"),
     "USMV": ("US Min Vol", "Minimum volatility"),
@@ -212,6 +215,11 @@ etf_info = {
     "PDBC": ("Broad Commodities Alt", "Rules-based commodities"),
     "URA": ("Uranium", "Nuclear fuel cycle"),
     "VXX": ("Equity Volatility", "Front-end VIX futures"),
+    "UUP": ("USD", "US Dollar Index"),
+    "FXE": ("EURUSD", "Euro vs USD"),
+    "FXY": ("JPYUSD", "Japanese yen vs USD"),
+    "FXF": ("CHFUSD", "Swiss franc vs USD"),
+    "CEW": ("EM FX", "Emerging market currencies"),
     "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
     "ETH": ("Ethereum", "Ethereum proxy ticker as originally listed"),
 }
@@ -253,6 +261,9 @@ def fmt_score(x) -> str:
         return ""
     return f"{float(x):.4f}"
 
+
+def axis_fmt(x, _pos=None) -> str:
+    return fmt_compact_cur(x)
 
 # =========================================================
 # RETRY
@@ -414,7 +425,6 @@ def build_table(
     start_date = calc_start_date(period_days, as_of_dt_et)
 
     price_map = fetch_prices(tickers, start_date, as_of_date)
-
     cutoff = as_of_dt_naive - pd.Timedelta(days=period_days)
 
     latest_complete_week_end = last_friday(as_of_dt_naive - pd.Timedelta(days=1))
@@ -430,12 +440,10 @@ def build_table(
         cat, desc = etf_info.get(tk, ("", ""))
         px = price_map.get(tk, pd.DataFrame()).copy()
 
-        # Full lookback slice
         lookback_px = pd.DataFrame()
         if px is not None and not px.empty:
             lookback_px = px.loc[px.index >= cutoff].copy()
 
-        # Full daily proxy across fetched history, used for weekly windows
         full_daily_proxy = compute_money_flow_proxy(px) if px is not None and not px.empty else pd.Series(dtype="float64")
 
         lookback_proxy = np.nan
@@ -474,10 +482,10 @@ def build_table(
             current_day_end,
         )
 
-        has_data = not px.empty
         rows.append(
             {
                 "Ticker": tk,
+                "Label": f"{cat} ({tk})",
                 "Category": cat,
                 "Description": desc,
                 "Last Price": last_price,
@@ -487,7 +495,7 @@ def build_table(
                 "Pressure Score": pressure_score,
                 f"{period_label} Return %": ret,
                 "Avg Daily Dollar Vol": adv,
-                "Data Status": "OK" if has_data else "Missing",
+                "Data Status": "OK" if not px.empty else "Missing",
             }
         )
 
@@ -504,8 +512,7 @@ st.markdown(
     <div class="adfm-card">
         <div><strong>Window:</strong> {period_label}</div>
         <div class="adfm-subtle">
-            One table, every original ticker, plus lookback total, latest complete week, and week to date in the same output.
-            Nothing is hidden.
+            Original horizontal bar-chart workflow preserved. Full coverage table sits underneath with every original ticker listed.
         </div>
     </div>
     """,
@@ -516,6 +523,17 @@ st.markdown(
 # DATA BUILD
 # =========================================================
 df = build_table(etf_tickers, period_days, as_of_date, as_of_dt_naive)
+
+# =========================================================
+# VIEW SELECTOR FOR CHART
+# =========================================================
+bar_view = st.radio(
+    label="",
+    options=[f"{period_label} Flow Pressure", "Latest Complete Week", "Week to Date"],
+    horizontal=True,
+    key="bar_view",
+    label_visibility="collapsed",
+)
 
 # =========================================================
 # SUMMARY
@@ -534,25 +552,77 @@ c3.metric("Missing", f"{missing_count}")
 c4.metric(f"{period_label} Net", fmt_compact_cur(net_lookback) if pd.notna(net_lookback) else "")
 c5.metric("WTD Net", fmt_compact_cur(net_wtd) if pd.notna(net_wtd) else "")
 
-st.markdown(
-    f"""
-    <div class="small-note">
-        Latest complete week is computed from <strong>{pd.Timestamp(last_friday(as_of_dt_naive - pd.Timedelta(days=1))).strftime("%Y-%m-%d")}</strong> week-ending Friday logic. 
-        Week to date runs from this week's Monday through the latest available trading day in the pulled data window.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+# =========================================================
+# BAR CHART
+# =========================================================
+st.markdown("---")
+st.subheader("Flow Bar Chart")
+
+chart_df = df[["Ticker", "Label", bar_view, "Data Status"]].copy()
+chart_df[bar_view] = pd.to_numeric(chart_df[bar_view], errors="coerce")
+chart_df = chart_df.dropna(subset=[bar_view]).sort_values(bar_view, ascending=False)
+
+if chart_df.empty:
+    st.info("No chartable values available for this view.")
+else:
+    vals = chart_df[bar_view].fillna(0.0)
+    x_min = float(vals.min())
+    x_max = float(vals.max())
+    x_min = min(x_min, 0.0)
+    x_max = max(x_max, 0.0)
+    span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
+    pad = 0.08 * span
+
+    n = len(chart_df)
+    fig_h = max(10.0, 0.34 * n + 2.5)
+    colors = ["#1f7a1f" if v > 0 else "#b22222" if v < 0 else "#808080" for v in vals]
+
+    fig, ax = plt.subplots(figsize=(16, fig_h))
+    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.92, height=0.82)
+
+    ax.set_xlabel("Estimated Flow Pressure ($)")
+    ax.set_title(f"ETF Net Flows | {bar_view}")
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
+    ax.grid(False)
+    ax.xaxis.grid(False)
+    ax.yaxis.grid(False)
+    ax.invert_yaxis()
+    ax.set_ylim(n - 0.5, -0.5)
+    ax.margins(y=0.0)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_xlim(x_min - pad, x_max + pad)
+
+    text_pad = 0.012 * span
+    for bar, raw in zip(bars, vals):
+        label_txt = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
+        x = bar.get_width()
+        if raw > 0:
+            x_text, ha = x + text_pad, "left"
+        elif raw < 0:
+            x_text, ha = x - text_pad, "right"
+        else:
+            x_text, ha = 0.0, "center"
+
+        ax.text(
+            x_text,
+            bar.get_y() + bar.get_height() / 2,
+            label_txt,
+            va="center",
+            ha=ha,
+            fontsize=9,
+            color="black",
+            clip_on=True,
+        )
+
+    fig.tight_layout(pad=0.8)
+    st.pyplot(fig)
+    plt.close(fig)
 
 # =========================================================
 # TABLE PREP
 # =========================================================
-display_df = df.copy()
-
-if show_only_missing:
-    display_df = display_df[display_df["Data Status"] == "Missing"].copy()
-
-display_df = display_df[
+display_df = df[
     [
         "Ticker",
         "Category",
@@ -594,6 +664,7 @@ st.dataframe(
 # =========================================================
 st.caption(
     f"Last refresh: {as_of_dt_naive} | Source: Yahoo Finance OHLCV via yfinance | "
-    f"Method: price-volume flow-pressure proxy, not issuer-reported ETF creations/redemptions | "
+    f"Method: price-volume flow-pressure proxy using public OHLCV data | "
+    f"Every original ticker remains in the table even if chart data are missing | "
     f"© 2026 AD Fund Management LP"
 )
