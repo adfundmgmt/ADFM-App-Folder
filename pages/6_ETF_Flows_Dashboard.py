@@ -1,7 +1,6 @@
 import time
 from datetime import datetime, date
 from typing import Dict, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 import numpy as np
 import pandas as pd
@@ -11,32 +10,53 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
+# =========================================================
+# PAGE SETUP
+# =========================================================
 st.set_page_config(page_title="ETF Net Flows", layout="wide")
 
-# --------------------------- SIDEBAR ---------------------------
-with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        Purpose: ETF flow monitor estimating creations and redemptions across major sleeves.
-
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
-
-        Data source
-        • Public market and macro data feeds used throughout the app
-        ,
-        unsafe_allow_html=True,
-        """
-    )
-    st.markdown("---")
-    st.subheader("Lookback")
+CUSTOM_CSS = """
+<style>
+    .block-container {
+        padding-top: 1.1rem;
+        padding-bottom: 2rem;
+        max-width: 1500px;
+    }
+    h1, h2, h3 {
+        letter-spacing: 0.1px;
+        font-weight: 650;
+    }
+    .stMetric {
+        background: #fafafa;
+        border: 1px solid #ececec;
+        border-radius: 12px;
+        padding: 12px 14px;
+    }
+    .adfm-card {
+        background: #fafafa;
+        border: 1px solid #ececec;
+        border-radius: 14px;
+        padding: 16px 18px;
+        margin-bottom: 12px;
+    }
+    .adfm-muted {
+        color: #666;
+        font-size: 0.92rem;
+    }
+    .small-note {
+        color: #666;
+        font-size: 0.85rem;
+    }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 TZ = pytz.timezone("US/Eastern")
 
 
+# =========================================================
+# TIME HELPERS
+# =========================================================
 def now_et() -> datetime:
     return datetime.now(TZ)
 
@@ -53,6 +73,25 @@ def ytd_days(as_of: datetime) -> int:
     return max((as_of - start_ytd).days, 1)
 
 
+def calc_start_date(days: int, as_of: datetime) -> date:
+    padding = 15
+    return (as_of - pd.Timedelta(days=days + padding)).date()
+
+
+def last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(on_or_before).normalize()
+    wd = ts.weekday()
+    days_back = wd - 4 if wd >= 4 else wd + 3
+    return ts - pd.Timedelta(days=int(days_back))
+
+
+def week_start_monday(week_ending_friday: pd.Timestamp) -> pd.Timestamp:
+    return (pd.Timestamp(week_ending_friday).normalize() - pd.tseries.offsets.BDay(4)).normalize()
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
 as_of_dt = now_et()
 as_of_date = as_of_dt.date()
 as_of_dt_naive = as_naive_ts(as_of_dt)
@@ -64,10 +103,30 @@ lookback_dict = {
     "12 Months": 365,
     "YTD": ytd_days(as_of_dt),
 }
-period_label = st.sidebar.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
+
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        This dashboard tracks ETF flow pressure across major equity, rates, credit, commodity, FX, and crypto sleeves using public Yahoo Finance OHLCV data.
+
+        It does **not** rely on Yahoo shares outstanding history, which has become inconsistent for ETFs and is the main reason many older ETF flow scripts stopped working.
+
+        The output here is a **flow-pressure proxy**, built from money flow mechanics using price and volume. It is useful for relative ranking, trend detection, and tape reading, but it is not the same thing as official issuer-reported creations and redemptions.
+        """
+    )
+    st.markdown("---")
+    period_label = st.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
+    st.markdown("---")
+    top_n = st.slider("Bars to display", min_value=20, max_value=100, value=50, step=5)
+    st.caption(f"As of: {as_of_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
 period_days = int(lookback_dict[period_label])
 
-# --------------------------- ETF COVERAGE ---------------------------
+
+# =========================================================
+# ETF COVERAGE
+# =========================================================
 etf_info = {
     "VTI": ("US Total Market", "Total US equity market"),
     "VUG": ("US Growth", "Large-cap growth"),
@@ -147,36 +206,48 @@ etf_info = {
     "VXX": ("Equity Volatility", "Front-end VIX futures"),
     "UUP": ("USD", "US Dollar Index"),
     "FXE": ("EURUSD", "Euro vs USD"),
-    "FXY": ("USDJPY", "Japanese Yen"),
-    "FXF": ("CHFUSD", "Swiss franc"),
+    "FXY": ("JPYUSD", "Japanese yen vs USD"),
+    "FXF": ("CHFUSD", "Swiss franc vs USD"),
     "CEW": ("EM FX", "Emerging market currencies"),
     "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
-    "ETH": ("Ethereum", "Spot Ethereum ETF"),
+    "ETHA": ("Ethereum", "Spot Ethereum ETF"),
 }
-etf_tickers = list(etf_info.keys())
+etf_tickers = tuple(etf_info.keys())
 
-# --------------------------- HELPERS ---------------------------
+
+# =========================================================
+# FORMATTERS
+# =========================================================
 def fmt_compact_cur(x) -> str:
     if x is None or pd.isna(x):
         return ""
     x = float(x)
     ax = abs(x)
     if ax >= 1e12:
-        return f"${x/1e12:,.0f}T"
+        return f"${x/1e12:,.2f}T"
     if ax >= 1e9:
-        return f"${x/1e9:,.0f}B"
+        return f"${x/1e9:,.2f}B"
     if ax >= 1e6:
-        return f"${x/1e6:,.0f}M"
+        return f"${x/1e6:,.2f}M"
     if ax >= 1e3:
         return f"${x/1e3:,.0f}K"
     return f"${x:,.0f}"
+
+
+def fmt_num(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"{float(x):,.2f}"
 
 
 def axis_fmt(x, _pos=None) -> str:
     return fmt_compact_cur(x)
 
 
-def retry(n=2, delay=0.5):
+# =========================================================
+# RETRY
+# =========================================================
+def retry(n=3, delay=0.8):
     def deco(fn):
         def wrap(*args, **kwargs):
             last = None
@@ -192,220 +263,203 @@ def retry(n=2, delay=0.5):
     return deco
 
 
-def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+# =========================================================
+# DATA HELPERS
+# =========================================================
+def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+    out = df.copy()
+
+    if isinstance(out.columns, pd.MultiIndex):
+        out.columns = [c[0] if isinstance(c, tuple) else c for c in out.columns]
+
     need = ["Open", "High", "Low", "Close", "Volume"]
     for c in need:
-        if c not in df.columns:
-            df[c] = np.nan
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    idx = pd.to_datetime(df.index, errors="coerce")
+        if c not in out.columns:
+            out[c] = np.nan
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+
+    idx = pd.to_datetime(out.index, errors="coerce")
     try:
         idx = idx.tz_localize(None)
     except Exception:
         pass
-    df.index = idx
-    return df.dropna(subset=["Close"]).sort_index()
+    out.index = idx
+
+    out = out.dropna(subset=["Close"]).sort_index()
+    return out
 
 
-def _calc_start_date(days: int, as_of: datetime) -> date:
-    padding = 12
-    return (as_of - pd.Timedelta(days=days + padding)).date()
-
-
-def _last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
-    ts = pd.Timestamp(on_or_before).normalize()
-    wd = ts.weekday()
-    days_back = wd - 4 if wd >= 4 else wd + 3
-    return ts - pd.Timedelta(days=int(days_back))
-
-
-def _week_start_monday(week_ending_friday: pd.Timestamp) -> pd.Timestamp:
-    return (pd.Timestamp(week_ending_friday).normalize() - pd.tseries.offsets.BDay(4)).normalize()
-
-
-# --------------------------- DATA ---------------------------
 @retry()
 @st.cache_data(show_spinner=False, ttl=300)
-def fetch_prices(tickers: Tuple[str, ...], start_date: date, as_of_date: date) -> Dict[str, pd.DataFrame]:
-    data = yf.download(
+def fetch_prices(
+    tickers: Tuple[str, ...],
+    start_date: date,
+    as_of_date: date,
+) -> Dict[str, pd.DataFrame]:
+    raw = yf.download(
         tickers=list(tickers),
         start=start_date,
         end=as_of_date + pd.Timedelta(days=1),
         interval="1d",
         auto_adjust=False,
         group_by="ticker",
-        threads=True,
+        threads=False,
         progress=False,
     )
+
     out: Dict[str, pd.DataFrame] = {}
     for tk in tickers:
         try:
-            if isinstance(data.columns, pd.MultiIndex):
-                df = data[tk].copy()
+            if isinstance(raw.columns, pd.MultiIndex):
+                if tk in raw.columns.get_level_values(0):
+                    df = raw[tk].copy()
+                else:
+                    df = pd.DataFrame()
             else:
-                df = data.copy()
+                df = raw.copy() if len(tickers) == 1 else pd.DataFrame()
         except Exception:
             df = pd.DataFrame()
-        out[tk] = _normalize_ohlcv(df)
+
+        out[tk] = normalize_ohlcv(df)
+
     return out
 
 
-@retry()
-@st.cache_data(show_spinner=False, ttl=3600)
-def fetch_one_shares_series_cached(ticker: str, start_date: date) -> pd.Series:
-    t = yf.Ticker(ticker)
-    try:
-        s = t.get_shares_full(start=start_date)
-    except Exception:
-        s = None
-    if s is None or (isinstance(s, pd.DataFrame) and s.empty):
-        return pd.Series(dtype="float64")
-    if isinstance(s, pd.DataFrame):
-        if s.shape[1] >= 1:
-            s = s.iloc[:, 0]
-        else:
-            return pd.Series(dtype="float64")
-    s = pd.to_numeric(s, errors="coerce")
-    idx = pd.to_datetime(s.index, errors="coerce")
-    try:
-        idx = idx.tz_localize(None)
-    except Exception:
-        pass
-    s.index = idx
-    return s.dropna().sort_index()
-
-
-@st.cache_data(show_spinner=False, ttl=900)
-def fetch_shares_series_parallel(
-    tickers: Tuple[str, ...],
-    start_date: date,
-    timeout_sec: float = 10.0,
-) -> Dict[str, pd.Series]:
-    results: Dict[str, pd.Series] = {tk: pd.Series(dtype="float64") for tk in tickers}
-    max_workers = min(10, max(1, len(tickers)))
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(fetch_one_shares_series_cached, tk, start_date): tk for tk in tickers}
-        start_time = time.time()
-        for fut in as_completed(futures):
-            tk = futures[fut]
-            remaining = max(0.01, timeout_sec - (time.time() - start_time))
-            try:
-                results[tk] = fut.result(timeout=remaining)
-            except FuturesTimeoutError:
-                results[tk] = pd.Series(dtype="float64")
-            except Exception:
-                results[tk] = pd.Series(dtype="float64")
-            if (time.time() - start_time) >= timeout_sec:
-                break
-    return results
-
-
-def compute_daily_flows(close: pd.Series, shares: pd.Series, window_index: pd.DatetimeIndex) -> pd.Series:
-    if close is None or shares is None or close.empty or shares.empty or window_index is None or len(window_index) == 0:
-        return pd.Series(dtype="float64")
-
-    close = pd.to_numeric(close, errors="coerce").dropna()
-    close.index = pd.to_datetime(close.index, errors="coerce")
-    try:
-        close.index = close.index.tz_localize(None)
-    except Exception:
-        pass
-
-    sh = pd.to_numeric(shares, errors="coerce").dropna()
-    sh.index = pd.to_datetime(sh.index, errors="coerce")
-    try:
-        sh.index = sh.index.tz_localize(None)
-    except Exception:
-        pass
-
-    idx = pd.DatetimeIndex(window_index)
-    sh_daily = sh.sort_index().resample("B").ffill().reindex(idx).ffill()
-    delta_shares = sh_daily.diff().fillna(0.0)
-
-    close_aligned = close.reindex(idx).ffill()
-    flows = (delta_shares * close_aligned).astype(float)
-    flows = flows.replace([np.inf, -np.inf], np.nan).dropna()
-    return flows
-
-
-def compute_cmf_turnover_proxy(df: pd.DataFrame) -> float:
+# =========================================================
+# FLOW PROXY ENGINE
+# =========================================================
+def compute_money_flow_proxy(df: pd.DataFrame) -> pd.Series:
+    """
+    Chaikin-style money flow value in dollars:
+    Money Flow Multiplier * Volume * Typical Price
+    """
     if df is None or df.empty:
-        return np.nan
-    hl = (df["High"] - df["Low"]).replace(0, np.nan)
-    mfm = ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / hl
-    mfm = mfm.fillna(0.0)
-    typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
+        return pd.Series(dtype="float64")
+
+    high = pd.to_numeric(df["High"], errors="coerce")
+    low = pd.to_numeric(df["Low"], errors="coerce")
+    close = pd.to_numeric(df["Close"], errors="coerce")
     vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
-    return float((mfm * typical * vol).sum())
+
+    hl = (high - low).replace(0, np.nan)
+    mfm = ((close - low) - (high - close)) / hl
+    mfm = mfm.fillna(0.0)
+
+    typical = (high + low + close) / 3.0
+    money_flow_value = (mfm * vol * typical).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    money_flow_value.index = pd.to_datetime(money_flow_value.index, errors="coerce")
+    try:
+        money_flow_value.index = money_flow_value.index.tz_localize(None)
+    except Exception:
+        pass
+
+    return money_flow_value.sort_index()
+
+
+def compute_pressure_score(df: pd.DataFrame) -> float:
+    """
+    Normalized pressure score to compare across ETFs.
+    Positive means net buying pressure over the selected window.
+    """
+    mfv = compute_money_flow_proxy(df)
+    if mfv.empty:
+        return np.nan
+
+    traded_value = (
+        pd.to_numeric(df["Close"], errors="coerce") *
+        pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0)
+    ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    denom = float(traded_value.sum())
+    if denom <= 0:
+        return np.nan
+
+    return float(mfv.sum() / denom)
 
 
 @st.cache_data(show_spinner=True, ttl=300)
-def build_table(tickers: Tuple[str, ...], period_days: int, as_of_date: date, as_of_dt_naive: pd.Timestamp) -> pd.DataFrame:
+def build_table(
+    tickers: Tuple[str, ...],
+    period_days: int,
+    as_of_date: date,
+    as_of_dt_naive: pd.Timestamp,
+) -> pd.DataFrame:
     as_of_dt_local = as_of_dt_naive.to_pydatetime().replace(tzinfo=None)
     as_of_dt_et = TZ.localize(as_of_dt_local)
-    start_date = _calc_start_date(period_days, as_of_dt_et)
+    start_date = calc_start_date(period_days, as_of_dt_et)
 
-    price_map = fetch_prices(tuple(tickers), start_date, as_of_date)
-    shares_map = fetch_shares_series_parallel(tuple(tickers), start_date, timeout_sec=10.0)
-
+    price_map = fetch_prices(tickers, start_date, as_of_date)
     cutoff = as_of_dt_naive - pd.Timedelta(days=period_days)
 
     rows = []
     for tk in tickers:
-        px = price_map.get(tk, pd.DataFrame())
+        px = price_map.get(tk, pd.DataFrame()).copy()
         if not px.empty:
             px = px.loc[px.index >= cutoff]
 
-        flow_usd_sum = np.nan
-        method = "flows"
-        daily_flows_series = pd.Series(dtype="float64")
+        if px.empty:
+            rows.append(
+                {
+                    "Ticker": tk,
+                    "Category": etf_info.get(tk, ("", ""))[0],
+                    "Description": etf_info.get(tk, ("", ""))[1],
+                    "Proxy Flow ($)": np.nan,
+                    "Pressure Score": np.nan,
+                    "Last Price": np.nan,
+                    "Return %": np.nan,
+                    "Avg Daily Dollar Vol": np.nan,
+                    "_daily_proxy": pd.Series(dtype="float64"),
+                }
+            )
+            continue
 
-        if not px.empty:
-            window_index = pd.DatetimeIndex(px.index)
-            shares = shares_map.get(tk, pd.Series(dtype="float64"))
+        daily_proxy = compute_money_flow_proxy(px)
+        proxy_flow = float(daily_proxy.sum()) if not daily_proxy.empty else np.nan
+        pressure_score = compute_pressure_score(px)
 
-            if shares is not None and not shares.empty:
-                daily_flows = compute_daily_flows(px["Close"], shares, window_index)
-                if not daily_flows.empty and daily_flows.replace(0.0, np.nan).dropna().size > 0:
-                    flow_usd_sum = float(daily_flows.sum())
-                    method = "flows"
-                    daily_flows_series = daily_flows
-                else:
-                    flow_usd_sum = compute_cmf_turnover_proxy(px)
-                    method = "cmf_proxy"
-            else:
-                flow_usd_sum = compute_cmf_turnover_proxy(px)
-                method = "cmf_proxy"
+        close = pd.to_numeric(px["Close"], errors="coerce").dropna()
+        ret = np.nan
+        if len(close) >= 2 and close.iloc[0] != 0:
+            ret = float((close.iloc[-1] / close.iloc[0] - 1.0) * 100.0)
 
-        cat, desc = etf_info.get(tk, ("", ""))
-        rows.append({
-            "Ticker": tk,
-            "Category": cat,
-            "Flow ($)": flow_usd_sum,
-            "Method": method,
-            "Description": desc,
-            "_daily_flows": daily_flows_series,
-        })
+        adv = (
+            pd.to_numeric(px["Close"], errors="coerce") *
+            pd.to_numeric(px["Volume"], errors="coerce").fillna(0.0)
+        ).replace([np.inf, -np.inf], np.nan)
+
+        rows.append(
+            {
+                "Ticker": tk,
+                "Category": etf_info.get(tk, ("", ""))[0],
+                "Description": etf_info.get(tk, ("", ""))[1],
+                "Proxy Flow ($)": proxy_flow,
+                "Pressure Score": pressure_score,
+                "Last Price": float(close.iloc[-1]) if not close.empty else np.nan,
+                "Return %": ret,
+                "Avg Daily Dollar Vol": float(adv.mean()) if adv.notna().any() else np.nan,
+                "_daily_proxy": daily_proxy,
+            }
+        )
 
     df = pd.DataFrame(rows)
-
-    def label_for(t: str) -> str:
-        cat = etf_info.get(t, ("", ""))[0]
-        return f"{cat} ({t})"
-
-    df["Label"] = [label_for(t) for t in df["Ticker"]]
+    df["Label"] = df["Category"] + " (" + df["Ticker"] + ")"
     return df
 
 
 def compute_week_view_value_from_daily(daily: pd.Series, view: str, as_of_ts: pd.Timestamp) -> float:
+    if daily is None or daily.empty:
+        return np.nan
+
     daily = daily.copy()
     daily.index = pd.to_datetime(daily.index)
     daily = daily.sort_index()
 
-    this_week_end = _last_friday(as_of_ts)
-    this_week_start = _week_start_monday(this_week_end)
+    this_week_end = last_friday(as_of_ts)
+    this_week_start = week_start_monday(this_week_end)
 
     if view == "Week to date":
         start = this_week_start
@@ -413,35 +467,25 @@ def compute_week_view_value_from_daily(daily: pd.Series, view: str, as_of_ts: pd
         return float(daily.loc[(daily.index >= start) & (daily.index <= end)].sum())
 
     last_week_end = this_week_end - pd.Timedelta(days=7)
-    last_week_start = _week_start_monday(last_week_end)
+    last_week_start = week_start_monday(last_week_end)
     return float(daily.loc[(daily.index >= last_week_start) & (daily.index <= last_week_end)].sum())
 
 
-def slice_px_for_week(px: pd.DataFrame, view: str, as_of_ts: pd.Timestamp) -> pd.DataFrame:
-    if px is None or px.empty:
-        return pd.DataFrame()
-
-    px = px.copy()
-    px.index = pd.to_datetime(px.index)
-    px = px.sort_index()
-
-    this_week_end = _last_friday(as_of_ts)
-    this_week_start = _week_start_monday(this_week_end)
-
-    if view == "Week to date":
-        start = this_week_start
-        end = pd.Timestamp(as_of_ts).normalize()
-        return px.loc[(px.index >= start) & (px.index <= end)]
-
-    last_week_end = this_week_end - pd.Timedelta(days=7)
-    last_week_start = _week_start_monday(last_week_end)
-    return px.loc[(px.index >= last_week_start) & (px.index <= last_week_end)]
-
-
-# --------------------------- MAIN ---------------------------
+# =========================================================
+# BUILD DATA
+# =========================================================
 st.title("ETF Net Flows")
+st.markdown(
+    f"""
+    <div class="adfm-card">
+        <div><strong>Selected window:</strong> {period_label}</div>
+        <div class="adfm-muted">This version uses a robust price-volume money flow proxy because Yahoo ETF shares outstanding history has become inconsistent.</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-df = build_table(tuple(etf_tickers), period_days, as_of_date, as_of_dt_naive)
+df = build_table(etf_tickers, period_days, as_of_date, as_of_dt_naive)
 
 bar_view = st.radio(
     label="",
@@ -451,61 +495,40 @@ bar_view = st.radio(
     label_visibility="collapsed",
 )
 
-include_proxy_weekly = False
-if bar_view != "Lookback total":
-    include_proxy_weekly = st.checkbox(
-        "Include proxy tickers in weekly view (labeled as proxy)",
-        value=True,
-        help="When shares data are missing, weekly values use the CMF-style turnover proxy on that week's OHLCV slice.",
-    )
-
 as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
 
-weekly_price_map: Dict[str, pd.DataFrame] = {}
-if bar_view != "Lookback total" and include_proxy_weekly:
-    weekly_start = (as_of_ts - pd.Timedelta(days=21)).date()
-    weekly_price_map = fetch_prices(tuple(etf_tickers), weekly_start, as_of_date)
-
 chart_rows = []
-eligible_flows = 0
-eligible_proxy = 0
-
 for _, row in df.iterrows():
-    tk = row["Ticker"]
-    label = row["Label"]
-    method = row["Method"]
-    daily = row.get("_daily_flows", pd.Series(dtype="float64"))
+    daily = row.get("_daily_proxy", pd.Series(dtype="float64"))
 
     if bar_view == "Lookback total":
-        chart_rows.append({"Ticker": tk, "Label": label, "Value": row["Flow ($)"], "Method": method})
-        continue
+        value = row["Proxy Flow ($)"]
+    else:
+        value = compute_week_view_value_from_daily(daily, bar_view, as_of_ts)
 
-    if method == "flows" and isinstance(daily, pd.Series) and not daily.empty:
-        v = compute_week_view_value_from_daily(daily, bar_view, as_of_ts)
-        chart_rows.append({"Ticker": tk, "Label": label, "Value": float(v), "Method": "flows"})
-        eligible_flows += 1
-        continue
+    chart_rows.append(
+        {
+            "Ticker": row["Ticker"],
+            "Label": row["Label"],
+            "Value": value,
+            "Pressure Score": row["Pressure Score"],
+        }
+    )
 
-    if include_proxy_weekly:
-        px = weekly_price_map.get(tk, pd.DataFrame())
-        wk_px = slice_px_for_week(px, bar_view, as_of_ts)
-        if wk_px is not None and not wk_px.empty:
-            v = compute_cmf_turnover_proxy(wk_px)
-            if pd.notna(v):
-                chart_rows.append({"Ticker": tk, "Label": label, "Value": float(v), "Method": "cmf_proxy_week"})
-                eligible_proxy += 1
-
-chart_df = pd.DataFrame(chart_rows, columns=["Ticker", "Label", "Value", "Method"])
+chart_df = pd.DataFrame(chart_rows)
 chart_df["Value"] = pd.to_numeric(chart_df["Value"], errors="coerce")
 chart_df = chart_df.dropna(subset=["Value"]).sort_values("Value", ascending=False)
 
-if bar_view != "Lookback total":
-    st.caption(f"Eligible in this view: {eligible_flows} shares-based, {eligible_proxy} proxy.")
-
 if chart_df.empty:
-    st.info("No values available for this view. If weekly is selected, enable the proxy toggle or increase coverage.")
+    st.info("No values available for this view.")
 else:
-    vals = chart_df["Value"].fillna(0.0)
+    display_df = chart_df.copy()
+    if len(display_df) > top_n:
+        top_pos = display_df.nlargest(top_n // 2, "Value")
+        top_neg = display_df.nsmallest(top_n // 2, "Value")
+        display_df = pd.concat([top_pos, top_neg]).drop_duplicates().sort_values("Value", ascending=False)
+
+    vals = display_df["Value"].fillna(0.0)
     x_min = float(vals.min())
     x_max = float(vals.max())
     x_min = min(x_min, 0.0)
@@ -513,15 +536,16 @@ else:
     span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
     pad = 0.08 * span
 
-    n = len(chart_df)
-    fig_h = max(6.0, min(20.0, 0.30 * n + 2.0))
-    colors = ["green" if v > 0 else "red" if v < 0 else "gray" for v in vals]
+    n = len(display_df)
+    fig_h = max(6.0, min(22.0, 0.31 * n + 2.0))
+
+    colors = ["#1f7a1f" if v > 0 else "#b22222" if v < 0 else "#808080" for v in vals]
 
     fig, ax = plt.subplots(figsize=(15, fig_h))
-    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.9, height=0.82)
+    bars = ax.barh(display_df["Label"], vals, color=colors, alpha=0.92, height=0.82)
 
-    ax.set_xlabel("Estimated Net Flow ($)")
-    ax.set_title(f"ETF Net Flows, {bar_view} ({period_label} context)")
+    ax.set_xlabel("Estimated Net Flow Pressure ($)")
+    ax.set_title(f"ETF Flow Pressure Proxy | {bar_view} | {period_label}")
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
     ax.grid(False)
     ax.xaxis.grid(False)
@@ -533,7 +557,7 @@ else:
     ax.spines["right"].set_visible(False)
     ax.set_xlim(x_min - pad, x_max + pad)
 
-    text_pad = 0.012 * (span if span > 0 else 1.0)
+    text_pad = 0.012 * span
     for bar, raw in zip(bars, vals):
         label_txt = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
         x = bar.get_width()
@@ -543,46 +567,104 @@ else:
             x_text, ha = x - text_pad, "right"
         else:
             x_text, ha = 0.0, "center"
+
         ax.text(
             x_text,
             bar.get_y() + bar.get_height() / 2,
             label_txt,
             va="center",
             ha=ha,
-            fontsize=10,
+            fontsize=9.5,
             color="black",
             clip_on=True,
         )
 
-    fig.tight_layout(pad=0.6)
+    fig.tight_layout(pad=0.7)
     st.pyplot(fig)
     plt.close(fig)
 
-# ================================================================
+# =========================================================
+# SUMMARY METRICS
+# =========================================================
+valid = df.dropna(subset=["Proxy Flow ($)"]).copy()
+
+if not valid.empty:
+    total_proxy = float(valid["Proxy Flow ($)"].sum())
+    pos_count = int((valid["Proxy Flow ($)"] > 0).sum())
+    neg_count = int((valid["Proxy Flow ($)"] < 0).sum())
+    median_score = float(valid["Pressure Score"].median()) if valid["Pressure Score"].notna().any() else np.nan
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Net Flow Pressure", fmt_compact_cur(total_proxy))
+    c2.metric("Positive Sleeves", f"{pos_count}")
+    c3.metric("Negative Sleeves", f"{neg_count}")
+    c4.metric("Median Pressure Score", fmt_num(median_score))
+
+# =========================================================
 # TOP INFLOWS / OUTFLOWS
-# ================================================================
+# =========================================================
 st.markdown("---")
 st.markdown("#### Top Inflows and Outflows")
-valid = df.dropna(subset=["Flow ($)"]).copy()
 
 if valid.empty:
     st.write("No ETFs with computable values in the selected period.")
 else:
-    valid["Value"] = valid["Flow ($)"].apply(fmt_compact_cur)
+    valid["Value"] = valid["Proxy Flow ($)"].apply(fmt_compact_cur)
+    show_cols = ["Value", "Return %", "Avg Daily Dollar Vol"]
+    valid["Return %"] = valid["Return %"].map(lambda x: f"{x:,.2f}%" if pd.notna(x) else "")
+    valid["Avg Daily Dollar Vol"] = valid["Avg Daily Dollar Vol"].apply(fmt_compact_cur)
+
     col1, col2 = st.columns(2)
+
     with col1:
         st.write("**Top Inflows**")
-        st.table(
-            valid[valid["Flow ($)"] > 0]
-            .nlargest(5, "Flow ($)")
-            .set_index("Label")[["Value"]]
+        inflows = (
+            valid[valid["Proxy Flow ($)"] > 0]
+            .nlargest(5, "Proxy Flow ($)")
+            .set_index("Label")[show_cols]
         )
+        st.table(inflows)
+
     with col2:
         st.write("**Top Outflows**")
-        st.table(
-            valid[valid["Flow ($)"] < 0]
-            .nsmallest(5, "Flow ($)")
-            .set_index("Label")[["Value"]]
+        outflows = (
+            valid[valid["Proxy Flow ($)"] < 0]
+            .nsmallest(5, "Proxy Flow ($)")
+            .set_index("Label")[show_cols]
         )
+        st.table(outflows)
 
-st.caption(f"Last refresh: {as_of_dt_naive}  |  © 2026 AD Fund Management LP")
+# =========================================================
+# DETAIL TABLE
+# =========================================================
+st.markdown("---")
+st.markdown("#### Full Coverage Table")
+
+table_df = valid[
+    [
+        "Ticker",
+        "Category",
+        "Description",
+        "Proxy Flow ($)",
+        "Pressure Score",
+        "Return %",
+        "Last Price",
+        "Avg Daily Dollar Vol",
+    ]
+].copy()
+
+table_df["Proxy Flow ($)"] = table_df["Proxy Flow ($)"].apply(fmt_compact_cur)
+table_df["Pressure Score"] = table_df["Pressure Score"].map(lambda x: f"{x:.4f}" if pd.notna(x) else "")
+table_df["Return %"] = table_df["Return %"].map(lambda x: f"{x:,.2f}%" if pd.notna(x) else "")
+table_df["Last Price"] = table_df["Last Price"].map(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
+table_df["Avg Daily Dollar Vol"] = table_df["Avg Daily Dollar Vol"].apply(fmt_compact_cur)
+
+st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+# =========================================================
+# FOOTNOTE
+# =========================================================
+st.caption(
+    f"Last refresh: {as_of_dt_naive} | Source: Yahoo Finance OHLCV via yfinance | "
+    f"Method: money-flow proxy based on price and volume, not issuer-reported ETF creations/redemptions | © 2026 AD Fund Management LP"
+)
