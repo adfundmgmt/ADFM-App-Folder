@@ -20,7 +20,7 @@ CUSTOM_CSS = """
     .block-container {
         padding-top: 1.1rem;
         padding-bottom: 2rem;
-        max-width: 1500px;
+        max-width: 1600px;
     }
     h1, h2, h3 {
         letter-spacing: 0.1px;
@@ -42,10 +42,6 @@ CUSTOM_CSS = """
     .adfm-muted {
         color: #666;
         font-size: 0.92rem;
-    }
-    .small-note {
-        color: #666;
-        font-size: 0.85rem;
     }
 </style>
 """
@@ -110,15 +106,13 @@ with st.sidebar:
         """
         This dashboard tracks ETF flow pressure across major equity, rates, credit, commodity, FX, and crypto sleeves using public Yahoo Finance OHLCV data.
 
-        It does **not** rely on Yahoo shares outstanding history, which has become inconsistent for ETFs and is the main reason many older ETF flow scripts stopped working.
+        It does not rely on Yahoo shares outstanding history, which has become inconsistent for ETFs and is the main reason many older ETF flow scripts stopped working.
 
-        The output here is a **flow-pressure proxy**, built from money flow mechanics using price and volume. It is useful for relative ranking, trend detection, and tape reading, but it is not the same thing as official issuer-reported creations and redemptions.
+        The output here is a flow-pressure proxy, built from money flow mechanics using price and volume. It is useful for relative ranking, trend detection, and tape reading, but it is not the same thing as official issuer-reported creations and redemptions.
         """
     )
     st.markdown("---")
     period_label = st.radio("Select Lookback Period", list(lookback_dict.keys()), index=0)
-    st.markdown("---")
-    top_n = st.slider("Bars to display", min_value=20, max_value=100, value=50, step=5)
     st.caption(f"As of: {as_of_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
 period_days = int(lookback_dict[period_label])
@@ -332,10 +326,6 @@ def fetch_prices(
 # FLOW PROXY ENGINE
 # =========================================================
 def compute_money_flow_proxy(df: pd.DataFrame) -> pd.Series:
-    """
-    Chaikin-style money flow value in dollars:
-    Money Flow Multiplier * Volume * Typical Price
-    """
     if df is None or df.empty:
         return pd.Series(dtype="float64")
 
@@ -361,10 +351,9 @@ def compute_money_flow_proxy(df: pd.DataFrame) -> pd.Series:
 
 
 def compute_pressure_score(df: pd.DataFrame) -> float:
-    """
-    Normalized pressure score to compare across ETFs.
-    Positive means net buying pressure over the selected window.
-    """
+    if df is None or df.empty:
+        return np.nan
+
     mfv = compute_money_flow_proxy(df)
     if mfv.empty:
         return np.nan
@@ -479,7 +468,7 @@ st.markdown(
     f"""
     <div class="adfm-card">
         <div><strong>Selected window:</strong> {period_label}</div>
-        <div class="adfm-muted">This version uses a robust price-volume money flow proxy because Yahoo ETF shares outstanding history has become inconsistent.</div>
+        <div class="adfm-muted">This version plots every ticker you listed. Nothing is trimmed, sampled, or hidden.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -522,13 +511,7 @@ chart_df = chart_df.dropna(subset=["Value"]).sort_values("Value", ascending=Fals
 if chart_df.empty:
     st.info("No values available for this view.")
 else:
-    display_df = chart_df.copy()
-    if len(display_df) > top_n:
-        top_pos = display_df.nlargest(top_n // 2, "Value")
-        top_neg = display_df.nsmallest(top_n // 2, "Value")
-        display_df = pd.concat([top_pos, top_neg]).drop_duplicates().sort_values("Value", ascending=False)
-
-    vals = display_df["Value"].fillna(0.0)
+    vals = chart_df["Value"].fillna(0.0)
     x_min = float(vals.min())
     x_max = float(vals.max())
     x_min = min(x_min, 0.0)
@@ -536,13 +519,13 @@ else:
     span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
     pad = 0.08 * span
 
-    n = len(display_df)
-    fig_h = max(6.0, min(22.0, 0.31 * n + 2.0))
+    n = len(chart_df)
+    fig_h = max(10.0, 0.34 * n + 2.5)
 
     colors = ["#1f7a1f" if v > 0 else "#b22222" if v < 0 else "#808080" for v in vals]
 
-    fig, ax = plt.subplots(figsize=(15, fig_h))
-    bars = ax.barh(display_df["Label"], vals, color=colors, alpha=0.92, height=0.82)
+    fig, ax = plt.subplots(figsize=(16, fig_h))
+    bars = ax.barh(chart_df["Label"], vals, color=colors, alpha=0.92, height=0.82)
 
     ax.set_xlabel("Estimated Net Flow Pressure ($)")
     ax.set_title(f"ETF Flow Pressure Proxy | {bar_view} | {period_label}")
@@ -574,12 +557,12 @@ else:
             label_txt,
             va="center",
             ha=ha,
-            fontsize=9.5,
+            fontsize=9,
             color="black",
             clip_on=True,
         )
 
-    fig.tight_layout(pad=0.7)
+    fig.tight_layout(pad=0.8)
     st.pyplot(fig)
     plt.close(fig)
 
