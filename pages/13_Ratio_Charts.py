@@ -12,28 +12,29 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 plt.style.use("default")
 pd.options.mode.chained_assignment = None
 
-# ------------------------------ Page config ------------------------------
+# ============================== Page config ==============================
 st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
 
-# ------------------------------ Sidebar ----------------------------------
+# ============================== Sidebar ==================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Ratio dashboard for risk-on/risk-off and cross-asset relative strength relationships.
+        Purpose: Ratio chart workspace for cross-asset, global relative strength, and leadership dynamics.
 
         What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        • Cross asset relationships that help frame macro regime shifts
+        • US versus ex-US relative moves across regions and markets
+        • Cross sector and cross ticker leadership dynamics inside equities
 
         Data source
-        • Public market and macro data feeds used throughout the app
+        • Yahoo Finance adjusted daily price history
         """
     )
 
-    st.header("Look back")
+    st.markdown("---")
+    st.header("Lookback")
     spans = {
         "3 Months": 90,
         "6 Months": 180,
@@ -46,7 +47,7 @@ with st.sidebar:
         "20 Years": 365 * 20,
     }
     span_key = st.selectbox(
-        "",
+        "Period",
         list(spans.keys()),
         index=list(spans.keys()).index("5 Years"),
     )
@@ -55,18 +56,15 @@ with st.sidebar:
     st.header("Chart Controls")
     show_ma50 = st.checkbox("Show 50 DMA", value=True)
     show_ma200 = st.checkbox("Show 200 DMA", value=True)
-    show_rsi = st.checkbox("Show RSI panel", value=True)
+    show_rsi = st.checkbox("Show RSI panel", value=False)
     rsi_window = st.selectbox("RSI length", [7, 14, 21], index=1)
 
     st.markdown("---")
-    st.header("Preset Filters")
+    st.header("Groups")
     ratio_groups_available = [
-        "Core Macro",
-        "Risk Appetite",
-        "Rates & Inflation",
-        "Commodities & Real Assets",
-        "FX & International",
-        "AI / Growth Leadership",
+        "Cross Asset",
+        "US vs Ex-US",
+        "Cross Sector / Cross Ticker",
     ]
     selected_groups = st.multiselect(
         "Show groups",
@@ -79,7 +77,7 @@ with st.sidebar:
     custom_t1 = st.text_input("Ticker 1", "GLD").strip().upper()
     custom_t2 = st.text_input("Ticker 2", "TLT").strip().upper()
 
-# ------------------------------ Dates ------------------------------------
+# ============================== Dates ====================================
 now = datetime.today()
 hist_start = now - timedelta(days=365 * 25)
 
@@ -88,60 +86,48 @@ if span_key == "YTD":
 else:
     disp_start = pd.Timestamp(now - timedelta(days=spans[span_key]))
 
-# ------------------------------ Definitions ------------------------------
+# ============================== Definitions ==============================
 CYCLICALS = ["XLK", "XLI", "XLF", "XLY", "XLC", "XLB", "XLE"]
 DEFENSIVES = ["XLP", "XLV", "XLU", "XLRE"]
 
 PRESET_GROUPS: Dict[str, List[Tuple[str, str, str]]] = {
-    "Core Macro": [
-        ("GLD", "TLT", "Gold / Long Treasuries"),
-        ("DBC", "TLT", "Commodities / Long Treasuries"),
+    "Cross Asset": [
         ("SPY", "TLT", "Equities / Long Treasuries"),
-        ("TIP", "IEF", "Inflation Linkers / Intermediate Treasuries"),
-        ("HYG", "IEF", "High Yield / Intermediate Treasuries"),
         ("HYG", "LQD", "High Yield / Investment Grade Credit"),
-    ],
-    "Risk Appetite": [
-        ("QQQ", "IWM", "Large Growth / Small Caps"),
-        ("SPHB", "SPLV", "High Beta / Low Vol"),
-        ("XLY", "XLP", "Consumer Discretionary / Staples"),
-        ("XLF", "XLU", "Financials / Utilities"),
-        ("SMH", "XLU", "Semis / Utilities"),
-        ("ARKK", "XLP", "Spec Growth / Staples"),
-    ],
-    "Rates & Inflation": [
-        ("TLT", "IEF", "Long Duration / Intermediate Duration"),
-        ("TLT", "SHY", "Long Duration / Front End"),
+        ("GLD", "TLT", "Gold / Long Treasuries"),
         ("TIP", "TLT", "Inflation Linkers / Long Treasuries"),
-        ("XLE", "TLT", "Energy / Long Treasuries"),
-        ("XLF", "TLT", "Financials / Long Treasuries"),
-        ("VNQ", "IEF", "REITs / Intermediate Treasuries"),
-    ],
-    "Commodities & Real Assets": [
-        ("GLD", "IEF", "Gold / Intermediate Treasuries"),
-        ("GLD", "SPY", "Gold / Equities"),
-        ("SLV", "GLD", "Silver / Gold"),
-        ("CPER", "GLD", "Copper / Gold"),
-        ("USO", "TLT", "Oil / Long Treasuries"),
-        ("XLE", "XLU", "Energy / Utilities"),
-    ],
-    "FX & International": [
+        ("DBC", "TLT", "Broad Commodities / Long Treasuries"),
         ("UUP", "GLD", "Dollar / Gold"),
-        ("SMH", "JPY=X", "Semis / USDJPY"),
-        ("EEM", "SPY", "Emerging Markets / US Equities"),
+        ("XLE", "TLT", "Energy / Long Treasuries"),
+    ],
+    "US vs Ex-US": [
+        ("VXUS", "SPY", "Ex-US Equities / US Equities"),
         ("EFA", "SPY", "Developed ex-US / US Equities"),
         ("EWJ", "SPY", "Japan / US Equities"),
+        ("EZU", "SPY", "Europe / US Equities"),
+        ("EEM", "SPY", "Emerging Markets / US Equities"),
         ("FXI", "SPY", "China Large Caps / US Equities"),
     ],
-    "AI / Growth Leadership": [
-        ("SMH", "IGV", "Semis / Software"),
+    "Cross Sector / Cross Ticker": [
+        ("XLY", "XLP", "Consumer Discretionary / Staples"),
+        ("XLF", "XLU", "Financials / Utilities"),
+        ("XLI", "XLU", "Industrials / Utilities"),
+        ("QQQ", "IWM", "Large Growth / Small Caps"),
         ("SMH", "QQQ", "Semis / Nasdaq 100"),
-        ("QQQ", "XLV", "Nasdaq 100 / Healthcare"),
+        ("SMH", "IGV", "Semis / Software"),
         ("NVDA", "SMH", "NVIDIA / Semis ETF"),
+        ("AMZN", "XLY", "Amazon / Consumer Discretionary"),
+        ("META", "QQQ", "Meta / Nasdaq 100"),
     ],
 }
 
-ALL_PRESETS = []
+GROUP_DESCRIPTIONS = {
+    "Cross Asset": "Cross-asset regime relationships",
+    "US vs Ex-US": "Relative leadership between US and international markets",
+    "Cross Sector / Cross Ticker": "Equity internal leadership and sector rotation",
+}
+
+ALL_PRESETS: List[Tuple[str, str, str, str]] = []
 for group_name, pairs in PRESET_GROUPS.items():
     if group_name in selected_groups:
         ALL_PRESETS.extend([(a, b, label, group_name) for a, b, label in pairs])
@@ -150,11 +136,12 @@ STATIC_TICKERS = sorted(
     set(CYCLICALS + DEFENSIVES + [t for a, b, _, _ in ALL_PRESETS for t in (a, b)])
 )
 
-# ------------------------------ Data fetch --------------------------------
+# ============================== Data fetch ================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_closes(tickers: List[str], start: datetime, end: datetime) -> pd.DataFrame:
     if isinstance(tickers, str):
         tickers = [tickers]
+
     tickers = [t.strip().upper() for t in tickers if t and str(t).strip()]
     if not tickers:
         return pd.DataFrame()
@@ -171,13 +158,15 @@ def fetch_closes(tickers: List[str], start: datetime, end: datetime) -> pd.DataF
                     s = raw[(t, "Close")].copy()
                     s.name = t
                     out[t] = s
+                    continue
                 except Exception:
-                    try:
-                        s = raw[("Close", t)].copy()
-                        s.name = t
-                        out[t] = s
-                    except Exception:
-                        continue
+                    pass
+                try:
+                    s = raw[("Close", t)].copy()
+                    s.name = t
+                    out[t] = s
+                except Exception:
+                    continue
         else:
             if len(tickers_list) == 1 and "Close" in raw.columns:
                 out[tickers_list[0]] = raw["Close"].copy()
@@ -221,7 +210,7 @@ def fetch_closes(tickers: List[str], start: datetime, end: datetime) -> pd.DataF
     except Exception:
         return pd.DataFrame()
 
-# ------------------------------ Helpers -----------------------------------
+# ============================== Helpers ===================================
 def compute_cumrets(df: pd.DataFrame) -> pd.DataFrame:
     out = 1.0 + df.pct_change()
     out = out.fillna(1.0).cumprod()
@@ -284,6 +273,44 @@ def rsi_wilder(series: pd.Series, window: int = 14) -> pd.Series:
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
+def compute_stats(ratio: pd.Series) -> Dict[str, float]:
+    s = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+    if s.empty:
+        return {
+            "last": np.nan,
+            "chg_1m": np.nan,
+            "chg_3m": np.nan,
+            "vs_50dma": np.nan,
+            "vs_200dma": np.nan,
+        }
+
+    last = float(s.iloc[-1])
+
+    def pct_change_from_days(days: int) -> float:
+        if len(s) < 2:
+            return np.nan
+        ref_idx = max(0, len(s) - 1 - days)
+        ref_val = float(s.iloc[ref_idx])
+        if ref_val == 0 or not np.isfinite(ref_val):
+            return np.nan
+        return (last / ref_val - 1.0) * 100.0
+
+    ma50 = s.rolling(50, min_periods=1).mean().iloc[-1]
+    ma200 = s.rolling(200, min_periods=1).mean().iloc[-1]
+
+    return {
+        "last": last,
+        "chg_1m": pct_change_from_days(21),
+        "chg_3m": pct_change_from_days(63),
+        "vs_50dma": ((last / ma50 - 1.0) * 100.0) if ma50 and np.isfinite(ma50) else np.nan,
+        "vs_200dma": ((last / ma200 - 1.0) * 100.0) if ma200 and np.isfinite(ma200) else np.nan,
+    }
+
+def fmt_pct(x: float) -> str:
+    if pd.isna(x) or not np.isfinite(x):
+        return "n/a"
+    return f"{x:+.1f}%"
+
 def make_fig(
     ratio: pd.Series,
     title: str,
@@ -317,7 +344,7 @@ def make_fig(
         nrows=nrows,
         ncols=1,
         sharex=True,
-        figsize=(18, 5.3 if show_rsi_flag else 3.6),
+        figsize=(18, 5.0 if show_rsi_flag else 3.2),
         gridspec_kw={"height_ratios": height_ratios},
     )
 
@@ -330,7 +357,7 @@ def make_fig(
     x_start = ratio_view.index.min()
     x_end = ratio_view.index.max()
 
-    ax1.plot(ratio_view.index, ratio_view, color="black", lw=1.4, label=title)
+    ax1.plot(ratio_view.index, ratio_view, color="black", lw=1.5)
 
     if show_ma50_flag:
         ma50_view = ma50.loc[x_start:x_end].dropna()
@@ -358,7 +385,13 @@ def make_fig(
         pad = (ymax - ymin) * 0.06 if ymax != ymin else max(abs(ymin) * 0.05, 1.0)
         ax1.set_ylim(ymin - pad, ymax + pad)
 
-    ax1.legend(loc="upper left", fontsize=8, frameon=False)
+    legend_items = []
+    if show_ma50_flag:
+        legend_items.append("50 DMA")
+    if show_ma200_flag:
+        legend_items.append("200 DMA")
+    if legend_items:
+        ax1.legend(loc="upper left", fontsize=8, frameon=False)
 
     if show_rsi_flag and ax2 is not None:
         rsi_view = rsi.loc[x_start:x_end].dropna()
@@ -374,7 +407,7 @@ def make_fig(
         ax2.set_xlim(x_start, x_end)
         ax2.margins(x=0)
 
-    fig.subplots_adjust(left=0.06, right=0.995, top=0.92, bottom=0.08, hspace=0.10)
+    fig.subplots_adjust(left=0.06, right=0.995, top=0.90, bottom=0.08, hspace=0.10)
     return fig
 
 def render_ratio_block(
@@ -387,6 +420,14 @@ def render_ratio_block(
     if ratio.empty:
         st.warning(f"No usable data for {title}.")
         return
+
+    stats = compute_stats(ratio)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Last", f"{stats['last']:.1f}" if np.isfinite(stats["last"]) else "n/a")
+    c2.metric("1M", fmt_pct(stats["chg_1m"]))
+    c3.metric("3M", fmt_pct(stats["chg_3m"]))
+    c4.metric("vs 50 DMA", fmt_pct(stats["vs_50dma"]))
+    c5.metric("vs 200 DMA", fmt_pct(stats["vs_200dma"]))
 
     fig = make_fig(
         ratio=ratio,
@@ -402,24 +443,25 @@ def render_ratio_block(
     plt.close(fig)
     st.markdown("---")
 
-# ------------------------------ Fetch static data -------------------------
+# ============================== Fetch static data =========================
 closes_static = fetch_closes(STATIC_TICKERS, hist_start, now)
 if closes_static.empty:
     st.error("Failed to download price data.")
     st.stop()
 
-# ------------------------------ Cyc / Def block ---------------------------
+# ============================== Headline basket ===========================
 cum_static = compute_cumrets(closes_static)
 
 available_cyc = [t for t in CYCLICALS if t in cum_static.columns]
 available_def = [t for t in DEFENSIVES if t in cum_static.columns]
+
+st.subheader("Headline Basket")
 
 if available_cyc and available_def:
     eq_cyc = cum_static[available_cyc].mean(axis=1)
     eq_def = cum_static[available_def].mean(axis=1)
     cyc_def_ratio = compute_basket_ratio(eq_cyc, eq_def, base_date=disp_start, base=100.0)
 
-    st.subheader("Basket Regime Ratio")
     render_ratio_block(
         cyc_def_ratio,
         "Cyclicals / Defensives (Equal Weight)",
@@ -429,19 +471,20 @@ if available_cyc and available_def:
 else:
     st.warning("Unable to build the cyclicals / defensives basket with current data.")
 
-# ------------------------------ Preset ratios -----------------------------
-st.subheader("Preset Macro Ratios")
+# ============================== Preset ratios =============================
+st.subheader("Preset Ratio Charts")
 
 if not ALL_PRESETS:
-    st.info("No ratio groups selected.")
+    st.info("No groups selected.")
 else:
     failed_pairs = []
-
     current_group = None
+
     for a, b, label, group_name in ALL_PRESETS:
         if group_name != current_group:
             current_group = group_name
             st.markdown(f"### {group_name}")
+            st.caption(GROUP_DESCRIPTIONS.get(group_name, ""))
 
         if a in closes_static.columns and b in closes_static.columns:
             ratio = compute_price_ratio(
@@ -466,7 +509,7 @@ else:
     if failed_pairs:
         st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))
 
-# ------------------------------ Custom ratio ------------------------------
+# ============================== Custom ratio ==============================
 st.subheader("Custom Ratio")
 
 if custom_t1 and custom_t2:
