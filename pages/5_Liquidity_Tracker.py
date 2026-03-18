@@ -25,7 +25,7 @@ st.set_page_config(page_title=TITLE, layout="wide")
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 1.1rem;
+        padding-top: 2.1rem;
         padding-bottom: 2rem;
         max-width: 1500px;
     }
