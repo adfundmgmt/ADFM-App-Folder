@@ -16,6 +16,12 @@ pd.options.mode.chained_assignment = None
 st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
 
+# ============================== Defaults =================================
+SHOW_MA50 = True
+SHOW_MA200 = True
+SHOW_RSI = True
+RSI_WINDOW = 14
+
 # ============================== Sidebar ==================================
 with st.sidebar:
     st.header("About This Tool")
@@ -50,26 +56,6 @@ with st.sidebar:
         "Period",
         list(spans.keys()),
         index=list(spans.keys()).index("5 Years"),
-    )
-
-    st.markdown("---")
-    st.header("Chart Controls")
-    show_ma50 = st.checkbox("Show 50 DMA", value=True)
-    show_ma200 = st.checkbox("Show 200 DMA", value=True)
-    show_rsi = st.checkbox("Show RSI panel", value=False)
-    rsi_window = st.selectbox("RSI length", [7, 14, 21], index=1)
-
-    st.markdown("---")
-    st.header("Groups")
-    ratio_groups_available = [
-        "Cross Asset",
-        "US vs Ex-US",
-        "Cross Sector / Cross Ticker",
-    ]
-    selected_groups = st.multiselect(
-        "Show groups",
-        ratio_groups_available,
-        default=ratio_groups_available,
     )
 
     st.markdown("---")
@@ -129,8 +115,7 @@ GROUP_DESCRIPTIONS = {
 
 ALL_PRESETS: List[Tuple[str, str, str, str]] = []
 for group_name, pairs in PRESET_GROUPS.items():
-    if group_name in selected_groups:
-        ALL_PRESETS.extend([(a, b, label, group_name) for a, b, label in pairs])
+    ALL_PRESETS.extend([(a, b, label, group_name) for a, b, label in pairs])
 
 STATIC_TICKERS = sorted(
     set(CYCLICALS + DEFENSIVES + [t for a, b, _, _ in ALL_PRESETS for t in (a, b)])
@@ -273,43 +258,8 @@ def rsi_wilder(series: pd.Series, window: int = 14) -> pd.Series:
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def compute_stats(ratio: pd.Series) -> Dict[str, float]:
-    s = ratio.replace([np.inf, -np.inf], np.nan).dropna()
-    if s.empty:
-        return {
-            "last": np.nan,
-            "chg_1m": np.nan,
-            "chg_3m": np.nan,
-            "vs_50dma": np.nan,
-            "vs_200dma": np.nan,
-        }
-
-    last = float(s.iloc[-1])
-
-    def pct_change_from_days(days: int) -> float:
-        if len(s) < 2:
-            return np.nan
-        ref_idx = max(0, len(s) - 1 - days)
-        ref_val = float(s.iloc[ref_idx])
-        if ref_val == 0 or not np.isfinite(ref_val):
-            return np.nan
-        return (last / ref_val - 1.0) * 100.0
-
-    ma50 = s.rolling(50, min_periods=1).mean().iloc[-1]
-    ma200 = s.rolling(200, min_periods=1).mean().iloc[-1]
-
-    return {
-        "last": last,
-        "chg_1m": pct_change_from_days(21),
-        "chg_3m": pct_change_from_days(63),
-        "vs_50dma": ((last / ma50 - 1.0) * 100.0) if ma50 and np.isfinite(ma50) else np.nan,
-        "vs_200dma": ((last / ma200 - 1.0) * 100.0) if ma200 and np.isfinite(ma200) else np.nan,
-    }
-
-def fmt_pct(x: float) -> str:
-    if pd.isna(x) or not np.isfinite(x):
-        return "n/a"
-    return f"{x:+.1f}%"
+def make_display_title(ticker_1: str, ticker_2: str, label: str) -> str:
+    return f"{label} ({ticker_1}/{ticker_2})"
 
 def make_fig(
     ratio: pd.Series,
@@ -385,12 +335,7 @@ def make_fig(
         pad = (ymax - ymin) * 0.06 if ymax != ymin else max(abs(ymin) * 0.05, 1.0)
         ax1.set_ylim(ymin - pad, ymax + pad)
 
-    legend_items = []
-    if show_ma50_flag:
-        legend_items.append("50 DMA")
-    if show_ma200_flag:
-        legend_items.append("200 DMA")
-    if legend_items:
+    if show_ma50_flag or show_ma200_flag:
         ax1.legend(loc="upper left", fontsize=8, frameon=False)
 
     if show_rsi_flag and ax2 is not None:
@@ -421,22 +366,14 @@ def render_ratio_block(
         st.warning(f"No usable data for {title}.")
         return
 
-    stats = compute_stats(ratio)
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Last", f"{stats['last']:.1f}" if np.isfinite(stats["last"]) else "n/a")
-    c2.metric("1M", fmt_pct(stats["chg_1m"]))
-    c3.metric("3M", fmt_pct(stats["chg_3m"]))
-    c4.metric("vs 50 DMA", fmt_pct(stats["vs_50dma"]))
-    c5.metric("vs 200 DMA", fmt_pct(stats["vs_200dma"]))
-
     fig = make_fig(
         ratio=ratio,
         title=title,
         y_label="Ratio Index",
         display_start=display_start,
-        show_ma50_flag=show_ma50,
-        show_ma200_flag=show_ma200,
-        show_rsi_flag=show_rsi,
+        show_ma50_flag=SHOW_MA50,
+        show_ma200_flag=SHOW_MA200,
+        show_rsi_flag=SHOW_RSI,
         rsi_len=rsi_len,
     )
     st.pyplot(fig, use_container_width=True)
@@ -466,7 +403,7 @@ if available_cyc and available_def:
         cyc_def_ratio,
         "Cyclicals / Defensives (Equal Weight)",
         disp_start,
-        rsi_window,
+        RSI_WINDOW,
     )
 else:
     st.warning("Unable to build the cyclicals / defensives basket with current data.")
@@ -474,40 +411,39 @@ else:
 # ============================== Preset ratios =============================
 st.subheader("Preset Ratio Charts")
 
-if not ALL_PRESETS:
-    st.info("No groups selected.")
-else:
-    failed_pairs = []
-    current_group = None
+failed_pairs = []
+current_group = None
 
-    for a, b, label, group_name in ALL_PRESETS:
-        if group_name != current_group:
-            current_group = group_name
-            st.markdown(f"### {group_name}")
-            st.caption(GROUP_DESCRIPTIONS.get(group_name, ""))
+for a, b, label, group_name in ALL_PRESETS:
+    if group_name != current_group:
+        current_group = group_name
+        st.markdown(f"### {group_name}")
+        st.caption(GROUP_DESCRIPTIONS.get(group_name, ""))
 
-        if a in closes_static.columns and b in closes_static.columns:
-            ratio = compute_price_ratio(
-                closes_static[a],
-                closes_static[b],
-                base_date=disp_start,
-                base=100.0,
-            )
-            if ratio.empty:
-                failed_pairs.append(f"{a}/{b}")
-                continue
-
-            render_ratio_block(
-                ratio,
-                label,
-                disp_start,
-                rsi_window,
-            )
-        else:
+    if a in closes_static.columns and b in closes_static.columns:
+        ratio = compute_price_ratio(
+            closes_static[a],
+            closes_static[b],
+            base_date=disp_start,
+            base=100.0,
+        )
+        if ratio.empty:
             failed_pairs.append(f"{a}/{b}")
+            continue
 
-    if failed_pairs:
-        st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))
+        display_title = make_display_title(a, b, label)
+
+        render_ratio_block(
+            ratio,
+            display_title,
+            disp_start,
+            RSI_WINDOW,
+        )
+    else:
+        failed_pairs.append(f"{a}/{b}")
+
+if failed_pairs:
+    st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))
 
 # ============================== Custom ratio ==============================
 st.subheader("Custom Ratio")
@@ -530,11 +466,12 @@ if custom_t1 and custom_t2:
         if custom_ratio.empty:
             st.warning(f"No usable aligned data for {custom_t1}/{custom_t2}.")
         else:
+            custom_title = make_display_title(custom_t1, custom_t2, f"{custom_t1} / {custom_t2}")
             render_ratio_block(
                 custom_ratio,
-                f"{custom_t1} / {custom_t2}",
+                custom_title,
                 disp_start,
-                rsi_window,
+                RSI_WINDOW,
             )
     else:
         st.warning(f"Data not available for {custom_t1}/{custom_t2}.")
