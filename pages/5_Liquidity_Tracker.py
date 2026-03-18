@@ -35,9 +35,9 @@ CUSTOM_CSS = """
     }
 
     .adfm-title {
-        font-size: 3.0rem;
+        font-size: 2.0rem;
         font-weight: 700;
-        margin-bottom: 0.15rem;
+        margin-bottom: -0.15rem;
         color: #111827;
     }
 
