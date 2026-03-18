@@ -463,10 +463,10 @@ if df_display.empty:
 rangebreaks = build_rangebreaks(df_display.index, interval)
 
 # --------------------------- Header ---------------------------
-header_suffix = "Adjusted ADFM Technical Chart" if auto_adjust else "ADFM Technical Chart"
+header_suffix = "Adjusted ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
 st.markdown(
     f"""
-    <div style="margin-bottom: 10px;">
+    <div style="margin-bottom: 4px;">
         <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
             {ticker} | {header_suffix}
         </h2>
@@ -474,6 +474,49 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# --------------------------- Manual Legend ---------------------------
+COLORS = {
+    "up": "#26A69A",
+    "down": "#EF5350",
+    "ma8": "#6EC6FF",
+    "ma20": "#2962FF",
+    "ma50": "#7E57C2",
+    "ma100": "#C49A00",
+    "ma200": "#111111",
+    "bb": "#9E9E9E",
+    "grid": "rgba(120,120,120,0.18)",
+    "text": "#222222",
+    "volume_up": "rgba(38,166,154,0.55)",
+    "volume_down": "rgba(239,83,80,0.55)",
+    "rsi": "#5E35B1",
+    "macd": "#1E88E5",
+    "signal": "#FB8C00",
+    "hist_up": "rgba(38,166,154,0.65)",
+    "hist_down": "rgba(239,83,80,0.65)",
+    "range": "rgba(80,80,80,0.55)",
+    "last": "#1565C0",
+}
+
+legend_items = []
+if show_ma8:
+    legend_items.append(("MA 8", COLORS["ma8"]))
+legend_items.append(("MA 20", COLORS["ma20"]))
+legend_items.append(("MA 50", COLORS["ma50"]))
+if show_ma100:
+    legend_items.append(("MA 100", COLORS["ma100"]))
+legend_items.append(("MA 200", COLORS["ma200"]))
+
+legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin: 2px 0 10px 2px;">'
+for label, color in legend_items:
+    legend_html += f"""
+        <div style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444444;">
+            <span style="display:inline-block; width:28px; height:0; border-top:3px solid {color};"></span>
+            <span>{label}</span>
+        </div>
+    """
+legend_html += "</div>"
+st.markdown(legend_html, unsafe_allow_html=True)
 
 # --------------------------- Panel Setup ---------------------------
 panel_flags = {
@@ -519,29 +562,6 @@ for panel in active_panels:
     row_map[panel] = current_row
     current_row += 1
 
-# --------------------------- Styling ---------------------------
-COLORS = {
-    "up": "#26A69A",
-    "down": "#EF5350",
-    "ma8": "#6EC6FF",
-    "ma20": "#2962FF",
-    "ma50": "#7E57C2",
-    "ma100": "#C49A00",
-    "ma200": "#111111",
-    "bb": "#9E9E9E",
-    "grid": "rgba(120,120,120,0.18)",
-    "text": "#222222",
-    "volume_up": "rgba(38,166,154,0.55)",
-    "volume_down": "rgba(239,83,80,0.55)",
-    "rsi": "#5E35B1",
-    "macd": "#1E88E5",
-    "signal": "#FB8C00",
-    "hist_up": "rgba(38,166,154,0.65)",
-    "hist_down": "rgba(239,83,80,0.65)",
-    "range": "rgba(80,80,80,0.55)",
-    "last": "#1565C0",
-}
-
 # --------------------------- Price Panel ---------------------------
 fig.add_trace(
     go.Candlestick(
@@ -584,7 +604,7 @@ for w, color, enabled in ma_config:
                 y=df_display[f"MA{w}"],
                 mode="lines",
                 line=dict(color=color, width=1.6),
-                name=f"_ma_real_{w}",
+                name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
                 showlegend=False,
                 legendgroup=None,
@@ -600,7 +620,7 @@ if show_bbands:
             y=df_display["BB_UPPER"],
             mode="lines",
             line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
-            name="",
+            name="BB Upper",
             hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -615,7 +635,7 @@ if show_bbands:
             line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
             fill="tonexty",
             fillcolor="rgba(158,158,158,0.10)",
-            name="",
+            name="BB Lower",
             hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -628,7 +648,7 @@ if show_bbands:
             y=df_display["BB_MA"],
             mode="lines",
             line=dict(width=1.0, color="rgba(100,100,100,0.7)", dash="dot"),
-            name="",
+            name="BB Mid",
             hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -722,7 +742,7 @@ if show_volume:
             x=df_display.index,
             y=df_display["Volume"],
             marker_color=vol_colors,
-            name="",
+            name="Volume",
             hovertemplate="Volume: %{y:,.0f}<extra></extra>",
             showlegend=False,
         ),
@@ -738,7 +758,7 @@ if show_rsi:
             y=df_display["RSI14"],
             mode="lines",
             line=dict(width=1.6, color=COLORS["rsi"]),
-            name="",
+            name="RSI 14",
             hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -772,7 +792,7 @@ if show_macd:
             x=df_display.index,
             y=df_display["Hist"],
             marker_color=hist_colors,
-            name="",
+            name="MACD Hist",
             hovertemplate="Hist: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -785,7 +805,7 @@ if show_macd:
             y=df_display["MACD"],
             mode="lines",
             line=dict(width=1.5, color=COLORS["macd"]),
-            name="",
+            name="MACD",
             hovertemplate="MACD: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -798,7 +818,7 @@ if show_macd:
             y=df_display["Signal"],
             mode="lines",
             line=dict(width=1.3, color=COLORS["signal"]),
-            name="",
+            name="Signal",
             hovertemplate="Signal: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -850,54 +870,11 @@ fig.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=20, b=10),
+    margin=dict(l=40, r=20, t=10, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
-    showlegend=True,
-    legend_title_text="",
-    legend=dict(
-        orientation="h",
-        y=1.02,
-        x=0.0,
-        xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.85)",
-        borderwidth=0,
-        font=dict(size=11),
-        traceorder="normal",
-        itemclick=False,
-        itemdoubleclick=False,
-    ),
+    showlegend=False,
     bargap=0.08,
 )
-
-# --------------------------- Legend Fix ---------------------------
-for trace in fig.data:
-    trace.showlegend = False
-    trace.legendgroup = None
-
-legend_specs = [
-    ("MA 8", COLORS["ma8"], show_ma8),
-    ("MA 20", COLORS["ma20"], True),
-    ("MA 50", COLORS["ma50"], True),
-    ("MA 100", COLORS["ma100"], show_ma100),
-    ("MA 200", COLORS["ma200"], True),
-]
-
-for label, color, enabled in legend_specs:
-    if enabled:
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="lines",
-                line=dict(color=color, width=3),
-                name=label,
-                showlegend=True,
-                hoverinfo="skip",
-            ),
-            row=row_map["price"],
-            col=1,
-        )
 
 fig.update_yaxes(title_text="Price", row=row_map["price"], col=1)
 if show_volume:
