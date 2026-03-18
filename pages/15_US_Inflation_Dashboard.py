@@ -1,11 +1,15 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
+import time
 from io import StringIO
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import requests
+import streamlit as st
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # -----------------------------------------------------------------------------
 # Page config
@@ -28,16 +32,69 @@ THEME = {
     "headline": "#2563eb",
     "core": "#f59e0b",
     "recession_fill": "rgba(60, 60, 60, 0.16)",
-    "text": "#1f2937",
+    "text": "#111827",
     "subtle_text": "#6b7280",
     "grid": "rgba(120, 120, 120, 0.16)",
     "zero": "rgba(30, 41, 59, 0.35)",
     "paper_bg": "white",
     "plot_bg": "white",
     "border": "rgba(31, 41, 55, 0.10)",
+    "card_bg": "#ffffff",
 }
 
 PERIOD_OPTIONS = ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"]
+
+CACHE_DIR = Path(".fred_cache")
+CACHE_DIR.mkdir(exist_ok=True)
+
+FRED_BASE_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+REQUEST_TIMEOUT = (10, 60)  # connect timeout, read timeout
+MAX_RETRIES = 4
+
+# -----------------------------------------------------------------------------
+# Styling
+# -----------------------------------------------------------------------------
+CUSTOM_CSS = """
+<style>
+    .block-container {
+        padding-top: 0.85rem;
+        padding-bottom: 1.8rem;
+        max-width: 1650px;
+    }
+    h1, h2, h3 {
+        letter-spacing: 0.1px;
+    }
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid rgba(31, 41, 55, 0.10);
+        border-radius: 14px;
+        padding: 10px 12px;
+    }
+    .adfm-card {
+        background: #ffffff;
+        border: 1px solid rgba(31, 41, 55, 0.10);
+        border-radius: 14px;
+        padding: 14px 16px;
+        min-height: 86px;
+    }
+    .adfm-card-label {
+        font-size: 12px;
+        color: #6b7280;
+        margin-bottom: 4px;
+    }
+    .adfm-card-value {
+        font-size: 22px;
+        font-weight: 600;
+        color: #111827;
+        line-height: 1.2;
+    }
+    .adfm-caption {
+        color: #6b7280;
+        font-size: 0.92rem;
+    }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # Sidebar
@@ -48,13 +105,13 @@ with st.sidebar:
         """
         Purpose: US CPI dashboard for inflation trend, momentum, and regime classification.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        What it covers  
+        • Headline and core CPI across level, YoY, MoM, and 3M annualised views  
+        • Short-horizon inflation momentum versus slower-moving YoY base effects  
+        • Recession overlays for historical context and regime interpretation
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        Data source  
+        • Public FRED CSV endpoints from the St. Louis Fed
         """
     )
     st.markdown("---")
@@ -65,6 +122,30 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+def get_requests_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=MAX_RETRIES,
+        connect=MAX_RETRIES,
+        read=MAX_RETRIES,
+        backoff_factor=1.25,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/csv,text/plain,*/*",
+            "Cache-Control": "no-cache",
+        }
+    )
+    return session
+
+
 def apply_base_layout(fig: go.Figure, title: str | None = None, height: int = 460) -> go.Figure:
     fig.update_layout(
         title=title,
@@ -80,7 +161,7 @@ def apply_base_layout(fig: go.Figure, title: str | None = None, height: int = 46
             y=1.02,
             xanchor="right",
             x=1.0,
-            bgcolor="rgba(255,255,255,0.75)",
+            bgcolor="rgba(255,255,255,0.78)",
             bordercolor=THEME["border"],
             borderwidth=1,
         ),
@@ -180,30 +261,15 @@ def build_custom_month_range(
     return start, end
 
 
-def fetch_url_text(url: str, timeout: int = 20) -> str:
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "text/csv,text/plain,application/octet-stream,*/*",
-        },
-    )
-    with urlopen(req, timeout=timeout) as response:
-        raw = response.read()
-        return raw.decode("utf-8", errors="replace")
-
-
 def detect_fred_error_payload(text: str, series_id: str) -> None:
-    preview = text[:500].lower()
+    preview = text[:800].lower()
     if "<html" in preview or "<!doctype html" in preview:
         raise RuntimeError(
             f"FRED returned HTML instead of CSV for {series_id}. "
-            f"This usually means a temporary upstream error or rate-limit page."
+            f"This is usually a temporary upstream issue or rate-limit page."
         )
     if "error" in preview and "date" not in preview:
-        raise RuntimeError(
-            f"FRED returned an error payload instead of data for {series_id}."
-        )
+        raise RuntimeError(f"FRED returned an error payload for {series_id}.")
 
 
 def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
@@ -220,13 +286,7 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
             break
 
     value_col = None
-    for candidate in [
-        series_id.lower(),
-        "value",
-        "observation_value",
-        "cpi",
-        "usrec",
-    ]:
+    for candidate in [series_id.lower(), "value", "observation_value", "cpi", "usrec"]:
         if candidate in lower_map:
             value_col = lower_map[candidate]
             break
@@ -238,8 +298,7 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
 
     if date_col is None or value_col is None:
         raise ValueError(
-            f"Unexpected FRED response format for {series_id}. "
-            f"Columns received: {original_cols}"
+            f"Unexpected FRED response format for {series_id}. Columns received: {original_cols}"
         )
 
     out = df[[date_col, value_col]].copy()
@@ -247,34 +306,55 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     return out
 
 
-def fetch_fred_csv(series_id: str) -> pd.DataFrame:
-    urls = [
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={START_DATE_FULL}&id={series_id}",
-    ]
+def cache_path_for_series(series_id: str) -> Path:
+    return CACHE_DIR / f"{series_id}.csv"
 
+
+def write_series_cache(series_id: str, text: str) -> None:
+    cache_path_for_series(series_id).write_text(text, encoding="utf-8")
+
+
+def read_series_cache(series_id: str) -> str | None:
+    p = cache_path_for_series(series_id)
+    if p.exists():
+        return p.read_text(encoding="utf-8")
+    return None
+
+
+def fetch_fred_csv_text(series_id: str) -> str:
+    url = FRED_BASE_URL.format(series_id=series_id)
+    session = get_requests_session()
     last_error = None
 
-    for url in urls:
+    for attempt in range(1, MAX_RETRIES + 2):
         try:
-            text = fetch_url_text(url, timeout=20)
+            response = session.get(url, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            text = response.text
             detect_fred_error_payload(text, series_id)
-
-            df = pd.read_csv(StringIO(text))
-            if df.empty:
-                raise RuntimeError(f"Empty CSV returned for {series_id}")
-
-            df = normalize_fred_columns(df, series_id)
-            return df
-
-        except (URLError, HTTPError) as e:
-            last_error = f"Network error for {series_id}: {e}"
-        except pd.errors.EmptyDataError:
-            last_error = f"Empty CSV payload for {series_id}"
+            if not text.strip():
+                raise RuntimeError(f"Empty CSV payload for {series_id}")
+            write_series_cache(series_id, text)
+            return text
         except Exception as e:
-            last_error = str(e)
+            last_error = e
+            if attempt < MAX_RETRIES + 1:
+                time.sleep(min(1.5 * attempt, 5))
+
+    cached = read_series_cache(series_id)
+    if cached:
+        return cached
 
     raise RuntimeError(f"Failed to fetch FRED series {series_id}: {last_error}")
+
+
+def fetch_fred_csv(series_id: str) -> pd.DataFrame:
+    text = fetch_fred_csv_text(series_id)
+    df = pd.read_csv(StringIO(text))
+    if df.empty:
+        raise RuntimeError(f"Empty dataframe returned for {series_id}")
+    df = normalize_fred_columns(df, series_id)
+    return df
 
 
 def load_fred_series(series_id: str, start: str) -> pd.Series:
@@ -304,7 +384,6 @@ def fetch_fred_dataset(start: str = START_DATE_FULL) -> pd.DataFrame:
     df = df.sort_index()
     df = df[~df.index.duplicated(keep="last")]
     df = df.resample("MS").last()
-
     return df
 
 
@@ -429,6 +508,17 @@ def build_latest_table(df: pd.DataFrame, rows: int = 12) -> pd.DataFrame:
     return tbl
 
 
+def render_info_card(label: str, value: str) -> None:
+    st.markdown(
+        f"""
+        <div class="adfm-card">
+            <div class="adfm-card-label">{label}</div>
+            <div class="adfm-card-value">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # -----------------------------------------------------------------------------
 # Charts
 # -----------------------------------------------------------------------------
@@ -441,7 +531,7 @@ def plot_yoy(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Ti
             y=df["headline_yoy"],
             name="Headline CPI YoY",
             mode="lines",
-            line=dict(color=THEME["headline"], width=2.5),
+            line=dict(color=THEME["headline"], width=2.6),
             hovertemplate="%{x|%Y-%m}<br>Headline YoY: %{y:.2f}%<extra></extra>",
         )
     )
@@ -451,7 +541,7 @@ def plot_yoy(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Ti
             y=df["core_yoy"],
             name="Core CPI YoY",
             mode="lines",
-            line=dict(color=THEME["core"], width=2.5),
+            line=dict(color=THEME["core"], width=2.6),
             hovertemplate="%{x|%Y-%m}<br>Core YoY: %{y:.2f}%<extra></extra>",
         )
     )
@@ -495,7 +585,6 @@ def plot_mom(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Ti
     )
 
     add_recession_shapes(fig, recession_periods, rows=[1, 2])
-
     fig.update_yaxes(title_text="% MoM", row=1, col=1)
     fig.update_yaxes(title_text="% MoM", row=2, col=1)
     fig.update_layout(showlegend=False)
@@ -518,7 +607,7 @@ def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp
             y=df["core"],
             name="Core CPI Index",
             mode="lines",
-            line=dict(color=THEME["core"], width=2.5),
+            line=dict(color=THEME["core"], width=2.6),
             hovertemplate="%{x|%Y-%m}<br>Core Index: %{y:.2f}<extra></extra>",
         ),
         row=1,
@@ -530,7 +619,7 @@ def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp
             y=df["core_3m_ann"],
             name="Core 3M Annualised",
             mode="lines",
-            line=dict(color=THEME["headline"], width=2.5),
+            line=dict(color=THEME["headline"], width=2.6),
             hovertemplate="%{x|%Y-%m}<br>Core 3M Ann.: %{y:.2f}%<extra></extra>",
         ),
         row=2,
@@ -538,12 +627,10 @@ def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp
     )
 
     add_recession_shapes(fig, recession_periods, rows=[1, 2])
-
     fig.update_yaxes(title_text="Index", row=1, col=1)
     fig.update_yaxes(title_text="% Ann.", row=2, col=1)
     apply_base_layout(fig, title="Core CPI Level and Short-Horizon Inflation Signal", height=560)
     return fig
-
 
 # -----------------------------------------------------------------------------
 # Data load and prep
@@ -618,9 +705,14 @@ percentile_latest = latest_valid(window_df["core_3m_ann_percentile"])
 
 regime_label = classify_inflation_regime(core_yoy_latest, core_3m_latest)
 
-st.caption(
-    f"Latest available print: {latest_print_date.strftime('%B %Y')} | "
-    f"Window: {start_date.strftime('%Y-%m')} to {end_date.strftime('%Y-%m')}"
+st.markdown(
+    f"""
+    <div class="adfm-caption">
+        Latest available print: {latest_print_date.strftime('%B %Y')} |
+        Window: {start_date.strftime('%Y-%m')} to {end_date.strftime('%Y-%m')}
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 m1, m2, m3, m4, m5 = st.columns(5)
@@ -632,50 +724,14 @@ m5.metric("Core 3M vs YoY Gap", "N/A" if pd.isna(gap_latest) else f"{gap_latest:
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    st.markdown(
-        f"""
-        <div style="
-            padding:14px 16px;
-            border:1px solid {THEME["border"]};
-            border-radius:12px;
-            background:#ffffff;">
-            <div style="font-size:12px; color:{THEME["subtle_text"]};">Inflation regime</div>
-            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{regime_label}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_info_card("Inflation regime", regime_label)
 with c2:
     zscore_latest = latest_valid(window_df["core_3m_ann_zscore"])
     zscore_text = "N/A" if pd.isna(zscore_latest) else f"{zscore_latest:.2f}σ"
-    st.markdown(
-        f"""
-        <div style="
-            padding:14px 16px;
-            border:1px solid {THEME["border"]};
-            border-radius:12px;
-            background:#ffffff;">
-            <div style="font-size:12px; color:{THEME["subtle_text"]};">Core 3M annualised z-score</div>
-            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{zscore_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_info_card("Core 3M annualised z-score", zscore_text)
 with c3:
     pct_text = "N/A" if pd.isna(percentile_latest) else f"{percentile_latest:.1f}th pct"
-    st.markdown(
-        f"""
-        <div style="
-            padding:14px 16px;
-            border:1px solid {THEME["border"]};
-            border-radius:12px;
-            background:#ffffff;">
-            <div style="font-size:12px; color:{THEME["subtle_text"]};">Core 3M annualised historical percentile</div>
-            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{pct_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_info_card("Core 3M annualised historical percentile", pct_text)
 
 st.markdown("")
 
@@ -783,6 +839,12 @@ with st.expander("Methodology & Sources", expanded=False):
         • materially below YoY = disinflationary  
         • near YoY = sticky  
         • materially above YoY = reheating
+
+        **Reliability changes in this version**  
+        • Replaced `urllib` with `requests.Session()`  
+        • Added retry and backoff logic for transient FRED/network issues  
+        • Increased read timeout materially  
+        • Added last-good local CSV cache fallback per series
 
         **Notes**  
         All series are standardised to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
