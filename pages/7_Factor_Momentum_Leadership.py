@@ -105,7 +105,7 @@ FACTOR_ETFS: Dict[str, Tuple[str, Optional[str]]] = {
     "Small vs Large": ("IWM", "SPY"),
     "Tech vs Broad": ("XLK", "SPY"),
     "Cyclicals vs Defensives": ("XLY", "XLP"),
-    "US vs World": ("SPY", "VEA"),
+    "US vs World": ("SPY", "VXUS"),
     "Momentum": ("MTUM", "SPY"),
     "Equal Weight vs Cap": ("RSP", "SPY"),
 }
