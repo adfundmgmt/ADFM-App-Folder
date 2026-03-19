@@ -100,7 +100,7 @@ def _save_last_good_cache(name: str, df: pd.DataFrame) -> None:
 # =========================================================
 FACTOR_ETFS: Dict[str, Tuple[str, Optional[str]]] = {
     "Growth vs Value": ("VUG", "VTV"),
-    "Quality vs Junk": ("QUAL", "JNK"),
+    "Quality vs Junk": ("QUAL", "ARKK"),
     "High Beta vs Low Vol": ("SPHB", "SPLV"),
     "Small vs Large": ("IWM", "SPY"),
     "Tech vs Broad": ("XLK", "SPY"),
