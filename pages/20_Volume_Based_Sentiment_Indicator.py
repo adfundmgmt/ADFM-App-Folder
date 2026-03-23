@@ -26,7 +26,7 @@ CUSTOM_CSS = """
 <style>
     .block-container {
         max-width: 1680px;
-        padding-top: 1.65rem;
+        padding-top: 1.85rem;
         padding-bottom: 0.85rem;
     }
     h1, h2, h3 {
