@@ -880,7 +880,7 @@ fig.update_layout(
     title=None,
     plot_bgcolor="white",
     paper_bgcolor="white",
-    hovermode="closest",
+    hovermode="x",
     margin=dict(l=40, r=20, t=10, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     showlegend=False,
