@@ -64,18 +64,6 @@ elliott_mode = st.sidebar.selectbox(
     index=0,
 )
 
-# --------------------------- Header ---------------------------
-header_suffix = "ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
-st.markdown(
-    f"""
-<div style="margin-bottom: 6px;">
-    <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
-        {ticker} | {header_suffix}
-    </h2>
-</div>
-""",
-    unsafe_allow_html=True,
-)
 # --------------------------- Helpers ---------------------------
 def start_date_from_period(p: str) -> pd.Timestamp | None:
     today = pd.Timestamp.today().normalize()
@@ -478,7 +466,7 @@ rangebreaks = build_rangebreaks(df_display.index, interval)
 header_suffix = "Adjusted ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
 st.markdown(
     f"""
-    <div style="margin-bottom: 4px;">
+    <div style="margin-bottom: 6px;">
         <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
             {ticker} | {header_suffix}
         </h2>
@@ -487,7 +475,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --------------------------- Manual Legend ---------------------------
+# --------------------------- Colors ---------------------------
 COLORS = {
     "up": "#26A69A",
     "down": "#EF5350",
@@ -499,8 +487,7 @@ COLORS = {
     "bb": "#9E9E9E",
     "grid": "rgba(120,120,120,0.18)",
     "text": "#222222",
-    "volume_up": "rgba(38,166,154,0.55)",
-    "volume_down": "rgba(239,83,80,0.55)",
+    "volume_bar": "rgba(148,163,184,0.32)",
     "rsi": "#5E35B1",
     "macd": "#1E88E5",
     "signal": "#FB8C00",
@@ -509,25 +496,6 @@ COLORS = {
     "range": "rgba(80,80,80,0.55)",
     "last": "#1565C0",
 }
-
-legend_items = []
-if show_ma8:
-    legend_items.append(("MA 8", COLORS["ma8"]))
-legend_items.append(("MA 20", COLORS["ma20"]))
-legend_items.append(("MA 50", COLORS["ma50"]))
-if show_ma100:
-    legend_items.append(("MA 100", COLORS["ma100"]))
-legend_items.append(("MA 200", COLORS["ma200"]))
-
-legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin:2px 0 8px 2px;">'
-for label, color in legend_items:
-    legend_html += f'<div style="display:flex; align-items:center; gap:8px; font-size:13px; color:#444444; line-height:1;">'
-    legend_html += f'<span style="display:inline-block; width:30px; height:0; border-top:3px solid {color};"></span>'
-    legend_html += f'<span>{label}</span>'
-    legend_html += '</div>'
-legend_html += '</div>'
-
-st.markdown(legend_html, unsafe_allow_html=True)
 
 # --------------------------- Panel Setup ---------------------------
 panel_flags = {
@@ -585,8 +553,8 @@ fig.add_trace(
         increasing_fillcolor=COLORS["up"],
         decreasing_line_color=COLORS["down"],
         decreasing_fillcolor=COLORS["down"],
-        name="Price",
-        showlegend=False,
+        name=ticker,
+        showlegend=True,
         hovertemplate=(
             "Date: %{x|%Y-%m-%d}<br>"
             "Open: %{open:.2f}<br>"
@@ -617,8 +585,7 @@ for w, color, enabled in ma_config:
                 line=dict(color=color, width=1.6),
                 name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
-                showlegend=False,
-                legendgroup=None,
+                showlegend=True,
             ),
             row=row_map["price"],
             col=1,
@@ -738,24 +705,14 @@ if show_range_levels:
 
 # --------------------------- Volume Panel ---------------------------
 if show_volume:
-    vol_colors = []
-    closes = df_display["Close"].values
-    for i in range(len(df_display)):
-        if i == 0:
-            vol_colors.append("rgba(160,160,160,0.45)")
-        else:
-            vol_colors.append(
-                COLORS["volume_up"] if closes[i] >= closes[i - 1] else COLORS["volume_down"]
-            )
-
     fig.add_trace(
         go.Bar(
             x=df_display.index,
             y=df_display["Volume"],
-            marker_color=vol_colors,
+            marker_color=COLORS["volume_bar"],
             name="Volume",
             hovertemplate="Volume: %{y:,.0f}<extra></extra>",
-            showlegend=False,
+            showlegend=True,
         ),
         row=row_map["volume"],
         col=1,
@@ -771,7 +728,7 @@ if show_rsi:
             line=dict(width=1.6, color=COLORS["rsi"]),
             name="RSI 14",
             hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
-            showlegend=False,
+            showlegend=True,
         ),
         row=row_map["rsi"],
         col=1,
@@ -818,7 +775,7 @@ if show_macd:
             line=dict(width=1.5, color=COLORS["macd"]),
             name="MACD",
             hovertemplate="MACD: %{y:.2f}<extra></extra>",
-            showlegend=False,
+            showlegend=True,
         ),
         row=row_map["macd"],
         col=1,
@@ -831,7 +788,7 @@ if show_macd:
             line=dict(width=1.3, color=COLORS["signal"]),
             name="Signal",
             hovertemplate="Signal: %{y:.2f}<extra></extra>",
-            showlegend=False,
+            showlegend=True,
         ),
         row=row_map["macd"],
         col=1,
@@ -881,9 +838,22 @@ fig.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=10, b=10),
+    margin=dict(l=40, r=20, t=86, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
-    showlegend=False,
+    showlegend=True,
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="left",
+        x=0.0,
+        bgcolor="rgba(255,255,255,0.92)",
+        bordercolor="rgba(225,225,225,1)",
+        borderwidth=1,
+        font=dict(size=11, color="#444444"),
+        traceorder="normal",
+        itemsizing="constant",
+    ),
     legend_title_text="",
     bargap=0.08,
 )
