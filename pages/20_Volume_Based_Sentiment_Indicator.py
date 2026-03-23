@@ -26,12 +26,30 @@ CUSTOM_CSS = """
 <style>
     .block-container {
         max-width: 1680px;
-        padding-top: 0.55rem;
-        padding-bottom: 0.75rem;
+        padding-top: 1.65rem;
+        padding-bottom: 0.85rem;
     }
     h1, h2, h3 {
         letter-spacing: 0.05px;
         font-weight: 700;
+    }
+    .page-title-wrap {
+        padding-top: 0.15rem;
+        margin-bottom: 0.35rem;
+    }
+    .page-title-main {
+        font-size: 56px;
+        font-weight: 750;
+        color: #303445;
+        line-height: 1.02;
+        margin: 0 0 10px 0;
+        padding: 0;
+    }
+    .page-title-sub {
+        color: #6b7280;
+        font-size: 15px;
+        line-height: 1.4;
+        margin-bottom: 20px;
     }
     .adfm-card {
         background: #fafafa;
@@ -62,58 +80,6 @@ CUSTOM_CSS = """
         color: #666;
         font-size: 0.90rem;
         line-height: 1.45;
-    }
-    .chart-title-wrap {
-        margin-top: 2px;
-        margin-bottom: 2px;
-    }
-    .chart-title-main {
-        font-size: 32px;
-        font-weight: 700;
-        color: #222222;
-        line-height: 1.1;
-        margin: 0;
-        padding: 0;
-    }
-    .chart-title-sub {
-        margin-top: 4px;
-        color: #6b7280;
-        font-size: 14px;
-        line-height: 1.35;
-    }
-    .manual-legend {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 16px;
-        margin: 6px 0 10px 2px;
-    }
-    .legend-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 13px;
-        color: #4b5563;
-        line-height: 1;
-    }
-    .legend-line {
-        display: inline-block;
-        width: 28px;
-        height: 0;
-        border-top-width: 3px;
-        border-top-style: solid;
-    }
-    .legend-box {
-        display: inline-block;
-        width: 14px;
-        height: 10px;
-        border-radius: 3px;
-    }
-    .legend-pill {
-        display: inline-block;
-        width: 16px;
-        height: 8px;
-        border-radius: 999px;
     }
 </style>
 """
@@ -425,21 +391,6 @@ def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 18) 
     kept_index = [x[0] for x in kept_rows]
     return signal_df.loc[kept_index].copy()
 
-def manual_legend_html() -> str:
-    items = [
-        ('<span class="legend-box" style="background:#26A69A;"></span>', "Up Candle"),
-        ('<span class="legend-box" style="background:#EF5350;"></span>', "Down Candle"),
-        ('<span class="legend-line" style="border-top-color:#2962FF;"></span>', "Volume MA"),
-        ('<span class="legend-line" style="border-top-color:#111827;"></span>', "Volume Z-Score"),
-        ('<span class="legend-pill" style="background:rgba(239,83,80,0.22);"></span>', "Stress Zone"),
-        ('<span class="legend-pill" style="background:rgba(251,140,0,0.18);"></span>', "Complacency Zone"),
-    ]
-    html = '<div class="manual-legend">'
-    for icon, label in items:
-        html += f'<div class="legend-item">{icon}<span>{label}</span></div>'
-    html += '</div>'
-    return html
-
 def build_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -594,8 +545,8 @@ def build_chart(
             x=df.index,
             y=df["Vol_Display"],
             marker_color=bar_colors,
-            name="Daily Volume",
-            showlegend=False,
+            name="Volume",
+            showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume: %{y:,.4f}<extra></extra>",
         ),
         row=2,
@@ -609,7 +560,7 @@ def build_chart(
             mode="lines",
             line=dict(color=COLORS["vol_ma"], width=2.1),
             name=f"Volume {ma_period}D MA",
-            showlegend=False,
+            showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume MA: %{y:,.4f}<extra></extra>",
         ),
         row=2,
@@ -623,7 +574,7 @@ def build_chart(
             mode="lines",
             line=dict(color=COLORS["zscore"], width=1.9),
             name="Volume Z-Score",
-            showlegend=False,
+            showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume Z: %{y:.2f}<extra></extra>",
         ),
         row=3,
@@ -683,9 +634,23 @@ def build_chart(
         plot_bgcolor=COLORS["bg"],
         paper_bgcolor=COLORS["bg"],
         hovermode="x unified",
-        margin=dict(l=42, r=18, t=8, b=10),
+        margin=dict(l=42, r=18, t=34, b=10),
         font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
-        showlegend=False,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.03,
+            xanchor="left",
+            x=0.0,
+            bgcolor="rgba(255,255,255,0.92)",
+            bordercolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            font=dict(size=12, color="#4b5563"),
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
+            traceorder="normal",
+        ),
         bargap=0.06,
     )
 
@@ -801,8 +766,15 @@ vol_opacity = st.sidebar.slider(
 # =============================================================================
 # HEADER
 # =============================================================================
-st.title(APP_TITLE)
-st.caption(APP_SUBTITLE)
+st.markdown(
+    f"""
+    <div class="page-title-wrap">
+        <div class="page-title-main">{APP_TITLE}</div>
+        <div class="page-title-sub">{APP_SUBTITLE}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # =============================================================================
 # DATA FETCH
@@ -922,23 +894,6 @@ with c5:
         ),
         unsafe_allow_html=True,
     )
-
-# =============================================================================
-# CHART HEADER + MANUAL LEGEND
-# =============================================================================
-st.markdown(
-    f"""
-    <div class="chart-title-wrap">
-        <h2 class="chart-title-main">{symbol} | Volume Sentiment Workspace</h2>
-        <div class="chart-title-sub">
-            Price, volume trend, and volume regime in one view. Stress days are softly shaded red, quiet-tape days are softly shaded orange.
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.markdown(manual_legend_html(), unsafe_allow_html=True)
 
 # =============================================================================
 # CHART
