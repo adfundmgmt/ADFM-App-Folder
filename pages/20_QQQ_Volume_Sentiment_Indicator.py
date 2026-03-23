@@ -1,7 +1,8 @@
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import StringIO
 from typing import Optional, Tuple
+import json
 
 import numpy as np
 import pandas as pd
@@ -105,11 +106,29 @@ def safe_numeric(series: pd.Series) -> pd.Series:
 def format_billions(x: float) -> str:
     return f"{x / 1_000_000_000:.2f}B"
 
-def format_millions(x: float) -> str:
-    return f"{x / 1_000_000:.2f}M"
-
 def today_utc_ts() -> pd.Timestamp:
-    return pd.Timestamp.utcnow().normalize()
+    return pd.Timestamp.utcnow().tz_localize(None).normalize()
+
+def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Force a clean, timezone-naive DatetimeIndex so downstream comparisons never fail.
+    """
+    out = df.copy()
+
+    if not isinstance(out.index, pd.DatetimeIndex):
+        out.index = pd.to_datetime(out.index, errors="coerce")
+
+    out = out[~out.index.isna()].copy()
+
+    if getattr(out.index, "tz", None) is not None:
+        out.index = out.index.tz_convert(None)
+
+    out.index = pd.DatetimeIndex(out.index).tz_localize(None)
+    out.index = out.index.normalize()
+
+    out = out.sort_index()
+    out = out[~out.index.duplicated(keep="last")].copy()
+    return out
 
 def _request_text(url: str, timeout: int = 20, retries: int = 3, sleep_s: float = 1.0) -> str:
     last_err = None
@@ -125,20 +144,18 @@ def _request_text(url: str, timeout: int = 20, retries: int = 3, sleep_s: float 
     raise last_err
 
 def fetch_from_stooq(symbol: str, start_date: pd.Timestamp) -> pd.DataFrame:
-    """
-    Stooq is a solid free fallback for OHLCV and often avoids Yahoo throttling.
-    Data comes back in descending order.
-    """
     stooq_symbol = symbol.lower() + ".us"
     url = f"https://stooq.com/q/d/l/?s={stooq_symbol}&i=d"
     text = _request_text(url, timeout=20, retries=3, sleep_s=1.0)
     df = pd.read_csv(StringIO(text))
+
     if df.empty or "Date" not in df.columns:
         raise ValueError("Stooq returned no usable data.")
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"]).copy()
     df = df.rename(columns=str.title)
+
     expected = ["Open", "High", "Low", "Close", "Volume"]
     missing = [c for c in expected if c not in df.columns]
     if missing:
@@ -151,46 +168,54 @@ def fetch_from_stooq(symbol: str, start_date: pd.Timestamp) -> pd.DataFrame:
     df = df.sort_values("Date")
     df = df[df["Date"] >= start_date].copy()
     df = df.set_index("Date")
+    df = normalize_dt_index(df)
     return df
 
 def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
-    """
-    Public Yahoo chart endpoint. Lighter than repeated yfinance Ticker().history() usage.
-    """
     period1 = int(start_date.timestamp())
     period2 = int((end_date + pd.Timedelta(days=1)).timestamp())
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
         f"?period1={period1}&period2={period2}&interval=1d&includePrePost=false&events=div%2Csplits"
     )
-    resp_text = _request_text(url, timeout=20, retries=3, sleep_s=1.0)
-    data = requests.models.complexjson.loads(resp_text)
 
-    result = data["chart"]["result"][0]
-    timestamps = result["timestamp"]
-    quote = result["indicators"]["quote"][0]
-    adjclose = result.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", None)
+    resp_text = _request_text(url, timeout=20, retries=3, sleep_s=1.0)
+    data = json.loads(resp_text)
+
+    chart = data.get("chart", {})
+    result_list = chart.get("result", [])
+    if not result_list:
+        err = chart.get("error")
+        raise ValueError(f"Yahoo Chart API returned no result. Error: {err}")
+
+    result = result_list[0]
+    timestamps = result.get("timestamp", [])
+    quote = result.get("indicators", {}).get("quote", [{}])[0]
+    adjclose = result.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose")
+
+    if not timestamps:
+        raise ValueError("Yahoo Chart API returned empty timestamps.")
+
+    close_vals = adjclose if adjclose is not None else quote.get("close")
 
     df = pd.DataFrame({
-        "Date": pd.to_datetime(timestamps, unit="s"),
-        "Open": quote["open"],
-        "High": quote["high"],
-        "Low": quote["low"],
-        "Close": adjclose if adjclose is not None else quote["close"],
-        "Volume": quote["volume"],
+        "Date": pd.to_datetime(timestamps, unit="s", utc=True),
+        "Open": quote.get("open"),
+        "High": quote.get("high"),
+        "Low": quote.get("low"),
+        "Close": close_vals,
+        "Volume": quote.get("volume"),
     })
 
     for col in ["Open", "High", "Low", "Close", "Volume"]:
         df[col] = safe_numeric(df[col])
 
     df = df.dropna(subset=["Date", "Open", "High", "Low", "Close", "Volume"]).copy()
-    df = df.set_index("Date").sort_index()
+    df = df.set_index("Date")
+    df = normalize_dt_index(df)
     return df
 
 def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
-    """
-    Final fallback.
-    """
     df = yf.download(
         symbol,
         start=start_date.strftime("%Y-%m-%d"),
@@ -199,6 +224,7 @@ def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date
         progress=False,
         threads=False,
     )
+
     if df.empty:
         raise ValueError("yfinance returned an empty DataFrame.")
 
@@ -208,9 +234,12 @@ def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date
     df = df.rename(columns=str.title)
     needed = ["Open", "High", "Low", "Close", "Volume"]
     df = df[needed].copy()
+
     for col in needed:
         df[col] = safe_numeric(df[col])
-    df = df.dropna(subset=needed)
+
+    df = df.dropna(subset=needed).copy()
+    df = normalize_dt_index(df)
     return df
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -242,9 +271,6 @@ def fetch_qqq_ohlcv(start_date: pd.Timestamp, end_date: pd.Timestamp) -> Tuple[p
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_shares_outstanding(symbol: str) -> Optional[float]:
-    """
-    Optional enhancement only. If it fails, the app continues on raw volume.
-    """
     try:
         ticker = yf.Ticker(symbol)
         fast_info = getattr(ticker, "fast_info", None)
@@ -467,17 +493,14 @@ def build_chart(
 
     return fig
 
-def style_extremes_table(df: pd.DataFrame, vol_label: str, normalize_volume: bool):
+def style_extremes_table(df: pd.DataFrame, vol_label: str, normalized: bool):
     fmt = {
         "Close": "${:.2f}",
         "Z-Score": "{:.2f}",
         "1D Return %": "{:.2f}",
         "5D Return %": "{:.2f}",
     }
-    if normalize_volume:
-        fmt[vol_label] = "{:.4f}"
-    else:
-        fmt[vol_label] = "{:,.0f}"
+    fmt[vol_label] = "{:.4f}" if normalized else "{:,.0f}"
     return df.style.format(fmt)
 
 # =============================================================================
@@ -488,8 +511,8 @@ st.sidebar.markdown(
     """
     **Purpose**
 
-    Track QQQ volume as a sentiment input. The framework assumes heavy ETF volume often appears
-    during fear, hedging, and liquidation, while quiet tape can reflect complacency.
+    Track QQQ volume as a sentiment input. Heavy ETF volume often appears during fear, hedging,
+    and liquidation. Quiet tape can reflect complacency.
 
     **What it does**
     - Pulls QQQ OHLCV from multiple public-data paths with fallbacks
@@ -589,6 +612,7 @@ st.caption(APP_SUBTITLE)
 end_date = today_utc_ts()
 warmup_days = max(bb_period * 3, 180)
 start_date = end_date - pd.Timedelta(days=lookback_months * 31 + warmup_days)
+visible_start = end_date - pd.Timedelta(days=lookback_months * 31)
 
 with st.spinner("Loading QQQ data..."):
     try:
@@ -606,9 +630,8 @@ if raw_df.empty:
     st.warning("No data returned for the selected window.")
     st.stop()
 
-# Trim to requested visible window after warmup
-visible_start = end_date - pd.Timedelta(days=lookback_months * 31)
-raw_df = raw_df[raw_df.index >= (visible_start - pd.Timedelta(days=warmup_days))].copy()
+raw_df = normalize_dt_index(raw_df)
+raw_df = raw_df.loc[raw_df.index >= (visible_start - pd.Timedelta(days=warmup_days))].copy()
 
 df, vol_label = compute_signal_table(
     raw_df,
@@ -621,7 +644,8 @@ df, vol_label = compute_signal_table(
     exclude_holiday_noise=exclude_holiday_noise,
 )
 
-df = df[df.index >= visible_start].copy()
+df = normalize_dt_index(df)
+df = df.loc[df.index >= visible_start].copy()
 
 if df.empty:
     st.warning("No usable data remained after processing.")
@@ -669,11 +693,7 @@ with c2:
 
 with c3:
     vol_value = f"{latest_volume:.4f}" if "Shares Outstanding" in vol_label else f"{latest_volume:,.0f}"
-    sub = (
-        "Normalized volume"
-        if "Shares Outstanding" in vol_label
-        else "Raw shares volume"
-    )
+    sub = "Normalized volume" if "Shares Outstanding" in vol_label else "Raw shares volume"
     st.markdown(
         metric_card(
             "Latest Volume Reading",
@@ -713,7 +733,7 @@ st.plotly_chart(fig, use_container_width=True)
 # =============================================================================
 # INTERPRETATION BLOCK
 # =============================================================================
-recent_highs_n = int(df["Is_High"].tail(63).sum())  # about 3 months
+recent_highs_n = int(df["Is_High"].tail(63).sum())
 recent_lows_n = int(df["Is_Low"].tail(63).sum())
 
 st.markdown("### Read on the Tape")
@@ -825,24 +845,24 @@ Each day’s volume is then translated into a z-score relative to that rolling b
 
 `Volume Z-Score = (Today Volume - Rolling Mean) / Rolling Std Dev`
 
-A high positive z-score means the market is trading far above its recent “normal” pace. A deeply negative
+A high positive z-score means the market is trading far above its recent normal pace. A deeply negative
 z-score means the tape is unusually quiet.
 
 **Why normalization matters**
 
 Raw ETF volume is imperfect for long-range comparison because the share count changes over time through
 creations and redemptions. When shares outstanding is available, the app expresses volume as a % of shares
-outstanding. That makes a 2026 reading more comparable to an older reading.
+outstanding. That makes a current reading more comparable to an older reading.
 
 **Why low-volume signals need caution**
 
 Quiet sessions can reflect complacency, but they can also reflect half-days, holidays, summer lulls, or a
 dead news cycle. That is why the app includes an optional thin-session filter for low-volume flags.
 
-**What changed in this build**
+**Why this version is more stable**
 
 The app no longer depends on `Ticker.info` or a single Yahoo path just to function. OHLCV is fetched from
-multiple public sources with fallbacks, and the normalization layer is optional rather than hard-required.
-That is the main reason this version is more stable.
+multiple public sources with fallbacks, the normalization layer is optional rather than hard-required, and
+all date indices are standardized before any filtering or chart logic.
         """
     )
