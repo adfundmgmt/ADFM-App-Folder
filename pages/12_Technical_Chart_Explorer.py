@@ -464,16 +464,7 @@ rangebreaks = build_rangebreaks(df_display.index, interval)
 
 # --------------------------- Header ---------------------------
 header_suffix = "Adjusted ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
-st.markdown(
-    f"""
-    <div style="margin-bottom: 8px;">
-        <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
-            {ticker} | {header_suffix}
-        </h2>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+st.title(f"{ticker} | {header_suffix}")
 
 # --------------------------- Colors ---------------------------
 COLORS = {
@@ -487,7 +478,8 @@ COLORS = {
     "bb": "#9E9E9E",
     "grid": "rgba(120,120,120,0.18)",
     "text": "#222222",
-    "volume_bar": "rgba(148,163,184,0.32)",
+    "volume_up": "rgba(38,166,154,0.55)",
+    "volume_down": "rgba(239,83,80,0.55)",
     "rsi": "#5E35B1",
     "macd": "#1E88E5",
     "signal": "#FB8C00",
@@ -497,40 +489,28 @@ COLORS = {
     "last": "#1565C0",
 }
 
-# --------------------------- Manual Legend: MAs Only ---------------------------
-legend_items = []
+# --------------------------- Sidebar MA Legend ---------------------------
+st.sidebar.markdown("---")
+st.sidebar.subheader("Moving Averages")
+
+def sidebar_ma_item(label: str, color: str):
+    st.sidebar.markdown(
+        f"""
+        <div style="display:flex; align-items:center; gap:8px; margin: 0 0 6px 0;">
+            <span style="display:inline-block; width:22px; height:0; border-top:4px solid {color};"></span>
+            <span style="font-size:13px;">{label}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 if show_ma8:
-    legend_items.append(("MA 8", COLORS["ma8"]))
-legend_items.append(("MA 20", COLORS["ma20"]))
-legend_items.append(("MA 50", COLORS["ma50"]))
+    sidebar_ma_item("MA 8", COLORS["ma8"])
+sidebar_ma_item("MA 20", COLORS["ma20"])
+sidebar_ma_item("MA 50", COLORS["ma50"])
 if show_ma100:
-    legend_items.append(("MA 100", COLORS["ma100"]))
-legend_items.append(("MA 200", COLORS["ma200"]))
-
-legend_html = """
-<div style="
-    display:flex;
-    flex-wrap:wrap;
-    align-items:center;
-    gap:18px;
-    margin:2px 0 10px 2px;
-    padding:8px 12px;
-    background:rgba(255,255,255,0.96);
-    border:1px solid rgba(225,225,225,1);
-    border-radius:0px;
-    width:fit-content;
-">
-"""
-for label, color in legend_items:
-    legend_html += f"""
-    <div style="display:flex; align-items:center; gap:8px;">
-        <div style="width:28px; height:0; border-top:5px solid {color};"></div>
-        <div style="font-size:12px; color:#333333; line-height:1;">{label}</div>
-    </div>
-    """
-legend_html += "</div>"
-
-st.markdown(legend_html, unsafe_allow_html=True)
+    sidebar_ma_item("MA 100", COLORS["ma100"])
+sidebar_ma_item("MA 200", COLORS["ma200"])
 
 # --------------------------- Panel Setup ---------------------------
 panel_flags = {
@@ -869,11 +849,11 @@ fig.update_xaxes(
 
 fig.update_layout(
     height=fig_height,
-    title=dict(text=""),
+    title=None,
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=20, b=10),
+    margin=dict(l=40, r=20, t=5, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     showlegend=False,
     bargap=0.08,
