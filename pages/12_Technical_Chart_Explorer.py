@@ -7,20 +7,6 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="ADFM Chart Tool", layout="wide")
 
-# --------------------------- Global CSS ---------------------------
-st.markdown(
-    """
-    <style>
-        .block-container {
-            padding-top: 0.55rem;
-            padding-bottom: 0.75rem;
-            max-width: 1650px;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 # --------------------------- Sidebar ---------------------------
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
@@ -78,6 +64,18 @@ elliott_mode = st.sidebar.selectbox(
     index=0,
 )
 
+# --------------------------- Header ---------------------------
+header_suffix = "ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
+st.markdown(
+    f"""
+<div style="margin-bottom: 6px;">
+    <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
+        {ticker} | {header_suffix}
+    </h2>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 # --------------------------- Helpers ---------------------------
 def start_date_from_period(p: str) -> pd.Timestamp | None:
     today = pd.Timestamp.today().normalize()
@@ -131,16 +129,16 @@ def compute_bbands(close: pd.Series, window: int = 20, mult: float = 2.0):
 
 
 def _is_pivot_high(values: np.ndarray, i: int, w: int) -> bool:
-    left = values[i - w:i]
-    right = values[i + 1:i + w + 1]
+    left = values[i - w : i]
+    right = values[i + 1 : i + w + 1]
     if len(left) < w or len(right) < w:
         return False
     return (values[i] >= left.max()) and (values[i] >= right.max())
 
 
 def _is_pivot_low(values: np.ndarray, i: int, w: int) -> bool:
-    left = values[i - w:i]
-    right = values[i + 1:i + w + 1]
+    left = values[i - w : i]
+    right = values[i + 1 : i + w + 1]
     if len(left) < w or len(right) < w:
         return False
     return (values[i] <= left.min()) and (values[i] <= right.min())
@@ -253,7 +251,7 @@ def find_best_impulse(pivots: list[dict], lookback: int) -> tuple[list[dict] | N
     best_score = -1e9
 
     for j in range(len(subset) - 5):
-        seq = subset[j:j + 6]
+        seq = subset[j : j + 6]
         score = _impulse_score(seq)
         if score > best_score:
             best_score = score
@@ -276,7 +274,7 @@ def try_abc_after_impulse(pivots: list[dict], impulse: list[dict]) -> list[dict]
     if pos is None:
         return None
 
-    tail = pivots[pos + 1:]
+    tail = pivots[pos + 1 :]
     if len(tail) < 3:
         return None
 
@@ -478,9 +476,18 @@ rangebreaks = build_rangebreaks(df_display.index, interval)
 
 # --------------------------- Header ---------------------------
 header_suffix = "Adjusted ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
-st.title(f"{ticker} | {header_suffix}")
+st.markdown(
+    f"""
+    <div style="margin-bottom: 4px;">
+        <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
+            {ticker} | {header_suffix}
+        </h2>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-# --------------------------- Colors ---------------------------
+# --------------------------- Manual Legend ---------------------------
 COLORS = {
     "up": "#26A69A",
     "down": "#EF5350",
@@ -503,28 +510,24 @@ COLORS = {
     "last": "#1565C0",
 }
 
-# --------------------------- Sidebar MA Legend ---------------------------
-st.sidebar.markdown("---")
-st.sidebar.subheader("Moving Averages")
-
-def sidebar_ma_item(label: str, color: str):
-    st.sidebar.markdown(
-        f"""
-        <div style="display:flex; align-items:center; gap:8px; margin: 0 0 6px 0;">
-            <span style="display:inline-block; width:22px; height:0; border-top:4px solid {color};"></span>
-            <span style="font-size:13px;">{label}</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+legend_items = []
 if show_ma8:
-    sidebar_ma_item("MA 8", COLORS["ma8"])
-sidebar_ma_item("MA 20", COLORS["ma20"])
-sidebar_ma_item("MA 50", COLORS["ma50"])
+    legend_items.append(("MA 8", COLORS["ma8"]))
+legend_items.append(("MA 20", COLORS["ma20"]))
+legend_items.append(("MA 50", COLORS["ma50"]))
 if show_ma100:
-    sidebar_ma_item("MA 100", COLORS["ma100"])
-sidebar_ma_item("MA 200", COLORS["ma200"])
+    legend_items.append(("MA 100", COLORS["ma100"]))
+legend_items.append(("MA 200", COLORS["ma200"]))
+
+legend_html = '<div style="display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin:2px 0 8px 2px;">'
+for label, color in legend_items:
+    legend_html += f'<div style="display:flex; align-items:center; gap:8px; font-size:13px; color:#444444; line-height:1;">'
+    legend_html += f'<span style="display:inline-block; width:30px; height:0; border-top:3px solid {color};"></span>'
+    legend_html += f'<span>{label}</span>'
+    legend_html += '</div>'
+legend_html += '</div>'
+
+st.markdown(legend_html, unsafe_allow_html=True)
 
 # --------------------------- Panel Setup ---------------------------
 panel_flags = {
@@ -582,7 +585,7 @@ fig.add_trace(
         increasing_fillcolor=COLORS["up"],
         decreasing_line_color=COLORS["down"],
         decreasing_fillcolor=COLORS["down"],
-        name=ticker,
+        name="Price",
         showlegend=False,
         hovertemplate=(
             "Date: %{x|%Y-%m-%d}<br>"
@@ -615,6 +618,7 @@ for w, color, enabled in ma_config:
                 name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
                 showlegend=False,
+                legendgroup=None,
             ),
             row=row_map["price"],
             col=1,
@@ -734,11 +738,15 @@ if show_range_levels:
 
 # --------------------------- Volume Panel ---------------------------
 if show_volume:
-    vol_colors = np.where(
-        df_display["Close"] >= df_display["Open"],
-        COLORS["volume_up"],
-        COLORS["volume_down"],
-    )
+    vol_colors = []
+    closes = df_display["Close"].values
+    for i in range(len(df_display)):
+        if i == 0:
+            vol_colors.append("rgba(160,160,160,0.45)")
+        else:
+            vol_colors.append(
+                COLORS["volume_up"] if closes[i] >= closes[i - 1] else COLORS["volume_down"]
+            )
 
     fig.add_trace(
         go.Bar(
@@ -873,9 +881,10 @@ fig.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=5, b=10),
+    margin=dict(l=40, r=20, t=10, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
     showlegend=False,
+    legend_title_text="",
     bargap=0.08,
 )
 
@@ -888,13 +897,20 @@ if show_macd:
     fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
 
 # --------------------------- Render ---------------------------
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-    config={
-        "displaylogo": False,
-    },
+st.markdown(
+    """
+    <style>
+        .block-container {
+            padding-top: 0.55rem;
+            padding-bottom: 0.75rem;
+            max-width: 1650px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
+
+st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
 st.markdown(
     """
