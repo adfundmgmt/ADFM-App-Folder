@@ -26,42 +26,94 @@ CUSTOM_CSS = """
 <style>
     .block-container {
         max-width: 1680px;
-        padding-top: 0.9rem;
-        padding-bottom: 1.5rem;
+        padding-top: 0.55rem;
+        padding-bottom: 0.75rem;
     }
     h1, h2, h3 {
         letter-spacing: 0.05px;
-        font-weight: 680;
+        font-weight: 700;
     }
     .adfm-card {
         background: #fafafa;
         border: 1px solid #e8e8e8;
         border-radius: 14px;
-        padding: 14px 16px;
+        padding: 13px 16px;
         margin-bottom: 10px;
-        min-height: 122px;
+        min-height: 112px;
     }
     .adfm-label {
-        color: #666;
-        font-size: 0.88rem;
+        color: #6b7280;
+        font-size: 0.86rem;
         margin-bottom: 4px;
     }
     .adfm-value {
-        font-size: 1.55rem;
+        font-size: 1.50rem;
         font-weight: 750;
         color: #1f2937;
-        line-height: 1.1;
+        line-height: 1.08;
         margin-bottom: 6px;
     }
     .adfm-sub {
-        color: #666;
-        font-size: 0.86rem;
+        color: #6b7280;
+        font-size: 0.84rem;
         line-height: 1.35;
     }
     .sidebar-note {
         color: #666;
         font-size: 0.90rem;
         line-height: 1.45;
+    }
+    .chart-title-wrap {
+        margin-top: 2px;
+        margin-bottom: 2px;
+    }
+    .chart-title-main {
+        font-size: 32px;
+        font-weight: 700;
+        color: #222222;
+        line-height: 1.1;
+        margin: 0;
+        padding: 0;
+    }
+    .chart-title-sub {
+        margin-top: 4px;
+        color: #6b7280;
+        font-size: 14px;
+        line-height: 1.35;
+    }
+    .manual-legend {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 16px;
+        margin: 6px 0 10px 2px;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: #4b5563;
+        line-height: 1;
+    }
+    .legend-line {
+        display: inline-block;
+        width: 28px;
+        height: 0;
+        border-top-width: 3px;
+        border-top-style: solid;
+    }
+    .legend-box {
+        display: inline-block;
+        width: 14px;
+        height: 10px;
+        border-radius: 3px;
+    }
+    .legend-pill {
+        display: inline-block;
+        width: 16px;
+        height: 8px;
+        border-radius: 999px;
     }
 </style>
 """
@@ -73,7 +125,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 APP_TITLE = "Volume Based Sentiment Indicator"
 APP_SUBTITLE = (
     "Volume is treated as a sentiment input. Heavy turnover often aligns with fear, stress, and forced repositioning, "
-    "while quiet tape often reflects complacency. The point is to locate where current activity sits versus that instrument's own history."
+    "while quiet tape often reflects complacency. The goal is to place current activity in the context of the instrument's own history."
 )
 
 DEFAULT_HEADERS = {
@@ -84,9 +136,27 @@ DEFAULT_HEADERS = {
     )
 }
 
-DEFAULT_SYMBOLS = [
-    "QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "XLF", "NVDA", "TSLA"
-]
+DEFAULT_SYMBOLS = ["QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "NVDA", "TSLA", "META"]
+
+COLORS = {
+    "up": "#26A69A",
+    "down": "#EF5350",
+    "vol_base": "rgba(41, 98, 255, 0.14)",
+    "vol_stress": "rgba(239, 83, 80, 0.72)",
+    "vol_quiet": "rgba(251, 140, 0, 0.62)",
+    "vol_ma": "#2962FF",
+    "zscore": "#111827",
+    "stress_line": "rgba(239, 83, 80, 0.90)",
+    "quiet_line": "rgba(251, 140, 0, 0.90)",
+    "zero_line": "rgba(120, 120, 120, 0.55)",
+    "stress_fill": "rgba(239, 83, 80, 0.06)",
+    "quiet_fill": "rgba(251, 140, 0, 0.045)",
+    "grid": "rgba(120,120,120,0.14)",
+    "text": "#222222",
+    "subtle": "#6b7280",
+    "last": "#1565C0",
+    "bg": "white",
+}
 
 # =============================================================================
 # HELPERS
@@ -111,10 +181,8 @@ def today_utc_ts() -> pd.Timestamp:
 
 def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-
     if not isinstance(out.index, pd.DatetimeIndex):
         out.index = pd.to_datetime(out.index, errors="coerce")
-
     out = out[~out.index.isna()].copy()
 
     if getattr(out.index, "tz", None) is not None:
@@ -164,8 +232,7 @@ def fetch_from_stooq(symbol: str, start_date: pd.Timestamp) -> pd.DataFrame:
     df = df.sort_values("Date")
     df = df[df["Date"] >= start_date].copy()
     df = df.set_index("Date")
-    df = normalize_dt_index(df)
-    return df
+    return normalize_dt_index(df)
 
 def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     period1 = int(start_date.timestamp())
@@ -208,8 +275,7 @@ def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: 
 
     df = df.dropna(subset=["Date", "Open", "High", "Low", "Close", "Volume"]).copy()
     df = df.set_index("Date")
-    df = normalize_dt_index(df)
-    return df
+    return normalize_dt_index(df)
 
 def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     df = yf.download(
@@ -235,8 +301,7 @@ def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date
         df[col] = safe_numeric(df[col])
 
     df = df.dropna(subset=needed).copy()
-    df = normalize_dt_index(df)
-    return df
+    return normalize_dt_index(df)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_ohlcv(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> Tuple[pd.DataFrame, str]:
@@ -288,6 +353,18 @@ def fetch_shares_outstanding(symbol: str) -> Optional[float]:
 
     return None
 
+def build_rangebreaks(index: pd.DatetimeIndex) -> list[dict]:
+    if len(index) == 0:
+        return []
+    normalized = pd.DatetimeIndex(index).normalize().unique().sort_values()
+    full_bdays = pd.date_range(start=normalized.min(), end=normalized.max(), freq="B")
+    missing_bdays = full_bdays.difference(normalized)
+
+    rangebreaks = [dict(bounds=["sat", "mon"])]
+    if len(missing_bdays) > 0:
+        rangebreaks.append(dict(values=missing_bdays.strftime("%Y-%m-%d").tolist()))
+    return rangebreaks
+
 def compute_signal_table(
     df: pd.DataFrame,
     ma_period: int,
@@ -316,11 +393,8 @@ def compute_signal_table(
     out["Likely_Thin_Session"] = out["Vol_Display"] < 0.55 * out["Vol_Median_20"]
 
     if exclude_thin_sessions:
-        out.loc[out["Likely_Thin_Session"], "Vol_Z"] = np.where(
-            out.loc[out["Likely_Thin_Session"], "Vol_Z"] < low_z,
-            np.nan,
-            out.loc[out["Likely_Thin_Session"], "Vol_Z"]
-        )
+        mask = out["Likely_Thin_Session"] & (out["Vol_Z"] < low_z)
+        out.loc[mask, "Vol_Z"] = np.nan
 
     out["Is_High"] = out["Vol_Z"] >= high_z
     out["Is_Low"] = out["Vol_Z"] <= low_z
@@ -331,13 +405,9 @@ def compute_signal_table(
         .apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1] * 100, raw=False)
     )
 
-    out["Signal_State"] = "Neutral"
-    out.loc[out["Is_High"], "Signal_State"] = "Stress / Capitulation"
-    out.loc[out["Is_Low"], "Signal_State"] = "Complacency / Quiet Tape"
-
     return out, vol_label
 
-def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 20) -> pd.DataFrame:
+def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 18) -> pd.DataFrame:
     signal_df = df[df[signal_col]].copy()
     if signal_df.empty:
         return signal_df
@@ -355,6 +425,21 @@ def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 20) 
     kept_index = [x[0] for x in kept_rows]
     return signal_df.loc[kept_index].copy()
 
+def manual_legend_html() -> str:
+    items = [
+        ('<span class="legend-box" style="background:#26A69A;"></span>', "Up Candle"),
+        ('<span class="legend-box" style="background:#EF5350;"></span>', "Down Candle"),
+        ('<span class="legend-line" style="border-top-color:#2962FF;"></span>', "Volume MA"),
+        ('<span class="legend-line" style="border-top-color:#111827;"></span>', "Volume Z-Score"),
+        ('<span class="legend-pill" style="background:rgba(239,83,80,0.22);"></span>', "Stress Zone"),
+        ('<span class="legend-pill" style="background:rgba(251,140,0,0.18);"></span>', "Complacency Zone"),
+    ]
+    html = '<div class="manual-legend">'
+    for icon, label in items:
+        html += f'<div class="legend-item">{icon}<span>{label}</span></div>'
+    html += '</div>'
+    return html
+
 def build_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -363,34 +448,38 @@ def build_chart(
     high_z: float,
     low_z: float,
     show_markers: bool,
+    show_last_price: bool,
     vol_opacity: float,
 ) -> go.Figure:
+    rangebreaks = build_rangebreaks(df.index)
+
     fig = make_subplots(
         rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.045,
-        row_heights=[0.58, 0.24, 0.18],
+        vertical_spacing=0.012,
+        row_heights=[0.68, 0.18, 0.14],
+        specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}]],
     )
 
     stress_windows = df[df["Vol_Z"] >= high_z].copy()
-    complacency_windows = df[df["Vol_Z"] <= low_z].copy()
+    quiet_windows = df[df["Vol_Z"] <= low_z].copy()
 
     for idx in stress_windows.index:
         fig.add_vrect(
             x0=idx - pd.Timedelta(hours=12),
             x1=idx + pd.Timedelta(hours=12),
-            fillcolor="rgba(239,68,68,0.08)",
+            fillcolor=COLORS["stress_fill"],
             line_width=0,
             row="all",
             col=1,
         )
 
-    for idx in complacency_windows.index:
+    for idx in quiet_windows.index:
         fig.add_vrect(
             x0=idx - pd.Timedelta(hours=12),
             x1=idx + pd.Timedelta(hours=12),
-            fillcolor="rgba(245,158,11,0.05)",
+            fillcolor=COLORS["quiet_fill"],
             line_width=0,
             row="all",
             col=1,
@@ -403,11 +492,20 @@ def build_chart(
             high=df["High"],
             low=df["Low"],
             close=df["Close"],
+            increasing_line_color=COLORS["up"],
+            increasing_fillcolor=COLORS["up"],
+            decreasing_line_color=COLORS["down"],
+            decreasing_fillcolor=COLORS["down"],
             name=symbol,
-            increasing_line_color="#16a34a",
-            decreasing_line_color="#dc2626",
-            increasing_fillcolor="#16a34a",
-            decreasing_fillcolor="#dc2626",
+            showlegend=False,
+            whiskerwidth=0.5,
+            hovertemplate=(
+                "Date: %{x|%Y-%m-%d}<br>"
+                "Open: %{open:.2f}<br>"
+                "High: %{high:.2f}<br>"
+                "Low: %{low:.2f}<br>"
+                "Close: %{close:.2f}<extra></extra>"
+            ),
         ),
         row=1,
         col=1,
@@ -423,13 +521,14 @@ def build_chart(
                     x=highs_sparse.index,
                     y=highs_sparse["Low"] * 0.992,
                     mode="markers",
-                    name="Stress Signal",
                     marker=dict(
                         symbol="triangle-up",
-                        size=9,
-                        color="rgba(220,38,38,0.92)",
+                        size=8,
+                        color="rgba(239,83,80,0.92)",
                         line=dict(width=1, color="white"),
                     ),
+                    name="Stress Signal",
+                    showlegend=False,
                     hovertemplate=(
                         "<b>%{x|%Y-%m-%d}</b><br>"
                         "Close: %{customdata[0]:.2f}<br>"
@@ -447,13 +546,14 @@ def build_chart(
                     x=lows_sparse.index,
                     y=lows_sparse["High"] * 1.008,
                     mode="markers",
-                    name="Complacency Signal",
                     marker=dict(
                         symbol="triangle-down",
-                        size=9,
-                        color="rgba(245,158,11,0.92)",
+                        size=8,
+                        color="rgba(251,140,0,0.90)",
                         line=dict(width=1, color="white"),
                     ),
+                    name="Complacency Signal",
+                    showlegend=False,
                     hovertemplate=(
                         "<b>%{x|%Y-%m-%d}</b><br>"
                         "Close: %{customdata[0]:.2f}<br>"
@@ -465,13 +565,27 @@ def build_chart(
                 col=1,
             )
 
+    if show_last_price and len(df) > 0:
+        last_close = float(df["Close"].iloc[-1])
+        fig.add_hline(
+            y=last_close,
+            line_width=1,
+            line_dash="dot",
+            line_color=COLORS["last"],
+            row=1,
+            col=1,
+            annotation_text=f"Last {last_close:,.2f}",
+            annotation_position="top right",
+            annotation_font=dict(color=COLORS["last"], size=11),
+        )
+
     bar_colors = np.where(
         df["Vol_Z"] >= high_z,
-        "rgba(220,38,38,0.78)",
+        COLORS["vol_stress"],
         np.where(
             df["Vol_Z"] <= low_z,
-            "rgba(245,158,11,0.72)",
-            f"rgba(59,130,246,{vol_opacity})",
+            COLORS["vol_quiet"],
+            f"rgba(41, 98, 255, {vol_opacity})",
         ),
     )
 
@@ -479,8 +593,9 @@ def build_chart(
         go.Bar(
             x=df.index,
             y=df["Vol_Display"],
-            name="Daily Volume",
             marker_color=bar_colors,
+            name="Daily Volume",
+            showlegend=False,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume: %{y:,.4f}<extra></extra>",
         ),
         row=2,
@@ -492,9 +607,10 @@ def build_chart(
             x=df.index,
             y=df["Vol_MA"],
             mode="lines",
+            line=dict(color=COLORS["vol_ma"], width=2.1),
             name=f"Volume {ma_period}D MA",
-            line=dict(color="rgba(37,99,235,0.95)", width=2.3),
-            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>MA: %{y:,.4f}<extra></extra>",
+            showlegend=False,
+            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume MA: %{y:,.4f}<extra></extra>",
         ),
         row=2,
         col=1,
@@ -505,9 +621,10 @@ def build_chart(
             x=df.index,
             y=df["Vol_Z"],
             mode="lines",
+            line=dict(color=COLORS["zscore"], width=1.9),
             name="Volume Z-Score",
-            line=dict(color="rgba(17,24,39,0.95)", width=2.0),
-            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Z: %{y:.2f}<extra></extra>",
+            showlegend=False,
+            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume Z: %{y:.2f}<extra></extra>",
         ),
         row=3,
         col=1,
@@ -515,80 +632,61 @@ def build_chart(
 
     fig.add_hline(
         y=high_z,
-        line=dict(color="rgba(220,38,38,0.75)", width=1.2, dash="dot"),
+        line=dict(color=COLORS["stress_line"], width=1.2, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=0,
-        line=dict(color="rgba(100,116,139,0.65)", width=1.0, dash="dot"),
+        line=dict(color=COLORS["zero_line"], width=1.0, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=low_z,
-        line=dict(color="rgba(245,158,11,0.75)", width=1.2, dash="dot"),
+        line=dict(color=COLORS["quiet_line"], width=1.2, dash="dot"),
         row=3,
         col=1,
     )
 
-    fig.update_layout(
-        height=950,
-        template="plotly_white",
-        margin=dict(l=50, r=30, t=110, b=35),
-        hovermode="x unified",
-        title=dict(
-            text=f"{symbol} Price, Volume, and Sentiment Regime",
-            x=0.01,
-            xanchor="left",
-            y=0.985,
-            yanchor="top",
-            font=dict(size=18),
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.03,
-            xanchor="left",
-            x=0.01,
-            bgcolor="rgba(255,255,255,0.85)",
-            bordercolor="rgba(230,230,230,0.9)",
-            borderwidth=1,
-            font=dict(size=11),
-        ),
-    )
+    for r in [1, 2, 3]:
+        fig.update_yaxes(
+            showgrid=True,
+            gridcolor=COLORS["grid"],
+            gridwidth=1,
+            zeroline=False,
+            showline=False,
+            fixedrange=False,
+            automargin=True,
+            row=r,
+            col=1,
+        )
 
     fig.update_xaxes(
-        showgrid=False,
+        type="date",
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        gridwidth=1,
+        showline=False,
         rangeslider_visible=False,
-        tickformat="%b %Y",
+        rangebreaks=rangebreaks,
+        tickformat="%b %d\n%Y",
     )
 
-    fig.update_yaxes(
-        title_text="Price ($)",
-        row=1,
-        col=1,
-        showgrid=True,
-        gridcolor="rgba(120,120,120,0.14)",
-        zeroline=False,
-    )
+    fig.update_yaxes(title_text="Price", nticks=10, row=1, col=1)
+    fig.update_yaxes(title_text="Vol", nticks=6, row=2, col=1)
+    fig.update_yaxes(title_text="Z", nticks=6, row=3, col=1)
 
-    fig.update_yaxes(
-        title_text=vol_label,
-        row=2,
-        col=1,
-        showgrid=True,
-        gridcolor="rgba(120,120,120,0.10)",
-        zeroline=False,
-    )
-
-    fig.update_yaxes(
-        title_text="Volume Z-Score",
-        row=3,
-        col=1,
-        showgrid=True,
-        gridcolor="rgba(120,120,120,0.10)",
-        zeroline=False,
+    fig.update_layout(
+        height=940,
+        title=None,
+        plot_bgcolor=COLORS["bg"],
+        paper_bgcolor=COLORS["bg"],
+        hovermode="x unified",
+        margin=dict(l=42, r=18, t=8, b=10),
+        font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
+        showlegend=False,
+        bargap=0.06,
     )
 
     return fig
@@ -600,18 +698,18 @@ st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     """
 <div class="sidebar-note">
-This tool treats volume as a sentiment input for any liquid instrument you want to inspect.
+This tool treats volume as a sentiment input for any liquid instrument.
 
 What it shows:
 <br>• Price path
 <br>• Daily volume and volume trend
-<br>• Current activity versus its own rolling baseline
+<br>• Current activity versus its rolling baseline
 <br>• Stress and complacency zones based on volume z-scores
 
 How to read it:
 <br>• Heavy volume usually shows fear, stress, hedging, or forced repositioning
-<br>• Very quiet tape can reflect complacency, but those signals are inherently weaker
-<br>• The bottom panel matters most because it tells you where today sits relative to normal
+<br>• Very quiet tape can reflect complacency, but those signals are weaker
+<br>• The bottom panel matters most because it tells you where current activity sits versus normal
 </div>
 """,
     unsafe_allow_html=True,
@@ -687,11 +785,16 @@ show_markers = st.sidebar.checkbox(
     value=True,
 )
 
+show_last_price = st.sidebar.checkbox(
+    "Show Last Price Line",
+    value=False,
+)
+
 vol_opacity = st.sidebar.slider(
     "Base Volume Bar Opacity",
     min_value=0.08,
-    max_value=0.50,
-    value=0.16,
+    max_value=0.40,
+    value=0.14,
     step=0.02,
 )
 
@@ -751,7 +854,7 @@ if df.empty:
     st.stop()
 
 # =============================================================================
-# METRICS
+# TOP METRICS
 # =============================================================================
 latest = df.iloc[-1]
 latest_close = float(latest["Close"])
@@ -766,10 +869,7 @@ elif np.isfinite(latest_vol_z) and latest_vol_z <= low_z:
 else:
     regime_text = "Normal volume regime"
 
-if np.isfinite(latest_vol_pct):
-    percentile_text = f"{latest_vol_pct:.0f}th percentile"
-else:
-    percentile_text = "N/A"
+percentile_text = f"{latest_vol_pct:.0f}th percentile" if np.isfinite(latest_vol_pct) else "N/A"
 
 if "Shares Outstanding" in vol_label:
     volume_text = f"{latest_volume:.4f}"
@@ -782,21 +882,13 @@ c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     st.markdown(
-        metric_card(
-            "Instrument",
-            symbol,
-            f"Source: {data_source}",
-        ),
+        metric_card("Instrument", symbol, f"Source: {data_source}"),
         unsafe_allow_html=True,
     )
 
 with c2:
     st.markdown(
-        metric_card(
-            "Latest Close",
-            f"${latest_close:,.2f}",
-            "Adjusted daily close",
-        ),
+        metric_card("Latest Close", f"${latest_close:,.2f}", "Adjusted daily close"),
         unsafe_allow_html=True,
     )
 
@@ -812,11 +904,7 @@ with c3:
 
 with c4:
     st.markdown(
-        metric_card(
-            "Volume Percentile",
-            percentile_text,
-            "Versus rolling 1-year history",
-        ),
+        metric_card("Volume Percentile", percentile_text, "Versus rolling 1-year history"),
         unsafe_allow_html=True,
     )
 
@@ -836,6 +924,23 @@ with c5:
     )
 
 # =============================================================================
+# CHART HEADER + MANUAL LEGEND
+# =============================================================================
+st.markdown(
+    f"""
+    <div class="chart-title-wrap">
+        <h2 class="chart-title-main">{symbol} | Volume Sentiment Workspace</h2>
+        <div class="chart-title-sub">
+            Price, volume trend, and volume regime in one view. Stress days are softly shaded red, quiet-tape days are softly shaded orange.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(manual_legend_html(), unsafe_allow_html=True)
+
+# =============================================================================
 # CHART
 # =============================================================================
 fig = build_chart(
@@ -846,7 +951,12 @@ fig = build_chart(
     high_z=high_z,
     low_z=low_z,
     show_markers=show_markers,
+    show_last_price=show_last_price,
     vol_opacity=vol_opacity,
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={"displaylogo": False},
+)
