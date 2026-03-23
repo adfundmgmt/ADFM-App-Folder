@@ -117,16 +117,16 @@ def compute_bbands(close: pd.Series, window: int = 20, mult: float = 2.0):
 
 
 def _is_pivot_high(values: np.ndarray, i: int, w: int) -> bool:
-    left = values[i - w : i]
-    right = values[i + 1 : i + w + 1]
+    left = values[i - w:i]
+    right = values[i + 1:i + w + 1]
     if len(left) < w or len(right) < w:
         return False
     return (values[i] >= left.max()) and (values[i] >= right.max())
 
 
 def _is_pivot_low(values: np.ndarray, i: int, w: int) -> bool:
-    left = values[i - w : i]
-    right = values[i + 1 : i + w + 1]
+    left = values[i - w:i]
+    right = values[i + 1:i + w + 1]
     if len(left) < w or len(right) < w:
         return False
     return (values[i] <= left.min()) and (values[i] <= right.min())
@@ -239,7 +239,7 @@ def find_best_impulse(pivots: list[dict], lookback: int) -> tuple[list[dict] | N
     best_score = -1e9
 
     for j in range(len(subset) - 5):
-        seq = subset[j : j + 6]
+        seq = subset[j:j + 6]
         score = _impulse_score(seq)
         if score > best_score:
             best_score = score
@@ -262,7 +262,7 @@ def try_abc_after_impulse(pivots: list[dict], impulse: list[dict]) -> list[dict]
     if pos is None:
         return None
 
-    tail = pivots[pos + 1 :]
+    tail = pivots[pos + 1:]
     if len(tail) < 3:
         return None
 
@@ -466,7 +466,7 @@ rangebreaks = build_rangebreaks(df_display.index, interval)
 header_suffix = "Adjusted ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
 st.markdown(
     f"""
-    <div style="margin-bottom: 6px;">
+    <div style="margin-bottom: 8px;">
         <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
             {ticker} | {header_suffix}
         </h2>
@@ -496,6 +496,41 @@ COLORS = {
     "range": "rgba(80,80,80,0.55)",
     "last": "#1565C0",
 }
+
+# --------------------------- Manual Legend: MAs Only ---------------------------
+legend_items = []
+if show_ma8:
+    legend_items.append(("MA 8", COLORS["ma8"]))
+legend_items.append(("MA 20", COLORS["ma20"]))
+legend_items.append(("MA 50", COLORS["ma50"]))
+if show_ma100:
+    legend_items.append(("MA 100", COLORS["ma100"]))
+legend_items.append(("MA 200", COLORS["ma200"]))
+
+legend_html = """
+<div style="
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:18px;
+    margin:2px 0 10px 2px;
+    padding:8px 12px;
+    background:rgba(255,255,255,0.96);
+    border:1px solid rgba(225,225,225,1);
+    border-radius:0px;
+    width:fit-content;
+">
+"""
+for label, color in legend_items:
+    legend_html += f"""
+    <div style="display:flex; align-items:center; gap:8px;">
+        <div style="width:28px; height:0; border-top:5px solid {color};"></div>
+        <div style="font-size:12px; color:#333333; line-height:1;">{label}</div>
+    </div>
+    """
+legend_html += "</div>"
+
+st.markdown(legend_html, unsafe_allow_html=True)
 
 # --------------------------- Panel Setup ---------------------------
 panel_flags = {
@@ -554,7 +589,7 @@ fig.add_trace(
         decreasing_line_color=COLORS["down"],
         decreasing_fillcolor=COLORS["down"],
         name=ticker,
-        showlegend=True,
+        showlegend=False,
         hovertemplate=(
             "Date: %{x|%Y-%m-%d}<br>"
             "Open: %{open:.2f}<br>"
@@ -585,7 +620,7 @@ for w, color, enabled in ma_config:
                 line=dict(color=color, width=1.6),
                 name=f"MA {w}",
                 hovertemplate=f"MA {w}: " + "%{y:.2f}<extra></extra>",
-                showlegend=True,
+                showlegend=False,
             ),
             row=row_map["price"],
             col=1,
@@ -712,7 +747,7 @@ if show_volume:
             marker_color=COLORS["volume_bar"],
             name="Volume",
             hovertemplate="Volume: %{y:,.0f}<extra></extra>",
-            showlegend=True,
+            showlegend=False,
         ),
         row=row_map["volume"],
         col=1,
@@ -728,7 +763,7 @@ if show_rsi:
             line=dict(width=1.6, color=COLORS["rsi"]),
             name="RSI 14",
             hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
-            showlegend=True,
+            showlegend=False,
         ),
         row=row_map["rsi"],
         col=1,
@@ -775,7 +810,7 @@ if show_macd:
             line=dict(width=1.5, color=COLORS["macd"]),
             name="MACD",
             hovertemplate="MACD: %{y:.2f}<extra></extra>",
-            showlegend=True,
+            showlegend=False,
         ),
         row=row_map["macd"],
         col=1,
@@ -788,7 +823,7 @@ if show_macd:
             line=dict(width=1.3, color=COLORS["signal"]),
             name="Signal",
             hovertemplate="Signal: %{y:.2f}<extra></extra>",
-            showlegend=True,
+            showlegend=False,
         ),
         row=row_map["macd"],
         col=1,
@@ -834,27 +869,13 @@ fig.update_xaxes(
 
 fig.update_layout(
     height=fig_height,
-    title=None,
+    title=dict(text=""),
     plot_bgcolor="white",
     paper_bgcolor="white",
     hovermode="x unified",
-    margin=dict(l=40, r=20, t=86, b=10),
+    margin=dict(l=40, r=20, t=20, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
-    showlegend=True,
-    legend=dict(
-        orientation="h",
-        yanchor="bottom",
-        y=1.02,
-        xanchor="left",
-        x=0.0,
-        bgcolor="rgba(255,255,255,0.92)",
-        bordercolor="rgba(225,225,225,1)",
-        borderwidth=1,
-        font=dict(size=11, color="#444444"),
-        traceorder="normal",
-        itemsizing="constant",
-    ),
-    legend_title_text="",
+    showlegend=False,
     bargap=0.08,
 )
 
@@ -880,7 +901,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "displaylogo": False,
+    },
+)
 
 st.markdown(
     """
