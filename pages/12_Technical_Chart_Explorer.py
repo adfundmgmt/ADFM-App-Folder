@@ -7,6 +7,20 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="ADFM Chart Tool", layout="wide")
 
+# --------------------------- Global CSS ---------------------------
+st.markdown(
+    """
+    <style>
+        .block-container {
+            padding-top: 0.55rem;
+            padding-bottom: 0.75rem;
+            max-width: 1650px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # --------------------------- Sidebar ---------------------------
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
@@ -720,11 +734,17 @@ if show_range_levels:
 
 # --------------------------- Volume Panel ---------------------------
 if show_volume:
+    vol_colors = np.where(
+        df_display["Close"] >= df_display["Open"],
+        COLORS["volume_up"],
+        COLORS["volume_down"],
+    )
+
     fig.add_trace(
         go.Bar(
             x=df_display.index,
             y=df_display["Volume"],
-            marker_color=COLORS["volume_bar"],
+            marker_color=vol_colors,
             name="Volume",
             hovertemplate="Volume: %{y:,.0f}<extra></extra>",
             showlegend=False,
@@ -868,19 +888,6 @@ if show_macd:
     fig.update_yaxes(title_text="MACD", row=row_map["macd"], col=1)
 
 # --------------------------- Render ---------------------------
-st.markdown(
-    """
-    <style>
-        .block-container {
-            padding-top: 0.55rem;
-            padding-bottom: 0.75rem;
-            max-width: 1650px;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 st.plotly_chart(
     fig,
     use_container_width=True,
