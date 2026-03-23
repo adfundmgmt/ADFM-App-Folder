@@ -1,8 +1,7 @@
 import time
-from datetime import datetime
+import json
 from io import StringIO
 from typing import Optional, Tuple
-import json
 
 import numpy as np
 import pandas as pd
@@ -16,7 +15,7 @@ import yfinance as yf
 # PAGE CONFIG
 # =============================================================================
 st.set_page_config(
-    page_title="QQQ Volume Sentiment Indicator",
+    page_title="Volume Based Sentiment Indicator",
     layout="wide",
 )
 
@@ -26,45 +25,43 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
     .block-container {
-        max-width: 1650px;
-        padding-top: 1.0rem;
-        padding-bottom: 2.0rem;
+        max-width: 1680px;
+        padding-top: 0.9rem;
+        padding-bottom: 1.5rem;
     }
     h1, h2, h3 {
-        letter-spacing: 0.1px;
-        font-weight: 650;
+        letter-spacing: 0.05px;
+        font-weight: 680;
     }
     .adfm-card {
         background: #fafafa;
-        border: 1px solid #e9e9e9;
+        border: 1px solid #e8e8e8;
         border-radius: 14px;
         padding: 14px 16px;
         margin-bottom: 10px;
+        min-height: 122px;
     }
-    .adfm-small {
-        color: #666;
-        font-size: 0.92rem;
-    }
-    .adfm-metric-label {
+    .adfm-label {
         color: #666;
         font-size: 0.88rem;
-        margin-bottom: 2px;
+        margin-bottom: 4px;
     }
-    .adfm-metric-value {
-        font-size: 1.45rem;
-        font-weight: 700;
-        color: #202223;
+    .adfm-value {
+        font-size: 1.55rem;
+        font-weight: 750;
+        color: #1f2937;
         line-height: 1.1;
+        margin-bottom: 6px;
     }
-    .adfm-metric-sub {
+    .adfm-sub {
         color: #666;
-        font-size: 0.84rem;
-        margin-top: 4px;
+        font-size: 0.86rem;
+        line-height: 1.35;
     }
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #ececec;
-        border-radius: 12px;
-        overflow: hidden;
+    .sidebar-note {
+        color: #666;
+        font-size: 0.90rem;
+        line-height: 1.45;
     }
 </style>
 """
@@ -73,12 +70,11 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # =============================================================================
 # CONSTANTS
 # =============================================================================
-APP_TITLE = "QQQ Volume as an Inverse Sentiment Indicator"
+APP_TITLE = "Volume Based Sentiment Indicator"
 APP_SUBTITLE = (
-    "High volume tends to align with fear and capitulation, while unusually quiet volume often "
-    "shows complacency. The framework is inspired by McClellan-style sentiment work."
+    "Volume is treated as a sentiment input. Heavy turnover often aligns with fear, stress, and forced repositioning, "
+    "while quiet tape often reflects complacency. The point is to locate where current activity sits versus that instrument's own history."
 )
-SYMBOL = "QQQ"
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -88,15 +84,19 @@ DEFAULT_HEADERS = {
     )
 }
 
+DEFAULT_SYMBOLS = [
+    "QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "XLF", "NVDA", "TSLA"
+]
+
 # =============================================================================
 # HELPERS
 # =============================================================================
 def metric_card(label: str, value: str, subtext: str = "") -> str:
     return f"""
     <div class="adfm-card">
-        <div class="adfm-metric-label">{label}</div>
-        <div class="adfm-metric-value">{value}</div>
-        <div class="adfm-metric-sub">{subtext}</div>
+        <div class="adfm-label">{label}</div>
+        <div class="adfm-value">{value}</div>
+        <div class="adfm-sub">{subtext}</div>
     </div>
     """
 
@@ -110,9 +110,6 @@ def today_utc_ts() -> pd.Timestamp:
     return pd.Timestamp.utcnow().tz_localize(None).normalize()
 
 def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Force a clean, timezone-naive DatetimeIndex so downstream comparisons never fail.
-    """
     out = df.copy()
 
     if not isinstance(out.index, pd.DatetimeIndex):
@@ -125,7 +122,6 @@ def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
 
     out.index = pd.DatetimeIndex(out.index).tz_localize(None)
     out.index = out.index.normalize()
-
     out = out.sort_index()
     out = out[~out.index.duplicated(keep="last")].copy()
     return out
@@ -243,25 +239,25 @@ def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date
     return df
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_qqq_ohlcv(start_date: pd.Timestamp, end_date: pd.Timestamp) -> Tuple[pd.DataFrame, str]:
+def fetch_ohlcv(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> Tuple[pd.DataFrame, str]:
     errors = []
 
     try:
-        df = fetch_from_stooq(SYMBOL, start_date)
+        df = fetch_from_stooq(symbol, start_date)
         if not df.empty:
             return df, "Stooq"
     except Exception as e:
         errors.append(f"Stooq: {e}")
 
     try:
-        df = fetch_from_yahoo_chart_api(SYMBOL, start_date, end_date)
+        df = fetch_from_yahoo_chart_api(symbol, start_date, end_date)
         if not df.empty:
             return df, "Yahoo Chart API"
     except Exception as e:
         errors.append(f"Yahoo Chart API: {e}")
 
     try:
-        df = fetch_from_yfinance_download(SYMBOL, start_date, end_date)
+        df = fetch_from_yfinance_download(symbol, start_date, end_date)
         if not df.empty:
             return df, "yfinance"
     except Exception as e:
@@ -295,12 +291,12 @@ def fetch_shares_outstanding(symbol: str) -> Optional[float]:
 def compute_signal_table(
     df: pd.DataFrame,
     ma_period: int,
-    bb_period: int,
-    extreme_high_z: float,
-    extreme_low_z: float,
+    baseline_period: int,
+    high_z: float,
+    low_z: float,
     normalize_volume: bool,
     shares_outstanding: Optional[float],
-    exclude_holiday_noise: bool,
+    exclude_thin_sessions: bool,
 ) -> Tuple[pd.DataFrame, str]:
     out = df.copy()
 
@@ -312,35 +308,93 @@ def compute_signal_table(
         vol_label = "Volume (Shares)"
 
     out["Vol_MA"] = out["Vol_Display"].rolling(ma_period, min_periods=ma_period).mean()
-    out["Vol_Base"] = out["Vol_Display"].rolling(bb_period, min_periods=bb_period).mean()
-    out["Vol_Std"] = out["Vol_Display"].rolling(bb_period, min_periods=bb_period).std(ddof=0)
+    out["Vol_Base"] = out["Vol_Display"].rolling(baseline_period, min_periods=baseline_period).mean()
+    out["Vol_Std"] = out["Vol_Display"].rolling(baseline_period, min_periods=baseline_period).std(ddof=0)
     out["Vol_Z"] = (out["Vol_Display"] - out["Vol_Base"]) / out["Vol_Std"].replace(0, np.nan)
 
     out["Vol_Median_20"] = out["Vol_Display"].rolling(20, min_periods=10).median()
     out["Likely_Thin_Session"] = out["Vol_Display"] < 0.55 * out["Vol_Median_20"]
 
-    out["Is_High"] = out["Vol_Z"] >= extreme_high_z
-    out["Is_Low"] = out["Vol_Z"] <= extreme_low_z
+    if exclude_thin_sessions:
+        out.loc[out["Likely_Thin_Session"], "Vol_Z"] = np.where(
+            out.loc[out["Likely_Thin_Session"], "Vol_Z"] < low_z,
+            np.nan,
+            out.loc[out["Likely_Thin_Session"], "Vol_Z"]
+        )
 
-    if exclude_holiday_noise:
-        out.loc[out["Likely_Thin_Session"], "Is_Low"] = False
+    out["Is_High"] = out["Vol_Z"] >= high_z
+    out["Is_Low"] = out["Vol_Z"] <= low_z
+
+    out["Vol_PctRank"] = (
+        out["Vol_Display"]
+        .rolling(252, min_periods=60)
+        .apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1] * 100, raw=False)
+    )
+
+    out["Signal_State"] = "Neutral"
+    out.loc[out["Is_High"], "Signal_State"] = "Stress / Capitulation"
+    out.loc[out["Is_Low"], "Signal_State"] = "Complacency / Quiet Tape"
 
     return out, vol_label
 
+def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 20) -> pd.DataFrame:
+    signal_df = df[df[signal_col]].copy()
+    if signal_df.empty:
+        return signal_df
+
+    kept_rows = []
+    last_kept = None
+    for idx, row in signal_df.iterrows():
+        if last_kept is None or (idx - last_kept).days >= gap_days:
+            kept_rows.append((idx, row))
+            last_kept = idx
+
+    if not kept_rows:
+        return signal_df.iloc[0:0].copy()
+
+    kept_index = [x[0] for x in kept_rows]
+    return signal_df.loc[kept_index].copy()
+
 def build_chart(
     df: pd.DataFrame,
+    symbol: str,
     vol_label: str,
     ma_period: int,
-    highlight_extremes: bool,
-    vol_bar_opacity: float,
+    high_z: float,
+    low_z: float,
+    show_markers: bool,
+    vol_opacity: float,
 ) -> go.Figure:
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.04,
-        row_heights=[0.72, 0.28],
+        vertical_spacing=0.045,
+        row_heights=[0.58, 0.24, 0.18],
     )
+
+    stress_windows = df[df["Vol_Z"] >= high_z].copy()
+    complacency_windows = df[df["Vol_Z"] <= low_z].copy()
+
+    for idx in stress_windows.index:
+        fig.add_vrect(
+            x0=idx - pd.Timedelta(hours=12),
+            x1=idx + pd.Timedelta(hours=12),
+            fillcolor="rgba(239,68,68,0.08)",
+            line_width=0,
+            row="all",
+            col=1,
+        )
+
+    for idx in complacency_windows.index:
+        fig.add_vrect(
+            x0=idx - pd.Timedelta(hours=12),
+            x1=idx + pd.Timedelta(hours=12),
+            fillcolor="rgba(245,158,11,0.05)",
+            line_width=0,
+            row="all",
+            col=1,
+        )
 
     fig.add_trace(
         go.Candlestick(
@@ -349,7 +403,7 @@ def build_chart(
             high=df["High"],
             low=df["Low"],
             close=df["Close"],
-            name="QQQ",
+            name=symbol,
             increasing_line_color="#16a34a",
             decreasing_line_color="#dc2626",
             increasing_fillcolor="#16a34a",
@@ -359,65 +413,65 @@ def build_chart(
         col=1,
     )
 
-    if highlight_extremes:
-        highs = df[df["Is_High"]].copy()
-        lows = df[df["Is_Low"]].copy()
+    if show_markers:
+        highs_sparse = sparse_signal_points(df, "Is_High", gap_days=18)
+        lows_sparse = sparse_signal_points(df, "Is_Low", gap_days=18)
 
-        if not highs.empty:
+        if not highs_sparse.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=highs.index,
-                    y=highs["Low"] * 0.992,
+                    x=highs_sparse.index,
+                    y=highs_sparse["Low"] * 0.992,
                     mode="markers",
-                    name="High Volume Signal",
+                    name="Stress Signal",
                     marker=dict(
                         symbol="triangle-up",
-                        size=10,
-                        color="rgba(220, 38, 38, 0.95)",
+                        size=9,
+                        color="rgba(220,38,38,0.92)",
                         line=dict(width=1, color="white"),
                     ),
                     hovertemplate=(
                         "<b>%{x|%Y-%m-%d}</b><br>"
                         "Close: %{customdata[0]:.2f}<br>"
-                        "Vol Z: %{customdata[1]:.2f}<extra></extra>"
+                        "Volume Z: %{customdata[1]:.2f}<extra></extra>"
                     ),
-                    customdata=np.column_stack([highs["Close"], highs["Vol_Z"]]),
+                    customdata=np.column_stack([highs_sparse["Close"], highs_sparse["Vol_Z"]]),
                 ),
                 row=1,
                 col=1,
             )
 
-        if not lows.empty:
+        if not lows_sparse.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=lows.index,
-                    y=lows["High"] * 1.008,
+                    x=lows_sparse.index,
+                    y=lows_sparse["High"] * 1.008,
                     mode="markers",
-                    name="Low Volume Signal",
+                    name="Complacency Signal",
                     marker=dict(
                         symbol="triangle-down",
-                        size=10,
-                        color="rgba(245, 158, 11, 0.95)",
+                        size=9,
+                        color="rgba(245,158,11,0.92)",
                         line=dict(width=1, color="white"),
                     ),
                     hovertemplate=(
                         "<b>%{x|%Y-%m-%d}</b><br>"
                         "Close: %{customdata[0]:.2f}<br>"
-                        "Vol Z: %{customdata[1]:.2f}<extra></extra>"
+                        "Volume Z: %{customdata[1]:.2f}<extra></extra>"
                     ),
-                    customdata=np.column_stack([lows["Close"], lows["Vol_Z"]]),
+                    customdata=np.column_stack([lows_sparse["Close"], lows_sparse["Vol_Z"]]),
                 ),
                 row=1,
                 col=1,
             )
 
     bar_colors = np.where(
-        df["Is_High"],
-        "rgba(220, 38, 38, 0.90)",
+        df["Vol_Z"] >= high_z,
+        "rgba(220,38,38,0.78)",
         np.where(
-            df["Is_Low"],
-            "rgba(245, 158, 11, 0.90)",
-            f"rgba(59, 130, 246, {vol_bar_opacity})",
+            df["Vol_Z"] <= low_z,
+            "rgba(245,158,11,0.72)",
+            f"rgba(59,130,246,{vol_opacity})",
         ),
     )
 
@@ -425,7 +479,7 @@ def build_chart(
         go.Bar(
             x=df.index,
             y=df["Vol_Display"],
-            name="Volume",
+            name="Daily Volume",
             marker_color=bar_colors,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume: %{y:,.4f}<extra></extra>",
         ),
@@ -439,31 +493,68 @@ def build_chart(
             y=df["Vol_MA"],
             mode="lines",
             name=f"Volume {ma_period}D MA",
-            line=dict(color="rgba(30, 64, 175, 0.9)", width=2.2),
+            line=dict(color="rgba(37,99,235,0.95)", width=2.3),
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>MA: %{y:,.4f}<extra></extra>",
         ),
         row=2,
         col=1,
     )
 
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["Vol_Z"],
+            mode="lines",
+            name="Volume Z-Score",
+            line=dict(color="rgba(17,24,39,0.95)", width=2.0),
+            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Z: %{y:.2f}<extra></extra>",
+        ),
+        row=3,
+        col=1,
+    )
+
+    fig.add_hline(
+        y=high_z,
+        line=dict(color="rgba(220,38,38,0.75)", width=1.2, dash="dot"),
+        row=3,
+        col=1,
+    )
+    fig.add_hline(
+        y=0,
+        line=dict(color="rgba(100,116,139,0.65)", width=1.0, dash="dot"),
+        row=3,
+        col=1,
+    )
+    fig.add_hline(
+        y=low_z,
+        line=dict(color="rgba(245,158,11,0.75)", width=1.2, dash="dot"),
+        row=3,
+        col=1,
+    )
+
     fig.update_layout(
-        height=860,
+        height=950,
         template="plotly_white",
-        margin=dict(l=50, r=35, t=60, b=40),
+        margin=dict(l=50, r=30, t=110, b=35),
         hovermode="x unified",
+        title=dict(
+            text=f"{symbol} Price, Volume, and Sentiment Regime",
+            x=0.01,
+            xanchor="left",
+            y=0.985,
+            yanchor="top",
+            font=dict(size=18),
+        ),
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.02,
+            y=1.03,
             xanchor="left",
-            x=0.0,
-            font=dict(size=11),
-        ),
-        title=dict(
-            text="QQQ Price and Volume Sentiment Overlay",
             x=0.01,
-            xanchor="left",
-            font=dict(size=16),
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(230,230,230,0.9)",
+            borderwidth=1,
+            font=dict(size=11),
         ),
     )
 
@@ -478,7 +569,7 @@ def build_chart(
         row=1,
         col=1,
         showgrid=True,
-        gridcolor="rgba(120,120,120,0.15)",
+        gridcolor="rgba(120,120,120,0.14)",
         zeroline=False,
     )
 
@@ -487,21 +578,20 @@ def build_chart(
         row=2,
         col=1,
         showgrid=True,
-        gridcolor="rgba(120,120,120,0.12)",
+        gridcolor="rgba(120,120,120,0.10)",
+        zeroline=False,
+    )
+
+    fig.update_yaxes(
+        title_text="Volume Z-Score",
+        row=3,
+        col=1,
+        showgrid=True,
+        gridcolor="rgba(120,120,120,0.10)",
         zeroline=False,
     )
 
     return fig
-
-def style_extremes_table(df: pd.DataFrame, vol_label: str, normalized: bool):
-    fmt = {
-        "Close": "${:.2f}",
-        "Z-Score": "{:.2f}",
-        "1D Return %": "{:.2f}",
-        "5D Return %": "{:.2f}",
-    }
-    fmt[vol_label] = "{:.4f}" if normalized else "{:,.0f}"
-    return df.style.format(fmt)
 
 # =============================================================================
 # SIDEBAR
@@ -509,28 +599,36 @@ def style_extremes_table(df: pd.DataFrame, vol_label: str, normalized: bool):
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     """
-    **Purpose**
+<div class="sidebar-note">
+This tool treats volume as a sentiment input for any liquid instrument you want to inspect.
 
-    Track QQQ volume as a sentiment input. Heavy ETF volume often appears during fear, hedging,
-    and liquidation. Quiet tape can reflect complacency.
+What it shows:
+<br>• Price path
+<br>• Daily volume and volume trend
+<br>• Current activity versus its own rolling baseline
+<br>• Stress and complacency zones based on volume z-scores
 
-    **What it does**
-    - Pulls QQQ OHLCV from multiple public-data paths with fallbacks
-    - Computes volume z-scores against a rolling baseline
-    - Flags unusually high-volume and low-volume sessions
-    - Optionally normalizes volume by shares outstanding when available
-
-    **Interpretation**
-    - High-volume spikes often align with stress and local washouts
-    - Low-volume readings can align with complacency, but they are noisier
-
-    **Data handling**
-    - Primary OHLCV sources: Stooq, Yahoo Chart API, yfinance fallback
-    - Shares outstanding is optional and fetched separately
-    """
+How to read it:
+<br>• Heavy volume usually shows fear, stress, hedging, or forced repositioning
+<br>• Very quiet tape can reflect complacency, but those signals are inherently weaker
+<br>• The bottom panel matters most because it tells you where today sits relative to normal
+</div>
+""",
+    unsafe_allow_html=True,
 )
 
-st.sidebar.header("Settings")
+st.sidebar.header("Instrument")
+symbol = st.sidebar.text_input("Ticker", value="QQQ").upper().strip()
+
+st.sidebar.caption("Quick ideas")
+quick_cols = st.sidebar.columns(2)
+for i, sym in enumerate(DEFAULT_SYMBOLS[:6]):
+    with quick_cols[i % 2]:
+        if st.button(sym, use_container_width=True):
+            symbol = sym
+
+st.sidebar.markdown("---")
+st.sidebar.header("Window and Signal Setup")
 
 lookback_months = st.sidebar.slider(
     "Lookback (months)",
@@ -541,63 +639,60 @@ lookback_months = st.sidebar.slider(
 )
 
 ma_period = st.sidebar.slider(
-    "Volume Moving Average Period",
+    "Volume MA (days)",
     min_value=5,
     max_value=50,
-    value=10,
+    value=15,
     step=1,
 )
 
-normalize_volume = st.sidebar.checkbox(
-    "Normalize Volume by Shares Outstanding",
-    value=True,
-    help="Uses shares outstanding when available. If it fails, the app automatically falls back to raw volume.",
-)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Signal Detection")
-
-bb_period = st.sidebar.slider(
+baseline_period = st.sidebar.slider(
     "Volume Baseline Lookback (days)",
     min_value=20,
-    max_value=100,
-    value=50,
+    max_value=120,
+    value=60,
     step=5,
 )
 
-highlight_extremes = st.sidebar.checkbox(
-    "Highlight Extreme Volume Days",
-    value=True,
-)
-
-extreme_high_z = st.sidebar.slider(
-    "Bottom Signal Threshold (Z-score)",
+high_z = st.sidebar.slider(
+    "Stress Threshold (Z-score)",
     min_value=1.0,
     max_value=4.0,
     value=2.5,
     step=0.25,
 )
 
-extreme_low_z = st.sidebar.slider(
-    "Top Signal Threshold (Z-score)",
+low_z = st.sidebar.slider(
+    "Complacency Threshold (Z-score)",
     min_value=-4.0,
     max_value=-0.5,
     value=-2.0,
     step=0.25,
 )
 
-exclude_holiday_noise = st.sidebar.checkbox(
-    "Filter Obvious Thin-Session Noise",
+normalize_volume = st.sidebar.checkbox(
+    "Normalize by Shares Outstanding",
     value=True,
-    help="Removes likely half-days and holiday-distorted low-volume readings from bearish low-volume flags.",
+    help="For equities and ETFs, this improves long-range comparability when share count data is available.",
 )
 
-vol_bar_opacity = st.sidebar.slider(
-    "Volume Bar Opacity",
-    min_value=0.10,
-    max_value=0.80,
-    value=0.30,
-    step=0.05,
+exclude_thin_sessions = st.sidebar.checkbox(
+    "Filter Thin Sessions",
+    value=True,
+    help="Removes obvious holiday and half-day distortions from low-volume signals.",
+)
+
+show_markers = st.sidebar.checkbox(
+    "Show Sparse Signal Markers",
+    value=True,
+)
+
+vol_opacity = st.sidebar.slider(
+    "Base Volume Bar Opacity",
+    min_value=0.08,
+    max_value=0.50,
+    value=0.16,
+    step=0.02,
 )
 
 # =============================================================================
@@ -609,25 +704,29 @@ st.caption(APP_SUBTITLE)
 # =============================================================================
 # DATA FETCH
 # =============================================================================
+if not symbol:
+    st.warning("Enter a ticker to continue.")
+    st.stop()
+
 end_date = today_utc_ts()
-warmup_days = max(bb_period * 3, 180)
+warmup_days = max(baseline_period * 3, 220)
 start_date = end_date - pd.Timedelta(days=lookback_months * 31 + warmup_days)
 visible_start = end_date - pd.Timedelta(days=lookback_months * 31)
 
-with st.spinner("Loading QQQ data..."):
+with st.spinner(f"Loading {symbol} data..."):
     try:
-        raw_df, data_source = fetch_qqq_ohlcv(start_date, end_date)
+        raw_df, data_source = fetch_ohlcv(symbol, start_date, end_date)
     except Exception as e:
-        st.error(f"Failed to fetch QQQ data from all sources. Details: {e}")
+        st.error(f"Failed to fetch {symbol} data from all sources. Details: {e}")
         st.stop()
 
 shares_outstanding = None
 if normalize_volume:
     with st.spinner("Fetching shares outstanding..."):
-        shares_outstanding = fetch_shares_outstanding(SYMBOL)
+        shares_outstanding = fetch_shares_outstanding(symbol)
 
 if raw_df.empty:
-    st.warning("No data returned for the selected window.")
+    st.warning("No data returned for the selected instrument.")
     st.stop()
 
 raw_df = normalize_dt_index(raw_df)
@@ -636,12 +735,12 @@ raw_df = raw_df.loc[raw_df.index >= (visible_start - pd.Timedelta(days=warmup_da
 df, vol_label = compute_signal_table(
     raw_df,
     ma_period=ma_period,
-    bb_period=bb_period,
-    extreme_high_z=extreme_high_z,
-    extreme_low_z=extreme_low_z,
+    baseline_period=baseline_period,
+    high_z=high_z,
+    low_z=low_z,
     normalize_volume=normalize_volume,
     shares_outstanding=shares_outstanding,
-    exclude_holiday_noise=exclude_holiday_noise,
+    exclude_thin_sessions=exclude_thin_sessions,
 )
 
 df = normalize_dt_index(df)
@@ -652,58 +751,76 @@ if df.empty:
     st.stop()
 
 # =============================================================================
-# SUMMARY METRICS
+# METRICS
 # =============================================================================
 latest = df.iloc[-1]
 latest_close = float(latest["Close"])
 latest_vol_z = float(latest["Vol_Z"]) if pd.notna(latest["Vol_Z"]) else np.nan
-high_count = int(df["Is_High"].sum())
-low_count = int(df["Is_Low"].sum())
+latest_vol_pct = float(latest["Vol_PctRank"]) if pd.notna(latest["Vol_PctRank"]) else np.nan
 latest_volume = float(latest["Vol_Display"])
 
-c1, c2, c3, c4 = st.columns(4)
+if np.isfinite(latest_vol_z) and latest_vol_z >= high_z:
+    regime_text = "Stress / capitulation"
+elif np.isfinite(latest_vol_z) and latest_vol_z <= low_z:
+    regime_text = "Complacency / quiet tape"
+else:
+    regime_text = "Normal volume regime"
+
+if np.isfinite(latest_vol_pct):
+    percentile_text = f"{latest_vol_pct:.0f}th percentile"
+else:
+    percentile_text = "N/A"
+
+if "Shares Outstanding" in vol_label:
+    volume_text = f"{latest_volume:.4f}"
+    volume_sub = "Normalized volume"
+else:
+    volume_text = f"{latest_volume:,.0f}"
+    volume_sub = "Raw shares volume"
+
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     st.markdown(
         metric_card(
-            "Latest Close",
-            f"${latest_close:,.2f}",
+            "Instrument",
+            symbol,
             f"Source: {data_source}",
         ),
         unsafe_allow_html=True,
     )
 
 with c2:
-    z_text = f"{latest_vol_z:.2f}" if np.isfinite(latest_vol_z) else "N/A"
-    regime_text = (
-        "Fear / washout zone"
-        if np.isfinite(latest_vol_z) and latest_vol_z >= extreme_high_z
-        else "Complacency / quiet tape"
-        if np.isfinite(latest_vol_z) and latest_vol_z <= extreme_low_z
-        else "Within normal range"
-    )
     st.markdown(
         metric_card(
-            "Latest Volume Z-Score",
-            z_text,
-            regime_text,
+            "Latest Close",
+            f"${latest_close:,.2f}",
+            "Adjusted daily close",
         ),
         unsafe_allow_html=True,
     )
 
 with c3:
-    vol_value = f"{latest_volume:.4f}" if "Shares Outstanding" in vol_label else f"{latest_volume:,.0f}"
-    sub = "Normalized volume" if "Shares Outstanding" in vol_label else "Raw shares volume"
     st.markdown(
         metric_card(
-            "Latest Volume Reading",
-            vol_value,
-            sub,
+            "Volume Z-Score",
+            f"{latest_vol_z:.2f}" if np.isfinite(latest_vol_z) else "N/A",
+            regime_text,
         ),
         unsafe_allow_html=True,
     )
 
 with c4:
+    st.markdown(
+        metric_card(
+            "Volume Percentile",
+            percentile_text,
+            "Versus rolling 1-year history",
+        ),
+        unsafe_allow_html=True,
+    )
+
+with c5:
     shares_text = (
         format_billions(shares_outstanding)
         if shares_outstanding and np.isfinite(shares_outstanding)
@@ -711,9 +828,9 @@ with c4:
     )
     st.markdown(
         metric_card(
-            "Shares Outstanding",
-            shares_text,
-            "Used only when normalization is enabled and available",
+            "Volume Mode",
+            volume_text,
+            f"{volume_sub} | Shares out: {shares_text}",
         ),
         unsafe_allow_html=True,
     )
@@ -723,146 +840,13 @@ with c4:
 # =============================================================================
 fig = build_chart(
     df=df,
+    symbol=symbol,
     vol_label=vol_label,
     ma_period=ma_period,
-    highlight_extremes=highlight_extremes,
-    vol_bar_opacity=vol_bar_opacity,
+    high_z=high_z,
+    low_z=low_z,
+    show_markers=show_markers,
+    vol_opacity=vol_opacity,
 )
+
 st.plotly_chart(fig, use_container_width=True)
-
-# =============================================================================
-# INTERPRETATION BLOCK
-# =============================================================================
-recent_highs_n = int(df["Is_High"].tail(63).sum())
-recent_lows_n = int(df["Is_Low"].tail(63).sum())
-
-st.markdown("### Read on the Tape")
-interp_left, interp_right = st.columns([1.35, 1])
-
-with interp_left:
-    st.markdown(
-        f"""
-        <div class="adfm-card">
-            <div><b>Current read</b></div>
-            <div class="adfm-small" style="margin-top:8px;">
-                Over the visible window, the model flagged <b>{high_count}</b> high-volume stress signals and
-                <b>{low_count}</b> low-volume complacency signals. Over roughly the last 3 months, that narrows to
-                <b>{recent_highs_n}</b> and <b>{recent_lows_n}</b>, respectively.
-                The latest reading sits at a volume z-score of <b>{z_text}</b>, which places current activity in
-                <b>{regime_text.lower()}</b>.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with interp_right:
-    source_note = (
-        "Normalization active"
-        if "Shares Outstanding" in vol_label
-        else "Normalization inactive or unavailable"
-    )
-    st.markdown(
-        f"""
-        <div class="adfm-card">
-            <div><b>Data quality note</b></div>
-            <div class="adfm-small" style="margin-top:8px;">
-                OHLCV source used this run: <b>{data_source}</b>.<br><br>
-                Volume mode: <b>{source_note}</b>.<br><br>
-                Thin-session filter: <b>{"On" if exclude_holiday_noise else "Off"}</b>.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# =============================================================================
-# EXTREME TABLES
-# =============================================================================
-st.markdown("### Recent Extreme Volume Days")
-
-df["1D Return %"] = df["Close"].pct_change(1) * 100.0
-df["5D Return %"] = df["Close"].pct_change(5).shift(-5) * 100.0
-
-table_cols = ["Close", "Vol_Display", "Vol_Z", "1D Return %", "5D Return %"]
-
-recent_highs = (
-    df[df["Is_High"]][table_cols]
-    .rename(columns={"Vol_Display": vol_label, "Vol_Z": "Z-Score"})
-    .tail(12)
-    .sort_index(ascending=False)
-)
-
-recent_lows = (
-    df[df["Is_Low"]][table_cols]
-    .rename(columns={"Vol_Display": vol_label, "Vol_Z": "Z-Score"})
-    .tail(12)
-    .sort_index(ascending=False)
-)
-
-left, right = st.columns(2)
-
-with left:
-    st.markdown("#### High Volume Days")
-    st.caption("These are usually the more useful signals. They often show up during stress, deleveraging, and panic hedging.")
-    if not recent_highs.empty:
-        st.dataframe(
-            style_extremes_table(recent_highs, vol_label, "Shares Outstanding" in vol_label),
-            use_container_width=True,
-            height=430,
-        )
-    else:
-        st.info("No high-volume extremes in the selected window.")
-
-with right:
-    st.markdown("#### Low Volume Days")
-    st.caption("These can map to complacency, but they are inherently noisier and more vulnerable to calendar distortions.")
-    if not recent_lows.empty:
-        st.dataframe(
-            style_extremes_table(recent_lows, vol_label, "Shares Outstanding" in vol_label),
-            use_container_width=True,
-            height=430,
-        )
-    else:
-        st.info("No low-volume extremes in the selected window.")
-
-# =============================================================================
-# METHODOLOGY
-# =============================================================================
-with st.expander("Methodology"):
-    st.markdown(
-        """
-**Framework**
-
-For a very liquid ETF like QQQ, volume can function as a sentiment proxy. Heavy ETF turnover often appears
-when participants are rushing to hedge, reduce risk, or exit exposure. Quiet tape often aligns with confidence
-or indifference.
-
-**Signal construction**
-
-The app computes a rolling average and rolling standard deviation of volume over the selected baseline window.
-Each day’s volume is then translated into a z-score relative to that rolling baseline:
-
-`Volume Z-Score = (Today Volume - Rolling Mean) / Rolling Std Dev`
-
-A high positive z-score means the market is trading far above its recent normal pace. A deeply negative
-z-score means the tape is unusually quiet.
-
-**Why normalization matters**
-
-Raw ETF volume is imperfect for long-range comparison because the share count changes over time through
-creations and redemptions. When shares outstanding is available, the app expresses volume as a % of shares
-outstanding. That makes a current reading more comparable to an older reading.
-
-**Why low-volume signals need caution**
-
-Quiet sessions can reflect complacency, but they can also reflect half-days, holidays, summer lulls, or a
-dead news cycle. That is why the app includes an optional thin-session filter for low-volume flags.
-
-**Why this version is more stable**
-
-The app no longer depends on `Ticker.info` or a single Yahoo path just to function. OHLCV is fetched from
-multiple public sources with fallbacks, the normalization layer is optional rather than hard-required, and
-all date indices are standardized before any filtering or chart logic.
-        """
-    )
