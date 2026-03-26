@@ -310,7 +310,7 @@ def resolve_year_window(
     return int(custom_start_year), int(custom_end_year)
 
 def apply_filters(
-    filter_df: pd.DataFrame,
+    filter_table: pd.DataFrame,
     start_year: int,
     end_year: int,
     cycle_filter: str,
@@ -318,6 +318,23 @@ def apply_filters(
     fed_filter: str,
     complete_months_only: bool,
 ) -> pd.DataFrame:
+    df = filter_table.copy()
+
+    df = df[(df["year"] >= int(start_year)) & (df["year"] <= int(end_year))]
+
+    if complete_months_only:
+        df = df[df["is_complete_month"]]
+
+    if cycle_filter != "All years":
+        df = df[df["pres_cycle_bucket"] == cycle_filter]
+
+    if regime_filter != "All regimes":
+        df = df[df["regime_cycle"] == regime_filter]
+
+    if fed_filter != "All Fed regimes":
+        df = df[df["fed_regime"] == fed_filter]
+
+    return df.sort_index()
     df = filter_df.copy()
 
     df = df[(df["year"] >= int(start_year)) & (df["year"] <= int(end_year))]
@@ -1086,19 +1103,28 @@ with st.sidebar:
 
         Methodology
         • Monthly return is measured from prior month-end close to current month-end close.
+        
         • First-half and second-half contributions are split using the midpoint trading day of each month.
+        
         • Historical stats are computed only after the sample is explicitly filtered.
+        
         • Presidential cycle buckets are calendar-based and exact.
+        
         • Recession / expansion uses FRED USREC monthly recession indicator.
+        
         • Fed regime uses monthly change in FRED FEDFUNDS:
           Hiking if month-over-month change > 0
           Cutting if month-over-month change < 0
           Steady otherwise
+        
         • Complete months only excludes the current partial month from the historical sample.
 
         Accuracy guardrails
+        
         • Filter membership is applied before any aggregation.
+        
         • Observation count and distinct year count are shown below.
+        
         • Audit panel lists the exact included months in the sample.
         """
     )
