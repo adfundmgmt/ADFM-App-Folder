@@ -408,8 +408,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
 
-    fig = plt.figure(figsize=(18, 10.5), dpi=220)
-    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[5.8, 2.0], hspace=0.06)
+    fig = plt.figure(figsize=(18, 9.6), dpi=220)
+    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[6.2, 1.55], hspace=0.03)
     ax1 = fig.add_subplot(gs[0])
 
     x = np.arange(len(labels))
@@ -465,6 +465,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     ax1.margins(x=0.02)
     ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
     ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
+
     pad = 0.1 * max(abs(min_ret.min()), abs(max_ret.max())) if len(min_ret) > 0 else 0.5
     ymin = min(min_ret.min(), totals.min(), 0) - pad
     ymax = max(max_ret.max(), totals.max(), 0) + pad
@@ -484,6 +485,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
 
     ax_tbl = fig.add_subplot(gs[1])
     ax_tbl.axis("off")
+
     row_labels = ["1H %", "2H %", "Total %"]
     row1, row2, row3 = list(map(list, [mean_h1, mean_h2, totals]))
     cell_vals = [row1, row2, row3]
@@ -497,11 +499,11 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
         loc="center",
         cellLoc="center",
         rowLoc="center",
-        bbox=[0.02, 0.10, 0.96, 0.78],
+        bbox=[0.035, 0.18, 0.93, 0.68],
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(12)
-    table.scale(1.2, 1.9)
+    table.set_fontsize(11)
+    table.scale(1.0, 1.45)
 
     for (row, col), cell in table.get_celld().items():
         if row == 0:
@@ -515,8 +517,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
             cell.set_edgecolor("black")
             cell.set_linewidth(1.0)
 
-    fig.suptitle(title, fontsize=26, weight="bold", y=0.965)
-    fig.subplots_adjust(left=0.055, right=0.94, top=0.87, bottom=0.08)
+    fig.suptitle(title, fontsize=24, weight="bold", y=0.965)
+    fig.subplots_adjust(left=0.055, right=0.94, top=0.88, bottom=0.09)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=220)
