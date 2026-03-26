@@ -29,7 +29,7 @@ MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 
 # -------------------------- Streamlit UI -------------------------- #
-st.set_page_config(page_title="Seasonality Dashboard", layout="wide")
+st.set_page_config(page_title="Monthly Seasonality Explorer", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
 st.markdown(
