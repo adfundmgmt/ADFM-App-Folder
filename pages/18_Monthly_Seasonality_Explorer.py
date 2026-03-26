@@ -1121,20 +1121,30 @@ with st.sidebar:
         Purpose: Seasonality explorer for monthly return tendencies, hit-rate patterns, and intra-month path behavior across filtered historical samples.
 
         Methodology
+        
         • Monthly return is measured from prior month-end close to current month-end close.
+        
         • First-half and second-half contributions are split using the midpoint trading day of each month.
+        
         • Historical stats are computed only after the sample is explicitly filtered.
+        
         • Presidential cycle buckets are calendar-based and exact.
+        
         • Recession / expansion uses FRED USREC monthly recession indicator.
+        
         • Fed regime uses monthly change in FRED FEDFUNDS:
           Hiking if month-over-month change > 0
           Cutting if month-over-month change < 0
           Steady otherwise
+        
         • Complete months only excludes the current partial month from the historical sample.
 
         Accuracy guardrails
+        
         • Filter membership is applied before any aggregation.
+        
         • Observation count and distinct year count are shown below.
+        
         • Audit panel lists the exact included months in the sample.
         """
     )
