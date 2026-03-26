@@ -334,8 +334,6 @@ def apply_filters(
     start_year: int,
     end_year: int,
     cycle_filter: str,
-    regime_filter: str,
-    fed_filter: str,
     complete_months_only: bool,
 ) -> pd.DataFrame:
     df = filter_table.copy()
@@ -347,12 +345,6 @@ def apply_filters(
 
     if cycle_filter != "All years":
         df = df[df["pres_cycle_bucket"] == cycle_filter]
-
-    if regime_filter != "All regimes":
-        df = df[df["regime_cycle"] == regime_filter]
-
-    if fed_filter != "All Fed regimes":
-        df = df[df["fed_regime"] == fed_filter]
 
     return df.sort_index()
 
@@ -416,8 +408,8 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     min_ret = plot_df["min_ret"].to_numpy(float)
     max_ret = plot_df["max_ret"].to_numpy(float)
 
-    fig = plt.figure(figsize=(12.5, 7.8), dpi=200)
-    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[3.2, 1.1], hspace=0.25)
+    fig = plt.figure(figsize=(18, 10.5), dpi=220)
+    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[5.8, 2.0], hspace=0.06)
     ax1 = fig.add_subplot(gs[0])
 
     x = np.arange(len(labels))
@@ -431,21 +423,21 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     ax1.bar(
         x,
         mean_h1,
-        width=0.8,
+        width=0.84,
         color=seg_face(mean_h1),
         edgecolor=seg_edge(mean_h1),
-        linewidth=1.0,
+        linewidth=1.2,
         zorder=2,
         alpha=0.95,
     )
     bars2 = ax1.bar(
         x,
         mean_h2,
-        width=0.8,
+        width=0.84,
         bottom=mean_h1,
         color=seg_face(mean_h2),
         edgecolor=seg_edge(mean_h2),
-        linewidth=1.0,
+        linewidth=1.2,
         zorder=2,
         alpha=0.95,
         hatch="///",
@@ -460,31 +452,35 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
         yerr=yerr,
         fmt="none",
         ecolor="gray",
-        elinewidth=1.6,
-        alpha=0.7,
-        capsize=6,
+        elinewidth=1.8,
+        alpha=0.75,
+        capsize=7,
         zorder=3,
     )
 
     ax1.set_xticks(x, labels)
-    ax1.set_ylabel("Mean return (%)", weight="bold")
+    ax1.tick_params(axis="x", labelsize=13)
+    ax1.tick_params(axis="y", labelsize=13)
+    ax1.set_ylabel("Mean return (%)", weight="bold", fontsize=15)
+    ax1.margins(x=0.02)
     ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
     ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
     pad = 0.1 * max(abs(min_ret.min()), abs(max_ret.max())) if len(min_ret) > 0 else 0.5
     ymin = min(min_ret.min(), totals.min(), 0) - pad
     ymax = max(max_ret.max(), totals.max(), 0) + pad
     ax1.set_ylim(ymin, ymax)
-    ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.6, alpha=0.7, zorder=1)
+    ax1.grid(axis="y", linestyle="--", color="lightgrey", linewidth=0.7, alpha=0.75, zorder=1)
 
     ax2 = ax1.twinx()
-    ax2.scatter(x, hit, marker="D", s=90, color="black", zorder=4)
-    ax2.set_ylabel("Hit rate of positive returns", weight="bold")
+    ax2.scatter(x, hit, marker="D", s=110, color="black", zorder=4)
+    ax2.set_ylabel("Hit rate of positive returns", weight="bold", fontsize=15)
+    ax2.tick_params(axis="y", labelsize=13)
     ax2.set_ylim(0, 100)
     ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
     ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
 
     legend = [Patch(facecolor="white", edgecolor="black", hatch="///", label="Second half (hatched)")]
-    ax1.legend(handles=legend, loc="upper left", frameon=False)
+    ax1.legend(handles=legend, loc="upper left", frameon=False, fontsize=13)
 
     ax_tbl = fig.add_subplot(gs[1])
     ax_tbl.axis("off")
@@ -493,6 +489,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     cell_vals = [row1, row2, row3]
     cell_txt = [[_format_pct(v) for v in row] for row in cell_vals]
     cell_colors = _cell_colors(cell_vals)
+
     table = ax_tbl.table(
         cellText=cell_txt,
         rowLabels=row_labels,
@@ -500,9 +497,12 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
         loc="center",
         cellLoc="center",
         rowLoc="center",
+        bbox=[0.02, 0.10, 0.96, 0.78],
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(9)
+    table.set_fontsize(12)
+    table.scale(1.2, 1.9)
+
     for (row, col), cell in table.get_celld().items():
         if row == 0:
             cell.set_text_props(weight="bold")
@@ -513,12 +513,13 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
         else:
             cell.set_facecolor(cell_colors[row - 1][col])
             cell.set_edgecolor("black")
-            cell.set_linewidth(1)
+            cell.set_linewidth(1.0)
 
-    fig.suptitle(title, fontsize=17, weight="bold")
-    fig.tight_layout(pad=1.5)
+    fig.suptitle(title, fontsize=26, weight="bold", y=0.965)
+    fig.subplots_adjust(left=0.055, right=0.94, top=0.87, bottom=0.08)
+
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
+    fig.savefig(buf, format="png", dpi=220)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -906,7 +907,7 @@ def plot_intra_month_curve(
 ) -> io.BytesIO:
     df_sel, avg_sel = _month_paths_prev_eom_equal_weight_from_filtered(prices, filtered_halves, month_int)
 
-    fig = plt.figure(figsize=(12.5, 7.2), dpi=200, facecolor="#fcfcfb")
+    fig = plt.figure(figsize=(14.5, 8.3), dpi=220, facecolor="#fcfcfb")
     ax = fig.add_subplot(111, facecolor="#fcfcfb")
 
     if avg_sel.empty or df_sel.empty:
@@ -921,7 +922,7 @@ def plot_intra_month_curve(
         )
         ax.axis("off")
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="#fcfcfb")
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor="#fcfcfb")
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -1017,7 +1018,7 @@ def plot_intra_month_curve(
         transform=ax.transAxes,
         ha="right",
         va="top",
-        fontsize=9.1,
+        fontsize=10.5,
         color="#111111",
         bbox=dict(boxstyle="round,pad=0.32", fc="white", ec="#d6d6d6", lw=0.9),
     )
@@ -1025,17 +1026,18 @@ def plot_intra_month_curve(
     ax.set_title(
         f"{symbol_shown} {MONTH_LABELS[month_int - 1]} | Intra-Month Seasonality Curve",
         color="black",
-        fontsize=16,
+        fontsize=18,
         weight="bold",
         pad=10,
     )
-    ax.set_xlabel("Trading day since prior month-end anchor", color="black", fontsize=10, weight="bold")
-    ax.set_ylabel("Return from prior month-end (%)", color="black", fontsize=10, weight="bold")
+    ax.set_xlabel("Trading day since prior month-end anchor", color="black", fontsize=11, weight="bold")
+    ax.set_ylabel("Return from prior month-end (%)", color="black", fontsize=11, weight="bold")
     ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0, linewidth=0.8)
-    ax.tick_params(colors="black")
+    ax.tick_params(colors="black", labelsize=11)
     for sp in ax.spines.values():
         sp.set_color("#111111")
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.margins(x=0.01)
 
     if (today.month == month_int) and not df_sel.empty:
         m_cur = prices.loc[(prices.index.year == today.year) & (prices.index.month == month_int)]
@@ -1061,11 +1063,11 @@ def plot_intra_month_curve(
     pad_y = 0.12 * max(abs(y_min), abs(y_max)) if np.isfinite(y_min) and np.isfinite(y_max) else 0.0
     ax.set_ylim(y_min - pad_y, y_max + pad_y)
 
-    ax.legend(frameon=False, loc="upper left", fontsize=9)
-    fig.tight_layout(pad=1.0)
+    ax.legend(frameon=False, loc="upper left", fontsize=10)
+    fig.subplots_adjust(left=0.06, right=0.96, top=0.90, bottom=0.09)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200, facecolor="#fcfcfb")
+    fig.savefig(buf, format="png", dpi=220, facecolor="#fcfcfb")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -1121,30 +1123,15 @@ with st.sidebar:
         Purpose: Seasonality explorer for monthly return tendencies, hit-rate patterns, and intra-month path behavior across filtered historical samples.
 
         Methodology
-        
         • Monthly return is measured from prior month-end close to current month-end close.
-        
         • First-half and second-half contributions are split using the midpoint trading day of each month.
-        
         • Historical stats are computed only after the sample is explicitly filtered.
-        
         • Presidential cycle buckets are calendar-based and exact.
-        
-        • Recession / expansion uses FRED USREC monthly recession indicator.
-        
-        • Fed regime uses monthly change in FRED FEDFUNDS:
-          Hiking if month-over-month change > 0
-          Cutting if month-over-month change < 0
-          Steady otherwise
-        
         • Complete months only excludes the current partial month from the historical sample.
 
         Accuracy guardrails
-        
         • Filter membership is applied before any aggregation.
-        
         • Observation count and distinct year count are shown below.
-        
         • Audit panel lists the exact included months in the sample.
         """
     )
@@ -1176,18 +1163,6 @@ with st.sidebar:
         index=0,
     )
 
-    regime_filter = st.selectbox(
-        "Macro regime filter",
-        ["All regimes", "Expansion", "Recession"],
-        index=0,
-    )
-
-    fed_filter = st.selectbox(
-        "Fed regime filter",
-        ["All Fed regimes", "Hiking", "Cutting", "Steady"],
-        index=0,
-    )
-
     complete_months_only = st.checkbox("Complete months only", value=True)
 
 start_year, end_year = resolve_year_window(
@@ -1202,8 +1177,6 @@ filtered = apply_filters(
     start_year=start_year,
     end_year=end_year,
     cycle_filter=cycle_filter,
-    regime_filter=regime_filter,
-    fed_filter=fed_filter,
     complete_months_only=complete_months_only,
 )
 
@@ -1257,8 +1230,6 @@ filter_caption_parts = [
     f"{used_symbol}",
     f"{start_year}-{end_year}",
     cycle_filter,
-    regime_filter,
-    fed_filter,
     "Complete months only" if complete_months_only else "Partial current month allowed",
 ]
 chart_title = " | ".join(filter_caption_parts)
