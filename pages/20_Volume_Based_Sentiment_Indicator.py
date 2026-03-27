@@ -459,10 +459,14 @@ def build_chart(
         rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.02,
-        row_heights=[0.72, 0.17, 0.11],
+        vertical_spacing=0.04,
+        row_heights=[0.77, 0.14, 0.09],
         specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}]],
     )
+
+    # Standard candle colors
+    candle_up = "#16a34a"
+    candle_down = "#dc2626"
 
     fig.add_trace(
         go.Candlestick(
@@ -471,11 +475,15 @@ def build_chart(
             high=df["High"],
             low=df["Low"],
             close=df["Close"],
-            increasing_line_color=COLORS["up"],
-            increasing_fillcolor=COLORS["up_fill"],
-            decreasing_line_color=COLORS["down"],
-            decreasing_fillcolor=COLORS["down_fill"],
-            whiskerwidth=0.3,
+            increasing=dict(
+                line=dict(color=candle_up, width=1.15),
+                fillcolor=candle_up,
+            ),
+            decreasing=dict(
+                line=dict(color=candle_down, width=1.15),
+                fillcolor=candle_down,
+            ),
+            whiskerwidth=0.25,
             name=symbol,
             showlegend=False,
             hovertemplate=(
@@ -498,13 +506,13 @@ def build_chart(
             fig.add_trace(
                 go.Scatter(
                     x=highs_sparse.index,
-                    y=highs_sparse["High"] * 1.01,
+                    y=highs_sparse["High"] * 1.008,
                     mode="markers",
                     marker=dict(
                         symbol="circle",
                         size=7,
-                        color=COLORS["stress"],
-                        line=dict(width=0.8, color="#ffffff"),
+                        color=CHART["volume_hi"],
+                        line=dict(width=0.7, color="#ffffff"),
                     ),
                     name="High Vol",
                     showlegend=True,
@@ -523,13 +531,13 @@ def build_chart(
             fig.add_trace(
                 go.Scatter(
                     x=lows_sparse.index,
-                    y=lows_sparse["Low"] * 0.99,
+                    y=lows_sparse["Low"] * 0.992,
                     mode="markers",
                     marker=dict(
-                        symbol="circle",
-                        size=7,
-                        color=COLORS["quiet"],
-                        line=dict(width=0.8, color="#ffffff"),
+                        symbol="triangle-up",
+                        size=9,
+                        color="#16a34a",
+                        line=dict(width=0.7, color="#ffffff"),
                     ),
                     name="Low Vol",
                     showlegend=True,
@@ -550,22 +558,22 @@ def build_chart(
             y=last_close,
             line_width=1,
             line_dash="dot",
-            line_color=COLORS["last"],
+            line_color=CHART["last"],
             row=1,
             col=1,
             annotation_text=f"{last_close:,.2f}",
             annotation_position="top right",
-            annotation_font=dict(color=COLORS["last"], size=11),
+            annotation_font=dict(color=CHART["last"], size=11),
         )
 
-    base_volume_rgba = f"rgba(148, 163, 184, {min(max(vol_opacity + 0.12, 0.18), 0.65):.2f})"
+    base_volume_rgba = f"rgba(100, 116, 139, {min(max(vol_opacity, 0.10), 0.55):.2f})"
 
     bar_colors = np.where(
         df["Vol_Z"] >= high_z,
-        COLORS["volume_hi"],
+        CHART["volume_hi"],
         np.where(
             df["Vol_Z"] <= low_z,
-            COLORS["volume_lo"],
+            base_volume_rgba,
             base_volume_rgba,
         ),
     )
@@ -588,7 +596,7 @@ def build_chart(
             x=df.index,
             y=df["Vol_MA"],
             mode="lines",
-            line=dict(color=COLORS["ma"], width=1.8),
+            line=dict(color=CHART["ma"], width=1.8),
             name=f"{ma_period}D Vol MA",
             showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume MA: %{y:,.4f}<extra></extra>",
@@ -602,7 +610,7 @@ def build_chart(
             x=df.index,
             y=df["Vol_Z"],
             mode="lines",
-            line=dict(color=COLORS["z"], width=1.8),
+            line=dict(color=CHART["z"], width=1.6),
             name="Vol Z",
             showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume Z: %{y:.2f}<extra></extra>",
@@ -613,19 +621,19 @@ def build_chart(
 
     fig.add_hline(
         y=high_z,
-        line=dict(color=COLORS["stress"], width=1, dash="dot"),
+        line=dict(color=CHART["stress"], width=1, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=0,
-        line=dict(color=COLORS["zero"], width=1, dash="dot"),
+        line=dict(color=CHART["zero"], width=1, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=low_z,
-        line=dict(color=COLORS["quiet"], width=1, dash="dot"),
+        line=dict(color=CHART["quiet"], width=1, dash="dot"),
         row=3,
         col=1,
     )
@@ -633,13 +641,13 @@ def build_chart(
     for r in [1, 2, 3]:
         fig.update_yaxes(
             showgrid=True,
-            gridcolor=COLORS["grid"],
+            gridcolor=CHART["grid"],
             gridwidth=1,
             zeroline=False,
             showline=False,
             automargin=True,
-            tickfont=dict(color=COLORS["subtle"], size=11),
-            title_font=dict(color=COLORS["subtle"], size=11),
+            tickfont=dict(color=CHART["subtle"], size=11),
+            title_font=dict(color=CHART["subtle"], size=11),
             row=r,
             col=1,
         )
@@ -647,35 +655,34 @@ def build_chart(
     fig.update_xaxes(
         type="date",
         showgrid=True,
-        gridcolor=COLORS["grid"],
+        gridcolor=CHART["grid"],
         gridwidth=1,
         showline=False,
         rangeslider_visible=False,
         rangebreaks=rangebreaks,
         tickformat="%b '%y",
-        tickfont=dict(color=COLORS["subtle"], size=11),
+        tickfont=dict(color=CHART["subtle"], size=11),
     )
 
-    fig.update_yaxes(title_text=f"{symbol} Price", nticks=10, row=1, col=1)
+    fig.update_yaxes(title_text=f"{symbol} Price", nticks=9, row=1, col=1)
     fig.update_yaxes(title_text="Volume", nticks=4, row=2, col=1)
     fig.update_yaxes(title_text="Z-Score", nticks=4, row=3, col=1)
 
     fig.update_layout(
-        height=900,
+        height=980,
         title=dict(
-            text=f"{symbol} <span style='font-size:13px;color:{COLORS['subtle']}'>{vol_label}</span>",
+            text=f"{symbol} <span style='font-size:13px;color:{CHART['subtle']}'>{vol_label}</span>",
             x=0.01,
-            y=0.985,
+            y=0.992,
             xanchor="left",
             yanchor="top",
-            font=dict(size=21, color=COLORS["text"], family="Segoe UI, Arial, sans-serif"),
+            font=dict(size=20, color=CHART["text"], family="Arial, sans-serif"),
         ),
-        plot_bgcolor=COLORS["panel"],
-        paper_bgcolor=COLORS["bg"],
+        plot_bgcolor=CHART["panel"],
+        paper_bgcolor=CHART["bg"],
         hovermode="x unified",
-        hoverlabel=dict(bgcolor="#ffffff", font_color=COLORS["text"]),
-        margin=dict(l=48, r=20, t=56, b=18),
-        font=dict(family="Segoe UI, Arial, sans-serif", size=12, color=COLORS["text"]),
+        margin=dict(l=42, r=18, t=68, b=18),
+        font=dict(family="Arial, sans-serif", size=12, color=CHART["text"]),
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -683,14 +690,15 @@ def build_chart(
             y=1.01,
             xanchor="left",
             x=0.01,
-            bgcolor="rgba(0,0,0,0)",
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(0,0,0,0)",
             borderwidth=0,
-            font=dict(size=11, color=COLORS["subtle"]),
-            itemclick="toggle",
-            itemdoubleclick="toggleothers",
+            font=dict(size=11, color=CHART["subtle"]),
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
             traceorder="normal",
         ),
-        bargap=0.15,
+        bargap=0.08,
     )
 
     return fig
