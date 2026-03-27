@@ -2,14 +2,11 @@ import time
 import json
 from io import StringIO
 from typing import Optional, Tuple
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.patches import Rectangle
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 import yfinance as yf
@@ -29,7 +26,7 @@ CUSTOM_CSS = """
 <style>
     .block-container {
         max-width: 1720px;
-        padding-top: 2.0rem;
+        padding-top: 1.6rem;
         padding-bottom: 0.75rem;
     }
     h1, h2, h3 {
@@ -37,8 +34,8 @@ CUSTOM_CSS = """
         font-weight: 700;
     }
     .page-title-wrap {
-        padding-top: 0.10rem;
-        margin-bottom: 0.35rem;
+        padding-top: 0.15rem;
+        margin-bottom: 0.45rem;
     }
     .page-title-main {
         font-size: 54px;
@@ -89,7 +86,7 @@ CUSTOM_CSS = """
         background: #ffffff;
         border: 1px solid #e5e7eb;
         border-radius: 12px;
-        padding: 10px 10px 4px 10px;
+        padding: 8px 8px 2px 8px;
         margin-top: 8px;
     }
 </style>
@@ -114,24 +111,6 @@ DEFAULT_HEADERS = {
 }
 
 DEFAULT_SYMBOLS = ["QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "NVDA", "TSLA", "META"]
-
-CHART = {
-    "bg": "#ffffff",
-    "grid": "#e5e7eb",
-    "text": "#111827",
-    "subtle": "#6b7280",
-    "up": "#16a34a",
-    "down": "#dc2626",
-    "volume": "#cbd5e1",
-    "volume_hi": "#f59e0b",
-    "ma": "#3b82f6",
-    "z": "#4b5563",
-    "stress": "#d97706",
-    "quiet": "#2563eb",
-    "last": "#111827",
-    "zero": "#9ca3af",
-    "marker_low": "#16a34a",
-}
 
 # =============================================================================
 # HELPERS
@@ -370,70 +349,27 @@ def compute_signal_table(
 
     return out, vol_label
 
-def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 20) -> pd.DataFrame:
-    signal_df = df[df[signal_col]].copy()
-    if signal_df.empty:
-        return signal_df
-
-    kept_rows = []
-    last_kept = None
-    for idx, row in signal_df.iterrows():
-        if last_kept is None or (idx - last_kept).days >= gap_days:
-            kept_rows.append((idx, row))
-            last_kept = idx
-
-    if not kept_rows:
-        return signal_df.iloc[0:0].copy()
-
-    kept_index = [x[0] for x in kept_rows]
-    return signal_df.loc[kept_index].copy()
-
-def draw_candlesticks(ax, df: pd.DataFrame, width_days: float = 0.68) -> None:
-    dates = mdates.date2num(df.index.to_pydatetime())
-
-    for x, o, h, l, c in zip(
-        dates,
-        df["Open"].values,
-        df["High"].values,
-        df["Low"].values,
-        df["Close"].values,
-    ):
-        color = CHART["up"] if c >= o else CHART["down"]
-
-        ax.vlines(x, l, h, color=color, linewidth=1.0, zorder=2)
-
-        lower = min(o, c)
-        height = abs(c - o)
-
-        if height < 0.12:
-            ax.hlines(c, x - width_days / 2, x + width_days / 2, color=color, linewidth=1.4, zorder=3)
-        else:
-            rect = Rectangle(
-                (x - width_days / 2, lower),
-                width_days,
-                height,
-                facecolor=color,
-                edgecolor=color,
-                linewidth=0.8,
-                zorder=3,
-            )
-            ax.add_patch(rect)
-
 def build_plotly_chart(
     df: pd.DataFrame,
     symbol: str,
+    vol_label: str,
     ma_period: int,
-    high_z: float,
     show_last_price: bool,
+    vol_opacity: float,
 ):
     chart_df = df.copy()
+
+    if chart_df.empty:
+        fig = go.Figure()
+        fig.update_layout(height=760)
+        return fig
 
     fig = make_subplots(
         rows=2,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.78, 0.22],
+        vertical_spacing=0.035,
+        row_heights=[0.80, 0.20],
     )
 
     fig.add_trace(
@@ -457,32 +393,39 @@ def build_plotly_chart(
 
     high_vol_df = chart_df[chart_df["Is_High"].fillna(False)].copy()
     if not high_vol_df.empty:
+        low_anchor = (chart_df["High"] - chart_df["Low"]).replace(0, np.nan)
+        typical_range = float(low_anchor.median()) if low_anchor.notna().any() else 0.0
+        if not np.isfinite(typical_range) or typical_range <= 0:
+            typical_range = float(chart_df["Close"].median()) * 0.01
+
+        marker_y = high_vol_df["Low"] - typical_range * 0.18
+
         fig.add_trace(
             go.Scatter(
                 x=high_vol_df.index,
-                y=high_vol_df["Low"] * 0.992,
+                y=marker_y,
                 mode="markers",
                 marker=dict(
                     symbol="triangle-up",
-                    size=7,
+                    size=8,
                     color="#16a34a",
                     line=dict(width=0),
                 ),
                 name="High Vol",
                 hovertemplate=(
                     "<b>%{x|%b %d, %Y}</b><br>"
-                    "High-vol signal<extra></extra>"
+                    "High-volume signal<extra></extra>"
                 ),
             ),
             row=1,
             col=1,
         )
 
-    vol_colors = np.where(
-        chart_df["Is_High"].fillna(False),
-        "rgba(107,114,128,0.60)",
-        "rgba(203,213,225,0.85)"
-    )
+    base_rgba = f"rgba(148,163,184,{vol_opacity:.2f})"
+    high_rgba = "rgba(22,163,74,0.45)"
+    vol_colors = np.where(chart_df["Is_High"].fillna(False), high_rgba, base_rgba)
+
+    volume_hover_label = "Volume (%)" if "Shares Outstanding" in vol_label else "Volume"
 
     fig.add_trace(
         go.Bar(
@@ -491,7 +434,9 @@ def build_plotly_chart(
             marker_color=vol_colors,
             name="Volume",
             showlegend=False,
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>Volume: %{y:,.0f}<extra></extra>",
+            hovertemplate=f"<b>%{{x|%b %d, %Y}}</b><br>{volume_hover_label}: %{{y:,.4f}}<extra></extra>"
+            if "Shares Outstanding" in vol_label
+            else "<b>%{x|%b %d, %Y}</b><br>Volume: %{y:,.0f}<extra></extra>",
         ),
         row=2,
         col=1,
@@ -502,9 +447,11 @@ def build_plotly_chart(
             x=chart_df.index,
             y=chart_df["Vol_MA"],
             mode="lines",
-            line=dict(color="#2563eb", width=1.5),
+            line=dict(color="#2563eb", width=1.6),
             name=f"{ma_period}D Vol MA",
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>Vol MA: %{y:,.0f}<extra></extra>",
+            hovertemplate=f"<b>%{{x|%b %d, %Y}}</b><br>{ma_period}D Vol MA: %{{y:,.4f}}<extra></extra>"
+            if "Shares Outstanding" in vol_label
+            else f"<b>%{{x|%b %d, %Y}}</b><br>{ma_period}D Vol MA: %{{y:,.0f}}<extra></extra>",
         ),
         row=2,
         col=1,
@@ -512,6 +459,8 @@ def build_plotly_chart(
 
     if show_last_price and len(chart_df) > 0:
         last_close = float(chart_df["Close"].iloc[-1])
+        last_x = chart_df.index[-1]
+
         fig.add_hline(
             y=last_close,
             line_width=1,
@@ -522,34 +471,36 @@ def build_plotly_chart(
         )
 
         fig.add_annotation(
-            x=chart_df.index[-1],
+            x=last_x,
             y=last_close,
             text=f"{last_close:,.2f}",
             showarrow=False,
             xanchor="left",
             yanchor="bottom",
+            xshift=8,
             font=dict(size=11, color="#111827"),
-            bgcolor="rgba(255,255,255,0.85)",
-            bordercolor="rgba(0,0,0,0)",
+            bgcolor="rgba(255,255,255,0.90)",
+            bordercolor="rgba(17,24,39,0.15)",
+            borderwidth=1,
             row=1,
             col=1,
         )
 
     fig.update_layout(
-        height=760,
-        margin=dict(l=20, r=20, t=35, b=20),
+        height=780,
+        margin=dict(l=18, r=18, t=30, b=10),
         paper_bgcolor="white",
         plot_bgcolor="white",
         hovermode="x unified",
-        barmode="overlay",
         dragmode="pan",
         xaxis_rangeslider_visible=False,
+        bargap=0.0,
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.01,
             xanchor="left",
-            x=0,
+            x=0.0,
             bgcolor="rgba(0,0,0,0)",
             borderwidth=0,
             font=dict(size=11, color="#6b7280"),
@@ -585,7 +536,7 @@ def build_plotly_chart(
         zeroline=False,
         showline=False,
         tickfont=dict(size=10, color="#6b7280"),
-        title_text="Volume",
+        title_text=vol_label,
         title_font=dict(size=11, color="#6b7280"),
         fixedrange=False,
     )
@@ -593,22 +544,6 @@ def build_plotly_chart(
     fig.update_annotations(font=dict(color="#111827"))
 
     return fig
-
-plotly_fig = build_plotly_chart(
-    df=df,
-    symbol=symbol,
-    ma_period=ma_period,
-    high_z=high_z,
-    show_last_price=show_last_price,
-)
-
-st.markdown('<div class="chart-shell">', unsafe_allow_html=True)
-st.plotly_chart(plotly_fig, use_container_width=True, config={
-    "displayModeBar": False,
-    "scrollZoom": True,
-    "responsive": True,
-})
-st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================================================
 # SIDEBAR
@@ -628,7 +563,7 @@ What it shows:
 How to read it:
 <br>• Heavy volume usually shows fear, stress, hedging, or forced repositioning
 <br>• Very quiet tape can reflect complacency, but those signals are weaker
-<br>• The bottom panel matters most because it tells you where current activity sits versus normal
+<br>• The chart is intentionally simple: price on top, participation underneath
 </div>
 """,
     unsafe_allow_html=True,
@@ -697,11 +632,6 @@ exclude_thin_sessions = st.sidebar.checkbox(
     "Filter Thin Sessions",
     value=True,
     help="Removes obvious holiday and half-day distortions from low-volume signals.",
-)
-
-show_markers = st.sidebar.checkbox(
-    "Show Sparse Signal Markers",
-    value=True,
 )
 
 show_last_price = st.sidebar.checkbox(
@@ -852,20 +782,23 @@ with c5:
 # =============================================================================
 # CHART
 # =============================================================================
-fig = build_chart_image(
+plotly_fig = build_plotly_chart(
     df=df,
     symbol=symbol,
     vol_label=vol_label,
     ma_period=ma_period,
-    high_z=high_z,
-    low_z=low_z,
-    show_markers=show_markers,
     show_last_price=show_last_price,
     vol_opacity=vol_opacity,
 )
 
 st.markdown('<div class="chart-shell">', unsafe_allow_html=True)
-st.pyplot(fig, use_container_width=True)
+st.plotly_chart(
+    plotly_fig,
+    use_container_width=True,
+    config={
+        "displayModeBar": False,
+        "scrollZoom": True,
+        "responsive": True,
+    },
+)
 st.markdown("</div>", unsafe_allow_html=True)
-
-plt.close(fig)
