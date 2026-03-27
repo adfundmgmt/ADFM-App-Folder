@@ -25,35 +25,36 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
     .block-container {
-        max-width: 1680px;
-        padding-top: 3.0rem;
-        padding-bottom: 0.85rem;
+        max-width: 1720px;
+        padding-top: 2.0rem;
+        padding-bottom: 0.75rem;
     }
     h1, h2, h3 {
         letter-spacing: 0.05px;
         font-weight: 700;
     }
     .page-title-wrap {
-        padding-top: 0.15rem;
+        padding-top: 0.10rem;
         margin-bottom: 0.35rem;
     }
     .page-title-main {
-        font-size: 56px;
-        font-weight: 750;
-        color: #303445;
+        font-size: 54px;
+        font-weight: 760;
+        color: #1f2937;
         line-height: 1.02;
-        margin: 0 0 10px 0;
+        margin: 0 0 8px 0;
         padding: 0;
     }
     .page-title-sub {
         color: #6b7280;
         font-size: 15px;
-        line-height: 1.4;
-        margin-bottom: 20px;
+        line-height: 1.45;
+        margin-bottom: 18px;
+        max-width: 1200px;
     }
     .adfm-card {
         background: #fafafa;
-        border: 1px solid #e8e8e8;
+        border: 1px solid #e5e7eb;
         border-radius: 14px;
         padding: 13px 16px;
         margin-bottom: 10px;
@@ -66,8 +67,8 @@ CUSTOM_CSS = """
     }
     .adfm-value {
         font-size: 1.50rem;
-        font-weight: 750;
-        color: #1f2937;
+        font-weight: 760;
+        color: #111827;
         line-height: 1.08;
         margin-bottom: 6px;
     }
@@ -82,10 +83,10 @@ CUSTOM_CSS = """
         line-height: 1.45;
     }
     .chart-shell {
-        background: #0b0f14;
-        border: 1px solid #1f2937;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
         border-radius: 12px;
-        padding: 12px 12px 6px 12px;
+        padding: 8px 8px 2px 8px;
         margin-top: 8px;
     }
 </style>
@@ -111,24 +112,23 @@ DEFAULT_HEADERS = {
 
 DEFAULT_SYMBOLS = ["QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "NVDA", "TSLA", "META"]
 
-# Bloomberg-like chart palette
-COLORS = {
-    "bg": "#0b0f14",
-    "panel": "#0b0f14",
-    "grid": "rgba(255,255,255,0.08)",
-    "text": "#E5E7EB",
-    "subtle": "#9CA3AF",
-    "up": "#00C176",
-    "down": "#FF5B5B",
-    "volume": "rgba(120, 144, 156, 0.55)",
-    "volume_hi": "#F59E0B",
-    "volume_lo": "rgba(96, 165, 250, 0.80)",
-    "ma": "#4FC3F7",
-    "z": "#D1D5DB",
-    "stress": "#FF9F43",
-    "quiet": "#60A5FA",
-    "last": "#F3F4F6",
-    "zero": "rgba(255,255,255,0.25)",
+CHART = {
+    "bg": "#ffffff",
+    "panel": "#ffffff",
+    "grid": "rgba(15, 23, 42, 0.08)",
+    "text": "#111827",
+    "subtle": "#6b7280",
+    "up": "#10b981",
+    "down": "#ef4444",
+    "volume": "rgba(100, 116, 139, 0.35)",
+    "volume_hi": "#f59e0b",
+    "volume_lo": "#60a5fa",
+    "ma": "#38bdf8",
+    "z": "#4b5563",
+    "stress": "#d97706",
+    "quiet": "#2563eb",
+    "last": "#111827",
+    "zero": "rgba(17, 24, 39, 0.22)",
 }
 
 # =============================================================================
@@ -415,8 +415,8 @@ def build_chart(
         rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.015,
-        row_heights=[0.74, 0.16, 0.10],
+        vertical_spacing=0.04,
+        row_heights=[0.77, 0.14, 0.09],
         specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}]],
     )
 
@@ -427,11 +427,12 @@ def build_chart(
             high=df["High"],
             low=df["Low"],
             close=df["Close"],
-            increasing_line_color=COLORS["up"],
-            increasing_fillcolor=COLORS["up"],
-            decreasing_line_color=COLORS["down"],
-            decreasing_fillcolor=COLORS["down"],
-            whiskerwidth=0.35,
+            increasing_line_color=CHART["up"],
+            decreasing_line_color=CHART["down"],
+            increasing_fillcolor=CHART["up"],
+            decreasing_fillcolor=CHART["down"],
+            whiskerwidth=0.15,
+            opacity=0.95,
             name=symbol,
             showlegend=False,
             hovertemplate=(
@@ -454,13 +455,13 @@ def build_chart(
             fig.add_trace(
                 go.Scatter(
                     x=highs_sparse.index,
-                    y=highs_sparse["High"] * 1.01,
+                    y=highs_sparse["High"] * 1.006,
                     mode="markers",
                     marker=dict(
                         symbol="circle",
                         size=6,
-                        color=COLORS["stress"],
-                        line=dict(width=0.5, color=COLORS["bg"]),
+                        color=CHART["volume_hi"],
+                        line=dict(width=0.5, color="#ffffff"),
                     ),
                     name="High Vol",
                     showlegend=True,
@@ -479,13 +480,13 @@ def build_chart(
             fig.add_trace(
                 go.Scatter(
                     x=lows_sparse.index,
-                    y=lows_sparse["Low"] * 0.99,
+                    y=lows_sparse["Low"] * 0.994,
                     mode="markers",
                     marker=dict(
                         symbol="circle",
                         size=6,
-                        color=COLORS["quiet"],
-                        line=dict(width=0.5, color=COLORS["bg"]),
+                        color=CHART["volume_lo"],
+                        line=dict(width=0.5, color="#ffffff"),
                     ),
                     name="Low Vol",
                     showlegend=True,
@@ -506,22 +507,22 @@ def build_chart(
             y=last_close,
             line_width=1,
             line_dash="dot",
-            line_color=COLORS["last"],
+            line_color=CHART["last"],
             row=1,
             col=1,
             annotation_text=f"{last_close:,.2f}",
             annotation_position="top right",
-            annotation_font=dict(color=COLORS["last"], size=11),
+            annotation_font=dict(color=CHART["last"], size=11),
         )
 
-    base_volume_rgba = f"rgba(120, 144, 156, {min(max(vol_opacity + 0.18, 0.20), 0.75):.2f})"
+    base_volume_rgba = f"rgba(100, 116, 139, {min(max(vol_opacity, 0.10), 0.55):.2f})"
 
     bar_colors = np.where(
         df["Vol_Z"] >= high_z,
-        COLORS["volume_hi"],
+        CHART["volume_hi"],
         np.where(
             df["Vol_Z"] <= low_z,
-            COLORS["volume_lo"],
+            CHART["volume_lo"],
             base_volume_rgba,
         ),
     )
@@ -544,7 +545,7 @@ def build_chart(
             x=df.index,
             y=df["Vol_MA"],
             mode="lines",
-            line=dict(color=COLORS["ma"], width=1.6),
+            line=dict(color=CHART["ma"], width=1.8),
             name=f"{ma_period}D Vol MA",
             showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume MA: %{y:,.4f}<extra></extra>",
@@ -558,7 +559,7 @@ def build_chart(
             x=df.index,
             y=df["Vol_Z"],
             mode="lines",
-            line=dict(color=COLORS["z"], width=1.5),
+            line=dict(color=CHART["z"], width=1.6),
             name="Vol Z",
             showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume Z: %{y:.2f}<extra></extra>",
@@ -569,19 +570,19 @@ def build_chart(
 
     fig.add_hline(
         y=high_z,
-        line=dict(color=COLORS["stress"], width=1, dash="dot"),
+        line=dict(color=CHART["stress"], width=1, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=0,
-        line=dict(color=COLORS["zero"], width=1, dash="dot"),
+        line=dict(color=CHART["zero"], width=1, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=low_z,
-        line=dict(color=COLORS["quiet"], width=1, dash="dot"),
+        line=dict(color=CHART["quiet"], width=1, dash="dot"),
         row=3,
         col=1,
     )
@@ -589,13 +590,13 @@ def build_chart(
     for r in [1, 2, 3]:
         fig.update_yaxes(
             showgrid=True,
-            gridcolor=COLORS["grid"],
+            gridcolor=CHART["grid"],
             gridwidth=1,
             zeroline=False,
             showline=False,
             automargin=True,
-            tickfont=dict(color=COLORS["subtle"], size=11),
-            title_font=dict(color=COLORS["subtle"], size=11),
+            tickfont=dict(color=CHART["subtle"], size=11),
+            title_font=dict(color=CHART["subtle"], size=11),
             row=r,
             col=1,
         )
@@ -603,49 +604,50 @@ def build_chart(
     fig.update_xaxes(
         type="date",
         showgrid=True,
-        gridcolor=COLORS["grid"],
+        gridcolor=CHART["grid"],
         gridwidth=1,
         showline=False,
         rangeslider_visible=False,
         rangebreaks=rangebreaks,
         tickformat="%b '%y",
-        tickfont=dict(color=COLORS["subtle"], size=11),
+        tickfont=dict(color=CHART["subtle"], size=11),
     )
 
-    fig.update_yaxes(title_text=f"{symbol} Price", nticks=10, row=1, col=1)
+    fig.update_yaxes(title_text=f"{symbol} Price", nticks=9, row=1, col=1)
     fig.update_yaxes(title_text="Volume", nticks=4, row=2, col=1)
     fig.update_yaxes(title_text="Z-Score", nticks=4, row=3, col=1)
 
     fig.update_layout(
-        height=920,
+        height=980,
         title=dict(
-            text=f"{symbol} <span style='font-size:13px;color:{COLORS['subtle']}'>{vol_label}</span>",
+            text=f"{symbol} <span style='font-size:13px;color:{CHART['subtle']}'>{vol_label}</span>",
             x=0.01,
-            y=0.985,
+            y=0.992,
             xanchor="left",
             yanchor="top",
-            font=dict(size=20, color=COLORS["text"], family="Arial, sans-serif"),
+            font=dict(size=20, color=CHART["text"], family="Arial, sans-serif"),
         ),
-        plot_bgcolor=COLORS["panel"],
-        paper_bgcolor=COLORS["bg"],
+        plot_bgcolor=CHART["panel"],
+        paper_bgcolor=CHART["bg"],
         hovermode="x unified",
-        margin=dict(l=48, r=20, t=56, b=18),
-        font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
+        margin=dict(l=42, r=18, t=68, b=18),
+        font=dict(family="Arial, sans-serif", size=12, color=CHART["text"]),
         showlegend=True,
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.005,
+            y=1.01,
             xanchor="left",
             x=0.01,
-            bgcolor="rgba(0,0,0,0)",
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(0,0,0,0)",
             borderwidth=0,
-            font=dict(size=11, color=COLORS["subtle"]),
+            font=dict(size=11, color=CHART["subtle"]),
             itemclick="toggleothers",
             itemdoubleclick="toggle",
             traceorder="normal",
         ),
-        bargap=0.18,
+        bargap=0.08,
     )
 
     return fig
@@ -753,7 +755,7 @@ vol_opacity = st.sidebar.slider(
     "Base Volume Bar Opacity",
     min_value=0.08,
     max_value=0.40,
-    value=0.14,
+    value=0.18,
     step=0.02,
 )
 
