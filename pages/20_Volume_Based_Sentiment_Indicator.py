@@ -24,70 +24,75 @@ st.set_page_config(
 # =============================================================================
 CUSTOM_CSS = """
 <style>
+    .stApp {
+        background: linear-gradient(180deg, #f7f9fc 0%, #eef3f8 100%);
+    }
     .block-container {
-        max-width: 1720px;
-        padding-top: 2.0rem;
-        padding-bottom: 0.75rem;
+        max-width: 1600px;
+        padding-top: 2.2rem;
+        padding-bottom: 1rem;
     }
     h1, h2, h3 {
-        letter-spacing: 0.05px;
+        letter-spacing: -0.02em;
         font-weight: 700;
     }
     .page-title-wrap {
-        padding-top: 0.10rem;
-        margin-bottom: 0.35rem;
+        padding-top: 0.1rem;
+        margin-bottom: 0.65rem;
     }
     .page-title-main {
-        font-size: 54px;
+        font-size: 52px;
         font-weight: 760;
-        color: #1f2937;
+        color: #0f172a;
         line-height: 1.02;
-        margin: 0 0 8px 0;
+        margin: 0 0 10px 0;
         padding: 0;
     }
     .page-title-sub {
-        color: #6b7280;
+        color: #475467;
         font-size: 15px;
-        line-height: 1.45;
+        line-height: 1.5;
         margin-bottom: 18px;
-        max-width: 1200px;
+        max-width: 1080px;
     }
     .adfm-card {
-        background: #fafafa;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 13px 16px;
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid #dbe4ee;
+        border-radius: 16px;
+        padding: 14px 16px;
         margin-bottom: 10px;
         min-height: 112px;
+        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
     }
     .adfm-label {
-        color: #6b7280;
+        color: #667085;
         font-size: 0.86rem;
         margin-bottom: 4px;
     }
     .adfm-value {
-        font-size: 1.50rem;
+        font-size: 1.46rem;
         font-weight: 760;
-        color: #111827;
+        color: #101828;
         line-height: 1.08;
         margin-bottom: 6px;
     }
     .adfm-sub {
-        color: #6b7280;
+        color: #667085;
         font-size: 0.84rem;
         line-height: 1.35;
     }
     .sidebar-note {
-        color: #666;
+        color: #475467;
         font-size: 0.90rem;
-        line-height: 1.45;
+        line-height: 1.5;
     }
     .chart-shell {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        padding: 8px 8px 2px 8px;
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid #dbe4ee;
+        border-radius: 18px;
+        padding: 12px 12px 6px 12px;
         margin-top: 8px;
+        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.06);
     }
 </style>
 """
@@ -112,24 +117,27 @@ DEFAULT_HEADERS = {
 
 DEFAULT_SYMBOLS = ["QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "NVDA", "TSLA", "META"]
 
-CHART = {
+COLORS = {
     "bg": "#ffffff",
     "panel": "#ffffff",
-    "grid": "rgba(15, 23, 42, 0.08)",
-    "text": "#111827",
-    "subtle": "#6b7280",
-    "up": "#10b981",
-    "down": "#ef4444",
-    "volume": "rgba(100, 116, 139, 0.35)",
-    "volume_hi": "#f59e0b",
-    "volume_lo": "#60a5fa",
-    "ma": "#38bdf8",
-    "z": "#4b5563",
-    "stress": "#d97706",
+    "grid": "rgba(15, 23, 42, 0.09)",
+    "text": "#0f172a",
+    "subtle": "#667085",
+    "up": "#16a34a",
+    "up_fill": "rgba(22, 163, 74, 0.72)",
+    "down": "#dc2626",
+    "down_fill": "rgba(220, 38, 38, 0.72)",
+    "volume": "rgba(148, 163, 184, 0.48)",
+    "volume_hi": "#d97706",
+    "volume_lo": "rgba(37, 99, 235, 0.78)",
+    "ma": "#0284c7",
+    "z": "#334155",
+    "stress": "#ea580c",
     "quiet": "#2563eb",
     "last": "#111827",
-    "zero": "rgba(17, 24, 39, 0.22)",
+    "zero": "rgba(71, 85, 105, 0.25)",
 }
+
 
 # =============================================================================
 # HELPERS
@@ -143,14 +151,18 @@ def metric_card(label: str, value: str, subtext: str = "") -> str:
     </div>
     """
 
+
 def safe_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
+
 
 def format_billions(x: float) -> str:
     return f"{x / 1_000_000_000:.2f}B"
 
+
 def today_utc_ts() -> pd.Timestamp:
     return pd.Timestamp.utcnow().tz_localize(None).normalize()
+
 
 def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -167,6 +179,22 @@ def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
     out = out[~out.index.duplicated(keep="last")].copy()
     return out
 
+
+def adjust_ohlc_with_adj_close(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "Adj Close" not in out.columns:
+        return out
+
+    raw_close = safe_numeric(out["Close"])
+    adj_close = safe_numeric(out["Adj Close"])
+    factor = (adj_close / raw_close.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan).fillna(1.0)
+
+    for col in ["Open", "High", "Low", "Close"]:
+        out[col] = safe_numeric(out[col]) * factor
+
+    return out
+
+
 def _request_text(url: str, timeout: int = 20, retries: int = 3, sleep_s: float = 1.0) -> str:
     last_err = None
     for attempt in range(retries):
@@ -179,6 +207,7 @@ def _request_text(url: str, timeout: int = 20, retries: int = 3, sleep_s: float 
             if attempt < retries - 1:
                 time.sleep(sleep_s * (attempt + 1))
     raise last_err
+
 
 def fetch_from_stooq(symbol: str, start_date: pd.Timestamp) -> pd.DataFrame:
     stooq_symbol = symbol.lower() + ".us"
@@ -207,6 +236,7 @@ def fetch_from_stooq(symbol: str, start_date: pd.Timestamp) -> pd.DataFrame:
     df = df.set_index("Date")
     return normalize_dt_index(df)
 
+
 def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     period1 = int(start_date.timestamp())
     period2 = int((end_date + pd.Timedelta(days=1)).timestamp())
@@ -232,30 +262,34 @@ def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: 
     if not timestamps:
         raise ValueError("Yahoo Chart API returned empty timestamps.")
 
-    close_vals = adjclose if adjclose is not None else quote.get("close")
+    raw_close = quote.get("close")
+    df = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(timestamps, unit="s", utc=True),
+            "Open": quote.get("open"),
+            "High": quote.get("high"),
+            "Low": quote.get("low"),
+            "Close": raw_close,
+            "Adj Close": adjclose if adjclose is not None else raw_close,
+            "Volume": quote.get("volume"),
+        }
+    )
 
-    df = pd.DataFrame({
-        "Date": pd.to_datetime(timestamps, unit="s", utc=True),
-        "Open": quote.get("open"),
-        "High": quote.get("high"),
-        "Low": quote.get("low"),
-        "Close": close_vals,
-        "Volume": quote.get("volume"),
-    })
-
-    for col in ["Open", "High", "Low", "Close", "Volume"]:
+    for col in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
         df[col] = safe_numeric(df[col])
 
+    df = adjust_ohlc_with_adj_close(df)
     df = df.dropna(subset=["Date", "Open", "High", "Low", "Close", "Volume"]).copy()
     df = df.set_index("Date")
     return normalize_dt_index(df)
+
 
 def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     df = yf.download(
         symbol,
         start=start_date.strftime("%Y-%m-%d"),
         end=(end_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-        auto_adjust=True,
+        auto_adjust=False,
         progress=False,
         threads=False,
     )
@@ -267,6 +301,10 @@ def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date
         df.columns = [c[0] for c in df.columns]
 
     df = df.rename(columns=str.title)
+    if "Adj Close" not in df.columns:
+        df["Adj Close"] = df["Close"]
+
+    df = adjust_ohlc_with_adj_close(df)
     needed = ["Open", "High", "Low", "Close", "Volume"]
     df = df[needed].copy()
 
@@ -275,6 +313,7 @@ def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date
 
     df = df.dropna(subset=needed).copy()
     return normalize_dt_index(df)
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_ohlcv(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> Tuple[pd.DataFrame, str]:
@@ -303,6 +342,7 @@ def fetch_ohlcv(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -
 
     raise RuntimeError(" | ".join(errors))
 
+
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_shares_outstanding(symbol: str) -> Optional[float]:
     try:
@@ -326,6 +366,7 @@ def fetch_shares_outstanding(symbol: str) -> Optional[float]:
 
     return None
 
+
 def build_rangebreaks(index: pd.DatetimeIndex) -> list[dict]:
     if len(index) == 0:
         return []
@@ -337,6 +378,7 @@ def build_rangebreaks(index: pd.DatetimeIndex) -> list[dict]:
     if len(missing_bdays) > 0:
         rangebreaks.append(dict(values=missing_bdays.strftime("%Y-%m-%d").tolist()))
     return rangebreaks
+
 
 def compute_signal_table(
     df: pd.DataFrame,
@@ -380,6 +422,7 @@ def compute_signal_table(
 
     return out, vol_label
 
+
 def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 20) -> pd.DataFrame:
     signal_df = df[df[signal_col]].copy()
     if signal_df.empty:
@@ -398,6 +441,7 @@ def sparse_signal_points(df: pd.DataFrame, signal_col: str, gap_days: int = 20) 
     kept_index = [x[0] for x in kept_rows]
     return signal_df.loc[kept_index].copy()
 
+
 def build_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -415,8 +459,8 @@ def build_chart(
         rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.04,
-        row_heights=[0.77, 0.14, 0.09],
+        vertical_spacing=0.02,
+        row_heights=[0.72, 0.17, 0.11],
         specs=[[{"type": "candlestick"}], [{"type": "bar"}], [{"type": "scatter"}]],
     )
 
@@ -427,12 +471,11 @@ def build_chart(
             high=df["High"],
             low=df["Low"],
             close=df["Close"],
-            increasing_line_color=CHART["up"],
-            decreasing_line_color=CHART["down"],
-            increasing_fillcolor=CHART["up"],
-            decreasing_fillcolor=CHART["down"],
-            whiskerwidth=0.15,
-            opacity=0.95,
+            increasing_line_color=COLORS["up"],
+            increasing_fillcolor=COLORS["up_fill"],
+            decreasing_line_color=COLORS["down"],
+            decreasing_fillcolor=COLORS["down_fill"],
+            whiskerwidth=0.3,
             name=symbol,
             showlegend=False,
             hovertemplate=(
@@ -455,13 +498,13 @@ def build_chart(
             fig.add_trace(
                 go.Scatter(
                     x=highs_sparse.index,
-                    y=highs_sparse["High"] * 1.006,
+                    y=highs_sparse["High"] * 1.01,
                     mode="markers",
                     marker=dict(
                         symbol="circle",
-                        size=6,
-                        color=CHART["volume_hi"],
-                        line=dict(width=0.5, color="#ffffff"),
+                        size=7,
+                        color=COLORS["stress"],
+                        line=dict(width=0.8, color="#ffffff"),
                     ),
                     name="High Vol",
                     showlegend=True,
@@ -480,13 +523,13 @@ def build_chart(
             fig.add_trace(
                 go.Scatter(
                     x=lows_sparse.index,
-                    y=lows_sparse["Low"] * 0.994,
+                    y=lows_sparse["Low"] * 0.99,
                     mode="markers",
                     marker=dict(
                         symbol="circle",
-                        size=6,
-                        color=CHART["volume_lo"],
-                        line=dict(width=0.5, color="#ffffff"),
+                        size=7,
+                        color=COLORS["quiet"],
+                        line=dict(width=0.8, color="#ffffff"),
                     ),
                     name="Low Vol",
                     showlegend=True,
@@ -507,22 +550,22 @@ def build_chart(
             y=last_close,
             line_width=1,
             line_dash="dot",
-            line_color=CHART["last"],
+            line_color=COLORS["last"],
             row=1,
             col=1,
             annotation_text=f"{last_close:,.2f}",
             annotation_position="top right",
-            annotation_font=dict(color=CHART["last"], size=11),
+            annotation_font=dict(color=COLORS["last"], size=11),
         )
 
-    base_volume_rgba = f"rgba(100, 116, 139, {min(max(vol_opacity, 0.10), 0.55):.2f})"
+    base_volume_rgba = f"rgba(148, 163, 184, {min(max(vol_opacity + 0.12, 0.18), 0.65):.2f})"
 
     bar_colors = np.where(
         df["Vol_Z"] >= high_z,
-        CHART["volume_hi"],
+        COLORS["volume_hi"],
         np.where(
             df["Vol_Z"] <= low_z,
-            CHART["volume_lo"],
+            COLORS["volume_lo"],
             base_volume_rgba,
         ),
     )
@@ -545,7 +588,7 @@ def build_chart(
             x=df.index,
             y=df["Vol_MA"],
             mode="lines",
-            line=dict(color=CHART["ma"], width=1.8),
+            line=dict(color=COLORS["ma"], width=1.8),
             name=f"{ma_period}D Vol MA",
             showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume MA: %{y:,.4f}<extra></extra>",
@@ -559,7 +602,7 @@ def build_chart(
             x=df.index,
             y=df["Vol_Z"],
             mode="lines",
-            line=dict(color=CHART["z"], width=1.6),
+            line=dict(color=COLORS["z"], width=1.8),
             name="Vol Z",
             showlegend=True,
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Volume Z: %{y:.2f}<extra></extra>",
@@ -570,19 +613,19 @@ def build_chart(
 
     fig.add_hline(
         y=high_z,
-        line=dict(color=CHART["stress"], width=1, dash="dot"),
+        line=dict(color=COLORS["stress"], width=1, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=0,
-        line=dict(color=CHART["zero"], width=1, dash="dot"),
+        line=dict(color=COLORS["zero"], width=1, dash="dot"),
         row=3,
         col=1,
     )
     fig.add_hline(
         y=low_z,
-        line=dict(color=CHART["quiet"], width=1, dash="dot"),
+        line=dict(color=COLORS["quiet"], width=1, dash="dot"),
         row=3,
         col=1,
     )
@@ -590,13 +633,13 @@ def build_chart(
     for r in [1, 2, 3]:
         fig.update_yaxes(
             showgrid=True,
-            gridcolor=CHART["grid"],
+            gridcolor=COLORS["grid"],
             gridwidth=1,
             zeroline=False,
             showline=False,
             automargin=True,
-            tickfont=dict(color=CHART["subtle"], size=11),
-            title_font=dict(color=CHART["subtle"], size=11),
+            tickfont=dict(color=COLORS["subtle"], size=11),
+            title_font=dict(color=COLORS["subtle"], size=11),
             row=r,
             col=1,
         )
@@ -604,34 +647,35 @@ def build_chart(
     fig.update_xaxes(
         type="date",
         showgrid=True,
-        gridcolor=CHART["grid"],
+        gridcolor=COLORS["grid"],
         gridwidth=1,
         showline=False,
         rangeslider_visible=False,
         rangebreaks=rangebreaks,
         tickformat="%b '%y",
-        tickfont=dict(color=CHART["subtle"], size=11),
+        tickfont=dict(color=COLORS["subtle"], size=11),
     )
 
-    fig.update_yaxes(title_text=f"{symbol} Price", nticks=9, row=1, col=1)
+    fig.update_yaxes(title_text=f"{symbol} Price", nticks=10, row=1, col=1)
     fig.update_yaxes(title_text="Volume", nticks=4, row=2, col=1)
     fig.update_yaxes(title_text="Z-Score", nticks=4, row=3, col=1)
 
     fig.update_layout(
-        height=980,
+        height=900,
         title=dict(
-            text=f"{symbol} <span style='font-size:13px;color:{CHART['subtle']}'>{vol_label}</span>",
+            text=f"{symbol} <span style='font-size:13px;color:{COLORS['subtle']}'>{vol_label}</span>",
             x=0.01,
-            y=0.992,
+            y=0.985,
             xanchor="left",
             yanchor="top",
-            font=dict(size=20, color=CHART["text"], family="Arial, sans-serif"),
+            font=dict(size=21, color=COLORS["text"], family="Segoe UI, Arial, sans-serif"),
         ),
-        plot_bgcolor=CHART["panel"],
-        paper_bgcolor=CHART["bg"],
+        plot_bgcolor=COLORS["panel"],
+        paper_bgcolor=COLORS["bg"],
         hovermode="x unified",
-        margin=dict(l=42, r=18, t=68, b=18),
-        font=dict(family="Arial, sans-serif", size=12, color=CHART["text"]),
+        hoverlabel=dict(bgcolor="#ffffff", font_color=COLORS["text"]),
+        margin=dict(l=48, r=20, t=56, b=18),
+        font=dict(family="Segoe UI, Arial, sans-serif", size=12, color=COLORS["text"]),
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -639,18 +683,18 @@ def build_chart(
             y=1.01,
             xanchor="left",
             x=0.01,
-            bgcolor="rgba(255,255,255,0.85)",
-            bordercolor="rgba(0,0,0,0)",
+            bgcolor="rgba(0,0,0,0)",
             borderwidth=0,
-            font=dict(size=11, color=CHART["subtle"]),
-            itemclick="toggleothers",
-            itemdoubleclick="toggle",
+            font=dict(size=11, color=COLORS["subtle"]),
+            itemclick="toggle",
+            itemdoubleclick="toggleothers",
             traceorder="normal",
         ),
-        bargap=0.08,
+        bargap=0.15,
     )
 
     return fig
+
 
 # =============================================================================
 # SIDEBAR
@@ -755,7 +799,7 @@ vol_opacity = st.sidebar.slider(
     "Base Volume Bar Opacity",
     min_value=0.08,
     max_value=0.40,
-    value=0.18,
+    value=0.14,
     step=0.02,
 )
 
