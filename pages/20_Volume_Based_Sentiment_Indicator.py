@@ -2,6 +2,8 @@ import time
 import json
 from io import StringIO
 from typing import Optional, Tuple
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 
 import numpy as np
 import pandas as pd
@@ -417,191 +419,196 @@ def draw_candlesticks(ax, df: pd.DataFrame, width_days: float = 0.68) -> None:
             )
             ax.add_patch(rect)
 
-def build_chart_image(
+def build_plotly_chart(
     df: pd.DataFrame,
     symbol: str,
-    vol_label: str,
     ma_period: int,
     high_z: float,
-    low_z: float,
-    show_markers: bool,
     show_last_price: bool,
-    vol_opacity: float,
 ):
-    fig = plt.figure(figsize=(18, 11), dpi=180, facecolor=CHART["bg"])
-    gs = fig.add_gridspec(3, 1, height_ratios=[7.8, 1.5, 1.2], hspace=0.08)
+    chart_df = df.copy()
 
-    ax_price = fig.add_subplot(gs[0])
-    ax_vol = fig.add_subplot(gs[1], sharex=ax_price)
-    ax_z = fig.add_subplot(gs[2], sharex=ax_price)
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.78, 0.22],
+    )
 
-    for ax in [ax_price, ax_vol, ax_z]:
-        ax.set_facecolor(CHART["bg"])
-        ax.grid(True, color=CHART["grid"], linewidth=0.8, alpha=0.7)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_visible(False)
-        ax.spines["bottom"].set_visible(False)
-        ax.tick_params(axis="both", colors=CHART["subtle"], labelsize=10, length=0, pad=8)
+    fig.add_trace(
+        go.Candlestick(
+            x=chart_df.index,
+            open=chart_df["Open"],
+            high=chart_df["High"],
+            low=chart_df["Low"],
+            close=chart_df["Close"],
+            increasing_line_color="#16a34a",
+            increasing_fillcolor="#16a34a",
+            decreasing_line_color="#dc2626",
+            decreasing_fillcolor="#dc2626",
+            line_width=1,
+            name=symbol,
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
 
-    draw_candlesticks(ax_price, df)
-
-    if show_markers:
-        highs_sparse = sparse_signal_points(df, "Is_High", gap_days=20)
-        lows_sparse = sparse_signal_points(df, "Is_Low", gap_days=20)
-
-        if not highs_sparse.empty:
-            ax_price.scatter(
-                highs_sparse.index,
-                highs_sparse["High"] * 1.008,
-                s=28,
-                color=CHART["volume_hi"],
-                marker="o",
-                edgecolors="white",
-                linewidths=0.6,
-                zorder=4,
-                label="High Vol",
-            )
-
-        if not lows_sparse.empty:
-            ax_price.scatter(
-                lows_sparse.index,
-                lows_sparse["Low"] * 0.992,
-                s=54,
-                color=CHART["marker_low"],
-                marker="^",
-                edgecolors="white",
-                linewidths=0.6,
-                zorder=4,
-                label="Low Vol",
-            )
-
-    if show_last_price and len(df) > 0:
-        last_close = float(df["Close"].iloc[-1])
-        ax_price.axhline(last_close, color=CHART["last"], linewidth=0.9, linestyle=":")
-        ax_price.text(
-            df.index[-1],
-            last_close,
-            f" {last_close:,.2f}",
-            va="bottom",
-            ha="left",
-            fontsize=10,
-            color=CHART["last"],
+    high_vol_df = chart_df[chart_df["Is_High"].fillna(False)].copy()
+    if not high_vol_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=high_vol_df.index,
+                y=high_vol_df["Low"] * 0.992,
+                mode="markers",
+                marker=dict(
+                    symbol="triangle-up",
+                    size=7,
+                    color="#16a34a",
+                    line=dict(width=0),
+                ),
+                name="High Vol",
+                hovertemplate=(
+                    "<b>%{x|%b %d, %Y}</b><br>"
+                    "High-vol signal<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
         )
 
-    base_alpha = min(max(vol_opacity, 0.10), 0.55)
-    vol_colors = np.where(df["Vol_Z"] >= high_z, CHART["volume_hi"], CHART["volume"])
-
-    ax_vol.bar(
-        df.index,
-        df["Vol_Display"],
-        width=0.85,
-        color=vol_colors,
-        alpha=base_alpha if len(df) == 0 else 1.0,
-        edgecolor="none",
-        label="Volume",
-        zorder=2,
+    vol_colors = np.where(
+        chart_df["Is_High"].fillna(False),
+        "rgba(107,114,128,0.60)",
+        "rgba(203,213,225,0.85)"
     )
 
-    for bar, z in zip(ax_vol.patches, df["Vol_Z"].fillna(0).values):
-        if z < high_z:
-            r, g, b = (203/255, 213/255, 225/255)
-            bar.set_facecolor((r, g, b, base_alpha))
-
-    ax_vol.plot(
-        df.index,
-        df["Vol_MA"],
-        color=CHART["ma"],
-        linewidth=1.5,
-        label=f"{ma_period}D Vol MA",
-        zorder=3,
+    fig.add_trace(
+        go.Bar(
+            x=chart_df.index,
+            y=chart_df["Vol_Display"],
+            marker_color=vol_colors,
+            name="Volume",
+            showlegend=False,
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>Volume: %{y:,.0f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
     )
 
-    ax_z.plot(
-        df.index,
-        df["Vol_Z"],
-        color=CHART["z"],
-        linewidth=1.4,
-        label="Vol Z",
-        zorder=3,
-    )
-    ax_z.axhline(high_z, color=CHART["stress"], linewidth=1.0, linestyle=(0, (2, 2)))
-    ax_z.axhline(0, color=CHART["zero"], linewidth=0.9, linestyle=":")
-    ax_z.axhline(low_z, color=CHART["quiet"], linewidth=1.0, linestyle=(0, (2, 2)))
-
-    ax_price.set_ylabel(f"{symbol} Price", color=CHART["subtle"], fontsize=11)
-    ax_vol.set_ylabel("Volume", color=CHART["subtle"], fontsize=11)
-    ax_z.set_ylabel("Z-Score", color=CHART["subtle"], fontsize=11)
-
-    title_text = f"{symbol}  {vol_label}"
-    fig.suptitle(
-        title_text,
-        x=0.06,
-        y=0.982,
-        ha="left",
-        va="top",
-        fontsize=18,
-        fontweight="bold",
-        color=CHART["text"],
+    fig.add_trace(
+        go.Scatter(
+            x=chart_df.index,
+            y=chart_df["Vol_MA"],
+            mode="lines",
+            line=dict(color="#2563eb", width=1.5),
+            name=f"{ma_period}D Vol MA",
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>Vol MA: %{y:,.0f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
     )
 
-    legend_handles = []
-    legend_labels = []
+    if show_last_price and len(chart_df) > 0:
+        last_close = float(chart_df["Close"].iloc[-1])
+        fig.add_hline(
+            y=last_close,
+            line_width=1,
+            line_dash="dot",
+            line_color="#111827",
+            row=1,
+            col=1,
+        )
 
-    if show_markers:
-        if df["Is_High"].fillna(False).any():
-            h1 = plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=CHART["volume_hi"],
-                            markeredgecolor="white", markeredgewidth=0.6, markersize=6, linewidth=0)
-            legend_handles.append(h1)
-            legend_labels.append("High Vol")
+        fig.add_annotation(
+            x=chart_df.index[-1],
+            y=last_close,
+            text=f"{last_close:,.2f}",
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font=dict(size=11, color="#111827"),
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(0,0,0,0)",
+            row=1,
+            col=1,
+        )
 
-        if df["Is_Low"].fillna(False).any():
-            h2 = plt.Line2D([0], [0], marker="^", color="w", markerfacecolor=CHART["marker_low"],
-                            markeredgecolor="white", markeredgewidth=0.6, markersize=7, linewidth=0)
-            legend_handles.append(h2)
-            legend_labels.append("Low Vol")
-
-    h3 = plt.Line2D([0], [0], color=(203/255, 213/255, 225/255), linewidth=6, alpha=0.9)
-    h4 = plt.Line2D([0], [0], color=CHART["ma"], linewidth=1.5)
-    h5 = plt.Line2D([0], [0], color=CHART["z"], linewidth=1.4)
-
-    legend_handles.extend([h3, h4, h5])
-    legend_labels.extend(["Volume", f"{ma_period}D Vol MA", "Vol Z"])
-
-    fig.legend(
-        legend_handles,
-        legend_labels,
-        loc="upper left",
-        bbox_to_anchor=(0.095, 0.958),
-        frameon=False,
-        ncol=min(len(legend_labels), 5),
-        fontsize=10,
-        labelcolor=CHART["subtle"],
-        handletextpad=0.5,
-        columnspacing=1.1,
+    fig.update_layout(
+        height=760,
+        margin=dict(l=20, r=20, t=35, b=20),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        hovermode="x unified",
+        barmode="overlay",
+        dragmode="pan",
+        xaxis_rangeslider_visible=False,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.01,
+            xanchor="left",
+            x=0,
+            bgcolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            font=dict(size=11, color="#6b7280"),
+        ),
     )
 
-    months_span = max(1, (df.index.max() - df.index.min()).days / 30.5)
-    if months_span <= 12:
-        locator = mdates.MonthLocator(interval=1)
-    elif months_span <= 30:
-        locator = mdates.MonthLocator(interval=3)
-    else:
-        locator = mdates.MonthLocator(interval=6)
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="#f3f4f6",
+        showline=False,
+        zeroline=False,
+        tickfont=dict(size=11, color="#6b7280"),
+    )
 
-    formatter = mdates.DateFormatter("%b '%y")
-    ax_z.xaxis.set_major_locator(locator)
-    ax_z.xaxis.set_major_formatter(formatter)
-    plt.setp(ax_price.get_xticklabels(), visible=False)
-    plt.setp(ax_vol.get_xticklabels(), visible=False)
+    fig.update_yaxes(
+        row=1,
+        col=1,
+        showgrid=True,
+        gridcolor="#e5e7eb",
+        zeroline=False,
+        showline=False,
+        tickfont=dict(size=11, color="#6b7280"),
+        title_text="Price",
+        title_font=dict(size=11, color="#6b7280"),
+        fixedrange=False,
+    )
 
-    left_pad = pd.Timedelta(days=6)
-    right_pad = pd.Timedelta(days=8)
-    ax_price.set_xlim(df.index.min() - left_pad, df.index.max() + right_pad)
+    fig.update_yaxes(
+        row=2,
+        col=1,
+        showgrid=True,
+        gridcolor="#f3f4f6",
+        zeroline=False,
+        showline=False,
+        tickfont=dict(size=10, color="#6b7280"),
+        title_text="Volume",
+        title_font=dict(size=11, color="#6b7280"),
+        fixedrange=False,
+    )
 
-    fig.tight_layout(rect=[0.035, 0.04, 0.995, 0.95])
+    fig.update_annotations(font=dict(color="#111827"))
 
     return fig
+
+plotly_fig = build_plotly_chart(
+    df=df,
+    symbol=symbol,
+    ma_period=ma_period,
+    high_z=high_z,
+    show_last_price=show_last_price,
+)
+
+st.markdown('<div class="chart-shell">', unsafe_allow_html=True)
+st.plotly_chart(plotly_fig, use_container_width=True, config={
+    "displayModeBar": False,
+    "scrollZoom": True,
+    "responsive": True,
+})
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================================================
 # SIDEBAR
