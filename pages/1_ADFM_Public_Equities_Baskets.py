@@ -41,25 +41,6 @@ MARKET_CAP_EXCEPTIONS = {
 }
 
 # -----------------------------
-# Basket maintenance log
-# -----------------------------
-BASKET_REVISIONS = {
-    "added": {
-        "DT": "Added to Observability and Data Tooling after removal of acquired/delisted names",
-        "EXE": "Added as the public successor to CHK/SWN via Expand Energy",
-        "EQT": "Added to preserve liquid public gas-weighted exposure",
-        "CWEN": "Added to Wind and Renewables after AY delisting"
-    },
-    "removed": {
-        "SPLK": "Removed after Cisco acquisition and delisting",
-        "NEWR": "Removed after Francisco Partners/TPG take-private",
-        "CHK": "Removed after merger into Expand Energy",
-        "SWN": "Removed after merger into Expand Energy",
-        "AY": "Removed after ECP-led acquisition and delisting"
-    }
-}
-
-# -----------------------------
 # CATEGORY -> BASKETS -> TICKERS
 # -----------------------------
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {
