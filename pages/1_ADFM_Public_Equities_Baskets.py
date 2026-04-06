@@ -40,6 +40,7 @@ MARKET_CAP_EXCEPTIONS = {
     # "UUUU","UEC","URG","UROY","DNN","NXE","LEU"
 }
 
+
 # -----------------------------
 # CATEGORY -> BASKETS -> TICKERS
 # -----------------------------
@@ -955,18 +956,6 @@ bench_rets_full = levels[bench].pct_change().dropna()
 display_start_ts = pd.Timestamp(display_start_date)
 all_basket_rets_display = slice_returns_for_display(all_basket_rets_full, display_start_ts)
 bench_rets_display = bench_rets_full[bench_rets_full.index >= display_start_ts].copy()
-
-# -----------------------------
-# Basket maintenance note
-# -----------------------------
-with st.expander("Basket Revision Log"):
-    st.markdown("**Added**")
-    for ticker, note in BASKET_REVISIONS["added"].items():
-        st.write(f"- {ticker}: {note}")
-
-    st.markdown("**Removed**")
-    for ticker, note in BASKET_REVISIONS["removed"].items():
-        st.write(f"- {ticker}: {note}")
 
 # -----------------------------
 # Consolidated panel + chart
