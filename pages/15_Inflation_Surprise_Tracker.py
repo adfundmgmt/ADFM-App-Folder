@@ -1,1058 +1,858 @@
-import os
+bash -lc cat > /mnt/data/fed_tone_dashboard.py <<'PY'
+import re
 import time
-import threading
-from io import StringIO
-from typing import Optional, Dict, List
+import math
+import html
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import requests
 import streamlit as st
-import yfinance as yf
-import plotly.graph_objects as go
+from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ---------------- Config ----------------
-TITLE = "Inflation Surprise Tracker"
-START_DATE = "2010-01-01"
-CACHE_DIR = "macro_cache"
-
-FRED_SERIES = {
-    "headline_cpi": "CPIAUCNS",
-    "core_cpi": "CPILFESL",
-    "recession": "USREC",
-}
-
-ASSET_MAP = {
-    "SPY": "SPY",
-    "QQQ": "QQQ",
-    "TLT": "TLT",
-    "DXY": "DX-Y.NYB",
-    "Gold": "GLD",
-    "Crude": "CL=F",
-}
-
-SURPRISE_METHODS = [
-    "Consensus upload",
-    "Vs prior month",
-    "Vs 6M rolling median",
-]
-
-WINDOW_OPTIONS = ["3Y", "5Y", "10Y", "All"]
-
-st.set_page_config(page_title=TITLE, layout="wide")
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-# ---------------- Professional UI ----------------
-CUSTOM_CSS = """
-<style>
-    .block-container {
-        padding-top: 2.1rem;
-        padding-bottom: 2rem;
-        max-width: 1500px;
-    }
-
-    h1, h2, h3 {
-        letter-spacing: 0.1px;
-    }
-
-    .adfm-title {
-        font-size: 2.0rem;
-        font-weight: 700;
-        margin-bottom: -0.15rem;
-        color: #111827;
-    }
-
-    .adfm-subtitle {
-        font-size: 0.98rem;
-        color: #6b7280;
-        margin-bottom: 1.2rem;
-    }
-
-    .section-title {
-        font-size: 1.02rem;
-        font-weight: 700;
-        color: #111827;
-        margin-top: 0.4rem;
-        margin-bottom: 0.5rem;
-    }
-
-    .section-subtitle {
-        font-size: 0.9rem;
-        color: #6b7280;
-        margin-bottom: 1rem;
-    }
-
-    .metric-card {
-        background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 14px 16px 10px 16px;
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-        min-height: 92px;
-    }
-
-    .metric-label {
-        font-size: 0.78rem;
-        color: #6b7280;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin-bottom: 0.45rem;
-    }
-
-    .metric-value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #111827;
-        line-height: 1.1;
-    }
-
-    .metric-footnote {
-        font-size: 0.78rem;
-        color: #9ca3af;
-        margin-top: 0.4rem;
-    }
-
-    .info-box {
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 14px 16px;
-        margin-bottom: 0.8rem;
-    }
-
-    .sidebar-box {
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 14px 14px 10px 14px;
-        margin-bottom: 1rem;
-    }
-
-    .stDataFrame {
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        overflow: hidden;
-    }
-
-    .stDownloadButton button {
-        border-radius: 10px;
-        font-weight: 600;
-    }
-</style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-# ---------------- Header ----------------
-st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='adfm-subtitle'>CPI event study dashboard measuring inflation surprises and cross-asset reaction around each release.</div>",
-    unsafe_allow_html=True,
+APP_TITLE = "Fed Speeches Tone Underwriter"
+BASE_URL = "https://www.federalreserve.gov"
+INDEX_URL = f"{BASE_URL}/newsevents/speeches-testimony.htm"
+DATA_DIR = Path("fed_tone_data")
+DB_PATH = DATA_DIR / "fed_tone.sqlite"
+REQUEST_TIMEOUT = 25
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 )
 
-# ---------------- Sidebar ----------------
-with st.sidebar:
-    st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
-    st.markdown("### About This Tool")
-    st.markdown(
-        """
-This dashboard tracks CPI event risk and how markets actually reacted.
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-**What it shows**
-- Headline and core CPI MoM and YoY
-- Surprise versus uploaded consensus or fallback proxy
-- Same-day, 1D, and 5D moves in SPY, QQQ, TLT, DXY, Gold, and Crude
-- Sensitivity of each asset to inflation shocks
+SPEAKER_WEIGHTS = {
+    "Jerome H. Powell": 3.0,
+    "Philip N. Jefferson": 1.5,
+    "John C. Williams": 1.5,
+    "Christopher J. Waller": 1.5,
+    "Michelle W. Bowman": 1.2,
+    "Michael S. Barr": 1.1,
+    "Lisa D. Cook": 1.0,
+    "Adriana D. Kugler": 1.0,
+    "Austan D. Goolsbee": 1.0,
+    "Mary C. Daly": 1.0,
+    "Raphael W. Bostic": 1.0,
+    "Thomas I. Barkin": 1.0,
+    "Lorie K. Logan": 1.2,
+    "Neel Kashkari": 1.1,
+    "Susan M. Collins": 1.0,
+    "Patrick T. Harker": 1.0,
+    "Alberto G. Musalem": 1.0,
+    "Beth M. Hammack": 1.0,
+}
 
-**How to use it**
-- Uploaded consensus is the best version
-- Proxy mode still helps when you want directionality and reaction mapping
-- 0D is the cleanest release-day shock
-- 1D and 5D help you see whether the tape confirmed or faded the initial move
-        """
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+LEXICON = {
+    "hawkish": [
+        "higher for longer", "restrictive", "sufficiently restrictive", "upside risk",
+        "inflation remains too high", "inflation is too high", "persistent inflation",
+        "reaccelerat", "not yet done", "additional firming", "further tightening",
+        "vigilant", "upward pressure on prices", "elevated inflation", "inflation pressure",
+        "price stability", "tight labor market", "strong labor market", "overheating",
+        "policy restraint", "maintain restraint", "firming", "tightening",
+        "hold rates higher", "risk of inflation", "unanchored inflation expectations",
+        "still above target", "premature to ease", "not appropriate to cut",
+        "more work to do", "upside risks to inflation", "inflation persistence",
+    ],
+    "dovish": [
+        "disinflation", "cooling labor market", "softening labor market", "downside risk",
+        "growth is slowing", "economic slowdown", "below-trend growth", "normalizing inflation",
+        "further progress on inflation", "policy can respond", "room to ease", "easing",
+        "rate cuts", "cut rates", "lower rates", "less restrictive", "downward path",
+        "labor market is moderating", "balanced risks", "two-sided risks", "weak demand",
+        "headwinds", "slack", "unemployment is rising", "financial conditions tightened",
+        "act as appropriate", "support the labor market", "downside risks to employment",
+    ],
+    "inflation_concern": [
+        "inflation", "prices", "price pressures", "services inflation", "core inflation",
+        "shelter inflation", "goods inflation", "inflation expectations", "price stability",
+    ],
+    "labor_concern": [
+        "labor market", "employment", "unemployment", "job growth", "payroll",
+        "wages", "hiring", "layoffs", "slack", "participation",
+    ],
+    "growth_concern": [
+        "growth", "activity", "demand", "consumer spending", "investment", "slowdown",
+        "recession", "weakness", "output", "expansion",
+    ],
+    "financial_stability": [
+        "financial stability", "banking", "banks", "stress", "liquidity", "funding",
+        "market functioning", "credit conditions", "treasury market", "vulnerabilities",
+    ],
+    "balance_sheet": [
+        "balance sheet", "quantitative tightening", "qt", "runoff", "reserves",
+        "securities holdings", "mbs", "treasury holdings",
+    ],
+    "uncertainty_risk": [
+        "uncertain", "uncertainty", "risk management", "careful", "monitor", "watching",
+        "data dependent", "incoming data", "proceed carefully", "humble", "attentive",
+    ],
+}
 
-    st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
-    st.markdown("### Settings")
-    history_window = st.selectbox("History window", WINDOW_OPTIONS, index=1)
-    surprise_method = st.selectbox("Surprise method", SURPRISE_METHODS, index=0)
-    reaction_horizon = st.selectbox("Reaction horizon", ["0D", "1D", "5D"], index=2)
-    use_core_for_summary = st.checkbox("Use core surprise in summary", value=True)
-    show_loader_diagnostics = st.checkbox("Show loader diagnostics", value=False)
-    st.caption("FRED source: public CSV endpoint")
-    st.caption("No FRED API key required")
-    st.markdown("</div>", unsafe_allow_html=True)
+SNIPPET_PATTERNS = {
+    "hawkish": LEXICON["hawkish"],
+    "dovish": LEXICON["dovish"],
+    "inflation": LEXICON["inflation_concern"],
+    "labor": LEXICON["labor_concern"],
+    "growth": LEXICON["growth_concern"],
+}
 
-    st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
-    st.markdown("### Optional Consensus Upload")
-    uploaded_consensus = st.file_uploader(
-        "Upload CSV",
-        type=["csv"],
-        help=(
-            "Columns supported: release_date, cpi_month, headline_mom_consensus, "
-            "core_mom_consensus"
-        ),
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    if st.button("Clear cached data"):
-        st.cache_data.clear()
-        for filename in os.listdir(CACHE_DIR):
-            path = os.path.join(CACHE_DIR, filename)
-            if os.path.isfile(path):
-                os.remove(path)
-        st.success("Cache cleared. Rerun the app.")
-
-# ---------------- Helpers ----------------
-def cache_path(name: str) -> str:
-    safe_name = name.replace("/", "_").replace(":", "_").replace("?", "_").replace("&", "_").replace("=", "_")
-    return os.path.join(CACHE_DIR, f"{safe_name}.csv")
-
-
-def save_df_cache(name: str, df: pd.DataFrame) -> None:
-    df.to_csv(cache_path(name))
-
-
-def load_df_cache(name: str) -> Optional[pd.DataFrame]:
-    path = cache_path(name)
-    if not os.path.exists(path):
-        return None
-    try:
-        return pd.read_csv(path, index_col=0, parse_dates=True)
-    except Exception:
-        return None
-
-
-def fmt_pct(x: float, digits: int = 2) -> str:
-    return "N/A" if pd.isna(x) else f"{x:.{digits}f}%"
-
-
-def fmt_pp(x: float, digits: int = 2) -> str:
-    return "N/A" if pd.isna(x) else f"{x:+.{digits}f} pp"
-
-
-def fmt_num(x: float, digits: int = 2) -> str:
-    return "N/A" if pd.isna(x) else f"{x:.{digits}f}"
+STOP_PHRASES = [
+    "watch live", "for media inquiries", "last update", "return to text", "pdf",
+]
 
 
-def metric_card(label: str, value: str, footnote: str = ""):
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-footnote">{footnote}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+@dataclass
+class ToneResult:
+    net_score: float
+    hawkish_score: float
+    dovish_score: float
+    inflation_concern: float
+    labor_concern: float
+    growth_concern: float
+    financial_stability: float
+    balance_sheet: float
+    uncertainty_risk: float
+    word_count: int
 
 
-def month_start(ts) -> pd.Timestamp:
-    return pd.Timestamp(ts).to_period("M").to_timestamp(how="start")
-
-
-def build_request_session() -> requests.Session:
+def make_session() -> requests.Session:
     session = requests.Session()
-    retry = Retry(
-        total=3,
-        connect=3,
-        read=3,
-        backoff_factor=0.75,
+    retries = Retry(
+        total=5,
+        read=5,
+        connect=5,
+        backoff_factor=1.0,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
-    session.mount("https://", adapter)
+    adapter = HTTPAdapter(max_retries=retries)
     session.mount("http://", adapter)
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "text/csv,text/plain,*/*",
-            "Connection": "keep-alive",
-        }
-    )
+    session.mount("https://", adapter)
+    session.headers.update({"User-Agent": USER_AGENT})
     return session
 
 
-# ---------------- FRED loaders: same approach as your working example ----------------
-def fetch_fred_csv(series_id: str, start: pd.Timestamp, end: pd.Timestamp, timeout: int = 20) -> pd.Series:
-    url = (
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv"
-        f"?id={series_id}"
-        f"&cosd={start.strftime('%Y-%m-%d')}"
-        f"&coed={end.strftime('%Y-%m-%d')}"
+def init_db() -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            url TEXT PRIMARY KEY,
+            event_type TEXT,
+            year INTEGER,
+            date TEXT,
+            title TEXT,
+            speaker TEXT,
+            role TEXT,
+            venue TEXT,
+            pdf_url TEXT,
+            body_text TEXT,
+            word_count INTEGER,
+            scraped_at TEXT,
+            hawkish_score REAL,
+            dovish_score REAL,
+            net_score REAL,
+            inflation_concern REAL,
+            labor_concern REAL,
+            growth_concern REAL,
+            financial_stability REAL,
+            balance_sheet REAL,
+            uncertainty_risk REAL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_connection() -> sqlite3.Connection:
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+
+def clean_text(text: str) -> str:
+    text = html.unescape(text or "")
+    text = re.sub(r"\s+", " ", text)
+    text = text.replace("\xa0", " ").strip()
+    return text
+
+
+def normalize_phrase(phrase: str) -> str:
+    return re.escape(phrase.lower())
+
+
+def count_phrase_hits(text: str, phrases: List[str]) -> int:
+    low = text.lower()
+    hits = 0
+    for phrase in phrases:
+        pattern = normalize_phrase(phrase)
+        hits += len(re.findall(pattern, low))
+    return hits
+
+
+def score_text(text: str) -> ToneResult:
+    low = clean_text(text).lower()
+    words = re.findall(r"\b[a-z][a-z\-']+\b", low)
+    word_count = max(len(words), 1)
+
+    raw = {k: count_phrase_hits(low, v) for k, v in LEXICON.items()}
+    scaled = {k: (v / word_count) * 1000.0 for k, v in raw.items()}
+
+    hawkish = scaled.get("hawkish", 0.0)
+    dovish = scaled.get("dovish", 0.0)
+
+    inflation_weight = scaled.get("inflation_concern", 0.0)
+    labor_weight = scaled.get("labor_concern", 0.0)
+    growth_weight = scaled.get("growth_concern", 0.0)
+    fs_weight = scaled.get("financial_stability", 0.0)
+    bs_weight = scaled.get("balance_sheet", 0.0)
+    uncertainty_weight = scaled.get("uncertainty_risk", 0.0)
+
+    net = (
+        hawkish
+        - dovish
+        + 0.15 * inflation_weight
+        - 0.10 * labor_weight
+        - 0.10 * growth_weight
+        - 0.05 * fs_weight
     )
 
-    session = build_request_session()
-    r = session.get(url, timeout=timeout)
-    r.raise_for_status()
-
-    text = r.text
-    preview = text[:1000].lower()
-    if not text.strip():
-        raise ValueError(f"Empty payload returned for {series_id}")
-    if "<html" in preview or "<!doctype html" in preview:
-        raise ValueError(f"HTML returned instead of CSV for {series_id}")
-
-    df = pd.read_csv(StringIO(text))
-    if df.empty or len(df.columns) < 2:
-        raise ValueError(f"No usable data returned for {series_id}")
-
-    date_col = df.columns[0]
-    value_col = df.columns[1]
-
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
-    df = df.dropna(subset=[date_col]).sort_values(date_col)
-
-    s = pd.Series(df[value_col].values, index=df[date_col], name=series_id)
-    s = s[~s.index.duplicated(keep="last")]
-    return s
-
-
-@st.cache_data(ttl=60 * 60, show_spinner=False)
-def load_all_fred_series(start: pd.Timestamp, end: pd.Timestamp):
-    out = {}
-    errors = {}
-    diagnostics = []
-
-    for key, series_id in FRED_SERIES.items():
-        t0 = time.time()
-        cache_name = f"fred_{series_id}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}"
-
-        try:
-            s = fetch_fred_csv(series_id, start, end, timeout=20)
-            out[key] = s
-            save_df_cache(cache_name, s.to_frame(name=series_id))
-            diagnostics.append(f"{series_id}: live OK in {time.time() - t0:.1f}s")
-        except Exception as e:
-            cached = load_df_cache(cache_name)
-            if cached is not None and not cached.empty:
-                cached.index = pd.to_datetime(cached.index)
-                out[key] = cached.iloc[:, 0].rename(series_id)
-                errors[series_id] = f"live failed, used cache: {e}"
-                diagnostics.append(f"{series_id}: cache fallback after {time.time() - t0:.1f}s")
-            else:
-                out[key] = pd.Series(dtype="float64", name=series_id)
-                errors[series_id] = str(e)
-                diagnostics.append(f"{series_id}: failed in {time.time() - t0:.1f}s")
-
-    return out, errors, diagnostics
-
-
-# ---------------- Yahoo loaders with hard timeout ----------------
-def _download_one_ticker_worker(ticker: str, start: str, result: dict) -> None:
-    try:
-        end_date = (pd.Timestamp.today() + pd.Timedelta(days=5)).strftime("%Y-%m-%d")
-        df = yf.download(
-            tickers=ticker,
-            start=start,
-            end=end_date,
-            auto_adjust=False,
-            progress=False,
-            threads=False,
-            group_by="column",
-        )
-
-        if df is None or df.empty:
-            raise RuntimeError("Empty dataframe")
-
-        col = "Adj Close" if "Adj Close" in df.columns else "Close"
-        if col not in df.columns:
-            raise RuntimeError("Missing Close/Adj Close")
-
-        px = pd.to_numeric(df[col], errors="coerce").dropna().to_frame(name=ticker)
-        if px.empty:
-            raise RuntimeError("No usable prices after cleaning")
-
-        result["data"] = px
-    except Exception as e:
-        result["error"] = str(e)
-
-
-def download_one_ticker_with_timeout(ticker: str, start: str, timeout_sec: int = 18) -> pd.DataFrame:
-    result: Dict[str, object] = {}
-    thread = threading.Thread(target=_download_one_ticker_worker, args=(ticker, start, result), daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_sec)
-
-    if thread.is_alive():
-        raise TimeoutError(f"{ticker} timed out after {timeout_sec}s")
-    if "error" in result:
-        raise RuntimeError(str(result["error"]))
-
-    return result["data"]
-
-
-@st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
-def fetch_asset_prices(start: str = START_DATE):
-    frames = []
-    failures = {}
-    diagnostics = []
-
-    for label, ticker in ASSET_MAP.items():
-        t0 = time.time()
-        cache_name = f"asset_{label}_{ticker}"
-
-        try:
-            px = download_one_ticker_with_timeout(ticker=ticker, start=start, timeout_sec=18)
-            px.columns = [label]
-            px.index = pd.to_datetime(px.index).normalize()
-            px = px[~px.index.duplicated(keep="last")].sort_index()
-            save_df_cache(cache_name, px)
-            frames.append(px)
-            diagnostics.append(f"{label}: live OK in {time.time() - t0:.1f}s")
-        except Exception as e:
-            cached = load_df_cache(cache_name)
-            if cached is not None and not cached.empty:
-                cached.columns = [label]
-                cached.index = pd.to_datetime(cached.index).normalize()
-                frames.append(cached)
-                failures[label] = f"live failed, used cache: {e}"
-                diagnostics.append(f"{label}: cache fallback after {time.time() - t0:.1f}s")
-            else:
-                failures[label] = str(e)
-                diagnostics.append(f"{label}: failed in {time.time() - t0:.1f}s")
-
-    if not frames:
-        raise RuntimeError("All market assets failed to load")
-
-    prices = pd.concat(frames, axis=1).sort_index()
-    prices = prices[~prices.index.duplicated(keep="last")]
-    return prices, failures, diagnostics
-
-
-# ---------------- CPI prep ----------------
-def prepare_cpi_table(raw: pd.DataFrame) -> pd.DataFrame:
-    df = raw.copy()
-    df["headline_yoy"] = df["headline_cpi"].pct_change(12) * 100
-    df["core_yoy"] = df["core_cpi"].pct_change(12) * 100
-    df["headline_mom"] = df["headline_cpi"].pct_change(1) * 100
-    df["core_mom"] = df["core_cpi"].pct_change(1) * 100
-    df["cpi_month"] = df.index
-
-    approx_release = []
-    for dt in df.index:
-        next_month = (dt + pd.offsets.MonthBegin(1)) + pd.DateOffset(days=12)
-        if next_month.weekday() >= 5:
-            next_month = next_month + pd.offsets.BDay(1)
-        approx_release.append(pd.Timestamp(next_month).normalize())
-
-    df["release_date_est"] = pd.to_datetime(approx_release)
-    df["headline_mom_prior"] = df["headline_mom"].shift(1)
-    df["core_mom_prior"] = df["core_mom"].shift(1)
-    df["headline_mom_6m_median"] = df["headline_mom"].rolling(6).median().shift(1)
-    df["core_mom_6m_median"] = df["core_mom"].rolling(6).median().shift(1)
-
-    return df.reset_index(drop=True)
-
-
-def parse_consensus_upload(file) -> pd.DataFrame:
-    df = pd.read_csv(file)
-    df.columns = [c.lower().strip() for c in df.columns]
-
-    required_min = {"release_date", "cpi_month"}
-    if not required_min.issubset(df.columns):
-        raise ValueError(
-            "Consensus CSV must include at least release_date and cpi_month"
-        )
-
-    if "headline_mom_consensus" not in df.columns and "core_mom_consensus" not in df.columns:
-        raise ValueError(
-            "Consensus CSV must include headline_mom_consensus or core_mom_consensus"
-        )
-
-    df["release_date"] = pd.to_datetime(df["release_date"], errors="coerce").dt.normalize()
-    df["cpi_month"] = pd.to_datetime(df["cpi_month"], errors="coerce").dt.to_period("M").dt.to_timestamp()
-
-    for col in ["headline_mom_consensus", "core_mom_consensus"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df = df.dropna(subset=["release_date", "cpi_month"]).copy()
-    return df
-
-
-def merge_consensus(cpi_df: pd.DataFrame, uploaded_df: Optional[pd.DataFrame]) -> pd.DataFrame:
-    df = cpi_df.copy()
-
-    if uploaded_df is None:
-        df["release_date"] = df["release_date_est"]
-        df["headline_mom_consensus"] = np.nan
-        df["core_mom_consensus"] = np.nan
-        return df
-
-    merged = df.merge(
-        uploaded_df[
-            [c for c in ["release_date", "cpi_month", "headline_mom_consensus", "core_mom_consensus"] if c in uploaded_df.columns]
-        ],
-        on="cpi_month",
-        how="left",
-        suffixes=("", "_uploaded"),
+    return ToneResult(
+        net_score=net,
+        hawkish_score=hawkish,
+        dovish_score=dovish,
+        inflation_concern=inflation_weight,
+        labor_concern=labor_weight,
+        growth_concern=growth_weight,
+        financial_stability=fs_weight,
+        balance_sheet=bs_weight,
+        uncertainty_risk=uncertainty_weight,
+        word_count=word_count,
     )
 
-    if "release_date_uploaded" in merged.columns:
-        merged["release_date"] = merged["release_date_uploaded"].combine_first(merged["release_date_est"])
-        merged = merged.drop(columns=["release_date_uploaded"])
-    else:
-        merged["release_date"] = merged["release_date_est"]
 
-    return merged
+def fetch_html(session: requests.Session, url: str) -> BeautifulSoup:
+    resp = session.get(url, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    return BeautifulSoup(resp.text, "html.parser")
 
 
-def compute_surprises(df: pd.DataFrame, method: str) -> pd.DataFrame:
-    out = df.copy()
-
-    if method == "Consensus upload":
-        out["headline_surprise"] = out["headline_mom"] - out["headline_mom_consensus"]
-        out["core_surprise"] = out["core_mom"] - out["core_mom_consensus"]
-    elif method == "Vs prior month":
-        out["headline_surprise"] = out["headline_mom"] - out["headline_mom_prior"]
-        out["core_surprise"] = out["core_mom"] - out["core_mom_prior"]
-    elif method == "Vs 6M rolling median":
-        out["headline_surprise"] = out["headline_mom"] - out["headline_mom_6m_median"]
-        out["core_surprise"] = out["core_mom"] - out["core_mom_6m_median"]
-    else:
-        raise ValueError(f"Unsupported surprise method: {method}")
-
+def parse_year_links(index_soup: BeautifulSoup) -> List[Tuple[str, str, int]]:
+    out = []
+    heading_map = {"Speeches": "speech", "Testimony": "testimony"}
+    for h4 in index_soup.find_all(["h3", "h4"]):
+        section = clean_text(h4.get_text(" ", strip=True))
+        if section not in heading_map:
+            continue
+        ul = h4.find_next(lambda tag: tag.name in ["ul", "div"])
+        if ul is None:
+            continue
+        for a in ul.find_all("a", href=True):
+            year_text = clean_text(a.get_text(" ", strip=True))
+            if not year_text.isdigit():
+                continue
+            year = int(year_text)
+            href = urljoin(BASE_URL, a["href"])
+            out.append((heading_map[section], href, year))
     return out
 
 
-# ---------------- Event study ----------------
-def next_trading_day_index(idx: pd.DatetimeIndex, dt: pd.Timestamp) -> Optional[pd.Timestamp]:
-    pos = idx.searchsorted(pd.Timestamp(dt))
-    if pos >= len(idx):
-        return None
-    return idx[pos]
+def parse_index_items(year_soup: BeautifulSoup, event_type: str, year: int) -> List[Dict[str, str]]:
+    items = []
+    body_text = year_soup.get_text("\n", strip=True)
+    lines = [clean_text(x) for x in body_text.split("\n") if clean_text(x)]
 
-
-def prev_trading_day_index(idx: pd.DatetimeIndex, dt: pd.Timestamp) -> Optional[pd.Timestamp]:
-    pos = idx.searchsorted(pd.Timestamp(dt), side="left") - 1
-    if pos < 0:
-        return None
-    return idx[pos]
-
-
-def compute_event_reactions(events: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
-    px = prices.copy()
-    px.index = pd.to_datetime(px.index).normalize()
-    trading_days = px.index
-
-    rows = []
-    for _, row in events.iterrows():
-        release_date = pd.to_datetime(row["release_date"]).normalize()
-        event_day = next_trading_day_index(trading_days, release_date)
-        prev_day = prev_trading_day_index(trading_days, event_day) if event_day is not None else None
-
-        if event_day is None or prev_day is None:
+    anchors = []
+    for a in year_soup.find_all("a", href=True):
+        href = a.get("href", "")
+        title = clean_text(a.get_text(" ", strip=True))
+        if not href or not title:
             continue
-
-        result = row.to_dict()
-        result["event_day"] = event_day
-        result["prev_day"] = prev_day
-
-        for asset in prices.columns:
-            result[f"{asset}_0d"] = np.nan
-            result[f"{asset}_1d"] = np.nan
-            result[f"{asset}_5d"] = np.nan
-
-            try:
-                p_prev = px.loc[prev_day, asset]
-                p_0 = px.loc[event_day, asset]
-
-                pos = trading_days.get_loc(event_day)
-                p_1 = px.iloc[pos + 1][asset] if pos + 1 < len(px) else np.nan
-                p_5 = px.iloc[pos + 5][asset] if pos + 5 < len(px) else np.nan
-
-                if pd.notna(p_prev) and pd.notna(p_0):
-                    result[f"{asset}_0d"] = (p_0 / p_prev - 1.0) * 100
-                if pd.notna(p_0) and pd.notna(p_1):
-                    result[f"{asset}_1d"] = (p_1 / p_0 - 1.0) * 100
-                if pd.notna(p_0) and pd.notna(p_5):
-                    result[f"{asset}_5d"] = (p_5 / p_0 - 1.0) * 100
-            except Exception:
-                pass
-
-        rows.append(result)
-
-    if not rows:
-        return pd.DataFrame()
-
-    return pd.DataFrame(rows).sort_values("event_day")
-
-
-def filter_history_window(df: pd.DataFrame, window_label: str, date_col: str) -> pd.DataFrame:
-    if df.empty or window_label == "All":
-        return df.copy()
-
-    latest = pd.to_datetime(df[date_col]).max()
-    mapping = {"3Y": 3, "5Y": 5, "10Y": 10}
-    years = mapping.get(window_label, 5)
-    cutoff = latest - pd.DateOffset(years=years)
-    return df[pd.to_datetime(df[date_col]) >= cutoff].copy()
-
-
-def pick_reaction_col(asset: str, horizon: str) -> str:
-    return f"{asset}_{horizon.lower()}"
-
-
-def get_summary_surprise_col(use_core: bool) -> str:
-    return "core_surprise" if use_core else "headline_surprise"
-
-
-def correlation_safe(x: pd.Series, y: pd.Series) -> float:
-    tmp = pd.concat([x, y], axis=1).dropna()
-    if len(tmp) < 6:
-        return np.nan
-    return tmp.iloc[:, 0].corr(tmp.iloc[:, 1])
-
-
-def beta_safe(x: pd.Series, y: pd.Series) -> float:
-    tmp = pd.concat([x, y], axis=1).dropna()
-    if len(tmp) < 6:
-        return np.nan
-    xv = tmp.iloc[:, 0]
-    yv = tmp.iloc[:, 1]
-    var = xv.var(ddof=0)
-    if np.isclose(var, 0):
-        return np.nan
-    cov = np.cov(xv, yv, ddof=0)[0, 1]
-    return cov / var
-
-
-def make_sensitivity_table(events: pd.DataFrame, horizon: str, use_core: bool) -> pd.DataFrame:
-    surprise_col = get_summary_surprise_col(use_core)
-    rows = []
-
-    for asset in ASSET_MAP.keys():
-        reaction_col = pick_reaction_col(asset, horizon)
-        if reaction_col not in events.columns:
+        if "/newsevents/" not in href and not href.startswith("/"):
             continue
-
-        tmp = events[[surprise_col, reaction_col]].dropna()
-        if tmp.empty:
+        if any(bad in title.lower() for bad in STOP_PHRASES):
             continue
+        full_url = urljoin(BASE_URL, href)
+        if re.search(r"/newsevents/(speech|testimony)/", full_url):
+            anchors.append((title, full_url))
 
-        rows.append(
+    if not anchors:
+        return items
+
+    for title, full_url in anchors:
+        date_val = None
+        speaker = None
+        role = None
+        venue = None
+
+        title_idx = None
+        for idx, line in enumerate(lines):
+            if line == title:
+                title_idx = idx
+                break
+        if title_idx is not None:
+            for back in range(max(0, title_idx - 3), title_idx):
+                if re.match(r"\d{1,2}/\d{1,2}/\d{4}$", lines[back]):
+                    date_val = pd.to_datetime(lines[back], errors="coerce")
+                    if pd.notna(date_val):
+                        date_val = date_val.strftime("%Y-%m-%d")
+                        break
+            for fwd in range(title_idx + 1, min(len(lines), title_idx + 6)):
+                line = lines[fwd]
+                if line.startswith(("Chair ", "Vice Chair", "Governor ", "President ")):
+                    role = line
+                    speaker = re.sub(r"^(Chair|Vice Chair(?: for Supervision)?|Governor|President)\s+", "", line).strip()
+                    if speaker.startswith("for Supervision "):
+                        speaker = speaker.replace("for Supervision ", "")
+                elif role and venue is None and line != role:
+                    venue = line
+                    break
+
+        items.append(
             {
-                "Asset": asset,
-                "Obs": len(tmp),
-                "Avg Return on Positive Surprise (%)": tmp.loc[tmp[surprise_col] > 0, reaction_col].mean(),
-                "Avg Return on Negative Surprise (%)": tmp.loc[tmp[surprise_col] < 0, reaction_col].mean(),
-                "Correlation to Surprise": correlation_safe(tmp[surprise_col], tmp[reaction_col]),
-                "Reaction Beta": beta_safe(tmp[surprise_col], tmp[reaction_col]),
+                "url": full_url,
+                "event_type": event_type,
+                "year": year,
+                "date": date_val,
+                "title": title,
+                "speaker": speaker,
+                "role": role,
+                "venue": venue,
             }
         )
 
-    out = pd.DataFrame(rows)
-    if not out.empty:
-        out = out.sort_values("Reaction Beta", ascending=False)
+    dedup = {x["url"]: x for x in items}
+    return list(dedup.values())
+
+
+def extract_body_text(page_soup: BeautifulSoup) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]]:
+    title = None
+    date_val = None
+    speaker = None
+    role = None
+    pdf_url = None
+
+    if page_soup.find("h3", class_="title"):
+        title = clean_text(page_soup.find("h3", class_="title").get_text(" ", strip=True))
+    elif page_soup.find(["h1", "h2", "h3"]):
+        title = clean_text(page_soup.find(["h1", "h2", "h3"]).get_text(" ", strip=True))
+
+    for p in page_soup.find_all(["p", "div"]):
+        text = clean_text(p.get_text(" ", strip=True))
+        if re.match(r"^[A-Z][a-z]+\s+\d{1,2},\s+\d{4}$", text):
+            parsed = pd.to_datetime(text, errors="coerce")
+            if pd.notna(parsed):
+                date_val = parsed.strftime("%Y-%m-%d")
+                break
+
+    page_text = page_soup.get_text("\n", strip=True)
+    lines = [clean_text(x) for x in page_text.split("\n") if clean_text(x)]
+    for i, line in enumerate(lines[:50]):
+        if line.startswith(("Chair ", "Vice Chair", "Governor ", "President ")):
+            role = line
+            speaker = re.sub(r"^(Chair|Vice Chair(?: for Supervision)?|Governor|President)\s+", "", line).strip()
+            if speaker.startswith("for Supervision "):
+                speaker = speaker.replace("for Supervision ", "")
+            break
+
+    pdf_anchor = page_soup.find("a", href=re.compile(r"\.pdf($|\?)", re.I))
+    if pdf_anchor and pdf_anchor.get("href"):
+        pdf_url = urljoin(BASE_URL, pdf_anchor["href"])
+
+    content_candidates = []
+    selectors = [
+        "#article", ".article", ".col-xs-12.col-sm-8.col-md-8", ".col-md-8", "main",
+    ]
+    for sel in selectors:
+        for node in page_soup.select(sel):
+            txt = clean_text(node.get_text("\n", strip=True))
+            if len(txt.split()) > 300:
+                content_candidates.append(txt)
+    if not content_candidates:
+        paras = [clean_text(p.get_text(" ", strip=True)) for p in page_soup.find_all("p")]
+        paras = [p for p in paras if len(p.split()) > 8]
+        text = "\n\n".join(paras)
+    else:
+        text = max(content_candidates, key=len)
+
+    text = re.sub(r"\b(Return to text|For media inquiries.*)$", "", text, flags=re.I | re.S)
+    return clean_text(text), title, date_val, speaker, role, pdf_url
+
+
+def upsert_documents(rows: List[Dict[str, object]]) -> None:
+    if not rows:
+        return
+    conn = db_connection()
+    cur = conn.cursor()
+    for r in rows:
+        cur.execute(
+            """
+            INSERT INTO documents (
+                url, event_type, year, date, title, speaker, role, venue, pdf_url, body_text,
+                word_count, scraped_at, hawkish_score, dovish_score, net_score,
+                inflation_concern, labor_concern, growth_concern, financial_stability,
+                balance_sheet, uncertainty_risk
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+                event_type=excluded.event_type,
+                year=excluded.year,
+                date=excluded.date,
+                title=excluded.title,
+                speaker=excluded.speaker,
+                role=excluded.role,
+                venue=excluded.venue,
+                pdf_url=excluded.pdf_url,
+                body_text=excluded.body_text,
+                word_count=excluded.word_count,
+                scraped_at=excluded.scraped_at,
+                hawkish_score=excluded.hawkish_score,
+                dovish_score=excluded.dovish_score,
+                net_score=excluded.net_score,
+                inflation_concern=excluded.inflation_concern,
+                labor_concern=excluded.labor_concern,
+                growth_concern=excluded.growth_concern,
+                financial_stability=excluded.financial_stability,
+                balance_sheet=excluded.balance_sheet,
+                uncertainty_risk=excluded.uncertainty_risk
+            """,
+            (
+                r["url"], r["event_type"], r["year"], r["date"], r["title"], r["speaker"], r["role"],
+                r["venue"], r["pdf_url"], r["body_text"], r["word_count"], r["scraped_at"],
+                r["hawkish_score"], r["dovish_score"], r["net_score"], r["inflation_concern"],
+                r["labor_concern"], r["growth_concern"], r["financial_stability"], r["balance_sheet"],
+                r["uncertainty_risk"],
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def load_documents() -> pd.DataFrame:
+    conn = db_connection()
+    try:
+        df = pd.read_sql_query("SELECT * FROM documents", conn)
+    finally:
+        conn.close()
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["weight"] = df["speaker"].map(SPEAKER_WEIGHTS).fillna(1.0)
+    df = df.sort_values("date").reset_index(drop=True)
+    return df
+
+
+def crawl_fed(max_years: Optional[int] = None, force_refresh: bool = False, progress=None) -> pd.DataFrame:
+    init_db()
+    session = make_session()
+    index_soup = fetch_html(session, INDEX_URL)
+    year_links = parse_year_links(index_soup)
+    year_links = sorted(year_links, key=lambda x: x[2], reverse=True)
+    if max_years is not None:
+        allowed_years = sorted(list({y for _, _, y in year_links}), reverse=True)[:max_years]
+        year_links = [x for x in year_links if x[2] in allowed_years]
+
+    existing = load_documents()
+    existing_urls = set(existing["url"].tolist()) if not existing.empty else set()
+
+    metadata_rows = []
+    total = len(year_links)
+    for idx, (event_type, year_url, year) in enumerate(year_links, start=1):
+        if progress:
+            progress.info(f"Scanning {event_type} index for {year} ({idx}/{total})")
+        year_soup = fetch_html(session, year_url)
+        metadata_rows.extend(parse_index_items(year_soup, event_type, year))
+        time.sleep(0.15)
+
+    rows_to_fetch = []
+    for row in metadata_rows:
+        if force_refresh or row["url"] not in existing_urls:
+            rows_to_fetch.append(row)
+
+    fetched_rows = []
+    total_fetch = max(len(rows_to_fetch), 1)
+    for idx, row in enumerate(rows_to_fetch, start=1):
+        if progress:
+            progress.info(f"Parsing document {idx}/{total_fetch}: {row['title'][:90]}")
+        try:
+            page_soup = fetch_html(session, row["url"])
+            body_text, title, date_val, speaker, role, pdf_url = extract_body_text(page_soup)
+            if len(body_text.split()) < 120:
+                continue
+            scored = score_text(body_text)
+            row_out = {
+                **row,
+                "title": title or row.get("title"),
+                "date": date_val or row.get("date"),
+                "speaker": speaker or row.get("speaker"),
+                "role": role or row.get("role"),
+                "pdf_url": pdf_url,
+                "body_text": body_text,
+                "word_count": scored.word_count,
+                "scraped_at": pd.Timestamp.utcnow().isoformat(),
+                "hawkish_score": scored.hawkish_score,
+                "dovish_score": scored.dovish_score,
+                "net_score": scored.net_score,
+                "inflation_concern": scored.inflation_concern,
+                "labor_concern": scored.labor_concern,
+                "growth_concern": scored.growth_concern,
+                "financial_stability": scored.financial_stability,
+                "balance_sheet": scored.balance_sheet,
+                "uncertainty_risk": scored.uncertainty_risk,
+            }
+            fetched_rows.append(row_out)
+            time.sleep(0.2)
+        except Exception:
+            continue
+
+    if fetched_rows:
+        upsert_documents(fetched_rows)
+    return load_documents()
+
+
+def classify_stance(net_score: float, hawkish: float, dovish: float) -> str:
+    if net_score >= 0.6 or hawkish - dovish >= 0.4:
+        return "Hawkish"
+    if net_score <= -0.4 or dovish - hawkish >= 0.3:
+        return "Dovish"
+    return "Balanced"
+
+
+def compute_features(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    out = out.sort_values(["speaker", "date"])
+    out["speaker_baseline"] = out.groupby("speaker")["net_score"].transform(
+        lambda s: s.shift(1).rolling(5, min_periods=1).mean()
+    )
+    out["speaker_delta"] = out["net_score"] - out["speaker_baseline"].fillna(0.0)
+    out["stance"] = out.apply(lambda r: classify_stance(r["net_score"], r["hawkish_score"], r["dovish_score"]), axis=1)
+    out["relevance_weight"] = out["weight"] * np.where(out["event_type"].eq("testimony"), 1.15, 1.0)
+    out["weighted_net"] = out["net_score"] * out["relevance_weight"]
+    out["weighted_hawkish"] = out["hawkish_score"] * out["relevance_weight"]
+    out["weighted_dovish"] = out["dovish_score"] * out["relevance_weight"]
+    out = out.sort_values("date").reset_index(drop=True)
     return out
 
 
-def build_latest_event_table(events: pd.DataFrame) -> pd.DataFrame:
-    cols = [
-        "cpi_month",
-        "release_date",
-        "headline_mom",
-        "headline_mom_consensus",
-        "headline_surprise",
-        "core_mom",
-        "core_mom_consensus",
-        "core_surprise",
-    ]
-    keep_cols = [c for c in cols if c in events.columns]
-
-    reaction_cols = []
-    for asset in ASSET_MAP.keys():
-        for h in ["0d", "1d", "5d"]:
-            col = f"{asset}_{h}"
-            if col in events.columns:
-                reaction_cols.append(col)
-
-    return events[keep_cols + reaction_cols].copy().tail(15)
-
-
-# ---------------- Chart helpers ----------------
-def apply_base_layout(fig: go.Figure, title: Optional[str] = None, height: int = 420) -> go.Figure:
-    fig.update_layout(
-        template="plotly_white",
-        title=title,
-        height=height,
-        margin=dict(l=40, r=20, t=55 if title else 20, b=30),
-        legend=dict(
-            orientation="h",
-            x=0,
-            y=1.03,
-            xanchor="left",
-            yanchor="bottom",
-            bgcolor="rgba(255,255,255,0.75)",
-        ),
-        hovermode="x unified",
+def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
+    if df.empty:
+        return df
+    temp = df.copy()
+    temp = temp.dropna(subset=["date"])
+    temp = temp.set_index("date")
+    grouped = temp.resample(freq).apply(
+        {
+            "weighted_net": "sum",
+            "weighted_hawkish": "sum",
+            "weighted_dovish": "sum",
+            "relevance_weight": "sum",
+            "inflation_concern": "mean",
+            "labor_concern": "mean",
+            "growth_concern": "mean",
+            "financial_stability": "mean",
+            "uncertainty_risk": "mean",
+            "title": "count",
+        }
     )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor="#eceff3", zeroline=False)
-    return fig
+    grouped = grouped.rename(columns={"title": "doc_count"}).reset_index()
+    for col in ["weighted_net", "weighted_hawkish", "weighted_dovish"]:
+        grouped[col] = np.where(grouped["relevance_weight"] > 0, grouped[col] / grouped["relevance_weight"], np.nan)
+    grouped = grouped.rename(
+        columns={
+            "weighted_net": "tone_composite",
+            "weighted_hawkish": "hawkish_composite",
+            "weighted_dovish": "dovish_composite",
+        }
+    )
+    return grouped
 
 
-def plot_surprise_history(events: pd.DataFrame, use_core: bool) -> go.Figure:
-    s_col = get_summary_surprise_col(use_core)
-    title_series = "Core CPI MoM Surprise" if use_core else "Headline CPI MoM Surprise"
-    colors = np.where(events[s_col] >= 0, "#16a34a", "#dc2626")
+def find_snippets(text: str, patterns: List[str], max_snippets: int = 3) -> List[str]:
+    if not text:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+", clean_text(text))
+    hits = []
+    for sent in sentences:
+        low = sent.lower()
+        if any(p in low for p in patterns) and 30 <= len(sent) <= 400:
+            hits.append(sent.strip())
+    seen = []
+    for h in hits:
+        if h not in seen:
+            seen.append(h)
+    return seen[:max_snippets]
 
-    fig = go.Figure()
-    fig.add_trace(
-        go.Bar(
-            x=events["event_day"],
-            y=events[s_col],
-            name=title_series,
-            marker_color=colors,
-            hovertemplate="%{x|%Y-%m-%d}<br>Surprise: %{y:.2f} pp<extra></extra>",
+
+def highlight_terms(text: str, patterns: List[str]) -> str:
+    escaped = text
+    for phrase in sorted(patterns, key=len, reverse=True):
+        escaped = re.sub(
+            f"({re.escape(phrase)})",
+            r"<mark>\1</mark>",
+            escaped,
+            flags=re.IGNORECASE,
         )
+    return escaped
+
+
+def latest_snapshot(df: pd.DataFrame) -> Dict[str, float]:
+    if df.empty:
+        return {"tone": np.nan, "delta_30d": np.nan, "core_tone": np.nan}
+    end = df["date"].max()
+    start_30 = end - pd.Timedelta(days=30)
+    current = df[df["date"] >= start_30]
+    prior = df[(df["date"] < start_30) & (df["date"] >= start_30 - pd.Timedelta(days=30))]
+    tone = np.average(current["net_score"], weights=current["relevance_weight"]) if not current.empty else np.nan
+    prior_tone = np.average(prior["net_score"], weights=prior["relevance_weight"]) if not prior.empty else np.nan
+    core = current[current["speaker"].isin(["Jerome H. Powell", "Philip N. Jefferson", "John C. Williams", "Christopher J. Waller"])]
+    core_tone = np.average(core["net_score"], weights=core["relevance_weight"]) if not core.empty else np.nan
+    return {
+        "tone": tone,
+        "delta_30d": tone - prior_tone if pd.notna(tone) and pd.notna(prior_tone) else np.nan,
+        "core_tone": core_tone,
+    }
+
+
+def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
+    if df.empty:
+        return df
+    last_date = df["date"].max()
+    recent = df[df["date"] >= last_date - pd.Timedelta(days=180)].copy()
+    if recent.empty:
+        recent = df.copy()
+    agg = recent.groupby("speaker", dropna=False).agg(
+        docs=("title", "count"),
+        tone=("net_score", "mean"),
+        hawkish=("hawkish_score", "mean"),
+        dovish=("dovish_score", "mean"),
+        last_date=("date", "max"),
+    ).reset_index()
+    deltas = (
+        df.sort_values("date")
+          .groupby("speaker", dropna=False)
+          .tail(1)[["speaker", "speaker_delta", "stance"]]
     )
-    fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af")
-    fig.update_yaxes(title_text="pp")
-    return apply_base_layout(fig, title=f"{title_series} Over Time", height=380)
+    agg = agg.merge(deltas, on="speaker", how="left")
+    agg["weight"] = agg["speaker"].map(SPEAKER_WEIGHTS).fillna(1.0)
+    agg = agg.sort_values(["weight", "docs", "tone"], ascending=[False, False, False]).head(top_n)
+    return agg
 
 
-def plot_asset_reaction_bars(events: pd.DataFrame, horizon: str, use_core: bool) -> go.Figure:
-    sensitivity = make_sensitivity_table(events, horizon, use_core)
-    fig = go.Figure()
+def render_about():
+    with st.sidebar.expander("About This Tool", expanded=False):
+        st.write(
+            "This dashboard scrapes Federal Reserve speeches and testimony directly from the Board's website, "
+            "scores each document across hawkish and dovish dimensions, and tracks how each speaker's tone shifts over time. "
+            "The output is meant to help underwrite the reaction function, not replace reading the original text."
+        )
+        st.write(
+            "Primary source: Federal Reserve speeches and testimony pages. Scoring is rules-based and transparent so you can inspect the passages driving the result."
+        )
 
-    if not sensitivity.empty:
-        fig.add_trace(
-            go.Bar(
-                x=sensitivity["Asset"],
-                y=sensitivity["Reaction Beta"],
-                name="Reaction Beta",
-                hovertemplate="%{x}<br>Beta: %{y:.2f}<extra></extra>",
+
+def main():
+    st.set_page_config(page_title=APP_TITLE, layout="wide")
+    st.title(APP_TITLE)
+    st.caption("Primary-source underwriting of Fed communication tone from speeches and testimony.")
+    render_about()
+    init_db()
+
+    with st.sidebar:
+        st.subheader("Controls")
+        years_to_pull = st.slider("Years to scan from latest backward", min_value=1, max_value=20, value=6)
+        force_refresh = st.checkbox("Force refresh existing documents", value=False)
+        if st.button("Refresh corpus", use_container_width=True):
+            progress_box = st.empty()
+            with st.spinner("Refreshing Fed corpus..."):
+                df = crawl_fed(max_years=years_to_pull, force_refresh=force_refresh, progress=progress_box)
+            progress_box.empty()
+            st.success(f"Loaded {len(df):,} documents.")
+
+    df = load_documents()
+    if df.empty:
+        st.info("No local corpus found yet. Click 'Refresh corpus' in the sidebar to build the database.")
+        st.stop()
+
+    df = compute_features(df)
+
+    min_date = df["date"].min().date()
+    max_date = df["date"].max().date()
+
+    with st.sidebar:
+        date_range = st.date_input("Date range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+        speakers = sorted([x for x in df["speaker"].dropna().unique().tolist() if x])
+        selected_speakers = st.multiselect("Speakers", options=speakers, default=[])
+        event_types = st.multiselect("Event types", options=sorted(df["event_type"].dropna().unique()), default=sorted(df["event_type"].dropna().unique()))
+        search = st.text_input("Search title or transcript")
+
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+    else:
+        start_date, end_date = df["date"].min(), df["date"].max()
+
+    view = df[(df["date"] >= start_date) & (df["date"] <= end_date)]
+    if selected_speakers:
+        view = view[view["speaker"].isin(selected_speakers)]
+    if event_types:
+        view = view[view["event_type"].isin(event_types)]
+    if search.strip():
+        q = search.strip().lower()
+        view = view[
+            view["title"].fillna("").str.lower().str.contains(q, na=False)
+            | view["body_text"].fillna("").str.lower().str.contains(q, na=False)
+        ]
+
+    snapshot = latest_snapshot(view)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Tone composite", f"{snapshot['tone']:.2f}" if pd.notna(snapshot["tone"]) else "n.a.")
+    c2.metric("30-day change", f"{snapshot['delta_30d']:+.2f}" if pd.notna(snapshot["delta_30d"]) else "n.a.")
+    c3.metric("Core speaker tone", f"{snapshot['core_tone']:.2f}" if pd.notna(snapshot["core_tone"]) else "n.a.")
+    c4.metric("Documents in view", f"{len(view):,}")
+
+    series = aggregate_series(view, freq="30D")
+    left, right = st.columns([1.7, 1.1])
+
+    with left:
+        if not series.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=series["date"], y=series["tone_composite"], mode="lines+markers", name="Tone composite"))
+            fig.add_trace(go.Scatter(x=series["date"], y=series["hawkish_composite"], mode="lines", name="Hawkish"))
+            fig.add_trace(go.Scatter(x=series["date"], y=series["dovish_composite"], mode="lines", name="Dovish"))
+            fig.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=20), title="Fed tone over time")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No time series available for the current filters.")
+
+    with right:
+        matrix = speaker_matrix(view, top_n=12)
+        if not matrix.empty:
+            heat = px.scatter(
+                matrix,
+                x="tone",
+                y="speaker",
+                size="docs",
+                color="speaker_delta",
+                hover_data=["stance", "last_date", "docs"],
+                title="Speaker matrix",
+                height=420,
             )
-        )
+            heat.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(heat, use_container_width=True)
+        else:
+            st.info("No speaker matrix available.")
 
-    fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af")
-    fig.update_yaxes(title_text="Beta")
-    return apply_base_layout(fig, title=f"Asset Sensitivity to Inflation Surprise | {horizon}", height=360)
+    st.subheader("Latest communication")
+    latest_cols = [
+        "date", "speaker", "event_type", "title", "stance", "net_score", "speaker_delta",
+        "inflation_concern", "labor_concern", "growth_concern", "url"
+    ]
+    latest_view = view.sort_values("date", ascending=False)[latest_cols].copy()
+    latest_view = latest_view.rename(columns={
+        "net_score": "tone",
+        "speaker_delta": "delta vs speaker baseline",
+        "inflation_concern": "inflation",
+        "labor_concern": "labor",
+        "growth_concern": "growth",
+    })
+    st.dataframe(latest_view, use_container_width=True, hide_index=True)
 
-
-def plot_scatter(events: pd.DataFrame, asset: str, horizon: str, use_core: bool) -> go.Figure:
-    s_col = get_summary_surprise_col(use_core)
-    r_col = pick_reaction_col(asset, horizon)
-    tmp = events[[s_col, r_col, "event_day"]].dropna().copy()
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=tmp[s_col],
-            y=tmp[r_col],
-            mode="markers",
-            name=asset,
-            marker=dict(size=9),
-            text=tmp["event_day"].dt.strftime("%Y-%m-%d"),
-            hovertemplate=(
-                "Date: %{text}<br>"
-                "Surprise: %{x:.2f} pp<br>"
-                f"{asset} {horizon}: "
-                "%{y:.2f}%<extra></extra>"
-            ),
-        )
+    st.subheader("Transcript underwrite")
+    options = view.sort_values("date", ascending=False).copy()
+    options["label"] = options.apply(
+        lambda r: f"{r['date'].date() if pd.notna(r['date']) else 'n.a.'} | {r['speaker'] or 'Unknown'} | {r['title']}", axis=1
     )
-    fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af")
-    fig.add_vline(x=0, line_width=1, line_dash="dot", line_color="#9ca3af")
-    fig.update_xaxes(title_text="Surprise (pp)")
-    fig.update_yaxes(title_text=f"{asset} return (%)")
-    return apply_base_layout(fig, title=f"{asset} Reaction vs Inflation Surprise", height=400)
-
-
-# ---------------- Data ----------------
-today = pd.Timestamp.today().normalize()
-start = pd.Timestamp(START_DATE)
-
-status_box = st.empty()
-status_box.info("Loading CPI data from FRED...")
-
-with st.spinner("Loading CPI data from FRED..."):
-    raw_series, fred_errors, fred_diagnostics = load_all_fred_series(start, today)
-
-required = ["headline_cpi", "core_cpi"]
-missing_required = [k for k in required if raw_series[k].empty]
-
-if missing_required:
-    st.error(f"Required CPI series failed to load: {', '.join(missing_required)}")
-    if fred_errors:
-        with st.expander("FRED error details", expanded=True):
-            for k, v in fred_errors.items():
-                st.write(f"{k}: {v}")
-    st.stop()
-
-macro_raw = pd.concat(
-    [
-        raw_series["headline_cpi"].rename("headline_cpi"),
-        raw_series["core_cpi"].rename("core_cpi"),
-        raw_series["recession"].rename("recession"),
-    ],
-    axis=1,
-).sort_index().ffill()
-
-macro_raw = macro_raw[macro_raw.index >= start].copy()
-macro_raw = macro_raw.dropna(subset=["headline_cpi", "core_cpi"])
-
-if macro_raw.empty:
-    st.error("Macro dataframe is empty after cleaning.")
-    st.stop()
-
-status_box.info("CPI loaded. Loading market prices asset by asset...")
-
-with st.spinner("Loading market prices..."):
-    try:
-        prices, market_failures, market_diagnostics = fetch_asset_prices(START_DATE)
-    except Exception as e:
-        st.error(f"Market price load failed: {e}")
+    if options.empty:
+        st.info("No documents match the current filters.")
         st.stop()
 
-status_box.success("Data loaded.")
+    selected_label = st.selectbox("Choose a document", options["label"].tolist(), index=0)
+    doc = options.loc[options["label"] == selected_label].iloc[0]
 
-if fred_errors:
-    noncritical_fred = {k: v for k, v in fred_errors.items() if k not in ["headline_cpi", "core_cpi"]}
-    if noncritical_fred:
-        st.warning("Some non-critical FRED series failed to load.")
-        with st.expander("FRED non-critical series errors"):
-            for k, v in noncritical_fred.items():
-                st.write(f"{k}: {v}")
+    d1, d2 = st.columns([1.2, 1.8])
+    with d1:
+        st.markdown(f"**Title**: {doc['title']}")
+        st.markdown(f"**Speaker**: {doc['speaker'] or 'Unknown'}")
+        st.markdown(f"**Role**: {doc['role'] or 'Unknown'}")
+        st.markdown(f"**Date**: {doc['date'].date() if pd.notna(doc['date']) else 'Unknown'}")
+        st.markdown(f"**Event type**: {doc['event_type'].title()}")
+        if doc.get("venue"):
+            st.markdown(f"**Venue**: {doc['venue']}")
+        st.markdown(f"**Tone**: {doc['stance']} ({doc['net_score']:.2f})")
+        st.markdown(f"**Delta vs speaker baseline**: {doc['speaker_delta']:+.2f}" if pd.notna(doc['speaker_delta']) else "**Delta vs speaker baseline**: n.a.")
+        st.markdown(f"**Source**: [Open original]({doc['url']})")
+        if doc.get("pdf_url"):
+            st.markdown(f"**PDF**: [Open PDF]({doc['pdf_url']})")
 
-if market_failures:
-    st.warning("Some market assets failed to load.")
-    with st.expander("Market asset errors"):
-        for k, v in market_failures.items():
-            st.write(f"{k}: {v}")
+        scorecard = pd.DataFrame(
+            {
+                "dimension": ["hawkish", "dovish", "inflation", "labor", "growth", "financial stability", "balance sheet", "uncertainty"],
+                "score": [
+                    doc["hawkish_score"], doc["dovish_score"], doc["inflation_concern"], doc["labor_concern"],
+                    doc["growth_concern"], doc["financial_stability"], doc["balance_sheet"], doc["uncertainty_risk"]
+                ],
+            }
+        )
+        bar = px.bar(scorecard, x="score", y="dimension", orientation="h", height=320, title="Document scorecard")
+        bar.update_layout(margin=dict(l=20, r=20, t=40, b=20), yaxis=dict(categoryorder="total ascending"))
+        st.plotly_chart(bar, use_container_width=True)
 
-if show_loader_diagnostics:
-    with st.expander("Loader diagnostics", expanded=True):
-        st.markdown("**FRED**")
-        for line in fred_diagnostics:
-            st.write(line)
-        st.markdown("**Market data**")
-        for line in market_diagnostics:
-            st.write(line)
+    with d2:
+        hawk_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["hawkish"], max_snippets=4)
+        dove_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["dovish"], max_snippets=4)
+        infl_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["inflation"], max_snippets=2)
+        labor_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["labor"], max_snippets=2)
 
-# ---------------- Build event dataset ----------------
-cpi = prepare_cpi_table(macro_raw)
+        st.markdown("**Passages driving the score**")
+        if hawk_snips:
+            st.markdown("Hawkish passages")
+            for s in hawk_snips:
+                st.markdown(f"> {s}")
+        if dove_snips:
+            st.markdown("Dovish passages")
+            for s in dove_snips:
+                st.markdown(f"> {s}")
+        if infl_snips:
+            st.markdown("Inflation passages")
+            for s in infl_snips:
+                st.markdown(f"> {s}")
+        if labor_snips:
+            st.markdown("Labor passages")
+            for s in labor_snips:
+                st.markdown(f"> {s}")
 
-consensus_df = None
-if uploaded_consensus is not None:
-    try:
-        consensus_df = parse_consensus_upload(uploaded_consensus)
-    except Exception as e:
-        st.error(f"Consensus upload failed validation: {e}")
-        st.stop()
-
-events = merge_consensus(cpi, consensus_df)
-events = compute_surprises(events, surprise_method)
-events = compute_event_reactions(events, prices)
-
-if events.empty:
-    st.error("No event dataset could be built.")
-    st.stop()
-
-events = filter_history_window(events, history_window, "event_day")
-
-if events.empty:
-    st.warning("No events available in the selected window.")
-    st.stop()
-
-# ---------------- Snapshot ----------------
-latest = events.dropna(subset=["headline_mom", "core_mom"], how="all").iloc[-1]
-latest_surprise_col = get_summary_surprise_col(use_core_for_summary)
-latest_surprise = latest.get(latest_surprise_col, np.nan)
-
-st.markdown("<div class='section-title'>Snapshot</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>Latest CPI event, latest surprise, and selected cross-asset reaction.</div>",
-    unsafe_allow_html=True,
-)
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-with c1:
-    metric_card("Event Date", pd.to_datetime(latest["event_day"]).strftime("%Y-%m-%d"), "Market event day")
-with c2:
-    metric_card("Headline MoM", fmt_pct(latest.get("headline_mom", np.nan)), "Actual print")
-with c3:
-    metric_card("Core MoM", fmt_pct(latest.get("core_mom", np.nan)), "Actual print")
-with c4:
-    metric_card("Headline Surprise", fmt_pp(latest.get("headline_surprise", np.nan)), "Vs selected method")
-with c5:
-    metric_card("Core Surprise", fmt_pp(latest.get("core_surprise", np.nan)), "Vs selected method")
-with c6:
-    metric_card(
-        f"Selected Surprise",
-        fmt_pp(latest_surprise),
-        "Core" if use_core_for_summary else "Headline"
-    )
-
-st.caption(
-    f"CPI month: {pd.to_datetime(latest['cpi_month']).strftime('%Y-%m')} | "
-    f"Method: {surprise_method} | "
-    f"Window: {history_window}"
-)
-
-# ---------------- Quick Read ----------------
-st.markdown("<div class='section-title'>Quick Read</div>", unsafe_allow_html=True)
-
-quick_left, quick_right = st.columns([1.35, 1])
-
-with quick_left:
-    mode_text = "uploaded consensus" if uploaded_consensus is not None else "proxy surprise method"
-    st.markdown(
-        f"""
-        <div class="info-box">
-        <b>Framework</b><br><br>
-        This dashboard treats each CPI release as an event and then measures how major assets behaved around that shock. The cleanest version uses <b>{mode_text}</b>. When no consensus file is uploaded, the app falls back to internal baselines like prior-month MoM or the prior 6-month rolling median.
-        <br><br>
-        That still gives you a useful read on whether the latest print ran hot or cool versus recent inflation behavior, and whether the market confirmed or faded that impulse.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with quick_right:
-    spy_col = pick_reaction_col("SPY", reaction_horizon)
-    tlt_col = pick_reaction_col("TLT", reaction_horizon)
-    spy_move = latest.get(spy_col, np.nan)
-    tlt_move = latest.get(tlt_col, np.nan)
-
-    st.markdown(
-        f"""
-        <div class="info-box">
-        <b>Latest reaction</b><br><br>
-        SPY moved <b>{fmt_pct(spy_move)}</b> over the selected <b>{reaction_horizon}</b> horizon and TLT moved <b>{fmt_pct(tlt_move)}</b>.
-        <br><br>
-        The selected summary series is <b>{"core" if use_core_for_summary else "headline"}</b>, which is useful because core usually carries more policy weight.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# ---------------- Chartbook ----------------
-st.markdown("<div class='section-title'>Chartbook</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>Surprise history, sensitivity ranking, and cross-asset scatter plots.</div>",
-    unsafe_allow_html=True,
-)
-
-st.plotly_chart(plot_surprise_history(events, use_core_for_summary), use_container_width=True)
-
-left_top, right_top = st.columns([1.0, 1.0])
-with left_top:
-    st.plotly_chart(plot_asset_reaction_bars(events, reaction_horizon, use_core_for_summary), use_container_width=True)
-with right_top:
-    sensitivity_tbl = make_sensitivity_table(events, reaction_horizon, use_core_for_summary)
-    if sensitivity_tbl.empty:
-        st.info("No sensitivity table available for the selected window.")
-    else:
-        st.dataframe(
-            sensitivity_tbl.style.format(
-                {
-                    "Avg Return on Positive Surprise (%)": "{:.2f}",
-                    "Avg Return on Negative Surprise (%)": "{:.2f}",
-                    "Correlation to Surprise": "{:.2f}",
-                    "Reaction Beta": "{:.2f}",
-                }
-            ),
-            use_container_width=True,
-            height=360,
+        st.markdown("**Highlighted transcript excerpt**")
+        excerpt = clean_text(doc["body_text"])[:6000]
+        patterns = list({p for vals in SNIPPET_PATTERNS.values() for p in vals})
+        st.markdown(
+            f"<div style='line-height:1.6'>{highlight_terms(excerpt, patterns)}</div>",
+            unsafe_allow_html=True,
         )
 
-scatter_row_1 = st.columns(3)
-for slot, asset in zip(scatter_row_1, ["SPY", "TLT", "DXY"]):
-    with slot:
-        st.plotly_chart(
-            plot_scatter(events, asset, reaction_horizon, use_core_for_summary),
-            use_container_width=True,
-        )
+    st.subheader("Export")
+    export_cols = [
+        "date", "speaker", "role", "event_type", "title", "stance", "net_score", "speaker_delta",
+        "hawkish_score", "dovish_score", "inflation_concern", "labor_concern", "growth_concern",
+        "financial_stability", "balance_sheet", "uncertainty_risk", "url"
+    ]
+    csv_bytes = view.sort_values("date", ascending=False)[export_cols].to_csv(index=False).encode("utf-8")
+    st.download_button("Download filtered dataset as CSV", data=csv_bytes, file_name="fed_tone_filtered.csv", mime="text/csv")
 
-scatter_row_2 = st.columns(3)
-for slot, asset in zip(scatter_row_2, ["QQQ", "Gold", "Crude"]):
-    with slot:
-        st.plotly_chart(
-            plot_scatter(events, asset, reaction_horizon, use_core_for_summary),
-            use_container_width=True,
-        )
 
-# ---------------- Lower Panels ----------------
-left, right = st.columns([1.2, 0.8])
-
-with left:
-    st.markdown("<div class='section-title'>Recent CPI Events</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='section-subtitle'>Latest event rows used in the event study.</div>",
-        unsafe_allow_html=True,
-    )
-
-    latest_events_tbl = build_latest_event_table(events)
-    if latest_events_tbl.empty:
-        st.info("No recent events table available.")
-    else:
-        fmt_map = {}
-        for col in latest_events_tbl.columns:
-            if "date" in col or "month" in col:
-                continue
-            if latest_events_tbl[col].dtype.kind in "fi":
-                fmt_map[col] = "{:.2f}"
-
-        st.dataframe(
-            latest_events_tbl.style.format(fmt_map),
-            use_container_width=True,
-            height=420,
-        )
-
-with right:
-    st.markdown("<div class='section-title'>Download</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='section-subtitle'>Export the event dataset used in the dashboard.</div>",
-        unsafe_allow_html=True,
-    )
-
-    export_df = events.copy()
-    for col in ["cpi_month", "release_date", "event_day", "prev_day"]:
-        if col in export_df.columns:
-            export_df[col] = pd.to_datetime(export_df[col]).dt.strftime("%Y-%m-%d")
-
-    csv = export_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download CSV",
-        data=csv,
-        file_name="inflation_surprise_tracker.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-    st.markdown("<div class='section-title' style='margin-top:1.2rem;'>Methodology</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"""
-        <div class="info-box">
-        <b>FRED loading approach</b><br>
-        This version uses the same direct public CSV endpoint structure as your working liquidity tracker:
-        <br><br>
-        <code>fredgraph.csv?id=SERIES&cosd=START&coed=END</code>
-        <br><br>
-        <b>Surprise definitions</b><br>
-        • Consensus upload: actual MoM minus uploaded consensus<br>
-        • Vs prior month: actual MoM minus prior-month MoM<br>
-        • Vs 6M rolling median: actual MoM minus prior 6-month rolling median
-        <br><br>
-        <b>Asset reaction definitions</b><br>
-        • 0D: event-day close versus prior trading day close<br>
-        • 1D: next trading day close versus event-day close<br>
-        • 5D: five trading days after event-day close versus event-day close
-        <br><br>
-        <b>Release timing</b><br>
-        If no consensus file is uploaded, CPI release dates are estimated mechanically as a fallback.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-st.caption("© 2026 AD Fund Management LP")
+if __name__ == "__main__":
+    main()
+PY
+python -m py_compile /mnt/data/fed_tone_dashboard.py
