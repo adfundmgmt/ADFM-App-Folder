@@ -14,8 +14,8 @@ DEFAULT_STATEMENT_URL = "https://www.federalreserve.gov/newsevents/pressreleases
 DEFAULT_MINUTES_URL = "https://www.federalreserve.gov/monetarypolicy/fomcminutes20260318.htm"
 
 SERIES = {
-    "supercore": "CUSR0000SASL2RS",          # CPI services less rent of shelter
-    "wages": "FRBATLWGT3MMAWMHWGO",          # Atlanta Fed wage tracker
+    "supercore": "CUSR0000SASL2RS",
+    "wages": "FRBATLWGT3MMAWMHWGO",
     "unrate": "UNRATE",
     "anfci": "ANFCI",
     "hy_oas": "BAMLH0A0HYM2",
@@ -48,23 +48,27 @@ DOVE = {
     r"\brisks to employment\b": 1.25,
 }
 
-st.markdown(f"# {TITLE}")
+st.title(TITLE)
 st.caption("Map core services ex housing, wage growth, unemployment, financial conditions, market pricing, Fed language, and SEP medians into a single policy-bias readout.")
 
 def fred_csv(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    url = (
-        "https://fred.stlouisfed.org/graph/fredgraph.csv"
-        f"?id={series_id}&cosd={start:%Y-%m-%d}&coed={end:%Y-%m-%d}"
-    )
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start:%Y-%m-%d}&coed={end:%Y-%m-%d}"
     r = requests.get(url, timeout=30)
     r.raise_for_status()
-    df = pd.read_csv(StringIO(r.text))
-    if df.empty or len(df.columns) < 2:
+
+    raw = pd.read_csv(StringIO(r.text))
+    if raw.empty or raw.shape[1] < 2:
         raise ValueError(f"No usable data for {series_id}")
-    df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0], errors="coerce")
-    df.iloc[:, 1] = pd.to_numeric(df.iloc[:, 1], errors="coerce")
-    df = df.dropna(subset=[df.columns[0]]).sort_values(df.columns[0])
-    return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0], name=series_id)
+
+    out = pd.DataFrame({
+        "date": pd.to_datetime(raw.iloc[:, 0], errors="coerce"),
+        "value": pd.to_numeric(raw.iloc[:, 1], errors="coerce"),
+    }).dropna(subset=["date"]).sort_values("date")
+
+    if out.empty:
+        raise ValueError(f"No valid observations for {series_id}")
+
+    return pd.Series(out["value"].to_numpy(), index=out["date"].to_numpy(), name=series_id)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_series(start: pd.Timestamp, end: pd.Timestamp):
@@ -84,8 +88,7 @@ def page_text(url: str) -> str:
     soup = BeautifulSoup(r.text, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
-    text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
-    return text
+    return re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
 
 def yoy(s: pd.Series) -> pd.Series:
     return s.pct_change(12) * 100
@@ -93,7 +96,7 @@ def yoy(s: pd.Series) -> pd.Series:
 def ann3m(s: pd.Series) -> pd.Series:
     return ((s / s.shift(3)) ** 4 - 1) * 100
 
-def last(s: pd.Series):
+def last(s: pd.Series) -> float:
     s = s.dropna()
     return float("nan") if s.empty else float(s.iloc[-1])
 
@@ -122,7 +125,7 @@ def classify(total):
         return "tightening risk re-emerging"
     return "hold bias intact"
 
-def fig_line(s: pd.Series, title: str, months: int, ytitle: str = "%", ref=None, ref_name="Reference"):
+def line_chart(s: pd.Series, title: str, months: int, ytitle: str = "%", ref=None, ref_name="Reference"):
     s = s.dropna()
     if not s.empty:
         s = s[s.index >= s.index.max() - pd.DateOffset(months=months)]
@@ -136,9 +139,9 @@ def fig_line(s: pd.Series, title: str, months: int, ytitle: str = "%", ref=None,
 
 with st.sidebar:
     years = st.selectbox("Lookback", [2, 3, 5, 10], index=2)
-    market_mode = st.radio("Market pricing input", ["Cuts in bps", "Implied end-year rate"], index=0)
-    cuts_bps = st.number_input("Cuts over next 12 months (bps)", -100, 400, 50, 25) if market_mode == "Cuts in bps" else None
-    implied_rate = st.number_input("Implied end-year fed funds rate (%)", 0.0, 10.0, 3.10, 0.05, format="%.2f") if market_mode == "Implied end-year rate" else None
+    pricing_mode = st.radio("Market pricing input", ["Cuts in bps", "Implied end-year rate"], index=0)
+    cuts_bps = st.number_input("Cuts over next 12 months (bps)", -100, 400, 50, 25) if pricing_mode == "Cuts in bps" else None
+    implied_rate = st.number_input("Implied end-year fed funds rate (%)", 0.0, 10.0, 3.10, 0.05, format="%.2f") if pricing_mode == "Implied end-year rate" else None
     use_language = st.checkbox("Include Fed language", value=False)
     statement_url = st.text_input("Statement URL", DEFAULT_STATEMENT_URL) if use_language else DEFAULT_STATEMENT_URL
     minutes_url = st.text_input("Minutes URL", DEFAULT_MINUTES_URL) if use_language else DEFAULT_MINUTES_URL
@@ -151,6 +154,7 @@ with st.spinner("Loading data..."):
 
 required = ["supercore", "wages", "unrate", "anfci", "fed_upper", "sep_fed", "sep_unrate", "sep_pce", "sep_core_pce"]
 missing = [k for k in required if raw[k].empty]
+
 if missing:
     st.error("Required series failed to load: " + ", ".join(SERIES[k] for k in missing))
     with st.expander("Error details"):
@@ -158,7 +162,8 @@ if missing:
             st.write(v)
     st.stop()
 
-df = pd.concat(raw.values(), axis=1, keys=raw.keys()).ffill()
+df = pd.concat([raw[k].rename(k) for k in raw], axis=1).sort_index().ffill()
+
 supercore_3m = ann3m(df["supercore"])
 supercore_yoy = yoy(df["supercore"])
 
@@ -169,7 +174,7 @@ sep_un = sep_val(df["sep_unrate"], year)
 sep_pce = sep_val(df["sep_pce"], year)
 sep_core = sep_val(df["sep_core_pce"], year)
 
-if market_mode == "Cuts in bps":
+if pricing_mode == "Cuts in bps":
     implied_end = upper - cuts_bps / 100.0
 else:
     implied_end = implied_rate
@@ -283,11 +288,11 @@ st.dataframe(score_df, use_container_width=True, hide_index=True)
 
 l, r = st.columns(2)
 with l:
-    st.plotly_chart(fig_line(supercore_3m, "Core Services ex Housing, 3m Annualized", years * 12), use_container_width=True)
-    st.plotly_chart(fig_line(df["wages"], "Atlanta Fed Wage Growth Tracker", years * 12), use_container_width=True)
-    st.plotly_chart(fig_line(df["unrate"], "Unemployment Rate vs SEP Median", years * 12, ref=sep_un, ref_name="SEP median"), use_container_width=True)
+    st.plotly_chart(line_chart(supercore_3m, "Core Services ex Housing, 3m Annualized", years * 12), use_container_width=True)
+    st.plotly_chart(line_chart(df["wages"], "Atlanta Fed Wage Growth Tracker", years * 12), use_container_width=True)
+    st.plotly_chart(line_chart(df["unrate"], "Unemployment Rate vs SEP Median", years * 12, ref=sep_un, ref_name="SEP median"), use_container_width=True)
 with r:
-    st.plotly_chart(fig_line(df["anfci"], "Financial Conditions (ANFCI)", years * 12, ytitle="Index", ref=0, ref_name="Neutral"), use_container_width=True)
+    st.plotly_chart(line_chart(df["anfci"], "Financial Conditions (ANFCI)", years * 12, ytitle="Index", ref=0, ref_name="Neutral"), use_container_width=True)
     bar = pd.DataFrame({"Series": ["Current fed funds upper", "Market-implied end-year rate", "SEP median end-year rate"], "Value": [upper, implied_end, sep_fed]})
     fig = go.Figure(go.Bar(x=bar["Series"], y=bar["Value"]))
     fig.update_layout(template="plotly_white", height=300, margin=dict(l=20, r=20, t=50, b=20), title="Where policy is vs where market and SEP think it goes", yaxis_title="%")
