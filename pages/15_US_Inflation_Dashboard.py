@@ -1,9 +1,14 @@
+import os
+import time
+from io import StringIO
+from typing import Optional, Tuple, List
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-from io import StringIO
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
@@ -23,6 +28,7 @@ FRED_SERIES = {
 
 START_DATE_FULL = "1990-01-01"
 APP_TITLE = "US Inflation Dashboard"
+CACHE_DIR = "fred_cache"
 
 THEME = {
     "headline": "#2563eb",
@@ -39,6 +45,8 @@ THEME = {
 
 PERIOD_OPTIONS = ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"]
 
+os.makedirs(CACHE_DIR, exist_ok=True)
+
 # -----------------------------------------------------------------------------
 # Sidebar
 # -----------------------------------------------------------------------------
@@ -48,13 +56,13 @@ with st.sidebar:
         """
         Purpose: US CPI dashboard for inflation trend, momentum, and regime classification.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        What it covers  
+        • Headline and core CPI trend  
+        • YoY, MoM, and 3M annualized inflation  
+        • Recession overlays and regime classification  
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        Data source  
+        • FRED public CSV endpoints
         """
     )
     st.markdown("---")
@@ -65,7 +73,7 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-def apply_base_layout(fig: go.Figure, title: str | None = None, height: int = 460) -> go.Figure:
+def apply_base_layout(fig: go.Figure, title: Optional[str] = None, height: int = 460) -> go.Figure:
     fig.update_layout(
         title=title,
         height=height,
@@ -155,7 +163,7 @@ def build_custom_month_range(
     max_date: pd.Timestamp,
     default_start: pd.Timestamp,
     default_end: pd.Timestamp,
-) -> tuple[pd.Timestamp, pd.Timestamp]:
+) -> Tuple[pd.Timestamp, pd.Timestamp]:
     month_index = pd.period_range(min_date, max_date, freq="M")
     month_labels = [str(p) for p in month_index]
 
@@ -180,30 +188,51 @@ def build_custom_month_range(
     return start, end
 
 
-def fetch_url_text(url: str, timeout: int = 20) -> str:
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "text/csv,text/plain,application/octet-stream,*/*",
-        },
+def build_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=0.75,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
     )
-    with urlopen(req, timeout=timeout) as response:
-        raw = response.read()
-        return raw.decode("utf-8", errors="replace")
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/csv,text/plain,*/*",
+        }
+    )
+    return session
+
+
+def cache_path(series_id: str) -> str:
+    return os.path.join(CACHE_DIR, f"{series_id}.csv")
+
+
+def save_last_good_cache(series_id: str, text: str) -> None:
+    with open(cache_path(series_id), "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def load_last_good_cache(series_id: str) -> Optional[str]:
+    path = cache_path(series_id)
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 def detect_fred_error_payload(text: str, series_id: str) -> None:
-    preview = text[:500].lower()
+    preview = text[:1000].lower()
     if "<html" in preview or "<!doctype html" in preview:
         raise RuntimeError(
-            f"FRED returned HTML instead of CSV for {series_id}. "
-            f"This usually means a temporary upstream error or rate-limit page."
+            f"FRED returned HTML instead of CSV for {series_id}. Temporary upstream or rate-limit issue."
         )
-    if "error" in preview and "date" not in preview:
-        raise RuntimeError(
-            f"FRED returned an error payload instead of data for {series_id}."
-        )
+    if len(text.strip()) == 0:
+        raise RuntimeError(f"Empty payload returned for {series_id}.")
 
 
 def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
@@ -238,8 +267,7 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
 
     if date_col is None or value_col is None:
         raise ValueError(
-            f"Unexpected FRED response format for {series_id}. "
-            f"Columns received: {original_cols}"
+            f"Unexpected FRED response format for {series_id}. Columns received: {original_cols}"
         )
 
     out = df[[date_col, value_col]].copy()
@@ -247,7 +275,8 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     return out
 
 
-def fetch_fred_csv(series_id: str) -> pd.DataFrame:
+def fetch_fred_csv_text(series_id: str) -> str:
+    session = build_session()
     urls = [
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={START_DATE_FULL}&id={series_id}",
@@ -257,24 +286,30 @@ def fetch_fred_csv(series_id: str) -> pd.DataFrame:
 
     for url in urls:
         try:
-            text = fetch_url_text(url, timeout=20)
+            resp = session.get(url, timeout=20)
+            resp.raise_for_status()
+            text = resp.text
             detect_fred_error_payload(text, series_id)
-
-            df = pd.read_csv(StringIO(text))
-            if df.empty:
-                raise RuntimeError(f"Empty CSV returned for {series_id}")
-
-            df = normalize_fred_columns(df, series_id)
-            return df
-
-        except (URLError, HTTPError) as e:
-            last_error = f"Network error for {series_id}: {e}"
-        except pd.errors.EmptyDataError:
-            last_error = f"Empty CSV payload for {series_id}"
+            save_last_good_cache(series_id, text)
+            return text
         except Exception as e:
             last_error = str(e)
+            time.sleep(0.5)
+
+    cached = load_last_good_cache(series_id)
+    if cached is not None:
+        return cached
 
     raise RuntimeError(f"Failed to fetch FRED series {series_id}: {last_error}")
+
+
+def fetch_fred_csv(series_id: str) -> pd.DataFrame:
+    text = fetch_fred_csv_text(series_id)
+    df = pd.read_csv(StringIO(text))
+    if df.empty:
+        raise RuntimeError(f"Empty CSV returned for {series_id}")
+    df = normalize_fred_columns(df, series_id)
+    return df
 
 
 def load_fred_series(series_id: str, start: str) -> pd.Series:
@@ -304,7 +339,6 @@ def fetch_fred_dataset(start: str = START_DATE_FULL) -> pd.DataFrame:
     df = df.sort_index()
     df = df[~df.index.duplicated(keep="last")]
     df = df.resample("MS").last()
-
     return df
 
 
@@ -343,7 +377,7 @@ def filter_window(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Times
     return df.loc[(df.index >= start_date) & (df.index <= end_date)].copy()
 
 
-def get_recession_periods(flag: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+def get_recession_periods(flag: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
     f = flag.fillna(0).astype(int)
     if f.empty:
         return []
@@ -362,10 +396,10 @@ def get_recession_periods(flag: pd.Series) -> list[tuple[pd.Timestamp, pd.Timest
 
 
 def trim_recession_periods(
-    periods: list[tuple[pd.Timestamp, pd.Timestamp]],
+    periods: List[Tuple[pd.Timestamp, pd.Timestamp]],
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
-) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
     out = []
     for s, e in periods:
         if e < start_date or s > end_date:
@@ -374,7 +408,7 @@ def trim_recession_periods(
     return out
 
 
-def add_recession_shapes(fig: go.Figure, periods: list[tuple[pd.Timestamp, pd.Timestamp]], rows: list[int]) -> None:
+def add_recession_shapes(fig: go.Figure, periods: List[Tuple[pd.Timestamp, pd.Timestamp]], rows: List[int]) -> None:
     for row in rows:
         xref = "x" if row == 1 else f"x{row}"
         yref = "y domain" if row == 1 else f"y{row} domain"
@@ -428,11 +462,10 @@ def build_latest_table(df: pd.DataFrame, rows: int = 12) -> pd.DataFrame:
     ]
     return tbl
 
-
 # -----------------------------------------------------------------------------
 # Charts
 # -----------------------------------------------------------------------------
-def plot_yoy(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
+def plot_yoy(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
     fig = go.Figure()
 
     fig.add_trace(
@@ -462,7 +495,7 @@ def plot_yoy(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Ti
     return fig
 
 
-def plot_mom(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
+def plot_mom(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
     fig = make_subplots(
         rows=2,
         cols=1,
@@ -503,7 +536,7 @@ def plot_mom(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Ti
     return fig
 
 
-def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
+def plot_core_panel(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
     fig = make_subplots(
         rows=2,
         cols=1,
@@ -544,15 +577,15 @@ def plot_core_panel(df: pd.DataFrame, recession_periods: list[tuple[pd.Timestamp
     apply_base_layout(fig, title="Core CPI Level and Short-Horizon Inflation Signal", height=560)
     return fig
 
-
 # -----------------------------------------------------------------------------
 # Data load and prep
 # -----------------------------------------------------------------------------
-try:
-    raw_df = fetch_fred_dataset(START_DATE_FULL)
-except Exception as e:
-    st.error(f"Failed to load FRED data: {e}")
-    st.stop()
+with st.spinner("Loading FRED CPI data..."):
+    try:
+        raw_df = fetch_fred_dataset(START_DATE_FULL)
+    except Exception as e:
+        st.error(f"Failed to load FRED data: {e}")
+        st.stop()
 
 if raw_df.empty:
     st.error("Critical FRED data failed to load. Please refresh or check your connection.")
@@ -779,13 +812,13 @@ with st.expander("Methodology & Sources", expanded=False):
         • Core 3M vs YoY gap = `Core 3M annualised - Core YoY`
 
         **Interpretation layer**  
-        The dashboard labels the current inflation regime using the gap between core 3M annualised inflation and core YoY inflation:  
+        The dashboard labels the current inflation regime using the gap between core 3M annualised inflation and core YoY inflation:
         • materially below YoY = disinflationary  
         • near YoY = sticky  
         • materially above YoY = reheating
 
         **Notes**  
-        All series are standardised to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
+        All series are standardized to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
         """
     )
 
