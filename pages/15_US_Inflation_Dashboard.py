@@ -1,49 +1,68 @@
 import os
 import time
 from io import StringIO
-from typing import Optional, Tuple, List
+from typing import Optional, Dict, List, Tuple
 
-import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
 import requests
+import streamlit as st
+import yfinance as yf
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from plotly.subplots import make_subplots
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # -----------------------------------------------------------------------------
 # Page config
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="US CPI Dashboard", layout="wide")
+st.set_page_config(page_title="Inflation Surprise Tracker", layout="wide")
 
 # -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
+APP_TITLE = "Inflation Surprise Tracker"
+START_DATE = "2005-01-01"
+CACHE_DIR = "macro_cache"
+
 FRED_SERIES = {
-    "headline": "CPIAUCNS",
-    "core": "CPILFESL",
+    "headline_cpi": "CPIAUCNS",
+    "core_cpi": "CPILFESL",
     "recession": "USREC",
 }
 
-START_DATE_FULL = "1990-01-01"
-APP_TITLE = "US Inflation Dashboard"
-CACHE_DIR = "fred_cache"
+ASSET_MAP = {
+    "SPY": "SPY",
+    "QQQ": "QQQ",
+    "TLT": "TLT",
+    "DXY": "DX-Y.NYB",
+    "Gold": "GLD",
+    "Crude": "CL=F",
+}
 
 THEME = {
     "headline": "#2563eb",
     "core": "#f59e0b",
-    "recession_fill": "rgba(60, 60, 60, 0.16)",
-    "text": "#1f2937",
+    "pos": "#16a34a",
+    "neg": "#dc2626",
+    "neutral": "#64748b",
+    "text": "#111827",
     "subtle_text": "#6b7280",
-    "grid": "rgba(120, 120, 120, 0.16)",
-    "zero": "rgba(30, 41, 59, 0.35)",
+    "grid": "rgba(120,120,120,0.16)",
+    "zero": "rgba(30,41,59,0.30)",
     "paper_bg": "white",
     "plot_bg": "white",
-    "border": "rgba(31, 41, 55, 0.10)",
+    "border": "rgba(31,41,55,0.10)",
+    "recession_fill": "rgba(60,60,60,0.12)",
 }
 
-PERIOD_OPTIONS = ["1M", "3M", "6M", "9M", "1Y", "3Y", "5Y", "All"]
+SURPRISE_METHODS = [
+    "Consensus upload",
+    "Vs prior month",
+    "Vs 6M rolling median",
+]
+
+WINDOW_OPTIONS = ["3Y", "5Y", "10Y", "All"]
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -54,35 +73,54 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: US CPI dashboard for inflation trend, momentum, and regime classification.
+        Purpose: Track CPI surprises and measure how markets reacted around each release.
 
-        What it covers
-        • Headline and core CPI trend
-        • YoY, MoM, and 3M annualised inflation
-        • Recession overlays and regime classification
+        What it does
+        • Computes headline/core CPI MoM and YoY
+        • Measures surprise versus uploaded consensus or fallback proxy
+        • Tracks same-day, 1D, and 5D asset reactions
+        • Shows which assets are most sensitive to inflation shocks
 
-        Data source
-        • FRED public CSV endpoints
+        Data
+        • FRED public CSV endpoints for CPI
+        • Yahoo Finance for market prices
+
+        Notes
+        • Best mode is uploaded consensus with exact release dates
+        • Fallback modes are useful but are still proxies
         """
     )
     st.markdown("---")
-    st.subheader("Time Range")
-    period = st.selectbox("Select period:", PERIOD_OPTIONS, index=7)
-    use_custom_range = st.checkbox("Custom date range", value=False)
+
+    selected_window = st.selectbox("History window", WINDOW_OPTIONS, index=1)
+    surprise_method = st.selectbox("Surprise method", SURPRISE_METHODS, index=0)
+    event_horizon = st.selectbox("Reaction horizon", ["0D", "1D", "5D"], index=2)
+    use_core_for_summary = st.checkbox("Use core CPI surprise in summary", value=True)
+
+    st.markdown("---")
+    st.subheader("Optional consensus upload")
+    uploaded_consensus = st.file_uploader(
+        "Upload CSV with release dates and consensus",
+        type=["csv"],
+        help=(
+            "Columns supported: release_date, cpi_month, headline_mom_consensus, "
+            "core_mom_consensus. Release date should be the actual CPI release date."
+        ),
+    )
 
     st.markdown("---")
     if st.button("Clear cached data"):
         st.cache_data.clear()
-        for series_id in FRED_SERIES.values():
-            path = os.path.join(CACHE_DIR, f"{series_id}.csv")
-            if os.path.exists(path):
+        for filename in os.listdir(CACHE_DIR):
+            path = os.path.join(CACHE_DIR, filename)
+            if os.path.isfile(path):
                 os.remove(path)
         st.success("Cache cleared. Rerun the app.")
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-def apply_base_layout(fig: go.Figure, title: Optional[str] = None, height: int = 460) -> go.Figure:
+def apply_base_layout(fig: go.Figure, title: Optional[str] = None, height: int = 450) -> go.Figure:
     fig.update_layout(
         title=title,
         height=height,
@@ -108,7 +146,6 @@ def apply_base_layout(fig: go.Figure, title: Optional[str] = None, height: int =
         showline=True,
         linecolor=THEME["border"],
         rangeslider=dict(visible=False),
-        tickformat="%Y-%m",
     )
     fig.update_yaxes(
         showgrid=True,
@@ -121,93 +158,30 @@ def apply_base_layout(fig: go.Figure, title: Optional[str] = None, height: int =
     return fig
 
 
-def fmt_pct(x: float) -> str:
-    return "N/A" if pd.isna(x) else f"{x:.2f}%"
+def fmt_pct(x: float, digits: int = 2) -> str:
+    return "N/A" if pd.isna(x) else f"{x:.{digits}f}%"
 
 
-def safe_delta_text(curr: float, prev: float) -> str:
-    if pd.isna(curr) or pd.isna(prev):
-        return "vs prior print: N/A"
-    return f"vs prior print: {curr - prev:+.2f} pp"
-
-
-def classify_inflation_regime(core_yoy: float, core_3m_ann: float) -> str:
-    if pd.isna(core_yoy) or pd.isna(core_3m_ann):
-        return "Insufficient data"
-    gap = core_3m_ann - core_yoy
-    if gap <= -0.35:
-        return "Disinflationary"
-    if gap >= 0.35:
-        return "Reheating"
-    return "Sticky"
+def fmt_num(x: float, digits: int = 2) -> str:
+    return "N/A" if pd.isna(x) else f"{x:.{digits}f}"
 
 
 def month_start(ts) -> pd.Timestamp:
     return pd.Timestamp(ts).to_period("M").to_timestamp(how="start")
 
 
-def period_to_start_date(period_label: str, end_date: pd.Timestamp) -> pd.Timestamp:
-    end_date = month_start(end_date)
-
-    if period_label == "All":
-        return month_start(pd.Timestamp(START_DATE_FULL))
-
-    mapping = {
-        "1M": 3,
-        "3M": 6,
-        "6M": 9,
-        "9M": 12,
-        "1Y": 18,
-        "3Y": 42,
-        "5Y": 66,
-    }
-    months_back = mapping.get(period_label)
-    if months_back is None:
-        raise ValueError(f"Invalid period selected: {period_label}")
-    return month_start(end_date - pd.DateOffset(months=months_back))
+def cache_path(name: str) -> str:
+    safe_name = name.replace("/", "_").replace(":", "_").replace("?", "_").replace("&", "_").replace("=", "_")
+    return os.path.join(CACHE_DIR, f"{safe_name}.csv")
 
 
-def build_custom_month_range(
-    min_date: pd.Timestamp,
-    max_date: pd.Timestamp,
-    default_start: pd.Timestamp,
-    default_end: pd.Timestamp,
-) -> Tuple[pd.Timestamp, pd.Timestamp]:
-    month_index = pd.period_range(min_date, max_date, freq="M")
-    month_labels = [str(p) for p in month_index]
-
-    default_start_period = pd.Period(default_start, freq="M")
-    default_end_period = pd.Period(default_end, freq="M")
-
-    try:
-        default_value = (
-            month_labels.index(str(default_start_period)),
-            month_labels.index(str(default_end_period)),
-        )
-    except ValueError:
-        default_value = (0, len(month_labels) - 1)
-
-    sel = st.sidebar.select_slider(
-        "Select month range:",
-        options=month_labels,
-        value=(month_labels[default_value[0]], month_labels[default_value[1]]),
-    )
-    start = pd.Period(sel[0], freq="M").to_timestamp(how="start")
-    end = pd.Period(sel[1], freq="M").to_timestamp(how="start")
-    return start, end
-
-
-def cache_path(series_id: str) -> str:
-    return os.path.join(CACHE_DIR, f"{series_id}.csv")
-
-
-def save_last_good_cache(series_id: str, text: str) -> None:
-    with open(cache_path(series_id), "w", encoding="utf-8") as f:
+def save_text_cache(name: str, text: str) -> None:
+    with open(cache_path(name), "w", encoding="utf-8") as f:
         f.write(text)
 
 
-def load_last_good_cache(series_id: str) -> Optional[str]:
-    path = cache_path(series_id)
+def load_text_cache(name: str) -> Optional[str]:
+    path = cache_path(name)
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
@@ -220,7 +194,7 @@ def build_session() -> requests.Session:
         total=5,
         connect=5,
         read=5,
-        backoff_factor=1.5,
+        backoff_factor=1.25,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
         raise_on_status=False,
@@ -244,14 +218,12 @@ def build_session() -> requests.Session:
     return session
 
 
-def detect_bad_payload(text: str, series_id: str) -> None:
+def detect_bad_payload(text: str, label: str) -> None:
     preview = text[:1500].lower()
     if not text.strip():
-        raise RuntimeError(f"FRED returned an empty payload for {series_id}")
+        raise RuntimeError(f"Empty payload for {label}")
     if "<html" in preview or "<!doctype html" in preview:
-        raise RuntimeError(f"FRED returned HTML instead of CSV for {series_id}")
-    if "error" in preview and "date" not in preview:
-        raise RuntimeError(f"FRED returned an error payload for {series_id}")
+        raise RuntimeError(f"HTML returned instead of CSV for {label}")
 
 
 def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
@@ -266,7 +238,7 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
             break
 
     value_col = None
-    for candidate in [series_id.lower(), "value", "observation_value", "cpi", "usrec"]:
+    for candidate in [series_id.lower(), "value", "observation_value"]:
         if candidate in lower_map:
             value_col = lower_map[candidate]
             break
@@ -286,40 +258,31 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     return out
 
 
-def fetch_text(session: requests.Session, url: str, timeout=(10, 120)) -> str:
-    resp = session.get(url, timeout=timeout)
-    resp.raise_for_status()
-    text = resp.text
-    detect_bad_payload(text, url)
-    return text
-
-
-def fetch_fred_csv(series_id: str) -> pd.DataFrame:
+def fetch_fred_series_csv(series_id: str) -> pd.DataFrame:
     session = build_session()
-
     urls = [
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={START_DATE_FULL}&id={series_id}",
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={START_DATE}&id={series_id}",
     ]
 
     last_error = None
-
     for url in urls:
         try:
-            text = fetch_text(session, url, timeout=(10, 120))
+            resp = session.get(url, timeout=(10, 120))
+            resp.raise_for_status()
+            text = resp.text
+            detect_bad_payload(text, series_id)
             df = pd.read_csv(StringIO(text))
             if df.empty:
                 raise RuntimeError(f"Empty CSV returned for {series_id}")
-
             df = normalize_fred_columns(df, series_id)
-            save_last_good_cache(series_id, text)
+            save_text_cache(series_id, text)
             return df
-
         except Exception as e:
             last_error = f"{type(e).__name__}: {e}"
             time.sleep(1.0)
 
-    cached = load_last_good_cache(series_id)
+    cached = load_text_cache(series_id)
     if cached is not None:
         df = pd.read_csv(StringIO(cached))
         df = normalize_fred_columns(df, series_id)
@@ -329,11 +292,9 @@ def fetch_fred_csv(series_id: str) -> pd.DataFrame:
 
 
 def load_fred_series(series_id: str, start: str) -> pd.Series:
-    df = fetch_fred_csv(series_id)
-
+    df = fetch_fred_series_csv(series_id)
     df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
     df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
-
     df = df.dropna(subset=["DATE"]).copy()
     df = df[df["DATE"] >= pd.Timestamp(start)].copy()
 
@@ -345,7 +306,7 @@ def load_fred_series(series_id: str, start: str) -> pd.Series:
 
 
 @st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
-def fetch_fred_dataset(start: str = START_DATE_FULL) -> pd.DataFrame:
+def fetch_macro_data(start: str = START_DATE) -> pd.DataFrame:
     series_map = {}
     failures = []
 
@@ -363,356 +324,521 @@ def fetch_fred_dataset(start: str = START_DATE_FULL) -> pd.DataFrame:
     df = df.sort_index()
     df = df[~df.index.duplicated(keep="last")]
     df = df.resample("MS").last()
-
     df.attrs["failures"] = failures
     return df
 
 
-def prepare_cpi_dataset(raw: pd.DataFrame) -> pd.DataFrame:
-    df = raw.copy()
+@st.cache_data(show_spinner=False, ttl=6 * 60 * 60)
+def fetch_asset_prices(start: str = START_DATE) -> pd.DataFrame:
+    tickers = list(ASSET_MAP.values())
+    end_date = (pd.Timestamp.today() + pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+    failures = []
 
-    if "headline" in df.columns:
-        df["headline_yoy"] = df["headline"].pct_change(12) * 100
-        df["headline_mom"] = df["headline"].pct_change(1) * 100
-        df["headline_3m_ann"] = ((df["headline"] / df["headline"].shift(3)) ** 4 - 1) * 100
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            start=start,
+            end=end_date,
+            auto_adjust=False,
+            progress=False,
+            group_by="ticker",
+            threads=True,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Yahoo download failed: {e}")
 
-    if "core" in df.columns:
-        df["core_yoy"] = df["core"].pct_change(12) * 100
-        df["core_mom"] = df["core"].pct_change(1) * 100
-        df["core_3m_ann"] = ((df["core"] / df["core"].shift(3)) ** 4 - 1) * 100
-        df["core_3m_vs_yoy_gap"] = df["core_3m_ann"] - df["core_yoy"]
-
-        valid_hist = df["core_3m_ann"].dropna()
-        if not valid_hist.empty:
-            df["core_3m_ann_percentile"] = df["core_3m_ann"].apply(
-                lambda x: np.nan if pd.isna(x) else valid_hist.le(x).mean() * 100
-            )
-            mean = valid_hist.mean()
-            std = valid_hist.std(ddof=0)
-            if pd.notna(std) and not np.isclose(std, 0):
-                df["core_3m_ann_zscore"] = (df["core_3m_ann"] - mean) / std
+    frames = []
+    for label, ticker in ASSET_MAP.items():
+        try:
+            if len(tickers) == 1:
+                px = raw["Adj Close"].copy()
             else:
-                df["core_3m_ann_zscore"] = np.nan
-        else:
-            df["core_3m_ann_percentile"] = np.nan
-            df["core_3m_ann_zscore"] = np.nan
-    else:
-        df["core_3m_ann_percentile"] = np.nan
-        df["core_3m_ann_zscore"] = np.nan
+                if (ticker, "Adj Close") in raw.columns:
+                    px = raw[(ticker, "Adj Close")].copy()
+                elif (ticker, "Close") in raw.columns:
+                    px = raw[(ticker, "Close")].copy()
+                else:
+                    raise KeyError(f"No Adjusted Close or Close for {ticker}")
 
-    return df
+            s = pd.to_numeric(px, errors="coerce").dropna()
+            s.name = label
+            frames.append(s)
+        except Exception as e:
+            failures.append(f"{label} ({ticker}): {e}")
 
+    if not frames:
+        raise RuntimeError("All market assets failed. " + " | ".join(failures))
 
-def filter_window(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
-    start_date = month_start(start_date)
-    end_date = month_start(end_date)
-    return df.loc[(df.index >= start_date) & (df.index <= end_date)].copy()
-
-
-def get_recession_periods(flag: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
-    if flag is None or flag.empty:
-        return []
-
-    f = flag.fillna(0).astype(int)
-    starts = f.index[(f.eq(1)) & (f.shift(1, fill_value=0).eq(0))]
-    ends = f.index[(f.eq(0)) & (f.shift(1, fill_value=0).eq(1))]
-
-    if len(starts) == 0:
-        return []
-
-    if f.iloc[-1] == 1:
-        ends = ends.append(pd.Index([f.index[-1]]))
-
-    periods = []
-    for s, e in zip(starts, ends):
-        if e >= s:
-            periods.append((pd.Timestamp(s), pd.Timestamp(e)))
-    return periods
-
-
-def trim_recession_periods(
-    periods: List[Tuple[pd.Timestamp, pd.Timestamp]],
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
-    out = []
-    for s, e in periods:
-        if e < start_date or s > end_date:
-            continue
-        out.append((max(s, start_date), min(e, end_date)))
+    out = pd.concat(frames, axis=1).sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+    out.attrs["failures"] = failures
     return out
 
 
-def add_recession_shapes(fig: go.Figure, periods: List[Tuple[pd.Timestamp, pd.Timestamp]], rows: List[int]) -> None:
-    for row in rows:
-        xref = "x" if row == 1 else f"x{row}"
-        yref = "y domain" if row == 1 else f"y{row} domain"
-        for s, e in periods:
-            fig.add_shape(
-                type="rect",
-                xref=xref,
-                yref=yref,
-                x0=s,
-                x1=e,
-                y0=0,
-                y1=1,
-                fillcolor=THEME["recession_fill"],
-                line_width=0,
-                layer="below",
-            )
+def prepare_cpi_table(raw: pd.DataFrame) -> pd.DataFrame:
+    df = raw.copy()
+
+    df["headline_yoy"] = df["headline_cpi"].pct_change(12) * 100
+    df["core_yoy"] = df["core_cpi"].pct_change(12) * 100
+    df["headline_mom"] = df["headline_cpi"].pct_change(1) * 100
+    df["core_mom"] = df["core_cpi"].pct_change(1) * 100
+
+    # Month whose inflation is being reported
+    df["cpi_month"] = df.index
+
+    # Approx release date: BLS CPI is usually around the middle of the following month.
+    # This is a fallback only. Upload exact release dates for accurate event studies.
+    approx_release = []
+    for dt in df.index:
+        next_month = (dt + pd.offsets.MonthBegin(1)) + pd.DateOffset(days=12)
+        if next_month.weekday() >= 5:
+            next_month = next_month + pd.offsets.BDay(1)
+        approx_release.append(pd.Timestamp(next_month).normalize())
+
+    df["release_date_est"] = pd.to_datetime(approx_release)
+
+    # Proxy surprise baselines
+    df["headline_mom_prior"] = df["headline_mom"].shift(1)
+    df["core_mom_prior"] = df["core_mom"].shift(1)
+    df["headline_mom_6m_median"] = df["headline_mom"].rolling(6).median().shift(1)
+    df["core_mom_6m_median"] = df["core_mom"].rolling(6).median().shift(1)
+
+    return df.reset_index(drop=True)
 
 
-def latest_valid(series: pd.Series) -> float:
+def parse_consensus_upload(file) -> pd.DataFrame:
+    df = pd.read_csv(file)
+
+    rename_map = {c.lower().strip(): c for c in df.columns}
+    df.columns = [c.lower().strip() for c in df.columns]
+
+    required_any = {"release_date", "cpi_month"}
+    if not required_any.issubset(set(df.columns)):
+        raise ValueError(
+            "Consensus CSV must include at least: release_date, cpi_month, "
+            "headline_mom_consensus, core_mom_consensus"
+        )
+
+    if "headline_mom_consensus" not in df.columns and "core_mom_consensus" not in df.columns:
+        raise ValueError("Consensus CSV must include headline_mom_consensus or core_mom_consensus")
+
+    df["release_date"] = pd.to_datetime(df["release_date"], errors="coerce").dt.normalize()
+    df["cpi_month"] = pd.to_datetime(df["cpi_month"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+
+    for col in ["headline_mom_consensus", "core_mom_consensus"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=["release_date", "cpi_month"]).copy()
+    return df
+
+
+def merge_consensus(cpi_df: pd.DataFrame, uploaded_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    df = cpi_df.copy()
+
+    if uploaded_df is None:
+        df["release_date"] = df["release_date_est"]
+        df["headline_mom_consensus"] = np.nan
+        df["core_mom_consensus"] = np.nan
+        return df
+
+    merged = df.merge(
+        uploaded_df[
+            [c for c in ["release_date", "cpi_month", "headline_mom_consensus", "core_mom_consensus"] if c in uploaded_df.columns]
+        ],
+        on="cpi_month",
+        how="left",
+        suffixes=("", "_uploaded"),
+    )
+
+    if "release_date_uploaded" in merged.columns:
+        merged["release_date"] = merged["release_date_uploaded"].combine_first(merged["release_date_est"])
+        merged = merged.drop(columns=["release_date_uploaded"])
+    else:
+        merged["release_date"] = merged["release_date_est"]
+
+    return merged
+
+
+def compute_surprises(df: pd.DataFrame, method: str) -> pd.DataFrame:
+    out = df.copy()
+
+    if method == "Consensus upload":
+        out["headline_surprise"] = out["headline_mom"] - out["headline_mom_consensus"]
+        out["core_surprise"] = out["core_mom"] - out["core_mom_consensus"]
+        out["surprise_label"] = np.where(
+            out["core_surprise"].notna() | out["headline_surprise"].notna(),
+            "Actual vs uploaded consensus",
+            "Missing consensus",
+        )
+
+    elif method == "Vs prior month":
+        out["headline_surprise"] = out["headline_mom"] - out["headline_mom_prior"]
+        out["core_surprise"] = out["core_mom"] - out["core_mom_prior"]
+        out["surprise_label"] = "Actual vs prior month"
+
+    elif method == "Vs 6M rolling median":
+        out["headline_surprise"] = out["headline_mom"] - out["headline_mom_6m_median"]
+        out["core_surprise"] = out["core_mom"] - out["core_mom_6m_median"]
+        out["surprise_label"] = "Actual vs 6M rolling median"
+
+    else:
+        raise ValueError(f"Unsupported surprise method: {method}")
+
+    return out
+
+
+def next_trading_day_index(idx: pd.DatetimeIndex, dt: pd.Timestamp) -> Optional[pd.Timestamp]:
+    pos = idx.searchsorted(pd.Timestamp(dt))
+    if pos >= len(idx):
+        return None
+    return idx[pos]
+
+
+def prev_trading_day_index(idx: pd.DatetimeIndex, dt: pd.Timestamp) -> Optional[pd.Timestamp]:
+    pos = idx.searchsorted(pd.Timestamp(dt), side="left") - 1
+    if pos < 0:
+        return None
+    return idx[pos]
+
+
+def compute_event_reactions(events: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
+    px = prices.copy()
+    px.index = pd.to_datetime(px.index).normalize()
+    trading_days = px.index
+
+    rows = []
+    for _, row in events.iterrows():
+        release_date = pd.to_datetime(row["release_date"]).normalize()
+
+        event_day = next_trading_day_index(trading_days, release_date)
+        prev_day = prev_trading_day_index(trading_days, event_day) if event_day is not None else None
+
+        if event_day is None or prev_day is None:
+            continue
+
+        result = row.to_dict()
+        result["event_day"] = event_day
+        result["prev_day"] = prev_day
+
+        for asset in prices.columns:
+            result[f"{asset}_0d"] = np.nan
+            result[f"{asset}_1d"] = np.nan
+            result[f"{asset}_5d"] = np.nan
+
+            try:
+                p_prev = px.loc[prev_day, asset]
+                p_0 = px.loc[event_day, asset]
+
+                pos = trading_days.get_loc(event_day)
+                p_1 = px.iloc[pos + 1][asset] if pos + 1 < len(px) else np.nan
+                p_5 = px.iloc[pos + 5][asset] if pos + 5 < len(px) else np.nan
+
+                if pd.notna(p_prev) and pd.notna(p_0):
+                    result[f"{asset}_0d"] = (p_0 / p_prev - 1.0) * 100
+                if pd.notna(p_0) and pd.notna(p_1):
+                    result[f"{asset}_1d"] = (p_1 / p_0 - 1.0) * 100
+                if pd.notna(p_0) and pd.notna(p_5):
+                    result[f"{asset}_5d"] = (p_5 / p_0 - 1.0) * 100
+            except Exception:
+                pass
+
+        rows.append(result)
+
+    if not rows:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(rows).sort_values("event_day")
+    return out
+
+
+def filter_history_window(df: pd.DataFrame, window_label: str, date_col: str) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    if window_label == "All":
+        return df.copy()
+
+    latest = pd.to_datetime(df[date_col]).max()
+    mapping = {
+        "3Y": 3,
+        "5Y": 5,
+        "10Y": 10,
+    }
+    years = mapping.get(window_label, 5)
+    cutoff = latest - pd.DateOffset(years=years)
+    return df[pd.to_datetime(df[date_col]) >= cutoff].copy()
+
+
+def pick_reaction_col(asset: str, horizon: str) -> str:
+    return f"{asset}_{horizon.lower()}"
+
+
+def get_summary_surprise_col(use_core: bool) -> str:
+    return "core_surprise" if use_core else "headline_surprise"
+
+
+def latest_valid_value(series: pd.Series) -> float:
     s = series.dropna()
     return float("nan") if s.empty else float(s.iloc[-1])
 
 
-def prev_valid(series: pd.Series) -> float:
-    s = series.dropna()
-    return float("nan") if len(s) < 2 else float(s.iloc[-2])
+def correlation_safe(x: pd.Series, y: pd.Series) -> float:
+    tmp = pd.concat([x, y], axis=1).dropna()
+    if len(tmp) < 6:
+        return np.nan
+    return tmp.iloc[:, 0].corr(tmp.iloc[:, 1])
 
 
-def build_latest_table(df: pd.DataFrame, rows: int = 12) -> pd.DataFrame:
+def beta_safe(x: pd.Series, y: pd.Series) -> float:
+    tmp = pd.concat([x, y], axis=1).dropna()
+    if len(tmp) < 6:
+        return np.nan
+    xv = tmp.iloc[:, 0]
+    yv = tmp.iloc[:, 1]
+    var = xv.var(ddof=0)
+    if np.isclose(var, 0):
+        return np.nan
+    cov = np.cov(xv, yv, ddof=0)[0, 1]
+    return cov / var
+
+
+def make_sensitivity_table(events: pd.DataFrame, horizon: str, use_core: bool) -> pd.DataFrame:
+    surprise_col = get_summary_surprise_col(use_core)
+    rows = []
+
+    for asset in ASSET_MAP.keys():
+        reaction_col = pick_reaction_col(asset, horizon)
+        if reaction_col not in events.columns:
+            continue
+
+        tmp = events[[surprise_col, reaction_col]].dropna()
+        if tmp.empty:
+            continue
+
+        rows.append(
+            {
+                "Asset": asset,
+                "Obs": len(tmp),
+                "Avg Return on Positive Surprise (%)": tmp.loc[tmp[surprise_col] > 0, reaction_col].mean(),
+                "Avg Return on Negative Surprise (%)": tmp.loc[tmp[surprise_col] < 0, reaction_col].mean(),
+                "Correlation to Surprise": correlation_safe(tmp[surprise_col], tmp[reaction_col]),
+                "Reaction Beta": beta_safe(tmp[surprise_col], tmp[reaction_col]),
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("Reaction Beta", ascending=False)
+    return out
+
+
+def build_latest_event_table(events: pd.DataFrame) -> pd.DataFrame:
     cols = [
-        "headline",
-        "core",
-        "headline_yoy",
-        "core_yoy",
+        "cpi_month",
+        "release_date",
         "headline_mom",
+        "headline_mom_consensus",
+        "headline_surprise",
         "core_mom",
-        "core_3m_ann",
-        "core_3m_vs_yoy_gap",
+        "core_mom_consensus",
+        "core_surprise",
     ]
-    available_cols = [c for c in cols if c in df.columns]
-    tbl = df[available_cols].dropna(how="all").tail(rows).copy()
-    tbl.index.name = "Date"
+    keep_cols = [c for c in cols if c in events.columns]
 
-    rename_map = {
-        "headline": "Headline CPI",
-        "core": "Core CPI",
-        "headline_yoy": "Headline YoY (%)",
-        "core_yoy": "Core YoY (%)",
-        "headline_mom": "Headline MoM (%)",
-        "core_mom": "Core MoM (%)",
-        "core_3m_ann": "Core 3M Ann. (%)",
-        "core_3m_vs_yoy_gap": "Core 3M Ann. - YoY Gap (pp)",
-    }
-    tbl = tbl.rename(columns=rename_map)
-    return tbl
+    reaction_cols = []
+    for asset in ASSET_MAP.keys():
+        for h in ["0d", "1d", "5d"]:
+            col = f"{asset}_{h}"
+            if col in events.columns:
+                reaction_cols.append(col)
+
+    out = events[keep_cols + reaction_cols].copy()
+    out = out.tail(15)
+    return out
+
 
 # -----------------------------------------------------------------------------
 # Charts
 # -----------------------------------------------------------------------------
-def plot_yoy(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
+def plot_surprise_history(events: pd.DataFrame, use_core: bool) -> go.Figure:
+    s_col = get_summary_surprise_col(use_core)
+    title_series = "Core CPI MoM Surprise" if use_core else "Headline CPI MoM Surprise"
+
     fig = go.Figure()
 
+    colors = np.where(events[s_col] >= 0, THEME["pos"], THEME["neg"])
     fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["headline_yoy"],
-            name="Headline CPI YoY",
-            mode="lines",
-            line=dict(color=THEME["headline"], width=2.5),
-            hovertemplate="%{x|%Y-%m}<br>Headline YoY: %{y:.2f}%<extra></extra>",
+        go.Bar(
+            x=events["event_day"],
+            y=events[s_col],
+            name=title_series,
+            marker_color=colors,
+            hovertemplate="%{x|%Y-%m-%d}<br>Surprise: %{y:.2f} pp<extra></extra>",
         )
     )
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["core_yoy"],
-            name="Core CPI YoY",
-            mode="lines",
-            line=dict(color=THEME["core"], width=2.5),
-            hovertemplate="%{x|%Y-%m}<br>Core YoY: %{y:.2f}%<extra></extra>",
-        )
-    )
-
-    add_recession_shapes(fig, recession_periods, rows=[1])
-    fig.update_yaxes(title_text="% YoY")
-    apply_base_layout(fig, title="US CPI YoY | Headline vs Core", height=430)
+    fig.add_hline(y=0, line_color=THEME["zero"], line_width=1)
+    fig.update_yaxes(title_text="Surprise (pp)")
+    apply_base_layout(fig, title=f"{title_series} Over Time", height=380)
     return fig
 
 
-def plot_mom(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
-    fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.08,
-        subplot_titles=("Headline CPI MoM", "Core CPI MoM"),
+def plot_scatter(events: pd.DataFrame, asset: str, horizon: str, use_core: bool) -> go.Figure:
+    s_col = get_summary_surprise_col(use_core)
+    r_col = pick_reaction_col(asset, horizon)
+
+    tmp = events[[s_col, r_col, "event_day"]].dropna().copy()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=tmp[s_col],
+            y=tmp[r_col],
+            mode="markers",
+            name=asset,
+            marker=dict(size=9),
+            text=tmp["event_day"].dt.strftime("%Y-%m-%d"),
+            hovertemplate=(
+                "Date: %{text}<br>"
+                "Surprise: %{x:.2f} pp<br>"
+                f"{asset} {horizon}: "
+                "%{y:.2f}%<extra></extra>"
+            ),
+        )
     )
+    fig.add_hline(y=0, line_color=THEME["zero"], line_width=1)
+    fig.add_vline(x=0, line_color=THEME["zero"], line_width=1)
+    fig.update_xaxes(title_text="Inflation Surprise (pp)")
+    fig.update_yaxes(title_text=f"{asset} {horizon} Return (%)")
+    apply_base_layout(fig, title=f"{asset} Reaction vs Inflation Surprise", height=420)
+    return fig
+
+
+def plot_asset_reaction_bars(events: pd.DataFrame, horizon: str, use_core: bool) -> go.Figure:
+    sensitivity = make_sensitivity_table(events, horizon, use_core)
+    fig = go.Figure()
+
+    if sensitivity.empty:
+        apply_base_layout(fig, title=f"Asset Sensitivity | {horizon}", height=380)
+        return fig
 
     fig.add_trace(
         go.Bar(
-            x=df.index,
-            y=df["headline_mom"],
-            name="Headline MoM",
-            marker_color=THEME["headline"],
-            hovertemplate="%{x|%Y-%m}<br>Headline MoM: %{y:.2f}%<extra></extra>",
-        ),
-        row=1,
-        col=1,
+            x=sensitivity["Asset"],
+            y=sensitivity["Reaction Beta"],
+            name="Reaction Beta",
+            hovertemplate="%{x}<br>Beta: %{y:.2f}<extra></extra>",
+        )
     )
-    fig.add_trace(
-        go.Bar(
-            x=df.index,
-            y=df["core_mom"],
-            name="Core MoM",
-            marker_color=THEME["core"],
-            hovertemplate="%{x|%Y-%m}<br>Core MoM: %{y:.2f}%<extra></extra>",
-        ),
-        row=2,
-        col=1,
-    )
-
-    add_recession_shapes(fig, recession_periods, rows=[1, 2])
-    fig.update_yaxes(title_text="% MoM", row=1, col=1)
-    fig.update_yaxes(title_text="% MoM", row=2, col=1)
-    fig.update_layout(showlegend=False)
-    apply_base_layout(fig, title="US CPI MoM Prints", height=560)
+    fig.add_hline(y=0, line_color=THEME["zero"], line_width=1)
+    fig.update_yaxes(title_text="Beta of return vs surprise")
+    apply_base_layout(fig, title=f"Asset Sensitivity to Inflation Surprise | {horizon}", height=380)
     return fig
 
 
-def plot_core_panel(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp, pd.Timestamp]]) -> go.Figure:
-    fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.08,
-        subplot_titles=("Core CPI Index", "Core CPI 3M Annualised"),
-    )
+def plot_reaction_heatmap(events: pd.DataFrame, horizon: str, use_core: bool) -> go.Figure:
+    surprise_col = get_summary_surprise_col(use_core)
+    assets = list(ASSET_MAP.keys())
 
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["core"],
-            name="Core CPI Index",
-            mode="lines",
-            line=dict(color=THEME["core"], width=2.5),
-            hovertemplate="%{x|%Y-%m}<br>Core Index: %{y:.2f}<extra></extra>",
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["core_3m_ann"],
-            name="Core 3M Annualised",
-            mode="lines",
-            line=dict(color=THEME["headline"], width=2.5),
-            hovertemplate="%{x|%Y-%m}<br>Core 3M Ann.: %{y:.2f}%<extra></extra>",
-        ),
-        row=2,
-        col=1,
-    )
+    matrix = []
+    for asset in assets:
+        r_col = pick_reaction_col(asset, horizon)
+        tmp = events[[surprise_col, r_col]].dropna()
+        pos_mean = tmp.loc[tmp[surprise_col] > 0, r_col].mean() if not tmp.empty else np.nan
+        neg_mean = tmp.loc[tmp[surprise_col] < 0, r_col].mean() if not tmp.empty else np.nan
+        matrix.append([pos_mean, neg_mean])
 
-    add_recession_shapes(fig, recession_periods, rows=[1, 2])
-    fig.update_yaxes(title_text="Index", row=1, col=1)
-    fig.update_yaxes(title_text="% Ann.", row=2, col=1)
-    apply_base_layout(fig, title="Core CPI Level and Short-Horizon Inflation Signal", height=560)
+    z = np.array(matrix)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=["Positive Surprise", "Negative Surprise"],
+            y=assets,
+            zmid=0,
+            colorbar_title=f"{horizon} Return (%)",
+            hovertemplate="Asset: %{y}<br>Bucket: %{x}<br>Avg Return: %{z:.2f}%<extra></extra>",
+        )
+    )
+    apply_base_layout(fig, title=f"Average Asset Reaction Buckets | {horizon}", height=420)
     return fig
 
+
 # -----------------------------------------------------------------------------
-# Data load and prep
+# Load data
 # -----------------------------------------------------------------------------
-with st.spinner("Loading FRED CPI data..."):
+with st.spinner("Loading CPI data and market prices..."):
     try:
-        raw_df = fetch_fred_dataset(START_DATE_FULL)
+        macro_raw = fetch_macro_data(START_DATE)
+        prices = fetch_asset_prices(START_DATE)
     except Exception as e:
-        st.error(f"Failed to load FRED data: {e}")
+        st.error(f"Failed to load data: {e}")
         st.stop()
 
-if raw_df.empty:
-    st.error("Critical FRED data failed to load. Please refresh or check your connection.")
-    st.stop()
+macro_failures = macro_raw.attrs.get("failures", [])
+market_failures = prices.attrs.get("failures", [])
 
-failures = raw_df.attrs.get("failures", [])
-if failures:
-    st.warning("Some FRED series failed to load: " + " | ".join(failures))
+if macro_failures:
+    st.warning("Some FRED series failed to load: " + " | ".join(macro_failures))
+if market_failures:
+    st.warning("Some market assets failed to load: " + " | ".join(market_failures))
 
-df = prepare_cpi_dataset(raw_df)
-
-required_cols = ["headline", "core", "recession", "headline_yoy", "core_yoy", "headline_mom", "core_mom"]
-missing_required = [c for c in required_cols if c not in df.columns]
-if missing_required:
-    st.error("Missing required columns: " + ", ".join(missing_required))
-    st.stop()
-
-if df[required_cols].dropna(how="all").empty:
-    st.error("The dataset loaded, but the required CPI fields are missing or empty.")
+if macro_raw.empty or prices.empty:
+    st.error("Required macro data or market data is empty.")
     st.stop()
 
 # -----------------------------------------------------------------------------
-# Date window handling
+# Prepare dataset
 # -----------------------------------------------------------------------------
-latest_data_date = month_start(df.index.max())
-default_start_date = period_to_start_date(period, latest_data_date)
-default_end_date = latest_data_date
+cpi = prepare_cpi_table(macro_raw)
 
-if use_custom_range:
-    start_date, end_date = build_custom_month_range(
-        min_date=month_start(df.index.min()),
-        max_date=latest_data_date,
-        default_start=default_start_date,
-        default_end=default_end_date,
-    )
-else:
-    start_date, end_date = default_start_date, default_end_date
+consensus_df = None
+if uploaded_consensus is not None:
+    try:
+        consensus_df = parse_consensus_upload(uploaded_consensus)
+    except Exception as e:
+        st.error(f"Consensus upload failed validation: {e}")
+        st.stop()
 
-window_df = filter_window(df, start_date, end_date)
+events = merge_consensus(cpi, consensus_df)
+events = compute_surprises(events, surprise_method)
+events = compute_event_reactions(events, prices)
 
-if window_df.empty:
-    st.warning("No data is available for the selected range.")
+if events.empty:
+    st.error("No event dataset could be built. Try a different date range or check data connectivity.")
     st.stop()
 
-rate_cols = [c for c in ["headline_yoy", "core_yoy", "headline_mom", "core_mom"] if c in window_df.columns]
-if window_df[rate_cols].dropna(how="all").empty:
-    st.warning("The selected window does not contain enough observations to compute inflation rates.")
+events = filter_history_window(events, selected_window, "event_day")
+
+if events.empty:
+    st.warning("No events available in the selected window.")
     st.stop()
 
-recession_periods = get_recession_periods(df["recession"])
-recession_periods_window = trim_recession_periods(recession_periods, start_date, end_date)
-
 # -----------------------------------------------------------------------------
-# Header and regime strip
+# Header
 # -----------------------------------------------------------------------------
 st.title(APP_TITLE)
 
-latest_valid_rows = df.dropna(subset=["headline", "core"], how="all")
-if latest_valid_rows.empty:
-    st.error("No valid CPI rows found after loading data.")
-    st.stop()
-
-latest_row = latest_valid_rows.iloc[-1]
-latest_print_date = latest_row.name
-
-headline_yoy_latest = latest_valid(window_df["headline_yoy"])
-headline_yoy_prev = prev_valid(window_df["headline_yoy"])
-
-core_yoy_latest = latest_valid(window_df["core_yoy"])
-core_yoy_prev = prev_valid(window_df["core_yoy"])
-
-core_3m_latest = latest_valid(window_df["core_3m_ann"])
-core_3m_prev = prev_valid(window_df["core_3m_ann"])
-
-headline_3m_latest = latest_valid(window_df["headline_3m_ann"])
-gap_latest = latest_valid(window_df["core_3m_vs_yoy_gap"])
-percentile_latest = latest_valid(window_df["core_3m_ann_percentile"])
-
-regime_label = classify_inflation_regime(core_yoy_latest, core_3m_latest)
+latest = events.dropna(subset=["headline_mom", "core_mom"], how="all").iloc[-1]
+latest_surprise_col = get_summary_surprise_col(use_core_for_summary)
+latest_surprise = latest.get(latest_surprise_col, np.nan)
 
 st.caption(
-    f"Latest available print: {latest_print_date.strftime('%B %Y')} | "
-    f"Window: {start_date.strftime('%Y-%m')} to {end_date.strftime('%Y-%m')}"
+    f"Latest event: {pd.to_datetime(latest['event_day']).strftime('%Y-%m-%d')} | "
+    f"CPI month: {pd.to_datetime(latest['cpi_month']).strftime('%Y-%m')} | "
+    f"Method: {surprise_method}"
 )
 
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Headline CPI YoY", fmt_pct(headline_yoy_latest), safe_delta_text(headline_yoy_latest, headline_yoy_prev))
-m2.metric("Core CPI YoY", fmt_pct(core_yoy_latest), safe_delta_text(core_yoy_latest, core_yoy_prev))
-m3.metric("Core 3M Ann.", fmt_pct(core_3m_latest), safe_delta_text(core_3m_latest, core_3m_prev))
-m4.metric("Headline 3M Ann.", fmt_pct(headline_3m_latest))
-m5.metric("Core 3M vs YoY Gap", "N/A" if pd.isna(gap_latest) else f"{gap_latest:+.2f} pp", regime_label)
+
+headline_cons = latest.get("headline_mom_consensus", np.nan)
+core_cons = latest.get("core_mom_consensus", np.nan)
+
+m1.metric("Headline CPI MoM", fmt_pct(latest.get("headline_mom", np.nan)))
+m2.metric("Core CPI MoM", fmt_pct(latest.get("core_mom", np.nan)))
+m3.metric("Headline Surprise", "N/A" if pd.isna(latest.get("headline_surprise", np.nan)) else f"{latest.get('headline_surprise'):+.2f} pp")
+m4.metric("Core Surprise", "N/A" if pd.isna(latest.get("core_surprise", np.nan)) else f"{latest.get('core_surprise'):+.2f} pp")
+m5.metric(f"Selected Surprise ({'Core' if use_core_for_summary else 'Headline'})", "N/A" if pd.isna(latest_surprise) else f"{latest_surprise:+.2f} pp")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -723,15 +849,17 @@ with c1:
             border:1px solid {THEME["border"]};
             border-radius:12px;
             background:#ffffff;">
-            <div style="font-size:12px; color:{THEME["subtle_text"]};">Inflation regime</div>
-            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{regime_label}</div>
+            <div style="font-size:12px; color:{THEME["subtle_text"]};">Consensus mode</div>
+            <div style="font-size:20px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">
+                {"Uploaded consensus" if uploaded_consensus is not None else "Proxy mode"}
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 with c2:
-    zscore_latest = latest_valid(window_df["core_3m_ann_zscore"])
-    zscore_text = "N/A" if pd.isna(zscore_latest) else f"{zscore_latest:.2f}σ"
+    spy_col = pick_reaction_col("SPY", event_horizon)
+    spy_latest = latest.get(spy_col, np.nan)
     st.markdown(
         f"""
         <div style="
@@ -739,14 +867,17 @@ with c2:
             border:1px solid {THEME["border"]};
             border-radius:12px;
             background:#ffffff;">
-            <div style="font-size:12px; color:{THEME["subtle_text"]};">Core 3M annualised z-score</div>
-            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{zscore_text}</div>
+            <div style="font-size:12px; color:{THEME["subtle_text"]};">SPY reaction on latest event ({event_horizon})</div>
+            <div style="font-size:20px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">
+                {fmt_pct(spy_latest)}
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 with c3:
-    pct_text = "N/A" if pd.isna(percentile_latest) else f"{percentile_latest:.1f}th pct"
+    tlt_col = pick_reaction_col("TLT", event_horizon)
+    tlt_latest = latest.get(tlt_col, np.nan)
     st.markdown(
         f"""
         <div style="
@@ -754,8 +885,10 @@ with c3:
             border:1px solid {THEME["border"]};
             border-radius:12px;
             background:#ffffff;">
-            <div style="font-size:12px; color:{THEME["subtle_text"]};">Core 3M annualised historical percentile</div>
-            <div style="font-size:22px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">{pct_text}</div>
+            <div style="font-size:12px; color:{THEME["subtle_text"]};">TLT reaction on latest event ({event_horizon})</div>
+            <div style="font-size:20px; font-weight:600; color:{THEME["text"]}; margin-top:2px;">
+                {fmt_pct(tlt_latest)}
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -766,32 +899,58 @@ st.markdown("")
 # -----------------------------------------------------------------------------
 # Charts
 # -----------------------------------------------------------------------------
-st.plotly_chart(plot_yoy(window_df, recession_periods_window), use_container_width=True)
-st.plotly_chart(plot_mom(window_df, recession_periods_window), use_container_width=True)
-st.plotly_chart(plot_core_panel(window_df, recession_periods_window), use_container_width=True)
+st.plotly_chart(plot_surprise_history(events, use_core_for_summary), use_container_width=True)
+
+col_a, col_b = st.columns(2)
+with col_a:
+    st.plotly_chart(plot_asset_reaction_bars(events, event_horizon, use_core_for_summary), use_container_width=True)
+with col_b:
+    st.plotly_chart(plot_reaction_heatmap(events, event_horizon, use_core_for_summary), use_container_width=True)
+
+scatter_cols = st.columns(3)
+for slot, asset in zip(scatter_cols, ["SPY", "TLT", "DXY"]):
+    with slot:
+        st.plotly_chart(plot_scatter(events, asset, event_horizon, use_core_for_summary), use_container_width=True)
+
+scatter_cols2 = st.columns(3)
+for slot, asset in zip(scatter_cols2, ["QQQ", "Gold", "Crude"]):
+    with slot:
+        st.plotly_chart(plot_scatter(events, asset, event_horizon, use_core_for_summary), use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# Latest prints table
+# Tables
 # -----------------------------------------------------------------------------
-st.subheader("Latest Prints")
-latest_tbl = build_latest_table(window_df, rows=12)
+st.subheader("Asset Sensitivity Table")
+sensitivity_tbl = make_sensitivity_table(events, event_horizon, use_core_for_summary)
 
-fmt_cols = {
-    "Headline CPI": "{:.2f}",
-    "Core CPI": "{:.2f}",
-    "Headline YoY (%)": "{:.2f}",
-    "Core YoY (%)": "{:.2f}",
-    "Headline MoM (%)": "{:.2f}",
-    "Core MoM (%)": "{:.2f}",
-    "Core 3M Ann. (%)": "{:.2f}",
-    "Core 3M Ann. - YoY Gap (pp)": "{:.2f}",
-}
-
-if latest_tbl.empty:
-    st.info("No rows available for the latest prints table in the selected window.")
+if sensitivity_tbl.empty:
+    st.info("No sensitivity table available for the selected window.")
 else:
     st.dataframe(
-        latest_tbl.style.format({k: v for k, v in fmt_cols.items() if k in latest_tbl.columns}),
+        sensitivity_tbl.style.format(
+            {
+                "Avg Return on Positive Surprise (%)": "{:.2f}",
+                "Avg Return on Negative Surprise (%)": "{:.2f}",
+                "Correlation to Surprise": "{:.2f}",
+                "Reaction Beta": "{:.2f}",
+            }
+        ),
+        use_container_width=True,
+    )
+
+st.subheader("Recent CPI Events")
+latest_events_tbl = build_latest_event_table(events)
+if latest_events_tbl.empty:
+    st.info("No recent events table available.")
+else:
+    fmt_map = {}
+    for col in latest_events_tbl.columns:
+        if "date" in col or "month" in col:
+            continue
+        if latest_events_tbl[col].dtype.kind in "fi":
+            fmt_map[col] = "{:.2f}"
+    st.dataframe(
+        latest_events_tbl.style.format(fmt_map),
         use_container_width=True,
     )
 
@@ -799,79 +958,60 @@ else:
 # Download
 # -----------------------------------------------------------------------------
 with st.expander("Download Data"):
-    include_recession_flag = st.checkbox("Include recession flag", value=False)
-
-    export_cols = [
-        "headline",
-        "core",
-        "headline_yoy",
-        "core_yoy",
-        "headline_mom",
-        "core_mom",
-        "headline_3m_ann",
-        "core_3m_ann",
-        "core_3m_vs_yoy_gap",
-        "core_3m_ann_percentile",
-        "core_3m_ann_zscore",
-    ]
-    if include_recession_flag:
-        export_cols.append("recession")
-
-    export_cols = [c for c in export_cols if c in window_df.columns]
-    export_df = window_df[export_cols].copy()
-    export_df.index.name = "Date"
-
-    export_name_map = {
-        "headline": "Headline CPI",
-        "core": "Core CPI",
-        "headline_yoy": "Headline YoY (%)",
-        "core_yoy": "Core YoY (%)",
-        "headline_mom": "Headline MoM (%)",
-        "core_mom": "Core MoM (%)",
-        "headline_3m_ann": "Headline 3M Ann. (%)",
-        "core_3m_ann": "Core 3M Ann. (%)",
-        "core_3m_vs_yoy_gap": "Core 3M Ann. - YoY Gap (pp)",
-        "core_3m_ann_percentile": "Core 3M Ann. Percentile",
-        "core_3m_ann_zscore": "Core 3M Ann. Z-Score",
-        "recession": "Recession Flag",
-    }
-    export_df = export_df.rename(columns=export_name_map)
+    export_df = events.copy()
+    export_df["cpi_month"] = pd.to_datetime(export_df["cpi_month"]).dt.strftime("%Y-%m-%d")
+    export_df["release_date"] = pd.to_datetime(export_df["release_date"]).dt.strftime("%Y-%m-%d")
+    export_df["event_day"] = pd.to_datetime(export_df["event_day"]).dt.strftime("%Y-%m-%d")
+    export_df["prev_day"] = pd.to_datetime(export_df["prev_day"]).dt.strftime("%Y-%m-%d")
 
     st.download_button(
-        "Download CSV",
-        export_df.to_csv(index=True, index_label="Date"),
-        file_name="us_cpi_dashboard_data.csv",
+        "Download event study CSV",
+        export_df.to_csv(index=False),
+        file_name="inflation_surprise_tracker.csv",
         mime="text/csv",
     )
 
 # -----------------------------------------------------------------------------
 # Methodology
 # -----------------------------------------------------------------------------
-with st.expander("Methodology & Sources", expanded=False):
+with st.expander("Methodology & Data Notes", expanded=False):
     st.markdown(
         """
-        **Data source**  
-        FRED direct CSV endpoint from the St. Louis Fed
+        **What this tool is measuring**
 
-        **Series used**  
-        • Headline CPI: `CPIAUCNS`  
-        • Core CPI: `CPILFESL`  
-        • Recession indicator: `USREC`
+        The event dataset starts with monthly headline CPI and core CPI from FRED. It converts those index levels into MoM and YoY inflation rates, then assigns a CPI release date. If you upload a consensus file, the app uses your exact release dates and consensus estimates. If you do not, it uses an estimated release date and fallback surprise proxies.
 
-        **Transformations**  
-        • YoY = `(CPI_t / CPI_{t-12} - 1) × 100`  
-        • MoM = `(CPI_t / CPI_{t-1} - 1) × 100`  
-        • 3M annualised = `((CPI_t / CPI_{t-3})^4 - 1) × 100`  
-        • Core 3M vs YoY gap = `Core 3M annualised - Core YoY`
+        **Surprise definitions**
 
-        **Interpretation layer**  
-        The dashboard labels the current inflation regime using the gap between core 3M annualised inflation and core YoY inflation:  
-        • materially below YoY = disinflationary  
-        • near YoY = sticky  
-        • materially above YoY = reheating
+        • **Consensus upload**: actual MoM inflation minus uploaded consensus  
+        • **Vs prior month**: actual MoM inflation minus prior-month MoM  
+        • **Vs 6M rolling median**: actual MoM inflation minus prior 6-month rolling median of MoM prints
 
-        **Notes**  
-        All series are standardised to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
+        **Asset reaction definitions**
+
+        • **0D**: event-day close versus prior trading day close  
+        • **1D**: next trading day close versus event-day close  
+        • **5D**: five trading days after event-day close versus event-day close
+
+        **Why uploaded consensus matters**
+
+        True inflation surprise is actual versus what the market expected before the release. Free historical consensus data is inconsistent, so the app is built to work without it, but the strongest version is with uploaded street consensus.
+
+        **Suggested upload format**
+
+        Required columns:  
+        • `release_date`  
+        • `cpi_month`  
+        • `headline_mom_consensus`  
+        • `core_mom_consensus`
+
+        Example rows:  
+        • `2026-03-12,2026-02-01,0.30,0.30`  
+        • `2026-02-13,2026-01-01,0.30,0.30`
+
+        **Assets included**
+
+        SPY, QQQ, TLT, DXY proxy, Gold, and Crude.
         """
     )
 
