@@ -73,6 +73,10 @@ with st.sidebar:
     st.markdown("---")
     if st.button("Clear cached data"):
         st.cache_data.clear()
+        for series_id in FRED_SERIES.values():
+            path = os.path.join(CACHE_DIR, f"{series_id}.csv")
+            if os.path.exists(path):
+                os.remove(path)
         st.success("Cache cleared. Rerun the app.")
 
 # -----------------------------------------------------------------------------
@@ -213,39 +217,46 @@ def load_last_good_cache(series_id: str) -> Optional[str]:
 def build_session() -> requests.Session:
     session = requests.Session()
     retry = Retry(
-        total=4,
-        connect=4,
-        read=4,
-        backoff_factor=1.25,
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=1.5,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
+        raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     session.headers.update(
         {
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
             "Accept": "text/csv,text/plain,*/*",
-            "Accept-Encoding": "gzip, deflate",
+            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
+            "Referer": "https://fred.stlouisfed.org/",
         }
     )
     return session
 
 
-def detect_fred_error_payload(text: str, series_id: str) -> None:
-    preview = text[:1000].lower()
+def detect_bad_payload(text: str, series_id: str) -> None:
+    preview = text[:1500].lower()
+    if not text.strip():
+        raise RuntimeError(f"FRED returned an empty payload for {series_id}")
     if "<html" in preview or "<!doctype html" in preview:
         raise RuntimeError(f"FRED returned HTML instead of CSV for {series_id}")
-    if len(text.strip()) == 0:
-        raise RuntimeError(f"FRED returned an empty payload for {series_id}")
+    if "error" in preview and "date" not in preview:
+        raise RuntimeError(f"FRED returned an error payload for {series_id}")
 
 
 def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     original_cols = list(df.columns)
     df.columns = [str(c).strip() for c in df.columns]
-
     lower_map = {c.lower(): c for c in df.columns}
 
     date_col = None
@@ -275,14 +286,12 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     return out
 
 
-def fetch_text_streaming(session: requests.Session, url: str, timeout=(10, 90)) -> str:
-    with session.get(url, timeout=timeout, stream=True) as resp:
-        resp.raise_for_status()
-        chunks = []
-        for chunk in resp.iter_content(chunk_size=65536, decode_unicode=True):
-            if chunk:
-                chunks.append(chunk)
-        return "".join(chunks)
+def fetch_text(session: requests.Session, url: str, timeout=(10, 120)) -> str:
+    resp = session.get(url, timeout=timeout)
+    resp.raise_for_status()
+    text = resp.text
+    detect_bad_payload(text, url)
+    return text
 
 
 def fetch_fred_csv(series_id: str) -> pd.DataFrame:
@@ -291,16 +300,13 @@ def fetch_fred_csv(series_id: str) -> pd.DataFrame:
     urls = [
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={START_DATE_FULL}&id={series_id}",
-        f"https://fred.stlouisfed.org/series/{series_id}/downloaddata/{series_id}.csv",
     ]
 
     last_error = None
 
     for url in urls:
         try:
-            text = fetch_text_streaming(session, url, timeout=(10, 90))
-            detect_fred_error_payload(text, series_id)
-
+            text = fetch_text(session, url, timeout=(10, 120))
             df = pd.read_csv(StringIO(text))
             if df.empty:
                 raise RuntimeError(f"Empty CSV returned for {series_id}")
@@ -365,24 +371,30 @@ def fetch_fred_dataset(start: str = START_DATE_FULL) -> pd.DataFrame:
 def prepare_cpi_dataset(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.copy()
 
-    df["headline_yoy"] = df["headline"].pct_change(12) * 100
-    df["core_yoy"] = df["core"].pct_change(12) * 100
-    df["headline_mom"] = df["headline"].pct_change(1) * 100
-    df["core_mom"] = df["core"].pct_change(1) * 100
-    df["core_3m_ann"] = ((df["core"] / df["core"].shift(3)) ** 4 - 1) * 100
-    df["headline_3m_ann"] = ((df["headline"] / df["headline"].shift(3)) ** 4 - 1) * 100
-    df["core_3m_vs_yoy_gap"] = df["core_3m_ann"] - df["core_yoy"]
+    if "headline" in df.columns:
+        df["headline_yoy"] = df["headline"].pct_change(12) * 100
+        df["headline_mom"] = df["headline"].pct_change(1) * 100
+        df["headline_3m_ann"] = ((df["headline"] / df["headline"].shift(3)) ** 4 - 1) * 100
 
-    valid_hist = df["core_3m_ann"].dropna()
-    if not valid_hist.empty:
-        df["core_3m_ann_percentile"] = df["core_3m_ann"].apply(
-            lambda x: np.nan if pd.isna(x) else valid_hist.le(x).mean() * 100
-        )
-        mean = valid_hist.mean()
-        std = valid_hist.std(ddof=0)
-        if pd.notna(std) and not np.isclose(std, 0):
-            df["core_3m_ann_zscore"] = (df["core_3m_ann"] - mean) / std
+    if "core" in df.columns:
+        df["core_yoy"] = df["core"].pct_change(12) * 100
+        df["core_mom"] = df["core"].pct_change(1) * 100
+        df["core_3m_ann"] = ((df["core"] / df["core"].shift(3)) ** 4 - 1) * 100
+        df["core_3m_vs_yoy_gap"] = df["core_3m_ann"] - df["core_yoy"]
+
+        valid_hist = df["core_3m_ann"].dropna()
+        if not valid_hist.empty:
+            df["core_3m_ann_percentile"] = df["core_3m_ann"].apply(
+                lambda x: np.nan if pd.isna(x) else valid_hist.le(x).mean() * 100
+            )
+            mean = valid_hist.mean()
+            std = valid_hist.std(ddof=0)
+            if pd.notna(std) and not np.isclose(std, 0):
+                df["core_3m_ann_zscore"] = (df["core_3m_ann"] - mean) / std
+            else:
+                df["core_3m_ann_zscore"] = np.nan
         else:
+            df["core_3m_ann_percentile"] = np.nan
             df["core_3m_ann_zscore"] = np.nan
     else:
         df["core_3m_ann_percentile"] = np.nan
@@ -398,14 +410,17 @@ def filter_window(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Times
 
 
 def get_recession_periods(flag: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
-    f = flag.fillna(0).astype(int)
-    if f.empty:
+    if flag is None or flag.empty:
         return []
 
+    f = flag.fillna(0).astype(int)
     starts = f.index[(f.eq(1)) & (f.shift(1, fill_value=0).eq(0))]
     ends = f.index[(f.eq(0)) & (f.shift(1, fill_value=0).eq(1))]
 
-    if not f.empty and f.iloc[-1] == 1:
+    if len(starts) == 0:
+        return []
+
+    if f.iloc[-1] == 1:
         ends = ends.append(pd.Index([f.index[-1]]))
 
     periods = []
@@ -468,18 +483,21 @@ def build_latest_table(df: pd.DataFrame, rows: int = 12) -> pd.DataFrame:
         "core_3m_ann",
         "core_3m_vs_yoy_gap",
     ]
-    tbl = df[cols].dropna(how="all").tail(rows).copy()
+    available_cols = [c for c in cols if c in df.columns]
+    tbl = df[available_cols].dropna(how="all").tail(rows).copy()
     tbl.index.name = "Date"
-    tbl.columns = [
-        "Headline CPI",
-        "Core CPI",
-        "Headline YoY (%)",
-        "Core YoY (%)",
-        "Headline MoM (%)",
-        "Core MoM (%)",
-        "Core 3M Ann. (%)",
-        "Core 3M Ann. - YoY Gap (pp)",
-    ]
+
+    rename_map = {
+        "headline": "Headline CPI",
+        "core": "Core CPI",
+        "headline_yoy": "Headline YoY (%)",
+        "core_yoy": "Core YoY (%)",
+        "headline_mom": "Headline MoM (%)",
+        "core_mom": "Core MoM (%)",
+        "core_3m_ann": "Core 3M Ann. (%)",
+        "core_3m_vs_yoy_gap": "Core 3M Ann. - YoY Gap (pp)",
+    }
+    tbl = tbl.rename(columns=rename_map)
     return tbl
 
 # -----------------------------------------------------------------------------
@@ -548,7 +566,6 @@ def plot_mom(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp, pd.Ti
     )
 
     add_recession_shapes(fig, recession_periods, rows=[1, 2])
-
     fig.update_yaxes(title_text="% MoM", row=1, col=1)
     fig.update_yaxes(title_text="% MoM", row=2, col=1)
     fig.update_layout(showlegend=False)
@@ -591,7 +608,6 @@ def plot_core_panel(df: pd.DataFrame, recession_periods: List[Tuple[pd.Timestamp
     )
 
     add_recession_shapes(fig, recession_periods, rows=[1, 2])
-
     fig.update_yaxes(title_text="Index", row=1, col=1)
     fig.update_yaxes(title_text="% Ann.", row=2, col=1)
     apply_base_layout(fig, title="Core CPI Level and Short-Horizon Inflation Signal", height=560)
@@ -618,6 +634,11 @@ if failures:
 df = prepare_cpi_dataset(raw_df)
 
 required_cols = ["headline", "core", "recession", "headline_yoy", "core_yoy", "headline_mom", "core_mom"]
+missing_required = [c for c in required_cols if c not in df.columns]
+if missing_required:
+    st.error("Missing required columns: " + ", ".join(missing_required))
+    st.stop()
+
 if df[required_cols].dropna(how="all").empty:
     st.error("The dataset loaded, but the required CPI fields are missing or empty.")
     st.stop()
@@ -645,7 +666,8 @@ if window_df.empty:
     st.warning("No data is available for the selected range.")
     st.stop()
 
-if window_df[["headline_yoy", "core_yoy", "headline_mom", "core_mom"]].dropna(how="all").empty:
+rate_cols = [c for c in ["headline_yoy", "core_yoy", "headline_mom", "core_mom"] if c in window_df.columns]
+if window_df[rate_cols].dropna(how="all").empty:
     st.warning("The selected window does not contain enough observations to compute inflation rates.")
     st.stop()
 
@@ -657,7 +679,12 @@ recession_periods_window = trim_recession_periods(recession_periods, start_date,
 # -----------------------------------------------------------------------------
 st.title(APP_TITLE)
 
-latest_row = df.dropna(subset=["headline", "core"], how="all").iloc[-1]
+latest_valid_rows = df.dropna(subset=["headline", "core"], how="all")
+if latest_valid_rows.empty:
+    st.error("No valid CPI rows found after loading data.")
+    st.stop()
+
+latest_row = latest_valid_rows.iloc[-1]
 latest_print_date = latest_row.name
 
 headline_yoy_latest = latest_valid(window_df["headline_yoy"])
@@ -760,10 +787,13 @@ fmt_cols = {
     "Core 3M Ann. - YoY Gap (pp)": "{:.2f}",
 }
 
-st.dataframe(
-    latest_tbl.style.format(fmt_cols),
-    use_container_width=True,
-)
+if latest_tbl.empty:
+    st.info("No rows available for the latest prints table in the selected window.")
+else:
+    st.dataframe(
+        latest_tbl.style.format({k: v for k, v in fmt_cols.items() if k in latest_tbl.columns}),
+        use_container_width=True,
+    )
 
 # -----------------------------------------------------------------------------
 # Download
@@ -787,26 +817,25 @@ with st.expander("Download Data"):
     if include_recession_flag:
         export_cols.append("recession")
 
+    export_cols = [c for c in export_cols if c in window_df.columns]
     export_df = window_df[export_cols].copy()
     export_df.index.name = "Date"
 
-    export_names = [
-        "Headline CPI",
-        "Core CPI",
-        "Headline YoY (%)",
-        "Core YoY (%)",
-        "Headline MoM (%)",
-        "Core MoM (%)",
-        "Headline 3M Ann. (%)",
-        "Core 3M Ann. (%)",
-        "Core 3M Ann. - YoY Gap (pp)",
-        "Core 3M Ann. Percentile",
-        "Core 3M Ann. Z-Score",
-    ]
-    if include_recession_flag:
-        export_names.append("Recession Flag")
-
-    export_df.columns = export_names
+    export_name_map = {
+        "headline": "Headline CPI",
+        "core": "Core CPI",
+        "headline_yoy": "Headline YoY (%)",
+        "core_yoy": "Core YoY (%)",
+        "headline_mom": "Headline MoM (%)",
+        "core_mom": "Core MoM (%)",
+        "headline_3m_ann": "Headline 3M Ann. (%)",
+        "core_3m_ann": "Core 3M Ann. (%)",
+        "core_3m_vs_yoy_gap": "Core 3M Ann. - YoY Gap (pp)",
+        "core_3m_ann_percentile": "Core 3M Ann. Percentile",
+        "core_3m_ann_zscore": "Core 3M Ann. Z-Score",
+        "recession": "Recession Flag",
+    }
+    export_df = export_df.rename(columns=export_name_map)
 
     st.download_button(
         "Download CSV",
