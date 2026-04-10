@@ -1,6 +1,5 @@
 import re
 import time
-import math
 import html
 import sqlite3
 from dataclasses import dataclass
@@ -252,20 +251,24 @@ def fetch_html(session: requests.Session, url: str) -> BeautifulSoup:
 def parse_year_links(index_soup: BeautifulSoup) -> List[Tuple[str, str, int]]:
     out = []
     heading_map = {"Speeches": "speech", "Testimony": "testimony"}
+
     for h4 in index_soup.find_all(["h3", "h4"]):
         section = clean_text(h4.get_text(" ", strip=True))
         if section not in heading_map:
             continue
-        ul = h4.find_next(lambda tag: tag.name in ["ul", "div"])
-        if ul is None:
+
+        container = h4.find_next(lambda tag: tag.name in ["ul", "div"])
+        if container is None:
             continue
-        for a in ul.find_all("a", href=True):
+
+        for a in container.find_all("a", href=True):
             year_text = clean_text(a.get_text(" ", strip=True))
             if not year_text.isdigit():
                 continue
             year = int(year_text)
             href = urljoin(BASE_URL, a["href"])
             out.append((heading_map[section], href, year))
+
     return out
 
 
@@ -284,6 +287,7 @@ def parse_index_items(year_soup: BeautifulSoup, event_type: str, year: int) -> L
             continue
         if any(bad in title.lower() for bad in STOP_PHRASES):
             continue
+
         full_url = urljoin(BASE_URL, href)
         if re.search(r"/newsevents/(speech|testimony)/", full_url):
             anchors.append((title, full_url))
@@ -302,11 +306,14 @@ def parse_index_items(year_soup: BeautifulSoup, event_type: str, year: int) -> L
             if line == title:
                 title_idx = idx
                 break
+
         if title_idx is not None:
             context = lines[max(0, title_idx - 4): min(len(lines), title_idx + 8)]
+
             for ctx in context:
-                if re.search(r"[A-Z][a-z]+ \d{1,2}, \d{4}", ctx):
-                    date_val = re.search(r"[A-Z][a-z]+ \d{1,2}, \d{4}", ctx).group(0)
+                date_match = re.search(r"[A-Z][a-z]+ \d{1,2}, \d{4}", ctx)
+                if date_match:
+                    date_val = date_match.group(0)
                 if ctx.startswith("Federal Reserve") or "Board of Governors" in ctx:
                     role = ctx
                 if ctx.startswith("At ") or ctx.startswith("Before ") or ctx.startswith("At the "):
@@ -358,6 +365,7 @@ def extract_body_text(soup: BeautifulSoup) -> str:
         "article",
     ]
     chunks = []
+
     for selector in selectors:
         node = soup.select_one(selector)
         if node:
@@ -383,6 +391,7 @@ def extract_body_text(soup: BeautifulSoup) -> str:
 
 def extract_meta_line(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
     result = {"date": None, "speaker": None, "role": None, "venue": None, "title": None}
+
     title_node = soup.find(["h3", "h1"])
     if title_node:
         result["title"] = clean_text(title_node.get_text(" ", strip=True))
@@ -394,6 +403,7 @@ def extract_meta_line(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
             m = re.search(r"([A-Z][a-z]+ \d{1,2}, \d{4})", line)
             if m:
                 result["date"] = m.group(1)
+
         if result["speaker"] is None and re.match(r"^[A-Z][A-Za-z\.\-\' ]{5,}$", line):
             if 2 <= len(line.split()) <= 6 and "federal reserve" not in line.lower():
                 prev = text_lines[max(0, idx - 2): idx]
@@ -401,6 +411,7 @@ def extract_meta_line(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
                 around = " ".join(prev + nxt).lower()
                 if "chair" in around or "governor" in around or "president" in around or "board of governors" in around:
                     result["speaker"] = line
+
         if result["role"] is None and (
             "board of governors" in line.lower()
             or line.lower().startswith("chair ")
@@ -408,6 +419,7 @@ def extract_meta_line(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
             or "federal reserve bank of" in line.lower()
         ):
             result["role"] = line
+
         if result["venue"] is None and (
             line.startswith("At ")
             or line.startswith("Before ")
@@ -506,49 +518,6 @@ def get_existing_urls(conn: sqlite3.Connection) -> set:
     return {row[0] for row in cur.fetchall()}
 
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def crawl_fed(max_years: int = 6, force_refresh: bool = False, progress: Optional[st.delta_generator.DeltaGenerator] = None) -> pd.DataFrame:
-    init_db()
-    session = make_session()
-    index_soup = fetch_html(session, INDEX_URL)
-    year_links = parse_year_links(index_soup)
-    year_links = sorted(year_links, key=lambda x: x[2], reverse=True)[: max_years * 2]
-
-    conn = db_connection()
-    existing = get_existing_urls(conn)
-
-    all_items = []
-    for event_type, url, year in year_links:
-        try:
-            year_soup = fetch_html(session, url)
-            items = parse_index_items(year_soup, event_type, year)
-            all_items.extend(items)
-            time.sleep(0.2)
-        except Exception:
-            continue
-
-    all_items = sorted({item["url"]: item for item in all_items}.values(), key=lambda x: (x["year"], x["url"]), reverse=True)
-
-    total = len(all_items)
-    done = 0
-    for item in all_items:
-        done += 1
-        if progress is not None:
-            progress.info(f"Scanning {done:,}/{total:,}: {item['title'][:110]}")
-        if item["url"] in existing and not force_refresh:
-            continue
-        try:
-            doc = parse_document(session, item)
-            if doc["body_text"] and doc["word_count"] >= 80:
-                upsert_document(conn, doc)
-            time.sleep(0.15)
-        except Exception:
-            continue
-
-    conn.close()
-    return load_documents()
-
-
 @st.cache_data(show_spinner=False, ttl=600)
 def load_documents() -> pd.DataFrame:
     init_db()
@@ -561,6 +530,7 @@ def load_documents() -> pd.DataFrame:
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["year"] = pd.to_numeric(df["year"], errors="coerce")
+
     num_cols = [
         "word_count", "hawkish_score", "dovish_score", "net_score", "inflation_concern",
         "labor_concern", "growth_concern", "financial_stability", "balance_sheet", "uncertainty_risk",
@@ -570,6 +540,66 @@ def load_documents() -> pd.DataFrame:
 
     df = df.sort_values("date").reset_index(drop=True)
     return df
+
+
+def refresh_corpus(max_years: int = 6, force_refresh: bool = False, progress_bar=None, status_box=None) -> pd.DataFrame:
+    init_db()
+    session = make_session()
+    index_soup = fetch_html(session, INDEX_URL)
+    year_links = parse_year_links(index_soup)
+    year_links = sorted(year_links, key=lambda x: x[2], reverse=True)[: max_years * 2]
+
+    conn = db_connection()
+    existing = get_existing_urls(conn)
+
+    all_items = []
+    total_year_pages = len(year_links)
+
+    for idx, (event_type, url, year) in enumerate(year_links, start=1):
+        try:
+            if status_box is not None:
+                status_box.info(f"Loading {event_type} index for {year} ({idx}/{total_year_pages})")
+            year_soup = fetch_html(session, url)
+            items = parse_index_items(year_soup, event_type, year)
+            all_items.extend(items)
+            time.sleep(0.15)
+        except Exception as exc:
+            if status_box is not None:
+                status_box.warning(f"Skipped {year} {event_type}: {exc}")
+            continue
+
+    all_items = sorted(
+        {item["url"]: item for item in all_items}.values(),
+        key=lambda x: (x["year"], x["url"]),
+        reverse=True,
+    )
+
+    total_docs = len(all_items)
+    processed = 0
+
+    for item in all_items:
+        processed += 1
+
+        if progress_bar is not None:
+            progress_bar.progress(processed / max(total_docs, 1))
+
+        if status_box is not None:
+            status_box.info(f"Processing {processed:,}/{total_docs:,}: {item['title'][:110]}")
+
+        if item["url"] in existing and not force_refresh:
+            continue
+
+        try:
+            doc = parse_document(session, item)
+            if doc["body_text"] and doc["word_count"] >= 80:
+                upsert_document(conn, doc)
+            time.sleep(0.10)
+        except Exception:
+            continue
+
+    conn.close()
+    load_documents.clear()
+    return load_documents()
 
 
 def classify_stance(net_score: float) -> str:
@@ -608,18 +638,32 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
     if frame.empty:
         return frame
 
-    frame["bucket"] = frame["date"].dt.to_period(freq).dt.start_time
-    grouped = frame.groupby("bucket", as_index=False).apply(
-        lambda x: pd.Series(
-            {
-                "tone_composite": np.average(x["net_score"], weights=x["speaker_weight"]),
-                "hawkish_composite": np.average(x["hawkish_score"], weights=x["speaker_weight"]),
-                "dovish_composite": np.average(x["dovish_score"], weights=x["speaker_weight"]),
-                "documents": len(x),
-            }
+    if freq == "30D":
+        min_date = frame["date"].min().normalize()
+        frame["bucket"] = min_date + (
+            ((frame["date"] - min_date).dt.days // 30) * pd.Timedelta(days=30)
         )
+    else:
+        frame["bucket"] = frame["date"].dt.to_period(freq).dt.start_time
+
+    grouped = (
+        frame.groupby("bucket")
+        .apply(
+            lambda x: pd.Series(
+                {
+                    "tone_composite": np.average(x["net_score"], weights=x["speaker_weight"]),
+                    "hawkish_composite": np.average(x["hawkish_score"], weights=x["speaker_weight"]),
+                    "dovish_composite": np.average(x["dovish_score"], weights=x["speaker_weight"]),
+                    "documents": len(x),
+                }
+            )
+        )
+        .reset_index()
+        .rename(columns={"bucket": "date"})
+        .sort_values("date")
+        .reset_index(drop=True)
     )
-    grouped = grouped.rename(columns={"bucket": "date"}).reset_index(drop=True)
+
     return grouped
 
 
@@ -633,11 +677,16 @@ def latest_snapshot(df: pd.DataFrame) -> Dict[str, float]:
 
     window = aggregate_series(df, freq="30D")
     tone = window["tone_composite"].iloc[-1] if not window.empty else np.nan
+
     delta_30d = np.nan
     if len(window) >= 2:
         delta_30d = tone - window["tone_composite"].iloc[-2]
 
-    core = df[df["speaker"].isin(["Jerome H. Powell", "Philip N. Jefferson", "John C. Williams", "Christopher J. Waller"])]
+    core = df[
+        df["speaker"].isin(
+            ["Jerome H. Powell", "Philip N. Jefferson", "John C. Williams", "Christopher J. Waller"]
+        )
+    ]
     if core.empty:
         core_tone = np.nan
     else:
@@ -658,12 +707,14 @@ def find_snippets(text: str, phrases: List[str], max_snippets: int = 4) -> List[
 
     sentences = split_sentences(text)
     found = []
+
     for sent in sentences:
         low = sent.lower()
         if any(phrase.lower() in low for phrase in phrases):
             found.append(sent)
         if len(found) >= max_snippets:
             break
+
     return found
 
 
@@ -695,16 +746,19 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
         )
         .reset_index()
     )
+
     agg["stance"] = agg["tone"].apply(classify_stance)
 
     deltas = (
         df.sort_values("date")
-          .groupby("speaker", dropna=False)
-          .tail(1)[["speaker", "speaker_delta", "stance"]]
+        .groupby("speaker", dropna=False)
+        .tail(1)[["speaker", "speaker_delta", "stance"]]
     )
-    agg = agg.merge(deltas, on="speaker", how="left")
+
+    agg = agg.merge(deltas, on="speaker", how="left", suffixes=("", "_latest"))
     agg["weight"] = agg["speaker"].map(SPEAKER_WEIGHTS).fillna(1.0)
     agg = agg.sort_values(["weight", "docs", "tone"], ascending=[False, False, False]).head(top_n)
+
     return agg
 
 
@@ -731,12 +785,24 @@ def main():
         st.subheader("Controls")
         years_to_pull = st.slider("Years to scan from latest backward", min_value=1, max_value=20, value=6)
         force_refresh = st.checkbox("Force refresh existing documents", value=False)
-        if st.button("Refresh corpus", use_container_width=True):
-            progress_box = st.empty()
-            with st.spinner("Refreshing Fed corpus..."):
-                df = crawl_fed(max_years=years_to_pull, force_refresh=force_refresh, progress=progress_box)
-            progress_box.empty()
-            st.success(f"Loaded {len(df):,} documents.")
+
+    refresh_clicked = False
+    with st.sidebar:
+        refresh_clicked = st.button("Refresh corpus", use_container_width=True)
+
+    if refresh_clicked:
+        progress_bar = st.sidebar.progress(0)
+        status_box = st.sidebar.empty()
+        with st.spinner("Refreshing Fed corpus..."):
+            df = refresh_corpus(
+                max_years=years_to_pull,
+                force_refresh=force_refresh,
+                progress_bar=progress_bar,
+                status_box=status_box,
+            )
+        progress_bar.empty()
+        status_box.empty()
+        st.success(f"Loaded {len(df):,} documents.")
 
     df = load_documents()
     if df.empty:
@@ -745,32 +811,54 @@ def main():
 
     df = compute_features(df)
 
-    min_date = df["date"].min().date()
-    max_date = df["date"].max().date()
+    min_date_ts = df["date"].dropna().min()
+    max_date_ts = df["date"].dropna().max()
+
+    if pd.isna(min_date_ts) or pd.isna(max_date_ts):
+        st.warning("All documents are missing parsed dates. The corpus loaded, but date filters cannot be built.")
+        st.stop()
+
+    min_date = min_date_ts.date()
+    max_date = max_date_ts.date()
 
     with st.sidebar:
-        date_range = st.date_input("Date range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+        date_range = st.date_input(
+            "Date range",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date,
+        )
         speakers = sorted([x for x in df["speaker"].dropna().unique().tolist() if x])
         selected_speakers = st.multiselect("Speakers", options=speakers, default=[])
-        event_types = st.multiselect("Event types", options=sorted(df["event_type"].dropna().unique()), default=sorted(df["event_type"].dropna().unique()))
+        event_type_options = sorted(df["event_type"].dropna().unique().tolist())
+        event_types = st.multiselect("Event types", options=event_type_options, default=event_type_options)
         search = st.text_input("Search title or transcript")
 
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+    elif isinstance(date_range, list) and len(date_range) == 2:
+        start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
     else:
         start_date, end_date = df["date"].min(), df["date"].max()
 
-    view = df[(df["date"] >= start_date) & (df["date"] <= end_date)]
+    view = df[(df["date"] >= start_date) & (df["date"] <= end_date)].copy()
+
     if selected_speakers:
         view = view[view["speaker"].isin(selected_speakers)]
+
     if event_types:
         view = view[view["event_type"].isin(event_types)]
+
     if search.strip():
         q = search.strip().lower()
         view = view[
             view["title"].fillna("").str.lower().str.contains(q, na=False)
             | view["body_text"].fillna("").str.lower().str.contains(q, na=False)
         ]
+
+    if view.empty:
+        st.warning("No documents match the current filters.")
+        st.stop()
 
     snapshot = latest_snapshot(view)
     c1, c2, c3, c4 = st.columns(4)
@@ -785,10 +873,35 @@ def main():
     with left:
         if not series.empty:
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=series["date"], y=series["tone_composite"], mode="lines+markers", name="Tone composite"))
-            fig.add_trace(go.Scatter(x=series["date"], y=series["hawkish_composite"], mode="lines", name="Hawkish"))
-            fig.add_trace(go.Scatter(x=series["date"], y=series["dovish_composite"], mode="lines", name="Dovish"))
-            fig.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=20), title="Fed tone over time")
+            fig.add_trace(
+                go.Scatter(
+                    x=series["date"],
+                    y=series["tone_composite"],
+                    mode="lines+markers",
+                    name="Tone composite",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=series["date"],
+                    y=series["hawkish_composite"],
+                    mode="lines",
+                    name="Hawkish",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=series["date"],
+                    y=series["dovish_composite"],
+                    mode="lines",
+                    name="Dovish",
+                )
+            )
+            fig.update_layout(
+                height=420,
+                margin=dict(l=20, r=20, t=40, b=20),
+                title="Fed tone over time",
+            )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No time series available for the current filters.")
@@ -817,28 +930,29 @@ def main():
         "inflation_concern", "labor_concern", "growth_concern", "url"
     ]
     latest_view = view.sort_values("date", ascending=False)[latest_cols].copy()
-    latest_view = latest_view.rename(columns={
-        "net_score": "tone",
-        "speaker_delta": "delta vs speaker baseline",
-        "inflation_concern": "inflation",
-        "labor_concern": "labor",
-        "growth_concern": "growth",
-    })
+    latest_view = latest_view.rename(
+        columns={
+            "net_score": "tone",
+            "speaker_delta": "delta vs speaker baseline",
+            "inflation_concern": "inflation",
+            "labor_concern": "labor",
+            "growth_concern": "growth",
+        }
+    )
     st.dataframe(latest_view, use_container_width=True, hide_index=True)
 
     st.subheader("Transcript underwrite")
     options = view.sort_values("date", ascending=False).copy()
     options["label"] = options.apply(
-        lambda r: f"{r['date'].date() if pd.notna(r['date']) else 'n.a.'} | {r['speaker'] or 'Unknown'} | {r['title']}", axis=1
+        lambda r: f"{r['date'].date() if pd.notna(r['date']) else 'n.a.'} | {r['speaker'] or 'Unknown'} | {r['title']}",
+        axis=1,
     )
-    if options.empty:
-        st.info("No documents match the current filters.")
-        st.stop()
 
     selected_label = st.selectbox("Choose a document", options["label"].tolist(), index=0)
     doc = options.loc[options["label"] == selected_label].iloc[0]
 
     d1, d2 = st.columns([1.2, 1.8])
+
     with d1:
         st.markdown(f"**Title**: {doc['title']}")
         st.markdown(f"**Speaker**: {doc['speaker'] or 'Unknown'}")
@@ -848,22 +962,50 @@ def main():
         if doc.get("venue"):
             st.markdown(f"**Venue**: {doc['venue']}")
         st.markdown(f"**Tone**: {doc['stance']} ({doc['net_score']:.2f})")
-        st.markdown(f"**Delta vs speaker baseline**: {doc['speaker_delta']:+.2f}" if pd.notna(doc['speaker_delta']) else "**Delta vs speaker baseline**: n.a.")
+        if pd.notna(doc["speaker_delta"]):
+            st.markdown(f"**Delta vs speaker baseline**: {doc['speaker_delta']:+.2f}")
+        else:
+            st.markdown("**Delta vs speaker baseline**: n.a.")
         st.markdown(f"**Source**: [Open original]({doc['url']})")
         if doc.get("pdf_url"):
             st.markdown(f"**PDF**: [Open PDF]({doc['pdf_url']})")
 
         scorecard = pd.DataFrame(
             {
-                "dimension": ["hawkish", "dovish", "inflation", "labor", "growth", "financial stability", "balance sheet", "uncertainty"],
+                "dimension": [
+                    "hawkish",
+                    "dovish",
+                    "inflation",
+                    "labor",
+                    "growth",
+                    "financial stability",
+                    "balance sheet",
+                    "uncertainty",
+                ],
                 "score": [
-                    doc["hawkish_score"], doc["dovish_score"], doc["inflation_concern"], doc["labor_concern"],
-                    doc["growth_concern"], doc["financial_stability"], doc["balance_sheet"], doc["uncertainty_risk"]
+                    doc["hawkish_score"],
+                    doc["dovish_score"],
+                    doc["inflation_concern"],
+                    doc["labor_concern"],
+                    doc["growth_concern"],
+                    doc["financial_stability"],
+                    doc["balance_sheet"],
+                    doc["uncertainty_risk"],
                 ],
             }
         )
-        bar = px.bar(scorecard, x="score", y="dimension", orientation="h", height=320, title="Document scorecard")
-        bar.update_layout(margin=dict(l=20, r=20, t=40, b=20), yaxis=dict(categoryorder="total ascending"))
+        bar = px.bar(
+            scorecard,
+            x="score",
+            y="dimension",
+            orientation="h",
+            height=320,
+            title="Document scorecard",
+        )
+        bar.update_layout(
+            margin=dict(l=20, r=20, t=40, b=20),
+            yaxis=dict(categoryorder="total ascending"),
+        )
         st.plotly_chart(bar, use_container_width=True)
 
     with d2:
@@ -873,18 +1015,22 @@ def main():
         labor_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["labor"], max_snippets=2)
 
         st.markdown("**Passages driving the score**")
+
         if hawk_snips:
             st.markdown("Hawkish passages")
             for s in hawk_snips:
                 st.markdown(f"> {s}")
+
         if dove_snips:
             st.markdown("Dovish passages")
             for s in dove_snips:
                 st.markdown(f"> {s}")
+
         if infl_snips:
             st.markdown("Inflation passages")
             for s in infl_snips:
                 st.markdown(f"> {s}")
+
         if labor_snips:
             st.markdown("Labor passages")
             for s in labor_snips:
@@ -904,8 +1050,17 @@ def main():
         "hawkish_score", "dovish_score", "inflation_concern", "labor_concern", "growth_concern",
         "financial_stability", "balance_sheet", "uncertainty_risk", "url"
     ]
-    csv_bytes = view.sort_values("date", ascending=False)[export_cols].to_csv(index=False).encode("utf-8")
-    st.download_button("Download filtered dataset as CSV", data=csv_bytes, file_name="fed_tone_filtered.csv", mime="text/csv")
+    csv_bytes = (
+        view.sort_values("date", ascending=False)[export_cols]
+        .to_csv(index=False)
+        .encode("utf-8")
+    )
+    st.download_button(
+        "Download filtered dataset as CSV",
+        data=csv_bytes,
+        file_name="fed_tone_filtered.csv",
+        mime="text/csv",
+    )
 
 
 if __name__ == "__main__":
