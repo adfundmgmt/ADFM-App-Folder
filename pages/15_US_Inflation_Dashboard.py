@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 # -----------------------------------------------------------------------------
 # Page config
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="US CPI Dashboard", layout="wide")
+st.set_page_config(page_title="US Inflation Dashboard", layout="wide")
 
 # -----------------------------------------------------------------------------
 # Constants
