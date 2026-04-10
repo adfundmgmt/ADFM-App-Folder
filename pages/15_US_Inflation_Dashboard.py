@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 # -----------------------------------------------------------------------------
 # Page config
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="US Inflation Dashboard", layout="wide")
+st.set_page_config(page_title="US CPI Dashboard", layout="wide")
 
 # -----------------------------------------------------------------------------
 # Constants
@@ -56,12 +56,12 @@ with st.sidebar:
         """
         Purpose: US CPI dashboard for inflation trend, momentum, and regime classification.
 
-        What it covers  
-        • Headline and core CPI trend  
-        • YoY, MoM, and 3M annualized inflation  
-        • Recession overlays and regime classification  
+        What it covers
+        • Headline and core CPI trend
+        • YoY, MoM, and 3M annualised inflation
+        • Recession overlays and regime classification
 
-        Data source  
+        Data source
         • FRED public CSV endpoints
         """
     )
@@ -69,6 +69,11 @@ with st.sidebar:
     st.subheader("Time Range")
     period = st.selectbox("Select period:", PERIOD_OPTIONS, index=7)
     use_custom_range = st.checkbox("Custom date range", value=False)
+
+    st.markdown("---")
+    if st.button("Clear cached data"):
+        st.cache_data.clear()
+        st.success("Cache cleared. Rerun the app.")
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -188,26 +193,6 @@ def build_custom_month_range(
     return start, end
 
 
-def build_session() -> requests.Session:
-    session = requests.Session()
-    retry = Retry(
-        total=3,
-        backoff_factor=0.75,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "text/csv,text/plain,*/*",
-        }
-    )
-    return session
-
-
 def cache_path(series_id: str) -> str:
     return os.path.join(CACHE_DIR, f"{series_id}.csv")
 
@@ -225,22 +210,43 @@ def load_last_good_cache(series_id: str) -> Optional[str]:
         return f.read()
 
 
+def build_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=4,
+        connect=4,
+        read=4,
+        backoff_factor=1.25,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/csv,text/plain,*/*",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive",
+        }
+    )
+    return session
+
+
 def detect_fred_error_payload(text: str, series_id: str) -> None:
     preview = text[:1000].lower()
     if "<html" in preview or "<!doctype html" in preview:
-        raise RuntimeError(
-            f"FRED returned HTML instead of CSV for {series_id}. Temporary upstream or rate-limit issue."
-        )
+        raise RuntimeError(f"FRED returned HTML instead of CSV for {series_id}")
     if len(text.strip()) == 0:
-        raise RuntimeError(f"Empty payload returned for {series_id}.")
+        raise RuntimeError(f"FRED returned an empty payload for {series_id}")
 
 
 def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     original_cols = list(df.columns)
-    normalized_map = {c: str(c).strip() for c in df.columns}
-    df = df.rename(columns=normalized_map)
+    df.columns = [str(c).strip() for c in df.columns]
 
-    lower_map = {str(c).strip().lower(): c for c in df.columns}
+    lower_map = {c.lower(): c for c in df.columns}
 
     date_col = None
     for candidate in ["date", "observation_date"]:
@@ -249,13 +255,7 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
             break
 
     value_col = None
-    for candidate in [
-        series_id.lower(),
-        "value",
-        "observation_value",
-        "cpi",
-        "usrec",
-    ]:
+    for candidate in [series_id.lower(), "value", "observation_value", "cpi", "usrec"]:
         if candidate in lower_map:
             value_col = lower_map[candidate]
             break
@@ -275,41 +275,51 @@ def normalize_fred_columns(df: pd.DataFrame, series_id: str) -> pd.DataFrame:
     return out
 
 
-def fetch_fred_csv_text(series_id: str) -> str:
+def fetch_text_streaming(session: requests.Session, url: str, timeout=(10, 90)) -> str:
+    with session.get(url, timeout=timeout, stream=True) as resp:
+        resp.raise_for_status()
+        chunks = []
+        for chunk in resp.iter_content(chunk_size=65536, decode_unicode=True):
+            if chunk:
+                chunks.append(chunk)
+        return "".join(chunks)
+
+
+def fetch_fred_csv(series_id: str) -> pd.DataFrame:
     session = build_session()
+
     urls = [
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
         f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd={START_DATE_FULL}&id={series_id}",
+        f"https://fred.stlouisfed.org/series/{series_id}/downloaddata/{series_id}.csv",
     ]
 
     last_error = None
 
     for url in urls:
         try:
-            resp = session.get(url, timeout=20)
-            resp.raise_for_status()
-            text = resp.text
+            text = fetch_text_streaming(session, url, timeout=(10, 90))
             detect_fred_error_payload(text, series_id)
+
+            df = pd.read_csv(StringIO(text))
+            if df.empty:
+                raise RuntimeError(f"Empty CSV returned for {series_id}")
+
+            df = normalize_fred_columns(df, series_id)
             save_last_good_cache(series_id, text)
-            return text
+            return df
+
         except Exception as e:
-            last_error = str(e)
-            time.sleep(0.5)
+            last_error = f"{type(e).__name__}: {e}"
+            time.sleep(1.0)
 
     cached = load_last_good_cache(series_id)
     if cached is not None:
-        return cached
+        df = pd.read_csv(StringIO(cached))
+        df = normalize_fred_columns(df, series_id)
+        return df
 
     raise RuntimeError(f"Failed to fetch FRED series {series_id}: {last_error}")
-
-
-def fetch_fred_csv(series_id: str) -> pd.DataFrame:
-    text = fetch_fred_csv_text(series_id)
-    df = pd.read_csv(StringIO(text))
-    if df.empty:
-        raise RuntimeError(f"Empty CSV returned for {series_id}")
-    df = normalize_fred_columns(df, series_id)
-    return df
 
 
 def load_fred_series(series_id: str, start: str) -> pd.Series:
@@ -331,14 +341,24 @@ def load_fred_series(series_id: str, start: str) -> pd.Series:
 @st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
 def fetch_fred_dataset(start: str = START_DATE_FULL) -> pd.DataFrame:
     series_map = {}
+    failures = []
+
     for key, series_id in FRED_SERIES.items():
-        series_map[key] = load_fred_series(series_id, start)
+        try:
+            series_map[key] = load_fred_series(series_id, start)
+        except Exception as e:
+            failures.append(f"{key} ({series_id}): {e}")
+
+    if not series_map:
+        raise RuntimeError("All FRED series failed. " + " | ".join(failures))
 
     df = pd.concat(series_map.values(), axis=1)
     df.columns = list(series_map.keys())
     df = df.sort_index()
     df = df[~df.index.duplicated(keep="last")]
     df = df.resample("MS").last()
+
+    df.attrs["failures"] = failures
     return df
 
 
@@ -591,6 +611,10 @@ if raw_df.empty:
     st.error("Critical FRED data failed to load. Please refresh or check your connection.")
     st.stop()
 
+failures = raw_df.attrs.get("failures", [])
+if failures:
+    st.warning("Some FRED series failed to load: " + " | ".join(failures))
+
 df = prepare_cpi_dataset(raw_df)
 
 required_cols = ["headline", "core", "recession", "headline_yoy", "core_yoy", "headline_mom", "core_mom"]
@@ -812,13 +836,13 @@ with st.expander("Methodology & Sources", expanded=False):
         • Core 3M vs YoY gap = `Core 3M annualised - Core YoY`
 
         **Interpretation layer**  
-        The dashboard labels the current inflation regime using the gap between core 3M annualised inflation and core YoY inflation:
+        The dashboard labels the current inflation regime using the gap between core 3M annualised inflation and core YoY inflation:  
         • materially below YoY = disinflationary  
         • near YoY = sticky  
         • materially above YoY = reheating
 
         **Notes**  
-        All series are standardized to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
+        All series are standardised to month-start timestamps and aligned into one monthly dataframe before calculation, plotting, and export.
         """
     )
 
