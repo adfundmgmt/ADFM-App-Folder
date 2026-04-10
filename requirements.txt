@@ -12,3 +12,5 @@ mplfinance
 sec-edgar-downloader
 beautifulsoup4
 cot_reports
+requests
+urllib3
