@@ -27,12 +27,18 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Ratio chart workspace for cross-asset, global relative strength, and leadership dynamics.
+        Purpose: Ratio chart workspace for cross-asset regime framing, global equity leadership, and internal market leadership.
 
         What it covers
-        • Cross asset relationships that help frame macro regime shifts
-        • US versus ex-US relative moves across regions and markets
-        • Cross sector and cross ticker leadership dynamics inside equities
+        • Macro regime relationships across equities, credit, commodities, dollar, gold, and duration
+        • Global equity leadership across developed and emerging markets
+        • Internal equity leadership across sectors, factors, and key thematic leadership groups
+
+        Design philosophy
+        • Regime first
+        • Global leadership second
+        • Internal leadership third
+        • Fewer charts, less redundancy, higher signal
 
         Data source
         • Yahoo Finance adjusted daily price history
@@ -77,44 +83,36 @@ CYCLICALS = ["XLK", "XLI", "XLF", "XLY", "XLC", "XLB", "XLE"]
 DEFENSIVES = ["XLP", "XLV", "XLU", "XLRE"]
 
 PRESET_GROUPS: Dict[str, List[Tuple[str, str, str]]] = {
-    "Cross Asset": [
+    "Macro Regime": [
         ("SPY", "TLT", "Equities / Long Treasuries"),
         ("HYG", "LQD", "High Yield / Investment Grade Credit"),
-        ("TIP", "TLT", "Inflation Linkers / Long Treasuries"),
-        ("DBC", "TLT", "Broad Commodities / Long Treasuries"),
         ("GLD", "TLT", "Gold / Long Treasuries"),
+        ("DBC", "TLT", "Broad Commodities / Long Treasuries"),
         ("UUP", "GLD", "Dollar / Gold"),
-        ("XLE", "TLT", "Energy / Long Treasuries"),
-        ("IWM", "TLT", "Small Caps / Long Treasuries"),
+        ("XLE", "SPY", "Energy / S&P 500"),
     ],
-    "US vs Ex-US": [
+    "Global Equity Leadership": [
         ("VXUS", "SPY", "Ex-US Equities / US Equities"),
-        ("EFA", "SPY", "Developed ex-US / US Equities"),
-        ("EWJ", "SPY", "Japan / US Equities"),
-        ("EZU", "SPY", "Europe / US Equities"),
         ("EEM", "SPY", "Emerging Markets / US Equities"),
+        ("EZU", "SPY", "Europe / US Equities"),
+        ("EWJ", "SPY", "Japan / US Equities"),
         ("FXI", "SPY", "China Large Caps / US Equities"),
-        ("INDA", "SPY", "India / US Equities"),
     ],
-    "Cross Sector / Cross Ticker": [
+    "Equity Internal Leadership": [
         ("XLY", "XLP", "Consumer Discretionary / Staples"),
         ("XLF", "XLU", "Financials / Utilities"),
         ("XLI", "XLU", "Industrials / Utilities"),
         ("QQQ", "IWM", "Large Growth / Small Caps"),
+        ("XLK", "SPY", "Technology / S&P 500"),
         ("SMH", "QQQ", "Semis / Nasdaq 100"),
         ("SMH", "IGV", "Semis / Software"),
-        ("XLK", "SPY", "Technology / S&P 500"),
-        ("NVDA", "SMH", "NVIDIA / Semis ETF"),
-        ("AMZN", "XLY", "Amazon / Consumer Discretionary"),
-        ("META", "QQQ", "Meta / Nasdaq 100"),
-        ("MSFT", "QQQ", "Microsoft / Nasdaq 100"),
     ],
 }
 
 GROUP_DESCRIPTIONS = {
-    "Cross Asset": "Macro regime relationships across equities, credit, commodities, gold, dollar, and duration.",
-    "US vs Ex-US": "Relative performance of international equities versus the US, with regional and country-specific leadership lenses.",
-    "Cross Sector / Cross Ticker": "Equity internal leadership, sector rotation, and concentration within major market winners.",
+    "Macro Regime": "Core cross-asset ratios that frame risk appetite, inflation pressure, dollar tightness, and the balance between growth and duration.",
+    "Global Equity Leadership": "Regional and country-level relative strength versus the US, helping identify where capital is flowing across global equity markets.",
+    "Equity Internal Leadership": "Internal market leadership across cyclicals versus defensives, factor leadership, and thematic leadership inside growth.",
 }
 
 ALL_PRESETS: List[Tuple[str, str, str, str]] = []
