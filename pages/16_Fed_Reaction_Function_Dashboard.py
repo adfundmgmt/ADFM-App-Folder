@@ -1,5 +1,5 @@
 # app.py
-# FOMC Scenario Engine for ADFM
+# ADFM | FOMC Scenario Engine
 #
 # What this app does
 # - Scrapes Federal Reserve FOMC calendar pages and individual meeting pages
@@ -16,7 +16,7 @@
 # - Produces a clean Streamlit output tailored for discretionary macro work
 #
 # Run:
-#   pip install streamlit pandas numpy requests beautifulsoup4 plotly pypdf python-dateutil
+#   pip install streamlit pandas numpy requests beautifulsoup4 plotly pypdf PyPDF2 python-dateutil
 #   streamlit run app.py
 
 from __future__ import annotations
@@ -27,8 +27,7 @@ import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -37,7 +36,19 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 from dateutil import parser as dtparser
-from pypdf import PdfReader
+
+# Robust PDF reader import for Streamlit Cloud and local environments
+PDF_ENGINE = None
+try:
+    from pypdf import PdfReader  # preferred
+    PDF_ENGINE = "pypdf"
+except Exception:
+    try:
+        from PyPDF2 import PdfReader  # fallback
+        PDF_ENGINE = "PyPDF2"
+    except Exception:
+        PdfReader = None
+        PDF_ENGINE = None
 
 # =========================
 # App config
@@ -72,8 +83,10 @@ def clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+
 def normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
 
 def safe_float(x, default=np.nan):
     try:
@@ -81,31 +94,38 @@ def safe_float(x, default=np.nan):
     except Exception:
         return default
 
+
 def pct_fmt(x, decimals=1):
     if pd.isna(x):
         return "N/A"
     return f"{x:.{decimals}f}%"
+
 
 def num_fmt(x, decimals=2):
     if pd.isna(x):
         return "N/A"
     return f"{x:.{decimals}f}"
 
+
 def zscore(series: pd.Series, window: int = 252) -> pd.Series:
     roll_mean = series.rolling(window).mean()
     roll_std = series.rolling(window).std()
     return (series - roll_mean) / roll_std
 
+
 def annualized_3m_from_index(series: pd.Series) -> pd.Series:
     return ((series / series.shift(3)) ** 4 - 1) * 100
 
+
 def yoy(series: pd.Series) -> pd.Series:
     return (series / series.shift(12) - 1) * 100
+
 
 def make_session() -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": USER_AGENT})
     return s
+
 
 def fetch_url(url: str, session: Optional[requests.Session] = None, timeout: int = REQUEST_TIMEOUT) -> requests.Response:
     sess = session or make_session()
@@ -121,6 +141,7 @@ def fetch_url(url: str, session: Optional[requests.Session] = None, timeout: int
                 time.sleep(RETRY_SLEEP * (attempt + 1))
     raise last_err
 
+
 def absolute_url(href: str) -> str:
     if not href:
         return ""
@@ -130,11 +151,13 @@ def absolute_url(href: str) -> str:
         return FED_BASE + href
     return FED_BASE + "/" + href
 
+
 def try_parse_date(text: str) -> Optional[pd.Timestamp]:
     try:
         return pd.Timestamp(dtparser.parse(text, fuzzy=True))
     except Exception:
         return None
+
 
 # =========================
 # FRED data loader
@@ -151,6 +174,7 @@ def fetch_fred_series_csv(series_id: str, start: str = "1990-01-01") -> pd.DataF
     df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
     df = df.dropna(subset=["DATE"]).rename(columns={"DATE": "date", series_id: "value"})
     return df[["date", "value"]].copy()
+
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
 def load_macro_panel() -> pd.DataFrame:
@@ -188,7 +212,6 @@ def load_macro_panel() -> pd.DataFrame:
 
     panel = panel.sort_values("date").reset_index(drop=True)
 
-    # Monthly-ish transformations
     panel["core_pce_yoy"] = yoy(panel["PCEPILFE"])
     panel["cpi_yoy"] = yoy(panel["CPIAUCSL"])
     panel["payems_3m_ann"] = annualized_3m_from_index(panel["PAYEMS"])
@@ -197,6 +220,7 @@ def load_macro_panel() -> pd.DataFrame:
 
     panel.attrs["failures"] = failures
     return panel
+
 
 # =========================
 # Fed scraping
@@ -213,6 +237,7 @@ class MeetingDocLinks:
     projections_html: Optional[str] = None
     implementation_note: Optional[str] = None
 
+
 @dataclass
 class MeetingRecord:
     meeting_date: pd.Timestamp
@@ -228,30 +253,48 @@ class MeetingRecord:
     @property
     def combined_text(self) -> str:
         return clean_text(
-            " ".join([
-                self.statement_text[:30000],
-                self.minutes_text[:50000],
-                self.presser_text[:40000],
-                self.projections_text[:20000],
-            ])
+            " ".join(
+                [
+                    self.statement_text[:30000],
+                    self.minutes_text[:50000],
+                    self.presser_text[:40000],
+                    self.projections_text[:20000],
+                ]
+            )
         )
+
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def fetch_html(url: str) -> str:
     return fetch_url(url).text
 
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def fetch_pdf_text(url: str) -> str:
+    if PdfReader is None:
+        raise ImportError(
+            "No PDF reader library is installed. Add 'pypdf>=4.0.0' to requirements.txt "
+            "or install PyPDF2 as a fallback."
+        )
+
     resp = fetch_url(url)
     bio = io.BytesIO(resp.content)
-    reader = PdfReader(bio)
+
+    try:
+        reader = PdfReader(bio)
+    except Exception as e:
+        raise RuntimeError(f"Failed to open PDF from {url}: {e}")
+
     pages = []
     for page in reader.pages:
         try:
-            pages.append(page.extract_text() or "")
+            txt = page.extract_text() or ""
+            pages.append(txt)
         except Exception:
             pages.append("")
+
     return clean_text("\n".join(pages))
+
 
 def extract_main_html_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
@@ -279,10 +322,12 @@ def extract_main_html_text(html: str) -> str:
     text = max(texts, key=len)
     return clean_text(text)
 
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def fetch_html_text(url: str) -> str:
     html = fetch_html(url)
     return extract_main_html_text(html)
+
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def get_fomc_calendar_meetings() -> List[Dict]:
@@ -298,10 +343,6 @@ def get_fomc_calendar_meetings() -> List[Dict]:
         text = normalize_whitespace(a.get_text(" ", strip=True))
         full_url = absolute_url(href)
 
-        # Meeting pages often look like:
-        # /monetarypolicy/fomcpresconf20260318.htm
-        # /monetarypolicy/fomcpressconf20260128.htm
-        # There are variant spellings on the site over time.
         if re.search(r"/monetarypolicy/fomc.*\d{8}\.htm", href, flags=re.I):
             if full_url in seen:
                 continue
@@ -327,13 +368,13 @@ def get_fomc_calendar_meetings() -> List[Dict]:
 
     meetings = sorted(meetings, key=lambda x: x["meeting_date"], reverse=True)
 
-    # Deduplicate by date because calendar pages may include multiple links to same meeting
     dedup = {}
     for m in meetings:
         dedup[m["meeting_date"].date()] = m
     meetings = list(dedup.values())
     meetings = sorted(meetings, key=lambda x: x["meeting_date"], reverse=True)
     return meetings
+
 
 def parse_meeting_page_docs(page_url: str) -> MeetingDocLinks:
     html = fetch_html(page_url)
@@ -367,7 +408,6 @@ def parse_meeting_page_docs(page_url: str) -> MeetingDocLinks:
         elif "implementation note" in label:
             docs.implementation_note = docs.implementation_note or href
 
-    # Backstop patterns
     if not docs.presser_pdf:
         for a in anchors:
             href = absolute_url(a["href"])
@@ -391,6 +431,7 @@ def parse_meeting_page_docs(page_url: str) -> MeetingDocLinks:
 
     return docs
 
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def load_meeting_record(page_url: str, meeting_date: pd.Timestamp, title: str, year: int) -> MeetingRecord:
     docs = parse_meeting_page_docs(page_url)
@@ -403,7 +444,6 @@ def load_meeting_record(page_url: str, meeting_date: pd.Timestamp, title: str, y
         doc_links=docs,
     )
 
-    # Statement
     try:
         if docs.statement_html:
             rec.statement_text = fetch_html_text(docs.statement_html)
@@ -412,7 +452,6 @@ def load_meeting_record(page_url: str, meeting_date: pd.Timestamp, title: str, y
     except Exception:
         rec.statement_text = ""
 
-    # Minutes
     try:
         if docs.minutes_html:
             rec.minutes_text = fetch_html_text(docs.minutes_html)
@@ -421,14 +460,12 @@ def load_meeting_record(page_url: str, meeting_date: pd.Timestamp, title: str, y
     except Exception:
         rec.minutes_text = ""
 
-    # Press conference
     try:
         if docs.presser_pdf:
             rec.presser_text = fetch_pdf_text(docs.presser_pdf)
     except Exception:
         rec.presser_text = ""
 
-    # Projections
     try:
         if docs.projections_html:
             rec.projections_text = fetch_html_text(docs.projections_html)
@@ -438,6 +475,7 @@ def load_meeting_record(page_url: str, meeting_date: pd.Timestamp, title: str, y
         rec.projections_text = ""
 
     return rec
+
 
 # =========================
 # Text analytics
@@ -453,6 +491,7 @@ STOPWORDS = {
     "employment", "growth", "price", "prices", "rates", "rate", "financial", "conditions",
 }
 
+
 def tokenize(text: str) -> List[str]:
     text = (text or "").lower()
     text = re.sub(r"[^a-z0-9\s\-]", " ", text)
@@ -460,8 +499,10 @@ def tokenize(text: str) -> List[str]:
     toks = [t for t in toks if t not in STOPWORDS]
     return toks
 
+
 def tf_vector(text: str) -> Counter:
     return Counter(tokenize(text))
+
 
 def cosine_counter(a: Counter, b: Counter) -> float:
     if not a or not b:
@@ -474,9 +515,11 @@ def cosine_counter(a: Counter, b: Counter) -> float:
         return 0.0
     return dot / (na * nb)
 
+
 def count_keywords(text: str, terms: List[str]) -> int:
     text_l = (text or "").lower()
     return sum(text_l.count(t.lower()) for t in terms)
+
 
 SCENARIOS = {
     "Higher for longer": {
@@ -540,6 +583,7 @@ DOVE_TERMS = [
     "softer growth", "policy is restrictive", "balanced risks", "lower rates", "rate cuts"
 ]
 
+
 def score_scenarios(doc_text: str, macro_snapshot: Dict[str, float]) -> pd.DataFrame:
     rows = []
 
@@ -548,7 +592,6 @@ def score_scenarios(doc_text: str, macro_snapshot: Dict[str, float]) -> pd.DataF
         neg = count_keywords(doc_text, cfg["negative_terms"])
         raw = pos - 0.7 * neg
 
-        # Macro overlays
         if scenario == "Higher for longer":
             if macro_snapshot.get("core_pce_yoy", np.nan) > 2.7:
                 raw += 2.0
@@ -589,13 +632,13 @@ def score_scenarios(doc_text: str, macro_snapshot: Dict[str, float]) -> pd.DataF
 
     df = pd.DataFrame(rows).sort_values("raw_score", ascending=False).reset_index(drop=True)
 
-    # Softmax to probabilities
     x = df["raw_score"].astype(float).values
     x = x - np.nanmax(x)
     probs = np.exp(x)
     probs = probs / probs.sum() if probs.sum() > 0 else np.repeat(1 / len(df), len(df))
     df["probability"] = probs * 100
     return df
+
 
 def hawk_dove_balance(doc_text: str) -> Dict[str, float]:
     hawk = count_keywords(doc_text, HAWK_TERMS)
@@ -608,10 +651,12 @@ def hawk_dove_balance(doc_text: str) -> Dict[str, float]:
         "balance": balance,
     }
 
+
 def top_terms(text: str, n: int = 30) -> pd.DataFrame:
     c = tf_vector(text)
     common = c.most_common(n)
     return pd.DataFrame(common, columns=["term", "count"])
+
 
 # =========================
 # Analog engine
@@ -633,8 +678,12 @@ def build_similarity_frame(current: MeetingRecord, history: List[MeetingRecord])
             "similarity": sim,
         })
 
+    if not rows:
+        return pd.DataFrame(columns=["meeting_date", "title", "year", "page_url", "similarity"])
+
     df = pd.DataFrame(rows).sort_values("similarity", ascending=False).reset_index(drop=True)
     return df
+
 
 # =========================
 # Macro snapshot
@@ -642,7 +691,6 @@ def build_similarity_frame(current: MeetingRecord, history: List[MeetingRecord])
 
 def latest_macro_snapshot(panel: pd.DataFrame) -> Dict[str, float]:
     df = panel.sort_values("date").copy()
-
     latest = df.iloc[-1]
     prev_3m = df.iloc[-4] if len(df) >= 4 else latest
 
@@ -662,6 +710,7 @@ def latest_macro_snapshot(panel: pd.DataFrame) -> Dict[str, float]:
     }
     return snap
 
+
 def macro_regime_label(snap: Dict[str, float]) -> str:
     inf = snap.get("core_pce_yoy", np.nan)
     ur = snap.get("unrate", np.nan)
@@ -677,6 +726,7 @@ def macro_regime_label(snap: Dict[str, float]) -> str:
     if inf < 2.4 and ur_chg > 0.4:
         return "Cutting cycle setup"
     return "Restrictive hold / data-dependent plateau"
+
 
 # =========================
 # Streamlit UI
@@ -694,6 +744,8 @@ with st.sidebar:
     show_raw_text = st.checkbox("Show source text excerpts", value=False)
 
     st.markdown("---")
+    st.caption(f"PDF engine: {PDF_ENGINE or 'none'}")
+
     st.markdown(
         """
         **About This Tool**
@@ -706,12 +758,10 @@ with st.sidebar:
         """
     )
 
-# Pull macro panel
 with st.spinner("Loading macro panel from FRED..."):
     macro_panel = load_macro_panel()
 macro_snap = latest_macro_snapshot(macro_panel)
 
-# Pull meetings list
 with st.spinner("Loading FOMC meeting list from the Federal Reserve..."):
     meetings_meta = get_fomc_calendar_meetings()
 
@@ -733,7 +783,7 @@ st.markdown(f"**Current macro regime:** {macro_regime_label(macro_snap)}")
 with st.expander("Macro snapshot details", expanded=False):
     st.write(
         {
-            "as_of": str(macro_snap["date"].date()),
+            "as_of": str(pd.Timestamp(macro_snap["date"]).date()),
             "fed_target_mid": macro_snap["fed_target_mid"],
             "core_pce_yoy": macro_snap["core_pce_yoy"],
             "cpi_yoy": macro_snap["cpi_yoy"],
@@ -754,7 +804,6 @@ with st.expander("Macro snapshot details", expanded=False):
 
 st.markdown("---")
 
-# Load meeting records
 loaded_records: List[MeetingRecord] = []
 load_errors = []
 
@@ -770,15 +819,6 @@ for i, m in enumerate(meetings_meta):
             title=m["title"],
             year=m["year"],
         )
-
-        # Compose text based on toggles
-        parts = [rec.statement_text]
-        if include_minutes:
-            parts.append(rec.minutes_text)
-        if include_pressers:
-            parts.append(rec.presser_text)
-        if include_sep:
-            parts.append(rec.projections_text)
 
         rec.statement_text = rec.statement_text or ""
         rec.minutes_text = rec.minutes_text if include_minutes else ""
@@ -803,14 +843,12 @@ if not loaded_records:
 
 loaded_records = sorted(loaded_records, key=lambda x: x.meeting_date, reverse=True)
 
-# Current meeting selection
 current_options = {
     f"{r.meeting_date.date()} | {r.title[:90]}": idx for idx, r in enumerate(loaded_records)
 }
 selected_label = st.selectbox("Meeting to analyze", list(current_options.keys()), index=0)
 current_rec = loaded_records[current_options[selected_label]]
 
-# Scenario scoring
 doc_text = current_rec.combined_text
 scenario_df = score_scenarios(doc_text, macro_snap)
 hd = hawk_dove_balance(doc_text)
@@ -852,7 +890,6 @@ with right:
 
 st.markdown("---")
 
-# Historical analogs
 st.subheader("Closest historical analog meetings")
 sim_df = build_similarity_frame(current_rec, loaded_records)
 top_n = st.slider("Number of analogs", 3, 10, 5, 1)
@@ -865,7 +902,6 @@ else:
     show_df["similarity"] = (show_df["similarity"] * 100).round(1)
     st.dataframe(show_df[["meeting_date", "title", "similarity", "page_url"]], use_container_width=True)
 
-    # Pull analog scenario profiles
     analog_rows = []
     rec_map = {r.page_url: r for r in loaded_records}
     for _, row in show_df.iterrows():
@@ -886,7 +922,6 @@ else:
 
 st.markdown("---")
 
-# Meeting documents and excerpts
 doc_col1, doc_col2 = st.columns(2)
 
 with doc_col1:
@@ -932,7 +967,6 @@ if show_raw_text:
 
 st.markdown("---")
 
-# Macro trend chart
 st.subheader("Macro context")
 macro_plot = macro_panel.dropna(subset=["date"]).copy()
 chart_choice = st.selectbox(
@@ -968,12 +1002,12 @@ fig2.update_layout(
 )
 st.plotly_chart(fig2, use_container_width=True)
 
-# Current write-up
 st.markdown("---")
 st.subheader("ADFM readout")
 
 base = scenario_df.iloc[0]["scenario"]
 second = scenario_df.iloc[1]["scenario"] if len(scenario_df) > 1 else None
+
 
 def build_readout(base_case: str, second_case: Optional[str], snap: Dict[str, float], hd_map: Dict[str, float]) -> str:
     tone = "hawkish" if hd_map["balance"] > 0.15 else "dovish" if hd_map["balance"] < -0.15 else "balanced"
@@ -1014,6 +1048,7 @@ def build_readout(base_case: str, second_case: Optional[str], snap: Dict[str, fl
         )
 
     return "\n\n".join(out)
+
 
 st.markdown(build_readout(base, second, macro_snap, hd))
 
