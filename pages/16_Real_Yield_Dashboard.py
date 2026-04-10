@@ -1,576 +1,747 @@
-############################################################
-# Built by AD Fund Management LP
-# 10-Year Nominal and Real Yield Dashboard
-############################################################
+import math
+import re
+import time
+from datetime import datetime
+from io import StringIO
+from typing import Dict, List, Optional, Tuple
 
-from __future__ import annotations
-
-from typing import List, Tuple, Optional
-import io
-
+import numpy as np
 import pandas as pd
-import requests
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-# ── Constants ─────────────────────────────────────────────
-FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-REAL_SERIES = "DFII10"
-NOM_SERIES = "DGS10"
-REC_SERIES = "USREC"
+st.set_page_config(page_title="Fed Reaction Function Dashboard", layout="wide")
 
-DEFAULT_WIN = 63
-DEFAULT_EASE_BP = 40
-DEFAULT_TIGHT_BP = -40
-
-REQ_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; AD-Fund-Yield-Dashboard/2.1)"
+# =========================
+# Constants
+# =========================
+SERIES: Dict[str, Dict[str, str]] = {
+    # Closest stable public proxy for "core services ex housing":
+    # CPI Services Less Rent of Shelter
+    "supercore_cpi": {
+        "id": "CUSR0000SASL2RS",
+        "label": "CPI Services Less Rent of Shelter",
+    },
+    # Atlanta Fed Wage Growth Tracker
+    "wage_growth": {
+        "id": "FRBATLWGT3M",
+        "label": "Atlanta Fed Wage Growth Tracker",
+    },
+    "unemployment": {
+        "id": "UNRATE",
+        "label": "Unemployment Rate",
+    },
+    # Chicago Fed Adjusted National Financial Conditions Index
+    "anfci": {
+        "id": "ANFCI",
+        "label": "Adjusted National Financial Conditions Index",
+    },
+    # ICE BofA US High Yield OAS
+    "hy_oas": {
+        "id": "BAMLH0A0HYM2",
+        "label": "US High Yield OAS",
+    },
+    "fed_funds_effective": {
+        "id": "DFF",
+        "label": "Effective Fed Funds Rate",
+    },
+    # Upper bound of target range
+    "fed_target_upper": {
+        "id": "DFEDTARU",
+        "label": "Fed Funds Target Range Upper Limit",
+    },
+    # SEP medians on FRED
+    "sep_fed_funds": {
+        "id": "FEDTARMD",
+        "label": "SEP Median Federal Funds Rate",
+    },
+    "sep_unemployment": {
+        "id": "UNRATEMD",
+        "label": "SEP Median Unemployment Rate",
+    },
+    "sep_pce": {
+        "id": "PCEINFMDTOY",
+        "label": "SEP Median PCE Inflation",
+    },
+    "sep_core_pce": {
+        "id": "CPCEINFMDTOY",
+        "label": "SEP Median Core PCE Inflation",
+    },
 }
 
-# ── Streamlit Setup ──────────────────────────────────────
-st.set_page_config(page_title="10-Year Yield Dashboard", layout="wide")
-st.title("10-Year Nominal and Real Yield Dashboard")
+DEFAULT_STATEMENT_URL = "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260318a.htm"
+DEFAULT_MINUTES_URL = "https://www.federalreserve.gov/monetarypolicy/fomcminutes20260318.htm"
 
-# ── Helper Functions ─────────────────────────────────────
-def fmt_pct(x: Optional[float], decimals: int = 2) -> str:
-    if pd.isna(x):
-        return "N/A"
-    return f"{x:.{decimals}f}%"
+# Lightweight keyword scoring for Fed language
+HAWKISH_PATTERNS = {
+    r"\bhigher for longer\b": 2.0,
+    r"\bongoing increases\b": 2.0,
+    r"\bsome additional policy firming\b": 2.0,
+    r"\bupside risks to inflation\b": 1.5,
+    r"\binflation remains elevated\b": 1.0,
+    r"\binflation remains somewhat elevated\b": 1.0,
+    r"\brestrictive\b": 0.5,
+    r"\bstrong labor market\b": 0.5,
+    r"\bsolid pace\b": 0.5,
+    r"\bprepared to adjust policy as appropriate\b": 0.5,
+    r"\bnot appropriate to reduce\b": 1.5,
+    r"\bgreat(er)? confidence\b": -0.75,  # slightly offsets if in context of easing confidence
+}
 
-def fmt_bp(x: Optional[float], decimals: int = 0) -> str:
-    if pd.isna(x):
-        return "N/A"
-    return f"{x:+.{decimals}f} bp"
+DOVISH_PATTERNS = {
+    r"\bbegin to reduce\b": 2.0,
+    r"\breduce the target range\b": 2.0,
+    r"\bgreater confidence\b": 1.5,
+    r"\binflation has eased\b": 1.0,
+    r"\blabor market conditions have eased\b": 1.0,
+    r"\bunemployment has moved up\b": 1.0,
+    r"\beconomic activity has slowed\b": 1.0,
+    r"\brisks to employment\b": 1.25,
+    r"\brisk(s)? to the outlook\b": 0.5,
+    r"\bpolicy is well positioned\b": 0.5,
+    r"\bcarefully assess incoming data\b": 0.25,
+}
 
-def last_delta(series: pd.Series) -> float:
-    if len(series) < 2:
-        return pd.NA
-    return series.iloc[-1] - series.iloc[-2]
+# =========================
+# Helpers
+# =========================
+def init_session_state() -> None:
+    if "last_good_data" not in st.session_state:
+        st.session_state["last_good_data"] = {}
+    if "last_good_text" not in st.session_state:
+        st.session_state["last_good_text"] = {}
 
-def contiguous(mask: pd.Series) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
-    segments: List[Tuple[pd.Timestamp, pd.Timestamp]] = []
-    start_dt: Optional[pd.Timestamp] = None
-
-    for ts, flag in mask.items():
-        flag = bool(flag)
-        if flag and start_dt is None:
-            start_dt = ts
-        elif (not flag) and start_dt is not None:
-            segments.append((start_dt, ts))
-            start_dt = None
-
-    if start_dt is not None:
-        segments.append((start_dt, mask.index[-1]))
-
-    return segments
-
-# ── Data Fetching ────────────────────────────────────────
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_fred_series(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    params = {
-        "id": series_id,
-        "cosd": start.strftime("%Y-%m-%d"),
-        "coed": end.strftime("%Y-%m-%d"),
-    }
-
-    r = requests.get(FRED_BASE, params=params, headers=REQ_HEADERS, timeout=20)
-    r.raise_for_status()
-
-    text = r.text.strip()
-    if not text:
-        raise ValueError(f"Empty FRED response for {series_id}")
-
-    lower_text = text[:200].lower()
-    if lower_text.startswith("<!doctype html") or lower_text.startswith("<html"):
-        raise ValueError(f"FRED returned HTML instead of CSV for {series_id}")
-
-    df = pd.read_csv(io.StringIO(text))
-    df.columns = [str(c).strip() for c in df.columns]
-
-    date_col = None
-    for candidate in ["DATE", "observation_date", "date"]:
-        if candidate in df.columns:
-            date_col = candidate
-            break
-
-    if date_col is None:
-        raise ValueError(
-            f"FRED response missing date column for {series_id}. Columns: {df.columns.tolist()}"
-        )
-
-    value_col = series_id if series_id in df.columns else None
-    if value_col is None:
-        non_date_cols = [c for c in df.columns if c != date_col]
-        if not non_date_cols:
-            raise ValueError(
-                f"FRED response missing value column for {series_id}. Columns: {df.columns.tolist()}"
+def requests_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
             )
-        value_col = non_date_cols[0]
-
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
-
-    df = df.dropna(subset=[date_col]).set_index(date_col).sort_index()
-    s = df[value_col].ffill().dropna()
-    s.name = series_id
-
-    if s.empty:
-        raise ValueError(f"No usable observations returned for {series_id}")
-
+        }
+    )
     return s
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_fomc_dates() -> List[pd.Timestamp]:
-    url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+@st.cache_data(show_spinner=False, ttl=60 * 60)
+def fetch_fred_series(series_id: str) -> pd.Series:
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    s = requests_session()
+    last_err = None
+    for timeout in (15, 25, 40):
+        try:
+            r = s.get(url, timeout=timeout)
+            r.raise_for_status()
+            df = pd.read_csv(StringIO(r.text))
+            if df.empty or len(df.columns) < 2:
+                raise ValueError(f"Unexpected FRED CSV format for {series_id}")
+            df.columns = ["DATE", "VALUE"]
+            df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+            df["VALUE"] = pd.to_numeric(df["VALUE"], errors="coerce")
+            df = df.dropna(subset=["DATE"]).set_index("DATE").sort_index()
+            ser = df["VALUE"].dropna()
+            if ser.empty:
+                raise ValueError(f"No valid data returned for {series_id}")
+            return ser
+        except Exception as e:
+            last_err = e
+            time.sleep(1.0)
+    raise RuntimeError(f"Failed to fetch FRED series {series_id}: {last_err}")
+
+@st.cache_data(show_spinner=False, ttl=60 * 30)
+def fetch_html_text(url: str) -> str:
+    s = requests_session()
+    last_err = None
+    for timeout in (15, 25, 40):
+        try:
+            r = s.get(url, timeout=timeout)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "header", "footer"]):
+                tag.decompose()
+            text = soup.get_text(" ", strip=True)
+            text = re.sub(r"\s+", " ", text).strip()
+            if len(text) < 300:
+                raise ValueError("Extracted text is too short")
+            return text
+        except Exception as e:
+            last_err = e
+            time.sleep(1.0)
+    raise RuntimeError(f"Failed to fetch page text {url}: {last_err}")
+
+def safe_series(key: str) -> pd.Series:
     try:
-        r = requests.get(url, headers=REQ_HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        dates: List[pd.Timestamp] = []
-        for td in soup.select("td.eventdate"):
-            txt = td.get_text(" ", strip=True)
-            dt = pd.to_datetime(txt, errors="coerce")
-            if pd.notnull(dt):
-                dates.append(pd.Timestamp(dt).normalize())
-
-        return sorted(set(dates))
+        ser = fetch_fred_series(SERIES[key]["id"])
+        st.session_state["last_good_data"][key] = ser
+        return ser
     except Exception:
-        return []
+        cached = st.session_state["last_good_data"].get(key)
+        if cached is not None:
+            return cached
+        raise
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_cpi_dates() -> List[pd.Timestamp]:
-    url = "https://www.bls.gov/schedule/news_release/cpi.htm"
+def safe_text(cache_key: str, url: str) -> str:
     try:
-        r = requests.get(url, headers=REQ_HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        dates: List[pd.Timestamp] = []
-        for td in soup.select("table.nrtable tbody tr td"):
-            txt = td.get_text(" ", strip=True)
-            dt = pd.to_datetime(txt, errors="coerce")
-            if pd.notnull(dt):
-                dates.append(pd.Timestamp(dt).normalize())
-
-        return sorted(set(dates))
+        text = fetch_html_text(url)
+        st.session_state["last_good_text"][cache_key] = text
+        return text
     except Exception:
-        return []
+        cached = st.session_state["last_good_text"].get(cache_key)
+        if cached is not None:
+            return cached
+        raise
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_recession_bands(start: pd.Timestamp, end: pd.Timestamp) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:
-    try:
-        rec = fetch_fred_series(REC_SERIES, start, end)
-        daily_index = pd.date_range(rec.index.min(), rec.index.max(), freq="D")
-        rec = rec.reindex(daily_index).ffill()
+def latest_valid(ser: pd.Series) -> Tuple[pd.Timestamp, float]:
+    ser = ser.dropna()
+    return ser.index[-1], float(ser.iloc[-1])
 
-        mask = rec > 0.5
-        bands = contiguous(mask)
-        return [(s.normalize(), e.normalize()) for s, e in bands]
-    except Exception:
-        return []
+def pct_change_yoy(ser: pd.Series) -> pd.Series:
+    return ser.pct_change(12) * 100.0
 
-# ── Transform Layer ──────────────────────────────────────
-def build_yield_dataframe(
-    nominal: pd.Series,
-    real: pd.Series,
-    start: pd.Timestamp,
-    win: int,
-) -> tuple[pd.DataFrame, pd.Series]:
-    df = pd.concat(
-        [
-            nominal.rename("Nominal"),
-            real.rename("Real"),
-        ],
-        axis=1,
-    ).dropna()
+def pct_change_3m_ann(ser: pd.Series) -> pd.Series:
+    return ((ser / ser.shift(3)) ** 4 - 1.0) * 100.0
 
-    df = df[df.index >= start].copy()
-    if df.empty:
-        return pd.DataFrame(), pd.Series(dtype=float)
+def z_last(ser: pd.Series, window: int = 156) -> float:
+    s = ser.dropna().tail(window)
+    if len(s) < max(20, window // 4):
+        return float("nan")
+    std = float(s.std(ddof=0))
+    if std == 0:
+        return 0.0
+    return float((s.iloc[-1] - s.mean()) / std)
 
-    mom = -(df["Real"] - df["Real"].shift(win)) * 100.0
-    mom = mom.dropna()
+def get_sep_for_year(ser: pd.Series, year: int) -> Optional[float]:
+    if ser.dropna().empty:
+        return None
+    tmp = ser.dropna().copy()
+    exact = tmp[tmp.index.year == year]
+    if not exact.empty:
+        return float(exact.iloc[-1])
+    return None
 
-    if mom.empty:
-        return pd.DataFrame(), pd.Series(dtype=float)
+def score_text(text: str) -> Tuple[float, List[str], List[str]]:
+    t = text.lower()
+    hawk_hits = []
+    dove_hits = []
+    score = 0.0
+    for pattern, w in HAWKISH_PATTERNS.items():
+        if re.search(pattern, t):
+            score += w
+            hawk_hits.append(pattern.replace(r"\b", "").replace("\\", ""))
+    for pattern, w in DOVISH_PATTERNS.items():
+        if re.search(pattern, t):
+            score -= w
+            dove_hits.append(pattern.replace(r"\b", "").replace("\\", ""))
+    return score, hawk_hits, dove_hits
 
-    df = df.loc[mom.index].copy()
-    df["InflationCompProxy"] = df["Nominal"] - df["Real"]
+def classify_metric_direction(value: float, bands: List[Tuple[float, str, int]], higher_is_hawkish: bool = True) -> Tuple[str, int]:
+    """
+    bands example for higher_is_hawkish:
+    [(2.75, "cooling", -1), (4.0, "sticky", 1), (9e9, "hot", 2)]
+    """
+    if math.isnan(value):
+        return "n/a", 0
+    if higher_is_hawkish:
+        for upper, label, pts in bands:
+            if value <= upper:
+                return label, pts
+    else:
+        for upper, label, pts in bands:
+            if value <= upper:
+                return label, pts
+    return "n/a", 0
 
-    return df, mom
+def format_delta(curr: float, ref: Optional[float]) -> str:
+    if ref is None or pd.isna(ref):
+        return "n/a"
+    d = curr - ref
+    sign = "+" if d >= 0 else ""
+    return f"{sign}{d:.2f}"
 
-def classify_regime(mom_value: float, ease_bp: int, tight_bp: int) -> tuple[str, str]:
-    if mom_value > ease_bp:
-        return "Easing", "#16a34a"
-    if mom_value < tight_bp:
-        return "Tightening", "#dc2626"
-    return "Neutral", "#6b7280"
+def make_line_chart(
+    ser: pd.Series,
+    title: str,
+    y_title: str,
+    ref_value: Optional[float] = None,
+    ref_name: str = "Reference",
+    months: int = 60,
+) -> go.Figure:
+    s = ser.dropna().copy()
+    cutoff = s.index.max() - pd.DateOffset(months=months)
+    s = s[s.index >= cutoff]
 
-# ── Sidebar ──────────────────────────────────────────────
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=s.index,
+            y=s.values,
+            mode="lines",
+            name=title,
+            line=dict(width=2),
+        )
+    )
+    if ref_value is not None and not pd.isna(ref_value):
+        fig.add_hline(y=ref_value, line_dash="dash", annotation_text=ref_name, annotation_position="top left")
+    fig.update_layout(
+        height=320,
+        margin=dict(l=20, r=20, t=55, b=20),
+        title=title,
+        xaxis_title="",
+        yaxis_title=y_title,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        template="plotly_white",
+    )
+    return fig
+
+def reaction_summary(total_score: float) -> str:
+    if total_score <= -2.0:
+        return "easing bias rising"
+    if total_score >= 2.0:
+        return "tightening risk re-emerging"
+    return "hold bias intact"
+
+def score_badge(score: int) -> str:
+    if score >= 2:
+        return "hawkish"
+    if score <= -2:
+        return "dovish"
+    if score == 1:
+        return "slightly hawkish"
+    if score == -1:
+        return "slightly dovish"
+    return "neutral"
+
+def markdown_small(text: str) -> None:
+    st.markdown(f"<div style='font-size:0.92rem; color:#666;'>{text}</div>", unsafe_allow_html=True)
+
+# =========================
+# App
+# =========================
+init_session_state()
+
+st.title("Fed Reaction Function Dashboard")
+st.caption("Map inflation persistence, labor cooling, financial conditions, market pricing, Fed language, and SEP medians into a single policy-bias readout.")
+
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        Purpose: Real-yield monitor comparing nominal and inflation-adjusted rate pressure.
-
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
-
-        Data source
-        • Public market and macro data feeds used throughout the app
-        """
-    )
-    st.markdown("---")
-
-    st.header("Settings")
-    lookback = st.selectbox("Lookback Window", ["2y", "3y", "5y", "10y"], index=2)
-    start_years = int(lookback[:-1])
-
-    win = st.number_input(
-        "Momentum Window (trading days)",
-        min_value=21,
-        max_value=252,
-        value=DEFAULT_WIN,
-        step=1,
-    )
-    ease_bp = st.number_input(
-        "Easing Threshold (bp)",
-        min_value=10,
-        max_value=200,
-        value=DEFAULT_EASE_BP,
-        step=5,
-    )
-    tight_bp = st.number_input(
-        "Tightening Threshold (bp)",
-        min_value=-200,
-        max_value=-10,
-        value=DEFAULT_TIGHT_BP,
-        step=5,
-    )
+    st.header("Inputs")
+    st.markdown("Use official sources by default. Update the links after each FOMC meeting.")
+    statement_url = st.text_input("Latest FOMC statement URL", value=DEFAULT_STATEMENT_URL)
+    minutes_url = st.text_input("Latest FOMC minutes URL", value=DEFAULT_MINUTES_URL)
 
     st.markdown("---")
-    st.subheader("Overlays")
-    show_regime = st.checkbox("Show Regime Shading", value=True)
-    show_spread = st.checkbox("Show Inflation Compensation Proxy", value=False)
-    show_fomc = st.checkbox("Show FOMC Markers", value=True)
-    show_cpi = st.checkbox("Show CPI Markers", value=False)
-    show_recession = st.checkbox("Show Recession Shading", value=True)
+    st.subheader("Market pricing")
+    market_mode = st.radio(
+        "How to feed market-implied cuts",
+        options=["Manual input", "Infer from end-2026 rate"],
+        index=0,
+    )
+
+    current_target_upper = safe_series("fed_target_upper").dropna().iloc[-1]
+
+    if market_mode == "Manual input":
+        market_implied_cuts_bps = st.number_input(
+            "Cumulative cuts priced over next 12 months (bps)",
+            min_value=-100,
+            max_value=400,
+            value=50,
+            step=25,
+            help="Pull this from CME FedWatch or your preferred rates screen.",
+        )
+        market_implied_end_rate = float(current_target_upper) - float(market_implied_cuts_bps) / 100.0
+    else:
+        market_implied_end_rate = st.number_input(
+            "Market-implied end-2026 fed funds rate (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=3.10,
+            step=0.05,
+            format="%.2f",
+            help="Use the implied year-end rate from fed funds futures / OIS.",
+        )
+        market_implied_cuts_bps = int(round((float(current_target_upper) - float(market_implied_end_rate)) * 100.0))
 
     st.markdown("---")
-    st.caption("Source: FRED and official public event calendars")
+    lookback_months = st.slider("Chart lookback (months)", min_value=24, max_value=120, value=60, step=12)
 
-# ── Load Data ────────────────────────────────────────────
-today = pd.Timestamp.today().normalize()
-start = today - pd.DateOffset(years=start_years)
-extended_start = start - pd.Timedelta(days=max(180, win * 3))
+    st.markdown("---")
+    st.subheader("About this tool")
+    markdown_small(
+        "This dashboard is built for the actual reaction function, not a single inflation print. "
+        "It uses public FRED data for the macro state, official Fed webpages for language, and FOMC SEP median series distributed through FRED."
+    )
 
-try:
-    nominal = fetch_fred_series(NOM_SERIES, extended_start, today)
-except Exception as e:
-    st.error(f"Failed loading {NOM_SERIES}: {e}")
-    st.stop()
+# Load data
+with st.spinner("Loading macro data and Fed language..."):
+    supercore = safe_series("supercore_cpi")
+    supercore_yoy = pct_change_yoy(supercore)
+    supercore_3m = pct_change_3m_ann(supercore)
 
-try:
-    real = fetch_fred_series(REAL_SERIES, extended_start, today)
-except Exception as e:
-    st.error(f"Failed loading {REAL_SERIES}: {e}")
-    st.stop()
+    wages = safe_series("wage_growth")
+    unrate = safe_series("unemployment")
+    anfci = safe_series("anfci")
+    hy_oas = safe_series("hy_oas")
+    dff = safe_series("fed_funds_effective")
+    fed_target_upper = safe_series("fed_target_upper")
 
-df, mom = build_yield_dataframe(nominal=nominal, real=real, start=start, win=win)
+    sep_fed = safe_series("sep_fed_funds")
+    sep_un = safe_series("sep_unemployment")
+    sep_pce = safe_series("sep_pce")
+    sep_core = safe_series("sep_core_pce")
 
-if df.empty or mom.empty:
-    st.warning("No overlapping yield data for the selected lookback.")
-    st.stop()
+    statement_text = safe_text("statement", statement_url)
+    minutes_text = safe_text("minutes", minutes_url)
 
-latest = {
-    "date": df.index[-1],
-    "nominal": df["Nominal"].iloc[-1],
-    "real": df["Real"].iloc[-1],
-    "spread": df["InflationCompProxy"].iloc[-1],
-    "mom": mom.iloc[-1],
-    "mom_prev": mom.iloc[-2] if len(mom) > 1 else pd.NA,
-    "d_nominal": last_delta(df["Nominal"]),
-    "d_real": last_delta(df["Real"]),
-    "d_spread": last_delta(df["InflationCompProxy"]),
-}
+# Latest data
+today = datetime.now()
+current_year = today.year
 
-regime_label, regime_color = classify_regime(latest["mom"], ease_bp, tight_bp)
+supercore_yoy_dt, supercore_yoy_last = latest_valid(supercore_yoy)
+supercore_3m_dt, supercore_3m_last = latest_valid(supercore_3m)
+wage_dt, wage_last = latest_valid(wages)
+un_dt, un_last = latest_valid(unrate)
+anfci_dt, anfci_last = latest_valid(anfci)
+hy_dt, hy_last = latest_valid(hy_oas)
+dff_dt, dff_last = latest_valid(dff)
+upper_dt, upper_last = latest_valid(fed_target_upper)
 
-# ── Metrics Row ──────────────────────────────────────────
-c1, c2, c3, c4, c5 = st.columns([2, 2, 2.2, 2, 2.2])
+sep_fed_curr = get_sep_for_year(sep_fed, current_year)
+sep_un_curr = get_sep_for_year(sep_un, current_year)
+sep_pce_curr = get_sep_for_year(sep_pce, current_year)
+sep_core_curr = get_sep_for_year(sep_core, current_year)
 
-c1.metric(
-    "Nominal 10Y Yield",
-    fmt_pct(latest["nominal"]),
-    fmt_pct(latest["d_nominal"]),
-)
+# Scoring
+metric_rows = []
 
-c2.metric(
-    "Real 10Y Yield",
-    fmt_pct(latest["real"]),
-    fmt_pct(latest["d_real"]),
-)
+# Inflation proxy
+if supercore_3m_last >= 4.0:
+    inflation_pts = 2
+    inflation_state = "re-accelerating"
+elif supercore_3m_last >= 3.0:
+    inflation_pts = 1
+    inflation_state = "sticky"
+elif supercore_3m_last <= 2.25:
+    inflation_pts = -2
+    inflation_state = "cooling fast"
+elif supercore_3m_last <= 2.75:
+    inflation_pts = -1
+    inflation_state = "cooling"
+else:
+    inflation_pts = 0
+    inflation_state = "mixed"
 
-c3.metric(
-    f"Inverted {win}-Day Real Yield Momentum",
-    fmt_bp(latest["mom"]),
-    fmt_bp(latest["mom"] - latest["mom_prev"]) if pd.notna(latest["mom_prev"]) else "N/A",
-    help=f"-(Current real yield - real yield {win} observations ago) × 100",
-)
+metric_rows.append({
+    "Factor": "Core services ex housing",
+    "Current": f"{supercore_3m_last:.2f}% (3m ann)",
+    "Reference": f"{supercore_yoy_last:.2f}% YoY | SEP core PCE {sep_core_curr:.2f}%" if sep_core_curr is not None else f"{supercore_yoy_last:.2f}% YoY",
+    "Read": inflation_state,
+    "Score": inflation_pts,
+})
 
-c4.metric(
-    "Inflation Compensation Proxy",
-    fmt_pct(latest["spread"]),
-    fmt_pct(latest["d_spread"]),
-    help="Nominal 10Y minus real 10Y",
-)
+# Wage growth
+if wage_last >= 4.5:
+    wage_pts = 2
+    wage_state = "too hot"
+elif wage_last >= 4.0:
+    wage_pts = 1
+    wage_state = "still firm"
+elif wage_last <= 3.0:
+    wage_pts = -2
+    wage_state = "cool enough"
+elif wage_last <= 3.5:
+    wage_pts = -1
+    wage_state = "cooling"
+else:
+    wage_pts = 0
+    wage_state = "balanced"
 
-c5.markdown(
+metric_rows.append({
+    "Factor": "Wage growth",
+    "Current": f"{wage_last:.2f}%",
+    "Reference": "Atlanta Fed Wage Growth Tracker",
+    "Read": wage_state,
+    "Score": wage_pts,
+})
+
+# Unemployment vs SEP
+un_gap = None if sep_un_curr is None else un_last - sep_un_curr
+if un_gap is None:
+    un_pts = 0
+    un_state = "n/a"
+elif un_gap >= 0.30:
+    un_pts = -2
+    un_state = "labor cooling faster than SEP"
+elif un_gap >= 0.10:
+    un_pts = -1
+    un_state = "modestly softer than SEP"
+elif un_gap <= -0.30:
+    un_pts = 2
+    un_state = "labor still tighter than SEP"
+elif un_gap <= -0.10:
+    un_pts = 1
+    un_state = "slightly tighter than SEP"
+else:
+    un_pts = 0
+    un_state = "near SEP"
+
+metric_rows.append({
+    "Factor": "Unemployment",
+    "Current": f"{un_last:.2f}%",
+    "Reference": f"SEP median {sep_un_curr:.2f}% | gap {format_delta(un_last, sep_un_curr)}" if sep_un_curr is not None else "SEP n/a",
+    "Read": un_state,
+    "Score": un_pts,
+})
+
+# Financial conditions
+if anfci_last >= 0.50:
+    fci_pts = -2
+    fci_state = "materially tighter"
+elif anfci_last >= 0.15:
+    fci_pts = -1
+    fci_state = "tighter"
+elif anfci_last <= -0.50:
+    fci_pts = 2
+    fci_state = "very easy"
+elif anfci_last <= -0.15:
+    fci_pts = 1
+    fci_state = "easy"
+else:
+    fci_pts = 0
+    fci_state = "near neutral"
+
+metric_rows.append({
+    "Factor": "Financial conditions",
+    "Current": f"ANFCI {anfci_last:.2f} | HY OAS {hy_last:.2f}%",
+    "Reference": "Positive ANFCI = tighter than average",
+    "Read": fci_state,
+    "Score": fci_pts,
+})
+
+# Market implied cuts vs SEP
+fed_gap = None if sep_fed_curr is None else market_implied_end_rate - sep_fed_curr
+if fed_gap is None:
+    mkt_pts = 0
+    mkt_state = "n/a"
+elif fed_gap <= -0.50:
+    mkt_pts = -2
+    mkt_state = "market pricing much more easing than SEP"
+elif fed_gap <= -0.25:
+    mkt_pts = -1
+    mkt_state = "market leaning easier than SEP"
+elif fed_gap >= 0.50:
+    mkt_pts = 2
+    mkt_state = "market pricing tighter path than SEP"
+elif fed_gap >= 0.25:
+    mkt_pts = 1
+    mkt_state = "market fading cuts vs SEP"
+else:
+    mkt_pts = 0
+    mkt_state = "near SEP path"
+
+metric_rows.append({
+    "Factor": "Market-implied cuts",
+    "Current": f"{market_implied_cuts_bps} bps | implied end rate {market_implied_end_rate:.2f}%",
+    "Reference": f"SEP median end-{current_year} rate {sep_fed_curr:.2f}%" if sep_fed_curr is not None else "SEP n/a",
+    "Read": mkt_state,
+    "Score": mkt_pts,
+})
+
+# Fed language
+statement_score, statement_hawk, statement_dove = score_text(statement_text)
+minutes_score, minutes_hawk, minutes_dove = score_text(minutes_text)
+language_score = round(0.65 * statement_score + 0.35 * minutes_score, 2)
+
+if language_score <= -2.0:
+    lang_pts = -2
+    lang_state = "clear easing lean"
+elif language_score <= -0.50:
+    lang_pts = -1
+    lang_state = "softening tone"
+elif language_score >= 2.0:
+    lang_pts = 2
+    lang_state = "hawkish hold"
+elif language_score >= 0.50:
+    lang_pts = 1
+    lang_state = "guarded / restrictive"
+else:
+    lang_pts = 0
+    lang_state = "balanced hold"
+
+hits = []
+if statement_hawk:
+    hits.append("statement hawkish: " + ", ".join(statement_hawk[:3]))
+if statement_dove:
+    hits.append("statement dovish: " + ", ".join(statement_dove[:3]))
+if minutes_hawk:
+    hits.append("minutes hawkish: " + ", ".join(minutes_hawk[:3]))
+if minutes_dove:
+    hits.append("minutes dovish: " + ", ".join(minutes_dove[:3]))
+
+metric_rows.append({
+    "Factor": "Fed language",
+    "Current": f"score {language_score:.2f}",
+    "Reference": " | ".join(hits[:2]) if hits else "No keyword hits",
+    "Read": lang_state,
+    "Score": lang_pts,
+})
+
+score_df = pd.DataFrame(metric_rows)
+total_score = int(score_df["Score"].sum())
+policy_call = reaction_summary(total_score)
+
+# Header cards
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Dashboard output", policy_call.title())
+c2.metric("Reaction score", f"{total_score:+d}")
+c3.metric("Current fed funds upper", f"{upper_last:.2f}%")
+c4.metric("SEP median end-year rate", f"{sep_fed_curr:.2f}%" if sep_fed_curr is not None else "n/a")
+
+# Tape summary
+drivers = score_df.sort_values("Score")
+dovish_drivers = drivers[drivers["Score"] < 0]["Factor"].tolist()
+hawkish_drivers = drivers[drivers["Score"] > 0]["Factor"].tolist()
+
+summary_parts = []
+if dovish_drivers:
+    summary_parts.append("easing pressure is coming from " + ", ".join(dovish_drivers[:3]))
+if hawkish_drivers:
+    summary_parts.append("offset by " + ", ".join(hawkish_drivers[:3]))
+if not summary_parts:
+    summary_parts.append("the macro inputs are clustered around a holding pattern")
+
+st.markdown(
     f"""
-    <div style="padding-top:0.35rem;">
-        <div style="
-            display:inline-block;
-            padding:0.35rem 0.7rem;
-            border-radius:999px;
-            background:{regime_color};
-            color:white;
-            font-weight:600;
-            font-size:0.95rem;
-        ">{regime_label}</div>
-        <div style="margin-top:0.45rem; color:#6b7280; font-size:0.9rem;">
-            as of {latest["date"].date()}
-        </div>
+    <div style="padding:16px 18px; border:1px solid #ddd; border-radius:10px; background:#fafafa;">
+    <b>Tape read:</b> The model reads <b>{policy_call}</b>. Right now {summary_parts[0]}. 
+    This is a decision aid, not a mechanical forecast. The inflation proxy is a services-ex-housing CPI measure, while the SEP inflation median is core PCE, so that comparison is directional rather than apples-to-apples.
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-# ── Figure Builder ───────────────────────────────────────
-nrows = 3 if show_spread else 2
-row_heights = [0.42, 0.33, 0.25] if show_spread else [0.58, 0.42]
-
-subplot_titles = [
-    "Nominal vs Real 10-Year Yield",
-    f"{win}-Day Inverted Real Yield Momentum",
-]
-if show_spread:
-    subplot_titles.append("10Y Inflation Compensation Proxy")
-
-fig = make_subplots(
-    rows=nrows,
-    cols=1,
-    shared_xaxes=True,
-    vertical_spacing=0.05,
-    row_heights=row_heights,
-    subplot_titles=subplot_titles,
+st.markdown("")
+st.subheader("Reaction function scorecard")
+st.dataframe(
+    score_df,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Score": st.column_config.NumberColumn(format="%d"),
+    },
 )
 
-fig.add_trace(
-    go.Scatter(
-        x=df.index,
-        y=df["Nominal"],
-        name="Nominal 10Y",
-        mode="lines",
-        line=dict(color="#2563eb", width=2.2),
-        hovertemplate="%{x|%Y-%m-%d}<br>Nominal 10Y: %{y:.2f}%<extra></extra>",
-    ),
-    row=1,
-    col=1,
-)
-
-fig.add_trace(
-    go.Scatter(
-        x=df.index,
-        y=df["Real"],
-        name="Real 10Y",
-        mode="lines",
-        line=dict(color="#f59e0b", width=2.2),
-        hovertemplate="%{x|%Y-%m-%d}<br>Real 10Y: %{y:.2f}%<extra></extra>",
-    ),
-    row=1,
-    col=1,
-)
-
-fig.add_trace(
-    go.Scatter(
-        x=mom.index,
-        y=mom,
-        name="Inverted Real Yield Momentum",
-        mode="lines",
-        line=dict(color="#dc2626", width=1.9, dash="dash"),
-        hovertemplate="%{x|%Y-%m-%d}<br>Momentum: %{y:.0f} bp<extra></extra>",
-    ),
-    row=2,
-    col=1,
-)
-
-for level, label in [
-    (ease_bp, f"+{ease_bp} bp"),
-    (0, "0 bp"),
-    (tight_bp, f"{tight_bp} bp"),
-]:
-    fig.add_hline(
-        y=level,
-        line_width=1,
-        line_dash="dot",
-        line_color="rgba(100,100,100,0.7)",
-        row=2,
-        col=1,
+left, right = st.columns((1.1, 1.0))
+with left:
+    st.subheader("Macro state")
+    st.plotly_chart(
+        make_line_chart(supercore_3m, "Core Services ex Housing, 3m Annualized", "%", months=lookback_months),
+        use_container_width=True,
     )
-    fig.add_annotation(
-        x=df.index.max(),
-        y=level,
-        xref="x2" if nrows >= 2 else "x",
-        yref="y2",
-        text=label,
-        showarrow=False,
-        xanchor="right",
-        yanchor="bottom",
-        font=dict(size=10, color="rgba(80,80,80,0.9)"),
+    st.plotly_chart(
+        make_line_chart(wages, "Atlanta Fed Wage Growth Tracker", "%", months=lookback_months),
+        use_container_width=True,
+    )
+    st.plotly_chart(
+        make_line_chart(unrate, "Unemployment Rate vs SEP Median", "%", ref_value=sep_un_curr, ref_name="SEP median", months=lookback_months),
+        use_container_width=True,
     )
 
-if show_regime:
-    easing_mask = mom > ease_bp
-    tightening_mask = mom < tight_bp
-
-    for s, e in contiguous(easing_mask):
-        fig.add_vrect(
-            x0=s,
-            x1=e,
-            fillcolor="rgba(22,163,74,0.10)",
-            line_width=0,
-            row=2,
-            col=1,
-        )
-
-    for s, e in contiguous(tightening_mask):
-        fig.add_vrect(
-            x0=s,
-            x1=e,
-            fillcolor="rgba(220,38,38,0.10)",
-            line_width=0,
-            row=2,
-            col=1,
-        )
-
-if show_spread:
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["InflationCompProxy"],
-            name="Inflation Compensation Proxy",
-            mode="lines",
-            line=dict(color="#16a34a", width=2.0),
-            hovertemplate="%{x|%Y-%m-%d}<br>Proxy: %{y:.2f}%<extra></extra>",
-        ),
-        row=3,
-        col=1,
+with right:
+    st.subheader("Policy context")
+    st.plotly_chart(
+        make_line_chart(anfci, "Financial Conditions (ANFCI)", "Index", ref_value=0.0, ref_name="Neutral", months=lookback_months),
+        use_container_width=True,
     )
 
-if show_recession:
-    recession_bands = fetch_recession_bands(df.index.min(), df.index.max())
-    for rs, re in recession_bands:
-        if re >= df.index.min() and rs <= df.index.max():
-            fig.add_vrect(
-                x0=max(rs, df.index.min()),
-                x1=min(re, df.index.max()),
-                fillcolor="rgba(120,120,120,0.15)",
-                line_width=0,
-            )
+    fed_compare = pd.DataFrame(
+        {
+            "Series": ["Current fed funds upper", "Market-implied end-year rate", "SEP median end-year rate"],
+            "Value": [
+                upper_last,
+                market_implied_end_rate,
+                np.nan if sep_fed_curr is None else sep_fed_curr,
+            ],
+        }
+    ).dropna()
 
-if show_fomc:
-    for dt in fetch_fomc_dates():
-        if df.index.min() <= dt <= df.index.max():
-            fig.add_vline(
-                x=dt,
-                line_width=1,
-                line_dash="dashdot",
-                line_color="rgba(37,99,235,0.25)",
-            )
+    fig_bars = go.Figure()
+    fig_bars.add_trace(go.Bar(x=fed_compare["Series"], y=fed_compare["Value"]))
+    fig_bars.update_layout(
+        title="Where policy is vs where market and SEP think it goes",
+        height=320,
+        margin=dict(l=20, r=20, t=55, b=20),
+        yaxis_title="%",
+        template="plotly_white",
+    )
+    st.plotly_chart(fig_bars, use_container_width=True)
 
-if show_cpi:
-    for dt in fetch_cpi_dates():
-        if df.index.min() <= dt <= df.index.max():
-            fig.add_vline(
-                x=dt,
-                line_width=1,
-                line_dash="dot",
-                line_color="rgba(245,158,11,0.25)",
-            )
+    sep_tbl = pd.DataFrame(
+        {
+            "SEP median": ["Fed funds", "Unemployment", "PCE", "Core PCE"],
+            f"{current_year}": [
+                sep_fed_curr,
+                sep_un_curr,
+                sep_pce_curr,
+                sep_core_curr,
+            ],
+        }
+    )
+    st.markdown("**SEP medians**")
+    st.dataframe(sep_tbl, use_container_width=True, hide_index=True)
 
-fig.update_yaxes(title_text="Yield (%)", tickformat=".2f", row=1, col=1)
-fig.update_yaxes(title_text="bp", tickformat=".0f", row=2, col=1)
-if show_spread:
-    fig.update_yaxes(title_text="Spread (%)", tickformat=".2f", row=3, col=1)
+st.subheader("Fed language")
+lang1, lang2 = st.columns(2)
+with lang1:
+    st.markdown(f"**Statement score:** {statement_score:.2f}")
+    st.write(
+        "Hawkish hits: " + (", ".join(statement_hawk[:6]) if statement_hawk else "none")
+    )
+    st.write(
+        "Dovish hits: " + (", ".join(statement_dove[:6]) if statement_dove else "none")
+    )
+    st.text_area(
+        "Latest FOMC statement excerpt",
+        value=statement_text[:2500],
+        height=220,
+    )
 
-fig.update_xaxes(
-    title_text="Date",
-    tickformat="%b-%y",
-    showgrid=False,
-    row=nrows,
-    col=1,
+with lang2:
+    st.markdown(f"**Minutes score:** {minutes_score:.2f}")
+    st.write(
+        "Hawkish hits: " + (", ".join(minutes_hawk[:6]) if minutes_hawk else "none")
+    )
+    st.write(
+        "Dovish hits: " + (", ".join(minutes_dove[:6]) if minutes_dove else "none")
+    )
+    st.text_area(
+        "Latest FOMC minutes excerpt",
+        value=minutes_text[:2500],
+        height=220,
+    )
+
+with st.expander("Diagnostics and data freshness"):
+    freshness = pd.DataFrame(
+        [
+            ["Core services ex housing", str(supercore_3m_dt.date()), SERIES["supercore_cpi"]["id"]],
+            ["Wage growth", str(wage_dt.date()), SERIES["wage_growth"]["id"]],
+            ["Unemployment", str(un_dt.date()), SERIES["unemployment"]["id"]],
+            ["ANFCI", str(anfci_dt.date()), SERIES["anfci"]["id"]],
+            ["HY OAS", str(hy_dt.date()), SERIES["hy_oas"]["id"]],
+            ["Fed funds upper", str(upper_dt.date()), SERIES["fed_target_upper"]["id"]],
+            ["SEP fed funds", str(sep_fed.dropna().index.max().date()) if not sep_fed.dropna().empty else "n/a", SERIES["sep_fed_funds"]["id"]],
+            ["SEP unemployment", str(sep_un.dropna().index.max().date()) if not sep_un.dropna().empty else "n/a", SERIES["sep_unemployment"]["id"]],
+            ["SEP PCE", str(sep_pce.dropna().index.max().date()) if not sep_pce.dropna().empty else "n/a", SERIES["sep_pce"]["id"]],
+            ["SEP core PCE", str(sep_core.dropna().index.max().date()) if not sep_core.dropna().empty else "n/a", SERIES["sep_core_pce"]["id"]],
+        ],
+        columns=["Series", "Latest observation", "FRED ID"],
+    )
+    st.dataframe(freshness, use_container_width=True, hide_index=True)
+    st.markdown("**Fed URLs used**")
+    st.code(f"Statement: {statement_url}\nMinutes: {minutes_url}")
+
+st.markdown("---")
+markdown_small(
+    "Design choice: this tool uses CPI services less rent of shelter as the closest public, stable proxy for core services ex housing; the Fed's preferred inflation target remains PCE, and the SEP inflation medians are reported in PCE and core PCE."
 )
-
-fig.update_layout(
-    template="plotly_white",
-    height=840 if show_spread else 720,
-    margin=dict(l=60, r=30, t=70, b=50),
-    hovermode="x unified",
-    legend=dict(
-        orientation="h",
-        x=0,
-        y=1.08,
-        xanchor="left",
-        bgcolor="rgba(255,255,255,0.7)",
-    ),
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# ── Download Section ─────────────────────────────────────
-with st.expander("Download Data"):
-    df_out = df.copy()
-    df_out[f"Inverted_{win}d_Real_Yield_Momentum_bp"] = mom
-    st.download_button(
-        label="Download Yield Data (CSV)",
-        data=df_out.to_csv(index=True, index_label="Date"),
-        file_name="10yr_yield_dashboard.csv",
-        mime="text/csv",
-    )
-
-# ── Methodology ──────────────────────────────────────────
-with st.expander("Methodology and Interpretation", expanded=False):
-    st.markdown(
-        f"""
-**Series**  
-• Nominal 10Y: FRED `{NOM_SERIES}`  
-• Real 10Y: FRED `{REAL_SERIES}`  
-• Recessions: FRED `{REC_SERIES}`  
-
-**Inverted real-yield momentum**  
-• Formula: `-(current real yield - real yield {win} observations ago) × 100`  
-• Units: basis points  
-• Higher readings imply real yields have fallen over the lookback window  
-• Lower readings imply real yields have risen over the lookback window  
-
-**Regime thresholds**  
-• Easing: momentum greater than {ease_bp} bp  
-• Neutral: between {tight_bp} bp and {ease_bp} bp  
-• Tightening: momentum below {tight_bp} bp  
-
-**Inflation compensation proxy**  
-• Nominal 10Y minus real 10Y  
-• This is a rough market-implied inflation compensation measure, not a perfect breakeven series  
-
-**Overlay notes**  
-• FOMC and CPI markers come from public official calendars and may occasionally fail if source page structure changes  
-• Recession shading is derived from FRED `USREC`
-"""
-    )
-
-st.caption("© 2026 AD Fund Management LP")
