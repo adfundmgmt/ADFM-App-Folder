@@ -1725,7 +1725,7 @@ def main() -> None:
         },
     )
 
-     st.subheader("Transcript underwrite")
+    st.subheader("Transcript underwrite")
     options = view.sort_values("date", ascending=False).copy()
     options["label"] = options.apply(
         lambda r: f"{r['date'].date() if pd.notna(r['date']) else 'n.a.'} | {r['speaker'] or 'Unknown'} | {r['title']}",
