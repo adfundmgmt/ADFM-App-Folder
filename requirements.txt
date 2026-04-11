@@ -12,3 +12,6 @@ mplfinance
 sec-edgar-downloader
 beautifulsoup4
 cot_reports
+beautifulsoup4
+pypdf
+PyPDF2
