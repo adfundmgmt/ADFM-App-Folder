@@ -1083,13 +1083,23 @@ def make_badge(label: str, z: float) -> str:
 def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
 
-    # dovish = green, hawkish = red
+    # --- dynamic Y range (adaptive but still anchored) ---
+    y_min = series["tone_z_fed_smooth"].min()
+    y_max = series["tone_z_fed_smooth"].max()
+
+    # add breathing room
+    padding = 0.4
+    y_low = min(-2.5, y_min - padding)
+    y_high = max(2.5, y_max + padding)
+
+    # --- regime shading (kept consistent) ---
     fig.add_hrect(y0=-3, y1=-1.25, fillcolor="rgba(46, 125, 50, 0.12)", line_width=0)
     fig.add_hrect(y0=-1.25, y1=-0.35, fillcolor="rgba(46, 125, 50, 0.06)", line_width=0)
     fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="rgba(160, 160, 160, 0.05)", line_width=0)
     fig.add_hrect(y0=0.35, y1=1.25, fillcolor="rgba(183, 28, 28, 0.06)", line_width=0)
     fig.add_hrect(y0=1.25, y1=3, fillcolor="rgba(183, 28, 28, 0.12)", line_width=0)
 
+    # --- main series ---
     fig.add_trace(
         go.Scatter(
             x=series["date"],
@@ -1098,9 +1108,9 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             name="Institutional tone z-score",
             line=dict(width=2.4),
             marker=dict(size=6),
-            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
+
     fig.add_trace(
         go.Scatter(
             x=series["date"],
@@ -1108,9 +1118,9 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             mode="lines",
             name="3-bucket mean",
             line=dict(dash="dot", width=2),
-            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
+
     fig.add_trace(
         go.Scatter(
             x=series["date"],
@@ -1118,48 +1128,43 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             mode="lines",
             name="6-bucket mean",
             line=dict(dash="dash", width=2),
-            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
+
+    # --- dynamic X range (tight to data, no dead space) ---
+    x_min = series["date"].min()
+    x_max = series["date"].max()
 
     fig.update_layout(
         height=470,
         margin=dict(l=20, r=20, t=84, b=28),
-        title=dict(text="Fed tone over time", x=0.01, xanchor="left", y=0.98, yanchor="top"),
+        title=dict(text="Fed tone over time", x=0.01, xanchor="left"),
         yaxis_title="Z-score vs Fed baseline",
-        xaxis_title="",
+
+        xaxis=dict(
+            range=[x_min, x_max],
+            showgrid=True,
+            tickformat="%Y",
+            dtick="M12",  # cleaner yearly ticks
+        ),
+
+        yaxis=dict(
+            range=[y_low, y_high],
+            tickmode="linear",
+            dtick=0.5,  # tighter readability
+            zeroline=True,
+            zerolinewidth=1,
+        ),
+
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.03,
             xanchor="left",
             x=0.0,
-            bgcolor="rgba(255,255,255,0.7)",
         ),
-        xaxis=dict(automargin=True),
-        yaxis=dict(automargin=True, range=[-2.6, 2.6], zeroline=True, zerolinewidth=1),
     )
-    return fig
 
-
-def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
-    fig = px.scatter(
-        matrix,
-        x="latest_vs_fed",
-        y="speaker",
-        size="docs",
-        color="latest_vs_own",
-        hover_data=["avg_stance", "last_date", "docs", "latest_vs_own", "latest_vs_fed"],
-        title="Speaker matrix",
-        height=470,
-        color_continuous_scale="RdYlGn_r",
-    )
-    fig.update_layout(
-        margin=dict(l=20, r=20, t=68, b=25),
-        xaxis_title="Latest speech vs Fed baseline (z-score)",
-        yaxis_title="",
-        coloraxis_colorbar_title="Vs own history",
-    )
     return fig
 
 
