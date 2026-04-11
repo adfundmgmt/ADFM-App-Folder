@@ -50,6 +50,7 @@ SPEAKER_WEIGHTS = {
     "Alberto G. Musalem": 1.0,
     "Beth M. Hammack": 1.0,
     "Stephen I. Miran": 1.0,
+    "Lael Brainard": 1.0,
 }
 
 LEXICON = {
@@ -302,6 +303,12 @@ def emphasis_bucket(z: float) -> str:
     return "Neutral"
 
 
+def squash_score(x: float, scale: float = 2.5, max_abs: float = 2.2) -> float:
+    if pd.isna(x):
+        return np.nan
+    return float(np.tanh(x / scale) * max_abs)
+
+
 def score_text(text: str) -> ToneResult:
     low = clean_text(text).lower()
     words = re.findall(r"\b[a-z][a-z\-']+\b", low)
@@ -319,7 +326,7 @@ def score_text(text: str) -> ToneResult:
     bs_weight = scaled.get("balance_sheet", 0.0)
     uncertainty_weight = scaled.get("uncertainty_risk", 0.0)
 
-    net = (
+    net_raw = (
         hawkish
         - dovish
         + 0.15 * inflation_weight
@@ -327,6 +334,17 @@ def score_text(text: str) -> ToneResult:
         - 0.10 * growth_weight
         - 0.05 * fs_weight
     )
+
+    # compress document-level extremes so the output is less jumpy
+    net = squash_score(net_raw, scale=2.5, max_abs=2.2)
+    hawkish = squash_score(hawkish, scale=2.2, max_abs=2.4)
+    dovish = squash_score(dovish, scale=2.2, max_abs=2.4)
+    inflation_weight = squash_score(inflation_weight, scale=3.0, max_abs=2.5)
+    labor_weight = squash_score(labor_weight, scale=3.0, max_abs=2.5)
+    growth_weight = squash_score(growth_weight, scale=3.0, max_abs=2.5)
+    fs_weight = squash_score(fs_weight, scale=2.5, max_abs=2.3)
+    bs_weight = squash_score(bs_weight, scale=2.5, max_abs=2.3)
+    uncertainty_weight = squash_score(uncertainty_weight, scale=2.5, max_abs=2.3)
 
     return ToneResult(
         net_score=net,
@@ -891,12 +909,6 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     out["stance"] = out["tone_z_fed"].apply(tone_bucket)
     out["speaker_delta"] = out["tone_z_speaker"]
 
-    out["tone_regime"] = pd.cut(
-        out["tone_z_fed"],
-        bins=[-np.inf, -1.25, -0.35, 0.35, 1.25, np.inf],
-        labels=["Very Dovish", "Dovish", "Neutral", "Hawkish", "Very Hawkish"],
-    )
-
     return out
 
 
@@ -933,41 +945,12 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
-    grouped["tone_3m_ma"] = grouped["tone_z_fed"].rolling(3, min_periods=1).mean()
-    grouped["tone_6m_ma"] = grouped["tone_z_fed"].rolling(6, min_periods=1).mean()
+    # smoother institutional read
+    grouped["tone_z_fed_smooth"] = grouped["tone_z_fed"].ewm(span=4, adjust=False).mean()
+    grouped["tone_3m_ma"] = grouped["tone_z_fed_smooth"].rolling(3, min_periods=1).mean()
+    grouped["tone_6m_ma"] = grouped["tone_z_fed_smooth"].rolling(6, min_periods=1).mean()
+
     return grouped
-
-
-def latest_snapshot(df: pd.DataFrame) -> Dict[str, float]:
-    if df.empty:
-        return {
-            "tone_z_fed": np.nan,
-            "delta_30d": np.nan,
-            "core_tone_z": np.nan,
-            "tone_percentile_fed": np.nan,
-        }
-
-    window = aggregate_series(df, freq="30D")
-    tone = window["tone_z_fed"].iloc[-1] if not window.empty else np.nan
-
-    delta_30d = np.nan
-    if len(window) >= 2:
-        delta_30d = tone - window["tone_z_fed"].iloc[-2]
-
-    core = df[
-        df["speaker"].isin(
-            ["Jerome H. Powell", "Philip N. Jefferson", "John C. Williams", "Christopher J. Waller"]
-        )
-    ]
-    core_tone = np.average(core["tone_z_fed"], weights=core["speaker_weight"]) if not core.empty else np.nan
-
-    latest_doc = df.sort_values("date").iloc[-1]
-    return {
-        "tone_z_fed": tone,
-        "delta_30d": delta_30d,
-        "core_tone_z": core_tone,
-        "tone_percentile_fed": float(latest_doc["tone_percentile_fed"]) if "tone_percentile_fed" in latest_doc else np.nan,
-    }
 
 
 def split_sentences(text: str) -> List[str]:
@@ -1016,8 +999,6 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
             docs=("url", "count"),
             tone_z_fed=("tone_z_fed", "mean"),
             tone_z_speaker=("tone_z_speaker", "mean"),
-            inflation_z_fed=("inflation_z_fed", "mean"),
-            labor_z_fed=("labor_z_fed", "mean"),
             last_date=("date", "max"),
         )
         .reset_index()
@@ -1038,16 +1019,17 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
 
 
 def render_about() -> None:
-    with st.sidebar.expander("About This Tool", expanded=False):
-        st.write(
-            "This dashboard scrapes Federal Reserve speeches and testimony directly from the Board website, "
-            "scores each document on hawkish and dovish language, and shows how speaker tone is shifting "
-            "relative to both that speaker's own history and the broader Fed baseline."
-        )
-        st.write(
-            "The focus is signal extraction from primary source text. The highlighted transcript excerpt is "
-            "meant to sit at the center of the workflow so you can validate the score quickly."
-        )
+    st.sidebar.markdown("### About This Tool")
+    st.sidebar.markdown(
+        """
+        <div style="padding:0.85rem 1rem;border:1px solid #d9d9d9;border-radius:0.7rem;background:#fafafa;line-height:1.65">
+        This dashboard scrapes Federal Reserve speeches and testimony directly from the Board website, scores each document on hawkish and dovish language, and shows how speaker tone is shifting relative to both that speaker’s own history and the broader Fed baseline.
+        <br><br>
+        The goal is signal extraction from primary source text. The highlighted transcript excerpt sits near the center of the workflow so you can validate what the scoring engine is actually picking up.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_diagnostics(log_df: pd.DataFrame, stats: Optional[Dict[str, int]] = None) -> None:
@@ -1065,7 +1047,7 @@ def render_diagnostics(log_df: pd.DataFrame, stats: Optional[Dict[str, int]] = N
     if log_df.empty:
         st.info("No scrape log yet.")
     else:
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        st.dataframe(log_df, use_container_width=True, hide_index=True, height=260)
 
 
 def format_z(x: float) -> str:
@@ -1080,40 +1062,42 @@ def format_pct(x: float) -> str:
     return f"{x:.0f}th %ile"
 
 
-def make_badge(label: str, z: float) -> str:
-    color = "#d9ead3"
-    text = "#1f4e2d"
+def stance_color(z: float) -> Tuple[str, str]:
     if pd.isna(z):
-        color = "#eaeaea"
-        text = "#555555"
-    elif z <= -0.35:
-        color = "#dbe9ff"
-        text = "#123a70"
-    elif z >= 0.35:
-        color = "#fde2e2"
-        text = "#7a1f1f"
+        return "#efefef", "#555555"
+    if z <= -0.35:
+        return "#dff3e4", "#1e6b35"  # dovish green
+    if z >= 0.35:
+        return "#fbe3e4", "#8a1f2b"  # hawkish red
+    return "#efefef", "#555555"
 
+
+def make_badge(label: str, z: float) -> str:
+    bg, fg = stance_color(z)
     return (
         f"<span style='display:inline-block;padding:0.28rem 0.6rem;border-radius:999px;"
-        f"background:{color};color:{text};font-weight:600;font-size:0.88rem'>{html.escape(label)}</span>"
+        f"background:{bg};color:{fg};font-weight:600;font-size:0.88rem'>{html.escape(label)}</span>"
     )
 
 
 def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
 
-    fig.add_hrect(y0=-3, y1=-1.25, fillcolor="rgba(91,155,213,0.08)", line_width=0)
-    fig.add_hrect(y0=-1.25, y1=-0.35, fillcolor="rgba(91,155,213,0.04)", line_width=0)
-    fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="rgba(180,180,180,0.05)", line_width=0)
-    fig.add_hrect(y0=0.35, y1=1.25, fillcolor="rgba(192,80,77,0.04)", line_width=0)
-    fig.add_hrect(y0=1.25, y1=3, fillcolor="rgba(192,80,77,0.08)", line_width=0)
+    # dovish = green, hawkish = red
+    fig.add_hrect(y0=-3, y1=-1.25, fillcolor="rgba(46, 125, 50, 0.12)", line_width=0)
+    fig.add_hrect(y0=-1.25, y1=-0.35, fillcolor="rgba(46, 125, 50, 0.06)", line_width=0)
+    fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="rgba(160, 160, 160, 0.05)", line_width=0)
+    fig.add_hrect(y0=0.35, y1=1.25, fillcolor="rgba(183, 28, 28, 0.06)", line_width=0)
+    fig.add_hrect(y0=1.25, y1=3, fillcolor="rgba(183, 28, 28, 0.12)", line_width=0)
 
     fig.add_trace(
         go.Scatter(
             x=series["date"],
-            y=series["tone_z_fed"],
+            y=series["tone_z_fed_smooth"],
             mode="lines+markers",
             name="Institutional tone z-score",
+            line=dict(width=2.4),
+            marker=dict(size=6),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
@@ -1123,7 +1107,7 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             y=series["tone_3m_ma"],
             mode="lines",
             name="3-bucket mean",
-            line=dict(dash="dot"),
+            line=dict(dash="dot", width=2),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
@@ -1133,64 +1117,64 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             y=series["tone_6m_ma"],
             mode="lines",
             name="6-bucket mean",
-            line=dict(dash="dash"),
+            line=dict(dash="dash", width=2),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
 
     fig.update_layout(
-        height=420,
-        margin=dict(l=20, r=20, t=40, b=20),
-        title="Fed tone over time",
+        height=470,
+        margin=dict(l=20, r=20, t=84, b=28),
+        title=dict(text="Fed tone over time", x=0.01, xanchor="left", y=0.98, yanchor="top"),
         yaxis_title="Z-score vs Fed baseline",
         xaxis_title="",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.03,
+            xanchor="left",
+            x=0.0,
+            bgcolor="rgba(255,255,255,0.7)",
+        ),
+        xaxis=dict(automargin=True),
+        yaxis=dict(automargin=True, range=[-2.6, 2.6], zeroline=True, zerolinewidth=1),
     )
     return fig
 
 
-def emphasis_heatmap_figure(series: pd.DataFrame) -> go.Figure:
-    latest = series.tail(12).copy()
-    if latest.empty:
-        return go.Figure()
-
-    z = np.array([
-        latest["inflation_z_fed"].tolist(),
-        latest["labor_z_fed"].tolist(),
-        latest["growth_z_fed"].tolist(),
-    ])
-
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=z,
-            x=latest["date"].dt.strftime("%Y-%m-%d"),
-            y=["Inflation", "Labor", "Growth"],
-            zmin=-2.5,
-            zmax=2.5,
-            hovertemplate="%{y}<br>%{x}<br>%{z:.2f}σ<extra></extra>",
-        )
+def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
+    fig = px.scatter(
+        matrix,
+        x="latest_vs_fed",
+        y="speaker",
+        size="docs",
+        color="latest_vs_own",
+        hover_data=["avg_stance", "last_date", "docs", "latest_vs_own", "latest_vs_fed"],
+        title="Speaker matrix",
+        height=470,
+        color_continuous_scale="RdYlGn_r",
     )
     fig.update_layout(
-        height=420,
-        margin=dict(l=20, r=20, t=40, b=20),
-        title="Theme emphasis by period",
-        xaxis_title="",
+        margin=dict(l=20, r=20, t=68, b=25),
+        xaxis_title="Latest speech vs Fed baseline (z-score)",
         yaxis_title="",
+        coloraxis_colorbar_title="Vs own history",
     )
     return fig
 
 
 def clean_latest_table(view: pd.DataFrame) -> pd.DataFrame:
     latest = view.sort_values("date", ascending=False).copy()
-    latest["open"] = latest["url"].apply(lambda x: f'<a href="{x}" target="_blank">open</a>')
     latest["tone"] = latest["tone_z_fed"].apply(format_z)
     latest["vs own"] = latest["tone_z_speaker"].apply(format_z)
+    latest["fed %ile"] = latest["tone_percentile_fed"].apply(format_pct)
     latest["inflation"] = latest["inflation_z_fed"].apply(format_z)
     latest["labor"] = latest["labor_z_fed"].apply(format_z)
     latest["growth"] = latest["growth_z_fed"].apply(format_z)
-    latest["fed %ile"] = latest["tone_percentile_fed"].apply(format_pct)
+    latest["date"] = latest["date"].dt.strftime("%Y-%m-%d")
+    latest["source"] = latest["url"]
     latest = latest[
-        ["date", "speaker", "event_type", "stance", "tone", "vs own", "fed %ile", "inflation", "labor", "growth", "open"]
+        ["date", "speaker", "event_type", "stance", "tone", "vs own", "fed %ile", "inflation", "labor", "growth", "source"]
     ].rename(columns={"event_type": "type"})
     return latest
 
@@ -1205,13 +1189,23 @@ def scorecard_dataframe(doc: pd.Series) -> pd.DataFrame:
         ("Financial stability", doc["fs_z_fed"], np.nan, emphasis_bucket(doc["fs_z_fed"])),
         ("Uncertainty", doc["uncertainty_z_fed"], np.nan, emphasis_bucket(doc["uncertainty_z_fed"])),
     ]
-    out = pd.DataFrame(rows, columns=["dimension", "z", "percentile", "bucket"])
-    return out
+    return pd.DataFrame(rows, columns=["dimension", "z", "percentile", "bucket"])
 
 
 def scorecard_figure(scorecard: pd.DataFrame) -> go.Figure:
-    plot_df = scorecard.copy()
-    plot_df = plot_df.sort_values("z", ascending=True)
+    plot_df = scorecard.copy().sort_values("z", ascending=True)
+
+    colors = []
+    for z in plot_df["z"]:
+        if pd.isna(z):
+            colors.append("#bdbdbd")
+        elif z <= -0.35:
+            colors.append("#66bb6a")
+        elif z >= 0.35:
+            colors.append("#ef5350")
+        else:
+            colors.append("#bdbdbd")
+
     fig = go.Figure(
         go.Bar(
             x=plot_df["z"],
@@ -1219,6 +1213,7 @@ def scorecard_figure(scorecard: pd.DataFrame) -> go.Figure:
             orientation="h",
             text=[f"{z:+.2f}σ" if pd.notna(z) else "n.a." for z in plot_df["z"]],
             textposition="outside",
+            marker_color=colors,
             hovertemplate="%{y}<br>%{x:.2f}σ<extra></extra>",
         )
     )
@@ -1237,34 +1232,14 @@ def scorecard_figure(scorecard: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
-    fig = px.scatter(
-        matrix,
-        x="latest_vs_fed",
-        y="speaker",
-        size="docs",
-        color="latest_vs_own",
-        hover_data=["avg_stance", "last_date", "docs", "latest_vs_own", "latest_vs_fed"],
-        title="Speaker matrix",
-        height=420,
-    )
-    fig.update_layout(
-        margin=dict(l=20, r=20, t=40, b=20),
-        xaxis_title="Latest speech vs Fed baseline (z-score)",
-        yaxis_title="",
-        coloraxis_colorbar_title="Vs own history",
-    )
-    return fig
-
-
 def doc_summary_html(doc: pd.Series) -> str:
     tone = make_badge(tone_bucket(doc["tone_z_fed"]), doc["tone_z_fed"])
-    own = make_badge(tone_bucket(doc["tone_z_speaker"]), doc["tone_z_speaker"])
-    infl = make_badge(emphasis_bucket(doc["inflation_z_fed"]), doc["inflation_z_fed"])
-    labor = make_badge(emphasis_bucket(doc["labor_z_fed"]), doc["labor_z_fed"])
-    growth = make_badge(emphasis_bucket(doc["growth_z_fed"]), doc["growth_z_fed"])
+    own = make_badge(f"Vs own: {tone_bucket(doc['tone_z_speaker'])}", doc["tone_z_speaker"])
+    infl = make_badge(f"Inflation: {emphasis_bucket(doc['inflation_z_fed'])}", doc["inflation_z_fed"])
+    labor = make_badge(f"Labor: {emphasis_bucket(doc['labor_z_fed'])}", doc["labor_z_fed"])
+    growth = make_badge(f"Growth: {emphasis_bucket(doc['growth_z_fed'])}", doc["growth_z_fed"])
 
-    html_text = f"""
+    return f"""
     <div style="padding:0.9rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fafafa">
         <div style="font-size:1.05rem;font-weight:700;margin-bottom:0.45rem">{html.escape(doc['title'] or 'Untitled')}</div>
         <div style="margin-bottom:0.55rem;color:#555">
@@ -1286,7 +1261,6 @@ def doc_summary_html(doc: pd.Series) -> str:
         </div>
     </div>
     """
-    return html_text
 
 
 def main() -> None:
@@ -1317,10 +1291,6 @@ def main() -> None:
                 )
                 progress_bar.empty()
                 status_box.empty()
-                st.success(
-                    f"Refresh complete. Inserted {refresh_stats['inserted_docs']} documents "
-                    f"out of {refresh_stats['attempted_docs']} attempted."
-                )
             except Exception as exc:
                 progress_bar.empty()
                 status_box.empty()
@@ -1329,13 +1299,19 @@ def main() -> None:
     df = load_documents()
     log_df = load_log()
 
+    if refresh_stats is not None:
+        st.caption(
+            f"Refresh complete. Inserted {refresh_stats['inserted_docs']} documents out of "
+            f"{refresh_stats['attempted_docs']} attempted."
+        )
+
     if df.empty:
         st.warning("No local corpus found yet.")
         render_diagnostics(log_df, refresh_stats)
         st.stop()
 
     df = compute_features(df)
-    st.success(f"Loaded {len(df):,} documents.")
+    st.caption(f"Loaded {len(df):,} documents.")
 
     min_date_ts = df["date"].dropna().min()
     max_date_ts = df["date"].dropna().max()
@@ -1388,27 +1364,49 @@ def main() -> None:
         render_diagnostics(log_df, refresh_stats)
         st.stop()
 
-    snapshot = latest_snapshot(view)
     series = aggregate_series(view, freq="30D")
+    matrix = speaker_matrix(view, top_n=12)
 
-    a, b, c, d, e = st.columns(5)
-    a.metric("Institutional tone", format_z(snapshot["tone_z_fed"]))
-    b.metric("30-day change", format_z(snapshot["delta_30d"]))
-    c.metric("Core speaker tone", format_z(snapshot["core_tone_z"]))
-    d.metric("Latest percentile", format_pct(snapshot["tone_percentile_fed"]))
-    e.metric("Documents in view", f"{len(view):,}")
-
-    top_left, top_right = st.columns([1.75, 1.0])
+    top_left, top_right = st.columns([1.8, 1.2])
 
     with top_left:
-        st.plotly_chart(z_dashboard_figure(series), use_container_width=True)
+        st.plotly_chart(
+            z_dashboard_figure(series),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
 
     with top_right:
-        st.plotly_chart(emphasis_heatmap_figure(series), use_container_width=True)
+        if not matrix.empty:
+            st.plotly_chart(
+                speaker_matrix_figure(matrix),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
+        else:
+            st.info("No speaker matrix available.")
 
     st.subheader("Latest communication")
     latest_table = clean_latest_table(view)
-    st.markdown(latest_table.to_html(index=False, escape=False), unsafe_allow_html=True)
+
+    st.dataframe(
+        latest_table,
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+        column_config={
+            "speaker": st.column_config.TextColumn(width="large"),
+            "type": st.column_config.TextColumn(width="small"),
+            "stance": st.column_config.TextColumn(width="medium"),
+            "tone": st.column_config.TextColumn(width="small"),
+            "vs own": st.column_config.TextColumn(width="small"),
+            "fed %ile": st.column_config.TextColumn(width="small"),
+            "inflation": st.column_config.TextColumn(width="small"),
+            "labor": st.column_config.TextColumn(width="small"),
+            "growth": st.column_config.TextColumn(width="small"),
+            "source": st.column_config.LinkColumn("open"),
+        },
+    )
 
     st.subheader("Transcript underwrite")
     options = view.sort_values("date", ascending=False).copy()
@@ -1421,7 +1419,7 @@ def main() -> None:
 
     st.markdown(doc_summary_html(doc), unsafe_allow_html=True)
 
-    upper_left, upper_right = st.columns([1.5, 1.0])
+    upper_left, upper_right = st.columns([1.55, 1.0])
 
     with upper_left:
         st.markdown("**Highlighted transcript excerpt**")
@@ -1476,34 +1474,16 @@ def main() -> None:
         )
 
         scorecard = scorecard_dataframe(doc)
-        st.plotly_chart(scorecard_figure(scorecard), use_container_width=True)
+        st.plotly_chart(
+            scorecard_figure(scorecard),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
 
         scorecard_display = scorecard.copy()
         scorecard_display["z"] = scorecard_display["z"].apply(format_z)
         scorecard_display["percentile"] = scorecard_display["percentile"].apply(format_pct)
-        st.dataframe(scorecard_display, use_container_width=True, hide_index=True)
-
-    bottom_left, bottom_right = st.columns([1.5, 1.1])
-
-    with bottom_left:
-        matrix = speaker_matrix(view, top_n=12)
-        if not matrix.empty:
-            st.plotly_chart(speaker_matrix_figure(matrix), use_container_width=True)
-        else:
-            st.info("No speaker matrix available.")
-
-    with bottom_right:
-        speaker_latest = (
-            view.sort_values("date", ascending=False)
-            .groupby("speaker", dropna=False)
-            .head(1)[["speaker", "tone_z_fed", "tone_z_speaker", "stance", "date"]]
-            .sort_values("tone_z_fed", ascending=False)
-            .rename(columns={"tone_z_fed": "vs Fed", "tone_z_speaker": "vs own"})
-        )
-        speaker_latest["vs Fed"] = speaker_latest["vs Fed"].apply(format_z)
-        speaker_latest["vs own"] = speaker_latest["vs own"].apply(format_z)
-        st.markdown("**Latest speaker tape**")
-        st.dataframe(speaker_latest, use_container_width=True, hide_index=True)
+        st.dataframe(scorecard_display, use_container_width=True, hide_index=True, height=285)
 
     st.subheader("Export")
     export_cols = [
