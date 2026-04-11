@@ -1,7 +1,7 @@
-import html
 import re
-import sqlite3
+import html
 import time
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
@@ -28,79 +29,6 @@ USER_AGENT = (
 )
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-APP_CSS = """
-<style>
-    .block-container {
-        padding-top: 1.6rem;
-        padding-bottom: 2rem;
-    }
-    .sidebar-note {
-        color: #475467;
-        font-size: 0.92rem;
-        line-height: 1.55;
-    }
-    .status-line {
-        color: #475467;
-        font-size: 0.95rem;
-        line-height: 1.5;
-        margin: 0.15rem 0 0.9rem 0;
-    }
-    .chart-title {
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: #101828;
-        margin: 0.15rem 0 0.35rem 0;
-    }
-    .scroll-table-wrap {
-        max-height: 460px;
-        overflow-y: auto;
-        border: 1px solid #e4e7ec;
-        border-radius: 12px;
-        background: #ffffff;
-    }
-    .scroll-table-wrap table {
-        width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-        font-size: 0.93rem;
-    }
-    .scroll-table-wrap thead th {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        background: #f8fafc;
-    }
-    .scroll-table-wrap th,
-    .scroll-table-wrap td {
-        padding: 0.72rem 0.82rem;
-        border-bottom: 1px solid #eef2f6;
-        text-align: left;
-        white-space: nowrap;
-    }
-    .scroll-table-wrap td:nth-child(2) {
-        white-space: normal;
-        min-width: 220px;
-    }
-    .scroll-table-wrap tbody tr:hover {
-        background: #f9fafb;
-    }
-    .summary-card {
-        padding: 0.95rem 1rem;
-        border: 1px solid #e6e6e6;
-        border-radius: 0.8rem;
-        background: #fafafa;
-    }
-</style>
-"""
-
-ROLE_PREFIXES = [
-    ("Vice Chair for Supervision ", "Vice Chair for Supervision"),
-    ("Vice Chair ", "Vice Chair"),
-    ("Chair ", "Chair"),
-    ("Governor ", "Governor"),
-    ("President ", "President"),
-]
 
 SPEAKER_WEIGHTS = {
     "Jerome H. Powell": 3.0,
@@ -122,142 +50,55 @@ SPEAKER_WEIGHTS = {
     "Alberto G. Musalem": 1.0,
     "Beth M. Hammack": 1.0,
     "Stephen I. Miran": 1.0,
+    "Lael Brainard": 1.0,
 }
 
 LEXICON = {
     "hawkish": [
-        "higher for longer",
-        "restrictive",
-        "sufficiently restrictive",
-        "upside risk",
-        "inflation remains too high",
-        "inflation is too high",
-        "persistent inflation",
-        "reaccelerat",
-        "not yet done",
-        "additional firming",
-        "further tightening",
-        "vigilant",
-        "upward pressure on prices",
-        "elevated inflation",
-        "inflation pressure",
-        "price stability",
-        "tight labor market",
-        "strong labor market",
-        "overheating",
-        "policy restraint",
-        "maintain restraint",
-        "firming",
-        "tightening",
-        "hold rates higher",
-        "risk of inflation",
-        "unanchored inflation expectations",
-        "still above target",
-        "premature to ease",
-        "not appropriate to cut",
-        "more work to do",
-        "upside risks to inflation",
-        "inflation persistence",
+        "higher for longer", "restrictive", "sufficiently restrictive", "upside risk",
+        "inflation remains too high", "inflation is too high", "persistent inflation",
+        "reaccelerat", "not yet done", "additional firming", "further tightening",
+        "vigilant", "upward pressure on prices", "elevated inflation", "inflation pressure",
+        "price stability", "tight labor market", "strong labor market", "overheating",
+        "policy restraint", "maintain restraint", "firming", "tightening",
+        "hold rates higher", "risk of inflation", "unanchored inflation expectations",
+        "still above target", "premature to ease", "not appropriate to cut",
+        "more work to do", "upside risks to inflation", "inflation persistence",
+        "restrictive stance", "we are prepared to", "need to remain", "longer than expected",
     ],
     "dovish": [
-        "disinflation",
-        "cooling labor market",
-        "softening labor market",
-        "downside risk",
-        "growth is slowing",
-        "economic slowdown",
-        "below-trend growth",
-        "normalizing inflation",
-        "further progress on inflation",
-        "policy can respond",
-        "room to ease",
-        "easing",
-        "rate cuts",
-        "cut rates",
-        "lower rates",
-        "less restrictive",
-        "downward path",
-        "labor market is moderating",
-        "balanced risks",
-        "two-sided risks",
-        "weak demand",
-        "headwinds",
-        "slack",
-        "unemployment is rising",
-        "financial conditions tightened",
-        "act as appropriate",
-        "support the labor market",
-        "downside risks to employment",
+        "disinflation", "cooling labor market", "softening labor market", "downside risk",
+        "growth is slowing", "economic slowdown", "below-trend growth", "normalizing inflation",
+        "further progress on inflation", "policy can respond", "room to ease", "easing",
+        "rate cuts", "cut rates", "lower rates", "less restrictive", "downward path",
+        "labor market is moderating", "balanced risks", "two-sided risks", "weak demand",
+        "headwinds", "slack", "unemployment is rising", "financial conditions tightened",
+        "act as appropriate", "support the labor market", "downside risks to employment",
+        "can be patient", "can adjust policy", "if needed we can", "could move lower",
     ],
     "inflation_concern": [
-        "inflation",
-        "prices",
-        "price pressures",
-        "services inflation",
-        "core inflation",
-        "shelter inflation",
-        "goods inflation",
-        "inflation expectations",
-        "price stability",
+        "inflation", "prices", "price pressures", "services inflation", "core inflation",
+        "shelter inflation", "goods inflation", "inflation expectations", "price stability",
     ],
     "labor_concern": [
-        "labor market",
-        "employment",
-        "unemployment",
-        "job growth",
-        "payroll",
-        "wages",
-        "hiring",
-        "layoffs",
-        "slack",
-        "participation",
+        "labor market", "employment", "unemployment", "job growth", "payroll",
+        "wages", "hiring", "layoffs", "slack", "participation",
     ],
     "growth_concern": [
-        "growth",
-        "activity",
-        "demand",
-        "consumer spending",
-        "investment",
-        "slowdown",
-        "recession",
-        "weakness",
-        "output",
-        "expansion",
+        "growth", "activity", "demand", "consumer spending", "investment", "slowdown",
+        "recession", "weakness", "output", "expansion",
     ],
     "financial_stability": [
-        "financial stability",
-        "banking",
-        "banks",
-        "stress",
-        "liquidity",
-        "funding",
-        "market functioning",
-        "credit conditions",
-        "treasury market",
-        "vulnerabilities",
+        "financial stability", "banking", "banks", "stress", "liquidity", "funding",
+        "market functioning", "credit conditions", "treasury market", "vulnerabilities",
     ],
     "balance_sheet": [
-        "balance sheet",
-        "quantitative tightening",
-        "qt",
-        "runoff",
-        "reserves",
-        "securities holdings",
-        "mbs",
-        "treasury holdings",
+        "balance sheet", "quantitative tightening", "qt", "runoff", "reserves",
+        "securities holdings", "mbs", "treasury holdings",
     ],
     "uncertainty_risk": [
-        "uncertain",
-        "uncertainty",
-        "risk management",
-        "careful",
-        "monitor",
-        "watching",
-        "data dependent",
-        "incoming data",
-        "proceed carefully",
-        "humble",
-        "attentive",
+        "uncertain", "uncertainty", "risk management", "careful", "monitor", "watching",
+        "data dependent", "incoming data", "proceed carefully", "humble", "attentive",
     ],
 }
 
@@ -268,6 +109,79 @@ SNIPPET_PATTERNS = {
     "labor": LEXICON["labor_concern"],
     "growth": LEXICON["growth_concern"],
 }
+
+STOP_PHRASES = [
+    "watch live",
+    "for media inquiries",
+    "last update",
+    "return to text",
+]
+
+POLICY_RELEVANCE_TERMS = [
+    "policy", "monetary policy", "committee", "fomc", "federal funds rate", "rate",
+    "rates", "outlook", "forecast", "incoming data", "data dependent", "financial conditions",
+    "current", "currently", "today", "going forward", "at this time", "we expect",
+    "we will", "we may", "we remain", "our stance", "appropriate", "balance of risks",
+    "inflation remains", "labor market remains", "economic outlook", "target range",
+    "price stability", "maximum employment", "restrictive", "easing", "tightening",
+]
+
+HISTORICAL_TERMS = [
+    "in the early", "in the late", "in 19", "in 20", "during the", "history", "historical",
+    "legacy", "served", "was appointed", "reappointed", "under president", "at that time",
+    "in the 1980s", "in the 1970s", "years ago", "decades ago", "career", "throughout his career",
+    "he led", "he served", "he held firm", "volcker", "grew up", "biography",
+]
+
+CEREMONIAL_TERMS = [
+    "award", "honor", "ceremony", "commencement", "tribute", "memorial", "anniversary",
+    "public service", "integrity", "legacy", "congratulations", "pleasure to be here",
+    "humbling honor", "thank you for inviting me", "it is a pleasure", "introduction",
+]
+
+QUOTE_ATTRIBUTION_TERMS = [
+    "he said", "she said", "they said", "volcker said", "as he noted", "as she noted",
+    "critics argued", "in a speech", "he acknowledged", "she acknowledged", "according to",
+]
+
+FORWARD_LOOKING_TERMS = [
+    "will", "may", "could", "expect", "outlook", "going forward", "at this time",
+    "over coming", "over the coming", "in coming months", "we remain", "we are prepared",
+    "if needed", "from here", "currently", "today", "incoming data",
+]
+
+FOOTER_JUNK_PATTERNS = [
+    "about the fed news & events",
+    "monetary policy supervision & regulation",
+    "financial stability payment systems",
+    "economic research data",
+    "consumers & communities",
+    "connect with the board",
+    "tools and information",
+    "contact publications",
+    "freedom of information",
+    "office of inspector general",
+    "budget & performance",
+    "website policies",
+    "privacy program",
+    "federal reserve facebook",
+    "federal reserve instagram",
+    "federal reserve youtube",
+    "federal reserve flickr",
+    "federal reserve linkedin",
+    "federal reserve threads",
+    "bluesky page",
+    "20th street and constitution avenue",
+]
+
+ACCESSIBILITY_JUNK_PATTERNS = [
+    "accessible keys for video",
+    "toggles play/pause",
+    "seeks the video forwards and back",
+    "toggles mute on/off",
+    "toggles fullscreen on/off",
+    "caption on/off",
+]
 
 
 @dataclass
@@ -282,41 +196,113 @@ class ToneResult:
     balance_sheet: float
     uncertainty_risk: float
     word_count: int
+    policy_relevance: float
+    live_signal_share: float
 
 
-def clean_text(text: Optional[str]) -> str:
-    if text is None or pd.isna(text):
-        return ""
-    text = html.unescape(str(text))
+def make_session() -> requests.Session:
+    session = requests.Session()
+    retries = Retry(
+        total=5,
+        read=5,
+        connect=5,
+        backoff_factor=1.0,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.headers.update({"User-Agent": USER_AGENT})
+    return session
+
+
+def init_db() -> None:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            url TEXT PRIMARY KEY,
+            event_type TEXT,
+            year INTEGER,
+            date TEXT,
+            title TEXT,
+            speaker TEXT,
+            role TEXT,
+            venue TEXT,
+            pdf_url TEXT,
+            body_text TEXT,
+            word_count INTEGER,
+            scraped_at TEXT,
+            hawkish_score REAL,
+            dovish_score REAL,
+            net_score REAL,
+            inflation_concern REAL,
+            labor_concern REAL,
+            growth_concern REAL,
+            financial_stability REAL,
+            balance_sheet REAL,
+            uncertainty_risk REAL,
+            policy_relevance REAL,
+            live_signal_share REAL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scrape_log (
+            ts TEXT,
+            level TEXT,
+            message TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_connection() -> sqlite3.Connection:
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+
+def log_event(level: str, message: str) -> None:
+    conn = db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO scrape_log (ts, level, message) VALUES (?, ?, ?)",
+        (pd.Timestamp.utcnow().isoformat(), level, message[:4000]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_log() -> None:
+    conn = db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM scrape_log")
+    conn.commit()
+    conn.close()
+
+
+def load_log(limit: int = 250) -> pd.DataFrame:
+    init_db()
+    conn = db_connection()
+    df = pd.read_sql_query(
+        f"SELECT * FROM scrape_log ORDER BY ts DESC LIMIT {int(limit)}",
+        conn,
+    )
+    conn.close()
+    return df
+
+
+def clean_text(text: str) -> str:
+    text = html.unescape(text or "")
     text = text.replace("\xa0", " ")
+    text = text.replace("â", "'").replace("â", '"').replace("â", '"').replace("â", "-")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
-
-
-def split_role_speaker(raw_speaker_line: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    s = clean_text(raw_speaker_line)
-    if not s:
-        return None, None
-
-    for prefix, role in ROLE_PREFIXES:
-        if s.startswith(prefix):
-            return role, clean_text(s[len(prefix):])
-
-    return None, s
-
-
-def normalize_speaker_name(raw_speaker_line: Optional[str]) -> Optional[str]:
-    _, speaker = split_role_speaker(raw_speaker_line)
-    return speaker
-
-
-def normalize_role_name(raw_role_line: Optional[str]) -> Optional[str]:
-    role, speaker = split_role_speaker(raw_role_line)
-    if role:
-        return role
-    if clean_text(raw_role_line) and speaker != clean_text(raw_role_line):
-        return clean_text(raw_role_line)
-    return clean_text(raw_role_line) or None
 
 
 def normalize_phrase(phrase: str) -> str:
@@ -327,34 +313,15 @@ def count_phrase_hits(text: str, phrases: List[str]) -> int:
     low = text.lower()
     hits = 0
     for phrase in phrases:
-        hits += len(re.findall(normalize_phrase(phrase), low))
+        pattern = normalize_phrase(phrase)
+        hits += len(re.findall(pattern, low))
     return hits
-
-
-def count_distinct_phrase_hits(text: str, phrases: List[str]) -> int:
-    low = text.lower()
-    seen = 0
-    for phrase in phrases:
-        if re.search(normalize_phrase(phrase), low):
-            seen += 1
-    return seen
-
-
-def smooth_phrase_intensity(total_hits: int, distinct_hits: int, word_count: int) -> float:
-    if word_count <= 0:
-        return 0.0
-    length_scale = max(np.sqrt(word_count), 1.0)
-    return float(((0.75 * np.log1p(total_hits)) + (0.25 * distinct_hits)) / length_scale * 100.0)
 
 
 def safe_mean_std(series: pd.Series) -> Tuple[float, float]:
     s = pd.to_numeric(series, errors="coerce").dropna()
     if s.empty:
         return 0.0, 1.0
-    if len(s) >= 12:
-        lower = s.quantile(0.05)
-        upper = s.quantile(0.95)
-        s = s.clip(lower=lower, upper=upper)
     mean = float(s.mean())
     std = float(s.std(ddof=0))
     if std <= 1e-12:
@@ -409,144 +376,174 @@ def emphasis_bucket(z: float) -> str:
     return "Neutral"
 
 
-def score_text(text: str) -> ToneResult:
-    low = clean_text(text).lower()
-    words = re.findall(r"\b[a-z][a-z\-']+\b", low)
-    word_count = max(len(words), 1)
+def policy_bucket(x: float) -> str:
+    if pd.isna(x):
+        return "Unknown"
+    if x >= 0.70:
+        return "High"
+    if x >= 0.40:
+        return "Medium"
+    return "Low"
 
-    raw_hits = {k: count_phrase_hits(low, v) for k, v in LEXICON.items()}
-    distinct_hits = {k: count_distinct_phrase_hits(low, v) for k, v in LEXICON.items()}
-    scaled = {
-        key: smooth_phrase_intensity(raw_hits[key], distinct_hits[key], word_count)
-        for key in LEXICON
+
+def squash_score(x: float, scale: float = 2.5, max_abs: float = 2.2) -> float:
+    if pd.isna(x):
+        return np.nan
+    return float(np.tanh(x / scale) * max_abs)
+
+
+def split_paragraphs(text: str) -> List[str]:
+    text = clean_text(text)
+    raw = re.split(r"\n\s*\n|(?<=\.)\s{2,}", text)
+    out = []
+    for p in raw:
+        p = clean_text(p)
+        if len(p.split()) >= 12:
+            out.append(p)
+    return out
+
+
+def contains_any(text: str, phrases: List[str]) -> int:
+    low = text.lower()
+    return sum(1 for p in phrases if p.lower() in low)
+
+
+def paragraph_policy_relevance(paragraph: str) -> float:
+    low = paragraph.lower()
+    words = max(len(re.findall(r"\b[a-z][a-z\-']+\b", low)), 1)
+
+    policy_hits = contains_any(low, POLICY_RELEVANCE_TERMS)
+    forward_hits = contains_any(low, FORWARD_LOOKING_TERMS)
+    historical_hits = contains_any(low, HISTORICAL_TERMS)
+    ceremonial_hits = contains_any(low, CEREMONIAL_TERMS)
+    quote_hits = contains_any(low, QUOTE_ATTRIBUTION_TERMS)
+
+    topical_hits = (
+        count_phrase_hits(low, LEXICON["inflation_concern"])
+        + count_phrase_hits(low, LEXICON["labor_concern"])
+        + count_phrase_hits(low, LEXICON["growth_concern"])
+        + count_phrase_hits(low, LEXICON["financial_stability"])
+        + count_phrase_hits(low, LEXICON["balance_sheet"])
+    )
+
+    score = 0.0
+    score += 0.32 * min(policy_hits, 4)
+    score += 0.25 * min(forward_hits, 4)
+    score += 0.10 * min(topical_hits / max(words, 1) * 50.0, 2.5)
+    score -= 0.22 * min(historical_hits, 4)
+    score -= 0.18 * min(ceremonial_hits, 4)
+    score -= 0.15 * min(quote_hits, 3)
+
+    if "fomc" in low or "committee" in low or "federal funds rate" in low:
+        score += 0.35
+    if "today" in low and ("inflation" in low or "labor market" in low or "policy" in low):
+        score += 0.20
+    if re.search(r"\bin\s+(19|20)\d{2}\b", low):
+        score -= 0.15
+
+    return float(np.clip(score, 0.0, 1.0))
+
+
+def paragraph_directional_tone(paragraph: str) -> Dict[str, float]:
+    low = paragraph.lower()
+    words = max(len(re.findall(r"\b[a-z][a-z\-']+\b", low)), 1)
+
+    hawk = count_phrase_hits(low, LEXICON["hawkish"]) / words * 1000.0
+    dove = count_phrase_hits(low, LEXICON["dovish"]) / words * 1000.0
+    infl = count_phrase_hits(low, LEXICON["inflation_concern"]) / words * 1000.0
+    labor = count_phrase_hits(low, LEXICON["labor_concern"]) / words * 1000.0
+    growth = count_phrase_hits(low, LEXICON["growth_concern"]) / words * 1000.0
+    fs = count_phrase_hits(low, LEXICON["financial_stability"]) / words * 1000.0
+    bs = count_phrase_hits(low, LEXICON["balance_sheet"]) / words * 1000.0
+    unc = count_phrase_hits(low, LEXICON["uncertainty_risk"]) / words * 1000.0
+
+    # directional score emphasizes actual stance language, not topic mentions
+    net = (
+        1.15 * hawk
+        - 1.15 * dove
+        + 0.05 * infl
+        - 0.03 * labor
+        - 0.03 * growth
+        - 0.02 * fs
+    )
+
+    return {
+        "hawk": hawk,
+        "dove": dove,
+        "infl": infl,
+        "labor": labor,
+        "growth": growth,
+        "fs": fs,
+        "bs": bs,
+        "unc": unc,
+        "net": net,
     }
 
-    hawkish = scaled.get("hawkish", 0.0)
-    dovish = scaled.get("dovish", 0.0)
-    inflation_weight = scaled.get("inflation_concern", 0.0)
-    labor_weight = scaled.get("labor_concern", 0.0)
-    growth_weight = scaled.get("growth_concern", 0.0)
-    fs_weight = scaled.get("financial_stability", 0.0)
-    bs_weight = scaled.get("balance_sheet", 0.0)
-    uncertainty_weight = scaled.get("uncertainty_risk", 0.0)
 
-    document_reliability = min(1.0, 0.55 + 0.45 * np.tanh(word_count / 600.0))
-    net = (
-        hawkish
-        - dovish
-        + 0.08 * inflation_weight
-        - 0.06 * labor_weight
-        - 0.06 * growth_weight
-        - 0.03 * fs_weight
-    ) * document_reliability
+def score_text(text: str) -> ToneResult:
+    paragraphs = split_paragraphs(text)
+    if not paragraphs:
+        paragraphs = [clean_text(text)]
+
+    weighted = []
+    relevance_vals = []
+
+    for p in paragraphs:
+        rel = paragraph_policy_relevance(p)
+        direction = paragraph_directional_tone(p)
+
+        # floor keeps some small signal from disappearing entirely
+        w = max(0.08, rel)
+        relevance_vals.append(rel)
+        weighted.append((w, direction, p))
+
+    total_w = sum(w for w, _, _ in weighted) or 1.0
+
+    hawk = sum(w * d["hawk"] for w, d, _ in weighted) / total_w
+    dove = sum(w * d["dove"] for w, d, _ in weighted) / total_w
+    infl = sum(w * d["infl"] for w, d, _ in weighted) / total_w
+    labor = sum(w * d["labor"] for w, d, _ in weighted) / total_w
+    growth = sum(w * d["growth"] for w, d, _ in weighted) / total_w
+    fs = sum(w * d["fs"] for w, d, _ in weighted) / total_w
+    bs = sum(w * d["bs"] for w, d, _ in weighted) / total_w
+    unc = sum(w * d["unc"] for w, d, _ in weighted) / total_w
+    net = sum(w * d["net"] for w, d, _ in weighted) / total_w
+
+    live_signal_share = float(np.mean([1.0 if r >= 0.45 else 0.0 for r in relevance_vals])) if relevance_vals else 0.0
+    policy_relevance = float(np.mean(relevance_vals)) if relevance_vals else 0.0
+
+    # final dampener for low-relevance speeches
+    damp = 0.35 + 0.65 * policy_relevance
+
+    net = squash_score(net * damp, scale=2.2, max_abs=2.1)
+    hawk = squash_score(hawk * damp, scale=2.0, max_abs=2.3)
+    dove = squash_score(dove * damp, scale=2.0, max_abs=2.3)
+
+    # topic salience remains visible, but low-policy speeches cannot dominate
+    topic_damp = 0.55 + 0.45 * policy_relevance
+    infl = squash_score(infl * topic_damp, scale=2.8, max_abs=2.4)
+    labor = squash_score(labor * topic_damp, scale=2.8, max_abs=2.4)
+    growth = squash_score(growth * topic_damp, scale=2.8, max_abs=2.4)
+    fs = squash_score(fs * topic_damp, scale=2.6, max_abs=2.2)
+    bs = squash_score(bs * topic_damp, scale=2.6, max_abs=2.2)
+    unc = squash_score(unc * topic_damp, scale=2.6, max_abs=2.2)
+
+    word_count = max(len(re.findall(r"\b[a-z][a-z\-']+\b", clean_text(text).lower())), 1)
 
     return ToneResult(
         net_score=net,
-        hawkish_score=hawkish,
-        dovish_score=dovish,
-        inflation_concern=inflation_weight,
-        labor_concern=labor_weight,
-        growth_concern=growth_weight,
-        financial_stability=fs_weight,
-        balance_sheet=bs_weight,
-        uncertainty_risk=uncertainty_weight,
+        hawkish_score=hawk,
+        dovish_score=dove,
+        inflation_concern=infl,
+        labor_concern=labor,
+        growth_concern=growth,
+        financial_stability=fs,
+        balance_sheet=bs,
+        uncertainty_risk=unc,
         word_count=word_count,
+        policy_relevance=policy_relevance,
+        live_signal_share=live_signal_share,
     )
-
-
-def make_session() -> requests.Session:
-    session = requests.Session()
-    retries = Retry(
-        total=5,
-        read=5,
-        connect=5,
-        backoff_factor=1.0,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    session.headers.update({"User-Agent": USER_AGENT})
-    return session
-
-
-def init_db() -> None:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS documents (
-            url TEXT PRIMARY KEY,
-            event_type TEXT,
-            year INTEGER,
-            date TEXT,
-            title TEXT,
-            speaker TEXT,
-            role TEXT,
-            venue TEXT,
-            pdf_url TEXT,
-            body_text TEXT,
-            word_count INTEGER,
-            scraped_at TEXT,
-            hawkish_score REAL,
-            dovish_score REAL,
-            net_score REAL,
-            inflation_concern REAL,
-            labor_concern REAL,
-            growth_concern REAL,
-            financial_stability REAL,
-            balance_sheet REAL,
-            uncertainty_risk REAL
-        )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS scrape_log (
-            ts TEXT,
-            level TEXT,
-            message TEXT
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
-
-
-def db_connection() -> sqlite3.Connection:
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-
-def log_event(level: str, message: str) -> None:
-    conn = db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO scrape_log (ts, level, message) VALUES (?, ?, ?)",
-        (pd.Timestamp.utcnow().isoformat(), level, message[:4000]),
-    )
-    conn.commit()
-    conn.close()
-
-
-def clear_log() -> None:
-    conn = db_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM scrape_log")
-    conn.commit()
-    conn.close()
-
-
-def load_log(limit: int = 250) -> pd.DataFrame:
-    init_db()
-    conn = db_connection()
-    df = pd.read_sql_query(
-        f"SELECT * FROM scrape_log ORDER BY ts DESC LIMIT {int(limit)}",
-        conn,
-    )
-    conn.close()
-    return df
 
 
 def fetch_html(session: requests.Session, url: str) -> BeautifulSoup:
@@ -557,6 +554,7 @@ def fetch_html(session: requests.Session, url: str) -> BeautifulSoup:
 
 def parse_year_links(index_soup: BeautifulSoup) -> List[Tuple[str, str, int]]:
     items: List[Tuple[str, str, int]] = []
+
     for a in index_soup.find_all("a", href=True):
         href = urljoin(BASE_URL, a["href"])
         text = clean_text(a.get_text(" ", strip=True))
@@ -564,6 +562,7 @@ def parse_year_links(index_soup: BeautifulSoup) -> List[Tuple[str, str, int]]:
             continue
         year = int(text)
         href_low = href.lower()
+
         if re.search(r"/newsevents/\d{4}-speeches\.htm$", href_low):
             items.append(("speech", href, year))
         elif re.search(r"/newsevents/\d{4}-testimony\.htm$", href_low):
@@ -580,11 +579,13 @@ def parse_date_text(raw: str) -> Optional[str]:
     raw = clean_text(raw)
     if not raw:
         return None
+
     for fmt in ("%m/%d/%Y", "%B %d, %Y", "%b %d, %Y"):
         try:
             return pd.to_datetime(raw, format=fmt).strftime("%Y-%m-%d")
         except Exception:
             pass
+
     try:
         dt = pd.to_datetime(raw, errors="raise")
         return dt.strftime("%Y-%m-%d")
@@ -618,6 +619,7 @@ def parse_index_items(year_soup: BeautifulSoup, event_type: str, year: int) -> L
         dedup_links.append((title, href))
 
     items: List[Dict[str, str]] = []
+
     for title, full_url in dedup_links:
         title_idx = None
         for idx, line in enumerate(text_lines):
@@ -645,8 +647,7 @@ def parse_index_items(year_soup: BeautifulSoup, event_type: str, year: int) -> L
                 if "watch live" in low:
                     continue
                 if speaker_hint is None and any(
-                    low.startswith(prefix)
-                    for prefix in [
+                    low.startswith(prefix) for prefix in [
                         "chair ",
                         "vice chair ",
                         "vice chair for supervision ",
@@ -655,7 +656,7 @@ def parse_index_items(year_soup: BeautifulSoup, event_type: str, year: int) -> L
                     ]
                 ):
                     speaker_hint = cand
-                    role_hint, _ = split_role_speaker(cand)
+                    role_hint = cand
                     continue
 
                 if venue_hint is None and (
@@ -693,6 +694,29 @@ def extract_pdf_url(soup: BeautifulSoup, page_url: str) -> Optional[str]:
     return None
 
 
+def extract_role_and_speaker(raw_speaker_line: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    if not raw_speaker_line:
+        return None, None
+
+    s = clean_text(raw_speaker_line)
+    if not s:
+        return None, None
+
+    prefixes = [
+        "Vice Chair for Supervision ",
+        "Vice Chair ",
+        "Chair ",
+        "Governor ",
+        "President ",
+    ]
+
+    for prefix in prefixes:
+        if s.startswith(prefix):
+            return s, s
+
+    return None, s
+
+
 def extract_meta(soup: BeautifulSoup, page_url: str, hints: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
     result = {
         "title": None,
@@ -718,17 +742,15 @@ def extract_meta(soup: BeautifulSoup, page_url: str, hints: Dict[str, Optional[s
             continue
 
         low = line.lower()
-        if result["speaker"] is None and any(
-            low.startswith(prefix)
-            for prefix in [
-                "chair ",
-                "vice chair ",
-                "vice chair for supervision ",
-                "governor ",
-                "president ",
-            ]
+
+        if result["speaker"] is None and (
+            low.startswith("chair ")
+            or low.startswith("vice chair ")
+            or low.startswith("vice chair for supervision ")
+            or low.startswith("governor ")
+            or low.startswith("president ")
         ):
-            role, speaker = split_role_speaker(line)
+            role, speaker = extract_role_and_speaker(line)
             result["role"] = role
             result["speaker"] = speaker
             continue
@@ -748,7 +770,7 @@ def extract_meta(soup: BeautifulSoup, page_url: str, hints: Dict[str, Optional[s
     if result["date"] is None:
         result["date"] = hints.get("date_hint")
     if result["speaker"] is None:
-        hinted_role, hinted_speaker = split_role_speaker(hints.get("speaker_hint"))
+        hinted_role, hinted_speaker = extract_role_and_speaker(hints.get("speaker_hint"))
         result["speaker"] = hinted_speaker
         if result["role"] is None:
             result["role"] = hinted_role
@@ -760,8 +782,37 @@ def extract_meta(soup: BeautifulSoup, page_url: str, hints: Dict[str, Optional[s
     return result
 
 
+def strip_known_junk(text: str) -> str:
+    t = clean_text(text)
+    low = t.lower()
+
+    for pat in ACCESSIBILITY_JUNK_PATTERNS:
+        if pat in low:
+            idx = low.find(pat)
+            next_thank = re.search(r"(thank you|good morning|good afternoon|it is a pleasure|let me)", low[idx:])
+            if next_thank:
+                cut = idx + next_thank.start()
+                t = t[cut:]
+                low = t.lower()
+                break
+
+    for pat in FOOTER_JUNK_PATTERNS:
+        if pat in low:
+            idx = low.find(pat)
+            t = t[:idx]
+            low = t.lower()
+            break
+
+    last_update_match = re.search(r"last update:", low)
+    if last_update_match:
+        t = t[: last_update_match.start()]
+
+    return clean_text(t)
+
+
 def extract_body_text(soup: BeautifulSoup) -> str:
     lines = [clean_text(x) for x in soup.get_text("\n", strip=True).split("\n") if clean_text(x)]
+
     skip_patterns = [
         "share",
         "pdf",
@@ -776,28 +827,17 @@ def extract_body_text(soup: BeautifulSoup) -> str:
 
     body_lines: List[str] = []
     started = False
+
     for line in lines:
         low = line.lower()
+
         if not started:
             if any(
-                low.startswith(prefix)
-                for prefix in [
-                    "at ",
-                    "before ",
-                    "at the ",
-                    "before the ",
-                    "thank you",
-                    "good morning",
-                    "good afternoon",
-                    "good evening",
-                    "mr. chairman",
-                    "chairman",
-                    "madam chair",
-                    "let me",
-                    "today i",
-                    "this evening",
-                    "i would like",
-                    "it is a pleasure",
+                low.startswith(prefix) for prefix in [
+                    "at ", "before ", "at the ", "before the ",
+                    "thank you", "good morning", "good afternoon", "good evening",
+                    "mr. chairman", "chairman", "madam chair", "let me",
+                    "today i", "this evening", "i would like", "it is a pleasure",
                 ]
             ):
                 started = True
@@ -812,6 +852,7 @@ def extract_body_text(soup: BeautifulSoup) -> str:
             body_lines.append(line)
 
     body = "\n\n".join(body_lines).strip()
+
     if len(body.split()) < 120:
         paragraphs = []
         for p in soup.find_all("p"):
@@ -825,6 +866,7 @@ def extract_body_text(soup: BeautifulSoup) -> str:
                 paragraphs.append(txt)
         body = "\n\n".join(paragraphs).strip()
 
+    body = strip_known_junk(body)
     body = re.sub(r"\n{3,}", "\n\n", body)
     return body
 
@@ -842,20 +884,14 @@ def parse_document(session: requests.Session, item: Dict[str, str]) -> Dict[str,
     body_text = extract_body_text(soup)
     score = score_text(body_text)
 
-    speaker = merge_preferred(meta["speaker"], item.get("speaker_hint"))
-    role = merge_preferred(meta["role"], item.get("role_hint"))
-    parsed_role, parsed_speaker = split_role_speaker(speaker)
-    speaker = parsed_speaker or speaker
-    role = merge_preferred(role, parsed_role)
-
     return {
         "url": item["url"],
         "event_type": item["event_type"],
         "year": item["year"],
         "date": merge_preferred(meta["date"], item.get("date_hint")),
         "title": merge_preferred(meta["title"], item.get("title")),
-        "speaker": speaker,
-        "role": role,
+        "speaker": merge_preferred(meta["speaker"], item.get("speaker_hint")),
+        "role": merge_preferred(meta["role"], item.get("role_hint")),
         "venue": merge_preferred(meta["venue"], item.get("venue_hint")),
         "pdf_url": meta.get("pdf_url"),
         "body_text": body_text,
@@ -870,6 +906,8 @@ def parse_document(session: requests.Session, item: Dict[str, str]) -> Dict[str,
         "financial_stability": score.financial_stability,
         "balance_sheet": score.balance_sheet,
         "uncertainty_risk": score.uncertainty_risk,
+        "policy_relevance": score.policy_relevance,
+        "live_signal_share": score.live_signal_share,
     }
 
 
@@ -880,8 +918,9 @@ def upsert_document(conn: sqlite3.Connection, doc: Dict[str, Optional[str]]) -> 
         INSERT INTO documents (
             url, event_type, year, date, title, speaker, role, venue, pdf_url, body_text,
             word_count, scraped_at, hawkish_score, dovish_score, net_score, inflation_concern,
-            labor_concern, growth_concern, financial_stability, balance_sheet, uncertainty_risk
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            labor_concern, growth_concern, financial_stability, balance_sheet, uncertainty_risk,
+            policy_relevance, live_signal_share
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(url) DO UPDATE SET
             event_type=excluded.event_type,
             year=excluded.year,
@@ -902,30 +941,17 @@ def upsert_document(conn: sqlite3.Connection, doc: Dict[str, Optional[str]]) -> 
             growth_concern=excluded.growth_concern,
             financial_stability=excluded.financial_stability,
             balance_sheet=excluded.balance_sheet,
-            uncertainty_risk=excluded.uncertainty_risk
+            uncertainty_risk=excluded.uncertainty_risk,
+            policy_relevance=excluded.policy_relevance,
+            live_signal_share=excluded.live_signal_share
         """,
         (
-            doc["url"],
-            doc["event_type"],
-            doc["year"],
-            doc["date"],
-            doc["title"],
-            doc["speaker"],
-            doc["role"],
-            doc["venue"],
-            doc["pdf_url"],
-            doc["body_text"],
-            doc["word_count"],
-            doc["scraped_at"],
-            doc["hawkish_score"],
-            doc["dovish_score"],
-            doc["net_score"],
-            doc["inflation_concern"],
-            doc["labor_concern"],
-            doc["growth_concern"],
-            doc["financial_stability"],
-            doc["balance_sheet"],
-            doc["uncertainty_risk"],
+            doc["url"], doc["event_type"], doc["year"], doc["date"], doc["title"], doc["speaker"],
+            doc["role"], doc["venue"], doc["pdf_url"], doc["body_text"], doc["word_count"],
+            doc["scraped_at"], doc["hawkish_score"], doc["dovish_score"], doc["net_score"],
+            doc["inflation_concern"], doc["labor_concern"], doc["growth_concern"],
+            doc["financial_stability"], doc["balance_sheet"], doc["uncertainty_risk"],
+            doc["policy_relevance"], doc["live_signal_share"]
         ),
     )
     conn.commit()
@@ -949,39 +975,27 @@ def load_documents() -> pd.DataFrame:
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["year"] = pd.to_numeric(df["year"], errors="coerce")
-    original_speakers = df["speaker"].copy()
-    df["speaker"] = original_speakers.apply(normalize_speaker_name)
-    df["role"] = df["role"].apply(normalize_role_name)
-
-    needs_role = df["role"].isna() | (df["role"].astype(str).str.strip() == "")
-    inferred_roles = original_speakers.apply(lambda x: split_role_speaker(x)[0])
-    df.loc[needs_role, "role"] = inferred_roles[needs_role]
 
     num_cols = [
-        "word_count",
-        "hawkish_score",
-        "dovish_score",
-        "net_score",
-        "inflation_concern",
-        "labor_concern",
-        "growth_concern",
-        "financial_stability",
-        "balance_sheet",
-        "uncertainty_risk",
+        "word_count", "hawkish_score", "dovish_score", "net_score",
+        "inflation_concern", "labor_concern", "growth_concern",
+        "financial_stability", "balance_sheet", "uncertainty_risk",
+        "policy_relevance", "live_signal_share",
     ]
     for col in num_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "policy_relevance" not in df.columns:
+        df["policy_relevance"] = np.nan
+    if "live_signal_share" not in df.columns:
+        df["live_signal_share"] = np.nan
 
     df = df.sort_values(["date", "title"], ascending=[True, True]).reset_index(drop=True)
     return df
 
 
-def refresh_corpus(
-    max_years: int = 6,
-    force_refresh: bool = False,
-    progress_bar=None,
-    status_box=None,
-) -> Dict[str, int]:
+def refresh_corpus(max_years: int = 6, force_refresh: bool = False, progress_bar=None, status_box=None) -> Dict[str, int]:
     init_db()
     clear_log()
 
@@ -1002,6 +1016,7 @@ def refresh_corpus(
             status_box.info("Loading speeches/testimony index...")
         index_soup = fetch_html(session, INDEX_URL)
         year_links = parse_year_links(index_soup)
+
         if not year_links:
             raise RuntimeError("No yearly speech/testimony links were parsed from the Fed index page.")
 
@@ -1062,7 +1077,8 @@ def refresh_corpus(
                 stats["inserted_docs"] += 1
                 log_event(
                     "INFO",
-                    f"Stored {doc.get('date')} | {doc.get('speaker')} | {doc.get('title')} | words={doc.get('word_count')}",
+                    f"Stored {doc.get('date')} | {doc.get('speaker')} | {doc.get('title')} | "
+                    f"words={doc.get('word_count')} | policy_relevance={doc.get('policy_relevance')}"
                 )
                 time.sleep(0.05)
             except Exception as exc:
@@ -1103,7 +1119,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     out["labor_z_speaker"] = np.nan
     out["growth_z_speaker"] = np.nan
 
-    for _, idx in out.groupby("speaker", dropna=False).groups.items():
+    for speaker, idx in out.groupby("speaker", dropna=False).groups.items():
         subset = out.loc[idx]
         m, s = safe_mean_std(subset["net_score"])
         out.loc[idx, "tone_z_speaker"] = subset["net_score"].apply(lambda x: bounded_z(zscore_value(x, m, s)))
@@ -1121,12 +1137,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     out["stance"] = out["tone_z_fed"].apply(tone_bucket)
     out["speaker_delta"] = out["tone_z_speaker"]
-
-    out["tone_regime"] = pd.cut(
-        out["tone_z_fed"],
-        bins=[-np.inf, -1.25, -0.35, 0.35, 1.25, np.inf],
-        labels=["Very Dovish", "Dovish", "Neutral", "Hawkish", "Very Hawkish"],
-    )
+    out["policy_bucket"] = out["policy_relevance"].apply(policy_bucket)
 
     return out
 
@@ -1155,6 +1166,7 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
                     "labor_z_fed": np.average(x["labor_z_fed"], weights=x["speaker_weight"]),
                     "growth_z_fed": np.average(x["growth_z_fed"], weights=x["speaker_weight"]),
                     "documents": len(x),
+                    "policy_relevance": np.average(x["policy_relevance"].fillna(0.0), weights=x["speaker_weight"]),
                 }
             )
         )
@@ -1164,43 +1176,11 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
-    grouped["tone_signal"] = grouped["tone_z_fed"].ewm(span=2, adjust=False).mean()
-    grouped["tone_3m_ma"] = grouped["tone_signal"].rolling(3, min_periods=1).mean()
-    grouped["tone_6m_ma"] = grouped["tone_signal"].rolling(6, min_periods=1).mean()
+    grouped["tone_z_fed_smooth"] = grouped["tone_z_fed"].ewm(span=4, adjust=False).mean()
+    grouped["tone_3m_ma"] = grouped["tone_z_fed_smooth"].rolling(3, min_periods=1).mean()
+    grouped["tone_6m_ma"] = grouped["tone_z_fed_smooth"].rolling(6, min_periods=1).mean()
+
     return grouped
-
-
-def latest_snapshot(df: pd.DataFrame) -> Dict[str, float]:
-    if df.empty:
-        return {
-            "tone_signal": np.nan,
-            "delta_30d": np.nan,
-            "core_tone_z": np.nan,
-            "tone_percentile_fed": np.nan,
-        }
-
-    window = aggregate_series(df, freq="30D")
-    tone_col = "tone_signal" if "tone_signal" in window.columns else "tone_z_fed"
-    tone = window[tone_col].iloc[-1] if not window.empty else np.nan
-
-    delta_30d = np.nan
-    if len(window) >= 2:
-        delta_30d = tone - window[tone_col].iloc[-2]
-
-    core = df[
-        df["speaker"].isin(
-            ["Jerome H. Powell", "Philip N. Jefferson", "John C. Williams", "Christopher J. Waller"]
-        )
-    ]
-    core_tone = np.average(core["tone_z_fed"], weights=core["speaker_weight"]) if not core.empty else np.nan
-
-    latest_doc = df.sort_values("date").iloc[-1]
-    return {
-        "tone_signal": tone,
-        "delta_30d": delta_30d,
-        "core_tone_z": core_tone,
-        "tone_percentile_fed": float(latest_doc["tone_percentile_fed"]) if "tone_percentile_fed" in latest_doc else np.nan,
-    }
 
 
 def split_sentences(text: str) -> List[str]:
@@ -1212,14 +1192,17 @@ def split_sentences(text: str) -> List[str]:
 def find_snippets(text: str, phrases: List[str], max_snippets: int = 4) -> List[str]:
     if not text:
         return []
+
     sentences = split_sentences(text)
     found = []
+
     for sent in sentences:
         low = sent.lower()
         if any(phrase.lower() in low for phrase in phrases):
             found.append(sent)
         if len(found) >= max_snippets:
             break
+
     return found
 
 
@@ -1230,7 +1213,7 @@ def highlight_terms(text: str, phrases: List[str]) -> str:
             continue
         pattern = re.compile(re.escape(html.escape(phrase)), re.IGNORECASE)
         highlighted = pattern.sub(
-            lambda m: f"<mark style='background-color:#fee4a6'>{m.group(0)}</mark>",
+            lambda m: f"<mark style='background-color:#ffe58f'>{m.group(0)}</mark>",
             highlighted,
         )
     return highlighted
@@ -1246,8 +1229,7 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
             docs=("url", "count"),
             tone_z_fed=("tone_z_fed", "mean"),
             tone_z_speaker=("tone_z_speaker", "mean"),
-            inflation_z_fed=("inflation_z_fed", "mean"),
-            labor_z_fed=("labor_z_fed", "mean"),
+            policy_relevance=("policy_relevance", "mean"),
             last_date=("date", "max"),
         )
         .reset_index()
@@ -1264,26 +1246,26 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
     agg["weight"] = agg["speaker"].map(SPEAKER_WEIGHTS).fillna(1.0)
     agg["avg_stance"] = agg["tone_z_fed"].apply(tone_bucket)
     agg = agg.sort_values(["weight", "docs", "tone_z_fed"], ascending=[False, False, False]).head(top_n)
-    agg["last_date_label"] = agg["last_date"].dt.strftime("%Y-%m-%d")
     return agg
 
 
 def render_about() -> None:
-    st.sidebar.header("About This Tool")
+    st.sidebar.markdown("### About This Tool")
     st.sidebar.markdown(
         """
-<div class="sidebar-note">
-This dashboard scrapes Federal Reserve speeches and testimony directly from the Board website, scores each document on hawkish and dovish language, and shows how speaker tone is shifting relative to both the speaker's own history and the broader Fed baseline.
-<br><br>
-The focus is signal extraction from primary source text. The highlighted excerpt and passage list are meant to make the scoring easy to sanity-check quickly.
-</div>
-""",
+        <div style="padding:0.85rem 1rem;border:1px solid #d9d9d9;border-radius:0.7rem;background:#fafafa;line-height:1.65">
+        This dashboard scrapes Federal Reserve speeches and testimony directly from the Board website, scores each document on hawkish and dovish language, and shows how speaker tone is shifting relative to both that speaker’s own history and the broader Fed baseline.
+        <br><br>
+        The scoring engine now separates topic mentions from live policy signal, discounts ceremonial and historical passages, and weights paragraphs by policy relevance before assigning tone.
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
 def render_diagnostics(log_df: pd.DataFrame, stats: Optional[Dict[str, int]] = None) -> None:
     st.subheader("Diagnostics")
+
     if stats:
         a, b, c, d, e, f = st.columns(6)
         a.metric("Year pages", stats.get("year_pages_found", 0))
@@ -1296,7 +1278,7 @@ def render_diagnostics(log_df: pd.DataFrame, stats: Optional[Dict[str, int]] = N
     if log_df.empty:
         st.info("No scrape log yet.")
     else:
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        st.dataframe(log_df, use_container_width=True, hide_index=True, height=260)
 
 
 def format_z(x: float) -> str:
@@ -1311,241 +1293,249 @@ def format_pct(x: float) -> str:
     return f"{x:.0f}th %ile"
 
 
-def make_badge(label: str, z: float) -> str:
-    color = "#eef2f6"
-    text = "#475467"
-    if not pd.isna(z):
-        if z <= -0.35:
-            color = "#dcfce7"
-            text = "#166534"
-        elif z >= 0.35:
-            color = "#fee2e2"
-            text = "#991b1b"
-    return (
-        f"<span style='display:inline-block;padding:0.30rem 0.64rem;border-radius:999px;"
-        f"background:{color};color:{text};font-weight:600;font-size:0.86rem'>{html.escape(label)}</span>"
-    )
-
-
-def tone_color(z: float) -> str:
+def stance_color(z: float) -> Tuple[str, str]:
     if pd.isna(z):
-        return "#98a2b3"
+        return "#efefef", "#555555"
     if z <= -0.35:
-        return "#16a34a"
+        return "#dff3e4", "#1e6b35"
     if z >= 0.35:
-        return "#dc2626"
-    return "#667085"
+        return "#fbe3e4", "#8a1f2b"
+    return "#efefef", "#555555"
+
+
+def make_badge(label: str, z: float) -> str:
+    bg, fg = stance_color(z)
+    return (
+        f"<span style='display:inline-block;padding:0.28rem 0.6rem;border-radius:999px;"
+        f"background:{bg};color:{fg};font-weight:600;font-size:0.88rem'>{html.escape(label)}</span>"
+    )
 
 
 def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
 
-    fig.add_hrect(y0=-3, y1=-1.25, fillcolor="rgba(34,197,94,0.13)", line_width=0)
-    fig.add_hrect(y0=-1.25, y1=-0.35, fillcolor="rgba(34,197,94,0.07)", line_width=0)
-    fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="rgba(148,163,184,0.08)", line_width=0)
-    fig.add_hrect(y0=0.35, y1=1.25, fillcolor="rgba(239,68,68,0.07)", line_width=0)
-    fig.add_hrect(y0=1.25, y1=3, fillcolor="rgba(239,68,68,0.13)", line_width=0)
+    y_series = pd.to_numeric(series["tone_z_fed_smooth"], errors="coerce").dropna()
+    ma3_series = pd.to_numeric(series["tone_3m_ma"], errors="coerce").dropna()
+    ma6_series = pd.to_numeric(series["tone_6m_ma"], errors="coerce").dropna()
+    combined_y = pd.concat([y_series, ma3_series, ma6_series], axis=0).dropna()
+
+    if combined_y.empty:
+        y_low, y_high = -1.5, 1.5
+    else:
+        y_min = float(combined_y.min())
+        y_max = float(combined_y.max())
+        pad = max(0.18, (y_max - y_min) * 0.18)
+        y_low = np.floor((y_min - pad) / 0.25) * 0.25
+        y_high = np.ceil((y_max + pad) / 0.25) * 0.25
+        if (y_high - y_low) < 1.5:
+            mid = (y_high + y_low) / 2
+            y_low = mid - 0.75
+            y_high = mid + 0.75
+        y_low = max(y_low, -3.0)
+        y_high = min(y_high, 3.0)
+
+    def add_band(y0, y1, color, opacity):
+        band_low = max(y0, y_low)
+        band_high = min(y1, y_high)
+        if band_high > band_low:
+            fig.add_hrect(y0=band_low, y1=band_high, fillcolor=color, opacity=opacity, line_width=0)
+
+    add_band(-3.0, -1.25, "rgb(46, 125, 50)", 0.12)
+    add_band(-1.25, -0.35, "rgb(46, 125, 50)", 0.06)
+    add_band(-0.35, 0.35, "rgb(160, 160, 160)", 0.05)
+    add_band(0.35, 1.25, "rgb(183, 28, 28)", 0.06)
+    add_band(1.25, 3.0, "rgb(183, 28, 28)", 0.12)
 
     fig.add_trace(
         go.Scatter(
             x=series["date"],
-            y=series["tone_signal"],
-            mode="lines",
-            name="Smoothed tone signal",
-            line=dict(color="#2563eb", width=2.8, shape="spline", smoothing=0.8),
+            y=series["tone_z_fed_smooth"],
+            mode="lines+markers",
+            name="Institutional tone z-score",
+            line=dict(width=2.4),
+            marker=dict(size=6),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
+
     fig.add_trace(
         go.Scatter(
             x=series["date"],
             y=series["tone_3m_ma"],
             mode="lines",
-            name="3-period moving average",
-            line=dict(color="#60a5fa", width=2, dash="dot", shape="spline", smoothing=0.7),
+            name="3-bucket mean",
+            line=dict(dash="dot", width=2),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
+
     fig.add_trace(
         go.Scatter(
             x=series["date"],
             y=series["tone_6m_ma"],
             mode="lines",
-            name="6-period moving average",
-            line=dict(color="#ef4444", width=2, dash="dash", shape="spline", smoothing=0.7),
+            name="6-bucket mean",
+            line=dict(dash="dash", width=2),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
 
-    fig.add_annotation(
-        xref="paper",
-        x=1.01,
-        yref="y",
-        y=1.9,
-        text="Hawkish",
-        showarrow=False,
-        font=dict(color="#991b1b", size=11),
-    )
-    fig.add_annotation(
-        xref="paper",
-        x=1.01,
-        yref="y",
-        y=-1.9,
-        text="Dovish",
-        showarrow=False,
-        font=dict(color="#166534", size=11),
-    )
+    x_min = series["date"].min()
+    x_max = series["date"].max()
+
+    y_span = y_high - y_low
+    if y_span <= 1.5:
+        dtick = 0.25
+    elif y_span <= 3.0:
+        dtick = 0.5
+    else:
+        dtick = 1.0
 
     fig.update_layout(
-        height=430,
-        margin=dict(l=18, r=24, t=10, b=12),
-        yaxis_title="Dovish ← z-score → Hawkish",
+        height=470,
+        margin=dict(l=20, r=20, t=84, b=28),
+        title=dict(text="Fed tone over time", x=0.01, xanchor="left", y=0.98, yanchor="top"),
+        yaxis_title="Z-score vs Fed baseline",
         xaxis_title="",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        hovermode="x unified",
+        xaxis=dict(
+            range=[x_min, x_max],
+            showgrid=True,
+            tickformat="%Y",
+            dtick="M12",
+            automargin=True,
+        ),
+        yaxis=dict(
+            range=[y_low, y_high],
+            tickmode="linear",
+            dtick=dtick,
+            zeroline=True,
+            zerolinewidth=1,
+            automargin=True,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.03,
+            xanchor="left",
+            x=0.0,
+            bgcolor="rgba(255,255,255,0.7)",
+        ),
     )
-    fig.update_yaxes(zeroline=True, zerolinecolor="rgba(71,85,105,0.25)", gridcolor="rgba(15,23,42,0.08)")
-    fig.update_xaxes(gridcolor="rgba(15,23,42,0.05)")
+
     return fig
+
+
+def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
+    fig = px.scatter(
+        matrix,
+        x="latest_vs_fed",
+        y="speaker",
+        size="docs",
+        color="latest_vs_own",
+        hover_data=["avg_stance", "last_date", "docs", "latest_vs_own", "latest_vs_fed", "policy_relevance"],
+        title="Speaker matrix",
+        height=470,
+        color_continuous_scale="RdYlGn_r",
+    )
+    fig.update_layout(
+        margin=dict(l=20, r=20, t=68, b=25),
+        xaxis_title="Latest speech vs Fed baseline (z-score)",
+        yaxis_title="",
+        coloraxis_colorbar_title="Vs own history",
+    )
+    return fig
+
+
+def clean_latest_table(view: pd.DataFrame) -> pd.DataFrame:
+    latest = view.sort_values("date", ascending=False).copy()
+    latest["tone"] = latest["tone_z_fed"].apply(format_z)
+    latest["vs own"] = latest["tone_z_speaker"].apply(format_z)
+    latest["fed %ile"] = latest["tone_percentile_fed"].apply(format_pct)
+    latest["inflation"] = latest["inflation_z_fed"].apply(format_z)
+    latest["labor"] = latest["labor_z_fed"].apply(format_z)
+    latest["growth"] = latest["growth_z_fed"].apply(format_z)
+    latest["policy"] = latest["policy_bucket"]
+    latest["date"] = latest["date"].dt.strftime("%Y-%m-%d")
+    latest["source"] = latest["url"]
+    latest = latest[
+        ["date", "speaker", "event_type", "policy", "stance", "tone", "vs own", "fed %ile", "inflation", "labor", "growth", "source"]
+    ].rename(columns={"event_type": "type"})
+    return latest
 
 
 def scorecard_dataframe(doc: pd.Series) -> pd.DataFrame:
     rows = [
-        ("Tone vs Fed baseline", doc["tone_z_fed"], doc["tone_percentile_fed"], tone_bucket(doc["tone_z_fed"])),
-        ("Tone vs own history", doc["tone_z_speaker"], np.nan, tone_bucket(doc["tone_z_speaker"])),
-        ("Inflation emphasis", doc["inflation_z_fed"], doc["inflation_percentile_fed"], emphasis_bucket(doc["inflation_z_fed"])),
-        ("Labor emphasis", doc["labor_z_fed"], doc["labor_percentile_fed"], emphasis_bucket(doc["labor_z_fed"])),
-        ("Growth emphasis", doc["growth_z_fed"], doc["growth_percentile_fed"], emphasis_bucket(doc["growth_z_fed"])),
+        ("Overall tone", doc["tone_z_fed"], doc["tone_percentile_fed"], tone_bucket(doc["tone_z_fed"])),
+        ("Vs own history", doc["tone_z_speaker"], np.nan, tone_bucket(doc["tone_z_speaker"])),
+        ("Policy relevance", doc["policy_relevance"] * 2.0 - 1.0 if pd.notna(doc["policy_relevance"]) else np.nan, np.nan, policy_bucket(doc["policy_relevance"])),
+        ("Inflation salience", doc["inflation_z_fed"], doc["inflation_percentile_fed"], emphasis_bucket(doc["inflation_z_fed"])),
+        ("Labor salience", doc["labor_z_fed"], doc["labor_percentile_fed"], emphasis_bucket(doc["labor_z_fed"])),
+        ("Growth salience", doc["growth_z_fed"], doc["growth_percentile_fed"], emphasis_bucket(doc["growth_z_fed"])),
         ("Financial stability", doc["fs_z_fed"], np.nan, emphasis_bucket(doc["fs_z_fed"])),
-        ("Uncertainty / caution", doc["uncertainty_z_fed"], np.nan, emphasis_bucket(doc["uncertainty_z_fed"])),
+        ("Uncertainty", doc["uncertainty_z_fed"], np.nan, emphasis_bucket(doc["uncertainty_z_fed"])),
     ]
     return pd.DataFrame(rows, columns=["dimension", "z", "percentile", "bucket"])
 
 
 def scorecard_figure(scorecard: pd.DataFrame) -> go.Figure:
     plot_df = scorecard.copy().sort_values("z", ascending=True)
-    colors = [tone_color(z) for z in plot_df["z"]]
+
+    colors = []
+    for dim, z in zip(plot_df["dimension"], plot_df["z"]):
+        if pd.isna(z):
+            colors.append("#bdbdbd")
+        elif dim == "Policy relevance":
+            colors.append("#7e57c2")
+        elif z <= -0.35:
+            colors.append("#66bb6a")
+        elif z >= 0.35:
+            colors.append("#ef5350")
+        else:
+            colors.append("#bdbdbd")
 
     fig = go.Figure(
         go.Bar(
             x=plot_df["z"],
             y=plot_df["dimension"],
             orientation="h",
-            marker=dict(color=colors),
             text=[f"{z:+.2f}σ" if pd.notna(z) else "n.a." for z in plot_df["z"]],
             textposition="outside",
-            hovertemplate="%{y}<br>%{x:.2f}σ<extra></extra>",
+            marker_color=colors,
+            hovertemplate="%{y}<br>%{x:.2f}<extra></extra>",
         )
     )
-    fig.add_vrect(x0=-3, x1=-0.35, fillcolor="rgba(34,197,94,0.10)", line_width=0)
-    fig.add_vrect(x0=0.35, x1=3, fillcolor="rgba(239,68,68,0.10)", line_width=0)
     fig.add_vline(x=-0.35, line_dash="dot", line_width=1)
     fig.add_vline(x=0.35, line_dash="dot", line_width=1)
     fig.add_vline(x=-1.25, line_dash="dash", line_width=1)
     fig.add_vline(x=1.25, line_dash="dash", line_width=1)
     fig.update_layout(
-        height=370,
-        margin=dict(l=18, r=18, t=10, b=12),
-        xaxis_title="More dovish ← z-score → More hawkish",
+        height=380,
+        margin=dict(l=20, r=20, t=40, b=20),
+        title="Document scorecard",
+        xaxis_title="Relative score",
         yaxis_title="",
         xaxis=dict(range=[-3, 3]),
     )
     return fig
 
 
-def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
-    if matrix.empty:
-        return go.Figure()
-
-    marker_sizes = 12 + np.sqrt(matrix["docs"].fillna(1).to_numpy()) * 8
-    customdata = np.column_stack(
-        [
-            matrix["avg_stance"].fillna("Unknown"),
-            matrix["last_date_label"].fillna("n.a."),
-            matrix["docs"].fillna(0).astype(int),
-            matrix["latest_vs_own"].round(2),
-            matrix["latest_vs_fed"].round(2),
-        ]
-    )
-
-    fig = go.Figure(
-        go.Scatter(
-            x=matrix["latest_vs_fed"],
-            y=matrix["speaker"],
-            mode="markers",
-            customdata=customdata,
-            marker=dict(
-                size=marker_sizes,
-                color=matrix["latest_vs_own"],
-                colorscale=[
-                    [0.0, "#16a34a"],
-                    [0.5, "#e5e7eb"],
-                    [1.0, "#dc2626"],
-                ],
-                cmin=-1.5,
-                cmax=1.5,
-                line=dict(color="rgba(15,23,42,0.18)", width=1),
-                colorbar=dict(title="Vs own history"),
-                opacity=0.92,
-            ),
-            hovertemplate=(
-                "<b>%{y}</b><br>"
-                "Latest vs Fed: %{x:.2f}σ<br>"
-                "Latest vs own: %{marker.color:.2f}σ<br>"
-                "Average stance: %{customdata[0]}<br>"
-                "Latest date: %{customdata[1]}<br>"
-                "Documents: %{customdata[2]}<extra></extra>"
-            ),
-        )
-    )
-
-    fig.add_vrect(x0=-3, x1=-0.35, fillcolor="rgba(34,197,94,0.08)", line_width=0)
-    fig.add_vrect(x0=0.35, x1=3, fillcolor="rgba(239,68,68,0.08)", line_width=0)
-    fig.add_vline(x=0, line_width=1, line_color="rgba(71,85,105,0.35)")
-
-    fig.update_layout(
-        height=430,
-        margin=dict(l=18, r=18, t=10, b=12),
-        xaxis_title="More dovish ← latest vs Fed baseline → More hawkish",
-        yaxis_title="",
-    )
-    fig.update_xaxes(gridcolor="rgba(15,23,42,0.05)")
-    fig.update_yaxes(categoryorder="array", categoryarray=matrix["speaker"][::-1].tolist())
-    return fig
-
-
-def clean_latest_table(view: pd.DataFrame) -> pd.DataFrame:
-    latest = view.sort_values("date", ascending=False).copy()
-    latest["date"] = latest["date"].dt.strftime("%Y-%m-%d")
-    latest["open"] = latest["url"].apply(lambda x: f'<a href="{x}" target="_blank">open</a>')
-    latest["tone"] = latest["tone_z_fed"].apply(format_z)
-    latest["vs own"] = latest["tone_z_speaker"].apply(format_z)
-    latest["inflation"] = latest["inflation_z_fed"].apply(format_z)
-    latest["labor"] = latest["labor_z_fed"].apply(format_z)
-    latest["growth"] = latest["growth_z_fed"].apply(format_z)
-    latest["fed %ile"] = latest["tone_percentile_fed"].apply(format_pct)
-    latest["stance"] = latest["tone_z_fed"].apply(lambda z: make_badge(tone_bucket(z), z))
-    latest = latest[
-        ["date", "speaker", "event_type", "stance", "tone", "vs own", "fed %ile", "inflation", "labor", "growth", "open"]
-    ].rename(columns={"event_type": "type"})
-    return latest
-
-
-def render_latest_table(view: pd.DataFrame) -> None:
-    latest_table = clean_latest_table(view)
-    table_html = latest_table.to_html(index=False, escape=False)
-    st.markdown(f"<div class='scroll-table-wrap'>{table_html}</div>", unsafe_allow_html=True)
-
-
 def doc_summary_html(doc: pd.Series) -> str:
-    tone = make_badge(f"Fed tone: {tone_bucket(doc['tone_z_fed'])}", doc["tone_z_fed"])
+    tone = make_badge(tone_bucket(doc["tone_z_fed"]), doc["tone_z_fed"])
     own = make_badge(f"Vs own: {tone_bucket(doc['tone_z_speaker'])}", doc["tone_z_speaker"])
     infl = make_badge(f"Inflation: {emphasis_bucket(doc['inflation_z_fed'])}", doc["inflation_z_fed"])
     labor = make_badge(f"Labor: {emphasis_bucket(doc['labor_z_fed'])}", doc["labor_z_fed"])
     growth = make_badge(f"Growth: {emphasis_bucket(doc['growth_z_fed'])}", doc["growth_z_fed"])
 
+    policy_style = "#efe7ff" if doc["policy_bucket"] == "High" else "#f4f4f4"
+    policy_text = "#4a2ea8" if doc["policy_bucket"] == "High" else "#555555"
+    policy_badge = (
+        f"<span style='display:inline-block;padding:0.28rem 0.6rem;border-radius:999px;"
+        f"background:{policy_style};color:{policy_text};font-weight:600;font-size:0.88rem'>"
+        f"Policy relevance: {html.escape(doc['policy_bucket'])}</span>"
+    )
+
     return f"""
-    <div class="summary-card">
+    <div style="padding:0.9rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fafafa">
         <div style="font-size:1.05rem;font-weight:700;margin-bottom:0.45rem">{html.escape(doc['title'] or 'Untitled')}</div>
         <div style="margin-bottom:0.55rem;color:#555">
             {html.escape(str(doc['date'].date()) if pd.notna(doc['date']) else 'Unknown date')} |
@@ -1553,6 +1543,7 @@ def doc_summary_html(doc: pd.Series) -> str:
             {html.escape((doc['event_type'] or '').title())}
         </div>
         <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.6rem">
+            {policy_badge}
             {tone}
             {own}
             {infl}
@@ -1562,29 +1553,15 @@ def doc_summary_html(doc: pd.Series) -> str:
         <div style="font-size:0.92rem;color:#555">
             Fed baseline: {format_z(doc['tone_z_fed'])} |
             vs own history: {format_z(doc['tone_z_speaker'])} |
-            Fed percentile: {format_pct(doc['tone_percentile_fed'])}
+            Fed percentile: {format_pct(doc['tone_percentile_fed'])} |
+            Live-signal share: {int(round((doc['live_signal_share'] or 0) * 100))}%
         </div>
     </div>
     """
 
 
-def build_status_line(df: pd.DataFrame, view: pd.DataFrame, refresh_stats: Optional[Dict[str, int]]) -> str:
-    parts = []
-    if refresh_stats is not None:
-        parts.append(
-            f"Refresh checked {refresh_stats['attempted_docs']:,} items and added {refresh_stats['inserted_docs']:,} new documents."
-        )
-    min_date = df["date"].dropna().min()
-    max_date = df["date"].dropna().max()
-    if pd.notna(min_date) and pd.notna(max_date):
-        parts.append(f"Corpus: {len(df):,} documents from {min_date.date()} to {max_date.date()}.")
-    parts.append(f"Current view: {len(view):,} documents.")
-    return " ".join(parts)
-
-
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
-    st.markdown(APP_CSS, unsafe_allow_html=True)
     st.title(APP_TITLE)
     st.caption("Primary-source underwriting of Fed communication tone from speeches and testimony.")
     init_db()
@@ -1597,6 +1574,7 @@ def main() -> None:
         refresh_clicked = st.button("Refresh corpus", use_container_width=True)
 
     refresh_stats = None
+
     if refresh_clicked:
         progress_bar = st.sidebar.progress(0)
         status_box = st.sidebar.empty()
@@ -1608,12 +1586,21 @@ def main() -> None:
                     progress_bar=progress_bar,
                     status_box=status_box,
                 )
-            finally:
                 progress_bar.empty()
                 status_box.empty()
+            except Exception as exc:
+                progress_bar.empty()
+                status_box.empty()
+                st.error(f"Refresh failed: {exc}")
 
     df = load_documents()
     log_df = load_log()
+
+    if refresh_stats is not None:
+        st.caption(
+            f"Refresh complete. Inserted {refresh_stats['inserted_docs']} documents out of "
+            f"{refresh_stats['attempted_docs']} attempted."
+        )
 
     if df.empty:
         st.warning("No local corpus found yet.")
@@ -1621,9 +1608,11 @@ def main() -> None:
         st.stop()
 
     df = compute_features(df)
+    st.caption(f"Loaded {len(df):,} documents.")
 
     min_date_ts = df["date"].dropna().min()
     max_date_ts = df["date"].dropna().max()
+
     if pd.isna(min_date_ts) or pd.isna(max_date_ts):
         st.error("Corpus loaded, but parsed dates are missing across the dataset.")
         render_diagnostics(log_df, refresh_stats)
@@ -1644,6 +1633,7 @@ def main() -> None:
         event_type_options = sorted(df["event_type"].dropna().unique().tolist())
         event_types = st.multiselect("Event types", options=event_type_options, default=event_type_options)
         search = st.text_input("Search title or transcript")
+        min_policy = st.slider("Minimum policy relevance", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
 
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
@@ -1656,8 +1646,13 @@ def main() -> None:
 
     if selected_speakers:
         view = view[view["speaker"].isin(selected_speakers)]
+
     if event_types:
         view = view[view["event_type"].isin(event_types)]
+
+    if min_policy > 0:
+        view = view[view["policy_relevance"].fillna(0.0) >= min_policy]
+
     if search.strip():
         q = search.strip().lower()
         view = view[
@@ -1670,25 +1665,50 @@ def main() -> None:
         render_diagnostics(log_df, refresh_stats)
         st.stop()
 
-    st.markdown(f"<div class='status-line'>{build_status_line(df, view, refresh_stats)}</div>", unsafe_allow_html=True)
-
     series = aggregate_series(view, freq="30D")
     matrix = speaker_matrix(view, top_n=12)
 
-    top_left, top_right = st.columns([1.7, 1.05])
+    top_left, top_right = st.columns([1.8, 1.2])
+
     with top_left:
-        st.markdown("<div class='chart-title'>Fed tone over time</div>", unsafe_allow_html=True)
-        st.plotly_chart(z_dashboard_figure(series), use_container_width=True)
+        st.plotly_chart(
+            z_dashboard_figure(series),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+
     with top_right:
-        st.markdown("<div class='chart-title'>Speaker matrix</div>", unsafe_allow_html=True)
-        if matrix.empty:
-            st.info("No speaker matrix available.")
+        if not matrix.empty:
+            st.plotly_chart(
+                speaker_matrix_figure(matrix),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
         else:
-            st.plotly_chart(speaker_matrix_figure(matrix), use_container_width=True)
+            st.info("No speaker matrix available.")
 
     st.subheader("Latest communication")
-    st.caption("Showing the newest documents in a fixed-height box. Scroll inside the table for the rest.")
-    render_latest_table(view)
+    latest_table = clean_latest_table(view)
+
+    st.dataframe(
+        latest_table,
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+        column_config={
+            "speaker": st.column_config.TextColumn(width="large"),
+            "type": st.column_config.TextColumn(width="small"),
+            "policy": st.column_config.TextColumn(width="small"),
+            "stance": st.column_config.TextColumn(width="medium"),
+            "tone": st.column_config.TextColumn(width="small"),
+            "vs own": st.column_config.TextColumn(width="small"),
+            "fed %ile": st.column_config.TextColumn(width="small"),
+            "inflation": st.column_config.TextColumn(width="small"),
+            "labor": st.column_config.TextColumn(width="small"),
+            "growth": st.column_config.TextColumn(width="small"),
+            "source": st.column_config.LinkColumn("open"),
+        },
+    )
 
     st.subheader("Transcript underwrite")
     options = view.sort_values("date", ascending=False).copy()
@@ -1701,14 +1721,14 @@ def main() -> None:
 
     st.markdown(doc_summary_html(doc), unsafe_allow_html=True)
 
-    upper_left, upper_right = st.columns([1.5, 1.0])
+    upper_left, upper_right = st.columns([1.55, 1.0])
 
     with upper_left:
         st.markdown("**Highlighted transcript excerpt**")
         excerpt = clean_text(doc["body_text"])[:6000]
         patterns = list({p for vals in SNIPPET_PATTERNS.values() for p in vals})
         st.markdown(
-            f"<div class='summary-card' style='line-height:1.65;background:#fff'>{highlight_terms(excerpt, patterns)}</div>",
+            f"<div style='line-height:1.65;padding:0.95rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fff'>{highlight_terms(excerpt, patterns)}</div>",
             unsafe_allow_html=True,
         )
 
@@ -1739,15 +1759,17 @@ def main() -> None:
         st.markdown("**Document interpretation**")
         st.markdown(
             f"""
-            <div class="summary-card" style="line-height:1.7">
+            <div style="padding:0.95rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fafafa;line-height:1.7">
                 <div><strong>Title</strong>: {html.escape(doc['title'] or 'Unknown')}</div>
                 <div><strong>Speaker</strong>: {html.escape(doc['speaker'] or 'Unknown')}</div>
                 <div><strong>Role</strong>: {html.escape(doc['role'] or 'Unknown')}</div>
                 <div><strong>Date</strong>: {html.escape(str(doc['date'].date()) if pd.notna(doc['date']) else 'Unknown')}</div>
                 <div><strong>Type</strong>: {html.escape((doc['event_type'] or '').title())}</div>
+                <div><strong>Policy relevance</strong>: {html.escape(doc['policy_bucket'])} ({doc['policy_relevance']:.2f})</div>
                 <div><strong>Fed baseline</strong>: {format_z(doc['tone_z_fed'])} ({tone_bucket(doc['tone_z_fed'])})</div>
                 <div><strong>Vs own history</strong>: {format_z(doc['tone_z_speaker'])} ({tone_bucket(doc['tone_z_speaker'])})</div>
                 <div><strong>Fed percentile</strong>: {format_pct(doc['tone_percentile_fed'])}</div>
+                <div><strong>Live-signal share</strong>: {int(round((doc['live_signal_share'] or 0) * 100))}%</div>
                 <div><strong>Source</strong>: <a href="{html.escape(doc['url'])}" target="_blank">open original</a></div>
                 {"<div><strong>PDF</strong>: <a href='" + html.escape(doc['pdf_url']) + "' target='_blank'>open pdf</a></div>" if doc.get("pdf_url") else ""}
             </div>
@@ -1755,48 +1777,30 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-        st.markdown("**Document scorecard**")
         scorecard = scorecard_dataframe(doc)
-        st.plotly_chart(scorecard_figure(scorecard), use_container_width=True)
+        st.plotly_chart(
+            scorecard_figure(scorecard),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
 
         scorecard_display = scorecard.copy()
         scorecard_display["z"] = scorecard_display["z"].apply(format_z)
         scorecard_display["percentile"] = scorecard_display["percentile"].apply(format_pct)
-        st.dataframe(scorecard_display, use_container_width=True, hide_index=True)
-
-    st.subheader("Latest speaker tape")
-    speaker_latest = (
-        view.sort_values("date", ascending=False)
-        .groupby("speaker", dropna=False)
-        .head(1)[["speaker", "tone_z_fed", "tone_z_speaker", "stance", "date"]]
-        .sort_values("tone_z_fed", ascending=False)
-        .rename(columns={"tone_z_fed": "vs Fed", "tone_z_speaker": "vs own"})
-    )
-    speaker_latest["date"] = speaker_latest["date"].dt.strftime("%Y-%m-%d")
-    speaker_latest["vs Fed"] = speaker_latest["vs Fed"].apply(format_z)
-    speaker_latest["vs own"] = speaker_latest["vs own"].apply(format_z)
-    st.dataframe(speaker_latest, use_container_width=True, hide_index=True)
+        st.dataframe(scorecard_display, use_container_width=True, hide_index=True, height=285)
 
     st.subheader("Export")
     export_cols = [
-        "date",
-        "speaker",
-        "role",
-        "event_type",
-        "title",
-        "stance",
-        "tone_z_fed",
-        "tone_z_speaker",
-        "tone_percentile_fed",
-        "inflation_z_fed",
-        "labor_z_fed",
-        "growth_z_fed",
-        "financial_stability",
-        "balance_sheet",
-        "uncertainty_risk",
-        "url",
+        "date", "speaker", "role", "event_type", "title", "policy_relevance", "live_signal_share", "stance",
+        "tone_z_fed", "tone_z_speaker", "tone_percentile_fed",
+        "inflation_z_fed", "labor_z_fed", "growth_z_fed",
+        "financial_stability", "balance_sheet", "uncertainty_risk", "url"
     ]
-    csv_bytes = view.sort_values("date", ascending=False)[export_cols].to_csv(index=False).encode("utf-8")
+    csv_bytes = (
+        view.sort_values("date", ascending=False)[export_cols]
+        .to_csv(index=False)
+        .encode("utf-8")
+    )
     st.download_button(
         "Download filtered dataset as CSV",
         data=csv_bytes,
