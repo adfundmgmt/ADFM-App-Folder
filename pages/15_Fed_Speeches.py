@@ -1725,7 +1725,7 @@ def main() -> None:
         },
     )
 
-    st.subheader("Transcript underwrite")
+     st.subheader("Transcript underwrite")
     options = view.sort_values("date", ascending=False).copy()
     options["label"] = options.apply(
         lambda r: f"{r['date'].date() if pd.notna(r['date']) else 'n.a.'} | {r['speaker'] or 'Unknown'} | {r['title']}",
@@ -1757,66 +1757,74 @@ def main() -> None:
             st.markdown("Hawkish passages")
             for s in hawk_snips:
                 st.markdown(f"> {s}")
+
         if dove_snips:
             st.markdown("Dovish passages")
             for s in dove_snips:
                 st.markdown(f"> {s}")
+
         if infl_snips:
             st.markdown("Inflation passages")
             for s in infl_snips:
                 st.markdown(f"> {s}")
+
         if labor_snips:
             st.markdown("Labor passages")
             for s in labor_snips:
                 st.markdown(f"> {s}")
 
     with upper_right:
-    st.markdown("**Document interpretation**")
+        st.markdown("**Document interpretation**")
 
-    policy_relevance_value = doc.get("policy_relevance", np.nan)
-    live_signal_value = doc.get("live_signal_share", np.nan)
+        policy_relevance_value = doc.get("policy_relevance", np.nan)
+        live_signal_value = doc.get("live_signal_share", np.nan)
 
-    if pd.isna(policy_relevance_value):
-        policy_relevance_text = "n.a."
-    else:
-        policy_relevance_text = f"{float(policy_relevance_value):.2f}"
+        if pd.isna(policy_relevance_value):
+            policy_relevance_text = "n.a."
+        else:
+            policy_relevance_text = f"{float(policy_relevance_value):.2f}"
 
-    if pd.isna(live_signal_value):
-        live_signal_text = "n.a."
-    else:
-        live_signal_text = f"{int(round(float(live_signal_value) * 100))}%"
+        if pd.isna(live_signal_value):
+            live_signal_text = "n.a."
+        else:
+            live_signal_text = f"{int(round(float(live_signal_value) * 100))}%"
 
-    st.markdown(
-        f"""
-        <div style="padding:0.95rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fafafa;line-height:1.7">
-            <div><strong>Title</strong>: {html.escape(doc['title'] or 'Unknown')}</div>
-            <div><strong>Speaker</strong>: {html.escape(doc['speaker'] or 'Unknown')}</div>
-            <div><strong>Role</strong>: {html.escape(doc['role'] or 'Unknown')}</div>
-            <div><strong>Date</strong>: {html.escape(str(doc['date'].date()) if pd.notna(doc['date']) else 'Unknown')}</div>
-            <div><strong>Type</strong>: {html.escape((doc['event_type'] or '').title())}</div>
-            <div><strong>Policy relevance</strong>: {html.escape(str(doc.get('policy_bucket', 'Unknown')))} ({policy_relevance_text})</div>
-            <div><strong>Fed baseline</strong>: {format_z(doc['tone_z_fed'])} ({tone_bucket(doc['tone_z_fed'])})</div>
-            <div><strong>Vs own history</strong>: {format_z(doc['tone_z_speaker'])} ({tone_bucket(doc['tone_z_speaker'])})</div>
-            <div><strong>Fed percentile</strong>: {format_pct(doc['tone_percentile_fed'])}</div>
-            <div><strong>Live-signal share</strong>: {live_signal_text}</div>
-            <div><strong>Source</strong>: <a href="{html.escape(doc['url'])}" target="_blank">open original</a></div>
-            {"<div><strong>PDF</strong>: <a href='" + html.escape(doc['pdf_url']) + "' target='_blank'>open pdf</a></div>" if doc.get("pdf_url") else ""}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            f"""
+            <div style="padding:0.95rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fafafa;line-height:1.7">
+                <div><strong>Title</strong>: {html.escape(doc['title'] or 'Unknown')}</div>
+                <div><strong>Speaker</strong>: {html.escape(doc['speaker'] or 'Unknown')}</div>
+                <div><strong>Role</strong>: {html.escape(doc['role'] or 'Unknown')}</div>
+                <div><strong>Date</strong>: {html.escape(str(doc['date'].date()) if pd.notna(doc['date']) else 'Unknown')}</div>
+                <div><strong>Type</strong>: {html.escape((doc['event_type'] or '').title())}</div>
+                <div><strong>Policy relevance</strong>: {html.escape(str(doc.get('policy_bucket', 'Unknown')))} ({policy_relevance_text})</div>
+                <div><strong>Fed baseline</strong>: {format_z(doc['tone_z_fed'])} ({tone_bucket(doc['tone_z_fed'])})</div>
+                <div><strong>Vs own history</strong>: {format_z(doc['tone_z_speaker'])} ({tone_bucket(doc['tone_z_speaker'])})</div>
+                <div><strong>Fed percentile</strong>: {format_pct(doc['tone_percentile_fed'])}</div>
+                <div><strong>Live-signal share</strong>: {live_signal_text}</div>
+                <div><strong>Source</strong>: <a href="{html.escape(doc['url'])}" target="_blank">open original</a></div>
+                {"<div><strong>PDF</strong>: <a href='" + html.escape(doc['pdf_url']) + "' target='_blank'>open pdf</a></div>" if doc.get("pdf_url") else ""}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    scorecard = scorecard_dataframe(doc)
-    st.plotly_chart(
-        scorecard_figure(scorecard),
-        use_container_width=True,
-        config={"displaylogo": False},
-    )
+        scorecard = scorecard_dataframe(doc)
+        st.plotly_chart(
+            scorecard_figure(scorecard),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
 
-    scorecard_display = scorecard.copy()
-    scorecard_display["z"] = scorecard_display["z"].apply(format_z)
-    scorecard_display["percentile"] = scorecard_display["percentile"].apply(format_pct)
-    st.dataframe(scorecard_display, use_container_width=True, hide_index=True, height=285)
+        scorecard_display = scorecard.copy()
+        scorecard_display["z"] = scorecard_display["z"].apply(format_z)
+        scorecard_display["percentile"] = scorecard_display["percentile"].apply(format_pct)
+        st.dataframe(
+            scorecard_display,
+            use_container_width=True,
+            hide_index=True,
+            height=285,
+        )
     
     st.subheader("Export")
     export_cols = [
