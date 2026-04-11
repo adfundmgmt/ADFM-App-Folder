@@ -1,24 +1,3 @@
-# app.py
-# ADFM | FOMC Scenario Engine
-#
-# What this app does
-# - Scrapes Federal Reserve FOMC calendar pages and individual meeting pages
-# - Pulls meeting statements, minutes, press conference transcripts, and SEP materials where available
-# - Extracts text from HTML and PDF sources
-# - Builds a historical analog engine using document similarity
-# - Scores current FOMC tone across scenarios:
-#     1) Higher for longer
-#     2) Restrictive hold
-#     3) Dovish hold / pivot setup
-#     4) Cutting cycle
-#     5) Stagflation risk
-# - Pulls live macro series from FRED CSV endpoints with retries and caching
-# - Produces a clean Streamlit output tailored for discretionary macro work
-#
-# Run:
-#   pip install streamlit pandas numpy requests beautifulsoup4 plotly pypdf PyPDF2 python-dateutil
-#   streamlit run app.py
-
 from __future__ import annotations
 
 import io
@@ -28,6 +7,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
@@ -35,16 +15,17 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
-from dateutil import parser as dtparser
 
 # Robust PDF reader import for Streamlit Cloud and local environments
 PDF_ENGINE = None
 try:
     from pypdf import PdfReader  # preferred
+
     PDF_ENGINE = "pypdf"
 except Exception:
     try:
         from PyPDF2 import PdfReader  # fallback
+
         PDF_ENGINE = "PyPDF2"
     except Exception:
         PdfReader = None
@@ -69,13 +50,14 @@ FED_BASE = "https://www.federalreserve.gov"
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}"
 
-REQUEST_TIMEOUT = 25
+REQUEST_TIMEOUT = 20
 MAX_RETRIES = 3
-RETRY_SLEEP = 1.5
+RETRY_SLEEP = 1.25
 
 # =========================
 # Utility helpers
 # =========================
+
 
 def clean_text(text: str) -> str:
     if not text:
@@ -101,18 +83,6 @@ def pct_fmt(x, decimals=1):
     return f"{x:.{decimals}f}%"
 
 
-def num_fmt(x, decimals=2):
-    if pd.isna(x):
-        return "N/A"
-    return f"{x:.{decimals}f}"
-
-
-def zscore(series: pd.Series, window: int = 252) -> pd.Series:
-    roll_mean = series.rolling(window).mean()
-    roll_std = series.rolling(window).std()
-    return (series - roll_mean) / roll_std
-
-
 def annualized_3m_from_index(series: pd.Series) -> pd.Series:
     return ((series / series.shift(3)) ** 4 - 1) * 100
 
@@ -135,41 +105,43 @@ def fetch_url(url: str, session: Optional[requests.Session] = None, timeout: int
             resp = sess.get(url, timeout=timeout)
             resp.raise_for_status()
             return resp
-        except Exception as e:
-            last_err = e
+        except Exception as exc:
+            last_err = exc
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_SLEEP * (attempt + 1))
     raise last_err
 
 
 def absolute_url(href: str) -> str:
-    if not href:
-        return ""
-    if href.startswith("http://") or href.startswith("https://"):
-        return href
-    if href.startswith("/"):
-        return FED_BASE + href
-    return FED_BASE + "/" + href
-
-
-def try_parse_date(text: str) -> Optional[pd.Timestamp]:
-    try:
-        return pd.Timestamp(dtparser.parse(text, fuzzy=True))
-    except Exception:
-        return None
+    return urljoin(FED_BASE, href or "")
 
 
 # =========================
 # FRED data loader
 # =========================
 
+FRED_SERIES_STARTS = {
+    "DFEDTARL": "1990-01-01",
+    "DFEDTARU": "1990-01-01",
+    "UNRATE": "1990-01-01",
+    "PCEPILFE": "1990-01-01",
+    "CPIAUCSL": "1990-01-01",
+    "GS10": "1990-01-01",
+    "DGS2": "1990-01-01",
+    "NFCI": "1990-01-01",
+    "PAYEMS": "1990-01-01",
+}
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 60)
 def fetch_fred_series_csv(series_id: str, start: str = "1990-01-01") -> pd.DataFrame:
     url = FRED_CSV_URL.format(series_id=series_id, start=start)
     resp = fetch_url(url)
     df = pd.read_csv(io.StringIO(resp.text))
+
     if df.empty or "DATE" not in df.columns or series_id not in df.columns:
         raise ValueError(f"Malformed FRED response for {series_id}")
+
     df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
     df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
     df = df.dropna(subset=["DATE"]).rename(columns={"DATE": "date", series_id: "value"})
@@ -178,40 +150,29 @@ def fetch_fred_series_csv(series_id: str, start: str = "1990-01-01") -> pd.DataF
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
 def load_macro_panel() -> pd.DataFrame:
-    # FEDTARMD = Effective Federal Funds Target midpoint
-    # UNRATE = unemployment rate
-    # PCEPILFE = Core PCE index
-    # CPIAUCSL = CPI index
-    # GS10 = 10Y Treasury
-    # DGS2 = 2Y Treasury
-    # NFCI = Chicago Fed National Financial Conditions Index
-    # PAYEMS = nonfarm payrolls
-    series = {
-        "FEDTARMD": "1990-01-01",
-        "UNRATE": "1990-01-01",
-        "PCEPILFE": "1990-01-01",
-        "CPIAUCSL": "1990-01-01",
-        "GS10": "1990-01-01",
-        "DGS2": "1990-01-01",
-        "NFCI": "1990-01-01",
-        "PAYEMS": "1990-01-01",
-    }
-
     panel = None
     failures = []
 
-    for sid, start in series.items():
+    for sid, start in FRED_SERIES_STARTS.items():
         try:
             s = fetch_fred_series_csv(sid, start=start).rename(columns={"value": sid})
             panel = s if panel is None else panel.merge(s, on="date", how="outer")
-        except Exception as e:
-            failures.append(f"{sid}: {e}")
+        except Exception as exc:
+            failures.append(f"{sid}: {exc}")
 
     if panel is None:
         raise RuntimeError("Failed to load all required macro series.")
 
     panel = panel.sort_values("date").reset_index(drop=True)
 
+    for sid in FRED_SERIES_STARTS:
+        if sid not in panel.columns:
+            panel[sid] = np.nan
+
+    base_cols = list(FRED_SERIES_STARTS.keys())
+    panel[base_cols] = panel[base_cols].ffill()
+
+    panel["FEDTARMD"] = (panel["DFEDTARL"] + panel["DFEDTARU"]) / 2
     panel["core_pce_yoy"] = yoy(panel["PCEPILFE"])
     panel["cpi_yoy"] = yoy(panel["CPIAUCSL"])
     panel["payems_3m_ann"] = annualized_3m_from_index(panel["PAYEMS"])
@@ -264,6 +225,78 @@ class MeetingRecord:
         )
 
 
+def doc_links_to_dict(docs: MeetingDocLinks) -> Dict[str, Optional[str]]:
+    return {
+        "statement_html": docs.statement_html,
+        "statement_pdf": docs.statement_pdf,
+        "minutes_html": docs.minutes_html,
+        "minutes_pdf": docs.minutes_pdf,
+        "presser_pdf": docs.presser_pdf,
+        "projections_pdf": docs.projections_pdf,
+        "projections_html": docs.projections_html,
+        "implementation_note": docs.implementation_note,
+    }
+
+
+def merge_doc_links(seed: MeetingDocLinks, extra: MeetingDocLinks) -> MeetingDocLinks:
+    data = doc_links_to_dict(seed)
+    for key, value in doc_links_to_dict(extra).items():
+        if value and not data.get(key):
+            data[key] = value
+    return MeetingDocLinks(**data)
+
+
+def has_any_doc_link(docs: MeetingDocLinks) -> bool:
+    return any(doc_links_to_dict(docs).values())
+
+
+def assign_doc_link(docs: MeetingDocLinks, href: str, label: str) -> None:
+    href_l = href.lower()
+    label_l = normalize_whitespace(label).lower()
+
+    if re.search(r"/newsevents/pressreleases/monetary\d{8}a\.htm$", href_l):
+        docs.statement_html = docs.statement_html or href
+        return
+
+    if re.search(r"/newsevents/pressreleases/monetary\d{8}a1\.pdf$", href_l):
+        docs.statement_pdf = docs.statement_pdf or href
+        return
+
+    if re.search(r"/newsevents/pressreleases/monetary\d{8}a2\.pdf$", href_l) or "implementation note" in label_l:
+        docs.implementation_note = docs.implementation_note or href
+        return
+
+    if re.search(r"/monetarypolicy/fomcminutes\d{8}\.htm$", href_l):
+        docs.minutes_html = docs.minutes_html or href
+        return
+
+    if re.search(r"/monetarypolicy/fomcminutes\d{8}\.pdf$", href_l):
+        docs.minutes_pdf = docs.minutes_pdf or href
+        return
+
+    if re.search(r"/monetarypolicy/fomcpresconf\d{8}\.pdf$", href_l) or "press conference transcript" in label_l:
+        docs.presser_pdf = docs.presser_pdf or href
+        return
+
+    if re.search(r"/monetarypolicy/fomcprojtabl\d{8}\.htm$", href_l):
+        docs.projections_html = docs.projections_html or href
+        return
+
+    if re.search(r"/monetarypolicy/fomcprojtabl\d{8}\.pdf$", href_l):
+        docs.projections_pdf = docs.projections_pdf or href
+        return
+
+
+def extract_meeting_date_from_url(href: str) -> Optional[pd.Timestamp]:
+    match = re.search(r"(\d{8})", href or "")
+    if not match:
+        return None
+    dt = pd.to_datetime(match.group(1), format="%Y%m%d", errors="coerce")
+    if pd.isna(dt):
+        return None
+    return dt
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def fetch_html(url: str) -> str:
     return fetch_url(url).text
@@ -282,8 +315,8 @@ def fetch_pdf_text(url: str) -> str:
 
     try:
         reader = PdfReader(bio)
-    except Exception as e:
-        raise RuntimeError(f"Failed to open PDF from {url}: {e}")
+    except Exception as exc:
+        raise RuntimeError(f"Failed to open PDF from {url}: {exc}")
 
     pages = []
     for page in reader.pages:
@@ -298,6 +331,7 @@ def fetch_pdf_text(url: str) -> str:
 
 def extract_main_html_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
+
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
 
@@ -319,8 +353,7 @@ def extract_main_html_text(html: str) -> str:
     if not texts:
         texts = [soup.get_text(" ", strip=True)]
 
-    text = max(texts, key=len)
-    return clean_text(text)
+    return clean_text(max(texts, key=len))
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
@@ -334,45 +367,53 @@ def get_fomc_calendar_meetings() -> List[Dict]:
     html = fetch_html(FOMC_CALENDAR_URL)
     soup = BeautifulSoup(html, "html.parser")
 
+    grouped: Dict[pd.Timestamp, Dict] = {}
+
+    for a in soup.find_all("a", href=True):
+        href = absolute_url(a["href"])
+        label = normalize_whitespace(a.get_text(" ", strip=True))
+        meeting_date = extract_meeting_date_from_url(href)
+
+        if meeting_date is None:
+            continue
+
+        if not (
+            re.search(r"/monetarypolicy/fomcpresconf\d{8}\.htm$", href, flags=re.I)
+            or re.search(r"/monetarypolicy/fomcminutes\d{8}\.(pdf|htm)$", href, flags=re.I)
+            or re.search(r"/monetarypolicy/fomcprojtabl\d{8}\.(pdf|htm)$", href, flags=re.I)
+            or re.search(r"/newsevents/pressreleases/monetary\d{8}a\d?\.((pdf)|(htm))$", href, flags=re.I)
+        ):
+            continue
+
+        meta = grouped.setdefault(
+            meeting_date,
+            {
+                "meeting_date": meeting_date,
+                "title": f"FOMC Meeting {meeting_date.date()}",
+                "page_url": FOMC_CALENDAR_URL,
+                "year": int(meeting_date.year),
+                "doc_links_obj": MeetingDocLinks(),
+            },
+        )
+
+        assign_doc_link(meta["doc_links_obj"], href, label)
+
+        if re.search(r"/monetarypolicy/fomcpresconf\d{8}\.htm$", href, flags=re.I):
+            meta["page_url"] = href
+
     meetings = []
-    links = soup.find_all("a", href=True)
-
-    seen = set()
-    for a in links:
-        href = a["href"]
-        text = normalize_whitespace(a.get_text(" ", strip=True))
-        full_url = absolute_url(href)
-
-        if re.search(r"/monetarypolicy/fomc.*\d{8}\.htm", href, flags=re.I):
-            if full_url in seen:
-                continue
-            seen.add(full_url)
-
-            date_match = re.search(r"(\d{8})", href)
-            if not date_match:
-                continue
-
-            dt = pd.to_datetime(date_match.group(1), format="%Y%m%d", errors="coerce")
-            if pd.isna(dt):
-                continue
-
-            title = text or f"FOMC Meeting {dt.date()}"
+    for _, meta in sorted(grouped.items(), key=lambda x: x[0], reverse=True):
+        if has_any_doc_link(meta["doc_links_obj"]) or meta["page_url"] != FOMC_CALENDAR_URL:
             meetings.append(
                 {
-                    "meeting_date": dt,
-                    "title": title,
-                    "page_url": full_url,
-                    "year": int(dt.year),
+                    "meeting_date": meta["meeting_date"],
+                    "title": meta["title"],
+                    "page_url": meta["page_url"],
+                    "year": meta["year"],
+                    "doc_links": doc_links_to_dict(meta["doc_links_obj"]),
                 }
             )
 
-    meetings = sorted(meetings, key=lambda x: x["meeting_date"], reverse=True)
-
-    dedup = {}
-    for m in meetings:
-        dedup[m["meeting_date"].date()] = m
-    meetings = list(dedup.values())
-    meetings = sorted(meetings, key=lambda x: x["meeting_date"], reverse=True)
     return meetings
 
 
@@ -384,57 +425,35 @@ def parse_meeting_page_docs(page_url: str) -> MeetingDocLinks:
     anchors = soup.find_all("a", href=True)
 
     for a in anchors:
-        label = normalize_whitespace(a.get_text(" ", strip=True)).lower()
+        label = normalize_whitespace(a.get_text(" ", strip=True))
         href = absolute_url(a["href"])
-
-        if "statement" in label and href.endswith(".htm"):
-            docs.statement_html = docs.statement_html or href
-        elif "statement" in label and href.endswith(".pdf"):
-            docs.statement_pdf = docs.statement_pdf or href
-
-        elif "minutes" in label and href.endswith(".htm"):
-            docs.minutes_html = docs.minutes_html or href
-        elif "minutes" in label and href.endswith(".pdf"):
-            docs.minutes_pdf = docs.minutes_pdf or href
-
-        elif "press conference transcript" in label and href.endswith(".pdf"):
-            docs.presser_pdf = docs.presser_pdf or href
-
-        elif "projections materials" in label and href.endswith(".pdf"):
-            docs.projections_pdf = docs.projections_pdf or href
-        elif "projections materials" in label and href.endswith(".htm"):
-            docs.projections_html = docs.projections_html or href
-
-        elif "implementation note" in label:
-            docs.implementation_note = docs.implementation_note or href
+        assign_doc_link(docs, href, label)
 
     if not docs.presser_pdf:
         for a in anchors:
             href = absolute_url(a["href"])
-            if re.search(r"presconf.*\.pdf$", href, flags=re.I):
+            if re.search(r"fomcpresconf\d{8}\.pdf$", href, flags=re.I):
                 docs.presser_pdf = href
-                break
-
-    if not docs.minutes_pdf:
-        for a in anchors:
-            href = absolute_url(a["href"])
-            if re.search(r"fomcminutes\d{8}\.pdf$", href, flags=re.I):
-                docs.minutes_pdf = href
-                break
-
-    if not docs.minutes_html:
-        for a in anchors:
-            href = absolute_url(a["href"])
-            if re.search(r"fomcminutes\d{8}\.htm$", href, flags=re.I):
-                docs.minutes_html = href
                 break
 
     return docs
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
-def load_meeting_record(page_url: str, meeting_date: pd.Timestamp, title: str, year: int) -> MeetingRecord:
-    docs = parse_meeting_page_docs(page_url)
+def load_meeting_record(
+    page_url: str,
+    meeting_date: pd.Timestamp,
+    title: str,
+    year: int,
+    seed_doc_links: Optional[Dict[str, Optional[str]]] = None,
+) -> MeetingRecord:
+    docs = MeetingDocLinks(**(seed_doc_links or {}))
+
+    if page_url and page_url != FOMC_CALENDAR_URL:
+        try:
+            docs = merge_doc_links(docs, parse_meeting_page_docs(page_url))
+        except Exception:
+            pass
 
     rec = MeetingRecord(
         meeting_date=meeting_date,
@@ -482,13 +501,70 @@ def load_meeting_record(page_url: str, meeting_date: pd.Timestamp, title: str, y
 # =========================
 
 STOPWORDS = {
-    "the", "and", "for", "that", "with", "from", "this", "have", "were", "will", "their",
-    "they", "been", "into", "which", "would", "there", "about", "could", "should", "while",
-    "than", "also", "because", "these", "those", "such", "each", "other", "more", "less",
-    "very", "over", "under", "some", "most", "much", "many", "only", "both", "within",
-    "committee", "federal", "reserve", "board", "meeting", "monetary", "policy", "percent",
-    "participants", "economic", "economy", "market", "markets", "inflation", "labor",
-    "employment", "growth", "price", "prices", "rates", "rate", "financial", "conditions",
+    "the",
+    "and",
+    "for",
+    "that",
+    "with",
+    "from",
+    "this",
+    "have",
+    "were",
+    "will",
+    "their",
+    "they",
+    "been",
+    "into",
+    "which",
+    "would",
+    "there",
+    "about",
+    "could",
+    "should",
+    "while",
+    "than",
+    "also",
+    "because",
+    "these",
+    "those",
+    "such",
+    "each",
+    "other",
+    "more",
+    "less",
+    "very",
+    "over",
+    "under",
+    "some",
+    "most",
+    "much",
+    "many",
+    "only",
+    "both",
+    "within",
+    "committee",
+    "federal",
+    "reserve",
+    "board",
+    "meeting",
+    "monetary",
+    "policy",
+    "percent",
+    "participants",
+    "economic",
+    "economy",
+    "market",
+    "markets",
+    "inflation",
+    "labor",
+    "employment",
+    "growth",
+    "price",
+    "prices",
+    "rates",
+    "rate",
+    "financial",
+    "conditions",
 }
 
 
@@ -524,63 +600,121 @@ def count_keywords(text: str, terms: List[str]) -> int:
 SCENARIOS = {
     "Higher for longer": {
         "positive_terms": [
-            "higher for longer", "ongoing inflation", "upside risks to inflation", "restrictive",
-            "further policy firming", "not sufficiently restrictive", "elevated inflation",
-            "resilient demand", "strong labor market", "tight labor market"
+            "higher for longer",
+            "ongoing inflation",
+            "upside risks to inflation",
+            "restrictive",
+            "further policy firming",
+            "not sufficiently restrictive",
+            "elevated inflation",
+            "resilient demand",
+            "strong labor market",
+            "tight labor market",
         ],
         "negative_terms": [
-            "disinflation", "cooling labor market", "softer growth", "rate cuts", "lower rates"
+            "disinflation",
+            "cooling labor market",
+            "softer growth",
+            "rate cuts",
+            "lower rates",
         ],
     },
     "Restrictive hold": {
         "positive_terms": [
-            "well positioned", "wait for more evidence", "data dependent", "balance of risks",
-            "maintain current target range", "monitor incoming data", "uncertain outlook",
-            "restrictive stance", "hold rates steady"
+            "well positioned",
+            "wait for more evidence",
+            "data dependent",
+            "balance of risks",
+            "maintain current target range",
+            "monitor incoming data",
+            "uncertain outlook",
+            "restrictive stance",
+            "hold rates steady",
         ],
         "negative_terms": [
-            "imminent cuts", "need to cut", "rapid deterioration", "severe contraction"
+            "imminent cuts",
+            "need to cut",
+            "rapid deterioration",
+            "severe contraction",
         ],
     },
     "Dovish hold / pivot setup": {
         "positive_terms": [
-            "disinflation", "progress on inflation", "downside risks to employment",
-            "policy is restrictive", "cooling labor market", "slower demand", "moderating wages",
-            "balanced risks", "scope to adjust", "additional adjustments"
+            "disinflation",
+            "progress on inflation",
+            "downside risks to employment",
+            "policy is restrictive",
+            "cooling labor market",
+            "slower demand",
+            "moderating wages",
+            "balanced risks",
+            "scope to adjust",
+            "additional adjustments",
         ],
         "negative_terms": [
-            "upside inflation risks", "further firming", "reacceleration"
+            "upside inflation risks",
+            "further firming",
+            "reacceleration",
         ],
     },
     "Cutting cycle": {
         "positive_terms": [
-            "cut the target range", "lower the target range", "downside risks",
-            "deterioration in labor market", "weaker activity", "recession", "support the economy",
-            "ease policy", "policy accommodation"
+            "cut the target range",
+            "lower the target range",
+            "downside risks",
+            "deterioration in labor market",
+            "weaker activity",
+            "recession",
+            "support the economy",
+            "ease policy",
+            "policy accommodation",
         ],
         "negative_terms": [
-            "elevated inflation", "strong labor market", "further firming"
+            "elevated inflation",
+            "strong labor market",
+            "further firming",
         ],
     },
     "Stagflation risk": {
         "positive_terms": [
-            "higher energy prices", "elevated inflation", "slower growth", "weaker activity",
-            "supply shock", "inflation remains above target", "downside risks to growth",
-            "adverse supply developments", "tariffs", "geopolitical risks"
+            "higher energy prices",
+            "elevated inflation",
+            "slower growth",
+            "weaker activity",
+            "supply shock",
+            "inflation remains above target",
+            "downside risks to growth",
+            "adverse supply developments",
+            "tariffs",
+            "geopolitical risks",
         ],
         "negative_terms": [
-            "broad disinflation", "strong productivity", "cooling prices without growth damage"
+            "broad disinflation",
+            "strong productivity",
+            "cooling prices without growth damage",
         ],
     },
 }
 
 HAWK_TERMS = [
-    "further policy firming", "upside risks to inflation", "elevated inflation",
-    "restrictive", "strong labor market", "tight labor market", "not sufficiently restrictive",
+    "further policy firming",
+    "upside risks to inflation",
+    "elevated inflation",
+    "restrictive",
+    "strong labor market",
+    "tight labor market",
+    "not sufficiently restrictive",
 ]
+
 DOVE_TERMS = [
-    "disinflation", "downside risks to employment", "cooling labor market",
-    "softer growth", "policy is restrictive", "balanced risks", "lower rates", "rate cuts"
+    "disinflation",
+    "downside risks to employment",
+    "cooling labor market",
+    "softer growth",
+    "policy is restrictive",
+    "balanced risks",
+    "lower rates",
+    "rate cuts",
 ]
 
 
@@ -670,13 +804,15 @@ def build_similarity_frame(current: MeetingRecord, history: List[MeetingRecord])
         if rec.meeting_date >= current.meeting_date:
             continue
         sim = cosine_counter(current_vec, tf_vector(rec.combined_text))
-        rows.append({
-            "meeting_date": rec.meeting_date,
-            "title": rec.title,
-            "year": rec.year,
-            "page_url": rec.page_url,
-            "similarity": sim,
-        })
+        rows.append(
+            {
+                "meeting_date": rec.meeting_date,
+                "title": rec.title,
+                "year": rec.year,
+                "page_url": rec.page_url,
+                "similarity": sim,
+            }
+        )
 
     if not rows:
         return pd.DataFrame(columns=["meeting_date", "title", "year", "page_url", "similarity"])
@@ -691,8 +827,13 @@ def build_similarity_frame(current: MeetingRecord, history: List[MeetingRecord])
 
 def latest_macro_snapshot(panel: pd.DataFrame) -> Dict[str, float]:
     df = panel.sort_values("date").copy()
+    if df.empty:
+        raise RuntimeError("Macro panel is empty.")
+
     latest = df.iloc[-1]
-    prev_3m = df.iloc[-4] if len(df) >= 4 else latest
+    anchor_date = latest["date"] - pd.DateOffset(months=3)
+    hist = df[df["date"] <= anchor_date]
+    prev_3m = hist.iloc[-1] if not hist.empty else df.iloc[0]
 
     snap = {
         "date": latest["date"],
@@ -775,7 +916,7 @@ col_a, col_b, col_c, col_d, col_e = st.columns(5)
 col_a.metric("Fed Target Mid", pct_fmt(macro_snap["fed_target_mid"], 2))
 col_b.metric("Core PCE YoY", pct_fmt(macro_snap["core_pce_yoy"], 2))
 col_c.metric("Unemployment", pct_fmt(macro_snap["unrate"], 1))
-col_d.metric("3M Δ Unemployment", pct_fmt(macro_snap["unrate_3m_change"], 1))
+col_d.metric("3M Delta Unemployment", pct_fmt(macro_snap["unrate_3m_change"], 1))
 col_e.metric("2s10s", pct_fmt(macro_snap["curve_2s10s"], 2))
 
 st.markdown(f"**Current macro regime:** {macro_regime_label(macro_snap)}")
@@ -812,12 +953,13 @@ status = st.empty()
 
 for i, m in enumerate(meetings_meta):
     try:
-        status.text(f"Loading meeting {i+1}/{len(meetings_meta)}: {m['meeting_date'].date()}")
+        status.text(f"Loading meeting {i + 1}/{len(meetings_meta)}: {m['meeting_date'].date()}")
         rec = load_meeting_record(
             page_url=m["page_url"],
             meeting_date=m["meeting_date"],
             title=m["title"],
             year=m["year"],
+            seed_doc_links=m.get("doc_links"),
         )
 
         rec.statement_text = rec.statement_text or ""
@@ -827,8 +969,8 @@ for i, m in enumerate(meetings_meta):
 
         loaded_records.append(rec)
 
-    except Exception as e:
-        load_errors.append(f"{m['meeting_date'].date()}: {e}")
+    except Exception as exc:
+        load_errors.append(f"{m['meeting_date'].date()}: {exc}")
 
     progress.progress((i + 1) / len(meetings_meta))
 
@@ -843,15 +985,27 @@ if not loaded_records:
 
 loaded_records = sorted(loaded_records, key=lambda x: x.meeting_date, reverse=True)
 
+default_index = 0
+for idx, record in enumerate(loaded_records):
+    if record.combined_text:
+        default_index = idx
+        break
+
 current_options = {
     f"{r.meeting_date.date()} | {r.title[:90]}": idx for idx, r in enumerate(loaded_records)
 }
-selected_label = st.selectbox("Meeting to analyze", list(current_options.keys()), index=0)
+selected_label = st.selectbox("Meeting to analyze", list(current_options.keys()), index=default_index)
 current_rec = loaded_records[current_options[selected_label]]
 
 doc_text = current_rec.combined_text
 scenario_df = score_scenarios(doc_text, macro_snap)
 hd = hawk_dove_balance(doc_text)
+
+if not doc_text:
+    st.warning(
+        "No source text was extracted for the selected meeting. The meeting will still render, "
+        "but the scenario output is using only the macro overlay."
+    )
 
 left, right = st.columns([1.2, 1.4])
 
@@ -903,18 +1057,20 @@ else:
     st.dataframe(show_df[["meeting_date", "title", "similarity", "page_url"]], use_container_width=True)
 
     analog_rows = []
-    rec_map = {r.page_url: r for r in loaded_records}
+    rec_map = {r.meeting_date.date(): r for r in loaded_records}
     for _, row in show_df.iterrows():
-        rec = rec_map.get(row["page_url"])
+        rec = rec_map.get(row["meeting_date"])
         if rec:
             analog_scen = score_scenarios(rec.combined_text, macro_snap)
-            analog_rows.append({
-                "meeting_date": rec.meeting_date.date(),
-                "title": rec.title,
-                "top_scenario": analog_scen.iloc[0]["scenario"],
-                "probability": round(float(analog_scen.iloc[0]["probability"]), 1),
-                "similarity": row["similarity"],
-            })
+            analog_rows.append(
+                {
+                    "meeting_date": rec.meeting_date.date(),
+                    "title": rec.title,
+                    "top_scenario": analog_scen.iloc[0]["scenario"],
+                    "probability": round(float(analog_scen.iloc[0]["probability"]), 1),
+                    "similarity": row["similarity"],
+                }
+            )
 
     if analog_rows:
         st.markdown("**Analog read-through**")
