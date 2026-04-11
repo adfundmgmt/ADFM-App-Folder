@@ -1454,12 +1454,13 @@ def clean_latest_table(view: pd.DataFrame) -> pd.DataFrame:
     latest["inflation"] = latest["inflation_z_fed"].apply(format_z)
     latest["labor"] = latest["labor_z_fed"].apply(format_z)
     latest["growth"] = latest["growth_z_fed"].apply(format_z)
-    latest["policy"] = latest["policy_bucket"]
     latest["date"] = latest["date"].dt.strftime("%Y-%m-%d")
     latest["source"] = latest["url"]
+
     latest = latest[
-        ["date", "speaker", "event_type", "policy", "stance", "tone", "vs own", "fed %ile", "inflation", "labor", "growth", "source"]
+        ["date", "speaker", "event_type", "stance", "tone", "vs own", "fed %ile", "inflation", "labor", "growth", "source"]
     ].rename(columns={"event_type": "type"})
+
     return latest
 
 
@@ -1526,12 +1527,26 @@ def doc_summary_html(doc: pd.Series) -> str:
     labor = make_badge(f"Labor: {emphasis_bucket(doc['labor_z_fed'])}", doc["labor_z_fed"])
     growth = make_badge(f"Growth: {emphasis_bucket(doc['growth_z_fed'])}", doc["growth_z_fed"])
 
-    policy_style = "#efe7ff" if doc["policy_bucket"] == "High" else "#f4f4f4"
-    policy_text = "#4a2ea8" if doc["policy_bucket"] == "High" else "#555555"
+    policy_bucket_value = doc.get("policy_bucket", "Unknown")
+    policy_relevance_value = doc.get("policy_relevance", np.nan)
+    live_signal_value = doc.get("live_signal_share", np.nan)
+
+    if pd.isna(live_signal_value):
+        live_signal_text = "n.a."
+    else:
+        live_signal_text = f"{int(round(float(live_signal_value) * 100))}%"
+
+    if pd.isna(policy_relevance_value):
+        policy_relevance_text = "n.a."
+    else:
+        policy_relevance_text = f"{float(policy_relevance_value):.2f}"
+
+    policy_style = "#efe7ff" if policy_bucket_value == "High" else "#f4f4f4"
+    policy_text = "#4a2ea8" if policy_bucket_value == "High" else "#555555"
     policy_badge = (
         f"<span style='display:inline-block;padding:0.28rem 0.6rem;border-radius:999px;"
         f"background:{policy_style};color:{policy_text};font-weight:600;font-size:0.88rem'>"
-        f"Policy relevance: {html.escape(doc['policy_bucket'])}</span>"
+        f"Policy relevance: {html.escape(str(policy_bucket_value))}</span>"
     )
 
     return f"""
@@ -1554,7 +1569,8 @@ def doc_summary_html(doc: pd.Series) -> str:
             Fed baseline: {format_z(doc['tone_z_fed'])} |
             vs own history: {format_z(doc['tone_z_speaker'])} |
             Fed percentile: {format_pct(doc['tone_percentile_fed'])} |
-            Live-signal share: {int(round((doc['live_signal_share'] or 0) * 100))}%
+            Live-signal share: {live_signal_text} |
+            Policy relevance score: {policy_relevance_text}
         </div>
     </div>
     """
@@ -1698,7 +1714,6 @@ def main() -> None:
         column_config={
             "speaker": st.column_config.TextColumn(width="large"),
             "type": st.column_config.TextColumn(width="small"),
-            "policy": st.column_config.TextColumn(width="small"),
             "stance": st.column_config.TextColumn(width="medium"),
             "tone": st.column_config.TextColumn(width="small"),
             "vs own": st.column_config.TextColumn(width="small"),
