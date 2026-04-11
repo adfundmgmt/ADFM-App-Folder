@@ -244,6 +244,64 @@ def count_phrase_hits(text: str, phrases: List[str]) -> int:
     return hits
 
 
+def safe_mean_std(series: pd.Series) -> Tuple[float, float]:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty:
+        return 0.0, 1.0
+    mean = float(s.mean())
+    std = float(s.std(ddof=0))
+    if std <= 1e-12:
+        std = 1.0
+    return mean, std
+
+
+def zscore_value(value: float, mean: float, std: float) -> float:
+    if pd.isna(value):
+        return np.nan
+    return float((value - mean) / std)
+
+
+def bounded_z(z: float, limit: float = 3.0) -> float:
+    if pd.isna(z):
+        return np.nan
+    return float(np.clip(z, -limit, limit))
+
+
+def percentile_rank(series: pd.Series, value: float) -> float:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty or pd.isna(value):
+        return np.nan
+    return float((s <= value).mean() * 100.0)
+
+
+def tone_bucket(z: float) -> str:
+    if pd.isna(z):
+        return "Unknown"
+    if z >= 1.25:
+        return "Very Hawkish"
+    if z >= 0.35:
+        return "Hawkish"
+    if z <= -1.25:
+        return "Very Dovish"
+    if z <= -0.35:
+        return "Dovish"
+    return "Neutral"
+
+
+def emphasis_bucket(z: float) -> str:
+    if pd.isna(z):
+        return "Unknown"
+    if z >= 1.25:
+        return "Very High"
+    if z >= 0.35:
+        return "High"
+    if z <= -1.25:
+        return "Very Low"
+    if z <= -0.35:
+        return "Low"
+    return "Neutral"
+
+
 def score_text(text: str) -> ToneResult:
     low = clean_text(text).lower()
     words = re.findall(r"\b[a-z][a-z\-']+\b", low)
@@ -288,19 +346,6 @@ def fetch_html(session: requests.Session, url: str) -> BeautifulSoup:
     resp = session.get(url, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     return BeautifulSoup(resp.text, "html.parser")
-
-
-def safe_request_text(session: requests.Session, url: str) -> str:
-    resp = session.get(url, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    return resp.text
-
-
-def infer_event_type_from_url(url: str) -> str:
-    url_low = url.lower()
-    if "testimony" in url_low:
-        return "testimony"
-    return "speech"
 
 
 def parse_year_links(index_soup: BeautifulSoup) -> List[Tuple[str, str, int]]:
@@ -486,7 +531,7 @@ def extract_meta(soup: BeautifulSoup, page_url: str, hints: Dict[str, Optional[s
 
     lines = [clean_text(x) for x in soup.get_text("\n", strip=True).split("\n") if clean_text(x)]
 
-    for i, line in enumerate(lines[:120]):
+    for line in lines[:120]:
         maybe_date = parse_date_text(line)
         if maybe_date and result["date"] is None:
             result["date"] = maybe_date
@@ -704,12 +749,7 @@ def load_documents() -> pd.DataFrame:
     return df
 
 
-def refresh_corpus(
-    max_years: int = 6,
-    force_refresh: bool = False,
-    progress_bar=None,
-    status_box=None,
-) -> Dict[str, int]:
+def refresh_corpus(max_years: int = 6, force_refresh: bool = False, progress_bar=None, status_box=None) -> Dict[str, int]:
     init_db()
     clear_log()
 
@@ -784,10 +824,7 @@ def refresh_corpus(
                 doc = parse_document(session, item)
                 if not doc["body_text"] or int(doc["word_count"] or 0) < 80:
                     stats["failed_docs"] += 1
-                    log_event(
-                        "WARN",
-                        f"Skipped short/empty body for {item['url']} | words={doc.get('word_count')}"
-                    )
+                    log_event("WARN", f"Skipped short/empty body for {item['url']} | words={doc.get('word_count')}")
                     continue
 
                 upsert_document(conn, doc)
@@ -808,30 +845,57 @@ def refresh_corpus(
     return stats
 
 
-def classify_stance(net_score: float) -> str:
-    if pd.isna(net_score):
-        return "Unknown"
-    if net_score >= 0.35:
-        return "Hawkish"
-    if net_score <= -0.35:
-        return "Dovish"
-    return "Neutral"
-
-
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
     out = df.copy()
-    out["stance"] = out["net_score"].apply(classify_stance)
 
-    speaker_mean = out.groupby("speaker", dropna=False)["net_score"].transform("mean")
-    out["speaker_delta"] = out["net_score"] - speaker_mean
+    corpus_mean, corpus_std = safe_mean_std(out["net_score"])
+    infl_mean, infl_std = safe_mean_std(out["inflation_concern"])
+    labor_mean, labor_std = safe_mean_std(out["labor_concern"])
+    growth_mean, growth_std = safe_mean_std(out["growth_concern"])
+    fs_mean, fs_std = safe_mean_std(out["financial_stability"])
+    unc_mean, unc_std = safe_mean_std(out["uncertainty_risk"])
+
+    out["tone_z_fed"] = out["net_score"].apply(lambda x: bounded_z(zscore_value(x, corpus_mean, corpus_std)))
+    out["inflation_z_fed"] = out["inflation_concern"].apply(lambda x: bounded_z(zscore_value(x, infl_mean, infl_std)))
+    out["labor_z_fed"] = out["labor_concern"].apply(lambda x: bounded_z(zscore_value(x, labor_mean, labor_std)))
+    out["growth_z_fed"] = out["growth_concern"].apply(lambda x: bounded_z(zscore_value(x, growth_mean, growth_std)))
+    out["fs_z_fed"] = out["financial_stability"].apply(lambda x: bounded_z(zscore_value(x, fs_mean, fs_std)))
+    out["uncertainty_z_fed"] = out["uncertainty_risk"].apply(lambda x: bounded_z(zscore_value(x, unc_mean, unc_std)))
 
     out["speaker_weight"] = out["speaker"].map(SPEAKER_WEIGHTS).fillna(1.0)
-    out["weighted_net"] = out["net_score"] * out["speaker_weight"]
-    out["weighted_hawkish"] = out["hawkish_score"] * out["speaker_weight"]
-    out["weighted_dovish"] = out["dovish_score"] * out["speaker_weight"]
+
+    out["tone_z_speaker"] = np.nan
+    out["inflation_z_speaker"] = np.nan
+    out["labor_z_speaker"] = np.nan
+    out["growth_z_speaker"] = np.nan
+
+    for speaker, idx in out.groupby("speaker", dropna=False).groups.items():
+        subset = out.loc[idx]
+        m, s = safe_mean_std(subset["net_score"])
+        out.loc[idx, "tone_z_speaker"] = subset["net_score"].apply(lambda x: bounded_z(zscore_value(x, m, s)))
+        m, s = safe_mean_std(subset["inflation_concern"])
+        out.loc[idx, "inflation_z_speaker"] = subset["inflation_concern"].apply(lambda x: bounded_z(zscore_value(x, m, s)))
+        m, s = safe_mean_std(subset["labor_concern"])
+        out.loc[idx, "labor_z_speaker"] = subset["labor_concern"].apply(lambda x: bounded_z(zscore_value(x, m, s)))
+        m, s = safe_mean_std(subset["growth_concern"])
+        out.loc[idx, "growth_z_speaker"] = subset["growth_concern"].apply(lambda x: bounded_z(zscore_value(x, m, s)))
+
+    out["tone_percentile_fed"] = out["net_score"].apply(lambda x: percentile_rank(out["net_score"], x))
+    out["inflation_percentile_fed"] = out["inflation_concern"].apply(lambda x: percentile_rank(out["inflation_concern"], x))
+    out["labor_percentile_fed"] = out["labor_concern"].apply(lambda x: percentile_rank(out["labor_concern"], x))
+    out["growth_percentile_fed"] = out["growth_concern"].apply(lambda x: percentile_rank(out["growth_concern"], x))
+
+    out["stance"] = out["tone_z_fed"].apply(tone_bucket)
+    out["speaker_delta"] = out["tone_z_speaker"]
+
+    out["tone_regime"] = pd.cut(
+        out["tone_z_fed"],
+        bins=[-np.inf, -1.25, -0.35, 0.35, 1.25, np.inf],
+        labels=["Very Dovish", "Dovish", "Neutral", "Hawkish", "Very Hawkish"],
+    )
 
     return out
 
@@ -855,9 +919,10 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
         .apply(
             lambda x: pd.Series(
                 {
-                    "tone_composite": np.average(x["net_score"], weights=x["speaker_weight"]),
-                    "hawkish_composite": np.average(x["hawkish_score"], weights=x["speaker_weight"]),
-                    "dovish_composite": np.average(x["dovish_score"], weights=x["speaker_weight"]),
+                    "tone_z_fed": np.average(x["tone_z_fed"], weights=x["speaker_weight"]),
+                    "inflation_z_fed": np.average(x["inflation_z_fed"], weights=x["speaker_weight"]),
+                    "labor_z_fed": np.average(x["labor_z_fed"], weights=x["speaker_weight"]),
+                    "growth_z_fed": np.average(x["growth_z_fed"], weights=x["speaker_weight"]),
                     "documents": len(x),
                 }
             )
@@ -868,26 +933,41 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
+    grouped["tone_3m_ma"] = grouped["tone_z_fed"].rolling(3, min_periods=1).mean()
+    grouped["tone_6m_ma"] = grouped["tone_z_fed"].rolling(6, min_periods=1).mean()
     return grouped
 
 
 def latest_snapshot(df: pd.DataFrame) -> Dict[str, float]:
     if df.empty:
-        return {"tone": np.nan, "delta_30d": np.nan, "core_tone": np.nan}
+        return {
+            "tone_z_fed": np.nan,
+            "delta_30d": np.nan,
+            "core_tone_z": np.nan,
+            "tone_percentile_fed": np.nan,
+        }
 
     window = aggregate_series(df, freq="30D")
-    tone = window["tone_composite"].iloc[-1] if not window.empty else np.nan
+    tone = window["tone_z_fed"].iloc[-1] if not window.empty else np.nan
+
     delta_30d = np.nan
     if len(window) >= 2:
-        delta_30d = tone - window["tone_composite"].iloc[-2]
+        delta_30d = tone - window["tone_z_fed"].iloc[-2]
 
     core = df[
         df["speaker"].isin(
             ["Jerome H. Powell", "Philip N. Jefferson", "John C. Williams", "Christopher J. Waller"]
         )
     ]
-    core_tone = np.average(core["net_score"], weights=core["speaker_weight"]) if not core.empty else np.nan
-    return {"tone": tone, "delta_30d": delta_30d, "core_tone": core_tone}
+    core_tone = np.average(core["tone_z_fed"], weights=core["speaker_weight"]) if not core.empty else np.nan
+
+    latest_doc = df.sort_values("date").iloc[-1]
+    return {
+        "tone_z_fed": tone,
+        "delta_30d": delta_30d,
+        "core_tone_z": core_tone,
+        "tone_percentile_fed": float(latest_doc["tone_percentile_fed"]) if "tone_percentile_fed" in latest_doc else np.nan,
+    }
 
 
 def split_sentences(text: str) -> List[str]:
@@ -902,12 +982,14 @@ def find_snippets(text: str, phrases: List[str], max_snippets: int = 4) -> List[
 
     sentences = split_sentences(text)
     found = []
+
     for sent in sentences:
         low = sent.lower()
         if any(phrase.lower() in low for phrase in phrases):
             found.append(sent)
         if len(found) >= max_snippets:
             break
+
     return found
 
 
@@ -932,25 +1014,26 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
         df.groupby("speaker", dropna=False)
         .agg(
             docs=("url", "count"),
-            tone=("net_score", "mean"),
-            hawkish=("hawkish_score", "mean"),
-            dovish=("dovish_score", "mean"),
+            tone_z_fed=("tone_z_fed", "mean"),
+            tone_z_speaker=("tone_z_speaker", "mean"),
+            inflation_z_fed=("inflation_z_fed", "mean"),
+            labor_z_fed=("labor_z_fed", "mean"),
             last_date=("date", "max"),
         )
         .reset_index()
     )
 
-    agg["stance"] = agg["tone"].apply(classify_stance)
-
-    deltas = (
+    latest = (
         df.sort_values("date")
         .groupby("speaker", dropna=False)
-        .tail(1)[["speaker", "speaker_delta", "stance"]]
+        .tail(1)[["speaker", "tone_z_speaker", "tone_z_fed", "stance"]]
+        .rename(columns={"tone_z_speaker": "latest_vs_own", "tone_z_fed": "latest_vs_fed"})
     )
 
-    agg = agg.merge(deltas, on="speaker", how="left", suffixes=("", "_latest"))
+    agg = agg.merge(latest, on="speaker", how="left")
     agg["weight"] = agg["speaker"].map(SPEAKER_WEIGHTS).fillna(1.0)
-    agg = agg.sort_values(["weight", "docs", "tone"], ascending=[False, False, False]).head(top_n)
+    agg["avg_stance"] = agg["tone_z_fed"].apply(tone_bucket)
+    agg = agg.sort_values(["weight", "docs", "tone_z_fed"], ascending=[False, False, False]).head(top_n)
     return agg
 
 
@@ -958,11 +1041,12 @@ def render_about() -> None:
     with st.sidebar.expander("About This Tool", expanded=False):
         st.write(
             "This dashboard scrapes Federal Reserve speeches and testimony directly from the Board website, "
-            "scores each document on hawkish and dovish language, and tracks how individual speaker tone shifts over time."
+            "scores each document on hawkish and dovish language, and shows how speaker tone is shifting "
+            "relative to both that speaker's own history and the broader Fed baseline."
         )
         st.write(
-            "It is built for primary-source underwriting. The point is to narrow the reading set and surface passages "
-            "that are actually driving the tone score."
+            "The focus is signal extraction from primary source text. The highlighted transcript excerpt is "
+            "meant to sit at the center of the workflow so you can validate the score quickly."
         )
 
 
@@ -982,6 +1066,227 @@ def render_diagnostics(log_df: pd.DataFrame, stats: Optional[Dict[str, int]] = N
         st.info("No scrape log yet.")
     else:
         st.dataframe(log_df, use_container_width=True, hide_index=True)
+
+
+def format_z(x: float) -> str:
+    if pd.isna(x):
+        return "n.a."
+    return f"{x:+.2f}σ"
+
+
+def format_pct(x: float) -> str:
+    if pd.isna(x):
+        return "n.a."
+    return f"{x:.0f}th %ile"
+
+
+def make_badge(label: str, z: float) -> str:
+    color = "#d9ead3"
+    text = "#1f4e2d"
+    if pd.isna(z):
+        color = "#eaeaea"
+        text = "#555555"
+    elif z <= -0.35:
+        color = "#dbe9ff"
+        text = "#123a70"
+    elif z >= 0.35:
+        color = "#fde2e2"
+        text = "#7a1f1f"
+
+    return (
+        f"<span style='display:inline-block;padding:0.28rem 0.6rem;border-radius:999px;"
+        f"background:{color};color:{text};font-weight:600;font-size:0.88rem'>{html.escape(label)}</span>"
+    )
+
+
+def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+
+    fig.add_hrect(y0=-3, y1=-1.25, fillcolor="rgba(91,155,213,0.08)", line_width=0)
+    fig.add_hrect(y0=-1.25, y1=-0.35, fillcolor="rgba(91,155,213,0.04)", line_width=0)
+    fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="rgba(180,180,180,0.05)", line_width=0)
+    fig.add_hrect(y0=0.35, y1=1.25, fillcolor="rgba(192,80,77,0.04)", line_width=0)
+    fig.add_hrect(y0=1.25, y1=3, fillcolor="rgba(192,80,77,0.08)", line_width=0)
+
+    fig.add_trace(
+        go.Scatter(
+            x=series["date"],
+            y=series["tone_z_fed"],
+            mode="lines+markers",
+            name="Institutional tone z-score",
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=series["date"],
+            y=series["tone_3m_ma"],
+            mode="lines",
+            name="3-bucket mean",
+            line=dict(dash="dot"),
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=series["date"],
+            y=series["tone_6m_ma"],
+            mode="lines",
+            name="6-bucket mean",
+            line=dict(dash="dash"),
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
+        )
+    )
+
+    fig.update_layout(
+        height=420,
+        margin=dict(l=20, r=20, t=40, b=20),
+        title="Fed tone over time",
+        yaxis_title="Z-score vs Fed baseline",
+        xaxis_title="",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    return fig
+
+
+def emphasis_heatmap_figure(series: pd.DataFrame) -> go.Figure:
+    latest = series.tail(12).copy()
+    if latest.empty:
+        return go.Figure()
+
+    z = np.array([
+        latest["inflation_z_fed"].tolist(),
+        latest["labor_z_fed"].tolist(),
+        latest["growth_z_fed"].tolist(),
+    ])
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=latest["date"].dt.strftime("%Y-%m-%d"),
+            y=["Inflation", "Labor", "Growth"],
+            zmin=-2.5,
+            zmax=2.5,
+            hovertemplate="%{y}<br>%{x}<br>%{z:.2f}σ<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        height=420,
+        margin=dict(l=20, r=20, t=40, b=20),
+        title="Theme emphasis by period",
+        xaxis_title="",
+        yaxis_title="",
+    )
+    return fig
+
+
+def clean_latest_table(view: pd.DataFrame) -> pd.DataFrame:
+    latest = view.sort_values("date", ascending=False).copy()
+    latest["open"] = latest["url"].apply(lambda x: f'<a href="{x}" target="_blank">open</a>')
+    latest["tone"] = latest["tone_z_fed"].apply(format_z)
+    latest["vs own"] = latest["tone_z_speaker"].apply(format_z)
+    latest["inflation"] = latest["inflation_z_fed"].apply(format_z)
+    latest["labor"] = latest["labor_z_fed"].apply(format_z)
+    latest["growth"] = latest["growth_z_fed"].apply(format_z)
+    latest["fed %ile"] = latest["tone_percentile_fed"].apply(format_pct)
+    latest = latest[
+        ["date", "speaker", "event_type", "stance", "tone", "vs own", "fed %ile", "inflation", "labor", "growth", "open"]
+    ].rename(columns={"event_type": "type"})
+    return latest
+
+
+def scorecard_dataframe(doc: pd.Series) -> pd.DataFrame:
+    rows = [
+        ("Overall tone", doc["tone_z_fed"], doc["tone_percentile_fed"], tone_bucket(doc["tone_z_fed"])),
+        ("Vs own history", doc["tone_z_speaker"], np.nan, tone_bucket(doc["tone_z_speaker"])),
+        ("Inflation emphasis", doc["inflation_z_fed"], doc["inflation_percentile_fed"], emphasis_bucket(doc["inflation_z_fed"])),
+        ("Labor emphasis", doc["labor_z_fed"], doc["labor_percentile_fed"], emphasis_bucket(doc["labor_z_fed"])),
+        ("Growth emphasis", doc["growth_z_fed"], doc["growth_percentile_fed"], emphasis_bucket(doc["growth_z_fed"])),
+        ("Financial stability", doc["fs_z_fed"], np.nan, emphasis_bucket(doc["fs_z_fed"])),
+        ("Uncertainty", doc["uncertainty_z_fed"], np.nan, emphasis_bucket(doc["uncertainty_z_fed"])),
+    ]
+    out = pd.DataFrame(rows, columns=["dimension", "z", "percentile", "bucket"])
+    return out
+
+
+def scorecard_figure(scorecard: pd.DataFrame) -> go.Figure:
+    plot_df = scorecard.copy()
+    plot_df = plot_df.sort_values("z", ascending=True)
+    fig = go.Figure(
+        go.Bar(
+            x=plot_df["z"],
+            y=plot_df["dimension"],
+            orientation="h",
+            text=[f"{z:+.2f}σ" if pd.notna(z) else "n.a." for z in plot_df["z"]],
+            textposition="outside",
+            hovertemplate="%{y}<br>%{x:.2f}σ<extra></extra>",
+        )
+    )
+    fig.add_vline(x=-0.35, line_dash="dot", line_width=1)
+    fig.add_vline(x=0.35, line_dash="dot", line_width=1)
+    fig.add_vline(x=-1.25, line_dash="dash", line_width=1)
+    fig.add_vline(x=1.25, line_dash="dash", line_width=1)
+    fig.update_layout(
+        height=360,
+        margin=dict(l=20, r=20, t=40, b=20),
+        title="Document scorecard",
+        xaxis_title="Z-score",
+        yaxis_title="",
+        xaxis=dict(range=[-3, 3]),
+    )
+    return fig
+
+
+def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
+    fig = px.scatter(
+        matrix,
+        x="latest_vs_fed",
+        y="speaker",
+        size="docs",
+        color="latest_vs_own",
+        hover_data=["avg_stance", "last_date", "docs", "latest_vs_own", "latest_vs_fed"],
+        title="Speaker matrix",
+        height=420,
+    )
+    fig.update_layout(
+        margin=dict(l=20, r=20, t=40, b=20),
+        xaxis_title="Latest speech vs Fed baseline (z-score)",
+        yaxis_title="",
+        coloraxis_colorbar_title="Vs own history",
+    )
+    return fig
+
+
+def doc_summary_html(doc: pd.Series) -> str:
+    tone = make_badge(tone_bucket(doc["tone_z_fed"]), doc["tone_z_fed"])
+    own = make_badge(tone_bucket(doc["tone_z_speaker"]), doc["tone_z_speaker"])
+    infl = make_badge(emphasis_bucket(doc["inflation_z_fed"]), doc["inflation_z_fed"])
+    labor = make_badge(emphasis_bucket(doc["labor_z_fed"]), doc["labor_z_fed"])
+    growth = make_badge(emphasis_bucket(doc["growth_z_fed"]), doc["growth_z_fed"])
+
+    html_text = f"""
+    <div style="padding:0.9rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fafafa">
+        <div style="font-size:1.05rem;font-weight:700;margin-bottom:0.45rem">{html.escape(doc['title'] or 'Untitled')}</div>
+        <div style="margin-bottom:0.55rem;color:#555">
+            {html.escape(str(doc['date'].date()) if pd.notna(doc['date']) else 'Unknown date')} |
+            {html.escape(doc['speaker'] or 'Unknown speaker')} |
+            {html.escape((doc['event_type'] or '').title())}
+        </div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.6rem">
+            {tone}
+            {own}
+            {infl}
+            {labor}
+            {growth}
+        </div>
+        <div style="font-size:0.92rem;color:#555">
+            Fed baseline: {format_z(doc['tone_z_fed'])} |
+            vs own history: {format_z(doc['tone_z_speaker'])} |
+            Fed percentile: {format_pct(doc['tone_percentile_fed'])}
+        </div>
+    </div>
+    """
+    return html_text
 
 
 def main() -> None:
@@ -1030,7 +1335,6 @@ def main() -> None:
         st.stop()
 
     df = compute_features(df)
-
     st.success(f"Loaded {len(df):,} documents.")
 
     min_date_ts = df["date"].dropna().min()
@@ -1085,85 +1389,26 @@ def main() -> None:
         st.stop()
 
     snapshot = latest_snapshot(view)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Tone composite", f"{snapshot['tone']:.2f}" if pd.notna(snapshot["tone"]) else "n.a.")
-    c2.metric("30-day change", f"{snapshot['delta_30d']:+.2f}" if pd.notna(snapshot["delta_30d"]) else "n.a.")
-    c3.metric("Core speaker tone", f"{snapshot['core_tone']:.2f}" if pd.notna(snapshot["core_tone"]) else "n.a.")
-    c4.metric("Documents in view", f"{len(view):,}")
-
     series = aggregate_series(view, freq="30D")
-    left, right = st.columns([1.7, 1.1])
 
-    with left:
-        if not series.empty:
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scatter(
-                    x=series["date"],
-                    y=series["tone_composite"],
-                    mode="lines+markers",
-                    name="Tone composite",
-                )
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=series["date"],
-                    y=series["hawkish_composite"],
-                    mode="lines",
-                    name="Hawkish",
-                )
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=series["date"],
-                    y=series["dovish_composite"],
-                    mode="lines",
-                    name="Dovish",
-                )
-            )
-            fig.update_layout(
-                height=420,
-                margin=dict(l=20, r=20, t=40, b=20),
-                title="Fed tone over time",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No time series available for the current filters.")
+    a, b, c, d, e = st.columns(5)
+    a.metric("Institutional tone", format_z(snapshot["tone_z_fed"]))
+    b.metric("30-day change", format_z(snapshot["delta_30d"]))
+    c.metric("Core speaker tone", format_z(snapshot["core_tone_z"]))
+    d.metric("Latest percentile", format_pct(snapshot["tone_percentile_fed"]))
+    e.metric("Documents in view", f"{len(view):,}")
 
-    with right:
-        matrix = speaker_matrix(view, top_n=12)
-        if not matrix.empty:
-            heat = px.scatter(
-                matrix,
-                x="tone",
-                y="speaker",
-                size="docs",
-                color="speaker_delta",
-                hover_data=["stance", "last_date", "docs"],
-                title="Speaker matrix",
-                height=420,
-            )
-            heat.update_layout(margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(heat, use_container_width=True)
-        else:
-            st.info("No speaker matrix available.")
+    top_left, top_right = st.columns([1.75, 1.0])
+
+    with top_left:
+        st.plotly_chart(z_dashboard_figure(series), use_container_width=True)
+
+    with top_right:
+        st.plotly_chart(emphasis_heatmap_figure(series), use_container_width=True)
 
     st.subheader("Latest communication")
-    latest_cols = [
-        "date", "speaker", "event_type", "title", "stance", "net_score", "speaker_delta",
-        "inflation_concern", "labor_concern", "growth_concern", "url"
-    ]
-    latest_view = view.sort_values("date", ascending=False)[latest_cols].copy()
-    latest_view = latest_view.rename(
-        columns={
-            "net_score": "tone",
-            "speaker_delta": "delta vs speaker baseline",
-            "inflation_concern": "inflation",
-            "labor_concern": "labor",
-            "growth_concern": "growth",
-        }
-    )
-    st.dataframe(latest_view, use_container_width=True, hide_index=True)
+    latest_table = clean_latest_table(view)
+    st.markdown(latest_table.to_html(index=False, escape=False), unsafe_allow_html=True)
 
     st.subheader("Transcript underwrite")
     options = view.sort_values("date", ascending=False).copy()
@@ -1171,107 +1416,100 @@ def main() -> None:
         lambda r: f"{r['date'].date() if pd.notna(r['date']) else 'n.a.'} | {r['speaker'] or 'Unknown'} | {r['title']}",
         axis=1,
     )
-
     selected_label = st.selectbox("Choose a document", options["label"].tolist(), index=0)
     doc = options.loc[options["label"] == selected_label].iloc[0]
 
-    d1, d2 = st.columns([1.2, 1.8])
+    st.markdown(doc_summary_html(doc), unsafe_allow_html=True)
 
-    with d1:
-        st.markdown(f"**Title**: {doc['title']}")
-        st.markdown(f"**Speaker**: {doc['speaker'] or 'Unknown'}")
-        st.markdown(f"**Role**: {doc['role'] or 'Unknown'}")
-        st.markdown(f"**Date**: {doc['date'].date() if pd.notna(doc['date']) else 'Unknown'}")
-        st.markdown(f"**Event type**: {doc['event_type'].title()}")
-        if doc.get("venue"):
-            st.markdown(f"**Venue**: {doc['venue']}")
-        st.markdown(f"**Tone**: {doc['stance']} ({doc['net_score']:.2f})")
-        if pd.notna(doc["speaker_delta"]):
-            st.markdown(f"**Delta vs speaker baseline**: {doc['speaker_delta']:+.2f}")
-        else:
-            st.markdown("**Delta vs speaker baseline**: n.a.")
-        st.markdown(f"**Source**: [Open original]({doc['url']})")
-        if doc.get("pdf_url"):
-            st.markdown(f"**PDF**: [Open PDF]({doc['pdf_url']})")
+    upper_left, upper_right = st.columns([1.5, 1.0])
 
-        scorecard = pd.DataFrame(
-            {
-                "dimension": [
-                    "hawkish",
-                    "dovish",
-                    "inflation",
-                    "labor",
-                    "growth",
-                    "financial stability",
-                    "balance sheet",
-                    "uncertainty",
-                ],
-                "score": [
-                    doc["hawkish_score"],
-                    doc["dovish_score"],
-                    doc["inflation_concern"],
-                    doc["labor_concern"],
-                    doc["growth_concern"],
-                    doc["financial_stability"],
-                    doc["balance_sheet"],
-                    doc["uncertainty_risk"],
-                ],
-            }
+    with upper_left:
+        st.markdown("**Highlighted transcript excerpt**")
+        excerpt = clean_text(doc["body_text"])[:6000]
+        patterns = list({p for vals in SNIPPET_PATTERNS.values() for p in vals})
+        st.markdown(
+            f"<div style='line-height:1.65;padding:0.95rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fff'>{highlight_terms(excerpt, patterns)}</div>",
+            unsafe_allow_html=True,
         )
-        bar = px.bar(
-            scorecard,
-            x="score",
-            y="dimension",
-            orientation="h",
-            height=320,
-            title="Document scorecard",
-        )
-        bar.update_layout(
-            margin=dict(l=20, r=20, t=40, b=20),
-            yaxis=dict(categoryorder="total ascending"),
-        )
-        st.plotly_chart(bar, use_container_width=True)
 
-    with d2:
-        hawk_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["hawkish"], max_snippets=4)
-        dove_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["dovish"], max_snippets=4)
+        hawk_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["hawkish"], max_snippets=3)
+        dove_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["dovish"], max_snippets=3)
         infl_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["inflation"], max_snippets=2)
         labor_snips = find_snippets(doc["body_text"], SNIPPET_PATTERNS["labor"], max_snippets=2)
 
         st.markdown("**Passages driving the score**")
-
         if hawk_snips:
             st.markdown("Hawkish passages")
             for s in hawk_snips:
                 st.markdown(f"> {s}")
-
         if dove_snips:
             st.markdown("Dovish passages")
             for s in dove_snips:
                 st.markdown(f"> {s}")
-
         if infl_snips:
             st.markdown("Inflation passages")
             for s in infl_snips:
                 st.markdown(f"> {s}")
-
         if labor_snips:
             st.markdown("Labor passages")
             for s in labor_snips:
                 st.markdown(f"> {s}")
 
-        st.markdown("**Highlighted transcript excerpt**")
-        excerpt = clean_text(doc["body_text"])[:6000]
-        patterns = list({p for vals in SNIPPET_PATTERNS.values() for p in vals})
+    with upper_right:
+        st.markdown("**Document interpretation**")
         st.markdown(
-            f"<div style='line-height:1.6'>{highlight_terms(excerpt, patterns)}</div>",
+            f"""
+            <div style="padding:0.95rem 1rem;border:1px solid #e6e6e6;border-radius:0.8rem;background:#fafafa;line-height:1.7">
+                <div><strong>Title</strong>: {html.escape(doc['title'] or 'Unknown')}</div>
+                <div><strong>Speaker</strong>: {html.escape(doc['speaker'] or 'Unknown')}</div>
+                <div><strong>Role</strong>: {html.escape(doc['role'] or 'Unknown')}</div>
+                <div><strong>Date</strong>: {html.escape(str(doc['date'].date()) if pd.notna(doc['date']) else 'Unknown')}</div>
+                <div><strong>Type</strong>: {html.escape((doc['event_type'] or '').title())}</div>
+                <div><strong>Fed baseline</strong>: {format_z(doc['tone_z_fed'])} ({tone_bucket(doc['tone_z_fed'])})</div>
+                <div><strong>Vs own history</strong>: {format_z(doc['tone_z_speaker'])} ({tone_bucket(doc['tone_z_speaker'])})</div>
+                <div><strong>Fed percentile</strong>: {format_pct(doc['tone_percentile_fed'])}</div>
+                <div><strong>Source</strong>: <a href="{html.escape(doc['url'])}" target="_blank">open original</a></div>
+                {"<div><strong>PDF</strong>: <a href='" + html.escape(doc['pdf_url']) + "' target='_blank'>open pdf</a></div>" if doc.get("pdf_url") else ""}
+            </div>
+            """,
             unsafe_allow_html=True,
         )
 
+        scorecard = scorecard_dataframe(doc)
+        st.plotly_chart(scorecard_figure(scorecard), use_container_width=True)
+
+        scorecard_display = scorecard.copy()
+        scorecard_display["z"] = scorecard_display["z"].apply(format_z)
+        scorecard_display["percentile"] = scorecard_display["percentile"].apply(format_pct)
+        st.dataframe(scorecard_display, use_container_width=True, hide_index=True)
+
+    bottom_left, bottom_right = st.columns([1.5, 1.1])
+
+    with bottom_left:
+        matrix = speaker_matrix(view, top_n=12)
+        if not matrix.empty:
+            st.plotly_chart(speaker_matrix_figure(matrix), use_container_width=True)
+        else:
+            st.info("No speaker matrix available.")
+
+    with bottom_right:
+        speaker_latest = (
+            view.sort_values("date", ascending=False)
+            .groupby("speaker", dropna=False)
+            .head(1)[["speaker", "tone_z_fed", "tone_z_speaker", "stance", "date"]]
+            .sort_values("tone_z_fed", ascending=False)
+            .rename(columns={"tone_z_fed": "vs Fed", "tone_z_speaker": "vs own"})
+        )
+        speaker_latest["vs Fed"] = speaker_latest["vs Fed"].apply(format_z)
+        speaker_latest["vs own"] = speaker_latest["vs own"].apply(format_z)
+        st.markdown("**Latest speaker tape**")
+        st.dataframe(speaker_latest, use_container_width=True, hide_index=True)
+
     st.subheader("Export")
     export_cols = [
-        "date", "speaker", "role", "event_type", "title", "stance", "net_score", "speaker_delta",
-        "hawkish_score", "dovish_score", "inflation_concern", "labor_concern", "growth_concern",
+        "date", "speaker", "role", "event_type", "title", "stance",
+        "tone_z_fed", "tone_z_speaker", "tone_percentile_fed",
+        "inflation_z_fed", "labor_z_fed", "growth_z_fed",
         "financial_stability", "balance_sheet", "uncertainty_risk", "url"
     ]
     csv_bytes = (
