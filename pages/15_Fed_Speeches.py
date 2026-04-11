@@ -1083,23 +1083,58 @@ def make_badge(label: str, z: float) -> str:
 def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
 
-    # --- dynamic Y range (adaptive but still anchored) ---
-    y_min = series["tone_z_fed_smooth"].min()
-    y_max = series["tone_z_fed_smooth"].max()
+    y_series = pd.to_numeric(series["tone_z_fed_smooth"], errors="coerce").dropna()
+    ma3_series = pd.to_numeric(series["tone_3m_ma"], errors="coerce").dropna()
+    ma6_series = pd.to_numeric(series["tone_6m_ma"], errors="coerce").dropna()
 
-    # add breathing room
-    padding = 0.4
-    y_low = min(-2.5, y_min - padding)
-    y_high = max(2.5, y_max + padding)
+    combined_y = pd.concat([y_series, ma3_series, ma6_series], axis=0).dropna()
 
-    # --- regime shading (kept consistent) ---
-    fig.add_hrect(y0=-3, y1=-1.25, fillcolor="rgba(46, 125, 50, 0.12)", line_width=0)
-    fig.add_hrect(y0=-1.25, y1=-0.35, fillcolor="rgba(46, 125, 50, 0.06)", line_width=0)
-    fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="rgba(160, 160, 160, 0.05)", line_width=0)
-    fig.add_hrect(y0=0.35, y1=1.25, fillcolor="rgba(183, 28, 28, 0.06)", line_width=0)
-    fig.add_hrect(y0=1.25, y1=3, fillcolor="rgba(183, 28, 28, 0.12)", line_width=0)
+    if combined_y.empty:
+        y_low, y_high = -1.5, 1.5
+    else:
+        y_min = float(combined_y.min())
+        y_max = float(combined_y.max())
 
-    # --- main series ---
+        # tighter dynamic padding
+        pad = max(0.18, (y_max - y_min) * 0.18)
+
+        y_low = y_min - pad
+        y_high = y_max + pad
+
+        # round nicely to 0.25 increments
+        y_low = np.floor(y_low / 0.25) * 0.25
+        y_high = np.ceil(y_high / 0.25) * 0.25
+
+        # keep some minimum visual room
+        if (y_high - y_low) < 1.5:
+            mid = (y_high + y_low) / 2
+            y_low = mid - 0.75
+            y_high = mid + 0.75
+
+        # hard cap so it doesn't become silly
+        y_low = max(y_low, -3.0)
+        y_high = min(y_high, 3.0)
+
+    # shading clipped to visible range
+    def add_band(y0, y1, color, opacity):
+        band_low = max(y0, y_low)
+        band_high = min(y1, y_high)
+        if band_high > band_low:
+            fig.add_hrect(
+                y0=band_low,
+                y1=band_high,
+                fillcolor=color,
+                opacity=opacity,
+                line_width=0,
+            )
+
+    # dovish = green, hawkish = red
+    add_band(-3.0, -1.25, "rgb(46, 125, 50)", 0.12)
+    add_band(-1.25, -0.35, "rgb(46, 125, 50)", 0.06)
+    add_band(-0.35, 0.35, "rgb(160, 160, 160)", 0.05)
+    add_band(0.35, 1.25, "rgb(183, 28, 28)", 0.06)
+    add_band(1.25, 3.0, "rgb(183, 28, 28)", 0.12)
+
     fig.add_trace(
         go.Scatter(
             x=series["date"],
@@ -1108,6 +1143,7 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             name="Institutional tone z-score",
             line=dict(width=2.4),
             marker=dict(size=6),
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
 
@@ -1118,6 +1154,7 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             mode="lines",
             name="3-bucket mean",
             line=dict(dash="dot", width=2),
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
 
@@ -1128,40 +1165,49 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
             mode="lines",
             name="6-bucket mean",
             line=dict(dash="dash", width=2),
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
 
-    # --- dynamic X range (tight to data, no dead space) ---
     x_min = series["date"].min()
     x_max = series["date"].max()
+
+    y_span = y_high - y_low
+    if y_span <= 1.5:
+        dtick = 0.25
+    elif y_span <= 3.0:
+        dtick = 0.5
+    else:
+        dtick = 1.0
 
     fig.update_layout(
         height=470,
         margin=dict(l=20, r=20, t=84, b=28),
-        title=dict(text="Fed tone over time", x=0.01, xanchor="left"),
+        title=dict(text="Fed tone over time", x=0.01, xanchor="left", y=0.98, yanchor="top"),
         yaxis_title="Z-score vs Fed baseline",
-
+        xaxis_title="",
         xaxis=dict(
             range=[x_min, x_max],
             showgrid=True,
             tickformat="%Y",
-            dtick="M12",  # cleaner yearly ticks
+            dtick="M12",
+            automargin=True,
         ),
-
         yaxis=dict(
             range=[y_low, y_high],
             tickmode="linear",
-            dtick=0.5,  # tighter readability
+            dtick=dtick,
             zeroline=True,
             zerolinewidth=1,
+            automargin=True,
         ),
-
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.03,
             xanchor="left",
             x=0.0,
+            bgcolor="rgba(255,255,255,0.7)",
         ),
     )
 
