@@ -50,9 +50,10 @@ FED_BASE = "https://www.federalreserve.gov"
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}"
 
-REQUEST_TIMEOUT = 20
-MAX_RETRIES = 3
-RETRY_SLEEP = 1.25
+CONNECT_TIMEOUT = 3.05
+READ_TIMEOUT = 8
+MAX_RETRIES = 1
+RETRY_SLEEP = 0.5
 
 # =========================
 # Utility helpers
@@ -62,8 +63,7 @@ RETRY_SLEEP = 1.25
 def clean_text(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def normalize_whitespace(text: str) -> str:
@@ -91,24 +91,24 @@ def yoy(series: pd.Series) -> pd.Series:
     return (series / series.shift(12) - 1) * 100
 
 
-def make_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": USER_AGENT})
-    return s
-
-
-def fetch_url(url: str, session: Optional[requests.Session] = None, timeout: int = REQUEST_TIMEOUT) -> requests.Response:
-    sess = session or make_session()
+def fetch_url(url: str) -> requests.Response:
+    headers = {"User-Agent": USER_AGENT}
     last_err = None
+
     for attempt in range(MAX_RETRIES):
         try:
-            resp = sess.get(url, timeout=timeout)
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
+            )
             resp.raise_for_status()
             return resp
         except Exception as exc:
             last_err = exc
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_SLEEP * (attempt + 1))
+
     raise last_err
 
 
@@ -121,20 +121,20 @@ def absolute_url(href: str) -> str:
 # =========================
 
 FRED_SERIES_STARTS = {
-    "DFEDTARL": "1990-01-01",
-    "DFEDTARU": "1990-01-01",
-    "UNRATE": "1990-01-01",
-    "PCEPILFE": "1990-01-01",
-    "CPIAUCSL": "1990-01-01",
-    "GS10": "1990-01-01",
-    "DGS2": "1990-01-01",
-    "NFCI": "1990-01-01",
-    "PAYEMS": "1990-01-01",
+    "DFEDTARL": "2015-01-01",
+    "DFEDTARU": "2015-01-01",
+    "UNRATE": "2015-01-01",
+    "PCEPILFE": "2015-01-01",
+    "CPIAUCSL": "2015-01-01",
+    "GS10": "2015-01-01",
+    "DGS2": "2015-01-01",
+    "NFCI": "2015-01-01",
+    "PAYEMS": "2015-01-01",
 }
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
-def fetch_fred_series_csv(series_id: str, start: str = "1990-01-01") -> pd.DataFrame:
+def fetch_fred_series_csv(series_id: str, start: str = "2015-01-01") -> pd.DataFrame:
     url = FRED_CSV_URL.format(series_id=series_id, start=start)
     resp = fetch_url(url)
     df = pd.read_csv(io.StringIO(resp.text))
@@ -146,6 +146,34 @@ def fetch_fred_series_csv(series_id: str, start: str = "1990-01-01") -> pd.DataF
     df[series_id] = pd.to_numeric(df[series_id], errors="coerce")
     df = df.dropna(subset=["DATE"]).rename(columns={"DATE": "date", series_id: "value"})
     return df[["date", "value"]].copy()
+
+
+def build_fallback_macro_panel(error_msg: str = "") -> pd.DataFrame:
+    today = pd.Timestamp.utcnow().tz_localize(None).normalize()
+    panel = pd.DataFrame(
+        [
+            {
+                "date": today,
+                "DFEDTARL": np.nan,
+                "DFEDTARU": np.nan,
+                "UNRATE": np.nan,
+                "PCEPILFE": np.nan,
+                "CPIAUCSL": np.nan,
+                "GS10": np.nan,
+                "DGS2": np.nan,
+                "NFCI": np.nan,
+                "PAYEMS": np.nan,
+                "FEDTARMD": np.nan,
+                "core_pce_yoy": np.nan,
+                "cpi_yoy": np.nan,
+                "payems_3m_ann": np.nan,
+                "2s10s": np.nan,
+                "real_policy_proxy": np.nan,
+            }
+        ]
+    )
+    panel.attrs["failures"] = [error_msg] if error_msg else ["Live FRED load failed."]
+    return panel
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
@@ -161,7 +189,7 @@ def load_macro_panel() -> pd.DataFrame:
             failures.append(f"{sid}: {exc}")
 
     if panel is None:
-        raise RuntimeError("Failed to load all required macro series.")
+        return build_fallback_macro_panel("All live FRED series failed to load.")
 
     panel = panel.sort_values("date").reset_index(drop=True)
 
@@ -292,9 +320,7 @@ def extract_meeting_date_from_url(href: str) -> Optional[pd.Timestamp]:
     if not match:
         return None
     dt = pd.to_datetime(match.group(1), format="%Y%m%d", errors="coerce")
-    if pd.isna(dt):
-        return None
-    return dt
+    return None if pd.isna(dt) else dt
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
@@ -321,8 +347,7 @@ def fetch_pdf_text(url: str) -> str:
     pages = []
     for page in reader.pages:
         try:
-            txt = page.extract_text() or ""
-            pages.append(txt)
+            pages.append(page.extract_text() or "")
         except Exception:
             pages.append("")
 
@@ -358,15 +383,13 @@ def extract_main_html_text(html: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def fetch_html_text(url: str) -> str:
-    html = fetch_html(url)
-    return extract_main_html_text(html)
+    return extract_main_html_text(fetch_html(url))
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
 def get_fomc_calendar_meetings() -> List[Dict]:
     html = fetch_html(FOMC_CALENDAR_URL)
     soup = BeautifulSoup(html, "html.parser")
-
     grouped: Dict[pd.Timestamp, Dict] = {}
 
     for a in soup.find_all("a", href=True):
@@ -423,10 +446,9 @@ def parse_meeting_page_docs(page_url: str) -> MeetingDocLinks:
     docs = MeetingDocLinks()
 
     anchors = soup.find_all("a", href=True)
-
     for a in anchors:
-        label = normalize_whitespace(a.get_text(" ", strip=True))
         href = absolute_url(a["href"])
+        label = normalize_whitespace(a.get_text(" ", strip=True))
         assign_doc_link(docs, href, label)
 
     if not docs.presser_pdf:
@@ -501,70 +523,13 @@ def load_meeting_record(
 # =========================
 
 STOPWORDS = {
-    "the",
-    "and",
-    "for",
-    "that",
-    "with",
-    "from",
-    "this",
-    "have",
-    "were",
-    "will",
-    "their",
-    "they",
-    "been",
-    "into",
-    "which",
-    "would",
-    "there",
-    "about",
-    "could",
-    "should",
-    "while",
-    "than",
-    "also",
-    "because",
-    "these",
-    "those",
-    "such",
-    "each",
-    "other",
-    "more",
-    "less",
-    "very",
-    "over",
-    "under",
-    "some",
-    "most",
-    "much",
-    "many",
-    "only",
-    "both",
-    "within",
-    "committee",
-    "federal",
-    "reserve",
-    "board",
-    "meeting",
-    "monetary",
-    "policy",
-    "percent",
-    "participants",
-    "economic",
-    "economy",
-    "market",
-    "markets",
-    "inflation",
-    "labor",
-    "employment",
-    "growth",
-    "price",
-    "prices",
-    "rates",
-    "rate",
-    "financial",
-    "conditions",
+    "the", "and", "for", "that", "with", "from", "this", "have", "were", "will", "their",
+    "they", "been", "into", "which", "would", "there", "about", "could", "should", "while",
+    "than", "also", "because", "these", "those", "such", "each", "other", "more", "less",
+    "very", "over", "under", "some", "most", "much", "many", "only", "both", "within",
+    "committee", "federal", "reserve", "board", "meeting", "monetary", "policy", "percent",
+    "participants", "economic", "economy", "market", "markets", "inflation", "labor",
+    "employment", "growth", "price", "prices", "rates", "rate", "financial", "conditions",
 }
 
 
@@ -572,8 +537,7 @@ def tokenize(text: str) -> List[str]:
     text = (text or "").lower()
     text = re.sub(r"[^a-z0-9\s\-]", " ", text)
     toks = re.findall(r"\b[a-z][a-z0-9\-]{2,}\b", text)
-    toks = [t for t in toks if t not in STOPWORDS]
-    return toks
+    return [t for t in toks if t not in STOPWORDS]
 
 
 def tf_vector(text: str) -> Counter:
@@ -600,121 +564,64 @@ def count_keywords(text: str, terms: List[str]) -> int:
 SCENARIOS = {
     "Higher for longer": {
         "positive_terms": [
-            "higher for longer",
-            "ongoing inflation",
-            "upside risks to inflation",
-            "restrictive",
-            "further policy firming",
-            "not sufficiently restrictive",
-            "elevated inflation",
-            "resilient demand",
-            "strong labor market",
-            "tight labor market",
+            "higher for longer", "ongoing inflation", "upside risks to inflation", "restrictive",
+            "further policy firming", "not sufficiently restrictive", "elevated inflation",
+            "resilient demand", "strong labor market", "tight labor market",
         ],
         "negative_terms": [
-            "disinflation",
-            "cooling labor market",
-            "softer growth",
-            "rate cuts",
-            "lower rates",
+            "disinflation", "cooling labor market", "softer growth", "rate cuts", "lower rates",
         ],
     },
     "Restrictive hold": {
         "positive_terms": [
-            "well positioned",
-            "wait for more evidence",
-            "data dependent",
-            "balance of risks",
-            "maintain current target range",
-            "monitor incoming data",
-            "uncertain outlook",
-            "restrictive stance",
-            "hold rates steady",
+            "well positioned", "wait for more evidence", "data dependent", "balance of risks",
+            "maintain current target range", "monitor incoming data", "uncertain outlook",
+            "restrictive stance", "hold rates steady",
         ],
         "negative_terms": [
-            "imminent cuts",
-            "need to cut",
-            "rapid deterioration",
-            "severe contraction",
+            "imminent cuts", "need to cut", "rapid deterioration", "severe contraction",
         ],
     },
     "Dovish hold / pivot setup": {
         "positive_terms": [
-            "disinflation",
-            "progress on inflation",
-            "downside risks to employment",
-            "policy is restrictive",
-            "cooling labor market",
-            "slower demand",
-            "moderating wages",
-            "balanced risks",
-            "scope to adjust",
-            "additional adjustments",
+            "disinflation", "progress on inflation", "downside risks to employment",
+            "policy is restrictive", "cooling labor market", "slower demand", "moderating wages",
+            "balanced risks", "scope to adjust", "additional adjustments",
         ],
         "negative_terms": [
-            "upside inflation risks",
-            "further firming",
-            "reacceleration",
+            "upside inflation risks", "further firming", "reacceleration",
         ],
     },
     "Cutting cycle": {
         "positive_terms": [
-            "cut the target range",
-            "lower the target range",
-            "downside risks",
-            "deterioration in labor market",
-            "weaker activity",
-            "recession",
-            "support the economy",
-            "ease policy",
-            "policy accommodation",
+            "cut the target range", "lower the target range", "downside risks",
+            "deterioration in labor market", "weaker activity", "recession", "support the economy",
+            "ease policy", "policy accommodation",
         ],
         "negative_terms": [
-            "elevated inflation",
-            "strong labor market",
-            "further firming",
+            "elevated inflation", "strong labor market", "further firming",
         ],
     },
     "Stagflation risk": {
         "positive_terms": [
-            "higher energy prices",
-            "elevated inflation",
-            "slower growth",
-            "weaker activity",
-            "supply shock",
-            "inflation remains above target",
-            "downside risks to growth",
-            "adverse supply developments",
-            "tariffs",
-            "geopolitical risks",
+            "higher energy prices", "elevated inflation", "slower growth", "weaker activity",
+            "supply shock", "inflation remains above target", "downside risks to growth",
+            "adverse supply developments", "tariffs", "geopolitical risks",
         ],
         "negative_terms": [
-            "broad disinflation",
-            "strong productivity",
-            "cooling prices without growth damage",
+            "broad disinflation", "strong productivity", "cooling prices without growth damage",
         ],
     },
 }
 
 HAWK_TERMS = [
-    "further policy firming",
-    "upside risks to inflation",
-    "elevated inflation",
-    "restrictive",
-    "strong labor market",
-    "tight labor market",
-    "not sufficiently restrictive",
+    "further policy firming", "upside risks to inflation", "elevated inflation",
+    "restrictive", "strong labor market", "tight labor market", "not sufficiently restrictive",
 ]
 
 DOVE_TERMS = [
-    "disinflation",
-    "downside risks to employment",
-    "cooling labor market",
-    "softer growth",
-    "policy is restrictive",
-    "balanced risks",
-    "lower rates",
-    "rate cuts",
+    "disinflation", "downside risks to employment", "cooling labor market",
+    "softer growth", "policy is restrictive", "balanced risks", "lower rates", "rate cuts",
 ]
 
 
@@ -765,7 +672,6 @@ def score_scenarios(doc_text: str, macro_snapshot: Dict[str, float]) -> pd.DataF
         rows.append({"scenario": scenario, "raw_score": raw})
 
     df = pd.DataFrame(rows).sort_values("raw_score", ascending=False).reset_index(drop=True)
-
     x = df["raw_score"].astype(float).values
     x = x - np.nanmax(x)
     probs = np.exp(x)
@@ -779,17 +685,11 @@ def hawk_dove_balance(doc_text: str) -> Dict[str, float]:
     dove = count_keywords(doc_text, DOVE_TERMS)
     total = hawk + dove
     balance = 0.0 if total == 0 else (hawk - dove) / total
-    return {
-        "hawk_hits": hawk,
-        "dove_hits": dove,
-        "balance": balance,
-    }
+    return {"hawk_hits": hawk, "dove_hits": dove, "balance": balance}
 
 
 def top_terms(text: str, n: int = 30) -> pd.DataFrame:
-    c = tf_vector(text)
-    common = c.most_common(n)
-    return pd.DataFrame(common, columns=["term", "count"])
+    return pd.DataFrame(tf_vector(text).most_common(n), columns=["term", "count"])
 
 
 # =========================
@@ -809,16 +709,14 @@ def build_similarity_frame(current: MeetingRecord, history: List[MeetingRecord])
                 "meeting_date": rec.meeting_date,
                 "title": rec.title,
                 "year": rec.year,
-                "page_url": rec.page_url,
                 "similarity": sim,
             }
         )
 
     if not rows:
-        return pd.DataFrame(columns=["meeting_date", "title", "year", "page_url", "similarity"])
+        return pd.DataFrame(columns=["meeting_date", "title", "year", "similarity"])
 
-    df = pd.DataFrame(rows).sort_values("similarity", ascending=False).reset_index(drop=True)
-    return df
+    return pd.DataFrame(rows).sort_values("similarity", ascending=False).reset_index(drop=True)
 
 
 # =========================
@@ -827,15 +725,16 @@ def build_similarity_frame(current: MeetingRecord, history: List[MeetingRecord])
 
 def latest_macro_snapshot(panel: pd.DataFrame) -> Dict[str, float]:
     df = panel.sort_values("date").copy()
-    if df.empty:
-        raise RuntimeError("Macro panel is empty.")
-
     latest = df.iloc[-1]
-    anchor_date = latest["date"] - pd.DateOffset(months=3)
-    hist = df[df["date"] <= anchor_date]
-    prev_3m = hist.iloc[-1] if not hist.empty else df.iloc[0]
 
-    snap = {
+    if len(df) > 1:
+        anchor_date = latest["date"] - pd.DateOffset(months=3)
+        hist = df[df["date"] <= anchor_date]
+        prev_3m = hist.iloc[-1] if not hist.empty else df.iloc[0]
+    else:
+        prev_3m = latest
+
+    return {
         "date": latest["date"],
         "fed_target_mid": safe_float(latest.get("FEDTARMD")),
         "unrate": safe_float(latest.get("UNRATE")),
@@ -849,7 +748,6 @@ def latest_macro_snapshot(panel: pd.DataFrame) -> Dict[str, float]:
         "real_policy_proxy": safe_float(latest.get("real_policy_proxy")),
         "unrate_3m_change": safe_float(latest.get("UNRATE")) - safe_float(prev_3m.get("UNRATE")),
     }
-    return snap
 
 
 def macro_regime_label(snap: Dict[str, float]) -> str:
@@ -878,7 +776,7 @@ st.caption("Historical analogs, scenario probabilities, Fed language shifts, and
 
 with st.sidebar:
     st.subheader("Settings")
-    max_meetings = st.slider("Meetings to load", min_value=8, max_value=40, value=18, step=2)
+    max_meetings = st.slider("Meetings to load", min_value=6, max_value=24, value=10, step=2)
     include_minutes = st.checkbox("Use minutes", value=True)
     include_pressers = st.checkbox("Use press conference transcripts", value=True)
     include_sep = st.checkbox("Use SEP materials", value=False)
@@ -887,21 +785,17 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"PDF engine: {PDF_ENGINE or 'none'}")
 
-    st.markdown(
-        """
-        **About This Tool**
-
-        This app scrapes the Federal Reserve's FOMC meeting pages, then builds a scenario engine
-        around the text of statements, minutes, and press conferences. It overlays current macro
-        conditions from FRED and finds the closest historical analog meetings by document similarity.
-
-        It is designed for discretionary macro use, not as a forecasting black box.
-        """
-    )
-
 with st.spinner("Loading macro panel from FRED..."):
     macro_panel = load_macro_panel()
+
 macro_snap = latest_macro_snapshot(macro_panel)
+macro_failures = macro_panel.attrs.get("failures", [])
+
+if macro_failures:
+    st.warning(
+        "Live macro data was partially unavailable, so the app is using fallback values where needed. "
+        "Meeting analysis should still render."
+    )
 
 with st.spinner("Loading FOMC meeting list from the Federal Reserve..."):
     meetings_meta = get_fomc_calendar_meetings()
@@ -938,10 +832,9 @@ with st.expander("Macro snapshot details", expanded=False):
             "real_policy_proxy": macro_snap["real_policy_proxy"],
         }
     )
-    failures = macro_panel.attrs.get("failures", [])
-    if failures:
-        st.warning("Some non-critical macro series failed to load:")
-        st.code("\n".join(failures))
+    if macro_failures:
+        st.warning("Some macro series failed to load:")
+        st.code("\n".join(macro_failures))
 
 st.markdown("---")
 
@@ -954,6 +847,7 @@ status = st.empty()
 for i, m in enumerate(meetings_meta):
     try:
         status.text(f"Loading meeting {i + 1}/{len(meetings_meta)}: {m['meeting_date'].date()}")
+
         rec = load_meeting_record(
             page_url=m["page_url"],
             meeting_date=m["meeting_date"],
@@ -1003,8 +897,8 @@ hd = hawk_dove_balance(doc_text)
 
 if not doc_text:
     st.warning(
-        "No source text was extracted for the selected meeting. The meeting will still render, "
-        "but the scenario output is using only the macro overlay."
+        "No source text was extracted for the selected meeting. "
+        "The scenario output is relying mostly on the macro overlay."
     )
 
 left, right = st.columns([1.2, 1.4])
@@ -1012,11 +906,7 @@ left, right = st.columns([1.2, 1.4])
 with left:
     st.subheader("Scenario probabilities")
     fig = go.Figure()
-    fig.add_bar(
-        x=scenario_df["probability"],
-        y=scenario_df["scenario"],
-        orientation="h",
-    )
+    fig.add_bar(x=scenario_df["probability"], y=scenario_df["scenario"], orientation="h")
     fig.update_layout(
         height=360,
         margin=dict(l=20, r=20, t=20, b=20),
@@ -1054,10 +944,11 @@ else:
     show_df = sim_df.head(top_n).copy()
     show_df["meeting_date"] = show_df["meeting_date"].dt.date
     show_df["similarity"] = (show_df["similarity"] * 100).round(1)
-    st.dataframe(show_df[["meeting_date", "title", "similarity", "page_url"]], use_container_width=True)
+    st.dataframe(show_df[["meeting_date", "title", "similarity"]], use_container_width=True)
 
     analog_rows = []
     rec_map = {r.meeting_date.date(): r for r in loaded_records}
+
     for _, row in show_df.iterrows():
         rec = rec_map.get(row["meeting_date"])
         if rec:
@@ -1093,15 +984,12 @@ with doc_col1:
         "Implementation Note": current_rec.doc_links.implementation_note,
         "Meeting Page": current_rec.page_url,
     }
-    docs_df = pd.DataFrame(
-        [{"document": k, "url": v if v else ""} for k, v in docs_data.items()]
-    )
+    docs_df = pd.DataFrame([{"document": k, "url": v if v else ""} for k, v in docs_data.items()])
     st.dataframe(docs_df, use_container_width=True)
 
 with doc_col2:
     st.subheader("Top terms in selected document bundle")
-    terms_df = top_terms(doc_text, n=25)
-    st.dataframe(terms_df, use_container_width=True)
+    st.dataframe(top_terms(doc_text, n=25), use_container_width=True)
 
 if show_raw_text:
     st.markdown("---")
@@ -1125,6 +1013,7 @@ st.markdown("---")
 
 st.subheader("Macro context")
 macro_plot = macro_panel.dropna(subset=["date"]).copy()
+
 chart_choice = st.selectbox(
     "Macro chart",
     [
