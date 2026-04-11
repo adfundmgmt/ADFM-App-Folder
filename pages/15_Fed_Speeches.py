@@ -1312,7 +1312,25 @@ def doc_summary_html(doc: pd.Series) -> str:
         </div>
     </div>
     """
-
+def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
+    fig = px.scatter(
+        matrix,
+        x="latest_vs_fed",
+        y="speaker",
+        size="docs",
+        color="latest_vs_own",
+        hover_data=["avg_stance", "last_date", "docs", "latest_vs_own", "latest_vs_fed"],
+        title="Speaker matrix",
+        height=470,
+        color_continuous_scale="RdYlGn_r",
+    )
+    fig.update_layout(
+        margin=dict(l=20, r=20, t=68, b=25),
+        xaxis_title="Latest speech vs Fed baseline (z-score)",
+        yaxis_title="",
+        coloraxis_colorbar_title="Vs own history",
+    )
+    return fig
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
