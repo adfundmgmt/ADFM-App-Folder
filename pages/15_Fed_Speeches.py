@@ -1,6 +1,6 @@
 import re
-import time
 import html
+import time
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,10 +22,10 @@ BASE_URL = "https://www.federalreserve.gov"
 INDEX_URL = f"{BASE_URL}/newsevents/speeches-testimony.htm"
 DATA_DIR = Path("fed_tone_data")
 DB_PATH = DATA_DIR / "fed_tone.sqlite"
-REQUEST_TIMEOUT = 25
+REQUEST_TIMEOUT = 30
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 )
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,6 +49,7 @@ SPEAKER_WEIGHTS = {
     "Patrick T. Harker": 1.0,
     "Alberto G. Musalem": 1.0,
     "Beth M. Hammack": 1.0,
+    "Stephen I. Miran": 1.0,
 }
 
 LEXICON = {
@@ -107,7 +108,10 @@ SNIPPET_PATTERNS = {
 }
 
 STOP_PHRASES = [
-    "watch live", "for media inquiries", "last update", "return to text", "pdf",
+    "watch live",
+    "for media inquiries",
+    "last update",
+    "return to text",
 ]
 
 
@@ -173,6 +177,15 @@ def init_db() -> None:
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scrape_log (
+            ts TEXT,
+            level TEXT,
+            message TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -181,11 +194,41 @@ def db_connection() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
+def log_event(level: str, message: str) -> None:
+    conn = db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO scrape_log (ts, level, message) VALUES (?, ?, ?)",
+        (pd.Timestamp.utcnow().isoformat(), level, message[:4000]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_log() -> None:
+    conn = db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM scrape_log")
+    conn.commit()
+    conn.close()
+
+
+def load_log(limit: int = 250) -> pd.DataFrame:
+    init_db()
+    conn = db_connection()
+    df = pd.read_sql_query(
+        f"SELECT * FROM scrape_log ORDER BY ts DESC LIMIT {int(limit)}",
+        conn,
+    )
+    conn.close()
+    return df
+
+
 def clean_text(text: str) -> str:
     text = html.unescape(text or "")
+    text = text.replace("\xa0", " ")
     text = re.sub(r"\s+", " ", text)
-    text = text.replace("\xa0", " ").strip()
-    return text
+    return text.strip()
 
 
 def normalize_phrase(phrase: str) -> str:
@@ -211,7 +254,6 @@ def score_text(text: str) -> ToneResult:
 
     hawkish = scaled.get("hawkish", 0.0)
     dovish = scaled.get("dovish", 0.0)
-
     inflation_weight = scaled.get("inflation_concern", 0.0)
     labor_weight = scaled.get("labor_concern", 0.0)
     growth_weight = scaled.get("growth_concern", 0.0)
@@ -248,177 +290,221 @@ def fetch_html(session: requests.Session, url: str) -> BeautifulSoup:
     return BeautifulSoup(resp.text, "html.parser")
 
 
+def safe_request_text(session: requests.Session, url: str) -> str:
+    resp = session.get(url, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    return resp.text
+
+
+def infer_event_type_from_url(url: str) -> str:
+    url_low = url.lower()
+    if "testimony" in url_low:
+        return "testimony"
+    return "speech"
+
+
 def parse_year_links(index_soup: BeautifulSoup) -> List[Tuple[str, str, int]]:
-    out = []
-    heading_map = {"Speeches": "speech", "Testimony": "testimony"}
+    items: List[Tuple[str, str, int]] = []
 
-    for h4 in index_soup.find_all(["h3", "h4"]):
-        section = clean_text(h4.get_text(" ", strip=True))
-        if section not in heading_map:
+    for a in index_soup.find_all("a", href=True):
+        href = urljoin(BASE_URL, a["href"])
+        text = clean_text(a.get_text(" ", strip=True))
+        if not text.isdigit():
             continue
+        year = int(text)
+        href_low = href.lower()
 
-        container = h4.find_next(lambda tag: tag.name in ["ul", "div"])
-        if container is None:
-            continue
+        if re.search(r"/newsevents/\d{4}-speeches\.htm$", href_low):
+            items.append(("speech", href, year))
+        elif re.search(r"/newsevents/\d{4}-testimony\.htm$", href_low):
+            items.append(("testimony", href, year))
 
-        for a in container.find_all("a", href=True):
-            year_text = clean_text(a.get_text(" ", strip=True))
-            if not year_text.isdigit():
-                continue
-            year = int(year_text)
-            href = urljoin(BASE_URL, a["href"])
-            out.append((heading_map[section], href, year))
+    dedup = {}
+    for event_type, href, year in items:
+        dedup[(event_type, year)] = (event_type, href, year)
 
-    return out
+    return sorted(dedup.values(), key=lambda x: (x[2], x[0]), reverse=True)
+
+
+def parse_date_text(raw: str) -> Optional[str]:
+    raw = clean_text(raw)
+    if not raw:
+        return None
+
+    for fmt in ("%m/%d/%Y", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return pd.to_datetime(raw, format=fmt).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    try:
+        dt = pd.to_datetime(raw, errors="raise")
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return None
 
 
 def parse_index_items(year_soup: BeautifulSoup, event_type: str, year: int) -> List[Dict[str, str]]:
-    items = []
-    body_text = year_soup.get_text("\n", strip=True)
-    lines = [clean_text(x) for x in body_text.split("\n") if clean_text(x)]
+    text_lines = []
+    for line in year_soup.get_text("\n", strip=True).split("\n"):
+        line = clean_text(line)
+        if line:
+            text_lines.append(line)
 
-    anchors = []
+    article_links: List[Tuple[str, str]] = []
     for a in year_soup.find_all("a", href=True):
-        href = a.get("href", "")
+        href = urljoin(BASE_URL, a["href"])
+        href_low = href.lower()
         title = clean_text(a.get_text(" ", strip=True))
-        if not href or not title:
+        if not title:
             continue
-        if "/newsevents/" not in href and not href.startswith("/"):
+        if re.search(r"/newsevents/(speech|testimony)/.+\.htm$", href_low):
+            article_links.append((title, href))
+
+    dedup_links = []
+    seen = set()
+    for title, href in article_links:
+        if href in seen:
             continue
-        if any(bad in title.lower() for bad in STOP_PHRASES):
-            continue
+        seen.add(href)
+        dedup_links.append((title, href))
 
-        full_url = urljoin(BASE_URL, href)
-        if re.search(r"/newsevents/(speech|testimony)/", full_url):
-            anchors.append((title, full_url))
+    items: List[Dict[str, str]] = []
 
-    if not anchors:
-        return items
-
-    for title, full_url in anchors:
-        date_val = None
-        speaker = None
-        role = None
-        venue = None
-
+    for title, full_url in dedup_links:
         title_idx = None
-        for idx, line in enumerate(lines):
+        for idx, line in enumerate(text_lines):
             if line == title:
                 title_idx = idx
                 break
 
+        date_hint = None
+        speaker_hint = None
+        venue_hint = None
+        role_hint = None
+
         if title_idx is not None:
-            context = lines[max(0, title_idx - 4): min(len(lines), title_idx + 8)]
+            search_window_before = text_lines[max(0, title_idx - 3):title_idx]
+            search_window_after = text_lines[title_idx + 1:title_idx + 6]
 
-            for ctx in context:
-                date_match = re.search(r"[A-Z][a-z]+ \d{1,2}, \d{4}", ctx)
-                if date_match:
-                    date_val = date_match.group(0)
-                if ctx.startswith("Federal Reserve") or "Board of Governors" in ctx:
-                    role = ctx
-                if ctx.startswith("At ") or ctx.startswith("Before ") or ctx.startswith("At the "):
-                    venue = ctx
+            for cand in reversed(search_window_before):
+                maybe_date = parse_date_text(cand)
+                if maybe_date:
+                    date_hint = maybe_date
+                    break
 
-            for j in range(1, 5):
-                if title_idx + j < len(lines):
-                    maybe = lines[title_idx + j]
-                    if not speaker and re.match(r"^[A-Z][A-Za-z\.\-\' ]{5,}$", maybe) and len(maybe.split()) <= 6:
-                        if "federal reserve" not in maybe.lower() and "board of governors" not in maybe.lower():
-                            speaker = maybe
-                            break
+            for cand in search_window_after:
+                low = cand.lower()
+                if "watch live" in low:
+                    continue
+                if speaker_hint is None and any(
+                    low.startswith(prefix) for prefix in [
+                        "chair ",
+                        "vice chair ",
+                        "vice chair for supervision ",
+                        "governor ",
+                        "president ",
+                    ]
+                ):
+                    speaker_hint = cand
+                    role_hint = cand
+                    continue
+
+                if venue_hint is None and (
+                    cand.startswith("At ")
+                    or cand.startswith("Before ")
+                    or cand.startswith("At the ")
+                    or cand.startswith("Before the ")
+                ):
+                    venue_hint = cand
 
         items.append(
             {
                 "event_type": event_type,
-                "year": year,
+                "year": int(year),
                 "title": title,
                 "url": full_url,
-                "date_hint": date_val,
-                "speaker_hint": speaker,
-                "role_hint": role,
-                "venue_hint": venue,
+                "date_hint": date_hint,
+                "speaker_hint": speaker_hint,
+                "role_hint": role_hint,
+                "venue_hint": venue_hint,
             }
         )
 
-    dedup = {}
-    for item in items:
-        dedup[item["url"]] = item
-    return list(dedup.values())
+    return items
 
 
 def extract_pdf_url(soup: BeautifulSoup, page_url: str) -> Optional[str]:
     for a in soup.find_all("a", href=True):
-        href = a["href"].lower()
-        text = clean_text(a.get_text(" ", strip=True)).lower()
-        if href.endswith(".pdf") or text == "pdf" or "pdf" in text:
-            return urljoin(page_url, a["href"])
+        href = clean_text(a.get("href", ""))
+        label = clean_text(a.get_text(" ", strip=True)).lower()
+        if href.lower().endswith(".pdf"):
+            return urljoin(page_url, href)
+        if label == "pdf":
+            return urljoin(page_url, href)
     return None
 
 
-def extract_body_text(soup: BeautifulSoup) -> str:
-    selectors = [
-        "div.col-xs-12.col-sm-8.col-md-8",
-        "div#article",
-        "div.eventlist",
-        "div.col-xs-12.col-md-8",
-        "main",
-        "article",
+def extract_role_and_speaker(raw_speaker_line: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    if not raw_speaker_line:
+        return None, None
+
+    s = clean_text(raw_speaker_line)
+    if not s:
+        return None, None
+
+    prefixes = [
+        "Vice Chair for Supervision ",
+        "Vice Chair ",
+        "Chair ",
+        "Governor ",
+        "President ",
     ]
-    chunks = []
 
-    for selector in selectors:
-        node = soup.select_one(selector)
-        if node:
-            paras = node.find_all(["p", "div"])
-            for p in paras:
-                txt = clean_text(p.get_text(" ", strip=True))
-                if txt and len(txt.split()) >= 4 and not any(bad in txt.lower() for bad in STOP_PHRASES):
-                    chunks.append(txt)
-            if chunks:
-                break
+    for prefix in prefixes:
+        if s.startswith(prefix):
+            return s, s
 
-    if not chunks:
-        paras = soup.find_all("p")
-        for p in paras:
-            txt = clean_text(p.get_text(" ", strip=True))
-            if txt and len(txt.split()) >= 4 and not any(bad in txt.lower() for bad in STOP_PHRASES):
-                chunks.append(txt)
-
-    body = "\n\n".join(chunks)
-    body = re.sub(r"\n{3,}", "\n\n", body).strip()
-    return body
+    return None, s
 
 
-def extract_meta_line(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
-    result = {"date": None, "speaker": None, "role": None, "venue": None, "title": None}
+def extract_meta(soup: BeautifulSoup, page_url: str, hints: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
+    result = {
+        "title": None,
+        "date": None,
+        "speaker": None,
+        "role": None,
+        "venue": None,
+        "pdf_url": None,
+    }
 
-    title_node = soup.find(["h3", "h1"])
+    title_node = soup.find(["h1", "h2", "h3"])
     if title_node:
-        result["title"] = clean_text(title_node.get_text(" ", strip=True))
+        title_txt = clean_text(title_node.get_text(" ", strip=True))
+        if title_txt.lower() not in {"speech", "testimony"}:
+            result["title"] = title_txt
 
-    text_lines = [clean_text(t) for t in soup.get_text("\n", strip=True).split("\n") if clean_text(t)]
+    lines = [clean_text(x) for x in soup.get_text("\n", strip=True).split("\n") if clean_text(x)]
 
-    for idx, line in enumerate(text_lines[:80]):
-        if result["date"] is None:
-            m = re.search(r"([A-Z][a-z]+ \d{1,2}, \d{4})", line)
-            if m:
-                result["date"] = m.group(1)
+    for i, line in enumerate(lines[:120]):
+        maybe_date = parse_date_text(line)
+        if maybe_date and result["date"] is None:
+            result["date"] = maybe_date
+            continue
 
-        if result["speaker"] is None and re.match(r"^[A-Z][A-Za-z\.\-\' ]{5,}$", line):
-            if 2 <= len(line.split()) <= 6 and "federal reserve" not in line.lower():
-                prev = text_lines[max(0, idx - 2): idx]
-                nxt = text_lines[idx + 1: idx + 3]
-                around = " ".join(prev + nxt).lower()
-                if "chair" in around or "governor" in around or "president" in around or "board of governors" in around:
-                    result["speaker"] = line
+        low = line.lower()
 
-        if result["role"] is None and (
-            "board of governors" in line.lower()
-            or line.lower().startswith("chair ")
-            or line.lower().startswith("governor ")
-            or "federal reserve bank of" in line.lower()
+        if result["speaker"] is None and (
+            low.startswith("chair ")
+            or low.startswith("vice chair ")
+            or low.startswith("vice chair for supervision ")
+            or low.startswith("governor ")
+            or low.startswith("president ")
         ):
-            result["role"] = line
+            role, speaker = extract_role_and_speaker(line)
+            result["role"] = role
+            result["speaker"] = speaker
+            continue
 
         if result["venue"] is None and (
             line.startswith("At ")
@@ -428,20 +514,95 @@ def extract_meta_line(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
         ):
             result["venue"] = line
 
+    result["pdf_url"] = extract_pdf_url(soup, page_url)
+
+    if result["title"] is None:
+        result["title"] = hints.get("title")
+    if result["date"] is None:
+        result["date"] = hints.get("date_hint")
+    if result["speaker"] is None:
+        hinted_role, hinted_speaker = extract_role_and_speaker(hints.get("speaker_hint"))
+        result["speaker"] = hinted_speaker
+        if result["role"] is None:
+            result["role"] = hinted_role
+    if result["role"] is None:
+        result["role"] = hints.get("role_hint")
+    if result["venue"] is None:
+        result["venue"] = hints.get("venue_hint")
+
     return result
+
+
+def extract_body_text(soup: BeautifulSoup) -> str:
+    lines = [clean_text(x) for x in soup.get_text("\n", strip=True).split("\n") if clean_text(x)]
+
+    skip_patterns = [
+        "share",
+        "pdf",
+        "watch live",
+        "return to text",
+        "back to top",
+        "subscribe to rss",
+        "subscribe to email",
+        "board of governors of the federal reserve system",
+        "for media inquiries",
+    ]
+
+    body_lines: List[str] = []
+    started = False
+
+    for line in lines:
+        low = line.lower()
+
+        if not started:
+            if any(
+                low.startswith(prefix) for prefix in [
+                    "at ", "before ", "at the ", "before the ",
+                    "thank you", "good morning", "good afternoon", "good evening",
+                    "mr. chairman", "chairman", "madam chair", "let me",
+                    "today i", "this evening", "i would like", "it is a pleasure",
+                ]
+            ):
+                started = True
+
+        if started:
+            if any(bad in low for bad in skip_patterns):
+                continue
+            if re.match(r"^\d+\.$", line):
+                continue
+            if low in {"speech", "testimony"}:
+                continue
+            body_lines.append(line)
+
+    body = "\n\n".join(body_lines).strip()
+
+    if len(body.split()) < 120:
+        paragraphs = []
+        for p in soup.find_all("p"):
+            txt = clean_text(p.get_text(" ", strip=True))
+            if not txt:
+                continue
+            low = txt.lower()
+            if any(bad in low for bad in skip_patterns):
+                continue
+            if len(txt.split()) >= 5:
+                paragraphs.append(txt)
+        body = "\n\n".join(paragraphs).strip()
+
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    return body
 
 
 def merge_preferred(*vals: Optional[str]) -> Optional[str]:
     for v in vals:
-        if v and str(v).strip():
+        if v and clean_text(str(v)):
             return clean_text(str(v))
     return None
 
 
 def parse_document(session: requests.Session, item: Dict[str, str]) -> Dict[str, Optional[str]]:
     soup = fetch_html(session, item["url"])
-    meta = extract_meta_line(soup)
-    pdf_url = extract_pdf_url(soup, item["url"])
+    meta = extract_meta(soup, item["url"], item)
     body_text = extract_body_text(soup)
     score = score_text(body_text)
 
@@ -454,7 +615,7 @@ def parse_document(session: requests.Session, item: Dict[str, str]) -> Dict[str,
         "speaker": merge_preferred(meta["speaker"], item.get("speaker_hint")),
         "role": merge_preferred(meta["role"], item.get("role_hint")),
         "venue": merge_preferred(meta["venue"], item.get("venue_hint")),
-        "pdf_url": pdf_url,
+        "pdf_url": meta.get("pdf_url"),
         "body_text": body_text,
         "word_count": score.word_count,
         "scraped_at": pd.Timestamp.utcnow().isoformat(),
@@ -518,7 +679,7 @@ def get_existing_urls(conn: sqlite3.Connection) -> set:
     return {row[0] for row in cur.fetchall()}
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_documents() -> pd.DataFrame:
     init_db()
     conn = db_connection()
@@ -532,74 +693,119 @@ def load_documents() -> pd.DataFrame:
     df["year"] = pd.to_numeric(df["year"], errors="coerce")
 
     num_cols = [
-        "word_count", "hawkish_score", "dovish_score", "net_score", "inflation_concern",
-        "labor_concern", "growth_concern", "financial_stability", "balance_sheet", "uncertainty_risk",
+        "word_count", "hawkish_score", "dovish_score", "net_score",
+        "inflation_concern", "labor_concern", "growth_concern",
+        "financial_stability", "balance_sheet", "uncertainty_risk",
     ]
     for col in num_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = df.sort_values("date").reset_index(drop=True)
+    df = df.sort_values(["date", "title"], ascending=[True, True]).reset_index(drop=True)
     return df
 
 
-def refresh_corpus(max_years: int = 6, force_refresh: bool = False, progress_bar=None, status_box=None) -> pd.DataFrame:
+def refresh_corpus(
+    max_years: int = 6,
+    force_refresh: bool = False,
+    progress_bar=None,
+    status_box=None,
+) -> Dict[str, int]:
     init_db()
+    clear_log()
+
+    stats = {
+        "year_pages_found": 0,
+        "index_items_found": 0,
+        "attempted_docs": 0,
+        "inserted_docs": 0,
+        "skipped_existing": 0,
+        "failed_docs": 0,
+    }
+
     session = make_session()
-    index_soup = fetch_html(session, INDEX_URL)
-    year_links = parse_year_links(index_soup)
-    year_links = sorted(year_links, key=lambda x: x[2], reverse=True)[: max_years * 2]
-
     conn = db_connection()
-    existing = get_existing_urls(conn)
 
-    all_items = []
-    total_year_pages = len(year_links)
-
-    for idx, (event_type, url, year) in enumerate(year_links, start=1):
-        try:
-            if status_box is not None:
-                status_box.info(f"Loading {event_type} index for {year} ({idx}/{total_year_pages})")
-            year_soup = fetch_html(session, url)
-            items = parse_index_items(year_soup, event_type, year)
-            all_items.extend(items)
-            time.sleep(0.15)
-        except Exception as exc:
-            if status_box is not None:
-                status_box.warning(f"Skipped {year} {event_type}: {exc}")
-            continue
-
-    all_items = sorted(
-        {item["url"]: item for item in all_items}.values(),
-        key=lambda x: (x["year"], x["url"]),
-        reverse=True,
-    )
-
-    total_docs = len(all_items)
-    processed = 0
-
-    for item in all_items:
-        processed += 1
-
-        if progress_bar is not None:
-            progress_bar.progress(processed / max(total_docs, 1))
-
+    try:
         if status_box is not None:
-            status_box.info(f"Processing {processed:,}/{total_docs:,}: {item['title'][:110]}")
+            status_box.info("Loading speeches/testimony index...")
+        index_soup = fetch_html(session, INDEX_URL)
+        year_links = parse_year_links(index_soup)
 
-        if item["url"] in existing and not force_refresh:
-            continue
+        if not year_links:
+            raise RuntimeError("No yearly speech/testimony links were parsed from the Fed index page.")
 
-        try:
-            doc = parse_document(session, item)
-            if doc["body_text"] and doc["word_count"] >= 80:
+        by_type: Dict[str, List[Tuple[str, str, int]]] = {"speech": [], "testimony": []}
+        for event_type, url, year in year_links:
+            by_type[event_type].append((event_type, url, year))
+
+        selected_year_links: List[Tuple[str, str, int]] = []
+        for event_type in ["speech", "testimony"]:
+            selected_year_links.extend(by_type[event_type][:max_years])
+
+        selected_year_links = sorted(selected_year_links, key=lambda x: (x[2], x[0]), reverse=True)
+        stats["year_pages_found"] = len(selected_year_links)
+
+        existing = get_existing_urls(conn)
+        all_items: List[Dict[str, str]] = []
+
+        for idx, (event_type, year_url, year) in enumerate(selected_year_links, start=1):
+            try:
+                if status_box is not None:
+                    status_box.info(f"Loading {event_type} index for {year} ({idx}/{len(selected_year_links)})")
+                year_soup = fetch_html(session, year_url)
+                items = parse_index_items(year_soup, event_type, year)
+                all_items.extend(items)
+                log_event("INFO", f"Parsed {len(items)} index items from {year_url}")
+                time.sleep(0.1)
+            except Exception as exc:
+                log_event("ERROR", f"Failed year index {year_url}: {repr(exc)}")
+
+        dedup = {}
+        for item in all_items:
+            dedup[item["url"]] = item
+        all_items = sorted(dedup.values(), key=lambda x: (x["year"], x["url"]), reverse=True)
+        stats["index_items_found"] = len(all_items)
+
+        if not all_items:
+            raise RuntimeError("Parsed zero speech/testimony documents from the selected yearly index pages.")
+
+        for i, item in enumerate(all_items, start=1):
+            stats["attempted_docs"] += 1
+            if progress_bar is not None:
+                progress_bar.progress(i / max(len(all_items), 1))
+            if status_box is not None:
+                status_box.info(f"Processing {i:,}/{len(all_items):,}: {item['title'][:120]}")
+
+            if item["url"] in existing and not force_refresh:
+                stats["skipped_existing"] += 1
+                continue
+
+            try:
+                doc = parse_document(session, item)
+                if not doc["body_text"] or int(doc["word_count"] or 0) < 80:
+                    stats["failed_docs"] += 1
+                    log_event(
+                        "WARN",
+                        f"Skipped short/empty body for {item['url']} | words={doc.get('word_count')}"
+                    )
+                    continue
+
                 upsert_document(conn, doc)
-            time.sleep(0.10)
-        except Exception:
-            continue
+                stats["inserted_docs"] += 1
+                log_event(
+                    "INFO",
+                    f"Stored {doc.get('date')} | {doc.get('speaker')} | {doc.get('title')} | words={doc.get('word_count')}"
+                )
+                time.sleep(0.05)
+            except Exception as exc:
+                stats["failed_docs"] += 1
+                log_event("ERROR", f"Failed document {item['url']}: {repr(exc)}")
 
-    conn.close()
-    load_documents.clear()
-    return load_documents()
+    finally:
+        conn.close()
+        load_documents.clear()
+
+    return stats
 
 
 def classify_stance(net_score: float) -> str:
@@ -640,9 +846,7 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
 
     if freq == "30D":
         min_date = frame["date"].min().normalize()
-        frame["bucket"] = min_date + (
-            ((frame["date"] - min_date).dt.days // 30) * pd.Timedelta(days=30)
-        )
+        frame["bucket"] = min_date + (((frame["date"] - min_date).dt.days // 30) * pd.Timedelta(days=30))
     else:
         frame["bucket"] = frame["date"].dt.to_period(freq).dt.start_time
 
@@ -669,15 +873,10 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
 
 def latest_snapshot(df: pd.DataFrame) -> Dict[str, float]:
     if df.empty:
-        return {
-            "tone": np.nan,
-            "delta_30d": np.nan,
-            "core_tone": np.nan,
-        }
+        return {"tone": np.nan, "delta_30d": np.nan, "core_tone": np.nan}
 
     window = aggregate_series(df, freq="30D")
     tone = window["tone_composite"].iloc[-1] if not window.empty else np.nan
-
     delta_30d = np.nan
     if len(window) >= 2:
         delta_30d = tone - window["tone_composite"].iloc[-2]
@@ -687,11 +886,7 @@ def latest_snapshot(df: pd.DataFrame) -> Dict[str, float]:
             ["Jerome H. Powell", "Philip N. Jefferson", "John C. Williams", "Christopher J. Waller"]
         )
     ]
-    if core.empty:
-        core_tone = np.nan
-    else:
-        core_tone = np.average(core["net_score"], weights=core["speaker_weight"])
-
+    core_tone = np.average(core["net_score"], weights=core["speaker_weight"]) if not core.empty else np.nan
     return {"tone": tone, "delta_30d": delta_30d, "core_tone": core_tone}
 
 
@@ -707,14 +902,12 @@ def find_snippets(text: str, phrases: List[str], max_snippets: int = 4) -> List[
 
     sentences = split_sentences(text)
     found = []
-
     for sent in sentences:
         low = sent.lower()
         if any(phrase.lower() in low for phrase in phrases):
             found.append(sent)
         if len(found) >= max_snippets:
             break
-
     return found
 
 
@@ -758,64 +951,94 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
     agg = agg.merge(deltas, on="speaker", how="left", suffixes=("", "_latest"))
     agg["weight"] = agg["speaker"].map(SPEAKER_WEIGHTS).fillna(1.0)
     agg = agg.sort_values(["weight", "docs", "tone"], ascending=[False, False, False]).head(top_n)
-
     return agg
 
 
-def render_about():
+def render_about() -> None:
     with st.sidebar.expander("About This Tool", expanded=False):
         st.write(
-            "This dashboard scrapes Federal Reserve speeches and testimony directly from the Board's website, "
-            "scores each document across hawkish and dovish dimensions, and tracks how each speaker's tone shifts over time. "
-            "The output is meant to help underwrite the reaction function, not replace reading the original text."
+            "This dashboard scrapes Federal Reserve speeches and testimony directly from the Board website, "
+            "scores each document on hawkish and dovish language, and tracks how individual speaker tone shifts over time."
         )
         st.write(
-            "Primary source: Federal Reserve speeches and testimony pages. Scoring is rules-based and transparent so you can inspect the passages driving the result."
+            "It is built for primary-source underwriting. The point is to narrow the reading set and surface passages "
+            "that are actually driving the tone score."
         )
 
 
-def main():
+def render_diagnostics(log_df: pd.DataFrame, stats: Optional[Dict[str, int]] = None) -> None:
+    st.subheader("Diagnostics")
+
+    if stats:
+        a, b, c, d, e, f = st.columns(6)
+        a.metric("Year pages", stats.get("year_pages_found", 0))
+        b.metric("Index items", stats.get("index_items_found", 0))
+        c.metric("Attempted docs", stats.get("attempted_docs", 0))
+        d.metric("Inserted docs", stats.get("inserted_docs", 0))
+        e.metric("Skipped existing", stats.get("skipped_existing", 0))
+        f.metric("Failed docs", stats.get("failed_docs", 0))
+
+    if log_df.empty:
+        st.info("No scrape log yet.")
+    else:
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
+
+
+def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     st.title(APP_TITLE)
     st.caption("Primary-source underwriting of Fed communication tone from speeches and testimony.")
-    render_about()
     init_db()
+    render_about()
 
     with st.sidebar:
         st.subheader("Controls")
         years_to_pull = st.slider("Years to scan from latest backward", min_value=1, max_value=20, value=6)
         force_refresh = st.checkbox("Force refresh existing documents", value=False)
-
-    refresh_clicked = False
-    with st.sidebar:
         refresh_clicked = st.button("Refresh corpus", use_container_width=True)
+
+    refresh_stats = None
 
     if refresh_clicked:
         progress_bar = st.sidebar.progress(0)
         status_box = st.sidebar.empty()
         with st.spinner("Refreshing Fed corpus..."):
-            df = refresh_corpus(
-                max_years=years_to_pull,
-                force_refresh=force_refresh,
-                progress_bar=progress_bar,
-                status_box=status_box,
-            )
-        progress_bar.empty()
-        status_box.empty()
-        st.success(f"Loaded {len(df):,} documents.")
+            try:
+                refresh_stats = refresh_corpus(
+                    max_years=years_to_pull,
+                    force_refresh=force_refresh,
+                    progress_bar=progress_bar,
+                    status_box=status_box,
+                )
+                progress_bar.empty()
+                status_box.empty()
+                st.success(
+                    f"Refresh complete. Inserted {refresh_stats['inserted_docs']} documents "
+                    f"out of {refresh_stats['attempted_docs']} attempted."
+                )
+            except Exception as exc:
+                progress_bar.empty()
+                status_box.empty()
+                st.error(f"Refresh failed: {exc}")
 
     df = load_documents()
+    log_df = load_log()
+
     if df.empty:
-        st.info("No local corpus found yet. Click 'Refresh corpus' in the sidebar to build the database.")
+        st.warning("No local corpus found yet.")
+        render_diagnostics(log_df, refresh_stats)
         st.stop()
 
     df = compute_features(df)
+
+    st.success(f"Loaded {len(df):,} documents.")
 
     min_date_ts = df["date"].dropna().min()
     max_date_ts = df["date"].dropna().max()
 
     if pd.isna(min_date_ts) or pd.isna(max_date_ts):
-        st.warning("All documents are missing parsed dates. The corpus loaded, but date filters cannot be built.")
+        st.error("Corpus loaded, but parsed dates are missing across the dataset.")
+        render_diagnostics(log_df, refresh_stats)
         st.stop()
 
     min_date = min_date_ts.date()
@@ -858,6 +1081,7 @@ def main():
 
     if view.empty:
         st.warning("No documents match the current filters.")
+        render_diagnostics(log_df, refresh_stats)
         st.stop()
 
     snapshot = latest_snapshot(view)
@@ -1061,6 +1285,8 @@ def main():
         file_name="fed_tone_filtered.csv",
         mime="text/csv",
     )
+
+    render_diagnostics(log_df, refresh_stats)
 
 
 if __name__ == "__main__":
