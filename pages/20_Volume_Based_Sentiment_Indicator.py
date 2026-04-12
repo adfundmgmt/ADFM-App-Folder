@@ -15,87 +15,19 @@ import yfinance as yf
 # =============================================================================
 # PAGE CONFIG
 # =============================================================================
-st.set_page_config(page_title="Volume Sentiment Explorer", layout="wide")
-
-
-# =============================================================================
-# STYLING
-# =============================================================================
-st.markdown(
-    """
-    <style>
-    .adfm-card-row {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
-        margin: 0.35rem 0 0.85rem 0;
-    }
-    .adfm-card {
-        border: 1px solid #e6e6e6;
-        border-radius: 12px;
-        background: #fafaf8;
-        padding: 12px 14px;
-    }
-    .adfm-card-label {
-        font-size: 0.78rem;
-        color: #666666;
-        margin-bottom: 6px;
-        line-height: 1.15;
-    }
-    .adfm-card-value {
-        font-size: 1.12rem;
-        font-weight: 700;
-        color: #111111;
-        line-height: 1.15;
-    }
-    .adfm-card-sub {
-        font-size: 0.80rem;
-        color: #666666;
-        margin-top: 6px;
-        line-height: 1.25;
-    }
-    .adfm-note {
-        border: 1px solid #e6e6e6;
-        border-radius: 12px;
-        background: #fcfcfb;
-        padding: 14px 16px;
-        margin: 0.35rem 0 1rem 0;
-        line-height: 1.55;
-        color: #161616;
-    }
-    .adfm-note-title {
-        font-size: 0.80rem;
-        color: #666666;
-        font-weight: 700;
-        letter-spacing: 0.02em;
-        margin-bottom: 7px;
-    }
-    .adfm-divider {
-        margin-top: 0.1rem;
-        margin-bottom: 0.85rem;
-    }
-    @media (max-width: 1100px) {
-        .adfm-card-row {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-    }
-    @media (max-width: 700px) {
-        .adfm-card-row {
-            grid-template-columns: repeat(1, minmax(0, 1fr));
-        }
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
+st.set_page_config(
+    page_title="Volume Sentiment Explorer",
+    layout="wide",
 )
+
+st.title("Volume Sentiment Explorer")
+st.subheader("Frame current participation versus the instrument's own recent history.")
+st.markdown("---")
 
 
 # =============================================================================
 # CONSTANTS
 # =============================================================================
-APP_TITLE = "Volume Sentiment Explorer"
-APP_SUBTITLE = "Frame current participation versus the instrument's own recent history."
-
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -108,40 +40,7 @@ DEFAULT_SYMBOLS = ["QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "NVDA", "MET
 
 
 # =============================================================================
-# UI HELPERS
-# =============================================================================
-def card_html(label: str, value: str, sub: str) -> str:
-    return f"""
-    <div class="adfm-card">
-        <div class="adfm-card-label">{label}</div>
-        <div class="adfm-card-value">{value}</div>
-        <div class="adfm-card-sub">{sub}</div>
-    </div>
-    """
-
-
-def render_cards(cards: list[tuple[str, str, str]]) -> None:
-    html = '<div class="adfm-card-row">'
-    for label, value, sub in cards:
-        html += card_html(label, value, sub)
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def render_note(title: str, body: str) -> None:
-    st.markdown(
-        f"""
-        <div class="adfm-note">
-            <div class="adfm-note-title">{title}</div>
-            <div>{body}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# =============================================================================
-# DATA HELPERS
+# HELPERS
 # =============================================================================
 def safe_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
@@ -368,6 +267,7 @@ def compute_signal_table(
     if exclude_thin_sessions:
         mask = out["Likely_Thin_Session"] & (out["Vol_Z"] < low_z)
         out.loc[mask, "Vol_Z"] = np.nan
+        out.loc[mask, "Vol_PctRank"] = np.nan
 
     out["Is_High"] = out["Vol_Z"] >= high_z
     out["Is_Low"] = out["Vol_Z"] <= low_z
@@ -395,8 +295,8 @@ def build_plotly_chart(
         rows=2,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.035,
-        row_heights=[0.72, 0.28],
+        vertical_spacing=0.04,
+        row_heights=[0.74, 0.26],
     )
 
     fig.add_trace(
@@ -404,7 +304,7 @@ def build_plotly_chart(
             x=df.index,
             y=df["Close"],
             mode="lines",
-            line=dict(color="#111111", width=2.0),
+            line=dict(color="#111111", width=2.1),
             name=symbol,
             hovertemplate="<b>%{x|%b %d, %Y}</b><br>Close: %{y:,.2f}<extra></extra>",
         ),
@@ -419,7 +319,7 @@ def build_plotly_chart(
                 x=stress_df.index,
                 y=stress_df["Close"],
                 mode="markers",
-                marker=dict(size=7, color="#c2410c"),
+                marker=dict(size=6, color="#b45309"),
                 name="Stress",
                 hovertemplate="<b>%{x|%b %d, %Y}</b><br>Stress day<extra></extra>",
             ),
@@ -434,7 +334,7 @@ def build_plotly_chart(
                 x=quiet_df.index,
                 y=quiet_df["Close"],
                 mode="markers",
-                marker=dict(size=6, color="#166534"),
+                marker=dict(size=5, color="#166534"),
                 name="Quiet",
                 hovertemplate="<b>%{x|%b %d, %Y}</b><br>Quiet day<extra></extra>",
             ),
@@ -446,7 +346,7 @@ def build_plotly_chart(
         go.Bar(
             x=df.index,
             y=df["Vol_Display"],
-            marker_color="rgba(140, 140, 140, 0.30)",
+            marker_color="rgba(120,120,120,0.28)",
             name="Volume",
             hovertemplate="<b>%{x|%b %d, %Y}</b><br>Volume: %{y:,.4f}<extra></extra>"
             if "% of shares" in vol_label.lower()
@@ -461,7 +361,7 @@ def build_plotly_chart(
             x=df.index,
             y=df["Vol_MA"],
             mode="lines",
-            line=dict(color="#2563eb", width=1.8),
+            line=dict(color="#2563eb", width=1.7),
             name=f"{ma_period}D MA",
             hovertemplate="<b>%{x|%b %d, %Y}</b><br>MA: %{y:,.4f}<extra></extra>"
             if "% of shares" in vol_label.lower()
@@ -483,8 +383,8 @@ def build_plotly_chart(
         )
 
     fig.update_layout(
-        height=740,
-        margin=dict(l=16, r=16, t=6, b=6),
+        height=760,
+        margin=dict(l=14, r=14, t=8, b=8),
         paper_bgcolor="white",
         plot_bgcolor="white",
         hovermode="x unified",
@@ -539,12 +439,12 @@ def build_plotly_chart(
 
 def describe_regime(vol_z: float, high_z: float, low_z: float) -> str:
     if not np.isfinite(vol_z):
-        return "Signal unavailable. There is not enough stable history yet to classify current participation cleanly."
+        return "Signal unavailable"
     if vol_z >= high_z:
-        return "Participation is elevated versus its own trailing baseline. That usually lines up with stress, forced repositioning, event-driven interest, or active hedging."
+        return "Stress regime"
     if vol_z <= low_z:
-        return "Participation is unusually quiet versus its own trailing baseline. That usually lines up with complacency, low urgency, or a simple lack of sponsorship."
-    return "Participation is sitting in a normal range versus its own trailing baseline. Price is moving without a major volume confirmation signal right now."
+        return "Quiet regime"
+    return "Normal regime"
 
 
 # =============================================================================
@@ -554,24 +454,14 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-Purpose: Volume sentiment explorer for ETFs and liquid equities.
+A stripped down participation chart.
 
-What it does
-
-• Compares current turnover against the instrument's own recent history  
-• Flags unusually stressed and unusually quiet sessions  
-• Normalizes by shares outstanding when available  
-• Keeps the chart simple so the participation signal is easy to read
-
-How to read it
-
-• Heavy volume often reflects fear, stress, or forced repositioning  
-• Quiet volume often reflects complacency or lack of urgency  
-• The signal is most useful around inflection points, breakouts, and breakdowns
+It compares current volume against the instrument's own trailing history, flags unusually heavy or unusually quiet sessions, and keeps the page clean.
         """
     )
 
     st.markdown("---")
+
     symbol = st.text_input("Ticker", value="QQQ").upper().strip()
 
     st.caption("Quick ideas")
@@ -639,22 +529,19 @@ How to read it
         value=False,
     )
 
+    show_stats = st.checkbox(
+        "Show compact stats",
+        value=False,
+    )
+
 
 # =============================================================================
-# HEADER
+# DATA
 # =============================================================================
-st.title(APP_TITLE)
-st.subheader(APP_SUBTITLE)
-st.markdown("<hr class='adfm-divider'>", unsafe_allow_html=True)
-
 if not symbol:
     st.warning("Enter a ticker to continue.")
     st.stop()
 
-
-# =============================================================================
-# FETCH + PREP
-# =============================================================================
 end_date = today_utc_ts()
 warmup_days = max(baseline_period * 3, 220)
 start_date = end_date - pd.Timedelta(days=lookback_months * 31 + warmup_days)
@@ -699,7 +586,7 @@ if df.empty:
 
 
 # =============================================================================
-# METRICS
+# OPTIONAL STATS
 # =============================================================================
 latest = df.iloc[-1]
 latest_close = float(latest["Close"]) if pd.notna(latest["Close"]) else np.nan
@@ -708,32 +595,29 @@ latest_vol_pct = float(latest["Vol_PctRank"]) if pd.notna(latest["Vol_PctRank"])
 latest_volume = float(latest["Vol_Display"]) if pd.notna(latest["Vol_Display"]) else np.nan
 ret_1d = float(latest["Ret_1D"]) if pd.notna(latest["Ret_1D"]) else np.nan
 ret_20d = float(latest["Ret_20D"]) if pd.notna(latest["Ret_20D"]) else np.nan
+regime = describe_regime(latest_vol_z, high_z, low_z)
 
-regime_text = describe_regime(latest_vol_z, high_z, low_z)
-percentile_text = f"{latest_vol_pct:.0f}th percentile" if np.isfinite(latest_vol_pct) else "N/A"
+if show_stats:
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Close", f"${latest_close:,.2f}" if np.isfinite(latest_close) else "N/A")
+    c2.metric("Volume z", f"{latest_vol_z:.2f}" if np.isfinite(latest_vol_z) else "N/A")
+    c3.metric("Percentile", f"{latest_vol_pct:.0f}" if np.isfinite(latest_vol_pct) else "N/A")
+    c4.metric("1D", f"{ret_1d:+.2f}%" if np.isfinite(ret_1d) else "N/A")
+    c5.metric("20D", f"{ret_20d:+.2f}%" if np.isfinite(ret_20d) else "N/A")
 
-if "% of shares" in vol_label.lower():
-    volume_text = f"{latest_volume:.4f}"
-    volume_sub = f"Normalized turnover | Shares out: {format_billions(shares_outstanding)}"
-else:
-    volume_text = f"{latest_volume:,.0f}"
-    volume_sub = f"Raw share volume | Shares out: {format_billions(shares_outstanding)}"
+    with st.expander("Details", expanded=False):
+        st.write(f"Regime: {regime}")
+        st.write(f"Source: {data_source}")
+        st.write(f"Volume mode: {vol_label}")
+        st.write(
+            f"Current turnover: {latest_volume:.4f}"
+            if "% of shares" in vol_label.lower() and np.isfinite(latest_volume)
+            else f"Current turnover: {latest_volume:,.0f}" if np.isfinite(latest_volume)
+            else "Current turnover: N/A"
+        )
+        st.write(f"Shares outstanding: {format_billions(shares_outstanding)}")
 
-ret_1d_text = f"{ret_1d:+.2f}%" if np.isfinite(ret_1d) else "N/A"
-ret_20d_text = f"{ret_20d:+.2f}%" if np.isfinite(ret_20d) else "N/A"
-vol_z_text = f"{latest_vol_z:.2f}" if np.isfinite(latest_vol_z) else "N/A"
-
-render_cards([
-    ("Latest close", f"${latest_close:,.2f}", f"Adjusted daily close | Source: {data_source}"),
-    ("Volume z-score", vol_z_text, "Distance from trailing baseline"),
-    ("Volume percentile", percentile_text, "Versus rolling 1-year history"),
-    ("Current turnover", volume_text, volume_sub),
-])
-
-render_note(
-    "PARTICIPATION READ",
-    f"{regime_text} The instrument is up {ret_1d_text} over 1 day and {ret_20d_text} over 20 days, so the key question is whether price is being confirmed by real sponsorship or just drifting on ordinary turnover."
-)
+    st.markdown("---")
 
 
 # =============================================================================
