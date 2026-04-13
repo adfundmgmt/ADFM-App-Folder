@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import numpy as np
 import pandas as pd
@@ -187,6 +187,14 @@ BAD_TITLE_PATTERNS = [
     "about us", "about", "contact us", "contact", "careers", "job opportunities",
     "privacy", "terms", "copyright", "cookies", "accessibility", "media enquiries",
     "media inquiries", "search", "site map", "press room", "publications", "calendar",
+    "speeches by speaker", "speeches 2026", "speeches 2025", "speeches 2024", "news", "browse",
+]
+
+BAD_URL_PATTERNS = [
+    "/about/", "/contact", "/careers", "/privacy", "/cookies", "/terms", "/banknotes/",
+    "/research/", "/markets/", "/rates/", "/core-functions/", "/educational-resources/",
+    "/the-bank-and-you/", "/about/press/koen_speaker/", "/about/press/", "/search",
+    "/media/", "/publications/", "/calendar",
 ]
 
 
@@ -195,6 +203,62 @@ def is_bad_title(title: Optional[str]) -> bool:
     if not low:
         return False
     return any(pat == low or low.startswith(pat + " |") or f" {pat} " in f" {low} " for pat in BAD_TITLE_PATTERNS)
+
+
+def is_bad_url(url: Optional[str]) -> bool:
+    low = clean_text(url or "").lower()
+    if not low:
+        return False
+    return any(pat in low for pat in BAD_URL_PATTERNS)
+
+
+def short_bank_name(bank_name: Optional[str]) -> str:
+    mapping = {
+        "Bank of Canada": "BoC",
+        "Bank of Japan": "BoJ",
+        "Reserve Bank of Australia": "RBA",
+        "Norges Bank": "Norges",
+    }
+    return mapping.get(bank_name or "", bank_name or "Unknown")
+
+
+def looks_like_bank_event_url(bank_name: str, url: Optional[str]) -> bool:
+    low = clean_text(url or "").lower()
+    if not low or is_bad_url(low):
+        return False
+
+    if bank_name == "Bank of Canada":
+        return bool(re.search(r"/20\d{2}/\d{2}/[^/]+/?$", low))
+
+    if bank_name == "Bank of Japan":
+        return bool(re.search(r"/koen_\d{4}/[^/]+\.htm$", low)) and not low.endswith("/index.htm")
+
+    if bank_name == "Reserve Bank of Australia":
+        return bool(re.search(r"/speeches/\d{4}/[^/]+\.html$", low))
+
+    if bank_name == "Norges Bank":
+        return ("/speeches/" in low) and bool(re.search(r"/\d{4}/", low)) and not low.endswith("/speeches/")
+
+    return False
+
+
+def infer_speaker(bank_name: str, *texts: str) -> Optional[str]:
+    combined = " ".join(clean_text(t or "") for t in texts).lower()
+    for speaker in BANK_CONFIGS.get(bank_name, {}).get("speaker_weights", {}):
+        if clean_text(speaker).lower() in combined:
+            return speaker
+    return None
+
+
+def recent_signal_view(df: pd.DataFrame, max_age_days: int = 420) -> pd.DataFrame:
+    if df.empty or "sort_date" not in df:
+        return df
+    valid = pd.to_datetime(df["sort_date"], errors="coerce").dropna()
+    if valid.empty:
+        return df
+    cutoff = valid.max() - pd.Timedelta(days=max_age_days)
+    out = df[df["sort_date"] >= cutoff].copy()
+    return out if not out.empty else df.copy()
 
 
 @dataclass
@@ -601,88 +665,36 @@ def detect_event_type(text: str) -> str:
     return "speech"
 
 
+
 def parse_boc_index(session: requests.Session, bank_name: str, cfg: Dict[str, object], max_items: int) -> List[Dict[str, Optional[str]]]:
     soup = fetch_html(session, str(cfg["index_url"]))
     items: List[Dict[str, Optional[str]]] = []
 
-    for h in soup.find_all(["h2", "h3"]):
-        title = clean_text(h.get_text(" ", strip=True))
-        if not title or len(title.split()) < 2:
+    for a in soup.find_all("a", href=True):
+        href = urljoin(str(cfg["index_url"]), a["href"])
+        title = clean_text(a.get_text(" ", strip=True))
+        if not title or len(title.split()) < 4:
             continue
-        parent = h.parent
-        link = None
-        for a in parent.find_all("a", href=True):
-            href = urljoin(str(cfg["index_url"]), a["href"])
-            if "/" in href and href.startswith("https://www.bankofcanada.ca/"):
-                link = href
-                break
-        if not link:
+        if is_bad_title(title) or not looks_like_bank_event_url(bank_name, href):
             continue
-        block_text = clean_text(parent.get_text(" ", strip=True))
+
+        parent_text = clean_text(a.parent.get_text(" ", strip=True))
+        block_text = f"{title} {parent_text}"
         date = None
-        m = re.search(r"([A-Z][a-z]+\.?\s+\d{1,2},\s+\d{4})", block_text)
+        m = re.search(r"([A-Z][a-z]+\.?\s+\d{1,2},\s+\d{4}|\d{1,2}\s+[A-Z][a-z]+\s+20\d{2})", block_text)
         if m:
             date = parse_date_text(m.group(1))
-        speaker = None
-        role = None
-        possible_speakers = [
-            "Tiff Macklem", "Carolyn Rogers", "Sharon Kozicki", "Nicolas Vincent", "Toni Gravelle",
-            "Carolyn A. Rogers",
-        ]
-        for sp in possible_speakers:
-            if sp.lower() in block_text.lower():
-                speaker = sp.replace(" A. ", " ")
-                break
+        if not date:
+            m = re.search(r"/(20\d{2})/(\d{2})/", href)
+            if m:
+                date = f"{m.group(1)}-{m.group(2)}-01"
+
+        speaker = infer_speaker(bank_name, title, parent_text)
         items.append({
             "bank_name": bank_name,
             "bank_code": cfg["bank_code"],
             "country": cfg["country"],
             "event_type": detect_event_type(block_text),
-            "date": date,
-            "title": title,
-            "speaker": speaker,
-            "role": role,
-            "venue": None,
-            "url": link,
-        })
-        if len(items) >= max_items:
-            break
-
-    dedup = {}
-    for item in items:
-        dedup[item["url"]] = item
-    return list(dedup.values())[:max_items]
-
-
-def parse_boj_index(session: requests.Session, bank_name: str, cfg: Dict[str, object], max_items: int) -> List[Dict[str, Optional[str]]]:
-    soup = fetch_html(session, str(cfg["index_url"]))
-    items: List[Dict[str, Optional[str]]] = []
-
-    for a in soup.find_all("a", href=True):
-        href = urljoin(str(cfg["index_url"]), a.get("href", ""))
-        title = clean_text(a.get_text(" ", strip=True))
-        if not title:
-            continue
-        if "/en/announcements/press/" not in href and "/en/about/press/" not in href:
-            continue
-        if len(title.split()) < 3:
-            continue
-        row_text = clean_text(a.parent.get_text(" ", strip=True))
-        if "speech" not in row_text.lower() and "monetary policy" not in title.lower() and "economic activity" not in title.lower():
-            continue
-        m = re.search(r"([A-Z][a-z]{2}\.\s+\d{1,2},\s+\d{4}|[A-Z][a-z]+\.?\s+\d{1,2},\s+\d{4})", row_text)
-        date = parse_date_text(m.group(1)) if m else None
-
-        speaker = None
-        speaker_match = re.search(r"\b([A-Z][A-Z]+\s+[A-Za-z]+|UEDA Kazuo|HIMINO Ryozo|TAKATA Hajime|TAMURA Naoki|NAKAGAWA Junko|KOEDA Junko)\b", row_text)
-        if speaker_match:
-            speaker = clean_text(speaker_match.group(1))
-
-        items.append({
-            "bank_name": bank_name,
-            "bank_code": cfg["bank_code"],
-            "country": cfg["country"],
-            "event_type": "speech",
             "date": date,
             "title": title,
             "speaker": speaker,
@@ -693,9 +705,47 @@ def parse_boj_index(session: requests.Session, bank_name: str, cfg: Dict[str, ob
         if len(items) >= max_items * 3:
             break
 
-    dedup = {}
-    for item in items:
-        dedup[item["url"]] = item
+    dedup = {item["url"]: item for item in items}
+    out = sorted(dedup.values(), key=lambda x: x.get("date") or "", reverse=True)
+    return out[:max_items]
+
+
+def parse_boj_index(session: requests.Session, bank_name: str, cfg: Dict[str, object], max_items: int) -> List[Dict[str, Optional[str]]]:
+    soup = fetch_html(session, str(cfg["index_url"]))
+    items: List[Dict[str, Optional[str]]] = []
+
+    for a in soup.find_all("a", href=True):
+        href = urljoin(str(cfg["index_url"]), a.get("href", ""))
+        title = clean_text(a.get_text(" ", strip=True))
+        if not title or len(title.split()) < 4:
+            continue
+        if is_bad_title(title) or not looks_like_bank_event_url(bank_name, href):
+            continue
+
+        row_text = clean_text(a.parent.get_text(" ", strip=True))
+        if not any(key in row_text.lower() for key in ["speech", "remarks", "statement", "address", "lecture", "panel"]):
+            continue
+
+        m = re.search(r"([A-Z][a-z]{2}\.?\s+\d{1,2},\s+\d{4}|[A-Z][a-z]+\.?\s+\d{1,2},\s+\d{4})", row_text)
+        date = parse_date_text(m.group(1)) if m else None
+        speaker = infer_speaker(bank_name, title, row_text)
+
+        items.append({
+            "bank_name": bank_name,
+            "bank_code": cfg["bank_code"],
+            "country": cfg["country"],
+            "event_type": detect_event_type(row_text),
+            "date": date,
+            "title": title,
+            "speaker": speaker,
+            "role": None,
+            "venue": None,
+            "url": href,
+        })
+        if len(items) >= max_items * 4:
+            break
+
+    dedup = {item["url"]: item for item in items}
     out = sorted(dedup.values(), key=lambda x: x.get("date") or "", reverse=True)
     return out[:max_items]
 
@@ -704,67 +754,19 @@ def parse_rba_index(session: requests.Session, bank_name: str, cfg: Dict[str, ob
     soup = fetch_html(session, str(cfg["index_url"]))
     items: List[Dict[str, Optional[str]]] = []
 
-    current_year = None
-    for node in soup.find_all(["h2", "h3", "a", "p", "li"]):
-        txt = clean_text(node.get_text(" ", strip=True))
-        if re.fullmatch(r"20\d{2}", txt):
-            current_year = txt
-        if node.name == "a" and node.get("href"):
-            href = urljoin(str(cfg["index_url"]), node["href"])
-            title = txt
-            if "/speeches/" not in href or href.endswith("/speeches/") or "/index.html" in href:
-                continue
-            if len(title.split()) < 3:
-                continue
-            parent_text = clean_text(node.parent.get_text(" ", strip=True))
-            m = re.search(r"(\d{1,2}\s+[A-Z][a-z]+\s+20\d{2}|[A-Z][a-z]+\s+\d{1,2},\s+20\d{2})", parent_text)
-            date = parse_date_text(m.group(1)) if m else None
-            speaker = None
-            for sp in ["Michele Bullock", "Andrew Hauser", "Sarah Hunter", "Christopher Kent", "Brad Jones", "Philip Lowe"]:
-                if sp.lower() in parent_text.lower():
-                    speaker = sp
-                    break
-            items.append({
-                "bank_name": bank_name,
-                "bank_code": cfg["bank_code"],
-                "country": cfg["country"],
-                "event_type": detect_event_type(parent_text),
-                "date": date,
-                "title": title,
-                "speaker": speaker,
-                "role": None,
-                "venue": None,
-                "url": href,
-            })
-        if len(items) >= max_items * 3:
-            break
-
-    dedup = {}
-    for item in items:
-        dedup[item["url"]] = item
-    out = sorted(dedup.values(), key=lambda x: x.get("date") or "", reverse=True)
-    return out[:max_items]
-
-
-def parse_norges_index(session: requests.Session, bank_name: str, cfg: Dict[str, object], max_items: int) -> List[Dict[str, Optional[str]]]:
-    soup = fetch_html(session, str(cfg["index_url"]))
-    items: List[Dict[str, Optional[str]]] = []
-
-    for a in soup.find_all("a", href=True):
-        href = urljoin(str(cfg["index_url"]), a["href"])
-        title = clean_text(a.get_text(" ", strip=True))
-        if "/Speeches/" not in href and "/speeches/" not in href:
+    for node in soup.find_all("a", href=True):
+        href = urljoin(str(cfg["index_url"]), node["href"])
+        title = clean_text(node.get_text(" ", strip=True))
+        if not title or len(title.split()) < 4:
             continue
-        if len(title.split()) < 3:
+        if is_bad_title(title) or not looks_like_bank_event_url(bank_name, href):
             continue
-        parent_text = clean_text(a.parent.get_text(" ", strip=True))
-        m = re.search(r"(\d{1,2}\s+[A-Z][a-z]+\s+20\d{2}|[A-Z][a-z]+\s+\d{4})", parent_text)
+
+        parent_text = clean_text(node.parent.get_text(" ", strip=True))
+        m = re.search(r"(\d{1,2}\s+[A-Z][a-z]+\s+20\d{2}|[A-Z][a-z]+\s+\d{1,2},\s+20\d{2})", parent_text)
         date = parse_date_text(m.group(1)) if m else None
-        speaker = None
-        for sp in ["Ida Wolden Bache", "Pål Longva", "Martin E. Nordhagen", "Torbjørn Hægeland"]:
-            if sp.lower() in parent_text.lower():
-                speaker = sp
-                break
+        speaker = infer_speaker(bank_name, title, parent_text)
+
         items.append({
             "bank_name": bank_name,
             "bank_code": cfg["bank_code"],
@@ -777,15 +779,49 @@ def parse_norges_index(session: requests.Session, bank_name: str, cfg: Dict[str,
             "venue": None,
             "url": href,
         })
-        if len(items) >= max_items * 3:
+        if len(items) >= max_items * 4:
             break
 
-    dedup = {}
-    for item in items:
-        dedup[item["url"]] = item
+    dedup = {item["url"]: item for item in items}
     out = sorted(dedup.values(), key=lambda x: x.get("date") or "", reverse=True)
     return out[:max_items]
 
+
+def parse_norges_index(session: requests.Session, bank_name: str, cfg: Dict[str, object], max_items: int) -> List[Dict[str, Optional[str]]]:
+    soup = fetch_html(session, str(cfg["index_url"]))
+    items: List[Dict[str, Optional[str]]] = []
+
+    for a in soup.find_all("a", href=True):
+        href = urljoin(str(cfg["index_url"]), a["href"])
+        title = clean_text(a.get_text(" ", strip=True))
+        if not title or len(title.split()) < 4:
+            continue
+        if is_bad_title(title) or not looks_like_bank_event_url(bank_name, href):
+            continue
+
+        parent_text = clean_text(a.parent.get_text(" ", strip=True))
+        m = re.search(r"(\d{1,2}\s+[A-Z][a-z]+\s+20\d{2}|[A-Z][a-z]+\s+\d{4})", parent_text)
+        date = parse_date_text(m.group(1)) if m else None
+        speaker = infer_speaker(bank_name, title, parent_text)
+
+        items.append({
+            "bank_name": bank_name,
+            "bank_code": cfg["bank_code"],
+            "country": cfg["country"],
+            "event_type": detect_event_type(parent_text),
+            "date": date,
+            "title": title,
+            "speaker": speaker,
+            "role": None,
+            "venue": None,
+            "url": href,
+        })
+        if len(items) >= max_items * 4:
+            break
+
+    dedup = {item["url"]: item for item in items}
+    out = sorted(dedup.values(), key=lambda x: x.get("date") or "", reverse=True)
+    return out[:max_items]
 
 def parse_index_for_bank(session: requests.Session, bank_name: str, cfg: Dict[str, object], max_items: int) -> List[Dict[str, Optional[str]]]:
     code = str(cfg["bank_code"])
@@ -828,6 +864,9 @@ def extract_meta_generic(soup: BeautifulSoup, item: Dict[str, Optional[str]]) ->
         if not venue and len(line.split()) >= 2 and (" sydney" in low or " tokyo" in low or " toronto" in low or " oslo" in low):
             venue = line
 
+    if not speaker:
+        speaker = infer_speaker(str(item.get("bank_name") or ""), title or "", all_text)
+
     return {
         "title": title,
         "date": date,
@@ -837,13 +876,23 @@ def extract_meta_generic(soup: BeautifulSoup, item: Dict[str, Optional[str]]) ->
     }
 
 
+
 def parse_document(session: requests.Session, item: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
     soup = fetch_html(session, str(item["url"]))
     meta = extract_meta_generic(soup, item)
     body_text = extract_body_text_generic(soup)
     score = score_text(body_text)
 
-    if is_bad_title(meta.get("title")) and score.policy_relevance < 0.55:
+    keep_url = looks_like_bank_event_url(str(item.get("bank_name") or ""), str(item.get("url") or ""))
+    reject_doc = False
+    if is_bad_title(meta.get("title")) or is_bad_url(item.get("url")):
+        reject_doc = True
+    if not keep_url and score.policy_relevance < 0.80:
+        reject_doc = True
+    if score.word_count < 120:
+        reject_doc = True
+
+    if reject_doc:
         body_text = ""
         score = ToneResult(
             net_score=np.nan,
@@ -1039,6 +1088,15 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     out = df.copy()
+    out = out[~out["title"].fillna("").apply(is_bad_title)].copy()
+    out = out[~out["url"].fillna("").apply(is_bad_url)].copy()
+    keep_mask = out.apply(
+        lambda r: looks_like_bank_event_url(str(r.get("bank_name") or ""), str(r.get("url") or "")) or float(pd.to_numeric(r.get("policy_relevance"), errors="coerce") or 0.0) >= 0.80,
+        axis=1,
+    )
+    out = out[keep_mask].copy()
+    if out.empty:
+        return out
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
     out["scraped_at"] = pd.to_datetime(out["scraped_at"], errors="coerce", utc=True).dt.tz_localize(None)
     out["sort_date"] = out["date"]
@@ -1441,30 +1499,34 @@ def dominant_theme_from_snapshot(snapshot: pd.DataFrame) -> str:
     return best[0]
 
 
+
 def latest_table(view: pd.DataFrame) -> pd.DataFrame:
-    latest = view.sort_values("sort_date", ascending=False).copy()
+    if view.empty:
+        return view
+
+    latest = view.sort_values(["bank_name", "sort_date", "signal_strength"], ascending=[True, False, False]).copy()
+    latest["next_tone"] = latest.groupby("bank_name")["tone_z_global"].shift(-1)
+    latest["change_raw"] = latest["tone_z_global"] - latest["next_tone"]
     latest["date"] = latest["sort_date"].dt.strftime("%Y-%m-%d")
+    latest["bank"] = latest["bank_name"].apply(short_bank_name)
+    latest["speaker"] = latest["speaker"].fillna("Unknown")
     latest["tone"] = latest["tone_z_global"].apply(format_z)
-    latest["change"] = latest.groupby("bank_name")["tone_z_global"].diff(-1).abs()  # placeholder overwritten below
-    changes = []
-    for bank_name, sub in latest.groupby("bank_name", sort=False):
-        vals = sub["tone_z_global"].tolist()
-        ch = [np.nan] * len(vals)
-        for i in range(len(vals) - 1):
-            ch[i] = vals[i] - vals[i + 1]
-        changes.extend(ch)
-    latest["change"] = pd.Series(changes, index=latest.index).apply(format_delta)
+    latest["change"] = latest["change_raw"].apply(format_delta)
     latest["policy"] = latest["policy_relevance"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "n.a.")
-    latest["focus"] = latest.apply(lambda r: ", ".join(top_focuses(r, top_n=1)), axis=1)
-    latest["source"] = latest["url"]
-    return latest[["date", "bank_name", "speaker", "stance", "tone", "change", "policy", "focus", "title", "source"]].rename(
-        columns={"bank_name": "bank"}
+    latest["focus"] = latest.apply(lambda r: ", ".join(top_focuses(r, top_n=2)), axis=1)
+    latest["signal_rank"] = latest.groupby("bank_name").cumcount() + 1
+    latest = latest[latest["signal_rank"] <= 3].copy()
+    latest["why it matters"] = latest.apply(
+        lambda r: f"{r['stance']} read with {r['focus'] or 'no clear theme'} in focus",
+        axis=1,
     )
+    latest = latest.sort_values(["sort_date", "signal_strength"], ascending=[False, False])
+    return latest[["date", "bank", "speaker", "stance", "tone", "change", "policy", "why it matters", "title"]]
 
 
-def takeaway_cards_html(snapshot: pd.DataFrame, cross: pd.DataFrame, latest_doc: pd.Series) -> str:
+def render_takeaway_panels(snapshot: pd.DataFrame, cross: pd.DataFrame, latest_doc: pd.Series) -> None:
     if snapshot.empty or cross.empty:
-        return ""
+        return
 
     latest_cross = cross.sort_values("date").iloc[-1]
     prev_cross = cross.sort_values("date").iloc[-2] if len(cross) >= 2 else None
@@ -1477,54 +1539,51 @@ def takeaway_cards_html(snapshot: pd.DataFrame, cross: pd.DataFrame, latest_doc:
     leader = snapshot.sort_values("tone_z_global", ascending=False).iloc[0]
     laggard = snapshot.sort_values("tone_z_global", ascending=True).iloc[0]
     mover = snapshot.iloc[snapshot["delta_vs_prev"].abs().fillna(-1).idxmax()] if snapshot["delta_vs_prev"].notna().any() else None
+    dominant_theme = dominant_theme_from_snapshot(snapshot)
 
     cards = [
         (
             "Composite call",
-            f"{tone_bucket(latest_cross['tone_z_smooth'])}",
-            f"The cross-bank read sits at {format_z(latest_cross['tone_z_smooth'])} and is {trend_word(cross_delta)} versus the prior bucket ({format_delta(cross_delta)}).",
+            tone_bucket(latest_cross["tone_z_smooth"]),
+            f"The cross-bank read is {format_z(latest_cross['tone_z_smooth'])} and {trend_word(cross_delta)} versus the prior bucket ({format_delta(cross_delta)}).",
         ),
         (
             "Breadth",
             f"{hawks} hawkish, {doves} dovish",
-            f"Across the latest clean documents, breadth is {hawks}/{len(snapshot)} on the hawkish side while dispersion is {dispersion_label(dispersion)} at {dispersion:.2f}σ.",
+            f"Across the latest live-policy read, breadth is {hawks}/{len(snapshot)} hawkish and dispersion sits at {dispersion:.2f}σ, which is {dispersion_label(dispersion)}.",
         ),
         (
             "Leadership",
-            f"{leader['bank_name']} leads",
-            f"{leader['bank_name']} is the most restrictive read at {format_z(leader['tone_z_global'])}. {laggard['bank_name']} is the softest at {format_z(laggard['tone_z_global'])}.",
+            f"{short_bank_name(leader['bank_name'])} leads",
+            f"{leader['bank_name']} is the most restrictive at {format_z(leader['tone_z_global'])}. {laggard['bank_name']} is the softest at {format_z(laggard['tone_z_global'])}.",
         ),
         (
-            "What is driving it",
-            dominant_theme_from_snapshot(snapshot).title(),
+            "What changed",
+            dominant_theme.title(),
             (
-                f"The strongest common emphasis right now is {dominant_theme_from_snapshot(snapshot)}. "
+                f"The dominant shared emphasis is {dominant_theme}. "
                 + (
-                    f"The largest single move came from {mover['bank_name']} at {format_delta(mover['delta_vs_prev'])}."
+                    f"The biggest incremental move came from {mover['bank_name']} at {format_delta(mover['delta_vs_prev'])}."
                     if mover is not None and pd.notna(mover["delta_vs_prev"])
-                    else "There is not enough history yet to rank the latest move cleanly."
+                    else "There is not enough recent history yet to rank the latest move cleanly."
                 )
             ),
         ),
     ]
 
-    html_out = ["<div class='adfm-card-grid'>"]
-    for kicker, title, body in cards:
-        html_out.append(
-            f"""
-            <div class='adfm-card'>
-              <div class='adfm-card-kicker'>{html.escape(kicker)}</div>
-              <div class='adfm-card-title'>{html.escape(title)}</div>
-              <div class='adfm-card-body'>{html.escape(body)}</div>
-            </div>
-            """
-        )
-    html_out.append("</div>")
-    return "".join(html_out)
+    cols = st.columns(4)
+    for col, (kicker, title, body) in zip(cols, cards):
+        with col:
+            st.caption(kicker.upper())
+            st.markdown(f"**{title}**")
+            st.write(body)
+
 
 
 def bank_tone_bar_figure(snapshot: pd.DataFrame) -> go.Figure:
     plot_df = snapshot.sort_values("tone_z_global", ascending=True).copy()
+    plot_df["bank_label"] = plot_df["bank_name"].apply(short_bank_name)
+
     colors = []
     for z in plot_df["tone_z_global"]:
         if pd.isna(z):
@@ -1536,20 +1595,14 @@ def bank_tone_bar_figure(snapshot: pd.DataFrame) -> go.Figure:
         else:
             colors.append("#9e9e9e")
 
-    text = [
-        f"{tone_bucket(z)} | Δ {format_delta(d)}"
-        for z, d in zip(plot_df["tone_z_global"], plot_df["delta_vs_prev"])
-    ]
-
     fig = go.Figure(
         go.Bar(
             x=plot_df["tone_z_global"],
-            y=plot_df["bank_name"],
+            y=plot_df["bank_label"],
             orientation="h",
             marker_color=colors,
-            text=text,
-            textposition="outside",
-            hovertemplate="<b>%{y}</b><br>Tone %{x:.2f}σ<extra></extra>",
+            customdata=plot_df["delta_vs_prev"].fillna(0.0),
+            hovertemplate="<b>%{y}</b><br>Tone %{x:.2f}σ<br>Change %{customdata:.2f}σ<extra></extra>",
         )
     )
     fig.add_vline(x=-0.35, line_dash="dot", line_width=1)
@@ -1558,7 +1611,7 @@ def bank_tone_bar_figure(snapshot: pd.DataFrame) -> go.Figure:
     fig.add_vline(x=1.25, line_dash="dash", line_width=1)
     fig.update_layout(
         height=420,
-        margin=dict(l=20, r=20, t=65, b=20),
+        margin=dict(l=20, r=40, t=65, b=20),
         title=dict(text="Current bank stance", x=0.01),
         xaxis_title="Latest tone vs corpus",
         yaxis_title="",
@@ -1576,12 +1629,13 @@ def theme_heatmap_figure(snapshot: pd.DataFrame) -> go.Figure:
         ("uncertainty_z_global", "Uncertainty"),
     ]
     plot_df = snapshot.sort_values("tone_z_global", ascending=False).copy()
+    plot_df["bank_label"] = plot_df["bank_name"].apply(short_bank_name)
     z = np.array([[row[c] for c, _ in dims] for _, row in plot_df.iterrows()])
     fig = go.Figure(
         go.Heatmap(
             z=z,
             x=[label for _, label in dims],
-            y=plot_df["bank_name"],
+            y=plot_df["bank_label"],
             zmid=0,
             zmin=-2.5,
             zmax=2.5,
@@ -1599,7 +1653,6 @@ def theme_heatmap_figure(snapshot: pd.DataFrame) -> go.Figure:
         yaxis_title="",
     )
     return fig
-
 
 def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
@@ -1898,7 +1951,7 @@ def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     add_global_style()
     st.title(APP_TITLE)
-    st.caption("A read on who is tightening, who is easing, what theme dominates, and which documents actually matter.")
+    st.caption("A read on who is tightening, who is easing, what is driving the move, and which documents actually matter right now.")
     render_about()
     init_db()
 
@@ -1960,8 +2013,12 @@ def main() -> None:
 
     series = aggregate_series(plot_feat, freq=freq)
     cross = aggregate_cross_bank(plot_feat, freq=freq)
-    snapshot = latest_bank_snapshot(feat)
-    latest_doc = latest_doc_row(feat)
+    current_view = recent_signal_view(feat, max_age_days=420)
+    snapshot = latest_bank_snapshot(current_view)
+    if snapshot.empty:
+        current_view = feat.copy()
+        snapshot = latest_bank_snapshot(current_view)
+    latest_doc = latest_doc_row(current_view)
 
     latest_cross = cross.sort_values("date").iloc[-1]
     prev_cross = cross.sort_values("date").iloc[-2] if len(cross) >= 2 else None
@@ -1970,7 +2027,7 @@ def main() -> None:
     breadth_dove = int((snapshot["tone_z_global"] <= -0.35).sum())
     dispersion = float(pd.to_numeric(snapshot["tone_z_global"], errors="coerce").std(ddof=0)) if len(snapshot) > 1 else 0.0
     latest_signal = (
-        f"{latest_doc['bank_name']} | {latest_doc['sort_date'].strftime('%Y-%m-%d')}"
+        f"{short_bank_name(latest_doc['bank_name'])} | {latest_doc['sort_date'].strftime('%Y-%m-%d')}"
         if not latest_doc.empty and pd.notna(latest_doc["sort_date"])
         else "Unknown"
     )
@@ -1981,9 +2038,7 @@ def main() -> None:
     c.metric("Dispersion", f"{dispersion:.2f}σ", dispersion_label(dispersion))
     d.metric("Latest signal", latest_signal, f"{len(feat):,} filtered docs")
 
-    takeaway_html = takeaway_cards_html(snapshot, cross, latest_doc)
-    if takeaway_html:
-        st.markdown(takeaway_html, unsafe_allow_html=True)
+    render_takeaway_panels(snapshot, cross, latest_doc)
 
     row1a, row1b = st.columns([1.05, 1.15])
     with row1a:
@@ -1998,17 +2053,21 @@ def main() -> None:
         st.plotly_chart(cross_bank_figure(cross), use_container_width=True)
 
     st.subheader("Current bank snapshots")
+    live_banks = set(snapshot["bank_name"].unique()) if not snapshot.empty else set()
+    missing_recent = [b for b in selected_banks if b not in live_banks]
+    if missing_recent:
+        st.caption("Dropped from current stance because there is no recent clean signal: " + ", ".join(short_bank_name(b) for b in missing_recent))
     st.dataframe(bank_snapshot_table(snapshot), use_container_width=True, hide_index=True, height=260)
 
     if show_speaker_matrix:
         matrix = speaker_matrix(feat, top_n=18)
         st.plotly_chart(speaker_matrix_figure(matrix), use_container_width=True)
 
-    st.subheader("Latest documents")
-    st.dataframe(latest_table(feat).head(40), use_container_width=True, hide_index=True, height=380)
+    st.subheader("Recent signal documents")
+    st.dataframe(latest_table(current_view).head(12), use_container_width=True, hide_index=True, height=420)
 
     st.subheader("Document deep dive")
-    doc_options = feat.sort_values(["sort_date", "signal_strength"], ascending=False).copy()
+    doc_options = current_view.sort_values(["sort_date", "signal_strength"], ascending=False).copy()
     doc_options["label"] = doc_options.apply(
         lambda r: f"{r['sort_date'].strftime('%Y-%m-%d') if pd.notna(r['sort_date']) else 'Unknown'} | {r['bank_name']} | {r['speaker'] or 'Unknown'} | {r['title']}",
         axis=1,
