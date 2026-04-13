@@ -202,7 +202,26 @@ def macd_hist(s: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> 
 
 
 def resample_last(s: pd.Series, rule: str) -> pd.Series:
-    return s.dropna().resample(rule).last()
+    s = s.dropna().copy()
+    if s.empty:
+        return s
+
+    if not isinstance(s.index, pd.DatetimeIndex):
+        s.index = pd.to_datetime(s.index)
+
+    # pandas now expects explicit end-of-period aliases like ME/QE/YE
+    freq_map = {
+        "M": "ME",
+        "Q": "QE",
+        "Y": "YE",
+        "A": "YE",
+        "BM": "BME",
+        "BQ": "BQE",
+        "BY": "BYE",
+    }
+    rule = freq_map.get(rule, rule)
+
+    return s.resample(rule).last()
 
 
 def mtf_to_daily(daily_index: pd.DatetimeIndex, mtf_series: pd.Series) -> pd.Series:
@@ -341,7 +360,11 @@ def compute_components_and_meta(
 
     vol_term_front = (safe_ratio(vix9, vix) >= 1.00) if has_vix9 else pd.Series(False, index=idx)
     vol_term_back = (safe_ratio(vix, vix3m) >= 1.00) if has_vix3m else pd.Series(False, index=idx)
-    vvix_tail = (vvix >= vvix.rolling(252, min_periods=126).quantile(0.70)) if has_vvix else pd.Series(False, index=idx)
+    vvix_tail = (
+        vvix >= vvix.rolling(252, min_periods=126).quantile(0.70)
+        if has_vvix
+        else pd.Series(False, index=idx)
+    )
 
     vol_stress = (vol_level | vol_term_front | vol_term_back) & (vvix_tail | (vix >= 18))
 
@@ -366,9 +389,15 @@ def compute_components_and_meta(
     rsi_w_roll = ((rsi_w.shift(1) >= 58) & (rsi_w < 58)) | ((rsi_w >= 48) & (rsi_w.diff(3) < 0))
     rsi_m_roll = ((rsi_m.shift(1) >= 55) & (rsi_m < 55)) | ((rsi_m >= 50) & (rsi_m.diff(2) < 0))
 
-    macd_d_bear = ((macd_d.shift(1) > 0) & (macd_d < 0)) | ((macd_d < macd_d.shift(3)) & (macd_d.diff(3) < 0))
-    macd_w_bear = ((macd_w.shift(1) > 0) & (macd_w < 0)) | ((macd_w < macd_w.shift(2)) & (macd_w.diff(2) < 0))
-    macd_m_bear = ((macd_m.shift(1) > 0) & (macd_m < 0)) | ((macd_m < macd_m.shift(2)) & (macd_m.diff(2) < 0))
+    macd_d_bear = ((macd_d.shift(1) > 0) & (macd_d < 0)) | (
+        (macd_d < macd_d.shift(3)) & (macd_d.diff(3) < 0)
+    )
+    macd_w_bear = ((macd_w.shift(1) > 0) & (macd_w < 0)) | (
+        (macd_w < macd_w.shift(2)) & (macd_w.diff(2) < 0)
+    )
+    macd_m_bear = ((macd_m.shift(1) > 0) & (macd_m < 0)) | (
+        (macd_m < macd_m.shift(2)) & (macd_m.diff(2) < 0)
+    )
 
     rsi_votes = (
         rsi_d_roll.fillna(False).astype(int)
@@ -453,7 +482,9 @@ def pick_target_today(df: pd.DataFrame) -> str:
     rs_ma200 = rolling_ma(rs, 200)
     rs_ma20 = rolling_ma(rs, 20)
 
-    if (last_valid(rs) < last_valid(rs_ma200)) and (last_valid(rs_ma20) < last_valid(rolling_ma(rs_ma200, 20))):
+    if (last_valid(rs) < last_valid(rs_ma200)) and (
+        last_valid(rs_ma20) < last_valid(rolling_ma(rs_ma200, 20))
+    ):
         return NDX_TICKER
     return SPX_TICKER
 
@@ -922,7 +953,9 @@ def plot_episode_table_image(table_df: pd.DataFrame, title: str) -> plt.Figure:
 
 # ============================== App ==============================
 st.title("Hedge Timer")
-st.caption("Decision slip for shorting ^SPX or ^NDX based on early-warning stress plus multi-timeframe momentum and trend confirmation, with explicit early-stage gating to avoid bottom-shorting.")
+st.caption(
+    "Decision slip for shorting ^SPX or ^NDX based on early-warning stress plus multi-timeframe momentum and trend confirmation, with explicit early-stage gating to avoid bottom-shorting."
+)
 
 start = _start_date()
 raw = yf_download(TICKERS, start)
@@ -1033,7 +1066,9 @@ st.pyplot(fig, use_container_width=True)
 
 st.markdown("<hr/>", unsafe_allow_html=True)
 st.subheader("Did it warn before major selloffs?")
-st.write(f"We look at 10%+ drawdowns and ask if a NEW short signal fired within the prior {LEAD_LOOKBACK} sessions. New signals are gated (early-stage) and oversold-blocked.")
+st.write(
+    f"We look at 10%+ drawdowns and ask if a NEW short signal fired within the prior {LEAD_LOOKBACK} sessions. New signals are gated (early-stage) and oversold-blocked."
+)
 
 
 def summarize_eps(name_label: str, px: pd.Series, score: pd.Series, meta: Dict[str, pd.Series]) -> pd.DataFrame:
