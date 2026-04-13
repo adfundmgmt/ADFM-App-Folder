@@ -183,6 +183,19 @@ SKIP_PATTERNS = [
     "skip to content", "subscribe", "copyright", "cookie", "privacy", "accessibility",
 ]
 
+BAD_TITLE_PATTERNS = [
+    "about us", "about", "contact us", "contact", "careers", "job opportunities",
+    "privacy", "terms", "copyright", "cookies", "accessibility", "media enquiries",
+    "media inquiries", "search", "site map", "press room", "publications", "calendar",
+]
+
+
+def is_bad_title(title: Optional[str]) -> bool:
+    low = clean_text(title or "").lower()
+    if not low:
+        return False
+    return any(pat == low or low.startswith(pat + " |") or f" {pat} " in f" {low} " for pat in BAD_TITLE_PATTERNS)
+
 
 @dataclass
 class ToneResult:
@@ -830,6 +843,23 @@ def parse_document(session: requests.Session, item: Dict[str, Optional[str]]) ->
     body_text = extract_body_text_generic(soup)
     score = score_text(body_text)
 
+    if is_bad_title(meta.get("title")) and score.policy_relevance < 0.55:
+        body_text = ""
+        score = ToneResult(
+            net_score=np.nan,
+            hawkish_score=np.nan,
+            dovish_score=np.nan,
+            inflation_concern=np.nan,
+            labor_concern=np.nan,
+            growth_concern=np.nan,
+            financial_stability=np.nan,
+            balance_sheet=np.nan,
+            uncertainty_risk=np.nan,
+            word_count=0,
+            policy_relevance=0.0,
+            live_signal_share=0.0,
+        )
+
     return {
         "url": item["url"],
         "bank_name": item["bank_name"],
@@ -856,7 +886,6 @@ def parse_document(session: requests.Session, item: Dict[str, Optional[str]]) ->
         "policy_relevance": score.policy_relevance,
         "live_signal_share": score.live_signal_share,
     }
-
 
 def upsert_document(conn: sqlite3.Connection, doc: Dict[str, Optional[str]]) -> None:
     cur = conn.cursor()
@@ -1010,6 +1039,10 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     out = df.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    out["scraped_at"] = pd.to_datetime(out["scraped_at"], errors="coerce", utc=True).dt.tz_localize(None)
+    out["sort_date"] = out["date"]
+    out.loc[out["sort_date"].isna(), "sort_date"] = out.loc[out["sort_date"].isna(), "scraped_at"]
 
     corpus_mean, corpus_std = safe_mean_std(out["net_score"])
     infl_mean, infl_std = safe_mean_std(out["inflation_concern"])
@@ -1035,12 +1068,12 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     out["tone_z_bank"] = np.nan
     out["tone_z_speaker"] = np.nan
 
-    for bank_name, idx in out.groupby("bank_name", dropna=False).groups.items():
+    for _, idx in out.groupby("bank_name", dropna=False).groups.items():
         subset = out.loc[idx]
         m, s = safe_mean_std(subset["net_score"])
         out.loc[idx, "tone_z_bank"] = subset["net_score"].apply(lambda x: bounded_z(zscore_value(x, m, s)))
 
-    for speaker, idx in out.groupby(["bank_name", "speaker"], dropna=False).groups.items():
+    for _, idx in out.groupby(["bank_name", "speaker"], dropna=False).groups.items():
         subset = out.loc[idx]
         m, s = safe_mean_std(subset["net_score"])
         out.loc[idx, "tone_z_speaker"] = subset["net_score"].apply(lambda x: bounded_z(zscore_value(x, m, s)))
@@ -1048,34 +1081,41 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     out["tone_percentile_global"] = out["net_score"].apply(lambda x: percentile_rank(out["net_score"], x))
     out["stance"] = out["tone_z_global"].apply(tone_bucket)
     out["policy_bucket"] = out["policy_relevance"].apply(policy_bucket)
+    out["signal_doc"] = (out["policy_relevance"] >= 0.35) & (out["word_count"] >= 120)
+    out["effective_weight"] = out["combined_weight"] * (0.30 + 0.90 * out["policy_relevance"].fillna(0.0))
+    out["effective_weight"] = out["effective_weight"].clip(lower=0.20)
+    out["signal_strength"] = (
+        0.55 * out["policy_relevance"].fillna(0.0)
+        + 0.30 * out["live_signal_share"].fillna(0.0)
+        + 0.15 * np.clip(out["word_count"].fillna(0.0) / 1500.0, 0.0, 1.0)
+    )
     return out
-
 
 def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
     if df.empty:
         return df
 
-    frame = df.copy().dropna(subset=["date"])
+    frame = df.copy().dropna(subset=["sort_date"])
     if frame.empty:
         return frame
 
     if freq == "30D":
-        min_date = frame["date"].min().normalize()
-        frame["bucket"] = min_date + (((frame["date"] - min_date).dt.days // 30) * pd.Timedelta(days=30))
+        min_date = frame["sort_date"].min().normalize()
+        frame["bucket"] = min_date + (((frame["sort_date"] - min_date).dt.days // 30) * pd.Timedelta(days=30))
     else:
-        frame["bucket"] = frame["date"].dt.to_period(freq).dt.start_time
+        frame["bucket"] = frame["sort_date"].dt.to_period(freq).dt.start_time
 
     grouped = (
         frame.groupby(["bucket", "bank_name"])
         .apply(
             lambda x: pd.Series(
                 {
-                    "tone_z_global": np.average(x["tone_z_global"], weights=x["combined_weight"]),
-                    "inflation_z_global": np.average(x["inflation_z_global"], weights=x["combined_weight"]),
-                    "labor_z_global": np.average(x["labor_z_global"], weights=x["combined_weight"]),
-                    "growth_z_global": np.average(x["growth_z_global"], weights=x["combined_weight"]),
+                    "tone_z_global": np.average(x["tone_z_global"], weights=x["effective_weight"]),
+                    "inflation_z_global": np.average(x["inflation_z_global"], weights=x["effective_weight"]),
+                    "labor_z_global": np.average(x["labor_z_global"], weights=x["effective_weight"]),
+                    "growth_z_global": np.average(x["growth_z_global"], weights=x["effective_weight"]),
                     "documents": len(x),
-                    "policy_relevance": np.average(x["policy_relevance"].fillna(0.0), weights=x["combined_weight"]),
+                    "policy_relevance": np.average(x["policy_relevance"].fillna(0.0), weights=x["effective_weight"]),
                 }
             )
         )
@@ -1088,29 +1128,28 @@ def aggregate_series(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
     grouped["tone_z_smooth"] = grouped.groupby("bank_name")["tone_z_global"].transform(lambda s: s.ewm(span=4, adjust=False).mean())
     return grouped
 
-
 def aggregate_cross_bank(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
     if df.empty:
         return df
-    frame = df.copy().dropna(subset=["date"])
+    frame = df.copy().dropna(subset=["sort_date"])
     if frame.empty:
         return frame
 
     if freq == "30D":
-        min_date = frame["date"].min().normalize()
-        frame["bucket"] = min_date + (((frame["date"] - min_date).dt.days // 30) * pd.Timedelta(days=30))
+        min_date = frame["sort_date"].min().normalize()
+        frame["bucket"] = min_date + (((frame["sort_date"] - min_date).dt.days // 30) * pd.Timedelta(days=30))
     else:
-        frame["bucket"] = frame["date"].dt.to_period(freq).dt.start_time
+        frame["bucket"] = frame["sort_date"].dt.to_period(freq).dt.start_time
 
     grouped = (
         frame.groupby("bucket")
         .apply(
             lambda x: pd.Series(
                 {
-                    "tone_z_global": np.average(x["tone_z_global"], weights=x["combined_weight"]),
-                    "inflation_z_global": np.average(x["inflation_z_global"], weights=x["combined_weight"]),
-                    "labor_z_global": np.average(x["labor_z_global"], weights=x["combined_weight"]),
-                    "growth_z_global": np.average(x["growth_z_global"], weights=x["combined_weight"]),
+                    "tone_z_global": np.average(x["tone_z_global"], weights=x["effective_weight"]),
+                    "inflation_z_global": np.average(x["inflation_z_global"], weights=x["effective_weight"]),
+                    "labor_z_global": np.average(x["labor_z_global"], weights=x["effective_weight"]),
+                    "growth_z_global": np.average(x["growth_z_global"], weights=x["effective_weight"]),
                     "documents": len(x),
                 }
             )
@@ -1124,7 +1163,6 @@ def aggregate_cross_bank(df: pd.DataFrame, freq: str = "30D") -> pd.DataFrame:
     grouped["tone_3m_ma"] = grouped["tone_z_smooth"].rolling(3, min_periods=1).mean()
     grouped["tone_6m_ma"] = grouped["tone_z_smooth"].rolling(6, min_periods=1).mean()
     return grouped
-
 
 def split_sentences(text: str) -> List[str]:
     text = clean_text(text)
@@ -1186,14 +1224,34 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 18) -> pd.DataFrame:
     return agg
 
 
+def add_global_style() -> None:
+    st.markdown(
+        """
+        <style>
+        .adfm-card-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0.8rem;margin:0.4rem 0 0.85rem 0;}
+        .adfm-card {border:1px solid #e7e7e7;border-radius:0.95rem;padding:0.95rem 1rem;background:#fafafa;}
+        .adfm-card-kicker {font-size:0.76rem;font-weight:700;letter-spacing:0.02em;color:#666;text-transform:uppercase;margin-bottom:0.45rem;}
+        .adfm-card-title {font-size:1.05rem;font-weight:700;color:#111;margin-bottom:0.3rem;line-height:1.25;}
+        .adfm-card-body {font-size:0.93rem;color:#444;line-height:1.55;}
+        .adfm-panel {border:1px solid #e7e7e7;border-radius:1rem;background:#fcfcfc;padding:1rem 1.05rem;margin:0.35rem 0 1rem 0;}
+        .adfm-panel h4 {margin:0 0 0.55rem 0;font-size:1rem;}
+        .adfm-stamp {display:inline-block;padding:0.24rem 0.58rem;border-radius:999px;font-size:0.78rem;font-weight:700;}
+        @media (max-width: 1200px) {.adfm-card-grid {grid-template-columns:repeat(2,minmax(0,1fr));}}
+        @media (max-width: 700px) {.adfm-card-grid {grid-template-columns:1fr;}}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_about() -> None:
     st.sidebar.markdown("### About This Tool")
     st.sidebar.markdown(
         """
         <div style='padding:0.85rem 1rem;border:1px solid #d9d9d9;border-radius:0.7rem;background:#fafafa;line-height:1.65'>
-        This dashboard extends the Fed tone underwriter framework to selected rest-of-world central banks using official speech pages, then scores each document on hawkish and dovish language after filtering out ceremonial noise and low-policy passages.
+        This tool scrapes official speech pages for selected non-US central banks, scores the text for directional tone and thematic emphasis, then pushes the output into an underwriter view that answers the practical question: who is leaning tighter, who is softening, what is driving the move, and how much signal is actually in the document.
         <br><br>
-        Version 1 prioritises scrapeable, transparent institutions: Bank of Canada, Bank of Japan, Reserve Bank of Australia and Norges Bank. The architecture is modular, so ECB, BoE, SNB and others can be added with dedicated adapters.
+        The dashboard now defaults toward live-policy documents instead of dumping every page into the same visual layer. Low-relevance speeches can still be shown, but the default is built to surface takeaways, not raw noise.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1228,6 +1286,12 @@ def format_pct(x: float) -> str:
     return f"{x:.0f}th %ile"
 
 
+def format_delta(x: float) -> str:
+    if pd.isna(x):
+        return "n.a."
+    return f"{x:+.2f}σ"
+
+
 def stance_color(z: float) -> Tuple[str, str]:
     if pd.isna(z):
         return "#efefef", "#555555"
@@ -1238,12 +1302,303 @@ def stance_color(z: float) -> Tuple[str, str]:
     return "#efefef", "#555555"
 
 
+def tone_word(z: float) -> str:
+    return tone_bucket(z)
+
+
+def trend_word(delta: float) -> str:
+    if pd.isna(delta):
+        return "first clean signal"
+    if delta >= 0.60:
+        return "sharply more hawkish"
+    if delta >= 0.20:
+        return "more hawkish"
+    if delta <= -0.60:
+        return "sharply more dovish"
+    if delta <= -0.20:
+        return "more dovish"
+    return "largely unchanged"
+
+
 def make_badge(label: str, z: float) -> str:
     bg, fg = stance_color(z)
     return (
         f"<span style='display:inline-block;padding:0.28rem 0.6rem;border-radius:999px;"
         f"background:{bg};color:{fg};font-weight:600;font-size:0.88rem'>{html.escape(label)}</span>"
     )
+
+
+def theme_display_name(theme_key: str) -> str:
+    mapping = {
+        "inflation_z_global": "inflation",
+        "labor_z_global": "labor",
+        "growth_z_global": "growth",
+        "fs_z_global": "financial stability",
+        "uncertainty_z_global": "uncertainty",
+    }
+    return mapping.get(theme_key, theme_key)
+
+
+def top_focuses(row: pd.Series, top_n: int = 2) -> List[str]:
+    dims = {
+        "inflation_z_global": row.get("inflation_z_global", np.nan),
+        "labor_z_global": row.get("labor_z_global", np.nan),
+        "growth_z_global": row.get("growth_z_global", np.nan),
+        "fs_z_global": row.get("fs_z_global", np.nan),
+        "uncertainty_z_global": row.get("uncertainty_z_global", np.nan),
+    }
+    ranked = [(k, v) for k, v in dims.items() if pd.notna(v)]
+    ranked = sorted(ranked, key=lambda x: x[1], reverse=True)
+    positives = [theme_display_name(k) for k, v in ranked if v >= 0.25][:top_n]
+    if positives:
+        return positives
+    return [theme_display_name(k) for k, _ in ranked[:top_n]] if ranked else []
+
+
+def underweights(row: pd.Series, top_n: int = 1) -> List[str]:
+    dims = {
+        "inflation_z_global": row.get("inflation_z_global", np.nan),
+        "labor_z_global": row.get("labor_z_global", np.nan),
+        "growth_z_global": row.get("growth_z_global", np.nan),
+        "fs_z_global": row.get("fs_z_global", np.nan),
+        "uncertainty_z_global": row.get("uncertainty_z_global", np.nan),
+    }
+    ranked = [(k, v) for k, v in dims.items() if pd.notna(v)]
+    ranked = sorted(ranked, key=lambda x: x[1])
+    negatives = [theme_display_name(k) for k, v in ranked if v <= -0.35][:top_n]
+    return negatives
+
+
+def latest_doc_row(df: pd.DataFrame) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype="object")
+    return df.sort_values(["sort_date", "signal_strength"]).iloc[-1]
+
+
+def latest_bank_snapshot(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    rows = []
+    ordered = df.sort_values(["bank_name", "sort_date", "signal_strength"])
+    for bank_name, sub in ordered.groupby("bank_name", dropna=False):
+        sub = sub.reset_index(drop=True)
+        latest = sub.iloc[-1]
+        prev = sub.iloc[-2] if len(sub) >= 2 else None
+        delta = np.nan if prev is None else latest["tone_z_global"] - prev["tone_z_global"]
+        rows.append(
+            {
+                "bank_name": bank_name,
+                "date": latest.get("sort_date"),
+                "speaker": latest.get("speaker"),
+                "title": latest.get("title"),
+                "tone_z_global": latest.get("tone_z_global"),
+                "tone_z_bank": latest.get("tone_z_bank"),
+                "tone_z_speaker": latest.get("tone_z_speaker"),
+                "tone_percentile_global": latest.get("tone_percentile_global"),
+                "stance": latest.get("stance"),
+                "delta_vs_prev": delta,
+                "policy_relevance": latest.get("policy_relevance"),
+                "inflation_z_global": latest.get("inflation_z_global"),
+                "labor_z_global": latest.get("labor_z_global"),
+                "growth_z_global": latest.get("growth_z_global"),
+                "fs_z_global": latest.get("fs_z_global"),
+                "uncertainty_z_global": latest.get("uncertainty_z_global"),
+                "focuses": ", ".join(top_focuses(latest)),
+                "underweights": ", ".join(underweights(latest)),
+                "signal_strength": latest.get("signal_strength"),
+            }
+        )
+    snap = pd.DataFrame(rows)
+    if not snap.empty:
+        snap = snap.sort_values("tone_z_global", ascending=False).reset_index(drop=True)
+    return snap
+
+
+def dispersion_label(x: float) -> str:
+    if pd.isna(x):
+        return "unknown"
+    if x >= 0.80:
+        return "high dispersion"
+    if x >= 0.45:
+        return "moderate dispersion"
+    return "tight clustering"
+
+
+def dominant_theme_from_snapshot(snapshot: pd.DataFrame) -> str:
+    if snapshot.empty:
+        return "no clear thematic leader"
+    means = {
+        "inflation": snapshot["inflation_z_global"].mean(),
+        "labor": snapshot["labor_z_global"].mean(),
+        "growth": snapshot["growth_z_global"].mean(),
+        "financial stability": snapshot["fs_z_global"].mean(),
+        "uncertainty": snapshot["uncertainty_z_global"].mean(),
+    }
+    best = max(means.items(), key=lambda kv: kv[1])
+    if pd.isna(best[1]) or best[1] < 0.20:
+        return "no clear thematic leader"
+    return best[0]
+
+
+def latest_table(view: pd.DataFrame) -> pd.DataFrame:
+    latest = view.sort_values("sort_date", ascending=False).copy()
+    latest["date"] = latest["sort_date"].dt.strftime("%Y-%m-%d")
+    latest["tone"] = latest["tone_z_global"].apply(format_z)
+    latest["change"] = latest.groupby("bank_name")["tone_z_global"].diff(-1).abs()  # placeholder overwritten below
+    changes = []
+    for bank_name, sub in latest.groupby("bank_name", sort=False):
+        vals = sub["tone_z_global"].tolist()
+        ch = [np.nan] * len(vals)
+        for i in range(len(vals) - 1):
+            ch[i] = vals[i] - vals[i + 1]
+        changes.extend(ch)
+    latest["change"] = pd.Series(changes, index=latest.index).apply(format_delta)
+    latest["policy"] = latest["policy_relevance"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "n.a.")
+    latest["focus"] = latest.apply(lambda r: ", ".join(top_focuses(r, top_n=1)), axis=1)
+    latest["source"] = latest["url"]
+    return latest[["date", "bank_name", "speaker", "stance", "tone", "change", "policy", "focus", "title", "source"]].rename(
+        columns={"bank_name": "bank"}
+    )
+
+
+def takeaway_cards_html(snapshot: pd.DataFrame, cross: pd.DataFrame, latest_doc: pd.Series) -> str:
+    if snapshot.empty or cross.empty:
+        return ""
+
+    latest_cross = cross.sort_values("date").iloc[-1]
+    prev_cross = cross.sort_values("date").iloc[-2] if len(cross) >= 2 else None
+    cross_delta = np.nan if prev_cross is None else latest_cross["tone_z_smooth"] - prev_cross["tone_z_smooth"]
+
+    hawks = int((snapshot["tone_z_global"] >= 0.35).sum())
+    doves = int((snapshot["tone_z_global"] <= -0.35).sum())
+    dispersion = float(pd.to_numeric(snapshot["tone_z_global"], errors="coerce").std(ddof=0)) if len(snapshot) > 1 else 0.0
+
+    leader = snapshot.sort_values("tone_z_global", ascending=False).iloc[0]
+    laggard = snapshot.sort_values("tone_z_global", ascending=True).iloc[0]
+    mover = snapshot.iloc[snapshot["delta_vs_prev"].abs().fillna(-1).idxmax()] if snapshot["delta_vs_prev"].notna().any() else None
+
+    cards = [
+        (
+            "Composite call",
+            f"{tone_bucket(latest_cross['tone_z_smooth'])}",
+            f"The cross-bank read sits at {format_z(latest_cross['tone_z_smooth'])} and is {trend_word(cross_delta)} versus the prior bucket ({format_delta(cross_delta)}).",
+        ),
+        (
+            "Breadth",
+            f"{hawks} hawkish, {doves} dovish",
+            f"Across the latest clean documents, breadth is {hawks}/{len(snapshot)} on the hawkish side while dispersion is {dispersion_label(dispersion)} at {dispersion:.2f}σ.",
+        ),
+        (
+            "Leadership",
+            f"{leader['bank_name']} leads",
+            f"{leader['bank_name']} is the most restrictive read at {format_z(leader['tone_z_global'])}. {laggard['bank_name']} is the softest at {format_z(laggard['tone_z_global'])}.",
+        ),
+        (
+            "What is driving it",
+            dominant_theme_from_snapshot(snapshot).title(),
+            (
+                f"The strongest common emphasis right now is {dominant_theme_from_snapshot(snapshot)}. "
+                + (
+                    f"The largest single move came from {mover['bank_name']} at {format_delta(mover['delta_vs_prev'])}."
+                    if mover is not None and pd.notna(mover["delta_vs_prev"])
+                    else "There is not enough history yet to rank the latest move cleanly."
+                )
+            ),
+        ),
+    ]
+
+    html_out = ["<div class='adfm-card-grid'>"]
+    for kicker, title, body in cards:
+        html_out.append(
+            f"""
+            <div class='adfm-card'>
+              <div class='adfm-card-kicker'>{html.escape(kicker)}</div>
+              <div class='adfm-card-title'>{html.escape(title)}</div>
+              <div class='adfm-card-body'>{html.escape(body)}</div>
+            </div>
+            """
+        )
+    html_out.append("</div>")
+    return "".join(html_out)
+
+
+def bank_tone_bar_figure(snapshot: pd.DataFrame) -> go.Figure:
+    plot_df = snapshot.sort_values("tone_z_global", ascending=True).copy()
+    colors = []
+    for z in plot_df["tone_z_global"]:
+        if pd.isna(z):
+            colors.append("#bdbdbd")
+        elif z <= -0.35:
+            colors.append("#66bb6a")
+        elif z >= 0.35:
+            colors.append("#ef5350")
+        else:
+            colors.append("#9e9e9e")
+
+    text = [
+        f"{tone_bucket(z)} | Δ {format_delta(d)}"
+        for z, d in zip(plot_df["tone_z_global"], plot_df["delta_vs_prev"])
+    ]
+
+    fig = go.Figure(
+        go.Bar(
+            x=plot_df["tone_z_global"],
+            y=plot_df["bank_name"],
+            orientation="h",
+            marker_color=colors,
+            text=text,
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Tone %{x:.2f}σ<extra></extra>",
+        )
+    )
+    fig.add_vline(x=-0.35, line_dash="dot", line_width=1)
+    fig.add_vline(x=0.35, line_dash="dot", line_width=1)
+    fig.add_vline(x=-1.25, line_dash="dash", line_width=1)
+    fig.add_vline(x=1.25, line_dash="dash", line_width=1)
+    fig.update_layout(
+        height=420,
+        margin=dict(l=20, r=20, t=65, b=20),
+        title=dict(text="Current bank stance", x=0.01),
+        xaxis_title="Latest tone vs corpus",
+        yaxis_title="",
+        xaxis=dict(range=[-2.5, 2.5]),
+    )
+    return fig
+
+
+def theme_heatmap_figure(snapshot: pd.DataFrame) -> go.Figure:
+    dims = [
+        ("inflation_z_global", "Inflation"),
+        ("labor_z_global", "Labor"),
+        ("growth_z_global", "Growth"),
+        ("fs_z_global", "Stability"),
+        ("uncertainty_z_global", "Uncertainty"),
+    ]
+    plot_df = snapshot.sort_values("tone_z_global", ascending=False).copy()
+    z = np.array([[row[c] for c, _ in dims] for _, row in plot_df.iterrows()])
+    fig = go.Figure(
+        go.Heatmap(
+            z=z,
+            x=[label for _, label in dims],
+            y=plot_df["bank_name"],
+            zmid=0,
+            zmin=-2.5,
+            zmax=2.5,
+            colorscale="RdYlGn_r",
+            text=np.vectorize(lambda x: f"{x:+.2f}σ" if pd.notna(x) else "n.a.")(z),
+            texttemplate="%{text}",
+            hovertemplate="<b>%{y}</b><br>%{x}: %{z:.2f}σ<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        height=420,
+        margin=dict(l=20, r=20, t=65, b=20),
+        title=dict(text="What each bank is emphasizing", x=0.01),
+        xaxis_title="",
+        yaxis_title="",
+    )
+    return fig
 
 
 def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
@@ -1266,13 +1621,14 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
         if band_high > band_low:
             fig.add_hrect(y0=band_low, y1=band_high, fillcolor=color, opacity=opacity, line_width=0)
 
-    add_band(-3.0, -1.25, "rgb(46, 125, 50)", 0.12)
-    add_band(-1.25, -0.35, "rgb(46, 125, 50)", 0.06)
+    add_band(-3.0, -1.25, "rgb(46, 125, 50)", 0.11)
+    add_band(-1.25, -0.35, "rgb(46, 125, 50)", 0.05)
     add_band(-0.35, 0.35, "rgb(160, 160, 160)", 0.05)
-    add_band(0.35, 1.25, "rgb(183, 28, 28)", 0.06)
-    add_band(1.25, 3.0, "rgb(183, 28, 28)", 0.12)
+    add_band(0.35, 1.25, "rgb(183, 28, 28)", 0.05)
+    add_band(1.25, 3.0, "rgb(183, 28, 28)", 0.11)
 
     for bank_name, sub in series.groupby("bank_name"):
+        sub = sub.sort_values("date")
         fig.add_trace(
             go.Scatter(
                 x=sub["date"],
@@ -1280,16 +1636,16 @@ def z_dashboard_figure(series: pd.DataFrame) -> go.Figure:
                 mode="lines+markers",
                 name=bank_name,
                 line=dict(width=2.2),
-                marker=dict(size=6),
+                marker=dict(size=7),
                 hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
             )
         )
 
     fig.update_layout(
-        height=500,
-        margin=dict(l=20, r=20, t=84, b=28),
-        title=dict(text="RoW central bank tone over time", x=0.01, xanchor="left", y=0.98, yanchor="top"),
-        yaxis_title="Z-score vs global baseline",
+        height=460,
+        margin=dict(l=20, r=20, t=78, b=28),
+        title=dict(text="Bank tone trajectory", x=0.01, xanchor="left", y=0.98, yanchor="top"),
+        yaxis_title="Z-score vs corpus",
         xaxis_title="",
         legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0.0),
     )
@@ -1303,9 +1659,9 @@ def cross_bank_figure(series: pd.DataFrame) -> go.Figure:
             x=series["date"],
             y=series["tone_z_smooth"],
             mode="lines+markers",
-            name="Cross-bank tone",
-            line=dict(width=2.4),
-            marker=dict(size=6),
+            name="Composite",
+            line=dict(width=2.6),
+            marker=dict(size=7),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}σ<extra></extra>",
         )
     )
@@ -1327,15 +1683,48 @@ def cross_bank_figure(series: pd.DataFrame) -> go.Figure:
             line=dict(dash="dash", width=2),
         )
     )
+    fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="#9e9e9e", opacity=0.05, line_width=0)
+    fig.add_hline(y=0.35, line_dash="dot", line_width=1)
+    fig.add_hline(y=-0.35, line_dash="dot", line_width=1)
     fig.update_layout(
-        height=440,
-        margin=dict(l=20, r=20, t=70, b=28),
-        title=dict(text="Cross-bank composite tone", x=0.01),
-        yaxis_title="Z-score",
+        height=460,
+        margin=dict(l=20, r=20, t=78, b=28),
+        title=dict(text="Cross-bank composite", x=0.01),
+        yaxis_title="Composite z-score",
         xaxis_title="",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
     )
     return fig
+
+
+def speaker_matrix(df: pd.DataFrame, top_n: int = 18) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    agg = (
+        df.groupby(["bank_name", "speaker"], dropna=False)
+        .agg(
+            docs=("url", "count"),
+            tone_z_global=("tone_z_global", "mean"),
+            tone_z_speaker=("tone_z_speaker", "mean"),
+            policy_relevance=("policy_relevance", "mean"),
+            last_date=("sort_date", "max"),
+        )
+        .reset_index()
+    )
+
+    latest = (
+        df.sort_values("sort_date")
+        .groupby(["bank_name", "speaker"], dropna=False)
+        .tail(1)[["bank_name", "speaker", "tone_z_speaker", "tone_z_global", "stance"]]
+        .rename(columns={"tone_z_speaker": "latest_vs_own", "tone_z_global": "latest_vs_global"})
+    )
+
+    agg = agg.merge(latest, on=["bank_name", "speaker"], how="left")
+    agg["weight"] = agg["bank_name"].map(BANK_WEIGHTS).fillna(1.0)
+    agg["label"] = agg["bank_name"] + " | " + agg["speaker"].fillna("Unknown")
+    agg = agg.sort_values(["weight", "docs", "tone_z_global"], ascending=[False, False, False]).head(top_n)
+    return agg
 
 
 def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
@@ -1352,7 +1741,7 @@ def speaker_matrix_figure(matrix: pd.DataFrame) -> go.Figure:
     )
     fig.update_layout(
         margin=dict(l=20, r=20, t=68, b=25),
-        xaxis_title="Latest speech vs global baseline (z-score)",
+        xaxis_title="Latest speech vs corpus",
         yaxis_title="",
         coloraxis_colorbar_title="Vs own history",
     )
@@ -1403,39 +1792,113 @@ def scorecard_figure(scorecard: pd.DataFrame) -> go.Figure:
     fig.add_vline(x=0.35, line_dash="dot", line_width=1)
     fig.add_vline(x=-1.25, line_dash="dash", line_width=1)
     fig.add_vline(x=1.25, line_dash="dash", line_width=1)
-    fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20), title="Document scorecard", xaxis_title="Relative score", yaxis_title="", xaxis=dict(range=[-3, 3]))
+    fig.update_layout(
+        height=420,
+        margin=dict(l=20, r=20, t=40, b=20),
+        title="Document scorecard",
+        xaxis_title="Relative score",
+        yaxis_title="",
+        xaxis=dict(range=[-3, 3]),
+    )
     return fig
+
+
+def doc_takeaway_text(doc: pd.Series) -> str:
+    focuses = top_focuses(doc, top_n=2)
+    under = underweights(doc, top_n=1)
+    focus_text = ", ".join(focuses) if focuses else "no dominant thematic focus"
+    under_text = f" The least emphasized area is {under[0]}." if under else ""
+    return (
+        f"This reads {tone_bucket(doc['tone_z_global']).lower()} with {policy_bucket(doc['policy_relevance']).lower()} policy relevance. "
+        f"Against the full corpus it sits at {format_z(doc['tone_z_global'])}, against this bank's own history at {format_z(doc['tone_z_bank'])}, "
+        f"and against this speaker's history at {format_z(doc['tone_z_speaker'])}. The main emphasis is {focus_text}.{under_text}"
+    )
+
+
+def paragraph_match_score(paragraph: str, phrase_groups: List[List[str]]) -> float:
+    hits = 0
+    for phrases in phrase_groups:
+        hits += count_phrase_hits(paragraph.lower(), phrases)
+    return hits + 1.5 * paragraph_policy_relevance(paragraph)
+
+
+def best_evidence_paragraphs(doc: pd.Series, max_paragraphs: int = 3) -> List[str]:
+    paragraphs = split_paragraphs(str(doc.get("body_text", "")))
+    if not paragraphs:
+        return []
+
+    phrase_groups: List[List[str]] = []
+    if pd.notna(doc.get("tone_z_global")) and doc["tone_z_global"] >= 0:
+        phrase_groups.append(LEXICON["hawkish"])
+    else:
+        phrase_groups.append(LEXICON["dovish"])
+
+    for theme in top_focuses(doc, top_n=2):
+        if theme == "inflation":
+            phrase_groups.append(LEXICON["inflation_concern"])
+        elif theme == "labor":
+            phrase_groups.append(LEXICON["labor_concern"])
+        elif theme == "growth":
+            phrase_groups.append(LEXICON["growth_concern"])
+        elif theme == "financial stability":
+            phrase_groups.append(LEXICON["financial_stability"])
+        elif theme == "uncertainty":
+            phrase_groups.append(LEXICON["uncertainty_risk"])
+
+    ranked = sorted(
+        [(paragraph_match_score(p, phrase_groups), p) for p in paragraphs],
+        key=lambda x: x[0],
+        reverse=True,
+    )
+    good = [p for score, p in ranked if score > 1.6][:max_paragraphs]
+    if good:
+        return good
+    fallback = sorted(paragraphs, key=paragraph_policy_relevance, reverse=True)
+    return fallback[:max_paragraphs]
 
 
 def doc_summary_html(doc: pd.Series) -> str:
     tone = make_badge(tone_bucket(doc["tone_z_global"]), doc["tone_z_global"])
     policy = make_badge(policy_bucket(doc["policy_relevance"]), doc["policy_relevance"])
+    title = html.escape(str(doc["title"]))
+    bank = html.escape(str(doc["bank_name"]))
+    speaker = html.escape(str(doc["speaker"] or "Unknown"))
+    date_str = doc["sort_date"].strftime("%Y-%m-%d") if pd.notna(doc["sort_date"]) else "Unknown date"
+    takeaway = html.escape(doc_takeaway_text(doc))
     return f"""
-    <div style='padding:1rem;border:1px solid #d9d9d9;border-radius:0.8rem;background:#fafafa'>
-      <div style='font-size:1.05rem;font-weight:700;margin-bottom:0.35rem'>{html.escape(str(doc['title']))}</div>
-      <div style='color:#555;margin-bottom:0.6rem'>{html.escape(str(doc['bank_name']))} | {html.escape(str(doc['speaker'] or 'Unknown'))} | {doc['date'].strftime('%Y-%m-%d') if pd.notna(doc['date']) else 'Unknown date'}</div>
-      <div style='display:flex;gap:0.5rem;flex-wrap:wrap'>{tone}{policy}</div>
+    <div class='adfm-panel'>
+      <div style='display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;flex-wrap:wrap'>
+        <div>
+          <div style='font-size:1.08rem;font-weight:700;margin-bottom:0.3rem'>{title}</div>
+          <div style='color:#555;margin-bottom:0.7rem'>{bank} | {speaker} | {date_str}</div>
+        </div>
+        <div style='display:flex;gap:0.45rem;flex-wrap:wrap'>{tone}{policy}</div>
+      </div>
+      <div style='font-size:0.94rem;line-height:1.65;color:#333'>{takeaway}</div>
     </div>
     """
 
 
-def latest_table(view: pd.DataFrame) -> pd.DataFrame:
-    latest = view.sort_values("date", ascending=False).copy()
-    latest["tone"] = latest["tone_z_global"].apply(format_z)
-    latest["vs bank"] = latest["tone_z_bank"].apply(format_z)
-    latest["vs own"] = latest["tone_z_speaker"].apply(format_z)
-    latest["global %ile"] = latest["tone_percentile_global"].apply(format_pct)
-    latest["inflation"] = latest["inflation_z_global"].apply(format_z)
-    latest["labor"] = latest["labor_z_global"].apply(format_z)
-    latest["growth"] = latest["growth_z_global"].apply(format_z)
-    latest["date"] = latest["date"].dt.strftime("%Y-%m-%d")
-    latest["source"] = latest["url"]
-    return latest[["date", "bank_name", "speaker", "event_type", "stance", "tone", "vs bank", "vs own", "global %ile", "inflation", "labor", "growth", "source"]].rename(columns={"event_type": "type", "bank_name": "bank"})
+def bank_snapshot_table(snapshot: pd.DataFrame) -> pd.DataFrame:
+    if snapshot.empty:
+        return snapshot
+    out = snapshot.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    out["tone"] = out["tone_z_global"].apply(format_z)
+    out["change"] = out["delta_vs_prev"].apply(format_delta)
+    out["policy"] = out["policy_relevance"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "n.a.")
+    out["focus"] = out["focuses"].replace("", "n.a.")
+    out["speaker"] = out["speaker"].fillna("Unknown")
+    return out[["date", "bank_name", "speaker", "stance", "tone", "change", "policy", "focus", "title"]].rename(
+        columns={"bank_name": "bank"}
+    )
 
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
+    add_global_style()
     st.title(APP_TITLE)
+    st.caption("A read on who is tightening, who is easing, what theme dominates, and which documents actually matter.")
     render_about()
     init_db()
 
@@ -1450,6 +1913,10 @@ def main() -> None:
         force_refresh = st.checkbox("Force refresh existing speeches", value=False)
         refresh_now = st.button("Refresh corpus", use_container_width=True)
         freq = st.selectbox("Aggregation frequency", options=["30D", "M", "Q"], index=0)
+        lookback_years = st.slider("Display window (years)", min_value=1, max_value=10, value=3, step=1)
+        min_policy_relevance = st.slider("Minimum policy relevance", min_value=0.0, max_value=0.8, value=0.35, step=0.05)
+        signal_only = st.checkbox("Default to live-policy documents", value=True)
+        show_speaker_matrix = st.checkbox("Show speaker matrix", value=False)
 
     stats = None
     if refresh_now:
@@ -1475,40 +1942,75 @@ def main() -> None:
     feat = compute_features(df)
     feat = feat[feat["bank_name"].isin(selected_banks)].copy()
 
+    if signal_only:
+        feat = feat[(feat["policy_relevance"] >= min_policy_relevance) & (feat["word_count"] >= 120)].copy()
+    else:
+        feat = feat[feat["policy_relevance"] >= min_policy_relevance].copy()
+
+    feat = feat.sort_values(["sort_date", "signal_strength"]).reset_index(drop=True)
+
     if feat.empty:
-        st.warning("No documents available for the selected bank set.")
+        st.warning("No documents pass the current filters. Lower the policy relevance threshold or disable the live-policy filter.")
         render_diagnostics(load_log(), stats)
         return
 
-    series = aggregate_series(feat, freq=freq)
-    cross = aggregate_cross_bank(feat, freq=freq)
-    matrix = speaker_matrix(feat, top_n=18)
+    latest_seen = feat["sort_date"].max()
+    plot_cutoff = latest_seen - pd.DateOffset(years=lookback_years)
+    plot_feat = feat[feat["sort_date"] >= plot_cutoff].copy()
 
-    latest_doc = feat.sort_values("date").tail(1).iloc[0]
-    latest_date = latest_doc["date"].strftime("%Y-%m-%d") if pd.notna(latest_doc["date"]) else "Unknown"
-    latest_stance = tone_bucket(latest_doc["tone_z_global"])
+    series = aggregate_series(plot_feat, freq=freq)
+    cross = aggregate_cross_bank(plot_feat, freq=freq)
+    snapshot = latest_bank_snapshot(feat)
+    latest_doc = latest_doc_row(feat)
+
+    latest_cross = cross.sort_values("date").iloc[-1]
+    prev_cross = cross.sort_values("date").iloc[-2] if len(cross) >= 2 else None
+    composite_delta = np.nan if prev_cross is None else latest_cross["tone_z_smooth"] - prev_cross["tone_z_smooth"]
+    breadth_hawk = int((snapshot["tone_z_global"] >= 0.35).sum())
+    breadth_dove = int((snapshot["tone_z_global"] <= -0.35).sum())
+    dispersion = float(pd.to_numeric(snapshot["tone_z_global"], errors="coerce").std(ddof=0)) if len(snapshot) > 1 else 0.0
+    latest_signal = (
+        f"{latest_doc['bank_name']} | {latest_doc['sort_date'].strftime('%Y-%m-%d')}"
+        if not latest_doc.empty and pd.notna(latest_doc["sort_date"])
+        else "Unknown"
+    )
 
     a, b, c, d = st.columns(4)
-    a.metric("Documents", f"{len(feat):,}")
-    b.metric("Banks", feat["bank_name"].nunique())
-    c.metric("Latest document", latest_date)
-    d.metric("Latest stance", latest_stance)
+    a.metric("Composite stance", tone_bucket(latest_cross["tone_z_smooth"]), format_delta(composite_delta))
+    b.metric("Hawkish breadth", f"{breadth_hawk}/{len(snapshot)} banks", f"{breadth_dove} dovish")
+    c.metric("Dispersion", f"{dispersion:.2f}σ", dispersion_label(dispersion))
+    d.metric("Latest signal", latest_signal, f"{len(feat):,} filtered docs")
 
-    row1a, row1b = st.columns([1.45, 1.0])
+    takeaway_html = takeaway_cards_html(snapshot, cross, latest_doc)
+    if takeaway_html:
+        st.markdown(takeaway_html, unsafe_allow_html=True)
+
+    row1a, row1b = st.columns([1.05, 1.15])
     with row1a:
-        st.plotly_chart(z_dashboard_figure(series), use_container_width=True)
+        st.plotly_chart(bank_tone_bar_figure(snapshot), use_container_width=True)
     with row1b:
+        st.plotly_chart(theme_heatmap_figure(snapshot), use_container_width=True)
+
+    row2a, row2b = st.columns([1.15, 1.0])
+    with row2a:
+        st.plotly_chart(z_dashboard_figure(series), use_container_width=True)
+    with row2b:
         st.plotly_chart(cross_bank_figure(cross), use_container_width=True)
 
-    st.plotly_chart(speaker_matrix_figure(matrix), use_container_width=True)
+    st.subheader("Current bank snapshots")
+    st.dataframe(bank_snapshot_table(snapshot), use_container_width=True, hide_index=True, height=260)
+
+    if show_speaker_matrix:
+        matrix = speaker_matrix(feat, top_n=18)
+        st.plotly_chart(speaker_matrix_figure(matrix), use_container_width=True)
 
     st.subheader("Latest documents")
-    st.dataframe(latest_table(feat).head(40), use_container_width=True, hide_index=True, height=420)
+    st.dataframe(latest_table(feat).head(40), use_container_width=True, hide_index=True, height=380)
 
     st.subheader("Document deep dive")
-    doc_options = feat.sort_values("date", ascending=False).copy()
+    doc_options = feat.sort_values(["sort_date", "signal_strength"], ascending=False).copy()
     doc_options["label"] = doc_options.apply(
-        lambda r: f"{r['date'].strftime('%Y-%m-%d') if pd.notna(r['date']) else 'Unknown'} | {r['bank_name']} | {r['speaker'] or 'Unknown'} | {r['title']}",
+        lambda r: f"{r['sort_date'].strftime('%Y-%m-%d') if pd.notna(r['sort_date']) else 'Unknown'} | {r['bank_name']} | {r['speaker'] or 'Unknown'} | {r['title']}",
         axis=1,
     )
     selected_label = st.selectbox("Select a document", options=doc_options["label"].tolist())
@@ -1516,27 +2018,50 @@ def main() -> None:
 
     st.markdown(doc_summary_html(doc), unsafe_allow_html=True)
 
-    deep_a, deep_b = st.columns([1.0, 1.1])
+    deep_a, deep_b = st.columns([1.0, 1.12])
     with deep_a:
         st.plotly_chart(scorecard_figure(scorecard_dataframe(doc)), use_container_width=True)
     with deep_b:
-        topic = st.selectbox("Snippet view", options=["hawkish", "dovish", "inflation_concern", "labor_concern", "growth_concern"], index=0)
-        phrases = LEXICON[topic]
-        snippets = find_snippets(str(doc["body_text"]), phrases, max_snippets=5)
-        if not snippets:
-            st.info("No matching snippets found for that theme.")
-        else:
-            for snip in snippets:
+        st.markdown(
+            f"""
+            <div class='adfm-panel'>
+              <h4>Plain-English read</h4>
+              <div style='font-size:0.94rem;line-height:1.65;color:#333'>{html.escape(doc_takeaway_text(doc))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        evidence = best_evidence_paragraphs(doc, max_paragraphs=3)
+        if evidence:
+            st.markdown("**Evidence that drove the read**")
+            phrase_groups = []
+            if pd.notna(doc.get("tone_z_global")) and doc["tone_z_global"] >= 0:
+                phrase_groups.extend(LEXICON["hawkish"])
+            else:
+                phrase_groups.extend(LEXICON["dovish"])
+            for focus in top_focuses(doc, top_n=2):
+                if focus == "inflation":
+                    phrase_groups.extend(LEXICON["inflation_concern"])
+                elif focus == "labor":
+                    phrase_groups.extend(LEXICON["labor_concern"])
+                elif focus == "growth":
+                    phrase_groups.extend(LEXICON["growth_concern"])
+                elif focus == "financial stability":
+                    phrase_groups.extend(LEXICON["financial_stability"])
+                elif focus == "uncertainty":
+                    phrase_groups.extend(LEXICON["uncertainty_risk"])
+            for paragraph in evidence:
                 st.markdown(
-                    f"<div style='padding:0.75rem 0.9rem;border:1px solid #e5e5e5;border-radius:0.7rem;margin-bottom:0.55rem;background:#fff'>{highlight_terms(snip, phrases)}</div>",
+                    f"<div style='padding:0.75rem 0.9rem;border:1px solid #e5e5e5;border-radius:0.7rem;margin-bottom:0.55rem;background:#fff'>{highlight_terms(paragraph, phrase_groups)}</div>",
                     unsafe_allow_html=True,
                 )
+        else:
+            st.info("No clean evidence snippets were found in this document.")
 
     with st.expander("Show cleaned document text"):
         st.write(doc["body_text"])
 
     render_diagnostics(load_log(), stats)
-
 
 if __name__ == "__main__":
     main()
