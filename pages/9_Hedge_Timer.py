@@ -350,7 +350,7 @@ def compute_components_and_meta(
     macd_d = macd_hist(tgt)
 
     w = resample_last(tgt, "W-FRI")
-    m = resample_last(tgt, "M")
+    m = resample_last(tgt, "ME")
 
     rsi_w = mtf_to_daily(idx, rsi(w, 14))
     rsi_m = mtf_to_daily(idx, rsi(m, 14))
