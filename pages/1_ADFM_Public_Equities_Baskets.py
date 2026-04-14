@@ -45,30 +45,29 @@ MARKET_CAP_EXCEPTIONS = {
 # CATEGORY -> BASKETS -> TICKERS
 # -----------------------------
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {
+    CATEGORIES_CLEANED: Dict[str, Dict[str, List[str]]] = {
     "Growth & Innovation": {
         "Semis ETFs": ["SMH", "SOXX", "XSD"],
-        "Semis Compute and Accelerators": ["NVDA", "AMD", "INTC", "ARM", "AVGO", "MRVL"],
-        "Semis Analog and Power": ["TXN", "ADI", "MCHP", "NXPI", "MPWR", "ON", "STM", "IFNNY", "WOLF"],
+        "Semis Compute and Accelerators": ["NVDA", "AMD", "AVGO", "MRVL", "ARM", "INTC"],
+        "Semis Analog and Power": ["TXN", "ADI", "MCHP", "NXPI", "MPWR", "ON", "STM", "IFNNY"],
         "Semis RF and Connectivity": ["QCOM", "SWKS", "QRVO", "MTSI", "AVNW"],
-        "Semis Memory and Storage": ["MU", "WDC", "STX", "SKM"],
-        "Semis Foundry and OSAT": ["TSM", "UMC", "GFS", "ASX"],
+        "Semis Memory and Storage": ["MU", "WDC", "STX", "SNDK", "SKM"],
+        "Foundry Packaging and OSAT": ["TSM", "UMC", "GFS", "ASX", "AMKR"],
         "Semis Equipment": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ONTO", "AEIS", "ACMR"],
         "Semis EDA and IP": ["SNPS", "CDNS", "ARM"],
-        "Semis China and HK ADRs": ["HIMX", "TSM", "UMC"],
 
         "Semis Automotive and Industrial End-Markets": ["NXPI", "ON", "MCHP", "STM", "QCOM", "ADI"],
-        "Semis Test, Assembly, and Packaging": ["AMKR", "TER", "ONTO", "AEIS", "KLAC"],
+        "Semis Test Assembly and Packaging": ["AMKR", "TER", "ONTO", "AEIS", "KLAC"],
 
-        "AI Infrastructure Leaders": [
+        "AI Infrastructure Supply Chain": [
             "NVDA", "AMD", "AVGO", "TSM", "ASML",
-            "ANET", "SMCI", "DELL", "HPE",
+            "ANET", "MRVL", "MU",
             "AMAT", "LRCX", "KLAC", "TER",
-            "MRVL", "MU", "WDC", "STX", "NTAP",
-            "ORCL", "MSFT", "AMZN", "GOOGL"
+            "VRT", "ETN", "SMCI", "DELL"
         ],
-        "Hyperscalers and Cloud": [
-            "MSFT", "AMZN", "GOOGL", "META", "ORCL", "IBM",
-            "NOW", "CRM", "DDOG", "SNOW", "MDB", "NET", "ZS", "OKTA"
+        "Hyperscalers": ["MSFT", "AMZN", "GOOGL", "META", "ORCL"],
+        "Enterprise Software and Cloud": [
+            "NOW", "CRM", "DDOG", "SNOW", "MDB", "NET", "ZS", "OKTA", "TEAM", "HUBS", "INTU", "ADBE"
         ],
 
         "Usage-Based and Consumption Software": ["SNOW", "DDOG", "MDB", "NET", "CRWD"],
@@ -77,42 +76,43 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
         "Quality SaaS": ["ADBE", "CRM", "NOW", "INTU", "TEAM", "HUBS", "DDOG", "NET", "MDB", "SNOW"],
         "Cybersecurity": ["PANW", "FTNT", "CRWD", "ZS", "OKTA", "TENB", "S", "CYBR", "CHKP", "NET"],
-        "Digital Payments": ["V", "MA", "PYPL", "SQ", "FI", "FIS", "GPN", "AXP", "COF", "DFS", "ADYEY", "MELI"],
+        "Digital Payments": ["V", "MA", "PYPL", "XYZ", "FI", "FIS", "GPN", "AXP", "COF", "DFS", "MELI"],
         "E-Commerce Platforms": ["AMZN", "SHOP", "MELI", "ETSY", "PDD", "BABA", "JD", "SE"],
         "Social and Consumer Internet": ["META", "SNAP", "PINS", "MTCH", "GOOGL", "BILI", "BIDU", "RBLX"],
         "Streaming and Media": ["NFLX", "DIS", "WBD", "PARA", "ROKU", "SPOT", "LYV", "CHTR", "CMCSA"],
-        "Fintech and Neobanks": ["SQ", "PYPL", "AFRM", "HOOD", "SOFI", "UPST", "LC", "ALLY", "COF", "DFS"],
+        "Fintech and Neobanks": ["XYZ", "PYPL", "AFRM", "HOOD", "SOFI", "UPST"],
     },
 
     "AI and Data Center Stack": {
         "Data Center Networking": ["ANET", "CSCO", "JNPR", "MRVL", "AVGO", "CIEN", "LITE", "INFN"],
         "Optical and Coherent": ["CIEN", "LITE", "INFN", "COHR", "AAOI"],
-        "Data Center Power and Cooling": ["VRT", "ETN", "TT", "JCI", "CARR", "ABB", "POWL"],
+        "Data Center Power and Cooling": ["VRT", "ETN", "TT", "JCI", "CARR", "ABB", "POWL", "GEV"],
         "Data Center REITs": ["EQIX", "DLR", "AMT", "SBAC", "CCI"],
-        "Servers and Storage": ["SMCI", "DELL", "HPE", "NTAP", "WDC", "STX", "IBM"],
+        "Servers": ["SMCI", "DELL", "HPE"],
+        "Storage and Data Infrastructure": ["NTAP", "WDC", "STX", "IBM", "SNDK"],
         "IT Services and Systems Integrators": ["ACN", "IBM", "CTSH", "EPAM", "GIB"],
 
-        "Rack Power Delivery and Electrical Gear": ["ETN", "VRT", "ABB", "POWL", "JCI"],
-        "AI Data Center Capex Beneficiaries": ["ANET", "AVGO", "MRVL", "ETN", "VRT", "SMCI", "DELL", "EQIX"],
+        "Rack Power Delivery and Electrical Gear": ["ETN", "VRT", "ABB", "POWL", "JCI", "GEV"],
+        "AI Data Center Capex Beneficiaries": ["ANET", "AVGO", "MRVL", "ETN", "VRT", "GEV", "PWR", "SMCI", "DELL", "EQIX"],
     },
 
     "Connectivity and Industrial Tech": {
-        "5G and Networking Infra": ["AMT", "CCI", "SBAC", "ANET", "CSCO", "JNPR", "HPE", "ERIC", "NOK", "FFIV"],
-        "Industrial Automation": ["ROK", "ETN", "EMR", "AME", "PH", "ABB", "FANUY", "KEYS", "TRMB", "CGNX", "IEX", "ITW", "GWW", "SYM"],
+        "5G and Networking Infra": ["AMT", "CCI", "SBAC", "ANET", "CSCO", "JNPR", "ERIC", "NOK", "FFIV"],
+        "Industrial Automation": ["ROK", "ETN", "EMR", "AME", "PH", "ABB", "KEYS", "TRMB", "CGNX", "IEX", "ITW", "GWW", "SYM"],
         "Aerospace Tech and Space": ["RKLB", "IRDM", "ASTS", "LHX", "LMT", "NOC", "RTX"],
         "Defense Software and ISR": ["PLTR", "KTOS", "AVAV", "LHX", "LDOS", "BAH"],
 
-        "Aerospace Aftermarket and MRO Exposure": ["GE", "RTX", "LMT", "HEI", "TDG"],
-        "Electrification and Grid Modernization": ["ETN", "ABB", "PWR", "MYRG", "POWL", "VRT"],
+        "Aerospace Aftermarket and MRO Exposure": ["GE", "RTX", "HEI", "TDG"],
+        "Electrification and Grid Modernization": ["ETN", "ABB", "PWR", "MYRG", "POWL", "VRT", "GEV"],
     },
 
     "Energy and Hard Assets": {
         "Energy Majors": ["XOM", "CVX", "COP", "SHEL", "BP", "TTE", "EQNR", "ENB", "PBR"],
         "US Shale and E&Ps": ["EOG", "DVN", "FANG", "MRO", "OXY", "APA", "AR", "RRC", "EXE", "CTRA"],
-        "Natural Gas and LNG": ["LNG", "EQNR", "KMI", "WMB", "EPD", "ET", "TELL"],
-        "Oilfield Services": ["SLB", "HAL", "BKR", "NOV", "CHX", "FTI", "PTEN", "HP", "NBR", "OII"],
+        "Natural Gas and LNG": ["LNG", "EQNR", "KMI", "WMB", "EPD", "ET", "WDS"],
+        "Oilfield Services": ["SLB", "HAL", "BKR", "NOV", "FTI", "PTEN", "HP", "NBR", "OII"],
         "Uranium and Fuel Cycle": ["CCJ", "UUUU", "UEC", "URG", "UROY", "DNN", "NXE", "LEU", "URA", "URNM"],
-        "Nuclear and Grid Buildout": ["VST", "CEG", "BWXT", "LEU", "ETN", "VRT"],
+        "Nuclear and Grid Buildout": ["VST", "CEG", "BWXT", "LEU", "ETN", "VRT", "GEV"],
         "Metals and Mining": ["BHP", "RIO", "VALE", "FCX", "NEM", "TECK", "SCCO", "AA"],
         "Gold and Silver Miners": ["GDX", "GDXJ", "NEM", "AEM", "GOLD", "KGC", "AG", "PAAS", "WPM"],
         "Energy Midstream and Storage": ["KMI", "WMB", "EPD", "ET", "ENB", "MPLX"],
@@ -120,20 +120,24 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
         "Oil-Weighted E&Ps": ["EOG", "FANG", "OXY", "DVN", "MRO"],
         "Gas-Weighted E&Ps": ["AR", "RRC", "CTRA", "EXE", "EQT"],
-        "LNG Export Levered": ["LNG", "KMI", "WMB", "ET", "EPD"],
+        "LNG Export Levered": ["LNG", "KMI", "WMB", "ET", "EPD", "WDS"],
     },
 
     "Clean Energy Transition": {
         "Solar and Inverters": ["TAN", "FSLR", "ENPH", "SEDG", "RUN", "CSIQ", "JKS"],
         "Wind and Renewables": ["ICLN", "FAN", "NEP", "FSLR", "CWEN"],
-        "Hydrogen": ["PLUG", "BE", "BLDP"],
-        "Utilities and Power": ["VST", "CEG", "NEE", "DUK", "SO", "AEP", "XEL", "EXC", "PCG", "EIX", "ED"],
+
+        "Distributed Power and Fuel Cells": ["BE", "BLDP", "FCEL"],
+        "Hydrogen Fuel and Electrolyzers": ["PLUG", "BE"],
+
+        "Utilities and Power": ["VST", "CEG", "NEE", "DUK", "SO", "AEP", "XEL", "EXC", "PCG", "EIX"],
         "Regulated Utilities Core": ["DUK", "SO", "AEP", "XEL", "EXC", "ED"],
         "Merchant Power and Volatility": ["VST", "CEG", "NRG", "AES", "CWEN"],
+        "Grid Equipment and Power Conversion": ["GEV", "ETN", "VRT", "ABB", "POWL", "HUBB"],
     },
 
     "Health and Longevity": {
-        "Large-Cap Biotech": ["AMGN", "GILD", "REGN", "BIIB", "VRTX", "ILMN"],
+        "Large-Cap Biotech": ["AMGN", "GILD", "REGN", "BIIB", "VRTX"],
         "GLP-1 and Metabolic": ["NVO", "LLY", "AZN", "MRK", "PFE"],
         "MedTech Devices": ["MDT", "SYK", "ISRG", "BSX", "ZBH", "EW", "PEN"],
         "Diagnostics and Tools": ["TMO", "DHR", "A", "RGEN", "ILMN"],
@@ -143,7 +147,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
         "Drug Channel and PBM Exposure": ["CVS", "UNH", "CI", "ELV"],
         "Life Science Tools and Supply Chain": ["TMO", "DHR", "A", "RGEN", "WAT"],
-        "CRO and Clinical Services": ["IQV", "SYK", "TMO", "LH", "DGX"],
+        "CRO and Clinical Services": ["IQV", "LH", "DGX", "MEDP", "ICLR"],
     },
 
     "Financials and Credit": {
@@ -151,7 +155,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Regional Banks": ["KRE", "TFC", "FITB", "CFG", "RF", "KEY", "PNC", "USB", "MTB"],
         "Brokers and Exchanges": ["IBKR", "SCHW", "HOOD", "CME", "ICE", "NDAQ", "CBOE", "MKTX"],
         "Alt Managers and PE": ["BX", "KKR", "APO", "CG", "ARES", "OWL", "TPG"],
-        "Credit and Specialty Finance": ["MS", "GS", "BX", "KKR", "ARES", "MAIN", "ARCC"],
+        "Private Credit and BDCs": ["ARES", "MAIN", "ARCC"],
         "Mortgage Finance": ["RKT", "UWMC", "COOP", "FNF", "NMIH", "ESNT"],
         "Insurers": ["BRK-B", "CB", "TRV", "PGR", "AIG", "MET"],
         "Insurance P&C": ["PGR", "TRV", "CB", "ALL", "CINF"],
@@ -169,7 +173,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Homebuilders": ["ITB", "DHI", "LEN", "NVR", "PHM", "TOL", "KBH", "MTH"],
         "REITs Core": ["VNQ", "PLD", "EQIX", "SPG", "O", "PSA", "DLR", "ARE", "VTR", "WELL"],
         "Industrials and Infrastructure": ["CAT", "DE", "URI", "PWR", "VMC", "MLM", "NUE"],
-        "Shipping and Logistics": ["FDX", "UPS", "GXO", "XPO", "ZIM", "MATX", "DAC"],
+        "Shipping and Logistics": ["FDX", "UPS", "GXO", "XPO", "MATX", "DAC"],
         "Agriculture and Machinery": ["MOS", "NTR", "DE", "CNHI", "ADM", "BG", "CF", "AGCO"],
         "Housing Home Improvement and Repair": ["HD", "LOW", "TSCO", "POOL"],
         "Housing Building Products and Materials": ["BLDR", "TREX", "MAS", "VMC", "MLM", "SUM"],
@@ -191,17 +195,17 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Autos Legacy OEMs": ["TM", "HMC", "F", "GM", "STLA"],
         "Electric Vehicles": ["TSLA", "RIVN", "LCID", "NIO", "LI", "XPEV"],
         "Luxury and Apparel": ["TPR", "RL", "CPRI", "LVMUY"],
-        "Retail Asset-Heavy Inventory Risk": ["WMT", "TGT", "COST", "BBY", "M", "GPS", "KSS", "BBWI"],
+        "Retail Asset-Heavy Inventory Risk": ["TGT", "BBY", "M", "GPS", "KSS", "BBWI"],
         "Retail Asset-Light Platforms and Marketplaces": ["AMZN", "EBAY", "ETSY", "SHOP", "PDD", "MELI"],
 
-        "Prime Consumer Discretionary": ["COST", "HD", "LOW", "LULU", "NKE"],
+        "Prime Consumer Discretionary": ["HD", "LOW", "LULU", "NKE", "RH"],
         "Subprime and Credit-Sensitive Consumer": ["AFRM", "UPST", "COF", "DFS", "SYF"],
-        "Big Ticket Durables": ["WHR", "TPX", "BBY", "RH", "LOW"],
+        "Big Ticket Durables": ["WHR", "SGI", "BBY", "RH", "LOW"],
         "Auto Parts and Service Tailwind": ["AZO", "ORLY", "LKQ", "AAP"],
     },
 
     "Defensives and Staples": {
-        "Retail Staples": ["WMT", "COST", "TGT", "DG", "KR", "WBA"],
+        "Retail Staples": ["WMT", "TGT", "DG", "KR", "WBA"],
         "Staples and Beverages": ["PG", "KO", "PEP", "PM", "MO", "MDLZ"],
         "Telecom and Cable": ["T", "VZ", "TMUS", "CHTR", "CMCSA"],
         "Aerospace and Defense": ["LMT", "NOC", "RTX", "GD", "HII", "TDG", "HEI"],
@@ -272,8 +276,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Net-Cash Compounders": ["AAPL", "MSFT", "GOOGL", "META", "ORCL", "ADBE", "INTU", "V"],
         "Equity Credit Stress Proxies": ["HYG", "JNK", "LQD"],
         "Financial Conditions Sensitive": ["IWM", "XLY", "KRE", "HYG", "ARKK"],
-        "Dollar-Up Winners": ["XLK", "XLC", "XLY", "IYT"],
-        "Dollar-Down Beneficiaries": ["XME", "GDX", "EEM", "EWZ"],
         "Commodity FX Equities": ["EWC", "EWA", "EWZ", "EWW"],
         "EM Domestic Demand": ["EEM", "INDA", "EWW", "EWZ", "EIDO"],
 
@@ -290,18 +292,13 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
         "Transportation Parcel and Last-Mile": ["FDX", "UPS", "GXO", "XPO"],
         "Air Cargo and Leasing": ["AL", "FTAI", "AER"],
 
-        "Commodity Chemicals": ["DOW", "LYB", "CE"],
-        "Specialty Chemicals": ["SHW", "EMN", "IFF", "PPG"],
-        "Industrial Gases": ["LIN", "APD", "AIQUY"],
-
         "Digital Advertising Platforms": ["GOOGL", "META", "TTD", "PINS", "SNAP"],
         "Traditional Media and Content": ["DIS", "WBD", "PARA", "CHTR", "CMCSA"],
         "Marketing Services and Agencies": ["IPG", "OMC", "WPP"],
 
         "Gov IT and Services": ["SAIC", "CACI", "LDOS", "BAH", "PSN", "G"],
-        "Public-Sector Systems Integration": ["ACN", "IBM", "CTSH", "EPAM"],
         "Defense and Security Spending": ["LMT", "NOC", "RTX", "GD", "LHX", "HII", "TDG"],
-        "Infrastructure and Grid Spend": ["PWR", "ETN", "VRT", "ABB", "CAT", "URI", "VMC", "MLM"],
+        "Infrastructure and Grid Spend": ["PWR", "ETN", "VRT", "ABB", "GEV", "CAT", "URI", "VMC", "MLM"],
 
         "Healthcare Policy Sensitive": ["UNH", "HUM", "CI", "ELV", "CNC", "CVS"],
         "Energy Subsidy and Transition Plays": ["FSLR", "ENPH", "BE", "PLUG", "NEE", "VST", "ICLN"],
@@ -309,7 +306,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
     "Everyday Economy": {
         "Recreation and Experiences": ["YETI", "FOXF", "ASO", "DOO", "PLAY", "LYV", "FUN", "RICK"],
-        "Deferred Durables and Home": ["SGI", "SNBR", "WHR", "POOL", "LOW", "TTC", "LAD"],
+        "Big Ticket and Home Replacement Cycle": ["SGI", "SNBR", "WHR", "POOL", "LOW", "TTC", "LAD"],
         "Deferred Healthcare": ["ALGN", "EYE", "WRBY", "HSIC"],
         "Debt and Credit Paydown": ["OMF", "CACC", "SYF", "COF", "OPFI", "ENVA"],
 
