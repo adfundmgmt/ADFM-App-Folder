@@ -269,7 +269,7 @@ def build_events(
         for idx in events.index:
             if last_kept is None or (idx - last_kept).days > lookback_gap:
                 keep_idx.append(idx)
-                last_kept = idx)
+                last_kept = idx
         events = events.loc[keep_idx].copy()
 
     return events
