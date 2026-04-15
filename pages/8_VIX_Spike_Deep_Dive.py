@@ -26,16 +26,6 @@ BAR_EDGE = "#666666"
 TEXT_COLOR = "#222222"
 
 # ------------------------------- Helpers -----------------------------------
-def card_box(inner_html):
-    st.markdown(
-        f"""
-        <div style="border:1px solid #e0e0e0; border-radius:10px; padding:14px; background:#fafafa; color:{TEXT_COLOR}; font-size:14px; line-height:1.4;">
-          {inner_html}
-        </div>
-        """.strip(),
-        unsafe_allow_html=True
-    )
-
 def fmt_pct(x, digits=1):
     if pd.isna(x):
         return "NA"
@@ -105,6 +95,12 @@ def safe_std(s):
         return np.nan
     v = x.std()
     return np.nan if v == 0 else v
+
+def render_metric_box(title, lines):
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        for line in lines:
+            st.markdown(line)
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
 def load_market_history(start="1990-01-01"):
@@ -273,7 +269,7 @@ def build_events(
         for idx in events.index:
             if last_kept is None or (idx - last_kept).days > lookback_gap:
                 keep_idx.append(idx)
-                last_kept = idx
+                last_kept = idx)
         events = events.loc[keep_idx].copy()
 
     return events
@@ -297,10 +293,7 @@ def compute_similarity(events, latest_idx, feature_cols):
             if pd.isna(a) or pd.isna(b) or pd.isna(s):
                 continue
             diffs.append(abs(a - b) / s)
-        if len(diffs) == 0:
-            scores.loc[idx] = np.nan
-        else:
-            scores.loc[idx] = np.mean(diffs)
+        scores.loc[idx] = np.nan if len(diffs) == 0 else np.mean(diffs)
 
     return scores.sort_values()
 
@@ -355,16 +348,16 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: classify large VIX events, score historical analogs, and map forward SPX paths.
+Purpose: classify large VIX events, score historical analogs, and map forward SPX paths.
 
-        What it covers
-        • Panic versus relief events
-        • Context-aware event study
-        • Analog matching on tape, trend, drawdown, vol, and cross-asset proxies
-        • Forward path cones and failure rates
+What it covers
+• Panic versus relief events
+• Context-aware event study
+• Analog matching on tape, trend, drawdown, vol, and cross-asset proxies
+• Forward path cones and failure rates
 
-        Data source
-        • Yahoo Finance
+Data source
+• Yahoo Finance
         """
     )
     st.divider()
@@ -444,28 +437,17 @@ sim_scores = sim_scores.drop(index=latest_idx, errors="ignore")
 analogs_idx = sim_scores.head(analog_count).index.tolist()
 analogs = events.loc[analogs_idx].copy() if len(analogs_idx) else pd.DataFrame()
 
-# ------------------------------- State / verdict ---------------------------
-latest_wr_setup = winrate(
-    events.loc[
-        (events["event_type"] == latest["event_type"]) &
-        (events["context_label"] == latest["context_label"]),
-        f"spx_fwd_{forward_focus}d"
-    ]
-)
-
-latest_median_setup = events.loc[
+latest_setup = events[
     (events["event_type"] == latest["event_type"]) &
-    (events["context_label"] == latest["context_label"]),
-    f"spx_fwd_{forward_focus}d"
-].median()
+    (events["context_label"] == latest["context_label"])
+].copy()
+
+latest_wr_setup = winrate(latest_setup[f"spx_fwd_{forward_focus}d"])
+latest_median_setup = latest_setup[f"spx_fwd_{forward_focus}d"].median()
 
 latest_continuation_rate = (
-    100.0 *
-    (events.loc[
-        (events["event_type"] == latest["event_type"]) &
-        (events["context_label"] == latest["context_label"]),
-        "outcome_label"
-    ] == "Continuation").mean()
+    100.0 * (latest_setup["outcome_label"] == "Continuation").mean()
+    if not latest_setup.empty else np.nan
 )
 
 if pd.notna(latest_wr_setup) and pd.notna(latest_median_setup):
@@ -490,58 +472,53 @@ else:
 col1, col2 = st.columns([1.6, 1.0])
 
 with col1:
-    dt = latest_idx.strftime("%Y-%m-%d")
-    summary_html = f"""
-    <div style="font-weight:700; margin-bottom:6px;">Latest Event Snapshot</div>
-    <div><b>Date</b>: {dt}</div>
-    <div><b>Type</b>: {latest['event_type']}</div>
-    <div><b>Context</b>: {latest['context_label']}</div>
-    <div><b>Verdict</b>: {verdict}</div>
-    <div style="margin-top:8px;"><b>VIX</b>: {fmt_num(latest['vix_close'])} | <b>Daily move</b>: {fmt_pct(latest['vix_pctchg'] * 100.0)}</div>
-    <div><b>SPX 1D</b>: {fmt_pct(latest['spx_ret_1d'])} | <b>SPX 5D</b>: {fmt_pct(latest['spx_ret_5d'])}</div>
-    <div><b>Drawdown from peak</b>: {fmt_pct(latest['spx_drawdown_pct'])} | <b>RSI14</b>: {fmt_num(latest['rsi14'], 1)}</div>
-    <div><b>Dist to 20DMA</b>: {fmt_pct(latest['dist_20dma'])} | <b>Dist to 50DMA</b>: {fmt_pct(latest['dist_50dma'])} | <b>Dist to 200DMA</b>: {fmt_pct(latest['dist_200dma'])}</div>
-    <div><b>RV20</b>: {fmt_pct(latest['rv20'])} | <b>RV20 percentile</b>: {fmt_pct(latest['rv20_pctile_252'])}</div>
-    <div style="margin-top:8px;"><b>Setup sample</b>: WR {fmt_pct(latest_wr_setup)}, median {fmt_pct(latest_median_setup)}, continuation risk {fmt_pct(latest_continuation_rate)}</div>
-    """
-    card_box(summary_html)
+    render_metric_box(
+        "Latest Event Snapshot",
+        [
+            f"**Date**: {latest_idx.strftime('%Y-%m-%d')}",
+            f"**Type**: {latest['event_type']}",
+            f"**Context**: {latest['context_label']}",
+            f"**Verdict**: {verdict}",
+            f"**VIX**: {fmt_num(latest['vix_close'])} | **Daily move**: {fmt_pct(latest['vix_pctchg'] * 100.0)}",
+            f"**SPX 1D**: {fmt_pct(latest['spx_ret_1d'])} | **SPX 5D**: {fmt_pct(latest['spx_ret_5d'])}",
+            f"**Drawdown from peak**: {fmt_pct(latest['spx_drawdown_pct'])} | **RSI14**: {fmt_num(latest['rsi14'], 1)}",
+            f"**Dist to 20DMA**: {fmt_pct(latest['dist_20dma'])} | **Dist to 50DMA**: {fmt_pct(latest['dist_50dma'])} | **Dist to 200DMA**: {fmt_pct(latest['dist_200dma'])}",
+            f"**RV20**: {fmt_pct(latest['rv20'])} | **RV20 percentile**: {fmt_pct(latest['rv20_pctile_252'])}",
+            f"**Setup sample**: WR {fmt_pct(latest_wr_setup)}, median {fmt_pct(latest_median_setup)}, continuation risk {fmt_pct(latest_continuation_rate)}",
+        ]
+    )
 
 with col2:
-    filter_html = f"""
-    <div style="font-weight:700; margin-bottom:6px;">Current Definition</div>
-    <div><b>Event mode</b>: {event_mode}</div>
-    <div><b>Abs threshold</b>: {abs_move_threshold}%</div>
-    <div><b>Z threshold</b>: {z_threshold}</div>
-    <div><b>SPX confirm</b>: {spx_down_confirm}%</div>
-    <div><b>Dedup gap</b>: {dedupe_gap} days</div>
-    <div><b>Primary horizon</b>: {forward_focus} days</div>
-    <div><b>Included events</b>: {len(events)}</div>
-    <div><b>Latest setup label</b>: {latest['event_label']}</div>
-    """
-    card_box(filter_html)
+    render_metric_box(
+        "Current Definition",
+        [
+            f"**Event mode**: {event_mode}",
+            f"**Abs threshold**: {abs_move_threshold}%",
+            f"**Z threshold**: {z_threshold}",
+            f"**SPX confirm**: {spx_down_confirm}%",
+            f"**Dedup gap**: {dedupe_gap} days",
+            f"**Primary horizon**: {forward_focus} days",
+            f"**Included events**: {len(events)}",
+            f"**Latest setup label**: {latest['event_label']}",
+        ]
+    )
 
 # ------------------------------- Dynamic readout ---------------------------
 st.subheader("What just happened and what usually comes next")
 
-same_setup = events[
-    (events["event_type"] == latest["event_type"]) &
-    (events["context_label"] == latest["context_label"])
-].copy()
-
-same_context = events[events["context_label"] == latest["context_label"]].copy()
-same_type = events[events["event_type"] == latest["event_type"]].copy()
+same_setup = latest_setup.copy()
 
 text = []
 
 if latest["event_type"] == "Panic":
     text.append(
-        f"This was a {latest['event_type'].lower()} event inside a {latest['context_label'].lower()} context. "
+        f"This was a panic event inside a {latest['context_label'].lower()} context. "
         f"The market came in with SPX {fmt_pct(latest['spx_ret_5d'])} over five days, drawdown {fmt_pct(latest['spx_drawdown_pct'])} from peak, "
         f"and VIX jumped {fmt_pct(latest['vix_pctchg'] * 100.0)} on the day."
     )
 else:
     text.append(
-        f"This was a {latest['event_type'].lower()} event inside a {latest['context_label'].lower()} context. "
+        f"This was a relief event inside a {latest['context_label'].lower()} context. "
         f"Fear came out of the tape with VIX down {fmt_pct(latest['vix_pctchg'] * 100.0)}, while SPX had moved {fmt_pct(latest['spx_ret_5d'])} over the prior five days."
     )
 
@@ -562,7 +539,9 @@ if len(analogs) > 0:
         f"That gives you a more tape-aware read than a raw bucket average."
     )
 
-card_box("<br><br>".join(text))
+with st.container(border=True):
+    for paragraph in text:
+        st.write(paragraph)
 
 # ------------------------------- Main charts -------------------------------
 st.subheader("Forward path and analog engine")
@@ -639,22 +618,25 @@ st.subheader("Failure rates and classification")
 col3, col4 = st.columns([1, 1])
 
 with col3:
-    outcome_table = (
-        same_setup["outcome_label"]
-        .value_counts(normalize=True)
-        .mul(100.0)
-        .rename("Rate_%")
-        .reset_index()
-        .rename(columns={"index": "Outcome"})
-    )
-    if not outcome_table.empty:
-        fig2, ax = plt.subplots(figsize=(7, 4))
-        ax.bar(outcome_table["Outcome"], outcome_table["Rate_%"], edgecolor=BAR_EDGE)
-        ax.set_title("Outcome Mix | Same Setup", color=TEXT_COLOR, fontsize=12)
-        ax.set_ylabel("Rate (%)")
-        ax.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
-        plt.xticks(rotation=20, ha="right")
-        st.pyplot(fig2, clear_figure=True)
+    if not same_setup.empty:
+        outcome_table = (
+            same_setup["outcome_label"]
+            .value_counts(normalize=True)
+            .mul(100.0)
+            .rename_axis("Outcome")
+            .reset_index(name="Rate_%")
+        )
+
+        if not outcome_table.empty and {"Outcome", "Rate_%"} <= set(outcome_table.columns):
+            fig2, ax = plt.subplots(figsize=(7, 4))
+            ax.bar(outcome_table["Outcome"], outcome_table["Rate_%"], edgecolor=BAR_EDGE)
+            ax.set_title("Outcome Mix | Same Setup", color=TEXT_COLOR, fontsize=12)
+            ax.set_ylabel("Rate (%)")
+            ax.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
+            plt.xticks(rotation=20, ha="right")
+            st.pyplot(fig2, clear_figure=True)
+        else:
+            st.write("Outcome table could not be constructed for current setup.")
     else:
         st.write("No outcome sample for current setup.")
 
