@@ -342,7 +342,7 @@ def build_path_stats(events, horizons):
     return pd.DataFrame(data)
 
 # ------------------------------- Sidebar -----------------------------------
-st.title("VIX Event Deep Dive")
+st.title("VIX Spike Deep Dive")
 
 with st.sidebar:
     st.header("About This Tool")
