@@ -1,23 +1,22 @@
-# vix_spike_deep_dive.py
-# ADFM Analytics Platform | VIX Spike Deep Dive
-# Captures both VIX spikes up and VIX drops down by absolute % threshold
+# vix_spike_deep_dive_rebuilt.py
+# ADFM Analytics Platform | VIX Event Deep Dive
+# Rebuilt as an event-study and analog engine using Yahoo Finance only
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import pandas as pd
+from datetime import datetime
 import numpy as np
+import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
-from datetime import datetime
 import streamlit as st
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(page_title="ADFM | VIX Spike Deep Dive", layout="wide")
+st.set_page_config(page_title="ADFM | VIX Event Deep Dive", layout="wide")
 plt.style.use("default")
 
-# ------------------------------- Pastel palette ----------------------------
+# ------------------------------- Style -------------------------------------
 PASTELS = [
     "#A8DADC", "#F4A261", "#90BE6D", "#FFCC99", "#BDE0FE",
     "#CDB4DB", "#FFD6A5", "#E2F0CB", "#F1C0E8", "#B9FBC0"
@@ -27,23 +26,25 @@ BAR_EDGE = "#666666"
 TEXT_COLOR = "#222222"
 
 # ------------------------------- Helpers -----------------------------------
-@st.cache_data(show_spinner=False, ttl=60 * 60)
-def load_history(start="1990-01-01"):
-    vix = yf.download("^VIX", start=start, auto_adjust=False, progress=False)
-    spx = yf.download("^GSPC", start=start, auto_adjust=False, progress=False)
+def card_box(inner_html):
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e0e0e0; border-radius:10px; padding:14px; background:#fafafa; color:{TEXT_COLOR}; font-size:14px; line-height:1.4;">
+          {inner_html}
+        </div>
+        """.strip(),
+        unsafe_allow_html=True
+    )
 
-    vix = vix.rename(columns=str.lower)
-    spx = spx.rename(columns=str.lower)
+def fmt_pct(x, digits=1):
+    if pd.isna(x):
+        return "NA"
+    return f"{x:.{digits}f}%"
 
-    df = pd.DataFrame(index=vix.index)
-    df["vix_close"] = vix["close"]
-    df["vix_prev"] = df["vix_close"].shift(1)
-    df["vix_pctchg"] = (df["vix_close"] / df["vix_prev"] - 1.0)
-    df["vix_abs_pctchg"] = df["vix_pctchg"].abs()
-    df["spx_close"] = spx["close"].reindex(df.index).ffill()
-    df["rsi14"] = compute_rsi(df["spx_close"], 14)
-    return df.dropna(subset=["vix_close", "spx_close"])
-
+def fmt_num(x, digits=2):
+    if pd.isna(x):
+        return "NA"
+    return f"{x:.{digits}f}"
 
 def compute_rsi(series, n=14):
     delta = series.diff()
@@ -52,647 +53,748 @@ def compute_rsi(series, n=14):
     roll_up = pd.Series(up, index=series.index).ewm(alpha=1 / n, adjust=False).mean()
     roll_down = pd.Series(down, index=series.index).ewm(alpha=1 / n, adjust=False).mean()
     rs = roll_up / roll_down.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-
-def bucket_vix_base(x, bins, labels):
-    if pd.isna(x):
-        return np.nan
-    try:
-        return pd.cut([x], bins=bins, labels=labels, right=False, include_lowest=True)[0]
-    except Exception:
-        return np.nan
-
-
-def bucket_move_mag(abs_pct):
-    if abs_pct < 0.30:
-        return "Moderate (25-30%)"
-    elif abs_pct < 0.50:
-        return "Large (30-50%)"
-    else:
-        return "Extreme (50%+)"
-
-
-def move_type_label(pct):
-    return "Spike Up" if pct >= 0 else "Spike Down"
-
-
-def decade_label(dt):
-    y = dt.year
-    return f"{y // 10 * 10}s"
-
+    return 100 - (100 / (1 + rs))
 
 def winrate(series):
-    series = pd.to_numeric(series, errors="coerce").dropna()
-    return 100.0 * (series > 0).mean() if len(series) else np.nan
-
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) == 0:
+        return np.nan
+    return 100.0 * (s > 0).mean()
 
 def pct_bands(series):
-    series = pd.to_numeric(series, errors="coerce").dropna()
-    if len(series) == 0:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) == 0:
         return np.nan, np.nan, np.nan
-    return np.percentile(series, [10, 50, 90])
+    return np.percentile(s, [10, 50, 90])
 
+def max_drawdown_from_peak(price):
+    peak = price.cummax()
+    dd = price / peak - 1.0
+    return dd * 100.0
 
-def mean_abs_deviation(series):
-    series = pd.to_numeric(series, errors="coerce").dropna()
-    if len(series) == 0:
+def zscore(series, window):
+    mean = series.rolling(window).mean()
+    std = series.rolling(window).std()
+    return (series - mean) / std.replace(0, np.nan)
+
+def percentile_rank_rolling(series, window):
+    vals = []
+    arr = series.values
+    idx = series.index
+    for i in range(len(arr)):
+        if i < window - 1 or pd.isna(arr[i]):
+            vals.append(np.nan)
+            continue
+        chunk = arr[i - window + 1:i + 1]
+        chunk = chunk[~np.isnan(chunk)]
+        if len(chunk) == 0:
+            vals.append(np.nan)
+            continue
+        vals.append(100.0 * (chunk <= arr[i]).mean())
+    return pd.Series(vals, index=idx)
+
+def future_return(price, h):
+    return (price.shift(-h) / price - 1.0) * 100.0
+
+def make_event_label(row):
+    return f"{row['event_type']} | {row['context_label']}"
+
+def safe_std(s):
+    x = pd.to_numeric(s, errors="coerce").dropna()
+    if len(x) == 0:
         return np.nan
-    return np.mean(np.abs(series - np.mean(series)))
+    v = x.std()
+    return np.nan if v == 0 else v
 
+@st.cache_data(show_spinner=False, ttl=60 * 60)
+def load_market_history(start="1990-01-01"):
+    tickers = {
+        "vix": "^VIX",
+        "spx": "^GSPC",
+        "qqq": "QQQ",
+        "iwm": "IWM",
+        "hyg": "HYG",
+        "ief": "IEF",
+        "tlt": "TLT",
+    }
 
-def fmt_pct(x, digits=1):
-    if pd.isna(x):
-        return "NA"
-    return f"{x:.{digits}f}%"
+    out = {}
+    for key, ticker in tickers.items():
+        df = yf.download(ticker, start=start, auto_adjust=False, progress=False)
+        if df.empty:
+            out[key] = pd.DataFrame()
+        else:
+            df = df.rename(columns=str.lower)
+            out[key] = df
 
+    if out["vix"].empty or out["spx"].empty:
+        return pd.DataFrame()
 
-def card_box(inner_html):
-    st.markdown(
-        f"""
-        <div style="border:1px solid #e0e0e0; border-radius:10px; padding:14px; background:#fafafa; color:{TEXT_COLOR}; font-size:14px; line-height:1.35;">
-          {inner_html}
-        </div>
-        """.strip(),
-        unsafe_allow_html=True
+    idx = out["spx"].index.union(out["vix"].index).sort_values()
+    df = pd.DataFrame(index=idx)
+
+    df["vix_close"] = out["vix"]["close"].reindex(idx).ffill()
+    df["spx_close"] = out["spx"]["close"].reindex(idx).ffill()
+    df["qqq_close"] = out["qqq"]["close"].reindex(idx).ffill() if not out["qqq"].empty else np.nan
+    df["iwm_close"] = out["iwm"]["close"].reindex(idx).ffill() if not out["iwm"].empty else np.nan
+    df["hyg_close"] = out["hyg"]["close"].reindex(idx).ffill() if not out["hyg"].empty else np.nan
+    df["ief_close"] = out["ief"]["close"].reindex(idx).ffill() if not out["ief"].empty else np.nan
+    df["tlt_close"] = out["tlt"]["close"].reindex(idx).ffill() if not out["tlt"].empty else np.nan
+
+    df = df.dropna(subset=["vix_close", "spx_close"]).copy()
+
+    df["vix_prev"] = df["vix_close"].shift(1)
+    df["vix_pctchg"] = df["vix_close"] / df["vix_prev"] - 1.0
+    df["vix_abs_pctchg"] = df["vix_pctchg"].abs()
+    df["vix_change"] = df["vix_close"].diff()
+    df["vix_z20"] = zscore(df["vix_change"], 20)
+    df["vix_z60"] = zscore(df["vix_change"], 60)
+
+    df["spx_ret_1d"] = df["spx_close"].pct_change() * 100.0
+    df["spx_ret_3d"] = df["spx_close"].pct_change(3) * 100.0
+    df["spx_ret_5d"] = df["spx_close"].pct_change(5) * 100.0
+    df["spx_ret_10d"] = df["spx_close"].pct_change(10) * 100.0
+
+    df["spx_20dma"] = df["spx_close"].rolling(20).mean()
+    df["spx_50dma"] = df["spx_close"].rolling(50).mean()
+    df["spx_200dma"] = df["spx_close"].rolling(200).mean()
+
+    df["dist_20dma"] = (df["spx_close"] / df["spx_20dma"] - 1.0) * 100.0
+    df["dist_50dma"] = (df["spx_close"] / df["spx_50dma"] - 1.0) * 100.0
+    df["dist_200dma"] = (df["spx_close"] / df["spx_200dma"] - 1.0) * 100.0
+
+    df["ma20_slope_5d"] = (df["spx_20dma"] / df["spx_20dma"].shift(5) - 1.0) * 100.0
+    df["ma50_slope_10d"] = (df["spx_50dma"] / df["spx_50dma"].shift(10) - 1.0) * 100.0
+
+    df["rsi14"] = compute_rsi(df["spx_close"], 14)
+    df["spx_drawdown_pct"] = max_drawdown_from_peak(df["spx_close"])
+
+    df["rv10"] = df["spx_close"].pct_change().rolling(10).std() * np.sqrt(252) * 100.0
+    df["rv20"] = df["spx_close"].pct_change().rolling(20).std() * np.sqrt(252) * 100.0
+    df["rv20_pctile_252"] = percentile_rank_rolling(df["rv20"], 252)
+
+    df["qqq_iwm_ratio"] = df["qqq_close"] / df["iwm_close"]
+    df["qqq_iwm_5d"] = (df["qqq_iwm_ratio"] / df["qqq_iwm_ratio"].shift(5) - 1.0) * 100.0
+
+    df["hyg_ief_ratio"] = df["hyg_close"] / df["ief_close"]
+    df["hyg_ief_5d"] = (df["hyg_ief_ratio"] / df["hyg_ief_ratio"].shift(5) - 1.0) * 100.0
+    df["tlt_ret_1d"] = df["tlt_close"].pct_change() * 100.0
+    df["ief_ret_1d"] = df["ief_close"].pct_change() * 100.0
+
+    for h in [1, 2, 3, 5, 10, 20]:
+        df[f"spx_fwd_{h}d"] = future_return(df["spx_close"], h)
+
+    return df.dropna(how="all")
+
+def classify_context(row, oversold_rsi=30, drawdown_cut=-8.0):
+    above_200 = pd.notna(row["dist_200dma"]) and row["dist_200dma"] >= 0
+    oversold = pd.notna(row["rsi14"]) and row["rsi14"] <= oversold_rsi
+    deep_dd = pd.notna(row["spx_drawdown_pct"]) and row["spx_drawdown_pct"] <= drawdown_cut
+    trend_down = pd.notna(row["ma20_slope_5d"]) and row["ma20_slope_5d"] < 0
+
+    if above_200 and oversold:
+        return "Bull Pullback"
+    if above_200 and not oversold:
+        return "Bull Shock"
+    if (not above_200) and deep_dd and oversold:
+        return "Washout"
+    if (not above_200) and trend_down:
+        return "Trend Break"
+    return "Mixed"
+
+def classify_outcome(row):
+    r2 = row.get("spx_fwd_2d", np.nan)
+    r5 = row.get("spx_fwd_5d", np.nan)
+    r10 = row.get("spx_fwd_10d", np.nan)
+
+    if pd.isna(r2) or pd.isna(r5):
+        return "Incomplete"
+
+    if r2 > 0 and r5 > 0:
+        return "Exhaustion / Bounce"
+    if r2 <= 0 and r5 <= 0:
+        return "Continuation"
+    if r2 > 0 and r5 <= 0:
+        return "Failed Bounce"
+    if r2 <= 0 and r5 > 0:
+        return "Delayed Recovery"
+    if pd.notna(r10) and r10 > 0:
+        return "Recovery"
+    return "Mixed"
+
+def build_events(
+    df,
+    event_mode="Absolute % move",
+    abs_move_threshold=25.0,
+    z_threshold=2.0,
+    spx_down_confirm=-1.5,
+    lookback_gap=5,
+    oversold_rsi=30,
+    drawdown_cut=-8.0
+):
+    if df.empty:
+        return pd.DataFrame()
+
+    events = df.copy()
+    events["vix_base"] = events["vix_close"].shift(1)
+
+    if event_mode == "Absolute % move":
+        mask = events["vix_abs_pctchg"] >= (abs_move_threshold / 100.0)
+    elif event_mode == "VIX z-score":
+        mask = events["vix_z20"].abs() >= z_threshold
+    elif event_mode == "Panic day":
+        mask = (
+            (events["vix_pctchg"] >= (abs_move_threshold / 100.0)) &
+            (events["spx_ret_1d"] <= spx_down_confirm)
+        )
+    elif event_mode == "Relief day":
+        mask = (
+            (events["vix_pctchg"] <= -(abs_move_threshold / 100.0)) &
+            (events["spx_ret_5d"].shift(1) <= -3.0)
+        )
+    else:
+        mask = events["vix_abs_pctchg"] >= (abs_move_threshold / 100.0)
+
+    events = events[mask].copy()
+    if events.empty:
+        return events
+
+    events["event_type"] = np.where(events["vix_pctchg"] >= 0, "Panic", "Relief")
+    events["move_mag"] = events["vix_abs_pctchg"] * 100.0
+    events["context_label"] = events.apply(
+        lambda row: classify_context(row, oversold_rsi=oversold_rsi, drawdown_cut=drawdown_cut), axis=1
     )
+    events["outcome_label"] = events.apply(classify_outcome, axis=1)
+    events["event_label"] = events.apply(make_event_label, axis=1)
 
+    if lookback_gap > 0:
+        keep_idx = []
+        last_kept = None
+        for idx in events.index:
+            if last_kept is None or (idx - last_kept).days > lookback_gap:
+                keep_idx.append(idx)
+                last_kept = idx
+        events = events.loc[keep_idx].copy()
 
-def make_vix_bins_and_labels(vix_min, vix_1, vix_2, vix_3, vix_4, vix_5, vix_max=99):
-    raw_edges = [vix_min, vix_1, vix_2, vix_3, vix_4, vix_5, vix_max]
-    bins = [raw_edges[0]]
-    for edge in raw_edges[1:]:
-        bins.append(max(edge, bins[-1] + 1))
+    return events
 
-    labels = [
-        f"{bins[0]}-{bins[1]}",
-        f"{bins[1]}-{bins[2]}",
-        f"{bins[2]}-{bins[3]}",
-        f"{bins[3]}-{bins[4]}",
-        f"{bins[4]}-{bins[5]}",
-        f"{bins[5]}+",
-    ]
-    return bins, labels
+def compute_similarity(events, latest_idx, feature_cols):
+    if events.empty or latest_idx not in events.index:
+        return pd.Series(dtype=float)
 
+    X = events[feature_cols].copy()
+    latest = X.loc[latest_idx]
+
+    stds = X.apply(safe_std, axis=0)
+    scores = pd.Series(index=events.index, dtype=float)
+
+    for idx, row in X.iterrows():
+        diffs = []
+        for col in feature_cols:
+            a = row[col]
+            b = latest[col]
+            s = stds[col]
+            if pd.isna(a) or pd.isna(b) or pd.isna(s):
+                continue
+            diffs.append(abs(a - b) / s)
+        if len(diffs) == 0:
+            scores.loc[idx] = np.nan
+        else:
+            scores.loc[idx] = np.mean(diffs)
+
+    return scores.sort_values()
+
+def summarize_setup(events, label_col, ret_col):
+    if events.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for name, g in events.groupby(label_col):
+        s = pd.to_numeric(g[ret_col], errors="coerce").dropna()
+        if len(s) == 0:
+            continue
+        p10, p50, p90 = pct_bands(s)
+        rows.append({
+            label_col: name,
+            "N": len(s),
+            "WR_%": winrate(s),
+            "Avg_%": s.mean(),
+            "Med_%": s.median(),
+            "P10_%": p10,
+            "P50_%": p50,
+            "P90_%": p90,
+        })
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(["N", "WR_%"], ascending=[False, False])
+    return out
+
+def build_path_stats(events, horizons):
+    data = []
+    for h in horizons:
+        col = f"spx_fwd_{h}d"
+        s = pd.to_numeric(events[col], errors="coerce").dropna()
+        if len(s) == 0:
+            data.append({"h": h, "mean": np.nan, "median": np.nan, "p25": np.nan, "p75": np.nan, "p10": np.nan, "p90": np.nan})
+        else:
+            data.append({
+                "h": h,
+                "mean": s.mean(),
+                "median": s.median(),
+                "p25": np.percentile(s, 25),
+                "p75": np.percentile(s, 75),
+                "p10": np.percentile(s, 10),
+                "p90": np.percentile(s, 90),
+            })
+    return pd.DataFrame(data)
 
 # ------------------------------- Sidebar -----------------------------------
-st.title("VIX Spike Deep Dive")
+st.title("VIX Event Deep Dive")
 
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Evaluate post-event equity behavior after large VIX moves.
+        Purpose: classify large VIX events, score historical analogs, and map forward SPX paths.
 
         What it covers
-        • Forward SPX return distributions after configurable VIX moves
-        • Hit-rate, tail-risk, and regime-conditioned outcome diagnostics
-        • Event-study and heatmap views to support tactical timing and sizing
+        • Panic versus relief events
+        • Context-aware event study
+        • Analog matching on tape, trend, drawdown, vol, and cross-asset proxies
+        • Forward path cones and failure rates
 
         Data source
-        • Yahoo Finance VIX and SPX history
+        • Yahoo Finance
         """
     )
     st.divider()
 
-    st.header("Controls")
-    start_date = st.date_input("History start", value=datetime(1990, 1, 1))
-    fwd_days = st.number_input("Forward horizon (days)", min_value=1, max_value=30, value=2, step=1)
-    spike_threshold = st.slider("Absolute VIX move threshold (%)", 10, 100, 25, step=5)
-    rsi_thresh = st.slider("Oversold RSI threshold", 10, 40, 30, step=1)
-    ma_window = st.selectbox("Regime MA window", [100, 150, 200], index=2)
-    show_legend = st.checkbox("Show legend", value=False)
-
-    st.divider()
-    st.subheader("VIX Base Buckets")
-    st.caption("Adjust the starting VIX regime buckets used in the analysis.")
-
-    vix_min = st.slider("Min VIX", 0, 20, 0)
-    vix_1 = st.slider("Bucket 1 upper", 8, 20, 12)
-    vix_2 = st.slider("Bucket 2 upper", 12, 25, 16)
-    vix_3 = st.slider("Bucket 3 upper", 15, 30, 20)
-    vix_4 = st.slider("Bucket 4 upper", 20, 35, 24)
-    vix_5 = st.slider("Bucket 5 upper", 25, 40, 30)
-
-vix_bins, vix_labels = make_vix_bins_and_labels(
-    vix_min=vix_min,
-    vix_1=vix_1,
-    vix_2=vix_2,
-    vix_3=vix_3,
-    vix_4=vix_4,
-    vix_5=vix_5,
-    vix_max=99
-)
-
-# ------------------------------- Data --------------------------------------
-df = load_history(start=str(start_date))
-
-df[f"spx_next{fwd_days}"] = df["spx_close"].shift(-fwd_days)
-df[f"spx_fwd{fwd_days}_ret"] = (df[f"spx_next{fwd_days}"] / df["spx_close"] - 1.0) * 100.0
-
-df[f"spx_{ma_window}dma"] = df["spx_close"].rolling(ma_window).mean()
-df["regime"] = np.where(df["spx_close"] >= df[f"spx_{ma_window}dma"], "Bull", "Bear")
-
-events = df.copy()
-events["vix_base"] = events["vix_close"].shift(1)
-events["qualifying_move"] = events["vix_abs_pctchg"] >= (spike_threshold / 100.0)
-events = events[events["qualifying_move"]].dropna(subset=["vix_base"]).copy()
-
-if not events.empty:
-    events["vix_base_bucket"] = events["vix_base"].apply(
-        lambda x: bucket_vix_base(x, vix_bins, vix_labels)
+    start_date = st.date_input("History start", value=datetime(1998, 1, 1))
+    event_mode = st.selectbox(
+        "Event definition",
+        ["Absolute % move", "VIX z-score", "Panic day", "Relief day"],
+        index=0
     )
-    events["move_type"] = events["vix_pctchg"].apply(move_type_label)
-    events["move_mag"] = events["vix_abs_pctchg"].apply(bucket_move_mag)
-    events["oversold"] = np.where(events["rsi14"] <= rsi_thresh, "Oversold", "Not Oversold")
-    events["decade"] = [decade_label(d) for d in events.index]
-else:
-    events = pd.DataFrame(
-        columns=[
-            "vix_base_bucket", "move_type", "move_mag", "oversold",
-            "decade", "regime", f"spx_fwd{fwd_days}_ret"
-        ]
+    abs_move_threshold = st.slider("Absolute VIX move threshold (%)", 10, 80, 25, step=5)
+    z_threshold = st.slider("VIX z-score threshold", 1.0, 4.0, 2.0, step=0.1)
+    spx_down_confirm = st.slider("SPX down confirm for panic day (%)", -5.0, 0.0, -1.5, step=0.1)
+    dedupe_gap = st.slider("Minimum gap between events (calendar days)", 0, 20, 5, step=1)
+    oversold_rsi = st.slider("Oversold RSI threshold", 10, 40, 30, step=1)
+    drawdown_cut = st.slider("Washout drawdown threshold (%)", -25.0, -3.0, -8.0, step=1.0)
+    forward_focus = st.selectbox("Primary forward horizon", [1, 2, 3, 5, 10, 20], index=3)
+    analog_count = st.slider("Nearest analogs to show", 3, 15, 8, step=1)
+    event_type_filter = st.multiselect("Event types", ["Panic", "Relief"], default=["Panic", "Relief"])
+    context_filter = st.multiselect(
+        "Contexts",
+        ["Bull Pullback", "Bull Shock", "Washout", "Trend Break", "Mixed"],
+        default=["Bull Pullback", "Bull Shock", "Washout", "Trend Break", "Mixed"]
     )
 
-all_decades = sorted(events["decade"].unique().tolist()) if not events.empty else []
-decade_filter = st.sidebar.multiselect("Decades to include", options=all_decades, default=all_decades)
-if decade_filter:
-    events = events[events["decade"].isin(decade_filter)]
+# ------------------------------- Data load ---------------------------------
+df = load_market_history(start=str(start_date))
 
-latest = events.iloc[-1] if not events.empty else None
-if latest is not None:
-    bucket_now = latest["vix_base_bucket"]
-    move_type_now = latest["move_type"]
-    mag_now = latest["move_mag"]
-    regime_now = latest["regime"]
-    rsi_state = latest["oversold"]
+if df.empty:
+    st.error("Failed to load VIX and SPX history.")
+    st.stop()
 
-    comps_mask = (
-        (events["vix_base_bucket"] == bucket_now) &
-        (events["move_type"] == move_type_now) &
-        (events["move_mag"] == mag_now) &
-        (events["regime"] == regime_now)
-    )
-    comps = events[comps_mask].copy()
-else:
-    bucket_now = move_type_now = mag_now = regime_now = rsi_state = None
-    comps = pd.DataFrame(columns=events.columns)
-
-# ------------------------------- Stats for commentary ----------------------
-overall = events[f"spx_fwd{fwd_days}_ret"] if not events.empty else pd.Series(dtype=float)
-bucket_wr = (
-    events.groupby("vix_base_bucket")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
-    if not events.empty else pd.Series(dtype=float)
-)
-move_type_wr = (
-    events.groupby("move_type")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
-    if not events.empty else pd.Series(dtype=float)
-)
-mag_wr = (
-    events.groupby("move_mag")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
-    if not events.empty else pd.Series(dtype=float)
-)
-reg_wr = (
-    events.groupby("regime")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
-    if not events.empty else pd.Series(dtype=float)
-)
-ov_wr = (
-    events.groupby("oversold")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
-    if not events.empty else pd.Series(dtype=float)
+events = build_events(
+    df=df,
+    event_mode=event_mode,
+    abs_move_threshold=abs_move_threshold,
+    z_threshold=z_threshold,
+    spx_down_confirm=spx_down_confirm,
+    lookback_gap=dedupe_gap,
+    oversold_rsi=oversold_rsi,
+    drawdown_cut=drawdown_cut
 )
 
-p10, p50, p90 = pct_bands(overall) if len(overall) else (np.nan, np.nan, np.nan)
+if events.empty:
+    st.warning("No events matched the current definition.")
+    st.stop()
 
-wr_all = winrate(overall)
-avg_all = overall.mean() if len(overall) else np.nan
-med_all = overall.median() if len(overall) else np.nan
-mad_all = mean_abs_deviation(overall)
-n_all = len(overall)
+events = events[events["event_type"].isin(event_type_filter)].copy()
+events = events[events["context_label"].isin(context_filter)].copy()
 
-best_bucket_label = bucket_wr.idxmax() if len(bucket_wr) else None
-best_bucket_wr = float(bucket_wr.max()) if len(bucket_wr) else np.nan
-best_mag_label = mag_wr.idxmax() if len(mag_wr) else None
-best_mag_wr = float(mag_wr.max()) if len(mag_wr) else np.nan
-up_wr = move_type_wr.get("Spike Up", np.nan)
-down_wr = move_type_wr.get("Spike Down", np.nan)
-bull_wr = reg_wr.get("Bull", np.nan)
-bear_wr = reg_wr.get("Bear", np.nan)
-ov_yes = ov_wr.get("Oversold", np.nan)
-ov_no = ov_wr.get("Not Oversold", np.nan)
+if events.empty:
+    st.warning("No events remained after the current filters.")
+    st.stop()
 
-# ------------------------------- Commentary engine -------------------------
-def generate_commentary(ctx):
-    wr_all, med, avg, n = ctx["wr_all"], ctx["med_all"], ctx["avg_all"], ctx["n_all"]
-    p10, p50, p90 = ctx["p10"], ctx["p50"], ctx["p90"]
-    best_bucket_label, best_bucket_wr = ctx["best_bucket_label"], ctx["best_bucket_wr"]
-    best_mag_label, best_mag_wr = ctx["best_mag_label"], ctx["best_mag_wr"]
-    up_wr, down_wr = ctx["up_wr"], ctx["down_wr"]
-    bull_wr, bear_wr = ctx["bull_wr"], ctx["bear_wr"]
-    ov_yes, ov_no = ctx["ov_yes"], ctx["ov_no"]
-    threshold = ctx["spike_threshold"]
-    fwd_days = ctx["fwd_days"]
-    bucket_now = ctx["bucket_now"]
-    move_type_now = ctx["move_type_now"]
-    mag_now = ctx["mag_now"]
-    regime_now = ctx["regime_now"]
-    rsi_state = ctx["rsi_state"]
-    ma_window = ctx["ma_window"]
-    show_legend = ctx["show_legend"]
-    current_order_base = ctx["order_base"]
+latest_idx = events.index.max()
+latest = events.loc[latest_idx].copy()
 
-    bucket_idx = current_order_base.index(str(bucket_now)) if bucket_now in current_order_base else 0
-    regime_idx = 0 if regime_now == "Bull" else 1
-    dir_idx = 0 if move_type_now == "Spike Up" else 1
-    rsi_idx = 0 if rsi_state == "Oversold" else 1
+feature_cols = [
+    "vix_close",
+    "move_mag",
+    "spx_ret_1d",
+    "spx_ret_5d",
+    "dist_20dma",
+    "dist_50dma",
+    "dist_200dma",
+    "spx_drawdown_pct",
+    "rsi14",
+    "rv20",
+    "rv20_pctile_252",
+    "qqq_iwm_5d",
+    "hyg_ief_5d",
+    "ief_ret_1d",
+]
 
-    if move_type_now == "Spike Up":
-        headline_bank = [
-            "Vol shock higher, relief odds depend on the tape.",
-            "Panic spike registered, now the question is whether buyers absorb it.",
-            "Upside VIX shock, reflex bounce setup depends on trend support.",
-            "Fear surged, now the tape has to prove it can stabilize.",
-        ]
-        why = f"Whether a ≥{threshold}% upside VIX shock creates a buyable short-term reset."
-    else:
-        headline_bank = [
-            "Vol collapsed, calm can persist or fade fast.",
-            "Fear came out of the tape, now the question is whether complacency bites.",
-            "Downside VIX shock, grind higher can continue but reward may compress.",
-            "Stress unwound quickly, now follow-through matters more than relief.",
-        ]
-        why = f"Whether a ≥{threshold}% downside VIX move signals cleaner follow-through or near-term exhaustion."
+sim_scores = compute_similarity(events, latest_idx, feature_cols)
+sim_scores = sim_scores.drop(index=latest_idx, errors="ignore")
+analogs_idx = sim_scores.head(analog_count).index.tolist()
+analogs = events.loc[analogs_idx].copy() if len(analogs_idx) else pd.DataFrame()
 
-    headline = headline_bank[(bucket_idx + regime_idx + rsi_idx) % len(headline_bank)]
+# ------------------------------- State / verdict ---------------------------
+latest_wr_setup = winrate(
+    events.loc[
+        (events["event_type"] == latest["event_type"]) &
+        (events["context_label"] == latest["context_label"]),
+        f"spx_fwd_{forward_focus}d"
+    ]
+)
 
-    if regime_idx == 0:
-        regime_line = f"Above the {ma_window}-DMA, hit rate improves to {fmt_pct(bull_wr, 1)}."
-    else:
-        regime_line = f"Below the {ma_window}-DMA, hit rate slips to {fmt_pct(bear_wr, 1)}."
+latest_median_setup = events.loc[
+    (events["event_type"] == latest["event_type"]) &
+    (events["context_label"] == latest["context_label"]),
+    f"spx_fwd_{forward_focus}d"
+].median()
 
-    direction_line = f"Direction split, Spike Up WR {fmt_pct(up_wr,1)} vs Spike Down WR {fmt_pct(down_wr,1)}."
+latest_continuation_rate = (
+    100.0 *
+    (events.loc[
+        (events["event_type"] == latest["event_type"]) &
+        (events["context_label"] == latest["context_label"]),
+        "outcome_label"
+    ] == "Continuation").mean()
+)
 
-    if pd.notna(wr_all) and pd.notna(med):
-        if wr_all >= 53 and med >= 0:
-            conclusion_tail = "Setup supports tactical participation."
-        elif 47 <= wr_all < 53:
-            conclusion_tail = "Edge is mixed, execution matters."
+if pd.notna(latest_wr_setup) and pd.notna(latest_median_setup):
+    if latest["event_type"] == "Panic":
+        if latest_wr_setup >= 60 and latest_median_setup > 0:
+            verdict = "Exhaustion bias"
+        elif latest_continuation_rate >= 50:
+            verdict = "Continuation risk"
         else:
-            conclusion_tail = "Edge is weak, caution first."
+            verdict = "Transition / mixed"
     else:
-        conclusion_tail = "Insufficient sample."
+        if latest_wr_setup >= 60 and latest_median_setup > 0:
+            verdict = "Follow-through bias"
+        elif latest_continuation_rate >= 40:
+            verdict = "Complacency risk"
+        else:
+            verdict = "Transition / mixed"
+else:
+    verdict = "Insufficient sample"
 
-    drivers = []
-    drivers.append(f"Base case, WR {fmt_pct(wr_all, 1)}, median {fmt_pct(med, 1)}, average {fmt_pct(avg, 1)}, N {n}.")
-    drivers.append(direction_line)
-    if pd.notna(best_bucket_wr) and best_bucket_label is not None:
-        drivers.append(f"Base VIX {best_bucket_label} works best, WR {fmt_pct(best_bucket_wr, 1)}.")
-    if pd.notna(best_mag_wr) and best_mag_label is not None:
-        drivers.append(f"Move magnitude {best_mag_label}, WR {fmt_pct(best_mag_wr, 1)}.")
-    drivers.append(regime_line)
-    if pd.notna(ov_yes) and pd.notna(ov_no):
-        drivers.append(f"RSI filter, Oversold {fmt_pct(ov_yes, 1)} vs Not {fmt_pct(ov_no, 1)}.")
-    drivers.append(f"Expected range for {fwd_days} days, p10 {fmt_pct(p10)}, p50 {fmt_pct(p50)}, p90 {fmt_pct(p90)}.")
-
-    body = (
-        f'<div style="font-weight:700; margin-bottom:6px;">Conclusion</div>'
-        f'<div>{headline} {conclusion_tail}</div>'
-        f'<div style="font-weight:700; margin:10px 0 6px;">Why it matters</div>'
-        f'<div>{why}</div>'
-        f'<div style="font-weight:700; margin:10px 0 6px;">Key drivers</div>'
-        f'<ul style="margin-top:4px; margin-bottom:4px;">'
-        + "".join(f"<li>{d}</li>" for d in drivers) +
-        "</ul>"
-    )
-
-    if show_legend:
-        body += (
-            '<hr style="border-top:1px solid #eee; margin:10px 0;">'
-            '<div style="font-size:13px;">'
-            "<b>Legend</b> WR win rate, Avg and Med forward SPX returns, N sample size. "
-            "Base bucket is VIX level before the move. Move type separates VIX spikes up from drops down. "
-            "Magnitude uses the absolute VIX move. Regime uses your DMA. RSI uses your slider. "
-            "p10, p50, p90 are percentile bands of forward returns for the chosen horizon."
-            "</div>"
-        )
-
-    lights = 0
-    high_buckets = current_order_base[-2:] if len(current_order_base) >= 2 else current_order_base
-    if bucket_now in high_buckets:
-        lights += 1
-    if mag_now in ["Large (30-50%)", "Extreme (50%+)"]:
-        lights += 1
-    if regime_now == "Bull":
-        lights += 1
-    if rsi_state == "Oversold" and pd.notna(ov_yes) and pd.notna(ov_no) and ov_yes >= ov_no:
-        lights += 1
-
-    return body, lights
-
-
-ctx = {
-    "wr_all": wr_all,
-    "med_all": med_all,
-    "avg_all": avg_all,
-    "n_all": n_all,
-    "p10": p10,
-    "p50": p50,
-    "p90": p90,
-    "best_bucket_label": best_bucket_label,
-    "best_bucket_wr": best_bucket_wr,
-    "best_mag_label": best_mag_label,
-    "best_mag_wr": best_mag_wr,
-    "up_wr": up_wr,
-    "down_wr": down_wr,
-    "bull_wr": bull_wr,
-    "bear_wr": bear_wr,
-    "ov_yes": ov_yes,
-    "ov_no": ov_no,
-    "spike_threshold": spike_threshold,
-    "fwd_days": fwd_days,
-    "bucket_now": bucket_now,
-    "move_type_now": move_type_now,
-    "mag_now": mag_now,
-    "regime_now": regime_now,
-    "rsi_state": rsi_state,
-    "ma_window": ma_window,
-    "show_legend": show_legend,
-    "order_base": vix_labels,
-}
-summary_html, lights = generate_commentary(ctx)
-
-# ------------------------------- Top row -----------------------------------
-col1, col2 = st.columns([1.8, 1])
+# ------------------------------- Top cards ---------------------------------
+col1, col2 = st.columns([1.6, 1.0])
 
 with col1:
-    st.subheader("Decision Box")
+    dt = latest_idx.strftime("%Y-%m-%d")
+    summary_html = f"""
+    <div style="font-weight:700; margin-bottom:6px;">Latest Event Snapshot</div>
+    <div><b>Date</b>: {dt}</div>
+    <div><b>Type</b>: {latest['event_type']}</div>
+    <div><b>Context</b>: {latest['context_label']}</div>
+    <div><b>Verdict</b>: {verdict}</div>
+    <div style="margin-top:8px;"><b>VIX</b>: {fmt_num(latest['vix_close'])} | <b>Daily move</b>: {fmt_pct(latest['vix_pctchg'] * 100.0)}</div>
+    <div><b>SPX 1D</b>: {fmt_pct(latest['spx_ret_1d'])} | <b>SPX 5D</b>: {fmt_pct(latest['spx_ret_5d'])}</div>
+    <div><b>Drawdown from peak</b>: {fmt_pct(latest['spx_drawdown_pct'])} | <b>RSI14</b>: {fmt_num(latest['rsi14'], 1)}</div>
+    <div><b>Dist to 20DMA</b>: {fmt_pct(latest['dist_20dma'])} | <b>Dist to 50DMA</b>: {fmt_pct(latest['dist_50dma'])} | <b>Dist to 200DMA</b>: {fmt_pct(latest['dist_200dma'])}</div>
+    <div><b>RV20</b>: {fmt_pct(latest['rv20'])} | <b>RV20 percentile</b>: {fmt_pct(latest['rv20_pctile_252'])}</div>
+    <div style="margin-top:8px;"><b>Setup sample</b>: WR {fmt_pct(latest_wr_setup)}, median {fmt_pct(latest_median_setup)}, continuation risk {fmt_pct(latest_continuation_rate)}</div>
+    """
     card_box(summary_html)
 
 with col2:
-    st.subheader("Filters")
-    card_box(
-        f"""
-        <b>Absolute move threshold</b>: {spike_threshold}%<br>
-        <b>Forward horizon</b>: {fwd_days} trading days<br>
-        <b>RSI oversold</b>: ≤ {rsi_thresh}<br>
-        <b>Regime MA</b>: {ma_window}-day<br>
-        <b>VIX buckets</b>: {", ".join(vix_labels)}<br>
-        <b>Decades</b>: {", ".join(decade_filter) if decade_filter else "None"}<br>
-        <b>Four lights</b>: {lights} / 4
-        """.strip()
+    filter_html = f"""
+    <div style="font-weight:700; margin-bottom:6px;">Current Definition</div>
+    <div><b>Event mode</b>: {event_mode}</div>
+    <div><b>Abs threshold</b>: {abs_move_threshold}%</div>
+    <div><b>Z threshold</b>: {z_threshold}</div>
+    <div><b>SPX confirm</b>: {spx_down_confirm}%</div>
+    <div><b>Dedup gap</b>: {dedupe_gap} days</div>
+    <div><b>Primary horizon</b>: {forward_focus} days</div>
+    <div><b>Included events</b>: {len(events)}</div>
+    <div><b>Latest setup label</b>: {latest['event_label']}</div>
+    """
+    card_box(filter_html)
+
+# ------------------------------- Dynamic readout ---------------------------
+st.subheader("What just happened and what usually comes next")
+
+same_setup = events[
+    (events["event_type"] == latest["event_type"]) &
+    (events["context_label"] == latest["context_label"])
+].copy()
+
+same_context = events[events["context_label"] == latest["context_label"]].copy()
+same_type = events[events["event_type"] == latest["event_type"]].copy()
+
+text = []
+
+if latest["event_type"] == "Panic":
+    text.append(
+        f"This was a {latest['event_type'].lower()} event inside a {latest['context_label'].lower()} context. "
+        f"The market came in with SPX {fmt_pct(latest['spx_ret_5d'])} over five days, drawdown {fmt_pct(latest['spx_drawdown_pct'])} from peak, "
+        f"and VIX jumped {fmt_pct(latest['vix_pctchg'] * 100.0)} on the day."
+    )
+else:
+    text.append(
+        f"This was a {latest['event_type'].lower()} event inside a {latest['context_label'].lower()} context. "
+        f"Fear came out of the tape with VIX down {fmt_pct(latest['vix_pctchg'] * 100.0)}, while SPX had moved {fmt_pct(latest['spx_ret_5d'])} over the prior five days."
     )
 
-# ------------------------------- Panels ------------------------------------
-def safe_group_lists(g, col, order):
-    data = []
-    labels = []
-    for k in order:
-        if (not events.empty) and (k in g.groups):
-            arr = pd.to_numeric(g.get_group(k)[col], errors="coerce").dropna().values
-        else:
-            arr = np.array([])
-        if arr.size > 0:
-            data.append(arr)
-            labels.append(k)
-    return data, labels
+if len(same_setup) > 0:
+    wr = winrate(same_setup[f"spx_fwd_{forward_focus}d"])
+    med = same_setup[f"spx_fwd_{forward_focus}d"].median()
+    p10, p50, p90 = pct_bands(same_setup[f"spx_fwd_{forward_focus}d"])
+    text.append(
+        f"For this exact setup label, the {forward_focus}-day base rate is WR {fmt_pct(wr)}, median {fmt_pct(med)}, "
+        f"with a 10th to 90th percentile range of {fmt_pct(p10)} to {fmt_pct(p90)} on {len(same_setup)} events."
+    )
 
+if len(analogs) > 0:
+    analog_med_5 = analogs["spx_fwd_5d"].median()
+    analog_med_10 = analogs["spx_fwd_10d"].median()
+    text.append(
+        f"The nearest analog set points to median SPX returns of {fmt_pct(analog_med_5)} over 5 days and {fmt_pct(analog_med_10)} over 10 days. "
+        f"That gives you a more tape-aware read than a raw bucket average."
+    )
 
-def ensure_fwd_cols(df_, horizons):
-    for h in horizons:
-        nxt = f"spx_next{h}"
-        ret = f"spx_fwd{h}_ret"
-        if ret not in df_.columns:
-            df_[nxt] = df_["spx_close"].shift(-h)
-            df_[ret] = (df_[nxt] / df_["spx_close"] - 1.0) * 100.0
-    return df_
+card_box("<br><br>".join(text))
 
+# ------------------------------- Main charts -------------------------------
+st.subheader("Forward path and analog engine")
 
-fig, axes = plt.subplots(2, 3, figsize=(16, 8))
-fig.subplots_adjust(wspace=0.35, hspace=0.45)
+fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+fig.subplots_adjust(wspace=0.25, hspace=0.35)
 
-# 1) Boxplot by base bucket
+# Chart 1: path cone for same setup
 ax1 = axes[0, 0]
-order_base = vix_labels
-
-if not events.empty:
-    g = events.groupby("vix_base_bucket", observed=False)
-    data, labels = safe_group_lists(g, f"spx_fwd{fwd_days}_ret", order_base)
-else:
-    data, labels = [], []
-
-bp = ax1.boxplot(
-    data if data else [np.array([np.nan])],
-    tick_labels=labels if labels else ["no data"],
-    patch_artist=True,
-    notch=True,
-    showfliers=False
-)
-for i, patch in enumerate(bp["boxes"]):
-    patch.set_facecolor(PASTELS[i % len(PASTELS)])
-    patch.set_edgecolor(BAR_EDGE)
-for med in bp["medians"]:
-    med.set_color("#444444")
-ax1.axhline(0, color="#888888", linewidth=1)
-ax1.set_title(f"Distribution by VIX Base, {fwd_days}-Day %", color=TEXT_COLOR, fontsize=12, pad=8)
-ax1.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
-
-# 2) Heatmap by Base × Direction
-ax2 = axes[0, 1]
-order_direction = ["Spike Up", "Spike Down"]
-
-if not events.empty:
-    pivot = events.pivot_table(
-        index="vix_base_bucket",
-        columns="move_type",
-        values=f"spx_fwd{fwd_days}_ret",
-        aggfunc=lambda s: winrate(pd.Series(s))
-    ).reindex(index=order_base, columns=order_direction)
-else:
-    pivot = pd.DataFrame(np.nan, index=order_base, columns=order_direction)
-
-cmap = LinearSegmentedColormap.from_list("pastelWR", ["#EAF7FB", "#A8DADC", "#4DB6AC"])
-ax2.imshow(pivot.values.astype(float), aspect="auto", cmap=cmap, vmin=0, vmax=100)
-ax2.set_xticks(range(len(order_direction)))
-ax2.set_xticklabels(order_direction, fontsize=10)
-ax2.set_yticks(range(len(order_base)))
-ax2.set_yticklabels(order_base, fontsize=10)
-ax2.set_title("Win Rate by Base × Direction", color=TEXT_COLOR, fontsize=12, pad=8)
-
-for i in range(len(order_base)):
-    for j in range(len(order_direction)):
-        val = pivot.values[i, j]
-        txt = "" if np.isnan(val) else f"{val:.0f}%"
-        ax2.text(j, i, txt, ha="center", va="center", color="#1f1f1f", fontsize=9)
-
-# 3) ECDF by regime
-ax3 = axes[0, 2]
-if not events.empty:
-    for name, color in [("Bull", PASTELS[0]), ("Bear", PASTELS[2])]:
-        vals = pd.to_numeric(
-            events.loc[events["regime"] == name, f"spx_fwd{fwd_days}_ret"],
-            errors="coerce"
-        ).dropna().values
-        if vals.size > 0:
-            x = np.sort(vals)
-            y = np.arange(1, x.size + 1) / x.size
-            ax3.plot(x, y, label=f"{name} (N={x.size})", linewidth=2, color=color)
-ax3.axvline(0, color="#888888", linewidth=1)
-ax3.set_title(f"ECDF of {fwd_days}-Day Returns by Regime", color=TEXT_COLOR, fontsize=12, pad=8)
-ax3.set_xlabel("SPX Forward Return (%)", color=TEXT_COLOR)
-ax3.set_ylabel("Cumulative Probability", color=TEXT_COLOR)
-ax3.grid(color=GRID_COLOR, linewidth=0.6)
-ax3.legend(frameon=False, fontsize=9)
-
-# 4) Scatter
-ax4 = axes[1, 0]
-if not events.empty:
-    vals = events.copy()
-    vals["MovePct"] = vals["vix_pctchg"] * 100.0
-    colors = np.where(vals["move_type"] == "Spike Up", PASTELS[1], PASTELS[3])
-    sizes = 10 + np.clip(vals["MovePct"].abs(), 0, 100)
-    ax4.scatter(
-        vals["vix_base"],
-        vals[f"spx_fwd{fwd_days}_ret"],
-        s=sizes,
-        c=colors,
-        alpha=0.85,
-        edgecolors=BAR_EDGE,
-        linewidths=0.3
-    )
-    good = vals[["vix_base", f"spx_fwd{fwd_days}_ret"]].dropna()
-    if len(good) > 5:
-        m, b = np.polyfit(good["vix_base"], good[f"spx_fwd{fwd_days}_ret"], 1)
-        xs = np.linspace(good["vix_base"].min(), good["vix_base"].max(), 100)
-        ax4.plot(xs, m * xs + b, linewidth=1.5, color="#444444")
-ax4.axhline(0, color="#888888", linewidth=1)
-ax4.set_title("VIX Base vs Forward Return, size=|Move| color=Direction", color=TEXT_COLOR, fontsize=12, pad=8)
-ax4.set_xlabel("VIX Level Before Move", color=TEXT_COLOR)
-ax4.set_ylabel(f"SPX {fwd_days}-Day Return (%)", color=TEXT_COLOR)
-ax4.grid(color=GRID_COLOR, linewidth=0.6)
-
-# 5) Event study
-ax5 = axes[1, 1]
 horizons = [1, 2, 3, 5, 10, 20]
-df = ensure_fwd_cols(df, horizons)
+path_same_setup = build_path_stats(same_setup, horizons)
+if not path_same_setup.empty:
+    ax1.plot(path_same_setup["h"], path_same_setup["median"], linewidth=2, marker="o", label="Median")
+    ax1.fill_between(path_same_setup["h"], path_same_setup["p25"], path_same_setup["p75"], alpha=0.25, label="25-75")
+    ax1.fill_between(path_same_setup["h"], path_same_setup["p10"], path_same_setup["p90"], alpha=0.12, label="10-90")
+ax1.axhline(0, color="#888888", linewidth=1)
+ax1.set_title("Forward Path Cone | Same Setup", color=TEXT_COLOR, fontsize=12)
+ax1.set_xlabel("Trading days")
+ax1.set_ylabel("SPX forward return (%)")
+ax1.grid(color=GRID_COLOR, linewidth=0.6)
+ax1.legend(frameon=False, fontsize=9)
 
-if not events.empty:
-    idx = events.index
-    means, p10s, p90s = [], [], []
-    for h in horizons:
-        x = df.loc[idx, f"spx_fwd{h}_ret"].astype(float)
-        means.append(np.nanmean(x))
-        p10s.append(np.nanpercentile(x.dropna(), 10) if x.notna().sum() else np.nan)
-        p90s.append(np.nanpercentile(x.dropna(), 90) if x.notna().sum() else np.nan)
-    ax5.plot(horizons, means, linewidth=2, marker="o")
-    ax5.fill_between(horizons, p10s, p90s, alpha=0.25)
+# Chart 2: path cone for analogs
+ax2 = axes[0, 1]
+path_analogs = build_path_stats(analogs, horizons)
+if not path_analogs.empty:
+    ax2.plot(path_analogs["h"], path_analogs["median"], linewidth=2, marker="o", label="Median")
+    ax2.fill_between(path_analogs["h"], path_analogs["p25"], path_analogs["p75"], alpha=0.25, label="25-75")
+    ax2.fill_between(path_analogs["h"], path_analogs["p10"], path_analogs["p90"], alpha=0.12, label="10-90")
+ax2.axhline(0, color="#888888", linewidth=1)
+ax2.set_title("Forward Path Cone | Nearest Analogs", color=TEXT_COLOR, fontsize=12)
+ax2.set_xlabel("Trading days")
+ax2.set_ylabel("SPX forward return (%)")
+ax2.grid(color=GRID_COLOR, linewidth=0.6)
+ax2.legend(frameon=False, fontsize=9)
 
-ax5.axhline(0, color="#888888", linewidth=1)
-ax5.set_title("Event Study, Mean Path after Qualifying Move", color=TEXT_COLOR, fontsize=12, pad=8)
-ax5.set_xlabel("Horizon (trading days)", color=TEXT_COLOR)
-ax5.set_ylabel("Forward Return (%)", color=TEXT_COLOR)
-ax5.grid(color=GRID_COLOR, linewidth=0.6)
+# Chart 3: context expectancy
+ax3 = axes[1, 0]
+context_table = summarize_setup(events, "context_label", f"spx_fwd_{forward_focus}d")
+if not context_table.empty:
+    plot_df = context_table.sort_values("Med_%")
+    ax3.barh(plot_df["context_label"], plot_df["Med_%"], edgecolor=BAR_EDGE)
+ax3.axvline(0, color="#888888", linewidth=1)
+ax3.set_title(f"Median SPX Return by Context | {forward_focus}D", color=TEXT_COLOR, fontsize=12)
+ax3.set_xlabel("Median return (%)")
+ax3.grid(axis="x", color=GRID_COLOR, linewidth=0.6)
 
-# 6) Yearly count
-ax6 = axes[1, 2]
-if not events.empty:
-    yr_counts = events.groupby(events.index.year).size()
-    years = yr_counts.index.astype(int).tolist()
-    counts = yr_counts.values.tolist()
-    ax6.bar(years, counts, edgecolor=BAR_EDGE, color=PASTELS[9])
-    ax6.set_xlim(min(years) - 0.5, max(years) + 0.5)
-ax6.set_title("Yearly Count of Qualifying VIX Moves", color=TEXT_COLOR, fontsize=12, pad=8)
-ax6.set_xlabel("Year", color=TEXT_COLOR)
-ax6.set_ylabel("Count", color=TEXT_COLOR)
-ax6.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
+# Chart 4: scatter of event severity vs forward path
+ax4 = axes[1, 1]
+scatter = events.copy()
+colors = np.where(scatter["event_type"] == "Panic", PASTELS[1], PASTELS[0])
+sizes = 20 + np.clip(scatter["move_mag"], 0, 80) * 2
+ax4.scatter(
+    scatter["spx_drawdown_pct"],
+    scatter[f"spx_fwd_{forward_focus}d"],
+    s=sizes,
+    c=colors,
+    alpha=0.75,
+    edgecolors=BAR_EDGE,
+    linewidths=0.3
+)
+ax4.axhline(0, color="#888888", linewidth=1)
+ax4.axvline(latest["spx_drawdown_pct"], color="#444444", linewidth=1, linestyle="--")
+ax4.set_title(f"Forward Return vs Drawdown at Event | {forward_focus}D", color=TEXT_COLOR, fontsize=12)
+ax4.set_xlabel("SPX drawdown from peak (%)")
+ax4.set_ylabel("SPX forward return (%)")
+ax4.grid(color=GRID_COLOR, linewidth=0.6)
 
 st.pyplot(fig, clear_figure=True)
 
-# ------------------------------- Dynamic commentary ------------------------
-st.subheader("Dynamic Commentary")
+# ------------------------------- Outcome diagnostics -----------------------
+st.subheader("Failure rates and classification")
 
-def latest_context_box():
-    if latest is None:
-        card_box("No qualifying VIX move events in the filtered sample.")
-        return
+col3, col4 = st.columns([1, 1])
 
-    dt = latest.name.strftime("%Y-%m-%d")
-    vix_now = latest["vix_close"]
-    vix_base = latest["vix_base"]
-    vix_move = latest["vix_pctchg"] * 100.0
-    spx_now = latest["spx_close"]
-    rsi_now = latest["rsi14"]
-    regime_now_local = latest["regime"]
-    bucket = latest["vix_base_bucket"]
-    move_type = latest["move_type"]
-    magcat = latest["move_mag"]
-    over = latest["oversold"]
-
-    wr = winrate(comps[f"spx_fwd{fwd_days}_ret"]) if not comps.empty else np.nan
-    avg = comps[f"spx_fwd{fwd_days}_ret"].mean() if not comps.empty else np.nan
-    med = comps[f"spx_fwd{fwd_days}_ret"].median() if not comps.empty else np.nan
-    mad = mean_abs_deviation(comps[f"spx_fwd{fwd_days}_ret"]) if not comps.empty else np.nan
-    p10_c, p50_c, p90_c = pct_bands(comps[f"spx_fwd{fwd_days}_ret"]) if not comps.empty else (np.nan, np.nan, np.nan)
-    n = len(comps) if not comps.empty else 0
-
-    text = f"""
-    <b>Latest event</b> {dt}. VIX {vix_now:.2f} from base {vix_base:.2f}, move {vix_move:.1f}% ({move_type}).
-    SPX {spx_now:.2f}, RSI14 {rsi_now:.1f} ({over}), regime {regime_now_local}.
-    Setup, base {bucket}, magnitude {magcat}.
-    <br><br>
-    <b>Setup stats</b> same bucket, direction, magnitude, regime. WR {fmt_pct(wr, 1)}, Avg {fmt_pct(avg, 1)}, Med {fmt_pct(med, 1)}, Disp {fmt_pct(mad, 1)}, N {n}.
-    Bands p10 {fmt_pct(p10_c)}, p50 {fmt_pct(p50_c)}, p90 {fmt_pct(p90_c)}.
-    """.strip()
-    card_box(text)
-
-    if n > 0:
-        show_cols = [
-            "vix_close", "vix_base", "vix_pctchg", "spx_close", f"spx_fwd{fwd_days}_ret", "rsi14", "move_type"
-        ]
-        analogs = (
-            comps[show_cols]
-            .rename(columns={
-                "vix_close": "VIX",
-                "vix_base": "VIX_Base",
-                "vix_pctchg": "VIX_Move_Frac",
-                "spx_close": "SPX",
-                f"spx_fwd{fwd_days}_ret": f"SPX_Fwd{fwd_days}_Ret_%",
-                "rsi14": "RSI14",
-                "move_type": "Move_Type"
-            })
-            .copy()
-        )
-        analogs["VIX_Move_%"] = (analogs["VIX_Move_Frac"] * 100.0).round(2)
-        analogs.drop(columns=["VIX_Move_Frac"], inplace=True)
-        analogs = analogs.round(2).sort_index(ascending=False).head(10)
-        st.markdown("**Nearest analogs, same setup, last 10 occurrences**")
-        st.dataframe(analogs, use_container_width=True)
-
-latest_context_box()
-
-# ------------------------------- Events table ------------------------------
-with st.expander("Show events table"):
-    if not events.empty:
-        show_cols = [
-            "vix_close", "vix_base", "vix_pctchg", "vix_abs_pctchg", "spx_close", f"spx_fwd{fwd_days}_ret",
-            "vix_base_bucket", "move_type", "move_mag", "regime", "rsi14", "oversold", "decade"
-        ]
-        tbl = events[show_cols].copy()
-        tbl.rename(columns={
-            "vix_close": "VIX",
-            "vix_base": "VIX_Base",
-            "vix_pctchg": "VIX_Move_Fr",
-            "vix_abs_pctchg": "VIX_Abs_Move_Fr",
-            "spx_close": "SPX",
-            f"spx_fwd{fwd_days}_ret": f"SPX_Fwd{fwd_days}_Ret_%",
-            "rsi14": "RSI14"
-        }, inplace=True)
-        tbl["VIX_Move_%"] = (tbl["VIX_Move_Fr"] * 100.0).round(2)
-        tbl["VIX_Abs_Move_%"] = (tbl["VIX_Abs_Move_Fr"] * 100.0).round(2)
-        tbl.drop(columns=["VIX_Move_Fr", "VIX_Abs_Move_Fr"], inplace=True)
-        st.dataframe(tbl.round(2), use_container_width=True)
+with col3:
+    outcome_table = (
+        same_setup["outcome_label"]
+        .value_counts(normalize=True)
+        .mul(100.0)
+        .rename("Rate_%")
+        .reset_index()
+        .rename(columns={"index": "Outcome"})
+    )
+    if not outcome_table.empty:
+        fig2, ax = plt.subplots(figsize=(7, 4))
+        ax.bar(outcome_table["Outcome"], outcome_table["Rate_%"], edgecolor=BAR_EDGE)
+        ax.set_title("Outcome Mix | Same Setup", color=TEXT_COLOR, fontsize=12)
+        ax.set_ylabel("Rate (%)")
+        ax.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
+        plt.xticks(rotation=20, ha="right")
+        st.pyplot(fig2, clear_figure=True)
     else:
-        st.write("No events under current filters.")
+        st.write("No outcome sample for current setup.")
+
+with col4:
+    type_table = summarize_setup(events, "event_type", f"spx_fwd_{forward_focus}d")
+    if not type_table.empty:
+        fig3, ax = plt.subplots(figsize=(7, 4))
+        ax.bar(type_table["event_type"], type_table["Med_%"], edgecolor=BAR_EDGE)
+        ax.axhline(0, color="#888888", linewidth=1)
+        ax.set_title(f"Median Return | Panic vs Relief | {forward_focus}D", color=TEXT_COLOR, fontsize=12)
+        ax.set_ylabel("Median return (%)")
+        ax.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
+        st.pyplot(fig3, clear_figure=True)
+    else:
+        st.write("No type sample for current filters.")
+
+# ------------------------------- Tables ------------------------------------
+st.subheader("Nearest analogs")
+
+if len(analogs) > 0:
+    analog_table = analogs.copy()
+    analog_table["similarity_score"] = sim_scores.loc[analog_table.index]
+    keep_cols = [
+        "similarity_score",
+        "event_type",
+        "context_label",
+        "vix_close",
+        "move_mag",
+        "spx_ret_1d",
+        "spx_ret_5d",
+        "spx_drawdown_pct",
+        "rsi14",
+        "rv20_pctile_252",
+        "spx_fwd_1d",
+        "spx_fwd_2d",
+        "spx_fwd_3d",
+        "spx_fwd_5d",
+        "spx_fwd_10d",
+        "spx_fwd_20d",
+        "outcome_label",
+    ]
+    analog_table = analog_table[keep_cols].copy()
+    analog_table.columns = [
+        "Similarity",
+        "Type",
+        "Context",
+        "VIX",
+        "Move_%",
+        "SPX_1D_%",
+        "SPX_5D_%",
+        "Drawdown_%",
+        "RSI14",
+        "RV20_Pctile_%",
+        "Fwd_1D_%",
+        "Fwd_2D_%",
+        "Fwd_3D_%",
+        "Fwd_5D_%",
+        "Fwd_10D_%",
+        "Fwd_20D_%",
+        "Outcome",
+    ]
+    st.dataframe(analog_table.round(2).sort_values("Similarity"), use_container_width=True)
+else:
+    st.write("No analogs available.")
+
+st.subheader("Setup expectancy tables")
+
+col5, col6 = st.columns([1, 1])
+
+with col5:
+    context_expectancy = summarize_setup(events, "context_label", f"spx_fwd_{forward_focus}d")
+    if not context_expectancy.empty:
+        st.markdown("**By context**")
+        st.dataframe(context_expectancy.round(2), use_container_width=True)
+
+with col6:
+    setup_expectancy = summarize_setup(events, "event_label", f"spx_fwd_{forward_focus}d")
+    if not setup_expectancy.empty:
+        st.markdown("**By event label**")
+        st.dataframe(setup_expectancy.round(2), use_container_width=True)
+
+with st.expander("Show full events table"):
+    show_cols = [
+        "event_type",
+        "context_label",
+        "event_label",
+        "vix_close",
+        "vix_pctchg",
+        "move_mag",
+        "spx_ret_1d",
+        "spx_ret_3d",
+        "spx_ret_5d",
+        "spx_drawdown_pct",
+        "dist_20dma",
+        "dist_50dma",
+        "dist_200dma",
+        "rsi14",
+        "rv20",
+        "rv20_pctile_252",
+        "qqq_iwm_5d",
+        "hyg_ief_5d",
+        "spx_fwd_1d",
+        "spx_fwd_2d",
+        "spx_fwd_3d",
+        "spx_fwd_5d",
+        "spx_fwd_10d",
+        "spx_fwd_20d",
+        "outcome_label",
+    ]
+    full_tbl = events[show_cols].copy()
+    full_tbl["vix_pctchg"] = full_tbl["vix_pctchg"] * 100.0
+    full_tbl = full_tbl.rename(columns={
+        "event_type": "Type",
+        "context_label": "Context",
+        "event_label": "Event_Label",
+        "vix_close": "VIX",
+        "vix_pctchg": "VIX_Move_%",
+        "move_mag": "Abs_Move_%",
+        "spx_ret_1d": "SPX_1D_%",
+        "spx_ret_3d": "SPX_3D_%",
+        "spx_ret_5d": "SPX_5D_%",
+        "spx_drawdown_pct": "Drawdown_%",
+        "dist_20dma": "Dist_20DMA_%",
+        "dist_50dma": "Dist_50DMA_%",
+        "dist_200dma": "Dist_200DMA_%",
+        "rsi14": "RSI14",
+        "rv20": "RV20_%",
+        "rv20_pctile_252": "RV20_Pctile_%",
+        "qqq_iwm_5d": "QQQ_IWM_5D_%",
+        "hyg_ief_5d": "HYG_IEF_5D_%",
+        "spx_fwd_1d": "Fwd_1D_%",
+        "spx_fwd_2d": "Fwd_2D_%",
+        "spx_fwd_3d": "Fwd_3D_%",
+        "spx_fwd_5d": "Fwd_5D_%",
+        "spx_fwd_10d": "Fwd_10D_%",
+        "spx_fwd_20d": "Fwd_20D_%",
+        "outcome_label": "Outcome",
+    })
+    st.dataframe(full_tbl.round(2), use_container_width=True)
 
 # ------------------------------- Footer ------------------------------------
-st.caption("ADFM Analytics Platform | VIX Spike Deep Dive | Data source: Yahoo Finance")
+st.caption("ADFM Analytics Platform | VIX Event Deep Dive | Data source: Yahoo Finance")
 st.caption("© 2026 AD Fund Management LP")
