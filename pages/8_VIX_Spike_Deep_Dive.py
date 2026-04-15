@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import streamlit as st
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(page_title="ADFM | VIX Event Deep Dive", layout="wide")
+st.set_page_config(page_title="VIX Spike Deep Dive", layout="wide")
 plt.style.use("default")
 
 # ------------------------------- Style -------------------------------------
@@ -368,7 +368,7 @@ Data source
         ["Absolute % move", "VIX z-score", "Panic day", "Relief day"],
         index=0
     )
-    abs_move_threshold = st.slider("Absolute VIX move threshold (%)", 10, 80, 25, step=5)
+    abs_move_threshold = st.slider("Absolute VIX move threshold (%)", 10, 80, 15, step=5)
     z_threshold = st.slider("VIX z-score threshold", 1.0, 4.0, 2.0, step=0.1)
     spx_down_confirm = st.slider("SPX down confirm for panic day (%)", -5.0, 0.0, -1.5, step=0.1)
     dedupe_gap = st.slider("Minimum gap between events (calendar days)", 0, 20, 5, step=1)
