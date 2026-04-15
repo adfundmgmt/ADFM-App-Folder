@@ -1,5 +1,5 @@
 # vix_spike_deep_dive.py
-# ADFM Analytics Platform — VIX Spike Deep Dive
+# ADFM Analytics Platform | VIX Spike Deep Dive
 # Light theme, pastel palette, matplotlib only. Decision Box unchanged. Six revised panels.
 
 import warnings
@@ -14,7 +14,7 @@ from datetime import datetime
 import streamlit as st
 
 # ------------------------------- Page config -------------------------------
-st.set_page_config(page_title="ADFM | VIX Spike Deep Dive", layout="wide")
+st.set_page_config(page_title="VIX Spike Deep Dive", layout="wide")
 plt.style.use("default")
 
 # ------------------------------- Pastel palette ----------------------------
@@ -27,10 +27,11 @@ BAR_EDGE = "#666666"
 TEXT_COLOR = "#222222"
 
 # ------------------------------- Helpers -----------------------------------
-@st.cache_data(show_spinner=False, ttl=60*60)
+@st.cache_data(show_spinner=False, ttl=60 * 60)
 def load_history(start="1990-01-01"):
     vix = yf.download("^VIX", start=start, auto_adjust=False, progress=False)
     spx = yf.download("^GSPC", start=start, auto_adjust=False, progress=False)
+
     vix = vix.rename(columns=str.lower)
     spx = spx.rename(columns=str.lower)
 
@@ -42,20 +43,26 @@ def load_history(start="1990-01-01"):
     df["rsi14"] = compute_rsi(df["spx_close"], 14)
     return df.dropna(subset=["vix_close", "spx_close"])
 
+
 def compute_rsi(series, n=14):
     delta = series.diff()
     up = np.where(delta > 0, delta, 0.0)
     down = np.where(delta < 0, -delta, 0.0)
-    roll_up = pd.Series(up, index=series.index).ewm(alpha=1/n, adjust=False).mean()
-    roll_down = pd.Series(down, index=series.index).ewm(alpha=1/n, adjust=False).mean()
+    roll_up = pd.Series(up, index=series.index).ewm(alpha=1 / n, adjust=False).mean()
+    roll_down = pd.Series(down, index=series.index).ewm(alpha=1 / n, adjust=False).mean()
     rs = roll_up / roll_down.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def bucket_vix_base(x):
-    bins = [0, 12, 16, 20, 24, 30, 99]
-    labels = ["0-12", "12-16", "16-20", "20-24", "24-30", "30+"]
-    return pd.cut([x], bins=bins, labels=labels, right=False)[0]
+
+def bucket_vix_base(x, bins, labels):
+    if pd.isna(x):
+        return np.nan
+    try:
+        return pd.cut([x], bins=bins, labels=labels, right=False, include_lowest=True)[0]
+    except Exception:
+        return np.nan
+
 
 def bucket_spike_mag(pct):
     if pct < 0.30:
@@ -65,13 +72,16 @@ def bucket_spike_mag(pct):
     else:
         return "Extreme (50%+)"
 
+
 def decade_label(dt):
     y = dt.year
-    return f"{y//10*10}s"
+    return f"{y // 10 * 10}s"
+
 
 def winrate(series):
     series = pd.to_numeric(series, errors="coerce").dropna()
     return 100.0 * (series > 0).mean() if len(series) else np.nan
+
 
 def pct_bands(series):
     series = pd.to_numeric(series, errors="coerce").dropna()
@@ -79,16 +89,19 @@ def pct_bands(series):
         return np.nan, np.nan, np.nan
     return np.percentile(series, [10, 50, 90])
 
+
 def mean_abs_deviation(series):
     series = pd.to_numeric(series, errors="coerce").dropna()
     if len(series) == 0:
         return np.nan
     return np.mean(np.abs(series - np.mean(series)))
 
+
 def fmt_pct(x, digits=1):
     if pd.isna(x):
         return "NA"
     return f"{x:.{digits}f}%"
+
 
 def card_box(inner_html):
     st.markdown(
@@ -99,6 +112,24 @@ def card_box(inner_html):
         """.strip(),
         unsafe_allow_html=True
     )
+
+
+def make_vix_bins_and_labels(vix_min, vix_1, vix_2, vix_3, vix_4, vix_5, vix_max=99):
+    raw_edges = [vix_min, vix_1, vix_2, vix_3, vix_4, vix_5, vix_max]
+    bins = [raw_edges[0]]
+    for edge in raw_edges[1:]:
+        bins.append(max(edge, bins[-1] + 1))
+
+    labels = [
+        f"{bins[0]}-{bins[1]}",
+        f"{bins[1]}-{bins[2]}",
+        f"{bins[2]}-{bins[3]}",
+        f"{bins[3]}-{bins[4]}",
+        f"{bins[4]}-{bins[5]}",
+        f"{bins[5]}+",
+    ]
+    return bins, labels
+
 
 # ------------------------------- Sidebar -----------------------------------
 st.title("VIX Spike Deep Dive")
@@ -128,6 +159,27 @@ with st.sidebar:
     ma_window = st.selectbox("Regime MA window", [100, 150, 200], index=2)
     show_legend = st.checkbox("Show legend", value=False)
 
+    st.divider()
+    st.subheader("VIX Base Buckets")
+    st.caption("Adjust the starting VIX regime buckets used in the analysis.")
+
+    vix_min = st.slider("Min VIX", 0, 20, 0)
+    vix_1 = st.slider("Bucket 1 upper", 8, 20, 12)
+    vix_2 = st.slider("Bucket 2 upper", 12, 25, 16)
+    vix_3 = st.slider("Bucket 3 upper", 15, 30, 20)
+    vix_4 = st.slider("Bucket 4 upper", 20, 35, 24)
+    vix_5 = st.slider("Bucket 5 upper", 25, 40, 30)
+
+vix_bins, vix_labels = make_vix_bins_and_labels(
+    vix_min=vix_min,
+    vix_1=vix_1,
+    vix_2=vix_2,
+    vix_3=vix_3,
+    vix_4=vix_4,
+    vix_5=vix_5,
+    vix_max=99
+)
+
 # ------------------------------- Data --------------------------------------
 df = load_history(start=str(start_date))
 
@@ -143,12 +195,19 @@ events["vix_spike"] = events["vix_pctchg"] >= (spike_threshold / 100.0)
 events = events[events["vix_spike"]].dropna(subset=["vix_base"]).copy()
 
 if not events.empty:
-    events["vix_base_bucket"] = events["vix_base"].apply(bucket_vix_base)
+    events["vix_base_bucket"] = events["vix_base"].apply(
+        lambda x: bucket_vix_base(x, vix_bins, vix_labels)
+    )
     events["spike_mag"] = events["vix_pctchg"].apply(bucket_spike_mag)
     events["oversold"] = np.where(events["rsi14"] <= rsi_thresh, "Oversold", "Not Oversold")
     events["decade"] = [decade_label(d) for d in events.index]
 else:
-    events = pd.DataFrame(columns=["vix_base_bucket","spike_mag","oversold","decade","regime",f"spx_fwd{fwd_days}_ret"])
+    events = pd.DataFrame(
+        columns=[
+            "vix_base_bucket", "spike_mag", "oversold", "decade",
+            "regime", f"spx_fwd{fwd_days}_ret"
+        ]
+    )
 
 all_decades = sorted(events["decade"].unique().tolist()) if not events.empty else []
 decade_filter = st.sidebar.multiselect("Decades to include", options=all_decades, default=all_decades)
@@ -173,10 +232,22 @@ else:
 
 # ------------------------------- Stats for commentary ----------------------
 overall = events[f"spx_fwd{fwd_days}_ret"] if not events.empty else pd.Series(dtype=float)
-bucket_wr = events.groupby("vix_base_bucket")[f"spx_fwd{fwd_days}_ret"].apply(winrate) if not events.empty else pd.Series(dtype=float)
-mag_wr = events.groupby("spike_mag")[f"spx_fwd{fwd_days}_ret"].apply(winrate) if not events.empty else pd.Series(dtype=float)
-reg_wr = events.groupby("regime")[f"spx_fwd{fwd_days}_ret"].apply(winrate) if not events.empty else pd.Series(dtype=float)
-ov_wr = events.groupby("oversold")[f"spx_fwd{fwd_days}_ret"].apply(winrate) if not events.empty else pd.Series(dtype=float)
+bucket_wr = (
+    events.groupby("vix_base_bucket")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
+    if not events.empty else pd.Series(dtype=float)
+)
+mag_wr = (
+    events.groupby("spike_mag")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
+    if not events.empty else pd.Series(dtype=float)
+)
+reg_wr = (
+    events.groupby("regime")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
+    if not events.empty else pd.Series(dtype=float)
+)
+ov_wr = (
+    events.groupby("oversold")[f"spx_fwd{fwd_days}_ret"].apply(winrate)
+    if not events.empty else pd.Series(dtype=float)
+)
 p10, p50, p90 = pct_bands(overall) if len(overall) else (np.nan, np.nan, np.nan)
 
 wr_all = winrate(overall)
@@ -210,10 +281,11 @@ def generate_commentary(ctx):
     rsi_state = ctx["rsi_state"]
     ma_window = ctx["ma_window"]
     show_legend = ctx["show_legend"]
+    current_order_base = ctx["order_base"]
 
-    bucket_order = ["0-12","12-16","16-20","20-24","24-30","30+"]
-    mag_order = ["Moderate (20-30%)","Large (30-50%)","Extreme (50%+)"]
-    bucket_idx = bucket_order.index(str(bucket_now)) if bucket_now in bucket_order else 0
+    mag_order = ["Moderate (20-30%)", "Large (30-50%)", "Extreme (50%+)"]
+
+    bucket_idx = current_order_base.index(str(bucket_now)) if bucket_now in current_order_base else 0
     mag_idx = mag_order.index(str(mag_now)) if mag_now in mag_order else 0
     regime_idx = 0 if regime_now == "Bull" else 1
     rsi_idx = 0 if rsi_state == "Oversold" else 1
@@ -246,14 +318,15 @@ def generate_commentary(ctx):
     ]
     why = wim_bank[(regime_idx + rsi_idx + mag_idx) % len(wim_bank)]
 
-    bucket_desc = [
-        "low base VIX leaves less fuel",
-        "mid base VIX offers some spring",
-        "upper-mid base VIX carries energy",
-        "elevated base VIX adds thrust",
-        "high base VIX loads the coil",
-        "very high base VIX, tails widen",
-    ][bucket_idx]
+    desc_map = {
+        0: "low base VIX leaves less fuel",
+        1: "mid base VIX offers some spring",
+        2: "upper-mid base VIX carries energy",
+        3: "elevated base VIX adds thrust",
+        4: "high base VIX loads the coil",
+        5: "very high base VIX, tails widen",
+    }
+    bucket_desc = desc_map.get(bucket_idx, "base VIX bucket")
 
     mag_desc = [
         "a manageable shock",
@@ -265,9 +338,9 @@ def generate_commentary(ctx):
     ][(mag_idx + bucket_idx) % 6]
 
     if regime_idx == 0:
-        regime_line = f"Above the {ma_window}-DMA, hit rate improves to {fmt_pct(bull_wr,1)}."
+        regime_line = f"Above the {ma_window}-DMA, hit rate improves to {fmt_pct(bull_wr, 1)}."
     else:
-        regime_line = f"Below the {ma_window}-DMA, hit rate slips to {fmt_pct(bear_wr,1)}."
+        regime_line = f"Below the {ma_window}-DMA, hit rate slips to {fmt_pct(bear_wr, 1)}."
 
     if pd.notna(wr_all) and pd.notna(med):
         if wr_all >= 53 and med >= 0:
@@ -280,15 +353,15 @@ def generate_commentary(ctx):
         conclusion_tail = "Insufficient sample."
 
     drivers = []
-    drivers.append(f"Base case, WR {fmt_pct(wr_all,1)}, median {fmt_pct(med,1)}, average {fmt_pct(avg,1)}, N {n}.")
+    drivers.append(f"Base case, WR {fmt_pct(wr_all, 1)}, median {fmt_pct(med, 1)}, average {fmt_pct(avg, 1)}, N {n}.")
     if pd.notna(best_bucket_wr) and best_bucket_label is not None:
-        drivers.append(f"Base VIX {best_bucket_label} works best, WR {fmt_pct(best_bucket_wr,1)} ({bucket_desc}).")
+        drivers.append(f"Base VIX {best_bucket_label} works best, WR {fmt_pct(best_bucket_wr, 1)} ({bucket_desc}).")
     if pd.notna(best_mag_wr) and best_mag_label is not None:
-        drivers.append(f"Spike magnitude {best_mag_label}, WR {fmt_pct(best_mag_wr,1)} ({mag_desc}).")
+        drivers.append(f"Spike magnitude {best_mag_label}, WR {fmt_pct(best_mag_wr, 1)} ({mag_desc}).")
     drivers.append(regime_line)
     if pd.notna(ov_yes) and pd.notna(ov_no):
         rsi_line = "Oversold helps" if rsi_idx == 0 else "No stretch tempers the pop"
-        drivers.append(f"RSI filter, Oversold {fmt_pct(ov_yes,1)} vs Not {fmt_pct(ov_no,1)} ({rsi_line}).")
+        drivers.append(f"RSI filter, Oversold {fmt_pct(ov_yes, 1)} vs Not {fmt_pct(ov_no, 1)} ({rsi_line}).")
     drivers.append(f"Expected range for {fwd_days} days, p10 {fmt_pct(p10)}, p50 {fmt_pct(p50)}, p90 {fmt_pct(p90)}.")
 
     body = (
@@ -298,25 +371,26 @@ def generate_commentary(ctx):
         f'<div>{why}</div>'
         f'<div style="font-weight:700; margin:10px 0 6px;">Key drivers</div>'
         f'<ul style="margin-top:4px; margin-bottom:4px;">'
-        + ''.join(f'<li>{d}</li>' for d in drivers) +
-        '</ul>'
+        + "".join(f"<li>{d}</li>" for d in drivers) +
+        "</ul>"
     )
 
     if show_legend:
         body += (
             '<hr style="border-top:1px solid #eee; margin:10px 0;">'
             '<div style="font-size:13px;">'
-            '<b>Legend</b> WR win rate, Avg and Med forward SPX returns, N sample size. '
-            'Base bucket is VIX level before the spike. Magnitude is spike size. '
-            'Regime uses your DMA. RSI uses your slider. '
-            'p10, p50, p90 are percentile bands of forward returns for the chosen horizon.'
-            '</div>'
+            "<b>Legend</b> WR win rate, Avg and Med forward SPX returns, N sample size. "
+            "Base bucket is VIX level before the spike. Magnitude is spike size. "
+            "Regime uses your DMA. RSI uses your slider. "
+            "p10, p50, p90 are percentile bands of forward returns for the chosen horizon."
+            "</div>"
         )
 
     lights = 0
-    if bucket_now in ["24-30","30+"]:
+    high_buckets = current_order_base[-2:] if len(current_order_base) >= 2 else current_order_base
+    if bucket_now in high_buckets:
         lights += 1
-    if mag_now in ["Large (30-50%)","Extreme (50%+)"]:
+    if mag_now in ["Large (30-50%)", "Extreme (50%+)"]:
         lights += 1
     if regime_now == "Bull":
         lights += 1
@@ -325,17 +399,33 @@ def generate_commentary(ctx):
 
     return body, lights
 
+
 # Build context and commentary
 ctx = {
-    "wr_all": wr_all, "med_all": med_all, "avg_all": avg_all, "n_all": n_all,
-    "p10": p10, "p50": p50, "p90": p90,
-    "best_bucket_label": best_bucket_label, "best_bucket_wr": best_bucket_wr,
-    "best_mag_label": best_mag_label, "best_mag_wr": best_mag_wr,
-    "bull_wr": bull_wr, "bear_wr": bear_wr,
-    "ov_yes": ov_yes, "ov_no": ov_no,
-    "spike_threshold": spike_threshold, "fwd_days": fwd_days,
-    "bucket_now": bucket_now, "mag_now": mag_now, "regime_now": regime_now, "rsi_state": rsi_state,
-    "ma_window": ma_window, "show_legend": show_legend,
+    "wr_all": wr_all,
+    "med_all": med_all,
+    "avg_all": avg_all,
+    "n_all": n_all,
+    "p10": p10,
+    "p50": p50,
+    "p90": p90,
+    "best_bucket_label": best_bucket_label,
+    "best_bucket_wr": best_bucket_wr,
+    "best_mag_label": best_mag_label,
+    "best_mag_wr": best_mag_wr,
+    "bull_wr": bull_wr,
+    "bear_wr": bear_wr,
+    "ov_yes": ov_yes,
+    "ov_no": ov_no,
+    "spike_threshold": spike_threshold,
+    "fwd_days": fwd_days,
+    "bucket_now": bucket_now,
+    "mag_now": mag_now,
+    "regime_now": regime_now,
+    "rsi_state": rsi_state,
+    "ma_window": ma_window,
+    "show_legend": show_legend,
+    "order_base": vix_labels,
 }
 summary_html, lights = generate_commentary(ctx)
 
@@ -354,7 +444,8 @@ with col2:
         <b>Forward horizon</b>: {fwd_days} trading days<br>
         <b>RSI oversold</b>: ≤ {rsi_thresh}<br>
         <b>Regime MA</b>: {ma_window}-day<br>
-        <b>Decades</b>: {', '.join(decade_filter) if decade_filter else 'None'}<br>
+        <b>VIX buckets</b>: {", ".join(vix_labels)}<br>
+        <b>Decades</b>: {", ".join(decade_filter) if decade_filter else "None"}<br>
         <b>Four lights</b>: {lights} / 4
         """.strip()
     )
@@ -364,11 +455,15 @@ def safe_group_lists(g, col, order):
     data = []
     labels = []
     for k in order:
-        arr = pd.to_numeric(g.get_group(k)[col], errors="coerce").dropna().values if (not events.empty and k in g.groups) else np.array([])
+        if (not events.empty) and (k in g.groups):
+            arr = pd.to_numeric(g.get_group(k)[col], errors="coerce").dropna().values
+        else:
+            arr = np.array([])
         if arr.size > 0:
             data.append(arr)
             labels.append(k)
     return data, labels
+
 
 def ensure_fwd_cols(df_, horizons):
     for h in horizons:
@@ -379,21 +474,26 @@ def ensure_fwd_cols(df_, horizons):
             df_[ret] = (df_[nxt] / df_["spx_close"] - 1.0) * 100.0
     return df_
 
+
 fig, axes = plt.subplots(2, 3, figsize=(16, 8))
 fig.subplots_adjust(wspace=0.35, hspace=0.45)
 
 # 1) Boxplot: forward returns by VIX base bucket
 ax1 = axes[0, 0]
-order_base = ["0-12","12-16","16-20","20-24","24-30","30+"]
+order_base = vix_labels
+
 if not events.empty:
-    g = events.groupby("vix_base_bucket")
+    g = events.groupby("vix_base_bucket", observed=False)
     data, labels = safe_group_lists(g, f"spx_fwd{fwd_days}_ret", order_base)
 else:
     data, labels = [], []
+
 bp = ax1.boxplot(
     data if data else [np.array([np.nan])],
-    labels=labels if labels else ["no data"],
-    patch_artist=True, notch=True, showfliers=False
+    tick_labels=labels if labels else ["no data"],
+    patch_artist=True,
+    notch=True,
+    showfliers=False
 )
 for i, patch in enumerate(bp["boxes"]):
     patch.set_facecolor(PASTELS[i % len(PASTELS)])
@@ -406,15 +506,18 @@ ax1.grid(axis="y", color=GRID_COLOR, linewidth=0.6)
 
 # 2) Heatmap: win rate by Base × Magnitude
 ax2 = axes[0, 1]
-order_mag = ["Moderate (20-30%)","Large (30-50%)","Extreme (50%+)"]
+order_mag = ["Moderate (20-30%)", "Large (30-50%)", "Extreme (50%+)"]
+
 if not events.empty:
     pivot = events.pivot_table(
-        index="vix_base_bucket", columns="spike_mag",
+        index="vix_base_bucket",
+        columns="spike_mag",
         values=f"spx_fwd{fwd_days}_ret",
         aggfunc=lambda s: winrate(pd.Series(s))
     ).reindex(index=order_base, columns=order_mag)
 else:
     pivot = pd.DataFrame(np.nan, index=order_base, columns=order_mag)
+
 cmap = LinearSegmentedColormap.from_list("pastelWR", ["#EAF7FB", "#A8DADC", "#4DB6AC"])
 im = ax2.imshow(pivot.values.astype(float), aspect="auto", cmap=cmap, vmin=0, vmax=100)
 ax2.set_xticks(range(len(order_mag)))
@@ -422,6 +525,7 @@ ax2.set_xticklabels(["20–30%", "30–50%", "50%+"], fontsize=10)
 ax2.set_yticks(range(len(order_base)))
 ax2.set_yticklabels(order_base, fontsize=10)
 ax2.set_title("Win Rate by Base × Magnitude", color=TEXT_COLOR, fontsize=12, pad=8)
+
 for i in range(len(order_base)):
     for j in range(len(order_mag)):
         val = pivot.values[i, j]
@@ -432,7 +536,10 @@ for i in range(len(order_base)):
 ax3 = axes[0, 2]
 if not events.empty:
     for name, color in [("Bull", PASTELS[0]), ("Bear", PASTELS[2])]:
-        vals = pd.to_numeric(events.loc[events["regime"] == name, f"spx_fwd{fwd_days}_ret"], errors="coerce").dropna().values
+        vals = pd.to_numeric(
+            events.loc[events["regime"] == name, f"spx_fwd{fwd_days}_ret"],
+            errors="coerce"
+        ).dropna().values
         if vals.size > 0:
             x = np.sort(vals)
             y = np.arange(1, x.size + 1) / x.size
@@ -451,13 +558,20 @@ if not events.empty:
     vals["SpikePct"] = vals["vix_pctchg"] * 100.0
     colors = np.where(vals["oversold"] == "Oversold", PASTELS[3], PASTELS[1])
     sizes = 10 + np.clip(vals["SpikePct"].abs(), 0, 100)
-    ax4.scatter(vals["vix_base"], vals[f"spx_fwd{fwd_days}_ret"], s=sizes, c=colors,
-                alpha=0.85, edgecolors=BAR_EDGE, linewidths=0.3)
+    ax4.scatter(
+        vals["vix_base"],
+        vals[f"spx_fwd{fwd_days}_ret"],
+        s=sizes,
+        c=colors,
+        alpha=0.85,
+        edgecolors=BAR_EDGE,
+        linewidths=0.3
+    )
     good = vals[["vix_base", f"spx_fwd{fwd_days}_ret"]].dropna()
     if len(good) > 5:
         m, b = np.polyfit(good["vix_base"], good[f"spx_fwd{fwd_days}_ret"], 1)
         xs = np.linspace(good["vix_base"].min(), good["vix_base"].max(), 100)
-        ax4.plot(xs, m*xs + b, linewidth=1.5, color="#444444")
+        ax4.plot(xs, m * xs + b, linewidth=1.5, color="#444444")
 ax4.axhline(0, color="#888888", linewidth=1)
 ax4.set_title("VIX Base vs Forward Return, size=Spike% color=RSI", color=TEXT_COLOR, fontsize=12, pad=8)
 ax4.set_xlabel("VIX Level Before Spike", color=TEXT_COLOR)
@@ -468,6 +582,7 @@ ax4.grid(color=GRID_COLOR, linewidth=0.6)
 ax5 = axes[1, 1]
 horizons = [1, 2, 3, 5, 10, 20]
 df = ensure_fwd_cols(df, horizons)
+
 if not events.empty:
     idx = events.index
     means, p10s, p90s = [], [], []
@@ -478,6 +593,7 @@ if not events.empty:
         p90s.append(np.nanpercentile(x.dropna(), 90) if x.notna().sum() else np.nan)
     ax5.plot(horizons, means, linewidth=2, marker="o")
     ax5.fill_between(horizons, p10s, p90s, alpha=0.25)
+
 ax5.axhline(0, color="#888888", linewidth=1)
 ax5.set_title("Event Study, Mean Path after Spike", color=TEXT_COLOR, fontsize=12, pad=8)
 ax5.set_xlabel("Horizon (trading days)", color=TEXT_COLOR)
@@ -513,7 +629,7 @@ def latest_context_box():
     vix_spike = latest["vix_pctchg"] * 100.0
     spx_now = latest["spx_close"]
     rsi_now = latest["rsi14"]
-    regime_now = latest["regime"]
+    regime_now_local = latest["regime"]
     bucket = latest["vix_base_bucket"]
     magcat = latest["spike_mag"]
     over = latest["oversold"]
@@ -527,10 +643,10 @@ def latest_context_box():
 
     text = f"""
     <b>Latest event</b> {dt}. VIX {vix_now:.2f} from base {vix_base:.2f}, spike {vix_spike:.1f}%.
-    SPX {spx_now:.2f}, RSI14 {rsi_now:.1f} ({over}), regime {regime_now}.
+    SPX {spx_now:.2f}, RSI14 {rsi_now:.1f} ({over}), regime {regime_now_local}.
     Setup, base {bucket}, magnitude {magcat}.
     <br><br>
-    <b>Setup stats</b> same bucket, magnitude, regime. WR {fmt_pct(wr,1)}, Avg {fmt_pct(avg,1)}, Med {fmt_pct(med,1)}, Disp {fmt_pct(mad,1)}, N {n}.
+    <b>Setup stats</b> same bucket, magnitude, regime. WR {fmt_pct(wr, 1)}, Avg {fmt_pct(avg, 1)}, Med {fmt_pct(med, 1)}, Disp {fmt_pct(mad, 1)}, N {n}.
     Bands p10 {fmt_pct(p10_c)}, p50 {fmt_pct(p50_c)}, p90 {fmt_pct(p90_c)}.
     """.strip()
     card_box(text)
@@ -557,6 +673,7 @@ def latest_context_box():
         st.markdown("**Nearest analogs, same setup, last 10 occurrences**")
         st.dataframe(analogs, use_container_width=True)
 
+
 latest_context_box()
 
 # ------------------------------- Events table ------------------------------
@@ -582,6 +699,5 @@ with st.expander("Show events table"):
         st.write("No events under current filters.")
 
 # ------------------------------- Footer ------------------------------------
-st.caption("ADFM Analytics Platform · VIX Spike Deep Dive · Data source: Yahoo Finance")
+st.caption("ADFM Analytics Platform | VIX Spike Deep Dive | Data source: Yahoo Finance")
 st.caption("© 2026 AD Fund Management LP")
-
