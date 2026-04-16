@@ -117,8 +117,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
     "Clean Energy Transition": {
         "Solar and Inverters": ["TAN", "FSLR", "ENPH", "SEDG", "RUN", "CSIQ", "JKS"],
         "Wind and Renewables": ["ICLN", "FAN", "NEP", "FSLR", "CWEN"],
-        "Distributed Power and Fuel Cells": ["BE", "BLDP", "FCEL"],
-        "Hydrogen Fuel and Electrolyzers": ["PLUG", "BE"],
+        "Distributed Power and Fuel Cells": ["BE", "BLDP", "FCEL", "PLUG"],
         "Utilities and Power": ["VST", "CEG", "NEE", "DUK", "SO", "AEP", "XEL", "EXC", "PCG", "EIX"],
         "Regulated Utilities Core": ["DUK", "SO", "AEP", "XEL", "EXC", "ED"],
         "Merchant Power and Volatility": ["VST", "CEG", "NRG", "AES", "CWEN"],
