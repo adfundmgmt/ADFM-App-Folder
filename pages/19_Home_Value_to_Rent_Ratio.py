@@ -1,5 +1,4 @@
 import json
-import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +15,7 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 
 # =============================================================================
-# CONFIG
+# PAGE CONFIG
 # =============================================================================
 
 st.set_page_config(
@@ -27,21 +26,21 @@ st.set_page_config(
 APP_TITLE = "Home Value to Rent Ratio"
 APP_SUBTITLE = "Housing valuation, affordability, and regime monitor"
 
+LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
+
 CACHE_TTL_SECONDS = 60 * 60
-HTTP_TIMEOUT = 25
-MAX_RETRIES = 4
-RETRY_BACKOFF_SECONDS = 1.25
+HTTP_TIMEOUT = 12
+MAX_RETRIES_PER_ENDPOINT = 2
+RETRY_SLEEP_SECONDS = 1.0
 
 LOCAL_CACHE_DIR = Path(".cache_fred_home_rent")
 LOCAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-LOGO_PATH = Path("/mnt/data/0ea02e99-f067-4315-accc-0d2bbd3ee87d.png")
-
 FRED_SERIES = {
-    "home_index": "CSUSHPINSA",        # S&P CoreLogic Case-Shiller U.S. National Home Price Index
-    "rent_index": "CUSR0000SEHA",      # CPI Rent of Primary Residence: U.S. city average
-    "mortgage_30y": "MORTGAGE30US",    # 30-Year Fixed Rate Mortgage Average in the United States
-    "recession": "USREC",              # NBER based recession indicators
+    "home_index": "CSUSHPINSA",
+    "rent_index": "CUSR0000SEHA",
+    "mortgage_30y": "MORTGAGE30US",
+    "recession": "USREC",
 }
 
 USER_AGENT = {
@@ -53,7 +52,7 @@ USER_AGENT = {
 }
 
 # =============================================================================
-# DATA STRUCTURES
+# DATA CLASSES
 # =============================================================================
 
 @dataclass
@@ -65,6 +64,7 @@ class SeriesFetchResult:
     last_observation: pd.Timestamp
     num_points: int
     frequency_hint: str
+    status: str
 
 @dataclass
 class DashboardData:
@@ -75,7 +75,7 @@ class DashboardData:
     latest_snapshot: Dict[str, float]
 
 # =============================================================================
-# UTILS
+# HELPERS
 # =============================================================================
 
 def percentile_rank(series: pd.Series, value: float) -> float:
@@ -89,7 +89,7 @@ def zscore_last(series: pd.Series) -> float:
     if len(s) < 12:
         return np.nan
     std = float(s.std(ddof=0))
-    if std == 0 or not np.isfinite(std):
+    if not np.isfinite(std) or std == 0:
         return np.nan
     return float((s.iloc[-1] - s.mean()) / std)
 
@@ -122,12 +122,21 @@ def infer_frequency(index: pd.DatetimeIndex) -> str:
         return "quarterly"
     return "low_frequency"
 
-# =============================================================================
-# FRED DATA LAYER
-# =============================================================================
+def validate_series(series_id: str, s: pd.Series) -> pd.Series:
+    if s is None or s.empty:
+        raise ValueError(f"{series_id} returned an empty series")
+    s = s.dropna().sort_index()
+    if s.empty:
+        raise ValueError(f"{series_id} is empty after dropping NA")
+    if not isinstance(s.index, pd.DatetimeIndex):
+        raise ValueError(f"{series_id} index is not DatetimeIndex")
+    if len(s) < 12:
+        raise ValueError(f"{series_id} has too few observations")
+    return s
 
-def _fred_csv_url(series_id: str) -> str:
-    return f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+# =============================================================================
+# CACHE LAYER
+# =============================================================================
 
 def _series_cache_path(series_id: str) -> Path:
     return LOCAL_CACHE_DIR / f"{series_id}.csv"
@@ -135,10 +144,11 @@ def _series_cache_path(series_id: str) -> Path:
 def _meta_cache_path(series_id: str) -> Path:
     return LOCAL_CACHE_DIR / f"{series_id}.meta.json"
 
-def _write_local_cache(series_id: str, s: pd.Series, source: str) -> None:
+def write_local_cache(series_id: str, s: pd.Series, source: str) -> None:
     df = s.rename("value").to_frame()
     df.index.name = "date"
     df.to_csv(_series_cache_path(series_id))
+
     meta = {
         "series_id": series_id,
         "source": source,
@@ -148,102 +158,132 @@ def _write_local_cache(series_id: str, s: pd.Series, source: str) -> None:
     }
     _meta_cache_path(series_id).write_text(json.dumps(meta, indent=2))
 
-def _read_local_cache(series_id: str) -> Optional[SeriesFetchResult]:
+def read_local_cache(series_id: str) -> Optional[SeriesFetchResult]:
     csv_path = _series_cache_path(series_id)
     meta_path = _meta_cache_path(series_id)
 
     if not csv_path.exists():
         return None
 
-    df = pd.read_csv(csv_path)
-    if df.empty or "date" not in df.columns or "value" not in df.columns:
+    try:
+        df = pd.read_csv(csv_path)
+        if "date" not in df.columns or "value" not in df.columns:
+            return None
+
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
+        s = (
+            df.dropna(subset=["date"])
+            .set_index("date")["value"]
+            .dropna()
+            .sort_index()
+        )
+        s = validate_series(series_id, s)
+
+        meta = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except Exception:
+                meta = {}
+
+        fetched_at = pd.to_datetime(meta.get("fetched_at", pd.Timestamp.utcnow()))
+        last_observation = pd.to_datetime(meta.get("last_observation", s.index.max()))
+
+        return SeriesFetchResult(
+            series_id=series_id,
+            data=s,
+            source="local_cache",
+            fetched_at=fetched_at,
+            last_observation=last_observation,
+            num_points=int(len(s)),
+            frequency_hint=infer_frequency(s.index),
+            status="stale_cache_fallback",
+        )
+    except Exception:
         return None
 
+# =============================================================================
+# FRED FETCH LAYER
+# =============================================================================
+
+def fred_candidate_urls(series_id: str) -> List[Tuple[str, str]]:
+    return [
+        (
+            "fred_csv_graph",
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
+        ),
+        (
+            "fred_csv_download",
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv?cosd=1900-01-01&coed=2099-12-31&id={series_id}",
+        ),
+        (
+            "alfred_csv",
+            f"https://alfred.stlouisfed.org/graph/alfredgraph.csv?id={series_id}",
+        ),
+    ]
+
+def fetch_url_bytes(url: str) -> bytes:
+    r = requests.get(url, headers=USER_AGENT, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    return r.content
+
+def parse_fred_csv_bytes(series_id: str, raw: bytes) -> pd.Series:
+    df = pd.read_csv(pd.io.common.BytesIO(raw))
+    if df.shape[1] < 2:
+        raise ValueError(f"{series_id} returned unexpected CSV shape")
+
+    df.columns = ["date", "value"]
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
-    s = df.dropna(subset=["date"]).set_index("date")["value"].dropna().sort_index()
 
-    if s.empty:
-        return None
-
-    meta = {}
-    if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text())
-        except Exception:
-            meta = {}
-
-    fetched_at = pd.to_datetime(meta.get("fetched_at", pd.Timestamp.utcnow()))
-    last_obs = pd.to_datetime(meta.get("last_observation", s.index.max()))
-
-    return SeriesFetchResult(
-        series_id=series_id,
-        data=s,
-        source="local_cache",
-        fetched_at=fetched_at,
-        last_observation=last_obs,
-        num_points=int(len(s)),
-        frequency_hint=infer_frequency(s.index),
+    s = (
+        df.dropna(subset=["date"])
+        .set_index("date")["value"]
+        .dropna()
+        .sort_index()
     )
 
-def _download_fred_series(series_id: str) -> pd.Series:
-    url = _fred_csv_url(series_id)
-    last_err = None
-    delay = RETRY_BACKOFF_SECONDS
+    return validate_series(series_id, s)
 
-    for _ in range(MAX_RETRIES):
-        try:
-            r = requests.get(url, headers=USER_AGENT, timeout=HTTP_TIMEOUT)
-            r.raise_for_status()
-            df = pd.read_csv(pd.io.common.BytesIO(r.content))
-            if df.shape[1] < 2:
-                raise ValueError(f"Unexpected FRED format for {series_id}")
+def fetch_fred_series_live(series_id: str) -> SeriesFetchResult:
+    errors = []
 
-            df.columns = ["date", "value"]
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-            df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    for source_name, url in fred_candidate_urls(series_id):
+        for attempt in range(MAX_RETRIES_PER_ENDPOINT):
+            try:
+                raw = fetch_url_bytes(url)
+                s = parse_fred_csv_bytes(series_id, raw)
+                write_local_cache(series_id, s, source=source_name)
+                return SeriesFetchResult(
+                    series_id=series_id,
+                    data=s,
+                    source=source_name,
+                    fetched_at=pd.Timestamp.utcnow(),
+                    last_observation=s.index.max(),
+                    num_points=int(len(s)),
+                    frequency_hint=infer_frequency(s.index),
+                    status="live",
+                )
+            except Exception as e:
+                errors.append(f"{source_name} attempt {attempt + 1}: {repr(e)}")
+                time.sleep(RETRY_SLEEP_SECONDS)
 
-            s = (
-                df.dropna(subset=["date"])
-                .set_index("date")["value"]
-                .dropna()
-                .sort_index()
-            )
-
-            if s.empty:
-                raise ValueError(f"Empty series returned for {series_id}")
-
-            return s
-
-        except Exception as e:
-            last_err = e
-            time.sleep(delay)
-            delay *= 2.0
-
-    raise RuntimeError(f"Failed to fetch {series_id}: {last_err}")
+    raise RuntimeError(" | ".join(errors))
 
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def fetch_fred_series(series_id: str) -> SeriesFetchResult:
     try:
-        s = _download_fred_series(series_id)
-        _write_local_cache(series_id, s, source="fred_live")
-        return SeriesFetchResult(
-            series_id=series_id,
-            data=s,
-            source="fred_live",
-            fetched_at=pd.Timestamp.utcnow(),
-            last_observation=s.index.max(),
-            num_points=int(len(s)),
-            frequency_hint=infer_frequency(s.index),
-        )
-    except Exception:
-        cached = _read_local_cache(series_id)
+        return fetch_fred_series_live(series_id)
+    except Exception as live_error:
+        cached = read_local_cache(series_id)
         if cached is not None:
             return cached
-        raise
+        raise RuntimeError(f"All live endpoints failed for {series_id}. No usable local cache found. Last error: {live_error}")
 
 # =============================================================================
-# ANALYTICS LAYER
+# ANALYTICS
 # =============================================================================
 
 def to_monthly(series: pd.Series, method: str = "mean") -> pd.Series:
@@ -293,7 +333,6 @@ def build_analytics(
         for key, series_id in FRED_SERIES.items()
     }
 
-    # Monthly aligned series
     home_m = to_monthly(fetched["home_index"].data, method="mean")
     rent_m = to_monthly(fetched["rent_index"].data, method="mean")
     mort_m = to_monthly(fetched["mortgage_30y"].data, method="mean")
@@ -308,51 +347,36 @@ def build_analytics(
     monthly.columns = ["home_index", "rent_index", "mortgage_rate", "recession"]
 
     if monthly.empty or len(monthly) < 24:
-        raise ValueError("Merged monthly dataset is too short after alignment.")
+        raise ValueError("Merged monthly dataset is too short after alignment")
 
     monthly["ratio_raw"] = monthly["home_index"] / monthly["rent_index"]
 
     raw_median = float(monthly["ratio_raw"].median())
-    if np.isfinite(raw_median) and raw_median != 0:
-        scale = float(target_median) / raw_median
-    else:
-        scale = 1.0
+    scale = float(target_median) / raw_median if np.isfinite(raw_median) and raw_median != 0 else 1.0
 
-    monthly["ratio_display"] = (
-        monthly["ratio_raw"] * scale if normalize_ratio else monthly["ratio_raw"]
-    )
-
+    monthly["ratio_display"] = monthly["ratio_raw"] * scale if normalize_ratio else monthly["ratio_raw"]
     monthly["ratio_12m_avg"] = monthly["ratio_display"].rolling(12, min_periods=6).mean()
-    monthly["ratio_zscore"] = (
-        (monthly["ratio_raw"] - monthly["ratio_raw"].mean()) / monthly["ratio_raw"].std(ddof=0)
-    )
+    monthly["ratio_zscore"] = (monthly["ratio_raw"] - monthly["ratio_raw"].mean()) / monthly["ratio_raw"].std(ddof=0)
 
     monthly["home_yoy"] = monthly["home_index"].pct_change(12) * 100.0
     monthly["rent_yoy"] = monthly["rent_index"].pct_change(12) * 100.0
     monthly["spread_yoy"] = monthly["home_yoy"] - monthly["rent_yoy"]
 
     monthly["payment_per_100k"] = mortgage_payment_per_100k(monthly["mortgage_rate"])
+    monthly["synthetic_payment_burden_raw"] = monthly["payment_per_100k"] * monthly["home_index"]
 
-    # Synthetic affordability index
-    monthly["synthetic_payment_burden_raw"] = (
-        monthly["payment_per_100k"] * monthly["home_index"]
-    )
-
-    baseline_year = int(affordability_baseline_year)
-    baseline_slice = monthly.loc[monthly.index.year == baseline_year, "synthetic_payment_burden_raw"].dropna()
+    baseline_slice = monthly.loc[
+        monthly.index.year == int(affordability_baseline_year),
+        "synthetic_payment_burden_raw"
+    ].dropna()
 
     if not baseline_slice.empty and float(baseline_slice.mean()) != 0:
         baseline_value = float(baseline_slice.mean())
     else:
         first_valid = safe_first_valid(monthly["synthetic_payment_burden_raw"])
-        if first_valid is None or first_valid == 0:
-            baseline_value = 1.0
-        else:
-            baseline_value = first_valid
+        baseline_value = first_valid if first_valid is not None and first_valid != 0 else 1.0
 
-    monthly["affordability_index"] = (
-        monthly["synthetic_payment_burden_raw"] / baseline_value
-    ) * 100.0
+    monthly["affordability_index"] = (monthly["synthetic_payment_burden_raw"] / baseline_value) * 100.0
 
     annual = pd.DataFrame(index=pd.Index(sorted(monthly.index.year.unique()), name="year"))
     annual["ratio_display"] = monthly["ratio_display"].resample("YE").mean().values
@@ -362,7 +386,6 @@ def build_analytics(
     annual["rent_yoy"] = monthly["rent_yoy"].resample("YE").mean().values
     annual["spread_yoy"] = monthly["spread_yoy"].resample("YE").mean().values
     annual["affordability_index"] = monthly["affordability_index"].resample("YE").mean().values
-
     annual.index = annual.index.astype(int)
 
     rec_spans = recession_spans(monthly["recession"])
@@ -395,6 +418,7 @@ def build_analytics(
                 "series_name": name,
                 "series_id": result.series_id,
                 "source": result.source,
+                "status": result.status,
                 "fetched_at_utc": pd.to_datetime(result.fetched_at),
                 "last_observation": pd.to_datetime(result.last_observation),
                 "num_points": result.num_points,
@@ -437,11 +461,8 @@ def build_ratio_chart(
     downturn_reference: float,
 ) -> go.Figure:
     df = data.monthly.copy()
-
     ratio_col = "ratio_display"
-    ratio_label = "Home / Rent Ratio"
-    if normalize_ratio:
-        ratio_label = "Home / Rent Ratio (Normalized)"
+    ratio_label = "Home / Rent Ratio (Normalized)" if normalize_ratio else "Home / Rent Ratio"
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     if show_recessions:
@@ -453,7 +474,7 @@ def build_ratio_chart(
             y=df[ratio_col],
             mode="lines",
             name=ratio_label,
-            line=dict(width=2.5),
+            line=dict(width=2.6),
             hovertemplate="%{x|%Y-%m}<br>Ratio: %{y:.2f}<extra></extra>",
         ),
         secondary_y=False,
@@ -496,17 +517,17 @@ def build_ratio_chart(
 
     latest_x = df.index[-1]
     latest_y = float(df[ratio_col].iloc[-1])
+
     fig.add_trace(
         go.Scatter(
             x=[latest_x],
             y=[latest_y],
             mode="markers+text",
-            name="Latest",
             text=[f"{latest_y:.2f}"],
             textposition="middle right",
             marker=dict(size=9),
-            hovertemplate="%{x|%Y-%m}<br>Latest: %{y:.2f}<extra></extra>",
             showlegend=False,
+            hovertemplate="%{x|%Y-%m}<br>Latest: %{y:.2f}<extra></extra>",
         ),
         secondary_y=False,
     )
@@ -529,7 +550,7 @@ def build_ratio_chart(
         height=520,
         margin=dict(l=20, r=20, t=55, b=20),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        legend=dict(orientation="h", y=1.02, x=0),
     )
     fig.update_yaxes(title_text=ratio_label, secondary_y=False)
     fig.update_yaxes(title_text="Mortgage Rate (%)", secondary_y=True, showgrid=False)
@@ -538,17 +559,11 @@ def build_ratio_chart(
 
 def build_inflation_chart(data: DashboardData, show_recessions: bool) -> go.Figure:
     df = data.monthly.copy()
-
     fig = go.Figure()
+
     if show_recessions:
         for start, end in data.recession_spans:
-            fig.add_vrect(
-                x0=start,
-                x1=end,
-                fillcolor="lightgray",
-                opacity=0.16,
-                line_width=0,
-            )
+            fig.add_vrect(x0=start, x1=end, fillcolor="lightgray", opacity=0.16, line_width=0)
 
     fig.add_trace(
         go.Scatter(
@@ -580,7 +595,6 @@ def build_inflation_chart(data: DashboardData, show_recessions: bool) -> go.Figu
             hovertemplate="%{x|%Y-%m}<br>Spread: %{y:.2f}%<extra></extra>",
         )
     )
-
     fig.add_hline(y=0, line_width=1, opacity=0.7)
 
     fig.update_layout(
@@ -588,7 +602,7 @@ def build_inflation_chart(data: DashboardData, show_recessions: bool) -> go.Figu
         height=500,
         margin=dict(l=20, r=20, t=55, b=20),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        legend=dict(orientation="h", y=1.02, x=0),
     )
     fig.update_yaxes(title_text="YoY %")
     fig.update_xaxes(title_text="")
@@ -596,17 +610,11 @@ def build_inflation_chart(data: DashboardData, show_recessions: bool) -> go.Figu
 
 def build_affordability_chart(data: DashboardData, show_recessions: bool, baseline_year: int) -> go.Figure:
     df = data.monthly.copy()
-
     fig = go.Figure()
+
     if show_recessions:
         for start, end in data.recession_spans:
-            fig.add_vrect(
-                x0=start,
-                x1=end,
-                fillcolor="lightgray",
-                opacity=0.16,
-                line_width=0,
-            )
+            fig.add_vrect(x0=start, x1=end, fillcolor="lightgray", opacity=0.16, line_width=0)
 
     fig.add_trace(
         go.Scatter(
@@ -621,17 +629,17 @@ def build_affordability_chart(data: DashboardData, show_recessions: bool, baseli
 
     latest_x = df.index[-1]
     latest_y = float(df["affordability_index"].iloc[-1])
+
     fig.add_trace(
         go.Scatter(
             x=[latest_x],
             y=[latest_y],
             mode="markers+text",
-            name="Latest",
             text=[f"{latest_y:.0f}"],
             textposition="middle right",
             marker=dict(size=9),
-            hovertemplate="%{x|%Y-%m}<br>Latest: %{y:.1f}<extra></extra>",
             showlegend=False,
+            hovertemplate="%{x|%Y-%m}<br>Latest: %{y:.1f}<extra></extra>",
         )
     )
 
@@ -649,7 +657,7 @@ def build_affordability_chart(data: DashboardData, show_recessions: bool, baseli
         height=500,
         margin=dict(l=20, r=20, t=55, b=20),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        legend=dict(orientation="h", y=1.02, x=0),
     )
     fig.update_yaxes(title_text="Index")
     fig.update_xaxes(title_text="")
@@ -657,12 +665,10 @@ def build_affordability_chart(data: DashboardData, show_recessions: bool, baseli
 
 def build_distribution_chart(data: DashboardData) -> go.Figure:
     df = data.monthly.copy()
-
     latest_ratio = float(df["ratio_raw"].iloc[-1])
     pctl = percentile_rank(df["ratio_raw"], latest_ratio)
 
     fig = go.Figure()
-
     fig.add_trace(
         go.Histogram(
             x=df["ratio_raw"],
@@ -671,7 +677,6 @@ def build_distribution_chart(data: DashboardData) -> go.Figure:
             hovertemplate="Ratio bin: %{x}<br>Count: %{y}<extra></extra>",
         )
     )
-
     fig.add_vline(
         x=latest_ratio,
         line_width=2,
@@ -679,7 +684,6 @@ def build_distribution_chart(data: DashboardData) -> go.Figure:
         annotation_text=f"Latest {latest_ratio:.2f} | {pctl:.0f}th pct",
         annotation_position="top",
     )
-
     fig.update_layout(
         title="Raw Ratio Distribution",
         height=400,
@@ -691,7 +695,7 @@ def build_distribution_chart(data: DashboardData) -> go.Figure:
     return fig
 
 # =============================================================================
-# INTERPRETATION
+# COMMENTARY
 # =============================================================================
 
 def generate_regime_commentary(snapshot: Dict[str, float]) -> str:
@@ -714,20 +718,20 @@ def generate_regime_commentary(snapshot: Dict[str, float]) -> str:
     if np.isnan(spread):
         spread_text = "The home-versus-rent spread is unavailable."
     elif spread > 1.5:
-        spread_text = "Home-price inflation is still running ahead of rent inflation, which argues the ratio remains under upward pressure."
+        spread_text = "Home-price inflation is still running ahead of rent inflation, which keeps upward pressure on the ratio."
     elif spread > -1.5:
-        spread_text = "Home-price inflation and rent inflation are moving close together, which suggests the ratio is no longer being pushed materially by relative price acceleration."
+        spread_text = "Home-price inflation and rent inflation are moving close together, so the ratio is no longer being pushed materially by relative acceleration."
     else:
-        spread_text = "Rent inflation is now outpacing home-price inflation, which usually helps mean reversion in the valuation ratio over time."
+        spread_text = "Rent inflation is outpacing home-price inflation, which usually helps mean reversion in the ratio over time."
 
     if np.isnan(mort):
         mort_text = "Mortgage-rate context is unavailable."
     elif mort >= 7:
-        mort_text = "Mortgage rates remain restrictive, so valuation resilience still depends on supply tightness, buyer mix, or eventual policy relief."
+        mort_text = "Mortgage rates remain restrictive, so valuation resilience still depends on supply tightness, buyer mix, or eventual rate relief."
     elif mort >= 5.5:
         mort_text = "Mortgage rates remain meaningfully above the pre-2022 regime, which keeps affordability pressure elevated."
     else:
-        mort_text = "Mortgage rates are no longer the same degree of headwind they were at the peak of the tightening shock."
+        mort_text = "Mortgage rates are less punitive than at the peak of the tightening shock."
 
     if np.isnan(aff):
         aff_text = "Affordability proxy is unavailable."
@@ -736,11 +740,9 @@ def generate_regime_commentary(snapshot: Dict[str, float]) -> str:
     elif aff >= 125:
         aff_text = "The synthetic burden index is still materially above baseline, so affordability remains impaired."
     else:
-        aff_text = "The synthetic burden index is closer to baseline than it was during the most stressed period."
+        aff_text = "The synthetic burden index is closer to baseline than during the most stressed period."
 
-    return (
-        f"{ratio_regime}. {spread_text} {mort_text} {aff_text}"
-    )
+    return f"{ratio_regime}. {spread_text} {mort_text} {aff_text}"
 
 # =============================================================================
 # UI
@@ -759,13 +761,7 @@ with st.sidebar:
         This dashboard tracks housing valuation through the relationship between home prices and rent,
         then layers in mortgage-rate pressure and a synthetic affordability burden proxy.
 
-        It is built for regime monitoring rather than one-chart storytelling.
-
-        Core design principles:
-        - Raw ratio stays intact as the economic source of truth
-        - Normalization is optional and clearly separated
-        - Data quality is surfaced through diagnostics
-        - Recession shading and overlays are optional
+        It is designed for regime monitoring rather than one-chart storytelling.
         """
     )
 
@@ -805,58 +801,23 @@ except Exception as e:
 snapshot = dashboard.latest_snapshot
 latest_date = dashboard.monthly.index.max()
 
-# =============================================================================
-# KPI ROW
-# =============================================================================
-
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 
 with c1:
-    st.metric(
-        "Raw Ratio",
-        format_num(snapshot["latest_ratio_raw"], 2),
-        delta=format_num(snapshot["ratio_vs_12m"], 2),
-    )
-
+    st.metric("Raw Ratio", format_num(snapshot["latest_ratio_raw"], 2), delta=format_num(snapshot["ratio_vs_12m"], 2))
 with c2:
-    st.metric(
-        "Historical Percentile",
-        format_pct(snapshot["ratio_percentile"], 0),
-    )
-
+    st.metric("Historical Percentile", format_pct(snapshot["ratio_percentile"], 0))
 with c3:
-    st.metric(
-        "Z-Score",
-        format_num(snapshot["ratio_zscore_latest"], 2),
-    )
-
+    st.metric("Z-Score", format_num(snapshot["ratio_zscore_latest"], 2))
 with c4:
-    st.metric(
-        "Mortgage Rate",
-        format_pct(snapshot["latest_mortgage_rate"], 2),
-    )
-
+    st.metric("Mortgage Rate", format_pct(snapshot["latest_mortgage_rate"], 2))
 with c5:
-    st.metric(
-        "Home minus Rent YoY",
-        format_pct(snapshot["latest_spread_yoy"], 2),
-    )
-
+    st.metric("Home minus Rent YoY", format_pct(snapshot["latest_spread_yoy"], 2))
 with c6:
-    st.metric(
-        "Affordability Index",
-        format_num(snapshot["latest_affordability_index"], 0),
-    )
+    st.metric("Affordability Index", format_num(snapshot["latest_affordability_index"], 0))
 
-st.markdown(
-    f"**Latest monthly observation:** {latest_date.strftime('%B %Y')}"
-)
-
+st.markdown(f"**Latest monthly observation:** {latest_date.strftime('%B %Y')}")
 st.info(generate_regime_commentary(snapshot))
-
-# =============================================================================
-# CHARTS
-# =============================================================================
 
 fig_ratio = build_ratio_chart(
     data=dashboard,
@@ -871,56 +832,19 @@ st.plotly_chart(fig_ratio, use_container_width=True)
 left, right = st.columns(2)
 
 with left:
-    fig_infl = build_inflation_chart(dashboard, show_recessions=show_recessions)
-    st.plotly_chart(fig_infl, use_container_width=True)
+    st.plotly_chart(build_inflation_chart(dashboard, show_recessions=show_recessions), use_container_width=True)
 
 with right:
-    fig_aff = build_affordability_chart(
-        dashboard,
-        show_recessions=show_recessions,
-        baseline_year=int(affordability_baseline_year),
+    st.plotly_chart(
+        build_affordability_chart(
+            dashboard,
+            show_recessions=show_recessions,
+            baseline_year=int(affordability_baseline_year),
+        ),
+        use_container_width=True,
     )
-    st.plotly_chart(fig_aff, use_container_width=True)
 
-fig_dist = build_distribution_chart(dashboard)
-st.plotly_chart(fig_dist, use_container_width=True)
-
-# =============================================================================
-# DATA TABLES / DIAGNOSTICS
-# =============================================================================
-
-with st.expander("Current snapshot table", expanded=False):
-    snapshot_table = pd.DataFrame(
-        {
-            "Metric": [
-                "Latest raw ratio",
-                "Latest display ratio",
-                "Raw ratio historical percentile",
-                "Raw ratio z-score",
-                "Raw ratio median",
-                "Display ratio median",
-                "Home YoY",
-                "Rent YoY",
-                "Home minus Rent spread",
-                "30Y mortgage rate",
-                "Affordability index",
-            ],
-            "Value": [
-                snapshot["latest_ratio_raw"],
-                snapshot["latest_ratio_display"],
-                snapshot["ratio_percentile"],
-                snapshot["ratio_zscore_latest"],
-                snapshot["raw_ratio_median"],
-                snapshot["display_ratio_median"],
-                snapshot["latest_home_yoy"],
-                snapshot["latest_rent_yoy"],
-                snapshot["latest_spread_yoy"],
-                snapshot["latest_mortgage_rate"],
-                snapshot["latest_affordability_index"],
-            ],
-        }
-    )
-    st.dataframe(snapshot_table, use_container_width=True, hide_index=True)
+st.plotly_chart(build_distribution_chart(dashboard), use_container_width=True)
 
 with st.expander("Diagnostics", expanded=False):
     diag = dashboard.diagnostics.copy()
@@ -928,59 +852,32 @@ with st.expander("Diagnostics", expanded=False):
     diag["last_observation"] = pd.to_datetime(diag["last_observation"]).dt.strftime("%Y-%m-%d")
     st.dataframe(diag, use_container_width=True, hide_index=True)
 
-    merged_info = pd.DataFrame(
-        {
-            "Field": [
-                "Merged monthly start",
-                "Merged monthly end",
-                "Merged monthly rows",
-                "Annual rows",
-                "Normalization enabled",
-                "Affordability baseline year",
-            ],
-            "Value": [
-                str(dashboard.monthly.index.min().date()),
-                str(dashboard.monthly.index.max().date()),
-                int(len(dashboard.monthly)),
-                int(len(dashboard.annual)),
-                str(bool(normalize_ratio)),
-                int(affordability_baseline_year),
-            ],
-        }
-    )
-    st.dataframe(merged_info, use_container_width=True, hide_index=True)
+    if (diag["status"] != "live").any():
+        st.warning("One or more series loaded from local cache because live FRED endpoints were unavailable.")
 
 with st.expander("Methodology", expanded=False):
     st.markdown(
         """
         **Raw ratio**
-        
+
         The core signal is the monthly U.S. national home price index divided by the CPI rent index.
-        This is a valuation proxy, not a direct cap-rate or cash-flow measure.
 
         **Normalized ratio**
-        
+
         When enabled, the raw ratio is scaled so its full-sample median equals the user-selected target.
-        This is a presentation transform only. It should not be treated as the economic truth series.
+        This is a presentation transform only.
 
         **Inflation spread**
-        
-        Home-price inflation and rent inflation are each measured as 12-month % change.
+
+        Home-price inflation and rent inflation are measured as 12-month % change.
         The spread is home-price YoY minus rent YoY.
 
         **Synthetic affordability index**
-        
+
         This uses the standard monthly payment formula for a 30-year fixed mortgage per $100k of principal,
-        then multiplies that by the home price index level. The result is indexed to the chosen baseline year.
-        It is a directional burden proxy, not a literal household payment series.
+        multiplied by the home price index level, then indexed to the chosen baseline year.
 
-        **Recession shading**
-        
-        Recessions are shaded using the FRED USREC monthly recession indicator.
-
-        **Data source**
-        
-        FRED series used:
+        **FRED series**
         - CSUSHPINSA
         - CUSR0000SEHA
         - MORTGAGE30US
@@ -1000,7 +897,5 @@ with st.expander("Underlying monthly dataset", expanded=False):
         mime="text/csv",
     )
 
-st.caption(
-    "Source: FRED. This dashboard uses public macro data and a synthetic affordability framework intended for monitoring and comparative analysis."
-)
+st.caption("Source: FRED public endpoints with local last-good cache fallback.")
 st.caption("© 2026 AD Fund Management LP")
