@@ -1,6 +1,5 @@
 import json
 import time
-from io import StringIO
 from typing import Optional, Tuple
 
 import numpy as np
@@ -36,6 +35,15 @@ DEFAULT_HEADERS = {
 }
 
 DEFAULT_SYMBOLS = ["QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "NVDA", "META", "TSLA"]
+
+US_MARKET_HOLIDAYS = [
+    "2024-01-01", "2024-01-15", "2024-02-19", "2024-03-29", "2024-05-27",
+    "2024-06-19", "2024-07-04", "2024-09-02", "2024-11-28", "2024-12-25",
+    "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27", "2025-12-25",
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+]
 
 
 # =============================================================================
@@ -77,18 +85,6 @@ def fmt_large_number(x: Optional[float]) -> str:
     if abs(x) >= 1_000:
         return f"{x / 1_000:.1f}K"
     return f"{x:,.0f}"
-
-
-def fmt_pct(x: Optional[float], digits: int = 1) -> str:
-    if x is None or not np.isfinite(x):
-        return "N/A"
-    return f"{x:.{digits}f}%"
-
-
-def fmt_float(x: Optional[float], digits: int = 2) -> str:
-    if x is None or not np.isfinite(x):
-        return "N/A"
-    return f"{x:.{digits}f}"
 
 
 def request_text(url: str, timeout: int = 20, retries: int = 3) -> str:
@@ -339,8 +335,8 @@ def build_chart(
         rows=2,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.05,
-        row_heights=[0.72, 0.28],
+        vertical_spacing=0.04,
+        row_heights=[0.74, 0.26],
     )
 
     fig.add_trace(
@@ -363,7 +359,7 @@ def build_chart(
                 y=df["Price_MA20"],
                 mode="lines",
                 name="20D MA",
-                line=dict(width=1.2, color="rgba(59,130,246,0.75)"),
+                line=dict(width=1.1, color="rgba(59,130,246,0.72)"),
                 hovertemplate="<b>%{x|%b %d, %Y}</b><br>20D MA: %{y:,.2f}<extra></extra>",
             ),
             row=1,
@@ -375,7 +371,7 @@ def build_chart(
                 y=df["Price_MA50"],
                 mode="lines",
                 name="50D MA",
-                line=dict(width=1.2, color="rgba(107,114,128,0.80)"),
+                line=dict(width=1.1, color="rgba(107,114,128,0.78)"),
                 hovertemplate="<b>%{x|%b %d, %Y}</b><br>50D MA: %{y:,.2f}<extra></extra>",
             ),
             row=1,
@@ -429,8 +425,8 @@ def build_chart(
 
     bar_colors = np.where(
         df["State"].eq("Heavy"),
-        "rgba(180,83,9,0.65)",
-        np.where(df["State"].eq("Quiet"), "rgba(22,101,52,0.60)", "rgba(120,120,120,0.28)")
+        "rgba(180,83,9,0.62)",
+        np.where(df["State"].eq("Quiet"), "rgba(22,101,52,0.58)", "rgba(140,140,140,0.24)")
     )
 
     if "Turnover" in vol_label:
@@ -458,6 +454,7 @@ def build_chart(
             y=df["Volume_Display"],
             name="Volume",
             marker_color=bar_colors,
+            width=0.78 * 24 * 60 * 60 * 1000,
             customdata=np.column_stack([df["Volume_Pctl"], df["Volume_Ratio"]]),
             hovertemplate=bar_hover,
         ),
@@ -486,6 +483,7 @@ def build_chart(
         hovermode="x unified",
         dragmode="pan",
         xaxis_rangeslider_visible=False,
+        bargap=0.05,
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -499,6 +497,10 @@ def build_chart(
     )
 
     fig.update_xaxes(
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),
+            dict(values=US_MARKET_HOLIDAYS),
+        ],
         showgrid=True,
         gridcolor="#f1f3f5",
         showline=False,
@@ -680,7 +682,7 @@ latest_pctl = float(latest["Volume_Pctl"]) if pd.notna(latest["Volume_Pctl"]) el
 latest_ret_1d = float(latest["Ret_1D"]) if pd.notna(latest["Ret_1D"]) else np.nan
 latest_state = latest["State"] if pd.notna(latest["State"]) else "Unavailable"
 
-left, right = st.columns([0.68, 0.32], gap="large")
+left, right = st.columns([0.70, 0.30], gap="large")
 
 with right:
     st.markdown("### Current read")
@@ -710,6 +712,7 @@ with right:
         st.write(f"Visible window: last {lookback_months} months")
         st.write(f"Percentile window: {percentile_window} trading days")
         st.write(f"Baseline window: {smooth_window} trading days")
+        st.write("X-axis compresses weekends and listed US market holidays.")
 
 with left:
     fig = build_chart(
@@ -746,6 +749,5 @@ if show_event_table:
         st.info("No extreme sessions found in the visible window.")
     else:
         st.dataframe(events, use_container_width=True, hide_index=True)
-
 
 st.caption("© 2026 AD Fund Management LP")
