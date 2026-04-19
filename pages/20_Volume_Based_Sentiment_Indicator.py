@@ -1,5 +1,5 @@
-import time
 import json
+import time
 from io import StringIO
 from typing import Optional, Tuple
 
@@ -16,13 +16,12 @@ import yfinance as yf
 # PAGE CONFIG
 # =============================================================================
 st.set_page_config(
-    page_title="Volume Sentiment Explorer",
+    page_title="Volume Regime Explorer",
     layout="wide",
 )
 
-st.title("Volume Sentiment Explorer")
-st.subheader("Frame current participation versus the instrument's own recent history.")
-st.markdown("---")
+st.title("Volume Regime Explorer")
+st.caption("Compare current participation to the instrument's own trailing history.")
 
 
 # =============================================================================
@@ -40,16 +39,10 @@ DEFAULT_SYMBOLS = ["QQQ", "SPY", "IWM", "TLT", "GLD", "HYG", "SMH", "NVDA", "MET
 
 
 # =============================================================================
-# HELPERS
+# BASIC HELPERS
 # =============================================================================
 def safe_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
-
-
-def format_billions(x: Optional[float]) -> str:
-    if x is None or not np.isfinite(x):
-        return "Unavailable"
-    return f"{x / 1_000_000_000:.2f}B"
 
 
 def today_utc_ts() -> pd.Timestamp:
@@ -58,21 +51,47 @@ def today_utc_ts() -> pd.Timestamp:
 
 def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+
     if not isinstance(out.index, pd.DatetimeIndex):
         out.index = pd.to_datetime(out.index, errors="coerce")
+
     out = out[~out.index.isna()].copy()
 
     if getattr(out.index, "tz", None) is not None:
         out.index = out.index.tz_convert(None)
 
-    out.index = pd.DatetimeIndex(out.index).tz_localize(None)
-    out.index = out.index.normalize()
+    out.index = pd.DatetimeIndex(out.index).tz_localize(None).normalize()
     out = out.sort_index()
     out = out[~out.index.duplicated(keep="last")].copy()
     return out
 
 
-def _request_text(url: str, timeout: int = 20, retries: int = 3, sleep_s: float = 1.0) -> str:
+def fmt_large_number(x: Optional[float]) -> str:
+    if x is None or not np.isfinite(x):
+        return "N/A"
+    x = float(x)
+    if abs(x) >= 1_000_000_000:
+        return f"{x / 1_000_000_000:.2f}B"
+    if abs(x) >= 1_000_000:
+        return f"{x / 1_000_000:.2f}M"
+    if abs(x) >= 1_000:
+        return f"{x / 1_000:.1f}K"
+    return f"{x:,.0f}"
+
+
+def fmt_pct(x: Optional[float], digits: int = 1) -> str:
+    if x is None or not np.isfinite(x):
+        return "N/A"
+    return f"{x:.{digits}f}%"
+
+
+def fmt_float(x: Optional[float], digits: int = 2) -> str:
+    if x is None or not np.isfinite(x):
+        return "N/A"
+    return f"{x:.{digits}f}"
+
+
+def request_text(url: str, timeout: int = 20, retries: int = 3) -> str:
     last_err = None
     for attempt in range(retries):
         try:
@@ -82,38 +101,13 @@ def _request_text(url: str, timeout: int = 20, retries: int = 3, sleep_s: float 
         except Exception as e:
             last_err = e
             if attempt < retries - 1:
-                time.sleep(sleep_s * (attempt + 1))
+                time.sleep(1.0 * (attempt + 1))
     raise last_err
 
 
-def fetch_from_stooq(symbol: str, start_date: pd.Timestamp) -> pd.DataFrame:
-    stooq_symbol = symbol.lower() + ".us"
-    url = f"https://stooq.com/q/d/l/?s={stooq_symbol}&i=d"
-    text = _request_text(url, timeout=20, retries=3, sleep_s=1.0)
-    df = pd.read_csv(StringIO(text))
-
-    if df.empty or "Date" not in df.columns:
-        raise ValueError("Stooq returned no usable data.")
-
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"]).copy()
-    df = df.rename(columns=str.title)
-
-    expected = ["Open", "High", "Low", "Close", "Volume"]
-    missing = [c for c in expected if c not in df.columns]
-    if missing:
-        raise ValueError(f"Stooq data missing columns: {missing}")
-
-    for col in expected:
-        df[col] = safe_numeric(df[col])
-
-    df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"]).copy()
-    df = df.sort_values("Date")
-    df = df[df["Date"] >= start_date].copy()
-    df = df.set_index("Date")
-    return normalize_dt_index(df)
-
-
+# =============================================================================
+# DATA FETCH
+# =============================================================================
 def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     period1 = int(start_date.timestamp())
     period2 = int((end_date + pd.Timedelta(days=1)).timestamp())
@@ -122,31 +116,29 @@ def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: 
         f"?period1={period1}&period2={period2}&interval=1d&includePrePost=false&events=div%2Csplits"
     )
 
-    resp_text = _request_text(url, timeout=20, retries=3, sleep_s=1.0)
-    data = json.loads(resp_text)
+    text = request_text(url)
+    payload = json.loads(text)
+    chart = payload.get("chart", {})
+    result = chart.get("result", [])
 
-    chart = data.get("chart", {})
-    result_list = chart.get("result", [])
-    if not result_list:
-        err = chart.get("error")
-        raise ValueError(f"Yahoo Chart API returned no result. Error: {err}")
+    if not result:
+        raise ValueError(f"No chart data returned. Error: {chart.get('error')}")
 
-    result = result_list[0]
-    timestamps = result.get("timestamp", [])
-    quote = result.get("indicators", {}).get("quote", [{}])[0]
-    adjclose = result.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose")
+    result0 = result[0]
+    ts = result0.get("timestamp", [])
+    quote = result0.get("indicators", {}).get("quote", [{}])[0]
+    adjclose = result0.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose")
+    closes = adjclose if adjclose is not None else quote.get("close")
 
-    if not timestamps:
-        raise ValueError("Yahoo Chart API returned empty timestamps.")
-
-    close_vals = adjclose if adjclose is not None else quote.get("close")
+    if not ts:
+        raise ValueError("Yahoo chart API returned no timestamps.")
 
     df = pd.DataFrame({
-        "Date": pd.to_datetime(timestamps, unit="s", utc=True),
+        "Date": pd.to_datetime(ts, unit="s", utc=True),
         "Open": quote.get("open"),
         "High": quote.get("high"),
         "Low": quote.get("low"),
-        "Close": close_vals,
+        "Close": closes,
         "Volume": quote.get("volume"),
     })
 
@@ -158,7 +150,7 @@ def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: 
     return normalize_dt_index(df)
 
 
-def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+def fetch_from_yfinance(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     df = yf.download(
         symbol,
         start=start_date.strftime("%Y-%m-%d"),
@@ -176,8 +168,11 @@ def fetch_from_yfinance_download(symbol: str, start_date: pd.Timestamp, end_date
 
     df = df.rename(columns=str.title)
     needed = ["Open", "High", "Low", "Close", "Volume"]
-    df = df[needed].copy()
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}")
 
+    df = df[needed].copy()
     for col in needed:
         df[col] = safe_numeric(df[col])
 
@@ -190,13 +185,6 @@ def fetch_ohlcv(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -
     errors = []
 
     try:
-        df = fetch_from_stooq(symbol, start_date)
-        if not df.empty:
-            return df, "Stooq"
-    except Exception as e:
-        errors.append(f"Stooq: {e}")
-
-    try:
         df = fetch_from_yahoo_chart_api(symbol, start_date, end_date)
         if not df.empty:
             return df, "Yahoo Chart API"
@@ -204,7 +192,7 @@ def fetch_ohlcv(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -
         errors.append(f"Yahoo Chart API: {e}")
 
     try:
-        df = fetch_from_yfinance_download(symbol, start_date, end_date)
+        df = fetch_from_yfinance(symbol, start_date, end_date)
         if not df.empty:
             return df, "yfinance"
     except Exception as e:
@@ -237,66 +225,122 @@ def fetch_shares_outstanding(symbol: str) -> Optional[float]:
     return None
 
 
-def compute_signal_table(
+# =============================================================================
+# SIGNAL ENGINE
+# =============================================================================
+def compute_percentile_of_last(values: pd.Series) -> float:
+    s = pd.Series(values).dropna()
+    if len(s) == 0:
+        return np.nan
+    return float(s.rank(pct=True).iloc[-1] * 100.0)
+
+
+def classify_event(pctl: float, high_cutoff: float, low_cutoff: float) -> str:
+    if not np.isfinite(pctl):
+        return "Unavailable"
+    if pctl >= high_cutoff:
+        return "Heavy"
+    if pctl <= low_cutoff:
+        return "Quiet"
+    return "Normal"
+
+
+def compute_volume_framework(
     df: pd.DataFrame,
-    ma_period: int,
-    baseline_period: int,
-    high_z: float,
-    low_z: float,
-    normalize_volume: bool,
+    volume_mode: str,
     shares_outstanding: Optional[float],
-    exclude_thin_sessions: bool,
+    percentile_window: int,
+    smooth_window: int,
+    high_cutoff: float,
+    low_cutoff: float,
 ) -> Tuple[pd.DataFrame, str]:
     out = df.copy()
 
-    if normalize_volume and shares_outstanding and shares_outstanding > 0:
-        out["Vol_Display"] = out["Volume"] / shares_outstanding * 100.0
-        vol_label = "Volume (% of shares outstanding)"
+    if volume_mode == "Turnover %" and shares_outstanding and shares_outstanding > 0:
+        out["Volume_Display"] = out["Volume"] / shares_outstanding * 100.0
+        vol_label = "Turnover (% of shares outstanding)"
     else:
-        out["Vol_Display"] = out["Volume"].astype(float)
+        out["Volume_Display"] = out["Volume"].astype(float)
         vol_label = "Volume (shares)"
 
-    out["Vol_MA"] = out["Vol_Display"].rolling(ma_period, min_periods=ma_period).mean()
-    out["Vol_Base"] = out["Vol_Display"].rolling(baseline_period, min_periods=baseline_period).mean()
-    out["Vol_Std"] = out["Vol_Display"].rolling(baseline_period, min_periods=baseline_period).std(ddof=0)
-    out["Vol_Z"] = (out["Vol_Display"] - out["Vol_Base"]) / out["Vol_Std"].replace(0, np.nan)
+    out["Volume_Baseline"] = out["Volume_Display"].rolling(
+        smooth_window, min_periods=max(10, smooth_window // 2)
+    ).median()
 
-    out["Vol_Median_20"] = out["Vol_Display"].rolling(20, min_periods=10).median()
-    out["Likely_Thin_Session"] = out["Vol_Display"] < 0.55 * out["Vol_Median_20"]
+    out["Volume_Ratio"] = out["Volume_Display"] / out["Volume_Baseline"].replace(0, np.nan)
 
-    if exclude_thin_sessions:
-        mask = out["Likely_Thin_Session"] & (out["Vol_Z"] < low_z)
-        out.loc[mask, "Vol_Z"] = np.nan
-        out.loc[mask, "Vol_PctRank"] = np.nan
+    out["Volume_Pctl"] = out["Volume_Display"].rolling(
+        percentile_window, min_periods=max(40, percentile_window // 3)
+    ).apply(compute_percentile_of_last, raw=False)
 
-    out["Is_High"] = out["Vol_Z"] >= high_z
-    out["Is_Low"] = out["Vol_Z"] <= low_z
-
-    out["Vol_PctRank"] = (
-        out["Vol_Display"]
-        .rolling(252, min_periods=60)
-        .apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1] * 100, raw=False)
-    )
+    out["State"] = out["Volume_Pctl"].apply(lambda x: classify_event(x, high_cutoff, low_cutoff))
+    out["Is_Heavy"] = out["State"].eq("Heavy")
+    out["Is_Quiet"] = out["State"].eq("Quiet")
 
     out["Ret_1D"] = out["Close"].pct_change() * 100.0
+    out["Ret_5D"] = out["Close"].pct_change(5) * 100.0
     out["Ret_20D"] = out["Close"].pct_change(20) * 100.0
+
+    out["Price_MA20"] = out["Close"].rolling(20, min_periods=20).mean()
+    out["Price_MA50"] = out["Close"].rolling(50, min_periods=50).mean()
 
     return out, vol_label
 
 
-def build_plotly_chart(
+def build_recent_events_table(
+    df: pd.DataFrame,
+    vol_label: str,
+    event_filter: str,
+    max_rows: int = 12,
+) -> pd.DataFrame:
+    events = df[df["State"].isin(["Heavy", "Quiet"])].copy()
+
+    if event_filter == "Heavy only":
+        events = events[events["State"] == "Heavy"].copy()
+    elif event_filter == "Quiet only":
+        events = events[events["State"] == "Quiet"].copy()
+
+    if events.empty:
+        return pd.DataFrame()
+
+    events = events.tail(max_rows).copy()
+    events["Date"] = events.index.strftime("%Y-%m-%d")
+
+    if "Turnover" in vol_label:
+        volume_col = events["Volume_Display"].map(lambda x: f"{x:.2f}%")
+        baseline_col = events["Volume_Baseline"].map(lambda x: f"{x:.2f}%")
+    else:
+        volume_col = events["Volume_Display"].map(fmt_large_number)
+        baseline_col = events["Volume_Baseline"].map(fmt_large_number)
+
+    out = pd.DataFrame({
+        "Date": events["Date"],
+        "State": events["State"],
+        "Volume": volume_col,
+        "Baseline": baseline_col,
+        "Ratio": events["Volume_Ratio"].map(lambda x: f"{x:.2f}x" if np.isfinite(x) else "N/A"),
+        "Percentile": events["Volume_Pctl"].map(lambda x: f"{x:.0f}" if np.isfinite(x) else "N/A"),
+        "1D Return": events["Ret_1D"].map(lambda x: f"{x:+.2f}%" if np.isfinite(x) else "N/A"),
+    })
+
+    return out.iloc[::-1].reset_index(drop=True)
+
+
+# =============================================================================
+# CHARTING
+# =============================================================================
+def build_chart(
     df: pd.DataFrame,
     symbol: str,
     vol_label: str,
-    ma_period: int,
-    show_last_price: bool,
-):
+    show_price_mas: bool,
+) -> go.Figure:
     fig = make_subplots(
         rows=2,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.04,
-        row_heights=[0.74, 0.26],
+        vertical_spacing=0.05,
+        row_heights=[0.72, 0.28],
     )
 
     fig.add_trace(
@@ -304,53 +348,118 @@ def build_plotly_chart(
             x=df.index,
             y=df["Close"],
             mode="lines",
-            line=dict(color="#111111", width=2.1),
             name=symbol,
+            line=dict(width=2.2, color="#111111"),
             hovertemplate="<b>%{x|%b %d, %Y}</b><br>Close: %{y:,.2f}<extra></extra>",
         ),
         row=1,
         col=1,
     )
 
-    stress_df = df[df["Is_High"].fillna(False)].copy()
-    if not stress_df.empty:
+    if show_price_mas:
         fig.add_trace(
             go.Scatter(
-                x=stress_df.index,
-                y=stress_df["Close"],
-                mode="markers",
-                marker=dict(size=6, color="#b45309"),
-                name="Stress",
-                hovertemplate="<b>%{x|%b %d, %Y}</b><br>Stress day<extra></extra>",
+                x=df.index,
+                y=df["Price_MA20"],
+                mode="lines",
+                name="20D MA",
+                line=dict(width=1.2, color="rgba(59,130,246,0.75)"),
+                hovertemplate="<b>%{x|%b %d, %Y}</b><br>20D MA: %{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df["Price_MA50"],
+                mode="lines",
+                name="50D MA",
+                line=dict(width=1.2, color="rgba(107,114,128,0.80)"),
+                hovertemplate="<b>%{x|%b %d, %Y}</b><br>50D MA: %{y:,.2f}<extra></extra>",
             ),
             row=1,
             col=1,
         )
 
-    quiet_df = df[df["Is_Low"].fillna(False)].copy()
-    if not quiet_df.empty:
+    heavy = df[df["Is_Heavy"]].copy()
+    quiet = df[df["Is_Quiet"]].copy()
+
+    if not heavy.empty:
         fig.add_trace(
             go.Scatter(
-                x=quiet_df.index,
-                y=quiet_df["Close"],
+                x=heavy.index,
+                y=heavy["Close"],
                 mode="markers",
-                marker=dict(size=5, color="#166534"),
-                name="Quiet",
-                hovertemplate="<b>%{x|%b %d, %Y}</b><br>Quiet day<extra></extra>",
+                name="Heavy",
+                marker=dict(size=7, color="#b45309"),
+                hovertemplate=(
+                    "<b>%{x|%b %d, %Y}</b><br>"
+                    "Heavy volume session"
+                    "<br>Percentile: %{customdata[0]:.0f}"
+                    "<br>Ratio: %{customdata[1]:.2f}x"
+                    "<extra></extra>"
+                ),
+                customdata=np.column_stack([heavy["Volume_Pctl"], heavy["Volume_Ratio"]]),
             ),
             row=1,
             col=1,
         )
+
+    if not quiet.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=quiet.index,
+                y=quiet["Close"],
+                mode="markers",
+                name="Quiet",
+                marker=dict(size=6, color="#166534"),
+                hovertemplate=(
+                    "<b>%{x|%b %d, %Y}</b><br>"
+                    "Quiet volume session"
+                    "<br>Percentile: %{customdata[0]:.0f}"
+                    "<br>Ratio: %{customdata[1]:.2f}x"
+                    "<extra></extra>"
+                ),
+                customdata=np.column_stack([quiet["Volume_Pctl"], quiet["Volume_Ratio"]]),
+            ),
+            row=1,
+            col=1,
+        )
+
+    bar_colors = np.where(
+        df["State"].eq("Heavy"),
+        "rgba(180,83,9,0.65)",
+        np.where(df["State"].eq("Quiet"), "rgba(22,101,52,0.60)", "rgba(120,120,120,0.28)")
+    )
+
+    if "Turnover" in vol_label:
+        bar_hover = (
+            "<b>%{x|%b %d, %Y}</b><br>"
+            "Turnover: %{y:.2f}%"
+            "<br>Percentile: %{customdata[0]:.0f}"
+            "<br>Ratio: %{customdata[1]:.2f}x"
+            "<extra></extra>"
+        )
+        baseline_hover = "<b>%{x|%b %d, %Y}</b><br>Baseline: %{y:.2f}%<extra></extra>"
+    else:
+        bar_hover = (
+            "<b>%{x|%b %d, %Y}</b><br>"
+            "Volume: %{y:,.0f}"
+            "<br>Percentile: %{customdata[0]:.0f}"
+            "<br>Ratio: %{customdata[1]:.2f}x"
+            "<extra></extra>"
+        )
+        baseline_hover = "<b>%{x|%b %d, %Y}</b><br>Baseline: %{y:,.0f}<extra></extra>"
 
     fig.add_trace(
         go.Bar(
             x=df.index,
-            y=df["Vol_Display"],
-            marker_color="rgba(120,120,120,0.28)",
+            y=df["Volume_Display"],
             name="Volume",
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>Volume: %{y:,.4f}<extra></extra>"
-            if "% of shares" in vol_label.lower()
-            else "<b>%{x|%b %d, %Y}</b><br>Volume: %{y:,.0f}<extra></extra>",
+            marker_color=bar_colors,
+            customdata=np.column_stack([df["Volume_Pctl"], df["Volume_Ratio"]]),
+            hovertemplate=bar_hover,
         ),
         row=2,
         col=1,
@@ -359,32 +468,19 @@ def build_plotly_chart(
     fig.add_trace(
         go.Scatter(
             x=df.index,
-            y=df["Vol_MA"],
+            y=df["Volume_Baseline"],
             mode="lines",
-            line=dict(color="#2563eb", width=1.7),
-            name=f"{ma_period}D MA",
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>MA: %{y:,.4f}<extra></extra>"
-            if "% of shares" in vol_label.lower()
-            else "<b>%{x|%b %d, %Y}</b><br>MA: %{y:,.0f}<extra></extra>",
+            name="Baseline",
+            line=dict(width=1.8, color="#2563eb"),
+            hovertemplate=baseline_hover,
         ),
         row=2,
         col=1,
     )
 
-    if show_last_price and len(df) > 0:
-        last_close = float(df["Close"].iloc[-1])
-        fig.add_hline(
-            y=last_close,
-            line_width=1,
-            line_dash="dot",
-            line_color="rgba(17,17,17,0.35)",
-            row=1,
-            col=1,
-        )
-
     fig.update_layout(
         height=760,
-        margin=dict(l=14, r=14, t=8, b=8),
+        margin=dict(l=12, r=12, t=10, b=10),
         paper_bgcolor="white",
         plot_bgcolor="white",
         hovermode="x unified",
@@ -398,13 +494,13 @@ def build_plotly_chart(
             x=0.0,
             bgcolor="rgba(255,255,255,0)",
             borderwidth=0,
-            font=dict(size=11, color="#555555"),
+            font=dict(size=11, color="#444444"),
         ),
     )
 
     fig.update_xaxes(
         showgrid=True,
-        gridcolor="#efefef",
+        gridcolor="#f1f3f5",
         showline=False,
         zeroline=False,
         tickfont=dict(size=11, color="#666666"),
@@ -414,170 +510,156 @@ def build_plotly_chart(
         row=1,
         col=1,
         title_text="Price",
-        title_font=dict(size=11, color="#666666"),
-        tickfont=dict(size=11, color="#666666"),
         showgrid=True,
-        gridcolor="#e8e8e8",
+        gridcolor="#ececec",
         zeroline=False,
         showline=False,
+        tickfont=dict(size=11, color="#666666"),
+        title_font=dict(size=11, color="#666666"),
     )
 
     fig.update_yaxes(
         row=2,
         col=1,
         title_text=vol_label,
-        title_font=dict(size=11, color="#666666"),
-        tickfont=dict(size=10, color="#666666"),
         showgrid=True,
-        gridcolor="#f0f0f0",
+        gridcolor="#f3f4f6",
         zeroline=False,
         showline=False,
+        tickfont=dict(size=10, color="#666666"),
+        title_font=dict(size=11, color="#666666"),
     )
 
     return fig
-
-
-def describe_regime(vol_z: float, high_z: float, low_z: float) -> str:
-    if not np.isfinite(vol_z):
-        return "Signal unavailable"
-    if vol_z >= high_z:
-        return "Stress regime"
-    if vol_z <= low_z:
-        return "Quiet regime"
-    return "Normal regime"
 
 
 # =============================================================================
 # SIDEBAR
 # =============================================================================
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-A stripped down participation chart.
-
-It compares current volume against the instrument's own trailing history, flags unusually heavy or unusually quiet sessions, and keeps the page clean.
-        """
+    st.subheader("About This Tool")
+    st.write(
+        "This page compares each session's volume to the instrument's own trailing history, "
+        "highlights unusually heavy or quiet participation, and keeps the output focused."
     )
 
     st.markdown("---")
 
-    symbol = st.text_input("Ticker", value="QQQ").upper().strip()
+    symbol_input = st.text_input("Ticker", value="QQQ")
+    symbol = symbol_input.upper().strip()
 
-    st.caption("Quick ideas")
-    q1, q2 = st.columns(2)
+    st.caption("Quick tickers")
+    c1, c2 = st.columns(2)
+    selected_symbol = None
     for i, sym in enumerate(DEFAULT_SYMBOLS):
-        with (q1 if i % 2 == 0 else q2):
+        with (c1 if i % 2 == 0 else c2):
             if st.button(sym, use_container_width=True):
-                symbol = sym
+                selected_symbol = sym
+
+    if selected_symbol:
+        symbol = selected_symbol
 
     st.markdown("---")
-    st.subheader("Signal Setup")
+    st.subheader("Lookback")
 
     lookback_months = st.slider(
-        "Lookback (months)",
+        "Visible history (months)",
         min_value=6,
-        max_value=60,
-        value=24,
+        max_value=36,
+        value=18,
         step=3,
     )
 
-    ma_period = st.slider(
-        "Volume MA (days)",
-        min_value=5,
-        max_value=50,
-        value=20,
-        step=1,
+    percentile_window = st.slider(
+        "Percentile window (days)",
+        min_value=60,
+        max_value=252,
+        value=126,
+        step=21,
     )
 
-    baseline_period = st.slider(
-        "Volume baseline lookback (days)",
-        min_value=20,
-        max_value=120,
-        value=60,
+    smooth_window = st.slider(
+        "Baseline window (days)",
+        min_value=10,
+        max_value=60,
+        value=20,
         step=5,
     )
 
-    high_z = st.slider(
-        "Stress threshold (z-score)",
-        min_value=1.0,
-        max_value=4.0,
-        value=2.0,
-        step=0.25,
+    st.markdown("---")
+    st.subheader("Detection")
+
+    volume_mode = st.selectbox(
+        "Volume mode",
+        options=["Raw volume", "Turnover %"],
+        index=1,
     )
 
-    low_z = st.slider(
-        "Quiet threshold (z-score)",
-        min_value=-4.0,
-        max_value=-0.5,
-        value=-1.5,
-        step=0.25,
+    high_cutoff = st.slider(
+        "Heavy threshold percentile",
+        min_value=75,
+        max_value=99,
+        value=90,
+        step=1,
     )
 
-    normalize_volume = st.checkbox(
-        "Normalize by shares outstanding",
-        value=True,
+    low_cutoff = st.slider(
+        "Quiet threshold percentile",
+        min_value=1,
+        max_value=25,
+        value=10,
+        step=1,
     )
 
-    exclude_thin_sessions = st.checkbox(
-        "Filter thin sessions",
-        value=True,
-    )
-
-    show_last_price = st.checkbox(
-        "Show last price guide",
-        value=False,
-    )
-
-    show_stats = st.checkbox(
-        "Show compact stats",
-        value=False,
+    show_price_mas = st.checkbox("Show 20D and 50D price averages", value=False)
+    show_event_table = st.checkbox("Show recent event table", value=True)
+    event_filter = st.selectbox(
+        "Event table filter",
+        options=["All extremes", "Heavy only", "Quiet only"],
+        index=0,
     )
 
 
 # =============================================================================
-# DATA
+# DATA PREP
 # =============================================================================
 if not symbol:
     st.warning("Enter a ticker to continue.")
     st.stop()
 
 end_date = today_utc_ts()
-warmup_days = max(baseline_period * 3, 220)
+warmup_days = max(percentile_window + 40, 220)
 start_date = end_date - pd.Timedelta(days=lookback_months * 31 + warmup_days)
 visible_start = end_date - pd.Timedelta(days=lookback_months * 31)
 
-with st.spinner(f"Loading {symbol} data..."):
+with st.spinner(f"Loading {symbol}..."):
     try:
         raw_df, data_source = fetch_ohlcv(symbol, start_date, end_date)
     except Exception as e:
-        st.error(f"Failed to fetch {symbol} data from all sources. Details: {e}")
+        st.error(f"Failed to fetch data for {symbol}. Details: {e}")
         st.stop()
 
+if raw_df.empty:
+    st.warning("No data returned for this ticker.")
+    st.stop()
+
 shares_outstanding = None
-if normalize_volume:
+if volume_mode == "Turnover %":
     with st.spinner("Fetching shares outstanding..."):
         shares_outstanding = fetch_shares_outstanding(symbol)
 
-if raw_df.empty:
-    st.warning("No data returned for the selected instrument.")
-    st.stop()
-
 raw_df = normalize_dt_index(raw_df)
-raw_df = raw_df.loc[raw_df.index >= (visible_start - pd.Timedelta(days=warmup_days))].copy()
 
-df, vol_label = compute_signal_table(
+df, vol_label = compute_volume_framework(
     raw_df,
-    ma_period=ma_period,
-    baseline_period=baseline_period,
-    high_z=high_z,
-    low_z=low_z,
-    normalize_volume=normalize_volume,
+    volume_mode=volume_mode,
     shares_outstanding=shares_outstanding,
-    exclude_thin_sessions=exclude_thin_sessions,
+    percentile_window=percentile_window,
+    smooth_window=smooth_window,
+    high_cutoff=high_cutoff,
+    low_cutoff=low_cutoff,
 )
 
-df = normalize_dt_index(df)
 df = df.loc[df.index >= visible_start].copy()
 
 if df.empty:
@@ -586,59 +668,84 @@ if df.empty:
 
 
 # =============================================================================
-# OPTIONAL STATS
+# LATEST SNAPSHOT
 # =============================================================================
 latest = df.iloc[-1]
+
 latest_close = float(latest["Close"]) if pd.notna(latest["Close"]) else np.nan
-latest_vol_z = float(latest["Vol_Z"]) if pd.notna(latest["Vol_Z"]) else np.nan
-latest_vol_pct = float(latest["Vol_PctRank"]) if pd.notna(latest["Vol_PctRank"]) else np.nan
-latest_volume = float(latest["Vol_Display"]) if pd.notna(latest["Vol_Display"]) else np.nan
-ret_1d = float(latest["Ret_1D"]) if pd.notna(latest["Ret_1D"]) else np.nan
-ret_20d = float(latest["Ret_20D"]) if pd.notna(latest["Ret_20D"]) else np.nan
-regime = describe_regime(latest_vol_z, high_z, low_z)
+latest_vol = float(latest["Volume_Display"]) if pd.notna(latest["Volume_Display"]) else np.nan
+latest_base = float(latest["Volume_Baseline"]) if pd.notna(latest["Volume_Baseline"]) else np.nan
+latest_ratio = float(latest["Volume_Ratio"]) if pd.notna(latest["Volume_Ratio"]) else np.nan
+latest_pctl = float(latest["Volume_Pctl"]) if pd.notna(latest["Volume_Pctl"]) else np.nan
+latest_ret_1d = float(latest["Ret_1D"]) if pd.notna(latest["Ret_1D"]) else np.nan
+latest_state = latest["State"] if pd.notna(latest["State"]) else "Unavailable"
 
-if show_stats:
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Close", f"${latest_close:,.2f}" if np.isfinite(latest_close) else "N/A")
-    c2.metric("Volume z", f"{latest_vol_z:.2f}" if np.isfinite(latest_vol_z) else "N/A")
-    c3.metric("Percentile", f"{latest_vol_pct:.0f}" if np.isfinite(latest_vol_pct) else "N/A")
-    c4.metric("1D", f"{ret_1d:+.2f}%" if np.isfinite(ret_1d) else "N/A")
-    c5.metric("20D", f"{ret_20d:+.2f}%" if np.isfinite(ret_20d) else "N/A")
+left, right = st.columns([0.68, 0.32], gap="large")
 
-    with st.expander("Details", expanded=False):
-        st.write(f"Regime: {regime}")
-        st.write(f"Source: {data_source}")
-        st.write(f"Volume mode: {vol_label}")
-        st.write(
-            f"Current turnover: {latest_volume:.4f}"
-            if "% of shares" in vol_label.lower() and np.isfinite(latest_volume)
-            else f"Current turnover: {latest_volume:,.0f}" if np.isfinite(latest_volume)
-            else "Current turnover: N/A"
+with right:
+    st.markdown("### Current read")
+    st.metric("State", latest_state)
+    st.metric("Volume percentile", f"{latest_pctl:.0f}" if np.isfinite(latest_pctl) else "N/A")
+    st.metric("Vs baseline", f"{latest_ratio:.2f}x" if np.isfinite(latest_ratio) else "N/A")
+    st.metric("Last close", f"${latest_close:,.2f}" if np.isfinite(latest_close) else "N/A")
+    st.metric("1D move", f"{latest_ret_1d:+.2f}%" if np.isfinite(latest_ret_1d) else "N/A")
+
+    if "Turnover" in vol_label:
+        st.caption(
+            f"Latest turnover {latest_vol:.2f}% versus {latest_base:.2f}% baseline"
+            if np.isfinite(latest_vol) and np.isfinite(latest_base)
+            else "Turnover data unavailable"
         )
-        st.write(f"Shares outstanding: {format_billions(shares_outstanding)}")
+    else:
+        st.caption(
+            f"Latest volume {fmt_large_number(latest_vol)} versus {fmt_large_number(latest_base)} baseline"
+            if np.isfinite(latest_vol) and np.isfinite(latest_base)
+            else "Volume data unavailable"
+        )
 
-    st.markdown("---")
+    with st.expander("Data notes", expanded=False):
+        st.write(f"Source: {data_source}")
+        st.write(f"Mode: {vol_label}")
+        st.write(f"Shares outstanding: {fmt_large_number(shares_outstanding)}")
+        st.write(f"Visible window: last {lookback_months} months")
+        st.write(f"Percentile window: {percentile_window} trading days")
+        st.write(f"Baseline window: {smooth_window} trading days")
+
+with left:
+    fig = build_chart(
+        df=df,
+        symbol=symbol,
+        vol_label=vol_label,
+        show_price_mas=show_price_mas,
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displayModeBar": False,
+            "scrollZoom": True,
+            "responsive": True,
+        },
+    )
 
 
 # =============================================================================
-# CHART
+# RECENT EXTREMES TABLE
 # =============================================================================
-plotly_fig = build_plotly_chart(
-    df=df,
-    symbol=symbol,
-    vol_label=vol_label,
-    ma_period=ma_period,
-    show_last_price=show_last_price,
-)
+if show_event_table:
+    events = build_recent_events_table(
+        df=df,
+        vol_label=vol_label,
+        event_filter=event_filter,
+        max_rows=12,
+    )
 
-st.plotly_chart(
-    plotly_fig,
-    use_container_width=True,
-    config={
-        "displayModeBar": False,
-        "scrollZoom": True,
-        "responsive": True,
-    },
-)
+    st.markdown("### Recent extremes")
+    if events.empty:
+        st.info("No extreme sessions found in the visible window.")
+    else:
+        st.dataframe(events, use_container_width=True, hide_index=True)
+
 
 st.caption("© 2026 AD Fund Management LP")
