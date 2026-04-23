@@ -348,16 +348,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-Purpose: classify large VIX events, score historical analogs, and map forward SPX paths.
+**Purpose:** Classify large VIX events, score historical analogs, and map forward SPX paths.
 
-What it covers
-• Panic versus relief events
-• Context-aware event study
-• Analog matching on tape, trend, drawdown, vol, and cross-asset proxies
-• Forward path cones and failure rates
+**What this tab shows**
+- Panic-versus-relief event classification and context-aware event studies.
+- Analog matching on trend, drawdown, volatility, and cross-asset proxies.
+- Forward-path cones and failure-rate framing from prior episodes.
 
-Data source
-• Yahoo Finance
+**Data source**
+- Yahoo Finance.
         """
     )
     st.divider()

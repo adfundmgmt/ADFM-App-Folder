@@ -76,16 +76,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Hedge-timing dashboard combining trend, stress, and drawdown conditions.
+        **Purpose:** Hedge-timing dashboard combining trend, stress, and drawdown conditions.
 
-        What it covers
-        • Composite hedge signal with explicit gating and oversold safeguards
-        • Multi-horizon regime checks plus sanity testing since 2020
-        • Practical readout for adding, holding, or reducing hedges
-        • Optional chart lookback window for 1, 2, 3, 5, or 10 years
+        **What this tab shows**
+        - Composite hedge signal with explicit gating and oversold safeguards.
+        - Multi-horizon regime checks and sanity testing since 2020.
+        - Practical readout for adding, holding, or reducing hedges.
 
-        Data source
-        • Yahoo Finance and FRED market/regime inputs
+        **Data source**
+        - Yahoo Finance and FRED market/regime inputs.
         """
     )
 

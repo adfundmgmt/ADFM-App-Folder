@@ -126,27 +126,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: A pure market-data cross-asset stress gauge built from realized volatility across equities, credit, commodities, FX, and rates.
+        **Purpose:** Market-data cross-asset stress gauge built from realized volatility across major markets.
 
-        What to look at
-        • Daily, weekly, and monthly regime reads  
-        • Which asset class is contributing the most to the stress score  
-        • Whether RVOL is concentrated or broadening across markets
+        **What this tab shows**
+        - Daily, weekly, and monthly stress-regime readings.
+        - Which sleeves are driving the composite stress score.
+        - Whether realized-volatility pressure is concentrated or broadening.
 
-        How to use it
-        • High readings suggest realized volatility is becoming systemic across assets  
-        • Low readings suggest a calmer tape with tighter realized ranges  
-        • Breadth tells you whether the stress is localized or spreading
-
-        Construction notes
-        • Each instrument is converted into 21D annualized realized volatility  
-        • Each RVOL series is converted into a trailing percentile over a rolling trading-day window  
-        • Asset-class factors are averages of their underlying RVOL percentiles  
-        • Breadth is the share of instruments with RVOL percentile above the threshold  
-        • Dispersion is the cross-sectional standard deviation of asset-class percentiles
-
-        Data sources
-        • Yahoo Finance for ETFs and market proxies
+        **Data source**
+        - Yahoo Finance for ETFs and market proxies.
         """
     )
 

@@ -1303,16 +1303,19 @@ def add_global_style() -> None:
 
 
 def render_about() -> None:
-    st.sidebar.markdown("### About This Tool")
+    st.sidebar.markdown("## About This Tool")
     st.sidebar.markdown(
         """
-        <div style='padding:0.85rem 1rem;border:1px solid #d9d9d9;border-radius:0.7rem;background:#fafafa;line-height:1.65'>
-        This tool scrapes official speech pages for selected non-US central banks, scores the text for directional tone and thematic emphasis, then pushes the output into an underwriter view that answers the practical question: who is leaning tighter, who is softening, what is driving the move, and how much signal is actually in the document.
-        <br><br>
-        The dashboard now defaults toward live-policy documents instead of dumping every page into the same visual layer. Low-relevance speeches can still be shown, but the default is built to surface takeaways, not raw noise.
-        </div>
-        """,
-        unsafe_allow_html=True,
+        **Purpose:** Non-US central-bank speech-tone monitor for directional policy drift and thematic shifts.
+
+        **What this tab shows**
+        - Cross-bank tone ranking for tightening versus easing direction.
+        - Speech-level thematic and relevance-weighted policy signal extraction.
+        - Underwriter-style context on who is hardening, softening, and why.
+
+        **Data source**
+        - Official speech pages from selected non-US central banks.
+        """
     )
 
 

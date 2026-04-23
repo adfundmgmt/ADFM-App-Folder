@@ -1106,14 +1106,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: unusual options-flow scanner for outsized listed-options activity across Nasdaq 100 names.
+        **Purpose:** Unusual options-flow scanner for outsized listed-options activity across Nasdaq 100 names.
 
-        Improvements here:
-        • smaller universe
-        • pre-scan underlying filters
-        • lazy loading of heavy data
-        • chart-driven review
-        • safer Yahoo retry logic
+        **What this tab shows**
+        - Concentrated options activity with a tighter, higher-signal universe.
+        - Pre-scan underlying filters to reduce noisy or illiquid names.
+        - Chart-led follow-through review for fast tape validation.
+
+        **Data source**
+        - Public options and market data feeds used throughout the app.
         """
     )
 

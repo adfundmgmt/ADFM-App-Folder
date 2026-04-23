@@ -522,15 +522,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Cross-asset volatility regime monitor for stress concentration and hedge richness.
+        **Purpose:** Cross-asset volatility regime monitor for stress concentration and hedge richness.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        **What this tab shows**
+        - Realized-volatility regime reads across key asset classes.
+        - Concentration checks to see whether stress is isolated or broadening.
+        - Practical context for hedge pricing, demand, and risk posture.
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        **Data source**
+        - Public market and macro data feeds used throughout the app.
         """
     )
     st.divider()

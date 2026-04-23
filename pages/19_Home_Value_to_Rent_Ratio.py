@@ -31,15 +31,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Housing valuation monitor using home value-to-rent dynamics over time.
+        **Purpose:** Housing valuation monitor using home value-to-rent dynamics over time.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        **What this tab shows**
+        - Long-run valuation context using home prices versus rent levels.
+        - Regime framing versus trend and macro stress overlays.
+        - Practical diagnostics for cyclical versus structural valuation shifts.
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        **Data source**
+        - Public housing and macroeconomic data feeds used throughout the app.
         """
     )
     st.markdown("---")

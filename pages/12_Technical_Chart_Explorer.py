@@ -11,15 +11,15 @@ st.set_page_config(page_title="ADFM Chart Tool", layout="wide")
 st.sidebar.header("About This Tool")
 st.sidebar.markdown(
     """
-    Purpose: Technical chart workspace with trend, momentum, and optional Elliott diagnostics.
+    **Purpose:** Technical chart workspace with trend, momentum, and optional Elliott diagnostics.
 
-    What it covers
-    • Core signals and summary outputs for this dashboard
-    • Key context needed to interpret current regime or setup
-    • Practical view designed for quick internal decision support
+    **What this tab shows**
+    - Flexible charting with trend, momentum, and volatility overlays.
+    - Multi-indicator confirmation to frame breakout and mean-reversion setups.
+    - Optional Elliott diagnostics for wave-structure context.
 
-    Data source
-    • Public market and macro data feeds used throughout the app
+    **Data source**
+    - Public market and macro data feeds used throughout the app.
     """,
     unsafe_allow_html=True,
 )

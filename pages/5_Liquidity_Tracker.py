@@ -134,19 +134,15 @@ with st.sidebar:
     st.markdown("### About This Tool")
     st.markdown(
         """
-This dashboard tracks a simple liquidity framework centered on Fed balance sheet expansion versus reserve drains.
+**Purpose:** Liquidity framework centered on Fed balance-sheet expansion versus reserve drains.
 
-**What it shows**
-- Net liquidity using WALCL minus ON RRP minus TGA
-- A rebased view of the three core balance sheet components
-- Effective Fed Funds Rate as the policy anchor
-- Chicago Fed NFCI as a clean read on broader financial conditions
+**What this tab shows**
+- Net liquidity using WALCL minus ON RRP minus TGA.
+- A rebased view of the three core balance-sheet components.
+- EFFR and NFCI context for policy stance and broader conditions.
 
-**How to use it**
-- Rising net liquidity usually signals easier reserve conditions
-- Falling net liquidity often reflects tighter background liquidity
-- EFFR helps frame the policy stance
-- NFCI above zero suggests tighter-than-average financial conditions
+**Data source**
+- Federal Reserve (FRED) liquidity and rates series.
         """
     )
     st.markdown("</div>", unsafe_allow_html=True)

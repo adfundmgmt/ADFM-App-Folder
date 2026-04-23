@@ -861,16 +861,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Internal basket monitor for equal-weight performance, trend, and SPY-relative context.
+        **Purpose:** Internal basket monitor for equal-weight performance, trend, and SPY-relative context.
 
-        What it covers  
-        • Daily basket return snapshots and relative performance versus SPY  
-        • Trend, momentum, volatility, and correlation diagnostics by basket  
-        • Constituent-level drill-down with stale-data and market-cap filters  
-        • Warmup history so weekly RSI and 63-day correlation stay populated under short presets
+        **What this tab shows**
+        - Daily basket snapshots and relative performance versus SPY.
+        - Trend, momentum, volatility, and correlation diagnostics by basket.
+        - Constituent-level drill-down with stale-data and market-cap filters.
 
-        Data source  
-        • Internal basket definitions and Yahoo Finance market data
+        **Data source**
+        - Internal basket definitions and Yahoo Finance market data.
         """
     )
     st.divider()

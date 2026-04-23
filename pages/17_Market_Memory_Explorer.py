@@ -34,39 +34,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-Purpose: Historical analog explorer comparing the current market path versus prior periods.
+**Purpose:** Historical analog explorer comparing the current market path versus prior periods.
 
-What the first chart does
+**What this tab shows**
+- Current year-to-date cumulative path versus prior calendar years.
+- Correlation-ranked analog years based on the elapsed part of the current year.
+- Rolling 252-day analog windows plus forward paths after matched setups.
 
-• Compares the current year-to-date cumulative return path against prior calendar years
-
-• Ranks analog years using correlation over the portion of the year completed so far
-
-• Helps frame where the current tape sits relative to past calendar-year paths
-
-What the second chart does
-
-• Takes the most recent trailing 252 trading day price path
-
-• Compares that path against all prior rolling 252 trading day historical price paths
-
-• Keeps historical windows with correlation at or above the selected threshold
-
-• Plots what happened in the next 252 trading days after those matched historical windows
-
-• Keeps the single best match per year to reduce duplicate windows from the same regime
-
-How to read it
-
-• The second chart is a historical scenario tool based on similar trailing price action
-
-• It is matching normalized price paths, not fundamentals, macro backdrop, or valuation
-
-• It is best used as context for path framing rather than as a stand-alone forecast
-
-Data source
-
-• Yahoo Finance adjusted close history
+**Data source**
+- Yahoo Finance adjusted close history.
         """,
         unsafe_allow_html=False,
     )

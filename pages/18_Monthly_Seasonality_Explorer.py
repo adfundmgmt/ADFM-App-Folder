@@ -1122,27 +1122,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Seasonality explorer for monthly return tendencies, hit-rate patterns, and intra-month path behavior across filtered historical samples.
+        **Purpose:** Seasonality explorer for monthly tendencies, hit-rate patterns, and intra-month behavior.
 
-        Methodology
-        
-        • Monthly return is measured from prior month-end close to current month-end close.
-        
-        • First-half and second-half contributions are split using the midpoint trading day of each month.
-        
-        • Historical stats are computed only after the sample is explicitly filtered.
-        
-        • Presidential cycle buckets are calendar-based and exact.
-        
-        • Complete months only excludes the current partial month from the historical sample.
+        **What this tab shows**
+        - Month-level return tendencies after explicit sample filtering.
+        - First-half versus second-half contribution splits within each month.
+        - Observation counts and auditability context for statistical confidence.
 
-        Accuracy guardrails
-        
-        • Filter membership is applied before any aggregation.
-        
-        • Observation count and distinct year count are shown below.
-        
-        • Audit panel lists the exact included months in the sample.
+        **Data source**
+        - Historical daily market price series used to build month-level seasonality statistics.
         """
     )
 
