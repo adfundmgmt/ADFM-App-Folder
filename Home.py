@@ -6,7 +6,7 @@ st.markdown(
     """
     <style>
         .hero {
-            padding: 1.25rem 1.5rem;
+            padding: 1.35rem 1.6rem;
             border-radius: 14px;
             background: linear-gradient(135deg, #0b1220, #121f36 55%, #183a66);
             color: #f3f7ff;
@@ -19,7 +19,7 @@ st.markdown(
         }
         .hero p {
             margin: 0;
-            opacity: 0.9;
+            opacity: 0.92;
             font-size: 1rem;
         }
         .section-card {
@@ -28,6 +28,18 @@ st.markdown(
             padding: 0.8rem 1rem;
             margin-bottom: 0.75rem;
             background: rgba(16, 24, 40, 0.45);
+        }
+        .featured-card {
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 12px;
+            padding: 0.9rem 1rem;
+            background: rgba(15, 23, 42, 0.55);
+            margin-bottom: 0.75rem;
+        }
+        .featured-card p {
+            margin: 0.35rem 0 0 0;
+            font-size: 0.92rem;
+            opacity: 0.94;
         }
         .status-chip {
             display: inline-block;
@@ -79,6 +91,13 @@ TOOL_LIBRARY = {
             "name": "Liquidity Tracker",
             "description": "Tracks Net Liquidity (WALCL - RRP - TGA) alongside policy and financial-conditions context.",
             "page": "pages/5_Liquidity_Tracker.py",
+            "priority": "High",
+            "status": "Live",
+        },
+        {
+            "name": "Fed Speeches Tone Underwriter",
+            "description": "Flagship policy-tone monitor that scores live Fed communications for hawkish/dovish drift.",
+            "page": "pages/15_Fed_Speeches_Tone_Underwriter.py",
             "priority": "High",
             "status": "Live",
         },
@@ -150,13 +169,6 @@ TOOL_LIBRARY = {
             "status": "Live",
         },
         {
-            "name": "Fed Speeches Tone Underwriter",
-            "description": "Analyzes sentiment and policy tilt from Federal Reserve communications.",
-            "page": "pages/15_Fed_Speeches_Tone_Underwriter.py",
-            "priority": "Normal",
-            "status": "Live",
-        },
-        {
             "name": "RoW Central Bank Tone Underwriter",
             "description": "Tracks policy tone and sentiment shifts from major non-US central banks.",
             "page": "pages/16_RoW_Central_Bank_Tone_Underwriter.py",
@@ -206,6 +218,24 @@ TOOL_LIBRARY = {
     ],
 }
 
+FEATURED_UPDATES = [
+    {
+        "title": "Fed Speeches Tone Underwriter",
+        "description": "Institutional nowcasting for Fed rhetoric. Prioritize this module ahead of high-impact macro events and FOMC windows.",
+        "page": "pages/15_Fed_Speeches_Tone_Underwriter.py",
+    },
+    {
+        "title": "RoW Central Bank Tone Underwriter",
+        "description": "Cross-check global policy impulse to capture divergence risk across ECB, BOE, BOJ, and broader G10 messaging.",
+        "page": "pages/16_RoW_Central_Bank_Tone_Underwriter.py",
+    },
+    {
+        "title": "Market Memory + Seasonality Stack",
+        "description": "Pair analog-year pattern matching with monthly return tendencies to tighten scenario framing and timing decisions.",
+        "page": "pages/17_Market_Memory_Explorer.py",
+    },
+]
+
 all_tools = [tool for group in TOOL_LIBRARY.values() for tool in group]
 live_tools = [tool for tool in all_tools if tool["status"] == "Live"]
 
@@ -213,7 +243,7 @@ st.markdown(
     """
     <div class='hero'>
         <h1>AD Fund Management LP · Analytics Suite</h1>
-        <p>Internal decision-support dashboards for market structure, macro regime, liquidity, and positioning intelligence.</p>
+        <p>Professional decision-support platform for market structure, macro regime, liquidity, and policy-tone intelligence.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -227,8 +257,25 @@ m4.metric("Research Modules", len(TOOL_LIBRARY["Supporting Research Tools"]))
 
 st.markdown("---")
 
+st.subheader("What\'s New / Featured Intelligence")
+feat_cols = st.columns(3)
+for i, item in enumerate(FEATURED_UPDATES):
+    with feat_cols[i % len(feat_cols)]:
+        st.markdown(
+            f"""
+            <div class='featured-card'>
+                <strong>{item['title']}</strong>
+                <p>{item['description']}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.page_link(item["page"], label=f"Open {item['title']}", icon="🧭")
+
+st.markdown("---")
+
 st.subheader("Quick Launch")
-quick_cols = st.columns(5)
+quick_cols = st.columns(3)
 for i, tool in enumerate(TOOL_LIBRARY["Priority Dashboards"]):
     with quick_cols[i % len(quick_cols)]:
         st.page_link(tool["page"], label=tool["name"], icon="📌")
@@ -236,10 +283,11 @@ for i, tool in enumerate(TOOL_LIBRARY["Priority Dashboards"]):
 st.markdown("---")
 
 st.subheader("Decision Workflow")
-wf1, wf2, wf3 = st.columns(3)
+wf1, wf2, wf3, wf4 = st.columns(4)
 wf1.info("**1) Set regime context**\n\nStart with stress, liquidity, and cross-asset dashboards.")
-wf2.info("**2) Validate participation**\n\nConfirm breadth, factor leadership, and flows before acting.")
-wf3.info("**3) Pressure-test ideas**\n\nUse scanners, analog studies, and seasonality to challenge conviction.")
+wf2.info("**2) Read policy signal**\n\nRun Fed + RoW tone underwriters to identify policy drift and message asymmetry.")
+wf3.info("**3) Validate participation**\n\nConfirm breadth, factor leadership, and flows before acting.")
+wf4.info("**4) Pressure-test ideas**\n\nUse scanners, analog studies, and seasonality to challenge conviction.")
 
 st.markdown("---")
 
@@ -283,6 +331,6 @@ for category, tools in TOOL_LIBRARY.items():
 
 st.markdown("---")
 st.success(
-    "Built for speed and repeatability: start with context, validate with breadth/flows, "
-    "then use research modules to sharpen entries, exits, and risk framing."
+    "Built for institutional speed and repeatability: frame regime, validate policy tone, "
+    "confirm participation, and execute with disciplined risk context."
 )
