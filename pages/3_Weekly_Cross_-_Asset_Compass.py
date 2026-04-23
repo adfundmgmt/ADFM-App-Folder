@@ -136,15 +136,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Weekly cross-asset regime summary for positioning and risk framing.
+        **Purpose:** Weekly cross-asset regime summary for positioning and risk framing.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        **What this tab shows**
+        - Regime snapshots across growth, inflation, policy, and risk assets.
+        - Relative leadership and confirmation signals across major sleeves.
+        - A concise positioning frame for weekly decision support.
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        **Data source**
+        - Public market and macro data feeds used throughout the app.
         """
     )
 

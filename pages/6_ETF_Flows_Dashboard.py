@@ -112,17 +112,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        This keeps the original horizontal bar-chart workflow while using a more stable data path.
+        **Purpose:** ETF flow-pressure monitor using a stable price-volume proxy workflow.
 
-        The chart and table use a price-volume flow-pressure proxy built from Yahoo Finance OHLCV data. That is deliberate because Yahoo ETF shares-outstanding history has become inconsistent, and that is what breaks many older ETF flow tools.
+        **What this tab shows**
+        - Horizontal ranking bars for the selected lookback.
+        - Full-table coverage with lookback total, latest week, and week-to-date values.
+        - Transparent handling of missing rows to preserve coverage context.
 
-        What is included here:
-        • A horizontal bar chart for the selected view  
-        • One full table with every original ticker listed  
-        • Lookback total, latest complete week, and week-to-date values together  
-        • Missing-data rows preserved so coverage stays transparent  
-
-        Treat this as a directional tape-reading and relative-ranking tool rather than official issuer-reported creations and redemptions.
+        **Data source**
+        - Yahoo Finance OHLCV data used as a directional flow-pressure proxy.
         """
     )
     st.markdown("---")

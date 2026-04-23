@@ -21,17 +21,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Breakout scanner for multi-horizon highs with momentum and RSI confirmation context.
+        **Purpose:** Breakout scanner for multi-horizon highs with momentum and RSI confirmation context.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        **What this tab shows**
+        - Multi-timeframe breakout candidates with confirmation signals.
+        - Context to distinguish fresh expansion from extended moves.
+        - A practical review list for quick internal decision support.
 
-        Data source
-        • Public market and macro data feeds used throughout the app
-        ,
-        unsafe_allow_html=True,
+        **Data source**
+        - Public market and macro data feeds used throughout the app.
         """
     )
 

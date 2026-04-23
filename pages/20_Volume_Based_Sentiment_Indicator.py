@@ -539,10 +539,19 @@ def build_chart(
 # SIDEBAR
 # =============================================================================
 with st.sidebar:
-    st.subheader("About This Tool")
-    st.write(
-        "This page compares each session's volume to the instrument's own trailing history, "
-        "highlights unusually heavy or quiet participation, and keeps the output focused."
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **Purpose:** Volume-based sentiment monitor comparing daily participation versus trailing history.
+
+        **What this tab shows**
+        - Unusually heavy or quiet participation relative to each instrument's own baseline.
+        - A cleaner read on conviction behind recent price movement.
+        - Focused diagnostics for tape strength and exhaustion risk.
+
+        **Data source**
+        - Public market price and volume history feeds used throughout the app.
+        """
     )
 
     st.markdown("---")

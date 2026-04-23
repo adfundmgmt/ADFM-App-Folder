@@ -1250,16 +1250,19 @@ def speaker_matrix(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
 
 
 def render_about() -> None:
-    st.sidebar.markdown("### About This Tool")
+    st.sidebar.markdown("## About This Tool")
     st.sidebar.markdown(
         """
-        <div style="padding:0.85rem 1rem;border:1px solid #d9d9d9;border-radius:0.7rem;background:#fafafa;line-height:1.65">
-        This dashboard scrapes Federal Reserve speeches and testimony directly from the Board website, scores each document on hawkish and dovish language, and shows how speaker tone is shifting relative to both that speaker’s own history and the broader Fed baseline.
-        <br><br>
-        The scoring engine now separates topic mentions from live policy signal, discounts ceremonial and historical passages, and weights paragraphs by policy relevance before assigning tone.
-        </div>
-        """,
-        unsafe_allow_html=True,
+        **Purpose:** Federal Reserve speech-tone monitor for hawkish/dovish shifts by speaker and at the system level.
+
+        **What this tab shows**
+        - Speaker-level tone shifts versus each speaker's own baseline.
+        - Cross-speaker tone context versus the broader Fed baseline.
+        - Policy-relevance-weighted scoring to reduce ceremonial and low-signal language.
+
+        **Data source**
+        - Official Federal Reserve Board speeches and testimony pages.
+        """
     )
 
 

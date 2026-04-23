@@ -492,15 +492,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Factor leadership monitor based on relative momentum, trend, and inflection signals.
+        **Purpose:** Factor leadership monitor based on relative momentum, trend, and inflection signals.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        **What this tab shows**
+        - Relative-strength leadership across major equity factors.
+        - Trend and momentum confirmation for regime transitions.
+        - Practical diagnostics for quick internal decision support.
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        **Data source**
+        - Public market and macro data feeds used throughout the app.
         """
     )
     st.markdown("---")

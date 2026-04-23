@@ -27,21 +27,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Ratio chart workspace for cross-asset regime framing, global equity leadership, and internal market leadership.
+        **Purpose:** Ratio chart workspace for cross-asset regime framing and leadership analysis.
 
-        What it covers
-        • Macro regime relationships across equities, credit, commodities, dollar, gold, and duration
-        • Global equity leadership across developed and emerging markets
-        • Internal equity leadership across sectors, factors, and key thematic leadership groups
+        **What this tab shows**
+        - Macro regime relationships across equities, credit, commodities, dollar, gold, and duration.
+        - Global equity leadership across developed and emerging markets.
+        - Internal equity leadership across sectors, factors, and thematic groups.
 
-        Design philosophy
-        • Regime first
-        • Global leadership second
-        • Internal leadership third
-        • Fewer charts, less redundancy, higher signal
-
-        Data source
-        • Yahoo Finance adjusted daily price history
+        **Data source**
+        - Yahoo Finance adjusted daily price history.
         """
     )
 

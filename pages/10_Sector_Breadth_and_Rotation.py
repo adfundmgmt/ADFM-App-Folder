@@ -97,15 +97,15 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Purpose: Sector breadth and rotation monitor for leadership, participation, and regime shifts.
+        **Purpose:** Sector breadth and rotation monitor for leadership, participation, and regime shifts.
 
-        What it covers
-        • Core signals and summary outputs for this dashboard
-        • Key context needed to interpret current regime or setup
-        • Practical view designed for quick internal decision support
+        **What this tab shows**
+        - Breadth, momentum, and relative-strength leadership across sectors.
+        - Regime context to separate broad participation from narrow leadership.
+        - Quick-read diagnostics for internal positioning and risk framing.
 
-        Data source
-        • Public market and macro data feeds used throughout the app
+        **Data source**
+        - Public market and macro data feeds used throughout the app.
         """
     )
 
