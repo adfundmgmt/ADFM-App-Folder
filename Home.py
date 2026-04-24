@@ -1,68 +1,8 @@
 import streamlit as st
 
 st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
-
-st.markdown(
-    """
-    <style>
-        .stApp {
-            background-color: #f4f4ef;
-            color: #111;
-        }
-        .retro-wrap {
-            border: 2px solid #000;
-            background: #fffef7;
-            padding: 0.8rem 1rem;
-            margin-bottom: 0.8rem;
-            box-shadow: 4px 4px 0 #bdbdbd;
-        }
-        .retro-title {
-            font-family: "Courier New", monospace;
-            font-size: 2rem;
-            font-weight: 700;
-            margin: 0;
-            letter-spacing: 0.5px;
-        }
-        .retro-subtitle {
-            margin: 0.3rem 0 0 0;
-            font-family: "Courier New", monospace;
-            font-size: 0.95rem;
-        }
-        .retro-heading {
-            font-family: "Courier New", monospace;
-            font-size: 1.15rem;
-            font-weight: 700;
-            border-bottom: 1px solid #111;
-            padding-bottom: 0.25rem;
-            margin-bottom: 0.5rem;
-        }
-        .retro-row {
-            border: 1px solid #111;
-            background: #fff;
-            padding: 0.6rem 0.7rem;
-            margin-bottom: 0.45rem;
-        }
-        .retro-note {
-            font-size: 0.9rem;
-            font-family: "Courier New", monospace;
-            border: 1px dashed #111;
-            padding: 0.5rem 0.6rem;
-            background: #fafafa;
-        }
-        .status-live {
-            color: #006400;
-            font-weight: 700;
-            font-family: "Courier New", monospace;
-        }
-        .status-planned {
-            color: #8b0000;
-            font-weight: 700;
-            font-family: "Courier New", monospace;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.title("AD Fund Management Tools")
+st.caption("Simple navigation hub for all dashboards.")
 
 TOOL_LIBRARY = {
     "Priority Dashboards": [
@@ -240,98 +180,44 @@ TOOL_LIBRARY = {
 }
 
 
-def show_tool(tool: dict) -> None:
-    status = tool["status"]
-    st.write(f"**{tool['name']}** ({status})")
-    st.caption(tool["description"])
-    if tool.get("page"):
-        st.page_link(tool["page"], label=f"Open {tool['name']}")
-
-
 all_tools = [tool for group in TOOL_LIBRARY.values() for tool in group]
 live_tools = [tool for tool in all_tools if tool["status"] == "Live"]
 planned_tools = [tool for tool in all_tools if tool["status"] == "Planned"]
 
-st.markdown(
-    """
-    <div class='retro-wrap'>
-        <p class='retro-title'>AD FUND MANAGEMENT LP</p>
-        <p class='retro-subtitle'>Market Analytics Home Page | Last Update: Current Session</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+summary_cols = st.columns(3)
+summary_cols[0].metric("Live dashboards", len(live_tools))
+summary_cols[1].metric("Planned tools", len(planned_tools))
+summary_cols[2].metric("Priority dashboards", len(TOOL_LIBRARY["Priority Dashboards"]))
 
-summary_col1, summary_col2 = st.columns([1, 2])
-with summary_col1:
-    st.markdown("<div class='retro-wrap'><p class='retro-heading'>Site Summary</p>", unsafe_allow_html=True)
-    st.write(f"Live dashboards: {len(live_tools)}")
-    st.write(f"Planned tools: {len(all_tools) - len(live_tools)}")
-    st.write(f"Priority dashboards: {len(TOOL_LIBRARY['Priority Dashboards'])}")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with summary_col2:
-    st.markdown(
-        """
-        <div class='retro-wrap'>
-            <p class='retro-heading'>How To Use This Site</p>
-            <div class='retro-note'>
-                1. Start in <b>Priority Dashboards</b> for daily monitoring.<br>
-                2. Use <b>Market & Macro Monitoring</b> to confirm regime and leadership.<br>
-                3. Use <b>Supporting Research Tools</b> to validate or challenge your thesis.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-st.markdown("<div class='retro-wrap'><p class='retro-heading'>Quick Launch</p></div>", unsafe_allow_html=True)
+st.subheader("Quick Launch")
 quick_cols = st.columns(3)
 for i, tool in enumerate(TOOL_LIBRARY["Priority Dashboards"]):
     with quick_cols[i % len(quick_cols)]:
         st.page_link(tool["page"], label=tool["name"])
 
-st.markdown("<div class='retro-wrap'><p class='retro-heading'>Full Tool Index</p></div>", unsafe_allow_html=True)
-
-search_term = st.text_input("Find a tool", placeholder="Type a keyword such as liquidity, volatility, seasonality")
+st.subheader("Tool Index")
+search_term = st.text_input("Find a tool", placeholder="Search by name or keyword")
 show_planned = st.checkbox("Show planned tools", value=True)
 needle = search_term.strip().lower()
 
 for category, tools in TOOL_LIBRARY.items():
-    filtered = []
+    visible_tools = []
     for tool in tools:
         if tool["status"] == "Planned" and not show_planned:
             continue
         haystack = f"{tool['name']} {tool['description']}".lower()
         if needle and needle not in haystack:
             continue
-        filtered.append(tool)
+        visible_tools.append(tool)
 
-    st.markdown(f"### {category} ({len(filtered)})")
-
-    if not filtered:
+    st.markdown(f"### {category} ({len(visible_tools)})")
+    if not visible_tools:
         st.write("No tools match the current filter.")
         continue
 
-    for tool in filtered:
-        status_class = "status-live" if tool["status"] == "Live" else "status-planned"
-        st.markdown(
-            f"""
-            <div class='retro-row'>
-                <b>{tool['name']}</b> | <span class='{status_class}'>{tool['status'].upper()}</span><br>
-                {tool['description']}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    for tool in visible_tools:
+        st.write(f"**{tool['name']}** — {tool['status']}")
+        st.caption(tool["description"])
         if tool.get("page"):
             st.page_link(tool["page"], label=f"Open {tool['name']}")
-
-st.markdown(
-    """
-    <div class='retro-wrap'>
-        <p class='retro-subtitle'>Functional layout designed for fast navigation and readability.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+        st.divider()
