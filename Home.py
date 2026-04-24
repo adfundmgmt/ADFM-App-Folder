@@ -1,6 +1,8 @@
 import streamlit as st
 
 st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
+st.title("AD Fund Management Tools")
+st.caption("Simple navigation hub for all dashboards.")
 
 TOOL_LIBRARY = {
     "Priority Dashboards": [
@@ -177,18 +179,45 @@ TOOL_LIBRARY = {
     ],
 }
 
-st.markdown("""
-<h1>AD Fund Management Tools</h1>
-<p>Simple home page for accessing all analytics tools.</p>
-<p>Choose a section below and open any live tool.</p>
-""", unsafe_allow_html=True)
+
+all_tools = [tool for group in TOOL_LIBRARY.values() for tool in group]
+live_tools = [tool for tool in all_tools if tool["status"] == "Live"]
+planned_tools = [tool for tool in all_tools if tool["status"] == "Planned"]
+
+summary_cols = st.columns(3)
+summary_cols[0].metric("Live dashboards", len(live_tools))
+summary_cols[1].metric("Planned tools", len(planned_tools))
+summary_cols[2].metric("Priority dashboards", len(TOOL_LIBRARY["Priority Dashboards"]))
+
+st.subheader("Quick Launch")
+quick_cols = st.columns(3)
+for i, tool in enumerate(TOOL_LIBRARY["Priority Dashboards"]):
+    with quick_cols[i % len(quick_cols)]:
+        st.page_link(tool["page"], label=tool["name"])
+
+st.subheader("Tool Index")
+search_term = st.text_input("Find a tool", placeholder="Search by name or keyword")
+show_planned = st.checkbox("Show planned tools", value=True)
+needle = search_term.strip().lower()
 
 for category, tools in TOOL_LIBRARY.items():
-    st.markdown(f"## {category}")
+    visible_tools = []
     for tool in tools:
-        st.markdown(f"**{tool['name']}**")
-        st.write(tool["description"])
-        st.write(f"Status: {tool['status']}")
+        if tool["status"] == "Planned" and not show_planned:
+            continue
+        haystack = f"{tool['name']} {tool['description']}".lower()
+        if needle and needle not in haystack:
+            continue
+        visible_tools.append(tool)
+
+    st.markdown(f"### {category} ({len(visible_tools)})")
+    if not visible_tools:
+        st.write("No tools match the current filter.")
+        continue
+
+    for tool in visible_tools:
+        st.write(f"**{tool['name']}** — {tool['status']}")
+        st.caption(tool["description"])
         if tool.get("page"):
             st.page_link(tool["page"], label=f"Open {tool['name']}")
-        st.markdown("---")
+        st.divider()
