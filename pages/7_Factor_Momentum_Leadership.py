@@ -3,7 +3,6 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
-from html import escape
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -71,13 +70,6 @@ CUSTOM_CSS = """
         font-weight: 600;
         letter-spacing: 0.15px;
         color: #222222;
-    }
-
-    .stMetric {
-        background: #FAFAFA;
-        border: 1px solid #E0E0E0;
-        border-radius: 12px;
-        padding: 12px;
     }
 
     div[data-testid="stCaptionContainer"] {
@@ -238,25 +230,6 @@ WINDOW_MAP_DAYS: Dict[str, int] = {
     "5Y": 252 * 5,
     "10Y": 252 * 10,
 }
-
-# =========================================================
-# HTML helpers
-# =========================================================
-def card_box(inner_html: str) -> None:
-    st.markdown(
-        f"""
-        <div style="border:1px solid {BORDER}; border-radius:12px;
-                    padding:15px; background:{CARD_BG}; color:{TEXT};
-                    font-size:14px; line-height:1.48;">
-          {inner_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def small_note(text: str) -> None:
-    st.caption(text)
 
 # =========================================================
 # General helpers
@@ -755,50 +728,8 @@ def fetch_daily_levels(
     }
 
 # =========================================================
-# Commentary helpers
+# State and styling helpers
 # =========================================================
-def bucket_breadth(breadth: float) -> str:
-    if breadth < 15:
-        return "very narrow"
-
-    if breadth < 35:
-        return "narrow"
-
-    if breadth < 55:
-        return "mixed"
-
-    if breadth < 75:
-        return "broad"
-
-    return "very broad"
-
-
-def bucket_regime(regime_score: float) -> str:
-    if regime_score < 25:
-        return "defensive"
-
-    if regime_score < 40:
-        return "cautious"
-
-    if regime_score < 60:
-        return "balanced"
-
-    if regime_score < 75:
-        return "constructive"
-
-    return "aggressively risk-seeking"
-
-
-def bucket_confidence(confidence_score: float) -> str:
-    if confidence_score >= 75:
-        return "high"
-
-    if confidence_score >= 50:
-        return "medium"
-
-    return "low"
-
-
 def factor_state(score: float) -> str:
     if pd.isna(score):
         return "Unscored"
@@ -818,98 +749,6 @@ def factor_state(score: float) -> str:
     return "Laggard"
 
 
-def join_names(names: List[str], fallback: str = "none") -> str:
-    clean = [escape(str(x)) for x in names if str(x).strip()]
-
-    if not clean:
-        return fallback
-
-    return ", ".join(clean)
-
-
-def build_commentary(
-    mom_df: pd.DataFrame,
-    breadth_stats: Dict[str, float],
-    regime_score: float,
-    confidence_score: float,
-    stale_count: int,
-    skipped_count: int,
-    data_mode: str,
-) -> str:
-    trend_counts = mom_df["Trend"].value_counts()
-    up_count = int(trend_counts.get("Up", 0))
-    down_count = int(trend_counts.get("Down", 0))
-    neutral_count = int(trend_counts.get("Neutral", 0))
-
-    leaders = mom_df.sort_values("Composite", ascending=False).head(4).index.tolist()
-    laggards = mom_df.sort_values("Composite", ascending=True).head(4).index.tolist()
-    confirmed_up = mom_df[mom_df["Inflection"] == "Confirmed Up"].sort_values("Composite", ascending=False)
-    confirmed_down = mom_df[mom_df["Inflection"] == "Confirmed Down"].sort_values("Composite", ascending=True)
-    turning_up = mom_df[mom_df["Inflection"] == "Turning Up"].sort_values("Short", ascending=False)
-    turning_down = mom_df[mom_df["Inflection"] == "Turning Down"].sort_values("Short", ascending=True)
-
-    trend_breadth = breadth_stats.get("trend_breadth", np.nan)
-    short_breadth = breadth_stats.get("short_breadth", np.nan)
-    long_breadth = breadth_stats.get("long_breadth", np.nan)
-    alignment = breadth_stats.get("alignment", np.nan)
-    conflict = breadth_stats.get("conflict", np.nan)
-    dispersion = breadth_stats.get("composite_dispersion", np.nan)
-
-    if regime_score >= 65 and trend_breadth >= 50 and alignment >= 0.35:
-        tape_read = (
-            f"The factor board is constructive. Trend breadth is {bucket_breadth(trend_breadth)}, "
-            f"short-window breadth is {short_breadth:.1f}%, and the regime score reads {regime_score:.1f}. "
-            f"Leadership is being carried by {join_names(leaders[:3])}, with enough confirmation to treat the move as broader than a one-factor spike."
-        )
-
-    elif regime_score <= 40 or (trend_breadth < 35 and conflict >= 0.30):
-        tape_read = (
-            f"The factor board is fragile. Trend breadth is {bucket_breadth(trend_breadth)}, "
-            f"conflict is {conflict * 100:.1f}%, and the regime score reads {regime_score:.1f}. "
-            f"The tape is still producing relative winners, led by {join_names(leaders[:3])}, but the internal message is closer to rotation pressure than broad risk confirmation."
-        )
-
-    else:
-        tape_read = (
-            f"The factor board is balanced. Trend breadth is {bucket_breadth(trend_breadth)}, "
-            f"short-window breadth is {short_breadth:.1f}%, long-window breadth is {long_breadth:.1f}%, and the regime score reads {regime_score:.1f}. "
-            f"The better leadership sits in {join_names(leaders[:3])}, while the weakest relative structures remain {join_names(laggards[:3])}."
-        )
-
-    internal_message = (
-        f"Confirmed strength is concentrated in {join_names(confirmed_up.index.tolist()[:4], 'very few factor pairs')}. "
-        f"Confirmed weakness is concentrated in {join_names(confirmed_down.index.tolist()[:4], 'very few factor pairs')}. "
-        f"Fresh improvement is showing up in {join_names(turning_up.index.tolist()[:3])}, while deterioration is showing up in {join_names(turning_down.index.tolist()[:3])}."
-    )
-
-    risk_message = (
-        f"Composite dispersion is {dispersion:.1f} points. Alignment is {alignment * 100:.1f}% and conflict is {conflict * 100:.1f}%. "
-        f"If dispersion compresses while leaders stop making higher short-window scores, the board is moving from continuation into rotation. "
-        f"If long-window breadth catches up to short-window breadth, the move has a better chance of becoming durable."
-    )
-
-    data_message = (
-        f"Signal confidence is {bucket_confidence(confidence_score)} at {confidence_score:.1f}/100. "
-        f"Data mode is {escape(str(data_mode))}. Stale tickers flagged: {stale_count}. Skipped factor pairs: {skipped_count}. "
-        f"Uptrends: {up_count}. Downtrends: {down_count}. Neutral: {neutral_count}."
-    )
-
-    body = (
-        '<div style="font-weight:700; margin-bottom:6px;">Conclusion</div>'
-        f"<div>{tape_read}</div>"
-        '<div style="font-weight:700; margin:10px 0 6px;">Internal read</div>'
-        f"<div>{internal_message}</div>"
-        '<div style="font-weight:700; margin:10px 0 6px;">What to watch</div>'
-        f"<div>{risk_message}</div>"
-        '<div style="font-weight:700; margin:10px 0 6px;">Data quality</div>'
-        f"<div>{data_message}</div>"
-    )
-
-    return body
-
-# =========================================================
-# Plot helpers
-# =========================================================
 def composite_color(score: float) -> str:
     if pd.isna(score):
         return PASTEL_GREY
@@ -923,37 +762,33 @@ def composite_color(score: float) -> str:
     return PASTEL_GREY
 
 
-def plot_composite_bar(mom_df: pd.DataFrame) -> plt.Figure:
-    df = mom_df.sort_values("Composite", ascending=True).copy()
-    height = max(4.5, 0.42 * len(df))
+def style_state(value: str) -> str:
+    if value in ("Leader", "Positive"):
+        return f"background-color: {PASTEL_GREEN}; color: white; font-weight: 600;"
 
-    fig, ax = plt.subplots(figsize=(10.5, height))
+    if value in ("Weak", "Laggard"):
+        return f"background-color: {PASTEL_RED}; color: white; font-weight: 600;"
 
-    colors = [composite_color(v) for v in df["Composite"]]
-    ax.barh(df.index, df["Composite"], color=colors, edgecolor="#FFFFFF", linewidth=0.8)
-
-    ax.axvline(50, color="#777777", linewidth=1.0, alpha=0.9)
-    ax.axvline(57, color=PASTEL_GREEN, linewidth=0.8, alpha=0.7)
-    ax.axvline(43, color=PASTEL_RED, linewidth=0.8, alpha=0.7)
-
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Composite leadership score", color=TEXT)
-    ax.set_title("Factor Ranking", color=TEXT, pad=10)
-    ax.grid(axis="x", color=GRID, linewidth=0.6, alpha=0.7)
-    ax.tick_params(axis="x", labelsize=9)
-    ax.tick_params(axis="y", labelsize=9)
-
-    for spine in ["top", "right", "left"]:
-        ax.spines[spine].set_visible(False)
-
-    for y, value in enumerate(df["Composite"]):
-        ax.text(min(value + 1.2, 97.0), y, f"{value:.1f}", va="center", fontsize=8, color="#333333")
-
-    fig.tight_layout()
-
-    return fig
+    return f"background-color: {PASTEL_GREY}; color: white; font-weight: 600;"
 
 
+def style_pct_value(value: float) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return ""
+
+    if v > 0:
+        return f"color: {PASTEL_GREEN}; font-weight: 600;"
+
+    if v < 0:
+        return f"color: {PASTEL_RED}; font-weight: 600;"
+
+    return "color: #555555;"
+
+# =========================================================
+# Plot helpers
+# =========================================================
 def plot_factor_grid(
     plot_df: pd.DataFrame,
     mom_df: pd.DataFrame,
@@ -1028,6 +863,37 @@ def plot_factor_grid(
 
     for j in range(n_factors, len(axes)):
         axes[j].axis("off")
+
+    fig.tight_layout()
+
+    return fig
+
+
+def plot_composite_bar(mom_df: pd.DataFrame) -> plt.Figure:
+    df = mom_df.sort_values("Composite", ascending=True).copy()
+    height = max(4.5, 0.42 * len(df))
+
+    fig, ax = plt.subplots(figsize=(10.5, height))
+
+    colors = [composite_color(v) for v in df["Composite"]]
+    ax.barh(df.index, df["Composite"], color=colors, edgecolor="#FFFFFF", linewidth=0.8)
+
+    ax.axvline(50, color="#777777", linewidth=1.0, alpha=0.9)
+    ax.axvline(57, color=PASTEL_GREEN, linewidth=0.8, alpha=0.7)
+    ax.axvline(43, color=PASTEL_RED, linewidth=0.8, alpha=0.7)
+
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Composite leadership score", color=TEXT)
+    ax.set_title("Factor Ranking", color=TEXT, pad=10)
+    ax.grid(axis="x", color=GRID, linewidth=0.6, alpha=0.7)
+    ax.tick_params(axis="x", labelsize=9)
+    ax.tick_params(axis="y", labelsize=9)
+
+    for spine in ["top", "right", "left"]:
+        ax.spines[spine].set_visible(False)
+
+    for y, value in enumerate(df["Composite"]):
+        ax.text(min(value + 1.2, 97.0), y, f"{value:.1f}", va="center", fontsize=8, color="#333333")
 
     fig.tight_layout()
 
@@ -1449,7 +1315,7 @@ if mom_df.empty:
 mom_df = mom_df.set_index("Factor")
 
 # =========================================================
-# Composite scores and regime statistics
+# Composite scores
 # =========================================================
 short_abs = mom_df["Short Pctl"].apply(percentile_signal)
 long_abs = mom_df["Long Pctl"].apply(percentile_signal)
@@ -1483,83 +1349,45 @@ mom_df["Composite"] = (50.0 + 35.0 * score_raw).clip(0.0, 100.0)
 mom_df["State"] = mom_df["Composite"].apply(factor_state)
 mom_df = mom_df.sort_values("Composite", ascending=False)
 
-trend_breadth = float((mom_df["Trend"] == "Up").mean() * 100.0)
-short_breadth = float((mom_df["Short"] > 0).mean() * 100.0)
-long_breadth = float((mom_df["Long"] > 0).mean() * 100.0)
-
-alignment = float(((mom_df["Short"] > 0) & (mom_df["Long"] > 0)).mean())
-
-conflict = float(
-    (
-        ((mom_df["Short"] > 0) & (mom_df["Long"] < 0))
-        | ((mom_df["Short"] < 0) & (mom_df["Long"] > 0))
-    ).mean()
-)
-
-if len(mom_df) > 0:
-    composite_dispersion = float(mom_df["Composite"].max() - mom_df["Composite"].min())
-else:
-    composite_dispersion = np.nan
-
-breadth_blend = 0.35 * trend_breadth + 0.325 * short_breadth + 0.325 * long_breadth
-regime_score = float(np.clip(0.65 * mom_df["Composite"].mean() + 0.35 * breadth_blend, 0.0, 100.0))
-
 ok_pairs = [d for d in pair_diagnostics if d["Status"] == "OK"]
 skipped_pairs = [d for d in pair_diagnostics if d["Status"] != "OK"]
 missing_tickers = fetch_meta.get("missing_tickers", []) or []
 
-confidence_penalty = 0.0
-confidence_penalty += max(0, 10 - len(ok_pairs)) * 4.0
-confidence_penalty += len(skipped_pairs) * 2.5
-confidence_penalty += len(stale_tickers) * 5.0
-confidence_penalty += len(missing_tickers) * 6.0
-confidence_penalty += conflict * 15.0
-
-confidence_score = float(np.clip(100.0 - confidence_penalty, 0.0, 100.0))
-
-breadth_stats = {
-    "trend_breadth": trend_breadth,
-    "short_breadth": short_breadth,
-    "long_breadth": long_breadth,
-    "alignment": alignment,
-    "conflict": conflict,
-    "composite_dispersion": composite_dispersion,
-}
-
 # =========================================================
-# Header and summary
+# Main layout
 # =========================================================
-st.subheader(f"Factor Tape Summary ({window_choice})")
-
-metric_cols = st.columns(7)
-
-metric_cols[0].metric("Regime Score", f"{regime_score:.1f}", bucket_regime(regime_score).title())
-metric_cols[1].metric("Confidence", f"{confidence_score:.1f}", bucket_confidence(confidence_score).title())
-metric_cols[2].metric("Trend Breadth", f"{trend_breadth:.1f}%")
-metric_cols[3].metric("Short Breadth", f"{short_breadth:.1f}%")
-metric_cols[4].metric("Long Breadth", f"{long_breadth:.1f}%")
-metric_cols[5].metric("Alignment", f"{alignment * 100:.1f}%")
-metric_cols[6].metric("Conflict", f"{conflict * 100:.1f}%")
-
-summary_html = build_commentary(
-    mom_df=mom_df,
-    breadth_stats=breadth_stats,
-    regime_score=regime_score,
-    confidence_score=confidence_score,
-    stale_count=len(stale_tickers),
-    skipped_count=len(skipped_pairs),
-    data_mode=str(fetch_meta.get("mode", "unknown")),
-)
-
-card_box(summary_html)
-
-small_note(
+st.caption(
     f"As of {as_of_date}. Window starts {window_start.strftime('%Y-%m-%d')}. "
     f"Fetch mode: {fetch_meta.get('mode', 'unknown')}. Last fetch timestamp: {fetch_meta.get('fetched_at', 'unknown')}."
 )
 
 # =========================================================
-# Ranking view
+# Factor charts first
+# =========================================================
+st.subheader(f"Factor Time Series ({window_choice})")
+
+plot_df = factor_df.copy()
+plot_df = plot_df[[c for c in mom_df.index if c in plot_df.columns]]
+
+if normalize_charts:
+    for col in plot_df.columns:
+        plot_df[col] = normalized_series(plot_df[col])
+
+fig_ts = plot_factor_grid(
+    plot_df=plot_df,
+    mom_df=mom_df,
+    normalize_charts=normalize_charts,
+    show_ema=show_ema,
+)
+
+if fig_ts is not None:
+    st.pyplot(fig_ts, clear_figure=True)
+    plt.close(fig_ts)
+else:
+    st.info("No factor charts are available for the selected window.")
+
+# =========================================================
+# Ranking view below factor charts
 # =========================================================
 st.subheader("All-Factor Ranking View")
 
@@ -1608,32 +1436,6 @@ format_map = {
     "Obs Full": "{:.0f}",
 }
 
-
-def style_state(value: str) -> str:
-    if value in ("Leader", "Positive"):
-        return f"background-color: {PASTEL_GREEN}; color: white; font-weight: 600;"
-
-    if value in ("Weak", "Laggard"):
-        return f"background-color: {PASTEL_RED}; color: white; font-weight: 600;"
-
-    return f"background-color: {PASTEL_GREY}; color: white; font-weight: 600;"
-
-
-def style_pct_value(value: float) -> str:
-    try:
-        v = float(value)
-    except Exception:
-        return ""
-
-    if v > 0:
-        return f"color: {PASTEL_GREEN}; font-weight: 600;"
-
-    if v < 0:
-        return f"color: {PASTEL_RED}; font-weight: 600;"
-
-    return "color: #555555;"
-
-
 styled_ranking = ranking_df.style.format(format_map, na_rep="n/a")
 
 try:
@@ -1650,31 +1452,6 @@ except AttributeError:
     )
 
 st.dataframe(styled_ranking, use_container_width=True)
-
-# =========================================================
-# Factor charts
-# =========================================================
-st.subheader(f"Factor Time Series ({window_choice})")
-
-plot_df = factor_df.copy()
-plot_df = plot_df[[c for c in mom_df.index if c in plot_df.columns]]
-
-if normalize_charts:
-    for col in plot_df.columns:
-        plot_df[col] = normalized_series(plot_df[col])
-
-fig_ts = plot_factor_grid(
-    plot_df=plot_df,
-    mom_df=mom_df,
-    normalize_charts=normalize_charts,
-    show_ema=show_ema,
-)
-
-if fig_ts is not None:
-    st.pyplot(fig_ts, clear_figure=True)
-    plt.close(fig_ts)
-else:
-    st.info("No factor charts are available for the selected window.")
 
 # =========================================================
 # Leadership map
