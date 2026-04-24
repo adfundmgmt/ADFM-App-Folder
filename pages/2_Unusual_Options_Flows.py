@@ -1,6 +1,5 @@
 # streamlit_app.py
 # ADFM | Options Flow Trend Monitor
-# Bulltard-style public-data approximation using Yahoo Finance option chains.
 #
 # What Yahoo can provide: option chains, volume, open interest, bid, ask, last price, IV, expiries.
 # What Yahoo cannot provide reliably: institutional trade prints, sweep/block tags, buyer/seller IDs,
@@ -1743,7 +1742,6 @@ with tab5:
 
         It cannot fully replicate institutional flow products because Yahoo does not give the full exchange-grade tape: no reliable sweep/block flags, no exact trade sequence, no opening-versus-closing classification, no real buyer/seller identity, and no true institutional tag. The app therefore treats direction as an estimate based on the relationship between last price and bid/ask, then scores persistence by ticker over time.
 
-        The key Bulltard-style element is the database. A single scan is just a board. Repeated saved scans become a trend engine. The 20D and 60D scores are the most useful because they show where the same ticker keeps attracting unusual contracts, whether the premium is net bullish or bearish, and whether the activity is broad enough to matter.
         """
     )
 
