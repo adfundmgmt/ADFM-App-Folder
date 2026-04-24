@@ -23,7 +23,7 @@ CUSTOM_CSS = """
     .block-container {
         padding-top: 0.85rem;
         padding-bottom: 1.65rem;
-        max-width: 1700px;
+        max-width: 1750px;
     }
 
     h1, h2, h3 {
@@ -39,23 +39,21 @@ CUSTOM_CSS = """
         padding: 10px 12px;
     }
 
-    .small-note {
-        color: #6b7280;
-        font-size: 0.84rem;
-        line-height: 1.35;
-    }
-
     .section-card {
         background: #ffffff;
         border: 1px solid #ececec;
         border-radius: 14px;
-        padding: 14px 16px;
-        margin-top: 8px;
-        margin-bottom: 10px;
+        padding: 15px 17px;
+        margin-top: 12px;
+        margin-bottom: 12px;
+        color: #242833;
+        line-height: 1.55;
     }
 
-    .muted {
+    .muted-note {
         color: #6b7280;
+        font-size: 0.88rem;
+        line-height: 1.4;
     }
 </style>
 """
@@ -152,7 +150,6 @@ as_of_dt_et = now_et()
 as_of_bucket = floor_time_to_bucket(as_of_dt_et, minutes=15)
 as_of_bucket_key = as_of_bucket.strftime("%Y-%m-%d %H:%M %Z")
 as_of_date = as_of_dt_et.date()
-as_of_ts = pd.Timestamp(as_of_date).normalize()
 
 lookback_dict = {
     "1 Month": 30,
@@ -254,7 +251,6 @@ etf_info = {
 
 etf_tickers = tuple(etf_info.keys())
 
-
 US_EQUITY_TICKERS = {
     "VTI", "VUG", "VTV", "MTUM", "QUAL", "USMV", "SCHD",
     "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
@@ -309,9 +305,7 @@ def fmt_compact_cur(x) -> str:
         return ""
     x = float(x)
     ax = abs(x)
-
     sign = "-" if x < 0 else ""
-    ax = abs(x)
 
     if ax >= 1e12:
         return f"{sign}${ax / 1e12:,.2f}T"
@@ -348,7 +342,7 @@ def fmt_int(x) -> str:
     return f"{int(x):,}"
 
 
-def axis_fmt(x, _pos=None) -> str:
+def axis_fmt_currency(x, _pos=None) -> str:
     return fmt_compact_cur(x)
 
 
@@ -386,6 +380,7 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         out.columns = [c[0] if isinstance(c, tuple) else c for c in out.columns]
 
     needed = ["Open", "High", "Low", "Close", "Volume"]
+
     for c in needed:
         if c not in out.columns:
             out[c] = np.nan
@@ -427,8 +422,6 @@ def safe_yf_download(
     attempts: int = 3,
     delay: float = 0.9,
 ) -> pd.DataFrame:
-    last_error = None
-
     for i in range(attempts):
         try:
             raw = yf.download(
@@ -445,13 +438,10 @@ def safe_yf_download(
             if raw is not None and not raw.empty:
                 return raw
 
-        except Exception as e:
-            last_error = e
+        except Exception:
+            pass
 
         time.sleep(delay * (i + 1))
-
-    if last_error is not None:
-        return pd.DataFrame()
 
     return pd.DataFrame()
 
@@ -710,7 +700,7 @@ def render_matplotlib_high_res(fig) -> bytes:
     fig.savefig(
         buf,
         format="png",
-        dpi=280,
+        dpi=285,
         bbox_inches="tight",
         pad_inches=0.04,
         facecolor="white",
@@ -720,7 +710,9 @@ def render_matplotlib_high_res(fig) -> bytes:
     return buf.getvalue()
 
 
-def color_for_value(v: float) -> str:
+def color_for_value(v: float, was_missing: bool = False) -> str:
+    if was_missing:
+        return PASTEL_GREY
     if pd.isna(v) or abs(float(v)) < 1e-12:
         return PASTEL_GREY
     if float(v) > 0:
@@ -810,16 +802,52 @@ def build_tape_read(df: pd.DataFrame, flow_col: str) -> str:
         net_text = "flat"
 
     return (
-        f"**Tape read:** Aggregate {flow_col.lower()} is {net_text}. "
+        f"<strong>Tape read:</strong> Aggregate {flow_col.lower()} is {net_text}. "
         f"The strongest positive pressure is in {top_pos}. "
         f"The weakest pressure is in {top_neg}. "
         f"By asset class, the leader is {group_leader}, while the weakest bucket is {group_lagger}. "
-        f"This is a price-volume pressure proxy from public OHLCV data, so treat it as a directional tape signal rather than official ETF creations or redemptions."
+        f"This is a price-volume pressure proxy from public OHLCV data. Treat it as a directional tape signal, "
+        f"separate from official ETF creation and redemption flow data."
     )
 
 
+def build_chart_dataframe(
+    source_df: pd.DataFrame,
+    metric: str,
+    sort_mode: str,
+) -> pd.DataFrame:
+    chart_df = source_df[
+        ["Ticker", "Label", "Asset Class", metric, "Data Status"]
+    ].copy()
+
+    chart_df["Raw Value"] = pd.to_numeric(chart_df[metric], errors="coerce")
+    chart_df["Missing Chart Value"] = chart_df["Raw Value"].isna()
+    chart_df["Chart Value"] = chart_df["Raw Value"].fillna(0.0)
+
+    def label_with_status(row):
+        label = row["Label"]
+        status = row["Data Status"]
+        if status in {"Missing", "Stale", "Partial History", "Low Volume"}:
+            return f"{label} [{status}]"
+        return label
+
+    chart_df["Chart Label"] = chart_df.apply(label_with_status, axis=1)
+
+    if sort_mode == "Positive to Negative":
+        chart_df = chart_df.sort_values("Chart Value", ascending=False)
+    elif sort_mode == "Negative to Positive":
+        chart_df = chart_df.sort_values("Chart Value", ascending=True)
+    elif sort_mode == "Asset Class":
+        chart_df = chart_df.sort_values(["Asset Class", "Chart Value"], ascending=[True, False])
+    else:
+        chart_df["Original Order"] = range(len(chart_df))
+        chart_df = chart_df.sort_values("Original Order")
+
+    return chart_df.reset_index(drop=True)
+
+
 # =========================================================
-# SIDEBAR
+# SIDEBAR CONTROLS
 # =========================================================
 with st.sidebar:
     st.header("About This Tool")
@@ -827,18 +855,19 @@ with st.sidebar:
         """
         **Purpose:** ETF flow-pressure monitor using a stable price-volume proxy workflow.
 
-        **What this tab shows**
-        - Dollarized flow-pressure proxy by lookback window.
-        - Latest complete week and week-to-date proxy values.
-        - Normalized pressure score, which adjusts pressure by traded dollar value.
-        - Data diagnostics for missing, stale, low-volume, and partial-history tickers.
+        **What the chart shows**
+        - Full ETF coverage by default.
+        - Missing chart values are retained and shown as zero.
+        - Green means positive pressure.
+        - Red means negative pressure.
+        - Grey means zero, missing, or unchartable.
 
         **Data source**
-        - Yahoo Finance OHLCV data via yfinance.
+        - Yahoo Finance OHLCV data through yfinance.
 
         **Important**
-        - This is not official ETF fund-flow data.
-        - It is a directional pressure signal derived from price, volume, and intraday range.
+        - This is a directional price-volume pressure signal.
+        - It is separate from official ETF creation and redemption flow data.
         """
     )
 
@@ -850,10 +879,47 @@ with st.sidebar:
         index=0,
     )
 
+    chart_metric_choice = st.radio(
+        "Ranking Metric",
+        options=[
+            "Flow Pressure Proxy",
+            "Latest Complete Week",
+            "Week to Date",
+            "Pressure Score",
+            "Return %",
+        ],
+        index=0,
+    )
+
+    sort_mode = st.radio(
+        "Chart Sort",
+        options=[
+            "Positive to Negative",
+            "Negative to Positive",
+            "Asset Class",
+            "Original Coverage Order",
+        ],
+        index=0,
+    )
+
+    st.markdown("---")
     st.caption(f"As of: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     st.caption(f"Cache bucket: {as_of_bucket_key}")
 
+
 period_days = int(lookback_dict[period_label])
+flow_col = f"{period_label} Flow Pressure Proxy"
+return_col = f"{period_label} Return %"
+
+metric_map = {
+    "Flow Pressure Proxy": flow_col,
+    "Latest Complete Week": "Latest Complete Week",
+    "Week to Date": "Week to Date",
+    "Pressure Score": "Pressure Score",
+    "Return %": return_col,
+}
+
+bar_view = metric_map[chart_metric_choice]
 
 
 # =========================================================
@@ -877,63 +943,162 @@ df = build_table(
     cache_key=as_of_bucket_key,
 )
 
-flow_col = f"{period_label} Flow Pressure Proxy"
-return_col = f"{period_label} Return %"
+
+# =========================================================
+# RANKING VIEW FIRST
+# =========================================================
+st.markdown("---")
+st.subheader("Ranking View")
+
+chart_df = build_chart_dataframe(
+    source_df=df,
+    metric=bar_view,
+    sort_mode=sort_mode,
+)
+
+shown_count = int(len(chart_df))
+total_count = int(len(df))
+
+st.caption(
+    f"Showing {shown_count} of {total_count} ETFs. "
+    f"Rows with missing or unchartable values stay in the ranking as grey zero-value bars."
+)
+
+if chart_df.empty:
+    st.info("No chartable values available.")
+else:
+    vals = chart_df["Chart Value"].astype(float)
+    raw_vals = chart_df["Raw Value"]
+
+    x_min = float(vals.min())
+    x_max = float(vals.max())
+    x_min = min(x_min, 0.0)
+    x_max = max(x_max, 0.0)
+
+    span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
+    pad = 0.075 * span
+
+    n = len(chart_df)
+
+    fig_h = max(13.5, min(28.0, 0.255 * n + 1.8))
+    bar_height = 0.82 if n >= 70 else 0.78
+    y_font = 6.8 if n >= 80 else 7.3
+    value_font = 6.7 if n >= 80 else 7.2
+
+    colors = [
+        color_for_value(v, was_missing=missing)
+        for v, missing in zip(chart_df["Chart Value"], chart_df["Missing Chart Value"])
+    ]
+
+    fig, ax = plt.subplots(figsize=(16.8, fig_h), dpi=220)
+
+    bars = ax.barh(
+        chart_df["Chart Label"],
+        vals,
+        color=colors,
+        alpha=0.98,
+        height=bar_height,
+        linewidth=0,
+    )
+
+    ax.axvline(0, color="#9ca3af", linewidth=0.85, alpha=0.85)
+
+    ax.set_xlabel(
+        "Estimated Flow Pressure ($)" if metric_is_currency(bar_view) else bar_view,
+        fontsize=9,
+        color=TEXT_DARK,
+    )
+    ax.set_title(f"{bar_view} | Full Coverage", fontsize=10.8, pad=7, color=TEXT_DARK)
+
+    if metric_is_currency(bar_view):
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt_currency))
+    elif bar_view.endswith("Return %"):
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _pos: f"{x:,.1f}%"))
+    else:
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _pos: f"{x:,.3f}"))
+
+    ax.tick_params(axis="y", labelsize=y_font, pad=0.6, length=0, colors=TEXT_DARK)
+    ax.tick_params(axis="x", labelsize=8.2, colors=AXIS_GREY)
+
+    ax.grid(False)
+    ax.xaxis.grid(False)
+    ax.yaxis.grid(False)
+
+    ax.invert_yaxis()
+    ax.set_ylim(n - 0.5, -0.5)
+    ax.margins(y=0.0)
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#e5e7eb")
+    ax.spines["bottom"].set_color("#e5e7eb")
+
+    ax.set_xlim(x_min - pad, x_max + pad)
+
+    text_pad = 0.0075 * span
+
+    for bar, raw, chart_value, was_missing in zip(
+        bars,
+        raw_vals,
+        vals,
+        chart_df["Missing Chart Value"],
+    ):
+        if was_missing:
+            label_txt = "NA"
+        else:
+            label_txt = format_metric_value(bar_view, raw)
+
+        x = chart_value
+
+        if chart_value > 0:
+            x_text, ha = x + text_pad, "left"
+        elif chart_value < 0:
+            x_text, ha = x - text_pad, "right"
+        else:
+            x_text, ha = 0.0, "center"
+
+        ax.text(
+            x_text,
+            bar.get_y() + bar.get_height() / 2,
+            label_txt,
+            va="center",
+            ha=ha,
+            fontsize=value_font,
+            color="#374151",
+            clip_on=False,
+        )
+
+    fig.subplots_adjust(left=0.285, right=0.975, top=0.955, bottom=0.055)
+
+    chart_png = render_matplotlib_high_res(fig)
+    st.image(chart_png, use_container_width=True)
+    plt.close(fig)
 
 
 # =========================================================
-# CONTROLS
+# EVERYTHING ELSE BELOW THE RANKING IMAGE
 # =========================================================
+st.markdown("---")
+
 all_asset_classes = sorted(df["Asset Class"].dropna().unique().tolist())
 all_statuses = ["OK", "Low Volume", "Partial History", "Stale", "Missing"]
 
-with st.container():
-    c1, c2, c3, c4 = st.columns([1.15, 1.25, 1.25, 1.0])
+with st.expander("Filters and Display Controls", expanded=False):
+    c1, c2 = st.columns(2)
 
     with c1:
-        bar_view = st.radio(
-            "Chart Metric",
-            options=[
-                flow_col,
-                "Latest Complete Week",
-                "Week to Date",
-                "Pressure Score",
-                return_col,
-            ],
-            horizontal=False,
-            index=0,
-        )
-
-    with c2:
         selected_assets = st.multiselect(
             "Asset Class Filter",
             options=all_asset_classes,
             default=all_asset_classes,
         )
 
-    with c3:
+    with c2:
         selected_statuses = st.multiselect(
             "Data Status Filter",
             options=all_statuses,
-            default=["OK", "Low Volume", "Partial History", "Stale"],
+            default=all_statuses,
         )
-
-    with c4:
-        chart_scope = st.radio(
-            "Chart Scope",
-            options=["Top and Bottom", "All Filtered"],
-            index=0,
-        )
-
-        top_bottom_n = st.slider(
-            "Rows per side",
-            min_value=5,
-            max_value=40,
-            value=20,
-            step=5,
-            disabled=chart_scope == "All Filtered",
-        )
-
 
 filtered_df = df[
     df["Asset Class"].isin(selected_assets)
@@ -962,16 +1127,11 @@ c4.metric("Missing", f"{missing_count}")
 c5.metric(f"{period_label} Aggregate", fmt_compact_cur(net_lookback) if pd.notna(net_lookback) else "")
 c6.metric("WTD Aggregate", fmt_compact_cur(net_wtd) if pd.notna(net_wtd) else "")
 
-if low_vol_count > 0 or stale_count > 0 or partial_count > 0 or missing_count > 0:
-    st.caption(
-        f"Diagnostics: {low_vol_count} low-volume, {partial_count} partial-history, "
-        f"{stale_count} stale, {missing_count} missing."
-    )
+st.caption(
+    f"Diagnostics: {low_vol_count} low-volume, {partial_count} partial-history, "
+    f"{stale_count} stale, {missing_count} missing."
+)
 
-
-# =========================================================
-# TAPE READ
-# =========================================================
 st.markdown(
     f"""
 <div class="section-card">
@@ -983,7 +1143,7 @@ st.markdown(
 
 
 # =========================================================
-# GROUP ROLLUP
+# ASSET CLASS ROLLUP
 # =========================================================
 with st.expander("Asset-Class Rollup", expanded=False):
     group_df = (
@@ -1010,7 +1170,6 @@ with st.expander("Asset-Class Rollup", expanded=False):
 
     group_display = group_display.rename(
         columns={
-            "Asset Class": "Asset Class",
             "Clean_Data": "Clean Data",
             "Lookback_Flow": f"{period_label} Flow Pressure Proxy",
             "Latest_Complete_Week": "Latest Complete Week",
@@ -1026,125 +1185,6 @@ with st.expander("Asset-Class Rollup", expanded=False):
         hide_index=True,
         height=260,
     )
-
-
-# =========================================================
-# BAR CHART
-# =========================================================
-st.markdown("---")
-st.subheader("Ranking View")
-
-chart_source = filtered_df[["Ticker", "Label", "Asset Class", bar_view, "Data Status"]].copy()
-chart_source[bar_view] = pd.to_numeric(chart_source[bar_view], errors="coerce")
-chart_source = chart_source.dropna(subset=[bar_view])
-
-if chart_source.empty:
-    st.info("No chartable values available for the selected filters.")
-else:
-    if chart_scope == "Top and Bottom":
-        top = chart_source.nlargest(top_bottom_n, bar_view)
-        bottom = chart_source.nsmallest(top_bottom_n, bar_view)
-        chart_df = (
-            pd.concat([top, bottom], axis=0)
-            .drop_duplicates(subset=["Ticker"])
-            .sort_values(bar_view, ascending=False)
-        )
-    else:
-        chart_df = chart_source.sort_values(bar_view, ascending=False)
-
-    vals = chart_df[bar_view].astype(float)
-
-    x_min = float(vals.min())
-    x_max = float(vals.max())
-    x_min = min(x_min, 0.0)
-    x_max = max(x_max, 0.0)
-
-    span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
-    pad = 0.07 * span
-
-    n = len(chart_df)
-
-    fig_h = max(6.7, min(16.5, 0.22 * n + 1.35))
-    bar_height = 0.84 if n >= 50 else 0.78
-    y_font = 7.0 if n >= 60 else 7.8
-    value_font = 6.8 if n >= 60 else 7.4
-
-    colors = [color_for_value(v) for v in vals]
-
-    fig, ax = plt.subplots(figsize=(16.4, fig_h), dpi=220)
-
-    bars = ax.barh(
-        chart_df["Label"],
-        vals,
-        color=colors,
-        alpha=0.98,
-        height=bar_height,
-        linewidth=0,
-    )
-
-    ax.axvline(0, color="#9ca3af", linewidth=0.85, alpha=0.8)
-
-    ax.set_xlabel(
-        "Estimated Flow Pressure ($)" if metric_is_currency(bar_view) else bar_view,
-        fontsize=9,
-        color=TEXT_DARK,
-    )
-    ax.set_title(bar_view, fontsize=10.6, pad=6, color=TEXT_DARK)
-
-    if metric_is_currency(bar_view):
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
-    elif bar_view.endswith("Return %"):
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _pos: f"{x:,.1f}%"))
-    else:
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _pos: f"{x:,.3f}"))
-
-    ax.tick_params(axis="y", labelsize=y_font, pad=0.7, length=0, colors=TEXT_DARK)
-    ax.tick_params(axis="x", labelsize=8.2, colors=AXIS_GREY)
-
-    ax.grid(False)
-    ax.xaxis.grid(False)
-    ax.yaxis.grid(False)
-
-    ax.invert_yaxis()
-    ax.set_ylim(n - 0.5, -0.5)
-    ax.margins(y=0.0)
-
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#e5e7eb")
-    ax.spines["bottom"].set_color("#e5e7eb")
-
-    ax.set_xlim(x_min - pad, x_max + pad)
-
-    text_pad = 0.0075 * span
-
-    for bar, raw in zip(bars, vals):
-        label_txt = format_metric_value(bar_view, raw)
-        x = bar.get_width()
-
-        if raw > 0:
-            x_text, ha = x + text_pad, "left"
-        elif raw < 0:
-            x_text, ha = x - text_pad, "right"
-        else:
-            x_text, ha = 0.0, "center"
-
-        ax.text(
-            x_text,
-            bar.get_y() + bar.get_height() / 2,
-            label_txt,
-            va="center",
-            ha=ha,
-            fontsize=value_font,
-            color="#374151",
-            clip_on=False,
-        )
-
-    fig.subplots_adjust(left=0.27, right=0.975, top=0.94, bottom=0.085)
-
-    chart_png = render_matplotlib_high_res(fig)
-    st.image(chart_png, use_container_width=True)
-    plt.close(fig)
 
 
 # =========================================================
@@ -1169,7 +1209,7 @@ display_cols = [
     "Data Status",
 ]
 
-display_df = df[display_cols].copy()
+display_df = filtered_df[display_cols].copy()
 
 display_df["Last Price"] = display_df["Last Price"].apply(fmt_price)
 display_df[flow_col] = display_df[flow_col].apply(fmt_compact_cur)
@@ -1184,10 +1224,15 @@ display_df["Business Days Since Last Bar"] = display_df["Business Days Since Las
 
 
 # =========================================================
-# OUTPUT TABLE
+# FULL COVERAGE TABLE
 # =========================================================
 st.markdown("---")
 st.subheader("Full Coverage Table")
+
+st.caption(
+    f"Table shows {len(display_df)} of {len(df)} ETFs after filters. "
+    f"The ranking image above always starts from full coverage."
+)
 
 st.dataframe(
     display_df,
@@ -1221,6 +1266,6 @@ st.caption(
     f"Last refresh: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
     f"Source: Yahoo Finance OHLCV via yfinance | "
     f"Method: dollarized price-volume flow-pressure proxy, normalized pressure score, and data diagnostics | "
-    f"Every original ticker remains in the table even if chart data are missing | "
+    f"Every ticker in the original coverage list remains in the ranking image and table | "
     f"© 2026 AD Fund Management LP"
 )
