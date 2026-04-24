@@ -107,6 +107,29 @@ RETRY_ATTEMPTS = 3
 RETRY_SLEEP_BASE = 0.85
 CHAIN_JITTER_MAX = 0.35
 
+
+# =============================================================================
+# Visual palette
+# =============================================================================
+PASTEL_GREEN = "#BFE8C5"
+PASTEL_RED = "#F4B6B6"
+PASTEL_GREY = "#D1D5DB"
+NET_LINE_GREY = "#6B7280"
+
+DIRECTION_COLOR_MAP = {
+    "BULLISH": PASTEL_GREEN,
+    "BEARISH": PASTEL_RED,
+    "NEUTRAL": PASTEL_GREY,
+    "MIXED": PASTEL_GREY,
+}
+
+TAPE_COLOR_MAP = {
+    "BULLISH": PASTEL_GREEN,
+    "BEARISH": PASTEL_RED,
+    "NEUTRAL": PASTEL_GREY,
+    "MIXED": PASTEL_GREY,
+}
+
 DEFAULT_EXTRA_SYMBOLS = sorted([
     "SPY", "QQQ", "IWM", "DIA", "TLT", "HYG", "LQD", "GLD", "SLV", "USO", "XLE", "XLF",
     "XLK", "SMH", "SOXX", "KRE", "XBI", "ARKK", "FXI", "EEM", "EWZ", "TSM", "VST", "AXON",
@@ -1239,6 +1262,8 @@ def render_trend_bar(trend: pd.DataFrame, lookback_days: int, top_n: int = 30) -
         x="net_premium",
         y="symbol",
         color="tape",
+        color_discrete_map=TAPE_COLOR_MAP,
+        category_orders={"tape": ["BULLISH", "MIXED", "NEUTRAL", "BEARISH"]},
         orientation="h",
         hover_data={
             "unusual_trades": True,
@@ -1279,9 +1304,32 @@ def render_ticker_timeline(db: pd.DataFrame, ticker: str) -> None:
     daily["net_premium"] = daily["bullish_premium"] - daily["bearish_premium"]
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=daily["scan_date_dt"], y=daily["bullish_premium"], name="Bullish premium"))
-    fig.add_trace(go.Bar(x=daily["scan_date_dt"], y=-daily["bearish_premium"], name="Bearish premium"))
-    fig.add_trace(go.Scatter(x=daily["scan_date_dt"], y=daily["net_premium"], mode="lines+markers", name="Net premium"))
+    fig.add_trace(
+        go.Bar(
+            x=daily["scan_date_dt"],
+            y=daily["bullish_premium"],
+            name="Bullish premium",
+            marker_color=PASTEL_GREEN,
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=daily["scan_date_dt"],
+            y=-daily["bearish_premium"],
+            name="Bearish premium",
+            marker_color=PASTEL_RED,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=daily["scan_date_dt"],
+            y=daily["net_premium"],
+            mode="lines+markers",
+            name="Net premium",
+            line=dict(color=NET_LINE_GREY),
+            marker=dict(color=NET_LINE_GREY),
+        )
+    )
     fig.update_layout(
         title=f"{ticker} | Saved Unusual Flow by Day",
         barmode="relative",
@@ -1657,6 +1705,8 @@ with tab2:
             x="premium",
             y="label",
             color="direction",
+            color_discrete_map=DIRECTION_COLOR_MAP,
+            category_orders={"direction": ["BULLISH", "NEUTRAL", "MIXED", "BEARISH"]},
             orientation="h",
             hover_data={
                 "symbol": True,
