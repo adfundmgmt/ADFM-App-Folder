@@ -27,7 +27,7 @@ st.set_page_config(page_title="Weekly Cross-Asset Compass", layout="wide")
 CUSTOM_CSS = """
 <style>
 .block-container {
-    padding-top: 1.35rem;
+    padding-top: 2.35rem;
     padding-bottom: 1.6rem;
     max-width: 1580px;
 }
