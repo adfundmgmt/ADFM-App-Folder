@@ -1950,6 +1950,79 @@ def bank_snapshot_table(snapshot: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def actionable_playbook(snapshot: pd.DataFrame, cross: pd.DataFrame) -> Tuple[str, pd.DataFrame]:
+    if snapshot.empty:
+        return "No current snapshot available.", pd.DataFrame()
+
+    latest_cross = cross.sort_values("date").iloc[-1] if not cross.empty else pd.Series(dtype="object")
+    composite = float(pd.to_numeric(latest_cross.get("tone_z_smooth"), errors="coerce")) if not latest_cross.empty else np.nan
+    inf_bias = float(pd.to_numeric(snapshot["inflation_z_global"], errors="coerce").mean())
+    growth_bias = float(pd.to_numeric(snapshot["growth_z_global"], errors="coerce").mean())
+
+    if pd.isna(composite):
+        top_call = "Composite call is unavailable until enough documents are loaded."
+    elif composite >= 0.35:
+        top_call = "RoW central-bank communication is net hawkish: fade aggressive duration longs and prioritize inflation resilience."
+    elif composite <= -0.35:
+        top_call = "RoW central-bank communication is net dovish: duration extension and easing-sensitive exposures are favored."
+    else:
+        top_call = "RoW central-bank communication is broadly neutral: focus on relative-value between banks and speakers."
+
+    if pd.notna(inf_bias) and inf_bias >= 0.25:
+        top_call += " Inflation emphasis remains elevated across the cohort."
+    elif pd.notna(growth_bias) and growth_bias >= 0.25:
+        top_call += " Growth downside messaging is increasingly salient."
+
+    rows = []
+    for _, row in snapshot.sort_values("tone_z_global", ascending=False).iterrows():
+        tone = float(pd.to_numeric(row.get("tone_z_global"), errors="coerce"))
+        delta = float(pd.to_numeric(row.get("delta_vs_prev"), errors="coerce"))
+        policy = float(pd.to_numeric(row.get("policy_relevance"), errors="coerce"))
+        bank = str(row.get("bank_name") or "Unknown bank")
+        focus = str(row.get("focuses") or "no clear theme")
+
+        if pd.isna(tone):
+            bias = "Unknown"
+            action = "Insufficient signal; wait for another policy-relevant speech before adjusting exposure."
+            trigger = "Next high-relevance speech from governor/deputy."
+        elif tone >= 0.85:
+            bias = "Strong hawkish"
+            action = "Maintain defensive rates stance, prefer shorter duration, and keep inflation-hedge overlays active."
+            trigger = "Fade only if the next print drops below +0.35σ."
+        elif tone >= 0.35:
+            bias = "Mild hawkish"
+            action = "Keep slight hawkish tilt; avoid adding duration until tone momentum rolls over."
+            trigger = "Reassess if two consecutive documents print neutral-or-dovish."
+        elif tone <= -0.85:
+            bias = "Strong dovish"
+            action = "Lean into duration extension and easing-sensitive risk where local macro confirms."
+            trigger = "Cut risk if tone snaps back above -0.35σ."
+        elif tone <= -0.35:
+            bias = "Mild dovish"
+            action = "Run moderate easing bias and prioritize carry over outright curve steepening."
+            trigger = "Upgrade conviction on another dovish step lower."
+        else:
+            bias = "Neutral"
+            action = "Trade relative-value rather than outright direction; conviction is low."
+            trigger = "Await break above +0.35σ or below -0.35σ."
+
+        momentum = "n.a." if pd.isna(delta) else ("accelerating" if abs(delta) >= 0.35 else "stable")
+        rows.append(
+            {
+                "bank": short_bank_name(bank),
+                "bias": bias,
+                "tone": format_z(tone),
+                "momentum": momentum,
+                "policy relevance": f"{policy:.2f}" if pd.notna(policy) else "n.a.",
+                "key focus": focus,
+                "actionable read": action,
+                "invalidation trigger": trigger,
+            }
+        )
+
+    return top_call, pd.DataFrame(rows)
+
+
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     add_global_style()
@@ -2062,6 +2135,20 @@ def main() -> None:
         st.caption("Dropped from current stance because there is no recent clean signal: " + ", ".join(short_bank_name(b) for b in missing_recent))
     st.dataframe(bank_snapshot_table(snapshot), use_container_width=True, hide_index=True, height=260)
 
+    st.subheader("Actionable playbook")
+    top_call, playbook_df = actionable_playbook(snapshot, cross)
+    st.markdown(
+        f"""
+        <div class='adfm-panel'>
+          <h4>Top-down implementation call</h4>
+          <div style='font-size:0.95rem;line-height:1.65;color:#333'>{html.escape(top_call)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if not playbook_df.empty:
+        st.dataframe(playbook_df, use_container_width=True, hide_index=True, height=320)
+
     if show_speaker_matrix:
         matrix = speaker_matrix(feat, top_n=18)
         st.plotly_chart(speaker_matrix_figure(matrix), use_container_width=True)
@@ -2122,6 +2209,21 @@ def main() -> None:
 
     with st.expander("Show cleaned document text"):
         st.write(doc["body_text"])
+
+    st.subheader("Export")
+    export_cols = [
+        "sort_date", "bank_name", "speaker", "event_type", "title", "stance", "policy_relevance",
+        "live_signal_share", "signal_strength", "tone_z_global", "tone_z_bank", "tone_z_speaker",
+        "inflation_z_global", "labor_z_global", "growth_z_global", "fs_z_global", "uncertainty_z_global", "url",
+    ]
+    export_df = current_view.sort_values(["sort_date", "signal_strength"], ascending=[False, False])[export_cols].copy()
+    export_df["sort_date"] = pd.to_datetime(export_df["sort_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    st.download_button(
+        "Download filtered dataset as CSV",
+        data=export_df.to_csv(index=False).encode("utf-8"),
+        file_name="row_central_bank_tone_filtered.csv",
+        mime="text/csv",
+    )
 
     render_diagnostics(load_log(), stats)
 
