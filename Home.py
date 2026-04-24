@@ -2,61 +2,6 @@ import streamlit as st
 
 st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
 
-st.markdown(
-    """
-    <style>
-        .hero {
-            padding: 1.35rem 1.6rem;
-            border-radius: 14px;
-            background: linear-gradient(135deg, #0b1220, #121f36 55%, #183a66);
-            color: #f3f7ff;
-            border: 1px solid rgba(160, 199, 255, 0.25);
-            margin-bottom: 1rem;
-        }
-        .hero h1 {
-            margin: 0 0 0.35rem 0;
-            font-size: 2rem;
-        }
-        .hero p {
-            margin: 0;
-            opacity: 0.92;
-            font-size: 1rem;
-        }
-        .section-card {
-            border: 1px solid rgba(120, 140, 180, 0.3);
-            border-radius: 12px;
-            padding: 0.8rem 1rem;
-            margin-bottom: 0.75rem;
-            background: rgba(16, 24, 40, 0.45);
-        }
-        .featured-card {
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            border-radius: 12px;
-            padding: 0.9rem 1rem;
-            background: rgba(15, 23, 42, 0.55);
-            margin-bottom: 0.75rem;
-        }
-        .featured-card p {
-            margin: 0.35rem 0 0 0;
-            font-size: 0.92rem;
-            opacity: 0.94;
-        }
-        .status-chip {
-            display: inline-block;
-            font-size: 0.72rem;
-            padding: 0.15rem 0.45rem;
-            border-radius: 999px;
-            margin-left: 0.35rem;
-            background: rgba(251, 191, 36, 0.12);
-            border: 1px solid rgba(251, 191, 36, 0.4);
-            color: #fbbf24;
-            vertical-align: middle;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 TOOL_LIBRARY = {
     "Priority Dashboards": [
         {
@@ -218,82 +163,45 @@ TOOL_LIBRARY = {
     ],
 }
 
-FEATURED_UPDATES = [
-    {
-        "title": "Fed Speeches Tone Underwriter",
-        "description": "Institutional nowcasting for Fed rhetoric. Prioritize this module ahead of high-impact macro events and FOMC windows.",
-        "page": "pages/15_Fed_Speeches_Tone_Underwriter.py",
-    },
-    {
-        "title": "RoW Central Bank Tone Underwriter",
-        "description": "Cross-check global policy impulse to capture divergence risk across ECB, BOE, BOJ, and broader G10 messaging.",
-        "page": "pages/16_RoW_Central_Bank_Tone_Underwriter.py",
-    },
-    {
-        "title": "Market Memory + Seasonality Stack",
-        "description": "Pair analog-year pattern matching with monthly return tendencies to tighten scenario framing and timing decisions.",
-        "page": "pages/17_Market_Memory_Explorer.py",
-    },
-]
+
+def show_tool(tool: dict) -> None:
+    status = tool["status"]
+    st.write(f"**{tool['name']}** ({status})")
+    st.caption(tool["description"])
+    if tool.get("page"):
+        st.page_link(tool["page"], label=f"Open {tool['name']}")
+
 
 all_tools = [tool for group in TOOL_LIBRARY.values() for tool in group]
 live_tools = [tool for tool in all_tools if tool["status"] == "Live"]
+planned_tools = [tool for tool in all_tools if tool["status"] == "Planned"]
 
+st.title("AD Fund Management LP Analytics Suite")
+st.write("Use this page as a simple launch point for the full dashboard library.")
+
+m1, m2, m3 = st.columns(3)
+m1.metric("Live Dashboards", len(live_tools))
+m2.metric("Planned Tools", len(planned_tools))
+m3.metric("Total Tools", len(all_tools))
+
+st.subheader("Recommended Flow")
 st.markdown(
     """
-    <div class='hero'>
-        <h1>AD Fund Management LP · Analytics Suite</h1>
-        <p>Professional decision-support platform for market structure, macro regime, liquidity, and policy-tone intelligence.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
+1. Start with **Priority Dashboards** for daily context.
+2. Move to **Market & Macro Monitoring** for confirmation.
+3. Use **Supporting Research Tools** for deeper validation.
+"""
 )
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Live Dashboards", len(live_tools))
-m2.metric("Planned Modules", len(all_tools) - len(live_tools))
-m3.metric("Priority Dashboards", len(TOOL_LIBRARY["Priority Dashboards"]))
-m4.metric("Research Modules", len(TOOL_LIBRARY["Supporting Research Tools"]))
-
-st.markdown("---")
-
-st.subheader("What\'s New / Featured Intelligence")
-feat_cols = st.columns(3)
-for i, item in enumerate(FEATURED_UPDATES):
-    with feat_cols[i % len(feat_cols)]:
-        st.markdown(
-            f"""
-            <div class='featured-card'>
-                <strong>{item['title']}</strong>
-                <p>{item['description']}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.page_link(item["page"], label=f"Open {item['title']}", icon="🧭")
-
-st.markdown("---")
-
-st.subheader("Quick Launch")
-quick_cols = st.columns(3)
+st.subheader("Quick Launch: Priority Dashboards")
+quick_cols = st.columns(2)
 for i, tool in enumerate(TOOL_LIBRARY["Priority Dashboards"]):
     with quick_cols[i % len(quick_cols)]:
-        st.page_link(tool["page"], label=tool["name"], icon="📌")
-
-st.markdown("---")
-
-st.subheader("Decision Workflow")
-wf1, wf2, wf3, wf4 = st.columns(4)
-wf1.info("**1) Set regime context**\n\nStart with stress, liquidity, and cross-asset dashboards.")
-wf2.info("**2) Read policy signal**\n\nRun Fed + RoW tone underwriters to identify policy drift and message asymmetry.")
-wf3.info("**3) Validate participation**\n\nConfirm breadth, factor leadership, and flows before acting.")
-wf4.info("**4) Pressure-test ideas**\n\nUse scanners, analog studies, and seasonality to challenge conviction.")
-
-st.markdown("---")
+        st.page_link(tool["page"], label=tool["name"])
 
 st.subheader("Tool Library")
-search_term = st.text_input("Filter tools by name or description", placeholder="e.g., liquidity, volatility, seasonality")
-show_planned = st.toggle("Show planned tools", value=True)
+search_term = st.text_input("Find tools by name or description")
+show_planned = st.checkbox("Show planned tools", value=True)
 needle = search_term.strip().lower()
 
 for category, tools in TOOL_LIBRARY.items():
@@ -308,29 +216,8 @@ for category, tools in TOOL_LIBRARY.items():
 
     with st.expander(f"{category} ({len(filtered)})", expanded=True):
         if not filtered:
-            st.caption("No tools match your current filter.")
+            st.write("No tools match the current filter.")
             continue
-
         for tool in filtered:
-            badge = ""
-            if tool["status"] != "Live":
-                badge = "<span class='status-chip'>PLANNED</span>"
-
-            st.markdown(
-                f"""
-                <div class='section-card'>
-                    <strong>{tool['name']}</strong>{badge}<br>
-                    <span>{tool['description']}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            if tool.get("page"):
-                st.page_link(tool["page"], label=f"Open {tool['name']}", icon="➡️")
-
-st.markdown("---")
-st.success(
-    "Built for institutional speed and repeatability: frame regime, validate policy tone, "
-    "confirm participation, and execute with disciplined risk context."
-)
+            show_tool(tool)
+            st.divider()
