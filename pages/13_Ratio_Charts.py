@@ -196,10 +196,12 @@ with st.sidebar:
         show_signal_strip = st.checkbox("Show signal strip", value=True)
         rsi_window = st.slider("RSI window", min_value=5, max_value=30, value=DEFAULT_RSI_WINDOW, step=1)
         show_rsi = st.checkbox("Show RSI pane", value=True)
+
         selected_mas = {}
         st.caption("Moving averages")
         for ma_len, default_value in MA_DEFAULTS.items():
             selected_mas[ma_len] = st.checkbox(f"{ma_len} DMA", value=default_value)
+
         min_basket_coverage = st.slider(
             "Minimum basket coverage",
             min_value=0.30,
@@ -255,6 +257,7 @@ def parse_custom_ratio_text(text: str) -> List[RatioSpec]:
 
     raw_parts = re.split(r"[\n,;]+", text)
     specs: List[RatioSpec] = []
+
     for part in raw_parts:
         part = part.strip().upper()
         if not part:
@@ -268,7 +271,9 @@ def parse_custom_ratio_text(text: str) -> List[RatioSpec]:
         if len(pieces) < 2:
             continue
 
-        a, b = clean_ticker(pieces[0]), clean_ticker(pieces[1])
+        a = clean_ticker(pieces[0])
+        b = clean_ticker(pieces[1])
+
         if a and b and a != b:
             specs.append(RatioSpec(a, b, f"{a} / {b}", "Custom Ratios"))
 
@@ -279,6 +284,7 @@ def parse_custom_ratio_text(text: str) -> List[RatioSpec]:
         if key not in seen:
             seen.add(key)
             deduped.append(spec)
+
     return deduped
 
 
@@ -291,12 +297,15 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
     def _extract_close(block: pd.DataFrame) -> Optional[pd.Series]:
         if block is None or block.empty:
             return None
+
         for field in ("Close", "Adj Close"):
             if field in block.columns:
                 return pd.to_numeric(block[field], errors="coerce")
+
         numeric = block.select_dtypes(include=[np.number])
         if numeric.empty:
             return None
+
         return pd.to_numeric(numeric.iloc[:, 0], errors="coerce")
 
     def _normalize(raw: pd.DataFrame, requested: List[str]) -> pd.DataFrame:
@@ -334,15 +343,12 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
                                 break
                         except Exception:
                             continue
+
         else:
             if len(requested) == 1:
                 close = _extract_close(raw)
                 if close is not None:
                     out[requested[0]] = close
-            elif "Close" in raw.columns:
-                for ticker in requested:
-                    if ticker in raw.columns:
-                        out[ticker] = pd.to_numeric(raw[ticker], errors="coerce")
 
         if out.empty:
             return pd.DataFrame()
@@ -352,9 +358,11 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
         out = out[~out.index.duplicated(keep="last")]
         out = out.ffill()
         out = out.dropna(how="all")
+
         return out
 
     frames = []
+
     for batch in chunked(ticker_list, 30):
         try:
             raw = yf.download(
@@ -394,6 +402,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
     out = pd.concat(frames, axis=1)
     out = out.loc[:, ~out.columns.duplicated()]
     out = out.sort_index().ffill().dropna(how="all")
+
     return out
 
 
@@ -401,9 +410,11 @@ def first_valid_on_or_after(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Tim
     s = series.dropna()
     if s.empty:
         return pd.NaT, np.nan
+
     sub = s.loc[ts:]
     if not sub.empty:
         return sub.index[0], float(sub.iloc[0])
+
     return s.index[-1], float(s.iloc[-1])
 
 
@@ -411,9 +422,11 @@ def last_valid_on_or_before(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Tim
     s = series.dropna()
     if s.empty:
         return pd.NaT, np.nan
+
     sub = s.loc[:ts]
     if not sub.empty:
         return sub.index[-1], float(sub.iloc[-1])
+
     return s.index[0], float(s.iloc[0])
 
 
@@ -421,9 +434,12 @@ def rebase_series(series: pd.Series, base_date: pd.Timestamp, base: float = 100.
     s = series.replace([np.inf, -np.inf], np.nan).dropna()
     if s.empty:
         return pd.Series(dtype=float)
+
     base_ts, base_val = last_valid_on_or_before(s, base_date)
+
     if pd.isna(base_ts) or not np.isfinite(base_val) or base_val == 0:
         return pd.Series(dtype=float)
+
     return s / base_val * base
 
 
@@ -443,20 +459,27 @@ def normalize_prices_to_100(prices: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(index=prices.index)
 
     out = pd.DataFrame(index=prices.index)
+
     for col in prices.columns:
         s = pd.to_numeric(prices[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
         first = s.first_valid_index()
+
         if first is None:
             continue
+
         base_val = s.loc[first]
+
         if not np.isfinite(base_val) or base_val == 0:
             continue
+
         out[col] = s / base_val * 100.0
+
     return out
 
 
 def equal_weight_basket(prices: pd.DataFrame, min_coverage: float = 0.60) -> pd.Series:
     normalized = normalize_prices_to_100(prices)
+
     if normalized.empty:
         return pd.Series(dtype=float)
 
@@ -464,6 +487,7 @@ def equal_weight_basket(prices: pd.DataFrame, min_coverage: float = 0.60) -> pd.
     counts = normalized.notna().sum(axis=1)
     basket = normalized.mean(axis=1, skipna=True)
     basket = basket.where(counts >= required)
+
     return basket.dropna()
 
 
@@ -480,50 +504,69 @@ def compute_basket_ratio(
 
 def rsi_wilder(series: pd.Series, window: int = 14) -> pd.Series:
     s = series.replace([np.inf, -np.inf], np.nan).dropna()
+
     if s.empty:
         return pd.Series(dtype=float)
 
     delta = s.diff()
     up = delta.clip(lower=0)
     down = -delta.clip(upper=0)
+
     ma_up = up.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
     ma_down = down.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+
     rs = ma_up / ma_down.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
 
 
 def period_change(series: pd.Series, periods: int) -> float:
     s = series.dropna()
+
     if len(s) <= periods:
         return np.nan
+
     prev = s.iloc[-periods - 1]
     latest = s.iloc[-1]
+
     if not np.isfinite(prev) or prev == 0:
         return np.nan
+
     return latest / prev - 1.0
 
 
 def ytd_change(series: pd.Series) -> float:
     s = series.dropna()
+
     if s.empty:
         return np.nan
+
     latest_date = s.index[-1]
     year_start = pd.Timestamp(datetime(latest_date.year, 1, 1))
+
     _, base_val = first_valid_on_or_after(s, year_start)
     latest = s.iloc[-1]
+
     if not np.isfinite(base_val) or base_val == 0:
         return np.nan
+
     return latest / base_val - 1.0
 
 
 def days_since_window_extreme(series: pd.Series, window: int, kind: str) -> float:
     s = series.dropna()
+
     if s.empty:
         return np.nan
+
     view = s.tail(window)
+
     if view.empty:
         return np.nan
+
     extreme_date = view.idxmax() if kind == "high" else view.idxmin()
+
     return float(len(s.loc[extreme_date:]) - 1)
 
 
@@ -551,6 +594,7 @@ def make_display_title(spec: RatioSpec) -> str:
 
 def ratio_signal_line(ratio: pd.Series, rsi_len: int, stale_days: int = DEFAULT_STALE_DAYS) -> str:
     s = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+
     if s.empty:
         return "No usable data."
 
@@ -591,6 +635,26 @@ def ratio_signal_line(ratio: pd.Series, rsi_len: int, stale_days: int = DEFAULT_
     return " | ".join(parts)
 
 
+def make_empty_fig(message: str = "No data") -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font={"size": 14},
+    )
+    fig.update_layout(
+        height=280,
+        margin={"l": 40, "r": 20, "t": 40, "b": 30},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+    )
+    return fig
+
+
 def make_fig(
     ratio: pd.Series,
     title: str,
@@ -602,12 +666,10 @@ def make_fig(
     ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
 
     if ratio.empty:
-        fig = go.Figure()
-        fig.add_annotation(text="No data", x=0.5, y=0.5, showarrow=False)
-        fig.update_layout(height=280, template="plotly_white")
-        return fig
+        return make_empty_fig("No data")
 
     ratio_view = ratio.loc[display_start:].copy()
+
     if ratio_view.empty:
         ratio_view = ratio.copy()
 
@@ -631,7 +693,7 @@ def make_fig(
             y=ratio_view.values,
             mode="lines",
             name="Ratio",
-            line=dict(color="black", width=2.0),
+            line={"color": "black", "width": 2.0},
             hovertemplate="%{y:.2f}<extra>Ratio</extra>",
         ),
         row=1,
@@ -639,21 +701,27 @@ def make_fig(
     )
 
     visible_y = [ratio_view]
+
     for ma_len, enabled in sorted(ma_settings.items()):
         if not enabled:
             continue
-        ma = ratio.rolling(ma_len, min_periods=max(2, min(ma_len, int(ma_len * 0.40)))).mean()
+
+        min_obs = max(2, min(ma_len, int(ma_len * 0.40)))
+        ma = ratio.rolling(ma_len, min_periods=min_obs).mean()
         ma_view = ma.loc[x_start:x_end].dropna()
+
         if ma_view.empty:
             continue
+
         visible_y.append(ma_view)
+
         fig.add_trace(
             go.Scatter(
                 x=ma_view.index,
                 y=ma_view.values,
                 mode="lines",
                 name=f"{ma_len}D",
-                line=dict(color=MA_COLORS.get(ma_len, "#555555"), width=1.2),
+                line={"color": MA_COLORS.get(ma_len, "#555555"), "width": 1.2},
                 hovertemplate=f"%{{y:.2f}}<extra>{ma_len}D</extra>",
             ),
             row=1,
@@ -662,13 +730,14 @@ def make_fig(
 
     latest_x = ratio_view.index[-1]
     latest_y = ratio_view.iloc[-1]
+
     fig.add_trace(
         go.Scatter(
             x=[latest_x],
             y=[latest_y],
             mode="markers",
             name="Last",
-            marker=dict(color="black", size=6),
+            marker={"color": "black", "size": 6},
             showlegend=False,
             hovertemplate="%{y:.2f}<extra>Last</extra>",
         ),
@@ -677,42 +746,99 @@ def make_fig(
     )
 
     y_all = pd.concat(visible_y).replace([np.inf, -np.inf], np.nan).dropna()
+
     if not y_all.empty:
-        ymin, ymax = float(y_all.min()), float(y_all.max())
+        ymin = float(y_all.min())
+        ymax = float(y_all.max())
         pad = (ymax - ymin) * 0.06 if ymax != ymin else max(abs(ymin) * 0.05, 1.0)
         fig.update_yaxes(range=[ymin - pad, ymax + pad], row=1, col=1)
 
     if show_rsi_flag:
         rsi = rsi_wilder(ratio, window=rsi_len)
         rsi_view = rsi.loc[x_start:x_end].dropna()
-        fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.08, line_width=0, row=2, col=1)
+
+        fig.add_shape(
+            type="rect",
+            xref="x",
+            yref="y2",
+            x0=x_start,
+            x1=x_end,
+            y0=30,
+            y1=70,
+            fillcolor="gray",
+            opacity=0.08,
+            line_width=0,
+        )
+
         fig.add_trace(
             go.Scatter(
                 x=rsi_view.index,
                 y=rsi_view.values,
                 mode="lines",
                 name="RSI",
-                line=dict(color="black", width=1.1),
+                line={"color": "black", "width": 1.1},
                 showlegend=False,
                 hovertemplate="%{y:.1f}<extra>RSI</extra>",
             ),
             row=2,
             col=1,
         )
-        fig.add_hline(y=70, line_dash="dot", line_width=1, line_color="#b22222", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_width=1, line_color="#2e8b57", row=2, col=1)
+
+        fig.add_trace(
+            go.Scatter(
+                x=[x_start, x_end],
+                y=[70, 70],
+                mode="lines",
+                name="RSI 70",
+                line={"color": "#b22222", "width": 1, "dash": "dot"},
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[x_start, x_end],
+                y=[30, 30],
+                mode="lines",
+                name="RSI 30",
+                line={"color": "#2e8b57", "width": 1, "dash": "dot"},
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+
         fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
 
     fig.update_layout(
-        title=dict(text=title, x=0.0, xanchor="left", font=dict(size=15)),
+        title_text=title,
         height=540 if show_rsi_flag else 380,
-        margin=dict(left=40, right=22, top=54, bottom=34),
-        template="plotly_white",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0, font=dict(size=10)),
+        margin={"l": 40, "r": 22, "t": 54, "b": 34},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        hovermode="x",
+        showlegend=True,
     )
-    fig.update_xaxes(range=[x_start, x_end], showgrid=True, gridcolor="rgba(0,0,0,0.08)")
-    fig.update_yaxes(title_text="Ratio Index", showgrid=True, gridcolor="rgba(0,0,0,0.08)", row=1, col=1)
+
+    fig.update_xaxes(
+        range=[x_start, x_end],
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.08)",
+        zeroline=False,
+    )
+
+    fig.update_yaxes(
+        title_text="Ratio Index",
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.08)",
+        zeroline=False,
+        row=1,
+        col=1,
+    )
 
     return fig
 
@@ -728,6 +854,7 @@ def render_ratio_block(
     note: str = "",
 ):
     clean = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+
     if clean.empty:
         st.warning(f"No usable data for {title}.")
         return
@@ -735,15 +862,20 @@ def render_ratio_block(
     if note:
         st.caption(note)
 
-    fig = make_fig(
-        ratio=clean,
-        title=title,
-        display_start=display_start,
-        ma_settings=ma_settings,
-        show_rsi_flag=show_rsi_flag,
-        rsi_len=rsi_len,
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    try:
+        fig = make_fig(
+            ratio=clean,
+            title=title,
+            display_start=display_start,
+            ma_settings=ma_settings,
+            show_rsi_flag=show_rsi_flag,
+            rsi_len=rsi_len,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.warning(f"Chart rendering failed for {title}. Data loaded, but Plotly rejected the chart configuration.")
+        st.caption(f"Error: {type(e).__name__}: {e}")
 
     if signal_strip:
         st.caption(ratio_signal_line(clean, rsi_len=rsi_len))
@@ -753,6 +885,7 @@ def render_ratio_block(
 
 # ============================== Selected universe =========================
 custom_specs = parse_custom_ratio_text(custom_ratio_text)
+
 selected_presets: List[RatioSpec] = []
 for group in selected_groups:
     selected_presets.extend(PRESET_GROUPS.get(group, []))
@@ -762,7 +895,10 @@ static_tickers = unique_keep_order(
     + DEFENSIVES
     + [ticker for spec in selected_presets for ticker in (spec.ticker_1, spec.ticker_2)]
 )
-custom_tickers = unique_keep_order([ticker for spec in custom_specs for ticker in (spec.ticker_1, spec.ticker_2)])
+
+custom_tickers = unique_keep_order(
+    [ticker for spec in custom_specs for ticker in (spec.ticker_1, spec.ticker_2)]
+)
 
 # ============================== Fetch static data =========================
 with st.spinner("Downloading price history..."):
@@ -806,6 +942,7 @@ if not selected_presets:
 else:
     for group in selected_groups:
         group_specs = [spec for spec in selected_presets if spec.group == group]
+
         if not group_specs:
             continue
 
@@ -813,7 +950,9 @@ else:
         st.caption(GROUP_DESCRIPTIONS.get(group, ""))
 
         for spec in group_specs:
-            a, b = spec.ticker_1, spec.ticker_2
+            a = spec.ticker_1
+            b = spec.ticker_2
+
             if a in closes_static.columns and b in closes_static.columns:
                 ratio = compute_price_ratio(
                     closes_static[a],
@@ -821,6 +960,7 @@ else:
                     base_date=disp_start,
                     base=100.0,
                 )
+
                 if ratio.empty:
                     failed_pairs.append(f"{a}/{b}")
                     continue
@@ -835,6 +975,7 @@ else:
                     show_signal_strip,
                     note=spec.note,
                 )
+
             else:
                 failed_pairs.append(f"{a}/{b}")
 
@@ -853,8 +994,11 @@ else:
         st.warning("No custom ratio data available.")
     else:
         custom_failed = []
+
         for spec in custom_specs:
-            a, b = spec.ticker_1, spec.ticker_2
+            a = spec.ticker_1
+            b = spec.ticker_2
+
             if a not in closes_custom.columns or b not in closes_custom.columns:
                 custom_failed.append(f"{a}/{b}")
                 continue
