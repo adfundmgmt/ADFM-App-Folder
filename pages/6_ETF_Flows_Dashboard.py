@@ -70,9 +70,9 @@ plt.rcParams["font.size"] = 9
 # =========================================================
 TZ = pytz.timezone("America/New_York")
 
-PASTEL_GREEN = "#b7e4c7"
-PASTEL_RED = "#f4a6a6"
-PASTEL_GREY = "#d1d5db"
+PASTEL_GREEN = "#74c69d"
+PASTEL_RED = "#ef6f6c"
+PASTEL_GREY = "#9ca3af"
 AXIS_GREY = "#6b7280"
 TEXT_DARK = "#1f2937"
 
