@@ -62,6 +62,31 @@ TOOL_GROUPS = {
     ],
 }
 
+TOOL_DESCRIPTIONS = {
+    "Weekly Cross - Asset Compass": "Summarizes cross-asset moves to classify the current market regime.",
+    "Market Stress Composite": "Tracks a blended stress score across volatility, credit, and funding conditions.",
+    "Liquidity Tracker": "Monitors major liquidity drivers like Fed balance sheet, RRP, and TGA flows.",
+    "VIX Spike Deep Dive": "Breaks down volatility spikes to show trigger, magnitude, and persistence.",
+    "Consensus Regime Score": "Combines model signals into a single read on risk-on versus risk-off conditions.",
+    "ADFM Public Equities Baskets": "Compares ADFM equity sleeves to spot leadership, trend strength, and dispersion.",
+    "Sector Breadth and Rotation": "Measures participation and rotation to identify where equity strength is broadening or narrowing.",
+    "Factor Momentum Leadership": "Ranks factor momentum to highlight which styles are leading or fading.",
+    "Breakout Scanner": "Finds names and groups breaking above key technical levels with confirmation.",
+    "Technical Chart Explorer": "Explores multi-timeframe chart structure, trend, and momentum in one view.",
+    "Ratio Charts": "Uses relative-strength ratios to compare assets, sectors, and factors versus benchmarks.",
+    "Market Memory Explorer": "Surfaces historical analogs to contextualize current market behavior.",
+    "Volume Based Sentiment Indicator": "Reads conviction and sentiment using volume trends and participation signals.",
+    "Unusual Options Flows": "Flags outsized options activity to reveal potential positioning and intent.",
+    "ETF Flows Dashboard": "Tracks ETF creations and redemptions to monitor real-time allocation shifts.",
+    "Cross Asset Volatility Surface": "Maps implied volatility across assets and tenors to locate stress pockets.",
+    "Hedge Timer": "Provides timing cues for adding, reducing, or rolling portfolio hedges.",
+    "Fed Speeches Tone Underwriter": "Scores Federal Reserve communication tone for policy bias and risk impact.",
+    "RoW Central Bank Tone Underwriter": "Analyzes non-U.S. central bank tone to gauge global policy direction.",
+    "Monthly Seasonality Explorer": "Shows recurring monthly return and volatility patterns by asset and sector.",
+    "Home Value to Rent Ratio": "Tracks housing valuation pressure through the home price-to-rent relationship.",
+    "Alert Engine": "Centralizes configurable alerts across regime, flow, volatility, and technical signals.",
+}
+
 
 st.markdown(
     """
@@ -201,8 +226,7 @@ st.markdown(
         <div class="eyebrow">Analytics Tools</div>
         <div class="title">AD Fund Management</div>
         <div class="subtitle">
-            A clean command center for top-down market reads. Start with regime,
-            confirm liquidity and stress, then move into flows, leadership, and tactical tools.
+            Home dashboard for quickly launching each tool and understanding what it does before you open it.
         </div>
     </div>
     """,
@@ -240,7 +264,10 @@ st.markdown(
 map_cols = st.columns(2)
 for idx, (group_name, tool_names) in enumerate(TOOL_GROUPS.items()):
     with map_cols[idx % 2]:
-        tools_html = "".join(f"<li>{tool}</li>" for tool in tool_names)
+        tools_html = "".join(
+            f"<li><strong>{tool}:</strong> {TOOL_DESCRIPTIONS.get(tool, 'Description coming soon.')}</li>"
+            for tool in tool_names
+        )
         st.markdown(
             f"""
             <div class="panel">
