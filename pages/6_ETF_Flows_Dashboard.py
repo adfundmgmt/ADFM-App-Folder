@@ -1,7 +1,8 @@
 import time
 from datetime import datetime, date
-from typing import Dict, Tuple, List
+from functools import wraps
 from io import BytesIO
+from typing import Dict, Tuple, List, Sequence
 
 import numpy as np
 import pandas as pd
@@ -11,47 +12,71 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
+
 # =========================================================
 # PAGE SETUP
 # =========================================================
-st.set_page_config(page_title="ETF Net Flows", layout="wide")
+st.set_page_config(page_title="ETF Flow Pressure Proxy", layout="wide")
 
 CUSTOM_CSS = """
 <style>
     .block-container {
         padding-top: 0.85rem;
-        padding-bottom: 1.6rem;
+        padding-bottom: 1.65rem;
         max-width: 1700px;
     }
+
     h1, h2, h3 {
         letter-spacing: 0.1px;
         font-weight: 650;
         margin-bottom: 0.35rem;
     }
+
     div[data-testid="stMetric"] {
         background: #fafafa;
         border: 1px solid #ececec;
         border-radius: 12px;
         padding: 10px 12px;
     }
+
     .small-note {
         color: #6b7280;
         font-size: 0.84rem;
+        line-height: 1.35;
+    }
+
+    .section-card {
+        background: #ffffff;
+        border: 1px solid #ececec;
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-top: 8px;
+        margin-bottom: 10px;
+    }
+
+    .muted {
+        color: #6b7280;
     }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# Slightly crisper global Matplotlib defaults
 plt.rcParams["figure.dpi"] = 160
 plt.rcParams["savefig.dpi"] = 260
 plt.rcParams["text.antialiased"] = True
 plt.rcParams["font.size"] = 9
 
+
 # =========================================================
 # GLOBALS
 # =========================================================
-TZ = pytz.timezone("US/Eastern")
+TZ = pytz.timezone("America/New_York")
+
+PASTEL_GREEN = "#b7e4c7"
+PASTEL_RED = "#f4a6a6"
+PASTEL_GREY = "#d1d5db"
+AXIS_GREY = "#6b7280"
+TEXT_DARK = "#1f2937"
 
 
 # =========================================================
@@ -61,11 +86,22 @@ def now_et() -> datetime:
     return datetime.now(TZ)
 
 
-def as_naive_ts(dt: datetime) -> pd.Timestamp:
-    ts = pd.Timestamp(dt)
-    if ts.tzinfo is not None:
-        return ts.tz_convert("UTC").tz_localize(None)
-    return pd.Timestamp(ts.replace(tzinfo=None))
+def floor_time_to_bucket(dt: datetime, minutes: int = 15) -> datetime:
+    minute = (dt.minute // minutes) * minutes
+    return dt.replace(minute=minute, second=0, microsecond=0)
+
+
+def strip_tz_from_index(idx: pd.Index) -> pd.DatetimeIndex:
+    out = pd.to_datetime(idx, errors="coerce")
+    try:
+        if out.tz is not None:
+            out = out.tz_convert(None)
+    except Exception:
+        try:
+            out = out.tz_localize(None)
+        except Exception:
+            pass
+    return pd.DatetimeIndex(out)
 
 
 def ytd_days(as_of: datetime) -> int:
@@ -73,9 +109,9 @@ def ytd_days(as_of: datetime) -> int:
     return max((as_of - start_ytd).days, 1)
 
 
-def calc_start_date(days: int, as_of: datetime) -> date:
-    padding = 21
-    return (as_of - pd.Timedelta(days=days + padding)).date()
+def calc_start_date(days: int, as_of: date) -> date:
+    padding = 30
+    return (pd.Timestamp(as_of) - pd.Timedelta(days=int(days) + padding)).date()
 
 
 def last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
@@ -85,49 +121,47 @@ def last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
     return ts - pd.Timedelta(days=int(days_back))
 
 
+def monday_of_week(ts: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(ts).normalize()
+    return ts - pd.Timedelta(days=int(ts.weekday()))
+
+
 def week_start_monday(week_ending_friday: pd.Timestamp) -> pd.Timestamp:
     return (pd.Timestamp(week_ending_friday).normalize() - pd.tseries.offsets.BDay(4)).normalize()
+
+
+def business_day_gap(last_data_date: date, as_of: date) -> int:
+    if last_data_date is None or pd.isna(last_data_date):
+        return 999
+
+    last_ts = pd.Timestamp(last_data_date).normalize()
+    as_of_ts = pd.Timestamp(as_of).normalize()
+
+    if last_ts >= as_of_ts:
+        return 0
+
+    start = last_ts + pd.tseries.offsets.BDay(1)
+    rng = pd.bdate_range(start=start, end=as_of_ts)
+    return int(len(rng))
 
 
 # =========================================================
 # RUNTIME
 # =========================================================
-as_of_dt = now_et()
-as_of_date = as_of_dt.date()
-as_of_dt_naive = as_naive_ts(as_of_dt)
-as_of_ts = pd.Timestamp(as_of_dt_naive).normalize()
+as_of_dt_et = now_et()
+as_of_bucket = floor_time_to_bucket(as_of_dt_et, minutes=15)
+as_of_bucket_key = as_of_bucket.strftime("%Y-%m-%d %H:%M %Z")
+as_of_date = as_of_dt_et.date()
+as_of_ts = pd.Timestamp(as_of_date).normalize()
 
 lookback_dict = {
     "1 Month": 30,
     "3 Months": 90,
     "6 Months": 180,
     "12 Months": 365,
-    "YTD": ytd_days(as_of_dt),
+    "YTD": ytd_days(as_of_dt_et),
 }
 
-# =========================================================
-# SIDEBAR
-# =========================================================
-with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** ETF flow-pressure monitor using a stable price-volume proxy workflow.
-
-        **What this tab shows**
-        - Horizontal ranking bars for the selected lookback.
-        - Full-table coverage with lookback total, latest week, and week-to-date values.
-        - Transparent handling of missing rows to preserve coverage context.
-
-        **Data source**
-        - Yahoo Finance OHLCV data used as a directional flow-pressure proxy.
-        """
-    )
-    st.markdown("---")
-    period_label = st.radio("Lookback Window", list(lookback_dict.keys()), index=0)
-    st.caption(f"As of: {as_of_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-
-period_days = int(lookback_dict[period_label])
 
 # =========================================================
 # ETF COVERAGE
@@ -217,7 +251,55 @@ etf_info = {
     "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
     "ETH": ("Ethereum", "Ethereum proxy ticker as originally listed"),
 }
+
 etf_tickers = tuple(etf_info.keys())
+
+
+US_EQUITY_TICKERS = {
+    "VTI", "VUG", "VTV", "MTUM", "QUAL", "USMV", "SCHD",
+    "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
+    "SMH", "IGV", "SKYY",
+}
+
+INTERNATIONAL_EQUITY_TICKERS = {
+    "VT", "ACWI", "VEA", "VWO", "EXUS",
+    "EWG", "EWQ", "EWU", "EWI", "EWP", "EWL", "EWN", "EWD", "EWO", "EWK",
+    "EWJ", "EWY", "ASHR", "FXI", "EWT", "INDA", "EWS", "EWA", "EWH", "EPHE",
+    "EWM", "IDX", "THD", "VNM", "EWZ", "EWW", "EWC", "EPU", "ECH", "ARGT", "GXG",
+}
+
+RATES_CREDIT_TICKERS = {
+    "SGOV", "SHY", "IEF", "TLT", "TIP", "LQD", "VCIT", "HYG", "BKLN", "EMB", "BND",
+}
+
+COMMODITY_TICKERS = {
+    "GLD", "SLV", "CPER", "USO", "DBC", "PDBC", "URA",
+}
+
+FX_TICKERS = {
+    "UUP", "FXE", "FXY", "FXF", "CEW",
+}
+
+CRYPTO_VOL_TICKERS = {
+    "IBIT", "ETH", "VXX",
+}
+
+
+def infer_asset_class(ticker: str) -> str:
+    if ticker in US_EQUITY_TICKERS:
+        return "US Equity"
+    if ticker in INTERNATIONAL_EQUITY_TICKERS:
+        return "International Equity"
+    if ticker in RATES_CREDIT_TICKERS:
+        return "Rates and Credit"
+    if ticker in COMMODITY_TICKERS:
+        return "Commodities"
+    if ticker in FX_TICKERS:
+        return "FX"
+    if ticker in CRYPTO_VOL_TICKERS:
+        return "Crypto and Volatility"
+    return "Other"
+
 
 # =========================================================
 # FORMATTERS
@@ -227,15 +309,19 @@ def fmt_compact_cur(x) -> str:
         return ""
     x = float(x)
     ax = abs(x)
+
+    sign = "-" if x < 0 else ""
+    ax = abs(x)
+
     if ax >= 1e12:
-        return f"${x / 1e12:,.2f}T"
+        return f"{sign}${ax / 1e12:,.2f}T"
     if ax >= 1e9:
-        return f"${x / 1e9:,.2f}B"
+        return f"{sign}${ax / 1e9:,.2f}B"
     if ax >= 1e6:
-        return f"${x / 1e6:,.2f}M"
+        return f"{sign}${ax / 1e6:,.2f}M"
     if ax >= 1e3:
-        return f"${x / 1e3:,.0f}K"
-    return f"${x:,.0f}"
+        return f"{sign}${ax / 1e3:,.0f}K"
+    return f"{sign}${ax:,.0f}"
 
 
 def fmt_pct(x) -> str:
@@ -256,15 +342,22 @@ def fmt_score(x) -> str:
     return f"{float(x):.4f}"
 
 
+def fmt_int(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"{int(x):,}"
+
+
 def axis_fmt(x, _pos=None) -> str:
     return fmt_compact_cur(x)
 
 
 # =========================================================
-# RETRY
+# RETRY AND DOWNLOAD HELPERS
 # =========================================================
-def retry(n=3, delay=0.8):
+def retry(n: int = 3, delay: float = 0.8):
     def deco(fn):
+        @wraps(fn)
         def wrap(*args, **kwargs):
             last = None
             for i in range(n):
@@ -279,9 +372,10 @@ def retry(n=3, delay=0.8):
     return deco
 
 
-# =========================================================
-# DATA HELPERS
-# =========================================================
+def chunked(seq: Sequence[str], size: int) -> List[Tuple[str, ...]]:
+    return [tuple(seq[i:i + size]) for i in range(0, len(seq), size)]
+
+
 def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
@@ -297,55 +391,104 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = np.nan
         out[c] = pd.to_numeric(out[c], errors="coerce")
 
-    idx = pd.to_datetime(out.index, errors="coerce")
-    try:
-        idx = idx.tz_localize(None)
-    except Exception:
-        pass
-    out.index = idx
+    out.index = strip_tz_from_index(out.index)
+    out = out[~out.index.isna()].dropna(subset=["Close"]).sort_index()
 
-    out = out.dropna(subset=["Close"]).sort_index()
-    return out
+    return out[needed]
 
 
-@retry()
-@st.cache_data(show_spinner=False, ttl=300)
+def extract_ticker_frame(raw: pd.DataFrame, ticker: str, batch_len: int) -> pd.DataFrame:
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        lvl0 = raw.columns.get_level_values(0)
+        lvl1 = raw.columns.get_level_values(1)
+
+        if ticker in lvl0:
+            return raw[ticker].copy()
+
+        if ticker in lvl1:
+            return raw.xs(ticker, axis=1, level=1).copy()
+
+        return pd.DataFrame()
+
+    if batch_len == 1:
+        return raw.copy()
+
+    return pd.DataFrame()
+
+
+def safe_yf_download(
+    tickers: Tuple[str, ...],
+    start_date: date,
+    end_date: date,
+    threads: bool = True,
+    attempts: int = 3,
+    delay: float = 0.9,
+) -> pd.DataFrame:
+    last_error = None
+
+    for i in range(attempts):
+        try:
+            raw = yf.download(
+                tickers=list(tickers),
+                start=start_date,
+                end=end_date,
+                interval="1d",
+                auto_adjust=False,
+                group_by="ticker",
+                threads=threads,
+                progress=False,
+            )
+
+            if raw is not None and not raw.empty:
+                return raw
+
+        except Exception as e:
+            last_error = e
+
+        time.sleep(delay * (i + 1))
+
+    if last_error is not None:
+        return pd.DataFrame()
+
+    return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False, ttl=900)
 def fetch_prices(
     tickers: Tuple[str, ...],
     start_date: date,
-    as_of_date: date,
+    end_date: date,
+    cache_key: str,
+    batch_size: int = 35,
 ) -> Dict[str, pd.DataFrame]:
-    raw = yf.download(
-        tickers=list(tickers),
-        start=start_date,
-        end=as_of_date + pd.Timedelta(days=1),
-        interval="1d",
-        auto_adjust=False,
-        group_by="ticker",
-        threads=False,
-        progress=False,
-    )
+    _ = cache_key
 
     out: Dict[str, pd.DataFrame] = {}
-    for tk in tickers:
-        try:
-            if isinstance(raw.columns, pd.MultiIndex):
-                if tk in raw.columns.get_level_values(0):
-                    df = raw[tk].copy()
-                else:
-                    df = pd.DataFrame()
-            else:
-                df = raw.copy() if len(tickers) == 1 else pd.DataFrame()
-        except Exception:
-            df = pd.DataFrame()
 
-        out[tk] = normalize_ohlcv(df)
+    for batch in chunked(tickers, batch_size):
+        raw = safe_yf_download(batch, start_date, end_date, threads=True)
+
+        for tk in batch:
+            df = normalize_ohlcv(extract_ticker_frame(raw, tk, len(batch)))
+
+            if df.empty and len(batch) > 1:
+                raw_single = safe_yf_download((tk,), start_date, end_date, threads=False, attempts=2)
+                df = normalize_ohlcv(extract_ticker_frame(raw_single, tk, 1))
+
+            out[tk] = df
+
+    for tk in tickers:
+        if tk not in out:
+            out[tk] = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
     return out
 
 
 # =========================================================
-# FLOW PROXY ENGINE
+# FLOW PRESSURE ENGINE
 # =========================================================
 def compute_money_flow_proxy(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty:
@@ -357,19 +500,29 @@ def compute_money_flow_proxy(df: pd.DataFrame) -> pd.Series:
     vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
 
     hl = (high - low).replace(0, np.nan)
-    mfm = ((close - low) - (high - close)) / hl
-    mfm = mfm.fillna(0.0)
 
-    typical = (high + low + close) / 3.0
+    mfm = ((close - low) - (high - close)) / hl
+    mfm = mfm.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-1.0, 1.0)
+
+    typical = ((high + low + close) / 3.0).fillna(close)
     money_flow_value = (mfm * vol * typical).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-    money_flow_value.index = pd.to_datetime(money_flow_value.index, errors="coerce")
-    try:
-        money_flow_value.index = money_flow_value.index.tz_localize(None)
-    except Exception:
-        pass
+    money_flow_value.index = strip_tz_from_index(money_flow_value.index)
 
     return money_flow_value.sort_index()
+
+
+def compute_traded_value(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype="float64")
+
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
+
+    tv = (close * vol).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    tv.index = strip_tz_from_index(tv.index)
+
+    return tv.sort_index()
 
 
 def compute_pressure_score(df: pd.DataFrame) -> float:
@@ -377,15 +530,13 @@ def compute_pressure_score(df: pd.DataFrame) -> float:
         return np.nan
 
     mfv = compute_money_flow_proxy(df)
-    if mfv.empty:
+    traded_value = compute_traded_value(df)
+
+    if mfv.empty or traded_value.empty:
         return np.nan
 
-    traded_value = (
-        pd.to_numeric(df["Close"], errors="coerce")
-        * pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0)
-    ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
-
     denom = float(traded_value.sum())
+
     if denom <= 0:
         return np.nan
 
@@ -397,53 +548,89 @@ def compute_window_sum(daily: pd.Series, start: pd.Timestamp, end: pd.Timestamp)
         return np.nan
 
     s = daily.copy()
-    s.index = pd.to_datetime(s.index, errors="coerce")
+    s.index = strip_tz_from_index(s.index)
     s = s.sort_index()
+
+    start = pd.Timestamp(start).normalize()
+    end = pd.Timestamp(end).normalize()
+
     window = s.loc[(s.index >= start) & (s.index <= end)]
+
     if window.empty:
         return np.nan
+
     return float(window.sum())
 
 
+def classify_data_status(
+    px: pd.DataFrame,
+    lookback_px: pd.DataFrame,
+    period_days: int,
+    as_of: date,
+    adv: float,
+) -> Tuple[str, int, float, int, str]:
+    if px is None or px.empty:
+        return "Missing", 0, np.nan, 999, ""
+
+    last_date = px.index.max().date()
+    stale_gap = business_day_gap(last_date, as_of)
+
+    cutoff = pd.Timestamp(as_of).normalize() - pd.Timedelta(days=int(period_days))
+    expected_obs = max(len(pd.bdate_range(start=cutoff, end=pd.Timestamp(as_of))), 1)
+    obs_count = int(len(lookback_px))
+    coverage_ratio = float(obs_count / expected_obs) if expected_obs > 0 else np.nan
+
+    last_date_str = str(last_date)
+
+    if stale_gap >= 4:
+        return "Stale", obs_count, coverage_ratio, stale_gap, last_date_str
+
+    if coverage_ratio < 0.60:
+        return "Partial History", obs_count, coverage_ratio, stale_gap, last_date_str
+
+    if pd.notna(adv) and adv > 0 and adv < 2_000_000:
+        return "Low Volume", obs_count, coverage_ratio, stale_gap, last_date_str
+
+    return "OK", obs_count, coverage_ratio, stale_gap, last_date_str
+
+
 # =========================================================
-# BUILD TABLE
+# TABLE BUILD
 # =========================================================
-@st.cache_data(show_spinner=True, ttl=300)
+@st.cache_data(show_spinner=True, ttl=900)
 def build_table(
     tickers: Tuple[str, ...],
+    period_label: str,
     period_days: int,
-    as_of_date: date,
-    as_of_dt_naive: pd.Timestamp,
+    as_of: date,
+    cache_key: str,
 ) -> pd.DataFrame:
-    as_of_dt_local = as_of_dt_naive.to_pydatetime().replace(tzinfo=None)
-    as_of_dt_et = TZ.localize(as_of_dt_local)
-    start_date = calc_start_date(period_days, as_of_dt_et)
+    start_date = calc_start_date(period_days, as_of)
+    end_date = (pd.Timestamp(as_of) + pd.Timedelta(days=1)).date()
 
-    price_map = fetch_prices(tickers, start_date, as_of_date)
-    cutoff = as_of_dt_naive - pd.Timedelta(days=period_days)
+    price_map = fetch_prices(tickers, start_date, end_date, cache_key)
 
-    latest_complete_week_end = last_friday(as_of_dt_naive - pd.Timedelta(days=1))
+    cutoff = pd.Timestamp(as_of).normalize() - pd.Timedelta(days=int(period_days))
+
+    as_of_ts_local = pd.Timestamp(as_of).normalize()
+    latest_complete_week_end = last_friday(as_of_ts_local - pd.Timedelta(days=1))
     latest_complete_week_start = week_start_monday(latest_complete_week_end)
 
-    current_week_anchor = last_friday(as_of_dt_naive)
-    current_week_start = week_start_monday(current_week_anchor)
-    current_day_end = pd.Timestamp(as_of_dt_naive).normalize()
+    current_week_start = monday_of_week(as_of_ts_local)
+    current_day_end = as_of_ts_local
 
     rows: List[Dict] = []
 
     for tk in tickers:
         cat, desc = etf_info.get(tk, ("", ""))
+        asset_class = infer_asset_class(tk)
         px = price_map.get(tk, pd.DataFrame()).copy()
 
         lookback_px = pd.DataFrame()
         if px is not None and not px.empty:
             lookback_px = px.loc[px.index >= cutoff].copy()
 
-        full_daily_proxy = (
-            compute_money_flow_proxy(px)
-            if px is not None and not px.empty
-            else pd.Series(dtype="float64")
-        )
+        full_daily_proxy = compute_money_flow_proxy(px) if px is not None and not px.empty else pd.Series(dtype="float64")
 
         lookback_proxy = np.nan
         pressure_score = np.nan
@@ -453,19 +640,20 @@ def build_table(
 
         if not lookback_px.empty:
             lookback_daily_proxy = compute_money_flow_proxy(lookback_px)
-            lookback_proxy = float(lookback_daily_proxy.sum()) if not lookback_daily_proxy.empty else np.nan
+
+            if not lookback_daily_proxy.empty:
+                lookback_proxy = float(lookback_daily_proxy.sum())
+
             pressure_score = compute_pressure_score(lookback_px)
 
             close = pd.to_numeric(lookback_px["Close"], errors="coerce").dropna()
             if len(close) >= 2 and close.iloc[0] != 0:
                 ret = float((close.iloc[-1] / close.iloc[0] - 1.0) * 100.0)
+
             if len(close) >= 1:
                 last_price = float(close.iloc[-1])
 
-            adv_series = (
-                pd.to_numeric(lookback_px["Close"], errors="coerce")
-                * pd.to_numeric(lookback_px["Volume"], errors="coerce").fillna(0.0)
-            ).replace([np.inf, -np.inf], np.nan)
+            adv_series = compute_traded_value(lookback_px)
             if adv_series.notna().any():
                 adv = float(adv_series.mean())
 
@@ -481,20 +669,33 @@ def build_table(
             current_day_end,
         )
 
+        data_status, obs_count, coverage_ratio, stale_gap, last_data_date = classify_data_status(
+            px=px,
+            lookback_px=lookback_px,
+            period_days=period_days,
+            as_of=as_of,
+            adv=adv,
+        )
+
         rows.append(
             {
                 "Ticker": tk,
                 "Label": f"{cat} ({tk})",
+                "Asset Class": asset_class,
                 "Category": cat,
                 "Description": desc,
                 "Last Price": last_price,
-                f"{period_label} Flow Pressure": lookback_proxy,
+                f"{period_label} Flow Pressure Proxy": lookback_proxy,
                 "Latest Complete Week": latest_complete_week_proxy,
                 "Week to Date": week_to_date_proxy,
                 "Pressure Score": pressure_score,
                 f"{period_label} Return %": ret,
                 "Avg Daily Dollar Vol": adv,
-                "Data Status": "OK" if not px.empty else "Missing",
+                "Obs": obs_count,
+                "Coverage %": coverage_ratio * 100.0 if pd.notna(coverage_ratio) else np.nan,
+                "Business Days Since Last Bar": stale_gap,
+                "Last Data Date": last_data_date,
+                "Data Status": data_status,
             }
         )
 
@@ -502,7 +703,7 @@ def build_table(
 
 
 # =========================================================
-# HIGH-RES IMAGE RENDER
+# DISPLAY HELPERS
 # =========================================================
 def render_matplotlib_high_res(fig) -> bytes:
     buf = BytesIO()
@@ -519,103 +720,406 @@ def render_matplotlib_high_res(fig) -> bytes:
     return buf.getvalue()
 
 
+def color_for_value(v: float) -> str:
+    if pd.isna(v) or abs(float(v)) < 1e-12:
+        return PASTEL_GREY
+    if float(v) > 0:
+        return PASTEL_GREEN
+    return PASTEL_RED
+
+
+def metric_is_currency(metric_name: str) -> bool:
+    return metric_name in {
+        "Latest Complete Week",
+        "Week to Date",
+    } or "Flow Pressure Proxy" in metric_name
+
+
+def format_metric_value(metric_name: str, value) -> str:
+    if pd.isna(value):
+        return ""
+
+    if metric_is_currency(metric_name):
+        return fmt_compact_cur(value)
+
+    if metric_name.endswith("Return %") or metric_name == "Coverage %":
+        return fmt_pct(value)
+
+    if metric_name == "Pressure Score":
+        return fmt_score(value)
+
+    return f"{float(value):,.2f}"
+
+
+def top_names(df: pd.DataFrame, metric: str, n: int = 3, positive: bool = True) -> str:
+    x = df.copy()
+    x[metric] = pd.to_numeric(x[metric], errors="coerce")
+    x = x.dropna(subset=[metric])
+
+    if x.empty:
+        return "None"
+
+    x = x[x[metric] > 0] if positive else x[x[metric] < 0]
+
+    if x.empty:
+        return "None"
+
+    x = x.nlargest(n, metric) if positive else x.nsmallest(n, metric)
+
+    parts = [
+        f"{row['Ticker']} {format_metric_value(metric, row[metric])}"
+        for _, row in x.iterrows()
+    ]
+
+    return ", ".join(parts)
+
+
+def build_tape_read(df: pd.DataFrame, flow_col: str) -> str:
+    valid = df[df["Data Status"] != "Missing"].copy()
+    valid[flow_col] = pd.to_numeric(valid[flow_col], errors="coerce")
+
+    if valid.empty or valid[flow_col].dropna().empty:
+        return "Tape read unavailable because no usable flow-pressure values were returned."
+
+    net = valid[flow_col].sum(min_count=1)
+
+    group = (
+        valid.groupby("Asset Class", dropna=False)[flow_col]
+        .sum(min_count=1)
+        .dropna()
+        .sort_values(ascending=False)
+    )
+
+    if group.empty:
+        group_leader = "None"
+        group_lagger = "None"
+    else:
+        group_leader = f"{group.index[0]} {fmt_compact_cur(group.iloc[0])}"
+        group_lagger = f"{group.index[-1]} {fmt_compact_cur(group.iloc[-1])}"
+
+    top_pos = top_names(valid, flow_col, n=3, positive=True)
+    top_neg = top_names(valid, flow_col, n=3, positive=False)
+
+    if pd.isna(net):
+        net_text = "unavailable"
+    elif net > 0:
+        net_text = f"positive at {fmt_compact_cur(net)}"
+    elif net < 0:
+        net_text = f"negative at {fmt_compact_cur(net)}"
+    else:
+        net_text = "flat"
+
+    return (
+        f"**Tape read:** Aggregate {flow_col.lower()} is {net_text}. "
+        f"The strongest positive pressure is in {top_pos}. "
+        f"The weakest pressure is in {top_neg}. "
+        f"By asset class, the leader is {group_leader}, while the weakest bucket is {group_lagger}. "
+        f"This is a price-volume pressure proxy from public OHLCV data, so treat it as a directional tape signal rather than official ETF creations or redemptions."
+    )
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **Purpose:** ETF flow-pressure monitor using a stable price-volume proxy workflow.
+
+        **What this tab shows**
+        - Dollarized flow-pressure proxy by lookback window.
+        - Latest complete week and week-to-date proxy values.
+        - Normalized pressure score, which adjusts pressure by traded dollar value.
+        - Data diagnostics for missing, stale, low-volume, and partial-history tickers.
+
+        **Data source**
+        - Yahoo Finance OHLCV data via yfinance.
+
+        **Important**
+        - This is not official ETF fund-flow data.
+        - It is a directional pressure signal derived from price, volume, and intraday range.
+        """
+    )
+
+    st.markdown("---")
+
+    period_label = st.radio(
+        "Lookback Window",
+        list(lookback_dict.keys()),
+        index=0,
+    )
+
+    st.caption(f"As of: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    st.caption(f"Cache bucket: {as_of_bucket_key}")
+
+period_days = int(lookback_dict[period_label])
+
+
 # =========================================================
 # HEADER
 # =========================================================
-st.title("ETF Net Flows")
+st.title("ETF Flow Pressure Proxy")
+st.caption(
+    "Directional ETF pressure monitor using public OHLCV data. "
+    "Positive values suggest accumulation pressure. Negative values suggest distribution pressure."
+)
+
 
 # =========================================================
 # DATA BUILD
 # =========================================================
-df = build_table(etf_tickers, period_days, as_of_date, as_of_dt_naive)
-
-# =========================================================
-# VIEW SELECTOR FOR CHART
-# =========================================================
-bar_view = st.radio(
-    label="",
-    options=[f"{period_label} Flow Pressure", "Latest Complete Week", "Week to Date"],
-    horizontal=True,
-    key="bar_view",
-    label_visibility="collapsed",
+df = build_table(
+    tickers=etf_tickers,
+    period_label=period_label,
+    period_days=period_days,
+    as_of=as_of_date,
+    cache_key=as_of_bucket_key,
 )
 
+flow_col = f"{period_label} Flow Pressure Proxy"
+return_col = f"{period_label} Return %"
+
+
 # =========================================================
-# SUMMARY
+# CONTROLS
+# =========================================================
+all_asset_classes = sorted(df["Asset Class"].dropna().unique().tolist())
+all_statuses = ["OK", "Low Volume", "Partial History", "Stale", "Missing"]
+
+with st.container():
+    c1, c2, c3, c4 = st.columns([1.15, 1.25, 1.25, 1.0])
+
+    with c1:
+        bar_view = st.radio(
+            "Chart Metric",
+            options=[
+                flow_col,
+                "Latest Complete Week",
+                "Week to Date",
+                "Pressure Score",
+                return_col,
+            ],
+            horizontal=False,
+            index=0,
+        )
+
+    with c2:
+        selected_assets = st.multiselect(
+            "Asset Class Filter",
+            options=all_asset_classes,
+            default=all_asset_classes,
+        )
+
+    with c3:
+        selected_statuses = st.multiselect(
+            "Data Status Filter",
+            options=all_statuses,
+            default=["OK", "Low Volume", "Partial History", "Stale"],
+        )
+
+    with c4:
+        chart_scope = st.radio(
+            "Chart Scope",
+            options=["Top and Bottom", "All Filtered"],
+            index=0,
+        )
+
+        top_bottom_n = st.slider(
+            "Rows per side",
+            min_value=5,
+            max_value=40,
+            value=20,
+            step=5,
+            disabled=chart_scope == "All Filtered",
+        )
+
+
+filtered_df = df[
+    df["Asset Class"].isin(selected_assets)
+    & df["Data Status"].isin(selected_statuses)
+].copy()
+
+
+# =========================================================
+# SUMMARY METRICS
 # =========================================================
 missing_count = int((df["Data Status"] == "Missing").sum())
+stale_count = int((df["Data Status"] == "Stale").sum())
+partial_count = int((df["Data Status"] == "Partial History").sum())
+low_vol_count = int((df["Data Status"] == "Low Volume").sum())
 ok_count = int((df["Data Status"] == "OK").sum())
 
-net_lookback = pd.to_numeric(df[f"{period_label} Flow Pressure"], errors="coerce").sum(min_count=1)
+net_lookback = pd.to_numeric(df[flow_col], errors="coerce").sum(min_count=1)
 net_lcw = pd.to_numeric(df["Latest Complete Week"], errors="coerce").sum(min_count=1)
 net_wtd = pd.to_numeric(df["Week to Date"], errors="coerce").sum(min_count=1)
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Tickers Listed", f"{len(df)}")
-c2.metric("Data Returned", f"{ok_count}")
-c3.metric("Missing", f"{missing_count}")
-c4.metric(f"{period_label} Net", fmt_compact_cur(net_lookback) if pd.notna(net_lookback) else "")
-c5.metric("WTD Net", fmt_compact_cur(net_wtd) if pd.notna(net_wtd) else "")
+c2.metric("Clean Data", f"{ok_count}")
+c3.metric("Stale or Partial", f"{stale_count + partial_count}")
+c4.metric("Missing", f"{missing_count}")
+c5.metric(f"{period_label} Aggregate", fmt_compact_cur(net_lookback) if pd.notna(net_lookback) else "")
+c6.metric("WTD Aggregate", fmt_compact_cur(net_wtd) if pd.notna(net_wtd) else "")
+
+if low_vol_count > 0 or stale_count > 0 or partial_count > 0 or missing_count > 0:
+    st.caption(
+        f"Diagnostics: {low_vol_count} low-volume, {partial_count} partial-history, "
+        f"{stale_count} stale, {missing_count} missing."
+    )
+
+
+# =========================================================
+# TAPE READ
+# =========================================================
+st.markdown(
+    f"""
+<div class="section-card">
+{build_tape_read(df, flow_col)}
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# GROUP ROLLUP
+# =========================================================
+with st.expander("Asset-Class Rollup", expanded=False):
+    group_df = (
+        df.groupby("Asset Class", dropna=False)
+        .agg(
+            Tickers=("Ticker", "count"),
+            Clean_Data=("Data Status", lambda x: int((x == "OK").sum())),
+            Lookback_Flow=(flow_col, lambda x: pd.to_numeric(x, errors="coerce").sum(min_count=1)),
+            Latest_Complete_Week=("Latest Complete Week", lambda x: pd.to_numeric(x, errors="coerce").sum(min_count=1)),
+            Week_to_Date=("Week to Date", lambda x: pd.to_numeric(x, errors="coerce").sum(min_count=1)),
+            Avg_Pressure_Score=("Pressure Score", lambda x: pd.to_numeric(x, errors="coerce").mean()),
+            Avg_Return=(return_col, lambda x: pd.to_numeric(x, errors="coerce").mean()),
+        )
+        .reset_index()
+        .sort_values("Lookback_Flow", ascending=False)
+    )
+
+    group_display = group_df.copy()
+    group_display["Lookback_Flow"] = group_display["Lookback_Flow"].apply(fmt_compact_cur)
+    group_display["Latest_Complete_Week"] = group_display["Latest_Complete_Week"].apply(fmt_compact_cur)
+    group_display["Week_to_Date"] = group_display["Week_to_Date"].apply(fmt_compact_cur)
+    group_display["Avg_Pressure_Score"] = group_display["Avg_Pressure_Score"].apply(fmt_score)
+    group_display["Avg_Return"] = group_display["Avg_Return"].apply(fmt_pct)
+
+    group_display = group_display.rename(
+        columns={
+            "Asset Class": "Asset Class",
+            "Clean_Data": "Clean Data",
+            "Lookback_Flow": f"{period_label} Flow Pressure Proxy",
+            "Latest_Complete_Week": "Latest Complete Week",
+            "Week_to_Date": "Week to Date",
+            "Avg_Pressure_Score": "Avg Pressure Score",
+            "Avg_Return": f"Avg {period_label} Return",
+        }
+    )
+
+    st.dataframe(
+        group_display,
+        use_container_width=True,
+        hide_index=True,
+        height=260,
+    )
+
 
 # =========================================================
 # BAR CHART
 # =========================================================
 st.markdown("---")
+st.subheader("Ranking View")
 
-chart_df = df[["Ticker", "Label", bar_view, "Data Status"]].copy()
-chart_df[bar_view] = pd.to_numeric(chart_df[bar_view], errors="coerce")
-chart_df = chart_df.dropna(subset=[bar_view]).sort_values(bar_view, ascending=False)
+chart_source = filtered_df[["Ticker", "Label", "Asset Class", bar_view, "Data Status"]].copy()
+chart_source[bar_view] = pd.to_numeric(chart_source[bar_view], errors="coerce")
+chart_source = chart_source.dropna(subset=[bar_view])
 
-if chart_df.empty:
-    st.info("No chartable values available for this view.")
+if chart_source.empty:
+    st.info("No chartable values available for the selected filters.")
 else:
-    vals = chart_df[bar_view].fillna(0.0)
+    if chart_scope == "Top and Bottom":
+        top = chart_source.nlargest(top_bottom_n, bar_view)
+        bottom = chart_source.nsmallest(top_bottom_n, bar_view)
+        chart_df = (
+            pd.concat([top, bottom], axis=0)
+            .drop_duplicates(subset=["Ticker"])
+            .sort_values(bar_view, ascending=False)
+        )
+    else:
+        chart_df = chart_source.sort_values(bar_view, ascending=False)
+
+    vals = chart_df[bar_view].astype(float)
+
     x_min = float(vals.min())
     x_max = float(vals.max())
     x_min = min(x_min, 0.0)
     x_max = max(x_max, 0.0)
+
     span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
-    pad = 0.055 * span
+    pad = 0.07 * span
 
     n = len(chart_df)
 
-    # Harder packing: less height per row, taller bars, smaller gaps
-    fig_h = max(6.9, min(15.2, 0.165 * n + 1.2))
-    bar_height = 0.88 if n >= 60 else 0.84
-    y_font = 7.1 if n >= 70 else 7.8
-    value_font = 6.8 if n >= 70 else 7.5
+    fig_h = max(6.7, min(16.5, 0.22 * n + 1.35))
+    bar_height = 0.84 if n >= 50 else 0.78
+    y_font = 7.0 if n >= 60 else 7.8
+    value_font = 6.8 if n >= 60 else 7.4
 
-    colors = ["#2e7d32" if v > 0 else "#c0392b" if v < 0 else "#808080" for v in vals]
+    colors = [color_for_value(v) for v in vals]
 
-    fig, ax = plt.subplots(figsize=(16.2, fig_h), dpi=220)
+    fig, ax = plt.subplots(figsize=(16.4, fig_h), dpi=220)
 
     bars = ax.barh(
         chart_df["Label"],
         vals,
         color=colors,
-        alpha=0.97,
+        alpha=0.98,
         height=bar_height,
         linewidth=0,
     )
 
-    ax.set_xlabel("Estimated Flow Pressure ($)", fontsize=9)
-    ax.set_title(bar_view, fontsize=10.5, pad=5)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
-    ax.tick_params(axis="y", labelsize=y_font, pad=0.6, length=0)
-    ax.tick_params(axis="x", labelsize=8.2)
+    ax.axvline(0, color="#9ca3af", linewidth=0.85, alpha=0.8)
+
+    ax.set_xlabel(
+        "Estimated Flow Pressure ($)" if metric_is_currency(bar_view) else bar_view,
+        fontsize=9,
+        color=TEXT_DARK,
+    )
+    ax.set_title(bar_view, fontsize=10.6, pad=6, color=TEXT_DARK)
+
+    if metric_is_currency(bar_view):
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt))
+    elif bar_view.endswith("Return %"):
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _pos: f"{x:,.1f}%"))
+    else:
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _pos: f"{x:,.3f}"))
+
+    ax.tick_params(axis="y", labelsize=y_font, pad=0.7, length=0, colors=TEXT_DARK)
+    ax.tick_params(axis="x", labelsize=8.2, colors=AXIS_GREY)
+
     ax.grid(False)
     ax.xaxis.grid(False)
     ax.yaxis.grid(False)
+
     ax.invert_yaxis()
     ax.set_ylim(n - 0.5, -0.5)
     ax.margins(y=0.0)
+
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#e5e7eb")
+    ax.spines["bottom"].set_color("#e5e7eb")
+
     ax.set_xlim(x_min - pad, x_max + pad)
 
-    text_pad = 0.0065 * span
+    text_pad = 0.0075 * span
+
     for bar, raw in zip(bars, vals):
-        label_txt = fmt_compact_cur(raw) if pd.notna(raw) else "$0"
+        label_txt = format_metric_value(bar_view, raw)
         x = bar.get_width()
 
         if raw > 0:
@@ -632,42 +1136,52 @@ else:
             va="center",
             ha=ha,
             fontsize=value_font,
-            color="#333333",
-            clip_on=True,
+            color="#374151",
+            clip_on=False,
         )
 
-    fig.subplots_adjust(left=0.26, right=0.985, top=0.94, bottom=0.085)
+    fig.subplots_adjust(left=0.27, right=0.975, top=0.94, bottom=0.085)
 
     chart_png = render_matplotlib_high_res(fig)
     st.image(chart_png, use_container_width=True)
     plt.close(fig)
 
+
 # =========================================================
 # TABLE PREP
 # =========================================================
-display_df = df[
-    [
-        "Ticker",
-        "Category",
-        "Description",
-        "Last Price",
-        f"{period_label} Flow Pressure",
-        "Latest Complete Week",
-        "Week to Date",
-        "Pressure Score",
-        f"{period_label} Return %",
-        "Avg Daily Dollar Vol",
-        "Data Status",
-    ]
-].copy()
+display_cols = [
+    "Ticker",
+    "Asset Class",
+    "Category",
+    "Description",
+    "Last Price",
+    flow_col,
+    "Latest Complete Week",
+    "Week to Date",
+    "Pressure Score",
+    return_col,
+    "Avg Daily Dollar Vol",
+    "Obs",
+    "Coverage %",
+    "Business Days Since Last Bar",
+    "Last Data Date",
+    "Data Status",
+]
+
+display_df = df[display_cols].copy()
 
 display_df["Last Price"] = display_df["Last Price"].apply(fmt_price)
-display_df[f"{period_label} Flow Pressure"] = display_df[f"{period_label} Flow Pressure"].apply(fmt_compact_cur)
+display_df[flow_col] = display_df[flow_col].apply(fmt_compact_cur)
 display_df["Latest Complete Week"] = display_df["Latest Complete Week"].apply(fmt_compact_cur)
 display_df["Week to Date"] = display_df["Week to Date"].apply(fmt_compact_cur)
 display_df["Pressure Score"] = display_df["Pressure Score"].apply(fmt_score)
-display_df[f"{period_label} Return %"] = display_df[f"{period_label} Return %"].apply(fmt_pct)
+display_df[return_col] = display_df[return_col].apply(fmt_pct)
 display_df["Avg Daily Dollar Vol"] = display_df["Avg Daily Dollar Vol"].apply(fmt_compact_cur)
+display_df["Obs"] = display_df["Obs"].apply(fmt_int)
+display_df["Coverage %"] = display_df["Coverage %"].apply(fmt_pct)
+display_df["Business Days Since Last Bar"] = display_df["Business Days Since Last Bar"].apply(fmt_int)
+
 
 # =========================================================
 # OUTPUT TABLE
@@ -682,12 +1196,31 @@ st.dataframe(
     height=900,
 )
 
+
+# =========================================================
+# EXPORT
+# =========================================================
+raw_export = df.copy()
+raw_export.insert(0, "Run Timestamp ET", as_of_dt_et.strftime("%Y-%m-%d %H:%M:%S %Z"))
+raw_export.insert(1, "Cache Bucket ET", as_of_bucket_key)
+
+csv_bytes = raw_export.to_csv(index=False).encode("utf-8")
+
+st.download_button(
+    label="Download raw table as CSV",
+    data=csv_bytes,
+    file_name=f"etf_flow_pressure_proxy_{as_of_date}.csv",
+    mime="text/csv",
+)
+
+
 # =========================================================
 # FOOTNOTE
 # =========================================================
 st.caption(
-    f"Last refresh: {as_of_dt_naive} | Source: Yahoo Finance OHLCV via yfinance | "
-    f"Method: price-volume flow-pressure proxy using public OHLCV data | "
+    f"Last refresh: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
+    f"Source: Yahoo Finance OHLCV via yfinance | "
+    f"Method: dollarized price-volume flow-pressure proxy, normalized pressure score, and data diagnostics | "
     f"Every original ticker remains in the table even if chart data are missing | "
     f"© 2026 AD Fund Management LP"
 )
