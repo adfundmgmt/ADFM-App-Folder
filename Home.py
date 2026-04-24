@@ -5,52 +5,59 @@ st.set_page_config(page_title="AD Fund Management Tools", layout="wide")
 st.markdown(
     """
     <style>
-        .hero {
-            padding: 1.35rem 1.6rem;
-            border-radius: 14px;
-            background: linear-gradient(135deg, #0b1220, #121f36 55%, #183a66);
-            color: #f3f7ff;
-            border: 1px solid rgba(160, 199, 255, 0.25);
-            margin-bottom: 1rem;
+        .stApp {
+            background-color: #f4f4ef;
+            color: #111;
         }
-        .hero h1 {
-            margin: 0 0 0.35rem 0;
-            font-size: 2rem;
-        }
-        .hero p {
-            margin: 0;
-            opacity: 0.92;
-            font-size: 1rem;
-        }
-        .section-card {
-            border: 1px solid rgba(120, 140, 180, 0.3);
-            border-radius: 12px;
+        .retro-wrap {
+            border: 2px solid #000;
+            background: #fffef7;
             padding: 0.8rem 1rem;
-            margin-bottom: 0.75rem;
-            background: rgba(16, 24, 40, 0.45);
+            margin-bottom: 0.8rem;
+            box-shadow: 4px 4px 0 #bdbdbd;
         }
-        .featured-card {
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            border-radius: 12px;
-            padding: 0.9rem 1rem;
-            background: rgba(15, 23, 42, 0.55);
-            margin-bottom: 0.75rem;
+        .retro-title {
+            font-family: "Courier New", monospace;
+            font-size: 2rem;
+            font-weight: 700;
+            margin: 0;
+            letter-spacing: 0.5px;
         }
-        .featured-card p {
-            margin: 0.35rem 0 0 0;
-            font-size: 0.92rem;
-            opacity: 0.94;
+        .retro-subtitle {
+            margin: 0.3rem 0 0 0;
+            font-family: "Courier New", monospace;
+            font-size: 0.95rem;
         }
-        .status-chip {
-            display: inline-block;
-            font-size: 0.72rem;
-            padding: 0.15rem 0.45rem;
-            border-radius: 999px;
-            margin-left: 0.35rem;
-            background: rgba(251, 191, 36, 0.12);
-            border: 1px solid rgba(251, 191, 36, 0.4);
-            color: #fbbf24;
-            vertical-align: middle;
+        .retro-heading {
+            font-family: "Courier New", monospace;
+            font-size: 1.15rem;
+            font-weight: 700;
+            border-bottom: 1px solid #111;
+            padding-bottom: 0.25rem;
+            margin-bottom: 0.5rem;
+        }
+        .retro-row {
+            border: 1px solid #111;
+            background: #fff;
+            padding: 0.6rem 0.7rem;
+            margin-bottom: 0.45rem;
+        }
+        .retro-note {
+            font-size: 0.9rem;
+            font-family: "Courier New", monospace;
+            border: 1px dashed #111;
+            padding: 0.5rem 0.6rem;
+            background: #fafafa;
+        }
+        .status-live {
+            color: #006400;
+            font-weight: 700;
+            font-family: "Courier New", monospace;
+        }
+        .status-planned {
+            color: #8b0000;
+            font-weight: 700;
+            font-family: "Courier New", monospace;
         }
     </style>
     """,
@@ -218,82 +225,52 @@ TOOL_LIBRARY = {
     ],
 }
 
-FEATURED_UPDATES = [
-    {
-        "title": "Fed Speeches Tone Underwriter",
-        "description": "Institutional nowcasting for Fed rhetoric. Prioritize this module ahead of high-impact macro events and FOMC windows.",
-        "page": "pages/15_Fed_Speeches_Tone_Underwriter.py",
-    },
-    {
-        "title": "RoW Central Bank Tone Underwriter",
-        "description": "Cross-check global policy impulse to capture divergence risk across ECB, BOE, BOJ, and broader G10 messaging.",
-        "page": "pages/16_RoW_Central_Bank_Tone_Underwriter.py",
-    },
-    {
-        "title": "Market Memory + Seasonality Stack",
-        "description": "Pair analog-year pattern matching with monthly return tendencies to tighten scenario framing and timing decisions.",
-        "page": "pages/17_Market_Memory_Explorer.py",
-    },
-]
-
 all_tools = [tool for group in TOOL_LIBRARY.values() for tool in group]
 live_tools = [tool for tool in all_tools if tool["status"] == "Live"]
 
 st.markdown(
     """
-    <div class='hero'>
-        <h1>AD Fund Management LP · Analytics Suite</h1>
-        <p>Professional decision-support platform for market structure, macro regime, liquidity, and policy-tone intelligence.</p>
+    <div class='retro-wrap'>
+        <p class='retro-title'>AD FUND MANAGEMENT LP</p>
+        <p class='retro-subtitle'>Market Analytics Home Page | Last Update: Current Session</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Live Dashboards", len(live_tools))
-m2.metric("Planned Modules", len(all_tools) - len(live_tools))
-m3.metric("Priority Dashboards", len(TOOL_LIBRARY["Priority Dashboards"]))
-m4.metric("Research Modules", len(TOOL_LIBRARY["Supporting Research Tools"]))
+summary_col1, summary_col2 = st.columns([1, 2])
+with summary_col1:
+    st.markdown("<div class='retro-wrap'><p class='retro-heading'>Site Summary</p>", unsafe_allow_html=True)
+    st.write(f"Live dashboards: {len(live_tools)}")
+    st.write(f"Planned tools: {len(all_tools) - len(live_tools)}")
+    st.write(f"Priority dashboards: {len(TOOL_LIBRARY['Priority Dashboards'])}")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown("---")
-
-st.subheader("What\'s New / Featured Intelligence")
-feat_cols = st.columns(3)
-for i, item in enumerate(FEATURED_UPDATES):
-    with feat_cols[i % len(feat_cols)]:
-        st.markdown(
-            f"""
-            <div class='featured-card'>
-                <strong>{item['title']}</strong>
-                <p>{item['description']}</p>
+with summary_col2:
+    st.markdown(
+        """
+        <div class='retro-wrap'>
+            <p class='retro-heading'>How To Use This Site</p>
+            <div class='retro-note'>
+                1. Start in <b>Priority Dashboards</b> for daily monitoring.<br>
+                2. Use <b>Market & Macro Monitoring</b> to confirm regime and leadership.<br>
+                3. Use <b>Supporting Research Tools</b> to validate or challenge your thesis.
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.page_link(item["page"], label=f"Open {item['title']}", icon="🧭")
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-st.markdown("---")
-
-st.subheader("Quick Launch")
+st.markdown("<div class='retro-wrap'><p class='retro-heading'>Quick Launch</p></div>", unsafe_allow_html=True)
 quick_cols = st.columns(3)
 for i, tool in enumerate(TOOL_LIBRARY["Priority Dashboards"]):
     with quick_cols[i % len(quick_cols)]:
-        st.page_link(tool["page"], label=tool["name"], icon="📌")
+        st.page_link(tool["page"], label=tool["name"])
 
-st.markdown("---")
+st.markdown("<div class='retro-wrap'><p class='retro-heading'>Full Tool Index</p></div>", unsafe_allow_html=True)
 
-st.subheader("Decision Workflow")
-wf1, wf2, wf3, wf4 = st.columns(4)
-wf1.info("**1) Set regime context**\n\nStart with stress, liquidity, and cross-asset dashboards.")
-wf2.info("**2) Read policy signal**\n\nRun Fed + RoW tone underwriters to identify policy drift and message asymmetry.")
-wf3.info("**3) Validate participation**\n\nConfirm breadth, factor leadership, and flows before acting.")
-wf4.info("**4) Pressure-test ideas**\n\nUse scanners, analog studies, and seasonality to challenge conviction.")
-
-st.markdown("---")
-
-st.subheader("Tool Library")
-search_term = st.text_input("Filter tools by name or description", placeholder="e.g., liquidity, volatility, seasonality")
-show_planned = st.toggle("Show planned tools", value=True)
+search_term = st.text_input("Find a tool", placeholder="Type a keyword such as liquidity, volatility, seasonality")
+show_planned = st.checkbox("Show planned tools", value=True)
 needle = search_term.strip().lower()
 
 for category, tools in TOOL_LIBRARY.items():
@@ -306,31 +283,31 @@ for category, tools in TOOL_LIBRARY.items():
             continue
         filtered.append(tool)
 
-    with st.expander(f"{category} ({len(filtered)})", expanded=True):
-        if not filtered:
-            st.caption("No tools match your current filter.")
-            continue
+    st.markdown(f"### {category} ({len(filtered)})")
 
-        for tool in filtered:
-            badge = ""
-            if tool["status"] != "Live":
-                badge = "<span class='status-chip'>PLANNED</span>"
+    if not filtered:
+        st.write("No tools match the current filter.")
+        continue
 
-            st.markdown(
-                f"""
-                <div class='section-card'>
-                    <strong>{tool['name']}</strong>{badge}<br>
-                    <span>{tool['description']}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    for tool in filtered:
+        status_class = "status-live" if tool["status"] == "Live" else "status-planned"
+        st.markdown(
+            f"""
+            <div class='retro-row'>
+                <b>{tool['name']}</b> | <span class='{status_class}'>{tool['status'].upper()}</span><br>
+                {tool['description']}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if tool.get("page"):
+            st.page_link(tool["page"], label=f"Open {tool['name']}")
 
-            if tool.get("page"):
-                st.page_link(tool["page"], label=f"Open {tool['name']}", icon="➡️")
-
-st.markdown("---")
-st.success(
-    "Built for institutional speed and repeatability: frame regime, validate policy tone, "
-    "confirm participation, and execute with disciplined risk context."
+st.markdown(
+    """
+    <div class='retro-wrap'>
+        <p class='retro-subtitle'>Functional layout designed for fast navigation and readability.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
