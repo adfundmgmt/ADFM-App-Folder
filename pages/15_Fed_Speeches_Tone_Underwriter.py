@@ -465,6 +465,18 @@ def clear_log() -> None:
     conn.close()
 
 
+def clear_documents() -> None:
+    init_db()
+    conn = db_connection()
+    conn.execute("DELETE FROM documents")
+    conn.commit()
+    conn.close()
+    try:
+        load_documents.clear()
+    except Exception:
+        pass
+
+
 def load_log(limit: int = 300) -> pd.DataFrame:
     init_db()
     conn = db_connection()
@@ -1038,67 +1050,208 @@ def strip_known_junk(text: str) -> str:
     return clean_text(t)
 
 
+def _candidate_body_from_container(container: BeautifulSoup) -> str:
+    lines = [
+        clean_text(x)
+        for x in container.get_text("\n", strip=True).split("\n")
+        if clean_text(x)
+    ]
+
+    if not lines:
+        return ""
+
+    def is_end_line(line: str) -> bool:
+        low = line.lower()
+        return (
+            low.startswith("last update:")
+            or low == "back to top"
+            or low.startswith("board of governors of the federal reserve system")
+            or low.startswith("stay connected")
+            or low.startswith("tools and information")
+            or low.startswith("connect with the board")
+        )
+
+    def is_skip_line(line: str) -> bool:
+        low = line.lower().strip()
+        if not low:
+            return True
+        if low in {"share", "pdf", "speech", "testimony", "speeches", "testimonies"}:
+            return True
+        if any(bad == low or bad in low for bad in SKIP_LINE_PATTERNS):
+            return True
+        if any(bad in low for bad in ACCESSIBILITY_JUNK_PATTERNS):
+            return True
+        if re.match(r"^\[?[a-z/ ]+\]?\s+(toggles|seeks|increase|decrease)", low):
+            return True
+        if re.match(r"^\d+\.$", low):
+            return True
+        if "twitter.com" in low or "facebook.com" in low or "linkedin.com" in low:
+            return True
+        return False
+
+    def is_body_opening(line: str) -> bool:
+        low = line.lower().strip()
+        starts = (
+            "thank you",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "let me",
+            "today i",
+            "this morning",
+            "this afternoon",
+            "this evening",
+            "i would like",
+            "i am pleased",
+            "i'm pleased",
+            "it is a pleasure",
+            "it’s a pleasure",
+            "it is an honor",
+            "i appreciate",
+            "chairman ",
+            "chair ",
+            "ranking member",
+            "members of the committee",
+            "madam chair",
+            "mr. chairman",
+            "the federal reserve",
+            "as always",
+            "in my remarks",
+            "in these remarks",
+        )
+        return low.startswith(starts)
+
+    def is_venue_line(line: str) -> bool:
+        return (
+            line.startswith("At ")
+            or line.startswith("Before ")
+            or line.startswith("At the ")
+            or line.startswith("Before the ")
+        )
+
+    cut_lines = []
+    for line in lines:
+        if is_end_line(line):
+            break
+        cut_lines.append(line)
+
+    lines = cut_lines
+
+    start_idx = None
+    for i, line in enumerate(lines):
+        if is_body_opening(line):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        venue_indices = [i for i, line in enumerate(lines) if is_venue_line(line)]
+        if venue_indices:
+            start_idx = venue_indices[-1] + 1
+
+    if start_idx is None:
+        # Last resort: start after the first speaker/date/title block.
+        for i, line in enumerate(lines):
+            role, speaker = canonicalize_speaker_name(line)
+            if role and speaker:
+                start_idx = i + 1
+                break
+
+    if start_idx is None:
+        start_idx = 0
+
+    body_lines = []
+    for line in lines[start_idx:]:
+        if is_skip_line(line):
+            continue
+        if parse_date_text(line):
+            continue
+
+        role, speaker = canonicalize_speaker_name(line)
+        if role and speaker and len(line.split()) <= 8:
+            continue
+
+        if is_venue_line(line) and len(body_lines) == 0:
+            continue
+
+        body_lines.append(line)
+
+    return strip_known_junk("\n\n".join(body_lines))
+
+
 def extract_body_text(soup: BeautifulSoup) -> str:
+    # Do not rely on the first generic "content" div. The Fed site has many navigation
+    # containers before the article body, and selecting one of those is what caused the
+    # one-word extraction failure.
     for tag in soup(["script", "style", "noscript", "nav", "footer", "header"]):
         tag.decompose()
 
-    main = soup.find("main") or soup.find("article") or soup.find("div", class_=re.compile("col|content|article", re.I)) or soup
+    candidates = []
 
-    paragraphs = []
-    for p in main.find_all(["p", "blockquote"]):
-        txt = clean_text(p.get_text(" ", strip=True))
-        low = txt.lower()
-        if not txt or len(txt.split()) < 5:
+    selectors = [
+        "main",
+        "article",
+        "div.col-xs-12.col-sm-8.col-md-8",
+        "div.col-sm-8",
+        "div.col-md-8",
+        "div.article",
+        "div.article__body",
+        "div#article",
+        "div#content",
+        "div.content",
+    ]
+
+    seen = set()
+    for selector in selectors:
+        try:
+            for node in soup.select(selector):
+                ident = id(node)
+                if ident not in seen:
+                    seen.add(ident)
+                    candidates.append(node)
+        except Exception:
             continue
-        if any(bad in low for bad in SKIP_LINE_PATTERNS):
-            continue
-        paragraphs.append(txt)
 
-    body = "\n\n".join(paragraphs)
+    candidates.append(soup)
 
-    if word_count(body) < 150:
-        lines = [
-            clean_text(x)
-            for x in main.get_text("\n", strip=True).split("\n")
-            if clean_text(x)
-        ]
+    best_body = ""
+    best_score = -1.0
 
-        body_lines = []
-        started = False
-        for line in lines:
-            low = line.lower()
+    for node in candidates:
+        paragraphs = []
+        for p in node.find_all(["p", "blockquote"]):
+            txt = clean_text(p.get_text(" ", strip=True))
+            low = txt.lower()
+            if not txt or len(txt.split()) < 4:
+                continue
+            if any(bad in low for bad in SKIP_LINE_PATTERNS):
+                continue
+            if any(bad in low for bad in ACCESSIBILITY_JUNK_PATTERNS):
+                continue
+            paragraphs.append(txt)
 
-            if not started:
-                if (
-                    line.startswith("At ")
-                    or line.startswith("Before ")
-                    or low.startswith("thank you")
-                    or low.startswith("good morning")
-                    or low.startswith("good afternoon")
-                    or low.startswith("good evening")
-                    or low.startswith("let me")
-                    or low.startswith("today i")
-                    or low.startswith("i would like")
-                    or low.startswith("it is a pleasure")
-                    or low.startswith("mr. chairman")
-                    or low.startswith("chairman")
-                    or low.startswith("madam chair")
-                ):
-                    started = True
+        paragraph_body = strip_known_junk("\n\n".join(paragraphs))
+        line_body = _candidate_body_from_container(node)
 
-            if started:
-                if any(bad in low for bad in SKIP_LINE_PATTERNS):
-                    continue
-                if low in {"speech", "testimony"}:
-                    continue
-                if re.match(r"^\d+\.$", line):
-                    continue
-                body_lines.append(line)
+        for body in [paragraph_body, line_body]:
+            wc = word_count(body)
+            if wc <= 0:
+                continue
 
-        body = "\n\n".join(body_lines)
+            low = body.lower()
+            junk_hits = sum(1 for pat in FOOTER_JUNK_PATTERNS + ACCESSIBILITY_JUNK_PATTERNS if pat in low)
+            score = wc - 140 * junk_hits
 
-    return strip_known_junk(body)
+            # Prefer the true body over the whole-page candidate with navigation.
+            if "main menu toggle button" in low or "official websites use .gov" in low:
+                score -= 500
+            if "last update:" in low:
+                score -= 75
 
+            if score > best_score:
+                best_score = score
+                best_body = body
+
+    return strip_known_junk(best_body)
 
 def parse_document(session: requests.Session, item: Dict[str, Any]) -> Dict[str, Any]:
     soup = fetch_html(session, item["url"])
@@ -1314,7 +1467,7 @@ def refresh_corpus(
                 wc = int(doc.get("word_count") or 0)
                 quality = float(doc.get("source_quality") or 0.0)
 
-                if not doc.get("body_text") or wc < 90 or quality < 0.20:
+                if not doc.get("body_text") or wc < 35 or quality < 0.05:
                     stats["failed_docs"] += 1
                     log_event(
                         "WARN",
@@ -2214,12 +2367,15 @@ def main() -> None:
         st.subheader("Controls")
         years_to_pull = st.slider("Years to scan from latest backward", min_value=1, max_value=20, value=6)
         force_refresh = st.checkbox("Force refresh existing documents", value=False)
+        rebuild_db = st.checkbox("Rebuild local corpus before refresh", value=False)
         include_market = st.checkbox("Add market confirmation layer", value=True)
         refresh_clicked = st.button("Refresh corpus", use_container_width=True)
 
     refresh_stats = None
 
     if refresh_clicked:
+        if rebuild_db:
+            clear_documents()
         progress_bar = st.sidebar.progress(0)
         status_box = st.sidebar.empty()
         with st.spinner("Refreshing Fed corpus."):
@@ -2288,7 +2444,7 @@ def main() -> None:
         event_types = st.multiselect("Event types", options=event_type_options, default=event_type_options)
 
         min_policy = st.slider("Minimum policy relevance", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
-        min_quality = st.slider("Minimum source quality", min_value=0.0, max_value=1.0, value=0.25, step=0.05)
+        min_quality = st.slider("Minimum source quality", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
         search = st.text_input("Search title or transcript")
 
     if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
