@@ -1,4 +1,4 @@
-# sp_sector_rotation_monitor_v8.py
+# sp_sector_rotation_monitor_v9.py
 # ADFM | S&P 500 Sector Breadth & Rotation Monitor
 
 import warnings
@@ -49,10 +49,6 @@ BENCHMARKS: Dict[str, str] = {
     "RSP": "Invesco S&P 500 Equal Weight",
     "QQQ": "Invesco QQQ",
     "TLT": "iShares 20+ Year Treasury Bond",
-}
-
-MARKET_CONTEXT: Dict[str, str] = {
-    "^VIX": "CBOE Volatility Index",
 }
 
 LOOKBACK_PERIOD = "2y"
@@ -121,10 +117,6 @@ STATE_COLORS = {
     "Neutral": "#6b7280",
 }
 
-PASTEL_GREEN = "#52b788"
-PASTEL_RED = "#e85d5d"
-PASTEL_GREY = "#8b949e"
-
 
 # =============================================================================
 # Data classes
@@ -143,25 +135,7 @@ class RotationConfig:
 # =============================================================================
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Sector breadth and rotation monitor for leadership, participation, and regime shifts.
-
-        **Core read**
-        - The default rotation map uses sector relative strength versus the selected benchmark.
-        - Absolute sector returns are preserved in the table.
-        - Composite rank combines RS momentum, RS trend, acceleration, and absolute participation.
-
-        **Use case**
-        - Identify whether leadership is broadening, narrowing, rotating, or breaking.
-        - Separate genuine sector leadership from sectors that are only rising because the tape is strong.
-        - Track whether rotation is confirmed by equal weight, growth, duration, and volatility signals.
-
-        **Data source**
-        - Yahoo Finance through `yfinance`.
-        """
-    )
+    st.header("Settings")
 
     benchmark = st.selectbox(
         "Benchmark",
@@ -174,7 +148,7 @@ with st.sidebar:
         "Rotation mode",
         options=list(ROTATION_MODES.keys()),
         index=0,
-        help="Benchmark-relative rotation is usually the cleaner default for leadership analysis.",
+        help="Benchmark-relative rotation uses sector performance versus the selected benchmark.",
     )
     rotation_mode = ROTATION_MODES[rotation_mode_label]
 
@@ -233,11 +207,7 @@ def _safe_to_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
 def _normalize_download(data: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
     """
     Normalize yfinance output into a clean wide dataframe of adjusted closes.
-
-    Handles:
-    - MultiIndex columns with first level as field and second level as ticker.
-    - MultiIndex columns with first level as ticker and second level as field.
-    - Single ticker downloads with normal OHLC columns.
+    Handles MultiIndex and single-index outputs.
     """
     if data is None or data.empty:
         return pd.DataFrame()
@@ -315,6 +285,7 @@ def validate_prices(prices: pd.DataFrame, required: List[str]) -> Tuple[bool, Li
         return False, required
 
     missing = []
+
     for ticker in required:
         if ticker not in prices.columns:
             missing.append(ticker)
@@ -409,9 +380,9 @@ def compute_relative_strength(
     sector_tickers: List[str],
     benchmark_ticker: str,
 ) -> pd.DataFrame:
-    base = prices[sector_tickers].div(prices[benchmark_ticker], axis=0)
-    base = base.replace([np.inf, -np.inf], np.nan)
-    return base.dropna(how="all")
+    rs = prices[sector_tickers].div(prices[benchmark_ticker], axis=0)
+    rs = rs.replace([np.inf, -np.inf], np.nan)
+    return rs.dropna(how="all")
 
 
 def compute_zscore(frame: pd.DataFrame, window: int = 63) -> pd.DataFrame:
@@ -682,6 +653,7 @@ def build_rotation_trails(
             continue
 
         s = rotation_frame[ticker].dropna()
+
         if s.empty or len(s) <= long_weeks:
             continue
 
@@ -701,57 +673,6 @@ def build_rotation_trails(
         trail_points[ticker] = df.tail(trail_weeks)
 
     return trail_points
-
-
-def make_summary_text(
-    snap: pd.DataFrame,
-    cfg: RotationConfig,
-    benchmark_ticker: str,
-    rotation_basis: str,
-) -> str:
-    if snap.empty:
-        return "No valid sector data available."
-
-    leaders = snap[snap["Quadrant"] == "Leading"].sort_values(
-        "Composite Score",
-        ascending=False,
-    )
-    improvers = snap[snap["Quadrant"] == "Improving"].sort_values(
-        "Rotation Accel",
-        ascending=False,
-    )
-    weakeners = snap[snap["Quadrant"] == "Weakening"].sort_values(
-        "Rotation Accel",
-        ascending=True,
-    )
-    laggards = snap[snap["Quadrant"] == "Lagging"].sort_values(
-        "Composite Score",
-        ascending=True,
-    )
-
-    leader_txt = ", ".join(leaders["Ticker"].head(3).tolist()) if not leaders.empty else "none"
-    improver_txt = ", ".join(improvers["Ticker"].head(2).tolist()) if not improvers.empty else "none"
-    weakener_txt = ", ".join(weakeners["Ticker"].head(2).tolist()) if not weakeners.empty else "none"
-    laggard_txt = ", ".join(laggards["Ticker"].head(2).tolist()) if not laggards.empty else "none"
-
-    positive_rs_short = int((snap[f"RS {cfg.short_label}"] > 0).sum())
-    positive_rs_long = int((snap[f"RS {cfg.long_label}"] > 0).sum())
-    positive_rs_slope = int((snap["RS Slope 10D"] > 0).sum())
-    accelerating_rs = int((snap["RS Accel"] > 0).sum())
-
-    mode_text = "benchmark-relative" if rotation_basis == "relative" else "absolute-return"
-
-    text = (
-        f"The map is currently reading {mode_text} rotation versus {benchmark_ticker}. "
-        f"Leadership is concentrated in {leader_txt}. The main improvement bucket is {improver_txt}, "
-        f"while deterioration is clearest in {weakener_txt}. Laggards remain {laggard_txt}. "
-        f"Across the sector set, {positive_rs_short} of {len(snap)} sectors are outperforming over {cfg.short_label}, "
-        f"{positive_rs_long} of {len(snap)} are outperforming over {cfg.long_label}, "
-        f"{positive_rs_slope} of {len(snap)} have a positive 10-day RS slope, and "
-        f"{accelerating_rs} of {len(snap)} are accelerating on a 5-day versus 10-day RS basis."
-    )
-
-    return text
 
 
 def make_rs_chart(
@@ -911,6 +832,7 @@ def make_rotation_scatter(
         showarrow=False,
         font=dict(color=STATE_COLORS["Leading"], size=12),
     )
+
     fig.add_annotation(
         x=x_min - x_pad * 0.45,
         y=y_max + y_pad * 0.45,
@@ -918,6 +840,7 @@ def make_rotation_scatter(
         showarrow=False,
         font=dict(color=STATE_COLORS["Improving"], size=12),
     )
+
     fig.add_annotation(
         x=x_min - x_pad * 0.45,
         y=y_min - y_pad * 0.45,
@@ -925,6 +848,7 @@ def make_rotation_scatter(
         showarrow=False,
         font=dict(color=STATE_COLORS["Lagging"], size=12),
     )
+
     fig.add_annotation(
         x=x_max + x_pad * 0.45,
         y=y_min - y_pad * 0.45,
@@ -1008,169 +932,6 @@ def build_display_table(
     return table[cols].copy()
 
 
-def last_valid(series: pd.Series) -> float:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    if s.empty:
-        return np.nan
-    return float(s.iloc[-1])
-
-
-def pct_change_value(series: pd.Series, periods: int) -> float:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    if len(s) <= periods:
-        return np.nan
-    return float(s.iloc[-1] / s.iloc[-periods - 1] - 1.0)
-
-
-def ratio_pct_change(
-    prices: pd.DataFrame,
-    numerator: str,
-    denominator: str,
-    periods: int,
-) -> float:
-    if numerator not in prices.columns or denominator not in prices.columns:
-        return np.nan
-
-    ratio = prices[numerator].div(prices[denominator]).replace([np.inf, -np.inf], np.nan).dropna()
-    if len(ratio) <= periods:
-        return np.nan
-
-    return float(ratio.iloc[-1] / ratio.iloc[-periods - 1] - 1.0)
-
-
-def moving_average_stack(series: pd.Series, windows: List[int]) -> Tuple[int, int]:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    if s.empty:
-        return 0, len(windows)
-
-    last = float(s.iloc[-1])
-    above = 0
-
-    for window in windows:
-        if len(s) < window:
-            continue
-
-        ma = float(s.rolling(window).mean().iloc[-1])
-        if last > ma:
-            above += 1
-
-    return above, len(windows)
-
-
-def make_market_context(prices: pd.DataFrame, benchmark_ticker: str) -> List[Dict[str, str]]:
-    metrics = []
-
-    if benchmark_ticker in prices.columns:
-        s = prices[benchmark_ticker].dropna()
-        last = last_valid(s)
-        chg_5d = pct_change_value(s, 5)
-        above, total = moving_average_stack(s, [21, 50, 100, 200])
-
-        metrics.append(
-            {
-                "label": f"{benchmark_ticker} Trend",
-                "value": f"{above}/{total} MAs",
-                "delta": f"{chg_5d:+.2%} 5D" if not pd.isna(chg_5d) else "",
-            }
-        )
-
-    if "RSP" in prices.columns and "SPY" in prices.columns:
-        rsp_spy_20d = ratio_pct_change(prices, "RSP", "SPY", 20)
-        metrics.append(
-            {
-                "label": "Equal Weight",
-                "value": "RSP / SPY",
-                "delta": f"{rsp_spy_20d:+.2%} 20D" if not pd.isna(rsp_spy_20d) else "",
-            }
-        )
-
-    if "QQQ" in prices.columns and "SPY" in prices.columns:
-        qqq_spy_20d = ratio_pct_change(prices, "QQQ", "SPY", 20)
-        metrics.append(
-            {
-                "label": "Growth Tilt",
-                "value": "QQQ / SPY",
-                "delta": f"{qqq_spy_20d:+.2%} 20D" if not pd.isna(qqq_spy_20d) else "",
-            }
-        )
-
-    if "TLT" in prices.columns and "SPY" in prices.columns:
-        tlt_spy_20d = ratio_pct_change(prices, "TLT", "SPY", 20)
-        metrics.append(
-            {
-                "label": "Duration Tilt",
-                "value": "TLT / SPY",
-                "delta": f"{tlt_spy_20d:+.2%} 20D" if not pd.isna(tlt_spy_20d) else "",
-            }
-        )
-
-    if "^VIX" in prices.columns:
-        vix = prices["^VIX"].dropna()
-        vix_last = last_valid(vix)
-
-        if len(vix) > 5:
-            vix_5d_change = float(vix.iloc[-1] - vix.iloc[-6])
-        else:
-            vix_5d_change = np.nan
-
-        metrics.append(
-            {
-                "label": "Volatility",
-                "value": f"{vix_last:.1f}" if not pd.isna(vix_last) else "",
-                "delta": f"{vix_5d_change:+.1f} pts 5D" if not pd.isna(vix_5d_change) else "",
-            }
-        )
-
-    return metrics
-
-
-def make_quadrant_counts(snap: pd.DataFrame) -> pd.DataFrame:
-    order = ["Leading", "Improving", "Weakening", "Lagging", "Neutral"]
-    counts = snap["Quadrant"].value_counts().reindex(order).fillna(0).astype(int)
-    return counts.reset_index().rename(columns={"index": "Quadrant", "Quadrant": "Count"})
-
-
-def make_score_bar_chart(snap: pd.DataFrame) -> go.Figure:
-    df = snap.sort_values("Composite Score", ascending=True).copy()
-
-    colors = []
-    for value in df["Composite Score"]:
-        if value >= 65:
-            colors.append(PASTEL_GREEN)
-        elif value <= 35:
-            colors.append(PASTEL_RED)
-        else:
-            colors.append(PASTEL_GREY)
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Bar(
-            x=df["Composite Score"],
-            y=df["Ticker"],
-            orientation="h",
-            marker=dict(color=colors),
-            text=df["Composite Score"].round(1),
-            textposition="outside",
-            hovertemplate=(
-                "<b>%{y}</b><br>"
-                "Composite Score: %{x:.1f}<extra></extra>"
-            ),
-        )
-    )
-
-    fig.update_layout(
-        title="Composite Leadership Score",
-        height=390,
-        margin=dict(l=10, r=30, t=55, b=10),
-        xaxis=dict(title="Score", range=[0, 105]),
-        yaxis=dict(title=""),
-        showlegend=False,
-    )
-
-    return fig
-
-
 def style_snapshot_table(df: pd.DataFrame, cfg: RotationConfig):
     fmt_map = {
         "Composite Score": "{:.1f}",
@@ -1232,7 +993,6 @@ all_tickers = list(
     dict.fromkeys(
         list(SECTORS.keys())
         + list(BENCHMARKS.keys())
-        + list(MARKET_CONTEXT.keys())
     )
 )
 
@@ -1288,33 +1048,13 @@ trail_points = build_rotation_trails(
     rotation_basis=rotation_mode,
 )
 
-summary_text = make_summary_text(
-    snap=snap,
-    cfg=cfg,
-    benchmark_ticker=benchmark,
-    rotation_basis=rotation_mode,
-)
-
 display_df = build_display_table(snap, rank_delta, cfg)
 diagnostics_df = build_price_diagnostics(prices, all_tickers)
-context_metrics = make_market_context(prices, benchmark)
 
 
 # =============================================================================
-# Market context
+# Optional diagnostics
 # =============================================================================
-
-st.subheader("Market structure")
-
-if context_metrics:
-    context_cols = st.columns(len(context_metrics))
-
-    for col, metric in zip(context_cols, context_metrics):
-        col.metric(
-            metric["label"],
-            metric["value"],
-            metric["delta"],
-        )
 
 if show_diagnostics:
     with st.expander("Data diagnostics", expanded=True):
@@ -1323,67 +1063,6 @@ if show_diagnostics:
             use_container_width=True,
             hide_index=True,
         )
-
-
-# =============================================================================
-# Top dashboard
-# =============================================================================
-
-leader_row = snap.sort_values("Composite Score", ascending=False).iloc[0]
-worst_row = snap.sort_values("Composite Score", ascending=True).iloc[0]
-best_rs_row = snap.sort_values("RS Slope 10D", ascending=False).iloc[0]
-worst_rs_row = snap.sort_values("RS Slope 10D", ascending=True).iloc[0]
-leading_count = int((snap["Quadrant"] == "Leading").sum())
-accelerating_count = int((snap["RS Accel"] > 0).sum())
-
-st.subheader("Sector tape")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-
-c1.metric(
-    "Top Composite",
-    f"{leader_row['Ticker']}",
-    f"{leader_row['Composite Score']:.1f}",
-)
-
-c2.metric(
-    "Weakest Composite",
-    f"{worst_row['Ticker']}",
-    f"{worst_row['Composite Score']:.1f}",
-)
-
-c3.metric(
-    "Best RS Slope",
-    f"{best_rs_row['Ticker']}",
-    f"{best_rs_row['RS Slope 10D']:.2%}",
-)
-
-c4.metric(
-    "Weakest RS Slope",
-    f"{worst_rs_row['Ticker']}",
-    f"{worst_rs_row['RS Slope 10D']:.2%}",
-)
-
-c5.metric(
-    "Breadth / Accel",
-    f"{leading_count} leading",
-    f"{accelerating_count} accelerating",
-)
-
-st.markdown(
-    f"""
-    <div style="
-        padding: 0.75rem 0.95rem;
-        border: 1px solid rgba(128,128,128,0.25);
-        border-radius: 0.65rem;
-        margin-bottom: 0.85rem;
-        line-height: 1.45;
-    ">
-        <b>Regime summary:</b> {summary_text}
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
 
 # =============================================================================
@@ -1402,9 +1081,6 @@ with left:
     )
 
     st.plotly_chart(rs_fig, use_container_width=True)
-
-    score_fig = make_score_bar_chart(snap)
-    st.plotly_chart(score_fig, use_container_width=True)
 
 with right:
     st.subheader("Rotation map")
@@ -1506,34 +1182,6 @@ else:
         use_container_width=True,
         height=table_height,
         hide_index=True,
-    )
-
-
-# =============================================================================
-# Quadrant counts and notes
-# =============================================================================
-
-q_left, q_right = st.columns([0.85, 1.15])
-
-with q_left:
-    st.subheader("Quadrant counts")
-    quadrant_counts = make_quadrant_counts(snap)
-    st.dataframe(
-        quadrant_counts,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-with q_right:
-    st.subheader("Interpretation guide")
-    st.markdown(
-        f"""
-        - **Leading:** positive {cfg.short_label} and {cfg.long_label} rotation.
-        - **Improving:** negative {cfg.long_label} rotation, positive {cfg.short_label} rotation.
-        - **Weakening:** positive {cfg.long_label} rotation, negative {cfg.short_label} rotation.
-        - **Lagging:** negative {cfg.short_label} and {cfg.long_label} rotation.
-        - **Composite Score:** weighted score using RS {cfg.short_label}, RS {cfg.long_label}, 10-day RS slope, RS acceleration, and absolute participation.
-        """
     )
 
 
