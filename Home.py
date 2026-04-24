@@ -198,8 +198,8 @@ def page_link(path: str, label: str) -> None:
 st.markdown(
     """
     <div class="hero">
-        <div class="eyebrow">AD Fund Management</div>
-        <div class="title">Market Workspace</div>
+        <div class="eyebrow">Analytics Tools</div>
+        <div class="title">AD Fund Management</div>
         <div class="subtitle">
             A clean command center for top-down market reads. Start with regime,
             confirm liquidity and stress, then move into flows, leadership, and tactical tools.
