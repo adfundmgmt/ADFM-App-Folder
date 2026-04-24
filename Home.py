@@ -225,8 +225,18 @@ TOOL_LIBRARY = {
     ],
 }
 
+
+def show_tool(tool: dict) -> None:
+    status = tool["status"]
+    st.write(f"**{tool['name']}** ({status})")
+    st.caption(tool["description"])
+    if tool.get("page"):
+        st.page_link(tool["page"], label=f"Open {tool['name']}")
+
+
 all_tools = [tool for group in TOOL_LIBRARY.values() for tool in group]
 live_tools = [tool for tool in all_tools if tool["status"] == "Live"]
+planned_tools = [tool for tool in all_tools if tool["status"] == "Planned"]
 
 st.markdown(
     """
