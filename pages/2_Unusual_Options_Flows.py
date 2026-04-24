@@ -1,7 +1,16 @@
 # streamlit_app.py
-# ADFM | Unusual Options Flow Tracker
-# Revised version with safer Yahoo handling, retries, better diagnostics,
-# gentler concurrency, and explicit empty-board reasons.
+# ADFM | Options Flow Trend Monitor
+# Bulltard-style public-data approximation using Yahoo Finance option chains.
+#
+# What Yahoo can provide: option chains, volume, open interest, bid, ask, last price, IV, expiries.
+# What Yahoo cannot provide reliably: institutional trade prints, sweep/block tags, buyer/seller IDs,
+# true time-and-sales, opening vs closing trade classification, or real-time exchange-grade flow.
+#
+# The right public-data approximation is therefore:
+# 1) scan option chains for unusual contracts,
+# 2) classify likely direction using bid/ask/last-price heuristics,
+# 3) save qualifying rows into a local database,
+# 4) build rolling ticker trend scores from the saved database.
 
 from __future__ import annotations
 
@@ -9,53 +18,48 @@ import json
 import math
 import pickle
 import random
+import sqlite3
 import time
 import warnings
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Page config
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Unusual Options Flow Tracker", layout="wide")
+# =============================================================================
+st.set_page_config(page_title="ADFM Options Flow Trend Monitor", layout="wide")
 
-APP_TITLE = "Unusual Options Flow Tracker"
+APP_TITLE = "ADFM | Options Flow Trend Monitor"
 APP_SUBTITLE = (
-    "Nasdaq 100 public-data options anomaly scanner. Wikipedia for constituents, "
-    "Yahoo Finance for chains, and anomaly filters tuned for practical tape triage."
+    "Yahoo Finance option-chain scanner with a persistent unusual-flow database, "
+    "rolling bull/bear scores, and ticker-level trend boards."
 )
 
 CUSTOM_CSS = """
 <style>
-    .block-container {padding-top: 1.0rem; padding-bottom: 1.5rem; max-width: 1680px;}
-    h1, h2, h3 {font-weight: 700; letter-spacing: 0.1px;}
+    .block-container {padding-top: 1.0rem; padding-bottom: 1.8rem; max-width: 1680px;}
+    h1, h2, h3 {font-weight: 650; letter-spacing: 0.1px;}
     .stMetric {
         background: #fafafa;
         border: 1px solid #ececec;
         border-radius: 14px;
         padding: 10px 14px;
     }
-    .stDataFrame, .stPlotlyChart {
-        border-radius: 14px;
-    }
-    div[data-testid="stSidebarContent"] {
-        padding-top: 0.6rem;
-    }
-    .small-note {
-        color: #6b7280;
-        font-size: 0.88rem;
-        line-height: 1.4;
-    }
+    .stDataFrame, .stPlotlyChart {border-radius: 14px;}
+    div[data-testid="stSidebarContent"] {padding-top: 0.6rem;}
+    .small-note {color: #6b7280; font-size: 0.88rem; line-height: 1.4;}
     .status-card {
         background: #fbfbfb;
         border: 1px solid #ececec;
@@ -70,83 +74,92 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 st.title(APP_TITLE)
 st.caption(APP_SUBTITLE)
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Constants and paths
-# -----------------------------------------------------------------------------
+# =============================================================================
 CACHE_DIR = Path(".uw_cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
+FLOW_DB = CACHE_DIR / "adfm_options_flow.sqlite"
 UNIVERSE_META_CACHE = CACHE_DIR / "ndx100_meta.pkl"
-LAST_GOOD_SCAN = CACHE_DIR / "last_good_flow.pkl"
-LAST_GOOD_DIAGS = CACHE_DIR / "last_good_diags.pkl"
-LAST_GOOD_META = CACHE_DIR / "last_good_meta.json"
-LAST_GOOD_SNAPSHOT = CACHE_DIR / "last_good_snapshot.pkl"
+LAST_GOOD_SNAPSHOT = CACHE_DIR / "last_good_underlying_snapshot.pkl"
+LAST_GOOD_SCAN = CACHE_DIR / "last_good_live_scan.pkl"
+LAST_GOOD_DIAGS = CACHE_DIR / "last_good_live_diags.pkl"
+LAST_GOOD_META = CACHE_DIR / "last_good_live_meta.json"
 
 NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 
 DEFAULT_MIN_PREMIUM = 50_000.0
 DEFAULT_MIN_VOLUME = 100
 DEFAULT_MIN_VOL_OI = 1.5
-DEFAULT_MAX_SPREAD_PCT = 30.0
-DEFAULT_TOP_N = 200
+DEFAULT_MAX_SPREAD_PCT = 35.0
+DEFAULT_TOP_N = 150
 DEFAULT_MAX_WORKERS = 4
 DEFAULT_DTE_MIN = 0
-DEFAULT_DTE_MAX = 60
-DEFAULT_MAX_EXPIRIES_PER_SYMBOL = 6
+DEFAULT_DTE_MAX = 90
+DEFAULT_MAX_EXPIRIES_PER_SYMBOL = 8
 DEFAULT_MIN_UNUSUAL_SCORE = 55.0
 DEFAULT_MIN_UNDERLYING_DOLLAR_VOL_MM = 100.0
 DEFAULT_BATCH_SIZE = 25
-
 DEFAULT_MIN_PRICE = 10.0
 DEFAULT_MIN_20D_VOL = 1_000_000
 
 RETRY_ATTEMPTS = 3
-RETRY_SLEEP_BASE = 0.9
+RETRY_SLEEP_BASE = 0.85
 CHAIN_JITTER_MAX = 0.35
 
-NASDAQ100_FALLBACK_SYMBOLS = sorted([
-    "AAPL","ABNB","ADBE","ADI","ADP","ADSK","AEP","AMAT","AMD","AMGN","AMZN","ANSS","APP","ARM",
-    "ASML","AVGO","AXON","AZN","BIIB","BKNG","CDNS","CEG","CHTR","CMCSA","COST","CPRT","CRWD",
-    "CSCO","CSGP","CSX","CTAS","CTSH","DASH","DDOG","DXCM","EA","EXC","FANG","FAST","FTNT",
-    "GEHC","GFS","GILD","GOOG","GOOGL","HON","IDXX","INTC","INTU","ISRG","KDP","KHC","KLAC",
-    "LIN","LRCX","LULU","MAR","MCHP","MDLZ","MELI","META","MNST","MRVL","MSFT","MU","NFLX",
-    "NVDA","NXPI","ODFL","ON","ORLY","PANW","PAYX","PCAR","PDD","PEP","PLTR","PYPL","QCOM",
-    "REGN","ROP","ROST","SBUX","SNPS","TEAM","TMUS","TSLA","TTD","TTWO","TXN","VRTX","WBD",
-    "WDAY","XEL","ZS"
+DEFAULT_EXTRA_SYMBOLS = sorted([
+    "SPY", "QQQ", "IWM", "DIA", "TLT", "HYG", "LQD", "GLD", "SLV", "USO", "XLE", "XLF",
+    "XLK", "SMH", "SOXX", "KRE", "XBI", "ARKK", "FXI", "EEM", "EWZ", "TSM", "VST", "AXON",
+    "HOOD", "COIN", "MSTR", "CAR", "NKTR", "FICO", "KKR", "TPL", "AMD", "NVDA", "META", "MSFT",
 ])
 
-# -----------------------------------------------------------------------------
-# Utility helpers
-# -----------------------------------------------------------------------------
+NASDAQ100_FALLBACK_SYMBOLS = sorted([
+    "AAPL", "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMD", "AMGN", "AMZN", "ANSS", "APP", "ARM",
+    "ASML", "AVGO", "AXON", "AZN", "BIIB", "BKNG", "CDNS", "CEG", "CHTR", "CMCSA", "COST", "CPRT", "CRWD",
+    "CSCO", "CSGP", "CSX", "CTAS", "CTSH", "DASH", "DDOG", "DXCM", "EA", "EXC", "FANG", "FAST", "FTNT",
+    "GEHC", "GFS", "GILD", "GOOG", "GOOGL", "HON", "IDXX", "INTC", "INTU", "ISRG", "KDP", "KHC", "KLAC",
+    "LIN", "LRCX", "LULU", "MAR", "MCHP", "MDLZ", "MELI", "META", "MNST", "MRVL", "MSFT", "MU", "NFLX",
+    "NVDA", "NXPI", "ODFL", "ON", "ORLY", "PANW", "PAYX", "PCAR", "PDD", "PEP", "PLTR", "PYPL", "QCOM",
+    "REGN", "ROP", "ROST", "SBUX", "SNPS", "TEAM", "TMUS", "TSLA", "TTD", "TTWO", "TXN", "VRTX", "WBD",
+    "WDAY", "XEL", "ZS"
+])
+
+# =============================================================================
+# Formatting helpers
+# =============================================================================
 def human_money(x: float) -> str:
     x = 0.0 if pd.isna(x) else float(x)
     ax = abs(x)
     if ax >= 1_000_000_000:
-        return f"${x/1_000_000_000:.2f}B"
+        return f"${x / 1_000_000_000:.2f}B"
     if ax >= 1_000_000:
-        return f"${x/1_000_000:.2f}M"
+        return f"${x / 1_000_000:.2f}M"
     if ax >= 1_000:
-        return f"${x/1_000:.1f}K"
+        return f"${x / 1_000:.1f}K"
     return f"${x:,.0f}"
+
 
 def human_num(x: float) -> str:
     x = 0.0 if pd.isna(x) else float(x)
     ax = abs(x)
     if ax >= 1_000_000_000:
-        return f"{x/1_000_000_000:.2f}B"
+        return f"{x / 1_000_000_000:.2f}B"
     if ax >= 1_000_000:
-        return f"{x/1_000_000:.2f}M"
+        return f"{x / 1_000_000:.2f}M"
     if ax >= 1_000:
-        return f"{x/1_000:.1f}K"
+        return f"{x / 1_000:.1f}K"
     return f"{x:,.0f}"
 
-def safe_float(x, default=0.0) -> float:
+
+def safe_float(x, default=np.nan) -> float:
     try:
-        if pd.isna(x):
+        if x is None or pd.isna(x):
             return float(default)
         return float(x)
     except Exception:
         return float(default)
+
 
 def safe_int(x, default=0) -> int:
     try:
@@ -158,8 +171,15 @@ def safe_int(x, default=0) -> int:
     except Exception:
         return int(default)
 
+
+def normalize_symbol(sym: str) -> str:
+    sym = str(sym).strip().upper()
+    return sym.replace(".", "-")
+
+
 def chunked(items: List[str], n: int) -> List[List[str]]:
     return [items[i:i + n] for i in range(0, len(items), n)]
+
 
 def load_pickle(path: Path):
     if not path.exists():
@@ -170,12 +190,14 @@ def load_pickle(path: Path):
     except Exception:
         return None
 
-def save_pickle(obj, path: Path):
+
+def save_pickle(obj, path: Path) -> None:
     try:
         with open(path, "wb") as f:
             pickle.dump(obj, f)
     except Exception:
         pass
+
 
 def load_json(path: Path):
     if not path.exists():
@@ -186,93 +208,143 @@ def load_json(path: Path):
     except Exception:
         return None
 
-def save_json(obj: dict, path: Path):
+
+def save_json(obj: dict, path: Path) -> None:
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
-def normalize_symbol(sym: str) -> str:
-    sym = str(sym).strip().upper()
-    return sym.replace(".", "-")
 
-def classify_side(fill: float, bid: float, ask: float) -> str:
-    bid = 0.0 if pd.isna(bid) else float(bid)
-    ask = 0.0 if pd.isna(ask) else float(ask)
-    fill = 0.0 if pd.isna(fill) else float(fill)
-
-    if bid <= 0 and ask <= 0:
-        return "UNKNOWN"
-    if ask <= 0:
-        return "BID"
-    if bid <= 0:
-        return "ASK"
-
-    spread = ask - bid
-    if spread <= 0:
-        return "MID"
-
-    near_bid = abs(fill - bid)
-    near_ask = abs(fill - ask)
-    tol = max(spread * 0.20, 0.02)
-
-    if near_ask <= tol and near_ask <= near_bid:
-        return "ASK"
-    if near_bid <= tol and near_bid < near_ask:
-        return "BID"
-    return "MID"
-
-def classify_direction(option_type: str, side: str) -> str:
-    option_type = str(option_type).upper()
-    side = str(side).upper()
-
-    if option_type == "CALL":
-        if side in ("ASK", "MID"):
-            return "BULLISH"
-        if side == "BID":
-            return "BEARISH"
-    elif option_type == "PUT":
-        if side == "BID":
-            return "BULLISH"
-        if side in ("ASK", "MID"):
-            return "BEARISH"
-    return "NEUTRAL"
-
-def strike_bucket(strike: float, spot: float) -> str:
-    if spot <= 0 or pd.isna(spot) or pd.isna(strike):
-        return "UNK"
-    pct = abs(float(strike) - float(spot)) / float(spot)
-    if pct <= 0.01:
-        return "0-1%"
-    if pct <= 0.03:
-        return "1-3%"
-    if pct <= 0.05:
-        return "3-5%"
-    if pct <= 0.10:
-        return "5-10%"
-    return "10%+"
-
-def dte_bucket(dte: int) -> str:
-    dte = int(dte)
-    if dte == 0:
-        return "0DTE"
-    if dte <= 7:
-        return "1-7D"
-    if dte <= 30:
-        return "8-30D"
-    if dte <= 60:
-        return "31-60D"
-    if dte <= 120:
-        return "61-120D"
-    return "120D+"
-
-def with_retry_sleep(attempt: int):
+def with_retry_sleep(attempt: int) -> None:
     time.sleep(RETRY_SLEEP_BASE * attempt + random.uniform(0.0, CHAIN_JITTER_MAX))
 
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Local database
+# =============================================================================
+def init_db() -> None:
+    with sqlite3.connect(FLOW_DB) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flow_events (
+                scan_date TEXT NOT NULL,
+                scan_ts TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                contract_symbol TEXT NOT NULL,
+                type TEXT,
+                expiry TEXT,
+                dte INTEGER,
+                spot REAL,
+                strike REAL,
+                moneyness TEXT,
+                pct_otm REAL,
+                side TEXT,
+                direction TEXT,
+                bid REAL,
+                ask REAL,
+                mid REAL,
+                fill_est REAL,
+                volume REAL,
+                open_interest REAL,
+                vol_oi REAL,
+                premium REAL,
+                spread_pct REAL,
+                iv REAL,
+                unusual_score REAL,
+                avg_dollar_vol REAL,
+                cluster_flag TEXT,
+                cluster_contracts REAL,
+                cluster_premium REAL,
+                cluster_volume REAL,
+                cluster_score REAL,
+                PRIMARY KEY (scan_date, symbol, contract_symbol)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_flow_symbol_date ON flow_events(symbol, scan_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_flow_date ON flow_events(scan_date)")
+        conn.commit()
+
+
+def save_flow_to_db(flow: pd.DataFrame, scan_ts: Optional[pd.Timestamp] = None) -> int:
+    if flow is None or flow.empty:
+        return 0
+
+    init_db()
+    scan_ts = scan_ts or pd.Timestamp.now()
+    scan_date = scan_ts.date().isoformat()
+    scan_ts_str = scan_ts.strftime("%Y-%m-%d %H:%M:%S")
+
+    out = ensure_flow_schema(build_cluster_flags(flow.copy()))
+    out["scan_date"] = scan_date
+    out["scan_ts"] = scan_ts_str
+
+    cols = [
+        "scan_date", "scan_ts", "symbol", "contract_symbol", "type", "expiry", "dte", "spot", "strike",
+        "moneyness", "pct_otm", "side", "direction", "bid", "ask", "mid", "fill_est", "volume",
+        "open_interest", "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "avg_dollar_vol",
+        "cluster_flag", "cluster_contracts", "cluster_premium", "cluster_volume", "cluster_score"
+    ]
+
+    for col in cols:
+        if col not in out.columns:
+            out[col] = np.nan if col not in ["cluster_flag"] else ""
+
+    out = out[cols].copy()
+
+    numeric_cols = [
+        "dte", "spot", "strike", "pct_otm", "bid", "ask", "mid", "fill_est", "volume", "open_interest",
+        "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "avg_dollar_vol", "cluster_contracts",
+        "cluster_premium", "cluster_volume", "cluster_score"
+    ]
+    for col in numeric_cols:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    inserted = 0
+    with sqlite3.connect(FLOW_DB) as conn:
+        placeholders = ",".join(["?"] * len(cols))
+        update_cols = [c for c in cols if c not in ["scan_date", "symbol", "contract_symbol"]]
+        update_clause = ", ".join([f"{c}=excluded.{c}" for c in update_cols])
+        sql = f"""
+            INSERT INTO flow_events ({','.join(cols)})
+            VALUES ({placeholders})
+            ON CONFLICT(scan_date, symbol, contract_symbol)
+            DO UPDATE SET {update_clause}
+        """
+        records = out.where(pd.notna(out), None).values.tolist()
+        conn.executemany(sql, records)
+        conn.commit()
+        inserted = len(records)
+
+    return inserted
+
+
+def load_flow_db(days: int = 90) -> pd.DataFrame:
+    init_db()
+    start_date = (date.today() - timedelta(days=int(days))).isoformat()
+    with sqlite3.connect(FLOW_DB) as conn:
+        df = pd.read_sql_query(
+            "SELECT * FROM flow_events WHERE scan_date >= ? ORDER BY scan_date DESC, premium DESC",
+            conn,
+            params=(start_date,),
+        )
+    if df.empty:
+        return df
+    df["scan_date"] = pd.to_datetime(df["scan_date"]).dt.date
+    df["scan_ts"] = pd.to_datetime(df["scan_ts"], errors="coerce")
+    return ensure_flow_schema(df)
+
+
+def clear_flow_db() -> None:
+    init_db()
+    with sqlite3.connect(FLOW_DB) as conn:
+        conn.execute("DELETE FROM flow_events")
+        conn.commit()
+
+# =============================================================================
 # Universe loader
-# -----------------------------------------------------------------------------
+# =============================================================================
 @st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
 def fetch_nasdaq100_from_wikipedia() -> pd.DataFrame:
     try:
@@ -311,15 +383,12 @@ def fetch_nasdaq100_from_wikipedia() -> pd.DataFrame:
 
         if "symbol" not in candidate.columns:
             raise ValueError("No symbol column found in Nasdaq 100 table.")
-
         if "company" not in candidate.columns:
             candidate["company"] = candidate["symbol"]
 
-        keep_cols = [c for c in ["symbol", "company"] if c in candidate.columns]
-        candidate = candidate[keep_cols].copy()
+        candidate = candidate[["symbol", "company"]].copy()
         candidate["symbol"] = candidate["symbol"].astype(str).map(normalize_symbol)
         candidate["company"] = candidate["company"].astype(str)
-
         candidate = candidate.dropna(subset=["symbol"]).drop_duplicates("symbol").reset_index(drop=True)
 
         if len(candidate) < 80:
@@ -333,8 +402,7 @@ def fetch_nasdaq100_from_wikipedia() -> pd.DataFrame:
         if isinstance(cached, pd.DataFrame) and not cached.empty and "symbol" in cached.columns:
             cached = cached.copy()
             cached["symbol"] = cached["symbol"].astype(str).map(normalize_symbol)
-            cached = cached.drop_duplicates("symbol").reset_index(drop=True)
-            return cached
+            return cached.drop_duplicates("symbol").reset_index(drop=True)
 
         df = pd.DataFrame({
             "symbol": [normalize_symbol(x) for x in NASDAQ100_FALLBACK_SYMBOLS],
@@ -342,11 +410,18 @@ def fetch_nasdaq100_from_wikipedia() -> pd.DataFrame:
         })
         return df.drop_duplicates("symbol").reset_index(drop=True)
 
-# -----------------------------------------------------------------------------
+
+def parse_custom_symbols(raw: str) -> List[str]:
+    if not raw:
+        return []
+    parts = raw.replace("\n", ",").replace(";", ",").split(",")
+    return sorted({normalize_symbol(x) for x in parts if str(x).strip()})
+
+# =============================================================================
 # Spot snapshot
-# -----------------------------------------------------------------------------
+# =============================================================================
 def _extract_snapshot_from_download(data: pd.DataFrame, symbols: List[str]) -> List[dict]:
-    rows = []
+    rows: List[dict] = []
     if data is None or len(data) == 0:
         return rows
 
@@ -368,15 +443,13 @@ def _extract_snapshot_from_download(data: pd.DataFrame, symbols: List[str]) -> L
 
             close = sub["Close"].dropna()
             vol = sub["Volume"].dropna() if "Volume" in sub.columns else pd.Series(dtype=float)
-
             if close.empty:
                 continue
 
             spot = float(close.iloc[-1])
             prev_close = float(close.iloc[-2]) if len(close) >= 2 else spot
-            avg_20d_vol = float(vol.tail(20).mean()) if len(vol) > 0 else np.nan
-            day_volume = float(vol.iloc[-1]) if len(vol) > 0 else np.nan
-
+            avg_20d_vol = float(vol.tail(20).mean()) if len(vol) else np.nan
+            day_volume = float(vol.iloc[-1]) if len(vol) else np.nan
             aligned = pd.concat([close.rename("close"), vol.rename("vol")], axis=1).dropna()
             avg_dollar_vol = float((aligned["close"] * aligned["vol"]).tail(20).mean()) if not aligned.empty else np.nan
 
@@ -393,6 +466,8 @@ def _extract_snapshot_from_download(data: pd.DataFrame, symbols: List[str]) -> L
 
     return rows
 
+
+@st.cache_data(ttl=20 * 60, show_spinner=False)
 def fetch_spot_snapshot(symbols: List[str], batch_size: int = DEFAULT_BATCH_SIZE) -> Tuple[pd.DataFrame, dict]:
     if not symbols:
         return pd.DataFrame(columns=["symbol", "spot", "prev_close", "avg_20d_vol", "day_volume", "avg_dollar_vol"]), {
@@ -407,7 +482,7 @@ def fetch_spot_snapshot(symbols: List[str], batch_size: int = DEFAULT_BATCH_SIZE
 
     for batch in chunked(symbols, batch_size):
         batches += 1
-        batch_rows = []
+        batch_rows: List[dict] = []
         batch_success = False
 
         for attempt in range(1, RETRY_ATTEMPTS + 1):
@@ -420,6 +495,7 @@ def fetch_spot_snapshot(symbols: List[str], batch_size: int = DEFAULT_BATCH_SIZE
                     progress=False,
                     threads=False,
                     group_by="ticker",
+                    ignore_tz=True,
                 )
                 batch_rows = _extract_snapshot_from_download(data, batch)
                 if batch_rows:
@@ -431,7 +507,6 @@ def fetch_spot_snapshot(symbols: List[str], batch_size: int = DEFAULT_BATCH_SIZE
 
         if not batch_success:
             failures += 1
-
         all_rows.extend(batch_rows)
 
     if not all_rows:
@@ -459,6 +534,7 @@ def fetch_spot_snapshot(symbols: List[str], batch_size: int = DEFAULT_BATCH_SIZE
         "used_cached_snapshot": False,
     }
 
+
 def filter_underlyings(
     snapshot: pd.DataFrame,
     min_price: float,
@@ -474,9 +550,83 @@ def filter_underlyings(
     out = out[pd.to_numeric(out["avg_20d_vol"], errors="coerce") >= float(min_avg_20d_vol)]
     return out.reset_index(drop=True)
 
-# -----------------------------------------------------------------------------
-# Scoring
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Option classification and scoring
+# =============================================================================
+def classify_side(fill: float, bid: float, ask: float) -> str:
+    bid = 0.0 if pd.isna(bid) else float(bid)
+    ask = 0.0 if pd.isna(ask) else float(ask)
+    fill = 0.0 if pd.isna(fill) else float(fill)
+
+    if bid <= 0 and ask <= 0:
+        return "UNKNOWN"
+    if ask <= 0:
+        return "BID"
+    if bid <= 0:
+        return "ASK"
+
+    spread = ask - bid
+    if spread <= 0:
+        return "MID"
+
+    near_bid = abs(fill - bid)
+    near_ask = abs(fill - ask)
+    tol = max(spread * 0.20, 0.02)
+
+    if near_ask <= tol and near_ask <= near_bid:
+        return "ASK"
+    if near_bid <= tol and near_bid < near_ask:
+        return "BID"
+    return "MID"
+
+
+def classify_direction(option_type: str, side: str) -> str:
+    option_type = str(option_type).upper()
+    side = str(side).upper()
+
+    if option_type == "CALL":
+        if side in ("ASK", "MID"):
+            return "BULLISH"
+        if side == "BID":
+            return "BEARISH"
+    elif option_type == "PUT":
+        if side == "BID":
+            return "BULLISH"
+        if side in ("ASK", "MID"):
+            return "BEARISH"
+    return "NEUTRAL"
+
+
+def strike_bucket(strike: float, spot: float) -> str:
+    if spot <= 0 or pd.isna(spot) or pd.isna(strike):
+        return "UNK"
+    pct = abs(float(strike) - float(spot)) / float(spot)
+    if pct <= 0.01:
+        return "0-1%"
+    if pct <= 0.03:
+        return "1-3%"
+    if pct <= 0.05:
+        return "3-5%"
+    if pct <= 0.10:
+        return "5-10%"
+    return "10%+"
+
+
+def dte_bucket(dte: int) -> str:
+    dte = int(dte)
+    if dte == 0:
+        return "0DTE"
+    if dte <= 7:
+        return "1-7D"
+    if dte <= 30:
+        return "8-30D"
+    if dte <= 60:
+        return "31-60D"
+    if dte <= 120:
+        return "61-120D"
+    return "120D+"
+
+
 def compute_unusual_score(
     premium: float,
     volume: float,
@@ -487,13 +637,13 @@ def compute_unusual_score(
     side: str,
     avg_dollar_vol: float,
 ) -> float:
-    premium_score = min(math.log10(max(premium, 0) + 1.0) / 6.7, 1.0)
+    premium_score = min(math.log10(max(premium, 0) + 1.0) / 6.8, 1.0)
     abs_size_score = min(max(volume, 0) / 3000.0, 1.0)
     voi_score = min((max(volume, 0) / max(open_interest, 1.0)) / 6.0, 1.0)
-    otm_score = min(max(pct_otm, 0) / 0.10, 1.0)
+    otm_score = min(max(pct_otm, 0) / 0.12, 1.0)
     dte_score = 1.0 if dte <= 30 else max(0.25, 1.0 - ((dte - 30) / 365.0))
     spread_penalty = min(max(spread_pct, 0) / 80.0, 1.0)
-    side_bonus = 0.05 if side in ("ASK", "BID") else 0.02 if side == "MID" else 0.0
+    side_bonus = 0.06 if side in ("ASK", "BID") else 0.025 if side == "MID" else 0.0
 
     if pd.isna(avg_dollar_vol) or avg_dollar_vol <= 0:
         liquidity_score = 0.4
@@ -501,20 +651,20 @@ def compute_unusual_score(
         liquidity_score = min(math.log10(avg_dollar_vol + 1.0) / 9.0, 1.0)
 
     raw = (
-        0.34 * premium_score
+        0.35 * premium_score
         + 0.20 * voi_score
         + 0.14 * abs_size_score
         + 0.08 * otm_score
         + 0.08 * dte_score
-        + 0.08 * liquidity_score
+        + 0.07 * liquidity_score
         + side_bonus
         - 0.16 * spread_penalty
     )
     return float(np.clip(raw, 0.0, 1.0) * 100.0)
 
-# -----------------------------------------------------------------------------
-# Yahoo helpers
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Yahoo option helpers
+# =============================================================================
 def get_ticker_with_retries(symbol: str) -> Optional[yf.Ticker]:
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
@@ -523,6 +673,7 @@ def get_ticker_with_retries(symbol: str) -> Optional[yf.Ticker]:
             with_retry_sleep(attempt)
     return None
 
+
 def get_options_dates(tkr: yf.Ticker) -> Tuple[List[str], Optional[str]]:
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
@@ -530,23 +681,22 @@ def get_options_dates(tkr: yf.Ticker) -> Tuple[List[str], Optional[str]]:
             if expiries:
                 return expiries, None
             return [], "no_listed_options"
-        except Exception as e:
-            last_error = str(e)
+        except Exception:
             with_retry_sleep(attempt)
-    return [], f"options_load_failed"
+    return [], "options_load_failed"
+
 
 def get_option_chain(tkr: yf.Ticker, expiry: str):
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
             return tkr.option_chain(expiry), None
-        except Exception as e:
-            last_error = str(e)
+        except Exception:
             with_retry_sleep(attempt)
     return None, "chain_load_failed"
 
-# -----------------------------------------------------------------------------
-# One-symbol scan
-# -----------------------------------------------------------------------------
+# =============================================================================
+# One-symbol scanner
+# =============================================================================
 def scan_one_symbol(
     symbol: str,
     spot_map: Dict[str, float],
@@ -590,20 +740,18 @@ def scan_one_symbol(
         diagnostics["reason"] = "spot_missing"
         return rows, diagnostics
 
-    today = pd.Timestamp.now(tz="UTC").date()
-
-    parsed_expiries = []
+    today_utc = pd.Timestamp.now(tz="UTC").date()
+    parsed_expiries: List[Tuple[str, int]] = []
     for exp in expiries:
         try:
             exp_date = pd.Timestamp(exp).date()
-            dte = (exp_date - today).days
+            dte = (exp_date - today_utc).days
             if dte_min <= dte <= dte_max:
                 parsed_expiries.append((exp, dte))
         except Exception:
             continue
 
     parsed_expiries = sorted(parsed_expiries, key=lambda x: x[1])[:max_expiries_per_symbol]
-
     if not parsed_expiries:
         diagnostics["reason"] = "no_expiry_in_range"
         return rows, diagnostics
@@ -649,12 +797,12 @@ def scan_one_symbol(
             mids = np.where(
                 (local["bid"] > 0) & (local["ask"] > 0),
                 (local["bid"] + local["ask"]) / 2.0,
-                np.where(local["ask"] > 0, local["ask"], np.where(local["bid"] > 0, local["bid"], 0.0))
+                np.where(local["ask"] > 0, local["ask"], np.where(local["bid"] > 0, local["bid"], 0.0)),
             )
             fills = np.where(
                 local["lastPrice"] > 0,
                 local["lastPrice"],
-                np.where(mids > 0, mids, np.where(local["ask"] > 0, local["ask"], local["bid"]))
+                np.where(mids > 0, mids, np.where(local["ask"] > 0, local["ask"], local["bid"])),
             )
 
             local["mid"] = mids
@@ -676,33 +824,21 @@ def scan_one_symbol(
             local["spread_pct"] = np.where(
                 (local["mid"] > 0) & (local["ask"] >= local["bid"]) & (local["bid"] > 0),
                 ((local["ask"] - local["bid"]) / local["mid"]) * 100.0,
-                np.nan
+                np.nan,
             )
             local = local[(local["spread_pct"].isna()) | (local["spread_pct"] <= max_spread_pct)].copy()
             if local.empty:
                 continue
 
-            local["side"] = [
-                classify_side(f, b, a)
-                for f, b, a in zip(local["fill_est"], local["bid"], local["ask"])
-            ]
-            local["direction"] = [
-                classify_direction(option_type, s)
-                for s in local["side"]
-            ]
+            local["side"] = [classify_side(f, b, a) for f, b, a in zip(local["fill_est"], local["bid"], local["ask"])]
+            local["direction"] = [classify_direction(option_type, s) for s in local["side"]]
 
             if option_type == "CALL":
                 local["pct_otm_dec"] = np.maximum((local["strike"] - spot) / spot, 0.0)
-                local["moneyness"] = np.where(
-                    local["strike"] > spot, "OTM",
-                    np.where(local["strike"] < spot, "ITM", "ATM")
-                )
+                local["moneyness"] = np.where(local["strike"] > spot, "OTM", np.where(local["strike"] < spot, "ITM", "ATM"))
             else:
                 local["pct_otm_dec"] = np.maximum((spot - local["strike"]) / spot, 0.0)
-                local["moneyness"] = np.where(
-                    local["strike"] < spot, "OTM",
-                    np.where(local["strike"] > spot, "ITM", "ATM")
-                )
+                local["moneyness"] = np.where(local["strike"] < spot, "OTM", np.where(local["strike"] > spot, "ITM", "ATM"))
 
             local["unusual_score"] = [
                 compute_unusual_score(
@@ -721,7 +857,7 @@ def scan_one_symbol(
                     local["openInterest"],
                     local["spread_pct"],
                     local["pct_otm_dec"],
-                    local["side"]
+                    local["side"],
                 )
             ]
 
@@ -741,26 +877,45 @@ def scan_one_symbol(
                 "symbol", "contractSymbol", "type", "expiry", "dte", "spot", "strike",
                 "moneyness", "pct_otm", "side", "direction", "bid", "ask", "mid",
                 "fill_est", "volume", "openInterest", "vol_oi", "premium",
-                "spread_pct", "impliedVolatility", "unusual_score", "avg_dollar_vol"
+                "spread_pct", "impliedVolatility", "unusual_score", "avg_dollar_vol",
             ]].rename(columns={
                 "contractSymbol": "contract_symbol",
                 "openInterest": "open_interest",
-                "impliedVolatility": "iv"
+                "impliedVolatility": "iv",
             }).to_dict("records"))
 
             diagnostics["contracts_kept"] += len(local)
 
     if diagnostics["contracts_kept"] == 0 and diagnostics["reason"] == "":
-        if diagnostics["contracts_seen"] == 0:
-            diagnostics["reason"] = "empty_chains"
-        else:
-            diagnostics["reason"] = "all_filtered_out"
+        diagnostics["reason"] = "empty_chains" if diagnostics["contracts_seen"] == 0 else "all_filtered_out"
 
     return rows, diagnostics
 
-# -----------------------------------------------------------------------------
-# Cluster logic
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Clusters and schema
+# =============================================================================
+def ensure_flow_schema(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+    defaults = {
+        "avg_dollar_vol": np.nan,
+        "iv": np.nan,
+        "spread_pct": np.nan,
+        "pct_otm": np.nan,
+        "cluster_flag": "",
+        "cluster_contracts": np.nan,
+        "cluster_premium": np.nan,
+        "cluster_volume": np.nan,
+        "cluster_score": np.nan,
+    }
+    for col, default in defaults.items():
+        if col not in out.columns:
+            out[col] = default
+    return out
+
+
 def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
@@ -768,7 +923,7 @@ def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     stale_cols = [
         "strike_bucket", "cluster_key", "cluster_contracts", "cluster_premium",
-        "cluster_volume", "cluster_score", "cluster_flag"
+        "cluster_volume", "cluster_score", "cluster_flag",
     ]
     out = out.drop(columns=[c for c in stale_cols if c in out.columns], errors="ignore")
 
@@ -806,17 +961,12 @@ def build_cluster_flags(df: pd.DataFrame) -> pd.DataFrame:
     out["cluster_premium"] = out["cluster_premium"].fillna(0.0)
     out["cluster_volume"] = out["cluster_volume"].fillna(0.0)
     out["cluster_score"] = out["cluster_score"].fillna(0.0)
-
-    out["cluster_flag"] = np.where(
-        (out["cluster_contracts"] >= 3) & (out["cluster_premium"] >= 500_000),
-        "CLUSTER",
-        ""
-    )
+    out["cluster_flag"] = np.where((out["cluster_contracts"] >= 3) & (out["cluster_premium"] >= 500_000), "CLUSTER", "")
     return out
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Full scan
-# -----------------------------------------------------------------------------
+# =============================================================================
 def run_full_scan(
     symbols: List[str],
     spot_snapshot: pd.DataFrame,
@@ -842,7 +992,6 @@ def run_full_scan(
 
     progress_bar = st.progress(0.0)
     status = st.empty()
-
     total = len(symbols)
     completed = 0
 
@@ -902,183 +1051,252 @@ def run_full_scan(
         flow = build_cluster_flags(flow)
         flow = flow.sort_values(
             ["unusual_score", "premium", "vol_oi", "volume"],
-            ascending=[False, False, False, False]
+            ascending=[False, False, False, False],
         ).reset_index(drop=True)
 
     return flow, diags
 
-# -----------------------------------------------------------------------------
-# Commentary and schema helpers
-# -----------------------------------------------------------------------------
-def summarize_tape(df: pd.DataFrame) -> str:
+# =============================================================================
+# Trend engine
+# =============================================================================
+def build_trend_board(db: pd.DataFrame, lookback_days: int) -> pd.DataFrame:
+    if db is None or db.empty:
+        return pd.DataFrame()
+
+    start = date.today() - timedelta(days=int(lookback_days))
+    sub = db[pd.to_datetime(db["scan_date"]).dt.date >= start].copy()
+    if sub.empty:
+        return pd.DataFrame()
+
+    sub["bullish_premium"] = np.where(sub["direction"] == "BULLISH", sub["premium"], 0.0)
+    sub["bearish_premium"] = np.where(sub["direction"] == "BEARISH", sub["premium"], 0.0)
+    sub["bullish_rows"] = np.where(sub["direction"] == "BULLISH", 1, 0)
+    sub["bearish_rows"] = np.where(sub["direction"] == "BEARISH", 1, 0)
+    sub["cluster_int"] = np.where(sub["cluster_flag"].astype(str).str.upper() == "CLUSTER", 1, 0)
+
+    trend = (
+        sub.groupby("symbol", as_index=False)
+        .agg(
+            unusual_trades=("contract_symbol", "count"),
+            active_days=("scan_date", lambda x: pd.Series(x).nunique()),
+            total_premium=("premium", "sum"),
+            bullish_premium=("bullish_premium", "sum"),
+            bearish_premium=("bearish_premium", "sum"),
+            bullish_trades=("bullish_rows", "sum"),
+            bearish_trades=("bearish_rows", "sum"),
+            avg_score=("unusual_score", "mean"),
+            max_score=("unusual_score", "max"),
+            avg_dte=("dte", "mean"),
+            largest_print=("premium", "max"),
+            clusters=("cluster_int", "sum"),
+        )
+    )
+
+    trend["net_premium"] = trend["bullish_premium"] - trend["bearish_premium"]
+    trend["net_trades"] = trend["bullish_trades"] - trend["bearish_trades"]
+    trend["bull_bear_score"] = np.where(
+        trend["total_premium"] > 0,
+        100.0 * trend["net_premium"] / trend["total_premium"],
+        0.0,
+    )
+    trend["persistence"] = trend["active_days"] / max(lookback_days, 1)
+
+    trend["tape"] = np.select(
+        [
+            trend["bull_bear_score"] >= 35,
+            trend["bull_bear_score"] <= -35,
+        ],
+        ["BULLISH", "BEARISH"],
+        default="MIXED",
+    )
+
+    trend["conviction_score"] = (
+        trend["avg_score"].fillna(0) * 0.40
+        + np.clip(np.log10(trend["total_premium"].fillna(0) + 1) / 7.0 * 100, 0, 100) * 0.30
+        + np.clip(trend["unusual_trades"].fillna(0) / 20 * 100, 0, 100) * 0.20
+        + np.clip(trend["active_days"].fillna(0) / max(min(lookback_days, 20), 1) * 100, 0, 100) * 0.10
+    )
+
+    return trend.sort_values(["conviction_score", "total_premium"], ascending=[False, False]).reset_index(drop=True)
+
+
+def build_multi_window_scores(db: pd.DataFrame) -> pd.DataFrame:
+    windows = [1, 5, 20, 60]
+    boards = []
+    for w in windows:
+        b = build_trend_board(db, w)
+        if b.empty:
+            continue
+        keep = b[["symbol", "unusual_trades", "total_premium", "net_premium", "bull_bear_score", "conviction_score", "tape"]].copy()
+        keep = keep.rename(columns={
+            "unusual_trades": f"{w}D Trades",
+            "total_premium": f"{w}D Premium",
+            "net_premium": f"{w}D Net Premium",
+            "bull_bear_score": f"{w}D B/B Score",
+            "conviction_score": f"{w}D Conviction",
+            "tape": f"{w}D Tape",
+        })
+        boards.append(keep)
+
+    if not boards:
+        return pd.DataFrame()
+
+    out = boards[0]
+    for b in boards[1:]:
+        out = out.merge(b, on="symbol", how="outer")
+
+    sort_col = "20D Conviction" if "20D Conviction" in out.columns else [c for c in out.columns if c.endswith("Conviction")][0]
+    return out.sort_values(sort_col, ascending=False).reset_index(drop=True)
+
+# =============================================================================
+# Display helpers
+# =============================================================================
+def prep_flow_display(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        return "No qualifying anomalies made it through the current public-data filters."
+        return pd.DataFrame()
 
-    bullish = float(df.loc[df["direction"] == "BULLISH", "premium"].sum()) if "direction" in df.columns else 0.0
-    bearish = float(df.loc[df["direction"] == "BEARISH", "premium"].sum()) if "direction" in df.columns else 0.0
-    total = float(df["premium"].sum()) if "premium" in df.columns else 0.0
-
-    top = df.iloc[0]
-    top_tickers = (
-        df.groupby("symbol", as_index=False)["premium"].sum()
-        .sort_values("premium", ascending=False)
-        .head(5)
-    )
-    concentration = float(top_tickers["premium"].sum() / total) if total > 0 else 0.0
-
-    dte_mix = (
-        df.assign(dte_bucket=df["dte"].map(dte_bucket))
-        .groupby("dte_bucket", as_index=False)["premium"]
-        .sum()
-        .sort_values("premium", ascending=False)
-    )
-    lead_bucket = dte_mix.iloc[0]["dte_bucket"] if not dte_mix.empty else "N/A"
-
-    clusters = int((df["cluster_flag"] == "CLUSTER").sum()) if "cluster_flag" in df.columns else 0
-    cluster_premium = float(df.loc[df["cluster_flag"] == "CLUSTER", "premium"].sum()) if "cluster_flag" in df.columns else 0.0
-
-    leader = (
-        f"Top print is {top['symbol']} {top['type'].lower()} flow in the {top['expiry']} "
-        f"{top['strike']:.0f} strike, estimated premium {human_money(top['premium'])}, "
-        f"volume/OI {top['vol_oi']:.2f}x, score {top['unusual_score']:.1f}."
-    )
-
-    if bullish > bearish * 1.25:
-        tilt = f"Directional premium skews bullish at {human_money(bullish)} versus {human_money(bearish)} bearish."
-    elif bearish > bullish * 1.25:
-        tilt = f"Directional premium skews bearish at {human_money(bearish)} versus {human_money(bullish)} bullish."
+    out = ensure_flow_schema(df).copy()
+    out["Premium"] = out["premium"].map(human_money)
+    out["Vol"] = out["volume"].map(human_num)
+    out["OI"] = out["open_interest"].map(human_num)
+    out["Vol/OI"] = out["vol_oi"].map(lambda x: f"{safe_float(x, 0):.2f}x")
+    out["Fill"] = out["fill_est"].map(lambda x: f"{safe_float(x, 0):.2f}")
+    out["Bid"] = out["bid"].map(lambda x: f"{safe_float(x, 0):.2f}")
+    out["Ask"] = out["ask"].map(lambda x: f"{safe_float(x, 0):.2f}")
+    out["Spread %"] = out["spread_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
+    out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}")
+    out["OTM %"] = out["pct_otm"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
+    out["Score"] = out["unusual_score"].map(lambda x: f"{safe_float(x, 0):.1f}")
+    if "scan_date" in out.columns:
+        out["Date"] = out["scan_date"].astype(str)
     else:
-        tilt = f"Directional premium is relatively balanced with {human_money(bullish)} bullish and {human_money(bearish)} bearish."
-
-    breadth = (
-        f"Concentration is {'high' if concentration >= 0.60 else 'moderate' if concentration >= 0.40 else 'broad'}, "
-        f"with the top five tickers accounting for {concentration:.0%} of qualifying premium."
-    )
-
-    tenor = f"The tape is led by the {lead_bucket} bucket."
-    cluster_line = (
-        f"Cluster behavior is meaningful, with {clusters:,} flagged rows representing {human_money(cluster_premium)} of premium."
-        if clusters > 0 else
-        "The board is more single-print than cluster-driven."
-    )
-
-    return " ".join([leader, tilt, breadth, tenor, cluster_line])
-
-def ensure_flow_schema(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    out = df.copy()
-    defaults = {
-        "avg_dollar_vol": np.nan,
-        "iv": np.nan,
-        "spread_pct": np.nan,
-        "pct_otm": np.nan,
-        "cluster_flag": "",
-        "cluster_contracts": np.nan,
-        "cluster_premium": np.nan,
-        "cluster_volume": np.nan,
-        "cluster_score": np.nan,
-    }
-    for col, default in defaults.items():
-        if col not in out.columns:
-            out[col] = default
-    return out
-
-def prep_display(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    out = ensure_flow_schema(df)
-
-    out["Premium"] = out["premium"].map(human_money) if "premium" in out.columns else ""
-    out["Vol"] = out["volume"].map(human_num) if "volume" in out.columns else ""
-    out["OI"] = out["open_interest"].map(human_num) if "open_interest" in out.columns else ""
-    out["Vol/OI"] = out["vol_oi"].map(lambda x: f"{x:.2f}x") if "vol_oi" in out.columns else ""
-    out["Fill"] = out["fill_est"].map(lambda x: f"{x:.2f}") if "fill_est" in out.columns else ""
-    out["Bid"] = out["bid"].map(lambda x: f"{x:.2f}") if "bid" in out.columns else ""
-    out["Ask"] = out["ask"].map(lambda x: f"{x:.2f}") if "ask" in out.columns else ""
-    out["Spread %"] = out["spread_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%") if "spread_pct" in out.columns else ""
-    out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}") if "iv" in out.columns else ""
-    out["OTM %"] = out["pct_otm"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%") if "pct_otm" in out.columns else ""
-    out["Score"] = out["unusual_score"].map(lambda x: f"{x:.1f}") if "unusual_score" in out.columns else ""
-    out["ADV"] = out["avg_dollar_vol"].map(lambda x: "" if pd.isna(x) else human_money(x)) if "avg_dollar_vol" in out.columns else ""
+        out["Date"] = ""
 
     keep = [
-        "symbol", "type", "expiry", "dte", "direction", "side", "strike", "spot",
-        "moneyness", "OTM %", "Fill", "Bid", "Ask", "Spread %", "Vol", "OI",
-        "Vol/OI", "Premium", "IV", "Score", "ADV", "cluster_flag", "contract_symbol"
+        "Date", "symbol", "type", "expiry", "dte", "direction", "side", "strike", "spot",
+        "moneyness", "OTM %", "Fill", "Bid", "Ask", "Spread %", "Vol", "OI", "Vol/OI",
+        "Premium", "IV", "Score", "cluster_flag", "contract_symbol",
     ]
     keep = [c for c in keep if c in out.columns]
     return out[keep].copy()
 
-def render_top_flow_dashboard(df: pd.DataFrame):
+
+def prep_trend_display(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        st.info("No top-flow rows to show.")
+        return pd.DataFrame()
+    out = df.copy()
+    money_cols = [c for c in out.columns if "Premium" in c or c in ["total_premium", "bullish_premium", "bearish_premium", "net_premium", "largest_print"]]
+    for col in money_cols:
+        if col in out.columns:
+            out[col] = out[col].map(human_money)
+    score_cols = [c for c in out.columns if "Score" in c or "Conviction" in c or c in ["avg_score", "max_score", "bull_bear_score"]]
+    for col in score_cols:
+        if col in out.columns:
+            out[col] = out[col].map(lambda x: "" if pd.isna(x) else f"{x:.1f}")
+    if "avg_dte" in out.columns:
+        out["avg_dte"] = out["avg_dte"].map(lambda x: "" if pd.isna(x) else f"{x:.0f}")
+    return out
+
+
+def render_top_metrics(db: pd.DataFrame, live_flow: pd.DataFrame, scan_meta: dict) -> None:
+    db_rows = 0 if db is None or db.empty else len(db)
+    db_symbols = 0 if db is None or db.empty else db["symbol"].nunique()
+    live_rows = 0 if live_flow is None or live_flow.empty else len(live_flow)
+    live_premium = 0.0 if live_flow is None or live_flow.empty else float(live_flow["premium"].sum())
+    live_bull = 0.0 if live_flow is None or live_flow.empty else float(live_flow.loc[live_flow["direction"] == "BULLISH", "premium"].sum())
+    live_bear = 0.0 if live_flow is None or live_flow.empty else float(live_flow.loc[live_flow["direction"] == "BEARISH", "premium"].sum())
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Live rows", f"{live_rows:,}")
+    c2.metric("Live premium", human_money(live_premium))
+    c3.metric("Live bull", human_money(live_bull))
+    c4.metric("Live bear", human_money(live_bear))
+    c5.metric("DB rows", f"{db_rows:,}")
+    c6.metric("DB tickers", f"{db_symbols:,}")
+
+    if scan_meta:
+        meta = f"Mode: {scan_meta.get('mode', 'Unknown')}"
+        if scan_meta.get("saved_at"):
+            meta += f" | Snapshot: {scan_meta.get('saved_at')}"
+        if scan_meta.get("symbols_scanned") is not None:
+            meta += f" | Symbols scanned: {safe_int(scan_meta.get('symbols_scanned')):,}"
+        if scan_meta.get("raw_contracts") is not None:
+            meta += f" | Raw contracts: {safe_int(scan_meta.get('raw_contracts')):,}"
+        if scan_meta.get("success_ratio") is not None:
+            meta += f" | Success ratio: {safe_float(scan_meta.get('success_ratio'), 0):.0%}"
+        if scan_meta.get("elapsed") is not None:
+            meta += f" | Elapsed: {safe_float(scan_meta.get('elapsed'), 0):.1f}s"
+        st.caption(meta)
+
+
+def render_trend_bar(trend: pd.DataFrame, lookback_days: int, top_n: int = 30) -> None:
+    if trend.empty:
+        st.info("No saved trend data for this window yet. Run and save a scan first.")
         return
 
-    df = ensure_flow_schema(df).copy().head(30)
-    df["label"] = (
-        df["symbol"].astype(str) + " | " +
-        df["type"].astype(str) + " | " +
-        df["expiry"].astype(str) + " | " +
-        df["strike"].round(0).astype(int).astype(str)
-    )
-
+    top = trend.head(top_n).copy()
     fig = px.bar(
-        df.sort_values(["premium", "unusual_score"], ascending=[True, True]),
-        x="premium",
-        y="label",
-        color="direction",
+        top.sort_values("net_premium", ascending=True),
+        x="net_premium",
+        y="symbol",
+        color="tape",
         orientation="h",
         hover_data={
-            "symbol": True,
-            "type": True,
-            "expiry": True,
-            "strike": ":.2f",
-            "dte": True,
-            "vol_oi": ":.2f",
-            "spread_pct": ":.1f",
-            "unusual_score": ":.1f",
-            "premium": ":,.0f",
+            "unusual_trades": True,
+            "active_days": True,
+            "total_premium": ":,.0f",
+            "bullish_premium": ":,.0f",
+            "bearish_premium": ":,.0f",
+            "bull_bear_score": ":.1f",
+            "conviction_score": ":.1f",
         },
-        title="Top Flow Leaderboard"
+        title=f"Top Net Flow by Ticker | {lookback_days}D Window",
     )
-    fig.update_layout(height=780, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
+    fig.update_layout(height=760, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="", xaxis_title="Net bullish minus bearish premium")
     st.plotly_chart(fig, use_container_width=True)
 
-    inspect_choice = st.selectbox(
-        "Inspect contract",
-        options=df["label"].tolist(),
-        index=0,
-        key="top_flow_inspect_choice"
+
+def render_ticker_timeline(db: pd.DataFrame, ticker: str) -> None:
+    if db.empty or not ticker:
+        return
+
+    sub = db[db["symbol"] == ticker].copy()
+    if sub.empty:
+        st.info("No saved rows for this ticker.")
+        return
+
+    sub["scan_date_dt"] = pd.to_datetime(sub["scan_date"])
+    sub["bullish_premium"] = np.where(sub["direction"] == "BULLISH", sub["premium"], 0.0)
+    sub["bearish_premium"] = np.where(sub["direction"] == "BEARISH", sub["premium"], 0.0)
+
+    daily = (
+        sub.groupby("scan_date_dt", as_index=False)
+        .agg(
+            bullish_premium=("bullish_premium", "sum"),
+            bearish_premium=("bearish_premium", "sum"),
+            rows=("contract_symbol", "count"),
+        )
     )
-    row = df.loc[df["label"] == inspect_choice].iloc[0]
+    daily["net_premium"] = daily["bullish_premium"] - daily["bearish_premium"]
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Premium", human_money(row["premium"]))
-    c2.metric("Vol/OI", f"{row['vol_oi']:.2f}x")
-    c3.metric("Score", f"{row['unusual_score']:.1f}")
-    c4.metric("Spread %", "" if pd.isna(row["spread_pct"]) else f"{row['spread_pct']:.1f}%")
-
-    st.markdown(
-        f"""
-        **{row['symbol']} {row['type']} {int(round(row['strike']))} {row['expiry']}**
-
-        Direction: **{row['direction']}**  
-        Side estimate: **{row['side']}**  
-        DTE: **{int(row['dte'])}**  
-        Spot: **{row['spot']:.2f}**  
-        Moneyness: **{row['moneyness']}**  
-        OTM distance: **{row['pct_otm']:.1f}%**  
-        Cluster flag: **{row['cluster_flag'] if str(row['cluster_flag']).strip() else 'None'}**
-        """
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=daily["scan_date_dt"], y=daily["bullish_premium"], name="Bullish premium"))
+    fig.add_trace(go.Bar(x=daily["scan_date_dt"], y=-daily["bearish_premium"], name="Bearish premium"))
+    fig.add_trace(go.Scatter(x=daily["scan_date_dt"], y=daily["net_premium"], mode="lines+markers", name="Net premium"))
+    fig.update_layout(
+        title=f"{ticker} | Saved Unusual Flow by Day",
+        barmode="relative",
+        height=500,
+        margin=dict(l=20, r=20, t=55, b=20),
+        yaxis_title="Premium",
+        hovermode="x unified",
     )
+    st.plotly_chart(fig, use_container_width=True)
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Session state
-# -----------------------------------------------------------------------------
-def init_state():
+# =============================================================================
+def init_state() -> None:
     defaults = {
         "flow_raw": None,
         "diags_raw": None,
@@ -1091,32 +1309,57 @@ def init_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
+
 init_state()
+init_db()
 
-# -----------------------------------------------------------------------------
-# Universe loads fast
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Universe
+# =============================================================================
 universe = fetch_nasdaq100_from_wikipedia()
-symbols_all = universe["symbol"].dropna().astype(str).map(normalize_symbol).unique().tolist()
+ndx_symbols = universe["symbol"].dropna().astype(str).map(normalize_symbol).unique().tolist()
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Sidebar
-# -----------------------------------------------------------------------------
+# =============================================================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Unusual options-flow scanner for outsized listed-options activity across Nasdaq 100 names.
+        **Purpose:** A public-data approximation of a curated unusual-options-flow service.
 
-        **What this tab shows**
-        - Concentrated options activity with a tighter, higher-signal universe.
-        - Pre-scan underlying filters to reduce noisy or illiquid names.
-        - Chart-led follow-through review for fast tape validation.
+        **What it does**
+        - Scans Yahoo Finance option chains for unusual contracts.
+        - Saves qualifying rows into a local SQLite database.
+        - Builds ticker-level bull/bear trend scores over rolling windows.
+        - Lets you drill down into repeated attacks on the same ticker.
 
-        **Data source**
-        - Public options and market data feeds used throughout the app.
+        **Yahoo limitation**
+        - This is chain-snapshot data, not exchange-grade time-and-sales.
+        - Side and direction are estimates from last price versus bid/ask.
         """
     )
+
+    st.subheader("Universe")
+    universe_mode = st.selectbox(
+        "Universe mode",
+        ["Nasdaq 100 + ADFM extras", "Nasdaq 100 only", "Custom only"],
+        index=0,
+    )
+    custom_raw = st.text_area(
+        "Custom tickers",
+        value="",
+        placeholder="Example: SLV, GLD, VST, HOOD, CAR, NKTR",
+        height=80,
+    )
+    custom_symbols = parse_custom_symbols(custom_raw)
+
+    if universe_mode == "Nasdaq 100 only":
+        symbols_all = sorted(set(ndx_symbols))
+    elif universe_mode == "Custom only":
+        symbols_all = sorted(set(custom_symbols))
+    else:
+        symbols_all = sorted(set(ndx_symbols + DEFAULT_EXTRA_SYMBOLS + custom_symbols))
 
     st.subheader("Underlying Pre-Filters")
     min_price = st.number_input("Minimum stock price ($)", min_value=0.0, value=float(DEFAULT_MIN_PRICE), step=5.0, format="%.0f")
@@ -1126,7 +1369,7 @@ with st.sidebar:
         min_value=0.0,
         value=float(DEFAULT_MIN_UNDERLYING_DOLLAR_VOL_MM),
         step=25.0,
-        format="%.0f"
+        format="%.0f",
     )
 
     st.subheader("Anomaly Filters")
@@ -1139,20 +1382,22 @@ with st.sidebar:
 
     st.subheader("Scan Engine")
     max_expiries_per_symbol = st.slider("Max expiries per symbol", min_value=1, max_value=16, value=DEFAULT_MAX_EXPIRIES_PER_SYMBOL, step=1)
-    max_workers = st.slider("Concurrent workers", min_value=1, max_value=12, value=DEFAULT_MAX_WORKERS, step=1)
-    top_n = st.slider("Rows to display", min_value=25, max_value=300, value=DEFAULT_TOP_N, step=25)
+    max_workers = st.slider("Concurrent workers", min_value=1, max_value=10, value=DEFAULT_MAX_WORKERS, step=1)
+    top_n = st.slider("Rows to display", min_value=25, max_value=500, value=DEFAULT_TOP_N, step=25)
     allow_cached_fallback = st.toggle("Use last-good cached scan when live scan is degraded", value=True)
+    save_to_database = st.toggle("Save qualifying rows to local trend database", value=True)
 
     run_scan = st.button("Run Live Scan", use_container_width=True, type="primary")
 
-    st.markdown(
-        '<div class="small-note">This version fetches the Nasdaq 100 universe quickly, then only pulls spot data and option chains after you click Run Live Scan. Concurrency was reduced and retries were added because Yahoo option-chain endpoints degrade under load.</div>',
-        unsafe_allow_html=True,
-    )
+    st.subheader("Database")
+    db_days = st.slider("Database lookback loaded", min_value=5, max_value=365, value=90, step=5)
+    if st.button("Clear local flow database", use_container_width=True):
+        clear_flow_db()
+        st.success("Local flow database cleared.")
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Cached startup load
-# -----------------------------------------------------------------------------
+# =============================================================================
 if not st.session_state["scan_ran"]:
     cached_flow = load_pickle(LAST_GOOD_SCAN)
     cached_diags = load_pickle(LAST_GOOD_DIAGS)
@@ -1183,13 +1428,18 @@ if not st.session_state["scan_ran"]:
             "symbols_scanned": 0,
         }
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Run scan
-# -----------------------------------------------------------------------------
+# =============================================================================
 if run_scan:
     scan_started = time.time()
+    scan_ts = pd.Timestamp.now()
 
-    with st.spinner(f"Fetching Nasdaq 100 spot data for {len(symbols_all):,} symbols..."):
+    if not symbols_all:
+        st.error("No symbols selected.")
+        st.stop()
+
+    with st.spinner(f"Fetching spot data for {len(symbols_all):,} symbols..."):
         snapshot, spot_meta = fetch_spot_snapshot(symbols_all, batch_size=DEFAULT_BATCH_SIZE)
 
     st.session_state["spot_snapshot_meta"] = spot_meta
@@ -1200,27 +1450,18 @@ if run_scan:
         min_avg_dollar_vol_mm=min_underlying_dollar_vol_mm,
         min_avg_20d_vol=min_avg_20d_vol,
     )
-    symbols_scanned_list = filtered_snapshot["symbol"].dropna().astype(str).tolist()
+    symbols_scanned_list = filtered_snapshot["symbol"].dropna().astype(str).tolist() if not filtered_snapshot.empty else []
     symbols_scanned_count = len(symbols_scanned_list)
-
     st.session_state["filtered_snapshot"] = filtered_snapshot.copy()
 
     if symbols_scanned_count == 0:
-        st.session_state["flow_raw"] = pd.DataFrame()
-        st.session_state["diags_raw"] = pd.DataFrame()
-        st.session_state["scan_meta"] = {
-            "mode": "Live",
-            "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "elapsed": round(time.time() - scan_started, 1),
-            "success_ratio": None,
-            "raw_contracts": 0,
-            "symbols_requested": len(symbols_all),
-            "symbols_scanned": 0,
-            "empty_reason": "All underlyings failed the pre-scan filters.",
-        }
-        st.session_state["scan_ran"] = True
+        flow_live = pd.DataFrame()
+        diags_live = pd.DataFrame()
+        success_ratio = None
+        raw_contracts = 0
+        empty_reason = "All underlyings failed the pre-scan filters."
     else:
-        with st.spinner(f"Running live options scan across {symbols_scanned_count:,} filtered Nasdaq 100 symbols..."):
+        with st.spinner(f"Running Yahoo options-chain scan across {symbols_scanned_count:,} filtered symbols..."):
             try:
                 flow_live, diags_live = run_full_scan(
                     symbols=symbols_scanned_list,
@@ -1246,80 +1487,87 @@ if run_scan:
             raw_contracts = int(diags_live["contracts_seen"].sum()) if "contracts_seen" in diags_live.columns else 0
             non_error_rows = int((diags_live["errors"].fillna(0) == 0).sum()) if "errors" in diags_live.columns else 0
             success_ratio = non_error_rows / max(len(diags_live), 1)
+        empty_reason = None
 
-        degraded = (
-            diags_live is None
-            or diags_live.empty
-            or success_ratio < 0.35
-            or raw_contracts < 250
-        )
+    degraded = (
+        diags_live is None
+        or diags_live.empty
+        or (success_ratio is not None and success_ratio < 0.35)
+        or raw_contracts < 250
+    )
 
-        if degraded and allow_cached_fallback:
-            cached_flow = load_pickle(LAST_GOOD_SCAN)
-            cached_diags = load_pickle(LAST_GOOD_DIAGS)
-            cached_meta = load_json(LAST_GOOD_META)
+    if degraded and allow_cached_fallback:
+        cached_flow = load_pickle(LAST_GOOD_SCAN)
+        cached_diags = load_pickle(LAST_GOOD_DIAGS)
+        cached_meta = load_json(LAST_GOOD_META)
 
-            if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
-                st.session_state["flow_raw"] = ensure_flow_schema(build_cluster_flags(cached_flow.copy()))
-                st.session_state["diags_raw"] = cached_diags if isinstance(cached_diags, pd.DataFrame) else pd.DataFrame()
-                st.session_state["scan_meta"] = {
-                    "mode": "Cached fallback",
-                    "saved_at": cached_meta.get("saved_at", "unknown") if isinstance(cached_meta, dict) else "unknown",
-                    "elapsed": round(time.time() - scan_started, 1),
-                    "success_ratio": success_ratio,
-                    "raw_contracts": raw_contracts,
-                    "symbols_requested": len(symbols_all),
-                    "symbols_scanned": symbols_scanned_count,
-                    "empty_reason": "Live scan looked degraded, so cached data was loaded.",
-                }
-                st.session_state["scan_ran"] = True
-                st.warning("Live scan looked degraded, so the app loaded the last-good cached snapshot.")
-            else:
-                st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
-                st.session_state["diags_raw"] = diags_live
-                st.session_state["scan_meta"] = {
-                    "mode": "Live",
-                    "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "elapsed": round(time.time() - scan_started, 1),
-                    "success_ratio": success_ratio,
-                    "raw_contracts": raw_contracts,
-                    "symbols_requested": len(symbols_all),
-                    "symbols_scanned": symbols_scanned_count,
-                    "empty_reason": "Live scan returned weak chain coverage and no cached snapshot was strong enough to use.",
-                }
-                st.session_state["scan_ran"] = True
-        else:
-            st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
-            st.session_state["diags_raw"] = diags_live
+        if isinstance(cached_flow, pd.DataFrame) and not cached_flow.empty:
+            st.session_state["flow_raw"] = ensure_flow_schema(build_cluster_flags(cached_flow.copy()))
+            st.session_state["diags_raw"] = cached_diags if isinstance(cached_diags, pd.DataFrame) else pd.DataFrame()
             st.session_state["scan_meta"] = {
-                "mode": "Live",
-                "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "mode": "Cached fallback",
+                "saved_at": cached_meta.get("saved_at", "unknown") if isinstance(cached_meta, dict) else "unknown",
                 "elapsed": round(time.time() - scan_started, 1),
                 "success_ratio": success_ratio,
                 "raw_contracts": raw_contracts,
                 "symbols_requested": len(symbols_all),
                 "symbols_scanned": symbols_scanned_count,
+                "empty_reason": "Live scan looked degraded, so cached data was loaded.",
             }
             st.session_state["scan_ran"] = True
+            st.warning("Live scan looked degraded, so the app loaded the last-good cached snapshot.")
+        else:
+            st.session_state["flow_raw"] = ensure_flow_schema(flow_live)
+            st.session_state["diags_raw"] = diags_live
+            st.session_state["scan_meta"] = {
+                "mode": "Live",
+                "saved_at": scan_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "elapsed": round(time.time() - scan_started, 1),
+                "success_ratio": success_ratio,
+                "raw_contracts": raw_contracts,
+                "symbols_requested": len(symbols_all),
+                "symbols_scanned": symbols_scanned_count,
+                "empty_reason": empty_reason or "Live scan returned weak chain coverage and no cached snapshot was strong enough to use.",
+            }
+            st.session_state["scan_ran"] = True
+    else:
+        flow_live = ensure_flow_schema(flow_live)
+        st.session_state["flow_raw"] = flow_live
+        st.session_state["diags_raw"] = diags_live
+        st.session_state["scan_meta"] = {
+            "mode": "Live",
+            "saved_at": scan_ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "elapsed": round(time.time() - scan_started, 1),
+            "success_ratio": success_ratio,
+            "raw_contracts": raw_contracts,
+            "symbols_requested": len(symbols_all),
+            "symbols_scanned": symbols_scanned_count,
+            "empty_reason": empty_reason,
+        }
+        st.session_state["scan_ran"] = True
 
-            if flow_live is not None and not flow_live.empty:
-                save_pickle(flow_live, LAST_GOOD_SCAN)
-                save_pickle(diags_live, LAST_GOOD_DIAGS)
-                save_json(
-                    {
-                        "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "rows": int(len(flow_live)),
-                        "symbols_requested": int(len(symbols_all)),
-                        "symbols_scanned": int(symbols_scanned_count),
-                        "raw_contracts": raw_contracts,
-                        "success_ratio": success_ratio,
-                    },
-                    LAST_GOOD_META,
-                )
+        if flow_live is not None and not flow_live.empty:
+            save_pickle(flow_live, LAST_GOOD_SCAN)
+            save_pickle(diags_live, LAST_GOOD_DIAGS)
+            save_json(
+                {
+                    "saved_at": scan_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "rows": int(len(flow_live)),
+                    "symbols_requested": int(len(symbols_all)),
+                    "symbols_scanned": int(symbols_scanned_count),
+                    "raw_contracts": raw_contracts,
+                    "success_ratio": success_ratio,
+                },
+                LAST_GOOD_META,
+            )
 
-# -----------------------------------------------------------------------------
-# Main frames
-# -----------------------------------------------------------------------------
+            if save_to_database:
+                inserted = save_flow_to_db(flow_live, scan_ts=scan_ts)
+                st.success(f"Saved {inserted:,} qualifying rows to the local trend database.")
+
+# =============================================================================
+# Main data frames
+# =============================================================================
 flow = st.session_state["flow_raw"] if st.session_state["flow_raw"] is not None else pd.DataFrame()
 diags = st.session_state["diags_raw"] if st.session_state["diags_raw"] is not None else pd.DataFrame()
 scan_meta = st.session_state["scan_meta"] or {}
@@ -1329,350 +1577,174 @@ spot_snapshot_meta = st.session_state["spot_snapshot_meta"] or {}
 if flow is not None and not flow.empty:
     flow = ensure_flow_schema(build_cluster_flags(flow.copy()))
 
-# -----------------------------------------------------------------------------
-# Metrics
-# -----------------------------------------------------------------------------
-symbols_requested = safe_int(len(symbols_all))
-symbols_scanned = safe_int(scan_meta.get("symbols_scanned", 0))
-symbols_completed = safe_int(diags["symbol"].nunique()) if not diags.empty and "symbol" in diags.columns else 0
-contracts_seen = safe_int(diags["contracts_seen"].sum()) if not diags.empty and "contracts_seen" in diags.columns else 0
-scan_errors = safe_int(diags["errors"].sum()) if not diags.empty and "errors" in diags.columns else 0
-qualifying_rows = safe_int(len(flow)) if flow is not None and not flow.empty else 0
+db = load_flow_db(days=db_days)
+render_top_metrics(db, flow, scan_meta)
 
-bullish_premium = float(flow.loc[flow["direction"] == "BULLISH", "premium"].sum()) if qualifying_rows > 0 else 0.0
-bearish_premium = float(flow.loc[flow["direction"] == "BEARISH", "premium"].sum()) if qualifying_rows > 0 else 0.0
-total_premium = float(flow["premium"].sum()) if qualifying_rows > 0 else 0.0
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Universe size", f"{symbols_requested:,}")
-c2.metric("Symbols scanned", f"{symbols_scanned:,}")
-c3.metric("Symbols completed", f"{symbols_completed:,}")
-c4.metric("Contracts seen", f"{contracts_seen:,}")
-c5.metric("Qualifying rows", f"{qualifying_rows:,}")
-c6.metric("Total premium", human_money(total_premium))
-
-mode = scan_meta.get("mode", "Unknown")
-saved_at = scan_meta.get("saved_at", "Unknown")
-elapsed = scan_meta.get("elapsed", None)
-success_ratio = scan_meta.get("success_ratio", None)
-raw_contracts = scan_meta.get("raw_contracts", None)
-
-meta_text = f"Scan mode: {mode}"
-if saved_at:
-    meta_text += f" | Snapshot: {saved_at}"
-meta_text += f" | Bullish premium: {human_money(bullish_premium)} | Bearish premium: {human_money(bearish_premium)} | Errors: {scan_errors:,}"
-if elapsed is not None:
-    meta_text += f" | Elapsed: {elapsed:.1f}s"
-if success_ratio is not None:
-    meta_text += f" | Success ratio: {success_ratio:.0%}"
-if raw_contracts is not None:
-    meta_text += f" | Raw contracts: {safe_int(raw_contracts):,}"
-if spot_snapshot_meta:
-    meta_text += f" | Spot rows: {safe_int(spot_snapshot_meta.get('rows', 0)):,}"
-    meta_text += f" | Spot batch failures: {safe_int(spot_snapshot_meta.get('failures', 0)):,}"
-    if spot_snapshot_meta.get("used_cached_snapshot", False):
-        meta_text += " | Spot source: cached"
-st.caption(meta_text)
-
-# -----------------------------------------------------------------------------
-# No-scan and empty states
-# -----------------------------------------------------------------------------
-if not st.session_state["scan_ran"] and flow.empty:
+# =============================================================================
+# Empty state
+# =============================================================================
+if not st.session_state["scan_ran"] and flow.empty and db.empty:
     st.markdown(
         """
         <div class="status-card">
-        <b>No scan has been run yet.</b><br>
-        This version uses the Nasdaq 100 plus pre-scan underlying filters. Click <b>Run Live Scan</b> in the sidebar.
+        <b>No scan has been run yet and the local trend database is empty.</b><br>
+        Click <b>Run Live Scan</b> in the sidebar. Qualifying rows can be saved into the local database, which is what powers the rolling trend board.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-if flow.empty:
-    left, right = st.columns([1.1, 1.0])
-
-    with left:
-        st.subheader("Why the board is empty")
-
-        if scan_meta.get("empty_reason"):
-            st.warning(scan_meta["empty_reason"])
-
-        if diags.empty:
-            st.info("No diagnostics yet. Run the live scan first.")
-        else:
-            reason_counts = (
-                diags["reason"]
-                .fillna("unknown")
-                .replace("", "kept_none")
-                .value_counts()
-                .rename_axis("reason")
-                .reset_index(name="count")
-            )
-            fig_reason = px.bar(
-                reason_counts.sort_values("count", ascending=True),
-                x="count",
-                y="reason",
-                orientation="h",
-                title="Top Failure Reasons"
-            )
-            fig_reason.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
-            st.plotly_chart(fig_reason, use_container_width=True)
-
-            show_diag = diags.copy()
-            if "detail" in show_diag.columns:
-                st.dataframe(show_diag.sort_values(["errors", "contracts_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
-
-    with right:
-        st.subheader("Practical fixes")
-        st.markdown(
-            """
-            Most useful levers:
-            • lower minimum premium
-            • lower minimum volume
-            • lower minimum volume / OI
-            • raise max spread %
-            • lower minimum unusual score
-            • expand DTE range
-            • loosen pre-scan underlying filters
-            • reduce concurrent workers
-            • try cached fallback
-            """
-        )
-        if filtered_snapshot is not None and isinstance(filtered_snapshot, pd.DataFrame) and not filtered_snapshot.empty:
-            st.dataframe(filtered_snapshot[["symbol", "spot", "avg_20d_vol", "avg_dollar_vol"]], use_container_width=True, hide_index=True)
-
-    st.stop()
-
-# -----------------------------------------------------------------------------
-# Derived views
-# -----------------------------------------------------------------------------
-flow = flow.copy()
-flow["rank"] = np.arange(1, len(flow) + 1)
-
-overall = flow.nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
-bullish = flow[flow["direction"] == "BULLISH"].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
-bearish = flow[flow["direction"] == "BEARISH"].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
-zero_dte = flow[flow["dte"] == 0].nlargest(top_n, ["unusual_score", "premium", "vol_oi"])
-clusters_only = flow[flow["cluster_flag"] == "CLUSTER"].nlargest(top_n, ["cluster_premium", "unusual_score", "premium"])
-
-bullish_prem_by_symbol = flow.loc[flow["direction"] == "BULLISH"].groupby("symbol")["premium"].sum()
-bearish_prem_by_symbol = flow.loc[flow["direction"] == "BEARISH"].groupby("symbol")["premium"].sum()
-
-ticker_summary = (
-    flow.groupby("symbol", as_index=False)
-    .agg(
-        rows=("symbol", "size"),
-        total_premium=("premium", "sum"),
-        avg_score=("unusual_score", "mean"),
-        max_score=("unusual_score", "max"),
-        avg_dte=("dte", "mean"),
-    )
-)
-
-ticker_summary["bullish_premium"] = ticker_summary["symbol"].map(bullish_prem_by_symbol).fillna(0.0)
-ticker_summary["bearish_premium"] = ticker_summary["symbol"].map(bearish_prem_by_symbol).fillna(0.0)
-ticker_summary["net_premium"] = ticker_summary["bullish_premium"] - ticker_summary["bearish_premium"]
-ticker_summary["flow_bias"] = np.where(
-    ticker_summary["net_premium"] > 0, "BULLISH",
-    np.where(ticker_summary["net_premium"] < 0, "BEARISH", "BALANCED")
-)
-ticker_summary = ticker_summary.sort_values(["total_premium", "max_score", "rows"], ascending=[False, False, False]).reset_index(drop=True)
-
-# -----------------------------------------------------------------------------
-# Commentary
-# -----------------------------------------------------------------------------
-st.subheader("Tape Commentary")
-st.write(summarize_tape(overall))
-
-leaderboard_cols = st.columns([1.2, 1.2, 1.1, 1.1])
-top_contract = f"{overall.iloc[0]['symbol']} {overall.iloc[0]['expiry']} {overall.iloc[0]['type']} {overall.iloc[0]['strike']:.0f}"
-leaderboard_cols[0].metric("Top ticker by premium", str(ticker_summary.iloc[0]["symbol"]))
-leaderboard_cols[1].metric("Top contract", top_contract)
-leaderboard_cols[2].metric("0DTE rows", f"{len(zero_dte):,}")
-leaderboard_cols[3].metric("Cluster flags", f"{int((flow['cluster_flag'] == 'CLUSTER').sum()):,}")
-
-# -----------------------------------------------------------------------------
-# Charts
-# -----------------------------------------------------------------------------
-left, right = st.columns(2)
-
-with left:
-    direction_dte = (
-        flow.assign(dte_bucket=flow["dte"].map(dte_bucket))
-        .groupby(["dte_bucket", "direction"], as_index=False)["premium"]
-        .sum()
-    )
-    dte_order = ["0DTE", "1-7D", "8-30D", "31-60D", "61-120D", "120D+"]
-    direction_dte["dte_bucket"] = pd.Categorical(direction_dte["dte_bucket"], categories=dte_order, ordered=True)
-    direction_dte = direction_dte.sort_values("dte_bucket")
-
-    fig_dte = px.bar(
-        direction_dte,
-        x="dte_bucket",
-        y="premium",
-        color="direction",
-        barmode="group",
-        title="Premium by Direction and DTE Bucket"
-    )
-    fig_dte.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20))
-    st.plotly_chart(fig_dte, use_container_width=True)
-
-with right:
-    bubble = overall.copy().head(300)
-    bubble["label"] = bubble["symbol"] + " " + bubble["type"] + " " + bubble["expiry"]
-    bubble["premium_log"] = np.log10(np.maximum(bubble["premium"], 1.0))
-
-    fig_bubble = px.scatter(
-        bubble,
-        x="vol_oi",
-        y="premium_log",
-        size="unusual_score",
-        color="direction",
-        hover_name="label",
-        hover_data={
-            "strike": True,
-            "dte": True,
-            "side": True,
-            "pct_otm": ":.1f",
-            "spread_pct": ":.1f",
-            "unusual_score": ":.1f",
-            "vol_oi": ":.2f",
-            "premium": ":,.0f",
-            "premium_log": False,
-        },
-        title="Flow Map: log10(Premium) vs Volume/OI"
-    )
-    fig_bubble.update_yaxes(title_text="log10(Premium)")
-    fig_bubble.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20))
-    st.plotly_chart(fig_bubble, use_container_width=True)
-
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Tabs
-# -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
-    ["Top Flow", "Bullish", "Bearish", "0DTE", "Clusters", "By Ticker", "Diagnostics"]
-)
+# =============================================================================
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Trend Board",
+    "Today Odd Action",
+    "Ticker Drilldown",
+    "Live Scan Diagnostics",
+    "Method Notes",
+])
 
 with tab1:
-    render_top_flow_dashboard(overall)
+    st.subheader("Rolling Bull/Bear Trend Board")
+
+    if db.empty:
+        st.info("No saved database rows yet. Run a live scan with 'Save qualifying rows to local trend database' turned on.")
+    else:
+        lookback = st.selectbox("Trend window", [1, 5, 20, 60, 90], index=2, key="trend_window")
+        trend = build_trend_board(db, lookback)
+        multi = build_multi_window_scores(db)
+
+        if trend.empty:
+            st.info("No saved rows in this lookback window.")
+        else:
+            render_trend_bar(trend, lookback_days=lookback, top_n=30)
+
+            display_cols = [
+                "symbol", "tape", "unusual_trades", "active_days", "total_premium", "bullish_premium",
+                "bearish_premium", "net_premium", "bull_bear_score", "conviction_score", "avg_score",
+                "avg_dte", "largest_print", "clusters",
+            ]
+            display_cols = [c for c in display_cols if c in trend.columns]
+            st.dataframe(prep_trend_display(trend[display_cols]).head(150), use_container_width=True, hide_index=True)
+
+        st.subheader("Multi-Window Scoreboard")
+        if multi.empty:
+            st.info("No multi-window score available yet.")
+        else:
+            st.dataframe(prep_trend_display(multi).head(150), use_container_width=True, hide_index=True)
 
 with tab2:
-    st.dataframe(prep_display(bullish), use_container_width=True, hide_index=True)
+    st.subheader("Today Odd Action")
 
-with tab3:
-    st.dataframe(prep_display(bearish), use_container_width=True, hide_index=True)
-
-with tab4:
-    if zero_dte.empty:
-        st.info("No 0DTE anomalies passed the current filters.")
+    if flow.empty:
+        st.info("No live or cached scan rows loaded. Run a live scan first.")
     else:
-        st.dataframe(prep_display(zero_dte), use_container_width=True, hide_index=True)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Rows", f"{len(flow):,}")
+        c2.metric("Premium", human_money(float(flow["premium"].sum())))
+        c3.metric("Bullish premium", human_money(float(flow.loc[flow["direction"] == "BULLISH", "premium"].sum())))
+        c4.metric("Bearish premium", human_money(float(flow.loc[flow["direction"] == "BEARISH", "premium"].sum())))
 
-with tab5:
-    if clusters_only.empty:
-        st.info("No cluster anomalies passed the current filters.")
-    else:
-        cluster_detail = (
-            clusters_only.groupby(["symbol", "expiry", "type", "direction", "strike_bucket"], as_index=False)
-            .agg(
-                cluster_premium=("premium", "sum"),
-                cluster_volume=("volume", "sum"),
-                cluster_contracts=("contract_symbol", "count"),
-                cluster_score=("unusual_score", "mean"),
-            )
-            .sort_values(["cluster_premium", "cluster_score"], ascending=[False, False])
-            .head(50)
+        chart = flow.head(30).copy()
+        chart["label"] = (
+            chart["symbol"].astype(str) + " | " +
+            chart["type"].astype(str) + " | " +
+            chart["expiry"].astype(str) + " | " +
+            chart["strike"].round(0).astype(int).astype(str)
         )
-
-        fig_cluster_detail = px.scatter(
-            cluster_detail,
-            x="cluster_contracts",
-            y="cluster_premium",
-            size="cluster_score",
+        fig = px.bar(
+            chart.sort_values(["premium", "unusual_score"], ascending=[True, True]),
+            x="premium",
+            y="label",
             color="direction",
-            hover_data={
-                "symbol": True,
-                "expiry": True,
-                "type": True,
-                "strike_bucket": True,
-                "cluster_volume": ":,.0f",
-                "cluster_premium": ":,.0f",
-                "cluster_score": ":.1f",
-            },
-            title="Cluster Detail Map"
-        )
-        fig_cluster_detail.update_layout(height=520, margin=dict(l=20, r=20, t=55, b=20))
-        st.plotly_chart(fig_cluster_detail, use_container_width=True)
-
-with tab6:
-    display_ticker = ticker_summary.copy()
-    display_ticker["Total Premium"] = display_ticker["total_premium"].map(human_money)
-    display_ticker["Bullish Premium"] = display_ticker["bullish_premium"].map(human_money)
-    display_ticker["Bearish Premium"] = display_ticker["bearish_premium"].map(human_money)
-    display_ticker["Net Premium"] = display_ticker["net_premium"].map(human_money)
-    display_ticker["Avg Score"] = display_ticker["avg_score"].map(lambda x: f"{x:.1f}")
-    display_ticker["Max Score"] = display_ticker["max_score"].map(lambda x: f"{x:.1f}")
-    display_ticker["Avg DTE"] = display_ticker["avg_dte"].map(lambda x: f"{x:.1f}")
-
-    left_ticker, right_ticker = st.columns([1.15, 1.0])
-
-    with left_ticker:
-        fig_ticker = px.bar(
-            ticker_summary.head(25).sort_values("total_premium", ascending=True),
-            x="total_premium",
-            y="symbol",
-            color="flow_bias",
             orientation="h",
             hover_data={
-                "rows": True,
-                "bullish_premium": ":,.0f",
-                "bearish_premium": ":,.0f",
-                "avg_score": ":.1f",
-                "max_score": ":.1f",
+                "symbol": True,
+                "type": True,
+                "expiry": True,
+                "strike": ":.2f",
+                "dte": True,
+                "vol_oi": ":.2f",
+                "spread_pct": ":.1f",
+                "unusual_score": ":.1f",
+                "premium": ":,.0f",
             },
-            title="Top Tickers by Total Premium"
+            title="Top Live Unusual Flow",
         )
-        fig_ticker.update_layout(height=760, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
-        st.plotly_chart(fig_ticker, use_container_width=True)
+        fig.update_layout(height=780, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
 
-    with right_ticker:
-        st.dataframe(
-            display_ticker[[
-                "symbol", "rows", "Total Premium", "Bullish Premium", "Bearish Premium",
-                "Net Premium", "flow_bias", "Avg Score", "Max Score", "Avg DTE"
-            ]].head(100),
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(prep_flow_display(flow.head(top_n)), use_container_width=True, hide_index=True)
 
-    ticker_pick = st.selectbox("Inspect ticker", options=ticker_summary["symbol"].tolist(), index=0)
-    ticker_rows = flow[flow["symbol"] == ticker_pick].nlargest(200, ["unusual_score", "premium", "vol_oi"])
-    st.dataframe(prep_display(ticker_rows), use_container_width=True, hide_index=True)
+with tab3:
+    st.subheader("Ticker Drilldown")
 
-with tab7:
-    st.subheader("Diagnostics")
+    if db.empty:
+        st.info("No saved database rows yet.")
+    else:
+        symbols_in_db = sorted(db["symbol"].dropna().astype(str).unique().tolist())
+        default_symbol = symbols_in_db[0] if symbols_in_db else ""
+        ticker_pick = st.selectbox("Ticker", options=symbols_in_db, index=0 if symbols_in_db else None)
+
+        if ticker_pick:
+            sub = db[db["symbol"] == ticker_pick].copy().sort_values(["scan_date", "premium"], ascending=[False, False])
+            render_ticker_timeline(db, ticker_pick)
+
+            trend_5 = build_trend_board(db[db["symbol"] == ticker_pick], 5)
+            trend_20 = build_trend_board(db[db["symbol"] == ticker_pick], 20)
+            trend_60 = build_trend_board(db[db["symbol"] == ticker_pick], 60)
+
+            cols = st.columns(3)
+            for col, label, frame in zip(cols, ["5D", "20D", "60D"], [trend_5, trend_20, trend_60]):
+                if frame.empty:
+                    col.metric(f"{label} B/B Score", "N/A")
+                else:
+                    row = frame.iloc[0]
+                    col.metric(f"{label} B/B Score", f"{row['bull_bear_score']:.1f}", delta=human_money(row["net_premium"]))
+
+            st.dataframe(prep_flow_display(sub.head(300)), use_container_width=True, hide_index=True)
+
+with tab4:
+    st.subheader("Live Scan Diagnostics")
+
     if filtered_snapshot is not None and isinstance(filtered_snapshot, pd.DataFrame) and not filtered_snapshot.empty:
         st.caption(f"Underlying pre-filters reduced the universe from {len(symbols_all):,} names to {len(filtered_snapshot):,} names before option-chain scanning.")
+        st.dataframe(filtered_snapshot[["symbol", "spot", "avg_20d_vol", "avg_dollar_vol"]], use_container_width=True, hide_index=True)
+
     if not diags.empty:
-        diag_show = diags.copy()
-        st.dataframe(diag_show.sort_values(["errors", "contracts_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
+        st.dataframe(diags.sort_values(["errors", "contracts_seen"], ascending=[False, False]), use_container_width=True, hide_index=True)
 
         reason_counts = (
-            diag_show["reason"]
+            diags["reason"]
             .fillna("unknown")
             .replace("", "blank")
             .value_counts()
             .rename_axis("reason")
             .reset_index(name="count")
         )
-        fig_diag_reason = px.bar(
+        fig_diag = px.bar(
             reason_counts.sort_values("count", ascending=True),
             x="count",
             y="reason",
             orientation="h",
-            title="Reason Breakdown"
+            title="Reason Breakdown",
         )
-        fig_diag_reason.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
-        st.plotly_chart(fig_diag_reason, use_container_width=True)
+        fig_diag.update_layout(height=420, margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
+        st.plotly_chart(fig_diag, use_container_width=True)
     else:
         st.info("No diagnostic frame loaded yet. Run the live scan first.")
+
+with tab5:
+    st.subheader("Method Notes")
+    st.markdown(
+        """
+        This is intentionally designed as a public-data approximation of a curated unusual-options-flow service. Yahoo Finance can provide option-chain snapshots, including bid, ask, last price, volume, open interest, implied volatility, strike, and expiry. That is enough to identify unusual contracts, estimate premium, calculate volume/open-interest anomalies, and build a persistent trend database.
+
+        It cannot fully replicate institutional flow products because Yahoo does not give the full exchange-grade tape: no reliable sweep/block flags, no exact trade sequence, no opening-versus-closing classification, no real buyer/seller identity, and no true institutional tag. The app therefore treats direction as an estimate based on the relationship between last price and bid/ask, then scores persistence by ticker over time.
+
+        The key Bulltard-style element is the database. A single scan is just a board. Repeated saved scans become a trend engine. The 20D and 60D scores are the most useful because they show where the same ticker keeps attracting unusual contracts, whether the premium is net bullish or bearish, and whether the activity is broad enough to matter.
+        """
+    )
+
+st.caption("© 2026 AD Fund Management LP")
