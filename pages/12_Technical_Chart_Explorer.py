@@ -21,7 +21,7 @@ st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 0.55rem;
+            padding-top: 0.65rem;
             padding-bottom: 0.75rem;
             max-width: 1650px;
         }
@@ -642,7 +642,7 @@ def add_structure_overlay(
             line=dict(width=1.6, color=COLORS["elliott"]),
             name="ZigZag",
             hoverinfo="skip",
-            showlegend=False,
+            showlegend=True,
         ),
         row=1,
         col=1,
@@ -691,43 +691,6 @@ def format_last_update(index_value: pd.Timestamp) -> str:
         return pd.Timestamp(index_value).strftime("%b %d, %Y")
     except Exception:
         return ""
-
-
-def build_manual_legend(
-    ma_items: list[tuple[str, str]],
-    show_bbands_flag: bool,
-    show_last_flag: bool,
-    show_range_flag: bool,
-) -> str:
-    items = ma_items.copy()
-
-    if show_bbands_flag:
-        items.append(("Bollinger", COLORS["bb"]))
-
-    if show_last_flag:
-        items.append(("Last Price", COLORS["last"]))
-
-    if show_range_flag:
-        items.append(("Range", COLORS["range"]))
-
-    if not items:
-        return ""
-
-    html = """
-    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin:2px 0 8px 2px;">
-    """
-
-    for label, color in items:
-        html += f"""
-        <div style="display:flex; align-items:center; gap:8px; font-size:13px; color:#444444; line-height:1;">
-            <span style="display:inline-block; width:30px; height:0; border-top:3px solid {color};"></span>
-            <span>{label}</span>
-        </div>
-        """
-
-    html += "</div>"
-
-    return html
 
 
 # ============================================================
@@ -795,43 +758,8 @@ rangebreaks = build_rangebreaks(df_display.index, interval)
 header_suffix = "Adjusted ADFM Chart Tool" if auto_adjust else "ADFM Chart Tool"
 last_update = format_last_update(df_display.index[-1])
 
-st.markdown(
-    f"""
-    <div style="margin-bottom: 4px;">
-        <h2 style="margin: 0; padding: 0; font-size: 32px; font-weight: 700; color: #222222;">
-            {ticker} | {header_suffix}
-        </h2>
-        <div style="margin-top: 3px; color: #777777; font-size: 13px;">
-            Interval: {interval} | Period: {period} | Last bar: {last_update}
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# Legend
-# ============================================================
-
-ma_config = [
-    (8, COLORS["ma8"], show_ma8),
-    (20, COLORS["ma20"], show_ma20),
-    (50, COLORS["ma50"], show_ma50),
-    (100, COLORS["ma100"], show_ma100),
-    (200, COLORS["ma200"], show_ma200),
-]
-
-active_ma_items = [(f"MA {window}", color) for window, color, enabled in ma_config if enabled]
-legend_html = build_manual_legend(
-    ma_items=active_ma_items,
-    show_bbands_flag=show_bbands,
-    show_last_flag=show_last_price,
-    show_range_flag=show_range_levels,
-)
-
-if legend_html:
-    st.markdown(legend_html, unsafe_allow_html=True)
+st.markdown(f"## {ticker} | {header_suffix}")
+st.caption(f"Interval: {interval} | Period: {period} | Last bar: {last_update}")
 
 
 # ============================================================
@@ -913,6 +841,14 @@ fig.add_trace(
     col=1,
 )
 
+ma_config = [
+    (8, COLORS["ma8"], show_ma8),
+    (20, COLORS["ma20"], show_ma20),
+    (50, COLORS["ma50"], show_ma50),
+    (100, COLORS["ma100"], show_ma100),
+    (200, COLORS["ma200"], show_ma200),
+]
+
 for window, color, enabled in ma_config:
     column = f"MA{window}"
 
@@ -925,7 +861,7 @@ for window, color, enabled in ma_config:
                 line=dict(color=color, width=1.6),
                 name=f"MA {window}",
                 hovertemplate=f"MA {window}: " + "%{y:.2f}<extra></extra>",
-                showlegend=False,
+                showlegend=True,
             ),
             row=row_map["price"],
             col=1,
@@ -938,9 +874,10 @@ if show_bbands:
             y=df_display["BB_UPPER"],
             mode="lines",
             line=dict(width=1.0, color=COLORS["bb"], dash="dot"),
-            name="BB Upper",
+            name="Bollinger",
             hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
-            showlegend=False,
+            showlegend=True,
+            legendgroup="bbands",
         ),
         row=row_map["price"],
         col=1,
@@ -957,6 +894,7 @@ if show_bbands:
             name="BB Lower",
             hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
             showlegend=False,
+            legendgroup="bbands",
         ),
         row=row_map["price"],
         col=1,
@@ -971,6 +909,7 @@ if show_bbands:
             name="BB Mid",
             hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
             showlegend=False,
+            legendgroup="bbands",
         ),
         row=row_map["price"],
         col=1,
@@ -1223,6 +1162,18 @@ fig.update_xaxes(
     tickformat="%b '%y" if interval in ["1wk", "1mo"] else "%b %d\n%Y",
 )
 
+legend_enabled = any(
+    [
+        show_ma8,
+        show_ma20,
+        show_ma50,
+        show_ma100,
+        show_ma200,
+        show_bbands,
+        show_elliott,
+    ]
+)
+
 fig.update_layout(
     height=fig_height,
     title=None,
@@ -1231,8 +1182,18 @@ fig.update_layout(
     hovermode="x unified",
     margin=dict(l=40, r=20, t=10, b=10),
     font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
-    showlegend=False,
-    legend_title_text="",
+    showlegend=legend_enabled,
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.015,
+        xanchor="left",
+        x=0,
+        bgcolor="rgba(255,255,255,0)",
+        borderwidth=0,
+        font=dict(size=12, color="#444444"),
+        title_text="",
+    ),
     bargap=0.08,
     xaxis_rangeslider_visible=False,
 )
@@ -1255,11 +1216,4 @@ st.plotly_chart(
     },
 )
 
-st.markdown(
-    """
-    <div style="margin-top: 2px; color: #7a7a7a; font-size: 13px;">
-        © 2026 AD Fund Management LP
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+st.caption("© 2026 AD Fund Management LP")
