@@ -150,6 +150,24 @@ FORWARD_LOOKING_TERMS = [
     "if needed", "from here", "currently", "today", "incoming data",
 ]
 
+NEGATION_TERMS = [
+    "not", "no", "never", "neither", "nor", "without", "hardly", "scarcely",
+]
+
+HEDGE_TERMS = [
+    "somewhat", "modestly", "gradually", "to some extent", "may", "might", "could",
+    "uncertain", "uncertainty", "risk management",
+]
+
+INTENSIFIER_TERMS = [
+    "clearly", "significantly", "materially", "firmly", "strongly", "substantially",
+    "persistently", "meaningfully",
+]
+
+CONTRAST_CUES = [
+    "but", "however", "although", "though", "yet", "nevertheless", "nonetheless",
+]
+
 FOOTER_JUNK_PATTERNS = [
     "about the fed news & events",
     "monetary policy supervision & regulation",
@@ -318,6 +336,52 @@ def count_phrase_hits(text: str, phrases: List[str]) -> int:
     return hits
 
 
+def split_sentences(text: str) -> List[str]:
+    text = clean_text(text)
+    if not text:
+        return []
+    pieces = re.split(r"(?<=[.!?;])\s+", text)
+    out = [clean_text(p) for p in pieces if clean_text(p)]
+    return out or [text]
+
+
+def weighted_phrase_hits(text: str, phrases: List[str]) -> float:
+    low = clean_text(text).lower()
+    if not low:
+        return 0.0
+
+    total = 0.0
+    for sentence in split_sentences(low):
+        sent_words = sentence.split()
+        has_hedge = any(h in sentence for h in HEDGE_TERMS)
+        has_intensifier = any(i in sentence for i in INTENSIFIER_TERMS)
+
+        for phrase in phrases:
+            pattern = normalize_phrase(phrase)
+            for match in re.finditer(pattern, sentence):
+                prefix = sentence[:match.start()].strip()
+                prefix_words = prefix.split()
+                lookback = prefix_words[-5:] if prefix_words else []
+                has_negation = any(w in NEGATION_TERMS for w in lookback)
+
+                hit = 1.0
+                if has_negation:
+                    hit *= 0.25
+                if has_hedge:
+                    hit *= 0.85
+                if has_intensifier:
+                    hit *= 1.10
+                if "?" in sentence:
+                    hit *= 0.80
+
+                total += hit
+
+        if any(cue in sentence for cue in CONTRAST_CUES) and sent_words:
+            total *= 1.03
+
+    return float(total)
+
+
 def safe_mean_std(series: pd.Series) -> Tuple[float, float]:
     s = pd.to_numeric(series, errors="coerce").dropna()
     if s.empty:
@@ -448,8 +512,27 @@ def paragraph_directional_tone(paragraph: str) -> Dict[str, float]:
     low = paragraph.lower()
     words = max(len(re.findall(r"\b[a-z][a-z\-']+\b", low)), 1)
 
-    hawk = count_phrase_hits(low, LEXICON["hawkish"]) / words * 1000.0
-    dove = count_phrase_hits(low, LEXICON["dovish"]) / words * 1000.0
+    hawk_raw = weighted_phrase_hits(low, LEXICON["hawkish"])
+    dove_raw = weighted_phrase_hits(low, LEXICON["dovish"])
+
+    # In contrast-heavy paragraphs, policy stance after cue words is often the real signal.
+    post_contrast_weight = 1.0
+    for cue in CONTRAST_CUES:
+        if f" {cue} " in low:
+            parts = low.split(f" {cue} ", 1)
+            if len(parts) == 2:
+                pre, post = parts
+                pre_h = weighted_phrase_hits(pre, LEXICON["hawkish"])
+                pre_d = weighted_phrase_hits(pre, LEXICON["dovish"])
+                post_h = weighted_phrase_hits(post, LEXICON["hawkish"])
+                post_d = weighted_phrase_hits(post, LEXICON["dovish"])
+                hawk_raw = 0.75 * pre_h + 1.35 * post_h
+                dove_raw = 0.75 * pre_d + 1.35 * post_d
+                post_contrast_weight = 1.05
+            break
+
+    hawk = hawk_raw / words * 1000.0 * post_contrast_weight
+    dove = dove_raw / words * 1000.0 * post_contrast_weight
     infl = count_phrase_hits(low, LEXICON["inflation_concern"]) / words * 1000.0
     labor = count_phrase_hits(low, LEXICON["labor_concern"]) / words * 1000.0
     growth = count_phrase_hits(low, LEXICON["growth_concern"]) / words * 1000.0
