@@ -1950,6 +1950,112 @@ def bank_snapshot_table(snapshot: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def derive_theme_signal(row: pd.Series) -> Tuple[str, float]:
+    theme_values = {
+        "inflation": float(pd.to_numeric(row.get("inflation_z_global"), errors="coerce")),
+        "labor": float(pd.to_numeric(row.get("labor_z_global"), errors="coerce")),
+        "growth": float(pd.to_numeric(row.get("growth_z_global"), errors="coerce")),
+        "financial stability": float(pd.to_numeric(row.get("fs_z_global"), errors="coerce")),
+        "uncertainty": float(pd.to_numeric(row.get("uncertainty_z_global"), errors="coerce")),
+    }
+    valid = {k: v for k, v in theme_values.items() if pd.notna(v)}
+    if not valid:
+        return "no clear theme", np.nan
+    key = max(valid, key=valid.get)
+    return key, valid[key]
+
+
+def action_for_bank(row: pd.Series) -> Tuple[str, str]:
+    tone = float(pd.to_numeric(row.get("tone_z_global"), errors="coerce"))
+    delta = float(pd.to_numeric(row.get("delta_vs_prev"), errors="coerce"))
+    theme, theme_value = derive_theme_signal(row)
+
+    if pd.isna(tone):
+        return (
+            "Wait for next policy-heavy communication; current signal is not reliable enough.",
+            "Require next speech with policy relevance >= 0.50 before changing stance.",
+        )
+
+    if tone >= 0.85:
+        base = "Keep defensive duration posture (underweight local duration / pay front-end)."
+    elif tone >= 0.35:
+        base = "Hold mild hawkish bias; avoid adding long duration until language softens."
+    elif tone <= -0.85:
+        base = "Lean into easing setup (add duration / receive front-end) where macro confirms."
+    elif tone <= -0.35:
+        base = "Run moderate dovish bias; favor carry with measured duration extension."
+    else:
+        base = "Stay neutral directional; prefer relative-value and event-driven tactics."
+
+    if pd.notna(theme_value) and theme_value >= 0.35 and theme == "inflation":
+        base += " Inflation language is dominant, so keep inflation-protection overlays."
+    elif pd.notna(theme_value) and theme_value >= 0.35 and theme == "growth":
+        base += " Growth concern is dominant, supporting downside-rate hedges."
+
+    if pd.isna(delta):
+        trigger = "Invalidate if next two policy-relevant speeches conflict with this stance."
+    elif tone >= 0.35:
+        trigger = "Invalidate on a drop below +0.10σ or two consecutive dovish prints."
+    elif tone <= -0.35:
+        trigger = "Invalidate on a rise above -0.10σ or two consecutive hawkish prints."
+    else:
+        trigger = "Invalidate neutrality on a confirmed break outside ±0.35σ."
+
+    return base, trigger
+
+
+def confidence_score(row: pd.Series) -> float:
+    policy = float(pd.to_numeric(row.get("policy_relevance"), errors="coerce"))
+    signal = float(pd.to_numeric(row.get("signal_strength"), errors="coerce"))
+    delta = abs(float(pd.to_numeric(row.get("delta_vs_prev"), errors="coerce")))
+    if pd.isna(policy):
+        policy = 0.0
+    if pd.isna(signal):
+        signal = 0.0
+    if pd.isna(delta):
+        delta = 0.15
+    score = 100.0 * (0.55 * np.clip(policy, 0.0, 1.0) + 0.30 * np.clip(signal, 0.0, 1.0) + 0.15 * np.clip(delta / 1.2, 0.0, 1.0))
+    return float(np.clip(score, 0.0, 100.0))
+
+
+def build_action_center(snapshot: pd.DataFrame, cross: pd.DataFrame) -> Tuple[str, pd.DataFrame]:
+    if snapshot.empty:
+        return "No actionable signal yet — load recent speeches first.", pd.DataFrame()
+
+    latest_cross = cross.sort_values("date").iloc[-1] if not cross.empty else pd.Series(dtype="object")
+    composite = float(pd.to_numeric(latest_cross.get("tone_z_smooth"), errors="coerce")) if not latest_cross.empty else np.nan
+    breadth_hawk = int((snapshot["tone_z_global"] >= 0.35).sum())
+    breadth_dove = int((snapshot["tone_z_global"] <= -0.35).sum())
+
+    if pd.isna(composite):
+        headline = "Composite unavailable: use bank-level signals only until enough history is present."
+    elif composite >= 0.35:
+        headline = f"Cross-bank stance is hawkish ({composite:+.2f}σ) with breadth {breadth_hawk}H/{breadth_dove}D — keep a defensive rates bias."
+    elif composite <= -0.35:
+        headline = f"Cross-bank stance is dovish ({composite:+.2f}σ) with breadth {breadth_hawk}H/{breadth_dove}D — favor easing-sensitive duration exposure."
+    else:
+        headline = f"Cross-bank stance is neutral ({composite:+.2f}σ) — run RV/event-driven positioning while waiting for directional confirmation."
+
+    rows = []
+    for _, row in snapshot.sort_values("tone_z_global", ascending=False).iterrows():
+        action, invalidation = action_for_bank(row)
+        main_theme, theme_value = derive_theme_signal(row)
+        rows.append(
+            {
+                "bank": short_bank_name(str(row.get("bank_name") or "")),
+                "stance": tone_bucket(row.get("tone_z_global")),
+                "tone": format_z(float(pd.to_numeric(row.get("tone_z_global"), errors="coerce"))),
+                "change vs prior": format_delta(float(pd.to_numeric(row.get("delta_vs_prev"), errors="coerce"))),
+                "policy relevance": f"{float(pd.to_numeric(row.get('policy_relevance'), errors='coerce')):.2f}" if pd.notna(pd.to_numeric(row.get("policy_relevance"), errors="coerce")) else "n.a.",
+                "confidence": f"{confidence_score(row):.0f}/100",
+                "main theme": f"{main_theme} ({theme_value:+.2f}σ)" if pd.notna(theme_value) else main_theme,
+                "recommended action": action,
+                "invalidation": invalidation,
+            }
+        )
+    return headline, pd.DataFrame(rows)
+
+
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     add_global_style()
@@ -2023,9 +2129,13 @@ def main() -> None:
         snapshot = latest_bank_snapshot(current_view)
     latest_doc = latest_doc_row(current_view)
 
-    latest_cross = cross.sort_values("date").iloc[-1]
+    latest_cross = cross.sort_values("date").iloc[-1] if not cross.empty else pd.Series(dtype="object")
     prev_cross = cross.sort_values("date").iloc[-2] if len(cross) >= 2 else None
-    composite_delta = np.nan if prev_cross is None else latest_cross["tone_z_smooth"] - prev_cross["tone_z_smooth"]
+    composite_delta = (
+        np.nan
+        if prev_cross is None or latest_cross.empty
+        else latest_cross["tone_z_smooth"] - prev_cross["tone_z_smooth"]
+    )
     breadth_hawk = int((snapshot["tone_z_global"] >= 0.35).sum())
     breadth_dove = int((snapshot["tone_z_global"] <= -0.35).sum())
     dispersion = float(pd.to_numeric(snapshot["tone_z_global"], errors="coerce").std(ddof=0)) if len(snapshot) > 1 else 0.0
@@ -2036,7 +2146,8 @@ def main() -> None:
     )
 
     a, b, c, d = st.columns(4)
-    a.metric("Composite stance", tone_bucket(latest_cross["tone_z_smooth"]), format_delta(composite_delta))
+    composite_stance = tone_bucket(float(pd.to_numeric(latest_cross.get("tone_z_smooth"), errors="coerce"))) if not latest_cross.empty else "Unknown"
+    a.metric("Composite stance", composite_stance, format_delta(composite_delta))
     b.metric("Hawkish breadth", f"{breadth_hawk}/{len(snapshot)} banks", f"{breadth_dove} dovish")
     c.metric("Dispersion", f"{dispersion:.2f}σ", dispersion_label(dispersion))
     d.metric("Latest signal", latest_signal, f"{len(feat):,} filtered docs")
@@ -2045,15 +2156,27 @@ def main() -> None:
 
     row1a, row1b = st.columns([1.05, 1.15])
     with row1a:
-        st.plotly_chart(bank_tone_bar_figure(snapshot), use_container_width=True)
+        if snapshot.empty:
+            st.info("No current bank snapshot available.")
+        else:
+            st.plotly_chart(bank_tone_bar_figure(snapshot), use_container_width=True)
     with row1b:
-        st.plotly_chart(theme_heatmap_figure(snapshot), use_container_width=True)
+        if snapshot.empty:
+            st.info("No thematic heatmap available yet.")
+        else:
+            st.plotly_chart(theme_heatmap_figure(snapshot), use_container_width=True)
 
     row2a, row2b = st.columns([1.15, 1.0])
     with row2a:
-        st.plotly_chart(z_dashboard_figure(series), use_container_width=True)
+        if series.empty:
+            st.info("Not enough history for a trajectory chart at this filter window.")
+        else:
+            st.plotly_chart(z_dashboard_figure(series), use_container_width=True)
     with row2b:
-        st.plotly_chart(cross_bank_figure(cross), use_container_width=True)
+        if cross.empty:
+            st.info("Not enough history for a cross-bank composite chart at this filter window.")
+        else:
+            st.plotly_chart(cross_bank_figure(cross), use_container_width=True)
 
     st.subheader("Current bank snapshots")
     live_banks = set(snapshot["bank_name"].unique()) if not snapshot.empty else set()
@@ -2061,6 +2184,20 @@ def main() -> None:
     if missing_recent:
         st.caption("Dropped from current stance because there is no recent clean signal: " + ", ".join(short_bank_name(b) for b in missing_recent))
     st.dataframe(bank_snapshot_table(snapshot), use_container_width=True, hide_index=True, height=260)
+
+    st.subheader("Action center")
+    top_call, playbook_df = build_action_center(snapshot, cross)
+    st.markdown(
+        f"""
+        <div class='adfm-panel'>
+          <h4>Top-down implementation call</h4>
+          <div style='font-size:0.95rem;line-height:1.65;color:#333'>{html.escape(top_call)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if not playbook_df.empty:
+        st.dataframe(playbook_df, use_container_width=True, hide_index=True, height=340)
 
     if show_speaker_matrix:
         matrix = speaker_matrix(feat, top_n=18)
@@ -2122,6 +2259,21 @@ def main() -> None:
 
     with st.expander("Show cleaned document text"):
         st.write(doc["body_text"])
+
+    st.subheader("Export")
+    export_cols = [
+        "sort_date", "bank_name", "speaker", "event_type", "title", "stance", "policy_relevance",
+        "live_signal_share", "signal_strength", "tone_z_global", "tone_z_bank", "tone_z_speaker",
+        "inflation_z_global", "labor_z_global", "growth_z_global", "fs_z_global", "uncertainty_z_global", "url",
+    ]
+    export_df = current_view.sort_values(["sort_date", "signal_strength"], ascending=[False, False])[export_cols].copy()
+    export_df["sort_date"] = pd.to_datetime(export_df["sort_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    st.download_button(
+        "Download filtered dataset as CSV",
+        data=export_df.to_csv(index=False).encode("utf-8"),
+        file_name="row_central_bank_tone_filtered.csv",
+        mime="text/csv",
+    )
 
     render_diagnostics(load_log(), stats)
 
