@@ -145,6 +145,20 @@ TOOL_LIBRARY = {
             "priority": "Medium",
             "status": "Live",
         },
+        {
+            "name": "Alert Engine",
+            "description": "Multi-signal trigger board that flags risk-on/risk-off conditions when key market thresholds align.",
+            "page": "pages/21_Alert_Engine.py",
+            "priority": "Medium",
+            "status": "Live",
+        },
+        {
+            "name": "Consensus Regime Score",
+            "description": "Composite 0-100 market regime score blending trend, volatility, credit, and breadth internals.",
+            "page": "pages/22_Consensus_Regime_Score.py",
+            "priority": "Medium",
+            "status": "Live",
+        },
     ],
     "Supporting Research Tools": [
         {
