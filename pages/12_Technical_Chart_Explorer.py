@@ -139,7 +139,7 @@ def read_settings() -> ChartSettings:
     show_macd = st.sidebar.checkbox("Show MACD", value=True)
 
     st.sidebar.subheader("Structure Overlay")
-    show_structure = st.sidebar.checkbox("Show Impulse + ABC / Elliott heuristic", value=False)
+    show_structure = st.sidebar.checkbox("Show ZigZag / Elliott heuristic", value=False)
     pivot_window = st.sidebar.slider("Pivot sensitivity", 2, 20, 8)
     min_swing_pct = st.sidebar.slider("Minimum swing filter (%)", 0.0, 10.0, 2.0, 0.25)
     max_pivots = st.sidebar.slider("Maximum pivots to draw", 20, 200, 80)
@@ -147,7 +147,7 @@ def read_settings() -> ChartSettings:
     structure_mode = st.sidebar.selectbox(
         "Structure mode",
         ["ZigZag only", "Impulse only", "Impulse + ABC"],
-        index=0,
+        index=2,
     )
 
     return ChartSettings(
