@@ -1,3 +1,4 @@
+
 import datetime as dt
 import time
 from pathlib import Path
@@ -10,6 +11,10 @@ import streamlit as st
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
+
+# =========================
+# CONFIG
+# =========================
 
 plt.style.use("default")
 
@@ -49,6 +54,10 @@ MUTED_TEXT = "#7a8497"
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
 
+# =========================
+# SMALL UI HELPERS
+# =========================
+
 def fmt_pct(x, digits: int = 2) -> str:
     if x is None:
         return "N/A"
@@ -83,6 +92,172 @@ def add_logo() -> None:
         if path.exists():
             st.image(str(path), width=70)
             return
+
+
+
+def inject_app_css() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.35rem;
+            padding-bottom: 2.25rem;
+        }
+        .hero-wrap {
+            margin: 0.15rem 0 1.10rem 0;
+        }
+        .hero-title {
+            color: #202733;
+            font-size: 2.35rem;
+            font-weight: 700;
+            line-height: 1.08;
+            letter-spacing: -0.03em;
+            margin-bottom: 0.35rem;
+        }
+        .hero-subtitle {
+            color: #667085;
+            font-size: 1.02rem;
+            line-height: 1.45;
+            max-width: 980px;
+        }
+        .panel-card {
+            background: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
+            border: 1px solid #e4e9f1;
+            border-radius: 16px;
+            padding: 16px 18px;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+        }
+        .panel-tight {
+            min-height: 112px;
+        }
+        .panel-offset {
+            margin-top: 1.85rem;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px 16px;
+        }
+        .info-label {
+            color: #8b97a8;
+            font-size: 0.74rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            margin-bottom: 0.25rem;
+        }
+        .info-value {
+            color: #26303d;
+            font-size: 1rem;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        .metric-card {
+            background: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
+            border: 1px solid #e4e9f1;
+            border-radius: 16px;
+            padding: 16px 18px 14px 18px;
+            min-height: 118px;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+        }
+        .metric-label {
+            color: #8b97a8;
+            font-size: 0.74rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            margin-bottom: 0.65rem;
+        }
+        .metric-value {
+            color: #202733;
+            font-size: 2.15rem;
+            font-weight: 700;
+            line-height: 1.0;
+            letter-spacing: -0.03em;
+        }
+        .metric-foot {
+            color: #667085;
+            font-size: 0.83rem;
+            margin-top: 0.60rem;
+            line-height: 1.35;
+        }
+        div[data-testid="stTextInput"] label p {
+            color: #8b97a8;
+            font-size: 0.74rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+        }
+        div[data-baseweb="input"] > div {
+            background: #f7f9fc;
+            border: 1px solid #dde3ed;
+            border-radius: 14px;
+            min-height: 54px;
+            box-shadow: inset 0 1px 1px rgba(16, 24, 40, 0.02);
+        }
+        div[data-baseweb="input"] input {
+            color: #202733;
+            font-size: 1.08rem;
+            font-weight: 600;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_hero() -> None:
+    st.markdown(
+        """
+        <div class="hero-wrap">
+            <div class="hero-title">Market Memory Explorer</div>
+            <div class="hero-subtitle">Compare the current market path with history, then measure what happened next.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_status_panel(ticker_label: str, last_data_date: pd.Timestamp, ny_now: dt.datetime, stale_bdays: int) -> None:
+    freshness_text = "Current" if stale_bdays <= 1 else f"{stale_bdays} business days behind"
+    st.markdown(
+        f"""
+        <div class="panel-card panel-tight panel-offset">
+            <div class="info-grid">
+                <div>
+                    <div class="info-label">Selected Series</div>
+                    <div class="info-value">{ticker_label}</div>
+                </div>
+                <div>
+                    <div class="info-label">Latest Close</div>
+                    <div class="info-value">{last_data_date:%Y-%m-%d}</div>
+                </div>
+                <div>
+                    <div class="info-label">New York Date</div>
+                    <div class="info-value">{ny_now:%Y-%m-%d}</div>
+                </div>
+                <div>
+                    <div class="info-label">Data Status</div>
+                    <div class="info-value">{freshness_text}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_metric_card(label: str, value: str, footnote: str) -> None:
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value">{value}</div>
+            <div class="metric-foot">{footnote}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def clean_axes(ax) -> None:
@@ -149,8 +324,15 @@ def get_palette(n: int):
     return (colors + fallback)[:n]
 
 
+# =========================
+# DATA LOADING
+# =========================
+
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def load_history(symbol: str) -> pd.DataFrame:
+    """
+    Robust Yahoo loader with retries. Returns a clean Close-only frame.
+    """
     symbol = str(symbol).strip()
     attempts = 0
     delay = 1.0
@@ -204,6 +386,9 @@ def load_history(symbol: str) -> pd.DataFrame:
 
 
 def load_optional_regime_data(raw_close: pd.Series):
+    """
+    Regime data is optional. The app should still work if one proxy fails.
+    """
     data = {"asset": raw_close.dropna().copy()}
     missing = []
 
@@ -222,6 +407,10 @@ def load_optional_regime_data(raw_close: pd.Series):
     return data, missing
 
 
+# =========================
+# PATH MATH
+# =========================
+
 def business_days_behind(last_date: pd.Timestamp, reference_date: dt.date) -> int:
     last_day = pd.Timestamp(last_date).date()
     if last_day >= reference_date:
@@ -230,6 +419,10 @@ def business_days_behind(last_date: pd.Timestamp, reference_date: dt.date) -> in
 
 
 def build_true_ytd_paths(raw: pd.DataFrame, current_year: int):
+    """
+    True YTD return path uses the prior year's final close as the base.
+    This preserves the first trading day's gap instead of forcing day one to 0%.
+    """
     close = raw["Close"].dropna().copy()
     paths = {}
     date_maps = {}
@@ -421,6 +614,10 @@ def rolling_composite_score(current_path: pd.Series, hist_path: pd.Series, rho: 
     }
 
 
+# =========================
+# REGIME FEATURES
+# =========================
+
 def value_on_or_before(series: pd.Series, date_value: pd.Timestamp):
     s = series.loc[:pd.Timestamp(date_value)].dropna()
     if s.empty:
@@ -444,6 +641,9 @@ def bucket_trend(pct_change: float, up_threshold: float = 0.02, down_threshold: 
 
 
 def bucket_yield_change(change_in_tnx_points: float) -> str:
+    """
+    Yahoo ^TNX is quoted as yield x 10. A 2.5 point move is roughly 25 bps.
+    """
     if not np.isfinite(change_in_tnx_points):
         return "unknown"
     if change_in_tnx_points >= 2.5:
@@ -528,6 +728,10 @@ def current_regime_text(features: dict) -> str:
     return "; ".join([f"{k}: {v}" for k, v in features.items()])
 
 
+# =========================
+# TABLE HELPERS
+# =========================
+
 def make_forward_distribution_table(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for col, label in [
@@ -602,6 +806,10 @@ def select_clustered_matches(df: pd.DataFrame, gap_days: int, max_one_per_year: 
     selected["Cluster Windows"] = cluster_counts
     return selected.sort_values(["Score", "Correlation"], ascending=[False, False]).reset_index(drop=True)
 
+
+# =========================
+# MATPLOTLIB CHARTS
+# =========================
 
 def plot_ytd_analogs(ticker_label, current_year, current, ytd_df, analog_df, n_days):
     palette = get_palette(len(analog_df))
@@ -815,10 +1023,13 @@ def plot_forward_paths(ticker_label, close_px, selected_df, forward_matrix, trai
     return fig
 
 
-add_logo()
+# =========================
+# PAGE
+# =========================
 
-st.title("Market Memory Explorer")
-st.subheader("Compare the current market path with history, then measure what happened next")
+add_logo()
+inject_app_css()
+render_hero()
 
 with st.sidebar:
     st.header("About This Tool")
@@ -842,7 +1053,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Analog Controls")
 
-    top_n = st.slider("Top Analogs Shown", 1, 15, 5)
+    top_n = st.slider("Top Analogs Shown", 1, 15, 8)
     min_corr = st.slider("Minimum Calendar-Year ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
     rolling_min_corr = st.slider(
         "Minimum Rolling 252D ρ",
@@ -878,8 +1089,10 @@ with st.sidebar:
         min_regime_score = 0.0
 
 
-ticker_col, note_col = st.columns([1, 2])
-ticker_in = ticker_col.text_input("Ticker", "^SPX").strip().upper()
+control_left, control_right = st.columns([1.05, 1.15], gap="large")
+with control_left:
+    ticker_in = st.text_input("Ticker", "^SPX").strip().upper()
+
 ticker = TICKER_ALIASES.get(ticker_in, ticker_in)
 ticker_label = ticker_in if ticker_in else ticker
 
@@ -901,14 +1114,14 @@ if close_px.empty:
 last_data_date = pd.Timestamp(close_px.index[-1])
 stale_bdays = business_days_behind(last_data_date, ny_now.date())
 
-with note_col:
-    if stale_bdays > 1:
-        st.warning(
-            f"Latest close for {ticker_label} is {last_data_date:%Y-%m-%d}. "
-            f"That is {stale_bdays} business days behind New York time."
-        )
-    else:
-        st.caption(f"Latest close: {last_data_date:%Y-%m-%d} | New York date: {ny_now:%Y-%m-%d}")
+with control_right:
+    render_status_panel(ticker_label=ticker_label, last_data_date=last_data_date, ny_now=ny_now, stale_bdays=stale_bdays)
+
+if stale_bdays > 1:
+    st.warning(
+        f"Latest close for {ticker_label} is {last_data_date:%Y-%m-%d}. "
+        f"That is {stale_bdays} business days behind New York time."
+    )
 
 regime_data = {"asset": close_px}
 missing_regime_symbols = []
@@ -958,6 +1171,10 @@ if n_days < MIN_DAYS_FOR_CORR:
     st.caption("© 2026 AD Fund Management LP")
     st.stop()
 
+
+# =========================
+# CALENDAR-YEAR ANALOGS
+# =========================
 
 records = []
 
@@ -1032,10 +1249,25 @@ current_ret = float(current.iloc[-1])
 median_final = float(np.nanmedian(top_calendar["Full-Year Return"])) if len(top_calendar) else np.nan
 median_after_match = float(np.nanmedian(top_calendar["Return After Match Date"])) if len(top_calendar) else np.nan
 
-m1, m2, m3 = st.columns(3)
-m1.metric(f"{this_year} True YTD", fmt_pct(current_ret))
-m2.metric("Median Full-Year Return of Shown Analogs", fmt_pct(median_final))
-m3.metric("Median Return After Match Date", fmt_pct(median_after_match))
+metric_cols = st.columns(3, gap="large")
+with metric_cols[0]:
+    render_metric_card(
+        label=f"{this_year} True YTD",
+        value=fmt_pct(current_ret),
+        footnote="Anchored to the prior year-end close.",
+    )
+with metric_cols[1]:
+    render_metric_card(
+        label="Median Full-Year Return of Shown Analogs",
+        value=fmt_pct(median_final),
+        footnote="Median full-year outcome across the displayed analog set.",
+    )
+with metric_cols[2]:
+    render_metric_card(
+        label="Median Return After Match Date",
+        value=fmt_pct(median_after_match),
+        footnote="Median return from the match point through year-end.",
+    )
 
 fig_ytd = plot_ytd_analogs(
     ticker_label=ticker_label,
@@ -1079,6 +1311,10 @@ if use_regime_filter:
 st.markdown("**Composite-ranked calendar-year analogs**")
 st.dataframe(table_calendar[display_cols], use_container_width=True, hide_index=True)
 
+
+# =========================
+# ROLLING TRAILING WINDOW ANALOGS
+# =========================
 
 st.markdown("<hr style='margin-top:18px; margin-bottom:12px;'>", unsafe_allow_html=True)
 st.subheader(f"Rolling {TRAILING_DAYS}-Day Setup Match and Forward Signal")
