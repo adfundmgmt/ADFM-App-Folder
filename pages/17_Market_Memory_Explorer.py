@@ -3,17 +3,15 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 import yfinance as yf
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 
-# =========================
-# CONFIG
-# =========================
+plt.style.use("default")
 
 MIN_DAYS_REQUIRED = 30
 MIN_DAYS_CURRENT_YEAR = 5
@@ -43,33 +41,34 @@ REGIME_SYMBOLS = {
     "ief": "IEF",
 }
 
-PLOT_TEMPLATE = "plotly_white"
+CHART_FACE = "white"
+GRID_COLOR = "#d9dee7"
+TEXT_COLOR = "#2f3542"
+MUTED_TEXT = "#7a8497"
 
 st.set_page_config(page_title="Market Memory Explorer", layout="wide")
 
 
-# =========================
-# SMALL UI HELPERS
-# =========================
-
-def fmt_pct(x: float | int | None, digits: int = 2) -> str:
+def fmt_pct(x, digits: int = 2) -> str:
     if x is None:
         return "N/A"
     try:
-        if not np.isfinite(float(x)):
+        x = float(x)
+        if not np.isfinite(x):
             return "N/A"
-        return f"{float(x):.{digits}%}"
+        return f"{x:.{digits}%}"
     except Exception:
         return "N/A"
 
 
-def fmt_num(x: float | int | None, digits: int = 3) -> str:
+def fmt_num(x, digits: int = 3) -> str:
     if x is None:
         return "N/A"
     try:
-        if not np.isfinite(float(x)):
+        x = float(x)
+        if not np.isfinite(x):
             return "N/A"
-        return f"{float(x):.{digits}f}"
+        return f"{x:.{digits}f}"
     except Exception:
         return "N/A"
 
@@ -86,15 +85,72 @@ def add_logo() -> None:
             return
 
 
-# =========================
-# DATA LOADING
-# =========================
+def clean_axes(ax) -> None:
+    ax.set_facecolor(CHART_FACE)
+    ax.grid(True, ls=":", lw=0.75, color=GRID_COLOR, alpha=0.95)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#c9d0dc")
+    ax.spines["bottom"].set_color("#c9d0dc")
+    ax.tick_params(axis="both", colors=MUTED_TEXT, labelsize=10)
+    ax.xaxis.label.set_color(MUTED_TEXT)
+    ax.yaxis.label.set_color(MUTED_TEXT)
+    ax.title.set_color(TEXT_COLOR)
+
+
+def set_percent_axis(ax, values) -> None:
+    vals = np.asarray(values, dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if len(vals) == 0:
+        return
+
+    ymin = float(np.min(vals))
+    ymax = float(np.max(vals))
+    pad = 0.06 * (ymax - ymin) if ymax > ymin else 0.02
+
+    ax.set_ylim(ymin - pad, ymax + pad)
+
+    span = ax.get_ylim()[1] - ax.get_ylim()[0]
+    raw_step = max(span / 12, 0.0025)
+    candidates = np.array([
+        0.0025, 0.005, 0.01, 0.02, 0.025, 0.05,
+        0.10, 0.20, 0.25, 0.50, 1.00
+    ])
+    step = float(candidates[np.argmin(np.abs(candidates - raw_step))])
+
+    ax.yaxis.set_major_locator(MultipleLocator(step))
+    ax.yaxis.set_minor_locator(MultipleLocator(step / 2))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0%}"))
+
+
+def get_palette(n: int):
+    cmap_names = ["tab10", "Dark2", "Set1", "tab20", "tab20b", "tab20c", "Paired"]
+    colors = []
+    seen = set()
+
+    for name in cmap_names:
+        cmap = plt.get_cmap(name)
+        if hasattr(cmap, "colors"):
+            raw_colors = cmap.colors
+        else:
+            raw_colors = [cmap(x) for x in np.linspace(0, 1, 20)]
+
+        for color in raw_colors:
+            rgb = tuple(color[:3])
+            key = tuple(round(v, 4) for v in rgb)
+            if key not in seen:
+                seen.add(key)
+                colors.append(rgb)
+
+    if n <= len(colors):
+        return colors[:n]
+
+    fallback = [plt.get_cmap("hsv")(x)[:3] for x in np.linspace(0, 1, n)]
+    return (colors + fallback)[:n]
+
 
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def load_history(symbol: str) -> pd.DataFrame:
-    """
-    Robust Yahoo loader with retries. Returns a clean Close-only frame.
-    """
     symbol = str(symbol).strip()
     attempts = 0
     delay = 1.0
@@ -147,11 +203,8 @@ def load_history(symbol: str) -> pd.DataFrame:
     raise ValueError(last_error or "Yahoo returned no usable data.")
 
 
-def load_optional_regime_data(main_symbol: str, raw_close: pd.Series) -> tuple[dict[str, pd.Series], list[str]]:
-    """
-    Regime data is optional. The app should still work if one proxy fails.
-    """
-    data: dict[str, pd.Series] = {"asset": raw_close.dropna().copy()}
+def load_optional_regime_data(raw_close: pd.Series):
+    data = {"asset": raw_close.dropna().copy()}
     missing = []
 
     for key, symbol in REGIME_SYMBOLS.items():
@@ -169,10 +222,6 @@ def load_optional_regime_data(main_symbol: str, raw_close: pd.Series) -> tuple[d
     return data, missing
 
 
-# =========================
-# PATH MATH
-# =========================
-
 def business_days_behind(last_date: pd.Timestamp, reference_date: dt.date) -> int:
     last_day = pd.Timestamp(last_date).date()
     if last_day >= reference_date:
@@ -180,14 +229,10 @@ def business_days_behind(last_date: pd.Timestamp, reference_date: dt.date) -> in
     return len(pd.bdate_range(pd.Timestamp(last_day) + pd.Timedelta(days=1), pd.Timestamp(reference_date)))
 
 
-def build_true_ytd_paths(raw: pd.DataFrame, current_year: int) -> tuple[dict[int, pd.Series], dict[int, pd.Series]]:
-    """
-    True YTD return path uses the prior year's final close as the base.
-    This preserves the first trading day's gap instead of forcing day one to 0%.
-    """
+def build_true_ytd_paths(raw: pd.DataFrame, current_year: int):
     close = raw["Close"].dropna().copy()
-    paths: dict[int, pd.Series] = {}
-    date_maps: dict[int, pd.Series] = {}
+    paths = {}
+    date_maps = {}
 
     for yr in sorted(close.index.year.unique()):
         year_closes = close.loc[close.index.year == yr].dropna()
@@ -231,7 +276,7 @@ def daily_returns_from_cum_path(path: pd.Series) -> pd.Series:
     return ret.dropna()
 
 
-def normalized_price_path(series: pd.Series) -> pd.Series | None:
+def normalized_price_path(series: pd.Series):
     series = series.dropna().astype(float)
     if len(series) < 2:
         return None
@@ -243,12 +288,12 @@ def normalized_price_path(series: pd.Series) -> pd.Series | None:
     return out
 
 
-def forward_path_from_signal(series: pd.Series, signal_loc: int, horizon: int) -> pd.Series | None:
+def forward_path_from_signal(series: pd.Series, signal_loc: int, horizon: int):
     end_loc = signal_loc + horizon
     if signal_loc < 0 or end_loc >= len(series):
         return None
 
-    window = series.iloc[signal_loc : end_loc + 1].copy()
+    window = series.iloc[signal_loc:end_loc + 1].copy()
     if len(window) != horizon + 1 or window.isna().any():
         return None
 
@@ -298,13 +343,8 @@ def similarity_from_gap(gap: float, tolerance: float) -> float:
     return float(np.clip(1.0 - abs(gap) / tolerance, 0.0, 1.0))
 
 
-def ytd_composite_score(
-    current_path: pd.Series,
-    hist_path: pd.Series,
-    rho: float,
-    regime_score: float | None = None,
-) -> dict[str, float]:
-    hist_path = hist_path.iloc[: len(current_path)].dropna().astype(float)
+def ytd_composite_score(current_path: pd.Series, hist_path: pd.Series, rho: float, regime_score=None):
+    hist_path = hist_path.iloc[:len(current_path)].dropna().astype(float)
     current_path = current_path.dropna().astype(float)
 
     current_endpoint = float(current_path.iloc[-1])
@@ -329,8 +369,6 @@ def ytd_composite_score(
     dd_score = similarity_from_gap(current_dd - hist_dd, 0.20)
     slope_score = similarity_from_gap(current_slope_21 - hist_slope_21, 0.12)
 
-    regime_component = 0.50 if regime_score is None or not np.isfinite(regime_score) else float(regime_score)
-
     score = (
         0.50 * float(rho)
         + 0.20 * endpoint_score
@@ -340,7 +378,7 @@ def ytd_composite_score(
     )
 
     if regime_score is not None and np.isfinite(regime_score):
-        score = 0.88 * score + 0.12 * regime_component
+        score = 0.88 * score + 0.12 * float(regime_score)
 
     return {
         "Score": float(score),
@@ -351,12 +389,7 @@ def ytd_composite_score(
     }
 
 
-def rolling_composite_score(
-    current_path: pd.Series,
-    hist_path: pd.Series,
-    rho: float,
-    regime_score: float | None = None,
-) -> dict[str, float]:
+def rolling_composite_score(current_path: pd.Series, hist_path: pd.Series, rho: float, regime_score=None):
     current_endpoint = float(current_path.iloc[-1])
     hist_endpoint = float(hist_path.iloc[-1])
 
@@ -375,12 +408,10 @@ def rolling_composite_score(
 
     dd_score = similarity_from_gap(current_dd - hist_dd, 0.25)
 
-    regime_component = 0.50 if regime_score is None or not np.isfinite(regime_score) else float(regime_score)
-
     score = 0.58 * float(rho) + 0.18 * endpoint_score + 0.12 * vol_score + 0.12 * dd_score
 
     if regime_score is not None and np.isfinite(regime_score):
-        score = 0.88 * score + 0.12 * regime_component
+        score = 0.88 * score + 0.12 * float(regime_score)
 
     return {
         "Score": float(score),
@@ -390,12 +421,8 @@ def rolling_composite_score(
     }
 
 
-# =========================
-# REGIME FEATURES
-# =========================
-
-def value_on_or_before(series: pd.Series, date_value: pd.Timestamp) -> float | None:
-    s = series.loc[: pd.Timestamp(date_value)].dropna()
+def value_on_or_before(series: pd.Series, date_value: pd.Timestamp):
+    s = series.loc[:pd.Timestamp(date_value)].dropna()
     if s.empty:
         return None
     value = float(s.iloc[-1])
@@ -403,7 +430,7 @@ def value_on_or_before(series: pd.Series, date_value: pd.Timestamp) -> float | N
 
 
 def window_on_or_before(series: pd.Series, date_value: pd.Timestamp, n: int) -> pd.Series:
-    return series.loc[: pd.Timestamp(date_value)].dropna().tail(n)
+    return series.loc[:pd.Timestamp(date_value)].dropna().tail(n)
 
 
 def bucket_trend(pct_change: float, up_threshold: float = 0.02, down_threshold: float = -0.02) -> str:
@@ -417,9 +444,6 @@ def bucket_trend(pct_change: float, up_threshold: float = 0.02, down_threshold: 
 
 
 def bucket_yield_change(change_in_tnx_points: float) -> str:
-    """
-    Yahoo ^TNX is quoted as yield x 10. A 2.5 point move is roughly 25 bps.
-    """
     if not np.isfinite(change_in_tnx_points):
         return "unknown"
     if change_in_tnx_points >= 2.5:
@@ -429,7 +453,7 @@ def bucket_yield_change(change_in_tnx_points: float) -> str:
     return "flat"
 
 
-def bucket_vix(value: float | None) -> str:
+def bucket_vix(value) -> str:
     if value is None or not np.isfinite(value):
         return "unknown"
     if value < 15:
@@ -439,8 +463,8 @@ def bucket_vix(value: float | None) -> str:
     return "stressed"
 
 
-def regime_features_for_date(regime_data: dict[str, pd.Series], date_value: pd.Timestamp) -> dict[str, str]:
-    features: dict[str, str] = {}
+def regime_features_for_date(regime_data: dict, date_value: pd.Timestamp) -> dict:
+    features = {}
 
     asset = regime_data.get("asset")
     if asset is not None:
@@ -481,7 +505,7 @@ def regime_features_for_date(regime_data: dict[str, pd.Series], date_value: pd.T
     return features
 
 
-def compare_regimes(current_features: dict[str, str], hist_features: dict[str, str]) -> tuple[float, str]:
+def compare_regimes(current_features: dict, hist_features: dict):
     keys = sorted(set(current_features).intersection(hist_features))
     valid_keys = [
         k for k in keys
@@ -498,15 +522,11 @@ def compare_regimes(current_features: dict[str, str], hist_features: dict[str, s
     return float(score), detail
 
 
-def current_regime_text(features: dict[str, str]) -> str:
+def current_regime_text(features: dict) -> str:
     if not features:
         return "No regime features available."
     return "; ".join([f"{k}: {v}" for k, v in features.items()])
 
-
-# =========================
-# TABLE HELPERS
-# =========================
 
 def make_forward_distribution_table(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -583,86 +603,74 @@ def select_clustered_matches(df: pd.DataFrame, gap_days: int, max_one_per_year: 
     return selected.sort_values(["Score", "Correlation"], ascending=[False, False]).reset_index(drop=True)
 
 
-# =========================
-# CHART HELPERS
-# =========================
+def plot_ytd_analogs(ticker_label, current_year, current, ytd_df, analog_df, n_days):
+    palette = get_palette(len(analog_df))
+    fig, ax = plt.subplots(figsize=(14.5, 7.5))
+    fig.patch.set_facecolor(CHART_FACE)
 
-def plot_ytd_analogs(
-    ticker_label: str,
-    current_year: int,
-    current: pd.Series,
-    ytd_df: pd.DataFrame,
-    analog_df: pd.DataFrame,
-    n_days: int,
-) -> go.Figure:
-    colors = px.colors.qualitative.Dark24 + px.colors.qualitative.Set3 + px.colors.qualitative.Plotly
-    fig = go.Figure()
+    all_values = [current.values]
 
     for idx, row in analog_df.reset_index(drop=True).iterrows():
         yr = int(row["Year"])
         ser = ytd_df[yr].dropna()
-        color = colors[idx % len(colors)]
+        all_values.append(ser.values)
 
-        fig.add_trace(
-            go.Scatter(
-                x=ser.index,
-                y=ser.values,
-                mode="lines",
-                name=f"{yr} | score {row['Score']:.2f} | ρ {row['Correlation']:.2f}",
-                line=dict(width=2.0, dash="dash", color=color),
-                opacity=0.95,
-                hovertemplate=(
-                    f"{yr}<br>"
-                    "Trading Day=%{x}<br>"
-                    "Cum Return=%{y:.2%}<br>"
-                    f"Score={row['Score']:.3f}<br>"
-                    f"ρ={row['Correlation']:.3f}<extra></extra>"
-                ),
-            )
+        ax.plot(
+            ser.index,
+            ser.values,
+            "--",
+            lw=2.2,
+            alpha=0.95,
+            color=palette[idx],
+            label=f"{yr} | score {row['Score']:.2f} | ρ {row['Correlation']:.2f}",
         )
 
-    fig.add_trace(
-        go.Scatter(
-            x=current.index,
-            y=current.values,
-            mode="lines",
-            name=f"{current_year} YTD",
-            line=dict(width=3.6, color="black"),
-            hovertemplate=(
-                f"{current_year}<br>"
-                "Trading Day=%{x}<br>"
-                "Cum Return=%{y:.2%}<extra></extra>"
-            ),
-        )
+    ax.plot(
+        current.index,
+        current.values,
+        color="black",
+        lw=3.4,
+        label=f"{current_year} YTD",
+        zorder=10,
     )
 
-    fig.add_vline(x=n_days, line_width=1.2, line_dash="dot", line_color="gray")
-    fig.add_hline(y=0, line_width=1.0, line_dash="dash", line_color="gray")
+    ax.axvline(n_days, color="#6b7280", ls=":", lw=1.3, alpha=0.85)
+    ax.axhline(0, color="#6b7280", ls="--", lw=1.0, alpha=0.85)
 
-    fig.update_layout(
-        template=PLOT_TEMPLATE,
-        height=650,
-        title=f"{ticker_label} | Current YTD Path vs Composite-Ranked Historical Analogs",
-        xaxis_title="Trading Day of Year",
-        yaxis_title="Cumulative Return",
-        yaxis_tickformat=".0%",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.28, xanchor="left", x=0),
-        margin=dict(l=40, r=30, t=70, b=130),
-        hovermode="x unified",
+    xmax = max(len(ytd_df[c].dropna()) for c in ytd_df.columns)
+    ax.set_xlim(1, xmax)
+
+    ax.set_title(
+        f"{ticker_label} | Current YTD Path vs Composite-Ranked Historical Analogs",
+        fontsize=15,
+        weight="bold",
+        loc="left",
+        pad=12,
+    )
+    ax.set_xlabel("Trading Day of Year", fontsize=12)
+    ax.set_ylabel("Cumulative Return", fontsize=12)
+
+    set_percent_axis(ax, np.hstack(all_values))
+    clean_axes(ax)
+
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.13),
+        ncol=3,
+        frameon=False,
+        fontsize=9,
     )
 
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
     return fig
 
 
-def plot_setup_paths(
-    ticker_label: str,
-    current_path: pd.Series,
-    close_px: pd.Series,
-    selected_df: pd.DataFrame,
-    trailing_days: int,
-) -> go.Figure:
-    colors = px.colors.qualitative.Dark24 + px.colors.qualitative.Set3 + px.colors.qualitative.Plotly
-    fig = go.Figure()
+def plot_setup_paths(ticker_label, current_path, close_px, selected_df, trailing_days):
+    palette = get_palette(len(selected_df))
+    fig, ax = plt.subplots(figsize=(14.5, 7.3))
+    fig.patch.set_facecolor(CHART_FACE)
+
+    all_values = [current_path.values]
 
     for idx, row in selected_df.reset_index(drop=True).iterrows():
         start_loc = int(row["_start_loc"])
@@ -672,59 +680,60 @@ def plot_setup_paths(
         if hist_path is None:
             continue
 
-        fig.add_trace(
-            go.Scatter(
-                x=hist_path.index,
-                y=hist_path.values,
-                mode="lines",
-                name=f"{int(row['Year'])} setup | score {row['Score']:.2f}",
-                line=dict(width=1.9, dash="dash", color=colors[idx % len(colors)]),
-                opacity=0.90,
-                hovertemplate=(
-                    f"{int(row['Year'])} setup<br>"
-                    "Day=%{x}<br>"
-                    "Return=%{y:.2%}<br>"
-                    f"Signal={pd.Timestamp(row['Signal Date']).strftime('%Y-%m-%d')}<extra></extra>"
-                ),
-            )
+        all_values.append(hist_path.values)
+
+        ax.plot(
+            hist_path.index,
+            hist_path.values,
+            "--",
+            lw=2.0,
+            alpha=0.92,
+            color=palette[idx],
+            label=f"{int(row['Year'])} setup | score {row['Score']:.2f} | ρ {row['Correlation']:.2f}",
         )
 
-    fig.add_trace(
-        go.Scatter(
-            x=current_path.index,
-            y=current_path.values,
-            mode="lines",
-            name="Current trailing setup",
-            line=dict(width=3.6, color="black"),
-            hovertemplate="Current setup<br>Day=%{x}<br>Return=%{y:.2%}<extra></extra>",
-        )
+    ax.plot(
+        current_path.index,
+        current_path.values,
+        color="black",
+        lw=3.4,
+        label="Current trailing setup",
+        zorder=10,
     )
 
-    fig.add_hline(y=0, line_width=1.0, line_dash="dash", line_color="gray")
+    ax.axhline(0, color="#6b7280", ls="--", lw=1.0, alpha=0.85)
 
-    fig.update_layout(
-        template=PLOT_TEMPLATE,
-        height=590,
-        title=f"{ticker_label} | Current {trailing_days}D Setup vs Prior Matched Setups",
-        xaxis_title="Trading Days in Setup Window",
-        yaxis_title="Normalized Return",
-        yaxis_tickformat=".0%",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.28, xanchor="left", x=0),
-        margin=dict(l=40, r=30, t=70, b=130),
-        hovermode="x unified",
+    ax.set_title(
+        f"{ticker_label} | Current {trailing_days}D Setup vs Prior Matched Setups",
+        fontsize=15,
+        weight="bold",
+        loc="left",
+        pad=12,
+    )
+    ax.set_xlabel("Trading Days in Setup Window", fontsize=12)
+    ax.set_ylabel("Normalized Return", fontsize=12)
+    ax.set_xlim(0, trailing_days - 1)
+
+    set_percent_axis(ax, np.hstack(all_values))
+    clean_axes(ax)
+
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.13),
+        ncol=3,
+        frameon=False,
+        fontsize=9,
     )
 
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
     return fig
 
 
-def plot_forward_paths(
-    ticker_label: str,
-    close_px: pd.Series,
-    selected_df: pd.DataFrame,
-    forward_matrix: np.ndarray,
-    trailing_days: int,
-) -> go.Figure:
-    colors = px.colors.qualitative.Dark24 + px.colors.qualitative.Set3 + px.colors.qualitative.Plotly
+def plot_forward_paths(ticker_label, close_px, selected_df, forward_matrix, trailing_days):
+    palette = get_palette(len(selected_df))
+    fig, ax = plt.subplots(figsize=(14.5, 7.6))
+    fig.patch.set_facecolor(CHART_FACE)
+
     x_fwd = np.arange(0, trailing_days + 1)
 
     median_path = np.nanmedian(forward_matrix, axis=0)
@@ -733,110 +742,78 @@ def plot_forward_paths(
     p10_path = np.nanpercentile(forward_matrix, 10, axis=0)
     p90_path = np.nanpercentile(forward_matrix, 90, axis=0)
 
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Scatter(
-            x=x_fwd,
-            y=p90_path,
-            mode="lines",
-            name="10th to 90th %ile",
-            line=dict(width=0, color="rgba(150,150,150,0.25)"),
-            hoverinfo="skip",
-            showlegend=False,
-        )
+    ax.fill_between(
+        x_fwd,
+        p10_path,
+        p90_path,
+        color="#d5dae3",
+        alpha=0.45,
+        label="10th to 90th %ile",
     )
-    fig.add_trace(
-        go.Scatter(
-            x=x_fwd,
-            y=p10_path,
-            mode="lines",
-            name="10th to 90th %ile",
-            fill="tonexty",
-            fillcolor="rgba(150,150,150,0.22)",
-            line=dict(width=0, color="rgba(150,150,150,0.25)"),
-            hoverinfo="skip",
-        )
+    ax.fill_between(
+        x_fwd,
+        p25_path,
+        p75_path,
+        color="#aeb7c6",
+        alpha=0.45,
+        label="25th to 75th %ile",
     )
-
-    fig.add_trace(
-        go.Scatter(
-            x=x_fwd,
-            y=p75_path,
-            mode="lines",
-            name="25th to 75th %ile",
-            line=dict(width=0, color="rgba(120,120,120,0.25)"),
-            hoverinfo="skip",
-            showlegend=False,
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x_fwd,
-            y=p25_path,
-            mode="lines",
-            name="25th to 75th %ile",
-            fill="tonexty",
-            fillcolor="rgba(120,120,120,0.28)",
-            line=dict(width=0, color="rgba(120,120,120,0.25)"),
-            hoverinfo="skip",
-        )
+    ax.plot(
+        x_fwd,
+        median_path,
+        color="black",
+        lw=3.2,
+        label="Median forward path",
+        zorder=10,
     )
 
-    fig.add_trace(
-        go.Scatter(
-            x=x_fwd,
-            y=median_path,
-            mode="lines",
-            name="Median forward path",
-            line=dict(width=3.3, color="black"),
-            hovertemplate="Median<br>Day=%{x}<br>Return=%{y:.2%}<extra></extra>",
-        )
-    )
+    all_values = [median_path, p10_path, p90_path]
 
     for idx, row in selected_df.reset_index(drop=True).iterrows():
         fwd_path = forward_path_from_signal(close_px, int(row["_signal_loc"]), trailing_days)
         if fwd_path is None:
             continue
 
-        fig.add_trace(
-            go.Scatter(
-                x=fwd_path.index,
-                y=fwd_path.values,
-                mode="lines",
-                name=f"{int(row['Year'])} forward | score {row['Score']:.2f}",
-                line=dict(width=1.9, dash="dash", color=colors[idx % len(colors)]),
-                opacity=0.90,
-                hovertemplate=(
-                    f"{int(row['Year'])} forward<br>"
-                    "Day=%{x}<br>"
-                    "Return=%{y:.2%}<br>"
-                    f"Signal={pd.Timestamp(row['Signal Date']).strftime('%Y-%m-%d')}<extra></extra>"
-                ),
-            )
+        all_values.append(fwd_path.values)
+
+        ax.plot(
+            fwd_path.index,
+            fwd_path.values,
+            "--",
+            lw=2.0,
+            alpha=0.92,
+            color=palette[idx],
+            label=f"{int(row['Year'])} forward | score {row['Score']:.2f}",
         )
 
-    fig.add_hline(y=0, line_width=1.0, line_dash="dash", line_color="gray")
-    fig.add_vline(x=0, line_width=1.0, line_dash="dot", line_color="gray")
+    ax.axhline(0, color="#6b7280", ls="--", lw=1.0, alpha=0.85)
+    ax.axvline(0, color="#6b7280", ls=":", lw=1.0, alpha=0.85)
 
-    fig.update_layout(
-        template=PLOT_TEMPLATE,
-        height=650,
-        title=f"{ticker_label} | Forward Path After Similar {trailing_days}D Setups",
-        xaxis_title="Trading Days After Signal",
-        yaxis_title="Forward Cumulative Return",
-        yaxis_tickformat=".0%",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.30, xanchor="left", x=0),
-        margin=dict(l=40, r=30, t=70, b=140),
-        hovermode="x unified",
+    ax.set_title(
+        f"{ticker_label} | Forward Path After Similar {trailing_days}D Setups",
+        fontsize=15,
+        weight="bold",
+        loc="left",
+        pad=12,
+    )
+    ax.set_xlabel("Trading Days After Signal", fontsize=12)
+    ax.set_ylabel("Forward Cumulative Return", fontsize=12)
+    ax.set_xlim(0, trailing_days)
+
+    set_percent_axis(ax, np.hstack(all_values))
+    clean_axes(ax)
+
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.13),
+        ncol=3,
+        frameon=False,
+        fontsize=9,
     )
 
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
     return fig
 
-
-# =========================
-# PAGE
-# =========================
 
 add_logo()
 
@@ -865,7 +842,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Analog Controls")
 
-    top_n = st.slider("Top Analogs Shown", 1, 15, 8)
+    top_n = st.slider("Top Analogs Shown", 1, 15, 5)
     min_corr = st.slider("Minimum Calendar-Year ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
     rolling_min_corr = st.slider(
         "Minimum Rolling 252D ρ",
@@ -933,12 +910,12 @@ with note_col:
     else:
         st.caption(f"Latest close: {last_data_date:%Y-%m-%d} | New York date: {ny_now:%Y-%m-%d}")
 
-regime_data: dict[str, pd.Series] = {"asset": close_px}
-missing_regime_symbols: list[str] = []
-current_regime_features: dict[str, str] = {}
+regime_data = {"asset": close_px}
+missing_regime_symbols = []
+current_regime_features = {}
 
 if use_regime_filter:
-    regime_data, missing_regime_symbols = load_optional_regime_data(ticker, close_px)
+    regime_data, missing_regime_symbols = load_optional_regime_data(close_px)
     current_regime_features = regime_features_for_date(regime_data, last_data_date)
 
     if missing_regime_symbols:
@@ -965,35 +942,22 @@ if n_days < MIN_DAYS_FOR_CORR:
         f"{this_year} has only {n_days} trading days so far. "
         f"Correlation-based analogs are unstable before {MIN_DAYS_FOR_CORR} trading days."
     )
-    fig_early = go.Figure()
-    fig_early.add_trace(
-        go.Scatter(
-            x=current.index,
-            y=current.values,
-            mode="lines",
-            name=f"{this_year} YTD",
-            line=dict(width=3.5, color="black"),
-            hovertemplate="Trading Day=%{x}<br>Cum Return=%{y:.2%}<extra></extra>",
-        )
-    )
-    fig_early.add_hline(y=0, line_width=1.0, line_dash="dash", line_color="gray")
-    fig_early.update_layout(
-        template=PLOT_TEMPLATE,
-        height=580,
-        title=f"{ticker_label} | {this_year} YTD",
-        xaxis_title="Trading Day of Year",
-        yaxis_title="Cumulative Return",
-        yaxis_tickformat=".0%",
-        margin=dict(l=40, r=30, t=70, b=70),
-    )
-    st.plotly_chart(fig_early, use_container_width=True)
+    fig_early, ax_early = plt.subplots(figsize=(14.5, 7.2))
+    fig_early.patch.set_facecolor(CHART_FACE)
+    ax_early.plot(current.index, current.values, color="black", lw=3.4, label=f"{this_year} YTD")
+    ax_early.axhline(0, color="#6b7280", ls="--", lw=1.0, alpha=0.85)
+    ax_early.set_title(f"{ticker_label} | {this_year} YTD", fontsize=15, weight="bold", loc="left")
+    ax_early.set_xlabel("Trading Day of Year")
+    ax_early.set_ylabel("Cumulative Return")
+    set_percent_axis(ax_early, current.values)
+    clean_axes(ax_early)
+    ax_early.legend(frameon=False)
+    fig_early.tight_layout()
+    st.pyplot(fig_early, clear_figure=True)
+    plt.close(fig_early)
     st.caption("© 2026 AD Fund Management LP")
     st.stop()
 
-
-# =========================
-# CALENDAR-YEAR ANALOGS
-# =========================
 
 records = []
 
@@ -1073,17 +1037,16 @@ m1.metric(f"{this_year} True YTD", fmt_pct(current_ret))
 m2.metric("Median Full-Year Return of Shown Analogs", fmt_pct(median_final))
 m3.metric("Median Return After Match Date", fmt_pct(median_after_match))
 
-st.plotly_chart(
-    plot_ytd_analogs(
-        ticker_label=ticker_label,
-        current_year=this_year,
-        current=current,
-        ytd_df=ytd_df,
-        analog_df=top_calendar,
-        n_days=n_days,
-    ),
-    use_container_width=True,
+fig_ytd = plot_ytd_analogs(
+    ticker_label=ticker_label,
+    current_year=this_year,
+    current=current,
+    ytd_df=ytd_df,
+    analog_df=top_calendar,
+    n_days=n_days,
 )
+st.pyplot(fig_ytd, clear_figure=True)
+plt.close(fig_ytd)
 
 table_calendar = top_calendar.copy()
 table_calendar["Match Date"] = pd.to_datetime(table_calendar["Match Date"]).dt.strftime("%Y-%m-%d")
@@ -1117,10 +1080,6 @@ st.markdown("**Composite-ranked calendar-year analogs**")
 st.dataframe(table_calendar[display_cols], use_container_width=True, hide_index=True)
 
 
-# =========================
-# ROLLING TRAILING WINDOW ANALOGS
-# =========================
-
 st.markdown("<hr style='margin-top:18px; margin-bottom:12px;'>", unsafe_allow_html=True)
 st.subheader(f"Rolling {TRAILING_DAYS}-Day Setup Match and Forward Signal")
 
@@ -1142,7 +1101,6 @@ if current_trailing_path is None:
     st.stop()
 
 rolling_matches = []
-current_signal_date = pd.Timestamp(close_px.index[-1])
 
 for start_loc in range(0, len(close_px) - TRAILING_DAYS + 1, int(rolling_step)):
     end_loc = start_loc + TRAILING_DAYS
@@ -1244,27 +1202,25 @@ s1.metric("Clustered Matches", f"{len(selected_rolling)}")
 s2.metric("Median Next 252D", fmt_pct(float(np.nanmedian(selected_rolling["Next 252D"]))))
 s3.metric("Positive 252D Hit Rate", fmt_pct(float(np.mean(selected_rolling["Next 252D"] > 0))))
 
-st.plotly_chart(
-    plot_setup_paths(
-        ticker_label=ticker_label,
-        current_path=current_trailing_path,
-        close_px=close_px,
-        selected_df=overlay_rolling,
-        trailing_days=TRAILING_DAYS,
-    ),
-    use_container_width=True,
+fig_setup = plot_setup_paths(
+    ticker_label=ticker_label,
+    current_path=current_trailing_path,
+    close_px=close_px,
+    selected_df=overlay_rolling,
+    trailing_days=TRAILING_DAYS,
 )
+st.pyplot(fig_setup, clear_figure=True)
+plt.close(fig_setup)
 
-st.plotly_chart(
-    plot_forward_paths(
-        ticker_label=ticker_label,
-        close_px=close_px,
-        selected_df=overlay_rolling,
-        forward_matrix=forward_matrix,
-        trailing_days=TRAILING_DAYS,
-    ),
-    use_container_width=True,
+fig_forward = plot_forward_paths(
+    ticker_label=ticker_label,
+    close_px=close_px,
+    selected_df=overlay_rolling,
+    forward_matrix=forward_matrix,
+    trailing_days=TRAILING_DAYS,
 )
+st.pyplot(fig_forward, clear_figure=True)
+plt.close(fig_forward)
 
 dist_table = make_forward_distribution_table(selected_rolling)
 if not dist_table.empty:
