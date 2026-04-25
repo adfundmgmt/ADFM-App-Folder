@@ -100,74 +100,101 @@ def inject_app_css() -> None:
         """
         <style>
         .block-container {
-            padding-top: 1.35rem;
+            padding-top: 0.85rem;
             padding-bottom: 2.25rem;
         }
+
         .hero-wrap {
-            margin: 0.15rem 0 1.10rem 0;
+            margin: 0 0 1.15rem 0;
+            padding-top: 0.10rem;
         }
+
         .hero-title {
             color: #202733;
-            font-size: 2.35rem;
-            font-weight: 700;
-            line-height: 1.08;
-            letter-spacing: -0.03em;
-            margin-bottom: 0.35rem;
+            font-size: 2.05rem;
+            font-weight: 750;
+            line-height: 1.12;
+            letter-spacing: -0.035em;
+            margin: 0 0 0.28rem 0;
+            padding: 0;
         }
+
         .hero-subtitle {
             color: #667085;
-            font-size: 1.02rem;
-            line-height: 1.45;
-            max-width: 980px;
+            font-size: 0.98rem;
+            line-height: 1.42;
+            margin: 0;
+            max-width: 920px;
         }
-        .inline-stat-wrap {
-            margin-top: 1.95rem;
+
+        .top-control-row {
+            margin-top: 0.10rem;
+            margin-bottom: 1.05rem;
         }
-        .inline-stat {
+
+        .clean-metric {
+            height: 58px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 1rem;
-            background: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
-            border: 1px solid #e4e9f1;
+            background: #f7f9fc;
+            border: 1px solid #dde3ed;
             border-radius: 14px;
-            padding: 0.95rem 1.15rem;
-            min-height: 54px;
-            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+            padding: 0 1.05rem;
+            box-shadow: inset 0 1px 1px rgba(16, 24, 40, 0.02);
         }
-        .inline-stat-label {
+
+        .clean-metric-label {
             color: #8b97a8;
             font-size: 0.74rem;
-            font-weight: 700;
+            font-weight: 750;
             text-transform: uppercase;
             letter-spacing: 0.07em;
-        }
-        .inline-stat-value {
-            color: #202733;
-            font-size: 1.65rem;
-            font-weight: 700;
-            line-height: 1;
-            letter-spacing: -0.03em;
             white-space: nowrap;
         }
+
+        .clean-metric-value {
+            color: #202733;
+            font-size: 1.18rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            white-space: nowrap;
+        }
+
+        div[data-testid="stTextInput"] {
+            margin-bottom: 0 !important;
+        }
+
+        div[data-testid="stTextInput"] label {
+            padding-bottom: 0.28rem;
+        }
+
         div[data-testid="stTextInput"] label p {
             color: #8b97a8;
             font-size: 0.74rem;
-            font-weight: 700;
+            font-weight: 750;
             text-transform: uppercase;
             letter-spacing: 0.07em;
         }
+
+        div[data-baseweb="input"] {
+            height: 58px;
+        }
+
         div[data-baseweb="input"] > div {
             background: #f7f9fc;
             border: 1px solid #dde3ed;
             border-radius: 14px;
-            min-height: 54px;
+            min-height: 58px;
             box-shadow: inset 0 1px 1px rgba(16, 24, 40, 0.02);
         }
+
         div[data-baseweb="input"] input {
             color: #202733;
-            font-size: 1.08rem;
-            font-weight: 600;
+            font-size: 1.18rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
         }
         </style>
         """,
@@ -190,10 +217,10 @@ def render_hero() -> None:
 def render_inline_metric(label: str, value: str) -> None:
     st.markdown(
         f"""
-        <div class="inline-stat-wrap">
-            <div class="inline-stat">
-                <div class="inline-stat-label">{label}</div>
-                <div class="inline-stat-value">{value}</div>
+        <div style="padding-top: 1.72rem;">
+            <div class="clean-metric">
+                <div class="clean-metric-label">{label}</div>
+                <div class="clean-metric-value">{value}</div>
             </div>
         </div>
         """,
@@ -1030,12 +1057,17 @@ with st.sidebar:
         min_regime_score = 0.0
 
 
-top_bar = st.container()
-with top_bar:
-    top_left, top_right = st.columns([1.2, 0.9], gap="large")
-    with top_left:
-        ticker_in = st.text_input("Ticker", "^SPX").strip().upper()
-    metric_placeholder = top_right.empty()
+st.markdown('<div class="top-control-row">', unsafe_allow_html=True)
+
+top_left, top_right = st.columns([0.92, 1.08], gap="medium")
+
+with top_left:
+    ticker_in = st.text_input("Ticker", "^SPX").strip().upper()
+
+with top_right:
+    metric_placeholder = st.empty()
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 ticker = TICKER_ALIASES.get(ticker_in, ticker_in)
 ticker_label = ticker_in if ticker_in else ticker
