@@ -13,7 +13,7 @@ import time
 # ============================================================
 # Page and theme
 # ============================================================
-st.set_page_config(page_title="Basket Panels", layout="wide")
+st.set_page_config(page_title="Sector and Thematic Basket Panels", layout="wide")
 
 CUSTOM_CSS = """
 <style>
@@ -26,14 +26,18 @@ CUSTOM_CSS = """
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-TITLE = "ADFM Basket Panels"
-SUBTITLE = "Consolidated panel for all baskets, plus per-category panels with aligned business-day dates."
+TITLE = "ADFM Sector and Thematic Basket Panels"
+SUBTITLE = "Sector, thematic, and country baskets only. No pure regime diagnostics or duplicate factor baskets."
+
+PASTEL_GREEN = "#52b788"
+PASTEL_RED = "#e85d5d"
+PASTEL_GREY = "#8b949e"
 
 PASTEL = [
-    "#AEC6CF", "#FFB347", "#B39EB5", "#77DD77", "#F49AC2",
-    "#CFCFC4", "#DEA5A4", "#C6E2FF", "#FFDAC1", "#E2F0CB",
-    "#C7CEEA", "#FFB3BA", "#FFD1DC", "#B5EAD7", "#E7E6F7",
-    "#F1E3DD", "#B0E0E6", "#E0BBE4", "#F3E5AB", "#D5E8D4"
+    "#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2",
+    "#b279a2", "#ff9da6", "#9d755d", "#bab0ac", "#59a14f",
+    "#edc948", "#af7aa1", "#ff9da7", "#76b7b2", "#8cd17d",
+    "#b6992d", "#499894", "#d37295", "#fabfd2", "#79706e",
 ]
 
 MIN_MARKET_CAP = 1_000_000_000
@@ -41,8 +45,8 @@ INDICATOR_WARMUP_DAYS = 520
 BENCH = "SPY"
 
 CACHE_DIR = Path(".adfm_cache")
-LEVELS_CACHE = CACHE_DIR / "basket_levels_last_good.pkl"
-LEVELS_META_CACHE = CACHE_DIR / "basket_levels_last_good_meta.json"
+LEVELS_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good.pkl"
+LEVELS_META_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good_meta.json"
 
 MARKET_CAP_EXCEPTIONS: set[str] = set()
 
@@ -53,265 +57,791 @@ EXCLUDE_MISSING_MARKET_CAP = False
 
 # ============================================================
 # Category -> Baskets -> Tickers
+# 250 baskets total:
+# Technology/AI/Internet: 36
+# Energy/Power/Infrastructure/Materials: 36
+# Industrials/Defense/Transport: 27
+# Healthcare: 25
+# Financials/Real Estate: 28
+# Consumer/Housing/Travel: 28
+# Thematic Cross-Sector: 35
+# Countries/Regions: 35
 # ============================================================
-CATEGORIES: Dict[str, Dict[str, List[str]]] = {
-    "Growth & Innovation": {
-        "Semis ETFs": ["SMH", "SOXX", "XSD"],
-        "Semis Compute and Accelerators": ["NVDA", "AMD", "AVGO", "MRVL", "ARM", "INTC"],
-        "Semis Analog and Power": ["TXN", "ADI", "MCHP", "NXPI", "MPWR", "ON", "STM", "IFNNY"],
-        "Semis RF and Connectivity": ["QCOM", "SWKS", "QRVO", "MTSI", "AVNW"],
-        "Semis Memory and Storage": ["MU", "WDC", "STX", "SNDK", "SKM"],
-        "Foundry Packaging and OSAT": ["TSM", "UMC", "GFS", "ASX", "AMKR"],
-        "Semis Equipment": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ONTO", "AEIS", "ACMR"],
-        "Semis EDA and IP": ["SNPS", "CDNS", "ARM"],
-        "Semis Automotive and Industrial End-Markets": ["NXPI", "ON", "MCHP", "STM", "QCOM", "ADI"],
-        "Semis Test Assembly and Packaging": ["AMKR", "TER", "ONTO", "AEIS", "KLAC"],
-        "AI Infrastructure Supply Chain": [
-            "NVDA", "AMD", "AVGO", "TSM", "ASML",
-            "ANET", "MRVL", "MU",
-            "AMAT", "LRCX", "KLAC", "TER",
-            "VRT", "ETN", "SMCI", "DELL"
-        ],
-        "Hyperscalers": ["MSFT", "AMZN", "GOOGL", "META", "ORCL"],
-        "Enterprise Software and Cloud": [
-            "NOW", "CRM", "DDOG", "SNOW", "MDB", "NET", "ZS", "OKTA", "TEAM", "HUBS", "INTU", "ADBE"
-        ],
-        "Usage-Based and Consumption Software": ["SNOW", "DDOG", "MDB", "NET", "CRWD"],
-        "Developer Tools and DevOps": ["DT", "GTLB", "MDB", "DDOG", "NET", "TEAM"],
-        "Observability and Data Tooling": ["DDOG", "ESTC", "MDB", "DT"],
-        "Quality SaaS": ["ADBE", "CRM", "NOW", "INTU", "TEAM", "HUBS", "DDOG", "NET", "MDB", "SNOW"],
-        "Cybersecurity": ["PANW", "FTNT", "CRWD", "ZS", "OKTA", "TENB", "S", "CYBR", "CHKP", "NET"],
-        "Digital Payments": ["V", "MA", "PYPL", "XYZ", "FI", "FIS", "GPN", "AXP", "COF", "DFS", "MELI"],
-        "E-Commerce Platforms": ["AMZN", "SHOP", "MELI", "ETSY", "PDD", "BABA", "JD", "SE"],
-        "Social and Consumer Internet": ["META", "SNAP", "PINS", "MTCH", "GOOGL", "BILI", "BIDU", "RBLX"],
-        "Streaming and Media": ["NFLX", "DIS", "WBD", "PARA", "ROKU", "SPOT", "LYV", "CHTR", "CMCSA"],
-        "Fintech and Neobanks": ["XYZ", "PYPL", "AFRM", "HOOD", "SOFI", "UPST"],
-    },
-
-    "AI and Data Center Stack": {
-        "Data Center Networking": ["ANET", "CSCO", "JNPR", "MRVL", "AVGO", "CIEN", "LITE", "INFN"],
-        "Optical and Coherent": ["CIEN", "LITE", "INFN", "COHR", "AAOI"],
-        "Data Center Power and Cooling": ["VRT", "ETN", "TT", "JCI", "CARR", "ABB", "POWL", "GEV"],
-        "Data Center REITs": ["EQIX", "DLR", "AMT", "SBAC", "CCI"],
-        "Servers": ["SMCI", "DELL", "HPE"],
-        "Storage and Data Infrastructure": ["NTAP", "WDC", "STX", "IBM", "SNDK"],
-        "IT Services and Systems Integrators": ["ACN", "IBM", "CTSH", "EPAM", "GIB"],
-        "Rack Power Delivery and Electrical Gear": ["ETN", "VRT", "ABB", "POWL", "JCI", "GEV"],
-        "AI Data Center Capex Beneficiaries": ["ANET", "AVGO", "MRVL", "ETN", "VRT", "GEV", "PWR", "SMCI", "DELL", "EQIX"],
-    },
-
-    "Connectivity and Industrial Tech": {
-        "5G and Networking Infra": ["AMT", "CCI", "SBAC", "ANET", "CSCO", "JNPR", "ERIC", "NOK", "FFIV"],
-        "Industrial Automation": ["ROK", "ETN", "EMR", "AME", "PH", "ABB", "KEYS", "TRMB", "CGNX", "IEX", "ITW", "GWW", "SYM"],
-        "Aerospace Tech and Space": ["RKLB", "IRDM", "ASTS", "LHX", "LMT", "NOC", "RTX"],
-        "Defense Software and ISR": ["PLTR", "KTOS", "AVAV", "LHX", "LDOS", "BAH"],
-        "Aerospace Aftermarket and MRO Exposure": ["GE", "RTX", "HEI", "TDG"],
-        "Electrification and Grid Modernization": ["ETN", "ABB", "PWR", "MYRG", "POWL", "VRT", "GEV"],
-    },
-
-    "Energy and Hard Assets": {
-        "Energy Majors": ["XOM", "CVX", "COP", "SHEL", "BP", "TTE", "EQNR", "ENB", "PBR"],
-        "US Shale and E&Ps": ["EOG", "DVN", "FANG", "MRO", "OXY", "APA", "AR", "RRC", "EXE", "CTRA"],
-        "Natural Gas and LNG": ["LNG", "EQNR", "KMI", "WMB", "EPD", "ET", "WDS"],
-        "Oilfield Services": ["SLB", "HAL", "BKR", "NOV", "FTI", "PTEN", "HP", "NBR", "OII"],
-        "Uranium and Fuel Cycle": ["CCJ", "UUUU", "UEC", "URG", "UROY", "DNN", "NXE", "LEU", "URA", "URNM"],
-        "Nuclear and Grid Buildout": ["VST", "CEG", "BWXT", "LEU", "ETN", "VRT", "GEV"],
-        "Metals and Mining": ["BHP", "RIO", "VALE", "FCX", "NEM", "TECK", "SCCO", "AA"],
-        "Gold and Silver Miners": ["GDX", "GDXJ", "NEM", "AEM", "GOLD", "KGC", "AG", "PAAS", "WPM"],
-        "Energy Midstream and Storage": ["KMI", "WMB", "EPD", "ET", "ENB", "MPLX"],
-        "Refining and Downstream": ["MPC", "VLO", "PSX", "DK", "PBF"],
-        "Oil-Weighted E&Ps": ["EOG", "FANG", "OXY", "DVN", "MRO"],
-        "Gas-Weighted E&Ps": ["AR", "RRC", "CTRA", "EXE", "EQT"],
-        "LNG Export Levered": ["LNG", "KMI", "WMB", "ET", "EPD", "WDS"],
-    },
-
-    "Clean Energy Transition": {
-        "Solar and Inverters": ["TAN", "FSLR", "ENPH", "SEDG", "RUN", "CSIQ", "JKS"],
-        "Wind and Renewables": ["ICLN", "FAN", "NEP", "FSLR", "CWEN"],
-        "Distributed Power and Fuel Cells": ["BE", "BLDP", "FCEL", "PLUG"],
-        "Utilities and Power": ["VST", "CEG", "NEE", "DUK", "SO", "AEP", "XEL", "EXC", "PCG", "EIX"],
-        "Regulated Utilities Core": ["DUK", "SO", "AEP", "XEL", "EXC", "ED"],
-        "Merchant Power and Volatility": ["VST", "CEG", "NRG", "AES", "CWEN"],
-        "Grid Equipment and Power Conversion": ["GEV", "ETN", "VRT", "ABB", "POWL", "HUBB"],
-    },
-
-    "Health and Longevity": {
-        "Large-Cap Biotech": ["AMGN", "GILD", "REGN", "BIIB", "VRTX"],
-        "GLP-1 and Metabolic": ["NVO", "LLY", "AZN", "MRK", "PFE"],
-        "MedTech Devices": ["MDT", "SYK", "ISRG", "BSX", "ZBH", "EW", "PEN"],
-        "Diagnostics and Tools": ["TMO", "DHR", "A", "RGEN", "ILMN"],
-        "Healthcare Payers": ["UNH", "HUM", "CI", "ELV", "CNC", "MOH"],
-        "Healthcare Providers and Hospitals": ["HCA", "THC", "UHS", "CYH"],
-        "Healthcare Services and Outsourcing": ["LH", "DGX", "AMN", "EHC"],
-        "Drug Channel and PBM Exposure": ["CVS", "UNH", "CI", "ELV"],
-        "Life Science Tools and Supply Chain": ["TMO", "DHR", "A", "RGEN", "WAT"],
-        "CRO and Clinical Services": ["IQV", "LH", "DGX", "MEDP", "ICLR"],
-    },
-
-    "Financials and Credit": {
-        "Money-Center and IBs": ["JPM", "BAC", "C", "WFC", "GS", "MS"],
-        "Regional Banks": ["KRE", "TFC", "FITB", "CFG", "RF", "KEY", "PNC", "USB", "MTB"],
-        "Brokers and Exchanges": ["IBKR", "SCHW", "HOOD", "CME", "ICE", "NDAQ", "CBOE", "MKTX"],
-        "Alt Managers and PE": ["BX", "KKR", "APO", "CG", "ARES", "OWL", "TPG"],
-        "Private Credit and BDCs": ["ARES", "MAIN", "ARCC"],
-        "Mortgage Finance": ["RKT", "UWMC", "COOP", "FNF", "NMIH", "ESNT"],
-        "Insurers": ["BRK-B", "CB", "TRV", "PGR", "AIG", "MET"],
-        "Insurance P&C": ["PGR", "TRV", "CB", "ALL", "CINF"],
-        "Insurance Life and Retirement": ["MET", "PRU", "LNC", "AIG"],
-        "Reinsurers": ["RNR", "RE", "EG"],
-        "Insurance Brokers": ["AJG", "BRO", "MMC", "AON", "WTW"],
-        "Deposit Beta and Funding Sensitivity": ["WFC", "BAC", "USB", "PNC", "KEY"],
-        "CRE Sensitivity Banks": ["KEY", "CFG", "NYCB", "ZION", "WAL"],
-        "Card and Consumer Lenders": ["AXP", "COF", "DFS", "SYF", "ALLY"],
-        "Capital Markets Activity Proxies": ["GS", "MS", "CME", "ICE", "NDAQ"],
-    },
-
-    "Real Assets and Inflation Beneficiaries": {
-        "Homebuilders": ["ITB", "DHI", "LEN", "NVR", "PHM", "TOL", "KBH", "MTH"],
-        "REITs Core": ["VNQ", "PLD", "EQIX", "SPG", "O", "PSA", "DLR", "ARE", "VTR", "WELL"],
-        "Industrials and Infrastructure": ["CAT", "DE", "URI", "PWR", "VMC", "MLM", "NUE"],
-        "Shipping and Logistics": ["FDX", "UPS", "GXO", "XPO", "MATX", "DAC"],
-        "Agriculture and Machinery": ["MOS", "NTR", "DE", "CNHI", "ADM", "BG", "CF", "AGCO"],
-        "Housing Home Improvement and Repair": ["HD", "LOW", "TSCO", "POOL"],
-        "Housing Building Products and Materials": ["BLDR", "TREX", "MAS", "VMC", "MLM", "SUM"],
-        "Housing Mortgage and Title": ["COOP", "RKT", "UWMC", "FNF", "FAF"],
-        "Housing Residential Transaction Proxies": ["RDFN", "ZG", "OPEN"],
-        "Net Lease and Long Lease Duration REITs": ["O", "NNN", "ADC", "WPC"],
-        "Multifamily REITs": ["AVB", "EQR", "UDR", "ESS", "MAA"],
-        "Office and Refi Wall Sensitive REITs": ["BXP", "VNO", "SLG", "KRC"],
-        "Construction Materials and Aggregates": ["VMC", "MLM", "SUM", "NUE", "EXP"],
-    },
-
-    "Consumer Cyclicals": {
-        "Retail Discretionary": ["HD", "LOW", "M", "GPS", "BBY", "TJX", "TGT", "ROST"],
-        "Restaurants": ["MCD", "SBUX", "YUM", "CMG", "DRI", "DPZ", "WING", "QSR"],
-        "Travel and Booking": ["BKNG", "EXPE", "ABNB", "TRIP"],
-        "Hotels and Casinos": ["MAR", "HLT", "IHG", "MGM", "LVS", "WYNN", "MLCO", "CZR", "PENN"],
-        "Airlines": ["AAL", "DAL", "UAL", "LUV", "JBLU", "ALK"],
-        "Autos Legacy OEMs": ["TM", "HMC", "F", "GM", "STLA"],
-        "Electric Vehicles": ["TSLA", "RIVN", "LCID", "NIO", "LI", "XPEV"],
-        "Luxury and Apparel": ["TPR", "RL", "CPRI", "LVMUY"],
-        "Retail Asset-Heavy Inventory Risk": ["TGT", "BBY", "M", "GPS", "KSS", "BBWI"],
-        "Retail Asset-Light Platforms and Marketplaces": ["AMZN", "EBAY", "ETSY", "SHOP", "PDD", "MELI"],
-        "Prime Consumer Discretionary": ["HD", "LOW", "LULU", "NKE", "RH"],
-        "Subprime and Credit-Sensitive Consumer": ["AFRM", "UPST", "COF", "DFS", "SYF"],
-        "Big Ticket Durables": ["WHR", "SGI", "BBY", "RH", "LOW"],
-        "Auto Parts and Service Tailwind": ["AZO", "ORLY", "LKQ", "AAP"],
-    },
-
-    "Defensives and Staples": {
-        "Retail Staples": ["WMT", "TGT", "DG", "KR", "WBA"],
-        "Staples and Beverages": ["PG", "KO", "PEP", "PM", "MO", "MDLZ"],
-        "Telecom and Cable": ["T", "VZ", "TMUS", "CHTR", "CMCSA"],
-        "Aerospace and Defense": ["LMT", "NOC", "RTX", "GD", "HII", "TDG", "HEI"],
-        "Utilities Defensive": ["DUK", "SO", "AEP", "XEL", "EXC", "ED"],
-        "Beverage Bottlers and Distributors": ["KOF", "COKE", "FIZZ", "KO"],
-        "Pricing Power Staples": ["PG", "KO", "PEP", "COST", "MDLZ"],
-        "Volume Risk and Trade-Down Staples": ["WMT", "DG", "DLTR", "KR"],
-    },
-
-    "Materials and Chemicals": {
-        "Fertilizers": ["CF", "MOS", "NTR"],
-        "Commodity Chemicals": ["DOW", "LYB", "CE"],
-        "Specialty Chemicals": ["SHW", "EMN", "IFF", "PPG", "RPM"],
-        "Industrial Gases": ["LIN", "APD", "AIQUY"],
-        "Packaging and Containers": ["IP", "PKG", "WRK"],
-        "Construction Chemicals and Adhesives": ["EMN", "RPM", "SHW"],
-    },
-
-    "Country and Region ETFs": {
-        "Developed ex-US": ["VEA"],
-        "Europe Broad": ["VGK"],
-        "Eurozone": ["EZU"],
-        "UK": ["EWU"],
-        "Japan": ["EWJ"],
-        "Canada": ["EWC"],
-        "Australia": ["EWA"],
-        "China": ["MCHI"],
-        "Hong Kong": ["EWH"],
-        "Taiwan": ["EWT"],
-        "South Korea": ["EWY"],
-        "India": ["INDA"],
-        "Singapore": ["EWS"],
-        "Emerging Markets Broad": ["IEMG"],
-        "Frontier Markets": ["FM"],
-        "Latin America Broad": ["ILF"],
-        "Brazil": ["EWZ"],
-        "Mexico": ["EWW"],
-        "Chile": ["ECH"],
-        "Peru": ["EPU"],
-        "Israel": ["EIS"],
-        "Saudi Arabia": ["KSA"],
-        "UAE": ["UAE"],
-        "Qatar": ["QAT"],
-        "South Africa": ["EZA"],
-    },
-
-    "Alt and Global Risk": {
-        "Crypto Proxies": ["COIN", "MSTR", "MARA", "RIOT", "BITO"],
-        "China Tech ADRs": ["BABA", "BIDU", "JD", "PDD", "BILI", "NTES", "TCEHY"],
-        "EM Internet and Commerce": ["MELI", "SE", "NU", "STNE"],
-    },
-
-    "Regime Diagnostics": {
-        "Long-Duration Equities": ["ARKK", "IPO", "IGV", "SNOW", "NET", "DDOG", "MDB", "SHOP"],
-        "Short-Duration Cash Flow": ["BRK-B", "PGR", "CB", "ICE", "CME", "NDAQ", "SPGI", "MSCI"],
-        "Yield Proxies": ["XLU", "VZ", "T", "KMI", "EPD", "ENB"],
-        "Rate-Sensitive Cyclicals": ["ITB", "XHB", "CVNA", "COF", "DFS", "AXP", "SYF"],
-        "Labor-Intensive Services": ["SBUX", "CMG", "DRI", "MAR", "HLT", "RCL", "CCL"],
-        "Automation and Productivity Winners": ["ROK", "ABB", "ETN", "PH", "CGNX", "ISRG", "SYM", "TER"],
-        "IT Services and Outsourcing": ["ACN", "IBM", "CTSH", "EPAM", "GIB"],
-        "Staffing and Wage-Sensitive Names": ["RHI", "MAN", "KFY", "ASGN"],
-        "Leveraged Cyclicals": ["CCL", "RCL", "NCLH", "AAL", "UAL", "DAL", "MGM", "LVS"],
-        "Net-Cash Compounders": ["AAPL", "MSFT", "GOOGL", "META", "ORCL", "ADBE", "INTU", "V"],
-        "Equity Credit Stress Proxies": ["HYG", "JNK", "LQD"],
-        "Financial Conditions Sensitive": ["IWM", "XLY", "KRE", "HYG", "ARKK"],
-        "Commodity FX Equities": ["EWC", "EWA", "EWZ", "EWW"],
-        "EM Domestic Demand": ["EEM", "INDA", "EWW", "EWZ", "EIDO"],
-        "High Multiple Duration Risk": ["SNOW", "NET", "DDOG", "MDB", "SHOP"],
-        "Buyback and Cash Yield Winners": ["AAPL", "MSFT", "BRK-B", "XOM", "META"],
-        "High Short Interest and Retail Flow": ["CVNA", "UPST", "RIVN", "BYND"],
-        "Spread Beta Equities": ["COF", "DFS", "SYF", "OMF", "ENVA"],
-        "Inflation Pass-Through Winners": ["COST", "HD", "SHW", "NUE", "VMC"],
-        "Input Cost and Margin Pressure Risk": ["DAL", "UAL", "SBUX", "DPZ", "WHR"],
-    },
-
-    "Sector Expansions": {
-        "Transportation Rails and Trucking": ["UNP", "CSX", "NSC", "CNI", "CP", "JBHT", "KNX"],
-        "Transportation Parcel and Last-Mile": ["FDX", "UPS", "GXO", "XPO"],
-        "Air Cargo and Leasing": ["AL", "FTAI", "AER"],
-        "Digital Advertising Platforms": ["GOOGL", "META", "TTD", "PINS", "SNAP"],
-        "Traditional Media and Content": ["DIS", "WBD", "PARA", "CHTR", "CMCSA"],
-        "Marketing Services and Agencies": ["IPG", "OMC", "WPP"],
-        "Gov IT and Services": ["SAIC", "CACI", "LDOS", "BAH", "PSN", "G"],
-        "Defense and Security Spending": ["LMT", "NOC", "RTX", "GD", "LHX", "HII", "TDG"],
-        "Infrastructure and Grid Spend": ["PWR", "ETN", "VRT", "ABB", "GEV", "CAT", "URI", "VMC", "MLM"],
-        "Healthcare Policy Sensitive": ["UNH", "HUM", "CI", "ELV", "CNC", "CVS"],
-        "Energy Subsidy and Transition Plays": ["FSLR", "ENPH", "BE", "PLUG", "NEE", "VST", "ICLN"],
-    },
-
-    "Everyday Economy": {
-        "Recreation and Experiences": ["YETI", "FOXF", "ASO", "DOO", "PLAY", "LYV", "FUN", "RICK"],
-        "Big Ticket and Home Replacement Cycle": ["SGI", "SNBR", "WHR", "POOL", "LOW", "TTC", "LAD"],
-        "Deferred Healthcare": ["ALGN", "EYE", "WRBY", "HSIC"],
-        "Debt and Credit Paydown": ["OMF", "CACC", "SYF", "COF", "OPFI", "ENVA"],
-        "Trade-Down Retail and Off-Price": ["TJX", "ROST", "BURL", "FIVE", "OLLI"],
-        "Discount and Dollar": ["DG", "DLTR", "BURL"],
-        "Staple Volume and Clubs": ["WMT", "COST", "KR"],
-        "Value QSR": ["MCD", "YUM", "QSR", "WEN", "DPZ"],
-        "Auto Parts and Repair": ["AZO", "ORLY", "AAP", "LKQ"],
-        "Home Repair and Maintenance": ["HD", "LOW", "POOL", "TSCO"],
-        "Used Auto and Affordability": ["KMX", "CVNA", "LAD"],
-        "Shelter and Rent Economy": ["INVH", "AMH", "AVB", "EQR", "UDR", "MAA", "ESS"],
-        "Manufactured Housing Affordability": ["ELS", "SUI", "CUBE"],
-        "Storage and Mobility Stress": ["PSA", "EXR", "CUBE"],
-        "Freight and Parcels": ["UNP", "CSX", "NSC", "JBHT", "KNX", "SAIA", "ODFL", "FDX", "UPS", "CHRW", "XPO", "GXO"],
-        "Consumer Credit Stress": ["SYF", "COF", "DFS", "ALLY", "OMF", "ENVA"],
-        "Payroll and Staffing": ["ADP", "PAYX", "RHI", "MAN", "KFY", "ASGN"],
-        "Budget Hotels and Value Travel": ["CHH", "WH", "RYAAY"],
-        "Chemicals Feedstock Sensitivity": ["DOW", "LYB", "WLK", "OLN", "CF", "NTR", "MOS"],
-    },
-}
+CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'AI Compute and Accelerators': ['NVDA', 'AMD', 'AVGO', 'MRVL', 'ARM', 'INTC'],
+                                 'AI ASICs and Custom Silicon': ['AVGO', 'MRVL', 'AMD', 'TSM', 'ARM', 'SNPS', 'CDNS'],
+                                 'Semiconductor Broad ETFs': ['SMH', 'SOXX', 'XSD'],
+                                 'Analog Power and Mixed Signal': ['TXN',
+                                                                   'ADI',
+                                                                   'MCHP',
+                                                                   'NXPI',
+                                                                   'MPWR',
+                                                                   'ON',
+                                                                   'STM',
+                                                                   'IFNNY'],
+                                 'Memory and Storage': ['MU', 'WDC', 'STX', 'SNDK', 'HXSCF', 'SSNLF'],
+                                 'HBM and Advanced Memory': ['MU',
+                                                             'HXSCF',
+                                                             'SSNLF',
+                                                             'NVDA',
+                                                             'AMD',
+                                                             'TSM',
+                                                             'ASML',
+                                                             'AMAT',
+                                                             'LRCX'],
+                                 'Foundry and OSAT': ['TSM', 'UMC', 'GFS', 'ASX', 'AMKR', 'BESIY'],
+                                 'Advanced Packaging': ['AMKR', 'ASX', 'TSM', 'BESIY', 'AMAT', 'LRCX', 'KLAC', 'ONTO'],
+                                 'Semiconductor Equipment': ['ASML',
+                                                             'AMAT',
+                                                             'LRCX',
+                                                             'KLAC',
+                                                             'TER',
+                                                             'ONTO',
+                                                             'AEIS',
+                                                             'ACMR',
+                                                             'COHU'],
+                                 'Semicap Subsystems and Components': ['MKSI',
+                                                                       'ENTG',
+                                                                       'AEIS',
+                                                                       'UCTT',
+                                                                       'ICHR',
+                                                                       'COHU',
+                                                                       'VECO',
+                                                                       'CAMT'],
+                                 'EDA and Chip IP': ['SNPS', 'CDNS', 'ARM'],
+                                 'RF and Wireless Connectivity': ['QCOM',
+                                                                  'SWKS',
+                                                                  'QRVO',
+                                                                  'MTSI',
+                                                                  'AVNW',
+                                                                  'CIEN',
+                                                                  'LITE'],
+                                 'Optical Networking and Interconnect': ['CIEN', 'LITE', 'COHR', 'AAOI', 'INFN', 'NOK'],
+                                 'Data Center Networking': ['ANET', 'CSCO', 'JNPR', 'AVGO', 'MRVL', 'CIEN', 'LITE'],
+                                 'Servers and AI Hardware': ['SMCI', 'DELL', 'HPE', 'NTAP', 'WDC', 'STX', 'IBM'],
+                                 'Enterprise Storage and Data Infrastructure': ['NTAP',
+                                                                                'WDC',
+                                                                                'STX',
+                                                                                'IBM',
+                                                                                'DDOG',
+                                                                                'SNOW',
+                                                                                'MDB'],
+                                 'Hyperscalers': ['MSFT', 'AMZN', 'GOOGL', 'META', 'ORCL'],
+                                 'AI Cloud Challengers and Neocloud': ['ORCL',
+                                                                       'IBM',
+                                                                       'HPE',
+                                                                       'SMCI',
+                                                                       'DELL',
+                                                                       'NBIS',
+                                                                       'IREN',
+                                                                       'CORZ',
+                                                                       'APLD'],
+                                 'Enterprise SaaS': ['NOW', 'CRM', 'ADBE', 'INTU', 'TEAM', 'HUBS', 'WDAY', 'DOCU'],
+                                 'Vertical Software': ['VEEV', 'TYL', 'APPF', 'MNDY', 'PAYC', 'GWRE', 'DAY', 'APP'],
+                                 'Data Analytics and AI Software': ['PLTR',
+                                                                    'SNOW',
+                                                                    'MDB',
+                                                                    'DDOG',
+                                                                    'ESTC',
+                                                                    'CFLT',
+                                                                    'S',
+                                                                    'AI'],
+                                 'Database and Data Platforms': ['SNOW', 'MDB', 'ESTC', 'CFLT', 'DDOG', 'ORCL', 'IBM'],
+                                 'Observability and DevOps': ['DDOG', 'DT', 'GTLB', 'NET', 'ESTC', 'MDB', 'TEAM'],
+                                 'Developer Productivity and Code AI': ['MSFT', 'GTLB', 'TEAM', 'DDOG', 'MDB', 'NOW'],
+                                 'Cybersecurity Platforms': ['PANW',
+                                                             'CRWD',
+                                                             'FTNT',
+                                                             'ZS',
+                                                             'OKTA',
+                                                             'CYBR',
+                                                             'CHKP',
+                                                             'NET',
+                                                             'TENB',
+                                                             'S'],
+                                 'Identity and Access Management': ['OKTA', 'CYBR', 'MSFT', 'PANW', 'FTNT', 'CHKP'],
+                                 'AI Security and Model Governance': ['CRWD',
+                                                                      'PANW',
+                                                                      'ZS',
+                                                                      'DDOG',
+                                                                      'PLTR',
+                                                                      'SNOW',
+                                                                      'NET',
+                                                                      'S'],
+                                 'Digital Advertising Platforms': ['GOOGL', 'META', 'TTD', 'PINS', 'SNAP', 'APP'],
+                                 'Retail Media Networks': ['AMZN', 'WMT', 'CART', 'GOOGL', 'META', 'TTD'],
+                                 'Consumer Internet': ['META', 'SNAP', 'PINS', 'MTCH', 'GOOGL', 'BIDU', 'BILI', 'RBLX'],
+                                 'E-Commerce Marketplaces': ['AMZN',
+                                                             'SHOP',
+                                                             'MELI',
+                                                             'ETSY',
+                                                             'PDD',
+                                                             'BABA',
+                                                             'JD',
+                                                             'SE',
+                                                             'EBAY'],
+                                 'Streaming and Audio': ['NFLX', 'DIS', 'WBD', 'PARA', 'ROKU', 'SPOT', 'LYV', 'CMCSA'],
+                                 'Digital Payments and Networks': ['V',
+                                                                   'MA',
+                                                                   'AXP',
+                                                                   'PYPL',
+                                                                   'XYZ',
+                                                                   'FI',
+                                                                   'FIS',
+                                                                   'GPN',
+                                                                   'MELI'],
+                                 'Fintech and Brokerage Platforms': ['HOOD',
+                                                                     'SOFI',
+                                                                     'AFRM',
+                                                                     'UPST',
+                                                                     'XYZ',
+                                                                     'PYPL',
+                                                                     'NU'],
+                                 'IT Services and AI Implementation': ['ACN',
+                                                                       'IBM',
+                                                                       'CTSH',
+                                                                       'EPAM',
+                                                                       'GIB',
+                                                                       'INFY',
+                                                                       'WIT'],
+                                 'Robotics and Embodied AI': ['ISRG',
+                                                              'SYM',
+                                                              'ROK',
+                                                              'TER',
+                                                              'ABB',
+                                                              'FANUY',
+                                                              'TSLA',
+                                                              'CGNX']},
+ 'Energy, Power, Infrastructure and Materials': {'Integrated Energy Majors': ['XOM',
+                                                                              'CVX',
+                                                                              'COP',
+                                                                              'SHEL',
+                                                                              'BP',
+                                                                              'TTE',
+                                                                              'EQNR',
+                                                                              'PBR'],
+                                                 'Oil-Weighted E&Ps': ['EOG',
+                                                                       'FANG',
+                                                                       'OXY',
+                                                                       'DVN',
+                                                                       'COP',
+                                                                       'PR',
+                                                                       'MTDR',
+                                                                       'APA',
+                                                                       'MRO'],
+                                                 'Gas-Weighted E&Ps': ['EQT', 'AR', 'RRC', 'CTRA', 'EXE', 'CRK', 'CNX'],
+                                                 'LNG Export and Gas Infrastructure': ['LNG',
+                                                                                       'KMI',
+                                                                                       'WMB',
+                                                                                       'ET',
+                                                                                       'EPD',
+                                                                                       'WDS',
+                                                                                       'NEXT'],
+                                                 'Midstream Pipelines': ['KMI',
+                                                                         'WMB',
+                                                                         'EPD',
+                                                                         'ET',
+                                                                         'ENB',
+                                                                         'MPLX',
+                                                                         'OKE',
+                                                                         'TRP'],
+                                                 'Oilfield Services': ['SLB',
+                                                                       'HAL',
+                                                                       'BKR',
+                                                                       'NOV',
+                                                                       'FTI',
+                                                                       'PTEN',
+                                                                       'HP',
+                                                                       'NBR',
+                                                                       'OII'],
+                                                 'Refiners and Downstream': ['MPC', 'VLO', 'PSX', 'DK', 'PBF', 'SUN'],
+                                                 'Uranium Miners and Fuel Cycle': ['CCJ',
+                                                                                   'UUUU',
+                                                                                   'UEC',
+                                                                                   'URG',
+                                                                                   'UROY',
+                                                                                   'DNN',
+                                                                                   'NXE',
+                                                                                   'LEU',
+                                                                                   'URA',
+                                                                                   'URNM'],
+                                                 'Nuclear Power and Services': ['VST',
+                                                                                'CEG',
+                                                                                'BWXT',
+                                                                                'LEU',
+                                                                                'SMR',
+                                                                                'OKLO',
+                                                                                'CCJ'],
+                                                 'Nuclear SMR Developers': ['SMR', 'OKLO', 'BWXT', 'FLR', 'GEV'],
+                                                 'Merchant Power Producers': ['VST',
+                                                                              'CEG',
+                                                                              'NRG',
+                                                                              'TLN',
+                                                                              'AES',
+                                                                              'CWEN'],
+                                                 'Regulated Electric Utilities': ['NEE',
+                                                                                  'DUK',
+                                                                                  'SO',
+                                                                                  'AEP',
+                                                                                  'XEL',
+                                                                                  'EXC',
+                                                                                  'PCG',
+                                                                                  'EIX',
+                                                                                  'ED'],
+                                                 'Grid Equipment and Transformers': ['ETN',
+                                                                                     'GEV',
+                                                                                     'ABB',
+                                                                                     'HUBB',
+                                                                                     'POWL',
+                                                                                     'MYRG',
+                                                                                     'PWR',
+                                                                                     'RRX'],
+                                                 'Transformer Bottleneck': ['ETN', 'GEV', 'HUBB', 'POWL', 'ABB', 'RRX'],
+                                                 'Switchgear and Electrical Distribution': ['ETN',
+                                                                                            'ABB',
+                                                                                            'GEV',
+                                                                                            'HUBB',
+                                                                                            'POWL',
+                                                                                            'GNRC'],
+                                                 'Data Center Power and Thermal': ['VRT',
+                                                                                   'ETN',
+                                                                                   'TT',
+                                                                                   'CARR',
+                                                                                   'JCI',
+                                                                                   'POWL',
+                                                                                   'GEV',
+                                                                                   'HUBB'],
+                                                 'Liquid Cooling and Thermal Management': ['VRT',
+                                                                                           'TT',
+                                                                                           'CARR',
+                                                                                           'JCI',
+                                                                                           'MOD',
+                                                                                           'AOS',
+                                                                                           'ETN'],
+                                                 'Backup Power and Generators': ['GNRC',
+                                                                                 'CAT',
+                                                                                 'CMI',
+                                                                                 'GEV',
+                                                                                 'ETN',
+                                                                                 'VRT'],
+                                                 'Gas Turbines and Peakers': ['GEV', 'VST', 'NRG', 'TLN', 'CEG', 'CMI'],
+                                                 'Solar and Inverters': ['TAN',
+                                                                         'FSLR',
+                                                                         'ENPH',
+                                                                         'SEDG',
+                                                                         'RUN',
+                                                                         'CSIQ',
+                                                                         'JKS',
+                                                                         'ARRY'],
+                                                 'Wind and Renewables': ['FAN',
+                                                                         'ICLN',
+                                                                         'NEE',
+                                                                         'BEP',
+                                                                         'AY',
+                                                                         'GEV',
+                                                                         'VWSYF'],
+                                                 'Hydrogen and Fuel Cells': ['BE',
+                                                                             'BLDP',
+                                                                             'FCEL',
+                                                                             'PLUG',
+                                                                             'LIN',
+                                                                             'APD'],
+                                                 'Battery Storage and BESS': ['FLNC',
+                                                                              'STEM',
+                                                                              'TSLA',
+                                                                              'ENPH',
+                                                                              'SEDG',
+                                                                              'NXT',
+                                                                              'NEE',
+                                                                              'AES'],
+                                                 'Copper Miners Pure Play': ['FCX',
+                                                                             'SCCO',
+                                                                             'TECK',
+                                                                             'ERO',
+                                                                             'IVPAF',
+                                                                             'COPX'],
+                                                 'Diversified Metals and Mining': ['BHP',
+                                                                                   'RIO',
+                                                                                   'VALE',
+                                                                                   'GLNCY',
+                                                                                   'TECK',
+                                                                                   'AA',
+                                                                                   'XME'],
+                                                 'Lithium Miners': ['ALB', 'SQM', 'LAC', 'LTHM', 'LIT', 'PLL'],
+                                                 'Battery Metals Broad': ['ALB',
+                                                                          'SQM',
+                                                                          'LAC',
+                                                                          'MP',
+                                                                          'VALE',
+                                                                          'BHP',
+                                                                          'LIT'],
+                                                 'Rare Earths and Magnets': ['MP', 'LYSDY', 'REMX', 'UUUU', 'NEM'],
+                                                 'Gold and Silver Miners': ['GDX',
+                                                                            'GDXJ',
+                                                                            'NEM',
+                                                                            'AEM',
+                                                                            'GOLD',
+                                                                            'KGC',
+                                                                            'AG',
+                                                                            'PAAS',
+                                                                            'WPM'],
+                                                 'Steel and Aluminum': ['NUE', 'STLD', 'X', 'CLF', 'AA', 'CENX'],
+                                                 'Fertilizers': ['CF', 'MOS', 'NTR', 'IPI'],
+                                                 'Industrial Gases': ['LIN', 'APD', 'AIQUY'],
+                                                 'Commodity Chemicals': ['DOW', 'LYB', 'CE', 'WLK', 'OLN'],
+                                                 'Specialty Chemicals': ['SHW', 'PPG', 'EMN', 'RPM', 'IFF', 'ALB'],
+                                                 'Aggregates and Construction Materials': ['VMC',
+                                                                                           'MLM',
+                                                                                           'SUM',
+                                                                                           'EXP',
+                                                                                           'CRH',
+                                                                                           'CX'],
+                                                 'Water Infrastructure and Treatment': ['XYL',
+                                                                                        'WTS',
+                                                                                        'AWK',
+                                                                                        'ECL',
+                                                                                        'DHR',
+                                                                                        'PNR',
+                                                                                        'CWCO']},
+ 'Industrials, Defense and Transport': {'Aerospace and Defense Primes': ['LMT',
+                                                                         'NOC',
+                                                                         'RTX',
+                                                                         'GD',
+                                                                         'HII',
+                                                                         'BAESY',
+                                                                         'RNMBY'],
+                                        'Defense Electronics and ISR': ['LHX',
+                                                                        'LDOS',
+                                                                        'BAH',
+                                                                        'CACI',
+                                                                        'KTOS',
+                                                                        'AVAV',
+                                                                        'PLTR'],
+                                        'Missiles and Munitions': ['LMT', 'RTX', 'NOC', 'GD', 'LHX', 'BAESY', 'RNMBY'],
+                                        'Drones and Autonomous Defense': ['AVAV', 'KTOS', 'LMT', 'NOC', 'PLTR', 'TXT'],
+                                        'Naval Shipbuilding and Undersea': ['HII', 'GD', 'LMT', 'NOC', 'RTX'],
+                                        'Air Defense and Radar': ['RTX', 'LMT', 'NOC', 'LHX', 'BAESY', 'ESLT'],
+                                        'Defense Cybersecurity': ['PLTR', 'CRWD', 'PANW', 'ZS', 'LDOS', 'BAH', 'CACI'],
+                                        'Government IT and Mission Services': ['SAIC',
+                                                                               'CACI',
+                                                                               'LDOS',
+                                                                               'BAH',
+                                                                               'PSN',
+                                                                               'G'],
+                                        'Space and Satellite': ['RKLB',
+                                                                'IRDM',
+                                                                'ASTS',
+                                                                'LHX',
+                                                                'LMT',
+                                                                'NOC',
+                                                                'VSAT',
+                                                                'GSAT'],
+                                        'Satellite Communications': ['IRDM', 'VSAT', 'GSAT', 'ASTS', 'LHX', 'NOC'],
+                                        'Aerospace Aftermarket': ['GE', 'RTX', 'HEI', 'TDG', 'FTAI', 'HWM'],
+                                        'Commercial Aerospace OEM and Suppliers': ['BA',
+                                                                                   'GE',
+                                                                                   'HWM',
+                                                                                   'SPR',
+                                                                                   'TDG',
+                                                                                   'HEI',
+                                                                                   'TXT'],
+                                        'Industrial Automation': ['ROK',
+                                                                  'ETN',
+                                                                  'EMR',
+                                                                  'AME',
+                                                                  'PH',
+                                                                  'ABB',
+                                                                  'KEYS',
+                                                                  'TRMB',
+                                                                  'CGNX',
+                                                                  'SYM'],
+                                        'Factory Automation': ['ROK', 'ABB', 'FANUY', 'CGNX', 'TER', 'KEYS', 'AME'],
+                                        'Warehouse Automation': ['SYM', 'ZBRA', 'ROK', 'TER', 'CGNX', 'AME'],
+                                        'Sensors and Measurement': ['KEYS', 'TRMB', 'AME', 'TDY', 'FTV', 'ROK'],
+                                        'Test and Measurement': ['KEYS', 'TER', 'FTV', 'TDY', 'A', 'COHU'],
+                                        'Industrial Software and PLM': ['ADSK', 'PTC', 'DASTY', 'SNPS', 'CDNS', 'TRMB'],
+                                        'Machinery and Heavy Equipment': ['CAT', 'DE', 'CNHI', 'AGCO', 'PCAR', 'CMI'],
+                                        'Rental Equipment and Tools': ['URI', 'HRI', 'FTAI', 'GWW', 'FAST'],
+                                        'Industrial Distribution': ['GWW', 'FAST', 'AIT', 'WCC', 'SITE'],
+                                        'Waste and Environmental Services': ['WM', 'RSG', 'WCN', 'CLH', 'SRCL'],
+                                        'Engineering and Consulting': ['J', 'ACM', 'FLR', 'PWR', 'MTZ', 'FIX'],
+                                        'Railroads': ['UNP', 'CSX', 'NSC', 'CNI', 'CP'],
+                                        'Parcel and Logistics': ['FDX', 'UPS', 'GXO', 'XPO', 'CHRW'],
+                                        'Trucking and LTL': ['ODFL', 'SAIA', 'JBHT', 'KNX', 'ARCB', 'XPO'],
+                                        'Air Cargo and Aircraft Leasing': ['AL', 'FTAI', 'AER', 'ATSG', 'CPA']},
+ 'Healthcare': {'Large-Cap Pharma': ['LLY', 'JNJ', 'MRK', 'PFE', 'BMY', 'ABBV', 'AZN', 'NVO', 'NVS', 'GSK'],
+                'Large-Cap Biotech': ['AMGN', 'GILD', 'REGN', 'BIIB', 'VRTX', 'ALNY'],
+                'GLP-1 and Metabolic': ['LLY', 'NVO', 'AZN', 'MRK', 'PFE', 'VKTX', 'AMGN'],
+                'Obesity Drug Ecosystem': ['LLY', 'NVO', 'VKTX', 'AMGN', 'MRK', 'PFE', 'TMO', 'DHR'],
+                'Oncology and Immunology': ['MRK', 'BMY', 'RHHBY', 'REGN', 'VRTX', 'INCY', 'EXEL'],
+                'Rare Disease and Specialty Pharma': ['VRTX', 'ALNY', 'BMRN', 'RARE', 'IONS', 'HALO'],
+                'MedTech Devices': ['MDT', 'SYK', 'ISRG', 'BSX', 'ZBH', 'EW', 'PEN', 'ABT'],
+                'Surgical Robotics and Advanced Devices': ['ISRG', 'SYK', 'MDT', 'BSX', 'DXCM', 'TMDX'],
+                'Orthopedics and Spine': ['SYK', 'ZBH', 'GMED', 'MDT', 'SNN', 'OFIX'],
+                'Cardiovascular Devices': ['BSX', 'MDT', 'ABT', 'EW', 'PEN', 'TMDX'],
+                'Diabetes Devices': ['DXCM', 'PODD', 'ABT', 'MDT', 'TNDM'],
+                'Diagnostics and Life Science Tools': ['TMO', 'DHR', 'A', 'RGEN', 'ILMN', 'WAT', 'BRKR'],
+                'CRO and Clinical Services': ['IQV', 'LH', 'DGX', 'MEDP', 'ICLR', 'CRL'],
+                'Healthcare Payers and Managed Care': ['UNH', 'HUM', 'CI', 'ELV', 'CNC', 'MOH', 'OSCR'],
+                'Medicare Advantage Risk': ['HUM', 'UNH', 'ELV', 'CI', 'CNC', 'MOH'],
+                'Medicaid Managed Care': ['CNC', 'MOH', 'ELV', 'UNH'],
+                'Drug Distributors and Healthcare Supply Chain': ['MCK', 'COR', 'CAH', 'CVS', 'CI', 'HSIC', 'OMI'],
+                'Specialty Pharmacy and PBM': ['CVS', 'CI', 'UNH', 'ELV', 'MCK', 'COR'],
+                'Hospitals and Providers': ['HCA', 'THC', 'UHS', 'CYH', 'EHC'],
+                'Hospital Utilization Winners': ['HCA', 'THC', 'UHS', 'SYK', 'BSX', 'ISRG', 'EW'],
+                'Dental Vision and Elective Care': ['ALGN', 'HSIC', 'EYE', 'WRBY', 'XRAY'],
+                'Senior Housing and Aging Care': ['WELL', 'VTR', 'OHI', 'SBRA', 'HCA', 'EHC'],
+                'Healthcare AI and Automation': ['MCK', 'COR', 'UNH', 'CI', 'HCA', 'TMO', 'DHR', 'ISRG', 'PLTR'],
+                'Healthcare Staffing': ['AMN', 'RHI', 'ASGN', 'KFY'],
+                'Animal Health': ['ZTS', 'ELAN', 'IDXX', 'PETS', 'HSIC']},
+ 'Financials and Real Estate': {'Money Center Banks': ['JPM', 'BAC', 'C', 'WFC'],
+                                'Investment Banks': ['GS', 'MS', 'RJF', 'LAZ', 'PJT', 'EVR'],
+                                'Regional Banks': ['KRE',
+                                                   'TFC',
+                                                   'FITB',
+                                                   'CFG',
+                                                   'RF',
+                                                   'KEY',
+                                                   'PNC',
+                                                   'USB',
+                                                   'MTB',
+                                                   'WAL',
+                                                   'ZION'],
+                                'Asset Managers and Alts': ['BX',
+                                                            'KKR',
+                                                            'APO',
+                                                            'CG',
+                                                            'ARES',
+                                                            'OWL',
+                                                            'TPG',
+                                                            'BLK',
+                                                            'TROW'],
+                                'Private Credit and BDCs': ['ARES', 'ARCC', 'MAIN', 'BXSL', 'OBDC', 'FSK'],
+                                'Exchanges and Market Data': ['CME', 'ICE', 'NDAQ', 'CBOE', 'MKTX', 'SPGI', 'MSCI'],
+                                'Derivatives Exchanges': ['CME', 'ICE', 'CBOE', 'NDAQ'],
+                                'Market Data and Index Providers': ['SPGI', 'MSCI', 'NDAQ', 'ICE', 'MCO'],
+                                'Brokers and Trading Platforms': ['IBKR', 'SCHW', 'HOOD', 'RJF', 'MS', 'GS'],
+                                'Electronic Trading and Market Makers': ['VIRT', 'TW', 'IBKR', 'CBOE', 'NDAQ'],
+                                'Card Networks and Consumer Lenders': ['V',
+                                                                       'MA',
+                                                                       'AXP',
+                                                                       'COF',
+                                                                       'DFS',
+                                                                       'SYF',
+                                                                       'ALLY',
+                                                                       'OMF',
+                                                                       'ENVA'],
+                                'Payments Processors Legacy': ['FI', 'FIS', 'GPN', 'PYPL', 'XYZ'],
+                                'Cross-Border Payments': ['V', 'MA', 'PYPL', 'WU', 'EEFT', 'GPN'],
+                                'Stablecoin and Tokenization Proxies': ['COIN', 'HOOD', 'PYPL', 'XYZ', 'MSTR', 'IBKR'],
+                                'Crypto Exchanges and Custody': ['COIN', 'HOOD', 'MSTR', 'IBKR'],
+                                'Bitcoin Miners': ['MARA', 'RIOT', 'CLSK', 'IREN', 'CORZ', 'CIFR', 'BITF'],
+                                'P&C Insurance': ['PGR', 'TRV', 'CB', 'ALL', 'CINF', 'WRB', 'HIG'],
+                                'Life and Retirement Insurance': ['MET', 'PRU', 'LNC', 'AIG', 'EQH', 'RGA'],
+                                'Insurance Brokers': ['AJG', 'BRO', 'MMC', 'AON', 'WTW'],
+                                'Insurance Software and Data': ['BR', 'GWRE', 'VRSK', 'MSCI', 'SPGI'],
+                                'Mortgage Finance and Title': ['RKT', 'UWMC', 'COOP', 'FNF', 'FAF', 'NMIH', 'ESNT'],
+                                'Data Center REITs': ['EQIX', 'DLR'],
+                                'Industrial REITs': ['PLD', 'REXR', 'EGP', 'STAG', 'TRNO'],
+                                'Residential REITs': ['AVB', 'EQR', 'UDR', 'ESS', 'MAA', 'INVH', 'AMH'],
+                                'Self-Storage REITs': ['PSA', 'EXR', 'CUBE', 'NSA'],
+                                'Tower REITs': ['AMT', 'SBAC', 'CCI'],
+                                'Office REITs': ['BXP', 'VNO', 'SLG', 'KRC', 'DEI'],
+                                'Senior Housing REITs': ['WELL', 'VTR', 'OHI', 'SBRA']},
+ 'Consumer, Housing and Travel': {'Grocery and Clubs': ['WMT', 'COST', 'KR', 'BJ', 'ACI'],
+                                  'Household and Personal Care': ['PG', 'CL', 'KMB', 'CHD', 'EL', 'KVUE'],
+                                  'Beverages and Tobacco': ['KO', 'PEP', 'KDP', 'MNST', 'PM', 'MO', 'BTI'],
+                                  'Food Producers and Packaged Food': ['GIS',
+                                                                       'K',
+                                                                       'CPB',
+                                                                       'CAG',
+                                                                       'HSY',
+                                                                       'MDLZ',
+                                                                       'SJM',
+                                                                       'KHC'],
+                                  'Discount and Dollar Stores': ['DG', 'DLTR', 'WMT', 'BURL', 'FIVE', 'OLLI'],
+                                  'Off-Price Retail': ['TJX', 'ROST', 'BURL'],
+                                  'Home Improvement': ['HD', 'LOW', 'TSCO', 'POOL', 'BLDR'],
+                                  'Apparel and Footwear': ['NKE', 'LULU', 'DECK', 'ONON', 'UAA', 'RL', 'TPR'],
+                                  'Luxury Goods': ['LVMUY', 'TPR', 'RL', 'CPRI', 'CFRUY', 'PPRUY'],
+                                  'Beauty and Cosmetics': ['EL', 'ULTA', 'COTY', 'LRLCY', 'ELF'],
+                                  'Restaurants and QSR': ['MCD', 'YUM', 'QSR', 'WEN', 'DPZ', 'CMG'],
+                                  'Casual Dining': ['DRI', 'TXRH', 'EAT', 'BLMN', 'CAKE', 'WING'],
+                                  'Travel Booking': ['BKNG', 'EXPE', 'ABNB', 'TRIP'],
+                                  'Hotels and Casinos': ['MAR',
+                                                         'HLT',
+                                                         'IHG',
+                                                         'MGM',
+                                                         'LVS',
+                                                         'WYNN',
+                                                         'MLCO',
+                                                         'CZR',
+                                                         'PENN'],
+                                  'Cruise Lines': ['RCL', 'CCL', 'NCLH'],
+                                  'Airlines': ['DAL', 'UAL', 'AAL', 'LUV', 'ALK', 'JBLU'],
+                                  'Sports Betting and iGaming': ['DKNG', 'FLUT', 'MGM', 'PENN', 'CZR', 'RSI'],
+                                  'Live Sports and Venue Economics': ['LYV', 'TKO', 'MSGS', 'SPHR', 'BATRA', 'FWONA'],
+                                  'Gaming Publishers': ['EA', 'TTWO', 'RBLX', 'NTDOY', 'SONY', 'MSFT'],
+                                  'Autos Legacy OEMs': ['TM', 'HMC', 'F', 'GM', 'STLA', 'VWAGY'],
+                                  'Electric Vehicles': ['TSLA', 'RIVN', 'LCID', 'NIO', 'LI', 'XPEV', 'RACE'],
+                                  'Auto Parts and Repair': ['AZO', 'ORLY', 'AAP', 'LKQ', 'GPC'],
+                                  'Used Auto and Affordability': ['KMX', 'CVNA', 'LAD', 'AN', 'PAG'],
+                                  'Auto Finance and Subprime Credit': ['ALLY', 'COF', 'DFS', 'SYF', 'OMF', 'ENVA'],
+                                  'Homebuilders': ['ITB', 'DHI', 'LEN', 'NVR', 'PHM', 'TOL', 'KBH', 'MTH'],
+                                  'Building Products': ['BLDR', 'TREX', 'MAS', 'OC', 'JELD', 'FBIN'],
+                                  'Single-Family Rental': ['INVH', 'AMH'],
+                                  'Apartment Rent Pressure': ['AVB', 'EQR', 'UDR', 'ESS', 'MAA', 'CPT']},
+ 'Thematic Cross-Sector Baskets': {'AI Data Center Capex': ['NVDA',
+                                                            'AMD',
+                                                            'AVGO',
+                                                            'MRVL',
+                                                            'ANET',
+                                                            'VRT',
+                                                            'ETN',
+                                                            'GEV',
+                                                            'SMCI',
+                                                            'DELL',
+                                                            'TSM',
+                                                            'ASML'],
+                                   'AI Power Demand': ['VST', 'CEG', 'NRG', 'TLN', 'ETN', 'VRT', 'GEV', 'PWR', 'NEE'],
+                                   'AI Margin Expansion Beneficiaries': ['MCK',
+                                                                         'COR',
+                                                                         'CAH',
+                                                                         'UNH',
+                                                                         'CI',
+                                                                         'ACN',
+                                                                         'IBM',
+                                                                         'FIS',
+                                                                         'FI',
+                                                                         'ADP',
+                                                                         'PAYX'],
+                                   'AI Application Layer': ['MSFT',
+                                                            'NOW',
+                                                            'CRM',
+                                                            'ADBE',
+                                                            'INTU',
+                                                            'PLTR',
+                                                            'SNOW',
+                                                            'MDB',
+                                                            'DDOG'],
+                                   'AI Hardware Supply Chain': ['NVDA',
+                                                                'AMD',
+                                                                'AVGO',
+                                                                'TSM',
+                                                                'ASML',
+                                                                'AMAT',
+                                                                'LRCX',
+                                                                'KLAC',
+                                                                'MU',
+                                                                'ANET',
+                                                                'VRT',
+                                                                'DELL'],
+                                   'Sovereign AI Infrastructure': ['NVDA',
+                                                                   'AMD',
+                                                                   'AVGO',
+                                                                   'TSM',
+                                                                   'ASML',
+                                                                   'ANET',
+                                                                   'VRT',
+                                                                   'ETN',
+                                                                   'ORCL',
+                                                                   'HPE'],
+                                   'Data Center Construction and EPC': ['PWR',
+                                                                        'MYRG',
+                                                                        'EME',
+                                                                        'FIX',
+                                                                        'J',
+                                                                        'ACM',
+                                                                        'VRT',
+                                                                        'ETN',
+                                                                        'GEV'],
+                                   'Grid Bottleneck': ['ETN', 'GEV', 'HUBB', 'POWL', 'PWR', 'MYRG', 'ABB', 'VRT'],
+                                   'Electrification': ['ETN', 'GEV', 'ABB', 'HUBB', 'POWL', 'VRT', 'ON', 'MPWR'],
+                                   'Reindustrialization': ['CAT',
+                                                           'DE',
+                                                           'ETN',
+                                                           'PWR',
+                                                           'URI',
+                                                           'VMC',
+                                                           'MLM',
+                                                           'NUE',
+                                                           'STLD',
+                                                           'GEV'],
+                                   'Reshoring and Factory Buildout': ['PWR',
+                                                                      'MTZ',
+                                                                      'EME',
+                                                                      'FIX',
+                                                                      'URI',
+                                                                      'CAT',
+                                                                      'VMC',
+                                                                      'MLM',
+                                                                      'ROK',
+                                                                      'ABB'],
+                                   'North American Onshoring Materials': ['VMC',
+                                                                          'MLM',
+                                                                          'SUM',
+                                                                          'NUE',
+                                                                          'STLD',
+                                                                          'X',
+                                                                          'CLF',
+                                                                          'FCX',
+                                                                          'EXP'],
+                                   'Nearshoring Mexico': ['EWW', 'KOF', 'FMX', 'CX', 'AMX', 'PAC', 'OMAB', 'ASR'],
+                                   'Defense Modernization': ['LMT',
+                                                             'NOC',
+                                                             'RTX',
+                                                             'GD',
+                                                             'LHX',
+                                                             'PLTR',
+                                                             'KTOS',
+                                                             'AVAV',
+                                                             'LDOS',
+                                                             'BAH'],
+                                   'NATO Re-Armament': ['LMT',
+                                                        'NOC',
+                                                        'RTX',
+                                                        'GD',
+                                                        'BAESY',
+                                                        'RNMBY',
+                                                        'SAABY',
+                                                        'THLLY',
+                                                        'ESLT'],
+                                   'Space Economy': ['RKLB', 'IRDM', 'ASTS', 'LHX', 'NOC', 'LMT', 'VSAT', 'GSAT'],
+                                   'GLP-1 Winners': ['LLY', 'NVO', 'VKTX', 'AMGN', 'TMO', 'DHR', 'MCK', 'COR'],
+                                   'GLP-1 Consumer Losers': ['HSY', 'MDLZ', 'PEP', 'KO', 'MCD', 'YUM', 'DPZ', 'KDP'],
+                                   'Longevity and Aging Population': ['LLY',
+                                                                      'NVO',
+                                                                      'ISRG',
+                                                                      'SYK',
+                                                                      'MDT',
+                                                                      'MCK',
+                                                                      'COR',
+                                                                      'WELL',
+                                                                      'VTR',
+                                                                      'HCA'],
+                                   'Healthcare Supply Chain Automation': ['MCK',
+                                                                          'COR',
+                                                                          'CAH',
+                                                                          'UNH',
+                                                                          'CI',
+                                                                          'ACN',
+                                                                          'CTSH',
+                                                                          'PLTR'],
+                                   'Crypto and Tokenization Proxies': ['COIN',
+                                                                       'MSTR',
+                                                                       'HOOD',
+                                                                       'MARA',
+                                                                       'RIOT',
+                                                                       'CLSK',
+                                                                       'IBIT',
+                                                                       'ETHA'],
+                                   'Speculative Liquidity and Retail Beta': ['CVNA',
+                                                                             'UPST',
+                                                                             'RIVN',
+                                                                             'COIN',
+                                                                             'MSTR',
+                                                                             'HOOD',
+                                                                             'SOFI',
+                                                                             'MARA',
+                                                                             'RIOT',
+                                                                             'PLTR'],
+                                   'Sports Live Events and Experiences': ['LYV',
+                                                                          'TKO',
+                                                                          'MSGS',
+                                                                          'SPHR',
+                                                                          'RCL',
+                                                                          'CCL',
+                                                                          'BKNG',
+                                                                          'ABNB'],
+                                   'Premium Consumer': ['LULU', 'NKE', 'ONON', 'RACE', 'LVMUY', 'COST', 'CMG', 'MAR'],
+                                   'Trade-Down Consumer': ['WMT', 'COST', 'TJX', 'ROST', 'BURL', 'DG', 'DLTR', 'OLLI'],
+                                   'Housing Affordability Stress': ['KMX',
+                                                                    'CVNA',
+                                                                    'RKT',
+                                                                    'UWMC',
+                                                                    'COOP',
+                                                                    'INVH',
+                                                                    'AMH',
+                                                                    'AVB'],
+                                   'Mortgage Rate Sensitive Housing': ['ITB',
+                                                                       'DHI',
+                                                                       'LEN',
+                                                                       'PHM',
+                                                                       'TOL',
+                                                                       'RKT',
+                                                                       'UWMC',
+                                                                       'FNF'],
+                                   'Tariff Beneficiaries': ['NUE',
+                                                            'STLD',
+                                                            'CLF',
+                                                            'X',
+                                                            'CAT',
+                                                            'DE',
+                                                            'GEV',
+                                                            'ETN',
+                                                            'PWR'],
+                                   'Supply Chain Diversification': ['EWW',
+                                                                    'INDA',
+                                                                    'VNM',
+                                                                    'EWT',
+                                                                    'EWY',
+                                                                    'EWM',
+                                                                    'TSM',
+                                                                    'FMX'],
+                                   'Japan Reflation Beneficiaries': ['EWJ', 'DXJ', 'TM', 'HMC', 'MUFG', 'SMFG', 'SONY'],
+                                   'Europe Fiscal Expansion': ['VGK', 'EZU', 'EWG', 'BAESY', 'RNMBY', 'EADSY', 'SIEGY'],
+                                   'Climate Adaptation': ['URI',
+                                                          'PWR',
+                                                          'VMC',
+                                                          'MLM',
+                                                          'GNRC',
+                                                          'AWK',
+                                                          'XYL',
+                                                          'WM',
+                                                          'RSG'],
+                                   'Humanoid Robotics': ['TSLA', 'NVDA', 'ISRG', 'SYM', 'ROK', 'TER', 'FANUY', 'ABB'],
+                                   'Quantum Computing': ['IONQ', 'RGTI', 'QBTS', 'QUBT', 'IBM', 'GOOGL', 'MSFT'],
+                                   'Autonomous Vehicles and Robotaxis': ['TSLA',
+                                                                         'GOOGL',
+                                                                         'GM',
+                                                                         'UBER',
+                                                                         'MBLY',
+                                                                         'QCOM',
+                                                                         'NVDA']},
+ 'Countries and Regions': {'Developed ex-US': ['VEA'],
+                           'Europe Broad': ['VGK'],
+                           'Eurozone': ['EZU'],
+                           'Germany': ['EWG'],
+                           'France': ['EWQ'],
+                           'Italy': ['EWI'],
+                           'Spain': ['EWP'],
+                           'UK': ['EWU'],
+                           'Switzerland': ['EWL'],
+                           'Nordics': ['EWD', 'EDEN', 'NORW'],
+                           'Japan': ['EWJ', 'DXJ'],
+                           'Canada': ['EWC'],
+                           'Australia': ['EWA'],
+                           'China Broad': ['MCHI', 'FXI'],
+                           'China Internet': ['KWEB', 'BABA', 'JD', 'PDD', 'BIDU', 'BILI', 'NTES'],
+                           'Taiwan': ['EWT', 'TSM'],
+                           'South Korea': ['EWY'],
+                           'India': ['INDA', 'EPI', 'INDY'],
+                           'Indonesia': ['EIDO', 'IDX'],
+                           'Vietnam': ['VNM'],
+                           'Emerging Markets Broad': ['IEMG', 'EEM'],
+                           'Frontier Markets': ['FM'],
+                           'Latin America Broad': ['ILF'],
+                           'Brazil': ['EWZ'],
+                           'Mexico': ['EWW'],
+                           'Argentina': ['ARGT'],
+                           'Chile': ['ECH'],
+                           'Peru': ['EPU'],
+                           'Poland': ['EPOL'],
+                           'Turkey': ['TUR'],
+                           'Middle East Broad': ['KSA', 'UAE', 'QAT', 'EIS', 'TUR'],
+                           'Saudi Arabia': ['KSA'],
+                           'UAE': ['UAE'],
+                           'Israel': ['EIS'],
+                           'South Africa': ['EZA']}}
 
 ALL_BASKETS = {basket: tickers for cat in CATEGORIES.values() for basket, tickers in cat.items()}
 
@@ -853,12 +1383,20 @@ def color_ret(x):
 
     if x >= 0:
         s = min(abs(x) / 20.0, 1.0)
-        g = int(255 - 90 * s)
-        return f"rgb({int(240 - 120 * s)},{g},{int(240 - 120 * s)})"
+        r1, g1, b1 = 240, 255, 245
+        r2, g2, b2 = 82, 183, 136
+        r = int(r1 + (r2 - r1) * s)
+        g = int(g1 + (g2 - g1) * s)
+        b = int(b1 + (b2 - b1) * s)
+        return f"rgb({r},{g},{b})"
 
     s = min(abs(x) / 20.0, 1.0)
-    r = int(255 - 90 * s)
-    return f"rgb({r},{int(240 - 120 * s)},{int(240 - 120 * s)})"
+    r1, g1, b1 = 255, 245, 245
+    r2, g2, b2 = 232, 93, 93
+    r = int(r1 + (r2 - r1) * s)
+    g = int(g1 + (g2 - g1) * s)
+    b = int(b1 + (b2 - b1) * s)
+    return f"rgb({r},{g},{b})"
 
 
 def color_rsi(x):
@@ -945,8 +1483,12 @@ def plot_panel_table(panel_df: pd.DataFrame):
         st.info("No baskets passed the data-quality checks for this window.")
         return
 
-    dynamic_col = [c for c in panel_df.columns if c.startswith("%") and c not in ["%5D", "%1M"]]
-    dynamic_col = dynamic_col[0] if dynamic_col else None
+    dynamic_cols = [c for c in panel_df.columns if c.startswith("%") and c not in ["%5D", "%1M"]]
+    dynamic_col = dynamic_cols[0] if dynamic_cols else None
+
+    if dynamic_col is None:
+        st.info("No dynamic return column available.")
+        return
 
     headers = [
         "Basket", "%5D", "%1M", dynamic_col,
@@ -1015,7 +1557,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
 
     fig_tbl.update_layout(
         margin=dict(l=0, r=0, t=6, b=0),
-        height=min(900, 64 + 26 * max(3, len(panel_df)))
+        height=min(920, 64 + 26 * max(3, len(panel_df)))
     )
 
     st.plotly_chart(fig_tbl, use_container_width=True)
@@ -1035,7 +1577,14 @@ def plot_cumulative_chart(
         st.info("No overlapping dates between series and benchmark.")
         return
 
-    cum_pct = ((1 + basket_returns_display.loc[common_index].fillna(0.0)).cumprod() - 1.0) * 100.0
+    chart_rets = basket_returns_display.loc[common_index].copy()
+    chart_rets = chart_rets.dropna(axis=1, how="all")
+
+    if chart_rets.empty:
+        st.info("No basket return series available for this chart.")
+        return
+
+    cum_pct = ((1 + chart_rets.fillna(0.0)).cumprod() - 1.0) * 100.0
     bm_cum = ((1 + benchmark_series_display.loc[common_index].fillna(0.0)).cumprod() - 1.0) * 100.0
 
     fig = go.Figure()
@@ -1047,7 +1596,7 @@ def plot_cumulative_chart(
             mode="lines",
             line=dict(width=2, color=PASTEL[i % len(PASTEL)]),
             name=basket,
-            hovertemplate=f"{basket}<br>% Cum: %{{y:.1f}}%<extra></extra>"
+            hovertemplate=f"{basket}<br>% Cum: %{y:.1f}%<extra></extra>"
         ))
 
     fig.add_trace(go.Scatter(
@@ -1076,18 +1625,23 @@ def plot_cumulative_chart(
 # Sidebar
 # ============================================================
 st.title(TITLE)
-st.caption(SUBTITLE)
+st.caption(f"{SUBTITLE} Current map: {sum(len(v) for v in CATEGORIES.values())} baskets across {len(CATEGORIES)} groups.")
 
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Internal basket monitor for equal-weight performance, trend, and SPY-relative context.
+        **Purpose:** Internal sector, thematic, and country basket monitor.
 
-        **What this tab shows**
-        - Daily basket snapshots and relative performance versus SPY.
-        - Trend, momentum, volatility, and correlation diagnostics by basket.
-        - Constituents are cleaned automatically, so unavailable or excluded tickers are removed from calculations.
+        **What this page includes**
+        - Sector and subsector baskets.
+        - Cross-sector thematic baskets.
+        - Country and regional baskets.
+
+        **What this page excludes**
+        - Pure factor baskets.
+        - Pure regime diagnostics.
+        - Redundant duplicate baskets.
 
         **Data source**
         - Internal basket definitions and Yahoo Finance market data.
@@ -1104,7 +1658,7 @@ with st.sidebar:
         index=0
     )
 
-    apply_market_cap_filter = st.checkbox("Apply $1B market-cap filter", value=True)
+    apply_market_cap_filter = st.checkbox("Apply $1B market-cap filter", value=False)
     stale_days = st.slider("Stale Price Threshold, Days", min_value=10, max_value=90, value=30, step=5)
 
     selected_categories = st.multiselect(
@@ -1128,11 +1682,12 @@ need = {BENCH}
 for tickers in ALL_BASKETS.values():
     need.update(str(t).upper() for t in tickers)
 
-levels, fetch_meta = fetch_daily_levels(
-    sorted(list(need)),
-    start=pd.to_datetime(fetch_start_date),
-    end=pd.to_datetime(end_date) + pd.Timedelta(days=1)
-)
+with st.spinner("Fetching basket price history..."):
+    levels, fetch_meta = fetch_daily_levels(
+        sorted(list(need)),
+        start=pd.to_datetime(fetch_start_date),
+        end=pd.to_datetime(end_date) + pd.Timedelta(days=1)
+    )
 
 if levels.empty:
     st.error("No data returned for the selected range.")
@@ -1196,7 +1751,8 @@ plot_panel_table(all_panel_df)
 
 st.subheader("All Baskets | Cumulative Performance vs SPY")
 
-all_display_chart_rets = all_basket_rets_display[all_panel_df.index] if not all_panel_df.empty else all_basket_rets_display
+ordered_cols = [c for c in all_panel_df.index if c in all_basket_rets_display.columns]
+all_display_chart_rets = all_basket_rets_display[ordered_cols] if ordered_cols else all_basket_rets_display
 
 plot_cumulative_chart(
     basket_returns_display=all_display_chart_rets,
@@ -1233,7 +1789,8 @@ for category, baskets in live_categories.items():
 
     plot_panel_table(cat_panel)
 
-    chart_rets = cat_rets_display[cat_panel.index] if not cat_panel.empty else cat_rets_display
+    cat_ordered_cols = [c for c in cat_panel.index if c in cat_rets_display.columns]
+    chart_rets = cat_rets_display[cat_ordered_cols] if cat_ordered_cols else cat_rets_display
 
     plot_cumulative_chart(
         basket_returns_display=chart_rets,
@@ -1243,15 +1800,23 @@ for category, baskets in live_categories.items():
 
 
 # ============================================================
-# Basket constituents
+# Basket constituents and data notes
 # ============================================================
 with st.expander("Basket Constituents"):
-    st.caption("Shows only live members used in the calculations after price, stale-data, and market-cap filters.")
+    st.caption("Shows only live members used in the calculations after price, stale-data, and optional market-cap filters.")
 
     for category, groups in live_categories.items():
         st.markdown(f"**{category}**")
         for name, tickers in groups.items():
             st.write(f"- {name}: {', '.join(sorted(set(str(t).upper() for t in tickers)))}")
+
+
+with st.expander("Full Basket Map"):
+    st.caption("Raw basket definitions before data-quality filtering.")
+    for category, groups in CATEGORIES.items():
+        st.markdown(f"**{category}**")
+        for name, tickers in groups.items():
+            st.write(f"- {name}: {', '.join(tickers)}")
 
 
 with st.expander("Data Notes"):
