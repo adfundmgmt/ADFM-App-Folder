@@ -1324,7 +1324,7 @@ def build_monthly_stats_table(stats: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_median_iqr_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
-    plot_df = stats.dropna(subset=["median_total", "p25_total", "p75_total"]).copy()
+    plot_df = stats.dropna(subset=["median_total", "p25_total", "p75_total", "hit_rate"]).copy()
 
     labels = plot_df["label"].tolist()
     x = np.arange(len(labels))
@@ -1333,63 +1333,114 @@ def plot_median_iqr_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     p25 = plot_df["p25_total"].to_numpy(float)
     p75 = plot_df["p75_total"].to_numpy(float)
     mean = plot_df["mean_total"].to_numpy(float)
+    hit = plot_df["hit_rate"].to_numpy(float)
+    downside = plot_df["downside_freq"].to_numpy(float)
 
-    fig = plt.figure(figsize=(16, 7.6), dpi=220, facecolor=BACKGROUND)
-    ax = fig.add_subplot(111, facecolor=BACKGROUND)
+    fig = plt.figure(figsize=(18, 9.6), dpi=220, facecolor=BACKGROUND)
+    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[6.2, 1.55], hspace=0.03)
+    ax1 = fig.add_subplot(gs[0], facecolor=BACKGROUND)
 
     bar_colors = np.where(med >= 0, POS_GREEN, NEG_RED)
 
-    ax.bar(
+    ax1.bar(
         x,
         med,
-        width=0.72,
+        width=0.78,
         color=bar_colors,
         edgecolor="#111111",
-        linewidth=0.85,
-        alpha=0.92,
-        label="Median monthly return",
+        linewidth=1.0,
+        alpha=0.95,
         zorder=2,
+        label="Median return",
     )
 
     yerr = np.vstack([med - p25, p75 - med])
-    ax.errorbar(
+    ax1.errorbar(
         x,
         med,
         yerr=yerr,
         fmt="none",
         ecolor="#111111",
-        elinewidth=1.45,
-        capsize=5,
+        elinewidth=1.6,
         alpha=0.75,
-        label="IQR",
+        capsize=6,
         zorder=3,
+        label="IQR",
     )
 
-    ax.scatter(
+    ax1.scatter(
         x,
         mean,
-        s=42,
-        color="black",
         marker="D",
-        label="Mean",
+        s=72,
+        color="black",
         zorder=4,
+        label="Mean",
     )
 
-    ax.axhline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
+    ax1.axhline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
+    ax1.set_xticks(x, labels)
+    ax1.tick_params(axis="x", labelsize=13)
+    ax1.tick_params(axis="y", labelsize=13)
+    ax1.set_ylabel("Return (%)", weight="bold", fontsize=15)
+    ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
+    ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
+    ax1.grid(axis="y", linestyle="--", color="#d9d9d9", linewidth=0.75, alpha=0.9, zorder=1)
 
-    ax.set_xticks(x, labels)
-    ax.set_ylabel("Return (%)", fontsize=12, weight="bold")
-    ax.set_title(title, fontsize=18, weight="bold", pad=10)
-    ax.yaxis.set_major_formatter(PercentFormatter(xmax=100))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=8))
-    ax.grid(axis="y", linestyle="--", color="#d9d9d9", linewidth=0.8, alpha=0.9)
-    ax.tick_params(labelsize=11)
+    ax2 = ax1.twinx()
+    ax2.scatter(x, hit, marker="o", s=92, color="#333333", zorder=4, label="Hit rate")
+    ax2.set_ylabel("Hit rate of positive returns", weight="bold", fontsize=15)
+    ax2.tick_params(axis="y", labelsize=13)
+    ax2.set_ylim(0, 100)
+    ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
+    ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
 
-    for sp in ax.spines.values():
-        sp.set_color("#111111")
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    ax1.legend(handles1, labels1, loc="upper left", frameon=False, fontsize=12)
 
-    ax.legend(frameon=False, loc="upper left", fontsize=10)
-    fig.subplots_adjust(left=0.06, right=0.96, top=0.90, bottom=0.09)
+    ax_tbl = fig.add_subplot(gs[1])
+    ax_tbl.axis("off")
+
+    row_labels = ["Median %", "P25 %", "P75 %", "Hit %", "Downside %"]
+    cell_vals = [med, p25, p75, hit, downside]
+
+    cell_txt = []
+    for i, row in enumerate(cell_vals):
+        if row_labels[i] in ["Hit %", "Downside %"]:
+            cell_txt.append([f"{v:.0f}%" if pd.notna(v) else "n/a" for v in row])
+        else:
+            cell_txt.append([_format_pct(v) for v in row])
+
+    color_basis = [med, p25, p75, hit - 50, -downside]
+    cell_colors = _cell_colors([list(row) for row in color_basis])
+
+    table = ax_tbl.table(
+        cellText=cell_txt,
+        rowLabels=row_labels,
+        colLabels=labels,
+        loc="center",
+        cellLoc="center",
+        rowLoc="center",
+        bbox=[0.035, 0.15, 0.93, 0.72],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10.5)
+    table.scale(1.0, 1.45)
+
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#f0f0f0")
+        elif col == -1:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#f0f0f0")
+        else:
+            cell.set_facecolor(cell_colors[row - 1][col])
+            cell.set_edgecolor("black")
+            cell.set_linewidth(0.85)
+
+    fig.suptitle(title, fontsize=24, weight="bold", y=0.965)
+    fig.subplots_adjust(left=0.055, right=0.94, top=0.88, bottom=0.09)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
@@ -1446,8 +1497,10 @@ def build_regime_comparison_table(
 
 
 def plot_regime_comparison(regime_table: pd.DataFrame, title: str) -> io.BytesIO:
-    fig = plt.figure(figsize=(14.5, 8.2), dpi=220, facecolor=BACKGROUND)
-    ax = fig.add_subplot(111, facecolor=BACKGROUND)
+    fig = plt.figure(figsize=(15.5, 9.2), dpi=220, facecolor=BACKGROUND)
+    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[5.6, 2.0], hspace=0.08)
+
+    ax = fig.add_subplot(gs[0], facecolor=BACKGROUND)
 
     if regime_table.empty:
         ax.text(0.5, 0.5, "Not enough data for regime comparison", ha="center", va="center", fontsize=12)
@@ -1459,7 +1512,8 @@ def plot_regime_comparison(regime_table: pd.DataFrame, title: str) -> io.BytesIO
         return buf
 
     plot_df = regime_table.copy()
-    plot_df = plot_df[plot_df["N"] >= 3].head(12)
+    plot_df = plot_df[plot_df["N"] >= 3].copy()
+    plot_df = plot_df.sort_values("Median", ascending=True).tail(10)
 
     if plot_df.empty:
         ax.text(0.5, 0.5, "No regime bucket has at least 3 observations", ha="center", va="center", fontsize=12)
@@ -1470,10 +1524,13 @@ def plot_regime_comparison(regime_table: pd.DataFrame, title: str) -> io.BytesIO
         buf.seek(0)
         return buf
 
-    plot_df = plot_df.iloc[::-1].reset_index(drop=True)
-
     y = np.arange(len(plot_df))
     med = plot_df["Median"].to_numpy(float)
+    mean = plot_df["Mean"].to_numpy(float)
+    p25 = plot_df["P25"].to_numpy(float)
+    p75 = plot_df["P75"].to_numpy(float)
+    n_vals = plot_df["N"].to_numpy(int)
+
     colors = np.where(med >= 0, POS_GREEN, NEG_RED)
 
     ax.barh(
@@ -1481,24 +1538,39 @@ def plot_regime_comparison(regime_table: pd.DataFrame, title: str) -> io.BytesIO
         med,
         color=colors,
         edgecolor="#111111",
-        linewidth=0.8,
-        alpha=0.92,
+        linewidth=0.85,
+        alpha=0.95,
         zorder=2,
     )
 
+    xerr = np.vstack([med - p25, p75 - med])
+    ax.errorbar(
+        med,
+        y,
+        xerr=xerr,
+        fmt="none",
+        ecolor="#111111",
+        elinewidth=1.35,
+        capsize=4,
+        alpha=0.75,
+        zorder=3,
+    )
+
+    ax.scatter(mean, y, marker="D", s=46, color="black", zorder=4)
+
     ax.axvline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
-    ax.set_yticks(y, [f"{r}  |  N={n}" for r, n in zip(plot_df["Regime"], plot_df["N"])])
-    ax.set_xlabel("Median return (%)", fontsize=11, weight="bold")
-    ax.set_title(title, fontsize=18, weight="bold", pad=10)
+    ax.set_yticks(y, plot_df["Regime"].tolist())
+    ax.set_xlabel("Median return (%) with IQR range", fontsize=11, weight="bold")
+    ax.set_title(title, fontsize=20, weight="bold", pad=10)
     ax.xaxis.set_major_formatter(PercentFormatter(xmax=100))
     ax.grid(axis="x", linestyle="--", color="#d9d9d9", linewidth=0.8, alpha=0.9)
     ax.tick_params(labelsize=10.5)
 
     for i, v in enumerate(med):
         ax.text(
-            v + (0.05 if v >= 0 else -0.05),
+            v + (0.08 if v >= 0 else -0.08),
             i,
-            f"{v:+.2f}%",
+            f"{v:+.2f}% | N={n_vals[i]}",
             va="center",
             ha="left" if v >= 0 else "right",
             fontsize=9.5,
@@ -1508,7 +1580,64 @@ def plot_regime_comparison(regime_table: pd.DataFrame, title: str) -> io.BytesIO
     for sp in ax.spines.values():
         sp.set_color("#111111")
 
-    fig.subplots_adjust(left=0.26, right=0.96, top=0.90, bottom=0.10)
+    ax_tbl = fig.add_subplot(gs[1])
+    ax_tbl.axis("off")
+
+    table_df = plot_df.sort_values("Median", ascending=False).head(8).copy()
+    col_labels = table_df["Regime"].tolist()
+
+    rows = [
+        ("N", table_df["N"].tolist()),
+        ("Median", table_df["Median"].tolist()),
+        ("Mean", table_df["Mean"].tolist()),
+        ("Hit %", table_df["Hit Rate"].tolist()),
+        ("Worst", table_df["Worst"].tolist()),
+    ]
+
+    cell_text = []
+    cell_colors = []
+
+    for row_name, vals in rows:
+        if row_name == "N":
+            cell_text.append([str(int(v)) for v in vals])
+            cell_colors.append([LIGHT_GREY for _ in vals])
+        elif row_name == "Hit %":
+            cell_text.append([f"{v:.0f}%" if pd.notna(v) else "n/a" for v in vals])
+            cell_colors.append([LIGHT_GREEN if v >= 50 else LIGHT_RED for v in vals])
+        else:
+            cell_text.append([_format_pct(v) for v in vals])
+            cell_colors.append([
+                LIGHT_GREEN if pd.notna(v) and v > 0 else LIGHT_RED if pd.notna(v) and v < 0 else LIGHT_GREY
+                for v in vals
+            ])
+
+    table = ax_tbl.table(
+        cellText=cell_text,
+        rowLabels=[r[0] for r in rows],
+        colLabels=col_labels,
+        loc="center",
+        cellLoc="center",
+        rowLoc="center",
+        bbox=[0.02, 0.12, 0.96, 0.78],
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(9.5)
+    table.scale(1.0, 1.35)
+
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#f0f0f0")
+        elif col == -1:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#f0f0f0")
+        else:
+            cell.set_facecolor(cell_colors[row - 1][col])
+            cell.set_edgecolor("black")
+            cell.set_linewidth(0.75)
+
+    fig.subplots_adjust(left=0.20, right=0.96, top=0.91, bottom=0.08)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
@@ -2141,14 +2270,23 @@ median_buf = plot_median_iqr_seasonality(
 )
 st.image(median_buf, use_container_width=True)
 
-monthly_table = build_monthly_stats_table(stats)
-st.dataframe(monthly_table, use_container_width=True, hide_index=True)
-
 st.caption(
-    "This view reduces outlier dependence. Bars show median monthly return, whiskers show the interquartile range, and black diamonds show mean return."
+    "Bars show median monthly return, whiskers show the interquartile range, black diamonds show mean return, and the embedded table shows the month-level distribution."
 )
 
 
+st.markdown(f"### Regime Comparison for {MONTH_LABELS[month_choice - 1]}")
+
+regime_comp = build_regime_comparison_table(filtered, month_choice)
+regime_buf = plot_regime_comparison(
+    regime_comp,
+    f"{used_symbol} {MONTH_LABELS[month_choice - 1]} | Regime-Conditioned Return Profile",
+)
+st.image(regime_buf, use_container_width=True)
+
+st.caption(
+    "Bars show median return by regime bucket. Whiskers show the interquartile range, black diamonds show mean return, and the table below the chart keeps the key regime stats in image format."
+)
 # =========================
 # NEW OUTPUT 2: REGIME COMPARISON FOR SELECTED MONTH
 # =========================
@@ -2172,116 +2310,6 @@ st.caption(
     "Regime buckets are computed from the filtered sample, then shown only where enough observations exist. "
     "This is intended to show whether the selected month behaves differently under different macro conditions."
 )
-
-
-# =========================
-# NEW OUTPUT 3: FORWARD FROM CURRENT DAY TO MONTH-END
-# =========================
-
-st.markdown("### Forward Distribution From Current Trading-Day Position")
-
-today_ord_for_forward = summary.get("today_ord")
-
-if today_ord_for_forward is None:
-    month_paths_df, avg_month_path = _month_paths_prev_eom_equal_weight_from_filtered(prices, filtered, month_choice)
-    if not avg_month_path.empty:
-        today_ord_for_forward = min(10, int(avg_month_path.index.max()))
-    else:
-        today_ord_for_forward = None
-
-if today_ord_for_forward is not None:
-    forward_df = build_forward_distribution_table(prices, filtered, month_choice, int(today_ord_for_forward))
-else:
-    forward_df = pd.DataFrame()
-
-fwd_buf = plot_forward_distribution(
-    forward_df,
-    f"{used_symbol} {MONTH_LABELS[month_choice - 1]} | Forward Return From Day {today_ord_for_forward if today_ord_for_forward is not None else 'n/a'} to Month-End",
-)
-st.image(fwd_buf, use_container_width=True)
-
-if not forward_df.empty:
-    fwd_summary = pd.DataFrame(
-        [
-            {
-                "Month": MONTH_LABELS[month_choice - 1],
-                "From Trading Day": int(today_ord_for_forward),
-                "N": int(forward_df.shape[0]),
-                "Mean": _format_pct2(forward_df["Forward Return"].mean()),
-                "Median": _format_pct2(forward_df["Forward Return"].median()),
-                "P25": _format_pct2(forward_df["Forward Return"].quantile(0.25)),
-                "P75": _format_pct2(forward_df["Forward Return"].quantile(0.75)),
-                "Hit Rate": f"{(forward_df['Forward Return'] > 0).mean() * 100.0:.1f}%",
-                "Worst": _format_pct2(forward_df["Forward Return"].min()),
-                "Best": _format_pct2(forward_df["Forward Return"].max()),
-            }
-        ]
-    )
-    st.dataframe(fwd_summary, use_container_width=True, hide_index=True)
-
-    with st.expander("Best historical forward outcomes"):
-        st.dataframe(format_forward_table_for_display(forward_df, max_rows=20), use_container_width=True, hide_index=True)
-
-    with st.expander("Worst historical forward outcomes"):
-        st.dataframe(
-            format_forward_table_for_display(forward_df.sort_values("Forward Return", ascending=True), max_rows=20),
-            use_container_width=True,
-            hide_index=True,
-        )
-else:
-    st.info("Not enough data to build a forward distribution from the selected day.")
-
-
-# =========================
-# NEW OUTPUT 4: CURRENT YTD ANALOGS
-# =========================
-
-st.markdown("### Current YTD Path Versus Historical Analogs")
-
-analog_start_year = max(start_year, int(prices.index.min().year) + 1)
-analog_end_year = min(end_year, this_year - 1)
-
-analogs, current_ytd_path, hist_ytd_paths = build_ytd_analogs(
-    prices=prices,
-    current_year=this_year,
-    min_year=analog_start_year,
-    max_year=analog_end_year,
-    top_n=8,
-)
-
-analog_buf = plot_ytd_analogs(
-    analogs=analogs,
-    current_path=current_ytd_path,
-    hist_paths=hist_ytd_paths,
-    symbol=used_symbol,
-    current_year=this_year,
-)
-st.image(analog_buf, use_container_width=True)
-
-if not analogs.empty:
-    st.dataframe(format_analog_table_for_display(analogs), use_container_width=True, hide_index=True)
-
-    valid_fwd = analogs["Forward To Year-End"].dropna()
-    if not valid_fwd.empty:
-        analog_summary = pd.DataFrame(
-            [
-                {
-                    "Analog Count": int(valid_fwd.shape[0]),
-                    "Mean Forward To Year-End": _format_pct2(valid_fwd.mean()),
-                    "Median Forward To Year-End": _format_pct2(valid_fwd.median()),
-                    "Hit Rate": f"{(valid_fwd > 0).mean() * 100.0:.1f}%",
-                    "Worst": _format_pct2(valid_fwd.min()),
-                    "Best": _format_pct2(valid_fwd.max()),
-                }
-            ]
-        )
-        st.dataframe(analog_summary, use_container_width=True, hide_index=True)
-
-    st.caption(
-        "Analogs are ranked by YTD path correlation first and RMSE second. Forward return is measured from the same trading-day point to that historical year's final close."
-    )
-else:
-    st.info("Not enough history to build current-year YTD analogs.")
 
 
 # =========================
