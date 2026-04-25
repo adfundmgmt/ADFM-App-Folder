@@ -113,7 +113,7 @@ def inject_app_css() -> None:
             color: #202733;
             font-size: 2.05rem;
             font-weight: 750;
-            line-height: 1.12;
+            line-height: 0.12;
             letter-spacing: -0.035em;
             margin: 0 0 0.28rem 0;
             padding: 0;
@@ -128,7 +128,7 @@ def inject_app_css() -> None:
         }
 
         .top-control-row {
-            margin-top: 3.10rem;
+            margin-top: 0.10rem;
             margin-bottom: 1.05rem;
         }
 
