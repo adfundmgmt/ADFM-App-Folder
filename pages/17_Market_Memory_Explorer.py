@@ -112,7 +112,7 @@ def inject_app_css() -> None:
         .hero-title {
             color: #202733;
             font-size: 2.05rem;
-            font-weight: 100;
+            font-weight: 750;
             line-height: 3.12;
             letter-spacing: -0.035em;
             margin: 0 0 0.28rem 0;
