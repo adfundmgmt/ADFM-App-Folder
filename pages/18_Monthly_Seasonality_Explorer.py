@@ -267,7 +267,7 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
     regime = pd.DataFrame(index=monthly_index)
 
     if usrec is not None:
-        usrec_m = usrec.resample("M").last()
+        usrec_m = usrec.resample("ME").last()
         usrec_m.index = usrec_m.index.to_period("M")
         regime["is_recession"] = usrec_m.reindex(monthly_index)
         regime["is_recession"] = regime["is_recession"].fillna(0).astype(int)
@@ -275,7 +275,7 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
         regime["is_recession"] = 0
 
     if fedfunds is not None:
-        ff_m = fedfunds.resample("M").last()
+        ff_m = fedfunds.resample("ME").last()
         ff_m.index = ff_m.index.to_period("M")
         regime["fedfunds"] = ff_m.reindex(monthly_index)
 
@@ -303,7 +303,7 @@ def build_monthly_regime_features(regime_daily: pd.DataFrame) -> pd.DataFrame:
     daily = regime_daily.copy().sort_index()
 
     if "vix" in daily:
-        vix_m = daily["vix"].resample("M").mean()
+        vix_m = daily["vix"].resample("ME").mean()
         monthly["avg_vix"] = vix_m
         monthly["vix_bucket"] = pd.cut(
             monthly["avg_vix"],
@@ -312,7 +312,7 @@ def build_monthly_regime_features(regime_daily: pd.DataFrame) -> pd.DataFrame:
         ).astype(str)
 
     if "tnx" in daily:
-        tnx_m = daily["tnx"].resample("M").last()
+        tnx_m = daily["tnx"].resample("ME").last()
         tnx_delta = tnx_m.diff(3)
         monthly["teny"] = tnx_m
         monthly["teny_3m_chg"] = tnx_delta
@@ -323,7 +323,7 @@ def build_monthly_regime_features(regime_daily: pd.DataFrame) -> pd.DataFrame:
         )
 
     if "dxy" in daily:
-        dxy_m = daily["dxy"].resample("M").last()
+        dxy_m = daily["dxy"].resample("ME").last()
         dxy_delta = dxy_m.pct_change(3) * 100.0
         monthly["dxy"] = dxy_m
         monthly["dxy_3m_chg_pct"] = dxy_delta
