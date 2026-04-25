@@ -20,15 +20,43 @@ try:
 except ImportError:
     pdr = None
 
+
+# =========================
+# CONFIG
+# =========================
+
 FALLBACK_MAP = {
     "^SPX": "SP500",
+    "^GSPC": "SP500",
     "^DJI": "DJIA",
     "^IXIC": "NASDAQCOM",
 }
+
+REGIME_SYMBOLS = {
+    "VIX": "^VIX",
+    "10Y Yield": "^TNX",
+    "Dollar Index": "DX-Y.NYB",
+}
+
+DXY_FALLBACKS = ["DX=F", "UUP"]
+
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+POS_GREEN = "#52b788"
+NEG_RED = "#e85d5d"
+NEUTRAL_GREY = "#8b949e"
+LIGHT_GREEN = "#d9f2e4"
+LIGHT_RED = "#f7d9d7"
+LIGHT_GREY = "#f2f2f2"
+BACKGROUND = "#fcfcfb"
 
-# -------------------------- Streamlit UI -------------------------- #
+CACHE_TTL_SECONDS = 3600
+
+
+# =========================
+# STREAMLIT SETUP
+# =========================
+
 st.set_page_config(page_title="Monthly Seasonality Explorer", layout="wide")
 st.title("Monthly Seasonality Explorer")
 
@@ -81,6 +109,13 @@ st.markdown(
         letter-spacing: 0.02em;
         margin-bottom: 7px;
     }
+    .adfm-small-note {
+        color: #666666;
+        font-size: 0.82rem;
+        line-height: 1.35;
+        margin-top: -0.35rem;
+        margin-bottom: 0.65rem;
+    }
     @media (max-width: 900px) {
         .adfm-card-row {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -92,40 +127,70 @@ st.markdown(
 )
 
 
-# -------------------------- Data helpers -------------------------- #
+# =========================
+# DATA HELPERS
+# =========================
+
+def _today() -> pd.Timestamp:
+    return pd.Timestamp.today().normalize()
+
+
+def _clean_symbol(symbol: str) -> str:
+    return str(symbol).strip().upper()
+
+
 def _yf_download(symbol: str, start: str, end: str, retries: int = 3) -> Optional[pd.Series]:
     for n in range(retries):
-        df = yf.download(symbol, start=start, end=end, auto_adjust=True, progress=False, threads=False)
-        if not df.empty and "Close" in df:
-            ser = df["Close"]
-            if isinstance(ser, pd.DataFrame):
-                ser = ser.iloc[:, 0]
-            ser = pd.to_numeric(ser, errors="coerce").dropna()
-            if not ser.empty:
-                return ser.rename("Close")
-        time.sleep(2 * (n + 1))
+        try:
+            df = yf.download(
+                symbol,
+                start=start,
+                end=end,
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+            if df is not None and not df.empty and "Close" in df:
+                ser = df["Close"]
+                if isinstance(ser, pd.DataFrame):
+                    ser = ser.iloc[:, 0]
+                ser = pd.to_numeric(ser, errors="coerce").dropna()
+                ser.index = pd.to_datetime(ser.index).tz_localize(None)
+                if not ser.empty:
+                    return ser.rename("Close")
+        except Exception:
+            pass
+
+        time.sleep(1.25 * (n + 1))
+
     return None
 
 
 def _fred_series(series_code: str, start: str, end: str) -> Optional[pd.Series]:
     if pdr is None:
         return None
+
     try:
         df = pdr.DataReader(series_code, "fred", start, end)
         if df is None or df.empty or series_code not in df.columns:
             return None
+
         ser = pd.to_numeric(df[series_code], errors="coerce").dropna()
+        ser.index = pd.to_datetime(ser.index).tz_localize(None)
+
         if ser.empty:
             return None
+
         return ser.rename(series_code)
+
     except Exception:
         return None
 
 
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
-    symbol = symbol.strip().upper()
-    end = min(pd.Timestamp(end), pd.Timestamp.today()).strftime("%Y-%m-%d")
+    symbol = _clean_symbol(symbol)
+    end = min(pd.Timestamp(end), _today()).strftime("%Y-%m-%d")
 
     start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
     start_pad = start_pad_dt.strftime("%Y-%m-%d")
@@ -135,7 +200,7 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
         return series
 
     if symbol == "SPY":
-        series = _yf_download("^SPX", start_pad, end)
+        series = _yf_download("^GSPC", start_pad, end)
         if series is not None:
             return series
 
@@ -148,7 +213,39 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     return None
 
 
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
+def fetch_regime_market_series(start: str, end: str) -> pd.DataFrame:
+    start_dt = pd.Timestamp(start) - pd.DateOffset(years=1)
+    end_dt = min(pd.Timestamp(end), _today()) + pd.DateOffset(days=5)
+
+    out = pd.DataFrame()
+
+    vix = _yf_download("^VIX", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
+    if vix is not None:
+        out["vix"] = vix
+
+    tnx = _yf_download("^TNX", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
+    if tnx is not None:
+        out["tnx"] = tnx / 10.0
+
+    dxy = _yf_download("DX-Y.NYB", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
+    if dxy is None:
+        for fallback in DXY_FALLBACKS:
+            dxy = _yf_download(fallback, start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
+            if dxy is not None:
+                break
+
+    if dxy is not None:
+        out["dxy"] = dxy
+
+    if out.empty:
+        return out
+
+    out = out.sort_index()
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
     """
     Returns a monthly regime table indexed by PeriodIndex(freq='M') with:
@@ -158,7 +255,7 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
       - fedfunds
     """
     start_dt = pd.Timestamp(start) - pd.DateOffset(years=2)
-    end_dt = min(pd.Timestamp(end), pd.Timestamp.today()) + pd.DateOffset(days=31)
+    end_dt = min(pd.Timestamp(end), _today()) + pd.DateOffset(days=31)
 
     usrec = _fred_series("USREC", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
     fedfunds = _fred_series("FEDFUNDS", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
@@ -181,11 +278,13 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
         ff_m = fedfunds.resample("M").last()
         ff_m.index = ff_m.index.to_period("M")
         regime["fedfunds"] = ff_m.reindex(monthly_index)
-        delta = regime["fedfunds"].diff()
+
+        delta_3m = regime["fedfunds"].diff(3)
+
         regime["fed_regime"] = np.where(
-            delta > 0,
+            delta_3m > 0.05,
             "Hiking",
-            np.where(delta < 0, "Cutting", "Steady"),
+            np.where(delta_3m < -0.05, "Cutting", "Steady"),
         )
         regime.loc[regime["fedfunds"].isna(), "fed_regime"] = "Unknown"
     else:
@@ -194,6 +293,51 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
 
     regime["regime_cycle"] = np.where(regime["is_recession"] == 1, "Recession", "Expansion")
     return regime
+
+
+def build_monthly_regime_features(regime_daily: pd.DataFrame) -> pd.DataFrame:
+    if regime_daily is None or regime_daily.empty:
+        return pd.DataFrame()
+
+    monthly = pd.DataFrame()
+    daily = regime_daily.copy().sort_index()
+
+    if "vix" in daily:
+        vix_m = daily["vix"].resample("M").mean()
+        monthly["avg_vix"] = vix_m
+        monthly["vix_bucket"] = pd.cut(
+            monthly["avg_vix"],
+            bins=[-np.inf, 15, 20, 25, np.inf],
+            labels=["VIX <15", "VIX 15-20", "VIX 20-25", "VIX >25"],
+        ).astype(str)
+
+    if "tnx" in daily:
+        tnx_m = daily["tnx"].resample("M").last()
+        tnx_delta = tnx_m.diff(3)
+        monthly["teny"] = tnx_m
+        monthly["teny_3m_chg"] = tnx_delta
+        monthly["teny_trend"] = np.where(
+            tnx_delta > 0.15,
+            "10Y rising",
+            np.where(tnx_delta < -0.15, "10Y falling", "10Y flat"),
+        )
+
+    if "dxy" in daily:
+        dxy_m = daily["dxy"].resample("M").last()
+        dxy_delta = dxy_m.pct_change(3) * 100.0
+        monthly["dxy"] = dxy_m
+        monthly["dxy_3m_chg_pct"] = dxy_delta
+        monthly["dxy_trend"] = np.where(
+            dxy_delta > 1.5,
+            "Dollar rising",
+            np.where(dxy_delta < -1.5, "Dollar falling", "Dollar flat"),
+        )
+
+    if monthly.empty:
+        return monthly
+
+    monthly.index = monthly.index.to_period("M")
+    return monthly
 
 
 def _presidential_cycle_bucket(year: int) -> str:
@@ -228,6 +372,8 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
         freq="M",
     )
 
+    current_month = _today().to_period("M")
+
     for m in months:
         m_mask = prices.index.to_period("M") == m
         month_days = prices.loc[m_mask]
@@ -260,7 +406,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
                 "h1_ret": h1,
                 "h2_ret": h2,
                 "month_obs": int(month_days.shape[0]),
-                "is_complete_month": bool(m < pd.Timestamp.today().to_period("M")),
+                "is_complete_month": bool(m < current_month),
             }
         )
 
@@ -273,7 +419,11 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     return df
 
 
-def build_filter_table(prices: pd.Series, regime_df: pd.DataFrame) -> pd.DataFrame:
+def build_filter_table(
+    prices: pd.Series,
+    regime_df: pd.DataFrame,
+    market_regime_df: pd.DataFrame,
+) -> pd.DataFrame:
     halves = _intra_month_halves(prices)
     if halves.empty:
         return halves
@@ -292,17 +442,24 @@ def build_filter_table(prices: pd.Series, regime_df: pd.DataFrame) -> pd.DataFra
         df["fed_regime"] = "Unknown"
         df["fedfunds"] = np.nan
 
+    if market_regime_df is not None and not market_regime_df.empty:
+        df = df.join(market_regime_df, how="left")
+
     df["regime_cycle"] = df["regime_cycle"].fillna("Unknown")
     df["fed_regime"] = df["fed_regime"].fillna("Unknown")
+    df["vix_bucket"] = df.get("vix_bucket", pd.Series(index=df.index, dtype=object)).fillna("Unknown")
+    df["teny_trend"] = df.get("teny_trend", pd.Series(index=df.index, dtype=object)).fillna("Unknown")
+    df["dxy_trend"] = df.get("dxy_trend", pd.Series(index=df.index, dtype=object)).fillna("Unknown")
+
     return df
 
 
 def _latest_complete_year(prices: pd.Series) -> int:
     if prices.empty:
-        return pd.Timestamp.today().year - 1
+        return _today().year - 1
 
     latest_period = prices.index.max().to_period("M")
-    current_period = pd.Timestamp.today().to_period("M")
+    current_period = _today().to_period("M")
     if latest_period >= current_period:
         return current_period.year - 1
     return latest_period.year
@@ -335,6 +492,10 @@ def apply_filters(
     end_year: int,
     cycle_filter: str,
     complete_months_only: bool,
+    fed_filter: str,
+    vix_filter: str,
+    teny_filter: str,
+    dxy_filter: str,
 ) -> pd.DataFrame:
     df = filter_table.copy()
 
@@ -346,6 +507,18 @@ def apply_filters(
     if cycle_filter != "All years":
         df = df[df["pres_cycle_bucket"] == cycle_filter]
 
+    if fed_filter != "All Fed regimes":
+        df = df[df["fed_regime"] == fed_filter]
+
+    if vix_filter != "All VIX regimes":
+        df = df[df["vix_bucket"] == vix_filter]
+
+    if teny_filter != "All 10Y regimes":
+        df = df[df["teny_trend"] == teny_filter]
+
+    if dxy_filter != "All dollar regimes":
+        df = df[df["dxy_trend"] == dxy_filter]
+
     return df.sort_index()
 
 
@@ -354,14 +527,21 @@ def seasonal_stats_from_filtered(filtered_halves: pd.DataFrame) -> pd.DataFrame:
     stats["label"] = MONTH_LABELS
 
     if filtered_halves.empty:
-        stats["hit_rate"] = np.nan
-        stats["min_ret"] = np.nan
-        stats["max_ret"] = np.nan
-        stats["years_observed"] = np.nan
-        stats["mean_h1"] = np.nan
-        stats["mean_h2"] = np.nan
-        stats["mean_total"] = np.nan
-        stats["observations"] = np.nan
+        for col in [
+            "hit_rate",
+            "min_ret",
+            "max_ret",
+            "years_observed",
+            "mean_h1",
+            "mean_h2",
+            "mean_total",
+            "median_total",
+            "p25_total",
+            "p75_total",
+            "downside_freq",
+            "observations",
+        ]:
+            stats[col] = np.nan
         return stats
 
     grouped = filtered_halves.groupby("month")
@@ -373,6 +553,10 @@ def seasonal_stats_from_filtered(filtered_halves: pd.DataFrame) -> pd.DataFrame:
     stats["mean_h1"] = grouped["h1_ret"].mean()
     stats["mean_h2"] = grouped["h2_ret"].mean()
     stats["mean_total"] = grouped["total_ret"].mean()
+    stats["median_total"] = grouped["total_ret"].median()
+    stats["p25_total"] = grouped["total_ret"].quantile(0.25)
+    stats["p75_total"] = grouped["total_ret"].quantile(0.75)
+    stats["downside_freq"] = grouped["total_ret"].apply(lambda x: (x < -2.0).mean() * 100.0)
     stats["observations"] = grouped["total_ret"].count()
 
     return stats
@@ -382,20 +566,25 @@ def _format_pct(x: float) -> str:
     return f"{x:+.1f}%" if pd.notna(x) else "n/a"
 
 
+def _format_pct2(x: float) -> str:
+    return f"{x:+.2f}%" if pd.notna(x) else "n/a"
+
+
 def _cell_colors(values: List[List[float]]) -> List[List[str]]:
-    pos = "#d9f2e4"
-    neg = "#f7d9d7"
-    neu = "#f2f2f2"
     colors = []
     for row in values:
         colors.append(
             [
-                pos if (pd.notna(v) and v > 0) else neg if (pd.notna(v) and v < 0) else neu
+                LIGHT_GREEN if (pd.notna(v) and v > 0) else LIGHT_RED if (pd.notna(v) and v < 0) else LIGHT_GREY
                 for v in row
             ]
         )
     return colors
 
+
+# =========================
+# ORIGINAL CHART 1
+# =========================
 
 def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     plot_df = stats.dropna(subset=["mean_h1", "mean_h2", "min_ret", "max_ret", "hit_rate"]).copy()
@@ -415,7 +604,7 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     x = np.arange(len(labels))
 
     def seg_face(values):
-        return np.where(values >= 0, "#62c38e", "#e07a73")
+        return np.where(values >= 0, POS_GREEN, NEG_RED)
 
     def seg_edge(values):
         return np.where(values >= 0, "#1f7a4f", "#8b1e1a")
@@ -527,6 +716,10 @@ def plot_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
     return buf
 
 
+# =========================
+# INTRA-MONTH HELPERS
+# =========================
+
 def _month_paths_prev_eom_equal_weight_from_filtered(
     prices: pd.Series,
     filtered_halves: pd.DataFrame,
@@ -593,12 +786,14 @@ def _avg_calendar_day_for_ordinal_from_filtered(
 
     if not days:
         return None
+
     return int(round(np.mean(days)))
 
 
 def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> int:
     if month_index.empty:
         return 1
+
     idx = month_index.sort_values()
     d = pd.Timestamp(when).normalize()
     ord_ = int(np.searchsorted(idx.values, np.datetime64(d), side="right"))
@@ -633,7 +828,7 @@ def build_intra_month_summary(
         "day20_val": np.nan,
         "front_loaded": None,
         "recovery_strength": np.nan,
-        "current_year": pd.Timestamp.today().year,
+        "current_year": _today().year,
         "current_year_month_available": False,
         "today_ord": None,
         "today_avg_level": np.nan,
@@ -667,9 +862,11 @@ def build_intra_month_summary(
     if not avg_ex.empty:
         low_idx = int(avg_ex.idxmin())
         high_idx = int(avg_ex.idxmax())
+
         summary["avg_low_day"] = low_idx
         summary["avg_low_val"] = float(avg_ex.loc[low_idx])
         summary["avg_low_dom"] = _avg_calendar_day_for_ordinal_from_filtered(prices, filtered_halves, month_int, low_idx)
+
         summary["avg_high_day"] = high_idx
         summary["avg_high_val"] = float(avg_ex.loc[high_idx])
         summary["avg_high_dom"] = _avg_calendar_day_for_ordinal_from_filtered(prices, filtered_halves, month_int, high_idx)
@@ -681,12 +878,15 @@ def build_intra_month_summary(
     d10 = summary["day10_val"]
     month_end = summary["avg_month_end"]
     summary["front_loaded"] = bool(pd.notna(d10) and pd.notna(month_end) and abs(d10) >= 0.6 * abs(month_end))
+
     if summary["avg_low_day"] is not None and pd.notna(month_end):
         summary["recovery_strength"] = float(month_end - summary["avg_low_val"])
 
-    today = pd.Timestamp.today()
+    today = _today()
     cur_year = today.year
+
     m = prices.loc[(prices.index.year == cur_year) & (prices.index.month == month_int)]
+
     prev_mask = (prices.index.year == (cur_year if month_int > 1 else cur_year - 1)) & (
         prices.index.month == (month_int - 1 if month_int > 1 else 12)
     )
@@ -711,6 +911,7 @@ def build_intra_month_summary(
 
             if tday_ord in avg_sel.index:
                 summary["today_avg_level"] = float(avg_sel.loc[tday_ord])
+
             if tday_ord in cur_cum.index:
                 summary["today_cur_level"] = float(cur_cum.loc[tday_ord])
 
@@ -721,6 +922,7 @@ def build_intra_month_summary(
                 lvl_t = df_sel.loc[tday_ord]
                 lvl_end = df_sel.loc[df_sel.index.max()]
                 fwd = (lvl_end - lvl_t).dropna()
+
                 if not fwd.empty:
                     summary["fwd_mean"] = float(fwd.mean())
                     summary["fwd_median"] = float(fwd.median())
@@ -888,9 +1090,7 @@ def render_intra_month_commentary(summary: Dict[str, Any]) -> None:
                 f"so realized performance lagged the historical template."
             )
         else:
-            live_read = (
-                f"The current year's completed {month_label} finished broadly in line with the long-run average month-end path."
-            )
+            live_read = f"The current year's completed {month_label} finished broadly in line with the long-run average month-end path."
 
     commentary = f"""
     <div class="adfm-note">
@@ -901,6 +1101,10 @@ def render_intra_month_commentary(summary: Dict[str, Any]) -> None:
     st.markdown(commentary, unsafe_allow_html=True)
 
 
+# =========================
+# ORIGINAL CHART 2
+# =========================
+
 def plot_intra_month_curve(
     prices: pd.Series,
     filtered_halves: pd.DataFrame,
@@ -909,8 +1113,8 @@ def plot_intra_month_curve(
 ) -> io.BytesIO:
     df_sel, avg_sel = _month_paths_prev_eom_equal_weight_from_filtered(prices, filtered_halves, month_int)
 
-    fig = plt.figure(figsize=(14.5, 8.3), dpi=220, facecolor="#fcfcfb")
-    ax = fig.add_subplot(111, facecolor="#fcfcfb")
+    fig = plt.figure(figsize=(14.5, 8.3), dpi=220, facecolor=BACKGROUND)
+    ax = fig.add_subplot(111, facecolor=BACKGROUND)
 
     if avg_sel.empty or df_sel.empty:
         ax.text(
@@ -924,7 +1128,7 @@ def plot_intra_month_curve(
         )
         ax.axis("off")
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor="#fcfcfb")
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor=BACKGROUND)
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -956,7 +1160,7 @@ def plot_intra_month_curve(
         zorder=2.4,
     )
 
-    today = pd.Timestamp.today()
+    today = _today()
     cur_year = today.year
 
     cur_path = None
@@ -1036,8 +1240,10 @@ def plot_intra_month_curve(
     ax.set_ylabel("Return from prior month-end (%)", color="black", fontsize=11, weight="bold")
     ax.grid(axis="y", linestyle="--", color="#d9d9d9", alpha=1.0, linewidth=0.8)
     ax.tick_params(colors="black", labelsize=11)
+
     for sp in ax.spines.values():
         sp.set_color("#111111")
+
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.margins(x=0.01)
 
@@ -1049,6 +1255,7 @@ def plot_intra_month_curve(
 
             if tday_ord in avg_sel.index:
                 ax.scatter(tday_ord, avg_sel.loc[tday_ord], s=28, color="#111111", zorder=4)
+
             if cur_path is not None and tday_ord in cur_path.index:
                 ax.scatter(
                     tday_ord,
@@ -1069,21 +1276,568 @@ def plot_intra_month_curve(
     fig.subplots_adjust(left=0.06, right=0.96, top=0.90, bottom=0.09)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=220, facecolor="#fcfcfb")
+    fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
     plt.close(fig)
     buf.seek(0)
     return buf
 
 
-# -------------------------- Main controls -------------------------- #
-today_dt = pd.Timestamp.today()
+# =========================
+# NEW DECISION CHARTS BELOW ORIGINAL OUTPUTS
+# =========================
+
+def build_monthly_stats_table(stats: pd.DataFrame) -> pd.DataFrame:
+    out = stats.copy()
+    out = out[
+        [
+            "label",
+            "observations",
+            "mean_total",
+            "median_total",
+            "p25_total",
+            "p75_total",
+            "hit_rate",
+            "downside_freq",
+            "min_ret",
+            "max_ret",
+        ]
+    ].rename(
+        columns={
+            "label": "Month",
+            "observations": "N",
+            "mean_total": "Mean",
+            "median_total": "Median",
+            "p25_total": "P25",
+            "p75_total": "P75",
+            "hit_rate": "Hit Rate",
+            "downside_freq": "Downside Freq < -2%",
+            "min_ret": "Worst",
+            "max_ret": "Best",
+        }
+    )
+
+    for col in ["Mean", "Median", "P25", "P75", "Hit Rate", "Downside Freq < -2%", "Worst", "Best"]:
+        out[col] = out[col].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "n/a")
+
+    out["N"] = out["N"].map(lambda x: int(x) if pd.notna(x) else 0)
+    return out.reset_index(drop=True)
+
+
+def plot_median_iqr_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
+    plot_df = stats.dropna(subset=["median_total", "p25_total", "p75_total"]).copy()
+
+    labels = plot_df["label"].tolist()
+    x = np.arange(len(labels))
+
+    med = plot_df["median_total"].to_numpy(float)
+    p25 = plot_df["p25_total"].to_numpy(float)
+    p75 = plot_df["p75_total"].to_numpy(float)
+    mean = plot_df["mean_total"].to_numpy(float)
+
+    fig = plt.figure(figsize=(16, 7.6), dpi=220, facecolor=BACKGROUND)
+    ax = fig.add_subplot(111, facecolor=BACKGROUND)
+
+    bar_colors = np.where(med >= 0, POS_GREEN, NEG_RED)
+
+    ax.bar(
+        x,
+        med,
+        width=0.72,
+        color=bar_colors,
+        edgecolor="#111111",
+        linewidth=0.85,
+        alpha=0.92,
+        label="Median monthly return",
+        zorder=2,
+    )
+
+    yerr = np.vstack([med - p25, p75 - med])
+    ax.errorbar(
+        x,
+        med,
+        yerr=yerr,
+        fmt="none",
+        ecolor="#111111",
+        elinewidth=1.45,
+        capsize=5,
+        alpha=0.75,
+        label="IQR",
+        zorder=3,
+    )
+
+    ax.scatter(
+        x,
+        mean,
+        s=42,
+        color="black",
+        marker="D",
+        label="Mean",
+        zorder=4,
+    )
+
+    ax.axhline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
+
+    ax.set_xticks(x, labels)
+    ax.set_ylabel("Return (%)", fontsize=12, weight="bold")
+    ax.set_title(title, fontsize=18, weight="bold", pad=10)
+    ax.yaxis.set_major_formatter(PercentFormatter(xmax=100))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=8))
+    ax.grid(axis="y", linestyle="--", color="#d9d9d9", linewidth=0.8, alpha=0.9)
+    ax.tick_params(labelsize=11)
+
+    for sp in ax.spines.values():
+        sp.set_color("#111111")
+
+    ax.legend(frameon=False, loc="upper left", fontsize=10)
+    fig.subplots_adjust(left=0.06, right=0.96, top=0.90, bottom=0.09)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def build_regime_comparison_table(
+    base_filtered: pd.DataFrame,
+    selected_month: int,
+) -> pd.DataFrame:
+    if base_filtered.empty:
+        return pd.DataFrame()
+
+    month_df = base_filtered[base_filtered["month"] == selected_month].copy()
+    if month_df.empty:
+        return pd.DataFrame()
+
+    rows = []
+
+    def add_row(label: str, sub: pd.DataFrame) -> None:
+        if sub.empty:
+            return
+
+        rows.append(
+            {
+                "Regime": label,
+                "N": int(sub.shape[0]),
+                "Mean": sub["total_ret"].mean(),
+                "Median": sub["total_ret"].median(),
+                "Hit Rate": (sub["total_ret"] > 0).mean() * 100.0,
+                "P25": sub["total_ret"].quantile(0.25),
+                "P75": sub["total_ret"].quantile(0.75),
+                "Worst": sub["total_ret"].min(),
+                "Best": sub["total_ret"].max(),
+                "Downside Freq < -2%": (sub["total_ret"] < -2.0).mean() * 100.0,
+            }
+        )
+
+    add_row("All filtered years", month_df)
+
+    for col in ["fed_regime", "vix_bucket", "teny_trend", "dxy_trend", "regime_cycle"]:
+        if col in month_df.columns:
+            for val in sorted([x for x in month_df[col].dropna().unique() if str(x) != "Unknown"]):
+                add_row(str(val), month_df[month_df[col] == val])
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+
+    out = out.sort_values(["N", "Median"], ascending=[False, False]).reset_index(drop=True)
+    return out
+
+
+def plot_regime_comparison(regime_table: pd.DataFrame, title: str) -> io.BytesIO:
+    fig = plt.figure(figsize=(14.5, 8.2), dpi=220, facecolor=BACKGROUND)
+    ax = fig.add_subplot(111, facecolor=BACKGROUND)
+
+    if regime_table.empty:
+        ax.text(0.5, 0.5, "Not enough data for regime comparison", ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor=BACKGROUND)
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    plot_df = regime_table.copy()
+    plot_df = plot_df[plot_df["N"] >= 3].head(12)
+
+    if plot_df.empty:
+        ax.text(0.5, 0.5, "No regime bucket has at least 3 observations", ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor=BACKGROUND)
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    plot_df = plot_df.iloc[::-1].reset_index(drop=True)
+
+    y = np.arange(len(plot_df))
+    med = plot_df["Median"].to_numpy(float)
+    colors = np.where(med >= 0, POS_GREEN, NEG_RED)
+
+    ax.barh(
+        y,
+        med,
+        color=colors,
+        edgecolor="#111111",
+        linewidth=0.8,
+        alpha=0.92,
+        zorder=2,
+    )
+
+    ax.axvline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
+    ax.set_yticks(y, [f"{r}  |  N={n}" for r, n in zip(plot_df["Regime"], plot_df["N"])])
+    ax.set_xlabel("Median return (%)", fontsize=11, weight="bold")
+    ax.set_title(title, fontsize=18, weight="bold", pad=10)
+    ax.xaxis.set_major_formatter(PercentFormatter(xmax=100))
+    ax.grid(axis="x", linestyle="--", color="#d9d9d9", linewidth=0.8, alpha=0.9)
+    ax.tick_params(labelsize=10.5)
+
+    for i, v in enumerate(med):
+        ax.text(
+            v + (0.05 if v >= 0 else -0.05),
+            i,
+            f"{v:+.2f}%",
+            va="center",
+            ha="left" if v >= 0 else "right",
+            fontsize=9.5,
+            color="#111111",
+        )
+
+    for sp in ax.spines.values():
+        sp.set_color("#111111")
+
+    fig.subplots_adjust(left=0.26, right=0.96, top=0.90, bottom=0.10)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def build_forward_distribution_table(
+    prices: pd.Series,
+    filtered_halves: pd.DataFrame,
+    month_int: int,
+    day_ord: int,
+) -> pd.DataFrame:
+    df_paths, avg_path = _month_paths_prev_eom_equal_weight_from_filtered(prices, filtered_halves, month_int)
+    if df_paths.empty or day_ord is None:
+        return pd.DataFrame()
+
+    if day_ord not in df_paths.index:
+        return pd.DataFrame()
+
+    end_idx = df_paths.index.max()
+    current_lvl = df_paths.loc[day_ord]
+    end_lvl = df_paths.loc[end_idx]
+    fwd = (end_lvl - current_lvl).dropna()
+
+    if fwd.empty:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(
+        {
+            "Period": fwd.index,
+            "Forward Return": fwd.values,
+        }
+    )
+
+    out["Year"] = out["Period"].str.slice(0, 4).astype(int)
+    out = out.sort_values("Forward Return", ascending=False).reset_index(drop=True)
+    return out
+
+
+def plot_forward_distribution(forward_df: pd.DataFrame, title: str) -> io.BytesIO:
+    fig = plt.figure(figsize=(14.5, 7.7), dpi=220, facecolor=BACKGROUND)
+    ax = fig.add_subplot(111, facecolor=BACKGROUND)
+
+    if forward_df.empty:
+        ax.text(0.5, 0.5, "Not enough data for forward distribution", ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor=BACKGROUND)
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    vals = forward_df["Forward Return"].to_numpy(float)
+    bins = min(18, max(7, int(np.sqrt(len(vals)))))
+
+    ax.hist(
+        vals,
+        bins=bins,
+        color="#d8d8d8",
+        edgecolor="#111111",
+        linewidth=0.8,
+        alpha=0.95,
+        zorder=2,
+    )
+
+    mean = float(np.mean(vals))
+    median = float(np.median(vals))
+    p25 = float(np.quantile(vals, 0.25))
+    p75 = float(np.quantile(vals, 0.75))
+    hit = float((vals > 0).mean() * 100.0)
+
+    ax.axvline(mean, color="#111111", linewidth=1.5, label=f"Mean {mean:+.2f}%")
+    ax.axvline(median, color="#111111", linestyle="--", linewidth=1.5, label=f"Median {median:+.2f}%")
+    ax.axvline(p25, color=NEG_RED, linestyle=":", linewidth=1.4, label=f"P25 {p25:+.2f}%")
+    ax.axvline(p75, color=POS_GREEN, linestyle=":", linewidth=1.4, label=f"P75 {p75:+.2f}%")
+
+    ax.text(
+        0.985,
+        0.96,
+        f"N={len(vals)}\nHit rate={hit:.0f}%\nWorst={vals.min():+.2f}%\nBest={vals.max():+.2f}%",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=10.5,
+        bbox=dict(boxstyle="round,pad=0.32", fc="white", ec="#d6d6d6", lw=0.9),
+    )
+
+    ax.set_title(title, fontsize=18, weight="bold", pad=10)
+    ax.set_xlabel("Forward return to month-end (%)", fontsize=11, weight="bold")
+    ax.set_ylabel("Frequency", fontsize=11, weight="bold")
+    ax.xaxis.set_major_formatter(PercentFormatter(xmax=100))
+    ax.grid(axis="y", linestyle="--", color="#d9d9d9", linewidth=0.8, alpha=0.9)
+    ax.tick_params(labelsize=11)
+
+    for sp in ax.spines.values():
+        sp.set_color("#111111")
+
+    ax.legend(frameon=False, loc="upper left", fontsize=10)
+    fig.subplots_adjust(left=0.06, right=0.96, top=0.90, bottom=0.10)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def build_current_ytd_path(prices: pd.Series, year: int) -> Optional[pd.Series]:
+    y_prices = prices.loc[prices.index.year == year]
+    prev_year = prices.loc[prices.index.year == year - 1]
+
+    if y_prices.empty or prev_year.empty:
+        return None
+
+    anchor = float(prev_year.iloc[-1])
+    path = (y_prices / anchor - 1.0) * 100.0
+    path.index = pd.RangeIndex(1, len(path) + 1)
+    return path
+
+
+def build_historical_ytd_paths(prices: pd.Series, through_day: int, min_year: int, max_year: int) -> pd.DataFrame:
+    paths = {}
+
+    years = sorted(prices.index.year.unique())
+
+    for y in years:
+        if y < min_year or y > max_year:
+            continue
+
+        prev = prices.loc[prices.index.year == y - 1]
+        cur = prices.loc[prices.index.year == y]
+
+        if prev.empty or cur.empty or len(cur) < through_day:
+            continue
+
+        anchor = float(prev.iloc[-1])
+        path = (cur / anchor - 1.0) * 100.0
+        path.index = pd.RangeIndex(1, len(path) + 1)
+        paths[str(y)] = path.iloc[:through_day]
+
+    if not paths:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(paths)
+    return df
+
+
+def build_ytd_analogs(
+    prices: pd.Series,
+    current_year: int,
+    min_year: int,
+    max_year: int,
+    top_n: int = 8,
+) -> Tuple[pd.DataFrame, Optional[pd.Series], pd.DataFrame]:
+    cur_path = build_current_ytd_path(prices, current_year)
+    if cur_path is None or len(cur_path) < 15:
+        return pd.DataFrame(), cur_path, pd.DataFrame()
+
+    through_day = len(cur_path)
+    hist = build_historical_ytd_paths(prices, through_day, min_year, max_year)
+    if hist.empty:
+        return pd.DataFrame(), cur_path, hist
+
+    aligned_cur = cur_path.iloc[:through_day]
+
+    rows = []
+    for col in hist.columns:
+        y = int(col)
+        if y == current_year:
+            continue
+
+        h = hist[col].dropna()
+        if len(h) != through_day:
+            continue
+
+        corr = float(np.corrcoef(aligned_cur.values, h.values)[0, 1])
+        rmse = float(np.sqrt(np.mean((aligned_cur.values - h.values) ** 2)))
+
+        remainder_prices = prices.loc[prices.index.year == y]
+        if len(remainder_prices) > through_day:
+            anchor_price = float(remainder_prices.iloc[through_day - 1])
+            year_end = float(remainder_prices.iloc[-1])
+            fwd_to_year_end = (year_end / anchor_price - 1.0) * 100.0
+        else:
+            fwd_to_year_end = np.nan
+
+        rows.append(
+            {
+                "Year": y,
+                "Correlation": corr,
+                "RMSE": rmse,
+                "YTD Then": float(h.iloc[-1]),
+                "YTD Now": float(aligned_cur.iloc[-1]),
+                "Forward To Year-End": fwd_to_year_end,
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out, cur_path, hist
+
+    out = out.sort_values(["Correlation", "RMSE"], ascending=[False, True]).head(top_n).reset_index(drop=True)
+    return out, cur_path, hist
+
+
+def plot_ytd_analogs(
+    analogs: pd.DataFrame,
+    current_path: Optional[pd.Series],
+    hist_paths: pd.DataFrame,
+    symbol: str,
+    current_year: int,
+) -> io.BytesIO:
+    fig = plt.figure(figsize=(14.5, 8.1), dpi=220, facecolor=BACKGROUND)
+    ax = fig.add_subplot(111, facecolor=BACKGROUND)
+
+    if analogs.empty or current_path is None or hist_paths.empty:
+        ax.text(0.5, 0.5, "Not enough data for YTD analogs", ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor=BACKGROUND)
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    through_day = len(current_path)
+
+    for _, row in analogs.iterrows():
+        year = str(int(row["Year"]))
+        if year in hist_paths.columns:
+            ax.plot(
+                hist_paths.index,
+                hist_paths[year],
+                linewidth=1.2,
+                alpha=0.48,
+                label=f"{year} corr {row['Correlation']:.2f}",
+            )
+
+    ax.plot(
+        current_path.index,
+        current_path.values,
+        linewidth=2.8,
+        color="#111111",
+        label=str(current_year),
+        zorder=4,
+    )
+
+    ax.axhline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
+    ax.axvline(through_day, color="#9b9b9b", linestyle=":", linewidth=1.0)
+
+    ax.set_title(
+        f"{symbol} | Current YTD Path Versus Closest Historical Analogs",
+        fontsize=18,
+        weight="bold",
+        pad=10,
+    )
+    ax.set_xlabel("Trading day of year", fontsize=11, weight="bold")
+    ax.set_ylabel("YTD return (%)", fontsize=11, weight="bold")
+    ax.yaxis.set_major_formatter(PercentFormatter(xmax=100))
+    ax.grid(axis="y", linestyle="--", color="#d9d9d9", linewidth=0.8, alpha=0.9)
+    ax.tick_params(labelsize=11)
+
+    for sp in ax.spines.values():
+        sp.set_color("#111111")
+
+    ax.legend(frameon=False, loc="upper left", fontsize=9, ncol=2)
+    fig.subplots_adjust(left=0.06, right=0.96, top=0.90, bottom=0.10)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def format_regime_table_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    out = df.copy()
+    for col in ["Mean", "Median", "Hit Rate", "P25", "P75", "Worst", "Best", "Downside Freq < -2%"]:
+        out[col] = out[col].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "n/a")
+
+    return out
+
+
+def format_forward_table_for_display(df: pd.DataFrame, max_rows: int = 15) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    out = df.head(max_rows).copy()
+    out["Forward Return"] = out["Forward Return"].map(lambda x: f"{x:+.2f}%")
+    return out
+
+
+def format_analog_table_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    out = df.copy()
+    out["Correlation"] = out["Correlation"].map(lambda x: f"{x:.3f}")
+    out["RMSE"] = out["RMSE"].map(lambda x: f"{x:.2f}")
+    out["YTD Then"] = out["YTD Then"].map(lambda x: f"{x:+.2f}%")
+    out["YTD Now"] = out["YTD Now"].map(lambda x: f"{x:+.2f}%")
+    out["Forward To Year-End"] = out["Forward To Year-End"].map(lambda x: f"{x:+.2f}%" if pd.notna(x) else "n/a")
+    return out
+
+
+# =========================
+# MAIN CONTROLS
+# =========================
+
+today_dt = _today()
 this_year = int(today_dt.year)
 
 col1, col2, col3 = st.columns([2.0, 1.0, 1.0])
+
 with col1:
     symbol = st.text_input("Ticker symbol", value="^SPX").upper()
+
 with col2:
-    custom_start_year = st.number_input("Custom start year", value=2020, min_value=1900, max_value=this_year)
+    custom_start_year = st.number_input(
+        "Custom start year",
+        value=2020,
+        min_value=1900,
+        max_value=this_year,
+    )
+
 with col3:
     custom_end_year = st.number_input(
         "Custom end year",
@@ -1098,10 +1852,11 @@ end_fetch_date = f"{this_year}-12-31"
 with st.spinner("Fetching and analyzing data..."):
     used_symbol = symbol
     prices = fetch_prices(symbol, start_fetch_date, end_fetch_date)
+
     if prices is None and symbol == "SPY":
-        prices = fetch_prices("^SPX", start_fetch_date, end_fetch_date)
+        prices = fetch_prices("^GSPC", start_fetch_date, end_fetch_date)
         if prices is not None:
-            used_symbol = "^SPX"
+            used_symbol = "^GSPC"
 
 if prices is None or prices.empty:
     st.error(f"No data found for '{symbol}' in the given date range. Try a different symbol or adjust the years.")
@@ -1112,25 +1867,40 @@ if first_valid is not None:
     prices = prices.loc[first_valid:]
 
 if used_symbol != symbol:
-    st.info("SPY data unavailable. Using S&P 500 index (^SPX) fallback for seasonality.")
+    st.info("SPY data unavailable. Using S&P 500 index fallback for seasonality.")
 
+latest_price_date = prices.index.max().strftime("%Y-%m-%d")
 latest_complete_year = _latest_complete_year(prices)
+
 regime_df = fetch_regime_data(str(prices.index.min().date()), str(prices.index.max().date()))
-filter_table = build_filter_table(prices, regime_df)
+market_regime_daily = fetch_regime_market_series(str(prices.index.min().date()), str(prices.index.max().date()))
+market_regime_monthly = build_monthly_regime_features(market_regime_daily)
+
+filter_table = build_filter_table(prices, regime_df, market_regime_monthly)
+
+
+# =========================
+# SIDEBAR
+# =========================
 
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Seasonality explorer for monthly tendencies, hit-rate patterns, and intra-month behavior.
+        **Purpose:** Seasonality explorer for monthly tendencies, hit-rate patterns, intra-month behavior, regime-conditioned behavior, and similar-year YTD analogs.
 
         **What this tab shows**
         - Month-level return tendencies after explicit sample filtering.
         - First-half versus second-half contribution splits within each month.
-        - Observation counts and auditability context for statistical confidence.
+        - Intra-month average path versus current-year behavior when available.
+        - Regime-conditioned month behavior using Fed, VIX, 10Y, and dollar context.
+        - Forward return distribution from the current trading day to month-end.
+        - Current YTD path versus historical analog years.
 
         **Data source**
-        - Historical daily market price series used to build month-level seasonality statistics.
+        - Historical daily market price series from Yahoo Finance where available.
+        - FRED fallback for selected major indices.
+        - FRED recession and Fed Funds data for macro regime tagging.
         """
     )
 
@@ -1163,6 +1933,21 @@ with st.sidebar:
 
     complete_months_only = st.checkbox("Complete months only", value=True)
 
+    st.subheader("Regime Filters")
+
+    fed_options = ["All Fed regimes"] + sorted([x for x in filter_table["fed_regime"].dropna().unique() if x != "Unknown"])
+    fed_filter = st.selectbox("Fed regime", fed_options, index=0)
+
+    vix_options = ["All VIX regimes"] + sorted([x for x in filter_table["vix_bucket"].dropna().unique() if x != "Unknown"])
+    vix_filter = st.selectbox("VIX regime", vix_options, index=0)
+
+    teny_options = ["All 10Y regimes"] + sorted([x for x in filter_table["teny_trend"].dropna().unique() if x != "Unknown"])
+    teny_filter = st.selectbox("10Y trend", teny_options, index=0)
+
+    dxy_options = ["All dollar regimes"] + sorted([x for x in filter_table["dxy_trend"].dropna().unique() if x != "Unknown"])
+    dxy_filter = st.selectbox("Dollar trend", dxy_options, index=0)
+
+
 start_year, end_year = resolve_year_window(
     sample_preset,
     int(custom_start_year),
@@ -1176,6 +1961,10 @@ filtered = apply_filters(
     end_year=end_year,
     cycle_filter=cycle_filter,
     complete_months_only=complete_months_only,
+    fed_filter=fed_filter,
+    vix_filter=vix_filter,
+    teny_filter=teny_filter,
+    dxy_filter=dxy_filter,
 )
 
 if filtered.empty:
@@ -1183,9 +1972,15 @@ if filtered.empty:
     st.stop()
 
 stats = seasonal_stats_from_filtered(filtered)
+
 if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
     st.error("Insufficient data in the selected filtered window to compute statistics.")
     st.stop()
+
+
+# =========================
+# TOP METADATA
+# =========================
 
 obs_months = int(filtered.shape[0])
 obs_years = int(filtered["year"].nunique())
@@ -1196,7 +1991,7 @@ meta_c1, meta_c2, meta_c3, meta_c4 = st.columns(4)
 meta_c1.metric("Filtered month observations", f"{obs_months}")
 meta_c2.metric("Distinct years", f"{obs_years}")
 meta_c3.metric("Window", f"{start_year}-{end_year}")
-meta_c4.metric("Included months", f"{min_period} to {max_period}")
+meta_c4.metric("Latest price date", latest_price_date)
 
 if obs_months < 24 or obs_years < 5:
     st.warning(
@@ -1204,7 +1999,17 @@ if obs_months < 24 or obs_years < 5:
         "Read the output as directional rather than stable."
     )
 
+
+# =========================
+# BEST / WORST SUMMARY
+# =========================
+
 stats_valid = stats.dropna(subset=["mean_total"])
+
+if stats_valid.empty:
+    st.error("No valid monthly seasonality statistics after filtering.")
+    st.stop()
+
 best_idx = stats_valid["mean_total"].idxmax()
 worst_idx = stats_valid["mean_total"].idxmin()
 best = stats.loc[best_idx]
@@ -1224,12 +2029,22 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+# =========================
+# ORIGINAL OUTPUT 1
+# =========================
+
 filter_caption_parts = [
     f"{used_symbol}",
     f"{start_year}-{end_year}",
     cycle_filter,
+    fed_filter,
+    vix_filter,
+    teny_filter,
+    dxy_filter,
     "Complete months only" if complete_months_only else "Partial current month allowed",
 ]
+filter_caption_parts = [x for x in filter_caption_parts if not str(x).startswith("All ")]
 chart_title = " | ".join(filter_caption_parts)
 
 buf = plot_seasonality(stats, f"{used_symbol} Seasonality ({chart_title})")
@@ -1240,9 +2055,15 @@ st.caption(
     "Error bars use min and max of total monthly returns within the filtered sample."
 )
 
+
+# =========================
+# ORIGINAL OUTPUT 2
+# =========================
+
 st.subheader("Intra-Month Seasonality Curve")
 
 month_mode_col1, month_mode_col2 = st.columns([1.15, 1.85])
+
 with month_mode_col1:
     month_mode = st.radio(
         "View preset",
@@ -1272,6 +2093,7 @@ if month_mode != "Manual":
     st.caption(f"Selected month: {MONTH_LABELS[month_choice - 1]}")
 
 summary = build_intra_month_summary(prices, filtered, month_choice, used_symbol)
+
 render_intra_month_cards(summary)
 render_intra_month_commentary(summary)
 
@@ -1289,24 +2111,206 @@ else:
 
 st.caption(extra_caption)
 
+
+# =========================
+# NEW OUTPUTS BELOW ORIGINAL TWO
+# =========================
+
+st.markdown("---")
+st.subheader("Additional Decision Views")
+
+st.markdown(
+    """
+    <div class="adfm-small-note">
+    These charts are added below the original two outputs. They are meant to make the seasonality read less dependent on averages and more useful for current regime, forward path, and current-year analog work.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================
+# NEW OUTPUT 1: MEDIAN / IQR SEASONALITY
+# =========================
+
+st.markdown("### Median and IQR Seasonality")
+
+median_buf = plot_median_iqr_seasonality(
+    stats,
+    f"{used_symbol} Median Seasonality With IQR ({chart_title})",
+)
+st.image(median_buf, use_container_width=True)
+
+monthly_table = build_monthly_stats_table(stats)
+st.dataframe(monthly_table, use_container_width=True, hide_index=True)
+
+st.caption(
+    "This view reduces outlier dependence. Bars show median monthly return, whiskers show the interquartile range, and black diamonds show mean return."
+)
+
+
+# =========================
+# NEW OUTPUT 2: REGIME COMPARISON FOR SELECTED MONTH
+# =========================
+
+st.markdown(f"### Regime Comparison for {MONTH_LABELS[month_choice - 1]}")
+
+regime_comp = build_regime_comparison_table(filtered, month_choice)
+regime_buf = plot_regime_comparison(
+    regime_comp,
+    f"{used_symbol} {MONTH_LABELS[month_choice - 1]} | Median Return by Regime Bucket",
+)
+st.image(regime_buf, use_container_width=True)
+
+st.dataframe(
+    format_regime_table_for_display(regime_comp),
+    use_container_width=True,
+    hide_index=True,
+)
+
+st.caption(
+    "Regime buckets are computed from the filtered sample, then shown only where enough observations exist. "
+    "This is intended to show whether the selected month behaves differently under different macro conditions."
+)
+
+
+# =========================
+# NEW OUTPUT 3: FORWARD FROM CURRENT DAY TO MONTH-END
+# =========================
+
+st.markdown("### Forward Distribution From Current Trading-Day Position")
+
+today_ord_for_forward = summary.get("today_ord")
+
+if today_ord_for_forward is None:
+    month_paths_df, avg_month_path = _month_paths_prev_eom_equal_weight_from_filtered(prices, filtered, month_choice)
+    if not avg_month_path.empty:
+        today_ord_for_forward = min(10, int(avg_month_path.index.max()))
+    else:
+        today_ord_for_forward = None
+
+if today_ord_for_forward is not None:
+    forward_df = build_forward_distribution_table(prices, filtered, month_choice, int(today_ord_for_forward))
+else:
+    forward_df = pd.DataFrame()
+
+fwd_buf = plot_forward_distribution(
+    forward_df,
+    f"{used_symbol} {MONTH_LABELS[month_choice - 1]} | Forward Return From Day {today_ord_for_forward if today_ord_for_forward is not None else 'n/a'} to Month-End",
+)
+st.image(fwd_buf, use_container_width=True)
+
+if not forward_df.empty:
+    fwd_summary = pd.DataFrame(
+        [
+            {
+                "Month": MONTH_LABELS[month_choice - 1],
+                "From Trading Day": int(today_ord_for_forward),
+                "N": int(forward_df.shape[0]),
+                "Mean": _format_pct2(forward_df["Forward Return"].mean()),
+                "Median": _format_pct2(forward_df["Forward Return"].median()),
+                "P25": _format_pct2(forward_df["Forward Return"].quantile(0.25)),
+                "P75": _format_pct2(forward_df["Forward Return"].quantile(0.75)),
+                "Hit Rate": f"{(forward_df['Forward Return'] > 0).mean() * 100.0:.1f}%",
+                "Worst": _format_pct2(forward_df["Forward Return"].min()),
+                "Best": _format_pct2(forward_df["Forward Return"].max()),
+            }
+        ]
+    )
+    st.dataframe(fwd_summary, use_container_width=True, hide_index=True)
+
+    with st.expander("Best historical forward outcomes"):
+        st.dataframe(format_forward_table_for_display(forward_df, max_rows=20), use_container_width=True, hide_index=True)
+
+    with st.expander("Worst historical forward outcomes"):
+        st.dataframe(
+            format_forward_table_for_display(forward_df.sort_values("Forward Return", ascending=True), max_rows=20),
+            use_container_width=True,
+            hide_index=True,
+        )
+else:
+    st.info("Not enough data to build a forward distribution from the selected day.")
+
+
+# =========================
+# NEW OUTPUT 4: CURRENT YTD ANALOGS
+# =========================
+
+st.markdown("### Current YTD Path Versus Historical Analogs")
+
+analog_start_year = max(start_year, int(prices.index.min().year) + 1)
+analog_end_year = min(end_year, this_year - 1)
+
+analogs, current_ytd_path, hist_ytd_paths = build_ytd_analogs(
+    prices=prices,
+    current_year=this_year,
+    min_year=analog_start_year,
+    max_year=analog_end_year,
+    top_n=8,
+)
+
+analog_buf = plot_ytd_analogs(
+    analogs=analogs,
+    current_path=current_ytd_path,
+    hist_paths=hist_ytd_paths,
+    symbol=used_symbol,
+    current_year=this_year,
+)
+st.image(analog_buf, use_container_width=True)
+
+if not analogs.empty:
+    st.dataframe(format_analog_table_for_display(analogs), use_container_width=True, hide_index=True)
+
+    valid_fwd = analogs["Forward To Year-End"].dropna()
+    if not valid_fwd.empty:
+        analog_summary = pd.DataFrame(
+            [
+                {
+                    "Analog Count": int(valid_fwd.shape[0]),
+                    "Mean Forward To Year-End": _format_pct2(valid_fwd.mean()),
+                    "Median Forward To Year-End": _format_pct2(valid_fwd.median()),
+                    "Hit Rate": f"{(valid_fwd > 0).mean() * 100.0:.1f}%",
+                    "Worst": _format_pct2(valid_fwd.min()),
+                    "Best": _format_pct2(valid_fwd.max()),
+                }
+            ]
+        )
+        st.dataframe(analog_summary, use_container_width=True, hide_index=True)
+
+    st.caption(
+        "Analogs are ranked by YTD path correlation first and RMSE second. Forward return is measured from the same trading-day point to that historical year's final close."
+    )
+else:
+    st.info("Not enough history to build current-year YTD analogs.")
+
+
+# =========================
+# AUDIT
+# =========================
+
 with st.expander("Audit included observations"):
     audit_df = filtered.copy()
     audit_df = audit_df.reset_index().rename(columns={"index": "period"})
     audit_df["period"] = audit_df["period"].astype(str)
-    audit_df = audit_df[
-        [
-            "period",
-            "year",
-            "month",
-            "pres_cycle_bucket",
-            "regime_cycle",
-            "fed_regime",
-            "is_complete_month",
-            "total_ret",
-            "h1_ret",
-            "h2_ret",
-        ]
-    ].sort_values(["year", "month"])
+
+    audit_cols = [
+        "period",
+        "year",
+        "month",
+        "pres_cycle_bucket",
+        "regime_cycle",
+        "fed_regime",
+        "vix_bucket",
+        "teny_trend",
+        "dxy_trend",
+        "is_complete_month",
+        "total_ret",
+        "h1_ret",
+        "h2_ret",
+    ]
+
+    audit_cols = [c for c in audit_cols if c in audit_df.columns]
+    audit_df = audit_df[audit_cols].sort_values(["year", "month"])
 
     st.dataframe(
         audit_df,
