@@ -13,7 +13,7 @@ import time
 # ============================================================
 # Page and theme
 # ============================================================
-st.set_page_config(page_title="Sector and Thematic Basket Panels", layout="wide")
+st.set_page_config(page_title="ADFM Public Equities Baskets", layout="wide")
 
 CUSTOM_CSS = """
 <style>
@@ -26,8 +26,8 @@ CUSTOM_CSS = """
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-TITLE = "ADFM Sector and Thematic Basket Panels"
-SUBTITLE = "Sector, thematic, and country baskets only. No pure regime diagnostics or duplicate factor baskets."
+TITLE = "ADFM Public Equities Baskets"
+SUBTITLE = "Sector, thematic, and country baskets."
 
 PASTEL_GREEN = "#52b788"
 PASTEL_RED = "#e85d5d"
