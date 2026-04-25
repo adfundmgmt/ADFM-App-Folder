@@ -120,66 +120,35 @@ def inject_app_css() -> None:
             line-height: 1.45;
             max-width: 980px;
         }
-        .panel-card {
+        .inline-stat-wrap {
+            margin-top: 1.95rem;
+        }
+        .inline-stat {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
             background: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
             border: 1px solid #e4e9f1;
-            border-radius: 16px;
-            padding: 16px 18px;
+            border-radius: 14px;
+            padding: 0.95rem 1.15rem;
+            min-height: 54px;
             box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
         }
-        .panel-tight {
-            min-height: 112px;
-        }
-        .panel-offset {
-            margin-top: 1.85rem;
-        }
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px 16px;
-        }
-        .info-label {
+        .inline-stat-label {
             color: #8b97a8;
             font-size: 0.74rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.07em;
-            margin-bottom: 0.25rem;
         }
-        .info-value {
-            color: #26303d;
-            font-size: 1rem;
-            font-weight: 600;
-            line-height: 1.2;
-        }
-        .metric-card {
-            background: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
-            border: 1px solid #e4e9f1;
-            border-radius: 16px;
-            padding: 16px 18px 14px 18px;
-            min-height: 118px;
-            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-        }
-        .metric-label {
-            color: #8b97a8;
-            font-size: 0.74rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.07em;
-            margin-bottom: 0.65rem;
-        }
-        .metric-value {
+        .inline-stat-value {
             color: #202733;
-            font-size: 2.15rem;
+            font-size: 1.65rem;
             font-weight: 700;
-            line-height: 1.0;
+            line-height: 1;
             letter-spacing: -0.03em;
-        }
-        .metric-foot {
-            color: #667085;
-            font-size: 0.83rem;
-            margin-top: 0.60rem;
-            line-height: 1.35;
+            white-space: nowrap;
         }
         div[data-testid="stTextInput"] label p {
             color: #8b97a8;
@@ -218,42 +187,14 @@ def render_hero() -> None:
     )
 
 
-def render_status_panel(ticker_label: str, last_data_date: pd.Timestamp, ny_now: dt.datetime, stale_bdays: int) -> None:
-    freshness_text = "Current" if stale_bdays <= 1 else f"{stale_bdays} business days behind"
+def render_inline_metric(label: str, value: str) -> None:
     st.markdown(
         f"""
-        <div class="panel-card panel-tight panel-offset">
-            <div class="info-grid">
-                <div>
-                    <div class="info-label">Selected Series</div>
-                    <div class="info-value">{ticker_label}</div>
-                </div>
-                <div>
-                    <div class="info-label">Latest Close</div>
-                    <div class="info-value">{last_data_date:%Y-%m-%d}</div>
-                </div>
-                <div>
-                    <div class="info-label">New York Date</div>
-                    <div class="info-value">{ny_now:%Y-%m-%d}</div>
-                </div>
-                <div>
-                    <div class="info-label">Data Status</div>
-                    <div class="info-value">{freshness_text}</div>
-                </div>
+        <div class="inline-stat-wrap">
+            <div class="inline-stat">
+                <div class="inline-stat-label">{label}</div>
+                <div class="inline-stat-value">{value}</div>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_metric_card(label: str, value: str, footnote: str) -> None:
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-foot">{footnote}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1089,9 +1030,12 @@ with st.sidebar:
         min_regime_score = 0.0
 
 
-control_left, control_right = st.columns([1.05, 1.15], gap="large")
-with control_left:
-    ticker_in = st.text_input("Ticker", "^SPX").strip().upper()
+top_bar = st.container()
+with top_bar:
+    top_left, top_right = st.columns([1.2, 0.9], gap="large")
+    with top_left:
+        ticker_in = st.text_input("Ticker", "^SPX").strip().upper()
+    metric_placeholder = top_right.empty()
 
 ticker = TICKER_ALIASES.get(ticker_in, ticker_in)
 ticker_label = ticker_in if ticker_in else ticker
@@ -1113,9 +1057,6 @@ if close_px.empty:
 
 last_data_date = pd.Timestamp(close_px.index[-1])
 stale_bdays = business_days_behind(last_data_date, ny_now.date())
-
-with control_right:
-    render_status_panel(ticker_label=ticker_label, last_data_date=last_data_date, ny_now=ny_now, stale_bdays=stale_bdays)
 
 if stale_bdays > 1:
     st.warning(
@@ -1245,28 +1186,12 @@ if not records:
 calendar_df = pd.DataFrame(records).sort_values(["Score", "Correlation"], ascending=[False, False]).reset_index(drop=True)
 top_calendar = calendar_df.head(top_n).copy()
 
-current_ret = float(current.iloc[-1])
-median_final = float(np.nanmedian(top_calendar["Full-Year Return"])) if len(top_calendar) else np.nan
 median_after_match = float(np.nanmedian(top_calendar["Return After Match Date"])) if len(top_calendar) else np.nan
 
-metric_cols = st.columns(3, gap="large")
-with metric_cols[0]:
-    render_metric_card(
-        label=f"{this_year} True YTD",
-        value=fmt_pct(current_ret),
-        footnote="Anchored to the prior year-end close.",
-    )
-with metric_cols[1]:
-    render_metric_card(
-        label="Median Full-Year Return of Shown Analogs",
-        value=fmt_pct(median_final),
-        footnote="Median full-year outcome across the displayed analog set.",
-    )
-with metric_cols[2]:
-    render_metric_card(
+with metric_placeholder.container():
+    render_inline_metric(
         label="Median Return After Match Date",
         value=fmt_pct(median_after_match),
-        footnote="Median return from the match point through year-end.",
     )
 
 fig_ytd = plot_ytd_analogs(
