@@ -1,4 +1,3 @@
-
 import datetime as dt
 import time
 from pathlib import Path
@@ -94,42 +93,22 @@ def add_logo() -> None:
             return
 
 
-
-def inject_app_css() -> None:
+def inject_control_css() -> None:
     st.markdown(
         """
         <style>
         .block-container {
-            padding-top: 0.85rem;
+            padding-top: 2.25rem;
             padding-bottom: 2.25rem;
         }
 
-        .hero-wrap {
-            margin: 0 0 1.15rem 0;
-            padding-top: 0.10rem;
-        }
-
-        .hero-title {
-            color: #202733;
-            font-size: 2.05rem;
-            font-weight: 750;
-            line-height: 3.12;
-            letter-spacing: -0.035em;
-            margin: 0 0 0.28rem 0;
-            padding: 0;
-        }
-
-        .hero-subtitle {
-            color: #667085;
-            font-size: 0.98rem;
-            line-height: 1.42;
-            margin: 0;
-            max-width: 920px;
-        }
-
         .top-control-row {
-            margin-top: 0.10rem;
-            margin-bottom: 1.05rem;
+            margin-top: 1.10rem;
+            margin-bottom: 1.15rem;
+        }
+
+        .clean-metric-offset {
+            padding-top: 1.72rem;
         }
 
         .clean-metric {
@@ -202,22 +181,10 @@ def inject_app_css() -> None:
     )
 
 
-def render_hero() -> None:
-    st.markdown(
-        """
-        <div class="hero-wrap">
-            <div class="hero-title">Market Memory Explorer</div>
-            <div class="hero-subtitle">Compare the current market path with history, then measure what happened next.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def render_inline_metric(label: str, value: str) -> None:
     st.markdown(
         f"""
-        <div style="padding-top: 1.72rem;">
+        <div class="clean-metric-offset">
             <div class="clean-metric">
                 <div class="clean-metric-label">{label}</div>
                 <div class="clean-metric-value">{value}</div>
@@ -255,10 +222,21 @@ def set_percent_axis(ax, values) -> None:
 
     span = ax.get_ylim()[1] - ax.get_ylim()[0]
     raw_step = max(span / 12, 0.0025)
-    candidates = np.array([
-        0.0025, 0.005, 0.01, 0.02, 0.025, 0.05,
-        0.10, 0.20, 0.25, 0.50, 1.00
-    ])
+    candidates = np.array(
+        [
+            0.0025,
+            0.005,
+            0.01,
+            0.02,
+            0.025,
+            0.05,
+            0.10,
+            0.20,
+            0.25,
+            0.50,
+            1.00,
+        ]
+    )
     step = float(candidates[np.argmin(np.abs(candidates - raw_step))])
 
     ax.yaxis.set_major_locator(MultipleLocator(step))
@@ -298,9 +276,6 @@ def get_palette(n: int):
 
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def load_history(symbol: str) -> pd.DataFrame:
-    """
-    Robust Yahoo loader with retries. Returns a clean Close-only frame.
-    """
     symbol = str(symbol).strip()
     attempts = 0
     delay = 1.0
@@ -354,9 +329,6 @@ def load_history(symbol: str) -> pd.DataFrame:
 
 
 def load_optional_regime_data(raw_close: pd.Series):
-    """
-    Regime data is optional. The app should still work if one proxy fails.
-    """
     data = {"asset": raw_close.dropna().copy()}
     missing = []
 
@@ -387,10 +359,6 @@ def business_days_behind(last_date: pd.Timestamp, reference_date: dt.date) -> in
 
 
 def build_true_ytd_paths(raw: pd.DataFrame, current_year: int):
-    """
-    True YTD return path uses the prior year's final close as the base.
-    This preserves the first trading day's gap instead of forcing day one to 0%.
-    """
     close = raw["Close"].dropna().copy()
     paths = {}
     date_maps = {}
@@ -609,9 +577,6 @@ def bucket_trend(pct_change: float, up_threshold: float = 0.02, down_threshold: 
 
 
 def bucket_yield_change(change_in_tnx_points: float) -> str:
-    """
-    Yahoo ^TNX is quoted as yield x 10. A 2.5 point move is roughly 25 bps.
-    """
     if not np.isfinite(change_in_tnx_points):
         return "unknown"
     if change_in_tnx_points >= 2.5:
@@ -995,9 +960,11 @@ def plot_forward_paths(ticker_label, close_px, selected_df, forward_matrix, trai
 # PAGE
 # =========================
 
+inject_control_css()
 add_logo()
-inject_app_css()
-render_hero()
+
+st.title("Market Memory Explorer")
+st.caption("Compare the current market path with history, then measure what happened next.")
 
 with st.sidebar:
     st.header("About This Tool")
@@ -1247,6 +1214,7 @@ for col in [
     "Max Drawdown",
 ]:
     table_calendar[col] = table_calendar[col].map(lambda x: fmt_pct(x))
+
 for col in ["Correlation", "Score", "Endpoint Score", "Vol Score", "Drawdown Score", "Slope Score", "Regime Score"]:
     if col in table_calendar.columns:
         table_calendar[col] = table_calendar[col].map(lambda x: fmt_num(x))
