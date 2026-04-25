@@ -1596,7 +1596,7 @@ def plot_cumulative_chart(
             mode="lines",
             line=dict(width=2, color=PASTEL[i % len(PASTEL)]),
             name=basket,
-            hovertemplate=f"{basket}<br>% Cum: %{y:.1f}%<extra></extra>"
+            hovertemplate=f"{basket}<br>% Cum: %{{y:.1f}}%<extra></extra>"
         ))
 
     fig.add_trace(go.Scatter(
