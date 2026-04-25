@@ -1053,7 +1053,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Analog Controls")
 
-    top_n = st.slider("Top Analogs Shown", 1, 15, 8)
+    top_n = st.slider("Top Analogs Shown", 1, 15, 5)
     min_corr = st.slider("Minimum Calendar-Year ρ", 0.00, 1.00, 0.00, 0.05, format="%.2f")
     rolling_min_corr = st.slider(
         "Minimum Rolling 252D ρ",
@@ -1317,7 +1317,7 @@ st.dataframe(table_calendar[display_cols], use_container_width=True, hide_index=
 # =========================
 
 st.markdown("<hr style='margin-top:18px; margin-bottom:12px;'>", unsafe_allow_html=True)
-st.subheader(f"Rolling {TRAILING_DAYS}-Day Setup Match and Forward Signal")
+st.subheader(f"Rolling {TRAILING_DAYS}-Day Forward Analog Signal")
 
 if len(close_px) < TRAILING_DAYS * 3:
     st.info(
@@ -1433,21 +1433,6 @@ if not forward_paths:
 
 forward_matrix = np.vstack(forward_paths)
 
-s1, s2, s3 = st.columns(3)
-s1.metric("Clustered Matches", f"{len(selected_rolling)}")
-s2.metric("Median Next 252D", fmt_pct(float(np.nanmedian(selected_rolling["Next 252D"]))))
-s3.metric("Positive 252D Hit Rate", fmt_pct(float(np.mean(selected_rolling["Next 252D"] > 0))))
-
-fig_setup = plot_setup_paths(
-    ticker_label=ticker_label,
-    current_path=current_trailing_path,
-    close_px=close_px,
-    selected_df=overlay_rolling,
-    trailing_days=TRAILING_DAYS,
-)
-st.pyplot(fig_setup, clear_figure=True)
-plt.close(fig_setup)
-
 fig_forward = plot_forward_paths(
     ticker_label=ticker_label,
     close_px=close_px,
@@ -1457,11 +1442,6 @@ fig_forward = plot_forward_paths(
 )
 st.pyplot(fig_forward, clear_figure=True)
 plt.close(fig_forward)
-
-dist_table = make_forward_distribution_table(selected_rolling)
-if not dist_table.empty:
-    st.markdown("**Forward return distribution after clustered rolling matches**")
-    st.dataframe(dist_table, use_container_width=True, hide_index=True)
 
 table_rolling = selected_rolling.copy()
 for col in ["Match Start", "Match End", "Signal Date"]:
@@ -1501,16 +1481,5 @@ st.markdown(
     f"**Clustered rolling {TRAILING_DAYS}-day matches with correlation >= {rolling_min_corr:.2f}**"
 )
 st.dataframe(table_rolling[rolling_cols], use_container_width=True, hide_index=True)
-
-d1, d2, d3 = st.columns(3)
-d1.metric("Median Max Drawdown", fmt_pct(float(np.nanmedian(selected_rolling["Max DD Next 252D"]))))
-d2.metric("Median Next 63D", fmt_pct(float(np.nanmedian(selected_rolling["Next 63D"]))))
-d3.metric("Median Next 126D", fmt_pct(float(np.nanmedian(selected_rolling["Next 126D"]))))
-
-st.caption(
-    f"Signal logic: compare the current trailing {TRAILING_DAYS}-day normalized price path with prior rolling "
-    f"{TRAILING_DAYS}-day historical windows, score matches by correlation plus magnitude, volatility, drawdown, "
-    f"and optional regime similarity, then plot the next {TRAILING_DAYS} trading days after each clustered signal."
-)
 
 st.caption("© 2026 AD Fund Management LP")
