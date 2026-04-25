@@ -128,7 +128,7 @@ def inject_app_css() -> None:
         }
 
         .top-control-row {
-            margin-top: 0.10rem;
+            margin-top: 3.10rem;
             margin-bottom: 1.05rem;
         }
 
