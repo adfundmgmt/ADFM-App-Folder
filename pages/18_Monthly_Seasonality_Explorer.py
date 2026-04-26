@@ -1185,20 +1185,26 @@ def build_3d_month_matrix(
     max_days = 0
 
     for month_int in range(1, 13):
-        _, avg_path = _month_paths_prev_eom_equal_weight_from_filtered(prices, filtered_halves, month_int)
+        _, avg_path = _month_paths_prev_eom_equal_weight_from_filtered(
+            prices,
+            filtered_halves,
+            month_int,
+        )
+
         if avg_path is not None and not avg_path.empty:
             avg_path = avg_path.sort_index()
             month_paths[month_int] = avg_path
             max_days = max(max_days, int(avg_path.index.max()))
 
     if not month_paths:
-        return pd.DataFrame(), 0, 0.0
+        return pd.DataFrame(), 0, 1.0
 
     full_idx = pd.RangeIndex(0, max_days + 1)
     matrix = pd.DataFrame(index=full_idx)
 
     for month_int in range(1, 13):
         path = month_paths.get(month_int)
+
         if path is None or path.empty:
             matrix[month_int] = np.nan
         else:
@@ -1210,7 +1216,13 @@ def build_3d_month_matrix(
     if finite_vals.size == 0:
         z_abs = 1.0
     else:
-        z_abs = float(max(abs(np.nanmin(finite_vals)), abs(np.nanmax(finite_vals)), 1.0))
+        z_abs = float(
+            max(
+                abs(np.nanmin(finite_vals)),
+                abs(np.nanmax(finite_vals)),
+                1.0,
+            )
+        )
 
     return matrix, max_days, z_abs
 
@@ -1231,7 +1243,10 @@ def plot_3d_seasonality_terrain(
     symbol_shown: str,
     selected_month: int,
 ) -> go.Figure:
-    matrix, max_days, z_abs = build_3d_month_matrix(prices, filtered_halves)
+    matrix, max_days, z_abs = build_3d_month_matrix(
+        prices=prices,
+        filtered_halves=filtered_halves,
+    )
 
     fig = go.Figure()
 
@@ -1240,7 +1255,7 @@ def plot_3d_seasonality_terrain(
             paper_bgcolor=BACKGROUND,
             plot_bgcolor=BACKGROUND,
             margin=dict(l=0, r=0, t=18, b=0),
-            height=760,
+            height=780,
         )
         fig.add_annotation(
             text="Not enough filtered history to build the 3D seasonality terrain.",
@@ -1263,11 +1278,19 @@ def plot_3d_seasonality_terrain(
 
     finite_vals = z_values[np.isfinite(z_values)]
     z_min = float(np.nanmin(finite_vals)) if finite_vals.size else -1.0
+    z_max = float(np.nanmax(finite_vals)) if finite_vals.size else 1.0
     z_floor = min(z_min - 0.75, -1.0)
+    z_top = max(z_abs * 1.12, z_max + 0.75, 1.0)
 
     floor_z = np.full_like(z_values, z_floor, dtype=float)
 
-        fig.add_trace(
+    floor_customdata = np.empty(z_values.shape + (2,), dtype=object)
+    for i, month_num in enumerate(months.astype(int)):
+        for j, day_num in enumerate(days.astype(int)):
+            floor_customdata[i, j, 0] = MONTH_LABELS[month_num - 1]
+            floor_customdata[i, j, 1] = z_values[i, j]
+
+    fig.add_trace(
         go.Surface(
             x=x_grid,
             y=y_grid,
@@ -1285,17 +1308,18 @@ def plot_3d_seasonality_terrain(
                 thickness=13,
                 x=0.98,
             ),
+            customdata=floor_customdata,
             hovertemplate=(
-                "<b>%{customdata}</b><br>"
+                "<b>%{customdata[0]}</b><br>"
                 "Trading day: %{x:.0f}<br>"
-                "Avg return: %{surfacecolor:.2f}%<extra></extra>"
+                "Avg return: %{customdata[1]:+.2f}%<extra></extra>"
             ),
-            customdata=np.array([[MONTH_LABELS[int(m) - 1] for _ in days] for m in months]),
             name="Floor heatmap",
         )
     )
 
     zero_z = np.zeros_like(z_values, dtype=float)
+
     fig.add_trace(
         go.Surface(
             x=x_grid,
@@ -1303,7 +1327,7 @@ def plot_3d_seasonality_terrain(
             z=zero_z,
             surfacecolor=np.zeros_like(z_values, dtype=float),
             colorscale=[[0, "#d8d8d8"], [1, "#d8d8d8"]],
-            opacity=0.16,
+            opacity=0.15,
             showscale=False,
             hoverinfo="skip",
             name="Zero plane",
@@ -1314,16 +1338,26 @@ def plot_3d_seasonality_terrain(
 
     for month_int in range(1, 13):
         path = matrix[month_int].dropna()
+
         if path.empty:
             continue
 
         x_vals = path.index.to_numpy(dtype=float)
         z_vals = path.to_numpy(dtype=float)
-        y_top = np.full_like(x_vals, month_int - curtain_width / 2.0, dtype=float)
-        y_base = np.full_like(x_vals, month_int + curtain_width / 2.0, dtype=float)
+
+        y_front = np.full_like(
+            x_vals,
+            month_int - curtain_width / 2.0,
+            dtype=float,
+        )
+        y_back = np.full_like(
+            x_vals,
+            month_int + curtain_width / 2.0,
+            dtype=float,
+        )
 
         curtain_x = np.vstack([x_vals, x_vals])
-        curtain_y = np.vstack([y_top, y_base])
+        curtain_y = np.vstack([y_front, y_back])
         curtain_z = np.vstack([z_vals, np.zeros_like(z_vals)])
         curtain_color = np.vstack([z_vals, z_vals])
 
@@ -1338,19 +1372,21 @@ def plot_3d_seasonality_terrain(
                 colorscale=colorscale,
                 cmin=-z_abs,
                 cmax=z_abs,
-                opacity=0.62 if is_selected else 0.43,
+                opacity=0.66 if is_selected else 0.42,
                 showscale=False,
                 hovertemplate=(
                     f"<b>{MONTH_LABELS[month_int - 1]}</b><br>"
                     "Trading day: %{x:.0f}<br>"
-                    "Avg return: %{z:.2f}%<extra></extra>"
+                    "Avg return: %{z:+.2f}%<extra></extra>"
                 ),
                 name=MONTH_LABELS[month_int - 1],
             )
         )
 
-        line_color = "#111111" if is_selected else (POS_GREEN if float(path.iloc[-1]) >= 0 else NEG_RED)
-        line_width = 11 if is_selected else 6
+        line_color = "#111111" if is_selected else (
+            POS_GREEN if float(path.iloc[-1]) >= 0 else NEG_RED
+        )
+        line_width = 12 if is_selected else 6
 
         fig.add_trace(
             go.Scatter3d(
@@ -1358,12 +1394,15 @@ def plot_3d_seasonality_terrain(
                 y=np.full_like(x_vals, month_int, dtype=float),
                 z=z_vals,
                 mode="lines",
-                line=dict(color=line_color, width=line_width),
+                line=dict(
+                    color=line_color,
+                    width=line_width,
+                ),
                 name=MONTH_LABELS[month_int - 1],
                 hovertemplate=(
                     f"<b>{MONTH_LABELS[month_int - 1]}</b><br>"
                     "Trading day: %{x:.0f}<br>"
-                    "Avg return: %{z:.2f}%<extra></extra>"
+                    "Avg return: %{z:+.2f}%<extra></extra>"
                 ),
                 showlegend=False,
             )
@@ -1388,19 +1427,22 @@ def plot_3d_seasonality_terrain(
             )
         )
 
-    selected_path = matrix[selected_month].dropna() if selected_month in matrix.columns else pd.Series(dtype=float)
     selected_note = ""
-    if not selected_path.empty:
-        selected_note = (
-            f"Selected month: {MONTH_LABELS[selected_month - 1]} | "
-            f"Avg month-end: {float(selected_path.iloc[-1]):+.2f}%"
-        )
+
+    if selected_month in matrix.columns:
+        selected_path = matrix[selected_month].dropna()
+
+        if not selected_path.empty:
+            selected_note = (
+                f"Selected month: {MONTH_LABELS[selected_month - 1]} | "
+                f"Avg month-end: {float(selected_path.iloc[-1]):+.2f}%"
+            )
 
     fig.update_layout(
         paper_bgcolor=BACKGROUND,
         plot_bgcolor=BACKGROUND,
         height=780,
-        margin=dict(l=0, r=0, t=28, b=0),
+        margin=dict(l=0, r=0, t=42, b=0),
         title=dict(
             text=f"{symbol_shown} | 3D Seasonal Waterfall Terrain<br><sup>{selected_note}</sup>",
             x=0.01,
@@ -1436,7 +1478,7 @@ def plot_3d_seasonality_terrain(
             ),
             zaxis=dict(
                 title="Avg return from prior month-end (%)",
-                range=[z_floor, z_abs * 1.12],
+                range=[z_floor, z_top],
                 backgroundcolor=BACKGROUND,
                 gridcolor="#dddddd",
                 zerolinecolor="#bbbbbb",
@@ -1456,8 +1498,6 @@ def plot_3d_seasonality_terrain(
     )
 
     return fig
-
-
 # =========================
 # MAIN CONTROLS
 # =========================
