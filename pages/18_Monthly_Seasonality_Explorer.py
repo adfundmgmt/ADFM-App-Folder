@@ -6,6 +6,7 @@ from typing import Optional, Tuple, List, Dict, Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 from matplotlib import gridspec
@@ -768,16 +769,6 @@ def _avg_calendar_day_for_ordinal_from_filtered(
     return int(round(np.mean(days)))
 
 
-def _trading_day_ordinal(month_index: pd.DatetimeIndex, when: pd.Timestamp) -> int:
-    if month_index.empty:
-        return 1
-
-    idx = month_index.sort_values()
-    d = pd.Timestamp(when).normalize()
-    ord_ = int(np.searchsorted(idx.values, np.datetime64(d), side="right"))
-    return max(1, min(ord_, len(idx)))
-
-
 def build_intra_month_summary(
     prices: pd.Series,
     filtered_halves: pd.DataFrame,
@@ -1183,333 +1174,151 @@ def plot_intra_month_curve(
 
 
 # =========================
-# ADDITIONAL CHARTS
+# NEW 3D PLOTLY CHART
 # =========================
 
-def plot_median_iqr_seasonality(stats: pd.DataFrame, title: str) -> io.BytesIO:
-    plot_df = stats.dropna(subset=["median_total", "p25_total", "p75_total", "hit_rate"]).copy()
+def build_3d_ribbon_data(
+    prices: pd.Series,
+    filtered_halves: pd.DataFrame,
+) -> Tuple[Dict[int, pd.Series], int]:
+    month_paths: Dict[int, pd.Series] = {}
+    max_days = 0
 
-    labels = plot_df["label"].tolist()
-    x = np.arange(len(labels))
+    for month_int in range(1, 13):
+        _, avg_path = _month_paths_prev_eom_equal_weight_from_filtered(prices, filtered_halves, month_int)
+        if avg_path is not None and not avg_path.empty:
+            avg_path = avg_path.sort_index()
+            month_paths[month_int] = avg_path
+            max_days = max(max_days, int(avg_path.index.max()))
 
-    med = plot_df["median_total"].to_numpy(float)
-    p25 = plot_df["p25_total"].to_numpy(float)
-    p75 = plot_df["p75_total"].to_numpy(float)
-    mean = plot_df["mean_total"].to_numpy(float)
-    hit = plot_df["hit_rate"].to_numpy(float)
-    downside = plot_df["downside_freq"].to_numpy(float)
-
-    fig = plt.figure(figsize=(18, 9.6), dpi=220, facecolor=BACKGROUND)
-    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[6.2, 1.55], hspace=0.03)
-    ax1 = fig.add_subplot(gs[0], facecolor=BACKGROUND)
-
-    bar_colors = np.where(med >= 0, POS_GREEN, NEG_RED)
-
-    ax1.bar(
-        x,
-        med,
-        width=0.78,
-        color=bar_colors,
-        edgecolor="#111111",
-        linewidth=1.0,
-        alpha=0.95,
-        zorder=2,
-        label="Median return",
-    )
-
-    yerr = np.vstack([med - p25, p75 - med])
-    ax1.errorbar(
-        x,
-        med,
-        yerr=yerr,
-        fmt="none",
-        ecolor="#111111",
-        elinewidth=1.6,
-        alpha=0.75,
-        capsize=6,
-        zorder=3,
-        label="IQR",
-    )
-
-    ax1.scatter(
-        x,
-        mean,
-        marker="D",
-        s=72,
-        color="black",
-        zorder=4,
-        label="Mean",
-    )
-
-    ax1.axhline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
-    ax1.set_xticks(x, labels)
-    ax1.tick_params(axis="x", labelsize=13)
-    ax1.tick_params(axis="y", labelsize=13)
-    ax1.set_ylabel("Return (%)", weight="bold", fontsize=15)
-    ax1.yaxis.set_major_locator(MaxNLocator(nbins=8))
-    ax1.yaxis.set_major_formatter(PercentFormatter(xmax=100))
-    ax1.grid(axis="y", linestyle="--", color="#d9d9d9", linewidth=0.75, alpha=0.9, zorder=1)
-
-    ax2 = ax1.twinx()
-    ax2.scatter(x, hit, marker="o", s=92, color="#333333", zorder=4, label="Hit rate")
-    ax2.set_ylabel("Hit rate of positive returns", weight="bold", fontsize=15)
-    ax2.tick_params(axis="y", labelsize=13)
-    ax2.set_ylim(0, 100)
-    ax2.yaxis.set_major_locator(MaxNLocator(nbins=11, integer=True))
-    ax2.yaxis.set_major_formatter(PercentFormatter(xmax=100))
-
-    handles1, labels1 = ax1.get_legend_handles_labels()
-    ax1.legend(handles1, labels1, loc="upper left", frameon=False, fontsize=12)
-
-    ax_tbl = fig.add_subplot(gs[1])
-    ax_tbl.axis("off")
-
-    row_labels = ["Median %", "P25 %", "P75 %", "Hit %", "Downside %"]
-    cell_vals = [med, p25, p75, hit, downside]
-
-    cell_txt = []
-    for i, row in enumerate(cell_vals):
-        if row_labels[i] in ["Hit %", "Downside %"]:
-            cell_txt.append([f"{v:.0f}%" if pd.notna(v) else "n/a" for v in row])
-        else:
-            cell_txt.append([_format_pct(v) for v in row])
-
-    color_basis = [med, p25, p75, hit - 50, -downside]
-    cell_colors = _cell_colors([list(row) for row in color_basis])
-
-    table = ax_tbl.table(
-        cellText=cell_txt,
-        rowLabels=row_labels,
-        colLabels=labels,
-        loc="center",
-        cellLoc="center",
-        rowLoc="center",
-        bbox=[0.035, 0.15, 0.93, 0.72],
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(10.5)
-    table.scale(1.0, 1.45)
-
-    for (row, col), cell in table.get_celld().items():
-        if row == 0:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
-        elif col == -1:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
-        else:
-            cell.set_facecolor(cell_colors[row - 1][col])
-            cell.set_edgecolor("black")
-            cell.set_linewidth(0.85)
-
-    fig.suptitle(title, fontsize=24, weight="bold", y=0.965)
-    fig.subplots_adjust(left=0.055, right=0.94, top=0.88, bottom=0.09)
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
-    plt.close(fig)
-    buf.seek(0)
-    return buf
+    return month_paths, max_days
 
 
-def build_regime_comparison_table(
-    base_filtered: pd.DataFrame,
-    selected_month: int,
-) -> pd.DataFrame:
-    if base_filtered.empty:
-        return pd.DataFrame()
+def plot_3d_seasonality_ribbons(
+    prices: pd.Series,
+    filtered_halves: pd.DataFrame,
+    symbol_shown: str,
+) -> go.Figure:
+    month_paths, max_days = build_3d_ribbon_data(prices, filtered_halves)
 
-    month_df = base_filtered[base_filtered["month"] == selected_month].copy()
-    if month_df.empty:
-        return pd.DataFrame()
+    fig = go.Figure()
 
-    rows = []
-
-    def add_row(label: str, sub: pd.DataFrame) -> None:
-        if sub.empty:
-            return
-
-        rows.append(
-            {
-                "Regime": label,
-                "N": int(sub.shape[0]),
-                "Mean": sub["total_ret"].mean(),
-                "Median": sub["total_ret"].median(),
-                "Hit Rate": (sub["total_ret"] > 0).mean() * 100.0,
-                "P25": sub["total_ret"].quantile(0.25),
-                "P75": sub["total_ret"].quantile(0.75),
-                "Worst": sub["total_ret"].min(),
-                "Best": sub["total_ret"].max(),
-                "Downside Freq < -2%": (sub["total_ret"] < -2.0).mean() * 100.0,
-            }
+    if not month_paths:
+        fig.update_layout(
+            title=f"{symbol_shown} | 3D Seasonality Terrain",
+            paper_bgcolor=BACKGROUND,
+            plot_bgcolor=BACKGROUND,
+            margin=dict(l=0, r=0, t=60, b=0),
         )
-
-    add_row("All filtered years", month_df)
-
-    for col in ["fed_regime", "vix_bucket", "teny_trend", "dxy_trend", "regime_cycle"]:
-        if col in month_df.columns:
-            vals = sorted([x for x in month_df[col].dropna().unique() if str(x) != "Unknown"])
-            for val in vals:
-                add_row(str(val), month_df[month_df[col] == val])
-
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-
-    out = out.sort_values(["N", "Median"], ascending=[False, False]).reset_index(drop=True)
-    return out
-
-
-def plot_regime_comparison(regime_table: pd.DataFrame, title: str) -> io.BytesIO:
-    fig = plt.figure(figsize=(15.5, 9.2), dpi=220, facecolor=BACKGROUND)
-    gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[5.6, 2.0], hspace=0.08)
-
-    ax = fig.add_subplot(gs[0], facecolor=BACKGROUND)
-
-    if regime_table.empty:
-        ax.text(0.5, 0.5, "Not enough data for regime comparison", ha="center", va="center", fontsize=12)
-        ax.axis("off")
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor=BACKGROUND)
-        plt.close(fig)
-        buf.seek(0)
-        return buf
-
-    plot_df = regime_table.copy()
-    plot_df = plot_df[plot_df["N"] >= 3].copy()
-    plot_df = plot_df.sort_values("Median", ascending=True).tail(10)
-
-    if plot_df.empty:
-        ax.text(0.5, 0.5, "No regime bucket has at least 3 observations", ha="center", va="center", fontsize=12)
-        ax.axis("off")
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=220, facecolor=BACKGROUND)
-        plt.close(fig)
-        buf.seek(0)
-        return buf
-
-    y = np.arange(len(plot_df))
-    med = plot_df["Median"].to_numpy(float)
-    mean = plot_df["Mean"].to_numpy(float)
-    p25 = plot_df["P25"].to_numpy(float)
-    p75 = plot_df["P75"].to_numpy(float)
-    n_vals = plot_df["N"].to_numpy(int)
-
-    colors = np.where(med >= 0, POS_GREEN, NEG_RED)
-
-    ax.barh(
-        y,
-        med,
-        color=colors,
-        edgecolor="#111111",
-        linewidth=0.85,
-        alpha=0.95,
-        zorder=2,
-    )
-
-    xerr = np.vstack([med - p25, p75 - med])
-    ax.errorbar(
-        med,
-        y,
-        xerr=xerr,
-        fmt="none",
-        ecolor="#111111",
-        elinewidth=1.35,
-        capsize=4,
-        alpha=0.75,
-        zorder=3,
-    )
-
-    ax.scatter(mean, y, marker="D", s=46, color="black", zorder=4)
-
-    ax.axvline(0, color="#9b9b9b", linestyle=":", linewidth=1.0)
-    ax.set_yticks(y, plot_df["Regime"].tolist())
-    ax.set_xlabel("Median return (%) with IQR range", fontsize=11, weight="bold")
-    ax.set_title(title, fontsize=20, weight="bold", pad=10)
-    ax.xaxis.set_major_formatter(PercentFormatter(xmax=100))
-    ax.grid(axis="x", linestyle="--", color="#d9d9d9", linewidth=0.8, alpha=0.9)
-    ax.tick_params(labelsize=10.5)
-
-    for i, v in enumerate(med):
-        ax.text(
-            v + (0.08 if v >= 0 else -0.08),
-            i,
-            f"{v:+.2f}% | N={n_vals[i]}",
-            va="center",
-            ha="left" if v >= 0 else "right",
-            fontsize=9.5,
-            color="#111111",
+        fig.add_annotation(
+            text="Not enough filtered history to build the 3D seasonality terrain.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=16, color="#111111"),
         )
+        return fig
 
-    for sp in ax.spines.values():
-        sp.set_color("#111111")
+    for month_int in range(1, 13):
+        avg_path = month_paths.get(month_int)
+        if avg_path is None or avg_path.empty:
+            continue
 
-    ax_tbl = fig.add_subplot(gs[1])
-    ax_tbl.axis("off")
+        x_vals = np.full(len(avg_path), month_int)
+        y_vals = avg_path.index.astype(int).to_numpy()
+        z_vals = avg_path.values.astype(float)
 
-    table_df = plot_df.sort_values("Median", ascending=False).head(8).copy()
-    col_labels = table_df["Regime"].tolist()
+        end_val = float(avg_path.iloc[-1])
+        line_color = POS_GREEN if end_val >= 0 else NEG_RED
 
-    rows = [
-        ("N", table_df["N"].tolist()),
-        ("Median", table_df["Median"].tolist()),
-        ("Mean", table_df["Mean"].tolist()),
-        ("Hit %", table_df["Hit Rate"].tolist()),
-        ("Worst", table_df["Worst"].tolist()),
-    ]
+        custom_month = np.array([MONTH_LABELS[month_int - 1]] * len(avg_path))
 
-    cell_text = []
-    cell_colors = []
-
-    for row_name, vals in rows:
-        if row_name == "N":
-            cell_text.append([str(int(v)) for v in vals])
-            cell_colors.append([LIGHT_GREY for _ in vals])
-        elif row_name == "Hit %":
-            cell_text.append([f"{v:.0f}%" if pd.notna(v) else "n/a" for v in vals])
-            cell_colors.append([LIGHT_GREEN if v >= 50 else LIGHT_RED for v in vals])
-        else:
-            cell_text.append([_format_pct(v) for v in vals])
-            cell_colors.append(
-                [
-                    LIGHT_GREEN if pd.notna(v) and v > 0 else LIGHT_RED if pd.notna(v) and v < 0 else LIGHT_GREY
-                    for v in vals
-                ]
+        fig.add_trace(
+            go.Scatter3d(
+                x=x_vals,
+                y=y_vals,
+                z=z_vals,
+                mode="lines",
+                line=dict(color=line_color, width=8),
+                name=MONTH_LABELS[month_int - 1],
+                customdata=custom_month,
+                hovertemplate=(
+                    "<b>%{customdata}</b><br>"
+                    "Trading day: %{y}<br>"
+                    "Avg return: %{z:.2f}%<extra></extra>"
+                ),
+                showlegend=False,
             )
+        )
 
-    table = ax_tbl.table(
-        cellText=cell_text,
-        rowLabels=[r[0] for r in rows],
-        colLabels=col_labels,
-        loc="center",
-        cellLoc="center",
-        rowLoc="center",
-        bbox=[0.02, 0.12, 0.96, 0.78],
+        fig.add_trace(
+            go.Scatter3d(
+                x=[month_int],
+                y=[int(y_vals[-1])],
+                z=[float(z_vals[-1])],
+                mode="markers",
+                marker=dict(size=4, color=line_color),
+                hovertemplate=(
+                    f"<b>{MONTH_LABELS[month_int - 1]}</b><br>"
+                    f"Month-end avg: {end_val:.2f}%<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
+
+    fig.update_layout(
+        title=dict(
+            text=f"{symbol_shown} | 3D Seasonality Terrain",
+            x=0.01,
+            xanchor="left",
+            font=dict(size=22, color="#111111"),
+        ),
+        paper_bgcolor=BACKGROUND,
+        plot_bgcolor=BACKGROUND,
+        margin=dict(l=0, r=0, t=60, b=0),
+        height=760,
+        scene=dict(
+            bgcolor=BACKGROUND,
+            xaxis=dict(
+                title="Month",
+                tickmode="array",
+                tickvals=list(range(1, 13)),
+                ticktext=MONTH_LABELS,
+                backgroundcolor=BACKGROUND,
+                gridcolor="#dedede",
+                zerolinecolor="#cfcfcf",
+                showbackground=True,
+                showspikes=False,
+            ),
+            yaxis=dict(
+                title="Trading day",
+                range=[0, max_days + 1],
+                backgroundcolor=BACKGROUND,
+                gridcolor="#dedede",
+                zerolinecolor="#cfcfcf",
+                showbackground=True,
+                showspikes=False,
+            ),
+            zaxis=dict(
+                title="Avg return from prior month-end (%)",
+                backgroundcolor=BACKGROUND,
+                gridcolor="#dedede",
+                zerolinecolor="#cfcfcf",
+                showbackground=True,
+                showspikes=False,
+                ticksuffix="%",
+            ),
+            camera=dict(
+                eye=dict(x=1.55, y=1.45, z=0.95)
+            ),
+            aspectmode="manual",
+            aspectratio=dict(x=1.1, y=1.55, z=0.85),
+        ),
     )
 
-    table.auto_set_font_size(False)
-    table.set_fontsize(9.5)
-    table.scale(1.0, 1.35)
-
-    for (row, col), cell in table.get_celld().items():
-        if row == 0:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
-        elif col == -1:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor("#f0f0f0")
-        else:
-            cell.set_facecolor(cell_colors[row - 1][col])
-            cell.set_edgecolor("black")
-            cell.set_linewidth(0.75)
-
-    fig.subplots_adjust(left=0.20, right=0.96, top=0.91, bottom=0.08)
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=220, facecolor=BACKGROUND)
-    plt.close(fig)
-    buf.seek(0)
-    return buf
+    return fig
 
 
 # =========================
@@ -1586,7 +1395,7 @@ with st.sidebar:
         - Month-level return tendencies after explicit sample filtering.
         - First-half versus second-half contribution splits within each month.
         - Intra-month average path versus current-year behavior when available.
-        - Regime-conditioned month behavior using Fed, VIX, 10Y, and dollar context.
+        - A 3D seasonality terrain showing the average path of each month across the calendar year.
 
         **Data source**
         - Historical daily market price series from Yahoo Finance where available.
@@ -1802,44 +1611,18 @@ st.caption(extra_caption)
 
 
 # =========================
-# ADDITIONAL OUTPUTS
+# NEW OUTPUT 3
 # =========================
 
 st.markdown("---")
-st.subheader("Additional Decision Views")
+st.subheader("3D Seasonality Terrain")
 
-st.markdown(
-    """
-    <div class="adfm-small-note">
-    These charts sit below the original two outputs and are meant to make the seasonality read more robust and easier to interpret.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.markdown("### Median and IQR Seasonality")
-
-median_buf = plot_median_iqr_seasonality(
-    stats,
-    f"{used_symbol} Median Seasonality With IQR ({chart_title})",
-)
-st.image(median_buf, use_container_width=True)
+terrain_fig = plot_3d_seasonality_ribbons(prices, filtered, used_symbol)
+st.plotly_chart(terrain_fig, use_container_width=True, config={"displayModeBar": False})
 
 st.caption(
-    "Bars show median monthly return, whiskers show the interquartile range, black diamonds show mean return, and the embedded table shows the month-level distribution."
-)
-
-st.markdown(f"### Regime Comparison for {MONTH_LABELS[month_choice - 1]}")
-
-regime_comp = build_regime_comparison_table(filtered, month_choice)
-regime_buf = plot_regime_comparison(
-    regime_comp,
-    f"{used_symbol} {MONTH_LABELS[month_choice - 1]} | Regime-Conditioned Return Profile",
-)
-st.image(regime_buf, use_container_width=True)
-
-st.caption(
-    "Bars show median return by regime bucket. Whiskers show the interquartile range, black diamonds show mean return, and the table below the chart keeps the key regime stats in image format."
+    "Each ribbon is the average cumulative return path for one month, measured from the prior month-end. "
+    "Green ribbons finish positive on average, red ribbons finish negative on average. Rotate the chart to see where strength or weakness tends to cluster across the calendar."
 )
 
 
