@@ -1,5 +1,4 @@
 import datetime as dt
-import html
 import json
 import re
 import time
@@ -24,6 +23,7 @@ st.set_page_config(
     page_title="Volume Regime Explorer",
     layout="wide",
 )
+
 
 # =============================================================================
 # CONSTANTS
@@ -63,15 +63,12 @@ US_MARKET_HOLIDAYS_STATIC = [
 PASTEL_GREEN = "#52b788"
 PASTEL_RED = "#e85d5d"
 PASTEL_GREY = "#8b949e"
-DARK_TEXT = "#111827"
-MID_TEXT = "#4b5563"
-LIGHT_BORDER = "#e5e7eb"
 AMBER = "#f59e0b"
 BLUE = "#2563eb"
 
 
 # =============================================================================
-# STYLE
+# STREAMLIT STYLE
 # =============================================================================
 
 st.markdown(
@@ -90,158 +87,25 @@ st.markdown(
             border-radius: 14px;
         }
 
-        .adfm-title-row {
-            display: flex;
-            align-items: flex-end;
-            justify-content: space-between;
-            gap: 1rem;
-            margin-bottom: 0.25rem;
+        div[data-testid="stMetricValue"] {
+            font-size: 1.25rem;
         }
 
-        .adfm-title {
-            font-size: 2.0rem;
-            font-weight: 760;
-            letter-spacing: -0.04em;
-            color: #111827;
-            margin: 0;
-        }
-
-        .adfm-caption {
-            font-size: 0.95rem;
-            color: #6b7280;
-            margin-top: 0.25rem;
-            margin-bottom: 1.0rem;
-        }
-
-        .adfm-card-grid {
-            display: grid;
-            grid-template-columns: repeat(6, minmax(120px, 1fr));
-            gap: 10px;
-            margin: 0.65rem 0 1.0rem 0;
-        }
-
-        .adfm-card {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            padding: 0.72rem 0.82rem;
-            min-height: 76px;
-        }
-
-        .adfm-card-label {
-            color: #6b7280;
-            font-size: 0.74rem;
-            font-weight: 650;
-            letter-spacing: 0.02em;
-            text-transform: uppercase;
-            margin-bottom: 0.22rem;
-        }
-
-        .adfm-card-value {
-            color: #111827;
-            font-size: 1.05rem;
-            font-weight: 760;
-            letter-spacing: -0.02em;
-            white-space: nowrap;
-        }
-
-        .adfm-card-sub {
-            color: #6b7280;
+        div[data-testid="stMetricLabel"] {
             font-size: 0.78rem;
-            margin-top: 0.15rem;
-            white-space: nowrap;
-        }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 0.26rem 0.50rem;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 720;
-            line-height: 1.0;
-            white-space: nowrap;
-        }
-
-        .table-wrap {
-            border: 1px solid #e5e7eb;
-            border-radius: 18px;
-            overflow: hidden;
-            background: #ffffff;
-            margin-top: 0.45rem;
-        }
-
-        .adfm-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.84rem;
-        }
-
-        .adfm-table thead th {
-            background: #f9fafb;
-            color: #4b5563;
-            font-weight: 760;
-            text-align: right;
-            padding: 0.70rem 0.75rem;
-            border-bottom: 1px solid #e5e7eb;
-            white-space: nowrap;
-        }
-
-        .adfm-table thead th.left {
-            text-align: left;
-        }
-
-        .adfm-table tbody td {
-            padding: 0.68rem 0.75rem;
-            border-bottom: 1px solid #f1f5f9;
-            color: #111827;
-            text-align: right;
-            white-space: nowrap;
-        }
-
-        .adfm-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-
-        .adfm-table tbody tr:hover td {
-            background: #fafafa;
-        }
-
-        .adfm-table tbody td.left {
-            text-align: left;
-        }
-
-        .num-pos {
-            color: #15803d !important;
-            font-weight: 720;
-        }
-
-        .num-neg {
-            color: #b91c1c !important;
-            font-weight: 720;
-        }
-
-        .num-neutral {
-            color: #374151 !important;
-            font-weight: 650;
+            color: #6b7280;
         }
 
         .small-note {
             color: #6b7280;
-            font-size: 0.82rem;
-            margin-top: 0.35rem;
+            font-size: 0.83rem;
         }
 
-        @media (max-width: 1100px) {
-            .adfm-card-grid {
-                grid-template-columns: repeat(3, minmax(120px, 1fr));
-            }
-        }
-
-        @media (max-width: 700px) {
-            .adfm-card-grid {
-                grid-template-columns: repeat(2, minmax(120px, 1fr));
-            }
+        .section-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-top: 0.75rem;
+            margin-bottom: 0.35rem;
         }
     </style>
     """,
@@ -275,10 +139,12 @@ def current_market_date() -> pd.Timestamp:
 
 def to_unix_seconds(ts: pd.Timestamp) -> int:
     t = pd.Timestamp(ts)
+
     if t.tzinfo is None:
         t = t.tz_localize("UTC")
     else:
         t = t.tz_convert("UTC")
+
     return int(t.timestamp())
 
 
@@ -296,6 +162,7 @@ def normalize_dt_index(df: pd.DataFrame) -> pd.DataFrame:
     out.index = pd.DatetimeIndex(out.index).tz_localize(None).normalize()
     out = out.sort_index()
     out = out[~out.index.duplicated(keep="last")].copy()
+
     return out
 
 
@@ -328,6 +195,7 @@ def fmt_price(x: Optional[float]) -> str:
 def fmt_pct(x: Optional[float], digits: int = 2, signed: bool = True) -> str:
     if x is None or not np.isfinite(x):
         return "N/A"
+
     prefix = "+" if signed and x > 0 else ""
     return f"{prefix}{x:.{digits}f}%"
 
@@ -357,16 +225,6 @@ def fmt_volume_value(x: Optional[float], vol_label: str) -> str:
     return fmt_large_number(x)
 
 
-def value_class(x: Optional[float]) -> str:
-    if x is None or not np.isfinite(x):
-        return "num-neutral"
-    if x > 0:
-        return "num-pos"
-    if x < 0:
-        return "num-neg"
-    return "num-neutral"
-
-
 def request_text(url: str, timeout: int = 20, retries: int = 3) -> str:
     last_err = None
 
@@ -384,7 +242,7 @@ def request_text(url: str, timeout: int = 20, retries: int = 3) -> str:
 
 
 # =============================================================================
-# MARKET CALENDAR HELPERS
+# MARKET CALENDAR
 # =============================================================================
 
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
@@ -406,10 +264,12 @@ def get_holiday_values(start_date_str: str, end_date_str: str) -> list:
 
     except Exception:
         static = []
+
         for x in US_MARKET_HOLIDAYS_STATIC:
             ts = pd.Timestamp(x).normalize()
             if start_date <= ts <= end_date:
                 static.append(ts.strftime("%Y-%m-%d"))
+
         return static
 
 
@@ -436,12 +296,11 @@ def is_market_open_now() -> bool:
             return False
 
         today_str = pd.Timestamp(n.date()).strftime("%Y-%m-%d")
+
         if today_str in US_MARKET_HOLIDAYS_STATIC:
             return False
 
-        open_time = dt.time(9, 30)
-        close_time = dt.time(16, 0)
-        return open_time <= n.time() <= close_time
+        return dt.time(9, 30) <= n.time() <= dt.time(16, 0)
 
 
 # =============================================================================
@@ -460,6 +319,7 @@ def load_local_cache(symbol: str, start_date: pd.Timestamp, end_date: pd.Timesta
 
     try:
         df = pd.read_csv(path, parse_dates=["Date"])
+
         if df.empty or "Date" not in df.columns:
             return None
 
@@ -468,6 +328,7 @@ def load_local_cache(symbol: str, start_date: pd.Timestamp, end_date: pd.Timesta
 
         needed = ["Open", "High", "Low", "Close", "Volume"]
         missing = [c for c in needed if c not in df.columns]
+
         if missing:
             return None
 
@@ -615,9 +476,10 @@ def fetch_ohlcv(symbol: str, start_date_str: str, end_date_str: str) -> Tuple[pd
         errors.append(f"yfinance: {e}")
 
     cached = load_local_cache(symbol, start_date, end_date)
+
     if cached is not None and not cached.empty:
         cache_mtime = dt.datetime.fromtimestamp(cache_path_for_symbol(symbol).stat().st_mtime)
-        source = f"Local cache, saved {cache_mtime.strftime('%Y-%m-%d %H:%M')}"
+        source = f"Local cache saved {cache_mtime.strftime('%Y-%m-%d %H:%M')}"
         return cached, source
 
     raise RuntimeError(" | ".join(errors))
@@ -728,7 +590,7 @@ def classify_setup(row: pd.Series, high_cutoff: float, low_cutoff: float) -> str
     return "Normal"
 
 
-def setup_color(setup: str, ret_1d: Optional[float] = None, close_location: Optional[float] = None) -> str:
+def setup_color(setup: str, ret_1d: Optional[float] = None) -> str:
     setup = str(setup)
 
     constructive = {
@@ -774,34 +636,6 @@ def setup_color(setup: str, ret_1d: Optional[float] = None, close_location: Opti
             return PASTEL_RED
 
     return PASTEL_GREY
-
-
-def setup_badge_html(setup: str) -> str:
-    color = setup_color(setup)
-    safe = html.escape(str(setup))
-
-    if color == PASTEL_GREEN:
-        bg = "rgba(82,183,136,0.14)"
-        fg = "#166534"
-        border = "rgba(82,183,136,0.32)"
-    elif color == PASTEL_RED:
-        bg = "rgba(232,93,93,0.14)"
-        fg = "#991b1b"
-        border = "rgba(232,93,93,0.32)"
-    elif color == AMBER:
-        bg = "rgba(245,158,11,0.15)"
-        fg = "#92400e"
-        border = "rgba(245,158,11,0.34)"
-    else:
-        bg = "rgba(139,148,158,0.14)"
-        fg = "#374151"
-        border = "rgba(139,148,158,0.28)"
-
-    return (
-        f"<span class='badge' "
-        f"style='background:{bg}; color:{fg}; border:1px solid {border};'>"
-        f"{safe}</span>"
-    )
 
 
 def compute_forward_outcomes(df: pd.DataFrame, horizons: Tuple[int, ...] = (5, 10, 20, 63)) -> pd.DataFrame:
@@ -860,6 +694,7 @@ def compute_volume_framework(
     else:
         if volume_mode == "Turnover %":
             turnover_fallback = True
+
         out["Volume_Display"] = out["Volume"].astype(float)
         vol_label = "Volume (shares)"
 
@@ -941,6 +776,7 @@ def volume_bar_color(row: pd.Series) -> str:
                 return "rgba(82,183,136,0.72)"
             if ret < 0 or close_loc < 0.45:
                 return "rgba(232,93,93,0.72)"
+
         return "rgba(245,158,11,0.68)"
 
     if state == "Quiet":
@@ -1008,7 +844,7 @@ def build_chart(
 
     if not events.empty:
         marker_colors = [
-            setup_color(row["Setup"], row.get("Ret_1D", np.nan), row.get("Close_Location", np.nan))
+            setup_color(row["Setup"], row.get("Ret_1D", np.nan))
             for _, row in events.iterrows()
         ]
 
@@ -1189,97 +1025,8 @@ def build_chart(
 
 
 # =============================================================================
-# TABLE RENDERING
+# NATIVE STREAMLIT OUTPUTS
 # =============================================================================
-
-def build_recent_events(df: pd.DataFrame, event_filter: str, max_rows: int) -> pd.DataFrame:
-    events = df[df["State"].isin(["Heavy", "Quiet"])].copy()
-
-    if event_filter == "Heavy only":
-        events = events[events["State"] == "Heavy"].copy()
-    elif event_filter == "Quiet only":
-        events = events[events["State"] == "Quiet"].copy()
-
-    if events.empty:
-        return pd.DataFrame()
-
-    return events.tail(max_rows).iloc[::-1].copy()
-
-
-def render_events_table(events: pd.DataFrame, vol_label: str) -> None:
-    if events.empty:
-        st.info("No extreme sessions found in the visible window.")
-        return
-
-    rows_html = []
-
-    for idx, row in events.iterrows():
-        date_str = idx.strftime("%Y-%m-%d")
-        setup = row.get("Setup", "Unavailable")
-
-        ret_1d = row.get("Ret_1D", np.nan)
-        ret_5d = row.get("Ret_5D", np.nan)
-        ret_20d = row.get("Ret_20D", np.nan)
-
-        fwd_5d = row.get("Fwd_5D", np.nan)
-        fwd_20d = row.get("Fwd_20D", np.nan)
-        max_dd_20d = row.get("Max_DD_20D", np.nan)
-
-        vol_ratio = row.get("Volume_Ratio", np.nan)
-        vol_pctl = row.get("Volume_Pctl", np.nan)
-        close_loc = row.get("Close_Location", np.nan)
-
-        vol_display = row.get("Volume_Display", np.nan)
-        volume_text = fmt_volume_value(vol_display, vol_label)
-
-        row_html = f"""
-            <tr>
-                <td class="left">{html.escape(date_str)}</td>
-                <td class="left">{setup_badge_html(setup)}</td>
-                <td>{fmt_price(row.get("Close", np.nan))}</td>
-                <td class="{value_class(ret_1d)}">{fmt_pct(ret_1d)}</td>
-                <td class="{value_class(ret_5d)}">{fmt_pct(ret_5d)}</td>
-                <td class="{value_class(ret_20d)}">{fmt_pct(ret_20d)}</td>
-                <td>{html.escape(volume_text)}</td>
-                <td>{fmt_ratio(vol_ratio)}</td>
-                <td>{fmt_pctl(vol_pctl)}</td>
-                <td>{fmt_pct(close_loc * 100.0, digits=0, signed=False) if np.isfinite(close_loc) else "N/A"}</td>
-                <td class="{value_class(fwd_5d)}">{fmt_pct(fwd_5d)}</td>
-                <td class="{value_class(fwd_20d)}">{fmt_pct(fwd_20d)}</td>
-                <td class="{value_class(max_dd_20d)}">{fmt_pct(max_dd_20d)}</td>
-            </tr>
-        """
-        rows_html.append(row_html)
-
-    table_html = f"""
-        <div class="table-wrap">
-            <table class="adfm-table">
-                <thead>
-                    <tr>
-                        <th class="left">Date</th>
-                        <th class="left">Setup</th>
-                        <th>Close</th>
-                        <th>1D</th>
-                        <th>5D</th>
-                        <th>20D</th>
-                        <th>Volume</th>
-                        <th>Vs Base</th>
-                        <th>Pctl</th>
-                        <th>Close Loc</th>
-                        <th>Fwd 5D</th>
-                        <th>Fwd 20D</th>
-                        <th>Max DD 20D</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {''.join(rows_html)}
-                </tbody>
-            </table>
-        </div>
-    """
-
-    st.markdown(table_html, unsafe_allow_html=True)
-
 
 def render_current_read(
     latest: pd.Series,
@@ -1300,62 +1047,116 @@ def render_current_read(
     vol_text = fmt_volume_value(latest_vol, vol_label)
     base_text = fmt_volume_value(latest_base, vol_label)
 
-    cards = [
-        {
-            "label": "Ticker",
-            "value": symbol,
-            "sub": latest_date.strftime("%Y-%m-%d"),
-        },
-        {
-            "label": "Setup",
-            "value_html": setup_badge_html(latest_setup),
-            "sub": "Latest tape label",
-        },
-        {
-            "label": "Volume Percentile",
-            "value": fmt_pctl(latest_pctl),
-            "sub": f"{vol_text}",
-        },
-        {
-            "label": "Vs Baseline",
-            "value": fmt_ratio(latest_ratio),
-            "sub": f"Baseline {base_text}",
-        },
-        {
-            "label": "Close",
-            "value": fmt_price(latest_close),
-            "sub": f"1D {fmt_pct(latest_ret)}",
-        },
-        {
-            "label": "RVOL 20D",
-            "value": fmt_ratio(latest_rvol20),
-            "sub": html.escape(data_source),
-        },
-    ]
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-    card_html = ['<div class="adfm-card-grid">']
+    c1.metric("Ticker", symbol, latest_date.strftime("%Y-%m-%d"))
+    c2.metric("Setup", latest_setup)
+    c3.metric("Volume percentile", fmt_pctl(latest_pctl), vol_text)
+    c4.metric("Vs baseline", fmt_ratio(latest_ratio), f"Base {base_text}")
+    c5.metric("Close", fmt_price(latest_close), fmt_pct(latest_ret))
+    c6.metric("RVOL 20D", fmt_ratio(latest_rvol20), data_source)
 
-    for card in cards:
-        label = html.escape(card["label"])
-        sub = html.escape(card.get("sub", ""))
 
-        if "value_html" in card:
-            value = card["value_html"]
-        else:
-            value = html.escape(str(card.get("value", "N/A")))
+def build_recent_events(df: pd.DataFrame, event_filter: str, max_rows: int) -> pd.DataFrame:
+    events = df[df["State"].isin(["Heavy", "Quiet"])].copy()
 
-        card_html.append(
-            f"""
-            <div class="adfm-card">
-                <div class="adfm-card-label">{label}</div>
-                <div class="adfm-card-value">{value}</div>
-                <div class="adfm-card-sub">{sub}</div>
-            </div>
-            """
-        )
+    if event_filter == "Heavy only":
+        events = events[events["State"] == "Heavy"].copy()
+    elif event_filter == "Quiet only":
+        events = events[events["State"] == "Quiet"].copy()
 
-    card_html.append("</div>")
-    st.markdown("".join(card_html), unsafe_allow_html=True)
+    if events.empty:
+        return pd.DataFrame()
+
+    return events.tail(max_rows).iloc[::-1].copy()
+
+
+def format_events_for_display(events: pd.DataFrame, vol_label: str) -> pd.DataFrame:
+    if events.empty:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(index=events.index)
+
+    out["Date"] = events.index.strftime("%Y-%m-%d")
+    out["Setup"] = events["Setup"].astype(str)
+    out["Close"] = events["Close"].map(fmt_price)
+    out["1D"] = events["Ret_1D"].map(lambda x: fmt_pct(x))
+    out["5D"] = events["Ret_5D"].map(lambda x: fmt_pct(x))
+    out["20D"] = events["Ret_20D"].map(lambda x: fmt_pct(x))
+    out["Volume"] = events["Volume_Display"].map(lambda x: fmt_volume_value(x, vol_label))
+    out["Vs Base"] = events["Volume_Ratio"].map(fmt_ratio)
+    out["Pctl"] = events["Volume_Pctl"].map(fmt_pctl)
+    out["Close Loc"] = events["Close_Location"].map(lambda x: fmt_pct(x * 100.0, digits=0, signed=False))
+    out["Fwd 5D"] = events["Fwd_5D"].map(lambda x: fmt_pct(x))
+    out["Fwd 20D"] = events["Fwd_20D"].map(lambda x: fmt_pct(x))
+    out["Max DD 20D"] = events["Max_DD_20D"].map(lambda x: fmt_pct(x))
+
+    return out.reset_index(drop=True)
+
+
+def style_events_table(display_df: pd.DataFrame):
+    def color_return_text(value: str) -> str:
+        if not isinstance(value, str):
+            return ""
+
+        if value.startswith("+"):
+            return f"color: {PASTEL_GREEN}; font-weight: 700;"
+        if value.startswith("-"):
+            return f"color: {PASTEL_RED}; font-weight: 700;"
+
+        return "color: #374151;"
+
+    def color_setup_text(value: str) -> str:
+        color = setup_color(value)
+
+        if color == PASTEL_GREEN:
+            return f"color: #166534; font-weight: 700;"
+        if color == PASTEL_RED:
+            return f"color: #991b1b; font-weight: 700;"
+        if color == AMBER:
+            return f"color: #92400e; font-weight: 700;"
+
+        return "color: #374151; font-weight: 700;"
+
+    styled = display_df.style
+
+    return_cols = ["1D", "5D", "20D", "Fwd 5D", "Fwd 20D", "Max DD 20D"]
+    return_cols = [c for c in return_cols if c in display_df.columns]
+
+    styled = styled.map(color_return_text, subset=return_cols)
+
+    if "Setup" in display_df.columns:
+        styled = styled.map(color_setup_text, subset=["Setup"])
+
+    styled = styled.set_properties(
+        **{
+            "font-size": "13px",
+            "white-space": "nowrap",
+        }
+    )
+
+    styled = styled.set_table_styles(
+        [
+            {
+                "selector": "th",
+                "props": [
+                    ("font-size", "12px"),
+                    ("font-weight", "700"),
+                    ("color", "#4b5563"),
+                    ("background-color", "#f9fafb"),
+                    ("border-bottom", "1px solid #e5e7eb"),
+                ],
+            },
+            {
+                "selector": "td",
+                "props": [
+                    ("border-bottom", "1px solid #f1f5f9"),
+                ],
+            },
+        ]
+    )
+
+    return styled
 
 
 # =============================================================================
@@ -1465,19 +1266,8 @@ with st.sidebar:
 # TITLE
 # =============================================================================
 
-st.markdown(
-    """
-    <div class="adfm-title-row">
-        <div>
-            <h1 class="adfm-title">Volume Regime Explorer</h1>
-            <div class="adfm-caption">
-                Tape participation, relative volume, and forward outcomes around extreme sessions.
-            </div>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+st.title("Volume Regime Explorer")
+st.caption("Tape participation, relative volume, and forward outcomes around extreme sessions.")
 
 
 # =============================================================================
@@ -1573,7 +1363,7 @@ render_current_read(
 
 if incomplete_session_excluded:
     st.caption(
-        "Current NYSE session appears to be open, so today's incomplete daily volume row was excluded from the signal."
+        "Current NYSE session appears open, so today's incomplete daily volume row was excluded from the signal."
     )
 
 if turnover_fallback:
@@ -1583,7 +1373,7 @@ if turnover_fallback:
 
 
 # =============================================================================
-# MAIN CHART
+# CHART
 # =============================================================================
 
 fig = build_chart(
@@ -1622,6 +1412,17 @@ events = build_recent_events(
     max_rows=max_event_rows,
 )
 
-render_events_table(events, vol_label=vol_label)
+if events.empty:
+    st.info("No extreme sessions found in the visible window.")
+else:
+    display_events = format_events_for_display(events, vol_label=vol_label)
+    styled_events = style_events_table(display_events)
+
+    st.dataframe(
+        styled_events,
+        use_container_width=True,
+        hide_index=True,
+        height=min(560, 42 + 36 * (len(display_events) + 1)),
+    )
 
 st.caption("© 2026 AD Fund Management LP")
