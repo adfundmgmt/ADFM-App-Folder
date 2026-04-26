@@ -1174,13 +1174,13 @@ def plot_intra_month_curve(
 
 
 # =========================
-# NEW 3D PLOTLY CHART
+# NEW 3D WATERFALL TERRAIN
 # =========================
 
-def build_3d_ribbon_data(
+def build_3d_month_matrix(
     prices: pd.Series,
     filtered_halves: pd.DataFrame,
-) -> Tuple[Dict[int, pd.Series], int]:
+) -> Tuple[pd.DataFrame, int, float]:
     month_paths: Dict[int, pd.Series] = {}
     max_days = 0
 
@@ -1191,24 +1191,56 @@ def build_3d_ribbon_data(
             month_paths[month_int] = avg_path
             max_days = max(max_days, int(avg_path.index.max()))
 
-    return month_paths, max_days
+    if not month_paths:
+        return pd.DataFrame(), 0, 0.0
+
+    full_idx = pd.RangeIndex(0, max_days + 1)
+    matrix = pd.DataFrame(index=full_idx)
+
+    for month_int in range(1, 13):
+        path = month_paths.get(month_int)
+        if path is None or path.empty:
+            matrix[month_int] = np.nan
+        else:
+            matrix[month_int] = path.reindex(full_idx).ffill()
+
+    finite_vals = matrix.to_numpy(dtype=float)
+    finite_vals = finite_vals[np.isfinite(finite_vals)]
+
+    if finite_vals.size == 0:
+        z_abs = 1.0
+    else:
+        z_abs = float(max(abs(np.nanmin(finite_vals)), abs(np.nanmax(finite_vals)), 1.0))
+
+    return matrix, max_days, z_abs
 
 
-def plot_3d_seasonality_ribbons(
+def _seasonality_colorscale() -> List[List[Any]]:
+    return [
+        [0.00, "#b83232"],
+        [0.35, NEG_RED],
+        [0.50, "#f4f4f1"],
+        [0.65, POS_GREEN],
+        [1.00, "#247a4a"],
+    ]
+
+
+def plot_3d_seasonality_terrain(
     prices: pd.Series,
     filtered_halves: pd.DataFrame,
     symbol_shown: str,
+    selected_month: int,
 ) -> go.Figure:
-    month_paths, max_days = build_3d_ribbon_data(prices, filtered_halves)
+    matrix, max_days, z_abs = build_3d_month_matrix(prices, filtered_halves)
 
     fig = go.Figure()
 
-    if not month_paths:
+    if matrix.empty:
         fig.update_layout(
-            title=f"{symbol_shown} | 3D Seasonality Terrain",
             paper_bgcolor=BACKGROUND,
             plot_bgcolor=BACKGROUND,
-            margin=dict(l=0, r=0, t=60, b=0),
+            margin=dict(l=0, r=0, t=18, b=0),
+            height=760,
         )
         fig.add_annotation(
             text="Not enough filtered history to build the 3D seasonality terrain.",
@@ -1221,32 +1253,117 @@ def plot_3d_seasonality_ribbons(
         )
         return fig
 
+    colorscale = _seasonality_colorscale()
+
+    days = matrix.index.to_numpy(dtype=float)
+    months = np.arange(1, 13, dtype=float)
+
+    x_grid, y_grid = np.meshgrid(days, months)
+    z_values = matrix.T.to_numpy(dtype=float)
+
+    finite_vals = z_values[np.isfinite(z_values)]
+    z_min = float(np.nanmin(finite_vals)) if finite_vals.size else -1.0
+    z_floor = min(z_min - 0.75, -1.0)
+
+    floor_z = np.full_like(z_values, z_floor, dtype=float)
+
+    fig.add_trace(
+        go.Surface(
+            x=x_grid,
+            y=y_grid,
+            z=floor_z,
+            surfacecolor=z_values,
+            colorscale=colorscale,
+            cmin=-z_abs,
+            cmax=z_abs,
+            opacity=0.78,
+            showscale=True,
+            colorbar=dict(
+                title="Avg return",
+                titleside="right",
+                ticksuffix="%",
+                len=0.62,
+                thickness=13,
+                x=0.98,
+            ),
+            hovertemplate=(
+                "<b>%{customdata}</b><br>"
+                "Trading day: %{x:.0f}<br>"
+                "Avg return: %{surfacecolor:.2f}%<extra></extra>"
+            ),
+            customdata=np.array([[MONTH_LABELS[int(m) - 1] for _ in days] for m in months]),
+            name="Floor heatmap",
+        )
+    )
+
+    zero_z = np.zeros_like(z_values, dtype=float)
+    fig.add_trace(
+        go.Surface(
+            x=x_grid,
+            y=y_grid,
+            z=zero_z,
+            surfacecolor=np.zeros_like(z_values, dtype=float),
+            colorscale=[[0, "#d8d8d8"], [1, "#d8d8d8"]],
+            opacity=0.16,
+            showscale=False,
+            hoverinfo="skip",
+            name="Zero plane",
+        )
+    )
+
+    curtain_width = 0.52
+
     for month_int in range(1, 13):
-        avg_path = month_paths.get(month_int)
-        if avg_path is None or avg_path.empty:
+        path = matrix[month_int].dropna()
+        if path.empty:
             continue
 
-        x_vals = np.full(len(avg_path), month_int)
-        y_vals = avg_path.index.astype(int).to_numpy()
-        z_vals = avg_path.values.astype(float)
+        x_vals = path.index.to_numpy(dtype=float)
+        z_vals = path.to_numpy(dtype=float)
+        y_top = np.full_like(x_vals, month_int - curtain_width / 2.0, dtype=float)
+        y_base = np.full_like(x_vals, month_int + curtain_width / 2.0, dtype=float)
 
-        end_val = float(avg_path.iloc[-1])
-        line_color = POS_GREEN if end_val >= 0 else NEG_RED
+        curtain_x = np.vstack([x_vals, x_vals])
+        curtain_y = np.vstack([y_top, y_base])
+        curtain_z = np.vstack([z_vals, np.zeros_like(z_vals)])
+        curtain_color = np.vstack([z_vals, z_vals])
 
-        custom_month = np.array([MONTH_LABELS[month_int - 1]] * len(avg_path))
+        is_selected = int(month_int) == int(selected_month)
+
+        fig.add_trace(
+            go.Surface(
+                x=curtain_x,
+                y=curtain_y,
+                z=curtain_z,
+                surfacecolor=curtain_color,
+                colorscale=colorscale,
+                cmin=-z_abs,
+                cmax=z_abs,
+                opacity=0.62 if is_selected else 0.43,
+                showscale=False,
+                hovertemplate=(
+                    f"<b>{MONTH_LABELS[month_int - 1]}</b><br>"
+                    "Trading day: %{x:.0f}<br>"
+                    "Avg return: %{z:.2f}%<extra></extra>"
+                ),
+                name=MONTH_LABELS[month_int - 1],
+            )
+        )
+
+        line_color = "#111111" if is_selected else (POS_GREEN if float(path.iloc[-1]) >= 0 else NEG_RED)
+        line_width = 11 if is_selected else 6
 
         fig.add_trace(
             go.Scatter3d(
                 x=x_vals,
-                y=y_vals,
+                y=np.full_like(x_vals, month_int, dtype=float),
                 z=z_vals,
                 mode="lines",
-                line=dict(color=line_color, width=8),
+                line=dict(color=line_color, width=line_width),
                 name=MONTH_LABELS[month_int - 1],
-                customdata=custom_month,
                 hovertemplate=(
-                    "<b>%{customdata}</b><br>"
-                    "Trading day: %{y}<br>"
+                    f"<b>{MONTH_LABELS[month_int - 1]}</b><br>"
+                    "Trading day: %{x:.0f}<br>"
                     "Avg return: %{z:.2f}%<extra></extra>"
                 ),
                 showlegend=False,
@@ -1255,66 +1372,87 @@ def plot_3d_seasonality_ribbons(
 
         fig.add_trace(
             go.Scatter3d(
-                x=[month_int],
-                y=[int(y_vals[-1])],
+                x=[float(x_vals[-1])],
+                y=[float(month_int)],
                 z=[float(z_vals[-1])],
                 mode="markers",
-                marker=dict(size=4, color=line_color),
+                marker=dict(
+                    size=5.5 if is_selected else 4,
+                    color=line_color,
+                    symbol="circle",
+                ),
                 hovertemplate=(
                     f"<b>{MONTH_LABELS[month_int - 1]}</b><br>"
-                    f"Month-end avg: {end_val:.2f}%<extra></extra>"
+                    f"Month-end avg: {float(z_vals[-1]):+.2f}%<extra></extra>"
                 ),
                 showlegend=False,
             )
         )
 
+    selected_path = matrix[selected_month].dropna() if selected_month in matrix.columns else pd.Series(dtype=float)
+    selected_note = ""
+    if not selected_path.empty:
+        selected_note = (
+            f"Selected month: {MONTH_LABELS[selected_month - 1]} | "
+            f"Avg month-end: {float(selected_path.iloc[-1]):+.2f}%"
+        )
+
     fig.update_layout(
+        paper_bgcolor=BACKGROUND,
+        plot_bgcolor=BACKGROUND,
+        height=780,
+        margin=dict(l=0, r=0, t=28, b=0),
         title=dict(
-            text=f"{symbol_shown} | 3D Seasonality Terrain",
+            text=f"{symbol_shown} | 3D Seasonal Waterfall Terrain<br><sup>{selected_note}</sup>",
             x=0.01,
             xanchor="left",
             font=dict(size=22, color="#111111"),
         ),
-        paper_bgcolor=BACKGROUND,
-        plot_bgcolor=BACKGROUND,
-        margin=dict(l=0, r=0, t=60, b=0),
-        height=760,
         scene=dict(
             bgcolor=BACKGROUND,
             xaxis=dict(
+                title="Trading day",
+                range=[0, max_days + 1],
+                backgroundcolor=BACKGROUND,
+                gridcolor="#dddddd",
+                zerolinecolor="#bbbbbb",
+                showbackground=True,
+                showspikes=False,
+                tickfont=dict(size=11),
+                titlefont=dict(size=12),
+            ),
+            yaxis=dict(
                 title="Month",
                 tickmode="array",
                 tickvals=list(range(1, 13)),
                 ticktext=MONTH_LABELS,
+                autorange="reversed",
                 backgroundcolor=BACKGROUND,
-                gridcolor="#dedede",
-                zerolinecolor="#cfcfcf",
+                gridcolor="#dddddd",
+                zerolinecolor="#bbbbbb",
                 showbackground=True,
                 showspikes=False,
-            ),
-            yaxis=dict(
-                title="Trading day",
-                range=[0, max_days + 1],
-                backgroundcolor=BACKGROUND,
-                gridcolor="#dedede",
-                zerolinecolor="#cfcfcf",
-                showbackground=True,
-                showspikes=False,
+                tickfont=dict(size=11),
+                titlefont=dict(size=12),
             ),
             zaxis=dict(
                 title="Avg return from prior month-end (%)",
+                range=[z_floor, z_abs * 1.12],
                 backgroundcolor=BACKGROUND,
-                gridcolor="#dedede",
-                zerolinecolor="#cfcfcf",
+                gridcolor="#dddddd",
+                zerolinecolor="#bbbbbb",
                 showbackground=True,
                 showspikes=False,
                 ticksuffix="%",
+                tickfont=dict(size=11),
+                titlefont=dict(size=12),
             ),
             camera=dict(
-                eye=dict(x=1.55, y=1.45, z=0.95)
+                eye=dict(x=1.55, y=-1.95, z=1.05),
+                center=dict(x=0.02, y=0.02, z=-0.05),
             ),
             aspectmode="manual",
-            aspectratio=dict(x=1.1, y=1.55, z=0.85),
+            aspectratio=dict(x=1.65, y=1.10, z=0.74),
         ),
     )
 
@@ -1395,7 +1533,7 @@ with st.sidebar:
         - Month-level return tendencies after explicit sample filtering.
         - First-half versus second-half contribution splits within each month.
         - Intra-month average path versus current-year behavior when available.
-        - A 3D seasonality terrain showing the average path of each month across the calendar year.
+        - A 3D seasonal waterfall terrain showing how average monthly paths behave across the calendar.
 
         **Data source**
         - Historical daily market price series from Yahoo Finance where available.
@@ -1615,14 +1753,24 @@ st.caption(extra_caption)
 # =========================
 
 st.markdown("---")
-st.subheader("3D Seasonality Terrain")
+st.subheader("3D Seasonal Waterfall Terrain")
 
-terrain_fig = plot_3d_seasonality_ribbons(prices, filtered, used_symbol)
-st.plotly_chart(terrain_fig, use_container_width=True, config={"displayModeBar": False})
+terrain_fig = plot_3d_seasonality_terrain(
+    prices=prices,
+    filtered_halves=filtered,
+    symbol_shown=used_symbol,
+    selected_month=month_choice,
+)
+
+st.plotly_chart(
+    terrain_fig,
+    use_container_width=True,
+    config={"displayModeBar": False},
+)
 
 st.caption(
-    "Each ribbon is the average cumulative return path for one month, measured from the prior month-end. "
-    "Green ribbons finish positive on average, red ribbons finish negative on average. Rotate the chart to see where strength or weakness tends to cluster across the calendar."
+    "Each monthly curtain shows the average cumulative return path from the prior month-end to each trading day. "
+    "The floor heatmap gives a flat read of the same data, the translucent plane marks zero, and the selected month is highlighted in black."
 )
 
 
