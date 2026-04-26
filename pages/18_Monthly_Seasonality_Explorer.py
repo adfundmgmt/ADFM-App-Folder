@@ -1438,7 +1438,7 @@ def plot_3d_seasonality_terrain(
                 f"Avg month-end: {float(selected_path.iloc[-1]):+.2f}%"
             )
 
-    fig.update_layout(
+     fig.update_layout(
         paper_bgcolor=BACKGROUND,
         plot_bgcolor=BACKGROUND,
         height=780,
@@ -1460,21 +1460,19 @@ def plot_3d_seasonality_terrain(
                 showbackground=True,
                 showspikes=False,
                 tickfont=dict(size=11),
-                titlefont=dict(size=12),
             ),
             yaxis=dict(
                 title="Month",
                 tickmode="array",
                 tickvals=list(range(1, 13)),
                 ticktext=MONTH_LABELS,
-                autorange="reversed",
+                range=[12.5, 0.5],
                 backgroundcolor=BACKGROUND,
                 gridcolor="#dddddd",
                 zerolinecolor="#bbbbbb",
                 showbackground=True,
                 showspikes=False,
                 tickfont=dict(size=11),
-                titlefont=dict(size=12),
             ),
             zaxis=dict(
                 title="Avg return from prior month-end (%)",
@@ -1484,9 +1482,7 @@ def plot_3d_seasonality_terrain(
                 zerolinecolor="#bbbbbb",
                 showbackground=True,
                 showspikes=False,
-                ticksuffix="%",
                 tickfont=dict(size=11),
-                titlefont=dict(size=12),
             ),
             camera=dict(
                 eye=dict(x=1.55, y=-1.95, z=1.05),
