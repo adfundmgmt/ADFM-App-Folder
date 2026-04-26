@@ -45,8 +45,7 @@ DEFAULT_HEADERS = {
 
 DEFAULT_SYMBOLS = [
     "QQQ", "SPY", "IWM", "DIA", "TLT",
-    "GLD", "HYG", "SMH", "NVDA", "AMD",
-    "META", "MSFT", "TSLA", "VST", "AXON",
+    "GLD",
 ]
 
 US_MARKET_HOLIDAYS_STATIC = [
