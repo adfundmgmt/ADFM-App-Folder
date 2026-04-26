@@ -1267,7 +1267,7 @@ def plot_3d_seasonality_terrain(
 
     floor_z = np.full_like(z_values, z_floor, dtype=float)
 
-    fig.add_trace(
+        fig.add_trace(
         go.Surface(
             x=x_grid,
             y=y_grid,
@@ -1279,8 +1279,7 @@ def plot_3d_seasonality_terrain(
             opacity=0.78,
             showscale=True,
             colorbar=dict(
-                title="Avg return",
-                titleside="right",
+                title=dict(text="Avg return"),
                 ticksuffix="%",
                 len=0.62,
                 thickness=13,
