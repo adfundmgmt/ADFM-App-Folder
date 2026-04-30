@@ -204,19 +204,16 @@ st.markdown(
         <div class="eyebrow">Analytics Tools</div>
         <div class="title">AD Fund Management</div>
         <div class="subtitle">
-            Home dashboard for quickly finding the right tool before opening it from the sidebar.
+            Home dashboard.
         </div>
         <div class="chip-row">
-            <span class="chip">Fast navigation</span>
-            <span class="chip">Macro + equities + flows</span>
-        </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 
-st.markdown("### Quick launch")
+st.markdown("### Overview")
 
 selected_group = st.segmented_control(
     "Filter by group",
