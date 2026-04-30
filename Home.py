@@ -281,29 +281,6 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True,
-)
-
-all_tools = [tool for tools in TOOL_GROUPS.values() for tool in tools]
-total_tools = len(all_tools)
-available_core_pages = sum(1 for item in CORE_PAGES.values() if Path(item["path"]).exists())
-group_count = len(TOOL_GROUPS)
-
-kpi_cols = st.columns(3)
-with kpi_cols[0]:
-    st.markdown(
-        f'<div class="kpi"><div class="kpi-label">Total tools</div><div class="kpi-value">{total_tools}</div></div>',
-        unsafe_allow_html=True,
-    )
-with kpi_cols[1]:
-    st.markdown(
-        f'<div class="kpi"><div class="kpi-label">Core pages ready</div><div class="kpi-value">{available_core_pages} / {len(CORE_PAGES)}</div></div>',
-        unsafe_allow_html=True,
-    )
-with kpi_cols[2]:
-    st.markdown(
-        f'<div class="kpi"><div class="kpi-label">Tool groups</div><div class="kpi-value">{group_count}</div></div>',
-        unsafe_allow_html=True,
-    )
 
 st.markdown("### Quick launch")
 tool_options = ["All tools"] + list(TOOL_GROUPS.keys())
