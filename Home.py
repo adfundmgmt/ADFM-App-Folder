@@ -134,6 +134,30 @@ st.markdown(
             background: rgba(248, 250, 252, 0.75);
         }
 
+        .kpi {
+            border: 1px solid rgba(120, 120, 120, 0.2);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.72);
+            padding: 0.85rem 0.95rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .kpi-label {
+            font-size: 0.76rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #64748b;
+            font-weight: 700;
+        }
+
+        .kpi-value {
+            font-size: 1.36rem;
+            font-weight: 800;
+            color: #0f172a;
+            line-height: 1.2;
+            margin-top: 0.22rem;
+        }
+
         .panel-title {
             font-size: 0.97rem;
             font-weight: 760;
@@ -180,7 +204,8 @@ st.markdown(
         @media (prefers-color-scheme: dark) {
             .title,
             .panel-title,
-            .section-label {
+            .section-label,
+            .kpi-value {
                 color: #f8fafc;
             }
 
@@ -193,12 +218,14 @@ st.markdown(
             }
 
             .eyebrow,
-            .footer {
+            .footer,
+            .kpi-label {
                 color: #94a3b8;
             }
 
             .hero,
             .panel,
+            .kpi,
             .chip {
                 background: rgba(15, 23, 42, 0.52);
                 border-color: rgba(148, 163, 184, 0.24);
@@ -228,6 +255,50 @@ st.markdown(
 )
 
 all_tools = [tool for tools in TOOL_GROUPS.values() for tool in tools]
+total_tools = len(all_tools)
+available_core_pages = sum(1 for item in CORE_PAGES.values() if Path(item["path"]).exists())
+group_count = len(TOOL_GROUPS)
+
+kpi_cols = st.columns(3)
+with kpi_cols[0]:
+    st.markdown(
+        f'<div class="kpi"><div class="kpi-label">Total tools</div><div class="kpi-value">{total_tools}</div></div>',
+        unsafe_allow_html=True,
+    )
+with kpi_cols[1]:
+    st.markdown(
+        f'<div class="kpi"><div class="kpi-label">Core pages ready</div><div class="kpi-value">{available_core_pages} / {len(CORE_PAGES)}</div></div>',
+        unsafe_allow_html=True,
+    )
+with kpi_cols[2]:
+    st.markdown(
+        f'<div class="kpi"><div class="kpi-label">Tool groups</div><div class="kpi-value">{group_count}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown("### Quick launch")
+tool_options = ["All tools"] + list(TOOL_GROUPS.keys())
+selected_group = st.segmented_control(
+    "Filter by group",
+    options=tool_options,
+    default="All tools",
+    label_visibility="collapsed",
+)
+query = st.text_input("Search tools", placeholder="Try: liquidity, breakout, sentiment...", label_visibility="collapsed")
+
+filtered_tools = all_tools if selected_group == "All tools" else TOOL_GROUPS[selected_group]
+if query:
+    filtered_tools = [tool for tool in filtered_tools if query.lower() in tool.lower()]
+
+if filtered_tools:
+    quick_cols = st.columns(2)
+    for idx, tool in enumerate(filtered_tools):
+        with quick_cols[idx % 2]:
+            st.markdown(f"**{tool}**")
+            st.caption(TOOL_DESCRIPTIONS.get(tool, "Description coming soon."))
+else:
+    st.info("No tools matched your search. Try a shorter keyword.")
+
 
 st.markdown("### Quick launch")
 tool_options = ["All tools"] + list(TOOL_GROUPS.keys())
