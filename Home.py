@@ -1,5 +1,4 @@
 import streamlit as st
-from pathlib import Path
 
 
 st.set_page_config(
@@ -7,26 +6,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-
-
-CORE_PAGES = {
-    "Market Compass": {
-        "path": "pages/3_Weekly_Cross_-_Asset_Compass.py",
-        "description": "Cross-asset regime snapshot to frame risk-on vs risk-off.",
-    },
-    "Liquidity Tracker": {
-        "path": "pages/5_Liquidity_Tracker.py",
-        "description": "Fed balance sheet, RRP, TGA, and broad liquidity pressure.",
-    },
-    "Market Stress": {
-        "path": "pages/4_Market_Stress_Composite.py",
-        "description": "Composite stress read across vol, funding, credit, and breadth.",
-    },
-    "Equity Baskets": {
-        "path": "pages/1_ADFM_Public_Equities_Baskets.py",
-        "description": "Leadership and trend behavior across ADFM equity sleeves.",
-    },
-}
 
 
 TOOL_GROUPS = {
@@ -98,7 +77,7 @@ st.markdown(
         }
 
         .hero {
-            padding: 1.6rem 1.8rem;
+            padding: 1.8rem 2rem;
             border: 1px solid rgba(120, 120, 120, 0.2);
             border-radius: 18px;
             background: linear-gradient(135deg, rgba(59, 130, 246, 0.06), rgba(2, 132, 199, 0.03));
@@ -137,6 +116,22 @@ st.markdown(
             background: rgba(255, 255, 255, 0.72);
             margin-bottom: 0.9rem;
             min-height: 145px;
+        }
+
+        .chip-row {
+            display: flex;
+            gap: 0.45rem;
+            flex-wrap: wrap;
+            margin-top: 0.95rem;
+        }
+
+        .chip {
+            border: 1px solid rgba(100, 116, 139, 0.28);
+            padding: 0.24rem 0.62rem;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            color: #475569;
+            background: rgba(248, 250, 252, 0.75);
         }
 
         .panel-title {
@@ -192,7 +187,8 @@ st.markdown(
             .subtitle,
             .panel-copy,
             .section-copy,
-            .tool-list {
+            .tool-list,
+            .chip {
                 color: #cbd5e1;
             }
 
@@ -202,7 +198,8 @@ st.markdown(
             }
 
             .hero,
-            .panel {
+            .panel,
+            .chip {
                 background: rgba(15, 23, 42, 0.52);
                 border-color: rgba(148, 163, 184, 0.24);
             }
@@ -212,14 +209,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
-def page_link(path: str, label: str) -> None:
-    if Path(path).exists():
-        st.page_link(path, label=label)
-    else:
-        st.caption("Page file not found.")
-
-
 st.markdown(
     """
     <div class="hero">
@@ -228,62 +217,37 @@ st.markdown(
         <div class="subtitle">
             Home dashboard for quickly launching each tool and understanding what it does before you open it.
         </div>
+        <div class="chip-row">
+            <span class="chip">Daily workflow</span>
+            <span class="chip">Fast navigation</span>
+            <span class="chip">Macro + equities + flows</span>
+        </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
+all_tools = [tool for tools in TOOL_GROUPS.values() for tool in tools]
 
-st.markdown('<div class="section-label">Core workflow</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section-copy">Use these four pages in order for a simple, repeatable daily process.</div>',
-    unsafe_allow_html=True,
+st.markdown("### Quick launch")
+tool_options = ["All tools"] + list(TOOL_GROUPS.keys())
+selected_group = st.segmented_control(
+    "Filter by group",
+    options=tool_options,
+    default="All tools",
+    label_visibility="collapsed",
 )
+query = st.text_input("Search tools", placeholder="Try: liquidity, breakout, sentiment...", label_visibility="collapsed")
 
-core_cols = st.columns(4)
-for col, (name, item) in zip(core_cols, CORE_PAGES.items()):
-    with col:
-        st.markdown(
-            f"""
-            <div class="panel">
-                <div class="panel-title">{name}</div>
-                <div class="panel-copy">{item['description']}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        page_link(item["path"], f"Open {name}")
+filtered_tools = all_tools if selected_group == "All tools" else TOOL_GROUPS[selected_group]
+if query:
+    filtered_tools = [tool for tool in filtered_tools if query.lower() in tool.lower()]
 
-
-st.markdown('<div class="section-label">Tool map</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section-copy">Everything in the app grouped by purpose, so you can find the right page fast.</div>',
-    unsafe_allow_html=True,
-)
-
-map_cols = st.columns(2)
-for idx, (group_name, tool_names) in enumerate(TOOL_GROUPS.items()):
-    with map_cols[idx % 2]:
-        tools_html = "".join(
-            f"<li><strong>{tool}:</strong> {TOOL_DESCRIPTIONS.get(tool, 'Description coming soon.')}</li>"
-            for tool in tool_names
-        )
-        st.markdown(
-            f"""
-            <div class="panel">
-                <div class="panel-title">{group_name}</div>
-                <ul class="tool-list">{tools_html}</ul>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-st.markdown(
-    """
-    <div class="footer">
-        Suggested sequence: Regime → Liquidity → Stress → Expression.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+if filtered_tools:
+    quick_cols = st.columns(2)
+    for idx, tool in enumerate(filtered_tools):
+        with quick_cols[idx % 2]:
+            st.markdown(f"**{tool}**")
+            st.caption(TOOL_DESCRIPTIONS.get(tool, "Description coming soon."))
+else:
+    st.info("No tools matched your search. Try a shorter keyword.")
