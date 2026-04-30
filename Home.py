@@ -8,18 +8,36 @@ st.set_page_config(
 )
 
 
+TOOL_ORDER = [
+    "ADFM Public Equities Baskets",
+    "Unusual Options Flows",
+    "Weekly Cross - Asset Compass",
+    "Market Stress Composite",
+    "Liquidity Tracker",
+    "ETF Flows Dashboard",
+    "Factor Momentum Leadership",
+    "VIX Spike Deep Dive",
+    "Hedge Timer",
+    "Sector Breadth and Rotation",
+    "Breakout Scanner",
+    "Technical Chart Explorer",
+    "Ratio Charts",
+    "Cross Asset Volatility Surface",
+    "Fed Speeches Tone Underwriter",
+    "RoW Central Bank Tone Underwriter",
+    "Market Memory Explorer",
+    "Monthly Seasonality Explorer",
+    "Home Value to Rent Ratio",
+    "Volume Based Sentiment Indicator",
+]
+
+
 TOOL_GROUPS = {
-    "Macro + Risk Regime": [
-        "Weekly Cross - Asset Compass",
-        "Market Stress Composite",
-        "Liquidity Tracker",
-        "VIX Spike Deep Dive",
-        "Consensus Regime Score",
-    ],
+    "All tools": TOOL_ORDER,
     "Equities + Positioning": [
         "ADFM Public Equities Baskets",
-        "Sector Breadth and Rotation",
         "Factor Momentum Leadership",
+        "Sector Breadth and Rotation",
         "Breakout Scanner",
         "Technical Chart Explorer",
         "Ratio Charts",
@@ -32,41 +50,43 @@ TOOL_GROUPS = {
         "Cross Asset Volatility Surface",
         "Hedge Timer",
     ],
+    "Macro + Risk Regime": [
+        "Weekly Cross - Asset Compass",
+        "Market Stress Composite",
+        "Liquidity Tracker",
+        "VIX Spike Deep Dive",
+    ],
     "Rates + Macro Tone": [
         "Fed Speeches Tone Underwriter",
         "RoW Central Bank Tone Underwriter",
         "Monthly Seasonality Explorer",
         "Home Value to Rent Ratio",
-        "Alert Engine",
     ],
 }
 
+
 TOOL_DESCRIPTIONS = {
+    "ADFM Public Equities Baskets": "Compares ADFM equity sleeves to spot leadership, trend strength, and dispersion.",
+    "Unusual Options Flows": "Flags outsized options activity to reveal potential positioning and intent.",
     "Weekly Cross - Asset Compass": "Summarizes cross-asset moves to classify the current market regime.",
     "Market Stress Composite": "Tracks a blended stress score across volatility, credit, and funding conditions.",
     "Liquidity Tracker": "Monitors major liquidity drivers like Fed balance sheet, RRP, and TGA flows.",
-    "VIX Spike Deep Dive": "Breaks down volatility spikes to show trigger, magnitude, and persistence.",
-    "Consensus Regime Score": "Combines model signals into a single read on risk-on versus risk-off conditions.",
-    "ADFM Public Equities Baskets": "Compares ADFM equity sleeves to spot leadership, trend strength, and dispersion.",
-    "Sector Breadth and Rotation": "Measures participation and rotation to identify where equity strength is broadening or narrowing.",
+    "ETF Flows Dashboard": "Tracks ETF creations and redemptions to monitor real-time allocation shifts.",
     "Factor Momentum Leadership": "Ranks factor momentum to highlight which styles are leading or fading.",
+    "VIX Spike Deep Dive": "Breaks down volatility spikes to show trigger, magnitude, and persistence.",
+    "Hedge Timer": "Provides timing cues for adding, reducing, or rolling portfolio hedges.",
+    "Sector Breadth and Rotation": "Measures participation and rotation to identify where equity strength is broadening or narrowing.",
     "Breakout Scanner": "Finds names and groups breaking above key technical levels with confirmation.",
     "Technical Chart Explorer": "Explores multi-timeframe chart structure, trend, and momentum in one view.",
     "Ratio Charts": "Uses relative-strength ratios to compare assets, sectors, and factors versus benchmarks.",
-    "Market Memory Explorer": "Surfaces historical analogs to contextualize current market behavior.",
-    "Volume Based Sentiment Indicator": "Reads conviction and sentiment using volume trends and participation signals.",
-    "Unusual Options Flows": "Flags outsized options activity to reveal potential positioning and intent.",
-    "ETF Flows Dashboard": "Tracks ETF creations and redemptions to monitor real-time allocation shifts.",
     "Cross Asset Volatility Surface": "Maps implied volatility across assets and tenors to locate stress pockets.",
-    "Hedge Timer": "Provides timing cues for adding, reducing, or rolling portfolio hedges.",
     "Fed Speeches Tone Underwriter": "Scores Federal Reserve communication tone for policy bias and risk impact.",
     "RoW Central Bank Tone Underwriter": "Analyzes non-U.S. central bank tone to gauge global policy direction.",
+    "Market Memory Explorer": "Surfaces historical analogs to contextualize current market behavior.",
     "Monthly Seasonality Explorer": "Shows recurring monthly return and volatility patterns by asset and sector.",
     "Home Value to Rent Ratio": "Tracks housing valuation pressure through the home price-to-rent relationship.",
-    "Alert Engine": "Centralizes configurable alerts across regime, flow, volatility, and technical signals.",
+    "Volume Based Sentiment Indicator": "Reads conviction and sentiment using volume trends and participation signals.",
 }
-
-ALL_TOOLS = [tool for tools in TOOL_GROUPS.values() for tool in tools]
 
 
 st.markdown(
@@ -198,11 +218,9 @@ st.markdown(
 
 st.markdown("### Quick launch")
 
-tool_options = ["All tools"] + list(TOOL_GROUPS.keys())
-
 selected_group = st.segmented_control(
     "Filter by group",
-    options=tool_options,
+    options=list(TOOL_GROUPS.keys()),
     default="All tools",
     label_visibility="collapsed",
 )
@@ -213,12 +231,13 @@ query = st.text_input(
     label_visibility="collapsed",
 )
 
-filtered_tools = ALL_TOOLS if selected_group == "All tools" else TOOL_GROUPS[selected_group]
+filtered_tools = TOOL_GROUPS[selected_group]
 
 if query:
     q = query.lower().strip()
     filtered_tools = [
-        tool for tool in filtered_tools
+        tool
+        for tool in filtered_tools
         if q in tool.lower() or q in TOOL_DESCRIPTIONS.get(tool, "").lower()
     ]
 
