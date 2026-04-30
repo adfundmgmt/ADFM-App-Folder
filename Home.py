@@ -201,12 +201,20 @@ st.markdown(
 st.markdown(
     """
     <div class="hero">
-        <div class="eyebrow">Analytics Tools</div>
+        <div class="eyebrow">ADFM Analytics Platform</div>
         <div class="title">AD Fund Management</div>
         <div class="subtitle">
-            Home dashboard.
+            A centralized dashboard for regime analysis, liquidity monitoring, positioning,
+            volatility, flows, and technical market structure.
         </div>
         <div class="chip-row">
+            <span class="chip">Regime</span>
+            <span class="chip">Liquidity</span>
+            <span class="chip">Flows</span>
+            <span class="chip">Volatility</span>
+            <span class="chip">Technicals</span>
+            <span class="chip">Risk</span>
+        </div>
     </div>
     """,
     unsafe_allow_html=True,
