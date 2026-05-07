@@ -739,6 +739,7 @@ def compute_commodity_score() -> Tuple[int, str, str, List[dict]]:
     oil_1m = pct_change_days(uso, 21)
     copper_1w = pct_change_days(cper, week_back)
     gold_1w = pct_change_days(gld, week_back)
+    real_10y_w = bps_change_days(real_10y, week_back)
     oil_vol_z = zscore_last(oil_rv, 252)
 
     raw = 0
@@ -751,12 +752,12 @@ def compute_commodity_score() -> Tuple[int, str, str, List[dict]]:
         raw -= 1
     if pd.notna(copper_1w) and copper_1w > 2 and pd.notna(oil_1w) and oil_1w < 3:
         raw += 0.5
-    if pd.notna(gold_1w) and gold_1w > 2 and pd.notna(real_10y) and bps_change_days(real_10y, week_back) > 5:
+    if pd.notna(gold_1w) and gold_1w > 2 and pd.notna(real_10y_w) and real_10y_w > 5:
         raw -= 0.5
 
     score = score_clip(raw)
     state = "Balanced" if score >= 0 else "Hot"
-    read = f"Oil 1W {format_pct(oil_1w)}, oil 1M {format_pct(oil_1m)}, copper 1W {format_pct(copper_1w)}, gold 1W {format_pct(gold_1w)}, oil vol z {format_level(oil_vol_z)}."
+    read = f"Oil 1W {format_pct(oil_1w)}, oil 1M {format_pct(oil_1m)}, copper 1W {format_pct(copper_1w)}, gold 1W {format_pct(gold_1w)}, real 10Y 1W {format_bps(real_10y_w)}, oil vol z {format_level(oil_vol_z)}."
     inputs = [
         {"Sleeve": "Commodities", "Input": "Oil", "Latest": format_level(safe_last(uso)), "Weekly Move": format_pct(oil_1w), "Percentile": f"{pct_rank_last(uso, 252):.0f}%" if not uso.empty else "NA", "Score": score, "Read": state},
         {"Sleeve": "Commodities", "Input": "Gold", "Latest": format_level(safe_last(gld)), "Weekly Move": format_pct(gold_1w), "Percentile": f"{pct_rank_last(gld, 252):.0f}%" if not gld.empty else "NA", "Score": score, "Read": read},
