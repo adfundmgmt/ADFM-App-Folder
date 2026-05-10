@@ -71,6 +71,12 @@ class ChartSettings:
     show_ma100: bool
     show_ma200: bool
 
+    show_ema8: bool
+    show_ema20: bool
+    show_ema50: bool
+    show_ema100: bool
+    show_ema200: bool
+
     show_bbands: bool
     show_last_price: bool
     show_range_levels: bool
@@ -95,7 +101,8 @@ def read_settings() -> ChartSettings:
 
         **Default setup**
         - Candlesticks
-        - MA8, MA20, MA50, MA100, MA200
+        - SMA 8, SMA 20, SMA 50, SMA 100, SMA 200
+        - Optional EMA 8, EMA 20, EMA 50, EMA 100, EMA 200
         - Bollinger Bands
         - Volume when available
         - RSI and MACD
@@ -121,12 +128,19 @@ def read_settings() -> ChartSettings:
 
     auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
 
-    st.sidebar.subheader("Moving Averages")
-    show_ma8 = st.sidebar.checkbox("Show MA 8", value=True)
-    show_ma20 = st.sidebar.checkbox("Show MA 20", value=True)
-    show_ma50 = st.sidebar.checkbox("Show MA 50", value=True)
-    show_ma100 = st.sidebar.checkbox("Show MA 100", value=True)
-    show_ma200 = st.sidebar.checkbox("Show MA 200", value=True)
+    st.sidebar.subheader("Simple Moving Averages")
+    show_ma8 = st.sidebar.checkbox("Show SMA 8", value=True)
+    show_ma20 = st.sidebar.checkbox("Show SMA 20", value=True)
+    show_ma50 = st.sidebar.checkbox("Show SMA 50", value=True)
+    show_ma100 = st.sidebar.checkbox("Show SMA 100", value=True)
+    show_ma200 = st.sidebar.checkbox("Show SMA 200", value=True)
+
+    st.sidebar.subheader("Exponential Moving Averages")
+    show_ema8 = st.sidebar.checkbox("Show EMA 8", value=False)
+    show_ema20 = st.sidebar.checkbox("Show EMA 20", value=False)
+    show_ema50 = st.sidebar.checkbox("Show EMA 50", value=False)
+    show_ema100 = st.sidebar.checkbox("Show EMA 100", value=False)
+    show_ema200 = st.sidebar.checkbox("Show EMA 200", value=False)
 
     st.sidebar.subheader("Price Overlays")
     show_bbands = st.sidebar.checkbox("Show Bollinger Bands", value=True)
@@ -160,6 +174,11 @@ def read_settings() -> ChartSettings:
         show_ma50=show_ma50,
         show_ma100=show_ma100,
         show_ma200=show_ma200,
+        show_ema8=show_ema8,
+        show_ema20=show_ema20,
+        show_ema50=show_ema50,
+        show_ema100=show_ema100,
+        show_ema200=show_ema200,
         show_bbands=show_bbands,
         show_last_price=show_last_price,
         show_range_levels=show_range_levels,
@@ -498,6 +517,12 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     for window in [8, 20, 50, 100, 200]:
         out[f"MA{window}"] = out["Close"].rolling(
             window=window,
+            min_periods=window,
+        ).mean()
+
+        out[f"EMA{window}"] = out["Close"].ewm(
+            span=window,
+            adjust=False,
             min_periods=window,
         ).mean()
 
@@ -1020,11 +1045,11 @@ def add_price_panel(
     )
 
     ma_config = [
-        ("MA8", "MA 8", COLORS["ma8"], settings.show_ma8),
-        ("MA20", "MA 20", COLORS["ma20"], settings.show_ma20),
-        ("MA50", "MA 50", COLORS["ma50"], settings.show_ma50),
-        ("MA100", "MA 100", COLORS["ma100"], settings.show_ma100),
-        ("MA200", "MA 200", COLORS["ma200"], settings.show_ma200),
+        ("MA8", "SMA 8", COLORS["ma8"], settings.show_ma8),
+        ("MA20", "SMA 20", COLORS["ma20"], settings.show_ma20),
+        ("MA50", "SMA 50", COLORS["ma50"], settings.show_ma50),
+        ("MA100", "SMA 100", COLORS["ma100"], settings.show_ma100),
+        ("MA200", "SMA 200", COLORS["ma200"], settings.show_ma200),
     ]
 
     for column, label, color, enabled in ma_config:
@@ -1035,6 +1060,30 @@ def add_price_panel(
                     y=df[column],
                     mode="lines",
                     line=dict(color=color, width=1.55),
+                    name=label,
+                    hovertemplate=f"{label}: " + "%{y:.2f}<extra></extra>",
+                    showlegend=True,
+                ),
+                row=row,
+                col=1,
+            )
+
+    ema_config = [
+        ("EMA8", "EMA 8", COLORS["ma8"], settings.show_ema8),
+        ("EMA20", "EMA 20", COLORS["ma20"], settings.show_ema20),
+        ("EMA50", "EMA 50", COLORS["ma50"], settings.show_ema50),
+        ("EMA100", "EMA 100", COLORS["ma100"], settings.show_ema100),
+        ("EMA200", "EMA 200", COLORS["ma200"], settings.show_ema200),
+    ]
+
+    for column, label, color, enabled in ema_config:
+        if enabled and column in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df[column],
+                    mode="lines",
+                    line=dict(color=color, width=1.45, dash="dash"),
                     name=label,
                     hovertemplate=f"{label}: " + "%{y:.2f}<extra></extra>",
                     showlegend=True,
@@ -1317,6 +1366,11 @@ def build_chart(
             settings.show_ma50,
             settings.show_ma100,
             settings.show_ma200,
+            settings.show_ema8,
+            settings.show_ema20,
+            settings.show_ema50,
+            settings.show_ema100,
+            settings.show_ema200,
             settings.show_bbands,
             settings.show_structure,
         ]
