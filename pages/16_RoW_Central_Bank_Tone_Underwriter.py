@@ -55,6 +55,9 @@ def compute_features(df: pd.DataFrame, roc_n: int, spy_df: pd.DataFrame) -> pd.D
 
     for win in [21, 50, 100, 200]:
         out[f"SMA_{win}"] = px.rolling(win, min_periods=1).mean()
+    for win in [21, 50]:
+        out[f"EMA_{win}"] = px.ewm(span=win, adjust=False).mean()
+
     out["ROC"] = px.pct_change(roc_n)
     out["ROC_Slope"] = out["ROC"].diff(5)
     out["Second_Derivative"] = out["ROC"].diff()
@@ -141,7 +144,7 @@ def institutional_signal(row: pd.Series, regime: str) -> Tuple[str, float]:
     if row["Second_Derivative"] < 0 and row["ROC"] > 0:
         return "Acceleration rolling over despite price strength", 0.80
     if regime in ["Early Bull Acceleration", "Reflexive Recovery"]:
-        return "Potential early-cycle setup developing", 0.74
+        return "Potential Druckenmiller-style early-cycle setup", 0.74
     if regime == "Early Bear Acceleration":
         return "Reflexive breakdown risk increasing", 0.76
     if regime == "Momentum Exhaustion":
@@ -151,116 +154,135 @@ def institutional_signal(row: pd.Series, regime: str) -> Tuple[str, float]:
 
 
 
+st.title("Rate of Change Regime Dashboard")
+st.caption("Second-derivative market inflection monitor for institutional macro workflow.")
+
+tab_dashboard, tab_about = st.tabs(["Dashboard", "About This Tool"])
+
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Identify market inflection points by tracking momentum (ROC) and acceleration/deceleration (second derivative).
-
-        **What this tab shows**
-        - Price trend with 21/50/100/200-day SMAs.
-        - Rolling ROC and second-derivative behavior.
-        - Positive/negative inflection markers and regime transitions.
-        - Summary scores for momentum, acceleration, trend strength, and risk.
-
-        **Data source**
-        - Daily OHLCV history from Yahoo Finance (`yfinance`) with retry + cache handling.
-        """
-    )
-    st.divider()
     st.header("Controls")
     ticker = st.text_input("Ticker", value="QQQ").upper().strip()
     timeframe = st.selectbox("Timeframe", list(TIMEFRAME_MAP.keys()), index=3)
     roc_label = st.selectbox("ROC Period", list(ROC_PERIODS.keys()), index=2)
     show_candle = st.toggle("Candlestick view", value=True)
+    show_ema = st.toggle("Show dashed EMAs", value=True)
 
 try:
     df = fetch_history(ticker, TIMEFRAME_MAP[timeframe])
     spy = fetch_history("SPY", TIMEFRAME_MAP[timeframe])
     vix = fetch_history("^VIX", TIMEFRAME_MAP[timeframe])
 except Exception as e:
-    st.error(str(e))
+    with tab_dashboard:
+        st.error(str(e))
     st.stop()
 
-st.title("Rate of Change Regime Dashboard")
-st.caption("Institutional market inflection monitor using momentum and acceleration regime logic.")
-
-if len(df) < 60:
-    st.warning("Not enough data points for robust derivative analysis.")
-
-feat = compute_features(df, ROC_PERIODS[roc_label], spy)
-feat["VIX"] = (vix["Adj Close"] if "Adj Close" in vix.columns else vix["Close"]).reindex(feat.index).ffill()
-feat = feat.dropna(subset=["ROC", "Second_Derivative"], how="any")
-if feat.empty:
-    st.warning("Data became empty after indicator calculations.")
-    st.stop()
-
-latest = feat.iloc[-1]
-regime = classify_regime(latest)
-scores = score_snapshot(latest)
-signal, confidence = institutional_signal(latest, regime)
-
-m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Current Regime", regime)
-m2.metric("Momentum Score", f"{scores['momentum']:.1f}/100")
-m3.metric("Acceleration Score", f"{scores['acceleration']:.1f}/100")
-m4.metric("Risk Regime", "High" if scores["risk_regime"] > 65 else "Moderate" if scores["risk_regime"] > 45 else "Low")
-m5.metric("Trend Strength", f"{scores['trend_strength']:.1f}/100")
-m6.metric("Signal Confidence", f"{confidence*100:.0f}%")
-
-fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25])
-if show_candle:
-    fig.add_trace(go.Candlestick(x=feat.index, open=feat["Open"], high=feat["High"], low=feat["Low"], close=feat["Close"], name="Price"), row=1, col=1)
-else:
-    fig.add_trace(go.Scatter(x=feat.index, y=feat["Close"], mode="lines", name="Price", line=dict(color="#85c1ff", width=2)), row=1, col=1)
-
-for ma, color in [("SMA_21", "#f1c40f"), ("SMA_50", "#e67e22"), ("SMA_100", "#9b59b6"), ("SMA_200", "#ecf0f1")]:
-    fig.add_trace(go.Scatter(x=feat.index, y=feat[ma], mode="lines", name=ma, line=dict(color=color, width=1.3)), row=1, col=1)
-
-fig.add_trace(go.Scatter(x=feat.index, y=feat["ROC"], mode="lines", name=f"ROC {roc_label}", line=dict(color="#5dade2", width=2)), row=2, col=1)
-fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray", row=2, col=1)
-
-colors = np.where(feat["Second_Derivative"] >= 0, "#2ecc71", "#e74c3c")
-fig.add_trace(go.Bar(x=feat.index, y=feat["Second_Derivative"], marker_color=colors, name="Second Derivative"), row=3, col=1)
-fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray", row=3, col=1)
-
-pos_marks = feat[feat["Pos_Inflect"]]
-neg_marks = feat[feat["Neg_Inflect"]]
-fig.add_trace(go.Scatter(x=pos_marks.index, y=pos_marks["Second_Derivative"], mode="markers", name="Positive inflection", marker=dict(color="#7DFF9B", size=8, symbol="triangle-up")), row=3, col=1)
-fig.add_trace(go.Scatter(x=neg_marks.index, y=neg_marks["Second_Derivative"], mode="markers", name="Negative inflection", marker=dict(color="#FF7A7A", size=8, symbol="triangle-down")), row=3, col=1)
-
-fig.update_layout(
-    height=950,
-    template="plotly",
-    title=f"{ticker} | Price, ROC, and Second Derivative",
-    xaxis_rangeslider_visible=False,
-    legend=dict(orientation="h", y=1.02, x=0.01),
-)
-st.plotly_chart(fig, use_container_width=True)
-
-left, right = st.columns([1, 1])
-with left:
-    st.subheader("Institutional Overlays")
-    st.write(f"**Relative Strength vs SPY:** {latest['Rel_Strength_SPY']:.3f}")
-    st.write(f"**Volume Acceleration (10/50):** {latest['Volume_Accel']:.2f}x")
-    st.write(f"**ATR % of Price:** {latest['ATR_Pct']*100:.2f}%")
-    st.write(f"**VIX Proxy:** {latest['VIX']:.2f}")
-    st.write(f"**Volatility Regime:** {latest['Vol_Regime']}")
-    st.write(f"**Breadth Proxy:** {latest['Breadth_Proxy']*100:.0f}%")
-
-with right:
-    st.subheader("Macro Signal Desk")
-    st.info(signal)
-    st.markdown("### Current Market Interpretation")
-    st.write(
-        f"Regime reads **{regime}** with momentum score **{scores['momentum']:.1f}** and acceleration score **{scores['acceleration']:.1f}**. "
-        f"Risk profile is **{'elevated' if scores['risk_regime'] > 65 else 'contained'}**, while trend strength sits at **{scores['trend_strength']:.1f}**."
+with tab_dashboard:
+    if len(df) < 60:
+        st.warning("Not enough data points for robust derivative analysis.")
+    
+    feat = compute_features(df, ROC_PERIODS[roc_label], spy)
+    feat["VIX"] = (vix["Adj Close"] if "Adj Close" in vix.columns else vix["Close"]).reindex(feat.index).ffill()
+    feat = feat.dropna(subset=["ROC", "Second_Derivative"], how="any")
+    if feat.empty:
+        st.warning("Data became empty after indicator calculations.")
+        st.stop()
+    
+    latest = feat.iloc[-1]
+    regime = classify_regime(latest)
+    scores = score_snapshot(latest)
+    signal, confidence = institutional_signal(latest, regime)
+    
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("Current Regime", regime)
+    m2.metric("Momentum Score", f"{scores['momentum']:.1f}/100")
+    m3.metric("Acceleration Score", f"{scores['acceleration']:.1f}/100")
+    m4.metric("Risk Regime", "High" if scores["risk_regime"] > 65 else "Moderate" if scores["risk_regime"] > 45 else "Low")
+    m5.metric("Trend Strength", f"{scores['trend_strength']:.1f}/100")
+    m6.metric("Signal Confidence", f"{confidence*100:.0f}%")
+    
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.5, 0.25, 0.25])
+    if show_candle:
+        fig.add_trace(go.Candlestick(x=feat.index, open=feat["Open"], high=feat["High"], low=feat["Low"], close=feat["Close"], name="Price"), row=1, col=1)
+    else:
+        fig.add_trace(go.Scatter(x=feat.index, y=feat["Close"], mode="lines", name="Price", line=dict(color="#85c1ff", width=2)), row=1, col=1)
+    
+    for ma, color in [("SMA_21", "#f1c40f"), ("SMA_50", "#e67e22"), ("SMA_100", "#9b59b6"), ("SMA_200", "#ecf0f1")]:
+        fig.add_trace(go.Scatter(x=feat.index, y=feat[ma], mode="lines", name=ma, line=dict(color=color, width=1.3)), row=1, col=1)
+    if show_ema:
+        for ma, color in [("EMA_21", "#2ecc71"), ("EMA_50", "#1abc9c")]:
+            fig.add_trace(go.Scatter(x=feat.index, y=feat[ma], mode="lines", name=ma, line=dict(color=color, width=1.2, dash="dash")), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=feat.index, y=feat["ROC"], mode="lines", name=f"ROC {roc_label}", line=dict(color="#5dade2", width=2)), row=2, col=1)
+    fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray", row=2, col=1)
+    
+    colors = np.where(feat["Second_Derivative"] >= 0, "#2ecc71", "#e74c3c")
+    fig.add_trace(go.Bar(x=feat.index, y=feat["Second_Derivative"], marker_color=colors, name="Second Derivative"), row=3, col=1)
+    fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray", row=3, col=1)
+    
+    pos_marks = feat[feat["Pos_Inflect"]]
+    neg_marks = feat[feat["Neg_Inflect"]]
+    fig.add_trace(go.Scatter(x=pos_marks.index, y=pos_marks["Second_Derivative"], mode="markers", name="Positive inflection", marker=dict(color="#7DFF9B", size=8, symbol="triangle-up")), row=3, col=1)
+    fig.add_trace(go.Scatter(x=neg_marks.index, y=neg_marks["Second_Derivative"], mode="markers", name="Negative inflection", marker=dict(color="#FF7A7A", size=8, symbol="triangle-down")), row=3, col=1)
+    
+    fig.update_layout(
+        height=950,
+        template="plotly",
+        title=f"{ticker} | Price, ROC, and Second Derivative",
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", y=1.02, x=0.01),
     )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    left, right = st.columns([1, 1])
+    with left:
+        st.subheader("Institutional Overlays")
+        st.write(f"**Relative Strength vs SPY:** {latest['Rel_Strength_SPY']:.3f}")
+        st.write(f"**Volume Acceleration (10/50):** {latest['Volume_Accel']:.2f}x")
+        st.write(f"**ATR % of Price:** {latest['ATR_Pct']*100:.2f}%")
+        st.write(f"**VIX Proxy:** {latest['VIX']:.2f}")
+        st.write(f"**Volatility Regime:** {latest['Vol_Regime']}")
+        st.write(f"**Breadth Proxy:** {latest['Breadth_Proxy']*100:.0f}%")
+    
+    with right:
+        st.subheader("Macro Signal Desk")
+        st.info(signal)
+        st.markdown("### Current Market Interpretation")
+        st.write(
+            f"Regime reads **{regime}** with momentum score **{scores['momentum']:.1f}** and acceleration score **{scores['acceleration']:.1f}**. "
+            f"Risk profile is **{'elevated' if scores['risk_regime'] > 65 else 'contained'}**, while trend strength sits at **{scores['trend_strength']:.1f}**."
+        )
+        st.markdown("### What Druckenmiller Would Likely Focus On")
+        st.write(
+            "He would prioritize whether the second derivative is inflecting before consensus revisions: "
+            "improving acceleration during weak price often signals early accumulation, while fading acceleration during strong price often flags late-cycle complacency."
+        )
+    
+        phase = "trend continuation"
+        if regime in ["Early Bull Acceleration", "Reflexive Recovery", "Capitulation Stabilization"]:
+            phase = "early accumulation"
+        elif regime in ["Momentum Exhaustion", "Early Bear Acceleration"]:
+            phase = "late-cycle exhaustion"
+        st.markdown("### Phase Assessment")
+        st.success(f"Conditions currently resemble **{phase}**.")
 
-    phase = "trend continuation"
-    if regime in ["Early Bull Acceleration", "Reflexive Recovery", "Capitulation Stabilization"]:
-        phase = "early accumulation"
-    elif regime in ["Momentum Exhaustion", "Early Bear Acceleration"]:
-        phase = "late-cycle exhaustion"
-    st.markdown("### Phase Assessment")
-    st.success(f"Conditions currently resemble **{phase}**.")
+with tab_about:
+    st.header("About This Tool")
+    st.markdown("""
+    **Purpose:** Detect market turning points using first- and second-derivative behavior before fundamentals visibly shift.
+
+    **What this dashboard does**
+    - Tracks price trend with 21/50/100/200-day moving averages and optional EMAs.
+    - Measures momentum via rolling ROC and acceleration via second derivative.
+    - Flags positive/negative inflections and zero-line regime transitions.
+    - Scores momentum, acceleration, trend strength, and risk regime for quick decision support.
+    - Adds institutional overlays: relative strength vs SPY, ATR volatility, VIX proxy, and volume acceleration.
+
+    **How to interpret**
+    - Positive second derivative while price is weak can indicate early accumulation.
+    - Negative second derivative while price is strong can indicate late-cycle exhaustion risk.
+    - Combine regime label, confidence, and volatility context before acting.
+
+    **Data & method**
+    - Data source: `yfinance` daily OHLCV series.
+    - Engine uses cached fetches, retry handling, and NaN-safe rolling calculations.
+    """)
