@@ -167,6 +167,7 @@ def fetch_history(
 
             data.index = pd.to_datetime(data.index)
             data = data.sort_index()
+            data = data[~data.index.duplicated(keep="last")]
 
             return data
 
@@ -180,8 +181,7 @@ def fetch_history(
 def compute_features(df: pd.DataFrame, roc_n: int) -> pd.DataFrame:
     out = df.copy()
 
-    px = out["Adj Close"] if "Adj Close" in out.columns else out["Close"]
-    px = px.astype(float)
+    px = out["Close"].astype(float)
 
     for win in SMA_WINDOWS:
         out[f"SMA_{win}"] = px.rolling(win, min_periods=1).mean()
@@ -241,13 +241,31 @@ def padded_range(
     return [y_min - pad, y_max + pad]
 
 
-def get_x_range(index: pd.Index) -> Optional[list]:
-    clean_index = pd.to_datetime(index).dropna()
+def add_trading_session_axis(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["Session"] = np.arange(len(out))
+    out["Date_Label"] = out.index.strftime("%Y-%m-%d")
+    return out
 
-    if len(clean_index) == 0:
-        return None
 
-    return [clean_index.min(), clean_index.max()]
+def make_date_ticks(index: pd.DatetimeIndex, session_values: pd.Series, max_ticks: int = 10):
+    if len(index) == 0:
+        return [], []
+
+    tick_count = min(max_ticks, max(2, len(index)))
+    positions = np.linspace(0, len(index) - 1, tick_count).round().astype(int)
+    positions = np.unique(positions)
+
+    tickvals = session_values.iloc[positions].tolist()
+
+    if len(index) > 900:
+        ticktext = index[positions].strftime("%Y").tolist()
+    elif len(index) > 260:
+        ticktext = index[positions].strftime("%b %Y").tolist()
+    else:
+        ticktext = index[positions].strftime("%b %d").tolist()
+
+    return tickvals, ticktext
 
 
 with st.sidebar:
@@ -266,6 +284,12 @@ with st.sidebar:
         **Data source**
 
         - Yahoo Finance daily OHLCV history via `yfinance`.
+
+        **Chart construction**
+
+        - The x-axis is plotted by trading session, then labeled with calendar dates.
+        - Weekends, holidays, and missing sessions are compressed automatically.
+        - Price, ROC, and acceleration therefore share the same observation-by-observation alignment.
         """
     )
 
@@ -273,7 +297,6 @@ with st.sidebar:
 
     st.markdown("### Display Controls")
     show_inflections = st.toggle("Show inflection markers", value=True)
-    compact_weekends = st.toggle("Compress weekends", value=True)
 
 
 st.markdown(
@@ -325,6 +348,11 @@ if feat.empty:
     st.stop()
 
 
+feat = add_trading_session_axis(feat)
+
+x_plot = feat["Session"]
+custom_dates = feat["Date_Label"].to_numpy().reshape(-1, 1)
+
 price_series_for_range = []
 
 for col in ["Open", "High", "Low", "Close", "SMA_21", "SMA_50", "SMA_100", "SMA_200"]:
@@ -334,7 +362,9 @@ for col in ["Open", "High", "Low", "Close", "SMA_21", "SMA_50", "SMA_100", "SMA_
 price_y_range = padded_range(price_series_for_range, pad_pct=0.035)
 roc_y_range = padded_range([feat["ROC"]], pad_pct=0.12, include_zero=True)
 acceleration_y_range = padded_range([feat["Second_Derivative"]], pad_pct=0.15, include_zero=True)
-x_range = get_x_range(feat.index)
+
+x_range = [-0.5, len(feat) - 0.5]
+tickvals, ticktext = make_date_ticks(feat.index, feat["Session"], max_ticks=11)
 
 
 fig = make_subplots(
@@ -349,18 +379,19 @@ fig = make_subplots(
 if chart_view == "Candlestick":
     fig.add_trace(
         go.Candlestick(
-            x=feat.index,
+            x=x_plot,
             open=feat["Open"],
             high=feat["High"],
             low=feat["Low"],
             close=feat["Close"],
             name="Price",
+            customdata=custom_dates,
             increasing_line_color=PASTEL_GREEN,
             decreasing_line_color=PASTEL_RED,
             increasing_fillcolor="rgba(82, 183, 136, 0.60)",
             decreasing_fillcolor="rgba(232, 93, 93, 0.60)",
             hovertemplate=(
-                "%{x|%Y-%m-%d}<br>"
+                "%{customdata[0]}<br>"
                 "Open: %{open:.2f}<br>"
                 "High: %{high:.2f}<br>"
                 "Low: %{low:.2f}<br>"
@@ -374,12 +405,13 @@ if chart_view == "Candlestick":
 else:
     fig.add_trace(
         go.Scatter(
-            x=feat.index,
+            x=x_plot,
             y=feat["Close"],
             mode="lines",
             name="Price",
+            customdata=custom_dates,
             line=dict(color="#111827", width=2.2),
-            hovertemplate="%{x|%Y-%m-%d}<br>Close: %{y:.2f}<extra></extra>",
+            hovertemplate="%{customdata[0]}<br>Close: %{y:.2f}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -389,12 +421,13 @@ else:
 for ma in ["SMA_21", "SMA_50", "SMA_100", "SMA_200"]:
     fig.add_trace(
         go.Scatter(
-            x=feat.index,
+            x=x_plot,
             y=feat[ma],
             mode="lines",
             name=ma.replace("_", " "),
+            customdata=custom_dates,
             line=dict(color=SMA_COLORS[ma], width=1.6),
-            hovertemplate="%{x|%Y-%m-%d}<br>%{fullData.name}: %{y:.2f}<extra></extra>",
+            hovertemplate="%{customdata[0]}<br>%{fullData.name}: %{y:.2f}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -403,12 +436,13 @@ for ma in ["SMA_21", "SMA_50", "SMA_100", "SMA_200"]:
 
 fig.add_trace(
     go.Scatter(
-        x=feat.index,
+        x=x_plot,
         y=feat["ROC"],
         mode="lines",
         name=f"ROC {roc_label}",
+        customdata=custom_dates,
         line=dict(color="#4c78a8", width=2.0),
-        hovertemplate="%{x|%Y-%m-%d}<br>ROC: %{y:.2%}<extra></extra>",
+        hovertemplate="%{customdata[0]}<br>ROC: %{y:.2%}<extra></extra>",
     ),
     row=2,
     col=1,
@@ -428,11 +462,13 @@ bar_colors = np.where(feat["Second_Derivative"] >= 0, PASTEL_GREEN, PASTEL_RED)
 
 fig.add_trace(
     go.Bar(
-        x=feat.index,
+        x=x_plot,
         y=feat["Second_Derivative"],
         marker_color=bar_colors,
         name="Acceleration",
-        hovertemplate="%{x|%Y-%m-%d}<br>Acceleration: %{y:.2%}<extra></extra>",
+        customdata=custom_dates,
+        width=0.85,
+        hovertemplate="%{customdata[0]}<br>Acceleration: %{y:.2%}<extra></extra>",
     ),
     row=3,
     col=1,
@@ -454,17 +490,18 @@ if show_inflections:
 
     fig.add_trace(
         go.Scatter(
-            x=pos_marks.index,
+            x=pos_marks["Session"],
             y=pos_marks["Second_Derivative"],
             mode="markers",
             name="Positive inflection",
+            customdata=pos_marks["Date_Label"].to_numpy().reshape(-1, 1),
             marker=dict(
                 color=PASTEL_GREEN,
                 size=8,
                 symbol="triangle-up",
                 line=dict(width=0.8, color="#ffffff"),
             ),
-            hovertemplate="%{x|%Y-%m-%d}<br>Positive acceleration inflection<extra></extra>",
+            hovertemplate="%{customdata[0]}<br>Positive acceleration inflection<extra></extra>",
         ),
         row=3,
         col=1,
@@ -472,17 +509,18 @@ if show_inflections:
 
     fig.add_trace(
         go.Scatter(
-            x=neg_marks.index,
+            x=neg_marks["Session"],
             y=neg_marks["Second_Derivative"],
             mode="markers",
             name="Negative inflection",
+            customdata=neg_marks["Date_Label"].to_numpy().reshape(-1, 1),
             marker=dict(
                 color=PASTEL_RED,
                 size=8,
                 symbol="triangle-down",
                 line=dict(width=0.8, color="#ffffff"),
             ),
-            hovertemplate="%{x|%Y-%m-%d}<br>Negative acceleration inflection<extra></extra>",
+            hovertemplate="%{customdata[0]}<br>Negative acceleration inflection<extra></extra>",
         ),
         row=3,
         col=1,
@@ -521,6 +559,9 @@ fig.update_layout(
 
 fig.update_xaxes(
     range=x_range,
+    tickmode="array",
+    tickvals=tickvals,
+    ticktext=ticktext,
     constrain="domain",
     automargin=False,
     showgrid=True,
@@ -529,10 +570,8 @@ fig.update_xaxes(
     linewidth=1,
     linecolor="#d7dde8",
     rangeslider_visible=False,
+    fixedrange=False,
 )
-
-if compact_weekends:
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
 
 
 fig.update_yaxes(
