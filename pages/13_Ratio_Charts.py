@@ -55,110 +55,42 @@ class RatioSpec:
 CYCLICALS = ["XLK", "XLI", "XLF", "XLY", "XLC", "XLB", "XLE"]
 DEFENSIVES = ["XLP", "XLV", "XLU", "XLRE"]
 
-PRESET_GROUPS: Dict[str, List[RatioSpec]] = {
-    "Macro Regime": [
-        RatioSpec("SPY", "TLT", "Equities / Long Treasuries", "Macro Regime", "Risk assets versus duration."),
-        RatioSpec("HYG", "LQD", "High Yield / Investment Grade Credit", "Macro Regime", "Credit risk appetite."),
-        RatioSpec("HYG", "IEF", "High Yield / Intermediate Treasuries", "Macro Regime", "Credit beta versus safer duration."),
-        RatioSpec("TIP", "TLT", "TIPS / Nominal Long Treasuries", "Macro Regime", "Inflation-linked duration versus nominal duration."),
-        RatioSpec("GLD", "TLT", "Gold / Long Treasuries", "Macro Regime", "Real-rate and hard-asset pressure."),
-        RatioSpec("DBC", "TLT", "Broad Commodities / Long Treasuries", "Macro Regime", "Inflation assets versus duration."),
-        RatioSpec("UUP", "GLD", "Dollar / Gold", "Macro Regime", "Dollar tightness versus gold."),
-        RatioSpec("UUP", "SPY", "Dollar / S&P 500", "Macro Regime", "Dollar strength versus equity risk."),
-        RatioSpec("XLE", "SPY", "Energy / S&P 500", "Macro Regime", "Energy leadership versus broad equities."),
-    ],
-    "Global Equity Leadership": [
-        RatioSpec("VXUS", "SPY", "Ex-US Equities / US Equities", "Global Equity Leadership"),
-        RatioSpec("EFA", "SPY", "Developed Ex-US / US Equities", "Global Equity Leadership"),
-        RatioSpec("EEM", "SPY", "Emerging Markets / US Equities", "Global Equity Leadership"),
-        RatioSpec("EZU", "SPY", "Europe / US Equities", "Global Equity Leadership"),
-        RatioSpec("EWJ", "SPY", "Japan / US Equities", "Global Equity Leadership"),
-        RatioSpec("FXI", "SPY", "China Large Caps / US Equities", "Global Equity Leadership"),
-        RatioSpec("INDA", "SPY", "India / US Equities", "Global Equity Leadership"),
-        RatioSpec("EWZ", "SPY", "Brazil / US Equities", "Global Equity Leadership"),
-        RatioSpec("EWW", "SPY", "Mexico / US Equities", "Global Equity Leadership"),
-    ],
-    "Equity Internal Leadership": [
-        RatioSpec("RSP", "SPY", "Equal Weight S&P 500 / Cap Weight S&P 500", "Equity Internal Leadership", "Breadth and concentration."),
-        RatioSpec("IWM", "SPY", "Small Caps / S&P 500", "Equity Internal Leadership", "Domestic cyclicality and risk appetite."),
-        RatioSpec("MDY", "SPY", "Mid Caps / S&P 500", "Equity Internal Leadership"),
-        RatioSpec("QQQ", "IWM", "Nasdaq 100 / Small Caps", "Equity Internal Leadership", "Mega-cap growth versus domestic beta."),
-        RatioSpec("XLY", "XLP", "Consumer Discretionary / Staples", "Equity Internal Leadership"),
-        RatioSpec("XLF", "XLU", "Financials / Utilities", "Equity Internal Leadership"),
-        RatioSpec("XLI", "XLU", "Industrials / Utilities", "Equity Internal Leadership"),
-        RatioSpec("XLK", "SPY", "Technology / S&P 500", "Equity Internal Leadership"),
-        RatioSpec("XLC", "SPY", "Communication Services / S&P 500", "Equity Internal Leadership"),
-        RatioSpec("SMH", "QQQ", "Semis / Nasdaq 100", "Equity Internal Leadership"),
-        RatioSpec("SMH", "IGV", "Semis / Software", "Equity Internal Leadership"),
-        RatioSpec("IGV", "QQQ", "Software / Nasdaq 100", "Equity Internal Leadership"),
-    ],
-    "Factor Leadership": [
-        RatioSpec("IWF", "IWD", "Growth / Value", "Factor Leadership"),
-        RatioSpec("MTUM", "VLUE", "Momentum / Value", "Factor Leadership"),
-        RatioSpec("QUAL", "SPY", "Quality / S&P 500", "Factor Leadership"),
-        RatioSpec("USMV", "SPY", "Minimum Volatility / S&P 500", "Factor Leadership"),
-        RatioSpec("SPLV", "SPY", "Low Volatility / S&P 500", "Factor Leadership"),
-        RatioSpec("RPV", "RPG", "Pure Value / Pure Growth", "Factor Leadership"),
-    ],
-    "Rates and Housing Sensitivity": [
-        RatioSpec("TLT", "IEF", "Long Duration / Intermediate Duration", "Rates and Housing Sensitivity"),
-        RatioSpec("TLT", "SHY", "Long Duration / Short Duration", "Rates and Housing Sensitivity"),
-        RatioSpec("KRE", "XLF", "Regional Banks / Financials", "Rates and Housing Sensitivity"),
-        RatioSpec("ITB", "XLRE", "Homebuilders / Real Estate", "Rates and Housing Sensitivity"),
-        RatioSpec("XHB", "XLRE", "Housing Basket / Real Estate", "Rates and Housing Sensitivity"),
-        RatioSpec("VNQ", "SPY", "REITs / S&P 500", "Rates and Housing Sensitivity"),
-    ],
-    "Commodities and Hard Assets": [
-        RatioSpec("GDX", "GLD", "Gold Miners / Gold", "Commodities and Hard Assets"),
-        RatioSpec("SLV", "GLD", "Silver / Gold", "Commodities and Hard Assets"),
-        RatioSpec("COPX", "GLD", "Copper Miners / Gold", "Commodities and Hard Assets"),
-        RatioSpec("XME", "SPY", "Metals and Mining / S&P 500", "Commodities and Hard Assets"),
-        RatioSpec("XOP", "XLE", "E&P / Energy Sector", "Commodities and Hard Assets"),
-        RatioSpec("OIH", "XLE", "Oil Services / Energy Sector", "Commodities and Hard Assets"),
-        RatioSpec("DBA", "DBC", "Agriculture / Broad Commodities", "Commodities and Hard Assets"),
-        RatioSpec("URA", "SPY", "Uranium / S&P 500", "Commodities and Hard Assets"),
-    ],
-    "AI and Growth Stack": [
-        RatioSpec("SMH", "SPY", "Semiconductors / S&P 500", "AI and Growth Stack"),
-        RatioSpec("SOXX", "QQQ", "Semiconductors / Nasdaq 100", "AI and Growth Stack"),
-        RatioSpec("NVDA", "SMH", "Nvidia / Semiconductors", "AI and Growth Stack"),
-        RatioSpec("AMD", "SMH", "AMD / Semiconductors", "AI and Growth Stack"),
-        RatioSpec("MSFT", "QQQ", "Microsoft / Nasdaq 100", "AI and Growth Stack"),
-        RatioSpec("META", "QQQ", "Meta / Nasdaq 100", "AI and Growth Stack"),
-        RatioSpec("WCLD", "QQQ", "Cloud Software / Nasdaq 100", "AI and Growth Stack"),
-        RatioSpec("ARKK", "QQQ", "Speculative Growth / Nasdaq 100", "AI and Growth Stack"),
-    ],
-    "Currency Proxy Leadership": [
-        RatioSpec("FXY", "UUP", "Yen ETF / Dollar Index ETF", "Currency Proxy Leadership"),
-        RatioSpec("FXE", "UUP", "Euro ETF / Dollar Index ETF", "Currency Proxy Leadership"),
-        RatioSpec("FXF", "UUP", "Swiss Franc ETF / Dollar Index ETF", "Currency Proxy Leadership"),
-        RatioSpec("FXB", "UUP", "British Pound ETF / Dollar Index ETF", "Currency Proxy Leadership"),
-        RatioSpec("CEW", "UUP", "EM Currency Basket / Dollar Index ETF", "Currency Proxy Leadership"),
-    ],
-}
+CORE_RATIO_SPECS: List[RatioSpec] = [
+    RatioSpec("SPY", "TLT", "Equities / Long Treasuries", "Core 15", "Primary risk-assets-versus-duration ratio."),
+    RatioSpec("HYG", "LQD", "High Yield / Investment Grade Credit", "Core 15", "Credit risk appetite and spread-beta confirmation."),
+    RatioSpec("TIP", "TLT", "TIPS / Nominal Long Treasuries", "Core 15", "Inflation-linked duration versus nominal duration."),
+    RatioSpec("GLD", "TLT", "Gold / Long Treasuries", "Core 15", "Hard-asset duration versus nominal duration."),
+    RatioSpec("DBC", "TLT", "Broad Commodities / Long Treasuries", "Core 15", "Commodity inflation pressure versus duration."),
+    RatioSpec("UUP", "GLD", "Dollar / Gold", "Core 15", "Dollar tightness versus hard money."),
+    RatioSpec("XLE", "SPY", "Energy / S&P 500", "Core 15", "Energy equity leadership versus broad equities."),
+    RatioSpec("VXUS", "SPY", "Ex-US Equities / US Equities", "Core 15", "Global equity leadership versus the US."),
+    RatioSpec("RSP", "SPY", "Equal Weight S&P 500 / Cap Weight S&P 500", "Core 15", "Breadth and concentration."),
+    RatioSpec("IWM", "SPY", "Small Caps / S&P 500", "Core 15", "Domestic cyclicality and risk appetite."),
+    RatioSpec("QQQ", "IWM", "Nasdaq 100 / Small Caps", "Core 15", "Mega-cap growth versus domestic beta."),
+    RatioSpec("IWF", "IWD", "Growth / Value", "Core 15", "Growth factor leadership versus value."),
+    RatioSpec("SMH", "QQQ", "Semiconductors / Nasdaq 100", "Core 15", "Semiconductor leadership inside the growth tape."),
+    RatioSpec("FXY", "UUP", "Yen ETF / Dollar Index ETF", "Core 15", "Yen strength versus the dollar proxy."),
+]
 
-GROUP_DESCRIPTIONS = {
-    "Macro Regime": "Core cross-asset ratios for risk appetite, inflation pressure, dollar tightness, gold, credit, and duration.",
-    "Global Equity Leadership": "Regional leadership versus US equities.",
-    "Equity Internal Leadership": "Breadth, concentration, cyclicals versus defensives, and growth leadership inside the US equity market.",
-    "Factor Leadership": "Growth, value, momentum, quality, and defensive factor leadership.",
-    "Rates and Housing Sensitivity": "Duration, banks, housing, and real estate leadership.",
-    "Commodities and Hard Assets": "Gold, miners, energy, uranium, metals, and commodity sub-leadership.",
-    "AI and Growth Stack": "Semis, software, mega-cap AI, and speculative growth leadership.",
-    "Currency Proxy Leadership": "ETF proxies for currency leadership versus the US dollar ETF.",
-}
+CORE_RATIO_DESCRIPTION = (
+    "A deliberately small default set: 1 equal-weight cyclicals/defensives basket plus "
+    "14 cross-asset, equity leadership, factor, commodity, AI, and FX ratios. "
+    "Custom ratios remain available in the sidebar."
+)
 
 # ============================== Sidebar ==================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Ratio chart workspace for cross-asset regime framing, leadership analysis, and tape confirmation.
+        **Purpose:** Focused ratio chart workspace for cross-asset regime framing, leadership analysis, and tape confirmation.
 
         **How to read it**
         - A rising ratio means the first ticker is outperforming the second ticker.
         - Ratios are rebased to 100 at the selected lookback start date.
         - The signal line below each chart gives quick trend, momentum, and stale-data context.
+
+        **Default view:** 15 core charts only, to keep the tape readable instead of turning the page into a ratio library.
 
         **Data source:** Yahoo Finance adjusted daily close history.
         """
@@ -184,12 +116,8 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.header("Coverage")
-    selected_groups = st.multiselect(
-        "Preset groups",
-        list(PRESET_GROUPS.keys()),
-        default=list(PRESET_GROUPS.keys()),
-    )
+    st.header("Core 15")
+    st.caption("Default preset coverage is intentionally capped at 15 charts: one cyclicals/defensives basket plus 14 must-have ratios. Add anything else through Custom Ratios below.")
 
     st.markdown("---")
     with st.expander("Chart Settings", expanded=False):
@@ -215,8 +143,8 @@ with st.sidebar:
     st.header("Custom Ratios")
     custom_ratio_text = st.text_area(
         "Enter one or more ratios",
-        value="GLD/TLT",
-        help="Use formats like GLD/TLT, SMH/QQQ, or one pair per line.",
+        value="",
+        help="Use formats like GLD/TLT, SMH/QQQ, FXE/FXB, or one pair per line.",
         height=90,
     )
 
@@ -885,10 +813,7 @@ def render_ratio_block(
 
 # ============================== Selected universe =========================
 custom_specs = parse_custom_ratio_text(custom_ratio_text)
-
-selected_presets: List[RatioSpec] = []
-for group in selected_groups:
-    selected_presets.extend(PRESET_GROUPS.get(group, []))
+selected_presets: List[RatioSpec] = CORE_RATIO_SPECS
 
 static_tickers = unique_keep_order(
     CYCLICALS
@@ -908,8 +833,10 @@ if closes_static.empty:
     st.error("Failed to download price data.")
     st.stop()
 
-# ============================== Headline basket ===========================
-st.subheader("Headline Basket")
+# ============================== Core 15 chart 1 ===========================
+st.subheader("Core 15 Ratio Charts")
+st.caption(CORE_RATIO_DESCRIPTION)
+st.markdown("### 1. Cyclicals / Defensives")
 
 available_cyc = [t for t in CYCLICALS if t in closes_static.columns]
 available_def = [t for t in DEFENSIVES if t in closes_static.columns]
@@ -932,52 +859,40 @@ if available_cyc and available_def:
 else:
     st.warning("Unable to build the cyclicals / defensives basket with current data.")
 
-# ============================== Preset ratios =============================
-st.subheader("Preset Ratio Charts")
+# ============================== Core 15 charts 2-15 =======================
+st.markdown("### 2-15. Must-Have Preset Ratios")
 
 failed_pairs = []
 
-if not selected_presets:
-    st.info("Select at least one preset group in the sidebar.")
-else:
-    for group in selected_groups:
-        group_specs = [spec for spec in selected_presets if spec.group == group]
+for i, spec in enumerate(selected_presets, start=2):
+    a = spec.ticker_1
+    b = spec.ticker_2
 
-        if not group_specs:
+    if a in closes_static.columns and b in closes_static.columns:
+        ratio = compute_price_ratio(
+            closes_static[a],
+            closes_static[b],
+            base_date=disp_start,
+            base=100.0,
+        )
+
+        if ratio.empty:
+            failed_pairs.append(f"{a}/{b}")
             continue
 
-        st.markdown(f"### {group}")
-        st.caption(GROUP_DESCRIPTIONS.get(group, ""))
+        render_ratio_block(
+            ratio,
+            f"{i}. {make_display_title(spec)}",
+            disp_start,
+            selected_mas,
+            show_rsi,
+            rsi_window,
+            show_signal_strip,
+            note=spec.note,
+        )
 
-        for spec in group_specs:
-            a = spec.ticker_1
-            b = spec.ticker_2
-
-            if a in closes_static.columns and b in closes_static.columns:
-                ratio = compute_price_ratio(
-                    closes_static[a],
-                    closes_static[b],
-                    base_date=disp_start,
-                    base=100.0,
-                )
-
-                if ratio.empty:
-                    failed_pairs.append(f"{a}/{b}")
-                    continue
-
-                render_ratio_block(
-                    ratio,
-                    make_display_title(spec),
-                    disp_start,
-                    selected_mas,
-                    show_rsi,
-                    rsi_window,
-                    show_signal_strip,
-                    note=spec.note,
-                )
-
-            else:
-                failed_pairs.append(f"{a}/{b}")
+    else:
+        failed_pairs.append(f"{a}/{b}")
 
 if failed_pairs:
     st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))
