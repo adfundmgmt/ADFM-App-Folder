@@ -130,7 +130,7 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
     RatioSpec(
         "SMH",
         "^DJI",
-        "3x levered SOXX / Dow Jones",
+        "Semiconductors / Dow Jones",
         "Factor leadership.",
     ),
     RatioSpec(
