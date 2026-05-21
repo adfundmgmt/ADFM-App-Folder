@@ -27,7 +27,7 @@ CUSTOM_CSS = """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 TITLE = "ADFM Public Equities Baskets"
-SUBTITLE = "Sector, thematic, and country baskets."
+SUBTITLE = "Sector, thematic, country, and macro dislocation baskets."
 
 PASTEL_GREEN = "#52b788"
 PASTEL_RED = "#e85d5d"
@@ -57,7 +57,7 @@ EXCLUDE_MISSING_MARKET_CAP = False
 
 # ============================================================
 # Category -> Baskets -> Tickers
-# 250 baskets total:
+# 275 baskets total:
 # Technology/AI/Internet: 36
 # Energy/Power/Infrastructure/Materials: 36
 # Industrials/Defense/Transport: 27
@@ -66,6 +66,7 @@ EXCLUDE_MISSING_MARKET_CAP = False
 # Consumer/Housing/Travel: 28
 # Thematic Cross-Sector: 35
 # Countries/Regions: 35
+# Macro Dislocation and Special Situations: 25
 # ============================================================
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'AI Compute and Accelerators': ['NVDA', 'AMD', 'AVGO', 'MRVL', 'ARM', 'INTC'],
                                  'AI ASICs and Custom Silicon': ['AVGO', 'MRVL', 'AMD', 'TSM', 'ARM', 'SNPS', 'CDNS'],
@@ -841,7 +842,34 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                            'Saudi Arabia': ['KSA'],
                            'UAE': ['UAE'],
                            'Israel': ['EIS'],
-                           'South Africa': ['EZA']}}
+                           'South Africa': ['EZA']},
+ 'Macro Dislocation and Special Situations': {
+     'Tanker Shipping': ['FRO', 'STNG', 'INSW', 'TNK', 'DHT', 'NAT', 'TRMD', 'HAFN', 'CMBT', 'ASC'],
+     'Offshore Drilling': ['RIG', 'VAL', 'NE', 'BORR', 'DO', 'SDRL'],
+     'Critical Minerals: Tungsten and Antimony': ['ALM', 'PPTA', 'TUN.L', 'USAR', 'UAMY'],
+     'eVTOL and Urban Air Mobility': ['JOBY', 'ACHR', 'EH', 'EVTL', 'BLDE'],
+     'Greece Reclassification': ['GREK', 'NBG', 'EUROB.AT', 'OPAP.AT', 'MYTIL.AT'],
+     'Cannabis and MSOs': ['MSOS', 'CURLF', 'GTBIF', 'TCNNF', 'VRNOF', 'CRLBF', 'TRUL.CN'],
+     'Shipping and Geopolitical Tonne-Mile Risk': ['FRO', 'DHT', 'INSW', 'TNK', 'STNG', 'TRMD', 'ASC', 'FLNG', 'LPG', 'NVGS'],
+     'Energy Services: Offshore and Deepwater': ['RIG', 'VAL', 'NE', 'BORR', 'DO', 'SLB', 'HAL', 'BKR', 'FTI'],
+     'Strategic Minerals and Defense Metals': ['USAR', 'UAMY', 'MP', 'PPTA', 'ALM', 'TUN.L', 'UUUU', 'CRML'],
+     'Speculative Aviation and Autonomy': ['JOBY', 'ACHR', 'EH', 'EVTL', 'BLDE', 'RKLB', 'ASTS', 'IRDM'],
+     'Policy Optionality and Regulatory Beta': ['MSOS', 'CURLF', 'GTBIF', 'TCNNF', 'VRNOF', 'CRLBF', 'TRUL.CN', 'COIN', 'HOOD'],
+     'Index Reclassification and Frontier-to-Developed': ['GREK', 'NBG', 'EUROB.AT', 'OPAP.AT', 'MYTIL.AT', 'VNM', 'FM'],
+     'Container Shipping and Liners': ['ZIM', 'MATX', 'DAC', 'GSL', 'CMRE', 'SFL'],
+     'Dry Bulk Shipping': ['SBLK', 'GNK', 'GOGL', 'EGLE', 'SB', 'DSX', 'PANL'],
+     'LNG and LPG Shipping': ['FLNG', 'GLNG', 'LPG', 'BWLP', 'NVGS', 'SFL'],
+     'Marine Insurance and Reinsurance': ['ACGL', 'RNR', 'EG', 'AXS', 'CB', 'TRV', 'WRB'],
+     'Coal and Baseload Scarcity': ['CNR', 'BTU', 'AMR', 'HCC', 'METC', 'TECK', 'BHP', 'RIO'],
+     'Nuclear Fuel, Enrichment and Services': ['LEU', 'BWXT', 'CCJ', 'UUUU', 'UEC', 'NXE', 'DNN', 'URNM'],
+     'Geothermal and Clean Firm Power': ['ORA', 'BE', 'OKLO', 'SMR', 'CEG', 'VST', 'TLN', 'NEE'],
+     'Grid Flexibility and Storage': ['FLNC', 'STEM', 'NXT', 'AES', 'TSLA', 'ENPH', 'SEDG', 'NEE'],
+     'Gold Royalty and Streamers': ['FNV', 'WPM', 'RGLD', 'OR', 'SAND', 'TFPM'],
+     'Silver Pure Play': ['SLV', 'SIL', 'PAAS', 'AG', 'HL', 'CDE', 'FSM', 'MAG'],
+     'Volatility and Market Plumbing': ['CBOE', 'CME', 'ICE', 'NDAQ', 'VIRT', 'TW', 'IBKR', 'SCHW', 'MKTX'],
+     'Credit Data and Underwriting': ['FICO', 'EFX', 'TRU', 'SPGI', 'MCO', 'EXPGY'],
+     'Argentina Reform': ['ARGT', 'YPF', 'GGAL', 'BMA', 'BBAR', 'PAM', 'TGS', 'CEPU', 'LOMA']}}
+
 
 ALL_BASKETS = {basket: tickers for cat in CATEGORIES.values() for basket, tickers in cat.items()}
 
@@ -1637,10 +1665,10 @@ with st.sidebar:
         - Sector and subsector baskets.
         - Cross-sector thematic baskets.
         - Country and regional baskets.
+        - Macro dislocation and special-situation baskets.
 
         **What this page excludes**
         - Pure factor baskets.
-        - Pure regime diagnostics.
         - Redundant duplicate baskets.
 
         **Data source**
