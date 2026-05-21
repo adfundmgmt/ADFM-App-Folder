@@ -2,7 +2,6 @@ import re
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from math import ceil
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -18,13 +17,11 @@ pd.options.mode.chained_assignment = None
 # ============================== Page config ==============================
 st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
-st.caption("Cross-asset and equity leadership ratios using Yahoo Finance adjusted daily close data.")
 
 # ============================== Defaults =================================
 DEFAULT_LOOKBACK = "5 Years"
 DEFAULT_RSI_WINDOW = 14
 DEFAULT_STALE_DAYS = 7
-DEFAULT_MIN_BASKET_COVERAGE = 0.60
 
 MA_DEFAULTS = {
     8: True,
@@ -48,49 +45,113 @@ class RatioSpec:
     ticker_1: str
     ticker_2: str
     label: str
-    group: str
     note: str = ""
 
 
-CYCLICALS = ["XLK", "XLI", "XLF", "XLY", "XLC", "XLB", "XLE"]
-DEFENSIVES = ["XLP", "XLV", "XLU", "XLRE"]
-
 CORE_RATIO_SPECS: List[RatioSpec] = [
-    RatioSpec("SPY", "TLT", "Equities / Long Treasuries", "Core 15", "Primary risk-assets-versus-duration ratio."),
-    RatioSpec("HYG", "LQD", "High Yield / Investment Grade Credit", "Core 15", "Credit risk appetite and spread-beta confirmation."),
-    RatioSpec("TIP", "TLT", "TIPS / Nominal Long Treasuries", "Core 15", "Inflation-linked duration versus nominal duration."),
-    RatioSpec("GLD", "TLT", "Gold / Long Treasuries", "Core 15", "Hard-asset duration versus nominal duration."),
-    RatioSpec("DBC", "TLT", "Broad Commodities / Long Treasuries", "Core 15", "Commodity inflation pressure versus duration."),
-    RatioSpec("UUP", "GLD", "Dollar / Gold", "Core 15", "Dollar tightness versus hard money."),
-    RatioSpec("XLE", "SPY", "Energy / S&P 500", "Core 15", "Energy equity leadership versus broad equities."),
-    RatioSpec("VXUS", "SPY", "Ex-US Equities / US Equities", "Core 15", "Global equity leadership versus the US."),
-    RatioSpec("RSP", "SPY", "Equal Weight S&P 500 / Cap Weight S&P 500", "Core 15", "Breadth and concentration."),
-    RatioSpec("IWM", "SPY", "Small Caps / S&P 500", "Core 15", "Domestic cyclicality and risk appetite."),
-    RatioSpec("QQQ", "IWM", "Nasdaq 100 / Small Caps", "Core 15", "Mega-cap growth versus domestic beta."),
-    RatioSpec("IWF", "IWD", "Growth / Value", "Core 15", "Growth factor leadership versus value."),
-    RatioSpec("SMH", "QQQ", "Semiconductors / Nasdaq 100", "Core 15", "Semiconductor leadership inside the growth tape."),
-    RatioSpec("FXY", "UUP", "Yen ETF / Dollar Index ETF", "Core 15", "Yen strength versus the dollar proxy."),
+    RatioSpec(
+        "SPY",
+        "IEF",
+        "Equities / Intermediate Treasuries",
+        "Primary risk-assets-versus-rates ratio.",
+    ),
+    RatioSpec(
+        "HYG",
+        "LQD",
+        "High Yield / Investment Grade Credit",
+        "Credit risk appetite.",
+    ),
+    RatioSpec(
+        "UUP",
+        "SPY",
+        "Dollar / S&P 500",
+        "Dollar tightness versus equity risk.",
+    ),
+    RatioSpec(
+        "GLD",
+        "SPY",
+        "Gold / S&P 500",
+        "Gold versus equity risk.",
+    ),
+    RatioSpec(
+        "DBC",
+        "SPY",
+        "Broad Commodities / S&P 500",
+        "Commodity leadership versus equities.",
+    ),
+    RatioSpec(
+        "XLE",
+        "SPY",
+        "Energy / S&P 500",
+        "Energy and inflation beta versus broad equities.",
+    ),
+    RatioSpec(
+        "RSP",
+        "SPY",
+        "Equal Weight S&P 500 / Cap Weight S&P 500",
+        "Breadth and concentration.",
+    ),
+    RatioSpec(
+        "IWM",
+        "SPY",
+        "Small Caps / S&P 500",
+        "Domestic cyclicality and risk appetite.",
+    ),
+    RatioSpec(
+        "QQQ",
+        "SPY",
+        "Nasdaq 100 / S&P 500",
+        "Mega-cap growth leadership.",
+    ),
+    RatioSpec(
+        "XLY",
+        "XLP",
+        "Consumer Discretionary / Staples",
+        "Consumer cyclicals versus defensives.",
+    ),
+    RatioSpec(
+        "XLF",
+        "XLU",
+        "Financials / Utilities",
+        "Financial cyclicals versus bond-proxy defensives.",
+    ),
+    RatioSpec(
+        "XLI",
+        "XLU",
+        "Industrials / Utilities",
+        "Industrial cyclicals versus defensives.",
+    ),
+    RatioSpec(
+        "IWF",
+        "IWD",
+        "Growth / Value",
+        "Style leadership.",
+    ),
+    RatioSpec(
+        "MTUM",
+        "VLUE",
+        "Momentum / Value",
+        "Factor leadership.",
+    ),
+    RatioSpec(
+        "SMH",
+        "QQQ",
+        "Semiconductors / Nasdaq 100",
+        "AI and semiconductor leadership inside growth.",
+    ),
 ]
-
-CORE_RATIO_DESCRIPTION = (
-    "A deliberately small default set: 1 equal-weight cyclicals/defensives basket plus "
-    "14 cross-asset, equity leadership, factor, commodity, AI, and FX ratios. "
-    "Custom ratios remain available in the sidebar."
-)
 
 # ============================== Sidebar ==================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Focused ratio chart workspace for cross-asset regime framing, leadership analysis, and tape confirmation.
+        **Purpose:** Ratio chart workspace for regime framing, leadership confirmation, and tape discipline.
 
         **How to read it**
         - A rising ratio means the first ticker is outperforming the second ticker.
         - Ratios are rebased to 100 at the selected lookback start date.
-        - The signal line below each chart gives quick trend, momentum, and stale-data context.
-
-        **Default view:** 15 core charts only, to keep the tape readable instead of turning the page into a ratio library.
+        - The signal line gives trend, momentum, moving-average, and stale-data context.
 
         **Data source:** Yahoo Finance adjusted daily close history.
         """
@@ -109,6 +170,7 @@ with st.sidebar:
         "10 Years": 365 * 10,
         "20 Years": 365 * 20,
     }
+
     span_key = st.selectbox(
         "Period",
         list(spans.keys()),
@@ -116,13 +178,15 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.header("Core 15")
-    st.caption("Default preset coverage is intentionally capped at 15 charts: one cyclicals/defensives basket plus 14 must-have ratios. Add anything else through Custom Ratios below.")
-
-    st.markdown("---")
     with st.expander("Chart Settings", expanded=False):
         show_signal_strip = st.checkbox("Show signal strip", value=True)
-        rsi_window = st.slider("RSI window", min_value=5, max_value=30, value=DEFAULT_RSI_WINDOW, step=1)
+        rsi_window = st.slider(
+            "RSI window",
+            min_value=5,
+            max_value=30,
+            value=DEFAULT_RSI_WINDOW,
+            step=1,
+        )
         show_rsi = st.checkbox("Show RSI pane", value=True)
 
         selected_mas = {}
@@ -130,21 +194,12 @@ with st.sidebar:
         for ma_len, default_value in MA_DEFAULTS.items():
             selected_mas[ma_len] = st.checkbox(f"{ma_len} DMA", value=default_value)
 
-        min_basket_coverage = st.slider(
-            "Minimum basket coverage",
-            min_value=0.30,
-            max_value=1.00,
-            value=DEFAULT_MIN_BASKET_COVERAGE,
-            step=0.05,
-            help="Minimum share of basket constituents required before an equal-weight basket value is calculated.",
-        )
-
     st.markdown("---")
     st.header("Custom Ratios")
     custom_ratio_text = st.text_area(
         "Enter one or more ratios",
         value="",
-        help="Use formats like GLD/TLT, SMH/QQQ, FXE/FXB, or one pair per line.",
+        help="Use formats like GLD/SPY, SMH/QQQ, FXE/FXB, or one pair per line.",
         height=90,
     )
 
@@ -166,11 +221,14 @@ def clean_ticker(ticker: str) -> str:
 def unique_keep_order(items: Iterable[str]) -> List[str]:
     seen = set()
     out = []
+
     for item in items:
         item = clean_ticker(item)
+
         if item and item not in seen:
             seen.add(item)
             out.append(item)
+
     return out
 
 
@@ -188,6 +246,7 @@ def parse_custom_ratio_text(text: str) -> List[RatioSpec]:
 
     for part in raw_parts:
         part = part.strip().upper()
+
         if not part:
             continue
 
@@ -203,12 +262,14 @@ def parse_custom_ratio_text(text: str) -> List[RatioSpec]:
         b = clean_ticker(pieces[1])
 
         if a and b and a != b:
-            specs.append(RatioSpec(a, b, f"{a} / {b}", "Custom Ratios"))
+            specs.append(RatioSpec(a, b, f"{a} / {b}"))
 
     deduped = []
     seen = set()
+
     for spec in specs:
         key = (spec.ticker_1, spec.ticker_2)
+
         if key not in seen:
             seen.add(key)
             deduped.append(spec)
@@ -219,6 +280,7 @@ def parse_custom_ratio_text(text: str) -> List[RatioSpec]:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd.DataFrame:
     ticker_list = unique_keep_order(tickers)
+
     if not ticker_list:
         return pd.DataFrame()
 
@@ -231,6 +293,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
                 return pd.to_numeric(block[field], errors="coerce")
 
         numeric = block.select_dtypes(include=[np.number])
+
         if numeric.empty:
             return None
 
@@ -253,8 +316,10 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
                 for ticker in requested:
                     if ticker not in tickers_in_level0:
                         continue
+
                     try:
                         close = _extract_close(raw[ticker])
+
                         if close is not None:
                             out[ticker] = close
                     except Exception:
@@ -264,10 +329,14 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
                 for ticker in requested:
                     if ticker not in tickers_in_level1:
                         continue
+
                     for field in ("Close", "Adj Close"):
                         try:
                             if (field, ticker) in raw.columns:
-                                out[ticker] = pd.to_numeric(raw[(field, ticker)], errors="coerce")
+                                out[ticker] = pd.to_numeric(
+                                    raw[(field, ticker)],
+                                    errors="coerce",
+                                )
                                 break
                         except Exception:
                             continue
@@ -275,6 +344,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
         else:
             if len(requested) == 1:
                 close = _extract_close(raw)
+
                 if close is not None:
                     out[requested[0]] = close
 
@@ -303,6 +373,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
                 threads=True,
             )
             normalized = _normalize(raw, batch)
+
             if not normalized.empty:
                 frames.append(normalized)
                 continue
@@ -319,6 +390,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
                 threads=True,
             )
             normalized = _normalize(raw, batch)
+
             if not normalized.empty:
                 frames.append(normalized)
         except Exception:
@@ -336,10 +408,12 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
 
 def first_valid_on_or_after(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Timestamp, float]:
     s = series.dropna()
+
     if s.empty:
         return pd.NaT, np.nan
 
     sub = s.loc[ts:]
+
     if not sub.empty:
         return sub.index[0], float(sub.iloc[0])
 
@@ -348,10 +422,12 @@ def first_valid_on_or_after(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Tim
 
 def last_valid_on_or_before(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Timestamp, float]:
     s = series.dropna()
+
     if s.empty:
         return pd.NaT, np.nan
 
     sub = s.loc[:ts]
+
     if not sub.empty:
         return sub.index[-1], float(sub.iloc[-1])
 
@@ -360,6 +436,7 @@ def last_valid_on_or_before(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Tim
 
 def rebase_series(series: pd.Series, base_date: pd.Timestamp, base: float = 100.0) -> pd.Series:
     s = series.replace([np.inf, -np.inf], np.nan).dropna()
+
     if s.empty:
         return pd.Series(dtype=float)
 
@@ -378,54 +455,6 @@ def compute_price_ratio(
     base: float = 100.0,
 ) -> pd.Series:
     a, b = s1.align(s2, join="inner")
-    raw_ratio = (a / b).replace([np.inf, -np.inf], np.nan).dropna()
-    return rebase_series(raw_ratio, base_date=base_date, base=base)
-
-
-def normalize_prices_to_100(prices: pd.DataFrame) -> pd.DataFrame:
-    if prices.empty:
-        return pd.DataFrame(index=prices.index)
-
-    out = pd.DataFrame(index=prices.index)
-
-    for col in prices.columns:
-        s = pd.to_numeric(prices[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        first = s.first_valid_index()
-
-        if first is None:
-            continue
-
-        base_val = s.loc[first]
-
-        if not np.isfinite(base_val) or base_val == 0:
-            continue
-
-        out[col] = s / base_val * 100.0
-
-    return out
-
-
-def equal_weight_basket(prices: pd.DataFrame, min_coverage: float = 0.60) -> pd.Series:
-    normalized = normalize_prices_to_100(prices)
-
-    if normalized.empty:
-        return pd.Series(dtype=float)
-
-    required = max(1, int(ceil(len(normalized.columns) * min_coverage)))
-    counts = normalized.notna().sum(axis=1)
-    basket = normalized.mean(axis=1, skipna=True)
-    basket = basket.where(counts >= required)
-
-    return basket.dropna()
-
-
-def compute_basket_ratio(
-    basket_1: pd.Series,
-    basket_2: pd.Series,
-    base_date: pd.Timestamp,
-    base: float = 100.0,
-) -> pd.Series:
-    a, b = basket_1.align(basket_2, join="inner")
     raw_ratio = (a / b).replace([np.inf, -np.inf], np.nan).dropna()
     return rebase_series(raw_ratio, base_date=base_date, base=base)
 
@@ -501,18 +530,21 @@ def days_since_window_extreme(series: pd.Series, window: int, kind: str) -> floa
 def fmt_pct(value: float) -> str:
     if value is None or not np.isfinite(value):
         return "n/a"
+
     return f"{value:+.1%}"
 
 
 def fmt_num(value: float) -> str:
     if value is None or not np.isfinite(value):
         return "n/a"
+
     return f"{value:,.1f}"
 
 
 def fmt_days(value: float) -> str:
     if value is None or not np.isfinite(value):
         return "n/a"
+
     return f"{int(value)}d"
 
 
@@ -520,7 +552,11 @@ def make_display_title(spec: RatioSpec) -> str:
     return f"{spec.label} ({spec.ticker_1}/{spec.ticker_2})"
 
 
-def ratio_signal_line(ratio: pd.Series, rsi_len: int, stale_days: int = DEFAULT_STALE_DAYS) -> str:
+def ratio_signal_line(
+    ratio: pd.Series,
+    rsi_len: int,
+    stale_days: int = DEFAULT_STALE_DAYS,
+) -> str:
     s = ratio.replace([np.inf, -np.inf], np.nan).dropna()
 
     if s.empty:
@@ -779,16 +815,12 @@ def render_ratio_block(
     show_rsi_flag: bool,
     rsi_len: int,
     signal_strip: bool,
-    note: str = "",
 ):
     clean = ratio.replace([np.inf, -np.inf], np.nan).dropna()
 
     if clean.empty:
         st.warning(f"No usable data for {title}.")
         return
-
-    if note:
-        st.caption(note)
 
     try:
         fig = make_fig(
@@ -813,12 +845,9 @@ def render_ratio_block(
 
 # ============================== Selected universe =========================
 custom_specs = parse_custom_ratio_text(custom_ratio_text)
-selected_presets: List[RatioSpec] = CORE_RATIO_SPECS
 
 static_tickers = unique_keep_order(
-    CYCLICALS
-    + DEFENSIVES
-    + [ticker for spec in selected_presets for ticker in (spec.ticker_1, spec.ticker_2)]
+    [ticker for spec in CORE_RATIO_SPECS for ticker in (spec.ticker_1, spec.ticker_2)]
 )
 
 custom_tickers = unique_keep_order(
@@ -833,38 +862,10 @@ if closes_static.empty:
     st.error("Failed to download price data.")
     st.stop()
 
-# ============================== Core 15 chart 1 ===========================
-st.subheader("Core 15 Ratio Charts")
-st.caption(CORE_RATIO_DESCRIPTION)
-st.markdown("### 1. Cyclicals / Defensives")
-
-available_cyc = [t for t in CYCLICALS if t in closes_static.columns]
-available_def = [t for t in DEFENSIVES if t in closes_static.columns]
-
-if available_cyc and available_def:
-    cyc_basket = equal_weight_basket(closes_static[available_cyc], min_coverage=min_basket_coverage)
-    def_basket = equal_weight_basket(closes_static[available_def], min_coverage=min_basket_coverage)
-    cyc_def_ratio = compute_basket_ratio(cyc_basket, def_basket, base_date=disp_start, base=100.0)
-
-    render_ratio_block(
-        cyc_def_ratio,
-        "Cyclicals / Defensives Equal Weight Basket",
-        disp_start,
-        selected_mas,
-        show_rsi,
-        rsi_window,
-        show_signal_strip,
-        note=f"Cyclicals: {', '.join(available_cyc)} | Defensives: {', '.join(available_def)}",
-    )
-else:
-    st.warning("Unable to build the cyclicals / defensives basket with current data.")
-
-# ============================== Core 15 charts 2-15 =======================
-st.markdown("### 2-15. Must-Have Preset Ratios")
-
+# ============================== Render core ratios ========================
 failed_pairs = []
 
-for i, spec in enumerate(selected_presets, start=2):
+for spec in CORE_RATIO_SPECS:
     a = spec.ticker_1
     b = spec.ticker_2
 
@@ -882,13 +883,12 @@ for i, spec in enumerate(selected_presets, start=2):
 
         render_ratio_block(
             ratio,
-            f"{i}. {make_display_title(spec)}",
+            make_display_title(spec),
             disp_start,
             selected_mas,
             show_rsi,
             rsi_window,
             show_signal_strip,
-            note=spec.note,
         )
 
     else:
@@ -898,11 +898,9 @@ if failed_pairs:
     st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))
 
 # ============================== Custom ratios =============================
-st.subheader("Custom Ratios")
+if custom_specs:
+    st.subheader("Custom Ratios")
 
-if not custom_specs:
-    st.info("Enter custom pairs in the sidebar using the format TICKER1/TICKER2.")
-else:
     closes_custom = fetch_closes(tuple(custom_tickers), hist_start, yf_end)
 
     if closes_custom.empty:
