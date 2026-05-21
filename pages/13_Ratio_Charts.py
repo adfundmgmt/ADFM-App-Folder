@@ -19,7 +19,7 @@ st.set_page_config(layout="wide", page_title="Ratio Charts")
 st.title("Ratio Charts")
 
 # ============================== Defaults =================================
-DEFAULT_LOOKBACK = "5 Years"
+DEFAULT_LOOKBACK = "3 Years"
 DEFAULT_RSI_WINDOW = 14
 DEFAULT_STALE_DAYS = 7
 
@@ -134,9 +134,9 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "Factor leadership.",
     ),
     RatioSpec(
-        "SMH",
         "NVDA",
-        "Semiconductors / Nvidia",
+        "SMH",
+        "Nvidia / Semiconductors",
         "AI and semiconductor leadership.",
     ),
 ]
