@@ -28,7 +28,7 @@ DEFAULT_MIN_BASKET_COVERAGE = 0.60
 
 MA_DEFAULTS = {
     8: True,
-    21: True,
+    21: False,
     50: True,
     100: True,
     200: True,
