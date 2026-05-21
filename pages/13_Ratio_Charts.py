@@ -24,8 +24,8 @@ DEFAULT_RSI_WINDOW = 14
 DEFAULT_STALE_DAYS = 7
 
 MA_DEFAULTS = {
-    8: True,
-    21: False,
+    8: False,
+    21: True,
     50: True,
     100: True,
     200: True,
@@ -116,10 +116,10 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "Financial cyclicals versus bond-proxy defensives.",
     ),
     RatioSpec(
-        "XLI",
-        "XLU",
-        "Industrials / Utilities",
-        "Industrial cyclicals versus defensives.",
+        "XLK",
+        "XLE",
+        "Technology / Energy",
+        "Technology versus energy.",
     ),
     RatioSpec(
         "IWF",
@@ -128,16 +128,16 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "Style leadership.",
     ),
     RatioSpec(
-        "MTUM",
-        "VLUE",
-        "Momentum / Value",
+        "SMH",
+        "^DJI",
+        "3x levered SOXX / Dow Jones",
         "Factor leadership.",
     ),
     RatioSpec(
         "SMH",
-        "QQQ",
-        "Semiconductors / Nasdaq 100",
-        "AI and semiconductor leadership inside growth.",
+        "NVDA",
+        "Semiconductors / Nvidia",
+        "AI and semiconductor leadership.",
     ),
 ]
 
