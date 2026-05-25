@@ -5,7 +5,7 @@ import yfinance as yf
 from datetime import date, timedelta
 import plotly.graph_objects as go
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 import json
 import time
 
@@ -29,9 +29,6 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 TITLE = "ADFM Public Equities Baskets"
 SUBTITLE = "Sector, thematic, country, and macro dislocation baskets."
 
-PASTEL_GREEN = "#52b788"
-PASTEL_RED = "#e85d5d"
-PASTEL_GREY = "#8b949e"
 
 PASTEL = [
     "#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2",
@@ -48,7 +45,6 @@ CACHE_DIR = Path(".adfm_cache")
 LEVELS_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good.pkl"
 LEVELS_META_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good_meta.json"
 
-MARKET_CAP_EXCEPTIONS: set[str] = set()
 
 # If Yahoo does not return a market cap, the ticker is kept.
 # ETFs, ADRs, and foreign listings often have missing market-cap fields.
@@ -57,16 +53,7 @@ EXCLUDE_MISSING_MARKET_CAP = False
 
 # ============================================================
 # Category -> Baskets -> Tickers
-# 275 baskets total:
-# Technology/AI/Internet: 36
-# Energy/Power/Infrastructure/Materials: 36
-# Industrials/Defense/Transport: 27
-# Healthcare: 25
-# Financials/Real Estate: 28
-# Consumer/Housing/Travel: 28
-# Thematic Cross-Sector: 35
-# Countries/Regions: 35
-# Macro Dislocation and Special Situations: 25
+# Consolidated basket map. Near-duplicate baskets were removed so each remaining basket has a cleaner signal.
 # ============================================================
 CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'AI Compute and Accelerators': ['NVDA', 'AMD', 'AVGO', 'MRVL', 'ARM', 'INTC'],
                                  'AI ASICs and Custom Silicon': ['AVGO', 'MRVL', 'AMD', 'TSM', 'ARM', 'SNPS', 'CDNS'],
@@ -148,7 +135,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                     'AI'],
                                  'Database and Data Platforms': ['SNOW', 'MDB', 'ESTC', 'CFLT', 'DDOG', 'ORCL', 'IBM'],
                                  'Observability and DevOps': ['DDOG', 'DT', 'GTLB', 'NET', 'ESTC', 'MDB', 'TEAM'],
-                                 'Developer Productivity and Code AI': ['MSFT', 'GTLB', 'TEAM', 'DDOG', 'MDB', 'NOW'],
                                  'Cybersecurity Platforms': ['PANW',
                                                              'CRWD',
                                                              'FTNT',
@@ -160,16 +146,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                              'TENB',
                                                              'S'],
                                  'Identity and Access Management': ['OKTA', 'CYBR', 'MSFT', 'PANW', 'FTNT', 'CHKP'],
-                                 'AI Security and Model Governance': ['CRWD',
-                                                                      'PANW',
-                                                                      'ZS',
-                                                                      'DDOG',
-                                                                      'PLTR',
-                                                                      'SNOW',
-                                                                      'NET',
-                                                                      'S'],
                                  'Digital Advertising Platforms': ['GOOGL', 'META', 'TTD', 'PINS', 'SNAP', 'APP'],
-                                 'Retail Media Networks': ['AMZN', 'WMT', 'CART', 'GOOGL', 'META', 'TTD'],
                                  'Consumer Internet': ['META', 'SNAP', 'PINS', 'MTCH', 'GOOGL', 'BIDU', 'BILI', 'RBLX'],
                                  'E-Commerce Marketplaces': ['AMZN',
                                                              'SHOP',
@@ -272,7 +249,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                                 'SMR',
                                                                                 'OKLO',
                                                                                 'CCJ'],
-                                                 'Nuclear SMR Developers': ['SMR', 'OKLO', 'BWXT', 'FLR', 'GEV'],
                                                  'Merchant Power Producers': ['VST',
                                                                               'CEG',
                                                                               'NRG',
@@ -296,13 +272,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                                      'MYRG',
                                                                                      'PWR',
                                                                                      'RRX'],
-                                                 'Transformer Bottleneck': ['ETN', 'GEV', 'HUBB', 'POWL', 'ABB', 'RRX'],
-                                                 'Switchgear and Electrical Distribution': ['ETN',
-                                                                                            'ABB',
-                                                                                            'GEV',
-                                                                                            'HUBB',
-                                                                                            'POWL',
-                                                                                            'GNRC'],
                                                  'Data Center Power and Thermal': ['VRT',
                                                                                    'ETN',
                                                                                    'TT',
@@ -417,10 +386,8 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                         'KTOS',
                                                                         'AVAV',
                                                                         'PLTR'],
-                                        'Missiles and Munitions': ['LMT', 'RTX', 'NOC', 'GD', 'LHX', 'BAESY', 'RNMBY'],
                                         'Drones and Autonomous Defense': ['AVAV', 'KTOS', 'LMT', 'NOC', 'PLTR', 'TXT'],
                                         'Naval Shipbuilding and Undersea': ['HII', 'GD', 'LMT', 'NOC', 'RTX'],
-                                        'Air Defense and Radar': ['RTX', 'LMT', 'NOC', 'LHX', 'BAESY', 'ESLT'],
                                         'Defense Cybersecurity': ['PLTR', 'CRWD', 'PANW', 'ZS', 'LDOS', 'BAH', 'CACI'],
                                         'Government IT and Mission Services': ['SAIC',
                                                                                'CACI',
@@ -436,7 +403,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                 'NOC',
                                                                 'VSAT',
                                                                 'GSAT'],
-                                        'Satellite Communications': ['IRDM', 'VSAT', 'GSAT', 'ASTS', 'LHX', 'NOC'],
                                         'Aerospace Aftermarket': ['GE', 'RTX', 'HEI', 'TDG', 'FTAI', 'HWM'],
                                         'Commercial Aerospace OEM and Suppliers': ['BA',
                                                                                    'GE',
@@ -455,8 +421,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                   'TRMB',
                                                                   'CGNX',
                                                                   'SYM'],
-                                        'Factory Automation': ['ROK', 'ABB', 'FANUY', 'CGNX', 'TER', 'KEYS', 'AME'],
-                                        'Warehouse Automation': ['SYM', 'ZBRA', 'ROK', 'TER', 'CGNX', 'AME'],
                                         'Sensors and Measurement': ['KEYS', 'TRMB', 'AME', 'TDY', 'FTV', 'ROK'],
                                         'Test and Measurement': ['KEYS', 'TER', 'FTV', 'TDY', 'A', 'COHU'],
                                         'Industrial Software and PLM': ['ADSK', 'PTC', 'DASTY', 'SNPS', 'CDNS', 'TRMB'],
@@ -472,7 +436,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
  'Healthcare': {'Large-Cap Pharma': ['LLY', 'JNJ', 'MRK', 'PFE', 'BMY', 'ABBV', 'AZN', 'NVO', 'NVS', 'GSK'],
                 'Large-Cap Biotech': ['AMGN', 'GILD', 'REGN', 'BIIB', 'VRTX', 'ALNY'],
                 'GLP-1 and Metabolic': ['LLY', 'NVO', 'AZN', 'MRK', 'PFE', 'VKTX', 'AMGN'],
-                'Obesity Drug Ecosystem': ['LLY', 'NVO', 'VKTX', 'AMGN', 'MRK', 'PFE', 'TMO', 'DHR'],
                 'Oncology and Immunology': ['MRK', 'BMY', 'RHHBY', 'REGN', 'VRTX', 'INCY', 'EXEL'],
                 'Rare Disease and Specialty Pharma': ['VRTX', 'ALNY', 'BMRN', 'RARE', 'IONS', 'HALO'],
                 'MedTech Devices': ['MDT', 'SYK', 'ISRG', 'BSX', 'ZBH', 'EW', 'PEN', 'ABT'],
@@ -483,12 +446,8 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                 'Diagnostics and Life Science Tools': ['TMO', 'DHR', 'A', 'RGEN', 'ILMN', 'WAT', 'BRKR'],
                 'CRO and Clinical Services': ['IQV', 'LH', 'DGX', 'MEDP', 'ICLR', 'CRL'],
                 'Healthcare Payers and Managed Care': ['UNH', 'HUM', 'CI', 'ELV', 'CNC', 'MOH', 'OSCR'],
-                'Medicare Advantage Risk': ['HUM', 'UNH', 'ELV', 'CI', 'CNC', 'MOH'],
-                'Medicaid Managed Care': ['CNC', 'MOH', 'ELV', 'UNH'],
                 'Drug Distributors and Healthcare Supply Chain': ['MCK', 'COR', 'CAH', 'CVS', 'CI', 'HSIC', 'OMI'],
-                'Specialty Pharmacy and PBM': ['CVS', 'CI', 'UNH', 'ELV', 'MCK', 'COR'],
                 'Hospitals and Providers': ['HCA', 'THC', 'UHS', 'CYH', 'EHC'],
-                'Hospital Utilization Winners': ['HCA', 'THC', 'UHS', 'SYK', 'BSX', 'ISRG', 'EW'],
                 'Dental Vision and Elective Care': ['ALGN', 'HSIC', 'EYE', 'WRBY', 'XRAY'],
                 'Senior Housing and Aging Care': ['WELL', 'VTR', 'OHI', 'SBRA', 'HCA', 'EHC'],
                 'Healthcare AI and Automation': ['MCK', 'COR', 'UNH', 'CI', 'HCA', 'TMO', 'DHR', 'ISRG', 'PLTR'],
@@ -518,8 +477,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                             'TROW'],
                                 'Private Credit and BDCs': ['ARES', 'ARCC', 'MAIN', 'BXSL', 'OBDC', 'FSK'],
                                 'Exchanges and Market Data': ['CME', 'ICE', 'NDAQ', 'CBOE', 'MKTX', 'SPGI', 'MSCI'],
-                                'Derivatives Exchanges': ['CME', 'ICE', 'CBOE', 'NDAQ'],
-                                'Market Data and Index Providers': ['SPGI', 'MSCI', 'NDAQ', 'ICE', 'MCO'],
                                 'Brokers and Trading Platforms': ['IBKR', 'SCHW', 'HOOD', 'RJF', 'MS', 'GS'],
                                 'Electronic Trading and Market Makers': ['VIRT', 'TW', 'IBKR', 'CBOE', 'NDAQ'],
                                 'Card Networks and Consumer Lenders': ['V',
@@ -534,7 +491,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                 'Payments Processors Legacy': ['FI', 'FIS', 'GPN', 'PYPL', 'XYZ'],
                                 'Cross-Border Payments': ['V', 'MA', 'PYPL', 'WU', 'EEFT', 'GPN'],
                                 'Stablecoin and Tokenization Proxies': ['COIN', 'HOOD', 'PYPL', 'XYZ', 'MSTR', 'IBKR'],
-                                'Crypto Exchanges and Custody': ['COIN', 'HOOD', 'MSTR', 'IBKR'],
                                 'Bitcoin Miners': ['MARA', 'RIOT', 'CLSK', 'IREN', 'CORZ', 'CIFR', 'BITF'],
                                 'P&C Insurance': ['PGR', 'TRV', 'CB', 'ALL', 'CINF', 'WRB', 'HIG'],
                                 'Life and Retirement Insurance': ['MET', 'PRU', 'LNC', 'AIG', 'EQH', 'RGA'],
@@ -624,28 +580,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                             'SNOW',
                                                             'MDB',
                                                             'DDOG'],
-                                   'AI Hardware Supply Chain': ['NVDA',
-                                                                'AMD',
-                                                                'AVGO',
-                                                                'TSM',
-                                                                'ASML',
-                                                                'AMAT',
-                                                                'LRCX',
-                                                                'KLAC',
-                                                                'MU',
-                                                                'ANET',
-                                                                'VRT',
-                                                                'DELL'],
-                                   'Sovereign AI Infrastructure': ['NVDA',
-                                                                   'AMD',
-                                                                   'AVGO',
-                                                                   'TSM',
-                                                                   'ASML',
-                                                                   'ANET',
-                                                                   'VRT',
-                                                                   'ETN',
-                                                                   'ORCL',
-                                                                   'HPE'],
                                    'Data Center Construction and EPC': ['PWR',
                                                                         'MYRG',
                                                                         'EME',
@@ -655,8 +589,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                         'VRT',
                                                                         'ETN',
                                                                         'GEV'],
-                                   'Grid Bottleneck': ['ETN', 'GEV', 'HUBB', 'POWL', 'PWR', 'MYRG', 'ABB', 'VRT'],
-                                   'Electrification': ['ETN', 'GEV', 'ABB', 'HUBB', 'POWL', 'VRT', 'ON', 'MPWR'],
                                    'Reindustrialization': ['CAT',
                                                            'DE',
                                                            'ETN',
@@ -687,16 +619,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                           'FCX',
                                                                           'EXP'],
                                    'Nearshoring Mexico': ['EWW', 'KOF', 'FMX', 'CX', 'AMX', 'PAC', 'OMAB', 'ASR'],
-                                   'Defense Modernization': ['LMT',
-                                                             'NOC',
-                                                             'RTX',
-                                                             'GD',
-                                                             'LHX',
-                                                             'PLTR',
-                                                             'KTOS',
-                                                             'AVAV',
-                                                             'LDOS',
-                                                             'BAH'],
                                    'NATO Re-Armament': ['LMT',
                                                         'NOC',
                                                         'RTX',
@@ -719,14 +641,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                       'WELL',
                                                                       'VTR',
                                                                       'HCA'],
-                                   'Healthcare Supply Chain Automation': ['MCK',
-                                                                          'COR',
-                                                                          'CAH',
-                                                                          'UNH',
-                                                                          'CI',
-                                                                          'ACN',
-                                                                          'CTSH',
-                                                                          'PLTR'],
                                    'Crypto and Tokenization Proxies': ['COIN',
                                                                        'MSTR',
                                                                        'HOOD',
@@ -763,14 +677,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                     'INVH',
                                                                     'AMH',
                                                                     'AVB'],
-                                   'Mortgage Rate Sensitive Housing': ['ITB',
-                                                                       'DHI',
-                                                                       'LEN',
-                                                                       'PHM',
-                                                                       'TOL',
-                                                                       'RKT',
-                                                                       'UWMC',
-                                                                       'FNF'],
                                    'Tariff Beneficiaries': ['NUE',
                                                             'STLD',
                                                             'CLF',
@@ -843,35 +749,121 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                            'UAE': ['UAE'],
                            'Israel': ['EIS'],
                            'South Africa': ['EZA']},
- 'Macro Dislocation and Special Situations': {
-     'Tanker Shipping': ['FRO', 'STNG', 'INSW', 'TNK', 'DHT', 'NAT', 'TRMD', 'HAFN', 'CMBT', 'ASC'],
-     'Offshore Drilling': ['RIG', 'VAL', 'NE', 'BORR', 'DO', 'SDRL'],
-     'Critical Minerals: Tungsten and Antimony': ['ALM', 'PPTA', 'TUN.L', 'USAR', 'UAMY'],
-     'eVTOL and Urban Air Mobility': ['JOBY', 'ACHR', 'EH', 'EVTL', 'BLDE'],
-     'Greece Reclassification': ['GREK', 'NBG', 'EUROB.AT', 'OPAP.AT', 'MYTIL.AT'],
-     'Cannabis and MSOs': ['MSOS', 'CURLF', 'GTBIF', 'TCNNF', 'VRNOF', 'CRLBF', 'TRUL.CN'],
-     'Shipping and Geopolitical Tonne-Mile Risk': ['FRO', 'DHT', 'INSW', 'TNK', 'STNG', 'TRMD', 'ASC', 'FLNG', 'LPG', 'NVGS'],
-     'Energy Services: Offshore and Deepwater': ['RIG', 'VAL', 'NE', 'BORR', 'DO', 'SLB', 'HAL', 'BKR', 'FTI'],
-     'Strategic Minerals and Defense Metals': ['USAR', 'UAMY', 'MP', 'PPTA', 'ALM', 'TUN.L', 'UUUU', 'CRML'],
-     'Speculative Aviation and Autonomy': ['JOBY', 'ACHR', 'EH', 'EVTL', 'BLDE', 'RKLB', 'ASTS', 'IRDM'],
-     'Policy Optionality and Regulatory Beta': ['MSOS', 'CURLF', 'GTBIF', 'TCNNF', 'VRNOF', 'CRLBF', 'TRUL.CN', 'COIN', 'HOOD'],
-     'Index Reclassification and Frontier-to-Developed': ['GREK', 'NBG', 'EUROB.AT', 'OPAP.AT', 'MYTIL.AT', 'VNM', 'FM'],
-     'Container Shipping and Liners': ['ZIM', 'MATX', 'DAC', 'GSL', 'CMRE', 'SFL'],
-     'Dry Bulk Shipping': ['SBLK', 'GNK', 'GOGL', 'EGLE', 'SB', 'DSX', 'PANL'],
-     'LNG and LPG Shipping': ['FLNG', 'GLNG', 'LPG', 'BWLP', 'NVGS', 'SFL'],
-     'Marine Insurance and Reinsurance': ['ACGL', 'RNR', 'EG', 'AXS', 'CB', 'TRV', 'WRB'],
-     'Coal and Baseload Scarcity': ['CNR', 'BTU', 'AMR', 'HCC', 'METC', 'TECK', 'BHP', 'RIO'],
-     'Nuclear Fuel, Enrichment and Services': ['LEU', 'BWXT', 'CCJ', 'UUUU', 'UEC', 'NXE', 'DNN', 'URNM'],
-     'Geothermal and Clean Firm Power': ['ORA', 'BE', 'OKLO', 'SMR', 'CEG', 'VST', 'TLN', 'NEE'],
-     'Grid Flexibility and Storage': ['FLNC', 'STEM', 'NXT', 'AES', 'TSLA', 'ENPH', 'SEDG', 'NEE'],
-     'Gold Royalty and Streamers': ['FNV', 'WPM', 'RGLD', 'OR', 'SAND', 'TFPM'],
-     'Silver Pure Play': ['SLV', 'SIL', 'PAAS', 'AG', 'HL', 'CDE', 'FSM', 'MAG'],
-     'Volatility and Market Plumbing': ['CBOE', 'CME', 'ICE', 'NDAQ', 'VIRT', 'TW', 'IBKR', 'SCHW', 'MKTX'],
-     'Credit Data and Underwriting': ['FICO', 'EFX', 'TRU', 'SPGI', 'MCO', 'EXPGY'],
-     'Argentina Reform': ['ARGT', 'YPF', 'GGAL', 'BMA', 'BBAR', 'PAM', 'TGS', 'CEPU', 'LOMA']}}
+ 'Macro Dislocation and Special Situations': {'Tanker Shipping': ['FRO',
+                                                                  'STNG',
+                                                                  'INSW',
+                                                                  'TNK',
+                                                                  'DHT',
+                                                                  'NAT',
+                                                                  'TRMD',
+                                                                  'HAFN',
+                                                                  'CMBT',
+                                                                  'ASC'],
+                                              'Offshore Drilling': ['RIG', 'VAL', 'NE', 'BORR', 'DO', 'SDRL'],
+                                              'Critical Minerals: Tungsten and Antimony': ['ALM',
+                                                                                           'PPTA',
+                                                                                           'TUN.L',
+                                                                                           'USAR',
+                                                                                           'UAMY'],
+                                              'eVTOL and Urban Air Mobility': ['JOBY', 'ACHR', 'EH', 'EVTL', 'BLDE'],
+                                              'Greece Reclassification': ['GREK',
+                                                                          'NBG',
+                                                                          'EUROB.AT',
+                                                                          'OPAP.AT',
+                                                                          'MYTIL.AT'],
+                                              'Cannabis and MSOs': ['MSOS',
+                                                                    'CURLF',
+                                                                    'GTBIF',
+                                                                    'TCNNF',
+                                                                    'VRNOF',
+                                                                    'CRLBF',
+                                                                    'TRUL.CN'],
+                                              'Container Shipping and Liners': ['ZIM',
+                                                                                'MATX',
+                                                                                'DAC',
+                                                                                'GSL',
+                                                                                'CMRE',
+                                                                                'SFL'],
+                                              'Dry Bulk Shipping': ['SBLK', 'GNK', 'GOGL', 'EGLE', 'SB', 'DSX', 'PANL'],
+                                              'LNG and LPG Shipping': ['FLNG', 'GLNG', 'LPG', 'BWLP', 'NVGS', 'SFL'],
+                                              'Marine Insurance and Reinsurance': ['ACGL',
+                                                                                   'RNR',
+                                                                                   'EG',
+                                                                                   'AXS',
+                                                                                   'CB',
+                                                                                   'TRV',
+                                                                                   'WRB'],
+                                              'Coal and Baseload Scarcity': ['CNR',
+                                                                             'BTU',
+                                                                             'AMR',
+                                                                             'HCC',
+                                                                             'METC',
+                                                                             'TECK',
+                                                                             'BHP',
+                                                                             'RIO'],
+                                              'Nuclear Fuel, Enrichment and Services': ['LEU',
+                                                                                        'BWXT',
+                                                                                        'CCJ',
+                                                                                        'UUUU',
+                                                                                        'UEC',
+                                                                                        'NXE',
+                                                                                        'DNN',
+                                                                                        'URNM'],
+                                              'Geothermal and Clean Firm Power': ['ORA',
+                                                                                  'BE',
+                                                                                  'OKLO',
+                                                                                  'SMR',
+                                                                                  'CEG',
+                                                                                  'VST',
+                                                                                  'TLN',
+                                                                                  'NEE'],
+                                              'Grid Flexibility and Storage': ['FLNC',
+                                                                               'STEM',
+                                                                               'NXT',
+                                                                               'AES',
+                                                                               'TSLA',
+                                                                               'ENPH',
+                                                                               'SEDG',
+                                                                               'NEE'],
+                                              'Gold Royalty and Streamers': ['FNV',
+                                                                             'WPM',
+                                                                             'RGLD',
+                                                                             'OR',
+                                                                             'SAND',
+                                                                             'TFPM'],
+                                              'Silver Pure Play': ['SLV',
+                                                                   'SIL',
+                                                                   'PAAS',
+                                                                   'AG',
+                                                                   'HL',
+                                                                   'CDE',
+                                                                   'FSM',
+                                                                   'MAG'],
+                                              'Volatility and Market Plumbing': ['CBOE',
+                                                                                 'CME',
+                                                                                 'ICE',
+                                                                                 'NDAQ',
+                                                                                 'VIRT',
+                                                                                 'TW',
+                                                                                 'IBKR',
+                                                                                 'SCHW',
+                                                                                 'MKTX'],
+                                              'Credit Data and Underwriting': ['FICO',
+                                                                               'EFX',
+                                                                               'TRU',
+                                                                               'SPGI',
+                                                                               'MCO',
+                                                                               'EXPGY'],
+                                              'Argentina Reform': ['ARGT',
+                                                                   'YPF',
+                                                                   'GGAL',
+                                                                   'BMA',
+                                                                   'BBAR',
+                                                                   'PAM',
+                                                                   'TGS',
+                                                                   'CEPU',
+                                                                   'LOMA']}}
 
-
-ALL_BASKETS = {basket: tickers for cat in CATEGORIES.values() for basket, tickers in cat.items()}
 
 
 # ============================================================
@@ -1115,7 +1107,7 @@ def normalize_basket_members(
         if s.index.max() < last_idx - pd.Timedelta(days=stale_days):
             continue
 
-        if min_market_cap is not None and market_caps is not None and sym not in MARKET_CAP_EXCEPTIONS:
+        if min_market_cap is not None and market_caps is not None:
             mc = market_caps.get(sym)
 
             if mc is None and EXCLUDE_MISSING_MARKET_CAP:
@@ -1160,7 +1152,16 @@ def build_live_baskets(
 
 
 def flatten_baskets(categories: Dict[str, Dict[str, List[str]]]) -> Dict[str, List[str]]:
-    return {basket: tickers for cat in categories.values() for basket, tickers in cat.items()}
+    return {basket: tickers for groups in categories.values() for basket, tickers in groups.items()}
+
+
+def unique_tickers_from_baskets(baskets: Dict[str, List[str]], extra: Optional[Iterable[str]] = None) -> List[str]:
+    tickers = {str(t).upper().strip() for members in baskets.values() for t in members if str(t).strip()}
+
+    if extra:
+        tickers.update(str(t).upper().strip() for t in extra if str(t).strip())
+
+    return sorted(tickers)
 
 
 def ew_rets_from_levels(
@@ -1649,6 +1650,42 @@ def plot_cumulative_chart(
     st.plotly_chart(fig, use_container_width=True)
 
 
+
+
+def render_basket_section(
+    heading: str,
+    basket_returns_full: pd.DataFrame,
+    basket_returns_display: pd.DataFrame,
+    benchmark_returns_full: pd.Series,
+    benchmark_returns_display: pd.Series,
+    display_start: pd.Timestamp,
+    dynamic_label: str,
+    show_chart: bool,
+) -> pd.DataFrame:
+    st.subheader(heading)
+
+    panel_df = build_panel_df(
+        basket_returns_full=basket_returns_full,
+        display_start=display_start,
+        dynamic_label=dynamic_label,
+        benchmark_series_full=benchmark_returns_full,
+    )
+
+    plot_panel_table(panel_df)
+
+    if show_chart:
+        ordered_cols = [c for c in panel_df.index if c in basket_returns_display.columns]
+        chart_rets = basket_returns_display[ordered_cols] if ordered_cols else basket_returns_display
+
+        plot_cumulative_chart(
+            basket_returns_display=chart_rets,
+            title=f"{heading} | Cumulative Performance vs SPY",
+            benchmark_series_display=benchmark_returns_display,
+        )
+
+    return panel_df
+
+
 # ============================================================
 # Sidebar
 # ============================================================
@@ -1695,6 +1732,13 @@ with st.sidebar:
         default=list(CATEGORIES.keys())
     )
 
+    st.markdown("### Optional Sections")
+    show_all_chart = st.checkbox("Show consolidated cumulative chart", value=False)
+    show_category_sections = st.checkbox("Show per-category panels and charts", value=False)
+    show_constituents = st.checkbox("Show live basket constituents", value=False)
+    show_full_map = st.checkbox("Show raw basket map", value=False)
+    show_data_notes = st.checkbox("Show data notes", value=False)
+
 display_start_date = compute_display_start(preset, today)
 fetch_start_date = compute_fetch_start(display_start_date)
 end_date = today
@@ -1706,9 +1750,7 @@ min_market_cap = MIN_MARKET_CAP if apply_market_cap_filter else None
 # ============================================================
 # Fetch data
 # ============================================================
-need = {BENCH}
-for tickers in ALL_BASKETS.values():
-    need.update(str(t).upper() for t in tickers)
+need = unique_tickers_from_baskets(flatten_baskets(CATEGORIES), extra=[BENCH])
 
 with st.spinner("Fetching basket price history..."):
     levels, fetch_meta = fetch_daily_levels(
@@ -1764,103 +1806,76 @@ bench_rets_display = bench_rets_full[bench_rets_full.index >= display_start_ts].
 
 
 # ============================================================
-# Consolidated panel + chart
+# Consolidated panel and optional sections
 # ============================================================
-st.subheader("All Baskets | Consolidated Panel")
-
-all_panel_df = build_panel_df(
+all_panel_df = render_basket_section(
+    heading="All Baskets | Consolidated Panel",
     basket_returns_full=all_basket_rets_full,
+    basket_returns_display=all_basket_rets_display,
+    benchmark_returns_full=bench_rets_full,
+    benchmark_returns_display=bench_rets_display,
     display_start=display_start_ts,
     dynamic_label=DYNAMIC_LABEL,
-    benchmark_series_full=bench_rets_full
+    show_chart=show_all_chart,
 )
 
-plot_panel_table(all_panel_df)
+if show_category_sections:
+    for category, baskets in live_categories.items():
+        cat_names = [basket for basket in baskets if basket in all_basket_rets_full.columns]
 
-st.subheader("All Baskets | Cumulative Performance vs SPY")
+        if not cat_names:
+            st.info(f"{category}: no data for this group in the selected range.")
+            continue
 
-ordered_cols = [c for c in all_panel_df.index if c in all_basket_rets_display.columns]
-all_display_chart_rets = all_basket_rets_display[ordered_cols] if ordered_cols else all_basket_rets_display
+        cat_rets_full = all_basket_rets_full[cat_names].dropna(how="all")
+        if cat_rets_full.empty:
+            st.info(f"{category}: no data for this group in the selected range.")
+            continue
 
-plot_cumulative_chart(
-    basket_returns_display=all_display_chart_rets,
-    title="All Baskets vs SPY",
-    benchmark_series_display=bench_rets_display
-)
+        render_basket_section(
+            heading=category,
+            basket_returns_full=cat_rets_full,
+            basket_returns_display=slice_returns_for_display(cat_rets_full, display_start_ts),
+            benchmark_returns_full=bench_rets_full,
+            benchmark_returns_display=bench_rets_display,
+            display_start=display_start_ts,
+            dynamic_label=DYNAMIC_LABEL,
+            show_chart=True,
+        )
 
+if show_constituents:
+    with st.expander("Basket Constituents", expanded=True):
+        st.caption("Shows only live members used in the calculations after price, stale-data, and optional market-cap filters.")
 
-# ============================================================
-# Per-category sections
-# ============================================================
-for category, baskets in live_categories.items():
-    st.markdown(f"## {category}")
+        for category, groups in live_categories.items():
+            st.markdown(f"**{category}**")
+            for name, tickers in groups.items():
+                members = sorted({str(t).upper() for t in tickers})
+                st.write(f"- {name}: {', '.join(members)}")
 
-    cat_names = [basket for basket in baskets.keys() if basket in all_basket_rets_full.columns]
+if show_full_map:
+    with st.expander("Full Basket Map", expanded=True):
+        st.caption("Raw basket definitions before data-quality filtering.")
+        for category, groups in CATEGORIES.items():
+            st.markdown(f"**{category}**")
+            for name, tickers in groups.items():
+                st.write(f"- {name}: {', '.join(tickers)}")
 
-    if not cat_names:
-        st.info("No data for this group in the selected range.")
-        continue
+if show_data_notes:
+    with st.expander("Data Notes", expanded=True):
+        last_obs = fetch_meta.get("last_observation")
+        requested = fetch_meta.get("requested_tickers")
+        returned = fetch_meta.get("returned_tickers")
 
-    cat_rets_full = all_basket_rets_full[cat_names].dropna(how="all")
-    if cat_rets_full.empty:
-        st.info("No data for this group in the selected range.")
-        continue
+        if last_obs:
+            st.write(f"Last observation: {last_obs}")
 
-    cat_rets_display = slice_returns_for_display(cat_rets_full, display_start_ts)
+        if requested is not None and returned is not None:
+            st.write(f"Yahoo price coverage: {returned}/{requested} tickers returned.")
 
-    cat_panel = build_panel_df(
-        basket_returns_full=cat_rets_full,
-        display_start=display_start_ts,
-        dynamic_label=DYNAMIC_LABEL,
-        benchmark_series_full=bench_rets_full
-    )
-
-    plot_panel_table(cat_panel)
-
-    cat_ordered_cols = [c for c in cat_panel.index if c in cat_rets_display.columns]
-    chart_rets = cat_rets_display[cat_ordered_cols] if cat_ordered_cols else cat_rets_display
-
-    plot_cumulative_chart(
-        basket_returns_display=chart_rets,
-        title=f"{category} | Cumulative Performance vs SPY",
-        benchmark_series_display=bench_rets_display
-    )
-
-
-# ============================================================
-# Basket constituents and data notes
-# ============================================================
-with st.expander("Basket Constituents"):
-    st.caption("Shows only live members used in the calculations after price, stale-data, and optional market-cap filters.")
-
-    for category, groups in live_categories.items():
-        st.markdown(f"**{category}**")
-        for name, tickers in groups.items():
-            st.write(f"- {name}: {', '.join(sorted(set(str(t).upper() for t in tickers)))}")
-
-
-with st.expander("Full Basket Map"):
-    st.caption("Raw basket definitions before data-quality filtering.")
-    for category, groups in CATEGORIES.items():
-        st.markdown(f"**{category}**")
-        for name, tickers in groups.items():
-            st.write(f"- {name}: {', '.join(tickers)}")
-
-
-with st.expander("Data Notes"):
-    last_obs = fetch_meta.get("last_observation")
-    requested = fetch_meta.get("requested_tickers")
-    returned = fetch_meta.get("returned_tickers")
-
-    if last_obs:
-        st.write(f"Last observation: {last_obs}")
-
-    if requested is not None and returned is not None:
-        st.write(f"Yahoo price coverage: {returned}/{requested} tickers returned.")
-
-    missing = fetch_meta.get("missing_tickers", [])
-    if missing:
-        st.write("Tickers missing from Yahoo result:")
-        st.write(", ".join(missing[:300]))
+        missing = fetch_meta.get("missing_tickers", [])
+        if missing:
+            st.write("Tickers missing from Yahoo result:")
+            st.write(", ".join(missing[:300]))
 
 st.caption("© 2026 AD Fund Management LP")
