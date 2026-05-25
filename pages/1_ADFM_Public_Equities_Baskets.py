@@ -1736,7 +1736,7 @@ with st.sidebar:
     show_all_chart = st.checkbox("Show consolidated cumulative chart", value=False)
     show_category_sections = st.checkbox("Show per-category panels and charts", value=False)
     show_constituents = st.checkbox("Show live basket constituents", value=False)
-    show_full_map = st.checkbox("Show raw basket map", value=False)
+    show_full_map = st.checkbox("Show raw basket map", value=True)
     show_data_notes = st.checkbox("Show data notes", value=False)
 
 display_start_date = compute_display_start(preset, today)
