@@ -1501,50 +1501,38 @@ if same_setup_n < 10:
 
 # ------------------------------- Dynamic readout ----------------------------
 
-st.subheader("What just happened and what usually comes next")
+st.subheader("VIX Signal Summary")
 
-paragraphs = []
-
-if current_event_hit:
-    paragraphs.append(
-        f"The current tape qualifies under the selected event definition. VIX moved {fmt_pct(current.get('vix_pctchg') * 100.0)} on the latest available session, SPX was {fmt_pct(current.get('spx_ret_1d'))} on the day, and the market sits {fmt_pct(current.get('spx_drawdown_pct'))} below its prior peak. The live context reads as {current_context.lower()}, which is the regime label to anchor before leaning on any historical average."
-    )
-else:
-    paragraphs.append(
-        f"The current tape does not qualify under the selected VIX event definition. That matters because the last matched event was {last_event_idx.strftime('%Y-%m-%d')}, so the event-study section is describing the most recent qualifying volatility episode rather than claiming that today is a fresh signal."
-    )
-
-if last_event["event_type"] == "Panic":
-    paragraphs.append(
-        f"The last matched event was a panic event inside a {last_event['context_label'].lower()} context. SPX had moved {fmt_pct(last_event.get('spx_ret_5d'))} over the prior five sessions, the index was {fmt_pct(last_event.get('spx_drawdown_pct'))} below its peak, and VIX jumped {fmt_pct(last_event.get('vix_pctchg') * 100.0)} on the day."
-    )
-else:
-    paragraphs.append(
-        f"The last matched event was a relief event inside a {last_event['context_label'].lower()} context. VIX fell {fmt_pct(last_event.get('vix_pctchg') * 100.0)} on the day, while SPX had moved {fmt_pct(last_event.get('spx_ret_5d'))} over the prior five sessions."
-    )
+signal_state = "Triggered" if current_event_hit else "Not Triggered"
+setup_quality = sample_quality_label(same_setup_n)
 
 if same_setup_n > 0:
     p10, p50, p90 = pct_bands(same_setup[primary_ret_col])
-    paragraphs.append(
-        f"For the same event type and context, the {forward_focus}-day historical base rate is WR {fmt_pct(same_setup_wr)}, median {fmt_pct(same_setup_median)}, with a 10th to 90th percentile range of {fmt_pct(p10)} to {fmt_pct(p90)} across {same_setup_n} prior events. Sample quality: {sample_quality_label(same_setup_n).lower()}."
-    )
+else:
+    p10, p50, p90 = np.nan, np.nan, np.nan
+
+with st.container(border=True):
+    st.markdown(f"**Signal State:** {signal_state}")
+    st.markdown(f"**Regime:** {last_event['event_type']} | {last_event['context_label']}")
+    st.markdown(f"**Verdict:** {verdict}")
+    st.markdown(f"**{forward_focus}D Base Rate:** WR {fmt_pct(same_setup_wr)} | Median {fmt_pct(same_setup_median)} | Range {fmt_pct(p10)} to {fmt_pct(p90)}")
+    st.markdown(f"**Continuation Risk:** {fmt_pct(same_setup_continuation_rate)}")
+    st.markdown(f"**Sample Quality:** {setup_quality} (N={fmt_int(same_setup_n)})")
 
 if len(analogs) > 0:
     analog_med_5 = analogs["spx_fwd_5d"].median()
     analog_med_10 = analogs["spx_fwd_10d"].median()
     analog_wr_5 = winrate(analogs["spx_fwd_5d"])
-    paragraphs.append(
-        f"The weighted analog set points to median SPX returns of {fmt_pct(analog_med_5)} over 5 trading days and {fmt_pct(analog_med_10)} over 10 trading days, with a 5-day win rate of {fmt_pct(analog_wr_5)}. This is usually more useful than the raw bucket average because it gives more weight to drawdown, trend, VIX severity, realized volatility, and credit stress."
-    )
 
-with st.container(border=True):
-    for p in paragraphs:
-        st.write(p)
-
+    with st.container(border=True):
+        st.markdown("**Nearest Analog Takeaway**")
+        st.markdown(f"- 5D median: {fmt_pct(analog_med_5)}")
+        st.markdown(f"- 10D median: {fmt_pct(analog_med_10)}")
+        st.markdown(f"- 5D win rate: {fmt_pct(analog_wr_5)}")
 
 # ------------------------------- Main charts --------------------------------
 
-st.subheader("Forward path and analog engine")
+st.subheader("Forward Return Profile")
 
 horizons = [1, 2, 3, 5, 10, 20]
 
@@ -1593,7 +1581,7 @@ with chart4:
 
 # ------------------------------- Outcome diagnostics ------------------------
 
-st.subheader("Failure rates and classification")
+st.subheader("Outcome Diagnostics")
 
 out1, out2 = st.columns([1, 1])
 
@@ -1703,44 +1691,9 @@ else:
     st.write("No analogs available under the current filters.")
 
 
-st.subheader("Setup expectancy tables")
+st.caption("Detailed expectancy tables removed for a cleaner, decision-first view.")
 
-table1, table2 = st.columns([1, 1])
-
-with table1:
-    context_expectancy = summarize_setup(
-        historical_events,
-        "context_label",
-        primary_ret_col,
-    )
-
-    if not context_expectancy.empty:
-        st.markdown("**By context**")
-        st.dataframe(
-            safe_round_table(context_expectancy, 2),
-            use_container_width=True,
-        )
-    else:
-        st.write("No context expectancy table available.")
-
-with table2:
-    setup_expectancy = summarize_setup(
-        historical_events,
-        "event_label",
-        primary_ret_col,
-    )
-
-    if not setup_expectancy.empty:
-        st.markdown("**By event label**")
-        st.dataframe(
-            safe_round_table(setup_expectancy, 2),
-            use_container_width=True,
-        )
-    else:
-        st.write("No setup expectancy table available.")
-
-
-with st.expander("Show full events table"):
+with st.expander("Show supporting event table"):
     show_cols = [
         "event_type",
         "context_label",
