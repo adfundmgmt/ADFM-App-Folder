@@ -66,7 +66,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                    'ON',
                                                                    'STM',
                                                                    'IFNNY'],
-                                 'Memory and Storage': ['MU', 'WDC', 'STX', 'SNDK', 'HXSCF', 'SSNLF'],
+                                 'Memory and Storage': ['MU', 'WDC', 'STX', 'SNDK', '000660.KS', '005930.KS'],
                                  'HBM and Advanced Memory': ['MU',
                                                              'HXSCF',
                                                              'SSNLF',
