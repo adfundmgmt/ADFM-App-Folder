@@ -41,6 +41,9 @@ MIN_MARKET_CAP = 1_000_000_000
 INDICATOR_WARMUP_DAYS = 520
 BENCH = "SPY"
 
+MAGNIFICENT_SEVEN = "Magnificent Seven"
+MAGNIFICENT_SEVEN_TICKERS = ["NVDA", "MSFT", "GOOGL", "AMZN", "AAPL", "META", "TSLA"]
+
 CACHE_DIR = Path(".adfm_cache")
 LEVELS_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good.pkl"
 LEVELS_META_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good_meta.json"
@@ -849,6 +852,10 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                    'LOMA']}}
 
 
+# Keep this basket explicit so it survives future edits to the raw basket map.
+CATEGORIES.setdefault("Technology, AI and Internet", {})[MAGNIFICENT_SEVEN] = MAGNIFICENT_SEVEN_TICKERS
+
+
 
 # ============================================================
 # Data helpers
@@ -1375,6 +1382,11 @@ def build_panel_df(
 
     if dyn_col in df.columns:
         df = df.sort_values(by=dyn_col, ascending=False)
+
+    if MAGNIFICENT_SEVEN in df.index:
+        priority_rows = [MAGNIFICENT_SEVEN]
+        remaining_rows = [idx for idx in df.index if idx not in priority_rows]
+        df = df.loc[priority_rows + remaining_rows]
 
     return df
 
