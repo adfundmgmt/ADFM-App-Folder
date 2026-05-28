@@ -77,6 +77,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                              'AMAT',
                                                              'LRCX'],
                                  'Foundry and OSAT': ['TSM', 'UMC', 'GFS', 'ASX', 'AMKR', 'BESIY'],
+                                 'Magnificent Seven': ['NVDA', 'MSFT', 'GOOGL', 'AMZN', 'AAPL', 'META', 'TSLA'],
                                  'Advanced Packaging': ['AMKR', 'ASX', 'TSM', 'BESIY', 'AMAT', 'LRCX', 'KLAC', 'ONTO'],
                                  'Semiconductor Equipment': ['ASML',
                                                              'AMAT',
