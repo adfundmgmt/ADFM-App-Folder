@@ -1383,11 +1383,6 @@ def build_panel_df(
     if dyn_col in df.columns:
         df = df.sort_values(by=dyn_col, ascending=False)
 
-    if MAGNIFICENT_SEVEN in df.index:
-        priority_rows = [MAGNIFICENT_SEVEN]
-        remaining_rows = [idx for idx in df.index if idx not in priority_rows]
-        df = df.loc[priority_rows + remaining_rows]
-
     return df
 
 
