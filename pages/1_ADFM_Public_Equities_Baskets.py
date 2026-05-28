@@ -775,7 +775,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                                                     'CURLF',
                                                                     'GTBIF',
                                                                     'TCNNF',
-                                                                    'VRNOF',
                                                                     'CRLBF',
                                                                     'TRUL.CN'],
                                               'Container Shipping and Liners': ['ZIM',
