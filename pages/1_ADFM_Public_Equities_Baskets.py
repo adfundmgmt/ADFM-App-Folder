@@ -762,7 +762,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Technology, AI and Internet': {'
                                               'Offshore Drilling': ['RIG', 'VAL', 'NE', 'BORR', 'DO', 'SDRL'],
                                               'Critical Minerals: Tungsten and Antimony': ['ALM',
                                                                                            'PPTA',
-                                                                                           'TUN.L',
                                                                                            'USAR',
                                                                                            'UAMY'],
                                               'eVTOL and Urban Air Mobility': ['JOBY', 'ACHR', 'EH', 'EVTL', 'BLDE'],
