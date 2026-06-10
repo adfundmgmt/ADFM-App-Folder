@@ -1153,29 +1153,60 @@ with rate_left:
         if rv_view.empty:
             rv_view = rates_vol_index
 
-        fig = go.Figure()
-        fig.add_hrect(y0=1.50, y1=max(3.5, float(rv_view.max()) * 1.05), fillcolor=COLORS["soft_red"], opacity=0.35, line_width=0)
-        fig.add_hrect(y0=1.00, y1=1.50, fillcolor=COLORS["soft_amber"], opacity=0.35, line_width=0)
+        rv_view = rv_view.dropna()
 
-        fig.add_trace(
-            go.Scatter(
-                x=rv_view.index,
-                y=rv_view.values,
-                mode="lines",
-                name="Rates Vol Index",
-                line=dict(color=COLORS["purple"], width=2.6),
-                hovertemplate="%{y:.2f}<extra>Rates Vol Index</extra>",
+        if rv_view.empty:
+            st.info("Rates volatility index unavailable.")
+        else:
+            y_min_data = float(rv_view.min())
+            y_max_data = float(rv_view.max())
+
+            band_low = 1.0
+            band_high = 1.5
+
+            span = max(y_max_data - y_min_data, 0.20)
+            y_bottom = max(0.0, y_min_data - span * 0.12)
+            y_top = max(band_high * 1.05, y_max_data + span * 0.18)
+
+            fig = go.Figure()
+
+            if y_top > band_high:
+                fig.add_hrect(
+                    y0=band_high,
+                    y1=y_top,
+                    fillcolor=COLORS["soft_red"],
+                    opacity=0.35,
+                    line_width=0,
+                )
+
+            if y_top > band_low:
+                fig.add_hrect(
+                    y0=band_low,
+                    y1=min(band_high, y_top),
+                    fillcolor=COLORS["soft_amber"],
+                    opacity=0.35,
+                    line_width=0,
+                )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=rv_view.index,
+                    y=rv_view.values,
+                    mode="lines",
+                    name="Rates Vol Index",
+                    line=dict(color=COLORS["purple"], width=2.6),
+                    hovertemplate="%{y:.2f}<extra>Rates Vol Index</extra>",
+                )
             )
-        )
 
-        fig.add_hline(y=1.0, line_width=1, line_dash="dot", line_color=COLORS["amber"])
-        fig.add_hline(y=1.5, line_width=1, line_dash="dot", line_color=COLORS["red"])
-        fig.add_hline(y=0.0, line_width=1, line_color=COLORS["grid"])
+            fig.add_hline(y=1.0, line_width=1, line_dash="dot", line_color=COLORS["amber"])
+            fig.add_hline(y=1.5, line_width=1, line_dash="dot", line_color=COLORS["red"])
+            fig.add_hline(y=0.0, line_width=1, line_color=COLORS["grid"])
 
-        fig.update_layout(**chart_layout(height=400, showlegend=False))
-        fig.update_yaxes(title_text="Average |z-score|")
-        apply_axis_style(fig)
-        st.plotly_chart(fig, use_container_width=True)
+            fig.update_layout(**chart_layout(height=400, showlegend=False))
+            fig.update_yaxes(title_text="Average |z-score|", range=[y_bottom, y_top])
+            apply_axis_style(fig)
+            st.plotly_chart(fig, use_container_width=True)
 
 with rate_right:
     st.markdown('<div class="section-title">Rates / Volatility Regime Grid</div>', unsafe_allow_html=True)
