@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
+
 TITLE = "Catalyst Calendar"
 
 MARKET_TICKERS: Tuple[str, ...] = ("SPY", "QQQ", "IWM", "TLT", "UUP", "GLD", "^VIX")
@@ -66,6 +67,7 @@ RISK_COLORS = {
     "high": "#dc2626",
     "neutral": "#64748b",
 }
+
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
 
@@ -164,8 +166,10 @@ def next_weekday(d: date) -> date:
 
 def first_weekday(year: int, month: int, weekday: int) -> date:
     d = date(year, month, 1)
+
     while d.weekday() != weekday:
         d += timedelta(days=1)
+
     return d
 
 
@@ -649,10 +653,13 @@ def metric_card(label: str, value: str, footnote: str, color: str) -> None:
 def make_timeline(events: pd.DataFrame, today_: date) -> go.Figure:
     fig = go.Figure()
 
-    for event_type, group in events.groupby("Type", sort=False):
+    plot_events = events.copy()
+    plot_events["PlotDate"] = pd.to_datetime(plot_events["Date"])
+
+    for event_type, group in plot_events.groupby("Type", sort=False):
         fig.add_trace(
             go.Scatter(
-                x=group["Date"],
+                x=group["PlotDate"],
                 y=group["Risk Score"],
                 mode="markers",
                 name=str(event_type),
@@ -673,7 +680,7 @@ def make_timeline(events: pd.DataFrame, today_: date) -> go.Figure:
                 text=group["Event"],
                 hovertemplate=(
                     "<b>%{text}</b><br>"
-                    "%{x}<br>"
+                    "%{x|%Y-%m-%d}<br>"
                     "Days: %{customdata[0]}<br>"
                     "Risk: %{y:.0f}<br>"
                     "Precision: %{customdata[1]}<br>"
@@ -683,21 +690,42 @@ def make_timeline(events: pd.DataFrame, today_: date) -> go.Figure:
             )
         )
 
-    fig.add_vline(
-        x=today_,
-        line_width=1,
-        line_dash="dot",
-        line_color="#0f172a",
-        annotation_text="Today",
-        annotation_position="top left",
+    today_ts = pd.Timestamp(today_)
+
+    fig.add_shape(
+        type="line",
+        x0=today_ts,
+        x1=today_ts,
+        y0=35,
+        y1=103,
+        xref="x",
+        yref="y",
+        line=dict(
+            color="#0f172a",
+            width=1,
+            dash="dot",
+        ),
+    )
+
+    fig.add_annotation(
+        x=today_ts,
+        y=101,
+        xref="x",
+        yref="y",
+        text="Today",
+        showarrow=False,
+        xanchor="left",
+        yanchor="bottom",
+        font=dict(size=11, color="#0f172a"),
     )
 
     fig.add_vrect(
-        x0=today_,
-        x1=today_ + timedelta(days=7),
+        x0=today_ts,
+        x1=today_ts + pd.Timedelta(days=7),
         fillcolor="#f1f5f9",
         opacity=0.55,
         line_width=0,
+        layer="below",
     )
 
     fig.update_layout(
