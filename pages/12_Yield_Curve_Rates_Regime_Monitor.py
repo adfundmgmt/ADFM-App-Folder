@@ -13,7 +13,12 @@ from plotly.subplots import make_subplots
 
 TITLE = "Rates Regime Monitor"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-REQUEST_TIMEOUT = (3, 10)
+TREASURY_CSV_URL = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{year}/all"
+REQUEST_TIMEOUT = (4, 14)
+HEADERS = {
+    "User-Agent": "ADFM Streamlit Rates Monitor/1.0 (+https://www.adfundmgmt.com)",
+    "Accept": "text/csv,application/csv,text/plain,*/*",
+}
 
 SERIES: Dict[str, str] = {
     "DGS3MO": "3M",
@@ -160,33 +165,189 @@ def fmt_num(x: float, decimals: int = 1) -> str:
     return "N/A" if not np.isfinite(x) else f"{x:,.{decimals}f}"
 
 
+def normalize_col(name: object) -> str:
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
+def numeric_series(values: pd.Series) -> pd.Series:
+    return pd.to_numeric(values.astype(str).str.replace("%", "", regex=False).replace({".": np.nan, "N/A": np.nan, "nan": np.nan}), errors="coerce")
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_fred(series_ids: Tuple[str, ...], start_date: date) -> pd.DataFrame:
+def fetch_fred(series_ids: Tuple[str, ...], start_date: date) -> Tuple[pd.DataFrame, Tuple[str, ...]]:
     frames: List[pd.Series] = []
+    diagnostics: List[str] = []
+
     for series_id in series_ids:
-        try:
-            response = requests.get(
-                FRED_URL,
-                params={"id": series_id, "cosd": start_date.isoformat()},
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-            raw = pd.read_csv(StringIO(response.text))
-            if raw.empty or len(raw.columns) < 2:
+        loaded = False
+        requests_to_try = [
+            {"id": series_id, "cosd": start_date.isoformat()},
+            {"id": series_id},
+        ]
+
+        for params in requests_to_try:
+            try:
+                response = requests.get(FRED_URL, params=params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
+                if response.status_code != 200:
+                    diagnostics.append(f"FRED {series_id}: HTTP {response.status_code}")
+                    continue
+                if "html" in response.headers.get("Content-Type", "").lower() and "<html" in response.text[:250].lower():
+                    diagnostics.append(f"FRED {series_id}: received HTML instead of CSV")
+                    continue
+
+                raw = pd.read_csv(StringIO(response.text))
+                if raw.empty or len(raw.columns) < 2:
+                    diagnostics.append(f"FRED {series_id}: empty or malformed CSV")
+                    continue
+
+                date_col = raw.columns[0]
+                value_col = series_id if series_id in raw.columns else raw.columns[-1]
+                idx = pd.to_datetime(raw[date_col], errors="coerce")
+                vals = numeric_series(raw[value_col])
+                frame = pd.Series(vals.to_numpy(), index=idx, name=series_id).dropna()
+                frame = frame.loc[frame.index >= pd.Timestamp(start_date)]
+                if frame.empty:
+                    diagnostics.append(f"FRED {series_id}: no rows after {start_date}")
+                    continue
+
+                frames.append(frame)
+                loaded = True
+                break
+            except Exception as exc:
+                diagnostics.append(f"FRED {series_id}: {type(exc).__name__}: {exc}")
                 continue
-            raw.columns = ["date", series_id]
-            values = pd.to_numeric(raw[series_id].replace(".", np.nan), errors="coerce")
-            frame = pd.Series(values.to_numpy(), index=pd.to_datetime(raw["date"]), name=series_id)
-            frames.append(frame)
-        except Exception:
-            continue
+
+        if not loaded:
+            diagnostics.append(f"FRED {series_id}: failed all CSV attempts")
 
     if not frames:
-        return pd.DataFrame()
+        return pd.DataFrame(), tuple(diagnostics)
 
     out = pd.concat(frames, axis=1).sort_index()
     out = out[~out.index.duplicated(keep="last")]
-    return out.ffill().dropna(how="all")
+    return out.ffill().dropna(how="all"), tuple(diagnostics)
+
+
+def pick_column(columns: List[str], aliases: List[str]) -> Optional[str]:
+    normalized = {normalize_col(c): c for c in columns}
+    for alias in aliases:
+        key = normalize_col(alias)
+        if key in normalized:
+            return normalized[key]
+    for c in columns:
+        key = normalize_col(c)
+        if any(normalize_col(alias) in key for alias in aliases):
+            return c
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_treasury_csv(dataset_type: str, start_date: date, end_date: date) -> Tuple[pd.DataFrame, Tuple[str, ...]]:
+    frames: List[pd.DataFrame] = []
+    diagnostics: List[str] = []
+
+    for year in range(start_date.year, end_date.year + 1):
+        try:
+            response = requests.get(
+                TREASURY_CSV_URL.format(year=year),
+                params={"_format": "csv", "field_tdr_date_value": str(year), "page": "", "type": dataset_type},
+                timeout=REQUEST_TIMEOUT,
+                headers=HEADERS,
+            )
+            if response.status_code != 200:
+                diagnostics.append(f"Treasury {dataset_type} {year}: HTTP {response.status_code}")
+                continue
+            if not response.text.strip() or "<html" in response.text[:250].lower():
+                diagnostics.append(f"Treasury {dataset_type} {year}: received non-CSV response")
+                continue
+
+            raw = pd.read_csv(StringIO(response.text))
+            if raw.empty:
+                diagnostics.append(f"Treasury {dataset_type} {year}: empty CSV")
+                continue
+            frames.append(raw)
+        except Exception as exc:
+            diagnostics.append(f"Treasury {dataset_type} {year}: {type(exc).__name__}: {exc}")
+
+    if not frames:
+        return pd.DataFrame(), tuple(diagnostics)
+
+    raw = pd.concat(frames, ignore_index=True)
+    date_col = pick_column(list(raw.columns), ["Date", "NEW_DATE", "record_date"])
+    if date_col is None:
+        return pd.DataFrame(), tuple(diagnostics + [f"Treasury {dataset_type}: date column not found"])
+
+    out = pd.DataFrame(index=pd.to_datetime(raw[date_col], errors="coerce"))
+    out = out.loc[out.index.notna()]
+
+    if dataset_type == "daily_treasury_yield_curve":
+        mapping = {
+            "DGS3MO": ["3 Mo", "3 Month", "BC_3MONTH"],
+            "DGS2": ["2 Yr", "2 Year", "BC_2YEAR"],
+            "DGS5": ["5 Yr", "5 Year", "BC_5YEAR"],
+            "DGS10": ["10 Yr", "10 Year", "BC_10YEAR"],
+            "DGS30": ["30 Yr", "30 Year", "BC_30YEAR"],
+        }
+    else:
+        mapping = {
+            "DFII10": ["10 Yr", "10 Year", "TC_10YEAR"],
+        }
+
+    for target, aliases in mapping.items():
+        col = pick_column(list(raw.columns), aliases)
+        if col is not None:
+            out[target] = numeric_series(raw[col]).to_numpy()
+
+    out = out.sort_index()
+    out = out.loc[(out.index >= pd.Timestamp(start_date)) & (out.index <= pd.Timestamp(end_date))]
+    out = out[~out.index.duplicated(keep="last")]
+    return out.ffill().dropna(how="all"), tuple(diagnostics)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_rates(series_ids: Tuple[str, ...], start_date: date, end_date: date) -> Tuple[pd.DataFrame, str, Tuple[str, ...]]:
+    diagnostics: List[str] = []
+    fred, fred_diag = fetch_fred(series_ids, start_date)
+    diagnostics.extend(fred_diag)
+
+    nominal_cols = ["DGS3MO", "DGS2", "DGS5", "DGS10", "DGS30"]
+    have_nominal = [c for c in nominal_cols if c in fred.columns and fred[c].dropna().any()]
+
+    if "DGS10" in have_nominal and len(have_nominal) >= 3:
+        out = fred.copy()
+        source = "FRED"
+    else:
+        treasury_nominal, nominal_diag = fetch_treasury_csv("daily_treasury_yield_curve", start_date, end_date)
+        treasury_real, real_diag = fetch_treasury_csv("daily_treasury_real_yield_curve", start_date, end_date)
+        diagnostics.extend(nominal_diag)
+        diagnostics.extend(real_diag)
+
+        out = fred.copy()
+        if out.empty:
+            out = treasury_nominal.copy()
+        else:
+            for col in treasury_nominal.columns:
+                if col not in out.columns or out[col].dropna().empty:
+                    out[col] = treasury_nominal[col]
+                else:
+                    out[col] = out[col].combine_first(treasury_nominal[col])
+
+        if not treasury_real.empty and "DFII10" in treasury_real.columns:
+            if "DFII10" not in out.columns or out["DFII10"].dropna().empty:
+                out["DFII10"] = treasury_real["DFII10"]
+            else:
+                out["DFII10"] = out["DFII10"].combine_first(treasury_real["DFII10"])
+
+        source = "FRED + Treasury fallback" if not fred.empty else "Treasury fallback"
+
+    if not out.empty:
+        out = out.sort_index()
+        out = out[~out.index.duplicated(keep="last")]
+        out = out.ffill().dropna(how="all")
+        if {"DGS10", "DFII10"}.issubset(out.columns) and ("T10YIE" not in out.columns or out["T10YIE"].dropna().empty):
+            out["T10YIE"] = out["DGS10"] - out["DFII10"]
+
+    return out, source, tuple(diagnostics)
 
 
 def add_derived(df: pd.DataFrame) -> pd.DataFrame:
@@ -331,8 +492,8 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        FRED-only Treasury monitor for curve shape, real yields, breakevens, and regime pressure. 
-        Built to answer one question quickly: is the rates move helping or hurting risk?
+        Treasury monitor for curve shape, real yields, breakevens, and regime pressure. 
+        Uses FRED first. If FRED is blocked or stale, it falls back to official Treasury daily-rate CSVs for the nominal curve.
         """
     )
 
@@ -340,31 +501,36 @@ with st.sidebar:
     st.header("Controls")
     lookback_years = st.selectbox("History", [1, 2, 3, 5, 10, 20], index=3)
     regime_period = st.radio("Regime window", list(PERIODS.keys()), index=2, horizontal=True)
-    curve_choices_default = ["2s10s", "3m10y", "5s30s"]
-    selected_curve = st.selectbox("Curve gauge", curve_choices_default, index=0)
+    selected_curve = st.selectbox("Curve gauge", ["2s10s", "3m10y", "5s30s"], index=0)
     curve_compare = st.radio("Curve comparison", ["1W", "1M", "3M", "YTD"], index=1, horizontal=True)
     show_full_history = st.checkbox("Show full history chart", value=True)
     show_table = st.checkbox("Show data table", value=False)
-
-    st.divider()
-    st.caption("No Yahoo fallback. If data is missing, the page shows the gap instead of mixing sources.")
+    show_diagnostics = st.checkbox("Show data diagnostics", value=False)
 
 st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='adfm-subtitle'>Curve shape, level shock, real-rate pressure, breakevens, and outlier days. FRED-only to avoid proxy drift.</div>",
+    "<div class='adfm-subtitle'>Curve shape, level shock, real-rate pressure, breakevens, and outlier days. Built to show the rates impulse first.</div>",
     unsafe_allow_html=True,
 )
 
 start = date.today() - timedelta(days=int(lookback_years * 365.25) + 15)
-rates = add_derived(fetch_fred(tuple(SERIES.keys()), start))
+end = date.today()
+rates_raw, data_source, diagnostics = load_rates(tuple(SERIES.keys()), start, end)
+rates = add_derived(rates_raw)
 
 if rates.empty or "DGS10" not in rates.columns or rates["DGS10"].dropna().empty:
-    st.error("No usable FRED Treasury data loaded. Check connection or FRED availability.")
+    st.error("No usable Treasury curve data loaded from FRED or the official Treasury fallback.")
+    if diagnostics:
+        with st.expander("Data diagnostics", expanded=True):
+            st.code("\n".join(diagnostics[-60:]))
     st.stop()
 
 curve_cols = available_curve_columns(rates)
 if not curve_cols:
-    st.error("No usable curve spreads can be calculated from the loaded FRED data.")
+    st.error("No usable curve spreads can be calculated from the loaded data.")
+    if diagnostics:
+        with st.expander("Data diagnostics", expanded=True):
+            st.code("\n".join(diagnostics[-60:]))
     st.stop()
 if selected_curve not in curve_cols:
     selected_curve = curve_cols[0]
@@ -372,8 +538,13 @@ if selected_curve not in curve_cols:
 last_obs = latest_date(rates)
 if last_obs is not None:
     age_days = (pd.Timestamp(date.today()) - last_obs.normalize()).days
+    st.caption(f"Source: {data_source}. Last observation: {last_obs.date()}.")
     if age_days > 4:
-        st.warning(f"Last FRED observation is {last_obs.date()}. Data may be stale.")
+        st.warning(f"Last observation is {last_obs.date()}. Data may be stale.")
+
+if show_diagnostics and diagnostics:
+    with st.expander("Data diagnostics", expanded=False):
+        st.code("\n".join(diagnostics[-80:]))
 
 regime, regime_note, regime_color = classify_regime(rates, regime_period, selected_curve)
 real_col = "DFII10" if "DFII10" in rates.columns and rates["DFII10"].dropna().any() else "REAL10_CALC"
