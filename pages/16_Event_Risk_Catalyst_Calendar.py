@@ -999,13 +999,3 @@ with st.expander("Full event details"):
         use_container_width=True,
         hide_index=True,
     )
-
-st.markdown(
-    """
-    <div class="note-box">
-        This page is intentionally light. It uses yfinance for the tape and rule-based calendar windows for speed.
-        Treat estimated macro dates as planning windows. For official releases, paste exact dates into the custom event CSV.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
