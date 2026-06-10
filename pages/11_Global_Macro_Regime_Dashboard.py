@@ -15,7 +15,7 @@ import yfinance as yf
 # =============================================================================
 
 TITLE = "Global Macro Regime Dashboard"
-SUBTITLE = "Market-implied regime monitor built only from Yahoo Finance prices, ETFs, futures, FX, yield indexes, and volatility."
+SUBTITLE = "Market-implied regime monitor built from prices, ETFs, futures, FX, yield indexes, credit proxies, commodities, and volatility."
 
 TICKERS: Dict[str, str] = {
     # Equity / risk
@@ -122,13 +122,20 @@ st.markdown(
     <style>
         .stApp { background: #f6f7f9; }
         .block-container {
-            padding-top: 1.15rem;
+            padding-top: 3.25rem;
             padding-bottom: 2.5rem;
             max-width: 1560px;
         }
         div[data-testid="stSidebar"] {
             background: #ffffff;
             border-right: 1px solid #e5e7eb;
+        }
+
+        header[data-testid="stHeader"] {
+            background: #ffffff;
+        }
+        .page-title {
+            padding-top: 0.25rem;
         }
         div[data-testid="stSidebar"] h2, div[data-testid="stSidebar"] h3 {
             color: #111827;
@@ -447,7 +454,7 @@ def score_phrase(score: float | None) -> str:
 # =============================================================================
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_yahoo_prices(tickers: Tuple[str, ...], period: str) -> Tuple[pd.DataFrame, List[str]]:
+def fetch_market_prices(tickers: Tuple[str, ...], period: str) -> Tuple[pd.DataFrame, List[str]]:
     if not tickers:
         return pd.DataFrame(), []
 
@@ -1149,9 +1156,9 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Yahoo-only cross-asset monitor. It uses liquid market proxies rather than economic releases, so the output is faster, more stable, and easier to compare across ADFM tabs.
+        Cross-asset regime monitor built from liquid market proxies rather than economic-release endpoints. The output is designed to be fast, stable, and comparable across ADFM tabs.
 
-        It should be read as a tape-and-liquidity dashboard, not an official CPI, ISM, claims, or Fed data page.
+        It should be read as a tape-and-liquidity dashboard, not as an official CPI, ISM, claims, or Fed-release page.
         """
     )
 
@@ -1159,7 +1166,7 @@ with st.sidebar:
     st.header("Controls")
 
     period = st.selectbox(
-        "Yahoo history",
+        "Market history",
         ["6mo", "1y", "2y", "3y", "5y"],
         index=3,
         help="Longer windows improve percentile scoring. Shorter windows load faster but reduce signal depth.",
@@ -1215,10 +1222,10 @@ st.markdown(f"<div class='page-title'>{TITLE}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='page-subtitle'>{SUBTITLE}</div>", unsafe_allow_html=True)
 
 all_tickers = tuple(TICKERS.keys())
-prices, failed = fetch_yahoo_prices(all_tickers, period)
+prices, failed = fetch_market_prices(all_tickers, period)
 
 if prices.empty:
-    st.error("No Yahoo Finance data loaded. Check connectivity or reduce the ticker list.")
+    st.error("No market data loaded. Check connectivity or reduce the ticker list.")
     st.stop()
 
 signals = build_signal_table(prices)
@@ -1238,7 +1245,7 @@ failed_text = ", ".join(failed[:8]) + ("..." if len(failed) > 8 else "") if fail
 st.markdown(
     f"""
     <div class="data-status">
-        <b>Data status:</b> Yahoo-only; latest market observation {latest_market_text}; loaded {loaded_count}/{len(TICKERS)} tickers; history {period}; unavailable tickers: {failed_text}.
+        <b>Data status:</b> latest market observation {latest_market_text}; loaded {loaded_count}/{len(TICKERS)} tickers; history {period}; unavailable tickers: {failed_text}.
     </div>
     """,
     unsafe_allow_html=True,
@@ -1318,12 +1325,12 @@ with right:
     st.markdown("<div class='section-title'>Signal Confirmation Matrix</div>", unsafe_allow_html=True)
     st.markdown("<div class='section-subtitle'>Percentile-based scores across short-term moves, YTD impulse, trend, and composite confirmation.</div>", unsafe_allow_html=True)
     if signals.empty:
-        st.info("Not enough Yahoo data to calculate signal scores.")
+        st.info("Not enough market data to calculate signal scores.")
     else:
         st.plotly_chart(signal_heatmap(signals), use_container_width=True)
 
 st.markdown("<div class='section-title'>Cross-Asset Performance</div>", unsafe_allow_html=True)
-st.markdown("<div class='section-subtitle'>Yahoo Finance price moves across the liquid proxy set. Futures and yield indexes are included only when Yahoo returns usable data.</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-subtitle'>Price moves across the liquid proxy set. Futures, FX, and yield indexes are included when usable data is available.</div>", unsafe_allow_html=True)
 
 perf_left, perf_right = st.columns([1.05, 0.95])
 with perf_left:
@@ -1394,14 +1401,14 @@ with tab_tables:
 with st.expander("Scoring methodology"):
     st.markdown(
         """
-        This page intentionally uses only Yahoo Finance. It does not call FRED, BEA, BLS, ISM, or any macro-release endpoint.
+        This page uses liquid market proxies rather than macro-release endpoints.
 
-        Each signal is transformed so that a higher series is generally more constructive for liquidity or risk appetite. Examples: HYG/LQD higher is constructive for credit; 1/VIX higher is volatility relief; 1/DXY or 1/UUP higher is softer-dollar liquidity; 1/crude higher is crude disinflation relief. The tool then scores 1D, 1W, 1M, and 3M moves by percentile against the selected Yahoo history window, adds a YTD impulse and a trend score, and rolls those into a -1 to +1 composite.
+        Each signal is transformed so that a higher series is generally more constructive for liquidity or risk appetite. Examples: HYG/LQD higher is constructive for credit; 1/VIX higher is volatility relief; 1/DXY or 1/UUP higher is softer-dollar liquidity; 1/crude higher is crude disinflation relief. The tool then scores 1D, 1W, 1M, and 3M moves by percentile against the selected market-history window, adds a YTD impulse and a trend score, and rolls those into a -1 to +1 composite.
 
-        Because Yahoo does not provide clean official macro releases, this is a market-implied regime tool. It is designed to answer what the tape is confirming now, not what CPI, payrolls, ISM, claims, or Fed funds officially printed.
+        This is a market-implied regime tool. It is designed to answer what the tape is confirming now, not what CPI, payrolls, ISM, claims, or Fed funds officially printed.
         """
     )
 
 if show_raw:
-    st.markdown("<div class='section-title'>Raw Yahoo Data</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Raw Market Data</div>", unsafe_allow_html=True)
     st.dataframe(prices.tail(220), use_container_width=True)
