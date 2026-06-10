@@ -11,7 +11,6 @@ import streamlit as st
 import yfinance as yf
 
 TITLE = "Event Risk + Catalyst Calendar"
-
 MARKET_TICKERS = ["SPY", "QQQ", "IWM", "TLT", "UUP", "GLD", "^VIX"]
 
 EVENT_WEIGHTS = {
@@ -40,15 +39,15 @@ st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expan
 st.markdown(
     """
     <style>
-        .block-container {padding-top: 1.35rem; padding-bottom: 2rem; max-width: 1550px;}
-        .adfm-title {font-size: 1.85rem; font-weight: 750; margin-bottom: 0.1rem; color: #111827;}
-        .adfm-subtitle {font-size: 0.96rem; color: #6b7280; margin-bottom: 1.1rem;}
-        .metric-card {background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%); border: 1px solid #e5e7eb; border-radius: 14px; padding: 13px 15px 10px 15px; min-height: 96px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);}
-        .metric-label {font-size: 0.74rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.045em; margin-bottom: 0.42rem;}
-        .metric-value {font-size: 1.30rem; font-weight: 750; color: #111827; line-height: 1.12;}
-        .metric-footnote {font-size: 0.76rem; color: #9ca3af; margin-top: 0.42rem;}
-        .section-title {font-size: 1.03rem; font-weight: 750; color: #111827; margin-top: 0.5rem; margin-bottom: 0.5rem;}
-        .note-box {background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px 14px; color: #475569; font-size: 0.88rem;}
+        .block-container {padding-top: 3.0rem; padding-bottom: 2rem; max-width: 1550px;}
+        .adfm-title {font-size: 1.9rem; line-height: 1.18; font-weight: 760; margin: 0 0 0.25rem 0; color: #111827;}
+        .adfm-subtitle {font-size: 0.96rem; color: #6b7280; margin-bottom: 1.15rem;}
+        .metric-card {background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%); border: 1px solid #e5e7eb; border-radius: 12px; padding: 13px 15px 10px 15px; min-height: 96px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);}
+        .metric-label {font-size: 0.72rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.045em; margin-bottom: 0.42rem;}
+        .metric-value {font-size: 1.22rem; font-weight: 750; color: #111827; line-height: 1.18;}
+        .metric-footnote {font-size: 0.75rem; color: #9ca3af; margin-top: 0.42rem; line-height: 1.35;}
+        .section-title {font-size: 1.03rem; font-weight: 750; color: #111827; margin-top: 0.9rem; margin-bottom: 0.45rem;}
+        .note-box {background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px; color: #475569; font-size: 0.86rem; line-height: 1.45;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -94,21 +93,22 @@ def risk_color(score: float) -> str:
 
 
 def parse_custom_events(text: str) -> pd.DataFrame:
+    cols = ["Date", "Event", "Type", "Region", "Why It Matters", "Precision"]
     if not text.strip():
-        return pd.DataFrame(columns=["Date", "Event", "Type", "Region", "Why It Matters", "Precision"])
+        return pd.DataFrame(columns=cols)
     try:
         df = pd.read_csv(StringIO(text))
         required = ["Date", "Event", "Type", "Region", "Why It Matters"]
         missing = [col for col in required if col not in df.columns]
         if missing:
             st.warning(f"Custom calendar missing columns: {', '.join(missing)}")
-            return pd.DataFrame(columns=["Date", "Event", "Type", "Region", "Why It Matters", "Precision"])
+            return pd.DataFrame(columns=cols)
         df["Date"] = pd.to_datetime(df["Date"]).dt.date
         df["Precision"] = "Custom"
-        return df[["Date", "Event", "Type", "Region", "Why It Matters", "Precision"]]
+        return df[cols]
     except Exception as exc:
         st.warning(f"Could not parse custom CSV: {exc}")
-        return pd.DataFrame(columns=["Date", "Event", "Type", "Region", "Why It Matters", "Precision"])
+        return pd.DataFrame(columns=cols)
 
 
 def build_rule_calendar(start: date, months_forward: int) -> pd.DataFrame:
@@ -119,18 +119,18 @@ def build_rule_calendar(start: date, months_forward: int) -> pd.DataFrame:
         y, m = cursor.year, cursor.month
         rows.extend(
             [
-                {"Date": first_weekday(y, m, 4), "Event": "Payrolls / Employment Situation", "Type": "Labor", "Region": "U.S.", "Why It Matters": "Growth and wage pressure impulse for rates and equities.", "Precision": "Estimated rule"},
-                {"Date": second_weekday(y, m, 2), "Event": "CPI Inflation Window", "Type": "Inflation", "Region": "U.S.", "Why It Matters": "Primary inflation catalyst for rates, dollar, duration, and growth equities.", "Precision": "Estimated rule"},
-                {"Date": second_weekday(y, m, 3), "Event": "PPI Inflation Window", "Type": "Inflation", "Region": "U.S.", "Why It Matters": "Pipeline inflation and margin pressure read-through.", "Precision": "Estimated rule"},
-                {"Date": third_friday(y, m), "Event": "Monthly Options Expiration", "Type": "Options", "Region": "U.S.", "Why It Matters": "Dealer positioning, gamma decay, and liquidity conditions can shift.", "Precision": "Rule"},
+                {"Date": first_weekday(y, m, 4), "Event": "Payrolls / Employment Situation", "Type": "Labor", "Region": "U.S.", "Why It Matters": "Growth, wages, rates, and equity-index risk.", "Precision": "Estimated"},
+                {"Date": second_weekday(y, m, 2), "Event": "CPI Inflation Window", "Type": "Inflation", "Region": "U.S.", "Why It Matters": "Rates, dollar, duration, and growth-equity catalyst.", "Precision": "Estimated"},
+                {"Date": second_weekday(y, m, 3), "Event": "PPI Inflation Window", "Type": "Inflation", "Region": "U.S.", "Why It Matters": "Pipeline inflation and margin-pressure read-through.", "Precision": "Estimated"},
+                {"Date": third_friday(y, m), "Event": "Monthly Options Expiration", "Type": "Options", "Region": "U.S.", "Why It Matters": "Dealer positioning, gamma decay, and liquidity shift.", "Precision": "Rule"},
             ]
         )
         if m in [1, 4, 7, 10]:
-            rows.append({"Date": second_weekday(y, m, 0), "Event": "Earnings Season Ramp", "Type": "Earnings", "Region": "U.S.", "Why It Matters": "Index-level earnings revisions, guidance tone, and factor leadership catalyst.", "Precision": "Estimated window"})
+            rows.append({"Date": second_weekday(y, m, 0), "Event": "Earnings Season Ramp", "Type": "Earnings", "Region": "U.S.", "Why It Matters": "Index revisions, guidance tone, factor leadership.", "Precision": "Estimated"})
         if m in [2, 5, 8, 11]:
-            rows.append({"Date": first_weekday(y, m, 2), "Event": "Quarterly Treasury Refunding Window", "Type": "Treasury", "Region": "U.S.", "Why It Matters": "Supply, duration risk, term premium, and curve catalyst.", "Precision": "Estimated window"})
+            rows.append({"Date": first_weekday(y, m, 2), "Event": "Quarterly Treasury Refunding Window", "Type": "Treasury", "Region": "U.S.", "Why It Matters": "Supply, duration risk, term premium, curve catalyst.", "Precision": "Estimated"})
         if m in [3, 6, 9, 12]:
-            rows.append({"Date": last_day_of_month(y, m), "Event": "Quarter-End Rebalance", "Type": "Quarter-End", "Region": "Global", "Why It Matters": "Rebalance flow, liquidity, and window-dressing risk.", "Precision": "Rule"})
+            rows.append({"Date": last_day_of_month(y, m), "Event": "Quarter-End Rebalance", "Type": "Quarter-End", "Region": "Global", "Why It Matters": "Rebalance flow, liquidity, and positioning risk.", "Precision": "Rule"})
         cursor = date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
     df = pd.DataFrame(rows)
     return df[(df["Date"] >= start) & (df["Date"] <= end)].sort_values("Date")
@@ -138,12 +138,17 @@ def build_rule_calendar(start: date, months_forward: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_market(tickers: List[str], period: str) -> pd.DataFrame:
-    data = yf.download(tickers, period=period, interval="1d", auto_adjust=True, progress=False, threads=False)
+    try:
+        data = yf.download(tickers, period=period, interval="1d", auto_adjust=True, progress=False, threads=False)
+    except Exception:
+        return pd.DataFrame()
     if data.empty:
         return pd.DataFrame()
     if isinstance(data.columns, pd.MultiIndex):
-        return data["Close"].ffill()
-    return data[["Close"]].rename(columns={"Close": tickers[0]}).ffill()
+        close = data["Close"].copy()
+    else:
+        close = data[["Close"]].rename(columns={"Close": tickers[0]})
+    return close.dropna(how="all").ffill()
 
 
 with st.sidebar:
@@ -151,11 +156,11 @@ with st.sidebar:
     horizon_days = st.slider("Event horizon", 14, 180, 90, 7)
     months_forward = max(3, int(np.ceil(horizon_days / 31)) + 1)
     market_period = st.selectbox("Market backdrop", ["3mo", "6mo", "1y", "2y"], index=2)
-    include_estimated = st.checkbox("Include rule-based estimated macro windows", value=True)
+    include_estimated = st.checkbox("Include estimated macro windows", value=True)
 
     st.divider()
     st.header("Custom Events")
-    st.caption("Optional CSV columns: Date, Event, Type, Region, Why It Matters")
+    st.caption("CSV columns: Date, Event, Type, Region, Why It Matters")
     custom_text = st.text_area(
         "Paste custom event CSV",
         value="",
@@ -167,10 +172,8 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Forward catalyst planner for known macro/event windows.
-
-        Rule-based rows are estimates designed for planning. For exact official release
-        dates, paste a custom CSV into the sidebar and those events will be included.
+        Forward catalyst planner for known macro/event windows. Rule-based rows are
+        estimates for planning; paste official dates as custom events when precision matters.
         """
     )
 
@@ -203,17 +206,15 @@ market = fetch_market(MARKET_TICKERS, market_period)
 next_event = calendar.iloc[0] if not calendar.empty else None
 next_high = calendar.sort_values("Risk Score", ascending=False).iloc[0] if not calendar.empty else None
 high_count = int((calendar["Risk Score"] >= 80).sum()) if not calendar.empty else 0
-inflation_count = int((calendar["Type"] == "Inflation").sum()) if not calendar.empty else 0
-
 vix_latest = np.nan
 if not market.empty and "^VIX" in market and not market["^VIX"].dropna().empty:
     vix_latest = float(market["^VIX"].dropna().iloc[-1])
 
 cards = [
-    ("Next Catalyst", str(next_event["Event"]) if next_event is not None else "N/A", f"{next_event['Days']} days away" if next_event is not None else "N/A", COLORS["blue"]),
+    ("Next Catalyst", str(next_event["Event"]) if next_event is not None else "N/A", "Today" if next_event is not None and next_event["Days"] == 0 else (f"{next_event['Days']} days away" if next_event is not None else "N/A"), COLORS["blue"]),
     ("Highest Risk", str(next_high["Event"]) if next_high is not None else "N/A", f"Score {next_high['Risk Score']:.0f}" if next_high is not None else "N/A", risk_color(float(next_high["Risk Score"])) if next_high is not None else COLORS["grey"]),
     ("High-Risk Events", str(high_count), f"Within {horizon_days} days", COLORS["red"] if high_count else COLORS["green"]),
-    ("Inflation Windows", str(inflation_count), "CPI/PPI estimated windows", COLORS["amber"]),
+    ("Event Count", str(len(calendar)), "Visible catalyst rows", COLORS["amber"]),
     ("VIX Backdrop", f"{vix_latest:.1f}" if np.isfinite(vix_latest) else "N/A", market_period, COLORS["purple"]),
 ]
 
@@ -230,21 +231,22 @@ for col, (label, value, footnote, color) in zip(st.columns(5), cards):
             unsafe_allow_html=True,
         )
 
-left, right = st.columns([1.1, 0.9])
+left, right = st.columns([1.05, 0.95])
 with left:
     st.markdown("<div class='section-title'>Catalyst Calendar</div>", unsafe_allow_html=True)
     display = calendar.copy()
     display["Date"] = display["Date"].map(lambda d: d.strftime("%Y-%m-%d"))
     display["Risk Score"] = display["Risk Score"].map(lambda x: f"{x:.0f}")
-    st.dataframe(display[["Date", "Days", "Event", "Type", "Region", "Risk Score", "Precision", "Why It Matters"]], use_container_width=True, hide_index=True)
+    compact = display[["Date", "Days", "Event", "Type", "Risk Score", "Precision"]]
+    st.dataframe(compact, use_container_width=True, hide_index=True, height=385)
 
 with right:
     st.markdown("<div class='section-title'>Event Risk Timeline</div>", unsafe_allow_html=True)
     type_colors = {"Labor": COLORS["blue"], "Inflation": COLORS["red"], "Fed": COLORS["purple"], "Treasury": COLORS["amber"], "Options": COLORS["green"], "Earnings": "#14b8a6", "Growth": "#64748b", "Quarter-End": "#a855f7", "Custom": "#111827"}
     timeline = go.Figure()
     for event_type, group in calendar.groupby("Type"):
-        timeline.add_trace(go.Scatter(x=group["Date"], y=group["Risk Score"], mode="markers", name=str(event_type), marker=dict(size=np.clip(group["Risk Score"] / 4, 10, 24), color=type_colors.get(event_type, COLORS["grey"]), opacity=0.82), text=group["Event"], hovertemplate="%{text}<br>%{x}<br>Risk %{y:.0f}<extra></extra>"))
-    timeline.update_layout(height=420, margin=dict(l=20, r=20, t=20, b=20), yaxis=dict(title="Risk score", range=[45, 105]), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
+        timeline.add_trace(go.Scatter(x=group["Date"], y=group["Risk Score"], mode="markers", name=str(event_type), marker=dict(size=np.clip(group["Risk Score"] / 5, 9, 18), color=type_colors.get(event_type, COLORS["grey"]), opacity=0.82), text=group["Event"], hovertemplate="%{text}<br>%{x}<br>Risk %{y:.0f}<extra></extra>"))
+    timeline.update_layout(height=385, margin=dict(l=12, r=12, t=15, b=15), yaxis=dict(title="Risk score", range=[35, 105]), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
     st.plotly_chart(timeline, use_container_width=True)
 
 st.markdown("<div class='section-title'>Market Backdrop Into Events</div>", unsafe_allow_html=True)
@@ -257,14 +259,18 @@ else:
     for ticker in ["SPY", "QQQ", "IWM", "TLT", "UUP", "GLD"]:
         if ticker in rebased:
             fig.add_trace(go.Scatter(x=rebased.index, y=rebased[ticker], mode="lines", name=ticker))
-    fig.update_layout(height=430, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="Rebased to 100", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
+    fig.update_layout(height=390, margin=dict(l=12, r=12, t=15, b=15), yaxis_title="Rebased to 100", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
     st.plotly_chart(fig, use_container_width=True)
+
+with st.expander("Event details"):
+    details = calendar.copy()
+    details["Date"] = details["Date"].map(lambda d: d.strftime("%Y-%m-%d"))
+    st.dataframe(details[["Date", "Days", "Event", "Type", "Region", "Risk Score", "Precision", "Why It Matters"]], use_container_width=True, hide_index=True)
 
 st.markdown(
     """
     <div class="note-box">
-        Estimated event rows are planning placeholders based on common recurring windows.
-        Paste exact official dates into the custom CSV box when precision matters.
+        Estimated rows are planning placeholders based on recurring macro windows. Use the custom CSV field for exact official release dates.
     </div>
     """,
     unsafe_allow_html=True,
