@@ -95,7 +95,7 @@ HORIZONS = {
 SCORE_COLUMNS = ["1D", "1W", "1M", "3M", "YTD", "Trend", "Composite"]
 
 PALETTE = {
-    "bg": "#f6f7f9",
+    "bg": "#ffffff",
     "card": "#ffffff",
     "border": "#d9dee7",
     "text": "#111827",
@@ -120,7 +120,9 @@ st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expan
 st.markdown(
     """
     <style>
-        .stApp { background: #f6f7f9; }
+        html, body, .stApp, main, [data-testid="stAppViewContainer"] {
+            background: #ffffff !important;
+        }
         .block-container {
             padding-top: 3.25rem;
             padding-bottom: 2.5rem;
@@ -132,7 +134,8 @@ st.markdown(
         }
 
         header[data-testid="stHeader"] {
-            background: #ffffff;
+            background: rgba(255, 255, 255, 0.96) !important;
+            border-bottom: 1px solid #f1f5f9;
         }
         .page-title {
             padding-top: 0.25rem;
@@ -258,6 +261,17 @@ st.markdown(
             border: 1px solid #d9dee7;
             border-radius: 11px;
             overflow: hidden;
+        }
+        div[data-testid="stPlotlyChart"] {
+            background: #ffffff;
+            border-radius: 12px;
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.5rem;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 2.35rem;
+            padding: 0 0.9rem;
         }
         @media (max-width: 1250px) {
             .brief-grid { grid-template-columns: 1fr 1fr; }
@@ -1297,17 +1311,19 @@ pillar_items = [
     ("Composite", scores.get("Composite", np.nan), "Weighted regime score."),
 ]
 
-pillar_html = "<div class='pillar-grid'>"
-for label, value, note in pillar_items:
-    pillar_html += f"""
-    <div class="pillar-card">
-        <div class="pillar-label">{label}</div>
-        <div class="pillar-value" style="color:{score_color(value)};">{signed_num_fmt(value, 2)}</div>
-        <div class="pillar-note">{score_label(value)}. {note}</div>
-    </div>
-    """
-pillar_html += "</div>"
-st.markdown(pillar_html, unsafe_allow_html=True)
+pillar_cols = st.columns(len(pillar_items), gap="small")
+for col, (label, value, note) in zip(pillar_cols, pillar_items):
+    with col:
+        st.markdown(
+            f"""
+            <div class="pillar-card">
+                <div class="pillar-label">{label}</div>
+                <div class="pillar-value" style="color:{score_color(value)};">{signed_num_fmt(value, 2)}</div>
+                <div class="pillar-note">{score_label(value)}. {note}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # =============================================================================
