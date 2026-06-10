@@ -1,8 +1,8 @@
 # streamlit_app.py
-# ADFM | Options Flow Trend Monitor
-# Revised rebuild: separates scan filters from dashboard filters, fixes lookback wiring,
-# preserves intraday scan events, uses universe-aware cache fallback, and makes direction
-# estimates more conservative for public Yahoo option-chain snapshots.
+# ADFM | Options Flow Outlier Monitor
+# Revised rebuild: designed to capture true outlier contracts rather than broad option-chain activity.
+# Public Yahoo chain snapshots are filtered through premium, volume/OI, spread, DTE, direction confidence,
+# OTM distance, and premium-versus-underlying-liquidity checks.
 
 from __future__ import annotations
 
@@ -32,12 +32,12 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # =============================================================================
 # Page config
 # =============================================================================
-st.set_page_config(page_title="ADFM Options Flow Trend Monitor", layout="wide")
+st.set_page_config(page_title="ADFM Options Flow Outlier Monitor", layout="wide")
 
-APP_TITLE = "ADFM | Options Flow Trend Monitor"
+APP_TITLE = "ADFM | Options Flow Outlier Monitor"
 APP_SUBTITLE = (
-    "Yahoo Finance option-chain scanner with a persistent unusual-flow database, "
-    "rolling bull/bear scores, and ticker-level trend boards."
+    "Yahoo Finance option-chain scanner focused on outlier contracts: high premium, high volume/OI, "
+    "cleaner quotes, aggressive side estimates, and fast DTE toggles."
 )
 
 CUSTOM_CSS = """
@@ -74,26 +74,26 @@ CACHE_DIR = Path(".uw_cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
 # Use a v2 DB so old same-day overwrite behavior does not poison new events.
-FLOW_DB = CACHE_DIR / "adfm_options_flow_v2.sqlite"
+FLOW_DB = CACHE_DIR / "adfm_options_flow_outliers_v3.sqlite"
 LEGACY_FLOW_DB = CACHE_DIR / "adfm_options_flow.sqlite"
 UNIVERSE_META_CACHE = CACHE_DIR / "ndx100_meta.pkl"
 LAST_GOOD_SNAPSHOT = CACHE_DIR / "last_good_underlying_snapshot.pkl"
-LAST_GOOD_SCAN = CACHE_DIR / "last_good_live_scan_v2.pkl"
-LAST_GOOD_DIAGS = CACHE_DIR / "last_good_live_diags_v2.pkl"
-LAST_GOOD_META = CACHE_DIR / "last_good_live_meta_v2.json"
+LAST_GOOD_SCAN = CACHE_DIR / "last_good_live_scan_outliers_v3.pkl"
+LAST_GOOD_DIAGS = CACHE_DIR / "last_good_live_diags_outliers_v3.pkl"
+LAST_GOOD_META = CACHE_DIR / "last_good_live_meta_outliers_v3.json"
 
 NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 
-DEFAULT_MIN_PREMIUM = 50_000.0
-DEFAULT_MIN_VOLUME = 100
-DEFAULT_MIN_VOL_OI = 1.5
-DEFAULT_MAX_SPREAD_PCT = 35.0
+DEFAULT_MIN_PREMIUM = 150_000.0
+DEFAULT_MIN_VOLUME = 250
+DEFAULT_MIN_VOL_OI = 2.0
+DEFAULT_MAX_SPREAD_PCT = 30.0
 DEFAULT_TOP_N = 150
 DEFAULT_MAX_WORKERS = 4
 DEFAULT_DTE_MIN = 0
-DEFAULT_DTE_MAX = 90
+DEFAULT_DTE_MAX = 60
 DEFAULT_MAX_EXPIRIES_PER_SYMBOL = 8
-DEFAULT_MIN_UNUSUAL_SCORE = 55.0
+DEFAULT_MIN_UNUSUAL_SCORE = 70.0
 DEFAULT_MIN_UNDERLYING_DOLLAR_VOL_MM = 100.0
 DEFAULT_BATCH_SIZE = 25
 DEFAULT_MIN_PRICE = 10.0
@@ -102,6 +102,39 @@ DEFAULT_MIN_20D_VOL = 1_000_000
 RETRY_ATTEMPTS = 3
 RETRY_SLEEP_BASE = 0.85
 CHAIN_JITTER_MAX = 0.35
+
+DTE_PRESETS = [20, 30, 60, 90, 120, 360]
+TREND_WINDOWS = [1, 5, 20, 30, 60, 90, 120, 360]
+
+OUTLIER_PROFILES = {
+    "Outliers only": {
+        "min_premium": 150_000.0,
+        "min_volume": 250,
+        "min_vol_oi": 2.0,
+        "max_spread_pct": 30.0,
+        "min_unusual_score": 70.0,
+        "min_outlier_score": 72.0,
+        "min_premium_adv_bps": 0.10,
+    },
+    "Strict outliers": {
+        "min_premium": 300_000.0,
+        "min_volume": 500,
+        "min_vol_oi": 3.0,
+        "max_spread_pct": 25.0,
+        "min_unusual_score": 78.0,
+        "min_outlier_score": 82.0,
+        "min_premium_adv_bps": 0.25,
+    },
+    "Exploratory": {
+        "min_premium": 75_000.0,
+        "min_volume": 100,
+        "min_vol_oi": 1.25,
+        "max_spread_pct": 40.0,
+        "min_unusual_score": 58.0,
+        "min_outlier_score": 60.0,
+        "min_premium_adv_bps": 0.00,
+    },
+}
 
 PASTEL_GREEN = "#BFE8C5"
 PASTEL_RED = "#F4B6B6"
@@ -283,6 +316,11 @@ def init_db() -> None:
                 spread_pct REAL,
                 iv REAL,
                 unusual_score REAL,
+                outlier_score REAL,
+                outlier_tier TEXT,
+                premium_adv_bps REAL,
+                expiry_bucket TEXT,
+                outlier_reason TEXT,
                 avg_dollar_vol REAL,
                 cluster_flag TEXT,
                 cluster_contracts REAL,
@@ -331,19 +369,19 @@ def save_flow_to_db(flow: pd.DataFrame, scan_ts: Optional[pd.Timestamp] = None, 
     cols = [
         "event_id", "scan_date", "scan_ts", "scan_signature", "symbol", "contract_symbol", "type", "expiry", "dte", "spot", "strike",
         "moneyness", "pct_otm", "side", "direction", "direction_confidence", "bid", "ask", "mid", "fill_est", "volume",
-        "open_interest", "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "avg_dollar_vol",
+        "open_interest", "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "outlier_score", "outlier_tier", "premium_adv_bps", "expiry_bucket", "outlier_reason", "avg_dollar_vol",
         "cluster_flag", "cluster_contracts", "cluster_premium", "cluster_volume", "cluster_score"
     ]
 
     for col in cols:
         if col not in out.columns:
-            out[col] = "" if col in ["event_id", "cluster_flag", "scan_signature"] else np.nan
+            out[col] = "" if col in ["event_id", "cluster_flag", "scan_signature", "outlier_tier", "expiry_bucket", "outlier_reason"] else np.nan
 
     out["event_id"] = [ensure_event_id(row, scan_ts_str, scan_signature) for _, row in out.iterrows()]
 
     numeric_cols = [
         "dte", "spot", "strike", "pct_otm", "direction_confidence", "bid", "ask", "mid", "fill_est", "volume", "open_interest",
-        "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "avg_dollar_vol", "cluster_contracts",
+        "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "outlier_score", "premium_adv_bps", "avg_dollar_vol", "cluster_contracts",
         "cluster_premium", "cluster_volume", "cluster_score"
     ]
     for col in numeric_cols:
@@ -673,16 +711,106 @@ def compute_unusual_score(
     side_bonus = 0.06 if side in ("ASK", "BID") else 0.0
     liquidity_score = 0.4 if pd.isna(avg_dollar_vol) or avg_dollar_vol <= 0 else min(math.log10(avg_dollar_vol + 1.0) / 9.0, 1.0)
     raw = (
-        0.35 * premium_score
-        + 0.20 * voi_score
+        0.30 * premium_score
+        + 0.26 * voi_score
         + 0.14 * abs_size_score
-        + 0.08 * otm_score
+        + 0.10 * otm_score
         + 0.08 * dte_score
-        + 0.07 * liquidity_score
+        + 0.06 * liquidity_score
         + side_bonus
-        - 0.16 * spread_penalty
+        - 0.18 * spread_penalty
     )
     return float(np.clip(raw, 0.0, 1.0) * 100.0)
+
+
+def compute_outlier_metadata(
+    premium: float,
+    volume: float,
+    open_interest: float,
+    vol_oi: float,
+    spread_pct: float,
+    pct_otm_pct: float,
+    dte: int,
+    side: str,
+    unusual_score: float,
+    avg_dollar_vol: float,
+) -> Tuple[float, str, float, str, str]:
+    """Stricter public-chain outlier model: size, vol/OI, quote quality, aggression, DTE, OTM distance, and size versus underlying liquidity."""
+    premium = safe_float(premium, 0.0)
+    volume = safe_float(volume, 0.0)
+    open_interest = safe_float(open_interest, 0.0)
+    vol_oi = safe_float(vol_oi, 0.0)
+    spread_pct = safe_float(spread_pct, np.nan)
+    pct_otm_pct = safe_float(pct_otm_pct, 0.0)
+    dte = safe_int(dte, 0)
+    unusual_score = safe_float(unusual_score, 0.0)
+    avg_dollar_vol = safe_float(avg_dollar_vol, np.nan)
+
+    premium_adv_bps = 0.0 if pd.isna(avg_dollar_vol) or avg_dollar_vol <= 0 else premium / avg_dollar_vol * 10_000.0
+    score = unusual_score * 0.62
+    reasons = []
+
+    if premium >= 1_000_000:
+        score += 14; reasons.append(">$1M premium")
+    elif premium >= 500_000:
+        score += 10; reasons.append(">$500k premium")
+    elif premium >= 250_000:
+        score += 6; reasons.append(">$250k premium")
+
+    if vol_oi >= 10:
+        score += 15; reasons.append("vol/OI >=10x")
+    elif vol_oi >= 5:
+        score += 12; reasons.append("vol/OI >=5x")
+    elif vol_oi >= 3:
+        score += 8; reasons.append("vol/OI >=3x")
+    elif vol_oi >= 1.5:
+        score += 4; reasons.append("volume > OI")
+
+    if volume >= 10_000:
+        score += 9; reasons.append(">10k contracts")
+    elif volume >= 3_000:
+        score += 6; reasons.append(">3k contracts")
+    elif volume >= 1_000:
+        score += 3; reasons.append(">1k contracts")
+
+    if pd.notna(spread_pct):
+        if spread_pct <= 12:
+            score += 6; reasons.append("tight spread")
+        elif spread_pct <= 25:
+            score += 3
+
+    if side in {"ASK", "BID"}:
+        score += 7; reasons.append("aggressive side")
+
+    if dte <= 20:
+        score += 6; reasons.append("<=20D")
+    elif dte <= 60:
+        score += 4
+    elif dte >= 180:
+        score -= 4
+
+    if 3 <= pct_otm_pct <= 25:
+        score += 6; reasons.append("meaningful OTM")
+    elif pct_otm_pct > 40:
+        score -= 5
+
+    if premium_adv_bps >= 2.0:
+        score += 8; reasons.append(">=2 bps ADV")
+    elif premium_adv_bps >= 0.5:
+        score += 5; reasons.append(">=0.5 bps ADV")
+    elif premium_adv_bps >= 0.1:
+        score += 2
+
+    score = float(np.clip(score, 0.0, 100.0))
+    if score >= 88:
+        tier = "EXTREME"
+    elif score >= 78:
+        tier = "HIGH"
+    elif score >= 68:
+        tier = "WATCH"
+    else:
+        tier = "NOISE"
+    return score, tier, premium_adv_bps, dte_bucket(dte), "; ".join(reasons[:5]) if reasons else "generic activity"
 
 # =============================================================================
 # Yahoo option helpers
@@ -731,6 +859,8 @@ def scan_one_symbol(
     dte_max: int,
     max_expiries_per_symbol: int,
     min_unusual_score: float,
+    min_outlier_score: float,
+    min_premium_adv_bps: float,
     require_two_sided_quotes: bool,
 ) -> Tuple[List[dict], dict]:
     diagnostics = {
@@ -879,19 +1009,50 @@ def scan_one_symbol(
             if local.empty:
                 continue
 
+            local["pct_otm"] = local["pct_otm_dec"] * 100.0
+            meta_rows = [
+                compute_outlier_metadata(
+                    premium=prem,
+                    volume=vol,
+                    open_interest=oi,
+                    vol_oi=voi,
+                    spread_pct=sp,
+                    pct_otm_pct=pct_otm,
+                    dte=dte,
+                    side=side,
+                    unusual_score=score,
+                    avg_dollar_vol=avg_dollar_vol,
+                )
+                for prem, vol, oi, voi, sp, pct_otm, side, score in zip(
+                    local["premium"], local["volume"], local["openInterest"], local["vol_oi"],
+                    local["spread_pct"], local["pct_otm"], local["side"], local["unusual_score"]
+                )
+            ]
+            local["outlier_score"] = [x[0] for x in meta_rows]
+            local["outlier_tier"] = [x[1] for x in meta_rows]
+            local["premium_adv_bps"] = [x[2] for x in meta_rows]
+            local["expiry_bucket"] = [x[3] for x in meta_rows]
+            local["outlier_reason"] = [x[4] for x in meta_rows]
+            local = local[
+                (local["outlier_score"] >= min_outlier_score)
+                & (local["premium_adv_bps"] >= min_premium_adv_bps)
+                & (local["outlier_tier"].isin(["WATCH", "HIGH", "EXTREME"]))
+            ].copy()
+            if local.empty:
+                continue
+
             local["symbol"] = symbol
             local["type"] = option_type
             local["expiry"] = exp
             local["dte"] = int(dte)
             local["spot"] = float(spot)
-            local["pct_otm"] = local["pct_otm_dec"] * 100.0
             local["avg_dollar_vol"] = avg_dollar_vol
 
             rows.extend(local[[
                 "symbol", "contractSymbol", "type", "expiry", "dte", "spot", "strike", "moneyness",
                 "pct_otm", "side", "direction", "direction_confidence", "bid", "ask", "mid", "fill_est",
                 "volume", "openInterest", "vol_oi", "premium", "spread_pct", "impliedVolatility",
-                "unusual_score", "avg_dollar_vol",
+                "unusual_score", "outlier_score", "outlier_tier", "premium_adv_bps", "expiry_bucket", "outlier_reason", "avg_dollar_vol",
             ]].rename(columns={
                 "contractSymbol": "contract_symbol",
                 "openInterest": "open_interest",
@@ -921,6 +1082,11 @@ def ensure_flow_schema(df: pd.DataFrame) -> pd.DataFrame:
         "spread_pct": np.nan,
         "pct_otm": np.nan,
         "direction_confidence": np.nan,
+        "outlier_score": np.nan,
+        "outlier_tier": "",
+        "premium_adv_bps": np.nan,
+        "expiry_bucket": "",
+        "outlier_reason": "",
         "cluster_flag": "",
         "cluster_contracts": np.nan,
         "cluster_premium": np.nan,
@@ -934,7 +1100,7 @@ def ensure_flow_schema(df: pd.DataFrame) -> pd.DataFrame:
         out = normalize_scan_date_col(out)
     numeric_cols = [
         "dte", "spot", "strike", "pct_otm", "direction_confidence", "bid", "ask", "mid", "fill_est", "volume",
-        "open_interest", "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "avg_dollar_vol",
+        "open_interest", "vol_oi", "premium", "spread_pct", "iv", "unusual_score", "outlier_score", "premium_adv_bps", "avg_dollar_vol",
         "cluster_contracts", "cluster_premium", "cluster_volume", "cluster_score"
     ]
     for col in numeric_cols:
@@ -992,6 +1158,8 @@ def run_full_scan(
     max_workers: int,
     max_expiries_per_symbol: int,
     min_unusual_score: float,
+    min_outlier_score: float,
+    min_premium_adv_bps: float,
     require_two_sided_quotes: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     spot_map: Dict[str, float] = {}
@@ -1026,6 +1194,8 @@ def run_full_scan(
                 dte_max,
                 max_expiries_per_symbol,
                 min_unusual_score,
+                min_outlier_score,
+                min_premium_adv_bps,
                 require_two_sided_quotes,
             ): sym
             for sym in symbols
@@ -1058,7 +1228,7 @@ def run_full_scan(
     diags = pd.DataFrame(all_diags)
     if not flow.empty:
         flow = ensure_flow_schema(build_cluster_flags(flow))
-        flow = flow.sort_values(["unusual_score", "premium", "vol_oi", "volume"], ascending=[False, False, False, False]).reset_index(drop=True)
+        flow = flow.sort_values(["outlier_score", "premium", "vol_oi", "volume"], ascending=[False, False, False, False]).reset_index(drop=True)
     return flow, diags
 
 # =============================================================================
@@ -1087,7 +1257,9 @@ def apply_dashboard_filters(
     dte_range: Tuple[int, int],
     min_premium: float,
     min_score: float,
+    min_outlier_score: float,
     min_confidence: float,
+    outlier_tiers: List[str],
 ) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
@@ -1097,9 +1269,12 @@ def apply_dashboard_filters(
         out = out[out["symbol"].astype(str).map(normalize_symbol).isin(allowed)]
     if directions and "All" not in directions:
         out = out[out["direction"].astype(str).isin(directions)]
+    if outlier_tiers and "All" not in outlier_tiers and "outlier_tier" in out.columns:
+        out = out[out["outlier_tier"].astype(str).isin(outlier_tiers)]
     out = out[pd.to_numeric(out["dte"], errors="coerce").between(dte_range[0], dte_range[1], inclusive="both")]
     out = out[pd.to_numeric(out["premium"], errors="coerce") >= float(min_premium)]
     out = out[pd.to_numeric(out["unusual_score"], errors="coerce") >= float(min_score)]
+    out = out[pd.to_numeric(out["outlier_score"], errors="coerce").fillna(0) >= float(min_outlier_score)]
     out = out[pd.to_numeric(out["direction_confidence"], errors="coerce").fillna(0) >= float(min_confidence)]
     return out.copy()
 
@@ -1133,7 +1308,9 @@ def build_trend_board(db: pd.DataFrame, lookback_days: int, anchor: Optional[dat
         bearish_trades=("bearish_rows", "sum"),
         neutral_trades=("neutral_rows", "sum"),
         avg_score=("unusual_score", "mean"),
+        avg_outlier_score=("outlier_score", "mean"),
         max_score=("unusual_score", "max"),
+        max_outlier_score=("outlier_score", "max"),
         avg_dte=("dte", "mean"),
         largest_print=("premium", "max"),
         clusters=("cluster_int", "sum"),
@@ -1154,9 +1331,9 @@ def build_trend_board(db: pd.DataFrame, lookback_days: int, anchor: Optional[dat
         default="MIXED",
     )
     trend["conviction_score"] = (
-        trend["avg_score"].fillna(0) * 0.40
-        + np.clip(np.log10(trend["directional_premium"].fillna(0) + 1) / 7.0 * 100, 0, 100) * 0.30
-        + np.clip(trend["unusual_trades"].fillna(0) / 20 * 100, 0, 100) * 0.18
+        trend["avg_outlier_score"].fillna(trend["avg_score"]).fillna(0) * 0.45
+        + np.clip(np.log10(trend["directional_premium"].fillna(0) + 1) / 7.0 * 100, 0, 100) * 0.28
+        + np.clip(trend["unusual_trades"].fillna(0) / 20 * 100, 0, 100) * 0.15
         + np.clip(trend["active_days"].fillna(0) / max(min(lookback_days, 20), 1) * 100, 0, 100) * 0.12
     )
     return trend.sort_values(["conviction_score", "directional_premium"], ascending=[False, False]).reset_index(drop=True)
@@ -1208,13 +1385,15 @@ def prep_flow_display(df: pd.DataFrame) -> pd.DataFrame:
     out["IV"] = out["iv"].map(lambda x: "" if pd.isna(x) else f"{x:.1%}")
     out["OTM %"] = out["pct_otm"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
     out["Score"] = out["unusual_score"].map(lambda x: f"{safe_float(x, 0):.1f}")
+    out["Outlier"] = out["outlier_score"].map(lambda x: f"{safe_float(x, 0):.1f}")
+    out["ADV bps"] = out["premium_adv_bps"].map(lambda x: "" if pd.isna(x) else f"{x:.2f}")
     out["Conf"] = out["direction_confidence"].map(lambda x: "" if pd.isna(x) else f"{x:.2f}")
     out["Date"] = out["scan_date"].astype(str) if "scan_date" in out.columns else ""
     out["Time"] = pd.to_datetime(out["scan_ts"], errors="coerce").dt.strftime("%H:%M:%S") if "scan_ts" in out.columns else ""
     keep = [
-        "Date", "Time", "symbol", "type", "expiry", "dte", "direction", "Conf", "side", "strike", "spot",
-        "moneyness", "OTM %", "Fill", "Bid", "Ask", "Spread %", "Vol", "OI", "Vol/OI", "Premium", "IV",
-        "Score", "cluster_flag", "contract_symbol",
+        "Date", "Time", "symbol", "type", "expiry", "dte", "expiry_bucket", "direction", "Conf", "side", "strike", "spot",
+        "moneyness", "OTM %", "Fill", "Bid", "Ask", "Spread %", "Vol", "OI", "Vol/OI", "Premium", "ADV bps", "IV",
+        "Score", "Outlier", "outlier_tier", "outlier_reason", "cluster_flag", "contract_symbol",
     ]
     return out[[c for c in keep if c in out.columns]].copy()
 
@@ -1227,7 +1406,7 @@ def prep_trend_display(df: pd.DataFrame) -> pd.DataFrame:
     for col in money_cols:
         if col in out.columns:
             out[col] = out[col].map(human_money)
-    score_cols = [c for c in out.columns if "Score" in c or "Conviction" in c or c in ["avg_score", "max_score", "bull_bear_score"]]
+    score_cols = [c for c in out.columns if "Score" in c or "Conviction" in c or c in ["avg_score", "max_score", "avg_outlier_score", "max_outlier_score", "bull_bear_score"]]
     for col in score_cols:
         if col in out.columns:
             out[col] = out[col].map(lambda x: "" if pd.isna(x) else f"{x:.1f}")
@@ -1303,6 +1482,7 @@ def render_trend_bar(trend: pd.DataFrame, lookback_days: int, top_n: int, rank_b
             "neutral_premium": ":,.0f",
             "bull_bear_score": ":.1f",
             "conviction_score": ":.1f",
+            "avg_outlier_score": ":.1f",
         },
         title=f"Ticker Net Directional Flow | {lookback_days}D Window | Ranked by {rank_by}",
     )
@@ -1380,9 +1560,10 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** A public-data approximation of a curated unusual-options-flow service.
+        **Purpose:** Capture option-chain outliers, not generic active contracts.
 
         **Scan filters** affect the next Yahoo scan. **Dashboard filters** affect existing live/cache/database views immediately.
+        The DTE controls below let you flip through 20, 30, 60, 90, 120, and 360-day contracts without dragging ranges.
         """
     )
 
@@ -1397,39 +1578,49 @@ with st.sidebar:
     else:
         symbols_all = sorted(set(ndx_symbols + DEFAULT_EXTRA_SYMBOLS + custom_symbols))
 
-    st.subheader("Scan Filters")
+    st.subheader("Outlier Scan Profile")
+    scan_profile = st.selectbox("Profile", ["Outliers only", "Strict outliers", "Exploratory"], index=0)
+    profile_defaults = OUTLIER_PROFILES[scan_profile]
+    scan_dte_max = st.select_slider("Scan option expiry max DTE", options=DTE_PRESETS, value=60)
+    dte_range = (0, int(scan_dte_max))
+
     min_price = st.number_input("Minimum stock price ($)", min_value=0.0, value=float(DEFAULT_MIN_PRICE), step=5.0, format="%.0f")
     min_avg_20d_vol = st.number_input("Minimum 20D avg share volume", min_value=0, value=int(DEFAULT_MIN_20D_VOL), step=250_000)
     min_underlying_dollar_vol_mm = st.number_input("Minimum underlying ADV ($mm)", min_value=0.0, value=float(DEFAULT_MIN_UNDERLYING_DOLLAR_VOL_MM), step=25.0, format="%.0f")
-    min_premium = st.number_input("Minimum premium ($)", min_value=0.0, value=float(DEFAULT_MIN_PREMIUM), step=25_000.0, format="%.0f")
-    min_volume = st.number_input("Minimum contract volume", min_value=1, value=int(DEFAULT_MIN_VOLUME), step=25)
-    min_vol_oi = st.number_input("Minimum volume / OI", min_value=0.0, value=float(DEFAULT_MIN_VOL_OI), step=0.25, format="%.2f")
-    max_spread_pct = st.number_input("Maximum spread %", min_value=0.0, value=float(DEFAULT_MAX_SPREAD_PCT), step=5.0, format="%.1f")
-    min_unusual_score = st.slider("Minimum unusual score", min_value=0.0, max_value=100.0, value=float(DEFAULT_MIN_UNUSUAL_SCORE), step=1.0)
-    dte_range = st.slider("DTE range", min_value=0, max_value=365, value=(DEFAULT_DTE_MIN, DEFAULT_DTE_MAX), step=1)
+
+    min_premium = st.number_input("Minimum premium ($)", min_value=0.0, value=float(profile_defaults["min_premium"]), step=25_000.0, format="%.0f", key=f"scan_min_premium_{scan_profile}")
+    min_volume = st.number_input("Minimum contract volume", min_value=1, value=int(profile_defaults["min_volume"]), step=25, key=f"scan_min_volume_{scan_profile}")
+    min_vol_oi = st.number_input("Minimum volume / OI", min_value=0.0, value=float(profile_defaults["min_vol_oi"]), step=0.25, format="%.2f", key=f"scan_min_vol_oi_{scan_profile}")
+    max_spread_pct = st.number_input("Maximum spread %", min_value=0.0, value=float(profile_defaults["max_spread_pct"]), step=5.0, format="%.1f", key=f"scan_max_spread_{scan_profile}")
+    min_unusual_score = st.slider("Minimum unusual score", min_value=0.0, max_value=100.0, value=float(profile_defaults["min_unusual_score"]), step=1.0, key=f"scan_min_unusual_{scan_profile}")
+    min_outlier_score = st.slider("Minimum outlier score", min_value=0.0, max_value=100.0, value=float(profile_defaults["min_outlier_score"]), step=1.0, key=f"scan_min_outlier_{scan_profile}")
+    min_premium_adv_bps = st.number_input("Minimum premium / underlying ADV, bps", min_value=0.0, value=float(profile_defaults["min_premium_adv_bps"]), step=0.05, format="%.2f", key=f"scan_min_adv_bps_{scan_profile}")
     require_two_sided_quotes = st.toggle("Require two-sided option quotes", value=True)
 
     st.subheader("Scan Engine")
-    max_expiries_per_symbol = st.slider("Max expiries per symbol", min_value=1, max_value=16, value=DEFAULT_MAX_EXPIRIES_PER_SYMBOL, step=1)
+    max_expiries_per_symbol = st.slider("Max expiries per symbol", min_value=1, max_value=24, value=10, step=1)
     max_workers = st.slider("Concurrent workers", min_value=1, max_value=10, value=DEFAULT_MAX_WORKERS, step=1)
     allow_cached_fallback = st.toggle("Use same-filter last-good cached scan when live scan is degraded", value=True)
     save_to_database = st.toggle("Save qualifying rows to local trend database", value=True)
-    run_scan = st.button("Run Live Scan", use_container_width=True, type="primary")
+    run_scan = st.button("Run Outlier Scan", use_container_width=True, type="primary")
 
     st.subheader("Dashboard Filters")
-    dashboard_lookback = st.selectbox("Dashboard / chart window", [1, 5, 20, 60, 90, 120], index=2, key="dashboard_window")
+    dashboard_lookback = st.selectbox("Trend lookback", TREND_WINDOWS, index=2, key="dashboard_window")
+    dashboard_dte_max = st.select_slider("Option expiry max DTE", options=DTE_PRESETS, value=60, key="dashboard_dte_max")
+    dashboard_dte_range = (0, int(dashboard_dte_max))
     top_n = st.slider("Rows / tickers to display", min_value=10, max_value=500, value=DEFAULT_TOP_N, step=10)
     rank_by = st.selectbox("Trend chart ranking", ["Conviction", "Absolute net premium", "Directional premium"], index=0)
-    dashboard_directions = st.multiselect("Direction filter", ["All", "BULLISH", "BEARISH", "NEUTRAL"], default=["All"])
-    dashboard_min_premium = st.number_input("Dashboard min premium ($)", min_value=0.0, value=0.0, step=25_000.0, format="%.0f")
-    dashboard_min_score = st.slider("Dashboard min score", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
-    dashboard_min_confidence = st.slider("Dashboard min direction confidence", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
-    dashboard_dte_range = st.slider("Dashboard DTE range", min_value=0, max_value=365, value=(0, 365), step=1, key="dashboard_dte")
+    dashboard_directions = st.multiselect("Direction filter", ["All", "BULLISH", "BEARISH", "NEUTRAL"], default=["BULLISH", "BEARISH"])
+    dashboard_tiers = st.multiselect("Outlier tier", ["All", "EXTREME", "HIGH", "WATCH", "NOISE"], default=["EXTREME", "HIGH", "WATCH"])
+    dashboard_min_premium = st.number_input("Dashboard min premium ($)", min_value=0.0, value=float(profile_defaults["min_premium"]), step=25_000.0, format="%.0f")
+    dashboard_min_score = st.slider("Dashboard min unusual score", min_value=0.0, max_value=100.0, value=float(profile_defaults["min_unusual_score"]), step=1.0)
+    dashboard_min_outlier_score = st.slider("Dashboard min outlier score", min_value=0.0, max_value=100.0, value=float(profile_defaults["min_outlier_score"]), step=1.0)
+    dashboard_min_confidence = st.slider("Dashboard min direction confidence", min_value=0.0, max_value=1.0, value=0.75, step=0.05)
     dashboard_symbol_filter_raw = st.text_input("Dashboard ticker filter", value="", placeholder="Optional: NVDA, AMD, META")
     dashboard_symbols = parse_custom_symbols(dashboard_symbol_filter_raw)
 
     st.subheader("Database")
-    db_days = st.slider("Database history loaded", min_value=5, max_value=730, value=max(120, int(dashboard_lookback)), step=5)
+    db_days = st.slider("Database history loaded", min_value=5, max_value=730, value=max(360, int(dashboard_lookback)), step=5)
     if st.button("Clear local flow database", use_container_width=True):
         clear_flow_db()
         st.success("Local flow database cleared.")
@@ -1444,7 +1635,10 @@ scan_filter_payload = {
     "min_volume": min_volume,
     "min_vol_oi": min_vol_oi,
     "max_spread_pct": max_spread_pct,
+    "scan_profile": scan_profile,
     "min_unusual_score": min_unusual_score,
+    "min_outlier_score": min_outlier_score,
+    "min_premium_adv_bps": min_premium_adv_bps,
     "dte_range": dte_range,
     "max_expiries_per_symbol": max_expiries_per_symbol,
     "require_two_sided_quotes": require_two_sided_quotes,
@@ -1520,6 +1714,8 @@ if run_scan:
                     max_workers=max_workers,
                     max_expiries_per_symbol=max_expiries_per_symbol,
                     min_unusual_score=min_unusual_score,
+                    min_outlier_score=min_outlier_score,
+                    min_premium_adv_bps=min_premium_adv_bps,
                     require_two_sided_quotes=require_two_sided_quotes,
                 )
             except Exception as e:
@@ -1609,6 +1805,9 @@ if run_scan:
                 "api_success_ratio": api_success_ratio,
                 "usable_ratio": usable_ratio,
                 "scan_signature": scan_signature,
+                "scan_profile": scan_profile,
+                "scan_dte_range": dte_range,
+                "min_outlier_score": min_outlier_score,
             }, LAST_GOOD_META)
             if save_to_database:
                 inserted = save_flow_to_db(flow_live, scan_ts=scan_ts, scan_signature=scan_signature)
@@ -1636,7 +1835,9 @@ dashboard_db = apply_dashboard_filters(
     dte_range=dashboard_dte_range,
     min_premium=dashboard_min_premium,
     min_score=dashboard_min_score,
+    min_outlier_score=dashboard_min_outlier_score,
     min_confidence=dashboard_min_confidence,
+    outlier_tiers=dashboard_tiers,
 )
 flow_view = apply_dashboard_filters(
     flow,
@@ -1645,7 +1846,9 @@ flow_view = apply_dashboard_filters(
     dte_range=dashboard_dte_range,
     min_premium=dashboard_min_premium,
     min_score=dashboard_min_score,
+    min_outlier_score=dashboard_min_outlier_score,
     min_confidence=dashboard_min_confidence,
+    outlier_tiers=dashboard_tiers,
 )
 anchor = anchor_date_for_db(dashboard_db)
 render_top_metrics(db_raw, flow_view, scan_meta, dashboard_db)
@@ -1669,7 +1872,7 @@ if not st.session_state["scan_ran"] and flow_view.empty and dashboard_db.empty:
 # =============================================================================
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Trend Board",
-    "Today Odd Action",
+    "Outlier Tape",
     "Ticker Drilldown",
     "Live Scan Diagnostics",
     "Method Notes",
@@ -1681,23 +1884,23 @@ with tab1:
         st.info("No database rows match the current dashboard filters. Run a live scan with database saving on, or loosen the dashboard filters.")
     else:
         trend = build_trend_board(dashboard_db, dashboard_lookback, anchor=anchor)
-        windows = [1, 5, 20, 60, 90, dashboard_lookback]
+        windows = [20, 30, 60, 90, 120, 360, dashboard_lookback]
         multi = build_multi_window_scores(dashboard_db, windows=windows, anchor=anchor, sort_window=dashboard_lookback)
 
         if trend.empty:
             st.info("No saved rows in this dashboard window.")
         else:
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Window", f"{dashboard_lookback}D")
-            c2.metric("Trend tickers", f"{len(trend):,}")
-            c3.metric("Directional premium", human_money(float(trend["directional_premium"].sum())))
+            c1.metric("Trend window", f"{dashboard_lookback}D")
+            c2.metric("Option DTE", f"0-{dashboard_dte_max}D")
+            c3.metric("Trend tickers", f"{len(trend):,}")
             c4.metric("Net premium", human_money(float(trend["net_premium"].sum())))
             render_trend_bar(trend, lookback_days=dashboard_lookback, top_n=min(top_n, 100), rank_by=rank_by)
 
             display_cols = [
                 "symbol", "tape", "unusual_trades", "active_days", "total_premium", "directional_premium",
                 "bullish_premium", "bearish_premium", "neutral_premium", "net_premium", "bull_bear_score",
-                "conviction_score", "avg_score", "avg_dte", "largest_print", "clusters", "last_seen",
+                "conviction_score", "avg_outlier_score", "avg_score", "avg_dte", "largest_print", "clusters", "last_seen",
             ]
             display_cols = [c for c in display_cols if c in trend.columns]
             st.dataframe(prep_trend_display(trend[display_cols]).head(top_n), use_container_width=True, hide_index=True)
@@ -1709,7 +1912,7 @@ with tab1:
             st.dataframe(prep_trend_display(multi).head(top_n), use_container_width=True, hide_index=True)
 
 with tab2:
-    st.subheader("Today Odd Action")
+    st.subheader("Loaded Outlier Tape")
     if flow_view.empty:
         st.info("No live or cached scan rows match the current dashboard filters. Run a live scan first or loosen dashboard filters.")
     else:
@@ -1719,12 +1922,12 @@ with tab2:
         c3.metric("Bullish premium", human_money(float(flow_view.loc[flow_view["direction"] == "BULLISH", "premium"].sum())))
         c4.metric("Bearish premium", human_money(float(flow_view.loc[flow_view["direction"] == "BEARISH", "premium"].sum())))
 
-        chart = flow_view.sort_values(["premium", "unusual_score"], ascending=[False, False]).head(min(top_n, 60)).copy()
+        chart = flow_view.sort_values(["outlier_score", "premium", "vol_oi"], ascending=[False, False, False]).head(min(top_n, 60)).copy()
         chart["label"] = (
             chart["symbol"].astype(str) + " | " + chart["type"].astype(str) + " | " + chart["expiry"].astype(str) + " | " + chart["strike"].round(0).astype("Int64").astype(str)
         )
         fig = px.bar(
-            chart.sort_values(["premium", "unusual_score"], ascending=[True, True]),
+            chart.sort_values(["outlier_score", "premium"], ascending=[True, True]),
             x="premium",
             y="label",
             color="direction",
@@ -1741,13 +1944,16 @@ with tab2:
                 "spread_pct": ":.1f",
                 "direction_confidence": ":.2f",
                 "unusual_score": ":.1f",
+                "outlier_score": ":.1f",
+                "outlier_tier": True,
+                "premium_adv_bps": ":.2f",
                 "premium": ":,.0f",
             },
-            title="Top Loaded Unusual Flow | Dashboard Filters Applied",
+            title=f"Top Loaded Option Outliers | 0-{dashboard_dte_max}D Options | Dashboard Filters Applied",
         )
         fig.update_layout(height=max(420, min(900, 30 * len(chart) + 140)), margin=dict(l=20, r=20, t=55, b=20), yaxis_title="")
         st.plotly_chart(fig, use_container_width=True, key=f"today_flow_{dashboard_lookback}_{len(flow_view)}_{top_n}")
-        st.dataframe(prep_flow_display(flow_view.sort_values(["premium", "unusual_score"], ascending=[False, False]).head(top_n)), use_container_width=True, hide_index=True)
+        st.dataframe(prep_flow_display(flow_view.sort_values(["outlier_score", "premium", "vol_oi"], ascending=[False, False, False]).head(top_n)), use_container_width=True, hide_index=True)
 
 with tab3:
     st.subheader("Ticker Drilldown")
@@ -1757,7 +1963,7 @@ with tab3:
         symbols_in_db = sorted(dashboard_db["symbol"].dropna().astype(str).unique().tolist())
         ticker_pick = st.selectbox("Ticker", options=symbols_in_db, index=0 if symbols_in_db else None)
         if ticker_pick:
-            sub = dashboard_db[dashboard_db["symbol"] == ticker_pick].copy().sort_values(["scan_ts", "premium"], ascending=[False, False])
+            sub = dashboard_db[dashboard_db["symbol"] == ticker_pick].copy().sort_values(["scan_ts", "outlier_score", "premium"], ascending=[False, False, False])
             sub_window = filter_to_lookback(sub, dashboard_lookback, anchor=anchor)
             render_ticker_timeline(dashboard_db, ticker_pick, dashboard_lookback, anchor=anchor)
 
@@ -1795,11 +2001,11 @@ with tab5:
     st.subheader("Method Notes")
     st.markdown(
         """
-        This app is a public-data approximation of an unusual-options-flow service. Yahoo Finance provides option-chain snapshots: bid, ask, last price, volume, open interest, implied volatility, strike, and expiry. That is enough to identify unusual contracts, estimate premium, calculate volume/open-interest anomalies, and build a persistent trend database.
+        This app is a public-data approximation of a curated option-outlier service. Yahoo Finance provides option-chain snapshots: bid, ask, last price, volume, open interest, implied volatility, strike, and expiry. The app deliberately filters harder than a generic chain scanner: premium, volume/open-interest, outlier score, quote quality, aggressive side estimate, DTE, OTM distance, and premium versus underlying ADV.
 
         It does not provide exchange-grade time-and-sales, sweep/block tags, opening-versus-closing classification, or buyer/seller identity. Direction is therefore estimated conservatively. Ask-side call prints and bid-side put prints are treated as bullish; ask-side put prints and bid-side call prints are treated as bearish. Midpoint and one-sided quotes are neutral unless you change the source logic.
 
-        The selected dashboard window is now applied consistently across the Trend Board, chart, ticker drilldown, and ticker timeline. Database history is anchored to the latest saved scan date rather than the machine date, so old or weekend data does not silently disappear.
+        The selected trend window is applied consistently across the Trend Board, chart, ticker drilldown, and ticker timeline. The selected option DTE max is applied to both database and loaded-flow views, so you can toggle quickly between 20, 30, 60, 90, 120, and 360-day contracts.
         """
     )
 
