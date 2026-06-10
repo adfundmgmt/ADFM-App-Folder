@@ -14,7 +14,7 @@ from plotly.subplots import make_subplots
 
 TITLE = "Global Macro Regime Dashboard"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-REQUEST_TIMEOUT = (4, 12)
+REQUEST_TIMEOUT = (3, 8)
 
 FRED_SERIES = {
     "NAPM": "ISM Manufacturing PMI",
@@ -24,7 +24,6 @@ FRED_SERIES = {
     "CPILFESL": "Core CPI",
     "T10YIE": "10Y Breakeven",
     "DGS10": "10Y Treasury",
-    "FEDFUNDS": "Fed Funds",
     "NFCI": "Chicago Fed NFCI",
 }
 
@@ -44,14 +43,15 @@ st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expan
 st.markdown(
     """
     <style>
-        .block-container {padding-top: 1.35rem; padding-bottom: 2rem; max-width: 1550px;}
-        .adfm-title {font-size: 1.85rem; font-weight: 750; margin-bottom: 0.1rem; color: #111827;}
-        .adfm-subtitle {font-size: 0.96rem; color: #6b7280; margin-bottom: 1.1rem;}
-        .metric-card {background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%); border: 1px solid #e5e7eb; border-radius: 14px; padding: 13px 15px 10px 15px; min-height: 96px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);}
-        .metric-label {font-size: 0.74rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.045em; margin-bottom: 0.42rem;}
-        .metric-value {font-size: 1.28rem; font-weight: 750; color: #111827; line-height: 1.12;}
-        .metric-footnote {font-size: 0.76rem; color: #9ca3af; margin-top: 0.42rem;}
-        .section-title {font-size: 1.03rem; font-weight: 750; color: #111827; margin-top: 0.5rem; margin-bottom: 0.5rem;}
+        .block-container {padding-top: 3.0rem; padding-bottom: 2rem; max-width: 1550px;}
+        .adfm-title {font-size: 1.9rem; line-height: 1.18; font-weight: 760; margin: 0 0 0.25rem 0; color: #111827;}
+        .adfm-subtitle {font-size: 0.96rem; color: #6b7280; margin-bottom: 1.15rem;}
+        .metric-card {background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%); border: 1px solid #e5e7eb; border-radius: 12px; padding: 13px 15px 10px 15px; min-height: 96px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);}
+        .metric-label {font-size: 0.72rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.045em; margin-bottom: 0.42rem;}
+        .metric-value {font-size: 1.22rem; font-weight: 750; color: #111827; line-height: 1.18;}
+        .metric-footnote {font-size: 0.75rem; color: #9ca3af; margin-top: 0.42rem; line-height: 1.35;}
+        .section-title {font-size: 1.03rem; font-weight: 750; color: #111827; margin-top: 0.9rem; margin-bottom: 0.45rem;}
+        .note-box {background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px; color: #475569; font-size: 0.86rem; line-height: 1.45;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -80,9 +80,14 @@ def pct_change(series: pd.Series, periods: int) -> float:
 def percentile_score(series: pd.Series, invert: bool = False) -> float:
     clean = series.dropna()
     if len(clean) < 12:
-        return 0.0
+        return np.nan
     score = (float(clean.rank(pct=True).iloc[-1]) - 0.5) * 2.0
     return -score if invert else score
+
+
+def mean_score(parts: List[float]) -> float:
+    clean = [x for x in parts if np.isfinite(x)]
+    return float(np.mean(clean)) if clean else 0.0
 
 
 def score_color(score: float) -> str:
@@ -104,7 +109,11 @@ def fetch_fred(series_map: Dict[str, str], start: date) -> pd.DataFrame:
     frames: List[pd.Series] = []
     for series_id in series_map:
         try:
-            response = requests.get(FRED_URL, params={"id": series_id, "cosd": start.isoformat()}, timeout=REQUEST_TIMEOUT)
+            response = requests.get(
+                FRED_URL,
+                params={"id": series_id, "cosd": start.isoformat()},
+                timeout=REQUEST_TIMEOUT,
+            )
             response.raise_for_status()
             raw = pd.read_csv(StringIO(response.text))
             if raw.empty or len(raw.columns) < 2:
@@ -121,12 +130,17 @@ def fetch_fred(series_map: Dict[str, str], start: date) -> pd.DataFrame:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_market(tickers: List[str], period: str) -> pd.DataFrame:
-    data = yf.download(tickers, period=period, interval="1d", auto_adjust=True, progress=False, threads=False)
+    try:
+        data = yf.download(tickers, period=period, interval="1d", auto_adjust=True, progress=False, threads=False)
+    except Exception:
+        return pd.DataFrame()
     if data.empty:
         return pd.DataFrame()
     if isinstance(data.columns, pd.MultiIndex):
-        return data["Close"].ffill()
-    return data[["Close"]].rename(columns={"Close": tickers[0]}).ffill()
+        close = data["Close"].copy()
+    else:
+        close = data[["Close"]].rename(columns={"Close": tickers[0]})
+    return close.dropna(how="all").ffill()
 
 
 def classify(growth: float, inflation: float, policy: float, risk: float) -> tuple[str, str]:
@@ -138,7 +152,7 @@ def classify(growth: float, inflation: float, policy: float, risk: float) -> tup
         return "Stagflation Pressure", "Growth is fading while inflation remains sticky."
     if growth < -0.15 and risk < -0.15:
         return "Slowdown / Risk-Off", "Growth and market signals are both deteriorating."
-    if policy < -0.45 and risk < 0:
+    if policy < -0.35 and risk < 0:
         return "Tight Financial Conditions", "Policy and financial conditions are leaning restrictive."
     return "Transition / Mixed Macro", "Signals are cross-current; watch breadth, credit, and rates confirmation."
 
@@ -155,10 +169,8 @@ with st.sidebar:
     st.markdown(
         """
         Broad macro regime dashboard built from public growth, inflation,
-        policy, financial-conditions, and market proxies.
-
-        Scores are directional and percentile-based. They are intended to
-        organize the macro backdrop, not replace judgment around individual releases.
+        policy, financial-conditions, and market proxies. If FRED is slow or
+        partially unavailable, the page still renders from market proxies.
         """
     )
 
@@ -176,7 +188,7 @@ if fred.empty and market.empty:
     st.error("No macro or market data loaded. Check data-source connectivity.")
     st.stop()
 
-monthly = fred.resample("M").last().ffill() if not fred.empty else pd.DataFrame()
+monthly = fred.resample("ME").last().ffill() if not fred.empty else pd.DataFrame()
 if smoothing > 1 and not monthly.empty:
     monthly = monthly.rolling(smoothing, min_periods=1).mean()
 
@@ -220,23 +232,29 @@ if "NFCI" in monthly:
 if not market.empty:
     if "SPY" in market:
         risk_parts.append(np.clip(pct_change(market["SPY"], 63) * 5, -1, 1))
-        rows.append(["SPY 3M", fmt_pct(pct_change(market["SPY"], 63) * 100), "Risk appetite"])
+        growth_parts.append(np.clip(pct_change(market["SPY"], 126) * 3, -1, 1))
+        rows.append(["SPY 3M", fmt_pct(pct_change(market["SPY"], 63) * 100), "Market growth/risk proxy"])
     if "HYG" in market and "LQD" in market:
         ratio = market["HYG"] / market["LQD"]
         risk_parts.append(np.clip(pct_change(ratio, 63) * 8, -1, 1))
+        policy_parts.append(np.clip(pct_change(ratio, 126) * 6, -1, 1))
         rows.append(["HYG/LQD 3M", fmt_pct(pct_change(ratio, 63) * 100), "Credit risk appetite"])
     if "^VIX" in market:
         risk_parts.append(percentile_score(market["^VIX"], invert=True))
         rows.append(["VIX", f"{latest(market['^VIX']):.1f}", "Lower is easier"])
     if "UUP" in market:
         risk_parts.append(np.clip(-pct_change(market["UUP"], 63) * 8, -1, 1))
+        policy_parts.append(np.clip(-pct_change(market["UUP"], 126) * 5, -1, 1))
         rows.append(["Dollar 3M", fmt_pct(pct_change(market["UUP"], 63) * 100), "Higher can tighten global liquidity"])
+    if "CPER" in market:
+        growth_parts.append(np.clip(pct_change(market["CPER"], 126) * 3, -1, 1))
+        rows.append(["Copper 6M", fmt_pct(pct_change(market["CPER"], 126) * 100), "Cyclical growth proxy"])
 
-growth_score = float(np.nanmean(growth_parts)) if growth_parts else 0.0
-inflation_score = float(np.nanmean(inflation_parts)) if inflation_parts else 0.0
-policy_score = float(np.nanmean(policy_parts)) if policy_parts else 0.0
-risk_score = float(np.nanmean(risk_parts)) if risk_parts else 0.0
-composite = float(np.nanmean([growth_score, -inflation_score, policy_score, risk_score]))
+growth_score = mean_score(growth_parts)
+inflation_score = mean_score(inflation_parts)
+policy_score = mean_score(policy_parts)
+risk_score = mean_score(risk_parts)
+composite = mean_score([growth_score, -inflation_score, policy_score, risk_score])
 regime, regime_note = classify(growth_score, inflation_score, policy_score, risk_score)
 
 cards = [
@@ -269,13 +287,16 @@ score_fig = go.Figure(
     )
 )
 score_fig.add_hline(y=0, line_color="#9ca3af", line_width=1)
-score_fig.update_layout(height=330, margin=dict(l=20, r=20, t=20, b=20), yaxis=dict(range=[-1, 1], title="Score"), plot_bgcolor="white", paper_bgcolor="white")
+score_fig.update_layout(height=310, margin=dict(l=12, r=12, t=15, b=15), yaxis=dict(range=[-1, 1], title="Score"), plot_bgcolor="white", paper_bgcolor="white")
 st.plotly_chart(score_fig, use_container_width=True)
 
-left, right = st.columns([1.05, 0.95])
+left, right = st.columns([1.0, 1.0])
 with left:
-    st.markdown("<div class='section-title'>Key Macro Inputs</div>", unsafe_allow_html=True)
-    st.dataframe(pd.DataFrame(rows, columns=["Input", "Latest", "Read-through"]), use_container_width=True, hide_index=True)
+    st.markdown("<div class='section-title'>Key Inputs</div>", unsafe_allow_html=True)
+    if rows:
+        st.dataframe(pd.DataFrame(rows, columns=["Input", "Latest", "Read-through"]), use_container_width=True, hide_index=True, height=330)
+    else:
+        st.info("Input table unavailable. Market proxy charts still loaded below.")
 
 with right:
     st.markdown("<div class='section-title'>Market Context</div>", unsafe_allow_html=True)
@@ -288,7 +309,7 @@ with right:
         for ticker in ["SPY", "HYG", "LQD", "UUP", "GLD", "TLT"]:
             if ticker in rebased:
                 fig.add_trace(go.Scatter(x=rebased.index, y=rebased[ticker], mode="lines", name=ticker))
-        fig.update_layout(height=360, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="Rebased to 100", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
+        fig.update_layout(height=330, margin=dict(l=12, r=12, t=15, b=15), yaxis_title="Rebased to 100", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
         st.plotly_chart(fig, use_container_width=True)
 
 if not monthly.empty:
@@ -301,11 +322,16 @@ if not monthly.empty:
         history_fig.add_trace(go.Scatter(x=cpi_yoy.index, y=cpi_yoy, name="CPI YoY", line=dict(color=COLORS["red"])), secondary_y=True)
     if "DGS10" in monthly:
         history_fig.add_trace(go.Scatter(x=monthly.index, y=monthly["DGS10"], name="10Y Yield", line=dict(color=COLORS["purple"])), secondary_y=True)
-    history_fig.update_layout(height=430, margin=dict(l=20, r=20, t=25, b=20), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
+    history_fig.update_layout(height=400, margin=dict(l=12, r=12, t=20, b=15), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
     history_fig.update_yaxes(title_text="ISM", secondary_y=False)
     history_fig.update_yaxes(title_text="Percent", secondary_y=True)
     st.plotly_chart(history_fig, use_container_width=True)
+else:
+    st.markdown(
+        "<div class='note-box'>FRED macro series did not load in this session, so the regime is based on market proxies only.</div>",
+        unsafe_allow_html=True,
+    )
 
-if show_raw:
+if show_raw and not fred.empty:
     st.markdown("<div class='section-title'>Raw FRED Data</div>", unsafe_allow_html=True)
     st.dataframe(fred.tail(120), use_container_width=True)
