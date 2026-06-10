@@ -19,8 +19,12 @@ TOOL_ORDER = [
     "Monthly Seasonality Explorer",
     "Volume Based Sentiment Indicator",
     "ETF Flows Dashboard",
+    "Global Macro Regime Dashboard",
+    "Yield Curve + Rates Regime Monitor",
+    "Credit Conditions Dashboard",
     "Liquidity Tracker",
     "Market Stress Composite",
+    "Event Risk + Catalyst Calendar",
     "Hedge Timer",
 ]
 
@@ -43,9 +47,15 @@ TOOL_GROUPS = {
         "ETF Flows Dashboard",
         "Volume Based Sentiment Indicator",
     ],
-    "Risk + Liquidity": [
+    "Macro + Rates": [
+        "Global Macro Regime Dashboard",
+        "Yield Curve + Rates Regime Monitor",
+        "Credit Conditions Dashboard",
         "Liquidity Tracker",
+    ],
+    "Risk + Catalysts": [
         "Market Stress Composite",
+        "Event Risk + Catalyst Calendar",
         "Hedge Timer",
     ],
 }
@@ -62,8 +72,12 @@ TOOL_DESCRIPTIONS = {
     "Monthly Seasonality Explorer": "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.",
     "Volume Based Sentiment Indicator": "Reads conviction, participation, and sentiment using volume regime signals across major liquid assets.",
     "ETF Flows Dashboard": "Tracks ETF flow pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures.",
+    "Global Macro Regime Dashboard": "Combines growth, inflation, policy, financial conditions, and market signals into a broad macro-regime read.",
+    "Yield Curve + Rates Regime Monitor": "Tracks the Treasury curve, real yields, breakevens, and bull/bear steepener or flattener regimes.",
+    "Credit Conditions Dashboard": "Monitors credit spreads, credit ETF ratios, regional banks, loans, EM debt, and financial conditions.",
     "Liquidity Tracker": "Monitors major liquidity drivers including the Fed balance sheet, RRP, TGA, policy rates, and financial conditions.",
     "Market Stress Composite": "Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion.",
+    "Event Risk + Catalyst Calendar": "Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks.",
     "Hedge Timer": "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.",
 }
 
@@ -210,15 +224,19 @@ st.markdown(
         <div class="title">AD Fund Management</div>
         <div class="subtitle">
             A focused command center for equity leadership, technical structure,
-            flows, liquidity, stress, seasonality, analogs, and hedge timing.
+            flows, macro regimes, rates, credit, liquidity, stress, event risk,
+            seasonality, analogs, and hedge timing.
         </div>
         <div class="chip-row">
             <span class="chip">Equity Leadership</span>
             <span class="chip">Technicals</span>
             <span class="chip">Relative Value</span>
             <span class="chip">Flows</span>
+            <span class="chip">Macro Regime</span>
+            <span class="chip">Rates</span>
+            <span class="chip">Credit</span>
             <span class="chip">Liquidity</span>
-            <span class="chip">Risk</span>
+            <span class="chip">Event Risk</span>
             <span class="chip">Hedging</span>
         </div>
     </div>
@@ -249,7 +267,7 @@ else:
 
 query = st.text_input(
     "Search tools",
-    placeholder="Try: liquidity, breadth, hedge, seasonality...",
+    placeholder="Try: inflation, rates, credit, liquidity, catalyst...",
     label_visibility="collapsed",
 )
 
