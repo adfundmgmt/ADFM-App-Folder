@@ -232,10 +232,11 @@ def build_feature_table(close: pd.DataFrame, anchors: AnchorDates) -> pd.DataFra
         return df
 
     score = (
-        0.35 * zscore(df["ret_since_friday"])
+        0.20 * zscore(df["ret_1d"])
+        + 0.25 * zscore(df["ret_1w"])
         + 0.25 * zscore(df["ret_1m"])
-        + 0.20 * zscore(df["dist_50"])
-        + 0.10 * zscore(df["dist_200"])
+        + 0.20 * zscore(df["ret_3m"])
+        + 0.10 * zscore(df["dist_50"])
         - 0.10 * zscore(df["vol_1m"])
     )
     df["score"] = score
@@ -245,15 +246,15 @@ def build_feature_table(close: pd.DataFrame, anchors: AnchorDates) -> pd.DataFra
 
     df["action"] = np.select(
         [
-            (df["score"] > 0.7) & (df["dist_50"] > 0),
-            (df["score"] < -0.7) & (df["dist_50"] < 0),
+            (df["score"] > 0.7) & (df["ret_1w"] > 0) & (df["dist_50"] > 0),
+            (df["score"] < -0.7) & (df["ret_1w"] < 0) & (df["dist_50"] < 0),
             stretched_up | stretched_down,
         ],
         ["Leadership", "Pressure", "Stretch"],
         default="Neutral",
     )
 
-    return df.sort_values(["score", "ret_since_friday"], ascending=[False, False]).reset_index(drop=True)
+    return df.sort_values(["score", "ret_1w"], ascending=[False, False]).reset_index(drop=True)
 
 
 def zscore(s: pd.Series) -> pd.Series:
@@ -272,12 +273,12 @@ def get_value(df: pd.DataFrame, ticker: str, col: str) -> float:
 
 
 def regime_summary(features: pd.DataFrame) -> Tuple[str, str]:
-    eq = np.nanmean([get_value(features, x, "ret_since_friday") for x in ["SPY", "QQQ", "IWM", "RSP"]])
-    rates = get_value(features, "TLT", "ret_since_friday")
-    credit = get_value(features, "HYG", "ret_since_friday") - get_value(features, "LQD", "ret_since_friday")
-    dollar = get_value(features, "UUP", "ret_since_friday")
-    vol = get_value(features, "VIXY", "ret_since_friday")
-    oil = get_value(features, "USO", "ret_since_friday")
+    eq = np.nanmean([get_value(features, x, "ret_1w") for x in ["SPY", "QQQ", "IWM", "RSP"]])
+    rates = get_value(features, "TLT", "ret_1w")
+    credit = get_value(features, "HYG", "ret_1w") - get_value(features, "LQD", "ret_1w")
+    dollar = get_value(features, "UUP", "ret_1w")
+    vol = get_value(features, "VIXY", "ret_1w")
+    oil = get_value(features, "USO", "ret_1w")
 
     score = 0
     score += 1 if eq > 0 else -1
@@ -291,7 +292,7 @@ def regime_summary(features: pd.DataFrame) -> Tuple[str, str]:
         note = "Equities, credit, duration and vol are moving in a direction consistent with easier conditions. Broad beta can work, but watch for crowded growth leadership."
     elif score <= -3:
         label = "Risk-off pressure"
-        note = "The post-Friday tape is being confirmed by tightening signals. Respect dollar strength, credit slippage, and equity weakness before pressing gross."
+        note = "The one-week tape is being confirmed by tightening signals. Respect dollar strength, credit slippage, and equity weakness before pressing gross."
     else:
         label = "Mixed tape / dispersion"
         note = "The tape is not giving clean cross-asset confirmation. Focus on relative-value, keep gross honest, and let leadership versus laggards do the work."
@@ -358,9 +359,9 @@ def make_tape_chart(close: pd.DataFrame, tickers: List[str], anchors: AnchorDate
 
 
 def make_heatmap(features: pd.DataFrame) -> go.Figure:
-    cols = ["ret_1d", "ret_since_friday", "ret_1w", "ret_1m", "ret_ytd"]
-    labels = ["Today", "Since Friday", "1W", "1M", "YTD"]
-    data = features.sort_values(["sleeve", "ret_since_friday"], ascending=[True, False]).copy()
+    cols = ["ret_1d", "ret_1w", "ret_1m", "ret_3m", "ret_ytd"]
+    labels = ["Today", "1W", "1M", "3M", "YTD"]
+    data = features.sort_values(["sleeve", "ret_1w"], ascending=[True, False]).copy()
     z = data[cols].to_numpy() * 100
     text = np.empty_like(z, dtype=object)
     for i in range(z.shape[0]):
@@ -385,17 +386,25 @@ def make_heatmap(features: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def make_since_friday_bar(features: pd.DataFrame) -> go.Figure:
-    data = features.sort_values("ret_since_friday", ascending=True).copy()
-    data["since_friday_pct"] = data["ret_since_friday"] * 100
+def make_horizon_bar(features: pd.DataFrame, horizon_col: str, label: str) -> go.Figure:
+    data = features.sort_values(horizon_col, ascending=True).copy()
+    data["horizon_pct"] = data[horizon_col] * 100
     fig = px.bar(
         data,
-        x="since_friday_pct",
+        x="horizon_pct",
         y="ticker",
         color="sleeve",
         orientation="h",
-        hover_data={"asset": True, "since_friday_pct": ":.1f", "ret_1d": ":.2%", "ret_1m": ":.2%"},
-        labels={"since_friday_pct": "Since Friday (%)", "ticker": ""},
+        hover_data={
+            "asset": True,
+            "horizon_pct": ":.1f",
+            "ret_1d": ":.2%",
+            "ret_1w": ":.2%",
+            "ret_1m": ":.2%",
+            "ret_3m": ":.2%",
+            "ret_ytd": ":.2%",
+        },
+        labels={"horizon_pct": f"{label} return (%)", "ticker": ""},
     )
     fig.add_vline(x=0, line_width=1)
     fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
@@ -405,25 +414,26 @@ def make_since_friday_bar(features: pd.DataFrame) -> go.Figure:
 def make_scatter(features: pd.DataFrame) -> go.Figure:
     data = features.copy()
     data["today_pct"] = data["ret_1d"] * 100
-    data["since_friday_pct"] = data["ret_since_friday"] * 100
+    data["ret_1w_pct"] = data["ret_1w"] * 100
     data["dist_50_pct"] = data["dist_50"] * 100
     data["vol_1m_pct"] = data["vol_1m"] * 100
     fig = px.scatter(
         data,
         x="dist_50_pct",
-        y="since_friday_pct",
+        y="ret_1w_pct",
         color="sleeve",
         size="vol_1m_pct",
         hover_name="ticker",
         hover_data={
             "asset": True,
             "today_pct": ":.1f",
-            "since_friday_pct": ":.1f",
+            "ret_1w_pct": ":.1f",
             "ret_1m": ":.1%",
+            "ret_3m": ":.1%",
             "score": ":.2f",
             "vol_1m_pct": False,
         },
-        labels={"dist_50_pct": "Distance from 50D MA (%)", "since_friday_pct": "Move since Friday (%)"},
+        labels={"dist_50_pct": "Distance from 50D MA (%)", "ret_1w_pct": "1W return (%)"},
     )
     fig.add_hline(y=0, line_width=1)
     fig.add_vline(x=0, line_width=1)
@@ -433,11 +443,11 @@ def make_scatter(features: pd.DataFrame) -> go.Figure:
 
 def make_sleeve_bars(features: pd.DataFrame) -> go.Figure:
     grouped = (
-        features.groupby("sleeve", as_index=False)[["ret_1d", "ret_since_friday", "ret_1m"]]
+        features.groupby("sleeve", as_index=False)[["ret_1d", "ret_1w", "ret_1m", "ret_3m", "ret_ytd"]]
         .mean(numeric_only=True)
         .melt(id_vars="sleeve", var_name="period", value_name="ret")
     )
-    mapping = {"ret_1d": "Today", "ret_since_friday": "Since Friday", "ret_1m": "1M"}
+    mapping = {"ret_1d": "Today", "ret_1w": "1W", "ret_1m": "1M", "ret_3m": "3M", "ret_ytd": "YTD"}
     grouped["period"] = grouped["period"].map(mapping)
     grouped["ret_pct"] = grouped["ret"] * 100
     fig = px.bar(
@@ -454,14 +464,14 @@ def make_sleeve_bars(features: pd.DataFrame) -> go.Figure:
 
 
 def build_takeaways(features: pd.DataFrame) -> dict:
-    leadership = features.sort_values(["ret_since_friday", "ret_1d"], ascending=False).head(5)
-    pressure = features.sort_values(["ret_since_friday", "ret_1d"], ascending=True).head(5)
+    leadership = features.sort_values(["ret_1w", "ret_1d"], ascending=False).head(5)
+    pressure = features.sort_values(["ret_1w", "ret_1d"], ascending=True).head(5)
     reversals = features.reindex(features["ret_1d"].abs().sort_values(ascending=False).index).head(5)
 
     def format_lines(df: pd.DataFrame) -> str:
         lines = []
         for _, row in df.iterrows():
-            lines.append(f"• {row['ticker']} {pct_fmt(row['ret_1d'])} today, {pct_fmt(row['ret_since_friday'])} since Friday")
+            lines.append(f"• {row['ticker']} {pct_fmt(row['ret_1d'])} today, {pct_fmt(row['ret_1w'])} 1W, {pct_fmt(row['ret_1m'])} 1M")
         return "\n".join(lines)
 
     return {
@@ -478,38 +488,47 @@ def make_table(features: pd.DataFrame) -> pd.DataFrame:
         "sleeve",
         "action",
         "ret_1d",
-        "ret_since_friday",
         "ret_1w",
         "ret_1m",
+        "ret_3m",
         "ret_ytd",
         "dist_50",
         "dist_200",
         "drawdown",
         "score",
     ]].copy()
-    for c in ["ret_1d", "ret_since_friday", "ret_1w", "ret_1m", "ret_ytd", "dist_50", "dist_200", "drawdown"]:
+    for c in ["ret_1d", "ret_1w", "ret_1m", "ret_3m", "ret_ytd", "dist_50", "dist_200", "drawdown"]:
         out[c] = out[c].map(pct_fmt)
     out["score"] = out["score"].map(num_fmt)
     return out
 
 
 st.title("Weekly Cross-Asset Compass")
-st.caption("Visual-first weekly macro page. The point is to surface what changed from Friday to today, where confirmation is broad, and where pressure is building.")
+st.caption("Visual-first weekly macro page. The point is to surface today, one-week, one-month, three-month, and YTD pressure across the tape.")
 
-with st.expander("Controls", expanded=False):
-    period = st.selectbox("History", ["1y", "18mo", "2y", "3y"], index=1)
-    include = st.multiselect(
-        "Assets",
-        list(UNIVERSE.keys()),
-        default=list(UNIVERSE.keys()),
+with st.sidebar:
+    st.markdown("## About This Tool")
+    st.caption(
+        "A visual-first weekly cross-asset page for triage. It ranks today, 1W, 1M, 3M, and YTD moves across equities, rates, credit, FX, commodities, volatility, and crypto. 1W, 1M, and 3M are 5, 21, and 63 trading-day windows. "
+        "The chart markers keep Friday and today visible because those are often the inflection points that matter for positioning."
     )
+
+    st.markdown("---")
+    st.markdown("## Controls")
+    period = st.selectbox("History", ["1y", "2y", "5y"], index=1)
+    sleeves = sorted(set(v["sleeve"] for v in UNIVERSE.values()))
+    selected_sleeves = st.multiselect("Sleeves", sleeves, default=sleeves)
+    default_assets = [t for t, meta in UNIVERSE.items() if meta["sleeve"] in selected_sleeves]
+    include = st.multiselect("Assets", list(UNIVERSE.keys()), default=default_assets)
     tape_focus = st.multiselect(
         "Tape chart focus",
         include,
         default=[t for t in CORE_TAPE if t in include],
     )
-    lookback = st.slider("Tape lookback (trading days)", min_value=60, max_value=252, value=126, step=21)
-    st.caption("Data source: Yahoo Finance via yfinance. This is for weekly triage and should sit on top of your real data stack, not replace it.")
+    lookback = st.slider("Tape lookback", min_value=60, max_value=252, value=126, step=21)
+    bar_horizon_label = st.selectbox("Ranking bar horizon", ["Today", "1W", "1M", "3M", "YTD"], index=1)
+    st.markdown("---")
+    st.caption("Data source: Yahoo Finance via yfinance. Use this for weekly triage, not official marks.")
 
 if not include:
     st.warning("Select at least one asset.")
@@ -533,27 +552,29 @@ takeaways = build_takeaways(features)
 
 # Snapshot row
 snap1, snap2, snap3, snap4, snap5, snap6 = st.columns(6)
-snap1.metric("S&P 500 today", pct_fmt(get_value(features, "SPY", "ret_1d")), pct_fmt(get_value(features, "SPY", "ret_since_friday")))
-snap2.metric("Nasdaq today", pct_fmt(get_value(features, "QQQ", "ret_1d")), pct_fmt(get_value(features, "QQQ", "ret_since_friday")))
-snap3.metric("TLT today", pct_fmt(get_value(features, "TLT", "ret_1d")), pct_fmt(get_value(features, "TLT", "ret_since_friday")))
-snap4.metric("HY minus IG", pct_fmt(get_value(features, "HYG", "ret_since_friday") - get_value(features, "LQD", "ret_since_friday")))
-snap5.metric("Dollar since Friday", pct_fmt(get_value(features, "UUP", "ret_since_friday")))
-snap6.metric("Oil since Friday", pct_fmt(get_value(features, "USO", "ret_since_friday")))
+snap1.metric("S&P 500 today", pct_fmt(get_value(features, "SPY", "ret_1d")), pct_fmt(get_value(features, "SPY", "ret_1w")))
+snap2.metric("Nasdaq today", pct_fmt(get_value(features, "QQQ", "ret_1d")), pct_fmt(get_value(features, "QQQ", "ret_1w")))
+snap3.metric("TLT today", pct_fmt(get_value(features, "TLT", "ret_1d")), pct_fmt(get_value(features, "TLT", "ret_1w")))
+snap4.metric("HY minus IG 1W", pct_fmt(get_value(features, "HYG", "ret_1w") - get_value(features, "LQD", "ret_1w")))
+snap5.metric("Dollar 1W", pct_fmt(get_value(features, "UUP", "ret_1w")))
+snap6.metric("Oil 1W", pct_fmt(get_value(features, "USO", "ret_1w")))
 
 st.markdown(f"### Regime: {regime}")
 st.write(note)
 st.caption(
     f"Latest available close: {anchors.latest.strftime('%A, %b %d, %Y')}. "
-    f"Reference Friday: {anchors.last_friday.strftime('%A, %b %d, %Y')}. "
-    f"Metric deltas in the snapshot row are moves since Friday."
+    f"Reference Friday marker: {anchors.last_friday.strftime('%A, %b %d, %Y')}. "
+    f"Metric deltas in the snapshot row are one-week moves."
 )
 
-st.markdown("## Friday to today")
+st.markdown("## Main horizons: today, 1W, 1M, 3M, YTD")
 left, right = st.columns([1.05, 0.95])
 with left:
     st.plotly_chart(make_heatmap(features), use_container_width=True)
 with right:
-    st.plotly_chart(make_since_friday_bar(features), use_container_width=True)
+    horizon_map = {"Today": ("ret_1d", "Today"), "1W": ("ret_1w", "1W"), "1M": ("ret_1m", "1M"), "3M": ("ret_3m", "3M"), "YTD": ("ret_ytd", "YTD")}
+    horizon_col, horizon_label = horizon_map[bar_horizon_label]
+    st.plotly_chart(make_horizon_bar(features, horizon_col, horizon_label), use_container_width=True)
 
 st.markdown("## Cross-asset tape")
 st.plotly_chart(make_tape_chart(close, tape_focus, anchors, lookback), use_container_width=True)
@@ -568,16 +589,16 @@ with right2:
 st.markdown("## Actionable takeaways")
 c1, c2, c3 = st.columns(3)
 with c1:
-    st.markdown('<div class="callout"><div class="bigline">Leadership</div><div class="mini">What is being bid both today and since Friday.</div><br><pre style="white-space: pre-wrap; font-family: inherit;">' + takeaways["leadership"] + '</pre></div>', unsafe_allow_html=True)
+    st.markdown('<div class="callout"><div class="bigline">Leadership</div><div class="mini">What is being bid today and over the last week.</div><br><pre style="white-space: pre-wrap; font-family: inherit;">' + takeaways["leadership"] + '</pre></div>', unsafe_allow_html=True)
 with c2:
     st.markdown('<div class="callout"><div class="bigline">Pressure</div><div class="mini">What is getting sold and where the tape is weak.</div><br><pre style="white-space: pre-wrap; font-family: inherit;">' + takeaways["pressure"] + '</pre></div>', unsafe_allow_html=True)
 with c3:
-    st.markdown('<div class="callout"><div class="bigline">Attention</div><div class="mini">Largest daily swings. These are the names to inspect first.</div><br><pre style="white-space: pre-wrap; font-family: inherit;">' + takeaways["reversals"] + '</pre></div>', unsafe_allow_html=True)
+    st.markdown('<div class="callout"><div class="bigline">Attention</div><div class="mini">Largest daily swings. These are the assets to inspect first.</div><br><pre style="white-space: pre-wrap; font-family: inherit;">' + takeaways["reversals"] + '</pre></div>', unsafe_allow_html=True)
 
 st.markdown("## Full cross-asset table")
 st.dataframe(make_table(features), use_container_width=True, hide_index=True)
 
 st.caption(
-    "Leadership means positive tape confirmation through today and since Friday. "
+    "Leadership means positive tape confirmation through today, 1W, 1M, and trend. "
     "Pressure means the opposite. Stretch flags are based on short-term extension versus the 20-day trend combined with a large daily move."
 )
