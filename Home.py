@@ -10,82 +10,61 @@ st.set_page_config(
 
 TOOL_ORDER = [
     "ADFM Public Equities Baskets",
-    "Unusual Options Flows",
-    "Weekly Cross - Asset Compass",
-    "Market Stress Composite",
-    "Liquidity Tracker",
-    "ETF Flows Dashboard",
-    "Factor Momentum Leadership",
-    "VIX Spike Deep Dive",
-    "Hedge Timer",
     "Sector Breadth and Rotation",
-    "Breakout Scanner",
+    "Factor Momentum Leadership",
+    "Rate of Change Dashboard",
     "Technical Chart Explorer",
     "Ratio Charts",
-    "Cross Asset Volatility Surface",
-    "Fed Speeches Tone Underwriter",
-    "RoW Central Bank Tone Underwriter",
     "Market Memory Explorer",
     "Monthly Seasonality Explorer",
-    "Home Value to Rent Ratio",
     "Volume Based Sentiment Indicator",
+    "ETF Flows Dashboard",
+    "Liquidity Tracker",
+    "Market Stress Composite",
+    "Hedge Timer",
 ]
 
 
 TOOL_GROUPS = {
     "All tools": TOOL_ORDER,
-    "Equities + Positioning": [
+    "Equity Leadership": [
         "ADFM Public Equities Baskets",
-        "Factor Momentum Leadership",
         "Sector Breadth and Rotation",
-        "Breakout Scanner",
+        "Factor Momentum Leadership",
+        "Rate of Change Dashboard",
+    ],
+    "Technicals + Analogs": [
         "Technical Chart Explorer",
         "Ratio Charts",
         "Market Memory Explorer",
+        "Monthly Seasonality Explorer",
+    ],
+    "Flows + Sentiment": [
+        "ETF Flows Dashboard",
         "Volume Based Sentiment Indicator",
     ],
-    "Flows + Derivatives": [
-        "Unusual Options Flows",
-        "ETF Flows Dashboard",
-        "Cross Asset Volatility Surface",
-        "Hedge Timer",
-    ],
-    "Macro + Risk Regime": [
-        "Weekly Cross - Asset Compass",
-        "Market Stress Composite",
+    "Risk + Liquidity": [
         "Liquidity Tracker",
-        "VIX Spike Deep Dive",
-    ],
-    "Rates + Macro Tone": [
-        "Fed Speeches Tone Underwriter",
-        "RoW Central Bank Tone Underwriter",
-        "Monthly Seasonality Explorer",
-        "Home Value to Rent Ratio",
+        "Market Stress Composite",
+        "Hedge Timer",
     ],
 }
 
 
 TOOL_DESCRIPTIONS = {
-    "ADFM Public Equities Baskets": "Compares ADFM equity sleeves to spot leadership, trend strength, and dispersion.",
-    "Unusual Options Flows": "Flags outsized options activity to reveal potential positioning and intent.",
-    "Weekly Cross - Asset Compass": "Summarizes cross-asset moves to classify the current market regime.",
-    "Market Stress Composite": "Tracks a blended stress score across volatility, credit, and funding conditions.",
-    "Liquidity Tracker": "Monitors major liquidity drivers like Fed balance sheet, RRP, and TGA flows.",
-    "ETF Flows Dashboard": "Tracks ETF creations and redemptions to monitor real-time allocation shifts.",
-    "Factor Momentum Leadership": "Ranks factor momentum to highlight which styles are leading or fading.",
-    "VIX Spike Deep Dive": "Breaks down volatility spikes to show trigger, magnitude, and persistence.",
-    "Hedge Timer": "Provides timing cues for adding, reducing, or rolling portfolio hedges.",
-    "Sector Breadth and Rotation": "Measures participation and rotation to identify where equity strength is broadening or narrowing.",
-    "Breakout Scanner": "Finds names and groups breaking above key technical levels with confirmation.",
-    "Technical Chart Explorer": "Explores multi-timeframe chart structure, trend, and momentum in one view.",
-    "Ratio Charts": "Uses relative-strength ratios to compare assets, sectors, and factors versus benchmarks.",
-    "Cross Asset Volatility Surface": "Maps implied volatility across assets and tenors to locate stress pockets.",
-    "Fed Speeches Tone Underwriter": "Scores Federal Reserve communication tone for policy bias and risk impact.",
-    "RoW Central Bank Tone Underwriter": "Analyzes non-U.S. central bank tone to gauge global policy direction.",
-    "Market Memory Explorer": "Surfaces historical analogs to contextualize current market behavior.",
-    "Monthly Seasonality Explorer": "Shows recurring monthly return and volatility patterns by asset and sector.",
-    "Home Value to Rent Ratio": "Tracks housing valuation pressure through the home price-to-rent relationship.",
-    "Volume Based Sentiment Indicator": "Reads conviction and sentiment using volume trends and participation signals.",
+    "ADFM Public Equities Baskets": "Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance.",
+    "Sector Breadth and Rotation": "Measures participation and sector rotation to identify where equity strength is broadening or narrowing.",
+    "Factor Momentum Leadership": "Ranks factor momentum to highlight which styles are leading, fading, or inflecting.",
+    "Rate of Change Dashboard": "Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure.",
+    "Technical Chart Explorer": "Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages.",
+    "Ratio Charts": "Uses relative-strength ratios to compare assets, sectors, credit, factors, and risk appetite proxies.",
+    "Market Memory Explorer": "Surfaces historical analogs to contextualize the current tape against prior return paths and regimes.",
+    "Monthly Seasonality Explorer": "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.",
+    "Volume Based Sentiment Indicator": "Reads conviction, participation, and sentiment using volume regime signals across major liquid assets.",
+    "ETF Flows Dashboard": "Tracks ETF flow pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures.",
+    "Liquidity Tracker": "Monitors major liquidity drivers including the Fed balance sheet, RRP, TGA, policy rates, and financial conditions.",
+    "Market Stress Composite": "Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion.",
+    "Hedge Timer": "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.",
 }
 
 
@@ -230,16 +209,17 @@ st.markdown(
         <div class="eyebrow">ADFM Analytics Platform</div>
         <div class="title">AD Fund Management</div>
         <div class="subtitle">
-            A centralized dashboard for regime analysis, liquidity monitoring, positioning,
-            volatility, flows, and technical market structure.
+            A focused command center for equity leadership, technical structure,
+            flows, liquidity, stress, seasonality, analogs, and hedge timing.
         </div>
         <div class="chip-row">
-            <span class="chip">Regime</span>
-            <span class="chip">Liquidity</span>
-            <span class="chip">Flows</span>
-            <span class="chip">Volatility</span>
+            <span class="chip">Equity Leadership</span>
             <span class="chip">Technicals</span>
+            <span class="chip">Relative Value</span>
+            <span class="chip">Flows</span>
+            <span class="chip">Liquidity</span>
             <span class="chip">Risk</span>
+            <span class="chip">Hedging</span>
         </div>
     </div>
     """,
@@ -247,7 +227,7 @@ st.markdown(
 )
 
 
-st.markdown('<div class="section-title">Overview</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">Tool Map</div>', unsafe_allow_html=True)
 
 
 if hasattr(st, "segmented_control"):
@@ -269,7 +249,7 @@ else:
 
 query = st.text_input(
     "Search tools",
-    placeholder="Try: liquidity, breakout, sentiment...",
+    placeholder="Try: liquidity, breadth, hedge, seasonality...",
     label_visibility="collapsed",
 )
 
