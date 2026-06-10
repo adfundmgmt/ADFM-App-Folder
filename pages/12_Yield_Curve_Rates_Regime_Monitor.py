@@ -12,7 +12,11 @@ from plotly.subplots import make_subplots
 
 TITLE = "Yield Curve Rates Regime Monitor"
 
-st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title=TITLE,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 YAHOO_YIELD_TICKERS: Dict[str, Dict[str, object]] = {
     "^IRX": {"label": "3M", "field": "Y3M", "years": 0.25},
@@ -67,18 +71,21 @@ st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 2.20rem;
+            padding-top: 3.75rem;
             padding-bottom: 2.00rem;
             max-width: 1560px;
         }
 
         .adfm-title {
-            font-size: 1.72rem;
-            line-height: 1.12;
+            font-size: 1.85rem;
+            line-height: 1.32;
             font-weight: 760;
-            margin-bottom: 0.18rem;
+            margin-top: 0.25rem;
+            margin-bottom: 0.25rem;
             color: #0f172a;
             letter-spacing: -0.025em;
+            overflow: visible;
+            white-space: normal;
         }
 
         .adfm-subtitle {
@@ -291,8 +298,6 @@ def normalize_yahoo_yield_series(series: pd.Series) -> pd.Series:
     out = pd.to_numeric(series, errors="coerce").astype(float)
     median = out.dropna().tail(260).median()
 
-    # Yahoo/Cboe yield indices can occasionally arrive in 10x notation depending on endpoint behavior.
-    # The display target here is yield in percent, e.g. 4.55 for a 4.55% 10Y Treasury yield.
     if np.isfinite(median) and median > 20:
         out = out / 10.0
 
