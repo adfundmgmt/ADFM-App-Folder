@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from io import StringIO
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -161,7 +161,7 @@ def fmt_num(x: float, decimals: int = 1) -> str:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_fred(series_ids: Iterable[str], start_date: date) -> pd.DataFrame:
+def fetch_fred(series_ids: Tuple[str, ...], start_date: date) -> pd.DataFrame:
     frames: List[pd.Series] = []
     for series_id in series_ids:
         try:
@@ -356,7 +356,7 @@ st.markdown(
 )
 
 start = date.today() - timedelta(days=int(lookback_years * 365.25) + 15)
-rates = add_derived(fetch_fred(SERIES.keys(), start))
+rates = add_derived(fetch_fred(tuple(SERIES.keys()), start))
 
 if rates.empty or "DGS10" not in rates.columns or rates["DGS10"].dropna().empty:
     st.error("No usable FRED Treasury data loaded. Check connection or FRED availability.")
@@ -438,7 +438,9 @@ with right:
     else:
         heat_cols = list(PERIODS.keys())
         z = matrix[heat_cols].to_numpy(dtype=float)
-        text = np.where(np.isfinite(z), np.round(z, 0).astype(object), "")
+        text = np.full(z.shape, "", dtype=object)
+        finite_mask = np.isfinite(z)
+        text[finite_mask] = np.round(z[finite_mask], 0).astype(int).astype(str)
         fig = go.Figure(
             data=go.Heatmap(
                 z=z,
