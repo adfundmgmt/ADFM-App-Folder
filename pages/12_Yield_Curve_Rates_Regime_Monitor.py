@@ -2,21 +2,20 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from io import StringIO
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-import yfinance as yf
 from plotly.subplots import make_subplots
 
-TITLE = "Yield Curve + Rates Regime Monitor"
+TITLE = "Rates Regime Monitor"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-REQUEST_TIMEOUT = (3, 8)
+REQUEST_TIMEOUT = (3, 10)
 
-SERIES = {
+SERIES: Dict[str, str] = {
     "DGS3MO": "3M",
     "DGS2": "2Y",
     "DGS5": "5Y",
@@ -26,29 +25,35 @@ SERIES = {
     "T10YIE": "10Y Breakeven",
 }
 
-YAHOO_YIELD_FALLBACKS = {
-    "DGS3MO": "^IRX",
-    "DGS5": "^FVX",
-    "DGS10": "^TNX",
-    "DGS30": "^TYX",
-}
-
-TENOR_META = {
+TENORS: Dict[str, Tuple[str, float]] = {
     "DGS3MO": ("3M", 0.25),
-    "DGS2": ("2Y", 2),
-    "DGS5": ("5Y", 5),
-    "DGS10": ("10Y", 10),
-    "DGS30": ("30Y", 30),
+    "DGS2": ("2Y", 2.0),
+    "DGS5": ("5Y", 5.0),
+    "DGS10": ("10Y", 10.0),
+    "DGS30": ("30Y", 30.0),
 }
-TENOR_ORDER = list(TENOR_META.keys())
+TENOR_ORDER = list(TENORS.keys())
+
+PERIODS = {
+    "1D": {"kind": "row", "rows": 1, "threshold": 4},
+    "1W": {"kind": "calendar", "days": 7, "threshold": 8},
+    "1M": {"kind": "calendar", "months": 1, "threshold": 15},
+    "3M": {"kind": "calendar", "months": 3, "threshold": 30},
+    "YTD": {"kind": "ytd", "threshold": 35},
+}
 
 COLORS = {
-    "green": "#52b788",
-    "red": "#e85d5d",
-    "amber": "#f59e0b",
-    "blue": "#4c78a8",
-    "purple": "#8b5cf6",
-    "grey": "#8b949e",
+    "ink": "#111827",
+    "muted": "#6b7280",
+    "border": "#e5e7eb",
+    "panel": "#ffffff",
+    "soft": "#f8fafc",
+    "blue": "#2563eb",
+    "purple": "#7c3aed",
+    "green": "#059669",
+    "red": "#dc2626",
+    "amber": "#d97706",
+    "grey": "#9ca3af",
 }
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
@@ -56,61 +61,113 @@ st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expan
 st.markdown(
     """
     <style>
-        .block-container {padding-top: 3.0rem; padding-bottom: 2rem; max-width: 1550px;}
-        .adfm-title {font-size: 1.9rem; line-height: 1.18; font-weight: 760; margin: 0 0 0.25rem 0; color: #111827;}
-        .adfm-subtitle {font-size: 0.96rem; color: #6b7280; margin-bottom: 1.15rem;}
-        .metric-card {background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%); border: 1px solid #e5e7eb; border-radius: 12px; padding: 13px 15px 10px 15px; min-height: 92px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);}
-        .metric-label {font-size: 0.72rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.045em; margin-bottom: 0.42rem;}
-        .metric-value {font-size: 1.24rem; font-weight: 750; color: #111827; line-height: 1.18;}
-        .metric-footnote {font-size: 0.75rem; color: #9ca3af; margin-top: 0.42rem; line-height: 1.35;}
-        .section-title {font-size: 1.03rem; font-weight: 750; color: #111827; margin-top: 0.9rem; margin-bottom: 0.45rem;}
-        .note-box {background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px; color: #475569; font-size: 0.86rem; line-height: 1.45;}
+        .block-container {padding-top: 2.4rem; padding-bottom: 2rem; max-width: 1540px;}
+        .adfm-title {font-size: 1.75rem; line-height: 1.15; font-weight: 760; margin-bottom: 0.2rem; color: #111827;}
+        .adfm-subtitle {font-size: 0.94rem; color: #6b7280; margin-bottom: 1.05rem;}
+        .metric-card {background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%); border: 1px solid #e5e7eb; border-radius: 13px; padding: 13px 15px 11px 15px; min-height: 96px; box-shadow: 0 1px 5px rgba(15,23,42,0.045);}
+        .metric-label {font-size: 0.71rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.055em; margin-bottom: 0.4rem;}
+        .metric-value {font-size: 1.26rem; font-weight: 760; color: #111827; line-height: 1.18;}
+        .metric-footnote {font-size: 0.75rem; color: #6b7280; margin-top: 0.42rem; line-height: 1.34;}
+        .section-title {font-size: 1.02rem; font-weight: 760; color: #111827; margin-top: 0.95rem; margin-bottom: 0.45rem;}
+        .small-note {font-size: 0.80rem; color: #6b7280; margin-top: -0.25rem; margin-bottom: 0.45rem;}
+        .note-box {background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 11px 13px; color: #475569; font-size: 0.84rem; line-height: 1.42;}
+        div[data-testid="stMetric"] {background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 0.65rem 0.75rem;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
+def safe_float(x: object) -> float:
+    try:
+        value = float(x)
+        return value if np.isfinite(value) else np.nan
+    except Exception:
+        return np.nan
+
+
 def latest(series: pd.Series) -> float:
     clean = series.dropna()
-    return float(clean.iloc[-1]) if not clean.empty else np.nan
+    return safe_float(clean.iloc[-1]) if not clean.empty else np.nan
 
 
-def change_bp(series: pd.Series, periods: int) -> float:
-    clean = series.dropna()
-    if len(clean) <= periods:
+def latest_date(df: pd.DataFrame) -> Optional[pd.Timestamp]:
+    clean = df.dropna(how="all")
+    if clean.empty:
+        return None
+    return pd.Timestamp(clean.index[-1])
+
+
+def value_on_or_before(series: pd.Series, target: pd.Timestamp) -> float:
+    clean = series.dropna().sort_index()
+    if clean.empty:
         return np.nan
-    return float((clean.iloc[-1] - clean.iloc[-periods - 1]) * 100)
+    subset = clean.loc[clean.index <= target]
+    if subset.empty:
+        return np.nan
+    return safe_float(subset.iloc[-1])
+
+
+def first_value_on_or_after(series: pd.Series, target: pd.Timestamp) -> float:
+    clean = series.dropna().sort_index()
+    if clean.empty:
+        return np.nan
+    subset = clean.loc[clean.index >= target]
+    if subset.empty:
+        return np.nan
+    return safe_float(subset.iloc[0])
+
+
+def change_bp(series: pd.Series, period: str) -> float:
+    clean = series.dropna().sort_index()
+    if len(clean) < 2:
+        return np.nan
+
+    last_value = safe_float(clean.iloc[-1])
+    last_idx = pd.Timestamp(clean.index[-1])
+    spec = PERIODS[period]
+
+    if spec["kind"] == "row":
+        rows = int(spec.get("rows", 1))
+        if len(clean) <= rows:
+            return np.nan
+        anchor = safe_float(clean.iloc[-rows - 1])
+    elif spec["kind"] == "calendar":
+        target = last_idx - pd.DateOffset(days=int(spec.get("days", 0)))
+        if "months" in spec:
+            target = last_idx - pd.DateOffset(months=int(spec["months"]))
+        anchor = value_on_or_before(clean, target)
+    elif spec["kind"] == "ytd":
+        jan_first = pd.Timestamp(date(last_idx.year, 1, 1))
+        anchor = first_value_on_or_after(clean, jan_first)
+    else:
+        return np.nan
+
+    if not np.isfinite(last_value) or not np.isfinite(anchor):
+        return np.nan
+    return float((last_value - anchor) * 100.0)
 
 
 def fmt_pct(x: float) -> str:
-    if not np.isfinite(x):
-        return "N/A"
-    return f"{x:.2f}%"
+    return "N/A" if not np.isfinite(x) else f"{x:.2f}%"
 
 
 def fmt_bp(x: float) -> str:
-    if not np.isfinite(x):
-        return "N/A"
-    return f"{x:+.0f} bps"
+    return "N/A" if not np.isfinite(x) else f"{x:+.0f} bps"
 
 
-def card_color(regime: str) -> str:
-    if "Bull" in regime or "Falling" in regime:
-        return COLORS["green"]
-    if "Bear" in regime or "Rising" in regime:
-        return COLORS["red"]
-    return COLORS["amber"]
+def fmt_num(x: float, decimals: int = 1) -> str:
+    return "N/A" if not np.isfinite(x) else f"{x:,.{decimals}f}"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_fred(series_map: Dict[str, str], start: date) -> pd.DataFrame:
+def fetch_fred(series_ids: Iterable[str], start_date: date) -> pd.DataFrame:
     frames: List[pd.Series] = []
-    for series_id in series_map:
+    for series_id in series_ids:
         try:
             response = requests.get(
                 FRED_URL,
-                params={"id": series_id, "cosd": start.isoformat()},
+                params={"id": series_id, "cosd": start_date.isoformat()},
                 timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status()
@@ -119,183 +176,328 @@ def fetch_fred(series_map: Dict[str, str], start: date) -> pd.DataFrame:
                 continue
             raw.columns = ["date", series_id]
             values = pd.to_numeric(raw[series_id].replace(".", np.nan), errors="coerce")
-            frames.append(pd.Series(values.values, index=pd.to_datetime(raw["date"]), name=series_id))
+            frame = pd.Series(values.to_numpy(), index=pd.to_datetime(raw["date"]), name=series_id)
+            frames.append(frame)
         except Exception:
             continue
+
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, axis=1).sort_index().ffill()
+
+    out = pd.concat(frames, axis=1).sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+    return out.ffill().dropna(how="all")
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_yahoo_yields(period: str) -> pd.DataFrame:
-    tickers = list(YAHOO_YIELD_FALLBACKS.values())
-    try:
-        data = yf.download(tickers, period=period, interval="1d", auto_adjust=False, progress=False, threads=False)
-    except Exception:
-        return pd.DataFrame()
-    if data.empty:
-        return pd.DataFrame()
-    close = data["Close"] if isinstance(data.columns, pd.MultiIndex) else data[["Close"]].rename(columns={"Close": tickers[0]})
-    out = pd.DataFrame(index=close.index)
-    reverse = {v: k for k, v in YAHOO_YIELD_FALLBACKS.items()}
-    for ticker, series_id in reverse.items():
-        if ticker in close:
-            out[series_id] = pd.to_numeric(close[ticker], errors="coerce") / 10.0
-    return out.dropna(how="all").ffill()
-
-
-def add_curves(df: pd.DataFrame) -> pd.DataFrame:
+def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    if "DGS10" in out and "DGS2" in out:
+    if {"DGS10", "DGS2"}.issubset(out.columns):
         out["2s10s"] = out["DGS10"] - out["DGS2"]
-    if "DGS30" in out and "DGS5" in out:
+    if {"DGS30", "DGS5"}.issubset(out.columns):
         out["5s30s"] = out["DGS30"] - out["DGS5"]
-    if "DGS10" in out and "DGS3MO" in out:
+    if {"DGS10", "DGS3MO"}.issubset(out.columns):
         out["3m10y"] = out["DGS10"] - out["DGS3MO"]
-    if "DGS10" in out and "T10YIE" in out:
-        out["Market Real 10Y"] = out["DGS10"] - out["T10YIE"]
+    if {"DGS10", "T10YIE"}.issubset(out.columns):
+        out["REAL10_CALC"] = out["DGS10"] - out["T10YIE"]
     return out
 
 
-def classify_rates(df: pd.DataFrame, window: int) -> tuple[str, str, str | None]:
-    ten = change_bp(df["DGS10"], window) if "DGS10" in df else np.nan
-    curve_col = next((c for c in ["2s10s", "3m10y", "5s30s"] if c in df), None)
-    curve = change_bp(df[curve_col], window) if curve_col else np.nan
+def available_curve_columns(df: pd.DataFrame) -> List[str]:
+    return [c for c in ["2s10s", "3m10y", "5s30s"] if c in df.columns and df[c].dropna().any()]
+
+
+def classify_regime(df: pd.DataFrame, period: str, curve_col: str) -> Tuple[str, str, str]:
+    ten = change_bp(df["DGS10"], period) if "DGS10" in df else np.nan
+    curve = change_bp(df[curve_col], period) if curve_col in df else np.nan
+    threshold = float(PERIODS[period]["threshold"])
 
     if not np.isfinite(ten):
-        return "Insufficient Data", "Need a 10Y yield series to classify the rates move.", curve_col
-    if not np.isfinite(curve):
-        if ten > 5:
-            return "Rates Rising", "10Y yields are rising; curve data is incomplete in this session.", curve_col
-        if ten < -5:
-            return "Rates Falling", "10Y yields are falling; curve data is incomplete in this session.", curve_col
-        return "Range / Mixed", "10Y yield change is not large enough to define a clean regime.", curve_col
+        return "Insufficient Data", "Need a valid 10Y series.", COLORS["amber"]
 
-    if ten > 5 and curve > 5:
-        return "Bear Steepener", f"10Y yields rising and {curve_col} steepening.", curve_col
-    if ten > 5 and curve < -5:
-        return "Bear Flattener", f"10Y yields rising and {curve_col} flattening.", curve_col
-    if ten < -5 and curve > 5:
-        return "Bull Steepener", f"10Y yields falling and {curve_col} steepening.", curve_col
-    if ten < -5 and curve < -5:
-        return "Bull Flattener", f"10Y yields falling and {curve_col} flattening.", curve_col
-    return "Range / Mixed", "Rates and curve changes are not large enough to define a clean regime.", curve_col
+    if not np.isfinite(curve):
+        if ten > threshold:
+            return "Rates Rising", f"10Y yield up {fmt_bp(ten)} over {period}; curve unavailable.", COLORS["red"]
+        if ten < -threshold:
+            return "Rates Falling", f"10Y yield down {fmt_bp(ten)} over {period}; curve unavailable.", COLORS["green"]
+        return "Range / Mixed", f"10Y move inside the {threshold:.0f} bp signal band.", COLORS["amber"]
+
+    if abs(ten) < threshold and abs(curve) < threshold:
+        return "Range / Mixed", f"10Y and {curve_col} are inside the {threshold:.0f} bp signal band.", COLORS["amber"]
+    if ten > threshold and curve > threshold:
+        return "Bear Steepener", f"10Y up {fmt_bp(ten)}; {curve_col} steepened {fmt_bp(curve)} over {period}.", COLORS["red"]
+    if ten > threshold and curve < -threshold:
+        return "Bear Flattener", f"10Y up {fmt_bp(ten)}; {curve_col} flattened {fmt_bp(curve)} over {period}.", COLORS["red"]
+    if ten < -threshold and curve > threshold:
+        return "Bull Steepener", f"10Y down {fmt_bp(ten)}; {curve_col} steepened {fmt_bp(curve)} over {period}.", COLORS["green"]
+    if ten < -threshold and curve < -threshold:
+        return "Bull Flattener", f"10Y down {fmt_bp(ten)}; {curve_col} flattened {fmt_bp(curve)} over {period}.", COLORS["green"]
+    if ten > threshold:
+        return "Bearish Rates Impulse", f"10Y up {fmt_bp(ten)}; curve signal is mixed.", COLORS["red"]
+    if ten < -threshold:
+        return "Bullish Rates Impulse", f"10Y down {fmt_bp(ten)}; curve signal is mixed.", COLORS["green"]
+    return "Curve Signal", f"10Y quiet, but {curve_col} moved {fmt_bp(curve)} over {period}.", COLORS["amber"]
+
+
+def regime_read(regime: str) -> str:
+    reads = {
+        "Bear Steepener": "Higher long-end yields with a steeper curve. Usually the most hostile mix for long-duration equity, levered growth, and bond proxies unless it is driven by better nominal growth.",
+        "Bear Flattener": "Front-end or intermediate rates are tightening the curve while yields rise. This is usually the cleanest policy-pressure regime and tends to pressure cyclicals, small caps, and credit appetite.",
+        "Bull Steepener": "Yields are falling while the curve steepens. This often reflects growth deterioration, Fed-cut pricing, or a flight-to-duration bid. Good for duration, less clean for equities unless liquidity is improving.",
+        "Bull Flattener": "Yields are falling while the curve flattens. Usually a long-end duration bid without a strong reflation impulse. Quality and defensive duration often screen better than cyclicals.",
+        "Bearish Rates Impulse": "The level move matters more than the curve. Duration is the pressure point. Equity duration and crowded quality growth should be watched first.",
+        "Bullish Rates Impulse": "The level move is supportive for duration. The equity read depends on whether falling yields reflect easing liquidity or weakening growth.",
+        "Curve Signal": "The curve is moving more than the level of 10Y yields. The trade is about policy path, term premium, and growth expectations rather than outright duration alone.",
+        "Range / Mixed": "No clean rates regime. Treat the curve as background information and avoid over-reading small basis-point changes.",
+    }
+    return reads.get(regime, "Signal quality is low. Check data freshness and the underlying series before acting on the classification.")
+
+
+def period_matrix(df: pd.DataFrame, rows: List[str]) -> pd.DataFrame:
+    out = []
+    for col in rows:
+        if col not in df.columns:
+            continue
+        label = SERIES.get(col, col)
+        if col in ["2s10s", "5s30s", "3m10y"]:
+            label = col
+        out.append(
+            {
+                "Series": label,
+                "Latest": latest(df[col]),
+                **{period: change_bp(df[col], period) for period in PERIODS},
+            }
+        )
+    return pd.DataFrame(out)
+
+
+def build_shock_table(df: pd.DataFrame, curve_col: str, lookback_days: int, top_n: int) -> pd.DataFrame:
+    cols = [c for c in ["DGS10", curve_col, "DFII10", "T10YIE"] if c in df.columns]
+    if "DGS10" not in cols or len(df) < 5:
+        return pd.DataFrame()
+
+    recent = df[cols].dropna(how="all").tail(lookback_days).copy()
+    daily_bp = recent.diff() * 100.0
+    if daily_bp.empty:
+        return pd.DataFrame()
+
+    weights = {"DGS10": 1.00, curve_col: 0.70, "DFII10": 0.60, "T10YIE": 0.45}
+    score = pd.Series(0.0, index=daily_bp.index)
+    for col in daily_bp.columns:
+        score = score.add(daily_bp[col].abs().fillna(0.0) * weights.get(col, 0.5), fill_value=0.0)
+
+    shock = daily_bp.copy()
+    shock["Shock Score"] = score
+    shock = shock.dropna(how="all")
+    if shock.empty:
+        return pd.DataFrame()
+
+    component_cols = [c for c in ["DGS10", curve_col, "DFII10", "T10YIE"] if c in shock.columns]
+    shock["Driver"] = shock[component_cols].abs().idxmax(axis=1).replace(
+        {"DGS10": "10Y", curve_col: curve_col, "DFII10": "Real", "T10YIE": "Breakeven"}
+    )
+    shock = shock.sort_values("Shock Score", ascending=False).head(top_n).sort_index()
+    shock = shock.rename(columns={"DGS10": "10Y bp", curve_col: f"{curve_col} bp", "DFII10": "Real bp", "T10YIE": "BE bp"})
+    shock.insert(0, "Date", shock.index.date)
+    return shock.reset_index(drop=True)
+
+
+def metric_card(label: str, value: str, footnote: str, color: str) -> None:
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value" style="color:{color};">{value}</div>
+            <div class="metric-footnote">{footnote}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def clean_plot_layout(fig: go.Figure, height: int, y_title: Optional[str] = None) -> go.Figure:
+    fig.update_layout(
+        height=height,
+        margin=dict(l=12, r=12, t=18, b=18),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    fig.update_xaxes(showgrid=False, zeroline=False)
+    fig.update_yaxes(gridcolor="#eef2f7", zeroline=False, title_text=y_title)
+    return fig
 
 
 with st.sidebar:
-    st.header("Settings")
-    lookback_years = st.selectbox("History", [1, 2, 3, 5, 10, 20], index=3)
-    regime_window = st.selectbox("Regime window", [5, 21, 63, 126], index=1, format_func=lambda x: f"{x} trading days")
-    comparison_window = st.selectbox("Curve comparison", [21, 63, 126, 252], index=1, format_func=lambda x: f"{x} trading days ago")
-    show_table = st.checkbox("Show rates table", value=True)
-
-    st.divider()
     st.header("About This Tool")
     st.markdown(
         """
-        Tracks the U.S. Treasury curve, real yields, breakevens, and rates regimes.
-        FRED is used where available; Yahoo yield indices fill common Treasury gaps.
+        FRED-only Treasury monitor for curve shape, real yields, breakevens, and regime pressure. 
+        Built to answer one question quickly: is the rates move helping or hurting risk?
         """
     )
 
+    st.divider()
+    st.header("Controls")
+    lookback_years = st.selectbox("History", [1, 2, 3, 5, 10, 20], index=3)
+    regime_period = st.radio("Regime window", list(PERIODS.keys()), index=2, horizontal=True)
+    curve_choices_default = ["2s10s", "3m10y", "5s30s"]
+    selected_curve = st.selectbox("Curve gauge", curve_choices_default, index=0)
+    curve_compare = st.radio("Curve comparison", ["1W", "1M", "3M", "YTD"], index=1, horizontal=True)
+    show_full_history = st.checkbox("Show full history chart", value=True)
+    show_table = st.checkbox("Show data table", value=False)
+
+    st.divider()
+    st.caption("No Yahoo fallback. If data is missing, the page shows the gap instead of mixing sources.")
+
 st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='adfm-subtitle'>Treasury curve shape, real yields, breakevens, and steepener/flattener regimes.</div>",
+    "<div class='adfm-subtitle'>Curve shape, level shock, real-rate pressure, breakevens, and outlier days. FRED-only to avoid proxy drift.</div>",
     unsafe_allow_html=True,
 )
 
-start_date = date.today() - timedelta(days=int(lookback_years * 365.25) + 120)
-rates = fetch_fred(SERIES, start_date)
-yahoo_rates = fetch_yahoo_yields(f"{lookback_years}y")
+start = date.today() - timedelta(days=int(lookback_years * 365.25) + 15)
+rates = add_derived(fetch_fred(SERIES.keys(), start))
 
-if rates.empty:
-    rates = yahoo_rates.copy()
-elif not yahoo_rates.empty:
-    rates = rates.combine_first(yahoo_rates).ffill()
-rates = add_curves(rates)
-
-available_tenors = [c for c in TENOR_ORDER if c in rates and rates[c].dropna().any()]
-if rates.empty or "DGS10" not in rates:
-    st.error("No usable rates data loaded from FRED or Yahoo yield proxies.")
+if rates.empty or "DGS10" not in rates.columns or rates["DGS10"].dropna().empty:
+    st.error("No usable FRED Treasury data loaded. Check connection or FRED availability.")
     st.stop()
 
-regime, note, curve_col = classify_rates(rates, regime_window)
+curve_cols = available_curve_columns(rates)
+if not curve_cols:
+    st.error("No usable curve spreads can be calculated from the loaded FRED data.")
+    st.stop()
+if selected_curve not in curve_cols:
+    selected_curve = curve_cols[0]
+
+last_obs = latest_date(rates)
+if last_obs is not None:
+    age_days = (pd.Timestamp(date.today()) - last_obs.normalize()).days
+    if age_days > 4:
+        st.warning(f"Last FRED observation is {last_obs.date()}. Data may be stale.")
+
+regime, regime_note, regime_color = classify_regime(rates, regime_period, selected_curve)
+real_col = "DFII10" if "DFII10" in rates.columns and rates["DFII10"].dropna().any() else "REAL10_CALC"
 
 cards = [
-    ("Rates Regime", regime, note, card_color(regime)),
-    ("10Y Treasury", fmt_pct(latest(rates["DGS10"])), f"{regime_window}D {fmt_bp(change_bp(rates['DGS10'], regime_window))}", COLORS["blue"]),
-    ("Curve Gauge", fmt_bp(latest(rates[curve_col]) * 100) if curve_col else "N/A", curve_col or "Curve unavailable", COLORS["purple"]),
-    ("10Y Breakeven", fmt_pct(latest(rates["T10YIE"])) if "T10YIE" in rates else "N/A", f"{regime_window}D {fmt_bp(change_bp(rates['T10YIE'], regime_window))}" if "T10YIE" in rates else "FRED only", COLORS["amber"]),
-    ("10Y Real Yield", fmt_pct(latest(rates["DFII10"])) if "DFII10" in rates else (fmt_pct(latest(rates["Market Real 10Y"])) if "Market Real 10Y" in rates else "N/A"), "FRED real or nominal less breakeven", COLORS["green"]),
+    ("Regime", regime, regime_note, regime_color),
+    ("10Y Treasury", fmt_pct(latest(rates["DGS10"])), f"{regime_period} {fmt_bp(change_bp(rates['DGS10'], regime_period))}", COLORS["blue"]),
+    (selected_curve, fmt_bp(latest(rates[selected_curve]) * 100.0), f"{regime_period} {fmt_bp(change_bp(rates[selected_curve], regime_period))}", COLORS["purple"]),
+    ("10Y Real", fmt_pct(latest(rates[real_col])) if real_col in rates else "N/A", f"{regime_period} {fmt_bp(change_bp(rates[real_col], regime_period))}" if real_col in rates else "Unavailable", COLORS["green"]),
+    ("10Y Breakeven", fmt_pct(latest(rates["T10YIE"])) if "T10YIE" in rates else "N/A", f"{regime_period} {fmt_bp(change_bp(rates['T10YIE'], regime_period))}" if "T10YIE" in rates else "Unavailable", COLORS["amber"]),
 ]
 
-for col, (label, value, footnote, color) in zip(st.columns(5), cards):
+for col, card in zip(st.columns(5), cards):
     with col:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">{label}</div>
-                <div class="metric-value" style="color:{color};">{value}</div>
-                <div class="metric-footnote">{footnote}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        metric_card(*card)
+
+st.markdown("<div class='section-title'>Read-through</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='note-box'>{regime_read(regime)}</div>", unsafe_allow_html=True)
+
+available_tenors = [c for c in TENOR_ORDER if c in rates.columns and rates[c].dropna().any()]
+curve_data = rates[available_tenors].dropna(how="all")
 
 left, right = st.columns([1.05, 0.95])
+
 with left:
     st.markdown("<div class='section-title'>Yield Curve Snapshot</div>", unsafe_allow_html=True)
-    if len(available_tenors) < 2:
-        st.info("At least two tenor series are needed to draw the curve snapshot.")
+    if len(available_tenors) < 2 or curve_data.empty:
+        st.info("At least two tenors are needed for the curve snapshot.")
     else:
-        curve_data = rates[available_tenors].dropna(how="all")
         latest_curve = curve_data.iloc[-1]
-        comparison_curve = curve_data.iloc[max(0, len(curve_data) - comparison_window - 1)]
-        one_year_curve = curve_data.iloc[max(0, len(curve_data) - 252 - 1)]
-        x_vals = [TENOR_META[c][1] for c in available_tenors]
-        x_labels = [TENOR_META[c][0] for c in available_tenors]
-        curve_fig = go.Figure()
-        curve_fig.add_trace(go.Scatter(x=x_vals, y=latest_curve.values, mode="lines+markers", name="Latest", line=dict(color=COLORS["blue"], width=3)))
-        curve_fig.add_trace(go.Scatter(x=x_vals, y=comparison_curve.values, mode="lines+markers", name=f"{comparison_window}D ago", line=dict(color=COLORS["grey"], dash="dash")))
-        curve_fig.add_trace(go.Scatter(x=x_vals, y=one_year_curve.values, mode="lines+markers", name="1Y ago", line=dict(color=COLORS["amber"], dash="dot")))
-        curve_fig.update_layout(height=385, margin=dict(l=12, r=12, t=15, b=15), xaxis=dict(title="Tenor", tickvals=x_vals, ticktext=x_labels), yaxis=dict(title="Yield (%)"), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
-        st.plotly_chart(curve_fig, use_container_width=True)
+        last_idx = pd.Timestamp(curve_data.index[-1])
+        compare_target = last_idx - pd.DateOffset(days=7)
+        if curve_compare == "1M":
+            compare_target = last_idx - pd.DateOffset(months=1)
+        elif curve_compare == "3M":
+            compare_target = last_idx - pd.DateOffset(months=3)
+        elif curve_compare == "YTD":
+            compare_target = pd.Timestamp(date(last_idx.year, 1, 1))
+
+        comparison_curve = []
+        for tenor in available_tenors:
+            if curve_compare == "YTD":
+                comparison_curve.append(first_value_on_or_after(curve_data[tenor], compare_target))
+            else:
+                comparison_curve.append(value_on_or_before(curve_data[tenor], compare_target))
+
+        x_vals = [TENORS[c][1] for c in available_tenors]
+        x_labels = [TENORS[c][0] for c in available_tenors]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=x_vals, y=latest_curve.values, mode="lines+markers", name="Latest", line=dict(color=COLORS["blue"], width=3)))
+        fig.add_trace(go.Scatter(x=x_vals, y=comparison_curve, mode="lines+markers", name=f"{curve_compare} ago", line=dict(color=COLORS["grey"], width=2, dash="dash")))
+        fig.update_layout(xaxis=dict(title="Tenor", tickvals=x_vals, ticktext=x_labels), yaxis=dict(title="Yield (%)"))
+        st.plotly_chart(clean_plot_layout(fig, 390), use_container_width=True)
 
 with right:
-    st.markdown("<div class='section-title'>Rate Change Heatmap</div>", unsafe_allow_html=True)
-    rows = []
-    for series_id in available_tenors:
-        label = TENOR_META[series_id][0]
-        rows.append({"Tenor": label, "Latest": latest(rates[series_id]), "5D bp": change_bp(rates[series_id], 5), "21D bp": change_bp(rates[series_id], 21), "63D bp": change_bp(rates[series_id], 63), "126D bp": change_bp(rates[series_id], 126)})
-    heat = pd.DataFrame(rows).set_index("Tenor") if rows else pd.DataFrame()
-    if heat.empty:
-        st.info("No tenor history available for the heatmap.")
+    st.markdown("<div class='section-title'>Pressure Matrix</div>", unsafe_allow_html=True)
+    matrix_rows = ["DGS3MO", "DGS2", "DGS5", "DGS10", "DGS30", selected_curve, real_col, "T10YIE"]
+    matrix = period_matrix(rates, matrix_rows)
+    if matrix.empty:
+        st.info("No period matrix available.")
     else:
-        heat_cols = ["5D bp", "21D bp", "63D bp", "126D bp"]
-        fig = go.Figure(data=go.Heatmap(z=heat[heat_cols].values, x=["5D", "21D", "63D", "126D"], y=heat.index, colorscale="RdYlGn_r", zmid=0, text=np.round(heat[heat_cols].values, 0), texttemplate="%{text:.0f}", colorbar=dict(title="bps")))
-        fig.update_layout(height=385, margin=dict(l=12, r=12, t=15, b=15), plot_bgcolor="white", paper_bgcolor="white")
-        st.plotly_chart(fig, use_container_width=True)
+        heat_cols = list(PERIODS.keys())
+        z = matrix[heat_cols].to_numpy(dtype=float)
+        text = np.where(np.isfinite(z), np.round(z, 0).astype(object), "")
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=z,
+                x=heat_cols,
+                y=matrix["Series"],
+                colorscale="RdYlGn_r",
+                zmid=0,
+                text=text,
+                texttemplate="%{text}",
+                colorbar=dict(title="bps"),
+            )
+        )
+        st.plotly_chart(clean_plot_layout(fig, 390), use_container_width=True)
 
-st.markdown("<div class='section-title'>Rates Regime History</div>", unsafe_allow_html=True)
-hist = make_subplots(specs=[[{"secondary_y": True}]])
-if "DGS10" in rates:
-    hist.add_trace(go.Scatter(x=rates.index, y=rates["DGS10"], name="10Y", line=dict(color=COLORS["blue"])), secondary_y=False)
-if "DGS2" in rates:
-    hist.add_trace(go.Scatter(x=rates.index, y=rates["DGS2"], name="2Y", line=dict(color=COLORS["purple"])), secondary_y=False)
-if "DGS3MO" in rates:
-    hist.add_trace(go.Scatter(x=rates.index, y=rates["DGS3MO"], name="3M", line=dict(color=COLORS["grey"])), secondary_y=False)
-if curve_col:
-    hist.add_trace(go.Scatter(x=rates.index, y=rates[curve_col] * 100, name=f"{curve_col} bps", line=dict(color=COLORS["amber"])), secondary_y=True)
-hist.update_layout(height=420, margin=dict(l=12, r=12, t=20, b=15), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
-hist.update_yaxes(title_text="Yield (%)", secondary_y=False)
-hist.update_yaxes(title_text="Curve bps", secondary_y=True)
-st.plotly_chart(hist, use_container_width=True)
+st.markdown("<div class='section-title'>Outlier Rate Days</div>", unsafe_allow_html=True)
+st.markdown("<div class='small-note'>Weighted daily shock score from 10Y level, selected curve, real yields, and breakevens. The goal is to flag days worth reviewing, not to predict the next move.</div>", unsafe_allow_html=True)
+shock = build_shock_table(rates, selected_curve, lookback_days=min(len(rates), 300), top_n=10)
+if shock.empty:
+    st.info("Not enough history to calculate outlier days.")
+else:
+    chart = shock.copy()
+    chart["Date Label"] = chart["Date"].astype(str)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=chart["Date Label"],
+            y=chart["Shock Score"],
+            text=chart["Driver"],
+            textposition="outside",
+            name="Shock score",
+            marker=dict(color=COLORS["blue"]),
+        )
+    )
+    fig.update_layout(xaxis=dict(title="Date"), yaxis=dict(title="Weighted bp shock"), showlegend=False)
+    st.plotly_chart(clean_plot_layout(fig, 330), use_container_width=True)
 
-if show_table and rows:
-    st.markdown("<div class='section-title'>Rates Table</div>", unsafe_allow_html=True)
-    display = pd.DataFrame(rows)
-    display["Latest"] = display["Latest"].map(lambda x: f"{x:.2f}%" if np.isfinite(x) else "N/A")
-    for col in ["5D bp", "21D bp", "63D bp", "126D bp"]:
-        display[col] = display[col].map(lambda x: f"{x:+.0f}" if np.isfinite(x) else "N/A")
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    display_shock = shock.copy()
+    for col in display_shock.columns:
+        if col.endswith("bp") or col == "Shock Score":
+            display_shock[col] = display_shock[col].map(lambda x: fmt_num(x, 0))
+    st.dataframe(display_shock, use_container_width=True, hide_index=True)
+
+if show_full_history:
+    st.markdown("<div class='section-title'>Level + Curve History</div>", unsafe_allow_html=True)
+    hist = make_subplots(specs=[[{"secondary_y": True}]])
+    hist.add_trace(go.Scatter(x=rates.index, y=rates["DGS10"], name="10Y", line=dict(color=COLORS["blue"], width=2)), secondary_y=False)
+    if "DGS2" in rates.columns:
+        hist.add_trace(go.Scatter(x=rates.index, y=rates["DGS2"], name="2Y", line=dict(color=COLORS["purple"], width=1.6)), secondary_y=False)
+    if real_col in rates.columns:
+        hist.add_trace(go.Scatter(x=rates.index, y=rates[real_col], name="10Y Real", line=dict(color=COLORS["green"], width=1.4)), secondary_y=False)
+    hist.add_trace(go.Scatter(x=rates.index, y=rates[selected_curve] * 100.0, name=f"{selected_curve} bp", line=dict(color=COLORS["amber"], width=2)), secondary_y=True)
+    hist.update_yaxes(title_text="Yield (%)", secondary_y=False)
+    hist.update_yaxes(title_text="Curve bps", secondary_y=True)
+    st.plotly_chart(clean_plot_layout(hist, 430), use_container_width=True)
+
+if show_table:
+    st.markdown("<div class='section-title'>Raw Rates Table</div>", unsafe_allow_html=True)
+    table_cols = [c for c in ["DGS3MO", "DGS2", "DGS5", "DGS10", "DGS30", "DFII10", "T10YIE", "2s10s", "3m10y", "5s30s"] if c in rates.columns]
+    table = rates[table_cols].tail(260).copy()
+    rename = {**SERIES, "2s10s": "2s10s", "3m10y": "3m10y", "5s30s": "5s30s"}
+    table = table.rename(columns=rename)
+    st.dataframe(table, use_container_width=True)
