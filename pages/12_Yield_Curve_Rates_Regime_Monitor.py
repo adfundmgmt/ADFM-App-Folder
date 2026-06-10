@@ -11,7 +11,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 
-TITLE = "Rates Regime Monitor"
+st.set_page_config(page_title="Yield Curve Rates Regime Monitor", layout="wide")
 
 YAHOO_YIELD_TICKERS: Dict[str, Dict[str, object]] = {
     "^IRX": {"label": "3M", "field": "Y3M", "years": 0.25},
