@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import warnings
@@ -232,9 +233,9 @@ class ProxySpec:
 class RateGridSpec:
     name: str
     source: str
-    source_type: str
-    mode: str
-    risk_sign: int
+    source_type: str  # rates or market
+    mode: str         # diff or pct
+    risk_sign: int    # +1 means higher z is tighter; -1 means lower z is tighter
 
 
 PROXY_SPECS: Tuple[ProxySpec, ...] = (
@@ -566,10 +567,10 @@ def asof_value(series: pd.Series, target: pd.Timestamp) -> float:
 
 
 def lookback_target(label: str) -> pd.Timestamp:
-    today = pd.Timestamp(date.today())
+    today = pd.Timestamp(datetime.today().date())
 
     if label == "YTD":
-        return pd.Timestamp(date(today.year, 1, 1))
+        return pd.Timestamp(datetime(today.year, 1, 1))
 
     days = FOCUS_WINDOWS.get(label, 30)
 
