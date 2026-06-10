@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from io import StringIO
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -10,173 +10,360 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
+from plotly.subplots import make_subplots
 
-TITLE = "Global Macro Regime"
+
+TITLE = "Global Macro Regime Dashboard"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-REQUEST_TIMEOUT = (3, 8)
+REQUEST_TIMEOUT = (4, 12)
 
-# Keep the data set deliberately small. These are enough to cover growth,
-# inflation, rates, financial conditions, credit, dollar, commodities, and risk.
-FRED_SERIES: Dict[str, str] = {
+FRED_SERIES = {
     "NAPM": "ISM Manufacturing PMI",
     "UNRATE": "Unemployment Rate",
     "ICSA": "Initial Claims",
     "CPIAUCSL": "Headline CPI",
     "CPILFESL": "Core CPI",
     "T10YIE": "10Y Breakeven",
+    "FEDFUNDS": "Fed Funds",
     "DGS10": "10Y Treasury",
     "NFCI": "Chicago Fed NFCI",
+    "USREC": "NBER Recession Indicator",
 }
 
-MARKET_TICKERS = ["SPY", "HYG", "LQD", "UUP", "GLD", "CPER", "TLT", "^VIX"]
-DISPLAY_TICKERS = ["SPY", "HYG/LQD", "TLT", "UUP", "GLD", "CPER", "^VIX"]
-
-COLORS = {
-    "green": "#2f9e44",
-    "red": "#d9480f",
-    "amber": "#f59f00",
-    "blue": "#1971c2",
-    "purple": "#7048e8",
-    "grey": "#868e96",
-    "dark": "#111827",
-    "muted": "#6b7280",
-    "border": "#e5e7eb",
-    "bg": "#f8fafc",
+MARKET_TICKERS = {
+    "SPY": "S&P 500",
+    "RSP": "Equal Weight S&P 500",
+    "HYG": "High Yield Credit",
+    "LQD": "Investment Grade Credit",
+    "UUP": "U.S. Dollar",
+    "GLD": "Gold",
+    "CPER": "Copper",
+    "TLT": "Long Duration",
+    "^VIX": "VIX",
 }
+
+PALETTE = {
+    "green": "#52b788",
+    "red": "#e85d5d",
+    "amber": "#f59e0b",
+    "blue": "#4c78a8",
+    "purple": "#8b5cf6",
+    "grey": "#8b949e",
+    "grid": "#e5e7eb",
+    "text": "#111827",
+}
+
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(
     """
     <style>
-        .block-container {padding-top: 2.4rem; padding-bottom: 2.0rem; max-width: 1550px;}
-        .adfm-title {font-size: 1.85rem; line-height: 1.15; font-weight: 780; margin: 0 0 0.20rem 0; color: #111827;}
-        .adfm-subtitle {font-size: 0.94rem; color: #6b7280; margin-bottom: 1.00rem;}
-        .metric-card {background: linear-gradient(180deg, #ffffff 0%, #fbfbfb 100%); border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px 15px 12px 15px; min-height: 106px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);}
-        .metric-label {font-size: 0.71rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.055em; margin-bottom: 0.42rem;}
-        .metric-value {font-size: 1.18rem; font-weight: 760; color: #111827; line-height: 1.18;}
-        .metric-footnote {font-size: 0.76rem; color: #6b7280; margin-top: 0.48rem; line-height: 1.34;}
-        .section-title {font-size: 1.02rem; font-weight: 760; color: #111827; margin-top: 0.82rem; margin-bottom: 0.44rem;}
-        .note-box {background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 11px 13px; color: #475569; font-size: 0.85rem; line-height: 1.42;}
-        .pill {display:inline-block; border: 1px solid #e5e7eb; border-radius: 999px; padding: 2px 8px; font-size: 0.74rem; color:#6b7280; background:#ffffff; margin-right: 5px;}
-        div[data-testid="stMetric"] {background: #ffffff; border: 1px solid #e5e7eb; padding: 10px 12px; border-radius: 12px;}
-        hr {margin-top: 0.7rem; margin-bottom: 0.7rem;}
+        .block-container {padding-top: 1.35rem; padding-bottom: 2rem; max-width: 1550px;}
+        .adfm-title {font-size: 1.85rem; font-weight: 750; margin-bottom: 0.1rem; color: #111827;}
+        .adfm-subtitle {font-size: 0.96rem; color: #6b7280; margin-bottom: 1.1rem;}
+        .metric-card {
+            background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+            border: 1px solid #e5e7eb; border-radius: 14px;
+            padding: 13px 15px 10px 15px; min-height: 96px;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+        }
+        .metric-label {font-size: 0.74rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.045em; margin-bottom: 0.42rem;}
+        .metric-value {font-size: 1.3rem; font-weight: 750; color: #111827; line-height: 1.12;}
+        .metric-footnote {font-size: 0.76rem; color: #9ca3af; margin-top: 0.42rem;}
+        .section-title {font-size: 1.03rem; font-weight: 750; color: #111827; margin-top: 0.5rem; margin-bottom: 0.5rem;}
+        .section-subtitle {font-size: 0.88rem; color: #6b7280; margin-bottom: 0.9rem;}
+        .note-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; margin-bottom: 1rem;}
+        .decision-note {background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px; min-height: 118px;}
+        .decision-label {color: #8b5f39; font-size: 0.71rem; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.4rem;}
+        .decision-copy {color: #334155; font-size: 0.88rem; line-height: 1.48;}
+        .context-grid {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 0.85rem;}
+        .context-card {background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 11px 13px;}
+        .context-label {color: #6b7280; font-size: 0.69rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase;}
+        .context-value {color: #111827; font-size: 1.15rem; font-weight: 750; margin: 0.2rem 0;}
+        .context-copy {color: #64748b; font-size: 0.76rem; line-height: 1.4;}
+        @media (max-width: 1000px) {
+            .note-grid, .context-grid {grid-template-columns: 1fr;}
+        }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
-def latest(series: pd.Series) -> float:
+def pct_fmt(x: float | None, digits: int = 1) -> str:
+    if x is None or not np.isfinite(x):
+        return "N/A"
+    return f"{x:.{digits}f}%"
+
+
+def bp_fmt(x: float | None) -> str:
+    if x is None or not np.isfinite(x):
+        return "N/A"
+    return f"{x:.0f} bps"
+
+
+def score_color(score: float) -> str:
+    if score >= 0.45:
+        return PALETTE["green"]
+    if score <= -0.45:
+        return PALETTE["red"]
+    return PALETTE["amber"]
+
+
+def latest_valid(series: pd.Series) -> float:
     clean = series.dropna()
     return float(clean.iloc[-1]) if not clean.empty else np.nan
 
 
-def latest_date(df: pd.DataFrame) -> str:
-    if df.empty:
-        return "N/A"
-    idx = df.dropna(how="all").index
-    if len(idx) == 0:
-        return "N/A"
-    return pd.Timestamp(idx[-1]).strftime("%b %d, %Y")
-
-
-def delta(series: pd.Series, periods: int) -> float:
+def safe_change(series: pd.Series, periods: int) -> float:
     clean = series.dropna()
     if len(clean) <= periods:
         return np.nan
     return float(clean.iloc[-1] - clean.iloc[-periods - 1])
 
 
-def ret(series: pd.Series, periods: int) -> float:
+def safe_pct_change(series: pd.Series, periods: int) -> float:
     clean = series.dropna()
     if len(clean) <= periods:
         return np.nan
-    base = float(clean.iloc[-periods - 1])
-    if base == 0 or not np.isfinite(base):
-        return np.nan
-    return float(clean.iloc[-1] / base - 1.0)
+    return float(clean.iloc[-1] / clean.iloc[-periods - 1] - 1.0)
 
 
-def ytd_ret(series: pd.Series) -> float:
+def percentile_score(series: pd.Series, invert: bool = False) -> float:
     clean = series.dropna()
-    if clean.empty:
-        return np.nan
-    latest_idx = pd.Timestamp(clean.index[-1])
-    start = clean[clean.index >= pd.Timestamp(date(latest_idx.year, 1, 1))]
-    if len(start) < 2:
-        return np.nan
-    base = float(start.iloc[0])
-    if base == 0 or not np.isfinite(base):
-        return np.nan
-    return float(clean.iloc[-1] / base - 1.0)
+    if len(clean) < 12:
+        return 0.0
+    rank = clean.rank(pct=True).iloc[-1]
+    score = (float(rank) - 0.5) * 2.0
+    return -score if invert else score
 
 
-def percentile_score(series: pd.Series, invert: bool = False, min_obs: int = 18) -> float:
+def historical_change_score(series: pd.Series, periods: int) -> float:
     clean = series.replace([np.inf, -np.inf], np.nan).dropna()
-    if len(clean) < min_obs:
+    changes = clean.pct_change(periods).dropna()
+    if len(changes) < 20:
         return np.nan
-    score = (float(clean.rank(pct=True).iloc[-1]) - 0.5) * 2.0
-    return -score if invert else score
+    rank = float(changes.rank(pct=True).iloc[-1])
+    return float(np.clip((rank - 0.5) * 2.0, -1.0, 1.0))
 
 
-def clip_score(value: float, scale: float, invert: bool = False) -> float:
-    if not np.isfinite(value) or scale == 0:
+def historical_trend_score(series: pd.Series, window: int = 200) -> float:
+    clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+    trend = clean / clean.rolling(window, min_periods=min(60, window)).mean() - 1.0
+    trend = trend.dropna()
+    if len(trend) < 20:
         return np.nan
-    score = float(np.clip(value / scale, -1.0, 1.0))
-    return -score if invert else score
+    rank = float(trend.rank(pct=True).iloc[-1])
+    return float(np.clip((rank - 0.5) * 2.0, -1.0, 1.0))
 
 
-def mean_score(parts: Iterable[float]) -> float:
-    clean = [float(x) for x in parts if np.isfinite(x)]
-    return float(np.mean(clean)) if clean else 0.0
+def market_confirmation_frame(market: pd.DataFrame) -> pd.DataFrame:
+    if market.empty:
+        return pd.DataFrame()
+
+    definitions: list[tuple[str, str, pd.Series | None]] = [
+        ("Equity trend", "SPY: broad risk appetite and earnings confidence", market["SPY"] if "SPY" in market else None),
+        (
+            "Equity breadth",
+            "RSP/SPY: equal-weight participation versus mega-cap concentration",
+            market["RSP"] / market["SPY"] if {"RSP", "SPY"}.issubset(market.columns) else None,
+        ),
+        (
+            "Credit appetite",
+            "HYG/LQD: lower-quality credit versus investment grade",
+            market["HYG"] / market["LQD"] if {"HYG", "LQD"}.issubset(market.columns) else None,
+        ),
+        (
+            "Cyclical growth",
+            "CPER/GLD: industrial demand versus defensive scarcity",
+            market["CPER"] / market["GLD"] if {"CPER", "GLD"}.issubset(market.columns) else None,
+        ),
+        (
+            "Dollar liquidity",
+            "Inverse UUP: a softer dollar generally eases global conditions",
+            1.0 / market["UUP"] if "UUP" in market else None,
+        ),
+        (
+            "Volatility",
+            "Inverse VIX: lower implied volatility confirms risk tolerance",
+            1.0 / market["^VIX"] if "^VIX" in market else None,
+        ),
+    ]
+
+    rows: list[dict[str, object]] = []
+    horizons = ["1M", "3M", "6M", "Trend"]
+    horizon_weights = [0.20, 0.35, 0.30, 0.15]
+    for signal, rationale, series in definitions:
+        if series is None:
+            continue
+        scores = {
+            "1M": historical_change_score(series, 21),
+            "3M": historical_change_score(series, 63),
+            "6M": historical_change_score(series, 126),
+            "Trend": historical_trend_score(series),
+        }
+        available = [(scores[key], weight) for key, weight in zip(horizons, horizon_weights) if np.isfinite(scores[key])]
+        if not available:
+            continue
+        aggregate = float(np.average([item[0] for item in available], weights=[item[1] for item in available]))
+        rows.append({"Signal": signal, "Why it matters": rationale, **scores, "Composite": aggregate})
+    return pd.DataFrame(rows)
 
 
-def score_color(score: float) -> str:
-    if score >= 0.35:
-        return COLORS["green"]
-    if score <= -0.35:
-        return COLORS["red"]
-    return COLORS["amber"]
+def score_phrase(value: float) -> str:
+    if value >= 0.5:
+        return "strongly constructive"
+    if value >= 0.15:
+        return "constructive"
+    if value <= -0.5:
+        return "strongly defensive"
+    if value <= -0.15:
+        return "defensive"
+    return "neutral"
 
 
-def fmt_num(x: float, digits: int = 1) -> str:
-    if not np.isfinite(x):
-        return "N/A"
-    return f"{x:.{digits}f}"
+def build_decision_notes(
+    regime: str,
+    growth: float,
+    inflation: float,
+    policy: float,
+    risk: float,
+    composite: float,
+    confirmations: pd.DataFrame,
+    macro_inputs_available: int,
+) -> list[tuple[str, str]]:
+    dimensions = {
+        "growth": growth,
+        "inflation relief": -inflation,
+        "policy/conditions": policy,
+        "risk appetite": risk,
+    }
+    ordered = sorted(dimensions.items(), key=lambda item: item[1], reverse=True)
+    strongest_name, strongest_value = ordered[0]
+    weakest_name, weakest_value = ordered[-1]
+    market_scores = confirmations["Composite"].dropna() if not confirmations.empty else pd.Series(dtype=float)
+    positive = int((market_scores > 0.15).sum())
+    negative = int((market_scores < -0.15).sum())
+    total = len(market_scores)
+    breadth = positive / total if total else np.nan
+    market_average = float(market_scores.mean()) if total else np.nan
+
+    base_case = (
+        f"{regime}. The composite is {score_phrase(composite)} ({composite:+.2f}). "
+        f"The strongest pillar is {strongest_name} ({strongest_value:+.2f}); "
+        f"the main drag is {weakest_name} ({weakest_value:+.2f})."
+    )
+    if total:
+        leaders = confirmations.nlargest(min(2, total), "Composite")["Signal"].tolist()
+        laggards = confirmations.nsmallest(min(2, total), "Composite")["Signal"].tolist()
+        confirmation = (
+            f"{positive} of {total} market lenses are constructive and {negative} {'is' if negative == 1 else 'are'} defensive "
+            f"(average {market_average:+.2f}). Strongest: {', '.join(leaders)}. "
+            f"Weakest: {', '.join(laggards)}."
+        )
+    else:
+        confirmation = "Market confirmation is unavailable, so the regime read should be treated as macro-only."
+
+    macro_direction = np.sign(composite) if abs(composite) >= 0.15 else 0
+    market_direction = np.sign(market_average) if np.isfinite(market_average) and abs(market_average) >= 0.15 else 0
+    if macro_direction and market_direction and macro_direction != market_direction:
+        tension = (
+            "Macro and markets disagree. Keep position sizes below normal until credit, breadth, and volatility "
+            "move back into line with the macro composite."
+        )
+    elif strongest_value - weakest_value >= 0.75:
+        tension = (
+            f"Internal dispersion is high: {strongest_name} and {weakest_name} send materially different signals. "
+            "Favor relative-value expressions over a large one-way macro bet."
+        )
+    else:
+        tension = "The main pillars are reasonably aligned; the current regime has no large internal contradiction."
+
+    if composite >= 0.35 and (not np.isfinite(breadth) or breadth >= 0.5):
+        stance = "Risk budget can remain constructive, emphasizing exposures confirmed by breadth and credit."
+    elif composite <= -0.35 or (np.isfinite(breadth) and breadth < 0.34):
+        stance = "Keep risk below normal, prioritize liquidity and quality, and require broader confirmation before adding beta."
+    else:
+        stance = "Run a balanced book, keep optionality, and add risk only where macro and market confirmation agree."
+
+    coverage = min(macro_inputs_available / 8.0, 1.0)
+    if total:
+        coverage = 0.65 * coverage + 0.35 * min(total / 6.0, 1.0)
+    confidence = "high" if coverage >= 0.85 else "moderate" if coverage >= 0.6 else "low"
+    invalidation = (
+        f"Confidence is {confidence}. Reassess if growth falls below -0.15, inflation pressure rises above +0.15, "
+        f"policy/conditions falls below -0.35, or fewer than 2 of {max(total, 6)} market lenses remain constructive."
+    )
+    return [
+        ("Base case", base_case),
+        ("Market confirmation", confirmation),
+        ("Tensions and sizing", tension),
+        ("Decision and invalidation", f"{stance} {invalidation}"),
+    ]
 
 
-def fmt_pct(x: float, digits: int = 1) -> str:
-    if not np.isfinite(x):
-        return "N/A"
-    return f"{x:.{digits}f}%"
+def history_context_items(monthly: pd.DataFrame) -> list[tuple[str, str, str]]:
+    items: list[tuple[str, str, str]] = []
+
+    def add_item(label: str, series: pd.Series, value_format: str, threshold_copy: str) -> None:
+        clean = series.dropna()
+        if clean.empty:
+            return
+        value = float(clean.iloc[-1])
+        percentile = float(clean.rank(pct=True).iloc[-1] * 100)
+        six_month_change = safe_change(clean, 6)
+        change_text = f"{six_month_change:+.2f}" if np.isfinite(six_month_change) else "N/A"
+        items.append(
+            (
+                label,
+                value_format.format(value),
+                f"{percentile:.0f}th percentile in view; 6M change {change_text}. {threshold_copy}",
+            )
+        )
+
+    if "NAPM" in monthly:
+        ism = monthly["NAPM"]
+        add_item("Growth pulse", ism, "{:.1f}", "Above 50 signals expansion." if latest_valid(ism) >= 50 else "Below 50 signals contraction.")
+    if "CPILFESL" in monthly:
+        core = monthly["CPILFESL"].pct_change(12) * 100
+        add_item(
+            "Core inflation",
+            core,
+            "{:.1f}%",
+            "Above the Fed's 2% objective." if latest_valid(core) > 2 else "At or below the Fed's 2% objective.",
+        )
+    if "DGS10" in monthly:
+        add_item("10Y Treasury", monthly["DGS10"], "{:.2f}%", "Higher levels tighten discount rates and financing costs.")
+    if "NFCI" in monthly:
+        nfci = monthly["NFCI"]
+        add_item(
+            "Financial conditions",
+            nfci,
+            "{:.2f}",
+            "Above zero is tighter than average." if latest_valid(nfci) > 0 else "Below zero is easier than average.",
+        )
+    return items
 
 
-def fmt_ret(x: float, digits: int = 1) -> str:
-    if not np.isfinite(x):
-        return "N/A"
-    return f"{x * 100:+.{digits}f}%"
+def recession_windows(monthly: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    if "USREC" not in monthly:
+        return []
+    recession = monthly["USREC"].fillna(0).ge(0.5)
+    windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    start: pd.Timestamp | None = None
+    for timestamp, active in recession.items():
+        if active and start is None:
+            start = pd.Timestamp(timestamp)
+        elif not active and start is not None:
+            windows.append((start, pd.Timestamp(timestamp)))
+            start = None
+    if start is not None:
+        windows.append((start, pd.Timestamp(monthly.index[-1])))
+    return windows
 
 
-def fmt_bps(x: float) -> str:
-    if not np.isfinite(x):
-        return "N/A"
-    return f"{x * 100:+.0f} bps"
-
-
-def score_label(score: float) -> str:
-    if score >= 0.55:
-        return "Strong"
-    if score >= 0.20:
-        return "Firm"
-    if score <= -0.55:
-        return "Weak"
-    if score <= -0.20:
-        return "Soft"
-    return "Mixed"
-
-
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_fred(series_map: Dict[str, str], start: date) -> pd.DataFrame:
     frames: List[pd.Series] = []
     for series_id in series_map:
@@ -192,386 +379,170 @@ def fetch_fred(series_map: Dict[str, str], start: date) -> pd.DataFrame:
                 continue
             raw.columns = ["date", series_id]
             values = pd.to_numeric(raw[series_id].replace(".", np.nan), errors="coerce")
-            index = pd.to_datetime(raw["date"], errors="coerce")
-            frames.append(pd.Series(values.values, index=index, name=series_id).dropna(how="all"))
+            frames.append(pd.Series(values.values, index=pd.to_datetime(raw["date"]), name=series_id))
         except Exception:
             continue
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, axis=1).sort_index().ffill()
+    return pd.concat(frames, axis=1).sort_index()
 
 
-@st.cache_data(ttl=15 * 60, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_market(tickers: List[str], period: str) -> pd.DataFrame:
-    try:
-        data = yf.download(
-            tickers,
-            period=period,
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-        )
-    except Exception:
-        return pd.DataFrame()
+    data = yf.download(
+        tickers,
+        period=period,
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        threads=False,
+    )
     if data.empty:
         return pd.DataFrame()
     if isinstance(data.columns, pd.MultiIndex):
-        if "Close" not in data.columns.get_level_values(0):
-            return pd.DataFrame()
         close = data["Close"].copy()
     else:
-        if "Close" not in data.columns:
-            return pd.DataFrame()
         close = data[["Close"]].rename(columns={"Close": tickers[0]})
-    close.columns = [str(c) for c in close.columns]
-    return close.dropna(how="all").ffill()
-
-
-def build_monthly(fred: pd.DataFrame, smoothing: int) -> pd.DataFrame:
-    if fred.empty:
-        return pd.DataFrame()
-    monthly = fred.resample("ME").last().ffill()
-    if smoothing > 1:
-        monthly = monthly.rolling(smoothing, min_periods=1).mean()
-    return monthly
-
-
-def market_series(market: pd.DataFrame, ticker: str) -> pd.Series:
-    if market.empty:
-        return pd.Series(dtype=float)
-    if ticker == "HYG/LQD" and {"HYG", "LQD"}.issubset(market.columns):
-        return market["HYG"] / market["LQD"]
-    if ticker in market.columns:
-        return market[ticker]
-    return pd.Series(dtype=float)
+    return close.ffill()
 
 
 def classify_regime(growth: float, inflation: float, policy: float, risk: float) -> Tuple[str, str]:
-    if growth >= 0.25 and inflation <= 0.10 and policy >= -0.10 and risk >= 0.10:
-        return "Goldilocks / Expansion", "Growth is firm, inflation pressure is contained, and the tape confirms easier conditions."
-    if growth >= 0.20 and inflation > 0.20:
-        return "Reflation / Policy Watch", "Nominal growth is holding, but inflation pressure leaves duration and multiples exposed."
-    if growth < -0.20 and inflation > 0.20:
-        return "Stagflation Pressure", "The bad mix is weaker growth with sticky prices. Credit and cyclicals need confirmation before adding risk."
-    if growth < -0.20 and inflation <= 0.00 and risk < 0.00:
-        return "Disinflationary Slowdown", "Growth is fading and inflation pressure is cooling. Duration can work if credit does not break."
-    if policy < -0.35 and risk < -0.05:
-        return "Liquidity Squeeze", "Policy and financial conditions are restrictive and market confirmation is weak."
-    if risk >= 0.35 and policy >= 0.00 and growth >= -0.10:
-        return "Risk-On Transition", "The tape is improving before the macro data has fully confirmed it."
-    return "Mixed / Transition", "The regime is cross-current. Positioning should wait for confirmation from credit, rates, and the dollar."
-
-
-def dominant_pressure(scores: Dict[str, float]) -> Tuple[str, float, str]:
-    ordered = sorted(scores.items(), key=lambda kv: abs(kv[1]), reverse=True)
-    label, value = ordered[0]
-    if label == "Inflation":
-        text = "Inflation is the main pressure point" if value > 0 else "Disinflation is the main pressure point"
-    elif label == "Policy / Liquidity":
-        text = "Liquidity is easing" if value > 0 else "Policy/liquidity is the main tightening pressure"
-    elif label == "Risk Appetite":
-        text = "The tape is confirming risk appetite" if value > 0 else "Risk appetite is the main pressure point"
-    else:
-        text = "Growth is confirming" if value > 0 else "Growth is the main pressure point"
-    return label, value, text
-
-
-def asset_readthrough(growth: float, inflation: float, policy: float, risk: float, composite: float) -> str:
-    if growth < -0.20 and risk < -0.20:
-        return "Defensive bias. Prefer quality, duration hedges, and lower cyclicality until credit stabilizes."
-    if growth < -0.20 and inflation <= 0.00:
-        return "Slowdown bias. Duration improves, cyclicals need discipline, and credit is the confirmation variable."
-    if growth >= 0.20 and inflation > 0.20:
-        return "Nominal growth bias. Equities can hold up, but duration and long-multiple risk remain exposed."
-    if policy < -0.35:
-        return "Liquidity-sensitive assets need confirmation. Strong dollar or higher real yields can pressure breadth."
-    if composite >= 0.25 and risk >= 0.15:
-        return "Constructive tape. Risk can be owned, but the invalidation is a turn lower in credit or breadth."
-    return "Keep sizing moderate. The data does not yet justify a one-way macro bet."
-
-
-def market_confirmation(composite: float, risk: float) -> str:
-    spread = risk - composite
-    if risk >= 0.25 and composite >= 0.10:
-        return "Macro and tape agree."
-    if risk <= -0.25 and composite <= -0.10:
-        return "Macro and tape are deteriorating together."
-    if spread >= 0.35:
-        return "Tape is stronger than macro."
-    if spread <= -0.35:
-        return "Macro is stronger than tape."
-    return "No clean confirmation yet."
-
-
-def add_signal(rows: List[Dict[str, object]], group: str, signal: str, latest_value: str, move: str, score: float, readthrough: str) -> None:
-    rows.append(
-        {
-            "Group": group,
-            "Signal": signal,
-            "Latest": latest_value,
-            "Move": move,
-            "Score": score,
-            "Read-through": readthrough,
-        }
-    )
-
-
-def build_scores(monthly: pd.DataFrame, market: pd.DataFrame) -> Tuple[Dict[str, float], pd.DataFrame]:
-    rows: List[Dict[str, object]] = []
-    growth_parts: List[float] = []
-    inflation_parts: List[float] = []
-    policy_parts: List[float] = []
-    risk_parts: List[float] = []
-
-    if "NAPM" in monthly:
-        s = percentile_score(monthly["NAPM"])
-        growth_parts.append(s)
-        add_signal(rows, "Growth", "ISM Manufacturing PMI", fmt_num(latest(monthly["NAPM"]), 1), f"3M {delta(monthly['NAPM'], 3):+.1f}", s, "Above-trend PMI supports cyclicals; deterioration pressures earnings breadth.")
-
-    if "UNRATE" in monthly:
-        s = clip_score(delta(monthly["UNRATE"], 6), 0.75, invert=True)
-        growth_parts.append(s)
-        add_signal(rows, "Growth", "Unemployment Rate", fmt_pct(latest(monthly["UNRATE"]), 1), f"6M {delta(monthly['UNRATE'], 6):+.1f} pts", s, "Rising unemployment weakens the soft-landing case.")
-
-    if "ICSA" in monthly:
-        claims = monthly["ICSA"].rolling(3, min_periods=1).mean()
-        s = clip_score(ret(claims, 6), 0.20, invert=True)
-        growth_parts.append(s)
-        add_signal(rows, "Growth", "Initial Claims", f"{latest(claims) / 1000:.0f}k", f"6M {ret(claims, 6):+.1%}", s, "Claims are the labor-market early warning signal.")
-
-    if "CPIAUCSL" in monthly:
-        cpi_yoy = monthly["CPIAUCSL"].pct_change(12) * 100
-        s = percentile_score(cpi_yoy)
-        inflation_parts.append(s)
-        add_signal(rows, "Inflation", "Headline CPI YoY", fmt_pct(latest(cpi_yoy), 1), f"3M {delta(cpi_yoy, 3):+.1f} pts", s, "Higher inflation pressure keeps the policy reaction function restrictive.")
-
-    if "CPILFESL" in monthly:
-        core_yoy = monthly["CPILFESL"].pct_change(12) * 100
-        s = percentile_score(core_yoy)
-        inflation_parts.append(s)
-        add_signal(rows, "Inflation", "Core CPI YoY", fmt_pct(latest(core_yoy), 1), f"3M {delta(core_yoy, 3):+.1f} pts", s, "Core inflation is the cleaner policy signal.")
-
-    if "T10YIE" in monthly:
-        s = percentile_score(monthly["T10YIE"])
-        inflation_parts.append(s)
-        add_signal(rows, "Inflation", "10Y Breakeven", fmt_pct(latest(monthly["T10YIE"]), 2), f"6M {fmt_bps(delta(monthly['T10YIE'], 6))}", s, "Breakevens capture market-implied inflation risk.")
-
-    if "DGS10" in monthly and "CPIAUCSL" in monthly:
-        cpi_yoy = monthly["CPIAUCSL"].pct_change(12) * 100
-        real_10y = monthly["DGS10"] - cpi_yoy
-        s = percentile_score(real_10y, invert=True)
-        policy_parts.append(s)
-        add_signal(rows, "Policy / Liquidity", "Ex-post Real 10Y", fmt_pct(latest(real_10y), 1), f"6M {delta(real_10y, 6):+.1f} pts", s, "Higher real rates tighten multiples, credit, and housing.")
-
-    if "NFCI" in monthly:
-        s = percentile_score(monthly["NFCI"], invert=True)
-        policy_parts.append(s)
-        add_signal(rows, "Policy / Liquidity", "Chicago Fed NFCI", fmt_num(latest(monthly["NFCI"]), 2), f"6M {delta(monthly['NFCI'], 6):+.2f}", s, "Lower NFCI means easier financial conditions.")
-
-    if not market.empty:
-        spy = market_series(market, "SPY")
-        if not spy.empty:
-            s_3m = clip_score(ret(spy, 63), 0.10)
-            s_6m = clip_score(ret(spy, 126), 0.18)
-            risk_parts.append(s_3m)
-            growth_parts.append(s_6m)
-            add_signal(rows, "Risk Appetite", "SPY", fmt_ret(ret(spy, 1), 1), f"3M {fmt_ret(ret(spy, 63), 1)}", s_3m, "Equity tape confirms or rejects the macro regime.")
-
-        hyg_lqd = market_series(market, "HYG/LQD")
-        if not hyg_lqd.empty:
-            s = clip_score(ret(hyg_lqd, 63), 0.035)
-            risk_parts.append(s)
-            policy_parts.append(clip_score(ret(hyg_lqd, 126), 0.055))
-            add_signal(rows, "Risk Appetite", "HYG/LQD", fmt_ret(ret(hyg_lqd, 5), 1), f"3M {fmt_ret(ret(hyg_lqd, 63), 1)}", s, "Credit leadership is the key risk confirmation signal.")
-
-        vix = market_series(market, "^VIX")
-        if not vix.empty:
-            s = percentile_score(vix, invert=True)
-            risk_parts.append(s)
-            add_signal(rows, "Risk Appetite", "VIX", fmt_num(latest(vix), 1), f"1W {delta(vix, 5):+.1f} pts", s, "Falling vol eases financial conditions; rising vol tightens them.")
-
-        uup = market_series(market, "UUP")
-        if not uup.empty:
-            s = clip_score(ret(uup, 63), 0.055, invert=True)
-            risk_parts.append(s)
-            policy_parts.append(clip_score(ret(uup, 126), 0.08, invert=True))
-            add_signal(rows, "Policy / Liquidity", "Dollar ETF", fmt_ret(ret(uup, 1), 1), f"3M {fmt_ret(ret(uup, 63), 1)}", s, "A stronger dollar usually tightens global liquidity.")
-
-        copper = market_series(market, "CPER")
-        if not copper.empty:
-            s = clip_score(ret(copper, 126), 0.18)
-            growth_parts.append(s)
-            add_signal(rows, "Growth", "Copper ETF", fmt_ret(ret(copper, 1), 1), f"6M {fmt_ret(ret(copper, 126), 1)}", s, "Copper is a market-based cyclical growth proxy.")
-
-        tlt = market_series(market, "TLT")
-        if not tlt.empty:
-            s = clip_score(ret(tlt, 63), 0.10)
-            policy_parts.append(s)
-            add_signal(rows, "Policy / Liquidity", "TLT", fmt_ret(ret(tlt, 1), 1), f"3M {fmt_ret(ret(tlt, 63), 1)}", s, "Long-duration strength can signal easier rates pressure or rising slowdown risk.")
-
-    scores = {
-        "Growth": mean_score(growth_parts),
-        "Inflation": mean_score(inflation_parts),
-        "Policy / Liquidity": mean_score(policy_parts),
-        "Risk Appetite": mean_score(risk_parts),
-    }
-    scores["Composite"] = mean_score([scores["Growth"], -scores["Inflation"], scores["Policy / Liquidity"], scores["Risk Appetite"]])
-    return scores, pd.DataFrame(rows)
-
-
-def create_score_bar(scores: Dict[str, float]) -> go.Figure:
-    labels = ["Growth", "Inflation Pressure", "Policy / Liquidity", "Risk Appetite", "Composite"]
-    values = [scores["Growth"], scores["Inflation"], scores["Policy / Liquidity"], scores["Risk Appetite"], scores["Composite"]]
-    colors = [score_color(scores["Growth"]), score_color(-scores["Inflation"]), score_color(scores["Policy / Liquidity"]), score_color(scores["Risk Appetite"]), score_color(scores["Composite"])]
-    fig = go.Figure(go.Bar(x=values, y=labels, orientation="h", marker_color=colors, text=[f"{v:+.2f}" for v in values], textposition="outside", cliponaxis=False))
-    fig.add_vline(x=0, line_color="#9ca3af", line_width=1)
-    fig.update_layout(height=292, margin=dict(l=8, r=45, t=14, b=18), xaxis=dict(range=[-1, 1], title="Score"), yaxis=dict(autorange="reversed"), plot_bgcolor="white", paper_bgcolor="white", showlegend=False)
-    return fig
-
-
-def create_regime_map(growth: float, inflation: float) -> go.Figure:
-    fig = go.Figure()
-    fig.add_shape(type="rect", x0=0, x1=1, y0=-1, y1=0, fillcolor="rgba(47,158,68,0.08)", line_width=0)
-    fig.add_shape(type="rect", x0=0, x1=1, y0=0, y1=1, fillcolor="rgba(245,159,0,0.08)", line_width=0)
-    fig.add_shape(type="rect", x0=-1, x1=0, y0=0, y1=1, fillcolor="rgba(217,72,15,0.08)", line_width=0)
-    fig.add_shape(type="rect", x0=-1, x1=0, y0=-1, y1=0, fillcolor="rgba(25,113,194,0.08)", line_width=0)
-    fig.add_hline(y=0, line_color="#9ca3af", line_width=1)
-    fig.add_vline(x=0, line_color="#9ca3af", line_width=1)
-    fig.add_trace(go.Scatter(x=[growth], y=[inflation], mode="markers+text", marker=dict(size=22, color=score_color(growth - inflation), line=dict(color="#111827", width=1)), text=["Now"], textposition="top center", name="Current"))
-    fig.add_annotation(x=0.55, y=-0.72, text="Goldilocks", showarrow=False, font=dict(size=12, color="#2f9e44"))
-    fig.add_annotation(x=0.55, y=0.72, text="Reflation", showarrow=False, font=dict(size=12, color="#b7791f"))
-    fig.add_annotation(x=-0.55, y=0.72, text="Stagflation", showarrow=False, font=dict(size=12, color="#d9480f"))
-    fig.add_annotation(x=-0.55, y=-0.72, text="Slowdown", showarrow=False, font=dict(size=12, color="#1971c2"))
-    fig.update_layout(height=292, margin=dict(l=12, r=12, t=14, b=18), xaxis=dict(title="Growth", range=[-1, 1], zeroline=False), yaxis=dict(title="Inflation Pressure", range=[-1, 1], zeroline=False), plot_bgcolor="white", paper_bgcolor="white", showlegend=False)
-    return fig
-
-
-def create_market_heatmap(market: pd.DataFrame, tickers: List[str]) -> go.Figure:
-    horizons = [("Today", 1), ("1W", 5), ("1M", 21), ("3M", 63), ("YTD", None)]
-    z: List[List[float]] = []
-    text: List[List[str]] = []
-    rows: List[str] = []
-    for ticker in tickers:
-        s = market_series(market, ticker)
-        if s.empty:
-            continue
-        vals = []
-        labels = []
-        for _, window in horizons:
-            value = ytd_ret(s) if window is None else ret(s, window)
-            vals.append(value * 100 if np.isfinite(value) else np.nan)
-            labels.append(fmt_ret(value, 1))
-        z.append(vals)
-        text.append(labels)
-        rows.append(ticker)
-
-    fig = go.Figure(
-        go.Heatmap(
-            z=z,
-            x=[h[0] for h in horizons],
-            y=rows,
-            text=text,
-            texttemplate="%{text}",
-            colorscale=[[0, "#d9480f"], [0.5, "#ffffff"], [1, "#2f9e44"]],
-            zmid=0,
-            colorbar=dict(title="%"),
-        )
-    )
-    fig.update_layout(height=330, margin=dict(l=8, r=8, t=10, b=10), plot_bgcolor="white", paper_bgcolor="white")
-    return fig
-
-
-def create_rebased_chart(market: pd.DataFrame, tickers: List[str]) -> go.Figure:
-    fig = go.Figure()
-    for ticker in tickers:
-        s = market_series(market, ticker).dropna()
-        if s.empty:
-            continue
-        rebased = s / s.iloc[0] * 100
-        fig.add_trace(go.Scatter(x=rebased.index, y=rebased, mode="lines", name=ticker, line=dict(width=2)))
-    fig.update_layout(height=335, margin=dict(l=10, r=10, t=12, b=12), yaxis_title="Rebased to 100", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), plot_bgcolor="white", paper_bgcolor="white")
-    return fig
-
-
-def create_history_chart(monthly: pd.DataFrame) -> go.Figure:
-    fig = go.Figure()
-    if "NAPM" in monthly:
-        fig.add_trace(go.Scatter(x=monthly.index, y=monthly["NAPM"], name="ISM PMI", yaxis="y1", line=dict(width=2)))
-    if "CPIAUCSL" in monthly:
-        cpi_yoy = monthly["CPIAUCSL"].pct_change(12) * 100
-        fig.add_trace(go.Scatter(x=cpi_yoy.index, y=cpi_yoy, name="Headline CPI YoY", yaxis="y2", line=dict(width=2)))
-    if "DGS10" in monthly:
-        fig.add_trace(go.Scatter(x=monthly.index, y=monthly["DGS10"], name="10Y Treasury", yaxis="y2", line=dict(width=2)))
-    fig.update_layout(
-        height=365,
-        margin=dict(l=10, r=10, t=12, b=12),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        yaxis=dict(title="ISM", side="left"),
-        yaxis2=dict(title="Percent", overlaying="y", side="right"),
-    )
-    return fig
+    if growth >= 0.25 and inflation <= 0.15 and risk >= 0:
+        return "Goldilocks / Expansion", "Growth firm, inflation manageable, risk appetite constructive."
+    if growth >= 0.15 and inflation > 0.15:
+        return "Reflation / Policy Watch", "Growth is holding up, but inflation pressure keeps rates-sensitive assets exposed."
+    if growth < -0.15 and inflation > 0.15:
+        return "Stagflation Pressure", "Growth is fading while inflation remains sticky."
+    if growth < -0.15 and risk < -0.15:
+        return "Slowdown / Risk-Off", "Growth and market signals are both deteriorating."
+    if policy < -0.45 and risk < 0:
+        return "Tight Financial Conditions", "Policy and financial conditions are leaning restrictive."
+    return "Transition / Mixed Macro", "Signals are cross-current; watch breadth, credit, and rates confirmation."
 
 
 with st.sidebar:
+    st.header("Settings")
+    lookback_years = st.selectbox("Macro history", [3, 5, 10, 20], index=1)
+    market_period = st.selectbox("Market history", ["1y", "2y", "3y", "5y"], index=2)
+    smooth = st.slider("Score smoothing", 1, 6, 3)
+    show_raw = st.checkbox("Show raw inputs", value=False)
+
+    st.divider()
     st.header("About This Tool")
     st.markdown(
         """
-        Lightweight macro regime map built from FRED macro series and liquid market proxies.
-        The first screen is designed to answer three questions: what regime are we in,
-        what is the pressure point, and whether the tape confirms it.
+        Broad macro regime dashboard built from public growth, inflation, policy,
+        financial conditions, and market proxies.
+
+        Scores are directional and percentile-based. They are meant to organize
+        the macro backdrop, not replace judgment around individual releases.
         """
     )
 
-    st.divider()
-    st.header("Controls")
-    lookback_years = st.selectbox("Macro lookback", [3, 5, 10, 20], index=1)
-    market_period = st.selectbox("Market history", ["6mo", "1y", "2y", "3y", "5y"], index=3)
-    smoothing = st.slider("Monthly smoothing", 1, 6, 3)
-    show_inputs = st.checkbox("Show input table", value=True)
-    show_history = st.checkbox("Show macro history", value=True)
-    show_raw = st.checkbox("Show raw FRED data", value=False)
 
 st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='adfm-subtitle'>Regime, pressure point, liquidity signal, and market confirmation without turning the page into a terminal.</div>",
+    "<div class='adfm-subtitle'>Growth, inflation, policy, financial conditions, and risk appetite in one macro map.</div>",
     unsafe_allow_html=True,
 )
 
-start_date = date.today() - timedelta(days=int(lookback_years * 365.25) + 395)
+start_date = date.today() - timedelta(days=int(lookback_years * 365.25) + 120)
+
 fred = fetch_fred(FRED_SERIES, start_date)
-market = fetch_market(MARKET_TICKERS, market_period)
+market = fetch_market(list(MARKET_TICKERS.keys()), market_period)
 
 if fred.empty and market.empty:
-    st.error("No macro or market data loaded. Check FRED/yfinance connectivity.")
+    st.error("No macro or market data loaded. Check data-source connectivity.")
     st.stop()
 
-monthly = build_monthly(fred, smoothing)
-scores, signal_table = build_scores(monthly, market)
-regime, regime_note = classify_regime(scores["Growth"], scores["Inflation"], scores["Policy / Liquidity"], scores["Risk Appetite"])
-pressure_label, pressure_value, pressure_text = dominant_pressure({k: scores[k] for k in ["Growth", "Inflation", "Policy / Liquidity", "Risk Appetite"]})
-confirmation = market_confirmation(scores["Composite"], scores["Risk Appetite"])
-readthrough = asset_readthrough(scores["Growth"], scores["Inflation"], scores["Policy / Liquidity"], scores["Risk Appetite"], scores["Composite"])
+history_monthly = fred.resample("ME").last().ffill() if not fred.empty else pd.DataFrame()
+monthly = history_monthly.copy()
+if smooth > 1 and not monthly.empty:
+    monthly = monthly.rolling(smooth, min_periods=1).mean()
+    if "USREC" in history_monthly:
+        monthly["USREC"] = history_monthly["USREC"]
 
-fred_loaded = len([c for c in FRED_SERIES if c in fred.columns]) if not fred.empty else 0
-market_loaded = len([c for c in MARKET_TICKERS if c in market.columns]) if not market.empty else 0
+metric_rows = []
 
-st.markdown(
-    f"<span class='pill'>FRED: {fred_loaded}/{len(FRED_SERIES)} loaded, latest {latest_date(fred)}</span>"
-    f"<span class='pill'>Market: {market_loaded}/{len(MARKET_TICKERS)} loaded, latest {latest_date(market)}</span>",
-    unsafe_allow_html=True,
+growth_parts = []
+if "NAPM" in monthly:
+    growth_parts.append(percentile_score(monthly["NAPM"]))
+    metric_rows.append(("ISM PMI", f"{latest_valid(monthly['NAPM']):.1f}", f"3M change {safe_change(monthly['NAPM'], 3):+.1f}"))
+if "UNRATE" in monthly:
+    growth_parts.append(np.clip(-safe_change(monthly["UNRATE"], 6), -1, 1))
+    metric_rows.append(("Unemployment", pct_fmt(latest_valid(monthly["UNRATE"])), f"6M change {safe_change(monthly['UNRATE'], 6):+.1f} pts"))
+if "ICSA" in monthly:
+    claims_13w = monthly["ICSA"].rolling(3, min_periods=1).mean()
+    growth_parts.append(np.clip(-safe_pct_change(claims_13w, 6) * 4, -1, 1))
+    metric_rows.append(("Initial Claims", f"{latest_valid(claims_13w) / 1000:.0f}k", f"6M change {safe_pct_change(claims_13w, 6):+.1%}"))
+
+inflation_parts = []
+if "CPIAUCSL" in monthly:
+    cpi_yoy = monthly["CPIAUCSL"].pct_change(12) * 100
+    inflation_parts.append(percentile_score(cpi_yoy))
+    metric_rows.append(("Headline CPI YoY", pct_fmt(latest_valid(cpi_yoy)), f"3M change {safe_change(cpi_yoy, 3):+.1f} pts"))
+if "CPILFESL" in monthly:
+    core_yoy = monthly["CPILFESL"].pct_change(12) * 100
+    inflation_parts.append(percentile_score(core_yoy))
+    metric_rows.append(("Core CPI YoY", pct_fmt(latest_valid(core_yoy)), f"3M change {safe_change(core_yoy, 3):+.1f} pts"))
+if "T10YIE" in monthly:
+    inflation_parts.append(percentile_score(monthly["T10YIE"]))
+    metric_rows.append(("10Y Breakeven", pct_fmt(latest_valid(monthly["T10YIE"])), f"6M change {safe_change(monthly['T10YIE'], 6) * 100:+.0f} bps"))
+
+policy_parts = []
+if "FEDFUNDS" in monthly and "DGS10" in monthly and "CPIAUCSL" in monthly:
+    real_rate = monthly["DGS10"] - monthly["CPIAUCSL"].pct_change(12) * 100
+    policy_parts.append(percentile_score(real_rate, invert=True))
+    metric_rows.append(("Ex-post Real 10Y", pct_fmt(latest_valid(real_rate)), f"6M change {safe_change(real_rate, 6):+.1f} pts"))
+if "NFCI" in monthly:
+    policy_parts.append(percentile_score(monthly["NFCI"], invert=True))
+    metric_rows.append(("NFCI", f"{latest_valid(monthly['NFCI']):.2f}", f"6M change {safe_change(monthly['NFCI'], 6):+.2f}"))
+
+risk_parts = []
+if not market.empty:
+    returns = market.pct_change()
+    if "SPY" in market:
+        risk_parts.append(np.clip(safe_pct_change(market["SPY"], 63) * 5, -1, 1))
+        metric_rows.append(("SPY 3M", pct_fmt(safe_pct_change(market["SPY"], 63) * 100), "Risk appetite"))
+    if "HYG" in market and "LQD" in market:
+        ratio = market["HYG"] / market["LQD"]
+        risk_parts.append(np.clip(safe_pct_change(ratio, 63) * 8, -1, 1))
+        metric_rows.append(("HYG/LQD 3M", pct_fmt(safe_pct_change(ratio, 63) * 100), "Credit risk appetite"))
+    if "^VIX" in market:
+        risk_parts.append(percentile_score(market["^VIX"], invert=True))
+        metric_rows.append(("VIX", f"{latest_valid(market['^VIX']):.1f}", "Lower is easier"))
+    if "UUP" in market:
+        risk_parts.append(np.clip(-safe_pct_change(market["UUP"], 63) * 8, -1, 1))
+        metric_rows.append(("Dollar 3M", pct_fmt(safe_pct_change(market["UUP"], 63) * 100), "Higher can tighten global liquidity"))
+
+growth_score = float(np.nanmean(growth_parts)) if growth_parts else 0.0
+inflation_score = float(np.nanmean(inflation_parts)) if inflation_parts else 0.0
+policy_score = float(np.nanmean(policy_parts)) if policy_parts else 0.0
+risk_score = float(np.nanmean(risk_parts)) if risk_parts else 0.0
+composite = float(np.nanmean([growth_score, -inflation_score, policy_score, risk_score]))
+regime, regime_note = classify_regime(growth_score, inflation_score, policy_score, risk_score)
+confirmations = market_confirmation_frame(market)
+decision_notes = build_decision_notes(
+    regime,
+    growth_score,
+    inflation_score,
+    policy_score,
+    risk_score,
+    composite,
+    confirmations,
+    len(growth_parts) + len(inflation_parts) + len(policy_parts) + len(risk_parts),
 )
 
+cols = st.columns(5)
 cards = [
-    ("Regime", regime, regime_note, score_color(scores["Composite"])),
-    ("Pressure Point", f"{pressure_label} {pressure_value:+.2f}", pressure_text, score_color(-pressure_value if pressure_label == "Inflation" else pressure_value)),
-    ("Market Confirmation", confirmation, f"Risk score {scores['Risk Appetite']:+.2f}; composite {scores['Composite']:+.2f}.", score_color(scores["Risk Appetite"])),
-    ("Asset Read-Through", score_label(scores["Composite"]), readthrough, score_color(scores["Composite"])),
+    ("Regime", regime, regime_note, score_color(composite)),
+    ("Growth", f"{growth_score:+.2f}", "Positive means improving/firm", score_color(growth_score)),
+    ("Inflation", f"{inflation_score:+.2f}", "Positive means more pressure", score_color(-inflation_score)),
+    ("Policy / Conditions", f"{policy_score:+.2f}", "Positive means easier", score_color(policy_score)),
+    ("Risk Appetite", f"{risk_score:+.2f}", "Positive means constructive tape", score_color(risk_score)),
 ]
 
-for col, (label, value, footnote, color) in zip(st.columns(4), cards):
+for col, (label, value, footnote, color) in zip(cols, cards):
     with col:
         st.markdown(
             f"""
@@ -584,59 +555,244 @@ for col, (label, value, footnote, color) in zip(st.columns(4), cards):
             unsafe_allow_html=True,
         )
 
-left, right = st.columns([1.0, 1.0])
-with left:
-    st.markdown("<div class='section-title'>Regime Map</div>", unsafe_allow_html=True)
-    st.plotly_chart(create_regime_map(scores["Growth"], scores["Inflation"]), use_container_width=True)
-with right:
-    st.markdown("<div class='section-title'>Macro Scoreboard</div>", unsafe_allow_html=True)
-    st.plotly_chart(create_score_bar(scores), use_container_width=True)
+st.markdown("<div class='section-title'>Macro Scoreboard</div>", unsafe_allow_html=True)
+score_fig = go.Figure(
+    go.Bar(
+        x=["Growth", "Inflation Pressure", "Policy / Conditions", "Risk Appetite", "Composite"],
+        y=[growth_score, inflation_score, policy_score, risk_score, composite],
+        marker_color=[
+            score_color(growth_score),
+            score_color(-inflation_score),
+            score_color(policy_score),
+            score_color(risk_score),
+            score_color(composite),
+        ],
+    )
+)
+score_fig.add_hline(y=0, line_color="#9ca3af", line_width=1)
+score_fig.update_layout(
+    height=330,
+    margin=dict(l=20, r=20, t=20, b=20),
+    yaxis=dict(range=[-1, 1], title="Score"),
+    xaxis=dict(title=""),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+)
+st.plotly_chart(score_fig, use_container_width=True)
 
-if not market.empty:
-    st.markdown("<div class='section-title'>Market Confirmation Heatmap</div>", unsafe_allow_html=True)
-    st.plotly_chart(create_market_heatmap(market, DISPLAY_TICKERS), use_container_width=True)
+st.markdown("<div class='section-title'>Market Confirmation Heatmap</div>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div class='section-subtitle'>
+        A fixed cross-asset confirmation set, chosen for economic meaning rather than recent performance.
+        Each cell ranks the latest move against that signal's own history; positive values confirm easier,
+        broader risk-taking conditions and negative values flag defensive pressure.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+if confirmations.empty:
+    st.info("Not enough market history is available to calculate confirmation percentiles.")
+else:
+    heatmap_columns = ["1M", "3M", "6M", "Trend", "Composite"]
+    heatmap_values = confirmations[heatmap_columns].to_numpy(dtype=float)
+    heatmap_text = np.where(np.isfinite(heatmap_values), np.vectorize(lambda value: f"{value:+.2f}")(heatmap_values), "N/A")
+    rationale = np.repeat(confirmations["Why it matters"].to_numpy()[:, None], len(heatmap_columns), axis=1)
+    heatmap_fig = go.Figure(
+        go.Heatmap(
+            z=heatmap_values,
+            x=heatmap_columns,
+            y=confirmations["Signal"],
+            zmin=-1,
+            zmax=1,
+            zmid=0,
+            colorscale=[
+                [0.0, "#9f3d3d"],
+                [0.35, "#e8b4a2"],
+                [0.5, "#f3efe7"],
+                [0.65, "#a8d5c8"],
+                [1.0, "#1f6f5f"],
+            ],
+            text=heatmap_text,
+            texttemplate="%{text}",
+            customdata=rationale,
+            hovertemplate="<b>%{y}</b><br>%{x}: %{z:+.2f}<br>%{customdata}<extra></extra>",
+            colorbar=dict(title="Confirmation", tickvals=[-1, -0.5, 0, 0.5, 1]),
+        )
+    )
+    heatmap_fig.update_layout(
+        height=390,
+        margin=dict(l=20, r=20, t=10, b=20),
+        xaxis=dict(side="top", title=""),
+        yaxis=dict(title="", autorange="reversed"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    st.plotly_chart(heatmap_fig, use_container_width=True)
+    with st.expander("Why these signals?"):
+        st.dataframe(
+            confirmations[["Signal", "Why it matters", "Composite"]].style.format({"Composite": "{:+.2f}"}),
+            use_container_width=True,
+            hide_index=True,
+        )
 
-left, right = st.columns([1.0, 1.0])
-with left:
+st.markdown("<div class='section-title'>Decision Notes</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-subtitle'>A decision framework that separates the base case, confirmation, contradictions, sizing, and invalidation.</div>",
+    unsafe_allow_html=True,
+)
+notes_html = "".join(
+    f'<div class="decision-note"><div class="decision-label">{label}</div>'
+    f'<div class="decision-copy">{copy}</div></div>'
+    for label, copy in decision_notes
+)
+st.markdown(f"<div class='note-grid'>{notes_html}</div>", unsafe_allow_html=True)
+
+chart_cols = st.columns([1.05, 0.95])
+
+with chart_cols[0]:
+    st.markdown("<div class='section-title'>Key Macro Inputs</div>", unsafe_allow_html=True)
+    table = pd.DataFrame(metric_rows, columns=["Input", "Latest", "Read-through"])
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+with chart_cols[1]:
     st.markdown("<div class='section-title'>Market Context</div>", unsafe_allow_html=True)
     if market.empty:
         st.info("Market data unavailable.")
     else:
-        st.plotly_chart(create_rebased_chart(market, ["SPY", "HYG/LQD", "TLT", "UUP", "GLD", "CPER"]), use_container_width=True)
+        rebased = market.dropna(how="all").copy()
+        rebased = rebased / rebased.ffill().bfill().iloc[0] * 100
+        fig = go.Figure()
+        for ticker in ["SPY", "HYG", "LQD", "UUP", "GLD", "TLT"]:
+            if ticker in rebased:
+                fig.add_trace(go.Scatter(x=rebased.index, y=rebased[ticker], mode="lines", name=ticker))
+        fig.update_layout(
+            height=360,
+            margin=dict(l=20, r=20, t=20, b=20),
+            yaxis_title="Rebased to 100",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-with right:
-    st.markdown("<div class='section-title'>Decision Notes</div>", unsafe_allow_html=True)
+if not monthly.empty:
+    st.markdown("<div class='section-title'>Macro History</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
-        <div class='note-box'>
-            <b>Regime:</b> {regime}. {regime_note}<br><br>
-            <b>Pressure:</b> {pressure_text}.<br><br>
-            <b>Read-through:</b> {readthrough}<br><br>
-            <b>Invalidation:</b> watch the HYG/LQD ratio, VIX, UUP, and 10Y real-rate signal. A regime call without credit or dollar confirmation should be sized smaller.
+        <div class='section-subtitle'>
+            {lookback_years} years of macro context with {smooth}-month smoothing. Dashed lines mark economic
+            thresholds; shaded bands mark NBER recessions. Percentiles below are calculated within the selected view,
+            so today's level is compared with a relevant cycle rather than shown in isolation.
         </div>
         """,
         unsafe_allow_html=True,
     )
+    context_html = "".join(
+        f'<div class="context-card"><div class="context-label">{label}</div>'
+        f'<div class="context-value">{value}</div><div class="context-copy">{copy}</div></div>'
+        for label, value, copy in history_context_items(monthly)
+    )
+    st.markdown(f"<div class='context-grid'>{context_html}</div>", unsafe_allow_html=True)
 
-if show_inputs:
-    st.markdown("<div class='section-title'>Key Inputs</div>", unsafe_allow_html=True)
-    if signal_table.empty:
-        st.info("Input table unavailable. The page is running from partial market or macro data.")
-    else:
-        view = signal_table.copy()
-        view["Score"] = view["Score"].map(lambda x: f"{x:+.2f}" if np.isfinite(x) else "N/A")
-        st.dataframe(view, use_container_width=True, hide_index=True, height=360)
-
-if show_history:
-    if not monthly.empty:
-        st.markdown("<div class='section-title'>Macro History</div>", unsafe_allow_html=True)
-        st.plotly_chart(create_history_chart(monthly), use_container_width=True)
-    else:
-        st.markdown(
-            "<div class='note-box'>FRED macro series did not load, so the regime is based on market proxies only.</div>",
-            unsafe_allow_html=True,
+    history_fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        specs=[[{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]],
+        subplot_titles=("Growth and labor", "Inflation", "Rates and financial conditions"),
+    )
+    if "NAPM" in monthly:
+        history_fig.add_trace(
+            go.Scatter(x=monthly.index, y=monthly["NAPM"], name="ISM PMI", line=dict(color=PALETTE["blue"])),
+            row=1,
+            col=1,
+            secondary_y=False,
         )
+        history_fig.add_hline(y=50, line_dash="dash", line_color="#94a3b8", row=1, col=1)
+    if "UNRATE" in monthly:
+        history_fig.add_trace(
+            go.Scatter(x=monthly.index, y=monthly["UNRATE"], name="Unemployment", line=dict(color=PALETTE["grey"])),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
+    if "CPIAUCSL" in monthly:
+        cpi_yoy = monthly["CPIAUCSL"].pct_change(12) * 100
+        history_fig.add_trace(
+            go.Scatter(x=cpi_yoy.index, y=cpi_yoy, name="Headline CPI YoY", line=dict(color=PALETTE["red"])),
+            row=2,
+            col=1,
+            secondary_y=False,
+        )
+    if "CPILFESL" in monthly:
+        core_yoy = monthly["CPILFESL"].pct_change(12) * 100
+        history_fig.add_trace(
+            go.Scatter(x=core_yoy.index, y=core_yoy, name="Core CPI YoY", line=dict(color="#b45309")),
+            row=2,
+            col=1,
+            secondary_y=False,
+        )
+    if "T10YIE" in monthly:
+        history_fig.add_trace(
+            go.Scatter(x=monthly.index, y=monthly["T10YIE"], name="10Y Breakeven", line=dict(color="#d97706", dash="dot")),
+            row=2,
+            col=1,
+            secondary_y=True,
+        )
+    history_fig.add_hline(y=2, line_dash="dash", line_color="#94a3b8", row=2, col=1)
+    if "DGS10" in monthly:
+        history_fig.add_trace(
+            go.Scatter(x=monthly.index, y=monthly["DGS10"], name="10Y Yield", line=dict(color=PALETTE["purple"])),
+            row=3,
+            col=1,
+            secondary_y=False,
+        )
+    if "FEDFUNDS" in monthly:
+        history_fig.add_trace(
+            go.Scatter(x=monthly.index, y=monthly["FEDFUNDS"], name="Fed Funds", line=dict(color="#475569", dash="dot")),
+            row=3,
+            col=1,
+            secondary_y=False,
+        )
+    if "NFCI" in monthly:
+        history_fig.add_trace(
+            go.Scatter(x=monthly.index, y=monthly["NFCI"], name="NFCI", line=dict(color="#9f3d3d")),
+            row=3,
+            col=1,
+            secondary_y=True,
+        )
+        history_fig.add_hline(y=0, line_dash="dash", line_color="#94a3b8", row=3, col=1, secondary_y=True)
 
-if show_raw and not fred.empty:
+    for recession_start, recession_end in recession_windows(history_monthly):
+        for row in [1, 2, 3]:
+            history_fig.add_vrect(
+                x0=recession_start,
+                x1=recession_end,
+                fillcolor="#94a3b8",
+                opacity=0.13,
+                line_width=0,
+                row=row,
+                col=1,
+            )
+
+    history_fig.update_layout(
+        height=760,
+        margin=dict(l=20, r=20, t=55, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        hovermode="x unified",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    history_fig.update_yaxes(title_text="ISM", row=1, col=1, secondary_y=False)
+    history_fig.update_yaxes(title_text="Unemployment %", row=1, col=1, secondary_y=True)
+    history_fig.update_yaxes(title_text="CPI %", row=2, col=1, secondary_y=False)
+    history_fig.update_yaxes(title_text="Breakeven %", row=2, col=1, secondary_y=True)
+    history_fig.update_yaxes(title_text="Policy / yield %", row=3, col=1, secondary_y=False)
+    history_fig.update_yaxes(title_text="NFCI", row=3, col=1, secondary_y=True)
+    st.plotly_chart(history_fig, use_container_width=True)
+
+if show_raw:
     st.markdown("<div class='section-title'>Raw FRED Data</div>", unsafe_allow_html=True)
-    st.dataframe(fred.tail(180), use_container_width=True)
+    st.dataframe(fred.tail(120), use_container_width=True)
