@@ -1,9 +1,12 @@
+import time
+from io import StringIO
+from typing import Dict, Optional, Tuple
+
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
-import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from io import StringIO
 
 # ---------------- Config ----------------
 TITLE = "Liquidity & Fed Policy Tracker"
@@ -16,79 +19,81 @@ SERIES = {
     "NFCI": "Chicago Fed NFCI",
 }
 
-DEFAULT_LOOKBACK_YEARS = 3
+REQUIRED_SERIES = ["WALCL", "RRPONTSYD", "WDTGAL"]
 DEFAULT_SMOOTH = 5
+FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+
+# Fail fast. The old version could sit inside one Streamlit spinner for too long.
+REQUEST_TIMEOUT = (4, 10)  # connect timeout, read timeout
+MAX_RETRIES = 2
+BACKOFF_SECONDS = 0.75
 
 st.set_page_config(page_title=TITLE, layout="wide")
 
-# ---------------- Professional UI ----------------
+# ---------------- UI ----------------
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 2.1rem;
+        padding-top: 1.4rem;
         padding-bottom: 2rem;
-        max-width: 1500px;
-    }
-
-    h1, h2, h3 {
-        letter-spacing: 0.1px;
+        max-width: 1550px;
     }
 
     .adfm-title {
-        font-size: 2.0rem;
-        font-weight: 700;
-        margin-bottom: -0.15rem;
+        font-size: 1.85rem;
+        font-weight: 750;
+        margin-bottom: 0.1rem;
         color: #111827;
     }
 
     .adfm-subtitle {
-        font-size: 0.98rem;
+        font-size: 0.96rem;
         color: #6b7280;
-        margin-bottom: 1.2rem;
+        margin-bottom: 1.1rem;
     }
 
     .section-title {
         font-size: 1.02rem;
-        font-weight: 700;
+        font-weight: 750;
         color: #111827;
-        margin-top: 0.4rem;
-        margin-bottom: 0.5rem;
+        margin-top: 0.35rem;
+        margin-bottom: 0.45rem;
     }
 
     .section-subtitle {
-        font-size: 0.9rem;
+        font-size: 0.88rem;
         color: #6b7280;
-        margin-bottom: 1rem;
+        margin-bottom: 0.85rem;
     }
 
     .metric-card {
         background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
         border: 1px solid #e5e7eb;
         border-radius: 14px;
-        padding: 14px 16px 10px 16px;
+        padding: 13px 15px 10px 15px;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-        min-height: 92px;
+        min-height: 91px;
     }
 
     .metric-label {
-        font-size: 0.78rem;
+        font-size: 0.75rem;
         color: #6b7280;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.045em;
         margin-bottom: 0.45rem;
     }
 
     .metric-value {
-        font-size: 1.5rem;
-        font-weight: 700;
+        font-size: 1.42rem;
+        font-weight: 750;
         color: #111827;
-        line-height: 1.1;
+        line-height: 1.08;
     }
 
     .metric-footnote {
-        font-size: 0.78rem;
+        font-size: 0.76rem;
         color: #9ca3af;
-        margin-top: 0.4rem;
+        margin-top: 0.42rem;
     }
 
     .info-box {
@@ -99,23 +104,25 @@ CUSTOM_CSS = """
         margin-bottom: 0.8rem;
     }
 
+    .warning-box {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        border-radius: 14px;
+        padding: 13px 15px;
+        margin-bottom: 0.9rem;
+        color: #7c2d12;
+        font-size: 0.9rem;
+    }
+
     .stDownloadButton button {
         border-radius: 10px;
-        font-weight: 600;
+        font-weight: 650;
     }
 
     .stDataFrame {
         border: 1px solid #e5e7eb;
         border-radius: 12px;
         overflow: hidden;
-    }
-
-    .sidebar-box {
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 14px 14px 10px 14px;
-        margin-bottom: 1rem;
     }
 </style>
 """
@@ -124,33 +131,34 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # ---------------- Header ----------------
 st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='adfm-subtitle'>Public macro dashboard tracking balance sheet liquidity, funding drains, policy rate, and financial conditions.</div>",
+    "<div class='adfm-subtitle'>Balance-sheet liquidity, funding drains, policy rate, and financial conditions.</div>",
     unsafe_allow_html=True,
 )
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
-    st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
     st.markdown("### About This Tool")
     st.markdown(
         """
-**Purpose:** Liquidity framework centered on Fed balance-sheet expansion versus reserve drains.
+Tracks the Fed balance sheet, ON RRP, Treasury cash balance, EFFR, and NFCI.
 
-**What this tab shows**
-- Net liquidity using WALCL minus ON RRP minus TGA.
-- A rebased view of the three core balance-sheet components.
-- EFFR and NFCI context for policy stance and broader conditions.
+The core liquidity proxy is:
 
-**Data source**
-- Federal Reserve (FRED) liquidity and rates series.
+**Net Liquidity = WALCL - ON RRP - TGA**
+
+WALCL and TGA are converted from millions to billions. ON RRP is already in billions.
         """
     )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
-    st.markdown("### Settings")
-    lookback = st.selectbox("Lookback", ["1y", "2y", "3y", "5y", "10y"], index=2)
-    years = int(lookback[:-1])
+    st.divider()
+    st.markdown("### Controls")
+
+    lookback = st.selectbox(
+        "Lookback",
+        ["1y", "2y", "3y", "5y", "10y"],
+        index=2,
+    )
+    years = int(lookback.replace("y", ""))
 
     smooth_days = st.number_input(
         "Smoothing window",
@@ -161,57 +169,112 @@ with st.sidebar:
     )
 
     smooth_policy = st.checkbox("Smooth EFFR and NFCI", value=False)
-    st.caption("Source: Public FRED CSV endpoints")
-    st.caption("No API key required")
-    st.markdown("</div>", unsafe_allow_html=True)
+    show_raw_table = st.checkbox("Show raw data table", value=True)
 
-# ---------------- Loaders ----------------
-def fetch_fred_csv(series_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    url = (
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv"
-        f"?id={series_id}"
-        f"&cosd={start.strftime('%Y-%m-%d')}"
-        f"&coed={end.strftime('%Y-%m-%d')}"
-    )
+    st.caption("Source: public FRED CSV endpoints. No API key required.")
 
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+# ---------------- Helpers ----------------
+def _clean_fred_csv(text: str, series_id: str) -> pd.Series:
+    df = pd.read_csv(StringIO(text))
 
-    df = pd.read_csv(StringIO(r.text))
     if df.empty or len(df.columns) < 2:
-        raise ValueError(f"No usable data returned for {series_id}")
+        raise ValueError(f"No usable CSV returned for {series_id}")
 
     date_col = df.columns[0]
     value_col = df.columns[1]
 
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
+    df[value_col] = pd.to_numeric(df[value_col].replace(".", pd.NA), errors="coerce")
     df = df.dropna(subset=[date_col]).sort_values(date_col)
 
-    return pd.Series(df[value_col].values, index=df[date_col], name=series_id)
+    if df.empty:
+        raise ValueError(f"No valid dates returned for {series_id}")
+
+    s = pd.Series(df[value_col].values, index=df[date_col], name=series_id)
+    s = s[~s.index.duplicated(keep="last")]
+    s = s.dropna()
+
+    if s.empty:
+        raise ValueError(f"No numeric observations returned for {series_id}")
+
+    return s
+
 
 @st.cache_data(ttl=60 * 60, show_spinner=False)
-def load_all_series(start: pd.Timestamp, end: pd.Timestamp):
-    out = {}
-    errors = {}
+def fetch_fred_series(series_id: str, start_iso: str, end_iso: str) -> pd.Series:
+    """Fetch one FRED series with short timeouts and explicit retries."""
+    params = {
+        "id": series_id,
+        "cosd": start_iso,
+        "coed": end_iso,
+    }
+    headers = {
+        "User-Agent": "ADFM-Liquidity-Tracker/1.0",
+        "Accept": "text/csv,*/*;q=0.8",
+    }
 
-    for series_id in SERIES:
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-            out[series_id] = fetch_fred_csv(series_id, start, end)
-        except Exception as e:
-            errors[series_id] = str(e)
-            out[series_id] = pd.Series(dtype="float64", name=series_id)
+            r = requests.get(
+                FRED_URL,
+                params=params,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+            r.raise_for_status()
 
-    return out, errors
+            if "observation_date" not in r.text[:250] and series_id not in r.text[:250]:
+                raise ValueError(f"Unexpected FRED response for {series_id}")
+
+            return _clean_fred_csv(r.text, series_id)
+
+        except Exception as exc:
+            last_error = exc
+            if attempt < MAX_RETRIES:
+                time.sleep(BACKOFF_SECONDS * attempt)
+
+    raise RuntimeError(f"{series_id} failed after {MAX_RETRIES} attempts: {last_error}")
+
+
+def load_all_series(start: pd.Timestamp, end: pd.Timestamp) -> Tuple[Dict[str, pd.Series], Dict[str, str]]:
+    raw: Dict[str, pd.Series] = {}
+    errors: Dict[str, str] = {}
+
+    start_iso = start.strftime("%Y-%m-%d")
+    end_iso = end.strftime("%Y-%m-%d")
+
+    progress = st.progress(0)
+    status_line = st.empty()
+
+    items = list(SERIES.items())
+    for i, (series_id, label) in enumerate(items, start=1):
+        status_line.caption(f"Loading {label} ({series_id})")
+        try:
+            raw[series_id] = fetch_fred_series(series_id, start_iso, end_iso)
+        except Exception as exc:
+            errors[series_id] = str(exc)
+            raw[series_id] = pd.Series(dtype="float64", name=series_id)
+        progress.progress(i / len(items))
+
+    progress.empty()
+    status_line.empty()
+
+    return raw, errors
+
 
 def smooth(s: pd.Series, window: int) -> pd.Series:
+    s = pd.to_numeric(s, errors="coerce")
     if window <= 1:
         return s
     return s.rolling(window, min_periods=1).mean()
 
-def rebase(s: pd.Series, floor: float | None = None) -> pd.Series:
+
+def rebase(s: pd.Series, floor: Optional[float] = None) -> pd.Series:
     s = pd.to_numeric(s, errors="coerce")
     valid = s.dropna()
+
     if valid.empty:
         return pd.Series(index=s.index, dtype="float64", name=s.name)
 
@@ -224,16 +287,34 @@ def rebase(s: pd.Series, floor: float | None = None) -> pd.Series:
 
     return (s / base) * 100.0
 
-def fmt_b(x):
-    return "N/A" if pd.isna(x) else f"{x:,.0f} B"
 
-def fmt_pct(x):
+def chg(series: pd.Series, periods: int) -> float:
+    valid = pd.to_numeric(series, errors="coerce").dropna()
+    if len(valid) <= periods:
+        return float("nan")
+    return valid.iloc[-1] - valid.iloc[-1 - periods]
+
+
+def fmt_b(x: float) -> str:
+    return "N/A" if pd.isna(x) else f"{x:,.0f}B"
+
+
+def fmt_delta_b(x: float) -> str:
+    if pd.isna(x):
+        return "N/A"
+    sign = "+" if x > 0 else ""
+    return f"{sign}{x:,.0f}B"
+
+
+def fmt_pct(x: float) -> str:
     return "N/A" if pd.isna(x) else f"{x:.2f}%"
 
-def fmt_num(x):
+
+def fmt_num(x: float) -> str:
     return "N/A" if pd.isna(x) else f"{x:.3f}"
 
-def metric_card(label: str, value: str, footnote: str = ""):
+
+def metric_card(label: str, value: str, footnote: str = "") -> None:
     st.markdown(
         f"""
         <div class="metric-card">
@@ -249,40 +330,60 @@ def metric_card(label: str, value: str, footnote: str = ""):
 today = pd.Timestamp.today().normalize()
 start = today - pd.DateOffset(years=years)
 
-with st.spinner("Loading macro series..."):
-    raw, errors = load_all_series(start, today)
+raw, errors = load_all_series(start, today)
 
-required = ["WALCL", "RRPONTSYD", "WDTGAL"]
-missing = [x for x in required if raw[x].empty]
+missing_required = [series_id for series_id in REQUIRED_SERIES if raw.get(series_id, pd.Series(dtype="float64")).empty]
 
-if missing:
-    st.error(f"Required series failed to load: {', '.join(missing)}")
-    if errors:
-        with st.expander("Error details"):
-            for k, v in errors.items():
-                st.write(f"{k}: {v}")
+if missing_required:
+    st.error(f"Required FRED series failed to load: {', '.join(missing_required)}")
+    st.markdown(
+        """
+        <div class="warning-box">
+        The app is no longer stuck. FRED did not return the required liquidity series before the timeout.
+        This usually means the runtime cannot reach fred.stlouisfed.org, the network is blocking outbound requests,
+        or FRED is temporarily slow. The failed series and exact errors are below.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander("Error details", expanded=True):
+        for series_id, message in errors.items():
+            st.write(f"**{series_id}:** {message}")
     st.stop()
 
-df = pd.concat(
-    [
-        raw["WALCL"].rename("WALCL"),
-        raw["RRPONTSYD"].rename("RRP"),
-        raw["WDTGAL"].rename("TGA"),
-        raw["EFFR"].rename("EFFR"),
-        raw["NFCI"].rename("NFCI"),
-    ],
-    axis=1,
-).sort_index().ffill()
+# Keep optional series optional. If EFFR or NFCI fails, the dashboard still loads.
+def optional_series(series_id: str) -> pd.Series:
+    s = raw.get(series_id, pd.Series(dtype="float64", name=series_id))
+    if s.empty:
+        return pd.Series(dtype="float64", name=series_id)
+    return s
 
+frames = [
+    raw["WALCL"].rename("WALCL"),
+    raw["RRPONTSYD"].rename("RRP"),
+    raw["WDTGAL"].rename("TGA"),
+    optional_series("EFFR").rename("EFFR"),
+    optional_series("NFCI").rename("NFCI"),
+]
+
+df = pd.concat(frames, axis=1).sort_index()
+
+# Convert the irregular FRED calendar into a clean daily calendar.
+# Weekly balance-sheet/TGA/NFCI observations carry forward until the next release.
+daily_index = pd.date_range(df.index.min(), df.index.max(), freq="D")
+df = df.reindex(daily_index).ffill()
 df = df[df.index >= start].copy()
 df = df.dropna(subset=["WALCL", "RRP", "TGA"])
 
 if df.empty:
-    st.error("Dataframe is empty after cleaning.")
+    st.error("The working dataframe is empty after cleaning and alignment.")
+    with st.expander("Error details"):
+        st.write(errors)
     st.stop()
 
 # ---------------- Units ----------------
-# WALCL and WDTGAL are in millions. RRPONTSYD is already billions.
+# FRED units:
+# WALCL: millions of dollars. WDTGAL: millions of dollars. RRPONTSYD: billions of dollars.
 df["WALCL_b"] = pd.to_numeric(df["WALCL"], errors="coerce") / 1000.0
 df["RRP_b"] = pd.to_numeric(df["RRP"], errors="coerce")
 df["TGA_b"] = pd.to_numeric(df["TGA"], errors="coerce") / 1000.0
@@ -297,12 +398,8 @@ df["WALCL_s"] = smooth(df["WALCL_b"], smooth_days)
 df["RRP_s"] = smooth(df["RRP_b"], smooth_days)
 df["TGA_s"] = smooth(df["TGA_b"], smooth_days)
 
-if smooth_policy:
-    df["EFFR_s"] = smooth(df["EFFR"], smooth_days)
-    df["NFCI_s"] = smooth(df["NFCI"], smooth_days)
-else:
-    df["EFFR_s"] = df["EFFR"]
-    df["NFCI_s"] = df["NFCI"]
+df["EFFR_s"] = smooth(df["EFFR"], smooth_days) if smooth_policy else df["EFFR"]
+df["NFCI_s"] = smooth(df["NFCI"], smooth_days) if smooth_policy else df["NFCI"]
 
 reb = pd.DataFrame(index=df.index)
 reb["WALCL_idx"] = rebase(df["WALCL_b"])
@@ -310,11 +407,12 @@ reb["RRP_idx"] = rebase(df["RRP_b"], floor=5.0)
 reb["TGA_idx"] = rebase(df["TGA_b"])
 
 latest = df.iloc[-1]
+latest_date = df.index[-1].strftime("%b %d, %Y")
 
-# ---------------- Top Summary ----------------
+# ---------------- Snapshot ----------------
 st.markdown("<div class='section-title'>Snapshot</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-subtitle'>Latest available readings across liquidity, policy, and financial conditions.</div>",
+    f"<div class='section-subtitle'>Latest available reading: {latest_date}. Values are shown in billions unless noted.</div>",
     unsafe_allow_html=True,
 )
 
@@ -322,60 +420,71 @@ c1, c2, c3, c4, c5, c6 = st.columns(6)
 with c1:
     metric_card("Net Liquidity", fmt_b(latest["NetLiq"]), "WALCL - RRP - TGA")
 with c2:
-    metric_card("WALCL", fmt_b(latest["WALCL_b"]), "Fed total assets")
+    metric_card("1W Change", fmt_delta_b(chg(df["NetLiq"], 7)), "Net liquidity")
 with c3:
-    metric_card("RRP", fmt_b(latest["RRP_b"]), "ON reverse repo")
+    metric_card("1M Change", fmt_delta_b(chg(df["NetLiq"], 30)), "Net liquidity")
 with c4:
-    metric_card("TGA", fmt_b(latest["TGA_b"]), "Treasury cash balance")
+    metric_card("WALCL", fmt_b(latest["WALCL_b"]), "Fed assets")
 with c5:
-    metric_card("EFFR", fmt_pct(latest["EFFR"]), "Policy rate")
+    metric_card("TGA", fmt_b(latest["TGA_b"]), "Treasury cash")
 with c6:
+    metric_card("RRP", fmt_b(latest["RRP_b"]), "ON reverse repo")
+
+c7, c8, c9, c10 = st.columns(4)
+with c7:
+    metric_card("EFFR", fmt_pct(latest["EFFR"]), "Policy rate")
+with c8:
     metric_card("NFCI", fmt_num(latest["NFCI"]), "Above 0 = tighter")
+with c9:
+    metric_card("TGA 1W", fmt_delta_b(chg(df["TGA_b"], 7)), "Cash drain/source")
+with c10:
+    metric_card("RRP 1W", fmt_delta_b(chg(df["RRP_b"], 7)), "Funding drain/source")
 
 # ---------------- Quick Read ----------------
 st.markdown("<div class='section-title'>Quick Read</div>", unsafe_allow_html=True)
 
-quick_left, quick_right = st.columns([1.35, 1])
+net_1w = chg(df["NetLiq"], 7)
+net_1m = chg(df["NetLiq"], 30)
+policy_state = "tighter than average" if pd.notna(latest["NFCI"]) and latest["NFCI"] > 0 else "easier than average"
 
+quick_left, quick_right = st.columns([1.25, 1])
 with quick_left:
     st.markdown(
         f"""
         <div class="info-box">
-        <b>Net liquidity framework</b><br><br>
-        The dashboard computes net liquidity as <b>Fed balance sheet minus ON RRP minus TGA</b>. A higher reading generally points to easier reserve conditions in the system, while a lower reading usually reflects a tighter liquidity backdrop.
-        <br><br>
-        Over the selected <b>{lookback}</b> window, the chart lets you separate three different forces: balance sheet expansion or contraction, reserve absorption through reverse repo, and Treasury cash accumulation.
+        <b>Liquidity impulse</b><br><br>
+        Net liquidity is <b>{fmt_b(latest["NetLiq"])}</b>, with a <b>{fmt_delta_b(net_1w)}</b> one-week move and a <b>{fmt_delta_b(net_1m)}</b> one-month move.
+        The relevant pressure point is whether Treasury cash rebuilding and residual RRP usage are absorbing reserves faster than the Fed balance sheet path offsets them.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 with quick_right:
-    policy_state = "tighter-than-average" if pd.notna(latest["NFCI"]) and latest["NFCI"] > 0 else "easier-than-average"
     st.markdown(
         f"""
         <div class="info-box">
-        <b>Current read</b><br><br>
-        EFFR is currently at <b>{fmt_pct(latest["EFFR"])}</b> and NFCI is <b>{fmt_num(latest["NFCI"])}</b>, which implies financial conditions are running <b>{policy_state}</b> on the Chicago Fed measure.
+        <b>Policy and conditions</b><br><br>
+        EFFR is <b>{fmt_pct(latest["EFFR"])}</b>. NFCI is <b>{fmt_num(latest["NFCI"])}</b>, implying financial conditions are currently <b>{policy_state}</b> on the Chicago Fed measure.
         <br><br>
-        Smooth window applied: <b>{smooth_days} day(s)</b>.
+        Liquidity smoothing: <b>{smooth_days} day(s)</b>. Policy smoothing: <b>{"on" if smooth_policy else "off"}</b>.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 if errors:
-    noncritical = {k: v for k, v in errors.items() if k not in required}
-    if noncritical:
-        st.warning("Some non-critical series failed to load.")
-        with st.expander("Series error details"):
-            for k, v in noncritical.items():
-                st.write(f"{k}: {v}")
+    optional_errors = {k: v for k, v in errors.items() if k not in REQUIRED_SERIES}
+    if optional_errors:
+        st.warning("The dashboard loaded, but one or more optional policy/conditions series failed.")
+        with st.expander("Optional series error details"):
+            for series_id, message in optional_errors.items():
+                st.write(f"**{series_id}:** {message}")
 
-# ---------------- Main Chart ----------------
+# ---------------- Chartbook ----------------
 st.markdown("<div class='section-title'>Chartbook</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-subtitle'>Liquidity path, underlying components, policy rate, and financial conditions in one view.</div>",
+    "<div class='section-subtitle'>Liquidity path, components, policy rate, and financial conditions.</div>",
     unsafe_allow_html=True,
 )
 
@@ -385,10 +494,10 @@ fig = make_subplots(
     shared_xaxes=True,
     vertical_spacing=0.055,
     subplot_titles=(
-        "Net Liquidity (Billions)",
+        "Net Liquidity",
         "Core Components Rebased to 100",
         "Effective Fed Funds Rate",
-        "Financial Conditions (NFCI)",
+        "Financial Conditions",
     ),
 )
 
@@ -399,7 +508,7 @@ fig.add_trace(
         name="Net Liquidity",
         mode="lines",
         line=dict(width=2.8, color="#111827"),
-        hovertemplate="%{x|%Y-%m-%d}<br>Net Liquidity: %{y:,.0f} B<extra></extra>",
+        hovertemplate="%{x|%Y-%m-%d}<br>Net Liquidity: %{y:,.0f}B<extra></extra>",
     ),
     row=1,
     col=1,
@@ -409,36 +518,34 @@ fig.add_trace(
     go.Scatter(
         x=reb.index,
         y=reb["WALCL_idx"],
-        name="WALCL idx",
+        name="WALCL",
         mode="lines",
         line=dict(width=2.2, color="#2563eb"),
-        hovertemplate="%{x|%Y-%m-%d}<br>WALCL idx: %{y:.1f}<extra></extra>",
+        hovertemplate="%{x|%Y-%m-%d}<br>WALCL Index: %{y:.1f}<extra></extra>",
     ),
     row=2,
     col=1,
 )
-
 fig.add_trace(
     go.Scatter(
         x=reb.index,
         y=reb["RRP_idx"],
-        name="RRP idx",
+        name="RRP",
         mode="lines",
         line=dict(width=2.2, color="#dc2626"),
-        hovertemplate="%{x|%Y-%m-%d}<br>RRP idx: %{y:.1f}<extra></extra>",
+        hovertemplate="%{x|%Y-%m-%d}<br>RRP Index: %{y:.1f}<extra></extra>",
     ),
     row=2,
     col=1,
 )
-
 fig.add_trace(
     go.Scatter(
         x=reb.index,
         y=reb["TGA_idx"],
-        name="TGA idx",
+        name="TGA",
         mode="lines",
         line=dict(width=2.2, color="#059669"),
-        hovertemplate="%{x|%Y-%m-%d}<br>TGA idx: %{y:.1f}<extra></extra>",
+        hovertemplate="%{x|%Y-%m-%d}<br>TGA Index: %{y:.1f}<extra></extra>",
     ),
     row=2,
     col=1,
@@ -475,15 +582,15 @@ if df["NFCI_s"].notna().any():
 
 fig.update_layout(
     template="plotly_white",
-    height=1125,
+    height=1080,
     margin=dict(l=55, r=25, t=55, b=35),
     legend=dict(
         orientation="h",
         x=0,
-        y=1.03,
+        y=1.035,
         xanchor="left",
         yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.75)",
+        bgcolor="rgba(255,255,255,0.78)",
     ),
     hovermode="x unified",
 )
@@ -501,14 +608,15 @@ st.plotly_chart(fig, use_container_width=True)
 left, right = st.columns([1.2, 0.8])
 
 with left:
-    st.markdown("<div class='section-title'>Raw Data</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='section-subtitle'>Latest 50 observations for the cleaned working dataset.</div>",
-        unsafe_allow_html=True,
-    )
-    show = df[["WALCL_b", "RRP_b", "TGA_b", "EFFR", "NFCI", "NetLiq"]].copy()
-    show.columns = ["WALCL (B)", "RRP (B)", "TGA (B)", "EFFR (%)", "NFCI", "Net Liquidity (B)"]
-    st.dataframe(show.tail(50), use_container_width=True, height=420)
+    if show_raw_table:
+        st.markdown("<div class='section-title'>Raw Data</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='section-subtitle'>Latest 50 observations from the cleaned daily working dataset.</div>",
+            unsafe_allow_html=True,
+        )
+        show = df[["WALCL_b", "RRP_b", "TGA_b", "EFFR", "NFCI", "NetLiq"]].copy()
+        show.columns = ["WALCL (B)", "RRP (B)", "TGA (B)", "EFFR (%)", "NFCI", "Net Liquidity (B)"]
+        st.dataframe(show.tail(50), use_container_width=True, height=420)
 
 with right:
     st.markdown("<div class='section-title'>Download</div>", unsafe_allow_html=True)
@@ -516,7 +624,7 @@ with right:
         "<div class='section-subtitle'>Export the cleaned working dataset used in the dashboard.</div>",
         unsafe_allow_html=True,
     )
-    csv = df[["WALCL_b", "RRP_b", "TGA_b", "EFFR", "NFCI", "NetLiq"]].to_csv().encode("utf-8")
+    csv = df[["WALCL_b", "RRP_b", "TGA_b", "EFFR", "NFCI", "NetLiq"]].to_csv(index_label="Date").encode("utf-8")
     st.download_button(
         "Download CSV",
         data=csv,
@@ -530,16 +638,16 @@ with right:
         f"""
         <div class="info-box">
         <b>Formula</b><br>
-        Net Liquidity = WALCL - RRP - TGA
+        Net Liquidity = WALCL - ON RRP - TGA
         <br><br>
         <b>Unit treatment</b><br>
         WALCL and WDTGAL are converted from millions to billions. RRPONTSYD is already in billions.
         <br><br>
-        <b>Smoothing</b><br>
-        Liquidity series use a <b>{smooth_days}-day</b> rolling average. Policy series smoothing is <b>{"enabled" if smooth_policy else "disabled"}</b>.
+        <b>Calendar treatment</b><br>
+        FRED series are aligned to a daily calendar and forward-filled. Weekly series carry forward until the next release.
         <br><br>
-        <b>Rebasing</b><br>
-        Component indexes are rebased to 100 using the median of the first 10 valid observations in the displayed window. RRP rebasing uses a 5.0B floor to reduce unstable index jumps when the base is very small.
+        <b>Smoothing</b><br>
+        Liquidity series use a <b>{smooth_days}-day</b> rolling average. Policy smoothing is <b>{"enabled" if smooth_policy else "disabled"}</b>.
         </div>
         """,
         unsafe_allow_html=True,
