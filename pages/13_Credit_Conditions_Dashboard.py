@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -9,7 +9,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
-from plotly.subplots import make_subplots
 
 
 # ============================================================
@@ -17,28 +16,28 @@ from plotly.subplots import make_subplots
 # ============================================================
 
 TITLE = "Credit Conditions Monitor"
-SUBTITLE = "Yahoo Finance only: market-implied credit stress, bank pressure, loan appetite, EM credit, volatility, and duration confirmation."
+SUBTITLE = "Market-implied credit stress, bank pressure, loan appetite, EM credit, and rates / volatility backdrop."
 
 MARKET_TICKERS: Tuple[str, ...] = (
-    "HYG",   # iShares iBoxx High Yield Corporate Bond ETF
-    "JNK",   # SPDR Bloomberg High Yield Bond ETF
-    "LQD",   # iShares iBoxx Investment Grade Corporate Bond ETF
-    "BKLN",  # Invesco Senior Loan ETF
-    "SRLN",  # SPDR Blackstone Senior Loan ETF
-    "EMB",   # iShares J.P. Morgan USD Emerging Markets Bond ETF
-    "KRE",   # SPDR S&P Regional Banking ETF
-    "XLF",   # Financial Select Sector SPDR Fund
-    "SPY",   # S&P 500 ETF
-    "QQQ",   # Nasdaq 100 ETF
-    "IWM",   # Russell 2000 ETF
-    "TLT",   # 20+ Year Treasury ETF
-    "IEF",   # 7-10 Year Treasury ETF
-    "SHY",   # 1-3 Year Treasury ETF
-    "UUP",   # Dollar Index ETF proxy
-    "GLD",   # Gold ETF, liquidity/risk hedge context
-    "^VIX",  # CBOE VIX Index
-    "^TNX",  # CBOE 10Y Treasury yield index, quoted as yield x 10
-    "^IRX",  # CBOE 13-week T-bill yield index, quoted as yield x 10
+    "HYG",
+    "JNK",
+    "LQD",
+    "BKLN",
+    "SRLN",
+    "EMB",
+    "KRE",
+    "XLF",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "TLT",
+    "IEF",
+    "SHY",
+    "UUP",
+    "GLD",
+    "^VIX",
+    "^TNX",
+    "^IRX",
 )
 
 DISPLAY_NAMES: Dict[str, str] = {
@@ -64,7 +63,6 @@ DISPLAY_NAMES: Dict[str, str] = {
 }
 
 PERIOD_OPTIONS: Dict[str, str] = {
-    "6M": "6mo",
     "1Y": "1y",
     "2Y": "2y",
     "3Y": "3y",
@@ -79,6 +77,15 @@ LOOKBACKS: Dict[str, object] = {
     "3M": 91,
     "6M": 182,
     "YTD": "YTD",
+}
+
+TRADING_WINDOWS: Dict[str, int] = {
+    "1M": 21,
+    "3M": 63,
+    "6M": 126,
+    "1Y": 252,
+    "3Y": 756,
+    "5Y": 1260,
 }
 
 COLORS = {
@@ -121,7 +128,7 @@ st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 2.1rem;
+            padding-top: 1.85rem;
             padding-bottom: 2.0rem;
             max-width: 1580px;
         }
@@ -136,31 +143,31 @@ st.markdown(
             justify-content: space-between;
             align-items: flex-start;
             gap: 1rem;
-            margin-bottom: 0.95rem;
+            margin-bottom: 1.05rem;
         }
 
         .adfm-title {
-            font-size: 1.85rem;
-            line-height: 1.12;
+            font-size: 1.80rem;
+            line-height: 1.10;
             font-weight: 760;
-            margin: 0 0 0.22rem 0;
+            margin: 0 0 0.20rem 0;
             color: #0f172a;
             letter-spacing: -0.025em;
         }
 
         .adfm-subtitle {
-            font-size: 0.93rem;
+            font-size: 0.92rem;
             color: #64748b;
             line-height: 1.42;
-            max-width: 950px;
+            max-width: 980px;
         }
 
-        .source-pill {
+        .latest-pill {
             white-space: nowrap;
             background: #ffffff;
             border: 1px solid #e5e7eb;
             border-radius: 999px;
-            padding: 0.42rem 0.72rem;
+            padding: 0.40rem 0.72rem;
             color: #475569;
             font-size: 0.78rem;
             box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
@@ -199,28 +206,19 @@ st.markdown(
             line-height: 1.35;
         }
 
-        .section-card {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 0.85rem 0.95rem 0.95rem 0.95rem;
-            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
-            margin-top: 0.95rem;
-        }
-
         .section-title {
             font-size: 1.00rem;
             font-weight: 760;
             color: #0f172a;
-            margin: 0 0 0.55rem 0;
+            margin: 0.85rem 0 0.20rem 0;
             letter-spacing: -0.01em;
         }
 
         .section-subtitle {
             font-size: 0.80rem;
             color: #64748b;
-            margin-top: -0.35rem;
-            margin-bottom: 0.65rem;
+            margin-top: 0;
+            margin-bottom: 0.55rem;
             line-height: 1.42;
         }
 
@@ -243,17 +241,13 @@ st.markdown(
             color: #92400e;
             font-size: 0.84rem;
             line-height: 1.45;
-            margin-top: 0.75rem;
+            margin-top: 0.55rem;
         }
 
         div[data-testid="stDataFrame"] {
             border: 1px solid #e5e7eb;
             border-radius: 12px;
             overflow: hidden;
-        }
-
-        [data-testid="stMetricValue"] {
-            font-size: 1.15rem;
         }
     </style>
     """,
@@ -274,6 +268,14 @@ class ProxySpec:
     higher_is_good: bool = True
 
 
+@dataclass(frozen=True)
+class RegimeGridSpec:
+    name: str
+    source: str
+    source_type: str  # proxy, market, rates
+    mode: str         # diff or pct
+
+
 PROXY_SPECS: Tuple[ProxySpec, ...] = (
     ProxySpec("HYG/LQD", "HYG", "LQD", "HY beta versus IG credit. Higher means credit risk appetite is improving."),
     ProxySpec("JNK/LQD", "JNK", "LQD", "Second HY confirmation versus IG credit."),
@@ -285,6 +287,16 @@ PROXY_SPECS: Tuple[ProxySpec, ...] = (
     ProxySpec("IWM/SPY", "IWM", "SPY", "Small caps versus large caps. Lower can flag tighter domestic liquidity."),
     ProxySpec("HYG/SHY", "HYG", "SHY", "HY credit versus front-end Treasury collateral."),
     ProxySpec("LQD/TLT", "LQD", "TLT", "IG credit versus pure duration. Higher can mean credit is absorbing rates better."),
+)
+
+RATE_VIX_GRID_SPECS: Tuple[RegimeGridSpec, ...] = (
+    RegimeGridSpec("10Y Yield", "10Y Yield", "rates", "diff"),
+    RegimeGridSpec("3M Bill Yield", "3M Bill Yield", "rates", "diff"),
+    RegimeGridSpec("10Y-3M Slope", "10Y-3M Slope", "rates", "diff"),
+    RegimeGridSpec("VIX", "^VIX", "market", "diff"),
+    RegimeGridSpec("TLT", "TLT", "market", "pct"),
+    RegimeGridSpec("IEF", "IEF", "market", "pct"),
+    RegimeGridSpec("SHY", "SHY", "market", "pct"),
 )
 
 
@@ -323,10 +335,12 @@ def fmt_price(x: float) -> str:
     return f"{x:,.2f}"
 
 
-def fmt_yield_from_yahoo_index(x: float) -> str:
-    if not np.isfinite(x):
+def fmt_move(raw_value: float, mode: str) -> str:
+    if not np.isfinite(raw_value):
         return "N/A"
-    return f"{x / 10.0:.2f}%"
+    if mode == "pct":
+        return f"{raw_value:+.1f}%"
+    return f"{raw_value:+.2f}"
 
 
 def stress_color(score: float) -> str:
@@ -497,6 +511,29 @@ def apply_axis_style(fig: go.Figure) -> go.Figure:
     return fig
 
 
+def rolling_change_zscore(series: pd.Series, periods: int, mode: str = "diff") -> Tuple[float, float]:
+    clean = series.dropna().astype(float)
+    if len(clean) <= periods + 30:
+        return np.nan, np.nan
+
+    if mode == "pct":
+        changes = clean.pct_change(periods) * 100.0
+    else:
+        changes = clean.diff(periods)
+
+    changes = changes.dropna()
+    if len(changes) < 30:
+        return np.nan, np.nan
+
+    current = float(changes.iloc[-1])
+    std = float(changes.std())
+    if not np.isfinite(std) or std == 0:
+        return current, np.nan
+
+    z = float((current - float(changes.mean())) / std)
+    return current, z
+
+
 # ============================================================
 # Data Fetching
 # ============================================================
@@ -554,16 +591,16 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Market-implied credit monitor built only from Yahoo Finance tickers.
+        Market-implied credit monitor built from liquid traded proxies.
 
-        This page does not use FRED, cash OAS, NFCI, or external spread files. It reads the credit tape through liquid ETFs, relative ratios, banks, volatility, rates proxies, and drawdowns.
+        The page reads the credit tape through HY versus IG, loans, EM debt, bank leadership, duration, volatility, and rate-sensitive confirmation.
         """
     )
 
     st.divider()
 
     st.header("Controls")
-    history_label = st.selectbox("History", list(PERIOD_OPTIONS.keys()), index=3)
+    history_label = st.selectbox("History", list(PERIOD_OPTIONS.keys()), index=4)
     focus_window = st.selectbox("Focus window", ["1D", "1W", "1M", "3M", "6M", "YTD"], index=2)
     stress_window = st.selectbox(
         "Stress percentile window",
@@ -571,8 +608,13 @@ with st.sidebar:
         index=2,
         format_func=lambda x: f"{x} trading days",
     )
-    smoothing_days = st.selectbox("Composite smoothing", [1, 3, 5, 10], index=1, format_func=lambda x: "None" if x == 1 else f"{x} days")
-    show_raw = st.checkbox("Show raw Yahoo data", value=False)
+    smoothing_days = st.selectbox(
+        "Composite smoothing",
+        [1, 3, 5, 10],
+        index=1,
+        format_func=lambda x: "None" if x == 1 else f"{x} days",
+    )
+    show_raw = st.checkbox("Show raw data", value=False)
 
 
 # ============================================================
@@ -580,7 +622,6 @@ with st.sidebar:
 # ============================================================
 
 market_period = PERIOD_OPTIONS[history_label]
-
 market = fetch_market(MARKET_TICKERS, market_period)
 
 st.markdown(
@@ -590,14 +631,14 @@ st.markdown(
             <div class="adfm-title">{TITLE}</div>
             <div class="adfm-subtitle">{SUBTITLE}</div>
         </div>
-        <div class="source-pill">Source: Yahoo Finance · Latest: {latest_date(market)}</div>
+        <div class="latest-pill">Latest close: {latest_date(market)}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 if market.empty:
-    st.error("No Yahoo Finance market data loaded. Check yfinance availability or ticker access.")
+    st.error("No market data loaded. Check yfinance availability or ticker access.")
     st.stop()
 
 loaded_tickers = set(market.columns)
@@ -607,7 +648,7 @@ if missing_tickers:
     st.markdown(
         f"""
         <div class="warn-box">
-            <b>Partial Yahoo load:</b> {', '.join(missing_tickers)} did not load. The dashboard is using the available tickers and will skip unavailable signals automatically.
+            <b>Partial load:</b> {', '.join(missing_tickers)} did not load. The dashboard is using available tickers and skipping unavailable signals automatically.
         </div>
         """,
         unsafe_allow_html=True,
@@ -643,7 +684,6 @@ rates = rates.dropna(how="all").ffill()
 
 # ============================================================
 # Composite Credit Stress
-# Higher = tighter / worse. Lower = easier / better.
 # ============================================================
 
 stress_components = pd.DataFrame(index=market.index)
@@ -698,10 +738,9 @@ else:
 hyg_lqd_move = pct_change_since(proxy["HYG/LQD"], target) * 100 if "HYG/LQD" in proxy.columns else np.nan
 kre_spy_move = pct_change_since(proxy["KRE/SPY"], target) * 100 if "KRE/SPY" in proxy.columns else np.nan
 bkl_lqd_move = pct_change_since(proxy["BKLN/LQD"], target) * 100 if "BKLN/LQD" in proxy.columns else np.nan
-emb_lqd_move = pct_change_since(proxy["EMB/LQD"], target) * 100 if "EMB/LQD" in proxy.columns else np.nan
 hyg_drawdown = drawdown_pct(market["HYG"], 126) if "HYG" in market.columns else np.nan
 vix_level = latest(market["^VIX"]) if "^VIX" in market.columns else np.nan
-vix_move = absolute_change_since(market["^VIX"], target) if "^VIX" in market.columns else np.nan
+vix_z = zscore(market["^VIX"], 252) if "^VIX" in market.columns else np.nan
 
 cards = [
     (
@@ -735,10 +774,10 @@ cards = [
         COLORS["green"] if np.isfinite(bkl_lqd_move) and bkl_lqd_move > 0 else COLORS["red"],
     ),
     (
-        "HY Drawdown",
-        fmt_pct(hyg_drawdown),
-        "126D drawdown",
-        COLORS["red"] if np.isfinite(hyg_drawdown) and hyg_drawdown < -3.0 else COLORS["amber"] if np.isfinite(hyg_drawdown) and hyg_drawdown < -1.0 else COLORS["green"],
+        "VIX",
+        fmt_price(vix_level),
+        f"1Y z-score {fmt_num(vix_z, 2)}",
+        COLORS["red"] if np.isfinite(vix_z) and vix_z > 0.5 else COLORS["amber"] if np.isfinite(vix_z) and vix_z > 0 else COLORS["green"],
     ),
 ]
 
@@ -764,12 +803,11 @@ for col, (label, value, footnote, color) in zip(metric_cols, cards):
 top_left, top_right = st.columns([1.15, 0.85])
 
 with top_left:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Credit Stress Pulse</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-subtitle">Composite of Yahoo-traded credit, bank, loan, EM, drawdown, and volatility signals. Higher means tighter credit conditions.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-subtitle">Composite of credit, bank, loan, EM, drawdown, and volatility signals. Higher means tighter credit conditions.</div>', unsafe_allow_html=True)
 
     if credit_score_ts.empty:
-        st.info("Composite stress could not be calculated with the available Yahoo data.")
+        st.info("Composite stress could not be calculated with the available data.")
     else:
         fig = go.Figure()
         fig.add_hrect(y0=0.60, y1=1.05, fillcolor=COLORS["soft_red"], opacity=0.45, line_width=0)
@@ -793,10 +831,7 @@ with top_left:
         apply_axis_style(fig)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
 with top_right:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Pressure Map</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-subtitle">Current component scores. Positive bars are tightening. Negative bars are easing.</div>', unsafe_allow_html=True)
 
@@ -827,190 +862,123 @@ with top_right:
         apply_axis_style(bar_fig)
         st.plotly_chart(bar_fig, use_container_width=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
 
 # ============================================================
-# Proxy Leadership and Drawdowns
+# Rates / VIX Module
 # ============================================================
 
-mid_left, mid_right = st.columns([1.05, 0.95])
+def get_grid_series(spec: RegimeGridSpec) -> pd.Series:
+    if spec.source_type == "rates":
+        return rates[spec.source] if spec.source in rates.columns else pd.Series(dtype=float)
+    if spec.source_type == "proxy":
+        return proxy[spec.source] if spec.source in proxy.columns else pd.Series(dtype=float)
+    return market[spec.source] if spec.source in market.columns else pd.Series(dtype=float)
+
+
+regime_z = pd.DataFrame(index=[s.name for s in RATE_VIX_GRID_SPECS], columns=list(TRADING_WINDOWS.keys()), dtype=float)
+regime_text = pd.DataFrame(index=[s.name for s in RATE_VIX_GRID_SPECS], columns=list(TRADING_WINDOWS.keys()), dtype=object)
+regime_hover = pd.DataFrame(index=[s.name for s in RATE_VIX_GRID_SPECS], columns=list(TRADING_WINDOWS.keys()), dtype=object)
+
+for spec in RATE_VIX_GRID_SPECS:
+    s = get_grid_series(spec)
+    for label, periods in TRADING_WINDOWS.items():
+        raw_move, z_val = rolling_change_zscore(s, periods=periods, mode=spec.mode)
+        regime_z.loc[spec.name, label] = z_val
+        regime_text.loc[spec.name, label] = "" if not np.isfinite(z_val) else f"{z_val:.1f}"
+        regime_hover.loc[spec.name, label] = f"Move: {fmt_move(raw_move, spec.mode)}<br>Z-score: {fmt_num(z_val, 2)}"
+
+mid_left, mid_right = st.columns([1.0, 1.0])
 
 with mid_left:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Credit Risk Appetite</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-subtitle">Relative proxy basket rebased to 100. Rising lines usually mean credit sponsorship is improving.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Rates / Volatility Regime Grid</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-subtitle">Trailing move z-scores across 1M, 3M, 6M, 1Y, 3Y, and 5Y trading windows. Positive means the move is high versus its own history. Negative means low.</div>', unsafe_allow_html=True)
 
-    proxy_cols = [c for c in ["HYG/LQD", "JNK/LQD", "BKLN/LQD", "EMB/LQD", "KRE/SPY", "XLF/SPY"] if c in proxy.columns]
-    if not proxy_cols:
-        st.info("Relative credit proxy data unavailable.")
+    if regime_z.dropna(how="all").empty:
+        st.info("Rates / volatility regime grid unavailable.")
     else:
-        proxy_rebased = rebase(proxy[proxy_cols])
-        proxy_fig = go.Figure()
-        for i, col_name in enumerate(proxy_rebased.columns):
-            proxy_fig.add_trace(
-                go.Scatter(
-                    x=proxy_rebased.index,
-                    y=proxy_rebased[col_name],
-                    mode="lines",
-                    name=col_name,
-                    line=dict(color=LINE_COLORS[i % len(LINE_COLORS)], width=2),
-                )
+        grid_fig = go.Figure(
+            data=go.Heatmap(
+                z=regime_z.values.astype(float),
+                x=list(regime_z.columns),
+                y=list(regime_z.index),
+                zmin=-2.5,
+                zmax=2.5,
+                colorscale=[
+                    [0.00, "#15803d"],
+                    [0.20, "#86efac"],
+                    [0.50, "#f8fafc"],
+                    [0.80, "#fca5a5"],
+                    [1.00, "#b91c1c"],
+                ],
+                text=regime_text.values,
+                texttemplate="%{text}",
+                textfont={"size": 12},
+                customdata=regime_hover.values,
+                colorbar=dict(title="z", thickness=12, len=0.82),
+                hovertemplate="%{y}<br>%{x}<br>%{customdata}<extra></extra>",
             )
-        proxy_fig.add_hline(y=100, line_width=1, line_color=COLORS["grid"])
-        proxy_fig.update_layout(**chart_layout(height=400, showlegend=True))
-        proxy_fig.update_yaxes(title_text="Rebased to 100")
-        apply_axis_style(proxy_fig)
-        st.plotly_chart(proxy_fig, use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+        )
+        grid_fig.update_layout(**chart_layout(height=400, showlegend=False))
+        grid_fig.update_xaxes(side="top", tickfont=dict(color=COLORS["slate"]))
+        grid_fig.update_yaxes(tickfont=dict(color=COLORS["slate"]))
+        st.plotly_chart(grid_fig, use_container_width=True)
 
 with mid_right:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Credit ETF Drawdowns</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-subtitle">Drawdown pressure across HY, IG, loans, EM debt, banks, and equities.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Rates / VIX Trend</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-subtitle">Standardized history for the main rates and volatility series. Zero is each series’ own mean over the selected history.</div>', unsafe_allow_html=True)
 
-    drawdown_cols = [c for c in ["HYG", "JNK", "LQD", "BKLN", "EMB", "KRE", "SPY"] if c in market.columns]
-    if not drawdown_cols:
-        st.info("Drawdown data unavailable.")
+    trend_df = pd.DataFrame(index=market.index)
+    if "10Y Yield" in rates.columns:
+        trend_df["10Y Yield"] = (rates["10Y Yield"] - rates["10Y Yield"].mean()) / rates["10Y Yield"].std(ddof=0)
+    if "3M Bill Yield" in rates.columns:
+        trend_df["3M Bill Yield"] = (rates["3M Bill Yield"] - rates["3M Bill Yield"].mean()) / rates["3M Bill Yield"].std(ddof=0)
+    if "10Y-3M Slope" in rates.columns:
+        trend_df["10Y-3M Slope"] = (rates["10Y-3M Slope"] - rates["10Y-3M Slope"].mean()) / rates["10Y-3M Slope"].std(ddof=0)
+    if "^VIX" in market.columns:
+        trend_df["VIX"] = (market["^VIX"] - market["^VIX"].mean()) / market["^VIX"].std(ddof=0)
+    trend_df = trend_df.replace([np.inf, -np.inf], np.nan).dropna(how="all")
+
+    if trend_df.empty:
+        st.info("Rates / VIX trend chart unavailable.")
     else:
-        dd = pd.DataFrame(index=market.index)
-        for c in drawdown_cols:
-            dd[DISPLAY_NAMES.get(c, c)] = rolling_drawdown(market[c], window=126) * 100.0
-
-        dd_fig = go.Figure()
-        for i, col_name in enumerate(dd.columns):
-            dd_fig.add_trace(
+        trend_fig = go.Figure()
+        for i, col_name in enumerate(trend_df.columns):
+            trend_fig.add_trace(
                 go.Scatter(
-                    x=dd.index,
-                    y=dd[col_name],
+                    x=trend_df.index,
+                    y=trend_df[col_name],
                     mode="lines",
                     name=col_name,
                     line=dict(color=LINE_COLORS[i % len(LINE_COLORS)], width=2),
                 )
             )
-        dd_fig.add_hline(y=0, line_width=1, line_color=COLORS["grid"])
-        dd_fig.add_hline(y=-3, line_width=1, line_dash="dot", line_color=COLORS["amber"])
-        dd_fig.add_hline(y=-6, line_width=1, line_dash="dot", line_color=COLORS["red"])
-        dd_fig.update_layout(**chart_layout(height=400, showlegend=True))
-        dd_fig.update_yaxes(title_text="126D drawdown %")
-        apply_axis_style(dd_fig)
-        st.plotly_chart(dd_fig, use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ============================================================
-# Rates, Volatility, and Asset Confirmation
-# ============================================================
-
-lower_left, lower_right = st.columns([1.0, 1.0])
-
-with lower_left:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Rates and Volatility Backdrop</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-subtitle">Yahoo rate indexes are quoted as yield x 10. The chart converts them back to percent.</div>', unsafe_allow_html=True)
-
-    if rates.empty and "^VIX" not in market.columns:
-        st.info("Rates and volatility proxies unavailable.")
-    else:
-        rv_fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-        if "10Y Yield" in rates.columns:
-            rv_fig.add_trace(
-                go.Scatter(
-                    x=rates.index,
-                    y=rates["10Y Yield"],
-                    mode="lines",
-                    name="10Y Yield",
-                    line=dict(color=COLORS["blue"], width=2),
-                ),
-                secondary_y=False,
-            )
-
-        if "3M Bill Yield" in rates.columns:
-            rv_fig.add_trace(
-                go.Scatter(
-                    x=rates.index,
-                    y=rates["3M Bill Yield"],
-                    mode="lines",
-                    name="3M Bill Yield",
-                    line=dict(color=COLORS["slate"], width=2),
-                ),
-                secondary_y=False,
-            )
-
-        if "^VIX" in market.columns:
-            rv_fig.add_trace(
-                go.Scatter(
-                    x=market.index,
-                    y=market["^VIX"],
-                    mode="lines",
-                    name="VIX",
-                    line=dict(color=COLORS["red"], width=2),
-                ),
-                secondary_y=True,
-            )
-
-        rv_fig.update_layout(**chart_layout(height=385, showlegend=True))
-        rv_fig.update_yaxes(title_text="Yield %", secondary_y=False)
-        rv_fig.update_yaxes(title_text="VIX", secondary_y=True, showgrid=False)
-        apply_axis_style(rv_fig)
-        st.plotly_chart(rv_fig, use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with lower_right:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Macro Confirmation</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-subtitle">Cross-asset confirmation around credit: duration, dollar, gold, equities, and small caps.</div>', unsafe_allow_html=True)
-
-    macro_cols = [c for c in ["SPY", "QQQ", "IWM", "TLT", "IEF", "UUP", "GLD"] if c in market.columns]
-    if not macro_cols:
-        st.info("Macro confirmation data unavailable.")
-    else:
-        macro_rebased = rebase(market[macro_cols].rename(columns=DISPLAY_NAMES))
-        macro_fig = go.Figure()
-        for i, col_name in enumerate(macro_rebased.columns):
-            macro_fig.add_trace(
-                go.Scatter(
-                    x=macro_rebased.index,
-                    y=macro_rebased[col_name],
-                    mode="lines",
-                    name=col_name,
-                    line=dict(color=LINE_COLORS[i % len(LINE_COLORS)], width=2),
-                )
-            )
-        macro_fig.add_hline(y=100, line_width=1, line_color=COLORS["grid"])
-        macro_fig.update_layout(**chart_layout(height=385, showlegend=True))
-        macro_fig.update_yaxes(title_text="Rebased to 100")
-        apply_axis_style(macro_fig)
-        st.plotly_chart(macro_fig, use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+        trend_fig.add_hline(y=0, line_width=1, line_color=COLORS["grid"])
+        trend_fig.update_layout(**chart_layout(height=400, showlegend=True))
+        trend_fig.update_yaxes(title_text="Standardized level")
+        apply_axis_style(trend_fig)
+        st.plotly_chart(trend_fig, use_container_width=True)
 
 
 # ============================================================
 # Credit Tape
 # ============================================================
 
-st.markdown('<div class="section-card">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">Credit Tape</div>', unsafe_allow_html=True)
-st.markdown('<div class="section-subtitle">Decision table across ratio proxies, ETFs, rates, and volatility. Ratio moves are percentage changes; rates and VIX are absolute changes.</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-subtitle">Decision table across ratio proxies, ETFs, rates, and volatility. Ratio moves are percentage changes. Rates and VIX are absolute moves.</div>', unsafe_allow_html=True)
 
 tape_rows: List[Dict[str, object]] = []
 
 
-def add_ratio_tape(name: str, series: pd.Series, read: str, higher_is_good: bool = True) -> None:
+def add_ratio_tape(name: str, series: pd.Series, read: str) -> None:
     current_stress = latest(stress_components[name]) if name in stress_components.columns else np.nan
     tape_rows.append(
         {
             "Signal": name,
             "Latest": fmt_num(latest(series), 3),
-            "1D": fmt_pct(pct_change_since(series, lookback_target("1D")) * 100, signed=True),
             "1W": fmt_pct(pct_change_since(series, lookback_target("1W")) * 100, signed=True),
             "1M": fmt_pct(pct_change_since(series, lookback_target("1M")) * 100, signed=True),
             "3M": fmt_pct(pct_change_since(series, lookback_target("3M")) * 100, signed=True),
+            "6M": fmt_pct(pct_change_since(series, lookback_target("6M")) * 100, signed=True),
             "YTD": fmt_pct(pct_change_since(series, lookback_target("YTD")) * 100, signed=True),
             "Z": fmt_num(zscore(series, 252), 2),
             "Stress": fmt_num(current_stress, 2),
@@ -1026,10 +994,10 @@ def add_price_tape(ticker: str, series: pd.Series, read: str) -> None:
         {
             "Signal": DISPLAY_NAMES.get(ticker, ticker),
             "Latest": fmt_price(latest(series)),
-            "1D": fmt_pct(pct_change_since(series, lookback_target("1D")) * 100, signed=True),
             "1W": fmt_pct(pct_change_since(series, lookback_target("1W")) * 100, signed=True),
             "1M": fmt_pct(pct_change_since(series, lookback_target("1M")) * 100, signed=True),
             "3M": fmt_pct(pct_change_since(series, lookback_target("3M")) * 100, signed=True),
+            "6M": fmt_pct(pct_change_since(series, lookback_target("6M")) * 100, signed=True),
             "YTD": fmt_pct(pct_change_since(series, lookback_target("YTD")) * 100, signed=True),
             "Z": fmt_num(zscore(series, 252), 2),
             "Stress": fmt_num(current_stress, 2),
@@ -1044,10 +1012,10 @@ def add_absolute_tape(name: str, series: pd.Series, latest_formatter, read: str)
         {
             "Signal": name,
             "Latest": latest_formatter(latest(series)),
-            "1D": fmt_num(absolute_change_since(series, lookback_target("1D")), 2),
             "1W": fmt_num(absolute_change_since(series, lookback_target("1W")), 2),
             "1M": fmt_num(absolute_change_since(series, lookback_target("1M")), 2),
             "3M": fmt_num(absolute_change_since(series, lookback_target("3M")), 2),
+            "6M": fmt_num(absolute_change_since(series, lookback_target("6M")), 2),
             "YTD": fmt_num(absolute_change_since(series, lookback_target("YTD")), 2),
             "Z": fmt_num(zscore(series, 252), 2),
             "Stress": fmt_num(latest(stress_components[name]) if name in stress_components.columns else np.nan, 2),
@@ -1059,12 +1027,12 @@ def add_absolute_tape(name: str, series: pd.Series, latest_formatter, read: str)
 
 for name in ["HYG/LQD", "JNK/LQD", "BKLN/LQD", "SRLN/LQD", "EMB/LQD", "KRE/SPY", "XLF/SPY", "IWM/SPY", "HYG/SHY", "LQD/TLT"]:
     if name in proxy.columns:
-        add_ratio_tape(name, proxy[name], proxy_reads.get(name, "Relative credit proxy"), proxy_higher_is_good.get(name, True))
+        add_ratio_tape(name, proxy[name], proxy_reads.get(name, "Relative credit proxy"))
 
 for ticker, read in [
     ("HYG", "HY ETF price. Persistent drawdown is a market-implied spread warning."),
     ("JNK", "Second high-yield ETF confirmation."),
-    ("LQD", "IG credit price. Separates credit and duration stress imperfectly but usefully."),
+    ("LQD", "IG credit price. Useful for separating credit and duration stress imperfectly."),
     ("BKLN", "Loan ETF price. Tracks floating-rate credit appetite."),
     ("EMB", "EM hard-currency debt price. Flags global credit pressure."),
     ("KRE", "Regional bank equity proxy. Often leads tightening in credit transmission."),
@@ -1084,11 +1052,9 @@ if "10Y-3M Slope" in rates.columns:
 
 if tape_rows:
     tape = pd.DataFrame(tape_rows)
-    st.dataframe(tape, use_container_width=True, hide_index=True, height=520)
+    st.dataframe(tape, use_container_width=True, hide_index=True, height=480)
 else:
     st.info("No tape signals loaded.")
-
-st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1097,31 +1063,27 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 if credit_score >= 0.60:
     readthrough = (
-        "Credit proxies are in stress mode. The signal is no longer isolated to one ETF or one bank proxy. "
-        "When HY underperforms IG, KRE loses to SPY, drawdowns deepen, and VIX rises together, the tape is saying de-risking pressure has moved into credit transmission."
+        "Credit proxies are in stress mode. When HY underperforms IG, KRE loses to SPY, drawdowns deepen, and VIX rises together, the tape is saying de-risking pressure has moved into credit transmission."
     )
 elif credit_score >= 0.25:
     readthrough = (
-        "Credit is tightening. Equity rallies need confirmation from HYG/LQD and KRE/SPY here. "
-        "If those ratios fail while VIX stays bid or HY drawdowns deepen, the rally is losing credit sponsorship."
+        "Credit is tightening. Equity rallies need confirmation from HYG/LQD and KRE/SPY here. If those ratios fail while VIX stays bid or HY drawdowns deepen, the rally is losing credit sponsorship."
     )
 elif credit_score <= -0.25:
     readthrough = (
-        "Credit is supportive. HY, loans, banks, or volatility proxies are not confirming broad funding stress. "
-        "That keeps the burden of proof on equity bears unless the bank and HY ratios roll over."
+        "Credit is supportive. HY, loans, banks, or volatility proxies are not confirming broad funding stress. That keeps the burden of proof on equity bears unless the bank and HY ratios roll over."
     )
 else:
     readthrough = (
-        "Credit is neutral. The composite is not strong enough by itself. "
-        "The next useful break should come from HYG/LQD, KRE/SPY, BKLN/LQD, and VIX moving in the same direction."
+        "Credit is neutral. The composite is not strong enough by itself. The next useful break should come from HYG/LQD, KRE/SPY, BKLN/LQD, and VIX moving in the same direction."
     )
 
 st.markdown(
     f"""
     <div class="note-box">
         <b>Read-through:</b> {readthrough}<br>
-        <b>Data discipline:</b> Yahoo Finance only. No FRED, no NFCI, no cash OAS, and no bps spread labels. Outputs are market-implied proxy signals based on liquid instruments available through yfinance.<br>
-        <b>Latest Yahoo close:</b> {latest_date(market)}
+        <b>Framework:</b> This is a market-implied monitor. Outputs are proxy signals from liquid instruments rather than cash OAS series.<br>
+        <b>Latest close:</b> {latest_date(market)}
     </div>
     """,
     unsafe_allow_html=True,
@@ -1133,7 +1095,7 @@ st.markdown(
 # ============================================================
 
 if show_raw:
-    with st.expander("Raw Yahoo Close Data", expanded=False):
+    with st.expander("Raw Close Data", expanded=False):
         renamed_market = market.rename(columns=DISPLAY_NAMES)
         st.dataframe(renamed_market.tail(500), use_container_width=True)
 
@@ -1148,3 +1110,7 @@ if show_raw:
             st.info("No stress components calculated.")
         else:
             st.dataframe(stress_components.tail(500), use_container_width=True)
+
+    with st.expander("Rates / Volatility Regime Grid Data", expanded=False):
+        grid_out = regime_z.copy()
+        st.dataframe(grid_out, use_container_width=True)
