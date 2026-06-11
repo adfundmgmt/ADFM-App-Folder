@@ -188,6 +188,14 @@ st.markdown(
             color: #1f2933;
         }
 
+        .chart-top-gap {
+            height: 18px;
+        }
+
+        .compare-chart-top-gap {
+            height: 10px;
+        }
+
         @media (max-width: 1200px) {
             .metric-strip {
                 grid-template-columns: repeat(4, minmax(95px, 1fr));
@@ -356,7 +364,7 @@ def read_settings() -> ChartSettings:
 
         st.markdown("---")
         with st.expander("Chart Settings", expanded=False):
-            show_last_price = st.checkbox("Last price line", value=False)
+            show_last_price = st.checkbox("Last price line", value=True)
             show_bbands = st.checkbox("Bollinger Bands", value=True)
 
             st.caption("Moving averages")
@@ -1928,7 +1936,7 @@ def build_chart(
         plot_bgcolor="white",
         paper_bgcolor="white",
         hovermode="x",
-        margin=dict(l=40, r=22, t=34, b=30),
+        margin=dict(l=40, r=22, t=66, b=30),
         font=dict(
             family="Arial, sans-serif",
             size=12,
@@ -1938,7 +1946,7 @@ def build_chart(
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.018,
+            y=1.075,
             xanchor="left",
             x=0,
             bgcolor="rgba(255,255,255,0)",
@@ -2047,11 +2055,11 @@ def build_compare_chart(
         )
 
     fig.update_layout(
-        height=360,
+        height=390,
         plot_bgcolor="white",
         paper_bgcolor="white",
         hovermode="x unified",
-        margin=dict(l=44, r=20, t=28, b=18),
+        margin=dict(l=44, r=20, t=78, b=24),
         font=dict(
             family="Arial, sans-serif",
             size=12,
@@ -2060,20 +2068,27 @@ def build_compare_chart(
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.02,
+            y=1.115,
             xanchor="left",
-            x=0,
+            x=0.18,
             bgcolor="rgba(255,255,255,0)",
             borderwidth=0,
-            title_text="",
+            title=dict(text=""),
+            font=dict(size=11, color="#374151"),
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
         ),
         title=dict(
-            text="Relative performance, indexed to 100",
+            text="<b>Relative performance, indexed to 100</b>",
             x=0.0,
             xanchor="left",
-            font=dict(size=14),
+            y=0.985,
+            yanchor="top",
+            font=dict(size=14, color=COLORS["text"]),
         ),
     )
+
+    fig.layout.legend.title.text = ""
 
     fig.update_xaxes(
         showgrid=True,
@@ -2185,6 +2200,7 @@ if settings.show_volume and not volume_is_usable:
     st.sidebar.info("Volume panel hidden because this symbol does not have usable volume data.")
 
 render_header(settings, display_df, indicator_df)
+st.markdown('<div class="chart-top-gap"></div>', unsafe_allow_html=True)
 
 chart = build_chart(
     df=display_df,
@@ -2214,6 +2230,7 @@ compare_fig = build_compare_chart(
 )
 
 if compare_fig is not None:
+    st.markdown('<div class="compare-chart-top-gap"></div>', unsafe_allow_html=True)
     st.plotly_chart(
         compare_fig,
         use_container_width=True,
