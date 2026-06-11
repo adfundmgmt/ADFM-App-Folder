@@ -5,6 +5,9 @@ import yfinance as yf
 import plotly.graph_objects as go
 
 from dataclasses import dataclass
+from html import escape as html_escape
+from textwrap import dedent
+
 from plotly.subplots import make_subplots
 
 
@@ -31,6 +34,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
+APP_VERSION = "2026-06-11-html-render-fix"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -72,8 +76,17 @@ COLORS = {
 # ============================================================
 
 st.markdown(
-    """
-    <style>
+    dedent(
+        """
+        <style>
+        .stApp {
+            background: #ffffff;
+        }
+
+        section[data-testid="stSidebar"] {
+            background: #ffffff;
+        }
+
         .block-container {
             padding-top: 1.15rem;
             padding-bottom: 1.0rem;
@@ -186,8 +199,9 @@ st.markdown(
                 grid-template-columns: repeat(2, minmax(95px, 1fr));
             }
         }
-    </style>
-    """,
+        </style>
+        """
+    ).strip(),
     unsafe_allow_html=True,
 )
 
@@ -232,6 +246,14 @@ def ensure_session_defaults() -> None:
         "chart_type_input": "Candles",
         "compare_input": "",
     }
+
+    # Reset once after this fix is deployed so stale Streamlit session state
+    # does not keep the old YTD default / broken render state alive.
+    if st.session_state.get("_adfm_chart_terminal_version") != APP_VERSION:
+        for key, value in defaults.items():
+            st.session_state[key] = value
+        st.session_state["_adfm_chart_terminal_version"] = APP_VERSION
+        return
 
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -312,6 +334,7 @@ def read_settings() -> ChartSettings:
             "Ticker",
             key="ticker_input",
             placeholder="^SPX, NVDA, TLT, USDJPY=X",
+            label_visibility="collapsed",
         )
 
     with toolbar_cols[1]:
@@ -320,6 +343,7 @@ def read_settings() -> ChartSettings:
             PERIOD_OPTIONS,
             key="period_input",
             horizontal=True,
+            label_visibility="collapsed",
         )
 
     with toolbar_cols[2]:
@@ -328,6 +352,7 @@ def read_settings() -> ChartSettings:
             INTERVAL_OPTIONS,
             index=INTERVAL_OPTIONS.index(st.session_state.get("interval_input", "1d")),
             key="interval_input",
+            label_visibility="collapsed",
         )
 
     with toolbar_cols[3]:
@@ -336,6 +361,7 @@ def read_settings() -> ChartSettings:
             CHART_TYPES,
             index=CHART_TYPES.index(st.session_state.get("chart_type_input", "Candles")),
             key="chart_type_input",
+            label_visibility="collapsed",
         )
 
     with toolbar_cols[4]:
@@ -343,6 +369,7 @@ def read_settings() -> ChartSettings:
             "Compare",
             key="compare_input",
             placeholder="SPY, QQQ, TLT",
+            label_visibility="collapsed",
         )
 
     compare_mode = "Indexed to 100"
@@ -1093,33 +1120,34 @@ def build_technical_memo(df: pd.DataFrame, ticker: str) -> str:
 
 
 def signal_table_html(rows: list[dict[str, str]]) -> str:
-    html = """
-    <table class="signal-table">
-        <thead>
-            <tr>
-                <th>Signal</th>
-                <th>Reading</th>
-                <th>Interpretation</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
+    body = []
 
     for row in rows:
-        html += f"""
-            <tr>
-                <td>{row['Signal']}</td>
-                <td><strong>{row['Reading']}</strong></td>
-                <td>{row['Interpretation']}</td>
-            </tr>
-        """
+        signal = html_escape(str(row.get("Signal", "")))
+        reading = html_escape(str(row.get("Reading", "")))
+        interpretation = html_escape(str(row.get("Interpretation", "")))
+        body.append(
+            "<tr>"
+            f"<td>{signal}</td>"
+            f"<td><strong>{reading}</strong></td>"
+            f"<td>{interpretation}</td>"
+            "</tr>"
+        )
 
-    html += """
-        </tbody>
-    </table>
-    """
-
-    return html
+    return (
+        '<table class="signal-table">'
+        '<thead>'
+        '<tr>'
+        '<th>Signal</th>'
+        '<th>Reading</th>'
+        '<th>Interpretation</th>'
+        '</tr>'
+        '</thead>'
+        '<tbody>'
+        + "".join(body)
+        + '</tbody>'
+        + '</table>'
+    )
 
 
 # ============================================================
@@ -1816,35 +1844,53 @@ def build_compare_chart(
 # ============================================================
 
 def metric_card(label: str, value: str, note: str = "") -> str:
-    return f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-note">{note}</div>
-        </div>
-    """
+    label = html_escape(str(label))
+    value = html_escape(str(value))
+    note = html_escape(str(note))
+
+    return (
+        '<div class="metric-card">'
+        f'<div class="metric-label">{label}</div>'
+        f'<div class="metric-value">{value}</div>'
+        f'<div class="metric-note">{note}</div>'
+        '</div>'
+    )
 
 
-def render_header(settings: ChartSettings, display_df: pd.DataFrame) -> None:
-    stats = compute_header_stats(display_df)
+def render_header(
+    settings: ChartSettings,
+    display_df: pd.DataFrame,
+    metrics_df: pd.DataFrame | None = None,
+) -> None:
+    stats_source = metrics_df if metrics_df is not None and not metrics_df.empty else display_df
+    stats = compute_header_stats(stats_source)
     last_bar = format_last_bar(display_df.index[-1])
 
-    html = f"""
-    <div class="adfm-header">
-        <div class="adfm-title">{settings.ticker} Technical Regime</div>
-        <div class="adfm-subtitle">Interval: {settings.interval} | Window: {settings.period} | Last bar: {last_bar}</div>
-        <div class="metric-strip">
-            {metric_card("Last", stats["Last"])}
-            {metric_card("1D", stats["1D"])}
-            {metric_card("5D", stats["5D"])}
-            {metric_card("1M", stats["1M"])}
-            {metric_card("3M", stats["3M"])}
-            {metric_card("YTD", stats["YTD"])}
-            {metric_card("Drawdown", stats["Drawdown"], "From 52w high")}
-            {metric_card("ATR", stats["ATR"], "14-period")}
-        </div>
-    </div>
-    """
+    ticker = html_escape(settings.ticker)
+    interval = html_escape(settings.interval)
+    period = html_escape(settings.period)
+    last_bar_text = html_escape(last_bar)
+
+    cards = "".join(
+        [
+            metric_card("Last", stats["Last"]),
+            metric_card("1D", stats["1D"]),
+            metric_card("5D", stats["5D"]),
+            metric_card("1M", stats["1M"]),
+            metric_card("3M", stats["3M"]),
+            metric_card("YTD", stats["YTD"]),
+            metric_card("Drawdown", stats["Drawdown"], "From 52w high"),
+            metric_card("ATR", stats["ATR"], "14-period"),
+        ]
+    )
+
+    html = (
+        '<div class="adfm-header">'
+        f'<div class="adfm-title">{ticker} Technical Regime</div>'
+        f'<div class="adfm-subtitle">Interval: {interval} | Window: {period} | Last bar: {last_bar_text}</div>'
+        f'<div class="metric-strip">{cards}</div>'
+        '</div>'
+    )
 
     st.markdown(html, unsafe_allow_html=True)
 
@@ -1880,7 +1926,7 @@ volume_is_usable = has_usable_volume(display_df)
 if settings.show_volume and not volume_is_usable:
     st.sidebar.info("Volume panel hidden because this symbol does not have usable volume data.")
 
-render_header(settings, display_df)
+render_header(settings, display_df, indicator_df)
 
 chart = build_chart(
     df=display_df,
@@ -1923,8 +1969,8 @@ if compare_fig is not None:
         },
     )
 
-signal_rows = build_signal_rows(display_df)
-memo = build_technical_memo(display_df, settings.ticker)
+signal_rows = build_signal_rows(indicator_df)
+memo = build_technical_memo(indicator_df, settings.ticker)
 
 left, right = st.columns([1.35, 1.00])
 
@@ -1934,6 +1980,6 @@ with left:
 
 with right:
     st.markdown("#### Technical Memo")
-    st.markdown(f"""<div class="memo-box">{memo}</div>""", unsafe_allow_html=True)
+    st.markdown(f'<div class="memo-box">{html_escape(memo)}</div>', unsafe_allow_html=True)
 
 st.caption("© 2026 AD Fund Management LP")
