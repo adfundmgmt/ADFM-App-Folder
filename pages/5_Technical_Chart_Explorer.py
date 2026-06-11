@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 
 
 # ============================================================
-# Page
+# Page Config
 # ============================================================
 
 TITLE = "ADFM Chart Terminal"
@@ -32,6 +32,17 @@ CHART_TYPES = ["Candles", "Line"]
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
 
+TICKER_ALIASES = {
+    "SPX": "^GSPC",
+    "^SPX": "^GSPC",
+    "SP500": "^GSPC",
+    "S&P": "^GSPC",
+    "S&P500": "^GSPC",
+    "NDX": "^NDX",
+    "DJI": "^DJI",
+    "VIX": "^VIX",
+}
+
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
     "Mag 7": ["NVDA", "MSFT", "META", "AMZN", "GOOGL", "AAPL", "TSLA"],
@@ -51,8 +62,8 @@ COLORS = {
     "sma200": "#111111",
     "bb": "rgba(90,90,90,0.72)",
     "bb_fill": "rgba(120,120,120,0.08)",
-    "grid": "rgba(100,100,100,0.16)",
-    "text": "#1f2933",
+    "grid": "rgba(100,100,100,0.15)",
+    "text": "#111827",
     "muted": "#6b7280",
     "volume_up": "rgba(31,157,117,0.50)",
     "volume_down": "rgba(214,69,69,0.50)",
@@ -75,116 +86,71 @@ st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 1.15rem;
+            padding-top: 1.0rem;
             padding-bottom: 1.0rem;
             max-width: 100%;
         }
 
+        section[data-testid="stSidebar"] {
+            background: #fbfbfc;
+            border-right: 1px solid rgba(17, 24, 39, 0.07);
+        }
+
         div[data-testid="stVerticalBlock"] {
-            gap: 0.65rem;
+            gap: 0.72rem;
         }
 
-        .adfm-header {
-            border: 1px solid rgba(49, 51, 63, 0.10);
-            border-radius: 14px;
-            padding: 14px 16px 12px 16px;
+        div[data-testid="stMetric"] {
+            border: 1px solid rgba(17, 24, 39, 0.09);
+            border-radius: 13px;
+            padding: 0.55rem 0.70rem;
             background: #ffffff;
-            margin-bottom: 4px;
+            box-shadow: 0 1px 2px rgba(17, 24, 39, 0.025);
         }
 
-        .adfm-title {
-            font-size: 1.35rem;
-            line-height: 1.25;
-            font-weight: 750;
+        div[data-testid="stMetricLabel"] {
+            color: #6b7280;
+            font-size: 0.72rem;
+        }
+
+        div[data-testid="stMetricValue"] {
             color: #111827;
-            margin: 0;
-            white-space: normal;
-            overflow-wrap: anywhere;
-        }
-
-        .adfm-subtitle {
-            font-size: 0.82rem;
-            color: #6b7280;
-            margin-top: 4px;
-        }
-
-        .metric-strip {
-            display: grid;
-            grid-template-columns: repeat(8, minmax(95px, 1fr));
-            gap: 8px;
-            margin-top: 10px;
-        }
-
-        .metric-card {
-            border: 1px solid rgba(49, 51, 63, 0.10);
-            border-radius: 12px;
-            padding: 8px 10px;
-            background: #ffffff;
-            min-height: 58px;
-        }
-
-        .metric-label {
-            font-size: 0.70rem;
-            letter-spacing: 0.02em;
-            text-transform: uppercase;
-            color: #6b7280;
-            margin-bottom: 2px;
-        }
-
-        .metric-value {
-            font-size: 1.02rem;
-            line-height: 1.20;
+            font-size: 1.03rem;
             font-weight: 700;
+        }
+
+        div[data-testid="stMetricDelta"] {
+            font-size: 0.76rem;
+        }
+
+        .adfm-page-kicker {
+            color: #6b7280;
+            font-size: 0.78rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: -0.35rem;
+        }
+
+        .adfm-page-title {
             color: #111827;
-            white-space: nowrap;
+            font-size: 1.65rem;
+            font-weight: 750;
+            line-height: 1.15;
+            margin: 0.0rem 0 0.15rem 0;
         }
 
-        .metric-note {
-            font-size: 0.70rem;
+        .adfm-page-subtitle {
             color: #6b7280;
-            margin-top: 2px;
+            font-size: 0.86rem;
+            margin-bottom: 0.15rem;
         }
 
-        .signal-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.88rem;
-        }
-
-        .signal-table th {
-            text-align: left;
-            color: #6b7280;
-            font-weight: 650;
-            border-bottom: 1px solid rgba(49, 51, 63, 0.12);
-            padding: 7px 8px;
-        }
-
-        .signal-table td {
-            border-bottom: 1px solid rgba(49, 51, 63, 0.08);
-            padding: 8px;
-            vertical-align: top;
-        }
-
-        .memo-box {
-            border: 1px solid rgba(49, 51, 63, 0.10);
-            border-radius: 12px;
-            padding: 12px 14px;
-            background: #ffffff;
-            font-size: 0.93rem;
-            line-height: 1.5;
-            color: #1f2933;
-        }
-
-        @media (max-width: 1200px) {
-            .metric-strip {
-                grid-template-columns: repeat(4, minmax(95px, 1fr));
-            }
-        }
-
-        @media (max-width: 700px) {
-            .metric-strip {
-                grid-template-columns: repeat(2, minmax(95px, 1fr));
-            }
+        .adfm-section-title {
+            color: #111827;
+            font-size: 1.00rem;
+            font-weight: 700;
+            margin-top: 0.25rem;
+            margin-bottom: -0.25rem;
         }
     </style>
     """,
@@ -198,7 +164,8 @@ st.markdown(
 
 @dataclass(frozen=True)
 class ChartSettings:
-    ticker: str
+    display_ticker: str
+    fetch_ticker: str
     period: str
     interval: str
     chart_type: str
@@ -221,7 +188,13 @@ class ChartSettings:
     show_macd: bool
 
     compare_tickers: str
-    compare_mode: str
+
+
+def rerun_app() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
 
 
 def ensure_session_defaults() -> None:
@@ -231,6 +204,7 @@ def ensure_session_defaults() -> None:
         "interval_input": "1d",
         "chart_type_input": "Candles",
         "compare_input": "",
+        "selected_watchlist": "Index",
     }
 
     for key, value in defaults.items():
@@ -242,18 +216,26 @@ def normalize_ticker(ticker: str) -> str:
     return str(ticker).strip().upper()
 
 
+def resolve_fetch_ticker(ticker: str) -> str:
+    normalized = normalize_ticker(ticker)
+    return TICKER_ALIASES.get(normalized, normalized)
+
+
 def parse_compare_tickers(raw: str, primary: str) -> list[str]:
     if not raw:
         return []
 
     tickers = []
-    seen = {normalize_ticker(primary)}
+    seen = {normalize_ticker(primary), resolve_fetch_ticker(primary)}
 
     for part in raw.replace(";", ",").split(","):
         ticker = normalize_ticker(part)
-        if ticker and ticker not in seen:
+        fetch_ticker = resolve_fetch_ticker(ticker)
+
+        if ticker and ticker not in seen and fetch_ticker not in seen:
             tickers.append(ticker)
             seen.add(ticker)
+            seen.add(fetch_ticker)
 
     return tickers[:8]
 
@@ -263,28 +245,68 @@ def read_settings() -> ChartSettings:
 
     with st.sidebar:
         st.markdown("### About This Tool")
-        st.markdown(
-            """
-            Technical chart terminal for trend, momentum, volatility, relative strength, and invalidation levels.
-            """
+        st.caption(
+            "Single-name and macro chart terminal for trend, momentum, volatility, range structure, relative performance, and invalidation levels."
+        )
+
+        st.markdown("### Controls")
+
+        ticker = st.text_input(
+            "Primary ticker",
+            key="ticker_input",
+            placeholder="^SPX, NVDA, TLT, USDJPY=X",
+        )
+
+        period = st.selectbox(
+            "Window",
+            PERIOD_OPTIONS,
+            index=PERIOD_OPTIONS.index(st.session_state.get("period_input", "1y")),
+            key="period_input",
+        )
+
+        interval = st.selectbox(
+            "Interval",
+            INTERVAL_OPTIONS,
+            index=INTERVAL_OPTIONS.index(st.session_state.get("interval_input", "1d")),
+            key="interval_input",
+        )
+
+        chart_type = st.selectbox(
+            "Chart type",
+            CHART_TYPES,
+            index=CHART_TYPES.index(st.session_state.get("chart_type_input", "Candles")),
+            key="chart_type_input",
+        )
+
+        compare_tickers = st.text_input(
+            "Compare tickers",
+            key="compare_input",
+            placeholder="SPY, QQQ, TLT",
         )
 
         st.markdown("### Watchlists")
+
         selected_watchlist = st.selectbox(
             "Group",
             list(WATCHLISTS.keys()),
-            index=0,
-            label_visibility="collapsed",
+            index=list(WATCHLISTS.keys()).index(st.session_state.get("selected_watchlist", "Index")),
+            key="selected_watchlist",
         )
 
         cols = st.columns(2)
-        for i, ticker in enumerate(WATCHLISTS[selected_watchlist]):
-            with cols[i % 2]:
-                if st.button(ticker, key=f"watch_{selected_watchlist}_{ticker}", use_container_width=True):
-                    st.session_state["ticker_input"] = ticker
-                    st.rerun()
 
-        st.markdown("### Defaults")
+        for i, watch_ticker in enumerate(WATCHLISTS[selected_watchlist]):
+            with cols[i % 2]:
+                if st.button(
+                    watch_ticker,
+                    key=f"watch_{selected_watchlist}_{watch_ticker}",
+                    use_container_width=True,
+                ):
+                    st.session_state["ticker_input"] = watch_ticker
+                    rerun_app()
+
+        st.markdown("### Display")
+
         auto_adjust = st.checkbox("Use adjusted prices", value=False)
         log_scale = st.checkbox("Log price axis", value=False)
         tight_y_axis = st.checkbox("Dynamic price axis", value=True)
@@ -293,11 +315,11 @@ def read_settings() -> ChartSettings:
         show_range_levels = st.checkbox("Visible range high / low", value=False)
 
         with st.expander("Moving averages", expanded=False):
-            show_sma8 = st.checkbox("SMA 8", value=True)
-            show_sma20 = st.checkbox("SMA 20", value=True)
-            show_sma50 = st.checkbox("SMA 50", value=True)
-            show_sma100 = st.checkbox("SMA 100", value=True)
-            show_sma200 = st.checkbox("SMA 200", value=True)
+            show_sma8 = st.checkbox("8DMA", value=True)
+            show_sma20 = st.checkbox("20DMA", value=True)
+            show_sma50 = st.checkbox("50DMA", value=True)
+            show_sma100 = st.checkbox("100DMA", value=False)
+            show_sma200 = st.checkbox("200DMA", value=True)
 
         with st.expander("Indicators", expanded=False):
             show_bbands = st.checkbox("Bollinger Bands", value=True)
@@ -305,50 +327,12 @@ def read_settings() -> ChartSettings:
             show_rsi = st.checkbox("RSI", value=True)
             show_macd = st.checkbox("MACD", value=True)
 
-    toolbar_cols = st.columns([1.35, 2.20, 0.85, 0.85, 1.40])
-
-    with toolbar_cols[0]:
-        ticker = st.text_input(
-            "Ticker",
-            key="ticker_input",
-            placeholder="^SPX, NVDA, TLT, USDJPY=X",
-        )
-
-    with toolbar_cols[1]:
-        period = st.radio(
-            "Window",
-            PERIOD_OPTIONS,
-            key="period_input",
-            horizontal=True,
-        )
-
-    with toolbar_cols[2]:
-        interval = st.selectbox(
-            "Interval",
-            INTERVAL_OPTIONS,
-            index=INTERVAL_OPTIONS.index(st.session_state.get("interval_input", "1d")),
-            key="interval_input",
-        )
-
-    with toolbar_cols[3]:
-        chart_type = st.selectbox(
-            "Chart",
-            CHART_TYPES,
-            index=CHART_TYPES.index(st.session_state.get("chart_type_input", "Candles")),
-            key="chart_type_input",
-        )
-
-    with toolbar_cols[4]:
-        compare_tickers = st.text_input(
-            "Compare",
-            key="compare_input",
-            placeholder="SPY, QQQ, TLT",
-        )
-
-    compare_mode = "Indexed to 100"
+    display_ticker = normalize_ticker(ticker)
+    fetch_ticker = resolve_fetch_ticker(display_ticker)
 
     return ChartSettings(
-        ticker=normalize_ticker(ticker),
+        display_ticker=display_ticker,
+        fetch_ticker=fetch_ticker,
         period=period,
         interval=interval,
         chart_type=chart_type,
@@ -367,12 +351,11 @@ def read_settings() -> ChartSettings:
         show_rsi=show_rsi,
         show_macd=show_macd,
         compare_tickers=compare_tickers,
-        compare_mode=compare_mode,
     )
 
 
 # ============================================================
-# Dates
+# Date Helpers
 # ============================================================
 
 def today_normalized() -> pd.Timestamp:
@@ -389,16 +372,13 @@ def start_date_from_period(period: str) -> pd.Timestamp | None:
         return pd.Timestamp(year=today.year, month=1, day=1)
 
     if period.endswith("d"):
-        days = int(period[:-1])
-        return today - pd.DateOffset(days=days)
+        return today - pd.DateOffset(days=int(period[:-1]))
 
     if period.endswith("mo"):
-        months = int(period[:-2])
-        return today - pd.DateOffset(months=months)
+        return today - pd.DateOffset(months=int(period[:-2]))
 
     if period.endswith("y"):
-        years = int(period[:-1])
-        return today - pd.DateOffset(years=years)
+        return today - pd.DateOffset(years=int(period[:-1]))
 
     return None
 
@@ -430,8 +410,8 @@ def format_last_bar(index_value: pd.Timestamp) -> str:
 # ============================================================
 
 def flatten_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
+    if df is None or df.empty:
+        return pd.DataFrame()
 
     if not isinstance(df.columns, pd.MultiIndex):
         return df
@@ -469,14 +449,17 @@ def clean_price_data(df: pd.DataFrame) -> pd.DataFrame:
     out = out[~out.index.duplicated(keep="last")]
 
     rename_map = {}
+
     for col in out.columns:
         clean = str(col).strip()
+
         if clean in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
             rename_map[col] = clean
 
     out = out.rename(columns=rename_map)
 
     missing = [col for col in REQUIRED_PRICE_COLUMNS if col not in out.columns]
+
     if missing:
         return pd.DataFrame()
 
@@ -556,12 +539,14 @@ def fetch_with_ticker_history(
 
     if cleaned.empty:
         fallback_period_clean = "1y" if fallback_period == "YTD" else fallback_period
+
         raw = ticker_obj.history(
             period=fallback_period_clean,
             interval=interval,
             auto_adjust=auto_adjust,
             actions=False,
         )
+
         cleaned = clean_price_data(raw)
 
     return cleaned
@@ -573,7 +558,7 @@ def fetch_history(settings: ChartSettings) -> tuple[pd.DataFrame, str | None]:
 
     try:
         df = fetch_with_yfinance_download(
-            ticker=settings.ticker,
+            ticker=settings.fetch_ticker,
             interval=settings.interval,
             auto_adjust=settings.auto_adjust,
             fetch_start=fetch_start_str,
@@ -589,7 +574,7 @@ def fetch_history(settings: ChartSettings) -> tuple[pd.DataFrame, str | None]:
 
     try:
         df = fetch_with_ticker_history(
-            ticker=settings.ticker,
+            ticker=settings.fetch_ticker,
             interval=settings.interval,
             auto_adjust=settings.auto_adjust,
             fetch_start=fetch_start_str,
@@ -741,9 +726,18 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["ATR14"] = compute_atr(out)
     out["ATR14_PCT"] = out["ATR14"] / out["Close"].replace(0, np.nan)
 
-    out["ROLLING_VOL_20"] = out["Close"].pct_change().rolling(20, min_periods=20).std() * np.sqrt(252)
+    out["ROLLING_VOL_20"] = (
+        out["Close"]
+        .pct_change()
+        .rolling(20, min_periods=20)
+        .std()
+        * np.sqrt(252)
+    )
 
-    out["DRAWDOWN_252"] = (out["Close"] / out["Close"].rolling(252, min_periods=30).max()) - 1.0
+    out["DRAWDOWN_252"] = (
+        out["Close"]
+        / out["Close"].rolling(252, min_periods=30).max()
+    ) - 1.0
 
     return out
 
@@ -828,6 +822,7 @@ def compute_return_metrics(df: pd.DataFrame) -> dict[str, float | None]:
 
     if ytd_base is None:
         year_data = df[df.index >= pd.Timestamp(year=latest_date.year, month=1, day=1)]
+
         if not year_data.empty:
             ytd_base = float(year_data["Close"].iloc[0])
 
@@ -844,6 +839,7 @@ def compute_header_stats(df: pd.DataFrame) -> dict[str, str]:
     ret = compute_return_metrics(df)
 
     one_year = df[df.index >= latest_date - pd.DateOffset(years=1)]
+
     if one_year.empty:
         one_year = df.tail(252)
 
@@ -865,6 +861,7 @@ def compute_header_stats(df: pd.DataFrame) -> dict[str, str]:
         "1M": fmt_pct(ret.get("1M")),
         "3M": fmt_pct(ret.get("3M")),
         "YTD": fmt_pct(ret.get("YTD")),
+        "1Y": fmt_pct(ret.get("1Y")),
         "Drawdown": fmt_pct(drawdown_52w),
         "ATR": fmt_pct_abs(atr_pct),
         "52w Low Dist": fmt_pct(upside_from_52w_low),
@@ -915,11 +912,11 @@ def classify_trend(df: pd.DataFrame) -> tuple[str, str]:
     if len(below) == len(valid):
         return "Bearish", "Price is below the major moving averages."
 
-    if close > (sma50 or close) and close > (sma200 or close):
-        return "Constructive", "Price is above the core 50DMA / 200DMA trend filter, but the stack is not fully clean."
+    if sma50 is not None and sma200 is not None and close > sma50 and close > sma200:
+        return "Constructive", "Price is above the 50DMA / 200DMA trend filter, but the full moving-average stack is not clean."
 
-    if close < (sma50 or close) and close < (sma200 or close):
-        return "Damaged", "Price is below the core 50DMA / 200DMA trend filter."
+    if sma50 is not None and sma200 is not None and close < sma50 and close < sma200:
+        return "Damaged", "Price is below the 50DMA / 200DMA trend filter."
 
     return "Mixed", "Trend filters are split across short and long horizons."
 
@@ -935,14 +932,14 @@ def classify_momentum(df: pd.DataFrame) -> tuple[str, str]:
     hist_text = "MACD histogram unavailable" if hist is None else f"MACD histogram {hist:.2f}"
 
     if rsi is not None and hist is not None:
+        if rsi >= 70 and hist > 0:
+            return "Extended", f"{rsi_text}; {hist_text}. Momentum is strong but extended."
         if rsi >= 60 and hist > 0:
             return "Positive", f"{rsi_text}; {hist_text}. Momentum confirms the trend."
         if rsi >= 50 and hist > 0:
             return "Constructive", f"{rsi_text}; {hist_text}. Momentum is positive but not stretched."
         if rsi < 45 and hist < 0:
             return "Negative", f"{rsi_text}; {hist_text}. Momentum is deteriorating."
-        if rsi > 70:
-            return "Extended", f"{rsi_text}; {hist_text}. Momentum is strong but extended."
 
     return "Mixed", f"{rsi_text}; {hist_text}."
 
@@ -962,6 +959,7 @@ def classify_volatility(df: pd.DataFrame) -> tuple[str, str]:
 
     if percentile >= 0.80:
         return "Elevated", f"ATR is {latest_atr * 100:.2f}% of price, in the {percentile * 100:.0f}th percentile of recent history."
+
     if percentile <= 0.25:
         return "Compressed", f"ATR is {latest_atr * 100:.2f}% of price, in the {percentile * 100:.0f}th percentile of recent history."
 
@@ -980,15 +978,17 @@ def classify_structure(df: pd.DataFrame) -> tuple[str, str]:
 
     if close >= high_20 * 0.995:
         return "Breakout pressure", f"Price is pressing the 20-bar high at {high_20:,.2f}."
+
     if close <= low_20 * 1.005:
         return "Breakdown pressure", f"Price is pressing the 20-bar low at {low_20:,.2f}."
 
     range_position = (close - low_60) / max(high_60 - low_60, 1e-9)
 
     if range_position >= 0.70:
-        return "Upper range", f"Price sits in the upper part of the 60-bar range."
+        return "Upper range", "Price sits in the upper part of the 60-bar range."
+
     if range_position <= 0.30:
-        return "Lower range", f"Price sits in the lower part of the 60-bar range."
+        return "Lower range", "Price sits in the lower part of the 60-bar range."
 
     return "Range", "Price is inside the recent range without a clean breakout or breakdown."
 
@@ -1025,6 +1025,8 @@ def risk_levels(df: pd.DataFrame) -> tuple[str, str]:
         ("200DMA", latest_float(df, "SMA200")),
         ("20-bar low", float(df["Low"].tail(20).min()) if len(df) >= 20 else None),
         ("60-bar low", float(df["Low"].tail(60).min()) if len(df) >= 60 else None),
+        ("20-bar high", float(df["High"].tail(20).max()) if len(df) >= 20 else None),
+        ("60-bar high", float(df["High"].tail(60).max()) if len(df) >= 60 else None),
     ]
 
     below = nearest_level_below(close, levels)
@@ -1033,6 +1035,7 @@ def risk_levels(df: pd.DataFrame) -> tuple[str, str]:
     if below and above:
         support_label, support_value = below
         resistance_label, resistance_value = above
+
         return (
             support_label,
             f"Nearest support is {support_label} at {support_value:,.2f}. Nearest resistance is {resistance_label} at {resistance_value:,.2f}.",
@@ -1070,13 +1073,14 @@ def build_technical_memo(df: pd.DataFrame, ticker: str) -> str:
     momentum, momentum_note = classify_momentum(df)
     volatility, volatility_note = classify_volatility(df)
     structure, structure_note = classify_structure(df)
-    risk, risk_note = risk_levels(df)
+    _, risk_note = risk_levels(df)
 
     close = latest_float(df, "Close")
     sma50 = latest_float(df, "SMA50")
     sma200 = latest_float(df, "SMA200")
 
     invalidation = "the next major moving-average break"
+
     if close is not None and sma50 is not None and close > sma50:
         invalidation = "a close below the 50DMA"
     elif close is not None and sma200 is not None and close > sma200:
@@ -1088,38 +1092,8 @@ def build_technical_memo(df: pd.DataFrame, ticker: str) -> str:
         f"{ticker} screens as {trend.lower()} on trend and {momentum.lower()} on momentum. "
         f"{trend_note} {momentum_note} Volatility is {volatility.lower()}: {volatility_note} "
         f"Structure reads as {structure.lower()}. {structure_note} {risk_note} "
-        f"The practical invalidation level is {invalidation}."
+        f"Practical invalidation is {invalidation}."
     )
-
-
-def signal_table_html(rows: list[dict[str, str]]) -> str:
-    html = """
-    <table class="signal-table">
-        <thead>
-            <tr>
-                <th>Signal</th>
-                <th>Reading</th>
-                <th>Interpretation</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
-
-    for row in rows:
-        html += f"""
-            <tr>
-                <td>{row['Signal']}</td>
-                <td><strong>{row['Reading']}</strong></td>
-                <td>{row['Interpretation']}</td>
-            </tr>
-        """
-
-    html += """
-        </tbody>
-    </table>
-    """
-
-    return html
 
 
 # ============================================================
@@ -1171,15 +1145,15 @@ def panel_layout(panels: list[str]) -> tuple[int, list[float], int]:
     row_count = 1 + len(panels)
 
     if row_count == 1:
-        return row_count, [1.0], 670
+        return row_count, [1.0], 690
 
     if row_count == 2:
-        return row_count, [0.80, 0.20], 790
+        return row_count, [0.80, 0.20], 800
 
     if row_count == 3:
-        return row_count, [0.70, 0.15, 0.15], 890
+        return row_count, [0.70, 0.15, 0.15], 905
 
-    return row_count, [0.64, 0.12, 0.12, 0.12], 980
+    return row_count, [0.64, 0.12, 0.12, 0.12], 990
 
 
 def volume_tick_count(volume: pd.Series) -> int:
@@ -1220,8 +1194,14 @@ def price_axis_range(df: pd.DataFrame, settings: ChartSettings) -> list[float] |
             columns.append(column)
 
     values = []
+
     for column in columns:
-        series = pd.to_numeric(df[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        series = (
+            pd.to_numeric(df[column], errors="coerce")
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
+
         if not series.empty:
             values.append(series)
 
@@ -1233,7 +1213,12 @@ def price_axis_range(df: pd.DataFrame, settings: ChartSettings) -> list[float] |
     ymax = float(combined.max())
 
     if ymin <= 0 and settings.log_scale:
-        ymin = float(pd.to_numeric(df["Low"], errors="coerce").dropna().min())
+        low_series = pd.to_numeric(df["Low"], errors="coerce").dropna()
+
+        if low_series.empty:
+            return None
+
+        ymin = float(low_series.min())
 
     visible_range = ymax - ymin
 
@@ -1352,10 +1337,10 @@ def add_price_panel(
         )
 
     ma_config = [
-        ("SMA8", "8DMA", COLORS["sma8"], settings.show_sma8, 1.30),
-        ("SMA20", "20DMA", COLORS["sma20"], settings.show_sma20, 1.45),
+        ("SMA8", "8DMA", COLORS["sma8"], settings.show_sma8, 1.25),
+        ("SMA20", "20DMA", COLORS["sma20"], settings.show_sma20, 1.35),
         ("SMA50", "50DMA", COLORS["sma50"], settings.show_sma50, 1.55),
-        ("SMA100", "100DMA", COLORS["sma100"], settings.show_sma100, 1.45),
+        ("SMA100", "100DMA", COLORS["sma100"], settings.show_sma100, 1.35),
         ("SMA200", "200DMA", COLORS["sma200"], settings.show_sma200, 1.75),
     ]
 
@@ -1589,7 +1574,6 @@ def build_chart(
         )
 
     price_range = price_axis_range(df, settings)
-
     axis_type = "log" if settings.log_scale else "linear"
     axis_range = price_range
 
@@ -1649,7 +1633,7 @@ def build_chart(
         plot_bgcolor="white",
         paper_bgcolor="white",
         hovermode="x unified",
-        margin=dict(l=44, r=20, t=26, b=12),
+        margin=dict(l=48, r=18, t=24, b=12),
         font=dict(
             family="Arial, sans-serif",
             size=12,
@@ -1686,17 +1670,17 @@ def fetch_compare_close(
     fetch_start: str | None,
 ) -> pd.Series:
     df = fetch_with_yfinance_download(
-        ticker=ticker,
+        ticker=resolve_fetch_ticker(ticker),
         interval=interval,
         auto_adjust=auto_adjust,
         fetch_start=fetch_start,
     )
 
     if df.empty:
-        return pd.Series(dtype=float, name=ticker)
+        return pd.Series(dtype=float, name=normalize_ticker(ticker))
 
     out = df["Close"].astype(float).copy()
-    out.name = ticker
+    out.name = normalize_ticker(ticker)
 
     return out
 
@@ -1712,7 +1696,7 @@ def build_compare_chart(
     fetch_start = warmup_start_date(settings.period, settings.interval)
     fetch_start_str = fetch_start.strftime("%Y-%m-%d") if fetch_start is not None else None
 
-    series_list = [primary_df["Close"].astype(float).rename(settings.ticker)]
+    series_list = [primary_df["Close"].astype(float).rename(settings.display_ticker)]
 
     for ticker in compare_tickers:
         try:
@@ -1748,7 +1732,8 @@ def build_compare_chart(
     fig = go.Figure()
 
     for column in indexed.columns:
-        width = 2.4 if column == settings.ticker else 1.55
+        width = 2.4 if column == settings.display_ticker else 1.55
+
         fig.add_trace(
             go.Scatter(
                 x=indexed.index,
@@ -1761,11 +1746,11 @@ def build_compare_chart(
         )
 
     fig.update_layout(
-        height=360,
+        height=390,
         plot_bgcolor="white",
         paper_bgcolor="white",
         hovermode="x unified",
-        margin=dict(l=44, r=20, t=28, b=18),
+        margin=dict(l=48, r=18, t=34, b=18),
         font=dict(
             family="Arial, sans-serif",
             size=12,
@@ -1815,38 +1800,84 @@ def build_compare_chart(
 # Render Helpers
 # ============================================================
 
-def metric_card(label: str, value: str, note: str = "") -> str:
-    return f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-note">{note}</div>
-        </div>
-    """
-
-
-def render_header(settings: ChartSettings, display_df: pd.DataFrame) -> None:
-    stats = compute_header_stats(display_df)
+def render_page_header(settings: ChartSettings, full_df: pd.DataFrame, display_df: pd.DataFrame) -> None:
     last_bar = format_last_bar(display_df.index[-1])
 
-    html = f"""
-    <div class="adfm-header">
-        <div class="adfm-title">{settings.ticker} Technical Regime</div>
-        <div class="adfm-subtitle">Interval: {settings.interval} | Window: {settings.period} | Last bar: {last_bar}</div>
-        <div class="metric-strip">
-            {metric_card("Last", stats["Last"])}
-            {metric_card("1D", stats["1D"])}
-            {metric_card("5D", stats["5D"])}
-            {metric_card("1M", stats["1M"])}
-            {metric_card("3M", stats["3M"])}
-            {metric_card("YTD", stats["YTD"])}
-            {metric_card("Drawdown", stats["Drawdown"], "From 52w high")}
-            {metric_card("ATR", stats["ATR"], "14-period")}
-        </div>
-    </div>
-    """
+    st.markdown(
+        f"""
+        <div class="adfm-page-kicker">ADFM Chart Terminal</div>
+        <div class="adfm-page-title">{settings.display_ticker} Technical Regime</div>
+        <div class="adfm-page-subtitle">Window: {settings.period} | Interval: {settings.interval} | Last bar: {last_bar}</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown(html, unsafe_allow_html=True)
+
+def render_metric_strip(full_df: pd.DataFrame) -> None:
+    stats = compute_header_stats(full_df)
+
+    metric_items = [
+        ("Last", stats["Last"], None),
+        ("1D", stats["1D"], None),
+        ("5D", stats["5D"], None),
+        ("1M", stats["1M"], None),
+        ("3M", stats["3M"], None),
+        ("YTD", stats["YTD"], None),
+        ("1Y", stats["1Y"], None),
+        ("ATR", stats["ATR"], "14-period"),
+    ]
+
+    metric_cols = st.columns(8)
+
+    for col, (label, value, help_text) in zip(metric_cols, metric_items):
+        with col:
+            st.metric(
+                label=label,
+                value=value,
+                help=help_text,
+            )
+
+
+def render_signal_matrix(rows: list[dict[str, str]]) -> None:
+    signal_df = pd.DataFrame(rows)
+
+    st.dataframe(
+        signal_df,
+        use_container_width=True,
+        hide_index=True,
+        height=248,
+        column_config={
+            "Signal": st.column_config.TextColumn("Signal", width="small"),
+            "Reading": st.column_config.TextColumn("Reading", width="medium"),
+            "Interpretation": st.column_config.TextColumn("Interpretation", width="large"),
+        },
+    )
+
+
+def render_technical_memo(memo: str) -> None:
+    try:
+        container = st.container(border=True)
+
+        with container:
+            st.write(memo)
+
+    except TypeError:
+        st.write(memo)
+
+
+def render_lower_section(display_df: pd.DataFrame, settings: ChartSettings) -> None:
+    signal_rows = build_signal_rows(display_df)
+    memo = build_technical_memo(display_df, settings.display_ticker)
+
+    st.markdown('<div class="adfm-section-title">Signal Matrix and Technical Memo</div>', unsafe_allow_html=True)
+
+    left, right = st.columns([1.35, 1.00])
+
+    with left:
+        render_signal_matrix(signal_rows)
+
+    with right:
+        render_technical_memo(memo)
 
 
 # ============================================================
@@ -1855,7 +1886,7 @@ def render_header(settings: ChartSettings, display_df: pd.DataFrame) -> None:
 
 settings = read_settings()
 
-if not settings.ticker:
+if not settings.display_ticker:
     st.error("Enter a ticker.")
     st.stop()
 
@@ -1863,9 +1894,11 @@ with st.spinner("Loading chart data..."):
     raw_df, fetch_error = fetch_history(settings)
 
 if raw_df.empty:
-    st.error(f"No data available for {settings.ticker}.")
+    st.error(f"No data available for {settings.display_ticker}.")
+
     if fetch_error:
         st.caption(fetch_error)
+
     st.stop()
 
 indicator_df = add_indicators(raw_df)
@@ -1880,16 +1913,17 @@ volume_is_usable = has_usable_volume(display_df)
 if settings.show_volume and not volume_is_usable:
     st.sidebar.info("Volume panel hidden because this symbol does not have usable volume data.")
 
-render_header(settings, display_df)
+render_page_header(settings, indicator_df, display_df)
+render_metric_strip(indicator_df)
 
-chart = build_chart(
+main_chart = build_chart(
     df=display_df,
     settings=settings,
     usable_volume=volume_is_usable,
 )
 
 st.plotly_chart(
-    chart,
+    main_chart,
     use_container_width=True,
     config={
         "displaylogo": False,
@@ -1902,38 +1936,31 @@ st.plotly_chart(
     },
 )
 
-compare_tickers = parse_compare_tickers(settings.compare_tickers, settings.ticker)
-compare_fig = build_compare_chart(
-    primary_df=indicator_df,
-    settings=settings,
-    compare_tickers=compare_tickers,
-)
+compare_tickers = parse_compare_tickers(settings.compare_tickers, settings.display_ticker)
 
-if compare_fig is not None:
-    st.plotly_chart(
-        compare_fig,
-        use_container_width=True,
-        config={
-            "displaylogo": False,
-            "scrollZoom": True,
-            "modeBarButtonsToRemove": [
-                "select2d",
-                "lasso2d",
-            ],
-        },
+if compare_tickers:
+    compare_fig = build_compare_chart(
+        primary_df=indicator_df,
+        settings=settings,
+        compare_tickers=compare_tickers,
     )
 
-signal_rows = build_signal_rows(display_df)
-memo = build_technical_memo(display_df, settings.ticker)
+    if compare_fig is not None:
+        st.plotly_chart(
+            compare_fig,
+            use_container_width=True,
+            config={
+                "displaylogo": False,
+                "scrollZoom": True,
+                "modeBarButtonsToRemove": [
+                    "select2d",
+                    "lasso2d",
+                ],
+            },
+        )
+    else:
+        st.info("Compare chart unavailable. Check compare tickers or data availability.")
 
-left, right = st.columns([1.35, 1.00])
-
-with left:
-    st.markdown("#### Signal Matrix")
-    st.markdown(signal_table_html(signal_rows), unsafe_allow_html=True)
-
-with right:
-    st.markdown("#### Technical Memo")
-    st.markdown(f"""<div class="memo-box">{memo}</div>""", unsafe_allow_html=True)
+render_lower_section(display_df, settings)
 
 st.caption("© 2026 AD Fund Management LP")
