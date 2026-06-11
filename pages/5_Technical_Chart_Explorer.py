@@ -34,7 +34,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-06-11-sidebar-controls-elliott-wave"
+APP_VERSION = "2026-06-11-output-quality-clean-legend-rsi"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -46,28 +46,28 @@ WATCHLISTS = {
 }
 
 COLORS = {
-    "up": "#1f9d75",
-    "down": "#d64545",
-    "sma8": "#00A6FB",
-    "sma20": "#2962FF",
-    "sma50": "#7E57C2",
-    "sma100": "#B7791F",
-    "sma200": "#111111",
-    "bb": "rgba(90,90,90,0.72)",
-    "bb_fill": "rgba(120,120,120,0.08)",
-    "grid": "rgba(100,100,100,0.16)",
+    "up": "rgba(46,139,87,0.82)",
+    "down": "rgba(178,34,34,0.82)",
+    "sma8": "#6c757d",
+    "sma20": "#9467bd",
+    "sma50": "#1f77b4",
+    "sma100": "#ff7f0e",
+    "sma200": "#d62728",
+    "bb": "rgba(70,70,70,0.38)",
+    "bb_fill": "rgba(120,120,120,0.05)",
+    "grid": "rgba(0,0,0,0.08)",
     "text": "#1f2933",
     "muted": "#6b7280",
-    "volume_up": "rgba(31,157,117,0.50)",
-    "volume_down": "rgba(214,69,69,0.50)",
-    "volume_neutral": "rgba(150,150,150,0.40)",
-    "rsi": "#5E35B1",
-    "macd": "#1E88E5",
-    "signal": "#FB8C00",
-    "hist_up": "rgba(31,157,117,0.65)",
-    "hist_down": "rgba(214,69,69,0.65)",
-    "range": "rgba(55,65,81,0.65)",
-    "last": "#0F4C81",
+    "volume_up": "rgba(46,139,87,0.38)",
+    "volume_down": "rgba(178,34,34,0.34)",
+    "volume_neutral": "rgba(150,150,150,0.32)",
+    "rsi": "#111111",
+    "macd": "#1f77b4",
+    "signal": "#ff7f0e",
+    "hist_up": "rgba(46,139,87,0.48)",
+    "hist_down": "rgba(178,34,34,0.45)",
+    "range": "rgba(55,65,81,0.55)",
+    "last": "rgba(17,24,39,0.78)",
 }
 
 
@@ -1708,29 +1708,65 @@ def add_volume_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
 
 def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
+    x_start = df.index.min()
+    x_end = df.index.max()
+
+    fig.add_shape(
+        type="rect",
+        xref=f"x{row}" if row > 1 else "x",
+        yref=f"y{row}" if row > 1 else "y",
+        x0=x_start,
+        x1=x_end,
+        y0=30,
+        y1=70,
+        fillcolor="gray",
+        opacity=0.08,
+        line_width=0,
+        row=row,
+        col=1,
+    )
+
     fig.add_trace(
         go.Scatter(
             x=df.index,
             y=df["RSI14"],
             mode="lines",
-            line=dict(color=COLORS["rsi"], width=1.5),
-            name="RSI 14",
-            hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
+            line=dict(color=COLORS["rsi"], width=1.1),
+            name="RSI",
+            hovertemplate="RSI: %{y:.1f}<extra></extra>",
             showlegend=False,
         ),
         row=row,
         col=1,
     )
 
-    for level in [70, 50, 30]:
-        fig.add_hline(
-            y=level,
-            line_dash="dash" if level != 50 else "dot",
-            line_color="rgba(120,120,120,0.45)",
-            line_width=1,
-            row=row,
-            col=1,
-        )
+    fig.add_trace(
+        go.Scatter(
+            x=[x_start, x_end],
+            y=[70, 70],
+            mode="lines",
+            line=dict(color="#b22222", width=1, dash="dot"),
+            name="RSI 70",
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        row=row,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[x_start, x_end],
+            y=[30, 30],
+            mode="lines",
+            line=dict(color="#2e8b57", width=1, dash="dot"),
+            name="RSI 30",
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        row=row,
+        col=1,
+    )
 
 
 def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
@@ -1801,7 +1837,7 @@ def build_chart(
         rows=row_count,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.012,
+        vertical_spacing=0.028,
         row_heights=row_heights,
         specs=[[{"type": "xy"}] for _ in range(row_count)],
     )
@@ -1888,11 +1924,11 @@ def build_chart(
 
     fig.update_layout(
         height=fig_height,
-        title=None,
+        title=dict(text=""),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        hovermode="x unified",
-        margin=dict(l=44, r=20, t=26, b=12),
+        hovermode="x",
+        margin=dict(l=40, r=22, t=34, b=30),
         font=dict(
             family="Arial, sans-serif",
             size=12,
@@ -1902,17 +1938,24 @@ def build_chart(
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.012,
+            y=1.018,
             xanchor="left",
             x=0,
             bgcolor="rgba(255,255,255,0)",
             borderwidth=0,
             font=dict(size=11, color="#374151"),
-            title_text="",
+            title=dict(text=""),
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
         ),
         bargap=0.08,
         xaxis_rangeslider_visible=False,
     )
+
+    # Defensive clean-up for Plotly / Streamlit builds that render a blank
+    # layout title as the literal word "undefined".
+    fig.layout.title.text = ""
+    fig.layout.legend.title.text = ""
 
     return fig
 
