@@ -34,7 +34,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-06-11-html-render-fix"
+APP_VERSION = "2026-06-11-toolbar-spacing-fix"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -88,7 +88,7 @@ st.markdown(
         }
 
         .block-container {
-            padding-top: 1.15rem;
+            padding-top: 1.85rem;
             padding-bottom: 1.0rem;
             max-width: 100%;
         }
@@ -296,7 +296,7 @@ def read_settings() -> ChartSettings:
             "Group",
             list(WATCHLISTS.keys()),
             index=0,
-            label_visibility="collapsed",
+            label_visibility="hidden",
         )
 
         cols = st.columns(2)
@@ -334,7 +334,7 @@ def read_settings() -> ChartSettings:
             "Ticker",
             key="ticker_input",
             placeholder="^SPX, NVDA, TLT, USDJPY=X",
-            label_visibility="collapsed",
+            label_visibility="hidden",
         )
 
     with toolbar_cols[1]:
@@ -343,7 +343,7 @@ def read_settings() -> ChartSettings:
             PERIOD_OPTIONS,
             key="period_input",
             horizontal=True,
-            label_visibility="collapsed",
+            label_visibility="hidden",
         )
 
     with toolbar_cols[2]:
@@ -352,7 +352,7 @@ def read_settings() -> ChartSettings:
             INTERVAL_OPTIONS,
             index=INTERVAL_OPTIONS.index(st.session_state.get("interval_input", "1d")),
             key="interval_input",
-            label_visibility="collapsed",
+            label_visibility="hidden",
         )
 
     with toolbar_cols[3]:
@@ -361,7 +361,7 @@ def read_settings() -> ChartSettings:
             CHART_TYPES,
             index=CHART_TYPES.index(st.session_state.get("chart_type_input", "Candles")),
             key="chart_type_input",
-            label_visibility="collapsed",
+            label_visibility="hidden",
         )
 
     with toolbar_cols[4]:
@@ -369,7 +369,7 @@ def read_settings() -> ChartSettings:
             "Compare",
             key="compare_input",
             placeholder="SPY, QQQ, TLT",
-            label_visibility="collapsed",
+            label_visibility="hidden",
         )
 
     compare_mode = "Indexed to 100"
