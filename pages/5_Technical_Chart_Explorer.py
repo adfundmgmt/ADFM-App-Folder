@@ -12,9 +12,12 @@ from plotly.subplots import make_subplots
 # Page
 # ============================================================
 
+TITLE = "ADFM Chart Terminal"
+
 st.set_page_config(
-    page_title="ADFM Chart Tool",
+    page_title=TITLE,
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -22,36 +25,171 @@ st.set_page_config(
 # Constants
 # ============================================================
 
-PERIOD_OPTIONS = ["1mo", "3mo", "6mo", "1y", "2y", "3y", "5y", "10y", "max"]
+PERIOD_OPTIONS = ["5d", "1mo", "3mo", "6mo", "YTD", "1y", "2y", "5y", "10y", "max"]
 INTERVAL_OPTIONS = ["1d", "1wk", "1mo"]
+CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
-CAP_MAX_ROWS = 200_000
+CAP_MAX_ROWS = 250_000
+
+WATCHLISTS = {
+    "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
+    "Mag 7": ["NVDA", "MSFT", "META", "AMZN", "GOOGL", "AAPL", "TSLA"],
+    "Rates / Credit": ["TLT", "IEF", "SHY", "HYG", "LQD", "JNK"],
+    "Commodities": ["USO", "BNO", "GLD", "SLV", "CPER", "UNG"],
+    "FX": ["DX-Y.NYB", "USDJPY=X", "EURUSD=X", "EURGBP=X", "GBPUSD=X"],
+    "Crypto": ["BTC-USD", "ETH-USD", "IBIT", "ETHE"],
+}
 
 COLORS = {
-    "up": "#26A69A",
-    "down": "#EF5350",
-    "ma8": "#00A6FB",
-    "ma20": "#2962FF",
-    "ma50": "#7E57C2",
-    "ma100": "#C49A00",
-    "ma200": "#111111",
-    "bb": "#9E9E9E",
-    "bb_fill": "rgba(158,158,158,0.10)",
-    "grid": "rgba(120,120,120,0.18)",
-    "text": "#222222",
-    "volume_up": "rgba(38,166,154,0.55)",
-    "volume_down": "rgba(239,83,80,0.55)",
-    "volume_neutral": "rgba(150,150,150,0.45)",
+    "up": "#1f9d75",
+    "down": "#d64545",
+    "sma8": "#00A6FB",
+    "sma20": "#2962FF",
+    "sma50": "#7E57C2",
+    "sma100": "#B7791F",
+    "sma200": "#111111",
+    "bb": "rgba(90,90,90,0.72)",
+    "bb_fill": "rgba(120,120,120,0.08)",
+    "grid": "rgba(100,100,100,0.16)",
+    "text": "#1f2933",
+    "muted": "#6b7280",
+    "volume_up": "rgba(31,157,117,0.50)",
+    "volume_down": "rgba(214,69,69,0.50)",
+    "volume_neutral": "rgba(150,150,150,0.40)",
     "rsi": "#5E35B1",
     "macd": "#1E88E5",
     "signal": "#FB8C00",
-    "hist_up": "rgba(38,166,154,0.65)",
-    "hist_down": "rgba(239,83,80,0.65)",
-    "range": "rgba(80,80,80,0.60)",
-    "last": "#1565C0",
-    "zigzag": "rgba(30,30,30,0.65)",
+    "hist_up": "rgba(31,157,117,0.65)",
+    "hist_down": "rgba(214,69,69,0.65)",
+    "range": "rgba(55,65,81,0.65)",
+    "last": "#0F4C81",
 }
+
+
+# ============================================================
+# CSS
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+        .block-container {
+            padding-top: 1.15rem;
+            padding-bottom: 1.0rem;
+            max-width: 100%;
+        }
+
+        div[data-testid="stVerticalBlock"] {
+            gap: 0.65rem;
+        }
+
+        .adfm-header {
+            border: 1px solid rgba(49, 51, 63, 0.10);
+            border-radius: 14px;
+            padding: 14px 16px 12px 16px;
+            background: #ffffff;
+            margin-bottom: 4px;
+        }
+
+        .adfm-title {
+            font-size: 1.35rem;
+            line-height: 1.25;
+            font-weight: 750;
+            color: #111827;
+            margin: 0;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        .adfm-subtitle {
+            font-size: 0.82rem;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
+        .metric-strip {
+            display: grid;
+            grid-template-columns: repeat(8, minmax(95px, 1fr));
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .metric-card {
+            border: 1px solid rgba(49, 51, 63, 0.10);
+            border-radius: 12px;
+            padding: 8px 10px;
+            background: #ffffff;
+            min-height: 58px;
+        }
+
+        .metric-label {
+            font-size: 0.70rem;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            color: #6b7280;
+            margin-bottom: 2px;
+        }
+
+        .metric-value {
+            font-size: 1.02rem;
+            line-height: 1.20;
+            font-weight: 700;
+            color: #111827;
+            white-space: nowrap;
+        }
+
+        .metric-note {
+            font-size: 0.70rem;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+
+        .signal-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+        }
+
+        .signal-table th {
+            text-align: left;
+            color: #6b7280;
+            font-weight: 650;
+            border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+            padding: 7px 8px;
+        }
+
+        .signal-table td {
+            border-bottom: 1px solid rgba(49, 51, 63, 0.08);
+            padding: 8px;
+            vertical-align: top;
+        }
+
+        .memo-box {
+            border: 1px solid rgba(49, 51, 63, 0.10);
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: #ffffff;
+            font-size: 0.93rem;
+            line-height: 1.5;
+            color: #1f2933;
+        }
+
+        @media (max-width: 1200px) {
+            .metric-strip {
+                grid-template-columns: repeat(4, minmax(95px, 1fr));
+            }
+        }
+
+        @media (max-width: 700px) {
+            .metric-strip {
+                grid-template-columns: repeat(2, minmax(95px, 1fr));
+            }
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
@@ -63,19 +201,16 @@ class ChartSettings:
     ticker: str
     period: str
     interval: str
+    chart_type: str
     auto_adjust: bool
+    log_scale: bool
+    tight_y_axis: bool
 
-    show_ma8: bool
-    show_ma20: bool
-    show_ma50: bool
-    show_ma100: bool
-    show_ma200: bool
-
-    show_ema8: bool
-    show_ema20: bool
-    show_ema50: bool
-    show_ema100: bool
-    show_ema200: bool
+    show_sma8: bool
+    show_sma20: bool
+    show_sma50: bool
+    show_sma100: bool
+    show_sma200: bool
 
     show_bbands: bool
     show_last_price: bool
@@ -85,112 +220,154 @@ class ChartSettings:
     show_rsi: bool
     show_macd: bool
 
-    show_structure: bool
-    pivot_window: int
-    min_swing_pct: float
-    max_pivots: int
-    structure_lookback_pivots: int
-    structure_mode: str
+    compare_tickers: str
+    compare_mode: str
+
+
+def ensure_session_defaults() -> None:
+    defaults = {
+        "ticker_input": "^SPX",
+        "period_input": "1y",
+        "interval_input": "1d",
+        "chart_type_input": "Candles",
+        "compare_input": "",
+    }
+
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def normalize_ticker(ticker: str) -> str:
+    return str(ticker).strip().upper()
+
+
+def parse_compare_tickers(raw: str, primary: str) -> list[str]:
+    if not raw:
+        return []
+
+    tickers = []
+    seen = {normalize_ticker(primary)}
+
+    for part in raw.replace(";", ",").split(","):
+        ticker = normalize_ticker(part)
+        if ticker and ticker not in seen:
+            tickers.append(ticker)
+            seen.add(ticker)
+
+    return tickers[:8]
 
 
 def read_settings() -> ChartSettings:
-    st.sidebar.header("About This Tool")
-    st.sidebar.markdown(
-        """
-        **Purpose:** Clean technical chart workspace for trend, momentum, volatility, and structure context.
+    ensure_session_defaults()
 
-        **Default setup**
-        - Candlesticks
-        - SMA 8, SMA 20, SMA 50, SMA 100, SMA 200
-        - Optional EMA 8, EMA 20, EMA 50, EMA 100, EMA 200
-        - Bollinger Bands
-        - Volume when available
-        - RSI and MACD
+    with st.sidebar:
+        st.markdown("### About This Tool")
+        st.markdown(
+            """
+            Technical chart terminal for trend, momentum, volatility, relative strength, and invalidation levels.
+            """
+        )
 
-        **Data source**
-        - Yahoo Finance via `yfinance`
-        """
-    )
+        st.markdown("### Watchlists")
+        selected_watchlist = st.selectbox(
+            "Group",
+            list(WATCHLISTS.keys()),
+            index=0,
+            label_visibility="collapsed",
+        )
 
-    ticker = st.sidebar.text_input("Ticker", "^SPX").upper().strip()
+        cols = st.columns(2)
+        for i, ticker in enumerate(WATCHLISTS[selected_watchlist]):
+            with cols[i % 2]:
+                if st.button(ticker, key=f"watch_{selected_watchlist}_{ticker}", use_container_width=True):
+                    st.session_state["ticker_input"] = ticker
+                    st.rerun()
 
-    period = st.sidebar.selectbox(
-        "Period",
-        PERIOD_OPTIONS,
-        index=3,
-    )
+        st.markdown("### Defaults")
+        auto_adjust = st.checkbox("Use adjusted prices", value=False)
+        log_scale = st.checkbox("Log price axis", value=False)
+        tight_y_axis = st.checkbox("Dynamic price axis", value=True)
 
-    interval = st.sidebar.selectbox(
-        "Interval",
-        INTERVAL_OPTIONS,
-        index=0,
-    )
+        show_last_price = st.checkbox("Last price line", value=True)
+        show_range_levels = st.checkbox("Visible range high / low", value=False)
 
-    auto_adjust = st.sidebar.checkbox("Use adjusted prices", value=False)
+        with st.expander("Moving averages", expanded=False):
+            show_sma8 = st.checkbox("SMA 8", value=True)
+            show_sma20 = st.checkbox("SMA 20", value=True)
+            show_sma50 = st.checkbox("SMA 50", value=True)
+            show_sma100 = st.checkbox("SMA 100", value=True)
+            show_sma200 = st.checkbox("SMA 200", value=True)
 
-    st.sidebar.subheader("Simple Moving Averages")
-    show_ma8 = st.sidebar.checkbox("Show SMA 8", value=True)
-    show_ma20 = st.sidebar.checkbox("Show SMA 20", value=True)
-    show_ma50 = st.sidebar.checkbox("Show SMA 50", value=True)
-    show_ma100 = st.sidebar.checkbox("Show SMA 100", value=True)
-    show_ma200 = st.sidebar.checkbox("Show SMA 200", value=True)
+        with st.expander("Indicators", expanded=False):
+            show_bbands = st.checkbox("Bollinger Bands", value=True)
+            show_volume = st.checkbox("Volume", value=True)
+            show_rsi = st.checkbox("RSI", value=True)
+            show_macd = st.checkbox("MACD", value=True)
 
-    st.sidebar.subheader("Exponential Moving Averages")
-    show_ema8 = st.sidebar.checkbox("Show EMA 8", value=False)
-    show_ema20 = st.sidebar.checkbox("Show EMA 20", value=False)
-    show_ema50 = st.sidebar.checkbox("Show EMA 50", value=False)
-    show_ema100 = st.sidebar.checkbox("Show EMA 100", value=False)
-    show_ema200 = st.sidebar.checkbox("Show EMA 200", value=False)
+    toolbar_cols = st.columns([1.35, 2.20, 0.85, 0.85, 1.40])
 
-    st.sidebar.subheader("Price Overlays")
-    show_bbands = st.sidebar.checkbox("Show Bollinger Bands", value=True)
-    show_last_price = st.sidebar.checkbox("Show last price line", value=False)
-    show_range_levels = st.sidebar.checkbox("Show visible-range high / low", value=False)
+    with toolbar_cols[0]:
+        ticker = st.text_input(
+            "Ticker",
+            key="ticker_input",
+            placeholder="^SPX, NVDA, TLT, USDJPY=X",
+        )
 
-    st.sidebar.subheader("Indicators")
-    show_volume = st.sidebar.checkbox("Show Volume", value=True)
-    show_rsi = st.sidebar.checkbox("Show RSI", value=True)
-    show_macd = st.sidebar.checkbox("Show MACD", value=True)
+    with toolbar_cols[1]:
+        period = st.radio(
+            "Window",
+            PERIOD_OPTIONS,
+            key="period_input",
+            horizontal=True,
+        )
 
-    st.sidebar.subheader("Structure Overlay")
-    show_structure = st.sidebar.checkbox("Show Impulse + ABC / Elliott heuristic", value=False)
-    pivot_window = st.sidebar.slider("Pivot sensitivity", 2, 20, 8)
-    min_swing_pct = st.sidebar.slider("Minimum swing filter (%)", 0.0, 10.0, 2.0, 0.25)
-    max_pivots = st.sidebar.slider("Maximum pivots to draw", 20, 200, 80)
-    structure_lookback_pivots = st.sidebar.slider("Lookback pivots for auto-count", 20, 200, 80)
-    structure_mode = st.sidebar.selectbox(
-        "Structure mode",
-        ["ZigZag only", "Impulse only", "Impulse + ABC"],
-        index=2,
-    )
+    with toolbar_cols[2]:
+        interval = st.selectbox(
+            "Interval",
+            INTERVAL_OPTIONS,
+            index=INTERVAL_OPTIONS.index(st.session_state.get("interval_input", "1d")),
+            key="interval_input",
+        )
+
+    with toolbar_cols[3]:
+        chart_type = st.selectbox(
+            "Chart",
+            CHART_TYPES,
+            index=CHART_TYPES.index(st.session_state.get("chart_type_input", "Candles")),
+            key="chart_type_input",
+        )
+
+    with toolbar_cols[4]:
+        compare_tickers = st.text_input(
+            "Compare",
+            key="compare_input",
+            placeholder="SPY, QQQ, TLT",
+        )
+
+    compare_mode = "Indexed to 100"
 
     return ChartSettings(
-        ticker=ticker,
+        ticker=normalize_ticker(ticker),
         period=period,
         interval=interval,
+        chart_type=chart_type,
         auto_adjust=auto_adjust,
-        show_ma8=show_ma8,
-        show_ma20=show_ma20,
-        show_ma50=show_ma50,
-        show_ma100=show_ma100,
-        show_ma200=show_ma200,
-        show_ema8=show_ema8,
-        show_ema20=show_ema20,
-        show_ema50=show_ema50,
-        show_ema100=show_ema100,
-        show_ema200=show_ema200,
+        log_scale=log_scale,
+        tight_y_axis=tight_y_axis,
+        show_sma8=show_sma8,
+        show_sma20=show_sma20,
+        show_sma50=show_sma50,
+        show_sma100=show_sma100,
+        show_sma200=show_sma200,
         show_bbands=show_bbands,
         show_last_price=show_last_price,
         show_range_levels=show_range_levels,
         show_volume=show_volume,
         show_rsi=show_rsi,
         show_macd=show_macd,
-        show_structure=show_structure,
-        pivot_window=pivot_window,
-        min_swing_pct=min_swing_pct,
-        max_pivots=max_pivots,
-        structure_lookback_pivots=structure_lookback_pivots,
-        structure_mode=structure_mode,
+        compare_tickers=compare_tickers,
+        compare_mode=compare_mode,
     )
 
 
@@ -198,11 +375,22 @@ def read_settings() -> ChartSettings:
 # Dates
 # ============================================================
 
+def today_normalized() -> pd.Timestamp:
+    return pd.Timestamp.today().normalize()
+
+
 def start_date_from_period(period: str) -> pd.Timestamp | None:
-    today = pd.Timestamp.today().normalize()
+    today = today_normalized()
 
     if period == "max":
         return None
+
+    if period == "YTD":
+        return pd.Timestamp(year=today.year, month=1, day=1)
+
+    if period.endswith("d"):
+        days = int(period[:-1])
+        return today - pd.DateOffset(days=days)
 
     if period.endswith("mo"):
         months = int(period[:-2])
@@ -216,18 +404,18 @@ def start_date_from_period(period: str) -> pd.Timestamp | None:
 
 
 def warmup_start_date(period: str, interval: str) -> pd.Timestamp | None:
-    start = start_date_from_period(period)
+    display_start = start_date_from_period(period)
 
-    if start is None:
+    if display_start is None:
         return None
 
     if interval == "1d":
-        return start - pd.DateOffset(years=3)
+        return display_start - pd.DateOffset(years=3)
 
     if interval == "1wk":
-        return start - pd.DateOffset(years=6)
+        return display_start - pd.DateOffset(years=6)
 
-    return start - pd.DateOffset(years=15)
+    return display_start - pd.DateOffset(years=15)
 
 
 def format_last_bar(index_value: pd.Timestamp) -> str:
@@ -248,10 +436,10 @@ def flatten_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(df.columns, pd.MultiIndex):
         return df
 
+    required = set(REQUIRED_PRICE_COLUMNS)
+
     level_0 = list(df.columns.get_level_values(0))
     level_1 = list(df.columns.get_level_values(1))
-
-    required = set(REQUIRED_PRICE_COLUMNS)
 
     if required.issubset(set(level_0)):
         out = df.copy()
@@ -269,12 +457,12 @@ def flatten_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_price_data(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
+    if df is None or df.empty:
         return pd.DataFrame()
 
     out = flatten_yfinance_columns(df).copy()
 
-    if out.index.tz is not None:
+    if getattr(out.index, "tz", None) is not None:
         out.index = out.index.tz_localize(None)
 
     out = out.sort_index()
@@ -313,7 +501,6 @@ def fetch_with_yfinance_download(
     ticker: str,
     interval: str,
     auto_adjust: bool,
-    period: str,
     fetch_start: str | None,
 ) -> pd.DataFrame:
     if fetch_start is None:
@@ -345,8 +532,8 @@ def fetch_with_ticker_history(
     ticker: str,
     interval: str,
     auto_adjust: bool,
-    period: str,
     fetch_start: str | None,
+    fallback_period: str,
 ) -> pd.DataFrame:
     ticker_obj = yf.Ticker(ticker)
 
@@ -368,13 +555,14 @@ def fetch_with_ticker_history(
     cleaned = clean_price_data(raw)
 
     if cleaned.empty:
-        fallback = ticker_obj.history(
-            period=period,
+        fallback_period_clean = "1y" if fallback_period == "YTD" else fallback_period
+        raw = ticker_obj.history(
+            period=fallback_period_clean,
             interval=interval,
             auto_adjust=auto_adjust,
             actions=False,
         )
-        cleaned = clean_price_data(fallback)
+        cleaned = clean_price_data(raw)
 
     return cleaned
 
@@ -388,7 +576,6 @@ def fetch_history(settings: ChartSettings) -> tuple[pd.DataFrame, str | None]:
             ticker=settings.ticker,
             interval=settings.interval,
             auto_adjust=settings.auto_adjust,
-            period=settings.period,
             fetch_start=fetch_start_str,
         )
 
@@ -398,15 +585,15 @@ def fetch_history(settings: ChartSettings) -> tuple[pd.DataFrame, str | None]:
     except Exception as exc:
         download_error = f"{type(exc).__name__}: {exc}"
     else:
-        download_error = "Yahoo download returned no data."
+        download_error = "Primary price fetch returned no data."
 
     try:
         df = fetch_with_ticker_history(
             ticker=settings.ticker,
             interval=settings.interval,
             auto_adjust=settings.auto_adjust,
-            period=settings.period,
             fetch_start=fetch_start_str,
+            fallback_period=settings.period,
         )
 
         if not df.empty:
@@ -511,18 +698,31 @@ def compute_bollinger_bands(
     return mid, upper, lower
 
 
+def compute_atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+    close = df["Close"].astype(float)
+
+    previous_close = close.shift(1)
+
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    return true_range.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
     for window in [8, 20, 50, 100, 200]:
-        out[f"MA{window}"] = out["Close"].rolling(
+        out[f"SMA{window}"] = out["Close"].rolling(
             window=window,
-            min_periods=window,
-        ).mean()
-
-        out[f"EMA{window}"] = out["Close"].ewm(
-            span=window,
-            adjust=False,
             min_periods=window,
         ).mean()
 
@@ -538,245 +738,388 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["BB_UPPER"] = bb_upper
     out["BB_LOWER"] = bb_lower
 
+    out["ATR14"] = compute_atr(out)
+    out["ATR14_PCT"] = out["ATR14"] / out["Close"].replace(0, np.nan)
+
+    out["ROLLING_VOL_20"] = out["Close"].pct_change().rolling(20, min_periods=20).std() * np.sqrt(252)
+
+    out["DRAWDOWN_252"] = (out["Close"] / out["Close"].rolling(252, min_periods=30).max()) - 1.0
+
     return out
 
 
 # ============================================================
-# Structure Overlay
+# Metrics and Signals
 # ============================================================
 
-def is_pivot_high(values: np.ndarray, i: int, window: int) -> bool:
-    left = values[i - window : i]
-    right = values[i + 1 : i + window + 1]
+def fmt_price(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
 
-    if len(left) < window or len(right) < window:
-        return False
+    value = float(value)
 
-    return values[i] >= left.max() and values[i] >= right.max()
+    if abs(value) >= 1000:
+        return f"{value:,.2f}"
 
+    if abs(value) >= 10:
+        return f"{value:,.2f}"
 
-def is_pivot_low(values: np.ndarray, i: int, window: int) -> bool:
-    left = values[i - window : i]
-    right = values[i + 1 : i + window + 1]
+    if abs(value) >= 1:
+        return f"{value:,.3f}"
 
-    if len(left) < window or len(right) < window:
-        return False
-
-    return values[i] <= left.min() and values[i] <= right.min()
+    return f"{value:,.4f}"
 
 
-def compute_pivots(price_df: pd.DataFrame, window: int) -> list[dict]:
-    if price_df.empty:
-        return []
+def fmt_pct(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
 
-    highs = price_df["High"].astype(float).values
-    lows = price_df["Low"].astype(float).values
-    closes = price_df["Close"].astype(float).values
-    index = price_df.index
-
-    pivots = []
-
-    for i in range(window, len(price_df) - window):
-        high_pivot = is_pivot_high(highs, i, window)
-        low_pivot = is_pivot_low(lows, i, window)
-
-        if high_pivot and low_pivot:
-            prior_close = closes[i - 1] if i > 0 else closes[i]
-            high_distance = abs(highs[i] - prior_close)
-            low_distance = abs(lows[i] - prior_close)
-
-            if high_distance >= low_distance:
-                pivots.append({"i": i, "ts": index[i], "px": float(highs[i]), "type": "H"})
-            else:
-                pivots.append({"i": i, "ts": index[i], "px": float(lows[i]), "type": "L"})
-
-        elif high_pivot:
-            pivots.append({"i": i, "ts": index[i], "px": float(highs[i]), "type": "H"})
-
-        elif low_pivot:
-            pivots.append({"i": i, "ts": index[i], "px": float(lows[i]), "type": "L"})
-
-    return sorted(pivots, key=lambda x: x["i"])
+    return f"{float(value) * 100:+.2f}%"
 
 
-def compress_pivots(
-    pivots: list[dict],
-    min_swing_pct: float,
-    max_pivots: int,
-) -> list[dict]:
-    if not pivots:
-        return []
+def fmt_pct_abs(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
 
-    merged = [pivots[0].copy()]
-
-    for pivot in pivots[1:]:
-        last = merged[-1]
-
-        if pivot["type"] == last["type"]:
-            if pivot["type"] == "H" and pivot["px"] >= last["px"]:
-                merged[-1] = pivot.copy()
-            elif pivot["type"] == "L" and pivot["px"] <= last["px"]:
-                merged[-1] = pivot.copy()
-        else:
-            merged.append(pivot.copy())
-
-    if len(merged) <= 2:
-        return merged[-max_pivots:]
-
-    filtered = [merged[0].copy()]
-    min_fraction = min_swing_pct / 100.0
-
-    for pivot in merged[1:]:
-        last = filtered[-1]
-        move = abs(pivot["px"] - last["px"])
-        base = max(abs(last["px"]), 1e-9)
-
-        if move / base >= min_fraction:
-            filtered.append(pivot.copy())
-        else:
-            if pivot["type"] == last["type"]:
-                if pivot["type"] == "H" and pivot["px"] > last["px"]:
-                    filtered[-1] = pivot.copy()
-                elif pivot["type"] == "L" and pivot["px"] < last["px"]:
-                    filtered[-1] = pivot.copy()
-
-    return filtered[-max_pivots:]
+    return f"{float(value) * 100:.2f}%"
 
 
-def impulse_score(sequence: list[dict]) -> float:
-    if len(sequence) != 6:
-        return -1e9
-
-    pattern = "".join(p["type"] for p in sequence)
-
-    is_up = pattern == "LHLHLH"
-    is_down = pattern == "HLHLHL"
-
-    if not is_up and not is_down:
-        return -1e9
-
-    px = np.array([p["px"] for p in sequence], dtype=float)
-
-    wave_1 = abs(px[1] - px[0])
-    wave_3 = abs(px[3] - px[2])
-    wave_5 = abs(px[5] - px[4])
-
-    if min(wave_1, wave_3, wave_5) <= 0:
-        return -1e9
-
-    retrace_2 = abs(px[2] - px[1]) / max(wave_1, 1e-9)
-    retrace_4 = abs(px[4] - px[3]) / max(wave_3, 1e-9)
-
-    score = 0.0
-    score += 2.0 if wave_3 >= wave_1 else -1.0
-    score += 1.5 if wave_3 >= wave_5 else 0.0
-    score += 2.0 if wave_3 >= min(wave_1, wave_5) else -3.0
-
-    def band_score(value: float, low: float, high: float, weight: float) -> float:
-        if low <= value <= high:
-            return 2.0 * weight
-
-        if low - 0.15 <= value <= high + 0.15:
-            return 1.0 * weight
-
-        return -1.0 * weight
-
-    score += band_score(retrace_2, 0.35, 0.80, 1.0)
-    score += band_score(retrace_4, 0.20, 0.60, 0.8)
-
-    if is_up:
-        score += 2.0 if px[3] > px[1] else -2.0
-        score += 2.0 if px[5] > px[3] else -1.0
-        score += 0.5 if px[4] > px[1] else -0.5
-    else:
-        score += 2.0 if px[3] < px[1] else -2.0
-        score += 2.0 if px[5] < px[3] else -1.0
-        score += 0.5 if px[4] < px[1] else -0.5
-
-    score += sequence[-1]["i"] / 100_000.0
-
-    return score
-
-
-def find_best_impulse(
-    pivots: list[dict],
-    lookback: int,
-) -> tuple[list[dict] | None, float]:
-    if len(pivots) < 6:
-        return None, -1e9
-
-    search_area = pivots[-lookback:] if len(pivots) > lookback else pivots
-
-    best_sequence = None
-    best_score = -1e9
-
-    for i in range(len(search_area) - 5):
-        sequence = search_area[i : i + 6]
-        score = impulse_score(sequence)
-
-        if score > best_score:
-            best_sequence = sequence
-            best_score = score
-
-    return best_sequence, best_score
-
-
-def find_abc_after_impulse(
-    pivots: list[dict],
-    impulse: list[dict] | None,
-) -> list[dict] | None:
-    if impulse is None or len(impulse) != 6:
+def close_asof(df: pd.DataFrame, target_date: pd.Timestamp) -> float | None:
+    if df.empty:
         return None
 
-    end_index = impulse[-1]["i"]
-    end_type = impulse[-1]["type"]
+    eligible = df[df.index <= target_date]
 
-    position = None
+    if eligible.empty:
+        eligible = df[df.index >= target_date]
 
-    for i, pivot in enumerate(pivots):
-        if pivot["i"] == end_index and pivot["type"] == end_type:
-            position = i
-            break
-
-    if position is None:
+    if eligible.empty:
         return None
 
-    tail = pivots[position + 1 :]
+    return float(eligible["Close"].iloc[-1])
 
-    if len(tail) < 3:
+
+def return_from_close(latest_close: float, base_close: float | None) -> float | None:
+    if base_close is None or pd.isna(base_close) or base_close == 0:
         return None
 
-    abc = []
-    last_type = end_type
+    return (latest_close / float(base_close)) - 1.0
 
-    for pivot in tail:
-        if pivot["type"] != last_type:
-            abc.append(pivot)
-            last_type = pivot["type"]
 
-        if len(abc) == 3:
-            break
+def compute_return_metrics(df: pd.DataFrame) -> dict[str, float | None]:
+    if df.empty:
+        return {}
 
-    if len(abc) < 3:
+    close = df["Close"].astype(float)
+    latest_close = float(close.iloc[-1])
+    latest_date = pd.Timestamp(df.index[-1])
+
+    out = {
+        "1D": return_from_close(latest_close, float(close.iloc[-2])) if len(close) >= 2 else None,
+        "5D": return_from_close(latest_close, float(close.iloc[-6])) if len(close) >= 6 else None,
+        "1M": return_from_close(latest_close, close_asof(df, latest_date - pd.DateOffset(months=1))),
+        "3M": return_from_close(latest_close, close_asof(df, latest_date - pd.DateOffset(months=3))),
+        "YTD": None,
+        "1Y": return_from_close(latest_close, close_asof(df, latest_date - pd.DateOffset(years=1))),
+    }
+
+    prior_year_end = pd.Timestamp(year=latest_date.year - 1, month=12, day=31)
+    ytd_base = close_asof(df, prior_year_end)
+
+    if ytd_base is None:
+        year_data = df[df.index >= pd.Timestamp(year=latest_date.year, month=1, day=1)]
+        if not year_data.empty:
+            ytd_base = float(year_data["Close"].iloc[0])
+
+    out["YTD"] = return_from_close(latest_close, ytd_base)
+
+    return out
+
+
+def compute_header_stats(df: pd.DataFrame) -> dict[str, str]:
+    close = df["Close"].astype(float)
+    latest_close = float(close.iloc[-1])
+    latest_date = pd.Timestamp(df.index[-1])
+
+    ret = compute_return_metrics(df)
+
+    one_year = df[df.index >= latest_date - pd.DateOffset(years=1)]
+    if one_year.empty:
+        one_year = df.tail(252)
+
+    high_52w = float(one_year["High"].max()) if not one_year.empty else np.nan
+    low_52w = float(one_year["Low"].min()) if not one_year.empty else np.nan
+
+    drawdown_52w = (latest_close / high_52w) - 1.0 if high_52w and not pd.isna(high_52w) else np.nan
+    upside_from_52w_low = (latest_close / low_52w) - 1.0 if low_52w and not pd.isna(low_52w) else np.nan
+
+    last_row = df.iloc[-1]
+
+    atr_pct = last_row.get("ATR14_PCT", np.nan)
+    rsi = last_row.get("RSI14", np.nan)
+
+    return {
+        "Last": fmt_price(latest_close),
+        "1D": fmt_pct(ret.get("1D")),
+        "5D": fmt_pct(ret.get("5D")),
+        "1M": fmt_pct(ret.get("1M")),
+        "3M": fmt_pct(ret.get("3M")),
+        "YTD": fmt_pct(ret.get("YTD")),
+        "Drawdown": fmt_pct(drawdown_52w),
+        "ATR": fmt_pct_abs(atr_pct),
+        "52w Low Dist": fmt_pct(upside_from_52w_low),
+        "RSI": "N/A" if pd.isna(rsi) else f"{float(rsi):.1f}",
+    }
+
+
+def latest_float(df: pd.DataFrame, column: str) -> float | None:
+    if column not in df.columns or df.empty:
         return None
 
-    p5 = impulse[-1]["px"]
-    a = abc[0]["px"]
-    b = abc[1]["px"]
-    c = abc[2]["px"]
+    value = df[column].iloc[-1]
 
-    direction_a = np.sign(a - p5)
-
-    if direction_a == 0:
+    if pd.isna(value):
         return None
 
-    if np.sign(b - a) == direction_a:
+    return float(value)
+
+
+def classify_trend(df: pd.DataFrame) -> tuple[str, str]:
+    close = latest_float(df, "Close")
+    sma20 = latest_float(df, "SMA20")
+    sma50 = latest_float(df, "SMA50")
+    sma100 = latest_float(df, "SMA100")
+    sma200 = latest_float(df, "SMA200")
+
+    if close is None:
+        return "Unavailable", "No closing price available."
+
+    checks = [
+        ("20DMA", sma20),
+        ("50DMA", sma50),
+        ("100DMA", sma100),
+        ("200DMA", sma200),
+    ]
+
+    valid = [(name, value) for name, value in checks if value is not None]
+
+    if not valid:
+        return "Unavailable", "Not enough data for moving-average trend classification."
+
+    above = [name for name, value in valid if close > value]
+    below = [name for name, value in valid if close < value]
+
+    if len(above) == len(valid):
+        return "Bullish", "Price is above the major moving averages."
+
+    if len(below) == len(valid):
+        return "Bearish", "Price is below the major moving averages."
+
+    if close > (sma50 or close) and close > (sma200 or close):
+        return "Constructive", "Price is above the core 50DMA / 200DMA trend filter, but the stack is not fully clean."
+
+    if close < (sma50 or close) and close < (sma200 or close):
+        return "Damaged", "Price is below the core 50DMA / 200DMA trend filter."
+
+    return "Mixed", "Trend filters are split across short and long horizons."
+
+
+def classify_momentum(df: pd.DataFrame) -> tuple[str, str]:
+    rsi = latest_float(df, "RSI14")
+    hist = latest_float(df, "MACD_HIST")
+
+    if rsi is None and hist is None:
+        return "Unavailable", "Not enough data for RSI or MACD."
+
+    rsi_text = "RSI unavailable" if rsi is None else f"RSI {rsi:.1f}"
+    hist_text = "MACD histogram unavailable" if hist is None else f"MACD histogram {hist:.2f}"
+
+    if rsi is not None and hist is not None:
+        if rsi >= 60 and hist > 0:
+            return "Positive", f"{rsi_text}; {hist_text}. Momentum confirms the trend."
+        if rsi >= 50 and hist > 0:
+            return "Constructive", f"{rsi_text}; {hist_text}. Momentum is positive but not stretched."
+        if rsi < 45 and hist < 0:
+            return "Negative", f"{rsi_text}; {hist_text}. Momentum is deteriorating."
+        if rsi > 70:
+            return "Extended", f"{rsi_text}; {hist_text}. Momentum is strong but extended."
+
+    return "Mixed", f"{rsi_text}; {hist_text}."
+
+
+def classify_volatility(df: pd.DataFrame) -> tuple[str, str]:
+    if "ATR14_PCT" not in df.columns:
+        return "Unavailable", "ATR unavailable."
+
+    atr_series = pd.to_numeric(df["ATR14_PCT"], errors="coerce").dropna()
+
+    if len(atr_series) < 30:
+        return "Unavailable", "Not enough ATR history."
+
+    latest_atr = float(atr_series.iloc[-1])
+    lookback = atr_series.tail(min(len(atr_series), 252))
+    percentile = float((lookback <= latest_atr).mean())
+
+    if percentile >= 0.80:
+        return "Elevated", f"ATR is {latest_atr * 100:.2f}% of price, in the {percentile * 100:.0f}th percentile of recent history."
+    if percentile <= 0.25:
+        return "Compressed", f"ATR is {latest_atr * 100:.2f}% of price, in the {percentile * 100:.0f}th percentile of recent history."
+
+    return "Normal", f"ATR is {latest_atr * 100:.2f}% of price, near the middle of recent history."
+
+
+def classify_structure(df: pd.DataFrame) -> tuple[str, str]:
+    if len(df) < 30:
+        return "Unavailable", "Not enough price history."
+
+    close = float(df["Close"].iloc[-1])
+    high_20 = float(df["High"].tail(20).max())
+    low_20 = float(df["Low"].tail(20).min())
+    high_60 = float(df["High"].tail(min(len(df), 60)).max())
+    low_60 = float(df["Low"].tail(min(len(df), 60)).min())
+
+    if close >= high_20 * 0.995:
+        return "Breakout pressure", f"Price is pressing the 20-bar high at {high_20:,.2f}."
+    if close <= low_20 * 1.005:
+        return "Breakdown pressure", f"Price is pressing the 20-bar low at {low_20:,.2f}."
+
+    range_position = (close - low_60) / max(high_60 - low_60, 1e-9)
+
+    if range_position >= 0.70:
+        return "Upper range", f"Price sits in the upper part of the 60-bar range."
+    if range_position <= 0.30:
+        return "Lower range", f"Price sits in the lower part of the 60-bar range."
+
+    return "Range", "Price is inside the recent range without a clean breakout or breakdown."
+
+
+def nearest_level_below(price: float, levels: list[tuple[str, float | None]]) -> tuple[str, float] | None:
+    valid = [(label, value) for label, value in levels if value is not None and value < price]
+
+    if not valid:
         return None
 
-    if np.sign(c - b) != direction_a:
+    return max(valid, key=lambda item: item[1])
+
+
+def nearest_level_above(price: float, levels: list[tuple[str, float | None]]) -> tuple[str, float] | None:
+    valid = [(label, value) for label, value in levels if value is not None and value > price]
+
+    if not valid:
         return None
 
-    return abc
+    return min(valid, key=lambda item: item[1])
+
+
+def risk_levels(df: pd.DataFrame) -> tuple[str, str]:
+    close = latest_float(df, "Close")
+
+    if close is None:
+        return "Unavailable", "No close available."
+
+    levels = [
+        ("8DMA", latest_float(df, "SMA8")),
+        ("20DMA", latest_float(df, "SMA20")),
+        ("50DMA", latest_float(df, "SMA50")),
+        ("100DMA", latest_float(df, "SMA100")),
+        ("200DMA", latest_float(df, "SMA200")),
+        ("20-bar low", float(df["Low"].tail(20).min()) if len(df) >= 20 else None),
+        ("60-bar low", float(df["Low"].tail(60).min()) if len(df) >= 60 else None),
+    ]
+
+    below = nearest_level_below(close, levels)
+    above = nearest_level_above(close, levels)
+
+    if below and above:
+        support_label, support_value = below
+        resistance_label, resistance_value = above
+        return (
+            support_label,
+            f"Nearest support is {support_label} at {support_value:,.2f}. Nearest resistance is {resistance_label} at {resistance_value:,.2f}.",
+        )
+
+    if below:
+        support_label, support_value = below
+        return support_label, f"Nearest support is {support_label} at {support_value:,.2f}."
+
+    if above:
+        resistance_label, resistance_value = above
+        return resistance_label, f"Nearest visible resistance is {resistance_label} at {resistance_value:,.2f}."
+
+    return "Unavailable", "No nearby moving-average or range level is available."
+
+
+def build_signal_rows(df: pd.DataFrame) -> list[dict[str, str]]:
+    trend, trend_note = classify_trend(df)
+    momentum, momentum_note = classify_momentum(df)
+    volatility, volatility_note = classify_volatility(df)
+    structure, structure_note = classify_structure(df)
+    risk, risk_note = risk_levels(df)
+
+    return [
+        {"Signal": "Trend", "Reading": trend, "Interpretation": trend_note},
+        {"Signal": "Momentum", "Reading": momentum, "Interpretation": momentum_note},
+        {"Signal": "Volatility", "Reading": volatility, "Interpretation": volatility_note},
+        {"Signal": "Structure", "Reading": structure, "Interpretation": structure_note},
+        {"Signal": "Risk level", "Reading": risk, "Interpretation": risk_note},
+    ]
+
+
+def build_technical_memo(df: pd.DataFrame, ticker: str) -> str:
+    trend, trend_note = classify_trend(df)
+    momentum, momentum_note = classify_momentum(df)
+    volatility, volatility_note = classify_volatility(df)
+    structure, structure_note = classify_structure(df)
+    risk, risk_note = risk_levels(df)
+
+    close = latest_float(df, "Close")
+    sma50 = latest_float(df, "SMA50")
+    sma200 = latest_float(df, "SMA200")
+
+    invalidation = "the next major moving-average break"
+    if close is not None and sma50 is not None and close > sma50:
+        invalidation = "a close below the 50DMA"
+    elif close is not None and sma200 is not None and close > sma200:
+        invalidation = "a close below the 200DMA"
+    elif close is not None and sma50 is not None and close < sma50:
+        invalidation = "a reclaim of the 50DMA"
+
+    return (
+        f"{ticker} screens as {trend.lower()} on trend and {momentum.lower()} on momentum. "
+        f"{trend_note} {momentum_note} Volatility is {volatility.lower()}: {volatility_note} "
+        f"Structure reads as {structure.lower()}. {structure_note} {risk_note} "
+        f"The practical invalidation level is {invalidation}."
+    )
+
+
+def signal_table_html(rows: list[dict[str, str]]) -> str:
+    html = """
+    <table class="signal-table">
+        <thead>
+            <tr>
+                <th>Signal</th>
+                <th>Reading</th>
+                <th>Interpretation</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+
+    for row in rows:
+        html += f"""
+            <tr>
+                <td>{row['Signal']}</td>
+                <td><strong>{row['Reading']}</strong></td>
+                <td>{row['Interpretation']}</td>
+            </tr>
+        """
+
+    html += """
+        </tbody>
+    </table>
+    """
+
+    return html
 
 
 # ============================================================
@@ -809,23 +1152,6 @@ def build_rangebreaks(index: pd.DatetimeIndex, interval: str) -> list[dict]:
     return rangebreaks
 
 
-def volume_tick_count(volume: pd.Series) -> int:
-    clean = pd.to_numeric(volume, errors="coerce").dropna()
-
-    if clean.empty:
-        return 4
-
-    maximum = float(clean.max())
-
-    if maximum >= 1e10:
-        return 7
-
-    if maximum >= 1e9:
-        return 6
-
-    return 5
-
-
 def active_panels(settings: ChartSettings, usable_volume: bool) -> list[str]:
     panels = []
 
@@ -845,22 +1171,97 @@ def panel_layout(panels: list[str]) -> tuple[int, list[float], int]:
     row_count = 1 + len(panels)
 
     if row_count == 1:
-        return row_count, [1.0], 640
+        return row_count, [1.0], 670
 
     if row_count == 2:
-        return row_count, [0.80, 0.20], 760
+        return row_count, [0.80, 0.20], 790
 
     if row_count == 3:
-        return row_count, [0.72, 0.14, 0.14], 860
+        return row_count, [0.70, 0.15, 0.15], 890
 
-    return row_count, [0.66, 0.12, 0.11, 0.11], 940
+    return row_count, [0.64, 0.12, 0.12, 0.12], 980
+
+
+def volume_tick_count(volume: pd.Series) -> int:
+    clean = pd.to_numeric(volume, errors="coerce").dropna()
+
+    if clean.empty:
+        return 4
+
+    maximum = float(clean.max())
+
+    if maximum >= 1e10:
+        return 7
+
+    if maximum >= 1e9:
+        return 6
+
+    return 5
+
+
+def price_axis_range(df: pd.DataFrame, settings: ChartSettings) -> list[float] | None:
+    if df.empty or not settings.tight_y_axis:
+        return None
+
+    columns = ["High", "Low"]
+
+    overlay_columns = [
+        ("SMA8", settings.show_sma8),
+        ("SMA20", settings.show_sma20),
+        ("SMA50", settings.show_sma50),
+        ("SMA100", settings.show_sma100),
+        ("SMA200", settings.show_sma200),
+        ("BB_UPPER", settings.show_bbands),
+        ("BB_LOWER", settings.show_bbands),
+    ]
+
+    for column, enabled in overlay_columns:
+        if enabled and column in df.columns:
+            columns.append(column)
+
+    values = []
+    for column in columns:
+        series = pd.to_numeric(df[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        if not series.empty:
+            values.append(series)
+
+    if not values:
+        return None
+
+    combined = pd.concat(values)
+    ymin = float(combined.min())
+    ymax = float(combined.max())
+
+    if ymin <= 0 and settings.log_scale:
+        ymin = float(pd.to_numeric(df["Low"], errors="coerce").dropna().min())
+
+    visible_range = ymax - ymin
+
+    if visible_range <= 0:
+        close = float(df["Close"].iloc[-1])
+        pad = max(abs(close) * 0.02, 1e-6)
+        return [close - pad, close + pad]
+
+    atr = latest_float(df, "ATR14")
+    atr_pad = 1.25 * atr if atr is not None else 0.0
+    pct_pad = 0.045 * visible_range
+    price_pad = abs(float(df["Close"].iloc[-1])) * 0.003
+
+    pad = max(atr_pad, pct_pad, price_pad)
+
+    lower = ymin - pad
+    upper = ymax + pad
+
+    if settings.log_scale and lower <= 0:
+        lower = max(ymin * 0.98, 1e-9)
+
+    return [lower, upper]
 
 
 def add_last_price_line(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
     last_close = float(df["Close"].iloc[-1])
-    prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else last_close
-
-    change_pct = ((last_close / prev_close) - 1.0) * 100 if prev_close != 0 else 0.0
+    previous_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else last_close
+    change_pct = ((last_close / previous_close) - 1.0) * 100 if previous_close != 0 else 0.0
 
     fig.add_hline(
         y=last_close,
@@ -886,7 +1287,7 @@ def add_range_levels(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
         line_color=COLORS["range"],
         line_dash="dot",
         line_width=1,
-        annotation_text=f"Range High {visible_high:,.2f}",
+        annotation_text=f"Range high {visible_high:,.2f}",
         annotation_position="top left",
         annotation_font=dict(color=COLORS["range"], size=10),
     )
@@ -898,119 +1299,10 @@ def add_range_levels(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
         line_color=COLORS["range"],
         line_dash="dot",
         line_width=1,
-        annotation_text=f"Range Low {visible_low:,.2f}",
+        annotation_text=f"Range low {visible_low:,.2f}",
         annotation_position="bottom left",
         annotation_font=dict(color=COLORS["range"], size=10),
     )
-
-
-def add_structure_overlay(
-    fig: go.Figure,
-    df: pd.DataFrame,
-    settings: ChartSettings,
-    row: int,
-) -> None:
-    structure_df = df[["High", "Low", "Close"]].dropna()
-
-    if len(structure_df) < settings.pivot_window * 2 + 5:
-        st.sidebar.warning("Not enough visible bars for the structure overlay.")
-        return
-
-    raw_pivots = compute_pivots(structure_df, settings.pivot_window)
-    pivots = compress_pivots(
-        raw_pivots,
-        settings.min_swing_pct,
-        settings.max_pivots,
-    )
-
-    if not pivots:
-        st.sidebar.warning("No structure pivots detected with current settings.")
-        return
-
-    impulse = None
-    impulse_fit_score = -1e9
-    abc = None
-
-    if settings.structure_mode in ["Impulse only", "Impulse + ABC"]:
-        impulse, impulse_fit_score = find_best_impulse(
-            pivots,
-            settings.structure_lookback_pivots,
-        )
-
-    if settings.structure_mode == "Impulse + ABC" and impulse:
-        abc = find_abc_after_impulse(pivots, impulse)
-
-    fig.add_trace(
-        go.Scatter(
-            x=[p["ts"] for p in pivots],
-            y=[p["px"] for p in pivots],
-            mode="lines",
-            line=dict(color=COLORS["zigzag"], width=1.6),
-            name="ZigZag",
-            hoverinfo="skip",
-            showlegend=True,
-        ),
-        row=row,
-        col=1,
-    )
-
-    if impulse:
-        for pivot, label in zip(impulse, ["0", "1", "2", "3", "4", "5"]):
-            fig.add_trace(
-                go.Scatter(
-                    x=[pivot["ts"]],
-                    y=[pivot["px"]],
-                    mode="markers+text",
-                    marker=dict(
-                        size=10,
-                        color="rgba(20,20,20,0.90)",
-                        symbol="circle",
-                    ),
-                    text=[label],
-                    textposition="top center",
-                    name=f"Wave {label}",
-                    hovertemplate=f"{label}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
-                    showlegend=False,
-                ),
-                row=row,
-                col=1,
-            )
-
-    if abc:
-        for pivot, label in zip(abc, ["A", "B", "C"]):
-            fig.add_trace(
-                go.Scatter(
-                    x=[pivot["ts"]],
-                    y=[pivot["px"]],
-                    mode="markers+text",
-                    marker=dict(
-                        size=9,
-                        color="rgba(20,20,20,0.90)",
-                        symbol="square",
-                    ),
-                    text=[label],
-                    textposition="top center",
-                    name=f"Wave {label}",
-                    hovertemplate=f"{label}<br>%{{x|%Y-%m-%d}}<br>%{{y:.2f}}<extra></extra>",
-                    showlegend=False,
-                ),
-                row=row,
-                col=1,
-            )
-
-    with st.sidebar.expander("Structure diagnostics", expanded=False):
-        st.write(f"Pivot count drawn: {len(pivots)}")
-
-        if impulse:
-            st.write(f"Impulse fit score: {impulse_fit_score:.2f}")
-            st.write(f"Impulse pattern: {''.join(p['type'] for p in impulse)}")
-        elif settings.structure_mode in ["Impulse only", "Impulse + ABC"]:
-            st.write("No valid impulse found.")
-
-        if settings.structure_mode == "Impulse + ABC":
-            st.write("ABC found after impulse." if abc else "ABC not found after impulse.")
-
-        st.caption("Heuristic only. Pivots are based on visible high and low data.")
 
 
 def add_price_panel(
@@ -1019,47 +1311,62 @@ def add_price_panel(
     settings: ChartSettings,
     row: int,
 ) -> None:
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            increasing_line_color=COLORS["up"],
-            increasing_fillcolor=COLORS["up"],
-            decreasing_line_color=COLORS["down"],
-            decreasing_fillcolor=COLORS["down"],
-            name="Price",
-            showlegend=False,
-            hovertemplate=(
-                "Date: %{x|%Y-%m-%d}<br>"
-                "Open: %{open:.2f}<br>"
-                "High: %{high:.2f}<br>"
-                "Low: %{low:.2f}<br>"
-                "Close: %{close:.2f}<extra></extra>"
+    if settings.chart_type == "Candles":
+        fig.add_trace(
+            go.Candlestick(
+                x=df.index,
+                open=df["Open"],
+                high=df["High"],
+                low=df["Low"],
+                close=df["Close"],
+                increasing_line_color=COLORS["up"],
+                increasing_fillcolor=COLORS["up"],
+                decreasing_line_color=COLORS["down"],
+                decreasing_fillcolor=COLORS["down"],
+                name="Price",
+                showlegend=False,
+                hovertemplate=(
+                    "Date: %{x|%Y-%m-%d}<br>"
+                    "Open: %{open:.2f}<br>"
+                    "High: %{high:.2f}<br>"
+                    "Low: %{low:.2f}<br>"
+                    "Close: %{close:.2f}<extra></extra>"
+                ),
             ),
-        ),
-        row=row,
-        col=1,
-    )
+            row=row,
+            col=1,
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df["Close"],
+                mode="lines",
+                line=dict(color="#111827", width=1.7),
+                name="Close",
+                hovertemplate="Close: %{y:.2f}<extra></extra>",
+                showlegend=False,
+            ),
+            row=row,
+            col=1,
+        )
 
     ma_config = [
-        ("MA8", "SMA 8", COLORS["ma8"], settings.show_ma8),
-        ("MA20", "SMA 20", COLORS["ma20"], settings.show_ma20),
-        ("MA50", "SMA 50", COLORS["ma50"], settings.show_ma50),
-        ("MA100", "SMA 100", COLORS["ma100"], settings.show_ma100),
-        ("MA200", "SMA 200", COLORS["ma200"], settings.show_ma200),
+        ("SMA8", "8DMA", COLORS["sma8"], settings.show_sma8, 1.30),
+        ("SMA20", "20DMA", COLORS["sma20"], settings.show_sma20, 1.45),
+        ("SMA50", "50DMA", COLORS["sma50"], settings.show_sma50, 1.55),
+        ("SMA100", "100DMA", COLORS["sma100"], settings.show_sma100, 1.45),
+        ("SMA200", "200DMA", COLORS["sma200"], settings.show_sma200, 1.75),
     ]
 
-    for column, label, color, enabled in ma_config:
+    for column, label, color, enabled, width in ma_config:
         if enabled and column in df.columns:
             fig.add_trace(
                 go.Scatter(
                     x=df.index,
                     y=df[column],
                     mode="lines",
-                    line=dict(color=color, width=1.55),
+                    line=dict(color=color, width=width),
                     name=label,
                     hovertemplate=f"{label}: " + "%{y:.2f}<extra></extra>",
                     showlegend=True,
@@ -1068,31 +1375,7 @@ def add_price_panel(
                 col=1,
             )
 
-    ema_config = [
-        ("EMA8", "EMA 8", COLORS["ma8"], settings.show_ema8),
-        ("EMA20", "EMA 20", COLORS["ma20"], settings.show_ema20),
-        ("EMA50", "EMA 50", COLORS["ma50"], settings.show_ema50),
-        ("EMA100", "EMA 100", COLORS["ma100"], settings.show_ema100),
-        ("EMA200", "EMA 200", COLORS["ma200"], settings.show_ema200),
-    ]
-
-    for column, label, color, enabled in ema_config:
-        if enabled and column in df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=df.index,
-                    y=df[column],
-                    mode="lines",
-                    line=dict(color=color, width=1.45, dash="dash"),
-                    name=label,
-                    hovertemplate=f"{label}: " + "%{y:.2f}<extra></extra>",
-                    showlegend=True,
-                ),
-                row=row,
-                col=1,
-            )
-
-    if settings.show_bbands:
+    if settings.show_bbands and all(col in df.columns for col in ["BB_UPPER", "BB_LOWER", "BB_MID"]):
         fig.add_trace(
             go.Scatter(
                 x=df.index,
@@ -1101,7 +1384,7 @@ def add_price_panel(
                 line=dict(color=COLORS["bb"], width=1.0, dash="dot"),
                 name="Bollinger Bands",
                 legendgroup="bbands",
-                hovertemplate="BB Upper: %{y:.2f}<extra></extra>",
+                hovertemplate="BB upper: %{y:.2f}<extra></extra>",
                 showlegend=True,
             ),
             row=row,
@@ -1116,9 +1399,9 @@ def add_price_panel(
                 line=dict(color=COLORS["bb"], width=1.0, dash="dot"),
                 fill="tonexty",
                 fillcolor=COLORS["bb_fill"],
-                name="BB Lower",
+                name="BB lower",
                 legendgroup="bbands",
-                hovertemplate="BB Lower: %{y:.2f}<extra></extra>",
+                hovertemplate="BB lower: %{y:.2f}<extra></extra>",
                 showlegend=False,
             ),
             row=row,
@@ -1130,18 +1413,15 @@ def add_price_panel(
                 x=df.index,
                 y=df["BB_MID"],
                 mode="lines",
-                line=dict(color="rgba(100,100,100,0.70)", width=1.0, dash="dot"),
-                name="BB Mid",
+                line=dict(color="rgba(90,90,90,0.60)", width=1.0, dash="dot"),
+                name="BB mid",
                 legendgroup="bbands",
-                hovertemplate="BB Mid: %{y:.2f}<extra></extra>",
+                hovertemplate="BB mid: %{y:.2f}<extra></extra>",
                 showlegend=False,
             ),
             row=row,
             col=1,
         )
-
-    if settings.show_structure:
-        add_structure_overlay(fig, df, settings, row)
 
     if settings.show_last_price:
         add_last_price_line(fig, df, row)
@@ -1182,7 +1462,7 @@ def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
             x=df.index,
             y=df["RSI14"],
             mode="lines",
-            line=dict(color=COLORS["rsi"], width=1.6),
+            line=dict(color=COLORS["rsi"], width=1.5),
             name="RSI 14",
             hovertemplate="RSI 14: %{y:.2f}<extra></extra>",
             showlegend=False,
@@ -1191,23 +1471,15 @@ def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
         col=1,
     )
 
-    fig.add_hline(
-        y=70,
-        line_dash="dash",
-        line_color="rgba(120,120,120,0.55)",
-        line_width=1,
-        row=row,
-        col=1,
-    )
-
-    fig.add_hline(
-        y=30,
-        line_dash="dash",
-        line_color="rgba(120,120,120,0.55)",
-        line_width=1,
-        row=row,
-        col=1,
-    )
+    for level in [70, 50, 30]:
+        fig.add_hline(
+            y=level,
+            line_dash="dash" if level != 50 else "dot",
+            line_color="rgba(120,120,120,0.45)",
+            line_width=1,
+            row=row,
+            col=1,
+        )
 
 
 def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
@@ -1221,7 +1493,7 @@ def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
             x=df.index,
             y=df["MACD_HIST"],
             marker_color=hist_colors,
-            name="MACD Histogram",
+            name="MACD histogram",
             hovertemplate="Hist: %{y:.2f}<extra></extra>",
             showlegend=False,
         ),
@@ -1234,7 +1506,7 @@ def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
             x=df.index,
             y=df["MACD"],
             mode="lines",
-            line=dict(color=COLORS["macd"], width=1.5),
+            line=dict(color=COLORS["macd"], width=1.4),
             name="MACD",
             hovertemplate="MACD: %{y:.2f}<extra></extra>",
             showlegend=False,
@@ -1248,7 +1520,7 @@ def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
             x=df.index,
             y=df["MACD_SIGNAL"],
             mode="lines",
-            line=dict(color=COLORS["signal"], width=1.3),
+            line=dict(color=COLORS["signal"], width=1.2),
             name="Signal",
             hovertemplate="Signal: %{y:.2f}<extra></extra>",
             showlegend=False,
@@ -1259,7 +1531,7 @@ def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
     fig.add_hline(
         y=0,
-        line_color="rgba(120,120,120,0.25)",
+        line_color="rgba(120,120,120,0.28)",
         line_width=1,
         row=row,
         col=1,
@@ -1284,8 +1556,8 @@ def build_chart(
     )
 
     row_map = {"price": 1}
-
     next_row = 2
+
     for panel in panels:
         row_map[panel] = next_row
         next_row += 1
@@ -1316,9 +1588,21 @@ def build_chart(
             col=1,
         )
 
+    price_range = price_axis_range(df, settings)
+
+    axis_type = "log" if settings.log_scale else "linear"
+    axis_range = price_range
+
+    if settings.log_scale and price_range is not None:
+        lower = max(float(price_range[0]), 1e-9)
+        upper = max(float(price_range[1]), lower * 1.001)
+        axis_range = [np.log10(lower), np.log10(upper)]
+
     fig.update_yaxes(
         title_text="Price",
-        nticks=10,
+        nticks=9,
+        type=axis_type,
+        range=axis_range,
         row=row_map["price"],
         col=1,
     )
@@ -1335,7 +1619,7 @@ def build_chart(
         fig.update_yaxes(
             title_text="RSI",
             range=[0, 100],
-            nticks=7,
+            nticks=6,
             row=row_map["rsi"],
             col=1,
         )
@@ -1343,7 +1627,7 @@ def build_chart(
     if "macd" in row_map:
         fig.update_yaxes(
             title_text="MACD",
-            nticks=7,
+            nticks=5,
             row=row_map["macd"],
             col=1,
         )
@@ -1359,45 +1643,28 @@ def build_chart(
         tickformat="%b '%y" if settings.interval in ["1wk", "1mo"] else "%b %d\n%Y",
     )
 
-    legend_enabled = any(
-        [
-            settings.show_ma8,
-            settings.show_ma20,
-            settings.show_ma50,
-            settings.show_ma100,
-            settings.show_ma200,
-            settings.show_ema8,
-            settings.show_ema20,
-            settings.show_ema50,
-            settings.show_ema100,
-            settings.show_ema200,
-            settings.show_bbands,
-            settings.show_structure,
-        ]
-    )
-
     fig.update_layout(
         height=fig_height,
         title=None,
         plot_bgcolor="white",
         paper_bgcolor="white",
         hovermode="x unified",
-        margin=dict(l=40, r=20, t=18, b=10),
+        margin=dict(l=44, r=20, t=26, b=12),
         font=dict(
             family="Arial, sans-serif",
             size=12,
             color=COLORS["text"],
         ),
-        showlegend=legend_enabled,
+        showlegend=True,
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.015,
+            y=1.012,
             xanchor="left",
             x=0,
             bgcolor="rgba(255,255,255,0)",
             borderwidth=0,
-            font=dict(size=12, color="#444444"),
+            font=dict(size=11, color="#374151"),
             title_text="",
         ),
         bargap=0.08,
@@ -1405,6 +1672,181 @@ def build_chart(
     )
 
     return fig
+
+
+# ============================================================
+# Compare Chart
+# ============================================================
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_compare_close(
+    ticker: str,
+    interval: str,
+    auto_adjust: bool,
+    fetch_start: str | None,
+) -> pd.Series:
+    df = fetch_with_yfinance_download(
+        ticker=ticker,
+        interval=interval,
+        auto_adjust=auto_adjust,
+        fetch_start=fetch_start,
+    )
+
+    if df.empty:
+        return pd.Series(dtype=float, name=ticker)
+
+    out = df["Close"].astype(float).copy()
+    out.name = ticker
+
+    return out
+
+
+def build_compare_chart(
+    primary_df: pd.DataFrame,
+    settings: ChartSettings,
+    compare_tickers: list[str],
+) -> go.Figure | None:
+    if primary_df.empty or not compare_tickers:
+        return None
+
+    fetch_start = warmup_start_date(settings.period, settings.interval)
+    fetch_start_str = fetch_start.strftime("%Y-%m-%d") if fetch_start is not None else None
+
+    series_list = [primary_df["Close"].astype(float).rename(settings.ticker)]
+
+    for ticker in compare_tickers:
+        try:
+            close = fetch_compare_close(
+                ticker=ticker,
+                interval=settings.interval,
+                auto_adjust=settings.auto_adjust,
+                fetch_start=fetch_start_str,
+            )
+
+            if not close.empty:
+                series_list.append(close)
+
+        except Exception:
+            continue
+
+    if len(series_list) <= 1:
+        return None
+
+    combined = pd.concat(series_list, axis=1).dropna(how="all")
+    start = start_date_from_period(settings.period)
+
+    if start is not None:
+        combined = combined[combined.index >= start]
+
+    combined = combined.ffill().dropna(how="any")
+
+    if combined.empty or len(combined) < 2:
+        return None
+
+    indexed = combined / combined.iloc[0] * 100.0
+
+    fig = go.Figure()
+
+    for column in indexed.columns:
+        width = 2.4 if column == settings.ticker else 1.55
+        fig.add_trace(
+            go.Scatter(
+                x=indexed.index,
+                y=indexed[column],
+                mode="lines",
+                line=dict(width=width),
+                name=column,
+                hovertemplate=f"{column}: " + "%{y:.2f}<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        height=360,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        hovermode="x unified",
+        margin=dict(l=44, r=20, t=28, b=18),
+        font=dict(
+            family="Arial, sans-serif",
+            size=12,
+            color=COLORS["text"],
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+            bgcolor="rgba(255,255,255,0)",
+            borderwidth=0,
+            title_text="",
+        ),
+        title=dict(
+            text="Relative performance, indexed to 100",
+            x=0.0,
+            xanchor="left",
+            font=dict(size=14),
+        ),
+    )
+
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        gridwidth=1,
+        showline=False,
+        rangeslider_visible=False,
+        rangebreaks=build_rangebreaks(indexed.index, settings.interval),
+    )
+
+    fig.update_yaxes(
+        title_text="Indexed price",
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        gridwidth=1,
+        zeroline=False,
+        showline=False,
+        automargin=True,
+    )
+
+    return fig
+
+
+# ============================================================
+# Render Helpers
+# ============================================================
+
+def metric_card(label: str, value: str, note: str = "") -> str:
+    return f"""
+        <div class="metric-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value">{value}</div>
+            <div class="metric-note">{note}</div>
+        </div>
+    """
+
+
+def render_header(settings: ChartSettings, display_df: pd.DataFrame) -> None:
+    stats = compute_header_stats(display_df)
+    last_bar = format_last_bar(display_df.index[-1])
+
+    html = f"""
+    <div class="adfm-header">
+        <div class="adfm-title">{settings.ticker} Technical Regime</div>
+        <div class="adfm-subtitle">Interval: {settings.interval} | Window: {settings.period} | Last bar: {last_bar}</div>
+        <div class="metric-strip">
+            {metric_card("Last", stats["Last"])}
+            {metric_card("1D", stats["1D"])}
+            {metric_card("5D", stats["5D"])}
+            {metric_card("1M", stats["1M"])}
+            {metric_card("3M", stats["3M"])}
+            {metric_card("YTD", stats["YTD"])}
+            {metric_card("Drawdown", stats["Drawdown"], "From 52w high")}
+            {metric_card("ATR", stats["ATR"], "14-period")}
+        </div>
+    </div>
+    """
+
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1417,7 +1859,8 @@ if not settings.ticker:
     st.error("Enter a ticker.")
     st.stop()
 
-raw_df, fetch_error = fetch_history(settings)
+with st.spinner("Loading chart data..."):
+    raw_df, fetch_error = fetch_history(settings)
 
 if raw_df.empty:
     st.error(f"No data available for {settings.ticker}.")
@@ -1437,11 +1880,7 @@ volume_is_usable = has_usable_volume(display_df)
 if settings.show_volume and not volume_is_usable:
     st.sidebar.info("Volume panel hidden because this symbol does not have usable volume data.")
 
-header_suffix = "Adjusted ADFM Chart Tool" if settings.auto_adjust else "ADFM Chart Tool"
-last_bar = format_last_bar(display_df.index[-1])
-
-st.title(f"{settings.ticker} | {header_suffix}")
-st.caption(f"Interval: {settings.interval} | Period: {settings.period} | Last bar: {last_bar}")
+render_header(settings, display_df)
 
 chart = build_chart(
     df=display_df,
@@ -1458,8 +1897,43 @@ st.plotly_chart(
         "modeBarButtonsToRemove": [
             "select2d",
             "lasso2d",
+            "autoScale2d",
         ],
     },
 )
+
+compare_tickers = parse_compare_tickers(settings.compare_tickers, settings.ticker)
+compare_fig = build_compare_chart(
+    primary_df=indicator_df,
+    settings=settings,
+    compare_tickers=compare_tickers,
+)
+
+if compare_fig is not None:
+    st.plotly_chart(
+        compare_fig,
+        use_container_width=True,
+        config={
+            "displaylogo": False,
+            "scrollZoom": True,
+            "modeBarButtonsToRemove": [
+                "select2d",
+                "lasso2d",
+            ],
+        },
+    )
+
+signal_rows = build_signal_rows(display_df)
+memo = build_technical_memo(display_df, settings.ticker)
+
+left, right = st.columns([1.35, 1.00])
+
+with left:
+    st.markdown("#### Signal Matrix")
+    st.markdown(signal_table_html(signal_rows), unsafe_allow_html=True)
+
+with right:
+    st.markdown("#### Technical Memo")
+    st.markdown(f"""<div class="memo-box">{memo}</div>""", unsafe_allow_html=True)
 
 st.caption("© 2026 AD Fund Management LP")
