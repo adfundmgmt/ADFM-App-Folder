@@ -34,7 +34,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-06-11-output-quality-clean-legend-rsi"
+APP_VERSION = "2026-06-11-watchlist-state-fix"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -291,8 +291,24 @@ def parse_compare_tickers(raw: str, primary: str) -> list[str]:
     return tickers[:8]
 
 
+def queue_watchlist_ticker(ticker: str) -> None:
+    # Do not write directly into ticker_input inside the same run after the
+    # text_input widget has been instantiated. Streamlit disallows that.
+    # Queue the value, then apply it at the top of the next run before the
+    # widget is created.
+    st.session_state["_queued_ticker_input"] = normalize_ticker(ticker)
+
+
+def apply_queued_ticker_update() -> None:
+    queued_ticker = st.session_state.pop("_queued_ticker_input", None)
+
+    if queued_ticker:
+        st.session_state["ticker_input"] = queued_ticker
+
+
 def read_settings() -> ChartSettings:
     ensure_session_defaults()
+    apply_queued_ticker_update()
 
     with st.sidebar:
         st.header("About This Tool")
@@ -358,9 +374,13 @@ def read_settings() -> ChartSettings:
         cols = st.columns(2)
         for i, watch_ticker in enumerate(WATCHLISTS[selected_watchlist]):
             with cols[i % 2]:
-                if st.button(watch_ticker, key=f"watch_{selected_watchlist}_{watch_ticker}", use_container_width=True):
-                    st.session_state["ticker_input"] = watch_ticker
-                    st.rerun()
+                st.button(
+                    watch_ticker,
+                    key=f"watch_{selected_watchlist}_{watch_ticker}",
+                    use_container_width=True,
+                    on_click=queue_watchlist_ticker,
+                    args=(watch_ticker,),
+                )
 
         st.markdown("---")
         with st.expander("Chart Settings", expanded=False):
