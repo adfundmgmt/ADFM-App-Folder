@@ -34,7 +34,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-06-11-toolbar-spacing-fix"
+APP_VERSION = "2026-06-11-sidebar-controls-elliott-wave"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -84,7 +84,7 @@ st.markdown(
         }
 
         section[data-testid="stSidebar"] {
-            background: #ffffff;
+            background: #f0f2f6;
         }
 
         .block-container {
@@ -205,6 +205,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+st.title(TITLE)
+
 
 # ============================================================
 # Settings
@@ -233,6 +235,7 @@ class ChartSettings:
     show_volume: bool
     show_rsi: bool
     show_macd: bool
+    show_elliott_wave: bool
 
     compare_tickers: str
     compare_mode: str
@@ -284,93 +287,99 @@ def read_settings() -> ChartSettings:
     ensure_session_defaults()
 
     with st.sidebar:
-        st.markdown("### About This Tool")
+        st.header("About This Tool")
         st.markdown(
             """
-            Technical chart terminal for trend, momentum, volatility, relative strength, and invalidation levels.
+            **Purpose:** Single-name technical chart workspace for regime framing, trend confirmation, momentum checks, and trade invalidation.
+
+            **How to read it**
+            - The header gives price, return, drawdown, and volatility context.
+            - The chart shows price, moving averages, Bollinger Bands, volume, RSI, MACD, and optional Elliott Wave swing pivots.
+            - The signal matrix turns the tape into trend, momentum, volatility, structure, and risk-level context.
+
+            **Data source:** Yahoo Finance OHLCV history.
             """
         )
 
-        st.markdown("### Watchlists")
-        selected_watchlist = st.selectbox(
-            "Group",
-            list(WATCHLISTS.keys()),
-            index=0,
-            label_visibility="hidden",
-        )
+        st.markdown("---")
+        st.header("Chart Controls")
 
-        cols = st.columns(2)
-        for i, ticker in enumerate(WATCHLISTS[selected_watchlist]):
-            with cols[i % 2]:
-                if st.button(ticker, key=f"watch_{selected_watchlist}_{ticker}", use_container_width=True):
-                    st.session_state["ticker_input"] = ticker
-                    st.rerun()
-
-        st.markdown("### Defaults")
-        auto_adjust = st.checkbox("Use adjusted prices", value=False)
-        log_scale = st.checkbox("Log price axis", value=False)
-        tight_y_axis = st.checkbox("Dynamic price axis", value=True)
-
-        show_last_price = st.checkbox("Last price line", value=True)
-        show_range_levels = st.checkbox("Visible range high / low", value=False)
-
-        with st.expander("Moving averages", expanded=False):
-            show_sma8 = st.checkbox("SMA 8", value=True)
-            show_sma20 = st.checkbox("SMA 20", value=True)
-            show_sma50 = st.checkbox("SMA 50", value=True)
-            show_sma100 = st.checkbox("SMA 100", value=True)
-            show_sma200 = st.checkbox("SMA 200", value=True)
-
-        with st.expander("Indicators", expanded=False):
-            show_bbands = st.checkbox("Bollinger Bands", value=True)
-            show_volume = st.checkbox("Volume", value=True)
-            show_rsi = st.checkbox("RSI", value=True)
-            show_macd = st.checkbox("MACD", value=True)
-
-    toolbar_cols = st.columns([1.35, 2.20, 0.85, 0.85, 1.40])
-
-    with toolbar_cols[0]:
         ticker = st.text_input(
             "Ticker",
             key="ticker_input",
             placeholder="^SPX, NVDA, TLT, USDJPY=X",
-            label_visibility="hidden",
         )
 
-    with toolbar_cols[1]:
-        period = st.radio(
+        period = st.selectbox(
             "Window",
             PERIOD_OPTIONS,
+            index=PERIOD_OPTIONS.index(st.session_state.get("period_input", "1y")),
             key="period_input",
-            horizontal=True,
-            label_visibility="hidden",
         )
 
-    with toolbar_cols[2]:
         interval = st.selectbox(
             "Interval",
             INTERVAL_OPTIONS,
             index=INTERVAL_OPTIONS.index(st.session_state.get("interval_input", "1d")),
             key="interval_input",
-            label_visibility="hidden",
         )
 
-    with toolbar_cols[3]:
         chart_type = st.selectbox(
-            "Chart",
+            "Chart Type",
             CHART_TYPES,
             index=CHART_TYPES.index(st.session_state.get("chart_type_input", "Candles")),
             key="chart_type_input",
-            label_visibility="hidden",
         )
 
-    with toolbar_cols[4]:
         compare_tickers = st.text_input(
             "Compare",
             key="compare_input",
             placeholder="SPY, QQQ, TLT",
-            label_visibility="hidden",
+            help="Optional. Enter tickers separated by commas. The relative chart is indexed to 100.",
         )
+
+        st.markdown("---")
+        st.header("Watchlists")
+
+        selected_watchlist = st.selectbox(
+            "Group",
+            list(WATCHLISTS.keys()),
+            index=0,
+        )
+
+        cols = st.columns(2)
+        for i, watch_ticker in enumerate(WATCHLISTS[selected_watchlist]):
+            with cols[i % 2]:
+                if st.button(watch_ticker, key=f"watch_{selected_watchlist}_{watch_ticker}", use_container_width=True):
+                    st.session_state["ticker_input"] = watch_ticker
+                    st.rerun()
+
+        st.markdown("---")
+        with st.expander("Chart Settings", expanded=False):
+            show_last_price = st.checkbox("Last price line", value=True)
+            show_bbands = st.checkbox("Bollinger Bands", value=True)
+
+            st.caption("Moving averages")
+            show_sma8 = st.checkbox("8 DMA", value=True)
+            show_sma20 = st.checkbox("20 DMA", value=True)
+            show_sma50 = st.checkbox("50 DMA", value=True)
+            show_sma100 = st.checkbox("100 DMA", value=True)
+            show_sma200 = st.checkbox("200 DMA", value=True)
+
+            st.caption("Panels and overlays")
+            show_volume = st.checkbox("Volume", value=True)
+            show_rsi = st.checkbox("RSI", value=True)
+            show_macd = st.checkbox("MACD", value=True)
+            show_elliott_wave = st.checkbox(
+                "Elliott Wave pivot map",
+                value=False,
+                help="Heuristic swing-pivot overlay. Use it as pattern context, not a deterministic signal.",
+            )
+
+        auto_adjust = False
+        log_scale = False
+        tight_y_axis = True
+        show_range_levels = False
 
     compare_mode = "Indexed to 100"
 
@@ -393,6 +402,7 @@ def read_settings() -> ChartSettings:
         show_volume=show_volume,
         show_rsi=show_rsi,
         show_macd=show_macd,
+        show_elliott_wave=show_elliott_wave,
         compare_tickers=compare_tickers,
         compare_mode=compare_mode,
     )
@@ -1076,14 +1086,187 @@ def risk_levels(df: pd.DataFrame) -> tuple[str, str]:
     return "Unavailable", "No nearby moving-average or range level is available."
 
 
-def build_signal_rows(df: pd.DataFrame) -> list[dict[str, str]]:
+
+def elliott_swing_window(df: pd.DataFrame) -> int:
+    n = len(df)
+
+    if n < 45:
+        return 0
+
+    return max(3, min(12, int(round(n / 40))))
+
+
+def elliott_min_swing_pct(df: pd.DataFrame) -> float:
+    close = latest_float(df, "Close")
+
+    if close is None or close == 0:
+        return 0.012
+
+    atr = latest_float(df, "ATR14_PCT")
+    atr_component = 1.35 * atr if atr is not None and not pd.isna(atr) else 0.0
+
+    visible_high = float(pd.to_numeric(df["High"], errors="coerce").max())
+    visible_low = float(pd.to_numeric(df["Low"], errors="coerce").min())
+    range_component = ((visible_high - visible_low) / abs(close)) * 0.035 if close else 0.0
+
+    return max(0.008, min(0.040, max(atr_component, range_component)))
+
+
+def find_elliott_pivots(df: pd.DataFrame, max_pivots: int = 9) -> list[dict[str, object]]:
+    if df.empty or len(df) < 45:
+        return []
+
+    window = elliott_swing_window(df)
+
+    if window <= 0 or len(df) < (window * 2 + 5):
+        return []
+
+    highs = pd.to_numeric(df["High"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(df["Low"], errors="coerce").to_numpy(dtype=float)
+    index = list(df.index)
+
+    candidates: list[dict[str, object]] = []
+
+    for i in range(window, len(df) - window):
+        high_window = highs[i - window : i + window + 1]
+        low_window = lows[i - window : i + window + 1]
+
+        if np.isfinite(highs[i]) and highs[i] >= np.nanmax(high_window):
+            candidates.append(
+                {
+                    "pos": i,
+                    "index": index[i],
+                    "price": float(highs[i]),
+                    "kind": "H",
+                    "current": False,
+                }
+            )
+
+        if np.isfinite(lows[i]) and lows[i] <= np.nanmin(low_window):
+            candidates.append(
+                {
+                    "pos": i,
+                    "index": index[i],
+                    "price": float(lows[i]),
+                    "kind": "L",
+                    "current": False,
+                }
+            )
+
+    if not candidates:
+        return []
+
+    candidates = sorted(candidates, key=lambda item: int(item["pos"]))
+    min_swing = elliott_min_swing_pct(df)
+    pivots: list[dict[str, object]] = []
+
+    for candidate in candidates:
+        if not pivots:
+            pivots.append(candidate)
+            continue
+
+        last = pivots[-1]
+
+        if int(candidate["pos"]) == int(last["pos"]):
+            continue
+
+        if str(candidate["kind"]) == str(last["kind"]):
+            candidate_price = float(candidate["price"])
+            last_price = float(last["price"])
+            is_more_extreme_high = str(candidate["kind"]) == "H" and candidate_price > last_price
+            is_more_extreme_low = str(candidate["kind"]) == "L" and candidate_price < last_price
+
+            if is_more_extreme_high or is_more_extreme_low:
+                pivots[-1] = candidate
+
+            continue
+
+        last_price = float(last["price"])
+        candidate_price = float(candidate["price"])
+        move = abs(candidate_price / last_price - 1.0) if last_price else 0.0
+
+        if move >= min_swing or len(pivots) < 2:
+            pivots.append(candidate)
+
+    if pivots:
+        last = pivots[-1]
+        current_price = float(pd.to_numeric(df["Close"], errors="coerce").iloc[-1])
+        current_kind = "H" if current_price >= float(last["price"]) else "L"
+        move_from_last = abs(current_price / float(last["price"]) - 1.0) if float(last["price"]) else 0.0
+
+        if current_kind != str(last["kind"]) and move_from_last >= min_swing * 0.75:
+            pivots.append(
+                {
+                    "pos": len(df) - 1,
+                    "index": df.index[-1],
+                    "price": current_price,
+                    "kind": current_kind,
+                    "current": True,
+                }
+            )
+
+    return pivots[-max_pivots:]
+
+
+def elliott_display_points(df: pd.DataFrame) -> list[dict[str, object]]:
+    pivots = find_elliott_pivots(df, max_pivots=9)
+
+    if len(pivots) >= 5:
+        points = pivots[-5:]
+        labels = ["1", "2", "3", "4", "5"]
+    elif len(pivots) >= 3:
+        points = pivots[-3:]
+        labels = ["A", "B", "C"]
+    else:
+        return []
+
+    for point, label in zip(points, labels):
+        point["label"] = label
+
+    return points
+
+
+def elliott_wave_state(df: pd.DataFrame) -> tuple[str, str]:
+    points = elliott_display_points(df)
+
+    if not points:
+        return "Unavailable", "Not enough qualified swing pivots for a useful Elliott Wave map."
+
+    latest = points[-1]
+    latest_label = str(latest.get("label", ""))
+    latest_kind = str(latest.get("kind", ""))
+    latest_price = float(latest["price"])
+
+    prior_low = next((point for point in reversed(points[:-1]) if str(point.get("kind")) == "L"), None)
+    prior_high = next((point for point in reversed(points[:-1]) if str(point.get("kind")) == "H"), None)
+
+    if latest_label == "5":
+        reading = "Provisional impulse"
+    elif latest_label == "C":
+        reading = "Corrective map"
+    else:
+        reading = "Wave map"
+
+    if latest_kind == "H" and prior_low is not None:
+        anchor = f"prior swing low at {float(prior_low['price']):,.2f}"
+        note = f"Latest qualified pivot is wave {latest_label} high at {latest_price:,.2f}; count weakens below the {anchor}."
+    elif latest_kind == "L" and prior_high is not None:
+        anchor = f"prior swing high at {float(prior_high['price']):,.2f}"
+        note = f"Latest qualified pivot is wave {latest_label} low at {latest_price:,.2f}; count improves through the {anchor}."
+    else:
+        note = f"Latest qualified pivot is wave {latest_label} at {latest_price:,.2f}."
+
+    return reading, note
+
+
+def build_signal_rows(df: pd.DataFrame, include_elliott: bool = False) -> list[dict[str, str]]:
     trend, trend_note = classify_trend(df)
     momentum, momentum_note = classify_momentum(df)
     volatility, volatility_note = classify_volatility(df)
     structure, structure_note = classify_structure(df)
     risk, risk_note = risk_levels(df)
 
-    return [
+    rows = [
         {"Signal": "Trend", "Reading": trend, "Interpretation": trend_note},
         {"Signal": "Momentum", "Reading": momentum, "Interpretation": momentum_note},
         {"Signal": "Volatility", "Reading": volatility, "Interpretation": volatility_note},
@@ -1091,8 +1274,14 @@ def build_signal_rows(df: pd.DataFrame) -> list[dict[str, str]]:
         {"Signal": "Risk level", "Reading": risk, "Interpretation": risk_note},
     ]
 
+    if include_elliott:
+        wave, wave_note = elliott_wave_state(df)
+        rows.append({"Signal": "Elliott Wave", "Reading": wave, "Interpretation": wave_note})
 
-def build_technical_memo(df: pd.DataFrame, ticker: str) -> str:
+    return rows
+
+
+def build_technical_memo(df: pd.DataFrame, ticker: str, include_elliott: bool = False) -> str:
     trend, trend_note = classify_trend(df)
     momentum, momentum_note = classify_momentum(df)
     volatility, volatility_note = classify_volatility(df)
@@ -1111,12 +1300,18 @@ def build_technical_memo(df: pd.DataFrame, ticker: str) -> str:
     elif close is not None and sma50 is not None and close < sma50:
         invalidation = "a reclaim of the 50DMA"
 
-    return (
+    memo = (
         f"{ticker} screens as {trend.lower()} on trend and {momentum.lower()} on momentum. "
         f"{trend_note} {momentum_note} Volatility is {volatility.lower()}: {volatility_note} "
         f"Structure reads as {structure.lower()}. {structure_note} {risk_note} "
         f"The practical invalidation level is {invalidation}."
     )
+
+    if include_elliott:
+        wave, wave_note = elliott_wave_state(df)
+        memo += f" Elliott Wave overlay reads as {wave.lower()}: {wave_note}"
+
+    return memo
 
 
 def signal_table_html(rows: list[dict[str, str]]) -> str:
@@ -1228,7 +1423,7 @@ def volume_tick_count(volume: pd.Series) -> int:
 
 
 def price_axis_range(df: pd.DataFrame, settings: ChartSettings) -> list[float] | None:
-    if df.empty or not settings.tight_y_axis:
+    if df.empty:
         return None
 
     columns = ["High", "Low"]
@@ -1260,9 +1455,6 @@ def price_axis_range(df: pd.DataFrame, settings: ChartSettings) -> list[float] |
     ymin = float(combined.min())
     ymax = float(combined.max())
 
-    if ymin <= 0 and settings.log_scale:
-        ymin = float(pd.to_numeric(df["Low"], errors="coerce").dropna().min())
-
     visible_range = ymax - ymin
 
     if visible_range <= 0:
@@ -1279,9 +1471,6 @@ def price_axis_range(df: pd.DataFrame, settings: ChartSettings) -> list[float] |
 
     lower = ymin - pad
     upper = ymax + pad
-
-    if settings.log_scale and lower <= 0:
-        lower = max(ymin * 0.98, 1e-9)
 
     return [lower, upper]
 
@@ -1332,6 +1521,40 @@ def add_range_levels(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
         annotation_font=dict(color=COLORS["range"], size=10),
     )
 
+
+
+
+def add_elliott_wave_overlay(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
+    points = elliott_display_points(df)
+
+    if not points:
+        return
+
+    x_values = [point["index"] for point in points]
+    y_values = [float(point["price"]) for point in points]
+    labels = [str(point.get("label", "")) for point in points]
+    text_positions = [
+        "top center" if str(point.get("kind")) == "H" else "bottom center"
+        for point in points
+    ]
+
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode="lines+markers+text",
+            line=dict(color="rgba(17,24,39,0.75)", width=1.5, dash="dash"),
+            marker=dict(size=7, color="rgba(17,24,39,0.85)", line=dict(width=1, color="#ffffff")),
+            text=labels,
+            textposition=text_positions,
+            textfont=dict(size=12, color="#111827"),
+            name="Elliott Wave",
+            hovertemplate="Wave %{text}: %{y:.2f}<extra></extra>",
+            showlegend=True,
+        ),
+        row=row,
+        col=1,
+    )
 
 def add_price_panel(
     fig: go.Figure,
@@ -1454,8 +1677,8 @@ def add_price_panel(
     if settings.show_last_price:
         add_last_price_line(fig, df, row)
 
-    if settings.show_range_levels:
-        add_range_levels(fig, df, row)
+    if settings.show_elliott_wave:
+        add_elliott_wave_overlay(fig, df, row)
 
 
 def add_volume_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
@@ -1618,19 +1841,11 @@ def build_chart(
 
     price_range = price_axis_range(df, settings)
 
-    axis_type = "log" if settings.log_scale else "linear"
-    axis_range = price_range
-
-    if settings.log_scale and price_range is not None:
-        lower = max(float(price_range[0]), 1e-9)
-        upper = max(float(price_range[1]), lower * 1.001)
-        axis_range = [np.log10(lower), np.log10(upper)]
-
     fig.update_yaxes(
         title_text="Price",
         nticks=9,
-        type=axis_type,
-        range=axis_range,
+        type="linear",
+        range=price_range,
         row=row_map["price"],
         col=1,
     )
@@ -1969,8 +2184,8 @@ if compare_fig is not None:
         },
     )
 
-signal_rows = build_signal_rows(indicator_df)
-memo = build_technical_memo(indicator_df, settings.ticker)
+signal_rows = build_signal_rows(indicator_df, include_elliott=settings.show_elliott_wave)
+memo = build_technical_memo(indicator_df, settings.ticker, include_elliott=settings.show_elliott_wave)
 
 left, right = st.columns([1.35, 1.00])
 
