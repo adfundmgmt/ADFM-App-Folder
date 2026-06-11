@@ -384,7 +384,7 @@ def read_settings() -> ChartSettings:
 
         st.markdown("---")
         with st.expander("Chart Settings", expanded=False):
-            show_last_price = st.checkbox("Last price line", value=True)
+            show_last_price = st.checkbox("Last price line", value=False)
             show_bbands = st.checkbox("Bollinger Bands", value=True)
 
             st.caption("Moving averages")
