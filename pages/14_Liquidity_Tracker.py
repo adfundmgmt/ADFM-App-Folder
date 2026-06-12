@@ -61,24 +61,41 @@ st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expan
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 1.15rem;
+        padding-top: 2.65rem !important;
         padding-bottom: 2rem;
         max-width: 1580px;
+        overflow: visible !important;
+    }
+
+    .main .block-container {
+        overflow: visible !important;
+    }
+
+    .adfm-header-wrap {
+        margin-top: 0.25rem;
+        margin-bottom: 1.15rem;
+        padding-top: 0.25rem;
+        overflow: visible;
     }
 
     .adfm-title {
-        font-size: 1.9rem;
-        line-height: 1.15;
+        font-size: 1.85rem;
+        line-height: 1.25;
         font-weight: 780;
         color: #111827;
-        margin-bottom: 0.15rem;
+        margin: 0 0 0.25rem 0;
+        padding: 0;
         letter-spacing: -0.025em;
+        overflow: visible;
+        white-space: normal;
     }
 
     .adfm-subtitle {
         font-size: 0.96rem;
+        line-height: 1.45;
         color: #6b7280;
-        margin-bottom: 1.05rem;
+        margin: 0;
+        padding: 0;
     }
 
     .section-title {
@@ -238,10 +255,12 @@ def row_cells(row: pd.Series) -> List[str]:
 
 def value_from_row(row: pd.Series, min_abs: float = 1000.0) -> float:
     nums = extract_numeric_values(row, min_abs=min_abs)
+
     if not nums:
         return np.nan
 
     positive_nums = [x for x in nums if x > 0]
+
     if positive_nums:
         return max(positive_nums)
 
@@ -284,7 +303,7 @@ def metric_card(label: str, value: str, footnote: str = "") -> None:
 @st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
 def fetch_text_cached(url: str) -> str:
     headers = {
-        "User-Agent": "ADFM-H41-Liquidity-Tracker/3.0",
+        "User-Agent": "ADFM-H41-Liquidity-Tracker/4.0",
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     }
 
@@ -292,14 +311,11 @@ def fetch_text_cached(url: str) -> str:
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT,
-            )
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
 
             text = response.text
+
             if not text or len(text.strip()) < 500:
                 raise ValueError("Empty or truncated H.4.1 response")
 
@@ -324,8 +340,10 @@ def parse_release_date(page_html: str, fallback: Optional[pd.Timestamp] = None) 
 
     for pattern in patterns:
         match = re.search(pattern, page_html, flags=re.IGNORECASE)
+
         if match:
             dt = pd.to_datetime(match.group(1), errors="coerce")
+
             if pd.notna(dt):
                 return pd.Timestamp(dt).normalize()
 
@@ -386,6 +404,7 @@ def find_value_by_row_text(
 
             if all(p in txt for p in required) and not any(p in txt for p in excluded):
                 val = value_from_row(row, min_abs=min_abs)
+
                 if pd.notna(val):
                     candidates.append(float(val))
 
@@ -409,6 +428,7 @@ def find_exact_label_value(
 
             if any(cell in labels_norm for cell in cells):
                 val = value_from_row(row, min_abs=min_abs)
+
                 if pd.notna(val):
                     candidates.append(float(val))
 
@@ -448,6 +468,7 @@ def find_child_after_parent(
 
                 if child_norm in cells or txt.startswith(child_norm + " "):
                     val = value_from_row(row, min_abs=min_abs)
+
                     if pd.notna(val):
                         candidates.append(float(val))
                         break
@@ -471,7 +492,6 @@ def parse_h41_page(page_html: str, fallback_date: Optional[pd.Timestamp] = None)
 
     data: Dict[str, float] = {}
 
-    # H.4.1 data are reported in millions. Convert to billions at the end.
     fed_assets_m = find_exact_label_value(
         tables,
         labels=[
@@ -565,21 +585,21 @@ def parse_h41_page(page_html: str, fallback_date: Optional[pd.Timestamp] = None)
         elif "RRP Total" in data:
             data["Net Liquidity"] = data["Fed Assets"] - data["TGA"] - data["RRP Total"]
 
-    s = pd.Series(data, name=release_date)
-    return s
+    return pd.Series(data, name=release_date)
 
 
 def previous_thursday(date_value: pd.Timestamp) -> pd.Timestamp:
     d = pd.Timestamp(date_value).normalize()
+
     while d.weekday() != 3:
         d -= pd.Timedelta(days=1)
+
     return d
 
 
 def generate_release_dates(latest_release_date: pd.Timestamp, weeks: int) -> List[pd.Timestamp]:
     latest = previous_thursday(latest_release_date)
-    dates = [latest - pd.Timedelta(weeks=i) for i in range(weeks)]
-    return dates
+    return [latest - pd.Timedelta(weeks=i) for i in range(weeks)]
 
 
 def archive_url_for_date(date_value: pd.Timestamp) -> str:
@@ -637,36 +657,53 @@ def merge_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
     return merged
 
 
-def fetch_h41_history(
-    requested_weeks: int,
-    force_backfill: bool,
-) -> Tuple[pd.DataFrame, Dict[str, str], str]:
+def load_current_h41() -> Tuple[pd.DataFrame, Dict[str, str]]:
     errors: Dict[str, str] = {}
-
-    cached = load_cache()
 
     try:
         current_html = fetch_text_cached(H41_CURRENT_URL)
         current_release_date = parse_release_date(current_html)
         current_series = parse_h41_page(current_html, fallback_date=current_release_date)
 
-        current_df = pd.DataFrame()
-        if not current_series.empty:
-            current_df = current_series.to_frame().T
-            current_df.index = pd.to_datetime(current_df.index)
-            current_df.index.name = "Date"
+        if current_series.empty or pd.isna(current_series.get("Fed Assets", np.nan)):
+            errors["current"] = "Current H.4.1 page parsed, but Fed Assets was not found."
+            return pd.DataFrame(), errors
+
+        current_df = current_series.to_frame().T
+        current_df.index = pd.to_datetime(current_df.index)
+        current_df.index.name = "Date"
+
+        return current_df, errors
 
     except Exception as exc:
         errors["current"] = str(exc)
-        current_df = pd.DataFrame()
+        return pd.DataFrame(), errors
+
+
+def run_archive_backfill(
+    requested_weeks: int,
+    force_backfill: bool,
+    current_df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    errors: Dict[str, str] = {}
+
+    cached = load_cache()
+
+    if not current_df.empty:
+        current_release_date = pd.Timestamp(current_df.index.max()).normalize()
+    elif not cached.empty:
+        current_release_date = pd.Timestamp(cached.index.max()).normalize()
+    else:
         current_release_date = pd.Timestamp.today().normalize()
 
     release_dates = generate_release_dates(current_release_date, requested_weeks)
 
     rows: List[pd.Series] = []
 
-    missing_dates = []
     cached_index = set(pd.to_datetime(cached.index).normalize()) if not cached.empty else set()
+    current_index = set(pd.to_datetime(current_df.index).normalize()) if not current_df.empty else set()
+
+    missing_dates = []
 
     for dt in release_dates:
         normalized_dt = pd.Timestamp(dt).normalize()
@@ -674,57 +711,48 @@ def fetch_h41_history(
         if not force_backfill and normalized_dt in cached_index:
             continue
 
-        if not current_df.empty and normalized_dt in set(pd.to_datetime(current_df.index).normalize()):
+        if normalized_dt in current_index:
             continue
 
         missing_dates.append(normalized_dt)
 
-    if missing_dates:
-        progress = st.progress(0)
-        status = st.empty()
+    if not missing_dates:
+        return pd.DataFrame(), errors
 
-        for i, dt in enumerate(missing_dates, start=1):
-            yyyymmdd = dt.strftime("%Y%m%d")
-            url = archive_url_for_date(dt)
+    progress = st.progress(0)
+    status = st.empty()
 
-            status.caption(f"Backfilling H.4.1 release {yyyymmdd}")
+    for i, dt in enumerate(missing_dates, start=1):
+        yyyymmdd = dt.strftime("%Y%m%d")
+        url = archive_url_for_date(dt)
 
-            try:
-                page_html = fetch_text_cached(url)
-                s = parse_h41_page(page_html, fallback_date=dt)
+        status.caption(f"Backfilling H.4.1 release {yyyymmdd}")
 
-                if not s.empty and pd.notna(s.get("Fed Assets", np.nan)):
-                    rows.append(s)
-                else:
-                    errors[yyyymmdd] = "Parsed page but could not find Fed Assets"
+        try:
+            page_html = fetch_text_cached(url)
+            s = parse_h41_page(page_html, fallback_date=dt)
 
-            except Exception as exc:
-                errors[yyyymmdd] = str(exc)
+            if not s.empty and pd.notna(s.get("Fed Assets", np.nan)):
+                rows.append(s)
+            else:
+                errors[yyyymmdd] = "Parsed page but could not find Fed Assets."
 
-            progress.progress(i / len(missing_dates))
+        except Exception as exc:
+            errors[yyyymmdd] = str(exc)
 
-        progress.empty()
-        status.empty()
+        progress.progress(i / len(missing_dates))
 
-    archive_df = pd.DataFrame()
-    if rows:
-        archive_df = pd.DataFrame(rows)
-        archive_df.index = pd.to_datetime(archive_df.index)
-        archive_df.index.name = "Date"
+    progress.empty()
+    status.empty()
 
-    merged = merge_frames([cached, archive_df, current_df])
+    if not rows:
+        return pd.DataFrame(), errors
 
-    if not merged.empty:
-        save_cache(merged)
+    archive_df = pd.DataFrame(rows)
+    archive_df.index = pd.to_datetime(archive_df.index)
+    archive_df.index.name = "Date"
 
-    if not current_df.empty:
-        status_text = "current H.4.1 + archive pages + local cache"
-    elif not cached.empty:
-        status_text = "local cache only"
-    else:
-        status_text = "no working source"
-
-    return merged, errors, status_text
+    return archive_df, errors
 
 
 def filter_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
@@ -770,6 +798,7 @@ def obs_pct_change(series: pd.Series, periods: int) -> float:
         return np.nan
 
     base = s.iloc[-1 - periods]
+
     if pd.isna(base) or base == 0:
         return np.nan
 
@@ -809,34 +838,19 @@ def rebase(series: pd.Series) -> pd.Series:
     return s / base * 100.0
 
 
-def liquidity_regime(asset_13w_ann: float, net_13w_ann: float) -> Tuple[str, str]:
-    primary = net_13w_ann if pd.notna(net_13w_ann) else asset_13w_ann
-
-    if pd.isna(primary):
-        return "Insufficient history", "#6b7280"
-
-    if primary > 250:
-        return "Strong liquidity expansion", "#166534"
-
-    if primary > 75:
-        return "Moderate liquidity expansion", "#15803d"
-
-    if primary < -250:
-        return "Strong liquidity drain", "#991b1b"
-
-    if primary < -75:
-        return "Moderate liquidity drain", "#b91c1c"
-
-    return "Flat liquidity impulse", "#92400e"
-
-
 # ------------------------------------------------------------
 # Header
 # ------------------------------------------------------------
 
-st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='adfm-subtitle'>Fed H.4.1 balance-sheet level, liquidity impulse, TGA, reverse repos, reserves, and rate of change. FRED is not used.</div>",
+    f"""
+    <div class="adfm-header-wrap">
+        <div class="adfm-title">{TITLE}</div>
+        <div class="adfm-subtitle">
+            Fed H.4.1 balance-sheet level, liquidity impulse, TGA, reverse repos, reserves, and rate of change. FRED is not used.
+        </div>
+    </div>
+    """,
     unsafe_allow_html=True,
 )
 
@@ -850,7 +864,7 @@ with st.sidebar:
         """
 This page avoids FRED entirely.
 
-It pulls the Fed's H.4.1 release pages directly, parses the balance-sheet tables, stores observations in a local CSV cache, and keeps running even when one historical release page fails.
+It pulls the current Fed H.4.1 release, merges it with a local CSV cache, and only backfills historical releases when you explicitly ask it to.
 
 Core proxy:
 
@@ -869,17 +883,6 @@ If RRP Others is unavailable, the app falls back to total reverse repos.
         index=["6m", "1y", "2y", "3y", "5y", "10y", "max"].index(DEFAULT_LOOKBACK),
     )
 
-    base_weeks = LOOKBACK_TO_WEEKS.get(lookback, 170)
-
-    backfill_weeks = st.slider(
-        "Archive releases to cache",
-        min_value=30,
-        max_value=540,
-        value=min(max(base_weeks, 60), 540),
-        step=10,
-        help="First run builds this local cache from Fed H.4.1 archive pages. Later runs use the cache.",
-    )
-
     smooth_window = st.number_input(
         "Smoothing window, weekly observations",
         min_value=1,
@@ -888,35 +891,90 @@ If RRP Others is unavailable, the app falls back to total reverse repos.
         step=1,
     )
 
-    force_backfill = st.checkbox(
-        "Force archive refresh",
-        value=False,
-        help="Leave off unless the local cache is stale or corrupted.",
-    )
-
     show_components = st.checkbox("Show components chart", value=True)
     show_raw_table = st.checkbox("Show cleaned data table", value=True)
+
+    st.divider()
+    st.markdown("### Cache")
+
+    cache_df_preview = load_cache()
+    cache_rows = len(cache_df_preview)
+
+    if cache_rows > 0:
+        st.caption(
+            f"Local cache: {cache_rows} observations through "
+            f"{pd.Timestamp(cache_df_preview.index.max()).strftime('%b %d, %Y')}"
+        )
+    else:
+        st.caption("Local cache: empty")
+
+    backfill_weeks = st.slider(
+        "Archive releases to cache",
+        min_value=30,
+        max_value=540,
+        value=min(max(LOOKBACK_TO_WEEKS.get(lookback, 115), 60), 540),
+        step=10,
+    )
+
+    force_backfill = st.checkbox("Force archive refresh", value=False)
+
+    run_backfill = st.button(
+        "Build / Refresh Archive Cache",
+        use_container_width=True,
+        help="This is the slow operation. Normal page loads do not run archive backfill.",
+    )
+
+    clear_cache = st.button(
+        "Clear Local Cache",
+        use_container_width=True,
+    )
 
     st.caption("Source: Federal Reserve H.4.1 current and historical release pages. No FRED dependency.")
 
 # ------------------------------------------------------------
-# Data Load
+# Cache Actions
 # ------------------------------------------------------------
 
-with st.spinner("Loading Fed H.4.1 data"):
-    full_df, source_errors, source_status = fetch_h41_history(
-        requested_weeks=int(backfill_weeks),
-        force_backfill=bool(force_backfill),
-    )
+if clear_cache:
+    try:
+        if os.path.exists(CACHE_PATH):
+            os.remove(CACHE_PATH)
+        st.success("Local cache cleared.")
+    except Exception as exc:
+        st.error(f"Could not clear cache: {exc}")
+
+# ------------------------------------------------------------
+# Fast Data Load
+# ------------------------------------------------------------
+
+current_df, current_errors = load_current_h41()
+cached_df = load_cache()
+
+archive_df = pd.DataFrame()
+archive_errors: Dict[str, str] = {}
+
+if run_backfill:
+    with st.spinner("Backfilling Fed H.4.1 archive cache"):
+        archive_df, archive_errors = run_archive_backfill(
+            requested_weeks=int(backfill_weeks),
+            force_backfill=bool(force_backfill),
+            current_df=current_df,
+        )
+
+full_df = merge_frames([cached_df, archive_df, current_df])
+
+if not full_df.empty:
+    save_cache(full_df)
+
+source_errors = {**current_errors, **archive_errors}
 
 if full_df.empty or "Fed Assets" not in full_df.columns:
     st.error("No usable Fed balance-sheet data loaded.")
     st.markdown(
         """
         <div class="warning-box">
-        The dashboard did not crash, but it could not locate a valid Fed Assets row from the current H.4.1 page,
-        the archive pages, or the local cache. This usually means the Fed page structure changed or the runtime
-        cannot reach federalreserve.gov.
+        The dashboard could not locate a valid Fed Assets row from the current H.4.1 page or the local cache.
+        Use the archive cache button only after the current page is loading correctly.
         </div>
         """,
         unsafe_allow_html=True,
@@ -948,16 +1006,6 @@ core_df = df.dropna(subset=["Fed Assets"])
 
 if core_df.empty:
     st.error("Fed Assets exists as a column, but every value is blank after parsing.")
-    st.markdown(
-        """
-        <div class="warning-box">
-        This is the condition that caused the prior IndexError. The revised page stops here instead of calling iloc[-1]
-        on an empty dataframe. Check the parsed data table and source errors below.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     st.dataframe(df.tail(30), use_container_width=True)
 
     if source_errors:
@@ -977,26 +1025,21 @@ latest_date = core_df.index[-1]
 assets_1w = obs_change(df["Fed Assets"], 1)
 assets_4w = obs_change(df["Fed Assets"], 4)
 assets_13w = obs_change(df["Fed Assets"], 13)
-assets_52w = obs_change(df["Fed Assets"], 52)
 assets_13w_ann = annualized_pace(df["Fed Assets"], 13)
 assets_13w_pct = obs_pct_change(df["Fed Assets"], 13)
 
 if "Net Liquidity" in df.columns:
-    net_1w = obs_change(df["Net Liquidity"], 1)
-    net_4w = obs_change(df["Net Liquidity"], 4)
-    net_13w = obs_change(df["Net Liquidity"], 13)
-    net_52w = obs_change(df["Net Liquidity"], 52)
     net_13w_ann = annualized_pace(df["Net Liquidity"], 13)
 else:
-    net_1w = net_4w = net_13w = net_52w = net_13w_ann = np.nan
+    net_13w_ann = np.nan
 
 if "TGA" in df.columns:
     tga_1w = obs_change(df["TGA"], 1)
-    tga_4w = obs_change(df["TGA"], 4)
 else:
-    tga_1w = tga_4w = np.nan
+    tga_1w = np.nan
 
 rrp_col = None
+
 if "RRP Others" in df.columns and df["RRP Others"].notna().any():
     rrp_col = "RRP Others"
 elif "RRP Total" in df.columns and df["RRP Total"].notna().any():
@@ -1004,11 +1047,8 @@ elif "RRP Total" in df.columns and df["RRP Total"].notna().any():
 
 if rrp_col is not None:
     rrp_1w = obs_change(df[rrp_col], 1)
-    rrp_4w = obs_change(df[rrp_col], 4)
 else:
-    rrp_1w = rrp_4w = np.nan
-
-regime_label, regime_color = liquidity_regime(assets_13w_ann, net_13w_ann)
+    rrp_1w = np.nan
 
 # ------------------------------------------------------------
 # Snapshot
@@ -1059,53 +1099,6 @@ with c11:
 
 with c12:
     metric_card("13W Asset %", fmt_pct(assets_13w_pct), "Fed assets ROC")
-
-# ------------------------------------------------------------
-# Liquidity Read
-# ------------------------------------------------------------
-
-st.markdown("<div class='section-title'>Liquidity Read</div>", unsafe_allow_html=True)
-
-left, right = st.columns([1.22, 0.78])
-
-with left:
-    st.markdown(
-        f"""
-        <div class="info-box">
-        <b>Balance-sheet impulse:</b><br><br>
-        Fed assets are <b>{fmt_b(latest.get("Fed Assets"))}</b>. The one-week move is
-        <b>{fmt_delta_b(assets_1w)}</b>, the four-week move is <b>{fmt_delta_b(assets_4w)}</b>,
-        and the thirteen-week annualized pace is <b>{fmt_delta_b(assets_13w_ann)}</b>.
-        The regime read is <b style="color:{regime_color};">{regime_label}</b>.
-        <br><br>
-        The pressure point is whether Treasury cash rebuilding and reverse-repo absorption are offsetting or amplifying
-        the Fed balance-sheet path. Rising TGA drains liquidity. Falling RRP releases liquidity. Reserve balances show
-        where the plumbing pressure actually settles.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with right:
-    st.markdown(
-        f"""
-        <div class="info-box">
-        <b>Data status</b><br><br>
-        Source stack: <b>{source_status}</b>.
-        <br><br>
-        FRED is not called anywhere in this page. The app parses Fed H.4.1 pages directly and stores a local CSV cache.
-        <br><br>
-        Lookback: <b>{lookback}</b>. Cached archive releases targeted: <b>{backfill_weeks}</b>.
-        Smoothing: <b>{smooth_window}</b> weekly observation(s).
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-if source_errors:
-    with st.expander("Source issues, non-fatal"):
-        for key, message in list(source_errors.items())[:80]:
-            st.write(f"**{key}:** {message}")
 
 # ------------------------------------------------------------
 # Chartbook
@@ -1393,7 +1386,7 @@ with right:
         Net Liquidity = Fed Assets - TGA - RRP Others.
         <br><br>
         <b>Fallback</b><br>
-        If RRP Others is unavailable, total reverse repos are used. If archive pages fail, the app uses the local cache.
+        If RRP Others is unavailable, total reverse repos are used. Historical archive pages are only pulled when the cache refresh button is pressed.
         <br><br>
         <b>Units</b><br>
         H.4.1 figures are reported in millions. The app converts them to billions.
@@ -1404,5 +1397,10 @@ with right:
         """,
         unsafe_allow_html=True,
     )
+
+if source_errors:
+    with st.expander("Source issues"):
+        for key, message in list(source_errors.items())[:80]:
+            st.write(f"**{key}:** {message}")
 
 st.caption("© 2026 AD Fund Management LP")
