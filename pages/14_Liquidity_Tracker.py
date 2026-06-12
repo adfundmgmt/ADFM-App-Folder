@@ -12,80 +12,37 @@ import requests
 import streamlit as st
 from plotly.subplots import make_subplots
 
-# ---------------- Config ----------------
+# ------------------------------------------------------------
+# Config
+# ------------------------------------------------------------
 
 TITLE = "Fed Balance Sheet & Liquidity Tracker"
 
-H41_DDP_OUTPUT_URL = "https://www.federalreserve.gov/datadownload/Output.aspx"
-H41_CURRENT_URL = "https://www.federalreserve.gov/releases/h41/current/h41.htm"
+H41_CURRENT_URL = "https://www.federalreserve.gov/releases/h41/current/"
+H41_ARCHIVE_URL_TEMPLATE = "https://www.federalreserve.gov/releases/h41/{yyyymmdd}/"
 
 CACHE_DIR = "data"
-CACHE_PATH = os.path.join(CACHE_DIR, "fed_liquidity_cache.csv")
+CACHE_PATH = os.path.join(CACHE_DIR, "fed_h41_liquidity_cache.csv")
 
-REQUEST_TIMEOUT = (4, 14)
+REQUEST_TIMEOUT = (4, 12)
 MAX_RETRIES = 2
-BACKOFF_SECONDS = 0.8
+BACKOFF_SECONDS = 0.75
 
-DEFAULT_LOOKBACK = "3y"
+DEFAULT_LOOKBACK = "2y"
 DEFAULT_SMOOTH = 1
 
-# These package hashes come from the Fed H.4.1 DDP preformatted/review pages.
-# Package 1 captures the condition statement, including total assets.
-# Package 2 captures reserve-balance factors, including TGA, RRP, and reserves.
-DDP_PACKAGES = {
-    "condition_statement": "3ab1b33ad80c27bc5cc4f8122b7a6440",
-    "reserve_factors": "2704b6bc9b50bc034baf9660364dfb26",
-}
-
-# H.4.1 DDP series identifiers. Units are millions of dollars.
-SERIES_PATTERNS = {
-    "Fed Assets": [
-        "RESPPMA_N.WW",
-        "total assets (less eliminations from consolidation)",
-        "assets: total assets: total assets (less eliminations",
-    ],
-    "Fed Assets Gross": [
-        "RESPPA_N.WW",
-        "assets: total assets: total assets: wednesday level",
-    ],
-    "Securities Held Outright": [
-        "RESPPALG_N.WW",
-        "securities held outright: securities held outright: wednesday level",
-    ],
-    "UST Holdings": [
-        "RESPPALGUM_N.WW",
-        "u.s. treasury securities: all: wednesday level",
-        "u.s. treasury securities: wednesday level",
-    ],
-    "MBS Holdings": [
-        "RESPPALGASMO_N.WW",
-        "mortgage-backed securities: wednesday level",
-    ],
-    "TGA": [
-        "RESPPLLDT_N.WW",
-        "u.s. treasury, general account: wednesday level",
-    ],
-    "RRP Total": [
-        "RESPPLLR_N.WW",
-        "reverse repurchase agreements: wednesday level",
-        "liabilities: reverse repurchase agreements: wednesday level",
-    ],
-    "RRP Foreign Official": [
-        "RESPPLLRF_N.WW",
-        "reverse repurchase agreements: foreign official and international accounts: wednesday level",
-    ],
-    "RRP Others": [
-        "RESPPLLRD_N.WW",
-        "reverse repurchase agreements: others: wednesday level",
-    ],
-    "Reserve Balances": [
-        "RESH4R_N.WW",
-        "reserve balances with federal reserve banks: wednesday level",
-    ],
+LOOKBACK_TO_WEEKS = {
+    "6m": 30,
+    "1y": 60,
+    "2y": 115,
+    "3y": 170,
+    "5y": 275,
+    "10y": 540,
 }
 
 DISPLAY_COLUMNS = [
     "Fed Assets",
+    "Net Liquidity",
     "TGA",
     "RRP Others",
     "RRP Total",
@@ -93,12 +50,13 @@ DISPLAY_COLUMNS = [
     "Securities Held Outright",
     "UST Holdings",
     "MBS Holdings",
-    "Net Liquidity",
 ]
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
 
-# ---------------- CSS ----------------
+# ------------------------------------------------------------
+# CSS
+# ------------------------------------------------------------
 
 CUSTOM_CSS = """
 <style>
@@ -192,17 +150,6 @@ CUSTOM_CSS = """
         line-height: 1.42;
     }
 
-    .good-box {
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 13px 15px;
-        margin-bottom: 0.9rem;
-        color: #111827;
-        font-size: 0.9rem;
-        line-height: 1.42;
-    }
-
     .stDataFrame {
         border: 1px solid #e5e7eb;
         border-radius: 12px;
@@ -222,14 +169,30 @@ CUSTOM_CSS = """
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# ---------------- Helpers ----------------
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
 
 def norm_text(x: object) -> str:
-    return re.sub(r"\s+", " ", str(x).strip().lower())
+    text = html.unescape(str(x))
+    text = text.replace("\xa0", " ")
+    text = text.replace("–", "-")
+    text = text.replace("—", "-")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().lower()
+
+
+def clean_cell(x: object) -> str:
+    if pd.isna(x):
+        return ""
+    text = html.unescape(str(x))
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 def parse_number(x: object) -> float:
-    if x is None:
+    if x is None or pd.isna(x):
         return np.nan
 
     s = html.unescape(str(x))
@@ -237,19 +200,52 @@ def parse_number(x: object) -> float:
     s = s.replace(",", "")
     s = s.replace("$", "")
     s = s.replace("−", "-")
+    s = s.replace("–", "-")
+    s = s.replace("—", "-")
     s = re.sub(r"\s+", "", s)
 
-    if s in {"", ".", "...", "nan", "None"}:
+    if s in {"", ".", "...", "nan", "None", "N/A"}:
         return np.nan
 
-    paren_negative = s.startswith("(") and s.endswith(")")
+    is_negative = s.startswith("(") and s.endswith(")")
     s = s.strip("()")
 
     try:
-        value = float(s)
-        return -value if paren_negative else value
+        val = float(s)
+        return -val if is_negative else val
     except Exception:
         return np.nan
+
+
+def extract_numeric_values(row: pd.Series, min_abs: float = 1000.0) -> List[float]:
+    vals: List[float] = []
+
+    for item in row.tolist():
+        val = parse_number(item)
+        if pd.notna(val) and abs(val) >= min_abs:
+            vals.append(float(val))
+
+    return vals
+
+
+def row_text(row: pd.Series) -> str:
+    return norm_text(" ".join(clean_cell(x) for x in row.tolist() if clean_cell(x)))
+
+
+def row_cells(row: pd.Series) -> List[str]:
+    return [norm_text(x) for x in row.tolist() if clean_cell(x)]
+
+
+def value_from_row(row: pd.Series, min_abs: float = 1000.0) -> float:
+    nums = extract_numeric_values(row, min_abs=min_abs)
+    if not nums:
+        return np.nan
+
+    positive_nums = [x for x in nums if x > 0]
+    if positive_nums:
+        return max(positive_nums)
+
+    return nums[0]
 
 
 def fmt_b(x: float) -> str:
@@ -272,13 +268,6 @@ def fmt_pct(x: float) -> str:
     return f"{sign}{x:.2f}%"
 
 
-def fmt_plain(x: float) -> str:
-    if pd.isna(x):
-        return "N/A"
-    sign = "+" if x > 0 else ""
-    return f"{sign}{x:,.0f}"
-
-
 def metric_card(label: str, value: str, footnote: str = "") -> None:
     st.markdown(
         f"""
@@ -292,27 +281,30 @@ def metric_card(label: str, value: str, footnote: str = "") -> None:
     )
 
 
-def fetch_text(url: str, params: Optional[Dict[str, str]] = None) -> str:
+@st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
+def fetch_text_cached(url: str) -> str:
     headers = {
-        "User-Agent": "ADFM-Fed-Liquidity-Tracker/2.0",
-        "Accept": "text/csv,text/html,application/xhtml+xml,*/*;q=0.8",
+        "User-Agent": "ADFM-H41-Liquidity-Tracker/3.0",
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     }
 
     last_error: Optional[Exception] = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            r = requests.get(
+            response = requests.get(
                 url,
-                params=params,
                 headers=headers,
                 timeout=REQUEST_TIMEOUT,
             )
-            r.raise_for_status()
-            text = r.text
+            response.raise_for_status()
 
-            if not text or len(text.strip()) < 50:
-                raise ValueError("Empty response")
+            text = response.text
+            if not text or len(text.strip()) < 500:
+                raise ValueError("Empty or truncated H.4.1 response")
+
+            if "Factors Affecting Reserve Balances" not in text and "H.4.1" not in text:
+                raise ValueError("Unexpected H.4.1 page structure")
 
             return text
 
@@ -321,152 +313,277 @@ def fetch_text(url: str, params: Optional[Dict[str, str]] = None) -> str:
             if attempt < MAX_RETRIES:
                 time.sleep(BACKOFF_SECONDS * attempt)
 
-    raise RuntimeError(f"Fetch failed after {MAX_RETRIES} attempts: {last_error}")
+    raise RuntimeError(f"Failed to fetch {url}: {last_error}")
 
 
-def clean_ddp_csv_text(text: str) -> str:
-    if "<html" in text[:500].lower() or "application is temporarily unavailable" in text.lower():
-        raise ValueError("Fed DDP returned HTML instead of CSV")
+def parse_release_date(page_html: str, fallback: Optional[pd.Timestamp] = None) -> pd.Timestamp:
+    patterns = [
+        r"Release Date:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+        r"Last Update:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+    ]
 
-    return text.replace("\ufeff", "")
+    for pattern in patterns:
+        match = re.search(pattern, page_html, flags=re.IGNORECASE)
+        if match:
+            dt = pd.to_datetime(match.group(1), errors="coerce")
+            if pd.notna(dt):
+                return pd.Timestamp(dt).normalize()
+
+    if fallback is not None and pd.notna(fallback):
+        return pd.Timestamp(fallback).normalize()
+
+    return pd.Timestamp.today().normalize()
 
 
-def read_ddp_csv_flexible(text: str) -> pd.DataFrame:
-    text = clean_ddp_csv_text(text)
-    lines = [line for line in text.splitlines() if line.strip()]
+def read_h41_tables(page_html: str) -> List[pd.DataFrame]:
+    try:
+        tables = pd.read_html(StringIO(page_html), displayed_only=False)
+    except Exception:
+        return []
 
-    if not lines:
-        raise ValueError("Fed DDP CSV response was empty")
+    cleaned: List[pd.DataFrame] = []
 
-    best: Optional[pd.DataFrame] = None
-    best_score = -1
-
-    for skip in range(0, min(35, len(lines))):
-        candidate_text = "\n".join(lines[skip:])
-
-        try:
-            candidate = pd.read_csv(StringIO(candidate_text), dtype=str)
-        except Exception:
+    for table in tables:
+        if table.empty:
             continue
 
-        if candidate.empty or candidate.shape[1] < 2:
-            continue
+        table = table.copy()
 
-        candidate.columns = [str(c).strip() for c in candidate.columns]
+        if isinstance(table.columns, pd.MultiIndex):
+            table.columns = [
+                " ".join(str(x) for x in col if str(x) != "nan").strip()
+                for col in table.columns
+            ]
+        else:
+            table.columns = [str(c).strip() for c in table.columns]
 
-        for col in candidate.columns[:4]:
-            dates = pd.to_datetime(candidate[col], errors="coerce")
-            score = int(dates.notna().sum())
+        table = table.dropna(how="all")
+        table = table.loc[:, ~table.columns.duplicated()]
 
-            if score > best_score:
-                tmp = candidate.copy()
-                tmp["_parsed_date_"] = dates
-                tmp = tmp.dropna(subset=["_parsed_date_"])
-                tmp = tmp.drop(columns=[col])
-                tmp = tmp.set_index("_parsed_date_").sort_index()
-                tmp.index.name = "Date"
+        if not table.empty:
+            cleaned.append(table)
 
-                if not tmp.empty and tmp.shape[1] >= 1:
-                    best = tmp
-                    best_score = score
-
-    if best is None or best.empty:
-        raise ValueError("Could not locate a usable date column in Fed DDP CSV")
-
-    best = best.loc[:, ~best.columns.duplicated()]
-    return best
+    return cleaned
 
 
-@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
-def fetch_ddp_package(package_hash: str, start_iso: str, end_iso: str) -> pd.DataFrame:
-    start_dt = pd.to_datetime(start_iso)
-    end_dt = pd.to_datetime(end_iso)
+def find_value_by_row_text(
+    tables: List[pd.DataFrame],
+    required_phrases: List[str],
+    excluded_phrases: Optional[List[str]] = None,
+    min_abs: float = 1000.0,
+) -> float:
+    required = [norm_text(x) for x in required_phrases]
+    excluded = [norm_text(x) for x in (excluded_phrases or [])]
 
-    params = {
-        "filetype": "csv",
-        "from": start_dt.strftime("%m/%d/%Y"),
-        "to": end_dt.strftime("%m/%d/%Y"),
-        "label": "include",
-        "lastobs": "",
-        "layout": "seriescolumn",
-        "rel": "H41",
-        "series": package_hash,
-    }
+    candidates: List[float] = []
 
-    text = fetch_text(H41_DDP_OUTPUT_URL, params=params)
-    return read_ddp_csv_flexible(text)
+    for table in tables:
+        for _, row in table.iterrows():
+            txt = row_text(row)
 
+            if not txt:
+                continue
 
-def locate_column(df: pd.DataFrame, patterns: List[str]) -> Optional[str]:
-    if df.empty:
-        return None
+            if all(p in txt for p in required) and not any(p in txt for p in excluded):
+                val = value_from_row(row, min_abs=min_abs)
+                if pd.notna(val):
+                    candidates.append(float(val))
 
-    normalized_cols = {col: norm_text(col) for col in df.columns}
-    normalized_patterns = [norm_text(p) for p in patterns]
+    if not candidates:
+        return np.nan
 
-    for pattern in normalized_patterns:
-        for col, ncol in normalized_cols.items():
-            if pattern in ncol:
-                return col
-
-    return None
+    return max(candidates)
 
 
-def build_working_df(raw: pd.DataFrame) -> pd.DataFrame:
-    if raw.empty:
-        return pd.DataFrame()
+def find_exact_label_value(
+    tables: List[pd.DataFrame],
+    labels: List[str],
+    min_abs: float = 1000.0,
+) -> float:
+    labels_norm = [norm_text(x) for x in labels]
+    candidates: List[float] = []
 
-    out = pd.DataFrame(index=raw.index)
+    for table in tables:
+        for _, row in table.iterrows():
+            cells = row_cells(row)
 
-    for display_name, patterns in SERIES_PATTERNS.items():
-        col = locate_column(raw, patterns)
-        if col is not None:
-            out[display_name] = raw[col].map(parse_number) / 1000.0
+            if any(cell in labels_norm for cell in cells):
+                val = value_from_row(row, min_abs=min_abs)
+                if pd.notna(val):
+                    candidates.append(float(val))
 
-    # Prefer less-eliminations total assets. Fall back to gross total assets if needed.
-    if "Fed Assets" not in out.columns and "Fed Assets Gross" in out.columns:
-        out["Fed Assets"] = out["Fed Assets Gross"]
+    if not candidates:
+        return np.nan
 
-    # For the net-liquidity proxy, use RRP Others when available.
-    # RRP Total includes foreign official and international accounts, which can distort the market-liquidity read.
-    if "Fed Assets" in out.columns and "TGA" in out.columns:
-        if "RRP Others" in out.columns:
-            out["Net Liquidity"] = out["Fed Assets"] - out["TGA"] - out["RRP Others"]
-        elif "RRP Total" in out.columns:
-            out["Net Liquidity"] = out["Fed Assets"] - out["TGA"] - out["RRP Total"]
-
-    out = out.sort_index()
-    out = out[~out.index.duplicated(keep="last")]
-
-    # Drop rows where the core series is missing.
-    if "Fed Assets" in out.columns:
-        out = out.dropna(subset=["Fed Assets"])
-
-    return out
+    return max(candidates)
 
 
-def load_ddp_history(start: pd.Timestamp, end: pd.Timestamp) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    frames: List[pd.DataFrame] = []
-    errors: Dict[str, str] = {}
+def find_child_after_parent(
+    tables: List[pd.DataFrame],
+    parent_phrase: str,
+    child_label: str,
+    max_rows_after_parent: int = 10,
+    min_abs: float = 1000.0,
+) -> float:
+    parent_norm = norm_text(parent_phrase)
+    child_norm = norm_text(child_label)
 
-    start_iso = start.strftime("%Y-%m-%d")
-    end_iso = end.strftime("%Y-%m-%d")
+    candidates: List[float] = []
 
-    for package_name, package_hash in DDP_PACKAGES.items():
-        try:
-            package_df = fetch_ddp_package(package_hash, start_iso, end_iso)
-            frames.append(package_df)
-        except Exception as exc:
-            errors[package_name] = str(exc)
+    for table in tables:
+        seen_parent = False
+        rows_after = 0
 
-    if not frames:
-        return pd.DataFrame(), errors
+        for _, row in table.iterrows():
+            txt = row_text(row)
+            cells = row_cells(row)
 
-    raw = pd.concat(frames, axis=1)
-    raw = raw.loc[:, ~raw.columns.duplicated()]
+            if parent_norm in txt:
+                seen_parent = True
+                rows_after = 0
+                continue
 
-    working = build_working_df(raw)
-    return working, errors
+            if seen_parent:
+                rows_after += 1
+
+                if child_norm in cells or txt.startswith(child_norm + " "):
+                    val = value_from_row(row, min_abs=min_abs)
+                    if pd.notna(val):
+                        candidates.append(float(val))
+                        break
+
+                if rows_after > max_rows_after_parent:
+                    seen_parent = False
+                    rows_after = 0
+
+    if not candidates:
+        return np.nan
+
+    return max(candidates)
+
+
+def parse_h41_page(page_html: str, fallback_date: Optional[pd.Timestamp] = None) -> pd.Series:
+    release_date = parse_release_date(page_html, fallback=fallback_date)
+    tables = read_h41_tables(page_html)
+
+    if not tables:
+        return pd.Series(dtype="float64", name=release_date)
+
+    data: Dict[str, float] = {}
+
+    # H.4.1 data are reported in millions. Convert to billions at the end.
+    fed_assets_m = find_exact_label_value(
+        tables,
+        labels=[
+            "Total assets",
+            "Total assets (less eliminations from consolidation)",
+        ],
+        min_abs=1_000_000.0,
+    )
+
+    if pd.isna(fed_assets_m):
+        fed_assets_m = find_value_by_row_text(
+            tables,
+            required_phrases=["total assets"],
+            excluded_phrases=["memoranda"],
+            min_abs=1_000_000.0,
+        )
+
+    tga_m = find_exact_label_value(
+        tables,
+        labels=["U.S. Treasury, General Account"],
+        min_abs=10_000.0,
+    )
+
+    rrp_total_m = find_exact_label_value(
+        tables,
+        labels=["Reverse repurchase agreements"],
+        min_abs=1_000.0,
+    )
+
+    rrp_others_m = find_child_after_parent(
+        tables,
+        parent_phrase="Reverse repurchase agreements",
+        child_label="Others",
+        max_rows_after_parent=8,
+        min_abs=1_000.0,
+    )
+
+    reserves_m = find_exact_label_value(
+        tables,
+        labels=["Reserve balances with Federal Reserve Banks"],
+        min_abs=100_000.0,
+    )
+
+    securities_m = find_exact_label_value(
+        tables,
+        labels=["Securities held outright"],
+        min_abs=1_000_000.0,
+    )
+
+    ust_m = find_value_by_row_text(
+        tables,
+        required_phrases=["u.s. treasury securities"],
+        excluded_phrases=["inflation compensation", "tips", "strips", "securities lent"],
+        min_abs=100_000.0,
+    )
+
+    mbs_m = find_value_by_row_text(
+        tables,
+        required_phrases=["mortgage-backed securities"],
+        excluded_phrases=["commitments", "memorandum", "securities lent"],
+        min_abs=100_000.0,
+    )
+
+    if pd.notna(fed_assets_m):
+        data["Fed Assets"] = fed_assets_m / 1000.0
+
+    if pd.notna(tga_m):
+        data["TGA"] = tga_m / 1000.0
+
+    if pd.notna(rrp_others_m):
+        data["RRP Others"] = rrp_others_m / 1000.0
+
+    if pd.notna(rrp_total_m):
+        data["RRP Total"] = rrp_total_m / 1000.0
+
+    if pd.notna(reserves_m):
+        data["Reserve Balances"] = reserves_m / 1000.0
+
+    if pd.notna(securities_m):
+        data["Securities Held Outright"] = securities_m / 1000.0
+
+    if pd.notna(ust_m):
+        data["UST Holdings"] = ust_m / 1000.0
+
+    if pd.notna(mbs_m):
+        data["MBS Holdings"] = mbs_m / 1000.0
+
+    if "Fed Assets" in data and "TGA" in data:
+        if "RRP Others" in data:
+            data["Net Liquidity"] = data["Fed Assets"] - data["TGA"] - data["RRP Others"]
+        elif "RRP Total" in data:
+            data["Net Liquidity"] = data["Fed Assets"] - data["TGA"] - data["RRP Total"]
+
+    s = pd.Series(data, name=release_date)
+    return s
+
+
+def previous_thursday(date_value: pd.Timestamp) -> pd.Timestamp:
+    d = pd.Timestamp(date_value).normalize()
+    while d.weekday() != 3:
+        d -= pd.Timedelta(days=1)
+    return d
+
+
+def generate_release_dates(latest_release_date: pd.Timestamp, weeks: int) -> List[pd.Timestamp]:
+    latest = previous_thursday(latest_release_date)
+    dates = [latest - pd.Timedelta(weeks=i) for i in range(weeks)]
+    return dates
+
+
+def archive_url_for_date(date_value: pd.Timestamp) -> str:
+    return H41_ARCHIVE_URL_TEMPLATE.format(yyyymmdd=pd.Timestamp(date_value).strftime("%Y%m%d"))
 
 
 def load_cache() -> pd.DataFrame:
@@ -474,10 +591,15 @@ def load_cache() -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        cached = pd.read_csv(CACHE_PATH, parse_dates=["Date"])
-        cached = cached.set_index("Date").sort_index()
-        cached = cached[~cached.index.duplicated(keep="last")]
-        return cached
+        df = pd.read_csv(CACHE_PATH, parse_dates=["Date"])
+        df = df.set_index("Date").sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        return df
+
     except Exception:
         return pd.DataFrame()
 
@@ -488,200 +610,203 @@ def save_cache(df: pd.DataFrame) -> None:
 
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    save = df.copy()
-    save.index.name = "Date"
-    save = save.sort_index()
-    save = save[~save.index.duplicated(keep="last")]
-    save.to_csv(CACHE_PATH)
+    out = df.copy()
+    out.index.name = "Date"
+    out = out.sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+
+    for col in out.columns:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    out.to_csv(CACHE_PATH)
 
 
-def merge_live_and_cache(live: pd.DataFrame, cached: pd.DataFrame) -> pd.DataFrame:
-    if cached.empty and live.empty:
+def merge_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
+    valid = [x for x in frames if x is not None and not x.empty]
+
+    if not valid:
         return pd.DataFrame()
 
-    if cached.empty:
-        return live.copy()
-
-    if live.empty:
-        return cached.copy()
-
-    all_cols = sorted(set(cached.columns).union(set(live.columns)))
-    cached2 = cached.reindex(columns=all_cols)
-    live2 = live.reindex(columns=all_cols)
-
-    merged = pd.concat([cached2, live2], axis=0)
-    merged = merged.sort_index()
+    merged = pd.concat(valid, axis=0).sort_index()
     merged = merged[~merged.index.duplicated(keep="last")]
+
+    columns = [c for c in DISPLAY_COLUMNS if c in merged.columns]
+    remaining = [c for c in merged.columns if c not in columns]
+    merged = merged[columns + remaining]
 
     return merged
 
 
-def html_to_lines(raw_html: str) -> List[str]:
-    text = re.sub(r"<br\s*/?>", "\n", raw_html, flags=re.IGNORECASE)
-    text = re.sub(r"</(p|div|tr|td|th|li|h1|h2|h3|h4)>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", "\n", text)
-    text = html.unescape(text)
-    text = text.replace("\xa0", " ")
+def fetch_h41_history(
+    requested_weeks: int,
+    force_backfill: bool,
+) -> Tuple[pd.DataFrame, Dict[str, str], str]:
+    errors: Dict[str, str] = {}
 
-    lines = []
-    for line in text.splitlines():
-        clean = re.sub(r"\s+", " ", line).strip()
-        if clean:
-            lines.append(clean)
+    cached = load_cache()
 
-    return lines
-
-
-def numeric_tokens_after(lines: List[str], label: str, start: int = 0, max_scan: int = 40) -> List[float]:
-    target = norm_text(label)
-
-    for i in range(start, len(lines)):
-        if norm_text(lines[i]) == target or target in norm_text(lines[i]):
-            nums: List[float] = []
-            for j in range(i + 1, min(i + 1 + max_scan, len(lines))):
-                val = parse_number(lines[j])
-                if pd.notna(val):
-                    nums.append(val)
-                if len(nums) >= 6:
-                    break
-            return nums
-
-    return []
-
-
-def current_h41_snapshot() -> pd.DataFrame:
-    """
-    Fallback parser for the current H.4.1 HTML page.
-    This gives the latest observation only. It is used to keep the app alive
-    even when the DDP service is temporarily unavailable.
-    """
     try:
-        raw_html = fetch_text(H41_CURRENT_URL)
-    except Exception:
-        return pd.DataFrame()
+        current_html = fetch_text_cached(H41_CURRENT_URL)
+        current_release_date = parse_release_date(current_html)
+        current_series = parse_h41_page(current_html, fallback_date=current_release_date)
 
-    lines = html_to_lines(raw_html)
+        current_df = pd.DataFrame()
+        if not current_series.empty:
+            current_df = current_series.to_frame().T
+            current_df.index = pd.to_datetime(current_df.index)
+            current_df.index.name = "Date"
 
-    release_date = None
-    joined = "\n".join(lines)
-    release_match = re.search(r"Release Date:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", joined)
-    if release_match:
-        release_date = pd.to_datetime(release_match.group(1), errors="coerce")
+    except Exception as exc:
+        errors["current"] = str(exc)
+        current_df = pd.DataFrame()
+        current_release_date = pd.Timestamp.today().normalize()
 
-    obs_date = None
-    for i, line in enumerate(lines):
-        if norm_text(line) == "wednesday" and i + 1 < len(lines):
-            dt = pd.to_datetime(lines[i + 1], errors="coerce")
-            if pd.notna(dt):
-                obs_date = dt
-                break
+    release_dates = generate_release_dates(current_release_date, requested_weeks)
 
-    if obs_date is None or pd.isna(obs_date):
-        obs_date = release_date
+    rows: List[pd.Series] = []
 
-    if obs_date is None or pd.isna(obs_date):
-        return pd.DataFrame()
+    missing_dates = []
+    cached_index = set(pd.to_datetime(cached.index).normalize()) if not cached.empty else set()
 
-    row: Dict[str, float] = {}
+    for dt in release_dates:
+        normalized_dt = pd.Timestamp(dt).normalize()
 
-    # Table 5 total assets has an eliminations line before the asset figure.
-    total_assets_nums = numeric_tokens_after(lines, "Total assets", start=0, max_scan=20)
-    if total_assets_nums:
-        big_nums = [x for x in total_assets_nums if abs(x) > 1000000]
-        if big_nums:
-            row["Fed Assets"] = big_nums[0] / 1000.0
+        if not force_backfill and normalized_dt in cached_index:
+            continue
 
-    # Table 1 reserve-factor lines.
-    tga_nums = numeric_tokens_after(lines, "U.S. Treasury, General Account", start=0, max_scan=20)
-    if len(tga_nums) >= 4:
-        row["TGA"] = tga_nums[3] / 1000.0
-    elif tga_nums:
-        row["TGA"] = tga_nums[0] / 1000.0
+        if not current_df.empty and normalized_dt in set(pd.to_datetime(current_df.index).normalize()):
+            continue
 
-    reserves_nums = numeric_tokens_after(lines, "Reserve balances with Federal Reserve Banks", start=0, max_scan=20)
-    if len(reserves_nums) >= 4:
-        row["Reserve Balances"] = reserves_nums[3] / 1000.0
-    elif reserves_nums:
-        row["Reserve Balances"] = reserves_nums[0] / 1000.0
+        missing_dates.append(normalized_dt)
 
-    rrp_total_nums = numeric_tokens_after(lines, "Reverse repurchase agreements", start=0, max_scan=20)
-    if len(rrp_total_nums) >= 4:
-        row["RRP Total"] = rrp_total_nums[3] / 1000.0
-    elif rrp_total_nums:
-        row["RRP Total"] = rrp_total_nums[0] / 1000.0
+    if missing_dates:
+        progress = st.progress(0)
+        status = st.empty()
 
-    # Get "Others" after the first reverse-repo line, which is closer to ON RRP than total RRP.
-    rrp_start = 0
-    for i, line in enumerate(lines):
-        if "reverse repurchase agreements" in norm_text(line):
-            rrp_start = i
-            break
+        for i, dt in enumerate(missing_dates, start=1):
+            yyyymmdd = dt.strftime("%Y%m%d")
+            url = archive_url_for_date(dt)
 
-    rrp_others_nums = numeric_tokens_after(lines, "Others", start=rrp_start, max_scan=20)
-    if len(rrp_others_nums) >= 4:
-        row["RRP Others"] = rrp_others_nums[3] / 1000.0
-    elif rrp_others_nums:
-        row["RRP Others"] = rrp_others_nums[0] / 1000.0
+            status.caption(f"Backfilling H.4.1 release {yyyymmdd}")
 
-    if "Fed Assets" in row and "TGA" in row:
-        if "RRP Others" in row:
-            row["Net Liquidity"] = row["Fed Assets"] - row["TGA"] - row["RRP Others"]
-        elif "RRP Total" in row:
-            row["Net Liquidity"] = row["Fed Assets"] - row["TGA"] - row["RRP Total"]
+            try:
+                page_html = fetch_text_cached(url)
+                s = parse_h41_page(page_html, fallback_date=dt)
 
-    if not row or "Fed Assets" not in row:
-        return pd.DataFrame()
+                if not s.empty and pd.notna(s.get("Fed Assets", np.nan)):
+                    rows.append(s)
+                else:
+                    errors[yyyymmdd] = "Parsed page but could not find Fed Assets"
 
-    out = pd.DataFrame([row], index=[pd.to_datetime(obs_date).normalize()])
-    out.index.name = "Date"
-    return out
+            except Exception as exc:
+                errors[yyyymmdd] = str(exc)
+
+            progress.progress(i / len(missing_dates))
+
+        progress.empty()
+        status.empty()
+
+    archive_df = pd.DataFrame()
+    if rows:
+        archive_df = pd.DataFrame(rows)
+        archive_df.index = pd.to_datetime(archive_df.index)
+        archive_df.index.name = "Date"
+
+    merged = merge_frames([cached, archive_df, current_df])
+
+    if not merged.empty:
+        save_cache(merged)
+
+    if not current_df.empty:
+        status_text = "current H.4.1 + archive pages + local cache"
+    elif not cached.empty:
+        status_text = "local cache only"
+    else:
+        status_text = "no working source"
+
+    return merged, errors, status_text
 
 
-def change_obs(series: pd.Series, periods: int) -> float:
+def filter_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    if lookback == "max":
+        return df.copy()
+
+    latest = df.index.max()
+
+    if lookback == "6m":
+        start = latest - pd.DateOffset(months=6)
+    elif lookback == "1y":
+        start = latest - pd.DateOffset(years=1)
+    elif lookback == "2y":
+        start = latest - pd.DateOffset(years=2)
+    elif lookback == "3y":
+        start = latest - pd.DateOffset(years=3)
+    elif lookback == "5y":
+        start = latest - pd.DateOffset(years=5)
+    elif lookback == "10y":
+        start = latest - pd.DateOffset(years=10)
+    else:
+        start = df.index.min()
+
+    return df[df.index >= start].copy()
+
+
+def obs_change(series: pd.Series, periods: int) -> float:
     s = pd.to_numeric(series, errors="coerce").dropna()
+
     if len(s) <= periods:
         return np.nan
+
     return float(s.iloc[-1] - s.iloc[-1 - periods])
 
 
-def pct_change_obs(series: pd.Series, periods: int) -> float:
+def obs_pct_change(series: pd.Series, periods: int) -> float:
     s = pd.to_numeric(series, errors="coerce").dropna()
+
     if len(s) <= periods:
         return np.nan
 
     base = s.iloc[-1 - periods]
-    if base == 0 or pd.isna(base):
+    if pd.isna(base) or base == 0:
         return np.nan
 
     return float((s.iloc[-1] / base - 1.0) * 100.0)
 
 
-def smooth_series(s: pd.Series, window: int) -> pd.Series:
-    s = pd.to_numeric(s, errors="coerce")
+def annualized_pace(series: pd.Series, periods: int = 13) -> float:
+    move = obs_change(series, periods)
+
+    if pd.isna(move):
+        return np.nan
+
+    return float(move / periods * 52.0)
+
+
+def smooth_series(series: pd.Series, window: int) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+
     if window <= 1:
         return s
+
     return s.rolling(window, min_periods=1).mean()
 
 
-def rebase(s: pd.Series) -> pd.Series:
-    s = pd.to_numeric(s, errors="coerce")
+def rebase(series: pd.Series) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
     valid = s.dropna()
 
     if valid.empty:
         return pd.Series(index=s.index, dtype="float64")
 
     base = valid.iloc[0]
+
     if pd.isna(base) or base == 0:
         return pd.Series(index=s.index, dtype="float64")
 
-    return (s / base) * 100.0
-
-
-def annualized_pace(series: pd.Series, periods: int = 13) -> float:
-    move = change_obs(series, periods)
-    if pd.isna(move):
-        return np.nan
-    return move / periods * 52.0
+    return s / base * 100.0
 
 
 def liquidity_regime(asset_13w_ann: float, net_13w_ann: float) -> Tuple[str, str]:
@@ -692,57 +817,22 @@ def liquidity_regime(asset_13w_ann: float, net_13w_ann: float) -> Tuple[str, str
 
     if primary > 250:
         return "Strong liquidity expansion", "#166534"
+
     if primary > 75:
         return "Moderate liquidity expansion", "#15803d"
+
     if primary < -250:
         return "Strong liquidity drain", "#991b1b"
+
     if primary < -75:
         return "Moderate liquidity drain", "#b91c1c"
 
     return "Flat liquidity impulse", "#92400e"
 
 
-def filter_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
-    if df.empty:
-        return df
-
-    latest_date = df.index.max()
-
-    if lookback == "6m":
-        start = latest_date - pd.DateOffset(months=6)
-    elif lookback == "1y":
-        start = latest_date - pd.DateOffset(years=1)
-    elif lookback == "2y":
-        start = latest_date - pd.DateOffset(years=2)
-    elif lookback == "3y":
-        start = latest_date - pd.DateOffset(years=3)
-    elif lookback == "5y":
-        start = latest_date - pd.DateOffset(years=5)
-    elif lookback == "10y":
-        start = latest_date - pd.DateOffset(years=10)
-    else:
-        start = df.index.min()
-
-    return df[df.index >= start].copy()
-
-
-def infer_source_status(live: pd.DataFrame, cached: pd.DataFrame, current: pd.DataFrame) -> str:
-    parts = []
-
-    if not live.empty:
-        parts.append("Fed DDP live")
-    if not current.empty:
-        parts.append("Current H.4.1 fallback")
-    if not cached.empty:
-        parts.append("local cache")
-
-    if not parts:
-        return "No data source available"
-
-    return " + ".join(parts)
-
-
-# ---------------- Header ----------------
+# ------------------------------------------------------------
+# Header
+# ------------------------------------------------------------
 
 st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
 st.markdown(
@@ -750,7 +840,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------------- Sidebar ----------------
+# ------------------------------------------------------------
+# Sidebar
+# ------------------------------------------------------------
 
 with st.sidebar:
     st.markdown("### About This Tool")
@@ -758,13 +850,13 @@ with st.sidebar:
         """
 This page avoids FRED entirely.
 
-Primary source is the Federal Reserve H.4.1 Data Download Program. If the DDP endpoint is unavailable, the app falls back to the current H.4.1 release and the local CSV cache.
+It pulls the Fed's H.4.1 release pages directly, parses the balance-sheet tables, stores observations in a local CSV cache, and keeps running even when one historical release page fails.
 
 Core proxy:
 
 **Net Liquidity = Fed Assets - TGA - RRP Others**
 
-RRP Others is used because total reverse repo includes foreign official and international accounts.
+If RRP Others is unavailable, the app falls back to total reverse repos.
         """
     )
 
@@ -777,6 +869,17 @@ RRP Others is used because total reverse repo includes foreign official and inte
         index=["6m", "1y", "2y", "3y", "5y", "10y", "max"].index(DEFAULT_LOOKBACK),
     )
 
+    base_weeks = LOOKBACK_TO_WEEKS.get(lookback, 170)
+
+    backfill_weeks = st.slider(
+        "Archive releases to cache",
+        min_value=30,
+        max_value=540,
+        value=min(max(base_weeks, 60), 540),
+        step=10,
+        help="First run builds this local cache from Fed H.4.1 archive pages. Later runs use the cache.",
+    )
+
     smooth_window = st.number_input(
         "Smoothing window, weekly observations",
         min_value=1,
@@ -785,167 +888,181 @@ RRP Others is used because total reverse repo includes foreign official and inte
         step=1,
     )
 
-    show_current_fallback = st.checkbox(
-        "Use current H.4.1 page as fallback",
-        value=True,
+    force_backfill = st.checkbox(
+        "Force archive refresh",
+        value=False,
+        help="Leave off unless the local cache is stale or corrupted.",
     )
 
-    show_components = st.checkbox(
-        "Show components chart",
-        value=True,
+    show_components = st.checkbox("Show components chart", value=True)
+    show_raw_table = st.checkbox("Show cleaned data table", value=True)
+
+    st.caption("Source: Federal Reserve H.4.1 current and historical release pages. No FRED dependency.")
+
+# ------------------------------------------------------------
+# Data Load
+# ------------------------------------------------------------
+
+with st.spinner("Loading Fed H.4.1 data"):
+    full_df, source_errors, source_status = fetch_h41_history(
+        requested_weeks=int(backfill_weeks),
+        force_backfill=bool(force_backfill),
     )
-
-    show_raw_table = st.checkbox(
-        "Show raw data table",
-        value=True,
-    )
-
-    st.caption("Source: Federal Reserve H.4.1 DDP and current H.4.1 release. No FRED dependency.")
-
-# ---------------- Data Load ----------------
-
-today = pd.Timestamp.today().normalize()
-start_for_fetch = today - pd.DateOffset(years=12)
-
-with st.spinner("Loading Federal Reserve H.4.1 data"):
-    cached_df = load_cache()
-
-    live_df, live_errors = load_ddp_history(start_for_fetch, today)
-
-    current_df = pd.DataFrame()
-    if show_current_fallback:
-        current_df = current_h41_snapshot()
-
-    combined_live = merge_live_and_cache(live_df, current_df)
-    full_df = merge_live_and_cache(combined_live, cached_df)
-
-    if not combined_live.empty:
-        save_cache(full_df)
 
 if full_df.empty or "Fed Assets" not in full_df.columns:
     st.error("No usable Fed balance-sheet data loaded.")
     st.markdown(
         """
         <div class="warning-box">
-        The Fed DDP endpoint did not return usable data, the current H.4.1 fallback did not parse,
-        and there is no local cache available. Once the app successfully loads one time, it will keep a local cache
-        and avoid failing on temporary source outages.
+        The dashboard did not crash, but it could not locate a valid Fed Assets row from the current H.4.1 page,
+        the archive pages, or the local cache. This usually means the Fed page structure changed or the runtime
+        cannot reach federalreserve.gov.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if live_errors:
+    if source_errors:
         with st.expander("Source error details", expanded=True):
-            for k, v in live_errors.items():
-                st.write(f"**{k}:** {v}")
+            for key, message in list(source_errors.items())[:50]:
+                st.write(f"**{key}:** {message}")
 
     st.stop()
 
 full_df = full_df.sort_index()
 full_df = full_df[~full_df.index.duplicated(keep="last")]
 
-# Keep only columns we care about, preserving any columns that exist.
-available_display_cols = [c for c in DISPLAY_COLUMNS if c in full_df.columns]
-full_df = full_df[available_display_cols].copy()
+for col in full_df.columns:
+    full_df[col] = pd.to_numeric(full_df[col], errors="coerce")
 
-# Filter lookback for display only.
+available_cols = [col for col in DISPLAY_COLUMNS if col in full_df.columns]
+full_df = full_df[available_cols].copy()
+
 df = filter_lookback(full_df, lookback)
 
 if df.empty:
-    st.error("Lookback filter removed all data.")
+    st.error("No data available for the selected lookback.")
     st.stop()
 
-for col in df.columns:
-    df[col] = pd.to_numeric(df[col], errors="coerce")
+core_df = df.dropna(subset=["Fed Assets"])
 
-latest = df.dropna(subset=["Fed Assets"]).iloc[-1]
-latest_date = df.dropna(subset=["Fed Assets"]).index[-1]
+if core_df.empty:
+    st.error("Fed Assets exists as a column, but every value is blank after parsing.")
+    st.markdown(
+        """
+        <div class="warning-box">
+        This is the condition that caused the prior IndexError. The revised page stops here instead of calling iloc[-1]
+        on an empty dataframe. Check the parsed data table and source errors below.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-source_status = infer_source_status(live_df, cached_df, current_df)
+    st.dataframe(df.tail(30), use_container_width=True)
 
-# ---------------- Derived Metrics ----------------
+    if source_errors:
+        with st.expander("Source error details", expanded=True):
+            for key, message in list(source_errors.items())[:50]:
+                st.write(f"**{key}:** {message}")
 
-assets_1w = change_obs(df["Fed Assets"], 1)
-assets_4w = change_obs(df["Fed Assets"], 4)
-assets_13w = change_obs(df["Fed Assets"], 13)
-assets_52w = change_obs(df["Fed Assets"], 52)
+    st.stop()
+
+latest = core_df.iloc[-1]
+latest_date = core_df.index[-1]
+
+# ------------------------------------------------------------
+# Derived Metrics
+# ------------------------------------------------------------
+
+assets_1w = obs_change(df["Fed Assets"], 1)
+assets_4w = obs_change(df["Fed Assets"], 4)
+assets_13w = obs_change(df["Fed Assets"], 13)
+assets_52w = obs_change(df["Fed Assets"], 52)
 assets_13w_ann = annualized_pace(df["Fed Assets"], 13)
-assets_13w_pct = pct_change_obs(df["Fed Assets"], 13)
+assets_13w_pct = obs_pct_change(df["Fed Assets"], 13)
 
 if "Net Liquidity" in df.columns:
-    net_1w = change_obs(df["Net Liquidity"], 1)
-    net_4w = change_obs(df["Net Liquidity"], 4)
-    net_13w = change_obs(df["Net Liquidity"], 13)
-    net_52w = change_obs(df["Net Liquidity"], 52)
+    net_1w = obs_change(df["Net Liquidity"], 1)
+    net_4w = obs_change(df["Net Liquidity"], 4)
+    net_13w = obs_change(df["Net Liquidity"], 13)
+    net_52w = obs_change(df["Net Liquidity"], 52)
     net_13w_ann = annualized_pace(df["Net Liquidity"], 13)
 else:
     net_1w = net_4w = net_13w = net_52w = net_13w_ann = np.nan
 
 if "TGA" in df.columns:
-    tga_1w = change_obs(df["TGA"], 1)
-    tga_4w = change_obs(df["TGA"], 4)
+    tga_1w = obs_change(df["TGA"], 1)
+    tga_4w = obs_change(df["TGA"], 4)
 else:
     tga_1w = tga_4w = np.nan
 
-rrp_col = "RRP Others" if "RRP Others" in df.columns else "RRP Total" if "RRP Total" in df.columns else None
+rrp_col = None
+if "RRP Others" in df.columns and df["RRP Others"].notna().any():
+    rrp_col = "RRP Others"
+elif "RRP Total" in df.columns and df["RRP Total"].notna().any():
+    rrp_col = "RRP Total"
+
 if rrp_col is not None:
-    rrp_1w = change_obs(df[rrp_col], 1)
-    rrp_4w = change_obs(df[rrp_col], 4)
+    rrp_1w = obs_change(df[rrp_col], 1)
+    rrp_4w = obs_change(df[rrp_col], 4)
 else:
     rrp_1w = rrp_4w = np.nan
 
 regime_label, regime_color = liquidity_regime(assets_13w_ann, net_13w_ann)
 
-# ---------------- Snapshot ----------------
+# ------------------------------------------------------------
+# Snapshot
+# ------------------------------------------------------------
 
 st.markdown("<div class='section-title'>Snapshot</div>", unsafe_allow_html=True)
 st.markdown(
-    f"<div class='section-subtitle'>Latest available H.4.1 observation: {latest_date.strftime('%b %d, %Y')}. Values are billions of dollars.</div>",
+    f"<div class='section-subtitle'>Latest parsed H.4.1 release: {latest_date.strftime('%b %d, %Y')}. Values are billions of dollars.</div>",
     unsafe_allow_html=True,
 )
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 
 with c1:
-    metric_card("Fed Assets", fmt_b(latest.get("Fed Assets")), "Total assets, H.4.1")
+    metric_card("Fed Assets", fmt_b(latest.get("Fed Assets")), "Total assets")
 
 with c2:
-    metric_card("1W Asset Change", fmt_delta_b(assets_1w), "Week over week")
+    metric_card("1W Asset Change", fmt_delta_b(assets_1w), "Weekly impulse")
 
 with c3:
     metric_card("4W Asset Change", fmt_delta_b(assets_4w), "Monthly impulse")
 
 with c4:
-    metric_card("13W Ann. Pace", fmt_delta_b(assets_13w_ann), "Annualized balance-sheet pace")
+    metric_card("13W Ann. Pace", fmt_delta_b(assets_13w_ann), "Annualized pace")
 
 with c5:
     metric_card("Net Liquidity", fmt_b(latest.get("Net Liquidity")), "Assets - TGA - RRP")
 
 with c6:
-    metric_card("Net 13W Ann.", fmt_delta_b(net_13w_ann), "Annualized net-liquidity pace")
+    metric_card("Net 13W Ann.", fmt_delta_b(net_13w_ann), "Annualized net pace")
 
 c7, c8, c9, c10, c11, c12 = st.columns(6)
 
 with c7:
-    metric_card("TGA", fmt_b(latest.get("TGA")), "Treasury cash balance")
+    metric_card("TGA", fmt_b(latest.get("TGA")), "Treasury cash")
 
 with c8:
-    metric_card("TGA 1W", fmt_delta_b(tga_1w), "Higher TGA drains liquidity")
+    metric_card("TGA 1W", fmt_delta_b(tga_1w), "Higher drains liquidity")
 
 with c9:
     metric_card("RRP", fmt_b(latest.get(rrp_col)) if rrp_col else "N/A", rrp_col or "Unavailable")
 
 with c10:
-    metric_card("RRP 1W", fmt_delta_b(rrp_1w), "Lower RRP releases liquidity")
+    metric_card("RRP 1W", fmt_delta_b(rrp_1w), "Lower releases liquidity")
 
 with c11:
     metric_card("Reserve Balances", fmt_b(latest.get("Reserve Balances")), "Bank reserves")
 
 with c12:
-    metric_card("13W Asset %", fmt_pct(assets_13w_pct), "Fed assets rate of change")
+    metric_card("13W Asset %", fmt_pct(assets_13w_pct), "Fed assets ROC")
 
-# ---------------- Read Through ----------------
+# ------------------------------------------------------------
+# Liquidity Read
+# ------------------------------------------------------------
 
 st.markdown("<div class='section-title'>Liquidity Read</div>", unsafe_allow_html=True)
 
@@ -956,13 +1073,14 @@ with left:
         f"""
         <div class="info-box">
         <b>Balance-sheet impulse:</b><br><br>
-        Fed assets are <b>{fmt_b(latest.get("Fed Assets"))}</b>. The one-week move is <b>{fmt_delta_b(assets_1w)}</b>,
-        the four-week move is <b>{fmt_delta_b(assets_4w)}</b>, and the thirteen-week annualized pace is
-        <b>{fmt_delta_b(assets_13w_ann)}</b>. The regime read is
-        <b style="color:{regime_color};">{regime_label}</b>.
+        Fed assets are <b>{fmt_b(latest.get("Fed Assets"))}</b>. The one-week move is
+        <b>{fmt_delta_b(assets_1w)}</b>, the four-week move is <b>{fmt_delta_b(assets_4w)}</b>,
+        and the thirteen-week annualized pace is <b>{fmt_delta_b(assets_13w_ann)}</b>.
+        The regime read is <b style="color:{regime_color};">{regime_label}</b>.
         <br><br>
-        The market-sensitive question is whether balance-sheet runoff is being offset or amplified by Treasury cash rebuilding
-        and residual reverse-repo absorption. A rising TGA drains reserves. A falling RRP releases liquidity back into the system.
+        The pressure point is whether Treasury cash rebuilding and reverse-repo absorption are offsetting or amplifying
+        the Fed balance-sheet path. Rising TGA drains liquidity. Falling RRP releases liquidity. Reserve balances show
+        where the plumbing pressure actually settles.
         </div>
         """,
         unsafe_allow_html=True,
@@ -971,38 +1089,43 @@ with left:
 with right:
     st.markdown(
         f"""
-        <div class="good-box">
+        <div class="info-box">
         <b>Data status</b><br><br>
-        Active source stack: <b>{source_status}</b>.
+        Source stack: <b>{source_status}</b>.
         <br><br>
-        FRED is not called anywhere in this page. If the Fed DDP endpoint is down, the app uses the current H.4.1 release and the local cache instead of failing.
+        FRED is not called anywhere in this page. The app parses Fed H.4.1 pages directly and stores a local CSV cache.
         <br><br>
-        Smoothing: <b>{smooth_window}</b> weekly observation(s). Lookback: <b>{lookback}</b>.
+        Lookback: <b>{lookback}</b>. Cached archive releases targeted: <b>{backfill_weeks}</b>.
+        Smoothing: <b>{smooth_window}</b> weekly observation(s).
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-if live_errors:
-    st.warning("One or more Fed DDP package pulls failed. The dashboard remained alive using the available source stack.")
-    with st.expander("DDP error details"):
-        for package_name, message in live_errors.items():
-            st.write(f"**{package_name}:** {message}")
+if source_errors:
+    with st.expander("Source issues, non-fatal"):
+        for key, message in list(source_errors.items())[:80]:
+            st.write(f"**{key}:** {message}")
 
-# ---------------- Charts ----------------
+# ------------------------------------------------------------
+# Chartbook
+# ------------------------------------------------------------
 
 st.markdown("<div class='section-title'>Chartbook</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-subtitle'>Fed assets, net liquidity, funding drains, reserves, and rate of change.</div>",
+    "<div class='section-subtitle'>Fed assets, liquidity proxy, funding drains, reserves, and rate of change.</div>",
     unsafe_allow_html=True,
 )
 
 plot_df = df.copy()
+
 for col in plot_df.columns:
     plot_df[f"{col}_s"] = smooth_series(plot_df[col], int(smooth_window))
 
+rows = 4 if show_components else 3
+
 fig = make_subplots(
-    rows=4 if show_components else 3,
+    rows=rows,
     cols=1,
     shared_xaxes=True,
     vertical_spacing=0.055,
@@ -1031,7 +1154,7 @@ fig.add_trace(
     col=1,
 )
 
-if "Net Liquidity" in plot_df.columns:
+if "Net Liquidity" in plot_df.columns and plot_df["Net Liquidity"].notna().any():
     fig.add_trace(
         go.Scatter(
             x=plot_df.index,
@@ -1046,7 +1169,9 @@ if "Net Liquidity" in plot_df.columns:
     )
 
 asset_roc = plot_df["Fed Assets"].diff(13) / 13 * 52
+
 fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=3, col=1)
+
 fig.add_trace(
     go.Scatter(
         x=asset_roc.index,
@@ -1054,14 +1179,15 @@ fig.add_trace(
         name="Fed Assets 13W Annualized Change",
         mode="lines",
         line=dict(width=2.3, color="#7c2d12"),
-        hovertemplate="%{x|%Y-%m-%d}<br>13W Ann. Change: %{y:,.0f}B<extra></extra>",
+        hovertemplate="%{x|%Y-%m-%d}<br>Assets 13W Ann.: %{y:,.0f}B<extra></extra>",
     ),
     row=3,
     col=1,
 )
 
-if "Net Liquidity" in plot_df.columns:
+if "Net Liquidity" in plot_df.columns and plot_df["Net Liquidity"].notna().any():
     net_roc = plot_df["Net Liquidity"].diff(13) / 13 * 52
+
     fig.add_trace(
         go.Scatter(
             x=net_roc.index,
@@ -1069,14 +1195,14 @@ if "Net Liquidity" in plot_df.columns:
             name="Net Liquidity 13W Annualized Change",
             mode="lines",
             line=dict(width=2.3, color="#9333ea"),
-            hovertemplate="%{x|%Y-%m-%d}<br>Net 13W Ann. Change: %{y:,.0f}B<extra></extra>",
+            hovertemplate="%{x|%Y-%m-%d}<br>Net 13W Ann.: %{y:,.0f}B<extra></extra>",
         ),
         row=3,
         col=1,
     )
 
 if show_components:
-    if "TGA" in plot_df.columns:
+    if "TGA" in plot_df.columns and plot_df["TGA"].notna().any():
         fig.add_trace(
             go.Scatter(
                 x=plot_df.index,
@@ -1104,7 +1230,7 @@ if show_components:
             col=1,
         )
 
-    if "Reserve Balances" in plot_df.columns:
+    if "Reserve Balances" in plot_df.columns and plot_df["Reserve Balances"].notna().any():
         fig.add_trace(
             go.Scatter(
                 x=plot_df.index,
@@ -1134,7 +1260,6 @@ fig.update_layout(
 )
 
 fig.update_annotations(font=dict(size=13, color="#111827"))
-
 fig.update_yaxes(title_text="Billions", showgrid=True, gridcolor="#edf0f4", zeroline=False, row=1, col=1)
 fig.update_yaxes(title_text="Billions", showgrid=True, gridcolor="#edf0f4", zeroline=False, row=2, col=1)
 fig.update_yaxes(title_text="Billions Ann.", showgrid=True, gridcolor="#edf0f4", zeroline=False, row=3, col=1)
@@ -1147,88 +1272,101 @@ else:
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Component Rebase ----------------
+# ------------------------------------------------------------
+# Component Pressure Map
+# ------------------------------------------------------------
 
 if show_components:
-    st.markdown("<div class='section-title'>Component Pressure Map</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='section-subtitle'>Rebased view to show which balance-sheet plumbing variable is driving the liquidity impulse.</div>",
-        unsafe_allow_html=True,
-    )
+    component_cols = [
+        col for col in ["Fed Assets", "Net Liquidity", "TGA", rrp_col, "Reserve Balances"]
+        if col is not None and col in df.columns and df[col].notna().any()
+    ]
 
-    rebase_cols = [c for c in ["Fed Assets", "TGA", "RRP Others", "RRP Total", "Reserve Balances"] if c in df.columns]
-
-    rebased = pd.DataFrame(index=df.index)
-    for col in rebase_cols:
-        rebased[col] = rebase(df[col])
-
-    fig2 = go.Figure()
-
-    color_map = {
-        "Fed Assets": "#111827",
-        "TGA": "#059669",
-        "RRP Others": "#dc2626",
-        "RRP Total": "#b91c1c",
-        "Reserve Balances": "#f59e0b",
-    }
-
-    for col in rebase_cols:
-        fig2.add_trace(
-            go.Scatter(
-                x=rebased.index,
-                y=smooth_series(rebased[col], int(smooth_window)),
-                mode="lines",
-                name=col,
-                line=dict(width=2.2, color=color_map.get(col, "#374151")),
-                hovertemplate=f"%{{x|%Y-%m-%d}}<br>{col} Index: %{{y:.1f}}<extra></extra>",
-            )
+    if component_cols:
+        st.markdown("<div class='section-title'>Component Pressure Map</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='section-subtitle'>Rebased view showing which balance-sheet plumbing variable is driving the liquidity impulse.</div>",
+            unsafe_allow_html=True,
         )
 
-    fig2.update_layout(
-        template="plotly_white",
-        height=460,
-        margin=dict(l=55, r=25, t=25, b=35),
-        legend=dict(
-            orientation="h",
-            x=0,
-            y=1.08,
-            xanchor="left",
-            yanchor="bottom",
-            bgcolor="rgba(255,255,255,0.78)",
-        ),
-        hovermode="x unified",
-    )
+        rebased = pd.DataFrame(index=df.index)
 
-    fig2.update_yaxes(title_text="Index, first obs = 100", showgrid=True, gridcolor="#edf0f4", zeroline=False)
-    fig2.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date")
+        for col in component_cols:
+            rebased[col] = rebase(df[col])
 
-    st.plotly_chart(fig2, use_container_width=True)
+        fig2 = go.Figure()
 
-# ---------------- Tables and Download ----------------
+        color_map = {
+            "Fed Assets": "#111827",
+            "Net Liquidity": "#2563eb",
+            "TGA": "#059669",
+            "RRP Others": "#dc2626",
+            "RRP Total": "#b91c1c",
+            "Reserve Balances": "#f59e0b",
+        }
+
+        for col in component_cols:
+            fig2.add_trace(
+                go.Scatter(
+                    x=rebased.index,
+                    y=smooth_series(rebased[col], int(smooth_window)),
+                    mode="lines",
+                    name=col,
+                    line=dict(width=2.2, color=color_map.get(col, "#374151")),
+                    hovertemplate=f"%{{x|%Y-%m-%d}}<br>{col} Index: %{{y:.1f}}<extra></extra>",
+                )
+            )
+
+        fig2.update_layout(
+            template="plotly_white",
+            height=460,
+            margin=dict(l=55, r=25, t=25, b=35),
+            legend=dict(
+                orientation="h",
+                x=0,
+                y=1.08,
+                xanchor="left",
+                yanchor="bottom",
+                bgcolor="rgba(255,255,255,0.78)",
+            ),
+            hovermode="x unified",
+        )
+
+        fig2.update_yaxes(title_text="Index, first obs = 100", showgrid=True, gridcolor="#edf0f4", zeroline=False)
+        fig2.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date")
+
+        st.plotly_chart(fig2, use_container_width=True)
+
+# ------------------------------------------------------------
+# Table and Download
+# ------------------------------------------------------------
 
 left, right = st.columns([1.25, 0.75])
 
 with left:
     if show_raw_table:
-        st.markdown("<div class='section-title'>Cleaned Data</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Cleaned H.4.1 Data</div>", unsafe_allow_html=True)
         st.markdown(
-            "<div class='section-subtitle'>Latest observations from the cleaned weekly H.4.1 dataset. Values are billions.</div>",
+            "<div class='section-subtitle'>Latest parsed observations. Values are billions.</div>",
             unsafe_allow_html=True,
         )
 
         table = df.copy()
         table.index.name = "Date"
 
-        display_table = table.tail(75).copy()
+        display_table = table.tail(90).copy()
+
         for col in display_table.columns:
-            display_table[col] = display_table[col].map(lambda x: np.nan if pd.isna(x) else round(float(x), 1))
+            display_table[col] = display_table[col].map(
+                lambda x: np.nan if pd.isna(x) else round(float(x), 1)
+            )
 
         st.dataframe(display_table, use_container_width=True, height=430)
 
 with right:
     st.markdown("<div class='section-title'>Download</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-subtitle'>Export the cleaned dataset used by the dashboard.</div>",
+        "<div class='section-subtitle'>Export the cleaned cached dataset used by the dashboard.</div>",
         unsafe_allow_html=True,
     )
 
@@ -1239,29 +1377,29 @@ with right:
     st.download_button(
         "Download Fed Liquidity CSV",
         data=csv,
-        file_name="fed_liquidity_tracker.csv",
+        file_name="fed_h41_liquidity_tracker.csv",
         mime="text/csv",
         use_container_width=True,
     )
 
     st.markdown("<div class='section-title' style='margin-top:1.2rem;'>Methodology</div>", unsafe_allow_html=True)
     st.markdown(
-        f"""
+        """
         <div class="info-box">
         <b>Primary source</b><br>
-        Federal Reserve H.4.1 Data Download Program.
-        <br><br>
-        <b>Fallback</b><br>
-        Current H.4.1 release page plus local CSV cache.
+        Federal Reserve H.4.1 current and historical release pages.
         <br><br>
         <b>Core proxy</b><br>
         Net Liquidity = Fed Assets - TGA - RRP Others.
         <br><br>
+        <b>Fallback</b><br>
+        If RRP Others is unavailable, total reverse repos are used. If archive pages fail, the app uses the local cache.
+        <br><br>
         <b>Units</b><br>
-        H.4.1 data are reported in millions. The app converts everything to billions.
+        H.4.1 figures are reported in millions. The app converts them to billions.
         <br><br>
         <b>Rate of change</b><br>
-        Weekly H.4.1 observations are used directly. 13-week annualized pace = 13-week change / 13 * 52.
+        13-week annualized pace = 13-week change / 13 * 52.
         </div>
         """,
         unsafe_allow_html=True,
