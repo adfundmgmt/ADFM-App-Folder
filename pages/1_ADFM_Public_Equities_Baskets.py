@@ -1284,16 +1284,62 @@ def compute_fetch_start(display_start: date) -> date:
     return display_start - timedelta(days=INDICATOR_WARMUP_DAYS)
 
 
+def constituent_dma_gap(
+    levels: pd.DataFrame,
+    basket_tickers: List[str],
+    window: int,
+) -> float:
+    """
+    Equal-weighted constituent distance from a moving average.
+
+    For each live member:
+        gap = current price / member rolling DMA - 1
+
+    The basket value is the simple average of those member-level gaps.
+    This avoids letting the basket index path or a single high-priced stock
+    dominate the technical read.
+    """
+    if levels.empty or not basket_tickers:
+        return np.nan
+
+    gaps: List[float] = []
+
+    for ticker in basket_tickers:
+        sym = str(ticker).upper().strip()
+        if sym not in levels.columns:
+            continue
+
+        s = levels[sym].dropna()
+        if s.shape[0] < window:
+            continue
+
+        ma = s.rolling(window=window, min_periods=window).mean()
+        latest_px = s.iloc[-1]
+        latest_ma = ma.dropna().iloc[-1] if ma.dropna().shape[0] else np.nan
+
+        if pd.isna(latest_px) or pd.isna(latest_ma) or latest_ma == 0:
+            continue
+
+        gaps.append(float((latest_px / latest_ma - 1.0) * 100.0))
+
+    if not gaps:
+        return np.nan
+
+    return float(np.nanmean(gaps))
+
+
 def build_panel_df(
     basket_returns_full: pd.DataFrame,
     display_start: pd.Timestamp,
     dynamic_label: str,
+    levels: Optional[pd.DataFrame] = None,
+    basket_members: Optional[Dict[str, List[str]]] = None,
     benchmark_series_full: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
     cols = [
         "Basket", "%5D", "%1M", f"%{dynamic_label}",
-        "RSI(14D)", "MACD Momentum", "EMA 4/9/18", "RSI(14W)",
-        "3M RVOL", "RVOL / SPY", "Corr(63D)"
+        "21DMA Gap", "50DMA Gap", "MACD Momentum", "EMA 4/9/18",
+        "RSI(14W)", "Corr(63D)"
     ]
 
     if basket_returns_full.empty:
@@ -1302,13 +1348,10 @@ def build_panel_df(
     levels_full = 100.0 * (1.0 + basket_returns_full.fillna(0.0)).cumprod()
     rows: List[Dict[str, Any]] = []
 
-    spy_rv = np.nan
-    if benchmark_series_full is not None:
-        spy_rv = realized_vol(benchmark_series_full, 63, 252)
+    basket_members = basket_members or {}
 
     for basket in levels_full.columns:
         s_full = levels_full[basket].dropna()
-        r_full = basket_returns_full[basket].dropna()
 
         if s_full.shape[0] < 15:
             continue
@@ -1328,8 +1371,12 @@ def build_panel_df(
         r1m = pct_since(s_full, s_full.index.max() - pd.DateOffset(months=1))
         r_dyn = pct_since(s_full, start_anchor)
 
-        rsi_d = rsi(s_full, 14)
-        rsi_14d = rsi_d.dropna().iloc[-1] if rsi_d.dropna().shape[0] else np.nan
+        dma_21_gap = np.nan
+        dma_50_gap = np.nan
+        if levels is not None and not levels.empty:
+            members = basket_members.get(basket, [])
+            dma_21_gap = constituent_dma_gap(levels, members, 21)
+            dma_50_gap = constituent_dma_gap(levels, members, 50)
 
         weekly = s_full.resample("W-FRI").last().dropna()
         rsi_14w = np.nan
@@ -1341,11 +1388,6 @@ def build_panel_df(
         hist = macd_hist(s_full, 12, 26, 9)
         macd_m = momentum_label(hist, lookback=5, z_window=63)
         ema_tag = ema_regime(s_full, 4, 9, 18)
-
-        rv = realized_vol(r_full, 63, 252)
-        rv_rel = np.nan
-        if pd.notna(rv) and pd.notna(spy_rv) and spy_rv != 0:
-            rv_rel = rv / spy_rv
 
         corr_spy = np.nan
         if benchmark_series_full is not None:
@@ -1365,12 +1407,11 @@ def build_panel_df(
             "%5D": round(r5d * 100, 1) if pd.notna(r5d) else np.nan,
             "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
             f"%{dynamic_label}": round(r_dyn * 100, 1) if pd.notna(r_dyn) else np.nan,
-            "RSI(14D)": round(rsi_14d, 2) if pd.notna(rsi_14d) else np.nan,
+            "21DMA Gap": round(dma_21_gap, 1) if pd.notna(dma_21_gap) else np.nan,
+            "50DMA Gap": round(dma_50_gap, 1) if pd.notna(dma_50_gap) else np.nan,
             "MACD Momentum": macd_m,
             "EMA 4/9/18": ema_tag,
             "RSI(14W)": round(rsi_14w, 2) if pd.notna(rsi_14w) else np.nan,
-            "3M RVOL": round(rv, 1) if pd.notna(rv) else np.nan,
-            "RVOL / SPY": round(rv_rel, 2) if pd.notna(rv_rel) else np.nan,
             "Corr(63D)": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan
         })
 
@@ -1512,21 +1553,17 @@ def plot_panel_table(panel_df: pd.DataFrame):
 
     headers = [
         "Basket", "%5D", "%1M", dynamic_col,
-        "RSI(14D)", "MACD Momentum", "EMA 4/9/18", "RSI(14W)",
-        "3M RVOL", "RVOL / SPY", "Corr(63D)"
+        "21DMA Gap", "50DMA Gap", "MACD Momentum",
+        "EMA 4/9/18", "RSI(14W)", "Corr(63D)"
     ]
 
     values = [panel_df.index.tolist()]
     fill_colors = [["white"] * len(panel_df)]
 
-    for col in ["%5D", "%1M", dynamic_col]:
+    for col in ["%5D", "%1M", dynamic_col, "21DMA Gap", "50DMA Gap"]:
         vals = panel_df[col].tolist()
         values.append(vals)
         fill_colors.append([color_ret(v) for v in vals])
-
-    vals = panel_df["RSI(14D)"].tolist()
-    values.append(vals)
-    fill_colors.append([color_rsi(v) for v in vals])
 
     vals = panel_df["MACD Momentum"].tolist()
     values.append(vals)
@@ -1540,19 +1577,11 @@ def plot_panel_table(panel_df: pd.DataFrame):
     values.append(vals)
     fill_colors.append([color_rsi(v) for v in vals])
 
-    vals = panel_df["3M RVOL"].tolist()
-    values.append(vals)
-    fill_colors.append([color_vol(v) for v in vals])
-
-    vals = panel_df["RVOL / SPY"].tolist()
-    values.append(vals)
-    fill_colors.append([color_vol_rel(v) for v in vals])
-
     vals = panel_df["Corr(63D)"].tolist()
     values.append(vals)
     fill_colors.append([color_corr(v) for v in vals])
 
-    col_widths = [0.22, 0.06, 0.06, 0.085, 0.085, 0.145, 0.105, 0.075, 0.075, 0.075, 0.05]
+    col_widths = [0.24, 0.06, 0.06, 0.085, 0.085, 0.085, 0.155, 0.105, 0.075, 0.055]
 
     fig_tbl = go.Figure(data=[go.Table(
         columnwidth=[int(w * 1000) for w in col_widths],
@@ -1571,7 +1600,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
             font=dict(color="black", size=12),
             align="left",
             height=26,
-            format=[None, ".1f", ".1f", ".1f", ".2f", None, None, ".2f", ".1f", ".2f", ".2f"]
+            format=[None, ".1f", ".1f", ".1f", ".1f", ".1f", None, None, ".2f", ".2f"]
         )
     )])
 
@@ -1652,6 +1681,8 @@ def render_basket_section(
     display_start: pd.Timestamp,
     dynamic_label: str,
     show_chart: bool,
+    levels: Optional[pd.DataFrame] = None,
+    basket_members: Optional[Dict[str, List[str]]] = None,
 ) -> pd.DataFrame:
     st.subheader(heading)
 
@@ -1659,6 +1690,8 @@ def render_basket_section(
         basket_returns_full=basket_returns_full,
         display_start=display_start,
         dynamic_label=dynamic_label,
+        levels=levels,
+        basket_members=basket_members,
         benchmark_series_full=benchmark_returns_full,
     )
 
@@ -1808,6 +1841,8 @@ all_panel_df = render_basket_section(
     display_start=display_start_ts,
     dynamic_label=DYNAMIC_LABEL,
     show_chart=show_all_chart,
+    levels=levels,
+    basket_members=live_all_baskets,
 )
 
 if show_category_sections:
@@ -1832,6 +1867,8 @@ if show_category_sections:
             display_start=display_start_ts,
             dynamic_label=DYNAMIC_LABEL,
             show_chart=True,
+            levels=levels,
+            basket_members=baskets,
         )
 
 if show_constituents:
