@@ -1284,48 +1284,36 @@ def compute_fetch_start(display_start: date) -> date:
     return display_start - timedelta(days=INDICATOR_WARMUP_DAYS)
 
 
-def constituent_dma_gap(
-    levels: pd.DataFrame,
-    basket_tickers: List[str],
+def basket_dma_move_pct(
+    series: pd.Series,
     window: int,
+    lookback: Optional[int] = None,
 ) -> float:
     """
-    Equal-weighted constituent distance from a moving average.
+    Percentage move of the basket's moving average.
 
-    For each live member:
-        gap = current price / member rolling DMA - 1
-
-    The basket value is the simple average of those member-level gaps.
-    This avoids letting the basket index path or a single high-priced stock
-    dominate the technical read.
+    The basket series is already equal-weighted by ew_rets_from_levels().
+    For a 21DMA reading, this compares today's 21DMA with the 21DMA
+    from 21 trading sessions ago. For a 50DMA reading, it compares
+    today's 50DMA with the 50DMA from 50 trading sessions ago.
     """
-    if levels.empty or not basket_tickers:
+    clean = series.dropna()
+    lb = int(lookback or window)
+
+    if clean.shape[0] < window + lb:
         return np.nan
 
-    gaps: List[float] = []
-
-    for ticker in basket_tickers:
-        sym = str(ticker).upper().strip()
-        if sym not in levels.columns:
-            continue
-
-        s = levels[sym].dropna()
-        if s.shape[0] < window:
-            continue
-
-        ma = s.rolling(window=window, min_periods=window).mean()
-        latest_px = s.iloc[-1]
-        latest_ma = ma.dropna().iloc[-1] if ma.dropna().shape[0] else np.nan
-
-        if pd.isna(latest_px) or pd.isna(latest_ma) or latest_ma == 0:
-            continue
-
-        gaps.append(float((latest_px / latest_ma - 1.0) * 100.0))
-
-    if not gaps:
+    dma = clean.rolling(window=window, min_periods=window).mean().dropna()
+    if dma.shape[0] <= lb:
         return np.nan
 
-    return float(np.nanmean(gaps))
+    latest_dma = dma.iloc[-1]
+    prior_dma = dma.iloc[-(lb + 1)]
+
+    if pd.isna(latest_dma) or pd.isna(prior_dma) or prior_dma == 0:
+        return np.nan
+
+    return float((latest_dma / prior_dma - 1.0) * 100.0)
 
 
 def build_panel_df(
@@ -1338,8 +1326,8 @@ def build_panel_df(
 ) -> pd.DataFrame:
     cols = [
         "Basket", "%5D", "%1M", f"%{dynamic_label}",
-        "21DMA Gap", "50DMA Gap", "MACD Momentum", "EMA 4/9/18",
-        "RSI(14W)", "Corr(63D)"
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", "Corr(63D)",
+        "21DMA Move %", "50DMA Move %"
     ]
 
     if basket_returns_full.empty:
@@ -1371,12 +1359,8 @@ def build_panel_df(
         r1m = pct_since(s_full, s_full.index.max() - pd.DateOffset(months=1))
         r_dyn = pct_since(s_full, start_anchor)
 
-        dma_21_gap = np.nan
-        dma_50_gap = np.nan
-        if levels is not None and not levels.empty:
-            members = basket_members.get(basket, [])
-            dma_21_gap = constituent_dma_gap(levels, members, 21)
-            dma_50_gap = constituent_dma_gap(levels, members, 50)
+        dma_21_move = basket_dma_move_pct(s_full, window=21)
+        dma_50_move = basket_dma_move_pct(s_full, window=50)
 
         weekly = s_full.resample("W-FRI").last().dropna()
         rsi_14w = np.nan
@@ -1407,12 +1391,12 @@ def build_panel_df(
             "%5D": round(r5d * 100, 1) if pd.notna(r5d) else np.nan,
             "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
             f"%{dynamic_label}": round(r_dyn * 100, 1) if pd.notna(r_dyn) else np.nan,
-            "21DMA Gap": round(dma_21_gap, 1) if pd.notna(dma_21_gap) else np.nan,
-            "50DMA Gap": round(dma_50_gap, 1) if pd.notna(dma_50_gap) else np.nan,
             "MACD Momentum": macd_m,
             "EMA 4/9/18": ema_tag,
             "RSI(14W)": round(rsi_14w, 2) if pd.notna(rsi_14w) else np.nan,
-            "Corr(63D)": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan
+            "Corr(63D)": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan,
+            "21DMA Move %": round(dma_21_move, 1) if pd.notna(dma_21_move) else np.nan,
+            "50DMA Move %": round(dma_50_move, 1) if pd.notna(dma_50_move) else np.nan
         })
 
     if not rows:
@@ -1553,14 +1537,14 @@ def plot_panel_table(panel_df: pd.DataFrame):
 
     headers = [
         "Basket", "%5D", "%1M", dynamic_col,
-        "21DMA Gap", "50DMA Gap", "MACD Momentum",
-        "EMA 4/9/18", "RSI(14W)", "Corr(63D)"
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", "Corr(63D)",
+        "21DMA Move %", "50DMA Move %"
     ]
 
     values = [panel_df.index.tolist()]
     fill_colors = [["white"] * len(panel_df)]
 
-    for col in ["%5D", "%1M", dynamic_col, "21DMA Gap", "50DMA Gap"]:
+    for col in ["%5D", "%1M", dynamic_col]:
         vals = panel_df[col].tolist()
         values.append(vals)
         fill_colors.append([color_ret(v) for v in vals])
@@ -1581,7 +1565,12 @@ def plot_panel_table(panel_df: pd.DataFrame):
     values.append(vals)
     fill_colors.append([color_corr(v) for v in vals])
 
-    col_widths = [0.24, 0.06, 0.06, 0.085, 0.085, 0.085, 0.155, 0.105, 0.075, 0.055]
+    for col in ["21DMA Move %", "50DMA Move %"]:
+        vals = panel_df[col].tolist()
+        values.append(vals)
+        fill_colors.append([color_ret(v) for v in vals])
+
+    col_widths = [0.25, 0.06, 0.06, 0.085, 0.155, 0.105, 0.075, 0.055, 0.085, 0.085]
 
     fig_tbl = go.Figure(data=[go.Table(
         columnwidth=[int(w * 1000) for w in col_widths],
@@ -1600,7 +1589,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
             font=dict(color="black", size=12),
             align="left",
             height=26,
-            format=[None, ".1f", ".1f", ".1f", ".1f", ".1f", None, None, ".2f", ".2f"]
+            format=[None, ".1f", ".1f", ".1f", None, None, ".2f", ".2f", ".1f", ".1f"]
         )
     )])
 
