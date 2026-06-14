@@ -1284,36 +1284,35 @@ def compute_fetch_start(display_start: date) -> date:
     return display_start - timedelta(days=INDICATOR_WARMUP_DAYS)
 
 
-def basket_dma_move_pct(
+def basket_vs_dma_pct(
     series: pd.Series,
     window: int,
-    lookback: Optional[int] = None,
 ) -> float:
     """
-    Percentage move of the basket's moving average.
+    Current basket level versus the basket's own moving average.
 
     The basket series is already equal-weighted by ew_rets_from_levels().
-    For a 21DMA reading, this compares today's 21DMA with the 21DMA
-    from 21 trading sessions ago. For a 50DMA reading, it compares
-    today's 50DMA with the 50DMA from 50 trading sessions ago.
+    This returns the percent distance between today's basket level and
+    today's rolling DMA:
+
+        current basket level / current basket DMA - 1
+
+    A positive value means the basket is trading above that DMA.
+    A negative value means the basket is trading below that DMA.
     """
     clean = series.dropna()
-    lb = int(lookback or window)
 
-    if clean.shape[0] < window + lb:
+    if clean.shape[0] < window:
         return np.nan
 
-    dma = clean.rolling(window=window, min_periods=window).mean().dropna()
-    if dma.shape[0] <= lb:
+    dma = clean.rolling(window=window, min_periods=window).mean()
+    latest_px = clean.iloc[-1]
+    latest_dma = dma.dropna().iloc[-1] if dma.dropna().shape[0] else np.nan
+
+    if pd.isna(latest_px) or pd.isna(latest_dma) or latest_dma == 0:
         return np.nan
 
-    latest_dma = dma.iloc[-1]
-    prior_dma = dma.iloc[-(lb + 1)]
-
-    if pd.isna(latest_dma) or pd.isna(prior_dma) or prior_dma == 0:
-        return np.nan
-
-    return float((latest_dma / prior_dma - 1.0) * 100.0)
+    return float((latest_px / latest_dma - 1.0) * 100.0)
 
 
 def build_panel_df(
@@ -1327,7 +1326,7 @@ def build_panel_df(
     cols = [
         "Basket", "%5D", "%1M", f"%{dynamic_label}",
         "MACD Momentum", "EMA 4/9/18", "RSI(14W)", "Corr(63D)",
-        "21DMA Move %", "50DMA Move %"
+        "vs 21DMA %", "vs 50DMA %"
     ]
 
     if basket_returns_full.empty:
@@ -1359,8 +1358,8 @@ def build_panel_df(
         r1m = pct_since(s_full, s_full.index.max() - pd.DateOffset(months=1))
         r_dyn = pct_since(s_full, start_anchor)
 
-        dma_21_move = basket_dma_move_pct(s_full, window=21)
-        dma_50_move = basket_dma_move_pct(s_full, window=50)
+        dma_21_pct = basket_vs_dma_pct(s_full, window=21)
+        dma_50_pct = basket_vs_dma_pct(s_full, window=50)
 
         weekly = s_full.resample("W-FRI").last().dropna()
         rsi_14w = np.nan
@@ -1395,8 +1394,8 @@ def build_panel_df(
             "EMA 4/9/18": ema_tag,
             "RSI(14W)": round(rsi_14w, 2) if pd.notna(rsi_14w) else np.nan,
             "Corr(63D)": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan,
-            "21DMA Move %": round(dma_21_move, 1) if pd.notna(dma_21_move) else np.nan,
-            "50DMA Move %": round(dma_50_move, 1) if pd.notna(dma_50_move) else np.nan
+            "vs 21DMA %": round(dma_21_pct, 1) if pd.notna(dma_21_pct) else np.nan,
+            "vs 50DMA %": round(dma_50_pct, 1) if pd.notna(dma_50_pct) else np.nan
         })
 
     if not rows:
@@ -1538,7 +1537,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
     headers = [
         "Basket", "%5D", "%1M", dynamic_col,
         "MACD Momentum", "EMA 4/9/18", "RSI(14W)", "Corr(63D)",
-        "21DMA Move %", "50DMA Move %"
+        "vs 21DMA %", "vs 50DMA %"
     ]
 
     values = [panel_df.index.tolist()]
@@ -1565,7 +1564,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
     values.append(vals)
     fill_colors.append([color_corr(v) for v in vals])
 
-    for col in ["21DMA Move %", "50DMA Move %"]:
+    for col in ["vs 21DMA %", "vs 50DMA %"]:
         vals = panel_df[col].tolist()
         values.append(vals)
         fill_colors.append([color_ret(v) for v in vals])
