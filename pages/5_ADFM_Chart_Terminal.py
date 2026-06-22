@@ -1584,6 +1584,87 @@ def add_elliott_wave_overlay(fig: go.Figure, df: pd.DataFrame, row: int) -> None
         col=1,
     )
 
+
+def hover_price_column(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(["N/A"] * len(df), index=df.index)
+
+    return pd.to_numeric(df[column], errors="coerce").map(fmt_price).astype(str)
+
+
+def price_hover_customdata(df: pd.DataFrame) -> np.ndarray:
+    columns = [
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "SMA8",
+        "SMA20",
+        "SMA50",
+        "SMA100",
+        "SMA200",
+        "BB_UPPER",
+        "BB_MID",
+        "BB_LOWER",
+    ]
+
+    return np.column_stack([hover_price_column(df, column) for column in columns])
+
+
+def add_price_hover_trace(
+    fig: go.Figure,
+    df: pd.DataFrame,
+    settings: ChartSettings,
+    row: int,
+) -> None:
+    bb_section = ""
+
+    if settings.show_bbands and all(col in df.columns for col in ["BB_UPPER", "BB_MID", "BB_LOWER"]):
+        bb_section = (
+            "<br><br>"
+            "<span style='color:#6b7280'>Bollinger Bands</span><br>"
+            "Upper %{customdata[9]} | Mid %{customdata[10]} | Lower %{customdata[11]}"
+        )
+
+    hovertemplate = (
+        "<b>%{x|%Y-%m-%d}</b><br>"
+        "<span style='color:#6b7280'>OHLC</span><br>"
+        "Open %{customdata[0]} | High %{customdata[1]}<br>"
+        "Low %{customdata[2]} | Close %{customdata[3]}"
+        "<br><br>"
+        "<span style='color:#6b7280'>Moving averages</span><br>"
+        "8DMA %{customdata[4]} | 20DMA %{customdata[5]}<br>"
+        "50DMA %{customdata[6]} | 100DMA %{customdata[7]} | 200DMA %{customdata[8]}"
+        + bb_section
+        + "<extra></extra>"
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["Close"],
+            mode="markers",
+            marker=dict(
+                size=18,
+                color="rgba(17,24,39,0.001)",
+                line=dict(width=0),
+            ),
+            name="Technical read",
+            customdata=price_hover_customdata(df),
+            hovertemplate=hovertemplate,
+            hoverlabel=dict(
+                bgcolor="#ffffff",
+                bordercolor="rgba(17,24,39,0.18)",
+                font=dict(size=12, color="#111827", family="Arial, sans-serif"),
+                align="left",
+            ),
+            showlegend=False,
+            cliponaxis=False,
+        ),
+        row=row,
+        col=1,
+    )
+
 def add_price_panel(
     fig: go.Figure,
     df: pd.DataFrame,
@@ -1604,13 +1685,7 @@ def add_price_panel(
                 decreasing_fillcolor=COLORS["down"],
                 name="Price",
                 showlegend=False,
-                hovertemplate=(
-                    "Date: %{x|%Y-%m-%d}<br>"
-                    "Open: %{open:.2f}<br>"
-                    "High: %{high:.2f}<br>"
-                    "Low: %{low:.2f}<br>"
-                    "Close: %{close:.2f}<extra></extra>"
-                ),
+                hoverinfo="skip",
             ),
             row=row,
             col=1,
@@ -1623,7 +1698,7 @@ def add_price_panel(
                 mode="lines",
                 line=dict(color="#111827", width=1.7),
                 name="Close",
-                hovertemplate="Close: %{y:.2f}<extra></extra>",
+                hoverinfo="skip",
                 showlegend=False,
             ),
             row=row,
@@ -1647,7 +1722,7 @@ def add_price_panel(
                     mode="lines",
                     line=dict(color=color, width=width),
                     name=label,
-                    hovertemplate=f"{label}: " + "%{y:.2f}<extra></extra>",
+                    hoverinfo="skip",
                     showlegend=True,
                 ),
                 row=row,
@@ -1663,7 +1738,7 @@ def add_price_panel(
                 line=dict(color=COLORS["bb"], width=1.0, dash="dot"),
                 name="Bollinger Bands",
                 legendgroup="bbands",
-                hovertemplate="BB upper: %{y:.2f}<extra></extra>",
+                hoverinfo="skip",
                 showlegend=True,
             ),
             row=row,
@@ -1680,7 +1755,7 @@ def add_price_panel(
                 fillcolor=COLORS["bb_fill"],
                 name="BB lower",
                 legendgroup="bbands",
-                hovertemplate="BB lower: %{y:.2f}<extra></extra>",
+                hoverinfo="skip",
                 showlegend=False,
             ),
             row=row,
@@ -1695,7 +1770,7 @@ def add_price_panel(
                 line=dict(color="rgba(90,90,90,0.60)", width=1.0, dash="dot"),
                 name="BB mid",
                 legendgroup="bbands",
-                hovertemplate="BB mid: %{y:.2f}<extra></extra>",
+                hoverinfo="skip",
                 showlegend=False,
             ),
             row=row,
@@ -1707,6 +1782,8 @@ def add_price_panel(
 
     if settings.show_elliott_wave:
         add_elliott_wave_overlay(fig, df, row)
+
+    add_price_hover_trace(fig, df, settings, row)
 
 
 def add_volume_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
@@ -1948,6 +2025,11 @@ def build_chart(
         rangeslider_visible=False,
         rangebreaks=rangebreaks,
         tickformat="%b '%y" if settings.interval in ["1wk", "1mo"] else "%b %d\n%Y",
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikethickness=1,
+        spikecolor="rgba(17,24,39,0.22)",
     )
 
     fig.update_layout(
@@ -1955,7 +2037,15 @@ def build_chart(
         title=dict(text=""),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        hovermode="x",
+        hovermode="x unified",
+        hoverdistance=70,
+        spikedistance=-1,
+        hoverlabel=dict(
+            bgcolor="#ffffff",
+            bordercolor="rgba(17,24,39,0.18)",
+            font=dict(size=12, color="#111827", family="Arial, sans-serif"),
+            align="left",
+        ),
         margin=dict(l=40, r=22, t=66, b=30),
         font=dict(
             family="Arial, sans-serif",
