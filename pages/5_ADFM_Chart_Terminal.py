@@ -1403,6 +1403,47 @@ def build_rangebreaks(index: pd.DatetimeIndex, interval: str) -> list[dict]:
     return rangebreaks
 
 
+def attach_plot_x(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["_PLOT_X"] = pd.DatetimeIndex(out.index).strftime("%Y-%m-%d")
+    return out
+
+
+def plot_x_values(df: pd.DataFrame) -> pd.Series:
+    if "_PLOT_X" in df.columns:
+        return df["_PLOT_X"]
+
+    return pd.Series(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d"), index=df.index)
+
+
+def x_tick_spec(df: pd.DataFrame, max_ticks: int = 8) -> tuple[list[str], list[str]]:
+    if df.empty:
+        return [], []
+
+    x_values = plot_x_values(df).astype(str).tolist()
+    dates = pd.DatetimeIndex(df.index)
+    n = len(x_values)
+
+    if n <= max_ticks:
+        positions = list(range(n))
+    else:
+        positions = np.linspace(0, n - 1, max_ticks).round().astype(int).tolist()
+
+    positions = sorted(dict.fromkeys(int(pos) for pos in positions if 0 <= int(pos) < n))
+
+    tickvals = [x_values[pos] for pos in positions]
+    ticktext = []
+
+    for pos in positions:
+        dt = dates[pos]
+        label = dt.strftime("%b %d")
+        if pos == positions[0] or pos == positions[-1] or dt.year != dates[positions[max(0, positions.index(pos) - 1)]].year:
+            label = dt.strftime("%b %d<br>%Y")
+        ticktext.append(label)
+
+    return tickvals, ticktext
+
+
 def active_panels(settings: ChartSettings, usable_volume: bool) -> list[str]:
     panels = []
 
@@ -1558,7 +1599,7 @@ def add_elliott_wave_overlay(fig: go.Figure, df: pd.DataFrame, row: int) -> None
     if not points:
         return
 
-    x_values = [point["index"] for point in points]
+    x_values = [pd.Timestamp(point["index"]).strftime("%Y-%m-%d") for point in points]
     y_values = [float(point["price"]) for point in points]
     labels = [str(point.get("label", "")) for point in points]
     text_positions = [
@@ -1627,7 +1668,7 @@ def add_price_hover_trace(
         )
 
     hovertemplate = (
-        "<b>%{x|%Y-%m-%d}</b><br>"
+        "<b>%{x}</b><br>"
         "<span style='color:#6b7280'>OHLC</span><br>"
         "Open %{customdata[0]} | High %{customdata[1]}<br>"
         "Low %{customdata[2]} | Close %{customdata[3]}"
@@ -1641,7 +1682,7 @@ def add_price_hover_trace(
 
     fig.add_trace(
         go.Scatter(
-            x=df.index,
+            x=plot_x_values(df),
             y=df["Close"],
             mode="markers",
             marker=dict(
@@ -1674,7 +1715,7 @@ def add_price_panel(
     if settings.chart_type == "Candles":
         fig.add_trace(
             go.Candlestick(
-                x=df.index,
+                x=plot_x_values(df),
                 open=df["Open"],
                 high=df["High"],
                 low=df["Low"],
@@ -1693,7 +1734,7 @@ def add_price_panel(
     else:
         fig.add_trace(
             go.Scatter(
-                x=df.index,
+                x=plot_x_values(df),
                 y=df["Close"],
                 mode="lines",
                 line=dict(color="#111827", width=1.7),
@@ -1717,7 +1758,7 @@ def add_price_panel(
         if enabled and column in df.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=df.index,
+                    x=plot_x_values(df),
                     y=df[column],
                     mode="lines",
                     line=dict(color=color, width=width),
@@ -1732,7 +1773,7 @@ def add_price_panel(
     if settings.show_bbands and all(col in df.columns for col in ["BB_UPPER", "BB_LOWER", "BB_MID"]):
         fig.add_trace(
             go.Scatter(
-                x=df.index,
+                x=plot_x_values(df),
                 y=df["BB_UPPER"],
                 mode="lines",
                 line=dict(color=COLORS["bb"], width=1.0, dash="dot"),
@@ -1747,7 +1788,7 @@ def add_price_panel(
 
         fig.add_trace(
             go.Scatter(
-                x=df.index,
+                x=plot_x_values(df),
                 y=df["BB_LOWER"],
                 mode="lines",
                 line=dict(color=COLORS["bb"], width=1.0, dash="dot"),
@@ -1764,7 +1805,7 @@ def add_price_panel(
 
         fig.add_trace(
             go.Scatter(
-                x=df.index,
+                x=plot_x_values(df),
                 y=df["BB_MID"],
                 mode="lines",
                 line=dict(color="rgba(90,90,90,0.60)", width=1.0, dash="dot"),
@@ -1800,7 +1841,7 @@ def add_volume_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
     fig.add_trace(
         go.Bar(
-            x=df.index,
+            x=plot_x_values(df),
             y=df["Volume"],
             marker_color=colors,
             name="Volume",
@@ -1813,8 +1854,8 @@ def add_volume_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
 
 def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
-    x_start = df.index.min()
-    x_end = df.index.max()
+    x_start = str(plot_x_values(df).iloc[0])
+    x_end = str(plot_x_values(df).iloc[-1])
 
     fig.add_shape(
         type="rect",
@@ -1833,7 +1874,7 @@ def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
     fig.add_trace(
         go.Scatter(
-            x=df.index,
+            x=plot_x_values(df),
             y=df["RSI14"],
             mode="lines",
             line=dict(color=COLORS["rsi"], width=1.1),
@@ -1882,7 +1923,7 @@ def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
     fig.add_trace(
         go.Bar(
-            x=df.index,
+            x=plot_x_values(df),
             y=df["MACD_HIST"],
             marker_color=hist_colors,
             name="MACD histogram",
@@ -1895,7 +1936,7 @@ def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
     fig.add_trace(
         go.Scatter(
-            x=df.index,
+            x=plot_x_values(df),
             y=df["MACD"],
             mode="lines",
             line=dict(color=COLORS["macd"], width=1.4),
@@ -1909,7 +1950,7 @@ def add_macd_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
 
     fig.add_trace(
         go.Scatter(
-            x=df.index,
+            x=plot_x_values(df),
             y=df["MACD_SIGNAL"],
             mode="lines",
             line=dict(color=COLORS["signal"], width=1.2),
@@ -1935,6 +1976,7 @@ def build_chart(
     settings: ChartSettings,
     usable_volume: bool,
 ) -> go.Figure:
+    df = attach_plot_x(df)
     panels = active_panels(settings, usable_volume)
     row_count, row_heights, fig_height = panel_layout(panels)
 
@@ -1965,7 +2007,8 @@ def build_chart(
     if "macd" in row_map:
         add_macd_panel(fig, df, row=row_map["macd"])
 
-    rangebreaks = build_rangebreaks(df.index, settings.interval)
+    tickvals, ticktext = x_tick_spec(df)
+    x_categories = plot_x_values(df).astype(str).tolist()
 
     for row in range(1, row_count + 1):
         fig.update_yaxes(
@@ -2017,14 +2060,18 @@ def build_chart(
         )
 
     fig.update_xaxes(
-        type="date",
+        type="category",
+        categoryorder="array",
+        categoryarray=x_categories,
+        range=[-0.5, max(len(x_categories) - 0.5, 0.5)],
+        tickmode="array",
+        tickvals=tickvals,
+        ticktext=ticktext,
         showgrid=True,
         gridcolor=COLORS["grid"],
         gridwidth=1,
         showline=False,
         rangeslider_visible=False,
-        rangebreaks=rangebreaks,
-        tickformat="%b '%y" if settings.interval in ["1wk", "1mo"] else "%b %d\n%Y",
         showspikes=True,
         spikemode="across",
         spikesnap="cursor",
