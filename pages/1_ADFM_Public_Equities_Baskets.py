@@ -306,7 +306,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
                                    'Tariff Beneficiaries': ['NUE','STLD','CLF','X','CAT','DE','GEV','ETN','PWR'],
                                    'Japan Reflation Beneficiaries': ['EWJ', 'DXJ', 'TM', 'HMC', 'MUFG', 'SMFG', 'SONY'],
                                    'Europe Fiscal Expansion': ['VGK', 'EZU', 'EWG', 'BAESY', 'RNMBY', 'EADSY', 'SIEGY'],
-                                   'Humanoid Robotics': ['TSLA', 'NVDA', 'ISRG','BOT, 'SYM', 'ROK', 'TER', 'FANUY', 'ABB'],
+                                   'Humanoid Robotics': ['TSLA', 'NVDA', 'ISRG','BOT', 'SYM', 'ROK', 'TER', 'FANUY', 'ABB'],
                                    'Quantum Computing': ['IONQ', 'RGTI', 'QBTS', 'QUBT', 'IBM', 'GOOGL', 'MSFT'],
                                    'Autonomous Vehicles and Robotaxis': ['TSLA','GOOGL','GM','UBER','MBLY']},
  'Countries and Regions': {'Developed ex-US': ['VEA'],
