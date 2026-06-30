@@ -255,8 +255,7 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
                 'Self-Storage REITs': ['PSA', 'EXR', 'CUBE', 'NSA'],
                 'Hotel REITs': ['HST', 'RHP', 'APLE', 'PK', 'SHO'],
                 'Healthcare REITs': ['WELL', 'VTR', 'OHI', 'SBRA', 'DOC'],
-                'Real Estate Services': ['CBRE', 'JLL', 'CWK', 'Z', 'RDFN'],
-                'Homebuilders and Developers': ['DHI', 'LEN', 'NVR', 'PHM', 'TOL', 'KBH', 'MTH']},
+                'Real Estate Services': ['CBRE', 'JLL', 'CWK', 'Z', 'RDFN']},
 
  'Materials': {
 		'Commodity Chemicals': ['DOW', 'LYB', 'CE', 'WLK', 'OLN'],
