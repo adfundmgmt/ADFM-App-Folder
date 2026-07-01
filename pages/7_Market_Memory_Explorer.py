@@ -1267,14 +1267,23 @@ with tab_ytd:
                     "Next 21D", "Next 63D", "Next 126D", "Next 252D", "Fwd DD 252D",
                     "Endpoint Gap", "Vol Gap", "Drawdown Gap", "21D Slope Gap",
                 ]
+
+                # Some tickers / sparse histories can produce calendar-year analog rows
+                # without complete forward-horizon columns. Pandas raises a KeyError
+                # if we select columns that do not exist, so create the missing display
+                # columns explicitly and show them as N/A rather than breaking the app.
+                for col in display_cols:
+                    if col not in top_calendar.columns:
+                        top_calendar[col] = np.nan
+
                 table = top_calendar[display_cols].copy()
-                table["Match Date"] = pd.to_datetime(table["Match Date"]).dt.strftime("%Y-%m-%d")
+                table["Match Date"] = pd.to_datetime(table["Match Date"], errors="coerce").dt.strftime("%Y-%m-%d")
                 table = format_percent_table(
                     table,
                     ["YTD at Match", "Full-Year Return", "Return After Match", "Next 21D", "Next 63D", "Next 126D", "Next 252D", "Fwd DD 252D", "Endpoint Gap", "Vol Gap", "Drawdown Gap", "21D Slope Gap"],
                 )
                 for col in ["Score", "Correlation"]:
-                    table[col] = top_calendar[col].map(lambda x: fmt_num(x, 3))
+                    table[col] = top_calendar[col].map(lambda x: fmt_num(x, 3)) if col in top_calendar.columns else "N/A"
                 st.markdown("**Top calendar-year analogs**")
                 st.dataframe(table, use_container_width=True, hide_index=True)
                 dataframe_download_button(top_calendar, "Download YTD analog table", f"{ticker_label}_ytd_analogs.csv")
