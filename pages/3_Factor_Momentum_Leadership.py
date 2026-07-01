@@ -134,20 +134,6 @@ FACTOR_PAIRS: List[FactorPair] = [
         interpretation="Average-stock participation versus cap-weighted concentration.",
     ),
     FactorPair(
-        name="Momentum vs Market",
-        numerator="MTUM",
-        denominator="SPY",
-        category="Equity Style",
-        interpretation="Price momentum factor versus broad market.",
-    ),
-    FactorPair(
-        name="Dividend Quality vs Market",
-        numerator="SCHD",
-        denominator="SPY",
-        category="Equity Style",
-        interpretation="Dividend quality and cash-return equities versus broad market.",
-    ),
-    FactorPair(
         name="Tech vs Broad Market",
         numerator="XLK",
         denominator="SPY",
@@ -158,8 +144,15 @@ FACTOR_PAIRS: List[FactorPair] = [
         name="Semis vs Tech",
         numerator="SMH",
         denominator="XLK",
-        category="Sector Leadership",
+        category="Technology Internals",
         interpretation="Semiconductor leadership versus the broader technology sector.",
+    ),
+    FactorPair(
+        name="Semis vs Software",
+        numerator="SMH",
+        denominator="IGV",
+        category="Technology Internals",
+        interpretation="Semiconductor and AI hardware leadership versus software leadership.",
     ),
     FactorPair(
         name="Cyclicals vs Staples",
@@ -169,18 +162,18 @@ FACTOR_PAIRS: List[FactorPair] = [
         interpretation="Consumer cyclicals versus staples defensiveness.",
     ),
     FactorPair(
-        name="Industrials vs Utilities",
+        name="Industrials vs Materials",
         numerator="XLI",
-        denominator="XLU",
+        denominator="XLB",
         category="Cycle Signal",
-        interpretation="Industrial cyclicality versus utility defensiveness.",
+        interpretation="Industrial capex and production leadership versus materials and input-cost exposure.",
     ),
     FactorPair(
-        name="Financials vs Utilities",
-        numerator="XLF",
-        denominator="XLU",
-        category="Rates and Cycle",
-        interpretation="Financials versus rate-sensitive defensives.",
+        name="Regional Banks vs REITs",
+        numerator="KRE",
+        denominator="XLRE",
+        category="Rates and Credit",
+        interpretation="Regional-bank credit and curve sensitivity versus real-estate duration sensitivity.",
     ),
     FactorPair(
         name="US vs Ex-US",
@@ -209,13 +202,6 @@ FACTOR_PAIRS: List[FactorPair] = [
         denominator="SHY",
         category="Rates",
         interpretation="Long-duration Treasury performance versus short bills.",
-    ),
-    FactorPair(
-        name="Copper Miners vs Gold Miners",
-        numerator="COPX",
-        denominator="GDX",
-        category="Hard Assets",
-        interpretation="Cyclical metal miners versus monetary metal miners.",
     ),
 ]
 
