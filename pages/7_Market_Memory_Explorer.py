@@ -181,6 +181,10 @@ def inject_css() -> None:
             border-top: 1px solid #dfe4ec;
             margin: 1.15rem 0;
         }
+        div[data-testid="stDataFrame"] {
+            margin-top: 0.25rem;
+            margin-bottom: 0.75rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -923,15 +927,24 @@ def plot_forward_cone(ticker_label: str, matrix: np.ndarray, horizon: int, title
     ax.axhline(0, color="#6b7280", ls="--", lw=1.0, alpha=0.85)
     ax.axvline(0, color="#6b7280", ls=":", lw=1.0, alpha=0.85)
     ax.set_xlim(0, horizon)
-    ax.set_title(title, fontsize=15, weight="bold", loc="left", pad=12)
+    ax.set_title(title, fontsize=15, weight="bold", loc="left", pad=30)
     if subtitle:
-        ax.text(0.0, 1.015, subtitle, transform=ax.transAxes, ha="left", va="bottom", fontsize=10.5, color=MUTED_TEXT)
+        ax.text(
+            0.0,
+            1.012,
+            subtitle,
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=10.5,
+            color=MUTED_TEXT,
+        )
     ax.set_xlabel("Trading Days After Signal", fontsize=12)
     ax.set_ylabel("Forward Cumulative Return", fontsize=12)
     set_percent_axis(ax, np.hstack(all_values), force_zero=True)
     clean_axes(ax)
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=3, frameon=False, fontsize=9)
-    fig.tight_layout(rect=[0, 0.07, 1, 1])
+    fig.tight_layout(rect=[0, 0.07, 1, 0.965])
     return fig
 
 
@@ -973,33 +986,58 @@ def plot_setup_overlay(ticker_label: str, current_path: pd.Series, close_px: pd.
 
 def plot_distribution_bars(df: pd.DataFrame, value_col: str, title: str, current_value: float | None = None):
     vals = pd.to_numeric(df[value_col], errors="coerce").dropna()
-    fig, ax = plt.subplots(figsize=(14.5, 5.4))
+    fig, ax = plt.subplots(figsize=(14.5, 5.9))
     fig.patch.set_facecolor(CHART_FACE)
     if vals.empty:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
         clean_axes(ax)
         return fig
 
-    colors = [GOOD if x >= 0 else BAD for x in vals]
-    x_labels = df.loc[vals.index, "Year"].astype(str).values if "Year" in df.columns else np.arange(len(vals))
-    ax.bar(np.arange(len(vals)), vals.values, color=colors, alpha=0.88, width=0.82)
+    plot_df = df.loc[vals.index].copy()
+    plot_df[value_col] = vals.values
+    has_year = "Year" in plot_df.columns
+    x = np.arange(len(plot_df))
+    colors = [GOOD if x_val >= 0 else BAD for x_val in plot_df[value_col].values]
+
+    ax.bar(x, plot_df[value_col].values, color=colors, alpha=0.88, width=0.82)
     ax.axhline(0, color="#6b7280", lw=1.0)
     ax.axhline(vals.median(), color="#6b7280", ls=":", lw=1.3, label=f"Median {fmt_pct(vals.median())}")
     if current_value is not None and np.isfinite(current_value):
         ax.axhline(current_value, color=BLUE, ls="--", lw=1.5, label=f"Current {fmt_pct(current_value)}")
-    if len(vals) <= 40:
-        ax.set_xticks(np.arange(len(vals)))
-        ax.set_xticklabels(x_labels, rotation=45, ha="right")
+
+    if has_year:
+        years = pd.to_numeric(plot_df["Year"], errors="coerce").astype("Int64")
+        n = len(plot_df)
+        # Keep the x-axis readable for long histories by showing roughly one label every 5 years,
+        # plus the first and last available years.
+        tick_locs = []
+        tick_labels = []
+        for i, yr in enumerate(years):
+            if pd.isna(yr):
+                continue
+            yr_int = int(yr)
+            show_tick = (yr_int % 5 == 0) or i == 0 or i == n - 1
+            if show_tick:
+                tick_locs.append(i)
+                tick_labels.append(str(yr_int))
+        ax.set_xticks(tick_locs)
+        ax.set_xticklabels(tick_labels, rotation=45 if len(tick_locs) > 18 else 0, ha="right" if len(tick_locs) > 18 else "center")
+        ax.set_xlabel("Signal year", fontsize=12)
+        ax.set_xlim(-0.8, len(plot_df) - 0.2)
     else:
-        ax.set_xticks([])
-    ax.set_title(title, fontsize=15, weight="bold", loc="left", pad=12)
+        tick_every = max(1, int(np.ceil(len(plot_df) / 18)))
+        tick_locs = np.arange(0, len(plot_df), tick_every)
+        ax.set_xticks(tick_locs)
+        ax.set_xticklabels([str(i) for i in tick_locs], rotation=0)
+        ax.set_xlabel("Observation", fontsize=12)
+
+    ax.set_title(title, fontsize=15, weight="bold", loc="left", pad=14)
     ax.set_ylabel("Return", fontsize=12)
     set_percent_axis(ax, vals.values, force_zero=True)
     clean_axes(ax)
-    ax.legend(frameon=False, fontsize=9)
-    fig.tight_layout()
+    ax.legend(frameon=False, fontsize=9, loc="upper right")
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
     return fig
-
 
 # =========================
 # SETUP FILTERS
@@ -1373,25 +1411,23 @@ with tab_rolling:
             selected_rolling = select_clustered_matches(rolling_df, int(cluster_gap), bool(max_one_per_year))
             overlay_rolling = selected_rolling.head(top_n).copy()
 
-            c1, c2 = st.columns(2, gap="large")
-            with c1:
-                fig_setup = plot_setup_overlay(ticker_label, current_trailing_path, close_px, overlay_rolling, rolling_window)
-                st.pyplot(fig_setup, clear_figure=True)
-                st.download_button("Download setup overlay", fig_to_png_bytes(fig_setup), file_name=f"{ticker_label}_rolling_setup_overlay.png", mime="image/png")
-                plt.close(fig_setup)
-            with c2:
-                locs = selected_rolling["_signal_loc"].astype(int).tolist()
-                matrix = forward_matrix_from_locs(close_px, locs, rolling_horizon)
-                fig_cone = plot_forward_cone(
-                    ticker_label,
-                    matrix,
-                    rolling_horizon,
-                    f"{ticker_label} | Forward Distribution After Similar {rolling_window}D Setups",
-                    subtitle=f"n={len(locs)} clustered matches, min ρ={rolling_min_corr:.2f}",
-                )
-                st.pyplot(fig_cone, clear_figure=True)
-                st.download_button("Download forward cone", fig_to_png_bytes(fig_cone), file_name=f"{ticker_label}_rolling_forward_cone.png", mime="image/png")
-                plt.close(fig_cone)
+            fig_setup = plot_setup_overlay(ticker_label, current_trailing_path, close_px, overlay_rolling, rolling_window)
+            st.pyplot(fig_setup, clear_figure=True)
+            st.download_button("Download setup overlay", fig_to_png_bytes(fig_setup), file_name=f"{ticker_label}_rolling_setup_overlay.png", mime="image/png")
+            plt.close(fig_setup)
+
+            locs = selected_rolling["_signal_loc"].astype(int).tolist()
+            matrix = forward_matrix_from_locs(close_px, locs, rolling_horizon)
+            fig_cone = plot_forward_cone(
+                ticker_label,
+                matrix,
+                rolling_horizon,
+                f"{ticker_label} | Forward Distribution After Similar {rolling_window}D Setups",
+                subtitle=f"n={len(locs)} clustered matches, min ρ={rolling_min_corr:.2f}",
+            )
+            st.pyplot(fig_cone, clear_figure=True)
+            st.download_button("Download forward cone", fig_to_png_bytes(fig_cone), file_name=f"{ticker_label}_rolling_forward_cone.png", mime="image/png")
+            plt.close(fig_cone)
 
             display_cols = [
                 "Year", "Match Start", "Match End", "Score", "Correlation", "Cluster Windows", "Setup Return",
@@ -1410,7 +1446,7 @@ with tab_rolling:
             for col in ["Score", "Correlation", "VIX"]:
                 table[col] = selected_rolling[col].map(lambda x: fmt_num(x, 3 if col != "VIX" else 1))
             st.markdown("**Clustered rolling matches**")
-            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.dataframe(table, use_container_width=True, hide_index=True, height=420)
             dataframe_download_button(selected_rolling, "Download rolling analog table", f"{ticker_label}_rolling_analogs.csv")
 
             compare_df = compare_to_base(selected_rolling, base_df, DEFAULT_HORIZONS)
@@ -1421,7 +1457,7 @@ with tab_rolling:
                     int_cols=["Cohort n", "Base n"],
                 )
                 st.markdown("**Rolling analog cohort versus base rates**")
-                st.dataframe(display_compare, use_container_width=True, hide_index=True)
+                st.dataframe(display_compare, use_container_width=True, hide_index=True, height=300)
 
             failures = selected_rolling.sort_values(f"Next {rolling_horizon}D", ascending=True).head(5)
             if not failures.empty:
@@ -1432,7 +1468,7 @@ with tab_rolling:
                 fail["Score"] = failures["Score"].map(lambda x: fmt_num(x, 3))
                 fail["Correlation"] = failures["Correlation"].map(lambda x: fmt_num(x, 3))
                 st.markdown("**Failure cases inside the matched set**")
-                st.dataframe(fail, use_container_width=True, hide_index=True)
+                st.dataframe(fail, use_container_width=True, hide_index=True, height=260)
 
 
 # =========================
@@ -1547,7 +1583,7 @@ with tab_scanner:
         table_display["VIX"] = table_raw["VIX"].map(lambda x: fmt_num(x, 1))
         table_display["Above 200D"] = table_raw["Above 200D"].map(lambda x: "Yes" if bool(x) else "No")
         st.markdown("**Most recent matching observations**")
-        st.dataframe(table_display, use_container_width=True, hide_index=True)
+        st.dataframe(table_display, use_container_width=True, hide_index=True, height=430)
         dataframe_download_button(cohort, "Download setup cohort", f"{ticker_label}_setup_cohort.csv")
 
         worst_cases = cohort.reset_index(drop=True).sort_values(f"next_{scanner_horizon}", ascending=True).head(8)
@@ -1567,7 +1603,7 @@ with tab_scanner:
         )
         worst_display["VIX"] = worst_cases["vix"].map(lambda x: fmt_num(x, 1))
         st.markdown("**Failure cases for this setup**")
-        st.dataframe(worst_display, use_container_width=True, hide_index=True)
+        st.dataframe(worst_display, use_container_width=True, hide_index=True, height=300)
 
 
 # =========================
@@ -1587,7 +1623,7 @@ with tab_base:
         ["Hit Rate", "Median", "Mean", "10th %ile", "25th %ile", "75th %ile", "90th %ile", "Worst", "Best", "Median Fwd DD", "Worst Fwd DD"],
         int_cols=["n"],
     )
-    st.dataframe(display_base, use_container_width=True, hide_index=True)
+    st.dataframe(display_base, use_container_width=True, hide_index=True, height=280)
     dataframe_download_button(base_df, "Download full base-rate universe", f"{ticker_label}_base_rate_universe.csv")
 
     dist_horizon = st.select_slider("Distribution horizon", options=[21, 63, 126, 252], value=63)
