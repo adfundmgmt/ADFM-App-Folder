@@ -635,7 +635,10 @@ def build_feature_frame(close_px: pd.Series, regime_data: dict) -> pd.DataFrame:
         df["credit_63"] = np.nan
         df["credit_trend"] = "unknown"
 
-    return df
+    # Keep Date only as a normal column. yfinance often names the index "Date",
+    # which makes pandas treat "Date" as both an index level and a column label.
+    # Resetting here prevents ambiguous sort/filter operations downstream.
+    return df.reset_index(drop=True)
 
 
 def historical_universe(feature_df: pd.DataFrame, start_year: int, min_history_days: int = 252, max_horizon: int = 252) -> pd.DataFrame:
@@ -1515,7 +1518,9 @@ with tab_scanner:
             "above_200d", "vix", "tnx_63_bps", "dxy_63", "credit_63",
             "next_21", "next_63", "next_126", "next_252", "fwd_dd_252",
         ]
-        table_raw = cohort.sort_values("Date", ascending=False).head(max_rows_to_show)[cohort_table_cols].copy()
+        cohort_for_table = cohort.reset_index(drop=True).copy()
+        available_cohort_cols = [col for col in cohort_table_cols if col in cohort_for_table.columns]
+        table_raw = cohort_for_table.sort_values("Date", ascending=False).head(max_rows_to_show)[available_cohort_cols].copy()
         table_raw["Date"] = pd.to_datetime(table_raw["Date"]).dt.strftime("%Y-%m-%d")
         table_raw = table_raw.rename(
             columns={
@@ -1536,7 +1541,7 @@ with tab_scanner:
         st.dataframe(table_display, use_container_width=True, hide_index=True)
         dataframe_download_button(cohort, "Download setup cohort", f"{ticker_label}_setup_cohort.csv")
 
-        worst_cases = cohort.sort_values(f"next_{scanner_horizon}", ascending=True).head(8)
+        worst_cases = cohort.reset_index(drop=True).sort_values(f"next_{scanner_horizon}", ascending=True).head(8)
         worst_display = worst_cases[["Date", "Year", f"next_{scanner_horizon}", f"fwd_dd_{scanner_horizon}", "ret_63", "ret_252", "vix", "tnx_63_bps", "dxy_63", "credit_63"]].copy()
         worst_display["Date"] = pd.to_datetime(worst_display["Date"]).dt.strftime("%Y-%m-%d")
         worst_display = worst_display.rename(
