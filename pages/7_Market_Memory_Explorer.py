@@ -650,13 +650,29 @@ def historical_universe(feature_df: pd.DataFrame, start_year: int, min_history_d
 # TABLE / SUMMARY FUNCTIONS
 # =========================
 
+def numeric_series_from_first_available(df: pd.DataFrame, candidate_cols: list[str]) -> pd.Series:
+    """Return a numeric Series from the first available column name.
+
+    The app uses machine-friendly names in the base-rate universe
+    (for example, ``next_63`` / ``fwd_dd_63``) and presentation-friendly
+    names in analog tables (for example, ``Next 63D`` / ``Fwd DD 63D``).
+    This helper lets comparison tables work with either shape.
+    """
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+
+    for col in candidate_cols:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce").dropna()
+
+    return pd.Series(dtype=float)
+
+
 def summarize_forward_distribution(df: pd.DataFrame, horizons: list[int], label: str = "Cohort") -> pd.DataFrame:
     rows = []
     for h in horizons:
-        ret_col = f"next_{h}"
-        dd_col = f"fwd_dd_{h}"
-        vals = pd.to_numeric(df.get(ret_col), errors="coerce").dropna()
-        dds = pd.to_numeric(df.get(dd_col), errors="coerce").dropna()
+        vals = numeric_series_from_first_available(df, [f"next_{h}", f"Next {h}D"])
+        dds = numeric_series_from_first_available(df, [f"fwd_dd_{h}", f"Fwd DD {h}D"])
         if vals.empty:
             continue
         rows.append(
@@ -1121,8 +1137,8 @@ st.caption(
 )
 
 
-tab_snapshot, tab_ytd, tab_rolling, tab_scanner, tab_base = st.tabs(
-    ["Snapshot", "YTD Analogs", "Rolling Analogs", "Setup Scanner", "Base Rates"]
+tab_ytd, tab_snapshot, tab_rolling, tab_scanner, tab_base = st.tabs(
+    ["YTD Analogs", "Snapshot", "Rolling Analogs", "Setup Scanner", "Base Rates"]
 )
 
 
