@@ -566,8 +566,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
                                    'Data Center Construction and EPC': ['PWR','MYRG','EME','FIX','J','ACM','VRT','ETN','GEV'],
 
-                                   'Grid Bottleneck/Electrification': ['ETN', 'GEV', 'HUBB', 'POWL', 'PWR', 'MYRG', 'ABB', 'VRT'],
-
                                    'Reindustrialization': ['CAT','DE','ETN','PWR','URI','VMC','MLM','NUE','STLD','GEV'],
 
                                    'Reshoring and Factory Buildout': ['PWR','MTZ','EME','FIX','URI','CAT','VMC','MLM','ROK','ABB'],
