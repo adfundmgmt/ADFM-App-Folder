@@ -654,8 +654,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
                            'Emerging Markets Broad': ['IEMG', 'EEM'],
 
-                           'Frontier Markets': ['FM'],
-
                            'Latin America Broad': ['ILF'],
 
                            'Brazil': ['EWZ'],
