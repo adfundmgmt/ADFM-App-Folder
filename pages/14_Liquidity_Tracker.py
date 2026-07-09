@@ -26,123 +26,236 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 0.90rem !important;
-        padding-bottom: 2rem;
-        max-width: 1760px;
+        padding-top: 2.35rem;
+        padding-bottom: 2.6rem;
+        max-width: 1580px;
     }
 
-    .adfm-header-wrap {
-        margin-top: 0.10rem;
-        margin-bottom: 1.05rem;
-        padding-bottom: 0.75rem;
-        border-bottom: 1px solid #e5e7eb;
+    section[data-testid="stSidebar"] {
+        background-color: #f3f6fa;
+        border-right: 1px solid #e2e8f0;
     }
 
-    .adfm-title {
-        font-size: 1.82rem;
-        line-height: 1.20;
-        font-weight: 780;
-        color: #111827;
-        margin: 0 0 0.25rem 0;
-        letter-spacing: -0.025em;
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #2d3748;
+        font-weight: 750;
+        letter-spacing: -0.01em;
     }
 
-    .adfm-subtitle {
-        font-size: 0.93rem;
-        line-height: 1.42;
-        color: #6b7280;
-        margin: 0;
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] li,
+    section[data-testid="stSidebar"] div {
+        color: #3f4a5a;
+    }
+
+    .tool-divider {
+        margin-top: 1.25rem;
+        margin-bottom: 1.25rem;
+        border-top: 1px solid #d8dee8;
+    }
+
+    .hero-title {
+        font-size: 2.55rem;
+        line-height: 1.05;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        color: #2d3142;
+        margin-bottom: 0.25rem;
+    }
+
+    .hero-caption {
+        color: #8b949e;
+        font-size: 1.00rem;
+        line-height: 1.48;
+        margin-bottom: 1.55rem;
         max-width: 1180px;
     }
 
     .section-title {
-        font-size: 1.03rem;
-        font-weight: 760;
-        color: #111827;
-        margin-top: 0.35rem;
-        margin-bottom: 0.20rem;
+        font-size: 1.08rem;
+        line-height: 1.25;
+        font-weight: 750;
+        letter-spacing: -0.015em;
+        color: #2d3142;
+        margin-top: 1.15rem;
+        margin-bottom: 0.28rem;
     }
 
     .section-subtitle {
-        font-size: 0.86rem;
-        color: #6b7280;
-        margin-bottom: 0.72rem;
-        line-height: 1.38;
+        font-size: 0.91rem;
+        color: #8b949e;
+        margin-bottom: 0.85rem;
+        line-height: 1.42;
     }
 
     .metric-card {
         background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 13px;
+        border: 1px solid #e3e8f0;
+        border-radius: 14px;
         padding: 12px 14px 10px 14px;
         min-height: 88px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.035);
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.045);
     }
 
     .metric-label {
-        font-size: 0.70rem;
-        color: #6b7280;
+        font-size: 0.69rem;
+        color: #667085;
         text-transform: uppercase;
-        letter-spacing: 0.052em;
+        letter-spacing: 0.08em;
+        font-weight: 700;
         margin-bottom: 0.42rem;
         white-space: nowrap;
     }
 
     .metric-value {
-        font-size: 1.24rem;
+        font-size: 1.22rem;
         font-weight: 760;
         color: #111827;
-        line-height: 1.10;
+        line-height: 1.12;
         white-space: nowrap;
     }
 
     .metric-footnote {
         font-size: 0.72rem;
-        color: #9ca3af;
+        color: #8b949e;
         margin-top: 0.40rem;
-        line-height: 1.22;
+        line-height: 1.25;
     }
 
     .info-box {
         background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 13px;
+        border: 1px solid #e3e8f0;
+        border-radius: 14px;
         padding: 13px 15px;
         margin-bottom: 0.85rem;
-        color: #111827;
-        font-size: 0.90rem;
-        line-height: 1.42;
+        color: #334155;
+        font-size: 0.91rem;
+        line-height: 1.48;
     }
 
     .warning-box {
         background: #fff7ed;
         border: 1px solid #fed7aa;
-        border-radius: 13px;
-        padding: 12px 14px;
-        margin-bottom: 0.85rem;
+        border-radius: 14px;
+        padding: 13px 15px;
+        margin-bottom: 0.90rem;
         color: #7c2d12;
-        font-size: 0.89rem;
-        line-height: 1.40;
+        font-size: 0.91rem;
+        line-height: 1.45;
+    }
+
+    div[data-testid="stTextInput"] label,
+    div[data-testid="stNumberInput"] label,
+    div[data-testid="stSelectbox"] label,
+    div[data-testid="stCheckbox"] label,
+    div[data-testid="stSlider"] label,
+    div[data-testid="stRadio"] label {
+        color: #536171;
+        font-size: 0.76rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    div[data-baseweb="input"] {
+        border-radius: 12px;
+        background-color: #f5f7fb;
+        border: 1px solid #e0e6ef;
+    }
+
+    div[data-baseweb="select"] > div {
+        border-radius: 12px;
+        background-color: #f5f7fb;
+        border-color: #e0e6ef;
+    }
+
+    .stPlotlyChart {
+        background: #ffffff;
+        border-radius: 12px;
     }
 
     .stDataFrame {
-        border: 1px solid #e5e7eb;
+        border: 1px solid #e3e8f0;
         border-radius: 12px;
         overflow: hidden;
     }
 
     .stDownloadButton button {
-        border-radius: 10px;
-        font-weight: 650;
+        border-radius: 11px;
+        font-weight: 700;
     }
 
-    [data-testid="stSidebar"] {
-        background: #ffffff;
+    .js-plotly-plot .plotly .modebar {
+        opacity: 0.35;
+    }
+
+    .js-plotly-plot .plotly .modebar:hover {
+        opacity: 0.75;
     }
 </style>
 """
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+PLOTLY_FONT = "Arial, sans-serif"
+PLOTLY_GRID = "rgba(226, 232, 240, 0.72)"
+PLOTLY_AXIS = "#d7dde8"
+PLOTLY_TEXT = "#334155"
+PLOTLY_TITLE = "#111827"
+
+
+def apply_adfm_plot_layout(
+    fig: go.Figure,
+    height: int,
+    margin: Optional[Dict[str, int]] = None,
+    showlegend: bool = True,
+    legend_y: float = 1.065,
+    hovermode: str = "x unified",
+) -> go.Figure:
+    """Shared chart styling used across the ADFM Streamlit pages."""
+    fig.update_layout(
+        template="plotly_white",
+        height=height,
+        autosize=True,
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        margin=margin or dict(l=42, r=28, t=54, b=42),
+        font=dict(color=PLOTLY_TEXT, family=PLOTLY_FONT),
+        hovermode=hovermode,
+        showlegend=showlegend,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=legend_y,
+            xanchor="left",
+            x=0.0,
+            font=dict(size=11),
+            bgcolor="rgba(255,255,255,0)",
+        ),
+    )
+    return fig
+
+
+def clean_axis(fig: go.Figure) -> go.Figure:
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(226, 232, 240, 0.55)",
+        showline=True,
+        linewidth=1,
+        linecolor=PLOTLY_AXIS,
+        zeroline=False,
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=PLOTLY_GRID,
+        showline=False,
+        zeroline=False,
+    )
+    return fig
+
 
 
 # ============================================================
@@ -937,15 +1050,11 @@ def filter_by_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
 # ============================================================
 
 st.markdown(
-    f"""
-    <div class="adfm-header-wrap">
-        <div class="adfm-title">{TITLE}</div>
-        <div class="adfm-subtitle">
-            Daily market-implied liquidity impulse from Yahoo Finance ratios, with the Federal Reserve FCI-G as the official financial-conditions overlay.
-            The composite is now built from 21D, 63D, and 126D liquidity moves rather than level z-scores, so the chart shows actual changes in traded liquidity instead of a flat statistical level.
-        </div>
-    </div>
-    """,
+    '<div class="hero-title">Liquidity Conditions Monitor</div>',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<div class="hero-caption">Daily traded-liquidity impulse from Yahoo Finance ratios, with the Federal Reserve FCI-G as the official financial-conditions overlay.</div>',
     unsafe_allow_html=True,
 )
 
@@ -955,19 +1064,27 @@ st.markdown(
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### Framework")
+    st.markdown("## About This Tool")
     st.markdown(
         """
-This page does not scrape Fed H.4.1 balance-sheet tables.
+        **Purpose:** Liquidity regime monitor for tracking whether credit, equity breadth, speculative beta, banks, crypto, rates, dollar pressure, and volatility are confirming easier or tighter traded liquidity.
 
-It uses Yahoo Finance to track whether liquidity is reaching traded markets through credit, breadth, high beta, crypto, dollar pressure, volatility, duration, and banks.
+        **What this page shows**
 
-The Fed FCI-G overlay is pulled directly from the Federal Reserve's public monthly CSVs.
+        - Yahoo Finance market-implied liquidity composite.
+        - Component breadth and sleeve attribution.
+        - Fed FCI-G financial-conditions overlay.
+        - Component scorecard for what is driving the impulse.
+
+        **Data source**
+
+        - Yahoo Finance adjusted daily prices through `yfinance`.
+        - Federal Reserve FCI-G monthly CSVs.
         """
     )
 
-    st.divider()
-    st.markdown("### Controls")
+    st.markdown('<div class="tool-divider"></div>', unsafe_allow_html=True)
+    st.markdown("### Display Controls")
 
     lookback = st.selectbox(
         "Display lookback",
@@ -1019,9 +1136,9 @@ The Fed FCI-G overlay is pulled directly from the Federal Reserve's public month
     show_scorecard = st.checkbox("Show component scorecard", value=True)
     show_raw_download = st.checkbox("Show download section", value=True)
 
-    st.divider()
+    st.markdown('<div class="tool-divider"></div>', unsafe_allow_html=True)
     st.caption(
-        "Composite score = weighted average of component impulse z-scores. Each component uses a blend of 21D, 63D, and 126D liquidity moves after direction adjustment."
+        "Composite score = weighted average of component impulse z-scores. Each component uses 21D, 63D, and 126D liquidity moves after direction adjustment."
     )
 
 
@@ -1110,7 +1227,7 @@ with c6:
 
 st.markdown("<div class='section-title'>Market-Implied Liquidity Impulse</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-subtitle'>A daily composite of 21D, 63D, and 126D moves across credit, breadth, speculation, banks, crypto, rates, dollar, and volatility. The y-axis is dynamic; the benchmark axis is no longer forced into the composite range.</div>",
+    "<div class='section-subtitle'>A daily composite of 21D, 63D, and 126D moves across credit, breadth, speculation, banks, crypto, rates, dollar, and volatility. The composite shows traded-liquidity impulse; the benchmark overlay is separately rebased to preserve signal shape.</div>",
     unsafe_allow_html=True,
 )
 
@@ -1144,9 +1261,9 @@ fig.add_hrect(
     col=1,
 )
 
-fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=1, col=1)
-fig.add_hline(y=0.90, line_width=1, line_dash="dot", line_color="#d1d5db", row=1, col=1)
-fig.add_hline(y=-0.90, line_width=1, line_dash="dot", line_color="#d1d5db", row=1, col=1)
+fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#8b949e", row=1, col=1)
+fig.add_hline(y=0.90, line_width=1, line_dash="dot", line_color="#cbd5e1", row=1, col=1)
+fig.add_hline(y=-0.90, line_width=1, line_dash="dot", line_color="#cbd5e1", row=1, col=1)
 
 fig.add_trace(
     go.Scatter(
@@ -1180,7 +1297,7 @@ if show_benchmark and benchmark in display_prices.columns:
         secondary_y=True,
     )
 
-fig.add_hline(y=50, line_width=1, line_dash="dot", line_color="#9ca3af", row=2, col=1)
+fig.add_hline(y=50, line_width=1, line_dash="dot", line_color="#8b949e", row=2, col=1)
 fig.add_trace(
     go.Scatter(
         x=display_breadth.index,
@@ -1196,26 +1313,20 @@ fig.add_trace(
     col=1,
 )
 
-fig.update_layout(
-    template="plotly_white",
+apply_adfm_plot_layout(
+    fig,
     height=690,
-    margin=dict(l=55, r=60, t=48, b=35),
-    legend=dict(
-        orientation="h",
-        x=0,
-        y=1.065,
-        xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.78)",
-    ),
-    hovermode="x unified",
+    margin=dict(l=46, r=58, t=54, b=48),
+    showlegend=True,
+    legend_y=1.065,
 )
+clean_axis(fig)
 
 fig.update_yaxes(
     title_text="Composite z-score",
     range=[comp_y0, comp_y1],
     showgrid=True,
-    gridcolor="#edf0f4",
+    gridcolor=PLOTLY_GRID,
     zeroline=False,
     row=1,
     col=1,
@@ -1236,7 +1347,7 @@ fig.update_yaxes(
     range=[0, 100],
     ticksuffix="%",
     showgrid=True,
-    gridcolor="#edf0f4",
+    gridcolor=PLOTLY_GRID,
     zeroline=False,
     row=2,
     col=1,
@@ -1262,7 +1373,7 @@ if show_category_chart and not category_scores.empty:
     cat_display = cat_display.sort_values("Latest Score", ascending=True)
 
     fig_cat = go.Figure()
-    fig_cat.add_vline(x=0, line_width=1, line_dash="dot", line_color="#9ca3af")
+    fig_cat.add_vline(x=0, line_width=1, line_dash="dot", line_color="#8b949e")
     fig_cat.add_trace(
         go.Bar(
             x=cat_display["Latest Score"],
@@ -1273,14 +1384,16 @@ if show_category_chart and not category_scores.empty:
         )
     )
 
-    fig_cat.update_layout(
-        template="plotly_white",
+    apply_adfm_plot_layout(
+        fig_cat,
         height=max(360, 42 * len(cat_display) + 110),
-        margin=dict(l=135, r=25, t=20, b=35),
+        margin=dict(l=135, r=28, t=24, b=42),
         showlegend=False,
+        hovermode="closest",
     )
+    clean_axis(fig_cat)
 
-    fig_cat.update_xaxes(title_text="Latest sleeve score", showgrid=True, gridcolor="#edf0f4", zeroline=False)
+    fig_cat.update_xaxes(title_text="Latest sleeve score", zeroline=False)
     fig_cat.update_yaxes(title_text="", showgrid=False)
     st.plotly_chart(fig_cat, use_container_width=True)
 
@@ -1300,7 +1413,7 @@ if show_component_bars and not scorecard.empty:
     bar_df = bar_df.sort_values("Score", ascending=True)
 
     fig_bar = go.Figure()
-    fig_bar.add_vline(x=0, line_width=1, line_dash="dot", line_color="#9ca3af")
+    fig_bar.add_vline(x=0, line_width=1, line_dash="dot", line_color="#8b949e")
     fig_bar.add_trace(
         go.Bar(
             x=bar_df["Score"],
@@ -1313,14 +1426,16 @@ if show_component_bars and not scorecard.empty:
         )
     )
 
-    fig_bar.update_layout(
-        template="plotly_white",
+    apply_adfm_plot_layout(
+        fig_bar,
         height=max(560, 31 * len(bar_df) + 110),
-        margin=dict(l=220, r=120, t=20, b=35),
+        margin=dict(l=220, r=118, t=24, b=42),
         showlegend=False,
+        hovermode="closest",
     )
+    clean_axis(fig_bar)
 
-    fig_bar.update_xaxes(title_text="Component score", showgrid=True, gridcolor="#edf0f4", zeroline=False)
+    fig_bar.update_xaxes(title_text="Component score", zeroline=False)
     fig_bar.update_yaxes(title_text="", showgrid=False)
     st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -1367,7 +1482,7 @@ if show_fed_fcig:
             subplot_titles=("Fed FCI-G and Yahoo traded-liquidity impulse", "Easing direction comparison"),
         )
 
-        fig_fcig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=1, col=1)
+        fig_fcig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#8b949e", row=1, col=1)
 
         if "FCI-G Baseline" in fcig_plot.columns:
             fig_fcig.add_trace(
@@ -1420,7 +1535,7 @@ if show_fed_fcig:
             fed_easing = -fcig_df["FCI-G Baseline"].dropna()
             fed_easing = filter_by_lookback(fed_easing.to_frame("Fed Easing Direction"), lookback)["Fed Easing Direction"]
 
-            fig_fcig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=2, col=1)
+            fig_fcig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#8b949e", row=2, col=1)
             fig_fcig.add_trace(
                 go.Scatter(
                     x=fed_easing.index,
@@ -1446,25 +1561,19 @@ if show_fed_fcig:
                 col=1,
             )
 
-        fig_fcig.update_layout(
-            template="plotly_white",
+        apply_adfm_plot_layout(
+            fig_fcig,
             height=690,
-            margin=dict(l=55, r=60, t=48, b=35),
-            legend=dict(
-                orientation="h",
-                x=0,
-                y=1.065,
-                xanchor="left",
-                yanchor="bottom",
-                bgcolor="rgba(255,255,255,0.78)",
-            ),
-            hovermode="x unified",
+            margin=dict(l=46, r=58, t=54, b=48),
+            showlegend=True,
+            legend_y=1.065,
         )
+        clean_axis(fig_fcig)
 
         fig_fcig.update_yaxes(
             title_text="FCI-G growth impulse",
             showgrid=True,
-            gridcolor="#edf0f4",
+            gridcolor=PLOTLY_GRID,
             zeroline=False,
             row=1,
             col=1,
@@ -1483,7 +1592,7 @@ if show_fed_fcig:
         fig_fcig.update_yaxes(
             title_text="Positive = easier",
             showgrid=True,
-            gridcolor="#edf0f4",
+            gridcolor=PLOTLY_GRID,
             zeroline=False,
             row=2,
             col=1,
@@ -1529,7 +1638,7 @@ if show_fed_fcig:
                 contrib_df = contrib_df.sort_values("Contribution", ascending=True)
 
                 fig_contrib = go.Figure()
-                fig_contrib.add_vline(x=0, line_width=1, line_dash="dot", line_color="#9ca3af")
+                fig_contrib.add_vline(x=0, line_width=1, line_dash="dot", line_color="#8b949e")
                 fig_contrib.add_trace(
                     go.Bar(
                         x=contrib_df["Contribution"],
@@ -1539,13 +1648,15 @@ if show_fed_fcig:
                     )
                 )
 
-                fig_contrib.update_layout(
-                    template="plotly_white",
+                apply_adfm_plot_layout(
+                    fig_contrib,
                     height=max(340, 38 * len(contrib_df) + 100),
-                    margin=dict(l=155, r=35, t=20, b=35),
+                    margin=dict(l=155, r=35, t=24, b=42),
                     showlegend=False,
+                    hovermode="closest",
                 )
-                fig_contrib.update_xaxes(title_text="FCI-G contribution", showgrid=True, gridcolor="#edf0f4", zeroline=False)
+                clean_axis(fig_contrib)
+                fig_contrib.update_xaxes(title_text="FCI-G contribution", zeroline=False)
                 fig_contrib.update_yaxes(title_text="", showgrid=False)
                 st.plotly_chart(fig_contrib, use_container_width=True)
 
