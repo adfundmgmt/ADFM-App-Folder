@@ -1,8 +1,6 @@
-import html
-import os
-import re
+import math
 import time
-from io import StringIO
+from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -10,161 +8,122 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+import yfinance as yf
 from plotly.subplots import make_subplots
 
-# ------------------------------------------------------------
-# Config
-# ------------------------------------------------------------
 
-TITLE = "Fed Balance Sheet & Liquidity Tracker"
+# ============================================================
+# PAGE SETUP
+# ============================================================
 
-H41_CURRENT_URL = "https://www.federalreserve.gov/releases/h41/current/"
-H41_ARCHIVE_URL_TEMPLATE = "https://www.federalreserve.gov/releases/h41/{yyyymmdd}/"
+TITLE = "Liquidity Conditions Monitor"
 
-CACHE_DIR = "data"
-CACHE_PATH = os.path.join(CACHE_DIR, "fed_h41_liquidity_cache.csv")
-
-REQUEST_TIMEOUT = (4, 12)
-MAX_RETRIES = 2
-BACKOFF_SECONDS = 0.75
-
-DEFAULT_LOOKBACK = "2y"
-DEFAULT_SMOOTH = 1
-
-LOOKBACK_TO_WEEKS = {
-    "6m": 30,
-    "1y": 60,
-    "2y": 115,
-    "3y": 170,
-    "5y": 275,
-    "10y": 540,
-}
-
-DISPLAY_COLUMNS = [
-    "Fed Assets",
-    "Net Liquidity",
-    "TGA",
-    "RRP Others",
-    "RRP Total",
-    "Reserve Balances",
-    "Securities Held Outright",
-    "UST Holdings",
-    "MBS Holdings",
-]
-
-st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
-
-# ------------------------------------------------------------
-# CSS
-# ------------------------------------------------------------
+st.set_page_config(
+    page_title=TITLE,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 2.65rem !important;
+        padding-top: 0.95rem !important;
         padding-bottom: 2rem;
-        max-width: 1580px;
-        overflow: visible !important;
-    }
-
-    .main .block-container {
-        overflow: visible !important;
+        max-width: 1740px;
     }
 
     .adfm-header-wrap {
-        margin-top: 0.25rem;
-        margin-bottom: 1.15rem;
-        padding-top: 0.25rem;
-        overflow: visible;
+        margin-top: 0.10rem;
+        margin-bottom: 1.10rem;
+        padding-bottom: 0.15rem;
+        border-bottom: 1px solid #e5e7eb;
     }
 
     .adfm-title {
-        font-size: 1.85rem;
-        line-height: 1.25;
+        font-size: 1.82rem;
+        line-height: 1.20;
         font-weight: 780;
         color: #111827;
         margin: 0 0 0.25rem 0;
-        padding: 0;
         letter-spacing: -0.025em;
-        overflow: visible;
-        white-space: normal;
     }
 
     .adfm-subtitle {
-        font-size: 0.96rem;
-        line-height: 1.45;
+        font-size: 0.93rem;
+        line-height: 1.42;
         color: #6b7280;
-        margin: 0;
-        padding: 0;
+        margin: 0 0 0.80rem 0;
+        max-width: 1180px;
     }
 
     .section-title {
-        font-size: 1.05rem;
+        font-size: 1.02rem;
         font-weight: 760;
         color: #111827;
         margin-top: 0.35rem;
-        margin-bottom: 0.35rem;
+        margin-bottom: 0.20rem;
     }
 
     .section-subtitle {
-        font-size: 0.88rem;
+        font-size: 0.86rem;
         color: #6b7280;
-        margin-bottom: 0.75rem;
+        margin-bottom: 0.72rem;
+        line-height: 1.38;
     }
 
     .metric-card {
         background: #ffffff;
         border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 13px 15px 11px 15px;
+        border-radius: 13px;
+        padding: 12px 14px 10px 14px;
+        min-height: 88px;
         box-shadow: 0 1px 4px rgba(0,0,0,0.035);
-        min-height: 94px;
     }
 
     .metric-label {
-        font-size: 0.72rem;
+        font-size: 0.70rem;
         color: #6b7280;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 0.45rem;
+        letter-spacing: 0.052em;
+        margin-bottom: 0.42rem;
         white-space: nowrap;
     }
 
     .metric-value {
-        font-size: 1.36rem;
+        font-size: 1.28rem;
         font-weight: 760;
         color: #111827;
-        line-height: 1.08;
+        line-height: 1.10;
         white-space: nowrap;
     }
 
     .metric-footnote {
-        font-size: 0.74rem;
+        font-size: 0.72rem;
         color: #9ca3af;
-        margin-top: 0.43rem;
-        line-height: 1.25;
+        margin-top: 0.40rem;
+        line-height: 1.22;
     }
 
     .info-box {
         background: #ffffff;
         border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 14px 16px;
+        border-radius: 13px;
+        padding: 13px 15px;
         margin-bottom: 0.85rem;
         color: #111827;
-        font-size: 0.91rem;
-        line-height: 1.45;
+        font-size: 0.90rem;
+        line-height: 1.42;
     }
 
     .warning-box {
         background: #fff7ed;
         border: 1px solid #fed7aa;
-        border-radius: 14px;
-        padding: 13px 15px;
-        margin-bottom: 0.9rem;
+        border-radius: 13px;
+        padding: 12px 14px;
+        margin-bottom: 0.85rem;
         color: #7c2d12;
-        font-size: 0.9rem;
-        line-height: 1.42;
+        font-size: 0.89rem;
+        line-height: 1.40;
     }
 
     .stDataFrame {
@@ -181,111 +140,193 @@ CUSTOM_CSS = """
     [data-testid="stSidebar"] {
         background: #ffffff;
     }
+
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 13px;
+        padding: 10px 12px;
+    }
 </style>
 """
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# ------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------
 
-def norm_text(x: object) -> str:
-    text = html.unescape(str(x))
-    text = text.replace("\xa0", " ")
-    text = text.replace("–", "-")
-    text = text.replace("—", "-")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip().lower()
+# ============================================================
+# FED FCI-G DATA
+# ============================================================
+
+FED_FCIG_SOURCES = {
+    "FCI-G Baseline": "https://www.federalreserve.gov/econres/notes/feds-notes/fci_g_public_monthly_3yr.csv",
+    "FCI-G 1Y Lookback": "https://www.federalreserve.gov/econres/notes/feds-notes/fci_g_public_monthly_1yr.csv",
+}
 
 
-def clean_cell(x: object) -> str:
-    if pd.isna(x):
-        return ""
-    text = html.unescape(str(x))
-    text = text.replace("\xa0", " ")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+# ============================================================
+# YAHOO LIQUIDITY COMPONENTS
+# ============================================================
+
+COMPONENTS = [
+    {
+        "name": "HY Credit / IG Credit",
+        "category": "Credit",
+        "numerator": "HYG",
+        "denominator": "LQD",
+        "orientation": 1,
+        "weight": 1.25,
+        "description": "High yield outperforming investment grade means credit risk appetite is improving.",
+    },
+    {
+        "name": "Junk Credit / IG Credit",
+        "category": "Credit",
+        "numerator": "JNK",
+        "denominator": "LQD",
+        "orientation": 1,
+        "weight": 1.00,
+        "description": "Second credit confirmation line; useful when HYG is distorted by ETF flows.",
+    },
+    {
+        "name": "Small Caps / S&P 500",
+        "category": "Equity Breadth",
+        "numerator": "IWM",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 1.00,
+        "description": "Small-cap participation is a liquidity and domestic cyclicality check.",
+    },
+    {
+        "name": "Equal-Weight Nasdaq / QQQ",
+        "category": "Equity Breadth",
+        "numerator": "QQQE",
+        "denominator": "QQQ",
+        "orientation": 1,
+        "weight": 1.00,
+        "description": "Nasdaq breadth beneath mega-cap leadership.",
+    },
+    {
+        "name": "Disruptive Growth / QQQ",
+        "category": "Speculation",
+        "numerator": "ARKK",
+        "denominator": "QQQ",
+        "orientation": 1,
+        "weight": 0.90,
+        "description": "Speculative duration appetite relative to large-cap growth.",
+    },
+    {
+        "name": "Biotech / QQQ",
+        "category": "Speculation",
+        "numerator": "XBI",
+        "denominator": "QQQ",
+        "orientation": 1,
+        "weight": 1.00,
+        "description": "One of the cleaner animal-spirits ratios.",
+    },
+    {
+        "name": "Regional Banks / S&P 500",
+        "category": "Funding",
+        "numerator": "KRE",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 1.00,
+        "description": "Bank equity confirmation for funding and credit creation.",
+    },
+    {
+        "name": "Financials / S&P 500",
+        "category": "Funding",
+        "numerator": "XLF",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 0.75,
+        "description": "Broad financials confirmation.",
+    },
+    {
+        "name": "Semis / Nasdaq",
+        "category": "Leadership",
+        "numerator": "SMH",
+        "denominator": "QQQ",
+        "orientation": 1,
+        "weight": 0.85,
+        "description": "AI and capex leadership relative to Nasdaq beta.",
+    },
+    {
+        "name": "NVDA / Semis",
+        "category": "Leadership",
+        "numerator": "NVDA",
+        "denominator": "SMH",
+        "orientation": 1,
+        "weight": 0.45,
+        "description": "Leadership concentration and AI reflexivity check. Lower weight by design.",
+    },
+    {
+        "name": "Bitcoin ETF / S&P 500",
+        "category": "Crypto",
+        "numerator": "IBIT",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 0.80,
+        "description": "Crypto ETF beta relative to broad equities.",
+    },
+    {
+        "name": "Bitcoin / S&P 500",
+        "category": "Crypto",
+        "numerator": "BTC-USD",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 0.80,
+        "description": "Native crypto liquidity impulse relative to equities.",
+    },
+    {
+        "name": "Emerging Markets / S&P 500",
+        "category": "Global Dollar Liquidity",
+        "numerator": "EEM",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 0.90,
+        "description": "Global dollar-liquidity sensitivity.",
+    },
+    {
+        "name": "Long Duration / Cash Proxy",
+        "category": "Rates",
+        "numerator": "TLT",
+        "denominator": "SHY",
+        "orientation": 1,
+        "weight": 0.80,
+        "description": "Long-duration bid versus short-duration cash proxy.",
+    },
+    {
+        "name": "Intermediate Duration / Cash Proxy",
+        "category": "Rates",
+        "numerator": "IEF",
+        "denominator": "SHY",
+        "orientation": 1,
+        "weight": 0.65,
+        "description": "Less volatile duration confirmation.",
+    },
+    {
+        "name": "Dollar Pressure",
+        "category": "Dollar",
+        "ticker": "UUP",
+        "orientation": -1,
+        "weight": 1.10,
+        "description": "Lower dollar pressure is positive for global liquidity.",
+    },
+    {
+        "name": "Volatility Pressure",
+        "category": "Volatility",
+        "ticker": "^VIX",
+        "orientation": -1,
+        "weight": 1.25,
+        "description": "Lower volatility mechanically eases risk budgets.",
+    },
+]
+
+CORE_BENCHMARKS = ["SPY", "QQQ"]
 
 
-def parse_number(x: object) -> float:
-    if x is None or pd.isna(x):
-        return np.nan
-
-    s = html.unescape(str(x))
-    s = s.replace("\xa0", " ")
-    s = s.replace(",", "")
-    s = s.replace("$", "")
-    s = s.replace("−", "-")
-    s = s.replace("–", "-")
-    s = s.replace("—", "-")
-    s = re.sub(r"\s+", "", s)
-
-    if s in {"", ".", "...", "nan", "None", "N/A"}:
-        return np.nan
-
-    is_negative = s.startswith("(") and s.endswith(")")
-    s = s.strip("()")
-
-    try:
-        val = float(s)
-        return -val if is_negative else val
-    except Exception:
-        return np.nan
-
-
-def extract_numeric_values(row: pd.Series, min_abs: float = 1000.0) -> List[float]:
-    vals: List[float] = []
-
-    for item in row.tolist():
-        val = parse_number(item)
-        if pd.notna(val) and abs(val) >= min_abs:
-            vals.append(float(val))
-
-    return vals
-
-
-def row_text(row: pd.Series) -> str:
-    return norm_text(" ".join(clean_cell(x) for x in row.tolist() if clean_cell(x)))
-
-
-def row_cells(row: pd.Series) -> List[str]:
-    return [norm_text(x) for x in row.tolist() if clean_cell(x)]
-
-
-def value_from_row(row: pd.Series, min_abs: float = 1000.0) -> float:
-    nums = extract_numeric_values(row, min_abs=min_abs)
-
-    if not nums:
-        return np.nan
-
-    positive_nums = [x for x in nums if x > 0]
-
-    if positive_nums:
-        return max(positive_nums)
-
-    return nums[0]
-
-
-def fmt_b(x: float) -> str:
-    if pd.isna(x):
-        return "N/A"
-    return f"${x:,.0f}B"
-
-
-def fmt_delta_b(x: float) -> str:
-    if pd.isna(x):
-        return "N/A"
-    sign = "+" if x > 0 else ""
-    return f"{sign}${x:,.0f}B"
-
-
-def fmt_pct(x: float) -> str:
-    if pd.isna(x):
-        return "N/A"
-    sign = "+" if x > 0 else ""
-    return f"{sign}{x:.2f}%"
-
+# ============================================================
+# FORMATTING HELPERS
+# ============================================================
 
 def metric_card(label: str, value: str, footnote: str = "") -> None:
     st.markdown(
@@ -300,462 +341,500 @@ def metric_card(label: str, value: str, footnote: str = "") -> None:
     )
 
 
-@st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
-def fetch_text_cached(url: str) -> str:
+def fmt_num(x: float, digits: int = 2) -> str:
+    if x is None or pd.isna(x):
+        return "N/A"
+    return f"{x:.{digits}f}"
+
+
+def fmt_pct(x: float, digits: int = 1) -> str:
+    if x is None or pd.isna(x):
+        return "N/A"
+    sign = "+" if x > 0 else ""
+    return f"{sign}{x:.{digits}f}%"
+
+
+def fmt_delta(x: float, digits: int = 2) -> str:
+    if x is None or pd.isna(x):
+        return "N/A"
+    sign = "+" if x > 0 else ""
+    return f"{sign}{x:.{digits}f}"
+
+
+def classify_regime(score: float) -> Tuple[str, str]:
+    if pd.isna(score):
+        return "Unavailable", "Insufficient component coverage"
+
+    if score >= 0.75:
+        return "Liquidity Expansion", "Risk appetite, breadth, credit, dollar, and vol are broadly confirming easier traded liquidity."
+
+    if score >= 0.25:
+        return "Improving", "Liquidity impulse is improving, but confirmation is not broad enough to call full expansion."
+
+    if score > -0.25:
+        return "Neutral / Mixed", "Signals are cross-current. The tape is not giving a clean liquidity message."
+
+    if score > -0.75:
+        return "Deteriorating", "The liquidity impulse is weakening. Watch credit, dollar, volatility, and breadth confirmation."
+
+    return "Liquidity Contraction", "Risk budgets are tightening across the market-implied liquidity stack."
+
+
+def regime_color(score: float) -> str:
+    if pd.isna(score):
+        return "#6b7280"
+    if score >= 0.75:
+        return "#065f46"
+    if score >= 0.25:
+        return "#047857"
+    if score > -0.25:
+        return "#6b7280"
+    if score > -0.75:
+        return "#b45309"
+    return "#991b1b"
+
+
+def signed_signal_word(value: float) -> str:
+    if pd.isna(value):
+        return "Unavailable"
+    if value > 0:
+        return "Easing"
+    if value < 0:
+        return "Tightening"
+    return "Flat"
+
+
+def safe_pct_change(series: pd.Series, periods: int) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    return s.pct_change(periods=periods, fill_method=None) * 100.0
+
+
+def latest_valid(series: pd.Series) -> float:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty:
+        return np.nan
+    return float(s.iloc[-1])
+
+
+def obs_change(series: pd.Series, periods: int) -> float:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) <= periods:
+        return np.nan
+    return float(s.iloc[-1] - s.iloc[-1 - periods])
+
+
+def obs_pct_change(series: pd.Series, periods: int) -> float:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) <= periods:
+        return np.nan
+    base = s.iloc[-1 - periods]
+    if pd.isna(base) or base == 0:
+        return np.nan
+    return float((s.iloc[-1] / base - 1.0) * 100.0)
+
+
+def rebase(series: pd.Series, base_value: float = 100.0) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    valid = s.dropna()
+
+    if valid.empty:
+        return pd.Series(index=s.index, dtype="float64")
+
+    base = valid.iloc[0]
+
+    if pd.isna(base) or base == 0:
+        return pd.Series(index=s.index, dtype="float64")
+
+    return s / base * base_value
+
+
+def zscore_trailing(series: pd.Series, window: int, min_periods: int) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    mu = s.rolling(window=window, min_periods=min_periods).mean()
+    sigma = s.rolling(window=window, min_periods=min_periods).std()
+
+    z = (s - mu) / sigma
+    z = z.replace([np.inf, -np.inf], np.nan)
+    return z
+
+
+def score_to_bucket(score: float) -> str:
+    if pd.isna(score):
+        return "Unavailable"
+    if score >= 0.75:
+        return "Strong easing"
+    if score >= 0.25:
+        return "Easing"
+    if score > -0.25:
+        return "Mixed"
+    if score > -0.75:
+        return "Tightening"
+    return "Strong tightening"
+
+
+def color_score(val: object) -> str:
+    try:
+        x = float(val)
+    except Exception:
+        return ""
+
+    if pd.isna(x):
+        return ""
+
+    if x >= 0.75:
+        return "background-color: #dcfce7; color: #14532d;"
+    if x >= 0.25:
+        return "background-color: #ecfdf5; color: #065f46;"
+    if x > -0.25:
+        return "background-color: #f9fafb; color: #374151;"
+    if x > -0.75:
+        return "background-color: #fff7ed; color: #9a3412;"
+    return "background-color: #fee2e2; color: #7f1d1d;"
+
+
+# ============================================================
+# DATA LOADERS
+# ============================================================
+
+def required_tickers(components: List[Dict[str, object]], benchmarks: List[str]) -> List[str]:
+    tickers = set(benchmarks)
+
+    for component in components:
+        if "ticker" in component:
+            tickers.add(str(component["ticker"]))
+        else:
+            tickers.add(str(component["numerator"]))
+            tickers.add(str(component["denominator"]))
+
+    return sorted(tickers)
+
+
+def extract_close_prices(raw: pd.DataFrame) -> pd.DataFrame:
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+
+    df = raw.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        level0 = list(df.columns.get_level_values(0))
+        level1 = list(df.columns.get_level_values(1))
+
+        if "Close" in level0:
+            close = df["Close"].copy()
+        elif "Adj Close" in level0:
+            close = df["Adj Close"].copy()
+        elif "Close" in level1:
+            close = df.xs("Close", axis=1, level=1).copy()
+        elif "Adj Close" in level1:
+            close = df.xs("Adj Close", axis=1, level=1).copy()
+        else:
+            return pd.DataFrame()
+    else:
+        if "Close" in df.columns:
+            close = df[["Close"]].copy()
+        elif "Adj Close" in df.columns:
+            close = df[["Adj Close"]].copy()
+        else:
+            numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            close = df[numeric_cols].copy()
+
+    if isinstance(close, pd.Series):
+        close = close.to_frame()
+
+    close.columns = [str(c).strip() for c in close.columns]
+    close = close.sort_index()
+    close.index = pd.to_datetime(close.index).tz_localize(None)
+    close = close.loc[:, ~close.columns.duplicated(keep="last")]
+
+    for col in close.columns:
+        close[col] = pd.to_numeric(close[col], errors="coerce")
+
+    close = close.dropna(how="all")
+    return close
+
+
+@st.cache_data(ttl=60 * 60 * 4, show_spinner=False)
+def load_yahoo_prices(tickers: Tuple[str, ...], period: str) -> pd.DataFrame:
+    raw = yf.download(
+        tickers=list(tickers),
+        period=period,
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        group_by="column",
+        threads=True,
+    )
+
+    close = extract_close_prices(raw)
+
+    if close.empty:
+        return pd.DataFrame()
+
+    available = [c for c in close.columns if close[c].notna().sum() > 20]
+    close = close[available].copy()
+
+    return close
+
+
+def choose_fcig_column(df: pd.DataFrame) -> Optional[str]:
+    numeric_cols = []
+
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if df[col].notna().sum() >= 12:
+            numeric_cols.append(col)
+
+    if not numeric_cols:
+        return None
+
+    priority_terms = ["fci-g", "fcig", "fci_g", "fci g", "fci"]
+
+    for term in priority_terms:
+        for col in numeric_cols:
+            lower = str(col).lower()
+            if term in lower and "contribution" not in lower and "cont" not in lower:
+                return col
+
+    return numeric_cols[0]
+
+
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
+def load_fed_fcig() -> Tuple[pd.DataFrame, Dict[str, str]]:
+    frames = []
+    errors: Dict[str, str] = {}
+
     headers = {
-        "User-Agent": "ADFM-H41-Liquidity-Tracker/4.0",
-        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "User-Agent": "ADFM-Liquidity-Conditions-Monitor/1.0",
+        "Accept": "text/csv,*/*;q=0.8",
     }
 
-    last_error: Optional[Exception] = None
-
-    for attempt in range(1, MAX_RETRIES + 1):
+    for label, url in FED_FCIG_SOURCES.items():
         try:
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = requests.get(url, headers=headers, timeout=(4, 20))
             response.raise_for_status()
 
-            text = response.text
+            temp = pd.read_csv(BytesIO(response.content))
+            temp.columns = [str(c).strip() for c in temp.columns]
 
-            if not text or len(text.strip()) < 500:
-                raise ValueError("Empty or truncated H.4.1 response")
+            if temp.empty:
+                errors[label] = "Fed CSV returned an empty file."
+                continue
 
-            if "Factors Affecting Reserve Balances" not in text and "H.4.1" not in text:
-                raise ValueError("Unexpected H.4.1 page structure")
+            date_col = None
 
-            return text
+            for col in temp.columns:
+                lower = str(col).lower()
+                if "date" in lower or "month" in lower or "time" in lower:
+                    date_col = col
+                    break
+
+            if date_col is None:
+                date_col = temp.columns[0]
+
+            temp[date_col] = pd.to_datetime(temp[date_col], errors="coerce")
+            temp = temp.dropna(subset=[date_col]).set_index(date_col).sort_index()
+
+            value_col = choose_fcig_column(temp)
+
+            if value_col is None:
+                errors[label] = "Could not identify a numeric FCI-G value column."
+                continue
+
+            out = temp[[value_col]].rename(columns={value_col: label})
+            frames.append(out)
 
         except Exception as exc:
-            last_error = exc
-            if attempt < MAX_RETRIES:
-                time.sleep(BACKOFF_SECONDS * attempt)
+            errors[label] = str(exc)
 
-    raise RuntimeError(f"Failed to fetch {url}: {last_error}")
+    if not frames:
+        return pd.DataFrame(), errors
 
+    fcig = pd.concat(frames, axis=1).sort_index()
+    fcig = fcig[~fcig.index.duplicated(keep="last")]
 
-def parse_release_date(page_html: str, fallback: Optional[pd.Timestamp] = None) -> pd.Timestamp:
-    patterns = [
-        r"Release Date:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})",
-        r"Last Update:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})",
-    ]
+    for col in fcig.columns:
+        fcig[col] = pd.to_numeric(fcig[col], errors="coerce")
 
-    for pattern in patterns:
-        match = re.search(pattern, page_html, flags=re.IGNORECASE)
+    fcig = fcig.dropna(how="all")
 
-        if match:
-            dt = pd.to_datetime(match.group(1), errors="coerce")
-
-            if pd.notna(dt):
-                return pd.Timestamp(dt).normalize()
-
-    if fallback is not None and pd.notna(fallback):
-        return pd.Timestamp(fallback).normalize()
-
-    return pd.Timestamp.today().normalize()
+    return fcig, errors
 
 
-def read_h41_tables(page_html: str) -> List[pd.DataFrame]:
-    try:
-        tables = pd.read_html(StringIO(page_html), displayed_only=False)
-    except Exception:
-        return []
+# ============================================================
+# SIGNAL ENGINE
+# ============================================================
 
-    cleaned: List[pd.DataFrame] = []
+def build_component_series(prices: pd.DataFrame, components: List[Dict[str, object]]) -> Tuple[pd.DataFrame, List[Dict[str, object]]]:
+    series_map: Dict[str, pd.Series] = {}
+    available_specs: List[Dict[str, object]] = []
 
-    for table in tables:
-        if table.empty:
+    for spec in components:
+        name = str(spec["name"])
+
+        if "ticker" in spec:
+            ticker = str(spec["ticker"])
+
+            if ticker not in prices.columns:
+                continue
+
+            s = pd.to_numeric(prices[ticker], errors="coerce").copy()
+            display_ticker = ticker
+        else:
+            numerator = str(spec["numerator"])
+            denominator = str(spec["denominator"])
+
+            if numerator not in prices.columns or denominator not in prices.columns:
+                continue
+
+            den = pd.to_numeric(prices[denominator], errors="coerce")
+            num = pd.to_numeric(prices[numerator], errors="coerce")
+
+            s = num / den.replace(0, np.nan)
+            display_ticker = f"{numerator}/{denominator}"
+
+        if s.dropna().shape[0] < 60:
             continue
 
-        table = table.copy()
+        series_map[name] = s
+        new_spec = dict(spec)
+        new_spec["display_ticker"] = display_ticker
+        available_specs.append(new_spec)
 
-        if isinstance(table.columns, pd.MultiIndex):
-            table.columns = [
-                " ".join(str(x) for x in col if str(x) != "nan").strip()
-                for col in table.columns
-            ]
-        else:
-            table.columns = [str(c).strip() for c in table.columns]
+    if not series_map:
+        return pd.DataFrame(), []
 
-        table = table.dropna(how="all")
-        table = table.loc[:, ~table.columns.duplicated()]
+    component_df = pd.DataFrame(series_map).sort_index()
+    component_df = component_df.dropna(how="all")
 
-        if not table.empty:
-            cleaned.append(table)
-
-    return cleaned
+    return component_df, available_specs
 
 
-def find_value_by_row_text(
-    tables: List[pd.DataFrame],
-    required_phrases: List[str],
-    excluded_phrases: Optional[List[str]] = None,
-    min_abs: float = 1000.0,
-) -> float:
-    required = [norm_text(x) for x in required_phrases]
-    excluded = [norm_text(x) for x in (excluded_phrases or [])]
+def build_scores(
+    component_df: pd.DataFrame,
+    available_specs: List[Dict[str, object]],
+    z_window: int,
+    min_z_periods: int,
+    smoothing_window: int,
+) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+    score_df = pd.DataFrame(index=component_df.index)
+    weighted_scores = pd.DataFrame(index=component_df.index)
+    weights = {}
 
-    candidates: List[float] = []
+    for spec in available_specs:
+        name = str(spec["name"])
+        orientation = float(spec.get("orientation", 1.0))
+        weight = float(spec.get("weight", 1.0))
 
-    for table in tables:
-        for _, row in table.iterrows():
-            txt = row_text(row)
+        z = zscore_trailing(component_df[name], window=z_window, min_periods=min_z_periods)
+        score = (z * orientation).clip(lower=-3.0, upper=3.0)
 
-            if not txt:
-                continue
+        score_df[name] = score
+        weighted_scores[name] = score * weight
+        weights[name] = weight
 
-            if all(p in txt for p in required) and not any(p in txt for p in excluded):
-                val = value_from_row(row, min_abs=min_abs)
+    weights_series = pd.Series(weights)
 
-                if pd.notna(val):
-                    candidates.append(float(val))
+    def weighted_mean(row: pd.Series) -> float:
+        valid = row.dropna()
 
-    if not candidates:
-        return np.nan
+        if valid.empty:
+            return np.nan
 
-    return max(candidates)
+        active_weights = weights_series.loc[valid.index]
+        denom = active_weights.sum()
 
+        if denom == 0:
+            return np.nan
 
-def find_exact_label_value(
-    tables: List[pd.DataFrame],
-    labels: List[str],
-    min_abs: float = 1000.0,
-) -> float:
-    labels_norm = [norm_text(x) for x in labels]
-    candidates: List[float] = []
+        return float((valid * active_weights).sum() / denom)
 
-    for table in tables:
-        for _, row in table.iterrows():
-            cells = row_cells(row)
+    min_components = max(4, int(math.ceil(len(available_specs) * 0.45)))
+    valid_count = score_df.notna().sum(axis=1)
 
-            if any(cell in labels_norm for cell in cells):
-                val = value_from_row(row, min_abs=min_abs)
+    composite = score_df.apply(weighted_mean, axis=1)
+    composite = composite.where(valid_count >= min_components)
 
-                if pd.notna(val):
-                    candidates.append(float(val))
+    if smoothing_window > 1:
+        composite = composite.rolling(smoothing_window, min_periods=1).mean()
 
-    if not candidates:
-        return np.nan
-
-    return max(candidates)
+    return score_df, composite, weighted_scores
 
 
-def find_child_after_parent(
-    tables: List[pd.DataFrame],
-    parent_phrase: str,
-    child_label: str,
-    max_rows_after_parent: int = 10,
-    min_abs: float = 1000.0,
-) -> float:
-    parent_norm = norm_text(parent_phrase)
-    child_norm = norm_text(child_label)
+def build_scorecard(
+    component_df: pd.DataFrame,
+    score_df: pd.DataFrame,
+    available_specs: List[Dict[str, object]],
+) -> pd.DataFrame:
+    rows = []
 
-    candidates: List[float] = []
+    for spec in available_specs:
+        name = str(spec["name"])
+        orientation = float(spec.get("orientation", 1.0))
+        raw = component_df[name]
+        adj_21d = safe_pct_change(raw, 21) * orientation
+        adj_63d = safe_pct_change(raw, 63) * orientation
 
-    for table in tables:
-        seen_parent = False
-        rows_after = 0
+        latest_score = latest_valid(score_df[name])
+        latest_level = latest_valid(raw)
+        latest_21d = latest_valid(adj_21d)
+        latest_63d = latest_valid(adj_63d)
 
-        for _, row in table.iterrows():
-            txt = row_text(row)
-            cells = row_cells(row)
-
-            if parent_norm in txt:
-                seen_parent = True
-                rows_after = 0
-                continue
-
-            if seen_parent:
-                rows_after += 1
-
-                if child_norm in cells or txt.startswith(child_norm + " "):
-                    val = value_from_row(row, min_abs=min_abs)
-
-                    if pd.notna(val):
-                        candidates.append(float(val))
-                        break
-
-                if rows_after > max_rows_after_parent:
-                    seen_parent = False
-                    rows_after = 0
-
-    if not candidates:
-        return np.nan
-
-    return max(candidates)
-
-
-def parse_h41_page(page_html: str, fallback_date: Optional[pd.Timestamp] = None) -> pd.Series:
-    release_date = parse_release_date(page_html, fallback=fallback_date)
-    tables = read_h41_tables(page_html)
-
-    if not tables:
-        return pd.Series(dtype="float64", name=release_date)
-
-    data: Dict[str, float] = {}
-
-    fed_assets_m = find_exact_label_value(
-        tables,
-        labels=[
-            "Total assets",
-            "Total assets (less eliminations from consolidation)",
-        ],
-        min_abs=1_000_000.0,
-    )
-
-    if pd.isna(fed_assets_m):
-        fed_assets_m = find_value_by_row_text(
-            tables,
-            required_phrases=["total assets"],
-            excluded_phrases=["memoranda"],
-            min_abs=1_000_000.0,
+        rows.append(
+            {
+                "Component": name,
+                "Category": spec.get("category", ""),
+                "Ticker / Ratio": spec.get("display_ticker", ""),
+                "Latest": latest_level,
+                "21D Liquidity Move": latest_21d,
+                "63D Liquidity Move": latest_63d,
+                "Score": latest_score,
+                "Signal": score_to_bucket(latest_score),
+                "Weight": float(spec.get("weight", 1.0)),
+                "Description": spec.get("description", ""),
+            }
         )
 
-    tga_m = find_exact_label_value(
-        tables,
-        labels=["U.S. Treasury, General Account"],
-        min_abs=10_000.0,
-    )
+    out = pd.DataFrame(rows)
 
-    rrp_total_m = find_exact_label_value(
-        tables,
-        labels=["Reverse repurchase agreements"],
-        min_abs=1_000.0,
-    )
+    if out.empty:
+        return out
 
-    rrp_others_m = find_child_after_parent(
-        tables,
-        parent_phrase="Reverse repurchase agreements",
-        child_label="Others",
-        max_rows_after_parent=8,
-        min_abs=1_000.0,
-    )
-
-    reserves_m = find_exact_label_value(
-        tables,
-        labels=["Reserve balances with Federal Reserve Banks"],
-        min_abs=100_000.0,
-    )
-
-    securities_m = find_exact_label_value(
-        tables,
-        labels=["Securities held outright"],
-        min_abs=1_000_000.0,
-    )
-
-    ust_m = find_value_by_row_text(
-        tables,
-        required_phrases=["u.s. treasury securities"],
-        excluded_phrases=["inflation compensation", "tips", "strips", "securities lent"],
-        min_abs=100_000.0,
-    )
-
-    mbs_m = find_value_by_row_text(
-        tables,
-        required_phrases=["mortgage-backed securities"],
-        excluded_phrases=["commitments", "memorandum", "securities lent"],
-        min_abs=100_000.0,
-    )
-
-    if pd.notna(fed_assets_m):
-        data["Fed Assets"] = fed_assets_m / 1000.0
-
-    if pd.notna(tga_m):
-        data["TGA"] = tga_m / 1000.0
-
-    if pd.notna(rrp_others_m):
-        data["RRP Others"] = rrp_others_m / 1000.0
-
-    if pd.notna(rrp_total_m):
-        data["RRP Total"] = rrp_total_m / 1000.0
-
-    if pd.notna(reserves_m):
-        data["Reserve Balances"] = reserves_m / 1000.0
-
-    if pd.notna(securities_m):
-        data["Securities Held Outright"] = securities_m / 1000.0
-
-    if pd.notna(ust_m):
-        data["UST Holdings"] = ust_m / 1000.0
-
-    if pd.notna(mbs_m):
-        data["MBS Holdings"] = mbs_m / 1000.0
-
-    if "Fed Assets" in data and "TGA" in data:
-        if "RRP Others" in data:
-            data["Net Liquidity"] = data["Fed Assets"] - data["TGA"] - data["RRP Others"]
-        elif "RRP Total" in data:
-            data["Net Liquidity"] = data["Fed Assets"] - data["TGA"] - data["RRP Total"]
-
-    return pd.Series(data, name=release_date)
+    out = out.sort_values("Score", ascending=False, na_position="last").reset_index(drop=True)
+    return out
 
 
-def previous_thursday(date_value: pd.Timestamp) -> pd.Timestamp:
-    d = pd.Timestamp(date_value).normalize()
-
-    while d.weekday() != 3:
-        d -= pd.Timedelta(days=1)
-
-    return d
-
-
-def generate_release_dates(latest_release_date: pd.Timestamp, weeks: int) -> List[pd.Timestamp]:
-    latest = previous_thursday(latest_release_date)
-    return [latest - pd.Timedelta(weeks=i) for i in range(weeks)]
-
-
-def archive_url_for_date(date_value: pd.Timestamp) -> str:
-    return H41_ARCHIVE_URL_TEMPLATE.format(yyyymmdd=pd.Timestamp(date_value).strftime("%Y%m%d"))
-
-
-def load_cache() -> pd.DataFrame:
-    if not os.path.exists(CACHE_PATH):
+def build_category_scores(score_df: pd.DataFrame, available_specs: List[Dict[str, object]]) -> pd.DataFrame:
+    if score_df.empty:
         return pd.DataFrame()
 
-    try:
-        df = pd.read_csv(CACHE_PATH, parse_dates=["Date"])
-        df = df.set_index("Date").sort_index()
-        df = df[~df.index.duplicated(keep="last")]
+    name_to_category = {str(spec["name"]): str(spec.get("category", "Other")) for spec in available_specs}
+    rows = []
 
-        for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    for category in sorted(set(name_to_category.values())):
+        names = [name for name, cat in name_to_category.items() if cat == category and name in score_df.columns]
 
-        return df
-
-    except Exception:
-        return pd.DataFrame()
-
-
-def save_cache(df: pd.DataFrame) -> None:
-    if df.empty:
-        return
-
-    os.makedirs(CACHE_DIR, exist_ok=True)
-
-    out = df.copy()
-    out.index.name = "Date"
-    out = out.sort_index()
-    out = out[~out.index.duplicated(keep="last")]
-
-    for col in out.columns:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-
-    out.to_csv(CACHE_PATH)
-
-
-def merge_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
-    valid = [x for x in frames if x is not None and not x.empty]
-
-    if not valid:
-        return pd.DataFrame()
-
-    merged = pd.concat(valid, axis=0).sort_index()
-    merged = merged[~merged.index.duplicated(keep="last")]
-
-    columns = [c for c in DISPLAY_COLUMNS if c in merged.columns]
-    remaining = [c for c in merged.columns if c not in columns]
-    merged = merged[columns + remaining]
-
-    return merged
-
-
-def load_current_h41() -> Tuple[pd.DataFrame, Dict[str, str]]:
-    errors: Dict[str, str] = {}
-
-    try:
-        current_html = fetch_text_cached(H41_CURRENT_URL)
-        current_release_date = parse_release_date(current_html)
-        current_series = parse_h41_page(current_html, fallback_date=current_release_date)
-
-        if current_series.empty or pd.isna(current_series.get("Fed Assets", np.nan)):
-            errors["current"] = "Current H.4.1 page parsed, but Fed Assets was not found."
-            return pd.DataFrame(), errors
-
-        current_df = current_series.to_frame().T
-        current_df.index = pd.to_datetime(current_df.index)
-        current_df.index.name = "Date"
-
-        return current_df, errors
-
-    except Exception as exc:
-        errors["current"] = str(exc)
-        return pd.DataFrame(), errors
-
-
-def run_archive_backfill(
-    requested_weeks: int,
-    force_backfill: bool,
-    current_df: pd.DataFrame,
-) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    errors: Dict[str, str] = {}
-
-    cached = load_cache()
-
-    if not current_df.empty:
-        current_release_date = pd.Timestamp(current_df.index.max()).normalize()
-    elif not cached.empty:
-        current_release_date = pd.Timestamp(cached.index.max()).normalize()
-    else:
-        current_release_date = pd.Timestamp.today().normalize()
-
-    release_dates = generate_release_dates(current_release_date, requested_weeks)
-
-    rows: List[pd.Series] = []
-
-    cached_index = set(pd.to_datetime(cached.index).normalize()) if not cached.empty else set()
-    current_index = set(pd.to_datetime(current_df.index).normalize()) if not current_df.empty else set()
-
-    missing_dates = []
-
-    for dt in release_dates:
-        normalized_dt = pd.Timestamp(dt).normalize()
-
-        if not force_backfill and normalized_dt in cached_index:
+        if not names:
             continue
 
-        if normalized_dt in current_index:
-            continue
-
-        missing_dates.append(normalized_dt)
-
-    if not missing_dates:
-        return pd.DataFrame(), errors
-
-    progress = st.progress(0)
-    status = st.empty()
-
-    for i, dt in enumerate(missing_dates, start=1):
-        yyyymmdd = dt.strftime("%Y%m%d")
-        url = archive_url_for_date(dt)
-
-        status.caption(f"Backfilling H.4.1 release {yyyymmdd}")
-
-        try:
-            page_html = fetch_text_cached(url)
-            s = parse_h41_page(page_html, fallback_date=dt)
-
-            if not s.empty and pd.notna(s.get("Fed Assets", np.nan)):
-                rows.append(s)
-            else:
-                errors[yyyymmdd] = "Parsed page but could not find Fed Assets."
-
-        except Exception as exc:
-            errors[yyyymmdd] = str(exc)
-
-        progress.progress(i / len(missing_dates))
-
-    progress.empty()
-    status.empty()
+        series = score_df[names].mean(axis=1)
+        rows.append(
+            {
+                "Category": category,
+                "Latest Score": latest_valid(series),
+                "1W Change": obs_change(series, 5),
+                "1M Change": obs_change(series, 21),
+                "3M Change": obs_change(series, 63),
+            }
+        )
 
     if not rows:
-        return pd.DataFrame(), errors
+        return pd.DataFrame()
 
-    archive_df = pd.DataFrame(rows)
-    archive_df.index = pd.to_datetime(archive_df.index)
-    archive_df.index.name = "Date"
-
-    return archive_df, errors
+    df = pd.DataFrame(rows).sort_values("Latest Score", ascending=False).reset_index(drop=True)
+    return df
 
 
-def filter_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
+def filter_by_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
     if df.empty:
         return df
 
@@ -782,95 +861,37 @@ def filter_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
     return df[df.index >= start].copy()
 
 
-def obs_change(series: pd.Series, periods: int) -> float:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-
-    if len(s) <= periods:
-        return np.nan
-
-    return float(s.iloc[-1] - s.iloc[-1 - periods])
-
-
-def obs_pct_change(series: pd.Series, periods: int) -> float:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-
-    if len(s) <= periods:
-        return np.nan
-
-    base = s.iloc[-1 - periods]
-
-    if pd.isna(base) or base == 0:
-        return np.nan
-
-    return float((s.iloc[-1] / base - 1.0) * 100.0)
-
-
-def annualized_pace(series: pd.Series, periods: int = 13) -> float:
-    move = obs_change(series, periods)
-
-    if pd.isna(move):
-        return np.nan
-
-    return float(move / periods * 52.0)
-
-
-def smooth_series(series: pd.Series, window: int) -> pd.Series:
-    s = pd.to_numeric(series, errors="coerce")
-
-    if window <= 1:
-        return s
-
-    return s.rolling(window, min_periods=1).mean()
-
-
-def rebase(series: pd.Series) -> pd.Series:
-    s = pd.to_numeric(series, errors="coerce")
-    valid = s.dropna()
-
-    if valid.empty:
-        return pd.Series(index=s.index, dtype="float64")
-
-    base = valid.iloc[0]
-
-    if pd.isna(base) or base == 0:
-        return pd.Series(index=s.index, dtype="float64")
-
-    return s / base * 100.0
-
-
-# ------------------------------------------------------------
-# Header
-# ------------------------------------------------------------
+# ============================================================
+# HEADER
+# ============================================================
 
 st.markdown(
     f"""
     <div class="adfm-header-wrap">
         <div class="adfm-title">{TITLE}</div>
         <div class="adfm-subtitle">
-            Fed H.4.1 balance-sheet level, liquidity impulse, TGA, reverse repos, reserves, and rate of change. FRED is not used.
+            Daily market-implied liquidity impulse from Yahoo Finance ratios, with the Federal Reserve FCI-G as the official financial-conditions overlay.
+            Positive composite readings indicate easier traded liquidity; negative readings indicate tightening pressure.
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-# ------------------------------------------------------------
-# Sidebar
-# ------------------------------------------------------------
+
+# ============================================================
+# SIDEBAR
+# ============================================================
 
 with st.sidebar:
-    st.markdown("### About This Tool")
+    st.markdown("### Framework")
     st.markdown(
         """
-This page avoids FRED entirely.
+This page is not a Fed balance-sheet scraper.
 
-It pulls the current Fed H.4.1 release, merges it with a local CSV cache, and only backfills historical releases when you explicitly ask it to.
+It uses Yahoo Finance to track whether liquidity is actually reaching traded markets through credit, breadth, high beta, crypto, dollar pressure, volatility, duration, and banks.
 
-Core proxy:
-
-**Net Liquidity = Fed Assets - TGA - RRP Others**
-
-If RRP Others is unavailable, the app falls back to total reverse repos.
+The Fed FCI-G overlay is pulled directly from the Federal Reserve's public monthly CSVs.
         """
     )
 
@@ -878,373 +899,211 @@ If RRP Others is unavailable, the app falls back to total reverse repos.
     st.markdown("### Controls")
 
     lookback = st.selectbox(
-        "Lookback",
+        "Display lookback",
         ["6m", "1y", "2y", "3y", "5y", "10y", "max"],
-        index=["6m", "1y", "2y", "3y", "5y", "10y", "max"].index(DEFAULT_LOOKBACK),
+        index=2,
     )
 
-    smooth_window = st.number_input(
-        "Smoothing window, weekly observations",
+    yahoo_period = st.selectbox(
+        "Yahoo download period",
+        ["1y", "2y", "3y", "5y", "10y", "max"],
+        index=3,
+        help="Use at least 3y if you want stable z-scores.",
+    )
+
+    benchmark = st.selectbox(
+        "Overlay benchmark",
+        ["SPY", "QQQ"],
+        index=0,
+    )
+
+    z_window = st.number_input(
+        "Z-score lookback, trading days",
+        min_value=126,
+        max_value=1260,
+        value=504,
+        step=21,
+    )
+
+    min_z_periods = st.number_input(
+        "Minimum z-score observations",
+        min_value=63,
+        max_value=504,
+        value=126,
+        step=21,
+    )
+
+    smoothing_window = st.number_input(
+        "Composite smoothing, trading days",
         min_value=1,
-        max_value=12,
-        value=DEFAULT_SMOOTH,
+        max_value=21,
+        value=5,
         step=1,
     )
 
-    show_components = st.checkbox("Show components chart", value=True)
-    show_raw_table = st.checkbox("Show cleaned data table", value=True)
+    st.divider()
+    st.markdown("### Display")
+
+    show_fed_fcig = st.checkbox("Show Fed FCI-G overlay", value=True)
+    show_category_scores = st.checkbox("Show category pressure map", value=True)
+    show_raw_components = st.checkbox("Show component table", value=True)
+    show_download = st.checkbox("Show download buttons", value=True)
 
     st.divider()
-    st.markdown("### Cache")
+    st.caption("Data: Yahoo Finance via yfinance; Federal Reserve FCI-G monthly CSVs.")
 
-    cache_df_preview = load_cache()
-    cache_rows = len(cache_df_preview)
 
-    if cache_rows > 0:
-        st.caption(
-            f"Local cache: {cache_rows} observations through "
-            f"{pd.Timestamp(cache_df_preview.index.max()).strftime('%b %d, %Y')}"
-        )
-    else:
-        st.caption("Local cache: empty")
+# ============================================================
+# LOAD DATA
+# ============================================================
 
-    backfill_weeks = st.slider(
-        "Archive releases to cache",
-        min_value=30,
-        max_value=540,
-        value=min(max(LOOKBACK_TO_WEEKS.get(lookback, 115), 60), 540),
-        step=10,
-    )
+tickers = required_tickers(COMPONENTS, CORE_BENCHMARKS)
+prices = load_yahoo_prices(tuple(tickers), yahoo_period)
 
-    force_backfill = st.checkbox("Force archive refresh", value=False)
-
-    run_backfill = st.button(
-        "Build / Refresh Archive Cache",
-        use_container_width=True,
-        help="This is the slow operation. Normal page loads do not run archive backfill.",
-    )
-
-    clear_cache = st.button(
-        "Clear Local Cache",
-        use_container_width=True,
-    )
-
-    st.caption("Source: Federal Reserve H.4.1 current and historical release pages. No FRED dependency.")
-
-# ------------------------------------------------------------
-# Cache Actions
-# ------------------------------------------------------------
-
-if clear_cache:
-    try:
-        if os.path.exists(CACHE_PATH):
-            os.remove(CACHE_PATH)
-        st.success("Local cache cleared.")
-    except Exception as exc:
-        st.error(f"Could not clear cache: {exc}")
-
-# ------------------------------------------------------------
-# Fast Data Load
-# ------------------------------------------------------------
-
-current_df, current_errors = load_current_h41()
-cached_df = load_cache()
-
-archive_df = pd.DataFrame()
-archive_errors: Dict[str, str] = {}
-
-if run_backfill:
-    with st.spinner("Backfilling Fed H.4.1 archive cache"):
-        archive_df, archive_errors = run_archive_backfill(
-            requested_weeks=int(backfill_weeks),
-            force_backfill=bool(force_backfill),
-            current_df=current_df,
-        )
-
-full_df = merge_frames([cached_df, archive_df, current_df])
-
-if not full_df.empty:
-    save_cache(full_df)
-
-source_errors = {**current_errors, **archive_errors}
-
-if full_df.empty or "Fed Assets" not in full_df.columns:
-    st.error("No usable Fed balance-sheet data loaded.")
-    st.markdown(
-        """
-        <div class="warning-box">
-        The dashboard could not locate a valid Fed Assets row from the current H.4.1 page or the local cache.
-        Use the archive cache button only after the current page is loading correctly.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if source_errors:
-        with st.expander("Source error details", expanded=True):
-            for key, message in list(source_errors.items())[:50]:
-                st.write(f"**{key}:** {message}")
-
+if prices.empty:
+    st.error("Yahoo Finance returned no usable price data.")
     st.stop()
 
-full_df = full_df.sort_index()
-full_df = full_df[~full_df.index.duplicated(keep="last")]
+component_df, available_specs = build_component_series(prices, COMPONENTS)
 
-for col in full_df.columns:
-    full_df[col] = pd.to_numeric(full_df[col], errors="coerce")
-
-available_cols = [col for col in DISPLAY_COLUMNS if col in full_df.columns]
-full_df = full_df[available_cols].copy()
-
-df = filter_lookback(full_df, lookback)
-
-if df.empty:
-    st.error("No data available for the selected lookback.")
+if component_df.empty or not available_specs:
+    st.error("No usable liquidity components could be built from the Yahoo Finance download.")
     st.stop()
 
-core_df = df.dropna(subset=["Fed Assets"])
+score_df, composite, weighted_scores = build_scores(
+    component_df=component_df,
+    available_specs=available_specs,
+    z_window=int(z_window),
+    min_z_periods=int(min_z_periods),
+    smoothing_window=int(smoothing_window),
+)
 
-if core_df.empty:
-    st.error("Fed Assets exists as a column, but every value is blank after parsing.")
-    st.dataframe(df.tail(30), use_container_width=True)
+scorecard = build_scorecard(component_df, score_df, available_specs)
+category_scores = build_category_scores(score_df, available_specs)
 
-    if source_errors:
-        with st.expander("Source error details", expanded=True):
-            for key, message in list(source_errors.items())[:50]:
-                st.write(f"**{key}:** {message}")
+display_component_df = filter_by_lookback(component_df, lookback)
+display_score_df = filter_by_lookback(score_df, lookback)
+display_composite = filter_by_lookback(composite.to_frame("Liquidity Composite"), lookback)["Liquidity Composite"]
 
-    st.stop()
+display_prices = filter_by_lookback(prices, lookback)
 
-latest = core_df.iloc[-1]
-latest_date = core_df.index[-1]
+latest_date = display_composite.dropna().index.max() if display_composite.notna().any() else prices.index.max()
+latest_score = latest_valid(display_composite)
+regime, regime_description = classify_regime(latest_score)
 
-# ------------------------------------------------------------
-# Derived Metrics
-# ------------------------------------------------------------
+composite_1w = obs_change(display_composite, 5)
+composite_1m = obs_change(display_composite, 21)
+composite_3m = obs_change(display_composite, 63)
 
-assets_1w = obs_change(df["Fed Assets"], 1)
-assets_4w = obs_change(df["Fed Assets"], 4)
-assets_13w = obs_change(df["Fed Assets"], 13)
-assets_13w_ann = annualized_pace(df["Fed Assets"], 13)
-assets_13w_pct = obs_pct_change(df["Fed Assets"], 13)
+latest_breadth = np.nan
+breadth_series = pd.Series(index=score_df.index, dtype="float64")
 
-if "Net Liquidity" in df.columns:
-    net_13w_ann = annualized_pace(df["Net Liquidity"], 13)
-else:
-    net_13w_ann = np.nan
+if not score_df.empty:
+    positive_count = (score_df > 0).sum(axis=1)
+    valid_count = score_df.notna().sum(axis=1)
+    breadth_series = positive_count / valid_count.replace(0, np.nan) * 100.0
+    latest_breadth = latest_valid(filter_by_lookback(breadth_series.to_frame("Breadth"), lookback)["Breadth"])
 
-if "TGA" in df.columns:
-    tga_1w = obs_change(df["TGA"], 1)
-else:
-    tga_1w = np.nan
+available_component_count = len(available_specs)
+total_component_count = len(COMPONENTS)
 
-rrp_col = None
 
-if "RRP Others" in df.columns and df["RRP Others"].notna().any():
-    rrp_col = "RRP Others"
-elif "RRP Total" in df.columns and df["RRP Total"].notna().any():
-    rrp_col = "RRP Total"
+# ============================================================
+# SNAPSHOT
+# ============================================================
 
-if rrp_col is not None:
-    rrp_1w = obs_change(df[rrp_col], 1)
-else:
-    rrp_1w = np.nan
-
-# ------------------------------------------------------------
-# Snapshot
-# ------------------------------------------------------------
-
-st.markdown("<div class='section-title'>Snapshot</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Liquidity Regime Snapshot</div>", unsafe_allow_html=True)
 st.markdown(
-    f"<div class='section-subtitle'>Latest parsed H.4.1 release: {latest_date.strftime('%b %d, %Y')}. Values are billions of dollars.</div>",
+    f"<div class='section-subtitle'>Latest Yahoo-derived signal: {pd.Timestamp(latest_date).strftime('%b %d, %Y')}. Composite is a weighted average of trailing z-scores after direction adjustment.</div>",
     unsafe_allow_html=True,
 )
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 
 with c1:
-    metric_card("Fed Assets", fmt_b(latest.get("Fed Assets")), "Total assets")
+    metric_card("Regime", regime, regime_description)
 
 with c2:
-    metric_card("1W Asset Change", fmt_delta_b(assets_1w), "Weekly impulse")
+    metric_card("Composite", fmt_num(latest_score, 2), "Positive = easier traded liquidity")
 
 with c3:
-    metric_card("4W Asset Change", fmt_delta_b(assets_4w), "Monthly impulse")
+    metric_card("1W Change", fmt_delta(composite_1w, 2), signed_signal_word(composite_1w))
 
 with c4:
-    metric_card("13W Ann. Pace", fmt_delta_b(assets_13w_ann), "Annualized pace")
+    metric_card("1M Change", fmt_delta(composite_1m, 2), signed_signal_word(composite_1m))
 
 with c5:
-    metric_card("Net Liquidity", fmt_b(latest.get("Net Liquidity")), "Assets - TGA - RRP")
+    metric_card("3M Change", fmt_delta(composite_3m, 2), signed_signal_word(composite_3m))
 
 with c6:
-    metric_card("Net 13W Ann.", fmt_delta_b(net_13w_ann), "Annualized net pace")
+    metric_card("Signal Breadth", fmt_pct(latest_breadth, 0), f"{available_component_count}/{total_component_count} components active")
 
-c7, c8, c9, c10, c11, c12 = st.columns(6)
 
-with c7:
-    metric_card("TGA", fmt_b(latest.get("TGA")), "Treasury cash")
+# ============================================================
+# MAIN CHART
+# ============================================================
 
-with c8:
-    metric_card("TGA 1W", fmt_delta_b(tga_1w), "Higher drains liquidity")
-
-with c9:
-    metric_card("RRP", fmt_b(latest.get(rrp_col)) if rrp_col else "N/A", rrp_col or "Unavailable")
-
-with c10:
-    metric_card("RRP 1W", fmt_delta_b(rrp_1w), "Lower releases liquidity")
-
-with c11:
-    metric_card("Reserve Balances", fmt_b(latest.get("Reserve Balances")), "Bank reserves")
-
-with c12:
-    metric_card("13W Asset %", fmt_pct(assets_13w_pct), "Fed assets ROC")
-
-# ------------------------------------------------------------
-# Chartbook
-# ------------------------------------------------------------
-
-st.markdown("<div class='section-title'>Chartbook</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Yahoo Market-Implied Liquidity Composite</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-subtitle'>Fed assets, liquidity proxy, funding drains, reserves, and rate of change.</div>",
+    "<div class='section-subtitle'>Credit, breadth, speculation, banks, crypto, dollar pressure, volatility, and duration compressed into one daily liquidity impulse.</div>",
     unsafe_allow_html=True,
 )
 
-plot_df = df.copy()
+fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-for col in plot_df.columns:
-    plot_df[f"{col}_s"] = smooth_series(plot_df[col], int(smooth_window))
-
-rows = 4 if show_components else 3
-
-fig = make_subplots(
-    rows=rows,
-    cols=1,
-    shared_xaxes=True,
-    vertical_spacing=0.055,
-    subplot_titles=(
-        "Fed Balance Sheet Level",
-        "Liquidity Proxy",
-        "Rate of Change",
-        "Funding Plumbing",
-    ) if show_components else (
-        "Fed Balance Sheet Level",
-        "Liquidity Proxy",
-        "Rate of Change",
-    ),
+fig.add_hrect(
+    y0=0.75,
+    y1=3.0,
+    fillcolor="rgba(5, 95, 70, 0.07)",
+    line_width=0
 )
+
+fig.add_hrect(
+    y0=-3.0,
+    y1=-0.75,
+    fillcolor="rgba(153, 27, 27, 0.07)",
+    line_width=0
+)
+
+fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af")
+fig.add_hline(y=0.75, line_width=1, line_dash="dot", line_color="#d1d5db")
+fig.add_hline(y=-0.75, line_width=1, line_dash="dot", line_color="#d1d5db")
 
 fig.add_trace(
     go.Scatter(
-        x=plot_df.index,
-        y=plot_df["Fed Assets_s"],
-        name="Fed Assets",
+        x=display_composite.index,
+        y=display_composite,
+        name="Liquidity Composite",
         mode="lines",
         line=dict(width=2.8, color="#111827"),
-        hovertemplate="%{x|%Y-%m-%d}<br>Fed Assets: %{y:,.0f}B<extra></extra>",
-    ),
-    row=1,
-    col=1,
-)
-
-if "Net Liquidity" in plot_df.columns and plot_df["Net Liquidity"].notna().any():
-    fig.add_trace(
-        go.Scatter(
-            x=plot_df.index,
-            y=plot_df["Net Liquidity_s"],
-            name="Net Liquidity",
-            mode="lines",
-            line=dict(width=2.8, color="#2563eb"),
-            hovertemplate="%{x|%Y-%m-%d}<br>Net Liquidity: %{y:,.0f}B<extra></extra>",
-        ),
-        row=2,
-        col=1,
+        hovertemplate="%{x|%Y-%m-%d}<br>Composite: %{y:.2f}<extra></extra>",
     )
-
-asset_roc = plot_df["Fed Assets"].diff(13) / 13 * 52
-
-fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=3, col=1)
-
-fig.add_trace(
-    go.Scatter(
-        x=asset_roc.index,
-        y=asset_roc,
-        name="Fed Assets 13W Annualized Change",
-        mode="lines",
-        line=dict(width=2.3, color="#7c2d12"),
-        hovertemplate="%{x|%Y-%m-%d}<br>Assets 13W Ann.: %{y:,.0f}B<extra></extra>",
-    ),
-    row=3,
-    col=1,
 )
 
-if "Net Liquidity" in plot_df.columns and plot_df["Net Liquidity"].notna().any():
-    net_roc = plot_df["Net Liquidity"].diff(13) / 13 * 52
+if benchmark in display_prices.columns:
+    bench_rebased = rebase(display_prices[benchmark])
 
     fig.add_trace(
         go.Scatter(
-            x=net_roc.index,
-            y=net_roc,
-            name="Net Liquidity 13W Annualized Change",
+            x=bench_rebased.index,
+            y=bench_rebased,
+            name=f"{benchmark}, rebased",
             mode="lines",
-            line=dict(width=2.3, color="#9333ea"),
-            hovertemplate="%{x|%Y-%m-%d}<br>Net 13W Ann.: %{y:,.0f}B<extra></extra>",
+            line=dict(width=1.9, color="#2563eb"),
+            opacity=0.72,
+            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{benchmark}: %{{y:.1f}}<extra></extra>",
         ),
-        row=3,
-        col=1,
+        secondary_y=True,
     )
-
-if show_components:
-    if "TGA" in plot_df.columns and plot_df["TGA"].notna().any():
-        fig.add_trace(
-            go.Scatter(
-                x=plot_df.index,
-                y=plot_df["TGA_s"],
-                name="TGA",
-                mode="lines",
-                line=dict(width=2.1, color="#059669"),
-                hovertemplate="%{x|%Y-%m-%d}<br>TGA: %{y:,.0f}B<extra></extra>",
-            ),
-            row=4,
-            col=1,
-        )
-
-    if rrp_col is not None:
-        fig.add_trace(
-            go.Scatter(
-                x=plot_df.index,
-                y=plot_df[f"{rrp_col}_s"],
-                name=rrp_col,
-                mode="lines",
-                line=dict(width=2.1, color="#dc2626"),
-                hovertemplate=f"%{{x|%Y-%m-%d}}<br>{rrp_col}: %{{y:,.0f}}B<extra></extra>",
-            ),
-            row=4,
-            col=1,
-        )
-
-    if "Reserve Balances" in plot_df.columns and plot_df["Reserve Balances"].notna().any():
-        fig.add_trace(
-            go.Scatter(
-                x=plot_df.index,
-                y=plot_df["Reserve Balances_s"],
-                name="Reserve Balances",
-                mode="lines",
-                line=dict(width=2.1, color="#f59e0b"),
-                hovertemplate="%{x|%Y-%m-%d}<br>Reserves: %{y:,.0f}B<extra></extra>",
-            ),
-            row=4,
-            col=1,
-        )
 
 fig.update_layout(
     template="plotly_white",
-    height=1040 if show_components else 850,
-    margin=dict(l=55, r=25, t=58, b=35),
+    height=560,
+    margin=dict(l=55, r=55, t=25, b=35),
     legend=dict(
         orientation="h",
         x=0,
-        y=1.04,
+        y=1.08,
         xanchor="left",
         yanchor="bottom",
         bgcolor="rgba(255,255,255,0.78)",
@@ -1252,68 +1111,113 @@ fig.update_layout(
     hovermode="x unified",
 )
 
-fig.update_annotations(font=dict(size=13, color="#111827"))
-fig.update_yaxes(title_text="Billions", showgrid=True, gridcolor="#edf0f4", zeroline=False, row=1, col=1)
-fig.update_yaxes(title_text="Billions", showgrid=True, gridcolor="#edf0f4", zeroline=False, row=2, col=1)
-fig.update_yaxes(title_text="Billions Ann.", showgrid=True, gridcolor="#edf0f4", zeroline=False, row=3, col=1)
+fig.update_yaxes(
+    title_text="Liquidity z-score",
+    range=[-3.0, 3.0],
+    showgrid=True,
+    gridcolor="#edf0f4",
+    zeroline=False
+)
 
-if show_components:
-    fig.update_yaxes(title_text="Billions", showgrid=True, gridcolor="#edf0f4", zeroline=False, row=4, col=1)
-    fig.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date", row=4, col=1)
-else:
-    fig.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date", row=3, col=1)
+fig.update_yaxes(
+    title_text=f"{benchmark}, rebased",
+    showgrid=False,
+    zeroline=False,
+    secondary_y=True,
+)
+
+fig.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date")
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ------------------------------------------------------------
-# Component Pressure Map
-# ------------------------------------------------------------
 
-if show_components:
-    component_cols = [
-        col for col in ["Fed Assets", "Net Liquidity", "TGA", rrp_col, "Reserve Balances"]
-        if col is not None and col in df.columns and df[col].notna().any()
-    ]
+# ============================================================
+# FED FCI-G OVERLAY
+# ============================================================
 
-    if component_cols:
-        st.markdown("<div class='section-title'>Component Pressure Map</div>", unsafe_allow_html=True)
+if show_fed_fcig:
+    fcig_df, fcig_errors = load_fed_fcig()
+
+    st.markdown("<div class='section-title'>Official Fed Financial Conditions Overlay</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-subtitle'>Federal Reserve FCI-G. Positive readings indicate financial conditions are a headwind to future GDP growth; negative readings indicate a tailwind.</div>",
+        unsafe_allow_html=True,
+    )
+
+    if fcig_df.empty:
         st.markdown(
-            "<div class='section-subtitle'>Rebased view showing which balance-sheet plumbing variable is driving the liquidity impulse.</div>",
+            """
+            <div class="warning-box">
+            Fed FCI-G data could not be loaded from the Federal Reserve CSV endpoints. The Yahoo liquidity composite above still works independently.
+            </div>
+            """,
             unsafe_allow_html=True,
         )
 
-        rebased = pd.DataFrame(index=df.index)
+        if fcig_errors:
+            with st.expander("Fed FCI-G source errors"):
+                for key, value in fcig_errors.items():
+                    st.write(f"**{key}:** {value}")
+    else:
+        fcig_plot = filter_by_lookback(fcig_df, lookback)
 
-        for col in component_cols:
-            rebased[col] = rebase(df[col])
+        fig_fcig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        fig2 = go.Figure()
+        fig_fcig.add_hline(
+            y=0,
+            line_width=1,
+            line_dash="dot",
+            line_color="#9ca3af"
+        )
 
-        color_map = {
-            "Fed Assets": "#111827",
-            "Net Liquidity": "#2563eb",
-            "TGA": "#059669",
-            "RRP Others": "#dc2626",
-            "RRP Total": "#b91c1c",
-            "Reserve Balances": "#f59e0b",
-        }
-
-        for col in component_cols:
-            fig2.add_trace(
+        if "FCI-G Baseline" in fcig_plot.columns:
+            fig_fcig.add_trace(
                 go.Scatter(
-                    x=rebased.index,
-                    y=smooth_series(rebased[col], int(smooth_window)),
+                    x=fcig_plot.index,
+                    y=fcig_plot["FCI-G Baseline"],
+                    name="FCI-G Baseline",
                     mode="lines",
-                    name=col,
-                    line=dict(width=2.2, color=color_map.get(col, "#374151")),
-                    hovertemplate=f"%{{x|%Y-%m-%d}}<br>{col} Index: %{{y:.1f}}<extra></extra>",
-                )
+                    line=dict(width=2.7, color="#111827"),
+                    hovertemplate="%{x|%Y-%m}<br>FCI-G Baseline: %{y:.2f}<extra></extra>",
+                ),
+                secondary_y=False,
             )
 
-        fig2.update_layout(
+        if "FCI-G 1Y Lookback" in fcig_plot.columns:
+            fig_fcig.add_trace(
+                go.Scatter(
+                    x=fcig_plot.index,
+                    y=fcig_plot["FCI-G 1Y Lookback"],
+                    name="FCI-G 1Y Lookback",
+                    mode="lines",
+                    line=dict(width=2.2, color="#b45309"),
+                    hovertemplate="%{x|%Y-%m}<br>FCI-G 1Y: %{y:.2f}<extra></extra>",
+                ),
+                secondary_y=False,
+            )
+
+        composite_monthly = composite.dropna().resample("M").last()
+
+        if not composite_monthly.empty:
+            composite_monthly = filter_by_lookback(composite_monthly.to_frame("Yahoo Composite"), lookback)["Yahoo Composite"]
+
+            fig_fcig.add_trace(
+                go.Scatter(
+                    x=composite_monthly.index,
+                    y=composite_monthly,
+                    name="Yahoo Liquidity Composite",
+                    mode="lines",
+                    line=dict(width=2.0, color="#2563eb"),
+                    opacity=0.76,
+                    hovertemplate="%{x|%Y-%m}<br>Yahoo Composite: %{y:.2f}<extra></extra>",
+                ),
+                secondary_y=True,
+            )
+
+        fig_fcig.update_layout(
             template="plotly_white",
-            height=460,
-            margin=dict(l=55, r=25, t=25, b=35),
+            height=500,
+            margin=dict(l=55, r=55, t=25, b=35),
             legend=dict(
                 orientation="h",
                 x=0,
@@ -1325,82 +1229,232 @@ if show_components:
             hovermode="x unified",
         )
 
-        fig2.update_yaxes(title_text="Index, first obs = 100", showgrid=True, gridcolor="#edf0f4", zeroline=False)
-        fig2.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date")
-
-        st.plotly_chart(fig2, use_container_width=True)
-
-# ------------------------------------------------------------
-# Table and Download
-# ------------------------------------------------------------
-
-left, right = st.columns([1.25, 0.75])
-
-with left:
-    if show_raw_table:
-        st.markdown("<div class='section-title'>Cleaned H.4.1 Data</div>", unsafe_allow_html=True)
-        st.markdown(
-            "<div class='section-subtitle'>Latest parsed observations. Values are billions.</div>",
-            unsafe_allow_html=True,
+        fig_fcig.update_yaxes(
+            title_text="FCI-G growth impulse",
+            showgrid=True,
+            gridcolor="#edf0f4",
+            zeroline=False
         )
 
-        table = df.copy()
-        table.index.name = "Date"
+        fig_fcig.update_yaxes(
+            title_text="Yahoo composite",
+            showgrid=False,
+            zeroline=False,
+            secondary_y=True,
+        )
 
-        display_table = table.tail(90).copy()
+        fig_fcig.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date")
 
-        for col in display_table.columns:
-            display_table[col] = display_table[col].map(
-                lambda x: np.nan if pd.isna(x) else round(float(x), 1)
-            )
+        st.plotly_chart(fig_fcig, use_container_width=True)
 
-        st.dataframe(display_table, use_container_width=True, height=430)
+        latest_fcig_row = fcig_df.dropna(how="all").iloc[-1]
+        latest_fcig_date = fcig_df.dropna(how="all").index[-1]
 
-with right:
-    st.markdown("<div class='section-title'>Download</div>", unsafe_allow_html=True)
+        f1, f2, f3, f4 = st.columns(4)
+
+        baseline = latest_fcig_row.get("FCI-G Baseline", np.nan)
+        one_year = latest_fcig_row.get("FCI-G 1Y Lookback", np.nan)
+
+        with f1:
+            metric_card("FCI-G Baseline", fmt_num(baseline, 2), f"Latest: {latest_fcig_date:%b %Y}")
+
+        with f2:
+            metric_card("FCI-G 1Y", fmt_num(one_year, 2), "Faster lookback window")
+
+        with f3:
+            fed_signal = "Growth headwind" if pd.notna(baseline) and baseline > 0 else "Growth tailwind"
+            metric_card("Fed Signal", fed_signal, "Positive = tighter conditions")
+
+        with f4:
+            spread = latest_score - (-baseline if pd.notna(baseline) else np.nan)
+            metric_card("Tape vs Fed Gap", fmt_delta(spread, 2), "Yahoo composite less inverted FCI-G")
+
+
+# ============================================================
+# CATEGORY MAP
+# ============================================================
+
+if show_category_scores and not category_scores.empty:
+    st.markdown("<div class='section-title'>Category Pressure Map</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-subtitle'>Export the cleaned cached dataset used by the dashboard.</div>",
+        "<div class='section-subtitle'>Latest score by liquidity sleeve. Positive means easing pressure; negative means tightening pressure.</div>",
         unsafe_allow_html=True,
     )
 
-    export = full_df.copy()
-    export.index.name = "Date"
-    csv = export.to_csv(index=True).encode("utf-8")
+    fig_cat = go.Figure()
 
-    st.download_button(
-        "Download Fed Liquidity CSV",
-        data=csv,
-        file_name="fed_h41_liquidity_tracker.csv",
-        mime="text/csv",
-        use_container_width=True,
+    fig_cat.add_trace(
+        go.Bar(
+            x=category_scores["Latest Score"],
+            y=category_scores["Category"],
+            orientation="h",
+            name="Latest Score",
+            hovertemplate="%{y}<br>Score: %{x:.2f}<extra></extra>",
+        )
     )
 
-    st.markdown("<div class='section-title' style='margin-top:1.2rem;'>Methodology</div>", unsafe_allow_html=True)
+    fig_cat.add_vline(
+        x=0,
+        line_width=1,
+        line_dash="dot",
+        line_color="#9ca3af",
+    )
+
+    fig_cat.update_layout(
+        template="plotly_white",
+        height=max(360, 48 * len(category_scores)),
+        margin=dict(l=130, r=25, t=20, b=35),
+        showlegend=False,
+    )
+
+    fig_cat.update_xaxes(
+        title_text="Liquidity score",
+        showgrid=True,
+        gridcolor="#edf0f4",
+        zeroline=False,
+        range=[
+            min(-2.0, float(category_scores["Latest Score"].min()) - 0.25),
+            max(2.0, float(category_scores["Latest Score"].max()) + 0.25),
+        ],
+    )
+
+    fig_cat.update_yaxes(title_text="")
+
+    st.plotly_chart(fig_cat, use_container_width=True)
+
+
+# ============================================================
+# COMPONENT SCORECARD
+# ============================================================
+
+if show_raw_components:
+    st.markdown("<div class='section-title'>Component Scorecard</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-subtitle'>Sorted by latest liquidity score. 21D and 63D moves are direction-adjusted: positive means easier liquidity pressure.</div>",
+        unsafe_allow_html=True,
+    )
+
+    display_cols = [
+        "Component",
+        "Category",
+        "Ticker / Ratio",
+        "Latest",
+        "21D Liquidity Move",
+        "63D Liquidity Move",
+        "Score",
+        "Signal",
+        "Weight",
+        "Description",
+    ]
+
+    display_scorecard = scorecard[display_cols].copy()
+
+    numeric_cols = ["Latest", "21D Liquidity Move", "63D Liquidity Move", "Score", "Weight"]
+
+    for col in numeric_cols:
+        display_scorecard[col] = pd.to_numeric(display_scorecard[col], errors="coerce")
+
+    styled = (
+        display_scorecard.style
+        .format(
+            {
+                "Latest": "{:.3f}",
+                "21D Liquidity Move": "{:+.1f}%",
+                "63D Liquidity Move": "{:+.1f}%",
+                "Score": "{:+.2f}",
+                "Weight": "{:.2f}",
+            },
+            na_rep="N/A",
+        )
+        .applymap(color_score, subset=["Score"])
+    )
+
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        height=520,
+        hide_index=True,
+    )
+
+
+# ============================================================
+# DOWNLOADS
+# ============================================================
+
+if show_download:
+    st.markdown("<div class='section-title'>Downloads</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-subtitle'>Export the series behind the dashboard.</div>",
+        unsafe_allow_html=True,
+    )
+
+    d1, d2, d3 = st.columns(3)
+
+    composite_export = pd.DataFrame(
+        {
+            "Liquidity Composite": composite,
+            "Signal Breadth": breadth_series,
+        }
+    )
+    composite_export.index.name = "Date"
+
+    components_export = component_df.copy()
+    components_export.index.name = "Date"
+
+    scores_export = score_df.copy()
+    scores_export.index.name = "Date"
+
+    with d1:
+        st.download_button(
+            "Download Composite CSV",
+            data=composite_export.to_csv(index=True).encode("utf-8"),
+            file_name="adfm_liquidity_composite.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    with d2:
+        st.download_button(
+            "Download Component Levels CSV",
+            data=components_export.to_csv(index=True).encode("utf-8"),
+            file_name="adfm_liquidity_component_levels.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    with d3:
+        st.download_button(
+            "Download Component Scores CSV",
+            data=scores_export.to_csv(index=True).encode("utf-8"),
+            file_name="adfm_liquidity_component_scores.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+
+# ============================================================
+# METHODOLOGY
+# ============================================================
+
+with st.expander("Methodology", expanded=False):
     st.markdown(
         """
-        <div class="info-box">
-        <b>Primary source</b><br>
-        Federal Reserve H.4.1 current and historical release pages.
-        <br><br>
-        <b>Core proxy</b><br>
-        Net Liquidity = Fed Assets - TGA - RRP Others.
-        <br><br>
-        <b>Fallback</b><br>
-        If RRP Others is unavailable, total reverse repos are used. Historical archive pages are only pulled when the cache refresh button is pressed.
-        <br><br>
-        <b>Units</b><br>
-        H.4.1 figures are reported in millions. The app converts them to billions.
-        <br><br>
-        <b>Rate of change</b><br>
-        13-week annualized pace = 13-week change / 13 * 52.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+**Market-implied liquidity composite**
 
-if source_errors:
-    with st.expander("Source issues"):
-        for key, message in list(source_errors.items())[:80]:
-            st.write(f"**{key}:** {message}")
+Each component is converted into a trailing z-score. The sign is adjusted so that positive always means easier liquidity pressure and negative always means tighter liquidity pressure. The final composite is a weighted average across available components.
+
+**Why this is different from a Fed balance-sheet tracker**
+
+This is not trying to replicate reserve balances, the Treasury General Account, or reverse repos. It tracks whether liquidity is reaching the tape through credit, volatility, dollar pressure, equity breadth, banks, crypto, duration, and high-beta participation.
+
+**Fed FCI-G overlay**
+
+The Fed FCI-G is shown separately because it measures the effect of financial conditions on future growth. Positive FCI-G readings imply a growth headwind from tighter conditions. Negative readings imply a tailwind.
+
+**Interpretation**
+
+The cleanest easing regime is when the Yahoo composite is rising while FCI-G is falling. The most dangerous regime is when the Yahoo composite rolls over while FCI-G is still positive, because the tape is losing liquidity confirmation before the official macro drag has cleared.
+        """
+    )
 
 st.caption("© 2026 AD Fund Management LP")
