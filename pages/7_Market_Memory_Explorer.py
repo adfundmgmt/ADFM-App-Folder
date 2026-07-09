@@ -1583,8 +1583,6 @@ if base_df.empty:
 latest_year = int(last_data_date.year)
 current = current_feature_snapshot(feature_df)
 
-)
-
 # =========================
 # CALENDAR-YEAR ANALOG MAP
 # =========================
