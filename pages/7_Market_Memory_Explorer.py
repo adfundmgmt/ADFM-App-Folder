@@ -1538,11 +1538,10 @@ def inject_single_page_css() -> None:
 # =========================
 
 inject_css()
-inject_single_page_css()
 add_logo()
 
 st.title("Market Memory Explorer")
-st.caption("Single-page regime analog engine: current setup, nearest historical cohort, forward distribution, failure cases, YTD analogs, and base-rate diagnostics.")
+st.caption("Calendar-year analogs, unconditional base rates, and current percentile context from adjusted close data.")
 
 with st.sidebar:
     st.header("Controls")
@@ -1552,23 +1551,8 @@ with st.sidebar:
 
     st.markdown("---")
     start_year = st.slider("Historical sample start", 1950, dt.datetime.now(NY_TZ).year, 1950, 1)
-    forward_horizon = st.select_slider("Primary forward horizon", options=[21, 42, 63, 126, 252], value=DEFAULT_FORWARD_HORIZON)
-    top_n = st.slider("Top analogs shown", 3, 12, 6, 1)
-    load_regime = st.checkbox("Load macro regime proxies", value=True)
-
-    st.markdown("---")
-    st.subheader("Current Setup Cohort")
-    setup_k = st.slider("Nearest historical setup sample", 50, 500, 125, 25)
-    same_trend = st.checkbox("Require same 200D / 50D-200D trend", value=True)
-    use_macro_in_cohort = st.checkbox("Use macro proxies in similarity score", value=True)
-
-    with st.expander("Advanced analog settings", expanded=False):
-        min_ytd_corr = st.slider("Minimum YTD correlation", -1.00, 1.00, 0.00, 0.05, format="%.2f")
-        rolling_window = st.select_slider("Trailing rolling setup window", options=[63, 126, 189, 252, 378, 504], value=DEFAULT_ROLLING_WINDOW)
-        rolling_min_corr = st.slider("Minimum rolling correlation", 0.00, 1.00, 0.75, 0.05, format="%.2f")
-        rolling_step = st.slider("Rolling scan step", 1, 10, 2, 1)
-        cluster_gap = st.slider("Minimum spacing between rolling matches", 21, 252, 63, 21)
-        max_one_per_year = st.checkbox("Max one rolling match per year", value=True)
+    top_n = st.slider("Top calendar-year analogs shown", 1, 15, DEFAULT_TOP_N, 1)
+    min_ytd_corr = st.slider("Minimum YTD correlation", -1.00, 1.00, 0.00, 0.05, format="%.2f")
 
 try:
     raw = load_history(ticker)
@@ -1587,10 +1571,9 @@ stale_bdays = business_days_behind(last_data_date, ny_now.date())
 if stale_bdays > 1:
     st.warning(f"Latest close for {ticker_label} is {last_data_date:%Y-%m-%d}. That is {stale_bdays} business days behind New York time.")
 
-regime_data, missing_regime = load_regime_data(close_px, load_regime)
-if missing_regime:
-    st.caption(f"Some optional regime proxies failed to load: {', '.join(missing_regime)}")
-
+# Keep regime proxies disabled for this stripped version. The page is now only
+# calendar-year analogs, base-rate diagnostics, and current percentiles.
+regime_data, _ = load_regime_data(close_px, enabled=False)
 feature_df = build_feature_frame(close_px, regime_data)
 base_df = historical_universe(feature_df, start_year=start_year, min_history_days=252, max_horizon=252)
 if base_df.empty:
@@ -1599,170 +1582,19 @@ if base_df.empty:
 
 latest_year = int(last_data_date.year)
 current = current_feature_snapshot(feature_df)
-base_stats = summarize_forward_distribution(base_df, DEFAULT_HORIZONS, "Base")
-
-setup_cohort = nearest_setup_cohort(
-    base_df=base_df,
-    feature_df=feature_df,
-    k=int(setup_k),
-    use_macro=bool(use_macro_in_cohort and load_regime),
-    same_trend=bool(same_trend),
-)
-setup_compare = compare_to_base(setup_cohort, base_df, DEFAULT_HORIZONS) if not setup_cohort.empty else pd.DataFrame()
-
-primary_row = pd.DataFrame()
-if not setup_compare.empty:
-    primary_row = setup_compare[setup_compare["Horizon"] == f"{forward_horizon}D"].copy()
-    if primary_row.empty:
-        primary_row = setup_compare.tail(1).copy()
-
-if primary_row.empty:
-    verdict_title = "Insufficient evidence"
-    verdict_detail = "The current setup cohort did not produce a usable forward distribution against the base-rate universe."
-else:
-    r = primary_row.iloc[0]
-    verdict_title, verdict_detail = interpret_edge(
-        float(r.get("Median Spread", np.nan)),
-        float(r.get("Hit Spread", np.nan)),
-        float(r.get("Cohort Worst DD", np.nan)) - float(r.get("Base Worst DD", np.nan)),
-    )
-
-render_verdict_card(verdict_title, verdict_detail, regime_tape_label(current))
-
-metric_cols = st.columns(6)
-with metric_cols[0]:
-    render_metric("Latest Close", f"{current['Close']:,.2f}" if np.isfinite(current["Close"]) else "N/A")
-with metric_cols[1]:
-    render_metric("YTD", fmt_pct(current["YTD"]))
-with metric_cols[2]:
-    render_metric("63D", fmt_pct(current["63D"]))
-with metric_cols[3]:
-    render_metric("252D", fmt_pct(current["252D"]))
-with metric_cols[4]:
-    render_metric("63D Vol", fmt_pct(current["Vol 63D"], signed=False))
-with metric_cols[5]:
-    render_metric("Vs 200D", fmt_pct(current["Distance vs 200D"]))
 
 st.caption(
     f"Data through {last_data_date:%Y-%m-%d}. Adjusted close from Yahoo Finance. "
     f"Base-rate universe: {len(base_df):,} eligible historical signal dates since {start_year}."
 )
 
-st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
-st.subheader("Current Setup Versus Base Rate")
-st.markdown(
-    "<div class='mini-note'>The default cohort is no longer a manual scanner. It finds the nearest historical market states to today across trend, momentum, volatility, drawdown, distance from trend, and optional macro proxies, then compares the forward distribution against the unconditional base rate.</div>",
-    unsafe_allow_html=True,
-)
+# =========================
+# CALENDAR-YEAR ANALOG MAP
+# =========================
 
-if setup_cohort.empty or setup_compare.empty:
-    st.warning("No usable current-setup cohort. Increase the nearest-neighbor sample or disable strict trend matching.")
-else:
-    c1, c2, c3, c4 = st.columns(4)
-    hcol = f"next_{forward_horizon}"
-    ddcol = f"fwd_dd_{forward_horizon}"
-    with c1:
-        render_metric("Setup n", f"{len(setup_cohort):,}")
-    with c2:
-        render_metric(f"Median Next {forward_horizon}D", fmt_pct(setup_cohort[hcol].median()))
-    with c3:
-        render_metric(f"Hit Rate {forward_horizon}D", fmt_pct((setup_cohort[hcol] > 0).mean(), signed=False))
-    with c4:
-        render_metric(f"Worst DD {forward_horizon}D", fmt_pct(setup_cohort[ddcol].min()))
-
-    st.dataframe(compact_compare_table(setup_compare), use_container_width=True, hide_index=True, height=250)
-
-    locs = setup_cohort["_loc"].astype(int).tolist()
-    matrix = forward_matrix_from_locs(close_px, locs, int(forward_horizon))
-    fig_setup_cone = plot_forward_cone(
-        ticker_label,
-        matrix,
-        int(forward_horizon),
-        f"{ticker_label} | Forward Distribution After Nearest Current Setups",
-        subtitle=f"n={len(setup_cohort):,} nearest historical states since {start_year}; horizon={forward_horizon}D",
-    )
-    st.pyplot(fig_setup_cone, clear_figure=True)
-    plt.close(fig_setup_cone)
-
-    worst_cases = setup_cohort.reset_index(drop=True).sort_values(hcol, ascending=True).head(8)
-    worst_cols = ["Date", "Year", hcol, ddcol, "ret_63", "ret_252", "trail_dd_63", "dist_200d", "vix", "tnx_63_bps", "dxy_63", "credit_63", "Similarity Score"]
-    worst_cols = [c for c in worst_cols if c in worst_cases.columns]
-    worst_display = worst_cases[worst_cols].copy()
-    if "Date" in worst_display.columns:
-        worst_display["Date"] = pd.to_datetime(worst_display["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    worst_display = worst_display.rename(columns={
-        hcol: f"Next {forward_horizon}D",
-        ddcol: f"Fwd DD {forward_horizon}D",
-        "ret_63": "63D",
-        "ret_252": "252D",
-        "trail_dd_63": "Trail DD 63D",
-        "dist_200d": "Vs 200D",
-        "vix": "VIX",
-        "tnx_63_bps": "10Y 63D",
-        "dxy_63": "DXY 63D",
-        "credit_63": "Credit 63D",
-    })
-    worst_display = format_percent_table(
-        worst_display,
-        [f"Next {forward_horizon}D", f"Fwd DD {forward_horizon}D", "63D", "252D", "Trail DD 63D", "Vs 200D", "DXY 63D", "Credit 63D"],
-        bps_cols=["10Y 63D"],
-    )
-    if "VIX" in worst_display.columns:
-        worst_display["VIX"] = worst_cases["vix"].map(lambda x: fmt_num(x, 1))
-    if "Similarity Score" in worst_display.columns:
-        worst_display["Similarity Score"] = worst_cases["Similarity Score"].map(lambda x: fmt_num(x, 3))
-    st.markdown("**Failure cases inside today's matched cohort**")
-    st.dataframe(worst_display, use_container_width=True, hide_index=True, height=300)
-
-st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
-st.subheader("Rolling Analog Evidence")
-st.markdown(
-    "<div class='mini-note'>This is the pattern-recognition layer: it scans prior trailing windows of the same length, removes overlapping clusters, and measures what happened after the matched signal date.</div>",
-    unsafe_allow_html=True,
-)
-
-selected_rolling, current_trailing_path = build_rolling_analog_table(
-    close_px=close_px,
-    feature_df=feature_df,
-    rolling_window=int(rolling_window),
-    rolling_horizon=int(forward_horizon),
-    rolling_min_corr=float(rolling_min_corr),
-    rolling_step=int(rolling_step),
-    cluster_gap=int(cluster_gap),
-    max_one_per_year=bool(max_one_per_year),
-    top_n=int(top_n),
-)
-
-if selected_rolling.empty or current_trailing_path is None:
-    st.warning(f"No rolling {rolling_window}D windows found with correlation above {rolling_min_corr:.2f}.")
-else:
-    fig_setup = plot_setup_overlay(ticker_label, current_trailing_path, close_px, selected_rolling, int(rolling_window))
-    st.pyplot(fig_setup, clear_figure=True)
-    plt.close(fig_setup)
-
-    rolling_locs = selected_rolling["_signal_loc"].astype(int).tolist()
-    rolling_matrix = forward_matrix_from_locs(close_px, rolling_locs, int(forward_horizon))
-    fig_rolling_cone = plot_forward_cone(
-        ticker_label,
-        rolling_matrix,
-        int(forward_horizon),
-        f"{ticker_label} | Forward Path After Rolling Analogs",
-        subtitle=f"n={len(rolling_locs)} clustered matches, min ρ={rolling_min_corr:.2f}",
-    )
-    st.pyplot(fig_rolling_cone, clear_figure=True)
-    plt.close(fig_rolling_cone)
-
-    st.dataframe(display_rolling_table(selected_rolling), use_container_width=True, hide_index=True, height=380)
-
-    rolling_compare = compare_to_base(selected_rolling, base_df, DEFAULT_HORIZONS)
-    if not rolling_compare.empty:
-        st.markdown("**Rolling analog cohort versus base rate**")
-        st.dataframe(compact_compare_table(rolling_compare), use_container_width=True, hide_index=True, height=250)
-
-st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
 st.subheader("Calendar-Year Analog Map")
 st.markdown(
-    "<div class='mini-note'>This keeps the original YTD analog concept, but it is now evidence below the current setup verdict rather than the organizing structure of the page.</div>",
+    "<div class='section-caption'>True YTD paths are anchored to the prior year-end close. The score combines path correlation, endpoint gap, volatility gap, drawdown gap, and 21-day slope gap.</div>",
     unsafe_allow_html=True,
 )
 
@@ -1782,47 +1614,55 @@ else:
     st.pyplot(fig_ytd, clear_figure=True)
     plt.close(fig_ytd)
 
-    st.markdown("**Top YTD analogs**")
+    st.markdown("**Top calendar-year analogs**")
     st.dataframe(display_ytd_table(top_calendar), use_container_width=True, hide_index=True, height=360)
 
     ytd_compare = compare_to_base(top_calendar, base_df, DEFAULT_HORIZONS)
     if not ytd_compare.empty:
-        st.markdown("**YTD analogs versus base rate**")
+        st.markdown("**Top analog forward results versus base rates**")
         st.dataframe(compact_compare_table(ytd_compare), use_container_width=True, hide_index=True, height=250)
 
-st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
+st.markdown("---")
 
-with st.expander("Base-rate diagnostics and current percentiles", expanded=False):
-    p1, p2 = st.columns([0.45, 0.55], gap="large")
-    with p1:
-        st.markdown("**Current percentile map**")
-        st.dataframe(format_percentile_snapshot(current_percentile_table(feature_df, base_df)), use_container_width=True, hide_index=True, height=300)
-    with p2:
-        st.markdown("**Unconditional forward base rates**")
-        display_base = format_percent_table(
-            base_stats,
-            ["Hit Rate", "Median", "Mean", "10th %ile", "25th %ile", "75th %ile", "90th %ile", "Worst", "Best", "Median Fwd DD", "Worst Fwd DD"],
-            int_cols=["n"],
-        )
-        st.dataframe(display_base, use_container_width=True, hide_index=True, height=300)
+# =========================
+# BASE-RATE DIAGNOSTICS
+# =========================
 
-    dist_horizon = st.select_slider("Distribution horizon", options=[21, 63, 126, 252], value=63)
-    by_year = base_df.groupby("Year")[f"next_{dist_horizon}"].median().reset_index()
-    fig_dist = plot_distribution_bars(
-        by_year,
-        f"next_{dist_horizon}",
-        f"{ticker_label} | Median Forward {dist_horizon}D Return by Signal Year",
-    )
-    st.pyplot(fig_dist, clear_figure=True)
-    plt.close(fig_dist)
+st.subheader("Base-rate Diagnostics")
+st.markdown(
+    "<div class='section-caption'>The base-rate table is the reference point for the analog map. A calendar-year analog is useful only if its forward return, hit rate, or drawdown profile differs materially from the unconditional distribution.</div>",
+    unsafe_allow_html=True,
+)
 
-with st.expander("Exports", expanded=False):
-    if not setup_cohort.empty:
-        dataframe_download_button(setup_cohort, "Download current setup cohort", f"{ticker_label}_current_setup_cohort.csv")
-    if not selected_rolling.empty:
-        dataframe_download_button(selected_rolling, "Download rolling analog table", f"{ticker_label}_rolling_analogs.csv")
-    if not top_calendar.empty:
-        dataframe_download_button(top_calendar, "Download YTD analog table", f"{ticker_label}_ytd_analogs.csv")
-    dataframe_download_button(base_df, "Download base-rate universe", f"{ticker_label}_base_rate_universe.csv")
+base_stats = summarize_forward_distribution(base_df, DEFAULT_HORIZONS, "Base")
+display_base = format_percent_table(
+    base_stats,
+    ["Hit Rate", "Median", "Mean", "10th %ile", "25th %ile", "75th %ile", "90th %ile", "Worst", "Best", "Median Fwd DD", "Worst Fwd DD"],
+    int_cols=["n"],
+)
+st.dataframe(display_base, use_container_width=True, hide_index=True, height=280)
+
+dist_horizon = st.select_slider("Distribution horizon", options=[21, 63, 126, 252], value=63)
+by_year = base_df.groupby("Year")[f"next_{dist_horizon}"].median().reset_index()
+fig_dist = plot_distribution_bars(
+    by_year,
+    f"next_{dist_horizon}",
+    f"{ticker_label} | Median Forward {dist_horizon}D Return by Signal Year",
+)
+st.pyplot(fig_dist, clear_figure=True)
+plt.close(fig_dist)
+
+st.markdown("---")
+
+# =========================
+# CURRENT PERCENTILES
+# =========================
+
+st.subheader("Current Percentiles")
+st.markdown(
+    "<div class='section-caption'>Current return, volatility, drawdown, and trend readings placed against the eligible historical sample.</div>",
+    unsafe_allow_html=True,
+)
+st.dataframe(format_percentile_snapshot(current_percentile_table(feature_df, base_df)), use_container_width=True, hide_index=True, height=300)
 
 st.caption("© 2026 AD Fund Management LP")
