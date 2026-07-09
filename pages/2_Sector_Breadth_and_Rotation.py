@@ -19,11 +19,11 @@ import yfinance as yf
 # =============================================================================
 
 st.set_page_config(
-    page_title="S&P 500 Sector + Subsector Breadth & Rotation Monitor",
+    page_title="Sector Breadth and Rotation",
     layout="wide",
 )
 
-st.title("S&P 500 Sector + Subsector Breadth & Rotation Monitor")
+st.title("Sector Breadth and Rotation")
 
 
 # =============================================================================
