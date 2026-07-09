@@ -162,114 +162,160 @@ lookback_dict = {
 
 # =========================================================
 # ETF COVERAGE
+# 100-name hedge-fund signal universe.
+# Broad allocator parking-lot ETFs such as SPY, IVV, VOO,
+# SPLG, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG are excluded.
 # =========================================================
 etf_info = {
-    "VTI": ("US Total Market", "Total US equity market"),
-    "VUG": ("US Growth", "Large-cap growth"),
-    "VTV": ("US Value", "Large-cap value"),
+    # -------------------------
+    # US EQUITY: TACTICAL INDEX, STYLE, FACTOR
+    # -------------------------
+    "QQQ": ("Nasdaq 100", "Large-cap growth / mega-cap tech risk appetite"),
+    "DIA": ("Dow Industrials", "Old-economy large-cap cyclicals"),
+    "IWM": ("Russell 2000", "Small-cap equity risk appetite"),
+    "IJR": ("S&P SmallCap 600", "Higher-quality small-cap proxy"),
+    "MDY": ("S&P MidCap 400", "Mid-cap equity risk appetite"),
+    "RSP": ("S&P 500 Equal Weight", "Equal-weight breadth versus cap-weight leadership"),
+    "IWF": ("Russell 1000 Growth", "Large-cap growth factor"),
+    "IWD": ("Russell 1000 Value", "Large-cap value factor"),
+    "IWO": ("Russell 2000 Growth", "Small-cap growth factor"),
+    "IWN": ("Russell 2000 Value", "Small-cap value factor"),
     "MTUM": ("US Momentum", "Momentum factor"),
     "QUAL": ("US Quality", "Quality factor"),
-    "USMV": ("US Min Vol", "Minimum volatility"),
-    "SCHD": ("US Dividends", "Dividend growth and yield"),
-    "XLB": ("US Materials", "S&P 500 Materials"),
-    "XLC": ("US Communication Services", "S&P 500 Communication Services"),
-    "XLE": ("US Energy", "S&P 500 Energy"),
-    "XLF": ("US Financials", "S&P 500 Financials"),
-    "XLI": ("US Industrials", "S&P 500 Industrials"),
-    "XLK": ("US Technology", "S&P 500 Technology"),
-    "XLP": ("US Staples", "S&P 500 Consumer Staples"),
-    "XLRE": ("US Real Estate", "S&P 500 Real Estate"),
-    "XLU": ("US Utilities", "S&P 500 Utilities"),
-    "XLV": ("US Healthcare", "S&P 500 Healthcare"),
-    "XLY": ("US Discretionary", "S&P 500 Consumer Discretionary"),
-    "SMH": ("Semiconductors", "Global semiconductor equities"),
-    "IGV": ("Software", "US application software"),
-    "SKYY": ("Cloud", "Cloud infrastructure and services"),
-    "VT": ("Global Equity", "Total world equity market"),
-    "ACWI": ("Global Equity ex-Frontier", "All-country world equity"),
-    "VEA": ("Developed ex-US", "Developed markets ex-US"),
-    "VWO": ("Emerging Markets", "Emerging markets equity"),
-    "EXUS": ("Non-US Equity", "Global equity ex-US"),
+    "USMV": ("US Minimum Volatility", "Defensive low-volatility factor"),
+    "VLUE": ("US Value Factor", "Value factor"),
+    "SPHB": ("S&P 500 High Beta", "High-beta equity risk appetite"),
+    "SPLV": ("S&P 500 Low Volatility", "Low-volatility defensive equity"),
+    "SCHD": ("US Dividend Quality", "Dividend / quality / defensive income equity"),
+
+    # -------------------------
+    # US SECTORS, INDUSTRIES, AND CYCLICAL SIGNALS
+    # -------------------------
+    "XLK": ("US Technology", "S&P 500 technology sector"),
+    "SMH": ("Semiconductors", "Large-cap semiconductor leadership"),
+    "SOXX": ("Semiconductor Breadth", "Semiconductor industry breadth"),
+    "XSD": ("Equal-Weight Semis", "Equal-weight semiconductor risk appetite"),
+    "XLC": ("US Communication Services", "Communication services / platform equities"),
+    "XLY": ("US Discretionary", "Consumer discretionary sector"),
+    "XLP": ("US Staples", "Consumer staples defensive sector"),
+    "XLF": ("US Financials", "Large-cap financials"),
+    "KRE": ("Regional Banks", "Regional banking and credit sensitivity"),
+    "XLE": ("US Energy", "Integrated energy and energy beta"),
+    "XOP": ("Oil & Gas E&P", "Exploration and production equities"),
+    "OIH": ("Oil Services", "Oilfield services / energy capex cycle"),
+    "XLI": ("US Industrials", "Industrial cyclicals"),
+    "IYT": ("Transports", "Transport cyclicality and goods movement"),
+    "XLU": ("US Utilities", "Defensive rate-sensitive equity"),
+    "XLV": ("US Healthcare", "Healthcare defensives"),
+    "IBB": ("Biotech Large-Cap", "Large-cap biotech"),
+    "XBI": ("Biotech Equal-Weight", "Speculative biotech risk appetite"),
+    "IHF": ("Healthcare Providers", "Managed care and healthcare services"),
+    "XLB": ("US Materials", "Materials cyclicality"),
+    "XME": ("Metals & Mining", "Mining and reflation sensitivity"),
+    "XRT": ("Retail", "Retail / consumer impulse"),
+    "XHB": ("Homebuilders", "Housing cycle proxy"),
+    "ITB": ("Home Construction", "Home construction and housing beta"),
+    "IYR": ("US Real Estate", "REITs and rate-sensitive real estate"),
+    "IGV": ("Software", "Software and application tech"),
+    "ARKK": ("Speculative Innovation", "Long-duration speculative growth"),
+
+    # -------------------------
+    # INTERNATIONAL AND EM EQUITY SIGNALS
+    # -------------------------
+    "EEM": ("Emerging Markets", "Liquid EM equity trading proxy"),
+    "VGK": ("Europe", "Developed Europe equities"),
+    "FEZ": ("Eurozone Large-Cap", "Eurozone blue-chip equity"),
+    "EWU": ("United Kingdom", "UK equities"),
     "EWG": ("Germany", "Germany equities"),
     "EWQ": ("France", "France equities"),
-    "EWU": ("United Kingdom", "UK equities"),
     "EWI": ("Italy", "Italy equities"),
     "EWP": ("Spain", "Spain equities"),
-    "EWL": ("Switzerland", "Switzerland equities"),
-    "EWN": ("Netherlands", "Netherlands equities"),
-    "EWD": ("Sweden", "Sweden equities"),
-    "EWO": ("Austria", "Austria equities"),
-    "EWK": ("Belgium", "Belgium equities"),
     "EWJ": ("Japan", "Japan equities"),
     "EWY": ("South Korea", "Korea equities"),
-    "ASHR": ("China A-Shares", "Onshore China equities"),
+    "EWT": ("Taiwan", "Taiwan equities / semis supply chain"),
     "FXI": ("China Large-Cap", "China offshore large caps"),
-    "EWT": ("Taiwan", "Taiwan equities"),
+    "MCHI": ("China Broad Equity", "Broad China equity"),
+    "KWEB": ("China Internet", "China internet and platform equities"),
+    "ASHR": ("China A-Shares", "Onshore China equities"),
     "INDA": ("India", "India equities"),
-    "EWS": ("Singapore", "Singapore equities"),
-    "EWA": ("Australia", "Australia equities"),
-    "EWH": ("Hong Kong", "Hong Kong equities"),
-    "EPHE": ("Philippines", "Philippines equities"),
-    "EWM": ("Malaysia", "Malaysia equities"),
-    "IDX": ("Indonesia", "Indonesia equities"),
-    "THD": ("Thailand", "Thailand equities"),
-    "VNM": ("Vietnam", "Vietnam equities"),
     "EWZ": ("Brazil", "Brazil equities"),
     "EWW": ("Mexico", "Mexico equities"),
-    "EWC": ("Canada", "Canada equities"),
-    "EPU": ("Peru", "Peru equities"),
-    "ECH": ("Chile", "Chile equities"),
+    "ECH": ("Chile", "Chile equities / copper sensitivity"),
     "ARGT": ("Argentina", "Argentina equities"),
-    "GXG": ("Colombia", "Colombia equities"),
-    "SGOV": ("UST Bills", "0-3 month Treasuries"),
-    "SHY": ("UST 1-3y", "Short-term Treasuries"),
-    "IEF": ("UST 7-10y", "Intermediate Treasuries"),
+
+    # -------------------------
+    # RATES, CREDIT, CASH, INFLATION
+    # -------------------------
+    "SGOV": ("UST Bills", "0-3 month Treasury bills"),
+    "BIL": ("UST Bills Alt", "1-3 month Treasury bills"),
+    "SHY": ("UST 1-3y", "Short-duration Treasuries"),
+    "IEF": ("UST 7-10y", "Intermediate-duration Treasuries"),
     "TLT": ("UST 20y+", "Long-duration Treasuries"),
+    "EDV": ("Extended Duration UST", "Long-duration zero-coupon Treasury exposure"),
     "TIP": ("TIPS", "Inflation-linked Treasuries"),
-    "LQD": ("IG Credit", "Investment-grade corporates"),
-    "VCIT": ("IG Credit Duration", "Intermediate IG corporates"),
-    "HYG": ("High Yield", "High-yield credit"),
-    "BKLN": ("Floating-Rate Credit", "Senior loans"),
-    "EMB": ("EM Debt", "USD EM sovereign debt"),
-    "BND": ("US Aggregate", "Total US bond market"),
+    "STIP": ("Short TIPS", "Short-duration inflation-linked Treasuries"),
+    "LQD": ("IG Credit", "Investment-grade corporate credit"),
+    "VCIT": ("Intermediate IG Credit", "Intermediate-duration investment-grade credit"),
+    "HYG": ("High Yield", "High-yield corporate credit"),
+    "JNK": ("High Yield Alt", "High-yield corporate credit alternative"),
+    "BKLN": ("Senior Loans", "Floating-rate senior loans"),
+    "MBB": ("Agency MBS", "Mortgage-backed securities"),
+    "EMB": ("EM Debt", "USD emerging-market sovereign debt"),
+    "MUB": ("Municipal Bonds", "Investment-grade municipal bonds"),
+    "GOVT": ("UST Aggregate", "Broad Treasury curve exposure"),
+
+    # -------------------------
+    # COMMODITIES, CRYPTO, VOLATILITY, FX
+    # -------------------------
     "GLD": ("Gold", "Gold bullion"),
     "SLV": ("Silver", "Silver bullion"),
-    "CPER": ("Copper", "Industrial copper"),
+    "GDX": ("Gold Miners", "Large-cap gold miners"),
+    "GDXJ": ("Junior Gold Miners", "Junior gold miners"),
     "USO": ("Crude Oil", "WTI crude oil"),
-    "DBC": ("Broad Commodities", "Commodity basket"),
-    "PDBC": ("Broad Commodities Alt", "Rules-based commodities"),
-    "URA": ("Uranium", "Nuclear fuel cycle"),
-    "VXX": ("Equity Volatility", "Front-end VIX futures"),
-    "UUP": ("USD", "US Dollar Index"),
-    "FXE": ("EURUSD", "Euro vs USD"),
-    "FXY": ("JPYUSD", "Japanese yen vs USD"),
-    "FXF": ("CHFUSD", "Swiss franc vs USD"),
-    "CEW": ("EM FX", "Emerging market currencies"),
+    "UNG": ("Natural Gas", "Natural gas futures"),
+    "DBC": ("Broad Commodities", "Diversified commodity basket"),
+    "DBA": ("Agriculture", "Agricultural commodities"),
+    "CPER": ("Copper", "Copper futures"),
+    "URA": ("Uranium", "Uranium and nuclear fuel cycle equities"),
+    "REMX": ("Rare Earths", "Rare earth and strategic metals equities"),
     "IBIT": ("Bitcoin", "Spot Bitcoin ETF"),
-    "ETH": ("Ethereum", "Ethereum proxy ticker as originally listed"),
+    "ETHA": ("Ethereum", "Spot Ethereum ETF"),
+    "VIXY": ("Equity Volatility", "Front-end VIX futures ETF"),
+    "UUP": ("US Dollar", "US Dollar Index bullish exposure"),
+    "FXE": ("Euro", "Euro versus US dollar"),
+    "FXY": ("Japanese Yen", "Japanese yen versus US dollar"),
+    "FXF": ("Swiss Franc", "Swiss franc versus US dollar"),
+    "CEW": ("EM FX", "Emerging-market currency basket"),
 }
 
 etf_tickers = tuple(etf_info.keys())
 
 US_EQUITY_TICKERS = {
-    "VTI", "VUG", "VTV", "MTUM", "QUAL", "USMV", "SCHD",
-    "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
-    "SMH", "IGV", "SKYY",
+    "QQQ", "DIA", "IWM", "IJR", "MDY", "RSP",
+    "IWF", "IWD", "IWO", "IWN",
+    "MTUM", "QUAL", "USMV", "VLUE", "SPHB", "SPLV", "SCHD",
+    "XLK", "SMH", "SOXX", "XSD", "XLC", "XLY", "XLP", "XLF", "KRE",
+    "XLE", "XOP", "OIH", "XLI", "IYT", "XLU", "XLV", "IBB", "XBI", "IHF",
+    "XLB", "XME", "XRT", "XHB", "ITB", "IYR", "IGV", "ARKK",
 }
 
 INTERNATIONAL_EQUITY_TICKERS = {
-    "VT", "ACWI", "VEA", "VWO", "EXUS",
-    "EWG", "EWQ", "EWU", "EWI", "EWP", "EWL", "EWN", "EWD", "EWO", "EWK",
-    "EWJ", "EWY", "ASHR", "FXI", "EWT", "INDA", "EWS", "EWA", "EWH", "EPHE",
-    "EWM", "IDX", "THD", "VNM", "EWZ", "EWW", "EWC", "EPU", "ECH", "ARGT", "GXG",
+    "EEM", "VGK", "FEZ", "EWU", "EWG", "EWQ", "EWI", "EWP",
+    "EWJ", "EWY", "EWT",
+    "FXI", "MCHI", "KWEB", "ASHR", "INDA",
+    "EWZ", "EWW", "ECH", "ARGT",
 }
 
 RATES_CREDIT_TICKERS = {
-    "SGOV", "SHY", "IEF", "TLT", "TIP", "LQD", "VCIT", "HYG", "BKLN", "EMB", "BND",
+    "SGOV", "BIL", "SHY", "IEF", "TLT", "EDV",
+    "TIP", "STIP",
+    "LQD", "VCIT", "HYG", "JNK", "BKLN", "MBB", "EMB", "MUB", "GOVT",
 }
 
 COMMODITY_TICKERS = {
-    "GLD", "SLV", "CPER", "USO", "DBC", "PDBC", "URA",
+    "GLD", "SLV", "GDX", "GDXJ",
+    "USO", "UNG", "DBC", "DBA", "CPER",
+    "URA", "REMX",
 }
 
 FX_TICKERS = {
@@ -277,7 +323,7 @@ FX_TICKERS = {
 }
 
 CRYPTO_VOL_TICKERS = {
-    "IBIT", "ETH", "VXX",
+    "IBIT", "ETHA", "VIXY",
 }
 
 
@@ -853,7 +899,7 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** ETF flow-pressure monitor using a stable price-volume proxy workflow.
+        **Purpose:** ETF flow-pressure monitor using a 100-name hedge-fund signal universe.
 
         **What the chart shows**
         - Full ETF coverage by default.
@@ -861,6 +907,10 @@ with st.sidebar:
         - Green means positive pressure.
         - Red means negative pressure.
         - Grey means zero, missing, or unchartable.
+
+        **Universe design**
+        - Excludes broad allocator parking-lot ETFs like SPY, IVV, VOO, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG.
+        - Focuses on sector, factor, regional, rates, credit, commodity, FX, crypto, and volatility signal ETFs.
 
         **Data source**
         - Yahoo Finance OHLCV data through yfinance.
@@ -927,7 +977,7 @@ bar_view = metric_map[chart_metric_choice]
 # =========================================================
 st.title("ETF Flow Pressure Proxy")
 st.caption(
-    "Directional ETF pressure monitor using public OHLCV data. "
+    "Directional ETF pressure monitor using a 100-name hedge-fund signal universe. "
     "Positive values suggest accumulation pressure. Negative values suggest distribution pressure."
 )
 
@@ -1266,6 +1316,6 @@ st.caption(
     f"Last refresh: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
     f"Source: Yahoo Finance OHLCV via yfinance | "
     f"Method: dollarized price-volume flow-pressure proxy, normalized pressure score, and data diagnostics | "
-    f"Every ticker in the original coverage list remains in the ranking image and table | "
+    f"Coverage: 100-name hedge-fund ETF signal universe, excluding broad allocator parking-lot ETFs | "
     f"© 2026 AD Fund Management LP"
 )
