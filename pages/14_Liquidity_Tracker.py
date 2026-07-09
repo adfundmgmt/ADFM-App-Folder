@@ -1,5 +1,4 @@
 import math
-import time
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 
@@ -27,15 +26,15 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 0.95rem !important;
+        padding-top: 0.90rem !important;
         padding-bottom: 2rem;
-        max-width: 1740px;
+        max-width: 1760px;
     }
 
     .adfm-header-wrap {
         margin-top: 0.10rem;
-        margin-bottom: 1.10rem;
-        padding-bottom: 0.15rem;
+        margin-bottom: 1.05rem;
+        padding-bottom: 0.75rem;
         border-bottom: 1px solid #e5e7eb;
     }
 
@@ -52,12 +51,12 @@ CUSTOM_CSS = """
         font-size: 0.93rem;
         line-height: 1.42;
         color: #6b7280;
-        margin: 0 0 0.80rem 0;
+        margin: 0;
         max-width: 1180px;
     }
 
     .section-title {
-        font-size: 1.02rem;
+        font-size: 1.03rem;
         font-weight: 760;
         color: #111827;
         margin-top: 0.35rem;
@@ -90,7 +89,7 @@ CUSTOM_CSS = """
     }
 
     .metric-value {
-        font-size: 1.28rem;
+        font-size: 1.24rem;
         font-weight: 760;
         color: #111827;
         line-height: 1.10;
@@ -140,13 +139,6 @@ CUSTOM_CSS = """
     [data-testid="stSidebar"] {
         background: #ffffff;
     }
-
-    div[data-testid="stMetric"] {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 13px;
-        padding: 10px 12px;
-    }
 </style>
 """
 
@@ -164,7 +156,7 @@ FED_FCIG_SOURCES = {
 
 
 # ============================================================
-# YAHOO LIQUIDITY COMPONENTS
+# MARKET-IMPLIED LIQUIDITY COMPONENTS
 # ============================================================
 
 COMPONENTS = [
@@ -174,7 +166,7 @@ COMPONENTS = [
         "numerator": "HYG",
         "denominator": "LQD",
         "orientation": 1,
-        "weight": 1.25,
+        "weight": 1.35,
         "description": "High yield outperforming investment grade means credit risk appetite is improving.",
     },
     {
@@ -184,7 +176,25 @@ COMPONENTS = [
         "denominator": "LQD",
         "orientation": 1,
         "weight": 1.00,
-        "description": "Second credit confirmation line; useful when HYG is distorted by ETF flows.",
+        "description": "Second credit confirmation line for risk appetite.",
+    },
+    {
+        "name": "HY Credit / Cash Proxy",
+        "category": "Credit",
+        "numerator": "HYG",
+        "denominator": "SHY",
+        "orientation": 1,
+        "weight": 1.00,
+        "description": "Credit beta versus cash-like short duration.",
+    },
+    {
+        "name": "Equal-Weight S&P / S&P 500",
+        "category": "Equity Breadth",
+        "numerator": "RSP",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 1.10,
+        "description": "Broad S&P participation beneath cap-weight leadership.",
     },
     {
         "name": "Small Caps / S&P 500",
@@ -192,8 +202,8 @@ COMPONENTS = [
         "numerator": "IWM",
         "denominator": "SPY",
         "orientation": 1,
-        "weight": 1.00,
-        "description": "Small-cap participation is a liquidity and domestic cyclicality check.",
+        "weight": 1.05,
+        "description": "Small-cap participation is a domestic cyclicality and liquidity check.",
     },
     {
         "name": "Equal-Weight Nasdaq / QQQ",
@@ -220,7 +230,16 @@ COMPONENTS = [
         "denominator": "QQQ",
         "orientation": 1,
         "weight": 1.00,
-        "description": "One of the cleaner animal-spirits ratios.",
+        "description": "Biotech is a clean animal-spirits and financing-conditions ratio.",
+    },
+    {
+        "name": "IPO Basket / S&P 500",
+        "category": "Speculation",
+        "numerator": "IPO",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 0.65,
+        "description": "Recent-issuance risk appetite relative to the broad market.",
     },
     {
         "name": "Regional Banks / S&P 500",
@@ -228,7 +247,7 @@ COMPONENTS = [
         "numerator": "KRE",
         "denominator": "SPY",
         "orientation": 1,
-        "weight": 1.00,
+        "weight": 1.05,
         "description": "Bank equity confirmation for funding and credit creation.",
     },
     {
@@ -237,7 +256,7 @@ COMPONENTS = [
         "numerator": "XLF",
         "denominator": "SPY",
         "orientation": 1,
-        "weight": 0.75,
+        "weight": 0.85,
         "description": "Broad financials confirmation.",
     },
     {
@@ -246,7 +265,7 @@ COMPONENTS = [
         "numerator": "SMH",
         "denominator": "QQQ",
         "orientation": 1,
-        "weight": 0.85,
+        "weight": 0.75,
         "description": "AI and capex leadership relative to Nasdaq beta.",
     },
     {
@@ -255,7 +274,7 @@ COMPONENTS = [
         "numerator": "NVDA",
         "denominator": "SMH",
         "orientation": 1,
-        "weight": 0.45,
+        "weight": 0.40,
         "description": "Leadership concentration and AI reflexivity check. Lower weight by design.",
     },
     {
@@ -264,7 +283,7 @@ COMPONENTS = [
         "numerator": "IBIT",
         "denominator": "SPY",
         "orientation": 1,
-        "weight": 0.80,
+        "weight": 0.75,
         "description": "Crypto ETF beta relative to broad equities.",
     },
     {
@@ -273,7 +292,7 @@ COMPONENTS = [
         "numerator": "BTC-USD",
         "denominator": "SPY",
         "orientation": 1,
-        "weight": 0.80,
+        "weight": 0.75,
         "description": "Native crypto liquidity impulse relative to equities.",
     },
     {
@@ -282,8 +301,17 @@ COMPONENTS = [
         "numerator": "EEM",
         "denominator": "SPY",
         "orientation": 1,
-        "weight": 0.90,
+        "weight": 0.85,
         "description": "Global dollar-liquidity sensitivity.",
+    },
+    {
+        "name": "China Internet / S&P 500",
+        "category": "Global Dollar Liquidity",
+        "numerator": "KWEB",
+        "denominator": "SPY",
+        "orientation": 1,
+        "weight": 0.55,
+        "description": "High-beta global liquidity and China risk appetite.",
     },
     {
         "name": "Long Duration / Cash Proxy",
@@ -291,7 +319,7 @@ COMPONENTS = [
         "numerator": "TLT",
         "denominator": "SHY",
         "orientation": 1,
-        "weight": 0.80,
+        "weight": 0.75,
         "description": "Long-duration bid versus short-duration cash proxy.",
     },
     {
@@ -300,7 +328,7 @@ COMPONENTS = [
         "numerator": "IEF",
         "denominator": "SHY",
         "orientation": 1,
-        "weight": 0.65,
+        "weight": 0.60,
         "description": "Less volatile duration confirmation.",
     },
     {
@@ -308,7 +336,7 @@ COMPONENTS = [
         "category": "Dollar",
         "ticker": "UUP",
         "orientation": -1,
-        "weight": 1.10,
+        "weight": 1.20,
         "description": "Lower dollar pressure is positive for global liquidity.",
     },
     {
@@ -316,7 +344,7 @@ COMPONENTS = [
         "category": "Volatility",
         "ticker": "^VIX",
         "orientation": -1,
-        "weight": 1.25,
+        "weight": 1.35,
         "description": "Lower volatility mechanically eases risk budgets.",
     },
 ]
@@ -361,37 +389,19 @@ def fmt_delta(x: float, digits: int = 2) -> str:
     return f"{sign}{x:.{digits}f}"
 
 
-def classify_regime(score: float) -> Tuple[str, str]:
+def classify_regime(score: float, breadth: float) -> Tuple[str, str]:
     if pd.isna(score):
-        return "Unavailable", "Insufficient component coverage"
+        return "Unavailable", "Insufficient component coverage."
 
-    if score >= 0.75:
-        return "Liquidity Expansion", "Risk appetite, breadth, credit, dollar, and vol are broadly confirming easier traded liquidity."
-
-    if score >= 0.25:
-        return "Improving", "Liquidity impulse is improving, but confirmation is not broad enough to call full expansion."
-
-    if score > -0.25:
-        return "Neutral / Mixed", "Signals are cross-current. The tape is not giving a clean liquidity message."
-
-    if score > -0.75:
-        return "Deteriorating", "The liquidity impulse is weakening. Watch credit, dollar, volatility, and breadth confirmation."
-
-    return "Liquidity Contraction", "Risk budgets are tightening across the market-implied liquidity stack."
-
-
-def regime_color(score: float) -> str:
-    if pd.isna(score):
-        return "#6b7280"
-    if score >= 0.75:
-        return "#065f46"
-    if score >= 0.25:
-        return "#047857"
-    if score > -0.25:
-        return "#6b7280"
-    if score > -0.75:
-        return "#b45309"
-    return "#991b1b"
+    if score >= 0.90 and breadth >= 65:
+        return "Liquidity Expansion", "Easier credit, lower pressure, and broad participation."
+    if score >= 0.35:
+        return "Improving", "Liquidity impulse is positive, but breadth still matters."
+    if score > -0.35:
+        return "Neutral / Mixed", "Cross-currents dominate; no clean liquidity regime."
+    if score > -0.90:
+        return "Deteriorating", "Liquidity impulse is weakening across enough components to matter."
+    return "Liquidity Contraction", "Tighter risk budgets, weaker breadth, or pressure from dollar/vol/credit."
 
 
 def signed_signal_word(value: float) -> str:
@@ -452,22 +462,38 @@ def zscore_trailing(series: pd.Series, window: int, min_periods: int) -> pd.Seri
     s = pd.to_numeric(series, errors="coerce")
     mu = s.rolling(window=window, min_periods=min_periods).mean()
     sigma = s.rolling(window=window, min_periods=min_periods).std()
-
     z = (s - mu) / sigma
     z = z.replace([np.inf, -np.inf], np.nan)
     return z
 
 
+def dynamic_axis_range(series: pd.Series, floor_abs: float = 1.25, pad: float = 0.20) -> Tuple[float, float]:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty:
+        return -floor_abs, floor_abs
+
+    lo = float(s.quantile(0.02))
+    hi = float(s.quantile(0.98))
+    lo = min(lo, -floor_abs)
+    hi = max(hi, floor_abs)
+
+    span = hi - lo
+    if span <= 0:
+        return -floor_abs, floor_abs
+
+    return lo - span * pad, hi + span * pad
+
+
 def score_to_bucket(score: float) -> str:
     if pd.isna(score):
         return "Unavailable"
-    if score >= 0.75:
+    if score >= 0.90:
         return "Strong easing"
-    if score >= 0.25:
+    if score >= 0.35:
         return "Easing"
-    if score > -0.25:
+    if score > -0.35:
         return "Mixed"
-    if score > -0.75:
+    if score > -0.90:
         return "Tightening"
     return "Strong tightening"
 
@@ -481,15 +507,29 @@ def color_score(val: object) -> str:
     if pd.isna(x):
         return ""
 
-    if x >= 0.75:
+    if x >= 0.90:
         return "background-color: #dcfce7; color: #14532d;"
-    if x >= 0.25:
+    if x >= 0.35:
         return "background-color: #ecfdf5; color: #065f46;"
-    if x > -0.25:
+    if x > -0.35:
         return "background-color: #f9fafb; color: #374151;"
-    if x > -0.75:
+    if x > -0.90:
         return "background-color: #fff7ed; color: #9a3412;"
     return "background-color: #fee2e2; color: #7f1d1d;"
+
+
+def month_end_last(obj: pd.Series | pd.DataFrame) -> pd.Series | pd.DataFrame:
+    out = obj.copy()
+    out.index = pd.to_datetime(out.index, errors="coerce")
+    out = out.loc[out.index.notna()].sort_index()
+
+    for freq in ("ME", "M"):
+        try:
+            return out.resample(freq).last()
+        except ValueError:
+            continue
+
+    raise ValueError("Could not resample to month-end with either ME or M.")
 
 
 # ============================================================
@@ -543,7 +583,9 @@ def extract_close_prices(raw: pd.DataFrame) -> pd.DataFrame:
 
     close.columns = [str(c).strip() for c in close.columns]
     close = close.sort_index()
-    close.index = pd.to_datetime(close.index).tz_localize(None)
+    close.index = pd.to_datetime(close.index, errors="coerce")
+    close = close.loc[close.index.notna()]
+    close.index = close.index.tz_localize(None) if getattr(close.index, "tz", None) is not None else close.index
     close = close.loc[:, ~close.columns.duplicated(keep="last")]
 
     for col in close.columns:
@@ -570,7 +612,7 @@ def load_yahoo_prices(tickers: Tuple[str, ...], period: str) -> pd.DataFrame:
     if close.empty:
         return pd.DataFrame()
 
-    available = [c for c in close.columns if close[c].notna().sum() > 20]
+    available = [c for c in close.columns if close[c].notna().sum() > 45]
     close = close[available].copy()
 
     return close
@@ -587,7 +629,7 @@ def choose_fcig_column(df: pd.DataFrame) -> Optional[str]:
     if not numeric_cols:
         return None
 
-    priority_terms = ["fci-g", "fcig", "fci_g", "fci g", "fci"]
+    priority_terms = ["fci-g index", "fci-g", "fcig", "fci_g", "fci g"]
 
     for term in priority_terms:
         for col in numeric_cols:
@@ -599,12 +641,13 @@ def choose_fcig_column(df: pd.DataFrame) -> Optional[str]:
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
-def load_fed_fcig() -> Tuple[pd.DataFrame, Dict[str, str]]:
+def load_fed_fcig() -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str]]:
     frames = []
+    contribution_frame = pd.DataFrame()
     errors: Dict[str, str] = {}
 
     headers = {
-        "User-Agent": "ADFM-Liquidity-Conditions-Monitor/1.0",
+        "User-Agent": "ADFM-Liquidity-Conditions-Monitor/2.0",
         "Accept": "text/csv,*/*;q=0.8",
     }
 
@@ -621,7 +664,6 @@ def load_fed_fcig() -> Tuple[pd.DataFrame, Dict[str, str]]:
                 continue
 
             date_col = None
-
             for col in temp.columns:
                 lower = str(col).lower()
                 if "date" in lower or "month" in lower or "time" in lower:
@@ -643,11 +685,23 @@ def load_fed_fcig() -> Tuple[pd.DataFrame, Dict[str, str]]:
             out = temp[[value_col]].rename(columns={value_col: label})
             frames.append(out)
 
+            if label == "FCI-G Baseline":
+                possible_contribs = []
+                for col in temp.columns:
+                    if col == value_col:
+                        continue
+                    temp[col] = pd.to_numeric(temp[col], errors="coerce")
+                    if temp[col].notna().sum() >= 12:
+                        possible_contribs.append(col)
+
+                if possible_contribs:
+                    contribution_frame = temp[possible_contribs].copy()
+
         except Exception as exc:
             errors[label] = str(exc)
 
     if not frames:
-        return pd.DataFrame(), errors
+        return pd.DataFrame(), contribution_frame, errors
 
     fcig = pd.concat(frames, axis=1).sort_index()
     fcig = fcig[~fcig.index.duplicated(keep="last")]
@@ -657,7 +711,7 @@ def load_fed_fcig() -> Tuple[pd.DataFrame, Dict[str, str]]:
 
     fcig = fcig.dropna(how="all")
 
-    return fcig, errors
+    return fcig, contribution_frame, errors
 
 
 # ============================================================
@@ -692,7 +746,7 @@ def build_component_series(prices: pd.DataFrame, components: List[Dict[str, obje
             s = num / den.replace(0, np.nan)
             display_ticker = f"{numerator}/{denominator}"
 
-        if s.dropna().shape[0] < 60:
+        if s.dropna().shape[0] < 90:
             continue
 
         series_map[name] = s
@@ -715,40 +769,45 @@ def build_scores(
     z_window: int,
     min_z_periods: int,
     smoothing_window: int,
-) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     score_df = pd.DataFrame(index=component_df.index)
-    weighted_scores = pd.DataFrame(index=component_df.index)
+    raw_impulse_df = pd.DataFrame(index=component_df.index)
     weights = {}
 
     for spec in available_specs:
         name = str(spec["name"])
         orientation = float(spec.get("orientation", 1.0))
         weight = float(spec.get("weight", 1.0))
+        raw = pd.to_numeric(component_df[name], errors="coerce")
 
-        z = zscore_trailing(component_df[name], window=z_window, min_periods=min_z_periods)
-        score = (z * orientation).clip(lower=-3.0, upper=3.0)
+        impulse_21d = safe_pct_change(raw, 21) * orientation
+        impulse_63d = safe_pct_change(raw, 63) * orientation
+        impulse_126d = safe_pct_change(raw, 126) * orientation
+
+        z_21d = zscore_trailing(impulse_21d, window=z_window, min_periods=min_z_periods)
+        z_63d = zscore_trailing(impulse_63d, window=z_window, min_periods=min_z_periods)
+        z_126d = zscore_trailing(impulse_126d, window=z_window, min_periods=min_z_periods)
+
+        score = (0.50 * z_21d + 0.35 * z_63d + 0.15 * z_126d).clip(lower=-3.0, upper=3.0)
+        raw_impulse = 0.60 * impulse_21d + 0.30 * impulse_63d + 0.10 * impulse_126d
 
         score_df[name] = score
-        weighted_scores[name] = score * weight
+        raw_impulse_df[name] = raw_impulse
         weights[name] = weight
 
     weights_series = pd.Series(weights)
 
     def weighted_mean(row: pd.Series) -> float:
         valid = row.dropna()
-
         if valid.empty:
             return np.nan
-
         active_weights = weights_series.loc[valid.index]
         denom = active_weights.sum()
-
         if denom == 0:
             return np.nan
-
         return float((valid * active_weights).sum() / denom)
 
-    min_components = max(4, int(math.ceil(len(available_specs) * 0.45)))
+    min_components = max(5, int(math.ceil(len(available_specs) * 0.45)))
     valid_count = score_df.notna().sum(axis=1)
 
     composite = score_df.apply(weighted_mean, axis=1)
@@ -757,12 +816,18 @@ def build_scores(
     if smoothing_window > 1:
         composite = composite.rolling(smoothing_window, min_periods=1).mean()
 
-    return score_df, composite, weighted_scores
+    positive_count = (score_df > 0).sum(axis=1)
+    valid_count = score_df.notna().sum(axis=1)
+    breadth = positive_count / valid_count.replace(0, np.nan) * 100.0
+    breadth = breadth.where(valid_count >= min_components)
+
+    return score_df, raw_impulse_df, composite, breadth
 
 
 def build_scorecard(
     component_df: pd.DataFrame,
     score_df: pd.DataFrame,
+    raw_impulse_df: pd.DataFrame,
     available_specs: List[Dict[str, object]],
 ) -> pd.DataFrame:
     rows = []
@@ -771,13 +836,13 @@ def build_scorecard(
         name = str(spec["name"])
         orientation = float(spec.get("orientation", 1.0))
         raw = component_df[name]
-        adj_21d = safe_pct_change(raw, 21) * orientation
-        adj_63d = safe_pct_change(raw, 63) * orientation
 
         latest_score = latest_valid(score_df[name])
         latest_level = latest_valid(raw)
-        latest_21d = latest_valid(adj_21d)
-        latest_63d = latest_valid(adj_63d)
+        latest_21d = latest_valid(safe_pct_change(raw, 21) * orientation)
+        latest_63d = latest_valid(safe_pct_change(raw, 63) * orientation)
+        latest_126d = latest_valid(safe_pct_change(raw, 126) * orientation)
+        latest_raw_impulse = latest_valid(raw_impulse_df[name])
 
         rows.append(
             {
@@ -785,8 +850,10 @@ def build_scorecard(
                 "Category": spec.get("category", ""),
                 "Ticker / Ratio": spec.get("display_ticker", ""),
                 "Latest": latest_level,
-                "21D Liquidity Move": latest_21d,
-                "63D Liquidity Move": latest_63d,
+                "21D Move": latest_21d,
+                "63D Move": latest_63d,
+                "126D Move": latest_126d,
+                "Raw Impulse": latest_raw_impulse,
                 "Score": latest_score,
                 "Signal": score_to_bucket(latest_score),
                 "Weight": float(spec.get("weight", 1.0)),
@@ -838,10 +905,14 @@ def filter_by_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
     if df.empty:
         return df
 
-    if lookback == "max":
-        return df.copy()
+    out = df.copy()
+    out.index = pd.to_datetime(out.index, errors="coerce")
+    out = out.loc[out.index.notna()].sort_index()
 
-    latest = df.index.max()
+    if lookback == "max":
+        return out.copy()
+
+    latest = out.index.max()
 
     if lookback == "6m":
         start = latest - pd.DateOffset(months=6)
@@ -856,9 +927,9 @@ def filter_by_lookback(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
     elif lookback == "10y":
         start = latest - pd.DateOffset(years=10)
     else:
-        start = df.index.min()
+        start = out.index.min()
 
-    return df[df.index >= start].copy()
+    return out[out.index >= start].copy()
 
 
 # ============================================================
@@ -871,7 +942,7 @@ st.markdown(
         <div class="adfm-title">{TITLE}</div>
         <div class="adfm-subtitle">
             Daily market-implied liquidity impulse from Yahoo Finance ratios, with the Federal Reserve FCI-G as the official financial-conditions overlay.
-            Positive composite readings indicate easier traded liquidity; negative readings indicate tightening pressure.
+            The composite is now built from 21D, 63D, and 126D liquidity moves rather than level z-scores, so the chart shows actual changes in traded liquidity instead of a flat statistical level.
         </div>
     </div>
     """,
@@ -887,9 +958,9 @@ with st.sidebar:
     st.markdown("### Framework")
     st.markdown(
         """
-This page is not a Fed balance-sheet scraper.
+This page does not scrape Fed H.4.1 balance-sheet tables.
 
-It uses Yahoo Finance to track whether liquidity is actually reaching traded markets through credit, breadth, high beta, crypto, dollar pressure, volatility, duration, and banks.
+It uses Yahoo Finance to track whether liquidity is reaching traded markets through credit, breadth, high beta, crypto, dollar pressure, volatility, duration, and banks.
 
 The Fed FCI-G overlay is pulled directly from the Federal Reserve's public monthly CSVs.
         """
@@ -908,7 +979,7 @@ The Fed FCI-G overlay is pulled directly from the Federal Reserve's public month
         "Yahoo download period",
         ["1y", "2y", "3y", "5y", "10y", "max"],
         index=3,
-        help="Use at least 3y if you want stable z-scores.",
+        help="Use at least 3y if you want stable impulse z-scores.",
     )
 
     benchmark = st.selectbox(
@@ -918,7 +989,7 @@ The Fed FCI-G overlay is pulled directly from the Federal Reserve's public month
     )
 
     z_window = st.number_input(
-        "Z-score lookback, trading days",
+        "Impulse z-score lookback, trading days",
         min_value=126,
         max_value=1260,
         value=504,
@@ -928,8 +999,8 @@ The Fed FCI-G overlay is pulled directly from the Federal Reserve's public month
     min_z_periods = st.number_input(
         "Minimum z-score observations",
         min_value=63,
-        max_value=504,
-        value=126,
+        max_value=756,
+        value=252,
         step=21,
     )
 
@@ -937,24 +1008,25 @@ The Fed FCI-G overlay is pulled directly from the Federal Reserve's public month
         "Composite smoothing, trading days",
         min_value=1,
         max_value=21,
-        value=5,
+        value=3,
         step=1,
     )
 
-    st.divider()
-    st.markdown("### Display")
-
+    show_benchmark = st.checkbox("Show benchmark overlay", value=True)
+    show_category_chart = st.checkbox("Show category pressure chart", value=True)
+    show_component_bars = st.checkbox("Show component score bars", value=True)
     show_fed_fcig = st.checkbox("Show Fed FCI-G overlay", value=True)
-    show_category_scores = st.checkbox("Show category pressure map", value=True)
-    show_raw_components = st.checkbox("Show component table", value=True)
-    show_download = st.checkbox("Show download buttons", value=True)
+    show_scorecard = st.checkbox("Show component scorecard", value=True)
+    show_raw_download = st.checkbox("Show download section", value=True)
 
     st.divider()
-    st.caption("Data: Yahoo Finance via yfinance; Federal Reserve FCI-G monthly CSVs.")
+    st.caption(
+        "Composite score = weighted average of component impulse z-scores. Each component uses a blend of 21D, 63D, and 126D liquidity moves after direction adjustment."
+    )
 
 
 # ============================================================
-# LOAD DATA
+# DATA PIPELINE
 # ============================================================
 
 tickers = required_tickers(COMPONENTS, CORE_BENCHMARKS)
@@ -970,7 +1042,7 @@ if component_df.empty or not available_specs:
     st.error("No usable liquidity components could be built from the Yahoo Finance download.")
     st.stop()
 
-score_df, composite, weighted_scores = build_scores(
+score_df, raw_impulse_df, composite, breadth_series = build_scores(
     component_df=component_df,
     available_specs=available_specs,
     z_window=int(z_window),
@@ -978,31 +1050,24 @@ score_df, composite, weighted_scores = build_scores(
     smoothing_window=int(smoothing_window),
 )
 
-scorecard = build_scorecard(component_df, score_df, available_specs)
+scorecard = build_scorecard(component_df, score_df, raw_impulse_df, available_specs)
 category_scores = build_category_scores(score_df, available_specs)
 
 display_component_df = filter_by_lookback(component_df, lookback)
 display_score_df = filter_by_lookback(score_df, lookback)
+display_raw_impulse_df = filter_by_lookback(raw_impulse_df, lookback)
 display_composite = filter_by_lookback(composite.to_frame("Liquidity Composite"), lookback)["Liquidity Composite"]
-
+display_breadth = filter_by_lookback(breadth_series.to_frame("Breadth"), lookback)["Breadth"]
 display_prices = filter_by_lookback(prices, lookback)
 
 latest_date = display_composite.dropna().index.max() if display_composite.notna().any() else prices.index.max()
 latest_score = latest_valid(display_composite)
-regime, regime_description = classify_regime(latest_score)
+latest_breadth = latest_valid(display_breadth)
+regime, regime_description = classify_regime(latest_score, latest_breadth)
 
 composite_1w = obs_change(display_composite, 5)
 composite_1m = obs_change(display_composite, 21)
 composite_3m = obs_change(display_composite, 63)
-
-latest_breadth = np.nan
-breadth_series = pd.Series(index=score_df.index, dtype="float64")
-
-if not score_df.empty:
-    positive_count = (score_df > 0).sum(axis=1)
-    valid_count = score_df.notna().sum(axis=1)
-    breadth_series = positive_count / valid_count.replace(0, np.nan) * 100.0
-    latest_breadth = latest_valid(filter_by_lookback(breadth_series.to_frame("Breadth"), lookback)["Breadth"])
 
 available_component_count = len(available_specs)
 total_component_count = len(COMPONENTS)
@@ -1014,7 +1079,7 @@ total_component_count = len(COMPONENTS)
 
 st.markdown("<div class='section-title'>Liquidity Regime Snapshot</div>", unsafe_allow_html=True)
 st.markdown(
-    f"<div class='section-subtitle'>Latest Yahoo-derived signal: {pd.Timestamp(latest_date).strftime('%b %d, %Y')}. Composite is a weighted average of trailing z-scores after direction adjustment.</div>",
+    f"<div class='section-subtitle'>Latest Yahoo-derived signal: {pd.Timestamp(latest_date).strftime('%b %d, %Y')}. Positive means easier traded liquidity; negative means tightening pressure.</div>",
     unsafe_allow_html=True,
 )
 
@@ -1024,7 +1089,7 @@ with c1:
     metric_card("Regime", regime, regime_description)
 
 with c2:
-    metric_card("Composite", fmt_num(latest_score, 2), "Positive = easier traded liquidity")
+    metric_card("Composite", fmt_num(latest_score, 2), "Weighted impulse z-score")
 
 with c3:
     metric_card("1W Change", fmt_delta(composite_1w, 2), signed_signal_word(composite_1w))
@@ -1043,31 +1108,45 @@ with c6:
 # MAIN CHART
 # ============================================================
 
-st.markdown("<div class='section-title'>Yahoo Market-Implied Liquidity Composite</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Market-Implied Liquidity Impulse</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-subtitle'>Credit, breadth, speculation, banks, crypto, dollar pressure, volatility, and duration compressed into one daily liquidity impulse.</div>",
+    "<div class='section-subtitle'>A daily composite of 21D, 63D, and 126D moves across credit, breadth, speculation, banks, crypto, rates, dollar, and volatility. The y-axis is dynamic; the benchmark axis is no longer forced into the composite range.</div>",
     unsafe_allow_html=True,
 )
 
-fig = make_subplots(specs=[[{"secondary_y": True}]])
+fig = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.075,
+    row_heights=[0.72, 0.28],
+    specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
+    subplot_titles=("Liquidity impulse", "Component breadth"),
+)
+
+comp_y0, comp_y1 = dynamic_axis_range(display_composite, floor_abs=1.15, pad=0.16)
 
 fig.add_hrect(
-    y0=0.75,
-    y1=3.0,
+    y0=0.90,
+    y1=max(comp_y1, 0.90),
     fillcolor="rgba(5, 95, 70, 0.07)",
-    line_width=0
+    line_width=0,
+    row=1,
+    col=1,
 )
 
 fig.add_hrect(
-    y0=-3.0,
-    y1=-0.75,
+    y0=min(comp_y0, -0.90),
+    y1=-0.90,
     fillcolor="rgba(153, 27, 27, 0.07)",
-    line_width=0
+    line_width=0,
+    row=1,
+    col=1,
 )
 
-fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af")
-fig.add_hline(y=0.75, line_width=1, line_dash="dot", line_color="#d1d5db")
-fig.add_hline(y=-0.75, line_width=1, line_dash="dot", line_color="#d1d5db")
+fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=1, col=1)
+fig.add_hline(y=0.90, line_width=1, line_dash="dot", line_color="#d1d5db", row=1, col=1)
+fig.add_hline(y=-0.90, line_width=1, line_dash="dot", line_color="#d1d5db", row=1, col=1)
 
 fig.add_trace(
     go.Scatter(
@@ -1075,12 +1154,15 @@ fig.add_trace(
         y=display_composite,
         name="Liquidity Composite",
         mode="lines",
-        line=dict(width=2.8, color="#111827"),
+        line=dict(width=2.9, color="#111827"),
         hovertemplate="%{x|%Y-%m-%d}<br>Composite: %{y:.2f}<extra></extra>",
-    )
+    ),
+    row=1,
+    col=1,
+    secondary_y=False,
 )
 
-if benchmark in display_prices.columns:
+if show_benchmark and benchmark in display_prices.columns:
     bench_rebased = rebase(display_prices[benchmark])
 
     fig.add_trace(
@@ -1090,20 +1172,38 @@ if benchmark in display_prices.columns:
             name=f"{benchmark}, rebased",
             mode="lines",
             line=dict(width=1.9, color="#2563eb"),
-            opacity=0.72,
+            opacity=0.62,
             hovertemplate=f"%{{x|%Y-%m-%d}}<br>{benchmark}: %{{y:.1f}}<extra></extra>",
         ),
+        row=1,
+        col=1,
         secondary_y=True,
     )
 
+fig.add_hline(y=50, line_width=1, line_dash="dot", line_color="#9ca3af", row=2, col=1)
+fig.add_trace(
+    go.Scatter(
+        x=display_breadth.index,
+        y=display_breadth,
+        name="% Components Easing",
+        mode="lines",
+        line=dict(width=2.0, color="#475569"),
+        fill="tozeroy",
+        opacity=0.85,
+        hovertemplate="%{x|%Y-%m-%d}<br>Components easing: %{y:.0f}%<extra></extra>",
+    ),
+    row=2,
+    col=1,
+)
+
 fig.update_layout(
     template="plotly_white",
-    height=560,
-    margin=dict(l=55, r=55, t=25, b=35),
+    height=690,
+    margin=dict(l=55, r=60, t=48, b=35),
     legend=dict(
         orientation="h",
         x=0,
-        y=1.08,
+        y=1.065,
         xanchor="left",
         yanchor="bottom",
         bgcolor="rgba(255,255,255,0.78)",
@@ -1112,23 +1212,117 @@ fig.update_layout(
 )
 
 fig.update_yaxes(
-    title_text="Liquidity z-score",
-    range=[-3.0, 3.0],
+    title_text="Composite z-score",
+    range=[comp_y0, comp_y1],
     showgrid=True,
     gridcolor="#edf0f4",
-    zeroline=False
+    zeroline=False,
+    row=1,
+    col=1,
+    secondary_y=False,
 )
 
 fig.update_yaxes(
     title_text=f"{benchmark}, rebased",
     showgrid=False,
     zeroline=False,
+    row=1,
+    col=1,
     secondary_y=True,
 )
 
-fig.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date")
+fig.update_yaxes(
+    title_text="Breadth",
+    range=[0, 100],
+    ticksuffix="%",
+    showgrid=True,
+    gridcolor="#edf0f4",
+    zeroline=False,
+    row=2,
+    col=1,
+)
+
+fig.update_xaxes(tickformat="%b-%y", showgrid=False, row=2, col=1, title_text="Date")
 
 st.plotly_chart(fig, use_container_width=True)
+
+
+# ============================================================
+# CATEGORY PRESSURE CHART
+# ============================================================
+
+if show_category_chart and not category_scores.empty:
+    st.markdown("<div class='section-title'>Liquidity Pressure by Sleeve</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-subtitle'>The composite is only useful if the internals explain it. This table and chart show where the liquidity impulse is coming from.</div>",
+        unsafe_allow_html=True,
+    )
+
+    cat_display = category_scores.copy()
+    cat_display = cat_display.sort_values("Latest Score", ascending=True)
+
+    fig_cat = go.Figure()
+    fig_cat.add_vline(x=0, line_width=1, line_dash="dot", line_color="#9ca3af")
+    fig_cat.add_trace(
+        go.Bar(
+            x=cat_display["Latest Score"],
+            y=cat_display["Category"],
+            orientation="h",
+            name="Latest Score",
+            hovertemplate="%{y}<br>Score: %{x:.2f}<extra></extra>",
+        )
+    )
+
+    fig_cat.update_layout(
+        template="plotly_white",
+        height=max(360, 42 * len(cat_display) + 110),
+        margin=dict(l=135, r=25, t=20, b=35),
+        showlegend=False,
+    )
+
+    fig_cat.update_xaxes(title_text="Latest sleeve score", showgrid=True, gridcolor="#edf0f4", zeroline=False)
+    fig_cat.update_yaxes(title_text="", showgrid=False)
+    st.plotly_chart(fig_cat, use_container_width=True)
+
+
+# ============================================================
+# COMPONENT SCORE BARS
+# ============================================================
+
+if show_component_bars and not scorecard.empty:
+    st.markdown("<div class='section-title'>Component Score Stack</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-subtitle'>Current component scores after direction adjustment. Positive means the component is contributing to easier liquidity; negative means it is tightening the tape.</div>",
+        unsafe_allow_html=True,
+    )
+
+    bar_df = scorecard[["Component", "Score", "Category", "Ticker / Ratio"]].dropna(subset=["Score"]).copy()
+    bar_df = bar_df.sort_values("Score", ascending=True)
+
+    fig_bar = go.Figure()
+    fig_bar.add_vline(x=0, line_width=1, line_dash="dot", line_color="#9ca3af")
+    fig_bar.add_trace(
+        go.Bar(
+            x=bar_df["Score"],
+            y=bar_df["Component"],
+            orientation="h",
+            text=bar_df["Ticker / Ratio"],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{y}<br>Score: %{x:.2f}<extra></extra>",
+        )
+    )
+
+    fig_bar.update_layout(
+        template="plotly_white",
+        height=max(560, 31 * len(bar_df) + 110),
+        margin=dict(l=220, r=120, t=20, b=35),
+        showlegend=False,
+    )
+
+    fig_bar.update_xaxes(title_text="Component score", showgrid=True, gridcolor="#edf0f4", zeroline=False)
+    fig_bar.update_yaxes(title_text="", showgrid=False)
+    st.plotly_chart(fig_bar, use_container_width=True)
 
 
 # ============================================================
@@ -1136,11 +1330,11 @@ st.plotly_chart(fig, use_container_width=True)
 # ============================================================
 
 if show_fed_fcig:
-    fcig_df, fcig_errors = load_fed_fcig()
+    fcig_df, fcig_contribs, fcig_errors = load_fed_fcig()
 
     st.markdown("<div class='section-title'>Official Fed Financial Conditions Overlay</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-subtitle'>Federal Reserve FCI-G. Positive readings indicate financial conditions are a headwind to future GDP growth; negative readings indicate a tailwind.</div>",
+        "<div class='section-subtitle'>Federal Reserve FCI-G. Positive FCI-G readings indicate financial conditions are a growth headwind; negative readings indicate a growth tailwind. The Yahoo composite remains a traded-market impulse, not an official macro series.</div>",
         unsafe_allow_html=True,
     )
 
@@ -1160,15 +1354,20 @@ if show_fed_fcig:
                     st.write(f"**{key}:** {value}")
     else:
         fcig_plot = filter_by_lookback(fcig_df, lookback)
+        composite_monthly = month_end_last(composite.dropna())
+        composite_monthly = filter_by_lookback(composite_monthly.to_frame("Yahoo Composite"), lookback)["Yahoo Composite"]
 
-        fig_fcig = make_subplots(specs=[[{"secondary_y": True}]])
-
-        fig_fcig.add_hline(
-            y=0,
-            line_width=1,
-            line_dash="dot",
-            line_color="#9ca3af"
+        fig_fcig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.075,
+            row_heights=[0.68, 0.32],
+            specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
+            subplot_titles=("Fed FCI-G and Yahoo traded-liquidity impulse", "Easing direction comparison"),
         )
+
+        fig_fcig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=1, col=1)
 
         if "FCI-G Baseline" in fcig_plot.columns:
             fig_fcig.add_trace(
@@ -1180,6 +1379,8 @@ if show_fed_fcig:
                     line=dict(width=2.7, color="#111827"),
                     hovertemplate="%{x|%Y-%m}<br>FCI-G Baseline: %{y:.2f}<extra></extra>",
                 ),
+                row=1,
+                col=1,
                 secondary_y=False,
             )
 
@@ -1190,38 +1391,69 @@ if show_fed_fcig:
                     y=fcig_plot["FCI-G 1Y Lookback"],
                     name="FCI-G 1Y Lookback",
                     mode="lines",
-                    line=dict(width=2.2, color="#b45309"),
+                    line=dict(width=2.1, color="#b45309"),
+                    opacity=0.82,
                     hovertemplate="%{x|%Y-%m}<br>FCI-G 1Y: %{y:.2f}<extra></extra>",
                 ),
+                row=1,
+                col=1,
                 secondary_y=False,
             )
 
-        composite_monthly = composite.dropna().resample("M").last()
-
         if not composite_monthly.empty:
-            composite_monthly = filter_by_lookback(composite_monthly.to_frame("Yahoo Composite"), lookback)["Yahoo Composite"]
-
             fig_fcig.add_trace(
                 go.Scatter(
                     x=composite_monthly.index,
                     y=composite_monthly,
-                    name="Yahoo Liquidity Composite",
+                    name="Yahoo Composite",
                     mode="lines",
                     line=dict(width=2.0, color="#2563eb"),
-                    opacity=0.76,
+                    opacity=0.78,
                     hovertemplate="%{x|%Y-%m}<br>Yahoo Composite: %{y:.2f}<extra></extra>",
                 ),
+                row=1,
+                col=1,
                 secondary_y=True,
+            )
+
+        if "FCI-G Baseline" in fcig_df.columns and not composite_monthly.empty:
+            fed_easing = -fcig_df["FCI-G Baseline"].dropna()
+            fed_easing = filter_by_lookback(fed_easing.to_frame("Fed Easing Direction"), lookback)["Fed Easing Direction"]
+
+            fig_fcig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#9ca3af", row=2, col=1)
+            fig_fcig.add_trace(
+                go.Scatter(
+                    x=fed_easing.index,
+                    y=fed_easing,
+                    name="Fed FCI-G, inverted",
+                    mode="lines",
+                    line=dict(width=2.2, color="#0f172a"),
+                    hovertemplate="%{x|%Y-%m}<br>Fed easing direction: %{y:.2f}<extra></extra>",
+                ),
+                row=2,
+                col=1,
+            )
+            fig_fcig.add_trace(
+                go.Scatter(
+                    x=composite_monthly.index,
+                    y=composite_monthly,
+                    name="Yahoo Composite, monthly",
+                    mode="lines",
+                    line=dict(width=2.0, color="#2563eb"),
+                    hovertemplate="%{x|%Y-%m}<br>Yahoo Composite: %{y:.2f}<extra></extra>",
+                ),
+                row=2,
+                col=1,
             )
 
         fig_fcig.update_layout(
             template="plotly_white",
-            height=500,
-            margin=dict(l=55, r=55, t=25, b=35),
+            height=690,
+            margin=dict(l=55, r=60, t=48, b=35),
             legend=dict(
                 orientation="h",
                 x=0,
-                y=1.08,
+                y=1.065,
                 xanchor="left",
                 yanchor="bottom",
                 bgcolor="rgba(255,255,255,0.78)",
@@ -1233,27 +1465,43 @@ if show_fed_fcig:
             title_text="FCI-G growth impulse",
             showgrid=True,
             gridcolor="#edf0f4",
-            zeroline=False
+            zeroline=False,
+            row=1,
+            col=1,
+            secondary_y=False,
         )
 
         fig_fcig.update_yaxes(
             title_text="Yahoo composite",
             showgrid=False,
             zeroline=False,
+            row=1,
+            col=1,
             secondary_y=True,
         )
 
-        fig_fcig.update_xaxes(tickformat="%b-%y", showgrid=False, title_text="Date")
+        fig_fcig.update_yaxes(
+            title_text="Positive = easier",
+            showgrid=True,
+            gridcolor="#edf0f4",
+            zeroline=False,
+            row=2,
+            col=1,
+        )
+
+        fig_fcig.update_xaxes(tickformat="%b-%y", showgrid=False, row=2, col=1, title_text="Date")
 
         st.plotly_chart(fig_fcig, use_container_width=True)
 
         latest_fcig_row = fcig_df.dropna(how="all").iloc[-1]
         latest_fcig_date = fcig_df.dropna(how="all").index[-1]
 
-        f1, f2, f3, f4 = st.columns(4)
-
         baseline = latest_fcig_row.get("FCI-G Baseline", np.nan)
         one_year = latest_fcig_row.get("FCI-G 1Y Lookback", np.nan)
+        fcig_3m_change = obs_change(fcig_df["FCI-G Baseline"], 3) if "FCI-G Baseline" in fcig_df.columns else np.nan
+        official_signal = "Growth headwind" if baseline > 0 else "Growth tailwind" if baseline < 0 else "Neutral"
+
+        f1, f2, f3, f4 = st.columns(4)
 
         with f1:
             metric_card("FCI-G Baseline", fmt_num(baseline, 2), f"Latest: {latest_fcig_date:%b %Y}")
@@ -1262,199 +1510,155 @@ if show_fed_fcig:
             metric_card("FCI-G 1Y", fmt_num(one_year, 2), "Faster lookback window")
 
         with f3:
-            fed_signal = "Growth headwind" if pd.notna(baseline) and baseline > 0 else "Growth tailwind"
-            metric_card("Fed Signal", fed_signal, "Positive = tighter conditions")
+            metric_card("3M FCI-G Change", fmt_delta(fcig_3m_change, 2), "Positive = conditions tightened")
 
         with f4:
-            spread = latest_score - (-baseline if pd.notna(baseline) else np.nan)
-            metric_card("Tape vs Fed Gap", fmt_delta(spread, 2), "Yahoo composite less inverted FCI-G")
+            metric_card("Official Signal", official_signal, "Positive FCI-G = GDP headwind")
+
+        if not fcig_contribs.empty:
+            contrib_latest = fcig_contribs.dropna(how="all").iloc[-1].dropna()
+            if not contrib_latest.empty:
+                st.markdown("<div class='section-title'>Fed FCI-G Contribution Stack</div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div class='section-subtitle'>Latest baseline FCI-G contribution by input. Positive values tighten financial conditions; negative values ease them.</div>",
+                    unsafe_allow_html=True,
+                )
+
+                contrib_df = contrib_latest.reset_index()
+                contrib_df.columns = ["Input", "Contribution"]
+                contrib_df = contrib_df.sort_values("Contribution", ascending=True)
+
+                fig_contrib = go.Figure()
+                fig_contrib.add_vline(x=0, line_width=1, line_dash="dot", line_color="#9ca3af")
+                fig_contrib.add_trace(
+                    go.Bar(
+                        x=contrib_df["Contribution"],
+                        y=contrib_df["Input"],
+                        orientation="h",
+                        hovertemplate="%{y}<br>Contribution: %{x:.2f}<extra></extra>",
+                    )
+                )
+
+                fig_contrib.update_layout(
+                    template="plotly_white",
+                    height=max(340, 38 * len(contrib_df) + 100),
+                    margin=dict(l=155, r=35, t=20, b=35),
+                    showlegend=False,
+                )
+                fig_contrib.update_xaxes(title_text="FCI-G contribution", showgrid=True, gridcolor="#edf0f4", zeroline=False)
+                fig_contrib.update_yaxes(title_text="", showgrid=False)
+                st.plotly_chart(fig_contrib, use_container_width=True)
+
+        if fcig_errors:
+            with st.expander("Fed FCI-G source notes"):
+                for key, value in fcig_errors.items():
+                    st.write(f"**{key}:** {value}")
 
 
 # ============================================================
-# CATEGORY MAP
+# SCORECARD TABLE
 # ============================================================
 
-if show_category_scores and not category_scores.empty:
-    st.markdown("<div class='section-title'>Category Pressure Map</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='section-subtitle'>Latest score by liquidity sleeve. Positive means easing pressure; negative means tightening pressure.</div>",
-        unsafe_allow_html=True,
-    )
-
-    fig_cat = go.Figure()
-
-    fig_cat.add_trace(
-        go.Bar(
-            x=category_scores["Latest Score"],
-            y=category_scores["Category"],
-            orientation="h",
-            name="Latest Score",
-            hovertemplate="%{y}<br>Score: %{x:.2f}<extra></extra>",
-        )
-    )
-
-    fig_cat.add_vline(
-        x=0,
-        line_width=1,
-        line_dash="dot",
-        line_color="#9ca3af",
-    )
-
-    fig_cat.update_layout(
-        template="plotly_white",
-        height=max(360, 48 * len(category_scores)),
-        margin=dict(l=130, r=25, t=20, b=35),
-        showlegend=False,
-    )
-
-    fig_cat.update_xaxes(
-        title_text="Liquidity score",
-        showgrid=True,
-        gridcolor="#edf0f4",
-        zeroline=False,
-        range=[
-            min(-2.0, float(category_scores["Latest Score"].min()) - 0.25),
-            max(2.0, float(category_scores["Latest Score"].max()) + 0.25),
-        ],
-    )
-
-    fig_cat.update_yaxes(title_text="")
-
-    st.plotly_chart(fig_cat, use_container_width=True)
-
-
-# ============================================================
-# COMPONENT SCORECARD
-# ============================================================
-
-if show_raw_components:
+if show_scorecard:
     st.markdown("<div class='section-title'>Component Scorecard</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='section-subtitle'>Sorted by latest liquidity score. 21D and 63D moves are direction-adjusted: positive means easier liquidity pressure.</div>",
+        "<div class='section-subtitle'>Moves are direction-adjusted: positive means easier liquidity for that component; negative means tighter liquidity pressure.</div>",
         unsafe_allow_html=True,
     )
+
+    table = scorecard.copy()
+    numeric_cols = ["Latest", "21D Move", "63D Move", "126D Move", "Raw Impulse", "Score", "Weight"]
+    for col in numeric_cols:
+        if col in table.columns:
+            table[col] = pd.to_numeric(table[col], errors="coerce")
 
     display_cols = [
         "Component",
         "Category",
         "Ticker / Ratio",
-        "Latest",
-        "21D Liquidity Move",
-        "63D Liquidity Move",
+        "21D Move",
+        "63D Move",
+        "126D Move",
         "Score",
         "Signal",
         "Weight",
         "Description",
     ]
-
-    display_scorecard = scorecard[display_cols].copy()
-
-    numeric_cols = ["Latest", "21D Liquidity Move", "63D Liquidity Move", "Score", "Weight"]
-
-    for col in numeric_cols:
-        display_scorecard[col] = pd.to_numeric(display_scorecard[col], errors="coerce")
+    display_cols = [col for col in display_cols if col in table.columns]
 
     styled = (
-        display_scorecard.style
+        table[display_cols]
+        .style
         .format(
             {
-                "Latest": "{:.3f}",
-                "21D Liquidity Move": "{:+.1f}%",
-                "63D Liquidity Move": "{:+.1f}%",
+                "21D Move": "{:+.1f}%",
+                "63D Move": "{:+.1f}%",
+                "126D Move": "{:+.1f}%",
                 "Score": "{:+.2f}",
                 "Weight": "{:.2f}",
             },
             na_rep="N/A",
         )
-        .applymap(color_score, subset=["Score"])
+        .map(color_score, subset=["Score"] if "Score" in display_cols else None)
     )
 
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        height=520,
-        hide_index=True,
-    )
+    st.dataframe(styled, use_container_width=True, height=560)
 
 
 # ============================================================
-# DOWNLOADS
+# DOWNLOAD AND METHODOLOGY
 # ============================================================
 
-if show_download:
-    st.markdown("<div class='section-title'>Downloads</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='section-subtitle'>Export the series behind the dashboard.</div>",
-        unsafe_allow_html=True,
-    )
+if show_raw_download:
+    left, right = st.columns([1.10, 0.90])
 
-    d1, d2, d3 = st.columns(3)
+    with left:
+        st.markdown("<div class='section-title'>Download</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='section-subtitle'>Export the composite, breadth, component scores, and raw component series.</div>",
+            unsafe_allow_html=True,
+        )
 
-    composite_export = pd.DataFrame(
-        {
-            "Liquidity Composite": composite,
-            "Signal Breadth": breadth_series,
-        }
-    )
-    composite_export.index.name = "Date"
+        export = pd.concat(
+            [
+                composite.rename("Liquidity Composite"),
+                breadth_series.rename("Signal Breadth"),
+                score_df.add_prefix("Score | "),
+                raw_impulse_df.add_prefix("Raw Impulse | "),
+                component_df.add_prefix("Series | "),
+            ],
+            axis=1,
+        ).sort_index()
+        export.index.name = "Date"
 
-    components_export = component_df.copy()
-    components_export.index.name = "Date"
-
-    scores_export = score_df.copy()
-    scores_export.index.name = "Date"
-
-    with d1:
+        csv = export.to_csv(index=True).encode("utf-8")
         st.download_button(
-            "Download Composite CSV",
-            data=composite_export.to_csv(index=True).encode("utf-8"),
-            file_name="adfm_liquidity_composite.csv",
+            "Download Liquidity Monitor CSV",
+            data=csv,
+            file_name="adfm_liquidity_conditions_monitor.csv",
             mime="text/csv",
             use_container_width=True,
         )
 
-    with d2:
-        st.download_button(
-            "Download Component Levels CSV",
-            data=components_export.to_csv(index=True).encode("utf-8"),
-            file_name="adfm_liquidity_component_levels.csv",
-            mime="text/csv",
-            use_container_width=True,
+    with right:
+        st.markdown("<div class='section-title'>Methodology</div>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class="info-box">
+            <b>Market-implied signal</b><br>
+            Each Yahoo component is converted into a direction-adjusted liquidity move. For ratios, the numerator is divided by the denominator. For pressure variables like UUP and VIX, the sign is inverted because lower dollar pressure and lower volatility are liquidity-positive.
+            <br><br>
+            <b>Composite construction</b><br>
+            Component score = 50% of 21D move z-score + 35% of 63D move z-score + 15% of 126D move z-score. The composite is the weighted average of active component scores.
+            <br><br>
+            <b>Fed overlay</b><br>
+            FCI-G is official Federal Reserve data. Positive FCI-G means financial conditions are a headwind to growth; negative FCI-G means they are a tailwind. The Yahoo composite is faster and market-implied; FCI-G is slower and macro-official.
+            <br><br>
+            <b>Important limitation</b><br>
+            This is not Fed net liquidity. It is a traded-market liquidity impulse. That distinction is intentional.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-
-    with d3:
-        st.download_button(
-            "Download Component Scores CSV",
-            data=scores_export.to_csv(index=True).encode("utf-8"),
-            file_name="adfm_liquidity_component_scores.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-
-# ============================================================
-# METHODOLOGY
-# ============================================================
-
-with st.expander("Methodology", expanded=False):
-    st.markdown(
-        """
-**Market-implied liquidity composite**
-
-Each component is converted into a trailing z-score. The sign is adjusted so that positive always means easier liquidity pressure and negative always means tighter liquidity pressure. The final composite is a weighted average across available components.
-
-**Why this is different from a Fed balance-sheet tracker**
-
-This is not trying to replicate reserve balances, the Treasury General Account, or reverse repos. It tracks whether liquidity is reaching the tape through credit, volatility, dollar pressure, equity breadth, banks, crypto, duration, and high-beta participation.
-
-**Fed FCI-G overlay**
-
-The Fed FCI-G is shown separately because it measures the effect of financial conditions on future growth. Positive FCI-G readings imply a growth headwind from tighter conditions. Negative readings imply a tailwind.
-
-**Interpretation**
-
-The cleanest easing regime is when the Yahoo composite is rising while FCI-G is falling. The most dangerous regime is when the Yahoo composite rolls over while FCI-G is still positive, because the tape is losing liquidity confirmation before the official macro drag has cleared.
-        """
-    )
 
 st.caption("© 2026 AD Fund Management LP")
