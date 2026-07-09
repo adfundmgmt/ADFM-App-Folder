@@ -170,7 +170,6 @@ etf_info = {
     # -------------------------
     # US EQUITY: TACTICAL INDEX, STYLE, FACTOR
     # -------------------------
-    "QQQ": ("Nasdaq 100", "Large-cap growth / mega-cap tech risk appetite"),
     "DIA": ("Dow Industrials", "Old-economy large-cap cyclicals"),
     "IWM": ("Russell 2000", "Small-cap equity risk appetite"),
     "IJR": ("S&P SmallCap 600", "Higher-quality small-cap proxy"),
@@ -291,7 +290,7 @@ etf_info = {
 etf_tickers = tuple(etf_info.keys())
 
 US_EQUITY_TICKERS = {
-    "QQQ", "DIA", "IWM", "IJR", "MDY", "RSP",
+    "DIA", "IWM", "IJR", "MDY", "RSP",
     "IWF", "IWD", "IWO", "IWN",
     "MTUM", "QUAL", "USMV", "VLUE", "SPHB", "SPLV", "SCHD",
     "XLK", "SMH", "SOXX", "XSD", "XLC", "XLY", "XLP", "XLF", "KRE",
