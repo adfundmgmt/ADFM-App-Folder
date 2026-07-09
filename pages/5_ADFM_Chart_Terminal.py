@@ -34,7 +34,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-07-09-dynamic-interval-metrics"
+APP_VERSION = "2026-07-09-elliott-fib-levels"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -68,6 +68,9 @@ COLORS = {
     "hist_down": "rgba(178,34,34,0.45)",
     "range": "rgba(55,65,81,0.55)",
     "last": "rgba(17,24,39,0.78)",
+    "fib_extension": "rgba(46,139,87,0.78)",
+    "fib_retracement": "rgba(55,65,81,0.58)",
+    "fib_anchor": "rgba(17,24,39,0.55)",
 }
 
 
@@ -244,6 +247,7 @@ class ChartSettings:
     show_rsi: bool
     show_macd: bool
     show_elliott_wave: bool
+    show_fibonacci: bool
 
     compare_tickers: str
     compare_mode: str
@@ -403,6 +407,11 @@ def read_settings() -> ChartSettings:
                 value=False,
                 help="Heuristic swing-pivot overlay. Use it as pattern context, not a deterministic signal.",
             )
+            show_fibonacci = st.checkbox(
+                "Fibonacci levels",
+                value=False,
+                help="Auto-draws retracement and extension levels from the dominant qualified Elliott swing.",
+            )
 
         auto_adjust = False
         log_scale = False
@@ -431,6 +440,7 @@ def read_settings() -> ChartSettings:
         show_rsi=show_rsi,
         show_macd=show_macd,
         show_elliott_wave=show_elliott_wave,
+        show_fibonacci=show_fibonacci,
         compare_tickers=compare_tickers,
         compare_mode=compare_mode,
     )
@@ -1331,7 +1341,206 @@ def elliott_wave_state(df: pd.DataFrame) -> tuple[str, str]:
     return reading, note
 
 
-def build_signal_rows(df: pd.DataFrame, include_elliott: bool = False) -> list[dict[str, str]]:
+
+# ============================================================
+# Fibonacci Levels
+# ============================================================
+
+FIB_RETRACEMENT_RATIOS = [0.382, 0.500, 0.618, 0.786]
+FIB_EXTENSION_RATIOS = [1.000, 1.272, 1.382, 1.618, 2.618]
+
+
+def format_fib_ratio(ratio: float) -> str:
+    text = f"{ratio:.3f}".rstrip("0").rstrip(".")
+    return text if text else "0"
+
+
+def fibonacci_anchor_points(df: pd.DataFrame) -> dict[str, object] | None:
+    if df.empty or len(df) < 20:
+        return None
+
+    pivots = find_elliott_pivots(df, max_pivots=9)
+
+    if len(pivots) >= 2:
+        best_pair: tuple[dict[str, object], dict[str, object]] | None = None
+        best_score = -np.inf
+
+        for i in range(len(pivots) - 1):
+            first = pivots[i]
+            first_price = float(first["price"])
+
+            if first_price == 0 or not np.isfinite(first_price):
+                continue
+
+            for j in range(i + 1, len(pivots)):
+                second = pivots[j]
+
+                if str(first.get("kind")) == str(second.get("kind")):
+                    continue
+
+                second_price = float(second["price"])
+
+                if not np.isfinite(second_price):
+                    continue
+
+                move = abs(second_price / first_price - 1.0)
+                recency_bonus = 1.0 + (0.035 * j)
+                score = move * recency_bonus
+
+                if score > best_score:
+                    best_pair = (first, second)
+                    best_score = score
+
+        if best_pair is None:
+            best_pair = (pivots[-2], pivots[-1])
+
+        start, end = best_pair
+        start_price = float(start["price"])
+        end_price = float(end["price"])
+
+        if start_price == end_price:
+            return None
+
+        return {
+            "start_index": start["index"],
+            "end_index": end["index"],
+            "start_price": start_price,
+            "end_price": end_price,
+            "direction": "up" if end_price > start_price else "down",
+            "source": "qualified Elliott swing",
+        }
+
+    high_idx = df["High"].idxmax()
+    low_idx = df["Low"].idxmin()
+    high_price = float(df.loc[high_idx, "High"])
+    low_price = float(df.loc[low_idx, "Low"])
+
+    if high_price == low_price:
+        return None
+
+    if pd.Timestamp(low_idx) < pd.Timestamp(high_idx):
+        return {
+            "start_index": low_idx,
+            "end_index": high_idx,
+            "start_price": low_price,
+            "end_price": high_price,
+            "direction": "up",
+            "source": "visible range",
+        }
+
+    return {
+        "start_index": high_idx,
+        "end_index": low_idx,
+        "start_price": high_price,
+        "end_price": low_price,
+        "direction": "down",
+        "source": "visible range",
+    }
+
+
+def fibonacci_levels(df: pd.DataFrame) -> dict[str, object] | None:
+    anchor = fibonacci_anchor_points(df)
+
+    if anchor is None:
+        return None
+
+    start_price = float(anchor["start_price"])
+    end_price = float(anchor["end_price"])
+    swing = abs(end_price - start_price)
+
+    if swing <= 0:
+        return None
+
+    direction = str(anchor["direction"])
+    retracements = []
+    extensions = []
+
+    for ratio in FIB_RETRACEMENT_RATIOS:
+        if direction == "up":
+            price = end_price - (ratio * swing)
+        else:
+            price = end_price + (ratio * swing)
+
+        retracements.append(
+            {
+                "ratio": ratio,
+                "price": float(price),
+                "kind": "retracement",
+            }
+        )
+
+    for ratio in FIB_EXTENSION_RATIOS:
+        if direction == "up":
+            price = start_price + (ratio * swing)
+        else:
+            price = start_price - (ratio * swing)
+
+        extensions.append(
+            {
+                "ratio": ratio,
+                "price": float(price),
+                "kind": "extension",
+            }
+        )
+
+    return {
+        "anchor": anchor,
+        "retracements": retracements,
+        "extensions": extensions,
+        "all_levels": retracements + extensions,
+    }
+
+
+def fibonacci_state(df: pd.DataFrame) -> tuple[str, str]:
+    data = fibonacci_levels(df)
+    close = latest_float(df, "Close")
+
+    if data is None or close is None:
+        return "Unavailable", "Not enough qualified swing structure for Fibonacci levels."
+
+    anchor = data["anchor"]
+    direction = str(anchor["direction"])
+    source = str(anchor["source"])
+    start_price = float(anchor["start_price"])
+    end_price = float(anchor["end_price"])
+
+    all_levels = [
+        (f"{format_fib_ratio(float(level['ratio']))} {level['kind']}", float(level["price"]))
+        for level in data["all_levels"]
+        if np.isfinite(float(level["price"]))
+    ]
+
+    below = nearest_level_below(close, all_levels)
+    above = nearest_level_above(close, all_levels)
+
+    if direction == "up":
+        reading = "Upside swing map"
+    else:
+        reading = "Downside swing map"
+
+    range_text = f"Anchor is the {source} from {start_price:,.2f} to {end_price:,.2f}."
+
+    if below and above:
+        below_label, below_price = below
+        above_label, above_price = above
+        return reading, f"{range_text} Nearest Fib support is {below_label} at {below_price:,.2f}; nearest Fib resistance is {above_label} at {above_price:,.2f}."
+
+    if below:
+        below_label, below_price = below
+        return reading, f"{range_text} Nearest Fib support is {below_label} at {below_price:,.2f}."
+
+    if above:
+        above_label, above_price = above
+        return reading, f"{range_text} Nearest Fib resistance is {above_label} at {above_price:,.2f}."
+
+    return reading, range_text
+
+
+def build_signal_rows(
+    df: pd.DataFrame,
+    include_elliott: bool = False,
+    include_fibonacci: bool = False,
+) -> list[dict[str, str]]:
     trend, trend_note = classify_trend(df)
     momentum, momentum_note = classify_momentum(df)
     volatility, volatility_note = classify_volatility(df)
@@ -1350,10 +1559,19 @@ def build_signal_rows(df: pd.DataFrame, include_elliott: bool = False) -> list[d
         wave, wave_note = elliott_wave_state(df)
         rows.append({"Signal": "Elliott Wave", "Reading": wave, "Interpretation": wave_note})
 
+    if include_fibonacci:
+        fib, fib_note = fibonacci_state(df)
+        rows.append({"Signal": "Fibonacci", "Reading": fib, "Interpretation": fib_note})
+
     return rows
 
 
-def build_technical_memo(df: pd.DataFrame, ticker: str, include_elliott: bool = False) -> str:
+def build_technical_memo(
+    df: pd.DataFrame,
+    ticker: str,
+    include_elliott: bool = False,
+    include_fibonacci: bool = False,
+) -> str:
     trend, trend_note = classify_trend(df)
     momentum, momentum_note = classify_momentum(df)
     volatility, volatility_note = classify_volatility(df)
@@ -1382,6 +1600,10 @@ def build_technical_memo(df: pd.DataFrame, ticker: str, include_elliott: bool = 
     if include_elliott:
         wave, wave_note = elliott_wave_state(df)
         memo += f" Elliott Wave overlay reads as {wave.lower()}: {wave_note}"
+
+    if include_fibonacci:
+        fib, fib_note = fibonacci_state(df)
+        memo += f" Fibonacci overlay reads as {fib.lower()}: {fib_note}"
 
     return memo
 
@@ -1561,6 +1783,17 @@ def price_axis_range(df: pd.DataFrame, settings: ChartSettings) -> list[float] |
         if not series.empty:
             values.append(series)
 
+    if settings.show_fibonacci:
+        fib_data = fibonacci_levels(df)
+        if fib_data is not None:
+            fib_prices = [
+                float(level["price"])
+                for level in fib_data["all_levels"]
+                if np.isfinite(float(level["price"]))
+            ]
+            if fib_prices:
+                values.append(pd.Series(fib_prices, dtype=float))
+
     if not values:
         return None
 
@@ -1668,6 +1901,80 @@ def add_elliott_wave_overlay(fig: go.Figure, df: pd.DataFrame, row: int) -> None
         row=row,
         col=1,
     )
+
+
+def add_fibonacci_overlay(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
+    data = fibonacci_levels(df)
+
+    if data is None:
+        return
+
+    anchor = data["anchor"]
+    start_x = pd.Timestamp(anchor["start_index"]).strftime("%Y-%m-%d")
+    end_x = pd.Timestamp(anchor["end_index"]).strftime("%Y-%m-%d")
+    x_start = str(plot_x_values(df).iloc[0])
+    x_end = str(plot_x_values(df).iloc[-1])
+
+    fig.add_trace(
+        go.Scatter(
+            x=[start_x, end_x],
+            y=[float(anchor["start_price"]), float(anchor["end_price"])],
+            mode="lines+markers",
+            line=dict(color=COLORS["fib_anchor"], width=1.2, dash="dash"),
+            marker=dict(size=6, color=COLORS["fib_anchor"]),
+            name="Fib anchor",
+            hovertemplate="Fib anchor: %{y:.2f}<extra></extra>",
+            showlegend=True,
+        ),
+        row=row,
+        col=1,
+    )
+
+    for level in data["retracements"]:
+        ratio = float(level["ratio"])
+        price = float(level["price"])
+        label = f"{format_fib_ratio(ratio)} ({price:,.2f})"
+
+        fig.add_trace(
+            go.Scatter(
+                x=[x_start, x_end],
+                y=[price, price],
+                mode="lines+text",
+                line=dict(color=COLORS["fib_retracement"], width=1.0, dash="dot"),
+                text=["", label],
+                textposition="middle right",
+                textfont=dict(size=10, color=COLORS["fib_retracement"]),
+                name="Fib retracement",
+                legendgroup="fib_retracement",
+                hovertemplate=f"Fib retracement {format_fib_ratio(ratio)}: %{{y:.2f}}<extra></extra>",
+                showlegend=ratio == FIB_RETRACEMENT_RATIOS[0],
+            ),
+            row=row,
+            col=1,
+        )
+
+    for level in data["extensions"]:
+        ratio = float(level["ratio"])
+        price = float(level["price"])
+        label = f"{format_fib_ratio(ratio)} ({price:,.2f})"
+
+        fig.add_trace(
+            go.Scatter(
+                x=[x_start, x_end],
+                y=[price, price],
+                mode="lines+text",
+                line=dict(color=COLORS["fib_extension"], width=1.15),
+                text=["", label],
+                textposition="middle right",
+                textfont=dict(size=10, color=COLORS["fib_extension"]),
+                name="Fib extension",
+                legendgroup="fib_extension",
+                hovertemplate=f"Fib extension {format_fib_ratio(ratio)}: %{{y:.2f}}<extra></extra>",
+                showlegend=ratio == FIB_EXTENSION_RATIOS[0],
+            ),
+            row=row,
+            col=1,
+        )
 
 
 def hover_price_column(df: pd.DataFrame, column: str) -> pd.Series:
@@ -1867,6 +2174,9 @@ def add_price_panel(
 
     if settings.show_elliott_wave:
         add_elliott_wave_overlay(fig, df, row)
+
+    if settings.show_fibonacci:
+        add_fibonacci_overlay(fig, df, row)
 
     add_price_hover_trace(fig, df, settings, row)
 
@@ -2451,8 +2761,17 @@ if compare_fig is not None:
         },
     )
 
-signal_rows = build_signal_rows(indicator_df, include_elliott=settings.show_elliott_wave)
-memo = build_technical_memo(indicator_df, settings.ticker, include_elliott=settings.show_elliott_wave)
+signal_rows = build_signal_rows(
+    indicator_df,
+    include_elliott=settings.show_elliott_wave,
+    include_fibonacci=settings.show_fibonacci,
+)
+memo = build_technical_memo(
+    indicator_df,
+    settings.ticker,
+    include_elliott=settings.show_elliott_wave,
+    include_fibonacci=settings.show_fibonacci,
+)
 
 left, right = st.columns([1.35, 1.00])
 
