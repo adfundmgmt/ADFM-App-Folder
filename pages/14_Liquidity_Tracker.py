@@ -645,6 +645,152 @@ def month_end_last(obj: pd.Series | pd.DataFrame) -> pd.Series | pd.DataFrame:
     raise ValueError("Could not resample to month-end with either ME or M.")
 
 
+def visible_axis_range(
+    data: pd.Series | pd.DataFrame | List[pd.Series],
+    floor_abs: Optional[float] = None,
+    pad: float = 0.08,
+    include_zero: bool = False,
+) -> Optional[List[float]]:
+    series_list: List[pd.Series] = []
+
+    if isinstance(data, pd.Series):
+        series_list = [data]
+    elif isinstance(data, pd.DataFrame):
+        series_list = [data[col] for col in data.columns]
+    elif isinstance(data, list):
+        series_list = [x for x in data if isinstance(x, pd.Series)]
+
+    values = []
+    for series in series_list:
+        clean = pd.to_numeric(series, errors="coerce")
+        clean = clean.replace([np.inf, -np.inf], np.nan).dropna()
+        if not clean.empty:
+            values.append(clean)
+
+    if not values:
+        return None
+
+    combined = pd.concat(values)
+
+    if include_zero:
+        combined = pd.concat([combined, pd.Series([0.0])])
+
+    y_min = float(combined.min())
+    y_max = float(combined.max())
+
+    if floor_abs is not None:
+        y_min = min(y_min, -float(floor_abs))
+        y_max = max(y_max, float(floor_abs))
+
+    if not np.isfinite(y_min) or not np.isfinite(y_max):
+        return None
+
+    if y_min == y_max:
+        base = abs(y_min) if y_min != 0 else 1.0
+        cushion = base * max(pad, 0.05)
+        return [y_min - cushion, y_max + cushion]
+
+    spread = y_max - y_min
+    cushion = spread * pad
+    return [y_min - cushion, y_max + cushion]
+
+
+def _clean_datetime_index(index: pd.Index) -> pd.DatetimeIndex:
+    idx = pd.to_datetime(index, errors="coerce")
+    idx = pd.DatetimeIndex(idx)
+    idx = idx[idx.notna()]
+
+    try:
+        if idx.tz is not None:
+            idx = idx.tz_convert(None)
+    except Exception:
+        pass
+
+    return pd.DatetimeIndex(idx).sort_values()
+
+
+def build_trading_session_axis(*objects: object) -> Tuple[pd.DatetimeIndex, Dict[pd.Timestamp, int]]:
+    dates: List[pd.Timestamp] = []
+
+    for obj in objects:
+        if obj is None:
+            continue
+
+        if isinstance(obj, (pd.Series, pd.DataFrame)):
+            idx = _clean_datetime_index(obj.index)
+            if len(idx) > 0:
+                dates.extend(pd.Timestamp(x) for x in idx)
+
+    if not dates:
+        return pd.DatetimeIndex([]), {}
+
+    trading_index = pd.DatetimeIndex(pd.unique(pd.DatetimeIndex(dates))).sort_values()
+    session_map = {pd.Timestamp(dt): i for i, dt in enumerate(trading_index)}
+    return trading_index, session_map
+
+
+def session_x(index: pd.Index, session_map: Dict[pd.Timestamp, int]) -> List[Optional[int]]:
+    idx = _clean_datetime_index(index)
+    return [session_map.get(pd.Timestamp(dt)) for dt in idx]
+
+
+def session_dates(index: pd.Index) -> List[str]:
+    idx = _clean_datetime_index(index)
+    return [pd.Timestamp(dt).strftime("%Y-%m-%d") for dt in idx]
+
+
+def make_session_ticks(trading_index: pd.DatetimeIndex, max_ticks: int = 10) -> Tuple[List[int], List[str]]:
+    if trading_index.empty:
+        return [], []
+
+    tick_count = min(max_ticks, max(2, len(trading_index)))
+    positions = np.linspace(0, len(trading_index) - 1, tick_count).round().astype(int)
+    positions = np.unique(positions)
+
+    tickvals = positions.tolist()
+
+    if len(trading_index) > 900:
+        ticktext = trading_index[positions].strftime("%Y").tolist()
+    elif len(trading_index) > 260:
+        ticktext = trading_index[positions].strftime("%b-%y").tolist()
+    else:
+        ticktext = trading_index[positions].strftime("%b %d").tolist()
+
+    return tickvals, ticktext
+
+
+def apply_trading_session_xaxis(
+    fig: go.Figure,
+    trading_index: pd.DatetimeIndex,
+    tickvals: List[int],
+    ticktext: List[str],
+    rows: List[int],
+    title_row: Optional[int] = None,
+) -> go.Figure:
+    if trading_index.empty:
+        return fig
+
+    x_range = [-0.5, max(len(trading_index) - 0.5, 0.5)]
+
+    for row in rows:
+        fig.update_xaxes(
+            type="linear",
+            range=x_range,
+            tickmode="array",
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            gridcolor="rgba(226, 232, 240, 0.45)",
+            row=row,
+            col=1,
+        )
+
+    if title_row is not None:
+        fig.update_xaxes(title_text="Date", row=title_row, col=1)
+
+    return fig
+
+
 # ============================================================
 # DATA LOADERS
 # ============================================================
@@ -1231,6 +1377,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+bench_rebased = None
+if show_benchmark and benchmark in display_prices.columns:
+    bench_rebased = rebase(display_prices[benchmark]).dropna()
+
+trading_index, session_map = build_trading_session_axis(
+    display_composite,
+    display_breadth,
+    bench_rebased,
+)
+tickvals, ticktext = make_session_ticks(trading_index, max_ticks=10)
+
 fig = make_subplots(
     rows=2,
     cols=1,
@@ -1241,7 +1398,11 @@ fig = make_subplots(
     subplot_titles=("Liquidity impulse", "Component breadth"),
 )
 
-comp_y0, comp_y1 = dynamic_axis_range(display_composite, floor_abs=1.15, pad=0.16)
+comp_y_range = visible_axis_range(display_composite, floor_abs=1.00, pad=0.10, include_zero=True)
+if comp_y_range is None:
+    comp_y0, comp_y1 = dynamic_axis_range(display_composite, floor_abs=1.15, pad=0.16)
+else:
+    comp_y0, comp_y1 = comp_y_range
 
 fig.add_hrect(
     y0=0.90,
@@ -1267,30 +1428,30 @@ fig.add_hline(y=-0.90, line_width=1, line_dash="dot", line_color="#cbd5e1", row=
 
 fig.add_trace(
     go.Scatter(
-        x=display_composite.index,
+        x=session_x(display_composite.index, session_map),
         y=display_composite,
+        customdata=session_dates(display_composite.index),
         name="Liquidity Composite",
         mode="lines",
         line=dict(width=2.9, color="#111827"),
-        hovertemplate="%{x|%Y-%m-%d}<br>Composite: %{y:.2f}<extra></extra>",
+        hovertemplate="%{customdata}<br>Composite: %{y:.2f}<extra></extra>",
     ),
     row=1,
     col=1,
     secondary_y=False,
 )
 
-if show_benchmark and benchmark in display_prices.columns:
-    bench_rebased = rebase(display_prices[benchmark])
-
+if bench_rebased is not None and not bench_rebased.empty:
     fig.add_trace(
         go.Scatter(
-            x=bench_rebased.index,
+            x=session_x(bench_rebased.index, session_map),
             y=bench_rebased,
+            customdata=session_dates(bench_rebased.index),
             name=f"{benchmark}, rebased",
             mode="lines",
             line=dict(width=1.9, color="#2563eb"),
             opacity=0.62,
-            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{benchmark}: %{{y:.1f}}<extra></extra>",
+            hovertemplate=f"%{{customdata}}<br>{benchmark}: %{{y:.1f}}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -1300,14 +1461,15 @@ if show_benchmark and benchmark in display_prices.columns:
 fig.add_hline(y=50, line_width=1, line_dash="dot", line_color="#8b949e", row=2, col=1)
 fig.add_trace(
     go.Scatter(
-        x=display_breadth.index,
+        x=session_x(display_breadth.index, session_map),
         y=display_breadth,
+        customdata=session_dates(display_breadth.index),
         name="% Components Easing",
         mode="lines",
         line=dict(width=2.0, color="#475569"),
         fill="tozeroy",
         opacity=0.85,
-        hovertemplate="%{x|%Y-%m-%d}<br>Components easing: %{y:.0f}%<extra></extra>",
+        hovertemplate="%{customdata}<br>Components easing: %{y:.0f}%<extra></extra>",
     ),
     row=2,
     col=1,
@@ -1321,6 +1483,14 @@ apply_adfm_plot_layout(
     legend_y=1.065,
 )
 clean_axis(fig)
+apply_trading_session_xaxis(
+    fig,
+    trading_index=trading_index,
+    tickvals=tickvals,
+    ticktext=ticktext,
+    rows=[1, 2],
+    title_row=2,
+)
 
 fig.update_yaxes(
     title_text="Composite z-score",
@@ -1333,8 +1503,10 @@ fig.update_yaxes(
     secondary_y=False,
 )
 
+benchmark_y_range = visible_axis_range(bench_rebased, pad=0.07) if bench_rebased is not None else None
 fig.update_yaxes(
     title_text=f"{benchmark}, rebased",
+    range=benchmark_y_range,
     showgrid=False,
     zeroline=False,
     row=1,
@@ -1352,8 +1524,6 @@ fig.update_yaxes(
     row=2,
     col=1,
 )
-
-fig.update_xaxes(tickformat="%b-%y", showgrid=False, row=2, col=1, title_text="Date")
 
 st.plotly_chart(fig, use_container_width=True)
 
