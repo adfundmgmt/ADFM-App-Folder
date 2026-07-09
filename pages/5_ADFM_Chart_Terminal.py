@@ -1863,8 +1863,8 @@ def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
         yref=f"y{row}" if row > 1 else "y",
         x0=x_start,
         x1=x_end,
-        y0=30,
-        y1=70,
+        y0=20,
+        y1=80,
         fillcolor="gray",
         opacity=0.08,
         line_width=0,
@@ -1889,10 +1889,10 @@ def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
     fig.add_trace(
         go.Scatter(
             x=[x_start, x_end],
-            y=[70, 70],
+            y=[80, 80],
             mode="lines",
             line=dict(color="#b22222", width=1, dash="dot"),
-            name="RSI 70",
+            name="RSI 80",
             showlegend=False,
             hoverinfo="skip",
         ),
@@ -1903,10 +1903,10 @@ def add_rsi_panel(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
     fig.add_trace(
         go.Scatter(
             x=[x_start, x_end],
-            y=[30, 30],
+            y=[20, 20],
             mode="lines",
             line=dict(color="#2e8b57", width=1, dash="dot"),
-            name="RSI 30",
+            name="RSI 20",
             showlegend=False,
             hoverinfo="skip",
         ),
