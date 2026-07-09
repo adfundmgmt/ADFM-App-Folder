@@ -65,51 +65,42 @@ PASTEL_GREY = "#8b949e"
 AMBER = "#f59e0b"
 BLUE = "#2563eb"
 
+TITLE = "Volume Regime Explorer"
+SUBTITLE = "Tape participation, relative volume, and forward outcomes around extreme sessions."
+
 
 # =============================================================================
 # STREAMLIT STYLE
 # =============================================================================
 
-st.markdown(
-    """
-    <style>
-        .block-container {
-            max-width: 1500px;
-            padding-top: 1.35rem;
-            padding-bottom: 2.0rem;
-        }
+CUSTOM_CSS = """
+<style>
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 2rem;
+        max-width: 1500px;
+    }
 
-        div[data-testid="stMetric"] {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            padding: 0.75rem 0.85rem;
-            border-radius: 14px;
-        }
+    h1, h2, h3 {
+        font-weight: 600;
+        letter-spacing: 0.15px;
+        color: #222222;
+    }
 
-        div[data-testid="stMetricValue"] {
-            font-size: 1.25rem;
-        }
+    div[data-testid="stCaptionContainer"] {
+        color: #666666;
+    }
 
-        div[data-testid="stMetricLabel"] {
-            font-size: 0.78rem;
-            color: #6b7280;
-        }
+    .stPlotlyChart {
+        background: #ffffff;
+    }
 
-        .small-note {
-            color: #6b7280;
-            font-size: 0.83rem;
-        }
-
-        .section-title {
-            font-size: 1.05rem;
-            font-weight: 700;
-            margin-top: 0.75rem;
-            margin-bottom: 0.35rem;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    .js-plotly-plot .table .cell {
+        font-size: 12px;
+    }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -805,7 +796,7 @@ def build_chart(
             y=df["Close"],
             mode="lines",
             name=symbol,
-            line=dict(width=2.25, color="#111827"),
+            line=dict(width=2.0, color="#111827"),
             hovertemplate="<b>%{x|%b %d, %Y}</b><br>Close: %{y:,.2f}<extra></extra>",
         ),
         row=1,
@@ -847,7 +838,7 @@ def build_chart(
             for _, row in events.iterrows()
         ]
 
-        marker_sizes = np.where(events["State"].eq("Heavy"), 8.5, 6.5)
+        marker_sizes = np.where(events["State"].eq("Heavy"), 8.0, 6.0)
 
         customdata = list(
             zip(
@@ -868,7 +859,7 @@ def build_chart(
                 marker=dict(
                     size=marker_sizes,
                     color=marker_colors,
-                    line=dict(width=1.0, color="white"),
+                    line=dict(width=0.8, color="white"),
                 ),
                 customdata=customdata,
                 hovertemplate=(
@@ -957,8 +948,8 @@ def build_chart(
     )
 
     fig.update_layout(
-        height=760,
-        margin=dict(l=12, r=12, t=10, b=10),
+        height=740,
+        margin=dict(l=8, r=8, t=8, b=8),
         paper_bgcolor="white",
         plot_bgcolor="white",
         hovermode="x unified",
@@ -1046,14 +1037,13 @@ def render_current_read(
     vol_text = fmt_volume_value(latest_vol, vol_label)
     base_text = fmt_volume_value(latest_base, vol_label)
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-
-    c1.metric("Ticker", symbol, latest_date.strftime("%Y-%m-%d"))
-    c2.metric("Setup", latest_setup)
-    c3.metric("Volume percentile", fmt_pctl(latest_pctl), vol_text)
-    c4.metric("Vs baseline", fmt_ratio(latest_ratio), f"Base {base_text}")
-    c5.metric("Close", fmt_price(latest_close), fmt_pct(latest_ret))
-    c6.metric("RVOL 20D", fmt_ratio(latest_rvol20), data_source)
+    st.caption(
+        f"{symbol} | {latest_date:%Y-%m-%d} | {latest_setup} | "
+        f"Volume percentile {fmt_pctl(latest_pctl)} ({vol_text}) | "
+        f"{fmt_ratio(latest_ratio)} baseline (base {base_text}) | "
+        f"Close {fmt_price(latest_close)} {fmt_pct(latest_ret)} | "
+        f"RVOL 20D {fmt_ratio(latest_rvol20)} | {data_source}"
+    )
 
 
 def build_recent_events(df: pd.DataFrame, event_filter: str, max_rows: int) -> pd.DataFrame:
@@ -1166,8 +1156,25 @@ if "vr_symbol" not in st.session_state:
     st.session_state["vr_symbol"] = "QQQ"
 
 with st.sidebar:
-    st.markdown("### Ticker")
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **Purpose:** Identify heavy and quiet participation regimes across ETFs and listed equities.
 
+        **How to read it**
+        - Heavy sessions show unusually high participation versus the selected percentile window.
+        - Quiet sessions show unusually low participation.
+        - Setup labels combine volume percentile, price direction, close location, and trend structure.
+        - Forward columns show realized post-signal returns where enough future data exists.
+
+        **Data source:** Yahoo Finance adjusted daily OHLCV.
+        """
+    )
+
+    st.divider()
+    st.header("Settings")
+
+    st.markdown("**Ticker**")
     button_cols = st.columns(2)
 
     for i, sym in enumerate(DEFAULT_SYMBOLS):
@@ -1178,95 +1185,89 @@ with st.sidebar:
     symbol_input = st.text_input("Ticker", key="vr_symbol")
     symbol = normalize_symbol(symbol_input)
 
-    st.markdown("---")
-    st.markdown("### Window")
+    with st.expander("Window", expanded=True):
+        lookback_months = st.slider(
+            "Visible history",
+            min_value=6,
+            max_value=48,
+            value=18,
+            step=3,
+            format="%d months",
+        )
 
-    lookback_months = st.slider(
-        "Visible history",
-        min_value=6,
-        max_value=48,
-        value=18,
-        step=3,
-        format="%d months",
-    )
+        percentile_window = st.slider(
+            "Percentile window",
+            min_value=60,
+            max_value=252,
+            value=126,
+            step=21,
+            format="%d trading days",
+        )
 
-    percentile_window = st.slider(
-        "Percentile window",
-        min_value=60,
-        max_value=252,
-        value=126,
-        step=21,
-        format="%d trading days",
-    )
+        smooth_window = st.slider(
+            "Baseline window",
+            min_value=10,
+            max_value=80,
+            value=20,
+            step=5,
+            format="%d trading days",
+        )
 
-    smooth_window = st.slider(
-        "Baseline window",
-        min_value=10,
-        max_value=80,
-        value=20,
-        step=5,
-        format="%d trading days",
-    )
+    with st.expander("Signal", expanded=True):
+        volume_mode = st.selectbox(
+            "Volume mode",
+            options=["Dollar volume", "Raw volume", "Turnover %"],
+            index=0,
+        )
 
-    st.markdown("---")
-    st.markdown("### Signal")
+        high_cutoff = st.slider(
+            "Heavy threshold",
+            min_value=75,
+            max_value=99,
+            value=90,
+            step=1,
+            format="%d percentile",
+        )
 
-    volume_mode = st.selectbox(
-        "Volume mode",
-        options=["Dollar volume", "Raw volume", "Turnover %"],
-        index=0,
-    )
+        low_cutoff = st.slider(
+            "Quiet threshold",
+            min_value=1,
+            max_value=25,
+            value=10,
+            step=1,
+            format="%d percentile",
+        )
 
-    high_cutoff = st.slider(
-        "Heavy threshold",
-        min_value=75,
-        max_value=99,
-        value=90,
-        step=1,
-        format="%d percentile",
-    )
+        show_price_mas = st.checkbox("Show 20D and 50D moving averages", value=True)
 
-    low_cutoff = st.slider(
-        "Quiet threshold",
-        min_value=1,
-        max_value=25,
-        value=10,
-        step=1,
-        format="%d percentile",
-    )
+        use_incomplete_session = st.checkbox(
+            "Use incomplete current session",
+            value=False,
+            help="If unchecked, the app excludes today's row while the NYSE session is still open.",
+        )
 
-    show_price_mas = st.checkbox("Show 20D and 50D moving averages", value=True)
+    with st.expander("Table", expanded=False):
+        event_filter = st.selectbox(
+            "Recent extremes",
+            options=["All extremes", "Heavy only", "Quiet only"],
+            index=0,
+        )
 
-    use_incomplete_session = st.checkbox(
-        "Use incomplete current session",
-        value=False,
-        help="If unchecked, the app excludes today's row while the NYSE session is still open.",
-    )
-
-    st.markdown("---")
-    st.markdown("### Table")
-
-    event_filter = st.selectbox(
-        "Recent extremes",
-        options=["All extremes", "Heavy only", "Quiet only"],
-        index=0,
-    )
-
-    max_event_rows = st.slider(
-        "Rows",
-        min_value=5,
-        max_value=25,
-        value=12,
-        step=1,
-    )
+        max_event_rows = st.slider(
+            "Rows",
+            min_value=5,
+            max_value=25,
+            value=12,
+            step=1,
+        )
 
 
 # =============================================================================
 # TITLE
 # =============================================================================
 
-st.title("Volume Regime Explorer")
-st.caption("Tape participation, relative volume, and forward outcomes around extreme sessions.")
+st.title(TITLE)
+st.caption(SUBTITLE)
 
 
 # =============================================================================
@@ -1394,8 +1395,8 @@ st.plotly_chart(
 )
 
 st.caption(
-    f"Source: {data_source}. Mode: {vol_label}. Percentile window: {percentile_window} trading days. "
-    f"Baseline: {smooth_window} trading days. Forward columns use realized returns where enough future data exists."
+    f"Data through {latest_date:%Y-%m-%d} | Source: {data_source} | Mode: {vol_label} | "
+    f"Percentile: {percentile_window}D | Baseline: {smooth_window}D"
 )
 
 
@@ -1403,7 +1404,7 @@ st.caption(
 # RECENT EXTREMES TABLE
 # =============================================================================
 
-st.markdown("### Recent extreme setups")
+st.subheader("Recent Participation Extremes")
 
 events = build_recent_events(
     df=df,
@@ -1421,7 +1422,7 @@ else:
         styled_events,
         use_container_width=True,
         hide_index=True,
-        height=min(560, 42 + 36 * (len(display_events) + 1)),
+        height=min(520, 38 + 32 * (len(display_events) + 1)),
     )
 
 st.caption("© 2026 AD Fund Management LP")
