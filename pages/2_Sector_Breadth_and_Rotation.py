@@ -1,4 +1,4 @@
-# sp_subsector_rotation_monitor_v10.py
+# sp_subsector_rotation_monitor_v11.py
 # ADFM | S&P 500 Sector + Subsector Breadth & Rotation Monitor
 
 import warnings
@@ -203,8 +203,6 @@ UNIVERSE_SCOPES = [
     "Major sectors only",
     "Core subsectors",
     "Core + thematic subsectors",
-    "Major sectors + core subsectors",
-    "Major sectors + all subsectors",
 ]
 
 LABEL_MODES = [
@@ -283,10 +281,6 @@ def build_universe(scope: str) -> pd.DataFrame:
         rows = core_subsectors
     elif scope == "Core + thematic subsectors":
         rows = all_subsectors
-    elif scope == "Major sectors + core subsectors":
-        rows = major + core_subsectors
-    elif scope == "Major sectors + all subsectors":
-        rows = major + all_subsectors
     else:
         rows = core_subsectors
 
@@ -335,7 +329,7 @@ with st.sidebar:
         "Universe",
         options=UNIVERSE_SCOPES,
         index=1,
-        help="Use subsectors for granular rotation work; add major sectors when you want top-down confirmation.",
+        help="Use major sectors for top-down confirmation or subsectors for granular rotation work.",
     )
 
     base_universe = build_universe(universe_scope)
@@ -972,7 +966,7 @@ def make_rs_chart(
 
     fig.update_layout(
         title=f"Relative Strength | {item_name} vs {benchmark_ticker}",
-        height=420,
+        height=500,
         margin=dict(l=10, r=10, t=55, b=10),
         xaxis_title="Date",
         yaxis_title="RS Ratio",
@@ -1016,7 +1010,7 @@ def make_rotation_scatter(
             text="No valid rotation data for the selected universe/window.",
             showarrow=False,
         )
-        fig.update_layout(height=560)
+        fig.update_layout(height=760)
         return fig
 
     label_set = set()
@@ -1143,7 +1137,7 @@ def make_rotation_scatter(
 
     fig.update_layout(
         title=f"Rotation Map | {mode_title} | {cfg.short_label} vs {cfg.long_label}",
-        height=610,
+        height=760,
         margin=dict(l=10, r=10, t=55, b=10),
         xaxis=dict(
             title=f"{cfg.long_label} rotation return",
@@ -1381,49 +1375,45 @@ if show_diagnostics:
 # Main charts
 # =============================================================================
 
-left, right = st.columns([1.0, 1.22])
+st.subheader("Rotation map")
 
-with left:
-    st.subheader("Relative strength")
+rot_fig = make_rotation_scatter(
+    snap=snap,
+    cfg=cfg,
+    trail_points=trail_points,
+    rotation_basis=rotation_mode,
+    benchmark_ticker=benchmark,
+    label_mode=label_mode,
+    label_top_n=label_top_n,
+)
 
-    rs_options = snap.sort_values("Rank")["Ticker"].tolist()
-    rs_default = rs_options.index("SMH") if "SMH" in rs_options else 0
+st.plotly_chart(rot_fig, use_container_width=True)
 
-    rs_item = st.selectbox(
-        "Ticker for RS chart",
-        options=rs_options,
-        format_func=lambda x: (
-            f"{x} | "
-            f"{eligible_universe.set_index('Ticker').loc[x, 'Name']} | "
-            f"{eligible_universe.set_index('Ticker').loc[x, 'Sector Group']}"
-        ),
-        index=rs_default,
-    )
+st.subheader("Relative strength")
 
-    rs_meta = eligible_universe.set_index("Ticker").loc[rs_item]
+rs_options = snap.sort_values("Rank")["Ticker"].tolist()
+rs_default = rs_options.index("SMH") if "SMH" in rs_options else 0
 
-    rs_fig = make_rs_chart(
-        rs_series=rs[rs_item].dropna(),
-        item_name=f"{rs_meta['Name']} ({rs_item})",
-        benchmark_ticker=benchmark,
-    )
+rs_item = st.selectbox(
+    "Ticker for RS chart",
+    options=rs_options,
+    format_func=lambda x: (
+        f"{x} | "
+        f"{eligible_universe.set_index('Ticker').loc[x, 'Name']} | "
+        f"{eligible_universe.set_index('Ticker').loc[x, 'Sector Group']}"
+    ),
+    index=rs_default,
+)
 
-    st.plotly_chart(rs_fig, use_container_width=True)
+rs_meta = eligible_universe.set_index("Ticker").loc[rs_item]
 
-with right:
-    st.subheader("Rotation map")
+rs_fig = make_rs_chart(
+    rs_series=rs[rs_item].dropna(),
+    item_name=f"{rs_meta['Name']} ({rs_item})",
+    benchmark_ticker=benchmark,
+)
 
-    rot_fig = make_rotation_scatter(
-        snap=snap,
-        cfg=cfg,
-        trail_points=trail_points,
-        rotation_basis=rotation_mode,
-        benchmark_ticker=benchmark,
-        label_mode=label_mode,
-        label_top_n=label_top_n,
-    )
-
-    st.plotly_chart(rot_fig, use_container_width=True)
+st.plotly_chart(rs_fig, use_container_width=True)
 
 
 # =============================================================================
@@ -1432,119 +1422,25 @@ with right:
 
 st.subheader("Rotation snapshot")
 
-filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns([1.1, 1.1, 1.2, 1.2, 1.0])
+table_sorted = display_df.sort_values("Rank", ascending=True).reset_index(drop=True)
 
-with filter_col1:
-    sort_col = st.selectbox(
-        "Sort by",
-        options=[
-            "Rank",
-            "Ticker",
-            "Name",
-            "Sector Group",
-            "Tier",
-            "Quadrant",
-            "State",
-            "Composite Score",
-            f"Rotation {cfg.short_label}",
-            f"Rotation {cfg.long_label}",
-            f"Abs {cfg.short_label}",
-            f"Abs {cfg.long_label}",
-            f"RS {cfg.short_label}",
-            f"RS {cfg.long_label}",
-            "RS Slope 10D",
-            "RS Accel",
-            "RS Z",
-            "Angle (deg)",
-            "Speed",
-        ],
-        index=7,
-    )
+row_height = 34
+table_height = min(780, max(180, row_height * (len(table_sorted) + 1)))
 
-with filter_col2:
-    table_group_options = display_df["Sector Group"].drop_duplicates().tolist()
+st.dataframe(
+    style_snapshot_table(table_sorted, cfg),
+    use_container_width=True,
+    height=table_height,
+    hide_index=True,
+)
 
-    table_groups = st.multiselect(
-        "Group filter",
-        options=table_group_options,
-        default=table_group_options,
-    )
-
-with filter_col3:
-    quadrant_options = [
-        q
-        for q in ["Leading", "Improving", "Weakening", "Lagging", "Neutral"]
-        if q in display_df["Quadrant"].unique()
-    ]
-
-    selected_quadrants = st.multiselect(
-        "Quadrant filter",
-        options=quadrant_options,
-        default=quadrant_options,
-    )
-
-with filter_col4:
-    state_options = sorted(display_df["State"].dropna().unique().tolist())
-
-    selected_states = st.multiselect(
-        "State filter",
-        options=state_options,
-        default=state_options,
-    )
-
-with filter_col5:
-    ascending = st.toggle("Ascending", value=False)
-    only_accelerating = st.toggle("RS accel only", value=False)
-
-    tier_options = display_df["Tier"].drop_duplicates().tolist()
-    selected_tiers = st.multiselect(
-        "Tier",
-        options=tier_options,
-        default=tier_options,
-    )
-
-table_filtered = display_df.copy()
-
-if table_groups:
-    table_filtered = table_filtered[table_filtered["Sector Group"].isin(table_groups)]
-
-if selected_tiers:
-    table_filtered = table_filtered[table_filtered["Tier"].isin(selected_tiers)]
-
-if selected_quadrants:
-    table_filtered = table_filtered[table_filtered["Quadrant"].isin(selected_quadrants)]
-
-if selected_states:
-    table_filtered = table_filtered[table_filtered["State"].isin(selected_states)]
-
-if only_accelerating:
-    table_filtered = table_filtered[table_filtered["RS Accel"] > 0]
-
-if table_filtered.empty:
-    st.info("No sectors/subsectors match the current filter selection.")
-else:
-    table_sorted = table_filtered.sort_values(
-        sort_col,
-        ascending=ascending,
-    ).reset_index(drop=True)
-
-    row_height = 34
-    table_height = min(780, max(180, row_height * (len(table_sorted) + 1)))
-
-    st.dataframe(
-        style_snapshot_table(table_sorted, cfg),
-        use_container_width=True,
-        height=table_height,
-        hide_index=True,
-    )
-
-    csv = table_sorted.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="Download snapshot CSV",
-        data=csv,
-        file_name="adfm_subsector_rotation_snapshot.csv",
-        mime="text/csv",
-    )
+csv = table_sorted.to_csv(index=False).encode("utf-8")
+st.download_button(
+    label="Download snapshot CSV",
+    data=csv,
+    file_name="adfm_subsector_rotation_snapshot.csv",
+    mime="text/csv",
+)
 
 
 # =============================================================================
