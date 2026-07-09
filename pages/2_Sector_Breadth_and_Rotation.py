@@ -964,20 +964,33 @@ def make_rs_chart(
         )
     )
 
-    fig.update_layout(
-        title=f"Relative Strength | {item_name} vs {benchmark_ticker}",
-        height=500,
-        margin=dict(l=10, r=10, t=55, b=10),
-        xaxis_title="Date",
-        yaxis_title="RS Ratio",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.01,
-            xanchor="left",
-            x=0.0,
-        ),
-    )
+fig.update_layout(
+    title=dict(
+        text=f"Relative Strength | {sector_name} vs {benchmark_ticker}",
+        x=0.0,
+        xanchor="left",
+        y=0.98,
+        yanchor="top",
+        font=dict(size=20),
+        pad=dict(b=12),
+    ),
+    height=440,
+    margin=dict(l=10, r=10, t=95, b=10),
+    xaxis_title="Date",
+    yaxis_title="RS Ratio",
+    legend=dict(
+        orientation="h",
+        yanchor="top",
+        y=1.10,
+        xanchor="left",
+        x=0.0,
+        traceorder="normal",
+        itemwidth=90,
+        entrywidth=95,
+        entrywidthmode="pixels",
+        font=dict(size=13),
+    ),
+)
 
     return fig
 
