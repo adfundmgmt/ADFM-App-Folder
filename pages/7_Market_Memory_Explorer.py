@@ -1583,9 +1583,6 @@ if base_df.empty:
 latest_year = int(last_data_date.year)
 current = current_feature_snapshot(feature_df)
 
-st.caption(
-    f"Data through {last_data_date:%Y-%m-%d}. Adjusted close from Yahoo Finance. "
-    f"Base-rate universe: {len(base_df):,} eligible historical signal dates since {start_year}."
 )
 
 # =========================
