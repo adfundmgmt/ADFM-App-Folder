@@ -162,8 +162,8 @@ lookback_dict = {
 
 # =========================================================
 # ETF COVERAGE
-# 100-name hedge-fund signal universe.
-# Broad allocator parking-lot ETFs such as SPY, IVV, VOO,
+# 99-name ETF signal universe.
+# Broad allocator parking-lot ETFs such as QQQ, SPY, IVV, VOO,
 # SPLG, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG are excluded.
 # =========================================================
 etf_info = {
@@ -898,7 +898,7 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** ETF flow-pressure monitor using a 100-name hedge-fund signal universe.
+        **Purpose:** ETF flow-pressure monitor using a 99-name ETF signal universe.
 
         **What the chart shows**
         - Full ETF coverage by default.
@@ -908,7 +908,7 @@ with st.sidebar:
         - Grey means zero, missing, or unchartable.
 
         **Universe design**
-        - Excludes broad allocator parking-lot ETFs like SPY, IVV, VOO, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG.
+        - Excludes broad allocator parking-lot ETFs like SPY, QQQ, IVV, VOO, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG.
         - Focuses on sector, factor, regional, rates, credit, commodity, FX, crypto, and volatility signal ETFs.
 
         **Data source**
@@ -976,7 +976,7 @@ bar_view = metric_map[chart_metric_choice]
 # =========================================================
 st.title("ETF Flow Pressure Proxy")
 st.caption(
-    "Directional ETF pressure monitor using a 100-name hedge-fund signal universe. "
+    "Directional ETF pressure monitor using a 99-name ETF signal universe. "
     "Positive values suggest accumulation pressure. Negative values suggest distribution pressure."
 )
 
@@ -1315,6 +1315,6 @@ st.caption(
     f"Last refresh: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
     f"Source: Yahoo Finance OHLCV via yfinance | "
     f"Method: dollarized price-volume flow-pressure proxy, normalized pressure score, and data diagnostics | "
-    f"Coverage: 100-name hedge-fund ETF signal universe, excluding broad allocator parking-lot ETFs | "
+    f"Coverage: 99-name ETF signal universe, excluding broad allocator parking-lot ETFs | "
     f"© 2026 AD Fund Management LP"
 )
