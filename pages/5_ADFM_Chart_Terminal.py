@@ -34,7 +34,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-06-11-watchlist-state-fix"
+APP_VERSION = "2026-07-09-dynamic-interval-metrics"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -871,6 +871,46 @@ def return_from_close(latest_close: float, base_close: float | None) -> float | 
     return (latest_close / float(base_close)) - 1.0
 
 
+def interval_bar_unit(interval: str) -> tuple[str, str]:
+    if interval == "1wk":
+        return "W", "week"
+
+    if interval == "1mo":
+        return "M", "month"
+
+    return "D", "day"
+
+
+def interval_bar_label(interval: str, bars: int) -> str:
+    suffix, _ = interval_bar_unit(interval)
+    return f"{bars}{suffix}"
+
+
+def interval_bar_note(interval: str, bars: int) -> str:
+    _, unit = interval_bar_unit(interval)
+    plural = "" if bars == 1 else "s"
+    return f"{bars} {unit}{plural}"
+
+
+def atr_note_for_interval(interval: str) -> str:
+    _, unit = interval_bar_unit(interval)
+    return f"14-{unit}"
+
+
+def drawdown_note_for_interval(interval: str) -> str:
+    if interval == "1mo":
+        return "From 12M high"
+
+    return "From 52W high"
+
+
+def header_horizon_keys(interval: str) -> list[tuple[str, str]]:
+    if interval == "1mo":
+        return [("3M", "3M"), ("1Y", "1Y")]
+
+    return [("1M", "1M"), ("3M", "3M")]
+
+
 def compute_return_metrics(df: pd.DataFrame) -> dict[str, float | None]:
     if df.empty:
         return {}
@@ -879,9 +919,12 @@ def compute_return_metrics(df: pd.DataFrame) -> dict[str, float | None]:
     latest_close = float(close.iloc[-1])
     latest_date = pd.Timestamp(df.index[-1])
 
+    one_bar_return = return_from_close(latest_close, float(close.iloc[-2])) if len(close) >= 2 else None
+    five_bar_return = return_from_close(latest_close, float(close.iloc[-6])) if len(close) >= 6 else None
+
     out = {
-        "1D": return_from_close(latest_close, float(close.iloc[-2])) if len(close) >= 2 else None,
-        "5D": return_from_close(latest_close, float(close.iloc[-6])) if len(close) >= 6 else None,
+        "1BAR": one_bar_return,
+        "5BAR": five_bar_return,
         "1M": return_from_close(latest_close, close_asof(df, latest_date - pd.DateOffset(months=1))),
         "3M": return_from_close(latest_close, close_asof(df, latest_date - pd.DateOffset(months=3))),
         "YTD": None,
@@ -910,13 +953,13 @@ def compute_header_stats(df: pd.DataFrame) -> dict[str, str]:
 
     one_year = df[df.index >= latest_date - pd.DateOffset(years=1)]
     if one_year.empty:
-        one_year = df.tail(252)
+        one_year = df.tail(min(len(df), 252))
 
-    high_52w = float(one_year["High"].max()) if not one_year.empty else np.nan
-    low_52w = float(one_year["Low"].min()) if not one_year.empty else np.nan
+    high_1y = float(one_year["High"].max()) if not one_year.empty else np.nan
+    low_1y = float(one_year["Low"].min()) if not one_year.empty else np.nan
 
-    drawdown_52w = (latest_close / high_52w) - 1.0 if high_52w and not pd.isna(high_52w) else np.nan
-    upside_from_52w_low = (latest_close / low_52w) - 1.0 if low_52w and not pd.isna(low_52w) else np.nan
+    drawdown_1y = (latest_close / high_1y) - 1.0 if high_1y and not pd.isna(high_1y) else np.nan
+    upside_from_1y_low = (latest_close / low_1y) - 1.0 if low_1y and not pd.isna(low_1y) else np.nan
 
     last_row = df.iloc[-1]
 
@@ -925,14 +968,15 @@ def compute_header_stats(df: pd.DataFrame) -> dict[str, str]:
 
     return {
         "Last": fmt_price(latest_close),
-        "1D": fmt_pct(ret.get("1D")),
-        "5D": fmt_pct(ret.get("5D")),
+        "1BAR": fmt_pct(ret.get("1BAR")),
+        "5BAR": fmt_pct(ret.get("5BAR")),
         "1M": fmt_pct(ret.get("1M")),
         "3M": fmt_pct(ret.get("3M")),
         "YTD": fmt_pct(ret.get("YTD")),
-        "Drawdown": fmt_pct(drawdown_52w),
+        "1Y": fmt_pct(ret.get("1Y")),
+        "Drawdown": fmt_pct(drawdown_1y),
         "ATR": fmt_pct_abs(atr_pct),
-        "52w Low Dist": fmt_pct(upside_from_52w_low),
+        "1Y Low Dist": fmt_pct(upside_from_1y_low),
         "RSI": "N/A" if pd.isna(rsi) else f"{float(rsi):.1f}",
     }
 
@@ -2301,16 +2345,22 @@ def render_header(
     period = html_escape(settings.period)
     last_bar_text = html_escape(last_bar)
 
+    bar_one_label = interval_bar_label(settings.interval, 1)
+    bar_five_label = interval_bar_label(settings.interval, 5)
+    horizon_cards = [
+        metric_card(label, stats[key])
+        for label, key in header_horizon_keys(settings.interval)
+    ]
+
     cards = "".join(
         [
             metric_card("Last", stats["Last"]),
-            metric_card("1D", stats["1D"]),
-            metric_card("5D", stats["5D"]),
-            metric_card("1M", stats["1M"]),
-            metric_card("3M", stats["3M"]),
+            metric_card(bar_one_label, stats["1BAR"], interval_bar_note(settings.interval, 1)),
+            metric_card(bar_five_label, stats["5BAR"], interval_bar_note(settings.interval, 5)),
+            *horizon_cards,
             metric_card("YTD", stats["YTD"]),
-            metric_card("Drawdown", stats["Drawdown"], "From 52w high"),
-            metric_card("ATR", stats["ATR"], "14-period"),
+            metric_card("Drawdown", stats["Drawdown"], drawdown_note_for_interval(settings.interval)),
+            metric_card("ATR", stats["ATR"], atr_note_for_interval(settings.interval)),
         ]
     )
 
