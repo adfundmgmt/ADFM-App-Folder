@@ -1,5 +1,5 @@
-# sp_sector_rotation_monitor_v9.py
-# ADFM | S&P 500 Sector Breadth & Rotation Monitor
+# sp_subsector_rotation_monitor_v10.py
+# ADFM | S&P 500 Sector + Subsector Breadth & Rotation Monitor
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -19,18 +19,18 @@ import yfinance as yf
 # =============================================================================
 
 st.set_page_config(
-    page_title="S&P 500 Sector Breadth & Rotation Monitor",
+    page_title="S&P 500 Sector + Subsector Breadth & Rotation Monitor",
     layout="wide",
 )
 
-st.title("S&P 500 Sector Breadth & Rotation Monitor")
+st.title("S&P 500 Sector + Subsector Breadth & Rotation Monitor")
 
 
 # =============================================================================
 # Constants
 # =============================================================================
 
-SECTORS: Dict[str, str] = {
+MAJOR_SECTORS: Dict[str, str] = {
     "XLC": "Communication Services",
     "XLY": "Consumer Discretionary",
     "XLP": "Consumer Staples",
@@ -44,11 +44,123 @@ SECTORS: Dict[str, str] = {
     "XLU": "Utilities",
 }
 
+SUBSECTOR_ROWS: List[Dict[str, str]] = [
+    # Communication Services
+    {"Ticker": "IYZ", "Name": "Telecom", "Sector Group": "Communication Services", "Tier": "Core"},
+    {"Ticker": "FDN", "Name": "Internet / platform growth", "Sector Group": "Communication Services", "Tier": "Core"},
+    {"Ticker": "PBS", "Name": "Media / entertainment", "Sector Group": "Communication Services", "Tier": "Core"},
+    {"Ticker": "SOCL", "Name": "Social media / online networks", "Sector Group": "Communication Services", "Tier": "Thematic"},
+    {"Ticker": "ESPO", "Name": "Video games / esports", "Sector Group": "Communication Services", "Tier": "Thematic"},
+
+    # Consumer Discretionary
+    {"Ticker": "XRT", "Name": "Retail", "Sector Group": "Consumer Discretionary", "Tier": "Core"},
+    {"Ticker": "RTH", "Name": "Large-cap retail", "Sector Group": "Consumer Discretionary", "Tier": "Core"},
+    {"Ticker": "XHB", "Name": "Homebuilders", "Sector Group": "Consumer Discretionary", "Tier": "Core"},
+    {"Ticker": "ITB", "Name": "Home construction", "Sector Group": "Consumer Discretionary", "Tier": "Core"},
+    {"Ticker": "JETS", "Name": "Airlines", "Sector Group": "Consumer Discretionary", "Tier": "Core"},
+    {"Ticker": "PEJ", "Name": "Travel / leisure", "Sector Group": "Consumer Discretionary", "Tier": "Core"},
+    {"Ticker": "CARZ", "Name": "Autos", "Sector Group": "Consumer Discretionary", "Tier": "Thematic"},
+    {"Ticker": "IBUY", "Name": "Online retail / e-commerce", "Sector Group": "Consumer Discretionary", "Tier": "Thematic"},
+    {"Ticker": "BJK", "Name": "Gaming / casinos", "Sector Group": "Consumer Discretionary", "Tier": "Thematic"},
+
+    # Consumer Staples
+    {"Ticker": "PBJ", "Name": "Food & beverage", "Sector Group": "Consumer Staples", "Tier": "Core"},
+    {"Ticker": "RHS", "Name": "Equal-weight staples", "Sector Group": "Consumer Staples", "Tier": "Core"},
+    {"Ticker": "IYK", "Name": "Broad staples confirmation", "Sector Group": "Consumer Staples", "Tier": "Core"},
+    {"Ticker": "MOO", "Name": "Agribusiness / food supply chain", "Sector Group": "Consumer Staples", "Tier": "Thematic"},
+
+    # Energy
+    {"Ticker": "XOP", "Name": "E&P", "Sector Group": "Energy", "Tier": "Core"},
+    {"Ticker": "OIH", "Name": "Oil services", "Sector Group": "Energy", "Tier": "Core"},
+    {"Ticker": "XES", "Name": "Oil equipment & services equal-weight", "Sector Group": "Energy", "Tier": "Core"},
+    {"Ticker": "FCG", "Name": "Natural gas equities", "Sector Group": "Energy", "Tier": "Core"},
+    {"Ticker": "AMLP", "Name": "Midstream / MLPs", "Sector Group": "Energy", "Tier": "Core"},
+    {"Ticker": "ICLN", "Name": "Clean energy", "Sector Group": "Energy", "Tier": "Thematic"},
+    {"Ticker": "TAN", "Name": "Solar", "Sector Group": "Energy", "Tier": "Thematic"},
+    {"Ticker": "URA", "Name": "Uranium / nuclear fuel cycle", "Sector Group": "Energy", "Tier": "Thematic"},
+
+    # Financials
+    {"Ticker": "KBE", "Name": "Banks", "Sector Group": "Financials", "Tier": "Core"},
+    {"Ticker": "KRE", "Name": "Regional banks", "Sector Group": "Financials", "Tier": "Core"},
+    {"Ticker": "KBWB", "Name": "Money-center banks", "Sector Group": "Financials", "Tier": "Core"},
+    {"Ticker": "KIE", "Name": "Insurance", "Sector Group": "Financials", "Tier": "Core"},
+    {"Ticker": "KCE", "Name": "Capital markets / brokers", "Sector Group": "Financials", "Tier": "Core"},
+    {"Ticker": "IAI", "Name": "Broker-dealers / investment banks", "Sector Group": "Financials", "Tier": "Core"},
+    {"Ticker": "BIZD", "Name": "BDCs / private credit beta", "Sector Group": "Financials", "Tier": "Thematic"},
+    {"Ticker": "PSP", "Name": "Private equity / alt managers", "Sector Group": "Financials", "Tier": "Thematic"},
+    {"Ticker": "FINX", "Name": "Fintech", "Sector Group": "Financials", "Tier": "Thematic"},
+
+    # Health Care
+    {"Ticker": "XBI", "Name": "Biotech equal-weight", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "IBB", "Name": "Biotech cap-weight", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "XPH", "Name": "Pharmaceuticals", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "IHE", "Name": "Large pharma", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "IHI", "Name": "Medical devices", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "XHE", "Name": "Health care equipment equal-weight", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "IHF", "Name": "Health care providers", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "XHS", "Name": "Health care services", "Sector Group": "Health Care", "Tier": "Core"},
+    {"Ticker": "ARKG", "Name": "Genomics / speculative health innovation", "Sector Group": "Health Care", "Tier": "Thematic"},
+
+    # Industrials
+    {"Ticker": "ITA", "Name": "Aerospace & defense", "Sector Group": "Industrials", "Tier": "Core"},
+    {"Ticker": "XAR", "Name": "Aerospace & defense equal-weight", "Sector Group": "Industrials", "Tier": "Core"},
+    {"Ticker": "PPA", "Name": "Defense primes / contractor basket", "Sector Group": "Industrials", "Tier": "Core"},
+    {"Ticker": "IYT", "Name": "Transportation", "Sector Group": "Industrials", "Tier": "Core"},
+    {"Ticker": "XTN", "Name": "Transportation equal-weight", "Sector Group": "Industrials", "Tier": "Core"},
+    {"Ticker": "PAVE", "Name": "Infrastructure", "Sector Group": "Industrials", "Tier": "Core"},
+    {"Ticker": "AIRR", "Name": "Small/mid industrial cyclicals", "Sector Group": "Industrials", "Tier": "Core"},
+    {"Ticker": "PHO", "Name": "Water infrastructure", "Sector Group": "Industrials", "Tier": "Thematic"},
+    {"Ticker": "BOTZ", "Name": "Robotics / automation", "Sector Group": "Industrials", "Tier": "Thematic"},
+
+    # Materials
+    {"Ticker": "XME", "Name": "Metals & mining", "Sector Group": "Materials", "Tier": "Core"},
+    {"Ticker": "SLX", "Name": "Steel", "Sector Group": "Materials", "Tier": "Core"},
+    {"Ticker": "COPX", "Name": "Copper miners", "Sector Group": "Materials", "Tier": "Core"},
+    {"Ticker": "PICK", "Name": "Broad global mining", "Sector Group": "Materials", "Tier": "Core"},
+    {"Ticker": "GDX", "Name": "Gold miners", "Sector Group": "Materials", "Tier": "Core"},
+    {"Ticker": "GDXJ", "Name": "Junior gold miners", "Sector Group": "Materials", "Tier": "Core"},
+    {"Ticker": "SIL", "Name": "Silver miners", "Sector Group": "Materials", "Tier": "Core"},
+    {"Ticker": "LIT", "Name": "Lithium / battery materials", "Sector Group": "Materials", "Tier": "Thematic"},
+    {"Ticker": "REMX", "Name": "Rare earths / strategic materials", "Sector Group": "Materials", "Tier": "Thematic"},
+    {"Ticker": "WOOD", "Name": "Timber / forest products", "Sector Group": "Materials", "Tier": "Thematic"},
+
+    # Real Estate
+    {"Ticker": "VNQ", "Name": "Broad REITs", "Sector Group": "Real Estate", "Tier": "Core"},
+    {"Ticker": "IYR", "Name": "U.S. real estate", "Sector Group": "Real Estate", "Tier": "Core"},
+    {"Ticker": "REZ", "Name": "Residential / multisector REITs", "Sector Group": "Real Estate", "Tier": "Core"},
+    {"Ticker": "REM", "Name": "Mortgage REITs", "Sector Group": "Real Estate", "Tier": "Core"},
+    {"Ticker": "KBWY", "Name": "High-yield REITs", "Sector Group": "Real Estate", "Tier": "Thematic"},
+    {"Ticker": "HOMZ", "Name": "Housing ecosystem", "Sector Group": "Real Estate", "Tier": "Thematic"},
+
+    # Technology
+    {"Ticker": "SMH", "Name": "Semiconductors", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "SOXX", "Name": "Semiconductors broader", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "XSD", "Name": "Semiconductors equal-weight", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "IGV", "Name": "Software", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "SKYY", "Name": "Cloud infrastructure", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "CIBR", "Name": "Cybersecurity", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "HACK", "Name": "Cybersecurity high beta", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "IGM", "Name": "Expanded technology", "Sector Group": "Technology", "Tier": "Core"},
+    {"Ticker": "WCLD", "Name": "Cloud software", "Sector Group": "Technology", "Tier": "Thematic"},
+    {"Ticker": "AIQ", "Name": "AI / automation", "Sector Group": "Technology", "Tier": "Thematic"},
+    {"Ticker": "ROBO", "Name": "Robotics", "Sector Group": "Technology", "Tier": "Thematic"},
+
+    # Utilities
+    {"Ticker": "RYU", "Name": "Equal-weight utilities", "Sector Group": "Utilities", "Tier": "Core"},
+    {"Ticker": "PUI", "Name": "Utilities momentum / defensive confirmation", "Sector Group": "Utilities", "Tier": "Core"},
+    {"Ticker": "GRID", "Name": "Grid / electrification", "Sector Group": "Utilities", "Tier": "Thematic"},
+    {"Ticker": "NLR", "Name": "Nuclear energy", "Sector Group": "Utilities", "Tier": "Thematic"},
+]
+
 BENCHMARKS: Dict[str, str] = {
     "SPY": "SPDR S&P 500",
     "RSP": "Invesco S&P 500 Equal Weight",
     "QQQ": "Invesco QQQ",
+    "IWM": "iShares Russell 2000",
+    "DIA": "SPDR Dow Jones Industrial Average",
     "TLT": "iShares 20+ Year Treasury Bond",
+    "IEF": "iShares 7-10 Year Treasury Bond",
+    "UUP": "Invesco DB US Dollar Index Bullish Fund",
 }
 
 LOOKBACK_PERIOD = "2y"
@@ -84,21 +196,35 @@ TRAIL_OPTIONS = {
 
 ROTATION_MODES = {
     "Benchmark-relative rotation": "relative",
-    "Absolute sector rotation": "absolute",
+    "Absolute sector/subsector rotation": "absolute",
 }
 
-SECTOR_COLORS = {
-    "XLC": "#4E79A7",
-    "XLY": "#F28E2B",
-    "XLP": "#59A14F",
-    "XLE": "#E15759",
-    "XLF": "#76B7B2",
-    "XLV": "#EDC948",
-    "XLI": "#B07AA1",
-    "XLB": "#FF9DA7",
-    "XLRE": "#9C755F",
-    "XLK": "#2F5597",
-    "XLU": "#BAB0AC",
+UNIVERSE_SCOPES = [
+    "Major sectors only",
+    "Core subsectors",
+    "Core + thematic subsectors",
+    "Major sectors + core subsectors",
+    "Major sectors + all subsectors",
+]
+
+LABEL_MODES = [
+    "Top ranked only",
+    "All tickers",
+    "No labels",
+]
+
+SECTOR_GROUP_COLORS = {
+    "Communication Services": "#4E79A7",
+    "Consumer Discretionary": "#F28E2B",
+    "Consumer Staples": "#59A14F",
+    "Energy": "#E15759",
+    "Financials": "#76B7B2",
+    "Health Care": "#EDC948",
+    "Industrials": "#B07AA1",
+    "Materials": "#FF9DA7",
+    "Real Estate": "#9C755F",
+    "Technology": "#2F5597",
+    "Utilities": "#BAB0AC",
 }
 
 QUADRANT_LABELS = {
@@ -131,11 +257,97 @@ class RotationConfig:
 
 
 # =============================================================================
+# Universe helpers
+# =============================================================================
+
+def major_sector_rows() -> List[Dict[str, str]]:
+    return [
+        {
+            "Ticker": ticker,
+            "Name": name,
+            "Sector Group": name,
+            "Tier": "Major Sector",
+        }
+        for ticker, name in MAJOR_SECTORS.items()
+    ]
+
+
+def build_universe(scope: str) -> pd.DataFrame:
+    major = major_sector_rows()
+    core_subsectors = [row for row in SUBSECTOR_ROWS if row["Tier"] == "Core"]
+    all_subsectors = SUBSECTOR_ROWS.copy()
+
+    if scope == "Major sectors only":
+        rows = major
+    elif scope == "Core subsectors":
+        rows = core_subsectors
+    elif scope == "Core + thematic subsectors":
+        rows = all_subsectors
+    elif scope == "Major sectors + core subsectors":
+        rows = major + core_subsectors
+    elif scope == "Major sectors + all subsectors":
+        rows = major + all_subsectors
+    else:
+        rows = core_subsectors
+
+    df = pd.DataFrame(rows)
+    df = df.drop_duplicates(subset=["Ticker"], keep="first")
+    df["Sort Group"] = df["Sector Group"].map({group: i for i, group in enumerate(SECTOR_GROUP_COLORS.keys())})
+    df["Sort Tier"] = df["Tier"].map({"Major Sector": 0, "Core": 1, "Thematic": 2}).fillna(9)
+    df = df.sort_values(["Sort Group", "Sort Tier", "Ticker"]).drop(columns=["Sort Group", "Sort Tier"])
+    return df.reset_index(drop=True)
+
+
+def filter_universe_by_groups(universe_df: pd.DataFrame, selected_groups: List[str]) -> pd.DataFrame:
+    if not selected_groups:
+        return universe_df.iloc[0:0].copy()
+
+    return universe_df[universe_df["Sector Group"].isin(selected_groups)].reset_index(drop=True)
+
+
+def filter_universe_by_data(
+    universe_df: pd.DataFrame,
+    prices: pd.DataFrame,
+    min_valid_rows: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    diagnostics = build_price_diagnostics(
+        prices=prices,
+        tickers=universe_df["Ticker"].tolist(),
+        min_valid_rows=min_valid_rows,
+    )
+
+    eligible = diagnostics[
+        diagnostics["Status"].isin(["OK", "Stale"])
+    ]["Ticker"].tolist()
+
+    filtered = universe_df[universe_df["Ticker"].isin(eligible)].reset_index(drop=True)
+    return filtered, diagnostics
+
+
+# =============================================================================
 # Sidebar
 # =============================================================================
 
 with st.sidebar:
     st.header("Settings")
+
+    universe_scope = st.selectbox(
+        "Universe",
+        options=UNIVERSE_SCOPES,
+        index=1,
+        help="Use subsectors for granular rotation work; add major sectors when you want top-down confirmation.",
+    )
+
+    base_universe = build_universe(universe_scope)
+    group_options = base_universe["Sector Group"].drop_duplicates().tolist()
+
+    selected_groups = st.multiselect(
+        "Sector group filter",
+        options=group_options,
+        default=group_options,
+    )
+
+    selected_universe = filter_universe_by_groups(base_universe, selected_groups)
 
     benchmark = st.selectbox(
         "Benchmark",
@@ -148,7 +360,7 @@ with st.sidebar:
         "Rotation mode",
         options=list(ROTATION_MODES.keys()),
         index=0,
-        help="Benchmark-relative rotation uses sector performance versus the selected benchmark.",
+        help="Benchmark-relative rotation uses sector/subsector performance versus the selected benchmark.",
     )
     rotation_mode = ROTATION_MODES[rotation_mode_label]
 
@@ -164,11 +376,19 @@ with st.sidebar:
         index=1,
     )
 
-    rs_sector = st.selectbox(
-        "Sector for RS chart",
-        options=list(SECTORS.keys()),
-        format_func=lambda x: f"{x} | {SECTORS[x]}",
-        index=list(SECTORS.keys()).index("XLK"),
+    label_mode = st.selectbox(
+        "Ticker labels on map",
+        options=LABEL_MODES,
+        index=0,
+    )
+
+    label_top_n = st.slider(
+        "Label top N",
+        min_value=5,
+        max_value=50,
+        value=25,
+        step=5,
+        disabled=label_mode != "Top ranked only",
     )
 
     show_diagnostics = st.checkbox("Show data diagnostics", value=False)
@@ -253,7 +473,10 @@ def fetch_prices(
     period: str = LOOKBACK_PERIOD,
     interval: str = INTERVAL,
 ) -> pd.DataFrame:
-    unique_tickers = list(dict.fromkeys(tickers))
+    unique_tickers = list(dict.fromkeys([t for t in tickers if t]))
+
+    if not unique_tickers:
+        return pd.DataFrame()
 
     try:
         raw = yf.download(
@@ -280,36 +503,56 @@ def fetch_prices(
     return prices
 
 
-def validate_prices(prices: pd.DataFrame, required: List[str]) -> Tuple[bool, List[str]]:
+def validate_benchmark(prices: pd.DataFrame, benchmark_ticker: str, min_valid_rows: int) -> Tuple[bool, str]:
     if prices.empty:
-        return False, required
+        return False, "No market data returned."
 
-    missing = []
+    if benchmark_ticker not in prices.columns:
+        return False, f"Benchmark data unavailable for {benchmark_ticker}."
 
-    for ticker in required:
-        if ticker not in prices.columns:
-            missing.append(ticker)
-            continue
+    s = pd.to_numeric(prices[benchmark_ticker], errors="coerce").dropna()
 
-        if prices[ticker].dropna().empty:
-            missing.append(ticker)
+    if s.empty:
+        return False, f"Benchmark data unavailable for {benchmark_ticker}."
 
-    return len(missing) == 0, missing
+    if len(s) < min_valid_rows:
+        return False, f"Benchmark has only {len(s)} valid rows; need at least {min_valid_rows}."
+
+    return True, ""
 
 
-def build_price_diagnostics(prices: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
+def build_price_diagnostics(
+    prices: pd.DataFrame,
+    tickers: List[str],
+    min_valid_rows: int = 100,
+) -> pd.DataFrame:
+    columns = [
+        "Ticker",
+        "Status",
+        "First Date",
+        "Latest Date",
+        "Valid Rows",
+        "Missing Values",
+        "Last Price",
+        "Stale Days",
+    ]
+
     if prices.empty:
         return pd.DataFrame(
-            columns=[
-                "Ticker",
-                "Status",
-                "First Date",
-                "Latest Date",
-                "Valid Rows",
-                "Missing Values",
-                "Last Price",
-                "Stale Days",
-            ]
+            [
+                {
+                    "Ticker": ticker,
+                    "Status": "Missing",
+                    "First Date": "",
+                    "Latest Date": "",
+                    "Valid Rows": 0,
+                    "Missing Values": "",
+                    "Last Price": np.nan,
+                    "Stale Days": np.nan,
+                }
+                for ticker in tickers
+            ],
+            columns=columns,
         )
 
     max_dt = pd.to_datetime(prices.index.max()).date()
@@ -352,10 +595,10 @@ def build_price_diagnostics(prices: pd.DataFrame, tickers: List[str]) -> pd.Data
         last_dt = pd.to_datetime(s.index.max()).date()
         stale_days = (max_dt - last_dt).days
 
-        if stale_days > 5:
-            status = "Stale"
-        elif len(s) < 100:
+        if len(s) < min_valid_rows:
             status = "Thin history"
+        elif stale_days > 5:
+            status = "Stale"
         else:
             status = "OK"
 
@@ -372,15 +615,15 @@ def build_price_diagnostics(prices: pd.DataFrame, tickers: List[str]) -> pd.Data
             }
         )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=columns)
 
 
 def compute_relative_strength(
     prices: pd.DataFrame,
-    sector_tickers: List[str],
+    item_tickers: List[str],
     benchmark_ticker: str,
 ) -> pd.DataFrame:
-    rs = prices[sector_tickers].div(prices[benchmark_ticker], axis=0)
+    rs = prices[item_tickers].div(prices[benchmark_ticker], axis=0)
     rs = rs.replace([np.inf, -np.inf], np.nan)
     return rs.dropna(how="all")
 
@@ -437,25 +680,25 @@ def pct_rank(series: pd.Series) -> pd.Series:
 
 def build_snapshot(
     prices: pd.DataFrame,
-    sectors: Dict[str, str],
+    universe_df: pd.DataFrame,
     benchmark_ticker: str,
     cfg: RotationConfig,
     rotation_basis: str,
 ) -> pd.DataFrame:
-    sector_tickers = list(sectors.keys())
-    sector_prices = prices[sector_tickers].copy()
+    item_tickers = universe_df["Ticker"].tolist()
+    item_prices = prices[item_tickers].copy()
 
-    rs = compute_relative_strength(prices, sector_tickers, benchmark_ticker)
+    rs = compute_relative_strength(prices, item_tickers, benchmark_ticker)
 
     if rotation_basis == "relative":
         rotation_frame = rs
         rotation_label = "Relative"
     else:
-        rotation_frame = sector_prices
+        rotation_frame = item_prices
         rotation_label = "Absolute"
 
-    abs_short = pct_change_last(sector_prices, cfg.short_window)
-    abs_long = pct_change_last(sector_prices, cfg.long_window)
+    abs_short = pct_change_last(item_prices, cfg.short_window)
+    abs_long = pct_change_last(item_prices, cfg.long_window)
 
     rs_short = pct_change_last(rs, cfg.short_window)
     rs_long = pct_change_last(rs, cfg.long_window)
@@ -473,7 +716,7 @@ def build_snapshot(
 
     rs_z_window = min(63, max(20, cfg.long_window))
     rs_z = compute_zscore(rs, window=rs_z_window)
-    rs_z_last = rs_z.iloc[-1] if not rs_z.empty else pd.Series(index=sector_tickers, dtype=float)
+    rs_z_last = rs_z.iloc[-1] if not rs_z.empty else pd.Series(index=item_tickers, dtype=float)
 
     angle = np.degrees(np.arctan2(rotation_short, rotation_long))
     speed = np.sqrt(rotation_short.pow(2) + rotation_long.pow(2))
@@ -487,26 +730,30 @@ def build_snapshot(
         + 0.05 * pct_rank(abs_long)
     ) * 100.0
 
+    meta = universe_df.set_index("Ticker")
+
     snap = pd.DataFrame(
         {
-            "Ticker": sector_tickers,
-            "Sector": [sectors[t] for t in sector_tickers],
+            "Ticker": item_tickers,
+            "Name": meta.reindex(item_tickers)["Name"].values,
+            "Sector Group": meta.reindex(item_tickers)["Sector Group"].values,
+            "Tier": meta.reindex(item_tickers)["Tier"].values,
             "Rotation Mode": rotation_label,
-            f"Rotation {cfg.short_label}": rotation_short.reindex(sector_tickers).values,
-            f"Rotation {cfg.long_label}": rotation_long.reindex(sector_tickers).values,
-            f"Abs {cfg.short_label}": abs_short.reindex(sector_tickers).values,
-            f"Abs {cfg.long_label}": abs_long.reindex(sector_tickers).values,
-            f"RS {cfg.short_label}": rs_short.reindex(sector_tickers).values,
-            f"RS {cfg.long_label}": rs_long.reindex(sector_tickers).values,
-            "RS Slope 10D": rs_slope_10d.reindex(sector_tickers).values,
-            "RS Slope 5D": rs_slope_5d.reindex(sector_tickers).values,
-            "RS Accel": rs_accel.reindex(sector_tickers).values,
-            "Rotation Slope 10D": rotation_slope_10d.reindex(sector_tickers).values,
-            "Rotation Accel": rotation_accel.reindex(sector_tickers).values,
-            "RS Z": rs_z_last.reindex(sector_tickers).values,
-            "Angle (deg)": angle.reindex(sector_tickers).values,
-            "Speed": speed.reindex(sector_tickers).values,
-            "Composite Score": composite.reindex(sector_tickers).values,
+            f"Rotation {cfg.short_label}": rotation_short.reindex(item_tickers).values,
+            f"Rotation {cfg.long_label}": rotation_long.reindex(item_tickers).values,
+            f"Abs {cfg.short_label}": abs_short.reindex(item_tickers).values,
+            f"Abs {cfg.long_label}": abs_long.reindex(item_tickers).values,
+            f"RS {cfg.short_label}": rs_short.reindex(item_tickers).values,
+            f"RS {cfg.long_label}": rs_long.reindex(item_tickers).values,
+            "RS Slope 10D": rs_slope_10d.reindex(item_tickers).values,
+            "RS Slope 5D": rs_slope_5d.reindex(item_tickers).values,
+            "RS Accel": rs_accel.reindex(item_tickers).values,
+            "Rotation Slope 10D": rotation_slope_10d.reindex(item_tickers).values,
+            "Rotation Accel": rotation_accel.reindex(item_tickers).values,
+            "RS Z": rs_z_last.reindex(item_tickers).values,
+            "Angle (deg)": angle.reindex(item_tickers).values,
+            "Speed": speed.reindex(item_tickers).values,
+            "Composite Score": composite.reindex(item_tickers).values,
         }
     )
 
@@ -543,8 +790,8 @@ def build_snapshot(
         default=snap["Quadrant"],
     )
 
-    snap["MarkerSize"] = 18 + (snap["Speed"].rank(pct=True).fillna(0.5) * 20)
-    snap["Color"] = snap["Ticker"].map(SECTOR_COLORS)
+    snap["MarkerSize"] = 16 + (snap["Speed"].rank(pct=True).fillna(0.5) * 18)
+    snap["Color"] = snap["Sector Group"].map(SECTOR_GROUP_COLORS).fillna("#4b5563")
 
     snap = snap.sort_values("Composite Score", ascending=False).reset_index(drop=True)
     snap["Rank"] = np.arange(1, len(snap) + 1)
@@ -554,7 +801,7 @@ def build_snapshot(
 
 def compute_rank_delta(
     prices: pd.DataFrame,
-    sectors: Dict[str, str],
+    universe_df: pd.DataFrame,
     benchmark_ticker: str,
     cfg: RotationConfig,
     rotation_basis: str,
@@ -576,7 +823,7 @@ def compute_rank_delta(
 
     past_snap = build_snapshot(
         past_prices,
-        sectors,
+        universe_df,
         benchmark_ticker,
         cfg,
         rotation_basis,
@@ -590,7 +837,7 @@ def compute_rank_delta(
 
     curr_snap = build_snapshot(
         current_prices,
-        sectors,
+        universe_df,
         benchmark_ticker,
         cfg,
         rotation_basis,
@@ -612,7 +859,7 @@ def compute_rank_delta(
 
 def build_rotation_trails(
     prices: pd.DataFrame,
-    sectors: Dict[str, str],
+    universe_df: pd.DataFrame,
     benchmark_ticker: str,
     cfg: RotationConfig,
     trail_weeks: int,
@@ -621,8 +868,8 @@ def build_rotation_trails(
     if trail_weeks <= 0:
         return {}
 
-    sector_tickers = list(sectors.keys())
-    needed = sector_tickers + [benchmark_ticker]
+    item_tickers = universe_df["Ticker"].tolist()
+    needed = item_tickers + [benchmark_ticker]
     available = [t for t in needed if t in prices.columns]
 
     weekly_prices = prices[available].resample("W-FRI").last().dropna(how="all")
@@ -630,16 +877,21 @@ def build_rotation_trails(
     if weekly_prices.empty:
         return {}
 
+    available_items = [ticker for ticker in item_tickers if ticker in weekly_prices.columns]
+
+    if not available_items:
+        return {}
+
     if rotation_basis == "relative":
         if benchmark_ticker not in weekly_prices.columns:
             return {}
 
-        rotation_frame = weekly_prices[sector_tickers].div(
+        rotation_frame = weekly_prices[available_items].div(
             weekly_prices[benchmark_ticker],
             axis=0,
         )
     else:
-        rotation_frame = weekly_prices[sector_tickers]
+        rotation_frame = weekly_prices[available_items]
 
     rotation_frame = rotation_frame.replace([np.inf, -np.inf], np.nan)
 
@@ -648,7 +900,7 @@ def build_rotation_trails(
 
     trail_points = {}
 
-    for ticker in sector_tickers:
+    for ticker in available_items:
         if ticker not in rotation_frame.columns:
             continue
 
@@ -677,7 +929,7 @@ def build_rotation_trails(
 
 def make_rs_chart(
     rs_series: pd.Series,
-    sector_name: str,
+    item_name: str,
     benchmark_ticker: str,
 ) -> go.Figure:
     rs_20 = rs_series.rolling(20).mean()
@@ -719,7 +971,7 @@ def make_rs_chart(
     )
 
     fig.update_layout(
-        title=f"Relative Strength | {sector_name} vs {benchmark_ticker}",
+        title=f"Relative Strength | {item_name} vs {benchmark_ticker}",
         height=420,
         margin=dict(l=10, r=10, t=55, b=10),
         xaxis_title="Date",
@@ -742,6 +994,8 @@ def make_rotation_scatter(
     trail_points: Dict[str, pd.DataFrame],
     rotation_basis: str,
     benchmark_ticker: str,
+    label_mode: str,
+    label_top_n: int,
 ) -> go.Figure:
     x_col = f"Rotation {cfg.long_label}"
     y_col = f"Rotation {cfg.short_label}"
@@ -751,31 +1005,55 @@ def make_rotation_scatter(
     fig.add_hline(y=0, line_width=1, opacity=0.45)
     fig.add_vline(x=0, line_width=1, opacity=0.45)
 
+    plot_df = snap.dropna(subset=[x_col, y_col]).copy()
+
+    if plot_df.empty:
+        fig.add_annotation(
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            text="No valid rotation data for the selected universe/window.",
+            showarrow=False,
+        )
+        fig.update_layout(height=560)
+        return fig
+
+    label_set = set()
+    if label_mode == "All tickers":
+        label_set = set(plot_df["Ticker"])
+    elif label_mode == "Top ranked only":
+        label_set = set(plot_df.nsmallest(label_top_n, "Rank")["Ticker"])
+
     for ticker, trail_df in trail_points.items():
-        if ticker not in snap["Ticker"].values or trail_df.empty:
+        if ticker not in plot_df["Ticker"].values or trail_df.empty:
             continue
 
-        color = SECTOR_COLORS.get(ticker, "#4b5563")
+        group = plot_df.loc[plot_df["Ticker"] == ticker, "Sector Group"].iloc[0]
+        color = SECTOR_GROUP_COLORS.get(group, "#4b5563")
 
         fig.add_trace(
             go.Scatter(
                 x=trail_df["x"],
                 y=trail_df["y"],
                 mode="lines+markers",
-                line=dict(color=color, width=1.4),
-                marker=dict(size=5, color=color, opacity=0.6),
-                opacity=0.45,
+                line=dict(color=color, width=1.2),
+                marker=dict(size=4, color=color, opacity=0.5),
+                opacity=0.35,
                 hoverinfo="skip",
                 showlegend=False,
             )
         )
 
-    for _, row in snap.iterrows():
+    for _, row in plot_df.iterrows():
         ticker = row["Ticker"]
         border_color = STATE_COLORS.get(row["Quadrant"], "#111827")
+        text = ticker if ticker in label_set else ""
 
         hovertemplate = (
-            f"<b>{row['Sector']} ({ticker})</b><br>"
+            f"<b>{row['Name']} ({ticker})</b><br>"
+            f"Group: {row['Sector Group']}<br>"
+            f"Tier: {row['Tier']}<br>"
             f"Rotation mode: {row['Rotation Mode']}<br>"
             f"Rotation {cfg.short_label}: {row[f'Rotation {cfg.short_label}']:.2%}<br>"
             f"Rotation {cfg.long_label}: {row[f'Rotation {cfg.long_label}']:.2%}<br>"
@@ -794,14 +1072,14 @@ def make_rotation_scatter(
             go.Scatter(
                 x=[row[x_col]],
                 y=[row[y_col]],
-                mode="markers+text",
-                text=[ticker],
+                mode="markers+text" if text else "markers",
+                text=[text] if text else None,
                 textposition="top center",
                 marker=dict(
                     size=float(row["MarkerSize"]),
                     color=row["Color"],
-                    line=dict(width=2.0, color=border_color),
-                    opacity=0.92,
+                    line=dict(width=1.8, color=border_color),
+                    opacity=0.90,
                 ),
                 name=ticker,
                 hovertemplate=hovertemplate,
@@ -809,13 +1087,13 @@ def make_rotation_scatter(
             )
         )
 
-    x_min = float(snap[x_col].min())
-    x_max = float(snap[x_col].max())
-    y_min = float(snap[y_col].min())
-    y_max = float(snap[y_col].max())
+    x_min = float(plot_df[x_col].min())
+    x_max = float(plot_df[x_col].max())
+    y_min = float(plot_df[y_col].min())
+    y_max = float(plot_df[y_col].max())
 
-    x_pad = max(0.02, abs(x_max - x_min) * 0.20, snap[x_col].abs().max() * 0.15)
-    y_pad = max(0.02, abs(y_max - y_min) * 0.20, snap[y_col].abs().max() * 0.15)
+    x_pad = max(0.02, abs(x_max - x_min) * 0.20, plot_df[x_col].abs().max() * 0.15)
+    y_pad = max(0.02, abs(y_max - y_min) * 0.20, plot_df[y_col].abs().max() * 0.15)
 
     if x_min == x_max:
         x_min -= x_pad
@@ -865,7 +1143,7 @@ def make_rotation_scatter(
 
     fig.update_layout(
         title=f"Rotation Map | {mode_title} | {cfg.short_label} vs {cfg.long_label}",
-        height=560,
+        height=610,
         margin=dict(l=10, r=10, t=55, b=10),
         xaxis=dict(
             title=f"{cfg.long_label} rotation return",
@@ -910,7 +1188,9 @@ def build_display_table(
     cols = [
         "Rank",
         "Ticker",
-        "Sector",
+        "Name",
+        "Sector Group",
+        "Tier",
         "Quadrant",
         "State",
         "Composite Score",
@@ -988,10 +1268,15 @@ def style_snapshot_table(df: pd.DataFrame, cfg: RotationConfig):
 # =============================================================================
 
 cfg = get_rotation_config(window_choice)
+min_required_rows = cfg.long_window + 20
+
+if selected_universe.empty:
+    st.warning("No sector groups selected.")
+    st.stop()
 
 all_tickers = list(
     dict.fromkeys(
-        list(SECTORS.keys())
+        selected_universe["Ticker"].tolist()
         + list(BENCHMARKS.keys())
     )
 )
@@ -999,32 +1284,60 @@ all_tickers = list(
 with st.spinner("Loading market data..."):
     prices = fetch_prices(all_tickers)
 
-required_tickers = list(SECTORS.keys()) + [benchmark]
-ok, missing = validate_prices(prices, required_tickers)
+benchmark_ok, benchmark_error = validate_benchmark(prices, benchmark, min_required_rows)
 
-if not ok:
-    st.error(f"Data unavailable for: {', '.join(missing)}")
+if not benchmark_ok:
+    st.error(benchmark_error)
     st.stop()
 
 prices = prices.sort_index().ffill()
 
-min_required_rows = cfg.long_window + 20
-if len(prices) < min_required_rows:
-    st.error(f"Not enough data for the selected window. Need at least {min_required_rows} rows.")
+eligible_universe, universe_diagnostics = filter_universe_by_data(
+    selected_universe,
+    prices,
+    min_valid_rows=min_required_rows,
+)
+
+benchmark_diagnostics = build_price_diagnostics(
+    prices=prices,
+    tickers=[benchmark],
+    min_valid_rows=min_required_rows,
+)
+
+diagnostics_df = pd.concat(
+    [universe_diagnostics, benchmark_diagnostics],
+    ignore_index=True,
+).drop_duplicates(subset=["Ticker"], keep="first")
+
+if eligible_universe.empty:
+    st.error("No eligible sector/subsector ETFs have enough valid history for the selected rotation window.")
     st.stop()
+
+missing_or_thin = universe_diagnostics[~universe_diagnostics["Status"].isin(["OK", "Stale"])]
+
+if not missing_or_thin.empty:
+    with st.expander(
+        f"Dropped {len(missing_or_thin)} ticker(s) with missing or thin data",
+        expanded=False,
+    ):
+        st.dataframe(
+            missing_or_thin,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # =============================================================================
 # Analytics
 # =============================================================================
 
-sector_tickers = list(SECTORS.keys())
+item_tickers = eligible_universe["Ticker"].tolist()
 
-rs = compute_relative_strength(prices, sector_tickers, benchmark)
+rs = compute_relative_strength(prices, item_tickers, benchmark)
 
 snap = build_snapshot(
     prices=prices,
-    sectors=SECTORS,
+    universe_df=eligible_universe,
     benchmark_ticker=benchmark,
     cfg=cfg,
     rotation_basis=rotation_mode,
@@ -1032,7 +1345,7 @@ snap = build_snapshot(
 
 rank_delta = compute_rank_delta(
     prices=prices,
-    sectors=SECTORS,
+    universe_df=eligible_universe,
     benchmark_ticker=benchmark,
     cfg=cfg,
     rotation_basis=rotation_mode,
@@ -1041,7 +1354,7 @@ rank_delta = compute_rank_delta(
 
 trail_points = build_rotation_trails(
     prices=prices,
-    sectors=SECTORS,
+    universe_df=eligible_universe,
     benchmark_ticker=benchmark,
     cfg=cfg,
     trail_weeks=TRAIL_OPTIONS[trail_choice],
@@ -1049,7 +1362,6 @@ trail_points = build_rotation_trails(
 )
 
 display_df = build_display_table(snap, rank_delta, cfg)
-diagnostics_df = build_price_diagnostics(prices, all_tickers)
 
 
 # =============================================================================
@@ -1069,14 +1381,30 @@ if show_diagnostics:
 # Main charts
 # =============================================================================
 
-left, right = st.columns([1.03, 1.17])
+left, right = st.columns([1.0, 1.22])
 
 with left:
     st.subheader("Relative strength")
 
+    rs_options = snap.sort_values("Rank")["Ticker"].tolist()
+    rs_default = rs_options.index("SMH") if "SMH" in rs_options else 0
+
+    rs_item = st.selectbox(
+        "Ticker for RS chart",
+        options=rs_options,
+        format_func=lambda x: (
+            f"{x} | "
+            f"{eligible_universe.set_index('Ticker').loc[x, 'Name']} | "
+            f"{eligible_universe.set_index('Ticker').loc[x, 'Sector Group']}"
+        ),
+        index=rs_default,
+    )
+
+    rs_meta = eligible_universe.set_index("Ticker").loc[rs_item]
+
     rs_fig = make_rs_chart(
-        rs_series=rs[rs_sector].dropna(),
-        sector_name=f"{SECTORS[rs_sector]} ({rs_sector})",
+        rs_series=rs[rs_item].dropna(),
+        item_name=f"{rs_meta['Name']} ({rs_item})",
         benchmark_ticker=benchmark,
     )
 
@@ -1091,6 +1419,8 @@ with right:
         trail_points=trail_points,
         rotation_basis=rotation_mode,
         benchmark_ticker=benchmark,
+        label_mode=label_mode,
+        label_top_n=label_top_n,
     )
 
     st.plotly_chart(rot_fig, use_container_width=True)
@@ -1102,7 +1432,7 @@ with right:
 
 st.subheader("Rotation snapshot")
 
-filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1.1, 1.4, 1.1, 1.0])
+filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns([1.1, 1.1, 1.2, 1.2, 1.0])
 
 with filter_col1:
     sort_col = st.selectbox(
@@ -1110,7 +1440,9 @@ with filter_col1:
         options=[
             "Rank",
             "Ticker",
-            "Sector",
+            "Name",
+            "Sector Group",
+            "Tier",
             "Quadrant",
             "State",
             "Composite Score",
@@ -1126,10 +1458,19 @@ with filter_col1:
             "Angle (deg)",
             "Speed",
         ],
-        index=5,
+        index=7,
     )
 
 with filter_col2:
+    table_group_options = display_df["Sector Group"].drop_duplicates().tolist()
+
+    table_groups = st.multiselect(
+        "Group filter",
+        options=table_group_options,
+        default=table_group_options,
+    )
+
+with filter_col3:
     quadrant_options = [
         q
         for q in ["Leading", "Improving", "Weakening", "Lagging", "Neutral"]
@@ -1142,7 +1483,7 @@ with filter_col2:
         default=quadrant_options,
     )
 
-with filter_col3:
+with filter_col4:
     state_options = sorted(display_df["State"].dropna().unique().tolist())
 
     selected_states = st.multiselect(
@@ -1151,11 +1492,24 @@ with filter_col3:
         default=state_options,
     )
 
-with filter_col4:
+with filter_col5:
     ascending = st.toggle("Ascending", value=False)
     only_accelerating = st.toggle("RS accel only", value=False)
 
+    tier_options = display_df["Tier"].drop_duplicates().tolist()
+    selected_tiers = st.multiselect(
+        "Tier",
+        options=tier_options,
+        default=tier_options,
+    )
+
 table_filtered = display_df.copy()
+
+if table_groups:
+    table_filtered = table_filtered[table_filtered["Sector Group"].isin(table_groups)]
+
+if selected_tiers:
+    table_filtered = table_filtered[table_filtered["Tier"].isin(selected_tiers)]
 
 if selected_quadrants:
     table_filtered = table_filtered[table_filtered["Quadrant"].isin(selected_quadrants)]
@@ -1167,15 +1521,15 @@ if only_accelerating:
     table_filtered = table_filtered[table_filtered["RS Accel"] > 0]
 
 if table_filtered.empty:
-    st.info("No sectors match the current filter selection.")
+    st.info("No sectors/subsectors match the current filter selection.")
 else:
     table_sorted = table_filtered.sort_values(
         sort_col,
         ascending=ascending,
     ).reset_index(drop=True)
 
-    row_height = 35
-    table_height = min(720, max(160, row_height * (len(table_sorted) + 1)))
+    row_height = 34
+    table_height = min(780, max(180, row_height * (len(table_sorted) + 1)))
 
     st.dataframe(
         style_snapshot_table(table_sorted, cfg),
@@ -1184,17 +1538,25 @@ else:
         hide_index=True,
     )
 
+    csv = table_sorted.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Download snapshot CSV",
+        data=csv,
+        file_name="adfm_subsector_rotation_snapshot.csv",
+        mime="text/csv",
+    )
+
 
 # =============================================================================
 # Footer
 # =============================================================================
 
-coverage = len([c for c in sector_tickers if c in prices.columns and not prices[c].dropna().empty])
+coverage = len([c for c in item_tickers if c in prices.columns and not prices[c].dropna().empty])
 latest_dt = pd.to_datetime(prices.index.max()).date()
 
 st.caption(
     f"Data through: {latest_dt} | Benchmark: {benchmark} | Rotation mode: {rotation_mode_label} | "
-    f"Coverage: {coverage}/{len(sector_tickers)} sector ETFs"
+    f"Universe: {universe_scope} | Coverage: {coverage}/{len(selected_universe)} eligible tickers"
 )
 
 st.caption("© 2026 AD Fund Management LP")
