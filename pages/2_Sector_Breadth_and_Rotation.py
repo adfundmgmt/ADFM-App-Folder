@@ -961,8 +961,8 @@ def build_snapshot(
     rotation_slope_10d = slope_last(rotation_frame, 10)
     rotation_accel = acceleration_last(rotation_frame, 5)
 
-    map_y = risk_adjusted_return_last(rotation_frame, cfg.short_window)
-    map_x = risk_adjusted_return_last(rotation_frame, cfg.long_window)
+    map_y = rotation_short.copy()
+    map_x = rotation_long.copy()
 
     rs_z_window = min(126, max(63, cfg.long_window))
     rs_z = compute_log_trend_zscore(rs, window=rs_z_window)
@@ -1161,7 +1161,7 @@ def build_rotation_trails(
     rotation_basis: str,
 ) -> Dict[str, pd.DataFrame]:
     """
-    Build trail points from the same daily-window, volatility-adjusted
+    Build trail points from the same daily-window percentage-return
     methodology used for the current map point, then sample those coordinates
     at weekly intervals. The latest trail point therefore matches the marker.
     """
@@ -1188,14 +1188,8 @@ def build_rotation_trails(
         rotation_frame = prices[item_tickers].copy()
 
     rotation_frame = rotation_frame.replace([np.inf, -np.inf], np.nan)
-    map_x_history = risk_adjusted_return_frame(
-        rotation_frame,
-        cfg.long_window,
-    )
-    map_y_history = risk_adjusted_return_frame(
-        rotation_frame,
-        cfg.short_window,
-    )
+    map_x_history = rotation_frame.pct_change(cfg.long_window, fill_method=None)
+    map_y_history = rotation_frame.pct_change(cfg.short_window, fill_method=None)
 
     trail_points: Dict[str, pd.DataFrame] = {}
 
@@ -1364,8 +1358,8 @@ def make_rotation_scatter(
             f"Rotation mode: {row['Rotation Mode']}<br>"
             f"Rotation {cfg.short_label}: {row[f'Rotation {cfg.short_label}']:.2%}<br>"
             f"Rotation {cfg.long_label}: {row[f'Rotation {cfg.long_label}']:.2%}<br>"
-            f"Risk-adjusted {cfg.short_label}: {row['Map Y']:.2f}<br>"
-            f"Risk-adjusted {cfg.long_label}: {row['Map X']:.2f}<br>"
+            f"Map {cfg.short_label}: {row['Map Y']:.2%}<br>"
+            f"Map {cfg.long_label}: {row['Map X']:.2%}<br>"
             f"Abs {cfg.short_label}: {row[f'Abs {cfg.short_label}']:.2%}<br>"
             f"Abs {cfg.long_label}: {row[f'Abs {cfg.long_label}']:.2%}<br>"
             f"RS {cfg.short_label}: {row[f'RS {cfg.short_label}']:.2%}<br>"
@@ -1463,14 +1457,14 @@ def make_rotation_scatter(
         height=760,
         margin=dict(l=10, r=10, t=55, b=10),
         xaxis=dict(
-            title=f"{cfg.long_label} risk-adjusted rotation",
-            tickformat=".2f",
+            title=f"{cfg.long_label} rotation",
+            tickformat=".1%",
             zeroline=False,
             range=[x_min - x_pad, x_max + x_pad],
         ),
         yaxis=dict(
-            title=f"{cfg.short_label} risk-adjusted rotation",
-            tickformat=".2f",
+            title=f"{cfg.short_label} rotation",
+            tickformat=".1%",
             zeroline=False,
             range=[y_min - y_pad, y_max + y_pad],
         ),
