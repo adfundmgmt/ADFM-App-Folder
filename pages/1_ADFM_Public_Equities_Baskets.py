@@ -6,7 +6,7 @@ import numpy as np
 
 import yfinance as yf
 
-from datetime import date, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 
 import plotly.graph_objects as go
 
@@ -14,7 +14,13 @@ from pathlib import Path
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from zoneinfo import ZoneInfo
+
+import hashlib
+
 import json
+
+import math
 
 import time
 
@@ -82,6 +88,24 @@ INDICATOR_WARMUP_DAYS = 520
 
 BENCH = "SPY"
 
+NY_TZ = ZoneInfo("America/New_York")
+
+COMPLETED_SESSION_TIME = dt_time(16, 15)
+
+CACHE_VERSION = 2
+
+CACHE_MAX_AGE_DAYS = 7
+
+MIN_LIVE_MEMBER_COVERAGE = 0.50
+
+MIN_DAILY_MEMBER_COVERAGE = 0.60
+
+MAX_FORWARD_FILL_SESSIONS = 5
+
+MAX_CHART_SERIES = 20
+
+BASKET_KEY_SEPARATOR = " :: "
+
 
 
 MAGNIFICENT_SEVEN = "Magnificent Seven"
@@ -92,19 +116,27 @@ MAGNIFICENT_SEVEN_TICKERS = ["NVDA", "MSFT", "GOOGL", "AMZN", "AAPL", "META", "T
 
 CACHE_DIR = Path(".adfm_cache")
 
-LEVELS_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good.pkl"
+FX_CONVERSIONS: Dict[str, Tuple[str, str]] = {
 
-LEVELS_META_CACHE = CACHE_DIR / "sector_thematic_basket_levels_last_good_meta.json"
+    "000660.KS": ("KRW=X", "divide"),
 
+    "005930.KS": ("KRW=X", "divide"),
 
+    "EUROB.AT": ("EURUSD=X", "multiply"),
 
+    "MYTIL.AT": ("EURUSD=X", "multiply"),
 
+    "OPAP.AT": ("EURUSD=X", "multiply"),
 
-# If Yahoo does not return a market cap, the ticker is kept.
+    "TRUL.CN": ("CAD=X", "divide"),
 
-# ETFs, ADRs, and foreign listings often have missing market-cap fields.
+    "TUN.L": ("GBPUSD=X", "multiply"),
 
-EXCLUDE_MISSING_MARKET_CAP = False
+    "WHC.AX": ("AUDUSD=X", "multiply"),
+
+}
+
+FUND_QUOTE_TYPES = {"ETF", "MUTUALFUND", "MONEYMARKET"}
 
 
 
@@ -118,7 +150,8 @@ EXCLUDE_MISSING_MARKET_CAP = False
 
 # Structure preserved: Dict[str, Dict[str, List[str]]]
 
-# 275 baskets across 14 groups.
+# 273 basket definitions across 14 groups. Internal keys include category names,
+# so repeated display names cannot overwrite one another.
 
 # ============================================================
 
@@ -777,55 +810,157 @@ def _to_float_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 
 
-def save_last_good_levels(levels: pd.DataFrame, meta: Dict[str, Any]) -> None:
+def _cache_key(tickers: List[str], start: pd.Timestamp) -> str:
+
+    payload = {
+
+        "version": CACHE_VERSION,
+
+        "tickers": sorted(tickers),
+
+        "start": str(pd.Timestamp(start).date()),
+
+    }
+
+    raw = json.dumps(payload, sort_keys=True).encode("utf-8")
+
+    return hashlib.sha256(raw).hexdigest()[:20]
+
+
+
+
+
+def _cache_paths(cache_key: str) -> Tuple[Path, Path]:
+
+    stem = CACHE_DIR / f"basket_levels_{cache_key}"
+
+    return Path(f"{stem}.pkl"), Path(f"{stem}.json")
+
+
+
+
+
+def save_last_good_levels(
+
+    levels: pd.DataFrame,
+
+    meta: Dict[str, Any],
+
+    cache_key: str,
+
+) -> Optional[str]:
+
+    levels_path, meta_path = _cache_paths(cache_key)
+
+    tmp_levels = Path(f"{levels_path}.tmp")
+
+    tmp_meta = Path(f"{meta_path}.tmp")
 
     try:
 
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-        levels.to_pickle(LEVELS_CACHE)
+        levels.to_pickle(tmp_levels)
 
-        with LEVELS_META_CACHE.open("w", encoding="utf-8") as f:
+        with tmp_meta.open("w", encoding="utf-8") as f:
 
             json.dump(meta, f, indent=2, default=str)
 
-    except Exception:
+        tmp_levels.replace(levels_path)
 
-        pass
+        tmp_meta.replace(meta_path)
+
+        return None
+
+    except Exception as exc:
+
+        for path in (tmp_levels, tmp_meta):
+
+            try:
+
+                path.unlink(missing_ok=True)
+
+            except Exception:
+
+                pass
+
+        return str(exc)
 
 
 
 
 
-def load_last_good_levels() -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def load_last_good_levels(cache_key: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+
+    levels_path, meta_path = _cache_paths(cache_key)
 
     try:
 
-        if not LEVELS_CACHE.exists():
+        if not levels_path.exists():
 
             return pd.DataFrame(), {}
 
-
-
-        levels = pd.read_pickle(LEVELS_CACHE)
+        levels = pd.read_pickle(levels_path)
 
         meta: Dict[str, Any] = {}
 
+        if meta_path.exists():
 
-
-        if LEVELS_META_CACHE.exists():
-
-            with LEVELS_META_CACHE.open("r", encoding="utf-8") as f:
+            with meta_path.open("r", encoding="utf-8") as f:
 
                 meta = json.load(f)
 
-
-
         return _clean_index(levels), meta
 
-    except Exception:
+    except Exception as exc:
 
-        return pd.DataFrame(), {}
+        return pd.DataFrame(), {"cache_load_error": str(exc)}
+
+
+
+
+
+def _cache_is_usable(
+
+    levels: pd.DataFrame,
+
+    requested_tickers: List[str],
+
+    start: pd.Timestamp,
+
+    end: pd.Timestamp,
+
+) -> bool:
+
+    if levels.empty or BENCH not in levels.columns:
+
+        return False
+
+    bench = levels[BENCH].dropna()
+
+    if bench.empty:
+
+        return False
+
+    if bench.index.min() > pd.Timestamp(start) + pd.Timedelta(days=10):
+
+        return False
+
+    latest_acceptable = pd.Timestamp(end) - pd.Timedelta(days=CACHE_MAX_AGE_DAYS)
+
+    if bench.index.max() < latest_acceptable:
+
+        return False
+
+    available = sum(
+
+        1 for ticker in requested_tickers
+
+        if ticker in levels.columns and not levels[ticker].dropna().empty
+
+    )
+
+    return available / max(len(requested_tickers), 1) >= 0.70
 
 
 
@@ -945,9 +1080,21 @@ def fetch_daily_levels(
 
     uniq = sorted({str(t).upper().strip() for t in tickers if str(t).strip()})
 
+    start = pd.Timestamp(start).tz_localize(None) if pd.Timestamp(start).tzinfo else pd.Timestamp(start)
+
+    end = pd.Timestamp(end).tz_localize(None) if pd.Timestamp(end).tzinfo else pd.Timestamp(end)
+
+    cache_key = _cache_key(uniq, start)
+
+    cached, cached_meta = load_last_good_levels(cache_key)
+
+    cache_usable = _cache_is_usable(cached, uniq, start, end)
+
     frames: List[pd.DataFrame] = []
 
     failed_batches: List[List[str]] = []
+
+    consecutive_failed_batches = 0
 
 
 
@@ -959,33 +1106,87 @@ def fetch_daily_levels(
 
             failed_batches.append(batch)
 
+            consecutive_failed_batches += 1
+
+            if cache_usable and consecutive_failed_batches >= 3:
+
+                break
+
         else:
 
             frames.append(close)
 
+            consecutive_failed_batches = 0
 
 
-    if not frames:
 
-        cached, cached_meta = load_last_good_levels()
+    wide = pd.concat(frames, axis=1) if frames else pd.DataFrame()
 
-        if not cached.empty:
+    if not wide.empty:
 
-            return cached, {
+        wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
 
-                "source": "last_good_cache",
-
-                "requested_tickers": len(uniq),
-
-                "returned_tickers": int(cached.shape[1]),
-
-                "cache_meta": cached_meta,
-
-                "failed_batches": failed_batches,
-
-            }
+        wide = _to_float_frame(_clean_index(wide))
 
 
+
+    missing_after_batches = sorted(set(uniq) - set(wide.columns))
+
+    retry_frames: List[pd.DataFrame] = []
+
+    retry_batches = _chunk(missing_after_batches, 8) if frames else []
+
+    for batch in retry_batches:
+
+        retry = _download_close(batch, start=start, end=end, retries=1)
+
+        if not retry.empty:
+
+            retry_frames.append(retry)
+
+    if retry_frames:
+
+        wide = pd.concat([wide, *retry_frames], axis=1)
+
+        wide = wide.loc[:, ~wide.columns.duplicated(keep="last")]
+
+        wide = _to_float_frame(_clean_index(wide))
+
+
+
+    if BENCH not in wide.columns or wide[BENCH].dropna().empty:
+
+        spy_only = _download_close([BENCH], start=start, end=end)
+
+        if not spy_only.empty:
+
+            wide = pd.concat([wide.drop(columns=[BENCH], errors="ignore"), spy_only], axis=1)
+
+            wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
+
+    cache_used = False
+
+    if cache_usable:
+
+        cached = cached.loc[(cached.index >= start) & (cached.index < end)]
+
+        if wide.empty:
+
+            wide = cached.copy()
+
+            cache_used = True
+
+        else:
+
+            before_columns = set(wide.columns)
+
+            wide = wide.combine_first(cached)
+
+            cache_used = bool(set(uniq) - before_columns)
+
+
+
+    if wide.empty:
 
         return pd.DataFrame(), {
 
@@ -997,43 +1198,29 @@ def fetch_daily_levels(
 
             "failed_batches": failed_batches,
 
+            "cache_meta": cached_meta,
+
         }
 
 
 
-    wide = pd.concat(frames, axis=1)
+    wide = wide.loc[(wide.index >= start) & (wide.index < end)]
 
-    wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
+    wide = wide.loc[:, ~wide.columns.duplicated()]
 
-    wide = _to_float_frame(_clean_index(wide))
+    wide = _to_float_frame(_clean_index(wide)).dropna(axis=1, how="all")
 
+    source = "last_good_cache" if not frames and cache_used else ("yahoo+cache" if cache_used else "yahoo")
 
+    last_observation = None
 
-    if not wide.empty:
+    if BENCH in wide.columns and not wide[BENCH].dropna().empty:
 
-        bidx = pd.bdate_range(wide.index.min(), wide.index.max(), name=wide.index.name)
-
-        wide = wide.reindex(bidx).ffill()
-
-
-
-    if BENCH not in wide.columns or wide[BENCH].dropna().empty:
-
-        spy_only = _download_close([BENCH], start=start, end=end)
-
-        if not spy_only.empty:
-
-            spy_only = spy_only.reindex(wide.index if not wide.empty else spy_only.index).ffill()
-
-            wide = pd.concat([wide.drop(columns=[BENCH], errors="ignore"), spy_only], axis=1)
-
-            wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
-
-
+        last_observation = str(wide[BENCH].dropna().index.max().date())
 
     meta = {
 
-        "source": "yahoo",
+        "source": source,
 
         "requested_tickers": len(uniq),
 
@@ -1047,7 +1234,9 @@ def fetch_daily_levels(
 
         "end": str(end.date()),
 
-        "last_observation": str(wide.index.max().date()) if not wide.empty else None,
+        "last_observation": last_observation,
+
+        "cache_meta": cached_meta if cache_used else {},
 
     }
 
@@ -1055,9 +1244,13 @@ def fetch_daily_levels(
 
     coverage = wide.shape[1] / max(len(uniq), 1)
 
-    if not wide.empty and BENCH in wide.columns and coverage >= 0.70:
+    if frames and BENCH in wide.columns and coverage >= 0.70:
 
-        save_last_good_levels(wide, meta)
+        cache_error = save_last_good_levels(wide, meta, cache_key)
+
+        if cache_error:
+
+            meta["cache_save_error"] = cache_error
 
 
 
@@ -1069,7 +1262,7 @@ def fetch_daily_levels(
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 12)
 
-def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
+def fetch_market_metadata(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
 
     uniq = sorted({str(t).upper().strip() for t in tickers if str(t).strip()})
 
@@ -1079,7 +1272,7 @@ def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
 
 
 
-    caps: Dict[str, float] = {}
+    metadata: Dict[str, Dict[str, Any]] = {}
 
 
 
@@ -1095,7 +1288,13 @@ def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
 
                 try:
 
+                    sym_upper = str(sym).upper()
+
                     mc_val = None
+
+                    quote_type = None
+
+                    currency = None
 
 
 
@@ -1107,23 +1306,37 @@ def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
 
                             mc_val = fast_info.get("market_cap")
 
+                            currency = fast_info.get("currency")
+
                         else:
 
                             mc_val = getattr(fast_info, "market_cap", None)
 
+                            currency = getattr(fast_info, "currency", None)
 
 
-                    if mc_val is None:
+
+                    if mc_val is None or sym_upper in FX_CONVERSIONS:
 
                         info = getattr(tk, "info", {}) or {}
 
-                        mc_val = info.get("marketCap")
+                        mc_val = mc_val if mc_val is not None else info.get("marketCap")
+
+                        quote_type = info.get("quoteType")
+
+                        currency = currency or info.get("currency")
 
 
 
-                    if mc_val is not None and pd.notna(mc_val):
+                    metadata[sym_upper] = {
 
-                        caps[str(sym).upper()] = float(mc_val)
+                        "market_cap": float(mc_val) if mc_val is not None and pd.notna(mc_val) else None,
+
+                        "quote_type": str(quote_type).upper() if quote_type else None,
+
+                        "currency": str(currency) if currency else None,
+
+                    }
 
 
 
@@ -1139,7 +1352,7 @@ def fetch_market_caps(tickers: List[str]) -> Dict[str, float]:
 
 
 
-    return caps
+    return metadata
 
 
 
@@ -1151,11 +1364,13 @@ def normalize_basket_members(
 
     basket_tickers: List[str],
 
-    market_caps: Optional[Dict[str, float]] = None,
+    market_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 
     min_market_cap: Optional[float] = None,
 
     stale_days: int = 30,
+
+    reference_date: Optional[pd.Timestamp] = None,
 
 ) -> List[str]:
 
@@ -1169,7 +1384,7 @@ def normalize_basket_members(
 
 
 
-    last_idx = pd.Timestamp(levels.index.max())
+    last_idx = pd.Timestamp(reference_date) if reference_date is not None else pd.Timestamp(levels.index.max())
 
 
 
@@ -1203,21 +1418,19 @@ def normalize_basket_members(
 
 
 
-        if min_market_cap is not None and market_caps is not None:
+        if min_market_cap is not None:
 
-            mc = market_caps.get(sym)
+            record = (market_metadata or {}).get(sym, {})
 
+            quote_type = str(record.get("quote_type") or "").upper()
 
+            mc = record.get("market_cap")
 
-            if mc is None and EXCLUDE_MISSING_MARKET_CAP:
+            if quote_type not in FUND_QUOTE_TYPES:
 
-                continue
+                if mc is None or pd.isna(mc) or float(mc) < min_market_cap:
 
-
-
-            if mc is not None and mc < min_market_cap:
-
-                continue
+                    continue
 
 
 
@@ -1237,15 +1450,21 @@ def build_live_baskets(
 
     categories: Dict[str, Dict[str, List[str]]],
 
-    market_caps: Dict[str, float],
+    market_metadata: Dict[str, Dict[str, Any]],
 
     min_market_cap: Optional[float],
 
     stale_days: int,
 
-) -> Dict[str, Dict[str, List[str]]]:
+    reference_date: pd.Timestamp,
+
+) -> Tuple[Dict[str, Dict[str, List[str]]], Dict[str, Dict[str, Any]], List[str]]:
 
     live_categories: Dict[str, Dict[str, List[str]]] = {}
+
+    basket_metadata: Dict[str, Dict[str, Any]] = {}
+
+    dropped_baskets: List[str] = []
 
 
 
@@ -1263,19 +1482,49 @@ def build_live_baskets(
 
                 basket_tickers=tickers,
 
-                market_caps=market_caps,
+                market_metadata=market_metadata,
 
                 min_market_cap=min_market_cap,
 
                 stale_days=stale_days,
 
+                reference_date=reference_date,
+
             )
 
+            defined_count = len({str(t).upper().strip() for t in tickers if str(t).strip()})
 
+            required_count = 1 if defined_count <= 1 else max(
 
-            if live_members:
+                2,
+
+                int(math.ceil(defined_count * MIN_LIVE_MEMBER_COVERAGE)),
+
+            )
+
+            key = basket_key(category, basket_name)
+
+            if len(live_members) >= required_count:
 
                 live_baskets[basket_name] = live_members
+
+                basket_metadata[key] = {
+
+                    "Category": category,
+
+                    "Basket": basket_name,
+
+                    "Live Members": len(live_members),
+
+                    "Defined Members": defined_count,
+
+                    "Members": f"{len(live_members)}/{defined_count}",
+
+                }
+
+            else:
+
+                dropped_baskets.append(key)
 
 
 
@@ -1285,7 +1534,15 @@ def build_live_baskets(
 
 
 
-    return live_categories
+    return live_categories, basket_metadata, dropped_baskets
+
+
+
+
+
+def basket_key(category: str, basket_name: str) -> str:
+
+    return f"{category}{BASKET_KEY_SEPARATOR}{basket_name}"
 
 
 
@@ -1293,7 +1550,15 @@ def build_live_baskets(
 
 def flatten_baskets(categories: Dict[str, Dict[str, List[str]]]) -> Dict[str, List[str]]:
 
-    return {basket: tickers for groups in categories.values() for basket, tickers in groups.items()}
+    return {
+
+        basket_key(category, basket_name): tickers
+
+        for category, groups in categories.items()
+
+        for basket_name, tickers in groups.items()
+
+    }
 
 
 
@@ -1317,11 +1582,171 @@ def unique_tickers_from_baskets(baskets: Dict[str, List[str]], extra: Optional[I
 
 
 
+def required_fx_tickers(tickers: Iterable[str]) -> List[str]:
+
+    return sorted({FX_CONVERSIONS[ticker][0] for ticker in tickers if ticker in FX_CONVERSIONS})
+
+
+
+
+
+def convert_foreign_levels_to_usd(levels: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+
+    if levels.empty:
+
+        return levels, []
+
+    out = levels.copy()
+
+    issues: List[str] = []
+
+    for ticker, (fx_ticker, operation) in FX_CONVERSIONS.items():
+
+        if ticker not in out.columns:
+
+            continue
+
+        if fx_ticker not in out.columns or out[fx_ticker].dropna().empty:
+
+            out[ticker] = np.nan
+
+            issues.append(f"{ticker}: missing {fx_ticker}")
+
+            continue
+
+        local = out[ticker]
+
+        fx = out[fx_ticker]
+
+        union_index = local.index.union(fx.index).sort_values()
+
+        fx_aligned = fx.reindex(union_index).ffill(limit=MAX_FORWARD_FILL_SESSIONS).reindex(local.index)
+
+        if operation == "multiply":
+
+            out[ticker] = local * fx_aligned
+
+        elif operation == "divide":
+
+            out[ticker] = local / fx_aligned.replace(0, np.nan)
+
+        else:
+
+            out[ticker] = np.nan
+
+            issues.append(f"{ticker}: unsupported FX operation {operation}")
+
+    return out.drop(columns=required_fx_tickers(out.columns), errors="ignore"), issues
+
+
+
+
+
+def convert_market_metadata_to_usd(
+
+    metadata: Dict[str, Dict[str, Any]],
+
+    raw_levels: pd.DataFrame,
+
+) -> Dict[str, Dict[str, Any]]:
+
+    out = {ticker: dict(record) for ticker, record in metadata.items()}
+
+    for ticker, (fx_ticker, operation) in FX_CONVERSIONS.items():
+
+        record = out.get(ticker)
+
+        if not record or record.get("market_cap") is None:
+
+            continue
+
+        if fx_ticker not in raw_levels.columns or raw_levels[fx_ticker].dropna().empty:
+
+            record["market_cap"] = None
+
+            continue
+
+        market_cap = float(record["market_cap"])
+
+        currency = str(record.get("currency") or "")
+
+        if currency in {"GBp", "GBX", "GBpence", "GBpenny"} and ticker.endswith(".L"):
+
+            market_cap /= 100.0
+
+        fx_value = float(raw_levels[fx_ticker].dropna().iloc[-1])
+
+        if operation == "multiply":
+
+            market_cap *= fx_value
+
+        elif operation == "divide" and fx_value != 0:
+
+            market_cap /= fx_value
+
+        else:
+
+            market_cap = np.nan
+
+        record["market_cap"] = market_cap if pd.notna(market_cap) else None
+
+    return out
+
+
+
+
+
+def align_levels_to_calendar(
+
+    levels: pd.DataFrame,
+
+    calendar_index: pd.Index,
+
+    max_forward_fill_sessions: int = MAX_FORWARD_FILL_SESSIONS,
+
+    forward_fill_tickers: Optional[Iterable[str]] = None,
+
+) -> pd.DataFrame:
+
+    if levels.empty or len(calendar_index) == 0:
+
+        return pd.DataFrame()
+
+    calendar = pd.DatetimeIndex(calendar_index).sort_values().unique()
+
+    aligned = levels.reindex(calendar)
+
+    fill_set = set(forward_fill_tickers or FX_CONVERSIONS.keys())
+
+    for ticker in fill_set.intersection(levels.columns):
+
+        union_index = levels.index.union(calendar).sort_values()
+
+        aligned[ticker] = (
+
+            levels[ticker]
+
+            .reindex(union_index)
+
+            .ffill(limit=max_forward_fill_sessions)
+
+            .reindex(calendar)
+
+        )
+
+    return aligned
+
+
+
+
+
 def ew_rets_from_levels(
 
     levels: pd.DataFrame,
 
     baskets: Dict[str, List[str]],
+
+    min_daily_coverage: float = MIN_DAILY_MEMBER_COVERAGE,
 
 ) -> pd.DataFrame:
 
@@ -1331,7 +1756,19 @@ def ew_rets_from_levels(
 
 
 
-    rets = levels.pct_change(fill_method=None)
+    rets = pd.DataFrame(
+
+        {
+
+            column: levels[column].dropna().pct_change(fill_method=None).reindex(levels.index)
+
+            for column in levels.columns
+
+        },
+
+        index=levels.index,
+
+    )
 
     out: Dict[str, pd.Series] = {}
 
@@ -1347,13 +1784,17 @@ def ew_rets_from_levels(
 
 
 
-        if len(cols) == 1:
+        member_rets = rets[cols]
 
-            out[basket_name] = rets[cols[0]]
+        required_count = max(1, int(math.ceil(len(cols) * min_daily_coverage)))
 
-        else:
+        valid_count = member_rets.notna().sum(axis=1)
 
-            out[basket_name] = rets[cols].mean(axis=1, skipna=True)
+        basket_ret = member_rets.mean(axis=1, skipna=True)
+
+        basket_ret[valid_count < required_count] = np.nan
+
+        out[basket_name] = basket_ret
 
 
 
@@ -1382,6 +1823,18 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = avg_gain / avg_loss.replace(0, np.nan)
 
     out = 100 - (100 / (1 + rs))
+
+    rising_only = (avg_loss == 0) & (avg_gain > 0)
+
+    falling_only = (avg_gain == 0) & (avg_loss > 0)
+
+    unchanged = (avg_gain == 0) & (avg_loss == 0)
+
+    out = out.mask(rising_only, 100.0)
+
+    out = out.mask(falling_only, 0.0)
+
+    out = out.mask(unchanged, 50.0)
 
     return out
 
@@ -1473,7 +1926,9 @@ def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> st
 
 
 
-    accel = "Accelerating" if (latest - ref) > 0 else "Decelerating"
+    directional_change = (latest - ref) * np.sign(latest)
+
+    accel = "Accelerating" if directional_change > 0 else "Decelerating"
 
     strength = "Strong" if abs(z) > 1 else "Weak"
 
@@ -1485,55 +1940,29 @@ def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> st
 
 
 
-def realized_vol(returns: pd.Series, days: int = 63, ann: int = 252) -> float:
-
-    sub = returns.dropna().iloc[-days:]
-
-    if sub.shape[0] < 20:
-
-        return np.nan
-
-
-
-    return float(sub.std(ddof=0) * np.sqrt(ann) * 100.0)
-
-
-
-
-
 def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
 
-    sub = levels[levels.index >= start_ts].dropna()
+    clean = levels.dropna()
 
-    if sub.shape[0] < 2:
+    if clean.empty:
 
         return np.nan
 
+    anchors = clean[clean.index <= pd.Timestamp(start_ts)]
 
+    if anchors.empty:
 
-    return float((sub.iloc[-1] / sub.iloc[0]) - 1.0)
+        return np.nan
 
+    anchor = anchors.iloc[-1]
 
+    latest = clean.iloc[-1]
 
+    if pd.isna(anchor) or anchor == 0 or pd.isna(latest):
 
+        return np.nan
 
-def first_valid_on_or_after(index: pd.Index, ts: pd.Timestamp) -> Optional[pd.Timestamp]:
-
-    if len(index) == 0:
-
-        return None
-
-
-
-    loc = index.searchsorted(ts)
-
-    if loc >= len(index):
-
-        return None
-
-
-
-    return pd.Timestamp(index[loc])
+    return float((latest / anchor) - 1.0)
 
 
 
@@ -1547,17 +1976,17 @@ def compute_display_start(preset: str, today: date) -> date:
 
         "1W": lambda t: t - timedelta(days=7),
 
-        "1M": lambda t: t - timedelta(days=30),
+        "1M": lambda t: (pd.Timestamp(t) - pd.DateOffset(months=1)).date(),
 
-        "3M": lambda t: t - timedelta(days=90),
+        "3M": lambda t: (pd.Timestamp(t) - pd.DateOffset(months=3)).date(),
 
-        "6M": lambda t: t - timedelta(days=182),
+        "6M": lambda t: (pd.Timestamp(t) - pd.DateOffset(months=6)).date(),
 
-        "1Y": lambda t: t - timedelta(days=365),
+        "1Y": lambda t: (pd.Timestamp(t) - pd.DateOffset(years=1)).date(),
 
-        "3Y": lambda t: t - timedelta(days=365 * 3),
+        "3Y": lambda t: (pd.Timestamp(t) - pd.DateOffset(years=3)).date(),
 
-        "5Y": lambda t: t - timedelta(days=365 * 5),
+        "5Y": lambda t: (pd.Timestamp(t) - pd.DateOffset(years=5)).date(),
 
     }
 
@@ -1645,21 +2074,29 @@ def build_panel_df(
 
     dynamic_label: str,
 
-    levels: Optional[pd.DataFrame] = None,
+    basket_metadata: Dict[str, Dict[str, Any]],
 
-    basket_members: Optional[Dict[str, List[str]]] = None,
-
-    benchmark_series_full: Optional[pd.Series] = None,
+    benchmark_series_full: pd.Series,
 
 ) -> pd.DataFrame:
 
+    dynamic_col = f"%{dynamic_label}"
+
+    return_cols = ["%5D", "%1M"]
+
+    if dynamic_col not in return_cols:
+
+        return_cols.append(dynamic_col)
+
+    relative_col = f"vs SPY {dynamic_label}"
+
     cols = [
 
-        "Basket", "%5D", "%1M", f"%{dynamic_label}",
+        "Category", "Basket", "Members", *return_cols, relative_col,
 
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", "Corr(63D)",
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)",
 
-        "vs 21DMA %", "vs 50DMA %"
+        "vs 21DMA %", "vs 50DMA %",
 
     ]
 
@@ -1667,43 +2104,27 @@ def build_panel_df(
 
     if basket_returns_full.empty:
 
-        return pd.DataFrame(columns=cols).set_index("Basket")
+        return pd.DataFrame(columns=cols)
 
 
 
-    levels_full = 100.0 * (1.0 + basket_returns_full.fillna(0.0)).cumprod()
+    levels_full = 100.0 * (1.0 + basket_returns_full).cumprod(skipna=True)
 
     rows: List[Dict[str, Any]] = []
 
 
 
-    basket_members = basket_members or {}
+    bench_levels = 100.0 * (1.0 + benchmark_series_full.dropna()).cumprod()
 
+    bench_dynamic = pct_since(bench_levels, display_start)
 
+    for basket_id in levels_full.columns:
 
-    for basket in levels_full.columns:
-
-        s_full = levels_full[basket].dropna()
+        s_full = levels_full[basket_id].dropna()
 
 
 
         if s_full.shape[0] < 15:
-
-            continue
-
-
-
-        start_anchor = first_valid_on_or_after(s_full.index, display_start)
-
-        if start_anchor is None:
-
-            continue
-
-
-
-        s_display = s_full[s_full.index >= start_anchor]
-
-        if s_display.shape[0] < 2:
 
             continue
 
@@ -1719,7 +2140,13 @@ def build_panel_df(
 
         r1m = pct_since(s_full, s_full.index.max() - pd.DateOffset(months=1))
 
-        r_dyn = pct_since(s_full, start_anchor)
+        r_dyn = pct_since(s_full, display_start)
+
+        relative_return = np.nan
+
+        if pd.notna(r_dyn) and pd.notna(bench_dynamic) and (1.0 + bench_dynamic) != 0:
+
+            relative_return = ((1.0 + r_dyn) / (1.0 + bench_dynamic)) - 1.0
 
 
 
@@ -1751,41 +2178,31 @@ def build_panel_df(
 
 
 
-        corr_spy = np.nan
+        meta = basket_metadata.get(basket_id, {})
 
-        if benchmark_series_full is not None:
+        if BASKET_KEY_SEPARATOR in basket_id:
 
-            merged = pd.concat(
+            fallback_category, fallback_basket = basket_id.split(BASKET_KEY_SEPARATOR, 1)
 
-                [basket_returns_full[basket], benchmark_series_full],
+        else:
 
-                axis=1,
+            fallback_category, fallback_basket = "", basket_id
 
-                join="inner"
+        row: Dict[str, Any] = {
 
-            ).dropna()
+            "_BasketKey": basket_id,
 
+            "Category": meta.get("Category", fallback_category),
 
+            "Basket": meta.get("Basket", fallback_basket),
 
-            if merged.shape[0] >= 63:
-
-                rolling_corr = merged.iloc[:, 0].rolling(63).corr(merged.iloc[:, 1])
-
-                if rolling_corr.dropna().shape[0]:
-
-                    corr_spy = rolling_corr.dropna().iloc[-1]
-
-
-
-        rows.append({
-
-            "Basket": basket,
+            "Members": meta.get("Members", ""),
 
             "%5D": round(r5d * 100, 1) if pd.notna(r5d) else np.nan,
 
             "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
 
-            f"%{dynamic_label}": round(r_dyn * 100, 1) if pd.notna(r_dyn) else np.nan,
+            relative_col: round(relative_return * 100, 1) if pd.notna(relative_return) else np.nan,
 
             "MACD Momentum": macd_m,
 
@@ -1793,31 +2210,31 @@ def build_panel_df(
 
             "RSI(14W)": round(rsi_14w, 2) if pd.notna(rsi_14w) else np.nan,
 
-            "Corr(63D)": round(corr_spy, 2) if pd.notna(corr_spy) else np.nan,
-
             "vs 21DMA %": round(dma_21_pct, 1) if pd.notna(dma_21_pct) else np.nan,
 
-            "vs 50DMA %": round(dma_50_pct, 1) if pd.notna(dma_50_pct) else np.nan
+            "vs 50DMA %": round(dma_50_pct, 1) if pd.notna(dma_50_pct) else np.nan,
 
-        })
+        }
+
+        row[dynamic_col] = round(r_dyn * 100, 1) if pd.notna(r_dyn) else np.nan
+
+        rows.append(row)
 
 
 
     if not rows:
 
-        return pd.DataFrame(columns=cols).set_index("Basket")
+        return pd.DataFrame(columns=cols)
 
 
 
-    df = pd.DataFrame(rows).set_index("Basket")
+    df = pd.DataFrame(rows).set_index("_BasketKey")
 
-    dyn_col = f"%{dynamic_label}"
+    if dynamic_col in df.columns:
 
+        df = df.sort_values(by=dynamic_col, ascending=False, na_position="last")
 
-
-    if dyn_col in df.columns:
-
-        df = df.sort_values(by=dyn_col, ascending=False)
+    df = df[[column for column in cols if column in df.columns]]
 
 
 
@@ -1827,17 +2244,31 @@ def build_panel_df(
 
 
 
-def slice_returns_for_display(returns_full: pd.DataFrame, display_start: pd.Timestamp) -> pd.DataFrame:
+def cumulative_return_since(returns: pd.Series, display_start: pd.Timestamp) -> pd.Series:
 
-    if returns_full.empty:
+    clean = returns.dropna()
 
-        return returns_full
+    if clean.empty:
 
+        return pd.Series(dtype=float)
 
+    levels = 100.0 * (1.0 + clean).cumprod()
 
-    out = returns_full[returns_full.index >= display_start].copy()
+    anchors = levels[levels.index <= pd.Timestamp(display_start)]
 
-    return out.dropna(how="all")
+    if anchors.empty:
+
+        return pd.Series(dtype=float)
+
+    anchor = anchors.iloc[-1]
+
+    if pd.isna(anchor) or anchor == 0:
+
+        return pd.Series(dtype=float)
+
+    display = levels[levels.index >= pd.Timestamp(display_start)]
+
+    return ((display / anchor) - 1.0) * 100.0
 
 
 
@@ -1849,7 +2280,7 @@ def slice_returns_for_display(returns_full: pd.DataFrame, display_start: pd.Time
 
 # ============================================================
 
-def color_ret(x):
+def color_ret(x, scale: float = 20.0):
 
     if pd.isna(x):
 
@@ -1859,7 +2290,7 @@ def color_ret(x):
 
     if x >= 0:
 
-        s = min(abs(x) / 20.0, 1.0)
+        s = min(abs(x) / max(scale, 1e-9), 1.0)
 
         r1, g1, b1 = 240, 255, 245
 
@@ -1875,7 +2306,7 @@ def color_ret(x):
 
 
 
-    s = min(abs(x) / 20.0, 1.0)
+    s = min(abs(x) / max(scale, 1e-9), 1.0)
 
     r1, g1, b1 = 255, 245, 245
 
@@ -1901,13 +2332,13 @@ def color_rsi(x):
 
 
 
-    if x >= 70:
+    if x >= 80:
 
         return "rgb(255,237,170)"
 
 
 
-    if x <= 30:
+    if x <= 20:
 
         return "rgb(255,210,210)"
 
@@ -1981,77 +2412,21 @@ def color_ema(tag):
 
 
 
-def color_vol(x):
+def return_color_scale(values: List[Any], floor: float) -> float:
 
-    if pd.isna(x):
+    numeric = pd.to_numeric(pd.Series(values), errors="coerce").dropna().abs()
 
-        return "white"
+    if numeric.empty:
 
+        return floor
 
-
-    return "rgb(220,232,255)" if x < 60 else ("rgb(200,220,255)" if x < 90 else "rgb(180,205,255)")
-
-
-
-
-
-def color_vol_rel(x):
-
-    if pd.isna(x):
-
-        return "white"
-
-
-
-    if x < 0.85:
-
-        return "rgb(225,246,225)"
-
-
-
-    if x < 1.15:
-
-        return "rgb(230,236,245)"
-
-
-
-    return "rgb(255,228,228)"
+    return max(float(numeric.quantile(0.90)), floor)
 
 
 
 
 
-def color_corr(x):
-
-    if pd.isna(x):
-
-        return "white"
-
-
-
-    v = abs(x)
-
-
-
-    if v >= 0.8:
-
-        return "rgb(210,230,255)"
-
-
-
-    if v >= 0.5:
-
-        return "rgb(220,235,255)"
-
-
-
-    return "rgb(230,240,255)"
-
-
-
-
-
-def plot_panel_table(panel_df: pd.DataFrame):
+def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
     if panel_df.empty:
 
@@ -2061,45 +2436,47 @@ def plot_panel_table(panel_df: pd.DataFrame):
 
 
 
-    dynamic_cols = [c for c in panel_df.columns if c.startswith("%") and c not in ["%5D", "%1M"]]
+    dynamic_col = f"%{dynamic_label}"
 
-    dynamic_col = dynamic_cols[0] if dynamic_cols else None
+    relative_col = f"vs SPY {dynamic_label}"
 
+    return_cols = ["%5D", "%1M"]
 
+    if dynamic_col not in return_cols:
 
-    if dynamic_col is None:
-
-        st.info("No dynamic return column available.")
-
-        return
-
-
+        return_cols.append(dynamic_col)
 
     headers = [
 
-        "Basket", "%5D", "%1M", dynamic_col,
+        "Category", "Basket", "Members", *return_cols, relative_col,
 
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", "Corr(63D)",
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)",
 
-        "vs 21DMA %", "vs 50DMA %"
+        "vs 21DMA %", "vs 50DMA %",
 
     ]
 
+    values: List[List[Any]] = []
 
+    fill_colors: List[List[str]] = []
 
-    values = [panel_df.index.tolist()]
+    for col in ["Category", "Basket", "Members"]:
 
-    fill_colors = [["white"] * len(panel_df)]
+        values.append(panel_df[col].tolist())
 
+        fill_colors.append(["white"] * len(panel_df))
 
-
-    for col in ["%5D", "%1M", dynamic_col]:
+    for col in [*return_cols, relative_col]:
 
         vals = panel_df[col].tolist()
 
         values.append(vals)
 
-        fill_colors.append([color_ret(v) for v in vals])
+        floor = 5.0 if col == "%5D" else 10.0
+
+        scale = return_color_scale(vals, floor=floor)
+
+        fill_colors.append([color_ret(v, scale=scale) for v in vals])
 
 
 
@@ -2127,31 +2504,57 @@ def plot_panel_table(panel_df: pd.DataFrame):
 
 
 
-    vals = panel_df["Corr(63D)"].tolist()
-
-    values.append(vals)
-
-    fill_colors.append([color_corr(v) for v in vals])
-
-
-
     for col in ["vs 21DMA %", "vs 50DMA %"]:
 
         vals = panel_df[col].tolist()
 
         values.append(vals)
 
-        fill_colors.append([color_ret(v) for v in vals])
+        scale = return_color_scale(vals, floor=10.0)
+
+        fill_colors.append([color_ret(v, scale=scale) for v in vals])
 
 
 
-    col_widths = [0.25, 0.06, 0.06, 0.085, 0.155, 0.105, 0.075, 0.055, 0.085, 0.085]
+    width_map = {
+
+        "Category": 150,
+
+        "Basket": 235,
+
+        "Members": 70,
+
+        "MACD Momentum": 155,
+
+        "EMA 4/9/18": 100,
+
+        "RSI(14W)": 80,
+
+        "vs 21DMA %": 90,
+
+        "vs 50DMA %": 90,
+
+    }
+
+    col_widths = [width_map.get(header, 82) for header in headers]
+
+    formats = [
+
+        None if header in {"Category", "Basket", "Members", "MACD Momentum", "EMA 4/9/18"}
+
+        else ".2f" if header == "RSI(14W)"
+
+        else ".1f"
+
+        for header in headers
+
+    ]
 
 
 
     fig_tbl = go.Figure(data=[go.Table(
 
-        columnwidth=[int(w * 1000) for w in col_widths],
+        columnwidth=col_widths,
 
         header=dict(
 
@@ -2183,7 +2586,7 @@ def plot_panel_table(panel_df: pd.DataFrame):
 
             height=26,
 
-            format=[None, ".1f", ".1f", ".1f", None, None, ".2f", ".2f", ".1f", ".1f"]
+            format=formats
 
         )
 
@@ -2209,15 +2612,19 @@ def plot_panel_table(panel_df: pd.DataFrame):
 
 def plot_cumulative_chart(
 
-    basket_returns_display: pd.DataFrame,
+    basket_returns_full: pd.DataFrame,
 
     title: str,
 
-    benchmark_series_display: pd.Series,
+    benchmark_returns_full: pd.Series,
+
+    display_start: pd.Timestamp,
+
+    basket_metadata: Dict[str, Dict[str, Any]],
 
 ):
 
-    if basket_returns_display.empty or benchmark_series_display.dropna().empty:
+    if basket_returns_full.empty or benchmark_returns_full.dropna().empty:
 
         st.info("Insufficient data to render chart for this window.")
 
@@ -2225,33 +2632,31 @@ def plot_cumulative_chart(
 
 
 
-    common_index = basket_returns_display.index.intersection(benchmark_series_display.index)
+    cumulative: Dict[str, pd.Series] = {}
 
-    if common_index.empty:
+    for basket_id in basket_returns_full.columns:
 
-        st.info("No overlapping dates between series and benchmark.")
+        series = cumulative_return_since(basket_returns_full[basket_id], display_start)
 
-        return
+        if not series.empty:
 
+            cumulative[basket_id] = series
 
-
-    chart_rets = basket_returns_display.loc[common_index].copy()
-
-    chart_rets = chart_rets.dropna(axis=1, how="all")
-
-
-
-    if chart_rets.empty:
+    if not cumulative:
 
         st.info("No basket return series available for this chart.")
 
         return
 
+    cum_pct = pd.DataFrame(cumulative)
 
+    bm_cum = cumulative_return_since(benchmark_returns_full, display_start)
 
-    cum_pct = ((1 + chart_rets.fillna(0.0)).cumprod() - 1.0) * 100.0
+    if bm_cum.empty:
 
-    bm_cum = ((1 + benchmark_series_display.loc[common_index].fillna(0.0)).cumprod() - 1.0) * 100.0
+        st.info("Insufficient benchmark history for this chart window.")
+
+        return
 
 
 
@@ -2259,21 +2664,29 @@ def plot_cumulative_chart(
 
 
 
-    for i, basket in enumerate(cum_pct.columns):
+    for i, basket_id in enumerate(cum_pct.columns):
+
+        meta = basket_metadata.get(basket_id, {})
+
+        category = meta.get("Category", "")
+
+        basket_name = meta.get("Basket", basket_id)
+
+        trace_name = f"{category} | {basket_name}" if category else basket_name
 
         fig.add_trace(go.Scatter(
 
             x=cum_pct.index,
 
-            y=cum_pct[basket],
+            y=cum_pct[basket_id],
 
             mode="lines",
 
             line=dict(width=2, color=PASTEL[i % len(PASTEL)]),
 
-            name=basket,
+            name=trace_name,
 
-            hovertemplate=f"{basket}<br>% Cum: %{{y:.1f}}%<extra></extra>"
+            hovertemplate=f"{trace_name}<br>% Cum: %{{y:.1f}}%<extra></extra>"
 
         ))
 
@@ -2297,6 +2710,18 @@ def plot_cumulative_chart(
 
 
 
+    rangebreaks: List[Dict[str, Any]] = [dict(bounds=["sat", "mon"])]
+
+    if not bm_cum.empty:
+
+        business_days = pd.date_range(bm_cum.index.min(), bm_cum.index.max(), freq="B")
+
+        missing_sessions = business_days.difference(bm_cum.index)
+
+        if len(missing_sessions):
+
+            rangebreaks.append(dict(values=missing_sessions))
+
     fig.update_layout(
 
         showlegend=True,
@@ -2309,7 +2734,19 @@ def plot_cumulative_chart(
 
         margin=dict(l=10, r=10, t=35, b=10),
 
-        xaxis=dict(showspikes=True, spikemode="across", spikesnap="cursor", showgrid=True),
+        xaxis=dict(
+
+            showspikes=True,
+
+            spikemode="across",
+
+            spikesnap="cursor",
+
+            showgrid=True,
+
+            rangebreaks=rangebreaks,
+
+        ),
 
         yaxis=dict(zeroline=False, showgrid=True)
 
@@ -2333,11 +2770,7 @@ def render_basket_section(
 
     basket_returns_full: pd.DataFrame,
 
-    basket_returns_display: pd.DataFrame,
-
     benchmark_returns_full: pd.Series,
-
-    benchmark_returns_display: pd.Series,
 
     display_start: pd.Timestamp,
 
@@ -2345,9 +2778,7 @@ def render_basket_section(
 
     show_chart: bool,
 
-    levels: Optional[pd.DataFrame] = None,
-
-    basket_members: Optional[Dict[str, List[str]]] = None,
+    basket_metadata: Dict[str, Dict[str, Any]],
 
 ) -> pd.DataFrame:
 
@@ -2363,9 +2794,7 @@ def render_basket_section(
 
         dynamic_label=dynamic_label,
 
-        levels=levels,
-
-        basket_members=basket_members,
+        basket_metadata=basket_metadata,
 
         benchmark_series_full=benchmark_returns_full,
 
@@ -2373,25 +2802,53 @@ def render_basket_section(
 
 
 
-    plot_panel_table(panel_df)
+    plot_panel_table(panel_df, dynamic_label=dynamic_label)
 
 
 
     if show_chart:
 
-        ordered_cols = [c for c in panel_df.index if c in basket_returns_display.columns]
+        dynamic_col = f"%{dynamic_label}"
 
-        chart_rets = basket_returns_display[ordered_cols] if ordered_cols else basket_returns_display
+        ordered_cols = [
+
+            c for c in panel_df.index
+
+            if c in basket_returns_full.columns
+
+            and dynamic_col in panel_df.columns
+
+            and pd.notna(panel_df.loc[c, dynamic_col])
+
+        ]
+
+        if len(ordered_cols) > MAX_CHART_SERIES:
+
+            half = MAX_CHART_SERIES // 2
+
+            ordered_cols = ordered_cols[:half] + ordered_cols[-half:]
+
+            st.caption(
+
+                f"Chart limited to the top and bottom {half} baskets by {dynamic_label} return."
+
+            )
+
+        chart_rets = basket_returns_full[ordered_cols]
 
 
 
         plot_cumulative_chart(
 
-            basket_returns_display=chart_rets,
+            basket_returns_full=chart_rets,
 
             title=f"{heading} | Cumulative Performance vs SPY",
 
-            benchmark_series_display=benchmark_returns_display,
+            benchmark_returns_full=benchmark_returns_full,
+
+            display_start=display_start,
+
+            basket_metadata=basket_metadata,
 
         )
 
@@ -2411,7 +2868,13 @@ def render_basket_section(
 
 st.title(TITLE)
 
-st.caption(f"{SUBTITLE} Current map: {sum(len(v) for v in CATEGORIES.values())} baskets across {len(CATEGORIES)} groups.")
+page_caption = st.empty()
+
+page_caption.caption(
+
+    f"{SUBTITLE} {sum(len(v) for v in CATEGORIES.values())} basket definitions across {len(CATEGORIES)} groups."
+
+)
 
 
 
@@ -2449,7 +2912,11 @@ with st.sidebar:
 
         **Data source**
 
-        - Internal basket definitions and Yahoo Finance market data.
+        - Internal basket definitions and Yahoo Finance adjusted-close data.
+
+        - Current constituents, daily equal weighting, and completed US sessions.
+
+        - Direct foreign listings are converted into USD.
 
         """
 
@@ -2461,7 +2928,9 @@ with st.sidebar:
 
 
 
-    today = date.today()
+    ny_now = datetime.now(NY_TZ)
+
+    today = ny_now.date()
 
 
 
@@ -2477,7 +2946,13 @@ with st.sidebar:
 
 
 
-    apply_market_cap_filter = st.checkbox("Apply $1B market-cap filter", value=False)
+    apply_market_cap_filter = st.checkbox(
+
+        "Apply $1B equity market-cap filter (funds exempt)",
+
+        value=False,
+
+    )
 
     stale_days = st.slider("Stale Price Threshold, Days", min_value=10, max_value=90, value=30, step=5)
 
@@ -2503,19 +2978,33 @@ with st.sidebar:
 
     show_constituents = st.checkbox("Show live basket constituents", value=False)
 
-    show_full_map = st.checkbox("Show raw basket map", value=True)
+    show_full_map = st.checkbox("Show raw basket map", value=False)
 
     show_data_notes = st.checkbox("Show data notes", value=False)
 
 
 
-display_start_date = compute_display_start(preset, today)
+if not selected_categories:
 
-fetch_start_date = compute_fetch_start(display_start_date)
+    st.warning("Select at least one category.")
 
-end_date = today
+    st.stop()
 
+selected_definitions = {
 
+    category: CATEGORIES[category]
+
+    for category in selected_categories
+
+}
+
+display_start_for_fetch = compute_display_start(preset, today)
+
+fetch_start_date = compute_fetch_start(display_start_for_fetch)
+
+include_today = ny_now.weekday() >= 5 or ny_now.time() >= COMPLETED_SESSION_TIME
+
+download_end_exclusive = today + timedelta(days=1) if include_today else today
 
 DYNAMIC_LABEL = preset
 
@@ -2527,27 +3016,29 @@ min_market_cap = MIN_MARKET_CAP if apply_market_cap_filter else None
 
 # ============================================================
 
-# Fetch data
+# Fetch and validate data
 
 # ============================================================
 
-need = unique_tickers_from_baskets(flatten_baskets(CATEGORIES), extra=[BENCH])
+raw_selected_baskets = flatten_baskets(selected_definitions)
 
+equity_tickers = unique_tickers_from_baskets(raw_selected_baskets)
 
+fx_tickers = required_fx_tickers(equity_tickers)
+
+need = sorted(set(equity_tickers + fx_tickers + [BENCH]))
 
 with st.spinner("Fetching basket price history..."):
 
     levels, fetch_meta = fetch_daily_levels(
 
-        sorted(list(need)),
+        need,
 
         start=pd.to_datetime(fetch_start_date),
 
-        end=pd.to_datetime(end_date) + pd.Timedelta(days=1)
+        end=pd.to_datetime(download_end_exclusive),
 
     )
-
-
 
 if levels.empty:
 
@@ -2555,87 +3046,103 @@ if levels.empty:
 
     st.stop()
 
-
-
 if fetch_meta.get("source") == "last_good_cache":
 
-    st.warning("Yahoo returned no usable data. Showing the last-good local cache.")
+    st.warning("Yahoo returned no usable data. Showing the validated last-good cache.")
 
+elif fetch_meta.get("source") == "yahoo+cache":
 
+    st.warning("Some unavailable Yahoo series were filled from the matching last-good cache.")
 
-if BENCH not in levels.columns or levels[BENCH].dropna().empty:
+levels_usd, fx_issues = convert_foreign_levels_to_usd(levels)
+
+if BENCH not in levels_usd.columns or levels_usd[BENCH].dropna().empty:
 
     st.error("SPY data missing or empty for the selected range.")
 
     st.stop()
 
+reference_date = pd.Timestamp(levels_usd[BENCH].dropna().index.max())
 
+display_start_date = compute_display_start(preset, reference_date.date())
 
-market_caps = fetch_market_caps(list(levels.columns))
+display_start_ts = pd.Timestamp(display_start_date)
 
+market_metadata: Dict[str, Dict[str, Any]] = {}
 
+if apply_market_cap_filter:
 
-live_categories = build_live_baskets(
+    with st.spinner("Fetching current market-cap metadata..."):
 
-    levels=levels,
+        market_metadata = fetch_market_metadata(equity_tickers)
 
-    categories=CATEGORIES,
+    market_metadata = convert_market_metadata_to_usd(market_metadata, levels)
 
-    market_caps=market_caps,
+live_categories, basket_metadata, dropped_baskets = build_live_baskets(
+
+    levels=levels_usd,
+
+    categories=selected_definitions,
+
+    market_metadata=market_metadata,
 
     min_market_cap=min_market_cap,
 
     stale_days=stale_days,
 
+    reference_date=reference_date,
+
 )
-
-
-
-if selected_categories:
-
-    live_categories = {
-
-        cat: baskets
-
-        for cat, baskets in live_categories.items()
-
-        if cat in selected_categories
-
-    }
-
-
 
 live_all_baskets = flatten_baskets(live_categories)
 
+if not live_all_baskets:
 
+    st.error("No baskets passed the current price, freshness, membership, and market-cap checks.")
+
+    st.stop()
+
+live_tickers = unique_tickers_from_baskets(live_all_baskets, extra=[BENCH])
+
+available_tickers = [ticker for ticker in live_tickers if ticker in levels_usd.columns]
+
+benchmark_calendar = levels_usd[BENCH].dropna().index
+
+aligned_levels = align_levels_to_calendar(
+
+    levels_usd[available_tickers],
+
+    calendar_index=benchmark_calendar,
+
+)
 
 all_basket_rets_full = ew_rets_from_levels(
 
-    levels=levels,
+    levels=aligned_levels,
 
     baskets=live_all_baskets,
 
 )
 
-
-
 if all_basket_rets_full.empty:
 
-    st.error("No baskets passed the current filters.")
+    st.error("No baskets passed the daily constituent-coverage requirement.")
 
     st.stop()
 
+bench_rets_full = aligned_levels[BENCH].pct_change(fill_method=None).dropna()
 
+selected_definition_count = sum(len(v) for v in selected_definitions.values())
 
-bench_rets_full = levels[BENCH].pct_change(fill_method=None).dropna()
+page_caption.caption(
 
+    f"{SUBTITLE} Data through {reference_date:%Y-%m-%d}. "
 
+    f"{len(live_all_baskets)}/{selected_definition_count} selected baskets live across "
 
-display_start_ts = pd.Timestamp(display_start_date)
+    f"{len(live_categories)} groups."
 
-all_basket_rets_display = slice_returns_for_display(all_basket_rets_full, display_start_ts)
-
-bench_rets_display = bench_rets_full[bench_rets_full.index >= display_start_ts].copy()
+)
 
 
 
@@ -2653,11 +3160,7 @@ all_panel_df = render_basket_section(
 
     basket_returns_full=all_basket_rets_full,
 
-    basket_returns_display=all_basket_rets_display,
-
     benchmark_returns_full=bench_rets_full,
-
-    benchmark_returns_display=bench_rets_display,
 
     display_start=display_start_ts,
 
@@ -2665,9 +3168,7 @@ all_panel_df = render_basket_section(
 
     show_chart=show_all_chart,
 
-    levels=levels,
-
-    basket_members=live_all_baskets,
+    basket_metadata=basket_metadata,
 
 )
 
@@ -2677,7 +3178,15 @@ if show_category_sections:
 
     for category, baskets in live_categories.items():
 
-        cat_names = [basket for basket in baskets if basket in all_basket_rets_full.columns]
+        cat_names = [
+
+            basket_key(category, basket_name)
+
+            for basket_name in baskets
+
+            if basket_key(category, basket_name) in all_basket_rets_full.columns
+
+        ]
 
 
 
@@ -2705,11 +3214,7 @@ if show_category_sections:
 
             basket_returns_full=cat_rets_full,
 
-            basket_returns_display=slice_returns_for_display(cat_rets_full, display_start_ts),
-
             benchmark_returns_full=bench_rets_full,
-
-            benchmark_returns_display=bench_rets_display,
 
             display_start=display_start_ts,
 
@@ -2717,9 +3222,7 @@ if show_category_sections:
 
             show_chart=True,
 
-            levels=levels,
-
-            basket_members=baskets,
+            basket_metadata=basket_metadata,
 
         )
 
@@ -2751,7 +3254,7 @@ if show_full_map:
 
         st.caption("Raw basket definitions before data-quality filtering.")
 
-        for category, groups in CATEGORIES.items():
+        for category, groups in selected_definitions.items():
 
             st.markdown(f"**{category}**")
 
@@ -2764,6 +3267,24 @@ if show_full_map:
 if show_data_notes:
 
     with st.expander("Data Notes", expanded=True):
+
+        st.write(
+
+            "Methodology: adjusted closes; current constituents; daily equal-weighted returns; "
+
+            "50% minimum live membership; 60% minimum daily constituent coverage; direct foreign "
+
+            "listings converted to USD."
+
+        )
+
+        st.write(
+
+            "Historical series are monitoring indices built from current definitions and should not "
+
+            "be treated as point-in-time constituent backtests."
+
+        )
 
         last_obs = fetch_meta.get("last_observation")
 
@@ -2783,6 +3304,18 @@ if show_data_notes:
 
             st.write(f"Yahoo price coverage: {returned}/{requested} tickers returned.")
 
+        st.write(f"Data source path: {fetch_meta.get('source', 'unknown')}.")
+
+        if dropped_baskets:
+
+            st.write(f"Baskets excluded for insufficient live membership: {len(dropped_baskets)}.")
+
+        if fx_issues:
+
+            st.write("Foreign-listing FX conversion issues:")
+
+            st.write(", ".join(fx_issues))
+
 
 
         missing = fetch_meta.get("missing_tickers", [])
@@ -2792,6 +3325,18 @@ if show_data_notes:
             st.write("Tickers missing from Yahoo result:")
 
             st.write(", ".join(missing[:300]))
+
+        cache_load_error = fetch_meta.get("cache_meta", {}).get("cache_load_error")
+
+        cache_save_error = fetch_meta.get("cache_save_error")
+
+        if cache_load_error:
+
+            st.write(f"Cache read error: {cache_load_error}")
+
+        if cache_save_error:
+
+            st.write(f"Cache write error: {cache_save_error}")
 
 
 
