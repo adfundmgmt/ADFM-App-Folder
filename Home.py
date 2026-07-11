@@ -26,6 +26,7 @@ TOOL_ORDER = [
     "Market Stress Composite",
     "Event Risk + Catalyst Calendar",
     "Hedge Timer",
+    "Currency Tension Engine",
 ]
 
 
@@ -52,6 +53,7 @@ TOOL_GROUPS = {
         "Yield Curve + Rates Regime Monitor",
         "Credit Conditions Dashboard",
         "Liquidity Tracker",
+        "Currency Tension Engine",
     ],
     "Risk + Catalysts": [
         "Market Stress Composite",
@@ -79,6 +81,7 @@ TOOL_DESCRIPTIONS = {
     "Market Stress Composite": "Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion.",
     "Event Risk + Catalyst Calendar": "Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks.",
     "Hedge Timer": "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.",
+    "Currency Tension Engine": "Maps major currencies across fundamental trajectory and valuation-policy stretch, with pairwise carry, pillar scores, overlays, and daily risk flags.",
 }
 
 
@@ -225,7 +228,7 @@ st.markdown(
         <div class="subtitle">
             A focused command center for equity leadership, technical structure,
             flows, macro regimes, rates, credit, liquidity, stress, event risk,
-            seasonality, analogs, and hedge timing.
+            seasonality, analogs, hedge timing, and currency tension.
         </div>
         <div class="chip-row">
             <span class="chip">Equity Leadership</span>
@@ -234,6 +237,7 @@ st.markdown(
             <span class="chip">Flows</span>
             <span class="chip">Macro Regime</span>
             <span class="chip">Rates</span>
+            <span class="chip">FX</span>
             <span class="chip">Credit</span>
             <span class="chip">Liquidity</span>
             <span class="chip">Event Risk</span>
