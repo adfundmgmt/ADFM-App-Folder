@@ -163,7 +163,14 @@ OECD_GDP_CCYS = ("USD", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD")
 OECD_BOP_DATAFLOW = "OECD.SDD.TPS,DSD_BOP@DF_BOP,"
 OECD_IIP_DATAFLOW = "OECD.SDD.TPS,DSD_BOP@DF_IIP,"
 
-CFTC_TFF_DATASET = "gpe5-46if"  # TFF, Futures-Only
+CFTC_TFF_DATASET = "yw9f-hn96"  # TFF, Futures-and-Options Combined (delta-adjusted
+                                # options folded in; verified live 2026-07: same field
+                                # names as futures-only, history to 2006-06)
+
+# Positioning overlay thresholds (flag layer only — never in the axis composites)
+POS_CROWDED_Z = 1.5      # |leveraged-fund net %OI z| at/past this = crowded
+POS_DIVERGE_Z = 1.0      # lev vs asset-mgr opposite signs, both past this = divergence
+POS_STRUCT_YEARS = 10    # z window for positioning (matches the struct horizon)
 
 # ------------------------------------------------------------------ FRED (macro backbone)
 # Spec §3/§14: FRED is the fundamental backbone + US real rates. It serves the

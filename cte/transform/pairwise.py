@@ -21,15 +21,20 @@ def _latest(feature: str, feats: pd.DataFrame) -> pd.Series:
     return last.set_index("ccy")["value"]
 
 
+def grid_from_values(vals: pd.Series) -> pd.DataFrame:
+    """Antisymmetric differential grid from per-ccy values (row=base, col=quote,
+    cell = base - quote). Shared by the live grid and the historical tabs."""
+    ccys = [c for c in CURRENCIES if c in vals.index and pd.notna(vals[c])]
+    grid = pd.DataFrame({b: {q: vals[b] - vals[q] for q in ccys} for b in ccys}).T
+    grid.index.name = "base"
+    return grid.loc[ccys, ccys].round(2)
+
+
 def carry_grid(feature: str = "real_2y") -> pd.DataFrame:
     """8x8 differential matrix for a per-leg rate feature (real_2y or nominal_2y).
     Row = base leg, col = quote leg; cell = base - quote."""
     feats = build_features()
-    vals = _latest(feature, feats)
-    ccys = [c for c in CURRENCIES if c in vals.index]
-    grid = pd.DataFrame({b: {q: vals[b] - vals[q] for q in ccys} for b in ccys}).T
-    grid.index.name = "base"
-    return grid.loc[ccys, ccys].round(2)
+    return grid_from_values(_latest(feature, feats))
 
 
 def carry_ranking(feature: str = "real_2y") -> pd.DataFrame:

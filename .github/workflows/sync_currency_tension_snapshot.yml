@@ -27,6 +27,11 @@ jobs:
             commentary_meta.json
             overlays.parquet
             pillar_scores.parquet
+            snapshot_history.parquet
+            pillar_history.parquet
+            carry_history.parquet
+            pos_history.parquet
+            overlay_history.parquet
             tension_map.parquet
             tension_map_prev.parquet
             warnings.json
