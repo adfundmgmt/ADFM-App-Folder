@@ -78,6 +78,33 @@ def score(zcol: str, latest: pd.DataFrame,
     return (pill, axis)
 
 
+def axes_from_pillars(pill: pd.DataFrame, value_col: str,
+                      weights: dict | None = None,
+                      keys: tuple = ("ccy",)) -> pd.DataFrame:
+    """Recompose axis scores from persisted pillar scores under (optionally
+    custom) pillar weights — the exact aggregation score() applies, factored out
+    so the app can re-weight client-side without recomputing pillars or overlays.
+    A weight of 0 excludes the pillar. Returns a wide frame keyed by `keys` with
+    columns axis1_fundamental_<value_col> / axis2_stretch_<value_col>."""
+    w = dict(PILLAR_WEIGHT)
+    w.update(weights or {})
+    d = pill.dropna(subset=[value_col]).copy()
+    d["axis"] = d["pillar"].map(PILLAR_AXIS)
+    d = d.dropna(subset=["axis"])
+    d["pw"] = d["pillar"].map(w).fillna(1.0)
+    d = d[d["pw"] > 0]
+    if d.empty:
+        return pd.DataFrame(columns=[*keys])
+    g = (d.groupby([*keys, "axis"])
+         .apply(lambda x: _wmean(x[value_col], x["pw"]), include_groups=False)
+         .rename("ascore").reset_index())
+    wide = g.pivot_table(index=list(keys), columns="axis",
+                         values="ascore").reset_index()
+    wide.columns.name = None
+    return wide.rename(columns={a: f"{a}_{value_col}"
+                                for a in ("axis1_fundamental", "axis2_stretch")})
+
+
 def tension_map() -> tuple[pd.DataFrame, dict]:
     """Current snapshot: each currency's structural & regime score on both axes, plus
     the per-currency inflection warnings that explain any bent contributions."""
@@ -85,7 +112,8 @@ def tension_map() -> tuple[pd.DataFrame, dict]:
     lz = latest_z(latest)
     snap = overlay_snapshot()
     rows = {}
-    for horizon, zcol in (("struct", "struct_z"), ("regime", "regime_z")):
+    from cte.transform.zscore import HORIZONS
+    for horizon, zcol, _ in HORIZONS:
         _, axis = score(zcol, lz, snap)
         for _, r in axis.iterrows():
             rows.setdefault(r["ccy"], {})[f"{r['axis']}_{horizon}"] = r["ascore"]
