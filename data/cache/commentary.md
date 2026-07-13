@@ -1,10 +1,7 @@
-**Regime: Risk-premium mode dominates; yield strength uncoupling from FX, favouring USD despite stretched valuation.**
+**Regime: Risk-premium mode; USD firm but yield-FX decoupled; carry crowding at extremes.**
 
-**Inflection points:**
-- **GBP & AUD short**: Both trapped in the same vise - rich valuation (+1.3, +1.9) propped only by carry (94th, 87th percentile crowding) on deteriorating fundamentals. Policy tightening is spent; stagflation drag replaces hawkish tailwind. Vol spike would unwind both violently.
-- **JPY long candidate**: Cheap valuation (-0.69), improving fundamentals (+0.32), and mean-reversion setup offset by carry crowding (88th percentile) and risk-premium yield regime (weak real-rate support). Works on quiet vol; fragile.
-- **CAD**: Valuation floor (-1.55) is the only pillar working; rest near-neutral. Narrow, not broad. Treat as a vol trade, not a directional macro setup.
+- **GBP & AUD sinking under same trap:** Rich valuations (+1.3, +1.9) propped by carry alone; fundamentals deteriorating; policy tightening credibility collapsed (feasibility -1.0, -0.8); real yields rising but currency weakening (risk-premium, not reward). Both carry crowded (94th, 87th percentiles). Unwind exposure if vol spikes.
+- **JPY & NZD the mean-reversion pair:** Cheap valuations, improving fundies (JPY +1.1 structural, NZD +0.3); JPY surged +0.74 fundamental since last snapshot—the big move. Both have policy headwinds (hike feasibility deeply negative) but valuation and real external balances anchor upside.
+- **CAD & EUR both one-legged:** CAD cheap (-1.6 val) but rest neutral—narrow thesis. EUR valuation propping it (+1.4) while all other pillars flatlining; FX-yield decoupling kills real-yield read.
 
-**Carry**: **GBP carries crowding at extremes** (94th percentile, fat real yield, but on a collapsing fundamental base) - highest unwind risk in the set.
-
-**Since prior**: NZD fundamentals deteriorated -0.23 and stretched +0.58 - dual compression; joins the policy-trap cohort more acutely.
+- **JPY carry strongest risk-adjusted:** Negative carry but deep discount + structural improvement + real external surplus (1.72) = non-crowded long.
