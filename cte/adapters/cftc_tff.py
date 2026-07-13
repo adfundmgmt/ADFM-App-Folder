@@ -1,7 +1,9 @@
 """CFTC Traders-in-Financial-Futures (TFF) positioning adapter — spec flag layer.
 
 Weekly leveraged-money and asset-manager positioning for the eight currency
-legs, pulled from the CFTC public-reporting Socrata dataset (Futures-Only).
+legs, pulled from the CFTC public-reporting Socrata dataset (Futures-and-Options
+Combined — the delta-adjusted options exposure is folded in, closing the biggest
+coverage gap of the futures-only report).
 This feeds the positioning *flag* overlay only; per spec §11 it is not part of
 the axis composites.
 
@@ -10,7 +12,7 @@ Asset manager    = real money (institutional) — the slower structural leg.
 
 Tidy contract returned:
   [date, ccy, lev_long, lev_short, lev_net, lev_net_pct_oi,
-   am_long, am_short, am_net, open_interest, source, fetched_at]
+   am_long, am_short, am_net, am_net_pct_oi, open_interest, source, fetched_at]
 """
 from __future__ import annotations
 
@@ -31,8 +33,8 @@ def _to_int(v) -> int | None:
         return None
 
 
-def fetch_tff(weeks_back: int = 260) -> pd.DataFrame:
-    """Pull ~5y (260 weeks) of TFF positioning for all eight currency legs.
+def fetch_tff(weeks_back: int = 1100) -> pd.DataFrame:
+    """Pull the full combined-report history (~2006-) for all eight currency legs.
 
     One Socrata query, filtered to our contract codes, ordered newest-first.
     """
@@ -71,13 +73,16 @@ def fetch_tff(weeks_back: int = 260) -> pd.DataFrame:
         am_net = (am_l - am_s) if (am_l is not None and am_s is not None) else None
         lev_net_pct_oi = (round(100 * lev_net / oi, 2)
                           if (lev_net is not None and oi) else None)
+        am_net_pct_oi = (round(100 * am_net / oi, 2)
+                         if (am_net is not None and oi) else None)
         out.append({
             "date": date.normalize(), "ccy": ccy,
             "lev_long": lev_l, "lev_short": lev_s, "lev_net": lev_net,
             "lev_net_pct_oi": lev_net_pct_oi,
             "am_long": am_l, "am_short": am_s, "am_net": am_net,
+            "am_net_pct_oi": am_net_pct_oi,
             "open_interest": oi,
-            "source": "cftc_tff_futonly", "fetched_at": fetched,
+            "source": "cftc_tff_combined", "fetched_at": fetched,
         })
     df = pd.DataFrame(out)
     if not df.empty:
