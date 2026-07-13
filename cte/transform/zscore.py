@@ -1,8 +1,9 @@
-"""Dual-horizon z-score engine (spec §Normalization).
+"""Multi-horizon z-score engine (spec §Normalization).
 
-Every trajectory/stretch metric is z-scored against *its own* history on two
+Every trajectory/stretch metric is z-scored against *its own* history on
 calendar lookback windows, shown side by side:
 
+  secular    (~15y) — "stretched vs. a full generation of cycles"
   structural (~10y) — "stretched vs. its whole cycle"
   regime     (~2y)  — "stretched vs. recent normal"
 
@@ -17,6 +18,14 @@ import pandas as pd
 
 STRUCT_YEARS = 10
 REGIME_YEARS = 2
+SECULAR_YEARS = 15
+# ordered horizon registry — the compositor, engine, history, and app all key off
+# this so adding a horizon is a one-line change here plus a history reseed
+HORIZONS: list[tuple[str, str, int]] = [
+    ("struct", "struct_z", STRUCT_YEARS),
+    ("regime", "regime_z", REGIME_YEARS),
+    ("secular", "secular_z", SECULAR_YEARS),
+]
 _DAYS = 365.25
 
 
@@ -34,19 +43,18 @@ def _roll_z(s: pd.Series, years: float, min_frac: float = 0.5) -> pd.Series:
     return (s - roll.mean()) / roll.std(ddof=0)
 
 
-def dual_horizon_z(df: pd.DataFrame, value_col: str = "value",
-                   struct_years: int = STRUCT_YEARS,
-                   regime_years: int = REGIME_YEARS) -> pd.DataFrame:
-    """Add struct_z / regime_z columns to a tidy [date, ccy, metric, value] frame,
-    computed per (ccy, metric) group. Returns the frame sorted by ccy, metric, date."""
+def dual_horizon_z(df: pd.DataFrame, value_col: str = "value") -> pd.DataFrame:
+    """Add one z column per registered horizon (struct_z / regime_z / secular_z) to
+    a tidy [date, ccy, metric, value] frame, computed per (ccy, metric) group.
+    (Name kept for API stability — it is now multi-horizon.)"""
     out = []
     for (ccy, metric), g in df.groupby(["ccy", "metric"], sort=False):
         g = g.sort_values("date").copy()
         s = g.set_index("date")[value_col]
-        g["struct_z"] = _roll_z(s, struct_years).values
-        g["regime_z"] = _roll_z(s, regime_years).values
+        for _, zcol, years in HORIZONS:
+            g[zcol] = _roll_z(s, years).values
         out.append(g)
-    cols = ["date", "ccy", "metric", value_col, "struct_z", "regime_z"]
+    cols = ["date", "ccy", "metric", value_col] + [z for _, z, _ in HORIZONS]
     res = pd.concat(out, ignore_index=True)
     keep = [c for c in cols if c in res.columns] + \
            [c for c in res.columns if c not in cols]
@@ -54,8 +62,8 @@ def dual_horizon_z(df: pd.DataFrame, value_col: str = "value",
 
 
 def latest_z(df: pd.DataFrame, value_col: str = "value") -> pd.DataFrame:
-    """The current-snapshot dual-horizon z per (ccy, metric): the last observation's
-    struct_z and regime_z, plus its date and raw value."""
+    """The current-snapshot multi-horizon z per (ccy, metric): the last
+    observation's z on every registered horizon, plus its date and raw value."""
     z = dual_horizon_z(df, value_col=value_col)
     last = z.sort_values("date").groupby(["ccy", "metric"]).tail(1)
     return last.reset_index(drop=True)
