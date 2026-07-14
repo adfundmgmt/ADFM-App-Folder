@@ -1,12 +1,20 @@
-import time
-from typing import Optional, Sequence
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
+
+from adfm_core.ui import render_footer
 from plotly.subplots import make_subplots
+
+from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report
+from adfm_core.market_data import fetch_daily_ohlcv
+from adfm_core.rate_of_change import (
+    add_trading_session_axis,
+    compute_features,
+    make_date_ticks,
+    padded_range,
+)
+from adfm_core.ui import render_status_line
 
 
 st.set_page_config(
@@ -34,8 +42,6 @@ ROC_PERIODS = {
     "63D": 63,
     "126D": 126,
 }
-
-SMA_WINDOWS = [21, 50, 100, 200]
 
 PASTEL_GREEN = "#52b788"
 PASTEL_RED = "#e85d5d"
@@ -133,139 +139,16 @@ st.markdown(
 def fetch_history(
     ticker: str,
     period: str,
-    interval: str = "1d",
-    retries: int = 3,
 ) -> pd.DataFrame:
-    last_err = None
-
-    for attempt in range(retries):
-        try:
-            data = yf.download(
-                ticker,
-                period=period,
-                interval=interval,
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
-
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
-
-            data = data.rename(columns=str.title)
-
-            keep_cols = [
-                c
-                for c in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
-                if c in data.columns
-            ]
-
-            data = data[keep_cols].dropna(how="all")
-
-            if data.empty:
-                raise ValueError(f"No data returned for {ticker}")
-
-            data.index = pd.to_datetime(data.index)
-            data = data.sort_index()
-            data = data[~data.index.duplicated(keep="last")]
-
-            return data
-
-        except Exception as err:
-            last_err = err
-            time.sleep(1.2 * (attempt + 1))
-
-    raise RuntimeError(f"Failed to fetch {ticker} after {retries} retries: {last_err}")
-
-
-def compute_features(df: pd.DataFrame, roc_n: int) -> pd.DataFrame:
-    out = df.copy()
-
-    px = out["Close"].astype(float)
-
-    for win in SMA_WINDOWS:
-        out[f"SMA_{win}"] = px.rolling(win, min_periods=1).mean()
-
-    out["ROC"] = px.pct_change(roc_n)
-    out["ROC_Slope"] = out["ROC"].diff(5)
-
-    out["Second_Derivative"] = out["ROC"].diff()
-    out["Second_Derivative_Slope"] = out["Second_Derivative"].diff(3)
-
-    prev_sd = out["Second_Derivative"].shift(1)
-    out["Pos_Inflect"] = (prev_sd <= 0) & (out["Second_Derivative"] > 0)
-    out["Neg_Inflect"] = (prev_sd >= 0) & (out["Second_Derivative"] < 0)
-
-    return out
-
-
-def padded_range(
-    series_list: Sequence[pd.Series],
-    pad_pct: float = 0.05,
-    include_zero: bool = False,
-) -> Optional[list]:
-    values = []
-
-    for series in series_list:
-        if series is None:
-            continue
-
-        clean = pd.to_numeric(series, errors="coerce")
-        clean = clean.replace([np.inf, -np.inf], np.nan).dropna()
-
-        if not clean.empty:
-            values.append(clean)
-
-    if not values:
-        return None
-
-    combined = pd.concat(values)
-
-    if include_zero:
-        combined = pd.concat([combined, pd.Series([0.0])])
-
-    y_min = float(combined.min())
-    y_max = float(combined.max())
-
-    if not np.isfinite(y_min) or not np.isfinite(y_max):
-        return None
-
-    if y_min == y_max:
-        base = abs(y_min) if y_min != 0 else 1.0
-        pad = base * 0.05
-        return [y_min - pad, y_max + pad]
-
-    spread = y_max - y_min
-    pad = spread * pad_pct
-
-    return [y_min - pad, y_max + pad]
-
-
-def add_trading_session_axis(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    out["Session"] = np.arange(len(out))
-    out["Date_Label"] = out.index.strftime("%Y-%m-%d")
-    return out
-
-
-def make_date_ticks(index: pd.DatetimeIndex, session_values: pd.Series, max_ticks: int = 10):
-    if len(index) == 0:
-        return [], []
-
-    tick_count = min(max_ticks, max(2, len(index)))
-    positions = np.linspace(0, len(index) - 1, tick_count).round().astype(int)
-    positions = np.unique(positions)
-
-    tickvals = session_values.iloc[positions].tolist()
-
-    if len(index) > 900:
-        ticktext = index[positions].strftime("%Y").tolist()
-    elif len(index) > 260:
-        ticktext = index[positions].strftime("%b %Y").tolist()
-    else:
-        ticktext = index[positions].strftime("%b %d").tolist()
-
-    return tickvals, ticktext
+    """Load one completed daily OHLCV history using the shared data contract."""
+    symbol = ticker.strip().upper()
+    frames, dropped = fetch_daily_ohlcv((symbol,), period)
+    if symbol in frames:
+        return frames[symbol]
+    reason = "No valid OHLCV data returned"
+    if not dropped.empty:
+        reason = str(dropped.iloc[0]["Reason"])
+    raise RuntimeError(f"Failed to fetch {symbol}: {reason}")
 
 
 with st.sidebar:
@@ -334,6 +217,17 @@ try:
 except Exception as e:
     st.error(str(e))
     st.stop()
+
+quality = build_data_quality_report(
+    {ticker.strip().upper(): df},
+    ticker.strip().upper(),
+    policy=DataIntegrityPolicy(min_valid_sessions=1, max_stale_sessions=0),
+)
+render_status_line(
+    data_through=quality.data_through.date().isoformat() if quality.data_through is not None else "unavailable",
+    source="Yahoo Finance",
+    data_quality="complete daily sessions" if quality.benchmark_ready else quality.reason_for(ticker.strip().upper()),
+)
 
 
 if len(df) < 60:
@@ -622,4 +516,4 @@ st.plotly_chart(
 )
 st.markdown("</div>", unsafe_allow_html=True)
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

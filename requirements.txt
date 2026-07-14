@@ -1,3 +1,6 @@
+# Runtime dependencies. Exact direct-dependency versions are in constraints.txt.
+-c constraints.txt
+
 streamlit
 yfinance
 pandas
@@ -12,7 +15,5 @@ mplfinance
 sec-edgar-downloader
 beautifulsoup4
 cot_reports
-beautifulsoup4
 pypdf
-PyPDF2
 pyarrow

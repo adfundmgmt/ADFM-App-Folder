@@ -1,4 +1,6 @@
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -2783,4 +2785,4 @@ with right:
     st.markdown("#### Technical Memo")
     st.markdown(f'<div class="memo-box">{html_escape(memo)}</div>', unsafe_allow_html=True)
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

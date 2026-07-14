@@ -8,8 +8,16 @@ import numpy as np
 import pandas as pd
 
 from adfm_momentum_scanner import (
-    SECTOR_WEIGHTS, SIGNAL_COLUMNS, adjusted_ohlcv, rank_change, score_scanner,
-    diagnostic_table, sector_leadership, security_features, signal_snapshot, valid_ohlcv_reason,
+    SECTOR_WEIGHTS,
+    SIGNAL_COLUMNS,
+    adjusted_ohlcv,
+    diagnostic_table,
+    rank_change,
+    score_scanner,
+    sector_leadership,
+    security_features,
+    signal_snapshot,
+    valid_ohlcv_reason,
 )
 from adfm_sector_rotation_config import MAJOR_SECTORS, SUBSECTOR_ROWS
 
@@ -50,7 +58,8 @@ class MomentumScannerTests(unittest.TestCase):
         rows = []
         for ticker, multiplier in [("AAA", 1.0), ("BBB", .95), ("CCC", 1.05)]:
             row = security_features(ticker, frame * multiplier, frame["Close"] * .97)
-            if ticker == "CCC": row["Sector RS 21D"] = np.nan
+            if ticker == "CCC":
+                row["Sector RS 21D"] = np.nan
             rows.append(row)
         scored = score_scanner(pd.DataFrame(rows))
         self.assertTrue(scored["Expansion Score"].between(0, 100).all())
@@ -75,7 +84,8 @@ class MomentumScannerTests(unittest.TestCase):
 
     def test_sector_aggregation_is_median_based_and_weights_sum_to_100(self) -> None:
         frames = {"SPY": make_frame(drift=.0004)}
-        for index, ticker in enumerate(MAJOR_SECTORS): frames[ticker] = make_frame(drift=.0005 + index * .00001)
+        for index, ticker in enumerate(MAJOR_SECTORS):
+            frames[ticker] = make_frame(drift=.0005 + index * .00001)
         for index, item in enumerate(row for row in SUBSECTOR_ROWS if row["Tier"] == "Core"):
             frames[item["Ticker"]] = make_frame(drift=.00035 + index * .000005)
         sectors, subsectors = sector_leadership(frames, "SPY", include_thematic=False)

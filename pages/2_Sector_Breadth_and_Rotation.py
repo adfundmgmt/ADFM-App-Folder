@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 
 
@@ -1611,4 +1613,4 @@ st.caption(
     f"Universe: {universe_scope} | Coverage: {coverage}/{len(selected_universe)} eligible tickers"
 )
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import pytz
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -1315,6 +1317,7 @@ st.caption(
     f"Last refresh: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
     f"Source: Yahoo Finance OHLCV via yfinance | "
     f"Method: dollarized price-volume flow-pressure proxy, normalized pressure score, and data diagnostics | "
-    f"Coverage: 99-name ETF signal universe, excluding broad allocator parking-lot ETFs | "
-    f"© 2026 AD Fund Management LP"
+    f"Coverage: 99-name ETF signal universe, excluding broad allocator parking-lot ETFs"
 )
+
+render_footer()

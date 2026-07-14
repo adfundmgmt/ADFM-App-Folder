@@ -15,6 +15,7 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
+from adfm_core.ui import render_footer
 from cte.adapters.base import read_cache
 from cte.config import CACHE_DIR
 from cte.dashboard.plots import (
@@ -1066,3 +1067,5 @@ st.markdown(
     '<div class="quiet-note">Currency Tension Engine · persisted snapshot architecture · analytical signals are descriptive, not trade instructions.</div>',
     unsafe_allow_html=True,
 )
+
+render_footer()

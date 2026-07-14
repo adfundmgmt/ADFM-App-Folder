@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 from plotly.subplots import make_subplots
 
@@ -1000,4 +1002,4 @@ if custom_specs:
         if custom_failed:
             st.caption("Unavailable custom ratios: " + ", ".join(sorted(set(custom_failed))))
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

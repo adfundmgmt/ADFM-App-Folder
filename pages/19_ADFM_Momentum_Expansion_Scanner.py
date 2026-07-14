@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report, report_caption
+from adfm_core.ui import render_footer
 from adfm_momentum_scanner import (
     GICS_TO_ADFM,
     MIN_DOLLAR_VOLUME,
@@ -27,7 +29,6 @@ from adfm_momentum_scanner import (
     sector_leadership,
     security_features,
     stale_sessions,
-    valid_ohlcv_reason,
 )
 from adfm_sector_rotation_config import BENCHMARKS, MAJOR_SECTORS, SUBSECTOR_ROWS
 
@@ -137,15 +138,21 @@ with st.spinner("Loading completed-session OHLCV data..."):
     downloaded = fetch_ohlcv(requested)
 frames = downloaded.frames
 calendar = benchmark_calendar(frames, benchmark)
-if len(calendar) < 252:
-    st.error(f"Benchmark {benchmark} has insufficient completed daily history.")
+quality_report = build_data_quality_report(
+    raw_frames=frames,
+    benchmark=benchmark,
+    tickers=tuple(filtered_universe["Ticker"].tolist()) + (benchmark,),
+    policy=DataIntegrityPolicy(min_valid_sessions=252, max_stale_sessions=3),
+)
+if not quality_report.benchmark_ready:
+    st.error(quality_report.reason_for(benchmark) or f"Benchmark {benchmark} is not eligible for analysis.")
     st.stop()
 
 dropped_rows: List[Dict[str, object]] = pre_filter_drops + downloaded.dropped.to_dict("records")
 eligible_records: List[Dict[str, object]] = []
 for record in filtered_universe.to_dict("records"):
     ticker = record["Ticker"]
-    reason = valid_ohlcv_reason(frames.get(ticker), calendar)
+    reason = quality_report.reason_for(ticker)
     if reason:
         dropped_rows.append({"Ticker": ticker, "Reason": reason})
         continue
@@ -188,8 +195,8 @@ if scanner.empty:
     st.warning("No securities have sufficient data to calculate all required scanner features.")
     st.stop()
 passing = scanner[scanner["Expansion Score"] >= min_score]
-latest_date = calendar[-1].date()
-st.markdown(f"<div class='scanner-status'><b>Potential Next-Session Expansion</b> Â· Data through: {latest_date} Â· Eligible securities: {len(scanner)} Â· Passing score threshold: {len(passing)} Â· Benchmark: {benchmark}</div>", unsafe_allow_html=True)
+latest_date = quality_report.data_through.date()
+st.markdown(f"<div class='scanner-status'><b>Potential Next-Session Expansion</b> · {report_caption(quality_report)} · Eligible securities: {len(scanner)} · Passing score threshold: {len(passing)}</div>", unsafe_allow_html=True)
 for error in universe_errors: st.caption(error)
 
 view = st.radio("Display", ["Card View", "Full Table"], horizontal=True, label_visibility="collapsed")
@@ -243,4 +250,4 @@ with st.expander("Signal Diagnostics", expanded=False):
             st.download_button("Download signal diagnostics CSV", diagnostics.to_csv(index=False).encode("utf-8"), "adfm_signal_diagnostics.csv", "text/csv")
 
 st.caption(f"Data through: {latest_date} | Benchmark: {benchmark} | Raw OHLCV is never forward-filled for signals or pattern recognition.")
-st.caption("Â© 2026 AD Fund Management LP")
+render_footer()

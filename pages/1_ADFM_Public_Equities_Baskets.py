@@ -1,5 +1,7 @@
 import streamlit as st
 
+from adfm_core.ui import render_footer
+
 import pandas as pd
 
 import numpy as np
@@ -3309,4 +3311,4 @@ if show_data_notes:
 
 
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()
