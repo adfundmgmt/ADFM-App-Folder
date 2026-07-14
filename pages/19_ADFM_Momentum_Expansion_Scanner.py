@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report, report_caption
+from adfm_core.ui import render_footer
 from adfm_momentum_scanner import (
     GICS_TO_ADFM,
     MIN_DOLLAR_VOLUME,
@@ -249,4 +250,4 @@ with st.expander("Signal Diagnostics", expanded=False):
             st.download_button("Download signal diagnostics CSV", diagnostics.to_csv(index=False).encode("utf-8"), "adfm_signal_diagnostics.csv", "text/csv")
 
 st.caption(f"Data through: {latest_date} | Benchmark: {benchmark} | Raw OHLCV is never forward-filled for signals or pattern recognition.")
-st.caption("Â© 2026 AD Fund Management LP")
+render_footer()
