@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from html import escape
+from pathlib import Path
 from typing import Mapping, Optional
 
 import pandas as pd
 import streamlit as st
+
+from .catalog import tool_for_page
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,17 @@ def dataframe_download(label: str, frame: pd.DataFrame, filename: str) -> None:
     )
 
 
-def render_footer(text: str = "© 2026 AD Fund Management LP") -> None:
-    """Render the standard discreet ADFM footer."""
+def render_footer(text: str = "© 2026 AD Fund Management LP", data_note: Optional[str] = None) -> None:
+    """Render a standard source/data-policy disclosure and discreet ADFM footer."""
+    if data_note is None:
+        caller = inspect.currentframe().f_back
+        caller_file = Path(str(caller.f_globals.get("__file__", ""))).name if caller is not None else ""
+        tool = tool_for_page(caller_file)
+        if tool is not None:
+            data_note = (
+                f"Primary inputs: {tool.primary_inputs}. Data dates and benchmarks are shown above when applicable. "
+                "Missing observations remain unavailable rather than being fabricated."
+            )
+    if data_note:
+        st.caption(data_note)
     st.caption(text)

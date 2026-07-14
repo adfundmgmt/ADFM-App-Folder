@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 
 # =========================================================
@@ -1481,4 +1483,4 @@ with st.expander(f"Factor diagnostics: {len(ok_pairs)} built, {len(skipped_pairs
     diag_df = pd.DataFrame(pair_diagnostics)
     st.dataframe(diag_df, use_container_width=True, hide_index=True)
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

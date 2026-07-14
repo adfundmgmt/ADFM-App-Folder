@@ -23,6 +23,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
@@ -1550,4 +1552,4 @@ with tab_download:
         "CSV includes raw prices, filled prices, RVOL, RVOL percentiles, factor scores, masks, contributions, breadth, dispersion, and composite metadata."
     )
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

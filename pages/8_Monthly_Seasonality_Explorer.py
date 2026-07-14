@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 from matplotlib import gridspec
 from matplotlib.patches import Patch
@@ -1848,4 +1850,4 @@ with st.expander("Audit included observations"):
         hide_index=True,
     )
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

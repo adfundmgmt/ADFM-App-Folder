@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, Normalize
@@ -1103,4 +1105,4 @@ fig_tbl = plot_episode_table_image(
 )
 st.pyplot(fig_tbl, use_container_width=True)
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

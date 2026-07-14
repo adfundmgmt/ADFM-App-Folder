@@ -7,6 +7,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 from plotly.subplots import make_subplots
 
@@ -1942,4 +1944,4 @@ if show_raw_download:
             unsafe_allow_html=True,
         )
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

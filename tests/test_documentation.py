@@ -5,7 +5,13 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from adfm_core.catalog import TOOL_CATALOG, tool_descriptions, tool_groups, tool_order
+from adfm_core.catalog import (
+    TOOL_CATALOG,
+    tool_descriptions,
+    tool_for_page,
+    tool_groups,
+    tool_order,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,6 +28,9 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(tool_order(), [tool.title for tool in TOOL_CATALOG])
         self.assertEqual(tool_groups()["All tools"], tool_order())
         self.assertEqual(tool_descriptions(), {tool.title: tool.description for tool in TOOL_CATALOG})
+        for tool in TOOL_CATALOG:
+            self.assertEqual(tool_for_page(f"pages/{tool.page_filename}"), tool)
+        self.assertIsNone(tool_for_page("unknown.py"))
 
     def test_readme_catalog_matches_the_shared_tool_catalog(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")

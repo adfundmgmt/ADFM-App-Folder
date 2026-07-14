@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
@@ -1660,4 +1662,4 @@ st.markdown(
 )
 st.dataframe(format_percentile_snapshot(current_percentile_table(feature_df, base_df)), use_container_width=True, hide_index=True, height=300)
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

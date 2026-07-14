@@ -14,10 +14,7 @@ class RepositoryStandardsTests(unittest.TestCase):
     def test_every_cataloged_page_has_a_standard_footer(self) -> None:
         for tool in TOOL_CATALOG:
             source = (ROOT / "pages" / tool.page_filename).read_text(encoding="utf-8")
-            self.assertTrue(
-                "render_footer" in source or "© 2026 AD Fund Management LP" in source,
-                msg=f"{tool.page_filename} is missing the application footer.",
-            )
+            self.assertIn("render_footer", source, msg=f"{tool.page_filename} is missing the shared application footer.")
 
     def test_runtime_requirements_are_unique_and_use_one_pdf_library(self) -> None:
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()

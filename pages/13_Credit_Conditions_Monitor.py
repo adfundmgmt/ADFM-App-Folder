@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -1500,4 +1502,4 @@ if show_raw:
         else:
             st.dataframe(rates_vol_index.rename("Rates Vol Index").to_frame().tail(500), use_container_width=True)
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

@@ -66,3 +66,9 @@ def tool_groups() -> dict[str, list[str]]:
 def tool_descriptions() -> dict[str, str]:
     """Return the Home-card description keyed by tool title."""
     return {tool.title: tool.description for tool in TOOL_CATALOG}
+
+
+def tool_for_page(page_filename: str) -> ToolDefinition | None:
+    """Resolve catalog metadata from a Streamlit page filename."""
+    normalized = page_filename.replace("\\", "/").rsplit("/", 1)[-1]
+    return next((tool for tool in TOOL_CATALOG if tool.page_filename == normalized), None)

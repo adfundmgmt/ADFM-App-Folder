@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+from adfm_core.ui import render_footer
 from plotly.subplots import make_subplots
 
 from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report
@@ -514,4 +516,4 @@ st.plotly_chart(
 )
 st.markdown("</div>", unsafe_allow_html=True)
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()

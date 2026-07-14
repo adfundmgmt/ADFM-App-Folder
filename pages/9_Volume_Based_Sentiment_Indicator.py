@@ -10,6 +10,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+
+from adfm_core.ui import render_footer
 import yfinance as yf
 from plotly.subplots import make_subplots
 from zoneinfo import ZoneInfo
@@ -1425,4 +1427,4 @@ else:
         height=min(520, 38 + 32 * (len(display_events) + 1)),
     )
 
-st.caption("© 2026 AD Fund Management LP")
+render_footer()
