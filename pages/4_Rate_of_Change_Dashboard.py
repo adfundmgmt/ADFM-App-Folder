@@ -1,5 +1,4 @@
 import time
-from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -7,6 +6,13 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
+
+from adfm_core.rate_of_change import (
+    add_trading_session_axis,
+    compute_features,
+    make_date_ticks,
+    padded_range,
+)
 
 
 st.set_page_config(
@@ -34,8 +40,6 @@ ROC_PERIODS = {
     "63D": 63,
     "126D": 126,
 }
-
-SMA_WINDOWS = [21, 50, 100, 200]
 
 PASTEL_GREEN = "#52b788"
 PASTEL_RED = "#e85d5d"
@@ -176,96 +180,6 @@ def fetch_history(
             time.sleep(1.2 * (attempt + 1))
 
     raise RuntimeError(f"Failed to fetch {ticker} after {retries} retries: {last_err}")
-
-
-def compute_features(df: pd.DataFrame, roc_n: int) -> pd.DataFrame:
-    out = df.copy()
-
-    px = out["Close"].astype(float)
-
-    for win in SMA_WINDOWS:
-        out[f"SMA_{win}"] = px.rolling(win, min_periods=1).mean()
-
-    out["ROC"] = px.pct_change(roc_n)
-    out["ROC_Slope"] = out["ROC"].diff(5)
-
-    out["Second_Derivative"] = out["ROC"].diff()
-    out["Second_Derivative_Slope"] = out["Second_Derivative"].diff(3)
-
-    prev_sd = out["Second_Derivative"].shift(1)
-    out["Pos_Inflect"] = (prev_sd <= 0) & (out["Second_Derivative"] > 0)
-    out["Neg_Inflect"] = (prev_sd >= 0) & (out["Second_Derivative"] < 0)
-
-    return out
-
-
-def padded_range(
-    series_list: Sequence[pd.Series],
-    pad_pct: float = 0.05,
-    include_zero: bool = False,
-) -> Optional[list]:
-    values = []
-
-    for series in series_list:
-        if series is None:
-            continue
-
-        clean = pd.to_numeric(series, errors="coerce")
-        clean = clean.replace([np.inf, -np.inf], np.nan).dropna()
-
-        if not clean.empty:
-            values.append(clean)
-
-    if not values:
-        return None
-
-    combined = pd.concat(values)
-
-    if include_zero:
-        combined = pd.concat([combined, pd.Series([0.0])])
-
-    y_min = float(combined.min())
-    y_max = float(combined.max())
-
-    if not np.isfinite(y_min) or not np.isfinite(y_max):
-        return None
-
-    if y_min == y_max:
-        base = abs(y_min) if y_min != 0 else 1.0
-        pad = base * 0.05
-        return [y_min - pad, y_max + pad]
-
-    spread = y_max - y_min
-    pad = spread * pad_pct
-
-    return [y_min - pad, y_max + pad]
-
-
-def add_trading_session_axis(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    out["Session"] = np.arange(len(out))
-    out["Date_Label"] = out.index.strftime("%Y-%m-%d")
-    return out
-
-
-def make_date_ticks(index: pd.DatetimeIndex, session_values: pd.Series, max_ticks: int = 10):
-    if len(index) == 0:
-        return [], []
-
-    tick_count = min(max_ticks, max(2, len(index)))
-    positions = np.linspace(0, len(index) - 1, tick_count).round().astype(int)
-    positions = np.unique(positions)
-
-    tickvals = session_values.iloc[positions].tolist()
-
-    if len(index) > 900:
-        ticktext = index[positions].strftime("%Y").tolist()
-    elif len(index) > 260:
-        ticktext = index[positions].strftime("%b %Y").tolist()
-    else:
-        ticktext = index[positions].strftime("%b %d").tolist()
-
-    return tickvals, ticktext
 
 
 with st.sidebar:
