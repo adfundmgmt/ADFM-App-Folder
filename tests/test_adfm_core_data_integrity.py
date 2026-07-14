@@ -6,7 +6,11 @@ import unittest
 
 import pandas as pd
 
-from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report, report_caption
+from adfm_core.data_integrity import (
+    DataIntegrityPolicy,
+    build_data_quality_report,
+    report_caption,
+)
 
 
 def valid_frame(periods: int = 5) -> pd.DataFrame:

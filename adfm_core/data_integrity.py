@@ -31,6 +31,9 @@ class DataIntegrityPolicy:
     reject_nonpositive_close: bool = True
 
 
+DEFAULT_DATA_INTEGRITY_POLICY = DataIntegrityPolicy()
+
+
 @dataclass(frozen=True)
 class DataQualityReport:
     """Raw-data validation result measured on one benchmark calendar."""
@@ -64,7 +67,7 @@ def build_data_quality_report(
     raw_frames: Mapping[str, pd.DataFrame],
     benchmark: str,
     tickers: Optional[Sequence[str]] = None,
-    policy: DataIntegrityPolicy = DataIntegrityPolicy(),
+    policy: DataIntegrityPolicy = DEFAULT_DATA_INTEGRITY_POLICY,
 ) -> DataQualityReport:
     """Validate raw series without filling, fabrication, or lookahead."""
     symbols = unique_tickers(tickers or tuple(raw_frames.keys()))

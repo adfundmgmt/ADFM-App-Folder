@@ -7,11 +7,12 @@ It is suitable for both price-only dashboards and OHLCV technical analysis.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from datetime import datetime, time as clock_time
+from datetime import datetime
+from datetime import time as clock_time
 from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
-import time
 
 import numpy as np
 import pandas as pd
