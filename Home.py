@@ -226,10 +226,10 @@ st.markdown(
 st.markdown(
     """
     <div class="hero">
-        <div class="eyebrow">ADFM Analytics Platform</div>
-        <div class="title">AD Fund Management</div>
+        <div class="eyebrow">AD Fund Management</div>
+        <div class="title">ADFM Analytics Platform</div>
         <div class="subtitle">
-            A focused command center for equity leadership, technical structure,
+            A command center built by ADFM team for equity leadership, technical structure,
             flows, macro regimes, rates, credit, liquidity, stress, event risk,
             seasonality, analogs, hedge timing, and currency tension.
         </div>
