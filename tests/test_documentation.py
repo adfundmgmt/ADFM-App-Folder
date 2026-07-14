@@ -1,33 +1,32 @@
-"""Regression checks for the public application catalog."""
+"""Regression checks for the public application catalog and documentation."""
 
 from __future__ import annotations
 
-import ast
 import unittest
 from pathlib import Path
+
+from adfm_core.catalog import TOOL_CATALOG, tool_descriptions, tool_groups, tool_order
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
-def home_tool_order() -> list[str]:
-    """Read TOOL_ORDER without importing Streamlit's application module."""
-    tree = ast.parse((REPOSITORY_ROOT / "Home.py").read_text(encoding="utf-8"))
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "TOOL_ORDER" for target in node.targets
-        ):
-            return list(ast.literal_eval(node.value))
-    raise AssertionError("Home.py does not define TOOL_ORDER.")
-
-
 class DocumentationTests(unittest.TestCase):
-    def test_readme_catalog_matches_home_tool_order(self) -> None:
-        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        tools = home_tool_order()
+    def test_catalog_contains_19_unique_existing_pages(self) -> None:
+        self.assertEqual(len(TOOL_CATALOG), 19)
+        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 20)))
+        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 19)
+        for tool in TOOL_CATALOG:
+            self.assertTrue((REPOSITORY_ROOT / "pages" / tool.page_filename).is_file())
 
-        self.assertEqual(len(tools), 19)
-        for number, tool in enumerate(tools, start=1):
-            self.assertIn(f"| {number} | {tool} |", readme)
+    def test_home_navigation_maps_to_catalog(self) -> None:
+        self.assertEqual(tool_order(), [tool.title for tool in TOOL_CATALOG])
+        self.assertEqual(tool_groups()["All tools"], tool_order())
+        self.assertEqual(tool_descriptions(), {tool.title: tool.description for tool in TOOL_CATALOG})
+
+    def test_readme_catalog_matches_the_shared_tool_catalog(self) -> None:
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        for tool in TOOL_CATALOG:
+            self.assertIn(f"| {tool.number} | {tool.title} |", readme)
 
 
 if __name__ == "__main__":

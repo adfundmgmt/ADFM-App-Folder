@@ -19,6 +19,8 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+from .observability import record_data_load
+
 
 @dataclass(frozen=True)
 class MarketDataConfig:
@@ -195,6 +197,7 @@ def fetch_daily_ohlcv(tickers: Tuple[str, ...], period: str = "3y") -> Tuple[Dic
     for ticker in (symbol for symbol in symbols if symbol not in frames):
         frames.update(_download_chunk([ticker], period, DEFAULT_CONFIG))
     missing = pd.DataFrame({"Ticker": [ticker for ticker in symbols if ticker not in frames], "Reason": "No valid OHLCV data returned"})
+    record_data_load("Yahoo Finance", frames, symbols)
     return frames, missing
 
 

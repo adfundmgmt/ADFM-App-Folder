@@ -1,5 +1,8 @@
 import streamlit as st
 
+from adfm_core.catalog import tool_descriptions, tool_groups, tool_order
+from adfm_core.observability import current_data_health
+
 
 st.set_page_config(
     page_title="AD Fund Management",
@@ -8,84 +11,9 @@ st.set_page_config(
 )
 
 
-TOOL_ORDER = [
-    "ADFM Public Equities Baskets",
-    "Sector Breadth and Rotation",
-    "Factor Momentum Leadership",
-    "Rate of Change Dashboard",
-    "Technical Chart Explorer",
-    "Ratio Charts",
-    "Market Memory Explorer",
-    "Monthly Seasonality Explorer",
-    "Volume Based Sentiment Indicator",
-    "ETF Flows Dashboard",
-    "Global Macro Regime Dashboard",
-    "Yield Curve + Rates Regime Monitor",
-    "Credit Conditions Dashboard",
-    "Liquidity Tracker",
-    "Market Stress Composite",
-    "Event Risk + Catalyst Calendar",
-    "Hedge Timer",
-    "Currency Tension Engine",
-    "ADFM Momentum Expansion Scanner",
-]
-
-
-TOOL_GROUPS = {
-    "All tools": TOOL_ORDER,
-    "Equity Leadership": [
-        "ADFM Public Equities Baskets",
-        "Sector Breadth and Rotation",
-        "Factor Momentum Leadership",
-        "Rate of Change Dashboard",
-        "ADFM Momentum Expansion Scanner",
-    ],
-    "Technicals + Analogs": [
-        "Technical Chart Explorer",
-        "Ratio Charts",
-        "Market Memory Explorer",
-        "Monthly Seasonality Explorer",
-    ],
-    "Flows + Sentiment": [
-        "ETF Flows Dashboard",
-        "Volume Based Sentiment Indicator",
-    ],
-    "Macro + Rates": [
-        "Global Macro Regime Dashboard",
-        "Yield Curve + Rates Regime Monitor",
-        "Credit Conditions Dashboard",
-        "Liquidity Tracker",
-        "Currency Tension Engine",
-    ],
-    "Risk + Catalysts": [
-        "Market Stress Composite",
-        "Event Risk + Catalyst Calendar",
-        "Hedge Timer",
-    ],
-}
-
-
-TOOL_DESCRIPTIONS = {
-    "ADFM Public Equities Baskets": "Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance.",
-    "Sector Breadth and Rotation": "Measures participation and sector rotation to identify where equity strength is broadening or narrowing.",
-    "Factor Momentum Leadership": "Ranks factor momentum to highlight which styles are leading, fading, or inflecting.",
-    "Rate of Change Dashboard": "Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure.",
-    "Technical Chart Explorer": "Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages.",
-    "Ratio Charts": "Uses relative-strength ratios to compare assets, sectors, credit, factors, and risk appetite proxies.",
-    "Market Memory Explorer": "Surfaces historical analogs to contextualize the current tape against prior return paths and regimes.",
-    "Monthly Seasonality Explorer": "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.",
-    "Volume Based Sentiment Indicator": "Reads conviction, participation, and sentiment using volume regime signals across major liquid assets.",
-    "ETF Flows Dashboard": "Tracks ETF flow pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures.",
-    "Global Macro Regime Dashboard": "Combines growth, inflation, policy, financial conditions, and market signals into a broad macro-regime read.",
-    "Yield Curve + Rates Regime Monitor": "Tracks the Treasury curve, real yields, breakevens, and bull/bear steepener or flattener regimes.",
-    "Credit Conditions Dashboard": "Monitors credit spreads, credit ETF ratios, regional banks, loans, EM debt, and financial conditions.",
-    "Liquidity Tracker": "Monitors major liquidity drivers including the Fed balance sheet, RRP, TGA, policy rates, and financial conditions.",
-    "Market Stress Composite": "Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion.",
-    "Event Risk + Catalyst Calendar": "Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks.",
-    "Hedge Timer": "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.",
-    "Currency Tension Engine": "Maps major currencies across fundamental trajectory and valuation-policy stretch, with pairwise carry, pillar scores, overlays, and daily risk flags.",
-    "ADFM Momentum Expansion Scanner": "Ranks liquid equities with deterministic momentum-expansion setups and maps sector and subsector leadership.",
-}
+TOOL_ORDER = tool_order()
+TOOL_GROUPS = tool_groups()
+TOOL_DESCRIPTIONS = tool_descriptions()
 
 
 st.markdown(
@@ -253,6 +181,18 @@ st.markdown(
 
 
 st.markdown('<div class="section-title">Tool Map</div>', unsafe_allow_html=True)
+
+with st.expander("Data health", expanded=False):
+    health = current_data_health()
+    if health is None:
+        st.caption("No shared Yahoo Finance request has run in this session yet.")
+    else:
+        st.caption(
+            f"Provider: {health.provider} | Last pull: {health.recorded_at_utc} | "
+            f"Data through: {health.data_through or 'unavailable'} | "
+            f"Returned: {health.returned_symbols}/{health.requested_symbols} | "
+            f"Failed: {health.failed_symbols}"
+        )
 
 
 if hasattr(st, "segmented_control"):

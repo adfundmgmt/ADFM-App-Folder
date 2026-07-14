@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from typing import Optional
+from typing import Mapping, Optional
 
 import pandas as pd
 import streamlit as st
@@ -48,6 +48,22 @@ def render_page_header(header: PageHeader) -> None:
         + ("<div class='adfm-status'>" + escape(status) + "</div>" if status else ""),
         unsafe_allow_html=True,
     )
+
+
+def render_status_line(**items: object) -> None:
+    """Render compact, escaped status metadata while omitting unavailable values."""
+    parts = [
+        f"{escape(label.replace('_', ' ').title())}: {escape(str(value))}"
+        for label, value in items.items()
+        if value not in (None, "")
+    ]
+    if parts:
+        st.markdown("<div class='adfm-status'>" + " · ".join(parts) + "</div>", unsafe_allow_html=True)
+
+
+def metric_table(frame: pd.DataFrame, column_config: Optional[Mapping[str, object]] = None) -> None:
+    """Render a consistent full-width metric table without transforming values."""
+    st.dataframe(frame, use_container_width=True, hide_index=True, column_config=dict(column_config or {}))
 
 
 def dataframe_download(label: str, frame: pd.DataFrame, filename: str) -> None:

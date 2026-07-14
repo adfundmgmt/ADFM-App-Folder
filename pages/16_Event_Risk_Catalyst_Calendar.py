@@ -10,6 +10,8 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
+from adfm_core.ui import render_footer
+
 
 TITLE = "Catalyst Calendar"
 
@@ -999,3 +1001,6 @@ with st.expander("Full event details"):
         use_container_width=True,
         hide_index=True,
     )
+
+
+render_footer()

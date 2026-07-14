@@ -10,6 +10,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from adfm_core.ui import render_footer
+
 TITLE = "Yield Curve Rates Regime Monitor"
 
 st.set_page_config(
@@ -182,6 +184,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
 def safe_float(x: object) -> float:
@@ -999,3 +1002,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+render_footer()

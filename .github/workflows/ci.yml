@@ -25,9 +25,13 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            constraints.txt
 
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Verify dependency consistency
+        run: python -m pip check
 
       - name: Compile application sources
         run: python -m compileall -q Home.py pages adfm_core adfm_momentum_scanner.py adfm_sector_rotation_config.py tests

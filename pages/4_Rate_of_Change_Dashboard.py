@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report
 from adfm_core.market_data import fetch_daily_ohlcv
 from adfm_core.rate_of_change import (
     add_trading_session_axis,
@@ -11,6 +12,7 @@ from adfm_core.rate_of_change import (
     make_date_ticks,
     padded_range,
 )
+from adfm_core.ui import render_status_line
 
 
 st.set_page_config(
@@ -213,6 +215,17 @@ try:
 except Exception as e:
     st.error(str(e))
     st.stop()
+
+quality = build_data_quality_report(
+    {ticker.strip().upper(): df},
+    ticker.strip().upper(),
+    policy=DataIntegrityPolicy(min_valid_sessions=1, max_stale_sessions=0),
+)
+render_status_line(
+    data_through=quality.data_through.date().isoformat() if quality.data_through is not None else "unavailable",
+    source="Yahoo Finance",
+    data_quality="complete daily sessions" if quality.benchmark_ready else quality.reason_for(ticker.strip().upper()),
+)
 
 
 if len(df) < 60:

@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
+from adfm_core.ui import render_footer
+
 
 # =============================================================================
 # PAGE CONFIG
@@ -1428,3 +1430,6 @@ with st.expander("Scoring methodology"):
 if show_raw:
     st.markdown("<div class='section-title'>Raw Market Data</div>", unsafe_allow_html=True)
     st.dataframe(prices.tail(220), use_container_width=True)
+
+
+render_footer()

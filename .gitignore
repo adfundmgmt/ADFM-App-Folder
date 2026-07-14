@@ -1,0 +1,28 @@
+# Python bytecode and test/lint caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environments and Streamlit state
+.venv/
+venv/
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Application/provider caches and local artifacts
+data/cache/
+data/last_good/
+*.sqlite
+*.db
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
