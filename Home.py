@@ -27,6 +27,7 @@ TOOL_ORDER = [
     "Event Risk + Catalyst Calendar",
     "Hedge Timer",
     "Currency Tension Engine",
+    "ADFM Momentum Expansion Scanner",
 ]
 
 
@@ -37,6 +38,7 @@ TOOL_GROUPS = {
         "Sector Breadth and Rotation",
         "Factor Momentum Leadership",
         "Rate of Change Dashboard",
+        "ADFM Momentum Expansion Scanner",
     ],
     "Technicals + Analogs": [
         "Technical Chart Explorer",
@@ -82,6 +84,7 @@ TOOL_DESCRIPTIONS = {
     "Event Risk + Catalyst Calendar": "Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks.",
     "Hedge Timer": "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.",
     "Currency Tension Engine": "Maps major currencies across fundamental trajectory and valuation-policy stretch, with pairwise carry, pillar scores, overlays, and daily risk flags.",
+    "ADFM Momentum Expansion Scanner": "Ranks liquid equities with deterministic momentum-expansion setups and maps sector and subsector leadership.",
 }
 
 
