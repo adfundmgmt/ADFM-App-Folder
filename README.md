@@ -1,59 +1,86 @@
-These are proprietary tools ADFM has built in-house to support daily decision-making. The goal is simple: make it easier to spot patterns, track shifts, and move faster with more context.
+# ADFM Analytics Platform
+
+These are proprietary tools built in-house by AD Fund Management LP to support daily decision-making. The objective is simple: identify patterns earlier, track shifts across markets, and move faster with better context.
+
+Use the sidebar to launch each tool.
 
 ---
 
-### Tools Available (use the sidebar to launch):
+## Equity Leadership
 
-- **Monthly Seasonality Explorer**  
-  Looks at median monthly returns and hit rates for any stock, index, or commodity. Pulls from Yahoo Finance and FRED for deeper historical data. Helps us stay aware of recurring calendar trends and seasonality biases.
+### ADFM Public Equities Baskets
+Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance.
 
-- **Market Memory Explorer**  
-  Compares how this year is tracking versus past years with similar return paths. Useful for putting the current tape in historical context and building intuition around where we might go next.
+### Sector Breadth and Rotation
+Measures participation and sector rotation to identify where equity strength is broadening or narrowing.
 
-- **Technical Chart Explorer**  
-  Visualize key technical indicators for any publicly traded ticker that is on Yahoo Finance (equities, commodities, credit).
+### Factor Momentum Leadership
+Ranks factor momentum to highlight which styles are leading, fading, or inflecting.
 
-- **Sector Breadth and Rotation**  
-  This dashboard monitors the relative performance and rotation of S&P 500 sectors to help identify leadership trends and market breadth dynamics.
+### Rate of Change Dashboard
+Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure.
 
-- **Breakout Scanner**  
-  Screen for stocks breaking out to 20D, 50D, 100D, or 200D highs and view multi-timeframe RSI.
+### ADFM Momentum Expansion Scanner
+Ranks liquid equities with deterministic momentum-expansion setups and maps sector and subsector leadership.
 
-- **Ratio Charts**  
-  Tracks the relative performance of S&P cyclical and defensive sector ETFs (equal-weighted) to visualize risk-on/risk-off regime shifts in US equities.
+---
 
-- **Cross Asset Volatility Surface**  
-  Track cross asset implied and realized volatility in one place and map it to a simple regime read that can steer gross and hedging.
+## Technicals and Analogs
 
-- **ETF Flows Dashboard**  
-  A dashboard of thematic, and global ETF flows - see where money is moving among major macro and innovation trades.
-  
-- **US Inflation Dashboard**  
-  Dissects the latest CPI print with YoY and MoM breakdowns across headline, and core categories.
+### Technical Chart Explorer
+Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages for publicly traded instruments available through Yahoo Finance.
 
-- **Real Yield Dashboard**  
-  Tracks nominal and real 10-year Treasury yields alongside the 63-day momentum of real yields (inverted). It’s a clean way to monitor macro regime changes—whether the environment is tilting toward tightening or easing.
+### Ratio Charts
+Uses relative-strength ratios to compare assets, sectors, credit, factors, and risk-appetite proxies.
 
-- **Liquidity Tracker**  
-  Tracks Net Liquidity and relate it to policy and equities. Definition: Net Liquidity = WALCL - RRP - TGA. Units are billions. Sustained rises often coincide with risk-on conditions.
+### Market Memory Explorer
+Surfaces historical analogs to place the current tape against prior return paths and market regimes.
 
-- **Market Stress Composite**  
-  A single 0 to 100 stress score blending volatility, credit, curve, funding, and equity drawdown. Higher = more stress.
+### Monthly Seasonality Explorer
+Shows recurring monthly return and volatility patterns across stocks, indices, sectors, and commodities using historical market data.
 
-- **Unusual Options Flow Tracker**  
-  Tracks unusual options flow tracker.
+---
 
-- **Factor Momentum Leadership**  
-  Tracks style and macro factor leadership using ETF pairs. Each factor is a relative strength ratio scored on short and long momentum, trend structure, and inflection.
-  
-- **Weekly Cross-Asset Compass**  
-  A weekly cross-asset readout that maps regime shifts, correlations, and volatility changes to clear actions, invalidations, and trade expressions in one place.
+## Flows and Sentiment
 
-- **VIX Spike Deep Dive**  
-  Evaluates short-horizon SPX behavior after a VIX spike. Support sizing and timing of tactical bounce or fade setups.
+### ETF Flows Dashboard
+Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures.
 
-- **ADFM Public Equities Baskets**  
-  A consolidated dashboard that tracks daily, equal-weight performance and technicals across all ADFM baskets, benchmarked to SPY, with aligned business-day panels and category-level drilldowns.
+### Volume Based Sentiment Indicator
+Reads conviction, participation, and sentiment through volume-regime signals across major liquid assets.
 
+---
 
-These tools aren’t overly complex, but they’ve become a key part of how we stay organized, especially in fast moving markets. Always a work in progress, open to feedback or feature ideas.
+## Macro, Rates, Credit, and FX
+
+### Global Macro Regime Dashboard
+Combines growth, inflation, policy, financial conditions, and market signals into a broad macro-regime read.
+
+### Yield Curve + Rates Regime Monitor
+Tracks the Treasury curve, real yields, breakevens, and bull or bear steepener and flattener regimes.
+
+### Credit Conditions Dashboard
+Monitors credit spreads, credit ETF ratios, regional banks, leveraged loans, emerging-market debt, and broader financial conditions.
+
+### Liquidity Tracker
+Monitors major liquidity drivers, including the Federal Reserve balance sheet, reverse repo balances, the Treasury General Account, policy rates, and financial conditions.
+
+### Currency Tension Engine
+Maps major currencies across fundamental trajectory and valuation-policy stretch, with pairwise carry, pillar scores, overlays, and daily risk flags.
+
+---
+
+## Risk and Catalysts
+
+### Market Stress Composite
+Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion.
+
+### Event Risk + Catalyst Calendar
+Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks.
+
+### Hedge Timer
+Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.
+
+---
+
+These tools are intentionally practical rather than overly complex. They have become a central part of how ADFM organizes information and evaluates fast-moving markets. The platform remains a work in progress, and feedback or feature ideas are welcome.
