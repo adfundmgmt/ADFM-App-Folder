@@ -2,7 +2,7 @@ import streamlit as st
 
 
 st.set_page_config(
-    page_title="AD Fund Management",
+    page_title="AD Fund Management LP",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -226,7 +226,7 @@ st.markdown(
 st.markdown(
     """
     <div class="hero">
-        <div class="eyebrow">AD Fund Management</div>
+        <div class="eyebrow">AD Fund Management LP</div>
         <div class="title">ADFM Analytics Platform</div>
         <div class="subtitle">
             A command center built by ADFM team for equity leadership, technical structure,
