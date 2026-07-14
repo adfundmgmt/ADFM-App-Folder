@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -16,6 +17,7 @@ from adfm_core.market_data import (
     canonicalize_date_index,
     close_panel,
     drop_unfinished_daily_session,
+    fetch_daily_ohlcv,
     percent_change,
     stale_session_count,
     unique_tickers,
@@ -31,6 +33,9 @@ def sample_ohlcv(index: pd.DatetimeIndex) -> pd.DataFrame:
 
 
 class MarketDataPrimitiveTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        fetch_daily_ohlcv.clear()
+
     def test_ticker_normalization_preserves_order(self) -> None:
         self.assertEqual(unique_tickers([" spy ", "SPY", "qqq", ""]), ("SPY", "QQQ"))
 
@@ -74,6 +79,20 @@ class MarketDataPrimitiveTests(unittest.TestCase):
         panel = close_panel(frames, ["AAA", "BBB"])
         self.assertTrue(pd.isna(panel["BBB"].iloc[1]))
         self.assertAlmostEqual(percent_change(panel["AAA"], 2), .02)
+
+    @patch("adfm_core.market_data.yf.download")
+    def test_shared_loader_normalizes_a_daily_ohlcv_response(self, download_mock: object) -> None:
+        index = pd.bdate_range("2026-01-02", periods=3)
+        raw = sample_ohlcv(index)
+        raw.columns = pd.MultiIndex.from_product([raw.columns, ["AAA"]])
+        download_mock.return_value = raw  # type: ignore[attr-defined]
+
+        frames, dropped = fetch_daily_ohlcv((" aaa ",), period="1y")
+
+        self.assertEqual(list(frames), ["AAA"])
+        self.assertEqual(frames["AAA"].index.tolist(), index.tolist())
+        self.assertTrue(dropped.empty)
+        self.assertEqual(download_mock.call_count, 1)  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

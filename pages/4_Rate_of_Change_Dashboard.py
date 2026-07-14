@@ -1,12 +1,10 @@
-import time
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
 from plotly.subplots import make_subplots
 
+from adfm_core.market_data import fetch_daily_ohlcv
 from adfm_core.rate_of_change import (
     add_trading_session_axis,
     compute_features,
@@ -137,49 +135,16 @@ st.markdown(
 def fetch_history(
     ticker: str,
     period: str,
-    interval: str = "1d",
-    retries: int = 3,
 ) -> pd.DataFrame:
-    last_err = None
-
-    for attempt in range(retries):
-        try:
-            data = yf.download(
-                ticker,
-                period=period,
-                interval=interval,
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
-
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
-
-            data = data.rename(columns=str.title)
-
-            keep_cols = [
-                c
-                for c in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
-                if c in data.columns
-            ]
-
-            data = data[keep_cols].dropna(how="all")
-
-            if data.empty:
-                raise ValueError(f"No data returned for {ticker}")
-
-            data.index = pd.to_datetime(data.index)
-            data = data.sort_index()
-            data = data[~data.index.duplicated(keep="last")]
-
-            return data
-
-        except Exception as err:
-            last_err = err
-            time.sleep(1.2 * (attempt + 1))
-
-    raise RuntimeError(f"Failed to fetch {ticker} after {retries} retries: {last_err}")
+    """Load one completed daily OHLCV history using the shared data contract."""
+    symbol = ticker.strip().upper()
+    frames, dropped = fetch_daily_ohlcv((symbol,), period)
+    if symbol in frames:
+        return frames[symbol]
+    reason = "No valid OHLCV data returned"
+    if not dropped.empty:
+        reason = str(dropped.iloc[0]["Reason"])
+    raise RuntimeError(f"Failed to fetch {symbol}: {reason}")
 
 
 with st.sidebar:
