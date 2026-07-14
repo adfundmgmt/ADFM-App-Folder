@@ -1,7 +1,9 @@
-**Regime: Risk-premium mode; USD firm but yield-FX decoupled; carry crowding at extremes.**
+**Regime: Strong dollar on valuation and fiscal pillars, but carry crowding and risk-premium dynamics (not real-yield reward) are fraying at edges.**
 
-- **GBP & AUD sinking under same trap:** Rich valuations (+1.3, +1.9) propped by carry alone; fundamentals deteriorating; policy tightening credibility collapsed (feasibility -1.0, -0.8); real yields rising but currency weakening (risk-premium, not reward). Both carry crowded (94th, 87th percentiles). Unwind exposure if vol spikes.
-- **JPY & NZD the mean-reversion pair:** Cheap valuations, improving fundies (JPY +1.1 structural, NZD +0.3); JPY surged +0.74 fundamental since last snapshot—the big move. Both have policy headwinds (hike feasibility deeply negative) but valuation and real external balances anchor upside.
-- **CAD & EUR both one-legged:** CAD cheap (-1.6 val) but rest neutral—narrow thesis. EUR valuation propping it (+1.4) while all other pillars flatlining; FX-yield decoupling kills real-yield read.
+- **GBP short**: Deteriorating fundamentals (-0.27) anchoring rich valuation (+1.27); carry crowded at 94th percentile on fragile base. Yield stress shows negative correlation to rate moves (−0.36)—risk premium, not reward. Unwind risk acute.
 
-- **JPY carry strongest risk-adjusted:** Negative carry but deep discount + structural improvement + real external surplus (1.72) = non-crowded long.
+- **AUD short**: Mirror GBP: expensive (+1.91 stretch), weakening fundamentals (−0.30), carry at 88th percentile. Policy constraint (feasibility −0.8) kills hawkish tailwind. Real yields high but currency weakens as yields rise—risk-regime signal, not fundamental.
+
+- **JPY long**: Cheap (−0.68 stretch) with improving fundamentals (+0.35). Valuation mean-reversion setup intact. Caveat: carry crowded (88th percentile) on stressed yield regime (−0.53 mult); vol spike is tail risk. Cross vs USD noise material.
+
+- **NZD/AUD carry**: Deteriorating AUD on stretched valuation + softening growth; NZD cheap and improving. Relative carry attractive, but both face policy-constraint stagflation drag.
