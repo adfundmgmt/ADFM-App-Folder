@@ -36,7 +36,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-07-09-elliott-fib-levels"
+APP_VERSION = "2026-07-15-quarter-moving-averages"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -55,6 +55,10 @@ COLORS = {
     "sma50": "#1f77b4",
     "sma100": "#ff7f0e",
     "sma200": "#d62728",
+    "sma65": "#17becf",
+    "sma130": "#bcbd22",
+    "sma195": "#8c564b",
+    "sma260": "#e377c2",
     "bb": "rgba(70,70,70,0.38)",
     "bb_fill": "rgba(120,120,120,0.05)",
     "grid": "rgba(0,0,0,0.08)",
@@ -240,6 +244,10 @@ class ChartSettings:
     show_sma50: bool
     show_sma100: bool
     show_sma200: bool
+    show_sma65: bool
+    show_sma130: bool
+    show_sma195: bool
+    show_sma260: bool
 
     show_bbands: bool
     show_last_price: bool
@@ -399,6 +407,10 @@ def read_settings() -> ChartSettings:
             show_sma50 = st.checkbox("50 DMA", value=True)
             show_sma100 = st.checkbox("100 DMA", value=True)
             show_sma200 = st.checkbox("200 DMA", value=True)
+            show_sma65 = st.checkbox("1Q MA (65 DMA)", value=False)
+            show_sma130 = st.checkbox("2Q MA (130 DMA)", value=False)
+            show_sma195 = st.checkbox("3Q MA (195 DMA)", value=False)
+            show_sma260 = st.checkbox("4Q MA (260 DMA)", value=False)
 
             st.caption("Panels and overlays")
             show_volume = st.checkbox("Volume", value=True)
@@ -435,6 +447,10 @@ def read_settings() -> ChartSettings:
         show_sma50=show_sma50,
         show_sma100=show_sma100,
         show_sma200=show_sma200,
+        show_sma65=show_sma65,
+        show_sma130=show_sma130,
+        show_sma195=show_sma195,
+        show_sma260=show_sma260,
         show_bbands=show_bbands,
         show_last_price=show_last_price,
         show_range_levels=show_range_levels,
@@ -797,7 +813,7 @@ def compute_atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    for window in [8, 20, 50, 100, 200]:
+    for window in [8, 20, 50, 65, 100, 130, 195, 200, 260]:
         out[f"SMA{window}"] = out["Close"].rolling(
             window=window,
             min_periods=window,
@@ -1997,6 +2013,10 @@ def price_hover_customdata(df: pd.DataFrame) -> np.ndarray:
         "SMA50",
         "SMA100",
         "SMA200",
+        "SMA65",
+        "SMA130",
+        "SMA195",
+        "SMA260",
         "BB_UPPER",
         "BB_MID",
         "BB_LOWER",
@@ -2017,7 +2037,7 @@ def add_price_hover_trace(
         bb_section = (
             "<br><br>"
             "<span style='color:#6b7280'>Bollinger Bands</span><br>"
-            "Upper %{customdata[9]} | Mid %{customdata[10]} | Lower %{customdata[11]}"
+            "Upper %{customdata[13]} | Mid %{customdata[14]} | Lower %{customdata[15]}"
         )
 
     hovertemplate = (
@@ -2028,7 +2048,8 @@ def add_price_hover_trace(
         "<br><br>"
         "<span style='color:#6b7280'>Moving averages</span><br>"
         "8DMA %{customdata[4]} | 20DMA %{customdata[5]}<br>"
-        "50DMA %{customdata[6]} | 100DMA %{customdata[7]} | 200DMA %{customdata[8]}"
+        "50DMA %{customdata[6]} | 100DMA %{customdata[7]} | 200DMA %{customdata[8]}<br>"
+        "1Q %{customdata[9]} | 2Q %{customdata[10]} | 3Q %{customdata[11]} | 4Q %{customdata[12]}"
         + bb_section
         + "<extra></extra>"
     )
@@ -2105,6 +2126,10 @@ def add_price_panel(
         ("SMA50", "50DMA", COLORS["sma50"], settings.show_sma50, 1.55),
         ("SMA100", "100DMA", COLORS["sma100"], settings.show_sma100, 1.45),
         ("SMA200", "200DMA", COLORS["sma200"], settings.show_sma200, 1.75),
+        ("SMA65", "1Q MA (65DMA)", COLORS["sma65"], settings.show_sma65, 1.40),
+        ("SMA130", "2Q MA (130DMA)", COLORS["sma130"], settings.show_sma130, 1.40),
+        ("SMA195", "3Q MA (195DMA)", COLORS["sma195"], settings.show_sma195, 1.40),
+        ("SMA260", "4Q MA (260DMA)", COLORS["sma260"], settings.show_sma260, 1.40),
     ]
 
     for column, label, color, enabled, width in ma_config:
