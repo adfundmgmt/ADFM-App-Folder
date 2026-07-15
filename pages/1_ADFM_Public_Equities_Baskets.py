@@ -2977,7 +2977,6 @@ with st.sidebar:
 
     show_category_sections = st.checkbox("Show per-category panels and charts", value=False)
 
-    show_constituents = st.checkbox("Show live basket constituents", value=False)
 
     show_full_map = st.checkbox("Show raw basket map", value=True)
 
@@ -3240,24 +3239,6 @@ if show_category_sections:
         )
 
 
-
-if show_constituents:
-
-    with st.expander("Basket Constituents", expanded=True):
-
-        st.caption("Shows only live members used in the calculations after price, stale-data, and optional market-cap filters.")
-
-
-
-        for category, groups in live_categories.items():
-
-            st.markdown(f"**{category}**")
-
-            for name, tickers in groups.items():
-
-                members = sorted({str(t).upper() for t in tickers})
-
-                st.write(f"- {name}: {', '.join(members)}")
 
 
 
