@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import re
 import time
+from html import escape
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -13,15 +14,7 @@ import streamlit as st
 
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.regime_math import rolling_percentile_previous
-from adfm_core.ui import (
-    PageHeader,
-    inject_explorer_style,
-    render_footer,
-    render_kpi_cards,
-    render_page_header,
-    render_section_header,
-    render_selection_note,
-)
+from adfm_core.ui import render_footer
 import yfinance as yf
 from plotly.subplots import make_subplots
 from zoneinfo import ZoneInfo
@@ -34,7 +27,7 @@ configure_yfinance_cache()
 # =============================================================================
 
 st.set_page_config(
-    page_title="Volume Regime Explorer",
+    page_title="Volume Based Sentiment Indicator",
     layout="wide",
 )
 
@@ -109,15 +102,15 @@ US_MARKET_HOLIDAYS_STATIC = [
     "2027-12-24",
 ]
 
-PASTEL_GREEN = "#52b788"
-PASTEL_RED = "#e85d5d"
-PASTEL_GREY = "#8b949e"
-AMBER = "#f59e0b"
-BLUE = "#2563eb"
+PASTEL_GREEN = "#4f765f"
+PASTEL_RED = "#a06452"
+PASTEL_GREY = "#94a3b8"
+AMBER = "#b08958"
+BLUE = "#526f8f"
 
-TITLE = "Volume Regime Explorer"
+TITLE = "Volume Based Sentiment Indicator"
 SUBTITLE = (
-    "Tape participation, relative volume, and forward outcomes around extreme sessions."
+    "Conviction, participation, and sentiment through volume-regime signals."
 )
 
 
@@ -128,32 +121,215 @@ SUBTITLE = (
 CUSTOM_CSS = """
 <style>
     .block-container {
-        padding-top: 1.2rem;
+        padding-top: 1.05rem;
         padding-bottom: 2rem;
         max-width: 1500px;
     }
 
-    h1, h2, h3 {
-        font-weight: 600;
-        letter-spacing: 0.15px;
-        color: #222222;
+    h1 {
+        font-weight: 650;
+        letter-spacing: -0.025em;
+        margin-bottom: 0.9rem;
     }
 
     div[data-testid="stCaptionContainer"] {
-        color: #666666;
+        color: #64748b;
     }
 
-    .stPlotlyChart {
+    section[data-testid="stSidebar"] {
+        background: #fafaf9;
+        border-right: 1px solid rgba(100, 116, 139, 0.16);
+    }
+
+    .vbsi-title {
+        font-size: 1.42rem;
+        font-weight: 760;
+        letter-spacing: -0.025em;
+        margin: 0.2rem 0 0.05rem;
+        color: inherit;
+    }
+
+    .vbsi-subtitle {
+        font-size: 0.72rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #64748b;
+        margin-bottom: 0.45rem;
+    }
+
+    .vbsi-banner {
+        border: 1px solid rgba(100, 116, 139, 0.18);
+        border-left: 3px solid #4f765f;
+        border-radius: 6px;
+        background: rgba(100, 116, 139, 0.045);
+        padding: 9px 12px;
+        margin: 0.45rem 0 0.55rem;
+        font-size: 0.89rem;
+        line-height: 1.45;
+    }
+
+    .vbsi-banner.negative { border-left-color: #a06452; }
+    .vbsi-banner.neutral {
+        border-left-color: #cbd5e1;
+        background: rgba(100, 116, 139, 0.025);
+    }
+
+    .vbsi-kicker {
+        font-size: 0.64rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        font-weight: 800;
+        color: #4f765f;
+        margin-right: 10px;
+    }
+
+    .vbsi-banner.negative .vbsi-kicker { color: #a06452; }
+    .vbsi-banner.neutral .vbsi-kicker {
+        color: inherit;
+        background: rgba(100, 116, 139, 0.15);
+        padding: 3px 7px;
+        border-radius: 2px;
+    }
+
+    .vbsi-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border: 1px solid rgba(100, 116, 139, 0.16);
+        border-radius: 7px;
+        overflow: hidden;
+        margin: 0.55rem 0 0.85rem;
+    }
+
+    .vbsi-kpi {
+        padding: 10px 13px 11px;
+        min-height: 66px;
+        border-right: 1px solid rgba(100, 116, 139, 0.14);
+    }
+
+    .vbsi-kpi:last-child { border-right: 0; }
+
+    .vbsi-kpi-label {
+        font-size: 0.61rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #64748b;
+        margin-bottom: 5px;
+    }
+
+    .vbsi-kpi-value {
+        font-size: 1.13rem;
+        line-height: 1;
+        font-weight: 780;
+        color: inherit;
+    }
+
+    .vbsi-kpi-note {
+        font-size: 0.68rem;
+        line-height: 1.25;
+        color: #64748b;
+        margin-top: 5px;
+    }
+
+    .vbsi-kpi.positive .vbsi-kpi-value { color: #4f765f; }
+    .vbsi-kpi.negative .vbsi-kpi-value { color: #a06452; }
+
+    .vbsi-section-title {
+        font-size: 1.04rem;
+        font-weight: 760;
+        letter-spacing: -0.015em;
+        margin: 1rem 0 0.08rem;
+        color: inherit;
+    }
+
+    .vbsi-section-subtitle {
+        font-size: 0.74rem;
+        line-height: 1.42;
+        color: #64748b;
+        margin-bottom: 0.5rem;
+    }
+
+    div[data-testid="stPlotlyChart"] {
+        border: 1px solid rgba(100, 116, 139, 0.16);
+        border-radius: 7px;
+        overflow: hidden;
         background: #ffffff;
+    }
+
+    div[data-testid="stDataFrame"] {
+        border: 1px solid rgba(100, 116, 139, 0.16);
+        border-radius: 7px;
+        overflow: hidden;
+    }
+
+    .stTabs [data-baseweb="tab-list"] { gap: 0.3rem; }
+    .stTabs [data-baseweb="tab"] {
+        height: 2.2rem;
+        padding: 0 0.72rem;
+        font-size: 0.82rem;
     }
 
     .js-plotly-plot .table .cell {
         font-size: 12px;
     }
+
+    @media (max-width: 900px) {
+        .vbsi-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .vbsi-kpi:nth-child(2) { border-right: 0; }
+        .vbsi-kpi:nth-child(-n+2) { border-bottom: 1px solid rgba(100, 116, 139, 0.14); }
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .vbsi-subtitle, .vbsi-kpi-label, .vbsi-kpi-note, .vbsi-section-subtitle {
+            color: #94a3b8;
+        }
+    }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-inject_explorer_style()
+
+
+def render_lens_header(symbol: str, volume_mode: str) -> None:
+    st.markdown(
+        "<div class='vbsi-title'>Volume Sentiment</div>"
+        f"<div class='vbsi-subtitle'>{escape(symbol)} &middot; {escape(volume_mode)} &middot; hover, scan, compare</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_signal_banner(label: str, text: str, tone: str = "neutral") -> None:
+    safe_tone = tone if tone in {"positive", "negative", "neutral"} else "neutral"
+    st.markdown(
+        f"<div class='vbsi-banner {safe_tone}'>"
+        f"<span class='vbsi-kicker'>{escape(label)}</span>"
+        f"{escape(text)}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_metric_grid(cards: list[tuple[str, str, str, str]]) -> None:
+    body = []
+    for label, value, note, tone in cards:
+        safe_tone = tone if tone in {"positive", "negative", "neutral"} else "neutral"
+        body.append(
+            f"<div class='vbsi-kpi {safe_tone}'>"
+            f"<div class='vbsi-kpi-label'>{escape(label)}</div>"
+            f"<div class='vbsi-kpi-value'>{escape(value)}</div>"
+            f"<div class='vbsi-kpi-note'>{escape(note)}</div>"
+            "</div>"
+        )
+    st.markdown(
+        "<div class='vbsi-kpi-grid'>" + "".join(body) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_volume_section(title: str, subtitle: str) -> None:
+    st.markdown(
+        f"<div class='vbsi-section-title'>{escape(title)}</div>"
+        f"<div class='vbsi-section-subtitle'>{escape(subtitle)}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # =============================================================================
@@ -861,16 +1037,16 @@ def volume_bar_color(row: pd.Series) -> str:
     if state == "Heavy":
         if np.isfinite(ret) and np.isfinite(close_loc):
             if ret >= 0 and close_loc >= 0.50:
-                return "rgba(82,183,136,0.72)"
+                return "rgba(79,118,95,0.72)"
             if ret < 0 or close_loc < 0.45:
-                return "rgba(232,93,93,0.72)"
+                return "rgba(160,100,82,0.72)"
 
-        return "rgba(245,158,11,0.68)"
+        return "rgba(176,137,88,0.68)"
 
     if state == "Quiet":
-        return "rgba(139,148,158,0.26)"
+        return "rgba(148,163,184,0.26)"
 
-    return "rgba(139,148,158,0.14)"
+    return "rgba(148,163,184,0.14)"
 
 
 def build_chart(
@@ -908,7 +1084,7 @@ def build_chart(
                 y=df["Price_MA20"],
                 mode="lines",
                 name="20D",
-                line=dict(width=1.15, color="rgba(37,99,235,0.70)"),
+                line=dict(width=1.15, color="rgba(82,111,143,0.72)"),
                 hovertemplate="<b>%{x|%b %d, %Y}</b><br>20D: %{y:,.2f}<extra></extra>",
             ),
             row=1,
@@ -1227,11 +1403,11 @@ def style_events_table(display_df: pd.DataFrame):
         color = setup_color(value)
 
         if color == PASTEL_GREEN:
-            return "color: #166534; font-weight: 700;"
+            return "color: #3f624e; font-weight: 700;"
         if color == PASTEL_RED:
-            return "color: #991b1b; font-weight: 700;"
+            return "color: #875241; font-weight: 700;"
         if color == AMBER:
-            return "color: #92400e; font-weight: 700;"
+            return "color: #8a6a3e; font-weight: 700;"
 
         return "color: #374151; font-weight: 700;"
 
@@ -1302,7 +1478,7 @@ with st.sidebar:
     st.divider()
     st.header("Settings")
 
-    st.markdown("**Ticker**")
+    st.markdown("**Quick ticker**")
     button_cols = st.columns(2)
 
     for i, sym in enumerate(DEFAULT_SYMBOLS):
@@ -1310,19 +1486,7 @@ with st.sidebar:
             if st.button(sym, width="stretch"):
                 st.session_state["vr_symbol"] = sym
 
-    symbol_input = st.text_input("Ticker", key="vr_symbol")
-    symbol = normalize_symbol(symbol_input)
-
-    with st.expander("Window", expanded=True):
-        lookback_months = st.slider(
-            "Visible history",
-            min_value=6,
-            max_value=48,
-            value=18,
-            step=3,
-            format="%d months",
-        )
-
+    with st.expander("Signal window", expanded=True):
         percentile_window = st.slider(
             "Percentile window",
             min_value=60,
@@ -1342,12 +1506,6 @@ with st.sidebar:
         )
 
     with st.expander("Signal", expanded=True):
-        volume_mode = st.selectbox(
-            "Volume mode",
-            options=["Dollar volume", "Raw volume", "Turnover %"],
-            index=0,
-        )
-
         high_cutoff = st.slider(
             "Heavy threshold",
             min_value=75,
@@ -1394,13 +1552,29 @@ with st.sidebar:
 # TITLE
 # =============================================================================
 
-render_page_header(
-    PageHeader(
-        title=TITLE,
-        description=SUBTITLE,
-        eyebrow="ADFM Market Structure",
+st.title(TITLE)
+st.caption(SUBTITLE)
+
+control_col1, control_col2, control_col3 = st.columns([2.0, 1.0, 1.0])
+
+with control_col1:
+    symbol_input = st.text_input("Ticker symbol", key="vr_symbol")
+    symbol = normalize_symbol(symbol_input)
+
+with control_col2:
+    lookback_months = st.selectbox(
+        "Visible history",
+        options=list(range(6, 49, 3)),
+        index=4,
+        format_func=lambda months: f"{months} months",
     )
-)
+
+with control_col3:
+    volume_mode = st.selectbox(
+        "Volume mode",
+        options=["Dollar volume", "Raw volume", "Turnover %"],
+        index=0,
+    )
 
 
 # =============================================================================
@@ -1508,38 +1682,60 @@ else:
         f"{float(setup_row['20D Hit Rate']):.0f}% positive"
     )
 
-render_kpi_cards(
+setup_tone = "neutral"
+latest_setup_color = setup_color(latest_setup, latest_ret)
+if latest_setup_color == PASTEL_GREEN:
+    setup_tone = "positive"
+elif latest_setup_color == PASTEL_RED:
+    setup_tone = "negative"
+
+session_tone = "positive" if latest_ret > 0 else "negative" if latest_ret < 0 else "neutral"
+outcome_tone = "positive" if outcome_value.startswith("+") else "negative" if outcome_value.startswith("-") else "neutral"
+
+render_lens_header(symbol=symbol, volume_mode=vol_label)
+
+render_signal_banner(
+    "Sentiment",
+    f"{latest_setup} · {latest_state} participation · {fmt_pctl(latest_pctl)}th percentile · "
+    f"session {fmt_pct(latest_ret, 1)}.",
+    tone=setup_tone,
+)
+
+render_signal_banner(
+    "Now",
+    f"{symbol} closed at {fmt_price(float(latest.get('Close', np.nan)))} on {latest_date:%b %d, %Y}. "
+    f"Participation is {fmt_ratio(latest_ratio)} the prior {smooth_window}D median; "
+    f"close location is {fmt_pct(latest_close_loc * 100, 0, False)}.",
+    tone="neutral",
+)
+
+render_metric_grid(
     [
-        ("Current setup", latest_setup, f"{latest_state} participation"),
         (
             "Participation percentile",
             fmt_pctl(latest_pctl),
             f"vs prior {percentile_window} sessions",
+            setup_tone,
         ),
         (
             "Relative volume",
             fmt_ratio(latest_ratio),
             f"vs prior {smooth_window}D median",
+            setup_tone,
         ),
         (
             "Session move",
             fmt_pct(latest_ret, 1),
             f"close location {fmt_pct(latest_close_loc * 100, 0, False)}",
+            session_tone,
         ),
-        ("20D historical read", outcome_value, outcome_note),
         (
-            "Latest close",
-            fmt_price(float(latest.get("Close", np.nan))),
-            latest_date.strftime("%b %d, %Y"),
+            "20D historical read",
+            outcome_value,
+            outcome_note,
+            outcome_tone,
         ),
     ]
-)
-
-render_selection_note(
-    "Active read",
-    f"{symbol} is in a {latest_setup} setup. Participation ranks at the {fmt_pctl(latest_pctl)}th percentile "
-    f"of its own causal relative-volume history and closed {fmt_pct(latest_ret, 1)} on the session. "
-    f"Historical outcome statistics are descriptive, use non-overlapping future data only, and are shown when at least three matches exist.",
 )
 
 if incomplete_session_excluded:
@@ -1557,7 +1753,7 @@ if turnover_fallback:
 # CHART
 # =============================================================================
 
-render_section_header(
+render_volume_section(
     "Price and Participation Regime",
     f"Adjusted price with raw-price dollar volume where available · {lookback_months} visible months · thresholds {low_cutoff}/{high_cutoff} percentile.",
 )
@@ -1595,7 +1791,7 @@ tab_events, tab_outcomes, tab_method = st.tabs(
 )
 
 with tab_events:
-    render_section_header(
+    render_volume_section(
         "Recent Participation Extremes",
         "Heavy and quiet sessions in the active visible window, with realized forward outcomes when enough future sessions exist.",
     )
@@ -1616,7 +1812,7 @@ with tab_events:
         )
 
 with tab_outcomes:
-    render_section_header(
+    render_volume_section(
         "Setup Outcome Matrix",
         "Descriptive event study across the full loaded history. Rows require at least three fully realized 20-session outcomes.",
     )
