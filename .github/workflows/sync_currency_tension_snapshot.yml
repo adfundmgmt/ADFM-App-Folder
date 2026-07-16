@@ -8,12 +8,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sync-currency-tension-snapshot
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Download latest analyst snapshot
         shell: bash
@@ -40,21 +46,50 @@ jobs:
 
           mkdir -p data/cache
           for file in "${files[@]}"; do
-            curl --fail --silent --show-error --location \
+            tmp="data/cache/.${file}.tmp"
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --location \
+              --retry 5 \
+              --retry-all-errors \
+              --retry-delay 2 \
+              --connect-timeout 15 \
+              --max-time 120 \
               "$base_url/$file" \
-              --output "data/cache/$file"
+              --output "$tmp"
+            test -s "$tmp"
+            mv "$tmp" "data/cache/$file"
           done
 
       - name: Commit snapshot changes
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name "cte-sync-bot"
           git config user.email "cte-sync-bot@users.noreply.github.com"
           git add data/cache
+
           if git diff --cached --quiet; then
             echo "Currency tension snapshot is already current."
-          else
-            git commit -m "chore: sync currency tension snapshot [skip ci]"
-            git push
+            exit 0
           fi
 
+          git commit -m "chore: sync currency tension snapshot [skip ci]"
+
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "Unable to push snapshot after 3 attempts."
+              exit 1
+            fi
+
+            echo "Push raced with another main-branch update; rebasing and retrying ($attempt/3)."
+            git fetch origin main
+            git rebase origin/main
+            sleep $((attempt * 2))
+          done
