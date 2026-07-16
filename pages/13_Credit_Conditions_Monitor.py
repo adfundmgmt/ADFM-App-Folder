@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import warnings
@@ -11,8 +10,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.ui import render_footer
+from adfm_core.market_data import configure_yfinance_cache
+from adfm_core.regime_math import grouped_weighted_composite
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_kpi_cards,
+    render_page_header,
+    render_selection_note,
+)
 import yfinance as yf
+
+configure_yfinance_cache()
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 pd.options.mode.chained_assignment = None
@@ -115,6 +125,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+inject_explorer_style()
 
 
 # ============================== Defaults =================================
@@ -220,8 +231,34 @@ LINE_COLORS = [
     "#475569",
 ]
 
+CREDIT_SLEEVE_WEIGHTS = {
+    "Core Credit": 0.25,
+    "Loans": 0.15,
+    "Banks": 0.18,
+    "Global Beta": 0.12,
+    "Drawdown": 0.15,
+    "Volatility": 0.15,
+}
+
+CREDIT_COMPONENT_SLEEVES = {
+    "HYG/LQD": ("Core Credit", 1.30),
+    "JNK/LQD": ("Core Credit", 0.70),
+    "HYG/SHY": ("Core Credit", 1.00),
+    "LQD/TLT": ("Core Credit", 0.50),
+    "BKLN/LQD": ("Loans", 1.00),
+    "SRLN/LQD": ("Loans", 0.80),
+    "KRE/SPY": ("Banks", 1.20),
+    "XLF/SPY": ("Banks", 0.80),
+    "EMB/LQD": ("Global Beta", 1.00),
+    "IWM/SPY": ("Global Beta", 0.80),
+    "HYG Drawdown": ("Drawdown", 1.00),
+    "JNK Drawdown": ("Drawdown", 0.70),
+    "VIX": ("Volatility", 1.00),
+}
+
 
 # ============================== Specs ====================================
+
 
 @dataclass(frozen=True)
 class ProxySpec:
@@ -236,20 +273,44 @@ class RateGridSpec:
     name: str
     source: str
     source_type: str  # rates or market
-    mode: str         # diff or pct
-    risk_sign: int    # +1 means higher z is tighter; -1 means lower z is tighter
+    mode: str  # diff or pct
+    risk_sign: int  # +1 means higher z is tighter; -1 means lower z is tighter
 
 
 PROXY_SPECS: Tuple[ProxySpec, ...] = (
-    ProxySpec("HYG/LQD", "HYG", "LQD", "HY beta versus IG credit. Higher means credit sponsorship is improving."),
+    ProxySpec(
+        "HYG/LQD",
+        "HYG",
+        "LQD",
+        "HY beta versus IG credit. Higher means credit sponsorship is improving.",
+    ),
     ProxySpec("JNK/LQD", "JNK", "LQD", "Second HY confirmation versus IG credit."),
-    ProxySpec("BKLN/LQD", "BKLN", "LQD", "Leveraged loan sponsorship versus IG credit."),
+    ProxySpec(
+        "BKLN/LQD", "BKLN", "LQD", "Leveraged loan sponsorship versus IG credit."
+    ),
     ProxySpec("SRLN/LQD", "SRLN", "LQD", "Senior loan confirmation versus IG credit."),
     ProxySpec("EMB/LQD", "EMB", "LQD", "EM USD credit versus domestic IG credit."),
-    ProxySpec("KRE/SPY", "KRE", "SPY", "Regional banks versus the market. Lower exposes credit transmission risk."),
-    ProxySpec("XLF/SPY", "XLF", "SPY", "Financials versus the market. Lower means credit-sensitive equities are losing sponsorship."),
-    ProxySpec("IWM/SPY", "IWM", "SPY", "Small caps versus large caps. Lower can flag tighter domestic liquidity."),
-    ProxySpec("HYG/SHY", "HYG", "SHY", "HY credit versus front-end Treasury collateral."),
+    ProxySpec(
+        "KRE/SPY",
+        "KRE",
+        "SPY",
+        "Regional banks versus the market. Lower exposes credit transmission risk.",
+    ),
+    ProxySpec(
+        "XLF/SPY",
+        "XLF",
+        "SPY",
+        "Financials versus the market. Lower means credit-sensitive equities are losing sponsorship.",
+    ),
+    ProxySpec(
+        "IWM/SPY",
+        "IWM",
+        "SPY",
+        "Small caps versus large caps. Lower can flag tighter domestic liquidity.",
+    ),
+    ProxySpec(
+        "HYG/SHY", "HYG", "SHY", "HY credit versus front-end Treasury collateral."
+    ),
     ProxySpec("LQD/TLT", "LQD", "TLT", "IG credit versus pure duration."),
 )
 
@@ -318,10 +379,15 @@ yf_end = now + timedelta(days=1)
 hist_start = now - timedelta(days=365 * 25)
 
 lookback_days = LOOKBACK_DAYS[lookback_key]
-display_start = pd.Timestamp(now - timedelta(days=lookback_days)) if lookback_days else pd.Timestamp(datetime(now.year, 1, 1))
+display_start = (
+    pd.Timestamp(now - timedelta(days=lookback_days))
+    if lookback_days
+    else pd.Timestamp(datetime(now.year, 1, 1))
+)
 
 
 # ============================== Helpers ==================================
+
 
 def clean_ticker(ticker: str) -> str:
     return str(ticker).strip().upper()
@@ -346,7 +412,9 @@ def chunked(items: Sequence[str], size: int) -> Iterable[List[str]]:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd.DataFrame:
+def fetch_closes(
+    tickers: Tuple[str, ...], start: datetime, end: datetime
+) -> pd.DataFrame:
     ticker_list = unique_keep_order(tickers)
 
     if not ticker_list:
@@ -399,7 +467,9 @@ def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd
                     for field in ("Close", "Adj Close"):
                         try:
                             if (field, ticker) in raw.columns:
-                                out[ticker] = pd.to_numeric(raw[(field, ticker)], errors="coerce")
+                                out[ticker] = pd.to_numeric(
+                                    raw[(field, ticker)], errors="coerce"
+                                )
                                 break
                         except Exception:
                             continue
@@ -526,7 +596,9 @@ def fmt_move(raw_value: float, mode: str) -> str:
     return f"{raw_value:+.2f}"
 
 
-def first_valid_on_or_after(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Timestamp, float]:
+def first_valid_on_or_after(
+    series: pd.Series, ts: pd.Timestamp
+) -> Tuple[pd.Timestamp, float]:
     s = series.dropna()
 
     if s.empty:
@@ -540,7 +612,9 @@ def first_valid_on_or_after(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Tim
     return s.index[-1], float(s.iloc[-1])
 
 
-def last_valid_on_or_before(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Timestamp, float]:
+def last_valid_on_or_before(
+    series: pd.Series, ts: pd.Timestamp
+) -> Tuple[pd.Timestamp, float]:
     s = series.dropna()
 
     if s.empty:
@@ -679,7 +753,9 @@ def zscore(series: pd.Series, window: int = 252) -> float:
     return float((clean.iloc[-1] - clean.mean()) / std)
 
 
-def rolling_percentile_last(series: pd.Series, window: int = 252, min_periods: int = 60) -> pd.Series:
+def rolling_percentile_last(
+    series: pd.Series, window: int = 252, min_periods: int = 60
+) -> pd.Series:
     clean = series.astype(float).copy()
 
     def pct_rank(values: np.ndarray) -> float:
@@ -690,7 +766,9 @@ def rolling_percentile_last(series: pd.Series, window: int = 252, min_periods: i
 
         return float(s.rank(pct=True).iloc[-1])
 
-    return clean.rolling(window=window, min_periods=min_periods).apply(pct_rank, raw=True)
+    return clean.rolling(window=window, min_periods=min_periods).apply(
+        pct_rank, raw=True
+    )
 
 
 def rebase(series_or_df, base_date: pd.Timestamp, base: float = 100.0):
@@ -793,7 +871,9 @@ def apply_axis_style(fig: go.Figure) -> go.Figure:
     return fig
 
 
-def rolling_change_zscore(series: pd.Series, periods: int, mode: str = "diff") -> Tuple[float, float]:
+def rolling_change_zscore(
+    series: pd.Series, periods: int, mode: str = "diff"
+) -> Tuple[float, float]:
     clean = series.dropna().astype(float)
 
     if len(clean) <= periods + 30:
@@ -820,7 +900,9 @@ def rolling_change_zscore(series: pd.Series, periods: int, mode: str = "diff") -
     return current, z_val
 
 
-def rolling_abs_z_index(series_map: Dict[str, Tuple[pd.Series, str]], windows: Dict[str, int]) -> pd.Series:
+def rolling_abs_z_index(
+    series_map: Dict[str, Tuple[pd.Series, str]], windows: Dict[str, int]
+) -> pd.Series:
     component_frames = []
 
     for _, (series, mode) in series_map.items():
@@ -857,8 +939,13 @@ def rolling_abs_z_index(series_map: Dict[str, Tuple[pd.Series, str]], windows: D
 
 # ============================== Header ===================================
 
-st.title(TITLE)
-st.caption(SUBTITLE)
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=SUBTITLE,
+        eyebrow="ADFM Credit Regimes",
+    )
+)
 
 
 # ============================== Load data ================================
@@ -877,7 +964,7 @@ if missing_tickers:
     st.markdown(
         f"""
         <div class="warn-box">
-            <b>Partial load:</b> {', '.join(missing_tickers)} did not load. The dashboard is using available tickers and skipping unavailable signals automatically.
+            <b>Partial load:</b> {", ".join(missing_tickers)} did not load. The dashboard is using available tickers and skipping unavailable signals automatically.
         </div>
         """,
         unsafe_allow_html=True,
@@ -932,10 +1019,14 @@ for name in [
         stress_components[name] = -(pct * 2.0 - 1.0)
 
 if "HYG" in market.columns:
-    stress_components["HYG Drawdown"] = np.clip(-rolling_drawdown(market["HYG"], 126) * 8.0, -1.0, 1.0)
+    stress_components["HYG Drawdown"] = np.clip(
+        -rolling_drawdown(market["HYG"], 126) * 8.0, -1.0, 1.0
+    )
 
 if "JNK" in market.columns:
-    stress_components["JNK Drawdown"] = np.clip(-rolling_drawdown(market["JNK"], 126) * 8.0, -1.0, 1.0)
+    stress_components["JNK Drawdown"] = np.clip(
+        -rolling_drawdown(market["JNK"], 126) * 8.0, -1.0, 1.0
+    )
 
 if "^VIX" in market.columns:
     vix_pct = rolling_percentile_last(market["^VIX"], window=stress_window)
@@ -945,23 +1036,43 @@ stress_components = stress_components.dropna(how="all").ffill()
 
 if stress_components.empty:
     credit_score_ts = pd.Series(dtype=float)
+    credit_sleeves = pd.DataFrame()
     credit_score = 0.0
     current_components = pd.Series(dtype=float)
+    current_sleeves = pd.Series(dtype=float)
 else:
-    credit_score_ts = stress_components.mean(axis=1).dropna()
+    sleeve_specs = []
+    for component in stress_components.columns:
+        sleeve, weight = CREDIT_COMPONENT_SLEEVES.get(component, ("Other", 1.0))
+        sleeve_specs.append({"name": component, "category": sleeve, "weight": weight})
+    credit_sleeves, credit_score_ts, _, _ = grouped_weighted_composite(
+        stress_components,
+        sleeve_specs,
+        group_weights=CREDIT_SLEEVE_WEIGHTS,
+        min_groups=3,
+    )
+    credit_score_ts = credit_score_ts.dropna()
 
     if smoothing_days > 1:
         credit_score_ts = credit_score_ts.rolling(smoothing_days, min_periods=1).mean()
 
     credit_score = latest(credit_score_ts) if not credit_score_ts.empty else 0.0
-    current_components = stress_components.dropna(how="all").iloc[-1].dropna().sort_values(ascending=False)
+    current_components = (
+        stress_components.dropna(how="all")
+        .iloc[-1]
+        .dropna()
+        .sort_values(ascending=False)
+    )
+    current_sleeves = (
+        credit_sleeves.dropna(how="all").iloc[-1].dropna().sort_values(ascending=False)
+    )
 
 credit_regime = classify_credit(credit_score)
 
-if len(current_components) > 0:
-    tightening_count = int((current_components >= 0.25).sum())
-    easing_count = int((current_components <= -0.25).sum())
-    stress_breadth = tightening_count / len(current_components)
+if len(current_sleeves) > 0:
+    tightening_count = int((current_sleeves >= 0.25).sum())
+    easing_count = int((current_sleeves <= -0.25).sum())
+    stress_breadth = tightening_count / len(current_sleeves)
 else:
     tightening_count = 0
     easing_count = 0
@@ -970,11 +1081,18 @@ else:
 
 # ============================== Rates volatility index ====================
 
+
 def get_grid_series(spec: RateGridSpec) -> pd.Series:
     if spec.source_type == "rates":
-        return rates[spec.source] if spec.source in rates.columns else pd.Series(dtype=float)
+        return (
+            rates[spec.source]
+            if spec.source in rates.columns
+            else pd.Series(dtype=float)
+        )
 
-    return market[spec.source] if spec.source in market.columns else pd.Series(dtype=float)
+    return (
+        market[spec.source] if spec.source in market.columns else pd.Series(dtype=float)
+    )
 
 
 rate_vol_series_map: Dict[str, Tuple[pd.Series, str]] = {}
@@ -987,9 +1105,21 @@ for spec in RATE_GRID_SPECS:
 rates_vol_index = rolling_abs_z_index(rate_vol_series_map, TRADING_WINDOWS)
 rates_vol_score = latest(rates_vol_index) if not rates_vol_index.empty else np.nan
 
-rate_grid_z = pd.DataFrame(index=[s.name for s in RATE_GRID_SPECS], columns=list(TRADING_WINDOWS.keys()), dtype=float)
-rate_grid_text = pd.DataFrame(index=[s.name for s in RATE_GRID_SPECS], columns=list(TRADING_WINDOWS.keys()), dtype=object)
-rate_grid_hover = pd.DataFrame(index=[s.name for s in RATE_GRID_SPECS], columns=list(TRADING_WINDOWS.keys()), dtype=object)
+rate_grid_z = pd.DataFrame(
+    index=[s.name for s in RATE_GRID_SPECS],
+    columns=list(TRADING_WINDOWS.keys()),
+    dtype=float,
+)
+rate_grid_text = pd.DataFrame(
+    index=[s.name for s in RATE_GRID_SPECS],
+    columns=list(TRADING_WINDOWS.keys()),
+    dtype=object,
+)
+rate_grid_hover = pd.DataFrame(
+    index=[s.name for s in RATE_GRID_SPECS],
+    columns=list(TRADING_WINDOWS.keys()),
+    dtype=object,
+)
 
 for spec in RATE_GRID_SPECS:
     s = get_grid_series(spec)
@@ -999,7 +1129,9 @@ for spec in RATE_GRID_SPECS:
         signed_risk_z = z_val * spec.risk_sign if np.isfinite(z_val) else np.nan
 
         rate_grid_z.loc[spec.name, label] = signed_risk_z
-        rate_grid_text.loc[spec.name, label] = "" if not np.isfinite(signed_risk_z) else f"{signed_risk_z:.1f}"
+        rate_grid_text.loc[spec.name, label] = (
+            "" if not np.isfinite(signed_risk_z) else f"{signed_risk_z:.1f}"
+        )
         rate_grid_hover.loc[spec.name, label] = (
             f"Move: {fmt_move(raw_move, spec.mode)}<br>"
             f"Risk z-score: {fmt_num(signed_risk_z, 2)}"
@@ -1010,48 +1142,68 @@ for spec in RATE_GRID_SPECS:
 
 target = lookback_target(focus_window)
 
-hyg_lqd_move = pct_change_since(proxy["HYG/LQD"], target) * 100 if "HYG/LQD" in proxy.columns else np.nan
-kre_spy_move = pct_change_since(proxy["KRE/SPY"], target) * 100 if "KRE/SPY" in proxy.columns else np.nan
-bkl_lqd_move = pct_change_since(proxy["BKLN/LQD"], target) * 100 if "BKLN/LQD" in proxy.columns else np.nan
+hyg_lqd_move = (
+    pct_change_since(proxy["HYG/LQD"], target) * 100
+    if "HYG/LQD" in proxy.columns
+    else np.nan
+)
+kre_spy_move = (
+    pct_change_since(proxy["KRE/SPY"], target) * 100
+    if "KRE/SPY" in proxy.columns
+    else np.nan
+)
+bkl_lqd_move = (
+    pct_change_since(proxy["BKLN/LQD"], target) * 100
+    if "BKLN/LQD" in proxy.columns
+    else np.nan
+)
 vix_level = latest(market["^VIX"]) if "^VIX" in market.columns else np.nan
 vix_z = zscore(market["^VIX"], 252) if "^VIX" in market.columns else np.nan
 
-cols = st.columns(6)
-
-cols[0].metric(
-    "Credit Regime",
-    credit_regime,
-    f"Composite {credit_score:+.2f}",
+render_kpi_cards(
+    [
+        ("Credit regime", credit_regime, f"Sleeve composite {credit_score:+.2f}"),
+        (
+            "Stress breadth",
+            fmt_pct(stress_breadth * 100, 0, signed=False),
+            f"{tightening_count} sleeves tightening · {easing_count} easing",
+        ),
+        (
+            "HY vs IG",
+            fmt_pct(hyg_lqd_move, 1, signed=True),
+            f"HYG/LQD · {focus_window}",
+        ),
+        (
+            "Bank beta",
+            fmt_pct(kre_spy_move, 1, signed=True),
+            f"KRE/SPY · {focus_window}",
+        ),
+        (
+            "Loan appetite",
+            fmt_pct(bkl_lqd_move, 1, signed=True),
+            f"BKLN/LQD · {focus_window}",
+        ),
+        (
+            "Rates vol index",
+            fmt_num(rates_vol_score, 2),
+            f"VIX {fmt_price(vix_level)} · z {fmt_num(vix_z, 2)}",
+        ),
+    ]
 )
 
-cols[1].metric(
-    "Stress Breadth",
-    fmt_pct(stress_breadth * 100, 0, signed=False),
-    f"{tightening_count} tightening / {easing_count} easing",
-)
+if credit_score >= 0.60:
+    top_read = "Credit proxies are in stress mode; require repair in HY, banks, and volatility before adding cyclical risk."
+elif credit_score >= 0.25:
+    top_read = "Credit is tightening. Equity strength needs confirmation from HYG/LQD, loans, and bank beta."
+elif credit_score <= -0.25:
+    top_read = "Credit remains supportive. Broad de-risking is not confirmed unless HY and bank sleeves roll over together."
+else:
+    top_read = "Credit is mixed. The next useful signal is synchronized movement across HY, loans, banks, and volatility."
 
-cols[2].metric(
-    "HY vs IG",
-    fmt_pct(hyg_lqd_move, 1, signed=True),
-    f"HYG/LQD {focus_window}",
-)
-
-cols[3].metric(
-    "Bank Beta",
-    fmt_pct(kre_spy_move, 1, signed=True),
-    f"KRE/SPY {focus_window}",
-)
-
-cols[4].metric(
-    "Loan Appetite",
-    fmt_pct(bkl_lqd_move, 1, signed=True),
-    f"BKLN/LQD {focus_window}",
-)
-
-cols[5].metric(
-    "Rates Vol Index",
-    fmt_num(rates_vol_score, 2),
-    f"VIX {fmt_price(vix_level)} | z {fmt_num(vix_z, 2)}",
+render_selection_note(
+    "Active credit read",
+    f"{top_read} The composite first normalizes related proxies inside six sleeves, then weights the sleeves, "
+    f"so adding a second HY ETF no longer gives credit beta an unintended extra vote. Latest close: {latest_date(market)}.",
 )
 
 
@@ -1060,7 +1212,9 @@ cols[5].metric(
 top_left, top_right = st.columns([1.15, 0.85])
 
 with top_left:
-    st.markdown('<div class="section-title">Credit Stress Pulse</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">Credit Stress Pulse</div>', unsafe_allow_html=True
+    )
     st.markdown(
         '<div class="section-subtitle">Composite of credit, bank, loan, EM, drawdown, and volatility signals. Higher means tighter credit conditions.</div>',
         unsafe_allow_html=True,
@@ -1074,9 +1228,19 @@ with top_left:
             view = credit_score_ts
 
         fig = go.Figure()
-        fig.add_hrect(y0=0.60, y1=1.05, fillcolor=COLORS["soft_red"], opacity=0.45, line_width=0)
-        fig.add_hrect(y0=0.25, y1=0.60, fillcolor=COLORS["soft_amber"], opacity=0.45, line_width=0)
-        fig.add_hrect(y0=-1.05, y1=-0.25, fillcolor=COLORS["soft_green"], opacity=0.35, line_width=0)
+        fig.add_hrect(
+            y0=0.60, y1=1.05, fillcolor=COLORS["soft_red"], opacity=0.45, line_width=0
+        )
+        fig.add_hrect(
+            y0=0.25, y1=0.60, fillcolor=COLORS["soft_amber"], opacity=0.45, line_width=0
+        )
+        fig.add_hrect(
+            y0=-1.05,
+            y1=-0.25,
+            fillcolor=COLORS["soft_green"],
+            opacity=0.35,
+            line_width=0,
+        )
 
         fig.add_trace(
             go.Scatter(
@@ -1091,31 +1255,35 @@ with top_left:
         fig.add_hline(y=0, line_width=1, line_color=COLORS["grid"])
         fig.add_hline(y=0.60, line_width=1, line_dash="dot", line_color=COLORS["red"])
         fig.add_hline(y=0.25, line_width=1, line_dash="dot", line_color=COLORS["amber"])
-        fig.add_hline(y=-0.25, line_width=1, line_dash="dot", line_color=COLORS["green"])
+        fig.add_hline(
+            y=-0.25, line_width=1, line_dash="dot", line_color=COLORS["green"]
+        )
 
         fig.update_layout(**chart_layout(height=395, showlegend=False))
         fig.update_yaxes(title_text="Stress score", range=[-1.05, 1.05])
         apply_axis_style(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 with top_right:
-    st.markdown('<div class="section-title">Pressure Map</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="section-subtitle">Current component scores. Positive bars are tightening. Negative bars are easing.</div>',
+        '<div class="section-title">Sleeve Pressure Map</div>', unsafe_allow_html=True
+    )
+    st.markdown(
+        '<div class="section-subtitle">Current sleeve scores after normalizing related proxies within each sleeve. Positive bars are tightening; negative bars are easing.</div>',
         unsafe_allow_html=True,
     )
 
-    if current_components.empty:
+    if current_sleeves.empty:
         st.info("Pressure map unavailable.")
     else:
-        bar_df = current_components.sort_values(ascending=True).reset_index()
-        bar_df.columns = ["Signal", "Stress"]
+        bar_df = current_sleeves.sort_values(ascending=True).reset_index()
+        bar_df.columns = ["Sleeve", "Stress"]
 
         fig = go.Figure()
         fig.add_trace(
             go.Bar(
                 x=bar_df["Stress"],
-                y=bar_df["Signal"],
+                y=bar_df["Sleeve"],
                 orientation="h",
                 marker=dict(
                     color=[stress_color(v) for v in bar_df["Stress"]],
@@ -1129,12 +1297,14 @@ with top_right:
         fig.add_vline(x=0, line_width=1, line_color=COLORS["grid"])
         fig.add_vline(x=0.25, line_width=1, line_dash="dot", line_color=COLORS["amber"])
         fig.add_vline(x=0.60, line_width=1, line_dash="dot", line_color=COLORS["red"])
-        fig.add_vline(x=-0.25, line_width=1, line_dash="dot", line_color=COLORS["green"])
+        fig.add_vline(
+            x=-0.25, line_width=1, line_dash="dot", line_color=COLORS["green"]
+        )
 
         fig.update_layout(**chart_layout(height=395, showlegend=False))
         fig.update_xaxes(title_text="Stress score", range=[-1.05, 1.05])
         apply_axis_style(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ============================== Rates module ==============================
@@ -1142,7 +1312,10 @@ with top_right:
 rate_left, rate_right = st.columns([1.0, 1.0])
 
 with rate_left:
-    st.markdown('<div class="section-title">Rates Volatility Index</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">Rates Volatility Index</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         '<div class="section-subtitle">Average absolute z-score of trailing 1M, 3M, 6M, 1Y, 3Y, and 5Y moves across rates, curve, duration, and VIX proxies.</div>',
         unsafe_allow_html=True,
@@ -1201,17 +1374,24 @@ with rate_left:
                 )
             )
 
-            fig.add_hline(y=1.0, line_width=1, line_dash="dot", line_color=COLORS["amber"])
-            fig.add_hline(y=1.5, line_width=1, line_dash="dot", line_color=COLORS["red"])
+            fig.add_hline(
+                y=1.0, line_width=1, line_dash="dot", line_color=COLORS["amber"]
+            )
+            fig.add_hline(
+                y=1.5, line_width=1, line_dash="dot", line_color=COLORS["red"]
+            )
             fig.add_hline(y=0.0, line_width=1, line_color=COLORS["grid"])
 
             fig.update_layout(**chart_layout(height=400, showlegend=False))
             fig.update_yaxes(title_text="Average |z-score|", range=[y_bottom, y_top])
             apply_axis_style(fig)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 with rate_right:
-    st.markdown('<div class="section-title">Rates / Volatility Regime Grid</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">Rates / Volatility Regime Grid</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         '<div class="section-subtitle">Risk-adjusted trailing move z-scores. Positive cells mean the move is tightening versus its own history. Negative cells mean easing.</div>',
         unsafe_allow_html=True,
@@ -1246,7 +1426,7 @@ with rate_right:
         fig.update_layout(**chart_layout(height=400, showlegend=False))
         fig.update_xaxes(side="top", tickfont=dict(color=COLORS["slate"]))
         fig.update_yaxes(tickfont=dict(color=COLORS["slate"]))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ============================== Confirmation charts =======================
@@ -1254,13 +1434,19 @@ with rate_right:
 conf_left, conf_right = st.columns([1.0, 1.0])
 
 with conf_left:
-    st.markdown('<div class="section-title">Credit Risk Appetite</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">Credit Risk Appetite</div>', unsafe_allow_html=True
+    )
     st.markdown(
         '<div class="section-subtitle">Relative proxy basket rebased to 100. Rising lines generally indicate improving credit sponsorship.</div>',
         unsafe_allow_html=True,
     )
 
-    proxy_cols = [c for c in ["HYG/LQD", "JNK/LQD", "BKLN/LQD", "EMB/LQD", "KRE/SPY", "XLF/SPY"] if c in proxy.columns]
+    proxy_cols = [
+        c
+        for c in ["HYG/LQD", "JNK/LQD", "BKLN/LQD", "EMB/LQD", "KRE/SPY", "XLF/SPY"]
+        if c in proxy.columns
+    ]
 
     if not proxy_cols:
         st.info("Relative credit proxy data unavailable.")
@@ -1285,16 +1471,22 @@ with conf_left:
         fig.update_layout(**chart_layout(height=385, showlegend=True))
         fig.update_yaxes(title_text="Rebased to 100")
         apply_axis_style(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 with conf_right:
-    st.markdown('<div class="section-title">Macro Confirmation</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">Macro Confirmation</div>', unsafe_allow_html=True
+    )
     st.markdown(
         '<div class="section-subtitle">Cross-asset confirmation around credit: duration, dollar, gold, equities, and small caps.</div>',
         unsafe_allow_html=True,
     )
 
-    macro_cols = [c for c in ["SPY", "QQQ", "IWM", "TLT", "IEF", "UUP", "GLD"] if c in market.columns]
+    macro_cols = [
+        c
+        for c in ["SPY", "QQQ", "IWM", "TLT", "IEF", "UUP", "GLD"]
+        if c in market.columns
+    ]
 
     if not macro_cols:
         st.info("Macro confirmation data unavailable.")
@@ -1320,7 +1512,7 @@ with conf_right:
         fig.update_layout(**chart_layout(height=385, showlegend=True))
         fig.update_yaxes(title_text="Rebased to 100")
         apply_axis_style(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ============================== Credit tape ===============================
@@ -1335,7 +1527,9 @@ tape_rows: List[Dict[str, object]] = []
 
 
 def add_ratio_tape(name: str, series: pd.Series, read: str) -> None:
-    current_stress = latest(stress_components[name]) if name in stress_components.columns else np.nan
+    current_stress = (
+        latest(stress_components[name]) if name in stress_components.columns else np.nan
+    )
 
     tape_rows.append(
         {
@@ -1356,7 +1550,11 @@ def add_ratio_tape(name: str, series: pd.Series, read: str) -> None:
 
 def add_price_tape(ticker: str, series: pd.Series, read: str) -> None:
     drawdown_name = f"{ticker} Drawdown"
-    current_stress = latest(stress_components[drawdown_name]) if drawdown_name in stress_components.columns else np.nan
+    current_stress = (
+        latest(stress_components[drawdown_name])
+        if drawdown_name in stress_components.columns
+        else np.nan
+    )
 
     tape_rows.append(
         {
@@ -1369,13 +1567,17 @@ def add_price_tape(ticker: str, series: pd.Series, read: str) -> None:
             "YTD": fmt_pct(pct_change_since(series, lookback_target("YTD")) * 100),
             "Z": fmt_num(zscore(series, 252), 2),
             "Stress": fmt_num(current_stress, 2),
-            "Regime": classify_component(current_stress) if np.isfinite(current_stress) else "Price",
+            "Regime": classify_component(current_stress)
+            if np.isfinite(current_stress)
+            else "Price",
             "Read-through": read,
         }
     )
 
 
-def add_absolute_tape(name: str, series: pd.Series, latest_formatter, read: str) -> None:
+def add_absolute_tape(
+    name: str, series: pd.Series, latest_formatter, read: str
+) -> None:
     tape_rows.append(
         {
             "Signal": name,
@@ -1386,8 +1588,15 @@ def add_absolute_tape(name: str, series: pd.Series, latest_formatter, read: str)
             "6M": fmt_num(absolute_change_since(series, lookback_target("6M")), 2),
             "YTD": fmt_num(absolute_change_since(series, lookback_target("YTD")), 2),
             "Z": fmt_num(zscore(series, 252), 2),
-            "Stress": fmt_num(latest(stress_components[name]) if name in stress_components.columns else np.nan, 2),
-            "Regime": classify_component(latest(stress_components[name])) if name in stress_components.columns else "Macro",
+            "Stress": fmt_num(
+                latest(stress_components[name])
+                if name in stress_components.columns
+                else np.nan,
+                2,
+            ),
+            "Regime": classify_component(latest(stress_components[name]))
+            if name in stress_components.columns
+            else "Macro",
             "Read-through": read,
         }
     )
@@ -1406,35 +1615,63 @@ for name in [
     "LQD/TLT",
 ]:
     if name in proxy.columns:
-        add_ratio_tape(name, proxy[name], proxy_reads.get(name, "Relative credit proxy."))
+        add_ratio_tape(
+            name, proxy[name], proxy_reads.get(name, "Relative credit proxy.")
+        )
 
 for ticker, read in [
     ("HYG", "HY ETF price. Persistent drawdown is a market-implied spread warning."),
     ("JNK", "Second high-yield ETF confirmation."),
-    ("LQD", "IG credit price. Useful for separating credit and duration stress imperfectly."),
+    (
+        "LQD",
+        "IG credit price. Useful for separating credit and duration stress imperfectly.",
+    ),
     ("BKLN", "Loan ETF price. Tracks floating-rate credit appetite."),
     ("EMB", "EM hard-currency debt price. Flags global credit pressure."),
-    ("KRE", "Regional bank equity proxy. Often leads tightening in credit transmission."),
+    (
+        "KRE",
+        "Regional bank equity proxy. Often leads tightening in credit transmission.",
+    ),
     ("SPY", "Equity beta confirmation."),
 ]:
     if ticker in market.columns:
         add_price_tape(ticker, market[ticker], read)
 
 if "^VIX" in market.columns:
-    add_absolute_tape("VIX", market["^VIX"], fmt_price, "Equity volatility. Higher means tighter risk appetite.")
+    add_absolute_tape(
+        "VIX",
+        market["^VIX"],
+        fmt_price,
+        "Equity volatility. Higher means tighter risk appetite.",
+    )
 
 if "10Y Yield" in rates.columns:
-    add_absolute_tape("10Y Yield", rates["10Y Yield"], lambda x: f"{x:.2f}%" if np.isfinite(x) else "n/a", "Rates pressure. Move shown in percentage points.")
+    add_absolute_tape(
+        "10Y Yield",
+        rates["10Y Yield"],
+        lambda x: f"{x:.2f}%" if np.isfinite(x) else "n/a",
+        "Rates pressure. Move shown in percentage points.",
+    )
 
 if "3M Bill Yield" in rates.columns:
-    add_absolute_tape("3M Bill Yield", rates["3M Bill Yield"], lambda x: f"{x:.2f}%" if np.isfinite(x) else "n/a", "Front-end policy rate pressure. Move shown in percentage points.")
+    add_absolute_tape(
+        "3M Bill Yield",
+        rates["3M Bill Yield"],
+        lambda x: f"{x:.2f}%" if np.isfinite(x) else "n/a",
+        "Front-end policy rate pressure. Move shown in percentage points.",
+    )
 
 if "10Y-3M Slope" in rates.columns:
-    add_absolute_tape("10Y-3M Slope", rates["10Y-3M Slope"], lambda x: f"{x:.2f}%" if np.isfinite(x) else "n/a", "Curve slope. Move shown in percentage points.")
+    add_absolute_tape(
+        "10Y-3M Slope",
+        rates["10Y-3M Slope"],
+        lambda x: f"{x:.2f}%" if np.isfinite(x) else "n/a",
+        "Curve slope. Move shown in percentage points.",
+    )
 
 if tape_rows:
     tape = pd.DataFrame(tape_rows)
-    st.dataframe(tape, use_container_width=True, hide_index=True, height=480)
+    st.dataframe(tape, width="stretch", hide_index=True, height=480)
 else:
     st.info("No tape signals loaded.")
 
@@ -1466,7 +1703,7 @@ st.markdown(
     f"""
     <div class="note-box">
         <b>Read-through:</b> {readthrough}<br>
-        <b>Framework:</b> This is a market-implied monitor. Outputs are proxy signals from liquid instruments rather than cash OAS series.<br>
+        <b>Framework:</b> This is a market-implied monitor. Related proxies are normalized within sleeves before the sleeve-weighted composite is calculated; outputs remain liquid-instrument proxies rather than cash OAS series.<br>
         <b>Latest close:</b> {latest_date(market)}
     </div>
     """,
@@ -1479,27 +1716,30 @@ st.markdown(
 if show_raw:
     with st.expander("Raw Close Data", expanded=False):
         renamed_market = market.rename(columns=DISPLAY_NAMES)
-        st.dataframe(renamed_market.tail(500), use_container_width=True)
+        st.dataframe(renamed_market.tail(500), width="stretch")
 
     with st.expander("Derived Proxy Data", expanded=False):
         if proxy.empty:
             st.info("No proxy data calculated.")
         else:
-            st.dataframe(proxy.tail(500), use_container_width=True)
+            st.dataframe(proxy.tail(500), width="stretch")
 
     with st.expander("Stress Components", expanded=False):
         if stress_components.empty:
             st.info("No stress components calculated.")
         else:
-            st.dataframe(stress_components.tail(500), use_container_width=True)
+            st.dataframe(stress_components.tail(500), width="stretch")
 
     with st.expander("Rates / Volatility Grid Data", expanded=False):
-        st.dataframe(rate_grid_z, use_container_width=True)
+        st.dataframe(rate_grid_z, width="stretch")
 
     with st.expander("Rates Volatility Index", expanded=False):
         if rates_vol_index.empty:
             st.info("No rates volatility index calculated.")
         else:
-            st.dataframe(rates_vol_index.rename("Rates Vol Index").to_frame().tail(500), use_container_width=True)
+            st.dataframe(
+                rates_vol_index.rename("Rates Vol Index").to_frame().tail(500),
+                width="stretch",
+            )
 
 render_footer()
