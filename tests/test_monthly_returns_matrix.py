@@ -159,6 +159,8 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
         self.assertIn("build_monthly_returns_frame", page)
         self.assertIn("render_monthly_returns_matrix", page)
         self.assertNotIn('selection_mode=["single-row", "single-column"]', page)
+        self.assertIn('filter_table["year"].astype(int).isin(matrix_years)', page)
+        self.assertNotIn("pd.concat([filtered, current_observation])", page)
         self.assertNotIn('st.metric(\n        "Strongest month"', page)
         self.assertNotIn('st.metric(\n        "Weakest month"', page)
         self.assertIn("Global lookback", page)
