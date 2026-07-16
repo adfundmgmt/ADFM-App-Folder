@@ -66,7 +66,7 @@ def _sparkline_svg(monthly_returns: Iterable[object], positive: bool) -> str:
     hi = float(np.nanmax(cumulative))
     span = max(hi - lo, 1e-9)
     y = height - pad - ((cumulative - lo) / span) * (height - 2.0 * pad)
-    points = " ".join(f"{px:.1f},{py:.1f}" for px, py in zip(x, y))
+    points = " ".join(f"{px:.1f},{py:.1f}" for px, py in zip(x, y, strict=True))
     stroke = "#4f765f" if positive else "#a06452"
     return (
         f"<svg class='monthly-spark' viewBox='0 0 {int(width)} {int(height)}' "
