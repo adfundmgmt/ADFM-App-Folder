@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
@@ -16,7 +17,6 @@ from adfm_core.ui import (
     inject_explorer_style,
     render_footer,
     render_page_header,
-    render_selection_note,
 )
 
 configure_yfinance_cache()
@@ -109,20 +109,21 @@ SCORE_COLUMNS = ["1D", "1W", "1M", "3M", "YTD", "Trend", "Composite"]
 PALETTE = {
     "bg": "#ffffff",
     "card": "#ffffff",
-    "border": "#d9dee7",
+    "border": "#dfe3e8",
     "text": "#111827",
     "muted": "#6b7280",
     "faint": "#94a3b8",
     "grid": "#e5e7eb",
-    "green": "#1f7a5a",
-    "red": "#a63d40",
-    "amber": "#b7791f",
-    "blue": "#315f95",
-    "purple": "#6d4aff",
+    "green": "#4f765f",
+    "red": "#a06452",
+    "amber": "#9a733c",
+    "blue": "#526f8f",
+    "purple": "#75668f",
     "slate": "#334155",
 }
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
+inject_explorer_style()
 
 
 # =============================================================================
@@ -170,29 +171,96 @@ st.markdown(
             line-height: 1.38;
         }
         .data-status {
-            background: #ffffff;
-            border: 1px solid #d9dee7;
-            border-radius: 10px;
-            padding: 9px 12px;
-            color: #475569;
-            font-size: 0.78rem;
-            margin-bottom: 0.75rem;
+            color: #64748b;
+            font-size: 0.73rem;
+            line-height: 1.4;
+            margin: -0.18rem 0 0.58rem;
         }
-        .brief-grid {
+        .regime-banner {
             display: grid;
-            grid-template-columns: 1.25fr 1fr 1fr 1fr;
-            gap: 0.72rem;
-            margin-bottom: 0.82rem;
+            grid-template-columns: minmax(0, 1.45fr) minmax(250px, 0.85fr);
+            gap: 1rem;
+            align-items: center;
+            border: 1px solid rgba(100, 116, 139, 0.18);
+            border-left: 4px solid var(--regime-accent, #526f8f);
+            border-radius: 8px;
+            background: rgba(100, 116, 139, 0.035);
+            padding: 14px 16px;
+            margin: 0.35rem 0 0.62rem;
         }
-        .brief-card {
-            background: #ffffff;
-            border: 1px solid #d9dee7;
-            border-radius: 13px;
-            padding: 13px 15px;
-            min-height: 118px;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+        .regime-kicker {
+            font-size: 0.63rem;
+            font-weight: 850;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: var(--regime-accent, #526f8f);
+            margin-bottom: 0.34rem;
         }
-        .brief-label, .pillar-label, .note-label {
+        .regime-title {
+            font-size: 1.34rem;
+            font-weight: 850;
+            color: #111827;
+            letter-spacing: -0.025em;
+            line-height: 1.15;
+            margin-bottom: 0.28rem;
+        }
+        .regime-copy {
+            font-size: 0.82rem;
+            color: #475569;
+            line-height: 1.42;
+        }
+        .regime-callout {
+            border-left: 1px solid rgba(100, 116, 139, 0.18);
+            padding-left: 1rem;
+        }
+        .regime-callout-label {
+            font-size: 0.61rem;
+            font-weight: 850;
+            letter-spacing: 0.13em;
+            text-transform: uppercase;
+            color: #64748b;
+            margin-bottom: 0.26rem;
+        }
+        .regime-callout-value {
+            font-size: 1rem;
+            font-weight: 800;
+            color: #111827;
+            margin-bottom: 0.24rem;
+        }
+        .metric-strip {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            border: 1px solid rgba(100, 116, 139, 0.18);
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 0.55rem 0 0.82rem;
+        }
+        .metric-cell {
+            min-height: 76px;
+            padding: 10px 13px 11px;
+            border-right: 1px solid rgba(100, 116, 139, 0.15);
+        }
+        .metric-cell:last-child { border-right: 0; }
+        .metric-label {
+            font-size: 0.60rem;
+            letter-spacing: 0.13em;
+            text-transform: uppercase;
+            color: #64748b;
+            margin-bottom: 5px;
+        }
+        .metric-value {
+            font-size: 1.08rem;
+            line-height: 1;
+            font-weight: 820;
+            color: #111827;
+        }
+        .metric-note {
+            font-size: 0.67rem;
+            line-height: 1.27;
+            color: #64748b;
+            margin-top: 5px;
+        }
+        .pillar-label, .note-label {
             font-size: 0.67rem;
             font-weight: 850;
             letter-spacing: 0.09em;
@@ -200,31 +268,21 @@ st.markdown(
             color: #6b7280;
             margin-bottom: 0.42rem;
         }
-        .brief-value {
-            font-size: 1.13rem;
-            font-weight: 850;
-            color: #111827;
-            line-height: 1.18;
-            margin-bottom: 0.44rem;
-        }
-        .brief-copy {
-            font-size: 0.80rem;
-            color: #475569;
-            line-height: 1.42;
-        }
         .pillar-grid {
             display: grid;
-            grid-template-columns: repeat(7, minmax(0, 1fr));
-            gap: 0.62rem;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            border: 1px solid rgba(100, 116, 139, 0.18);
+            border-radius: 8px;
+            overflow: hidden;
             margin-bottom: 0.82rem;
         }
         .pillar-card {
             background: #ffffff;
-            border: 1px solid #d9dee7;
-            border-radius: 12px;
+            border-right: 1px solid rgba(100, 116, 139, 0.15);
             padding: 11px 12px;
-            min-height: 91px;
+            min-height: 84px;
         }
+        .pillar-card:last-child { border-right: 0; }
         .pillar-value {
             font-size: 1.18rem;
             font-weight: 850;
@@ -276,7 +334,8 @@ st.markdown(
         }
         div[data-testid="stPlotlyChart"] {
             background: #ffffff;
-            border-radius: 12px;
+            border-radius: 8px;
+            overflow: hidden;
         }
         .stTabs [data-baseweb="tab-list"] {
             gap: 0.5rem;
@@ -286,17 +345,24 @@ st.markdown(
             padding: 0 0.9rem;
         }
         @media (max-width: 1250px) {
-            .brief-grid { grid-template-columns: 1fr 1fr; }
-            .pillar-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .metric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .metric-cell:nth-child(3) { border-right: 0; }
+            .metric-cell:nth-child(-n+3) { border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
+            .pillar-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .pillar-card:nth-child(3) { border-right: 0; }
+            .pillar-card:nth-child(-n+3) { border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
         }
         @media (max-width: 780px) {
-            .brief-grid, .pillar-grid { grid-template-columns: 1fr; }
+            .regime-banner { grid-template-columns: 1fr; }
+            .regime-callout { border-left: 0; border-top: 1px solid rgba(100, 116, 139, 0.18); padding: 0.8rem 0 0; }
+            .metric-strip, .pillar-grid { grid-template-columns: 1fr; }
+            .metric-cell, .pillar-card { border-right: 0; border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
+            .metric-cell:last-child, .pillar-card:last-child { border-bottom: 0; }
         }
     </style>
     """,
     unsafe_allow_html=True,
 )
-inject_explorer_style()
 
 
 # =============================================================================
@@ -975,6 +1041,114 @@ def build_decision_notes(
     }
 
 
+def build_regime_diagnostics(
+    scores: Dict[str, float], signals: pd.DataFrame
+) -> Dict[str, float | str]:
+    """Summarize conviction, agreement, and near-term regime momentum."""
+    composite = normalize_score(scores.get("Composite", 0.0))
+    pillar_values = np.array(
+        [
+            float(value)
+            for key, value in scores.items()
+            if key != "Composite" and is_valid(value)
+        ],
+        dtype=float,
+    )
+    direction = 1.0 if composite >= 0 else -1.0
+
+    if pillar_values.size:
+        pillar_alignment = float(np.mean(direction * pillar_values >= 0.05))
+        dispersion = float(np.std(pillar_values))
+        coherence = 1.0 - min(dispersion / 0.75, 1.0)
+    else:
+        pillar_alignment = 0.0
+        dispersion = np.nan
+        coherence = 0.0
+
+    signal_values = (
+        pd.to_numeric(signals.get("Composite"), errors="coerce").dropna()
+        if not signals.empty and "Composite" in signals
+        else pd.Series(dtype=float)
+    )
+    signal_alignment = (
+        float(np.mean(direction * signal_values.to_numpy(dtype=float) >= 0.10))
+        if not signal_values.empty
+        else 0.0
+    )
+
+    magnitude = min(abs(composite) / 0.55, 1.0)
+    confidence = float(
+        np.clip(
+            100.0
+            * (
+                0.30 * magnitude
+                + 0.25 * pillar_alignment
+                + 0.30 * signal_alignment
+                + 0.15 * coherence
+            ),
+            0.0,
+            100.0,
+        )
+    )
+    if confidence >= 70:
+        confidence_label = "High conviction"
+    elif confidence >= 50:
+        confidence_label = "Moderate conviction"
+    else:
+        confidence_label = "Low conviction"
+
+    if not signals.empty and {"1W", "3M"}.issubset(signals.columns):
+        impulse_values = (
+            pd.to_numeric(signals["1W"], errors="coerce")
+            - pd.to_numeric(signals["3M"], errors="coerce")
+        ).dropna()
+        impulse = float(impulse_values.mean()) if not impulse_values.empty else np.nan
+    else:
+        impulse = np.nan
+
+    if not is_valid(impulse):
+        impulse_label = "Unavailable"
+    elif float(impulse) >= 0.12:
+        impulse_label = "Improving"
+    elif float(impulse) <= -0.12:
+        impulse_label = "Deteriorating"
+    else:
+        impulse_label = "Stable"
+
+    directional_breadth = (
+        float(np.mean(direction * signal_values.to_numpy(dtype=float) > 0.20) * 100.0)
+        if not signal_values.empty
+        else np.nan
+    )
+
+    return {
+        "confidence": confidence,
+        "confidence_label": confidence_label,
+        "pillar_alignment": pillar_alignment * 100.0,
+        "signal_alignment": signal_alignment * 100.0,
+        "dispersion": dispersion,
+        "impulse": impulse,
+        "impulse_label": impulse_label,
+        "directional_breadth": directional_breadth,
+    }
+
+
+def render_metric_strip(cards: List[Tuple[str, str, str, str]]) -> None:
+    body: List[str] = []
+    for label, value, note, color in cards:
+        body.append(
+            "<div class='metric-cell'>"
+            f"<div class='metric-label'>{escape(label)}</div>"
+            f"<div class='metric-value' style='color:{escape(color)}'>{escape(value)}</div>"
+            f"<div class='metric-note'>{escape(note)}</div>"
+            "</div>"
+        )
+    st.markdown(
+        "<div class='metric-strip'>" + "".join(body) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 # =============================================================================
 # TABLES
 # =============================================================================
@@ -1139,11 +1313,11 @@ def signal_heatmap(signals: pd.DataFrame) -> go.Figure:
             zmax=1,
             zmid=0,
             colorscale=[
-                [0.00, "#8f2d35"],
-                [0.35, "#d8a092"],
-                [0.50, "#f2f0ea"],
-                [0.65, "#93c7b4"],
-                [1.00, "#1f7a5a"],
+                [0.00, "#875241"],
+                [0.35, "#d7b4a8"],
+                [0.50, "#f4f2ee"],
+                [0.65, "#b7cec0"],
+                [1.00, "#4f765f"],
             ],
             text=text,
             texttemplate="%{text}",
@@ -1160,6 +1334,66 @@ def signal_heatmap(signals: pd.DataFrame) -> go.Figure:
         paper_bgcolor="white",
         font=dict(color="#334155", size=11),
     )
+    return fig
+
+
+def signal_impulse_chart(signals: pd.DataFrame) -> go.Figure:
+    """Rank the near-term change in each signal versus its medium-term regime."""
+    if signals.empty or not {"1W", "3M"}.issubset(signals.columns):
+        return apply_layout(go.Figure(), height=340, showlegend=False)
+
+    frame = signals[["Group", "Signal", "1W", "3M"]].copy()
+    frame["1W"] = pd.to_numeric(frame["1W"], errors="coerce")
+    frame["3M"] = pd.to_numeric(frame["3M"], errors="coerce")
+    frame["Impulse"] = frame["1W"] - frame["3M"]
+    frame = frame.dropna(subset=["Impulse"])
+    if len(frame) > 10:
+        keep = frame["Impulse"].abs().nlargest(10).index
+        frame = frame.loc[keep]
+    frame = frame.sort_values("Impulse")
+    if frame.empty:
+        return apply_layout(go.Figure(), height=340, showlegend=False)
+
+    colors = [score_color(value) for value in frame["Impulse"]]
+    max_abs = max(float(frame["Impulse"].abs().max()), 0.25)
+    axis_limit = min(2.0, max_abs * 1.22)
+
+    fig = go.Figure(
+        go.Bar(
+            x=frame["Impulse"],
+            y=frame["Signal"],
+            orientation="h",
+            marker_color=colors,
+            text=[signed_num_fmt(value, 2) for value in frame["Impulse"]],
+            textposition="outside",
+            cliponaxis=False,
+            customdata=np.column_stack(
+                [frame["Group"], frame["1W"], frame["3M"]]
+            ),
+            hovertemplate=(
+                "<b>%{y}</b><br>%{customdata[0]}"
+                "<br>1W score: %{customdata[1]:+.2f}"
+                "<br>3M score: %{customdata[2]:+.2f}"
+                "<br>Impulse: %{x:+.2f}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_vline(x=0, line_color="#64748b", line_width=1)
+    fig.update_layout(
+        height=max(340, 26 * len(frame) + 80),
+        margin=dict(l=10, r=58, t=14, b=32),
+        xaxis=dict(
+            range=[-axis_limit, axis_limit],
+            title="1W score minus 3M score",
+        ),
+        yaxis=dict(autorange="reversed"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        showlegend=False,
+        font=dict(color="#334155", size=11),
+    )
+    fig.update_xaxes(gridcolor="#e5e7eb", zeroline=False)
+    fig.update_yaxes(showgrid=False)
     return fig
 
 
@@ -1185,11 +1419,11 @@ def asset_performance_heatmap(asset_returns: pd.DataFrame) -> go.Figure:
             y=labels,
             zmid=0,
             colorscale=[
-                [0.00, "#8f2d35"],
-                [0.42, "#d8a092"],
-                [0.50, "#f2f0ea"],
-                [0.58, "#93c7b4"],
-                [1.00, "#1f7a5a"],
+                [0.00, "#875241"],
+                [0.42, "#d7b4a8"],
+                [0.50, "#f4f2ee"],
+                [0.58, "#b7cec0"],
+                [1.00, "#4f765f"],
             ],
             text=text,
             texttemplate="%{text}",
@@ -1415,6 +1649,7 @@ signals = build_signal_table(prices)
 scores = group_scores(signals)
 regime, regime_note = classify_regime(scores)
 notes = build_decision_notes(regime, regime_note, scores, signals)
+diagnostics = build_regime_diagnostics(scores, signals)
 asset_returns = asset_return_rows(
     prices, [ticker for ticker in CORE_DISPLAY if ticker in TICKERS]
 )
@@ -1437,63 +1672,82 @@ failed_text = (
 signal_values = (
     signals["Composite"].dropna() if not signals.empty else pd.Series(dtype=float)
 )
-constructive_share = (
-    float((signal_values > 0.20).mean() * 100.0) if not signal_values.empty else np.nan
-)
-defensive_share = (
-    float((signal_values < -0.20).mean() * 100.0) if not signal_values.empty else np.nan
-)
-constructive_text = (
-    f"{constructive_share:.0f}%" if is_valid(constructive_share) else "N/A"
-)
-defensive_text = f"{defensive_share:.0f}%" if is_valid(defensive_share) else "N/A"
 
 st.markdown(
     f"""
     <div class="data-status">
-        <b>Data status:</b> latest market observation {latest_market_text}; loaded {loaded_count}/{len(TICKERS)} tickers; history {period}; unavailable tickers: {failed_text}.
+        Latest market observation {escape(latest_market_text)} &middot; {loaded_count}/{len(TICKERS)} proxies loaded &middot; {escape(period)} scoring history &middot; unavailable: {escape(failed_text)}
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-render_selection_note(
-    "Active regime read",
-    f"{regime}. {regime_note} Signal breadth is {constructive_text} constructive and "
-    f"{defensive_text} defensive across {len(signal_values)} available signals. "
-    f"Scores use causal percentiles against the selected {period} history.",
+composite = float(scores.get("Composite", 0.0))
+composite_color = score_color(composite)
+confidence = float(diagnostics["confidence"])
+confidence_color = (
+    PALETTE["blue"]
+    if confidence >= 70
+    else PALETTE["amber"]
+    if confidence >= 50
+    else PALETTE["red"]
 )
+impulse = diagnostics["impulse"]
+impulse_color = score_color(float(impulse)) if is_valid(impulse) else PALETTE["faint"]
+directional_label = "Constructive support" if composite >= 0 else "Defensive support"
 
-
-# =============================================================================
-# TOP DECISION BRIEF
-# =============================================================================
-
-brief_html = f"""
-<div class="brief-grid">
-    <div class="brief-card">
-        <div class="brief-label">Current regime</div>
-        <div class="brief-value" style="color:{score_color(scores.get("Composite", 0.0))};">{regime}</div>
-        <div class="brief-copy">{regime_note}</div>
+st.markdown(
+    f"""
+<div class="regime-banner" style="--regime-accent:{composite_color}">
+    <div>
+        <div class="regime-kicker">Active market regime</div>
+        <div class="regime-title">{escape(regime)}</div>
+        <div class="regime-copy">{escape(regime_note)} {escape(notes["pressure"])}</div>
     </div>
-    <div class="brief-card">
-        <div class="brief-label">Portfolio stance</div>
-        <div class="brief-value">{notes["stance"]}</div>
-        <div class="brief-copy">{notes["action"]}</div>
-    </div>
-    <div class="brief-card">
-        <div class="brief-label">Pressure point</div>
-        <div class="brief-value">What matters now</div>
-        <div class="brief-copy">{notes["pressure"]}</div>
-    </div>
-    <div class="brief-card">
-        <div class="brief-label">Invalidation</div>
-        <div class="brief-value">When to change</div>
-        <div class="brief-copy">{notes["invalidation"]}</div>
+    <div class="regime-callout">
+        <div class="regime-callout-label">Portfolio stance</div>
+        <div class="regime-callout-value">{escape(notes["stance"])}</div>
+        <div class="regime-copy">{escape(notes["action"])}</div>
     </div>
 </div>
-"""
-st.markdown(brief_html, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
+
+render_metric_strip(
+    [
+        (
+            "Composite score",
+            signed_num_fmt(composite, 2),
+            f"{score_label(composite)} · causal percentile blend",
+            composite_color,
+        ),
+        (
+            "Regime confidence",
+            f"{confidence:.0f}%",
+            f"{diagnostics['confidence_label']} · {float(diagnostics['pillar_alignment']):.0f}% pillar agreement",
+            confidence_color,
+        ),
+        (
+            directional_label,
+            pct_fmt(float(diagnostics["directional_breadth"]), 0),
+            f"of {len(signal_values)} signals beyond the ±0.20 threshold",
+            composite_color,
+        ),
+        (
+            "Near-term impulse",
+            signed_num_fmt(float(impulse), 2),
+            f"{diagnostics['impulse_label']} · average 1W minus 3M score",
+            impulse_color,
+        ),
+        (
+            "Market coverage",
+            f"{loaded_count}/{len(TICKERS)}",
+            f"latest observation {latest_market_text}",
+            PALETTE["blue"],
+        ),
+    ]
+)
 
 
 # =============================================================================
@@ -1519,22 +1773,21 @@ pillar_items = [
     ),
     ("Commodities", scores.get("Commodities", np.nan), "Copper/gold and crude relief."),
     ("Volatility", scores.get("Volatility", np.nan), "VIX and vol-of-vol relief."),
-    ("Composite", scores.get("Composite", np.nan), "Weighted regime score."),
 ]
 
-pillar_cols = st.columns(len(pillar_items), gap="small")
-for col, (label, value, note) in zip(pillar_cols, pillar_items):
-    with col:
-        st.markdown(
-            f"""
-            <div class="pillar-card">
-                <div class="pillar-label">{label}</div>
-                <div class="pillar-value" style="color:{score_color(value)};">{signed_num_fmt(value, 2)}</div>
-                <div class="pillar-note">{score_label(value)}. {note}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+pillar_html = []
+for label, value, note in pillar_items:
+    pillar_html.append(
+        "<div class='pillar-card'>"
+        f"<div class='pillar-label'>{escape(label)}</div>"
+        f"<div class='pillar-value' style='color:{score_color(value)}'>{escape(signed_num_fmt(value, 2))}</div>"
+        f"<div class='pillar-note'>{escape(score_label(value))}. {escape(note)}</div>"
+        "</div>"
+    )
+st.markdown(
+    "<div class='pillar-grid'>" + "".join(pillar_html) + "</div>",
+    unsafe_allow_html=True,
+)
 
 
 # =============================================================================
@@ -1545,27 +1798,40 @@ left, right = st.columns([0.85, 1.15])
 
 with left:
     st.markdown(
-        "<div class='section-title'>Regime Scores</div>", unsafe_allow_html=True
+        "<div class='section-title'>Regime Pillars</div>", unsafe_allow_html=True
     )
     st.markdown(
-        "<div class='section-subtitle'>Positive scores mean easier risk conditions; negative scores flag tightening or defensive pressure.</div>",
+        "<div class='section-subtitle'>Current cross-asset support by pillar. Scores run from -1 defensive to +1 constructive.</div>",
         unsafe_allow_html=True,
     )
     st.plotly_chart(score_bar_chart(scores), width="stretch")
 
 with right:
     st.markdown(
-        "<div class='section-title'>Signal Confirmation Matrix</div>",
+        "<div class='section-title'>Fastest Signal Shifts</div>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        "<div class='section-subtitle'>Percentile-based scores across short-term moves, YTD impulse, trend, and composite confirmation.</div>",
+        "<div class='section-subtitle'>Largest gaps between the 1-week and 3-month scores. Positive bars are improving; negative bars are deteriorating.</div>",
         unsafe_allow_html=True,
     )
     if signals.empty:
-        st.info("Not enough market data to calculate signal scores.")
+        st.info("Not enough market data to calculate signal shifts.")
     else:
-        st.plotly_chart(signal_heatmap(signals), width="stretch")
+        st.plotly_chart(signal_impulse_chart(signals), width="stretch")
+
+st.markdown(
+    "<div class='section-title'>Signal Confirmation Matrix</div>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "<div class='section-subtitle'>Causal percentile scores across short-term moves, YTD impulse, trend, and composite confirmation.</div>",
+    unsafe_allow_html=True,
+)
+if signals.empty:
+    st.info("Not enough market data to calculate signal scores.")
+else:
+    st.plotly_chart(signal_heatmap(signals), width="stretch")
 
 st.markdown(
     "<div class='section-title'>Cross-Asset Performance</div>", unsafe_allow_html=True
@@ -1587,12 +1853,16 @@ with perf_right:
 # =============================================================================
 
 st.markdown("<div class='section-title'>Decision Notes</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-subtitle'>Base case, confirmation, and the condition that should force a posture change.</div>",
+    unsafe_allow_html=True,
+)
 
 note_cols = st.columns(3)
 note_blocks = [
     ("Base case", notes["base"]),
     ("Market confirmation", notes["confirmation"]),
-    ("Risk sizing", notes["action"]),
+    ("Invalidation", notes["invalidation"]),
 ]
 
 for col, (label, copy) in zip(note_cols, note_blocks):
@@ -1600,8 +1870,8 @@ for col, (label, copy) in zip(note_cols, note_blocks):
         st.markdown(
             f"""
             <div class="note-card">
-                <div class="note-label">{label}</div>
-                <div class="note-copy">{copy}</div>
+                <div class="note-label">{escape(label)}</div>
+                <div class="note-copy">{escape(copy)}</div>
             </div>
             """,
             unsafe_allow_html=True,
