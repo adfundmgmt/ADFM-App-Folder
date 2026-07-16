@@ -1704,11 +1704,9 @@ st.caption(
     "The highlighted month and year coordinate the charts below."
 )
 
-current_observation = filter_table.loc[filter_table.index == current_period]
-matrix_observations = pd.concat([filtered, current_observation]).sort_index()
-matrix_observations = matrix_observations.loc[
-    ~matrix_observations.index.duplicated(keep="last")
-]
+matrix_observations = filter_table.loc[
+    filter_table["year"].astype(int).isin(matrix_years)
+].sort_index()
 matrix_frame = build_monthly_returns_frame(matrix_observations, stats, matrix_years)
 render_monthly_returns_matrix(
     matrix_observations,
