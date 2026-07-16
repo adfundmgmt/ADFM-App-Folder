@@ -11,7 +11,6 @@ from adfm_core.monthly_returns_matrix import (
     _prepare_month_table,
     build_monthly_returns_frame,
     monthly_returns_snapshot,
-    style_monthly_returns_frame,
 )
 
 
@@ -92,21 +91,28 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
         self.assertAlmostEqual(frame.loc["2025", "YEAR / YTD"], 4.5)
         self.assertAlmostEqual(frame.loc["FILTER AVG", "Jan"], 1.0)
 
-    def test_interactive_style_marks_shared_selection_and_live_cell(self) -> None:
-        frame = pd.DataFrame(
-            {"Jan": [1.0, 2.0], "Feb": [-1.0, -2.0], "YEAR / YTD": [np.nan, -0.04]},
-            index=["FILTER AVG", "2026"],
+    def test_terminal_matrix_marks_shared_month_and_year_selection(self) -> None:
+        months = pd.DataFrame(
+            {"year": [2026], "month": [2], "total_ret": [2.0]},
+            index=pd.PeriodIndex(["2026-02"], freq="M"),
+        )
+        stats = pd.DataFrame(
+            {"mean_total": [1.0, 2.0] + [np.nan] * 10, "hit_rate": [50.0] * 12},
+            index=pd.Index(range(1, 13), name="month"),
         )
 
-        html = style_monthly_returns_frame(
-            frame,
+        html, _ = _build_matrix_html(
+            months,
+            stats,
+            years=[2026],
+            current_period=pd.Period("2026-02", freq="M"),
             selected_month=2,
             selected_year=2026,
-            current_period=pd.Period("2026-02", freq="M"),
-        ).to_html()
+        )
 
-        self.assertIn("box-shadow", html)
-        self.assertIn("outline", html)
+        self.assertIn("is-selected-month", html)
+        self.assertIn("is-selected-year", html)
+        self.assertIn("monthly-now-badge", html)
 
     def test_snapshot_uses_same_filtered_sample_as_matrix(self) -> None:
         months = pd.DataFrame(
@@ -148,7 +154,8 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
         self.assertNotIn("plot_3d_seasonality_terrain", page)
         self.assertNotIn("plotly.graph_objects", page)
         self.assertIn("build_monthly_returns_frame", page)
-        self.assertIn('selection_mode=["single-row", "single-column"]', page)
+        self.assertIn("render_monthly_returns_matrix", page)
+        self.assertNotIn('selection_mode=["single-row", "single-column"]', page)
         self.assertIn("Global lookback", page)
         self.assertIn("plot_monthly_profile", page)
 
