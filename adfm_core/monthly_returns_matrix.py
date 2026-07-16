@@ -8,7 +8,7 @@ seasonality averages and the live comparison respect the active sample.
 from __future__ import annotations
 
 from html import escape
-from typing import Any, Iterable
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -164,6 +164,8 @@ def _build_matrix_html(
     stats: pd.DataFrame,
     years: list[int],
     current_period: pd.Period,
+    selected_month: int | None = None,
+    selected_year: int | None = None,
 ) -> tuple[str, np.ndarray]:
     visible = months.loc[months["year"].astype(int).isin(years)].copy()
     visible_values = _finite(visible["total_ret"])
@@ -174,7 +176,10 @@ def _build_matrix_html(
     )
     scale = max(scale, 1.0)
 
-    header = "".join(f"<th>{label}</th>" for label in MONTH_LABELS)
+    header = "".join(
+        f"<th class='{'is-selected-month' if month == selected_month else ''}'>{label}</th>"
+        for month, label in enumerate(MONTH_LABELS, start=1)
+    )
     rows: list[str] = []
 
     avg_cells: list[str] = []
@@ -182,8 +187,9 @@ def _build_matrix_html(
         value, hit_rate = _sample_month_stats(stats, month)
         bg, text_class = _tone(value, scale)
         title = f"{MONTH_LABELS[month - 1]} sample average: {_fmt_pct(value)}; hit rate: {_fmt_pct(hit_rate, 0, plus=False)}"
+        selected_class = " is-selected-month" if month == selected_month else ""
         avg_cells.append(
-            f"<td class='monthly-cell {text_class}' style='background:{bg}' title='{escape(title)}'>"
+            f"<td class='monthly-cell {text_class}{selected_class}' style='background:{bg}' title='{escape(title)}'>"
             f"{_fmt_pct(value, 2, plus=False)}</td>"
         )
     sample_avg = (
@@ -193,7 +199,7 @@ def _build_matrix_html(
     )
     rows.append(
         "<tr class='monthly-average-row'>"
-        "<th class='monthly-row-label'><span>SAMPLE AVG</span></th>"
+        "<th class='monthly-row-label'><span>FILTER AVG</span></th>"
         + "".join(avg_cells)
         + f"<td class='monthly-year-cell'><div class='monthly-year-return'>{_fmt_pct(sample_avg, 2)}</div>"
         "<div class='monthly-year-caption'>arithmetic month avg</div></td></tr>"
@@ -217,8 +223,9 @@ def _build_matrix_html(
             )
             title = f"{MONTH_LABELS[month - 1]} {year}: {_fmt_pct(value)}"
             now_class = " is-now" if is_now and pd.notna(value) else ""
+            selected_class = " is-selected-month" if month == selected_month else ""
             year_cells.append(
-                f"<td class='monthly-cell {text_class}{now_class}' style='background:{bg}' title='{escape(title)}'>"
+                f"<td class='monthly-cell {text_class}{now_class}{selected_class}' style='background:{bg}' title='{escape(title)}'>"
                 f"{badge}<span>{_fmt_pct(value, 2, plus=False)}</span></td>"
             )
 
@@ -230,8 +237,9 @@ def _build_matrix_html(
             if year == current_period.year and current_period.month < 12
             else "calendar return"
         )
+        selected_year_class = " class='is-selected-year'" if year == selected_year else ""
         rows.append(
-            "<tr>"
+            f"<tr{selected_year_class}>"
             f"<th class='monthly-row-label'>{year}</th>"
             + "".join(year_cells)
             + "<td class='monthly-year-cell'>"
@@ -245,6 +253,66 @@ def _build_matrix_html(
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
     return html, visible_values
+
+
+def render_monthly_returns_matrix(
+    months: pd.DataFrame,
+    stats: pd.DataFrame,
+    years: list[int],
+    current_period: pd.Period,
+    selected_month: int,
+    selected_year: int,
+) -> None:
+    """Render the compact terminal-style matrix used by the coordinated page."""
+
+    months = _prepare_month_table(months)
+    matrix_html, _ = _build_matrix_html(
+        months,
+        stats,
+        years,
+        current_period,
+        selected_month=selected_month,
+        selected_year=selected_year,
+    )
+    st.markdown(
+        """
+        <style>
+        .monthly-grid-wrap {overflow-x:auto; border:1px solid rgba(100,116,139,.16); border-radius:7px; margin:.2rem 0 .45rem; scrollbar-width:thin;}
+        .monthly-grid {width:100%; min-width:780px; border-collapse:separate; border-spacing:1px; background:rgba(100,116,139,.12); table-layout:fixed;}
+        .monthly-grid th,.monthly-grid td {height:44px; padding:3px; text-align:center; vertical-align:middle; position:relative;}
+        .monthly-grid thead th {height:31px; font-size:.60rem; letter-spacing:.14em; text-transform:uppercase; font-weight:680; color:#64748b; background:var(--background-color, #fff);}
+        .monthly-grid .monthly-row-label {width:72px; text-align:left; padding-left:9px; font-size:.74rem; font-weight:780; letter-spacing:.015em; background:var(--background-color, #fff); color:inherit;}
+        .monthly-grid .monthly-row-label span {font-size:.57rem; letter-spacing:.07em; color:#4f765f;}
+        .monthly-grid .monthly-cell {font-size:.69rem; font-variant-numeric:tabular-nums; color:inherit; transition:filter .12s ease, transform .12s ease;}
+        .monthly-grid .monthly-cell:hover {filter:brightness(1.08); transform:translateY(-1px); z-index:4;}
+        .monthly-grid .monthly-cell.strong {color:#f8fafc; font-weight:760; text-shadow:0 1px 1px rgba(15,23,42,.22);}
+        .monthly-grid .monthly-cell.muted {color:#94a3b8;}
+        .monthly-grid .monthly-cell.is-now {box-shadow:inset 0 0 0 2px rgba(15,23,42,.72); z-index:3;}
+        .monthly-now-badge {position:absolute; top:2px; right:3px; font-size:.46rem; line-height:1; letter-spacing:.08em; padding:2px 4px; border-radius:2px; background:rgba(15,23,42,.78); color:#f8fafc;}
+        .monthly-year-head {width:94px; background:rgba(79,118,95,.20)!important; color:#355845!important;}
+        .monthly-year-cell {width:94px; background:var(--background-color, #fff); padding:2px 6px!important;}
+        .monthly-spark {display:block; width:100%; height:20px; margin:0 auto -2px; opacity:.92;}
+        .monthly-year-return {font-size:.72rem; line-height:1.05; font-weight:760; font-variant-numeric:tabular-nums;}
+        .monthly-year-caption {font-size:.48rem; line-height:1.05; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin-top:2px;}
+        .monthly-average-row td,.monthly-average-row th {border-bottom:1px solid rgba(100,116,139,.38);}
+        .monthly-grid .is-selected-month {box-shadow:inset 2px 0 rgba(53,88,69,.88), inset -2px 0 rgba(53,88,69,.88); z-index:2;}
+        .monthly-grid thead .is-selected-month {color:#355845; background:rgba(79,118,95,.16); box-shadow:inset 2px 0 rgba(53,88,69,.88), inset -2px 0 rgba(53,88,69,.88), inset 0 2px rgba(53,88,69,.88);}
+        .monthly-grid tr.is-selected-year > * {border-top:2px solid rgba(53,88,69,.9); border-bottom:2px solid rgba(53,88,69,.9);}
+        .monthly-grid tr.is-selected-year > .monthly-row-label {color:#355845; background:rgba(79,118,95,.10);}
+        .monthly-grid tr.is-selected-year > .is-selected-month {outline:2px solid #243c2f; outline-offset:-3px; z-index:3;}
+        @media (prefers-color-scheme:dark) {
+          .monthly-grid thead th,.monthly-year-caption{color:#94a3b8;}
+          .monthly-grid thead th,.monthly-grid .monthly-row-label,.monthly-year-cell{background:#111827;}
+          .monthly-grid-wrap{border-color:rgba(148,163,184,.22)}
+          .monthly-year-head{background:rgba(79,118,95,.34)!important;color:#d5e6db!important;}
+          .monthly-grid thead .is-selected-month,.monthly-grid tr.is-selected-year > .monthly-row-label{color:#d5e6db;background:rgba(79,118,95,.25);}
+          .monthly-grid .is-selected-month{box-shadow:inset 2px 0 rgba(213,230,219,.72), inset -2px 0 rgba(213,230,219,.72);}
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(matrix_html, unsafe_allow_html=True)
 
 
 def build_monthly_returns_frame(
@@ -272,58 +340,6 @@ def build_monthly_returns_frame(
     frame = pd.DataFrame(rows, index=labels, columns=[*MONTH_LABELS, "YEAR / YTD"])
     frame.index.name = "Sample / Year"
     return frame
-
-
-def style_monthly_returns_frame(
-    frame: pd.DataFrame,
-    selected_month: int,
-    selected_year: int | None,
-    current_period: pd.Period,
-) -> Any:
-    """Apply one zero-centered visual language to the interactive matrix."""
-
-    values = _finite(frame.to_numpy().ravel())
-    scale = float(np.nanpercentile(np.abs(values), 82)) if values.size else 5.0
-    scale = max(scale, 1.0)
-    selected_column = MONTH_LABELS[int(selected_month) - 1]
-    current_row = str(int(current_period.year))
-    current_column = MONTH_LABELS[int(current_period.month) - 1]
-    selected_row = str(int(selected_year)) if selected_year is not None else None
-
-    def apply_styles(data: pd.DataFrame) -> pd.DataFrame:
-        styles = pd.DataFrame("", index=data.index, columns=data.columns)
-        for row_label in data.index:
-            for column in data.columns:
-                value = data.loc[row_label, column]
-                background, text_class = _tone(value, scale)
-                rules = [
-                    f"background-color: {background}",
-                    "font-variant-numeric: tabular-nums",
-                ]
-                if text_class == "strong":
-                    rules.extend(["color: #f8fafc", "font-weight: 700"])
-                if row_label == "FILTER AVG":
-                    rules.append("font-weight: 700")
-                if column == selected_column:
-                    rules.append(
-                        "box-shadow: inset 2px 0 #111827, inset -2px 0 #111827"
-                    )
-                if selected_row is not None and row_label == selected_row:
-                    rules.append(
-                        "border-top: 2px solid #111827; border-bottom: 2px solid #111827"
-                    )
-                if (
-                    row_label == current_row
-                    and column == current_column
-                    and pd.notna(value)
-                ):
-                    rules.append("outline: 2px solid #111827; outline-offset: -2px")
-                styles.loc[row_label, column] = "; ".join(rules)
-        return styles
-
-    return frame.style.apply(apply_styles, axis=None).format(
-        lambda value: "—" if pd.isna(value) else f"{float(value):+.2f}%"
-    )
 
 
 def monthly_returns_snapshot(
@@ -517,7 +533,7 @@ def render_monthly_returns_lens(
     )
     st.markdown(
         f"<div class='monthly-lens-caption'>Calendar rows show realized monthly returns and compounded year/YTD paths. "
-        f"The SAMPLE AVG row and the live comparison use the active seasonality filters: {filtered_obs} month observations across "
+        f"The FILTER AVG row and the live comparison use the active seasonality filters: {filtered_obs} month observations across "
         f"{filtered_years} distinct years. Partial current-month data is marked NOW.</div>",
         unsafe_allow_html=True,
     )
@@ -526,8 +542,8 @@ def render_monthly_returns_lens(
 __all__ = [
     "build_monthly_returns_frame",
     "monthly_returns_snapshot",
+    "render_monthly_returns_matrix",
     "render_monthly_returns_lens",
-    "style_monthly_returns_frame",
     "_compound_pct",
     "_display_years",
     "_prepare_month_table",
