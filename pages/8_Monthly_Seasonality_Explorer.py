@@ -15,12 +15,9 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator, PercentFormatter
 
 from adfm_core.monthly_returns_matrix import (
-    MONTH_LABELS as MATRIX_MONTH_LABELS,
-)
-from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
     monthly_returns_snapshot,
-    style_monthly_returns_frame,
+    render_monthly_returns_matrix,
 )
 from adfm_core.ui import render_footer
 
@@ -1759,8 +1756,8 @@ if int(filtered.shape[0]) < 24 or int(filtered["year"].nunique()) < 5:
 
 st.subheader("Monthly Returns Matrix")
 st.caption(
-    "Select a month column or year row to coordinate the charts below. "
-    "FILTER AVG uses the active sample; year rows show realized close-to-close returns."
+    "FILTER AVG uses the active sample; calendar rows show realized close-to-close returns. "
+    "The highlighted month and year coordinate the charts below."
 )
 
 current_observation = filter_table.loc[filter_table.index == current_period]
@@ -1769,60 +1766,14 @@ matrix_observations = matrix_observations.loc[
     ~matrix_observations.index.duplicated(keep="last")
 ]
 matrix_frame = build_monthly_returns_frame(matrix_observations, stats, matrix_years)
-matrix_style = style_monthly_returns_frame(
-    matrix_frame,
+render_monthly_returns_matrix(
+    matrix_observations,
+    stats,
+    matrix_years,
+    current_period,
     selected_month=selected_month,
     selected_year=selected_year,
-    current_period=current_period,
 )
-matrix_height = min(780, 54 + 38 * len(matrix_frame))
-matrix_column_config = {
-    "_index": st.column_config.TextColumn("Sample / Year", width=84),
-    **{
-        column: st.column_config.NumberColumn(column, width=52)
-        for column in matrix_frame.columns[:-1]
-    },
-    "YEAR / YTD": st.column_config.NumberColumn("YEAR / YTD", width=76),
-}
-matrix_event = st.dataframe(
-    matrix_style,
-    width="stretch",
-    height=matrix_height,
-    column_config=matrix_column_config,
-    selection_mode=["single-row", "single-column"],
-    on_select="rerun",
-    key="seasonality_matrix",
-)
-
-selection = getattr(matrix_event, "selection", {})
-selected_columns = list(getattr(selection, "columns", []) or [])
-selected_rows = list(getattr(selection, "rows", []) or [])
-selection_changed = False
-
-if selected_columns:
-    selected_column = str(selected_columns[-1])
-    if (
-        selected_column in MATRIX_MONTH_LABELS
-        and selected_column != st.session_state["seasonality_month_picker"]
-    ):
-        st.session_state["seasonality_month_picker"] = selected_column
-        selection_changed = True
-
-if selected_rows:
-    row_position = int(selected_rows[-1])
-    if 0 <= row_position < len(matrix_frame):
-        row_label = str(matrix_frame.index[row_position])
-        if row_label.isdigit():
-            row_year = int(row_label)
-            if (
-                row_year in matrix_years
-                and row_year != st.session_state["seasonality_year_picker"]
-            ):
-                st.session_state["seasonality_year_picker"] = row_year
-                selection_changed = True
-
-if selection_changed:
-    st.rerun()
 
 selection_month_col, selection_year_col = st.columns(
     [4.2, 1.3], vertical_alignment="bottom"
