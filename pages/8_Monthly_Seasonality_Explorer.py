@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from adfm_core.ui import render_footer
+from adfm_core.monthly_returns_matrix import render_monthly_returns_lens
 import yfinance as yf
 from matplotlib import gridspec
 from matplotlib.patches import Patch
@@ -1656,6 +1657,19 @@ stats = seasonal_stats_from_filtered(filtered)
 if stats.dropna(subset=["mean_h1", "mean_h2"]).empty:
     st.error("Insufficient data in the selected filtered window to compute statistics.")
     st.stop()
+
+
+# =========================
+# MONTHLY RETURNS MATRIX
+# =========================
+
+render_monthly_returns_lens(
+    all_months=filter_table,
+    filtered_months=filtered,
+    stats=stats,
+    symbol=used_symbol,
+    as_of=prices.index.max(),
+)
 
 
 # =========================
