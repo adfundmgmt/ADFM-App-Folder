@@ -9,7 +9,17 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-from adfm_core.ui import render_footer
+from adfm_core.market_data import configure_yfinance_cache
+from adfm_core.regime_math import rolling_percentile_previous
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_page_header,
+    render_selection_note,
+)
+
+configure_yfinance_cache()
 
 
 # =============================================================================
@@ -286,11 +296,13 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+inject_explorer_style()
 
 
 # =============================================================================
 # HELPERS
 # =============================================================================
+
 
 def is_valid(x: float | int | None) -> bool:
     try:
@@ -385,7 +397,9 @@ def ytd_return(series: pd.Series) -> float:
 
 
 def weighted_average(values: Dict[str, float], weights: Dict[str, float]) -> float:
-    used = [(values[k], weights[k]) for k in weights if k in values and is_valid(values[k])]
+    used = [
+        (values[k], weights[k]) for k in weights if k in values and is_valid(values[k])
+    ]
     if not used:
         return 0.0
     total_weight = sum(w for _, w in used)
@@ -407,7 +421,14 @@ def percentile_score_from_change(series: pd.Series, periods: int) -> float:
     changes = clean.pct_change(periods).replace([np.inf, -np.inf], np.nan).dropna()
     if len(changes) < 30:
         return np.nan
-    rank = float(changes.rank(pct=True).iloc[-1])
+    rank_series = rolling_percentile_previous(
+        changes,
+        window=min(756, max(30, len(changes) - 1)),
+        min_periods=min(30, max(1, len(changes) - 1)),
+    )
+    rank = latest_valid(rank_series)
+    if not is_valid(rank):
+        return np.nan
     return normalize_score((rank - 0.5) * 2.0)
 
 
@@ -420,8 +441,26 @@ def trend_score(series: pd.Series) -> float:
     spread = (clean / ma - 1.0).replace([np.inf, -np.inf], np.nan).dropna()
     if len(spread) < 25:
         return np.nan
-    rank = float(spread.rank(pct=True).iloc[-1])
+    rank_series = rolling_percentile_previous(
+        spread,
+        window=min(756, max(30, len(spread) - 1)),
+        min_periods=min(30, max(1, len(spread) - 1)),
+    )
+    rank = latest_valid(rank_series)
+    if not is_valid(rank):
+        return np.nan
     return normalize_score((rank - 0.5) * 2.0)
+
+
+def ytd_percentile_score(series: pd.Series) -> float:
+    """Compare the current YTD move with prior moves of the same trading-day length."""
+    clean = clean_series(series)
+    if clean.empty:
+        return np.nan
+    last_date = pd.Timestamp(clean.index[-1])
+    year_slice = clean.loc[clean.index >= pd.Timestamp(date(last_date.year, 1, 1))]
+    periods = max(1, len(year_slice) - 1)
+    return percentile_score_from_change(clean, periods)
 
 
 def score_color(score: float | None) -> str:
@@ -469,8 +508,11 @@ def score_phrase(score: float | None) -> str:
 # DATA
 # =============================================================================
 
+
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_market_prices(tickers: Tuple[str, ...], period: str) -> Tuple[pd.DataFrame, List[str]]:
+def fetch_market_prices(
+    tickers: Tuple[str, ...], period: str
+) -> Tuple[pd.DataFrame, List[str]]:
     if not tickers:
         return pd.DataFrame(), []
 
@@ -505,7 +547,9 @@ def fetch_market_prices(tickers: Tuple[str, ...], period: str) -> Tuple[pd.DataF
             if "Close" in data.columns and len(tickers) == 1:
                 close = data[["Close"]].rename(columns={"Close": tickers[0]}).copy()
             elif "Adj Close" in data.columns and len(tickers) == 1:
-                close = data[["Adj Close"]].rename(columns={"Adj Close": tickers[0]}).copy()
+                close = (
+                    data[["Adj Close"]].rename(columns={"Adj Close": tickers[0]}).copy()
+                )
     except Exception:
         close = pd.DataFrame()
 
@@ -521,11 +565,17 @@ def fetch_market_prices(tickers: Tuple[str, ...], period: str) -> Tuple[pd.DataF
     close = close.apply(pd.to_numeric, errors="coerce")
     close = close.ffill().dropna(axis=1, how="all").dropna(how="all")
 
-    failed = [ticker for ticker in tickers if ticker not in close.columns or close[ticker].dropna().empty]
+    failed = [
+        ticker
+        for ticker in tickers
+        if ticker not in close.columns or close[ticker].dropna().empty
+    ]
     return close, failed
 
 
-def pick_series(prices: pd.DataFrame, primary: str, fallback: str | None = None) -> Tuple[pd.Series | None, str | None]:
+def pick_series(
+    prices: pd.DataFrame, primary: str, fallback: str | None = None
+) -> Tuple[pd.Series | None, str | None]:
     if primary in prices.columns and not prices[primary].dropna().empty:
         return prices[primary], primary
     if fallback and fallback in prices.columns and not prices[fallback].dropna().empty:
@@ -533,7 +583,9 @@ def pick_series(prices: pd.DataFrame, primary: str, fallback: str | None = None)
     return None, None
 
 
-def safe_ratio(prices: pd.DataFrame, numerator: str, denominator: str) -> pd.Series | None:
+def safe_ratio(
+    prices: pd.DataFrame, numerator: str, denominator: str
+) -> pd.Series | None:
     if numerator not in prices.columns or denominator not in prices.columns:
         return None
     denom = prices[denominator].replace(0, np.nan)
@@ -545,6 +597,7 @@ def safe_ratio(prices: pd.DataFrame, numerator: str, denominator: str) -> pd.Ser
 # =============================================================================
 # SIGNALS
 # =============================================================================
+
 
 def build_signal_definitions(prices: pd.DataFrame) -> List[dict]:
     signals: List[dict] = []
@@ -712,18 +765,21 @@ def build_signal_definitions(prices: pd.DataFrame) -> List[dict]:
 
 
 def score_signal(series: pd.Series) -> Dict[str, float]:
-    scores = {label: percentile_score_from_change(series, days) for label, days in HORIZONS.items()}
-    scores["YTD"] = normalize_score(ytd_return(series) * 4.0) if is_valid(ytd_return(series)) else np.nan
+    scores = {
+        label: percentile_score_from_change(series, days)
+        for label, days in HORIZONS.items()
+    }
+    scores["YTD"] = ytd_percentile_score(series)
     scores["Trend"] = trend_score(series)
     scores["Composite"] = weighted_average(
         scores,
         {
-            "1D": 0.05,
-            "1W": 0.15,
+            "1D": 0.00,
+            "1W": 0.10,
             "1M": 0.30,
-            "3M": 0.30,
+            "3M": 0.35,
             "YTD": 0.10,
-            "Trend": 0.10,
+            "Trend": 0.15,
         },
     )
     return scores
@@ -798,31 +854,62 @@ def classify_regime(scores: Dict[str, float]) -> Tuple[str, str]:
     composite = scores.get("Composite", 0.0)
 
     if composite >= 0.35 and equity >= 0.15 and credit >= 0.10 and vol >= 0.00:
-        return "Risk-on / liquidity easing", "Equity tape, credit, and volatility are confirming easier conditions. The burden of proof shifts to breadth and credit staying firm."
+        return (
+            "Risk-on / liquidity easing",
+            "Equity tape, credit, and volatility are confirming easier conditions. The burden of proof shifts to breadth and credit staying firm.",
+        )
 
     if equity >= 0.20 and credit >= 0.10 and rates <= -0.15:
-        return "Reflation / rate pressure", "Risk assets are holding up while the rates impulse is tightening. This works until yields begin to pressure multiples or credit."
+        return (
+            "Reflation / rate pressure",
+            "Risk assets are holding up while the rates impulse is tightening. This works until yields begin to pressure multiples or credit.",
+        )
 
     if rates >= 0.25 and dollar >= 0.10 and commodities >= 0.00 and equity > -0.15:
-        return "Disinflationary easing", "Duration and dollar liquidity are improving without a decisive break in risk assets. That is the cleanest easing mix."
+        return (
+            "Disinflationary easing",
+            "Duration and dollar liquidity are improving without a decisive break in risk assets. That is the cleanest easing mix.",
+        )
 
     if equity <= -0.25 and credit <= -0.20:
-        return "Risk-off / credit stress", "Equity weakness is being confirmed by credit. Liquidity matters more than valuation until credit stabilizes."
+        return (
+            "Risk-off / credit stress",
+            "Equity weakness is being confirmed by credit. Liquidity matters more than valuation until credit stabilizes.",
+        )
 
     if rates <= -0.25 and dollar <= -0.20:
-        return "Tightening impulse", "Rates and dollar liquidity are moving in the wrong direction together. That usually raises the hurdle for long-duration risk."
+        return (
+            "Tightening impulse",
+            "Rates and dollar liquidity are moving in the wrong direction together. That usually raises the hurdle for long-duration risk.",
+        )
 
     if commodities <= -0.30 and equity <= 0.00 and credit <= 0.00:
-        return "Growth scare / defensive bid", "Commodity cyclicality and risk appetite are weak together. The market is pricing weaker nominal growth rather than clean disinflation."
+        return (
+            "Growth scare / defensive bid",
+            "Commodity cyclicality and risk appetite are weak together. The market is pricing weaker nominal growth rather than clean disinflation.",
+        )
 
-    return "Mixed / tactical", "The tape is not one-way. This is a relative-value backdrop until credit, breadth, or rates resolve the contradiction."
+    return (
+        "Mixed / tactical",
+        "The tape is not one-way. This is a relative-value backdrop until credit, breadth, or rates resolve the contradiction.",
+    )
 
 
-def build_decision_notes(regime: str, regime_note: str, scores: Dict[str, float], signals: pd.DataFrame) -> Dict[str, str]:
+def build_decision_notes(
+    regime: str, regime_note: str, scores: Dict[str, float], signals: pd.DataFrame
+) -> Dict[str, str]:
     composite = scores.get("Composite", 0.0)
     dimensions = {k: v for k, v in scores.items() if k != "Composite"}
-    strongest_name, strongest_value = max(dimensions.items(), key=lambda item: item[1]) if dimensions else ("N/A", np.nan)
-    weakest_name, weakest_value = min(dimensions.items(), key=lambda item: item[1]) if dimensions else ("N/A", np.nan)
+    strongest_name, strongest_value = (
+        max(dimensions.items(), key=lambda item: item[1])
+        if dimensions
+        else ("N/A", np.nan)
+    )
+    weakest_name, weakest_value = (
+        min(dimensions.items(), key=lambda item: item[1])
+        if dimensions
+        else ("N/A", np.nan)
+    )
 
     if signals.empty:
         positive = negative = total = 0
@@ -834,7 +921,9 @@ def build_decision_notes(regime: str, regime_note: str, scores: Dict[str, float]
         negative = int((market_scores < -0.20).sum())
         total = int(len(market_scores))
         leaders = signals.nlargest(min(2, len(signals)), "Composite")["Signal"].tolist()
-        laggards = signals.nsmallest(min(2, len(signals)), "Composite")["Signal"].tolist()
+        laggards = signals.nsmallest(min(2, len(signals)), "Composite")[
+            "Signal"
+        ].tolist()
 
     equity = scores.get("Equity Tape", 0.0)
     credit = scores.get("Credit", 0.0)
@@ -852,7 +941,11 @@ def build_decision_notes(regime: str, regime_note: str, scores: Dict[str, float]
         action = "Avoid a large one-way book. Favor liquid relative-value trades until the tape confirms a cleaner regime."
         invalidation = "Change posture when the composite clears ±0.35 with credit and breadth moving in the same direction."
 
-    if is_valid(strongest_value) and is_valid(weakest_value) and strongest_value - weakest_value > 0.70:
+    if (
+        is_valid(strongest_value)
+        and is_valid(weakest_value)
+        and strongest_value - weakest_value > 0.70
+    ):
         pressure = f"Internal dispersion is high: {strongest_name} is leading while {weakest_name} is the drag."
     else:
         pressure = f"The main pressure point is {weakest_name}; the strongest offset is {strongest_name}."
@@ -885,6 +978,7 @@ def build_decision_notes(regime: str, regime_note: str, scores: Dict[str, float]
 # =============================================================================
 # TABLES
 # =============================================================================
+
 
 def asset_return_rows(prices: pd.DataFrame, tickers: Iterable[str]) -> pd.DataFrame:
     rows: List[dict] = []
@@ -925,7 +1019,22 @@ def display_asset_table(frame: pd.DataFrame) -> pd.DataFrame:
 def display_signal_table(signals: pd.DataFrame) -> pd.DataFrame:
     if signals.empty:
         return signals
-    out = signals[["Group", "Signal", "Proxy", "Latest Date", "1D", "1W", "1M", "3M", "YTD", "Trend", "Composite", "Why it matters"]].copy()
+    out = signals[
+        [
+            "Group",
+            "Signal",
+            "Proxy",
+            "Latest Date",
+            "1D",
+            "1W",
+            "1M",
+            "3M",
+            "YTD",
+            "Trend",
+            "Composite",
+            "Why it matters",
+        ]
+    ].copy()
     for col in ["1D", "1W", "1M", "3M", "YTD", "Trend", "Composite"]:
         out[col] = out[col].map(lambda x: signed_num_fmt(x, 2))
     return out
@@ -935,7 +1044,10 @@ def display_signal_table(signals: pd.DataFrame) -> pd.DataFrame:
 # CHARTS
 # =============================================================================
 
-def apply_layout(fig: go.Figure, height: int = 360, showlegend: bool = True) -> go.Figure:
+
+def apply_layout(
+    fig: go.Figure, height: int = 360, showlegend: bool = True
+) -> go.Figure:
     fig.update_layout(
         height=height,
         margin=dict(l=20, r=24, t=30, b=24),
@@ -953,13 +1065,31 @@ def apply_layout(fig: go.Figure, height: int = 360, showlegend: bool = True) -> 
         ),
         showlegend=showlegend,
     )
-    fig.update_xaxes(showgrid=False, zeroline=False, linecolor="#e5e7eb", tickfont=dict(color="#64748b"))
-    fig.update_yaxes(gridcolor="#e5e7eb", zeroline=False, linecolor="#e5e7eb", tickfont=dict(color="#64748b"))
+    fig.update_xaxes(
+        showgrid=False,
+        zeroline=False,
+        linecolor="#e5e7eb",
+        tickfont=dict(color="#64748b"),
+    )
+    fig.update_yaxes(
+        gridcolor="#e5e7eb",
+        zeroline=False,
+        linecolor="#e5e7eb",
+        tickfont=dict(color="#64748b"),
+    )
     return fig
 
 
 def score_bar_chart(scores: Dict[str, float]) -> go.Figure:
-    labels = ["Equity Tape", "Credit", "Rates", "Dollar Liquidity", "Commodities", "Volatility", "Composite"]
+    labels = [
+        "Equity Tape",
+        "Credit",
+        "Rates",
+        "Dollar Liquidity",
+        "Commodities",
+        "Volatility",
+        "Composite",
+    ]
     values = [scores.get(label, np.nan) for label in labels]
     colors = [score_color(value) for value in values]
 
@@ -996,7 +1126,9 @@ def signal_heatmap(signals: pd.DataFrame) -> go.Figure:
         return apply_layout(go.Figure(), height=330, showlegend=False)
 
     values = signals[SCORE_COLUMNS].to_numpy(dtype=float)
-    text = np.where(np.isfinite(values), np.vectorize(lambda v: f"{v:+.2f}")(values), "N/A")
+    text = np.where(
+        np.isfinite(values), np.vectorize(lambda v: f"{v:+.2f}")(values), "N/A"
+    )
 
     fig = go.Figure(
         go.Heatmap(
@@ -1036,10 +1168,14 @@ def asset_performance_heatmap(asset_returns: pd.DataFrame) -> go.Figure:
         return apply_layout(go.Figure(), height=360, showlegend=False)
 
     cols = ["1D", "1W", "1M", "3M", "YTD"]
-    frame = asset_returns.dropna(subset=[c for c in cols if c in asset_returns], how="all").copy()
+    frame = asset_returns.dropna(
+        subset=[c for c in cols if c in asset_returns], how="all"
+    ).copy()
     frame = frame.head(22)
     values = frame[cols].to_numpy(dtype=float)
-    text = np.where(np.isfinite(values), np.vectorize(lambda v: f"{v:+.1f}%")(values), "N/A")
+    text = np.where(
+        np.isfinite(values), np.vectorize(lambda v: f"{v:+.1f}%")(values), "N/A"
+    )
     labels = frame["Ticker"] + "  " + frame["Asset"]
 
     fig = go.Figure(
@@ -1110,7 +1246,11 @@ def horizon_bar_chart(asset_returns: pd.DataFrame, horizon: str) -> go.Figure:
 
 def rebased_price_chart(prices: pd.DataFrame, tickers: List[str]) -> go.Figure:
     fig = go.Figure()
-    chosen = [ticker for ticker in tickers if ticker in prices.columns and not prices[ticker].dropna().empty]
+    chosen = [
+        ticker
+        for ticker in tickers
+        if ticker in prices.columns and not prices[ticker].dropna().empty
+    ]
     if not chosen:
         return apply_layout(fig, height=390)
 
@@ -1184,7 +1324,7 @@ with st.sidebar:
     period = st.selectbox(
         "Market history",
         ["6mo", "1y", "2y", "3y", "5y"],
-        index=3,
+        index=4,
         help="Longer windows improve percentile scoring. Shorter windows load faster but reduce signal depth.",
     )
 
@@ -1195,7 +1335,21 @@ with st.sidebar:
         help="Controls the main ranked performance chart.",
     )
 
-    default_assets = ["SPY", "QQQ", "RSP", "IWM", "HYG", "LQD", "TLT", "^TNX", "DX-Y.NYB", "CL=F", "GC=F", "HG=F", "^VIX"]
+    default_assets = [
+        "SPY",
+        "QQQ",
+        "RSP",
+        "IWM",
+        "HYG",
+        "LQD",
+        "TLT",
+        "^TNX",
+        "DX-Y.NYB",
+        "CL=F",
+        "GC=F",
+        "HG=F",
+        "^VIX",
+    ]
     selected_assets = st.multiselect(
         "Asset chart",
         options=list(TICKERS.keys()),
@@ -1203,7 +1357,15 @@ with st.sidebar:
         format_func=lambda ticker: f"{ticker} · {TICKERS.get(ticker, ticker)}",
     )
 
-    default_signal_names = ["Equity trend", "Breadth", "Credit risk appetite", "Duration bid", "Softer dollar liquidity", "Copper/gold cyclicality", "Volatility relief"]
+    default_signal_names = [
+        "Equity trend",
+        "Breadth",
+        "Credit risk appetite",
+        "Duration bid",
+        "Softer dollar liquidity",
+        "Copper/gold cyclicality",
+        "Volatility relief",
+    ]
     selected_signal_names = st.multiselect(
         "Signal chart",
         options=[
@@ -1234,8 +1396,13 @@ with st.sidebar:
 # LOAD DATA
 # =============================================================================
 
-st.markdown(f"<div class='page-title'>{TITLE}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='page-subtitle'>{SUBTITLE}</div>", unsafe_allow_html=True)
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=SUBTITLE,
+        eyebrow="ADFM Cross-Asset Regimes",
+    )
+)
 
 all_tickers = tuple(TICKERS.keys())
 prices, failed = fetch_market_prices(all_tickers, period)
@@ -1248,15 +1415,38 @@ signals = build_signal_table(prices)
 scores = group_scores(signals)
 regime, regime_note = classify_regime(scores)
 notes = build_decision_notes(regime, regime_note, scores, signals)
-asset_returns = asset_return_rows(prices, [ticker for ticker in CORE_DISPLAY if ticker in TICKERS])
+asset_returns = asset_return_rows(
+    prices, [ticker for ticker in CORE_DISPLAY if ticker in TICKERS]
+)
 
 latest_market_dt = max(
-    [pd.Timestamp(prices[col].dropna().index[-1]) for col in prices.columns if not prices[col].dropna().empty],
+    [
+        pd.Timestamp(prices[col].dropna().index[-1])
+        for col in prices.columns
+        if not prices[col].dropna().empty
+    ],
     default=None,
 )
-latest_market_text = latest_market_dt.strftime("%b %d, %Y") if latest_market_dt is not None else "N/A"
+latest_market_text = (
+    latest_market_dt.strftime("%b %d, %Y") if latest_market_dt is not None else "N/A"
+)
 loaded_count = len([col for col in prices.columns if not prices[col].dropna().empty])
-failed_text = ", ".join(failed[:8]) + ("..." if len(failed) > 8 else "") if failed else "None"
+failed_text = (
+    ", ".join(failed[:8]) + ("..." if len(failed) > 8 else "") if failed else "None"
+)
+signal_values = (
+    signals["Composite"].dropna() if not signals.empty else pd.Series(dtype=float)
+)
+constructive_share = (
+    float((signal_values > 0.20).mean() * 100.0) if not signal_values.empty else np.nan
+)
+defensive_share = (
+    float((signal_values < -0.20).mean() * 100.0) if not signal_values.empty else np.nan
+)
+constructive_text = (
+    f"{constructive_share:.0f}%" if is_valid(constructive_share) else "N/A"
+)
+defensive_text = f"{defensive_share:.0f}%" if is_valid(defensive_share) else "N/A"
 
 st.markdown(
     f"""
@@ -1265,6 +1455,13 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True,
+)
+
+render_selection_note(
+    "Active regime read",
+    f"{regime}. {regime_note} Signal breadth is {constructive_text} constructive and "
+    f"{defensive_text} defensive across {len(signal_values)} available signals. "
+    f"Scores use causal percentiles against the selected {period} history.",
 )
 
 
@@ -1276,23 +1473,23 @@ brief_html = f"""
 <div class="brief-grid">
     <div class="brief-card">
         <div class="brief-label">Current regime</div>
-        <div class="brief-value" style="color:{score_color(scores.get('Composite', 0.0))};">{regime}</div>
+        <div class="brief-value" style="color:{score_color(scores.get("Composite", 0.0))};">{regime}</div>
         <div class="brief-copy">{regime_note}</div>
     </div>
     <div class="brief-card">
         <div class="brief-label">Portfolio stance</div>
-        <div class="brief-value">{notes['stance']}</div>
-        <div class="brief-copy">{notes['action']}</div>
+        <div class="brief-value">{notes["stance"]}</div>
+        <div class="brief-copy">{notes["action"]}</div>
     </div>
     <div class="brief-card">
         <div class="brief-label">Pressure point</div>
         <div class="brief-value">What matters now</div>
-        <div class="brief-copy">{notes['pressure']}</div>
+        <div class="brief-copy">{notes["pressure"]}</div>
     </div>
     <div class="brief-card">
         <div class="brief-label">Invalidation</div>
         <div class="brief-value">When to change</div>
-        <div class="brief-copy">{notes['invalidation']}</div>
+        <div class="brief-copy">{notes["invalidation"]}</div>
     </div>
 </div>
 """
@@ -1304,10 +1501,22 @@ st.markdown(brief_html, unsafe_allow_html=True)
 # =============================================================================
 
 pillar_items = [
-    ("Equity Tape", scores.get("Equity Tape", np.nan), "Trend, breadth, small caps, Nasdaq, semis."),
-    ("Credit", scores.get("Credit", np.nan), "High yield and loans versus safer bonds."),
+    (
+        "Equity Tape",
+        scores.get("Equity Tape", np.nan),
+        "Trend, breadth, small caps, Nasdaq, semis.",
+    ),
+    (
+        "Credit",
+        scores.get("Credit", np.nan),
+        "High yield and loans versus safer bonds.",
+    ),
     ("Rates", scores.get("Rates", np.nan), "Duration bid, yields, and curve impulse."),
-    ("Dollar Liquidity", scores.get("Dollar Liquidity", np.nan), "DXY/UUP and EUR/USD pressure."),
+    (
+        "Dollar Liquidity",
+        scores.get("Dollar Liquidity", np.nan),
+        "DXY/UUP and EUR/USD pressure.",
+    ),
     ("Commodities", scores.get("Commodities", np.nan), "Copper/gold and crude relief."),
     ("Volatility", scores.get("Volatility", np.nan), "VIX and vol-of-vol relief."),
     ("Composite", scores.get("Composite", np.nan), "Weighted regime score."),
@@ -1335,26 +1544,42 @@ for col, (label, value, note) in zip(pillar_cols, pillar_items):
 left, right = st.columns([0.85, 1.15])
 
 with left:
-    st.markdown("<div class='section-title'>Regime Scores</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-subtitle'>Positive scores mean easier risk conditions; negative scores flag tightening or defensive pressure.</div>", unsafe_allow_html=True)
-    st.plotly_chart(score_bar_chart(scores), use_container_width=True)
+    st.markdown(
+        "<div class='section-title'>Regime Scores</div>", unsafe_allow_html=True
+    )
+    st.markdown(
+        "<div class='section-subtitle'>Positive scores mean easier risk conditions; negative scores flag tightening or defensive pressure.</div>",
+        unsafe_allow_html=True,
+    )
+    st.plotly_chart(score_bar_chart(scores), width="stretch")
 
 with right:
-    st.markdown("<div class='section-title'>Signal Confirmation Matrix</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-subtitle'>Percentile-based scores across short-term moves, YTD impulse, trend, and composite confirmation.</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-title'>Signal Confirmation Matrix</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='section-subtitle'>Percentile-based scores across short-term moves, YTD impulse, trend, and composite confirmation.</div>",
+        unsafe_allow_html=True,
+    )
     if signals.empty:
         st.info("Not enough market data to calculate signal scores.")
     else:
-        st.plotly_chart(signal_heatmap(signals), use_container_width=True)
+        st.plotly_chart(signal_heatmap(signals), width="stretch")
 
-st.markdown("<div class='section-title'>Cross-Asset Performance</div>", unsafe_allow_html=True)
-st.markdown("<div class='section-subtitle'>Price moves across the liquid proxy set. Futures, FX, and yield indexes are included when usable data is available.</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-title'>Cross-Asset Performance</div>", unsafe_allow_html=True
+)
+st.markdown(
+    "<div class='section-subtitle'>Price moves across the liquid proxy set. Futures, FX, and yield indexes are included when usable data is available.</div>",
+    unsafe_allow_html=True,
+)
 
 perf_left, perf_right = st.columns([1.05, 0.95])
 with perf_left:
-    st.plotly_chart(asset_performance_heatmap(asset_returns), use_container_width=True)
+    st.plotly_chart(asset_performance_heatmap(asset_returns), width="stretch")
 with perf_right:
-    st.plotly_chart(horizon_bar_chart(asset_returns, primary_horizon), use_container_width=True)
+    st.plotly_chart(horizon_bar_chart(asset_returns, primary_horizon), width="stretch")
 
 
 # =============================================================================
@@ -1387,29 +1612,43 @@ for col, (label, copy) in zip(note_cols, note_blocks):
 # CHART TABS
 # =============================================================================
 
-st.markdown("<div class='section-title'>Market Structure Charts</div>", unsafe_allow_html=True)
-st.markdown("<div class='section-subtitle'>The signal chart uses constructive proxies, so higher usually means easier conditions or better risk confirmation.</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-title'>Market Structure Charts</div>", unsafe_allow_html=True
+)
+st.markdown(
+    "<div class='section-subtitle'>The signal chart uses constructive proxies, so higher usually means easier conditions or better risk confirmation.</div>",
+    unsafe_allow_html=True,
+)
 
-tab_assets, tab_signals, tab_tables = st.tabs(["Asset Tape", "Constructive Signals", "Tables"])
+tab_assets, tab_signals, tab_tables = st.tabs(
+    ["Asset Tape", "Constructive Signals", "Tables"]
+)
 
 with tab_assets:
-    st.plotly_chart(rebased_price_chart(prices, selected_assets), use_container_width=True)
+    st.plotly_chart(rebased_price_chart(prices, selected_assets), width="stretch")
 
 with tab_signals:
-    st.plotly_chart(signal_line_chart(prices, selected_signal_names), use_container_width=True)
+    st.plotly_chart(signal_line_chart(prices, selected_signal_names), width="stretch")
 
 with tab_tables:
     st.markdown("<div class='section-title'>Asset Moves</div>", unsafe_allow_html=True)
     if asset_returns.empty:
         st.info("No asset return table available.")
     else:
-        st.dataframe(display_asset_table(asset_returns), use_container_width=True, hide_index=True)
+        st.dataframe(
+            display_asset_table(asset_returns),
+            width="stretch",
+            hide_index=True,
+        )
 
-    st.markdown("<div class='section-title'>Signal Definitions and Scores</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-title'>Signal Definitions and Scores</div>",
+        unsafe_allow_html=True,
+    )
     if signals.empty:
         st.info("No signal table available.")
     else:
-        st.dataframe(display_signal_table(signals), use_container_width=True, hide_index=True)
+        st.dataframe(display_signal_table(signals), width="stretch", hide_index=True)
 
 
 # =============================================================================
@@ -1421,15 +1660,17 @@ with st.expander("Scoring methodology"):
         """
         This page uses liquid market proxies rather than macro-release endpoints.
 
-        Each signal is transformed so that a higher series is generally more constructive for liquidity or risk appetite. Examples: HYG/LQD higher is constructive for credit; 1/VIX higher is volatility relief; 1/DXY or 1/UUP higher is softer-dollar liquidity; 1/crude higher is crude disinflation relief. The tool then scores 1D, 1W, 1M, and 3M moves by percentile against the selected market-history window, adds a YTD impulse and a trend score, and rolls those into a -1 to +1 composite.
+        Each signal is transformed so that a higher series is generally more constructive for liquidity or risk appetite. Examples: HYG/LQD higher is constructive for credit; 1/VIX higher is volatility relief; 1/DXY or 1/UUP higher is softer-dollar liquidity; 1/crude higher is crude disinflation relief. The tool scores 1D, 1W, 1M, and 3M moves against prior observations only, compares the current YTD move with historical moves of the same trading-day length, adds a trend score, and rolls those into a -1 to +1 composite. The 1D score is diagnostic but intentionally receives no composite weight.
 
         This is a market-implied regime tool. It is designed to answer what the tape is confirming now, not what CPI, payrolls, ISM, claims, or Fed funds officially printed.
         """
     )
 
 if show_raw:
-    st.markdown("<div class='section-title'>Raw Market Data</div>", unsafe_allow_html=True)
-    st.dataframe(prices.tail(220), use_container_width=True)
+    st.markdown(
+        "<div class='section-title'>Raw Market Data</div>", unsafe_allow_html=True
+    )
+    st.dataframe(prices.tail(220), width="stretch")
 
 
 render_footer()

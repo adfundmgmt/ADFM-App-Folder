@@ -8,10 +8,12 @@ It is suitable for both price-only dashboards and OHLCV technical analysis.
 from __future__ import annotations
 
 import time
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as clock_time
 from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -37,9 +39,23 @@ DEFAULT_CONFIG = MarketDataConfig()
 OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Adj Close", "Volume")
 
 
+def configure_yfinance_cache() -> None:
+    """Point yfinance's timezone database at a writable shared temp folder."""
+    try:
+        cache_dir = Path(tempfile.gettempdir()) / "adfm-yfinance-cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        yf.set_tz_cache_location(str(cache_dir))
+    except Exception:
+        pass
+
+
 def unique_tickers(tickers: Iterable[str]) -> Tuple[str, ...]:
     """Normalize, de-duplicate, and preserve the input ticker order."""
-    return tuple(dict.fromkeys(ticker.strip().upper() for ticker in tickers if ticker and ticker.strip()))
+    return tuple(
+        dict.fromkeys(
+            ticker.strip().upper() for ticker in tickers if ticker and ticker.strip()
+        )
+    )
 
 
 def canonicalize_date_index(frame: pd.DataFrame) -> pd.DataFrame:
@@ -74,7 +90,9 @@ def drop_unfinished_daily_session(
 
 def safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     """Divide aligned series without generating infinite values."""
-    return numerator.div(denominator.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+    return numerator.div(denominator.replace(0, np.nan)).replace(
+        [np.inf, -np.inf], np.nan
+    )
 
 
 def percent_change(series: pd.Series, periods: int) -> float:
@@ -85,7 +103,9 @@ def percent_change(series: pd.Series, periods: int) -> float:
     return float(clean.iloc[-1] / clean.iloc[-(periods + 1)] - 1.0)
 
 
-def benchmark_calendar(raw_frames: Mapping[str, pd.DataFrame], benchmark: str) -> pd.DatetimeIndex:
+def benchmark_calendar(
+    raw_frames: Mapping[str, pd.DataFrame], benchmark: str
+) -> pd.DatetimeIndex:
     """Return actual observed benchmark sessions, not a synthetic business calendar."""
     frame = raw_frames.get(benchmark)
     if frame is None or frame.empty or "Close" not in frame:
@@ -94,7 +114,9 @@ def benchmark_calendar(raw_frames: Mapping[str, pd.DataFrame], benchmark: str) -
     return pd.DatetimeIndex(close.index).sort_values().unique()
 
 
-def stale_session_count(frame: pd.DataFrame, benchmark_sessions: pd.DatetimeIndex) -> int:
+def stale_session_count(
+    frame: pd.DataFrame, benchmark_sessions: pd.DatetimeIndex
+) -> int:
     """Number of observed benchmark sessions after a security's latest close."""
     if frame.empty or "Close" not in frame or len(benchmark_sessions) == 0:
         return len(benchmark_sessions)
@@ -126,7 +148,9 @@ def align_to_benchmark_calendar(
 def adjusted_ohlcv(raw: pd.DataFrame) -> pd.DataFrame:
     """Derive split/dividend-adjusted OHLCV while retaining raw data upstream."""
     out = raw.copy()
-    if out.empty or not {"Open", "High", "Low", "Close", "Volume"}.issubset(out.columns):
+    if out.empty or not {"Open", "High", "Low", "Close", "Volume"}.issubset(
+        out.columns
+    ):
         return out
     close = pd.to_numeric(out["Close"], errors="coerce")
     adjusted_close = pd.to_numeric(out.get("Adj Close", close), errors="coerce")
@@ -134,12 +158,16 @@ def adjusted_ohlcv(raw: pd.DataFrame) -> pd.DataFrame:
     if factor.notna().any():
         for column in ("Open", "High", "Low", "Close"):
             out[column] = pd.to_numeric(out[column], errors="coerce") * factor
-        out["Volume"] = safe_divide(pd.to_numeric(out["Volume"], errors="coerce"), factor)
+        out["Volume"] = safe_divide(
+            pd.to_numeric(out["Volume"], errors="coerce"), factor
+        )
     out["Adj Close"] = pd.to_numeric(out["Close"], errors="coerce")
     return out.replace([np.inf, -np.inf], np.nan)
 
 
-def _extract_ohlcv(raw: pd.DataFrame, tickers: Sequence[str]) -> Dict[str, pd.DataFrame]:
+def _extract_ohlcv(
+    raw: pd.DataFrame, tickers: Sequence[str]
+) -> Dict[str, pd.DataFrame]:
     """Normalize both yfinance single- and multi-ticker response layouts."""
     frames: Dict[str, pd.DataFrame] = {}
     if raw is None or raw.empty:
@@ -165,12 +193,19 @@ def _extract_ohlcv(raw: pd.DataFrame, tickers: Sequence[str]) -> Dict[str, pd.Da
     return frames
 
 
-def _download_chunk(tickers: Sequence[str], period: str, config: MarketDataConfig) -> Dict[str, pd.DataFrame]:
+def _download_chunk(
+    tickers: Sequence[str], period: str, config: MarketDataConfig
+) -> Dict[str, pd.DataFrame]:
     for attempt in range(config.retries):
         try:
             raw = yf.download(
-                tickers=list(tickers), period=period, interval="1d", progress=False,
-                auto_adjust=False, group_by="column", threads=True,
+                tickers=list(tickers),
+                period=period,
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+                group_by="column",
+                threads=True,
             )
             frames = _extract_ohlcv(raw, tickers)
             if frames:
@@ -184,7 +219,9 @@ def _download_chunk(tickers: Sequence[str], period: str, config: MarketDataConfi
 
 
 @st.cache_data(ttl=DEFAULT_CONFIG.cache_ttl_seconds, show_spinner=False)
-def fetch_daily_ohlcv(tickers: Tuple[str, ...], period: str = "3y") -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+def fetch_daily_ohlcv(
+    tickers: Tuple[str, ...], period: str = "3y"
+) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
     """Fetch raw daily OHLCV in batches with retries and individual fallback.
 
     The returned frames are raw provider observations.  The diagnostics table
@@ -193,15 +230,31 @@ def fetch_daily_ohlcv(tickers: Tuple[str, ...], period: str = "3y") -> Tuple[Dic
     symbols = unique_tickers(tickers)
     frames: Dict[str, pd.DataFrame] = {}
     for start in range(0, len(symbols), DEFAULT_CONFIG.chunk_size):
-        frames.update(_download_chunk(symbols[start:start + DEFAULT_CONFIG.chunk_size], period, DEFAULT_CONFIG))
+        frames.update(
+            _download_chunk(
+                symbols[start : start + DEFAULT_CONFIG.chunk_size],
+                period,
+                DEFAULT_CONFIG,
+            )
+        )
     for ticker in (symbol for symbol in symbols if symbol not in frames):
         frames.update(_download_chunk([ticker], period, DEFAULT_CONFIG))
-    missing = pd.DataFrame({"Ticker": [ticker for ticker in symbols if ticker not in frames], "Reason": "No valid OHLCV data returned"})
+    missing = pd.DataFrame(
+        {
+            "Ticker": [ticker for ticker in symbols if ticker not in frames],
+            "Reason": "No valid OHLCV data returned",
+        }
+    )
     record_data_load("Yahoo Finance", frames, symbols)
     return frames, missing
 
 
-def close_panel(raw_frames: Mapping[str, pd.DataFrame], tickers: Sequence[str], *, adjusted: bool = True) -> pd.DataFrame:
+def close_panel(
+    raw_frames: Mapping[str, pd.DataFrame],
+    tickers: Sequence[str],
+    *,
+    adjusted: bool = True,
+) -> pd.DataFrame:
     """Build a wide close panel without filling observations."""
     series: Dict[str, pd.Series] = {}
     for ticker in unique_tickers(tickers):

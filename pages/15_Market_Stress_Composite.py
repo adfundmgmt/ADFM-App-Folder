@@ -24,15 +24,36 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from adfm_core.ui import render_footer
+from adfm_core.market_data import configure_yfinance_cache
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_kpi_cards,
+    render_page_header,
+    render_selection_note,
+)
 import yfinance as yf
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
+configure_yfinance_cache()
+
 # ---------------- App config ----------------
 TITLE = "Market Stress Composite"
 st.set_page_config(page_title=TITLE, layout="wide")
-st.title(TITLE)
+inject_explorer_style()
+st.markdown(
+    "<style>.block-container { padding-top: 2.15rem; }</style>",
+    unsafe_allow_html=True,
+)
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description="Cross-asset stress regime from realized volatility, breadth, dispersion, VIX, and equity drawdown.",
+        eyebrow="ADFM Cross-Asset Stress",
+    )
+)
 
 # ---------------- Constants ----------------
 NY_TZ = "America/New_York"
@@ -73,13 +94,15 @@ LOAD_TICKERS = sorted(set(ALL_TICKERS + MARKET_CONTEXT_TICKERS))
 
 # ---------------- Weights ----------------
 BASE_WEIGHTS = {
-    "Equities_p": 0.25,
-    "Credit_p": 0.20,
-    "Commodities_p": 0.15,
-    "FX_p": 0.15,
-    "Rates_p": 0.15,
-    "Breadth_p": 0.07,
-    "Dispersion_p": 0.03,
+    "Equities_p": 0.22,
+    "Credit_p": 0.18,
+    "Commodities_p": 0.10,
+    "FX_p": 0.10,
+    "Rates_p": 0.10,
+    "Breadth_p": 0.10,
+    "Dispersion_p": 0.05,
+    "VIX_p": 0.10,
+    "Drawdown_p": 0.05,
 }
 
 FACTOR_ORDER = list(BASE_WEIGHTS.keys())
@@ -87,10 +110,7 @@ WEIGHTS_VEC = np.array([BASE_WEIGHTS[k] for k in FACTOR_ORDER], dtype=float)
 WEIGHTS_VEC = WEIGHTS_VEC / WEIGHTS_VEC.sum()
 
 WEIGHTS_TEXT = ", ".join(
-    [
-        f"{k.replace('_p', '')} {v:.2f}"
-        for k, v in BASE_WEIGHTS.items()
-    ]
+    [f"{k.replace('_p', '')} {v:.2f}" for k, v in BASE_WEIGHTS.items()]
 )
 
 # stale limit in trading sessions
@@ -102,6 +122,8 @@ STALE_LIMITS = {
     "Rates": 2,
     "Breadth": 2,
     "Dispersion": 2,
+    "VIX": 2,
+    "Drawdown": 2,
     "SPX": 2,
     "DD": 2,
 }
@@ -167,6 +189,7 @@ with st.sidebar:
         """
     )
 
+
 # ---------------- Helpers ----------------
 def now_et() -> pd.Timestamp:
     return pd.Timestamp.now(tz=NY_TZ)
@@ -231,7 +254,9 @@ def read_cached_series(ticker: str) -> pd.Series:
             return pd.Series(dtype=float, name=ticker)
 
         s = pd.to_numeric(df["price"], errors="coerce")
-        out = pd.Series(s.values, index=pd.to_datetime(df["Date"]), name=ticker).dropna()
+        out = pd.Series(
+            s.values, index=pd.to_datetime(df["Date"]), name=ticker
+        ).dropna()
         out = normalize_date_index(out)
         return out.sort_index()
     except Exception:
@@ -372,7 +397,9 @@ def load_price_panel(
                 combined = normalize_date_index(downloaded)
 
             write_cached_series(ticker, combined)
-            s = combined.loc[(combined.index >= start) & (combined.index <= end)].dropna()
+            s = combined.loc[
+                (combined.index >= start) & (combined.index <= end)
+            ].dropna()
             source = "Yahoo plus cache" if not cached.empty else "Yahoo"
         else:
             s = cached.loc[(cached.index >= start) & (cached.index <= end)].dropna()
@@ -390,14 +417,20 @@ def load_price_panel(
                 "Ticker": ticker,
                 "Source": source,
                 "Observations": int(s.dropna().shape[0]) if not s.empty else 0,
-                "First Date": first_date.date().isoformat() if pd.notna(first_date) else "",
-                "Last Date": last_date.date().isoformat() if pd.notna(last_date) else "",
-                "Calendar Days Since Last": int((end - last_date).days) if pd.notna(last_date) else np.nan,
+                "First Date": first_date.date().isoformat()
+                if pd.notna(first_date)
+                else "",
+                "Last Date": last_date.date().isoformat()
+                if pd.notna(last_date)
+                else "",
+                "Calendar Days Since Last": int((end - last_date).days)
+                if pd.notna(last_date)
+                else np.nan,
             }
         )
 
     if series_list:
-        panel = pd.concat(series_list, axis=1).sort_index()
+        panel = pd.concat(series_list, axis=1, sort=False).sort_index()
         panel = normalize_date_index(panel)
     else:
         panel = pd.DataFrame()
@@ -437,15 +470,20 @@ def rolling_percentile_trading(
 ) -> pd.Series:
     s = normalize_date_index(values).reindex(idx)
 
+    min_history = max(40, window_trading_days // 6)
+
     def _last_percentile(x):
-        arr = pd.Series(x).dropna()
-        if arr.empty:
+        current = x.iloc[-1]
+        history = pd.Series(x.iloc[:-1]).dropna()
+        if pd.isna(current) or len(history) < min_history:
             return np.nan
-        return arr.rank(pct=True).iloc[-1]
+        below = float((history < current).sum())
+        tied = float((history == current).sum())
+        return (below + 0.5 * tied) / len(history)
 
     out = s.rolling(
-        window_trading_days,
-        min_periods=max(40, window_trading_days // 6),
+        window_trading_days + 1,
+        min_periods=min_history + 1,
     ).apply(_last_percentile, raw=False)
 
     return normalize_date_index(out)
@@ -553,12 +591,6 @@ def style_factor_table(df: pd.DataFrame):
 
     styler = df.style.format(fmt, na_rep="N/A")
 
-    cols_to_color = [
-        c
-        for c in ["Current %ile", "1D Chg", "5D Chg", "21D Chg"]
-        if c in df.columns
-    ]
-
     try:
         styler = styler.map(stress_cell_style, subset=["Current %ile"])
     except Exception:
@@ -659,7 +691,9 @@ def generate_commentary(
     if pd.notna(breadth_raw_latest):
         breadth_text = f"Raw stress breadth is {breadth_raw_latest:.0%}"
         if pd.notna(breadth_raw_5d_chg):
-            breadth_text += f", with a five-session change of {breadth_raw_5d_chg:+.0%}."
+            breadth_text += (
+                f", with a five-session change of {breadth_raw_5d_chg:+.0%}."
+            )
         else:
             breadth_text += "."
 
@@ -701,7 +735,9 @@ if raw_px.empty:
     st.stop()
 
 status.write("Building trading calendar...")
-trade_idx_all, calendar_source = build_trading_calendar_from_panel(raw_px, start_all, today)
+trade_idx_all, calendar_source = build_trading_calendar_from_panel(
+    raw_px, start_all, today
+)
 
 if len(trade_idx_all) == 0:
     status.update(label="Failed to build trading calendar", state="error")
@@ -709,7 +745,9 @@ if len(trade_idx_all) == 0:
     st.stop()
 
 if calendar_source == "Business-day fallback":
-    st.warning("Market session calendar could not be loaded from Yahoo. Using business-day fallback.")
+    st.warning(
+        "Market session calendar could not be loaded from Yahoo. Using business-day fallback."
+    )
 else:
     st.caption(f"Calendar source: {calendar_source}")
 
@@ -728,8 +766,14 @@ if "^GSPC" in raw_px.columns and not raw_px["^GSPC"].dropna().empty:
     raw_panel["SPX"] = reindex_raw(raw_px["^GSPC"], trade_idx_all)
 elif "SPY" in raw_px.columns and not raw_px["SPY"].dropna().empty:
     spy_raw = reindex_raw(raw_px["SPY"], trade_idx_all)
-    base_spy_raw = safe_float(spy_raw.dropna().iloc[0]) if not spy_raw.dropna().empty else np.nan
-    raw_panel["SPX"] = (spy_raw / base_spy_raw) * 100.0 if pd.notna(base_spy_raw) and base_spy_raw != 0 else np.nan
+    base_spy_raw = (
+        safe_float(spy_raw.dropna().iloc[0]) if not spy_raw.dropna().empty else np.nan
+    )
+    raw_panel["SPX"] = (
+        (spy_raw / base_spy_raw) * 100.0
+        if pd.notna(base_spy_raw) and base_spy_raw != 0
+        else np.nan
+    )
 else:
     raw_panel["SPX"] = np.nan
 
@@ -752,10 +796,13 @@ panel = filled_panel.copy()
 status.write("Computing realized volatility and rolling percentiles...")
 
 ret = panel[sorted(set(ALL_TICKERS))].pct_change(fill_method=None)
-rvol = np.sqrt(252.0) * ret.rolling(
-    rv_window,
-    min_periods=max(5, rv_window // 2),
-).std()
+rvol = (
+    np.sqrt(252.0)
+    * ret.rolling(
+        rv_window,
+        min_periods=max(5, rv_window // 2),
+    ).std()
+)
 
 rvol = normalize_date_index(rvol)
 
@@ -770,6 +817,10 @@ for ticker in rvol.columns:
     )
 
 rvol_pct = normalize_date_index(rvol_pct)
+
+panel["DD_stress"] = -(
+    100.0 * (panel["SPX"] / panel["SPX"].cummax() - 1.0).clip(upper=0)
+)
 
 # ---------------- Asset-class factors ----------------
 factor_panel = pd.DataFrame(index=panel.index)
@@ -807,12 +858,18 @@ factor_panel["Dispersion_p"] = rolling_percentile_trading(
     window_td,
 )
 
-factor_panel = normalize_date_index(factor_panel)
-
-# ---------------- Derived series ----------------
-panel["DD_stress"] = -(
-    100.0 * (panel["SPX"] / panel["SPX"].cummax() - 1.0).clip(upper=0)
+factor_panel["VIX_p"] = rolling_percentile_trading(
+    panel["VIX"],
+    panel.index,
+    window_td,
 )
+factor_panel["Drawdown_p"] = rolling_percentile_trading(
+    panel["DD_stress"],
+    panel.index,
+    window_td,
+)
+
+factor_panel = normalize_date_index(factor_panel)
 
 # ---------------- Lookback slice ----------------
 start_lb = as_naive_date(today - pd.DateOffset(years=years))
@@ -867,16 +924,20 @@ mask_map["SPX"], age_map["SPX"] = compute_stale_info(
 
 mask_map["DD"] = mask_map["SPX"].copy()
 age_map["DD"] = age_map["SPX"].copy()
+mask_map["Drawdown"] = mask_map["SPX"].copy()
+age_map["Drawdown"] = age_map["SPX"].copy()
+mask_map["VIX"], age_map["VIX"] = compute_stale_info(
+    raw_panel["VIX"],
+    panel.index,
+    STALE_LIMITS["VIX"],
+)
 
 # ---------------- Masks aligned ----------------
 masks = pd.DataFrame(index=scores.index)
 
-for factor_name in ["Equities", "Credit", "Commodities", "FX", "Rates", "Breadth", "Dispersion"]:
+for factor_name in [column.replace("_p", "") for column in FACTOR_ORDER]:
     masks[f"{factor_name}_m"] = (
-        mask_map[factor_name]
-        .reindex(scores.index)
-        .fillna(False)
-        .astype(float)
+        mask_map[factor_name].reindex(scores.index).fillna(False).astype(float)
     )
 
 score_cols = FACTOR_ORDER
@@ -909,8 +970,12 @@ comp = np.where(
 )
 
 comp_s = pd.Series(comp, index=scores.index, name="Composite").dropna()
-active_weight_s = pd.Series(active_w, index=scores.index, name="active_weight").reindex(comp_s.index)
-active_factors_s = pd.Series(M.sum(axis=1), index=scores.index, name="active_factors").reindex(comp_s.index)
+active_weight_s = pd.Series(active_w, index=scores.index, name="active_weight").reindex(
+    comp_s.index
+)
+active_factors_s = pd.Series(
+    M.sum(axis=1), index=scores.index, name="active_factors"
+).reindex(comp_s.index)
 
 contrib_cols = [c.replace("_p", "_contribution") for c in score_cols]
 contrib_panel = pd.DataFrame(
@@ -920,7 +985,9 @@ contrib_panel = pd.DataFrame(
 )
 
 if comp_s.empty:
-    status.update(label="Composite has no valid points for the selected lookback", state="error")
+    status.update(
+        label="Composite has no valid points for the selected lookback", state="error"
+    )
     st.error("Composite has no valid points for the selected lookback.")
     st.stop()
 
@@ -948,13 +1015,15 @@ spx_rebased = (
     else pd.Series(index=plot_idx, dtype=float)
 )
 
-dd_plot = (
-    100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)
-).clip(upper=0)
+dd_plot = (100.0 * (panel_plot["SPX"] / panel_plot["SPX"].cummax() - 1.0)).clip(upper=0)
 
 latest_spx_level = safe_float(panel_plot["SPX"].iloc[-1]) if len(panel_plot) else np.nan
-latest_dd_val = safe_float(panel_plot["DD_stress"].iloc[-1]) if len(panel_plot) else np.nan
-latest_active_weight = safe_float(active_weight_s.iloc[-1]) if not active_weight_s.empty else np.nan
+latest_dd_val = (
+    safe_float(panel_plot["DD_stress"].iloc[-1]) if len(panel_plot) else np.nan
+)
+latest_active_weight = (
+    safe_float(active_weight_s.iloc[-1]) if not active_weight_s.empty else np.nan
+)
 latest_active_factors = (
     int(active_factors_s.iloc[-1])
     if not active_factors_s.empty and pd.notna(active_factors_s.iloc[-1])
@@ -984,7 +1053,9 @@ latest_factor_table = pd.DataFrame(
         "Base Weight %": WEIGHTS_VEC * 100.0,
         "Effective Weight %": np.where(
             latest_active_weight > 0,
-            (WEIGHTS_VEC * masks.loc[latest_idx, mask_cols].values) / latest_active_weight * 100.0,
+            (WEIGHTS_VEC * masks.loc[latest_idx, mask_cols].values)
+            / latest_active_weight
+            * 100.0,
             np.nan,
         ),
         "Contribution pts": current_contrib.values,
@@ -992,14 +1063,18 @@ latest_factor_table = pd.DataFrame(
     }
 )
 
-latest_factor_table = latest_factor_table.sort_values("Contribution pts", ascending=False)
+latest_factor_table = latest_factor_table.sort_values(
+    "Contribution pts", ascending=False
+)
 
 breadth_raw_plot = breadth_raw.reindex(plot_idx)
 latest_breadth_raw = latest_or_nan(breadth_raw_plot)
 breadth_raw_5d_chg = change_last(breadth_raw_plot, 5)
 
 peak_idx = comp_s.idxmax()
-days_since_peak = float(len(comp_s.loc[peak_idx:]) - 1) if pd.notna(peak_idx) else np.nan
+days_since_peak = (
+    float(len(comp_s.loc[peak_idx:]) - 1) if pd.notna(peak_idx) else np.nan
+)
 peak_val = safe_float(comp_s.max())
 
 # ---------------- Commentary ----------------
@@ -1019,53 +1094,51 @@ commentary_text = generate_commentary(
     days_since_peak=days_since_peak,
 )
 
-st.info(commentary_text)
+render_selection_note("Active stress read", commentary_text)
 
 # ---------------- Top metrics ----------------
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-
-c1.metric(
-    "Daily regime",
-    regime_label(latest_val),
-    f"{latest_val:.0f}",
-)
-
-c2.metric(
-    "5D regime",
-    regime_label(five_day_val),
-    f"{five_day_val:.0f}" if not pd.isna(five_day_val) else "N/A",
-)
-
-c3.metric(
-    "21D regime",
-    regime_label(twenty_one_day_val),
-    f"{twenty_one_day_val:.0f}" if not pd.isna(twenty_one_day_val) else "N/A",
-)
-
-c4.metric(
-    "5D change",
-    f"{comp_5d_chg:+.1f}" if not pd.isna(comp_5d_chg) else "N/A",
-)
-
-c5.metric(
-    "Raw stress breadth",
-    f"{latest_breadth_raw:.0%}" if not pd.isna(latest_breadth_raw) else "N/A",
-    f"{breadth_raw_5d_chg:+.0%}" if not pd.isna(breadth_raw_5d_chg) else None,
-)
-
-c6.metric(
-    "Active weight",
-    f"{latest_active_weight:.0%}" if pd.notna(latest_active_weight) else "N/A",
-    f"{latest_active_factors}/7 factors",
+render_kpi_cards(
+    [
+        ("Daily regime", regime_label(latest_val), f"{latest_val:.0f} / 100"),
+        (
+            "5D regime",
+            regime_label(five_day_val),
+            f"{five_day_val:.0f} / 100" if not pd.isna(five_day_val) else "N/A",
+        ),
+        (
+            "21D regime",
+            regime_label(twenty_one_day_val),
+            f"{twenty_one_day_val:.0f} / 100"
+            if not pd.isna(twenty_one_day_val)
+            else "N/A",
+        ),
+        (
+            "5D change",
+            f"{comp_5d_chg:+.1f}" if not pd.isna(comp_5d_chg) else "N/A",
+            "positive = stress building",
+        ),
+        (
+            "Raw stress breadth",
+            f"{latest_breadth_raw:.0%}" if not pd.isna(latest_breadth_raw) else "N/A",
+            f"{breadth_raw_5d_chg:+.0%} over 5D"
+            if not pd.isna(breadth_raw_5d_chg)
+            else "N/A",
+        ),
+        (
+            "Signal coverage",
+            f"{latest_active_weight:.0%}" if pd.notna(latest_active_weight) else "N/A",
+            f"{latest_active_factors}/{len(FACTOR_ORDER)} factors active",
+        ),
+    ]
 )
 
 # ---------------- Tabs ----------------
 tab_composite, tab_factors, tab_diagnostics, tab_download = st.tabs(
     [
         "Composite",
-        "Factors",
-        "Diagnostics",
-        "Download Data",
+        "Drivers",
+        "Data Quality",
+        "Export",
     ]
 )
 
@@ -1174,7 +1247,7 @@ with tab_composite:
         legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.subheader("Regime transition")
 
@@ -1224,7 +1297,7 @@ with tab_composite:
 
     st.dataframe(
         style_factor_table(show_factor),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -1265,7 +1338,7 @@ with tab_factors:
     )
 
     st.caption(heat_caption)
-    st.plotly_chart(heat_fig, use_container_width=True)
+    st.plotly_chart(heat_fig, width="stretch")
 
     st.subheader("Today versus five sessions ago")
 
@@ -1293,7 +1366,7 @@ with tab_factors:
         showlegend=False,
     )
 
-    st.plotly_chart(bar_fig, use_container_width=True)
+    st.plotly_chart(bar_fig, width="stretch")
 
     st.subheader("Underlying instrument RVOL snapshot")
 
@@ -1302,22 +1375,30 @@ with tab_factors:
     for ticker in sorted(set(ALL_TICKERS)):
         col = f"{ticker}_p"
         if col in rvol_pct.columns:
-            asset_class = next(
-                k
-                for k, v in ASSET_CLASS_MAP.items()
-                if ticker in v
-            )
+            asset_class = next(k for k, v in ASSET_CLASS_MAP.items() if ticker in v)
 
-            last_raw_date = raw_panel[ticker].dropna().index.max() if ticker in raw_panel.columns else pd.NaT
+            last_raw_date = (
+                raw_panel[ticker].dropna().index.max()
+                if ticker in raw_panel.columns
+                else pd.NaT
+            )
 
             snap.append(
                 {
                     "Ticker": ticker,
                     "Asset Class": asset_class,
-                    "Last Raw Date": last_raw_date.date().isoformat() if pd.notna(last_raw_date) else "",
-                    "RVOL Percentile": safe_float(rvol_pct.loc[latest_idx, col] * 100.0),
-                    "RVOL": safe_float(rvol.loc[latest_idx, ticker]) if ticker in rvol.columns else np.nan,
-                    "Latest Price": safe_float(panel.loc[latest_idx, ticker]) if ticker in panel.columns else np.nan,
+                    "Last Raw Date": last_raw_date.date().isoformat()
+                    if pd.notna(last_raw_date)
+                    else "",
+                    "RVOL Percentile": safe_float(
+                        rvol_pct.loc[latest_idx, col] * 100.0
+                    ),
+                    "RVOL": safe_float(rvol.loc[latest_idx, ticker])
+                    if ticker in rvol.columns
+                    else np.nan,
+                    "Latest Price": safe_float(panel.loc[latest_idx, ticker])
+                    if ticker in panel.columns
+                    else np.nan,
                 }
             )
 
@@ -1343,7 +1424,7 @@ with tab_factors:
 
         st.dataframe(
             snap_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     else:
@@ -1362,7 +1443,7 @@ with tab_diagnostics:
 
         st.dataframe(
             fetch_show.sort_values(["Source", "Ticker"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1370,7 +1451,9 @@ with tab_diagnostics:
         missing_count = int((fetch_show["Source"] == "Missing").sum())
 
         if missing_count > 0:
-            st.warning(f"{missing_count} ticker(s) are missing from both Yahoo and local cache.")
+            st.warning(
+                f"{missing_count} ticker(s) are missing from both Yahoo and local cache."
+            )
 
         if fallback_count > 0:
             st.warning(f"{fallback_count} ticker(s) used local cache fallback.")
@@ -1379,35 +1462,27 @@ with tab_diagnostics:
 
     latest = latest_idx
 
+    diagnostic_factors = [column.replace("_p", "") for column in FACTOR_ORDER]
     diag = pd.DataFrame(
         {
-            "Factor": ["Equities", "Credit", "Commodities", "FX", "Rates", "Breadth", "Dispersion"],
+            "Factor": diagnostic_factors,
             "Raw Score": [
-                safe_float(scores.loc[latest, "Equities_p"] * 100.0) if "Equities_p" in scores.columns else np.nan,
-                safe_float(scores.loc[latest, "Credit_p"] * 100.0) if "Credit_p" in scores.columns else np.nan,
-                safe_float(scores.loc[latest, "Commodities_p"] * 100.0) if "Commodities_p" in scores.columns else np.nan,
-                safe_float(scores.loc[latest, "FX_p"] * 100.0) if "FX_p" in scores.columns else np.nan,
-                safe_float(scores.loc[latest, "Rates_p"] * 100.0) if "Rates_p" in scores.columns else np.nan,
-                safe_float(scores.loc[latest, "Breadth_p"] * 100.0) if "Breadth_p" in scores.columns else np.nan,
-                safe_float(scores.loc[latest, "Dispersion_p"] * 100.0) if "Dispersion_p" in scores.columns else np.nan,
+                safe_float(scores.loc[latest, f"{factor}_p"] * 100.0)
+                if f"{factor}_p" in scores.columns
+                else np.nan
+                for factor in diagnostic_factors
             ],
             "Active": [
-                bool(masks.loc[latest, "Equities_m"]) if "Equities_m" in masks.columns else False,
-                bool(masks.loc[latest, "Credit_m"]) if "Credit_m" in masks.columns else False,
-                bool(masks.loc[latest, "Commodities_m"]) if "Commodities_m" in masks.columns else False,
-                bool(masks.loc[latest, "FX_m"]) if "FX_m" in masks.columns else False,
-                bool(masks.loc[latest, "Rates_m"]) if "Rates_m" in masks.columns else False,
-                bool(masks.loc[latest, "Breadth_m"]) if "Breadth_m" in masks.columns else False,
-                bool(masks.loc[latest, "Dispersion_m"]) if "Dispersion_m" in masks.columns else False,
+                bool(masks.loc[latest, f"{factor}_m"])
+                if f"{factor}_m" in masks.columns
+                else False
+                for factor in diagnostic_factors
             ],
             "Trading Sessions Since Raw Update": [
-                age_map["Equities"].reindex(plot_idx).loc[latest] if "Equities" in age_map else np.nan,
-                age_map["Credit"].reindex(plot_idx).loc[latest] if "Credit" in age_map else np.nan,
-                age_map["Commodities"].reindex(plot_idx).loc[latest] if "Commodities" in age_map else np.nan,
-                age_map["FX"].reindex(plot_idx).loc[latest] if "FX" in age_map else np.nan,
-                age_map["Rates"].reindex(plot_idx).loc[latest] if "Rates" in age_map else np.nan,
-                age_map["Breadth"].reindex(plot_idx).loc[latest] if "Breadth" in age_map else np.nan,
-                age_map["Dispersion"].reindex(plot_idx).loc[latest] if "Dispersion" in age_map else np.nan,
+                age_map[factor].reindex(plot_idx).loc[latest]
+                if factor in age_map
+                else np.nan
+                for factor in diagnostic_factors
             ],
         }
     )
@@ -1424,7 +1499,7 @@ with tab_diagnostics:
 
     st.dataframe(
         diag,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -1444,9 +1519,17 @@ with tab_diagnostics:
                     {
                         "Series": label,
                         "Latest": safe_float(s.iloc[-1]),
-                        "1D Chg %": safe_float(s.pct_change(fill_method=None).iloc[-1] * 100.0),
-                        "5D Chg %": safe_float((s.iloc[-1] / s.iloc[-6] - 1.0) * 100.0) if len(s) > 5 else np.nan,
-                        "21D Chg %": safe_float((s.iloc[-1] / s.iloc[-22] - 1.0) * 100.0) if len(s) > 21 else np.nan,
+                        "1D Chg %": safe_float(
+                            s.pct_change(fill_method=None).iloc[-1] * 100.0
+                        ),
+                        "5D Chg %": safe_float((s.iloc[-1] / s.iloc[-6] - 1.0) * 100.0)
+                        if len(s) > 5
+                        else np.nan,
+                        "21D Chg %": safe_float(
+                            (s.iloc[-1] / s.iloc[-22] - 1.0) * 100.0
+                        )
+                        if len(s) > 21
+                        else np.nan,
                     }
                 )
 
@@ -1458,7 +1541,7 @@ with tab_diagnostics:
 
         st.dataframe(
             context_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1498,15 +1581,7 @@ with tab_download:
     )
 
     export_scores = (scores.reindex(export_idx) * 100.0).rename(
-        columns={
-            "Equities_p": "Equities_pct",
-            "Credit_p": "Credit_pct",
-            "Commodities_p": "Commodities_pct",
-            "FX_p": "FX_pct",
-            "Rates_p": "Rates_pct",
-            "Breadth_p": "Breadth_pct",
-            "Dispersion_p": "Dispersion_pct",
-        }
+        columns={column: column.replace("_p", "_pct") for column in FACTOR_ORDER}
     )
 
     export_masks = masks.reindex(export_idx).copy()
@@ -1545,11 +1620,22 @@ with tab_download:
         out.to_csv(),
         file_name="cross_asset_rvol_stress_composite.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
     st.caption(
         "CSV includes raw prices, filled prices, RVOL, RVOL percentiles, factor scores, masks, contributions, breadth, dispersion, and composite metadata."
+    )
+
+with st.expander("Methodology and active sample"):
+    st.markdown(
+        f"""
+        - Each instrument uses {rv_window}-session annualized realized volatility, ranked against its prior {pctl_window_years}-year history.
+        - Asset-class scores average constituent RVOL percentiles. Breadth measures the share of instruments above the {stress_cutoff}th percentile; dispersion measures disagreement across asset classes.
+        - VIX level and S&P 500 drawdown are now explicit factors, so option-market stress and price damage can confirm or temper RVOL-only signals.
+        - Active-factor weights are renormalized when a source is stale or missing. The composite is unavailable when no valid weighted factors remain.
+        - High stress begins at {REGIME_HI}; low stress ends at {REGIME_LO}. These are regime descriptors, not return forecasts.
+        """
     )
 
 render_footer()

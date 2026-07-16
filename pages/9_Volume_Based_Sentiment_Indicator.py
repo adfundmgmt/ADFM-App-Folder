@@ -11,10 +11,22 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-from adfm_core.ui import render_footer
+from adfm_core.market_data import configure_yfinance_cache
+from adfm_core.regime_math import rolling_percentile_previous
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_kpi_cards,
+    render_page_header,
+    render_section_header,
+    render_selection_note,
+)
 import yfinance as yf
 from plotly.subplots import make_subplots
 from zoneinfo import ZoneInfo
+
+configure_yfinance_cache()
 
 
 # =============================================================================
@@ -46,19 +58,55 @@ DEFAULT_HEADERS = {
 }
 
 DEFAULT_SYMBOLS = [
-    "QQQ", "SPY", "IWM", "DIA", "TLT",
+    "QQQ",
+    "SPY",
+    "IWM",
+    "DIA",
+    "TLT",
     "GLD",
 ]
 
 US_MARKET_HOLIDAYS_STATIC = [
-    "2024-01-01", "2024-01-15", "2024-02-19", "2024-03-29", "2024-05-27",
-    "2024-06-19", "2024-07-04", "2024-09-02", "2024-11-28", "2024-12-25",
-    "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
-    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27", "2025-12-25",
-    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
-    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
-    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
-    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+    "2024-01-01",
+    "2024-01-15",
+    "2024-02-19",
+    "2024-03-29",
+    "2024-05-27",
+    "2024-06-19",
+    "2024-07-04",
+    "2024-09-02",
+    "2024-11-28",
+    "2024-12-25",
+    "2025-01-01",
+    "2025-01-20",
+    "2025-02-17",
+    "2025-04-18",
+    "2025-05-26",
+    "2025-06-19",
+    "2025-07-04",
+    "2025-09-01",
+    "2025-11-27",
+    "2025-12-25",
+    "2026-01-01",
+    "2026-01-19",
+    "2026-02-16",
+    "2026-04-03",
+    "2026-05-25",
+    "2026-06-19",
+    "2026-07-03",
+    "2026-09-07",
+    "2026-11-26",
+    "2026-12-25",
+    "2027-01-01",
+    "2027-01-18",
+    "2027-02-15",
+    "2027-03-26",
+    "2027-05-31",
+    "2027-06-18",
+    "2027-07-05",
+    "2027-09-06",
+    "2027-11-25",
+    "2027-12-24",
 ]
 
 PASTEL_GREEN = "#52b788"
@@ -68,7 +116,9 @@ AMBER = "#f59e0b"
 BLUE = "#2563eb"
 
 TITLE = "Volume Regime Explorer"
-SUBTITLE = "Tape participation, relative volume, and forward outcomes around extreme sessions."
+SUBTITLE = (
+    "Tape participation, relative volume, and forward outcomes around extreme sessions."
+)
 
 
 # =============================================================================
@@ -103,11 +153,13 @@ CUSTOM_CSS = """
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+inject_explorer_style()
 
 
 # =============================================================================
 # BASIC HELPERS
 # =============================================================================
+
 
 def safe_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
@@ -237,6 +289,7 @@ def request_text(url: str, timeout: int = 20, retries: int = 3) -> str:
 # MARKET CALENDAR
 # =============================================================================
 
+
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def get_holiday_values(start_date_str: str, end_date_str: str) -> list:
     start_date = pd.Timestamp(start_date_str).normalize()
@@ -299,11 +352,14 @@ def is_market_open_now() -> bool:
 # LOCAL CACHE
 # =============================================================================
 
+
 def cache_path_for_symbol(symbol: str) -> Path:
     return LOCAL_CACHE_DIR / f"{safe_symbol_for_path(symbol)}.csv"
 
 
-def load_local_cache(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> Optional[pd.DataFrame]:
+def load_local_cache(
+    symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> Optional[pd.DataFrame]:
     path = cache_path_for_symbol(symbol)
 
     if not path.exists():
@@ -324,8 +380,11 @@ def load_local_cache(symbol: str, start_date: pd.Timestamp, end_date: pd.Timesta
         if missing:
             return None
 
-        df = df[needed].copy()
-        df = df.loc[(df.index >= start_date.normalize()) & (df.index <= end_date.normalize())].copy()
+        keep = needed + (["Raw_Close"] if "Raw_Close" in df.columns else [])
+        df = df[keep].copy()
+        df = df.loc[
+            (df.index >= start_date.normalize()) & (df.index <= end_date.normalize())
+        ].copy()
 
         if df.empty:
             return None
@@ -344,7 +403,10 @@ def save_local_cache(symbol: str, df: pd.DataFrame) -> None:
 
     try:
         out = normalize_dt_index(df)
-        out = out[["Open", "High", "Low", "Close", "Volume"]].copy()
+        keep = ["Open", "High", "Low", "Close", "Volume"]
+        if "Raw_Close" in out.columns:
+            keep.append("Raw_Close")
+        out = out[keep].copy()
         out.to_csv(path, index_label="Date")
     except Exception:
         pass
@@ -353,6 +415,7 @@ def save_local_cache(symbol: str, df: pd.DataFrame) -> None:
 # =============================================================================
 # DATA FETCH
 # =============================================================================
+
 
 def validate_ohlcv(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     if df.empty:
@@ -366,9 +429,10 @@ def validate_ohlcv(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     if missing:
         raise ValueError(f"{source_name} missing columns: {missing}")
 
-    out = out[needed].copy()
+    keep = needed + (["Raw_Close"] if "Raw_Close" in out.columns else [])
+    out = out[keep].copy()
 
-    for col in needed:
+    for col in keep:
         out[col] = safe_numeric(out[col])
 
     out = out.dropna(subset=["Open", "High", "Low", "Close", "Volume"]).copy()
@@ -381,7 +445,9 @@ def validate_ohlcv(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     return out
 
 
-def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+def fetch_from_yahoo_chart_api(
+    symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> pd.DataFrame:
     period1 = to_unix_seconds(start_date)
     period2 = to_unix_seconds(end_date + pd.Timedelta(days=1))
 
@@ -405,7 +471,8 @@ def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: 
     quote = result0.get("indicators", {}).get("quote", [{}])[0]
     adjclose = result0.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose")
 
-    closes = adjclose if adjclose is not None else quote.get("close")
+    raw_closes = quote.get("close")
+    closes = adjclose if adjclose is not None else raw_closes
 
     if not ts:
         raise ValueError("Yahoo chart API returned no timestamps.")
@@ -417,6 +484,7 @@ def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: 
             "High": quote.get("high"),
             "Low": quote.get("low"),
             "Close": closes,
+            "Raw_Close": raw_closes,
             "Volume": quote.get("volume"),
         }
     )
@@ -425,12 +493,14 @@ def fetch_from_yahoo_chart_api(symbol: str, start_date: pd.Timestamp, end_date: 
     return validate_ohlcv(df, "Yahoo Chart API")
 
 
-def fetch_from_yfinance(symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+def fetch_from_yfinance(
+    symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> pd.DataFrame:
     df = yf.download(
         symbol,
         start=start_date.strftime("%Y-%m-%d"),
         end=(end_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-        auto_adjust=True,
+        auto_adjust=False,
         progress=False,
         threads=False,
     )
@@ -442,12 +512,18 @@ def fetch_from_yfinance(symbol: str, start_date: pd.Timestamp, end_date: pd.Time
         df.columns = [c[0] for c in df.columns]
 
     df = df.rename(columns=str.title)
+    if "Close" in df.columns:
+        df["Raw_Close"] = df["Close"]
+    if "Adj Close" in df.columns:
+        df["Close"] = df["Adj Close"]
 
     return validate_ohlcv(df, "yfinance")
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def fetch_ohlcv(symbol: str, start_date_str: str, end_date_str: str) -> Tuple[pd.DataFrame, str]:
+def fetch_ohlcv(
+    symbol: str, start_date_str: str, end_date_str: str
+) -> Tuple[pd.DataFrame, str]:
     start_date = pd.Timestamp(start_date_str).normalize()
     end_date = pd.Timestamp(end_date_str).normalize()
 
@@ -470,7 +546,9 @@ def fetch_ohlcv(symbol: str, start_date_str: str, end_date_str: str) -> Tuple[pd
     cached = load_local_cache(symbol, start_date, end_date)
 
     if cached is not None and not cached.empty:
-        cache_mtime = dt.datetime.fromtimestamp(cache_path_for_symbol(symbol).stat().st_mtime)
+        cache_mtime = dt.datetime.fromtimestamp(
+            cache_path_for_symbol(symbol).stat().st_mtime
+        )
         source = f"Local cache saved {cache_mtime.strftime('%Y-%m-%d %H:%M')}"
         return cached, source
 
@@ -510,6 +588,7 @@ def fetch_shares_outstanding(symbol: str) -> Optional[float]:
 # =============================================================================
 # SIGNAL ENGINE
 # =============================================================================
+
 
 def compute_percentile_of_last(values: pd.Series) -> float:
     s = pd.Series(values).dropna()
@@ -630,7 +709,9 @@ def setup_color(setup: str, ret_1d: Optional[float] = None) -> str:
     return PASTEL_GREY
 
 
-def compute_forward_outcomes(df: pd.DataFrame, horizons: Tuple[int, ...] = (5, 10, 20, 63)) -> pd.DataFrame:
+def compute_forward_outcomes(
+    df: pd.DataFrame, horizons: Tuple[int, ...] = (5, 10, 20, 63)
+) -> pd.DataFrame:
     out = df.copy()
 
     for h in horizons:
@@ -647,8 +728,8 @@ def compute_forward_outcomes(df: pd.DataFrame, horizons: Tuple[int, ...] = (5, 1
         if not np.isfinite(close_arr[i]) or close_arr[i] <= 0:
             continue
 
-        forward_low = low_arr[i + 1: i + 21]
-        forward_high = high_arr[i + 1: i + 21]
+        forward_low = low_arr[i + 1 : i + 21]
+        forward_high = high_arr[i + 1 : i + 21]
 
         if len(forward_low) > 0 and np.isfinite(forward_low).any():
             max_dd_20[i] = (np.nanmin(forward_low) / close_arr[i] - 1.0) * 100.0
@@ -673,7 +754,8 @@ def compute_volume_framework(
 ) -> Tuple[pd.DataFrame, str, bool]:
     out = df.copy()
 
-    out["Dollar_Volume"] = out["Close"] * out["Volume"]
+    raw_close = out.get("Raw_Close", out["Close"])
+    out["Dollar_Volume"] = raw_close * out["Volume"]
 
     turnover_fallback = False
 
@@ -692,27 +774,36 @@ def compute_volume_framework(
 
     min_smooth = max(10, smooth_window // 2)
 
-    out["Volume_Baseline"] = out["Volume_Display"].rolling(
-        smooth_window,
-        min_periods=min_smooth,
-    ).median()
+    out["Volume_Baseline"] = (
+        out["Volume_Display"]
+        .shift(1)
+        .rolling(
+            smooth_window,
+            min_periods=min_smooth,
+        )
+        .median()
+    )
 
-    out["Volume_Ratio"] = out["Volume_Display"] / out["Volume_Baseline"].replace(0, np.nan)
+    out["Volume_Ratio"] = out["Volume_Display"] / out["Volume_Baseline"].replace(
+        0, np.nan
+    )
 
-    out["RVOL_20D"] = out["Volume_Display"] / out["Volume_Display"].rolling(
+    out["RVOL_20D"] = out["Volume_Display"] / out["Volume_Display"].shift(1).rolling(
         20,
         min_periods=10,
     ).median().replace(0, np.nan)
 
-    out["RVOL_60D"] = out["Volume_Display"] / out["Volume_Display"].rolling(
+    out["RVOL_60D"] = out["Volume_Display"] / out["Volume_Display"].shift(1).rolling(
         60,
         min_periods=30,
     ).median().replace(0, np.nan)
 
-    out["Volume_Pctl"] = out["Volume_Display"].rolling(
-        percentile_window,
+    out["Volume_Pctl"] = rolling_percentile_previous(
+        out["Volume_Ratio"],
+        window=percentile_window,
         min_periods=max(40, percentile_window // 3),
-    ).apply(compute_percentile_of_last, raw=False)
+        scale=100.0,
+    )
 
     out["Ret_1D"] = out["Close"].pct_change() * 100.0
     out["Ret_5D"] = out["Close"].pct_change(5) * 100.0
@@ -741,8 +832,12 @@ def compute_volume_framework(
     out["ATR20"] = out["True_Range"].rolling(20, min_periods=14).mean()
     out["Range_ATR20"] = out["True_Range"] / out["ATR20"].replace(0, np.nan)
 
-    out["State"] = out["Volume_Pctl"].apply(lambda x: classify_state(x, high_cutoff, low_cutoff))
-    out["Setup"] = out.apply(lambda row: classify_setup(row, high_cutoff, low_cutoff), axis=1)
+    out["State"] = out["Volume_Pctl"].apply(
+        lambda x: classify_state(x, high_cutoff, low_cutoff)
+    )
+    out["Setup"] = out.apply(
+        lambda row: classify_setup(row, high_cutoff, low_cutoff), axis=1
+    )
 
     out["Is_Heavy"] = out["State"].eq("Heavy")
     out["Is_Quiet"] = out["State"].eq("Quiet")
@@ -756,6 +851,7 @@ def compute_volume_framework(
 # =============================================================================
 # CHARTING
 # =============================================================================
+
 
 def volume_bar_color(row: pd.Series) -> str:
     state = row.get("State", "Normal")
@@ -1020,6 +1116,7 @@ def build_chart(
 # NATIVE STREAMLIT OUTPUTS
 # =============================================================================
 
+
 def render_current_read(
     latest: pd.Series,
     symbol: str,
@@ -1048,7 +1145,9 @@ def render_current_read(
     )
 
 
-def build_recent_events(df: pd.DataFrame, event_filter: str, max_rows: int) -> pd.DataFrame:
+def build_recent_events(
+    df: pd.DataFrame, event_filter: str, max_rows: int
+) -> pd.DataFrame:
     events = df[df["State"].isin(["Heavy", "Quiet"])].copy()
 
     if event_filter == "Heavy only":
@@ -1074,14 +1173,41 @@ def format_events_for_display(events: pd.DataFrame, vol_label: str) -> pd.DataFr
     out["1D"] = events["Ret_1D"].map(lambda x: fmt_pct(x))
     out["5D"] = events["Ret_5D"].map(lambda x: fmt_pct(x))
     out["20D"] = events["Ret_20D"].map(lambda x: fmt_pct(x))
-    out["Volume"] = events["Volume_Display"].map(lambda x: fmt_volume_value(x, vol_label))
+    out["Volume"] = events["Volume_Display"].map(
+        lambda x: fmt_volume_value(x, vol_label)
+    )
     out["Vs Base"] = events["Volume_Ratio"].map(fmt_ratio)
     out["Pctl"] = events["Volume_Pctl"].map(fmt_pctl)
-    out["Close Loc"] = events["Close_Location"].map(lambda x: fmt_pct(x * 100.0, digits=0, signed=False))
+    out["Close Loc"] = events["Close_Location"].map(
+        lambda x: fmt_pct(x * 100.0, digits=0, signed=False)
+    )
     out["Fwd 5D"] = events["Fwd_5D"].map(lambda x: fmt_pct(x))
     out["Fwd 20D"] = events["Fwd_20D"].map(lambda x: fmt_pct(x))
     out["Max DD 20D"] = events["Max_DD_20D"].map(lambda x: fmt_pct(x))
 
+    return out.reset_index(drop=True)
+
+
+def build_setup_outcomes(df: pd.DataFrame) -> pd.DataFrame:
+    """Summarize realized outcomes by setup using only rows with known futures."""
+    realized = df.dropna(subset=["Setup", "Fwd_5D", "Fwd_20D", "Max_DD_20D"]).copy()
+    realized = realized[~realized["Setup"].isin(["Unavailable", "Normal"])].copy()
+    if realized.empty:
+        return pd.DataFrame()
+
+    grouped = realized.groupby("Setup", sort=False)
+    out = grouped.agg(
+        Observations=("Fwd_20D", "count"),
+        **{
+            "Avg 5D": ("Fwd_5D", "mean"),
+            "Avg 20D": ("Fwd_20D", "mean"),
+            "20D Hit Rate": ("Fwd_20D", lambda x: float((x > 0).mean() * 100.0)),
+            "Median Max DD": ("Max_DD_20D", "median"),
+        },
+    ).reset_index()
+    out = out[out["Observations"] >= 3].sort_values(
+        ["Observations", "Avg 20D"], ascending=[False, False]
+    )
     return out.reset_index(drop=True)
 
 
@@ -1101,11 +1227,11 @@ def style_events_table(display_df: pd.DataFrame):
         color = setup_color(value)
 
         if color == PASTEL_GREEN:
-            return f"color: #166534; font-weight: 700;"
+            return "color: #166534; font-weight: 700;"
         if color == PASTEL_RED:
-            return f"color: #991b1b; font-weight: 700;"
+            return "color: #991b1b; font-weight: 700;"
         if color == AMBER:
-            return f"color: #92400e; font-weight: 700;"
+            return "color: #92400e; font-weight: 700;"
 
         return "color: #374151; font-weight: 700;"
 
@@ -1181,7 +1307,7 @@ with st.sidebar:
 
     for i, sym in enumerate(DEFAULT_SYMBOLS):
         with button_cols[i % 2]:
-            if st.button(sym, use_container_width=True):
+            if st.button(sym, width="stretch"):
                 st.session_state["vr_symbol"] = sym
 
     symbol_input = st.text_input("Ticker", key="vr_symbol")
@@ -1268,8 +1394,13 @@ with st.sidebar:
 # TITLE
 # =============================================================================
 
-st.title(TITLE)
-st.caption(SUBTITLE)
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=SUBTITLE,
+        eyebrow="ADFM Market Structure",
+    )
+)
 
 
 # =============================================================================
@@ -1304,7 +1435,9 @@ if raw_df.empty:
 raw_df = normalize_dt_index(raw_df)
 
 if raw_df["Volume"].sum() <= 0:
-    st.warning("This symbol does not have usable exchange volume. Try an ETF or listed equity with reported volume.")
+    st.warning(
+        "This symbol does not have usable exchange volume. Try an ETF or listed equity with reported volume."
+    )
     st.stop()
 
 incomplete_session_excluded = False
@@ -1344,6 +1477,7 @@ if df.empty:
 
 latest = df.iloc[-1]
 latest_date = df.index[-1]
+setup_outcomes = build_setup_outcomes(df_full)
 
 holiday_values = get_holiday_values(
     start_date_str=df.index.min().strftime("%Y-%m-%d"),
@@ -1355,12 +1489,57 @@ holiday_values = get_holiday_values(
 # CURRENT READ
 # =============================================================================
 
-render_current_read(
-    latest=latest,
-    symbol=symbol,
-    vol_label=vol_label,
-    data_source=data_source,
-    latest_date=latest_date,
+latest_setup = str(latest.get("Setup", "Unavailable"))
+latest_state = str(latest.get("State", "Unavailable"))
+latest_pctl = float(latest.get("Volume_Pctl", np.nan))
+latest_ratio = float(latest.get("Volume_Ratio", np.nan))
+latest_ret = float(latest.get("Ret_1D", np.nan))
+latest_close_loc = float(latest.get("Close_Location", np.nan))
+
+same_setup = setup_outcomes[setup_outcomes["Setup"] == latest_setup]
+if same_setup.empty:
+    outcome_value = "Insufficient sample"
+    outcome_note = "Fewer than 3 realized historical matches"
+else:
+    setup_row = same_setup.iloc[0]
+    outcome_value = fmt_pct(float(setup_row["Avg 20D"]), 1)
+    outcome_note = (
+        f"Avg 20D after {int(setup_row['Observations'])} matches · "
+        f"{float(setup_row['20D Hit Rate']):.0f}% positive"
+    )
+
+render_kpi_cards(
+    [
+        ("Current setup", latest_setup, f"{latest_state} participation"),
+        (
+            "Participation percentile",
+            fmt_pctl(latest_pctl),
+            f"vs prior {percentile_window} sessions",
+        ),
+        (
+            "Relative volume",
+            fmt_ratio(latest_ratio),
+            f"vs prior {smooth_window}D median",
+        ),
+        (
+            "Session move",
+            fmt_pct(latest_ret, 1),
+            f"close location {fmt_pct(latest_close_loc * 100, 0, False)}",
+        ),
+        ("20D historical read", outcome_value, outcome_note),
+        (
+            "Latest close",
+            fmt_price(float(latest.get("Close", np.nan))),
+            latest_date.strftime("%b %d, %Y"),
+        ),
+    ]
+)
+
+render_selection_note(
+    "Active read",
+    f"{symbol} is in a {latest_setup} setup. Participation ranks at the {fmt_pctl(latest_pctl)}th percentile "
+    f"of its own causal relative-volume history and closed {fmt_pct(latest_ret, 1)} on the session. "
+    f"Historical outcome statistics are descriptive, use non-overlapping future data only, and are shown when at least three matches exist.",
 )
 
 if incomplete_session_excluded:
@@ -1378,6 +1557,11 @@ if turnover_fallback:
 # CHART
 # =============================================================================
 
+render_section_header(
+    "Price and Participation Regime",
+    f"Adjusted price with raw-price dollar volume where available · {lookback_months} visible months · thresholds {low_cutoff}/{high_cutoff} percentile.",
+)
+
 fig = build_chart(
     df=df,
     symbol=symbol,
@@ -1388,7 +1572,7 @@ fig = build_chart(
 
 st.plotly_chart(
     fig,
-    use_container_width=True,
+    width="stretch",
     config={
         "displayModeBar": False,
         "scrollZoom": True,
@@ -1397,8 +1581,8 @@ st.plotly_chart(
 )
 
 st.caption(
-    f"Data through {latest_date:%Y-%m-%d} | Source: {data_source} | Mode: {vol_label} | "
-    f"Percentile: {percentile_window}D | Baseline: {smooth_window}D"
+    f"Data through {latest_date:%b %d, %Y} · Source: {data_source} · Mode: {vol_label} · "
+    f"Percentile history: {percentile_window} sessions · Baseline: prior {smooth_window} sessions"
 )
 
 
@@ -1406,25 +1590,72 @@ st.caption(
 # RECENT EXTREMES TABLE
 # =============================================================================
 
-st.subheader("Recent Participation Extremes")
-
-events = build_recent_events(
-    df=df,
-    event_filter=event_filter,
-    max_rows=max_event_rows,
+tab_events, tab_outcomes, tab_method = st.tabs(
+    ["Recent Extremes", "Historical Outcomes", "Methodology"]
 )
 
-if events.empty:
-    st.info("No extreme sessions found in the visible window.")
-else:
-    display_events = format_events_for_display(events, vol_label=vol_label)
-    styled_events = style_events_table(display_events)
+with tab_events:
+    render_section_header(
+        "Recent Participation Extremes",
+        "Heavy and quiet sessions in the active visible window, with realized forward outcomes when enough future sessions exist.",
+    )
+    events = build_recent_events(
+        df=df,
+        event_filter=event_filter,
+        max_rows=max_event_rows,
+    )
+    if events.empty:
+        st.info("No extreme sessions found in the visible window.")
+    else:
+        display_events = format_events_for_display(events, vol_label=vol_label)
+        st.dataframe(
+            style_events_table(display_events),
+            width="stretch",
+            hide_index=True,
+            height=min(520, 38 + 32 * (len(display_events) + 1)),
+        )
 
-    st.dataframe(
-        styled_events,
-        use_container_width=True,
-        hide_index=True,
-        height=min(520, 38 + 32 * (len(display_events) + 1)),
+with tab_outcomes:
+    render_section_header(
+        "Setup Outcome Matrix",
+        "Descriptive event study across the full loaded history. Rows require at least three fully realized 20-session outcomes.",
+    )
+    if setup_outcomes.empty:
+        st.info("Not enough fully realized setup observations are available.")
+    else:
+        outcome_display = setup_outcomes.copy()
+        for column in ["Avg 5D", "Avg 20D", "20D Hit Rate", "Median Max DD"]:
+            outcome_display[column] = pd.to_numeric(
+                outcome_display[column], errors="coerce"
+            )
+        st.dataframe(
+            outcome_display.style.format(
+                {
+                    "Avg 5D": "{:+.1f}%",
+                    "Avg 20D": "{:+.1f}%",
+                    "20D Hit Rate": "{:.0f}%",
+                    "Median Max DD": "{:+.1f}%",
+                },
+                na_rep="N/A",
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+with tab_method:
+    st.markdown(
+        f"""
+        **Participation score.** The current volume-to-baseline ratio is ranked against the prior
+        {percentile_window} sessions; the current row is excluded from both the baseline and percentile history.
+        This makes the live signal causal and reduces upward drift in dollar-volume levels.
+
+        **Volume modes.** Dollar volume uses unadjusted close times reported volume where the source provides both
+        raw and adjusted prices. Price returns use adjusted closes. Turnover falls back to raw shares when shares
+        outstanding is unavailable.
+
+        **Setup labels.** Labels combine participation percentile, one-day return, close location, ATR-normalized
+        range, and 20D/50D trend state. Forward outcomes are descriptive and are not forecasts.
+        """
     )
 
 render_footer()
