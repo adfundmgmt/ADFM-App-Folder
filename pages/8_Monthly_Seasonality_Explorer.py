@@ -1530,7 +1530,9 @@ with col3:
         max_value=this_year,
     )
 
-start_fetch_date = f"{int(custom_start_year) - 2}-01-01"
+matrix_floor_year = this_year - 21
+start_fetch_year = min(int(custom_start_year) - 2, matrix_floor_year)
+start_fetch_date = f"{start_fetch_year}-01-01"
 end_fetch_date = f"{this_year}-12-31"
 
 with st.spinner("Fetching and analyzing data..."):
