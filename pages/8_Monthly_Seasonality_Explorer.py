@@ -16,7 +16,6 @@ from matplotlib.ticker import MaxNLocator, PercentFormatter
 
 from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
-    monthly_returns_snapshot,
     render_monthly_returns_matrix,
 )
 from adfm_core.ui import render_footer
@@ -1693,61 +1692,6 @@ active_filters = [
 active_filters = [item for item in active_filters if not str(item).startswith("All ")]
 st.caption("Active sample · " + " · ".join(active_filters))
 
-snapshot = monthly_returns_snapshot(
-    filtered,
-    stats,
-    matrix_years,
-    current_period,
-    current_months=filter_table,
-)
-metric_cols = st.columns(4)
-best_month = snapshot["best_month"]
-worst_month = snapshot["worst_month"]
-with metric_cols[0]:
-    st.metric(
-        "Strongest month",
-        f"{MONTH_LABELS[int(best_month) - 1]} {float(snapshot['best_mean']):+.2f}%"
-        if best_month
-        else "n/a",
-        f"{float(snapshot['best_hit']):.0f}% positive"
-        if pd.notna(snapshot["best_hit"])
-        else None,
-        delta_color="off",
-    )
-with metric_cols[1]:
-    st.metric(
-        "Weakest month",
-        f"{MONTH_LABELS[int(worst_month) - 1]} {float(snapshot['worst_mean']):+.2f}%"
-        if worst_month
-        else "n/a",
-        f"{float(snapshot['worst_hit']):.0f}% positive"
-        if pd.notna(snapshot["worst_hit"])
-        else None,
-        delta_color="off",
-    )
-with metric_cols[2]:
-    st.metric(
-        "Realized-month hit rate",
-        f"{float(snapshot['hit_rate']):.0f}%"
-        if pd.notna(snapshot["hit_rate"])
-        else "n/a",
-        f"{float(snapshot['monthly_average']):+.2f}% monthly avg"
-        if pd.notna(snapshot["monthly_average"])
-        else None,
-        delta_color="off",
-    )
-with metric_cols[3]:
-    st.metric(
-        f"{MONTH_LABELS[int(current_period.month) - 1]} {int(current_period.year)}",
-        f"{float(snapshot['current_value']):+.2f}% MTD"
-        if pd.notna(snapshot["current_value"])
-        else "n/a",
-        f"{float(snapshot['current_gap']):+.2f}pp vs filtered avg"
-        if pd.notna(snapshot["current_gap"])
-        else None,
-        delta_color="off",
-    )
-
 if int(filtered.shape[0]) < 24 or int(filtered["year"].nunique()) < 5:
     st.warning(
         "Thin sample warning: the current filter set leaves a small historical base. "
@@ -1773,6 +1717,7 @@ render_monthly_returns_matrix(
     current_period,
     selected_month=selected_month,
     selected_year=selected_year,
+    average_label=f"{lookback} AVG" if lookback in {"5Y", "10Y", "20Y"} else "FILTER AVG",
 )
 
 selection_month_col, selection_year_col = st.columns(
