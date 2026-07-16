@@ -55,6 +55,14 @@ def grouped_weighted_composite(
         if name and name in scores.columns:
             groups.setdefault(group, []).append(spec)
 
+    def _inside_group(row: pd.Series, member_weights: pd.Series) -> float:
+        valid = row.dropna()
+        if valid.empty:
+            return np.nan
+        active = member_weights.loc[valid.index]
+        total = float(active.sum())
+        return float((valid * active).sum() / total) if total > 0 else np.nan
+
     group_frame = pd.DataFrame(index=scores.index)
     for group, members in groups.items():
         names = [str(member["name"]) for member in members]
@@ -64,16 +72,11 @@ def grouped_weighted_composite(
                 for member in members
             }
         )
-
-        def _inside_group(row: pd.Series) -> float:
-            valid = row.dropna()
-            if valid.empty:
-                return np.nan
-            active = weights.loc[valid.index]
-            total = float(active.sum())
-            return float((valid * active).sum() / total) if total > 0 else np.nan
-
-        group_frame[group] = scores[names].apply(_inside_group, axis=1)
+        group_frame[group] = scores[names].apply(
+            _inside_group,
+            axis=1,
+            member_weights=weights,
+        )
 
     if group_frame.empty:
         empty = pd.Series(index=scores.index, dtype=float)
