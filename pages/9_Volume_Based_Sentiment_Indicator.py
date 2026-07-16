@@ -1855,4 +1855,3 @@ with tab_method:
     )
 
 render_footer()
-
