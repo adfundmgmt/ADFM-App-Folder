@@ -1,9 +1,10 @@
 name: Apply monthly seasonality cleanup
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/monthly-seasonality-tab
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -12,7 +13,7 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out branch
+      - name: Check out PR branch
         uses: actions/checkout@v4
         with:
           ref: fix/monthly-seasonality-tab
@@ -27,7 +28,6 @@ jobs:
 
           page = Path("pages/8_Monthly_Seasonality_Explorer.py")
           text = page.read_text(encoding="utf-8")
-
           text = text.replace("import plotly.graph_objects as go\n", "")
 
           text, function_blocks = re.subn(
@@ -48,11 +48,7 @@ jobs:
           if output_blocks != 1:
               raise RuntimeError(f"Expected one 3D output block, removed {output_blocks}")
 
-          matrix_call = """# =========================
-# MONTHLY RETURNS MATRIX
-# =========================
-
-render_monthly_returns_lens(
+          required = """render_monthly_returns_lens(
     all_months=filter_table,
     filtered_months=filtered,
     stats=stats,
@@ -60,12 +56,11 @@ render_monthly_returns_lens(
     as_of=prices.index.max(),
 )
 """
-          if matrix_call not in text:
-              raise RuntimeError("Monthly Returns renderer is not attached to the Monthly Seasonality Explorer page")
+          if required not in text:
+              raise RuntimeError("Monthly Returns renderer is not attached to the Monthly Seasonality Explorer tab")
 
           page.write_text(text, encoding="utf-8")
           PY
-
           rm .github/workflows/apply_monthly_seasonality_cleanup.yml
 
       - name: Validate page
