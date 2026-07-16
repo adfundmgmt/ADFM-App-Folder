@@ -183,8 +183,9 @@ def _build_matrix_html(
             bg, text_class = _tone(value, scale)
             badge = "<span class='monthly-now-badge'>NOW</span>" if is_now and pd.notna(value) else ""
             title = f"{MONTH_LABELS[month - 1]} {year}: {_fmt_pct(value)}"
+            now_class = " is-now" if is_now and pd.notna(value) else ""
             year_cells.append(
-                f"<td class='monthly-cell {text_class}' style='background:{bg}' title='{escape(title)}'>"
+                f"<td class='monthly-cell {text_class}{now_class}' style='background:{bg}' title='{escape(title)}'>"
                 f"{badge}<span>{_fmt_pct(value, 2, plus=False)}</span></td>"
             )
 
@@ -238,19 +239,20 @@ def render_monthly_returns_lens(
         .monthly-kpi:last-child {border-right:0;}
         .monthly-kpi-label {font-size:.61rem; letter-spacing:.14em; text-transform:uppercase; color:#64748b; margin-bottom:5px;}
         .monthly-kpi-value {font-size:1.13rem; line-height:1; font-weight:780; color:inherit;}
-        .monthly-grid-wrap {overflow-x:auto; border:1px solid rgba(100,116,139,.16); border-radius:7px; margin:.2rem 0 .45rem;}
-        .monthly-grid {width:100%; min-width:1040px; border-collapse:separate; border-spacing:1px; background:rgba(100,116,139,.12); table-layout:fixed;}
-        .monthly-grid th,.monthly-grid td {height:46px; padding:4px 5px; text-align:center; vertical-align:middle; position:relative;}
+        .monthly-grid-wrap {overflow-x:auto; border:1px solid rgba(100,116,139,.16); border-radius:7px; margin:.2rem 0 .45rem; scrollbar-width:thin;}
+        .monthly-grid {width:100%; min-width:780px; border-collapse:separate; border-spacing:1px; background:rgba(100,116,139,.12); table-layout:fixed;}
+        .monthly-grid th,.monthly-grid td {height:44px; padding:3px; text-align:center; vertical-align:middle; position:relative;}
         .monthly-grid thead th {height:31px; font-size:.60rem; letter-spacing:.14em; text-transform:uppercase; font-weight:680; color:#64748b; background:var(--background-color, #fff);}
-        .monthly-grid .monthly-row-label {width:80px; text-align:left; padding-left:12px; font-size:.78rem; font-weight:780; letter-spacing:.015em; background:var(--background-color, #fff); color:inherit;}
-        .monthly-grid .monthly-row-label span {font-size:.62rem; letter-spacing:.09em; color:#4f765f;}
-        .monthly-grid .monthly-cell {font-size:.76rem; font-variant-numeric:tabular-nums; color:inherit; transition:filter .12s ease, transform .12s ease;}
+        .monthly-grid .monthly-row-label {width:72px; text-align:left; padding-left:9px; font-size:.74rem; font-weight:780; letter-spacing:.015em; background:var(--background-color, #fff); color:inherit;}
+        .monthly-grid .monthly-row-label span {font-size:.57rem; letter-spacing:.07em; color:#4f765f;}
+        .monthly-grid .monthly-cell {font-size:.69rem; font-variant-numeric:tabular-nums; color:inherit; transition:filter .12s ease, transform .12s ease;}
         .monthly-grid .monthly-cell:hover {filter:brightness(1.08); transform:translateY(-1px); z-index:2;}
         .monthly-grid .monthly-cell.strong {color:#f8fafc; font-weight:760; text-shadow:0 1px 1px rgba(15,23,42,.22);}
         .monthly-grid .monthly-cell.muted {color:#94a3b8;}
+        .monthly-grid .monthly-cell.is-now {box-shadow:inset 0 0 0 2px rgba(15,23,42,.66); z-index:1;}
         .monthly-now-badge {position:absolute; top:2px; right:3px; font-size:.46rem; line-height:1; letter-spacing:.08em; padding:2px 4px; border-radius:2px; background:rgba(15,23,42,.72); color:#f8fafc;}
-        .monthly-year-head {width:118px; background:rgba(79,118,95,.20)!important; color:#355845!important;}
-        .monthly-year-cell {width:118px; background:var(--background-color, #fff); padding:2px 8px!important;}
+        .monthly-year-head {width:94px; background:rgba(79,118,95,.20)!important; color:#355845!important;}
+        .monthly-year-cell {width:94px; background:var(--background-color, #fff); padding:2px 6px!important;}
         .monthly-spark {display:block; width:100%; height:20px; margin:0 auto -2px; opacity:.92;}
         .monthly-year-return {font-size:.72rem; line-height:1.05; font-weight:760; font-variant-numeric:tabular-nums;}
         .monthly-year-caption {font-size:.48rem; line-height:1.05; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin-top:2px;}
@@ -272,7 +274,7 @@ def render_monthly_returns_lens(
     with title_col:
         st.markdown(
             f"<div class='monthly-lens-title'>Monthly Returns</div>"
-            f"<div class='monthly-lens-subtitle'>{escape(symbol)} · close-to-close · hover for detail</div>",
+            f"<div class='monthly-lens-subtitle'>{escape(symbol)} · close-to-close · hover, scan, compare</div>",
             unsafe_allow_html=True,
         )
     with window_col:
@@ -329,8 +331,8 @@ def render_monthly_returns_lens(
         "<div class='monthly-kpi-grid'>"
         f"<div class='monthly-kpi'><div class='monthly-kpi-label'>Best month</div><div class='monthly-kpi-value monthly-positive'>{_fmt_pct(best_value)}</div></div>"
         f"<div class='monthly-kpi'><div class='monthly-kpi-label'>Worst month</div><div class='monthly-kpi-value monthly-negative'>{_fmt_pct(worst_value)}</div></div>"
-        f"<div class='monthly-kpi'><div class='monthly-kpi-label'>Positive-month hit rate</div><div class='monthly-kpi-value'>{_fmt_pct(hit_rate, 0, plus=False)}</div></div>"
-        f"<div class='monthly-kpi'><div class='monthly-kpi-label'>Displayed monthly avg</div><div class='monthly-kpi-value'>{_fmt_pct(avg_month)}</div></div>"
+        f"<div class='monthly-kpi'><div class='monthly-kpi-label'>Hit rate</div><div class='monthly-kpi-value'>{_fmt_pct(hit_rate, 0, plus=False)}</div></div>"
+        f"<div class='monthly-kpi'><div class='monthly-kpi-label'>{years_to_show}Y monthly avg</div><div class='monthly-kpi-value'>{_fmt_pct(avg_month)}</div></div>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -352,3 +354,4 @@ __all__ = [
     "_display_years",
     "_prepare_month_table",
 ]
+

@@ -69,7 +69,9 @@ jobs:
           set -euo pipefail
           git config user.name "cte-sync-bot"
           git config user.email "cte-sync-bot@users.noreply.github.com"
-          git add data/cache
+          # Runtime cache files are ignored by default. This scheduled snapshot
+          # is the controlled exception, so force-stage the curated files.
+          git add -f -- data/cache
 
           if git diff --cached --quiet; then
             echo "Currency tension snapshot is already current."
@@ -93,3 +95,4 @@ jobs:
             git rebase origin/main
             sleep $((attempt * 2))
           done
+
