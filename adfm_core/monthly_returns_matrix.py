@@ -166,6 +166,7 @@ def _build_matrix_html(
     current_period: pd.Period,
     selected_month: int | None = None,
     selected_year: int | None = None,
+    average_label: str = "FILTER AVG",
 ) -> tuple[str, np.ndarray]:
     visible = months.loc[months["year"].astype(int).isin(years)].copy()
     visible_values = _finite(visible["total_ret"])
@@ -192,17 +193,16 @@ def _build_matrix_html(
             f"<td class='monthly-cell {text_class}{selected_class}' style='background:{bg}' title='{escape(title)}'>"
             f"{_fmt_pct(value, 2, plus=False)}</td>"
         )
-    sample_avg = (
-        float(np.nanmean(_finite(stats.get("mean_total", []))))
-        if stats is not None and not stats.empty
-        else np.nan
-    )
+    average_values = [_sample_month_stats(stats, month)[0] for month in range(1, 13)]
+    average_year_return = _compound_pct(average_values)
+    average_spark = _sparkline_svg(average_values, bool(average_year_return >= 0))
     rows.append(
         "<tr class='monthly-average-row'>"
-        "<th class='monthly-row-label'><span>FILTER AVG</span></th>"
+        f"<th class='monthly-row-label'><span>{escape(average_label)}</span></th>"
         + "".join(avg_cells)
-        + f"<td class='monthly-year-cell'><div class='monthly-year-return'>{_fmt_pct(sample_avg, 2)}</div>"
-        "<div class='monthly-year-caption'>arithmetic month avg</div></td></tr>"
+        + f"<td class='monthly-year-cell {'is-positive' if average_year_return >= 0 else 'is-negative'}'>"
+        f"{average_spark}<div class='monthly-year-return'>{_fmt_pct(average_year_return, 1)}</div>"
+        "<div class='monthly-year-caption'>avg profile</div></td></tr>"
     )
 
     for year in years:
@@ -224,9 +224,10 @@ def _build_matrix_html(
             title = f"{MONTH_LABELS[month - 1]} {year}: {_fmt_pct(value)}"
             now_class = " is-now" if is_now and pd.notna(value) else ""
             selected_class = " is-selected-month" if month == selected_month else ""
+            display_value = "" if pd.isna(value) else _fmt_pct(value, 2, plus=False)
             year_cells.append(
                 f"<td class='monthly-cell {text_class}{now_class}{selected_class}' style='background:{bg}' title='{escape(title)}'>"
-                f"{badge}<span>{_fmt_pct(value, 2, plus=False)}</span></td>"
+                f"{badge}<span>{display_value}</span></td>"
             )
 
         spark = _sparkline_svg(
@@ -242,7 +243,7 @@ def _build_matrix_html(
             f"<tr{selected_year_class}>"
             f"<th class='monthly-row-label'>{year}</th>"
             + "".join(year_cells)
-            + "<td class='monthly-year-cell'>"
+            + f"<td class='monthly-year-cell {'is-positive' if year_return >= 0 else 'is-negative'}'>"
             f"{spark}<div class='monthly-year-return'>{_fmt_pct(year_return, 1)}</div>"
             f"<div class='monthly-year-caption'>{year_caption}</div></td></tr>"
         )
@@ -262,6 +263,7 @@ def render_monthly_returns_matrix(
     current_period: pd.Period,
     selected_month: int,
     selected_year: int,
+    average_label: str = "FILTER AVG",
 ) -> None:
     """Render the compact terminal-style matrix used by the coordinated page."""
 
@@ -273,6 +275,7 @@ def render_monthly_returns_matrix(
         current_period,
         selected_month=selected_month,
         selected_year=selected_year,
+        average_label=average_label,
     )
     st.markdown(
         """
@@ -291,6 +294,8 @@ def render_monthly_returns_matrix(
         .monthly-now-badge {position:absolute; top:2px; right:3px; font-size:.46rem; line-height:1; letter-spacing:.08em; padding:2px 4px; border-radius:2px; background:rgba(15,23,42,.78); color:#f8fafc;}
         .monthly-year-head {width:94px; background:rgba(79,118,95,.20)!important; color:#355845!important;}
         .monthly-year-cell {width:94px; background:var(--background-color, #fff); padding:2px 6px!important;}
+        .monthly-year-cell.is-positive {color:#4f765f;}
+        .monthly-year-cell.is-negative {color:#a06452;}
         .monthly-spark {display:block; width:100%; height:20px; margin:0 auto -2px; opacity:.92;}
         .monthly-year-return {font-size:.72rem; line-height:1.05; font-weight:760; font-variant-numeric:tabular-nums;}
         .monthly-year-caption {font-size:.48rem; line-height:1.05; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin-top:2px;}
@@ -300,14 +305,6 @@ def render_monthly_returns_matrix(
         .monthly-grid tr.is-selected-year > * {border-top:2px solid rgba(53,88,69,.9); border-bottom:2px solid rgba(53,88,69,.9);}
         .monthly-grid tr.is-selected-year > .monthly-row-label {color:#355845; background:rgba(79,118,95,.10);}
         .monthly-grid tr.is-selected-year > .is-selected-month {outline:2px solid #243c2f; outline-offset:-3px; z-index:3;}
-        @media (prefers-color-scheme:dark) {
-          .monthly-grid thead th,.monthly-year-caption{color:#94a3b8;}
-          .monthly-grid thead th,.monthly-grid .monthly-row-label,.monthly-year-cell{background:#111827;}
-          .monthly-grid-wrap{border-color:rgba(148,163,184,.22)}
-          .monthly-year-head{background:rgba(79,118,95,.34)!important;color:#d5e6db!important;}
-          .monthly-grid thead .is-selected-month,.monthly-grid tr.is-selected-year > .monthly-row-label{color:#d5e6db;background:rgba(79,118,95,.25);}
-          .monthly-grid .is-selected-month{box-shadow:inset 2px 0 rgba(213,230,219,.72), inset -2px 0 rgba(213,230,219,.72);}
-        }
         </style>
         """,
         unsafe_allow_html=True,
