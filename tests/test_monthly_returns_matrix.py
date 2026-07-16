@@ -3,7 +3,12 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from adfm_core.monthly_returns_matrix import _compound_pct, _display_years, _prepare_month_table
+from adfm_core.monthly_returns_matrix import (
+    _build_matrix_html,
+    _compound_pct,
+    _display_years,
+    _prepare_month_table,
+)
 
 
 class MonthlyReturnsMatrixTests(unittest.TestCase):
@@ -31,6 +36,32 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
         )
         years = _display_years(raw, years_to_show=5, as_of=pd.Timestamp("2026-07-16"))
         self.assertEqual(years, [2026, 2025, 2024, 2023, 2022])
+
+    def test_matrix_marks_live_period_and_compounds_ytd(self) -> None:
+        months = pd.DataFrame(
+            {
+                "year": [2026, 2026, 2026],
+                "month": [1, 2, 7],
+                "total_ret": [10.0, -5.0, 2.0],
+            },
+            index=pd.PeriodIndex(["2026-01", "2026-02", "2026-07"], freq="M"),
+        )
+        stats = pd.DataFrame(
+            {
+                "mean_total": [1.0] * 12,
+                "hit_rate": [60.0] * 12,
+            },
+            index=pd.Index(range(1, 13), name="month"),
+        )
+        html, values = _build_matrix_html(
+            months=months,
+            stats=stats,
+            years=[2026],
+            current_period=pd.Period("2026-07", freq="M"),
+        )
+        self.assertIn("monthly-now-badge", html)
+        self.assertIn("+6.6%", html)
+        self.assertEqual(values.tolist(), [10.0, -5.0, 2.0])
 
 
 if __name__ == "__main__":
