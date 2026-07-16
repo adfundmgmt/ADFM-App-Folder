@@ -8,13 +8,26 @@ seasonality averages and the live comparison respect the active sample.
 from __future__ import annotations
 
 from html import escape
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+MONTH_LABELS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
 POSITIVE = "56, 102, 73"
 NEGATIVE = "145, 88, 63"
 NEUTRAL = "148, 163, 184"
@@ -107,13 +120,21 @@ def _sample_month_stats(stats: pd.DataFrame, month: int) -> tuple[float, float]:
     return float(row.get("mean_total", np.nan)), float(row.get("hit_rate", np.nan))
 
 
-def _display_years(months: pd.DataFrame, years_to_show: int, as_of: pd.Timestamp) -> list[int]:
-    available = set(pd.to_numeric(months.get("year", pd.Series(dtype=float)), errors="coerce").dropna().astype(int))
+def _display_years(
+    months: pd.DataFrame, years_to_show: int, as_of: pd.Timestamp
+) -> list[int]:
+    available = set(
+        pd.to_numeric(months.get("year", pd.Series(dtype=float)), errors="coerce")
+        .dropna()
+        .astype(int)
+    )
     latest_year = int(as_of.year)
     preferred = list(range(latest_year, latest_year - years_to_show, -1))
     selected = [year for year in preferred if year in available or year == latest_year]
     if len(selected) < years_to_show:
-        remaining = sorted((year for year in available if year not in selected), reverse=True)
+        remaining = sorted(
+            (year for year in available if year not in selected), reverse=True
+        )
         selected.extend(remaining[: years_to_show - len(selected)])
     return selected[:years_to_show]
 
@@ -146,7 +167,11 @@ def _build_matrix_html(
 ) -> tuple[str, np.ndarray]:
     visible = months.loc[months["year"].astype(int).isin(years)].copy()
     visible_values = _finite(visible["total_ret"])
-    scale = float(np.nanpercentile(np.abs(visible_values), 82)) if visible_values.size else 5.0
+    scale = (
+        float(np.nanpercentile(np.abs(visible_values), 82))
+        if visible_values.size
+        else 5.0
+    )
     scale = max(scale, 1.0)
 
     header = "".join(f"<th>{label}</th>" for label in MONTH_LABELS)
@@ -161,7 +186,11 @@ def _build_matrix_html(
             f"<td class='monthly-cell {text_class}' style='background:{bg}' title='{escape(title)}'>"
             f"{_fmt_pct(value, 2, plus=False)}</td>"
         )
-    sample_avg = float(np.nanmean(_finite(stats.get("mean_total", [])))) if stats is not None and not stats.empty else np.nan
+    sample_avg = (
+        float(np.nanmean(_finite(stats.get("mean_total", []))))
+        if stats is not None and not stats.empty
+        else np.nan
+    )
     rows.append(
         "<tr class='monthly-average-row'>"
         "<th class='monthly-row-label'><span>SAMPLE AVG</span></th>"
@@ -181,7 +210,11 @@ def _build_matrix_html(
             period = pd.Period(year=year, month=month, freq="M")
             is_now = period == current_period
             bg, text_class = _tone(value, scale)
-            badge = "<span class='monthly-now-badge'>NOW</span>" if is_now and pd.notna(value) else ""
+            badge = (
+                "<span class='monthly-now-badge'>NOW</span>"
+                if is_now and pd.notna(value)
+                else ""
+            )
             title = f"{MONTH_LABELS[month - 1]} {year}: {_fmt_pct(value)}"
             now_class = " is-now" if is_now and pd.notna(value) else ""
             year_cells.append(
@@ -189,8 +222,14 @@ def _build_matrix_html(
                 f"{badge}<span>{_fmt_pct(value, 2, plus=False)}</span></td>"
             )
 
-        spark = _sparkline_svg(year_values, bool(pd.notna(year_return) and year_return >= 0))
-        year_caption = "YTD" if year == current_period.year and current_period.month < 12 else "calendar return"
+        spark = _sparkline_svg(
+            year_values, bool(pd.notna(year_return) and year_return >= 0)
+        )
+        year_caption = (
+            "YTD"
+            if year == current_period.year and current_period.month < 12
+            else "calendar return"
+        )
         rows.append(
             "<tr>"
             f"<th class='monthly-row-label'>{year}</th>"
@@ -208,6 +247,128 @@ def _build_matrix_html(
     return html, visible_values
 
 
+def build_monthly_returns_frame(
+    months: pd.DataFrame,
+    stats: pd.DataFrame,
+    years: list[int],
+) -> pd.DataFrame:
+    """Build the selectable year-by-month matrix used by the page controller."""
+
+    months = _prepare_month_table(months)
+    rows: list[list[float]] = []
+    labels: list[str] = []
+
+    average_row = [_sample_month_stats(stats, month)[0] for month in range(1, 13)]
+    rows.append(average_row + [float(np.nanmean(_finite(average_row)))])
+    labels.append("FILTER AVG")
+
+    for year in years:
+        year_data = months.loc[months["year"].astype(int).eq(int(year))]
+        by_month = year_data.groupby(year_data["month"].astype(int))["total_ret"].last()
+        values = [float(by_month.get(month, np.nan)) for month in range(1, 13)]
+        rows.append(values + [_compound_pct(values)])
+        labels.append(str(int(year)))
+
+    frame = pd.DataFrame(rows, index=labels, columns=[*MONTH_LABELS, "YEAR / YTD"])
+    frame.index.name = "Sample / Year"
+    return frame
+
+
+def style_monthly_returns_frame(
+    frame: pd.DataFrame,
+    selected_month: int,
+    selected_year: int | None,
+    current_period: pd.Period,
+) -> Any:
+    """Apply one zero-centered visual language to the interactive matrix."""
+
+    values = _finite(frame.to_numpy().ravel())
+    scale = float(np.nanpercentile(np.abs(values), 82)) if values.size else 5.0
+    scale = max(scale, 1.0)
+    selected_column = MONTH_LABELS[int(selected_month) - 1]
+    current_row = str(int(current_period.year))
+    current_column = MONTH_LABELS[int(current_period.month) - 1]
+    selected_row = str(int(selected_year)) if selected_year is not None else None
+
+    def apply_styles(data: pd.DataFrame) -> pd.DataFrame:
+        styles = pd.DataFrame("", index=data.index, columns=data.columns)
+        for row_label in data.index:
+            for column in data.columns:
+                value = data.loc[row_label, column]
+                background, text_class = _tone(value, scale)
+                rules = [
+                    f"background-color: {background}",
+                    "font-variant-numeric: tabular-nums",
+                ]
+                if text_class == "strong":
+                    rules.extend(["color: #f8fafc", "font-weight: 700"])
+                if row_label == "FILTER AVG":
+                    rules.append("font-weight: 700")
+                if column == selected_column:
+                    rules.append(
+                        "box-shadow: inset 2px 0 #111827, inset -2px 0 #111827"
+                    )
+                if selected_row is not None and row_label == selected_row:
+                    rules.append(
+                        "border-top: 2px solid #111827; border-bottom: 2px solid #111827"
+                    )
+                if (
+                    row_label == current_row
+                    and column == current_column
+                    and pd.notna(value)
+                ):
+                    rules.append("outline: 2px solid #111827; outline-offset: -2px")
+                styles.loc[row_label, column] = "; ".join(rules)
+        return styles
+
+    return frame.style.apply(apply_styles, axis=None).format(
+        lambda value: "—" if pd.isna(value) else f"{float(value):+.2f}%"
+    )
+
+
+def monthly_returns_snapshot(
+    months: pd.DataFrame,
+    stats: pd.DataFrame,
+    years: list[int],
+    current_period: pd.Period,
+    current_months: pd.DataFrame | None = None,
+) -> dict[str, float | int | None]:
+    """Return the headline metrics shared by the matrix and companion charts."""
+
+    months = _prepare_month_table(months)
+    current_source = _prepare_month_table(
+        current_months if current_months is not None else months
+    )
+    visible = months.loc[months["year"].astype(int).isin([int(year) for year in years])]
+    visible_values = _finite(visible.get("total_ret", []))
+    summary = _seasonality_summary(stats)
+    current_row = current_source.loc[current_source.index == current_period]
+    current_value = (
+        float(current_row["total_ret"].iloc[-1]) if not current_row.empty else np.nan
+    )
+    current_average, _ = _sample_month_stats(stats, int(current_period.month))
+
+    return {
+        "best_month": int(summary["best_month"]) if summary else None,
+        "best_mean": float(summary["best_mean"]) if summary else np.nan,
+        "best_hit": float(summary["best_hit"]) if summary else np.nan,
+        "worst_month": int(summary["worst_month"]) if summary else None,
+        "worst_mean": float(summary["worst_mean"]) if summary else np.nan,
+        "worst_hit": float(summary["worst_hit"]) if summary else np.nan,
+        "hit_rate": float(np.mean(visible_values > 0.0) * 100.0)
+        if visible_values.size
+        else np.nan,
+        "monthly_average": float(np.mean(visible_values))
+        if visible_values.size
+        else np.nan,
+        "current_value": current_value,
+        "current_average": current_average,
+        "current_gap": current_value - current_average
+        if pd.notna(current_value) and pd.notna(current_average)
+        else np.nan,
+    }
+
+
 def render_monthly_returns_lens(
     all_months: pd.DataFrame,
     filtered_months: pd.DataFrame,
@@ -219,7 +380,11 @@ def render_monthly_returns_lens(
 
     all_months = _prepare_month_table(all_months)
     filtered_months = _prepare_month_table(filtered_months)
-    as_of = pd.Timestamp(as_of).tz_localize(None) if getattr(pd.Timestamp(as_of), "tzinfo", None) else pd.Timestamp(as_of)
+    as_of = (
+        pd.Timestamp(as_of).tz_localize(None)
+        if getattr(pd.Timestamp(as_of), "tzinfo", None)
+        else pd.Timestamp(as_of)
+    )
     current_period = as_of.to_period("M")
 
     st.markdown(
@@ -301,9 +466,15 @@ def render_monthly_returns_lens(
         )
 
     current_row = all_months.loc[all_months.index == current_period]
-    current_value = float(current_row["total_ret"].iloc[-1]) if not current_row.empty else np.nan
+    current_value = (
+        float(current_row["total_ret"].iloc[-1]) if not current_row.empty else np.nan
+    )
     current_avg, _ = _sample_month_stats(stats, current_period.month)
-    current_gap = current_value - current_avg if pd.notna(current_value) and pd.notna(current_avg) else np.nan
+    current_gap = (
+        current_value - current_avg
+        if pd.notna(current_value) and pd.notna(current_avg)
+        else np.nan
+    )
     if pd.notna(current_value):
         gap_class = "monthly-positive" if current_gap >= 0 else "monthly-negative"
         gap_text = f"{abs(current_gap):.2f}pp {'above' if current_gap >= 0 else 'below'} the sample average"
@@ -318,7 +489,9 @@ def render_monthly_returns_lens(
         )
 
     years = _display_years(all_months, years_to_show, as_of)
-    matrix_html, visible_values = _build_matrix_html(all_months, stats, years, current_period)
+    matrix_html, visible_values = _build_matrix_html(
+        all_months, stats, years, current_period
+    )
     if visible_values.size:
         best_value = float(np.nanmax(visible_values))
         worst_value = float(np.nanmin(visible_values))
@@ -339,7 +512,9 @@ def render_monthly_returns_lens(
 
     st.markdown(matrix_html, unsafe_allow_html=True)
     filtered_obs = int(filtered_months.shape[0])
-    filtered_years = int(filtered_months["year"].nunique()) if not filtered_months.empty else 0
+    filtered_years = (
+        int(filtered_months["year"].nunique()) if not filtered_months.empty else 0
+    )
     st.markdown(
         f"<div class='monthly-lens-caption'>Calendar rows show realized monthly returns and compounded year/YTD paths. "
         f"The SAMPLE AVG row and the live comparison use the active seasonality filters: {filtered_obs} month observations across "
@@ -349,7 +524,10 @@ def render_monthly_returns_lens(
 
 
 __all__ = [
+    "build_monthly_returns_frame",
+    "monthly_returns_snapshot",
     "render_monthly_returns_lens",
+    "style_monthly_returns_frame",
     "_compound_pct",
     "_display_years",
     "_prepare_month_table",
