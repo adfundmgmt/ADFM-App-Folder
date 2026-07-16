@@ -108,11 +108,14 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
             current_period=pd.Period("2026-02", freq="M"),
             selected_month=2,
             selected_year=2026,
+            average_label="5Y AVG",
         )
 
         self.assertIn("is-selected-month", html)
         self.assertIn("is-selected-year", html)
         self.assertIn("monthly-now-badge", html)
+        self.assertIn("5Y AVG", html)
+        self.assertIn("avg profile", html)
 
     def test_snapshot_uses_same_filtered_sample_as_matrix(self) -> None:
         months = pd.DataFrame(
@@ -156,6 +159,8 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
         self.assertIn("build_monthly_returns_frame", page)
         self.assertIn("render_monthly_returns_matrix", page)
         self.assertNotIn('selection_mode=["single-row", "single-column"]', page)
+        self.assertNotIn('st.metric(\n        "Strongest month"', page)
+        self.assertNotIn('st.metric(\n        "Weakest month"', page)
         self.assertIn("Global lookback", page)
         self.assertIn("plot_monthly_profile", page)
 
