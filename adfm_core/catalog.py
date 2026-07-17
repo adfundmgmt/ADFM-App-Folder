@@ -39,7 +39,7 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
     ToolDefinition(17, "Hedge Timer", "17_Hedge_Timer.py", "Risk + Catalysts", "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.", "Yahoo Finance; FRED regime inputs"),
     ToolDefinition(18, "Currency Tension Engine", "18_Currency_Tension_Dashboard.py", "Macro + Rates", "Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags.", "Persisted Currency Tension Engine snapshot and configured adapters"),
     ToolDefinition(19, "ADFM Momentum Expansion Scanner", "19_ADFM_Momentum_Expansion_Scanner.py", "Equity Leadership", "Ranks liquid equities with deterministic momentum-expansion setups and maps sector and subsector leadership.", "Yahoo Finance daily OHLCV; existing sector and subsector universe"),
-    ToolDefinition(20, "Relative Volatility Lab", "20_Relative_Volatility_Lab.py", "Technicals + Analogs", "Compares selectable assets using realized volatility, volatility ratios, causal z-scores, percentiles, and an optional implied-volatility overlay.", "Yahoo Finance adjusted close history; optional implied-volatility index"),
+    ToolDefinition(20, "Relative Volatility Lab", "20_Relative_Volatility_Lab.py", "Technicals + Analogs", "Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics.", "Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available"),
 )
 
 GROUP_ORDER: Final[tuple[str, ...]] = (

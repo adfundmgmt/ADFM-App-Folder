@@ -42,7 +42,7 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 | 17 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | ADFM Momentum Expansion Scanner | Ranks liquid equities with deterministic momentum-expansion setups and maps sector and subsector leadership. | Yahoo Finance daily OHLCV; existing sector and subsector universe |
-| 20 | Relative Volatility Lab | Compares selectable assets using realized volatility, volatility ratios, causal z-scores, percentiles, and an optional implied-volatility overlay. | Yahoo Finance adjusted close history; optional implied-volatility index |
+| 20 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 
 ## Tool groups
 
