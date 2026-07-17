@@ -1,0 +1,337 @@
+"""Momentum Scanner — Page 19."""
+
+from __future__ import annotations
+
+from html import escape
+from typing import Dict, List
+
+import pandas as pd
+import streamlit as st
+
+from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report, report_caption
+from adfm_core.ui import render_footer
+from adfm_momentum_scanner import (
+    MIN_DOLLAR_VOLUME,
+    MIN_PRICE,
+    SIGNAL_COLUMNS,
+    adjusted_ohlcv,
+    benchmark_calendar,
+    diagnostic_table,
+    fetch_market_metadata,
+    fetch_ohlcv,
+    load_equity_universe,
+    market_cap_bucket,
+    rank_change,
+    score_scanner,
+    sector_etf,
+    sector_leadership,
+    security_features,
+    stale_sessions,
+)
+from adfm_sector_rotation_config import BENCHMARKS, MAJOR_SECTORS, SUBSECTOR_ROWS
+
+
+st.set_page_config(page_title="Momentum Scanner", layout="wide", initial_sidebar_state="collapsed")
+
+st.markdown("""
+<style>
+    .block-container {max-width: 1380px; padding-top: 1.4rem; padding-bottom: 1.5rem;}
+    .scanner-hero {padding:1rem 0 .4rem; margin-bottom:.35rem;}
+    .scanner-kicker {font-size:.68rem; letter-spacing:.13em; text-transform:uppercase; font-weight:750; color:#64748b; margin-bottom:.4rem;}
+    .scanner-title {font-size:clamp(2.15rem,4.5vw,3.6rem); line-height:1; letter-spacing:-.055em; font-weight:850; color:#0f172a; margin:0 0 .65rem;}
+    .scanner-about {font-size:.92rem; line-height:1.55; color:#64748b; max-width:940px; margin:0;}
+    .scanner-status {font-size:.79rem; color:#64748b; margin-bottom:1.1rem;}
+    .scanner-grid {display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px; align-items:stretch;}
+    .scanner-card {background:#fff; border:1px solid rgba(49,51,63,.13); border-left:3px solid #94a3b8; border-radius:12px; padding:13px 14px 12px; box-shadow:0 1px 2px rgba(15,23,42,.04); min-height:255px;}
+    .scanner-card.gold {border-left-color:#b8871a;} .scanner-card.blue {border-left-color:#2563eb;} .scanner-card.red {border-left-color:#dc2626;}
+    .scanner-top {display:flex; justify-content:space-between; align-items:center; gap:8px;} .ticker {font-size:1.08rem; font-weight:850; color:#111827;} .price {font-size:.82rem; font-weight:700; color:#1f2937; margin-left:auto;}
+    .cap {font-size:.62rem; letter-spacing:.06em; color:#2563eb; background:#eaf1ff; padding:2px 7px; border-radius:99px; font-weight:800;}
+    .signal-row {margin-top:8px; display:flex; gap:7px; align-items:center; font-size:.83rem; font-weight:800;} .score-pill {background:#111827;color:#fff;border-radius:99px;padding:3px 8px;font-size:.68rem;} .state {font-size:.69rem; padding:3px 7px; border-radius:99px; background:#f8edd2; color:#926f1b; font-weight:750;} .state.watch {background:#eaf1ff;color:#2555a5;} .state.bad {background:#fde8e7;color:#ae2722;}
+    .trend {font-size:.75rem; color:#36765e; font-weight:700; margin:8px 0 7px;} .badges{display:flex; flex-wrap:wrap; gap:4px; min-height:24px;}.badge{font-size:.60rem; letter-spacing:.025em; border-radius:99px; padding:3px 6px; background:#e2f1e8; color:#356d51; font-weight:750;}.badge.spring{background:#fff4d8;color:#92722b;}.badge.empty{background:#f0f1f3;color:#9aa0a8;}
+    .rsline {font-size:.75rem; margin:9px 0 5px; color:#4f46a5;} .description {font-size:.73rem; color:#667085; line-height:1.48; min-height:52px;}.foot {font-size:.69rem; color:#4b5563; line-height:1.62; margin-top:8px;}.foot strong {color:#2e6b4d;}.warning {color:#b42318; font-weight:750;}
+    @media (prefers-color-scheme: dark) {.scanner-card{background:rgba(15,23,42,.72); border-color:rgba(148,163,184,.26)}.scanner-title,.ticker,.price{color:#f8fafc}.description,.scanner-about,.scanner-status{color:#cbd5e1}.foot{color:#cbd5e1}}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class='scanner-hero'>
+  <div class='scanner-kicker'>Equity leadership · End-of-day signal</div>
+  <div class='scanner-title'>Momentum Scanner</div>
+  <div class='scanner-about'>Find liquid equities where trend, compression, participation, and relative strength are aligning for a potential next-session expansion. Signals use the latest fully completed session and indicate setup quality—not a guaranteed gap or breakout.</div>
+</div>
+""", unsafe_allow_html=True)
+
+
+def _money(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    value = float(value)
+    return f"${value / 1e9:.1f}B" if value >= 1e9 else f"${value / 1e6:.0f}M"
+
+
+def _pct(value: object) -> str:
+    return "â€”" if value is None or pd.isna(value) else f"{float(value):+.1%}"
+
+
+def _card_class(row: pd.Series) -> str:
+    if row["Risk Warning"] or row["Setup State"] == "Deteriorating":
+        return "red"
+    if row["Setup State"] in {"Momentum Building", "Constructive"}:
+        return "gold"
+    if row["Setup State"] in {"Watch", "Early Turn"}:
+        return "blue"
+    return ""
+
+
+def _render_card(row: pd.Series, all_signals: bool, benchmark: str) -> str:
+    state_class = "bad" if row["Setup State"] == "Deteriorating" else "watch" if row["Setup State"] in {"Watch", "Early Turn"} else ""
+    badges = []
+    for signal in SIGNAL_COLUMNS + (["SPRING"] if all_signals else []):
+        active = bool(row.get(signal, False))
+        if active:
+            extra = "spring" if signal == "SPRING" else ""
+            badges.append(f"<span class='badge {extra}'>{signal}</span>")
+    if not badges:
+        badges.append("<span class='badge empty'>No active core trigger</span>")
+    sector_text = "Sector ETF â€”" if pd.isna(row.get("Sector RS 21D")) else f"Sector ETF {'outperform' if row['Sector RS 21D'] > 0 else 'underperform'}"
+    spy_text = "SPY â€”" if pd.isna(row.get("RS 21D")) else f"{benchmark} {'outperform' if row['RS 21D'] > 0 else 'underperform'}"
+    warning = f"<div class='warning'>{escape(str(row['Risk Warning']))}</div>" if row["Risk Warning"] else ""
+    return f"""
+    <div class='scanner-card {_card_class(row)}'>
+      <div class='scanner-top'><span class='ticker'>{escape(str(row['Ticker']))}</span><span class='price'>${float(row['Price']):,.2f}</span><span class='cap'>{escape(str(row['Market Cap Bucket']))}</span></div>
+      <div class='signal-row'><span class='score-pill'>{float(row['Expansion Score']):.0f} score</span><span>{int(row['Signal Count'])}/12 signals</span><span class='state {state_class}'>{escape(str(row['Setup State']))}</span></div>
+      <div class='trend'>{escape(str(row['Trend Label']))}</div><div class='badges'>{''.join(badges)}</div>
+      <div class='rsline'>â˜… {escape(str(row['RS Label']))} Â· Setup {int(row['Signal Count Change 5D']):+d} over 5D</div>
+      <div class='description'>{escape(str(row['Setup Description']))}</div>
+      <div class='foot'>RVOL <b>{float(row['RVOL']):.1f}x</b> &nbsp; ATR <b>{float(row['ATR %']):.2%}</b> &nbsp; {"âœ“" if row['Above SMA200'] else "Ã—"} 200EMA<br>â˜… 52W HI {_pct(row['Distance 52W High'])} &nbsp; { _money(row['Median Dollar Volume']) }<br><strong>{spy_text}</strong> Â· <strong>{sector_text}</strong>{warning}</div>
+    </div>"""
+
+
+with st.sidebar:
+    st.header("Momentum Scanner")
+    st.caption("Tune the scan, then close the sidebar to maximize results space.")
+    with st.expander("Universe & benchmark", expanded=True):
+        universe_choice = st.selectbox("Universe", ["S&P 500", "Nasdaq 100", "Russell 1000 liquid", "Combined liquid indices", "Custom watchlist"], index=0)
+        custom_watchlist = st.text_area("Custom watchlist", placeholder="AAPL, MSFT, NVDA", height=68, disabled=universe_choice != "Custom watchlist")
+        benchmark = st.selectbox("Benchmark", list(BENCHMARKS), index=0, format_func=lambda x: f"{x} | {BENCHMARKS[x]}")
+
+universe, universe_errors = load_equity_universe(universe_choice, custom_watchlist)
+if universe.empty:
+    st.error("No scanner universe is available. " + " | ".join(universe_errors or ["Check the custom watchlist or constituent data source."]))
+    st.stop()
+
+with st.sidebar:
+    with st.expander("Eligibility filters", expanded=True):
+        sector_options = sorted(universe["ADFM Sector"].dropna().unique().tolist())
+        selected_sectors = st.multiselect("Sector", sector_options, default=sector_options)
+        industry_options = sorted(universe["Industry"].dropna().astype(str).unique().tolist())
+        selected_industries = st.multiselect("Industry", industry_options, default=industry_options)
+        cap_range = st.selectbox("Market-cap range", ["All", "Mega", "Large", "Mid", "Small"], index=0)
+        min_dv = st.number_input("Minimum median dollar volume", min_value=1_000_000, max_value=500_000_000, value=int(MIN_DOLLAR_VOLUME), step=5_000_000, format="%d")
+        min_score = st.slider("Minimum score", 0, 100, 50)
+        include_adrs = st.checkbox("Include identifiable ADRs", value=False)
+        include_etfs = st.checkbox("Include ETFs", value=False)
+    with st.expander("Card settings", expanded=False):
+        max_cards = st.slider("Maximum cards", 4, 80, 24, 4)
+        all_signals = st.radio("Signal display", ["Core signals only", "All signals"], index=0) == "All signals"
+        core_only = st.checkbox("Core subsectors only", value=True)
+
+filtered_universe = universe.copy()
+if selected_sectors:
+    filtered_universe = filtered_universe[filtered_universe["ADFM Sector"].isin(selected_sectors)]
+else:
+    filtered_universe = filtered_universe.iloc[0:0]
+if industry_options and selected_industries:
+    filtered_universe = filtered_universe[filtered_universe["Industry"].isin(selected_industries) | filtered_universe["Industry"].isna()]
+elif industry_options and not selected_industries:
+    filtered_universe = filtered_universe.iloc[0:0]
+pre_filter_drops: List[Dict[str, object]] = []
+if not include_adrs:
+    # Index constituent files do not consistently label all ADRs; only exclude
+    # explicitly labelled ADR/ADS names rather than guessing from country data.
+    adr_mask = filtered_universe["Name"].fillna("").str.contains(r"\bADR\b|\bADS\b", case=False, regex=True)
+    pre_filter_drops = [{"Ticker": ticker, "Reason": "Identifiable ADR/ADS excluded by setting"} for ticker in filtered_universe.loc[adr_mask, "Ticker"]]
+    filtered_universe = filtered_universe.loc[~adr_mask]
+
+sector_tickers = list(MAJOR_SECTORS) + [row["Ticker"] for row in SUBSECTOR_ROWS]
+requested = tuple(dict.fromkeys(filtered_universe["Ticker"].tolist() + [benchmark] + sector_tickers))
+with st.spinner("Loading completed-session OHLCV data..."):
+    downloaded = fetch_ohlcv(requested)
+frames = downloaded.frames
+calendar = benchmark_calendar(frames, benchmark)
+quality_report = build_data_quality_report(
+    raw_frames=frames,
+    benchmark=benchmark,
+    tickers=tuple(filtered_universe["Ticker"].tolist()) + (benchmark,),
+    policy=DataIntegrityPolicy(min_valid_sessions=252, max_stale_sessions=3),
+)
+if not quality_report.benchmark_ready:
+    st.error(quality_report.reason_for(benchmark) or f"Benchmark {benchmark} is not eligible for analysis.")
+    st.stop()
+
+dropped_rows: List[Dict[str, object]] = pre_filter_drops + downloaded.dropped.to_dict("records")
+eligible_records: List[Dict[str, object]] = []
+for record in filtered_universe.to_dict("records"):
+    ticker = record["Ticker"]
+    reason = quality_report.reason_for(ticker)
+    if reason:
+        dropped_rows.append({"Ticker": ticker, "Reason": reason})
+        continue
+    adjusted = adjusted_ohlcv(frames[ticker]).dropna(subset=["Close", "Volume"])
+    if adjusted["Close"].iloc[-1] < MIN_PRICE:
+        dropped_rows.append({"Ticker": ticker, "Reason": f"Price below ${MIN_PRICE:.0f}"})
+        continue
+    median_dv = (adjusted["Close"] * adjusted["Volume"]).rolling(20, min_periods=20).median().iloc[-1]
+    if pd.isna(median_dv) or median_dv < min_dv:
+        dropped_rows.append({"Ticker": ticker, "Reason": "Median 20D dollar volume below filter"})
+        continue
+    eligible_records.append(record)
+
+eligible_universe = pd.DataFrame(eligible_records)
+if eligible_universe.empty:
+    st.warning("No securities passed the data, price, and liquidity filters.")
+    st.stop()
+with st.spinner("Resolving available market-cap and security metadata..."):
+    metadata = fetch_market_metadata(tuple(eligible_universe["Ticker"].tolist()))
+eligible_universe = eligible_universe.merge(metadata, on="Ticker", how="left")
+eligible_universe["Market Cap Bucket"] = eligible_universe["Market Cap"].apply(market_cap_bucket)
+small_cap_mask = eligible_universe["Market Cap"].notna() & (eligible_universe["Market Cap"] < 1_000_000_000)
+for ticker in eligible_universe.loc[small_cap_mask, "Ticker"]:
+    dropped_rows.append({"Ticker": ticker, "Reason": "Market capitalization below $1B"})
+eligible_universe = eligible_universe.loc[~small_cap_mask]
+if not include_etfs:
+    etf_mask = eligible_universe["Quote Type"].fillna("").str.upper().eq("ETF")
+    for ticker in eligible_universe.loc[etf_mask, "Ticker"]:
+        dropped_rows.append({"Ticker": ticker, "Reason": "ETF excluded by setting"})
+    eligible_universe = eligible_universe.loc[~etf_mask]
+if cap_range != "All":
+    eligible_universe = eligible_universe[eligible_universe["Market Cap Bucket"] == cap_range]
+
+rows: List[Dict[str, object]] = []
+bench_close = adjusted_ohlcv(frames[benchmark])["Close"]
+for record in eligible_universe.to_dict("records"):
+    sector_ticker = sector_etf(record.get("ADFM Sector"))
+    sector_close = adjusted_ohlcv(frames[sector_ticker])["Close"] if sector_ticker in frames else None
+    row = security_features(record["Ticker"], frames[record["Ticker"]], bench_close, sector_close)
+    rows.append({**record, **row, "Stale Sessions": stale_sessions(frames[record["Ticker"]], calendar)})
+scanner = score_scanner(pd.DataFrame(rows)) if rows else pd.DataFrame()
+if scanner.empty:
+    st.warning("No securities have sufficient data to calculate all required scanner features.")
+    st.stop()
+passing = scanner[scanner["Expansion Score"] >= min_score]
+latest_date = quality_report.data_through.date()
+search_query = st.text_input(
+    "Find a result",
+    placeholder="Search ticker, company, sector, or industry",
+    label_visibility="collapsed",
+)
+results = passing.copy()
+if search_query.strip():
+    query = search_query.strip().lower()
+    search_columns = [column for column in ["Ticker", "Name", "ADFM Sector", "Industry"] if column in results]
+    search_mask = pd.Series(False, index=results.index)
+    for column in search_columns:
+        search_mask |= results[column].fillna("").astype(str).str.lower().str.contains(query, regex=False)
+    results = results.loc[search_mask]
+
+metric_cols = st.columns(4)
+metric_cols[0].metric("Setups", f"{len(results):,}", help=f"{len(scanner):,} eligible securities scanned")
+metric_cols[1].metric("Top score", f"{results['Expansion Score'].max():.0f}" if not results.empty else "—")
+metric_cols[2].metric("Median RVOL", f"{results['RVOL'].median():.1f}×" if not results.empty else "—")
+leading_sector = results.iloc[0].get("ADFM Sector", "—") if not results.empty else "—"
+metric_cols[3].metric("Leading sector", str(leading_sector) if pd.notna(leading_sector) else "—")
+st.markdown(f"<div class='scanner-status'><b>Potential next-session expansion</b> · {report_caption(quality_report)} · {len(scanner)} eligible · {len(passing)} above threshold · {len(results)} shown</div>", unsafe_allow_html=True)
+for error in universe_errors:
+    st.caption(error)
+
+view = st.segmented_control(
+    "Display",
+    ["Scan table", "Cards", "Full detail"],
+    default="Scan table",
+    label_visibility="collapsed",
+)
+if view == "Cards":
+    cards = results.head(max_cards)
+    if cards.empty:
+        st.info("No results match the current filters.")
+    else:
+        st.markdown("<div class='scanner-grid'>" + "".join(_render_card(row, all_signals, benchmark) for _, row in cards.iterrows()) + "</div>", unsafe_allow_html=True)
+elif view == "Full detail":
+    st.dataframe(results, use_container_width=True, hide_index=True, height=720)
+else:
+    compact = pd.DataFrame(index=results.index)
+    for source, target in [
+        ("Ticker", "Ticker"),
+        ("Name", "Company"),
+        ("Expansion Score", "Score"),
+        ("Setup State", "Setup"),
+        ("Signal Count", "Signals"),
+        ("Price", "Price"),
+        ("RVOL", "RVOL"),
+        ("ADFM Sector", "Sector"),
+        ("Market Cap Bucket", "Cap"),
+    ]:
+        if source in results:
+            compact[target] = results[source]
+    if "ATR %" in results:
+        compact["ATR"] = results["ATR %"] * 100
+    if "RS 21D" in results:
+        compact["RS 1M"] = results["RS 21D"] * 100
+    table_height = min(720, max(180, 38 + 35 * len(compact)))
+    st.dataframe(
+        compact,
+        use_container_width=True,
+        hide_index=True,
+        height=table_height,
+        column_config={
+            "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%.0f"),
+            "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+            "RVOL": st.column_config.NumberColumn("RVOL", format="%.1f×"),
+            "ATR": st.column_config.NumberColumn("ATR", format="%.1f%%"),
+            "RS 1M": st.column_config.NumberColumn("RS 1M", format="%+.1f%%"),
+        },
+    )
+
+st.download_button("Download results CSV", results.to_csv(index=False).encode("utf-8"), "momentum_scanner.csv", "text/csv")
+if dropped_rows:
+    with st.expander(f"Dropped securities ({len(pd.DataFrame(dropped_rows).drop_duplicates())})"):
+        st.dataframe(pd.DataFrame(dropped_rows).drop_duplicates(), use_container_width=True, hide_index=True)
+
+sector_df, subsector_df = sector_leadership(frames, benchmark, include_thematic=not core_only)
+with st.expander("Sector & subsector leadership", expanded=False):
+    if not sector_df.empty:
+        past_frames = {ticker: frame.iloc[:-5].copy() for ticker, frame in frames.items() if len(frame) > 5}
+        past_sector, past_sub = sector_leadership(past_frames, benchmark, include_thematic=not core_only)
+        if not past_sector.empty:
+            sector_df = rank_change(sector_df, past_sector, key="Sector")
+        display_cols = ["Rank", "Rank change over five sessions", "Sector", "Major ETF", "Leadership Score", "Leadership State", "RS 1W", "RS 1M", "RS 3M", "RS 6M", "RS Slope 10D", "RS Acceleration", "Positive RS 1M", "Above EMA50 Breadth", "Above SMA200 Breadth", "Strongest Subsector", "Weakest Subsector", "Dispersion", "Participation State"]
+        display = sector_df[[c for c in display_cols if c in sector_df]].copy()
+        style_cols = [c for c in ["Leadership Score", "RS 1W", "RS 1M", "RS 3M", "RS 6M", "RS Slope 10D", "RS Acceleration", "Positive RS 1M", "Above EMA50 Breadth", "Above SMA200 Breadth"] if c in display]
+        st.dataframe(display.style.format({c: "{:.1%}" for c in style_cols if c != "Leadership Score"}).format({"Leadership Score": "{:.1f}"}).background_gradient(subset=style_cols, cmap="RdYlGn"), use_container_width=True, hide_index=True, height=460)
+        st.download_button("Download sector leadership CSV", sector_df.to_csv(index=False).encode("utf-8"), "sector_leadership.csv", "text/csv")
+        with st.expander("Tracked subsectors", expanded=False):
+            if not subsector_df.empty:
+                if not past_sub.empty:
+                    subsector_df = rank_change(subsector_df, past_sub)
+                st.dataframe(subsector_df, use_container_width=True, hide_index=True, height=500)
+                st.download_button("Download subsector leadership CSV", subsector_df.to_csv(index=False).encode("utf-8"), "subsector_leadership.csv", "text/csv")
+    else:
+        st.warning("Sector leadership is unavailable because required major-sector ETF data could not be loaded.")
+
+with st.expander("Signal Diagnostics", expanded=False):
+    st.caption("Two-year walk-forward observations use only the signal date for setup classification and subsequent sessions only for outcomes. These are descriptive diagnostics, not optimized validation.")
+    run_diagnostics = st.checkbox("Run two-year diagnostics", value=False)
+    if run_diagnostics:
+        diagnostic_frames: Dict[str, pd.DataFrame] = {benchmark: frames[benchmark]}
+        diagnostic_frames.update({ticker: frames[ticker] for ticker in scanner["Ticker"] if ticker in frames})
+        with st.spinner("Calculating no-lookahead historical diagnostics..."):
+            diagnostics = diagnostic_table(diagnostic_frames, benchmark, min_dollar_volume=float(min_dv))
+        if diagnostics.empty:
+            st.info("No eligible historical observations were available.")
+        else:
+            fmt = {c: "{:.2%}" for c in diagnostics.columns if c not in {"Signal Bucket", "Positive RS", "Observations"}}
+            st.dataframe(diagnostics.style.format(fmt), use_container_width=True, hide_index=True)
+            st.download_button("Download signal diagnostics CSV", diagnostics.to_csv(index=False).encode("utf-8"), "signal_diagnostics.csv", "text/csv")
+
+st.caption(f"Data through: {latest_date} | Benchmark: {benchmark} | Raw OHLCV is never forward-filled for signals or pattern recognition.")
+render_footer()

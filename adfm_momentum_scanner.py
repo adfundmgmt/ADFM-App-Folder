@@ -1,4 +1,4 @@
-"""Deterministic data and analytics engine for the ADFM Momentum Expansion Scanner.
+"""Deterministic data and analytics engine for the Momentum Scanner.
 
 All indicator functions use only observations available at their requested end
 date.  The Streamlit page is deliberately kept separate from this module so

@@ -41,14 +41,14 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 | 16 | Event Risk + Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Yahoo Finance market proxies; configured calendar data |
 | 17 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
-| 19 | ADFM Momentum Expansion Scanner | Ranks liquid equities with deterministic momentum-expansion setups and maps sector and subsector leadership. | Yahoo Finance daily OHLCV; existing sector and subsector universe |
+| 19 | Momentum Scanner | Ranks liquid equities by momentum setup quality and maps sector and subsector leadership. | Yahoo Finance daily OHLCV; existing sector and subsector universe |
 | 20 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 
 ## Tool groups
 
 | Group | Tools |
 |---|---|
-| Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard; Momentum Expansion Scanner |
+| Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard; Momentum Scanner |
 | Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
 | Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Tracker; Currency Tension Engine |
@@ -63,7 +63,7 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - A data-integrity policy and diagnostics report for eligible, stale, thin-history, and invalid series.
 - Reusable Rate of Change calculations and chart-axis helpers.
 
-The Momentum Expansion Scanner and Rate of Change Dashboard currently use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable.
+The Momentum Scanner and Rate of Change Dashboard currently use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable.
 
 ## Data-use notes
 
@@ -73,4 +73,4 @@ The Momentum Expansion Scanner and Rate of Change Dashboard currently use these 
 
 ## Quality checks
 
-GitHub Actions runs compilation, unit tests, and Ruff checks on pushes and pull requests. The test suite covers shared market-data and integrity primitives, the Momentum Expansion Scanner, and the Rate of Change calculation module.
+GitHub Actions runs compilation, unit tests, and Ruff checks on pushes and pull requests. The test suite covers shared market-data and integrity primitives, the Momentum Scanner, and the Rate of Change calculation module.
