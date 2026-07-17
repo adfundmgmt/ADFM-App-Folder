@@ -15,7 +15,9 @@ from adfm_core.market_data import (
     unique_tickers,
 )
 from adfm_core.relative_volatility import (
+    pair_volatility_diagnostics,
     prior_percentile_rank,
+    realized_volatility_ratio,
     relative_volatility_frame,
     rolling_zscore_previous,
 )
@@ -35,15 +37,28 @@ TITLE = "Relative Volatility Lab"
 HISTORY_OPTIONS = ("1y", "2y", "3y", "5y", "10y", "max")
 RVOL_WINDOWS = (5, 10, 21, 42, 63, 126, 252)
 NORMALIZATION_WINDOWS = (21, 63, 126, 252, 504, 1260)
+DIAGNOSTIC_SHORT_WINDOW = 5
+DIAGNOSTIC_LONG_WINDOW = 21
+SOXX_TICKER = "SOXX"
+NDX_TICKER = "^NDX"
+EQUAL_WEIGHT_TICKER = "QEW"
+CAP_WEIGHT_TICKER = "QQQ"
 PRIMARY_COLOR = "#14213d"
 COMPARISON_COLOR = "#2563eb"
 IMPLIED_COLOR = "#7c8796"
+IMPLIED_COMPARISON_COLOR = "#9a3412"
 ALERT_COLOR = "#c81e1e"
 GRID_COLOR = "rgba(148,163,184,0.23)"
 
 
 def normalize_ticker(value: str) -> str:
     return str(value or "").strip().upper()
+
+
+def display_ticker(ticker: str) -> str:
+    return {"^NDX": "NDX", "^GSPC": "SPX", "^VXN": "VXN", "^VIX": "VIX"}.get(
+        ticker, ticker
+    )
 
 
 def close_series(raw_frames: dict[str, pd.DataFrame], ticker: str) -> pd.Series:
@@ -67,6 +82,39 @@ def fmt(value: float, suffix: str = "", digits: int = 1) -> str:
     return f"{value:,.{digits}f}{suffix}" if np.isfinite(value) else "N/A"
 
 
+def fmt_signed(value: float, suffix: str = "", digits: int = 2) -> str:
+    return f"{value:+,.{digits}f}{suffix}" if np.isfinite(value) else "N/A"
+
+
+def fmt_percentile(value: float) -> str:
+    if not np.isfinite(value):
+        return "N/A"
+    rounded = int(round(value))
+    suffix = "th" if 10 < rounded % 100 < 14 else {1: "st", 2: "nd", 3: "rd"}.get(
+        rounded % 10, "th"
+    )
+    return f"{rounded}{suffix}"
+
+
+def latest_point_change(series: pd.Series, periods: int = 5) -> tuple[float, float, float]:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if len(clean) <= periods:
+        return np.nan, np.nan, np.nan
+    current = float(clean.iloc[-1])
+    previous = float(clean.iloc[-(periods + 1)])
+    absolute = current - previous
+    percent = current / previous - 1.0 if previous else np.nan
+    return absolute, percent, previous
+
+
+def aligned_level_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    frame = pd.concat(
+        [numerator.rename("numerator"), denominator.rename("denominator")], axis=1
+    )
+    ratio = frame["numerator"].div(frame["denominator"].replace(0, np.nan))
+    return ratio.replace([np.inf, -np.inf], np.nan).rename("level_ratio")
+
+
 def return_correlation(
     primary_close: pd.Series,
     comparison_close: pd.Series,
@@ -84,7 +132,14 @@ def return_correlation(
     return float(returns.tail(sessions).corr().iloc[0, 1])
 
 
-def ratio_read(primary: str, comparison: str, ratio: float, median: float) -> str:
+def ratio_read(
+    primary: str,
+    comparison: str,
+    ratio: float,
+    median: float,
+    primary_percentile: float,
+    comparison_percentile: float,
+) -> str:
     if not np.isfinite(ratio) or not np.isfinite(median):
         return "The current relative-volatility reading is unavailable for this selection."
     spread = ratio / median - 1.0 if median else np.nan
@@ -94,10 +149,23 @@ def ratio_read(primary: str, comparison: str, ratio: float, median: float) -> st
     else:
         direction = "below"
         implication = f"{primary} volatility is subdued relative to {comparison}."
+    context = ""
+    if np.isfinite(primary_percentile) and np.isfinite(comparison_percentile):
+        if primary_percentile >= 80 and comparison_percentile <= 20:
+            context = (
+                f" Both elevated {primary} volatility and suppressed {comparison} "
+                "volatility are contributing to the extreme."
+            )
+        elif comparison_percentile <= 20:
+            context = (
+                f" Unusually low {comparison} volatility is amplifying the ratio."
+            )
+        elif primary_percentile >= 80:
+            context = f" Elevated {primary} volatility is driving the divergence."
     return (
         f"The {primary}/{comparison} realized-volatility ratio is {ratio:.2f}x, "
         f"{abs(spread):.0%} {direction} its loaded-history median of {median:.2f}x. "
-        f"{implication}"
+        f"{implication}{context}"
     )
 
 
@@ -126,7 +194,8 @@ def overview_chart(
     primary: str,
     comparison: str,
     rvol_window: int,
-    implied: str,
+    primary_implied: str,
+    comparison_implied: str,
 ) -> go.Figure:
     plot = frame.dropna(subset=["primary_rvol", "comparison_rvol", "rvol_ratio"])
     ratio_median = float(plot["rvol_ratio"].median())
@@ -159,13 +228,33 @@ def overview_chart(
         row=1,
         col=1,
     )
-    if implied and "implied_level" in plot and plot["implied_level"].notna().any():
+    if (
+        primary_implied
+        and "primary_implied_level" in plot
+        and plot["primary_implied_level"].notna().any()
+    ):
         fig.add_trace(
             go.Scatter(
                 x=plot.index,
-                y=plot["implied_level"],
-                name=f"{implied} implied",
+                y=plot["primary_implied_level"],
+                name=f"{primary_implied} implied",
                 line=dict(color=IMPLIED_COLOR, width=1.35, dash="dash"),
+                hovertemplate="%{y:.1f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    if (
+        comparison_implied
+        and "comparison_implied_level" in plot
+        and plot["comparison_implied_level"].notna().any()
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=plot.index,
+                y=plot["comparison_implied_level"],
+                name=f"{comparison_implied} implied",
+                line=dict(color=IMPLIED_COMPARISON_COLOR, width=1.35, dash="dot"),
                 hovertemplate="%{y:.1f}<extra></extra>",
             ),
             row=1,
@@ -182,6 +271,18 @@ def overview_chart(
         row=2,
         col=1,
     )
+    if "implied_ratio" in plot and plot["implied_ratio"].notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=plot.index,
+                y=plot["implied_ratio"],
+                name=f"{primary_implied} / {comparison_implied} implied",
+                line=dict(color=IMPLIED_COMPARISON_COLOR, width=1.55, dash="dot"),
+                hovertemplate="%{y:.2f}x<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
     fig.add_hline(
         y=ratio_median,
         line=dict(color=IMPLIED_COLOR, width=1.2, dash="dash"),
@@ -217,7 +318,8 @@ def normalized_chart(
     frame: pd.DataFrame,
     primary: str,
     comparison: str,
-    implied: str,
+    primary_implied: str,
+    comparison_implied: str,
 ) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(
@@ -238,13 +340,31 @@ def normalized_chart(
             hovertemplate="%{y:.2f}σ<extra></extra>",
         )
     )
-    if implied and "implied_zscore" in frame and frame["implied_zscore"].notna().any():
+    if (
+        primary_implied
+        and "primary_implied_zscore" in frame
+        and frame["primary_implied_zscore"].notna().any()
+    ):
         fig.add_trace(
             go.Scatter(
                 x=frame.index,
-                y=frame["implied_zscore"],
-                name=f"{implied} z-score",
+                y=frame["primary_implied_zscore"],
+                name=f"{primary_implied} z-score",
                 line=dict(color=IMPLIED_COLOR, width=1.35, dash="dash"),
+                hovertemplate="%{y:.2f}σ<extra></extra>",
+            )
+        )
+    if (
+        comparison_implied
+        and "comparison_implied_zscore" in frame
+        and frame["comparison_implied_zscore"].notna().any()
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=frame.index,
+                y=frame["comparison_implied_zscore"],
+                name=f"{comparison_implied} z-score",
+                line=dict(color=IMPLIED_COMPARISON_COLOR, width=1.35, dash="dot"),
                 hovertemplate="%{y:.2f}σ<extra></extra>",
             )
         )
@@ -287,10 +407,15 @@ with st.sidebar:
             "Comparison ticker",
             value="^GSPC",
         )
-        implied_ticker = st.text_input(
-            "Optional implied-vol ticker",
+        primary_implied_ticker = st.text_input(
+            "Primary implied-vol ticker",
+            value="^VXN",
+            help="Defaults to VXN for the Nasdaq 100.",
+        )
+        comparison_implied_ticker = st.text_input(
+            "Comparison implied-vol ticker",
             value="^VIX",
-            help="Leave blank when no traded implied-volatility index exists.",
+            help="Defaults to VIX for the S&P 500.",
         )
         history = st.selectbox("Price history", HISTORY_OPTIONS, index=3)
         rvol_window = st.selectbox(
@@ -308,7 +433,7 @@ with st.sidebar:
         st.form_submit_button("Apply", width="stretch")
     st.caption(
         "Synthetic VIX = annualized close-to-close realized volatility. "
-        "The optional overlay is a market-implied index and is not required."
+        "Implied-volatility inputs are optional and are used as a paired ratio."
     )
     st.markdown("---")
     st.header("About This Tool")
@@ -318,9 +443,10 @@ with st.sidebar:
 
         **What this page shows**
         - Annualized realized volatility for both selected tickers.
-        - The primary/comparison volatility ratio and historical percentile.
+        - Numerator, denominator, and ratio percentiles plus the 5-session ratio change.
+        - The paired implied-volatility ratio beside the realized ratio.
+        - Fixed 5D/21D acceleration, downside, semiconductor, and breadth diagnostics.
         - Each instrument's causal volatility z-score.
-        - An optional market-implied volatility overlay when one exists.
 
         **Data source**
         - Yahoo Finance adjusted daily price history.
@@ -330,14 +456,19 @@ with st.sidebar:
 
 primary = normalize_ticker(primary_ticker)
 comparison = normalize_ticker(comparison_ticker)
-implied = normalize_ticker(implied_ticker)
+primary_implied = normalize_ticker(primary_implied_ticker)
+comparison_implied = normalize_ticker(comparison_implied_ticker)
+primary_label = display_ticker(primary)
+comparison_label = display_ticker(comparison)
+primary_implied_label = display_ticker(primary_implied)
+comparison_implied_label = display_ticker(comparison_implied)
 
 render_page_header(
     PageHeader(
         title=TITLE,
         description=(
             "Compare any two assets through a selectable synthetic-VIX window, "
-            "relative-volatility ratio, causal z-scores, and an optional implied-volatility index."
+            "ratio decomposition, implied-versus-realized pricing, and fixed-window stress diagnostics."
         ),
         eyebrow="ADFM Volatility Intelligence",
     )
@@ -348,13 +479,29 @@ if not primary or not comparison:
     render_footer()
     st.stop()
 
-requested = unique_tickers([primary, comparison, implied])
+requested = unique_tickers(
+    [
+        primary,
+        comparison,
+        primary_implied,
+        comparison_implied,
+        SOXX_TICKER,
+        NDX_TICKER,
+        EQUAL_WEIGHT_TICKER,
+        CAP_WEIGHT_TICKER,
+    ]
+)
 with st.spinner("Loading volatility history..."):
     raw_frames, missing = fetch_daily_ohlcv(requested, period=history)
 
 primary_close = close_series(raw_frames, primary)
 comparison_close = close_series(raw_frames, comparison)
-implied_close = close_series(raw_frames, implied) if implied else pd.Series(dtype=float)
+primary_implied_close = close_series(raw_frames, primary_implied)
+comparison_implied_close = close_series(raw_frames, comparison_implied)
+soxx_close = close_series(raw_frames, SOXX_TICKER)
+ndx_close = close_series(raw_frames, NDX_TICKER)
+equal_weight_close = close_series(raw_frames, EQUAL_WEIGHT_TICKER)
+cap_weight_close = close_series(raw_frames, CAP_WEIGHT_TICKER)
 
 missing_required = [
     ticker
@@ -368,9 +515,23 @@ if missing_required:
     render_footer()
     st.stop()
 
-if implied and implied_close.empty:
+optional_missing = [
+    ticker
+    for ticker, close in (
+        (primary_implied, primary_implied_close),
+        (comparison_implied, comparison_implied_close),
+        (SOXX_TICKER, soxx_close),
+        (NDX_TICKER, ndx_close),
+        (EQUAL_WEIGHT_TICKER, equal_weight_close),
+        (CAP_WEIGHT_TICKER, cap_weight_close),
+    )
+    if ticker and close.empty
+]
+if optional_missing:
     st.warning(
-        f"{implied} was unavailable. The synthetic-VIX comparison still works without the optional overlay."
+        "Optional diagnostics are unavailable for: "
+        + ", ".join(dict.fromkeys(optional_missing))
+        + ". Core pair analysis is unaffected."
     )
 
 normalization_min_periods = max(10, min(63, normalization_window // 2))
@@ -381,13 +542,41 @@ analysis = relative_volatility_frame(
     normalization_window=normalization_window,
     normalization_min_periods=normalization_min_periods,
 )
-if not implied_close.empty:
-    analysis["implied_level"] = implied_close
-    analysis["implied_zscore"] = rolling_zscore_previous(
-        implied_close,
+pair_diagnostics = pair_volatility_diagnostics(
+    primary_close,
+    comparison_close,
+    short_window=DIAGNOSTIC_SHORT_WINDOW,
+    long_window=DIAGNOSTIC_LONG_WINDOW,
+)
+analysis = analysis.join(pair_diagnostics, how="outer")
+if not primary_implied_close.empty:
+    analysis["primary_implied_level"] = primary_implied_close
+    analysis["primary_implied_zscore"] = rolling_zscore_previous(
+        primary_implied_close,
         normalization_window,
         normalization_min_periods,
     )
+if not comparison_implied_close.empty:
+    analysis["comparison_implied_level"] = comparison_implied_close
+    analysis["comparison_implied_zscore"] = rolling_zscore_previous(
+        comparison_implied_close,
+        normalization_window,
+        normalization_min_periods,
+    )
+analysis["implied_ratio"] = aligned_level_ratio(
+    primary_implied_close,
+    comparison_implied_close,
+)
+analysis["soxx_ndx_rvol_ratio_21d"] = realized_volatility_ratio(
+    soxx_close,
+    ndx_close,
+    DIAGNOSTIC_LONG_WINDOW,
+)
+analysis["qew_qqq_rvol_ratio_21d"] = realized_volatility_ratio(
+    equal_weight_close,
+    cap_weight_close,
+    DIAGNOSTIC_LONG_WINDOW,
+)
 
 usable = analysis.dropna(subset=["primary_rvol", "comparison_rvol", "rvol_ratio"])
 if usable.empty:
@@ -411,22 +600,103 @@ comparison_rvol = latest_value(usable["comparison_rvol"])
 current_ratio = latest_value(usable["rvol_ratio"])
 ratio_median = float(usable["rvol_ratio"].median())
 ratio_percentile = prior_percentile_rank(usable["rvol_ratio"])
+primary_rvol_percentile = prior_percentile_rank(usable["primary_rvol"])
+comparison_rvol_percentile = prior_percentile_rank(usable["comparison_rvol"])
+ratio_change_5d, ratio_change_5d_pct, ratio_5d_ago = latest_point_change(
+    usable["rvol_ratio"], DIAGNOSTIC_SHORT_WINDOW
+)
+implied_ratio = latest_value(analysis["implied_ratio"])
+implied_realized_wedge = implied_ratio - current_ratio
+relative_acceleration = latest_value(analysis["relative_vol_acceleration"])
+downside_ratio = latest_value(
+    analysis[f"downside_rvol_ratio_{DIAGNOSTIC_LONG_WINDOW}d"]
+)
+soxx_ndx_ratio = latest_value(analysis["soxx_ndx_rvol_ratio_21d"])
+qew_qqq_ratio = latest_value(analysis["qew_qqq_rvol_ratio_21d"])
 primary_zscore = latest_value(analysis["primary_zscore"])
 comparison_zscore = latest_value(analysis["comparison_zscore"])
 corr_63d = return_correlation(primary_close, comparison_close)
 
 render_selection_note(
     "Current relative-volatility read",
-    ratio_read(primary, comparison, current_ratio, ratio_median),
+    ratio_read(
+        primary_label,
+        comparison_label,
+        current_ratio,
+        ratio_median,
+        primary_rvol_percentile,
+        comparison_rvol_percentile,
+    ),
+)
+render_section_header(
+    "Ratio decomposition",
+    "Separates the numerator, denominator, and ratio history so a quiet comparison market is not mistaken for primary-market panic.",
 )
 render_kpi_cards(
     [
-        (f"{primary} synthetic VIX", fmt(primary_rvol, "%"), f"{rvol_window}-session RVOL"),
-        (f"{comparison} synthetic VIX", fmt(comparison_rvol, "%"), f"{rvol_window}-session RVOL"),
-        ("RVOL ratio", fmt(current_ratio, "x", 2), f"median {fmt(ratio_median, 'x', 2)}"),
-        ("Ratio percentile", fmt(ratio_percentile, "th", 0), "vs loaded prior history"),
-        (f"{primary} vol z-score", fmt(primary_zscore, "σ", 2), f"vs {normalization_window} prior sessions"),
-        ("63D return correlation", fmt(corr_63d, "", 2), f"{primary} vs {comparison}"),
+        (
+            f"{primary_label} RVOL percentile",
+            fmt_percentile(primary_rvol_percentile),
+            f"current {fmt(primary_rvol, '%')} · {rvol_window}D annualized",
+        ),
+        (
+            f"{comparison_label} RVOL percentile",
+            fmt_percentile(comparison_rvol_percentile),
+            f"current {fmt(comparison_rvol, '%')} · {rvol_window}D annualized",
+        ),
+        (
+            "Realized RVOL ratio",
+            fmt(current_ratio, "x", 2),
+            f"loaded-history median {fmt(ratio_median, 'x', 2)}",
+        ),
+        (
+            "RVOL ratio percentile",
+            fmt_percentile(ratio_percentile),
+            "current ratio vs all earlier loaded observations",
+        ),
+        (
+            "5D ratio change",
+            fmt_signed(ratio_change_5d, "x", 2),
+            f"{fmt_signed(ratio_change_5d_pct * 100, '%', 1)} · from {fmt(ratio_5d_ago, 'x', 2)}",
+        ),
+        (
+            f"{primary_implied_label or 'Primary IV'} / {comparison_implied_label or 'Comparison IV'}",
+            fmt(implied_ratio, "x", 2),
+            f"implied ratio · wedge vs realized {fmt_signed(implied_realized_wedge, 'x', 2)}",
+        ),
+    ]
+)
+render_section_header(
+    "Cross-market diagnostics",
+    "Fixed 5- and 21-session measures show whether relative stress is accelerating, concentrated in semiconductors, asymmetric on down days, or broadening beyond cap-weight leaders.",
+)
+render_kpi_cards(
+    [
+        (
+            "Relative-vol acceleration",
+            fmt(relative_acceleration, "x", 2),
+            "5D pair ratio / 21D pair ratio · above 1 is accelerating",
+        ),
+        (
+            "SOXX / NDX RVOL",
+            fmt(soxx_ndx_ratio, "x", 2),
+            "21D semiconductor stress vs Nasdaq 100",
+        ),
+        (
+            f"{primary_label} / {comparison_label} downside",
+            fmt(downside_ratio, "x", 2),
+            "21D volatility on negative-return sessions only",
+        ),
+        (
+            "QEW / QQQ RVOL",
+            fmt(qew_qqq_ratio, "x", 2),
+            "21D equal-weight vs cap-weight Nasdaq volatility",
+        ),
+        (
+            "63D return correlation",
+            fmt(corr_63d, "", 2),
+            f"{primary_label} vs {comparison_label}",
+        ),
     ]
 )
 
@@ -439,11 +709,18 @@ with overview_tab:
         "Realized volatility and pairwise spread",
         (
             f"Annualized {rvol_window}-session close-to-close volatility. "
-            "The lower panel divides the primary asset's RVOL by the comparison asset's RVOL."
+            "The lower panel places the realized pair ratio beside the paired implied-volatility ratio."
         ),
     )
     st.plotly_chart(
-        overview_chart(analysis, primary, comparison, rvol_window, implied),
+        overview_chart(
+            analysis,
+            primary_label,
+            comparison_label,
+            rvol_window,
+            primary_implied_label,
+            comparison_implied_label,
+        ),
         width="stretch",
         config={"displaylogo": False, "scrollZoom": True},
     )
@@ -457,7 +734,13 @@ with normalized_tab:
         ),
     )
     st.plotly_chart(
-        normalized_chart(analysis, primary, comparison, implied),
+        normalized_chart(
+            analysis,
+            primary_label,
+            comparison_label,
+            primary_implied_label,
+            comparison_implied_label,
+        ),
         width="stretch",
         config={"displaylogo": False, "scrollZoom": True},
     )
@@ -475,11 +758,21 @@ with normalized_tab:
             },
         ]
     )
-    if implied and "implied_level" in analysis:
+    if primary_implied and "primary_implied_level" in analysis:
         z_table.loc[len(z_table)] = {
-            "Series": implied,
-            "Current synthetic VIX": latest_value(analysis["implied_level"]),
-            "Z-score": latest_value(analysis["implied_zscore"]),
+            "Series": primary_implied,
+            "Current synthetic VIX": latest_value(
+                analysis["primary_implied_level"]
+            ),
+            "Z-score": latest_value(analysis["primary_implied_zscore"]),
+        }
+    if comparison_implied and "comparison_implied_level" in analysis:
+        z_table.loc[len(z_table)] = {
+            "Series": comparison_implied,
+            "Current synthetic VIX": latest_value(
+                analysis["comparison_implied_level"]
+            ),
+            "Z-score": latest_value(analysis["comparison_implied_zscore"]),
         }
     st.dataframe(
         z_table.style.format(
@@ -502,8 +795,11 @@ with data_tab:
             "rvol_ratio": f"{primary}_{comparison}_rvol_ratio",
             "primary_zscore": f"{primary}_vol_zscore",
             "comparison_zscore": f"{comparison}_vol_zscore",
-            "implied_level": f"{implied}_level" if implied else "implied_level",
-            "implied_zscore": f"{implied}_zscore" if implied else "implied_zscore",
+            "primary_implied_level": f"{primary_implied}_level",
+            "primary_implied_zscore": f"{primary_implied}_zscore",
+            "comparison_implied_level": f"{comparison_implied}_level",
+            "comparison_implied_zscore": f"{comparison_implied}_zscore",
+            "implied_ratio": f"{primary_implied}_{comparison_implied}_ratio",
         }
     )
     export.index.name = "Date"
@@ -536,8 +832,16 @@ with methodology_tab:
 
         - Each z-score compares today's synthetic VIX with the mean and sample standard deviation of up to {normalization_window} prior observations. Excluding today keeps the calculation causal.
         - The ratio divides {primary} synthetic VIX by {comparison} synthetic VIX on overlapping dates.
-        - The ratio percentile ranks the latest ratio against all earlier ratios in the loaded history; ties receive half credit.
-        - The optional `{implied or 'implied-volatility'}` line is plotted as reported by Yahoo Finance and is not transformed into a realized-volatility estimate.
+        - The two asset percentiles and the ratio percentile rank each latest reading against all earlier observations in the loaded history; ties receive half credit. The current observation is excluded from its own reference set.
+        - The 5D ratio change is the point-to-point change from five valid ratio observations earlier.
+        - `{primary_implied or 'Primary implied volatility'}` divided by `{comparison_implied or 'comparison implied volatility'}` is shown beside the realized ratio. Both implied series are plotted as reported by Yahoo Finance and are not transformed into realized-volatility estimates.
+
+        **Fixed-window diagnostics**
+
+        - Relative-volatility acceleration divides the 5-session {primary}/{comparison} RVOL ratio by the 21-session ratio. A reading above 1.0 means short-term relative stress is running above the recent regime.
+        - SOXX/NDX and QEW/QQQ divide 21-session annualized realized volatility for those fixed benchmark pairs. QEW is used as the Nasdaq-100 equal-weight proxy and QQQ as the cap-weight proxy.
+        - The downside-semivolatility ratio uses the annualized sample standard deviation of negative log-return sessions observed within each trailing 21-session window. It requires at least two negative sessions per asset; sparse windows remain unavailable.
+        - No optional series is filled or fabricated. Missing implied-volatility or ETF history produces `N/A` diagnostics while the selected pair continues to render.
 
         Thin trading, stale observations, leverage, market-hour differences, and overnight gaps can make comparisons less representative. This dashboard is an analytical tool, not an investment recommendation.
         """
