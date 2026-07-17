@@ -16,7 +16,6 @@ from adfm_core.market_data import (
 )
 from adfm_core.relative_volatility import (
     pair_volatility_diagnostics,
-    prior_percentile_rank,
     realized_volatility_ratio,
     relative_volatility_frame,
     rolling_zscore_previous,
@@ -26,10 +25,8 @@ from adfm_core.ui import (
     dataframe_download,
     inject_explorer_style,
     render_footer,
-    render_kpi_cards,
     render_page_header,
     render_section_header,
-    render_selection_note,
     render_status_line,
 )
 
@@ -82,91 +79,12 @@ def fmt(value: float, suffix: str = "", digits: int = 1) -> str:
     return f"{value:,.{digits}f}{suffix}" if np.isfinite(value) else "N/A"
 
 
-def fmt_signed(value: float, suffix: str = "", digits: int = 2) -> str:
-    return f"{value:+,.{digits}f}{suffix}" if np.isfinite(value) else "N/A"
-
-
-def fmt_percentile(value: float) -> str:
-    if not np.isfinite(value):
-        return "N/A"
-    rounded = int(round(value))
-    suffix = "th" if 10 < rounded % 100 < 14 else {1: "st", 2: "nd", 3: "rd"}.get(
-        rounded % 10, "th"
-    )
-    return f"{rounded}{suffix}"
-
-
-def latest_point_change(series: pd.Series, periods: int = 5) -> tuple[float, float, float]:
-    clean = pd.to_numeric(series, errors="coerce").dropna()
-    if len(clean) <= periods:
-        return np.nan, np.nan, np.nan
-    current = float(clean.iloc[-1])
-    previous = float(clean.iloc[-(periods + 1)])
-    absolute = current - previous
-    percent = current / previous - 1.0 if previous else np.nan
-    return absolute, percent, previous
-
-
 def aligned_level_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     frame = pd.concat(
         [numerator.rename("numerator"), denominator.rename("denominator")], axis=1
     )
     ratio = frame["numerator"].div(frame["denominator"].replace(0, np.nan))
     return ratio.replace([np.inf, -np.inf], np.nan).rename("level_ratio")
-
-
-def return_correlation(
-    primary_close: pd.Series,
-    comparison_close: pd.Series,
-    sessions: int = 63,
-) -> float:
-    returns = pd.concat(
-        [
-            np.log(primary_close).diff().rename("primary"),
-            np.log(comparison_close).diff().rename("comparison"),
-        ],
-        axis=1,
-    ).dropna()
-    if len(returns) < 10:
-        return np.nan
-    return float(returns.tail(sessions).corr().iloc[0, 1])
-
-
-def ratio_read(
-    primary: str,
-    comparison: str,
-    ratio: float,
-    median: float,
-    primary_percentile: float,
-    comparison_percentile: float,
-) -> str:
-    if not np.isfinite(ratio) or not np.isfinite(median):
-        return "The current relative-volatility reading is unavailable for this selection."
-    spread = ratio / median - 1.0 if median else np.nan
-    if ratio >= median:
-        direction = "above"
-        implication = f"{primary} volatility is unusually elevated relative to {comparison}."
-    else:
-        direction = "below"
-        implication = f"{primary} volatility is subdued relative to {comparison}."
-    context = ""
-    if np.isfinite(primary_percentile) and np.isfinite(comparison_percentile):
-        if primary_percentile >= 80 and comparison_percentile <= 20:
-            context = (
-                f" Both elevated {primary} volatility and suppressed {comparison} "
-                "volatility are contributing to the extreme."
-            )
-        elif comparison_percentile <= 20:
-            context = (
-                f" Unusually low {comparison} volatility is amplifying the ratio."
-            )
-        elif primary_percentile >= 80:
-            context = f" Elevated {primary} volatility is driving the divergence."
-    return (
-        f"The {primary}/{comparison} realized-volatility ratio is {ratio:.2f}x, "
-        f"{abs(spread):.0%} {direction} its loaded-history median of {median:.2f}x. "
-        f"{implication}{context}"
-    )
 
 
 def style_axes(fig: go.Figure) -> None:
@@ -597,108 +515,8 @@ render_status_line(
 
 primary_rvol = latest_value(usable["primary_rvol"])
 comparison_rvol = latest_value(usable["comparison_rvol"])
-current_ratio = latest_value(usable["rvol_ratio"])
-ratio_median = float(usable["rvol_ratio"].median())
-ratio_percentile = prior_percentile_rank(usable["rvol_ratio"])
-primary_rvol_percentile = prior_percentile_rank(usable["primary_rvol"])
-comparison_rvol_percentile = prior_percentile_rank(usable["comparison_rvol"])
-ratio_change_5d, ratio_change_5d_pct, ratio_5d_ago = latest_point_change(
-    usable["rvol_ratio"], DIAGNOSTIC_SHORT_WINDOW
-)
-implied_ratio = latest_value(analysis["implied_ratio"])
-implied_realized_wedge = implied_ratio - current_ratio
-relative_acceleration = latest_value(analysis["relative_vol_acceleration"])
-downside_ratio = latest_value(
-    analysis[f"downside_rvol_ratio_{DIAGNOSTIC_LONG_WINDOW}d"]
-)
-soxx_ndx_ratio = latest_value(analysis["soxx_ndx_rvol_ratio_21d"])
-qew_qqq_ratio = latest_value(analysis["qew_qqq_rvol_ratio_21d"])
 primary_zscore = latest_value(analysis["primary_zscore"])
 comparison_zscore = latest_value(analysis["comparison_zscore"])
-corr_63d = return_correlation(primary_close, comparison_close)
-
-render_selection_note(
-    "Current relative-volatility read",
-    ratio_read(
-        primary_label,
-        comparison_label,
-        current_ratio,
-        ratio_median,
-        primary_rvol_percentile,
-        comparison_rvol_percentile,
-    ),
-)
-render_section_header(
-    "Ratio decomposition",
-    "Separates the numerator, denominator, and ratio history so a quiet comparison market is not mistaken for primary-market panic.",
-)
-render_kpi_cards(
-    [
-        (
-            f"{primary_label} RVOL percentile",
-            fmt_percentile(primary_rvol_percentile),
-            f"current {fmt(primary_rvol, '%')} · {rvol_window}D annualized",
-        ),
-        (
-            f"{comparison_label} RVOL percentile",
-            fmt_percentile(comparison_rvol_percentile),
-            f"current {fmt(comparison_rvol, '%')} · {rvol_window}D annualized",
-        ),
-        (
-            "Realized RVOL ratio",
-            fmt(current_ratio, "x", 2),
-            f"loaded-history median {fmt(ratio_median, 'x', 2)}",
-        ),
-        (
-            "RVOL ratio percentile",
-            fmt_percentile(ratio_percentile),
-            "current ratio vs all earlier loaded observations",
-        ),
-        (
-            "5D ratio change",
-            fmt_signed(ratio_change_5d, "x", 2),
-            f"{fmt_signed(ratio_change_5d_pct * 100, '%', 1)} · from {fmt(ratio_5d_ago, 'x', 2)}",
-        ),
-        (
-            f"{primary_implied_label or 'Primary IV'} / {comparison_implied_label or 'Comparison IV'}",
-            fmt(implied_ratio, "x", 2),
-            f"implied ratio · wedge vs realized {fmt_signed(implied_realized_wedge, 'x', 2)}",
-        ),
-    ]
-)
-render_section_header(
-    "Cross-market diagnostics",
-    "Fixed 5- and 21-session measures show whether relative stress is accelerating, concentrated in semiconductors, asymmetric on down days, or broadening beyond cap-weight leaders.",
-)
-render_kpi_cards(
-    [
-        (
-            "Relative-vol acceleration",
-            fmt(relative_acceleration, "x", 2),
-            "5D pair ratio / 21D pair ratio · above 1 is accelerating",
-        ),
-        (
-            "SOXX / NDX RVOL",
-            fmt(soxx_ndx_ratio, "x", 2),
-            "21D semiconductor stress vs Nasdaq 100",
-        ),
-        (
-            f"{primary_label} / {comparison_label} downside",
-            fmt(downside_ratio, "x", 2),
-            "21D volatility on negative-return sessions only",
-        ),
-        (
-            "QEW / QQQ RVOL",
-            fmt(qew_qqq_ratio, "x", 2),
-            "21D equal-weight vs cap-weight Nasdaq volatility",
-        ),
-        (
-            "63D return correlation",
-            fmt(corr_63d, "", 2),
-            f"{primary_label} vs {comparison_label}",
-        ),
-    ]
-)
 
 overview_tab, normalized_tab, data_tab, methodology_tab = st.tabs(
     ["Volatility spread", "Normalized stress", "Data", "Methodology"]

@@ -74,7 +74,7 @@ def fake_market_data(tickers: tuple[str, ...], period: str = "5y"):
 
 
 class RelativeVolatilityPageTests(unittest.TestCase):
-    def test_page_renders_controls_metrics_and_tabs(self):
+    def test_page_renders_controls_and_tabs_without_summary_cards(self):
         with patch(
             "adfm_core.market_data.fetch_daily_ohlcv",
             side_effect=fake_market_data,
@@ -91,12 +91,10 @@ class RelativeVolatilityPageTests(unittest.TestCase):
             [tab.label for tab in app.tabs],
             ["Volatility spread", "Normalized stress", "Data", "Methodology"],
         )
-        self.assertTrue(
-            any("NDX RVOL" in block.value for block in app.markdown)
-        )
-        self.assertTrue(
-            any("SOXX / NDX RVOL" in block.value for block in app.markdown)
-        )
+        markdown = [block.value for block in app.markdown]
+        self.assertFalse(any("Current relative-volatility read" in value for value in markdown))
+        self.assertFalse(any("Ratio decomposition" in value for value in markdown))
+        self.assertFalse(any("Cross-market diagnostics" in value for value in markdown))
 
     def test_page_keeps_core_pair_when_optional_diagnostics_are_missing(self):
         def required_pair_only(tickers: tuple[str, ...], period: str = "5y"):
