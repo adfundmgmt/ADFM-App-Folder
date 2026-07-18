@@ -6,7 +6,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Added
 
-- ADFM Momentum Expansion Scanner (Page 19).
+- Momentum Scanner (Page 19).
 - Shared core modules for market data, data integrity, Rate of Change calculations, catalog metadata, UI primitives, and session data-load status.
 - Continuous integration, regression coverage, and release-review templates.
 - Reproducible direct-dependency constraints and repository-wide standards checks.
