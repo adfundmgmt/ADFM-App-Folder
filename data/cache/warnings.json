@@ -1,7 +1,8 @@
 {
   "EUR": [
     "One-legged read: Valuation (+1.4) is doing almost all the work; the other pillars are near neutral, so treat this as narrow, not broad-based.",
-    "FX and yields are decoupled \u2014 the real-yield reward/stress read is ambiguous this window; treat Pillar D lightly."
+    "FX and yields are decoupled \u2014 the real-yield reward/stress read is ambiguous this window; treat Pillar D lightly.",
+    "Carry crowded: carry-to-vol in the 86th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
   ],
   "JPY": [
     "Cheap and improving \u2014 the mean-reversion setup: valuation is below its own norm (-0.7) while fundamentals are turning up (+0.4).",
@@ -9,7 +10,7 @@
     "Carry crowded: carry-to-vol in the 88th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
   ],
   "GBP": [
-    "Fat carry on a fragile base: out-yields the field in real terms (avg +1.1%) but sits on a stretched valuation \u2014 the classic carry-unwind setup.",
+    "Fat carry on a fragile base: out-yields the field in real terms (avg +1.0%) but sits on a stretched valuation \u2014 the classic carry-unwind setup.",
     "Policy trap: inflation above target but growth soft and policy already tight (feasibility -1.0) \u2014 the hawkish tailwind is fading toward a stagflation drag; inflation's axis-1 contribution is dampened (mult -0.77).",
     "Yield stress: real 10Y is high (z +1.5) but the currency weakens as yields rise (-0.36 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.62). Note: cross vs USD partly confounds this in a strong-dollar tape.",
     "Carry crowded: carry-to-vol in the 94th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
@@ -27,13 +28,13 @@
   ],
   "NZD": [
     "Policy trap: inflation above target but growth soft and policy already tight (feasibility -0.7) \u2014 the hawkish tailwind is fading toward a stagflation drag; inflation's axis-1 contribution is dampened (mult -0.58).",
-    "Yield stress: real 10Y is high (z +0.9) but the currency weakens as yields rise (-0.17 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.33). Note: cross vs USD partly confounds this in a strong-dollar tape."
+    "Yield stress: real 10Y is high (z +0.9) but the currency weakens as yields rise (-0.16 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.31). Note: cross vs USD partly confounds this in a strong-dollar tape."
   ],
   "CHF": [
     "One-legged read: Valuation (+1.5) is doing almost all the work; the other pillars are near neutral, so treat this as narrow, not broad-based."
   ],
   "USD": [
     "Rich versus its decade (+0.8) but easing versus its recent 2-year range (-0.4) \u2014 read as 'off its highs,' not absolute cheap.",
-    "Fat carry on a fragile base: out-yields the field in real terms (avg +0.7%) but sits on a stretched valuation \u2014 the classic carry-unwind setup."
+    "Fat carry on a fragile base: out-yields the field in real terms (avg +0.6%) but sits on a stretched valuation \u2014 the classic carry-unwind setup."
   ]
 }
