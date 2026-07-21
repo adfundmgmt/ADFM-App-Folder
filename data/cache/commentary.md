@@ -1,11 +1,9 @@
-**Regime: Risk-premium mode; carry crowded across all G10 longs (EUR, JPY, GBP, AUD, NZD 79–94th percentile); USD off recent highs but still stretched.**
+**Regime: Risk-premium mode—yields rising but FX weakens, carry crowded across the board, vol-dependent unwinding risk.**
 
-**Extremes:**
+**Inflection points:**
 
-• **GBP short.** Carry unwind setup: real 10Y yields high but weakening correlation (−0.36) signals risk-premium regime, not true support. Fat carry (+1.0% real avg) on fragile base—policy tightening cycle is spent (feasibility −1.0), stagflation drag ahead. Carry crowding at 94th percentile, fragile to vol spike.
+- **GBP short**: Expensive (+1.3 valuation), deteriorating fundamentals (−0.33), policy-rate ceiling hit (feasibility −1.4), real-yield stress (−0.62 mult), carry at 94th percentile. Classic unwind setup—rich on fragile.
+- **AUD short**: Expensive (+1.9 valuation, one-legged), deteriorating (−0.30), policy exhausted (feasibility −0.8), real-yield stress (−0.63 mult), carry at 87th percentile. Same trap as GBP.
+- **JPY long**: Cheap (−0.69 valuation), improving fundamentals (+0.41), mean-reversion candidate. Carry crowded (88th percentile) but structural upside on risk-premium unwind and USD-JPY cross drag in strong-dollar tape.
 
-• **JPY long.** Mean-reversion play: valuation cheap (−0.7) while fundamentals improve (+0.41 fund, +0.51 growth). Yield stress regime (real 10Y z +1.8, corr −0.22) means real-yield support downweighted, but that *is* the setup. Carry crowded (88th) but direction is long JPY, not short.
-
-• **AUD short.** Expensive deteriorating—rich valuation (+2.7) on weakening fundamentals (−0.30 fund). Policy cycle exhausted; inflation support fading (mult −0.69). One-legged valuation play with no backup. Carry crowded (88th).
-
-**Carry pair:** GBP/JPY—short the unwind. GBP has far-end carry crowding; JPY offers both cheaper valuation and upside from mean reversion under vol stress.
+**Carry pair:** **EUR/JPY**—EUR valuation narrow (+1.4, not broad-based) but carry at 86th percentile; JPY yield-stress discount (−0.41 mult) makes this the crowded-unwind candidate on any vol spike.
