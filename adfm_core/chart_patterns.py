@@ -375,8 +375,11 @@ def _envelope_patterns(
     flat = max(atr * 1.2 / scale, 0.012)
     converging = width_end < width_start * 0.78
     broadening = width_end > width_start * 1.20
-    upper_flat = abs(upper_move) <= flat
-    lower_flat = abs(lower_move) <= flat
+    flat_error = max(atr * 1.8, max(width_start, width_end) * 0.16)
+    upper_spread = max(point.price for point in highs) - min(point.price for point in highs)
+    lower_spread = max(point.price for point in lows) - min(point.price for point in lows)
+    upper_flat = abs(upper_move) <= flat and upper_spread <= flat_error
+    lower_flat = abs(lower_move) <= flat and lower_spread <= flat_error
     fit_quality = (upper_r2 + lower_r2) / 2
 
     name: str | None = None
@@ -700,7 +703,60 @@ def _overlap(first: PatternDetection, second: PatternDetection) -> float:
     return intersection / union if union > 0 else 1.0
 
 
-def _rank_and_deduplicate(detections: list[PatternDetection], max_patterns: int) -> list[PatternDetection]:
+def _confirmation_age(data: pd.DataFrame, pattern: PatternDetection) -> int | None:
+    """Return bars since the first qualifying break after the pattern completed."""
+    if pattern.status != "Confirmed" or pattern.breakout_level is None:
+        return None
+
+    closes = data["Close"].to_numpy(dtype=float)
+    if not len(closes):
+        return None
+    start = max(0, min(len(closes) - 1, pattern.end_pos))
+    breakout = float(pattern.breakout_level)
+    buffer = max(abs(breakout) * 0.0015, 1e-9)
+    post_pattern = closes[start:]
+    if pattern.bias == "bullish":
+        crossed = np.flatnonzero(post_pattern > breakout + buffer)
+    elif pattern.bias == "bearish":
+        crossed = np.flatnonzero(post_pattern < breakout - buffer)
+    else:
+        return None
+    if not crossed.size:
+        return None
+    confirmation_pos = start + int(crossed[0])
+    return len(closes) - 1 - confirmation_pos
+
+
+def _is_current_pattern(data: pd.DataFrame, pattern: PatternDetection, atr: float) -> bool:
+    """Reject stale or remote structures that no longer describe the active setup."""
+    n = len(data)
+    if n == 0:
+        return False
+
+    end_age = n - 1 - pattern.end_pos
+    max_end_age = max(24, min(45, n // 5))
+    if end_age > max_end_age:
+        return False
+
+    latest = float(data["Close"].iloc[-1])
+    if pattern.status == "Confirmed":
+        confirmation_age = _confirmation_age(data, pattern)
+        max_confirmation_age = max(12, min(30, n // 8))
+        return confirmation_age is not None and confirmation_age <= max_confirmation_age
+
+    if pattern.breakout_level is not None and np.isfinite(pattern.breakout_level):
+        distance = abs(latest - float(pattern.breakout_level))
+        if distance > max(atr * 3.5, abs(float(pattern.breakout_level)) * 0.055):
+            return False
+    return True
+
+
+def _rank_and_deduplicate(
+    detections: list[PatternDetection],
+    max_patterns: int,
+    data: pd.DataFrame,
+    atr: float,
+) -> list[PatternDetection]:
     groups = {
         "Double Bottom": "base", "Triple Bottom": "base", "Inverse Head and Shoulders": "base",
         "Double Top": "top", "Triple Top": "top", "Head and Shoulders Top": "top",
@@ -713,14 +769,15 @@ def _rank_and_deduplicate(detections: list[PatternDetection], max_patterns: int)
         "Megaphone / Broadening Formation": "envelope",
         "Bull Flag": "pole", "Bear Flag": "pole", "Bull Pennant": "pole", "Bear Pennant": "pole",
     }
-    envelope = next((item for item in detections if groups.get(item.name) == "envelope"), None)
+    current = [item for item in detections if _is_current_pattern(data, item, atr)]
+    envelope = next((item for item in current if groups.get(item.name) == "envelope"), None)
     filtered: list[PatternDetection] = []
-    for item in detections:
+    for item in current:
         group = groups.get(item.name)
         envelope_conflict = (
             envelope is not None
             and item is not envelope
-            and item.confidence <= envelope.confidence + 6
+            and item.confidence <= envelope.confidence + 16
             and (
                 (envelope.name == "Ascending Triangle" and group == "top")
                 or (envelope.name == "Descending Triangle" and group == "base")
@@ -730,15 +787,32 @@ def _rank_and_deduplicate(detections: list[PatternDetection], max_patterns: int)
         if not envelope_conflict:
             filtered.append(item)
     ordered = sorted(
-        (item for item in filtered if item.confidence >= 60),
-        key=lambda item: (item.confidence, item.status == "Confirmed", item.end_pos),
+        (item for item in filtered if item.confidence >= 72),
+        key=lambda item: (
+            item.confidence
+            + min(6.0, 6.0 * (item.end_pos + 1) / max(len(data), 1))
+            + (6.0 if groups.get(item.name) == "envelope" else 0.0),
+            item.status == "Confirmed",
+            item.end_pos,
+        ),
         reverse=True,
     )
     selected: list[PatternDetection] = []
     for candidate in ordered:
+        opposing_window = max(16, min(30, len(data) // 10))
         duplicate = any(
             candidate.name == existing.name
             or (groups.get(candidate.name) == groups.get(existing.name) and groups.get(candidate.name) is not None)
+            or (
+                candidate.bias in {"bullish", "bearish"}
+                and existing.bias in {"bullish", "bearish"}
+                and candidate.bias != existing.bias
+                and (
+                    _overlap(candidate, existing) >= 0.20
+                    or abs(candidate.end_pos - existing.end_pos) <= opposing_window
+                )
+            )
+            or _overlap(candidate, existing) >= 0.72
             for existing in selected
         )
         if duplicate:
@@ -749,7 +823,7 @@ def _rank_and_deduplicate(detections: list[PatternDetection], max_patterns: int)
     return selected
 
 
-def detect_chart_patterns(df: pd.DataFrame, max_patterns: int = 3) -> list[PatternDetection]:
+def detect_chart_patterns(df: pd.DataFrame, max_patterns: int = 2) -> list[PatternDetection]:
     """Detect and rank the strongest current patterns in the supplied chart window."""
     data = _price_frame(df)
     if len(data) < 18 or max_patterns <= 0:
@@ -765,4 +839,9 @@ def detect_chart_patterns(df: pd.DataFrame, max_patterns: int = 3) -> list[Patte
     detections.extend(_rounded_patterns(data, atr))
     detections.extend(_v_patterns(data, atr))
     detections.extend(_diamond_patterns(data, atr))
-    return _rank_and_deduplicate(detections, max_patterns=max_patterns)
+    return _rank_and_deduplicate(
+        detections,
+        max_patterns=max_patterns,
+        data=data,
+        atr=atr,
+    )
