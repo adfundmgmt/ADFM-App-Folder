@@ -205,7 +205,7 @@ st.markdown(
         }
 
         .chart-top-gap {
-            height: 18px;
+            height: 8px;
         }
 
         .compare-chart-top-gap {
@@ -214,9 +214,9 @@ st.markdown(
 
         .pattern-strip {
             display: grid;
-            grid-template-columns: repeat(3, minmax(210px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
             gap: 9px;
-            margin: -2px 0 12px 0;
+            margin: 6px 0 18px 0;
         }
 
         .pattern-card {
@@ -225,7 +225,26 @@ st.markdown(
             border-radius: 12px;
             padding: 10px 12px;
             background: linear-gradient(135deg, var(--pattern-tint), #ffffff 72%);
-            min-height: 92px;
+            min-height: 78px;
+        }
+
+        .pattern-section-header {
+            margin: 18px 0 2px 0;
+            padding-top: 14px;
+            border-top: 1px solid rgba(49, 51, 63, 0.10);
+        }
+
+        .pattern-section-title {
+            color: #111827;
+            font-size: 1.05rem;
+            font-weight: 750;
+            line-height: 1.3;
+        }
+
+        .pattern-section-note {
+            color: #6b7280;
+            font-size: 0.76rem;
+            margin-top: 3px;
         }
 
         .pattern-card-top {
@@ -491,7 +510,7 @@ def read_settings() -> ChartSettings:
             show_chart_patterns = st.toggle(
                 "Automatic chart patterns",
                 value=False,
-                help="Ranks up to three volatility-adjusted reversal, continuation, and breakout structures. Confirmation requires a close through the inferred trigger.",
+                help="Shows a dedicated chart with the strongest current volatility-adjusted structure plus the 20, 50, and 200 DMA. Stale and overlapping candidates are suppressed.",
             )
             show_volume = st.checkbox("Volume", value=True)
             show_rsi = st.checkbox("RSI", value=True)
@@ -2168,21 +2187,19 @@ def add_chart_pattern_overlay(
         else:
             anchor_y = float(df["Close"].iloc[-1])
 
-        yshift = 16 + pattern_index * 20 if pattern.bias != "bearish" else -(18 + pattern_index * 20)
+        yshift = 18 + pattern_index * 18 if pattern.bias != "bearish" else -(18 + pattern_index * 18)
+        xanchor = "right" if anchor_pos >= len(x_values) * 0.78 else "left"
         fig.add_annotation(
             x=x_values[anchor_pos],
             y=anchor_y,
             text=f"<b>{html_escape(pattern.name)}</b> | {pattern.status}",
-            showarrow=True,
-            arrowhead=0,
-            arrowwidth=1,
-            arrowcolor=accent,
-            ax=0,
-            ay=-yshift,
+            showarrow=False,
+            yshift=yshift,
+            xanchor=xanchor,
             bgcolor="rgba(255,255,255,0.94)",
             bordercolor=accent,
             borderwidth=1,
-            borderpad=4,
+            borderpad=3,
             font=dict(size=10, color="#111827"),
             align="left",
             row=row,
@@ -2758,6 +2775,154 @@ def build_chart(
     return fig
 
 
+def build_pattern_chart(
+    df: pd.DataFrame,
+    patterns: list[PatternDetection],
+) -> go.Figure:
+    """Build a quiet price-only canvas for the automatic pattern read."""
+    df = attach_plot_x(df)
+    x_values = plot_x_values(df)
+    x_categories = x_values.astype(str).tolist()
+    tickvals, ticktext = x_tick_spec(df)
+
+    fig = make_subplots(rows=1, cols=1, specs=[[{"type": "xy"}]])
+    fig.add_trace(
+        go.Candlestick(
+            x=x_values,
+            open=df["Open"],
+            high=df["High"],
+            low=df["Low"],
+            close=df["Close"],
+            increasing_line_color=COLORS["up"],
+            increasing_fillcolor=COLORS["up"],
+            decreasing_line_color=COLORS["down"],
+            decreasing_fillcolor=COLORS["down"],
+            name="Price",
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=1,
+    )
+
+    for column, label, color, width in (
+        ("SMA20", "20DMA", COLORS["sma20"], 1.55),
+        ("SMA50", "50DMA", COLORS["sma50"], 1.65),
+        ("SMA200", "200DMA", COLORS["sma200"], 1.85),
+    ):
+        if column not in df.columns:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=df[column],
+                mode="lines",
+                line=dict(color=color, width=width),
+                name=label,
+                hoverinfo="skip",
+                showlegend=True,
+            ),
+            row=1,
+            col=1,
+        )
+
+    add_chart_pattern_overlay(fig, df, patterns, row=1)
+
+    hover_data = np.column_stack(
+        [
+            hover_price_column(df, column)
+            for column in ("Open", "High", "Low", "Close", "SMA20", "SMA50", "SMA200")
+        ]
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=df["Close"],
+            mode="markers",
+            marker=dict(size=18, color="rgba(17,24,39,0.001)", line=dict(width=0)),
+            customdata=hover_data,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Open %{customdata[0]} | High %{customdata[1]}<br>"
+                "Low %{customdata[2]} | Close %{customdata[3]}<br><br>"
+                "20DMA %{customdata[4]} | 50DMA %{customdata[5]} | 200DMA %{customdata[6]}"
+                "<extra></extra>"
+            ),
+            name="Pattern read",
+            showlegend=False,
+            cliponaxis=False,
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=x_categories,
+        range=[-0.5, max(len(x_categories) - 0.5, 0.5)],
+        tickmode="array",
+        tickvals=tickvals,
+        ticktext=ticktext,
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        gridwidth=1,
+        showline=False,
+        rangeslider_visible=False,
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikethickness=1,
+        spikecolor="rgba(17,24,39,0.22)",
+    )
+    fig.update_yaxes(
+        title_text="Price",
+        nticks=9,
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        gridwidth=1,
+        zeroline=False,
+        showline=False,
+        automargin=True,
+        fixedrange=False,
+    )
+    fig.update_layout(
+        height=580,
+        title=dict(text=""),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        hovermode="x unified",
+        hoverdistance=70,
+        spikedistance=-1,
+        hoverlabel=dict(
+            bgcolor="#ffffff",
+            bordercolor="rgba(17,24,39,0.18)",
+            font=dict(size=12, color="#111827", family="Arial, sans-serif"),
+            align="left",
+        ),
+        margin=dict(l=42, r=28, t=44, b=24),
+        font=dict(family="Arial, sans-serif", size=12, color=COLORS["text"]),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.025,
+            xanchor="left",
+            x=0,
+            bgcolor="rgba(255,255,255,0)",
+            borderwidth=0,
+            font=dict(size=11, color="#374151"),
+            title=dict(text=""),
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
+        ),
+        xaxis_rangeslider_visible=False,
+    )
+    fig.layout.title.text = ""
+    fig.layout.legend.title.text = ""
+    return fig
+
+
 # ============================================================
 # Compare Chart
 # ============================================================
@@ -2991,7 +3156,7 @@ if display_df.empty:
     st.stop()
 
 volume_is_usable = has_usable_volume(display_df)
-chart_patterns = detect_chart_patterns(display_df, max_patterns=3) if settings.show_chart_patterns else []
+chart_patterns = detect_chart_patterns(display_df, max_patterns=1) if settings.show_chart_patterns else []
 
 if settings.show_volume and not volume_is_usable:
     st.sidebar.info("Volume panel hidden because this symbol does not have usable volume data.")
@@ -3003,7 +3168,7 @@ chart = build_chart(
     df=display_df,
     settings=settings,
     usable_volume=volume_is_usable,
-    patterns=chart_patterns,
+    patterns=[],
 )
 
 st.plotly_chart(
@@ -3021,6 +3186,31 @@ st.plotly_chart(
 )
 
 if settings.show_chart_patterns:
+    st.markdown(
+        (
+            '<div class="pattern-section-header">'
+            '<div class="pattern-section-title">Automatic Chart Patterns</div>'
+            '<div class="pattern-section-note">'
+            'A selective current-structure view with candlesticks and only the 20, 50, and 200 DMA.'
+            '</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+    pattern_chart = build_pattern_chart(display_df, chart_patterns)
+    st.plotly_chart(
+        pattern_chart,
+        use_container_width=True,
+        config={
+            "displaylogo": False,
+            "scrollZoom": True,
+            "modeBarButtonsToRemove": [
+                "select2d",
+                "lasso2d",
+                "autoScale2d",
+            ],
+        },
+    )
     st.markdown(pattern_summary_html(chart_patterns), unsafe_allow_html=True)
 
 compare_tickers = parse_compare_tickers(settings.compare_tickers, settings.ticker)
