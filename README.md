@@ -19,7 +19,7 @@ python -m ruff check --select E,F,I,B --ignore E501 adfm_core tests
 
 ## Tool catalog
 
-The application contains 20 tools, in the same order and groups shown on the Home page.
+The application contains 19 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -42,14 +42,13 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 | 17 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | ADFM Momentum Expansion Scanner | Ranks liquid equities with deterministic momentum-expansion setups and maps sector and subsector leadership. | Yahoo Finance daily OHLCV; existing sector and subsector universe |
-| 20 | Relative Volatility Lab | Compares selectable assets using realized volatility, volatility ratios, causal z-scores, percentiles, and an optional implied-volatility overlay. | Yahoo Finance adjusted close history; optional implied-volatility index |
 
 ## Tool groups
 
 | Group | Tools |
 |---|---|
 | Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard; Momentum Expansion Scanner |
-| Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
+| Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer |
 | Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Tracker; Currency Tension Engine |
 | Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer |
