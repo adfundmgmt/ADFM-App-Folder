@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from adfm_core.chart_patterns import SUPPORTED_PATTERN_NAMES, detect_chart_patterns
-
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -13,7 +13,6 @@ from typing import Iterable, Sequence
 import numpy as np
 import pandas as pd
 
-
 SUPPORTED_PATTERN_NAMES = (
     "Double Bottom",
     "Double Top",
