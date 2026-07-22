@@ -1,5 +1,6 @@
 import streamlit as st
 
+from adfm_core.chart_patterns import PatternDetection, PatternLine, detect_chart_patterns
 from adfm_core.ui import render_footer
 import pandas as pd
 import numpy as np
@@ -36,7 +37,7 @@ CHART_TYPES = ["Candles", "Line"]
 
 REQUIRED_PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 CAP_MAX_ROWS = 250_000
-APP_VERSION = "2026-07-15-quarter-moving-averages"
+APP_VERSION = "2026-07-22-automatic-chart-patterns"
 
 WATCHLISTS = {
     "Index": ["^SPX", "^NDX", "SPY", "QQQ", "IWM", "DIA"],
@@ -77,6 +78,12 @@ COLORS = {
     "fib_extension": "rgba(46,139,87,0.78)",
     "fib_retracement": "rgba(55,65,81,0.58)",
     "fib_anchor": "rgba(17,24,39,0.55)",
+    "pattern_bullish": "#0f9d75",
+    "pattern_bearish": "#d6455d",
+    "pattern_bilateral": "#3b82f6",
+    "pattern_support": "rgba(14,116,144,0.86)",
+    "pattern_resistance": "rgba(147,51,234,0.82)",
+    "pattern_muted": "rgba(71,85,105,0.72)",
 }
 
 
@@ -205,9 +212,76 @@ st.markdown(
             height: 10px;
         }
 
+        .pattern-strip {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(210px, 1fr));
+            gap: 9px;
+            margin: -2px 0 12px 0;
+        }
+
+        .pattern-card {
+            border: 1px solid rgba(49, 51, 63, 0.10);
+            border-left: 4px solid var(--pattern-accent);
+            border-radius: 12px;
+            padding: 10px 12px;
+            background: linear-gradient(135deg, var(--pattern-tint), #ffffff 72%);
+            min-height: 92px;
+        }
+
+        .pattern-card-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .pattern-card-name {
+            color: #111827;
+            font-size: 0.88rem;
+            font-weight: 750;
+        }
+
+        .pattern-card-score {
+            color: var(--pattern-accent);
+            background: rgba(255,255,255,0.82);
+            border: 1px solid color-mix(in srgb, var(--pattern-accent) 22%, transparent);
+            border-radius: 999px;
+            padding: 2px 7px;
+            font-size: 0.68rem;
+            font-weight: 750;
+            white-space: nowrap;
+        }
+
+        .pattern-card-meta {
+            color: #475569;
+            font-size: 0.72rem;
+            font-weight: 650;
+            margin-top: 5px;
+        }
+
+        .pattern-card-levels {
+            color: #64748b;
+            font-size: 0.70rem;
+            margin-top: 5px;
+        }
+
+        .pattern-empty {
+            border: 1px dashed rgba(49, 51, 63, 0.16);
+            border-radius: 12px;
+            color: #64748b;
+            font-size: 0.78rem;
+            padding: 10px 12px;
+            margin: -2px 0 12px 0;
+            background: #fafafa;
+        }
+
         @media (max-width: 1200px) {
             .metric-strip {
                 grid-template-columns: repeat(4, minmax(95px, 1fr));
+            }
+
+            .pattern-strip {
+                grid-template-columns: 1fr;
             }
         }
 
@@ -258,6 +332,7 @@ class ChartSettings:
     show_macd: bool
     show_elliott_wave: bool
     show_fibonacci: bool
+    show_chart_patterns: bool
 
     compare_tickers: str
     compare_mode: str
@@ -332,7 +407,7 @@ def read_settings() -> ChartSettings:
 
             **How to read it**
             - The header gives price, return, drawdown, and volatility context.
-            - The chart shows price, moving averages, Bollinger Bands, volume, RSI, MACD, and optional Elliott Wave swing pivots.
+            - The chart shows price, moving averages, Bollinger Bands, volume, RSI, MACD, and optional automatic pattern recognition.
             - The signal matrix turns the tape into trend, momentum, volatility, structure, and risk-level context.
 
             **Data source:** Yahoo Finance OHLCV history.
@@ -413,6 +488,11 @@ def read_settings() -> ChartSettings:
             show_sma260 = st.checkbox("4Q MA (260 DMA)", value=False)
 
             st.caption("Panels and overlays")
+            show_chart_patterns = st.toggle(
+                "Automatic chart patterns",
+                value=False,
+                help="Ranks up to three volatility-adjusted reversal, continuation, and breakout structures. Confirmation requires a close through the inferred trigger.",
+            )
             show_volume = st.checkbox("Volume", value=True)
             show_rsi = st.checkbox("RSI", value=True)
             show_macd = st.checkbox("MACD", value=True)
@@ -459,6 +539,7 @@ def read_settings() -> ChartSettings:
         show_macd=show_macd,
         show_elliott_wave=show_elliott_wave,
         show_fibonacci=show_fibonacci,
+        show_chart_patterns=show_chart_patterns,
         compare_tickers=compare_tickers,
         compare_mode=compare_mode,
     )
@@ -1123,9 +1204,9 @@ def classify_structure(df: pd.DataFrame) -> tuple[str, str]:
     range_position = (close - low_60) / max(high_60 - low_60, 1e-9)
 
     if range_position >= 0.70:
-        return "Upper range", f"Price sits in the upper part of the 60-bar range."
+        return "Upper range", "Price sits in the upper part of the 60-bar range."
     if range_position <= 0.30:
-        return "Lower range", f"Price sits in the lower part of the 60-bar range."
+        return "Lower range", "Price sits in the lower part of the 60-bar range."
 
     return "Range", "Price is inside the recent range without a clean breakout or breakdown."
 
@@ -1995,6 +2076,172 @@ def add_fibonacci_overlay(fig: go.Figure, df: pd.DataFrame, row: int) -> None:
         )
 
 
+def pattern_accent(pattern: PatternDetection) -> str:
+    if pattern.bias == "bullish":
+        return COLORS["pattern_bullish"]
+    if pattern.bias == "bearish":
+        return COLORS["pattern_bearish"]
+    return COLORS["pattern_bilateral"]
+
+
+def pattern_line_style(line: PatternLine, pattern: PatternDetection) -> tuple[str, str, float]:
+    if line.role == "support":
+        return COLORS["pattern_support"], "solid", 1.8
+    if line.role == "resistance":
+        return COLORS["pattern_resistance"], "solid", 1.8
+    if line.role == "breakout":
+        return pattern_accent(pattern), "dash", 1.45
+    if line.role == "pole":
+        return pattern_accent(pattern), "solid", 2.2
+    return COLORS["pattern_muted"], "dot", 1.25
+
+
+def add_chart_pattern_overlay(
+    fig: go.Figure,
+    df: pd.DataFrame,
+    patterns: list[PatternDetection],
+    row: int,
+) -> None:
+    if not patterns or df.empty:
+        return
+
+    x_values = plot_x_values(df).astype(str).tolist()
+    visible_low = float(pd.to_numeric(df["Low"], errors="coerce").min())
+    visible_high = float(pd.to_numeric(df["High"], errors="coerce").max())
+    visible_range = max(visible_high - visible_low, abs(float(df["Close"].iloc[-1])) * 0.01)
+
+    for pattern_index, pattern in enumerate(patterns):
+        accent = pattern_accent(pattern)
+        valid_points = [point for point in pattern.points if 0 <= point.pos < len(x_values)]
+
+        if len(valid_points) >= 2:
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_values[point.pos] for point in valid_points],
+                    y=[point.price for point in valid_points],
+                    mode="lines+markers",
+                    line=dict(color=accent, width=1.45),
+                    marker=dict(
+                        size=6,
+                        color="#ffffff",
+                        line=dict(color=accent, width=1.5),
+                    ),
+                    opacity=0.78,
+                    name=pattern.name,
+                    legendgroup="chart_patterns",
+                    hovertemplate=(
+                        f"<b>{html_escape(pattern.name)}</b><br>"
+                        f"{html_escape(pattern.status)} | {pattern.confidence:.0f}% confidence<br>"
+                        "Pivot %{y:.2f}<extra></extra>"
+                    ),
+                    showlegend=False,
+                ),
+                row=row,
+                col=1,
+            )
+
+        for line in pattern.lines:
+            start_pos = max(0, min(len(x_values) - 1, line.start_pos))
+            end_pos = max(0, min(len(x_values) - 1, line.end_pos))
+            color, dash, width = pattern_line_style(line, pattern)
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_values[start_pos], x_values[end_pos]],
+                    y=[line.start_price, line.end_price],
+                    mode="lines",
+                    line=dict(color=color, width=width, dash=dash),
+                    opacity=0.92,
+                    name=f"{pattern.name} {line.role}",
+                    legendgroup="chart_patterns",
+                    hovertemplate=f"{html_escape(pattern.name)} | {line.role}: %{{y:.2f}}<extra></extra>",
+                    showlegend=False,
+                ),
+                row=row,
+                col=1,
+            )
+
+        anchor_pos = max(0, min(len(x_values) - 1, pattern.end_pos))
+        if pattern.breakout_level is not None and np.isfinite(pattern.breakout_level):
+            anchor_y = float(pattern.breakout_level)
+        elif valid_points:
+            anchor_y = float(valid_points[-1].price)
+        else:
+            anchor_y = float(df["Close"].iloc[-1])
+
+        yshift = 16 + pattern_index * 20 if pattern.bias != "bearish" else -(18 + pattern_index * 20)
+        fig.add_annotation(
+            x=x_values[anchor_pos],
+            y=anchor_y,
+            text=f"<b>{html_escape(pattern.name)}</b> | {pattern.status}",
+            showarrow=True,
+            arrowhead=0,
+            arrowwidth=1,
+            arrowcolor=accent,
+            ax=0,
+            ay=-yshift,
+            bgcolor="rgba(255,255,255,0.94)",
+            bordercolor=accent,
+            borderwidth=1,
+            borderpad=4,
+            font=dict(size=10, color="#111827"),
+            align="left",
+            row=row,
+            col=1,
+        )
+
+        if pattern.status == "Confirmed" and pattern.target_level is not None:
+            target = float(pattern.target_level)
+            if visible_low - visible_range * 0.20 <= target <= visible_high + visible_range * 0.20:
+                target_start = max(0, len(x_values) - max(18, len(x_values) // 7))
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x_values[target_start], x_values[-1]],
+                        y=[target, target],
+                        mode="lines+text",
+                        line=dict(color=accent, width=1.15, dash="dot"),
+                        text=["", f"Target {target:,.2f}"],
+                        textposition="middle right",
+                        textfont=dict(size=9, color=accent),
+                        hovertemplate=f"{html_escape(pattern.name)} measured target: %{{y:.2f}}<extra></extra>",
+                        showlegend=False,
+                    ),
+                    row=row,
+                    col=1,
+                )
+
+
+def pattern_summary_html(patterns: list[PatternDetection]) -> str:
+    if not patterns:
+        return (
+            '<div class="pattern-empty">'
+            '<b>No high-confidence current pattern.</b> The overlay is intentionally selective; '
+            'short windows and noisy price action may not produce a qualified structure.'
+            '</div>'
+        )
+
+    cards = []
+    for pattern in patterns:
+        accent = pattern_accent(pattern)
+        tint = (
+            "rgba(15,157,117,0.055)" if pattern.bias == "bullish"
+            else "rgba(214,69,93,0.055)" if pattern.bias == "bearish"
+            else "rgba(59,130,246,0.055)"
+        )
+        breakout = fmt_price(pattern.breakout_level) if pattern.breakout_level is not None else "Two-sided"
+        target = fmt_price(pattern.target_level) if pattern.target_level is not None else "After confirmation"
+        bias = pattern.bias.capitalize()
+        cards.append(
+            f'<div class="pattern-card" style="--pattern-accent:{accent};--pattern-tint:{tint}">'
+            '<div class="pattern-card-top">'
+            f'<div class="pattern-card-name">{html_escape(pattern.name)}</div>'
+            f'<div class="pattern-card-score">{pattern.confidence:.0f}%</div>'
+            '</div>'
+            f'<div class="pattern-card-meta">{bias} &middot; {html_escape(pattern.status)} &middot; {html_escape(pattern.family.title())}</div>'
+            f'<div class="pattern-card-levels">Trigger {breakout} &nbsp;&middot;&nbsp; Target {target}</div>'
+            '</div>'
+        )
+    return f'<div class="pattern-strip">{"".join(cards)}</div>'
+
 def hover_price_column(df: pd.DataFrame, column: str) -> pd.Series:
     if column not in df.columns:
         return pd.Series(["N/A"] * len(df), index=df.index)
@@ -2084,6 +2331,7 @@ def add_price_panel(
     fig: go.Figure,
     df: pd.DataFrame,
     settings: ChartSettings,
+    patterns: list[PatternDetection],
     row: int,
 ) -> None:
     if settings.chart_type == "Candles":
@@ -2204,6 +2452,9 @@ def add_price_panel(
 
     if settings.show_fibonacci:
         add_fibonacci_overlay(fig, df, row)
+
+    if settings.show_chart_patterns:
+        add_chart_pattern_overlay(fig, df, patterns, row)
 
     add_price_hover_trace(fig, df, settings, row)
 
@@ -2356,6 +2607,7 @@ def build_chart(
     df: pd.DataFrame,
     settings: ChartSettings,
     usable_volume: bool,
+    patterns: list[PatternDetection] | None = None,
 ) -> go.Figure:
     df = attach_plot_x(df)
     panels = active_panels(settings, usable_volume)
@@ -2377,7 +2629,7 @@ def build_chart(
         row_map[panel] = next_row
         next_row += 1
 
-    add_price_panel(fig, df, settings, row=row_map["price"])
+    add_price_panel(fig, df, settings, patterns or [], row=row_map["price"])
 
     if "volume" in row_map:
         add_volume_panel(fig, df, row=row_map["volume"])
@@ -2739,6 +2991,7 @@ if display_df.empty:
     st.stop()
 
 volume_is_usable = has_usable_volume(display_df)
+chart_patterns = detect_chart_patterns(display_df, max_patterns=3) if settings.show_chart_patterns else []
 
 if settings.show_volume and not volume_is_usable:
     st.sidebar.info("Volume panel hidden because this symbol does not have usable volume data.")
@@ -2750,6 +3003,7 @@ chart = build_chart(
     df=display_df,
     settings=settings,
     usable_volume=volume_is_usable,
+    patterns=chart_patterns,
 )
 
 st.plotly_chart(
@@ -2765,6 +3019,9 @@ st.plotly_chart(
         ],
     },
 )
+
+if settings.show_chart_patterns:
+    st.markdown(pattern_summary_html(chart_patterns), unsafe_allow_html=True)
 
 compare_tickers = parse_compare_tickers(settings.compare_tickers, settings.ticker)
 compare_fig = build_compare_chart(
