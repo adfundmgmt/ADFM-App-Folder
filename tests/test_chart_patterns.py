@@ -76,8 +76,11 @@ class ChartPatternTests(unittest.TestCase):
 
 
     def test_detects_head_and_shoulders_top(self) -> None:
-        names = detected_names([(0, 90), (15, 105), (25, 96), (38, 114), (51, 96.5), (64, 104.5), (80, 91)])
-        self.assertIn("Head and Shoulders Top", names)
+        patterns = detect_chart_patterns(
+            price_frame([(0, 90), (15, 105), (25, 96), (38, 114), (51, 96.5), (64, 104.5), (80, 91)]),
+            max_patterns=5,
+        )
+        self.assertEqual([item.name for item in patterns], ["Head and Shoulders Top"])
 
 
     def test_detects_ascending_triangle(self) -> None:
@@ -144,12 +147,39 @@ class ChartPatternTests(unittest.TestCase):
         self.assertEqual(detect_chart_patterns(pd.DataFrame()), [])
         self.assertEqual(detect_chart_patterns(price_frame([(0, 100), (10, 105)])), [])
 
+    def test_stale_breakout_is_not_reported_as_a_current_double_bottom(self) -> None:
+        data = price_frame(
+            [
+                (0, 130),
+                (155, 120),
+                (175, 100),
+                (190, 116),
+                (205, 100.5),
+                (220, 121),
+                (251, 128),
+            ]
+        )
+        self.assertNotIn(
+            "Double Bottom",
+            {item.name for item in detect_chart_patterns(data, max_patterns=5)},
+        )
+
 
     def test_chart_terminal_exposes_toggle_overlay_and_summary(self) -> None:
         source = (ROOT / "pages" / "5_ADFM_Chart_Terminal.py").read_text(encoding="utf-8")
         self.assertIn('"Automatic chart patterns"', source)
         self.assertIn("add_chart_pattern_overlay", source)
         self.assertIn("pattern_summary_html", source)
+        self.assertIn("def build_pattern_chart", source)
+        self.assertIn("max_patterns=1", source)
+
+        pattern_chart_source = source[
+            source.index("def build_pattern_chart") : source.index("# Compare Chart")
+        ]
+        for moving_average in ("SMA20", "SMA50", "SMA200"):
+            self.assertIn(moving_average, pattern_chart_source)
+        for excluded_overlay in ("SMA8", "SMA100", "BB_UPPER", "add_volume_panel"):
+            self.assertNotIn(excluded_overlay, pattern_chart_source)
 
 
 if __name__ == "__main__":
