@@ -112,6 +112,10 @@ MAGNIFICENT_SEVEN = "Magnificent Seven"
 
 MAGNIFICENT_SEVEN_TICKERS = ["NVDA", "MSFT", "GOOGL", "AMZN", "AAPL", "META", "TSLA"]
 
+FAANG = "FAANG"
+
+FAANG_TICKERS = ["META", "AAPL", "AMZN", "NFLX", "GOOGL"]
+
 
 
 CACHE_DIR = Path(".adfm_cache")
@@ -150,7 +154,7 @@ FUND_QUOTE_TYPES = {"ETF", "MUTUALFUND", "MONEYMARKET"}
 
 # Structure preserved: Dict[str, Dict[str, List[str]]]
 
-# 273 basket definitions across 14 groups. Internal keys include category names,
+# 275 basket definitions across 14 groups. Internal keys include category names,
 # so repeated display names cannot overwrite one another.
 
 # ============================================================
@@ -585,7 +589,11 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {
 
 
 
- 'Thematic Cross-Sector Baskets': {'AI Data Center Capex': ['NVDA','AMD','AVGO','MRVL','ANET','VRT','ETN','GEV','SMCI','DELL','TSM','ASML'],
+ 'Thematic Cross-Sector Baskets': {MAGNIFICENT_SEVEN: MAGNIFICENT_SEVEN_TICKERS,
+
+                                   FAANG: FAANG_TICKERS,
+
+                                   'AI Data Center Capex': ['NVDA','AMD','AVGO','MRVL','ANET','VRT','ETN','GEV','SMCI','DELL','TSM','ASML'],
 
                                    'AI Power Demand': ['VST', 'CEG', 'NRG', 'TLN', 'ETN', 'VRT', 'GEV', 'PWR', 'NEE'],
 
@@ -2973,8 +2981,6 @@ with st.sidebar:
 
     st.markdown("### Optional Sections")
 
-    show_all_chart = st.checkbox("Show consolidated cumulative chart", value=False)
-
     show_category_sections = st.checkbox("Show per-category panels and charts", value=False)
 
 
@@ -3178,7 +3184,7 @@ all_panel_df = render_basket_section(
 
     dynamic_label=DYNAMIC_LABEL,
 
-    show_chart=show_all_chart,
+    show_chart=False,
 
     basket_metadata=basket_metadata,
 
