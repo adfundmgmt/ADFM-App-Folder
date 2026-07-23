@@ -1,11 +1,11 @@
-**Regime: Strong dollar on valuation and fiscal, but carry crowding at extremes and yield-FX decoupling signal fragility.**
+**Regime: Risk-premium dominance; carry crowded across stretched currencies; mean-reversion setup in JPY vs deteriorating AUD/GBP.**
 
-- **GBP short**: deteriorating fundamentals (-0.33) + expensive valuation (+1.27) + policy trap (growth soft, rates already tight) = classic unwind setup. Carry crowded at 94th percentile on quiet vol; real yields don't support the currency (-0.62 mult). Risk-reward skewed to downside.
+- **GBP short**: Expensive valuation (+1.3) collapsing into deteriorating fundamentals (-0.28); policy hawkish tailwind exhausted as growth softens; real yields rise but currency weakens (−0.36 corr)—stress regime, not reward. Carry at 95th percentile crowding; unwind risk acute.
 
-- **AUD short**: same vulnerability—rich valuation (+1.92) masking deteriorating trend (-0.30), policy out of room, yield stress regime. Carry at 88th percentile. Valuation is doing all the work; narrow setup prone to snap.
+- **JPY long**: Cheap (valuation −0.7), fundamentals improving (+0.41 growth), yet carry crowded at 88th percentile. Yield stress regime (real 10Y high but −0.22 yield-FX corr) masks the mean-reversion signal. Positioning vulnerable to vol spike; tactical entry.
 
-- **JPY long**: cheap (-0.69 stretch) + improving fundamentals (+0.41) = mean-reversion case. Valuation anchor still intact despite crowding (88th percentile carry). Yield weakness vs USD confounds the cross, but the currency asymmetry (rising rates ≠ stronger yen) hedges tail risk in risk-premium regimes.
+- **AUD short**: Mirroring GBP: stretched (+1.64), fundamentals deteriorating (−0.30), policy trap (tight already, growth soft). Valuation carrying the signal; carry crowded (88th). Weaker by −0.27 on stretch vs prior.
 
-- **CAD/USD carry**: USD sits on stretched valuation (+0.78) but CAD is cheap (-0.87 stretch, -1.55 valuation); real-yield decoupling ambiguous for both. Cleanest unhedged short-USD exposure.
+- **Carry pair: EUR/USD short-biased**: EUR policy tight (+1.22) but narrow—other pillars near flat. Carry at 87th percentile on decoupled yields; real-yield reward ambiguous. USD also stretched (+0.85) but improving fundamentals (+0.19). Both are crowded longs; vol spike unravels both.
 
-**Prior snapshot**: No prior data provided; positioning relative to regime anchors only.
+**Prior move**: AUD, CAD, CHF, EUR all unwound stretch by 0.2–0.4; no new fundamental breaks, repositioning only.
