@@ -2,11 +2,11 @@
   "EUR": [
     "One-legged read: Policy (+1.2) is doing almost all the work; the other pillars are near neutral, so treat this as narrow, not broad-based.",
     "FX and yields are decoupled \u2014 the real-yield reward/stress read is ambiguous this window; treat Pillar D lightly.",
-    "Carry crowded: carry-to-vol in the 87th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
+    "Carry crowded: carry-to-vol in the 88th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
   ],
   "JPY": [
     "Cheap and improving \u2014 the mean-reversion setup: valuation is below its own norm (-0.7) while fundamentals are turning up (+0.4).",
-    "Yield stress: real 10Y is high (z +1.7) but the currency weakens as yields rise (-0.21 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.40). Note: cross vs USD partly confounds this in a strong-dollar tape."
+    "Yield stress: real 10Y is high (z +1.7) but the currency weakens as yields rise (-0.22 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.42). Note: cross vs USD partly confounds this in a strong-dollar tape."
   ],
   "GBP": [
     "Expensive and deteriorating \u2014 the vulnerable combination: rich valuation (+1.3) on a softening fundamental trajectory (-0.3).",
