@@ -1,11 +1,9 @@
-**Regime: Risk-premium tape — carry vulnerable, real yields punishing commodity & commodity-proxy currencies, policy differentiation collapsing.**
+**Regime: Risk-premium tape; carry crowding extreme across AUD, GBP, JPY—vol spike is the tail risk.**
 
-**Inflection extremes:**
-- **GBP short**: Deteriorating fundamentals (-0.28) on expensive valuation (+1.30), carry crowded to 95th percentile atop a yield-stress regime (weakens as rates rise, -0.36 corr). Policy trap tightening—hawkish tailwind fading into stagflation drag. Unwind risk acute.
-- **AUD short**: Same template as GBP—soft growth (-0.33), rich valuation (+1.66), 90th-percentile carry crowding, yield-stress negative correlation (-0.39). Policy at limits; inflation tail unmoored.
-- **JPY long**: Cheap valuation (-0.70) + improving fundamentals (+0.43) = mean-reversion setup. Yield stress (real 10Y high) but negative correlation (-0.22) signals risk-premium regime, not real-rate support—less headwind than nominal reads suggest.
+• **GBP short**—valuation +1.3 on deteriorating fundamentals (-0.28); policy trapped (tight, growth soft, feasibility -1.54); carry 95th percentile crowding on yield-stress inversion (yields rise, GBP weakens); classic unwind setup.
 
-**Standout carry pair:**
-USD dominates on yield reward (+0.78 real10y) and fiscal pillar (+1.25) despite stretched valuation; but same carry-unwind fragility applies if vol spikes.
+• **AUD short**—valuation +1.7 on deteriorating trajectory (-0.33); policy fading (hawkish tailwind exhausted into stagflation drag); carry 90th percentile; yield stress (rises → weakens, mult -0.65).
 
-**Prior snapshot:** No comparative data given.
+• **JPY long**—valuation cheap (-0.7) with improving fundamentals (+0.44); mean-reversion inflection; real 10Y high but currency weakens on rises (risk-premium regime, not yield-reward); carry crowding 82nd percentile but technical setup cleaner than AUD/GBP.
+
+• **CAD carry**: Underowned (CTC 67th), valuation-driven cheap (-2.1), decoupled yield regime—structural hedge appeal if vol spikes.
