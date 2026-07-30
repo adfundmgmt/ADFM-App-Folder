@@ -1,9 +1,7 @@
-**Regime: Risk-premium regime (stress overlays dominating yield-reward narratives across AUD, GBP, CHF, JPY); USD and EUR structurally supported but narrow, policy-driven.**
+**Regime: Risk-premium dominance; carry crowding at extremes (AUD, GBP 90th+) signals fragility into vol spike.**
 
-- **GBP & AUD are the carry-unwind tripwires.** Both sit on rich valuations (+1.3, +1.7) with deteriorating fundamentals and real-yield stress (negative yield-FX correlation; carry crowded at 95th and 90th percentile respectively). GBP's policy feasibility has collapsed (-1.54); AUD's growth and inflation pillar are both underwater. Either a vol spike or Fed/RBA divergence twitch triggers sharp unwinds.
+- **GBP short candidate.** Deteriorating fundamentals (-0.28), expensive valuation (+1.30), policy trap (feasibility -1.54), carry at 95th percentile. Yield stress persists (real 10Y high but corr -0.36 = risk-off not reward). Unwind tail live.
+- **JPY long candidate.** Improving fundamentals (+0.44), cheap valuation (-0.69), strong external pillar (+1.72). Yield regime punished but mean reversion setup robust. Support via valuation normalization, not yield catch-up.
+- **AUD vulnerable.** Mirrors GBP: soft growth, rich valuation (+1.67), carry crowded (91st), policy trap (-1.0 feasibility). Unwind correlation with GBP high in stress scenarios.
 
-- **JPY the mean-reversion levered play.** Valuation well below trend (-0.70), fundamentals turning (+0.44 growth, +1.38 policy, +1.72 external), yet real 10Y stress keeps it cheap in a risk-premium regime. Upside compressed by strong USD tape and negative yield correlation; upside unlocks on risk-on or vol collapse.
-
-- **EUR/GBP the carry-crowding tell.** EUR's +1.2 policy pillar is a one-leg story propping a stretched valuation; GBP layered on top with policy trap (tight, growth soft) and 95th-percentile carry positioning. Both vulnerable if vol normalized or if ECB/BoE seen as nearing terminal.
-
-- **AUD/JPY: short the unwind, long the mean reversion.** Flows will chase AUD weakness into GBP weakness; JPY catches bid if risk premium narrows.
+**Carry pair: USD/JPY short-vol exposure.** USD stretched (+0.83), JPY cheap and improving; real-yield correlation breakdown (-0.22 for JPY, -0.23 for USD) means yield support is thin. Crowded longs at risk on vol normalization.
