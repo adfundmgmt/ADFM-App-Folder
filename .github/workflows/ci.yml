@@ -15,10 +15,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -39,7 +39,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -v
-          coverage report --show-missing --fail-under=42
+          coverage report --show-missing --fail-under=45
 
       - name: Lint shared code, engine, scripts, and tests
         run: ruff check --select E,F,I,B --ignore E501 Home.py adfm_core cte scripts tests
