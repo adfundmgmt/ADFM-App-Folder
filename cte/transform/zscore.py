@@ -12,6 +12,7 @@ calendar-based (not fixed observation counts) so the same code works for daily,
 monthly, and quarterly series. Each currency is scored against its own history —
 USD included; there is no cross-sectional demeaning here.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -36,7 +37,7 @@ def _roll_z(s: pd.Series, years: float, min_frac: float = 0.5) -> pd.Series:
     win = f"{int(years * _DAYS)}D"
     # infer typical obs spacing to set a sane min_periods
     gap = s.index.to_series().diff().dt.days.median()
-    if pd.isna(gap) or gap == 0:        # NaN- and zero-safe
+    if pd.isna(gap) or gap == 0:  # NaN- and zero-safe
         gap = 30
     min_obs = max(6, int((years * _DAYS / gap) * min_frac))
     roll = s.rolling(win, min_periods=min_obs)
@@ -48,7 +49,7 @@ def dual_horizon_z(df: pd.DataFrame, value_col: str = "value") -> pd.DataFrame:
     a tidy [date, ccy, metric, value] frame, computed per (ccy, metric) group.
     (Name kept for API stability — it is now multi-horizon.)"""
     out = []
-    for (ccy, metric), g in df.groupby(["ccy", "metric"], sort=False):
+    for _group_key, g in df.groupby(["ccy", "metric"], sort=False):
         g = g.sort_values("date").copy()
         s = g.set_index("date")[value_col]
         for _, zcol, years in HORIZONS:
@@ -56,8 +57,9 @@ def dual_horizon_z(df: pd.DataFrame, value_col: str = "value") -> pd.DataFrame:
         out.append(g)
     cols = ["date", "ccy", "metric", value_col] + [z for _, z, _ in HORIZONS]
     res = pd.concat(out, ignore_index=True)
-    keep = [c for c in cols if c in res.columns] + \
-           [c for c in res.columns if c not in cols]
+    keep = [c for c in cols if c in res.columns] + [
+        c for c in res.columns if c not in cols
+    ]
     return res[keep].sort_values(["ccy", "metric", "date"]).reset_index(drop=True)
 
 

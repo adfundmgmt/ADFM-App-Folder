@@ -12,6 +12,7 @@ is never logged or committed. Get a free key at https://fred.stlouisfed.org.
 Tidy contract: [date, ccy, metric, value, source, fetched_at]
   metric ∈ {gdp, unemp, core_cpi, policy, real_2y, real_10y}
 """
+
 from __future__ import annotations
 
 import os
@@ -20,8 +21,12 @@ import pandas as pd
 
 from cte.adapters.base import make_session, utcnow
 from cte.config import (
-    FRED_API_KEY_ENV, FRED_BASE, FRED_SERIES, FRED_US_REAL,
-    HTTP_TIMEOUT, HTTP_UA,
+    FRED_API_KEY_ENV,
+    FRED_BASE,
+    FRED_SERIES,
+    FRED_US_REAL,
+    HTTP_TIMEOUT,
+    HTTP_UA,
 )
 
 _OBSERVATIONS = FRED_BASE + "/series/observations"
@@ -41,18 +46,28 @@ def get_api_key() -> str:
     return key
 
 
-def fetch_series(series_id: str, *, observation_start: str = "1990-01-01",
-                 session=None, api_key: str | None = None) -> pd.DataFrame:
+def fetch_series(
+    series_id: str,
+    *,
+    observation_start: str = "1990-01-01",
+    session=None,
+    api_key: str | None = None,
+) -> pd.DataFrame:
     """Raw observations for one FRED series → DataFrame[date, value]."""
     sess = session or make_session()
     key = api_key or get_api_key()
     params = {
-        "series_id": series_id, "api_key": key, "file_type": "json",
+        "series_id": series_id,
+        "api_key": key,
+        "file_type": "json",
         "observation_start": observation_start,
     }
-    r = sess.get(_OBSERVATIONS, params=params,
-                 headers={"User-Agent": HTTP_UA, "Accept": "application/json"},
-                 timeout=HTTP_TIMEOUT)
+    r = sess.get(
+        _OBSERVATIONS,
+        params=params,
+        headers={"User-Agent": HTTP_UA, "Accept": "application/json"},
+        timeout=HTTP_TIMEOUT,
+    )
     r.raise_for_status()
     obs = r.json().get("observations", [])
     rows = []
@@ -86,8 +101,9 @@ def fetch_fred_macro(observation_start: str = "1990-01-01") -> pd.DataFrame:
 
     def _grab(ccy: str, metric: str, sid: str) -> None:
         try:
-            d = fetch_series(sid, observation_start=observation_start,
-                             session=sess, api_key=key)
+            d = fetch_series(
+                sid, observation_start=observation_start, session=sess, api_key=key
+            )
             if d.empty:
                 failures.append((ccy, metric, f"{sid}: empty"))
                 return
@@ -113,9 +129,9 @@ def fetch_fred_macro(observation_start: str = "1990-01-01") -> pd.DataFrame:
         for _, g in out.groupby(["ccy", "metric"], sort=False):
             g = g.sort_values("date").copy()
             gap = g["date"].diff().dt.days.median()
-            if gap and gap > 45:          # quarterly
+            if gap and gap > 45:  # quarterly
                 g["date"] = g["date"] + pd.offsets.QuarterEnd(0)
-            elif gap and gap > 4:         # monthly
+            elif gap and gap > 4:  # monthly
                 g["date"] = g["date"] + pd.offsets.MonthEnd(0)
             parts.append(g)
         out = pd.concat(parts, ignore_index=True)
@@ -126,10 +142,12 @@ def fetch_fred_macro(observation_start: str = "1990-01-01") -> pd.DataFrame:
 if __name__ == "__main__":
     try:
         df = fetch_fred_macro()
-    except FredKeyMissing as e:
-        raise SystemExit(str(e))
+    except FredKeyMissing as exc:
+        raise SystemExit(str(exc)) from exc
     fails = df.attrs.get("failures", [])
-    print(f"rows: {len(df)} | series ok: "
-          f"{df.groupby(['ccy','metric']).ngroups} | failures: {len(fails)}")
+    print(
+        f"rows: {len(df)} | series ok: "
+        f"{df.groupby(['ccy', 'metric']).ngroups} | failures: {len(fails)}"
+    )
     for ccy, metric, why in fails:
         print(f"  FAIL {ccy}/{metric}: {why}")

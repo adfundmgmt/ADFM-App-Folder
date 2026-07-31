@@ -56,6 +56,11 @@ def tool_order() -> list[str]:
     return [tool.title for tool in TOOL_CATALOG]
 
 
+def tool_definitions() -> list[ToolDefinition]:
+    """Return the ordered catalog for navigation and governance checks."""
+    return list(TOOL_CATALOG)
+
+
 def tool_groups() -> dict[str, list[str]]:
     """Return Home navigation groups while retaining catalog order."""
     groups = {"All tools": tool_order()}

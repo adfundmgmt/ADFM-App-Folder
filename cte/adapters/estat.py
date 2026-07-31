@@ -10,6 +10,7 @@ other OECD-sourced legs. e-Stat's YoY runs back to 1971.
 
 Returns the tidy contract: [date, ccy, metric, value, source, fetched_at]
 """
+
 from __future__ import annotations
 
 import os
@@ -18,9 +19,14 @@ import pandas as pd
 
 from cte.adapters.base import make_session, utcnow
 from cte.config import (
-    ESTAT_APP_ID_ENV, ESTAT_BASE, ESTAT_CPI_AREA_NATIONWIDE,
-    ESTAT_CPI_ITEM_HEADLINE, ESTAT_CPI_TAB_YOY, ESTAT_CPI_TABLE,
-    HTTP_TIMEOUT, HTTP_UA,
+    ESTAT_APP_ID_ENV,
+    ESTAT_BASE,
+    ESTAT_CPI_AREA_NATIONWIDE,
+    ESTAT_CPI_ITEM_HEADLINE,
+    ESTAT_CPI_TAB_YOY,
+    ESTAT_CPI_TABLE,
+    HTTP_TIMEOUT,
+    HTTP_UA,
 )
 
 
@@ -51,14 +57,15 @@ def fetch_estat_cpi(session=None) -> pd.DataFrame:
         "cdArea": ESTAT_CPI_AREA_NATIONWIDE,
         "limit": "5000",
     }
-    r = sess.get(ESTAT_BASE, params=params, headers={"User-Agent": HTTP_UA},
-                 timeout=HTTP_TIMEOUT)
+    r = sess.get(
+        ESTAT_BASE, params=params, headers={"User-Agent": HTTP_UA}, timeout=HTTP_TIMEOUT
+    )
     r.raise_for_status()
     j = r.json()
     result = j.get("GET_STATS_DATA", {}).get("RESULT", {})
     if str(result.get("STATUS")) != "0":
         raise RuntimeError(f"e-Stat error: {result.get('ERROR_MSG')}")
-    vals = (j["GET_STATS_DATA"]["STATISTICAL_DATA"]["DATA_INF"]["VALUE"])
+    vals = j["GET_STATS_DATA"]["STATISTICAL_DATA"]["DATA_INF"]["VALUE"]
     rows = []
     for v in vals:
         raw = v.get("$")
@@ -74,9 +81,13 @@ def fetch_estat_cpi(session=None) -> pd.DataFrame:
     df["metric"] = "cpi_yoy"
     df["source"] = "estat_cpi_headline"
     df["fetched_at"] = utcnow()
-    return (df.dropna(subset=["value"]).sort_values("date")
-            .reset_index(drop=True)[
-                ["date", "ccy", "metric", "value", "source", "fetched_at"]])
+    return (
+        df.dropna(subset=["value"])
+        .sort_values("date")
+        .reset_index(drop=True)[
+            ["date", "ccy", "metric", "value", "source", "fetched_at"]
+        ]
+    )
 
 
 if __name__ == "__main__":

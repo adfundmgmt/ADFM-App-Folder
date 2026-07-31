@@ -18,14 +18,14 @@ Conventions:
   - z-scores use the shared calendar-window engine (_roll_z) on the struct horizon;
     a 13-week change z captures the *swing* in positioning, not just the level.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
 from cte.adapters.base import read_cache
-from cte.config import (CURRENCIES, POS_CROWDED_Z, POS_DIVERGE_Z,
-                        POS_STRUCT_YEARS)
+from cte.config import CURRENCIES, POS_CROWDED_Z, POS_DIVERGE_Z, POS_STRUCT_YEARS
 from cte.transform.zscore import _roll_z
 
 
@@ -38,7 +38,9 @@ def _panel() -> pd.DataFrame | None:
     if "am_net_pct_oi" not in tff.columns:
         tff["am_net_pct_oi"] = np.where(
             tff["open_interest"].fillna(0) > 0,
-            100 * tff["am_net"] / tff["open_interest"], np.nan)
+            100 * tff["am_net"] / tff["open_interest"],
+            np.nan,
+        )
     return tff
 
 
@@ -48,8 +50,17 @@ def positioning_history() -> pd.DataFrame:
     everywhere downstream)."""
     tff = _panel()
     if tff is None:
-        return pd.DataFrame(columns=["date", "ccy", "lev_pct_oi", "am_pct_oi",
-                                     "lev_z", "am_z", "lev_chg13w_z"])
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "ccy",
+                "lev_pct_oi",
+                "am_pct_oi",
+                "lev_z",
+                "am_z",
+                "lev_chg13w_z",
+            ]
+        )
     rows = []
     for ccy, g in tff.groupby("ccy"):
         g = g.set_index("date").sort_index()
@@ -57,19 +68,31 @@ def positioning_history() -> pd.DataFrame:
         am = g["am_net_pct_oi"].astype(float).dropna()
         if len(lev) < 2:
             continue
-        d = pd.DataFrame({
-            "lev_pct_oi": lev,
-            "am_pct_oi": am,
-            "lev_z": _roll_z(lev, POS_STRUCT_YEARS),
-            "am_z": _roll_z(am, POS_STRUCT_YEARS) if len(am) >= 2 else np.nan,
-            "lev_chg13w_z": _roll_z(lev.diff(13).dropna(), POS_STRUCT_YEARS)
-                            if len(lev) > 13 else np.nan,
-        })
+        d = pd.DataFrame(
+            {
+                "lev_pct_oi": lev,
+                "am_pct_oi": am,
+                "lev_z": _roll_z(lev, POS_STRUCT_YEARS),
+                "am_z": _roll_z(am, POS_STRUCT_YEARS) if len(am) >= 2 else np.nan,
+                "lev_chg13w_z": _roll_z(lev.diff(13).dropna(), POS_STRUCT_YEARS)
+                if len(lev) > 13
+                else np.nan,
+            }
+        )
         d["ccy"] = ccy
         rows.append(d.reset_index().rename(columns={"index": "date"}))
     if not rows:
-        return pd.DataFrame(columns=["date", "ccy", "lev_pct_oi", "am_pct_oi",
-                                     "lev_z", "am_z", "lev_chg13w_z"])
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "ccy",
+                "lev_pct_oi",
+                "am_pct_oi",
+                "lev_z",
+                "am_z",
+                "lev_chg13w_z",
+            ]
+        )
     return pd.concat(rows, ignore_index=True)
 
 
@@ -79,12 +102,19 @@ def _label(lev_z: float, am_z: float) -> str:
     if abs(lev_z) >= POS_CROWDED_Z:
         side = "long" if lev_z > 0 else "short"
         tag = f"CROWDED {side}"
-        if pd.notna(am_z) and abs(am_z) >= POS_DIVERGE_Z and \
-                np.sign(am_z) != np.sign(lev_z):
+        if (
+            pd.notna(am_z)
+            and abs(am_z) >= POS_DIVERGE_Z
+            and np.sign(am_z) != np.sign(lev_z)
+        ):
             tag += " / real-money opposed"
         return tag
-    if pd.notna(am_z) and abs(am_z) >= POS_DIVERGE_Z and \
-            abs(lev_z) >= POS_DIVERGE_Z and np.sign(am_z) != np.sign(lev_z):
+    if (
+        pd.notna(am_z)
+        and abs(am_z) >= POS_DIVERGE_Z
+        and abs(lev_z) >= POS_DIVERGE_Z
+        and np.sign(am_z) != np.sign(lev_z)
+    ):
         return "spec vs real-money split"
     return "normal"
 
@@ -96,22 +126,46 @@ def positioning_snapshot() -> pd.DataFrame:
     hist = positioning_history()
     if hist.empty:
         return pd.DataFrame({"ccy": list(CURRENCIES)})
-    last = (hist.sort_values("date").groupby("ccy").tail(1)
-            .rename(columns={"date": "pos_date"}))
+    last = (
+        hist.sort_values("date")
+        .groupby("ccy")
+        .tail(1)
+        .rename(columns={"date": "pos_date"})
+    )
     # z-positions 13 weekly reports before the latest — one quarter, matching the
     # ~3-month (_WIN=63 trading-day) window used by the other overlays
     g = hist.sort_values("date").groupby("ccy")
     for col in ("lev_z", "am_z"):
-        prev = (g[col].apply(lambda s: s.iloc[-14] if len(s) >= 14 else np.nan)
-                .rename(f"{col}_13w"))
+        prev = (
+            g[col]
+            .apply(lambda s: s.iloc[-14] if len(s) >= 14 else np.nan)
+            .rename(f"{col}_13w")
+        )
         last = last.merge(prev, on="ccy", how="left")
-    last["pos_label"] = [
-        _label(r.lev_z, r.am_z) for r in last.itertuples()]
-    cols = ["ccy", "lev_pct_oi", "am_pct_oi", "lev_z", "am_z",
-            "lev_z_13w", "am_z_13w", "lev_chg13w_z", "pos_label", "pos_date"]
-    out = last[cols].round({"lev_pct_oi": 1, "am_pct_oi": 1, "lev_z": 2,
-                            "am_z": 2, "lev_z_13w": 2, "am_z_13w": 2,
-                            "lev_chg13w_z": 2})
+    last["pos_label"] = [_label(r.lev_z, r.am_z) for r in last.itertuples()]
+    cols = [
+        "ccy",
+        "lev_pct_oi",
+        "am_pct_oi",
+        "lev_z",
+        "am_z",
+        "lev_z_13w",
+        "am_z_13w",
+        "lev_chg13w_z",
+        "pos_label",
+        "pos_date",
+    ]
+    out = last[cols].round(
+        {
+            "lev_pct_oi": 1,
+            "am_pct_oi": 1,
+            "lev_z": 2,
+            "am_z": 2,
+            "lev_z_13w": 2,
+            "am_z_13w": 2,
+            "lev_chg13w_z": 2,
+        }
+    )
     return out.set_index("ccy").reindex(CURRENCIES).reset_index()
 
 
@@ -122,13 +176,15 @@ def persist_history() -> pd.DataFrame:
     """Write the full weekly z panel to the committed cache — the app's Historical
     mode reads this (it has no raw TFF cache on the public deploy)."""
     from cte.adapters.base import write_cache
+
     hist = positioning_history()
     write_cache(hist, POS_HISTORY_NAME)
     return hist
 
 
-def positioning_asof(asof: pd.Timestamp,
-                     hist: pd.DataFrame | None = None) -> pd.DataFrame:
+def positioning_asof(
+    asof: pd.Timestamp, hist: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Snapshot as it stood at a past date: the last weekly report on/before asof,
     with the 13-report-earlier origins, built from the committed pos_history."""
     if hist is None:
@@ -141,20 +197,34 @@ def positioning_asof(asof: pd.Timestamp,
     last = h.groupby("ccy").tail(1).rename(columns={"date": "pos_date"})
     g = h.groupby("ccy")
     for col in ("lev_z", "am_z"):
-        prev = (g[col].apply(lambda s: s.iloc[-14] if len(s) >= 14 else np.nan)
-                .rename(f"{col}_13w"))
+        prev = (
+            g[col]
+            .apply(lambda s: s.iloc[-14] if len(s) >= 14 else np.nan)
+            .rename(f"{col}_13w")
+        )
         last = last.merge(prev, on="ccy", how="left")
     last["pos_label"] = [_label(r.lev_z, r.am_z) for r in last.itertuples()]
-    cols = ["ccy", "lev_pct_oi", "am_pct_oi", "lev_z", "am_z",
-            "lev_z_13w", "am_z_13w", "lev_chg13w_z", "pos_label", "pos_date"]
+    cols = [
+        "ccy",
+        "lev_pct_oi",
+        "am_pct_oi",
+        "lev_z",
+        "am_z",
+        "lev_z_13w",
+        "am_z_13w",
+        "lev_chg13w_z",
+        "pos_label",
+        "pos_date",
+    ]
     out = last[[c for c in cols if c in last.columns]]
     num = out.select_dtypes("number").columns
     out[num] = out[num].round(2)
     return out.set_index("ccy").reindex(CURRENCIES).reset_index()
 
 
-def positioning_warnings(snap: pd.DataFrame,
-                         tm: pd.DataFrame | None = None) -> dict[str, list[str]]:
+def positioning_warnings(
+    snap: pd.DataFrame, tm: pd.DataFrame | None = None
+) -> dict[str, list[str]]:
     """Crowding / divergence sidenotes, plus the three-way setup when the tension
     map is supplied: the map's vulnerable quadrant (rich + deteriorating) with
     stretched LONG spec positioning is the dangerous combination — a fragile
@@ -179,13 +249,15 @@ def positioning_warnings(snap: pd.DataFrame,
                 f"{lev_z:+.1f}z extreme ({r.get('lev_pct_oi', float('nan')):+.0f}% of "
                 f"open interest, futures+options). Consensus side of the boat — "
                 f"unwind risk is elevated if the tape turns. (Listed-derivatives "
-                f"slice only; OTC positioning is not visible here.)")
+                f"slice only; OTC positioning is not visible here.)"
+            )
         if "real-money opposed" in label or label == "spec vs real-money split":
             notes.append(
                 f"Spec vs real money split: leveraged funds ({lev_z:+.1f}z) and "
                 f"asset managers ({r.get('am_z', float('nan')):+.1f}z) are on opposite "
                 f"sides — fast money is leaning against the institutional stance, a "
-                f"setup that resolves sharply when one side capitulates.")
+                f"setup that resolves sharply when one side capitulates."
+            )
         # three-way: quadrant + crowding coincide
         if axes is not None and c in axes.index:
             f = axes.loc[c].get("axis1_fundamental_struct", np.nan)
@@ -196,13 +268,15 @@ def positioning_warnings(snap: pd.DataFrame,
                         f"Vulnerable AND crowded long: rich valuation ({v:+.1f}), "
                         f"deteriorating fundamentals ({f:+.1f}), and spec money "
                         f"stretched long ({lev_z:+.1f}z) — the map's dangerous "
-                        f"quadrant with a catalyst attached. Classic unwind setup.")
+                        f"quadrant with a catalyst attached. Classic unwind setup."
+                    )
                 elif f > 0.25 and v < -0.25 and lev_z <= -POS_CROWDED_Z:
                     notes.append(
                         f"Washed out AND crowded short: cheap ({v:+.1f}), improving "
                         f"({f:+.1f}), and spec money stretched short ({lev_z:+.1f}z) "
                         f"— the squeeze setup: any positive surprise forces covering "
-                        f"into an improving story.")
+                        f"into an improving story."
+                    )
         if notes:
             out[c] = notes
     return out

@@ -14,9 +14,8 @@ Tidy contract returned:
   [date, ccy, lev_long, lev_short, lev_net, lev_net_pct_oi,
    am_long, am_short, am_net, am_net_pct_oi, open_interest, source, fetched_at]
 """
-from __future__ import annotations
 
-import datetime as dt
+from __future__ import annotations
 
 import pandas as pd
 
@@ -43,16 +42,23 @@ def fetch_tff(weeks_back: int = 1100) -> pd.DataFrame:
     inlist = ",".join(f"'{c}'" for c in codes.values())
     # rows per week (8 contracts) * weeks_back, plus headroom
     limit = max(8 * weeks_back, 2000)
-    select = ",".join([
-        "cftc_contract_market_code", "report_date_as_yyyy_mm_dd",
-        "lev_money_positions_long", "lev_money_positions_short",
-        "asset_mgr_positions_long", "asset_mgr_positions_short",
-        "open_interest_all",
-    ])
+    select = ",".join(
+        [
+            "cftc_contract_market_code",
+            "report_date_as_yyyy_mm_dd",
+            "lev_money_positions_long",
+            "lev_money_positions_short",
+            "asset_mgr_positions_long",
+            "asset_mgr_positions_short",
+            "open_interest_all",
+        ]
+    )
     where = f"cftc_contract_market_code in({inlist})"
-    url = (f"{_BASE.format(ds=CFTC_TFF_DATASET)}"
-           f"?$where={where}&$select={select}"
-           f"&$order=report_date_as_yyyy_mm_dd DESC&$limit={limit}")
+    url = (
+        f"{_BASE.format(ds=CFTC_TFF_DATASET)}"
+        f"?$where={where}&$select={select}"
+        f"&$order=report_date_as_yyyy_mm_dd DESC&$limit={limit}"
+    )
     rows = http_get(url).json()
 
     fetched = utcnow()
@@ -71,19 +77,29 @@ def fetch_tff(weeks_back: int = 1100) -> pd.DataFrame:
         oi = _to_int(r.get("open_interest_all"))
         lev_net = (lev_l - lev_s) if (lev_l is not None and lev_s is not None) else None
         am_net = (am_l - am_s) if (am_l is not None and am_s is not None) else None
-        lev_net_pct_oi = (round(100 * lev_net / oi, 2)
-                          if (lev_net is not None and oi) else None)
-        am_net_pct_oi = (round(100 * am_net / oi, 2)
-                         if (am_net is not None and oi) else None)
-        out.append({
-            "date": date.normalize(), "ccy": ccy,
-            "lev_long": lev_l, "lev_short": lev_s, "lev_net": lev_net,
-            "lev_net_pct_oi": lev_net_pct_oi,
-            "am_long": am_l, "am_short": am_s, "am_net": am_net,
-            "am_net_pct_oi": am_net_pct_oi,
-            "open_interest": oi,
-            "source": "cftc_tff_combined", "fetched_at": fetched,
-        })
+        lev_net_pct_oi = (
+            round(100 * lev_net / oi, 2) if (lev_net is not None and oi) else None
+        )
+        am_net_pct_oi = (
+            round(100 * am_net / oi, 2) if (am_net is not None and oi) else None
+        )
+        out.append(
+            {
+                "date": date.normalize(),
+                "ccy": ccy,
+                "lev_long": lev_l,
+                "lev_short": lev_s,
+                "lev_net": lev_net,
+                "lev_net_pct_oi": lev_net_pct_oi,
+                "am_long": am_l,
+                "am_short": am_s,
+                "am_net": am_net,
+                "am_net_pct_oi": am_net_pct_oi,
+                "open_interest": oi,
+                "source": "cftc_tff_combined",
+                "fetched_at": fetched,
+            }
+        )
     df = pd.DataFrame(out)
     if not df.empty:
         df = df.sort_values(["ccy", "date"]).reset_index(drop=True)
@@ -95,5 +111,8 @@ if __name__ == "__main__":
     print(f"rows: {len(df)} | currencies: {sorted(df.ccy.unique())}")
     print(f"date range: {df.date.min().date()} -> {df.date.max().date()}")
     latest = df.sort_values("date").groupby("ccy").tail(1)
-    print(latest[["ccy", "date", "lev_net", "lev_net_pct_oi", "am_net",
-                  "open_interest"]].to_string(index=False))
+    print(
+        latest[
+            ["ccy", "date", "lev_net", "lev_net_pct_oi", "am_net", "open_interest"]
+        ].to_string(index=False)
+    )

@@ -7,6 +7,7 @@ sovereign-yield source map, and target bond tenors. Per the spec, USD is one
 leg among eight — there is no hub currency; "USD-based" here is a *quoting*
 convention only.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,21 +28,26 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # plus DXY for the dollar leg. Every cross in the 28-grid is triangulated from
 # these eight price legs at transform time — we never pull 28 pairs.
 YF_USD_PAIRS: dict[str, str] = {
-    "EUR": "EURUSD=X",   # USD per EUR
-    "GBP": "GBPUSD=X",   # USD per GBP
-    "JPY": "USDJPY=X",   # JPY per USD  (inverted at transform)
-    "CHF": "USDCHF=X",   # CHF per USD  (inverted)
-    "CAD": "USDCAD=X",   # CAD per USD  (inverted)
-    "AUD": "AUDUSD=X",   # USD per AUD
-    "NZD": "NZDUSD=X",   # USD per NZD
+    "EUR": "EURUSD=X",  # USD per EUR
+    "GBP": "GBPUSD=X",  # USD per GBP
+    "JPY": "USDJPY=X",  # JPY per USD  (inverted at transform)
+    "CHF": "USDCHF=X",  # CHF per USD  (inverted)
+    "CAD": "USDCAD=X",  # CAD per USD  (inverted)
+    "AUD": "AUDUSD=X",  # USD per AUD
+    "NZD": "NZDUSD=X",  # USD per NZD
 }
-YF_DXY = "DX-Y.NYB"      # dollar's own price leg (broad-ish DXY proxy)
+YF_DXY = "DX-Y.NYB"  # dollar's own price leg (broad-ish DXY proxy)
 
 # True for tickers quoted as (foreign per USD), i.e. need inverting to get
 # "USD value of 1 unit of foreign" on a common basis.
 YF_PAIR_INVERTED: dict[str, bool] = {
-    "EUR": False, "GBP": False, "JPY": True,
-    "CHF": True, "CAD": True, "AUD": False, "NZD": False,
+    "EUR": False,
+    "GBP": False,
+    "JPY": True,
+    "CHF": True,
+    "CAD": True,
+    "AUD": False,
+    "NZD": False,
 }
 
 # ------------------------------------------------------------------ tenors
@@ -60,20 +66,26 @@ FISCAL_TENOR = "10Y"
 # not wired into scoring unless promoted.
 YIELD_SOURCES: dict[str, dict] = {
     "USD": {"adapter": "us_treasury", "role": "primary"},
-    "EUR": {"adapter": "ecb_yc",      "role": "primary"},
+    "EUR": {"adapter": "ecb_yc", "role": "primary"},
     "EUR_DE": {"adapter": "bundesbank", "role": "secondary", "ccy": "EUR"},
-    "JPY": {"adapter": "jp_mof",      "role": "primary"},
-    "GBP": {"adapter": "boe_iadb",    "role": "primary"},
-    "CHF": {"adapter": "snb",         "role": "primary"},
-    "CAD": {"adapter": "boc_valet",   "role": "primary"},
-    "AUD": {"adapter": "rba_f2",      "role": "primary"},
-    "NZD": {"adapter": "rbnz_b2",     "role": "primary"},
+    "JPY": {"adapter": "jp_mof", "role": "primary"},
+    "GBP": {"adapter": "boe_iadb", "role": "primary"},
+    "CHF": {"adapter": "snb", "role": "primary"},
+    "CAD": {"adapter": "boc_valet", "role": "primary"},
+    "AUD": {"adapter": "rba_f2", "role": "primary"},
+    "NZD": {"adapter": "rbnz_b2", "role": "primary"},
 }
 
 # BIS REER reference-area codes per currency (verified at BIS adapter stage).
 BIS_EER_AREA: dict[str, str] = {
-    "USD": "US", "EUR": "XM", "JPY": "JP", "GBP": "GB",
-    "CHF": "CH", "CAD": "CA", "AUD": "AU", "NZD": "NZ",
+    "USD": "US",
+    "EUR": "XM",
+    "JPY": "JP",
+    "GBP": "GB",
+    "CHF": "CH",
+    "CAD": "CA",
+    "AUD": "AU",
+    "NZD": "NZ",
 }
 
 # CFTC Traders-in-Financial-Futures contract-market codes per currency.
@@ -98,8 +110,14 @@ OECD_CSV_ACCEPT = "application/vnd.sdmx.data+csv"
 
 # OECD ref-area codes per currency (euro area = EA20 aggregate).
 OECD_REF_AREA: dict[str, str] = {
-    "USD": "USA", "EUR": "EA20", "JPY": "JPN", "GBP": "GBR",
-    "CHF": "CHE", "CAD": "CAN", "AUD": "AUS", "NZD": "NZL",
+    "USD": "USA",
+    "EUR": "EA20",
+    "JPY": "JPN",
+    "GBP": "GBR",
+    "CHF": "CHE",
+    "CAD": "CAN",
+    "AUD": "AUS",
+    "NZD": "NZL",
 }
 
 # Pillar A leading indicator: amplitude-adjusted business confidence (BCICP) for
@@ -128,15 +146,17 @@ OECD_CPI_CCYS = ("GBP", "CAD", "AUD", "NZD")
 ESTAT_BASE = "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
 ESTAT_APP_ID_ENV = "ESTAT_APP_ID"
 ESTAT_CPI_TABLE = "0003427113"
-ESTAT_CPI_TAB_YOY = "3"          # 前年同月比 (year-on-year %)
+ESTAT_CPI_TAB_YOY = "3"  # 前年同月比 (year-on-year %)
 ESTAT_CPI_ITEM_HEADLINE = "0001"  # 総合 (all items); 0161 = ex-fresh-food "core"
 ESTAT_CPI_AREA_NATIONWIDE = "00000"
 
 # UK unemployment from ONS directly (series MGSX, 16+, SA) — the primary source
 # for what is, empirically, the same number as the OECD harmonised UK rate, but
 # 1-2 months fresher. GBP is therefore dropped from the OECD unemployment set below.
-ONS_UNEMP_URL = ("https://www.ons.gov.uk/employmentandlabourmarket/peoplenotinwork/"
-                 "unemployment/timeseries/mgsx/lms/data")
+ONS_UNEMP_URL = (
+    "https://www.ons.gov.uk/employmentandlabourmarket/peoplenotinwork/"
+    "unemployment/timeseries/mgsx/lms/data"
+)
 
 # Unemployment for the non-US/EUR/GBP legs from OECD infra-annual labour stats —
 # uniformly ~1-2 months fresher than FRED's harmonised mirror. Monthly where it has
@@ -164,13 +184,13 @@ OECD_BOP_DATAFLOW = "OECD.SDD.TPS,DSD_BOP@DF_BOP,"
 OECD_IIP_DATAFLOW = "OECD.SDD.TPS,DSD_BOP@DF_IIP,"
 
 CFTC_TFF_DATASET = "yw9f-hn96"  # TFF, Futures-and-Options Combined (delta-adjusted
-                                # options folded in; verified live 2026-07: same field
-                                # names as futures-only, history to 2006-06)
+# options folded in; verified live 2026-07: same field
+# names as futures-only, history to 2006-06)
 
 # Positioning overlay thresholds (flag layer only — never in the axis composites)
-POS_CROWDED_Z = 1.5      # |leveraged-fund net %OI z| at/past this = crowded
-POS_DIVERGE_Z = 1.0      # lev vs asset-mgr opposite signs, both past this = divergence
-POS_STRUCT_YEARS = 10    # z window for positioning (matches the struct horizon)
+POS_CROWDED_Z = 1.5  # |leveraged-fund net %OI z| at/past this = crowded
+POS_DIVERGE_Z = 1.0  # lev vs asset-mgr opposite signs, both past this = divergence
+POS_STRUCT_YEARS = 10  # z window for positioning (matches the struct horizon)
 
 # ------------------------------------------------------------------ FRED (macro backbone)
 # Spec §3/§14: FRED is the fundamental backbone + US real rates. It serves the
@@ -184,9 +204,14 @@ FRED_BASE = "https://api.stlouisfed.org/fred"
 # Central-bank inflation targets (Pillar B/E use *distance from target*, which is
 # more comparable across countries than raw CPI). Point targets; RBA/RBNZ midpoints.
 CB_INFLATION_TARGET: dict[str, float] = {
-    "USD": 2.0, "EUR": 2.0, "JPY": 2.0, "GBP": 2.0,
-    "CHF": 1.0,   # SNB: price stability defined as <2%; ~1% used as operating midpoint
-    "CAD": 2.0, "AUD": 2.5, "NZD": 2.0,   # RBA target midpoint 2.5; RBNZ 2.0 midpoint
+    "USD": 2.0,
+    "EUR": 2.0,
+    "JPY": 2.0,
+    "GBP": 2.0,
+    "CHF": 1.0,  # SNB: price stability defined as <2%; ~1% used as operating midpoint
+    "CAD": 2.0,
+    "AUD": 2.5,
+    "NZD": 2.0,  # RBA target midpoint 2.5; RBNZ 2.0 midpoint
 }
 
 # ---------------------------------------------------------------- scoring / compositor
@@ -194,59 +219,90 @@ CB_INFLATION_TARGET: dict[str, float] = {
 # Axis 1 = fundamental trajectory (deteriorating <-> improving).
 # Axis 2 = valuation & policy stretch (cheap <-> maxed-out).
 FEATURE_PILLAR: dict[str, str] = {
-    "bcicp": "A_growth", "bcicp_slope": "A_growth", "gdp_yoy": "A_growth",
+    "bcicp": "A_growth",
+    "bcicp_slope": "A_growth",
+    "gdp_yoy": "A_growth",
     "unemp_3m_chg": "A_growth",
-    "infl_gap": "B_inflation", "infl_momentum": "B_inflation",
-    "current_account": "C_external", "niip": "C_external",
-    "real_10y": "D_fiscal",   # market-priced long-end real yield (term-premium read,
-                              # NOT the budget balance); reward/stress via the overlay
-    "real_policy": "E_policy", "priced_path": "E_policy",
+    "infl_gap": "B_inflation",
+    "infl_momentum": "B_inflation",
+    "current_account": "C_external",
+    "niip": "C_external",
+    "real_10y": "D_fiscal",  # market-priced long-end real yield (term-premium read,
+    # NOT the budget balance); reward/stress via the overlay
+    "real_policy": "E_policy",
+    "priced_path": "E_policy",
     # real_2y (carry) is PAIRWISE only — it lives in the carry grid, not the
     # per-currency composite (including it double-counted and re-imported the
     # post-ZIRP common component that lifts every leg's real-rate z-score).
     "reer": "G_valuation",
 }
 PILLAR_AXIS: dict[str, str] = {
-    "A_growth": "axis1_fundamental", "B_inflation": "axis1_fundamental",
-    "C_external": "axis1_fundamental", "D_fiscal": "axis1_fundamental",
-    "E_policy": "axis2_stretch", "F_carry": "axis2_stretch",
+    "A_growth": "axis1_fundamental",
+    "B_inflation": "axis1_fundamental",
+    "C_external": "axis1_fundamental",
+    "D_fiscal": "axis1_fundamental",
+    "E_policy": "axis2_stretch",
+    "F_carry": "axis2_stretch",
     "G_valuation": "axis2_stretch",
 }
 # Short display names — single source of truth (used by the completeness guard, the
 # narrative notes, and the dashboard's pillar labels/methodology).
 PILLAR_DISPLAY: dict[str, str] = {
-    "A_growth": "Growth", "B_inflation": "Inflation", "C_external": "External",
-    "D_fiscal": "Real 10Y", "E_policy": "Policy", "F_carry": "Carry",
+    "A_growth": "Growth",
+    "B_inflation": "Inflation",
+    "C_external": "External",
+    "D_fiscal": "Real 10Y",
+    "E_policy": "Policy",
+    "F_carry": "Carry",
     "G_valuation": "Valuation",
 }
 # Sign so a POSITIVE contribution points to the axis's positive pole (Axis 1: improving/
 # supportive; Axis 2: more stretched/maxed). Several are genuine design choices — see
 # README "scoring signs". Tunable.
 FEATURE_SIGN: dict[str, int] = {
-    "bcicp": +1, "bcicp_slope": +1, "gdp_yoy": +1, "unemp_3m_chg": -1,
-    "infl_gap": +1, "infl_momentum": +1,   # above-target/accelerating = hawkish support (debatable)
-    "current_account": +1, "niip": +1,
-    "real_10y": +1,                        # higher real 10y = support (vs fiscal-stress reading; debatable)
-    "real_policy": +1, "priced_path": +1,  # tighter / more hikes priced = less room = more maxed
-    "real_2y": +1,                         # higher real carry = more stretched/attractive
-    "reer": +1,                            # richer REER = more expensive
+    "bcicp": +1,
+    "bcicp_slope": +1,
+    "gdp_yoy": +1,
+    "unemp_3m_chg": -1,
+    "infl_gap": +1,
+    "infl_momentum": +1,  # above-target/accelerating = hawkish support (debatable)
+    "current_account": +1,
+    "niip": +1,
+    "real_10y": +1,  # higher real 10y = support (vs fiscal-stress reading; debatable)
+    "real_policy": +1,
+    "priced_path": +1,  # tighter / more hikes priced = less room = more maxed
+    "real_2y": +1,  # higher real carry = more stretched/attractive
+    "reer": +1,  # richer REER = more expensive
 }
 # Within-pillar feature weights (gdp low-weight per spec); pillar weights within axis.
 # All tunable via user sliders later.
 FEATURE_WEIGHT: dict[str, float] = {
-    "bcicp": 1.0, "bcicp_slope": 1.0, "gdp_yoy": 0.5, "unemp_3m_chg": 1.0,
-    "infl_gap": 1.0, "infl_momentum": 1.0,
-    "current_account": 1.0, "niip": 1.0,
-    "real_10y": 1.0, "real_policy": 1.0, "priced_path": 1.0,
-    "real_2y": 1.0, "reer": 1.0,
+    "bcicp": 1.0,
+    "bcicp_slope": 1.0,
+    "gdp_yoy": 0.5,
+    "unemp_3m_chg": 1.0,
+    "infl_gap": 1.0,
+    "infl_momentum": 1.0,
+    "current_account": 1.0,
+    "niip": 1.0,
+    "real_10y": 1.0,
+    "real_policy": 1.0,
+    "priced_path": 1.0,
+    "real_2y": 1.0,
+    "reer": 1.0,
 }
 PILLAR_WEIGHT: dict[str, float] = {
-    "A_growth": 1.0, "B_inflation": 1.0, "C_external": 1.0, "D_fiscal": 1.0,
+    "A_growth": 1.0,
+    "B_inflation": 1.0,
+    "C_external": 1.0,
+    "D_fiscal": 1.0,
     # Axis 2: valuation (REER) leads 2:1 over policy. Policy's own-history z-score
     # misreads early-cycle currencies off an anomalous baseline as "stretched" (e.g.
     # JPY, with the BoJ hiking off NIRP), so REER — the direct cheap/expensive read —
     # carries the axis, with policy as a modifier.
-    "E_policy": 1.0, "F_carry": 1.0, "G_valuation": 2.0,
+    "E_policy": 1.0,
+    "F_carry": 1.0,
+    "G_valuation": 2.0,
 }
 
 # FRED series per (currency, metric) — *** all verified live against actual
@@ -277,7 +333,7 @@ FRED_SERIES: dict[str, dict[str, str]] = {
 #   cpi  JPY             -> Japan e-Stat headline CPI (cte.adapters.estat)
 #   unemp EUR            -> Eurostat une_rt_m (cte.adapters.eurostat)
 FRED_GAPS: dict[str, list[str]] = {
-    "cpi":   ["GBP", "JPY", "CAD", "AUD", "NZD"],
+    "cpi": ["GBP", "JPY", "CAD", "AUD", "NZD"],
     "unemp": ["EUR"],
 }
 MACRO_GAPS_REMAINING: dict[str, list[str]] = {}  # all macro inputs now sourced

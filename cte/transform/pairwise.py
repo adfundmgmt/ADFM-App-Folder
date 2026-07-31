@@ -7,6 +7,7 @@ minus quote) and the nominal-2Y differential, from the latest month-end features
 
 carry[base, quote] = real_2y(base) - real_2y(quote)  (positive = base out-yields quote)
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -42,11 +43,16 @@ def carry_ranking(feature: str = "real_2y") -> pd.DataFrame:
     who's the target' read distilled from the grid."""
     feats = build_features()
     vals = _latest(feature, feats).reindex(
-        [c for c in CURRENCIES if c in _latest(feature, feats).index])
+        [c for c in CURRENCIES if c in _latest(feature, feats).index]
+    )
     avg = {c: (vals[c] - vals.drop(c)).mean() for c in vals.index}
     out = pd.Series(avg).sort_values(ascending=False)
-    return out.rename("avg_carry_vs_rest").round(2).reset_index().rename(
-        columns={"index": "ccy"})
+    return (
+        out.rename("avg_carry_vs_rest")
+        .round(2)
+        .reset_index()
+        .rename(columns={"index": "ccy"})
+    )
 
 
 if __name__ == "__main__":

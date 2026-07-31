@@ -34,10 +34,15 @@ jobs:
         run: python -m pip check
 
       - name: Compile application sources
-        run: python -m compileall -q Home.py pages adfm_core adfm_momentum_scanner.py adfm_sector_rotation_config.py tests
+        run: python -m compileall -q Home.py pages adfm_core cte scripts adfm_momentum_scanner.py adfm_sector_rotation_config.py tests
 
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run tests with coverage
+        run: |
+          coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -v
+          coverage report --show-missing --fail-under=42
 
-      - name: Lint shared code and tests
-        run: ruff check --select E,F,I,B --ignore E501 adfm_core tests
+      - name: Lint shared code, engine, scripts, and tests
+        run: ruff check --select E,F,I,B --ignore E501 Home.py adfm_core cte scripts tests
+
+      - name: Catch fatal page errors
+        run: ruff check --select E9,F63,F7,F82 pages adfm_momentum_scanner.py adfm_sector_rotation_config.py

@@ -13,8 +13,10 @@ For development checks, install `requirements-dev.txt` and run the test suite:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m unittest discover -s tests -p "test_*.py" -q
-python -m ruff check --select E,F,I,B --ignore E501 adfm_core tests
+coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -q
+coverage report --fail-under=42
+python -m ruff check --select E,F,I,B --ignore E501 Home.py adfm_core cte scripts tests
+python -m ruff check --select E9,F63,F7,F82 pages adfm_momentum_scanner.py adfm_sector_rotation_config.py
 ```
 
 ## Tool catalog
@@ -59,18 +61,21 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 The `adfm_core` package is the incremental shared layer for common functionality. It currently provides:
 
 - Daily OHLCV loading with ticker normalization, batching, retries, individual fallback, raw-observation preservation, and completed-session handling.
+- A centralized market and macro series registry, plus a primary-source FRED adapter with per-series diagnostics.
 - Benchmark-calendar alignment, adjusted-price handling, stale-session checks, safe ratios, and close panels.
 - A data-integrity policy and diagnostics report for eligible, stale, thin-history, and invalid series.
+- Causal PM command-center scores, cross-asset group summaries, movers, and an atomic point-in-time signal ledger.
 - Reusable Rate of Change calculations and chart-axis helpers.
 
-The Momentum Scanner and Rate of Change Dashboard currently use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable.
+The Momentum Scanner, Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Tracker use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
 ## Data-use notes
 
 - Market data are provider supplied and may be delayed, revised, unavailable, or incomplete.
 - Signals and dashboards are deterministic analytical tools, not investment advice or a guarantee of future returns.
 - Pages should surface their own as-of date and source context. Where a data field is unavailable, the application should leave it blank rather than fabricate a value.
+- Client, holdings, positions, account, and credential data must not be committed. See [the security policy](SECURITY.md).
 
 ## Quality checks
 
-GitHub Actions runs compilation, unit tests, and Ruff checks on pushes and pull requests. The test suite covers shared market-data and integrity primitives, the Momentum Scanner, and the Rate of Change calculation module.
+GitHub Actions runs dependency consistency, compilation, coverage-gated tests, strict shared-code lint, and fatal-error lint across every page. Dependabot reviews Python and workflow updates weekly. The scheduled Currency Tension Engine import validates all required files and schemas and emits a hash manifest before promoting a snapshot.

@@ -8,6 +8,7 @@ aged 16+, seasonally adjusted; history back to 1971.
 
 Tidy contract: [date, ccy, metric, value, source, fetched_at]
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -35,9 +36,13 @@ def fetch_uk_unemployment(session=None) -> pd.DataFrame:
     df["metric"] = "unemp"
     df["source"] = "ons_lfs"
     df["fetched_at"] = utcnow()
-    return (df.dropna(subset=["value"]).sort_values("date")
-            .reset_index(drop=True)[
-                ["date", "ccy", "metric", "value", "source", "fetched_at"]])
+    return (
+        df.dropna(subset=["value"])
+        .sort_values("date")
+        .reset_index(drop=True)[
+            ["date", "ccy", "metric", "value", "source", "fetched_at"]
+        ]
+    )
 
 
 if __name__ == "__main__":

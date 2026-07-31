@@ -26,6 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           base_url="https://raw.githubusercontent.com/smileys21/currency_tension_tool-main/main/data/cache"
+          staging_dir="$(mktemp -d)"
           files=(
             carry_grid_nominal.parquet
             carry_grid_real.parquet
@@ -44,9 +45,7 @@ jobs:
             yields.parquet
           )
 
-          mkdir -p data/cache
           for file in "${files[@]}"; do
-            tmp="data/cache/.${file}.tmp"
             curl \
               --fail \
               --silent \
@@ -58,10 +57,13 @@ jobs:
               --connect-timeout 15 \
               --max-time 120 \
               "$base_url/$file" \
-              --output "$tmp"
-            test -s "$tmp"
-            mv "$tmp" "data/cache/$file"
+              --output "$staging_dir/$file"
+            test -s "$staging_dir/$file"
           done
+
+          python scripts/validate_currency_snapshot.py "$staging_dir"
+          mkdir -p data/cache
+          cp "$staging_dir"/* data/cache/
 
       - name: Commit snapshot changes
         shell: bash
@@ -78,7 +80,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: sync currency tension snapshot [skip ci]"
+          git commit -m "chore: sync validated currency tension snapshot"
 
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then
@@ -95,4 +97,3 @@ jobs:
             git rebase origin/main
             sleep $((attempt * 2))
           done
-

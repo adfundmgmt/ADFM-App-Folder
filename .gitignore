@@ -18,6 +18,12 @@ venv/
 # Application/provider caches and local artifacts
 data/cache/
 data/last_good/
+.volume_regime_cache/
+data/portfolio/
+data/positions/
+private/
+*holdings*.csv
+*positions*.csv
 *.sqlite
 *.db
 

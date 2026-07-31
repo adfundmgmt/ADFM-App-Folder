@@ -5,18 +5,17 @@ Bundles: the two-axis tension map (structural + regime), the pillar scores behin
 the pairwise carry grid, the objective overlays, and the inflection warnings. The
 warnings make the balance visible wherever a conditional signal was bent.
 """
+
 from __future__ import annotations
 
 import json
 
-
-
 from cte.adapters.base import CACHE_DIR, write_cache
 from cte.flags.notes import completeness_warnings, context_notes
-from cte.flags.positioning import persist_history, positioning_warnings
-from cte.scoring.history import append_today, append_today_details
 from cte.flags.overlays import overlay_snapshot
+from cte.flags.positioning import persist_history, positioning_warnings
 from cte.scoring.compositor import score, tension_map
+from cte.scoring.history import append_today, append_today_details
 from cte.transform.features import build_features
 from cte.transform.pairwise import carry_grid, carry_ranking
 from cte.transform.zscore import latest_z
@@ -31,8 +30,9 @@ def build_snapshot(persist: bool = True) -> dict:
     pill_struct, _ = score("struct_z", lz, snap)
     pill_regime, _ = score("regime_z", lz, snap)
     pill_secular, _ = score("secular_z", lz, snap)
-    pillars = pill_struct.pivot_table(index="ccy", columns="pillar",
-                                      values="pscore").round(2)
+    pillars = pill_struct.pivot_table(
+        index="ccy", columns="pillar", values="pscore"
+    ).round(2)
 
     real_grid = carry_grid("real_2y")
     nom_grid = carry_grid("nominal_2y")
@@ -59,14 +59,21 @@ def build_snapshot(persist: bool = True) -> dict:
         write_cache(real_grid.reset_index(), "carry_grid_real")
         write_cache(nom_grid.reset_index(), "carry_grid_nominal")
         (CACHE_DIR / "warnings.json").write_text(json.dumps(warns, indent=2))
-        append_today(tm)   # tension-map history: idempotent daily append (trails/dial)
-        append_today_details(pill_struct, pill_regime, lz, snap,
-                             pill_secular=pill_secular)
+        append_today(tm)  # tension-map history: idempotent daily append (trails/dial)
+        append_today_details(
+            pill_struct, pill_regime, lz, snap, pill_secular=pill_secular
+        )
         persist_history()  # weekly positioning panel for the app's Historical mode
 
-    return {"tension_map": tm, "pillars": pillars, "overlays": snap,
-            "carry_real": real_grid, "carry_nominal": nom_grid,
-            "carry_ranking": ranking, "warnings": warns}
+    return {
+        "tension_map": tm,
+        "pillars": pillars,
+        "overlays": snap,
+        "carry_real": real_grid,
+        "carry_nominal": nom_grid,
+        "carry_ranking": ranking,
+        "warnings": warns,
+    }
 
 
 if __name__ == "__main__":
@@ -77,9 +84,14 @@ if __name__ == "__main__":
     for ccy in q.index:
         f = q.loc[ccy, "axis1_fundamental_struct"]
         v = q.loc[ccy, "axis2_stretch_struct"]
-        quad = (("improving" if f > 0 else "deteriorating") + " / " +
-                ("stretched" if v > 0 else "cheap"))
+        quad = (
+            ("improving" if f > 0 else "deteriorating")
+            + " / "
+            + ("stretched" if v > 0 else "cheap")
+        )
         print(f"  {ccy}: fundamental {f:+.2f}, stretch {v:+.2f}   [{quad}]")
-    print(f"\n{sum(len(v) for v in s['warnings'].values())} inflection warnings; "
-          f"snapshot persisted to cache (tension_map, pillar_scores, overlays, "
-          f"carry_grid_real, warnings.json).")
+    print(
+        f"\n{sum(len(v) for v in s['warnings'].values())} inflection warnings; "
+        f"snapshot persisted to cache (tension_map, pillar_scores, overlays, "
+        f"carry_grid_real, warnings.json)."
+    )

@@ -15,11 +15,11 @@ never has to special-case a source. Two shapes:
 `value` is always float in natural units (yields in %, fx as USD-per-unit).
 `fetched_at` is a UTC timestamp stamped at pull time for cache provenance.
 """
+
 from __future__ import annotations
 
 import datetime as dt
 import io
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -81,13 +81,17 @@ def read_cache(name: str) -> pd.DataFrame | None:
 def tidy_yields(rows: list[dict], source: str) -> pd.DataFrame:
     """rows: list of {date, ccy, tenor, value} -> contract DataFrame."""
     if not rows:
-        return pd.DataFrame(columns=["date", "ccy", "tenor", "value", "source", "fetched_at"])
+        return pd.DataFrame(
+            columns=["date", "ccy", "tenor", "value", "source", "fetched_at"]
+        )
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     df = df.dropna(subset=["value"]).copy()
     df["source"] = source
     df["fetched_at"] = utcnow()
-    return df[["date", "ccy", "tenor", "value", "source", "fetched_at"]].sort_values(
-        ["ccy", "tenor", "date"]
-    ).reset_index(drop=True)
+    return (
+        df[["date", "ccy", "tenor", "value", "source", "fetched_at"]]
+        .sort_values(["ccy", "tenor", "date"])
+        .reset_index(drop=True)
+    )
