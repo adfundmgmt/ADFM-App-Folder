@@ -9,10 +9,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 - Momentum Scanner (Page 19).
 - Relative Volatility Lab (Page 20).
 - PM command center with causal cross-asset regime, breadth, impulse, dispersion, confidence, and mover signals.
-- Six PM research and operating tools covering the daily brief, attribution, historical analogs, primary sources, decision journaling, reliability, and threshold alerts.
-- Causal signal-history reconstruction with forward hit rate, return, drawdown, turnover, and bounded evidence-weight diagnostics.
-- Historical regime matching across rates, inflation, liquidity, dollar, credit, volatility, and breadth with forward cross-asset return distributions.
-- Institutional primary-source registry for Treasury, BLS, BEA, Fed, ECB, BOJ, BOE, CFTC, EIA, and SEC data.
+- Cross-Asset Correlation Lab (Page 21) for correlation matrices, beta term structure, market-mode concentration, effective independent bets, regime history, conditional correlations, and pair diagnostics.
 - Centralized market/macro data registry, primary-source FRED adapter, and point-in-time signal ledger.
 - Shared core modules for market data, data integrity, Rate of Change calculations, catalog metadata, UI primitives, and session data-load status.
 - Currency snapshot schema validation and hash manifest before data promotion.
@@ -21,9 +18,9 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Changed
 
-- Home-page tool cards now navigate directly to all 20 tools.
-- README catalog now reflects the 20 tools exposed from `Home.py`.
-- The catalog and Home navigation now expose 26 tools, including a dedicated PM Research + Operations group.
+- Home-page tool cards now navigate directly to all 21 tools.
+- README catalog now reflects the 21 tools exposed from `Home.py`.
+- The catalog and Home navigation now expose 21 tools.
 - Rate of Change Dashboard now uses shared calculation and daily-data helpers.
 - Global Macro Regime Dashboard and Liquidity Tracker now use the shared market-data loader and preserve missing observations.
 - Currency snapshot commits now run application CI.

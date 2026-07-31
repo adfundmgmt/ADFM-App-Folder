@@ -17,10 +17,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationTests(unittest.TestCase):
-    def test_catalog_contains_26_unique_existing_pages(self) -> None:
-        self.assertEqual(len(TOOL_CATALOG), 26)
-        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 27)))
-        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 26)
+    def test_catalog_contains_21_unique_existing_pages(self) -> None:
+        self.assertEqual(len(TOOL_CATALOG), 21)
+        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 22)))
+        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 21)
         for tool in TOOL_CATALOG:
             self.assertTrue((REPOSITORY_ROOT / "pages" / tool.page_filename).is_file())
 
