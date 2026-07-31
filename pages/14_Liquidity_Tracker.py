@@ -7,8 +7,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+from plotly.subplots import make_subplots
 
-from adfm_core.market_data import configure_yfinance_cache
+from adfm_core.market_data import (
+    close_panel,
+    configure_yfinance_cache,
+    fetch_daily_ohlcv,
+)
 from adfm_core.regime_math import grouped_weighted_composite
 from adfm_core.ui import (
     PageHeader,
@@ -18,8 +23,6 @@ from adfm_core.ui import (
     render_page_header,
     render_selection_note,
 )
-import yfinance as yf
-from plotly.subplots import make_subplots
 
 configure_yfinance_cache()
 
@@ -909,18 +912,8 @@ def extract_close_prices(raw: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=60 * 60 * 4, show_spinner=False)
 def load_yahoo_prices(tickers: Tuple[str, ...], period: str) -> pd.DataFrame:
-    raw = yf.download(
-        tickers=list(tickers),
-        period=period,
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        group_by="column",
-        threads=True,
-    )
-
-    close = extract_close_prices(raw)
-
+    frames, _ = fetch_daily_ohlcv(tickers, period=period)
+    close = close_panel(frames, tickers, adjusted=True)
     if close.empty:
         return pd.DataFrame()
 

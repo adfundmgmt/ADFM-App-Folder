@@ -11,6 +11,7 @@ own history, so the unit mismatch between DXY (index) and the others
 
 scoring; they feed correlation/technical context and commentary.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -72,9 +73,9 @@ def fetch_fx_spot(period: str = "10y") -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
     df["source"] = "yahoo"
     df["fetched_at"] = utcnow()
-    df = df[["date", "ccy", "value", "source", "fetched_at"]].sort_values(
-        ["ccy", "date"]
-    ).reset_index(drop=True)
+    df = (
+        df[["date", "ccy", "value", "source", "fetched_at"]]
+        .sort_values(["ccy", "date"])
+        .reset_index(drop=True)
+    )
     return df
-
-

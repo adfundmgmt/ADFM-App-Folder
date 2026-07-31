@@ -18,6 +18,7 @@ FRED headline CPI arrives as an index and is converted to YoY here so every leg'
 inflation input is a comparable year-on-year rate under the unified metric 'cpi'.
 Contract: [date, ccy, metric, value, source, fetched_at].
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -30,11 +31,12 @@ def _cpi_index_to_yoy(df: pd.DataFrame) -> pd.DataFrame:
     using a calendar 12-month lookup (period-end aligned) so a dropped month can't
     silently turn the YoY into a 13-month change."""
     out = []
-    for ccy, g in df[df.metric == "cpi_index"].groupby("ccy"):
+    for _ccy, g in df[df.metric == "cpi_index"].groupby("ccy"):
         g = g.sort_values("date").copy()
         s = g.set_index("date")["value"]
         ref = (s.index - pd.offsets.DateOffset(months=12)) + pd.offsets.MonthEnd(0)
-        prev = s.reindex(ref); prev.index = s.index
+        prev = s.reindex(ref)
+        prev.index = s.index
         g["value"] = ((s / prev - 1) * 100).values
         g["metric"] = "cpi"
         g["source"] = g["source"] + ":yoy"
@@ -67,18 +69,42 @@ def build_macro_backbone() -> pd.DataFrame:
 
     fred_rest = fred_df[~fred_df.metric.isin(["cpi_index"])].copy()
 
-    panel = pd.concat([fred_rest, cpi_yoy, oecd_bcicp, oecd_cpi, oecd_gdp,
-                       oecd_unemp, gb_unemp, jp_cpi, ea_df, ca_df, niip_df,
-                       policy_df], ignore_index=True)
+    panel = pd.concat(
+        [
+            fred_rest,
+            cpi_yoy,
+            oecd_bcicp,
+            oecd_cpi,
+            oecd_gdp,
+            oecd_unemp,
+            gb_unemp,
+            jp_cpi,
+            ea_df,
+            ca_df,
+            niip_df,
+            policy_df,
+        ],
+        ignore_index=True,
+    )
     return panel.sort_values(["ccy", "metric", "date"]).reset_index(drop=True)
 
 
 if __name__ == "__main__":
     from cte.config import CURRENCIES
+
     p = build_macro_backbone()
-    print(f"rows: {len(p)} | groups: {p.groupby(['ccy','metric']).ngroups}")
+    print(f"rows: {len(p)} | groups: {p.groupby(['ccy', 'metric']).ngroups}")
     latest = p.sort_values("date").groupby(["ccy", "metric"]).tail(1)
-    metrics = ["bcicp", "cpi", "unemp", "gdp", "current_account", "niip", "policy", "real_10y"]
+    metrics = [
+        "bcicp",
+        "cpi",
+        "unemp",
+        "gdp",
+        "current_account",
+        "niip",
+        "policy",
+        "real_10y",
+    ]
     print(f"\n{'ccy':<5}" + "".join(f"{m:<10}" for m in metrics))
     for ccy in CURRENCIES:
         row = f"{ccy:<5}"

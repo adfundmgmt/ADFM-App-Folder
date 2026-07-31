@@ -8,9 +8,12 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
 
-from adfm_core.market_data import configure_yfinance_cache
+from adfm_core.market_data import (
+    close_panel,
+    configure_yfinance_cache,
+    fetch_daily_ohlcv,
+)
 from adfm_core.regime_math import rolling_percentile_previous
 from adfm_core.ui import (
     PageHeader,
@@ -582,60 +585,15 @@ def fetch_market_prices(
     if not tickers:
         return pd.DataFrame(), []
 
-    try:
-        data = yf.download(
-            tickers=list(tickers),
-            period=period,
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=True,
-            group_by="column",
-        )
-    except Exception:
-        return pd.DataFrame(), list(tickers)
-
-    if data is None or data.empty:
-        return pd.DataFrame(), list(tickers)
-
-    close = pd.DataFrame()
-
-    try:
-        if isinstance(data.columns, pd.MultiIndex):
-            level0 = list(data.columns.get_level_values(0).unique())
-            level1 = list(data.columns.get_level_values(1).unique())
-
-            if "Close" in level0:
-                close = data["Close"].copy()
-            elif "Close" in level1:
-                close = data.xs("Close", level=1, axis=1).copy()
-        else:
-            if "Close" in data.columns and len(tickers) == 1:
-                close = data[["Close"]].rename(columns={"Close": tickers[0]}).copy()
-            elif "Adj Close" in data.columns and len(tickers) == 1:
-                close = (
-                    data[["Adj Close"]].rename(columns={"Adj Close": tickers[0]}).copy()
-                )
-    except Exception:
-        close = pd.DataFrame()
-
+    frames, diagnostics = fetch_daily_ohlcv(tickers, period=period)
+    close = close_panel(frames, tickers, adjusted=True)
     if close.empty:
         return pd.DataFrame(), list(tickers)
 
-    close.index = pd.to_datetime(close.index).tz_localize(None)
-    close = close.sort_index()
-    close = close.loc[:, ~close.columns.duplicated()].copy()
-
     ordered_cols = [ticker for ticker in tickers if ticker in close.columns]
     close = close.reindex(columns=ordered_cols)
-    close = close.apply(pd.to_numeric, errors="coerce")
-    close = close.ffill().dropna(axis=1, how="all").dropna(how="all")
-
-    failed = [
-        ticker
-        for ticker in tickers
-        if ticker not in close.columns or close[ticker].dropna().empty
-    ]
+    close = close.dropna(axis=1, how="all").dropna(how="all")
+    failed = diagnostics["Ticker"].astype(str).tolist() if not diagnostics.empty else []
     return close, failed
 
 

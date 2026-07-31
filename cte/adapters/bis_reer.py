@@ -14,6 +14,7 @@ Tidy contract returned: [date, ccy, value, source, fetched_at]
   date  = month-end timestamp of the REER observation
   value = broad real EER index level
 """
+
 from __future__ import annotations
 
 import io
@@ -21,10 +22,9 @@ import io
 import pandas as pd
 
 from cte.adapters.base import make_session, utcnow
-from cte.config import BIS_EER_AREA, HTTP_UA, HTTP_TIMEOUT
+from cte.config import BIS_EER_AREA, HTTP_TIMEOUT, HTTP_UA
 
-_URL = ("https://stats.bis.org/api/v1/data/BIS,WS_EER,1.0/"
-        "M.R.B.{areas}?detail=dataonly")
+_URL = "https://stats.bis.org/api/v1/data/BIS,WS_EER,1.0/M.R.B.{areas}?detail=dataonly"
 _CBPOL_URL = "https://stats.bis.org/api/v1/data/BIS,WS_CBPOL,1.0/M.{areas}"
 _CSV_ACCEPT = "application/vnd.sdmx.data+csv"
 
@@ -34,8 +34,11 @@ def fetch_reer() -> pd.DataFrame:
     areas = "+".join(BIS_EER_AREA.values())
     url = _URL.format(areas=areas)
     sess = make_session()
-    resp = sess.get(url, headers={"User-Agent": HTTP_UA, "Accept": _CSV_ACCEPT},
-                    timeout=HTTP_TIMEOUT)
+    resp = sess.get(
+        url,
+        headers={"User-Agent": HTTP_UA, "Accept": _CSV_ACCEPT},
+        timeout=HTTP_TIMEOUT,
+    )
     resp.raise_for_status()
     raw = pd.read_csv(io.BytesIO(resp.content))
 
@@ -43,14 +46,18 @@ def fetch_reer() -> pd.DataFrame:
     df["ccy"] = df["REF_AREA"].map(area_to_ccy)
     df = df.dropna(subset=["ccy"])
     # TIME_PERIOD is 'YYYY-MM'; anchor to month-end and never interpolate
-    df["date"] = (pd.to_datetime(df["TIME_PERIOD"], format="%Y-%m")
-                  + pd.offsets.MonthEnd(0))
+    df["date"] = pd.to_datetime(
+        df["TIME_PERIOD"], format="%Y-%m"
+    ) + pd.offsets.MonthEnd(0)
     df["value"] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
     df = df.dropna(subset=["value"])
     df["source"] = "bis_eer_broad_real"
     df["fetched_at"] = utcnow()
-    out = (df[["date", "ccy", "value", "source", "fetched_at"]]
-           .sort_values(["ccy", "date"]).reset_index(drop=True))
+    out = (
+        df[["date", "ccy", "value", "source", "fetched_at"]]
+        .sort_values(["ccy", "date"])
+        .reset_index(drop=True)
+    )
     return out
 
 
@@ -61,23 +68,29 @@ def fetch_policy_rates() -> pd.DataFrame:
     area_to_ccy = {v: k for k, v in BIS_EER_AREA.items()}
     areas = "+".join(BIS_EER_AREA.values())
     sess = make_session()
-    resp = sess.get(_CBPOL_URL.format(areas=areas),
-                    headers={"User-Agent": HTTP_UA, "Accept": _CSV_ACCEPT},
-                    timeout=HTTP_TIMEOUT)
+    resp = sess.get(
+        _CBPOL_URL.format(areas=areas),
+        headers={"User-Agent": HTTP_UA, "Accept": _CSV_ACCEPT},
+        timeout=HTTP_TIMEOUT,
+    )
     resp.raise_for_status()
     raw = pd.read_csv(io.BytesIO(resp.content))
     df = raw[["REF_AREA", "TIME_PERIOD", "OBS_VALUE"]].copy()
     df["ccy"] = df["REF_AREA"].map(area_to_ccy)
     df = df.dropna(subset=["ccy"])
-    df["date"] = (pd.to_datetime(df["TIME_PERIOD"], format="%Y-%m")
-                  + pd.offsets.MonthEnd(0))
+    df["date"] = pd.to_datetime(
+        df["TIME_PERIOD"], format="%Y-%m"
+    ) + pd.offsets.MonthEnd(0)
     df["value"] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
     df = df.dropna(subset=["value"])
     df["metric"] = "policy"
     df["source"] = "bis_cbpol"
     df["fetched_at"] = utcnow()
-    return (df[["date", "ccy", "metric", "value", "source", "fetched_at"]]
-            .sort_values(["ccy", "date"]).reset_index(drop=True))
+    return (
+        df[["date", "ccy", "metric", "value", "source", "fetched_at"]]
+        .sort_values(["ccy", "date"])
+        .reset_index(drop=True)
+    )
 
 
 if __name__ == "__main__":

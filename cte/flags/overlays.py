@@ -14,6 +14,7 @@ balance is visible rather than buried in a number.
                     inflation multiplier (tailwind fades to headwind past the flip).
   carry_to_vol      2Y real carry / realized FX vol, percentiled — crowding/fragility.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -52,17 +53,30 @@ def yield_fx_regime(window: int = _WIN) -> pd.DataFrame:
         # inner-join the two calendars for THIS leg — no union+ffill, which would inject
         # zero-change days on one-sided holidays and bias the correlation toward 0.
         j = pd.concat({"fx": fx[c], "y": y10[c]}, axis=1, join="inner").dropna()
-        ret = j["fx"].pct_change()        # value = USD per unit (USD row = DXY); up = stronger
+        ret = j[
+            "fx"
+        ].pct_change()  # value = USD per unit (USD row = DXY); up = stronger
         dY = j["y"].diff()
         corr = ret.rolling(window).corr(dY).dropna()
         if corr.empty:
             continue
         val = float(corr.iloc[-1])
         mult = float(np.tanh(2.0 * val))  # ~+1 rewarded, ~-1 punished, ~0 decoupled
-        label = ("rewarded" if val > 0.15 else
-                 "PUNISHED (stress)" if val < -0.15 else "decoupled")
-        rows.append({"ccy": c, "yld_fx_corr": round(val, 2),
-                     "yld_regime": label, "real10y_mult": round(mult, 2)})
+        label = (
+            "rewarded"
+            if val > 0.15
+            else "PUNISHED (stress)"
+            if val < -0.15
+            else "decoupled"
+        )
+        rows.append(
+            {
+                "ccy": c,
+                "yld_fx_corr": round(val, 2),
+                "yld_regime": label,
+                "real10y_mult": round(mult, 2),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -72,8 +86,11 @@ def _growth_and_policy(lz: pd.DataFrame) -> pd.DataFrame:
     d = lz[lz.metric.isin(g_feats)].copy()
     d["signed"] = d["struct_z"] * d["metric"].map(g_feats)
     growth = d.groupby("ccy")["signed"].mean().rename("growth_z")
-    rp = (lz[lz.metric == "real_policy"].set_index("ccy")["struct_z"]
-          .rename("real_policy_z"))
+    rp = (
+        lz[lz.metric == "real_policy"]
+        .set_index("ccy")["struct_z"]
+        .rename("real_policy_z")
+    )
     return pd.concat([growth, rp], axis=1).reset_index()
 
 
@@ -100,7 +117,7 @@ def carry_to_vol(window: int = _WIN) -> pd.DataFrame:
     for c in CURRENCIES:
         if c not in fx:
             continue
-        vol = (fx[c].pct_change().rolling(window).std() * np.sqrt(252) * 100)
+        vol = fx[c].pct_change().rolling(window).std() * np.sqrt(252) * 100
         vol.index = vol.index + pd.offsets.MonthEnd(0)
         vol = vol[~vol.index.duplicated(keep="last")]
         carry = r2[r2.ccy == c].set_index("date")["value"]
@@ -109,13 +126,19 @@ def carry_to_vol(window: int = _WIN) -> pd.DataFrame:
             continue
         ratio = (j["carry"] / j["vol"]).replace([np.inf, -np.inf], np.nan).dropna()
         pctile = (ratio.rank(pct=True).iloc[-1]) * 100
-        rows.append({"ccy": c, "carry_to_vol": round(float(ratio.iloc[-1]), 2),
-                     "ctv_pctile": round(float(pctile))})
+        rows.append(
+            {
+                "ccy": c,
+                "carry_to_vol": round(float(ratio.iloc[-1]), 2),
+                "ctv_pctile": round(float(pctile)),
+            }
+        )
     return pd.DataFrame(rows)
 
 
-def warnings(snapshot: pd.DataFrame | None = None,
-             lz: pd.DataFrame | None = None) -> dict[str, list[str]]:
+def warnings(
+    snapshot: pd.DataFrame | None = None, lz: pd.DataFrame | None = None
+) -> dict[str, list[str]]:
     """Per-currency sidenotes that surface the balance when a conditional signal is
     near/through an inflection — so the ambiguity is visible, not hidden in a score.
     Thresholds are objective; confounds are flagged explicitly."""
@@ -127,33 +150,46 @@ def warnings(snapshot: pd.DataFrame | None = None,
     r10 = lz[lz.metric == "real_10y"].set_index("ccy")["struct_z"]
     out: dict[str, list[str]] = {}
     for _, r in snapshot.iterrows():
-        c = r["ccy"]; notes = []
+        c = r["ccy"]
+        notes = []
         gap = infl.get(c, np.nan)
         # policy-trap: above-target inflation but can't tighten
-        if pd.notna(gap) and gap > 0 and pd.notna(r["feasibility"]) and r["feasibility"] < -0.5:
+        if (
+            pd.notna(gap)
+            and gap > 0
+            and pd.notna(r["feasibility"])
+            and r["feasibility"] < -0.5
+        ):
             notes.append(
                 f"Policy trap: inflation above target but growth soft and policy "
                 f"already tight (feasibility {r['feasibility']:+.1f}) — the hawkish "
                 f"tailwind is fading toward a stagflation drag; inflation's axis-1 "
-                f"contribution is dampened (mult {r['infl_mult']:+.2f}).")
+                f"contribution is dampened (mult {r['infl_mult']:+.2f})."
+            )
         # yield stress: high real 10Y but currency punished for it
-        if (pd.notna(r10.get(c, np.nan)) and r10.get(c) > 0.5
-                and str(r["yld_regime"]).startswith("PUNISHED")):
+        if (
+            pd.notna(r10.get(c, np.nan))
+            and r10.get(c) > 0.5
+            and str(r["yld_regime"]).startswith("PUNISHED")
+        ):
             notes.append(
                 f"Yield stress: real 10Y is high (z {r10.get(c):+.1f}) but the "
                 f"currency weakens as yields rise ({r['yld_fx_corr']:+.2f} corr) — "
                 f"risk-premium regime, not reward; real-yield support downweighted "
                 f"(mult {r['real10y_mult']:+.2f}). Note: cross vs USD partly confounds "
-                f"this in a strong-dollar tape.")
+                f"this in a strong-dollar tape."
+            )
         elif str(r["yld_regime"]) == "decoupled":
             notes.append(
                 "FX and yields are decoupled — the real-yield reward/stress read is "
-                "ambiguous this window; treat Pillar D lightly.")
+                "ambiguous this window; treat Pillar D lightly."
+            )
         # carry crowding
         if pd.notna(r["ctv_pctile"]) and r["ctv_pctile"] >= 85:
             notes.append(
                 f"Carry crowded: carry-to-vol in the {int(r['ctv_pctile'])}th "
-                f"percentile — a lot of carry riding on quiet vol, fragile to a vol spike.")
+                f"percentile — a lot of carry riding on quiet vol, fragile to a vol spike."
+            )
         if notes:
             out[c] = notes
     return out

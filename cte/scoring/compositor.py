@@ -9,13 +9,19 @@ of pillars within axis. Produces, per currency, a structural and regime score on
 Signs/weights come from config (FEATURE_SIGN, FEATURE_WEIGHT, PILLAR_WEIGHT) so they
 are tunable; the carry grid (pairwise) is produced separately in transform.pairwise.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from cte.config import (FEATURE_PILLAR, FEATURE_SIGN, FEATURE_WEIGHT,
-                        PILLAR_AXIS, PILLAR_WEIGHT)
+from cte.config import (
+    FEATURE_PILLAR,
+    FEATURE_SIGN,
+    FEATURE_WEIGHT,
+    PILLAR_AXIS,
+    PILLAR_WEIGHT,
+)
 from cte.flags.overlays import overlay_snapshot, warnings
 from cte.transform.features import build_features
 from cte.transform.zscore import latest_z
@@ -40,20 +46,24 @@ def _apply_overlays(d: pd.DataFrame, snap: pd.DataFrame) -> pd.DataFrame:
     imult = snap.set_index("ccy")["infl_mult"]
     # the trap gate is the currency's inflation GAP (above/below target), looked up
     # once per currency — not each row's own value (infl_momentum's value is a change).
-    gap = (d[d.metric == "infl_gap"].set_index("ccy")["value"])
+    gap = d[d.metric == "infl_gap"].set_index("ccy")["value"]
     d = d.copy()
     for i, row in d.iterrows():
         c, met = row["ccy"], row["metric"]
         if met == "real_10y" and pd.notna(r10.get(c, np.nan)):
             d.at[i, "signed"] *= r10.get(c)
-        elif met in ("infl_gap", "infl_momentum") and gap.get(c, 0) > 0 \
-                and pd.notna(imult.get(c, np.nan)):
+        elif (
+            met in ("infl_gap", "infl_momentum")
+            and gap.get(c, 0) > 0
+            and pd.notna(imult.get(c, np.nan))
+        ):
             d.at[i, "signed"] *= imult.get(c)
     return d
 
 
-def score(zcol: str, latest: pd.DataFrame,
-          snap: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def score(
+    zcol: str, latest: pd.DataFrame, snap: pd.DataFrame | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Composite one horizon (zcol) into pillar and axis scores per currency, after
     applying the objective inflection multipliers. Returns (pillar, axis) frames."""
     d = latest.copy()
@@ -66,21 +76,30 @@ def score(zcol: str, latest: pd.DataFrame,
         d = _apply_overlays(d, snap)
     d = d.dropna(subset=["pillar", "signed"])
 
-    pill = (d.groupby(["ccy", "pillar"])
-            .apply(lambda g: _wmean(g["signed"], g["w"]), include_groups=False)
-            .rename("pscore").reset_index())
+    pill = (
+        d.groupby(["ccy", "pillar"])
+        .apply(lambda g: _wmean(g["signed"], g["w"]), include_groups=False)
+        .rename("pscore")
+        .reset_index()
+    )
     pill["axis"] = pill["pillar"].map(PILLAR_AXIS)
     pill["pw"] = pill["pillar"].map(PILLAR_WEIGHT).fillna(1.0)
 
-    axis = (pill.groupby(["ccy", "axis"])
-            .apply(lambda g: _wmean(g["pscore"], g["pw"]), include_groups=False)
-            .rename("ascore").reset_index())
+    axis = (
+        pill.groupby(["ccy", "axis"])
+        .apply(lambda g: _wmean(g["pscore"], g["pw"]), include_groups=False)
+        .rename("ascore")
+        .reset_index()
+    )
     return (pill, axis)
 
 
-def axes_from_pillars(pill: pd.DataFrame, value_col: str,
-                      weights: dict | None = None,
-                      keys: tuple = ("ccy",)) -> pd.DataFrame:
+def axes_from_pillars(
+    pill: pd.DataFrame,
+    value_col: str,
+    weights: dict | None = None,
+    keys: tuple = ("ccy",),
+) -> pd.DataFrame:
     """Recompose axis scores from persisted pillar scores under (optionally
     custom) pillar weights — the exact aggregation score() applies, factored out
     so the app can re-weight client-side without recomputing pillars or overlays.
@@ -95,14 +114,19 @@ def axes_from_pillars(pill: pd.DataFrame, value_col: str,
     d = d[d["pw"] > 0]
     if d.empty:
         return pd.DataFrame(columns=[*keys])
-    g = (d.groupby([*keys, "axis"])
-         .apply(lambda x: _wmean(x[value_col], x["pw"]), include_groups=False)
-         .rename("ascore").reset_index())
-    wide = g.pivot_table(index=list(keys), columns="axis",
-                         values="ascore").reset_index()
+    g = (
+        d.groupby([*keys, "axis"])
+        .apply(lambda x: _wmean(x[value_col], x["pw"]), include_groups=False)
+        .rename("ascore")
+        .reset_index()
+    )
+    wide = g.pivot_table(
+        index=list(keys), columns="axis", values="ascore"
+    ).reset_index()
     wide.columns.name = None
-    return wide.rename(columns={a: f"{a}_{value_col}"
-                                for a in ("axis1_fundamental", "axis2_stretch")})
+    return wide.rename(
+        columns={a: f"{a}_{value_col}" for a in ("axis1_fundamental", "axis2_stretch")}
+    )
 
 
 def tension_map() -> tuple[pd.DataFrame, dict]:
@@ -113,6 +137,7 @@ def tension_map() -> tuple[pd.DataFrame, dict]:
     snap = overlay_snapshot()
     rows = {}
     from cte.transform.zscore import HORIZONS
+
     for horizon, zcol, _ in HORIZONS:
         _, axis = score(zcol, lz, snap)
         for _, r in axis.iterrows():
@@ -128,12 +153,22 @@ if __name__ == "__main__":
     snap = overlay_snapshot()
     pill, axis = score("struct_z", lz, snap)
     print("=== Pillar scores (structural, signed, overlay-adjusted) ===")
-    print(pill.pivot_table(index="ccy", columns="pillar", values="pscore")
-          .round(2).to_string())
+    print(
+        pill.pivot_table(index="ccy", columns="pillar", values="pscore")
+        .round(2)
+        .to_string()
+    )
     tm, warns = tension_map()
     print("\n=== Tension map (axis scores, both horizons) ===")
-    cols = ["ccy", "axis1_fundamental_struct", "axis2_stretch_struct",
-            "axis1_fundamental_regime", "axis2_stretch_regime"]
+    cols = [
+        "ccy",
+        "axis1_fundamental_struct",
+        "axis2_stretch_struct",
+        "axis1_fundamental_regime",
+        "axis2_stretch_regime",
+    ]
     print(tm[[c for c in cols if c in tm.columns]].round(2).to_string(index=False))
-    print(f"\n{sum(len(v) for v in warns.values())} inflection warnings across "
-          f"{len(warns)} currencies (see cte.flags.overlays.warnings).")
+    print(
+        f"\n{sum(len(v) for v in warns.values())} inflection warnings across "
+        f"{len(warns)} currencies (see cte.flags.overlays.warnings)."
+    )
