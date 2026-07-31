@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -86,6 +87,19 @@ class CorrelationLabPageTests(unittest.TestCase):
         self.assertTrue(
             any("Cross-Asset Correlation Lab" in block.value for block in app.markdown)
         )
+
+        figures = [json.loads(chart.proto.spec) for chart in app.get("plotly_chart")]
+        matrix_layout = figures[0]["layout"]
+        self.assertFalse(matrix_layout["showlegend"])
+        self.assertEqual(matrix_layout["margin"]["t"], 70)
+        self.assertEqual(len(matrix_layout["annotations"]), 120)
+        self.assertEqual(len(matrix_layout["shapes"]), 10)
+
+        for figure_index in (2, 4, 5):
+            layout = figures[figure_index]["layout"]
+            self.assertEqual(layout["margin"]["t"], 92)
+            self.assertEqual(layout["title"]["y"], 0.985)
+            self.assertEqual(layout["legend"]["y"], 1.025)
 
     def test_page_keeps_core_analysis_when_optional_series_are_missing(self) -> None:
         def optional_series_missing(tickers: tuple[str, ...], period: str = "5y"):

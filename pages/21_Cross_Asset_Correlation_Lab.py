@@ -230,15 +230,39 @@ def display_label(ticker: str) -> str:
     return f"{DISPLAY_NAMES.get(ticker, ticker)} ({ticker})"
 
 
-def style_figure(figure: go.Figure, *, height: int) -> go.Figure:
+def style_figure(
+    figure: go.Figure,
+    *,
+    height: int,
+    show_legend: bool = True,
+) -> go.Figure:
+    top_margin = 92 if show_legend else 70
     figure.update_layout(
         template="plotly_white",
         height=height,
         paper_bgcolor="white",
         plot_bgcolor="white",
-        margin=dict(l=45, r=30, t=55, b=40),
+        margin=dict(l=55, r=42, t=top_margin, b=48),
         font=dict(family="Arial, sans-serif", color="#1f2937", size=12),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        title=dict(
+            x=0.01,
+            xanchor="left",
+            y=0.985,
+            yanchor="top",
+            font=dict(size=17, color="#303642"),
+        ),
+        showlegend=show_legend,
+        legend=dict(
+            orientation="h",
+            x=0,
+            xanchor="left",
+            y=1.025,
+            yanchor="bottom",
+            bgcolor="rgba(255,255,255,.92)",
+            borderwidth=0,
+            font=dict(size=11, color="#3f4652"),
+            traceorder="normal",
+        ),
         hovermode="x unified",
     )
     figure.update_xaxes(gridcolor=COLORS["grid"], zeroline=False)
@@ -254,22 +278,94 @@ def matrix_figure(
 ) -> go.Figure:
     labels = list(matrix.columns)
     limit = 0.50 if change else 1.0
+    values = matrix.to_numpy(dtype=float)
+    visible_values = np.where(
+        np.tril(np.ones(values.shape, dtype=bool)),
+        values,
+        np.nan,
+    )
+    colorscale = [
+        [0.00, "#315f95"],
+        [0.22, "#8eb4cf"],
+        [0.50, "#f7f7f5"],
+        [0.78, "#d98a70"],
+        [1.00, "#8f2f3a"],
+    ]
     figure = go.Figure(
         go.Heatmap(
-            z=matrix.to_numpy(dtype=float),
+            z=visible_values,
             x=labels,
             y=labels,
             zmin=-limit,
             zmax=limit,
             zmid=0,
-            colorscale="RdBu_r",
-            colorbar=dict(title="Δρ" if change else "ρ", thickness=12),
-            hovertemplate="%{y} / %{x}<br>%{z:.2f}<extra></extra>",
+            colorscale=colorscale,
+            xgap=1.4,
+            ygap=1.4,
+            colorbar=dict(
+                title=dict(text="Δρ" if change else "ρ", side="top"),
+                thickness=10,
+                len=0.78,
+                outlinewidth=0,
+                tickfont=dict(size=10, color="#596273"),
+                tickvals=(
+                    [-0.50, -0.25, 0, 0.25, 0.50] if change else [-1, -0.5, 0, 0.5, 1]
+                ),
+            ),
+            hovertemplate=(
+                "<b>%{y} vs %{x}</b><br>"
+                + ("Change %{z:+.2f}" if change else "Correlation %{z:+.2f}")
+                + "<extra></extra>"
+            ),
         )
     )
-    figure.update_layout(title=dict(text=title, x=0.01, xanchor="left"))
-    figure.update_xaxes(tickangle=-40, side="bottom")
-    return style_figure(figure, height=660)
+    for row_index, row_label in enumerate(labels):
+        for column_index, column_label in enumerate(labels):
+            if column_index > row_index:
+                continue
+            value = visible_values[row_index, column_index]
+            if not np.isfinite(value):
+                continue
+            figure.add_annotation(
+                x=column_label,
+                y=row_label,
+                text=f"{value:+.2f}",
+                showarrow=False,
+                font=dict(
+                    size=9,
+                    color=("#ffffff" if abs(value) >= limit * 0.56 else "#475569"),
+                ),
+            )
+
+    available = set(labels)
+    cumulative = 0
+    boundaries: list[float] = []
+    nonempty_groups = [
+        [ticker for ticker in tickers if ticker in available]
+        for tickers in ASSET_GROUPS.values()
+    ]
+    nonempty_groups = [group for group in nonempty_groups if group]
+    for group in nonempty_groups[:-1]:
+        cumulative += len(group)
+        boundaries.append(cumulative - 0.5)
+    for boundary in boundaries:
+        figure.add_vline(x=boundary, line_width=1.6, line_color="#ffffff")
+        figure.add_hline(y=boundary, line_width=1.6, line_color="#ffffff")
+
+    figure.update_layout(title=dict(text=title))
+    figure.update_xaxes(
+        tickangle=-35,
+        side="bottom",
+        tickfont=dict(size=11, color="#747d8f"),
+        showgrid=False,
+        fixedrange=True,
+    )
+    figure.update_yaxes(
+        tickfont=dict(size=11, color="#747d8f"),
+        showgrid=False,
+        fixedrange=True,
+    )
+    return style_figure(figure, height=630, show_legend=False)
 
 
 def rolling_regime_figure(
@@ -305,7 +401,7 @@ def rolling_regime_figure(
     figure.update_layout(
         title=dict(text="Cross-Asset Correlation Regime", x=0.01, xanchor="left")
     )
-    return style_figure(figure, height=560)
+    return style_figure(figure, height=560, show_legend=True)
 
 
 def conditional_heatmap(
@@ -320,7 +416,7 @@ def conditional_heatmap(
     matrix = matrix.reindex(
         columns=[ticker for ticker in MATRIX_TICKERS if ticker in matrix]
     )
-    labels = [DISPLAY_NAMES.get(column, column) for column in matrix.columns]
+    labels = list(matrix.columns)
     figure = go.Figure(
         go.Heatmap(
             z=matrix.to_numpy(dtype=float),
@@ -329,8 +425,21 @@ def conditional_heatmap(
             zmin=-1,
             zmax=1,
             zmid=0,
-            colorscale="RdBu_r",
-            colorbar=dict(title="ρ", thickness=12),
+            colorscale=[
+                [0.00, "#315f95"],
+                [0.22, "#8eb4cf"],
+                [0.50, "#f7f7f5"],
+                [0.78, "#d98a70"],
+                [1.00, "#8f2f3a"],
+            ],
+            xgap=1.2,
+            ygap=1.2,
+            colorbar=dict(
+                title=dict(text="ρ", side="top"),
+                thickness=10,
+                len=0.78,
+                outlinewidth=0,
+            ),
             hovertemplate="%{y}<br>%{x}<br>ρ %{z:.2f}<extra></extra>",
         )
     )
@@ -341,7 +450,9 @@ def conditional_heatmap(
             xanchor="left",
         )
     )
-    return style_figure(figure, height=470)
+    figure.update_xaxes(tickangle=-35, showgrid=False)
+    figure.update_yaxes(showgrid=False)
+    return style_figure(figure, height=470, show_legend=False)
 
 
 def pair_diagnostics_figure(
@@ -398,7 +509,7 @@ def pair_diagnostics_figure(
             xanchor="left",
         )
     )
-    return style_figure(figure, height=780)
+    return style_figure(figure, height=800, show_legend=True)
 
 
 def scatter_figure(
@@ -440,7 +551,7 @@ def scatter_figure(
     )
     figure.update_xaxes(title=f"{display_label(benchmark)} return, %")
     figure.update_yaxes(title=f"{display_label(asset)} return, %")
-    return style_figure(figure, height=500)
+    return style_figure(figure, height=520, show_legend=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -634,6 +745,10 @@ matrix_tab, regime_tab, pair_tab, data_tab = st.tabs(
 )
 
 with matrix_tab:
+    st.caption(
+        "Lower triangle shown to remove duplicated pairs. White separators mark "
+        "equity, credit, rates, commodity, and FX blocks."
+    )
     left, right = st.columns(2)
     with left:
         st.plotly_chart(
