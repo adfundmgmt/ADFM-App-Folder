@@ -40,12 +40,7 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
     ToolDefinition(18, "Currency Tension Engine", "18_Currency_Tension_Dashboard.py", "Macro + Rates", "Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags.", "Persisted Currency Tension Engine snapshot and configured adapters"),
     ToolDefinition(19, "Momentum Scanner", "19_Momentum_Scanner.py", "Equity Leadership", "Ranks liquid equities by momentum setup quality and maps sector and subsector leadership.", "Yahoo Finance daily OHLCV; existing sector and subsector universe"),
     ToolDefinition(20, "Relative Volatility Lab", "20_Relative_Volatility_Lab.py", "Technicals + Analogs", "Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics.", "Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available"),
-    ToolDefinition(21, "Daily PM Brief", "21_Daily_PM_Brief.py", "PM Research + Operations", "Consolidates the current regime, largest risk changes, threshold crossings, data gaps, and decisions requiring review.", "Shared market registry; decision journal; alert state"),
-    ToolDefinition(22, "Signal Attribution + Diagnostics", "22_Signal_Attribution_Diagnostics.py", "PM Research + Operations", "Audits composite changes, input contributions, forward performance, turnover, drawdown, and evidence-based research weights.", "Shared market registry; causal reconstructed signal history"),
-    ToolDefinition(23, "Historical Regime Analogs", "23_Historical_Regime_Analogs.py", "PM Research + Operations", "Finds similar historical macro and market configurations and reports the distribution of subsequent cross-asset returns.", "Federal Reserve FRED; Yahoo Finance market proxies"),
-    ToolDefinition(24, "Primary Source Monitor", "24_Primary_Source_Monitor.py", "PM Research + Operations", "Tracks live FRED health and adapter readiness across official statistical, central-bank, regulatory, energy, and filing sources.", "Treasury; BLS; BEA; Fed; ECB; BOJ; BOE; CFTC; EIA; SEC"),
-    ToolDefinition(25, "Decision Journal", "25_Decision_Journal.py", "PM Research + Operations", "Preserves thesis, catalyst, expected path, sizing, invalidation, review date, and entry-state evidence for each decision.", "Private local decision and signal ledgers"),
-    ToolDefinition(26, "Reliability + Alerts", "26_Reliability_Alerts.py", "PM Research + Operations", "Surfaces provider failures, stale inputs, persistence readiness, calculation version, CI coverage, and new threshold crossings.", "Shared observability; repository health contracts; local alert state"),
+    ToolDefinition(21, "Cross-Asset Correlation Lab", "21_Cross_Asset_Correlation_Lab.py", "Risk + Catalysts", "Measures rolling correlation, beta instability, market-mode concentration, and conditional diversification across major asset classes.", "Yahoo Finance adjusted close data for liquid equity, credit, rates, commodity, FX, and volatility proxies"),
 )
 
 GROUP_ORDER: Final[tuple[str, ...]] = (
@@ -54,7 +49,6 @@ GROUP_ORDER: Final[tuple[str, ...]] = (
     "Flows + Sentiment",
     "Macro + Rates",
     "Risk + Catalysts",
-    "PM Research + Operations",
 )
 
 

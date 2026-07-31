@@ -11,24 +11,14 @@
 | `data/cache/` | Validated public-source Currency Tension Engine snapshot used by the deployed app |
 | `data/last_good/` | Local, ignored continuity data such as the PM signal ledger |
 
-## PM research and operating layer
+## Cross-asset correlation layer
 
-Pages 21–26 are additive operating tools. They do not change calculations or
-controls on the original 20 analytical pages.
-
-- Signal attribution reconstructs causal weekly snapshots and reconciles each
-  composite to its weighted inputs, prior values, and timestamps.
-- Performance diagnostics evaluate subsequent 1-week, 1-month, and 3-month
-  constructive-proxy returns, hit rate, drawdown, and turnover. Evidence weights
-  are bounded research proposals and never change production weights automatically.
-- Regime analogs compare rates, inflation, liquidity, dollar, credit, volatility,
-  and breadth configurations. Results preserve the full forward-return
-  distribution across SPY, TLT, UUP, DBC, and HYG.
-- The decision journal stores entry-state evidence locally and outside Git.
-  Reviews separate thesis, timing, sizing, execution, and luck.
-- Threshold alerts persist active keys locally and surface only newly crossed
-  conditions. External notification delivery remains disabled until an approved
-  destination and credentials are configured.
+Page 21 is the only additive analytical page beyond the original 20. It covers
+the missing portfolio-independent market-structure layer: current and prior
+correlation matrices, rolling average correlation, beta term structure,
+market-mode concentration, effective rank, conditional correlations, and
+pair-level diagnostics. It uses adjusted-close market data and never requires
+portfolio, position, account, or thesis input.
 
 ## Data-source policy
 

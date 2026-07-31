@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_momentum_scanner.py adfm_
 
 ## Tool catalog
 
-The application contains 26 tools, in the same order and groups shown on the Home page.
+The application contains 21 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -45,12 +45,7 @@ The application contains 26 tools, in the same order and groups shown on the Hom
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | Momentum Scanner | Ranks liquid equities by momentum setup quality and maps sector and subsector leadership. | Yahoo Finance daily OHLCV; existing sector and subsector universe |
 | 20 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
-| 21 | Daily PM Brief | Consolidates the current regime, largest risk changes, threshold crossings, data gaps, and decisions requiring review. | Shared market registry; decision journal; alert state |
-| 22 | Signal Attribution + Diagnostics | Audits composite changes, input contributions, forward performance, turnover, drawdown, and evidence-based research weights. | Shared market registry; causal reconstructed signal history |
-| 23 | Historical Regime Analogs | Finds similar historical macro and market configurations and reports the distribution of subsequent cross-asset returns. | Federal Reserve FRED; Yahoo Finance market proxies |
-| 24 | Primary Source Monitor | Tracks live FRED health and adapter readiness across official statistical, central-bank, regulatory, energy, and filing sources. | Treasury; BLS; BEA; Fed; ECB; BOJ; BOE; CFTC; EIA; SEC |
-| 25 | Decision Journal | Preserves thesis, catalyst, expected path, sizing, invalidation, review date, and entry-state evidence for each decision. | Private local decision and signal ledgers |
-| 26 | Reliability + Alerts | Surfaces provider failures, stale inputs, persistence readiness, calculation version, CI coverage, and new threshold crossings. | Shared observability; repository health contracts; local alert state |
+| 21 | Cross-Asset Correlation Lab | Measures rolling correlation, beta instability, market-mode concentration, and conditional diversification across major asset classes. | Yahoo Finance adjusted close data for liquid equity, credit, rates, commodity, FX, and volatility proxies |
 
 ## Tool groups
 
@@ -60,8 +55,7 @@ The application contains 26 tools, in the same order and groups shown on the Hom
 | Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
 | Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Tracker; Currency Tension Engine |
-| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer |
-| PM Research + Operations | Daily PM Brief; Signal Attribution + Diagnostics; Historical Regime Analogs; Primary Source Monitor; Decision Journal; Reliability + Alerts |
+| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Cross-Asset Correlation Lab |
 
 ## Shared application foundations
 
