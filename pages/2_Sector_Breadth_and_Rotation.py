@@ -187,6 +187,15 @@ if universe_definition_errors:
 # =============================================================================
 
 with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **Purpose:** Measure whether equity participation is broadening or narrowing and identify changes in sector and subsector leadership.
+
+        **How to read it:** Use the rotation map for direction and persistence, then confirm the move through breadth, relative strength, and the underlying coverage table.
+        """
+    )
+
     st.header("Settings")
 
     universe_scope = st.selectbox(

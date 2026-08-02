@@ -1546,6 +1546,15 @@ st.title("Market Memory Explorer")
 st.caption("Calendar-year analogs, unconditional base rates, and current percentile context from adjusted close data.")
 
 with st.sidebar:
+    st.header("About This Tool")
+    st.markdown(
+        """
+        **Purpose:** Compare the current market path with prior calendar years while keeping unconditional base rates and current percentiles visible.
+
+        **How to read it:** Treat analogs as a distribution of possible paths. Correlation, endpoint gaps, volatility, drawdowns, and slope determine similarity; no single historical year is a forecast.
+        """
+    )
+
     st.header("Controls")
     ticker_in = st.text_input("Ticker", "^SPX").strip().upper()
     ticker = TICKER_ALIASES.get(ticker_in, ticker_in)

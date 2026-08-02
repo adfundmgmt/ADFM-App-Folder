@@ -8,11 +8,62 @@ from __future__ import annotations
 
 import inspect
 from functools import wraps
+from pathlib import Path
 
 from .catalog import TOOL_CATALOG, ToolDefinition
 from .data_integrity import DataIntegrityPolicy, DataQualityReport
 from .market_data import MarketDataConfig
-from .ui import PageHeader
+from .ui import PageHeader, inject_institutional_theme
+
+
+def _called_from_analytics_page() -> bool:
+    """Return True while a cataloged Streamlit page is configuring itself."""
+
+    frame = inspect.currentframe()
+    try:
+        frame = frame.f_back if frame is not None else None
+        while frame is not None:
+            filename = frame.f_code.co_filename.replace("\\", "/")
+            if (
+                filename.startswith("pages/") or "/pages/" in filename
+            ) and filename.endswith(".py"):
+                return True
+            frame = frame.f_back
+    finally:
+        del frame
+    return False
+
+
+def _install_institutional_theme() -> None:
+    """Apply the shared theme immediately after each tool calls page config."""
+
+    try:
+        import streamlit as st
+    except ImportError:
+        return
+
+    if getattr(st, "_adfm_institutional_theme_installed", False):
+        return
+
+    original_set_page_config = st.set_page_config
+    logo_path = Path(__file__).resolve().parents[1] / "assets" / "ADFM_Logo_Naked.png"
+
+    @wraps(original_set_page_config)
+    def set_page_config(*args, **kwargs):
+        is_analytics_page = _called_from_analytics_page()
+        if is_analytics_page:
+            kwargs = dict(kwargs)
+            kwargs.setdefault("page_icon", str(logo_path))
+        result = original_set_page_config(*args, **kwargs)
+        if is_analytics_page:
+            inject_institutional_theme()
+        return result
+
+    st.set_page_config = set_page_config
+    st._adfm_institutional_theme_installed = True
+
+
+_install_institutional_theme()
 
 
 def _called_from_monthly_seasonality() -> bool:
@@ -90,4 +141,5 @@ __all__ = [
     "PageHeader",
     "TOOL_CATALOG",
     "ToolDefinition",
+    "inject_institutional_theme",
 ]

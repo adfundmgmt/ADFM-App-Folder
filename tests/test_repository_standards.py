@@ -31,6 +31,16 @@ class RepositoryStandardsTests(unittest.TestCase):
                 source,
                 msg=f"{tool.page_filename} is missing page configuration.",
             )
+            self.assertIn(
+                "adfm_core",
+                source,
+                msg=f"{tool.page_filename} does not load the shared ADFM theme.",
+            )
+            self.assertIn(
+                "About This Tool",
+                source,
+                msg=f"{tool.page_filename} is missing the standardized About This Tool section.",
+            )
 
     def test_runtime_requirements_are_unique_and_use_one_pdf_library(self) -> None:
         requirements = (
