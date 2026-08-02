@@ -12,7 +12,7 @@ Use `adfm_core` for common market-data, integrity, UI, export, and catalog funct
 coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -q
 coverage report --show-missing --fail-under=45
 python -m ruff check --select E,F,I,B --ignore E501 Home.py adfm_core cte scripts tests
-python -m ruff check --select E9,F63,F7,F82 pages adfm_momentum_scanner.py adfm_sector_rotation_config.py
+python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 python -m compileall -q Home.py pages adfm_core cte scripts tests
 ```
 

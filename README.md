@@ -16,12 +16,12 @@ python -m pip install -r requirements-dev.txt
 coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -q
 coverage report --fail-under=45
 python -m ruff check --select E,F,I,B --ignore E501 Home.py adfm_core cte scripts tests
-python -m ruff check --select E9,F63,F7,F82 pages adfm_momentum_scanner.py adfm_sector_rotation_config.py
+python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 ```
 
 ## Tool catalog
 
-The application contains 21 tools, in the same order and groups shown on the Home page.
+The application contains 19 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -43,19 +43,17 @@ The application contains 21 tools, in the same order and groups shown on the Hom
 | 16 | Event Risk + Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Yahoo Finance market proxies; configured calendar data |
 | 17 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
-| 19 | Momentum Scanner | Ranks liquid equities by momentum setup quality and maps sector and subsector leadership. | Yahoo Finance daily OHLCV; existing sector and subsector universe |
-| 20 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
-| 21 | Cross-Asset Correlation Lab | Measures rolling correlation, beta instability, market-mode concentration, and conditional diversification across major asset classes. | Yahoo Finance adjusted close data for liquid equity, credit, rates, commodity, FX, and volatility proxies |
+| 19 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 
 ## Tool groups
 
 | Group | Tools |
 |---|---|
-| Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard; Momentum Scanner |
+| Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard |
 | Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
 | Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Tracker; Currency Tension Engine |
-| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Cross-Asset Correlation Lab |
+| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer |
 
 ## Shared application foundations
 
@@ -68,7 +66,7 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - Causal PM command-center scores, cross-asset group summaries, movers, and an atomic point-in-time signal ledger.
 - Reusable Rate of Change calculations and chart-axis helpers.
 
-The Momentum Scanner, Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Tracker use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
+The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Tracker use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
 ## Data-use notes
 

@@ -34,7 +34,7 @@ jobs:
         run: python -m pip check
 
       - name: Compile application sources
-        run: python -m compileall -q Home.py pages adfm_core cte scripts adfm_momentum_scanner.py adfm_sector_rotation_config.py tests
+        run: python -m compileall -q Home.py pages adfm_core cte scripts adfm_sector_rotation_config.py tests
 
       - name: Run tests with coverage
         run: |
@@ -45,4 +45,4 @@ jobs:
         run: ruff check --select E,F,I,B --ignore E501 Home.py adfm_core cte scripts tests
 
       - name: Catch fatal page errors
-        run: ruff check --select E9,F63,F7,F82 pages adfm_momentum_scanner.py adfm_sector_rotation_config.py
+        run: ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py

@@ -50,7 +50,7 @@ class HomeCommandCenterTests(unittest.TestCase):
 
         self.assertEqual(list(app.exception), [])
         self.assertEqual(len(app.metric), 5)
-        self.assertEqual(len(app.get("page_link")), 21)
+        self.assertEqual(len(app.get("page_link")), 19)
 
 
 if __name__ == "__main__":

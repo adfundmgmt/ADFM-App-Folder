@@ -11,15 +11,6 @@
 | `data/cache/` | Validated public-source Currency Tension Engine snapshot used by the deployed app |
 | `data/last_good/` | Local, ignored continuity data such as the PM signal ledger |
 
-## Cross-asset correlation layer
-
-Page 21 is the only additive analytical page beyond the original 20. It covers
-the missing portfolio-independent market-structure layer: current and prior
-correlation matrices, rolling average correlation, beta term structure,
-market-mode concentration, effective rank, conditional correlations, and
-pair-level diagnostics. It uses adjusted-close market data and never requires
-portfolio, position, account, or thesis input.
-
 ## Data-source policy
 
 1. Use a primary source when an official API is available. The shared FRED
