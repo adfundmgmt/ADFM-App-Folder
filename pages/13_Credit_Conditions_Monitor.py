@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from adfm_core.palette import PASTEL, PASTEL_20
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.regime_math import grouped_weighted_composite
 from adfm_core.ui import (
@@ -203,15 +204,15 @@ TRADING_WINDOWS: Dict[str, int] = {
 }
 
 COLORS = {
-    "green": "#15803d",
+    "green": PASTEL["sage"],
     "soft_green": "#dcfce7",
-    "red": "#b91c1c",
+    "red": PASTEL["rose"],
     "soft_red": "#fee2e2",
-    "amber": "#b45309",
+    "amber": PASTEL["amber"],
     "soft_amber": "#fef3c7",
-    "blue": "#1d4ed8",
-    "purple": "#6d28d9",
-    "teal": "#0f766e",
+    "blue": PASTEL["blue"],
+    "purple": PASTEL["lavender"],
+    "teal": PASTEL["teal"],
     "slate": "#334155",
     "muted": "#64748b",
     "border": "#e5e7eb",
@@ -219,17 +220,7 @@ COLORS = {
     "dark": "#0f172a",
 }
 
-LINE_COLORS = [
-    "#1d4ed8",
-    "#b91c1c",
-    "#15803d",
-    "#6d28d9",
-    "#b45309",
-    "#0f766e",
-    "#4338ca",
-    "#be123c",
-    "#475569",
-]
+LINE_COLORS = list(PASTEL_20)
 
 CREDIT_SLEEVE_WEIGHTS = {
     "Core Credit": 0.25,

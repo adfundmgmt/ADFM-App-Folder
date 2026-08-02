@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from adfm_core.palette import PASTEL, PASTEL_20
 from adfm_core.ui import render_footer
 import yfinance as yf
 
@@ -27,29 +28,16 @@ plt.style.use("default")
 TITLE = "Factor Momentum Leadership"
 SUBTITLE = "Relative factor leadership, regime pressure, rotation, and data-quality diagnostics."
 
-PASTEL_GREEN = "#52b788"
-PASTEL_RED = "#e85d5d"
+PASTEL_GREEN = PASTEL["sage"]
+PASTEL_RED = PASTEL["rose"]
 PASTEL_GREY = "#8b949e"
-PASTEL_BLUE = "#6FB9C3"
-PASTEL_ORANGE = "#E07A2F"
-PASTEL_PURPLE = "#A889C7"
-PASTEL_YELLOW = "#F2B874"
-PASTEL_TEAL = "#58b4ae"
+PASTEL_BLUE = PASTEL["blue"]
+PASTEL_ORANGE = PASTEL["coral"]
+PASTEL_PURPLE = PASTEL["lavender"]
+PASTEL_YELLOW = PASTEL["amber"]
+PASTEL_TEAL = PASTEL["teal"]
 
-PALETTE = [
-    PASTEL_BLUE,
-    PASTEL_ORANGE,
-    PASTEL_GREEN,
-    PASTEL_YELLOW,
-    "#8CC7F2",
-    PASTEL_PURPLE,
-    "#C7E29E",
-    "#D89AD3",
-    "#8FE3A1",
-    "#E8CFC3",
-    PASTEL_TEAL,
-    "#C0A36E",
-]
+PALETTE = list(PASTEL_20)
 
 TEXT = "#222222"
 SUBTLE = "#666666"

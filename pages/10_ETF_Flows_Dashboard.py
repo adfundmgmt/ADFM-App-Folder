@@ -9,6 +9,7 @@ import pandas as pd
 import pytz
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.ui import render_footer
 import yfinance as yf
 import matplotlib.pyplot as plt
@@ -72,8 +73,8 @@ plt.rcParams["font.size"] = 9
 # =========================================================
 TZ = pytz.timezone("America/New_York")
 
-PASTEL_GREEN = "#52b788"
-PASTEL_RED = "#e85d5d"
+PASTEL_GREEN = PASTEL["sage"]
+PASTEL_RED = PASTEL["rose"]
 PASTEL_GREY = "#8b949e"
 AXIS_GREY = "#6b7280"
 TEXT_DARK = "#1f2937"

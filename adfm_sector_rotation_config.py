@@ -2,6 +2,8 @@
 
 from typing import Dict, List
 
+from adfm_core.palette import PASTEL
+
 
 MAJOR_SECTORS: Dict[str, str] = {
     "XLC": "Communication Services", "XLY": "Consumer Discretionary",
@@ -105,9 +107,12 @@ BENCHMARKS: Dict[str, str] = {
 }
 
 SECTOR_GROUP_COLORS = {
-    "Communication Services":"#4E79A7", "Consumer Discretionary":"#F28E2B", "Consumer Staples":"#59A14F",
-    "Energy":"#E15759", "Financials":"#76B7B2", "Health Care":"#EDC948", "Industrials":"#B07AA1",
-    "Materials":"#FF9DA7", "Real Estate":"#9C755F", "Technology":"#2F5597", "Utilities":"#BAB0AC",
+    "Communication Services": PASTEL["blue"], "Consumer Discretionary": PASTEL["coral"],
+    "Consumer Staples": PASTEL["sage"], "Energy": PASTEL["rose"],
+    "Financials": PASTEL["teal"], "Health Care": PASTEL["amber"],
+    "Industrials": PASTEL["lavender"], "Materials": PASTEL["salmon"],
+    "Real Estate": PASTEL["clay"], "Technology": PASTEL["cornflower"],
+    "Utilities": PASTEL["slate_blue"],
 }
 
 LOOKBACK_PERIOD = "3y"
@@ -129,4 +134,8 @@ ROTATION_MODES = {"Benchmark-relative rotation": "relative", "Absolute sector/su
 UNIVERSE_SCOPES = ["Major sectors only", "Core subsectors", "Core + thematic subsectors"]
 LABEL_MODES = ["Top ranked only", "All tickers", "No labels"]
 QUADRANT_LABELS = {"Q1": "Leading", "Q2": "Improving", "Q3": "Lagging", "Q4": "Weakening", "Neutral": "Neutral"}
-STATE_COLORS = {"Leading": "#16a34a", "Improving": "#2563eb", "Lagging": "#dc2626", "Weakening": "#f59e0b", "Neutral": "#6b7280"}
+STATE_COLORS = {
+    "Leading": PASTEL["sage"], "Improving": PASTEL["blue"],
+    "Lagging": PASTEL["rose"], "Weakening": PASTEL["amber"],
+    "Neutral": PASTEL["slate_blue"],
+}

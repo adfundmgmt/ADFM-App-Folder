@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+from adfm_core.palette import PASTEL
 from plotly.subplots import make_subplots
 
 from adfm_core.market_data import (
@@ -1530,7 +1531,7 @@ if bench_rebased is not None and not bench_rebased.empty:
             customdata=session_dates(bench_rebased.index),
             name=f"{benchmark}, rebased",
             mode="lines",
-            line=dict(width=1.9, color="#2563eb"),
+            line=dict(width=1.9, color=PASTEL["blue"]),
             opacity=0.62,
             hovertemplate=f"%{{customdata}}<br>{benchmark}: %{{y:.1f}}<extra></extra>",
         ),
@@ -1778,7 +1779,7 @@ if show_fed_fcig:
                     y=fcig_plot["FCI-G 1Y Lookback"],
                     name="FCI-G 1Y Lookback",
                     mode="lines",
-                    line=dict(width=2.1, color="#b45309"),
+                    line=dict(width=2.1, color=PASTEL["amber"]),
                     opacity=0.82,
                     hovertemplate="%{x|%Y-%m}<br>FCI-G 1Y: %{y:.2f}<extra></extra>",
                 ),
@@ -1794,7 +1795,7 @@ if show_fed_fcig:
                     y=composite_monthly,
                     name="Yahoo Composite",
                     mode="lines",
-                    line=dict(width=2.0, color="#2563eb"),
+                    line=dict(width=2.0, color=PASTEL["blue"]),
                     opacity=0.78,
                     hovertemplate="%{x|%Y-%m}<br>Yahoo Composite: %{y:.2f}<extra></extra>",
                 ),
@@ -1830,7 +1831,7 @@ if show_fed_fcig:
                     y=composite_monthly,
                     name="Yahoo Composite, monthly",
                     mode="lines",
-                    line=dict(width=2.0, color="#2563eb"),
+                    line=dict(width=2.0, color=PASTEL["blue"]),
                     hovertemplate="%{x|%Y-%m}<br>Yahoo Composite: %{y:.2f}<extra></extra>",
                 ),
                 row=2,

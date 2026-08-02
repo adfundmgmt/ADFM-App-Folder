@@ -1,5 +1,6 @@
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.chart_patterns import PatternDetection, PatternLine, detect_chart_patterns
 from adfm_core.ui import render_footer
 import pandas as pd
@@ -52,14 +53,14 @@ COLORS = {
     "up": "rgba(46,139,87,0.82)",
     "down": "rgba(178,34,34,0.82)",
     "sma8": "#6c757d",
-    "sma20": "#9467bd",
-    "sma50": "#1f77b4",
-    "sma100": "#ff7f0e",
-    "sma200": "#d62728",
-    "sma65": "#17becf",
-    "sma130": "#bcbd22",
-    "sma195": "#8c564b",
-    "sma260": "#e377c2",
+    "sma20": PASTEL["lavender"],
+    "sma50": PASTEL["blue"],
+    "sma100": PASTEL["coral"],
+    "sma200": PASTEL["rose"],
+    "sma65": PASTEL["teal"],
+    "sma130": PASTEL["olive"],
+    "sma195": PASTEL["clay"],
+    "sma260": PASTEL["mauve"],
     "bb": "rgba(70,70,70,0.38)",
     "bb_fill": "rgba(120,120,120,0.05)",
     "grid": "rgba(0,0,0,0.08)",
@@ -69,8 +70,8 @@ COLORS = {
     "volume_down": "rgba(178,34,34,0.34)",
     "volume_neutral": "rgba(150,150,150,0.32)",
     "rsi": "#111111",
-    "macd": "#1f77b4",
-    "signal": "#ff7f0e",
+    "macd": PASTEL["blue"],
+    "signal": PASTEL["coral"],
     "hist_up": "rgba(46,139,87,0.48)",
     "hist_down": "rgba(178,34,34,0.45)",
     "range": "rgba(55,65,81,0.55)",
@@ -78,9 +79,9 @@ COLORS = {
     "fib_extension": "rgba(46,139,87,0.78)",
     "fib_retracement": "rgba(55,65,81,0.58)",
     "fib_anchor": "rgba(17,24,39,0.55)",
-    "pattern_bullish": "#0f9d75",
-    "pattern_bearish": "#d6455d",
-    "pattern_bilateral": "#3b82f6",
+    "pattern_bullish": PASTEL["sage"],
+    "pattern_bearish": PASTEL["rose"],
+    "pattern_bilateral": PASTEL["blue"],
     "pattern_support": "rgba(14,116,144,0.86)",
     "pattern_resistance": "rgba(147,51,234,0.82)",
     "pattern_muted": "rgba(71,85,105,0.72)",

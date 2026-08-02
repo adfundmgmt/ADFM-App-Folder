@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from adfm_core.palette import PASTEL
 from adfm_core.market_data import (
     adjusted_ohlcv,
     configure_yfinance_cache,
@@ -40,11 +41,11 @@ SOXX_TICKER = "SOXX"
 NDX_TICKER = "^NDX"
 EQUAL_WEIGHT_TICKER = "QEW"
 CAP_WEIGHT_TICKER = "QQQ"
-PRIMARY_COLOR = "#14213d"
-COMPARISON_COLOR = "#2563eb"
-IMPLIED_COLOR = "#7c8796"
-IMPLIED_COMPARISON_COLOR = "#9a3412"
-ALERT_COLOR = "#c81e1e"
+PRIMARY_COLOR = PASTEL["blue"]
+COMPARISON_COLOR = PASTEL["coral"]
+IMPLIED_COLOR = PASTEL["lavender"]
+IMPLIED_COMPARISON_COLOR = PASTEL["teal"]
+ALERT_COLOR = PASTEL["rose"]
 GRID_COLOR = "rgba(148,163,184,0.23)"
 
 

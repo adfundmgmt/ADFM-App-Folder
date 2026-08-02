@@ -18,6 +18,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.ui import (
     PageHeader,
     inject_institutional_tool_finish,
@@ -33,6 +34,16 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize
 st.set_page_config(page_title="Hedge Timer", layout="wide")
 
 inject_institutional_tool_finish()
+st.markdown(
+    f"""
+    <style>
+    .badge.b_bad {{ background: {PASTEL['rose']} !important; color: #171717 !important; }}
+    .badge.b_mid {{ background: {PASTEL['amber']} !important; color: #171717 !important; }}
+    .badge.b_good {{ background: {PASTEL['sage']} !important; color: #171717 !important; }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 plt.rcParams["figure.dpi"] = 200
 
@@ -679,9 +690,9 @@ def _apply_subtle_grid(ax: plt.Axes, y_only: bool = False) -> None:
 
 
 def _plot_score_gradient(ax: plt.Axes, x: np.ndarray, y: np.ndarray, lw: float = 2.2) -> None:
-    # Monochrome score grade: light -> mid -> dark.
+    # Risk score grade: constructive sage -> caution amber -> adverse rose.
     cmap = LinearSegmentedColormap.from_list(
-        "institutional_gray", ["#d0d0d0", "#777777", "#111111"]
+        "pastel_risk", [PASTEL["sage"], PASTEL["amber"], PASTEL["rose"]]
     )
     norm = Normalize(vmin=0, vmax=100)
 
@@ -825,10 +836,10 @@ def plot_price_and_score_image(
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
 
-    # Price and moving averages use the institutional grayscale hierarchy.
+    # Price stays black while moving averages use the shared pastel hierarchy.
     price_c = "#111111"
-    ma50_c = "#777777"
-    ma200_c = "#b5b5b5"
+    ma50_c = PASTEL["blue"]
+    ma200_c = PASTEL["lavender"]
 
     ax1.plot(x, dfp["price"].values, linewidth=style["price_lw"], color=price_c, label="Price")
     ax1.plot(x, ma50.values, linewidth=style["ma_lw"], color=ma50_c, label="MA50")
@@ -848,7 +859,7 @@ def plot_price_and_score_image(
             dfp["price"].values[sig_on.values],
             marker="v",
             s=style["marker_s"],
-            color="#111111",
+            color=PASTEL["rose"],
             edgecolors="white",
             linewidths=style["marker_lw"],
             label="Short signal (new)",
@@ -865,7 +876,7 @@ def plot_price_and_score_image(
     _plot_score_gradient(ax2, x.astype(float), y_score, lw=style["score_lw"])
 
     t_short_c = "#111111"
-    t_bias_c = "#999999"
+    t_bias_c = PASTEL["amber"]
     ax2.axhline(t_short, linewidth=1.1, color=t_short_c, alpha=0.70)
     ax2.axhline(t_bias, linewidth=1.0, color=t_bias_c, alpha=0.55)
     ax2.set_ylim(0, 100)

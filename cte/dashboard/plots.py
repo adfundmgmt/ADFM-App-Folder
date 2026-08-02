@@ -12,17 +12,20 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 
+from adfm_core.palette import PASTEL, PASTEL_20
+
 _BG = "#ffffff"
 _PANEL = "#ffffff"
 _FG = "#171717"
 _MUTE = "#666666"
 _GRID = "#d7d7d7"
-_BLUE = "#111111"
-_WARN = "#555555"
+_BLUE = PASTEL["blue"]
+_TEAL = PASTEL["teal"]
+_WARN = PASTEL["coral"]
 
-# Institutional grayscale divergence: dark extremes with a quiet neutral center.
+# Pastel divergence keeps direction legible without overpowering the page shell.
 _DIV = LinearSegmentedColormap.from_list(
-    "cte_div", ["#181818", "#777777", "#f4f4f2", "#a8a8a8", "#383838"]
+    "cte_div", [PASTEL["rose"], "#FBFBF8", PASTEL["sage"]]
 )
 
 _QUAD = {
@@ -31,7 +34,14 @@ _QUAD = {
     ("+", "-"): "Attractive",
     ("-", "-"): "Washed out",
 }
-_QUAD_TINT = {("+", "-"): "#eeeeec", ("-", "+"): "#d9d9d6"}
+_QUAD_TINT = {("+", "-"): "#EAF4EE", ("-", "+"): "#F6E8E8"}
+
+_CCY_ORDER = ("USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF", "NZD", "NOK", "SEK")
+_CCY_COLORS = {ccy: PASTEL_20[i] for i, ccy in enumerate(_CCY_ORDER)}
+
+
+def _currency_color(ccy: str) -> str:
+    return _CCY_COLORS.get(str(ccy), PASTEL["slate_blue"])
 
 PILLAR_LABEL = {
     "A_growth": "Growth (A)",
@@ -141,13 +151,14 @@ def tension_map_fig(
 
     # trails: age-faded path, small dots shrinking with age, live dot terminal
     for _ccy, pts in trails.items():
+        series_color = _currency_color(_ccy)
         n = len(pts)
         for i in range(n - 1):
             a = 0.10 + 0.42 * (i + 1) / (n - 1)
             ax.plot(
                 [pts[i][0], pts[i + 1][0]],
                 [pts[i][1], pts[i + 1][1]],
-                color=_BLUE,
+                color=series_color,
                 alpha=a,
                 lw=1.5,
                 zorder=2,
@@ -159,13 +170,14 @@ def tension_map_fig(
                 px,
                 py,
                 s=26 + 60 * (i + 1) / max(n - 1, 1),
-                color=_BLUE,
+                color=series_color,
                 alpha=a,
                 zorder=2,
                 edgecolors="none",
             )
 
     for ccy, r in d.iterrows():
+        series_color = _currency_color(ccy)
         if crowded and ccy in crowded:
             ax.scatter(
                 r[xcol],
@@ -182,7 +194,7 @@ def tension_map_fig(
             r[ycol],
             s=1500,
             zorder=3,
-            color=_BLUE,
+            color=series_color,
             alpha=0.16,
             edgecolors="none",
         )
@@ -191,7 +203,7 @@ def tension_map_fig(
             r[ycol],
             s=900,
             zorder=4,
-            color=_BLUE,
+            color=series_color,
             alpha=0.95,
             edgecolors=_BG,
             linewidths=1.6,
@@ -200,13 +212,13 @@ def tension_map_fig(
             r[xcol],
             r[ycol],
             ccy,
-            color="white",
+            color="#171717",
             fontsize=9.5,
             fontweight="bold",
             ha="center",
             va="center",
             zorder=5,
-            path_effects=[pe.withStroke(linewidth=1.4, foreground=_BLUE)],
+            path_effects=[pe.withStroke(linewidth=2.0, foreground="white")],
         )
 
     _HZ_LABEL = {
@@ -418,7 +430,6 @@ def positioning_fig(pos):
         ax.set_xticks([])
         ax.set_yticks([])
         return fig
-    _TEAL = "#777777"
     n = len(d)
     OFF = 0.14  # sub-row offset within each currency band
     fig, ax = plt.subplots(figsize=(8.8, 0.72 * n + 2.6), facecolor=_BG)

@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from adfm_core.palette import PASTEL, PASTEL_DIVERGING_SCALE, PASTEL_RATES_SCALE
 from adfm_core.ui import (
     PageHeader,
     inject_institutional_tool_finish,
@@ -65,20 +66,14 @@ COLORS = {
     "border": "#d0d0d0",
     "panel": "#ffffff",
     "soft": "#f5f5f3",
-    "blue": "#111111",
-    "purple": "#444444",
-    "green": "#555555",
-    "red": "#111111",
-    "amber": "#777777",
-    "slate": "#444444",
-    "grey": "#999999",
+    "blue": PASTEL["blue"],
+    "purple": PASTEL["lavender"],
+    "green": PASTEL["sage"],
+    "red": PASTEL["rose"],
+    "amber": PASTEL["amber"],
+    "slate": PASTEL["slate_blue"],
+    "grey": "#A8ADB5",
 }
-
-MONO_DIVERGING_SCALE = [
-    [0.0, "#171717"],
-    [0.5, "#f5f5f3"],
-    [1.0, "#777777"],
-]
 
 st.markdown(
     """
@@ -844,7 +839,7 @@ with right:
                 z=z,
                 x=heat_cols,
                 y=matrix["Series"],
-                colorscale=MONO_DIVERGING_SCALE,
+                colorscale=PASTEL_RATES_SCALE,
                 zmid=0,
                 text=text,
                 texttemplate="%{text}",
@@ -891,7 +886,7 @@ if show_market_confirmation:
                 z=z,
                 x=heat_cols,
                 y=market_matrix["Series"],
-                colorscale=MONO_DIVERGING_SCALE,
+                colorscale=PASTEL_DIVERGING_SCALE,
                 zmid=0,
                 text=text,
                 texttemplate="%{text}",

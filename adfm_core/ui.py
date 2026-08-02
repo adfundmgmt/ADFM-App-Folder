@@ -472,8 +472,7 @@ def inject_institutional_tool_finish() -> None:
             text-transform: uppercase !important;
         }
 
-        .metric-value,
-        .metric-value[style],
+        .metric-value:not([style]),
         div[data-testid="stMetricValue"] {
             color: #000000 !important;
             font-family: Georgia, "Times New Roman", serif !important;

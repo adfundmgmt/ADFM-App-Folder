@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from adfm_core.palette import PASTEL_20
 from adfm_core.ui import render_footer
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
@@ -256,22 +257,8 @@ def set_percent_axis(ax, values, force_zero: bool = False) -> None:
 
 
 def get_palette(n: int):
-    cmap_names = ["tab10", "Dark2", "Set1", "tab20", "Paired", "tab20b", "tab20c"]
-    colors = []
-    seen = set()
-    for name in cmap_names:
-        cmap = plt.get_cmap(name)
-        raw = cmap.colors if hasattr(cmap, "colors") else [cmap(x) for x in np.linspace(0, 1, 20)]
-        for color in raw:
-            rgb = tuple(color[:3])
-            key = tuple(round(v, 4) for v in rgb)
-            if key not in seen:
-                seen.add(key)
-                colors.append(rgb)
-    if n <= len(colors):
-        return colors[:n]
-    fallback = [plt.get_cmap("hsv")(x)[:3] for x in np.linspace(0, 1, n)]
-    return (colors + fallback)[:n]
+    colors = [tuple(int(color[i : i + 2], 16) / 255 for i in (1, 3, 5)) for color in PASTEL_20]
+    return [colors[i % len(colors)] for i in range(n)]
 
 
 def fig_to_png_bytes(fig) -> bytes:

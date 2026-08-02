@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
+from adfm_core.palette import PASTEL, PASTEL_DIVERGING_SCALE
 from adfm_core.ui import (
     PageHeader,
     inject_institutional_tool_finish,
@@ -57,29 +58,23 @@ EXPOSURE_MAP = {
 }
 
 TYPE_COLORS = {
-    "Fed": "#111111",
-    "Inflation": "#333333",
-    "Labor": "#555555",
-    "Treasury": "#777777",
-    "Growth": "#222222",
-    "Options": "#666666",
-    "Earnings": "#888888",
-    "Quarter-End": "#444444",
-    "Custom": "#000000",
+    "Fed": PASTEL["lavender"],
+    "Inflation": PASTEL["rose"],
+    "Labor": PASTEL["blue"],
+    "Treasury": PASTEL["amber"],
+    "Growth": PASTEL["sage"],
+    "Options": PASTEL["teal"],
+    "Earnings": PASTEL["coral"],
+    "Quarter-End": PASTEL["mauve"],
+    "Custom": PASTEL["slate_blue"],
 }
 
 RISK_COLORS = {
-    "low": "#888888",
-    "medium": "#555555",
-    "high": "#111111",
-    "neutral": "#666666",
+    "low": PASTEL["sage"],
+    "medium": PASTEL["amber"],
+    "high": PASTEL["rose"],
+    "neutral": PASTEL["slate_blue"],
 }
-
-MONO_DIVERGING_SCALE = [
-    [0.0, "#171717"],
-    [0.5, "#f5f5f3"],
-    [1.0, "#777777"],
-]
 
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
@@ -790,7 +785,7 @@ def make_return_heatmap(perf: pd.DataFrame) -> go.Figure:
             y=assets,
             text=text,
             texttemplate="%{text}",
-            colorscale=MONO_DIVERGING_SCALE,
+            colorscale=PASTEL_DIVERGING_SCALE,
             zmid=0,
             colorbar=dict(title="%", len=0.85),
             hovertemplate="%{y}<br>%{x}: %{text}<extra></extra>",

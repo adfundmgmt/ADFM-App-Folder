@@ -1,5 +1,6 @@
 import streamlit as st
 
+from adfm_core.palette import PASTEL_20
 from adfm_core.ui import render_footer
 
 import pandas as pd
@@ -70,17 +71,7 @@ SUBTITLE = "Sector, thematic, country, and macro dislocation baskets."
 
 
 
-PASTEL = [
-
-    "#4c78a8", "#f58518", "#54a24b", "#e45756", "#72b7b2",
-
-    "#b279a2", "#ff9da6", "#9d755d", "#bab0ac", "#59a14f",
-
-    "#edc948", "#af7aa1", "#ff9da7", "#76b7b2", "#8cd17d",
-
-    "#b6992d", "#499894", "#d37295", "#fabfd2", "#79706e",
-
-]
+PASTEL = list(PASTEL_20)
 
 
 

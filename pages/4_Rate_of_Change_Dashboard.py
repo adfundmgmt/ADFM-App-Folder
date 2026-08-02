@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.ui import render_footer
 from plotly.subplots import make_subplots
 
@@ -43,15 +44,15 @@ ROC_PERIODS = {
     "126D": 126,
 }
 
-PASTEL_GREEN = "#52b788"
-PASTEL_RED = "#e85d5d"
+PASTEL_GREEN = PASTEL["sage"]
+PASTEL_RED = PASTEL["rose"]
 PASTEL_GREY = "#8b949e"
 
 SMA_COLORS = {
-    "SMA_21": "#4c78a8",
-    "SMA_50": "#f58518",
-    "SMA_100": "#9c6ade",
-    "SMA_200": "#2f4858",
+    "SMA_21": PASTEL["blue"],
+    "SMA_50": PASTEL["coral"],
+    "SMA_100": PASTEL["lavender"],
+    "SMA_200": PASTEL["slate_blue"],
 }
 
 

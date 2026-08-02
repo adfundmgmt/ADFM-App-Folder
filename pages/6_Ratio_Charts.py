@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.ui import render_footer
 import yfinance as yf
 from plotly.subplots import make_subplots
@@ -35,10 +36,10 @@ MA_DEFAULTS = {
 
 MA_COLORS = {
     8: "#6c757d",
-    21: "#9467bd",
-    50: "#1f77b4",
-    100: "#ff7f0e",
-    200: "#d62728",
+    21: PASTEL["lavender"],
+    50: PASTEL["blue"],
+    100: PASTEL["coral"],
+    200: PASTEL["rose"],
 }
 
 # ============================== Ratio specs ==============================

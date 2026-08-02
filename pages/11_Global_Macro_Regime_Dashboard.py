@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.market_data import (
     close_panel,
     configure_yfinance_cache,
@@ -117,11 +118,11 @@ PALETTE = {
     "muted": "#6b7280",
     "faint": "#94a3b8",
     "grid": "#e5e7eb",
-    "green": "#4f765f",
-    "red": "#a06452",
-    "amber": "#9a733c",
-    "blue": "#526f8f",
-    "purple": "#75668f",
+    "green": PASTEL["sage"],
+    "red": PASTEL["rose"],
+    "amber": PASTEL["amber"],
+    "blue": PASTEL["blue"],
+    "purple": PASTEL["lavender"],
     "slate": "#334155",
 }
 

@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.regime_math import rolling_percentile_previous
 from adfm_core.ui import render_footer
@@ -102,11 +103,11 @@ US_MARKET_HOLIDAYS_STATIC = [
     "2027-12-24",
 ]
 
-PASTEL_GREEN = "#4f765f"
-PASTEL_RED = "#a06452"
+PASTEL_GREEN = PASTEL["sage"]
+PASTEL_RED = PASTEL["rose"]
 PASTEL_GREY = "#94a3b8"
-AMBER = "#b08958"
-BLUE = "#526f8f"
+AMBER = PASTEL["amber"]
+BLUE = PASTEL["blue"]
 
 TITLE = "Volume Based Sentiment Indicator"
 SUBTITLE = (

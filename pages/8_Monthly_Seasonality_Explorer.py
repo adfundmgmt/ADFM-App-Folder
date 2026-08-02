@@ -14,6 +14,7 @@ from matplotlib import gridspec
 from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator, PercentFormatter
 
+from adfm_core.palette import PASTEL
 from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
     render_monthly_returns_matrix,
@@ -64,8 +65,8 @@ MONTH_LABELS = [
     "Dec",
 ]
 
-POS_GREEN = "#52b788"
-NEG_RED = "#e85d5d"
+POS_GREEN = PASTEL["sage"]
+NEG_RED = PASTEL["rose"]
 NEUTRAL_GREY = "#8b949e"
 LIGHT_GREEN = "#d9f2e4"
 LIGHT_RED = "#f7d9d7"
@@ -1848,4 +1849,3 @@ with st.expander("Audit included observations"):
     )
 
 render_footer()
-

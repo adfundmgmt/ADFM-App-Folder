@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from adfm_core.palette import PASTEL
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.ui import (
     PageHeader,
@@ -1322,9 +1323,9 @@ with tab_factors:
             zmin=0,
             zmax=100,
             colorscale=[
-                [0.00, "#d1e7dd"],
+                [0.00, PASTEL["sage"]],
                 [0.50, "#f1f3f5"],
-                [1.00, "#f8d7da"],
+                [1.00, PASTEL["rose"]],
             ],
             colorbar=dict(title="Percentile"),
             hovertemplate="%{x|%Y-%m-%d}<br>%{y}: %{z:.1f}<extra></extra>",
