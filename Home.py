@@ -1,247 +1,306 @@
-import numpy as np
-import pandas as pd
+from __future__ import annotations
+
+from base64 import b64encode
+from html import escape
+from pathlib import Path
+
 import streamlit as st
 
-from adfm_core.catalog import (
-    tool_definitions,
-    tool_descriptions,
-    tool_groups,
-    tool_order,
-)
-from adfm_core.data_registry import market_symbols
-from adfm_core.market_data import close_panel, fetch_daily_ohlcv
-from adfm_core.observability import current_data_health
-from adfm_core.pm_cockpit import (
-    build_signal_snapshot,
-    group_scores,
-    largest_changes,
-    summarize_snapshot,
-)
-from adfm_core.signal_ledger import (
-    latest_score_changes,
-    record_signal_snapshot,
-)
+from adfm_core.catalog import GROUP_ORDER, tool_definitions
 
 st.set_page_config(
-    page_title="AD Fund Management LP",
+    page_title="ADFM Analytics",
+    page_icon="assets/ADFM_Logo_Naked.png",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 
-TOOL_ORDER = tool_order()
-TOOL_GROUPS = tool_groups()
-TOOL_DESCRIPTIONS = tool_descriptions()
-TOOL_DEFINITIONS = {tool.title: tool for tool in tool_definitions()}
+ROOT = Path(__file__).resolve().parent
+LOGO_PATH = ROOT / "assets" / "ADFM_Logo_Naked.png"
+TOOLS = tool_definitions()
+TOOLS_BY_GROUP = {
+    group: [tool for tool in TOOLS if tool.group == group] for group in GROUP_ORDER
+}
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def load_pm_command_center():
-    """Load one coherent market snapshot for the landing-page command center."""
+def logo_data_uri() -> str:
+    """Return the approved ADFM shield as an embeddable image."""
 
-    symbols = market_symbols()
-    frames, missing = fetch_daily_ohlcv(symbols, period="3y")
-    prices = close_panel(frames, symbols, adjusted=True)
-    snapshot = build_signal_snapshot(prices)
-    summary = summarize_snapshot(snapshot)
-    groups = group_scores(snapshot)
-    movers = largest_changes(snapshot)
-    ledger_error = None
-    score_changes = pd.DataFrame()
-    try:
-        history = record_signal_snapshot(snapshot)
-        score_changes = latest_score_changes(history)
-    except Exception as exc:
-        ledger_error = f"{type(exc).__name__}: {exc}"
-    if not score_changes.empty:
-        snapshot = snapshot.merge(score_changes, on="Key", how="left")
-    return snapshot, summary, groups, movers, missing, ledger_error
+    encoded = b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
-def fmt_score(value: float) -> str:
-    """Format a bounded signal score without fabricating unavailable values."""
+def render_group(group: str) -> None:
+    """Render one plain-text research section with native Streamlit links."""
 
-    return f"{value:+.2f}" if np.isfinite(value) else "Unavailable"
-
-
-def fmt_percent(value: float) -> str:
-    """Format a zero-to-one fraction as a whole percentage."""
-
-    return f"{value:.0%}" if np.isfinite(value) else "Unavailable"
+    st.markdown(
+        f"<div class='directory-group-title'>{escape(group)}</div>",
+        unsafe_allow_html=True,
+    )
+    for tool in TOOLS_BY_GROUP[group]:
+        with st.container():
+            st.page_link(
+                f"pages/{tool.page_filename}",
+                label=tool.title,
+                use_container_width=False,
+            )
+            st.markdown(
+                f"<div class='tool-description'>{escape(tool.description)}</div>"
+                "<div class='entry-rule'></div>",
+                unsafe_allow_html=True,
+            )
 
 
 st.markdown(
     """
     <style>
+        :root {
+            color-scheme: light;
+        }
+
+        html,
+        body,
+        .stApp,
+        main,
+        [data-testid="stAppViewContainer"] {
+            background: #ffffff !important;
+            color: #000000;
+        }
+
+        header[data-testid="stHeader"] {
+            background: rgba(255, 255, 255, 0.98);
+        }
+
+        [data-testid="stDecoration"] {
+            display: none;
+        }
+
         .block-container {
-            max-width: 1180px;
-            padding-top: 3.75rem;
-            padding-bottom: 2.5rem;
+            max-width: 1240px;
+            padding: 2.75rem 2.5rem 3rem;
         }
 
-        .hero {
-            padding: 2.1rem 2rem 2.2rem 2rem;
-            border: 1px solid rgba(120, 120, 120, 0.2);
-            border-radius: 18px;
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.06), rgba(2, 132, 199, 0.03));
-            margin-top: 0.35rem;
-            margin-bottom: 1.4rem;
-            overflow: visible;
-        }
-
-        .eyebrow {
-            font-size: 0.74rem;
-            letter-spacing: 0.13em;
-            text-transform: uppercase;
-            font-weight: 700;
-            color: #64748b;
-            margin-bottom: 0.45rem;
-        }
-
-        .title {
-            font-size: clamp(2.4rem, 5vw, 3.35rem);
-            line-height: 1.05;
-            letter-spacing: -0.045em;
-            font-weight: 850;
-            color: #0f172a;
-            margin-bottom: 0.65rem;
-        }
-
-        .subtitle {
-            max-width: 900px;
-            font-size: 1.03rem;
-            line-height: 1.65;
-            color: #475569;
-        }
-
-        .chip-row {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-            margin-top: 1.15rem;
-        }
-
-        .chip {
-            border: 1px solid rgba(100, 116, 139, 0.28);
-            padding: 0.28rem 0.72rem;
-            border-radius: 999px;
-            font-size: 0.78rem;
-            line-height: 1;
-            color: #475569;
-            background: rgba(248, 250, 252, 0.74);
-        }
-
-        .section-title {
-            font-size: 1.08rem;
-            font-weight: 750;
-            letter-spacing: -0.02em;
-            color: #0f172a;
-            margin-top: 0.25rem;
-            margin-bottom: 0.9rem;
-        }
-
-        .tool-card {
-            border: 1px solid rgba(120, 120, 120, 0.2);
-            border-radius: 16px;
-            padding: 1rem 1.1rem;
-            background: rgba(255, 255, 255, 0.72);
-            margin-bottom: 0.9rem;
-            min-height: 104px;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-        }
-
-        .tool-title {
-            font-size: 0.97rem;
-            font-weight: 760;
-            color: #0f172a;
-            margin-bottom: 0.32rem;
-        }
-
-        .tool-copy {
-            font-size: 0.89rem;
-            line-height: 1.5;
-            color: #64748b;
-        }
-
-        .cockpit-banner {
+        .adfm-masthead {
             display: grid;
-            grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
-            gap: 1rem;
-            padding: 1.1rem 1.2rem;
-            border: 1px solid rgba(120, 120, 120, 0.2);
-            border-left: 5px solid #315f95;
-            border-radius: 14px;
-            background: rgba(248, 250, 252, 0.74);
-            margin: 0.35rem 0 0.9rem;
+            grid-template-columns: 82px minmax(0, 1fr) auto;
+            align-items: center;
+            column-gap: 1.25rem;
+            border-top: 3px solid #000000;
+            border-bottom: 1px solid #000000;
+            padding: 1.35rem 0 1.25rem;
         }
 
-        .cockpit-label {
-            color: #64748b;
-            font-size: 0.7rem;
-            font-weight: 800;
-            letter-spacing: 0.1em;
+        .adfm-mark {
+            display: block;
+            width: 70px;
+            height: 70px;
+            object-fit: contain;
+            filter: brightness(0);
+        }
+
+        .firm-name {
+            margin: 0 0 0.3rem;
+            color: #000000;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.18em;
+            line-height: 1.2;
             text-transform: uppercase;
         }
 
-        .cockpit-regime {
-            color: #0f172a;
-            font-size: 1.45rem;
-            font-weight: 800;
-            margin: 0.2rem 0 0.35rem;
+        .adfm-title {
+            margin: 0;
+            color: #000000;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: clamp(2.05rem, 4vw, 3rem);
+            font-weight: 400;
+            letter-spacing: -0.035em;
+            line-height: 1;
         }
 
-        .cockpit-copy {
-            color: #475569;
-            font-size: 0.86rem;
-            line-height: 1.5;
+        .adfm-subtitle {
+            margin: 0.48rem 0 0;
+            color: #3f3f3f;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.84rem;
+            line-height: 1.4;
         }
 
-        .cockpit-score {
-            color: #0f172a;
-            font-size: 2rem;
-            font-weight: 820;
+        .research-label {
+            align-self: start;
+            margin-top: 0.15rem;
+            color: #000000;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.62rem;
+            font-weight: 700;
+            letter-spacing: 0.15em;
+            text-align: right;
+            text-transform: uppercase;
+        }
+
+        .directory-introduction {
+            display: grid;
+            grid-template-columns: minmax(240px, 0.8fr) minmax(360px, 1.2fr);
+            gap: 3rem;
+            align-items: end;
+            padding: 2.4rem 0 1.65rem;
+        }
+
+        .directory-title {
+            margin: 0;
+            color: #000000;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.55rem;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
+
+        .directory-copy {
+            margin: 0;
+            color: #4a4a4a;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.82rem;
+            line-height: 1.55;
             text-align: right;
         }
 
-        div[data-testid="stTextInput"] {
-            margin-bottom: 0.9rem;
+        .directory-group-title {
+            border-bottom: 2px solid #000000;
+            margin: 0 0 1rem;
+            padding: 0 0 0.55rem;
+            color: #000000;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.14em;
+            line-height: 1.2;
+            text-transform: uppercase;
         }
 
-        div[data-testid="stTextInput"] input {
-            border-radius: 999px;
+        div[data-testid="stPageLink"] {
+            margin: 0;
         }
 
-        @media (prefers-color-scheme: dark) {
-            .title,
-            .section-title,
-            .tool-title,
-            .cockpit-regime,
-            .cockpit-score {
-                color: #f8fafc;
+        div[data-testid="stPageLink"] a {
+            display: inline-flex;
+            width: auto;
+            min-height: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            padding: 0;
+            color: #000000;
+            text-decoration: none;
+        }
+
+        div[data-testid="stPageLink"] a:hover,
+        div[data-testid="stPageLink"] a:focus-visible {
+            border: 0;
+            background: transparent;
+            color: #000000;
+            text-decoration: underline;
+            text-decoration-thickness: 1px;
+            text-underline-offset: 0.18em;
+        }
+
+        div[data-testid="stPageLink"] a:focus-visible {
+            outline: 1px solid #000000;
+            outline-offset: 4px;
+        }
+
+        div[data-testid="stPageLink"] svg {
+            display: none;
+        }
+
+        div[data-testid="stPageLink"] p {
+            margin: 0;
+            color: #000000;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.02rem;
+            font-weight: 700;
+            letter-spacing: -0.012em;
+            line-height: 1.3;
+        }
+
+        .tool-description {
+            max-width: 34rem;
+            margin-top: 0.38rem;
+            color: #505050;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.79rem;
+            line-height: 1.5;
+        }
+
+        .entry-rule {
+            height: 1px;
+            margin: 1rem 0 1.2rem;
+            background: #d7d7d7;
+        }
+
+        div[data-testid="stVerticalBlock"] > div:has(.directory-group-title)
+        ~ div:has(.directory-group-title) {
+            margin-top: 1.4rem;
+        }
+
+        .adfm-footer {
+            display: flex;
+            justify-content: space-between;
+            gap: 2rem;
+            border-top: 1px solid #000000;
+            margin-top: 2.25rem;
+            padding-top: 0.8rem;
+            color: #333333;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 0.66rem;
+            letter-spacing: 0.04em;
+            line-height: 1.4;
+            text-transform: uppercase;
+        }
+
+        @media (max-width: 760px) {
+            .block-container {
+                padding: 1.5rem 1.15rem 2.25rem;
             }
 
-            .subtitle,
-            .tool-copy,
-            .chip,
-            .cockpit-copy {
-                color: #cbd5e1;
+            .adfm-masthead {
+                grid-template-columns: 58px minmax(0, 1fr);
+                column-gap: 0.9rem;
+                padding: 1rem 0;
             }
 
-            .eyebrow,
-            .cockpit-label {
-                color: #94a3b8;
+            .adfm-mark {
+                width: 52px;
+                height: 52px;
             }
 
-            .hero,
-            .tool-card,
-            .chip,
-            .cockpit-banner {
-                background: rgba(15, 23, 42, 0.52);
-                border-color: rgba(148, 163, 184, 0.24);
+            .adfm-title {
+                font-size: 2rem;
             }
 
-            .tool-card {
-                box-shadow: none;
+            .research-label {
+                display: none;
+            }
+
+            .directory-introduction {
+                display: block;
+                padding: 1.75rem 0 1.35rem;
+            }
+
+            .directory-copy {
+                margin-top: 0.55rem;
+                text-align: left;
+            }
+
+            .adfm-footer {
+                display: block;
+            }
+
+            .adfm-footer span:last-child {
+                display: block;
+                margin-top: 0.3rem;
             }
         }
     </style>
@@ -251,227 +310,53 @@ st.markdown(
 
 
 st.markdown(
-    """
-    <div class="hero">
-        <div class="eyebrow">AD Fund Management LP</div>
-        <div class="title">ADFM Analytics Platform</div>
-        <div class="subtitle">
-            A command center built by ADFM team for equity leadership, technical structure,
-            flows, macro regimes, rates, credit, liquidity, stress, event risk,
-            seasonality, analogs, hedge timing, and currency tension.
+    f"""
+    <header class="adfm-masthead">
+        <img class="adfm-mark" src="{logo_data_uri()}" alt="AD Fund Management shield">
+        <div>
+            <div class="firm-name">AD Fund Management LP</div>
+            <h1 class="adfm-title">ADFM Analytics</h1>
+            <p class="adfm-subtitle">Proprietary market research and analytical tools.</p>
         </div>
-        <div class="chip-row">
-            <span class="chip">Equity Leadership</span>
-            <span class="chip">Technicals</span>
-            <span class="chip">Relative Value</span>
-            <span class="chip">Flows</span>
-            <span class="chip">Macro Regime</span>
-            <span class="chip">Rates</span>
-            <span class="chip">FX</span>
-            <span class="chip">Credit</span>
-            <span class="chip">Liquidity</span>
-            <span class="chip">Event Risk</span>
-            <span class="chip">Hedging</span>
-        </div>
-    </div>
+        <div class="research-label">Internal Research</div>
+    </header>
+    <section class="directory-introduction">
+        <h2 class="directory-title">Research Directory</h2>
+        <p class="directory-copy">
+            Select an analytical page below. Each tool is designed to answer a
+            specific question across equities, market structure, macro, rates,
+            liquidity, positioning, and risk.
+        </p>
+    </section>
     """,
     unsafe_allow_html=True,
 )
 
 
-st.markdown(
-    '<div class="section-title">PM Command Center</div>', unsafe_allow_html=True
-)
+left_column, right_column = st.columns(2, gap="large")
 
-with st.spinner("Loading one coherent cross-asset snapshot..."):
-    (
-        signal_snapshot,
-        cockpit_summary,
-        cockpit_groups,
-        cockpit_movers,
-        cockpit_missing,
-        cockpit_ledger_error,
-    ) = load_pm_command_center()
-
-if cockpit_summary.available_signals == 0:
-    st.warning(
-        "The command center could not build a current cross-asset snapshot. "
-        "The tool map remains available below."
-    )
-else:
-    constructive = int(
-        (pd.to_numeric(signal_snapshot["Composite"], errors="coerce") > 0.10).sum()
-    )
-    defensive = int(
-        (pd.to_numeric(signal_snapshot["Composite"], errors="coerce") < -0.10).sum()
-    )
-    st.markdown(
-        f"""
-        <div class="cockpit-banner">
-            <div>
-                <div class="cockpit-label">Current cross-asset regime</div>
-                <div class="cockpit-regime">{cockpit_summary.regime}</div>
-                <div class="cockpit-copy">
-                    {constructive} signals are constructive and {defensive} are defensive.
-                    Dispersion is {cockpit_summary.dispersion:.2f}; higher dispersion means
-                    the tape is giving a less coherent message. Data through
-                    {cockpit_summary.as_of or "unavailable"}.
-                </div>
-            </div>
-            <div>
-                <div class="cockpit-label" style="text-align:right">Composite score</div>
-                <div class="cockpit-score">{fmt_score(cockpit_summary.composite)}</div>
-                <div class="cockpit-copy" style="text-align:right">
-                    Confidence {fmt_percent(cockpit_summary.confidence)}
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    metric_cols = st.columns(5)
-    metric_cols[0].metric("Signal breadth", fmt_percent(cockpit_summary.breadth))
-    metric_cols[1].metric("Near-term impulse", fmt_score(cockpit_summary.impulse))
-    metric_cols[2].metric(
-        "Cross-signal dispersion", f"{cockpit_summary.dispersion:.2f}"
-    )
-    metric_cols[3].metric(
-        "Signals available",
-        f"{cockpit_summary.available_signals}/{cockpit_summary.total_signals}",
-    )
-    metric_cols[4].metric(
-        "Missing tickers",
-        str(len(cockpit_missing)),
-    )
-
-    mover_cols = st.columns(2)
-    with mover_cols[0]:
-        st.caption("Largest improvements: 1-week score versus 3-month score")
-        improving = cockpit_movers["improving"][
-            ["Signal", "Group", "Composite", "Impulse"]
-        ].copy()
-        st.dataframe(
-            improving,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Composite": st.column_config.NumberColumn(format="%+.2f"),
-                "Impulse": st.column_config.NumberColumn(format="%+.2f"),
-            },
-        )
-    with mover_cols[1]:
-        st.caption("Largest deteriorations: 1-week score versus 3-month score")
-        deteriorating = cockpit_movers["deteriorating"][
-            ["Signal", "Group", "Composite", "Impulse"]
-        ].copy()
-        st.dataframe(
-            deteriorating,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Composite": st.column_config.NumberColumn(format="%+.2f"),
-                "Impulse": st.column_config.NumberColumn(format="%+.2f"),
-            },
-        )
-
-    with st.expander(
-        "Signal sleeves, source coverage, and methodology", expanded=False
+with left_column:
+    for section in (
+        "Equity Leadership",
+        "Flows + Sentiment",
+        "Risk + Catalysts",
     ):
-        st.dataframe(
-            cockpit_groups,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Composite": st.column_config.NumberColumn(format="%+.2f"),
-                "Impulse": st.column_config.NumberColumn(format="%+.2f"),
-            },
-        )
-        st.caption(
-            "Scores compare current market moves with prior observations only. "
-            "Higher scores are constructed to represent easier liquidity or stronger "
-            "risk confirmation. The landing page uses Yahoo Finance market proxies; "
-            "exact macro levels belong to registered primary-source series."
-        )
-        if not cockpit_missing.empty:
-            st.dataframe(cockpit_missing, width="stretch", hide_index=True)
-        if cockpit_ledger_error:
-            st.caption(
-                "Point-in-time history could not be updated in this runtime. "
-                "The current snapshot remains available."
-            )
+        render_group(section)
+
+with right_column:
+    for section in (
+        "Technicals + Analogs",
+        "Macro + Rates",
+    ):
+        render_group(section)
 
 
-st.markdown('<div class="section-title">Tool Map</div>', unsafe_allow_html=True)
-
-with st.expander("Data health", expanded=False):
-    health = current_data_health()
-    if health is None:
-        st.caption("No shared Yahoo Finance request has run in this session yet.")
-    else:
-        st.caption(
-            f"Provider: {health.provider} | Last pull: {health.recorded_at_utc} | "
-            f"Data through: {health.data_through or 'unavailable'} | "
-            f"Returned: {health.returned_symbols}/{health.requested_symbols} | "
-            f"Failed: {health.failed_symbols}"
-        )
-
-
-if hasattr(st, "segmented_control"):
-    selected_group = st.segmented_control(
-        "Filter by group",
-        options=list(TOOL_GROUPS.keys()),
-        default="All tools",
-        label_visibility="collapsed",
-    )
-else:
-    selected_group = st.radio(
-        "Filter by group",
-        options=list(TOOL_GROUPS.keys()),
-        index=0,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-
-
-query = st.text_input(
-    "Search tools",
-    placeholder="Try: inflation, rates, credit, liquidity, catalyst...",
-    label_visibility="collapsed",
+st.markdown(
+    f"""
+    <footer class="adfm-footer">
+        <span>AD Fund Management LP · New York</span>
+        <span>{len(TOOLS)} proprietary analytical modules</span>
+    </footer>
+    """,
+    unsafe_allow_html=True,
 )
-
-
-filtered_tools = TOOL_GROUPS[selected_group]
-
-
-if query:
-    q = query.lower().strip()
-    filtered_tools = [
-        tool
-        for tool in filtered_tools
-        if q in tool.lower() or q in TOOL_DESCRIPTIONS.get(tool, "").lower()
-    ]
-
-
-if filtered_tools:
-    quick_cols = st.columns(2)
-
-    for idx, tool in enumerate(filtered_tools):
-        with quick_cols[idx % 2]:
-            definition = TOOL_DEFINITIONS[tool]
-            st.markdown(
-                f"""
-                <div class="tool-card">
-                    <div class="tool-title">{tool}</div>
-                    <div class="tool-copy">{TOOL_DESCRIPTIONS.get(tool, "Description coming soon.")}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.page_link(
-                f"pages/{definition.page_filename}",
-                label=f"Open {tool}",
-                use_container_width=True,
-            )
-else:
-    st.info("No tools matched your search. Try a shorter keyword.")
