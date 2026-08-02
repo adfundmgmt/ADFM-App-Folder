@@ -56,6 +56,23 @@ class RepositoryStandardsTests(unittest.TestCase):
         self.assertIn("pypdf", packages)
         self.assertNotIn("pypdf2", packages)
 
+    def test_lagging_tools_use_the_finishing_theme_and_shared_masthead(self) -> None:
+        targets = (
+            "12_Yield_Curve_Rates_Regime_Monitor.py",
+            "16_Event_Risk_Catalyst_Calendar.py",
+            "17_Hedge_Timer.py",
+            "18_Currency_Tension_Dashboard.py",
+        )
+        for filename in targets:
+            source = (ROOT / "pages" / filename).read_text(encoding="utf-8")
+            self.assertIn("inject_institutional_tool_finish()", source)
+            self.assertIn("render_page_header(", source)
+
+    def test_home_sidebar_uses_the_institutional_white_rail(self) -> None:
+        source = (ROOT / "Home.py").read_text(encoding="utf-8")
+        self.assertIn('section[data-testid="stSidebar"]', source)
+        self.assertIn("border-right: 1px solid #000000", source)
+
     def test_governance_and_reproducibility_files_exist(self) -> None:
         for relative_path in (
             ".gitignore",

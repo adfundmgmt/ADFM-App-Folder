@@ -15,7 +15,12 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
-from adfm_core.ui import render_footer
+from adfm_core.ui import (
+    PageHeader,
+    inject_institutional_tool_finish,
+    render_footer,
+    render_page_header,
+)
 from cte.adapters.base import read_cache
 from cte.config import CACHE_DIR
 from cte.dashboard.plots import (
@@ -212,6 +217,7 @@ CUSTOM_CSS = """
 """
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+inject_institutional_tool_finish()
 
 
 # ============================================================
@@ -578,21 +584,17 @@ if overlays is not None and "pos_label" in overlays.columns:
 # Main page header and status row
 # ============================================================
 
-st.markdown('<div class="hero-kicker">ADFM Macro Systems</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="hero-title">Currency Tension Engine</div>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    """
-    <div class="hero-caption">
-        Cross-sectional FX regime map separating <strong>fundamental trajectory</strong>
-        from <strong>valuation and policy stretch</strong>. Each currency is scored
-        against its own history, while pairwise carry and positioning remain visible
-        as independent risk conditioners.
-    </div>
-    """,
-    unsafe_allow_html=True,
+render_page_header(
+    PageHeader(
+        title="Currency Tension Engine",
+        description=(
+            "Cross-sectional FX regime map separating fundamental trajectory from "
+            "valuation and policy stretch. Each currency is scored against its own "
+            "history, while pairwise carry and positioning remain visible as "
+            "independent risk conditioners."
+        ),
+        eyebrow="ADFM Macro Systems",
+    )
 )
 
 status_1, status_2, status_3, status_4 = st.columns(4)

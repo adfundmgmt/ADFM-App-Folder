@@ -10,7 +10,12 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-from adfm_core.ui import render_footer
+from adfm_core.ui import (
+    PageHeader,
+    inject_institutional_tool_finish,
+    render_footer,
+    render_page_header,
+)
 
 
 TITLE = "Catalyst Calendar"
@@ -52,23 +57,29 @@ EXPOSURE_MAP = {
 }
 
 TYPE_COLORS = {
-    "Fed": "#7c3aed",
-    "Inflation": "#dc2626",
-    "Labor": "#2563eb",
-    "Treasury": "#d97706",
-    "Growth": "#475569",
-    "Options": "#059669",
-    "Earnings": "#0891b2",
-    "Quarter-End": "#9333ea",
-    "Custom": "#111827",
+    "Fed": "#111111",
+    "Inflation": "#333333",
+    "Labor": "#555555",
+    "Treasury": "#777777",
+    "Growth": "#222222",
+    "Options": "#666666",
+    "Earnings": "#888888",
+    "Quarter-End": "#444444",
+    "Custom": "#000000",
 }
 
 RISK_COLORS = {
-    "low": "#16a34a",
-    "medium": "#d97706",
-    "high": "#dc2626",
-    "neutral": "#64748b",
+    "low": "#888888",
+    "medium": "#555555",
+    "high": "#111111",
+    "neutral": "#666666",
 }
+
+MONO_DIVERGING_SCALE = [
+    [0.0, "#171717"],
+    [0.5, "#f5f5f3"],
+    [1.0, "#777777"],
+]
 
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
@@ -148,6 +159,8 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+inject_institutional_tool_finish()
 
 
 def add_months(d: date, months: int) -> date:
@@ -777,7 +790,7 @@ def make_return_heatmap(perf: pd.DataFrame) -> go.Figure:
             y=assets,
             text=text,
             texttemplate="%{text}",
-            colorscale="RdYlGn",
+            colorscale=MONO_DIVERGING_SCALE,
             zmid=0,
             colorbar=dict(title="%", len=0.85),
             hovertemplate="%{y}<br>%{x}: %{text}<extra></extra>",
@@ -868,10 +881,15 @@ if not calendar.empty:
 
 perf = build_market_table(market, today)
 
-st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='adfm-subtitle'>Visual-first event risk, tape backdrop, and the next catalyst cluster worth respecting.</div>",
-    unsafe_allow_html=True,
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=(
+            "Event risk, market backdrop, and the next catalyst cluster worth "
+            "respecting."
+        ),
+        eyebrow="ADFM Risk + Catalysts",
+    )
 )
 
 if calendar.empty:

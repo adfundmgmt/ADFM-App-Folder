@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from adfm_core.ui import (
     PageHeader,
+    inject_institutional_tool_finish,
     inject_institutional_theme,
     render_footer,
     render_page_header,
@@ -39,6 +40,17 @@ class InstitutionalThemeTests(unittest.TestCase):
         self.assertTrue(body.endswith("</header>"))
         self.assertIn("Liquidity Tracker", body)
         self.assertIn("2026-07-31", body)
+
+    @patch("adfm_core.ui.st.markdown")
+    def test_legacy_tool_finish_removes_colored_rounded_chrome(self, markdown):
+        inject_institutional_tool_finish()
+
+        body = markdown.call_args.args[0]
+        self.assertIn(".hero-title", body)
+        self.assertIn(".metric-card", body)
+        self.assertIn("border-radius: 0", body)
+        self.assertIn("background: #ffffff", body)
+        self.assertIn("color: #000000", body)
 
     @patch("adfm_core.ui.st.markdown")
     def test_footer_uses_the_shared_rule_and_firm_lockup(self, markdown):

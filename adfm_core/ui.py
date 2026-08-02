@@ -394,6 +394,171 @@ def inject_explorer_style(max_width_px: int = 1560) -> None:
     )
 
 
+def inject_institutional_tool_finish() -> None:
+    """Finish legacy tool chrome with the shared black-and-white research style.
+
+    A handful of older pages still define their own cards, titles, and callouts
+    after the global theme is injected.  This final pass deliberately targets
+    those legacy classes so the page shell stays consistent without changing
+    any analytical calculations or chart semantics.
+    """
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"] {
+            background: #ffffff !important;
+            border-right: 1px solid #000000 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            background: #ffffff !important;
+        }
+
+        .adfm-title,
+        .hero-title {
+            border-top: 3px solid #000000 !important;
+            border-bottom: 1px solid #000000 !important;
+            margin: 0 0 .45rem !important;
+            padding: .82rem 0 .72rem !important;
+            color: #000000 !important;
+            font-family: Georgia, "Times New Roman", serif !important;
+            font-size: clamp(2rem, 3.2vw, 2.65rem) !important;
+            font-weight: 400 !important;
+            letter-spacing: -.035em !important;
+            line-height: 1.05 !important;
+        }
+
+        .hero-kicker {
+            margin: 0 0 .32rem !important;
+            color: #000000 !important;
+            font-family: Arial, Helvetica, sans-serif !important;
+            font-size: .66rem !important;
+            font-weight: 800 !important;
+            letter-spacing: .15em !important;
+            text-transform: uppercase !important;
+        }
+
+        .adfm-subtitle,
+        .hero-caption {
+            max-width: 1120px !important;
+            margin: .5rem 0 1rem !important;
+            color: #3f3f3f !important;
+            font-family: Arial, Helvetica, sans-serif !important;
+            font-size: .84rem !important;
+            line-height: 1.5 !important;
+        }
+
+        .metric-card,
+        div[data-testid="stMetric"],
+        div[data-testid="stVerticalBlockBorderWrapper"],
+        .card {
+            border: 1px solid #bdbdbd !important;
+            border-radius: 0 !important;
+            background: #ffffff !important;
+            background-image: none !important;
+            box-shadow: none !important;
+        }
+
+        .metric-card,
+        .card { padding: 12px 14px !important; }
+
+        .metric-label,
+        div[data-testid="stMetric"] label {
+            color: #555555 !important;
+            font-family: Arial, Helvetica, sans-serif !important;
+            font-size: .68rem !important;
+            font-weight: 800 !important;
+            letter-spacing: .08em !important;
+            text-transform: uppercase !important;
+        }
+
+        .metric-value,
+        .metric-value[style],
+        div[data-testid="stMetricValue"] {
+            color: #000000 !important;
+            font-family: Georgia, "Times New Roman", serif !important;
+            font-weight: 700 !important;
+        }
+
+        .metric-footnote,
+        .section-caption,
+        .small-note,
+        .quiet-note {
+            color: #555555 !important;
+        }
+
+        .section-title {
+            border-bottom: 1px solid #000000 !important;
+            margin: 1.25rem 0 .55rem !important;
+            padding-bottom: .38rem !important;
+            color: #000000 !important;
+            font-family: Georgia, "Times New Roman", serif !important;
+            font-size: 1.05rem !important;
+            font-weight: 700 !important;
+            letter-spacing: -.01em !important;
+        }
+
+        .note-box {
+            border: 1px solid #bdbdbd !important;
+            border-left: 4px solid #000000 !important;
+            border-radius: 0 !important;
+            background: #ffffff !important;
+            color: #171717 !important;
+            box-shadow: none !important;
+        }
+
+        .tool-divider { border-color: #000000 !important; }
+
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="input"],
+        div[data-baseweb="textarea"] > div,
+        div[data-testid="stDataFrame"],
+        .stDataFrame {
+            border-radius: 0 !important;
+            border-color: #8a8a8a !important;
+            background: #ffffff !important;
+            box-shadow: none !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0 !important;
+            border-bottom: 1px solid #000000 !important;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 0 !important;
+            background: #ffffff !important;
+            color: #555555 !important;
+        }
+
+        .stTabs [aria-selected="true"] {
+            background: #f5f5f3 !important;
+            color: #000000 !important;
+        }
+
+        .stButton > button,
+        .stDownloadButton > button {
+            border: 1px solid #000000 !important;
+            border-radius: 0 !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+            box-shadow: none !important;
+        }
+
+        .badge {
+            border: 1px solid #000000 !important;
+            border-radius: 0 !important;
+            background: #000000 !important;
+            color: #ffffff !important;
+            padding: .24rem .48rem !important;
+            font-weight: 800 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_kpi_cards(cards: Sequence[tuple[str, str, str]]) -> None:
     """Render a responsive strip of compact decision-oriented KPI cards."""
     body = []

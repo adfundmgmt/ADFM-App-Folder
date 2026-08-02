@@ -76,6 +76,44 @@ st.markdown(
             display: none;
         }
 
+        section[data-testid="stSidebar"] {
+            background: #ffffff !important;
+            border-right: 1px solid #000000 !important;
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            background: #ffffff !important;
+            padding-top: 1.25rem !important;
+        }
+
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] li,
+        section[data-testid="stSidebar"] label {
+            color: #303030 !important;
+            font-family: Arial, Helvetica, sans-serif !important;
+            font-size: .78rem !important;
+            line-height: 1.5 !important;
+        }
+
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2 {
+            border-bottom: 2px solid #000000 !important;
+            padding-bottom: .48rem !important;
+            color: #000000 !important;
+            font-size: .72rem !important;
+            font-weight: 800 !important;
+            letter-spacing: .13em !important;
+            text-transform: uppercase !important;
+        }
+
+        section[data-testid="stSidebar"] button {
+            border: 1px solid #000000 !important;
+            border-radius: 0 !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+            box-shadow: none !important;
+        }
+
         .block-container {
             max-width: 1240px;
             padding: 2.75rem 2.5rem 3rem;

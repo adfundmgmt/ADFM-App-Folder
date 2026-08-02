@@ -10,7 +10,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from adfm_core.ui import render_footer
+from adfm_core.ui import (
+    PageHeader,
+    inject_institutional_tool_finish,
+    render_footer,
+    render_page_header,
+)
 
 TITLE = "Yield Curve Rates Regime Monitor"
 
@@ -55,19 +60,25 @@ PERIODS: Dict[str, Dict[str, object]] = {
 CURVE_OPTIONS = ["3m10y", "5s10s", "10s30s", "5s30s"]
 
 COLORS = {
-    "ink": "#0f172a",
-    "muted": "#64748b",
-    "border": "#e2e8f0",
+    "ink": "#111111",
+    "muted": "#666666",
+    "border": "#d0d0d0",
     "panel": "#ffffff",
-    "soft": "#f8fafc",
-    "blue": "#2563eb",
-    "purple": "#7c3aed",
-    "green": "#059669",
-    "red": "#dc2626",
-    "amber": "#d97706",
-    "slate": "#475569",
-    "grey": "#94a3b8",
+    "soft": "#f5f5f3",
+    "blue": "#111111",
+    "purple": "#444444",
+    "green": "#555555",
+    "red": "#111111",
+    "amber": "#777777",
+    "slate": "#444444",
+    "grey": "#999999",
 }
+
+MONO_DIVERGING_SCALE = [
+    [0.0, "#171717"],
+    [0.5, "#f5f5f3"],
+    [1.0, "#777777"],
+]
 
 st.markdown(
     """
@@ -184,6 +195,8 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+inject_institutional_tool_finish()
 
 
 
@@ -657,10 +670,15 @@ with st.sidebar:
     show_status = st.checkbox("Show Yahoo download status", value=False)
 
 
-st.markdown(f"<div class='adfm-title'>{TITLE}</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='adfm-subtitle'>Yahoo Finance-only curve pressure, duration stress, relative-performance confirmation, and outlier rate days.</div>",
-    unsafe_allow_html=True,
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=(
+            "Yahoo Finance-only curve pressure, duration stress, relative-performance "
+            "confirmation, and outlier rate days."
+        ),
+        eyebrow="ADFM Macro + Rates",
+    )
 )
 
 start = date.today() - timedelta(days=lookback_days + 10)
@@ -826,7 +844,7 @@ with right:
                 z=z,
                 x=heat_cols,
                 y=matrix["Series"],
-                colorscale="RdYlGn_r",
+                colorscale=MONO_DIVERGING_SCALE,
                 zmid=0,
                 text=text,
                 texttemplate="%{text}",
@@ -873,7 +891,7 @@ if show_market_confirmation:
                 z=z,
                 x=heat_cols,
                 y=market_matrix["Series"],
-                colorscale="RdYlGn",
+                colorscale=MONO_DIVERGING_SCALE,
                 zmid=0,
                 text=text,
                 texttemplate="%{text}",

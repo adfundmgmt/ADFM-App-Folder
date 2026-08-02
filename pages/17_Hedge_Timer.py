@@ -18,7 +18,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 
-from adfm_core.ui import render_footer
+from adfm_core.ui import (
+    PageHeader,
+    inject_institutional_tool_finish,
+    render_footer,
+    render_page_header,
+)
 import yfinance as yf
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, Normalize
@@ -26,6 +31,8 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize
 
 # ============================== Page + Style ==============================
 st.set_page_config(page_title="Hedge Timer", layout="wide")
+
+inject_institutional_tool_finish()
 
 plt.rcParams["figure.dpi"] = 200
 
@@ -672,8 +679,10 @@ def _apply_subtle_grid(ax: plt.Axes, y_only: bool = False) -> None:
 
 
 def _plot_score_gradient(ax: plt.Axes, x: np.ndarray, y: np.ndarray, lw: float = 2.2) -> None:
-    # Color grade score: red -> yellow -> green
-    cmap = LinearSegmentedColormap.from_list("ryg", ["#DC2626", "#F59E0B", "#10B981"])
+    # Monochrome score grade: light -> mid -> dark.
+    cmap = LinearSegmentedColormap.from_list(
+        "institutional_gray", ["#d0d0d0", "#777777", "#111111"]
+    )
     norm = Normalize(vmin=0, vmax=100)
 
     pts = np.array([x, y]).T.reshape(-1, 1, 2)
@@ -816,10 +825,10 @@ def plot_price_and_score_image(
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
 
-    # Price + pastel MAs
-    price_c = "#111827"
-    ma50_c = "#A8DADC"   # pastel teal
-    ma200_c = "#CDB4DB"  # pastel lavender
+    # Price and moving averages use the institutional grayscale hierarchy.
+    price_c = "#111111"
+    ma50_c = "#777777"
+    ma200_c = "#b5b5b5"
 
     ax1.plot(x, dfp["price"].values, linewidth=style["price_lw"], color=price_c, label="Price")
     ax1.plot(x, ma50.values, linewidth=style["ma_lw"], color=ma50_c, label="MA50")
@@ -839,7 +848,7 @@ def plot_price_and_score_image(
             dfp["price"].values[sig_on.values],
             marker="v",
             s=style["marker_s"],
-            color="#DC2626",
+            color="#111111",
             edgecolors="white",
             linewidths=style["marker_lw"],
             label="Short signal (new)",
@@ -855,8 +864,8 @@ def plot_price_and_score_image(
     y_score = dfp["score"].fillna(0.0).values.astype(float)
     _plot_score_gradient(ax2, x.astype(float), y_score, lw=style["score_lw"])
 
-    t_short_c = "#111827"
-    t_bias_c = "#9CA3AF"
+    t_short_c = "#111111"
+    t_bias_c = "#999999"
     ax2.axhline(t_short, linewidth=1.1, color=t_short_c, alpha=0.70)
     ax2.axhline(t_bias, linewidth=1.0, color=t_bias_c, alpha=0.55)
     ax2.set_ylim(0, 100)
@@ -953,9 +962,16 @@ def plot_episode_table_image(table_df: pd.DataFrame, title: str) -> plt.Figure:
 
 
 # ============================== App ==============================
-st.title("Hedge Timer")
-st.caption(
-    "Decision slip for shorting ^SPX or ^NDX based on early-warning stress plus multi-timeframe momentum and trend confirmation, with explicit early-stage gating to avoid bottom-shorting."
+render_page_header(
+    PageHeader(
+        title="Hedge Timer",
+        description=(
+            "Decision slip for shorting ^SPX or ^NDX based on early-warning stress, "
+            "multi-timeframe momentum, and trend confirmation, with explicit "
+            "early-stage gating to avoid bottom-shorting."
+        ),
+        eyebrow="ADFM Risk + Catalysts",
+    )
 )
 
 start = _start_date()

@@ -12,17 +12,17 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 
-_BG = "#0e1117"
-_PANEL = "#141821"
-_FG = "#d7dce5"
-_MUTE = "#6b7280"
-_GRID = "#252a35"
-_BLUE = "#5b9bd5"
-_WARN = "#e07a5f"
+_BG = "#ffffff"
+_PANEL = "#ffffff"
+_FG = "#171717"
+_MUTE = "#666666"
+_GRID = "#d7d7d7"
+_BLUE = "#111111"
+_WARN = "#555555"
 
-# a calmer diverging map than RdYlGn (red -> slate -> teal-green)
+# Institutional grayscale divergence: dark extremes with a quiet neutral center.
 _DIV = LinearSegmentedColormap.from_list(
-    "cte_div", ["#c1543b", "#8a4a45", "#2b2f3a", "#3f7d6e", "#4fae8b"]
+    "cte_div", ["#181818", "#777777", "#f4f4f2", "#a8a8a8", "#383838"]
 )
 
 _QUAD = {
@@ -31,7 +31,7 @@ _QUAD = {
     ("+", "-"): "Attractive",
     ("-", "-"): "Washed out",
 }
-_QUAD_TINT = {("+", "-"): "#193a2e", ("-", "+"): "#3a1f19"}  # attractive / vulnerable
+_QUAD_TINT = {("+", "-"): "#eeeeec", ("-", "+"): "#d9d9d6"}
 
 PILLAR_LABEL = {
     "A_growth": "Growth (A)",
@@ -418,7 +418,7 @@ def positioning_fig(pos):
         ax.set_xticks([])
         ax.set_yticks([])
         return fig
-    _TEAL = "#4fae8b"
+    _TEAL = "#777777"
     n = len(d)
     OFF = 0.14  # sub-row offset within each currency band
     fig, ax = plt.subplots(figsize=(8.8, 0.72 * n + 2.6), facecolor=_BG)
