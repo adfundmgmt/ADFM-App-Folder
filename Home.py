@@ -363,9 +363,9 @@ st.markdown(
     <section class="directory-introduction">
         <h2 class="directory-title">Research Directory</h2>
         <p class="directory-copy">
-            Select an analytical page below. Each tool is designed to answer a
-            specific question across equities, market structure, macro, rates,
-            liquidity, positioning, and risk.
+            Choose a tool below. Each is built to examine a specific question
+            across equities, market structure, macro, rates, liquidity,
+            positioning, and risk.
         </p>
     </section>
     """,
