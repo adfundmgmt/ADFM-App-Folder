@@ -1,7 +1,9 @@
-"""Shared output palette for ADFM analytical charts and signal readouts.
+"""Shared Excel-style output palette for ADFM analytical charts and signals.
 
 The application shell remains black and white. These colors are reserved for
 data, series, regimes, risk states, and categorical distinctions inside outputs.
+The stronger Office-style RGB values are designed for legibility on a white
+canvas and in screenshots, exports, and investment-committee materials.
 """
 
 from __future__ import annotations
@@ -9,30 +11,35 @@ from __future__ import annotations
 from typing import Final
 
 
-PASTEL: Final[dict[str, str]] = {
-    "blue": "#7FA7D8",
-    "coral": "#E79A78",
-    "sage": "#8FBF9F",
-    "amber": "#D7AE62",
-    "lavender": "#A995C8",
-    "teal": "#72B7B2",
-    "rose": "#D98C8C",
-    "periwinkle": "#8F9ED1",
-    "olive": "#A8B77A",
-    "mauve": "#C38FB5",
-    "sky": "#8FC6DF",
-    "apricot": "#E7B98A",
-    "mint": "#9BC9B3",
-    "salmon": "#DF8F9D",
-    "cornflower": "#779ECB",
-    "plum": "#B185A7",
-    "seafoam": "#82BEB0",
-    "sand": "#C9B37E",
-    "slate_blue": "#879BBE",
-    "clay": "#C79274",
+EXCEL: Final[dict[str, str]] = {
+    "blue": "#4472C4",
+    "coral": "#ED7D31",
+    "sage": "#70AD47",
+    "amber": "#FFC000",
+    "lavender": "#8064A2",
+    "teal": "#4BACC6",
+    "rose": "#C0504D",
+    "periwinkle": "#5B9BD5",
+    "olive": "#9BBB59",
+    "mauve": "#A64D79",
+    "sky": "#00B0F0",
+    "apricot": "#F79646",
+    "mint": "#00B050",
+    "salmon": "#E26B6A",
+    "cornflower": "#2F5597",
+    "plum": "#7030A0",
+    "seafoam": "#008C95",
+    "sand": "#A67C00",
+    "slate_blue": "#7F8C8D",
+    "clay": "#C65911",
 }
 
-PASTEL_20: Final[tuple[str, ...]] = tuple(PASTEL.values())
+EXCEL_20: Final[tuple[str, ...]] = tuple(EXCEL.values())
+
+# Compatibility aliases keep every existing page on the centralized palette
+# without a broad rename touching analytical code.
+PASTEL: Final[dict[str, str]] = EXCEL
+PASTEL_20: Final[tuple[str, ...]] = EXCEL_20
 
 # Negative or adverse values sit at the low end; positive or constructive
 # values sit at the high end. The neutral midpoint stays close to the canvas.
@@ -52,6 +59,6 @@ PASTEL_RATES_SCALE: Final[list[list[float | str]]] = [
 
 
 def pastel(index: int) -> str:
-    """Return a stable palette color, cycling only after all 20 are used."""
+    """Return a stable Excel palette color, cycling after all 20 are used."""
 
     return PASTEL_20[index % len(PASTEL_20)]
