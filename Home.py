@@ -4,20 +4,23 @@ from base64 import b64encode
 from html import escape
 from pathlib import Path
 
+from PIL import Image
 import streamlit as st
 
 from adfm_core.catalog import GROUP_ORDER, tool_definitions
 
+ROOT = Path(__file__).resolve().parent
+LOGO_PATH = ROOT / "assets" / "ADFM_Logo_Naked.png"
+PAGE_ICON = Image.open(LOGO_PATH).convert("RGBA")
+
 st.set_page_config(
     page_title="ADFM Analytics",
-    page_icon="assets/ADFM_Logo_Naked.png",
+    page_icon=PAGE_ICON,
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 
-ROOT = Path(__file__).resolve().parent
-LOGO_PATH = ROOT / "assets" / "ADFM_Logo_Naked.png"
 TOOLS = tool_definitions()
 TOOLS_BY_GROUP = {
     group: [tool for tool in TOOLS if tool.group == group] for group in GROUP_ORDER
@@ -134,7 +137,6 @@ st.markdown(
             width: 70px;
             height: 70px;
             object-fit: contain;
-            filter: brightness(0);
         }
 
         .firm-name {

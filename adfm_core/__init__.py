@@ -39,6 +39,7 @@ def _install_institutional_theme() -> None:
 
     try:
         import streamlit as st
+        from PIL import Image
     except ImportError:
         return
 
@@ -53,7 +54,7 @@ def _install_institutional_theme() -> None:
         is_analytics_page = _called_from_analytics_page()
         if is_analytics_page:
             kwargs = dict(kwargs)
-            kwargs.setdefault("page_icon", str(logo_path))
+            kwargs.setdefault("page_icon", Image.open(logo_path).convert("RGBA"))
         result = original_set_page_config(*args, **kwargs)
         if is_analytics_page:
             inject_institutional_theme()
