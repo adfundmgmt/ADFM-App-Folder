@@ -390,13 +390,3 @@ with right_column:
     ):
         render_group(section)
 
-
-st.markdown(
-    f"""
-    <footer class="adfm-footer">
-        <span>AD Fund Management LP · New York</span>
-        <span>{len(TOOLS)} proprietary analytical modules</span>
-    </footer>
-    """,
-    unsafe_allow_html=True,
-)
