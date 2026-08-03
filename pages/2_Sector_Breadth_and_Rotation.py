@@ -13,7 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 import yfinance as yf
 
 
@@ -26,7 +26,16 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("Sector Breadth and Rotation")
+render_page_header(
+    PageHeader(
+        title="Sector Breadth and Rotation",
+        description=(
+            "Participation, trend breadth, and sector rotation across major, "
+            "industry, and thematic equity groups."
+        ),
+        eyebrow="ADFM Equity Leadership",
+    )
+)
 
 
 # =============================================================================

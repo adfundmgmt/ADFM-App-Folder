@@ -4,9 +4,8 @@ import re
 import unittest
 from pathlib import Path
 
-from adfm_core.palette import EXCEL, EXCEL_20, PASTEL, PASTEL_20, pastel
 from adfm_core.catalog import TOOL_CATALOG
-
+from adfm_core.palette import EXCEL, EXCEL_20, PASTEL, PASTEL_20, pastel
 
 ROOT = Path(__file__).resolve().parents[1]
 

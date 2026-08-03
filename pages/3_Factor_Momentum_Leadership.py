@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from adfm_core.palette import PASTEL, PASTEL_20
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 import yfinance as yf
 
 # =========================================================
@@ -978,8 +978,13 @@ def plot_leadership_map(mom_df: pd.DataFrame) -> plt.Figure:
 # =========================================================
 # Sidebar
 # =========================================================
-st.title(TITLE)
-st.caption(SUBTITLE)
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=SUBTITLE,
+        eyebrow="ADFM Equity Leadership",
+    )
+)
 
 with st.sidebar:
     st.header("About This Tool")

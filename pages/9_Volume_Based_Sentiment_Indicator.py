@@ -15,7 +15,7 @@ import streamlit as st
 from adfm_core.palette import PASTEL
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.regime_math import rolling_percentile_previous
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 import yfinance as yf
 from plotly.subplots import make_subplots
 from zoneinfo import ZoneInfo
@@ -1553,8 +1553,13 @@ with st.sidebar:
 # TITLE
 # =============================================================================
 
-st.title(TITLE)
-st.caption(SUBTITLE)
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=SUBTITLE,
+        eyebrow="ADFM Flows + Sentiment",
+    )
+)
 
 control_col1, control_col2, control_col3 = st.columns([2.0, 1.0, 1.0])
 

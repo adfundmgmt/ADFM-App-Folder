@@ -19,7 +19,7 @@ from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
     render_monthly_returns_matrix,
 )
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 
 plt.style.use("default")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
@@ -81,7 +81,6 @@ CACHE_TTL_SECONDS = 3600
 # =========================
 
 st.set_page_config(page_title="Monthly Seasonality Explorer", layout="wide")
-st.title("Monthly Seasonality Explorer")
 
 st.markdown(
     """
@@ -147,6 +146,17 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+render_page_header(
+    PageHeader(
+        title="Monthly Seasonality Explorer",
+        description=(
+            "One shared sample, one active month, and one comparison year drive "
+            "the matrix and both companion charts."
+        ),
+        eyebrow="ADFM Technicals + Analogs",
+    )
 )
 
 
@@ -1419,11 +1429,6 @@ def plot_intra_month_curve(
 
 today_dt = _today()
 this_year = int(today_dt.year)
-
-st.caption(
-    "One shared sample, one active month, and one comparison year drive the matrix and both companion charts."
-)
-
 
 def _reset_seasonality_view() -> None:
     keys = [

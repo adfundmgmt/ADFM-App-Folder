@@ -10,7 +10,7 @@ import pytz
 import streamlit as st
 
 from adfm_core.palette import PASTEL
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -977,10 +977,16 @@ bar_view = metric_map[chart_metric_choice]
 # =========================================================
 # HEADER
 # =========================================================
-st.title("ETF Flow Pressure Proxy")
-st.caption(
-    "Directional ETF pressure monitor using a 99-name ETF signal universe. "
-    "Positive values suggest accumulation pressure. Negative values suggest distribution pressure."
+render_page_header(
+    PageHeader(
+        title="ETF Flow Pressure Proxy",
+        description=(
+            "Directional ETF pressure monitor using a 99-name ETF signal universe. "
+            "Positive values suggest accumulation pressure. Negative values suggest "
+            "distribution pressure."
+        ),
+        eyebrow="ADFM Flows + Sentiment",
+    )
 )
 
 

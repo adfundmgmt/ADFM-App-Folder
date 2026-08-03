@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Final
 
-
 EXCEL: Final[dict[str, str]] = {
     "blue": "#4472C4",
     "coral": "#ED7D31",

@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from adfm_core.palette import PASTEL_20
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
@@ -1529,8 +1529,16 @@ def inject_single_page_css() -> None:
 inject_css()
 add_logo()
 
-st.title("Market Memory Explorer")
-st.caption("Calendar-year analogs, unconditional base rates, and current percentile context from adjusted close data.")
+render_page_header(
+    PageHeader(
+        title="Market Memory Explorer",
+        description=(
+            "Calendar-year analogs, unconditional base rates, and current "
+            "percentile context from adjusted close data."
+        ),
+        eyebrow="ADFM Technicals + Analogs",
+    )
+)
 
 with st.sidebar:
     st.header("About This Tool")

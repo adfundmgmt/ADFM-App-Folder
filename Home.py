@@ -4,8 +4,8 @@ from base64 import b64encode
 from html import escape
 from pathlib import Path
 
-from PIL import Image
 import streamlit as st
+from PIL import Image
 
 from adfm_core.catalog import GROUP_ORDER, tool_definitions
 
@@ -389,4 +389,3 @@ with right_column:
         "Macro + Rates",
     ):
         render_group(section)
-

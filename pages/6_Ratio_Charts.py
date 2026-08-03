@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from adfm_core.palette import PASTEL
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 import yfinance as yf
 from plotly.subplots import make_subplots
 
@@ -19,7 +19,16 @@ pd.options.mode.chained_assignment = None
 
 # ============================== Page config ==============================
 st.set_page_config(layout="wide", page_title="Ratio Charts")
-st.title("Ratio Charts")
+render_page_header(
+    PageHeader(
+        title="Ratio Charts",
+        description=(
+            "Relative-strength ratios across assets, sectors, credit, factors, "
+            "and risk-appetite proxies."
+        ),
+        eyebrow="ADFM Technicals + Analogs",
+    )
+)
 
 # ============================== Defaults =================================
 DEFAULT_LOOKBACK = "3 Years"
