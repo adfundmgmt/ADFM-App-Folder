@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 19 tools, in the same order and groups shown on the Home page.
+The application contains 20 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -44,6 +44,7 @@ The application contains 19 tools, in the same order and groups shown on the Hom
 | 17 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
+| 20 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity across a selected universe. | Yahoo Finance current option chains and adjusted close history |
 
 ## Tool groups
 
@@ -51,7 +52,7 @@ The application contains 19 tools, in the same order and groups shown on the Hom
 |---|---|
 | Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard |
 | Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
-| Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator |
+| Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Tracker; Currency Tension Engine |
 | Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer |
 
