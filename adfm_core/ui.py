@@ -735,7 +735,7 @@ def _inject_page_layout_contract() -> None:
             .block-container {
                 width: 100% !important;
                 max-width: 100% !important;
-                padding: 1.05rem .9rem 1.75rem !important;
+                padding: 1.75rem .9rem 1.75rem !important;
                 overflow-x: clip !important;
             }
 
