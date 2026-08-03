@@ -34,7 +34,6 @@ _original_render_selection_note = ui.render_selection_note
 _state = {"skip_plots": 0, "skip_info": 0}
 
 
-# pandas 3 removed Styler.applymap. The base implementation still calls it.
 _added_applymap_alias = False
 if not hasattr(Styler, "applymap") and hasattr(Styler, "map"):
     Styler.applymap = Styler.map  # type: ignore[attr-defined]
@@ -111,7 +110,7 @@ def _render_fci_g(namespace: dict[str, Any]) -> None:
     if not callable(load_fcig) or not callable(filter_lookback) or not callable(plot_layout):
         return
 
-    ui.render_section_header(
+    _original_render_section_header(
         "Federal Reserve FCI-G Overlay",
         "Above zero means financial conditions are a growth headwind. Below zero means they are a growth tailwind. This is a transmission measure, so it remains separate from the liquidity score.",
     )
@@ -193,7 +192,7 @@ def _render_liquidity_level_and_impulse(namespace: dict[str, Any]) -> None:
             "The bottom panel shows whether they are improving or deteriorating."
         )
 
-    ui.render_section_header("Liquidity Level and Marginal Impulse", subtitle)
+    _original_render_section_header("Liquidity Level and Marginal Impulse", subtitle)
 
     fig = make_subplots(
         rows=2,
