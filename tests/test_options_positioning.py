@@ -10,6 +10,7 @@ from adfm_core.options_positioning import (
     black_scholes_delta,
     black_scholes_price,
     build_positioning_commentary,
+    directional_realized_volatility,
     implied_volatility_from_price,
     option_snapshot,
     ordinal,
@@ -82,6 +83,23 @@ class OptionsPositioningTests(unittest.TestCase):
 
         self.assertTrue(np.isclose(result.loc[0, "impliedVolatility"], 0.25, atol=1e-6))
         self.assertEqual(result.loc[0, "iv_source"], "Solved from price")
+
+    def test_directional_realized_volatility_separates_return_signs(self):
+        returns = np.array([0.02, -0.01, 0.03, -0.04, 0.01, -0.02])
+        close = pd.Series(100.0 * np.exp(np.r_[0.0, returns.cumsum()]))
+
+        result = directional_realized_volatility(close, window=6)
+
+        expected_downside = returns[returns < 0].std(ddof=1) * math.sqrt(252)
+        expected_upside = returns[returns > 0].std(ddof=1) * math.sqrt(252)
+        self.assertTrue(np.isclose(result.iloc[-1]["downside_vol"], expected_downside))
+        self.assertTrue(np.isclose(result.iloc[-1]["upside_vol"], expected_upside))
+        self.assertTrue(
+            np.isclose(
+                result.iloc[-1]["downside_upside_ratio"],
+                expected_downside / expected_upside,
+            )
+        )
 
     def test_option_snapshot_builds_skew_and_put_call_ratios(self):
         calls = sample_chain(

@@ -44,7 +44,7 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 | 17 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
-| 20 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity across a selected universe. | Yahoo Finance current option chains and adjusted close history |
+| 20 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
 
 ## Tool groups
 

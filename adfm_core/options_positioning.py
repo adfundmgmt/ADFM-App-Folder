@@ -351,6 +351,42 @@ def add_cross_sectional_ranks(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def directional_realized_volatility(
+    close: pd.Series,
+    *,
+    window: int = 21,
+    periods_per_year: int = 252,
+) -> pd.DataFrame:
+    """Return annualized upside/downside volatility and their rolling ratio."""
+    window = max(int(window), 2)
+    clean = pd.to_numeric(close, errors="coerce").where(lambda values: values > 0)
+    returns = np.log(clean).diff()
+    scale = math.sqrt(int(periods_per_year))
+    downside = (
+        returns.where(returns < 0)
+        .rolling(window, min_periods=2)
+        .std(ddof=1)
+        .mul(scale)
+    )
+    upside = (
+        returns.where(returns > 0)
+        .rolling(window, min_periods=2)
+        .std(ddof=1)
+        .mul(scale)
+    )
+    frame = pd.concat(
+        {
+            "downside_vol": downside,
+            "upside_vol": upside,
+        },
+        axis=1,
+    )
+    frame["downside_upside_ratio"] = frame["downside_vol"].div(
+        frame["upside_vol"].replace(0, np.nan)
+    )
+    return frame.replace([np.inf, -np.inf], np.nan)
+
+
 def build_positioning_commentary(row: Mapping[str, object]) -> str:
     """Create restrained commentary from one ranked current snapshot."""
     ticker = str(row.get("ticker", "The selected ticker"))
