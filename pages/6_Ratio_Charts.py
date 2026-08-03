@@ -1,7 +1,8 @@
 import re
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from html import escape as html_escape
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -28,6 +29,29 @@ render_page_header(
         ),
         eyebrow="ADFM Technicals + Analogs",
     )
+)
+
+st.markdown(
+    """
+    <style>
+    .ratio-chart-heading {
+        margin: 1.1rem 0 .45rem;
+        color: #000000;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 1.08rem;
+        font-weight: 700;
+        line-height: 1.25;
+    }
+
+    @media (max-width: 760px) {
+        .ratio-chart-heading {
+            margin-top: .9rem;
+            font-size: 1rem;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # ============================== Defaults =================================
@@ -276,14 +300,24 @@ with st.sidebar:
     )
 
 # ============================== Dates ====================================
-now = datetime.today()
-yf_end = now + timedelta(days=1)
-hist_start = now - timedelta(days=365 * 25)
+market_date = date.today()
+yf_end = market_date + timedelta(days=1)
 
 if span_key == "YTD":
-    disp_start = pd.Timestamp(datetime(now.year, 1, 1))
+    display_days = max(1, (market_date - date(market_date.year, 1, 1)).days)
 else:
-    disp_start = pd.Timestamp(now - timedelta(days=spans[span_key]))
+    display_days = int(spans[span_key])
+
+# Keep enough warm-up history for the 200-day average without downloading
+# 25 years of prices on the default three-year view. Date-only bounds also
+# make the Streamlit cache key stable throughout the trading day.
+history_days = max(900, display_days + 450)
+hist_start = market_date - timedelta(days=history_days)
+
+if span_key == "YTD":
+    disp_start = pd.Timestamp(date(market_date.year, 1, 1))
+else:
+    disp_start = pd.Timestamp(market_date - timedelta(days=display_days))
 
 # ============================== Helpers ==================================
 def clean_ticker(ticker: str) -> str:
@@ -350,7 +384,7 @@ def parse_custom_ratio_text(text: str) -> List[RatioSpec]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_closes(tickers: Tuple[str, ...], start: datetime, end: datetime) -> pd.DataFrame:
+def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFrame:
     ticker_list = unique_keep_order(tickers)
 
     if not ticker_list:
@@ -851,13 +885,21 @@ def make_fig(
         fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
 
     fig.update_layout(
-        title_text=title,
+        title_text="",
         height=540 if show_rsi_flag else 380,
-        margin={"l": 40, "r": 22, "t": 54, "b": 34},
+        margin={"l": 40, "r": 22, "t": 56, "b": 34},
         paper_bgcolor="white",
         plot_bgcolor="white",
         hovermode="x",
         showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.01,
+            "xanchor": "left",
+            "x": 0,
+            "font": {"size": 10},
+        },
     )
 
     fig.update_xaxes(
@@ -895,6 +937,10 @@ def render_ratio_block(
         return
 
     try:
+        st.markdown(
+            f'<div class="ratio-chart-heading">{html_escape(title)}</div>',
+            unsafe_allow_html=True,
+        )
         fig = make_fig(
             ratio=clean,
             title=title,
@@ -903,7 +949,11 @@ def render_ratio_block(
             show_rsi_flag=show_rsi_flag,
             rsi_len=rsi_len,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False, "responsive": True},
+        )
 
     except Exception as e:
         st.warning(f"Chart rendering failed for {title}. Data loaded, but Plotly rejected the chart configuration.")
@@ -927,7 +977,7 @@ custom_tickers = unique_keep_order(
 )
 
 # ============================== Fetch static data =========================
-with st.spinner("Downloading price history..."):
+with st.spinner("Loading ratio data..."):
     closes_static = fetch_closes(tuple(static_tickers), hist_start, yf_end)
 
 if closes_static.empty:
