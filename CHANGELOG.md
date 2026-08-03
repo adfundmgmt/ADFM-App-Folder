@@ -6,7 +6,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Added
 
-- Options Positioning Compass (Page 20) with Yahoo Finance option-chain analytics, generated commentary, volatility/skew ranks, term structure, IV surface, and estimated premium activity.
+- Options Positioning Compass (Page 20) with Yahoo Finance option-chain analytics, generated commentary, volatility/skew ranks, term structure, IV surface, estimated premium activity, and a price-derived fallback when hosted option endpoints are unavailable.
 - Relative Volatility Lab (Page 19).
 - PM command center with causal cross-asset regime, breadth, impulse, dispersion, confidence, and mover signals.
 - Centralized market/macro data registry, primary-source FRED adapter, and point-in-time signal ledger.
