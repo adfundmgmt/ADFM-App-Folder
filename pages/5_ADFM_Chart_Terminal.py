@@ -115,18 +115,19 @@ st.markdown(
         }
 
         .adfm-header {
-            border: 1px solid rgba(49, 51, 63, 0.10);
-            border-radius: 14px;
-            padding: 14px 16px 12px 16px;
+            border: 0;
+            border-radius: 0;
+            padding: 0;
             background: #ffffff;
-            margin-bottom: 4px;
+            margin: 0 0 8px 0;
         }
 
         .adfm-title {
-            font-size: 1.35rem;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.38rem;
             line-height: 1.25;
-            font-weight: 750;
-            color: #111827;
+            font-weight: 700;
+            color: #000000;
             margin: 0;
             white-space: normal;
             overflow-wrap: anywhere;
@@ -146,11 +147,11 @@ st.markdown(
         }
 
         .metric-card {
-            border: 1px solid rgba(49, 51, 63, 0.10);
-            border-radius: 12px;
-            padding: 8px 10px;
+            border: 1px solid #bdbdbd;
+            border-radius: 0;
+            padding: 10px 12px;
             background: #ffffff;
-            min-height: 58px;
+            min-height: 72px;
         }
 
         .metric-label {
@@ -162,10 +163,11 @@ st.markdown(
         }
 
         .metric-value {
-            font-size: 1.02rem;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.06rem;
             line-height: 1.20;
             font-weight: 700;
-            color: #111827;
+            color: #000000;
             white-space: nowrap;
         }
 
@@ -307,7 +309,24 @@ st.markdown(
 
         @media (max-width: 700px) {
             .metric-strip {
-                grid-template-columns: repeat(2, minmax(95px, 1fr));
+                grid-template-columns: none;
+                grid-auto-flow: column;
+                grid-auto-columns: minmax(132px, 42vw);
+                gap: 7px;
+                overflow-x: auto;
+                overscroll-behavior-x: contain;
+                padding-bottom: 5px;
+                scroll-snap-type: x proximity;
+                scrollbar-width: thin;
+            }
+
+            .metric-card {
+                min-height: 78px;
+                scroll-snap-align: start;
+            }
+
+            .adfm-subtitle {
+                font-size: .78rem;
             }
         }
         </style>
@@ -3186,7 +3205,9 @@ st.plotly_chart(
     use_container_width=True,
     config={
         "displaylogo": False,
-        "scrollZoom": True,
+        "displayModeBar": False,
+        "scrollZoom": False,
+        "responsive": True,
         "modeBarButtonsToRemove": [
             "select2d",
             "lasso2d",

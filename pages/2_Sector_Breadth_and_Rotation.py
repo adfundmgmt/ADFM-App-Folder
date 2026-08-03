@@ -13,7 +13,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import (
+    PageHeader,
+    render_footer,
+    render_page_header,
+    render_section_header,
+)
 import yfinance as yf
 
 
@@ -410,8 +415,16 @@ def fetch_prices(
         if ticker not in prices.columns or not prices[ticker].notna().any()
     ]
 
+    # A thin or unavailable sector ETF can be dropped from the analysis. Only
+    # retry benchmark symbols individually because those are required for the
+    # relative-strength panel. The previous serial fallback loop delayed the
+    # first mobile chart for tickers that were dropped moments later.
+    fallback_tickers = [
+        ticker for ticker in missing_tickers if ticker in BENCHMARKS
+    ]
+
     fallback_pieces: List[pd.DataFrame] = []
-    for ticker in missing_tickers:
+    for ticker in fallback_tickers:
         downloaded = _download_batch([ticker], period, interval)
         if not downloaded.empty:
             fallback_pieces.append(downloaded)
@@ -1079,17 +1092,9 @@ def make_rs_chart(
     )
 
     fig.update_layout(
-        title=dict(
-            text=f"Relative Strength | {item_name} vs {benchmark_ticker}",
-            x=0.0,
-            xanchor="left",
-            y=0.98,
-            yanchor="top",
-            font=dict(size=20),
-            pad=dict(b=12),
-        ),
+        title="",
         height=440,
-        margin=dict(l=10, r=10, t=95, b=10),
+        margin=dict(l=10, r=10, t=58, b=10),
         xaxis_title="Date",
         yaxis_title="RS Ratio",
         legend=dict(
@@ -1136,7 +1141,7 @@ def make_rotation_scatter(
             text="No valid rotation data for the selected universe/window.",
             showarrow=False,
         )
-        fig.update_layout(height=760)
+        fig.update_layout(height=620)
         return fig
 
     label_set = set()
@@ -1268,16 +1273,10 @@ def make_rotation_scatter(
         font=dict(color=STATE_COLORS["Weakening"], size=12),
     )
 
-    mode_title = (
-        f"Relative to {benchmark_ticker}"
-        if rotation_basis == "relative"
-        else "Absolute return"
-    )
-
     fig.update_layout(
-        title=f"Rotation Map | {mode_title} | {cfg.short_label} vs {cfg.long_label}",
-        height=760,
-        margin=dict(l=10, r=10, t=55, b=10),
+        title="",
+        height=620,
+        margin=dict(l=10, r=10, t=20, b=10),
         xaxis=dict(
             title=f"{cfg.long_label} rotation",
             tickformat=".1%",
@@ -1459,17 +1458,6 @@ excluded_tickers = universe_diagnostics[
     universe_diagnostics["Status"] != "OK"
 ]
 
-if not excluded_tickers.empty:
-    with st.expander(
-        f"Dropped {len(excluded_tickers)} ticker(s) with missing, thin, or stale data",
-        expanded=False,
-    ):
-        st.dataframe(
-            excluded_tickers,
-            use_container_width=True,
-            hide_index=True,
-        )
-
 item_tickers = eligible_universe["Ticker"].tolist()
 analysis_tickers = list(dict.fromkeys(item_tickers + [benchmark]))
 prices = prepare_analysis_prices(
@@ -1545,7 +1533,15 @@ if show_diagnostics:
 # Main charts
 # =============================================================================
 
-st.subheader("Rotation map")
+rotation_context = (
+    f"Relative to {benchmark}"
+    if rotation_mode == "relative"
+    else "Absolute return"
+)
+render_section_header(
+    "Rotation map",
+    f"{rotation_context} · {cfg.short_label} versus {cfg.long_label}",
+)
 
 rot_fig = make_rotation_scatter(
     snap=snap,
@@ -1557,9 +1553,11 @@ rot_fig = make_rotation_scatter(
     label_top_n=label_top_n,
 )
 
-st.plotly_chart(rot_fig, use_container_width=True)
-
-st.subheader("Relative strength")
+st.plotly_chart(
+    rot_fig,
+    use_container_width=True,
+    config={"displayModeBar": False, "responsive": True},
+)
 
 rs_options = snap.sort_values("Rank")["Ticker"].tolist()
 rs_default = rs_options.index("SMH") if "SMH" in rs_options else 0
@@ -1579,20 +1577,32 @@ rs_item = st.selectbox(
 
 rs_meta = universe_lookup.loc[rs_item]
 
+render_section_header(
+    "Relative strength",
+    f"{rs_meta['Name']} ({rs_item}) versus {benchmark}",
+)
+
 rs_fig = make_rs_chart(
     rs_series=rs[rs_item].dropna(),
     item_name=f"{rs_meta['Name']} ({rs_item})",
     benchmark_ticker=benchmark,
 )
 
-st.plotly_chart(rs_fig, use_container_width=True)
+st.plotly_chart(
+    rs_fig,
+    use_container_width=True,
+    config={"displayModeBar": False, "responsive": True},
+)
 
 
 # =============================================================================
 # Snapshot table
 # =============================================================================
 
-st.subheader("Rotation snapshot")
+render_section_header(
+    "Rotation snapshot",
+    "Ranked sector and subsector leadership with current rotation diagnostics.",
+)
 
 table_sorted = display_df.sort_values("Rank", ascending=True).reset_index(drop=True)
 
@@ -1613,6 +1623,17 @@ st.download_button(
     file_name="adfm_subsector_rotation_snapshot.csv",
     mime="text/csv",
 )
+
+if not excluded_tickers.empty:
+    with st.expander(
+        f"Dropped {len(excluded_tickers)} ticker(s) with missing, thin, or stale data",
+        expanded=False,
+    ):
+        st.dataframe(
+            excluded_tickers,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # =============================================================================
