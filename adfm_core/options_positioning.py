@@ -159,7 +159,10 @@ def prepare_chain(
     out["openInterest"] = out["openInterest"].fillna(0).clip(lower=0)
     out["premium_activity"] = out["mid"].clip(lower=0) * out["volume"] * 100.0
     out["type"] = option_type.lower()
-    out["iv_source"] = "Yahoo"
+    if "iv_source" not in out:
+        out["iv_source"] = "Yahoo"
+    else:
+        out["iv_source"] = out["iv_source"].fillna("Provider")
     if (
         spot is not None
         and time_years is not None
