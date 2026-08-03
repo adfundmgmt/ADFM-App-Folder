@@ -6,6 +6,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Added
 
+- Options Positioning Compass (Page 20) with Yahoo Finance option-chain analytics, generated commentary, volatility/skew ranks, term structure, IV surface, and estimated premium activity.
 - Relative Volatility Lab (Page 19).
 - PM command center with causal cross-asset regime, breadth, impulse, dispersion, confidence, and mover signals.
 - Centralized market/macro data registry, primary-source FRED adapter, and point-in-time signal ledger.
@@ -16,9 +17,9 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Changed
 
-- Home-page tool cards now navigate directly to all 19 tools.
-- README catalog now reflects the 19 tools exposed from `Home.py`.
-- The catalog and Home navigation now expose 19 tools.
+- Home-page tool cards now navigate directly to all 20 tools.
+- README catalog now reflects the 20 tools exposed from `Home.py`.
+- The catalog and Home navigation now expose 20 tools.
 - Rate of Change Dashboard now uses shared calculation and daily-data helpers.
 - Global Macro Regime Dashboard and Liquidity Tracker now use the shared market-data loader and preserve missing observations.
 - Currency snapshot commits now run application CI.

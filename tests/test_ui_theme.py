@@ -52,7 +52,7 @@ class InstitutionalThemeTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         pages = sorted((root / "pages").glob("*.py"))
 
-        self.assertEqual(19, len(pages))
+        self.assertEqual(20, len(pages))
         for page in pages:
             source = page.read_text(encoding="utf-8")
             with self.subTest(page=page.name):

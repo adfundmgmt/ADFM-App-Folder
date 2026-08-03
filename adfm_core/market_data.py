@@ -40,11 +40,15 @@ OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Adj Close", "Volume")
 
 
 def configure_yfinance_cache() -> None:
-    """Point yfinance's timezone database at a writable shared temp folder."""
+    """Point yfinance's timezone and cookie databases at a writable folder."""
     try:
         cache_dir = Path(tempfile.gettempdir()) / "adfm-yfinance-cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         yf.set_tz_cache_location(str(cache_dir))
+        # Newer yfinance releases also persist Yahoo cookies through a separate
+        # SQLite cache. Redirect both stores so read-only deployments work.
+        if hasattr(yf, "cache") and hasattr(yf.cache, "set_cache_location"):
+            yf.cache.set_cache_location(str(cache_dir))
     except Exception:
         pass
 
