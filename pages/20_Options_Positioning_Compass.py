@@ -21,18 +21,17 @@ from adfm_core.market_data import (
 from adfm_core.options_positioning import (
     add_cross_sectional_ranks,
     build_positioning_commentary,
-    build_price_proxy_commentary,
-    directional_realized_volatility,
     option_snapshot,
     ordinal,
     prepare_chain,
-    price_proxy_regime,
+)
+from adfm_core.options_sources import (
+    expirations_from_cboe,
+    fetch_cboe_delayed_options,
+    select_cboe_expiry,
 )
 from adfm_core.palette import PASTEL
-from adfm_core.relative_volatility import (
-    annualized_realized_volatility,
-    prior_percentile_rank,
-)
+from adfm_core.relative_volatility import annualized_realized_volatility
 from adfm_core.ui import (
     PageHeader,
     dataframe_download,
@@ -74,15 +73,68 @@ def fetch_expirations(symbol: str) -> tuple[str, ...]:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
+def fetch_cboe_snapshot(
+    symbol: str,
+) -> tuple[pd.DataFrame, dict[str, object], str]:
+    return fetch_cboe_delayed_options(symbol)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_chain(
     symbol: str, expiry: str
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object], str | None]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    dict[str, object],
+    str | None,
+    str,
+    str,
+]:
     try:
         chain = yf.Ticker(symbol).option_chain(expiry)
         underlying = chain.underlying if isinstance(chain.underlying, Mapping) else {}
-        return chain.calls.copy(), chain.puts.copy(), dict(underlying), None
+        if not chain.calls.empty and not chain.puts.empty:
+            return (
+                chain.calls.copy(),
+                chain.puts.copy(),
+                dict(underlying),
+                None,
+                "Yahoo Finance",
+                "",
+            )
+        yahoo_error = "Empty Yahoo option chain"
     except Exception as exc:
-        return pd.DataFrame(), pd.DataFrame(), {}, str(exc)
+        yahoo_error = str(exc)
+
+    try:
+        cboe_frame, underlying, timestamp = fetch_cboe_snapshot(symbol)
+        calls, puts = select_cboe_expiry(cboe_frame, expiry)
+        if calls.empty or puts.empty:
+            raise ValueError("No matching Cboe expiration")
+        return calls, puts, underlying, None, "Cboe delayed quotes", timestamp
+    except Exception as exc:
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            {},
+            f"Yahoo: {yahoo_error}; Cboe: {exc}",
+            "",
+            "",
+        )
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_cboe_expirations(symbol: str) -> tuple[str, ...]:
+    try:
+        frame, _, _ = fetch_cboe_snapshot(symbol)
+        return expirations_from_cboe(frame)
+    except Exception:
+        return ()
+
+
+def available_expirations(symbol: str) -> tuple[str, ...]:
+    """Use Yahoo's calendar when available and Cboe's when Yahoo is blocked."""
+    return fetch_expirations(symbol) or fetch_cboe_expirations(symbol)
 
 
 def nearest_expiry(expirations: tuple[str, ...], target_dte: int, as_of: date) -> str | None:
@@ -179,280 +231,6 @@ def compass_chart(frame: pd.DataFrame, selected: str) -> go.Figure:
     )
     return fig
 
-
-def build_price_proxy_frame(
-    raw_frames: dict[str, pd.DataFrame], symbols: tuple[str, ...]
-) -> pd.DataFrame:
-    """Build a fully price-derived fallback when option chains are blocked."""
-    rows: list[dict[str, object]] = []
-    for symbol in symbols:
-        close = close_series(raw_frames, symbol)
-        if close.empty:
-            continue
-        realized = annualized_realized_volatility(close, 21).div(100.0)
-        directional = directional_realized_volatility(close, window=21)
-        asymmetry = directional["downside_upside_ratio"]
-        current_realized = latest_value(realized)
-        current_asymmetry = latest_value(asymmetry)
-        if not np.isfinite(current_realized) or not np.isfinite(current_asymmetry):
-            continue
-        downside_rank = prior_percentile_rank(asymmetry)
-        rows.append(
-            {
-                "ticker": symbol,
-                "realized_vol_21d": current_realized,
-                "realized_vol_percentile": prior_percentile_rank(realized),
-                "downside_upside_ratio": current_asymmetry,
-                "downside_asymmetry_percentile": downside_rank,
-                "upside_balance_percentile": 100.0 - downside_rank,
-                "return_5d": float(close.iloc[-1] / close.iloc[-6] - 1.0)
-                if len(close) >= 6
-                else np.nan,
-                "as_of": pd.Timestamp(close.index[-1]).date().isoformat(),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def price_proxy_chart(frame: pd.DataFrame, selected: str) -> go.Figure:
-    """Map volatility level against relative upside/downside pressure."""
-    plot = frame.dropna(
-        subset=["upside_balance_percentile", "realized_vol_percentile"]
-    )
-    fig = go.Figure()
-    quadrant_colors = (
-        (0, 50, 50, 100, "rgba(83,196,174,.13)"),
-        (50, 100, 50, 100, "rgba(83,196,174,.22)"),
-        (0, 50, 0, 50, "rgba(204,112,169,.13)"),
-        (50, 100, 0, 50, "rgba(204,112,169,.22)"),
-    )
-    for x0, x1, y0, y1, color in quadrant_colors:
-        fig.add_shape(
-            type="rect",
-            x0=x0,
-            x1=x1,
-            y0=y0,
-            y1=y1,
-            fillcolor=color,
-            line_width=0,
-            layer="below",
-        )
-    fig.add_hline(y=50, line=dict(color="#475569", width=1))
-    fig.add_vline(x=50, line=dict(color="#475569", width=1))
-    fig.add_trace(
-        go.Scatter(
-            x=plot["realized_vol_percentile"],
-            y=plot["upside_balance_percentile"],
-            text=plot["ticker"],
-            customdata=np.column_stack(
-                [
-                    plot["realized_vol_21d"] * 100.0,
-                    plot["downside_upside_ratio"],
-                    plot["return_5d"] * 100.0,
-                    plot["downside_asymmetry_percentile"],
-                ]
-            ),
-            mode="markers+text",
-            textposition="top center",
-            marker=dict(
-                size=[15 if ticker == selected else 10 for ticker in plot["ticker"]],
-                color=[
-                    SELECTED_COLOR if ticker == selected else PEER_COLOR
-                    for ticker in plot["ticker"]
-                ],
-                line=dict(color="white", width=1.2),
-            ),
-            hovertemplate=(
-                "<b>%{text}</b><br>Realized-vol rank: %{x:.0f}"
-                "<br>Upside-direction rank: %{y:.0f}"
-                "<br>Downside-direction rank: %{customdata[3]:.0f}"
-                "<br>21D realized vol: %{customdata[0]:.1f}%"
-                "<br>Down/up vol: %{customdata[1]:.2f}x"
-                "<br>5D return: %{customdata[2]:+.1f}%<extra></extra>"
-            ),
-        )
-    )
-    annotations = (
-        (24, 88, "Low realized vol<br>More upside pressure"),
-        (76, 88, "High realized vol<br>More upside pressure"),
-        (24, 12, "Low realized vol<br>More downside pressure"),
-        (76, 12, "High realized vol<br>More downside pressure"),
-    )
-    for x, y, text in annotations:
-        fig.add_annotation(
-            x=x,
-            y=y,
-            text=text,
-            showarrow=False,
-            font=dict(size=12, color="#64748b"),
-        )
-    fig.update_xaxes(
-        title="21D realized-vol percentile in own history",
-        range=[-4, 104],
-        showgrid=False,
-    )
-    fig.update_yaxes(
-        title="Directional percentile in own history (downside → upside)",
-        range=[-4, 104],
-        showgrid=False,
-    )
-    fig.update_layout(
-        height=620,
-        template="plotly_white",
-        margin=dict(l=55, r=25, t=25, b=55),
-        showlegend=False,
-        hovermode="closest",
-        font=dict(family="Arial, sans-serif", color="#1f2937"),
-    )
-    return fig
-
-
-def render_price_proxy_fallback(
-    frame: pd.DataFrame,
-    selected: str,
-    *,
-    as_of_date: date,
-    provider_errors: list[dict[str, str]],
-    price_failures: pd.DataFrame,
-) -> None:
-    """Render an honest price-history mode instead of a provider-failure wall."""
-    if frame.empty or selected not in set(frame.get("ticker", [])):
-        st.error(
-            "Neither current option chains nor enough price history were available for the selected ticker."
-        )
-        if provider_errors:
-            st.dataframe(pd.DataFrame(provider_errors), hide_index=True, width="stretch")
-        return
-    row = frame.loc[frame["ticker"].eq(selected)].iloc[0]
-    render_status_line(
-        as_of=as_of_date.isoformat(),
-        focus=selected,
-        mode="Price-history fallback",
-        source="Yahoo Finance adjusted daily prices",
-    )
-    st.warning(
-        "The hosting provider could not retrieve current option chains. The view below uses observed price history only; it is not implied volatility, option skew, or option flow."
-    )
-    render_selection_note("Price-volatility read", build_price_proxy_commentary(row))
-    volatility_state, direction = price_proxy_regime(row)
-    ratio = float(row["downside_upside_ratio"])
-    if direction == "Upside":
-        direction_value = f"{1.0 / ratio:.2f}x upside"
-    elif direction == "Downside":
-        direction_value = f"{ratio:.2f}x downside"
-    else:
-        direction_value = "Balanced"
-    render_kpi_cards(
-        [
-            (
-                "Regime",
-                f"{volatility_state} / {direction}",
-                "Price-derived, not options positioning",
-            ),
-            (
-                "21D realized vol",
-                fmt(float(row["realized_vol_21d"]) * 100.0, "%"),
-                "Annualized close-to-close",
-            ),
-            (
-                "Realized-vol rank",
-                ordinal(float(row["realized_vol_percentile"])),
-                "Own loaded history",
-            ),
-            (
-                "Directional read",
-                direction_value,
-                "Positive vs negative sessions",
-            ),
-            (
-                "5D return",
-                fmt(float(row["return_5d"]) * 100.0, "%", 1),
-                "Point-to-point price change",
-            ),
-        ]
-    )
-    proxy_tab, data_tab, methodology_tab = st.tabs(
-        ["Realized-volatility proxy", "Data + provider status", "Methodology"]
-    )
-    with proxy_tab:
-        render_section_header(
-            "Price-derived volatility regime",
-            "Right means higher realized volatility. Top means more upside pressure; bottom means more downside pressure. Both are ranked against each asset's own history.",
-        )
-        st.plotly_chart(
-            price_proxy_chart(frame, selected),
-            width="stretch",
-            config={"displaylogo": False},
-        )
-        display_frame = (
-            frame.sort_values("realized_vol_percentile", ascending=False)
-            [[
-                "ticker",
-                "as_of",
-                "realized_vol_21d",
-                "realized_vol_percentile",
-                "downside_upside_ratio",
-                "upside_balance_percentile",
-                "return_5d",
-            ]]
-            .rename(
-                columns={
-                    "ticker": "Ticker",
-                    "as_of": "As of",
-                    "realized_vol_21d": "21D realized vol",
-                    "realized_vol_percentile": "Vol rank",
-                    "downside_upside_ratio": "Down/up ratio",
-                    "upside_balance_percentile": "Upside rank",
-                    "return_5d": "5D return",
-                }
-            )
-        )
-        st.dataframe(
-            display_frame.style.format(
-                {
-                    "21D realized vol": "{:.1%}",
-                    "Vol rank": "{:.0f}",
-                    "Down/up ratio": "{:.2f}",
-                    "Upside rank": "{:.0f}",
-                    "5D return": "{:+.1%}",
-                },
-                na_rep="N/A",
-            ),
-            hide_index=True,
-            width="stretch",
-        )
-    with data_tab:
-        dataframe_download(
-            "Download realized-volatility proxy data",
-            frame,
-            "options_compass_price_proxy.csv",
-        )
-        diagnostics = provider_errors.copy()
-        for failure in price_failures.to_dict("records"):
-            diagnostics.append(
-                {
-                    "Ticker": str(failure.get("Ticker", "")),
-                    "Issue": str(failure.get("Reason", "Price history unavailable")),
-                }
-            )
-        if diagnostics:
-            st.dataframe(
-                pd.DataFrame(diagnostics).drop_duplicates(),
-                hide_index=True,
-                width="stretch",
-            )
-    with methodology_tab:
-        st.markdown(
-            """
-            **Fallback calculations**
-
-            - Realized volatility is the annualized sample standard deviation of 21 daily log returns.
-            - Downside/upside asymmetry divides the annualized volatility of negative-return sessions by the corresponding volatility of positive-return sessions in each 21-session window.
-            - The vertical axis reverses that downside rank, so unusually upside-heavy readings appear near the top and unusually downside-heavy readings appear near the bottom.
-            - Each percentile compares the latest reading with earlier observations for that same asset; the current observation is excluded from its reference set.
-            - No option-chain value, implied volatility, skew, trade direction, or premium estimate is synthesized in fallback mode.
-            """
-        )
 
 
 def term_structure_chart(frame: pd.DataFrame) -> go.Figure:
@@ -567,7 +345,7 @@ with st.sidebar:
         - Cross-sectional ranks and generated commentary for the selected universe.
         - Estimated premium activity from public end-of-session aggregates.
 
-        **Not available from Yahoo:** trade direction (BTO/BTC/STO/STC), spread IDs, dealer positioning, or historical option-chain ranks before this page was run.
+        **Not available from public chains:** trade direction (BTO/BTC/STO/STC), spread IDs, dealer positioning, or historical option-chain ranks before this page was run.
         """
     )
 
@@ -608,12 +386,14 @@ universe_rows: list[dict[str, object]] = []
 provider_errors: list[dict[str, str]] = []
 with st.spinner("Loading current option-chain snapshots…"):
     for symbol in universe:
-        expirations = fetch_expirations(symbol)
+        expirations = available_expirations(symbol)
         expiry = nearest_expiry(expirations, target_dte, as_of_date)
         if expiry is None:
             provider_errors.append({"Ticker": symbol, "Issue": "No eligible option expiration returned"})
             continue
-        calls, puts, underlying, error = fetch_chain(symbol, expiry)
+        calls, puts, underlying, error, source, source_timestamp = fetch_chain(
+            symbol, expiry
+        )
         if error or calls.empty or puts.empty:
             provider_errors.append({"Ticker": symbol, "Issue": error or "Empty option chain"})
             continue
@@ -634,6 +414,8 @@ with st.spinner("Loading current option-chain snapshots…"):
         universe_rows.append(
             {
                 "ticker": symbol,
+                "chain_source": source,
+                "source_timestamp": source_timestamp,
                 **snapshot,
                 **price_metrics[symbol],
             }
@@ -641,26 +423,26 @@ with st.spinner("Loading current option-chain snapshots…"):
 
 universe_frame = add_cross_sectional_ranks(pd.DataFrame(universe_rows)) if universe_rows else pd.DataFrame()
 if universe_frame.empty or selected not in set(universe_frame.get("ticker", [])):
-    proxy_frame = build_price_proxy_frame(raw_prices, universe)
-    render_price_proxy_fallback(
-        proxy_frame,
-        selected,
-        as_of_date=as_of_date,
-        provider_errors=provider_errors,
-        price_failures=price_failures,
-    )
+    st.error(f"Neither Yahoo nor Cboe returned a usable option chain for {selected}.")
+    if provider_errors:
+        st.dataframe(pd.DataFrame(provider_errors), hide_index=True, width="stretch")
     render_footer()
     st.stop()
 
 selected_row = universe_frame.loc[universe_frame["ticker"].eq(selected)].iloc[0]
 selected_expiry = str(selected_row["expiry"])
-selected_calls, selected_puts, _, _ = fetch_chain(selected, selected_expiry)
+selected_calls, selected_puts, _, _, selected_source, selected_timestamp = fetch_chain(
+    selected, selected_expiry
+)
+source_detail = selected_source
+if selected_timestamp:
+    source_detail = f"{selected_source} · snapshot {selected_timestamp} UTC"
 render_status_line(
     as_of=as_of_date.isoformat(),
     focus=selected,
     target_expiration=f"{selected_expiry} ({int(selected_row['dte'])} DTE)",
-    rank_basis=f"{len(universe_frame)} current chains",
-    source="Yahoo Finance via yfinance",
+    rank_basis=f"{len(universe_frame)} option chains",
+    source=source_detail,
 )
 
 render_selection_note("Current positioning read", build_positioning_commentary(selected_row))
@@ -699,6 +481,8 @@ with compass_tab:
             "put_call_volume",
             "put_call_oi",
             "return_5d",
+            "chain_source",
+            "source_timestamp",
         ]
     ].sort_values("put_skew_percentile", ascending=False)
     st.dataframe(
@@ -721,7 +505,7 @@ with compass_tab:
         width="stretch",
     )
 
-selected_expirations = fetch_expirations(selected)
+selected_expirations = available_expirations(selected)
 eligible_terms = [
     expiry
     for expiry in selected_expirations
@@ -730,7 +514,7 @@ eligible_terms = [
 term_rows: list[dict[str, object]] = []
 term_chains: list[tuple[dict[str, object], pd.DataFrame, pd.DataFrame]] = []
 for expiry in eligible_terms:
-    calls, puts, _, error = fetch_chain(selected, expiry)
+    calls, puts, _, error, _, _ = fetch_chain(selected, expiry)
     if error or calls.empty or puts.empty:
         continue
     snapshot = option_snapshot(
@@ -869,7 +653,7 @@ with methodology_tab:
         """
         **What is directly observed**
 
-        Expirations, strikes, bid, ask, last price, reported contract volume, open interest, and implied volatility come from Yahoo Finance through `yfinance`. Yahoo's documented option-chain response includes these fields. When Yahoo returns an obviously invalid IV below 2% or above 500%, the page solves Black-Scholes IV from the quote midpoint, or from the latest option price when no two-sided quote exists; those rows are labeled `Solved from price`.
+        Expirations, strikes, bid, ask, last price, reported contract volume, open interest, and implied volatility come from Yahoo Finance when available. If Yahoo is unavailable, the same option-chain fields come from Cboe delayed quotes. The page never replaces these measurements with a price-volatility proxy. When a provider returns an obviously invalid IV below 2% or above 500%, the page solves Black-Scholes IV from the quote midpoint, or from the latest option price when no two-sided quote exists; those rows are labeled `Solved from price`.
 
         **What is calculated**
 
