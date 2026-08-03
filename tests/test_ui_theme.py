@@ -46,6 +46,7 @@ class InstitutionalThemeTests(unittest.TestCase):
         self.assertIn("@media (max-width: 760px)", contract)
         self.assertIn(".modebar-container", contract)
         self.assertIn("overflow-x: clip", contract)
+        self.assertIn("padding: 1.75rem .9rem", contract)
 
     def test_every_analytics_page_uses_the_shared_header(self):
         root = Path(__file__).resolve().parents[1]
@@ -57,6 +58,37 @@ class InstitutionalThemeTests(unittest.TestCase):
             with self.subTest(page=page.name):
                 self.assertIn("render_page_header(", source)
                 self.assertNotIn("st.title(", source)
+
+    def test_mobile_first_render_contracts_for_legacy_tools(self):
+        root = Path(__file__).resolve().parents[1]
+        chart_terminal = (root / "pages" / "5_ADFM_Chart_Terminal.py").read_text(
+            encoding="utf-8"
+        )
+        ratio_charts = (root / "pages" / "6_Ratio_Charts.py").read_text(
+            encoding="utf-8"
+        )
+        sector_breadth = (
+            root / "pages" / "2_Sector_Breadth_and_Rotation.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("grid-auto-flow: column", chart_terminal)
+        self.assertIn('"displayModeBar": False', chart_terminal)
+        self.assertIn('"scrollZoom": False', chart_terminal)
+
+        self.assertIn("market_date = date.today()", ratio_charts)
+        self.assertIn("history_days = max(900, display_days + 450)", ratio_charts)
+        self.assertIn("ratio-chart-heading", ratio_charts)
+        self.assertNotIn("yf_end = now + timedelta", ratio_charts)
+
+        self.assertIn(
+            "ticker for ticker in missing_tickers if ticker in BENCHMARKS",
+            sector_breadth,
+        )
+        self.assertIn('config={"displayModeBar": False, "responsive": True}', sector_breadth)
+        self.assertLess(
+            sector_breadth.index("config={\"displayModeBar\": False"),
+            sector_breadth.index("Dropped {len(excluded_tickers)} ticker(s)"),
+        )
 
     @patch("adfm_core.ui.st.markdown")
     def test_legacy_tool_finish_removes_colored_rounded_chrome(self, markdown):
