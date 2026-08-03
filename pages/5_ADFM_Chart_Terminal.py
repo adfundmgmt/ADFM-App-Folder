@@ -2,7 +2,7 @@ import streamlit as st
 
 from adfm_core.palette import PASTEL
 from adfm_core.chart_patterns import PatternDetection, PatternLine, detect_chart_patterns
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -316,7 +316,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title(TITLE)
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=(
+            "Multi-timeframe price structure, trend, momentum, volatility bands, "
+            "and moving-average diagnostics."
+        ),
+        eyebrow="ADFM Technicals + Analogs",
+    )
+)
 
 
 # ============================================================

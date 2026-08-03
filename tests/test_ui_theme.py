@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from adfm_core.ui import (
     PageHeader,
-    inject_institutional_tool_finish,
     inject_institutional_theme,
+    inject_institutional_tool_finish,
     render_footer,
     render_page_header,
 )
@@ -40,6 +41,22 @@ class InstitutionalThemeTests(unittest.TestCase):
         self.assertTrue(body.endswith("</header>"))
         self.assertIn("Liquidity Tracker", body)
         self.assertIn("2026-07-31", body)
+
+        contract = markdown.call_args_list[0].args[0]
+        self.assertIn("@media (max-width: 760px)", contract)
+        self.assertIn(".modebar-container", contract)
+        self.assertIn("overflow-x: clip", contract)
+
+    def test_every_analytics_page_uses_the_shared_header(self):
+        root = Path(__file__).resolve().parents[1]
+        pages = sorted((root / "pages").glob("*.py"))
+
+        self.assertEqual(19, len(pages))
+        for page in pages:
+            source = page.read_text(encoding="utf-8")
+            with self.subTest(page=page.name):
+                self.assertIn("render_page_header(", source)
+                self.assertNotIn("st.title(", source)
 
     @patch("adfm_core.ui.st.markdown")
     def test_legacy_tool_finish_removes_colored_rounded_chrome(self, markdown):

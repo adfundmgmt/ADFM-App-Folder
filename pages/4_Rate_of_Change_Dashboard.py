@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from adfm_core.palette import PASTEL
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_status_line
 from plotly.subplots import make_subplots
 
 from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report
@@ -15,11 +15,11 @@ from adfm_core.rate_of_change import (
     make_date_ticks,
     padded_range,
 )
-from adfm_core.ui import render_status_line
-
+TITLE = "Rate of Change Regime Explorer"
+SUBTITLE = "Track price trend, rate of change, and acceleration through a clean regime lens."
 
 st.set_page_config(
-    page_title="Rate of Change Regime Explorer",
+    page_title=TITLE,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -59,72 +59,10 @@ SMA_COLORS = {
 st.markdown(
     """
     <style>
-        .block-container {
-            padding-top: 3.0rem;
-            padding-bottom: 3.0rem;
-            max-width: 1580px;
-        }
-
-        section[data-testid="stSidebar"] {
-            background-color: #f3f6fa;
-            border-right: 1px solid #e2e8f0;
-        }
-
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3 {
-            color: #2d3748;
-            font-weight: 750;
-            letter-spacing: -0.01em;
-        }
-
-        section[data-testid="stSidebar"] p,
-        section[data-testid="stSidebar"] li {
-            color: #3f4a5a;
-            font-size: 0.94rem;
-            line-height: 1.55;
-        }
-
         .tool-divider {
             margin-top: 1.25rem;
             margin-bottom: 1.25rem;
-            border-top: 1px solid #d8dee8;
-        }
-
-        .hero-title {
-            font-size: 2.65rem;
-            line-height: 1.05;
-            font-weight: 800;
-            letter-spacing: -0.04em;
-            color: #2d3142;
-            margin-bottom: 0.25rem;
-        }
-
-        .hero-caption {
-            color: #8b949e;
-            font-size: 1.0rem;
-            margin-bottom: 1.8rem;
-        }
-
-        div[data-testid="stTextInput"] label,
-        div[data-testid="stSelectbox"] label,
-        div[data-testid="stToggle"] label {
-            color: #536171;
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        div[data-baseweb="input"] {
-            border-radius: 12px;
-            background-color: #f5f7fb;
-            border: 1px solid #e0e6ef;
-        }
-
-        div[data-baseweb="select"] > div {
-            border-radius: 12px;
-            background-color: #f5f7fb;
-            border-color: #e0e6ef;
+            border-top: 1px solid #000000;
         }
 
         .chart-wrap {
@@ -183,13 +121,12 @@ with st.sidebar:
     show_inflections = st.toggle("Show inflection markers", value=True)
 
 
-st.markdown(
-    '<div class="hero-title">Rate of Change Regime Explorer</div>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    '<div class="hero-caption">Track price trend, rate of change, and acceleration through a clean regime lens.</div>',
-    unsafe_allow_html=True,
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=SUBTITLE,
+        eyebrow="ADFM Equity Leadership",
+    )
 )
 
 
@@ -428,13 +365,13 @@ fig.update_layout(
     template="plotly_white",
     paper_bgcolor="#ffffff",
     plot_bgcolor="#ffffff",
-    margin=dict(l=42, r=18, t=78, b=72),
+    margin=dict(l=42, r=18, t=64, b=72),
     title=dict(
-        text=f"{ticker} | Price, Rate of Change, and Acceleration",
+        text=f"<b>{ticker}</b> · Price, ROC and Acceleration",
         x=0.015,
         xanchor="left",
         y=0.975,
-        font=dict(size=25, color="#111827", family="Arial, sans-serif"),
+        font=dict(size=20, color="#111827", family="Arial, sans-serif"),
     ),
     font=dict(color="#334155", family="Arial, sans-serif"),
     hovermode="x unified",
@@ -510,9 +447,9 @@ st.plotly_chart(
     fig,
     use_container_width=True,
     config={
-        "displayModeBar": True,
+        "displayModeBar": False,
         "responsive": True,
-        "scrollZoom": True,
+        "scrollZoom": False,
     },
 )
 st.markdown("</div>", unsafe_allow_html=True)

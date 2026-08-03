@@ -1,7 +1,7 @@
 import streamlit as st
 
 from adfm_core.palette import PASTEL_20
-from adfm_core.ui import render_footer
+from adfm_core.ui import PageHeader, render_footer, render_page_header
 
 import pandas as pd
 
@@ -2882,9 +2882,16 @@ def render_basket_section(
 
 # ============================================================
 
-st.title(TITLE)
-
-st.caption(f"{SUBTITLE} Current map: {sum(len(v) for v in CATEGORIES.values())} baskets across {len(CATEGORIES)} groups.")
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=(
+            f"{SUBTITLE} Current map: {sum(len(v) for v in CATEGORIES.values())} "
+            f"baskets across {len(CATEGORIES)} groups."
+        ),
+        eyebrow="ADFM Equity Leadership",
+    )
+)
 
 
 
