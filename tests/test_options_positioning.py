@@ -10,11 +10,13 @@ from adfm_core.options_positioning import (
     black_scholes_delta,
     black_scholes_price,
     build_positioning_commentary,
+    build_price_proxy_commentary,
     directional_realized_volatility,
     implied_volatility_from_price,
     option_snapshot,
     ordinal,
     prepare_chain,
+    price_proxy_regime,
 )
 
 
@@ -100,6 +102,35 @@ class OptionsPositioningTests(unittest.TestCase):
                 expected_downside / expected_upside,
             )
         )
+
+    def test_price_proxy_commentary_is_short_and_directionally_clear(self):
+        row = {
+            "ticker": "BE",
+            "realized_vol_21d": 1.472,
+            "realized_vol_percentile": 100.0,
+            "downside_upside_ratio": 0.63,
+        }
+
+        commentary = build_price_proxy_commentary(row)
+
+        self.assertEqual(price_proxy_regime(row), ("Extreme", "Upside"))
+        self.assertIn("extreme-volatility, upside regime", commentary)
+        self.assertIn("147.2% (100th percentile)", commentary)
+        self.assertIn("Upside volatility is 1.59x downside volatility", commentary)
+        self.assertNotIn("must not be interpreted", commentary)
+
+    def test_price_proxy_regime_flags_downside_and_balanced_reads(self):
+        downside = {
+            "realized_vol_percentile": 75.0,
+            "downside_upside_ratio": 1.40,
+        }
+        balanced = {
+            "realized_vol_percentile": 50.0,
+            "downside_upside_ratio": 1.02,
+        }
+
+        self.assertEqual(price_proxy_regime(downside), ("Elevated", "Downside"))
+        self.assertEqual(price_proxy_regime(balanced), ("Moderate", "Balanced"))
 
     def test_option_snapshot_builds_skew_and_put_call_ratios(self):
         calls = sample_chain(

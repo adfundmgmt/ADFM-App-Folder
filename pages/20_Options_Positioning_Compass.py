@@ -21,10 +21,12 @@ from adfm_core.market_data import (
 from adfm_core.options_positioning import (
     add_cross_sectional_ranks,
     build_positioning_commentary,
+    build_price_proxy_commentary,
     directional_realized_volatility,
     option_snapshot,
     ordinal,
     prepare_chain,
+    price_proxy_regime,
 )
 from adfm_core.palette import PASTEL
 from adfm_core.relative_volatility import (
@@ -194,13 +196,15 @@ def build_price_proxy_frame(
         current_asymmetry = latest_value(asymmetry)
         if not np.isfinite(current_realized) or not np.isfinite(current_asymmetry):
             continue
+        downside_rank = prior_percentile_rank(asymmetry)
         rows.append(
             {
                 "ticker": symbol,
                 "realized_vol_21d": current_realized,
                 "realized_vol_percentile": prior_percentile_rank(realized),
                 "downside_upside_ratio": current_asymmetry,
-                "downside_asymmetry_percentile": prior_percentile_rank(asymmetry),
+                "downside_asymmetry_percentile": downside_rank,
+                "upside_balance_percentile": 100.0 - downside_rank,
                 "return_5d": float(close.iloc[-1] / close.iloc[-6] - 1.0)
                 if len(close) >= 6
                 else np.nan,
@@ -211,16 +215,16 @@ def build_price_proxy_frame(
 
 
 def price_proxy_chart(frame: pd.DataFrame, selected: str) -> go.Figure:
-    """Map each asset against its own realized-volatility history."""
+    """Map volatility level against relative upside/downside pressure."""
     plot = frame.dropna(
-        subset=["downside_asymmetry_percentile", "realized_vol_percentile"]
+        subset=["upside_balance_percentile", "realized_vol_percentile"]
     )
     fig = go.Figure()
     quadrant_colors = (
-        (0, 50, 50, 100, "rgba(83,196,174,.20)"),
-        (50, 100, 50, 100, "rgba(199,112,169,.20)"),
-        (0, 50, 0, 50, "rgba(98,180,168,.12)"),
-        (50, 100, 0, 50, "rgba(204,112,169,.13)"),
+        (0, 50, 50, 100, "rgba(83,196,174,.13)"),
+        (50, 100, 50, 100, "rgba(83,196,174,.22)"),
+        (0, 50, 0, 50, "rgba(204,112,169,.13)"),
+        (50, 100, 0, 50, "rgba(204,112,169,.22)"),
     )
     for x0, x1, y0, y1, color in quadrant_colors:
         fig.add_shape(
@@ -237,14 +241,15 @@ def price_proxy_chart(frame: pd.DataFrame, selected: str) -> go.Figure:
     fig.add_vline(x=50, line=dict(color="#475569", width=1))
     fig.add_trace(
         go.Scatter(
-            x=plot["downside_asymmetry_percentile"],
-            y=plot["realized_vol_percentile"],
+            x=plot["realized_vol_percentile"],
+            y=plot["upside_balance_percentile"],
             text=plot["ticker"],
             customdata=np.column_stack(
                 [
                     plot["realized_vol_21d"] * 100.0,
                     plot["downside_upside_ratio"],
                     plot["return_5d"] * 100.0,
+                    plot["downside_asymmetry_percentile"],
                 ]
             ),
             mode="markers+text",
@@ -258,8 +263,9 @@ def price_proxy_chart(frame: pd.DataFrame, selected: str) -> go.Figure:
                 line=dict(color="white", width=1.2),
             ),
             hovertemplate=(
-                "<b>%{text}</b><br>Realized-vol rank: %{y:.0f}"
-                "<br>Downside-asymmetry rank: %{x:.0f}"
+                "<b>%{text}</b><br>Realized-vol rank: %{x:.0f}"
+                "<br>Upside-direction rank: %{y:.0f}"
+                "<br>Downside-direction rank: %{customdata[3]:.0f}"
                 "<br>21D realized vol: %{customdata[0]:.1f}%"
                 "<br>Down/up vol: %{customdata[1]:.2f}x"
                 "<br>5D return: %{customdata[2]:+.1f}%<extra></extra>"
@@ -267,10 +273,10 @@ def price_proxy_chart(frame: pd.DataFrame, selected: str) -> go.Figure:
         )
     )
     annotations = (
-        (24, 88, "High realized vol<br>Lower downside asymmetry"),
-        (76, 88, "High realized vol<br>Higher downside asymmetry"),
-        (24, 12, "Low realized vol<br>Lower downside asymmetry"),
-        (76, 12, "Low realized vol<br>Higher downside asymmetry"),
+        (24, 88, "Low realized vol<br>More upside pressure"),
+        (76, 88, "High realized vol<br>More upside pressure"),
+        (24, 12, "Low realized vol<br>More downside pressure"),
+        (76, 12, "High realized vol<br>More downside pressure"),
     )
     for x, y, text in annotations:
         fig.add_annotation(
@@ -281,12 +287,12 @@ def price_proxy_chart(frame: pd.DataFrame, selected: str) -> go.Figure:
             font=dict(size=12, color="#64748b"),
         )
     fig.update_xaxes(
-        title="Downside/upside realized-vol percentile in own history",
+        title="21D realized-vol percentile in own history",
         range=[-4, 104],
         showgrid=False,
     )
     fig.update_yaxes(
-        title="21D realized-vol percentile in own history",
+        title="Directional percentile in own history (downside → upside)",
         range=[-4, 104],
         showgrid=False,
     )
@@ -327,18 +333,22 @@ def render_price_proxy_fallback(
     st.warning(
         "The hosting provider could not retrieve current option chains. The view below uses observed price history only; it is not implied volatility, option skew, or option flow."
     )
-    render_selection_note(
-        "Realized-volatility proxy read",
-        (
-            f"{selected} 21-session realized volatility is {float(row['realized_vol_21d']) * 100:.1f}% "
-            f"({ordinal(float(row['realized_vol_percentile']))} percentile of its own loaded history). "
-            f"Downside volatility is {float(row['downside_upside_ratio']):.2f}x upside volatility "
-            f"({ordinal(float(row['downside_asymmetry_percentile']))} historical percentile). "
-            "This describes realized price asymmetry and must not be interpreted as options-market positioning."
-        ),
-    )
+    render_selection_note("Price-volatility read", build_price_proxy_commentary(row))
+    volatility_state, direction = price_proxy_regime(row)
+    ratio = float(row["downside_upside_ratio"])
+    if direction == "Upside":
+        direction_value = f"{1.0 / ratio:.2f}x upside"
+    elif direction == "Downside":
+        direction_value = f"{ratio:.2f}x downside"
+    else:
+        direction_value = "Balanced"
     render_kpi_cards(
         [
+            (
+                "Regime",
+                f"{volatility_state} / {direction}",
+                "Price-derived, not options positioning",
+            ),
             (
                 "21D realized vol",
                 fmt(float(row["realized_vol_21d"]) * 100.0, "%"),
@@ -350,14 +360,9 @@ def render_price_proxy_fallback(
                 "Own loaded history",
             ),
             (
-                "Down/up volatility",
-                fmt(float(row["downside_upside_ratio"]), "x", 2),
-                "Negative vs positive sessions",
-            ),
-            (
-                "Asymmetry rank",
-                ordinal(float(row["downside_asymmetry_percentile"])),
-                "Own loaded history",
+                "Directional read",
+                direction_value,
+                "Positive vs negative sessions",
             ),
             (
                 "5D return",
@@ -372,21 +377,44 @@ def render_price_proxy_fallback(
     with proxy_tab:
         render_section_header(
             "Price-derived volatility regime",
-            "Each axis ranks the latest reading against that asset's own prior observations, so naturally high- and low-volatility assets remain comparable.",
+            "Right means higher realized volatility. Top means more upside pressure; bottom means more downside pressure. Both are ranked against each asset's own history.",
         )
         st.plotly_chart(
             price_proxy_chart(frame, selected),
             width="stretch",
             config={"displaylogo": False},
         )
+        display_frame = (
+            frame.sort_values("realized_vol_percentile", ascending=False)
+            [[
+                "ticker",
+                "as_of",
+                "realized_vol_21d",
+                "realized_vol_percentile",
+                "downside_upside_ratio",
+                "upside_balance_percentile",
+                "return_5d",
+            ]]
+            .rename(
+                columns={
+                    "ticker": "Ticker",
+                    "as_of": "As of",
+                    "realized_vol_21d": "21D realized vol",
+                    "realized_vol_percentile": "Vol rank",
+                    "downside_upside_ratio": "Down/up ratio",
+                    "upside_balance_percentile": "Upside rank",
+                    "return_5d": "5D return",
+                }
+            )
+        )
         st.dataframe(
-            frame.sort_values("realized_vol_percentile", ascending=False).style.format(
+            display_frame.style.format(
                 {
-                    "realized_vol_21d": "{:.1%}",
-                    "realized_vol_percentile": "{:.0f}",
-                    "downside_upside_ratio": "{:.2f}",
-                    "downside_asymmetry_percentile": "{:.0f}",
-                    "return_5d": "{:+.1%}",
+                    "21D realized vol": "{:.1%}",
+                    "Vol rank": "{:.0f}",
+                    "Down/up ratio": "{:.2f}",
+                    "Upside rank": "{:.0f}",
+                    "5D return": "{:+.1%}",
                 },
                 na_rep="N/A",
             ),
@@ -420,6 +448,7 @@ def render_price_proxy_fallback(
 
             - Realized volatility is the annualized sample standard deviation of 21 daily log returns.
             - Downside/upside asymmetry divides the annualized volatility of negative-return sessions by the corresponding volatility of positive-return sessions in each 21-session window.
+            - The vertical axis reverses that downside rank, so unusually upside-heavy readings appear near the top and unusually downside-heavy readings appear near the bottom.
             - Each percentile compares the latest reading with earlier observations for that same asset; the current observation is excluded from its reference set.
             - No option-chain value, implied volatility, skew, trade direction, or premium estimate is synthesized in fallback mode.
             """

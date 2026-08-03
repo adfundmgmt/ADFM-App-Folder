@@ -387,6 +387,55 @@ def directional_realized_volatility(
     return frame.replace([np.inf, -np.inf], np.nan)
 
 
+def price_proxy_regime(row: Mapping[str, object]) -> tuple[str, str]:
+    """Classify the price-history proxy by volatility level and direction."""
+    volatility_rank = float(row.get("realized_vol_percentile", np.nan))
+    ratio = float(row.get("downside_upside_ratio", np.nan))
+    if volatility_rank >= 90:
+        volatility_state = "Extreme"
+    elif volatility_rank >= 70:
+        volatility_state = "Elevated"
+    elif volatility_rank <= 30:
+        volatility_state = "Subdued"
+    else:
+        volatility_state = "Moderate"
+
+    if not np.isfinite(ratio) or ratio <= 0:
+        direction = "Unclear"
+    elif ratio >= 1.10:
+        direction = "Downside"
+    elif ratio <= 0.90:
+        direction = "Upside"
+    else:
+        direction = "Balanced"
+    return volatility_state, direction
+
+
+def build_price_proxy_commentary(row: Mapping[str, object]) -> str:
+    """Create a short, plain-language read from price-derived volatility."""
+    ticker = str(row.get("ticker", "The selected ticker"))
+    realized_vol = float(row.get("realized_vol_21d", np.nan))
+    volatility_rank = float(row.get("realized_vol_percentile", np.nan))
+    ratio = float(row.get("downside_upside_ratio", np.nan))
+    volatility_state, direction = price_proxy_regime(row)
+    regime = f"{volatility_state.lower()}-volatility, {direction.lower()}"
+    article = "an" if volatility_state in {"Elevated", "Extreme"} else "a"
+    parts = [f"{ticker} is in {article} {regime} regime."]
+    if np.isfinite(realized_vol) and np.isfinite(volatility_rank):
+        parts.append(
+            f"21-day realized volatility is {realized_vol * 100:.1f}% "
+            f"({ordinal(volatility_rank)} percentile)."
+        )
+    if np.isfinite(ratio) and ratio > 0:
+        if direction == "Upside":
+            parts.append(f"Upside volatility is {1.0 / ratio:.2f}x downside volatility.")
+        elif direction == "Downside":
+            parts.append(f"Downside volatility is {ratio:.2f}x upside volatility.")
+        else:
+            parts.append(f"Downside and upside volatility are broadly balanced ({ratio:.2f}x).")
+    return " ".join(parts)
+
+
 def build_positioning_commentary(row: Mapping[str, object]) -> str:
     """Create restrained commentary from one ranked current snapshot."""
     ticker = str(row.get("ticker", "The selected ticker"))
