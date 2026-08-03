@@ -1,4 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from __future__ import annotations
+
 from io import BytesIO
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -7,6 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
 
 from adfm_core.market_data import close_panel, configure_yfinance_cache, fetch_daily_ohlcv
@@ -36,7 +38,8 @@ TEAL = "#008C95"
 GRAY = "#6B7280"
 GRID = "rgba(203, 213, 225, 0.62)"
 
-FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}&coed={end}"
+FRED_START = "2010-01-01"
 FRED_IDS = (
     "WRESBAL",
     "WALCL",
@@ -69,128 +72,16 @@ FCIG_URLS = {
 }
 
 PRIMARY_SPECS: List[Dict[str, object]] = [
-    dict(
-        name="Reserve Balances",
-        category="Balance Sheet",
-        series="WRESBAL",
-        orientation=1.0,
-        weight=0.45,
-        change_kind="diff",
-        include_level=True,
-        format="mm_tn",
-        source="Federal Reserve H.4.1",
-        description="Directly observed reserve balances held at Federal Reserve Banks.",
-    ),
-    dict(
-        name="Fed Total Assets",
-        category="Balance Sheet",
-        series="WALCL",
-        orientation=1.0,
-        weight=0.25,
-        change_kind="diff",
-        include_level=True,
-        format="mm_tn",
-        source="Federal Reserve H.4.1",
-        description="Federal Reserve balance-sheet expansion or contraction.",
-    ),
-    dict(
-        name="Treasury General Account",
-        category="Balance Sheet",
-        series="WTREGEN",
-        orientation=-1.0,
-        weight=0.15,
-        change_kind="diff",
-        include_level=False,
-        format="mm_tn",
-        source="Federal Reserve H.4.1",
-        description="A rising TGA drains reserves; a falling TGA injects reserves.",
-    ),
-    dict(
-        name="ON RRP",
-        category="Balance Sheet",
-        series="RRPONTSYD",
-        orientation=-1.0,
-        weight=0.15,
-        change_kind="diff",
-        include_level=False,
-        format="bn_tn",
-        source="Federal Reserve Bank of New York",
-        description="RRP runoff shifts Federal Reserve liabilities toward reserves.",
-    ),
-    dict(
-        name="SOFR minus IORB",
-        category="Funding",
-        inputs=("SOFR", "IORB"),
-        formula="spread",
-        orientation=-1.0,
-        weight=0.60,
-        change_kind="diff",
-        include_level=True,
-        format="pct_bp",
-        source="New York Fed / Federal Reserve Board",
-        description="Secured overnight funding pressure versus the administered reserve rate.",
-    ),
-    dict(
-        name="EFFR minus IORB",
-        category="Funding",
-        inputs=("EFFR", "IORB"),
-        formula="spread",
-        orientation=-1.0,
-        weight=0.40,
-        change_kind="diff",
-        include_level=True,
-        format="pct_bp",
-        source="New York Fed / Federal Reserve Board",
-        description="Unsecured overnight funding pressure versus the administered reserve rate.",
-    ),
-    dict(
-        name="High Yield OAS",
-        category="Transmission",
-        series="BAMLH0A0HYM2",
-        orientation=-1.0,
-        weight=0.35,
-        change_kind="diff",
-        include_level=True,
-        format="pct",
-        source="ICE BofA via FRED",
-        description="Direct high-yield credit-risk compensation.",
-    ),
-    dict(
-        name="Investment Grade OAS",
-        category="Transmission",
-        series="BAMLC0A0CM",
-        orientation=-1.0,
-        weight=0.20,
-        change_kind="diff",
-        include_level=True,
-        format="pct",
-        source="ICE BofA via FRED",
-        description="Broad investment-grade corporate funding conditions.",
-    ),
-    dict(
-        name="Broad Dollar",
-        category="Transmission",
-        series="DTWEXBGS",
-        orientation=-1.0,
-        weight=0.25,
-        change_kind="pct",
-        include_level=True,
-        format="index",
-        source="Federal Reserve Board",
-        description="A stronger broad dollar tightens global dollar liquidity.",
-    ),
-    dict(
-        name="10-Year Real Yield",
-        category="Transmission",
-        series="DFII10",
-        orientation=-1.0,
-        weight=0.20,
-        change_kind="diff",
-        include_level=True,
-        format="pct",
-        source="US Treasury / Federal Reserve",
-        description="Higher real yields tighten the economy's discount rate.",
-    ),
+    dict(name="Reserve Balances", category="Balance Sheet", series="WRESBAL", orientation=1.0, weight=0.45, change_kind="diff", include_level=True, format="mm_tn", source="Federal Reserve H.4.1", description="Reserve balances are the banking system's settlement liquidity."),
+    dict(name="Federal Reserve Assets", category="Balance Sheet", series="WALCL", orientation=1.0, weight=0.20, change_kind="diff", include_level=True, format="mm_tn", source="Federal Reserve H.4.1", description="Changes in Federal Reserve assets alter the supply of central-bank liabilities."),
+    dict(name="Treasury General Account", category="Balance Sheet", series="WTREGEN", orientation=-1.0, weight=0.20, change_kind="diff", include_level=True, format="mm_tn", source="Federal Reserve H.4.1", description="A rising TGA drains reserves; a falling TGA adds reserves."),
+    dict(name="Overnight Reverse Repo", category="Balance Sheet", series="RRPONTSYD", orientation=-1.0, weight=0.15, change_kind="diff", include_level=True, format="bn_tn", source="Federal Reserve Bank of New York", description="RRP runoff can release cash into reserves or private markets."),
+    dict(name="SOFR minus IORB", category="Funding", formula="spread", inputs=("SOFR", "IORB"), orientation=-1.0, weight=0.60, change_kind="diff", include_level=True, format="pct_bp", source="Federal Reserve Bank of New York / Federal Reserve", description="A wider secured funding spread signals tighter reserve distribution."),
+    dict(name="EFFR minus IORB", category="Funding", formula="spread", inputs=("EFFR", "IORB"), orientation=-1.0, weight=0.40, change_kind="diff", include_level=True, format="pct_bp", source="Federal Reserve Bank of New York / Federal Reserve", description="A wider unsecured policy spread indicates firmer overnight funding pressure."),
+    dict(name="High Yield OAS", category="Transmission", series="BAMLH0A0HYM2", orientation=-1.0, weight=0.35, change_kind="diff", include_level=True, format="pct", source="ICE BofA / Federal Reserve FRED", description="Wider high-yield spreads transmit tighter financing conditions."),
+    dict(name="Investment Grade OAS", category="Transmission", series="BAMLC0A0CM", orientation=-1.0, weight=0.20, change_kind="diff", include_level=True, format="pct", source="ICE BofA / Federal Reserve FRED", description="Investment-grade spreads capture broad corporate funding pressure."),
+    dict(name="Broad US Dollar", category="Transmission", series="DTWEXBGS", orientation=-1.0, weight=0.25, change_kind="pct", include_level=True, format="index", source="Federal Reserve", description="A stronger broad dollar tightens global dollar liquidity."),
+    dict(name="10-Year Real Yield", category="Transmission", series="DFII10", orientation=-1.0, weight=0.20, change_kind="diff", include_level=True, format="pct", source="US Treasury / Federal Reserve", description="Higher real yields tighten the economy's discount rate."),
 ]
 
 MARKET_SPECS: List[Dict[str, object]] = [
@@ -203,6 +94,7 @@ MARKET_SPECS: List[Dict[str, object]] = [
     dict(name="Emerging Markets / S&P 500", category="Market Confirmation", numerator="EEM", denominator="SPY", orientation=1.0, weight=0.07, change_kind="pct", include_level=False, description="Global dollar-liquidity confirmation."),
     dict(name="Volatility Pressure", category="Market Confirmation", ticker="^VIX", orientation=-1.0, weight=0.05, change_kind="pct", include_level=False, description="Lower volatility releases risk-budget capacity."),
 ]
+
 SLEEVE_WEIGHTS = {
     "Balance Sheet": 0.35,
     "Funding": 0.25,
@@ -211,13 +103,7 @@ SLEEVE_WEIGHTS = {
 }
 
 
-def plot_layout(
-    fig: go.Figure,
-    height: int,
-    margin: Optional[Dict[str, int]] = None,
-    showlegend: bool = True,
-    hovermode: str = "x unified",
-) -> go.Figure:
+def plot_layout(fig: go.Figure, height: int, margin: Optional[Dict[str, int]] = None, showlegend: bool = True, hovermode: str = "x unified") -> go.Figure:
     fig.update_layout(
         template="plotly_white",
         height=height,
@@ -228,15 +114,7 @@ def plot_layout(
         font=dict(color="#334155", family="Arial, sans-serif"),
         hovermode=hovermode,
         showlegend=showlegend,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.025,
-            xanchor="left",
-            x=0.0,
-            font=dict(size=11),
-            bgcolor="rgba(255,255,255,0)",
-        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.025, xanchor="left", x=0.0, font=dict(size=11), bgcolor="rgba(255,255,255,0)"),
     )
     fig.update_xaxes(showgrid=True, gridcolor="rgba(226,232,240,.48)", showline=True, linecolor="#cbd5e1", zeroline=False)
     fig.update_yaxes(showgrid=True, gridcolor=GRID, showline=False, zeroline=False)
@@ -362,45 +240,82 @@ def color_score(value: object) -> str:
     return "background-color:#f4cccc;color:#990000;"
 
 
-def _fred_series(series_id: str) -> Tuple[str, pd.Series, Optional[str]]:
+def _normalize_fred_frame(raw: pd.DataFrame, series_id: str) -> pd.Series:
+    if raw is None or raw.empty:
+        raise ValueError("empty response")
+    frame = raw.copy()
+    if series_id in frame.columns:
+        series = frame[series_id]
+    elif frame.shape[1] == 1:
+        series = frame.iloc[:, 0]
+    else:
+        date_col = frame.columns[0]
+        value_col = frame.columns[-1]
+        frame[date_col] = pd.to_datetime(frame[date_col], errors="coerce")
+        frame = frame.dropna(subset=[date_col]).set_index(date_col)
+        series = frame[value_col]
+    series = pd.to_numeric(series, errors="coerce")
+    series.index = pd.to_datetime(series.index, errors="coerce")
+    series = series.loc[series.index.notna()].sort_index()
+    try:
+        if series.index.tz is not None:
+            series.index = series.index.tz_convert(None)
+    except Exception:
+        pass
+    series = series[~series.index.duplicated(keep="last")].dropna().rename(series_id)
+    if series.empty:
+        raise ValueError("no numeric observations")
+    return series
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def fetch_fred_one(series_id: str, start: str, end: str) -> pd.Series:
+    """Fetch one FRED series sequentially. Failed calls are not cached by Streamlit."""
+    errors: List[str] = []
+
+    try:
+        raw = pdr.DataReader(series_id, "fred", start, end)
+        return _normalize_fred_frame(raw, series_id)
+    except Exception as exc:
+        errors.append(f"pandas_datareader: {type(exc).__name__}: {exc}")
+
     try:
         response = requests.get(
-            FRED_URL.format(series_id=series_id),
-            headers={"User-Agent": "ADFM-Liquidity-Monitor/3.0"},
-            timeout=(4, 18),
+            FRED_CSV_URL.format(series_id=series_id, start=start, end=end),
+            headers={
+                "User-Agent": "Mozilla/5.0 ADFM-Liquidity-Monitor/3.1",
+                "Accept": "text/csv,application/octet-stream;q=0.9,*/*;q=0.8",
+            },
+            timeout=(8, 45),
         )
         response.raise_for_status()
-        frame = pd.read_csv(BytesIO(response.content))
-        if frame.empty or frame.shape[1] < 2:
-            return series_id, pd.Series(dtype=float), "Empty response."
-        date_col = frame.columns[0]
-        value_col = series_id if series_id in frame.columns else frame.columns[-1]
-        frame[date_col] = pd.to_datetime(frame[date_col], errors="coerce")
-        frame[value_col] = pd.to_numeric(frame[value_col], errors="coerce")
-        series = frame.dropna(subset=[date_col]).set_index(date_col)[value_col].sort_index().rename(series_id)
-        series = series[~series.index.duplicated(keep="last")]
-        return (series_id, series, None) if series.notna().any() else (series_id, pd.Series(dtype=float), "No numeric observations.")
+        raw = pd.read_csv(BytesIO(response.content))
+        return _normalize_fred_frame(raw, series_id)
     except Exception as exc:
-        return series_id, pd.Series(dtype=float), str(exc)
+        errors.append(f"direct CSV: {type(exc).__name__}: {exc}")
+
+    raise RuntimeError(" | ".join(errors))
 
 
-@st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
 def load_fred(ids: Tuple[str, ...]) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    """Load series one at a time to avoid FRED throttling and retry transient failures on rerun."""
+    end = pd.Timestamp.utcnow().date().isoformat()
     data: Dict[str, pd.Series] = {}
     errors: Dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=min(6, len(ids))) as executor:
-        futures = [executor.submit(_fred_series, series_id) for series_id in ids]
-        for future in as_completed(futures):
-            series_id, series, error = future.result()
-            if error:
-                errors[series_id] = error
-            else:
-                data[series_id] = series
+
+    for series_id in ids:
+        try:
+            data[series_id] = fetch_fred_one(series_id, FRED_START, end)
+        except Exception as exc:
+            errors[series_id] = str(exc)
+
     if not data:
         return pd.DataFrame(), errors
+
     panel = pd.concat(data.values(), axis=1).sort_index()
     panel = panel[~panel.index.duplicated(keep="last")]
-    panel = panel.reindex(pd.date_range(panel.index.min(), panel.index.max(), freq="B")).ffill(limit=10)
+    business_index = pd.date_range(panel.index.min(), panel.index.max(), freq="B")
+    panel = panel.reindex(business_index).ffill(limit=10)
     return panel.dropna(how="all"), errors
 
 
@@ -413,7 +328,8 @@ def load_market(tickers: Tuple[str, ...], period: str) -> pd.DataFrame:
     close.index = pd.to_datetime(close.index, errors="coerce")
     close = close.loc[close.index.notna()].sort_index()
     close = close.loc[:, ~close.columns.duplicated(keep="last")]
-    return close[[column for column in close.columns if pd.to_numeric(close[column], errors="coerce").notna().sum() >= 90]].apply(pd.to_numeric, errors="coerce")
+    valid = [column for column in close.columns if pd.to_numeric(close[column], errors="coerce").notna().sum() >= 90]
+    return close[valid].apply(pd.to_numeric, errors="coerce")
 
 
 def market_tickers() -> List[str]:
@@ -470,12 +386,7 @@ def build_market_components(prices: pd.DataFrame) -> Tuple[pd.DataFrame, List[Di
     return (pd.DataFrame(series_map).sort_index().dropna(how="all"), specs) if series_map else (pd.DataFrame(), [])
 
 
-def component_scores(
-    components: pd.DataFrame,
-    specs: Sequence[Mapping[str, object]],
-    window: int,
-    min_periods: int,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def component_scores(components: pd.DataFrame, specs: Sequence[Mapping[str, object]], window: int, min_periods: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
     levels = pd.DataFrame(index=components.index)
     impulses = pd.DataFrame(index=components.index)
     for spec in specs:
@@ -505,6 +416,7 @@ def sleeve_composite(
         name = str(spec["name"])
         if name in scores and scores[name].notna().any():
             groups.setdefault(str(spec["category"]), []).append(spec)
+
     sleeves = pd.DataFrame(index=scores.index)
     for group, members in groups.items():
         names = [str(member["name"]) for member in members]
@@ -521,12 +433,17 @@ def sleeve_composite(
             return float((valid * active).sum() / active.sum())
 
         sleeves[group] = scores[names].apply(score_row, axis=1)
+
     if sleeves.empty:
         empty = pd.Series(index=scores.index, dtype=float)
         return sleeves, empty, empty, empty
+
     group_weights = pd.Series({group: SLEEVE_WEIGHTS[group] for group in sleeves.columns})
     total_weight = float(group_weights.sum())
-    composite, breadth, coverage = [], [], []
+    composite: List[float] = []
+    breadth: List[float] = []
+    coverage: List[float] = []
+
     for _, row in sleeves.iterrows():
         valid = row.dropna()
         if valid.empty:
@@ -543,7 +460,9 @@ def sleeve_composite(
             breadth.append(np.nan)
             continue
         composite.append(float((valid * active).sum() / active_weight))
-        breadth.append(float(active.loc[valid.index[valid > 0]].sum()) / active_weight * 100)
+        positive_weight = float(active.loc[valid.index[valid > 0]].sum())
+        breadth.append(positive_weight / active_weight * 100)
+
     return (
         sleeves,
         pd.Series(composite, index=sleeves.index, dtype=float),
@@ -552,12 +471,7 @@ def sleeve_composite(
     )
 
 
-def scorecard(
-    components: pd.DataFrame,
-    levels: pd.DataFrame,
-    impulses: pd.DataFrame,
-    specs: Sequence[Mapping[str, object]],
-) -> pd.DataFrame:
+def scorecard(components: pd.DataFrame, levels: pd.DataFrame, impulses: pd.DataFrame, specs: Sequence[Mapping[str, object]]) -> pd.DataFrame:
     rows = []
     for spec in specs:
         name = str(spec["name"])
@@ -595,10 +509,11 @@ def fcig_column(frame: pd.DataFrame) -> Optional[str]:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def load_fcig() -> Tuple[pd.DataFrame, Dict[str, str]]:
-    frames, errors = [], {}
+    frames: List[pd.DataFrame] = []
+    errors: Dict[str, str] = {}
     for label, url in FCIG_URLS.items():
         try:
-            response = requests.get(url, headers={"User-Agent": "ADFM-Liquidity-Monitor/3.0"}, timeout=(4, 20))
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 ADFM-Liquidity-Monitor/3.1"}, timeout=(8, 45))
             response.raise_for_status()
             frame = pd.read_csv(BytesIO(response.content))
             date_col = next((column for column in frame if any(term in str(column).lower() for term in ("date", "month", "time"))), frame.columns[0])
@@ -659,12 +574,16 @@ with st.spinner("Loading primary-source liquidity data..."):
     fred, fred_errors = load_fred(FRED_IDS)
 
 if fred.empty:
-    st.error("Primary-source liquidity data could not be loaded from FRED.")
+    st.error("Primary-source liquidity data could not be loaded. The page will retry failed series on the next rerun rather than caching this failure.")
+    if fred_errors:
+        with st.expander("Primary-source diagnostics"):
+            for series_id, error in fred_errors.items():
+                st.write(f"**{FRED_LABELS.get(series_id, series_id)}:** {error}")
     st.stop()
 
 primary, primary_specs = build_primary(fred)
 if primary.empty:
-    st.error("The primary liquidity components could not be constructed.")
+    st.error("The primary liquidity components could not be constructed from the available series.")
     st.stop()
 
 prices = load_market(tuple(market_tickers()), market_period)
@@ -700,7 +619,8 @@ current_breadth = latest(display_breadth)
 current_coverage = latest(display_coverage)
 current_market = latest(display_market)
 regime, regime_description = classify_regime(current_level, current_impulse, current_breadth)
-latest_date = max(series.dropna().index.max() for series in (display_level, display_impulse) if not series.dropna().empty)
+valid_latest_dates = [series.dropna().index.max() for series in (display_level, display_impulse) if not series.dropna().empty]
+latest_date = max(valid_latest_dates) if valid_latest_dates else fred.index.max()
 
 if fred_errors:
     st.warning(
@@ -740,202 +660,136 @@ render_selection_note("Active liquidity read", f"{regime}: {regime_description} 
 
 render_section_header(
     "Liquidity Level and Marginal Impulse",
-    "The old risk-appetite composite is retained only as market confirmation and capped at 15% of the headline impulse.",
+    "The level score measures how easy or restrictive primary-source conditions are versus their trailing history. The impulse score measures whether those conditions are improving or deteriorating.",
 )
-benchmark_series = rebase(display_prices[benchmark]).dropna() if show_benchmark and benchmark in display_prices else None
-fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.09, row_heights=[0.74, 0.26], specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
-for y in (0, 0.35, -0.35):
-    fig.add_hline(y=y, line_width=1, line_dash="dot", line_color=GRAY if y == 0 else "#aab7c4", row=1, col=1)
-fig.add_trace(go.Scatter(x=display_level.index, y=display_level, name="Liquidity Level", mode="lines", line=dict(color=BLUE, width=2.8), hovertemplate="%{x|%Y-%m-%d}<br>Level: %{y:.2f}<extra></extra>"), row=1, col=1, secondary_y=False)
-fig.add_trace(go.Scatter(x=display_impulse.index, y=display_impulse, name="Liquidity Impulse", mode="lines", line=dict(color=GREEN, width=2.8), hovertemplate="%{x|%Y-%m-%d}<br>Impulse: %{y:.2f}<extra></extra>"), row=1, col=1, secondary_y=False)
-fig.add_trace(go.Scatter(x=display_market.index, y=display_market, name="Market Confirmation", mode="lines", line=dict(color=ORANGE, width=1.8, dash="dash"), opacity=0.82, hovertemplate="%{x|%Y-%m-%d}<br>Confirmation: %{y:.2f}<extra></extra>"), row=1, col=1, secondary_y=False)
-if benchmark_series is not None and not benchmark_series.empty:
-    fig.add_trace(go.Scatter(x=benchmark_series.index, y=benchmark_series, name=f"{benchmark}, rebased", mode="lines", line=dict(color=PURPLE, width=1.6), opacity=0.45, hovertemplate=f"%{{x|%Y-%m-%d}}<br>{benchmark}: %{{y:.1f}}<extra></extra>"), row=1, col=1, secondary_y=True)
-fig.add_hline(y=50, line_width=1, line_dash="dot", line_color=GRAY, row=2, col=1)
-fig.add_trace(go.Scatter(x=display_breadth.index, y=display_breadth, name="Weighted Easing Breadth", mode="lines", line=dict(color=TEAL, width=2.1), fill="tozeroy", opacity=0.78, hovertemplate="%{x|%Y-%m-%d}<br>Breadth: %{y:.0f}%<extra></extra>"), row=2, col=1)
-plot_layout(fig, 700, dict(l=52, r=62, t=88, b=48))
-fig.update_yaxes(title_text="Trailing z-score", row=1, col=1, secondary_y=False)
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.70, 0.30], specs=[[{"secondary_y": True}], [{}]], subplot_titles=("Level and impulse", "Weighted easing breadth"))
+fig.add_hrect(y0=-0.35, y1=0.35, fillcolor="rgba(107,114,128,.07)", line_width=0, row=1, col=1)
+fig.add_hline(y=0, line_dash="dot", line_color=GRAY, row=1, col=1)
+fig.add_trace(go.Scatter(x=display_level.index, y=display_level, name="Liquidity Level", mode="lines", line=dict(color=BLUE, width=2.7)), row=1, col=1, secondary_y=False)
+fig.add_trace(go.Scatter(x=display_impulse.index, y=display_impulse, name="Liquidity Impulse", mode="lines", line=dict(color=BLACK, width=2.9)), row=1, col=1, secondary_y=False)
+fig.add_trace(go.Scatter(x=display_market.index, y=display_market, name="Market Confirmation", mode="lines", line=dict(color=ORANGE, width=1.8, dash="dot"), opacity=0.9), row=1, col=1, secondary_y=False)
+if show_benchmark and benchmark in display_prices:
+    benchmark_rebased = rebase(display_prices[benchmark])
+    fig.add_trace(go.Scatter(x=benchmark_rebased.index, y=benchmark_rebased, name=f"{benchmark}, rebased", mode="lines", line=dict(color=TEAL, width=1.6), opacity=0.55), row=1, col=1, secondary_y=True)
+fig.add_hline(y=50, line_dash="dot", line_color=GRAY, row=2, col=1)
+fig.add_trace(go.Scatter(x=display_breadth.index, y=display_breadth, name="Weighted Breadth", mode="lines", fill="tozeroy", line=dict(color=PURPLE, width=2.0), opacity=0.75), row=2, col=1)
+plot_layout(fig, 700, margin=dict(l=50, r=56, t=84, b=46))
+fig.update_yaxes(title_text="Composite z-score", row=1, col=1, secondary_y=False)
 fig.update_yaxes(title_text=f"{benchmark}, rebased", showgrid=False, row=1, col=1, secondary_y=True)
-fig.update_yaxes(title_text="Weighted breadth", ticksuffix="%", range=[0, 100], row=2, col=1)
-fig.update_xaxes(title_text="Date", row=2, col=1)
+fig.update_yaxes(title_text="Breadth", range=[0, 100], ticksuffix="%", row=2, col=1)
 st.plotly_chart(fig, width="stretch")
 
-if show_quadrant:
-    render_section_header(
-        "Liquidity Regime Map",
-        "Upper-right is easy and improving. Lower-left is tight and deteriorating. The path shows the trailing six months.",
-    )
-    regime_frame = pd.concat([display_level.rename("Level"), display_impulse.rename("Impulse")], axis=1).dropna().tail(126)
-    quadrant = go.Figure()
-    for x0, x1, y0, y1, fill in [
-        (0, 4, 0, 4, "rgba(112,173,71,.10)"),
-        (0, 4, -4, 0, "rgba(237,125,49,.09)"),
-        (-4, 0, 0, 4, "rgba(68,114,196,.09)"),
-        (-4, 0, -4, 0, "rgba(192,0,0,.08)"),
-    ]:
-        quadrant.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1, fillcolor=fill, line_width=0, layer="below")
-    if not regime_frame.empty:
-        quadrant.add_trace(go.Scatter(x=regime_frame["Level"], y=regime_frame["Impulse"], mode="lines+markers", name="Trailing 6M path", line=dict(color="#94a3b8", width=1.6), marker=dict(size=4), customdata=regime_frame.index.strftime("%Y-%m-%d"), hovertemplate="%{customdata}<br>Level: %{x:.2f}<br>Impulse: %{y:.2f}<extra></extra>"))
-        quadrant.add_trace(go.Scatter(x=[regime_frame["Level"].iloc[-1]], y=[regime_frame["Impulse"].iloc[-1]], mode="markers+text", name="Current", marker=dict(size=14, color=BLACK, line=dict(color="#fff", width=1.5)), text=["Current"], textposition="top center"))
-    quadrant.add_hline(y=0, line_color=GRAY)
-    quadrant.add_vline(x=0, line_color=GRAY)
-    quadrant.add_annotation(x=2.6, y=3.4, text="Easy + Improving", showarrow=False)
-    quadrant.add_annotation(x=2.6, y=-3.4, text="Easy + Deteriorating", showarrow=False)
-    quadrant.add_annotation(x=-2.6, y=3.4, text="Tight + Improving", showarrow=False)
-    quadrant.add_annotation(x=-2.6, y=-3.4, text="Tight + Deteriorating", showarrow=False)
-    plot_layout(quadrant, 560, dict(l=58, r=36, t=70, b=55), hovermode="closest")
-    quadrant.update_xaxes(title_text="Liquidity Level", range=[-4, 4])
-    quadrant.update_yaxes(title_text="Liquidity Impulse", range=[-4, 4], scaleanchor="x", scaleratio=1)
-    st.plotly_chart(quadrant, width="stretch")
+render_section_header("Current Sleeve Attribution", "The headline score is constructed sleeve first, so a category with more proxies cannot dominate by count.")
+if not latest_sleeves.empty:
+    sleeve_plot = latest_sleeves.reset_index().rename(columns={"index": "Sleeve"})
+    fig_sleeves = go.Figure()
+    fig_sleeves.add_vline(x=0, line_dash="dot", line_color=GRAY)
+    fig_sleeves.add_trace(go.Bar(x=sleeve_plot["Impulse"], y=sleeve_plot["Sleeve"], orientation="h", name="Impulse", marker_color=BLUE))
+    plot_layout(fig_sleeves, 350, margin=dict(l=135, r=30, t=45, b=42), showlegend=False, hovermode="closest")
+    fig_sleeves.update_xaxes(title_text="Latest sleeve impulse")
+    fig_sleeves.update_yaxes(showgrid=False)
+    st.plotly_chart(fig_sleeves, width="stretch")
 
-render_section_header(
-    "Liquidity Attribution by Sleeve",
-    "The page shows the four sleeves separately so a market rally cannot conceal tightening in funding or balance-sheet liquidity.",
-)
-attribution = latest_sleeves.reset_index().rename(columns={"index": "Sleeve"})
-if not attribution.empty:
-    order = [sleeve for sleeve in SLEEVE_WEIGHTS if sleeve in attribution["Sleeve"].tolist()]
-    attribution["Sleeve"] = pd.Categorical(attribution["Sleeve"], categories=order, ordered=True)
-    attribution = attribution.sort_values("Sleeve")
-    bars = go.Figure()
-    bars.add_hline(y=0, line_width=1, line_dash="dot", line_color=GRAY)
-    bars.add_trace(go.Bar(x=attribution["Sleeve"], y=attribution["Level"], name="Level", marker_color=BLUE))
-    bars.add_trace(go.Bar(x=attribution["Sleeve"], y=attribution["Impulse"], name="Impulse", marker_color=GREEN))
-    plot_layout(bars, 450, dict(l=48, r=30, t=78, b=70), hovermode="closest")
-    bars.update_layout(barmode="group")
-    bars.update_yaxes(title_text="Latest sleeve z-score")
-    st.plotly_chart(bars, width="stretch")
+if show_quadrant and not latest_sleeves.empty:
+    quadrant = latest_sleeves.dropna(subset=["Level", "Impulse"]).copy()
+    if not quadrant.empty:
+        render_section_header("Level × Impulse Map", "Upper right is easy and improving. Lower left is tight and deteriorating. Funding and transmission may sit in different quadrants during turning points.")
+        fig_q = go.Figure()
+        fig_q.add_hline(y=0, line_dash="dot", line_color=GRAY)
+        fig_q.add_vline(x=0, line_dash="dot", line_color=GRAY)
+        fig_q.add_trace(go.Scatter(x=quadrant["Level"], y=quadrant["Impulse"], mode="markers+text", text=quadrant.index, textposition="top center", marker=dict(size=14, color=[BLUE, ORANGE, PURPLE, TEAL][: len(quadrant)]), hovertemplate="%{text}<br>Level %{x:.2f}<br>Impulse %{y:.2f}<extra></extra>"))
+        plot_layout(fig_q, 460, margin=dict(l=54, r=32, t=48, b=52), showlegend=False, hovermode="closest")
+        fig_q.update_xaxes(title_text="Liquidity level")
+        fig_q.update_yaxes(title_text="Liquidity impulse")
+        st.plotly_chart(fig_q, width="stretch")
 
 if show_raw:
-    render_section_header(
-        "Primary-Source Liquidity Plumbing",
-        "Raw quantities and funding spreads are shown separately from the standardized composite.",
-    )
-    tab_balance, tab_funding, tab_transmission = st.tabs(["Balance Sheet", "Funding", "Transmission"])
-    with tab_balance:
-        balance = pd.DataFrame(index=display_primary.index)
-        conversions = {
-            "Reserve Balances": 1_000_000,
-            "Fed Total Assets": 1_000_000,
-            "Treasury General Account": 1_000_000,
-            "ON RRP": 1_000,
-        }
-        colors = {
-            "Reserve Balances": BLUE,
-            "Fed Total Assets": BLACK,
-            "Treasury General Account": ORANGE,
-            "ON RRP": PURPLE,
-        }
-        for name, divisor in conversions.items():
-            if name in display_primary:
-                balance[name] = display_primary[name] / divisor
-        chart = go.Figure()
-        for name in balance:
-            chart.add_trace(go.Scatter(x=balance.index, y=balance[name], name=name, mode="lines", line=dict(color=colors[name], width=2.1), hovertemplate=f"%{{x|%Y-%m-%d}}<br>{name}: $%{{y:.2f}}tn<extra></extra>"))
-        plot_layout(chart, 500)
-        chart.update_yaxes(title_text="$ trillions")
-        st.plotly_chart(chart, width="stretch")
-    with tab_funding:
-        funding = pd.DataFrame(index=display_primary.index)
-        for name in ("SOFR minus IORB", "EFFR minus IORB"):
-            if name in display_primary:
-                funding[name] = display_primary[name] * 100
-        chart = go.Figure()
-        for name, color in zip(funding, (RED, ORANGE)):
-            chart.add_trace(go.Scatter(x=funding.index, y=funding[name], name=name, mode="lines", line=dict(color=color, width=2.2), hovertemplate=f"%{{x|%Y-%m-%d}}<br>{name}: %{{y:.1f}} bp<extra></extra>"))
-        chart.add_hline(y=0, line_width=1, line_dash="dot", line_color=GRAY)
-        plot_layout(chart, 470)
-        chart.update_yaxes(title_text="Basis points")
-        st.plotly_chart(chart, width="stretch")
-    with tab_transmission:
-        chart = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.10, specs=[[{"secondary_y": False}], [{"secondary_y": True}]])
-        if "High Yield OAS" in display_primary:
-            chart.add_trace(go.Scatter(x=display_primary.index, y=display_primary["High Yield OAS"], name="High Yield OAS", mode="lines", line=dict(color=RED, width=2.2)), row=1, col=1)
-        if "Investment Grade OAS" in display_primary:
-            chart.add_trace(go.Scatter(x=display_primary.index, y=display_primary["Investment Grade OAS"], name="Investment Grade OAS", mode="lines", line=dict(color=ORANGE, width=2.0)), row=1, col=1)
-        if "Broad Dollar" in display_primary:
-            chart.add_trace(go.Scatter(x=display_primary.index, y=display_primary["Broad Dollar"], name="Broad Dollar", mode="lines", line=dict(color=BLUE, width=2.0)), row=2, col=1, secondary_y=False)
-        if "10-Year Real Yield" in display_primary:
-            chart.add_trace(go.Scatter(x=display_primary.index, y=display_primary["10-Year Real Yield"], name="10-Year Real Yield", mode="lines", line=dict(color=PURPLE, width=2.0)), row=2, col=1, secondary_y=True)
-        plot_layout(chart, 620, dict(l=54, r=58, t=88, b=48))
-        chart.update_yaxes(title_text="Credit OAS", row=1, col=1)
-        chart.update_yaxes(title_text="Broad dollar", row=2, col=1, secondary_y=False)
-        chart.update_yaxes(title_text="Real yield", row=2, col=1, secondary_y=True)
-        st.plotly_chart(chart, width="stretch")
+    render_section_header("Primary-Source Plumbing and Transmission", "Raw series remain visible so the composite can be audited against the underlying reserve, funding, credit, dollar, and real-yield data.")
+    raw_groups = {
+        "Balance Sheet": ["Reserve Balances", "Federal Reserve Assets", "Treasury General Account", "Overnight Reverse Repo"],
+        "Funding": ["SOFR minus IORB", "EFFR minus IORB"],
+        "Transmission": ["High Yield OAS", "Investment Grade OAS", "Broad US Dollar", "10-Year Real Yield"],
+    }
+    for group, columns in raw_groups.items():
+        available = [column for column in columns if column in display_primary]
+        if not available:
+            continue
+        fig_raw = go.Figure()
+        for column in available:
+            normalized = zscore(display_primary[column], min(int(z_window), max(126, len(display_primary))), min(int(min_periods), max(63, len(display_primary) // 2)))
+            fig_raw.add_trace(go.Scatter(x=normalized.index, y=normalized, name=column, mode="lines", line=dict(width=1.9)))
+        fig_raw.add_hline(y=0, line_dash="dot", line_color=GRAY)
+        plot_layout(fig_raw, 360, margin=dict(l=50, r=28, t=58, b=42))
+        fig_raw.update_yaxes(title_text="Normalized level")
+        st.plotly_chart(fig_raw, width="stretch")
 
 primary_card = scorecard(primary, primary_levels, primary_impulses, primary_specs)
 market_card = scorecard(market, market_levels, market_impulses, market_specs) if not market.empty else pd.DataFrame()
-
 if show_scorecards:
-    render_section_header(
-        "Primary-Source Component Scorecard",
-        "Positive scores indicate easier conditions after direction adjustment. Level and impulse remain separate.",
-    )
-    if not primary_card.empty:
-        styled = primary_card.style.map(color_score, subset=["Level Score", "Impulse Score"]).format({"Level Score": "{:+.2f}", "Impulse Score": "{:+.2f}", "Within-Sleeve Weight": "{:.0%}"}, na_rep="N/A")
-        st.dataframe(styled, width="stretch", hide_index=True, column_config={"Description": st.column_config.TextColumn(width="large"), "Source": st.column_config.TextColumn(width="medium")})
-    render_section_header(
-        "Market Confirmation Scorecard",
-        "This sleeve is capped at 15% and excludes the duplicated credit, dollar, duration, and AI-leadership trades in the old formula.",
-    )
-    if market_card.empty:
-        st.info("Market confirmation is unavailable from the current Yahoo Finance download.")
-    else:
-        columns = ["Component", "Latest", "Impulse Score", "Signal", "Within-Sleeve Weight", "Description"]
-        styled = market_card[columns].style.map(color_score, subset=["Impulse Score"]).format({"Impulse Score": "{:+.2f}", "Within-Sleeve Weight": "{:.0%}"}, na_rep="N/A")
-        st.dataframe(styled, width="stretch", hide_index=True, column_config={"Description": st.column_config.TextColumn(width="large")})
+    render_section_header("Component Audit", "Every component shows its latest raw level, level score, marginal impulse, source, weight, and interpretation.")
+    tabs = st.tabs(["Primary Sources", "Market Confirmation", "Source Diagnostics"])
+    with tabs[0]:
+        if not primary_card.empty:
+            numeric_cols = [column for column in ("Level Score", "Impulse Score") if column in primary_card]
+            styled = primary_card.style.applymap(color_score, subset=numeric_cols).format({"Level Score": "{:+.2f}", "Impulse Score": "{:+.2f}", "Within-Sleeve Weight": "{:.0%}"}, na_rep="N/A")
+            st.dataframe(styled, width="stretch", hide_index=True)
+    with tabs[1]:
+        if market_card.empty:
+            st.info("Market confirmation data are unavailable.")
+        else:
+            styled = market_card.style.applymap(color_score, subset=["Impulse Score"]).format({"Impulse Score": "{:+.2f}", "Within-Sleeve Weight": "{:.0%}"}, na_rep="N/A")
+            st.dataframe(styled, width="stretch", hide_index=True)
+    with tabs[2]:
+        diagnostics = pd.DataFrame(
+            [
+                {
+                    "Series": FRED_LABELS.get(series_id, series_id),
+                    "FRED ID": series_id,
+                    "Status": "Unavailable" if series_id in fred_errors else "Loaded",
+                    "Latest Observation": fred[series_id].dropna().index.max().date().isoformat() if series_id in fred and fred[series_id].notna().any() else "N/A",
+                    "Error": fred_errors.get(series_id, ""),
+                }
+                for series_id in FRED_IDS
+            ]
+        )
+        st.dataframe(diagnostics, width="stretch", hide_index=True)
 
 if show_fcig_overlay:
-    render_section_header(
-        "Federal Reserve FCI-G Overlay",
-        "FCI-G measures the estimated growth headwind or tailwind from financial conditions. It remains an external macro overlay.",
-    )
     fcig, fcig_errors = load_fcig()
+    render_section_header("Federal Reserve FCI-G Overlay", "FCI-G estimates the growth headwind or tailwind from financial conditions. It is kept separate from the liquidity index because it measures transmission rather than balance-sheet liquidity.")
     if fcig.empty:
-        st.warning("Federal Reserve FCI-G data could not be loaded.")
+        st.info("Federal Reserve FCI-G is temporarily unavailable. The primary liquidity composite above is unaffected.")
     else:
-        fcig = filter_lookback(fcig, lookback)
-        monthly_level = filter_lookback(liquidity_level.resample("ME").last(), lookback)
-        monthly_impulse = filter_lookback(liquidity_impulse.resample("ME").last(), lookback)
-        chart = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.10)
-        for index, column in enumerate(fcig):
-            chart.add_trace(go.Scatter(x=fcig.index, y=fcig[column], name=column, mode="lines", line=dict(color=(RED, ORANGE)[index % 2], width=2.0)), row=1, col=1)
-        chart.add_hline(y=0, line_width=1, line_dash="dot", line_color=GRAY, row=1, col=1)
-        chart.add_trace(go.Scatter(x=monthly_level.index, y=monthly_level, name="Liquidity Level", mode="lines", line=dict(color=BLUE, width=2.2)), row=2, col=1)
-        chart.add_trace(go.Scatter(x=monthly_impulse.index, y=monthly_impulse, name="Liquidity Impulse", mode="lines", line=dict(color=GREEN, width=2.2)), row=2, col=1)
-        chart.add_hline(y=0, line_width=1, line_dash="dot", line_color=GRAY, row=2, col=1)
-        plot_layout(chart, 650)
-        chart.update_yaxes(title_text="FCI-G", row=1, col=1)
-        chart.update_yaxes(title_text="Liquidity z-score", row=2, col=1)
-        st.plotly_chart(chart, width="stretch")
+        fcig_display = filter_lookback(fcig, lookback)
+        monthly_impulse = filter_lookback(display_impulse.resample("ME").last(), lookback)
+        fig_fcig = make_subplots(specs=[[{"secondary_y": True}]])
+        for column in fcig_display:
+            fig_fcig.add_trace(go.Scatter(x=fcig_display.index, y=fcig_display[column], name=column, mode="lines", line=dict(width=2.0)), secondary_y=False)
+        fig_fcig.add_trace(go.Scatter(x=monthly_impulse.index, y=monthly_impulse, name="Liquidity Impulse", mode="lines", line=dict(color=BLACK, width=2.3, dash="dot")), secondary_y=True)
+        fig_fcig.add_hline(y=0, line_dash="dot", line_color=GRAY, secondary_y=False)
+        plot_layout(fig_fcig, 430, margin=dict(l=52, r=58, t=68, b=44))
+        fig_fcig.update_yaxes(title_text="FCI-G", secondary_y=False)
+        fig_fcig.update_yaxes(title_text="Liquidity impulse", showgrid=False, secondary_y=True)
+        st.plotly_chart(fig_fcig, width="stretch")
 
 if show_download:
-    render_section_header("Download Underlying Data", "The export preserves numeric values for independent audit and backtesting.")
+    render_section_header("Download", "Exports preserve numeric values for independent audit and backtesting.")
     export = pd.concat(
-        [
-            liquidity_level.rename("Liquidity Level"),
-            liquidity_impulse.rename("Liquidity Impulse"),
-            market_confirmation.rename("Market Confirmation"),
-            easing_breadth.rename("Weighted Easing Breadth"),
-            impulse_coverage.rename("Weighted Coverage"),
-            sleeve_levels.add_prefix("Level | "),
-            sleeve_impulses.add_prefix("Impulse | "),
-            primary.add_prefix("Raw | "),
-        ],
+        {
+            "Liquidity Level": liquidity_level,
+            "Liquidity Impulse": liquidity_impulse,
+            "Weighted Breadth": easing_breadth,
+            "Coverage": impulse_coverage,
+            "Market Confirmation": market_confirmation,
+        },
         axis=1,
-    )
-    export.index.name = "Date"
-    st.download_button(
-        "Download liquidity history",
-        data=export.reset_index().to_csv(index=False).encode("utf-8"),
-        file_name="adfm_liquidity_conditions_history.csv",
-        mime="text/csv",
-    )
+    ).reset_index(names="Date")
+    st.download_button("Download liquidity history", export.to_csv(index=False).encode("utf-8"), "adfm_liquidity_conditions.csv", "text/csv")
 
 render_footer(
     data_note=(
-        "Primary inputs: Federal Reserve H.4.1, New York Fed overnight rates and reverse repo, "
-        "ICE BofA option-adjusted spreads via FRED, the Federal Reserve broad dollar index, "
-        "10-year real yields, Federal Reserve FCI-G, and Yahoo Finance market confirmation proxies."
+        "Primary inputs: Federal Reserve FRED and H.4.1 series, New York Fed overnight rates and reverse-repo usage, "
+        "ICE BofA spread indexes distributed through FRED, Federal Reserve FCI-G, and Yahoo Finance market prices. "
+        "Failed primary-source calls are retried on the next rerun and are never cached as successful data."
     )
 )
