@@ -1,0 +1,2 @@
+Force Streamlit Cloud to rebuild Position Sizing Lab from main after the session-level simulation correction.
+Expected code commit: b429a9eee25caecc1cc787893f651eb5acaa9f54.
