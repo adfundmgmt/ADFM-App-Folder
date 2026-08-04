@@ -229,8 +229,9 @@ def earnings_reaction_frame(
     for raw_date in earnings_dates:
         event = pd.Timestamp(raw_date)
         if event.tzinfo is not None:
-            event = event.tz_convert(None)
-        event = event.normalize()
+            event = event.tz_convert("America/New_York").tz_localize(None)
+        after_close = event.hour >= 16
+        event = event.normalize() + pd.Timedelta(days=1 if after_close else 0)
         location = frame.index.searchsorted(event)
         if location <= 0 or location >= len(frame):
             continue
