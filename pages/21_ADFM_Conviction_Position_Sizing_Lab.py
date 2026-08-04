@@ -102,8 +102,8 @@ def earnings_dates(symbol: str) -> tuple[pd.Timestamp, ...]:
             return ()
         index = pd.DatetimeIndex(dates.index)
         if index.tz is not None:
-            index = index.tz_convert(None)
-        return tuple(pd.Timestamp(value).normalize() for value in index)
+            index = index.tz_convert("America/New_York").tz_localize(None)
+        return tuple(pd.Timestamp(value) for value in index)
     except Exception:
         return ()
 
@@ -278,7 +278,8 @@ if len(events) >= 4:
 else:
     event_move = daily_gap_proxy(ohlcv, .90)
     event_basis = "90th-percentile overnight gap; earnings history unavailable"
-next_earnings = min((date for date in dates if date >= pd.Timestamp(datetime.now(NY_TZ).date())), default=None)
+today = pd.Timestamp(datetime.now(NY_TZ).date())
+next_earnings = min((date for date in dates if date.normalize() >= today), default=None)
 
 step = {21: 5, 63: 5, 252: 21, 1260: 63}[horizon_days]
 paths = historical_windows(close, horizon_days, direction.lower(), step=step)
@@ -402,7 +403,7 @@ with events_tab:
         ("Event loss", pct(event_nav, 2), "Suggested exposure × event move"),
         ("Five-day tail", pct(tail_move), "Historical 5th-percentile move"),
         ("Tail loss", pct(tail_nav, 2), "Suggested exposure × tail move"),
-        ("Next earnings", next_earnings.strftime("%Y-%m-%d") if next_earnings is not None else "N/A", "Yahoo schedule when available"),
+        ("Next earnings", next_earnings.normalize().strftime("%Y-%m-%d") if next_earnings is not None else "N/A", "Yahoo schedule when available"),
         ("Earnings sample", str(len(events)), "Matched historical events"),
     ])
     if events.empty:
