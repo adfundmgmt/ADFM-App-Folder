@@ -34,6 +34,139 @@ def _called_from_analytics_page() -> bool:
     return False
 
 
+def _called_from_position_sizing() -> bool:
+    """Return True only while the Position Sizing Lab page is executing."""
+
+    frame = inspect.currentframe()
+    try:
+        frame = frame.f_back if frame is not None else None
+        while frame is not None:
+            filename = frame.f_code.co_filename.replace("\\", "/")
+            if filename.endswith("pages/21_Position_Sizing_Lab.py"):
+                return True
+            frame = frame.f_back
+    finally:
+        del frame
+    return False
+
+
+def _inject_position_sizing_contrast() -> None:
+    """Strengthen simulator marks and chart contrast without changing other pages."""
+
+    try:
+        import streamlit as st
+    except ImportError:
+        return
+
+    st.markdown(
+        """
+        <style>
+        main:has(.sim-head) .sim-grid {
+            gap: 7px !important;
+        }
+
+        main:has(.sim-head) .sim-dot {
+            border-width: 2px !important;
+            border-color: #7f7f7f !important;
+            background: #ffffff !important;
+            color: #262626 !important;
+            font-size: .72rem !important;
+            font-weight: 900 !important;
+        }
+
+        main:has(.sim-head) .sim-dot.win {
+            border-color: #548235 !important;
+            background: #c6e0b4 !important;
+            color: #1f4e21 !important;
+        }
+
+        main:has(.sim-head) .sim-dot.loss {
+            border-color: #c00000 !important;
+            background: #f4b183 !important;
+            color: #9c0006 !important;
+        }
+
+        main:has(.sim-head) .sim-dot.flat {
+            border-color: #4472c4 !important;
+            background: #d9e1f2 !important;
+            color: #203864 !important;
+        }
+
+        main:has(.sim-head) .sim-dot.empty {
+            border-color: #a6a6a6 !important;
+            background: #f2f2f2 !important;
+            color: transparent !important;
+        }
+
+        main:has(.sim-head) .sim-balance {
+            border-top-width: 2px !important;
+            border-bottom-width: 2px !important;
+        }
+
+        main:has(.sim-head) .sim-balance span:first-child {
+            color: #262626 !important;
+        }
+
+        main:has(.sim-head) button:disabled {
+            border-color: #a6a6a6 !important;
+            background: #e7e6e6 !important;
+            color: #666666 !important;
+            opacity: 1 !important;
+        }
+
+        main:has(.sim-head) [data-testid="stAlert"] {
+            border-width: 2px !important;
+            border-color: #595959 !important;
+            background: #f7f7f7 !important;
+        }
+
+        main:has(.sim-head) path.js-line[style*="112, 173, 71"] {
+            stroke: #2e7d32 !important;
+            stroke-width: 3px !important;
+        }
+
+        main:has(.sim-head) path.js-line[style*="237, 125, 49"] {
+            stroke: #c65911 !important;
+            stroke-width: 2.8px !important;
+        }
+
+        main:has(.sim-head) path.js-fill[style*="112, 173, 71"] {
+            fill: #70ad47 !important;
+            fill-opacity: .22 !important;
+        }
+
+        main:has(.sim-head) path.js-fill[style*="237, 125, 49"] {
+            fill: #ed7d31 !important;
+            fill-opacity: .18 !important;
+        }
+
+        main:has(.sim-head) .xtick text,
+        main:has(.sim-head) .ytick text,
+        main:has(.sim-head) .g-xtitle text,
+        main:has(.sim-head) .g-ytitle text {
+            fill: #404040 !important;
+        }
+
+        main:has(.sim-head) path.xgrid,
+        main:has(.sim-head) path.ygrid {
+            stroke: #d0d0d0 !important;
+        }
+
+        @media (max-width: 760px) {
+            main:has(.sim-head) .sim-grid {
+                gap: 5px !important;
+            }
+
+            main:has(.sim-head) .sim-dot {
+                font-size: .64rem !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _install_institutional_theme() -> None:
     """Apply the shared theme immediately after each tool calls page config."""
 
@@ -52,12 +185,15 @@ def _install_institutional_theme() -> None:
     @wraps(original_set_page_config)
     def set_page_config(*args, **kwargs):
         is_analytics_page = _called_from_analytics_page()
+        is_position_sizing = _called_from_position_sizing()
         if is_analytics_page:
             kwargs = dict(kwargs)
             kwargs.setdefault("page_icon", Image.open(logo_path).convert("RGBA"))
         result = original_set_page_config(*args, **kwargs)
         if is_analytics_page:
             inject_institutional_theme()
+        if is_position_sizing:
+            _inject_position_sizing_contrast()
         return result
 
     st.set_page_config = set_page_config
