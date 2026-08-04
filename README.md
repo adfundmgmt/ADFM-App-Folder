@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 20 tools, in the same order and groups shown on the Home page.
+The application contains 21 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -38,13 +38,14 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 | 11 | Global Macro Regime Dashboard | Combines growth, inflation, policy, financial conditions, and market signals into a broad macro-regime read. | Yahoo Finance market proxies |
 | 12 | Yield Curve + Rates Regime Monitor | Tracks the Treasury curve, real yields, breakevens, and bull/bear steepener or flattener regimes. | Yahoo Finance rate and market proxies |
 | 13 | Credit Conditions Dashboard | Monitors credit spreads, credit ETF ratios, regional banks, loans, EM debt, and financial conditions. | Yahoo Finance market proxies |
-| 14 | Liquidity Tracker | Monitors major liquidity drivers including the Fed balance sheet, RRP, TGA, policy rates, and financial conditions. | Yahoo Finance; Federal Reserve FCI-G data |
+| 14 | Liquidity Conditions Monitor | Separates the level and marginal impulse of system liquidity across Fed plumbing, overnight funding, credit transmission, and market confirmation. | Federal Reserve H.4.1; New York Fed; FRED; Yahoo Finance proxies |
 | 15 | Market Stress Composite | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
 | 16 | Event Risk + Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Yahoo Finance market proxies; configured calendar data |
 | 17 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 | 20 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
+| 21 | ADFM Conviction & Position Sizing Lab | Maps conviction to a 5%-25% exposure ceiling and reduces it using historical volatility, path risk, earnings reactions, liquidity, and explicit invalidation risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
 
 ## Tool groups
 
@@ -53,8 +54,8 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 | Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard |
 | Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
 | Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass |
-| Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Tracker; Currency Tension Engine |
-| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer |
+| Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Conditions Monitor; Currency Tension Engine |
+| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; ADFM Conviction & Position Sizing Lab |
 
 ## Shared application foundations
 
@@ -66,8 +67,9 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - A data-integrity policy and diagnostics report for eligible, stale, thin-history, and invalid series.
 - Causal PM command-center scores, cross-asset group summaries, movers, and an atomic point-in-time signal ledger.
 - Reusable Rate of Change calculations and chart-axis helpers.
+- Historical conviction-based position sizing, target/invalidation first-touch analysis, earnings-event risk, liquidity caps, and block-bootstrap path simulation.
 
-The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Tracker use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
+The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Conditions Monitor use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
 ## Data-use notes
 
