@@ -107,13 +107,6 @@ def _inject_position_sizing_contrast() -> None:
             color: #262626 !important;
         }
 
-        main:has(.sim-head) button:disabled {
-            border-color: #a6a6a6 !important;
-            background: #e7e6e6 !important;
-            color: #666666 !important;
-            opacity: 1 !important;
-        }
-
         main:has(.sim-head) [data-testid="stAlert"] {
             border-width: 2px !important;
             border-color: #595959 !important;
@@ -173,6 +166,7 @@ def _install_institutional_theme() -> None:
     try:
         import streamlit as st
         from PIL import Image
+        from streamlit.delta_generator import DeltaGenerator
     except ImportError:
         return
 
@@ -180,6 +174,7 @@ def _install_institutional_theme() -> None:
         return
 
     original_set_page_config = st.set_page_config
+    original_button = DeltaGenerator.button
     logo_path = Path(__file__).resolve().parents[1] / "assets" / "ADFM_Logo_Naked.png"
 
     @wraps(original_set_page_config)
@@ -196,7 +191,15 @@ def _install_institutional_theme() -> None:
             _inject_position_sizing_contrast()
         return result
 
+    @wraps(original_button)
+    def button(self, label, *args, **kwargs):
+        if _called_from_position_sizing() and str(label).strip() == "Start simulation":
+            kwargs = dict(kwargs)
+            kwargs["type"] = "secondary"
+        return original_button(self, label, *args, **kwargs)
+
     st.set_page_config = set_page_config
+    DeltaGenerator.button = button
     st._adfm_institutional_theme_installed = True
 
 
