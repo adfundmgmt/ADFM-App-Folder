@@ -45,7 +45,7 @@ The application contains 21 tools, in the same order and groups shown on the Hom
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 | 20 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
-| 21 | ADFM Conviction & Position Sizing Lab | Maps conviction to a 5%-25% exposure ceiling and reduces it using historical volatility, path risk, earnings reactions, liquidity, and explicit invalidation risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
+| 21 | Position Sizing Lab | Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
 
 ## Tool groups
 
@@ -55,7 +55,7 @@ The application contains 21 tools, in the same order and groups shown on the Hom
 | Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
 | Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Conditions Monitor; Currency Tension Engine |
-| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; ADFM Conviction & Position Sizing Lab |
+| Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Position Sizing Lab |
 
 ## Shared application foundations
 
@@ -67,7 +67,7 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - A data-integrity policy and diagnostics report for eligible, stale, thin-history, and invalid series.
 - Causal PM command-center scores, cross-asset group summaries, movers, and an atomic point-in-time signal ledger.
 - Reusable Rate of Change calculations and chart-axis helpers.
-- Historical conviction-based position sizing, target/invalidation first-touch analysis, earnings-event risk, liquidity caps, and block-bootstrap path simulation.
+- Historical conviction-based position sizing, target/invalidation first-touch analysis, earnings-event risk, liquidity caps, and an interactive compounding simulation built from observed holding-period outcomes.
 
 The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Conditions Monitor use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
