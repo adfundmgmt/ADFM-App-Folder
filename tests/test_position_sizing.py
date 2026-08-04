@@ -19,7 +19,7 @@ class PositionSizingTests(unittest.TestCase):
     def test_conviction_mapping(self) -> None:
         actual_values = [conviction_ceiling(i) for i in range(1, 6)]
         expected_values = [0.05, 0.10, 0.15, 0.20, 0.25]
-        for actual, expected in zip(actual_values, expected_values):
+        for actual, expected in zip(actual_values, expected_values, strict=True):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(HORIZON_TRADING_DAYS["1 month"], 21)
         self.assertEqual(HORIZON_TRADING_DAYS["5 years"], 1260)
