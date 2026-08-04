@@ -10,6 +10,7 @@ from adfm_core.position_sizing import (
     bootstrap_portfolio_paths,
     calculate_sizing,
     conviction_ceiling,
+    earnings_reaction_frame,
     first_touch_statistics,
     historical_windows,
 )
@@ -65,6 +66,23 @@ class PositionSizingTests(unittest.TestCase):
         stats = first_touch_statistics(frame, 3, "long", 0.05, 0.05, step=1)
         self.assertGreater(stats["target_first"], 0)
         self.assertEqual(stats["stop_first"], 0)
+
+    def test_after_hours_earnings_uses_next_session(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "Open": [100.0, 100.0, 110.0],
+                "Close": [100.0, 101.0, 111.0],
+            },
+            index=pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07"]),
+        )
+        events = earnings_reaction_frame(
+            frame,
+            [pd.Timestamp("2026-01-06 16:30:00")],
+        )
+        self.assertEqual(events.iloc[0]["date"], pd.Timestamp("2026-01-07"))
+        self.assertAlmostEqual(
+            float(events.iloc[0]["close_to_close"]), 111.0 / 101.0 - 1.0
+        )
 
     def test_bootstrap_shapes(self) -> None:
         returns = pd.Series(np.linspace(-0.02, 0.02, 200))
