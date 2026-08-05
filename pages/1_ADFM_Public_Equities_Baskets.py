@@ -595,7 +595,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Information Technology': {'Semic
                                    'Japan Reflation Beneficiaries': ['EWJ', 'DXJ', 'TM', 'HMC', 'MUFG', 'SMFG', 'SONY'],
                                    'Europe Fiscal Expansion': ['VGK', 'EZU', 'EWG', 'BAESY', 'RNMBY', 'EADSY', 'SIEGY'],
                                    'Humanoid Robotics': ['TSLA', 'NVDA', 'ISRG', 'SYM', 'ROK', 'TER', 'FANUY', 'ABB'],
-                                   'Private Robotics Access Vehicles': ['BOT'],
                                    'Recent IPO and New-Issue Beta': ['CRWV',
                                                                      'CRCL',
                                                                      'CHYM',
