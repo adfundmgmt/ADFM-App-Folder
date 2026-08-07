@@ -17,6 +17,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Changed
 
+- Public Equities Baskets deployment refreshed so the live app reflects the current basket map, which excludes the legacy Private Robotics Access Vehicles (BOT) entry.
 - The Options Positioning Compass price-history fallback now uses an intuitive left-to-right volatility scale, top-to-bottom upside/downside scale, matching directional colors, and shorter commentary.
 - Home-page tool cards now navigate directly to all 20 tools.
 - README catalog now reflects the 20 tools exposed from `Home.py`.
