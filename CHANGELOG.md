@@ -6,7 +6,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Added
 
-- Equity & Credit Underwriter (Page 22) with SEC EDGAR financial normalization, stand-alone-quarter reconstruction, current valuation, issuer-credit ratios, debt maturities, recent filings, and source-audit links.
+- ADFM Underwriter (Page 22) with SEC EDGAR financial normalization, stand-alone-quarter reconstruction, filing-calculated valuation and quality ratios, a one-year price chart, issuer-credit measures, debt maturities, recent filings, and source-audit links.
 - Options Positioning Compass (Page 20) with Yahoo Finance option-chain analytics, generated commentary, volatility/skew ranks, term structure, IV surface, estimated premium activity, and a price-derived fallback when hosted option endpoints are unavailable.
 - Relative Volatility Lab (Page 19).
 - PM command center with causal cross-asset regime, breadth, impulse, dispersion, confidence, and mover signals.
