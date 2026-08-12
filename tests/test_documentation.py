@@ -21,6 +21,7 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(len(TOOL_CATALOG), 22)
         self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 23)))
         self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 22)
+        self.assertEqual(TOOL_CATALOG[-1].page_filename, "22_ADFM_Underwriter.py")
         for tool in TOOL_CATALOG:
             self.assertTrue((REPOSITORY_ROOT / "pages" / tool.page_filename).is_file())
 
