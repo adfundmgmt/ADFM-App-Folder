@@ -6,6 +6,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Added
 
+- Equity & Credit Underwriter (Page 22) with SEC EDGAR financial normalization, stand-alone-quarter reconstruction, current valuation, issuer-credit ratios, debt maturities, recent filings, and source-audit links.
 - Options Positioning Compass (Page 20) with Yahoo Finance option-chain analytics, generated commentary, volatility/skew ranks, term structure, IV surface, estimated premium activity, and a price-derived fallback when hosted option endpoints are unavailable.
 - Relative Volatility Lab (Page 19).
 - PM command center with causal cross-asset regime, breadth, impulse, dispersion, confidence, and mover signals.
@@ -19,9 +20,9 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 - Public Equities Baskets deployment refreshed so the live app reflects the current basket map, which excludes the legacy Private Robotics Access Vehicles (BOT) entry.
 - The Options Positioning Compass price-history fallback now uses an intuitive left-to-right volatility scale, top-to-bottom upside/downside scale, matching directional colors, and shorter commentary.
-- Home-page tool cards now navigate directly to all 20 tools.
-- README catalog now reflects the 20 tools exposed from `Home.py`.
-- The catalog and Home navigation now expose 20 tools.
+- Home-page tool cards now navigate directly to all 22 tools.
+- README catalog now reflects the 22 tools exposed from `Home.py`.
+- The catalog and Home navigation now expose 22 tools.
 - Rate of Change Dashboard now uses shared calculation and daily-data helpers.
 - Global Macro Regime Dashboard and Liquidity Tracker now use the shared market-data loader and preserve missing observations.
 - Currency snapshot commits now run application CI.

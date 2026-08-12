@@ -22,6 +22,11 @@
    patterns, or turning points.
 4. Show the source, latest observation, freshness, and limitation close to the
    resulting signal.
+5. Filing-driven company analysis uses SEC EDGAR Company Facts and submissions.
+   Stand-alone quarters may be derived only by subtracting two disclosed YTD
+   observations with the same fiscal-period start. Current multiples keep the
+   market-price observation separate from the filing denominator and expose the
+   calculation formula and source concept.
 
 ## PM command-center scoring
 
