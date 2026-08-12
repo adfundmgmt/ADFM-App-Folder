@@ -11,7 +11,11 @@ import streamlit as st
 from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
 
-from adfm_core.market_data import close_panel, configure_yfinance_cache, fetch_daily_ohlcv
+from adfm_core.market_data import (
+    close_panel,
+    configure_yfinance_cache,
+    fetch_daily_ohlcv,
+)
 from adfm_core.ui import (
     PageHeader,
     inject_explorer_style,
@@ -423,7 +427,11 @@ def sleeve_composite(
         weights = pd.Series({str(member["name"]): float(member.get("weight", 1.0)) for member in members})
         total = float(weights.sum())
 
-        def score_row(row: pd.Series) -> float:
+        def score_row(
+            row: pd.Series,
+            weights: pd.Series = weights,
+            total: float = total,
+        ) -> float:
             valid = row.dropna()
             if valid.empty:
                 return np.nan
@@ -710,7 +718,7 @@ if show_raw:
         "Funding": ["SOFR minus IORB", "EFFR minus IORB"],
         "Transmission": ["High Yield OAS", "Investment Grade OAS", "Broad US Dollar", "10-Year Real Yield"],
     }
-    for group, columns in raw_groups.items():
+    for _group, columns in raw_groups.items():
         available = [column for column in columns if column in display_primary]
         if not available:
             continue

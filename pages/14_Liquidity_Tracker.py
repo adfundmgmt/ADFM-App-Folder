@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from adfm_core.palette import PASTEL
 
 BASE_PAGE = Path(__file__).resolve().parents[1] / "adfm_core" / "_liquidity_tracker_base.py"
 _ENGINE_SPLIT = "\nrender_page_header(\n"
@@ -32,15 +33,16 @@ exec(
     compile(_source.split(_ENGINE_SPLIT, 1)[0], str(BASE_PAGE), "exec"),
     _engine,
 )
+# st.set_page_config is executed once from the shared engine loaded above.
 
 # Engine bindings
 TITLE = _engine["TITLE"]
 BLACK = _engine["BLACK"]
-BLUE = _engine["BLUE"]
-GREEN = _engine["GREEN"]
+BLUE = PASTEL["blue"]
+GREEN = PASTEL["sage"]
 RED = _engine["RED"]
-ORANGE = _engine["ORANGE"]
-PURPLE = _engine["PURPLE"]
+ORANGE = PASTEL["coral"]
+PURPLE = PASTEL["plum"]
 GRAY = _engine["GRAY"]
 GRID = _engine["GRID"]
 

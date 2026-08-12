@@ -387,5 +387,6 @@ with right_column:
     for section in (
         "Technicals + Analogs",
         "Macro + Rates",
+        "Fundamental Research",
     ):
         render_group(section)

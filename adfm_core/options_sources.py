@@ -9,7 +9,6 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-
 CBOE_DELAYED_OPTIONS_URL = (
     "https://cdn.cboe.com/api/global/delayed_quotes/options/{symbol}.json"
 )
