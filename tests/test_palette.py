@@ -35,8 +35,8 @@ class ExcelPaletteTests(unittest.TestCase):
 
     def test_every_analytical_page_uses_the_shared_palette(self) -> None:
         indirect_palette_pages = {
-            "2_Sector_Breadth_and_Rotation.py": ROOT / "adfm_sector_rotation_config.py",
-            "18_Currency_Tension_Dashboard.py": ROOT / "cte" / "dashboard" / "plots.py",
+            "7_Sector_Breadth_and_Rotation.py": ROOT / "adfm_sector_rotation_config.py",
+            "6_Currency_Tension_Dashboard.py": ROOT / "cte" / "dashboard" / "plots.py",
         }
         for tool in TOOL_CATALOG:
             page = ROOT / "pages" / tool.page_filename

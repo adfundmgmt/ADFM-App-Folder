@@ -58,10 +58,10 @@ class RepositoryStandardsTests(unittest.TestCase):
 
     def test_lagging_tools_use_the_finishing_theme_and_shared_masthead(self) -> None:
         targets = (
-            "12_Yield_Curve_Rates_Regime_Monitor.py",
-            "16_Event_Risk_Catalyst_Calendar.py",
-            "17_Hedge_Timer.py",
-            "18_Currency_Tension_Dashboard.py",
+            "4_Yield_Curve_Rates_Regime_Monitor.py",
+            "18_Event_Risk_Catalyst_Calendar.py",
+            "19_Hedge_Timer.py",
+            "6_Currency_Tension_Dashboard.py",
         )
         for filename in targets:
             source = (ROOT / "pages" / filename).read_text(encoding="utf-8")

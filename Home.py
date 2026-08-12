@@ -34,8 +34,16 @@ def logo_data_uri() -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def page_route(page_filename: str) -> str:
+    """Return Streamlit's public route after its numeric ordering prefix is removed."""
+
+    stem = Path(page_filename).stem
+    prefix, separator, route = stem.partition("_")
+    return route if separator and prefix.isdigit() else stem
+
+
 def render_group(group: str) -> None:
-    """Render one plain-text research section with native Streamlit links."""
+    """Render one plain-text research section with stable internal route links."""
 
     st.markdown(
         f"<div class='directory-group-title'>{escape(group)}</div>",
@@ -43,10 +51,10 @@ def render_group(group: str) -> None:
     )
     for tool in TOOLS_BY_GROUP[group]:
         with st.container():
-            st.page_link(
-                f"pages/{tool.page_filename}",
-                label=tool.title,
-                use_container_width=False,
+            st.markdown(
+                f"<a class='directory-tool-link' href='/{escape(page_route(tool.page_filename))}' target='_self'>"
+                f"{escape(tool.title)}</a>",
+                unsafe_allow_html=True,
             )
             st.markdown(
                 f"<div class='tool-description'>{escape(tool.description)}</div>"
@@ -220,11 +228,8 @@ st.markdown(
             text-transform: uppercase;
         }
 
-        div[data-testid="stPageLink"] {
+        .directory-tool-link {
             margin: 0;
-        }
-
-        div[data-testid="stPageLink"] a {
             display: inline-flex;
             width: auto;
             min-height: 0;
@@ -234,10 +239,15 @@ st.markdown(
             padding: 0;
             color: #000000;
             text-decoration: none;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.02rem;
+            font-weight: 700;
+            letter-spacing: -0.012em;
+            line-height: 1.3;
         }
 
-        div[data-testid="stPageLink"] a:hover,
-        div[data-testid="stPageLink"] a:focus-visible {
+        .directory-tool-link:hover,
+        .directory-tool-link:focus-visible {
             border: 0;
             background: transparent;
             color: #000000;
@@ -246,23 +256,9 @@ st.markdown(
             text-underline-offset: 0.18em;
         }
 
-        div[data-testid="stPageLink"] a:focus-visible {
+        .directory-tool-link:focus-visible {
             outline: 1px solid #000000;
             outline-offset: 4px;
-        }
-
-        div[data-testid="stPageLink"] svg {
-            display: none;
-        }
-
-        div[data-testid="stPageLink"] p {
-            margin: 0;
-            color: #000000;
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: 1.02rem;
-            font-weight: 700;
-            letter-spacing: -0.012em;
-            line-height: 1.3;
         }
 
         .tool-description {
@@ -373,20 +369,14 @@ st.markdown(
 )
 
 
-left_column, right_column = st.columns(2, gap="large")
-
-with left_column:
-    for section in (
-        "Equity Leadership",
-        "Flows + Sentiment",
-        "Risk + Catalysts",
-    ):
-        render_group(section)
-
-with right_column:
-    for section in (
-        "Technicals + Analogs",
-        "Macro + Rates",
-        "Fundamental Research",
-    ):
-        render_group(section)
+for left_section, right_section in (
+    ("Equity Discovery", "Macro Regime"),
+    ("Equity Leadership", "Fundamental Research"),
+    ("Technical Confirmation", "Positioning + Flows"),
+    ("Risk + Execution", "Historical Context"),
+):
+    left_column, right_column = st.columns(2, gap="large")
+    with left_column:
+        render_group(left_section)
+    with right_column:
+        render_group(right_section)

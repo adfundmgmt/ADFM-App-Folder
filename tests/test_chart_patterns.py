@@ -166,7 +166,7 @@ class ChartPatternTests(unittest.TestCase):
 
 
     def test_chart_terminal_exposes_toggle_overlay_and_summary(self) -> None:
-        source = (ROOT / "pages" / "5_ADFM_Chart_Terminal.py").read_text(encoding="utf-8")
+        source = (ROOT / "pages" / "10_ADFM_Chart_Terminal.py").read_text(encoding="utf-8")
         self.assertIn('"Automatic chart patterns"', source)
         self.assertIn("add_chart_pattern_overlay", source)
         self.assertIn("pattern_summary_html", source)
