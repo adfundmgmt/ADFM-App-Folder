@@ -150,7 +150,7 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot["current_gap"], 3.0)
 
     def test_retired_3d_terrain_stays_out_of_seasonality_page(self) -> None:
-        page = Path("pages/8_Monthly_Seasonality_Explorer.py").read_text(
+        page = Path("pages/22_Monthly_Seasonality_Explorer.py").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("3D Seasonal Waterfall Terrain", page)
@@ -175,4 +175,3 @@ class MonthlyReturnsMatrixTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -61,14 +61,14 @@ class InstitutionalThemeTests(unittest.TestCase):
 
     def test_mobile_first_render_contracts_for_legacy_tools(self):
         root = Path(__file__).resolve().parents[1]
-        chart_terminal = (root / "pages" / "5_ADFM_Chart_Terminal.py").read_text(
+        chart_terminal = (root / "pages" / "10_ADFM_Chart_Terminal.py").read_text(
             encoding="utf-8"
         )
-        ratio_charts = (root / "pages" / "6_Ratio_Charts.py").read_text(
+        ratio_charts = (root / "pages" / "11_Ratio_Charts.py").read_text(
             encoding="utf-8"
         )
         sector_breadth = (
-            root / "pages" / "2_Sector_Breadth_and_Rotation.py"
+            root / "pages" / "7_Sector_Breadth_and_Rotation.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("grid-auto-flow: column", chart_terminal)

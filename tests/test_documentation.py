@@ -21,9 +21,40 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(len(TOOL_CATALOG), 22)
         self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 23)))
         self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 22)
-        self.assertEqual(TOOL_CATALOG[-1].page_filename, "22_ADFM_Underwriter.py")
+        self.assertEqual(TOOL_CATALOG[0].title, "ADFM Public Equities Baskets")
+        self.assertEqual(TOOL_CATALOG[8].page_filename, "9_ADFM_Underwriter.py")
         for tool in TOOL_CATALOG:
             self.assertTrue((REPOSITORY_ROOT / "pages" / tool.page_filename).is_file())
+            self.assertTrue(tool.page_filename.startswith(f"{tool.number}_"))
+
+    def test_catalog_follows_the_research_workflow(self) -> None:
+        self.assertEqual(
+            [tool.title for tool in TOOL_CATALOG],
+            [
+                "ADFM Public Equities Baskets",
+                "Global Macro Regime Dashboard",
+                "Liquidity Conditions Monitor",
+                "Yield Curve + Rates Regime Monitor",
+                "Credit Conditions Dashboard",
+                "Currency Tension Engine",
+                "Sector Breadth and Rotation",
+                "Factor Momentum Leadership",
+                "ADFM Underwriter",
+                "Technical Chart Explorer",
+                "Ratio Charts",
+                "Rate of Change Dashboard",
+                "Relative Volatility Lab",
+                "ETF Flows Dashboard",
+                "Volume Based Sentiment Indicator",
+                "Options Positioning Compass",
+                "Market Stress Composite",
+                "Event Risk + Catalyst Calendar",
+                "Hedge Timer",
+                "Position Sizing Lab",
+                "Market Memory Explorer",
+                "Monthly Seasonality Explorer",
+            ],
+        )
 
     def test_home_navigation_maps_to_catalog(self) -> None:
         self.assertEqual(tool_order(), [tool.title for tool in TOOL_CATALOG])

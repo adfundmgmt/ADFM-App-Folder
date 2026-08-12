@@ -11,7 +11,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = ROOT / "pages" / "19_Relative_Volatility_Lab.py"
+PAGE = ROOT / "pages" / "13_Relative_Volatility_Lab.py"
 
 
 def market_frame(close: pd.Series) -> pd.DataFrame:
