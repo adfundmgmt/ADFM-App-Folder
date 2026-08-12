@@ -99,15 +99,22 @@ class ValuationSnapshot:
     price: Optional[float]
     price_date: Optional[pd.Timestamp]
     shares: Optional[float]
+    diluted_shares: Optional[float]
     market_cap: Optional[float]
     cash: Optional[float]
     short_term_investments: Optional[float]
     liquid_assets: Optional[float]
+    receivables: Optional[float]
+    assets: Optional[float]
+    current_assets: Optional[float]
+    current_liabilities: Optional[float]
     debt: Optional[float]
+    equity: Optional[float]
     preferred_equity: Optional[float]
     minority_interest: Optional[float]
     enterprise_value: Optional[float]
     ltm_revenue: Optional[float]
+    ltm_gross_profit: Optional[float]
     ltm_operating_income: Optional[float]
     ltm_net_income: Optional[float]
     ltm_cfo: Optional[float]
@@ -116,12 +123,31 @@ class ValuationSnapshot:
     ltm_da: Optional[float]
     ltm_ebitda: Optional[float]
     ltm_interest_expense: Optional[float]
+    ltm_dividends: Optional[float]
+    eps: Optional[float]
+    sales_per_share: Optional[float]
+    book_per_share: Optional[float]
+    cash_per_share: Optional[float]
     pe: Optional[float]
+    price_sales: Optional[float]
+    price_book: Optional[float]
+    price_cash: Optional[float]
+    price_fcf: Optional[float]
     ev_revenue: Optional[float]
     ev_ebitda: Optional[float]
     fcf_yield: Optional[float]
+    gross_margin: Optional[float]
     operating_margin: Optional[float]
+    profit_margin: Optional[float]
     fcf_margin: Optional[float]
+    current_ratio: Optional[float]
+    quick_ratio: Optional[float]
+    debt_equity: Optional[float]
+    roa: Optional[float]
+    roe: Optional[float]
+    roic: Optional[float]
+    dividend_yield: Optional[float]
+    payout_ratio: Optional[float]
     debt_ebitda: Optional[float]
     net_debt_ebitda: Optional[float]
     interest_coverage: Optional[float]
@@ -212,6 +238,59 @@ CONCEPT_SPECS: Mapping[str, ConceptSpec] = {
             ("ifrs-full", "FinanceCosts"),
         ),
     ),
+    "pretax_income": ConceptSpec(
+        "Pre-Tax Income",
+        "duration",
+        "currency",
+        _candidate(
+            (
+                "us-gaap",
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            ),
+            ("us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"),
+            ("ifrs-full", "ProfitLossBeforeTax"),
+        ),
+    ),
+    "income_tax_expense": ConceptSpec(
+        "Income Tax Expense",
+        "duration",
+        "currency",
+        _candidate(
+            ("us-gaap", "IncomeTaxExpenseBenefit"),
+            ("ifrs-full", "IncomeTaxExpenseContinuingOperations"),
+            ("ifrs-full", "IncomeTaxExpenseBenefit"),
+        ),
+    ),
+    "dividends_paid": ConceptSpec(
+        "Common Dividends Paid",
+        "duration",
+        "currency",
+        _candidate(
+            ("us-gaap", "PaymentsOfDividendsCommonStock"),
+            ("us-gaap", "PaymentsOfDividends"),
+            ("ifrs-full", "DividendsPaid"),
+        ),
+    ),
+    "eps_diluted": ConceptSpec(
+        "Diluted EPS",
+        "duration",
+        "per_share",
+        _candidate(
+            ("us-gaap", "EarningsPerShareDiluted"),
+            ("us-gaap", "EarningsPerShareBasicAndDiluted"),
+            ("ifrs-full", "DilutedEarningsLossPerShare"),
+        ),
+    ),
+    "diluted_shares": ConceptSpec(
+        "Diluted Weighted-Average Shares",
+        "duration",
+        "shares",
+        _candidate(
+            ("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding"),
+            ("us-gaap", "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"),
+            ("ifrs-full", "AdjustedWeightedAverageSharesDiluted"),
+        ),
+    ),
     "shares_outstanding": ConceptSpec(
         "Common Shares Outstanding",
         "instant",
@@ -239,6 +318,37 @@ CONCEPT_SPECS: Mapping[str, ConceptSpec] = {
             ("us-gaap", "MarketableSecuritiesCurrent"),
             ("us-gaap", "AvailableForSaleSecuritiesCurrent"),
             ("ifrs-full", "CurrentFinancialAssetsAtFairValueThroughProfitOrLoss"),
+        ),
+    ),
+    "receivables": ConceptSpec(
+        "Accounts Receivable",
+        "instant",
+        "currency",
+        _candidate(
+            ("us-gaap", "AccountsReceivableNetCurrent"),
+            ("us-gaap", "AccountsNotesAndLoansReceivableNetCurrent"),
+            ("ifrs-full", "TradeAndOtherCurrentReceivables"),
+        ),
+    ),
+    "assets": ConceptSpec(
+        "Total Assets",
+        "instant",
+        "currency",
+        _candidate(("us-gaap", "Assets"), ("ifrs-full", "Assets")),
+    ),
+    "current_assets": ConceptSpec(
+        "Current Assets",
+        "instant",
+        "currency",
+        _candidate(("us-gaap", "AssetsCurrent"), ("ifrs-full", "CurrentAssets")),
+    ),
+    "current_liabilities": ConceptSpec(
+        "Current Liabilities",
+        "instant",
+        "currency",
+        _candidate(
+            ("us-gaap", "LiabilitiesCurrent"),
+            ("ifrs-full", "CurrentLiabilities"),
         ),
     ),
     "debt_total": ConceptSpec(
@@ -754,6 +864,65 @@ def ltm_value(metric: Optional[MetricSeries]) -> Optional[float]:
     return float(sum(observation.value for observation in latest))
 
 
+def average_quarter_value(metric: Optional[MetricSeries]) -> Optional[float]:
+    """Average the latest four consecutive stand-alone quarterly observations."""
+    if metric is None or len(metric.quarterly) < 4:
+        return None
+    latest = list(metric.quarterly[-4:])
+    gaps = [
+        int((right.end - left.end).days)
+        for left, right in zip(latest, latest[1:], strict=False)
+    ]
+    if int((latest[-1].end - latest[0].end).days) > 410:
+        return None
+    if any(gap < 55 or gap > 140 for gap in gaps):
+        return None
+    return float(sum(observation.value for observation in latest) / len(latest))
+
+
+def average_balance_value(metric: Optional[MetricSeries]) -> Optional[float]:
+    """Average the latest balance with its closest prior-year observation."""
+    if metric is None or len(metric.instant) < 2:
+        return None
+    latest = metric.instant[-1]
+    prior_candidates = [
+        observation
+        for observation in metric.instant[:-1]
+        if 330 <= int((latest.end - observation.end).days) <= 400
+    ]
+    if not prior_candidates:
+        return None
+    return float((latest.value + prior_candidates[-1].value) / 2.0)
+
+
+def annual_cagr(metric: Optional[MetricSeries], years: int) -> Optional[float]:
+    """Calculate an annual filing CAGR over approximately ``years`` fiscal years."""
+    if metric is None or len(metric.annual) < 2 or int(years) <= 0:
+        return None
+    latest = metric.annual[-1]
+    candidates = [
+        observation
+        for observation in metric.annual[:-1]
+        if 300 * int(years)
+        <= int((latest.end - observation.end).days)
+        <= 430 * int(years)
+    ]
+    if not candidates or latest.value <= 0:
+        return None
+    prior = min(
+        candidates,
+        key=lambda observation: abs(
+            int((latest.end - observation.end).days) - round(365.25 * int(years))
+        ),
+    )
+    if prior.value <= 0:
+        return None
+    elapsed_years = float((latest.end - prior.end).days) / 365.25
+    if elapsed_years <= 0:
+        return None
+    return float((latest.value / prior.value) ** (1.0 / elapsed_years) - 1.0)
+
+
 def _latest_value(metrics: Mapping[str, MetricSeries], key: str) -> Optional[float]:
     observation = latest_observation(metrics.get(key))
     return observation.value if observation is not None else None
@@ -792,13 +961,19 @@ def build_valuation_snapshot(
 ) -> ValuationSnapshot:
     """Calculate transparent current valuation and issuer-credit ratios."""
     shares = _latest_value(metrics, "shares_outstanding")
+    diluted_shares = average_quarter_value(metrics.get("diluted_shares"))
     market_cap = (
         float(price) * shares if price is not None and shares is not None else None
     )
     cash = _latest_value(metrics, "cash")
     investments = _latest_value(metrics, "short_term_investments")
     liquid_assets = _sum_available(cash, investments)
+    receivables = _latest_value(metrics, "receivables")
+    assets = _latest_value(metrics, "assets")
+    current_assets = _latest_value(metrics, "current_assets")
+    current_liabilities = _latest_value(metrics, "current_liabilities")
     debt = debt_value(metrics)
+    equity = _latest_value(metrics, "equity")
     preferred = _latest_value(metrics, "preferred_equity")
     minority = _latest_value(metrics, "minority_interest")
     enterprise_value = None
@@ -812,6 +987,7 @@ def build_valuation_snapshot(
         )
 
     revenue = ltm_value(metrics.get("revenue"))
+    gross_profit = ltm_value(metrics.get("gross_profit"))
     operating_income = ltm_value(metrics.get("operating_income"))
     net_income = ltm_value(metrics.get("net_income"))
     cfo = ltm_value(metrics.get("cfo"))
@@ -824,21 +1000,55 @@ def build_valuation_snapshot(
         else None
     )
     interest_expense = ltm_value(metrics.get("interest_expense"))
+    dividends_raw = ltm_value(metrics.get("dividends_paid"))
+    dividends = abs(dividends_raw) if dividends_raw is not None else None
+    eps = ltm_value(metrics.get("eps_diluted"))
+    if eps is None:
+        eps = _safe_ratio(net_income, diluted_shares)
+    pretax_income = ltm_value(metrics.get("pretax_income"))
+    income_tax_expense = ltm_value(metrics.get("income_tax_expense"))
+    effective_tax_rate = _safe_ratio(income_tax_expense, pretax_income)
+    if effective_tax_rate is not None:
+        effective_tax_rate = min(0.50, max(0.0, effective_tax_rate))
+    nopat = (
+        operating_income * (1.0 - effective_tax_rate)
+        if operating_income is not None and effective_tax_rate is not None
+        else None
+    )
+    invested_capital = (
+        equity + (debt or 0.0) - (liquid_assets or 0.0)
+        if equity is not None
+        else None
+    )
+    average_assets = average_balance_value(metrics.get("assets"))
+    average_equity = average_balance_value(metrics.get("equity"))
+    quick_assets = (
+        liquid_assets + receivables
+        if liquid_assets is not None and receivables is not None
+        else None
+    )
     net_debt = debt - (liquid_assets or 0.0) if debt is not None else None
 
     return ValuationSnapshot(
         price=price,
         price_date=price_date,
         shares=shares,
+        diluted_shares=diluted_shares,
         market_cap=market_cap,
         cash=cash,
         short_term_investments=investments,
         liquid_assets=liquid_assets,
+        receivables=receivables,
+        assets=assets,
+        current_assets=current_assets,
+        current_liabilities=current_liabilities,
         debt=debt,
+        equity=equity,
         preferred_equity=preferred,
         minority_interest=minority,
         enterprise_value=enterprise_value,
         ltm_revenue=revenue,
+        ltm_gross_profit=gross_profit,
         ltm_operating_income=operating_income,
         ltm_net_income=net_income,
         ltm_cfo=cfo,
@@ -847,12 +1057,31 @@ def build_valuation_snapshot(
         ltm_da=da,
         ltm_ebitda=ebitda,
         ltm_interest_expense=interest_expense,
+        ltm_dividends=dividends,
+        eps=eps,
+        sales_per_share=_safe_ratio(revenue, diluted_shares),
+        book_per_share=_safe_ratio(equity, shares),
+        cash_per_share=_safe_ratio(liquid_assets, shares),
         pe=_safe_ratio(market_cap, net_income),
+        price_sales=_safe_ratio(market_cap, revenue),
+        price_book=_safe_ratio(market_cap, equity),
+        price_cash=_safe_ratio(market_cap, liquid_assets),
+        price_fcf=_safe_ratio(market_cap, fcf),
         ev_revenue=_safe_ratio(enterprise_value, revenue),
         ev_ebitda=_safe_ratio(enterprise_value, ebitda),
         fcf_yield=_safe_ratio(fcf, market_cap),
+        gross_margin=_safe_ratio(gross_profit, revenue),
         operating_margin=_safe_ratio(operating_income, revenue),
+        profit_margin=_safe_ratio(net_income, revenue),
         fcf_margin=_safe_ratio(fcf, revenue),
+        current_ratio=_safe_ratio(current_assets, current_liabilities),
+        quick_ratio=_safe_ratio(quick_assets, current_liabilities),
+        debt_equity=_safe_ratio(debt, equity),
+        roa=_safe_ratio(net_income, average_assets),
+        roe=_safe_ratio(net_income, average_equity),
+        roic=_safe_ratio(nopat, invested_capital),
+        dividend_yield=_safe_ratio(dividends, market_cap),
+        payout_ratio=_safe_ratio(dividends, net_income),
         debt_ebitda=_safe_ratio(debt, ebitda),
         net_debt_ebitda=_safe_ratio(net_debt, ebitda),
         interest_coverage=_safe_ratio(ebitda, interest_expense),

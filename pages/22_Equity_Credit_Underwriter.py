@@ -13,6 +13,7 @@ from adfm_core.sec_fundamentals import (
     SecClient,
     SecDataError,
     ValuationSnapshot,
+    annual_cagr,
     balance_sheet_table,
     build_valuation_snapshot,
     extract_metrics,
@@ -36,10 +37,10 @@ from adfm_core.ui import (
     render_selection_note,
 )
 
-TITLE = "Equity & Credit Underwriter"
+TITLE = "ADFM Underwriter"
 DESCRIPTION = (
     "Filing-driven company fundamentals, current valuation, capital structure, "
-    "issuer-credit ratios, debt maturities, and recent SEC events."
+    "issuer-credit ratios, debt maturities, market context, and recent SEC events."
 )
 
 st.set_page_config(
@@ -66,31 +67,55 @@ def load_submissions(cik: int) -> Mapping[str, Any]:
     return SecClient().submissions(cik)
 
 
-def latest_market_close(ticker: str) -> tuple[Optional[float], Optional[pd.Timestamp]]:
-    frames, _ = fetch_daily_ohlcv((ticker,), period="1mo")
+def market_history(
+    ticker: str,
+) -> tuple[pd.Series, Optional[float], Optional[pd.Timestamp]]:
+    frames, _ = fetch_daily_ohlcv((ticker,), period="1y")
     frame = frames.get(ticker)
     if frame is None or frame.empty or "Close" not in frame:
-        return None, None
+        return pd.Series(dtype="float64"), None, None
     close = pd.to_numeric(frame["Close"], errors="coerce").dropna()
     if close.empty:
-        return None, None
-    return float(close.iloc[-1]), pd.Timestamp(close.index[-1]).normalize()
+        return close, None, None
+    return close, float(close.iloc[-1]), pd.Timestamp(close.index[-1]).normalize()
+
+
+CURRENCY_SYMBOLS: Mapping[str, str] = {
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "JPY": "¥",
+    "CNY": "¥",
+    "HKD": "HK$",
+    "CAD": "C$",
+    "AUD": "A$",
+    "CHF": "CHF ",
+    "INR": "₹",
+    "KRW": "₩",
+}
+
+
+def currency_prefix(currency: str) -> str:
+    code = str(currency or "").upper()
+    return CURRENCY_SYMBOLS.get(code, f"{code} " if code else "")
+
+
+def _signed_currency(value: float, currency: str, decimals: int = 0) -> str:
+    sign = "-" if float(value) < 0 else ""
+    return f"{sign}{currency_prefix(currency)}{abs(float(value)):,.{decimals}f}"
 
 
 def format_money(value: Optional[float], *, currency: str = "USD") -> str:
     if value is None or pd.isna(value):
         return "Unavailable"
     magnitude = abs(float(value))
-    if magnitude >= 1_000_000_000_000:
-        scaled, suffix = value / 1_000_000_000_000, "T"
-    elif magnitude >= 1_000_000_000:
+    if magnitude >= 1_000_000_000:
         scaled, suffix = value / 1_000_000_000, "B"
     elif magnitude >= 1_000_000:
         scaled, suffix = value / 1_000_000, "M"
     else:
         scaled, suffix = value, ""
-    prefix = "$" if currency == "USD" else f"{currency} "
-    return f"{prefix}{scaled:,.2f}{suffix}"
+    return f"{_signed_currency(scaled, currency, 2)}{suffix}"
 
 
 def format_multiple(value: Optional[float]) -> str:
@@ -113,15 +138,20 @@ def statement_currency(metrics: Mapping[str, Any]) -> str:
     return "USD"
 
 
-def scale_financial_table(frame: pd.DataFrame) -> pd.DataFrame:
+def scale_financial_table(frame: pd.DataFrame, currency: str) -> pd.DataFrame:
     if frame.empty:
         return frame
     out = frame.copy()
     for column in out.columns:
         if column != "Period End":
-            out[column] = pd.to_numeric(out[column], errors="coerce") / 1_000_000
+            numeric = pd.to_numeric(out[column], errors="coerce") / 1_000_000
+            out[column] = numeric.map(
+                lambda value: _signed_currency(value, currency)
+                if pd.notna(value)
+                else "Unavailable"
+            )
     out["Period End"] = pd.to_datetime(out["Period End"]).dt.date
-    return out.rename(columns={column: f"{column}" for column in out.columns})
+    return out
 
 
 def first_recent_value(submissions: Mapping[str, Any], field: str) -> str:
@@ -142,9 +172,11 @@ def quarterly_chart(frame: pd.DataFrame, unit: str) -> go.Figure:
         go.Bar(
             x=indexed.index,
             y=revenue / 1_000_000_000,
-            name=f"Revenue ({unit} bn)",
+            name=f"Revenue ({currency_prefix(unit)}bn)",
             marker_color=PASTEL["blue"],
-            hovertemplate="%{x|%Y-%m-%d}<br>Revenue: %{y:,.2f}bn<extra></extra>",
+            hovertemplate=(
+                f"%{{x|%Y-%m-%d}}<br>Revenue: {currency_prefix(unit)}%{{y:,.2f}}bn<extra></extra>"
+            ),
         ),
         secondary_y=False,
     )
@@ -160,7 +192,12 @@ def quarterly_chart(frame: pd.DataFrame, unit: str) -> go.Figure:
             ),
             secondary_y=True,
         )
-    fig.update_yaxes(title_text=f"Revenue ({unit} bn)", secondary_y=False, gridcolor="#e5e5e5")
+    fig.update_yaxes(
+        title_text=f"Revenue ({currency_prefix(unit)}bn)",
+        tickprefix=currency_prefix(unit),
+        secondary_y=False,
+        gridcolor="#e5e5e5",
+    )
     fig.update_yaxes(title_text="Operating margin", ticksuffix="%", secondary_y=True, showgrid=False)
     fig.update_layout(
         height=410,
@@ -171,6 +208,55 @@ def quarterly_chart(frame: pd.DataFrame, unit: str) -> go.Figure:
         legend={"orientation": "h", "y": 1.08, "x": 0},
         hovermode="x unified",
         bargap=0.28,
+    )
+    return fig
+
+
+def price_history_chart(close: pd.Series, ticker: str, currency: str) -> go.Figure:
+    clean = pd.to_numeric(close, errors="coerce").dropna()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=clean.index,
+            y=clean,
+            name=ticker,
+            mode="lines",
+            line={"color": PASTEL["blue"], "width": 2.5},
+            hovertemplate=(
+                f"%{{x|%Y-%m-%d}}<br>{currency_prefix(currency)}%{{y:,.2f}}<extra></extra>"
+            ),
+        )
+    )
+    for window, color in ((50, PASTEL["coral"]), (200, PASTEL["sage"])):
+        average = clean.rolling(window, min_periods=window).mean()
+        if average.notna().any():
+            fig.add_trace(
+                go.Scatter(
+                    x=average.index,
+                    y=average,
+                    name=f"{window}D average",
+                    mode="lines",
+                    line={"color": color, "width": 1.4},
+                    hovertemplate=(
+                        f"%{{x|%Y-%m-%d}}<br>{currency_prefix(currency)}%{{y:,.2f}}<extra></extra>"
+                    ),
+                )
+            )
+    fig.update_layout(
+        height=390,
+        margin={"l": 25, "r": 25, "t": 18, "b": 25},
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font={"color": "#171717", "family": "Arial"},
+        legend={"orientation": "h", "y": 1.08, "x": 0},
+        hovermode="x unified",
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(
+        tickprefix=currency_prefix(currency),
+        tickformat=",.0f",
+        gridcolor="#e5e5e5",
+        title_text="Price",
     )
     return fig
 
@@ -231,11 +317,15 @@ def underwrite_read(
     return reads
 
 
-def valuation_table(snapshot: ValuationSnapshot) -> pd.DataFrame:
+def valuation_table(snapshot: ValuationSnapshot, *, currency: str = "USD") -> pd.DataFrame:
     rows = (
         ("Market Capitalization", snapshot.market_cap, "Latest completed-session close × latest SEC shares outstanding"),
         ("Enterprise Value", snapshot.enterprise_value, "Market cap + funded debt + preferred + minority interest − cash and short-term investments"),
         ("P / E", snapshot.pe, "Market capitalization ÷ LTM net income available to common"),
+        ("P / Sales", snapshot.price_sales, "Market capitalization ÷ LTM revenue"),
+        ("P / Book", snapshot.price_book, "Market capitalization ÷ latest SEC stockholders' equity"),
+        ("P / Cash", snapshot.price_cash, "Market capitalization ÷ cash and short-term investments"),
+        ("P / FCF", snapshot.price_fcf, "Market capitalization ÷ LTM free cash flow"),
         ("EV / Revenue", snapshot.ev_revenue, "Enterprise value ÷ LTM revenue"),
         ("EV / EBITDA", snapshot.ev_ebitda, "Enterprise value ÷ (LTM operating income + LTM D&A)"),
         ("FCF Yield", snapshot.fcf_yield, "(LTM operating cash flow − LTM capex) ÷ market capitalization"),
@@ -244,14 +334,65 @@ def valuation_table(snapshot: ValuationSnapshot) -> pd.DataFrame:
     )
     output: list[dict[str, Any]] = []
     for metric, value, formula in rows:
-        if metric in {"P / E", "EV / Revenue", "EV / EBITDA"}:
+        if metric in {"P / E", "P / Sales", "P / Book", "P / Cash", "P / FCF", "EV / Revenue", "EV / EBITDA"}:
             display = format_multiple(value)
         elif metric in {"FCF Yield", "Operating Margin", "FCF Margin"}:
             display = format_percent(value)
         else:
-            display = format_money(value)
+            display = format_money(value, currency=currency)
         output.append({"Metric": metric, "Value": display, "Formula": formula})
     return pd.DataFrame(output)
+
+
+def sec_snapshot_table(
+    snapshot: ValuationSnapshot, *, currency: str = "USD"
+) -> pd.DataFrame:
+    rows = (
+        ("Per Share", "LTM Diluted EPS", _signed_currency(snapshot.eps, currency, 2) if snapshot.eps is not None else "Unavailable", "LTM reported diluted EPS; net income ÷ diluted shares if unavailable"),
+        ("Per Share", "Sales / Share", _signed_currency(snapshot.sales_per_share, currency, 2) if snapshot.sales_per_share is not None else "Unavailable", "LTM revenue ÷ diluted weighted-average shares"),
+        ("Per Share", "Book / Share", _signed_currency(snapshot.book_per_share, currency, 2) if snapshot.book_per_share is not None else "Unavailable", "Latest equity ÷ shares outstanding"),
+        ("Per Share", "Cash / Share", _signed_currency(snapshot.cash_per_share, currency, 2) if snapshot.cash_per_share is not None else "Unavailable", "Cash and short-term investments ÷ shares outstanding"),
+        ("Per Share", "Shares Outstanding", f"{snapshot.shares:,.0f}" if snapshot.shares is not None else "Unavailable", "Latest SEC shares outstanding"),
+        ("Margins", "Gross Margin", format_percent(snapshot.gross_margin), "LTM gross profit ÷ LTM revenue"),
+        ("Margins", "Operating Margin", format_percent(snapshot.operating_margin), "LTM operating income ÷ LTM revenue"),
+        ("Margins", "Profit Margin", format_percent(snapshot.profit_margin), "LTM net income ÷ LTM revenue"),
+        ("Margins", "FCF Margin", format_percent(snapshot.fcf_margin), "LTM free cash flow ÷ LTM revenue"),
+        ("Returns", "ROA", format_percent(snapshot.roa), "LTM net income ÷ average current/prior-year assets"),
+        ("Returns", "ROE", format_percent(snapshot.roe), "LTM net income ÷ average current/prior-year equity"),
+        ("Returns", "ROIC", format_percent(snapshot.roic), "After-tax operating income ÷ equity plus debt less liquid assets"),
+        ("Liquidity", "Current Ratio", format_multiple(snapshot.current_ratio), "Current assets ÷ current liabilities"),
+        ("Liquidity", "Quick Ratio", format_multiple(snapshot.quick_ratio), "Cash, short-term investments, and receivables ÷ current liabilities"),
+        ("Capital", "Debt / Equity", format_multiple(snapshot.debt_equity), "Funded debt ÷ stockholders' equity"),
+        ("Capital", "Dividend Yield", format_percent(snapshot.dividend_yield), "LTM common dividends paid ÷ market capitalization"),
+        ("Capital", "Payout Ratio", format_percent(snapshot.payout_ratio), "LTM common dividends paid ÷ LTM net income"),
+    )
+    return pd.DataFrame(rows, columns=["Section", "Metric", "Value", "Formula"])
+
+
+def _quarter_change(metric: Any, periods: int) -> Optional[float]:
+    if metric is None or len(metric.quarterly) <= periods:
+        return None
+    current = metric.quarterly[-1].value
+    prior = metric.quarterly[-1 - periods].value
+    if prior == 0:
+        return None
+    return (current - prior) / abs(prior)
+
+
+def growth_table(metrics: Mapping[str, Any]) -> pd.DataFrame:
+    rows: list[dict[str, str]] = []
+    for label, key in (("Revenue", "revenue"), ("Diluted EPS", "eps_diluted")):
+        metric = metrics.get(key)
+        rows.append(
+            {
+                "Metric": label,
+                "Q / Q": format_percent(_quarter_change(metric, 1)),
+                "Y / Y": format_percent(_quarter_change(metric, 4)),
+                "3Y CAGR": format_percent(annual_cagr(metric, 3)),
+                "5Y CAGR": format_percent(annual_cagr(metric, 5)),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def credit_table(snapshot: ValuationSnapshot, *, currency: str = "USD") -> pd.DataFrame:
@@ -265,6 +406,26 @@ def credit_table(snapshot: ValuationSnapshot, *, currency: str = "USD") -> pd.Da
             {"Metric": "LTM Interest Expense", "Value": format_money(snapshot.ltm_interest_expense, currency=currency), "Formula": "Latest four stand-alone quarters"},
         ]
     )
+
+
+def format_source_audit(audit: pd.DataFrame) -> pd.DataFrame:
+    if audit.empty:
+        return audit
+    out = audit.copy()
+
+    def display_value(row: pd.Series) -> str:
+        value = pd.to_numeric(row.get("Latest Reported"), errors="coerce")
+        if pd.isna(value):
+            return "Unavailable"
+        unit = str(row.get("Unit", ""))
+        if unit == "shares":
+            return f"{value:,.0f}"
+        if "/shares" in unit.replace(" ", ""):
+            return _signed_currency(float(value), unit.split("/")[0].strip(), 2)
+        return _signed_currency(float(value), unit, 0)
+
+    out["Latest Reported"] = out.apply(display_value, axis=1)
+    return out
 
 
 with st.sidebar:
@@ -293,7 +454,7 @@ render_page_header(
         title=TITLE,
         description=DESCRIPTION,
         eyebrow="ADFM Fundamental Research",
-        source_note="SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close",
+        source_note="SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session price history",
     )
 )
 
@@ -329,7 +490,7 @@ try:
         company_facts = load_company_facts(identity.cik)
         submissions = load_submissions(identity.cik)
         metrics = extract_metrics(company_facts)
-        price, price_date = latest_market_close(identity.ticker)
+        close_history, price, price_date = market_history(identity.ticker)
         filing_currency = statement_currency(metrics)
         valuation = build_valuation_snapshot(
             metrics,
@@ -360,6 +521,17 @@ render_selection_note(
     f"CIK {identity.padded_cik} · {sic_description} · Fiscal year end {fiscal_year_end} · Latest filing {latest_form} on {latest_filed}",
 )
 
+if not close_history.empty:
+    render_section_header(
+        "One-year price history",
+        "Latest completed-session close with 50-day and 200-day moving averages when sufficient history is available.",
+    )
+    st.plotly_chart(
+        price_history_chart(close_history, identity.ticker, "USD"),
+        use_container_width=True,
+        config={"displayModeBar": False, "responsive": True},
+    )
+
 render_kpi_cards(
     [
         ("Price", format_money(price), f"Close through {period_label(price_date)}"),
@@ -381,11 +553,32 @@ render_kpi_cards(
     ]
 )
 
-underwrite_tab, financials_tab, valuation_tab, credit_tab, filings_tab = st.tabs(
-    ["Underwrite", "Financials", "Valuation", "Credit", "Filings & Sources"]
+valuation_tab, financials_tab, credit_tab, filings_tab = st.tabs(
+    ["Valuation", "Financials", "Credit", "Filings & Sources"]
 )
 
-with underwrite_tab:
+with valuation_tab:
+    render_section_header(
+        "Current valuation",
+        "Every multiple is calculated in the app. SEC supplies the filing denominator; Yahoo Finance supplies the latest completed-session close.",
+    )
+    if currency == "USD":
+        metric_table(valuation_table(valuation, currency=currency))
+    else:
+        st.info("Valuation multiples are unavailable because the filing currency is not USD.")
+
+    render_section_header(
+        "SEC-calculated company snapshot",
+        "Backward-looking per-share, margin, return, liquidity, and capital-allocation measures derived from standardized 10-K and 10-Q facts.",
+    )
+    metric_table(sec_snapshot_table(valuation, currency=currency))
+
+    render_section_header(
+        "Reported growth",
+        "Quarterly comparisons and annual compound growth calculated from SEC filing periods. Non-positive CAGR bases remain unavailable.",
+    )
+    metric_table(growth_table(metrics))
+
     render_section_header(
         "Issuer read-through",
         "A deterministic first pass from the latest reported operating trajectory, cash conversion, leverage, and debt service.",
@@ -410,6 +603,10 @@ with underwrite_tab:
             column_config={"Document": st.column_config.LinkColumn("SEC Document", display_text="Open")},
         )
 
+    st.caption(
+        "Enterprise value includes separately tagged debt, preferred equity, and minority interest when available, and subtracts tagged cash and short-term investments. It does not infer missing pension, lease, derivative, or unconsolidated obligations. Forward estimates, analyst targets, short interest, and aggregated ownership are not calculated because they are not 10-K/10-Q Company Facts."
+    )
+
 with financials_tab:
     quarterly = financial_table(
         metrics,
@@ -425,13 +622,24 @@ with financials_tab:
     )
     balance_sheet = balance_sheet_table(
         metrics,
-        ("cash", "short_term_investments", "debt_current", "debt_noncurrent", "short_term_borrowings", "equity"),
+        (
+            "cash",
+            "short_term_investments",
+            "receivables",
+            "current_assets",
+            "current_liabilities",
+            "debt_current",
+            "debt_noncurrent",
+            "short_term_borrowings",
+            "equity",
+            "assets",
+        ),
         periods=12,
     )
 
     render_section_header(
         "Quarterly operating record",
-        f"Stand-alone quarters in {currency} millions. Cash-flow quarters can be mechanically derived from issuer-reported YTD values.",
+        f"Stand-alone quarters in {currency_prefix(currency)} millions. Cash-flow quarters can be mechanically derived from issuer-reported YTD values.",
     )
     if quarterly.empty:
         st.info("No standardized quarterly financial series were available.")
@@ -442,7 +650,7 @@ with financials_tab:
                 use_container_width=True,
                 config={"displayModeBar": False, "responsive": True},
             )
-        quarterly_display = scale_financial_table(quarterly)
+        quarterly_display = scale_financial_table(quarterly, currency)
         metric_table(quarterly_display)
         dataframe_download(
             "Download quarterly data",
@@ -452,29 +660,15 @@ with financials_tab:
 
     render_section_header(
         "Annual operating record",
-        f"Full fiscal years in {currency} millions, using the latest-filed observation for each period.",
+        f"Full fiscal years in {currency_prefix(currency)} millions, using the latest-filed observation for each period.",
     )
-    metric_table(scale_financial_table(annual)) if not annual.empty else st.caption("Unavailable")
+    metric_table(scale_financial_table(annual, currency)) if not annual.empty else st.caption("Unavailable")
 
     render_section_header(
         "Balance-sheet history",
-        f"Point-in-time reported values in {currency} millions. No observations are forward-filled.",
+        f"Point-in-time reported values in {currency_prefix(currency)} millions. No observations are forward-filled.",
     )
-    metric_table(scale_financial_table(balance_sheet)) if not balance_sheet.empty else st.caption("Unavailable")
-
-with valuation_tab:
-    render_section_header(
-        "Current valuation",
-        "Every multiple is calculated in the app. SEC supplies the denominator inputs; Yahoo Finance supplies the latest completed-session close.",
-    )
-    if currency == "USD":
-        metric_table(valuation_table(valuation))
-    else:
-        st.info("Valuation multiples are unavailable because the filing currency is not USD.")
-
-    st.caption(
-        "Enterprise value includes separately tagged debt, preferred equity, and minority interest when available, and subtracts tagged cash and short-term investments. It does not infer missing pension, lease, derivative, or unconsolidated obligations."
-    )
+    metric_table(scale_financial_table(balance_sheet, currency)) if not balance_sheet.empty else st.caption("Unavailable")
 
 with credit_tab:
     render_section_header(
@@ -492,8 +686,18 @@ with credit_tab:
         st.caption("The issuer did not expose a standardized debt maturity ladder through SEC Company Facts.")
     else:
         maturity_display = maturities.copy()
-        maturity_display["Principal"] = pd.to_numeric(maturity_display["Principal"], errors="coerce") / 1_000_000
-        maturity_display = maturity_display.rename(columns={"Principal": f"Principal ({currency} mm)"})
+        maturity_display["Principal"] = (
+            pd.to_numeric(maturity_display["Principal"], errors="coerce")
+            .div(1_000_000)
+            .map(
+                lambda value: _signed_currency(value, currency)
+                if pd.notna(value)
+                else "Unavailable"
+            )
+        )
+        maturity_display = maturity_display.rename(
+            columns={"Principal": f"Principal ({currency_prefix(currency)} millions)"}
+        )
         metric_table(
             maturity_display,
             column_config={"Source": st.column_config.LinkColumn("SEC Source", display_text="Open")},
@@ -524,8 +728,9 @@ with filings_tab:
     if audit.empty:
         st.caption("No standardized source observations were available.")
     else:
+        audit_display = format_source_audit(audit)
         metric_table(
-            audit,
+            audit_display,
             column_config={"Source": st.column_config.LinkColumn("SEC Source", display_text="Open")},
         )
         dataframe_download(
@@ -536,7 +741,7 @@ with filings_tab:
 
 render_footer(
     data_note=(
-        "Primary inputs: SEC EDGAR Company Facts, SEC submissions, and Yahoo Finance completed-session close. "
+        "Primary inputs: SEC EDGAR Company Facts, SEC submissions, and Yahoo Finance completed-session price history. "
         "Calculated values disclose their formulas; missing filing concepts remain unavailable."
     )
 )

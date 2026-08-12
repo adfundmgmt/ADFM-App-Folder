@@ -46,7 +46,7 @@ The application contains 22 tools, in the same order and groups shown on the Hom
 | 19 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 | 20 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
 | 21 | Position Sizing Lab | Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
-| 22 | Equity & Credit Underwriter | Rebuilds filing-driven company fundamentals, current valuation, capital structure, issuer-credit ratios, debt maturities, and recent SEC events. | SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close |
+| 22 | ADFM Underwriter | Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events. | SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history |
 
 ## Tool groups
 
@@ -57,7 +57,7 @@ The application contains 22 tools, in the same order and groups shown on the Hom
 | Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Conditions Monitor; Currency Tension Engine |
 | Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Position Sizing Lab |
-| Fundamental Research | Equity & Credit Underwriter |
+| Fundamental Research | ADFM Underwriter |
 
 ## Shared application foundations
 
