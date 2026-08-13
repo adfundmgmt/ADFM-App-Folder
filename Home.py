@@ -34,36 +34,34 @@ def logo_data_uri() -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def page_route(page_filename: str) -> str:
-    """Return Streamlit's public route after its numeric ordering prefix is removed."""
+def render_tool(tool) -> None:
+    """Render one catalog entry with Streamlit-native multipage navigation."""
 
-    stem = Path(page_filename).stem
-    prefix, separator, route = stem.partition("_")
-    return route if separator and prefix.isdigit() else stem
+    st.page_link(
+        f"pages/{tool.page_filename}",
+        label=tool.title,
+        width="content",
+    )
+    st.markdown(
+        f"<div class='tool-description'>{escape(tool.description)}</div>"
+        "<div class='entry-rule'></div>",
+        unsafe_allow_html=True,
+    )
 
 
-def render_directory() -> str:
-    """Render the catalog in the same sequence as Streamlit's numbered sidebar."""
+def render_group(group: str) -> None:
+    """Render one full-width group in the sidebar's catalog order."""
 
-    sections: list[str] = []
-    for group in GROUP_ORDER:
-        entries = "".join(
-            (
-                "<article class='directory-entry'>"
-                f"<a class='directory-tool-link' href='/{escape(page_route(tool.page_filename))}' target='_top'>"
-                f"{escape(tool.title)}</a>"
-                f"<div class='tool-description'>{escape(tool.description)}</div>"
-                "</article>"
-            )
-            for tool in TOOLS_BY_GROUP[group]
-        )
-        sections.append(
-            "<section class='directory-group'>"
-            f"<div class='directory-group-title'>{escape(group)}</div>"
-            f"<div class='directory-tools'>{entries}</div>"
-            "</section>"
-        )
-    return "<div class='directory-list'>" + "".join(sections) + "</div>"
+    st.markdown(
+        f"<div class='directory-group-title'>{escape(group)}</div>",
+        unsafe_allow_html=True,
+    )
+    group_tools = TOOLS_BY_GROUP[group]
+    for row_start in range(0, len(group_tools), 2):
+        row_columns = st.columns(2, gap="large")
+        for column_index, tool in enumerate(group_tools[row_start : row_start + 2]):
+            with row_columns[column_index]:
+                render_tool(tool)
 
 st.markdown(
     """
@@ -217,19 +215,9 @@ st.markdown(
             text-align: right;
         }
 
-        .directory-list {
-            display: flex;
-            flex-direction: column;
-            gap: 1.65rem;
-        }
-
-        .directory-group {
-            margin: 0;
-        }
-
         .directory-group-title {
             border-bottom: 2px solid #000000;
-            margin: 0 0 1rem;
+            margin: 1.65rem 0 1rem;
             padding: 0 0 0.55rem;
             color: #000000;
             font-family: Arial, Helvetica, sans-serif;
@@ -240,51 +228,42 @@ st.markdown(
             text-transform: uppercase;
         }
 
-        .directory-tools {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            column-gap: 4rem;
-            align-items: start;
-        }
-
-        .directory-entry {
-            min-width: 0;
-            border-bottom: 1px solid #d7d7d7;
-            margin: 0 0 1.2rem;
-            padding: 0 0 1rem;
-        }
-
-        .directory-tool-link {
-            display: inline-flex;
-            width: auto;
-            min-height: 0;
-            border: 0;
-            border-radius: 0;
+        main [data-testid="stPageLink"] {
             margin: 0;
-            background: transparent;
-            padding: 0;
-            color: #000000;
-            text-decoration: none;
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: 1.02rem;
-            font-weight: 700;
-            letter-spacing: -0.012em;
-            line-height: 1.3;
         }
 
-        .directory-tool-link:hover,
-        .directory-tool-link:focus-visible {
-            border: 0;
-            background: transparent;
-            color: #000000;
-            text-decoration: underline;
-            text-decoration-thickness: 1px;
-            text-underline-offset: 0.18em;
+        main [data-testid="stPageLink"] a {
+            display: inline-flex !important;
+            width: auto !important;
+            min-height: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+            text-decoration: none !important;
         }
 
-        .directory-tool-link:focus-visible {
-            outline: 1px solid #000000;
-            outline-offset: 4px;
+        main [data-testid="stPageLink"] a p {
+            margin: 0 !important;
+            color: #000000 !important;
+            font-family: Georgia, "Times New Roman", serif !important;
+            font-size: 1.02rem !important;
+            font-weight: 700 !important;
+            letter-spacing: -0.012em !important;
+            line-height: 1.3 !important;
+        }
+
+        main [data-testid="stPageLink"] a:hover p,
+        main [data-testid="stPageLink"] a:focus-visible p {
+            text-decoration: underline !important;
+            text-decoration-thickness: 1px !important;
+            text-underline-offset: 0.18em !important;
+        }
+
+        main [data-testid="stPageLink"] a:focus-visible {
+            outline: 1px solid #000000 !important;
+            outline-offset: 4px !important;
         }
 
         .tool-description {
@@ -294,6 +273,12 @@ st.markdown(
             font-family: Arial, Helvetica, sans-serif;
             font-size: 0.79rem;
             line-height: 1.5;
+        }
+
+        .entry-rule {
+            height: 1px;
+            margin: 1rem 0 1.2rem;
+            background: #d7d7d7;
         }
 
         .adfm-footer {
@@ -345,14 +330,6 @@ st.markdown(
                 text-align: left;
             }
 
-            .directory-list {
-                gap: 1.35rem;
-            }
-
-            .directory-tools {
-                grid-template-columns: 1fr;
-            }
-
             .adfm-footer {
                 display: block;
             }
@@ -392,5 +369,5 @@ st.markdown(
 )
 
 
-
-st.markdown(render_directory(), unsafe_allow_html=True)
+for group in GROUP_ORDER:
+    render_group(group)
