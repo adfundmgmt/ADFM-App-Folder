@@ -42,26 +42,28 @@ def page_route(page_filename: str) -> str:
     return route if separator and prefix.isdigit() else stem
 
 
-def render_group(group: str) -> None:
-    """Render one plain-text research section with stable internal route links."""
+def render_directory() -> str:
+    """Render the catalog in the same sequence as Streamlit's numbered sidebar."""
 
-    st.markdown(
-        f"<div class='directory-group-title'>{escape(group)}</div>",
-        unsafe_allow_html=True,
-    )
-    for tool in TOOLS_BY_GROUP[group]:
-        with st.container():
-            st.markdown(
+    sections: list[str] = []
+    for group in GROUP_ORDER:
+        entries = "".join(
+            (
+                "<article class='directory-entry'>"
                 f"<a class='directory-tool-link' href='/{escape(page_route(tool.page_filename))}' target='_self'>"
-                f"{escape(tool.title)}</a>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
+                f"{escape(tool.title)}</a>"
                 f"<div class='tool-description'>{escape(tool.description)}</div>"
-                "<div class='entry-rule'></div>",
-                unsafe_allow_html=True,
+                "</article>"
             )
-
+            for tool in TOOLS_BY_GROUP[group]
+        )
+        sections.append(
+            "<section class='directory-group'>"
+            f"<div class='directory-group-title'>{escape(group)}</div>"
+            f"<div class='directory-tools'>{entries}</div>"
+            "</section>"
+        )
+    return "<div class='directory-list'>" + "".join(sections) + "</div>"
 
 st.markdown(
     """
@@ -215,6 +217,16 @@ st.markdown(
             text-align: right;
         }
 
+        .directory-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1.65rem;
+        }
+
+        .directory-group {
+            margin: 0;
+        }
+
         .directory-group-title {
             border-bottom: 2px solid #000000;
             margin: 0 0 1rem;
@@ -228,13 +240,27 @@ st.markdown(
             text-transform: uppercase;
         }
 
+        .directory-tools {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            column-gap: 4rem;
+            align-items: start;
+        }
+
+        .directory-entry {
+            min-width: 0;
+            border-bottom: 1px solid #d7d7d7;
+            margin: 0 0 1.2rem;
+            padding: 0 0 1rem;
+        }
+
         .directory-tool-link {
-            margin: 0;
             display: inline-flex;
             width: auto;
             min-height: 0;
             border: 0;
             border-radius: 0;
+            margin: 0;
             background: transparent;
             padding: 0;
             color: #000000;
@@ -268,17 +294,6 @@ st.markdown(
             font-family: Arial, Helvetica, sans-serif;
             font-size: 0.79rem;
             line-height: 1.5;
-        }
-
-        .entry-rule {
-            height: 1px;
-            margin: 1rem 0 1.2rem;
-            background: #d7d7d7;
-        }
-
-        div[data-testid="stVerticalBlock"] > div:has(.directory-group-title)
-        ~ div:has(.directory-group-title) {
-            margin-top: 1.4rem;
         }
 
         .adfm-footer {
@@ -330,6 +345,14 @@ st.markdown(
                 text-align: left;
             }
 
+            .directory-list {
+                gap: 1.35rem;
+            }
+
+            .directory-tools {
+                grid-template-columns: 1fr;
+            }
+
             .adfm-footer {
                 display: block;
             }
@@ -369,14 +392,5 @@ st.markdown(
 )
 
 
-for left_section, right_section in (
-    ("Equity Discovery", "Macro Regime"),
-    ("Equity Leadership", "Fundamental Research"),
-    ("Technical Confirmation", "Positioning + Flows"),
-    ("Risk + Execution", "Historical Context"),
-):
-    left_column, right_column = st.columns(2, gap="large")
-    with left_column:
-        render_group(left_section)
-    with right_column:
-        render_group(right_section)
+
+st.markdown(render_directory(), unsafe_allow_html=True)
