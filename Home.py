@@ -63,7 +63,7 @@ def render_group(group: str) -> None:
             with row_columns[column_index]:
                 render_tool(tool)
 
-st.markdown(
+st.html(
     """
     <style>
         :root {
@@ -244,7 +244,8 @@ st.markdown(
             text-decoration: none !important;
         }
 
-        .stPageLink a p {
+        .stPageLink a p,
+        .stPageLink a p strong {
             margin: 0 !important;
             color: #000000 !important;
             font-family: Georgia, "Times New Roman", serif !important;
@@ -255,7 +256,9 @@ st.markdown(
         }
 
         .stPageLink a:hover p,
-        .stPageLink a:focus-visible p {
+        .stPageLink a:hover p strong,
+        .stPageLink a:focus-visible p,
+        .stPageLink a:focus-visible p strong {
             text-decoration: underline !important;
             text-decoration-thickness: 1px !important;
             text-underline-offset: 0.18em !important;
@@ -341,7 +344,6 @@ st.markdown(
         }
     </style>
     """,
-    unsafe_allow_html=True,
 )
 
 
