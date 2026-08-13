@@ -127,23 +127,23 @@ st.html(
 
         .block-container {
             max-width: 1240px;
-            padding: 2.75rem 2.5rem 3rem;
+            padding: 1.5rem 2.5rem 3rem;
         }
 
         .adfm-masthead {
             display: grid;
-            grid-template-columns: 82px minmax(0, 1fr) auto;
+            grid-template-columns: 68px minmax(0, 1fr) auto;
             align-items: center;
-            column-gap: 1.25rem;
+            column-gap: 1rem;
             border-top: 3px solid #000000;
             border-bottom: 1px solid #000000;
-            padding: 1.35rem 0 1.25rem;
+            padding: 0.85rem 0 0.9rem;
         }
 
         .adfm-mark {
             display: block;
-            width: 70px;
-            height: 70px;
+            width: 58px;
+            height: 58px;
             object-fit: contain;
         }
 
@@ -162,14 +162,14 @@ st.html(
             margin: 0;
             color: #000000;
             font-family: Georgia, "Times New Roman", serif;
-            font-size: clamp(2.05rem, 4vw, 3rem);
+            font-size: clamp(1.95rem, 3.4vw, 2.65rem);
             font-weight: 400;
             letter-spacing: -0.035em;
             line-height: 1;
         }
 
         .adfm-subtitle {
-            margin: 0.48rem 0 0;
+            margin: 0.32rem 0 0;
             color: #3f3f3f;
             font-family: Arial, Helvetica, sans-serif;
             font-size: 0.84rem;
@@ -191,16 +191,16 @@ st.html(
         .directory-introduction {
             display: grid;
             grid-template-columns: minmax(240px, 0.8fr) minmax(360px, 1.2fr);
-            gap: 3rem;
-            align-items: end;
-            padding: 2.4rem 0 1.65rem;
+            gap: 2rem;
+            align-items: center;
+            padding: 1.2rem 0 0.45rem;
         }
 
         .directory-title {
             margin: 0;
             color: #000000;
             font-family: Georgia, "Times New Roman", serif;
-            font-size: 1.55rem;
+            font-size: 1.45rem;
             font-weight: 400;
             letter-spacing: -0.02em;
             line-height: 1.2;
@@ -210,14 +210,14 @@ st.html(
             margin: 0;
             color: #4a4a4a;
             font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.82rem;
-            line-height: 1.55;
+            font-size: 0.78rem;
+            line-height: 1.35;
             text-align: right;
         }
 
         .directory-group-title {
             border-bottom: 2px solid #000000;
-            margin: 1.65rem 0 1rem;
+            margin: 0.75rem 0 0.9rem;
             padding: 0 0 0.55rem;
             color: #000000;
             font-family: Arial, Helvetica, sans-serif;
@@ -301,13 +301,13 @@ st.html(
 
         @media (max-width: 760px) {
             .block-container {
-                padding: 1.5rem 1.15rem 2.25rem;
+                padding: 1rem 1.15rem 2.25rem;
             }
 
             .adfm-masthead {
                 grid-template-columns: 58px minmax(0, 1fr);
                 column-gap: 0.9rem;
-                padding: 1rem 0;
+                padding: 0.75rem 0 0.8rem;
             }
 
             .adfm-mark {
@@ -325,7 +325,7 @@ st.html(
 
             .directory-introduction {
                 display: block;
-                padding: 1.75rem 0 1.35rem;
+                padding: 1rem 0 0.45rem;
             }
 
             .directory-copy {
@@ -349,21 +349,19 @@ st.html(
 
 st.markdown(
     f"""
-    <header class="adfm-masthead" data-home-revision="2026-08-13-link-typography-v3">
+    <header class="adfm-masthead" data-home-revision="2026-08-13-compact-header-v4">
         <img class="adfm-mark" src="{logo_data_uri()}" alt="AD Fund Management shield">
         <div>
             <div class="firm-name">AD Fund Management LP</div>
             <h1 class="adfm-title">ADFM Analytics</h1>
-            <p class="adfm-subtitle">Proprietary market research and analytical tools.</p>
+            <p class="adfm-subtitle">Market research and analytical tools.</p>
         </div>
         <div class="research-label">Internal Research</div>
     </header>
     <section class="directory-introduction">
         <h2 class="directory-title">Research Directory</h2>
         <p class="directory-copy">
-            Choose a tool below. Each is built to examine a specific question
-            across equities, market structure, macro, rates, liquidity,
-            positioning, and risk.
+            Equities / Macro / Rates / Liquidity / Positioning / Risk
         </p>
     </section>
     """,
