@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from adfm_core.ui import (
@@ -47,6 +48,28 @@ class InstitutionalThemeTests(unittest.TestCase):
         self.assertIn(".modebar-container", contract)
         self.assertIn("overflow-x: clip", contract)
         self.assertIn("padding: 1.75rem .9rem", contract)
+
+    @patch("adfm_core.ui.tool_for_page")
+    @patch("adfm_core.ui.st.markdown")
+    def test_page_header_uses_catalog_title_and_group(self, markdown, tool_for_page):
+        tool_for_page.return_value = SimpleNamespace(
+            title="ADFM Public Equities Baskets",
+            group="Equity Discovery",
+        )
+
+        render_page_header(
+            PageHeader(
+                title="Legacy page title",
+                description="Catalog-controlled identity.",
+                eyebrow="ADFM Equity Leadership",
+            )
+        )
+
+        body = markdown.call_args.args[0]
+        self.assertIn("ADFM Public Equities Baskets", body)
+        self.assertIn("ADFM Equity Discovery", body)
+        self.assertNotIn("Legacy page title", body)
+        self.assertNotIn("ADFM Equity Leadership", body)
 
     def test_every_analytics_page_uses_the_shared_header(self):
         root = Path(__file__).resolve().parents[1]
