@@ -74,6 +74,21 @@ class InstitutionalThemeTests(unittest.TestCase):
         self.assertNotIn("Legacy page title", body)
         self.assertNotIn("ADFM Equity Leadership", body)
 
+    def test_home_and_shared_headers_reserve_toolbar_safe_area(self):
+        root = Path(__file__).resolve().parents[1]
+        home = (root / "Home.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "padding: calc(4rem + env(safe-area-inset-top, 0px)) 2.5rem",
+            home,
+        )
+        self.assertIn(
+            "padding: calc(4.25rem + env(safe-area-inset-top, 0px)) 1.15rem",
+            home,
+        )
+        self.assertIn("white-space: normal !important", home)
+        self.assertIn("overflow: visible !important", home)
+
     def test_every_analytics_page_uses_the_shared_header(self):
         root = Path(__file__).resolve().parents[1]
         pages = sorted((root / "pages").glob("*.py"))
