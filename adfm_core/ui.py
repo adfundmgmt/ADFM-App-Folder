@@ -834,12 +834,22 @@ def render_section_header(title: str, subtitle: str) -> None:
 
 def render_page_header(header: PageHeader) -> None:
     """Render a consistent page identity and transparent as-of/source status."""
+
     _inject_page_layout_contract()
+    caller = inspect.currentframe().f_back
+    caller_file = (
+        Path(str(caller.f_globals.get("__file__", ""))).name
+        if caller is not None
+        else ""
+    )
+    tool = tool_for_page(caller_file)
+    title = tool.title if tool is not None else header.title
+    eyebrow = f"ADFM {tool.group}" if tool is not None else header.eyebrow
     status = " · ".join(item for item in (header.as_of, header.source_note) if item)
     st.markdown(
         "<header class='adfm-page-header'>"
-        "<div class='adfm-eyebrow'>" + escape(header.eyebrow) + "</div>"
-        "<div class='adfm-page-title'>" + escape(header.title) + "</div>"
+        "<div class='adfm-eyebrow'>" + escape(eyebrow) + "</div>"
+        "<div class='adfm-page-title'>" + escape(title) + "</div>"
         "<div class='adfm-page-description'>"
         + escape(header.description)
         + "</div>"
@@ -847,7 +857,6 @@ def render_page_header(header: PageHeader) -> None:
         + "</header>",
         unsafe_allow_html=True,
     )
-
 
 def render_status_line(**items: object) -> None:
     """Render compact, escaped status metadata while omitting unavailable values."""
