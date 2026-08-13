@@ -127,7 +127,7 @@ st.html(
 
         .block-container {
             max-width: 1240px;
-            padding: 2.5rem 2.5rem 3rem;
+            padding: calc(4rem + env(safe-area-inset-top, 0px)) 2.5rem 3rem;
         }
 
         .adfm-masthead {
@@ -156,6 +156,8 @@ st.html(
             letter-spacing: 0.18em;
             line-height: 1.2;
             text-transform: uppercase;
+            white-space: normal;
+            overflow: visible;
         }
 
         .adfm-title {
@@ -167,6 +169,8 @@ st.html(
             font-weight: 800 !important;
             letter-spacing: -0.035em;
             line-height: 1 !important;
+            white-space: normal !important;
+            overflow: visible !important;
         }
 
         .adfm-subtitle {
@@ -187,6 +191,8 @@ st.html(
             letter-spacing: 0.15em;
             text-align: right;
             text-transform: uppercase;
+            white-space: normal;
+            overflow: visible;
         }
 
         .directory-introduction {
@@ -303,7 +309,7 @@ st.html(
 
         @media (max-width: 760px) {
             .block-container {
-                padding: 2.25rem 1.15rem 2.25rem;
+                padding: calc(4.25rem + env(safe-area-inset-top, 0px)) 1.15rem 2.25rem;
             }
 
             .adfm-masthead {
@@ -318,7 +324,8 @@ st.html(
             }
 
             .adfm-title {
-                font-size: 2rem;
+                font-size: clamp(1.65rem, 8.5vw, 2rem) !important;
+                line-height: 1.05 !important;
             }
 
             .research-label {
@@ -351,7 +358,7 @@ st.html(
 
 st.markdown(
     f"""
-    <header class="adfm-masthead" data-home-revision="2026-08-13-compact-header-v5">
+    <header class="adfm-masthead" data-home-revision="2026-08-13-safe-header-v6">
         <img class="adfm-mark" src="{logo_data_uri()}" alt="AD Fund Management shield">
         <div>
             <div class="firm-name">AD Fund Management LP</div>
