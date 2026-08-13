@@ -47,7 +47,10 @@ class InstitutionalThemeTests(unittest.TestCase):
         self.assertIn("@media (max-width: 760px)", contract)
         self.assertIn(".modebar-container", contract)
         self.assertIn("overflow-x: clip", contract)
-        self.assertIn("padding: 1.75rem .9rem", contract)
+        self.assertIn("padding-top: calc(4rem + env(safe-area-inset-top, 0px))", contract)
+        self.assertIn("padding: calc(4.25rem + env(safe-area-inset-top, 0px)) .9rem", contract)
+        self.assertIn("white-space: normal !important", contract)
+        self.assertIn("overflow: visible !important", contract)
 
     @patch("adfm_core.ui.tool_for_page")
     @patch("adfm_core.ui.st.markdown")
