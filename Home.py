@@ -39,7 +39,7 @@ def render_tool(tool) -> None:
 
     st.page_link(
         f"pages/{tool.page_filename}",
-        label=tool.title,
+        label=f"**{tool.title}**",
         width="content",
     )
     st.markdown(
@@ -228,11 +228,11 @@ st.markdown(
             text-transform: uppercase;
         }
 
-        [data-testid="stMain"] [data-testid="stPageLink"] {
+        .stPageLink {
             margin: 0;
         }
 
-        [data-testid="stMain"] [data-testid="stPageLink"] a {
+        .stPageLink a {
             display: inline-flex !important;
             width: auto !important;
             min-height: 0 !important;
@@ -244,7 +244,7 @@ st.markdown(
             text-decoration: none !important;
         }
 
-        [data-testid="stMain"] [data-testid="stPageLink"] a p {
+        .stPageLink a p {
             margin: 0 !important;
             color: #000000 !important;
             font-family: Georgia, "Times New Roman", serif !important;
@@ -254,14 +254,14 @@ st.markdown(
             line-height: 1.3 !important;
         }
 
-        [data-testid="stMain"] [data-testid="stPageLink"] a:hover p,
-        [data-testid="stMain"] [data-testid="stPageLink"] a:focus-visible p {
+        .stPageLink a:hover p,
+        .stPageLink a:focus-visible p {
             text-decoration: underline !important;
             text-decoration-thickness: 1px !important;
             text-underline-offset: 0.18em !important;
         }
 
-        [data-testid="stMain"] [data-testid="stPageLink"] a:focus-visible {
+        .stPageLink a:focus-visible {
             outline: 1px solid #000000 !important;
             outline-offset: 4px !important;
         }
