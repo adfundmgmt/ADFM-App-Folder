@@ -228,11 +228,11 @@ st.html(
             text-transform: uppercase;
         }
 
-        .stPageLink {
+        div[data-testid="stPageLink"] {
             margin: 0;
         }
 
-        .stPageLink a {
+        div[data-testid="stPageLink"] a {
             display: inline-flex !important;
             width: auto !important;
             min-height: 0 !important;
@@ -244,27 +244,27 @@ st.html(
             text-decoration: none !important;
         }
 
-        .stPageLink a p,
-        .stPageLink a p strong {
+        div[data-testid="stPageLink"] p,
+        div[data-testid="stPageLink"] p strong {
             margin: 0 !important;
             color: #000000 !important;
             font-family: Georgia, "Times New Roman", serif !important;
-            font-size: 1.18rem !important;
+            font-size: 1.20rem !important;
             font-weight: 800 !important;
             letter-spacing: -0.012em !important;
             line-height: 1.3 !important;
         }
 
-        .stPageLink a:hover p,
-        .stPageLink a:hover p strong,
-        .stPageLink a:focus-visible p,
-        .stPageLink a:focus-visible p strong {
+        div[data-testid="stPageLink"] a:hover p,
+        div[data-testid="stPageLink"] a:hover p strong,
+        div[data-testid="stPageLink"] a:focus-visible p,
+        div[data-testid="stPageLink"] a:focus-visible p strong {
             text-decoration: underline !important;
             text-decoration-thickness: 1px !important;
             text-underline-offset: 0.18em !important;
         }
 
-        .stPageLink a:focus-visible {
+        div[data-testid="stPageLink"] a:focus-visible {
             outline: 1px solid #000000 !important;
             outline-offset: 4px !important;
         }
@@ -349,7 +349,7 @@ st.html(
 
 st.markdown(
     f"""
-    <header class="adfm-masthead">
+    <header class="adfm-masthead" data-home-revision="2026-08-13-link-typography-v3">
         <img class="adfm-mark" src="{logo_data_uri()}" alt="AD Fund Management shield">
         <div>
             <div class="firm-name">AD Fund Management LP</div>
