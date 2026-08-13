@@ -228,11 +228,11 @@ st.markdown(
             text-transform: uppercase;
         }
 
-        main [data-testid="stPageLink"] {
+        [data-testid="stMain"] [data-testid="stPageLink"] {
             margin: 0;
         }
 
-        main [data-testid="stPageLink"] a {
+        [data-testid="stMain"] [data-testid="stPageLink"] a {
             display: inline-flex !important;
             width: auto !important;
             min-height: 0 !important;
@@ -244,7 +244,7 @@ st.markdown(
             text-decoration: none !important;
         }
 
-        main [data-testid="stPageLink"] a p {
+        [data-testid="stMain"] [data-testid="stPageLink"] a p {
             margin: 0 !important;
             color: #000000 !important;
             font-family: Georgia, "Times New Roman", serif !important;
@@ -254,14 +254,14 @@ st.markdown(
             line-height: 1.3 !important;
         }
 
-        main [data-testid="stPageLink"] a:hover p,
-        main [data-testid="stPageLink"] a:focus-visible p {
+        [data-testid="stMain"] [data-testid="stPageLink"] a:hover p,
+        [data-testid="stMain"] [data-testid="stPageLink"] a:focus-visible p {
             text-decoration: underline !important;
             text-decoration-thickness: 1px !important;
             text-underline-offset: 0.18em !important;
         }
 
-        main [data-testid="stPageLink"] a:focus-visible {
+        [data-testid="stMain"] [data-testid="stPageLink"] a:focus-visible {
             outline: 1px solid #000000 !important;
             outline-offset: 4px !important;
         }
