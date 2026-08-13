@@ -1,33 +1,35 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
+from adfm_core.catalog import tool_definitions
+
 
 class HomeResearchDirectoryTests(unittest.TestCase):
-    def test_home_renders_research_directory_and_clickable_tool_links(self):
+    def test_home_renders_ordered_native_page_links(self):
         app = AppTest.from_file("Home.py", default_timeout=30).run()
 
         self.assertEqual(list(app.exception), [])
         self.assertEqual(len(app.metric), 0)
-        markup = "\n".join(element.value for element in app.markdown)
-        self.assertEqual(markup.count("class='directory-tool-link'"), 22)
-        self.assertIn("href='/ADFM_Public_Equities_Baskets'", markup)
-        self.assertIn("href='/ADFM_Underwriter'", markup)
-        self.assertIn("href='/Global_Macro_Regime_Dashboard'", markup)
-        self.assertLess(
-            markup.index("ADFM Public Equities Baskets"),
-            markup.index("Global Macro Regime Dashboard"),
+
+        expected_tools = tool_definitions()
+        page_links = list(app.get("page_link"))
+        self.assertEqual(len(page_links), len(expected_tools))
+        self.assertEqual(
+            [link.label for link in page_links],
+            [tool.title for tool in expected_tools],
         )
-        self.assertLess(
-            markup.index("Global Macro Regime Dashboard"),
-            markup.index("Sector Breadth and Rotation"),
+        self.assertEqual(
+            [link.page for link in page_links],
+            [
+                Path(tool.page_filename).stem.partition("_")[2]
+                for tool in expected_tools
+            ],
         )
-        self.assertLess(
-            markup.index("Factor Momentum Leadership"),
-            markup.index("ADFM Underwriter"),
-        )
+        self.assertTrue(all(not link.external for link in page_links))
 
 
 if __name__ == "__main__":
