@@ -59,7 +59,7 @@ def inject_institutional_theme(max_width_px: int = 1560) -> None:
 
         .block-container {{
             max-width: {int(max_width_px)}px !important;
-            padding-top: 1.7rem !important;
+            padding-top: calc(4rem + env(safe-area-inset-top, 0px)) !important;
             padding-bottom: 2rem !important;
         }}
 
@@ -351,7 +351,7 @@ def inject_institutional_theme(max_width_px: int = 1560) -> None:
             .block-container {{
                 width: 100% !important;
                 max-width: 100% !important;
-                padding: 1.1rem .9rem 1.75rem !important;
+                padding: calc(4.25rem + env(safe-area-inset-top, 0px)) .9rem 1.75rem !important;
                 overflow-x: clip !important;
             }}
             main h1, [data-testid="stMain"] h1, .adfm-page-title {{ font-size: 2rem !important; }}
@@ -574,7 +574,7 @@ def _inject_page_layout_contract() -> None:
         """
         <style>
         .block-container {
-            padding-top: 1.7rem !important;
+            padding-top: calc(4rem + env(safe-area-inset-top, 0px)) !important;
             padding-bottom: 2rem !important;
         }
 
@@ -588,6 +588,8 @@ def _inject_page_layout_contract() -> None:
         }
 
         .adfm-page-header {
+            position: relative !important;
+            overflow: visible !important;
             border-top: 3px solid #000000 !important;
             border-bottom: 1px solid #000000 !important;
             margin: 0 0 1rem !important;
@@ -603,6 +605,8 @@ def _inject_page_layout_contract() -> None:
             letter-spacing: .15em !important;
             line-height: 1.2 !important;
             text-transform: uppercase !important;
+            white-space: normal !important;
+            overflow: visible !important;
         }
 
         .adfm-page-title {
@@ -616,6 +620,8 @@ def _inject_page_layout_contract() -> None:
             line-height: 1.05 !important;
             overflow-wrap: normal !important;
             word-break: normal !important;
+            white-space: normal !important;
+            overflow: visible !important;
         }
 
         .adfm-page-description {
@@ -735,7 +741,7 @@ def _inject_page_layout_contract() -> None:
             .block-container {
                 width: 100% !important;
                 max-width: 100% !important;
-                padding: 1.75rem .9rem 1.75rem !important;
+                padding: calc(4.25rem + env(safe-area-inset-top, 0px)) .9rem 1.75rem !important;
                 overflow-x: clip !important;
             }
 
@@ -751,7 +757,8 @@ def _inject_page_layout_contract() -> None:
 
             .adfm-page-title {
                 font-size: clamp(2rem, 8.2vw, 2.3rem) !important;
-                line-height: 1.02 !important;
+                line-height: 1.08 !important;
+                overflow-wrap: anywhere !important;
             }
 
             .adfm-page-description {
