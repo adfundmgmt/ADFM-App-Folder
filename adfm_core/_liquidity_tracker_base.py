@@ -545,7 +545,7 @@ render_page_header(
             "overnight funding, credit spreads, the broad dollar, and real yields. Traded markets are retained "
             "as a separate confirmation sleeve rather than treated as the source of liquidity."
         ),
-        eyebrow="ADFM Liquidity Regimes",
+        eyebrow="ADFM Macro Regime",
     )
 )
 
