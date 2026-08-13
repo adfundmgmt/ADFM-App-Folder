@@ -127,7 +127,7 @@ st.html(
 
         .block-container {
             max-width: 1240px;
-            padding: 1.5rem 2.5rem 3rem;
+            padding: 2.5rem 2.5rem 3rem;
         }
 
         .adfm-masthead {
@@ -159,13 +159,14 @@ st.html(
         }
 
         .adfm-title {
-            margin: 0;
+            margin: 0 !important;
+            padding: 0 !important;
             color: #000000;
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: clamp(1.95rem, 3.4vw, 2.65rem);
-            font-weight: 400;
+            font-family: Arial, Helvetica, sans-serif !important;
+            font-size: clamp(1.95rem, 3vw, 2.2rem) !important;
+            font-weight: 800 !important;
             letter-spacing: -0.035em;
-            line-height: 1;
+            line-height: 1 !important;
         }
 
         .adfm-subtitle {
@@ -197,13 +198,14 @@ st.html(
         }
 
         .directory-title {
-            margin: 0;
+            margin: 0 !important;
+            padding: 0 !important;
             color: #000000;
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: 1.45rem;
-            font-weight: 400;
+            font-family: Arial, Helvetica, sans-serif !important;
+            font-size: 1.75rem !important;
+            font-weight: 800 !important;
             letter-spacing: -0.02em;
-            line-height: 1.2;
+            line-height: 1.1 !important;
         }
 
         .directory-copy {
@@ -301,7 +303,7 @@ st.html(
 
         @media (max-width: 760px) {
             .block-container {
-                padding: 1rem 1.15rem 2.25rem;
+                padding: 2.25rem 1.15rem 2.25rem;
             }
 
             .adfm-masthead {
@@ -349,7 +351,7 @@ st.html(
 
 st.markdown(
     f"""
-    <header class="adfm-masthead" data-home-revision="2026-08-13-compact-header-v4">
+    <header class="adfm-masthead" data-home-revision="2026-08-13-compact-header-v5">
         <img class="adfm-mark" src="{logo_data_uri()}" alt="AD Fund Management shield">
         <div>
             <div class="firm-name">AD Fund Management LP</div>
