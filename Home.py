@@ -50,7 +50,7 @@ def render_directory() -> str:
         entries = "".join(
             (
                 "<article class='directory-entry'>"
-                f"<a class='directory-tool-link' href='/{escape(page_route(tool.page_filename))}' target='_self'>"
+                f"<a class='directory-tool-link' href='/{escape(page_route(tool.page_filename))}' target='_top'>"
                 f"{escape(tool.title)}</a>"
                 f"<div class='tool-description'>{escape(tool.description)}</div>"
                 "</article>"
