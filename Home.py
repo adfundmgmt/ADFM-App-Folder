@@ -248,8 +248,8 @@ st.markdown(
             margin: 0 !important;
             color: #000000 !important;
             font-family: Georgia, "Times New Roman", serif !important;
-            font-size: 1.02rem !important;
-            font-weight: 700 !important;
+            font-size: 1.18rem !important;
+            font-weight: 800 !important;
             letter-spacing: -0.012em !important;
             line-height: 1.3 !important;
         }
