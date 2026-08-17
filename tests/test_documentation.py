@@ -17,12 +17,13 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationTests(unittest.TestCase):
-    def test_catalog_contains_22_unique_existing_pages(self) -> None:
-        self.assertEqual(len(TOOL_CATALOG), 22)
-        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 23)))
-        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 22)
+    def test_catalog_contains_23_unique_existing_pages(self) -> None:
+        self.assertEqual(len(TOOL_CATALOG), 23)
+        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 24)))
+        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 23)
         self.assertEqual(TOOL_CATALOG[0].title, "ADFM Public Equities Baskets")
         self.assertEqual(TOOL_CATALOG[8].page_filename, "9_ADFM_Underwriter.py")
+        self.assertEqual(TOOL_CATALOG[16].page_filename, "17_CFTC_Positioning_Monitor.py")
         for tool in TOOL_CATALOG:
             self.assertTrue((REPOSITORY_ROOT / "pages" / tool.page_filename).is_file())
             self.assertTrue(tool.page_filename.startswith(f"{tool.number}_"))
@@ -47,6 +48,7 @@ class DocumentationTests(unittest.TestCase):
                 "ETF Flows Dashboard",
                 "Volume Based Sentiment Indicator",
                 "Options Positioning Compass",
+                "CFTC Positioning Monitor",
                 "Market Stress Composite",
                 "Event Risk + Catalyst Calendar",
                 "Hedge Timer",
