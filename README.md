@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 23 tools, in the same order and groups shown on the Home page.
+The application contains 24 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -41,13 +41,14 @@ The application contains 23 tools, in the same order and groups shown on the Hom
 | 14 | ETF Flows Dashboard | Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures. | Yahoo Finance OHLCV |
 | 15 | Volume Based Sentiment Indicator | Reads conviction, participation, and sentiment using volume-regime signals across major liquid assets. | Yahoo Finance adjusted OHLCV; provider fallback where available |
 | 16 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
-| 17 | Market Stress Composite | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
-| 18 | Event Risk + Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Yahoo Finance market proxies; configured calendar data |
-| 19 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
-| 20 | Position Sizing Lab | Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
-| 21 | Market Memory Explorer | Surfaces historical analogs to contextualize the current tape against prior return paths and regimes. | Yahoo Finance market history |
-| 22 | Monthly Seasonality Explorer | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
-| 23 | SEC 13F Exposure Browser | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
+| 17 | CFTC Positioning Monitor | Scans financial and physical futures for crowded longs, crowded shorts, and sharp weekly positioning shifts, with cohort history and market-price overlays. | CFTC Public Reporting Environment TFF and Disaggregated futures-only reports; Yahoo Finance continuous-futures price proxies |
+| 18 | SEC 13F Exposure Browser | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
+| 19 | Market Stress Composite | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
+| 20 | Event Risk + Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Yahoo Finance market proxies; configured calendar data |
+| 21 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
+| 22 | Position Sizing Lab | Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
+| 23 | Market Memory Explorer | Surfaces historical analogs to contextualize the current tape against prior return paths and regimes. | Yahoo Finance market history |
+| 24 | Monthly Seasonality Explorer | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
 
 ## Tool groups
 
@@ -58,7 +59,7 @@ The application contains 23 tools, in the same order and groups shown on the Hom
 | Equity Leadership | Sector Breadth and Rotation; Factor Momentum Leadership |
 | Fundamental Research | ADFM Underwriter |
 | Technical Confirmation | Technical Chart Explorer; Ratio Charts; Rate of Change Dashboard; Relative Volatility Lab |
-| Positioning + Flows | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser |
+| Positioning + Flows | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass; CFTC Positioning Monitor; SEC 13F Exposure Browser |
 | Risk + Execution | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Position Sizing Lab |
 | Historical Context | Market Memory Explorer; Monthly Seasonality Explorer |
 
@@ -75,6 +76,7 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - Historical conviction-based position sizing, target/invalidation first-touch analysis, earnings-event risk, liquidity caps, and an interactive compounding simulation built from observed holding-period outcomes.
 - SEC EDGAR ticker resolution, XBRL concept normalization, stand-alone-quarter reconstruction, filing provenance, current valuation, and issuer-credit calculations.
 - SEC Form 13F quarterly archive discovery, local preparation, amendment-aware consolidation, ticker/CUSIP matching, and institutional exposure ranking.
+- CFTC TFF and Disaggregated positioning normalization, cohort aggregation, open-interest scaling, rolling crowding percentiles, z-scores, and mapped futures-price overlays.
 
 The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Conditions Monitor use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
