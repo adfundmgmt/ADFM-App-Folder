@@ -5,7 +5,7 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from adfm_core.catalog import tool_definitions
+from adfm_core.catalog import GROUP_ORDER, tool_definitions
 
 
 class HomeResearchDirectoryTests(unittest.TestCase):
@@ -15,7 +15,13 @@ class HomeResearchDirectoryTests(unittest.TestCase):
         self.assertEqual(list(app.exception), [])
         self.assertEqual(len(app.metric), 0)
 
-        expected_tools = tool_definitions()
+        catalog_tools = tool_definitions()
+        expected_tools = [
+            tool
+            for group in GROUP_ORDER
+            for tool in catalog_tools
+            if tool.group == group
+        ]
         page_links = list(app.get("page_link"))
         self.assertEqual(len(page_links), len(expected_tools))
         self.assertEqual(
