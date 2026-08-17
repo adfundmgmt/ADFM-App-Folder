@@ -178,6 +178,17 @@ with st.sidebar:
     tff_cohort = st.selectbox("Financial futures cohort", list(COHORTS["TFF"]), index=list(COHORTS["TFF"]).index(DEFAULT_COHORT["TFF"]))
     disagg_cohort = st.selectbox("Physical futures cohort", list(COHORTS["Disaggregated"]), index=list(COHORTS["Disaggregated"]).index(DEFAULT_COHORT["Disaggregated"]))
     market_filter = st.text_input("Filter contracts", placeholder="NASDAQ, gold, yen, crude…")
+    st.markdown("---")
+    st.header("About This Tool")
+    st.markdown(
+        """
+        - Scans public CFTC financial and physical futures reports for crowding and weekly positioning shifts.
+        - Normalizes net positioning by open interest and ranks it over a selectable trailing history.
+        - Overlays mapped futures prices and only estimates dollar notional where the contract multiplier is explicit.
+
+        **Timing:** COT is a weekly Tuesday position snapshot, normally released Friday. It is not a real-time flow feed.
+        """
+    )
 
 render_page_header(
     PageHeader(
