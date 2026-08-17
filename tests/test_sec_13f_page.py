@@ -14,7 +14,7 @@ from adfm_core.sec_13f import QuarterDataset
 from tests.test_sec_13f import prepared_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = ROOT / "pages" / "23_SEC_13F_Exposure_Browser.py"
+PAGE = ROOT / "pages" / "18_SEC_13F_Exposure_Browser.py"
 
 
 class Sec13FPageTests(unittest.TestCase):
