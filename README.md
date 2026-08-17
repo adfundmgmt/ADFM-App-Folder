@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 23 tools, in the same order and groups shown on the Home page.
+The application contains 24 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -48,6 +48,7 @@ The application contains 23 tools, in the same order and groups shown on the Hom
 | 21 | Market Memory Explorer | Surfaces historical analogs to contextualize the current tape against prior return paths and regimes. | Yahoo Finance market history |
 | 22 | Monthly Seasonality Explorer | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
 | 23 | SEC 13F Exposure Browser | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
+| 24 | CFTC Positioning Monitor | Scans financial and physical futures for crowded longs, crowded shorts, and sharp weekly positioning shifts, with historical percentile and z-score context. | CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts |
 
 ## Tool groups
 
@@ -58,7 +59,7 @@ The application contains 23 tools, in the same order and groups shown on the Hom
 | Equity Leadership | Sector Breadth and Rotation; Factor Momentum Leadership |
 | Fundamental Research | ADFM Underwriter |
 | Technical Confirmation | Technical Chart Explorer; Ratio Charts; Rate of Change Dashboard; Relative Volatility Lab |
-| Positioning + Flows | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser |
+| Positioning + Flows | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser; CFTC Positioning Monitor |
 | Risk + Execution | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Position Sizing Lab |
 | Historical Context | Market Memory Explorer; Monthly Seasonality Explorer |
 
@@ -75,6 +76,7 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - Historical conviction-based position sizing, target/invalidation first-touch analysis, earnings-event risk, liquidity caps, and an interactive compounding simulation built from observed holding-period outcomes.
 - SEC EDGAR ticker resolution, XBRL concept normalization, stand-alone-quarter reconstruction, filing provenance, current valuation, and issuer-credit calculations.
 - SEC Form 13F quarterly archive discovery, local preparation, amendment-aware consolidation, ticker/CUSIP matching, and institutional exposure ranking.
+- CFTC Commitments of Traders retrieval, cohort normalization, open-interest-adjusted crowding percentiles, z-scores, weekly changes, and mapped futures price overlays.
 
 The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Conditions Monitor use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
@@ -82,6 +84,7 @@ The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Condi
 
 - Market data are provider supplied and may be delayed, revised, unavailable, or incomplete.
 - The 13F browser stores prepared public SEC releases in the ignored `data/13f/` cache. Deployments can set `ADFM_13F_CACHE_DIR` for persistent storage and `ADFM_SEC_USER_AGENT` for an organization-specific SEC request identity.
+- CFTC positioning is a weekly Tuesday snapshot normally released Friday; it is not a real-time flow feed. Dollar notional is shown only for contracts with explicit mapped multipliers.
 - Signals and dashboards are deterministic analytical tools, not investment advice or a guarantee of future returns.
 - Pages should surface their own as-of date and source context. Where a data field is unavailable, the application should leave it blank rather than fabricate a value.
 - Client, holdings, positions, account, and credential data must not be committed. See [the security policy](SECURITY.md).
