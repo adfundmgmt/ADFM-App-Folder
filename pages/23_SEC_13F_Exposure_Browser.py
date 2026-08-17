@@ -1,8 +1,9 @@
-"""SEC Form 13F institutional exposure browser."""
+"""SEC Form 13F institutional exposure and manager browser."""
 
 from __future__ import annotations
 
 import html
+import os
 import re
 
 import pandas as pd
@@ -16,11 +17,13 @@ from adfm_core.sec_13f import (
     Sec13FError,
     available_report_periods,
     discover_quarter_datasets,
+    filing_url,
     load_company_tickers,
     load_security_catalog,
     prepare_dataset,
     rank_fund_exposure,
     search_security_candidates,
+    select_effective_filing_components,
 )
 from adfm_core.ui import (
     PageHeader,
@@ -60,10 +63,58 @@ DEFAULT_DETAIL_COLUMNS = [
     "FILING_URL",
 ]
 
+OFFICIAL_RELEASE_FALLBACKS = (
+    QuarterDataset(
+        slug="01mar2026-31may2026_form13f",
+        label="2026 March April May 13F",
+        url="https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01mar2026-31may2026_form13f.zip",
+        size_label="94.81 MB",
+    ),
+    QuarterDataset(
+        slug="01dec2025-28feb2026_form13f",
+        label="2025 December 2026 January February 13F",
+        url="https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01dec2025-28feb2026_form13f.zip",
+        size_label="86.08 MB",
+    ),
+    QuarterDataset(
+        slug="01sep2025-30nov2025_form13f",
+        label="2025 September October November 13F",
+        url="https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01sep2025-30nov2025_form13f.zip",
+        size_label="81.65 MB",
+    ),
+    QuarterDataset(
+        slug="01jun2025-31aug2025_form13f",
+        label="2025 June July August 13F",
+        url="https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01jun2025-31aug2025_form13f.zip",
+        size_label="82.3 MB",
+    ),
+    QuarterDataset(
+        slug="01mar2025-31may2025_form13f",
+        label="2025 March April May 13F",
+        url="https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01mar2025-31may2025_form13f.zip",
+        size_label="84.18 MB",
+    ),
+    QuarterDataset(
+        slug="01dec2024-28feb2025_form13f",
+        label="2024 December 2025 January February 13F",
+        url="https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01dec2024-28feb2025_form13f.zip",
+        size_label="82.53 MB",
+    ),
+)
+
+os.environ.setdefault(
+    "ADFM_SEC_USER_AGENT",
+    "AD Fund Management LP aryadeniz@adfundmgmt.com",
+)
+
 
 @st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
 def cached_releases() -> list[QuarterDataset]:
-    return discover_quarter_datasets()
+    try:
+        releases = discover_quarter_datasets()
+        return releases or list(OFFICIAL_RELEASE_FALLBACKS)
+    except Sec13FError:
+        return list(OFFICIAL_RELEASE_FALLBACKS)
 
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
@@ -93,6 +144,109 @@ def cached_ranking(
     )
 
 
+@st.cache_data(show_spinner=False)
+def cached_manager_portfolio(
+    prepared: PreparedDataset,
+    cik: str,
+    report_period: str,
+) -> tuple[dict[str, object], pd.DataFrame]:
+    """Return one manager's effective filing summary and full reported portfolio."""
+
+    filings = pd.read_parquet(prepared.filings_path)
+    components = select_effective_filing_components(filings, report_period)
+    if components.empty:
+        return {}, pd.DataFrame()
+
+    target_cik = str(cik).strip().zfill(10)
+    components = components.copy()
+    components["CIK"] = components["CIK"].astype(str).str.zfill(10)
+    manager_components = components.loc[components["CIK"].eq(target_cik)].copy()
+    if manager_components.empty:
+        return {}, pd.DataFrame()
+
+    manager_components["TABLEVALUETOTAL"] = pd.to_numeric(
+        manager_components["TABLEVALUETOTAL"], errors="coerce"
+    )
+    total_thousands = manager_components["TABLEVALUETOTAL"].sum(min_count=1)
+    if pd.isna(total_thousands) or total_thousands <= 0:
+        return {}, pd.DataFrame()
+
+    accessions = manager_components["ACCESSION_NUMBER"].astype(str).tolist()
+    try:
+        holdings = pd.read_parquet(
+            prepared.holdings_path,
+            filters=[("ACCESSION_NUMBER", "in", accessions)],
+        )
+    except (TypeError, ValueError):
+        holdings = pd.read_parquet(prepared.holdings_path)
+        holdings = holdings.loc[holdings["ACCESSION_NUMBER"].astype(str).isin(accessions)]
+    if holdings.empty:
+        return {}, pd.DataFrame()
+
+    filing_dates = manager_components[["ACCESSION_NUMBER", "FILING_DATE"]].copy()
+    filing_dates["ACCESSION_NUMBER"] = filing_dates["ACCESSION_NUMBER"].astype(str)
+    holdings["ACCESSION_NUMBER"] = holdings["ACCESSION_NUMBER"].astype(str)
+    holdings = holdings.merge(filing_dates, on="ACCESSION_NUMBER", how="left")
+    holdings["VALUE"] = pd.to_numeric(holdings["VALUE"], errors="coerce")
+    holdings["SSHPRNAMT"] = pd.to_numeric(holdings["SSHPRNAMT"], errors="coerce")
+    holdings["PUTCALL"] = holdings["PUTCALL"].fillna("").astype(str).str.upper().str.strip()
+    holdings["TITLEOFCLASS"] = holdings["TITLEOFCLASS"].fillna("").astype(str)
+    holdings["SSHPRNAMTTYPE"] = holdings["SSHPRNAMTTYPE"].fillna("").astype(str)
+    holdings = holdings.sort_values(["FILING_DATE", "ACCESSION_NUMBER"])
+
+    portfolio = (
+        holdings.groupby(
+            ["NAMEOFISSUER", "TITLEOFCLASS", "CUSIP", "PUTCALL", "SSHPRNAMTTYPE"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            POSITION_VALUE_THOUSANDS=("VALUE", "sum"),
+            REPORTED_AMOUNT=("SSHPRNAMT", lambda values: values.sum(min_count=1)),
+            SOURCE_ACCESSION_NUMBER=("ACCESSION_NUMBER", "last"),
+            SOURCE_FILING_DATE=("FILING_DATE", "max"),
+            LINES=("ACCESSION_NUMBER", "size"),
+        )
+    )
+    portfolio["POSITION_VALUE_USD"] = portfolio["POSITION_VALUE_THOUSANDS"] * 1_000.0
+    portfolio["PORTFOLIO_WEIGHT_PCT"] = (
+        portfolio["POSITION_VALUE_THOUSANDS"] / float(total_thousands) * 100.0
+    )
+    portfolio["POSITION_TYPE"] = portfolio["PUTCALL"].replace(
+        {"": "Long", "CALL": "Call", "PUT": "Put"}
+    )
+    portfolio["FILING_URL"] = portfolio["SOURCE_ACCESSION_NUMBER"].map(
+        lambda accession: filing_url(target_cik, accession)
+    )
+    portfolio = portfolio.sort_values(
+        ["PORTFOLIO_WEIGHT_PCT", "POSITION_VALUE_USD", "NAMEOFISSUER"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    portfolio.insert(0, "RANK", range(1, len(portfolio) + 1))
+
+    base_rows = manager_components.loc[manager_components["COMPONENT_ROLE"].eq("Base")]
+    base = base_rows.iloc[-1] if not base_rows.empty else manager_components.iloc[-1]
+    manager_name = str(base.get("FILINGMANAGER_NAME", "")).strip() or target_cik
+    report_date = pd.Timestamp(base["PERIODOFREPORT"])
+    latest_filing = pd.to_datetime(manager_components["FILING_DATE"], errors="coerce").max()
+    top_ten = float(portfolio.head(10)["PORTFOLIO_WEIGHT_PCT"].sum())
+    summary = {
+        "CIK": target_cik,
+        "MANAGER": manager_name,
+        "REPORT_PERIOD": report_date,
+        "LATEST_FILING_DATE": latest_filing,
+        "PORTFOLIO_VALUE_USD": float(total_thousands) * 1_000.0,
+        "POSITION_COUNT": len(portfolio),
+        "TOP_TEN_PCT": top_ten,
+        "COMPONENT_COUNT": len(manager_components),
+        "FILER_URL": (
+            "https://www.sec.gov/edgar/browse/?CIK="
+            f"{target_cik}&owner=exclude&action=getcompany&type=13F-HR"
+        ),
+    }
+    return summary, portfolio
+
+
 def money_label(value: float) -> str:
     if not pd.notna(value):
         return "N/A"
@@ -120,24 +274,22 @@ def candidate_label(row: pd.Series) -> str:
 
 
 def inject_13f_style() -> None:
-    """Add a compact research-terminal layer within the shared ADFM theme."""
     st.markdown(
         """
         <style>
         .adfm-13f-dossier {
-            background: linear-gradient(135deg, #f8fbff 0%, #ffffff 72%);
-            border: 1px solid #d9e2ef;
-            border-left: 5px solid #1f6f9f;
-            border-radius: 10px;
+            background: #ffffff;
+            border: 1px solid #d8d8d8;
+            border-left: 5px solid #000000;
             margin: 0.4rem 0 0.75rem;
-            padding: 1.05rem 1.2rem 1rem;
+            padding: 1rem 1.15rem;
         }
         .adfm-13f-eyebrow {
-            color: #567086;
-            font-size: 0.72rem;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            margin-bottom: 0.2rem;
+            color: #585858;
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.22rem;
             text-transform: uppercase;
         }
         .adfm-13f-title-row {
@@ -147,37 +299,37 @@ def inject_13f_style() -> None:
             gap: 0.55rem;
         }
         .adfm-13f-title {
-            color: #152333;
-            font-size: 1.45rem;
-            font-weight: 750;
+            color: #000000;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.55rem;
+            font-weight: 700;
             letter-spacing: -0.02em;
             line-height: 1.2;
         }
         .adfm-13f-query {
-            background: #163f5d;
-            border-radius: 5px;
-            color: white;
-            font-size: 0.78rem;
+            border: 1px solid #000000;
+            color: #000000;
+            font-size: 0.75rem;
             font-weight: 750;
             letter-spacing: 0.04em;
-            padding: 0.2rem 0.5rem;
+            padding: 0.18rem 0.46rem;
         }
         .adfm-13f-facts {
             display: grid;
             gap: 0.65rem 1.3rem;
             grid-template-columns: repeat(4, minmax(120px, 1fr));
-            margin-top: 0.9rem;
+            margin-top: 0.85rem;
         }
         .adfm-13f-fact-label {
-            color: #6b7785;
+            color: #666666;
             display: block;
-            font-size: 0.68rem;
-            font-weight: 700;
-            letter-spacing: 0.05em;
+            font-size: 0.66rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
             text-transform: uppercase;
         }
         .adfm-13f-fact-value {
-            color: #1e2b38;
+            color: #111111;
             display: block;
             font-size: 0.88rem;
             font-weight: 600;
@@ -191,28 +343,32 @@ def inject_13f_style() -> None:
             margin: 0 0 0.95rem;
         }
         .adfm-13f-filter-label {
-            color: #627183;
-            font-size: 0.73rem;
-            font-weight: 700;
-            letter-spacing: 0.04em;
+            color: #555555;
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.05em;
             margin-right: 0.1rem;
             text-transform: uppercase;
         }
         .adfm-13f-chip {
-            background: #f1f5f8;
-            border: 1px solid #d9e1e8;
-            border-radius: 999px;
-            color: #304457;
-            font-size: 0.75rem;
+            border: 1px solid #cfcfcf;
+            color: #202020;
+            font-size: 0.74rem;
             line-height: 1.2;
-            padding: 0.28rem 0.58rem;
+            padding: 0.27rem 0.55rem;
         }
-        .adfm-13f-chip strong { color: #172a3a; }
         .adfm-13f-results-count {
-            color: #243746;
-            font-size: 0.82rem;
+            color: #333333;
+            font-size: 0.8rem;
             font-weight: 650;
             margin: 0.15rem 0 0.6rem;
+        }
+        .adfm-13f-drill-note {
+            border-left: 3px solid #000000;
+            color: #333333;
+            font-size: 0.78rem;
+            margin: 0.45rem 0 0.75rem;
+            padding-left: 0.65rem;
         }
         @media (max-width: 850px) {
             .adfm-13f-facts { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
@@ -253,10 +409,7 @@ def render_security_dossier(
     )
 
 
-def render_active_filters(
-    request: dict[str, object],
-    report_period: pd.Timestamp,
-) -> None:
+def render_active_filters(request: dict[str, object], report_period: pd.Timestamp) -> None:
     quarter = f"{report_period.year} Q{(report_period.month - 1) // 3 + 1}"
     filters = [
         ("Quarter", quarter),
@@ -278,11 +431,7 @@ def render_active_filters(
     )
 
 
-def exposure_chart(
-    ranking: pd.DataFrame,
-    sort_label: str,
-    top_n: int,
-) -> go.Figure:
+def exposure_chart(ranking: pd.DataFrame, sort_label: str, top_n: int) -> go.Figure:
     sort_column = SORT_OPTIONS[sort_label]
     plot = ranking.sort_values(sort_column, ascending=False).head(top_n).copy()
     plot = plot.sort_values(sort_column, ascending=True)
@@ -354,7 +503,7 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
                 "SEC data release",
                 options=[release.label for release in releases],
                 index=0,
-                help="Each release contains the preceding three months of Form 13F filings and amendments.",
+                help="Each SEC bulk release contains the preceding three months of Form 13F filings and amendments.",
             )
             position_kind = st.selectbox("Position type", POSITION_KINDS, index=0)
             minimum_portfolio_billions = st.number_input(
@@ -362,7 +511,6 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
                 min_value=0.0,
                 value=1.0,
                 step=0.25,
-                help="Defaults to $1 billion to exclude smaller filing portfolios before ranking exposure.",
             )
             sort_label = st.selectbox(
                 "Rank funds by",
@@ -376,22 +524,20 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
 
         st.caption(
             "The first run for a release downloads and prepares the official SEC bulk file. "
-            "Later screens reuse the local cache."
+            "Later searches reuse the local cache."
         )
         st.markdown("---")
         st.header("About This Tool")
         st.markdown(
             """
-            **Purpose:** Find which institutional managers report the greatest exposure to a selected security.
+            **Security → holders → manager portfolio**
 
-            **What this page shows**
-            - Position value as a share of each manager's disclosed 13F portfolio.
-            - Rankings by allocation, reported market value, or shares.
-            - Exact issuer, share class, CUSIP, filing date, and EDGAR source link.
-            - Separate views for long holdings, calls, and puts.
+            1. Search a ticker or issuer.
+            2. Rank managers by portfolio weight, value, or shares.
+            3. Open **Fund holdings** and click any manager row.
+            4. The browser drills into that manager's complete effective 13F portfolio.
 
-            **Primary source**
-            - SEC Form 13F bulk data sets and the SEC company ticker directory.
+            **Primary source:** SEC Form 13F filings and official bulk data sets.
             """
         )
 
@@ -409,6 +555,171 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
     return request, submitted
 
 
+def render_manager_profile(
+    prepared: PreparedDataset,
+    cik: str,
+    report_period: pd.Timestamp,
+    security: pd.Series,
+    request: dict[str, object],
+) -> None:
+    summary, portfolio = cached_manager_portfolio(
+        prepared,
+        cik,
+        report_period.date().isoformat(),
+    )
+    if not summary or portfolio.empty:
+        st.error("The selected manager's effective 13F portfolio could not be reconstructed.")
+        if st.button("Back to holders"):
+            if "manager" in st.query_params:
+                del st.query_params["manager"]
+            st.rerun()
+        return
+
+    back_col, source_col = st.columns([1, 1], vertical_alignment="center")
+    with back_col:
+        if st.button(
+            f"← Back to {str(request['query']).upper()} holders",
+            type="secondary",
+        ):
+            if "manager" in st.query_params:
+                del st.query_params["manager"]
+            st.rerun()
+    with source_col:
+        st.link_button("Open manager on SEC EDGAR", str(summary["FILER_URL"]))
+
+    manager = html.escape(str(summary["MANAGER"]))
+    target_security = html.escape(str(security["NAMEOFISSUER"]))
+    st.markdown(
+        f"""
+        <section class="adfm-13f-dossier">
+            <div class="adfm-13f-eyebrow">13F manager profile · opened from {target_security}</div>
+            <div class="adfm-13f-title-row">
+                <div class="adfm-13f-title">{manager}</div>
+                <span class="adfm-13f-query">CIK {html.escape(str(summary['CIK']))}</span>
+            </div>
+            <div class="adfm-13f-facts">
+                <div><span class="adfm-13f-fact-label">Report period</span><span class="adfm-13f-fact-value">{pd.Timestamp(summary['REPORT_PERIOD']):%b. %d, %Y}</span></div>
+                <div><span class="adfm-13f-fact-label">Latest filing</span><span class="adfm-13f-fact-value">{pd.Timestamp(summary['LATEST_FILING_DATE']):%b. %d, %Y}</span></div>
+                <div><span class="adfm-13f-fact-label">13F portfolio</span><span class="adfm-13f-fact-value">{money_label(float(summary['PORTFOLIO_VALUE_USD']))}</span></div>
+                <div><span class="adfm-13f-fact-label">Reported positions</span><span class="adfm-13f-fact-value">{int(summary['POSITION_COUNT']):,}</span></div>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    render_kpi_cards(
+        [
+            (
+                "13F portfolio",
+                money_label(float(summary["PORTFOLIO_VALUE_USD"])),
+                "Effective disclosed market value",
+            ),
+            (
+                "Reported positions",
+                f"{int(summary['POSITION_COUNT']):,}",
+                "Security / option lines after consolidation",
+            ),
+            (
+                "Top 10 concentration",
+                f"{float(summary['TOP_TEN_PCT']):.1f}%",
+                "Share of disclosed portfolio in ten largest positions",
+            ),
+            (
+                "Filing components",
+                f"{int(summary['COMPONENT_COUNT']):,}",
+                "Base filing plus effective new-holdings amendments",
+            ),
+        ]
+    )
+
+    render_section_header(
+        "Manager portfolio",
+        "Full effective 13F holdings for the selected reporting date. Values are as filed, not current marks.",
+    )
+    filter_col, type_col = st.columns([1.3, 0.7])
+    with filter_col:
+        issuer_filter = st.text_input(
+            "Filter portfolio",
+            placeholder="Search issuer, CUSIP, or share class",
+            key="manager_portfolio_filter",
+        )
+    with type_col:
+        type_options = ["All", *sorted(portfolio["POSITION_TYPE"].dropna().unique().tolist())]
+        portfolio_type = st.selectbox(
+            "Position type",
+            type_options,
+            key="manager_portfolio_type",
+        )
+
+    filtered = portfolio.copy()
+    if issuer_filter.strip():
+        needle = issuer_filter.strip()
+        mask = (
+            filtered["NAMEOFISSUER"].str.contains(needle, case=False, na=False, regex=False)
+            | filtered["CUSIP"].astype(str).str.contains(needle, case=False, na=False, regex=False)
+            | filtered["TITLEOFCLASS"].astype(str).str.contains(needle, case=False, na=False, regex=False)
+        )
+        filtered = filtered.loc[mask]
+    if portfolio_type != "All":
+        filtered = filtered.loc[filtered["POSITION_TYPE"].eq(portfolio_type)]
+
+    manager_display = filtered[
+        [
+            "RANK",
+            "NAMEOFISSUER",
+            "TITLEOFCLASS",
+            "POSITION_TYPE",
+            "CUSIP",
+            "PORTFOLIO_WEIGHT_PCT",
+            "POSITION_VALUE_USD",
+            "REPORTED_AMOUNT",
+            "SSHPRNAMTTYPE",
+            "SOURCE_FILING_DATE",
+            "FILING_URL",
+        ]
+    ].head(750)
+    st.markdown(
+        f'<div class="adfm-13f-results-count">Results ({len(filtered):,} positions)</div>',
+        unsafe_allow_html=True,
+    )
+    st.dataframe(
+        manager_display,
+        hide_index=True,
+        width="stretch",
+        height=600,
+        column_config={
+            "RANK": st.column_config.NumberColumn("Rank", format="%d"),
+            "NAMEOFISSUER": "Issuer",
+            "TITLEOFCLASS": "Class",
+            "POSITION_TYPE": "Type",
+            "CUSIP": "CUSIP",
+            "PORTFOLIO_WEIGHT_PCT": st.column_config.NumberColumn(
+                "% of portfolio", format="%.2f%%"
+            ),
+            "POSITION_VALUE_USD": st.column_config.NumberColumn(
+                "Market value", format="$%.0f"
+            ),
+            "REPORTED_AMOUNT": st.column_config.NumberColumn(
+                "Shares / principal", format="%.0f"
+            ),
+            "SSHPRNAMTTYPE": "Amount type",
+            "SOURCE_FILING_DATE": st.column_config.DateColumn(
+                "Filing date", format="MMM D, YYYY"
+            ),
+            "FILING_URL": st.column_config.LinkColumn(
+                "Source", display_text="Open EDGAR"
+            ),
+        },
+    )
+    export_manager = re.sub(r"[^A-Za-z0-9_-]+", "_", str(summary["MANAGER"]))
+    dataframe_download(
+        "Download manager portfolio CSV",
+        filtered,
+        f"sec_13f_manager_{export_manager}_{report_period.date().isoformat()}.csv",
+    )
+
+
 def render_methodology(
     selected: pd.Series,
     prepared: PreparedDataset,
@@ -422,27 +733,28 @@ def render_methodology(
         - SEC values are reported in thousands of dollars. This page converts them to dollars for display; the percentage calculation is unchanged.
         - The active security is **{selected['NAMEOFISSUER']} — {selected['TITLEOFCLASS']}**, CUSIP `{selected['CUSIP']}`. The active position view is **{position_kind.lower()}**.
 
-        **Amendments and filing scope**
+        **Manager drill-through**
+
+        - Clicking a fund row reconstructs that manager's complete effective portfolio from the same SEC release and reporting date.
+        - The manager view combines the effective base filing with subsequent amendments that add new holdings and exposes direct EDGAR links for the underlying filing components.
+        - Top-ten concentration is calculated from the manager's as-filed 13F market values, not current prices.
+
+        **Filing scope**
 
         - A later restatement supersedes the original filing. Amendments that add new holdings are added only when they follow the effective base filing.
         - Form 13F is filed after quarter-end and can be up to 45 days stale when published. It does not disclose short positions, and option values are not delta-adjusted.
         - Reported market values are point-in-time filing values, not current marks. Confidential treatment, manager aggregation, shared discretion, and filer errors can affect comparability.
-        - Tickers are not included in the 13F information table. The app uses the SEC ticker directory to resolve the company name and always exposes the matched issuer, class, and CUSIP for review.
+        - Tickers are not included in the 13F information table. The app uses the SEC ticker directory to resolve the company name and exposes the matched issuer, class, and CUSIP for review.
 
         **Source and cache**
 
         - [SEC Form 13F data release]({prepared.source_url})
         - Prepared locally at {prepared.prepared_at}; {prepared.holdings_rows:,} as-filed holding rows are indexed for this release.
-
-        The SEC states that the bulk data are derived from as-filed submissions and are not a substitute for reviewing the full filing. This browser is an analytical tool, not an investment recommendation.
         """
     )
 
 
-def render_screen(
-    releases: list[QuarterDataset],
-    request: dict[str, object],
-) -> None:
+def render_screen(releases: list[QuarterDataset], request: dict[str, object]) -> None:
     release = next(
         item for item in releases if item.slug == str(request["release_slug"])
     )
@@ -494,6 +806,11 @@ def render_screen(
         st.warning(
             "No effective 13F filings met the current security, position-type, and portfolio-size filters."
         )
+        return
+
+    manager_cik = str(st.query_params.get("manager", "") or "").strip()
+    if manager_cik:
+        render_manager_profile(prepared, manager_cik, report_period, selected, request)
         return
 
     sort_label = str(request["sort_label"])
@@ -574,7 +891,11 @@ def render_screen(
     with data_tab:
         render_section_header(
             "Fund holdings",
-            "Search the manager list and choose the fields you want to inspect. The EDGAR link opens the latest effective filing component containing the matched position.",
+            "Search the holder list, then click any manager row to open that fund's complete 13F portfolio.",
+        )
+        st.markdown(
+            '<div class="adfm-13f-drill-note"><strong>Drill-through:</strong> select one fund row below and ADFM will open the manager profile using the same reporting quarter.</div>',
+            unsafe_allow_html=True,
         )
         manager_col, columns_col = st.columns([0.8, 1.4])
         with manager_col:
@@ -598,19 +919,22 @@ def render_screen(
                 )
             ]
         display_columns = ["RANK", "MANAGER", *optional_columns]
-        display = filtered[display_columns].head(500).copy()
+        display = filtered[display_columns].head(500).copy().reset_index(drop=True)
         st.markdown(
             f'<div class="adfm-13f-results-count">Results ({len(filtered):,} of {len(ranked):,} funds)</div>',
             unsafe_allow_html=True,
         )
-        st.dataframe(
+        selection = st.dataframe(
             display,
             hide_index=True,
             width="stretch",
             height=520,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="sec_13f_holder_table",
             column_config={
                 "RANK": st.column_config.NumberColumn("Rank", format="%d"),
-                "MANAGER": "Manager",
+                "MANAGER": "Manager — click row to open",
                 "PORTFOLIO_WEIGHT_PCT": st.column_config.NumberColumn(
                     "Portfolio weight", format="%.2f%%"
                 ),
@@ -635,6 +959,14 @@ def render_screen(
                 ),
             },
         )
+        selected_rows = list(selection.selection.rows)
+        if selected_rows:
+            row = display.iloc[int(selected_rows[0])]
+            manager_name = str(row["MANAGER"])
+            manager_match = ranked.loc[ranked["MANAGER"].eq(manager_name)].iloc[0]
+            st.query_params["manager"] = str(manager_match["CIK"])
+            st.rerun()
+
         export_name = re.sub(r"[^A-Za-z0-9_-]+", "_", str(request["query"]))
         dataframe_download(
             "Download filtered holdings CSV",
@@ -643,11 +975,7 @@ def render_screen(
         )
 
     with methodology_tab:
-        render_methodology(
-            selected,
-            prepared,
-            str(request["position_kind"]),
-        )
+        render_methodology(selected, prepared, str(request["position_kind"]))
 
 
 def render_page() -> None:
@@ -655,30 +983,27 @@ def render_page() -> None:
         PageHeader(
             title=TITLE,
             description=(
-                "Search a ticker or issuer, verify the exact filed security, and rank institutional managers "
-                "by the position's share of their disclosed Form 13F portfolio."
+                "Search a ticker, rank institutional holders, then drill into any manager's complete disclosed Form 13F portfolio."
             ),
-            eyebrow="ADFM Institutional Ownership Intelligence",
-            source_note="Official SEC Form 13F bulk data",
+            eyebrow="ADFM Positioning + Flows",
+            source_note="Official SEC Form 13F filings and bulk data",
         )
     )
-    try:
-        releases = cached_releases()
-    except Sec13FError as exc:
-        st.error(str(exc))
-        st.info(
-            "The browser needs access to the SEC Form 13F data page before a release can be selected."
-        )
+    releases = cached_releases()
+    if not releases:
+        st.error("No official SEC Form 13F data releases are configured.")
         return
 
     request, submitted = render_sidebar(releases)
     if submitted:
         st.session_state["sec_13f_request"] = request
+        if "manager" in st.query_params:
+            del st.query_params["manager"]
     active_request = st.session_state.get("sec_13f_request")
     if not active_request:
         render_selection_note(
             "Start with a security",
-            "INTC is prefilled. Run the screen to prepare the latest SEC release and identify managers with the highest disclosed allocation.",
+            "Enter a ticker such as VST, NVDA, or MSFT. Run the screen to rank institutional holders, then click a fund row to inspect that manager's full 13F portfolio.",
         )
         st.info(
             "No SEC archive is downloaded until you run a screen. The first preparation can take several minutes; later searches reuse it."
@@ -695,4 +1020,6 @@ st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expan
 inject_explorer_style(max_width_px=1560)
 inject_13f_style()
 render_page()
-render_footer()
+render_footer(
+    data_note="Primary inputs: official SEC Form 13F filings and bulk data sets; SEC company ticker directory."
+)
