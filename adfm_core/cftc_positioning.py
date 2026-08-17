@@ -247,9 +247,9 @@ def build_scanner(
     lookback_weeks: int = 156,
     max_stale_days: int = 21,
 ) -> pd.DataFrame:
-    metrics = add_metrics(frame, report_type, cohort)
-    if metrics.empty:
+    if frame is None or frame.empty:
         return pd.DataFrame()
+    metrics = add_metrics(frame, report_type, cohort)
     report_latest = pd.Timestamp(metrics["report_date"].max())
     rows = []
     for code, group in metrics.groupby("contract_code", sort=False):
