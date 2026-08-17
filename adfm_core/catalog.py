@@ -42,6 +42,7 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
     ToolDefinition(20, "Position Sizing Lab", "20_Position_Sizing_Lab.py", "Risk + Execution", "Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk.", "Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies"),
     ToolDefinition(21, "Market Memory Explorer", "21_Market_Memory_Explorer.py", "Historical Context", "Surfaces historical analogs to contextualize the current tape against prior return paths and regimes.", "Yahoo Finance market history"),
     ToolDefinition(22, "Monthly Seasonality Explorer", "22_Monthly_Seasonality_Explorer.py", "Historical Context", "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.", "Yahoo Finance; FRED for selected series and regime tags"),
+    ToolDefinition(23, "SEC 13F Exposure Browser", "23_SEC_13F_Exposure_Browser.py", "Positioning + Flows", "Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio.", "SEC Form 13F bulk data sets; SEC company ticker directory"),
 )
 
 GROUP_ORDER: Final[tuple[str, ...]] = (
