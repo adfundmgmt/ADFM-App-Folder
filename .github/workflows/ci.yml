@@ -36,10 +36,17 @@ jobs:
       - name: Compile application sources
         run: python -m compileall -q Home.py pages adfm_core cte scripts adfm_sector_rotation_config.py tests
 
-      - name: Run tests with coverage
-        run: |
-          coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -v
-          coverage report --show-missing --fail-under=45
+      - name: Run CFTC positioning tests
+        run: python -m unittest tests.test_cftc_positioning -v
+
+      - name: Run catalog and page standards tests
+        run: python -m unittest tests.test_documentation tests.test_repository_standards tests.test_ui_theme tests.test_sec_13f_page -v
+
+      - name: Run full test suite with coverage
+        run: coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Enforce coverage floor
+        run: coverage report --show-missing --fail-under=45
 
       - name: Lint shared code, engine, scripts, and tests
         run: ruff check --select E,F,I,B --ignore E501 Home.py adfm_core cte scripts tests
