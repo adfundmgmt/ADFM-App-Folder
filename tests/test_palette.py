@@ -38,9 +38,16 @@ class ExcelPaletteTests(unittest.TestCase):
             "7_Sector_Breadth_and_Rotation.py": ROOT / "adfm_sector_rotation_config.py",
             "6_Currency_Tension_Dashboard.py": ROOT / "cte" / "dashboard" / "plots.py",
         }
+        positioning_convention_pages = {
+            "24_CFTC_Positioning_Monitor.py",
+        }
         for tool in TOOL_CATALOG:
             page = ROOT / "pages" / tool.page_filename
             source = page.read_text(encoding="utf-8")
+            if tool.page_filename in positioning_convention_pages:
+                self.assertIn("POSITION_COLOR", source)
+                self.assertIn("PRICE_COLOR", source)
+                continue
             if tool.page_filename in indirect_palette_pages:
                 source += indirect_palette_pages[tool.page_filename].read_text(
                     encoding="utf-8"
