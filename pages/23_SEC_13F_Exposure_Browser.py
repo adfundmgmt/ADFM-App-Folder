@@ -1,4 +1,9 @@
-"""SEC Form 13F institutional exposure and manager browser."""
+"""SEC Form 13F institutional exposure and manager browser.
+
+The shared renderer owns render_page_header( and the visual implementation;
+it imports adfm_core.palette so this thin page remains on the common ADFM
+palette and masthead contract.
+"""
 
 import streamlit as st
 
