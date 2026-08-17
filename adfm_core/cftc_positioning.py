@@ -98,15 +98,39 @@ def normalize(raw: pd.DataFrame, report_type: str) -> pd.DataFrame:
     if raw is None or raw.empty:
         return pd.DataFrame()
     frame = raw.copy()
-    frame["report_date"] = pd.to_datetime(frame["report_date_as_yyyy_mm_dd"], errors="coerce").dt.normalize()
-    frame["contract_code"] = frame["cftc_contract_market_code"].astype("string").str.strip()
-    frame["market_name"] = frame["market_and_exchange_names"].fillna(frame["contract_market_name"]).astype("string").str.strip()
-    frame["commodity_name"] = frame.get("commodity_name", "").astype("string").str.strip()
+    frame["report_date"] = pd.to_datetime(
+        frame["report_date_as_yyyy_mm_dd"], errors="coerce"
+    ).dt.normalize()
+    frame["contract_code"] = (
+        frame["cftc_contract_market_code"].astype("string").str.strip()
+    )
+    frame["market_name"] = (
+        frame["market_and_exchange_names"]
+        .fillna(frame["contract_market_name"])
+        .astype("string")
+        .str.strip()
+    )
+    if "commodity_name" not in frame:
+        frame["commodity_name"] = ""
+    frame["commodity_name"] = frame["commodity_name"].astype("string").str.strip()
     frame["open_interest"] = pd.to_numeric(frame["open_interest_all"], errors="coerce")
     for field in _all_position_fields(report_type):
-        frame[field] = pd.to_numeric(frame.get(field), errors="coerce")
-    keep = ["report_date", "contract_code", "market_name", "commodity_name", "open_interest", *_all_position_fields(report_type)]
-    return frame[keep].dropna(subset=["report_date", "contract_code"]).sort_values(["contract_code", "report_date"])
+        if field not in frame:
+            frame[field] = np.nan
+        frame[field] = pd.to_numeric(frame[field], errors="coerce")
+    keep = [
+        "report_date",
+        "contract_code",
+        "market_name",
+        "commodity_name",
+        "open_interest",
+        *_all_position_fields(report_type),
+    ]
+    return (
+        frame[keep]
+        .dropna(subset=["report_date", "contract_code"])
+        .sort_values(["contract_code", "report_date"])
+    )
 
 
 def add_metrics(frame: pd.DataFrame, report_type: str, cohort: str) -> pd.DataFrame:
@@ -124,7 +148,11 @@ def percentile_rank(values: pd.Series) -> float:
     if clean.empty:
         return np.nan
     latest = clean.iloc[-1]
-    return float((clean.lt(latest).sum() + 0.5 * clean.eq(latest).sum()) / len(clean) * 100.0)
+    return float(
+        (clean.lt(latest).sum() + 0.5 * clean.eq(latest).sum())
+        / len(clean)
+        * 100.0
+    )
 
 
 def positioning_signal(percentile: float) -> str:
@@ -154,20 +182,32 @@ def infer_asset_class(report_type: str, market: str, commodity: str = "") -> str
     if report_type == "TFF":
         if any(x in text for x in ("BITCOIN", "ETHER", "SOLANA")):
             return "Crypto"
-        if any(x in text for x in ("S&P", "NASDAQ", "RUSSELL", "DOW JONES", "VIX", "MSCI", "NIKKEI")):
+        if any(
+            x in text
+            for x in ("S&P", "NASDAQ", "RUSSELL", "DOW JONES", "VIX", "MSCI", "NIKKEI")
+        ):
             return "Equity / Vol"
         if any(x in text for x in ("TREASURY", "UST ", "SOFR", "FED FUNDS", "EURODOLLAR")):
             return "Rates"
-        if any(x in text for x in ("EURO FX", "YEN", "POUND", "FRANC", "DOLLAR", "PESO", "REAL")):
+        if any(
+            x in text
+            for x in ("EURO FX", "YEN", "POUND", "FRANC", "DOLLAR", "PESO", "REAL")
+        ):
             return "FX"
         return "Financial"
-    if any(x in text for x in ("CRUDE", "GASOLINE", "HEATING OIL", "NATURAL GAS", "PROPANE")):
+    if any(
+        x in text for x in ("CRUDE", "GASOLINE", "HEATING OIL", "NATURAL GAS", "PROPANE")
+    ):
         return "Energy"
-    if any(x in text for x in ("GOLD", "SILVER", "COPPER", "PLATINUM", "PALLADIUM", "ALUMINUM")):
+    if any(
+        x in text for x in ("GOLD", "SILVER", "COPPER", "PLATINUM", "PALLADIUM", "ALUMINUM")
+    ):
         return "Metals"
     if any(x in text for x in ("CORN", "WHEAT", "SOY", "OATS", "RICE", "CANOLA")):
         return "Grains / Oilseeds"
-    if any(x in text for x in ("COCOA", "COFFEE", "SUGAR", "COTTON", "ORANGE JUICE", "LUMBER")):
+    if any(
+        x in text for x in ("COCOA", "COFFEE", "SUGAR", "COTTON", "ORANGE JUICE", "LUMBER")
+    ):
         return "Softs"
     if any(x in text for x in ("CATTLE", "HOG", "MILK", "BUTTER", "CHEESE")):
         return "Livestock / Dairy"
@@ -186,7 +226,9 @@ def fetch_recent(report_type: str, years: int = 5, timeout: int = 30) -> pd.Data
     return normalize(_request(report_type, params, timeout), report_type)
 
 
-def fetch_contract_history(report_type: str, contract_code: str, timeout: int = 30) -> pd.DataFrame:
+def fetch_contract_history(
+    report_type: str, contract_code: str, timeout: int = 30
+) -> pd.DataFrame:
     code = str(contract_code).replace("'", "''").strip()
     select = ",".join((*BASE_FIELDS, *_all_position_fields(report_type)))
     params = {
@@ -198,12 +240,24 @@ def fetch_contract_history(report_type: str, contract_code: str, timeout: int = 
     return normalize(_request(report_type, params, timeout), report_type)
 
 
-def build_scanner(frame: pd.DataFrame, report_type: str, cohort: str, lookback_weeks: int = 156) -> pd.DataFrame:
+def build_scanner(
+    frame: pd.DataFrame,
+    report_type: str,
+    cohort: str,
+    lookback_weeks: int = 156,
+    max_stale_days: int = 21,
+) -> pd.DataFrame:
     metrics = add_metrics(frame, report_type, cohort)
+    if metrics.empty:
+        return pd.DataFrame()
+    report_latest = pd.Timestamp(metrics["report_date"].max())
     rows = []
     for code, group in metrics.groupby("contract_code", sort=False):
         history = group.sort_values("report_date").tail(lookback_weeks)
         latest = history.iloc[-1]
+        stale_days = int((report_latest - pd.Timestamp(latest["report_date"])).days)
+        if stale_days > max_stale_days:
+            continue
         pct_history = history["net_pct_oi"].dropna()
         enough = len(pct_history) >= 26
         percentile = percentile_rank(pct_history) if enough else np.nan
@@ -216,32 +270,48 @@ def build_scanner(frame: pd.DataFrame, report_type: str, cohort: str, lookback_w
             record = f"{len(pct_history)}W Low"
         elif enough and latest["net_pct_oi"] == pct_history.max():
             record = f"{len(pct_history)}W High"
-        rows.append({
-            "report_type": report_type,
-            "report_date": latest["report_date"],
-            "contract_code": str(code),
-            "market": str(latest["market_name"]),
-            "commodity": str(latest["commodity_name"]),
-            "asset_class": infer_asset_class(report_type, str(latest["market_name"]), str(latest["commodity_name"])),
-            "open_interest": float(latest["open_interest"]),
-            "net_contracts": float(latest["net_contracts"]),
-            "net_pct_oi": float(latest["net_pct_oi"]),
-            "one_week_change": one_week,
-            "four_week_change": four_week,
-            "percentile": percentile,
-            "zscore": zscore,
-            "history_weeks": len(pct_history),
-            "signal": positioning_signal(percentile),
-            "record": record,
-        })
+        rows.append(
+            {
+                "report_type": report_type,
+                "report_date": latest["report_date"],
+                "contract_code": str(code),
+                "market": str(latest["market_name"]),
+                "commodity": str(latest["commodity_name"]),
+                "asset_class": infer_asset_class(
+                    report_type,
+                    str(latest["market_name"]),
+                    str(latest["commodity_name"]),
+                ),
+                "open_interest": float(latest["open_interest"]),
+                "net_contracts": float(latest["net_contracts"]),
+                "net_pct_oi": float(latest["net_pct_oi"]),
+                "one_week_change": one_week,
+                "four_week_change": four_week,
+                "percentile": percentile,
+                "zscore": zscore,
+                "history_weeks": len(pct_history),
+                "stale_days": stale_days,
+                "signal": positioning_signal(percentile),
+                "record": record,
+            }
+        )
     return pd.DataFrame(rows)
 
 
-def rolling_metrics(frame: pd.DataFrame, report_type: str, cohort: str, window_weeks: int = 156) -> pd.DataFrame:
+def rolling_metrics(
+    frame: pd.DataFrame,
+    report_type: str,
+    cohort: str,
+    window_weeks: int = 156,
+) -> pd.DataFrame:
     out = add_metrics(frame, report_type, cohort).sort_values("report_date").copy()
     window = max(window_weeks, 26)
-    out["rolling_zscore"] = out["net_pct_oi"].rolling(window, min_periods=26).apply(lambda x: zscore_latest(pd.Series(x)), raw=False)
-    out["rolling_percentile"] = out["net_pct_oi"].rolling(window, min_periods=26).apply(lambda x: percentile_rank(pd.Series(x)), raw=False)
+    out["rolling_zscore"] = out["net_pct_oi"].rolling(
+        window, min_periods=26
+    ).apply(lambda x: zscore_latest(pd.Series(x)), raw=False)
+    out["rolling_percentile"] = out["net_pct_oi"].rolling(
+        window, min_periods=26
+    ).apply(lambda x: percentile_rank(pd.Series(x)), raw=False)
     return out
 
 
@@ -249,7 +319,13 @@ def price_proxy(contract_code: str) -> tuple[str, str, float | None] | None:
     return PRICE_PROXIES.get(str(contract_code).strip())
 
 
-def estimate_notional(net_contracts: pd.Series, price: pd.Series, multiplier: float | None) -> pd.Series:
+def estimate_notional(
+    net_contracts: pd.Series, price: pd.Series, multiplier: float | None
+) -> pd.Series:
     if multiplier is None:
         return pd.Series(np.nan, index=net_contracts.index, dtype=float)
-    return pd.to_numeric(net_contracts, errors="coerce") * pd.to_numeric(price, errors="coerce") * multiplier
+    return (
+        pd.to_numeric(net_contracts, errors="coerce")
+        * pd.to_numeric(price, errors="coerce")
+        * multiplier
+    )
