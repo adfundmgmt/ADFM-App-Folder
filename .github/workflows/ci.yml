@@ -48,6 +48,15 @@ jobs:
       - name: Run SEC 13F core tests
         run: python -m unittest tests.test_sec_13f -v
 
+      - name: Run remaining tests A
+        run: python -m unittest tests.test_adfm_core_catalog tests.test_adfm_core_data_integrity tests.test_adfm_core_market_data tests.test_chart_patterns tests.test_correlation_regime tests.test_cte_math tests.test_data_registry tests.test_monthly_returns_matrix -v
+
+      - name: Run remaining tests B
+        run: python -m unittest tests.test_options_positioning tests.test_options_sources tests.test_palette tests.test_pm_cockpit tests.test_position_sizing tests.test_primary_data tests.test_rate_of_change tests.test_regime_math tests.test_relative_volatility -v
+
+      - name: Run remaining tests C
+        run: python -m unittest tests.test_sec_fundamentals tests.test_signal_ledger tests.test_snapshot_validation -v
+
       - name: Run full test suite with coverage
         run: coverage run --source=adfm_core,cte -m unittest discover -s tests -p "test_*.py" -v
 
