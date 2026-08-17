@@ -1,0 +1,38 @@
+[
+  {
+    "slug": "01mar2026-31may2026_form13f",
+    "label": "2026 March April May 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01mar2026-31may2026_form13f.zip",
+    "size_label": "94.81 MB"
+  },
+  {
+    "slug": "01dec2025-28feb2026_form13f",
+    "label": "2025 December 2026 January February 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01dec2025-28feb2026_form13f.zip",
+    "size_label": "86.08 MB"
+  },
+  {
+    "slug": "01sep2025-30nov2025_form13f",
+    "label": "2025 September October November 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01sep2025-30nov2025_form13f.zip",
+    "size_label": "81.65 MB"
+  },
+  {
+    "slug": "01jun2025-31aug2025_form13f",
+    "label": "2025 June July August 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01jun2025-31aug2025_form13f.zip",
+    "size_label": "82.3 MB"
+  },
+  {
+    "slug": "01mar2025-31may2025_form13f",
+    "label": "2025 March April May 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01mar2025-31may2025_form13f.zip",
+    "size_label": "84.18 MB"
+  },
+  {
+    "slug": "01dec2024-28feb2025_form13f",
+    "label": "2024 December 2025 January February 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01dec2024-28feb2025_form13f.zip",
+    "size_label": "82.53 MB"
+  }
+]
