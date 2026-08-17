@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 20 tools, in the same order and groups shown on the Home page.
+The application contains 21 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -45,6 +45,7 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 | 18 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 19 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 | 20 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
+| 21 | SEC 13F Exposure Browser | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
 
 ## Tool groups
 
@@ -52,7 +53,7 @@ The application contains 20 tools, in the same order and groups shown on the Hom
 |---|---|
 | Equity Leadership | Public Equities Baskets; Sector Breadth and Rotation; Factor Momentum Leadership; Rate of Change Dashboard |
 | Technicals + Analogs | Technical Chart Explorer; Ratio Charts; Market Memory Explorer; Monthly Seasonality Explorer; Relative Volatility Lab |
-| Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass |
+| Flows + Sentiment | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser |
 | Macro + Rates | Global Macro Regime Dashboard; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Liquidity Tracker; Currency Tension Engine |
 | Risk + Catalysts | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer |
 
@@ -72,6 +73,7 @@ The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Track
 ## Data-use notes
 
 - Market data are provider supplied and may be delayed, revised, unavailable, or incomplete.
+- The 13F browser stores prepared public SEC releases in the ignored `data/13f/` cache. Deployments can set `ADFM_13F_CACHE_DIR` for persistent storage and `ADFM_SEC_USER_AGENT` for an organization-specific SEC request identity.
 - Signals and dashboards are deterministic analytical tools, not investment advice or a guarantee of future returns.
 - Pages should surface their own as-of date and source context. Where a data field is unavailable, the application should leave it blank rather than fabricate a value.
 - Client, holdings, positions, account, and credential data must not be committed. See [the security policy](SECURITY.md).

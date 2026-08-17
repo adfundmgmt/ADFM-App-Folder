@@ -21,6 +21,7 @@ data/last_good/
 .volume_regime_cache/
 data/portfolio/
 data/positions/
+data/13f/
 private/
 *holdings*.csv
 *positions*.csv

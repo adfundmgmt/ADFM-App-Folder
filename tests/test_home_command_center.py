@@ -11,7 +11,7 @@ class HomeResearchDirectoryTests(unittest.TestCase):
 
         self.assertEqual(list(app.exception), [])
         self.assertEqual(len(app.metric), 0)
-        self.assertEqual(len(app.get("page_link")), 20)
+        self.assertEqual(len(app.get("page_link")), 21)
 
 
 if __name__ == "__main__":
