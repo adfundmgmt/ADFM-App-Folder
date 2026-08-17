@@ -43,6 +43,7 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
     ToolDefinition(21, "Market Memory Explorer", "21_Market_Memory_Explorer.py", "Historical Context", "Surfaces historical analogs to contextualize the current tape against prior return paths and regimes.", "Yahoo Finance market history"),
     ToolDefinition(22, "Monthly Seasonality Explorer", "22_Monthly_Seasonality_Explorer.py", "Historical Context", "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.", "Yahoo Finance; FRED for selected series and regime tags"),
     ToolDefinition(23, "SEC 13F Exposure Browser", "23_SEC_13F_Exposure_Browser.py", "Positioning + Flows", "Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio.", "SEC Form 13F bulk data sets; SEC company ticker directory"),
+    ToolDefinition(24, "CFTC Positioning Monitor", "24_CFTC_Positioning_Monitor.py", "Positioning + Flows", "Scans CFTC futures positioning for crowded longs, crowded shorts, and sharp weekly shifts across financial and physical futures, with historical percentile and z-score context.", "CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts"),
 )
 
 GROUP_ORDER: Final[tuple[str, ...]] = (
