@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 22 tools, in the same order and groups shown on the Home page.
+The application contains 23 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -47,6 +47,7 @@ The application contains 22 tools, in the same order and groups shown on the Hom
 | 20 | Position Sizing Lab | Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
 | 21 | Market Memory Explorer | Surfaces historical analogs to contextualize the current tape against prior return paths and regimes. | Yahoo Finance market history |
 | 22 | Monthly Seasonality Explorer | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
+| 23 | SEC 13F Exposure Browser | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
 
 ## Tool groups
 
@@ -57,7 +58,7 @@ The application contains 22 tools, in the same order and groups shown on the Hom
 | Equity Leadership | Sector Breadth and Rotation; Factor Momentum Leadership |
 | Fundamental Research | ADFM Underwriter |
 | Technical Confirmation | Technical Chart Explorer; Ratio Charts; Rate of Change Dashboard; Relative Volatility Lab |
-| Positioning + Flows | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass |
+| Positioning + Flows | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser |
 | Risk + Execution | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Position Sizing Lab |
 | Historical Context | Market Memory Explorer; Monthly Seasonality Explorer |
 
@@ -73,12 +74,14 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - Reusable Rate of Change calculations and chart-axis helpers.
 - Historical conviction-based position sizing, target/invalidation first-touch analysis, earnings-event risk, liquidity caps, and an interactive compounding simulation built from observed holding-period outcomes.
 - SEC EDGAR ticker resolution, XBRL concept normalization, stand-alone-quarter reconstruction, filing provenance, current valuation, and issuer-credit calculations.
+- SEC Form 13F quarterly archive discovery, local preparation, amendment-aware consolidation, ticker/CUSIP matching, and institutional exposure ranking.
 
 The Rate of Change Dashboard, Global Macro Regime Dashboard, and Liquidity Conditions Monitor use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
 ## Data-use notes
 
 - Market data are provider supplied and may be delayed, revised, unavailable, or incomplete.
+- The 13F browser stores prepared public SEC releases in the ignored `data/13f/` cache. Deployments can set `ADFM_13F_CACHE_DIR` for persistent storage and `ADFM_SEC_USER_AGENT` for an organization-specific SEC request identity.
 - Signals and dashboards are deterministic analytical tools, not investment advice or a guarantee of future returns.
 - Pages should surface their own as-of date and source context. Where a data field is unavailable, the application should leave it blank rather than fabricate a value.
 - Client, holdings, positions, account, and credential data must not be committed. See [the security policy](SECURITY.md).
