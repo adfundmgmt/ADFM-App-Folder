@@ -17,10 +17,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationTests(unittest.TestCase):
-    def test_catalog_contains_23_unique_existing_pages(self) -> None:
-        self.assertEqual(len(TOOL_CATALOG), 23)
-        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 24)))
-        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 23)
+    def test_catalog_contains_24_unique_existing_pages(self) -> None:
+        self.assertEqual(len(TOOL_CATALOG), 24)
+        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 25)))
+        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 24)
         self.assertEqual(TOOL_CATALOG[0].title, "ADFM Public Equities Baskets")
         self.assertEqual(TOOL_CATALOG[8].page_filename, "9_ADFM_Underwriter.py")
         for tool in TOOL_CATALOG:
@@ -54,6 +54,7 @@ class DocumentationTests(unittest.TestCase):
                 "Market Memory Explorer",
                 "Monthly Seasonality Explorer",
                 "SEC 13F Exposure Browser",
+                "CFTC Positioning Monitor",
             ],
         )
 
