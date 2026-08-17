@@ -20,7 +20,7 @@ class HomeResearchDirectoryTests(unittest.TestCase):
         self.assertEqual(len(page_links), len(expected_tools))
         self.assertEqual(
             [link.label for link in page_links],
-            [tool.title for tool in expected_tools],
+            [f"**{tool.title}**" for tool in expected_tools],
         )
         self.assertEqual(
             [link.page for link in page_links],
