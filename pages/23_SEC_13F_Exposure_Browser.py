@@ -63,10 +63,6 @@ DEFAULT_DETAIL_COLUMNS = [
     "FILING_URL",
 ]
 
-# SEC's release page can return 403s to hosted applications even when the
-# underlying public ZIP files remain available. These are the same official
-# SEC URLs exposed on the Form 13F Data Sets page and provide a deterministic
-# fallback for discovery.
 OFFICIAL_RELEASE_FALLBACKS = (
     QuarterDataset(
         slug="01mar2026-31may2026_form13f",
@@ -106,7 +102,6 @@ OFFICIAL_RELEASE_FALLBACKS = (
     ),
 )
 
-# SEC asks automated clients to identify the organization and a contact.
 os.environ.setdefault(
     "ADFM_SEC_USER_AGENT",
     "AD Fund Management LP aryadeniz@adfundmgmt.com",
@@ -501,7 +496,7 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
         with st.form("sec_13f_screen"):
             query = st.text_input(
                 "Ticker, issuer, or CUSIP",
-                value="VST",
+                value="INTC",
                 help="Ticker symbols are resolved through the SEC company directory, then matched to the exact filed security and CUSIP.",
             )
             release_label = st.selectbox(
@@ -532,7 +527,7 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
             "Later searches reuse the local cache."
         )
         st.markdown("---")
-        st.header("Workflow")
+        st.header("About This Tool")
         st.markdown(
             """
             **Security → holders → manager portfolio**
@@ -541,6 +536,8 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
             2. Rank managers by portfolio weight, value, or shares.
             3. Open **Fund holdings** and click any manager row.
             4. The browser drills into that manager's complete effective 13F portfolio.
+
+            **Primary source:** SEC Form 13F filings and official bulk data sets.
             """
         )
 
@@ -1006,7 +1003,7 @@ def render_page() -> None:
     if not active_request:
         render_selection_note(
             "Start with a security",
-            "VST is prefilled. Run the screen to rank its institutional holders, then click a fund row to inspect that manager's full 13F portfolio.",
+            "Enter a ticker such as VST, NVDA, or MSFT. Run the screen to rank institutional holders, then click a fund row to inspect that manager's full 13F portfolio.",
         )
         st.info(
             "No SEC archive is downloaded until you run a screen. The first preparation can take several minutes; later searches reuse it."
