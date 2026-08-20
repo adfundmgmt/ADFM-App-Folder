@@ -22,6 +22,7 @@ from adfm_core.sec_13f_corrected import (
     manager_portfolio,
     prepare_dataset,
     rank_fund_exposure,
+    search_manager_candidates,
     search_security_candidates,
 )
 from adfm_core.ui import (
@@ -36,6 +37,8 @@ from adfm_core.ui import (
 )
 
 TITLE = "SEC 13F Exposure Browser"
+SEARCH_MODES = ("Security", "Manager")
+DEFAULT_MANAGER_QUERY = "Duquesne Family Office LLC (CIK: 0001536411)"
 POSITION_KINDS = ("Long holdings", "Call options", "Put options", "All reported")
 SORT_OPTIONS = {
     "Portfolio weight": "PORTFOLIO_WEIGHT_PCT",
@@ -148,6 +151,19 @@ def cached_manager_portfolio(
     return manager_portfolio(prepared, cik, report_period)
 
 
+@st.cache_data(show_spinner=False)
+def cached_manager_candidates(
+    prepared: PreparedDataset,
+    query: str,
+    report_period: str,
+) -> pd.DataFrame:
+    return search_manager_candidates(
+        prepared,
+        query,
+        report_period=report_period,
+    )
+
+
 def money_label(value: float) -> str:
     if not pd.notna(value):
         return "N/A"
@@ -166,6 +182,11 @@ def candidate_label(row: pd.Series) -> str:
         f"{row['NAMEOFISSUER']} | {row['TITLEOFCLASS']} | "
         f"CUSIP {row['CUSIP']} | {instrument.title()}"
     )
+
+
+def manager_candidate_label(row: pd.Series) -> str:
+    filing_date = pd.Timestamp(row["LATEST_FILING_DATE"])
+    return f"{row['MANAGER']} | CIK {row['CIK']} | Filed {filing_date:%b. %d, %Y}"
 
 
 def inject_13f_style() -> None:
@@ -215,26 +236,49 @@ def inject_13f_style() -> None:
 
 def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], bool]:
     with st.sidebar:
-        st.header("Security search")
+        st.header("13F search")
+        search_mode = st.radio(
+            "Browse by",
+            SEARCH_MODES,
+            horizontal=True,
+            key="sec_13f_search_mode",
+        )
         with st.form("sec_13f_screen"):
-            query = st.text_input(
-                "Ticker, issuer, or CUSIP",
-                value="INTC",
-                help="Ticker symbols are matched to the exact filed issuer and CUSIP.",
-            )
+            if search_mode == "Security":
+                query = st.text_input(
+                    "Ticker, issuer, or CUSIP",
+                    value="INTC",
+                    help="Ticker symbols are matched to the exact filed issuer and CUSIP.",
+                    key="sec_13f_security_query",
+                )
+            else:
+                query = st.text_input(
+                    "Manager name or CIK",
+                    value=DEFAULT_MANAGER_QUERY,
+                    help="CIK searches resolve the exact filer; name searches return matching effective 13F managers.",
+                    key="sec_13f_manager_query",
+                )
             release_label = st.selectbox(
                 "SEC data release", [release.label for release in releases], index=0
             )
-            position_kind = st.selectbox("Position type", POSITION_KINDS, index=0)
-            minimum_portfolio_billions = st.number_input(
-                "Minimum disclosed portfolio ($B)",
-                min_value=0.0,
-                value=1.0,
-                step=0.25,
-            )
-            sort_label = st.selectbox("Rank funds by", list(SORT_OPTIONS), index=0)
-            top_n = st.slider("Funds in overview", 10, 50, 25, 5)
-            submitted = st.form_submit_button("Run 13F screen", width="stretch")
+            if search_mode == "Security":
+                position_kind = st.selectbox("Position type", POSITION_KINDS, index=0)
+                minimum_portfolio_billions = st.number_input(
+                    "Minimum disclosed portfolio ($B)",
+                    min_value=0.0,
+                    value=1.0,
+                    step=0.25,
+                )
+                sort_label = st.selectbox("Rank funds by", list(SORT_OPTIONS), index=0)
+                top_n = st.slider("Funds in overview", 10, 50, 25, 5)
+                button_label = "Run security screen"
+            else:
+                position_kind = "All reported"
+                minimum_portfolio_billions = 0.0
+                sort_label = "Portfolio weight"
+                top_n = 25
+                button_label = "Open manager portfolio"
+            submitted = st.form_submit_button(button_label, width="stretch")
 
         st.caption(
             "The first run prepares the official SEC bulk release. Later searches reuse the cache."
@@ -243,7 +287,9 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
         st.header("About This Tool")
         st.markdown(
             """
-            **Workflow:** search a security, rank institutional holders, then click a manager row to inspect that manager's complete effective 13F portfolio.
+            **Security workflow:** search a ticker, issuer, or CUSIP; rank institutional holders; then open any manager's effective portfolio.
+
+            **Manager workflow:** search a filing manager by name or CIK and browse its complete effective portfolio for the selected SEC release.
 
             **Calculation:** portfolio weight uses the sum of the manager's effective SEC information-table holdings as the denominator. This avoids filer summary-page unit inconsistencies.
             """
@@ -251,8 +297,10 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
 
     selected_release = next(r for r in releases if r.label == release_label)
     return {
+        "search_mode": search_mode,
         "query": query.strip(),
         "release_slug": selected_release.slug,
+        "release_label": selected_release.label,
         "position_kind": position_kind,
         "minimum_portfolio_millions": float(minimum_portfolio_billions) * 1_000.0,
         "sort_label": sort_label,
@@ -302,7 +350,8 @@ def render_manager_profile(
     prepared: PreparedDataset,
     cik: str,
     report_period: pd.Timestamp,
-    request: dict[str, object],
+    *,
+    back_label: str | None = None,
 ) -> None:
     summary, portfolio = cached_manager_portfolio(
         prepared, cik, report_period.date().isoformat()
@@ -311,7 +360,7 @@ def render_manager_profile(
         st.error("The selected manager portfolio could not be reconstructed.")
         return
 
-    if st.button(f"← Back to {str(request['query']).upper()} holders"):
+    if back_label and st.button(back_label):
         st.query_params.pop("manager", None)
         st.rerun()
     st.link_button("Open manager on SEC EDGAR", str(summary["FILER_URL"]))
@@ -386,17 +435,61 @@ def render_manager_profile(
     )
 
 
+def render_manager_search(
+    prepared: PreparedDataset,
+    report_period: pd.Timestamp,
+    release: QuarterDataset,
+    request: dict[str, object],
+) -> None:
+    with st.spinner("Matching effective 13F filing managers..."):
+        candidates = cached_manager_candidates(
+            prepared,
+            str(request["query"]),
+            report_period.date().isoformat(),
+        )
+    if candidates.empty:
+        st.error("No matching effective 13F manager was found in this release.")
+        return
+
+    if len(candidates) > 1:
+        labels = [manager_candidate_label(row) for _, row in candidates.iterrows()]
+        label = st.selectbox("Matched filing manager", labels, index=0)
+        selected = candidates.iloc[labels.index(label)]
+    else:
+        selected = candidates.iloc[0]
+
+    render_status_line(
+        report_period=report_period.date().isoformat(),
+        sec_release=release.label,
+        view="Manager portfolio",
+    )
+    render_selection_note(
+        "Matched filing manager",
+        f"{selected['MANAGER']} · CIK {selected['CIK']}",
+    )
+    render_manager_profile(
+        prepared,
+        str(selected["CIK"]),
+        report_period,
+    )
+
+
 def render_screen(releases: list[QuarterDataset], request: dict[str, object]) -> None:
     release = next(r for r in releases if r.slug == str(request["release_slug"]))
     with st.spinner("Loading the SEC release..."):
         prepared = prepare_dataset(release)
         periods = available_report_periods(prepared)
-        ticker_directory = cached_ticker_directory()
-        catalog = cached_security_catalog(prepared)
     if not periods:
         st.error("The selected release has no usable report period.")
         return
     report_period = periods[0]
+    if str(request.get("search_mode", "Security")) == "Manager":
+        render_manager_search(prepared, report_period, release, request)
+        return
+
+    with st.spinner("Matching the filed security..."):
+        ticker_directory = cached_ticker_directory()
+        catalog = cached_security_catalog(prepared)
     candidates = search_security_candidates(
         catalog,
         ticker_directory,
@@ -427,7 +520,17 @@ def render_screen(releases: list[QuarterDataset], request: dict[str, object]) ->
 
     manager_cik = str(st.query_params.get("manager", "") or "").strip()
     if manager_cik:
-        render_manager_profile(prepared, manager_cik, report_period, request)
+        render_status_line(
+            report_period=report_period.date().isoformat(),
+            sec_release=release.label,
+            view="Manager portfolio",
+        )
+        render_manager_profile(
+            prepared,
+            manager_cik,
+            report_period,
+            back_label=f"← Back to {str(request['query']).upper()} holders",
+        )
         return
 
     sort_label = str(request["sort_label"])
@@ -556,7 +659,7 @@ def render_browser() -> None:
     render_page_header(
         PageHeader(
             title=TITLE,
-            description="Search a ticker, rank institutional holders, and drill into any manager's complete disclosed Form 13F portfolio.",
+            description="Search a security to rank institutional holders, or open a filing manager directly to browse its complete Form 13F portfolio.",
             eyebrow="ADFM Positioning + Flows",
             source_note="Official SEC Form 13F filings and bulk data",
         )
@@ -569,8 +672,8 @@ def render_browser() -> None:
     active = st.session_state.get("sec_13f_request")
     if not active:
         render_selection_note(
-            "Start with a security",
-            "INTC is prefilled. Run the screen to rank institutional holders and open manager portfolios.",
+            "Start with a security or manager",
+            "INTC is prefilled for security exposure. Switch to Manager to open Duquesne Family Office LLC (CIK 0001536411) directly.",
         )
         return
     try:

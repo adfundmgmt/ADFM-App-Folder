@@ -19,6 +19,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Changed
 
+- SEC 13F Exposure Browser now supports direct filing-manager search by name or CIK, with Duquesne Family Office LLC (CIK 0001536411) as the manager-mode baseline and faster manager-specific portfolio loading.
 - Home now uses stable internal route links instead of deployment-sensitive `st.page_link` validation, and the Home/sidebar order follows a single research workflow from public-equity discovery through regime, fundamentals, technical confirmation, positioning, risk execution, and historical context.
 - Public Equities Baskets deployment refreshed so the live app reflects the current basket map, which excludes the legacy Private Robotics Access Vehicles (BOT) entry.
 - The Options Positioning Compass price-history fallback now uses an intuitive left-to-right volatility scale, top-to-bottom upside/downside scale, matching directional colors, and shorter commentary.

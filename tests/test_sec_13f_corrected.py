@@ -9,7 +9,11 @@ from pathlib import Path
 import pandas as pd
 
 from adfm_core.sec_13f import PreparedDataset
-from adfm_core.sec_13f_corrected import manager_portfolio, rank_fund_exposure
+from adfm_core.sec_13f_corrected import (
+    manager_portfolio,
+    rank_fund_exposure,
+    search_manager_candidates,
+)
 
 
 class Corrected13FValueTests(unittest.TestCase):
@@ -148,6 +152,24 @@ class Corrected13FValueTests(unittest.TestCase):
 
         self.assertAlmostEqual(summary["PORTFOLIO_VALUE_USD"], 5_704_793_000.0)
         self.assertAlmostEqual(portfolio["PORTFOLIO_WEIGHT_PCT"].sum(), 100.0)
+
+    def test_manager_search_resolves_name_and_exact_cik(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self.prepared_fixture(Path(temporary))
+            by_name = search_manager_candidates(
+                prepared,
+                "Legacy Summary Manager",
+                report_period="2026-03-31",
+            )
+            by_cik = search_manager_candidates(
+                prepared,
+                "Legacy Summary Manager (CIK: 0001537191)",
+                report_period="2026-03-31",
+            )
+
+        self.assertEqual(by_name.iloc[0]["CIK"], "0001537191")
+        self.assertEqual(by_cik.iloc[0]["CIK"], "0001537191")
+        self.assertEqual(by_cik.iloc[0]["MANAGER"], "LEGACY SUMMARY MANAGER")
 
 
 if __name__ == "__main__":
