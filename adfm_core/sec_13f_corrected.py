@@ -10,6 +10,7 @@ TABLEVALUETOTAL field.
 
 from __future__ import annotations
 
+import re
 from typing import Sequence
 
 import pandas as pd
@@ -87,6 +88,19 @@ def _effective_holdings(
 
     components = components.copy()
     components["CIK"] = components["CIK"].astype(str).str.zfill(10)
+    holdings = _holdings_for_components(prepared, components, report_period)
+    return components, holdings
+
+
+def _holdings_for_components(
+    prepared: PreparedDataset,
+    components: pd.DataFrame,
+    report_period: str | pd.Timestamp | None,
+) -> pd.DataFrame:
+    """Load and normalize only the information tables owned by components."""
+
+    if components.empty:
+        return pd.DataFrame()
     accessions = components["ACCESSION_NUMBER"].astype(str).drop_duplicates().tolist()
     try:
         holdings = pd.read_parquet(
@@ -111,7 +125,91 @@ def _effective_holdings(
     holdings["VALUE"] = pd.to_numeric(holdings["VALUE"], errors="coerce")
     holdings["SSHPRNAMT"] = pd.to_numeric(holdings["SSHPRNAMT"], errors="coerce")
     holdings["VALUE_USD"] = holdings["VALUE"] * _value_multiplier(report_period)
-    return components, holdings
+    return holdings
+
+
+def _normalize_manager_name(value: object) -> str:
+    text = str(value or "").upper().replace("&", " AND ")
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9]+", " ", text)).strip()
+
+
+def search_manager_candidates(
+    prepared: PreparedDataset,
+    query: str,
+    *,
+    report_period: str | pd.Timestamp | None = None,
+    limit: int = 25,
+) -> pd.DataFrame:
+    """Find effective 13F managers by filing name or exact CIK."""
+
+    cleaned_query = str(query or "").strip()
+    if not cleaned_query:
+        return pd.DataFrame()
+
+    filings = pd.read_parquet(prepared.filings_path)
+    components = base.select_effective_filing_components(filings, report_period)
+    if components.empty:
+        return pd.DataFrame()
+
+    components = components.copy()
+    components["CIK"] = components["CIK"].astype(str).str.zfill(10)
+    rows: list[dict[str, object]] = []
+    for cik, group in components.groupby("CIK", sort=False):
+        base_rows = group.loc[group["COMPONENT_ROLE"].eq("Base")]
+        base_row = base_rows.iloc[-1] if not base_rows.empty else group.iloc[-1]
+        rows.append(
+            {
+                "CIK": str(cik).zfill(10),
+                "MANAGER": str(base_row.get("FILINGMANAGER_NAME", "")).strip()
+                or str(cik).zfill(10),
+                "REPORT_PERIOD": pd.Timestamp(base_row["PERIODOFREPORT"]),
+                "LATEST_FILING_DATE": pd.to_datetime(
+                    group["FILING_DATE"], errors="coerce"
+                ).max(),
+                "COMPONENT_COUNT": len(group),
+            }
+        )
+    managers = pd.DataFrame(rows)
+    if managers.empty:
+        return managers
+
+    cik_match = re.search(r"\bCIK\s*:?\s*(\d{1,10})\b", cleaned_query, re.I)
+    if cik_match is None and cleaned_query.isdigit():
+        cik_match = re.match(r"(\d{1,10})", cleaned_query)
+    target_cik = cik_match.group(1).zfill(10) if cik_match else ""
+    if target_cik:
+        exact = managers.loc[managers["CIK"].eq(target_cik)].copy()
+        if not exact.empty:
+            exact["MATCH_SCORE"] = 200.0
+            return exact.reset_index(drop=True)
+
+    name_query = re.sub(r"\(\s*CIK\s*:?\s*\d+\s*\)", "", cleaned_query, flags=re.I)
+    target = _normalize_manager_name(name_query)
+    if not target:
+        return managers.head(0)
+
+    normalized = managers["MANAGER"].map(_normalize_manager_name)
+    exact_name = normalized.eq(target)
+    starts_with = normalized.str.startswith(target)
+    contains = normalized.str.contains(target, regex=False)
+    query_tokens = set(target.split())
+    token_coverage = normalized.map(
+        lambda value: len(query_tokens.intersection(value.split()))
+        / max(1, len(query_tokens))
+    )
+    managers["MATCH_SCORE"] = token_coverage * 80.0
+    managers.loc[contains, "MATCH_SCORE"] = 100.0
+    managers.loc[starts_with, "MATCH_SCORE"] = 125.0
+    managers.loc[exact_name, "MATCH_SCORE"] = 150.0
+    managers = managers.loc[managers["MATCH_SCORE"].ge(40.0)].copy()
+    return (
+        managers.sort_values(
+            ["MATCH_SCORE", "MANAGER", "CIK"],
+            ascending=[False, True, True],
+        )
+        .head(max(1, int(limit)))
+        .reset_index(drop=True)
+    )
 
 
 def rank_fund_exposure(
@@ -223,14 +321,21 @@ def manager_portfolio(
 ) -> tuple[dict[str, object], pd.DataFrame]:
     """Reconstruct a manager portfolio from effective information-table lines."""
 
-    components, holdings = _effective_holdings(prepared, report_period)
-    if components.empty or holdings.empty:
+    filings = pd.read_parquet(prepared.filings_path)
+    components = base.select_effective_filing_components(filings, report_period)
+    if components.empty:
         return {}, pd.DataFrame()
 
     target_cik = str(cik).strip().zfill(10)
+    components = components.copy()
+    components["CIK"] = components["CIK"].astype(str).str.zfill(10)
     manager_components = components.loc[components["CIK"].eq(target_cik)].copy()
-    manager_holdings = holdings.loc[holdings["CIK"].eq(target_cik)].copy()
-    if manager_components.empty or manager_holdings.empty:
+    if manager_components.empty:
+        return {}, pd.DataFrame()
+    manager_holdings = _holdings_for_components(
+        prepared, manager_components, report_period
+    )
+    if manager_holdings.empty:
         return {}, pd.DataFrame()
 
     total_usd = float(manager_holdings["VALUE_USD"].sum())
