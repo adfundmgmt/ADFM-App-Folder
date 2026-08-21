@@ -24,8 +24,8 @@ render_page_header(
     PageHeader(
         title="Ratio Charts",
         description=(
-            "Relative-strength ratios across assets, sectors, credit, factors, "
-            "and risk-appetite proxies."
+            "Fifty relative-strength ratios across assets, regions, credit, thematic baskets, "
+            "and single stocks."
         ),
         eyebrow="ADFM Technicals + Analogs",
     )
@@ -92,12 +92,6 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "Primary risk-assets-versus-rates ratio.",
     ),
     RatioSpec(
-        "HYG",
-        "LQD",
-        "High Yield / Investment Grade Credit",
-        "Credit risk appetite.",
-    ),
-    RatioSpec(
         "UUP",
         "SPY",
         "Dollar / S&P 500",
@@ -128,18 +122,6 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "Energy and inflation beta versus broad equities.",
     ),
     RatioSpec(
-        "RSP",
-        "SPY",
-        "Equal Weight S&P 500 / Cap Weight S&P 500",
-        "Breadth and concentration.",
-    ),
-    RatioSpec(
-        "IWM",
-        "SPY",
-        "Small Caps / S&P 500",
-        "Domestic cyclicality and financing-condition sensitivity.",
-    ),
-    RatioSpec(
         "QQQ",
         "SPY",
         "Nasdaq 100 / S&P 500",
@@ -150,12 +132,6 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "QQQ",
         "Equal Weight Nasdaq 100 / Nasdaq 100",
         "Nasdaq breadth versus mega-cap concentration.",
-    ),
-    RatioSpec(
-        "SMH",
-        "IGV",
-        "Semiconductors / Software",
-        "AI hardware and semiconductor leadership versus software.",
     ),
     RatioSpec(
         "NVDA",
@@ -174,18 +150,6 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "QQQ",
         "Biotech / Nasdaq 100",
         "Speculative biotech and funding-cycle sensitivity versus mega-cap growth.",
-    ),
-    RatioSpec(
-        "SOXL",
-        "KORU",
-        "Levered Semiconductors / Levered South Korea",
-        "Levered semiconductor momentum versus levered Korea/cyclical Asia exposure.",
-    ),
-    RatioSpec(
-        "XLY",
-        "XLP",
-        "Consumer Discretionary / Staples",
-        "Consumer cyclicals versus defensives.",
     ),
     RatioSpec(
         "KRE",
@@ -230,10 +194,196 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
         "China beta versus broader EM; isolates whether China is leading or dragging the complex.",
     ),
     RatioSpec(
-        "CPER",
+        "TLT",
         "GLD",
-        "Copper / Gold",
-        "Cyclical metal versus monetary hedge; reflation and growth pressure versus fear.",
+        "Long Treasuries / Gold",
+        "Long-duration sovereign confidence versus monetary and fiscal defense.",
+    ),
+    RatioSpec(
+        "UUP",
+        "GLD",
+        "Dollar / Gold",
+        "Separates dollar strength from gold-led monetary and credibility demand.",
+    ),
+    RatioSpec(
+        "FXY",
+        "UUP",
+        "Yen / Dollar",
+        "Direct policy-divergence and carry-unwind signal between the yen and dollar.",
+    ),
+    RatioSpec(
+        "FXA",
+        "UUP",
+        "Australian Dollar / US Dollar",
+        "Commodity, China, global-growth, and carry appetite versus dollar defensiveness.",
+    ),
+    RatioSpec(
+        "BKLN",
+        "IEF",
+        "Senior Loans / Intermediate Treasuries",
+        "Floating-rate credit risk versus duration; useful for funding and default pressure.",
+    ),
+    RatioSpec(
+        "IEF",
+        "SHY",
+        "Intermediate Treasuries / Treasury Bills",
+        "Intermediate-duration demand versus cash; a cleaner easing and growth-scare signal.",
+    ),
+    RatioSpec(
+        "GDX",
+        "GLD",
+        "Gold Miners / Gold",
+        "Mining operating leverage, cost pressure, and equity beta versus bullion.",
+    ),
+    RatioSpec(
+        "SIL",
+        "SLV",
+        "Silver Miners / Silver",
+        "Silver-miner operating leverage and margin pressure versus the underlying metal.",
+    ),
+    RatioSpec(
+        "UNG",
+        "USO",
+        "Natural Gas / Oil",
+        "Domestic weather and storage scarcity versus the global crude-demand cycle.",
+    ),
+    RatioSpec(
+        "DBA",
+        "DBC",
+        "Agriculture / Broad Commodities",
+        "Food inflation and crop stress versus the broader energy-and-metals complex.",
+    ),
+    RatioSpec(
+        "XBI",
+        "XLV",
+        "Biotech / Healthcare",
+        "Early-stage funding and innovation appetite versus established healthcare.",
+    ),
+    RatioSpec(
+        "ARKK",
+        "QQQ",
+        "Speculative Innovation / Nasdaq 100",
+        "Unprofitable long-duration growth versus profitable mega-cap technology.",
+    ),
+    RatioSpec(
+        "IPO",
+        "QQQ",
+        "Recent IPOs / Nasdaq 100",
+        "New-issue risk appetite versus established large-cap growth leadership.",
+    ),
+    RatioSpec(
+        "XRT",
+        "XLP",
+        "Retail / Consumer Staples",
+        "Consumer breadth and discretionary demand versus defensive consumption.",
+    ),
+    RatioSpec(
+        "XME",
+        "XLI",
+        "Metals & Mining / Industrials",
+        "Upstream materials and inflation beta versus downstream industrial capex.",
+    ),
+    RatioSpec(
+        "PAVE",
+        "SPY",
+        "US Infrastructure / S&P 500",
+        "Infrastructure, reshoring, and physical-capex leadership versus the broad market.",
+    ),
+    RatioSpec(
+        "INDA",
+        "EEM",
+        "India / Emerging Markets",
+        "India's domestic-growth premium versus the broader emerging-market complex.",
+    ),
+    RatioSpec(
+        "NVDA",
+        "AVGO",
+        "Nvidia / Broadcom",
+        "GPU-platform leadership versus custom silicon, networking, and hyperscaler exposure.",
+    ),
+    RatioSpec(
+        "AMD",
+        "NVDA",
+        "AMD / Nvidia",
+        "AI-accelerator challenger momentum versus the incumbent GPU platform.",
+    ),
+    RatioSpec(
+        "MU",
+        "SMH",
+        "Micron / Semiconductors",
+        "Memory-cycle and high-bandwidth-memory leadership versus the chip complex.",
+    ),
+    RatioSpec(
+        "ANET",
+        "SMH",
+        "Arista / Semiconductors",
+        "AI networking and Ethernet scale-out demand versus compute silicon.",
+    ),
+    RatioSpec(
+        "COHR",
+        "SMH",
+        "Coherent / Semiconductors",
+        "Optical interconnect and photonics demand versus compute silicon.",
+    ),
+    RatioSpec(
+        "PLTR",
+        "IGV",
+        "Palantir / Software",
+        "AI application monetization and government demand versus broad software.",
+    ),
+    RatioSpec(
+        "ORCL",
+        "MSFT",
+        "Oracle / Microsoft",
+        "AI infrastructure and cloud challenger momentum versus the incumbent platform.",
+    ),
+    RatioSpec(
+        "VST",
+        "XLU",
+        "Vistra / Utilities",
+        "Merchant-power and data-center scarcity value versus regulated utilities.",
+    ),
+    RatioSpec(
+        "ETN",
+        "XLI",
+        "Eaton / Industrials",
+        "Electrification, grid equipment, and data-center power exposure versus industrials.",
+    ),
+    RatioSpec(
+        "JPM",
+        "KRE",
+        "JPMorgan / Regional Banks",
+        "Money-center balance-sheet strength versus regional-bank credit and funding risk.",
+    ),
+    RatioSpec(
+        "GS",
+        "JPM",
+        "Goldman Sachs / JPMorgan",
+        "Capital-markets and advisory activity versus diversified money-center banking.",
+    ),
+    RatioSpec(
+        "COST",
+        "WMT",
+        "Costco / Walmart",
+        "Membership-led and higher-income consumption versus mass-market defensive retail.",
+    ),
+    RatioSpec(
+        "LLY",
+        "NVO",
+        "Eli Lilly / Novo Nordisk",
+        "Direct obesity-market, pipeline, pricing, and execution leadership.",
+    ),
+    RatioSpec(
+        "COIN",
+        "IBIT",
+        "Coinbase / Bitcoin ETF",
+        "Crypto trading, custody, and regulatory beta versus spot Bitcoin exposure.",
+    ),
+    RatioSpec(
+        "MSTR",
+        "IBIT",
+        "Strategy / Bitcoin ETF",
+        "Balance-sheet leverage and equity premium versus spot Bitcoin exposure.",
     ),
 ]
 
