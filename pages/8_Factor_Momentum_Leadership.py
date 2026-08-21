@@ -1,1550 +1,1111 @@
-import hashlib
-import json
-import time
+import warnings
 from dataclasses import dataclass
-from datetime import date, datetime
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from datetime import date, datetime, timedelta
+from html import escape as html_escape
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.palette import PASTEL, PASTEL_20
+from adfm_core.palette import PASTEL
 from adfm_core.ui import PageHeader, render_footer, render_page_header
 import yfinance as yf
+from plotly.subplots import make_subplots
 
-# =========================================================
-# Page config
-# =========================================================
-st.set_page_config(page_title="Factor Momentum Leadership", layout="wide")
-plt.style.use("default")
+warnings.filterwarnings("ignore", category=FutureWarning)
+pd.options.mode.chained_assignment = None
 
-# =========================================================
-# Config
-# =========================================================
-TITLE = "Factor Momentum Leadership"
-SUBTITLE = "Relative factor leadership, regime pressure, rotation, and data-quality diagnostics."
-
-PASTEL_GREEN = PASTEL["sage"]
-PASTEL_RED = PASTEL["rose"]
-PASTEL_GREY = "#8b949e"
-PASTEL_BLUE = PASTEL["blue"]
-PASTEL_ORANGE = PASTEL["coral"]
-PASTEL_PURPLE = PASTEL["lavender"]
-PASTEL_YELLOW = PASTEL["amber"]
-PASTEL_TEAL = PASTEL["teal"]
-
-PALETTE = list(PASTEL_20)
-
-TEXT = "#222222"
-SUBTLE = "#666666"
-GRID = "#E6E6E6"
-BORDER = "#E0E0E0"
-CARD_BG = "#FAFAFA"
-
-CACHE_DIR = Path(".adfm_factor_cache")
-CACHE_DIR.mkdir(exist_ok=True)
-
-CUSTOM_CSS = """
-<style>
-    .block-container {
-        padding-top: 1.2rem;
-        padding-bottom: 2rem;
-        max-width: 1500px;
-    }
-
-    h1, h2, h3 {
-        font-weight: 600;
-        letter-spacing: 0.15px;
-        color: #222222;
-    }
-
-    div[data-testid="stCaptionContainer"] {
-        color: #666666;
-    }
-</style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-# =========================================================
-# Factor universe
-# =========================================================
-@dataclass(frozen=True)
-class FactorPair:
-    name: str
-    numerator: str
-    denominator: Optional[str]
-    category: str
-    interpretation: str
-
-    @property
-    def expression(self) -> str:
-        if self.denominator:
-            return f"{self.numerator} / {self.denominator}"
-        return self.numerator
-
-
-FACTOR_PAIRS: List[FactorPair] = [
-    FactorPair(
-        name="Growth vs Value",
-        numerator="VUG",
-        denominator="VTV",
-        category="Equity Style",
-        interpretation="Growth leadership versus value leadership.",
-    ),
-    FactorPair(
-        name="Momentum vs Min Vol",
-        numerator="MTUM",
-        denominator="USMV",
-        category="Equity Style",
-        interpretation="Price momentum leadership versus minimum-volatility equities.",
-    ),
-    FactorPair(
-        name="GARP vs Pure Growth",
-        numerator="SPGP",
-        denominator="IWF",
-        category="Equity Style",
-        interpretation="Growth-at-a-reasonable-price leadership versus pure large-cap growth.",
-    ),
-    FactorPair(
-        name="Small Value vs Small Growth",
-        numerator="IWN",
-        denominator="IWO",
-        category="Equity Style",
-        interpretation="Small-cap value leadership versus small-cap growth.",
-    ),
-    FactorPair(
-        name="Quality vs Spec Growth",
-        numerator="QUAL",
-        denominator="ARKK",
-        category="Equity Style",
-        interpretation="Quality balance sheets versus speculative long-duration growth.",
-    ),
-    FactorPair(
-        name="High Beta vs Low Vol",
-        numerator="SPHB",
-        denominator="SPLV",
-        category="Risk Appetite",
-        interpretation="High-beta equities versus low-volatility defensives.",
-    ),
-    FactorPair(
-        name="Small vs Large",
-        numerator="IWM",
-        denominator="SPY",
-        category="Market Breadth",
-        interpretation="Small-cap participation versus S&P 500 leadership.",
-    ),
-    FactorPair(
-        name="Equal Weight vs Cap Weight",
-        numerator="RSP",
-        denominator="SPY",
-        category="Market Breadth",
-        interpretation="Average-stock participation versus cap-weighted concentration.",
-    ),
-    FactorPair(
-        name="Microcap vs Market",
-        numerator="IWC",
-        denominator="SPY",
-        category="Market Breadth",
-        interpretation="Microcap participation and liquidity reach versus the broad market.",
-    ),
-    FactorPair(
-        name="Free Cash Flow Yield",
-        numerator="COWZ",
-        denominator="SPY",
-        category="Fundamental Quality",
-        interpretation="High free-cash-flow-yield companies versus the broad market.",
-    ),
-    FactorPair(
-        name="Buybacks vs Market",
-        numerator="PKW",
-        denominator="SPY",
-        category="Capital Returns",
-        interpretation="Companies returning capital through buybacks versus the broad market.",
-    ),
-    FactorPair(
-        name="Dividend Quality vs High Yield",
-        numerator="NOBL",
-        denominator="SPYD",
-        category="Capital Returns",
-        interpretation="Durable dividend growth versus the highest-yielding S&P 500 equities.",
-    ),
-    FactorPair(
-        name="Hedge Fund Crowding",
-        numerator="GVIP",
-        denominator="SPY",
-        category="Positioning",
-        interpretation="Concentrated hedge-fund favorite longs versus the broad market.",
-    ),
-    FactorPair(
-        name="IPO Risk Appetite",
-        numerator="IPO",
-        denominator="SPY",
-        category="Risk Appetite",
-        interpretation="Recently listed companies versus the broad market.",
-    ),
-    FactorPair(
-        name="Biotech Risk Appetite",
-        numerator="XBI",
-        denominator="XLV",
-        category="Risk Appetite",
-        interpretation="Early-stage and equal-weight biotech versus established healthcare.",
-    ),
-    FactorPair(
-        name="Tech vs Broad Market",
-        numerator="XLK",
-        denominator="SPY",
-        category="Sector Leadership",
-        interpretation="Technology sector leadership versus the broad market.",
-    ),
-    FactorPair(
-        name="Semis vs Tech",
-        numerator="SMH",
-        denominator="XLK",
-        category="Technology Internals",
-        interpretation="Semiconductor leadership versus the broader technology sector.",
-    ),
-    FactorPair(
-        name="Semis vs Software",
-        numerator="SMH",
-        denominator="IGV",
-        category="Technology Internals",
-        interpretation="Semiconductor and AI hardware leadership versus software leadership.",
-    ),
-    FactorPair(
-        name="Cyclicals vs Staples",
-        numerator="XLY",
-        denominator="XLP",
-        category="Cycle Signal",
-        interpretation="Consumer cyclicals versus staples defensiveness.",
-    ),
-    FactorPair(
-        name="Industrials vs Materials",
-        numerator="XLI",
-        denominator="XLB",
-        category="Cycle Signal",
-        interpretation="Industrial capex and production leadership versus materials and input-cost exposure.",
-    ),
-    FactorPair(
-        name="Regional Banks vs REITs",
-        numerator="KRE",
-        denominator="XLRE",
-        category="Rates and Credit",
-        interpretation="Regional-bank credit and curve sensitivity versus real-estate duration sensitivity.",
-    ),
-    FactorPair(
-        name="US vs Ex-US",
-        numerator="SPY",
-        denominator="VXUS",
-        category="Global Equity",
-        interpretation="US equity leadership versus non-US equities.",
-    ),
-    FactorPair(
-        name="EM vs DM Ex-US",
-        numerator="EEM",
-        denominator="VEA",
-        category="Global Equity",
-        interpretation="Emerging markets versus developed ex-US equities.",
-    ),
-    FactorPair(
-        name="High Yield Credit vs Treasuries",
-        numerator="HYG",
-        denominator="IEF",
-        category="Credit Risk",
-        interpretation="Credit risk appetite versus intermediate Treasuries.",
-    ),
-    FactorPair(
-        name="Long Duration vs Bills",
-        numerator="TLT",
-        denominator="SHY",
-        category="Rates",
-        interpretation="Long-duration Treasury performance versus short bills.",
-    ),
-]
-
-BENCH = "SPY"
-
-WINDOW_MAP_DAYS: Dict[str, int] = {
-    "1M": 21,
-    "3M": 63,
-    "6M": 126,
-    "1Y": 252,
-    "3Y": 252 * 3,
-    "5Y": 252 * 5,
-    "10Y": 252 * 10,
-}
-
-# =========================================================
-# General helpers
-# =========================================================
-def _chunk(lst: List[str], n: int) -> List[List[str]]:
-    n = max(1, int(n))
-    return [lst[i : i + n] for i in range(0, len(lst), n)]
-
-
-def _safe_upper(value: Optional[str]) -> Optional[str]:
-    if value is None:
-        return None
-    out = str(value).upper().strip()
-    return out if out else None
-
-
-def _hash_key(prefix: str, payload: Dict) -> str:
-    raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:18]
-    return f"{prefix}_{digest}"
-
-
-def _cache_path(name: str) -> Path:
-    safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name)
-    return CACHE_DIR / f"{safe_name}.pkl"
-
-
-def _cache_meta_path(name: str) -> Path:
-    safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name)
-    return CACHE_DIR / f"{safe_name}.json"
-
-
-def _load_last_good_cache(name: str) -> Tuple[pd.DataFrame, Dict]:
-    path = _cache_path(name)
-    meta_path = _cache_meta_path(name)
-
-    if not path.exists():
-        return pd.DataFrame(), {}
-
-    try:
-        df = pd.read_pickle(path)
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-
-        meta = {}
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text())
-            except Exception:
-                meta = {}
-
-        return df, meta
-
-    except Exception:
-        return pd.DataFrame(), {}
-
-
-def _save_last_good_cache(name: str, df: pd.DataFrame, meta: Dict) -> None:
-    if df is None or df.empty:
-        return
-
-    try:
-        df.to_pickle(_cache_path(name))
-        _cache_meta_path(name).write_text(json.dumps(meta, indent=2, default=str))
-    except Exception:
-        pass
-
-
-def _last_valid_date(series: pd.Series) -> Optional[pd.Timestamp]:
-    s = series.dropna()
-
-    if s.empty:
-        return None
-
-    return pd.Timestamp(s.index.max()).normalize()
-
-
-def _format_date(value: Optional[pd.Timestamp]) -> str:
-    if value is None or pd.isna(value):
-        return "n/a"
-
-    return pd.Timestamp(value).strftime("%Y-%m-%d")
-
-# =========================================================
-# Math helpers
-# =========================================================
-def pct_change_window(series: pd.Series, days: int) -> float:
-    s = series.dropna()
-    days = int(days)
-
-    if days <= 0 or len(s) <= days:
-        return np.nan
-
-    base = s.iloc[-(days + 1)]
-
-    if pd.isna(base) or base == 0:
-        return np.nan
-
-    return float(s.iloc[-1] / base - 1.0)
-
-
-def ema(series: pd.Series, span: int) -> pd.Series:
-    s = series.dropna()
-    return s.ewm(span=span, adjust=False).mean()
-
-
-def trend_class(series: pd.Series) -> str:
-    s = series.dropna()
-
-    if len(s) < 50:
-        return "Neutral"
-
-    e10 = ema(s, 10).iloc[-1]
-    e20 = ema(s, 20).iloc[-1]
-    e40 = ema(s, 40).iloc[-1]
-
-    if e10 > e20 > e40:
-        return "Up"
-
-    if e10 < e20 < e40:
-        return "Down"
-
-    return "Neutral"
-
-
-def inflection(short_ret: float, long_ret: float) -> str:
-    if pd.isna(short_ret) or pd.isna(long_ret):
-        return "Neutral"
-
-    if short_ret > 0 and long_ret < 0:
-        return "Turning Up"
-
-    if short_ret < 0 and long_ret > 0:
-        return "Turning Down"
-
-    if short_ret > 0 and long_ret > 0:
-        return "Confirmed Up"
-
-    if short_ret < 0 and long_ret < 0:
-        return "Confirmed Down"
-
-    return "Mixed"
-
-
-def slope_zscore(series: pd.Series, lookback: int = 20, history: int = 252) -> float:
-    s = series.dropna()
-    lookback = int(max(5, lookback))
-    history = int(max(40, history))
-
-    if len(s) < lookback + 25:
-        return np.nan
-
-    r = s.pct_change().dropna()
-    roll = r.rolling(lookback).mean().dropna()
-    ref = roll.tail(history)
-
-    if len(ref) < max(20, lookback):
-        return np.nan
-
-    mu = ref.mean()
-    sd = ref.std(ddof=0)
-
-    if sd == 0 or pd.isna(sd):
-        return 0.0
-
-    return float((roll.iloc[-1] - mu) / sd)
-
-
-def trend_strength(series: pd.Series) -> float:
-    s = series.dropna()
-
-    if len(s) < 50:
-        return np.nan
-
-    e10 = ema(s, 10)
-    e40 = ema(s, 40)
-
-    if e40.iloc[-1] == 0 or pd.isna(e40.iloc[-1]):
-        return np.nan
-
-    return float((e10.iloc[-1] - e40.iloc[-1]) / e40.iloc[-1])
-
-
-def normalized_series(series: pd.Series) -> pd.Series:
-    s = series.dropna()
-
-    if s.empty or s.iloc[0] == 0:
-        return s
-
-    return s / s.iloc[0] * 100.0
-
-
-def robust_z_cross_section(series: pd.Series) -> pd.Series:
-    s = series.astype(float).replace([np.inf, -np.inf], np.nan)
-
-    if s.dropna().empty:
-        return pd.Series(0.0, index=s.index)
-
-    median = s.median(skipna=True)
-    mad = (s - median).abs().median(skipna=True)
-
-    if pd.isna(mad) or mad == 0:
-        std = s.std(skipna=True, ddof=0)
-
-        if pd.isna(std) or std == 0:
-            return pd.Series(0.0, index=s.index)
-
-        z = (s - s.mean(skipna=True)) / std
-        return z.clip(-3, 3).fillna(0.0)
-
-    z = 0.6745 * (s - median) / mad
-    return z.clip(-3, 3).fillna(0.0)
-
-
-def latest_return_percentile(series: pd.Series, days: int, min_samples: int = 60) -> float:
-    s = series.dropna()
-    days = int(days)
-
-    if days <= 0 or len(s) < days + min_samples:
-        return np.nan
-
-    returns = (s / s.shift(days) - 1.0).replace([np.inf, -np.inf], np.nan).dropna()
-
-    if len(returns) < min_samples:
-        return np.nan
-
-    current = returns.iloc[-1]
-
-    if pd.isna(current):
-        return np.nan
-
-    return float((returns <= current).mean() * 100.0)
-
-
-def percentile_signal(value: float) -> float:
-    if pd.isna(value):
-        return 0.0
-
-    return float(np.clip((value - 50.0) / 50.0, -1.0, 1.0))
-
-
-def build_relative_series(a: pd.Series, b: pd.Series, min_obs: int = 60) -> pd.Series:
-    aligned = pd.concat([a, b], axis=1).dropna()
-
-    if len(aligned) < min_obs:
-        return pd.Series(dtype=float)
-
-    denom = aligned.iloc[:, 1].replace(0, np.nan)
-    out = aligned.iloc[:, 0] / denom
-    out = out.replace([np.inf, -np.inf], np.nan).dropna()
-    out.name = f"{a.name}_vs_{b.name}"
-
-    return out
-
-# =========================================================
-# Data download and normalization
-# =========================================================
-def _normalize_yf_download(df: pd.DataFrame, requested: List[str]) -> pd.DataFrame:
-    requested = [_safe_upper(x) for x in requested if x]
-    requested = [x for x in requested if x]
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    out: Optional[pd.DataFrame] = None
-
-    if not isinstance(df.columns, pd.MultiIndex):
-        cols_lower = {str(c).lower(): c for c in df.columns}
-        price_col = None
-
-        for candidate in ("close", "adj close"):
-            if candidate in cols_lower:
-                price_col = cols_lower[candidate]
-                break
-
-        if price_col is not None:
-            s = df[price_col].copy()
-            ticker = requested[0] if requested else "TICKER"
-            s.name = ticker
-            out = s.to_frame()
-
-    if out is None and isinstance(df.columns, pd.MultiIndex):
-        level0 = [str(x) for x in df.columns.get_level_values(0)]
-        level1 = [str(x) for x in df.columns.get_level_values(1)]
-
-        if "Close" in level0 or "Adj Close" in level0:
-            field = "Close" if "Close" in level0 else "Adj Close"
-
-            try:
-                tmp = df[field].copy()
-
-                if isinstance(tmp, pd.Series):
-                    tmp = tmp.to_frame()
-
-                tmp.columns = [_safe_upper(c) for c in tmp.columns]
-                out = tmp
-
-            except Exception:
-                out = None
-
-        if out is None:
-            candidate_fields = {"Close", "Adj Close"}
-
-            if any(f in level1 for f in candidate_fields):
-                frames = {}
-
-                for ticker in requested:
-                    for field in ("Close", "Adj Close"):
-                        key = (ticker, field)
-
-                        if key in df.columns:
-                            frames[ticker] = df[key]
-                            break
-
-                if frames:
-                    out = pd.DataFrame(frames)
-
-    if out is None or out.empty:
-        return pd.DataFrame()
-
-    out = out.copy()
-    out.index = pd.to_datetime(out.index).normalize()
-    out = out.sort_index()
-    out = out.loc[:, ~out.columns.duplicated()]
-    out.columns = [_safe_upper(c) for c in out.columns]
-
-    valid_cols = [c for c in requested if c in out.columns]
-
-    if not valid_cols:
-        return pd.DataFrame()
-
-    return out[valid_cols]
-
-
-def _download_batch_once(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    batch = [_safe_upper(x) for x in batch if x]
-    batch = [x for x in batch if x]
-
-    if not batch:
-        return pd.DataFrame()
-
-    try:
-        data = yf.download(
-            tickers=batch if len(batch) > 1 else batch[0],
-            start=start,
-            end=end,
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-            group_by="column",
-        )
-        return _normalize_yf_download(data, batch)
-
-    except Exception:
-        return pd.DataFrame()
-
-
-def _download_one_by_one(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    frames = []
-
-    for ticker in batch:
-        out = pd.DataFrame()
-
-        for attempt in range(3):
-            out = _download_batch_once([ticker], start, end)
-
-            if not out.empty and ticker in out.columns and out[ticker].dropna().shape[0] > 0:
-                break
-
-            time.sleep(0.6 + attempt * 0.2)
-
-        if not out.empty:
-            frames.append(out)
-
-    if not frames:
-        return pd.DataFrame()
-
-    wide = pd.concat(frames, axis=1)
-    wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
-
-    return wide
-
-
-@st.cache_data(show_spinner=False, ttl=1800)
-def fetch_daily_levels(
-    tickers: Tuple[str, ...],
-    start_str: str,
-    end_str: str,
-    chunk_size: int = 25,
-) -> Tuple[pd.DataFrame, Dict]:
-    uniq = sorted({_safe_upper(t) for t in tickers if t})
-    uniq = [t for t in uniq if t]
-
-    start = pd.Timestamp(start_str)
-    end = pd.Timestamp(end_str)
-
-    if not uniq:
-        return pd.DataFrame(), {"mode": "empty", "message": "No tickers requested."}
-
-    cache_key = _hash_key(
-        "levels",
-        {
-            "tickers": uniq,
-            "start": start.strftime("%Y-%m-%d"),
-            "end": end.strftime("%Y-%m-%d"),
-        },
-    )
-
-    cached_df, cached_meta = _load_last_good_cache(cache_key)
-
-    frames: List[pd.DataFrame] = []
-    live_found = set()
-
-    for batch in _chunk(uniq, chunk_size):
-        out = pd.DataFrame()
-
-        for attempt in range(3):
-            out = _download_batch_once(batch, start, end)
-
-            if not out.empty:
-                break
-
-            time.sleep(0.6 + attempt * 0.25)
-
-        if not out.empty:
-            frames.append(out)
-            live_found.update([c for c in out.columns if out[c].dropna().shape[0] > 0])
-
-    missing_after_batch = [t for t in uniq if t not in live_found]
-
-    if missing_after_batch:
-        rescue = _download_one_by_one(missing_after_batch, start, end)
-
-        if not rescue.empty:
-            frames.append(rescue)
-            live_found.update([c for c in rescue.columns if rescue[c].dropna().shape[0] > 0])
-
-    if frames:
-        wide = pd.concat(frames, axis=1)
-        wide = wide.loc[:, ~wide.columns.duplicated()]
-        wide = wide.sort_index()
-        wide = wide[[c for c in uniq if c in wide.columns]]
-        wide = wide.ffill(limit=3)
-
-        cache_rescue = []
-
-        if not cached_df.empty:
-            for ticker in uniq:
-                if ticker not in wide.columns and ticker in cached_df.columns:
-                    wide[ticker] = cached_df[ticker]
-                    cache_rescue.append(ticker)
-
-            wide = wide[[c for c in uniq if c in wide.columns]]
-            wide = wide.sort_index()
-
-        missing = [t for t in uniq if t not in wide.columns or wide[t].dropna().empty]
-        mode = "live_plus_cache" if cache_rescue else "live"
-
-        meta = {
-            "mode": mode,
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "live_tickers": sorted(live_found),
-            "cache_rescue_tickers": cache_rescue,
-            "missing_tickers": missing,
-            "last_index": _format_date(pd.Timestamp(wide.index.max()) if not wide.empty else None),
-            "prior_cache_fetched_at": cached_meta.get("fetched_at"),
-        }
-
-        if not wide.empty:
-            _save_last_good_cache(cache_key, wide, meta)
-
-        return wide, meta
-
-    if not cached_df.empty:
-        missing = [t for t in uniq if t not in cached_df.columns or cached_df[t].dropna().empty]
-
-        cached_df = cached_df[[c for c in uniq if c in cached_df.columns]].sort_index()
-
-        meta = {
-            "mode": "cache",
-            "fetched_at": cached_meta.get("fetched_at", "unknown"),
-            "cache_loaded_at": datetime.now().isoformat(timespec="seconds"),
-            "live_tickers": [],
-            "cache_rescue_tickers": [c for c in cached_df.columns if c in uniq],
-            "missing_tickers": missing,
-            "last_index": _format_date(pd.Timestamp(cached_df.index.max()) if not cached_df.empty else None),
-        }
-
-        return cached_df, meta
-
-    return pd.DataFrame(), {
-        "mode": "empty",
-        "fetched_at": datetime.now().isoformat(timespec="seconds"),
-        "missing_tickers": uniq,
-        "message": "Yahoo returned no usable close data and no last-good cache was available.",
-    }
-
-# =========================================================
-# State and styling helpers
-# =========================================================
-def factor_state(score: float) -> str:
-    if pd.isna(score):
-        return "Unscored"
-
-    if score >= 70:
-        return "Leader"
-
-    if score >= 57:
-        return "Positive"
-
-    if score > 43:
-        return "Neutral"
-
-    if score > 30:
-        return "Weak"
-
-    return "Laggard"
-
-
-def composite_color(score: float) -> str:
-    if pd.isna(score):
-        return PASTEL_GREY
-
-    if score >= 57:
-        return PASTEL_GREEN
-
-    if score <= 43:
-        return PASTEL_RED
-
-    return PASTEL_GREY
-
-
-def style_state(value: str) -> str:
-    if value in ("Leader", "Positive"):
-        return f"background-color: {PASTEL_GREEN}; color: white; font-weight: 600;"
-
-    if value in ("Weak", "Laggard"):
-        return f"background-color: {PASTEL_RED}; color: white; font-weight: 600;"
-
-    return f"background-color: {PASTEL_GREY}; color: white; font-weight: 600;"
-
-
-def style_pct_value(value: float) -> str:
-    try:
-        v = float(value)
-    except Exception:
-        return ""
-
-    if v > 0:
-        return f"color: {PASTEL_GREEN}; font-weight: 600;"
-
-    if v < 0:
-        return f"color: {PASTEL_RED}; font-weight: 600;"
-
-    return "color: #555555;"
-
-# =========================================================
-# Plot helpers
-# =========================================================
-def plot_factor_grid(
-    plot_df: pd.DataFrame,
-    mom_df: pd.DataFrame,
-    normalize_charts: bool,
-    show_ema: bool,
-) -> Optional[plt.Figure]:
-    if plot_df.empty or len(plot_df.columns) == 0:
-        return None
-
-    n_factors = len(plot_df.columns)
-    ncols = 3
-    nrows = int(np.ceil(n_factors / ncols))
-
-    fig, axes = plt.subplots(nrows, ncols, figsize=(15, 4.1 * nrows), squeeze=False)
-    axes = axes.ravel()
-
-    if len(plot_df.index) > 1:
-        span_days = (plot_df.index[-1] - plot_df.index[0]).days
-    else:
-        span_days = 0
-
-    if span_days <= 120:
-        locator = mdates.WeekdayLocator(interval=2)
-        formatter = mdates.DateFormatter("%b %d")
-    elif span_days <= 420:
-        locator = mdates.MonthLocator()
-        formatter = mdates.DateFormatter("%b")
-    else:
-        locator = mdates.YearLocator()
-        formatter = mdates.DateFormatter("%Y")
-
-    for i, factor_name in enumerate(plot_df.columns):
-        ax = axes[i]
-        s = plot_df[factor_name].dropna()
-
-        if s.empty:
-            ax.axis("off")
-            continue
-
-        if factor_name in mom_df.index:
-            color = composite_color(mom_df.loc[factor_name, "Composite"])
-        else:
-            color = PALETTE[i % len(PALETTE)]
-
-        ax.plot(s.index, s.values, color=color, linewidth=2.1)
-
-        if show_ema and len(s) >= 20 and not normalize_charts:
-            e20 = ema(s, 20)
-            ax.plot(e20.index, e20.values, color="#777777", linewidth=1.0, alpha=0.9)
-
-        latest = s.iloc[-1]
-
-        if factor_name in mom_df.index:
-            latest_short = mom_df.loc[factor_name, "Short"] * 100.0
-            latest_long = mom_df.loc[factor_name, "Long"] * 100.0
-            composite = mom_df.loc[factor_name, "Composite"]
-            title = f"{factor_name}\nScore {composite:.1f} | S {latest_short:.1f}% | L {latest_long:.1f}%"
-        else:
-            title = factor_name
-
-        ax.set_title(title, color=TEXT, fontsize=10.5, pad=8)
-        ax.grid(color=GRID, linewidth=0.6, alpha=0.7)
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
-        ax.tick_params(axis="x", labelsize=8)
-        ax.tick_params(axis="y", labelsize=8)
-
-        for spine in ["top", "right"]:
-            ax.spines[spine].set_visible(False)
-
-        ax.scatter(s.index[-1], latest, s=20, color=color, zorder=3)
-
-    for j in range(n_factors, len(axes)):
-        axes[j].axis("off")
-
-    fig.tight_layout()
-
-    return fig
-
-
-def plot_composite_bar(mom_df: pd.DataFrame) -> plt.Figure:
-    df = mom_df.sort_values("Composite", ascending=True).copy()
-    height = max(4.5, 0.42 * len(df))
-
-    fig, ax = plt.subplots(figsize=(10.5, height))
-
-    colors = [composite_color(v) for v in df["Composite"]]
-    ax.barh(df.index, df["Composite"], color=colors, edgecolor="#FFFFFF", linewidth=0.8)
-
-    ax.axvline(50, color="#777777", linewidth=1.0, alpha=0.9)
-    ax.axvline(57, color=PASTEL_GREEN, linewidth=0.8, alpha=0.7)
-    ax.axvline(43, color=PASTEL_RED, linewidth=0.8, alpha=0.7)
-
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Composite leadership score", color=TEXT)
-    ax.set_title("Factor Ranking", color=TEXT, pad=10)
-    ax.grid(axis="x", color=GRID, linewidth=0.6, alpha=0.7)
-    ax.tick_params(axis="x", labelsize=9)
-    ax.tick_params(axis="y", labelsize=9)
-
-    for spine in ["top", "right", "left"]:
-        ax.spines[spine].set_visible(False)
-
-    for y, value in enumerate(df["Composite"]):
-        ax.text(min(value + 1.2, 97.0), y, f"{value:.1f}", va="center", fontsize=8, color="#333333")
-
-    fig.tight_layout()
-
-    return fig
-
-
-def plot_leadership_map(mom_df: pd.DataFrame) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(8.8, 6.6))
-
-    short_vals = mom_df["Short"] * 100.0
-    long_vals = mom_df["Long"] * 100.0
-
-    x_abs = max(abs(short_vals.min()), abs(short_vals.max()), 1.0)
-    y_abs = max(abs(long_vals.min()), abs(long_vals.max()), 1.0)
-
-    pad_x = x_abs * 0.18
-    pad_y = y_abs * 0.18
-
-    ax.set_xlim(-x_abs - pad_x, x_abs + pad_x)
-    ax.set_ylim(-y_abs - pad_y, y_abs + pad_y)
-
-    x_min, x_max = ax.get_xlim()
-    y_min, y_max = ax.get_ylim()
-
-    ax.fill_between([0, x_max], 0, y_max, color="#DDF3E7", alpha=0.8)
-    ax.fill_between([x_min, 0], 0, y_max, color="#FFF2C2", alpha=0.8)
-    ax.fill_between([x_min, 0], y_min, 0, color="#FAD7D7", alpha=0.8)
-    ax.fill_between([0, x_max], y_min, 0, color="#FFE3B5", alpha=0.8)
-
-    ax.axvline(0, color="#777777", linewidth=1)
-    ax.axhline(0, color="#777777", linewidth=1)
-
-    ax.text(
-        x_max * 0.58,
-        y_max * 0.78,
-        "Short up / Long up\nEstablished leaders",
-        fontsize=9,
-        ha="center",
-        va="center",
-        color="#333333",
-    )
-    ax.text(
-        x_min * 0.58,
-        y_max * 0.78,
-        "Short down / Long up\nMean reversion risk",
-        fontsize=9,
-        ha="center",
-        va="center",
-        color="#333333",
-    )
-    ax.text(
-        x_min * 0.58,
-        y_min * 0.78,
-        "Short down / Long down\nPersistent laggards",
-        fontsize=9,
-        ha="center",
-        va="center",
-        color="#333333",
-    )
-    ax.text(
-        x_max * 0.58,
-        y_min * 0.78,
-        "Short up / Long down\nNew rotations",
-        fontsize=9,
-        ha="center",
-        va="center",
-        color="#333333",
-    )
-
-    for factor_name in mom_df.index:
-        x = short_vals.loc[factor_name]
-        y = long_vals.loc[factor_name]
-        score = mom_df.loc[factor_name, "Composite"]
-
-        ax.scatter(
-            x,
-            y,
-            s=80,
-            color=composite_color(score),
-            edgecolor="#444444",
-            linewidth=0.6,
-            zorder=3,
-        )
-        ax.annotate(
-            factor_name,
-            xy=(x, y),
-            xytext=(4, 3),
-            textcoords="offset points",
-            fontsize=8.5,
-            va="center",
-            color="#111111",
-        )
-
-    ax.set_xlabel("Short-window return %", color=TEXT)
-    ax.set_ylabel("Long-window return %", color=TEXT)
-    ax.set_title("Short vs Long Momentum", color=TEXT, pad=10)
-    ax.grid(color=GRID, linewidth=0.6, alpha=0.6)
-
-    for spine in ["top", "right"]:
-        ax.spines[spine].set_visible(False)
-
-    fig.tight_layout()
-
-    return fig
-
-# =========================================================
-# Sidebar
-# =========================================================
+# ============================== Page config ==============================
+st.set_page_config(layout="wide", page_title="Factor Momentum Leadership")
 render_page_header(
     PageHeader(
-        title=TITLE,
-        description=SUBTITLE,
-        eyebrow="ADFM Equity Leadership",
+        title="Factor Momentum Leadership",
+        description=(
+            "Twenty-five relative-strength charts across technology, breadth, cyclicality, "
+            "rates, credit, hard assets, and global leadership."
+        ),
+        eyebrow="ADFM Technicals + Analogs",
     )
 )
 
+st.markdown(
+    """
+    <style>
+    .ratio-chart-heading {
+        margin: 1.1rem 0 .45rem;
+        color: #000000;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 1.08rem;
+        font-weight: 700;
+        line-height: 1.25;
+    }
+
+    @media (max-width: 760px) {
+        .ratio-chart-heading {
+            margin-top: .9rem;
+            font-size: 1rem;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ============================== Defaults =================================
+DEFAULT_LOOKBACK = "3 Years"
+DEFAULT_RSI_WINDOW = 14
+DEFAULT_STALE_DAYS = 7
+
+MA_DEFAULTS = {
+    8: False,
+    21: True,
+    50: True,
+    100: True,
+    200: True,
+}
+
+MA_COLORS = {
+    8: "#6c757d",
+    21: PASTEL["lavender"],
+    50: PASTEL["blue"],
+    100: PASTEL["coral"],
+    200: PASTEL["rose"],
+}
+
+# ============================== Ratio specs ==============================
+@dataclass(frozen=True)
+class RatioSpec:
+    ticker_1: str
+    ticker_2: str
+    label: str
+    note: str = ""
+
+
+RATIO_FAMILIES: Dict[str, List[RatioSpec]] = {
+    "AI / Technology Leadership": [
+        RatioSpec(
+            "SMH",
+            "IGV",
+            "Semiconductors / Software",
+            "AI hardware and compute leadership versus software and application-layer leadership.",
+        ),
+        RatioSpec(
+            "SMH",
+            "QQQ",
+            "Semiconductors / Nasdaq 100",
+            "Tests whether chips are leading technology rather than merely participating.",
+        ),
+        RatioSpec(
+            "IGV",
+            "QQQ",
+            "Software / Nasdaq 100",
+            "Tracks whether long-duration software is regaining leadership within technology.",
+        ),
+        RatioSpec(
+            "XLK",
+            "SPY",
+            "Technology / S&P 500",
+            "High-level technology leadership; weakness during an SPX advance signals broadening away from tech.",
+        ),
+        RatioSpec(
+            "XLF",
+            "XLK",
+            "Financials / Technology",
+            "A nominal-growth and curve regime ratio: financial breadth versus duration-heavy growth.",
+        ),
+    ],
+    "Breadth / Market Structure": [
+        RatioSpec(
+            "IWM",
+            "SPY",
+            "Small Caps / Large Caps",
+            "Domestic, economically sensitive small-cap participation versus large-cap leadership.",
+        ),
+        RatioSpec(
+            "RSP",
+            "SPY",
+            "Equal Weight / Cap Weight S&P 500",
+            "The cleanest measure of median-stock participation versus mega-cap concentration.",
+        ),
+        RatioSpec(
+            "IJH",
+            "SPY",
+            "Mid Caps / Large Caps",
+            "Confirms broadening with less unprofitable-company contamination than small caps.",
+        ),
+        RatioSpec(
+            "IWD",
+            "IWF",
+            "Value / Growth",
+            "Classic reflation and nominal-growth leadership versus duration-sensitive growth.",
+        ),
+        RatioSpec(
+            "MTUM",
+            "QUAL",
+            "Momentum / Quality",
+            "Distinguishes winner-chasing from balance-sheet and earnings durability; "
+            "reversals flag factor deleveraging.",
+        ),
+    ],
+    "Cyclicals / Defensives": [
+        RatioSpec(
+            "XLY",
+            "XLP",
+            "Consumer Discretionary / Staples",
+            "Consumer-cycle and equity risk-appetite signal; persistent weakness can precede broader growth concerns.",
+        ),
+        RatioSpec(
+            "XLI",
+            "XLU",
+            "Industrials / Utilities",
+            "Cyclical growth and capex expectations versus defensive duration.",
+        ),
+        RatioSpec(
+            "XLF",
+            "XLU",
+            "Financials / Utilities",
+            "Economic activity and curve health versus defensive demand and lower-rate sensitivity.",
+        ),
+        RatioSpec(
+            "XLE",
+            "XLK",
+            "Energy / Technology",
+            "Hard assets and inflation beta versus long-duration growth.",
+        ),
+        RatioSpec(
+            "KRE",
+            "XLF",
+            "Regional Banks / Large Financials",
+            "A hidden credit and funding-conditions signal for domestic growth and banking stress.",
+        ),
+    ],
+    "Rates / Credit / Inflation": [
+        RatioSpec(
+            "TLT",
+            "IEF",
+            "Long Treasuries / Intermediate Treasuries",
+            "Long-end duration leadership; weakness flags term-premium expansion, fiscal pressure, "
+            "inflation risk, or bear steepening.",
+        ),
+        RatioSpec(
+            "TIP",
+            "IEF",
+            "Inflation-Protected / Nominal Treasuries",
+            "Market-based inflation-regime proxy through TIPS relative to nominal duration.",
+        ),
+        RatioSpec(
+            "HYG",
+            "LQD",
+            "High Yield / Investment Grade Credit",
+            "Corporate credit risk appetite and willingness to move down the quality spectrum.",
+        ),
+        RatioSpec(
+            "LQD",
+            "IEF",
+            "Investment Grade Corporates / Treasuries",
+            "Total-return proxy for corporate spread pressure versus intermediate Treasuries.",
+        ),
+        RatioSpec(
+            "EMB",
+            "IEF",
+            "Emerging-Market Debt / Treasuries",
+            "Global liquidity and risk appetite, particularly when read alongside the dollar.",
+        ),
+    ],
+    "Hard Assets / Inflation / Debasement": [
+        RatioSpec(
+            "CPER",
+            "GLD",
+            "Copper / Gold",
+            "Industrial and global-growth demand versus monetary, fiscal, and defensive demand.",
+        ),
+        RatioSpec(
+            "SLV",
+            "GLD",
+            "Silver / Gold",
+            "Industrial reflation and risk appetite versus the more defensive monetary metal.",
+        ),
+        RatioSpec(
+            "USO",
+            "GLD",
+            "Oil / Gold",
+            "Commodity inflation and global-demand pressure versus monetary and fiscal fear.",
+        ),
+        RatioSpec(
+            "IBIT",
+            "GLD",
+            "Bitcoin / Gold",
+            "Speculative liquidity and high-beta debasement demand versus the traditional monetary safe haven.",
+        ),
+    ],
+    "Global Leadership / Dollar Regime": [
+        RatioSpec(
+            "EEM",
+            "SPY",
+            "Emerging Markets / United States",
+            "Broad global-liquidity leadership: EM participation versus U.S. exceptionalism and dollar tightness.",
+        ),
+    ],
+}
+
+RESERVE_RATIO_SPECS: List[RatioSpec] = [
+    RatioSpec(
+        "ITB",
+        "XLU",
+        "Homebuilders / Utilities",
+        "Housing and rate-sensitive cyclicality versus defensive duration.",
+    ),
+    RatioSpec("XHB", "SPY", "Homebuilders / S&P 500", "Housing-cycle leadership versus the broad equity market."),
+    RatioSpec(
+        "XRT",
+        "SPY",
+        "Retail / S&P 500",
+        "Consumer breadth and lower-income demand sensitivity versus the broad market.",
+    ),
+    RatioSpec(
+        "XME",
+        "SPY",
+        "Metals & Mining / S&P 500",
+        "Cyclical materials and industrial inflation beta versus the broad market.",
+    ),
+    RatioSpec(
+        "COPX",
+        "GLD",
+        "Copper Miners / Gold",
+        "Levered copper and global-growth exposure versus monetary defense.",
+    ),
+    RatioSpec(
+        "URA",
+        "XLU",
+        "Uranium / Utilities",
+        "Nuclear fuel and power scarcity exposure versus regulated utilities.",
+    ),
+    RatioSpec(
+        "EFA",
+        "SPY",
+        "Developed Ex-US / United States",
+        "Developed international leadership versus U.S. equities.",
+    ),
+    RatioSpec("EWJ", "SPY", "Japan / United States", "Japanese equity leadership versus U.S. equities."),
+    RatioSpec(
+        "DXJ",
+        "EWJ",
+        "Hedged Japan / Unhedged Japan",
+        "Separates Japanese equity performance from yen translation effects.",
+    ),
+    RatioSpec("FXI", "SPY", "China / United States", "China beta and policy impulse versus U.S. equity leadership."),
+]
+
+# ============================== Sidebar ==================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Monitor factor leadership using ETF-relative price ratios, absolute return percentiles, trend structure, and rotation pressure.
+        **Purpose:** Curated factor leadership ratios for regime framing, breadth confirmation, and tape discipline.
 
         **How to read it**
-        - Composite score above 57 means positive factor pressure.
-        - Composite score below 43 means negative factor pressure.
-        - Short breadth shows near-term participation.
-        - Long breadth shows durability.
-        - Conflict shows factors where short and long windows disagree.
+        - A rising ratio means the first ticker is outperforming the second ticker.
+        - Ratios are rebased to 100 at the selected lookback start date.
+        - Return percentiles compare the latest move with up to three years of available history.
+        - The 21D slope is the fitted change across the latest 21 trading sessions.
 
-        **Data source:** Yahoo Finance via `yfinance`. Signals are ETF price-based and do not include holdings-level flows, options data, or valuation data.
+        **Data source:** Yahoo Finance adjusted daily close history.
         """
     )
 
     st.markdown("---")
-    st.header("Settings")
-
-    history_start_input = st.date_input("History start", datetime(2015, 1, 1))
-
-    window_choice = st.selectbox(
-        "Analysis window",
-        ["1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "10Y"],
-        index=3,
-    )
-
-    lookback_short = st.slider("Short momentum window, trading days", 10, 60, 20)
-
-    long_min = max(30, lookback_short + 5)
-    lookback_long = st.slider("Long momentum window, trading days", long_min, 180, max(60, long_min))
-
-    normalize_charts = st.checkbox("Normalize factor charts to 100", value=False)
-    show_ema = st.checkbox("Show 20-day EMA on factor charts", value=True)
-
-    min_overlap_obs = st.slider("Minimum overlap observations per factor pair", 40, 252, 60, 5)
-    stale_threshold_days = st.slider("Stale data threshold in calendar days", 3, 10, 5)
-
-    st.caption("Internal use only. Cached fallback is shown explicitly when used.")
-
-# =========================================================
-# Window setup
-# =========================================================
-today = pd.Timestamp(date.today()).normalize()
-history_start = pd.Timestamp(history_start_input).normalize()
-
-if window_choice == "YTD":
-    window_start = pd.Timestamp(date(datetime.now().year, 1, 1))
-    requested_days = None
-else:
-    requested_days = WINDOW_MAP_DAYS[window_choice]
-    window_start = today - pd.Timedelta(days=int(requested_days * 1.65))
-
-window_end = today + pd.Timedelta(days=1)
-
-# =========================================================
-# Fetch data
-# =========================================================
-factor_tickers = sorted(
-    {
-        ticker
-        for pair in FACTOR_PAIRS
-        for ticker in (pair.numerator, pair.denominator)
-        if ticker is not None
+    st.header("Lookback")
+    spans = {
+        "3 Months": 90,
+        "6 Months": 180,
+        "9 Months": 270,
+        "YTD": None,
+        "1 Year": 365,
+        "3 Years": 365 * 3,
+        "5 Years": 365 * 5,
+        "10 Years": 365 * 10,
+        "20 Years": 365 * 20,
     }
-    | {BENCH}
-)
 
-with st.spinner("Loading ETF price data..."):
-    levels, fetch_meta = fetch_daily_levels(
-        tuple(factor_tickers),
-        start_str=history_start.strftime("%Y-%m-%d"),
-        end_str=window_end.strftime("%Y-%m-%d"),
-        chunk_size=25,
+    span_key = st.selectbox(
+        "Period",
+        list(spans.keys()),
+        index=list(spans.keys()).index(DEFAULT_LOOKBACK),
     )
 
-if levels.empty:
-    st.error("Price download failed for all requested ETFs. Yahoo returned no usable close data and no last-good cache was available.")
-    st.stop()
-
-levels = levels.sort_index()
-levels = levels.loc[:, ~levels.columns.duplicated()]
-
-if BENCH not in levels.columns or levels[BENCH].dropna().empty:
-    st.error("SPY data is missing or empty after fetch normalization.")
-    st.stop()
-
-# =========================================================
-# Freshness diagnostics
-# =========================================================
-freshness_rows = []
-stale_tickers = []
-
-for ticker in factor_tickers:
-    if ticker not in levels.columns or levels[ticker].dropna().empty:
-        freshness_rows.append(
-            {
-                "Ticker": ticker,
-                "Last Date": "n/a",
-                "Age Days": np.nan,
-                "Status": "Missing",
-            }
-        )
-        continue
-
-    last_dt = _last_valid_date(levels[ticker])
-    age_days = int((today - last_dt).days) if last_dt is not None else np.nan
-    status = "Stale" if pd.notna(age_days) and age_days > stale_threshold_days else "OK"
-
-    if status == "Stale":
-        stale_tickers.append(ticker)
-
-    freshness_rows.append(
-        {
-            "Ticker": ticker,
-            "Last Date": _format_date(last_dt),
-            "Age Days": age_days,
-            "Status": status,
-        }
+    selected_families = st.multiselect(
+        "Ratio families",
+        options=list(RATIO_FAMILIES.keys()),
+        default=list(RATIO_FAMILIES.keys()),
     )
 
-freshness_df = pd.DataFrame(freshness_rows).sort_values(["Status", "Ticker"])
-as_of_date = _format_date(pd.Timestamp(levels.index.max()))
-
-# =========================================================
-# Build factor series
-# =========================================================
-factor_meta = {pair.name: pair for pair in FACTOR_PAIRS}
-
-factor_levels_full: Dict[str, pd.Series] = {}
-pair_diagnostics: List[Dict[str, object]] = []
-
-for pair in FACTOR_PAIRS:
-    up = _safe_upper(pair.numerator)
-    down = _safe_upper(pair.denominator)
-
-    if up not in levels.columns or levels[up].dropna().empty:
-        pair_diagnostics.append(
-            {
-                "Factor": pair.name,
-                "Category": pair.category,
-                "Expression": pair.expression,
-                "Status": "Skipped",
-                "Observations": 0,
-                "Reason": f"Missing usable data for {up}",
-            }
-        )
-        continue
-
-    if down is None:
-        s = levels[up].dropna().copy()
-        s.name = pair.name
-        factor_levels_full[pair.name] = s
-
-        pair_diagnostics.append(
-            {
-                "Factor": pair.name,
-                "Category": pair.category,
-                "Expression": pair.expression,
-                "Status": "OK",
-                "Observations": len(s),
-                "Reason": f"Using standalone series {up}",
-            }
-        )
-        continue
-
-    if down not in levels.columns or levels[down].dropna().empty:
-        pair_diagnostics.append(
-            {
-                "Factor": pair.name,
-                "Category": pair.category,
-                "Expression": pair.expression,
-                "Status": "Skipped",
-                "Observations": 0,
-                "Reason": f"Missing usable data for {down}",
-            }
-        )
-        continue
-
-    rel = build_relative_series(levels[up], levels[down], min_obs=min_overlap_obs)
-    overlap = pd.concat([levels[up], levels[down]], axis=1).dropna().shape[0]
-
-    if rel.empty:
-        pair_diagnostics.append(
-            {
-                "Factor": pair.name,
-                "Category": pair.category,
-                "Expression": pair.expression,
-                "Status": "Skipped",
-                "Observations": overlap,
-                "Reason": f"Overlap too short: {overlap} observations",
-            }
-        )
-        continue
-
-    rel.name = pair.name
-    factor_levels_full[pair.name] = rel
-
-    pair_diagnostics.append(
-        {
-            "Factor": pair.name,
-            "Category": pair.category,
-            "Expression": pair.expression,
-            "Status": "OK",
-            "Observations": len(rel),
-            "Reason": pair.interpretation,
-        }
+    include_reserve = st.checkbox(
+        "Include 10 reserve ratios",
+        value=False,
+        help="Adds housing, retail, metals, uranium, developed-market, Japan, and China regime ratios.",
     )
 
-factor_df_full = pd.DataFrame(factor_levels_full).dropna(how="all")
+    st.markdown("---")
+    with st.expander("Chart Settings", expanded=False):
+        show_signal_strip = st.checkbox("Show signal strip", value=True)
+        rsi_window = st.slider(
+            "RSI window",
+            min_value=5,
+            max_value=30,
+            value=DEFAULT_RSI_WINDOW,
+            step=1,
+        )
+        show_rsi = st.checkbox("Show RSI pane", value=True)
 
-if factor_df_full.empty:
-    st.error("No factor series could be constructed from the available ETF data.")
-    with st.expander("Diagnostics", expanded=True):
-        st.dataframe(pd.DataFrame(pair_diagnostics), use_container_width=True, hide_index=True)
-    st.stop()
+        selected_mas = {}
+        st.caption("Moving averages")
+        for ma_len, default_value in MA_DEFAULTS.items():
+            selected_mas[ma_len] = st.checkbox(f"{ma_len} DMA", value=default_value)
 
-if requested_days is None:
-    factor_df = factor_df_full[factor_df_full.index >= window_start].copy()
+# ============================== Dates ====================================
+market_date = date.today()
+yf_end = market_date + timedelta(days=1)
+
+if span_key == "YTD":
+    display_days = max(1, (market_date - date(market_date.year, 1, 1)).days)
 else:
-    factor_df = factor_df_full.tail(min(requested_days, len(factor_df_full))).copy()
+    display_days = int(spans[span_key])
 
-    if not factor_df.empty:
-        window_start = factor_df.index.min()
+# Keep enough warm-up history for the 200-day average and three-year return
+# percentiles. Date-only bounds also make the cache key stable intraday.
+history_days = max(365 * 4, display_days + 450)
+hist_start = market_date - timedelta(days=history_days)
 
-if factor_df.empty:
-    st.error("No data is available for the selected window.")
-    with st.expander("Diagnostics", expanded=True):
-        st.dataframe(pd.DataFrame(pair_diagnostics), use_container_width=True, hide_index=True)
-    st.stop()
-
-# =========================================================
-# Momentum snapshot
-# =========================================================
-rows = []
-
-for factor_name in factor_df.columns:
-    s_win = factor_df[factor_name].dropna()
-    s_full = factor_df_full[factor_name].dropna()
-
-    if len(s_win) < 15:
-        continue
-
-    eff_short = min(lookback_short, max(5, len(s_win) - 2))
-    eff_long = min(lookback_long, max(eff_short + 1, len(s_win) - 2))
-
-    if eff_long <= eff_short:
-        eff_long = min(len(s_win) - 2, eff_short + 1)
-
-    if len(s_win) <= eff_long or eff_long <= 0:
-        continue
-
-    r5 = pct_change_window(s_win, min(5, len(s_win) - 2))
-    r_short = pct_change_window(s_win, eff_short)
-    r_long = pct_change_window(s_win, eff_long)
-
-    if pd.notna(r_long):
-        expected_short_from_long_pace = r_long * (eff_short / eff_long)
-    else:
-        expected_short_from_long_pace = np.nan
-
-    if pd.notna(r_short) and pd.notna(expected_short_from_long_pace):
-        accel = r_short - expected_short_from_long_pace
-    else:
-        accel = np.nan
-
-    short_pctile = latest_return_percentile(s_full, eff_short)
-    long_pctile = latest_return_percentile(s_full, eff_long)
-    tclass = trend_class(s_win)
-    infl = inflection(r_short, r_long)
-    slope_z = slope_zscore(s_full, lookback=min(20, max(10, len(s_full) // 20)), history=252)
-    t_strength = trend_strength(s_win)
-
-    pair = factor_meta.get(factor_name)
-
-    rows.append(
-        {
-            "Factor": factor_name,
-            "Category": pair.category if pair else "n/a",
-            "Expression": pair.expression if pair else "n/a",
-            "Interpretation": pair.interpretation if pair else "n/a",
-            "%5D": r5,
-            "Short": r_short,
-            "Long": r_long,
-            "Accel": accel,
-            "Short Pctl": short_pctile,
-            "Long Pctl": long_pctile,
-            "Trend": tclass,
-            "Inflection": infl,
-            "Eff Short": eff_short,
-            "Eff Long": eff_long,
-            "Slope Z": slope_z,
-            "Trend Strength": t_strength,
-            "Obs Window": len(s_win),
-            "Obs Full": len(s_full),
-        }
-    )
-
-mom_df = pd.DataFrame(rows)
-
-if mom_df.empty:
-    st.error("No factors passed data checks for this window. Try a longer analysis window or reduce the short and long lookbacks.")
-    with st.expander("Diagnostics", expanded=True):
-        st.dataframe(pd.DataFrame(pair_diagnostics), use_container_width=True, hide_index=True)
-    st.stop()
-
-mom_df = mom_df.set_index("Factor")
-
-# =========================================================
-# Composite scores
-# =========================================================
-short_abs = mom_df["Short Pctl"].apply(percentile_signal)
-long_abs = mom_df["Long Pctl"].apply(percentile_signal)
-
-accel_cs = robust_z_cross_section(mom_df["Accel"]).clip(-3, 3) / 3.0
-slope_component = mom_df["Slope Z"].fillna(0.0).clip(-3, 3) / 3.0
-
-trend_signal = mom_df["Trend"].map({"Up": 1.0, "Neutral": 0.0, "Down": -1.0}).fillna(0.0)
-
-inflection_signal = mom_df["Inflection"].map(
-    {
-        "Confirmed Up": 1.0,
-        "Turning Up": 0.65,
-        "Mixed": 0.0,
-        "Neutral": 0.0,
-        "Turning Down": -0.65,
-        "Confirmed Down": -1.0,
-    }
-).fillna(0.0)
-
-score_raw = (
-    0.24 * short_abs
-    + 0.20 * long_abs
-    + 0.18 * accel_cs
-    + 0.18 * trend_signal
-    + 0.10 * inflection_signal
-    + 0.10 * slope_component
-)
-
-mom_df["Composite"] = (50.0 + 35.0 * score_raw).clip(0.0, 100.0)
-mom_df["State"] = mom_df["Composite"].apply(factor_state)
-mom_df = mom_df.sort_values("Composite", ascending=False)
-
-ok_pairs = [d for d in pair_diagnostics if d["Status"] == "OK"]
-skipped_pairs = [d for d in pair_diagnostics if d["Status"] != "OK"]
-missing_tickers = fetch_meta.get("missing_tickers", []) or []
-
-# =========================================================
-# Main layout
-# =========================================================
-st.caption(
-    f"As of {as_of_date}. Window starts {window_start.strftime('%Y-%m-%d')}. "
-    f"Fetch mode: {fetch_meta.get('mode', 'unknown')}. Last fetch timestamp: {fetch_meta.get('fetched_at', 'unknown')}."
-)
-
-# =========================================================
-# Factor charts first
-# =========================================================
-st.subheader(f"Factor Time Series ({window_choice})")
-
-plot_df = factor_df.copy()
-plot_df = plot_df[[c for c in mom_df.index if c in plot_df.columns]]
-
-if normalize_charts:
-    for col in plot_df.columns:
-        plot_df[col] = normalized_series(plot_df[col])
-
-fig_ts = plot_factor_grid(
-    plot_df=plot_df,
-    mom_df=mom_df,
-    normalize_charts=normalize_charts,
-    show_ema=show_ema,
-)
-
-if fig_ts is not None:
-    st.pyplot(fig_ts, clear_figure=True)
-    plt.close(fig_ts)
+if span_key == "YTD":
+    disp_start = pd.Timestamp(date(market_date.year, 1, 1))
 else:
-    st.info("No factor charts are available for the selected window.")
+    disp_start = pd.Timestamp(market_date - timedelta(days=display_days))
 
-# =========================================================
-# Ranking view below factor charts
-# =========================================================
-st.subheader("All-Factor Ranking View")
+# ============================== Helpers ==================================
+def clean_ticker(ticker: str) -> str:
+    return str(ticker).strip().upper()
 
-fig_rank = plot_composite_bar(mom_df)
-st.pyplot(fig_rank, clear_figure=True)
-plt.close(fig_rank)
 
-ranking_df = mom_df.copy()
+def unique_keep_order(items: Iterable[str]) -> List[str]:
+    seen = set()
+    out = []
 
-for col in ["%5D", "Short", "Long", "Accel", "Trend Strength"]:
-    ranking_df[col] = ranking_df[col] * 100.0
+    for item in items:
+        item = clean_ticker(item)
 
-ranking_df = ranking_df[
-    [
-        "State",
-        "Category",
-        "Expression",
-        "Composite",
-        "%5D",
-        "Short",
-        "Long",
-        "Accel",
-        "Short Pctl",
-        "Long Pctl",
-        "Trend",
-        "Inflection",
-        "Slope Z",
-        "Trend Strength",
-        "Obs Window",
-        "Obs Full",
-        "Interpretation",
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+
+    return out
+
+
+def chunked(items: Sequence[str], size: int) -> Iterable[List[str]]:
+    for i in range(0, len(items), size):
+        yield list(items[i : i + size])
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFrame:
+    ticker_list = unique_keep_order(tickers)
+
+    if not ticker_list:
+        return pd.DataFrame()
+
+    def _extract_close(block: pd.DataFrame) -> Optional[pd.Series]:
+        if block is None or block.empty:
+            return None
+
+        for field in ("Close", "Adj Close"):
+            if field in block.columns:
+                return pd.to_numeric(block[field], errors="coerce")
+
+        numeric = block.select_dtypes(include=[np.number])
+
+        if numeric.empty:
+            return None
+
+        return pd.to_numeric(numeric.iloc[:, 0], errors="coerce")
+
+    def _normalize(raw: pd.DataFrame, requested: List[str]) -> pd.DataFrame:
+        if raw is None or raw.empty:
+            return pd.DataFrame()
+
+        out = pd.DataFrame()
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            level0 = raw.columns.get_level_values(0).astype(str)
+            level1 = raw.columns.get_level_values(1).astype(str)
+
+            tickers_in_level0 = set(level0).intersection(requested)
+            tickers_in_level1 = set(level1).intersection(requested)
+
+            if tickers_in_level0:
+                for ticker in requested:
+                    if ticker not in tickers_in_level0:
+                        continue
+
+                    try:
+                        close = _extract_close(raw[ticker])
+
+                        if close is not None:
+                            out[ticker] = close
+                    except Exception:
+                        continue
+
+            elif tickers_in_level1:
+                for ticker in requested:
+                    if ticker not in tickers_in_level1:
+                        continue
+
+                    for field in ("Close", "Adj Close"):
+                        try:
+                            if (field, ticker) in raw.columns:
+                                out[ticker] = pd.to_numeric(
+                                    raw[(field, ticker)],
+                                    errors="coerce",
+                                )
+                                break
+                        except Exception:
+                            continue
+
+        else:
+            if len(requested) == 1:
+                close = _extract_close(raw)
+
+                if close is not None:
+                    out[requested[0]] = close
+
+        if out.empty:
+            return pd.DataFrame()
+
+        out.index = pd.to_datetime(out.index).tz_localize(None)
+        out = out.sort_index()
+        out = out[~out.index.duplicated(keep="last")]
+        out = out.ffill()
+        out = out.dropna(how="all")
+
+        return out
+
+    frames = []
+
+    for batch in chunked(ticker_list, 30):
+        try:
+            raw = yf.download(
+                tickers=batch,
+                start=start,
+                end=end,
+                auto_adjust=True,
+                progress=False,
+                group_by="ticker",
+                threads=True,
+            )
+            normalized = _normalize(raw, batch)
+
+            if not normalized.empty:
+                frames.append(normalized)
+                continue
+        except Exception:
+            pass
+
+        try:
+            raw = yf.download(
+                tickers=batch,
+                period="max",
+                auto_adjust=True,
+                progress=False,
+                group_by="ticker",
+                threads=True,
+            )
+            normalized = _normalize(raw, batch)
+
+            if not normalized.empty:
+                frames.append(normalized)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame()
+
+    out = pd.concat(frames, axis=1)
+    out = out.loc[:, ~out.columns.duplicated()]
+    out = out.sort_index().ffill().dropna(how="all")
+
+    return out
+
+
+def first_valid_on_or_after(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Timestamp, float]:
+    s = series.dropna()
+
+    if s.empty:
+        return pd.NaT, np.nan
+
+    sub = s.loc[ts:]
+
+    if not sub.empty:
+        return sub.index[0], float(sub.iloc[0])
+
+    return s.index[-1], float(s.iloc[-1])
+
+
+def last_valid_on_or_before(series: pd.Series, ts: pd.Timestamp) -> Tuple[pd.Timestamp, float]:
+    s = series.dropna()
+
+    if s.empty:
+        return pd.NaT, np.nan
+
+    sub = s.loc[:ts]
+
+    if not sub.empty:
+        return sub.index[-1], float(sub.iloc[-1])
+
+    return s.index[0], float(s.iloc[0])
+
+
+def rebase_series(series: pd.Series, base_date: pd.Timestamp, base: float = 100.0) -> pd.Series:
+    s = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if s.empty:
+        return pd.Series(dtype=float)
+
+    base_ts, base_val = last_valid_on_or_before(s, base_date)
+
+    if pd.isna(base_ts) or not np.isfinite(base_val) or base_val == 0:
+        return pd.Series(dtype=float)
+
+    return s / base_val * base
+
+
+def compute_price_ratio(
+    s1: pd.Series,
+    s2: pd.Series,
+    base_date: pd.Timestamp,
+    base: float = 100.0,
+) -> pd.Series:
+    a, b = s1.align(s2, join="inner")
+    raw_ratio = (a / b).replace([np.inf, -np.inf], np.nan).dropna()
+    return rebase_series(raw_ratio, base_date=base_date, base=base)
+
+
+def rsi_wilder(series: pd.Series, window: int = 14) -> pd.Series:
+    s = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if s.empty:
+        return pd.Series(dtype=float)
+
+    delta = s.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+
+    ma_up = up.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+    ma_down = down.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+
+    rs = ma_up / ma_down.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.mask((ma_up > 0) & (ma_down == 0), 100.0)
+    rsi = rsi.mask((ma_up == 0) & (ma_down == 0), 50.0)
+
+    return rsi
+
+
+def period_change(series: pd.Series, periods: int) -> float:
+    s = series.dropna()
+
+    if len(s) <= periods:
+        return np.nan
+
+    prev = s.iloc[-periods - 1]
+    latest = s.iloc[-1]
+
+    if not np.isfinite(prev) or prev == 0:
+        return np.nan
+
+    return latest / prev - 1.0
+
+
+def return_percentile(
+    series: pd.Series,
+    periods: int,
+    history: int = 756,
+    min_observations: int = 60,
+) -> float:
+    s = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if len(s) <= periods:
+        return np.nan
+
+    returns = (s / s.shift(periods) - 1.0).replace([np.inf, -np.inf], np.nan).dropna()
+    reference = returns.tail(history)
+
+    if len(reference) < min_observations:
+        return np.nan
+
+    current = float(reference.iloc[-1])
+    return float((reference <= current).mean() * 100.0)
+
+
+def fitted_slope_change(series: pd.Series, periods: int = 21) -> float:
+    s = series.replace([np.inf, -np.inf], np.nan).dropna().tail(periods)
+
+    if len(s) < max(5, periods // 2) or (s <= 0).any():
+        return np.nan
+
+    x = np.arange(len(s), dtype=float)
+    slope = float(np.polyfit(x, np.log(s.to_numpy(dtype=float)), 1)[0])
+    return float(np.exp(slope * (len(s) - 1)) - 1.0)
+
+
+def ytd_change(series: pd.Series) -> float:
+    s = series.dropna()
+
+    if s.empty:
+        return np.nan
+
+    latest_date = s.index[-1]
+    year_start = pd.Timestamp(datetime(latest_date.year, 1, 1))
+
+    _, base_val = first_valid_on_or_after(s, year_start)
+    latest = s.iloc[-1]
+
+    if not np.isfinite(base_val) or base_val == 0:
+        return np.nan
+
+    return latest / base_val - 1.0
+
+
+def days_since_window_extreme(series: pd.Series, window: int, kind: str) -> float:
+    s = series.dropna()
+
+    if s.empty:
+        return np.nan
+
+    view = s.tail(window)
+
+    if view.empty:
+        return np.nan
+
+    extreme_date = view.idxmax() if kind == "high" else view.idxmin()
+
+    return float(len(s.loc[extreme_date:]) - 1)
+
+
+def fmt_pct(value: float) -> str:
+    if value is None or not np.isfinite(value):
+        return "n/a"
+
+    return f"{value:+.1%}"
+
+
+def fmt_num(value: float) -> str:
+    if value is None or not np.isfinite(value):
+        return "n/a"
+
+    return f"{value:,.1f}"
+
+
+def fmt_days(value: float) -> str:
+    if value is None or not np.isfinite(value):
+        return "n/a"
+
+    return f"{int(value)}d"
+
+
+def fmt_percentile(value: float) -> str:
+    if value is None or not np.isfinite(value):
+        return "n/a"
+
+    return f"{value:.0f}p"
+
+
+def make_display_title(spec: RatioSpec) -> str:
+    return f"{spec.label} ({spec.ticker_1}/{spec.ticker_2})"
+
+
+def ratio_signal_line(
+    ratio: pd.Series,
+    rsi_len: int,
+    stale_days: int = DEFAULT_STALE_DAYS,
+) -> str:
+    s = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if s.empty:
+        return "No usable data."
+
+    latest = float(s.iloc[-1])
+    latest_date = pd.Timestamp(s.index[-1]).date()
+    today = pd.Timestamp(datetime.today()).date()
+    stale = (today - latest_date).days > stale_days
+
+    rsi = rsi_wilder(s, window=rsi_len).dropna()
+    rsi_latest = float(rsi.iloc[-1]) if not rsi.empty else np.nan
+
+    ma50 = s.rolling(50, min_periods=20).mean().dropna()
+    ma100 = s.rolling(100, min_periods=40).mean().dropna()
+    ma200 = s.rolling(200, min_periods=80).mean().dropna()
+
+    vs_ma50 = latest / float(ma50.iloc[-1]) - 1.0 if not ma50.empty and ma50.iloc[-1] else np.nan
+    vs_ma100 = latest / float(ma100.iloc[-1]) - 1.0 if not ma100.empty and ma100.iloc[-1] else np.nan
+    vs_ma200 = latest / float(ma200.iloc[-1]) - 1.0 if not ma200.empty and ma200.iloc[-1] else np.nan
+
+    ret_1m = period_change(s, 21)
+    ret_3m = period_change(s, 63)
+    ret_6m = period_change(s, 126)
+    pctl_1m = return_percentile(s, 21)
+    pctl_3m = return_percentile(s, 63)
+    pctl_6m = return_percentile(s, 126)
+    slope_21d = fitted_slope_change(s, 21)
+
+    parts = [
+        f"Last {fmt_num(latest)}",
+        f"1M {fmt_pct(ret_1m)} / {fmt_percentile(pctl_1m)}",
+        f"3M {fmt_pct(ret_3m)} / {fmt_percentile(pctl_3m)}",
+        f"6M {fmt_pct(ret_6m)} / {fmt_percentile(pctl_6m)}",
+        f"YTD {fmt_pct(ytd_change(s))}",
+        f"21D slope {fmt_pct(slope_21d)}",
+        f"RSI {fmt_num(rsi_latest)}",
+        f"vs 50D {fmt_pct(vs_ma50)}",
+        f"vs 100D {fmt_pct(vs_ma100)}",
+        f"vs 200D {fmt_pct(vs_ma200)}",
+        f"3M high {fmt_days(days_since_window_extreme(s, 63, 'high'))} ago",
+        f"3M low {fmt_days(days_since_window_extreme(s, 63, 'low'))} ago",
+        f"Last data {latest_date}",
     ]
-]
 
-format_map = {
-    "Composite": "{:.1f}",
-    "%5D": "{:.1f}%",
-    "Short": "{:.1f}%",
-    "Long": "{:.1f}%",
-    "Accel": "{:.1f}%",
-    "Short Pctl": "{:.0f}",
-    "Long Pctl": "{:.0f}",
-    "Slope Z": "{:.2f}",
-    "Trend Strength": "{:.2f}%",
-    "Obs Window": "{:.0f}",
-    "Obs Full": "{:.0f}",
+    if stale:
+        parts.append("data may be stale")
+
+    return " | ".join(parts)
+
+
+def make_empty_fig(message: str = "No data") -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font={"size": 14},
+    )
+    fig.update_layout(
+        height=280,
+        margin={"l": 40, "r": 20, "t": 40, "b": 30},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+    )
+    return fig
+
+
+def make_fig(
+    ratio: pd.Series,
+    title: str,
+    display_start: pd.Timestamp,
+    ma_settings: Dict[int, bool],
+    show_rsi_flag: bool,
+    rsi_len: int,
+) -> go.Figure:
+    ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if ratio.empty:
+        return make_empty_fig("No data")
+
+    ratio_view = ratio.loc[display_start:].copy()
+
+    if ratio_view.empty:
+        ratio_view = ratio.copy()
+
+    x_start = ratio_view.index.min()
+    x_end = ratio_view.index.max()
+
+    rows = 2 if show_rsi_flag else 1
+    row_heights = [0.78, 0.22] if show_rsi_flag else [1.0]
+
+    fig = make_subplots(
+        rows=rows,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.045,
+        row_heights=row_heights,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=ratio_view.index,
+            y=ratio_view.values,
+            mode="lines",
+            name="Ratio",
+            line={"color": "black", "width": 2.0},
+            hovertemplate="%{y:.2f}<extra>Ratio</extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+    visible_y = [ratio_view]
+
+    for ma_len, enabled in sorted(ma_settings.items()):
+        if not enabled:
+            continue
+
+        min_obs = max(2, min(ma_len, int(ma_len * 0.40)))
+        ma = ratio.rolling(ma_len, min_periods=min_obs).mean()
+        ma_view = ma.loc[x_start:x_end].dropna()
+
+        if ma_view.empty:
+            continue
+
+        visible_y.append(ma_view)
+
+        fig.add_trace(
+            go.Scatter(
+                x=ma_view.index,
+                y=ma_view.values,
+                mode="lines",
+                name=f"{ma_len}D",
+                line={"color": MA_COLORS.get(ma_len, "#555555"), "width": 1.2},
+                hovertemplate=f"%{{y:.2f}}<extra>{ma_len}D</extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    latest_x = ratio_view.index[-1]
+    latest_y = ratio_view.iloc[-1]
+
+    fig.add_trace(
+        go.Scatter(
+            x=[latest_x],
+            y=[latest_y],
+            mode="markers",
+            name="Last",
+            marker={"color": "black", "size": 6},
+            showlegend=False,
+            hovertemplate="%{y:.2f}<extra>Last</extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+    y_all = pd.concat(visible_y).replace([np.inf, -np.inf], np.nan).dropna()
+
+    if not y_all.empty:
+        ymin = float(y_all.min())
+        ymax = float(y_all.max())
+        pad = (ymax - ymin) * 0.06 if ymax != ymin else max(abs(ymin) * 0.05, 1.0)
+        fig.update_yaxes(range=[ymin - pad, ymax + pad], row=1, col=1)
+
+    if show_rsi_flag:
+        rsi = rsi_wilder(ratio, window=rsi_len)
+        rsi_view = rsi.loc[x_start:x_end].dropna()
+
+        fig.add_shape(
+            type="rect",
+            xref="x",
+            yref="y2",
+            x0=x_start,
+            x1=x_end,
+            y0=30,
+            y1=70,
+            fillcolor="gray",
+            opacity=0.08,
+            line_width=0,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=rsi_view.index,
+                y=rsi_view.values,
+                mode="lines",
+                name="RSI",
+                line={"color": "black", "width": 1.1},
+                showlegend=False,
+                hovertemplate="%{y:.1f}<extra>RSI</extra>",
+            ),
+            row=2,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[x_start, x_end],
+                y=[70, 70],
+                mode="lines",
+                name="RSI 70",
+                line={"color": "#b22222", "width": 1, "dash": "dot"},
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[x_start, x_end],
+                y=[30, 30],
+                mode="lines",
+                name="RSI 30",
+                line={"color": "#2e8b57", "width": 1, "dash": "dot"},
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+
+        fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
+
+    fig.update_layout(
+        title_text="",
+        height=540 if show_rsi_flag else 380,
+        margin={"l": 40, "r": 22, "t": 56, "b": 34},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        hovermode="x",
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.01,
+            "xanchor": "left",
+            "x": 0,
+            "font": {"size": 10},
+        },
+    )
+
+    fig.update_xaxes(
+        range=[x_start, x_end],
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.08)",
+        zeroline=False,
+    )
+
+    fig.update_yaxes(
+        title_text="Ratio Index",
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.08)",
+        zeroline=False,
+        row=1,
+        col=1,
+    )
+
+    return fig
+
+
+def render_ratio_block(
+    ratio: pd.Series,
+    title: str,
+    note: str,
+    display_start: pd.Timestamp,
+    ma_settings: Dict[int, bool],
+    show_rsi_flag: bool,
+    rsi_len: int,
+    signal_strip: bool,
+):
+    clean = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if clean.empty:
+        st.warning(f"No usable data for {title}.")
+        return
+
+    try:
+        st.markdown(
+            f'<div class="ratio-chart-heading">{html_escape(title)}</div>',
+            unsafe_allow_html=True,
+        )
+        if note:
+            st.caption(note)
+        fig = make_fig(
+            ratio=clean,
+            title=title,
+            display_start=display_start,
+            ma_settings=ma_settings,
+            show_rsi_flag=show_rsi_flag,
+            rsi_len=rsi_len,
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False, "responsive": True},
+        )
+
+    except Exception as e:
+        st.warning(f"Chart rendering failed for {title}. Data loaded, but Plotly rejected the chart configuration.")
+        st.caption(f"Error: {type(e).__name__}: {e}")
+
+    if signal_strip:
+        st.caption(ratio_signal_line(clean, rsi_len=rsi_len))
+
+    st.markdown("---")
+
+
+# ============================== Selected universe =========================
+selected_groups: Dict[str, List[RatioSpec]] = {
+    family: RATIO_FAMILIES[family]
+    for family in selected_families
+    if family in RATIO_FAMILIES
 }
 
-styled_ranking = ranking_df.style.format(format_map, na_rep="n/a")
+if include_reserve:
+    selected_groups["Regime Reserve"] = RESERVE_RATIO_SPECS
 
-try:
-    styled_ranking = styled_ranking.map(style_state, subset=["State"])
-    styled_ranking = styled_ranking.map(
-        style_pct_value,
-        subset=["%5D", "Short", "Long", "Accel", "Trend Strength"],
-    )
-except AttributeError:
-    styled_ranking = styled_ranking.applymap(style_state, subset=["State"])
-    styled_ranking = styled_ranking.applymap(
-        style_pct_value,
-        subset=["%5D", "Short", "Long", "Accel", "Trend Strength"],
-    )
+if not selected_groups:
+    st.warning("Select at least one ratio family in the sidebar.")
+    st.stop()
 
-st.dataframe(styled_ranking, use_container_width=True)
+selected_specs = [spec for specs in selected_groups.values() for spec in specs]
+static_tickers = unique_keep_order(
+    [ticker for spec in selected_specs for ticker in (spec.ticker_1, spec.ticker_2)]
+)
 
-# =========================================================
-# Leadership map
-# =========================================================
-st.subheader("Leadership Map")
+# ============================== Fetch static data =========================
+with st.spinner("Loading ratio data..."):
+    closes_static = fetch_closes(tuple(static_tickers), hist_start, yf_end)
 
-fig_lead = plot_leadership_map(mom_df)
-st.pyplot(fig_lead, clear_figure=True)
-plt.close(fig_lead)
+if closes_static.empty:
+    st.error("Failed to download price data.")
+    st.stop()
 
-# =========================================================
-# Data quality and diagnostics
-# =========================================================
-st.subheader("Data Quality and Diagnostics")
+# ============================== Render factor ratios ======================
+failed_pairs = []
 
-col_a, col_b = st.columns(2)
+for family, specs in selected_groups.items():
+    st.subheader(family)
 
-with col_a:
-    st.markdown("**Fetch status**")
+    for spec in specs:
+        a = spec.ticker_1
+        b = spec.ticker_2
 
-    status_rows = [
-        {"Field": "Mode", "Value": fetch_meta.get("mode", "unknown")},
-        {"Field": "Fetched At", "Value": fetch_meta.get("fetched_at", "unknown")},
-        {"Field": "Loaded Cache At", "Value": fetch_meta.get("cache_loaded_at", "n/a")},
-        {"Field": "Last Index", "Value": fetch_meta.get("last_index", as_of_date)},
-        {"Field": "Live Tickers", "Value": len(fetch_meta.get("live_tickers", []) or [])},
-        {
-            "Field": "Cache Rescue Tickers",
-            "Value": ", ".join(fetch_meta.get("cache_rescue_tickers", []) or []) or "none",
-        },
-        {"Field": "Missing Tickers", "Value": ", ".join(missing_tickers) or "none"},
-    ]
+        if a in closes_static.columns and b in closes_static.columns:
+            ratio = compute_price_ratio(
+                closes_static[a],
+                closes_static[b],
+                base_date=disp_start,
+                base=100.0,
+            )
 
-    st.dataframe(pd.DataFrame(status_rows), use_container_width=True, hide_index=True)
+            if ratio.empty:
+                failed_pairs.append(f"{a}/{b}")
+                continue
 
-with col_b:
-    st.markdown("**Ticker freshness**")
-    st.dataframe(freshness_df, use_container_width=True, hide_index=True)
+            render_ratio_block(
+                ratio,
+                make_display_title(spec),
+                spec.note,
+                disp_start,
+                selected_mas,
+                show_rsi,
+                rsi_window,
+                show_signal_strip,
+            )
 
-with st.expander(f"Factor diagnostics: {len(ok_pairs)} built, {len(skipped_pairs)} skipped", expanded=False):
-    diag_df = pd.DataFrame(pair_diagnostics)
-    st.dataframe(diag_df, use_container_width=True, hide_index=True)
+        else:
+            failed_pairs.append(f"{a}/{b}")
+
+if failed_pairs:
+    st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))
 
 render_footer()
-
