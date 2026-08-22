@@ -79,11 +79,11 @@ class InstitutionalThemeTests(unittest.TestCase):
         home = (root / "Home.py").read_text(encoding="utf-8")
 
         self.assertIn(
-            "padding: calc(4rem + env(safe-area-inset-top, 0px)) 2.5rem",
+            "padding: calc(3.25rem + env(safe-area-inset-top, 0px)) 2rem",
             home,
         )
         self.assertIn(
-            "padding: calc(4.25rem + env(safe-area-inset-top, 0px)) 1.15rem",
+            "padding: calc(2.8rem + env(safe-area-inset-top, 0px)) 1rem",
             home,
         )
         self.assertIn("white-space: normal !important", home)
