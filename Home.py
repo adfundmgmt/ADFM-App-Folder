@@ -153,18 +153,18 @@ st.html(
 
         .adfm-masthead {
             display: grid;
-            grid-template-columns: 60px minmax(0, 1fr) auto;
+            grid-template-columns: 56px minmax(0, 1fr) auto;
             align-items: center;
             column-gap: 0.9rem;
             border-top: 3px solid #000000;
             border-bottom: 1px solid #000000;
-            padding: 0.9rem 0 1rem;
+            padding: 0.7rem 0 0.75rem;
         }
 
         .adfm-mark {
             display: block;
-            width: 52px;
-            height: 52px;
+            width: 48px;
+            height: 48px;
             object-fit: contain;
         }
 
@@ -184,7 +184,7 @@ st.html(
             padding: 0 !important;
             color: #000000;
             font-family: Arial, Helvetica, sans-serif !important;
-            font-size: clamp(2rem, 3vw, 2.5rem) !important;
+            font-size: clamp(2rem, 3vw, 2.2rem) !important;
             font-weight: 800 !important;
             letter-spacing: -0.04em;
             line-height: 0.98 !important;
@@ -196,7 +196,7 @@ st.html(
             margin: 0.3rem 0 0;
             color: #414141;
             font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.94rem;
+            font-size: 0.88rem;
             line-height: 1.35;
         }
 
@@ -213,7 +213,7 @@ st.html(
         }
 
         .directory-introduction {
-            padding: 1.55rem 0 1.35rem;
+            padding: 1rem 0 0.85rem;
         }
 
         .directory-title {
@@ -221,7 +221,7 @@ st.html(
             padding: 0 !important;
             color: #000000;
             font-family: Arial, Helvetica, sans-serif !important;
-            font-size: 2rem !important;
+            font-size: 1.9rem !important;
             font-weight: 800 !important;
             letter-spacing: -0.025em;
             line-height: 1.05 !important;
@@ -231,7 +231,7 @@ st.html(
             margin: 0.38rem 0 0;
             color: #4a4a4a;
             font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.94rem;
+            font-size: 0.88rem;
             line-height: 1.4;
         }
 
@@ -249,13 +249,13 @@ st.html(
         }
 
         .directory-group-title--first {
-            margin-top: 0;
+            margin-top: 1rem;
         }
 
         [class*="st-key-directory_entry_"] {
             position: relative;
             height: 100%;
-            padding: 0 0 1.15rem;
+            padding: 0.9rem 0 1.15rem;
             cursor: pointer;
         }
 
@@ -412,7 +412,7 @@ st.html(
             }
 
             .directory-group-title--first {
-                margin-top: 0;
+                margin-top: 0.85rem;
             }
 
             div[data-testid="stHorizontalBlock"] {
@@ -431,7 +431,7 @@ st.html(
             }
 
             [class*="st-key-directory_entry_"] {
-                padding-bottom: 1.1rem;
+                padding: 0.78rem 0 1.1rem;
             }
 
             div[data-testid="stPageLink"] p,
