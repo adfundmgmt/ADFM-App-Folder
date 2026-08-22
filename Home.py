@@ -269,7 +269,7 @@ st.html(
         }
 
         div[data-testid="stPageLink"]::after {
-            content: "\2192";
+            content: "→";
             position: absolute;
             top: 0.14rem;
             right: 0;
