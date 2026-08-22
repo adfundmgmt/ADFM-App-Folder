@@ -19,13 +19,13 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 pd.options.mode.chained_assignment = None
 
 # ============================== Page config ==============================
-st.set_page_config(layout="wide", page_title="Ratio Charts")
+st.set_page_config(layout="wide", page_title="Cross-Asset Ratio Chartbook")
 render_page_header(
     PageHeader(
-        title="Ratio Charts",
+        title="Cross-Asset Ratio Chartbook",
         description=(
-            "Fifty relative-strength ratios across assets, regions, credit, thematic baskets, "
-            "and single stocks."
+            "Inspect the trend, technical condition, and historical extremes of fifty specific "
+            "cross-asset, macro, thematic, and single-stock relationships."
         ),
         eyebrow="ADFM Technicals + Analogs",
     )
@@ -63,7 +63,7 @@ MA_DEFAULTS = {
     8: False,
     21: True,
     50: True,
-    100: True,
+    100: False,
     200: True,
 }
 
@@ -387,21 +387,74 @@ CORE_RATIO_SPECS: List[RatioSpec] = [
     ),
 ]
 
+RATIO_FAMILIES: Dict[str, List[RatioSpec]] = {
+    "Cross-Asset Regime": (
+        CORE_RATIO_SPECS[0:6]
+        + [CORE_RATIO_SPECS[9], CORE_RATIO_SPECS[15]]
+    ),
+    "Equity Breadth / Global Leadership": (
+        CORE_RATIO_SPECS[6:9]
+        + CORE_RATIO_SPECS[10:14]
+        + CORE_RATIO_SPECS[16:18]
+        + [CORE_RATIO_SPECS[34]]
+    ),
+    "Rates / Credit / FX": (
+        [CORE_RATIO_SPECS[14]] + CORE_RATIO_SPECS[18:24]
+    ),
+    "Commodities / Inflation": CORE_RATIO_SPECS[24:28],
+    "Equity Themes / Cyclicals": CORE_RATIO_SPECS[28:34],
+    "Single-Stock Relative Value": CORE_RATIO_SPECS[35:50],
+}
+
+SPEC_BY_PAIR = {
+    f"{spec.ticker_1}/{spec.ticker_2}": spec for spec in CORE_RATIO_SPECS
+}
+
 # ============================== Sidebar ==================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Ratio chart workspace for regime framing, leadership confirmation, and tape discipline.
+        **Purpose:** Deep inspection of a chosen market relationship, with an optional grouped chartbook for broader review.
 
         **How to read it**
         - A rising ratio means the first ticker is outperforming the second ticker.
         - Ratios are rebased to 100 at the selected lookback start date.
         - The signal line gives trend, momentum, moving-average, and stale-data context.
+        - Use Equity Leadership & Rotation for systematic ranking and inflection signals.
 
         **Data source:** Yahoo Finance adjusted daily close history.
         """
     )
+
+    st.markdown("---")
+    st.header("Chartbook")
+    view_mode = st.radio(
+        "View",
+        options=["Focused relationship", "Full chartbook"],
+        index=0,
+    )
+
+    selected_families = st.multiselect(
+        "Chart families",
+        options=list(RATIO_FAMILIES.keys()),
+        default=list(RATIO_FAMILIES.keys()),
+    )
+
+    selected_family_specs = [
+        spec
+        for family in selected_families
+        for spec in RATIO_FAMILIES[family]
+    ]
+    selected_pairs = [f"{spec.ticker_1}/{spec.ticker_2}" for spec in selected_family_specs]
+
+    focused_pair = None
+    if selected_pairs and view_mode == "Focused relationship":
+        focused_pair = st.selectbox(
+            "Relationship",
+            options=selected_pairs,
+            format_func=lambda pair: f"{pair} — {SPEC_BY_PAIR[pair].label}",
+        )
 
     st.markdown("---")
     st.header("Lookback")
@@ -433,7 +486,7 @@ with st.sidebar:
             value=DEFAULT_RSI_WINDOW,
             step=1,
         )
-        show_rsi = st.checkbox("Show RSI pane", value=True)
+        show_rsi = st.checkbox("Show RSI pane", value=False)
 
         selected_mas = {}
         st.caption("Moving averages")
@@ -882,6 +935,7 @@ def make_fig(
     ma_settings: Dict[int, bool],
     show_rsi_flag: bool,
     rsi_len: int,
+    compact: bool = False,
 ) -> go.Figure:
     ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
 
@@ -1036,12 +1090,13 @@ def make_fig(
 
     fig.update_layout(
         title_text="",
-        height=540 if show_rsi_flag else 380,
-        margin={"l": 40, "r": 22, "t": 56, "b": 34},
+        height=(430 if show_rsi_flag else 315) if compact else (620 if show_rsi_flag else 465),
+        margin={"l": 42, "r": 20, "t": 42, "b": 34},
         paper_bgcolor="white",
         plot_bgcolor="white",
-        hovermode="x",
+        hovermode="x unified",
         showlegend=True,
+        font={"family": "Arial, Helvetica, sans-serif", "color": "#202020", "size": 10},
         legend={
             "orientation": "h",
             "yanchor": "bottom",
@@ -1074,11 +1129,14 @@ def make_fig(
 def render_ratio_block(
     ratio: pd.Series,
     title: str,
+    note: str,
     display_start: pd.Timestamp,
     ma_settings: Dict[int, bool],
     show_rsi_flag: bool,
     rsi_len: int,
     signal_strip: bool,
+    chart_key: str,
+    compact: bool = False,
 ):
     clean = ratio.replace([np.inf, -np.inf], np.nan).dropna()
 
@@ -1091,6 +1149,8 @@ def render_ratio_block(
             f'<div class="ratio-chart-heading">{html_escape(title)}</div>',
             unsafe_allow_html=True,
         )
+        if note:
+            st.caption(note)
         fig = make_fig(
             ratio=clean,
             title=title,
@@ -1098,11 +1158,13 @@ def render_ratio_block(
             ma_settings=ma_settings,
             show_rsi_flag=show_rsi_flag,
             rsi_len=rsi_len,
+            compact=compact,
         )
         st.plotly_chart(
             fig,
-            use_container_width=True,
+            width="stretch",
             config={"displayModeBar": False, "responsive": True},
+            key=chart_key,
         )
 
     except Exception as e:
@@ -1118,8 +1180,23 @@ def render_ratio_block(
 # ============================== Selected universe =========================
 custom_specs = parse_custom_ratio_text(custom_ratio_text)
 
+selected_groups: Dict[str, List[RatioSpec]] = {
+    family: RATIO_FAMILIES[family]
+    for family in selected_families
+    if family in RATIO_FAMILIES
+}
+
+if not selected_groups:
+    st.warning("Select at least one chart family in the sidebar.")
+    st.stop()
+
+if view_mode == "Focused relationship" and focused_pair:
+    static_specs = [SPEC_BY_PAIR[focused_pair]]
+else:
+    static_specs = [spec for specs in selected_groups.values() for spec in specs]
+
 static_tickers = unique_keep_order(
-    [ticker for spec in CORE_RATIO_SPECS for ticker in (spec.ticker_1, spec.ticker_2)]
+    [ticker for spec in static_specs for ticker in (spec.ticker_1, spec.ticker_2)]
 )
 
 custom_tickers = unique_keep_order(
@@ -1137,34 +1214,53 @@ if closes_static.empty:
 # ============================== Render core ratios ========================
 failed_pairs = []
 
-for spec in CORE_RATIO_SPECS:
+def render_spec(spec: RatioSpec, compact: bool = False) -> None:
     a = spec.ticker_1
     b = spec.ticker_2
-
-    if a in closes_static.columns and b in closes_static.columns:
-        ratio = compute_price_ratio(
-            closes_static[a],
-            closes_static[b],
-            base_date=disp_start,
-            base=100.0,
-        )
-
-        if ratio.empty:
-            failed_pairs.append(f"{a}/{b}")
-            continue
-
-        render_ratio_block(
-            ratio,
-            make_display_title(spec),
-            disp_start,
-            selected_mas,
-            show_rsi,
-            rsi_window,
-            show_signal_strip,
-        )
-
-    else:
+    if a not in closes_static.columns or b not in closes_static.columns:
         failed_pairs.append(f"{a}/{b}")
+        return
+
+    ratio = compute_price_ratio(
+        closes_static[a],
+        closes_static[b],
+        base_date=disp_start,
+        base=100.0,
+    )
+    if ratio.empty:
+        failed_pairs.append(f"{a}/{b}")
+        return
+
+    render_ratio_block(
+        ratio,
+        make_display_title(spec),
+        spec.note,
+        disp_start,
+        selected_mas,
+        show_rsi,
+        rsi_window,
+        show_signal_strip,
+        chart_key=f"core-ratio-{a}-{b}",
+        compact=compact,
+    )
+
+
+if view_mode == "Focused relationship":
+    selected_family = next(
+        family
+        for family, specs in selected_groups.items()
+        if SPEC_BY_PAIR[focused_pair] in specs
+    )
+    st.subheader(f"{selected_family} · Focused Relationship")
+    render_spec(SPEC_BY_PAIR[focused_pair], compact=False)
+else:
+    for family, specs in selected_groups.items():
+        st.subheader(family)
+        for row_start in range(0, len(specs), 2):
+            columns = st.columns(2, gap="large")
+            for column_index, spec in enumerate(specs[row_start : row_start + 2]):
+                with columns[column_index]:
+                    render_spec(spec, compact=True)
 
 if failed_pairs:
     st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))
@@ -1180,7 +1276,7 @@ if custom_specs:
     else:
         custom_failed = []
 
-        for spec in custom_specs:
+        for custom_index, spec in enumerate(custom_specs):
             a = spec.ticker_1
             b = spec.ticker_2
 
@@ -1202,11 +1298,14 @@ if custom_specs:
             render_ratio_block(
                 ratio,
                 make_display_title(spec),
+                spec.note,
                 disp_start,
                 selected_mas,
                 show_rsi,
                 rsi_window,
                 show_signal_strip,
+                chart_key=f"custom-ratio-{custom_index}-{a}-{b}",
+                compact=False,
             )
 
         if custom_failed:

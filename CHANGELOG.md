@@ -19,6 +19,8 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ### Changed
 
+- Factor Momentum Leadership is now Equity Leadership & Rotation: a scored 25-relationship scanner with family rankings, a four-state rotation map, a multi-horizon heatmap, a styled leaderboard, and one selected historical drill-down instead of 25 duplicate full charts.
+- Ratio Charts is now Cross-Asset Ratio Chartbook, with a default focused relationship view, six institutional chart families, an optional two-column full chartbook, cleaner default moving averages, and retained custom ratios.
 - SEC 13F Exposure Browser now supports direct filing-manager search by name or CIK, with Duquesne Family Office LLC (CIK 0001536411) as the manager-mode baseline and faster manager-specific portfolio loading.
 - Home now uses stable internal route links instead of deployment-sensitive `st.page_link` validation, and the Home/sidebar order follows a single research workflow from public-equity discovery through regime, fundamentals, technical confirmation, positioning, risk execution, and historical context.
 - Public Equities Baskets deployment refreshed so the live app reflects the current basket map, which excludes the legacy Private Robotics Access Vehicles (BOT) entry.

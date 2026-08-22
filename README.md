@@ -32,10 +32,10 @@ The application contains 24 tools, in the same order and groups shown on the Hom
 | 5 | Credit Conditions Dashboard | Monitors credit spreads, credit ETF ratios, regional banks, loans, EM debt, and financial conditions. | Yahoo Finance market proxies |
 | 6 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 7 | Sector Breadth and Rotation | Measures participation and sector rotation to identify where equity strength is broadening or narrowing. | Yahoo Finance sector and subsector ETFs |
-| 8 | Factor Momentum Leadership | Ranks factor momentum to highlight which styles are leading, fading, or inflecting. | Yahoo Finance ETF prices |
+| 8 | Equity Leadership & Rotation | Ranks 25 equity relationships across four horizons to identify established leadership, positive inflections, weakening trends, and persistent laggards. | Yahoo Finance adjusted ETF prices |
 | 9 | ADFM Underwriter | Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events. | SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history |
 | 10 | Technical Chart Explorer | Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages. | Yahoo Finance OHLCV |
-| 11 | Ratio Charts | Uses relative-strength ratios to compare assets, sectors, credit, factors, and risk appetite proxies. | Yahoo Finance adjusted close history |
+| 11 | Cross-Asset Ratio Chartbook | Provides focused and grouped historical inspection of 50 cross-asset, macro, thematic, and single-stock ratios, plus custom relationships. | Yahoo Finance adjusted close history |
 | 12 | Rate of Change Dashboard | Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure. | Yahoo Finance daily OHLCV |
 | 13 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
 | 14 | ETF Flows Dashboard | Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures. | Yahoo Finance OHLCV |
@@ -56,9 +56,9 @@ The application contains 24 tools, in the same order and groups shown on the Hom
 |---|---|
 | Equity Discovery | ADFM Public Equities Baskets |
 | Macro Regime | Global Macro Regime Dashboard; Liquidity Conditions Monitor; Yield Curve + Rates Regime Monitor; Credit Conditions Dashboard; Currency Tension Engine |
-| Equity Leadership | Sector Breadth and Rotation; Factor Momentum Leadership |
+| Equity Leadership | Sector Breadth and Rotation; Equity Leadership & Rotation |
 | Fundamental Research | ADFM Underwriter |
-| Technical Confirmation | Technical Chart Explorer; Ratio Charts; Rate of Change Dashboard; Relative Volatility Lab |
+| Technical Confirmation | Technical Chart Explorer; Cross-Asset Ratio Chartbook; Rate of Change Dashboard; Relative Volatility Lab |
 | Positioning + Flows | ETF Flows Dashboard; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser; CFTC Positioning Monitor |
 | Risk + Execution | Market Stress Composite; Event Risk + Catalyst Calendar; Hedge Timer; Position Sizing Lab |
 | Historical Context | Market Memory Explorer; Monthly Seasonality Explorer |
