@@ -105,7 +105,9 @@ class InstitutionalThemeTests(unittest.TestCase):
         chart_terminal = (root / "pages" / "10_ADFM_Chart_Terminal.py").read_text(
             encoding="utf-8"
         )
-        ratio_charts = (root / "pages" / "11_Ratio_Charts.py").read_text(
+        ratio_charts = (
+            root / "pages" / "11_Cross_Asset_Ratio_Chartbook.py"
+        ).read_text(
             encoding="utf-8"
         )
         sector_breadth = (
