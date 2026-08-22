@@ -83,7 +83,7 @@ class InstitutionalThemeTests(unittest.TestCase):
             home,
         )
         self.assertIn(
-            "padding: calc(2.8rem + env(safe-area-inset-top, 0px)) 1rem",
+            "padding: calc(3.2rem + env(safe-area-inset-top, 0px)) 1rem",
             home,
         )
         self.assertIn("white-space: normal !important", home)
