@@ -188,6 +188,8 @@ st.html(
             font-weight: 800 !important;
             letter-spacing: -0.04em;
             line-height: 0.98 !important;
+            white-space: normal !important;
+            overflow: visible !important;
         }
 
         .adfm-subtitle {
