@@ -153,12 +153,13 @@ st.html(
 
         .adfm-masthead {
             display: grid;
-            grid-template-columns: 56px minmax(0, 1fr) auto;
+            grid-template-columns: 56px minmax(0, 1fr);
             align-items: center;
             column-gap: 0.9rem;
             border-top: 3px solid #000000;
             border-bottom: 1px solid #000000;
             padding: 0.7rem 0 0.75rem;
+            overflow: visible;
         }
 
         .adfm-mark {
@@ -177,6 +178,8 @@ st.html(
             letter-spacing: 0.18em;
             line-height: 1.2;
             text-transform: uppercase;
+            white-space: normal;
+            overflow: visible;
         }
 
         .adfm-title {
@@ -200,41 +203,6 @@ st.html(
             line-height: 1.35;
         }
 
-        .research-label {
-            align-self: start;
-            margin-top: 0.1rem;
-            color: #000000;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 0.15em;
-            text-align: right;
-            text-transform: uppercase;
-        }
-
-        .directory-introduction {
-            padding: 1rem 0 0.85rem;
-        }
-
-        .directory-title {
-            margin: 0 !important;
-            padding: 0 !important;
-            color: #000000;
-            font-family: Arial, Helvetica, sans-serif !important;
-            font-size: 1.9rem !important;
-            font-weight: 800 !important;
-            letter-spacing: -0.025em;
-            line-height: 1.05 !important;
-        }
-
-        .directory-copy {
-            margin: 0.38rem 0 0;
-            color: #4a4a4a;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.88rem;
-            line-height: 1.4;
-        }
-
         .directory-group-title {
             border-bottom: 2px solid #000000;
             margin: 2rem 0 0.9rem;
@@ -249,7 +217,7 @@ st.html(
         }
 
         .directory-group-title--first {
-            margin-top: 1rem;
+            margin-top: 2.25rem;
         }
 
         [class*="st-key-directory_entry_"] {
@@ -355,12 +323,13 @@ st.html(
 
             .block-container {
                 max-width: none;
-                padding: calc(2.8rem + env(safe-area-inset-top, 0px)) 1rem 2.25rem;
+                padding: calc(3.2rem + env(safe-area-inset-top, 0px)) 1rem 2.25rem;
             }
 
             .adfm-masthead {
                 grid-template-columns: 46px minmax(0, 1fr);
                 column-gap: 0.72rem;
+                margin-top: 0.3rem;
                 padding: 0.55rem 0 0.65rem;
             }
 
@@ -386,25 +355,6 @@ st.html(
                 line-height: 1.35;
             }
 
-            .research-label {
-                display: none;
-            }
-
-            .directory-introduction {
-                padding: 1.25rem 0 1.1rem;
-            }
-
-            .directory-title {
-                font-size: 1.78rem !important;
-            }
-
-            .directory-copy {
-                max-width: 23rem;
-                margin-top: 0.35rem;
-                font-size: 0.86rem;
-                line-height: 1.45;
-            }
-
             .directory-group-title {
                 margin: 1.7rem 0 0.8rem;
                 padding-bottom: 0.5rem;
@@ -412,7 +362,7 @@ st.html(
             }
 
             .directory-group-title--first {
-                margin-top: 0.85rem;
+                margin-top: 2.2rem;
             }
 
             div[data-testid="stHorizontalBlock"] {
@@ -465,14 +415,7 @@ st.markdown(
             <h1 class="adfm-title">ADFM Analytics</h1>
             <p class="adfm-subtitle">Market research and analytical tools.</p>
         </div>
-        <div class="research-label">Internal Research</div>
     </header>
-    <section class="directory-introduction">
-        <h2 class="directory-title">Research Directory</h2>
-        <p class="directory-copy">
-            Equities &middot; Macro &middot; Rates &middot; Liquidity &middot; Positioning &middot; Risk
-        </p>
-    </section>
     """,
     unsafe_allow_html=True,
 )
