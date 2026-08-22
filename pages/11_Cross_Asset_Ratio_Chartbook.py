@@ -406,16 +406,12 @@ RATIO_FAMILIES: Dict[str, List[RatioSpec]] = {
     "Single-Stock Relative Value": CORE_RATIO_SPECS[35:50],
 }
 
-SPEC_BY_PAIR = {
-    f"{spec.ticker_1}/{spec.ticker_2}": spec for spec in CORE_RATIO_SPECS
-}
-
 # ============================== Sidebar ==================================
 with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        **Purpose:** Deep inspection of a chosen market relationship, with an optional grouped chartbook for broader review.
+        **Purpose:** Scroll through the full grouped chartbook for historical inspection of market relationships.
 
         **How to read it**
         - A rising ratio means the first ticker is outperforming the second ticker.
@@ -429,32 +425,11 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("Chartbook")
-    view_mode = st.radio(
-        "View",
-        options=["Focused relationship", "Full chartbook"],
-        index=0,
-    )
-
     selected_families = st.multiselect(
         "Chart families",
         options=list(RATIO_FAMILIES.keys()),
         default=list(RATIO_FAMILIES.keys()),
     )
-
-    selected_family_specs = [
-        spec
-        for family in selected_families
-        for spec in RATIO_FAMILIES[family]
-    ]
-    selected_pairs = [f"{spec.ticker_1}/{spec.ticker_2}" for spec in selected_family_specs]
-
-    focused_pair = None
-    if selected_pairs and view_mode == "Focused relationship":
-        focused_pair = st.selectbox(
-            "Relationship",
-            options=selected_pairs,
-            format_func=lambda pair: f"{pair} — {SPEC_BY_PAIR[pair].label}",
-        )
 
     st.markdown("---")
     st.header("Lookback")
@@ -1190,10 +1165,7 @@ if not selected_groups:
     st.warning("Select at least one chart family in the sidebar.")
     st.stop()
 
-if view_mode == "Focused relationship" and focused_pair:
-    static_specs = [SPEC_BY_PAIR[focused_pair]]
-else:
-    static_specs = [spec for specs in selected_groups.values() for spec in specs]
+static_specs = [spec for specs in selected_groups.values() for spec in specs]
 
 static_tickers = unique_keep_order(
     [ticker for spec in static_specs for ticker in (spec.ticker_1, spec.ticker_2)]
@@ -1245,22 +1217,13 @@ def render_spec(spec: RatioSpec, compact: bool = False) -> None:
     )
 
 
-if view_mode == "Focused relationship":
-    selected_family = next(
-        family
-        for family, specs in selected_groups.items()
-        if SPEC_BY_PAIR[focused_pair] in specs
-    )
-    st.subheader(f"{selected_family} · Focused Relationship")
-    render_spec(SPEC_BY_PAIR[focused_pair], compact=False)
-else:
-    for family, specs in selected_groups.items():
-        st.subheader(family)
-        for row_start in range(0, len(specs), 2):
-            columns = st.columns(2, gap="large")
-            for column_index, spec in enumerate(specs[row_start : row_start + 2]):
-                with columns[column_index]:
-                    render_spec(spec, compact=True)
+for family, specs in selected_groups.items():
+    st.subheader(family)
+    for row_start in range(0, len(specs), 2):
+        columns = st.columns(2, gap="large")
+        for column_index, spec in enumerate(specs[row_start : row_start + 2]):
+            with columns[column_index]:
+                render_spec(spec, compact=True)
 
 if failed_pairs:
     st.caption("Unavailable this session: " + ", ".join(sorted(set(failed_pairs))))

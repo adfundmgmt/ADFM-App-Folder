@@ -4,6 +4,9 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Equity Leadership & Rotation now opens with the Rotation Map and renders every selected relationship as an expanded chart; the current read, family summary, momentum matrix, ranking table, and single-detail selector were removed.
+- Cross-Asset Ratio Chartbook now renders all selected families and all 50 default ratios immediately, removing the focused-versus-full view gate.
+
 ### Added
 
 - SEC 13F Exposure Browser (Page 23) with ticker-to-CUSIP resolution, amendment-aware filing consolidation, a $1 billion default minimum portfolio filter, manager rankings by disclosed portfolio weight, reported market value, or shares, searchable holdings, CSV export, and EDGAR filing links.

@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-from adfm_core.leadership import build_leadership_frame, summarize_families
+from adfm_core.leadership import build_leadership_frame
 from adfm_core.palette import PASTEL
 from adfm_core.ui import PageHeader, render_footer, render_page_header
 
@@ -36,31 +36,20 @@ render_page_header(
 st.markdown(
     """
     <style>
-    .leadership-read {
-        border-top: 1px solid #000000;
-        border-bottom: 1px solid #000000;
-        margin: .15rem 0 1.15rem;
-        padding: .8rem 0 .85rem;
-        color: #171717;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: .88rem;
-        line-height: 1.55;
-    }
-    .leadership-read-label {
-        margin-bottom: .25rem;
+    .leadership-chart-heading {
+        margin: 1rem 0 .25rem;
         color: #000000;
-        font-size: .66rem;
-        font-weight: 800;
-        letter-spacing: .13em;
-        text-transform: uppercase;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 1.02rem;
+        font-weight: 700;
+        line-height: 1.3;
     }
     .relationship-note {
-        max-width: 980px;
-        margin: -.2rem 0 .7rem;
+        margin: 0 0 .55rem;
         color: #4a4a4a;
         font-family: Arial, Helvetica, sans-serif;
-        font-size: .8rem;
-        line-height: 1.5;
+        font-size: .74rem;
+        line-height: 1.45;
     }
     .method-note {
         border-top: 1px solid #bdbdbd;
@@ -72,7 +61,7 @@ st.markdown(
         line-height: 1.5;
     }
     @media (max-width: 760px) {
-        .leadership-read { font-size: .84rem; }
+        .leadership-chart-heading { font-size: .96rem; }
     }
     </style>
     """,
@@ -340,51 +329,6 @@ STATE_COLORS = {
     "Weakening": PASTEL["amber"],
     "Lagging": PASTEL["rose"],
 }
-STATE_BACKGROUNDS = {
-    "Leading": "background-color: #E2F0D9; color: #000000",
-    "Improving": "background-color: #D9EAF7; color: #000000",
-    "Weakening": "background-color: #FFF2CC; color: #000000",
-    "Lagging": "background-color: #FCE4D6; color: #000000",
-}
-
-
-def current_read(frame: pd.DataFrame) -> str:
-    family_frame = summarize_families(frame)
-    strongest = family_frame.iloc[0]
-    weakest = family_frame.iloc[-1]
-    breadth = float((frame["Leadership Score"] >= 0).mean())
-    parts = [
-        f"{strongest['Family']} carries the strongest aggregate leadership score ({strongest['Leadership Score']:+.1f}), "
-        f"while {weakest['Family']} is weakest ({weakest['Leadership Score']:+.1f}).",
-        f"{breadth:.0%} of the displayed relationships rank in the stronger half of the universe.",
-    ]
-    improving = frame.loc[frame["State"] == "Improving"].sort_values("Acceleration", ascending=False)
-    weakening = frame.loc[frame["State"] == "Weakening"].sort_values("Acceleration")
-    if not improving.empty:
-        row = improving.iloc[0]
-        parts.append(f"The clearest positive inflection is {row['Pair']} ({row['Relationship']}), with acceleration of {row['Acceleration']:+.1f}.")
-    if not weakening.empty:
-        row = weakening.iloc[0]
-        parts.append(f"The clearest loss of momentum is {row['Pair']} ({row['Relationship']}), with acceleration of {row['Acceleration']:+.1f}.")
-    return " ".join(parts)
-
-
-def state_cell(value: object) -> str:
-    return STATE_BACKGROUNDS.get(str(value), "")
-
-
-def score_cell(value: object) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return ""
-    if number >= 25:
-        return "background-color: #E2F0D9; color: #000000"
-    if number <= -25:
-        return "background-color: #FCE4D6; color: #000000"
-    return "background-color: #F2F2F2; color: #000000"
-
-
 def make_rotation_map(frame: pd.DataFrame) -> go.Figure:
     figure = go.Figure()
     for state in ("Leading", "Improving", "Weakening", "Lagging"):
@@ -430,47 +374,6 @@ def make_rotation_map(frame: pd.DataFrame) -> go.Figure:
     return figure
 
 
-def make_momentum_heatmap(frame: pd.DataFrame) -> go.Figure:
-    columns = ["1W", "1M", "3M", "6M"]
-    values = frame[columns].to_numpy(dtype=float) * 100.0
-    finite = np.abs(values[np.isfinite(values)])
-    limit = max(2.0, float(np.nanpercentile(finite, 92))) if finite.size else 2.0
-    text = np.empty(values.shape, dtype=object)
-    for row_index in range(values.shape[0]):
-        for column_index in range(values.shape[1]):
-            value = values[row_index, column_index]
-            text[row_index, column_index] = "n/a" if not np.isfinite(value) else f"{value:+.1f}%"
-    figure = go.Figure(
-        go.Heatmap(
-            z=values,
-            x=columns,
-            y=frame["Pair"],
-            text=text,
-            texttemplate="%{text}",
-            textfont={"size": 10},
-            colorscale=[[0.0, PASTEL["rose"]], [0.5, "#FBFBF8"], [1.0, PASTEL["sage"]]],
-            zmin=-limit,
-            zmax=limit,
-            zmid=0,
-            xgap=1,
-            ygap=1,
-            colorbar={"title": "Relative<br>return", "ticksuffix": "%", "thickness": 12},
-            customdata=np.column_stack([frame["Relationship"], frame["State"]]),
-            hovertemplate="<b>%{y}</b><br>%{customdata[0]}<br>%{x}: %{z:+.2f}%<br>%{customdata[1]}<extra></extra>",
-        )
-    )
-    figure.update_layout(
-        height=max(500, 26 * len(frame) + 125),
-        margin={"l": 85, "r": 35, "t": 15, "b": 40},
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        font={"family": "Arial, Helvetica, sans-serif", "color": "#202020", "size": 11},
-    )
-    figure.update_yaxes(autorange="reversed", tickfont={"size": 10})
-    figure.update_xaxes(side="top", tickfont={"size": 11})
-    return figure
-
-
 def make_detail_figure(series: pd.Series, start: pd.Timestamp) -> go.Figure:
     clean = series.replace([np.inf, -np.inf], np.nan).dropna()
     display = clean.loc[start:].copy()
@@ -486,7 +389,7 @@ def make_detail_figure(series: pd.Series, start: pd.Timestamp) -> go.Figure:
         figure.add_trace(go.Scatter(x=moving_average.index, y=moving_average, mode="lines", name=f"{window}D", line={"color": color, "width": 1.25}, hovertemplate=f"%{{y:.2f}}<extra>{window}D</extra>"))
     figure.add_trace(go.Scatter(x=[view.index[-1]], y=[view.iloc[-1]], mode="markers", marker={"color": "#000000", "size": 7}, showlegend=False, hovertemplate="%{y:.2f}<extra>Last</extra>"))
     figure.update_layout(
-        height=500,
+        height=390,
         margin={"l": 50, "r": 25, "t": 20, "b": 45},
         paper_bgcolor="white",
         plot_bgcolor="white",
@@ -499,59 +402,51 @@ def make_detail_figure(series: pd.Series, start: pd.Timestamp) -> go.Figure:
     return figure
 
 
-st.markdown(
-    "<div class='leadership-read'><div class='leadership-read-label'>Current read</div>"
-    f"{html_escape(current_read(visible))}</div>",
-    unsafe_allow_html=True,
-)
-
-family_summary = summarize_families(visible)
-st.subheader("Leadership by Family")
-family_display = family_summary[["Rank", "Family", "Leadership Score", "Acceleration", "Leading Share", "1M", "3M"]].copy()
-family_styler = (
-    family_display.style.format({"Leadership Score": "{:+.1f}", "Acceleration": "{:+.1f}", "Leading Share": "{:.0%}", "1M": "{:+.1%}", "3M": "{:+.1%}"})
-    .map(score_cell, subset=["Leadership Score", "Acceleration"])
-    .set_properties(**{"text-align": "right"}, subset=["Rank", "Leadership Score", "Acceleration", "Leading Share", "1M", "3M"])
-)
-st.dataframe(family_styler, width="stretch", hide_index=True, height=212)
-
 st.subheader("Rotation Map")
 st.caption("Right of zero denotes stronger leadership; above zero denotes improving short-term momentum.")
 st.plotly_chart(make_rotation_map(visible), width="stretch", config={"displayModeBar": False, "responsive": True}, key="leadership-rotation-map")
 
-st.subheader("Multi-Horizon Leadership Matrix")
-st.caption("Relationships are ordered by composite leadership score. Green denotes numerator outperformance.")
-st.plotly_chart(make_momentum_heatmap(visible), width="stretch", config={"displayModeBar": False, "responsive": True}, key="leadership-momentum-heatmap")
-
-st.subheader("Leadership Ranking")
-ranking_columns = ["Rank", "Family", "Relationship", "Pair", "State", "Leadership Score", "Acceleration", "1W", "1M", "3M", "6M", "Trend"]
-ranking_display = visible[ranking_columns].copy()
-ranking_display["Rank"] = np.arange(1, len(ranking_display) + 1)
-ranking_styler = (
-    ranking_display.style.format({"Leadership Score": "{:+.1f}", "Acceleration": "{:+.1f}", "1W": "{:+.1%}", "1M": "{:+.1%}", "3M": "{:+.1%}", "6M": "{:+.1%}"})
-    .map(state_cell, subset=["State"])
-    .map(score_cell, subset=["Leadership Score", "Acceleration"])
-)
-st.dataframe(ranking_styler, width="stretch", hide_index=True, height=560)
-
-with st.sidebar:
-    st.markdown("---")
-    st.header("Detail")
-    detail_key = st.selectbox("Relationship", options=visible["Pair"].tolist(), format_func=lambda key: f"{key} — {SPEC_BY_KEY[key].label}")
-
-detail_row = visible.loc[detail_key]
-detail_spec = SPEC_BY_KEY[detail_key]
 detail_start = pd.Timestamp(market_date - timedelta(days=detail_spans[detail_span_key]))
-st.subheader(f"Selected Detail · {detail_key}")
-st.markdown(
-    f"<div class='relationship-note'><strong>{html_escape(detail_spec.label)}</strong> · {html_escape(detail_spec.note)}</div>",
-    unsafe_allow_html=True,
-)
-st.plotly_chart(make_detail_figure(ratios[detail_key], detail_start), width="stretch", config={"displayModeBar": False, "responsive": True}, key=f"leadership-detail-{detail_key}")
-st.caption(
-    f"State {detail_row['State']} | Score {detail_row['Leadership Score']:+.1f} | Acceleration {detail_row['Acceleration']:+.1f} | "
-    f"1W {detail_row['1W']:+.1%} | 1M {detail_row['1M']:+.1%} | 3M {detail_row['3M']:+.1%} | 6M {detail_row['6M']:+.1%} | As of {detail_row['As Of']}"
-)
+st.subheader("Leadership Charts")
+st.caption("All selected relationships are displayed below. Charts are grouped by leadership family and remain fully expanded.")
+
+for family in selected_families:
+    family_keys = [
+        spec.key
+        for spec in LEADERSHIP_FAMILIES[family]
+        if spec.key in visible.index
+    ]
+    if not family_keys:
+        continue
+
+    st.markdown(f"### {family}")
+    for row_start in range(0, len(family_keys), 2):
+        columns = st.columns(2, gap="large")
+        for column_index, detail_key in enumerate(family_keys[row_start : row_start + 2]):
+            detail_row = visible.loc[detail_key]
+            detail_spec = SPEC_BY_KEY[detail_key]
+            with columns[column_index]:
+                st.markdown(
+                    f"<div class='leadership-chart-heading'>{html_escape(detail_spec.label)} ({html_escape(detail_key)})</div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f"<div class='relationship-note'>{html_escape(detail_spec.note)}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.plotly_chart(
+                    make_detail_figure(ratios[detail_key], detail_start),
+                    width="stretch",
+                    config={"displayModeBar": False, "responsive": True},
+                    key=f"leadership-detail-{detail_key}",
+                )
+                st.caption(
+                    f"State {detail_row['State']} | Score {detail_row['Leadership Score']:+.1f} | "
+                    f"Acceleration {detail_row['Acceleration']:+.1f} | 1W {detail_row['1W']:+.1%} | "
+                    f"1M {detail_row['1M']:+.1%} | 3M {detail_row['3M']:+.1%} | "
+                    f"6M {detail_row['6M']:+.1%} | As of {detail_row['As Of']}"
+                )
+                st.markdown("---")
 
 if unavailable:
     st.caption("Unavailable this session: " + ", ".join(sorted(set(unavailable))))

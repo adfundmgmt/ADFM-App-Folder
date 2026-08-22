@@ -133,6 +133,34 @@ class InstitutionalThemeTests(unittest.TestCase):
             sector_breadth.index("Dropped {len(excluded_tickers)} ticker(s)"),
         )
 
+    def test_leadership_and_ratio_pages_default_to_expanded_chartbooks(self):
+        root = Path(__file__).resolve().parents[1]
+        leadership = (
+            root / "pages" / "8_Equity_Leadership_and_Rotation.py"
+        ).read_text(encoding="utf-8")
+        ratio_chartbook = (
+            root / "pages" / "11_Cross_Asset_Ratio_Chartbook.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('st.subheader("Rotation Map")', leadership)
+        self.assertIn('st.subheader("Leadership Charts")', leadership)
+        self.assertLess(
+            leadership.index('st.subheader("Rotation Map")'),
+            leadership.index('st.subheader("Leadership Charts")'),
+        )
+        self.assertIn('st.columns(2, gap="large")', leadership)
+        self.assertNotIn("Current read", leadership)
+        self.assertNotIn("Leadership by Family", leadership)
+        self.assertNotIn("Multi-Horizon Leadership Matrix", leadership)
+        self.assertNotIn("Leadership Ranking", leadership)
+        self.assertNotIn("Selected Detail", leadership)
+
+        self.assertIn("for family, specs in selected_groups.items():", ratio_chartbook)
+        self.assertIn("render_spec(spec, compact=True)", ratio_chartbook)
+        self.assertNotIn("Focused relationship", ratio_chartbook)
+        self.assertNotIn("Full chartbook", ratio_chartbook)
+        self.assertNotIn("view_mode", ratio_chartbook)
+
     @patch("adfm_core.ui.st.markdown")
     def test_legacy_tool_finish_removes_colored_rounded_chrome(self, markdown):
         inject_institutional_tool_finish()
