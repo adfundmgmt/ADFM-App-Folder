@@ -4,6 +4,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Equity Leadership & Rotation now formats all relative-return percentages to exactly two decimal places in Rotation Map hover labels and chart captions.
 - Equity Leadership & Rotation now opens with the Rotation Map and renders every selected relationship as an expanded chart; the current read, family summary, momentum matrix, ranking table, and single-detail selector were removed.
 - Cross-Asset Ratio Chartbook now renders all selected families and all 50 default ratios immediately, removing the focused-versus-full view gate.
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -43,6 +45,12 @@ class ExpandedChartbookPageTests(unittest.TestCase):
         self.assertEqual(len(app.get("plotly_chart")), 26)
         self.assertEqual(len(app.dataframe), 0)
         self.assertFalse(any(item.label == "Relationship" for item in app.selectbox))
+        rotation_spec = json.loads(app.get("plotly_chart")[0].proto.spec)
+        for trace in rotation_spec["data"]:
+            self.assertNotIn("customdata[2]:", trace["hovertemplate"])
+            for row in trace["customdata"]:
+                for value in row[2:6]:
+                    self.assertIsNotNone(re.fullmatch(r"[+-]\d+\.\d{2}%", value))
         body = "\n".join(block.value for block in app.markdown)
         self.assertNotIn("Current read", body)
         self.assertNotIn("Leadership by Family", body)

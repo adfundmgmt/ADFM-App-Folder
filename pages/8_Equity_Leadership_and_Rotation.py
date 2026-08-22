@@ -329,15 +329,35 @@ STATE_COLORS = {
     "Weakening": PASTEL["amber"],
     "Lagging": PASTEL["rose"],
 }
+
+
+def fmt_signed_percent(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if not np.isfinite(number):
+        return "n/a"
+    return f"{number:+.2%}"
+
+
 def make_rotation_map(frame: pd.DataFrame) -> go.Figure:
     figure = go.Figure()
     for state in ("Leading", "Improving", "Weakening", "Lagging"):
         subset = frame.loc[frame["State"] == state]
         if subset.empty:
             continue
-        custom = np.column_stack(
-            [subset["Relationship"], subset["Family"], subset["1W"] * 100, subset["1M"] * 100, subset["3M"] * 100, subset["6M"] * 100]
-        )
+        custom = [
+            [
+                row["Relationship"],
+                row["Family"],
+                fmt_signed_percent(row["1W"]),
+                fmt_signed_percent(row["1M"]),
+                fmt_signed_percent(row["3M"]),
+                fmt_signed_percent(row["6M"]),
+            ]
+            for _, row in subset.iterrows()
+        ]
         figure.add_trace(
             go.Scatter(
                 x=subset["Leadership Score"],
@@ -352,8 +372,8 @@ def make_rotation_map(frame: pd.DataFrame) -> go.Figure:
                 hovertemplate=(
                     "<b>%{text}</b><br>%{customdata[0]}<br>%{customdata[1]}"
                     "<br>Score %{x:.1f}<br>Acceleration %{y:.1f}"
-                    "<br>1W %{customdata[2]:+.1f}% · 1M %{customdata[3]:+.1f}%"
-                    "<br>3M %{customdata[4]:+.1f}% · 6M %{customdata[5]:+.1f}%<extra></extra>"
+                    "<br>1W %{customdata[2]} · 1M %{customdata[3]}"
+                    "<br>3M %{customdata[4]} · 6M %{customdata[5]}<extra></extra>"
                 ),
             )
         )
@@ -442,9 +462,9 @@ for family in selected_families:
                 )
                 st.caption(
                     f"State {detail_row['State']} | Score {detail_row['Leadership Score']:+.1f} | "
-                    f"Acceleration {detail_row['Acceleration']:+.1f} | 1W {detail_row['1W']:+.1%} | "
-                    f"1M {detail_row['1M']:+.1%} | 3M {detail_row['3M']:+.1%} | "
-                    f"6M {detail_row['6M']:+.1%} | As of {detail_row['As Of']}"
+                    f"Acceleration {detail_row['Acceleration']:+.1f} | 1W {fmt_signed_percent(detail_row['1W'])} | "
+                    f"1M {fmt_signed_percent(detail_row['1M'])} | 3M {fmt_signed_percent(detail_row['3M'])} | "
+                    f"6M {fmt_signed_percent(detail_row['6M'])} | As of {detail_row['As Of']}"
                 )
                 st.markdown("---")
 
