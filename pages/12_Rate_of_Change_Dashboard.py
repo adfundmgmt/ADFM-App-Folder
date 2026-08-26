@@ -41,7 +41,7 @@ ROC_PERIODS = {
     "20D": 20,
     "63D": 63,
     "126D": 126,
-    "1Y": 252,
+    "252D": 252,
 }
 
 PASTEL_GREEN = PASTEL["sage"]
