@@ -37,11 +37,11 @@ TIMEFRAME_MAP = {
 }
 
 ROC_PERIODS = {
-    "5D": 5,
     "10D": 10,
     "20D": 20,
     "63D": 63,
     "126D": 126,
+    "1Y": 252,
 }
 
 PASTEL_GREEN = PASTEL["sage"]
