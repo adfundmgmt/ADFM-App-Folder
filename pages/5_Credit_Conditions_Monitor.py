@@ -79,12 +79,45 @@ st.markdown(
             font-size: .76rem;
             line-height: 1.5;
         }
+        .sovereign-legend {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: .55rem 1.25rem;
+            margin: .15rem 0 .30rem;
+            color: #374151;
+            font-size: .75rem;
+            line-height: 1.2;
+        }
+        .sovereign-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: .42rem;
+            white-space: nowrap;
+        }
+        .sovereign-swatch {
+            width: .78rem;
+            height: .52rem;
+            border-radius: 2px;
+            display: inline-block;
+        }
+        .sovereign-median-line {
+            width: 1.12rem;
+            display: inline-block;
+            border-top: 2px dashed #111827;
+        }
+        .sovereign-zero-line {
+            width: 1.12rem;
+            display: inline-block;
+            border-top: 1px solid #CBD5E1;
+        }
         div[data-testid="stDataFrame"] {
             border-radius: 0 !important;
         }
         @media (max-width: 760px) {
             .section-title { font-size: 1.04rem; }
             .section-subtitle { font-size: .76rem; }
+            .sovereign-legend { gap: .45rem .90rem; font-size: .71rem; }
         }
     </style>
     """,
@@ -106,6 +139,14 @@ COLORS = {
     "dark": "#111111",
 }
 LINE_COLORS = list(PASTEL_20)
+
+# Higher/lower sovereign yield colors intentionally use a stronger, colorblind-friendly
+# warm/cool pair than the softer site palette. These charts encode direction first.
+SOVEREIGN_UP = "#F28E2B"
+SOVEREIGN_DOWN = "#4E79A7"
+SOVEREIGN_FLAT = "#9CA3AF"
+SOVEREIGN_MEDIAN = "#111827"
+SOVEREIGN_ZERO = "#CBD5E1"
 
 MARKET_TICKERS: Tuple[str, ...] = (
     "HYG",
@@ -962,7 +1003,7 @@ def sovereign_bar_chart(frame: pd.DataFrame, group: str, x_limit: float) -> go.F
     )
     median = float(group_frame["Move bp"].median()) if not group_frame.empty else 0.0
     colors = [
-        COLORS["orange"] if value > 0 else COLORS["blue"] if value < 0 else COLORS["grey"]
+        SOVEREIGN_UP if value > 0 else SOVEREIGN_DOWN if value < 0 else SOVEREIGN_FLAT
         for value in group_frame["Move bp"]
     ]
     custom = (
@@ -980,15 +1021,22 @@ def sovereign_bar_chart(frame: pd.DataFrame, group: str, x_limit: float) -> go.F
     )
 
     fig = go.Figure()
-    fig.add_vline(x=0, line_width=1, line_color="#8a8a8a")
+    fig.add_vline(x=0, line_width=1.1, line_color=SOVEREIGN_ZERO)
     if not group_frame.empty:
-        fig.add_vline(x=median, line_width=1.5, line_dash="dash", line_color=COLORS["amber"])
+        fig.add_vline(
+            x=median,
+            line_width=1.6,
+            line_dash="dash",
+            line_color=SOVEREIGN_MEDIAN,
+        )
         fig.add_trace(
             go.Bar(
                 x=group_frame["Move bp"],
                 y=group_frame["Label"],
                 orientation="h",
                 marker_color=colors,
+                marker_line_color="rgba(17,24,39,.10)",
+                marker_line_width=.5,
                 customdata=custom,
                 text=[
                     f"{value:+.0f} bp   {start:.2f}% → {end:.2f}%"
@@ -999,6 +1047,7 @@ def sovereign_bar_chart(frame: pd.DataFrame, group: str, x_limit: float) -> go.F
                     )
                 ],
                 textposition="outside",
+                textfont=dict(color="#111827", size=11),
                 cliponaxis=False,
                 hovertemplate=(
                     "%{y}<br>Move: %{x:+.0f} bp"
@@ -1011,23 +1060,29 @@ def sovereign_bar_chart(frame: pd.DataFrame, group: str, x_limit: float) -> go.F
 
     fig.update_layout(
         height=max(360, 34 * max(len(group_frame), 7) + 90),
-        margin=dict(l=18, r=130, t=46, b=34),
+        margin=dict(l=24, r=150, t=48, b=40),
         paper_bgcolor="white",
         plot_bgcolor="white",
         showlegend=False,
+        bargap=.18,
         title=dict(
             text=f"{group.upper()} · median {median:+.0f} bp",
             x=0,
             xanchor="left",
-            font=dict(size=14, color=COLORS["dark"]),
+            font=dict(size=15, color="#111827"),
         ),
         xaxis=dict(
             title="Change in benchmark 10Y yield (basis points)",
             range=[-x_limit, x_limit],
             zeroline=False,
-            gridcolor="#eeeeee",
+            gridcolor="#EEF2F6",
+            tickfont=dict(color="#64748B", size=11),
+            title_font=dict(color="#64748B", size=11),
         ),
-        yaxis=dict(showgrid=False),
+        yaxis=dict(
+            showgrid=False,
+            tickfont=dict(color="#374151", size=11),
+        ),
     )
     return fig
 
@@ -1248,8 +1303,17 @@ with right:
 st.markdown('<div class="section-title">Global 10Y Government Yield Moves</div>', unsafe_allow_html=True)
 st.markdown(
     f'<div class="section-subtitle">Change in benchmark 10-year sovereign yields over <b>{global_window}</b>. '
-    'Orange means yields rose; blue means yields fell. The group median is shown as a dashed line. '
+    'Bars show the direction and magnitude of repricing; current and starting yields are printed beside each bar. '
     'Only observations that pass freshness and coverage checks are displayed.</div>',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f'''<div class="sovereign-legend">
+        <span class="sovereign-legend-item"><span class="sovereign-swatch" style="background:{SOVEREIGN_UP};"></span>Yields higher</span>
+        <span class="sovereign-legend-item"><span class="sovereign-swatch" style="background:{SOVEREIGN_DOWN};"></span>Yields lower</span>
+        <span class="sovereign-legend-item"><span class="sovereign-median-line"></span>Group median</span>
+        <span class="sovereign-legend-item"><span class="sovereign-zero-line"></span>Zero change</span>
+    </div>''',
     unsafe_allow_html=True,
 )
 
@@ -1277,7 +1341,7 @@ else:
         unsafe_allow_html=True,
     )
     max_abs = float(sovereign_moves["Move bp"].abs().max())
-    x_limit = max(50.0, np.ceil((max_abs * 1.18) / 25.0) * 25.0)
+    x_limit = max(75.0, np.ceil((max_abs * 1.42 + 20.0) / 25.0) * 25.0)
     dm_col, em_col = st.columns(2)
     with dm_col:
         st.plotly_chart(sovereign_bar_chart(sovereign_moves, "Developed", x_limit), width="stretch")
