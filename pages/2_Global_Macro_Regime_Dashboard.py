@@ -75,33 +75,51 @@ PERFORMANCE_ROWS = [
     ("Commodities", "HG=F"),
 ]
 
-st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown(
     """
     <style>
-        html, body, .stApp, main, [data-testid="stAppViewContainer"] {
+        html, body, .stApp, main, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
             background: #ffffff !important;
         }
-        .block-container {
-            padding-top: 1.35rem !important;
-            padding-bottom: 2.0rem !important;
-            max-width: 1500px !important;
+
+        *, *::before, *::after {
+            box-sizing: border-box;
         }
-        div[data-testid="stSidebar"] {
+
+        .block-container,
+        [data-testid="stMainBlockContainer"] {
+            width: calc(100% - 4rem) !important;
+            max-width: 1480px !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            padding-top: 1.25rem !important;
+            padding-right: 0 !important;
+            padding-bottom: 2rem !important;
+            padding-left: 0 !important;
+            overflow-x: clip !important;
+        }
+
+        div[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] {
             background: #ffffff;
             border-right: 1px solid #e5e7eb;
         }
+
         header[data-testid="stHeader"] {
-            background: rgba(255,255,255,.96) !important;
+            background: rgba(255,255,255,.97) !important;
             border-bottom: 1px solid #f1f5f9;
         }
+
         .gm-head {
+            width: 100%;
             border-top: 3px solid #111827;
             border-bottom: 1px solid #111827;
             padding: 12px 0 14px;
             margin: 0 0 12px;
         }
+
         .gm-eyebrow {
             font-size: .68rem;
             font-weight: 800;
@@ -110,29 +128,42 @@ st.markdown(
             color: #111827;
             margin-bottom: 4px;
         }
+
         .gm-title {
-            font-size: 2.55rem;
+            max-width: 100%;
+            font-size: clamp(2.2rem, 3.0vw, 2.55rem);
             line-height: 1.02;
             letter-spacing: -.035em;
             font-weight: 620;
             color: #111827;
             margin: 0;
+            white-space: normal;
+            overflow-wrap: normal;
+            word-break: normal;
         }
+
         .gm-subtitle {
+            max-width: 1080px;
             color: #475569;
             font-size: .92rem;
             line-height: 1.45;
             margin-top: 7px;
         }
+
         .data-status {
             color: #64748b;
             font-size: .72rem;
+            line-height: 1.45;
             margin: 5px 0 18px;
+            overflow-wrap: anywhere;
         }
+
         .current-read {
+            width: 100%;
             padding: 0 0 14px;
             border-bottom: 1px solid #dfe3e8;
         }
+
         .section-kicker {
             color: #64748b;
             font-size: .66rem;
@@ -141,26 +172,35 @@ st.markdown(
             font-weight: 800;
             margin-bottom: 4px;
         }
+
         .regime-name {
             color: #111827;
             font-size: 1.55rem;
+            line-height: 1.14;
             font-weight: 800;
             letter-spacing: -.02em;
             margin-bottom: 6px;
         }
+
         .regime-copy {
             color: #334155;
             font-size: .91rem;
             line-height: 1.55;
-            max-width: 1180px;
+            max-width: 1120px;
         }
+
         .state-line {
+            max-width: 100%;
             font-size: .84rem;
-            line-height: 1.55;
+            line-height: 1.65;
             color: #334155;
             margin-top: 10px;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
+
         .state-line strong { color: #111827; }
+
         .section-title {
             font-size: 1.02rem;
             font-weight: 800;
@@ -169,36 +209,150 @@ st.markdown(
             margin-bottom: .18rem;
             letter-spacing: -.01em;
         }
+
         .section-subtitle {
+            max-width: 1080px;
             font-size: .78rem;
             color: #64748b;
             line-height: 1.45;
             margin-bottom: .55rem;
         }
+
         .tension-line {
+            width: 100%;
             border-top: 1px solid #e5e7eb;
             padding: 9px 0 8px;
             font-size: .84rem;
             color: #334155;
             line-height: 1.45;
+            overflow-wrap: anywhere;
         }
+
         .tension-line:last-child { border-bottom: 1px solid #e5e7eb; }
         .tension-line b { color: #111827; }
-        div[data-testid="stDataFrame"] {
+
+        div[data-testid="stDataFrame"],
+        div[data-testid="stTable"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
             border: 0 !important;
             border-radius: 0 !important;
+            overflow-x: auto !important;
         }
+
         .stDataFrame [role="columnheader"] {
             font-weight: 700 !important;
         }
+
         div[data-testid="stExpander"] {
+            width: 100%;
             border: 0;
             border-top: 1px solid #dfe3e8;
             border-radius: 0;
         }
-        @media (max-width: 900px) {
-            .block-container { padding-top: .8rem !important; }
-            .gm-title { font-size: 2rem; }
+
+        @media (min-width: 1501px) {
+            .block-container,
+            [data-testid="stMainBlockContainer"] {
+                width: min(1480px, calc(100% - 5rem)) !important;
+            }
+        }
+
+        @media (max-width: 1100px) {
+            .block-container,
+            [data-testid="stMainBlockContainer"] {
+                width: calc(100% - 2.5rem) !important;
+                max-width: none !important;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .block-container,
+            [data-testid="stMainBlockContainer"] {
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding-top: calc(4.1rem + env(safe-area-inset-top, 0px)) !important;
+                padding-right: max(1rem, env(safe-area-inset-right, 0px)) !important;
+                padding-bottom: calc(1.75rem + env(safe-area-inset-bottom, 0px)) !important;
+                padding-left: max(1rem, env(safe-area-inset-left, 0px)) !important;
+                overflow-x: clip !important;
+            }
+
+            .gm-head {
+                padding: 9px 0 11px;
+                margin-bottom: 10px;
+            }
+
+            .gm-eyebrow {
+                font-size: .64rem;
+                margin-bottom: 5px;
+            }
+
+            .gm-title {
+                font-size: clamp(1.85rem, 9vw, 2.15rem);
+                line-height: 1.06;
+                letter-spacing: -.03em;
+                overflow-wrap: anywhere;
+            }
+
+            .gm-subtitle {
+                font-size: .86rem;
+                line-height: 1.45;
+                margin-top: 7px;
+            }
+
+            .data-status {
+                font-size: .69rem;
+                margin: 4px 0 14px;
+            }
+
+            .current-read {
+                padding-bottom: 12px;
+            }
+
+            .section-kicker {
+                font-size: .63rem;
+            }
+
+            .regime-name {
+                font-size: 1.35rem;
+                line-height: 1.14;
+            }
+
+            .regime-copy {
+                font-size: .87rem;
+                line-height: 1.5;
+            }
+
+            .state-line {
+                font-size: .80rem;
+                line-height: 1.75;
+                margin-top: 9px;
+            }
+
+            .section-title {
+                font-size: .98rem;
+                margin-top: 1.05rem;
+            }
+
+            .section-subtitle {
+                font-size: .75rem;
+                line-height: 1.42;
+            }
+
+            .tension-line {
+                font-size: .80rem;
+                line-height: 1.48;
+                padding: 8px 0;
+            }
+
+            div[data-testid="stDataFrame"],
+            div[data-testid="stTable"] {
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
         }
     </style>
     """,
