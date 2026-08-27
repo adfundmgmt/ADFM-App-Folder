@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import timedelta
 from html import escape
 from typing import Dict, Iterable, List, Tuple
 
@@ -9,13 +9,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.palette import PASTEL
 from adfm_core.market_data import (
     close_panel,
     configure_yfinance_cache,
     fetch_daily_ohlcv,
 )
-from adfm_core.regime_math import rolling_percentile_previous
+from adfm_core.primary_data import fetch_fred_series
 from adfm_core.ui import (
     PageHeader,
     inject_explorer_style,
@@ -31,7 +30,10 @@ configure_yfinance_cache()
 # =============================================================================
 
 TITLE = "Global Macro Regime Dashboard"
-SUBTITLE = "Market-implied regime monitor built from prices, ETFs, futures, FX, yield indexes, credit proxies, commodities, and volatility."
+SUBTITLE = (
+    "A transparent cross-asset read of growth, inflation, rates, liquidity and risk appetite. "
+    "Every regime call is tied to observable market moves, yield changes or primary-source data."
+)
 
 TICKERS: Dict[str, str] = {
     # Equity / risk
@@ -39,91 +41,75 @@ TICKERS: Dict[str, str] = {
     "QQQ": "Nasdaq 100",
     "RSP": "Equal Weight S&P 500",
     "IWM": "Russell 2000",
-    "DIA": "Dow Industrials",
-    "ACWI": "Global Equities",
     "EFA": "Developed ex-US",
     "EEM": "Emerging Markets",
+    "FXI": "China Large Caps",
     "SMH": "Semiconductors",
     "XLF": "Financials",
     "XLI": "Industrials",
+    "XLE": "Energy",
     "XLY": "Consumer Discretionary",
     "XLP": "Consumer Staples",
     "XLU": "Utilities",
-    # Credit
+    # Credit / rates
     "HYG": "High Yield Credit",
-    "JNK": "High Yield Credit 2",
     "LQD": "Investment Grade Credit",
     "BKLN": "Senior Loans",
-    # Rates / duration
     "SHY": "1-3Y Treasuries",
     "IEF": "7-10Y Treasuries",
     "TLT": "20Y+ Treasuries",
     "TIP": "TIPS",
-    "^IRX": "13W Bill Yield",
-    "^FVX": "5Y Treasury Yield",
-    "^TNX": "10Y Treasury Yield",
-    "^TYX": "30Y Treasury Yield",
-    # Dollar / FX
+    # FX
     "DX-Y.NYB": "U.S. Dollar Index",
     "UUP": "Dollar ETF",
     "EURUSD=X": "EUR/USD",
     "JPY=X": "USD/JPY",
-    "EURGBP=X": "EUR/GBP",
     # Commodities
     "CL=F": "WTI Crude",
     "BZ=F": "Brent Crude",
     "GC=F": "Gold",
     "HG=F": "Copper",
-    "NG=F": "Natural Gas",
-    "GLD": "Gold ETF",
-    "CPER": "Copper ETF",
     # Volatility
     "^VIX": "VIX",
-    "^VVIX": "VVIX",
 }
 
-CORE_DISPLAY = [
+PERFORMANCE_TICKERS = [
     "SPY",
     "QQQ",
     "RSP",
     "IWM",
+    "EFA",
+    "EEM",
+    "FXI",
+    "SMH",
+    "XLF",
+    "XLI",
+    "XLE",
     "HYG",
     "LQD",
-    "TLT",
     "IEF",
-    "^TNX",
-    "DX-Y.NYB",
+    "TLT",
     "UUP",
-    "CL=F",
-    "BZ=F",
     "GC=F",
+    "CL=F",
     "HG=F",
-    "^VIX",
 ]
 
-HORIZONS = {
-    "1D": 1,
-    "1W": 5,
-    "1M": 21,
-    "3M": 63,
-}
-
-SCORE_COLUMNS = ["1D", "1W", "1M", "3M", "YTD", "Trend", "Composite"]
-
 PALETTE = {
-    "bg": "#ffffff",
-    "card": "#ffffff",
-    "border": "#dfe3e8",
     "text": "#111827",
-    "muted": "#6b7280",
+    "muted": "#64748b",
     "faint": "#94a3b8",
+    "border": "#dfe3e8",
     "grid": "#e5e7eb",
-    "green": PASTEL["sage"],
-    "red": PASTEL["rose"],
-    "amber": PASTEL["amber"],
-    "blue": PASTEL["blue"],
-    "purple": PASTEL["lavender"],
-    "slate": "#334155",
+    "green": "#6f9653",
+    "red": "#b75b54",
+    "amber": "#d9a525",
+    "blue": "#4569ad",
+    "slate": "#475569",
+    "green_bg": "#f3f8ef",
+    "red_bg": "#fbf3f2",
+    "amber_bg": "#fff9e9",
+    "blue_bg": "#f3f6fb",
 }
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="expanded")
@@ -143,225 +129,296 @@ st.markdown(
         .block-container {
             padding-top: 3.25rem;
             padding-bottom: 2.5rem;
-            max-width: 1560px;
+            max-width: 1580px;
         }
         div[data-testid="stSidebar"] {
             background: #ffffff;
             border-right: 1px solid #e5e7eb;
         }
-
         header[data-testid="stHeader"] {
             background: rgba(255, 255, 255, 0.96) !important;
             border-bottom: 1px solid #f1f5f9;
-        }
-        .page-title {
-            padding-top: 0.25rem;
-        }
-        div[data-testid="stSidebar"] h2, div[data-testid="stSidebar"] h3 {
-            color: #111827;
-            letter-spacing: -0.01em;
-        }
-        .page-title {
-            font-size: 1.62rem;
-            font-weight: 850;
-            color: #111827;
-            letter-spacing: -0.025em;
-            margin-bottom: 0.12rem;
-        }
-        .page-subtitle {
-            font-size: 0.91rem;
-            color: #64748b;
-            margin-bottom: 0.85rem;
-            line-height: 1.38;
         }
         .data-status {
             color: #64748b;
             font-size: 0.73rem;
             line-height: 1.4;
-            margin: -0.18rem 0 0.58rem;
+            margin: -0.15rem 0 0.62rem;
         }
-        .regime-banner {
+        .regime-hero {
             display: grid;
-            grid-template-columns: minmax(0, 1.45fr) minmax(250px, 0.85fr);
-            gap: 1rem;
-            align-items: center;
-            border: 1px solid rgba(100, 116, 139, 0.18);
-            border-left: 4px solid var(--regime-accent, #526f8f);
-            border-radius: 8px;
-            background: rgba(100, 116, 139, 0.035);
-            padding: 14px 16px;
-            margin: 0.35rem 0 0.62rem;
+            grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.72fr);
+            gap: 1.15rem;
+            align-items: stretch;
+            border: 1px solid rgba(100, 116, 139, 0.20);
+            border-left: 4px solid var(--hero-accent, #4569ad);
+            border-radius: 10px;
+            background: #ffffff;
+            padding: 15px 17px;
+            margin: 0.35rem 0 0.78rem;
         }
-        .regime-kicker {
+        .hero-kicker {
             font-size: 0.63rem;
             font-weight: 850;
-            letter-spacing: 0.15em;
+            letter-spacing: 0.14em;
             text-transform: uppercase;
-            color: var(--regime-accent, #526f8f);
+            color: var(--hero-accent, #4569ad);
             margin-bottom: 0.34rem;
         }
-        .regime-title {
-            font-size: 1.34rem;
+        .hero-title {
+            font-size: 1.48rem;
+            line-height: 1.12;
             font-weight: 850;
             color: #111827;
             letter-spacing: -0.025em;
-            line-height: 1.15;
-            margin-bottom: 0.28rem;
+            margin-bottom: 0.34rem;
         }
-        .regime-copy {
-            font-size: 0.82rem;
+        .hero-copy {
+            font-size: 0.84rem;
             color: #475569;
-            line-height: 1.42;
+            line-height: 1.46;
         }
-        .regime-callout {
+        .hero-side {
             border-left: 1px solid rgba(100, 116, 139, 0.18);
-            padding-left: 1rem;
+            padding-left: 1.05rem;
         }
-        .regime-callout-label {
+        .hero-side-label {
             font-size: 0.61rem;
             font-weight: 850;
-            letter-spacing: 0.13em;
+            letter-spacing: 0.12em;
             text-transform: uppercase;
             color: #64748b;
-            margin-bottom: 0.26rem;
+            margin-bottom: 0.31rem;
         }
-        .regime-callout-value {
-            font-size: 1rem;
-            font-weight: 800;
+        .hero-side-value {
+            font-size: 1.00rem;
+            font-weight: 820;
             color: #111827;
-            margin-bottom: 0.24rem;
+            line-height: 1.25;
+            margin-bottom: 0.27rem;
         }
-        .metric-strip {
+        .state-grid {
             display: grid;
             grid-template-columns: repeat(5, minmax(0, 1fr));
             border: 1px solid rgba(100, 116, 139, 0.18);
-            border-radius: 8px;
+            border-radius: 10px;
             overflow: hidden;
-            margin: 0.55rem 0 0.82rem;
+            margin-bottom: 0.92rem;
         }
-        .metric-cell {
-            min-height: 76px;
-            padding: 10px 13px 11px;
+        .state-card {
+            min-height: 118px;
+            padding: 12px 13px;
             border-right: 1px solid rgba(100, 116, 139, 0.15);
-        }
-        .metric-cell:last-child { border-right: 0; }
-        .metric-label {
-            font-size: 0.60rem;
-            letter-spacing: 0.13em;
-            text-transform: uppercase;
-            color: #64748b;
-            margin-bottom: 5px;
-        }
-        .metric-value {
-            font-size: 1.08rem;
-            line-height: 1;
-            font-weight: 820;
-            color: #111827;
-        }
-        .metric-note {
-            font-size: 0.67rem;
-            line-height: 1.27;
-            color: #64748b;
-            margin-top: 5px;
-        }
-        .pillar-label, .note-label {
-            font-size: 0.67rem;
-            font-weight: 850;
-            letter-spacing: 0.09em;
-            text-transform: uppercase;
-            color: #6b7280;
-            margin-bottom: 0.42rem;
-        }
-        .pillar-grid {
-            display: grid;
-            grid-template-columns: repeat(6, minmax(0, 1fr));
-            border: 1px solid rgba(100, 116, 139, 0.18);
-            border-radius: 8px;
-            overflow: hidden;
-            margin-bottom: 0.82rem;
-        }
-        .pillar-card {
             background: #ffffff;
-            border-right: 1px solid rgba(100, 116, 139, 0.15);
-            padding: 11px 12px;
-            min-height: 84px;
         }
-        .pillar-card:last-child { border-right: 0; }
-        .pillar-value {
-            font-size: 1.18rem;
+        .state-card:last-child { border-right: 0; }
+        .state-label {
+            font-size: 0.61rem;
             font-weight: 850;
-            line-height: 1.08;
-            margin-bottom: 0.30rem;
-        }
-        .pillar-note {
-            font-size: 0.745rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
             color: #64748b;
-            line-height: 1.32;
+            margin-bottom: 0.38rem;
+        }
+        .state-value {
+            font-size: 1.03rem;
+            font-weight: 850;
+            line-height: 1.16;
+            margin-bottom: 0.35rem;
+        }
+        .state-evidence {
+            font-size: 0.70rem;
+            color: #64748b;
+            line-height: 1.36;
         }
         .section-title {
-            font-size: 0.98rem;
+            font-size: 1.02rem;
             font-weight: 850;
             color: #111827;
-            margin-top: 0.78rem;
-            margin-bottom: 0.30rem;
+            margin-top: 0.95rem;
+            margin-bottom: 0.26rem;
             letter-spacing: -0.01em;
         }
         .section-subtitle {
-            font-size: 0.80rem;
+            font-size: 0.79rem;
             color: #64748b;
-            margin-bottom: 0.62rem;
+            margin-bottom: 0.56rem;
             line-height: 1.42;
         }
-        .note-card {
-            background: #ffffff;
-            border: 1px solid #d9dee7;
-            border-radius: 12px;
-            padding: 12px 14px;
-            min-height: 104px;
+        .transition-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.7rem;
             margin-bottom: 0.75rem;
         }
-        .note-label { color: #7c5a2b; }
-        .note-copy {
-            font-size: 0.82rem;
-            color: #334155;
-            line-height: 1.45;
+        .transition-card {
+            border: 1px solid #dfe3e8;
+            border-radius: 9px;
+            padding: 11px 13px;
+            background: #ffffff;
+            min-height: 102px;
         }
-        .mini-caption {
+        .transition-date {
             color: #64748b;
-            font-size: 0.76rem;
-            line-height: 1.38;
+            font-size: 0.66rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 0.3rem;
         }
-        div[data-testid="stDataFrame"] {
-            border: 1px solid #d9dee7;
-            border-radius: 11px;
+        .transition-regime {
+            color: #111827;
+            font-size: 0.93rem;
+            font-weight: 820;
+            margin-bottom: 0.28rem;
+        }
+        .transition-detail {
+            color: #64748b;
+            font-size: 0.71rem;
+            line-height: 1.36;
+        }
+        .change-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.64rem;
+            margin-bottom: 0.86rem;
+        }
+        .change-card {
+            border: 1px solid #dfe3e8;
+            border-radius: 9px;
+            padding: 10px 12px;
+            background: #ffffff;
+            min-height: 104px;
+        }
+        .change-name {
+            font-size: 0.72rem;
+            font-weight: 820;
+            color: #334155;
+            margin-bottom: 0.24rem;
+        }
+        .change-move {
+            font-size: 1.00rem;
+            font-weight: 850;
+            line-height: 1.1;
+            margin-bottom: 0.28rem;
+        }
+        .change-read {
+            font-size: 0.70rem;
+            line-height: 1.36;
+            color: #64748b;
+        }
+        .tension-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.66rem;
+            margin-bottom: 0.84rem;
+        }
+        .tension-card {
+            border: 1px solid #dfe3e8;
+            border-radius: 9px;
+            padding: 11px 13px;
+            background: #ffffff;
+            min-height: 108px;
+        }
+        .tension-status {
+            font-size: 0.61rem;
+            font-weight: 850;
+            letter-spacing: 0.10em;
+            text-transform: uppercase;
+            margin-bottom: 0.26rem;
+        }
+        .tension-title {
+            color: #111827;
+            font-size: 0.88rem;
+            font-weight: 820;
+            margin-bottom: 0.28rem;
+        }
+        .tension-copy {
+            color: #64748b;
+            font-size: 0.72rem;
+            line-height: 1.40;
+        }
+        .macro-table-wrap {
+            border: 1px solid #dfe3e8;
+            border-radius: 10px;
             overflow: hidden;
+            margin-bottom: 0.7rem;
         }
+        table.macro-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #ffffff;
+            font-size: 0.74rem;
+        }
+        .macro-table thead th {
+            text-align: right;
+            padding: 9px 10px;
+            color: #64748b;
+            font-size: 0.62rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            border-bottom: 1px solid #dfe3e8;
+            background: #fbfcfd;
+            white-space: nowrap;
+        }
+        .macro-table thead th:first-child,
+        .macro-table thead th:nth-child(2),
+        .macro-table thead th:last-child {
+            text-align: left;
+        }
+        .macro-table tbody td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #edf0f3;
+            color: #334155;
+            text-align: right;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+        .macro-table tbody tr:last-child td { border-bottom: 0; }
+        .macro-table tbody td:first-child,
+        .macro-table tbody td:nth-child(2),
+        .macro-table tbody td:last-child {
+            text-align: left;
+        }
+        .macro-group {
+            color: #64748b !important;
+            font-size: 0.66rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .macro-name {
+            font-weight: 780;
+            color: #111827 !important;
+        }
+        .read-chip {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 999px;
+            font-size: 0.65rem;
+            font-weight: 760;
+            white-space: nowrap;
+        }
+        .read-pos { background: #eef6e9; color: #4f733a; }
+        .read-neg { background: #faeeee; color: #9d4c47; }
+        .read-mix { background: #fff6dd; color: #876517; }
         div[data-testid="stPlotlyChart"] {
             background: #ffffff;
             border-radius: 8px;
             overflow: hidden;
         }
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 0.5rem;
-        }
-        .stTabs [data-baseweb="tab"] {
-            height: 2.35rem;
-            padding: 0 0.9rem;
-        }
         @media (max-width: 1250px) {
-            .metric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-            .metric-cell:nth-child(3) { border-right: 0; }
-            .metric-cell:nth-child(-n+3) { border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
-            .pillar-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-            .pillar-card:nth-child(3) { border-right: 0; }
-            .pillar-card:nth-child(-n+3) { border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
+            .state-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .state-card:nth-child(3) { border-right: 0; }
+            .state-card:nth-child(-n+3) { border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
         }
-        @media (max-width: 780px) {
-            .regime-banner { grid-template-columns: 1fr; }
-            .regime-callout { border-left: 0; border-top: 1px solid rgba(100, 116, 139, 0.18); padding: 0.8rem 0 0; }
-            .metric-strip, .pillar-grid { grid-template-columns: 1fr; }
-            .metric-cell, .pillar-card { border-right: 0; border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
-            .metric-cell:last-child, .pillar-card:last-child { border-bottom: 0; }
+        @media (max-width: 850px) {
+            .regime-hero { grid-template-columns: 1fr; }
+            .hero-side { border-left: 0; border-top: 1px solid rgba(100, 116, 139, 0.18); padding: 0.8rem 0 0; }
+            .state-grid, .transition-grid, .change-grid, .tension-grid { grid-template-columns: 1fr; }
+            .state-card { border-right: 0; border-bottom: 1px solid rgba(100, 116, 139, 0.15); }
+            .state-card:last-child { border-bottom: 0; }
+            .macro-table-wrap { overflow-x: auto; }
         }
     </style>
     """,
@@ -373,1128 +430,935 @@ st.markdown(
 # HELPERS
 # =============================================================================
 
-
-def is_valid(x: float | int | None) -> bool:
+def is_valid(value: object) -> bool:
     try:
-        return x is not None and np.isfinite(float(x))
+        return value is not None and np.isfinite(float(value))
     except Exception:
         return False
 
 
-def clean_series(series: pd.Series) -> pd.Series:
-    return series.replace([np.inf, -np.inf], np.nan).dropna()
+def clean_series(series: pd.Series | None) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype=float)
+    out = pd.to_numeric(series, errors="coerce")
+    out.index = pd.to_datetime(out.index, errors="coerce")
+    out = out.loc[out.index.notna()].replace([np.inf, -np.inf], np.nan).dropna()
+    return out.sort_index()
 
 
-def latest_valid(series: pd.Series) -> float:
-    clean = clean_series(series)
-    return float(clean.iloc[-1]) if not clean.empty else np.nan
-
-
-def latest_date(series: pd.Series) -> str:
-    clean = clean_series(series)
-    if clean.empty:
-        return "N/A"
-    return pd.Timestamp(clean.index[-1]).strftime("%b %d, %Y")
-
-
-def pct_fmt(x: float | None, digits: int = 1) -> str:
-    if not is_valid(x):
-        return "N/A"
-    return f"{float(x):.{digits}f}%"
-
-
-def num_fmt(x: float | None, digits: int = 2) -> str:
-    if not is_valid(x):
-        return "N/A"
-    return f"{float(x):.{digits}f}"
-
-
-def signed_num_fmt(x: float | None, digits: int = 2) -> str:
-    if not is_valid(x):
-        return "N/A"
-    return f"{float(x):+.{digits}f}"
-
-
-def signed_pct_fmt(x: float | None, digits: int = 1) -> str:
-    if not is_valid(x):
-        return "N/A"
-    return f"{float(x):+.{digits}f}%"
-
-
-def yield_level_fmt(ticker: str, value: float | None) -> str:
-    if not is_valid(value):
-        return "N/A"
-    if ticker in {"^IRX", "^FVX", "^TNX", "^TYX"}:
-        return f"{float(value) / 10:.2f}%"
-    return num_fmt(value, 2)
-
-
-def level_fmt(ticker: str, value: float | None) -> str:
-    if not is_valid(value):
-        return "N/A"
-    if ticker in {"^VIX", "^VVIX"}:
-        return num_fmt(value, 1)
-    if ticker in {"^IRX", "^FVX", "^TNX", "^TYX"}:
-        return yield_level_fmt(ticker, value)
-    if ticker.endswith("=X"):
-        return num_fmt(value, 4)
-    return num_fmt(value, 2)
-
-
-def safe_pct_change(series: pd.Series, periods: int) -> float:
-    clean = clean_series(series)
-    if len(clean) <= periods:
-        return np.nan
-    base = clean.iloc[-periods - 1]
-    last = clean.iloc[-1]
-    if not is_valid(base) or base == 0:
-        return np.nan
-    return float(last / base - 1.0)
-
-
-def ytd_return(series: pd.Series) -> float:
+def value_asof(series: pd.Series | None, asof: pd.Timestamp) -> float:
     clean = clean_series(series)
     if clean.empty:
         return np.nan
-    last_date = pd.Timestamp(clean.index[-1])
-    same_year = clean[clean.index >= pd.Timestamp(date(last_date.year, 1, 1))]
-    if len(same_year) < 2:
-        return np.nan
-    base = same_year.iloc[0]
-    if not is_valid(base) or base == 0:
-        return np.nan
-    return float(same_year.iloc[-1] / base - 1.0)
+    eligible = clean.loc[clean.index <= pd.Timestamp(asof)]
+    return float(eligible.iloc[-1]) if not eligible.empty else np.nan
 
 
-def weighted_average(values: Dict[str, float], weights: Dict[str, float]) -> float:
-    used = [
-        (values[k], weights[k]) for k in weights if k in values and is_valid(values[k])
-    ]
-    if not used:
-        return 0.0
-    total_weight = sum(w for _, w in used)
-    if total_weight == 0:
-        return 0.0
-    return float(sum(v * w for v, w in used) / total_weight)
-
-
-def normalize_score(value: float | None) -> float:
-    if not is_valid(value):
-        return 0.0
-    return float(np.clip(float(value), -1.0, 1.0))
-
-
-def percentile_score_from_change(series: pd.Series, periods: int) -> float:
-    clean = clean_series(series)
-    if len(clean) <= max(periods + 5, 35):
-        return np.nan
-    changes = clean.pct_change(periods).replace([np.inf, -np.inf], np.nan).dropna()
-    if len(changes) < 30:
-        return np.nan
-    rank_series = rolling_percentile_previous(
-        changes,
-        window=min(756, max(30, len(changes) - 1)),
-        min_periods=min(30, max(1, len(changes) - 1)),
-    )
-    rank = latest_valid(rank_series)
-    if not is_valid(rank):
-        return np.nan
-    return normalize_score((rank - 0.5) * 2.0)
-
-
-def trend_score(series: pd.Series) -> float:
-    clean = clean_series(series)
-    if len(clean) < 60:
-        return np.nan
-    window = min(200, max(50, len(clean) // 2))
-    ma = clean.rolling(window, min_periods=max(30, window // 2)).mean()
-    spread = (clean / ma - 1.0).replace([np.inf, -np.inf], np.nan).dropna()
-    if len(spread) < 25:
-        return np.nan
-    rank_series = rolling_percentile_previous(
-        spread,
-        window=min(756, max(30, len(spread) - 1)),
-        min_periods=min(30, max(1, len(spread) - 1)),
-    )
-    rank = latest_valid(rank_series)
-    if not is_valid(rank):
-        return np.nan
-    return normalize_score((rank - 0.5) * 2.0)
-
-
-def ytd_percentile_score(series: pd.Series) -> float:
-    """Compare the current YTD move with prior moves of the same trading-day length."""
+def pct_change_days(series: pd.Series | None, asof: pd.Timestamp, days: int) -> float:
     clean = clean_series(series)
     if clean.empty:
         return np.nan
-    last_date = pd.Timestamp(clean.index[-1])
-    year_slice = clean.loc[clean.index >= pd.Timestamp(date(last_date.year, 1, 1))]
-    periods = max(1, len(year_slice) - 1)
-    return percentile_score_from_change(clean, periods)
+    end = value_asof(clean, asof)
+    start = value_asof(clean, pd.Timestamp(asof) - pd.Timedelta(days=days))
+    if not is_valid(end) or not is_valid(start) or float(start) == 0:
+        return np.nan
+    return float((float(end) / float(start) - 1.0) * 100.0)
 
 
-def score_color(score: float | None) -> str:
-    if not is_valid(score):
-        return PALETTE["amber"]
-    score = float(score)
-    if score >= 0.25:
+def abs_change_days(series: pd.Series | None, asof: pd.Timestamp, days: int) -> float:
+    end = value_asof(series, asof)
+    start = value_asof(series, pd.Timestamp(asof) - pd.Timedelta(days=days))
+    if not is_valid(end) or not is_valid(start):
+        return np.nan
+    return float(end) - float(start)
+
+
+def ytd_change_pct(series: pd.Series | None, asof: pd.Timestamp) -> float:
+    clean = clean_series(series)
+    if clean.empty:
+        return np.nan
+    end = value_asof(clean, asof)
+    start = value_asof(clean, pd.Timestamp(year=pd.Timestamp(asof).year, month=1, day=1))
+    if not is_valid(end) or not is_valid(start) or float(start) == 0:
+        return np.nan
+    return float((float(end) / float(start) - 1.0) * 100.0)
+
+
+def safe_ratio(prices: pd.DataFrame, numerator: str, denominator: str) -> pd.Series:
+    if numerator not in prices.columns or denominator not in prices.columns:
+        return pd.Series(dtype=float)
+    denom = pd.to_numeric(prices[denominator], errors="coerce").replace(0, np.nan)
+    numer = pd.to_numeric(prices[numerator], errors="coerce")
+    return clean_series(numer / denom)
+
+
+def fmt_pct(value: float | None) -> str:
+    return "N/A" if not is_valid(value) else f"{float(value):+.2f}%"
+
+
+def fmt_bp(value: float | None) -> str:
+    return "N/A" if not is_valid(value) else f"{float(value):+.0f} bp"
+
+
+def fmt_bn(value: float | None) -> str:
+    return "N/A" if not is_valid(value) else f"${float(value):+,.0f}bn"
+
+
+def fmt_level(value: float | None, digits: int = 2, suffix: str = "") -> str:
+    if not is_valid(value):
+        return "N/A"
+    return f"{float(value):,.{digits}f}{suffix}"
+
+
+def score_color(read: str) -> str:
+    positive_words = {
+        "Improving",
+        "Falling",
+        "Easing",
+        "Broad risk-on",
+        "Constructive",
+        "Tighter",
+        "Lower",
+        "Weaker",
+    }
+    negative_words = {
+        "Weakening",
+        "Rising",
+        "Tightening",
+        "Risk-off",
+        "Defensive",
+        "Wider",
+        "Higher",
+        "Stronger",
+    }
+    if read in positive_words:
         return PALETTE["green"]
-    if score <= -0.25:
+    if read in negative_words:
         return PALETTE["red"]
     return PALETTE["amber"]
 
 
-def score_label(score: float | None) -> str:
-    if not is_valid(score):
-        return "N/A"
-    score = float(score)
-    if score >= 0.55:
-        return "Strong positive"
-    if score >= 0.25:
-        return "Positive"
-    if score <= -0.55:
-        return "Strong negative"
-    if score <= -0.25:
-        return "Negative"
-    return "Mixed"
+def state_background(read: str) -> str:
+    color = score_color(read)
+    if color == PALETTE["green"]:
+        return PALETTE["green_bg"]
+    if color == PALETTE["red"]:
+        return PALETTE["red_bg"]
+    return PALETTE["amber_bg"]
 
 
-def score_phrase(score: float | None) -> str:
-    if not is_valid(score):
-        return "unavailable"
-    score = float(score)
-    if score >= 0.55:
-        return "strongly constructive"
-    if score >= 0.25:
-        return "constructive"
-    if score <= -0.55:
-        return "strongly defensive"
-    if score <= -0.25:
-        return "defensive"
-    return "mixed"
+def signal_vote(move: float, threshold: float, orientation: int = 1) -> int:
+    if not is_valid(move):
+        return 0
+    adjusted = float(move) * int(orientation)
+    if adjusted >= threshold:
+        return 1
+    if adjusted <= -threshold:
+        return -1
+    return 0
+
+
+def classify_votes(
+    indicators: List[dict],
+    positive_label: str,
+    negative_label: str,
+    mixed_label: str = "Mixed",
+) -> Tuple[str, str]:
+    votes = [int(item.get("vote", 0)) for item in indicators if item.get("available", True)]
+    positives = sum(v > 0 for v in votes)
+    negatives = sum(v < 0 for v in votes)
+    neutrals = sum(v == 0 for v in votes)
+    if positives >= max(2, negatives + 1):
+        state = positive_label
+    elif negatives >= max(2, positives + 1):
+        state = negative_label
+    else:
+        state = mixed_label
+    detail = f"{positives} positive · {negatives} negative · {neutrals} neutral"
+    return state, detail
+
+
+def pct_indicator(
+    name: str,
+    series: pd.Series,
+    asof: pd.Timestamp,
+    threshold: float,
+    orientation: int = 1,
+    horizon_days: int = 30,
+) -> dict:
+    move = pct_change_days(series, asof, horizon_days)
+    return {
+        "name": name,
+        "move": move,
+        "move_text": fmt_pct(move),
+        "vote": signal_vote(move, threshold, orientation),
+        "available": is_valid(move),
+    }
+
+
+def bp_indicator(
+    name: str,
+    series: pd.Series,
+    asof: pd.Timestamp,
+    threshold: float,
+    orientation: int = 1,
+    horizon_days: int = 30,
+) -> dict:
+    move = abs_change_days(series, asof, horizon_days) * 100.0
+    return {
+        "name": name,
+        "move": move,
+        "move_text": fmt_bp(move),
+        "vote": signal_vote(move, threshold, orientation),
+        "available": is_valid(move),
+    }
+
+
+def bn_indicator(
+    name: str,
+    series: pd.Series,
+    asof: pd.Timestamp,
+    threshold: float,
+    orientation: int = 1,
+    horizon_days: int = 30,
+) -> dict:
+    move = abs_change_days(series, asof, horizon_days) / 1_000.0
+    return {
+        "name": name,
+        "move": move,
+        "move_text": fmt_bn(move),
+        "vote": signal_vote(move, threshold, orientation),
+        "available": is_valid(move),
+    }
+
+
+def evidence_text(indicators: List[dict], limit: int = 3) -> str:
+    usable = [item for item in indicators if item.get("available", False)]
+    if not usable:
+        return "Underlying observations unavailable."
+    parts = [
+        f"{item['name']} {item['move_text']}"
+        for item in usable[:limit]
+    ]
+    return " · ".join(parts)
 
 
 # =============================================================================
 # DATA
 # =============================================================================
 
-
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_market_prices(
-    tickers: Tuple[str, ...], period: str
-) -> Tuple[pd.DataFrame, List[str]]:
-    if not tickers:
-        return pd.DataFrame(), []
-
-    frames, diagnostics = fetch_daily_ohlcv(tickers, period=period)
+def fetch_market_prices(tickers: Tuple[str, ...]) -> Tuple[pd.DataFrame, List[str]]:
+    frames, diagnostics = fetch_daily_ohlcv(tickers, period="5y")
     close = close_panel(frames, tickers, adjusted=True)
     if close.empty:
         return pd.DataFrame(), list(tickers)
-
-    ordered_cols = [ticker for ticker in tickers if ticker in close.columns]
-    close = close.reindex(columns=ordered_cols)
-    close = close.dropna(axis=1, how="all").dropna(how="all")
+    ordered = [ticker for ticker in tickers if ticker in close.columns]
+    close = close.reindex(columns=ordered).dropna(axis=1, how="all").dropna(how="all")
     failed = diagnostics["Ticker"].astype(str).tolist() if not diagnostics.empty else []
     return close, failed
 
 
-def pick_series(
-    prices: pd.DataFrame, primary: str, fallback: str | None = None
-) -> Tuple[pd.Series | None, str | None]:
-    if primary in prices.columns and not prices[primary].dropna().empty:
-        return prices[primary], primary
-    if fallback and fallback in prices.columns and not prices[fallback].dropna().empty:
-        return prices[fallback], fallback
-    return None, None
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_macro_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
+    return fetch_fred_series(start="2015-01-01")
 
 
-def safe_ratio(
-    prices: pd.DataFrame, numerator: str, denominator: str
-) -> pd.Series | None:
-    if numerator not in prices.columns or denominator not in prices.columns:
-        return None
-    denom = prices[denominator].replace(0, np.nan)
-    ratio = prices[numerator] / denom
-    ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
-    return ratio if not ratio.empty else None
+def macro_series(panel: pd.DataFrame, key: str) -> pd.Series:
+    if key not in panel.columns:
+        return pd.Series(dtype=float)
+    return clean_series(panel[key])
+
+
+def build_net_liquidity(macro: pd.DataFrame) -> pd.Series:
+    if not {"walcl", "tga", "rrp"}.issubset(macro.columns):
+        return pd.Series(dtype=float)
+    frame = macro[["walcl", "tga", "rrp"]].copy().sort_index().ffill()
+    # WALCL / TGA are $mm. RRPONTSYD is $bn, so convert RRP to $mm.
+    net = frame["walcl"] - frame["tga"] - frame["rrp"] * 1_000.0
+    return clean_series(net.rename("net_liquidity"))
 
 
 # =============================================================================
-# SIGNALS
+# REGIME ENGINE
 # =============================================================================
 
+def build_snapshot(prices: pd.DataFrame, macro: pd.DataFrame, asof: pd.Timestamp) -> dict:
+    rsp_spy = safe_ratio(prices, "RSP", "SPY")
+    iwm_spy = safe_ratio(prices, "IWM", "SPY")
+    eem_spy = safe_ratio(prices, "EEM", "SPY")
+    hyg_lqd = safe_ratio(prices, "HYG", "LQD")
+    copper_gold = safe_ratio(prices, "HG=F", "GC=F")
+    tip_ief = safe_ratio(prices, "TIP", "IEF")
 
-def build_signal_definitions(prices: pd.DataFrame) -> List[dict]:
-    signals: List[dict] = []
+    dollar_series = (
+        clean_series(prices["DX-Y.NYB"])
+        if "DX-Y.NYB" in prices and not clean_series(prices["DX-Y.NYB"]).empty
+        else clean_series(prices["UUP"]) if "UUP" in prices else pd.Series(dtype=float)
+    )
 
-    def add_signal(
-        group: str,
-        signal: str,
-        proxy: str,
-        series: pd.Series | None,
-        why: str,
-    ) -> None:
-        if series is None:
-            return
-        clean = clean_series(series)
-        if len(clean) < 45:
-            return
-        signals.append(
+    growth_indicators = [
+        pct_indicator("Breadth · RSP/SPY", rsp_spy, asof, threshold=0.50),
+        pct_indicator("Small caps · IWM/SPY", iwm_spy, asof, threshold=1.00),
+        pct_indicator("Copper/Gold", copper_gold, asof, threshold=2.00),
+        pct_indicator("EM vs U.S. · EEM/SPY", eem_spy, asof, threshold=1.00),
+        bp_indicator(
+            "High Yield OAS",
+            macro_series(macro, "hy_oas"),
+            asof,
+            threshold=10.0,
+            orientation=-1,
+        ),
+    ]
+    growth_state, growth_detail = classify_votes(
+        growth_indicators, "Improving", "Weakening"
+    )
+
+    inflation_indicators = [
+        bp_indicator(
+            "10Y Breakeven",
+            macro_series(macro, "t10yie"),
+            asof,
+            threshold=5.0,
+            orientation=1,
+        ),
+        pct_indicator(
+            "WTI Crude",
+            clean_series(prices["CL=F"]) if "CL=F" in prices else pd.Series(dtype=float),
+            asof,
+            threshold=5.0,
+            orientation=1,
+        ),
+        pct_indicator("Copper/Gold", copper_gold, asof, threshold=2.00, orientation=1),
+        pct_indicator("TIPS vs Treasuries · TIP/IEF", tip_ief, asof, threshold=0.75),
+    ]
+    inflation_state, inflation_detail = classify_votes(
+        inflation_indicators, "Rising", "Falling"
+    )
+
+    rates_indicators = [
+        bp_indicator("U.S. 2Y", macro_series(macro, "dgs2"), asof, threshold=10.0),
+        bp_indicator("U.S. 10Y", macro_series(macro, "dgs10"), asof, threshold=10.0),
+        bp_indicator("U.S. 30Y", macro_series(macro, "dgs30"), asof, threshold=10.0),
+        bp_indicator(
+            "10Y Real Yield",
+            macro_series(macro, "dfii10"),
+            asof,
+            threshold=10.0,
+        ),
+    ]
+    rates_state, rates_detail = classify_votes(
+        rates_indicators, "Rising", "Falling"
+    )
+
+    net_liquidity = build_net_liquidity(macro)
+    liquidity_indicators = [
+        pct_indicator("U.S. Dollar", dollar_series, asof, threshold=1.00, orientation=-1),
+        bp_indicator(
+            "10Y Real Yield",
+            macro_series(macro, "dfii10"),
+            asof,
+            threshold=10.0,
+            orientation=-1,
+        ),
+        bp_indicator(
+            "High Yield OAS",
+            macro_series(macro, "hy_oas"),
+            asof,
+            threshold=10.0,
+            orientation=-1,
+        ),
+        bn_indicator(
+            "Fed - TGA - RRP",
+            net_liquidity,
+            asof,
+            threshold=100.0,
+            orientation=1,
+        ),
+        pct_indicator(
+            "EUR/USD",
+            clean_series(prices["EURUSD=X"]) if "EURUSD=X" in prices else pd.Series(dtype=float),
+            asof,
+            threshold=1.00,
+            orientation=1,
+        ),
+    ]
+    liquidity_state, liquidity_detail = classify_votes(
+        liquidity_indicators, "Easing", "Tightening"
+    )
+
+    risk_indicators = [
+        pct_indicator(
+            "S&P 500",
+            clean_series(prices["SPY"]) if "SPY" in prices else pd.Series(dtype=float),
+            asof,
+            threshold=2.00,
+        ),
+        pct_indicator("Breadth · RSP/SPY", rsp_spy, asof, threshold=0.50),
+        pct_indicator("Credit · HYG/LQD", hyg_lqd, asof, threshold=0.50),
+        pct_indicator(
+            "VIX",
+            clean_series(prices["^VIX"]) if "^VIX" in prices else pd.Series(dtype=float),
+            asof,
+            threshold=10.0,
+            orientation=-1,
+        ),
+        pct_indicator("EM vs U.S. · EEM/SPY", eem_spy, asof, threshold=1.00),
+    ]
+    base_risk_state, risk_detail = classify_votes(
+        risk_indicators, "Constructive", "Defensive"
+    )
+
+    spy_1m = pct_change_days(prices["SPY"] if "SPY" in prices else None, asof, 30)
+    breadth_1m = pct_change_days(rsp_spy, asof, 30)
+    credit_1m = pct_change_days(hyg_lqd, asof, 30)
+    vix_1m = pct_change_days(prices["^VIX"] if "^VIX" in prices else None, asof, 30)
+
+    if (
+        is_valid(spy_1m)
+        and spy_1m > 2.0
+        and is_valid(breadth_1m)
+        and breadth_1m > 0.5
+        and is_valid(credit_1m)
+        and credit_1m > 0.5
+    ):
+        risk_state = "Broad risk-on"
+    elif (
+        is_valid(spy_1m)
+        and spy_1m > 1.0
+        and (
+            (is_valid(breadth_1m) and breadth_1m < -0.5)
+            or (is_valid(credit_1m) and credit_1m < -0.5)
+        )
+    ):
+        risk_state = "Narrow risk-on"
+    elif (
+        (is_valid(spy_1m) and spy_1m < -2.0)
+        and (
+            (is_valid(credit_1m) and credit_1m < -0.5)
+            or (is_valid(vix_1m) and vix_1m > 10.0)
+        )
+    ):
+        risk_state = "Risk-off"
+    else:
+        risk_state = base_risk_state if base_risk_state != "Constructive" else "Mixed / constructive"
+
+    regime = classify_macro_quadrant(growth_state, inflation_state)
+    narrative = regime_narrative(
+        regime, growth_state, inflation_state, rates_state, liquidity_state, risk_state
+    )
+
+    return {
+        "asof": pd.Timestamp(asof),
+        "regime": regime,
+        "narrative": narrative,
+        "growth_state": growth_state,
+        "growth_detail": growth_detail,
+        "growth_indicators": growth_indicators,
+        "inflation_state": inflation_state,
+        "inflation_detail": inflation_detail,
+        "inflation_indicators": inflation_indicators,
+        "rates_state": rates_state,
+        "rates_detail": rates_detail,
+        "rates_indicators": rates_indicators,
+        "liquidity_state": liquidity_state,
+        "liquidity_detail": liquidity_detail,
+        "liquidity_indicators": liquidity_indicators,
+        "risk_state": risk_state,
+        "risk_detail": risk_detail,
+        "risk_indicators": risk_indicators,
+        "ratios": {
+            "rsp_spy": rsp_spy,
+            "iwm_spy": iwm_spy,
+            "eem_spy": eem_spy,
+            "hyg_lqd": hyg_lqd,
+            "copper_gold": copper_gold,
+            "tip_ief": tip_ief,
+        },
+        "dollar_series": dollar_series,
+        "net_liquidity": net_liquidity,
+    }
+
+
+def classify_macro_quadrant(growth_state: str, inflation_state: str) -> str:
+    if growth_state == "Improving" and inflation_state == "Falling":
+        return "Goldilocks / disinflationary growth"
+    if growth_state == "Improving" and inflation_state == "Rising":
+        return "Reflation"
+    if growth_state == "Weakening" and inflation_state == "Rising":
+        return "Stagflation pressure"
+    if growth_state == "Weakening" and inflation_state == "Falling":
+        return "Growth scare / disinflation"
+    return "Transition / mixed"
+
+
+def regime_narrative(
+    regime: str,
+    growth_state: str,
+    inflation_state: str,
+    rates_state: str,
+    liquidity_state: str,
+    risk_state: str,
+) -> str:
+    base = {
+        "Goldilocks / disinflationary growth":
+            "Growth-sensitive markets are improving while inflation pressure is fading. This is the cleanest backdrop for duration-sensitive risk when credit and breadth confirm.",
+        "Reflation":
+            "Growth and inflation proxies are rising together. Cyclical risk can work, but the long end and real yields become the key constraint on valuation.",
+        "Stagflation pressure":
+            "Growth-sensitive markets are weakening while inflation pressure remains firm. This is the most difficult mix for duration and weak-balance-sheet risk.",
+        "Growth scare / disinflation":
+            "Growth-sensitive markets and inflation pressure are falling together. Duration should normally begin to confirm; if yields rise anyway, term premium or fiscal pressure is the dominant contradiction.",
+        "Transition / mixed":
+            "Growth and inflation signals do not yet define a clean quadrant. The useful information is in the cross-asset divergences, not a forced headline label.",
+    }[regime]
+    return (
+        f"{base} Rates are {rates_state.lower()}, liquidity is {liquidity_state.lower()}, "
+        f"and risk confirmation is {risk_state.lower()}."
+    )
+
+
+def governing_tension(snapshot: dict, prices: pd.DataFrame, macro: pd.DataFrame) -> Tuple[str, str]:
+    asof = snapshot["asof"]
+    ten_y = abs_change_days(macro_series(macro, "dgs10"), asof, 30) * 100
+    real_y = abs_change_days(macro_series(macro, "dfii10"), asof, 30) * 100
+    breakeven = abs_change_days(macro_series(macro, "t10yie"), asof, 30) * 100
+    spy = pct_change_days(prices["SPY"] if "SPY" in prices else None, asof, 30)
+    credit = pct_change_days(snapshot["ratios"]["hyg_lqd"], asof, 30)
+    breadth = pct_change_days(snapshot["ratios"]["rsp_spy"], asof, 30)
+    dollar = pct_change_days(snapshot["dollar_series"], asof, 30)
+
+    if snapshot["growth_state"] == "Weakening" and is_valid(ten_y) and ten_y > 10:
+        return (
+            "Growth is weakening but the long end is still selling off",
+            f"10Y yields are {fmt_bp(ten_y)} over one month. The market is pricing a term-premium, fiscal or supply problem that is overpowering the softer growth tape.",
+        )
+    if snapshot["inflation_state"] == "Falling" and is_valid(ten_y) and ten_y > 10:
+        return (
+            "Disinflation is not translating into lower nominal yields",
+            f"10Y breakevens are {fmt_bp(breakeven)} over one month while the 10Y nominal yield is {fmt_bp(ten_y)}. Real rates and term premium are doing the tightening.",
+        )
+    if is_valid(spy) and spy > 1.0 and is_valid(credit) and credit < -0.5:
+        return (
+            "Equities are running ahead of credit",
+            f"SPY is {fmt_pct(spy)} over one month while HYG/LQD is {fmt_pct(credit)}. Equity beta is not receiving clean credit sponsorship.",
+        )
+    if is_valid(spy) and spy > 1.0 and is_valid(breadth) and breadth < -0.5:
+        return (
+            "Index strength is narrow",
+            f"SPY is {fmt_pct(spy)} over one month while RSP/SPY is {fmt_pct(breadth)}. Cap-weight leadership is masking weaker participation.",
+        )
+    if is_valid(dollar) and dollar < -1.0 and is_valid(real_y) and real_y > 10:
+        return (
+            "Dollar liquidity is easing while real-rate pressure rises",
+            f"The dollar is {fmt_pct(dollar)} over one month but 10Y real yields are {fmt_bp(real_y)}. Global liquidity relief is being offset by a higher discount rate.",
+        )
+    return (
+        "No single cross-asset contradiction dominates",
+        "The major growth, inflation, rates, liquidity and risk signals are either aligned or too mixed to elevate one tension above the rest.",
+    )
+
+
+# =============================================================================
+# TABLES / READS
+# =============================================================================
+
+def directional_read(value: float, threshold: float, pos: str, neg: str, neutral: str = "Flat") -> str:
+    if not is_valid(value):
+        return "N/A"
+    if float(value) >= threshold:
+        return pos
+    if float(value) <= -threshold:
+        return neg
+    return neutral
+
+
+def read_class(read: str) -> str:
+    positive = {
+        "Broadening", "Improving", "Tighter", "Falling", "Weaker dollar",
+        "Lower vol", "Risk-on", "Easing", "Outperforming",
+    }
+    negative = {
+        "Narrowing", "Weakening", "Wider", "Rising", "Stronger dollar",
+        "Higher vol", "Risk-off", "Tightening", "Underperforming",
+    }
+    if read in positive:
+        return "read-pos"
+    if read in negative:
+        return "read-neg"
+    return "read-mix"
+
+
+def build_macro_tape(prices: pd.DataFrame, macro: pd.DataFrame, snapshot: dict) -> pd.DataFrame:
+    asof = snapshot["asof"]
+    rows: List[dict] = []
+
+    def add_pct(group: str, name: str, series: pd.Series, threshold: float, pos: str, neg: str, level: str = "") -> None:
+        one_w = pct_change_days(series, asof, 7)
+        one_m = pct_change_days(series, asof, 30)
+        three_m = pct_change_days(series, asof, 91)
+        rows.append(
             {
                 "Group": group,
-                "Signal": signal,
-                "Proxy": proxy,
-                "Series": clean,
-                "Why it matters": why,
+                "Signal": name,
+                "Level": level or fmt_level(value_asof(series, asof), 2),
+                "1W": fmt_pct(one_w),
+                "1M": fmt_pct(one_m),
+                "3M": fmt_pct(three_m),
+                "Read": directional_read(one_m, threshold, pos, neg, "Mixed"),
             }
         )
 
-    add_signal(
-        "Equity Tape",
-        "Equity trend",
-        "SPY",
-        prices["SPY"] if "SPY" in prices else None,
-        "The cleanest liquid proxy for broad U.S. risk appetite.",
-    )
-    add_signal(
-        "Equity Tape",
-        "Breadth",
-        "RSP / SPY",
-        safe_ratio(prices, "RSP", "SPY"),
-        "Equal weight versus cap weight shows whether the tape is broadening or narrowing.",
-    )
-    add_signal(
-        "Equity Tape",
-        "Small-cap liquidity",
-        "IWM / SPY",
-        safe_ratio(prices, "IWM", "SPY"),
-        "Small-cap leadership usually requires easier liquidity and stronger domestic cyclicals.",
-    )
-    add_signal(
-        "Equity Tape",
-        "Nasdaq leadership",
-        "QQQ / SPY",
-        safe_ratio(prices, "QQQ", "SPY"),
-        "Growth and mega-cap leadership are a useful check on duration-sensitive equity risk.",
-    )
-    add_signal(
-        "Equity Tape",
-        "Semiconductor leadership",
-        "SMH / SPY",
-        safe_ratio(prices, "SMH", "SPY"),
-        "Semis capture the highest-beta AI and capex leadership pocket.",
-    )
-
-    add_signal(
-        "Credit",
-        "Credit risk appetite",
-        "HYG / LQD",
-        safe_ratio(prices, "HYG", "LQD"),
-        "High yield versus investment grade is the fastest liquid proxy for credit risk appetite.",
-    )
-    add_signal(
-        "Credit",
-        "Loan risk appetite",
-        "BKLN / SHY",
-        safe_ratio(prices, "BKLN", "SHY"),
-        "Senior loans versus short Treasuries help flag credit demand outside plain high yield.",
-    )
-
-    add_signal(
-        "Rates",
-        "Duration bid",
-        "TLT / SHY",
-        safe_ratio(prices, "TLT", "SHY"),
-        "Long duration outperforming bills points to lower-rate pressure or a growth scare hedge bid.",
-    )
-
-    if "^TNX" in prices:
-        add_signal(
-            "Rates",
-            "Lower 10Y yield impulse",
-            "1 / ^TNX",
-            1.0 / prices["^TNX"].replace(0, np.nan),
-            "Lower 10-year yields ease valuation pressure and usually help duration-sensitive assets.",
+    def add_bp(group: str, name: str, series: pd.Series, threshold: float, pos: str, neg: str) -> None:
+        one_w = abs_change_days(series, asof, 7) * 100
+        one_m = abs_change_days(series, asof, 30) * 100
+        three_m = abs_change_days(series, asof, 91) * 100
+        rows.append(
+            {
+                "Group": group,
+                "Signal": name,
+                "Level": fmt_level(value_asof(series, asof), 2, "%"),
+                "1W": fmt_bp(one_w),
+                "1M": fmt_bp(one_m),
+                "3M": fmt_bp(three_m),
+                "Read": directional_read(one_m, threshold, pos, neg, "Mixed"),
+            }
         )
 
-    if {"^TYX", "^IRX"}.issubset(prices.columns):
-        curve = prices["^TYX"] - prices["^IRX"]
-        add_signal(
-            "Rates",
-            "Curve steepening impulse",
-            "^TYX - ^IRX",
-            curve,
-            "A steeper curve can mark easing expectations, term-premium pressure, or cyclical reflation depending on the rest of the tape.",
-        )
+    add_pct("Risk", "S&P 500", clean_series(prices["SPY"]) if "SPY" in prices else pd.Series(dtype=float), 2.0, "Risk-on", "Risk-off")
+    add_pct("Risk", "Equal Weight / S&P", snapshot["ratios"]["rsp_spy"], 0.50, "Broadening", "Narrowing")
+    add_pct("Risk", "Small Caps / S&P", snapshot["ratios"]["iwm_spy"], 1.00, "Improving", "Weakening")
+    add_pct("Credit", "HYG / LQD", snapshot["ratios"]["hyg_lqd"], 0.50, "Improving", "Weakening")
+    add_bp("Credit", "High Yield OAS", macro_series(macro, "hy_oas"), 10.0, "Wider", "Tighter")
 
-    dollar_series, dollar_proxy = pick_series(prices, "DX-Y.NYB", "UUP")
-    if dollar_series is not None and dollar_proxy is not None:
-        add_signal(
-            "Dollar Liquidity",
-            "Softer dollar liquidity",
-            f"1 / {dollar_proxy}",
-            1.0 / dollar_series.replace(0, np.nan),
-            "A softer dollar generally loosens global financial conditions and helps non-U.S. risk.",
-        )
+    add_bp("Rates", "U.S. 2Y", macro_series(macro, "dgs2"), 10.0, "Rising", "Falling")
+    add_bp("Rates", "U.S. 10Y", macro_series(macro, "dgs10"), 10.0, "Rising", "Falling")
+    add_bp("Rates", "U.S. 30Y", macro_series(macro, "dgs30"), 10.0, "Rising", "Falling")
+    add_bp("Rates", "10Y Real Yield", macro_series(macro, "dfii10"), 10.0, "Rising", "Falling")
+    add_bp("Inflation", "10Y Breakeven", macro_series(macro, "t10yie"), 5.0, "Rising", "Falling")
 
-    add_signal(
-        "Dollar Liquidity",
-        "EUR/USD pressure",
-        "EURUSD=X",
-        prices["EURUSD=X"] if "EURUSD=X" in prices else None,
-        "EUR/USD strength is a simple check on dollar weakness and global liquidity relief.",
-    )
+    add_pct("FX / Liquidity", "U.S. Dollar", snapshot["dollar_series"], 1.00, "Stronger dollar", "Weaker dollar")
+    add_pct("FX / Liquidity", "EUR/USD", clean_series(prices["EURUSD=X"]) if "EURUSD=X" in prices else pd.Series(dtype=float), 1.00, "Improving", "Weakening")
+    add_pct("FX / Liquidity", "USD/JPY", clean_series(prices["JPY=X"]) if "JPY=X" in prices else pd.Series(dtype=float), 1.00, "Higher", "Lower")
 
-    copper_gold = safe_ratio(prices, "HG=F", "GC=F")
-    copper_gold_proxy = "Copper / Gold futures"
-    if copper_gold is None:
-        copper_gold = safe_ratio(prices, "CPER", "GLD")
-        copper_gold_proxy = "CPER / GLD"
-    add_signal(
-        "Commodities",
-        "Copper/gold cyclicality",
-        copper_gold_proxy,
-        copper_gold,
-        "Copper versus gold tracks cyclical demand against defensive scarcity demand.",
-    )
+    add_pct("Commodities", "WTI Crude", clean_series(prices["CL=F"]) if "CL=F" in prices else pd.Series(dtype=float), 5.00, "Rising", "Falling")
+    add_pct("Commodities", "Gold", clean_series(prices["GC=F"]) if "GC=F" in prices else pd.Series(dtype=float), 3.00, "Rising", "Falling")
+    add_pct("Growth", "Copper / Gold", snapshot["ratios"]["copper_gold"], 2.00, "Improving", "Weakening")
+    add_pct("Global Growth", "EM / U.S.", snapshot["ratios"]["eem_spy"], 1.00, "Outperforming", "Underperforming")
 
-    crude_series, crude_proxy = pick_series(prices, "CL=F", "BZ=F")
-    if crude_series is not None and crude_proxy is not None:
-        add_signal(
-            "Commodities",
-            "Crude disinflation relief",
-            f"1 / {crude_proxy}",
-            1.0 / crude_series.replace(0, np.nan),
-            "Lower crude reduces inflation pressure and can improve the policy optionality mix.",
-        )
+    vix = clean_series(prices["^VIX"]) if "^VIX" in prices else pd.Series(dtype=float)
+    add_pct("Volatility", "VIX", vix, 10.00, "Higher vol", "Lower vol")
 
-    if "^VIX" in prices:
-        add_signal(
-            "Volatility",
-            "Volatility relief",
-            "1 / ^VIX",
-            1.0 / prices["^VIX"].replace(0, np.nan),
-            "Lower VIX confirms risk tolerance and easier hedging conditions.",
-        )
-
-    if "^VVIX" in prices:
-        add_signal(
-            "Volatility",
-            "Vol-of-vol relief",
-            "1 / ^VVIX",
-            1.0 / prices["^VVIX"].replace(0, np.nan),
-            "VVIX is a useful stress proxy when index volatility is calm but option demand is unstable.",
-        )
-
-    return signals
-
-
-def score_signal(series: pd.Series) -> Dict[str, float]:
-    scores = {
-        label: percentile_score_from_change(series, days)
-        for label, days in HORIZONS.items()
-    }
-    scores["YTD"] = ytd_percentile_score(series)
-    scores["Trend"] = trend_score(series)
-    scores["Composite"] = weighted_average(
-        scores,
+    net = snapshot["net_liquidity"]
+    one_w = abs_change_days(net, asof, 7) / 1_000.0
+    one_m = abs_change_days(net, asof, 30) / 1_000.0
+    three_m = abs_change_days(net, asof, 91) / 1_000.0
+    rows.append(
         {
-            "1D": 0.00,
-            "1W": 0.10,
-            "1M": 0.30,
-            "3M": 0.35,
-            "YTD": 0.10,
-            "Trend": 0.15,
-        },
-    )
-    return scores
-
-
-def build_signal_table(prices: pd.DataFrame) -> pd.DataFrame:
-    rows: List[dict] = []
-    for item in build_signal_definitions(prices):
-        series = item["Series"]
-        scores = score_signal(series)
-        row = {
-            "Group": item["Group"],
-            "Signal": item["Signal"],
-            "Proxy": item["Proxy"],
-            "Why it matters": item["Why it matters"],
-            "Latest Date": latest_date(series),
-            **scores,
-        }
-        rows.append(row)
-
-    if not rows:
-        return pd.DataFrame()
-
-    frame = pd.DataFrame(rows)
-    frame = frame.sort_values("Composite", ascending=False).reset_index(drop=True)
-    return frame
-
-
-def group_scores(signals: pd.DataFrame) -> Dict[str, float]:
-    if signals.empty:
-        return {}
-
-    groups = signals.groupby("Group")["Composite"].mean().to_dict()
-
-    equity = groups.get("Equity Tape", 0.0)
-    credit = groups.get("Credit", 0.0)
-    rates = groups.get("Rates", 0.0)
-    dollar = groups.get("Dollar Liquidity", 0.0)
-    commodities = groups.get("Commodities", 0.0)
-    vol = groups.get("Volatility", 0.0)
-
-    composite = weighted_average(
-        {
-            "Equity Tape": equity,
-            "Credit": credit,
-            "Rates": rates,
-            "Dollar Liquidity": dollar,
-            "Commodities": commodities,
-            "Volatility": vol,
-        },
-        {
-            "Equity Tape": 0.26,
-            "Credit": 0.20,
-            "Rates": 0.16,
-            "Dollar Liquidity": 0.14,
-            "Commodities": 0.12,
-            "Volatility": 0.12,
-        },
-    )
-
-    groups["Composite"] = composite
-    return groups
-
-
-def classify_regime(scores: Dict[str, float]) -> Tuple[str, str]:
-    equity = scores.get("Equity Tape", 0.0)
-    credit = scores.get("Credit", 0.0)
-    rates = scores.get("Rates", 0.0)
-    dollar = scores.get("Dollar Liquidity", 0.0)
-    commodities = scores.get("Commodities", 0.0)
-    vol = scores.get("Volatility", 0.0)
-    composite = scores.get("Composite", 0.0)
-
-    if composite >= 0.35 and equity >= 0.15 and credit >= 0.10 and vol >= 0.00:
-        return (
-            "Risk-on / liquidity easing",
-            "Equity tape, credit, and volatility are confirming easier conditions. The burden of proof shifts to breadth and credit staying firm.",
-        )
-
-    if equity >= 0.20 and credit >= 0.10 and rates <= -0.15:
-        return (
-            "Reflation / rate pressure",
-            "Risk assets are holding up while the rates impulse is tightening. This works until yields begin to pressure multiples or credit.",
-        )
-
-    if rates >= 0.25 and dollar >= 0.10 and commodities >= 0.00 and equity > -0.15:
-        return (
-            "Disinflationary easing",
-            "Duration and dollar liquidity are improving without a decisive break in risk assets. That is the cleanest easing mix.",
-        )
-
-    if equity <= -0.25 and credit <= -0.20:
-        return (
-            "Risk-off / credit stress",
-            "Equity weakness is being confirmed by credit. Liquidity matters more than valuation until credit stabilizes.",
-        )
-
-    if rates <= -0.25 and dollar <= -0.20:
-        return (
-            "Tightening impulse",
-            "Rates and dollar liquidity are moving in the wrong direction together. That usually raises the hurdle for long-duration risk.",
-        )
-
-    if commodities <= -0.30 and equity <= 0.00 and credit <= 0.00:
-        return (
-            "Growth scare / defensive bid",
-            "Commodity cyclicality and risk appetite are weak together. The market is pricing weaker nominal growth rather than clean disinflation.",
-        )
-
-    return (
-        "Mixed / tactical",
-        "The tape is not one-way. This is a relative-value backdrop until credit, breadth, or rates resolve the contradiction.",
-    )
-
-
-def build_decision_notes(
-    regime: str, regime_note: str, scores: Dict[str, float], signals: pd.DataFrame
-) -> Dict[str, str]:
-    composite = scores.get("Composite", 0.0)
-    dimensions = {k: v for k, v in scores.items() if k != "Composite"}
-    strongest_name, strongest_value = (
-        max(dimensions.items(), key=lambda item: item[1])
-        if dimensions
-        else ("N/A", np.nan)
-    )
-    weakest_name, weakest_value = (
-        min(dimensions.items(), key=lambda item: item[1])
-        if dimensions
-        else ("N/A", np.nan)
-    )
-
-    if signals.empty:
-        positive = negative = total = 0
-        leaders: List[str] = []
-        laggards: List[str] = []
-    else:
-        market_scores = signals["Composite"].dropna()
-        positive = int((market_scores > 0.20).sum())
-        negative = int((market_scores < -0.20).sum())
-        total = int(len(market_scores))
-        leaders = signals.nlargest(min(2, len(signals)), "Composite")["Signal"].tolist()
-        laggards = signals.nsmallest(min(2, len(signals)), "Composite")[
-            "Signal"
-        ].tolist()
-
-    equity = scores.get("Equity Tape", 0.0)
-    credit = scores.get("Credit", 0.0)
-
-    if composite >= 0.30 and credit >= 0.00:
-        stance = "Constructive but selective"
-        action = "Risk can stay on, but sizing should be concentrated where credit, breadth, and trend confirm together."
-        invalidation = "Cut risk if HYG/LQD turns negative, breadth rolls over, or VIX begins rising while SPY is flat."
-    elif composite <= -0.30 or credit <= -0.30:
-        stance = "Defensive"
-        action = "Keep gross liquidity high, avoid weak-beta exposure, and require credit repair before adding cyclical risk."
-        invalidation = "Reassess if credit turns positive, breadth stops deteriorating, and volatility relief broadens beyond one session."
-    else:
-        stance = "Balanced / tactical"
-        action = "Avoid a large one-way book. Favor liquid relative-value trades until the tape confirms a cleaner regime."
-        invalidation = "Change posture when the composite clears ±0.35 with credit and breadth moving in the same direction."
-
-    if (
-        is_valid(strongest_value)
-        and is_valid(weakest_value)
-        and strongest_value - weakest_value > 0.70
-    ):
-        pressure = f"Internal dispersion is high: {strongest_name} is leading while {weakest_name} is the drag."
-    else:
-        pressure = f"The main pressure point is {weakest_name}; the strongest offset is {strongest_name}."
-
-    confirmation = (
-        f"{positive} of {total} signals are constructive; {negative} are defensive. "
-        f"Leadership: {', '.join(leaders) if leaders else 'N/A'}. "
-        f"Weakness: {', '.join(laggards) if laggards else 'N/A'}."
-    )
-
-    base = (
-        f"{regime}. Composite is {score_phrase(composite)} at {composite:+.2f}. "
-        f"Equity tape {scores.get('Equity Tape', 0.0):+.2f}, credit {scores.get('Credit', 0.0):+.2f}, "
-        f"rates {scores.get('Rates', 0.0):+.2f}, dollar liquidity {scores.get('Dollar Liquidity', 0.0):+.2f}, "
-        f"commodities {scores.get('Commodities', 0.0):+.2f}, volatility {scores.get('Volatility', 0.0):+.2f}."
-    )
-
-    return {
-        "stance": stance,
-        "action": action,
-        "pressure": pressure,
-        "confirmation": confirmation,
-        "invalidation": invalidation,
-        "base": base,
-        "regime_note": regime_note,
-        "equity_credit": f"Equity tape {equity:+.2f}; credit {credit:+.2f}. Credit remains the higher-quality confirmation signal.",
-    }
-
-
-def build_regime_diagnostics(
-    scores: Dict[str, float], signals: pd.DataFrame
-) -> Dict[str, float | str]:
-    """Summarize conviction, agreement, and near-term regime momentum."""
-    composite = normalize_score(scores.get("Composite", 0.0))
-    pillar_values = np.array(
-        [
-            float(value)
-            for key, value in scores.items()
-            if key != "Composite" and is_valid(value)
-        ],
-        dtype=float,
-    )
-    direction = 1.0 if composite >= 0 else -1.0
-
-    if pillar_values.size:
-        pillar_alignment = float(np.mean(direction * pillar_values >= 0.05))
-        dispersion = float(np.std(pillar_values))
-        coherence = 1.0 - min(dispersion / 0.75, 1.0)
-    else:
-        pillar_alignment = 0.0
-        dispersion = np.nan
-        coherence = 0.0
-
-    signal_values = (
-        pd.to_numeric(signals.get("Composite"), errors="coerce").dropna()
-        if not signals.empty and "Composite" in signals
-        else pd.Series(dtype=float)
-    )
-    signal_alignment = (
-        float(np.mean(direction * signal_values.to_numpy(dtype=float) >= 0.10))
-        if not signal_values.empty
-        else 0.0
-    )
-
-    magnitude = min(abs(composite) / 0.55, 1.0)
-    confidence = float(
-        np.clip(
-            100.0
-            * (
-                0.30 * magnitude
-                + 0.25 * pillar_alignment
-                + 0.30 * signal_alignment
-                + 0.15 * coherence
+            "Group": "Liquidity",
+            "Signal": "Fed - TGA - RRP",
+            "Level": (
+                f"${value_asof(net, asof) / 1_000.0:,.0f}bn"
+                if is_valid(value_asof(net, asof))
+                else "N/A"
             ),
-            0.0,
-            100.0,
-        )
-    )
-    if confidence >= 70:
-        confidence_label = "High conviction"
-    elif confidence >= 50:
-        confidence_label = "Moderate conviction"
-    else:
-        confidence_label = "Low conviction"
-
-    if not signals.empty and {"1W", "3M"}.issubset(signals.columns):
-        impulse_values = (
-            pd.to_numeric(signals["1W"], errors="coerce")
-            - pd.to_numeric(signals["3M"], errors="coerce")
-        ).dropna()
-        impulse = float(impulse_values.mean()) if not impulse_values.empty else np.nan
-    else:
-        impulse = np.nan
-
-    if not is_valid(impulse):
-        impulse_label = "Unavailable"
-    elif float(impulse) >= 0.12:
-        impulse_label = "Improving"
-    elif float(impulse) <= -0.12:
-        impulse_label = "Deteriorating"
-    else:
-        impulse_label = "Stable"
-
-    directional_breadth = (
-        float(np.mean(direction * signal_values.to_numpy(dtype=float) > 0.20) * 100.0)
-        if not signal_values.empty
-        else np.nan
+            "1W": fmt_bn(one_w),
+            "1M": fmt_bn(one_m),
+            "3M": fmt_bn(three_m),
+            "Read": directional_read(one_m, 100.0, "Easing", "Tightening", "Mixed"),
+        }
     )
 
-    return {
-        "confidence": confidence,
-        "confidence_label": confidence_label,
-        "pillar_alignment": pillar_alignment * 100.0,
-        "signal_alignment": signal_alignment * 100.0,
-        "dispersion": dispersion,
-        "impulse": impulse,
-        "impulse_label": impulse_label,
-        "directional_breadth": directional_breadth,
-    }
+    return pd.DataFrame(rows)
 
 
-def render_metric_strip(cards: List[Tuple[str, str, str, str]]) -> None:
+def render_macro_table(frame: pd.DataFrame) -> None:
+    if frame.empty:
+        st.info("No macro tape data available.")
+        return
     body: List[str] = []
-    for label, value, note, color in cards:
+    for _, row in frame.iterrows():
+        read = str(row["Read"])
         body.append(
-            "<div class='metric-cell'>"
-            f"<div class='metric-label'>{escape(label)}</div>"
-            f"<div class='metric-value' style='color:{escape(color)}'>{escape(value)}</div>"
-            f"<div class='metric-note'>{escape(note)}</div>"
-            "</div>"
+            "<tr>"
+            f"<td class='macro-group'>{escape(str(row['Group']))}</td>"
+            f"<td class='macro-name'>{escape(str(row['Signal']))}</td>"
+            f"<td>{escape(str(row['Level']))}</td>"
+            f"<td>{escape(str(row['1W']))}</td>"
+            f"<td>{escape(str(row['1M']))}</td>"
+            f"<td>{escape(str(row['3M']))}</td>"
+            f"<td><span class='read-chip {read_class(read)}'>{escape(read)}</span></td>"
+            "</tr>"
         )
     st.markdown(
-        "<div class='metric-strip'>" + "".join(body) + "</div>",
+        """
+        <div class="macro-table-wrap">
+            <table class="macro-table">
+                <thead>
+                    <tr>
+                        <th>Theme</th>
+                        <th>Signal</th>
+                        <th>Level</th>
+                        <th>1W</th>
+                        <th>1M</th>
+                        <th>3M</th>
+                        <th>Read</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        + "".join(body)
+        + """
+                </tbody>
+            </table>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
-# =============================================================================
-# TABLES
-# =============================================================================
+def build_weekly_changes(prices: pd.DataFrame, macro: pd.DataFrame, snapshot: dict) -> List[dict]:
+    asof = snapshot["asof"]
+    candidates: List[dict] = []
+
+    def add(name: str, move: float, threshold: float, formatter, read: str, color_hint: str) -> None:
+        if not is_valid(move) or threshold <= 0:
+            return
+        candidates.append(
+            {
+                "name": name,
+                "move": float(move),
+                "move_text": formatter(move),
+                "importance": abs(float(move)) / float(threshold),
+                "read": read,
+                "color": color_hint,
+            }
+        )
+
+    ten_y = abs_change_days(macro_series(macro, "dgs10"), asof, 7) * 100
+    two_y = abs_change_days(macro_series(macro, "dgs2"), asof, 7) * 100
+    real_y = abs_change_days(macro_series(macro, "dfii10"), asof, 7) * 100
+    breakeven = abs_change_days(macro_series(macro, "t10yie"), asof, 7) * 100
+    hy_oas = abs_change_days(macro_series(macro, "hy_oas"), asof, 7) * 100
+    dollar = pct_change_days(snapshot["dollar_series"], asof, 7)
+    breadth = pct_change_days(snapshot["ratios"]["rsp_spy"], asof, 7)
+    small_caps = pct_change_days(snapshot["ratios"]["iwm_spy"], asof, 7)
+    copper_gold = pct_change_days(snapshot["ratios"]["copper_gold"], asof, 7)
+    crude = pct_change_days(prices["CL=F"] if "CL=F" in prices else None, asof, 7)
+    vix = pct_change_days(prices["^VIX"] if "^VIX" in prices else None, asof, 7)
+    net_liq = abs_change_days(snapshot["net_liquidity"], asof, 7) / 1_000.0
+
+    add("U.S. 10Y yield", ten_y, 8.0, fmt_bp, "Long-end tightening" if ten_y > 0 else "Long-end relief", PALETTE["red"] if ten_y > 0 else PALETTE["green"])
+    add("U.S. 2Y yield", two_y, 8.0, fmt_bp, "Policy path repricing higher" if two_y > 0 else "Policy path repricing lower", PALETTE["red"] if two_y > 0 else PALETTE["green"])
+    add("10Y real yield", real_y, 8.0, fmt_bp, "Discount-rate tightening" if real_y > 0 else "Real-rate relief", PALETTE["red"] if real_y > 0 else PALETTE["green"])
+    add("10Y breakeven", breakeven, 5.0, fmt_bp, "Inflation compensation higher" if breakeven > 0 else "Inflation compensation lower", PALETTE["red"] if breakeven > 0 else PALETTE["green"])
+    add("High Yield OAS", hy_oas, 10.0, fmt_bp, "Credit spreads wider" if hy_oas > 0 else "Credit spreads tighter", PALETTE["red"] if hy_oas > 0 else PALETTE["green"])
+    add("U.S. dollar", dollar, 1.0, fmt_pct, "Dollar tightening" if dollar > 0 else "Dollar liquidity relief", PALETTE["red"] if dollar > 0 else PALETTE["green"])
+    add("Breadth · RSP/SPY", breadth, 1.0, fmt_pct, "Participation broadening" if breadth > 0 else "Participation narrowing", PALETTE["green"] if breadth > 0 else PALETTE["red"])
+    add("Small caps · IWM/SPY", small_caps, 1.25, fmt_pct, "Domestic cyclicals improving" if small_caps > 0 else "Domestic cyclicals weakening", PALETTE["green"] if small_caps > 0 else PALETTE["red"])
+    add("Copper / Gold", copper_gold, 2.5, fmt_pct, "Growth/reflation signal improving" if copper_gold > 0 else "Growth/reflation signal weakening", PALETTE["green"] if copper_gold > 0 else PALETTE["red"])
+    add("WTI crude", crude, 4.0, fmt_pct, "Energy inflation higher" if crude > 0 else "Energy inflation relief", PALETTE["red"] if crude > 0 else PALETTE["green"])
+    add("VIX", vix, 12.0, fmt_pct, "Volatility pressure higher" if vix > 0 else "Volatility pressure lower", PALETTE["red"] if vix > 0 else PALETTE["green"])
+    add("Fed - TGA - RRP", net_liq, 75.0, fmt_bn, "Net liquidity added" if net_liq > 0 else "Net liquidity drained", PALETTE["green"] if net_liq > 0 else PALETTE["red"])
+
+    candidates = sorted(candidates, key=lambda item: item["importance"], reverse=True)
+    meaningful = [item for item in candidates if item["importance"] >= 0.75]
+    return (meaningful or candidates)[:6]
 
 
-def asset_return_rows(prices: pd.DataFrame, tickers: Iterable[str]) -> pd.DataFrame:
+def build_tensions(prices: pd.DataFrame, macro: pd.DataFrame, snapshot: dict) -> List[dict]:
+    asof = snapshot["asof"]
+    items: List[dict] = []
+
+    ten_y = abs_change_days(macro_series(macro, "dgs10"), asof, 30) * 100
+    real_y = abs_change_days(macro_series(macro, "dfii10"), asof, 30) * 100
+    breakeven = abs_change_days(macro_series(macro, "t10yie"), asof, 30) * 100
+    spy = pct_change_days(prices["SPY"] if "SPY" in prices else None, asof, 30)
+    breadth = pct_change_days(snapshot["ratios"]["rsp_spy"], asof, 30)
+    credit = pct_change_days(snapshot["ratios"]["hyg_lqd"], asof, 30)
+    dollar = pct_change_days(snapshot["dollar_series"], asof, 30)
+
+    if snapshot["growth_state"] == "Weakening" and is_valid(ten_y) and ten_y > 10:
+        items.append(
+            {
+                "status": "Divergence",
+                "title": "Growth vs long-end yields",
+                "copy": f"Growth-sensitive signals are weakening, but the 10Y yield is {fmt_bp(ten_y)} over one month. Term premium, fiscal supply or inflation risk is overpowering the growth slowdown.",
+                "color": PALETTE["red"],
+            }
+        )
+    else:
+        items.append(
+            {
+                "status": "Aligned",
+                "title": "Growth vs long-end yields",
+                "copy": f"Growth is {snapshot['growth_state'].lower()} and the 10Y yield is {fmt_bp(ten_y)} over one month. Rates are broadly behaving consistently with the growth impulse.",
+                "color": PALETTE["green"],
+            }
+        )
+
+    if snapshot["inflation_state"] == "Falling" and is_valid(ten_y) and ten_y > 10:
+        items.append(
+            {
+                "status": "Divergence",
+                "title": "Inflation vs nominal yields",
+                "copy": f"Inflation pressure is falling and 10Y breakevens are {fmt_bp(breakeven)}, yet nominal 10Y yields are {fmt_bp(ten_y)}. Real yields or term premium are driving the selloff.",
+                "color": PALETTE["red"],
+            }
+        )
+    else:
+        items.append(
+            {
+                "status": "Check",
+                "title": "Inflation vs nominal yields",
+                "copy": f"10Y breakevens are {fmt_bp(breakeven)} and 10Y nominal yields are {fmt_bp(ten_y)} over one month. The split tells you whether inflation compensation or real rates are doing the work.",
+                "color": PALETTE["amber"],
+            }
+        )
+
+    if is_valid(spy) and spy > 1.0 and is_valid(credit) and credit < -0.5:
+        items.append(
+            {
+                "status": "Divergence",
+                "title": "Equities vs credit",
+                "copy": f"SPY is {fmt_pct(spy)} while HYG/LQD is {fmt_pct(credit)} over one month. Equity beta is running without clean credit sponsorship.",
+                "color": PALETTE["red"],
+            }
+        )
+    else:
+        items.append(
+            {
+                "status": "Aligned",
+                "title": "Equities vs credit",
+                "copy": f"SPY is {fmt_pct(spy)} and HYG/LQD is {fmt_pct(credit)} over one month. Credit is not materially contradicting the equity tape.",
+                "color": PALETTE["green"],
+            }
+        )
+
+    if is_valid(spy) and spy > 1.0 and is_valid(breadth) and breadth < -0.5:
+        items.append(
+            {
+                "status": "Divergence",
+                "title": "Index level vs breadth",
+                "copy": f"SPY is {fmt_pct(spy)} but RSP/SPY is {fmt_pct(breadth)} over one month. The headline index is stronger than participation underneath it.",
+                "color": PALETTE["red"],
+            }
+        )
+    else:
+        items.append(
+            {
+                "status": "Aligned",
+                "title": "Index level vs breadth",
+                "copy": f"SPY is {fmt_pct(spy)} and RSP/SPY is {fmt_pct(breadth)} over one month. Breadth is not materially diverging from the index.",
+                "color": PALETTE["green"],
+            }
+        )
+
+    if is_valid(dollar) and dollar < -1.0 and is_valid(real_y) and real_y > 10:
+        items.append(
+            {
+                "status": "Offsetting",
+                "title": "Dollar vs real yields",
+                "copy": f"The dollar is {fmt_pct(dollar)} while 10Y real yields are {fmt_bp(real_y)}. Dollar liquidity is easing, but the discount rate is tightening.",
+                "color": PALETTE["amber"],
+            }
+        )
+    else:
+        items.append(
+            {
+                "status": "Check",
+                "title": "Dollar vs real yields",
+                "copy": f"The dollar is {fmt_pct(dollar)} and 10Y real yields are {fmt_bp(real_y)} over one month. Together they define the external-liquidity and discount-rate mix.",
+                "color": PALETTE["amber"],
+            }
+        )
+
+    # Put the actual divergences first.
+    order = {"Divergence": 0, "Offsetting": 1, "Check": 2, "Aligned": 3}
+    return sorted(items, key=lambda item: order.get(item["status"], 4))[:4]
+
+
+# =============================================================================
+# PERFORMANCE
+# =============================================================================
+
+def performance_frame(prices: pd.DataFrame, asof: pd.Timestamp) -> pd.DataFrame:
     rows: List[dict] = []
-    for ticker in tickers:
-        if ticker not in prices.columns or prices[ticker].dropna().empty:
+    for ticker in PERFORMANCE_TICKERS:
+        if ticker not in prices.columns or clean_series(prices[ticker]).empty:
             continue
-        series = prices[ticker]
-        row = {
-            "Ticker": ticker,
-            "Asset": TICKERS.get(ticker, ticker),
-            "Latest": level_fmt(ticker, latest_valid(series)),
-            "Latest Date": latest_date(series),
-        }
-        for label, periods in HORIZONS.items():
-            row[label] = safe_pct_change(series, periods) * 100
-        row["YTD"] = ytd_return(series) * 100
-        rows.append(row)
-
-    if not rows:
-        return pd.DataFrame()
-
-    frame = pd.DataFrame(rows)
-    sort_col = "1M" if "1M" in frame else "YTD"
-    frame = frame.sort_values(sort_col, ascending=False).reset_index(drop=True)
-    return frame
+        series = clean_series(prices[ticker])
+        rows.append(
+            {
+                "Ticker": ticker,
+                "Asset": TICKERS.get(ticker, ticker),
+                "1W": pct_change_days(series, asof, 7),
+                "1M": pct_change_days(series, asof, 30),
+                "3M": pct_change_days(series, asof, 91),
+                "YTD": ytd_change_pct(series, asof),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
-def display_asset_table(frame: pd.DataFrame) -> pd.DataFrame:
+def performance_heatmap(frame: pd.DataFrame) -> go.Figure:
     if frame.empty:
-        return frame
-    out = frame.copy()
-    for col in ["1D", "1W", "1M", "3M", "YTD"]:
-        if col in out:
-            out[col] = out[col].map(lambda x: signed_pct_fmt(x, 1))
-    return out
+        return go.Figure()
 
+    cols = ["1W", "1M", "3M", "YTD"]
+    raw = frame[cols].to_numpy(dtype=float)
+    normalized = np.full_like(raw, np.nan, dtype=float)
 
-def display_signal_table(signals: pd.DataFrame) -> pd.DataFrame:
-    if signals.empty:
-        return signals
-    out = signals[
-        [
-            "Group",
-            "Signal",
-            "Proxy",
-            "Latest Date",
-            "1D",
-            "1W",
-            "1M",
-            "3M",
-            "YTD",
-            "Trend",
-            "Composite",
-            "Why it matters",
-        ]
-    ].copy()
-    for col in ["1D", "1W", "1M", "3M", "YTD", "Trend", "Composite"]:
-        out[col] = out[col].map(lambda x: signed_num_fmt(x, 2))
-    return out
+    for j, col in enumerate(cols):
+        values = pd.to_numeric(frame[col], errors="coerce").to_numpy(dtype=float)
+        finite = values[np.isfinite(values)]
+        if finite.size < 2:
+            continue
+        lo = np.nanpercentile(finite, 10)
+        hi = np.nanpercentile(finite, 90)
+        scale = max(abs(lo), abs(hi), 1.0)
+        normalized[:, j] = np.clip(values / scale, -1.0, 1.0)
 
+    text = np.empty(raw.shape, dtype=object)
+    for i in range(raw.shape[0]):
+        for j in range(raw.shape[1]):
+            text[i, j] = fmt_pct(raw[i, j]) if np.isfinite(raw[i, j]) else "N/A"
 
-# =============================================================================
-# CHARTS
-# =============================================================================
-
-
-def apply_layout(
-    fig: go.Figure, height: int = 360, showlegend: bool = True
-) -> go.Figure:
-    fig.update_layout(
-        height=height,
-        margin=dict(l=20, r=24, t=30, b=24),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        font=dict(color="#334155", size=12),
-        hovermode="x unified",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-            font=dict(size=11),
-        ),
-        showlegend=showlegend,
-    )
-    fig.update_xaxes(
-        showgrid=False,
-        zeroline=False,
-        linecolor="#e5e7eb",
-        tickfont=dict(color="#64748b"),
-    )
-    fig.update_yaxes(
-        gridcolor="#e5e7eb",
-        zeroline=False,
-        linecolor="#e5e7eb",
-        tickfont=dict(color="#64748b"),
-    )
-    return fig
-
-
-def score_bar_chart(scores: Dict[str, float]) -> go.Figure:
-    labels = [
-        "Equity Tape",
-        "Credit",
-        "Rates",
-        "Dollar Liquidity",
-        "Commodities",
-        "Volatility",
-        "Composite",
-    ]
-    values = [scores.get(label, np.nan) for label in labels]
-    colors = [score_color(value) for value in values]
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Bar(
-            x=values,
-            y=labels,
-            orientation="h",
-            marker_color=colors,
-            text=[signed_num_fmt(v, 2) for v in values],
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate="<b>%{y}</b><br>Score: %{x:+.2f}<extra></extra>",
-        )
-    )
-    fig.add_vline(x=0, line_color="#94a3b8", line_width=1)
-    fig.update_layout(
-        height=318,
-        margin=dict(l=10, r=48, t=12, b=20),
-        xaxis=dict(range=[-1, 1], tickvals=[-1, -0.5, 0, 0.5, 1]),
-        yaxis=dict(autorange="reversed"),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        showlegend=False,
-    )
-    fig.update_xaxes(gridcolor="#e5e7eb", zeroline=False)
-    fig.update_yaxes(showgrid=False)
-    return fig
-
-
-def signal_heatmap(signals: pd.DataFrame) -> go.Figure:
-    if signals.empty:
-        return apply_layout(go.Figure(), height=330, showlegend=False)
-
-    values = signals[SCORE_COLUMNS].to_numpy(dtype=float)
-    text = np.where(
-        np.isfinite(values), np.vectorize(lambda v: f"{v:+.2f}")(values), "N/A"
-    )
-
-    fig = go.Figure(
-        go.Heatmap(
-            z=values,
-            x=SCORE_COLUMNS,
-            y=signals["Signal"],
-            zmin=-1,
-            zmax=1,
-            zmid=0,
-            colorscale=[
-                [0.00, "#875241"],
-                [0.35, "#d7b4a8"],
-                [0.50, "#f4f2ee"],
-                [0.65, "#b7cec0"],
-                [1.00, "#4f765f"],
-            ],
-            text=text,
-            texttemplate="%{text}",
-            hovertemplate="<b>%{y}</b><br>%{x}: %{z:+.2f}<extra></extra>",
-            colorbar=dict(thickness=10, len=0.80, tickvals=[-1, -0.5, 0, 0.5, 1]),
-        )
-    )
-    fig.update_layout(
-        height=max(320, 28 * len(signals) + 90),
-        margin=dict(l=10, r=10, t=14, b=20),
-        xaxis=dict(side="top"),
-        yaxis=dict(autorange="reversed"),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        font=dict(color="#334155", size=11),
-    )
-    return fig
-
-
-def signal_impulse_chart(signals: pd.DataFrame) -> go.Figure:
-    """Rank the near-term change in each signal versus its medium-term regime."""
-    if signals.empty or not {"1W", "3M"}.issubset(signals.columns):
-        return apply_layout(go.Figure(), height=340, showlegend=False)
-
-    frame = signals[["Group", "Signal", "1W", "3M"]].copy()
-    frame["1W"] = pd.to_numeric(frame["1W"], errors="coerce")
-    frame["3M"] = pd.to_numeric(frame["3M"], errors="coerce")
-    frame["Impulse"] = frame["1W"] - frame["3M"]
-    frame = frame.dropna(subset=["Impulse"])
-    if len(frame) > 10:
-        keep = frame["Impulse"].abs().nlargest(10).index
-        frame = frame.loc[keep]
-    frame = frame.sort_values("Impulse")
-    if frame.empty:
-        return apply_layout(go.Figure(), height=340, showlegend=False)
-
-    colors = [score_color(value) for value in frame["Impulse"]]
-    max_abs = max(float(frame["Impulse"].abs().max()), 0.25)
-    axis_limit = min(2.0, max_abs * 1.22)
-
-    fig = go.Figure(
-        go.Bar(
-            x=frame["Impulse"],
-            y=frame["Signal"],
-            orientation="h",
-            marker_color=colors,
-            text=[signed_num_fmt(value, 2) for value in frame["Impulse"]],
-            textposition="outside",
-            cliponaxis=False,
-            customdata=np.column_stack(
-                [frame["Group"], frame["1W"], frame["3M"]]
-            ),
-            hovertemplate=(
-                "<b>%{y}</b><br>%{customdata[0]}"
-                "<br>1W score: %{customdata[1]:+.2f}"
-                "<br>3M score: %{customdata[2]:+.2f}"
-                "<br>Impulse: %{x:+.2f}<extra></extra>"
-            ),
-        )
-    )
-    fig.add_vline(x=0, line_color="#64748b", line_width=1)
-    fig.update_layout(
-        height=max(340, 26 * len(frame) + 80),
-        margin=dict(l=10, r=58, t=14, b=32),
-        xaxis=dict(
-            range=[-axis_limit, axis_limit],
-            title="1W score minus 3M score",
-        ),
-        yaxis=dict(autorange="reversed"),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        showlegend=False,
-        font=dict(color="#334155", size=11),
-    )
-    fig.update_xaxes(gridcolor="#e5e7eb", zeroline=False)
-    fig.update_yaxes(showgrid=False)
-    return fig
-
-
-def asset_performance_heatmap(asset_returns: pd.DataFrame) -> go.Figure:
-    if asset_returns.empty:
-        return apply_layout(go.Figure(), height=360, showlegend=False)
-
-    cols = ["1D", "1W", "1M", "3M", "YTD"]
-    frame = asset_returns.dropna(
-        subset=[c for c in cols if c in asset_returns], how="all"
-    ).copy()
-    frame = frame.head(22)
-    values = frame[cols].to_numpy(dtype=float)
-    text = np.where(
-        np.isfinite(values), np.vectorize(lambda v: f"{v:+.1f}%")(values), "N/A"
-    )
     labels = frame["Ticker"] + "  " + frame["Asset"]
 
     fig = go.Figure(
         go.Heatmap(
-            z=values,
+            z=normalized,
             x=cols,
             y=labels,
+            zmin=-1,
+            zmax=1,
             zmid=0,
             colorscale=[
-                [0.00, "#875241"],
-                [0.42, "#d7b4a8"],
-                [0.50, "#f4f2ee"],
-                [0.58, "#b7cec0"],
-                [1.00, "#4f765f"],
+                [0.00, "#a85a50"],
+                [0.38, "#dcc2bb"],
+                [0.50, "#f7f6f3"],
+                [0.62, "#c6d7bd"],
+                [1.00, "#668a50"],
             ],
             text=text,
             texttemplate="%{text}",
-            hovertemplate="<b>%{y}</b><br>%{x}: %{z:+.2f}%<extra></extra>",
-            colorbar=dict(title="%", thickness=10, len=0.78),
+            hovertemplate="<b>%{y}</b><br>%{x}: %{text}<extra></extra>",
+            showscale=False,
         )
     )
     fig.update_layout(
-        height=max(360, 24 * len(frame) + 86),
-        margin=dict(l=10, r=10, t=14, b=20),
+        height=max(480, 26 * len(frame) + 75),
+        margin=dict(l=10, r=18, t=18, b=20),
         xaxis=dict(side="top"),
         yaxis=dict(autorange="reversed"),
         plot_bgcolor="white",
         paper_bgcolor="white",
         font=dict(color="#334155", size=11),
     )
-    return fig
-
-
-def horizon_bar_chart(asset_returns: pd.DataFrame, horizon: str) -> go.Figure:
-    if asset_returns.empty or horizon not in asset_returns.columns:
-        return apply_layout(go.Figure(), height=320, showlegend=False)
-
-    frame = asset_returns.dropna(subset=[horizon]).copy()
-    frame = frame.sort_values(horizon, ascending=True).tail(22)
-    colors = [score_color(v / 8.0) for v in frame[horizon]]
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Bar(
-            x=frame[horizon],
-            y=frame["Ticker"] + "  " + frame["Asset"],
-            orientation="h",
-            marker_color=colors,
-            text=[signed_pct_fmt(v, 1) for v in frame[horizon]],
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate="<b>%{y}</b><br>Return: %{x:+.2f}%<extra></extra>",
-        )
-    )
-    fig.add_vline(x=0, line_color="#94a3b8", line_width=1)
-    fig.update_layout(
-        height=max(330, 24 * len(frame) + 70),
-        margin=dict(l=10, r=55, t=14, b=24),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        showlegend=False,
-        font=dict(color="#334155", size=11),
-    )
-    fig.update_xaxes(gridcolor="#e5e7eb", zeroline=False, title=f"{horizon} return")
+    fig.update_xaxes(showgrid=False)
     fig.update_yaxes(showgrid=False)
     return fig
-
-
-def rebased_price_chart(prices: pd.DataFrame, tickers: List[str]) -> go.Figure:
-    fig = go.Figure()
-    chosen = [
-        ticker
-        for ticker in tickers
-        if ticker in prices.columns and not prices[ticker].dropna().empty
-    ]
-    if not chosen:
-        return apply_layout(fig, height=390)
-
-    frame = prices[chosen].ffill().dropna(how="all")
-    frame = frame.dropna(how="all")
-
-    for ticker in chosen:
-        series = clean_series(frame[ticker])
-        if len(series) < 2:
-            continue
-        rebased = series / series.iloc[0] * 100
-        fig.add_trace(
-            go.Scatter(
-                x=rebased.index,
-                y=rebased,
-                mode="lines",
-                name=f"{ticker} {TICKERS.get(ticker, ticker)}",
-                line=dict(width=2),
-            )
-        )
-
-    fig.update_yaxes(title_text="Rebased to 100")
-    return apply_layout(fig, height=395)
-
-
-def signal_line_chart(prices: pd.DataFrame, signal_names: List[str]) -> go.Figure:
-    fig = go.Figure()
-    definitions = build_signal_definitions(prices)
-    lookup = {item["Signal"]: item for item in definitions}
-
-    for name in signal_names:
-        item = lookup.get(name)
-        if not item:
-            continue
-        series = clean_series(item["Series"])
-        if len(series) < 2:
-            continue
-        rebased = series / series.iloc[0] * 100
-        fig.add_trace(
-            go.Scatter(
-                x=rebased.index,
-                y=rebased,
-                mode="lines",
-                name=name,
-                line=dict(width=2),
-                hovertemplate=f"<b>{name}</b><br>%{{x|%b %d, %Y}}<br>%{{y:.2f}}<extra></extra>",
-            )
-        )
-
-    fig.update_yaxes(title_text="Constructive proxy rebased to 100")
-    return apply_layout(fig, height=395)
 
 
 # =============================================================================
@@ -1505,88 +1369,27 @@ with st.sidebar:
     st.header("About This Tool")
     st.markdown(
         """
-        Cross-asset regime monitor built from liquid market proxies rather than economic-release endpoints. The output is designed to be fast, stable, and comparable across ADFM tabs.
+        This page is deliberately rule-based and transparent. It does **not** compress the market into a proprietary -1 to +1 score.
 
-        It should be read as a tape-and-liquidity dashboard, not as an official CPI, ISM, claims, or Fed-release page.
+        The regime is built from five questions:
+
+        **Growth:** Are breadth, small caps, copper/gold, EM and credit improving or weakening?
+
+        **Inflation:** Are breakevens, crude and inflation-sensitive market ratios rising or falling?
+
+        **Rates:** Are nominal and real yields moving higher or lower?
+
+        **Liquidity:** Are the dollar, real yields, credit spreads and Fed/TGA/RRP liquidity easing or tightening?
+
+        **Risk:** Are equities being confirmed by breadth, credit and volatility?
+
+        Each call uses simple one-month thresholds. The underlying moves are shown directly on the page.
         """
     )
 
-    st.divider()
-    st.header("Controls")
-
-    period = st.selectbox(
-        "Market history",
-        ["6mo", "1y", "2y", "3y", "5y"],
-        index=4,
-        help="Longer windows improve percentile scoring. Shorter windows load faster but reduce signal depth.",
-    )
-
-    primary_horizon = st.selectbox(
-        "Primary move horizon",
-        ["1D", "1W", "1M", "3M", "YTD"],
-        index=2,
-        help="Controls the main ranked performance chart.",
-    )
-
-    default_assets = [
-        "SPY",
-        "QQQ",
-        "RSP",
-        "IWM",
-        "HYG",
-        "LQD",
-        "TLT",
-        "^TNX",
-        "DX-Y.NYB",
-        "CL=F",
-        "GC=F",
-        "HG=F",
-        "^VIX",
-    ]
-    selected_assets = st.multiselect(
-        "Asset chart",
-        options=list(TICKERS.keys()),
-        default=[ticker for ticker in default_assets if ticker in TICKERS],
-        format_func=lambda ticker: f"{ticker} · {TICKERS.get(ticker, ticker)}",
-    )
-
-    default_signal_names = [
-        "Equity trend",
-        "Breadth",
-        "Credit risk appetite",
-        "Duration bid",
-        "Softer dollar liquidity",
-        "Copper/gold cyclicality",
-        "Volatility relief",
-    ]
-    selected_signal_names = st.multiselect(
-        "Signal chart",
-        options=[
-            "Equity trend",
-            "Breadth",
-            "Small-cap liquidity",
-            "Nasdaq leadership",
-            "Semiconductor leadership",
-            "Credit risk appetite",
-            "Loan risk appetite",
-            "Duration bid",
-            "Lower 10Y yield impulse",
-            "Curve steepening impulse",
-            "Softer dollar liquidity",
-            "EUR/USD pressure",
-            "Copper/gold cyclicality",
-            "Crude disinflation relief",
-            "Volatility relief",
-            "Vol-of-vol relief",
-        ],
-        default=default_signal_names,
-    )
-
-    show_raw = st.checkbox("Show raw data", value=False)
-
 
 # =============================================================================
-# LOAD DATA
+# LOAD
 # =============================================================================
 
 render_page_header(
@@ -1597,309 +1400,243 @@ render_page_header(
     )
 )
 
-all_tickers = tuple(TICKERS.keys())
-prices, failed = fetch_market_prices(all_tickers, period)
+prices, market_failed = fetch_market_prices(tuple(TICKERS.keys()))
+macro, macro_diag = fetch_macro_data()
 
 if prices.empty:
-    st.error("No market data loaded. Check connectivity or reduce the ticker list.")
+    st.error("No market data loaded. Check market-data connectivity.")
     st.stop()
-
-signals = build_signal_table(prices)
-scores = group_scores(signals)
-regime, regime_note = classify_regime(scores)
-notes = build_decision_notes(regime, regime_note, scores, signals)
-diagnostics = build_regime_diagnostics(scores, signals)
-asset_returns = asset_return_rows(
-    prices, [ticker for ticker in CORE_DISPLAY if ticker in TICKERS]
-)
 
 latest_market_dt = max(
     [
-        pd.Timestamp(prices[col].dropna().index[-1])
+        pd.Timestamp(clean_series(prices[col]).index[-1])
         for col in prices.columns
-        if not prices[col].dropna().empty
+        if not clean_series(prices[col]).empty
     ],
-    default=None,
+    default=pd.Timestamp.today().normalize(),
 )
-latest_market_text = (
-    latest_market_dt.strftime("%b %d, %Y") if latest_market_dt is not None else "N/A"
-)
-loaded_count = len([col for col in prices.columns if not prices[col].dropna().empty])
-failed_text = (
-    ", ".join(failed[:8]) + ("..." if len(failed) > 8 else "") if failed else "None"
-)
-signal_values = (
-    signals["Composite"].dropna() if not signals.empty else pd.Series(dtype=float)
-)
+asof = pd.Timestamp(latest_market_dt).tz_localize(None) if getattr(latest_market_dt, "tzinfo", None) else pd.Timestamp(latest_market_dt)
+
+snapshot = build_snapshot(prices, macro, asof)
+tension_title, tension_copy = governing_tension(snapshot, prices, macro)
+
+loaded_market = sum(not clean_series(prices[col]).empty for col in prices.columns)
+macro_ok = 0
+if not macro_diag.empty and "status" in macro_diag.columns:
+    macro_ok = int((macro_diag["status"] == "OK").sum())
+macro_total = int(len(macro_diag)) if not macro_diag.empty else 0
+
+failed_text = ", ".join(market_failed[:6]) + ("..." if len(market_failed) > 6 else "") if market_failed else "None"
 
 st.markdown(
     f"""
     <div class="data-status">
-        Latest market observation {escape(latest_market_text)} &middot; {loaded_count}/{len(TICKERS)} proxies loaded &middot; {escape(period)} scoring history &middot; unavailable: {escape(failed_text)}
+        Latest market observation {escape(asof.strftime("%b %d, %Y"))}
+        &middot; market proxies {loaded_market}/{len(TICKERS)}
+        &middot; primary macro series {macro_ok}/{macro_total}
+        &middot; unavailable market data: {escape(failed_text)}
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-composite = float(scores.get("Composite", 0.0))
-composite_color = score_color(composite)
-confidence = float(diagnostics["confidence"])
-confidence_color = (
-    PALETTE["blue"]
-    if confidence >= 70
-    else PALETTE["amber"]
-    if confidence >= 50
-    else PALETTE["red"]
-)
-impulse = diagnostics["impulse"]
-impulse_color = score_color(float(impulse)) if is_valid(impulse) else PALETTE["faint"]
-directional_label = "Constructive support" if composite >= 0 else "Defensive support"
+hero_color = {
+    "Goldilocks / disinflationary growth": PALETTE["green"],
+    "Reflation": PALETTE["amber"],
+    "Stagflation pressure": PALETTE["red"],
+    "Growth scare / disinflation": PALETTE["blue"],
+    "Transition / mixed": PALETTE["amber"],
+}.get(snapshot["regime"], PALETTE["blue"])
 
 st.markdown(
     f"""
-<div class="regime-banner" style="--regime-accent:{composite_color}">
-    <div>
-        <div class="regime-kicker">Active market regime</div>
-        <div class="regime-title">{escape(regime)}</div>
-        <div class="regime-copy">{escape(regime_note)} {escape(notes["pressure"])}</div>
+    <div class="regime-hero" style="--hero-accent:{hero_color}">
+        <div>
+            <div class="hero-kicker">Current macro regime</div>
+            <div class="hero-title">{escape(snapshot["regime"])}</div>
+            <div class="hero-copy">{escape(snapshot["narrative"])}</div>
+        </div>
+        <div class="hero-side">
+            <div class="hero-side-label">Governing tension</div>
+            <div class="hero-side-value">{escape(tension_title)}</div>
+            <div class="hero-copy">{escape(tension_copy)}</div>
+        </div>
     </div>
-    <div class="regime-callout">
-        <div class="regime-callout-label">Portfolio stance</div>
-        <div class="regime-callout-value">{escape(notes["stance"])}</div>
-        <div class="regime-copy">{escape(notes["action"])}</div>
-    </div>
-</div>
     """,
     unsafe_allow_html=True,
 )
 
-render_metric_strip(
-    [
-        (
-            "Composite score",
-            signed_num_fmt(composite, 2),
-            f"{score_label(composite)} · causal percentile blend",
-            composite_color,
-        ),
-        (
-            "Regime confidence",
-            f"{confidence:.0f}%",
-            f"{diagnostics['confidence_label']} · {float(diagnostics['pillar_alignment']):.0f}% pillar agreement",
-            confidence_color,
-        ),
-        (
-            directional_label,
-            pct_fmt(float(diagnostics["directional_breadth"]), 0),
-            f"of {len(signal_values)} signals beyond the ±0.20 threshold",
-            composite_color,
-        ),
-        (
-            "Near-term impulse",
-            signed_num_fmt(float(impulse), 2),
-            f"{diagnostics['impulse_label']} · average 1W minus 3M score",
-            impulse_color,
-        ),
-        (
-            "Market coverage",
-            f"{loaded_count}/{len(TICKERS)}",
-            f"latest observation {latest_market_text}",
-            PALETTE["blue"],
-        ),
-    ]
-)
-
-
-# =============================================================================
-# PILLAR CARDS
-# =============================================================================
-
-pillar_items = [
+state_cards = [
     (
-        "Equity Tape",
-        scores.get("Equity Tape", np.nan),
-        "Trend, breadth, small caps, Nasdaq, semis.",
+        "Growth impulse",
+        snapshot["growth_state"],
+        f"{snapshot['growth_detail']}. {evidence_text(snapshot['growth_indicators'])}",
     ),
     (
-        "Credit",
-        scores.get("Credit", np.nan),
-        "High yield and loans versus safer bonds.",
+        "Inflation impulse",
+        snapshot["inflation_state"],
+        f"{snapshot['inflation_detail']}. {evidence_text(snapshot['inflation_indicators'])}",
     ),
-    ("Rates", scores.get("Rates", np.nan), "Duration bid, yields, and curve impulse."),
     (
-        "Dollar Liquidity",
-        scores.get("Dollar Liquidity", np.nan),
-        "DXY/UUP and EUR/USD pressure.",
+        "Rates impulse",
+        snapshot["rates_state"],
+        f"{snapshot['rates_detail']}. {evidence_text(snapshot['rates_indicators'])}",
     ),
-    ("Commodities", scores.get("Commodities", np.nan), "Copper/gold and crude relief."),
-    ("Volatility", scores.get("Volatility", np.nan), "VIX and vol-of-vol relief."),
+    (
+        "Liquidity / FCI",
+        snapshot["liquidity_state"],
+        f"{snapshot['liquidity_detail']}. {evidence_text(snapshot['liquidity_indicators'])}",
+    ),
+    (
+        "Risk confirmation",
+        snapshot["risk_state"],
+        f"{snapshot['risk_detail']}. {evidence_text(snapshot['risk_indicators'])}",
+    ),
 ]
 
-pillar_html = []
-for label, value, note in pillar_items:
-    pillar_html.append(
-        "<div class='pillar-card'>"
-        f"<div class='pillar-label'>{escape(label)}</div>"
-        f"<div class='pillar-value' style='color:{score_color(value)}'>{escape(signed_num_fmt(value, 2))}</div>"
-        f"<div class='pillar-note'>{escape(score_label(value))}. {escape(note)}</div>"
+state_html: List[str] = []
+for label, value, detail in state_cards:
+    color = score_color(value)
+    state_html.append(
+        "<div class='state-card'>"
+        f"<div class='state-label'>{escape(label)}</div>"
+        f"<div class='state-value' style='color:{color}'>{escape(value)}</div>"
+        f"<div class='state-evidence'>{escape(detail)}</div>"
         "</div>"
     )
 st.markdown(
-    "<div class='pillar-grid'>" + "".join(pillar_html) + "</div>",
+    "<div class='state-grid'>" + "".join(state_html) + "</div>",
     unsafe_allow_html=True,
 )
 
 
 # =============================================================================
-# VISUALS FIRST
+# REGIME TRANSITION
 # =============================================================================
 
-left, right = st.columns([0.85, 1.15])
-
-with left:
-    st.markdown(
-        "<div class='section-title'>Regime Pillars</div>", unsafe_allow_html=True
-    )
-    st.markdown(
-        "<div class='section-subtitle'>Current cross-asset support by pillar. Scores run from -1 defensive to +1 constructive.</div>",
-        unsafe_allow_html=True,
-    )
-    st.plotly_chart(score_bar_chart(scores), width="stretch")
-
-with right:
-    st.markdown(
-        "<div class='section-title'>Fastest Signal Shifts</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<div class='section-subtitle'>Largest gaps between the 1-week and 3-month scores. Positive bars are improving; negative bars are deteriorating.</div>",
-        unsafe_allow_html=True,
-    )
-    if signals.empty:
-        st.info("Not enough market data to calculate signal shifts.")
-    else:
-        st.plotly_chart(signal_impulse_chart(signals), width="stretch")
-
+st.markdown("<div class='section-title'>Regime Transition</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-title'>Signal Confirmation Matrix</div>",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    "<div class='section-subtitle'>Causal percentile scores across short-term moves, YTD impulse, trend, and composite confirmation.</div>",
-    unsafe_allow_html=True,
-)
-if signals.empty:
-    st.info("Not enough market data to calculate signal scores.")
-else:
-    st.plotly_chart(signal_heatmap(signals), width="stretch")
-
-st.markdown(
-    "<div class='section-title'>Cross-Asset Performance</div>", unsafe_allow_html=True
-)
-st.markdown(
-    "<div class='section-subtitle'>Price moves across the liquid proxy set. Futures, FX, and yield indexes are included when usable data is available.</div>",
+    "<div class='section-subtitle'>The same transparent framework evaluated at prior month-end-like lookbacks. This shows whether the macro mix is stable or actually changing.</div>",
     unsafe_allow_html=True,
 )
 
-perf_left, perf_right = st.columns([1.05, 0.95])
-with perf_left:
-    st.plotly_chart(asset_performance_heatmap(asset_returns), width="stretch")
-with perf_right:
-    st.plotly_chart(horizon_bar_chart(asset_returns, primary_horizon), width="stretch")
-
-
-# =============================================================================
-# DECISION NOTES
-# =============================================================================
-
-st.markdown("<div class='section-title'>Decision Notes</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>Base case, confirmation, and the condition that should force a posture change.</div>",
-    unsafe_allow_html=True,
-)
-
-note_cols = st.columns(3)
-note_blocks = [
-    ("Base case", notes["base"]),
-    ("Market confirmation", notes["confirmation"]),
-    ("Invalidation", notes["invalidation"]),
+transition_specs = [
+    ("3 months ago", asof - pd.Timedelta(days=91)),
+    ("1 month ago", asof - pd.Timedelta(days=30)),
+    ("Current", asof),
 ]
-
-for col, (label, copy) in zip(note_cols, note_blocks):
-    with col:
-        st.markdown(
-            f"""
-            <div class="note-card">
-                <div class="note-label">{escape(label)}</div>
-                <div class="note-copy">{escape(copy)}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-# =============================================================================
-# CHART TABS
-# =============================================================================
-
+transition_html: List[str] = []
+for label, snap_date in transition_specs:
+    snap = build_snapshot(prices, macro, snap_date)
+    transition_html.append(
+        "<div class='transition-card'>"
+        f"<div class='transition-date'>{escape(label)} · {escape(pd.Timestamp(snap_date).strftime('%b %d, %Y'))}</div>"
+        f"<div class='transition-regime'>{escape(snap['regime'])}</div>"
+        f"<div class='transition-detail'>Growth {escape(snap['growth_state'].lower())} · inflation {escape(snap['inflation_state'].lower())} · rates {escape(snap['rates_state'].lower())} · liquidity {escape(snap['liquidity_state'].lower())}</div>"
+        "</div>"
+    )
 st.markdown(
-    "<div class='section-title'>Market Structure Charts</div>", unsafe_allow_html=True
-)
-st.markdown(
-    "<div class='section-subtitle'>The signal chart uses constructive proxies, so higher usually means easier conditions or better risk confirmation.</div>",
+    "<div class='transition-grid'>" + "".join(transition_html) + "</div>",
     unsafe_allow_html=True,
 )
 
-tab_assets, tab_signals, tab_tables = st.tabs(
-    ["Asset Tape", "Constructive Signals", "Tables"]
+
+# =============================================================================
+# WHAT CHANGED
+# =============================================================================
+
+st.markdown("<div class='section-title'>What Changed This Week</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-subtitle'>Only concrete market moves are ranked here. The ranking compares each move with a practical threshold for that instrument; the displayed number is always the actual move.</div>",
+    unsafe_allow_html=True,
 )
 
-with tab_assets:
-    st.plotly_chart(rebased_price_chart(prices, selected_assets), width="stretch")
-
-with tab_signals:
-    st.plotly_chart(signal_line_chart(prices, selected_signal_names), width="stretch")
-
-with tab_tables:
-    st.markdown("<div class='section-title'>Asset Moves</div>", unsafe_allow_html=True)
-    if asset_returns.empty:
-        st.info("No asset return table available.")
-    else:
-        st.dataframe(
-            display_asset_table(asset_returns),
-            width="stretch",
-            hide_index=True,
-        )
-
-    st.markdown(
-        "<div class='section-title'>Signal Definitions and Scores</div>",
-        unsafe_allow_html=True,
+weekly = build_weekly_changes(prices, macro, snapshot)
+weekly_html: List[str] = []
+for item in weekly:
+    weekly_html.append(
+        "<div class='change-card'>"
+        f"<div class='change-name'>{escape(item['name'])}</div>"
+        f"<div class='change-move' style='color:{item['color']}'>{escape(item['move_text'])}</div>"
+        f"<div class='change-read'>{escape(item['read'])}</div>"
+        "</div>"
     )
-    if signals.empty:
-        st.info("No signal table available.")
-    else:
-        st.dataframe(display_signal_table(signals), width="stretch", hide_index=True)
+st.markdown(
+    "<div class='change-grid'>" + "".join(weekly_html) + "</div>",
+    unsafe_allow_html=True,
+)
 
 
 # =============================================================================
-# METHODOLOGY / RAW DATA
+# MACRO TAPE
 # =============================================================================
 
-with st.expander("Scoring methodology"):
+st.markdown("<div class='section-title'>Cross-Asset Macro Tape</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-subtitle'>The core signals behind the regime call. Returns are actual price moves; rates, breakevens and spreads are basis-point changes. No percentile or composite scoring.</div>",
+    unsafe_allow_html=True,
+)
+render_macro_table(build_macro_tape(prices, macro, snapshot))
+
+
+# =============================================================================
+# TENSIONS
+# =============================================================================
+
+st.markdown("<div class='section-title'>Cross-Asset Tensions</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-subtitle'>The places where one market is refusing to confirm another. These are usually more important than the headline regime label.</div>",
+    unsafe_allow_html=True,
+)
+
+tensions = build_tensions(prices, macro, snapshot)
+tension_html: List[str] = []
+for item in tensions:
+    tension_html.append(
+        "<div class='tension-card'>"
+        f"<div class='tension-status' style='color:{item['color']}'>{escape(item['status'])}</div>"
+        f"<div class='tension-title'>{escape(item['title'])}</div>"
+        f"<div class='tension-copy'>{escape(item['copy'])}</div>"
+        "</div>"
+    )
+st.markdown(
+    "<div class='tension-grid'>" + "".join(tension_html) + "</div>",
+    unsafe_allow_html=True,
+)
+
+
+# =============================================================================
+# CROSS-ASSET PERFORMANCE
+# =============================================================================
+
+st.markdown("<div class='section-title'>Cross-Asset Performance</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-subtitle'>Actual returns across major equity, credit, rates, dollar and commodity proxies. Cell color is normalized within each horizon so one oil or volatility outlier does not wash out the rest of the tape.</div>",
+    unsafe_allow_html=True,
+)
+perf = performance_frame(prices, asof)
+st.plotly_chart(performance_heatmap(perf), width="stretch")
+
+
+# =============================================================================
+# METHODOLOGY
+# =============================================================================
+
+with st.expander("Methodology and thresholds"):
     st.markdown(
         """
-        This page uses liquid market proxies rather than macro-release endpoints.
+        **Growth impulse** uses one-month moves in RSP/SPY, IWM/SPY, copper/gold, EEM/SPY and high-yield OAS. Breadth needs roughly ±0.50%, small caps and EM roughly ±1.00%, copper/gold ±2.00%, and high-yield spreads ±10 bp to register a directional vote.
 
-        Each signal is transformed so that a higher series is generally more constructive for liquidity or risk appetite. Examples: HYG/LQD higher is constructive for credit; 1/VIX higher is volatility relief; 1/DXY or 1/UUP higher is softer-dollar liquidity; 1/crude higher is crude disinflation relief. The tool scores 1D, 1W, 1M, and 3M moves against prior observations only, compares the current YTD move with historical moves of the same trading-day length, adds a trend score, and rolls those into a -1 to +1 composite. The 1D score is diagnostic but intentionally receives no composite weight.
+        **Inflation impulse** uses the 10-year breakeven, WTI crude, copper/gold and TIP/IEF. A ±5 bp breakeven move, roughly ±5% crude move, ±2% copper/gold move or ±0.75% TIP/IEF move is treated as meaningful.
 
-        This is a market-implied regime tool. It is designed to answer what the tape is confirming now, not what CPI, payrolls, ISM, claims, or Fed funds officially printed.
+        **Rates impulse** uses the 2-year, 10-year, 30-year and 10-year real yield. A one-month move beyond roughly ±10 bp is directional.
+
+        **Liquidity / financial conditions** uses the broad dollar, real yields, high-yield spreads, EUR/USD and a simple Fed balance-sheet liquidity measure: Federal Reserve assets minus the Treasury General Account minus overnight reverse repo. RRP is converted to the same units before subtraction.
+
+        **Risk confirmation** uses SPY, breadth, HYG/LQD, VIX and EEM/SPY. The regime is not considered clean risk-on if the index rises without breadth or credit.
+
+        No proprietary composite is shown. A state changes only when the balance of its underlying observable inputs moves decisively in one direction.
         """
     )
-
-if show_raw:
-    st.markdown(
-        "<div class='section-title'>Raw Market Data</div>", unsafe_allow_html=True
-    )
-    st.dataframe(prices.tail(220), width="stretch")
-
 
 render_footer()
