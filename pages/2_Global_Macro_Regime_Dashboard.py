@@ -13,7 +13,12 @@ from adfm_core.market_data import (
     fetch_daily_ohlcv,
 )
 from adfm_core.primary_data import fetch_fred_series
-from adfm_core.ui import render_footer
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_page_header,
+)
 
 configure_yfinance_cache()
 
@@ -76,277 +81,123 @@ PERFORMANCE_ROWS = [
 ]
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="collapsed")
+inject_explorer_style(max_width_px=1560)
 
+# Page-specific typography only. The page shell and responsive positioning are
+# deliberately inherited from adfm_core.ui, the same contract used by the
+# Liquidity Conditions Monitor.
 st.markdown(
     """
     <style>
-        html, body, .stApp, main, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-            background: #ffffff !important;
-        }
-
-        *, *::before, *::after {
-            box-sizing: border-box;
-        }
-
-        .block-container,
-        [data-testid="stMainBlockContainer"] {
-            width: calc(100% - 4rem) !important;
-            max-width: 1480px !important;
-            margin-left: auto !important;
-            margin-right: auto !important;
-            padding-top: 1.25rem !important;
-            padding-right: 0 !important;
-            padding-bottom: 2rem !important;
-            padding-left: 0 !important;
-            overflow-x: clip !important;
-        }
-
-        div[data-testid="stSidebar"],
-        section[data-testid="stSidebar"] {
-            background: #ffffff;
-            border-right: 1px solid #e5e7eb;
-        }
-
-        header[data-testid="stHeader"] {
-            background: rgba(255,255,255,.97) !important;
-            border-bottom: 1px solid #f1f5f9;
-        }
-
-        .gm-head {
-            width: 100%;
-            border-top: 3px solid #111827;
-            border-bottom: 1px solid #111827;
-            padding: 12px 0 14px;
-            margin: 0 0 12px;
-        }
-
-        .gm-eyebrow {
-            font-size: .68rem;
-            font-weight: 800;
-            letter-spacing: .14em;
-            text-transform: uppercase;
-            color: #111827;
-            margin-bottom: 4px;
-        }
-
-        .gm-title {
-            max-width: 100%;
-            font-size: clamp(2.2rem, 3.0vw, 2.55rem);
-            line-height: 1.02;
-            letter-spacing: -.035em;
-            font-weight: 620;
-            color: #111827;
-            margin: 0;
-            white-space: normal;
-            overflow-wrap: normal;
-            word-break: normal;
-        }
-
-        .gm-subtitle {
-            max-width: 1080px;
-            color: #475569;
-            font-size: .92rem;
-            line-height: 1.45;
-            margin-top: 7px;
-        }
-
         .data-status {
-            color: #64748b;
+            color: #555555;
+            font-family: Arial, Helvetica, sans-serif;
             font-size: .72rem;
             line-height: 1.45;
-            margin: 5px 0 18px;
+            margin: -.15rem 0 1rem;
             overflow-wrap: anywhere;
         }
 
         .current-read {
             width: 100%;
-            padding: 0 0 14px;
-            border-bottom: 1px solid #dfe3e8;
+            padding: .15rem 0 .9rem;
+            border-bottom: 1px solid #c9c9c9;
         }
 
         .section-kicker {
-            color: #64748b;
+            color: #555555;
+            font-family: Arial, Helvetica, sans-serif;
             font-size: .66rem;
-            letter-spacing: .12em;
-            text-transform: uppercase;
             font-weight: 800;
-            margin-bottom: 4px;
+            letter-spacing: .12em;
+            line-height: 1.25;
+            text-transform: uppercase;
+            margin-bottom: .35rem;
         }
 
         .regime-name {
-            color: #111827;
+            color: #000000;
+            font-family: Georgia, "Times New Roman", serif;
             font-size: 1.55rem;
-            line-height: 1.14;
-            font-weight: 800;
+            font-weight: 700;
             letter-spacing: -.02em;
-            margin-bottom: 6px;
+            line-height: 1.14;
+            margin-bottom: .42rem;
         }
 
         .regime-copy {
-            color: #334155;
-            font-size: .91rem;
-            line-height: 1.55;
             max-width: 1120px;
+            color: #303030;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: .88rem;
+            line-height: 1.55;
         }
 
         .state-line {
-            max-width: 100%;
-            font-size: .84rem;
+            max-width: 1120px;
+            color: #303030;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: .80rem;
             line-height: 1.65;
-            color: #334155;
-            margin-top: 10px;
-            white-space: normal;
+            margin-top: .65rem;
             overflow-wrap: anywhere;
         }
 
-        .state-line strong { color: #111827; }
+        .state-line strong { color: #000000; }
 
-        .section-title {
-            font-size: 1.02rem;
-            font-weight: 800;
-            color: #111827;
-            margin-top: 1.25rem;
-            margin-bottom: .18rem;
-            letter-spacing: -.01em;
+        .gm-section-title {
+            color: #000000;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.08rem;
+            font-weight: 700;
+            letter-spacing: -.012em;
+            line-height: 1.2;
+            margin: 1.2rem 0 .2rem;
         }
 
-        .section-subtitle {
-            max-width: 1080px;
-            font-size: .78rem;
-            color: #64748b;
+        .gm-section-subtitle {
+            max-width: 1120px;
+            color: #555555;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: .77rem;
             line-height: 1.45;
             margin-bottom: .55rem;
         }
 
         .tension-line {
             width: 100%;
-            border-top: 1px solid #e5e7eb;
-            padding: 9px 0 8px;
-            font-size: .84rem;
-            color: #334155;
-            line-height: 1.45;
+            border-top: 1px solid #e2e2e2;
+            color: #303030;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: .81rem;
+            line-height: 1.5;
+            padding: .58rem 0 .52rem;
             overflow-wrap: anywhere;
         }
 
-        .tension-line:last-child { border-bottom: 1px solid #e5e7eb; }
-        .tension-line b { color: #111827; }
+        .tension-line:last-child { border-bottom: 1px solid #e2e2e2; }
+        .tension-line b { color: #000000; }
 
         div[data-testid="stDataFrame"],
         div[data-testid="stTable"] {
             width: 100% !important;
             max-width: 100% !important;
             min-width: 0 !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            overflow-x: auto !important;
-        }
-
-        .stDataFrame [role="columnheader"] {
-            font-weight: 700 !important;
-        }
-
-        div[data-testid="stExpander"] {
-            width: 100%;
-            border: 0;
-            border-top: 1px solid #dfe3e8;
-            border-radius: 0;
-        }
-
-        @media (min-width: 1501px) {
-            .block-container,
-            [data-testid="stMainBlockContainer"] {
-                width: min(1480px, calc(100% - 5rem)) !important;
-            }
-        }
-
-        @media (max-width: 1100px) {
-            .block-container,
-            [data-testid="stMainBlockContainer"] {
-                width: calc(100% - 2.5rem) !important;
-                max-width: none !important;
-            }
         }
 
         @media (max-width: 760px) {
-            .block-container,
-            [data-testid="stMainBlockContainer"] {
-                width: 100% !important;
-                max-width: 100% !important;
-                margin: 0 !important;
-                padding-top: calc(4.1rem + env(safe-area-inset-top, 0px)) !important;
-                padding-right: max(1rem, env(safe-area-inset-right, 0px)) !important;
-                padding-bottom: calc(1.75rem + env(safe-area-inset-bottom, 0px)) !important;
-                padding-left: max(1rem, env(safe-area-inset-left, 0px)) !important;
-                overflow-x: clip !important;
-            }
-
-            .gm-head {
-                padding: 9px 0 11px;
-                margin-bottom: 10px;
-            }
-
-            .gm-eyebrow {
-                font-size: .64rem;
-                margin-bottom: 5px;
-            }
-
-            .gm-title {
-                font-size: clamp(1.85rem, 9vw, 2.15rem);
-                line-height: 1.06;
-                letter-spacing: -.03em;
-                overflow-wrap: anywhere;
-            }
-
-            .gm-subtitle {
-                font-size: .86rem;
-                line-height: 1.45;
-                margin-top: 7px;
-            }
-
             .data-status {
-                font-size: .69rem;
-                margin: 4px 0 14px;
+                font-size: .71rem;
+                margin-bottom: .8rem;
             }
 
-            .current-read {
-                padding-bottom: 12px;
-            }
-
-            .section-kicker {
-                font-size: .63rem;
-            }
-
-            .regime-name {
-                font-size: 1.35rem;
-                line-height: 1.14;
-            }
-
-            .regime-copy {
-                font-size: .87rem;
-                line-height: 1.5;
-            }
-
-            .state-line {
-                font-size: .80rem;
-                line-height: 1.75;
-                margin-top: 9px;
-            }
-
-            .section-title {
-                font-size: .98rem;
-                margin-top: 1.05rem;
-            }
-
-            .section-subtitle {
-                font-size: .75rem;
-                line-height: 1.42;
-            }
-
-            .tension-line {
-                font-size: .80rem;
-                line-height: 1.48;
-                padding: 8px 0;
-            }
+            .current-read { padding-bottom: .8rem; }
+            .regime-name { font-size: 1.38rem; }
+            .regime-copy { font-size: .86rem; line-height: 1.5; }
+            .state-line { font-size: .78rem; line-height: 1.75; }
+            .gm-section-title { font-size: 1.02rem; margin-top: 1.05rem; }
+            .gm-section-subtitle { font-size: .75rem; }
+            .tension-line { font-size: .79rem; }
 
             div[data-testid="stDataFrame"],
             div[data-testid="stTable"] {
@@ -421,8 +272,7 @@ def ytd_change(series: pd.Series | None, asof: pd.Timestamp) -> float:
 def safe_ratio(prices: pd.DataFrame, numerator: str, denominator: str) -> pd.Series:
     if numerator not in prices.columns or denominator not in prices.columns:
         return pd.Series(dtype=float)
-    ratio = prices[numerator] / prices[denominator].replace(0, np.nan)
-    return clean_series(ratio)
+    return clean_series(prices[numerator] / prices[denominator].replace(0, np.nan))
 
 
 def fmt_pct(value: float) -> str:
@@ -849,12 +699,32 @@ def style_returns(frame: pd.DataFrame):
                 return f"background-color: rgba(168,79,73,{alpha:.3f});"
             return ""
 
-        styler = styler.map(_cell, subset=[col])
+        if hasattr(styler, "map"):
+            styler = styler.map(_cell, subset=[col])
+        else:
+            styler = styler.applymap(_cell, subset=[col])
+
     return styler.format({
         col: lambda x: "N/A" if not is_valid(x) else f"{float(x):+.2f}%"
         for col in ["1W", "1M", "3M", "YTD"]
     })
 
+
+def section(title: str, subtitle: str) -> None:
+    st.markdown(
+        f"<div class='gm-section-title'>{title}</div>"
+        f"<div class='gm-section-subtitle'>{subtitle}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+render_page_header(
+    PageHeader(
+        title=TITLE,
+        description=SUBTITLE,
+        eyebrow="ADFM Macro Regime",
+    )
+)
 
 with st.sidebar:
     st.header("About This Page")
@@ -862,24 +732,12 @@ with st.sidebar:
         """
         A cross-asset macro read built from observable market prices and primary-source FRED series.
 
-        No composite score. No hidden regime weighting. The page separates growth, inflation, rates, liquidity and risk confirmation, then shows where those signals agree or conflict.
+        No composite score. No hidden regime weighting. Growth, inflation, rates, liquidity and risk confirmation are evaluated separately, then the page shows where those signals agree or conflict.
         """
     )
     st.divider()
     st.caption("Market data: Yahoo Finance proxies")
     st.caption("Macro data: Federal Reserve / FRED")
-
-
-st.markdown(
-    f"""
-    <div class="gm-head">
-        <div class="gm-eyebrow">ADFM Macro</div>
-        <div class="gm-title">{TITLE}</div>
-        <div class="gm-subtitle">{SUBTITLE}</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
 prices, failed = fetch_market_prices(tuple(TICKERS.keys()))
 macro, macro_status = fetch_macro_data()
@@ -931,10 +789,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown("<div class='section-title'>What is driving the call</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>One-month changes in the underlying signals. The evidence is shown directly rather than compressed into a score.</div>",
-    unsafe_allow_html=True,
+section(
+    "What is driving the call",
+    "One-month changes in the underlying signals. The evidence is shown directly rather than compressed into a score.",
 )
 driver_rows = pd.DataFrame(
     [
@@ -948,10 +805,9 @@ driver_rows = pd.DataFrame(
 )
 st.dataframe(driver_rows, width="stretch", hide_index=True)
 
-st.markdown("<div class='section-title'>Cross-asset tensions</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>The contradictions that matter more than the headline regime label.</div>",
-    unsafe_allow_html=True,
+section(
+    "Cross-asset tensions",
+    "The contradictions that matter more than the headline regime label.",
 )
 for label, copy in tensions:
     st.markdown(
@@ -959,34 +815,27 @@ for label, copy in tensions:
         unsafe_allow_html=True,
     )
 
-st.markdown("<div class='section-title'>Regime change</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>Same framework at fixed lookbacks. This is meant to show direction of travel, not create another score.</div>",
-    unsafe_allow_html=True,
+section(
+    "Regime change",
+    "Same framework at fixed lookbacks. This shows direction of travel rather than another score.",
 )
 st.dataframe(state_table(current, one_month, three_month), width="stretch", hide_index=True)
 
-st.markdown("<div class='section-title'>Rates and financial conditions</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>Actual levels and changes. Yields and spreads are shown in basis points; liquidity in dollars.</div>",
-    unsafe_allow_html=True,
+section(
+    "Rates and financial conditions",
+    "Actual levels and changes. Yields and spreads are shown in basis points; liquidity in dollars.",
 )
 st.dataframe(rates_fci_table(current, macro), width="stretch", hide_index=True)
 
-st.markdown("<div class='section-title'>Cross-asset performance</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>A grouped performance sheet rather than a ranked chart. Each horizon is shaded independently so one extreme asset does not flatten the rest of the tape.</div>",
-    unsafe_allow_html=True,
+section(
+    "Cross-asset performance",
+    "Grouped performance across the liquid proxy set. Each horizon is shaded independently so one extreme move does not flatten the rest of the tape.",
 )
 asset_moves = cross_asset_table(prices, asof)
 if asset_moves.empty:
     st.info("Cross-asset performance data unavailable.")
 else:
-    st.dataframe(
-        style_returns(asset_moves),
-        width="stretch",
-        hide_index=True,
-    )
+    st.dataframe(style_returns(asset_moves), width="stretch", hide_index=True)
 
 with st.expander("Signal definitions and data notes"):
     st.markdown(
