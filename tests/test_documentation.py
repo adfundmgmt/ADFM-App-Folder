@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -32,23 +33,23 @@ class DocumentationTests(unittest.TestCase):
             [tool.title for tool in TOOL_CATALOG],
             [
                 "ADFM Public Equities Baskets",
-                "Global Macro Regime Dashboard",
+                "Global Macro Regime",
                 "Liquidity Conditions Monitor",
-                "Yield Curve + Rates Regime Monitor",
-                "Credit Conditions Dashboard",
+                "Yield Curve Rates Regime Monitor",
+                "Credit Conditions Monitor",
                 "Currency Tension Engine",
                 "Sector Breadth and Rotation",
                 "Equity Leadership & Rotation",
                 "ADFM Underwriter",
-                "Technical Chart Explorer",
+                "ADFM Chart Terminal",
                 "Cross-Asset Ratio Chartbook",
-                "Rate of Change Dashboard",
+                "Rate of Change Regime Explorer",
                 "Relative Volatility Lab",
-                "ETF Flows Dashboard",
+                "ETF Flow Pressure Proxy",
                 "Volume Based Sentiment Indicator",
                 "Options Positioning Compass",
                 "Market Stress Composite",
-                "Event Risk + Catalyst Calendar",
+                "Catalyst Calendar",
                 "Hedge Timer",
                 "Position Sizing Lab",
                 "Market Memory Explorer",
@@ -57,6 +58,12 @@ class DocumentationTests(unittest.TestCase):
                 "CFTC Positioning Monitor",
             ],
         )
+
+    def test_sidebar_labels_match_catalog_titles(self) -> None:
+        for tool in TOOL_CATALOG:
+            stem = Path(tool.page_filename).stem
+            sidebar_label = re.sub(r"^\d+_", "", stem).replace("_", " ")
+            self.assertEqual(sidebar_label, tool.title)
 
     def test_home_navigation_maps_to_catalog(self) -> None:
         self.assertEqual(tool_order(), [tool.title for tool in TOOL_CATALOG])
