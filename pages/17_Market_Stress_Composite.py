@@ -51,10 +51,11 @@ st.markdown(
 render_page_header(
     PageHeader(
         title=TITLE,
-        description="Cross-asset stress regime from realized volatility, breadth, dispersion, VIX, and equity drawdown.",
+        description="Cross-asset stress signal with historical forward SPX/NDX drawdown mapping.",
         eyebrow="ADFM Cross-Asset Stress",
     )
 )
+forward_drawdown_slot = st.container()
 
 # ---------------- Constants ----------------
 NY_TZ = "America/New_York"
@@ -87,6 +88,7 @@ ALL_TICKERS = [t for group in ASSET_CLASS_MAP.values() for t in group]
 MARKET_CONTEXT_TICKERS = [
     "SPY",
     "^GSPC",
+    "^NDX",
     "^VIX",
     "DX-Y.NYB",
 ]
@@ -561,6 +563,25 @@ def latest_or_nan(series: pd.Series) -> float:
     return float(ser.iloc[-1])
 
 
+def forward_worst_close_return(series: pd.Series, horizon: int = 10) -> pd.Series:
+    """Worst close over the next `horizon` sessions versus the signal-day close."""
+    s = pd.to_numeric(series, errors="coerce").astype(float)
+    values = s.to_numpy(dtype=float)
+    out = np.full(len(values), np.nan, dtype=float)
+
+    for i in range(max(0, len(values) - horizon)):
+        base = values[i]
+        future = values[i + 1 : i + horizon + 1]
+        if not np.isfinite(base) or base == 0 or len(future) < horizon:
+            continue
+        finite = future[np.isfinite(future)]
+        if len(finite) != horizon:
+            continue
+        out[i] = (float(np.min(finite)) / base - 1.0) * 100.0
+
+    return pd.Series(out, index=s.index)
+
+
 def stress_cell_style(v):
     try:
         x = float(v)
@@ -777,6 +798,13 @@ elif "SPY" in raw_px.columns and not raw_px["SPY"].dropna().empty:
     )
 else:
     raw_panel["SPX"] = np.nan
+
+if "^NDX" in raw_px.columns and not raw_px["^NDX"].dropna().empty:
+    raw_panel["NDX"] = reindex_raw(raw_px["^NDX"], trade_idx_all)
+elif "QQQ" in raw_px.columns and not raw_px["QQQ"].dropna().empty:
+    raw_panel["NDX"] = reindex_raw(raw_px["QQQ"], trade_idx_all)
+else:
+    raw_panel["NDX"] = np.nan
 
 if "^VIX" in raw_px.columns:
     raw_panel["VIX"] = reindex_raw(raw_px["^VIX"], trade_idx_all)
@@ -1077,6 +1105,98 @@ days_since_peak = (
     float(len(comp_s.loc[peak_idx:]) - 1) if pd.notna(peak_idx) else np.nan
 )
 peak_val = safe_float(comp_s.max())
+
+# ---------------- Forward 10D equity drawdown map ----------------
+spx_forward_10d_dd = forward_worst_close_return(panel["SPX"], 10).reindex(comp_s.index)
+ndx_forward_10d_dd = forward_worst_close_return(panel["NDX"], 10).reindex(comp_s.index)
+
+forward_map = pd.DataFrame(
+    {
+        "Composite": comp_s,
+        "SPX 10D max drawdown": spx_forward_10d_dd,
+        "NDX 10D max drawdown": ndx_forward_10d_dd,
+    }
+)
+
+with forward_drawdown_slot:
+    st.subheader("Market Stress Composite vs Subsequent 10D SPX / NDX Drawdown")
+    st.caption(
+        "Each observation uses the stress score known on that date and the worst closing return over the next 10 trading sessions versus that day's close. "
+        "The most recent 10 sessions are excluded because their forward windows are incomplete. NDX uses ^NDX when available, with QQQ as a fallback."
+    )
+
+    forward_fig = go.Figure()
+
+    for target, label in [
+        ("SPX 10D max drawdown", "SPX"),
+        ("NDX 10D max drawdown", "NDX"),
+    ]:
+        hist = forward_map[["Composite", target]].dropna().copy()
+        if hist.empty:
+            continue
+
+        forward_fig.add_trace(
+            go.Scatter(
+                x=hist["Composite"],
+                y=hist[target],
+                mode="markers",
+                name=f"{label} observations",
+                marker=dict(size=5, opacity=0.18),
+                customdata=hist.index.strftime("%Y-%m-%d"),
+                hovertemplate=(
+                    "Signal date: %{customdata}<br>"
+                    "Stress score: %{x:.1f}<br>"
+                    + f"{label} worst next 10D: "
+                    + "%{y:.2f}%<extra></extra>"
+                ),
+            )
+        )
+
+        bins = np.arange(0, 110, 10)
+        hist["bucket"] = pd.cut(
+            hist["Composite"],
+            bins=bins,
+            include_lowest=True,
+            right=False,
+        )
+        med = hist.groupby("bucket", observed=True)[target].median().dropna()
+        if not med.empty:
+            centers = [float(interval.left + interval.right) / 2.0 for interval in med.index]
+            forward_fig.add_trace(
+                go.Scatter(
+                    x=centers,
+                    y=med.values,
+                    mode="lines+markers",
+                    name=f"{label} 10-point bucket median",
+                    line=dict(width=2.4),
+                    marker=dict(size=7),
+                    hovertemplate=(
+                        "Stress bucket midpoint: %{x:.0f}<br>"
+                        + f"Median {label} next-10D drawdown: "
+                        + "%{y:.2f}%<extra></extra>"
+                    ),
+                )
+            )
+
+    forward_fig.add_vline(
+        x=latest_val,
+        line_width=1.5,
+        line_dash="dot",
+        annotation_text=f"Current {latest_val:.0f}",
+        annotation_position="top",
+    )
+    forward_fig.add_hline(y=0, line_width=1, line_dash="dot")
+    forward_fig.update_layout(
+        template="plotly_white",
+        height=520,
+        margin=dict(l=55, r=25, t=35, b=45),
+        xaxis_title="Market Stress Composite",
+        yaxis_title="Worst subsequent 10D close vs signal-day close",
+        legend=dict(orientation="h", x=0, y=1.08, xanchor="left"),
+    )
+    forward_fig.update_xaxes(range=[0, 100])
+    forward_fig.update_yaxes(ticksuffix="%")
+    st.plotly_chart(forward_fig, width="stretch")
 
 # ---------------- Commentary ----------------
 commentary_text = generate_commentary(
@@ -1510,6 +1630,7 @@ with tab_diagnostics:
 
     for ticker, label in [
         ("SPX", "S&P 500"),
+        ("NDX", "Nasdaq 100"),
         ("VIX", "VIX"),
         ("DXY", "DXY"),
     ]:
@@ -1553,7 +1674,7 @@ with tab_download:
 
     export_panel_cols = [
         c
-        for c in ["SPX", "VIX", "DXY", "DD_stress"] + sorted(set(ALL_TICKERS))
+        for c in ["SPX", "NDX", "VIX", "DXY", "DD_stress"] + sorted(set(ALL_TICKERS))
         if c in panel.columns
     ]
 
@@ -1564,7 +1685,7 @@ with tab_download:
 
     export_raw_cols = [
         c
-        for c in ["SPX", "VIX", "DXY"] + sorted(set(ALL_TICKERS))
+        for c in ["SPX", "NDX", "VIX", "DXY"] + sorted(set(ALL_TICKERS))
         if c in raw_panel.columns
     ]
 
@@ -1635,7 +1756,7 @@ with st.expander("Methodology and active sample"):
         - Asset-class scores average constituent RVOL percentiles. Breadth measures the share of instruments above the {stress_cutoff}th percentile; dispersion measures disagreement across asset classes.
         - VIX level and S&P 500 drawdown are now explicit factors, so option-market stress and price damage can confirm or temper RVOL-only signals.
         - Active-factor weights are renormalized when a source is stale or missing. The composite is unavailable when no valid weighted factors remain.
-        - High stress begins at {REGIME_HI}; low stress ends at {REGIME_LO}. These are regime descriptors, not return forecasts.
+        - High stress begins at {REGIME_HI}; low stress ends at {REGIME_LO}. The top chart maps historical scores to realized subsequent 10-session SPX/NDX drawdowns; it is an empirical conditioning tool, not a deterministic forecast.
         """
     )
 
