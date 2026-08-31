@@ -1,4 +1,4 @@
-from adfm_core.catalyst_calendar_exact_page import render_catalyst_calendar
+from adfm_core.catalyst_calendar_official_page import render_catalyst_calendar
 
 
 render_catalyst_calendar()
