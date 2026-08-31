@@ -90,18 +90,22 @@ def _official_dated_calendar(start: date, horizon_days: int, include_fed: bool) 
     end = start + timedelta(days=horizon_days)
 
     # Keep recurring market-calendar events such as ISM, options expiration,
-    # quarter-end and weekly claims. FOMC is added only from the official schedule.
+    # quarter-end and weekly claims. Major macro releases are supplied only by
+    # the official schedule below so a heuristic cannot create a false event.
     recurring = base._build_rule_calendar(start, horizon_days, include_fed=False)
     if not recurring.empty:
+        recurring = recurring.reset_index(drop=True)
+        original_names = recurring["Event"].copy()
         recurring["Source"] = "Calendar rule"
         recurring["Event"] = recurring["Event"].replace(LABEL_REPLACEMENTS)
 
-        official_coverage_start = date(2026, 9, 1)
+        # Official schedule coverage begins before the current Aug. 31 date.
+        # This specifically prevents the old last-business-day heuristic from
+        # inventing an Aug. 31 PCE release; July PCE was released Aug. 26.
+        official_coverage_start = date(2026, 8, 26)
         official_coverage_end = date(2026, 12, 31)
         in_official_coverage = recurring["Date"].between(official_coverage_start, official_coverage_end)
-        original_names = base._build_rule_calendar(start, horizon_days, include_fed=False)["Event"].reset_index(drop=True)
-        recurring = recurring.reset_index(drop=True)
-        recurring = recurring[~(in_official_coverage.reset_index(drop=True) & original_names.isin(OVERRIDDEN_EVENTS))].copy()
+        recurring = recurring[~(in_official_coverage & original_names.isin(OVERRIDDEN_EVENTS))].copy()
         recurring = recurring[recurring["Event"] != "Earnings Season Ramp"].copy()
 
     official = pd.DataFrame(OFFICIAL_EVENTS)
