@@ -1,0 +1,20 @@
+name: Check Market Stress 10D
+
+on:
+  push:
+    paths:
+      - '.github/workflows/check-market-stress-10d.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Market Stress page
+        run: python -m py_compile pages/17_Market_Stress_Composite.py
