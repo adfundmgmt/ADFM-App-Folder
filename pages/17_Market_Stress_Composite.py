@@ -56,7 +56,7 @@ ALL_TICKERS = sorted(
 )
 
 DEFAULT_Z_YEARS = 3
-DEFAULT_SMOOTH_DAYS = 5
+DEFAULT_SMOOTH_DAYS = 10
 LEAD_HORIZON = 21
 EARLY_STAGE_DD63 = -0.07
 
@@ -224,7 +224,7 @@ with st.sidebar:
 
     lookback_years = st.selectbox(
         "Chart lookback",
-        [1, 2, 3, 5, 10],
+        [1, 2, 3, 5, 10, 25, 50],
         index=3,
         format_func=lambda x: f"{x} year" if x == 1 else f"{x} years",
     )
@@ -245,18 +245,22 @@ with st.sidebar:
 
     smoothing_mode = st.selectbox(
         "Signal speed",
-        ["Fast - 3D", "Base - 5D", "Slow - 10D"],
-        index=1,
+        ["Fast - 3D", "Base - 5D", "Slow - 10D", "21D", "63D"],
+        index=2,
     )
     smooth_days = {
         "Fast - 3D": 3,
         "Base - 5D": 5,
         "Slow - 10D": 10,
+        "21D": 21,
+        "63D": 63,
     }[smoothing_mode]
 
 
 # ---------------- Data ----------------
-history_start = date.today() - timedelta(days=int(12 * 365.25))
+# Pull enough prehistory to normalize the signal at the left edge of long charts.
+history_years = max(12, lookback_years + z_window_years + 2)
+history_start = date.today() - timedelta(days=int(history_years * 365.25))
 px = load_prices(ALL_TICKERS, history_start)
 
 if px.empty or SPX not in px.columns:
