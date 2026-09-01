@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 24 tools, in the same order and groups shown on the Home page.
+The application contains 25 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -49,6 +49,7 @@ The application contains 24 tools, in the same order and groups shown on the Hom
 | 22 | Monthly Seasonality Explorer | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
 | 23 | SEC 13F Exposure Browser | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
 | 24 | CFTC Positioning Monitor | Scans financial and physical futures for crowded longs, crowded shorts, and sharp weekly positioning shifts, with historical percentile and z-score context. | CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts |
+| 25 | Commodity Event Study | Marks repeatable commodity price events and measures historical forward returns and drawdowns across Yahoo Finance futures histories. | Yahoo Finance daily continuous-futures price history |
 
 ## Tool groups
 
@@ -61,7 +62,7 @@ The application contains 24 tools, in the same order and groups shown on the Hom
 | Technical Confirmation | ADFM Chart Terminal; Cross-Asset Ratio Chartbook; Rate of Change Regime Explorer; Relative Volatility Lab |
 | Positioning + Flows | ETF Flow Pressure Proxy; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser; CFTC Positioning Monitor |
 | Risk + Execution | Market Stress Composite; Catalyst Calendar; Hedge Timer; Position Sizing Lab |
-| Historical Context | Market Memory Explorer; Monthly Seasonality Explorer |
+| Historical Context | Market Memory Explorer; Monthly Seasonality Explorer; Commodity Event Study |
 
 ## Shared application foundations
 
