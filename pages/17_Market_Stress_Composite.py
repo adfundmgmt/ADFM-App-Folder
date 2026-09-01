@@ -10,6 +10,7 @@ import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
 
+from adfm_core.palette import PASTEL
 from adfm_core.ui import PageHeader, inject_explorer_style, render_page_header
 
 
@@ -64,6 +65,12 @@ WATCH_DISLOCATION = 1.10
 HEDGE_RISK = 1.25
 HEDGE_DISLOCATION = 1.50
 FRACTURE_LEVEL = 1.50
+
+INDEX_COLOR = "#202124"
+RISK_COLOR = PASTEL["rose"]
+DISLOCATION_COLOR = PASTEL["lavender"]
+WATCH_COLOR = PASTEL["amber"]
+THRESHOLD_COLOR = "#9AA0A6"
 
 
 st.set_page_config(page_title=TITLE, layout="wide")
@@ -219,6 +226,15 @@ def action_label(risk: float, dislocation: float, us_dd63: float) -> str:
 
 # ---------------- Sidebar controls ----------------
 with st.sidebar:
+    st.header("About This Tool")
+    st.caption(
+        "Tracks foreign equity weakness, carry unwinds, haven-FX strength and abnormal foreign bond, FX and equity moves to identify stress before it reaches the U.S. tape."
+    )
+    st.caption(
+        "Risk-Off measures directional deterioration. Dislocation measures unusual cross-market movement regardless of direction."
+    )
+
+    st.markdown("---")
     st.header("Settings")
 
     lookback_years = st.selectbox(
@@ -247,7 +263,7 @@ with st.sidebar:
         "Signal speed",
         ["Fast - 3D", "Base - 5D", "Slow - 10D"],
         index=1,
-        help="Base uses a 5-session EWM. The warning horizon is 21 trading days; smoothing is deliberately much shorter so the signal can lead rather than confirm a selloff.",
+        help="Base uses a 5-session EWM so the signal can lead rather than simply confirm a selloff.",
     )
     smooth_days = {
         "Fast - 3D": 3,
@@ -465,25 +481,20 @@ if len(onset_dates):
 
 signal_age = "No active watch"
 if watch_signal.iloc[-1] and last_onset_date is not None:
-    sessions_since = int(calendar.get_indexer([last_onset_date])[0])
+    onset_pos = int(calendar.get_indexer([last_onset_date])[0])
     current_pos = int(calendar.get_indexer([calendar[-1]])[0])
-    signal_age = f"{current_pos - sessions_since} sessions"
+    signal_age = f"{current_pos - onset_pos} sessions"
 
 
 # ---------------- Compact sidebar status ----------------
 with st.sidebar:
     st.markdown("---")
-    st.subheader("About This Tool")
+    st.subheader("Current read")
     st.caption(
         f"Risk-Off {fmt_score(risk_now)}  |  Dislocation {fmt_score(dislocation_now)}"
     )
     st.caption(f"{regime}  |  {target_label}")
-    st.caption(
-        f"{action}. Base signal uses a {DEFAULT_SMOOTH_DAYS}-session EWM and a {LEAD_HORIZON}-trading-day warning horizon."
-    )
-    st.caption(
-        "1987 design point: September 18, 1987, 21 trading sessions before Black Monday. The monitor is supposed to react to a rates/FX/global-equity fracture while the U.S. index is still near its highs."
-    )
+    st.caption(f"{action}  |  Watch age: {signal_age}")
 
     with st.expander("Signal construction", expanded=False):
         st.markdown(
@@ -529,7 +540,7 @@ fig.add_trace(
         y=target_px.reindex(plot_idx),
         name=target_label,
         mode="lines",
-        line=dict(width=2.2),
+        line=dict(width=2.4, color=INDEX_COLOR),
         hovertemplate=(
             "%{x|%Y-%m-%d}<br>"
             + target_label
@@ -545,7 +556,7 @@ fig.add_trace(
         y=risk_score.reindex(plot_idx),
         name="Global Risk-Off",
         mode="lines",
-        line=dict(width=2),
+        line=dict(width=2.1, color=RISK_COLOR),
         hovertemplate="%{x|%Y-%m-%d}<br>Risk-Off: %{y:+.2f}<extra></extra>",
     ),
     secondary_y=True,
@@ -557,7 +568,7 @@ fig.add_trace(
         y=dislocation_score.reindex(plot_idx),
         name="Global Dislocation",
         mode="lines",
-        line=dict(width=1.8, dash="dot"),
+        line=dict(width=2.0, dash="dot", color=DISLOCATION_COLOR),
         hovertemplate="%{x|%Y-%m-%d}<br>Dislocation: %{y:+.2f}<extra></extra>",
     ),
     secondary_y=True,
@@ -575,7 +586,12 @@ if len(visible_onsets):
             y=marker_y.values,
             name="Watch onset",
             mode="markers",
-            marker=dict(size=8, symbol="diamond"),
+            marker=dict(
+                size=8,
+                symbol="diamond",
+                color=WATCH_COLOR,
+                line=dict(color=INDEX_COLOR, width=0.8),
+            ),
             customdata=custom,
             hovertemplate=(
                 "%{x|%Y-%m-%d}<br>Watch onset"
@@ -592,7 +608,8 @@ for level in [WATCH_RISK, HEDGE_RISK, FRACTURE_LEVEL]:
         y=level,
         line_dash="dash",
         line_width=1,
-        opacity=0.22,
+        line_color=THRESHOLD_COLOR,
+        opacity=0.28,
         secondary_y=True,
     )
 
@@ -742,46 +759,3 @@ if not moves.empty:
         use_container_width=True,
         hide_index=True,
     )
-
-
-# ---------------- Simple actionable calibration ----------------
-st.markdown("---")
-st.subheader("21-trading-day calibration")
-
-future_min = rolling_future_min(target_px, LEAD_HORIZON)
-forward_dd = future_min / target_px - 1.0
-
-event_frame = pd.DataFrame(
-    {
-        "Risk-Off": risk_score,
-        "Dislocation": dislocation_score,
-        "US DD63": us_dd63_series,
-        "Forward DD": forward_dd,
-        "Onset": watch_onset,
-    }
-).dropna(subset=["Risk-Off", "Dislocation", "US DD63"])
-
-events = event_frame[event_frame["Onset"] & event_frame["Forward DD"].notna()].copy()
-
-if len(events):
-    median_fwd = events["Forward DD"].median()
-    avg_fwd = events["Forward DD"].mean()
-    hit_5 = (events["Forward DD"] <= -0.05).mean()
-    validation_text = (
-        f"Modern-history watch onsets: {len(events):,}. "
-        f"Median worst next-{LEAD_HORIZON}D move: {fmt_pct(median_fwd)}; "
-        f"average: {fmt_pct(avg_fwd)}; "
-        f">5% drawdown hit rate: {hit_5 * 100:.1f}%."
-    )
-else:
-    validation_text = "Not enough completed modern-history watch episodes for forward validation."
-
-st.write(
-    "The design target is September 18, 1987, 21 trading sessions before Black Monday: identify the fracture while U.S. equities are still close to their highs. "
-    "The default signal therefore emphasizes 21-day foreign-market deterioration, uses only a 5-session EWM to suppress noise, "
-    "and treats any new alert after a 7% U.S. drawdown as late."
-)
-st.caption(validation_text)
-st.caption(
-    "1987 is a design precedent rather than part of the Yahoo ETF backtest. Foreign bond ETF history does not extend to 1987."
-)
