@@ -1,6 +1,6 @@
 import streamlit as st
 
-from adfm_core.commodity_event_study_page import TITLE, render_commodity_event_study
+from adfm_core.commodity_top_exhaustion_page import TITLE, render_commodity_event_study
 from adfm_core.palette import PASTEL  # Shared output palette contract.
 from adfm_core.ui import render_footer, render_page_header
 
