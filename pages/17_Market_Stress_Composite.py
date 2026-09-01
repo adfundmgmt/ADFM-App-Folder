@@ -55,9 +55,9 @@ ALL_TICKERS = sorted(
     )
 )
 
-LEAD_HORIZON = 21
 DEFAULT_Z_YEARS = 3
 DEFAULT_SMOOTH_DAYS = 5
+LEAD_HORIZON = 21
 EARLY_STAGE_DD63 = -0.07
 
 WATCH_RISK = 0.90
@@ -70,7 +70,7 @@ INDEX_COLOR = "#202124"
 RISK_COLOR = PASTEL["rose"]
 DISLOCATION_COLOR = PASTEL["lavender"]
 WATCH_COLOR = PASTEL["amber"]
-THRESHOLD_COLOR = "#9AA0A6"
+THRESHOLD_COLOR = "#B7B7B7"
 
 
 st.set_page_config(page_title=TITLE, layout="wide")
@@ -79,12 +79,6 @@ st.markdown(
     """
     <style>
     .block-container { padding-top: 2.15rem; }
-    [data-testid="stSidebar"] .stMetric {
-        padding: 0 !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stMetricValue"] {
-        font-size: 1.05rem !important;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -120,13 +114,7 @@ def load_prices(tickers: List[str], start: date) -> pd.DataFrame:
             elif (ticker, "Adj Close") in raw.columns:
                 out[ticker] = pd.to_numeric(raw[(ticker, "Adj Close")], errors="coerce")
     else:
-        col = (
-            "Close"
-            if "Close" in raw.columns
-            else "Adj Close"
-            if "Adj Close" in raw.columns
-            else None
-        )
+        col = "Close" if "Close" in raw.columns else "Adj Close" if "Adj Close" in raw.columns else None
         if col and tickers:
             out[tickers[0]] = pd.to_numeric(raw[col], errors="coerce")
 
@@ -176,20 +164,17 @@ def fmt_pct(x: float) -> str:
     return "NA" if pd.isna(x) else f"{x * 100:+.2f}%"
 
 
-def rolling_future_min(px: pd.Series, horizon: int) -> pd.Series:
-    future = pd.concat(
-        [px.shift(-i).rename(i) for i in range(1, horizon + 1)],
-        axis=1,
-    )
-    return future.min(axis=1, skipna=False)
+def future_min(px: pd.Series, horizon: int) -> pd.Series:
+    forward = pd.concat([px.shift(-i) for i in range(1, horizon + 1)], axis=1)
+    return forward.min(axis=1, skipna=False)
 
 
 def classify_market(direction_z: float, shock_z: float) -> str:
     direction = 0.0 if pd.isna(direction_z) else direction_z
     shock = 0.0 if pd.isna(shock_z) else shock_z
-    if direction >= 1.5 or shock >= 2.0:
+    if direction >= 1.50 or shock >= 2.00:
         return "High stress"
-    if direction >= 0.9 or shock >= 1.2:
+    if direction >= 0.90 or shock >= 1.20:
         return "Watch"
     return "Normal"
 
@@ -224,7 +209,7 @@ def action_label(risk: float, dislocation: float, us_dd63: float) -> str:
     return "No hedge signal"
 
 
-# ---------------- Sidebar controls ----------------
+# ---------------- Sidebar ----------------
 with st.sidebar:
     st.header("About This Tool")
     st.caption(
@@ -248,7 +233,6 @@ with st.sidebar:
         "U.S. overlay",
         ["Auto", "S&P 500", "Nasdaq Composite"],
         index=0,
-        help="Auto chooses the U.S. index with the stronger historical relationship to the foreign signal, with a small preference for whichever is moving more now.",
     )
 
     z_window_years = st.slider(
@@ -263,7 +247,6 @@ with st.sidebar:
         "Signal speed",
         ["Fast - 3D", "Base - 5D", "Slow - 10D"],
         index=1,
-        help="Base uses a 5-session EWM so the signal can lead rather than simply confirm a selloff.",
     )
     smooth_days = {
         "Fast - 3D": 3,
@@ -289,61 +272,35 @@ haven_cols = available_cols(px, HAVEN_FX)
 bond_cols = available_cols(px, FOREIGN_BONDS)
 
 if len(eq_cols) < 3 or len(carry_cols) < 1:
-    st.warning(
-        "Some foreign-market series are unavailable today. Scores are automatically reweighted across available inputs."
-    )
+    st.warning("Some foreign-market series are unavailable today. Scores are reweighted across available inputs.")
 
 z_window = int(252 * z_window_years)
 
-# ---------------- Global Risk-Off ----------------
+
+# ---------------- Risk-Off score ----------------
 eq_r21 = pd.DataFrame({t: pct_return(px[t], 21) for t in eq_cols})
 eq_r63 = pd.DataFrame({t: pct_return(px[t], 63) for t in eq_cols})
 
-eq_weak_21 = safe_mean(
-    pd.DataFrame({t: -robust_z(eq_r21[t], z_window) for t in eq_cols})
-)
-eq_weak_63 = safe_mean(
-    pd.DataFrame({t: -robust_z(eq_r63[t], z_window) for t in eq_cols})
-)
+eq_weak_21 = safe_mean(pd.DataFrame({t: -robust_z(eq_r21[t], z_window) for t in eq_cols}))
+eq_weak_63 = safe_mean(pd.DataFrame({t: -robust_z(eq_r63[t], z_window) for t in eq_cols}))
 
-breadth_neg21 = (
-    (eq_r21 < 0).mean(axis=1)
-    if not eq_r21.empty
-    else pd.Series(index=calendar, dtype=float)
-)
+breadth_neg21 = (eq_r21 < 0).mean(axis=1) if not eq_r21.empty else pd.Series(index=calendar, dtype=float)
 below_ma = pd.DataFrame(
-    {
-        t: (px[t] < px[t].rolling(100, min_periods=60).mean()).astype(float)
-        for t in eq_cols
-    }
+    {t: (px[t] < px[t].rolling(100, min_periods=60).mean()).astype(float) for t in eq_cols}
 )
-breadth_ma = (
-    below_ma.mean(axis=1)
-    if not below_ma.empty
-    else pd.Series(index=calendar, dtype=float)
-)
-breadth_z = robust_z(0.5 * breadth_neg21 + 0.5 * breadth_ma, z_window)
+breadth_ma = below_ma.mean(axis=1) if not below_ma.empty else pd.Series(index=calendar, dtype=float)
+breadth_z = robust_z(0.50 * breadth_neg21 + 0.50 * breadth_ma, z_window)
 
 spx_r21 = pct_return(px[SPX], 21)
 relative = pd.DataFrame({t: eq_r21[t] - spx_r21 for t in eq_cols})
-relative_weak = safe_mean(
-    pd.DataFrame({t: -robust_z(relative[t], z_window) for t in eq_cols})
-)
+relative_weak = safe_mean(pd.DataFrame({t: -robust_z(relative[t], z_window) for t in eq_cols}))
 
-carry_5 = pd.DataFrame(
-    {t: -robust_z(pct_return(px[t], 5), z_window) for t in carry_cols}
-)
-carry_21 = pd.DataFrame(
-    {t: -robust_z(pct_return(px[t], 21), z_window) for t in carry_cols}
-)
+carry_5 = pd.DataFrame({t: -robust_z(pct_return(px[t], 5), z_window) for t in carry_cols})
+carry_21 = pd.DataFrame({t: -robust_z(pct_return(px[t], 21), z_window) for t in carry_cols})
 carry_stress = 0.35 * safe_mean(carry_5) + 0.65 * safe_mean(carry_21)
 
-haven_5 = pd.DataFrame(
-    {t: -robust_z(pct_return(px[t], 5), z_window) for t in haven_cols}
-)
-haven_21 = pd.DataFrame(
-    {t: -robust_z(pct_return(px[t], 21), z_window) for t in haven_cols}
-)
+haven_5 = pd.DataFrame({t: -robust_z(pct_return(px[t], 5), z_window) for t in haven_cols})
+haven_21 = pd.DataFrame({t: -robust_z(pct_return(px[t], 21), z_window) for t in haven_cols})
 haven_stress = 0.35 * safe_mean(haven_5) + 0.65 * safe_mean(haven_21)
 
 risk_components = pd.DataFrame(
@@ -362,31 +319,22 @@ risk_score = robust_z(risk_raw, z_window).ewm(
     min_periods=1,
 ).mean()
 
-# ---------------- Global Dislocation ----------------
+
+# ---------------- Dislocation score ----------------
 eq_shock = safe_mean(
-    pd.DataFrame(
-        {t: robust_z(pct_return(px[t], 5), z_window).abs() for t in eq_cols}
-    )
+    pd.DataFrame({t: robust_z(pct_return(px[t], 5), z_window).abs() for t in eq_cols})
 )
 
 fx_all = carry_cols + haven_cols
 fx_shock = safe_mean(
-    pd.DataFrame(
-        {t: robust_z(pct_return(px[t], 5), z_window).abs() for t in fx_all}
-    )
+    pd.DataFrame({t: robust_z(pct_return(px[t], 5), z_window).abs() for t in fx_all})
 )
 
 bond_shock = safe_mean(
-    pd.DataFrame(
-        {t: robust_z(pct_return(px[t], 5), z_window).abs() for t in bond_cols}
-    )
+    pd.DataFrame({t: robust_z(pct_return(px[t], 5), z_window).abs() for t in bond_cols})
 )
 
-eq_dispersion = (
-    eq_r21.std(axis=1, skipna=True)
-    if not eq_r21.empty
-    else pd.Series(index=calendar, dtype=float)
-)
+eq_dispersion = eq_r21.std(axis=1, skipna=True) if not eq_r21.empty else pd.Series(index=calendar, dtype=float)
 dispersion_z = robust_z(eq_dispersion, z_window)
 
 dislocation_components = pd.DataFrame(
@@ -405,14 +353,9 @@ dislocation_score = robust_z(dislocation_raw, z_window).ewm(
 ).mean()
 
 
-# ---------------- U.S. overlay selection ----------------
-def corr_with_future_drawdown(
-    signal: pd.Series,
-    target: pd.Series,
-    horizon: int = LEAD_HORIZON,
-) -> float:
-    future_min = rolling_future_min(target, horizon)
-    fwd_dd = future_min / target - 1.0
+# ---------------- U.S. overlay ----------------
+def corr_with_future_drawdown(signal: pd.Series, target: pd.Series) -> float:
+    fwd_dd = future_min(target, LEAD_HORIZON) / target - 1.0
     aligned = pd.concat([signal, fwd_dd], axis=1).dropna()
     if len(aligned) < 100:
         return np.nan
@@ -422,33 +365,25 @@ def corr_with_future_drawdown(
 def choose_target() -> tuple[str, str]:
     if target_mode == "S&P 500":
         return SPX, "S&P 500"
-
     if target_mode == "Nasdaq Composite":
-        if IXIC in px.columns:
-            return IXIC, "Nasdaq Composite"
-        return SPX, "S&P 500"
+        return (IXIC, "Nasdaq Composite") if IXIC in px.columns else (SPX, "S&P 500")
+
+    combined = pd.concat(
+        [risk_score.rename("Risk-Off"), dislocation_score.rename("Dislocation")],
+        axis=1,
+    ).mean(axis=1)
 
     candidates = [(SPX, "S&P 500")]
     if IXIC in px.columns:
         candidates.append((IXIC, "Nasdaq Composite"))
 
-    combined = pd.concat(
-        [risk_score.rename("risk"), dislocation_score.rename("dislocation")],
-        axis=1,
-    ).mean(axis=1)
-
     best = candidates[0]
     best_metric = -np.inf
     for ticker, label in candidates:
-        relationship = corr_with_future_drawdown(
-            combined,
-            px[ticker],
-            LEAD_HORIZON,
-        )
+        relationship = corr_with_future_drawdown(combined, px[ticker])
         move_21 = abs(latest_valid(pct_return(px[ticker], 21)))
-        metric = (
-            0.85 * (0 if pd.isna(relationship) else relationship)
-            + 0.15 * (0 if pd.isna(move_21) else move_21)
+        metric = 0.85 * (0.0 if pd.isna(relationship) else relationship) + 0.15 * (
+            0.0 if pd.isna(move_21) else move_21
         )
         if metric > best_metric:
             best_metric = metric
@@ -464,35 +399,27 @@ dislocation_now = latest_valid(dislocation_score)
 regime = regime_label(risk_now, dislocation_now)
 
 us_high63 = target_px.rolling(63, min_periods=20).max()
-us_dd63_series = target_px / us_high63 - 1.0
-us_dd63_now = latest_valid(us_dd63_series)
+us_dd63 = target_px / us_high63 - 1.0
+us_dd63_now = latest_valid(us_dd63)
 action = action_label(risk_now, dislocation_now, us_dd63_now)
 
 watch_signal = (
     ((risk_score >= WATCH_RISK) | (dislocation_score >= WATCH_DISLOCATION))
-    & (us_dd63_series > EARLY_STAGE_DD63)
+    & (us_dd63 > EARLY_STAGE_DD63)
 ).fillna(False)
 watch_onset = watch_signal & ~watch_signal.shift(1, fill_value=False)
-
-last_onset_date = None
 onset_dates = watch_onset[watch_onset].index
-if len(onset_dates):
-    last_onset_date = onset_dates[-1]
 
 signal_age = "No active watch"
-if watch_signal.iloc[-1] and last_onset_date is not None:
-    onset_pos = int(calendar.get_indexer([last_onset_date])[0])
+if watch_signal.iloc[-1] and len(onset_dates):
+    onset_pos = int(calendar.get_indexer([onset_dates[-1]])[0])
     current_pos = int(calendar.get_indexer([calendar[-1]])[0])
     signal_age = f"{current_pos - onset_pos} sessions"
 
-
-# ---------------- Compact sidebar status ----------------
 with st.sidebar:
     st.markdown("---")
     st.subheader("Current read")
-    st.caption(
-        f"Risk-Off {fmt_score(risk_now)}  |  Dislocation {fmt_score(dislocation_now)}"
-    )
+    st.caption(f"Risk-Off {fmt_score(risk_now)}  |  Dislocation {fmt_score(dislocation_now)}")
     st.caption(f"{regime}  |  {target_label}")
     st.caption(f"{action}  |  Watch age: {signal_age}")
 
@@ -503,7 +430,7 @@ with st.sidebar:
 
             **Dislocation:** abnormal foreign bond, FX and equity moves plus cross-country dispersion.
 
-            A new watch is suppressed once the U.S. index is more than 7% below its 63-session high. At that point the signal is considered late rather than a fresh hedge entry.
+            Fresh watch signals are suppressed once the selected U.S. index is more than 7% below its 63-session high.
             """
         )
 
@@ -518,21 +445,20 @@ with st.sidebar:
                     "Last": s.index.max().date().isoformat() if len(s) else "",
                 }
             )
-        st.dataframe(
-            pd.DataFrame(health_rows),
-            use_container_width=True,
-            hide_index=True,
-            height=260,
-        )
+        st.dataframe(pd.DataFrame(health_rows), use_container_width=True, hide_index=True, height=260)
 
 
-# ---------------- Main interactive overlay ----------------
-cutoff = pd.Timestamp(
-    date.today() - timedelta(days=int(lookback_years * 365.25))
-)
+# ---------------- Two-panel interactive chart ----------------
+cutoff = pd.Timestamp(date.today() - timedelta(days=int(lookback_years * 365.25)))
 plot_idx = target_px.index[target_px.index >= cutoff]
 
-fig = make_subplots(specs=[[{"secondary_y": True}]])
+fig = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.06,
+    row_heights=[0.62, 0.38],
+)
 
 fig.add_trace(
     go.Scatter(
@@ -547,43 +473,24 @@ fig.add_trace(
             + ": %{y:,.2f}<extra></extra>"
         ),
     ),
-    secondary_y=False,
-)
-
-fig.add_trace(
-    go.Scatter(
-        x=plot_idx,
-        y=risk_score.reindex(plot_idx),
-        name="Global Risk-Off",
-        mode="lines",
-        line=dict(width=2.1, color=RISK_COLOR),
-        hovertemplate="%{x|%Y-%m-%d}<br>Risk-Off: %{y:+.2f}<extra></extra>",
-    ),
-    secondary_y=True,
-)
-
-fig.add_trace(
-    go.Scatter(
-        x=plot_idx,
-        y=dislocation_score.reindex(plot_idx),
-        name="Global Dislocation",
-        mode="lines",
-        line=dict(width=2.0, dash="dot", color=DISLOCATION_COLOR),
-        hovertemplate="%{x|%Y-%m-%d}<br>Dislocation: %{y:+.2f}<extra></extra>",
-    ),
-    secondary_y=True,
+    row=1,
+    col=1,
 )
 
 visible_onsets = onset_dates[onset_dates >= cutoff]
 if len(visible_onsets):
-    marker_y = target_px.reindex(visible_onsets)
     marker_risk = risk_score.reindex(visible_onsets)
     marker_dis = dislocation_score.reindex(visible_onsets)
-    custom = np.column_stack([marker_risk.values, marker_dis.values])
+    custom = np.column_stack(
+        [
+            [f"{x:+.2f}" if pd.notna(x) else "NA" for x in marker_risk],
+            [f"{x:+.2f}" if pd.notna(x) else "NA" for x in marker_dis],
+        ]
+    )
     fig.add_trace(
         go.Scatter(
             x=visible_onsets,
-            y=marker_y.values,
+            y=target_px.reindex(visible_onsets).values,
             name="Watch onset",
             mode="markers",
             marker=dict(
@@ -595,33 +502,71 @@ if len(visible_onsets):
             customdata=custom,
             hovertemplate=(
                 "%{x|%Y-%m-%d}<br>Watch onset"
-                "<br>Risk-Off: %{customdata[0]:+.2f}"
-                "<br>Dislocation: %{customdata[1]:+.2f}"
+                "<br>Risk-Off: %{customdata[0]}"
+                "<br>Dislocation: %{customdata[1]}"
                 "<extra></extra>"
             ),
         ),
-        secondary_y=False,
+        row=1,
+        col=1,
     )
+
+fig.add_trace(
+    go.Scatter(
+        x=plot_idx,
+        y=risk_score.reindex(plot_idx),
+        name="Global Risk-Off",
+        mode="lines",
+        line=dict(width=2.0, color=RISK_COLOR),
+        hovertemplate="%{x|%Y-%m-%d}<br>Risk-Off: %{y:+.2f}<extra></extra>",
+    ),
+    row=2,
+    col=1,
+)
+
+fig.add_trace(
+    go.Scatter(
+        x=plot_idx,
+        y=dislocation_score.reindex(plot_idx),
+        name="Global Dislocation",
+        mode="lines",
+        line=dict(width=1.9, dash="dot", color=DISLOCATION_COLOR),
+        hovertemplate="%{x|%Y-%m-%d}<br>Dislocation: %{y:+.2f}<extra></extra>",
+    ),
+    row=2,
+    col=1,
+)
 
 for level in [WATCH_RISK, HEDGE_RISK, FRACTURE_LEVEL]:
     fig.add_hline(
         y=level,
+        row=2,
+        col=1,
         line_dash="dash",
         line_width=1,
         line_color=THRESHOLD_COLOR,
-        opacity=0.28,
-        secondary_y=True,
+        opacity=0.35,
     )
 
-fig.update_layout(
-    height=600,
-    margin=dict(l=25, r=25, t=45, b=25),
-    hovermode="x unified",
-    legend=dict(orientation="h", y=1.05, x=0),
-    xaxis_title=None,
+fig.add_hline(
+    y=0.0,
+    row=2,
+    col=1,
+    line_width=1,
+    line_color=THRESHOLD_COLOR,
+    opacity=0.30,
 )
-fig.update_yaxes(title_text=target_label, secondary_y=False)
-fig.update_yaxes(title_text="Global stress score", secondary_y=True)
+
+fig.update_layout(
+    height=700,
+    margin=dict(l=25, r=25, t=45, b=25),
+    hovermode="x",
+    legend=dict(orientation="h", y=1.04, x=0),
+)
+fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1)
+fig.update_yaxes(title_text=target_label, tickformat=",.2f", row=1, col=1)
+fig.update_yaxes(title_text="Global stress score", tickformat=".2f", row=2, col=1)
+
 st.plotly_chart(
     fig,
     use_container_width=True,
@@ -643,16 +588,11 @@ st.markdown(
 
 # ---------------- Main table ----------------
 st.subheader("Global market moves")
-
 rows = []
 
 for ticker in eq_cols:
-    direction_z = latest_valid(
-        -robust_z(pct_return(px[ticker], 21), z_window)
-    )
-    shock_z = abs(
-        latest_valid(robust_z(pct_return(px[ticker], 5), z_window))
-    )
+    direction_z = latest_valid(-robust_z(pct_return(px[ticker], 21), z_window))
+    shock_z = abs(latest_valid(robust_z(pct_return(px[ticker], 5), z_window)))
     rows.append(
         {
             "Bucket": "Foreign equities",
@@ -668,12 +608,8 @@ for ticker in eq_cols:
     )
 
 for ticker in carry_cols:
-    direction_z = latest_valid(
-        -robust_z(pct_return(px[ticker], 21), z_window)
-    )
-    shock_z = abs(
-        latest_valid(robust_z(pct_return(px[ticker], 5), z_window))
-    )
+    direction_z = latest_valid(-robust_z(pct_return(px[ticker], 21), z_window))
+    shock_z = abs(latest_valid(robust_z(pct_return(px[ticker], 5), z_window)))
     rows.append(
         {
             "Bucket": "Carry FX",
@@ -689,12 +625,8 @@ for ticker in carry_cols:
     )
 
 for ticker in haven_cols:
-    direction_z = latest_valid(
-        -robust_z(pct_return(px[ticker], 21), z_window)
-    )
-    shock_z = abs(
-        latest_valid(robust_z(pct_return(px[ticker], 5), z_window))
-    )
+    direction_z = latest_valid(-robust_z(pct_return(px[ticker], 21), z_window))
+    shock_z = abs(latest_valid(robust_z(pct_return(px[ticker], 5), z_window)))
     rows.append(
         {
             "Bucket": "Haven FX",
@@ -710,9 +642,7 @@ for ticker in haven_cols:
     )
 
 for ticker in bond_cols:
-    shock_z = abs(
-        latest_valid(robust_z(pct_return(px[ticker], 5), z_window))
-    )
+    shock_z = abs(latest_valid(robust_z(pct_return(px[ticker], 5), z_window)))
     rows.append(
         {
             "Bucket": "Foreign bonds",
@@ -729,20 +659,12 @@ for ticker in bond_cols:
 
 moves = pd.DataFrame(rows)
 if not moves.empty:
-    status_rank = {
-        "High stress": 2,
-        "Watch": 1,
-        "Normal": 0,
-    }
+    status_rank = {"High stress": 2, "Watch": 1, "Normal": 0}
     moves["_rank"] = moves["Status"].map(status_rank).fillna(0)
-    moves["_stress"] = moves[["Risk-Off Z", "Shock Z"]].max(
-        axis=1,
-        skipna=True,
+    moves["_stress"] = moves[["Risk-Off Z", "Shock Z"]].max(axis=1, skipna=True)
+    moves = moves.sort_values(["_rank", "_stress"], ascending=[False, False]).drop(
+        columns=["_rank", "_stress"]
     )
-    moves = moves.sort_values(
-        ["_rank", "_stress"],
-        ascending=[False, False],
-    ).drop(columns=["_rank", "_stress"])
 
     styled_moves = moves.style.format(
         {
@@ -754,8 +676,4 @@ if not moves.empty:
         },
         na_rep="",
     )
-    st.dataframe(
-        styled_moves,
-        use_container_width=True,
-        hide_index=True,
-    )
+    st.dataframe(styled_moves, use_container_width=True, hide_index=True)
