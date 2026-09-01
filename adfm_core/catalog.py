@@ -44,7 +44,7 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
     ToolDefinition(22, "Monthly Seasonality Explorer", "22_Monthly_Seasonality_Explorer.py", "Historical Context", "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.", "Yahoo Finance; FRED for selected series and regime tags"),
     ToolDefinition(23, "SEC 13F Exposure Browser", "23_SEC_13F_Exposure_Browser.py", "Positioning + Flows", "Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio.", "SEC Form 13F bulk data sets; SEC company ticker directory"),
     ToolDefinition(24, "CFTC Positioning Monitor", "24_CFTC_Positioning_Monitor.py", "Positioning + Flows", "Scans CFTC futures positioning for crowded longs, crowded shorts, and sharp weekly shifts across financial and physical futures, with historical percentile and z-score context.", "CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts"),
-    ToolDefinition(25, "Commodity Event Study", "25_Commodity_Event_Study.py", "Historical Context", "Marks repeatable commodity price events and measures the historical forward-return and drawdown distribution across Yahoo Finance futures histories.", "Yahoo Finance daily continuous-futures price history"),
+    ToolDefinition(25, "Commodity Event Study", "25_Commodity_Event_Study.py", "Historical Context", "Identifies historically extended commodity moves, waits for exhaustion or reversal confirmation, and measures how often those signals marked durable tops.", "Yahoo Finance daily continuous-futures history; CFTC Disaggregated Managed Money positioning where mapped"),
 )
 
 GROUP_ORDER: Final[tuple[str, ...]] = (
