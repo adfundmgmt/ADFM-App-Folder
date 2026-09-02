@@ -24,8 +24,8 @@ render_page_header(
     PageHeader(
         title="Cross-Asset Ratio Chartbook",
         description=(
-            "Inspect the trend, technical condition, and historical extremes of fifty specific "
-            "cross-asset, macro, thematic, and single-stock relationships."
+            "Inspect duration and crisis hedges, commodities versus equity indices, credit and funding, "
+            "and financial-intermediary baskets without single-stock ratios."
         ),
         eyebrow="ADFM Technicals + Analogs",
     )
@@ -85,325 +85,54 @@ class RatioSpec:
 
 
 CORE_RATIO_SPECS: List[RatioSpec] = [
-    RatioSpec(
-        "SPY",
-        "IEF",
-        "Equities / Intermediate Treasuries",
-        "Primary risk-assets-versus-rates ratio.",
-    ),
-    RatioSpec(
-        "UUP",
-        "SPY",
-        "Dollar / S&P 500",
-        "Dollar tightness versus equity risk.",
-    ),
-    RatioSpec(
-        "FXY",
-        "SPY",
-        "Yen / S&P 500",
-        "Yen strength versus equity risk; useful for carry-unwind pressure.",
-    ),
-    RatioSpec(
-        "GLD",
-        "SPY",
-        "Gold / S&P 500",
-        "Monetary hedge versus equity risk.",
-    ),
-    RatioSpec(
-        "DBC",
-        "SPY",
-        "Broad Commodities / S&P 500",
-        "Commodity leadership versus equities.",
-    ),
-    RatioSpec(
-        "XLE",
-        "SPY",
-        "Energy / S&P 500",
-        "Energy and inflation beta versus broad equities.",
-    ),
-    RatioSpec(
-        "QQQ",
-        "SPY",
-        "Nasdaq 100 / S&P 500",
-        "Mega-cap growth leadership.",
-    ),
-    RatioSpec(
-        "QQQE",
-        "QQQ",
-        "Equal Weight Nasdaq 100 / Nasdaq 100",
-        "Nasdaq breadth versus mega-cap concentration.",
-    ),
-    RatioSpec(
-        "NVDA",
-        "SMH",
-        "Nvidia / Semiconductors",
-        "Nvidia leadership versus the broader semiconductor complex.",
-    ),
-    RatioSpec(
-        "IBIT",
-        "SPY",
-        "Bitcoin ETF / S&P 500",
-        "Bitcoin and crypto risk appetite versus broad equity risk.",
-    ),
-    RatioSpec(
-        "XBI",
-        "QQQ",
-        "Biotech / Nasdaq 100",
-        "Speculative biotech and funding-cycle sensitivity versus mega-cap growth.",
-    ),
-    RatioSpec(
-        "KRE",
-        "XLRE",
-        "Regional Banks / Real Estate",
-        "Credit creation and bank stress versus real-estate duration sensitivity.",
-    ),
-    RatioSpec(
-        "BX",
-        "XLF",
-        "Blackstone / Financials",
-        "Private-assets leadership versus broad financials.",
-    ),
-    RatioSpec(
-        "SPY",
-        "VXUS",
-        "US Equities / Ex-US Equities",
-        "US equity leadership versus the rest of the world.",
-    ),
-    RatioSpec(
-        "TLT",
-        "SHY",
-        "Long Duration Treasuries / Treasury Bills",
-        "Duration impulse versus cash; useful for easing, slowdown, and long-end stress regimes.",
-    ),
-    RatioSpec(
-        "^VIX",
-        "SPY",
-        "VIX / S&P 500",
-        "Volatility stress versus equity risk; useful for de-risking and carry-unwind pressure.",
-    ),
-    RatioSpec(
-        "EEM",
-        "VEA",
-        "Emerging Markets / Developed Ex-US",
-        "EM leadership versus developed ex-US; global liquidity and dollar-cycle signal.",
-    ),
-    RatioSpec(
-        "FXI",
-        "EEM",
-        "China Large Caps / Emerging Markets",
-        "China beta versus broader EM; isolates whether China is leading or dragging the complex.",
-    ),
-    RatioSpec(
-        "TLT",
-        "GLD",
-        "Long Treasuries / Gold",
-        "Long-duration sovereign confidence versus monetary and fiscal defense.",
-    ),
-    RatioSpec(
-        "UUP",
-        "GLD",
-        "Dollar / Gold",
-        "Separates dollar strength from gold-led monetary and credibility demand.",
-    ),
-    RatioSpec(
-        "FXY",
-        "UUP",
-        "Yen / Dollar",
-        "Direct policy-divergence and carry-unwind signal between the yen and dollar.",
-    ),
-    RatioSpec(
-        "FXA",
-        "UUP",
-        "Australian Dollar / US Dollar",
-        "Commodity, China, global-growth, and carry appetite versus dollar defensiveness.",
-    ),
-    RatioSpec(
-        "BKLN",
-        "IEF",
-        "Senior Loans / Intermediate Treasuries",
-        "Floating-rate credit risk versus duration; useful for funding and default pressure.",
-    ),
-    RatioSpec(
-        "IEF",
-        "SHY",
-        "Intermediate Treasuries / Treasury Bills",
-        "Intermediate-duration demand versus cash; a cleaner easing and growth-scare signal.",
-    ),
-    RatioSpec(
-        "GDX",
-        "GLD",
-        "Gold Miners / Gold",
-        "Mining operating leverage, cost pressure, and equity beta versus bullion.",
-    ),
-    RatioSpec(
-        "SIL",
-        "SLV",
-        "Silver Miners / Silver",
-        "Silver-miner operating leverage and margin pressure versus the underlying metal.",
-    ),
-    RatioSpec(
-        "UNG",
-        "USO",
-        "Natural Gas / Oil",
-        "Domestic weather and storage scarcity versus the global crude-demand cycle.",
-    ),
-    RatioSpec(
-        "DBA",
-        "DBC",
-        "Agriculture / Broad Commodities",
-        "Food inflation and crop stress versus the broader energy-and-metals complex.",
-    ),
-    RatioSpec(
-        "XBI",
-        "XLV",
-        "Biotech / Healthcare",
-        "Early-stage funding and innovation appetite versus established healthcare.",
-    ),
-    RatioSpec(
-        "ARKK",
-        "QQQ",
-        "Speculative Innovation / Nasdaq 100",
-        "Unprofitable long-duration growth versus profitable mega-cap technology.",
-    ),
-    RatioSpec(
-        "IPO",
-        "QQQ",
-        "Recent IPOs / Nasdaq 100",
-        "New-issue risk appetite versus established large-cap growth leadership.",
-    ),
-    RatioSpec(
-        "XRT",
-        "XLP",
-        "Retail / Consumer Staples",
-        "Consumer breadth and discretionary demand versus defensive consumption.",
-    ),
-    RatioSpec(
-        "XME",
-        "XLI",
-        "Metals & Mining / Industrials",
-        "Upstream materials and inflation beta versus downstream industrial capex.",
-    ),
-    RatioSpec(
-        "PAVE",
-        "SPY",
-        "US Infrastructure / S&P 500",
-        "Infrastructure, reshoring, and physical-capex leadership versus the broad market.",
-    ),
-    RatioSpec(
-        "INDA",
-        "EEM",
-        "India / Emerging Markets",
-        "India's domestic-growth premium versus the broader emerging-market complex.",
-    ),
-    RatioSpec(
-        "NVDA",
-        "AVGO",
-        "Nvidia / Broadcom",
-        "GPU-platform leadership versus custom silicon, networking, and hyperscaler exposure.",
-    ),
-    RatioSpec(
-        "AMD",
-        "NVDA",
-        "AMD / Nvidia",
-        "AI-accelerator challenger momentum versus the incumbent GPU platform.",
-    ),
-    RatioSpec(
-        "MU",
-        "SMH",
-        "Micron / Semiconductors",
-        "Memory-cycle and high-bandwidth-memory leadership versus the chip complex.",
-    ),
-    RatioSpec(
-        "ANET",
-        "SMH",
-        "Arista / Semiconductors",
-        "AI networking and Ethernet scale-out demand versus compute silicon.",
-    ),
-    RatioSpec(
-        "COHR",
-        "SMH",
-        "Coherent / Semiconductors",
-        "Optical interconnect and photonics demand versus compute silicon.",
-    ),
-    RatioSpec(
-        "PLTR",
-        "IGV",
-        "Palantir / Software",
-        "AI application monetization and government demand versus broad software.",
-    ),
-    RatioSpec(
-        "ORCL",
-        "MSFT",
-        "Oracle / Microsoft",
-        "AI infrastructure and cloud challenger momentum versus the incumbent platform.",
-    ),
-    RatioSpec(
-        "VST",
-        "XLU",
-        "Vistra / Utilities",
-        "Merchant-power and data-center scarcity value versus regulated utilities.",
-    ),
-    RatioSpec(
-        "ETN",
-        "XLI",
-        "Eaton / Industrials",
-        "Electrification, grid equipment, and data-center power exposure versus industrials.",
-    ),
-    RatioSpec(
-        "JPM",
-        "KRE",
-        "JPMorgan / Regional Banks",
-        "Money-center balance-sheet strength versus regional-bank credit and funding risk.",
-    ),
-    RatioSpec(
-        "GS",
-        "JPM",
-        "Goldman Sachs / JPMorgan",
-        "Capital-markets and advisory activity versus diversified money-center banking.",
-    ),
-    RatioSpec(
-        "COST",
-        "WMT",
-        "Costco / Walmart",
-        "Membership-led and higher-income consumption versus mass-market defensive retail.",
-    ),
-    RatioSpec(
-        "LLY",
-        "NVO",
-        "Eli Lilly / Novo Nordisk",
-        "Direct obesity-market, pipeline, pricing, and execution leadership.",
-    ),
-    RatioSpec(
-        "COIN",
-        "IBIT",
-        "Coinbase / Bitcoin ETF",
-        "Crypto trading, custody, and regulatory beta versus spot Bitcoin exposure.",
-    ),
-    RatioSpec(
-        "MSTR",
-        "IBIT",
-        "Strategy / Bitcoin ETF",
-        "Balance-sheet leverage and equity premium versus spot Bitcoin exposure.",
-    ),
+    RatioSpec("TLT", "SHY", "Long Treasuries / Short Treasuries", "Long-duration demand versus the front of the Treasury curve."),
+    RatioSpec("IEF", "SHY", "Intermediate Treasuries / Short Treasuries", "Intermediate-duration demand versus short Treasuries."),
+    RatioSpec("EDV", "SHY", "Extended Duration Treasuries / Short Treasuries", "Maximum-duration Treasury convexity versus the short end."),
+    RatioSpec("TLT", "SPY", "Long Treasuries / S&P 500", "Duration hedge performance versus equity risk."),
+    RatioSpec("GLD", "SPY", "Gold / S&P 500", "Monetary and geopolitical hedge performance versus equity risk."),
+    RatioSpec("GLD", "TLT", "Gold / Long Treasuries", "Monetary and fiscal defense versus sovereign duration."),
+    RatioSpec("UUP", "SPY", "Dollar / S&P 500", "Dollar defensiveness and liquidity pressure versus equity risk."),
+    RatioSpec("FXY", "SPY", "Yen / S&P 500", "Yen strength and carry-unwind pressure versus equity risk."),
+    RatioSpec("BIL", "SPY", "Treasury Bills / S&P 500", "Cash-like Treasury safety versus equity risk."),
+    RatioSpec("^VIX", "^VIX3M", "Spot VIX / 3-Month VIX", "Volatility-term-structure stress; readings above one indicate inversion."),
+
+    RatioSpec("DBC", "SPY", "Broad Commodities / S&P 500", "Broad commodity leadership versus U.S. equities."),
+    RatioSpec("DBC", "QQQ", "Broad Commodities / Nasdaq 100", "Broad commodity leadership versus long-duration growth equities."),
+    RatioSpec("GLD", "QQQ", "Gold / Nasdaq 100", "Gold and monetary defense versus long-duration growth equities."),
+    RatioSpec("SLV", "SPY", "Silver / S&P 500", "Silver's monetary and industrial beta versus U.S. equities."),
+    RatioSpec("CPER", "SPY", "Copper / S&P 500", "Copper's global-growth signal versus U.S. equities."),
+    RatioSpec("DBB", "SPY", "Industrial Metals / S&P 500", "Industrial-metals leadership versus U.S. equities."),
+    RatioSpec("USO", "SPY", "WTI Oil / S&P 500", "Crude-oil inflation and scarcity pressure versus U.S. equities."),
+    RatioSpec("BNO", "SPY", "Brent Oil / S&P 500", "Global crude-oil leadership versus U.S. equities."),
+    RatioSpec("UNG", "SPY", "Natural Gas / S&P 500", "Natural-gas scarcity and weather beta versus U.S. equities."),
+    RatioSpec("DBA", "SPY", "Agriculture / S&P 500", "Agricultural inflation and crop stress versus U.S. equities."),
+
+    RatioSpec("HYG", "IEF", "High Yield / Intermediate Treasuries", "Credit-risk appetite versus intermediate-duration government bonds."),
+    RatioSpec("HYG", "LQD", "High Yield / Investment Grade", "Lower-quality credit performance versus investment-grade credit."),
+    RatioSpec("LQD", "IEF", "Investment Grade / Intermediate Treasuries", "Corporate credit performance versus duration-matched government bonds."),
+    RatioSpec("BKLN", "IEF", "Senior Loans / Intermediate Treasuries", "Floating-rate credit risk versus intermediate duration."),
+    RatioSpec("JAAA", "SHY", "AAA CLOs / Short Treasuries", "Top-of-stack structured credit versus short government bonds."),
+    RatioSpec("JBBB", "SHY", "BBB CLOs / Short Treasuries", "Lower-rated structured credit and funding sensitivity versus short government bonds."),
+    RatioSpec("EMB", "IEF", "Emerging-Market Dollar Debt / Intermediate Treasuries", "External sovereign credit and dollar-liquidity risk versus Treasuries."),
+    RatioSpec("PFF", "IEF", "Preferred Securities / Intermediate Treasuries", "Bank-capital and hybrid-credit performance versus government duration."),
+    RatioSpec("MBB", "IEF", "Agency MBS / Intermediate Treasuries", "Mortgage-basis and convexity performance versus intermediate Treasuries."),
+
+    RatioSpec("KRE", "SPY", "Regional Banks / S&P 500", "Regional-bank funding and credit-cycle performance versus the broad market."),
+    RatioSpec("KBE", "SPY", "U.S. Banks / S&P 500", "Broad bank equity performance versus the broad market."),
+    RatioSpec("KBWB", "SPY", "Money-Center Banks / S&P 500", "Large-bank balance-sheet and capital-markets performance versus the broad market."),
+    RatioSpec("BIZD", "SPY", "Business Development Companies / S&P 500", "BDC and private-credit equity performance versus the broad market."),
+    RatioSpec("PBDC", "SPY", "Active BDC Basket / S&P 500", "Actively selected BDC exposure versus the broad market."),
+    RatioSpec("PSP", "SPY", "Listed Private Equity / S&P 500", "Alternative-asset-manager and listed private-equity performance versus the broad market."),
+    RatioSpec("REM", "SPY", "Mortgage REITs / S&P 500", "Levered mortgage-finance and funding sensitivity versus the broad market."),
+    RatioSpec("KIE", "SPY", "Insurance / S&P 500", "Insurance underwriting and investment-income performance versus the broad market."),
+    RatioSpec("KCE", "SPY", "Capital Markets / S&P 500", "Brokerage, exchange, and capital-markets activity versus the broad market."),
 ]
 
 RATIO_FAMILIES: Dict[str, List[RatioSpec]] = {
-    "Cross-Asset Regime": (
-        CORE_RATIO_SPECS[0:6]
-        + [CORE_RATIO_SPECS[9], CORE_RATIO_SPECS[15]]
-    ),
-    "Equity Breadth / Global Leadership": (
-        CORE_RATIO_SPECS[6:9]
-        + CORE_RATIO_SPECS[10:14]
-        + CORE_RATIO_SPECS[16:18]
-        + [CORE_RATIO_SPECS[34]]
-    ),
-    "Rates / Credit / FX": (
-        [CORE_RATIO_SPECS[14]] + CORE_RATIO_SPECS[18:24]
-    ),
-    "Commodities / Inflation": CORE_RATIO_SPECS[24:28],
-    "Equity Themes / Cyclicals": CORE_RATIO_SPECS[28:34],
-    "Single-Stock Relative Value": CORE_RATIO_SPECS[35:50],
+    "Duration / Crisis Hedges": CORE_RATIO_SPECS[0:10],
+    "Commodities / Equity Indices": CORE_RATIO_SPECS[10:20],
+    "Credit / Funding": CORE_RATIO_SPECS[20:29],
+    "Financial Intermediaries": CORE_RATIO_SPECS[29:38],
 }
 
 # ============================== Sidebar ==================================

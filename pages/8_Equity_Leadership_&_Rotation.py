@@ -26,8 +26,8 @@ render_page_header(
     PageHeader(
         title="Equity Leadership & Rotation",
         description=(
-            "A systematic scanner for the equity relationships that are leading, improving, "
-            "weakening, or lagging across short- and medium-term horizons."
+            "A focused scanner for all eleven S&P 500 sectors versus SPY, China versus SPY, "
+            "and equal-weight breadth across the Nasdaq 100, S&P 500, and Russell 2000."
         ),
         eyebrow="ADFM Equity Leadership",
     )
@@ -83,40 +83,26 @@ class RatioSpec:
 
 
 LEADERSHIP_FAMILIES: Dict[str, List[RatioSpec]] = {
-    "AI / Technology Leadership": [
-        RatioSpec("SMH", "IGV", "Semiconductors / Software", "AI hardware and compute leadership versus software and application-layer leadership."),
-        RatioSpec("SMH", "QQQ", "Semiconductors / Nasdaq 100", "Tests whether chips are leading technology rather than merely participating."),
-        RatioSpec("IGV", "QQQ", "Software / Nasdaq 100", "Tracks whether long-duration software is regaining leadership within technology."),
-        RatioSpec("XLK", "SPY", "Technology / S&P 500", "High-level technology leadership and broadening away from technology."),
-        RatioSpec("XLF", "XLK", "Financials / Technology", "Nominal-growth and curve-sensitive breadth versus duration-heavy growth."),
+    "S&P 500 Sector Leadership": [
+        RatioSpec("XLK", "SPY", "Technology / S&P 500", "Technology sector leadership versus the broad market."),
+        RatioSpec("XLC", "SPY", "Communication Services / S&P 500", "Communication-services leadership versus the broad market."),
+        RatioSpec("XLY", "SPY", "Consumer Discretionary / S&P 500", "Consumer-cycle leadership versus the broad market."),
+        RatioSpec("XLF", "SPY", "Financials / S&P 500", "Financial-sector leadership and balance-sheet sensitivity versus the broad market."),
+        RatioSpec("XLI", "SPY", "Industrials / S&P 500", "Industrial, capex, and cyclical-growth leadership versus the broad market."),
+        RatioSpec("XLV", "SPY", "Health Care / S&P 500", "Health-care leadership versus the broad market."),
+        RatioSpec("XLP", "SPY", "Consumer Staples / S&P 500", "Defensive-consumption leadership versus the broad market."),
+        RatioSpec("XLE", "SPY", "Energy / S&P 500", "Energy and inflation-beta leadership versus the broad market."),
+        RatioSpec("XLB", "SPY", "Materials / S&P 500", "Materials and upstream cyclicality versus the broad market."),
+        RatioSpec("XLU", "SPY", "Utilities / S&P 500", "Defensive-duration and power-sector leadership versus the broad market."),
+        RatioSpec("XLRE", "SPY", "Real Estate / S&P 500", "Rate-sensitive real-estate leadership versus the broad market."),
     ],
-    "Breadth / Style Leadership": [
-        RatioSpec("IWM", "SPY", "Small Caps / Large Caps", "Domestic, economically sensitive small-cap participation versus large-cap leadership."),
-        RatioSpec("RSP", "SPY", "Equal Weight / Cap Weight S&P 500", "Median-stock participation versus mega-cap concentration."),
-        RatioSpec("IJH", "SPY", "Mid Caps / Large Caps", "Broadening with less unprofitable-company contamination than small caps."),
-        RatioSpec("IWD", "IWF", "Value / Growth", "Reflation and nominal-growth leadership versus duration-sensitive growth."),
-        RatioSpec("MTUM", "QUAL", "Momentum / Quality", "Winner-chasing versus earnings and balance-sheet durability; reversals flag factor deleveraging."),
+    "China / U.S. Leadership": [
+        RatioSpec("FXI", "SPY", "China Large Caps / S&P 500", "China policy and growth beta versus U.S. equity leadership."),
     ],
-    "Cyclicals / Defensives": [
-        RatioSpec("XLY", "XLP", "Consumer Discretionary / Staples", "Consumer-cycle and equity risk appetite versus defensive consumption."),
-        RatioSpec("XLI", "XLU", "Industrials / Utilities", "Cyclical growth and capex expectations versus defensive duration."),
-        RatioSpec("XLF", "XLU", "Financials / Utilities", "Economic activity and curve health versus defensive demand."),
-        RatioSpec("XLE", "XLK", "Energy / Technology", "Hard-asset and inflation beta versus long-duration growth."),
-        RatioSpec("KRE", "XLF", "Regional Banks / Large Financials", "Domestic credit and funding conditions versus diversified money-center balance sheets."),
-    ],
-    "Domestic Cyclical Internals": [
-        RatioSpec("ITB", "XLU", "Homebuilders / Utilities", "Housing and rate-sensitive cyclicality versus defensive duration."),
-        RatioSpec("XHB", "SPY", "Homebuilders / S&P 500", "Housing-cycle leadership versus the broad equity market."),
-        RatioSpec("XRT", "SPY", "Retail / S&P 500", "Consumer breadth and lower-income demand sensitivity versus the broad market."),
-        RatioSpec("XME", "SPY", "Metals & Mining / S&P 500", "Cyclical materials and industrial-inflation beta versus the broad market."),
-        RatioSpec("URA", "XLU", "Uranium / Utilities", "Nuclear-fuel and power-scarcity exposure versus regulated utilities."),
-    ],
-    "Global Equity Leadership": [
-        RatioSpec("EEM", "SPY", "Emerging Markets / United States", "Global-liquidity participation versus U.S. exceptionalism and dollar tightness."),
-        RatioSpec("EFA", "SPY", "Developed Ex-US / United States", "Developed international leadership versus U.S. equities."),
-        RatioSpec("EWJ", "SPY", "Japan / United States", "Japanese equity leadership versus U.S. equities."),
-        RatioSpec("DXJ", "EWJ", "Hedged Japan / Unhedged Japan", "Japanese equity leadership after separating yen translation effects."),
-        RatioSpec("FXI", "SPY", "China / United States", "China beta and policy impulse versus U.S. equity leadership."),
+    "Equal Weight / Capitalization Weight": [
+        RatioSpec("QQQE", "QQQ", "Equal Weight Nasdaq 100 / Nasdaq 100", "Nasdaq breadth versus mega-cap concentration."),
+        RatioSpec("RSP", "SPY", "Equal Weight S&P 500 / S&P 500", "Median-stock participation versus capitalization-weighted leadership."),
+        RatioSpec("^R2ESC", "^RUT", "Equal Weight Russell 2000 / Russell 2000", "Small-cap breadth without capitalization weighting versus the standard Russell 2000."),
     ],
 }
 
@@ -459,7 +445,7 @@ if unavailable:
 
 st.markdown(
     "<div class='method-note'>Leadership Score is a weighted cross-sectional rank of 1W, 1M, 3M, and 6M relative returns using 20%, 35%, 30%, and 15% weights. "
-    "Acceleration is the average 1W/1M rank minus the average 3M/6M rank. Scores are comparative within the fixed 25-relationship universe.</div>",
+    "Acceleration is the average 1W/1M rank minus the average 3M/6M rank. Scores are comparative within the fixed 15-relationship universe.</div>",
     unsafe_allow_html=True,
 )
 

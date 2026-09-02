@@ -37,11 +37,11 @@ def fake_yfinance_download(tickers, **_kwargs) -> pd.DataFrame:
 
 class ExpandedChartbookPageTests(unittest.TestCase):
     @patch("yfinance.download", side_effect=fake_yfinance_download)
-    def test_leadership_page_renders_rotation_map_and_all_25_charts(self, _download):
+    def test_leadership_page_renders_rotation_map_and_all_15_charts(self, _download):
         app = AppTest.from_file(str(LEADERSHIP_PAGE)).run(timeout=60)
 
         self.assertEqual(list(app.exception), [])
-        self.assertEqual(len(app.get("plotly_chart")), 26)
+        self.assertEqual(len(app.get("plotly_chart")), 16)
         self.assertEqual(len(app.dataframe), 0)
         self.assertFalse(any(item.label == "Relationship" for item in app.selectbox))
         rotation_spec = json.loads(app.get("plotly_chart")[0].proto.spec)
@@ -58,11 +58,11 @@ class ExpandedChartbookPageTests(unittest.TestCase):
         self.assertNotIn("Selected Detail", body)
 
     @patch("yfinance.download", side_effect=fake_yfinance_download)
-    def test_ratio_page_renders_all_50_charts_without_view_gate(self, _download):
+    def test_ratio_page_renders_all_38_charts_without_view_gate(self, _download):
         app = AppTest.from_file(str(RATIO_PAGE)).run(timeout=60)
 
         self.assertEqual(list(app.exception), [])
-        self.assertEqual(len(app.get("plotly_chart")), 50)
+        self.assertEqual(len(app.get("plotly_chart")), 38)
         self.assertEqual(len(app.radio), 0)
         self.assertFalse(any(item.label == "Relationship" for item in app.selectbox))
 

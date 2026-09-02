@@ -35,10 +35,10 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
     ToolDefinition(5, "Credit Conditions Monitor", "5_Credit_Conditions_Monitor.py", "Macro Regime", "Separates credit-spread stress from outright funding-cost pressure, then checks banks, loans, volatility, and global benchmark 10-year government-yield repricing across flexible horizons.", "ICE BofA corporate OAS and U.S. Treasury yields via Federal Reserve FRED; Yahoo Finance market confirmation; Trading Economics or fresh Stooq sovereign yields with OECD/FRED structural fallback"),
     ToolDefinition(6, "Currency Tension Engine", "6_Currency_Tension_Engine.py", "Macro Regime", "Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags.", "Persisted Currency Tension Engine snapshot and configured adapters"),
     ToolDefinition(7, "Sector Breadth and Rotation", "7_Sector_Breadth_and_Rotation.py", "Equity Leadership", "Measures participation and sector rotation to identify where equity strength is broadening or narrowing.", "Yahoo Finance sector and subsector ETFs"),
-    ToolDefinition(8, "Equity Leadership & Rotation", "8_Equity_Leadership_&_Rotation.py", "Equity Leadership", "Ranks 25 equity relationships across four horizons to identify established leadership, positive inflections, weakening trends, and persistent laggards.", "Yahoo Finance adjusted ETF prices"),
+    ToolDefinition(8, "Equity Leadership & Rotation", "8_Equity_Leadership_&_Rotation.py", "Equity Leadership", "Ranks all 11 S&P 500 sectors versus SPY, China versus SPY, and three equal-weight breadth relationships across four horizons.", "Yahoo Finance adjusted ETF prices"),
     ToolDefinition(9, "ADFM Underwriter", "9_ADFM_Underwriter.py", "Fundamental Research", "Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events.", "SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history"),
     ToolDefinition(10, "ADFM Chart Terminal", "10_ADFM_Chart_Terminal.py", "Technical Confirmation", "Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages.", "Yahoo Finance OHLCV"),
-    ToolDefinition(11, "Cross-Asset Ratio Chartbook", "11_Cross-Asset_Ratio_Chartbook.py", "Technical Confirmation", "Provides focused and grouped historical inspection of 50 cross-asset, macro, thematic, and single-stock ratios, plus custom relationships.", "Yahoo Finance adjusted close history"),
+    ToolDefinition(11, "Cross-Asset Ratio Chartbook", "11_Cross-Asset_Ratio_Chartbook.py", "Technical Confirmation", "Provides grouped historical inspection of 38 duration, crisis-hedge, commodity, credit, funding, and financial-intermediary ratios, plus custom relationships.", "Yahoo Finance adjusted close history"),
     ToolDefinition(12, "Rate of Change Regime Explorer", "12_Rate_of_Change_Regime_Explorer.py", "Technical Confirmation", "Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure.", "Yahoo Finance daily OHLCV"),
     ToolDefinition(13, "Relative Volatility Lab", "13_Relative_Volatility_Lab.py", "Technical Confirmation", "Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics.", "Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available"),
     ToolDefinition(14, "ETF Flow Pressure Proxy", "14_ETF_Flow_Pressure_Proxy.py", "Positioning + Flows", "Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures.", "Yahoo Finance OHLCV"),
@@ -116,7 +116,7 @@ SIDEBAR_GUIDES: Final[dict[str, SidebarGuide]] = {
             "Use acceleration to compare short-horizon ranks with the 3- and 6-month trend.",
             "Open the related chartbook when a ranked relationship needs full historical context.",
         ),
-        "A positive score means the numerator ranks in the stronger half of the 25-ratio universe.",
+        "A positive score means the numerator ranks in the stronger half of the 15-ratio universe.",
     ),
     "9_ADFM_Underwriter.py": SidebarGuide(
         (
