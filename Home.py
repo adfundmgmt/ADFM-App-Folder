@@ -34,12 +34,23 @@ def logo_data_uri() -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def current_page_path(page_filename: str) -> str:
+    """Resolve a catalog page after a numeric-prefix reorder or hot deploy."""
+
+    _, separator, stable_name = page_filename.partition("_")
+    if separator:
+        matches = sorted((ROOT / "pages").glob(f"*_{stable_name}"))
+        if len(matches) == 1:
+            return matches[0].relative_to(ROOT).as_posix()
+    return f"pages/{page_filename}"
+
+
 def render_tool(tool) -> None:
     """Render one fully clickable catalog entry with native page routing."""
 
     with st.container(key=f"directory_entry_{tool.number}"):
         st.page_link(
-            f"pages/{tool.page_filename}",
+            current_page_path(tool.page_filename),
             label=f"**{tool.title}**",
             width="content",
         )
