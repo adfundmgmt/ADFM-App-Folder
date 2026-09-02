@@ -16,6 +16,7 @@ from adfm_core.ui import (
     inject_institutional_tool_finish,
     render_footer,
     render_page_header,
+    render_sidebar_about,
 )
 
 TITLE = "Yield Curve Rates Regime Monitor"
@@ -750,19 +751,7 @@ def history_chart(
 
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        A focused U.S. rates monitor. It separates the outright Treasury yield
-        level from curve shape and shows how both are changing across multiple
-        horizons.
-
-        Cross-asset confirmation and generic shock-day rankings are intentionally
-        excluded. Those belong in other ADFM tools.
-        """
-    )
-
-    st.divider()
+    render_sidebar_about("4_Yield_Curve_Rates_Regime_Monitor.py")
     st.header("Controls")
 
     lookback_label = st.selectbox(

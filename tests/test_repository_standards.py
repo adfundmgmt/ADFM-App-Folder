@@ -13,8 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class RepositoryStandardsTests(unittest.TestCase):
     def test_every_cataloged_page_has_a_standard_footer(self) -> None:
+        shared_renderers = {
+            "20_Catalyst_Calendar.py": ROOT / "adfm_core" / "catalyst_calendar_exact_page.py",
+        }
         for tool in TOOL_CATALOG:
             source = (ROOT / "pages" / tool.page_filename).read_text(encoding="utf-8")
+            if tool.page_filename in shared_renderers:
+                source += shared_renderers[tool.page_filename].read_text(encoding="utf-8")
             self.assertIn(
                 "render_footer",
                 source,
@@ -22,13 +27,23 @@ class RepositoryStandardsTests(unittest.TestCase):
             )
 
     def test_every_cataloged_page_parses_and_configures_streamlit(self) -> None:
+        shared_sidebar_modules = {
+            "17_SEC_13F_Exposure_Browser.py": ROOT / "adfm_core" / "sec_13f_browser.py",
+            "20_Catalyst_Calendar.py": ROOT / "adfm_core" / "catalyst_calendar_exact_page.py",
+            "25_Commodity_Event_Study.py": ROOT / "adfm_core" / "commodity_top_exhaustion_page.py",
+        }
         for tool in TOOL_CATALOG:
             path = ROOT / "pages" / tool.page_filename
             source = path.read_text(encoding="utf-8")
             ast.parse(source, filename=str(path))
+            runtime_source = source
+            if tool.page_filename in shared_sidebar_modules:
+                runtime_source += shared_sidebar_modules[tool.page_filename].read_text(
+                    encoding="utf-8"
+                )
             self.assertIn(
                 "st.set_page_config",
-                source,
+                runtime_source,
                 msg=f"{tool.page_filename} is missing page configuration.",
             )
             self.assertIn(
@@ -37,8 +52,8 @@ class RepositoryStandardsTests(unittest.TestCase):
                 msg=f"{tool.page_filename} does not load the shared ADFM theme.",
             )
             self.assertIn(
-                "About This Tool",
-                source,
+                f'render_sidebar_about("{tool.page_filename}")',
+                runtime_source,
                 msg=f"{tool.page_filename} is missing the standardized About This Tool section.",
             )
 
@@ -59,12 +74,16 @@ class RepositoryStandardsTests(unittest.TestCase):
     def test_lagging_tools_use_the_finishing_theme_and_shared_masthead(self) -> None:
         targets = (
             "4_Yield_Curve_Rates_Regime_Monitor.py",
-            "18_Event_Risk_Catalyst_Calendar.py",
-            "19_Hedge_Timer.py",
-            "6_Currency_Tension_Dashboard.py",
+            "20_Catalyst_Calendar.py",
+            "21_Hedge_Timer.py",
+            "6_Currency_Tension_Engine.py",
         )
         for filename in targets:
             source = (ROOT / "pages" / filename).read_text(encoding="utf-8")
+            if filename == "20_Catalyst_Calendar.py":
+                source += (ROOT / "adfm_core" / "catalyst_calendar_exact_page.py").read_text(
+                    encoding="utf-8"
+                )
             self.assertIn("inject_institutional_tool_finish()", source)
             self.assertIn("render_page_header(", source)
 

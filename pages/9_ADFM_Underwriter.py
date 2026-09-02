@@ -35,6 +35,7 @@ from adfm_core.ui import (
     render_kpi_cards,
     render_page_header,
     render_section_header,
+    render_sidebar_about,
     render_selection_note,
 )
 
@@ -834,24 +835,7 @@ def format_source_audit(audit: pd.DataFrame) -> pd.DataFrame:
 
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Underwrite an SEC-reporting company from primary filings, then connect the equity valuation to the issuer's balance sheet and debt-service capacity.
-
-        **How to read it**
-        - Reported values come from SEC Company Facts or filing metadata.
-        - LTM values sum the latest four stand-alone quarters.
-        - Cash-flow quarters may be derived from cumulative YTD disclosures.
-        - Market value uses the latest completed Yahoo Finance close.
-        - Missing or incompatible fields remain unavailable.
-        """
-    )
-    st.markdown("---")
-    st.header("Coverage")
-    st.caption(
-        "Best coverage is for US issuers with standardized XBRL. Banks, insurers, foreign private issuers, partnerships, and custom-tag-heavy filers may require issuer-specific adjustments."
-    )
+    render_sidebar_about("9_ADFM_Underwriter.py")
 
 
 render_page_header(

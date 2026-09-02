@@ -40,6 +40,7 @@ from adfm_core.ui import (
     render_kpi_cards,
     render_page_header,
     render_section_header,
+    render_sidebar_about,
     render_selection_note,
     render_status_line,
 )
@@ -325,6 +326,7 @@ configure_yfinance_cache()
 inject_explorer_style(max_width_px=1560)
 
 with st.sidebar:
+    render_sidebar_about("16_Options_Positioning_Compass.py")
     st.header("Compass setup")
     selected = normalize_ticker(st.text_input("Focus ticker", value="QQQ"))
     universe_text = st.text_area(
@@ -337,17 +339,6 @@ with st.sidebar:
     term_count = st.slider("Term-structure expirations", min_value=3, max_value=10, value=6)
     risk_free_rate = st.number_input("Risk-free rate", min_value=0.0, max_value=0.20, value=0.04, step=0.005, format="%.3f")
     st.caption("The rate is used only to estimate option deltas for the 25-delta skew comparison.")
-    st.markdown("---")
-    st.header("About This Tool")
-    st.markdown(
-        """
-        - Current ATM IV, 25-delta skew, term structure, put/call activity, and open interest.
-        - Cross-sectional ranks and generated commentary for the selected universe.
-        - Estimated premium activity from public end-of-session aggregates.
-
-        **Not available from public chains:** trade direction (BTO/BTC/STO/STC), spread IDs, dealer positioning, or historical option-chain ranks before this page was run.
-        """
-    )
 
 render_page_header(
     PageHeader(

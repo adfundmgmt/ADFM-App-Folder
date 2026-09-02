@@ -20,6 +20,7 @@ from adfm_core.ui import (
     inject_institutional_tool_finish,
     render_footer,
     render_page_header,
+    render_sidebar_about,
 )
 from cte.adapters.base import read_cache
 from cte.config import CACHE_DIR
@@ -309,30 +310,7 @@ _hist = read_cache("snapshot_history")
 # ============================================================
 
 with st.sidebar:
-    st.markdown("## About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Cross-sectional FX regime monitor that separates fundamental
-        trajectory from valuation and policy stretch.
-
-        **What this page shows**
-
-        - A two-axis map of major currencies against their own histories.
-        - Structural, regime, and secular scoring horizons.
-        - Month-end trails and historical map reconstruction.
-        - Pillar-level drivers, pairwise carry, positioning, and overlays.
-        - Objective currency notes when signals diverge, crowd, or become fragile.
-
-        **How to read the map**
-
-        - Rightward movement means fundamentals are improving.
-        - Upward movement means the currency is becoming more stretched.
-        - The lower-right quadrant is the cleanest cheap-and-improving setup.
-        - Rings and notes identify crowding, overlay adjustments, or data caveats.
-        """
-    )
-
-    st.markdown('<div class="tool-divider"></div>', unsafe_allow_html=True)
+    render_sidebar_about("6_Currency_Tension_Engine.py")
     st.markdown("### Snapshot Controls")
 
     horizon = st.radio(

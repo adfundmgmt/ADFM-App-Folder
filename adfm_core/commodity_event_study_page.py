@@ -13,7 +13,12 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_page_header,
+)
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 

@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from adfm_core.palette import PASTEL_20
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import yfinance as yf
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
@@ -1541,15 +1541,7 @@ render_page_header(
 )
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Compare the current market path with prior calendar years while keeping unconditional base rates and current percentiles visible.
-
-        **How to read it:** Treat analogs as a distribution of possible paths. Correlation, endpoint gaps, volatility, drawdowns, and slope determine similarity; no single historical year is a forecast.
-        """
-    )
-
+    render_sidebar_about("23_Market_Memory_Explorer.py")
     st.header("Controls")
     ticker_in = st.text_input("Ticker", "^SPX").strip().upper()
     ticker = TICKER_ALIASES.get(ticker_in, ticker_in)

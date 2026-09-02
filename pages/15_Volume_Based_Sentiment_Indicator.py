@@ -15,7 +15,7 @@ import streamlit as st
 from adfm_core.palette import PASTEL
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.regime_math import rolling_percentile_previous
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import yfinance as yf
 from plotly.subplots import make_subplots
 from zoneinfo import ZoneInfo
@@ -1461,22 +1461,7 @@ if "vr_symbol" not in st.session_state:
     st.session_state["vr_symbol"] = "QQQ"
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Identify heavy and quiet participation regimes across ETFs and listed equities.
-
-        **How to read it**
-        - Heavy sessions show unusually high participation versus the selected percentile window.
-        - Quiet sessions show unusually low participation.
-        - Setup labels combine volume percentile, price direction, close location, and trend structure.
-        - Forward columns show realized post-signal returns where enough future data exists.
-
-        **Data source:** Yahoo Finance adjusted daily OHLCV.
-        """
-    )
-
-    st.divider()
+    render_sidebar_about("15_Volume_Based_Sentiment_Indicator.py")
     st.header("Settings")
 
     st.markdown("**Quick ticker**")

@@ -24,6 +24,7 @@ from adfm_core.ui import (
     inject_institutional_tool_finish,
     render_footer,
     render_page_header,
+    render_sidebar_about,
 )
 import yfinance as yf
 from matplotlib.collections import LineCollection
@@ -93,21 +94,7 @@ LOOKBACK_OPTIONS = [1, 2, 3, 5, 10]
 
 # ============================== Sidebar ==============================
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Hedge-timing dashboard combining trend, stress, and drawdown conditions.
-
-        **What this tab shows**
-        - Composite hedge signal with explicit gating and oversold safeguards.
-        - Multi-horizon regime checks and sanity testing since 2020.
-        - Practical readout for adding, holding, or reducing hedges.
-
-        **Data source**
-        - Yahoo Finance and FRED market/regime inputs.
-        """
-    )
-
+    render_sidebar_about("21_Hedge_Timer.py")
     chart_years = st.radio(
         "Chart lookback",
         options=LOOKBACK_OPTIONS,

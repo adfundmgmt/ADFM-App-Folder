@@ -39,6 +39,7 @@ from adfm_core.ui import (
     render_kpi_cards,
     render_page_header,
     render_section_header,
+    render_sidebar_about,
     render_selection_note,
     render_status_line,
 )
@@ -359,6 +360,7 @@ st.markdown(
 )
 
 with st.sidebar:
+    render_sidebar_about("22_Position_Sizing_Lab.py")
     st.header("Position setup")
     ticker = st.text_input("Ticker", "AAPL").strip().upper()
     direction = st.selectbox("Direction", ("Long", "Short"))
@@ -402,11 +404,6 @@ with st.sidebar:
             format="%d%%",
         )
         liquidation_days = st.slider("Target liquidation window", 1, 10, 3, format="%d days")
-    st.markdown("---")
-    st.header("About This Tool")
-    st.markdown(
-        "Conviction sets the maximum exposure. The simulator advances through observed daily returns for one selected holding-period path. Historical volatility, invalidation risk, event risk, tails, and liquidity can only reduce the recommended size."
-    )
 
 render_page_header(
     PageHeader(

@@ -8,7 +8,6 @@ import pandas as pd
 from adfm_core import catalyst_calendar_exact_page as exact
 from adfm_core import catalyst_calendar_page as base
 
-
 OVERRIDDEN_EVENTS = {
     "Payrolls / Employment Situation",
     "CPI Inflation Window",

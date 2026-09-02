@@ -10,7 +10,7 @@ import pytz
 import streamlit as st
 
 from adfm_core.palette import PASTEL
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -898,33 +898,7 @@ def build_chart_dataframe(
 # SIDEBAR CONTROLS
 # =========================================================
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** ETF flow-pressure monitor using a 99-name ETF signal universe.
-
-        **What the chart shows**
-        - Full ETF coverage by default.
-        - Missing chart values are retained and shown as zero.
-        - Green means positive pressure.
-        - Red means negative pressure.
-        - Grey means zero, missing, or unchartable.
-
-        **Universe design**
-        - Excludes broad allocator parking-lot ETFs like SPY, QQQ, IVV, VOO, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG.
-        - Focuses on sector, factor, regional, rates, credit, commodity, FX, crypto, and volatility signal ETFs.
-
-        **Data source**
-        - Yahoo Finance OHLCV data through yfinance.
-
-        **Important**
-        - This is a directional price-volume pressure signal.
-        - It is separate from official ETF creation and redemption flow data.
-        """
-    )
-
-    st.markdown("---")
-
+    render_sidebar_about("14_ETF_Flow_Pressure_Proxy.py")
     period_label = st.radio(
         "Lookback Window",
         list(lookback_dict.keys()),

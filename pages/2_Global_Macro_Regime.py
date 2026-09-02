@@ -12,12 +12,14 @@ from adfm_core.market_data import (
     configure_yfinance_cache,
     fetch_daily_ohlcv,
 )
+from adfm_core.palette import PASTEL
 from adfm_core.primary_data import fetch_fred_series
 from adfm_core.ui import (
     PageHeader,
     inject_explorer_style,
     render_footer,
     render_page_header,
+    render_sidebar_about,
 )
 
 configure_yfinance_cache()
@@ -79,6 +81,13 @@ PERFORMANCE_ROWS = [
     ("Commodities", "CL=F"),
     ("Commodities", "HG=F"),
 ]
+
+POSITIVE_RGB = ",".join(
+    str(int(PASTEL["sage"][offset : offset + 2], 16)) for offset in (1, 3, 5)
+)
+NEGATIVE_RGB = ",".join(
+    str(int(PASTEL["rose"][offset : offset + 2], 16)) for offset in (1, 3, 5)
+)
 
 st.set_page_config(page_title=TITLE, layout="wide", initial_sidebar_state="collapsed")
 inject_explorer_style(max_width_px=1560)
@@ -693,10 +702,10 @@ def style_returns(frame: pd.DataFrame):
             intensity = min(abs(x) / bound, 1.0)
             if x > 0:
                 alpha = 0.05 + 0.12 * intensity
-                return f"background-color: rgba(94,127,70,{alpha:.3f});"
+                return f"background-color: rgba({POSITIVE_RGB},{alpha:.3f});"
             if x < 0:
                 alpha = 0.05 + 0.12 * intensity
-                return f"background-color: rgba(168,79,73,{alpha:.3f});"
+                return f"background-color: rgba({NEGATIVE_RGB},{alpha:.3f});"
             return ""
 
         if hasattr(styler, "map"):
@@ -727,17 +736,7 @@ render_page_header(
 )
 
 with st.sidebar:
-    st.header("About This Page")
-    st.markdown(
-        """
-        A cross-asset macro read built from observable market prices and primary-source FRED series.
-
-        No composite score. No hidden regime weighting. Growth, inflation, rates, liquidity and risk confirmation are evaluated separately, then the page shows where those signals agree or conflict.
-        """
-    )
-    st.divider()
-    st.caption("Market data: Yahoo Finance proxies")
-    st.caption("Macro data: Federal Reserve / FRED")
+    render_sidebar_about("2_Global_Macro_Regime.py")
 
 prices, failed = fetch_market_prices(tuple(TICKERS.keys()))
 macro, macro_status = fetch_macro_data()

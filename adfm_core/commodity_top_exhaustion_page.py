@@ -13,9 +13,19 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-from adfm_core.cftc_positioning import PRICE_PROXIES, add_metrics, fetch_contract_history
+from adfm_core.cftc_positioning import (
+    PRICE_PROXIES,
+    add_metrics,
+    fetch_contract_history,
+)
 from adfm_core.palette import PASTEL
-from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_page_header,
+    render_sidebar_about,
+)
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
@@ -187,29 +197,7 @@ def _inject_page_style() -> None:
 
 def _render_sidebar(profile: str, settings: dict, crowding_source: str | None = None) -> None:
     with st.sidebar:
-        st.header("About This Tool")
-        st.markdown(
-            """
-            **Purpose:** identify commodity price exhaustion near potential tops, then test what happened after comparable historical signals.
-
-            The default **Confirmed Exhaustion** signal waits for a commodity to become historically extended and then requires the tape to roll over. It combines a trailing return percentile, distance above the 200-day trend, RSI, realized-volatility expansion and reversal confirmation.
-
-            **Signal profiles**
-            - **Early Warning:** extreme price/momentum conditions. Earlier, but more false positives.
-            - **Confirmed Exhaustion:** an extreme setup occurred recently and at least two reversal conditions now confirm.
-            - **Crowded Blow-Off:** stronger extension/volatility thresholds plus a crowding filter before reversal.
-
-            **Reversal confirmation** uses three observable conditions: negative 5-day return, a close below the 10-day moving average, and a close below the prior 5-session low.
-
-            **CFTC crowding:** where this app has a mapped CFTC contract, Managed Money net positioning is ranked against its trailing 3-year history using report dates shifted to estimated Friday availability. Elsewhere, the blow-off profile uses futures-volume intensity as a fallback, not as a substitute for positioning.
-
-            **How to read the table:** because this is a top signal, negative forward returns and deeper post-signal drawdowns are favorable and are shaded green. Positive follow-through is shaded red.
-            """
-        )
-        st.caption(
-            "Yahoo futures histories are provider-supplied continuous series. Roll construction can affect historical price paths."
-        )
-        st.divider()
+        render_sidebar_about("25_Commodity_Event_Study.py")
         st.subheader("Current definition")
         st.caption(
             f"{profile} · return ≥ {settings['return_pctile']:.0f}th pct · "

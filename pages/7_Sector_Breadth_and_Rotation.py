@@ -18,6 +18,7 @@ from adfm_core.ui import (
     render_footer,
     render_page_header,
     render_section_header,
+    render_sidebar_about,
 )
 import yfinance as yf
 
@@ -201,15 +202,7 @@ if universe_definition_errors:
 # =============================================================================
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Measure whether equity participation is broadening or narrowing and identify changes in sector and subsector leadership.
-
-        **How to read it:** Use the rotation map for direction and persistence, then confirm the move through breadth, relative strength, and the underlying coverage table.
-        """
-    )
-
+    render_sidebar_about("7_Sector_Breadth_and_Rotation.py")
     st.header("Settings")
 
     universe_scope = st.selectbox(

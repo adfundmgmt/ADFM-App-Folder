@@ -17,6 +17,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from adfm_core.palette import PASTEL
+from adfm_core.ui import render_sidebar_about
 
 BASE_PAGE = Path(__file__).resolve().parents[1] / "adfm_core" / "_liquidity_tracker_base.py"
 _ENGINE_SPLIT = "\nrender_page_header(\n"
@@ -186,19 +187,7 @@ render_page_header(
 )
 
 with st.sidebar:
-    st.markdown("## About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Separate the level of system liquidity from its marginal direction.
-
-        - **35% Balance Sheet:** reserves, Fed assets, TGA, ON RRP.
-        - **25% Funding:** SOFR and EFFR relative to IORB.
-        - **25% Transmission:** HY OAS, IG OAS, broad dollar, real yields.
-        - **15% Market Confirmation:** breadth, speculative beta, banks, EM, Bitcoin, volatility.
-
-        Market history is fixed at ten years so changing the display window cannot alter the formula.
-        """
-    )
+    render_sidebar_about("3_Liquidity_Conditions_Monitor.py")
     st.markdown("### Display Controls")
     lookback = st.selectbox(
         "Display lookback",

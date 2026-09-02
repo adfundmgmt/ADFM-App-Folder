@@ -14,7 +14,7 @@ import yfinance as yf
 
 from adfm_core.leadership import build_leadership_frame
 from adfm_core.palette import PASTEL
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 pd.options.mode.chained_assignment = None
@@ -127,21 +127,7 @@ FAMILY_BY_KEY = {spec.key: family for family, specs in LEADERSHIP_FAMILIES.items
 
 # ============================== Sidebar ==================================
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Rank equity leadership and identify rotation before it is obvious in the broad indexes.
-
-        **How to read it**
-        - A positive score means the numerator ranks in the stronger half of the 25-ratio universe.
-        - Acceleration compares 1W/1M ranks with 3M/6M ranks.
-        - Leading and lagging confirm established trends; improving and weakening identify transitions.
-        - Use Cross-Asset Ratio Chartbook for full historical inspection and custom pairs.
-
-        **Data source:** Yahoo Finance adjusted daily close history.
-        """
-    )
-    st.markdown("---")
+    render_sidebar_about("8_Equity_Leadership_&_Rotation.py")
     st.header("Scanner")
     selected_families = st.multiselect(
         "Leadership families",

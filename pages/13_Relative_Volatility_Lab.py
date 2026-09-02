@@ -28,6 +28,7 @@ from adfm_core.ui import (
     render_footer,
     render_page_header,
     render_section_header,
+    render_sidebar_about,
     render_status_line,
 )
 
@@ -315,6 +316,7 @@ st.markdown(
 )
 
 with st.sidebar:
+    render_sidebar_about("13_Relative_Volatility_Lab.py")
     st.header("Volatility setup")
     with st.form("relative_volatility_settings"):
         primary_ticker = st.text_input(
@@ -353,24 +355,6 @@ with st.sidebar:
     st.caption(
         "Synthetic VIX = annualized close-to-close realized volatility. "
         "Implied-volatility inputs are optional and are used as a paired ratio."
-    )
-    st.markdown("---")
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Compare the volatility regime of any two liquid market instruments on a consistent basis.
-
-        **What this page shows**
-        - Annualized realized volatility for both selected tickers.
-        - Numerator, denominator, and ratio percentiles plus the 5-session ratio change.
-        - The paired implied-volatility ratio beside the realized ratio.
-        - Fixed 5D/21D acceleration, downside, semiconductor, and breadth diagnostics.
-        - Each instrument's causal volatility z-score.
-
-        **Data source**
-        - Yahoo Finance adjusted daily price history.
-        - Missing observations remain unavailable rather than being fabricated.
-        """
     )
 
 primary = normalize_ticker(primary_ticker)

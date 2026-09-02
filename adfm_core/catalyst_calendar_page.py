@@ -13,7 +13,12 @@ import yfinance as yf
 from adfm_core.data_registry import SeriesDefinition
 from adfm_core.palette import PASTEL, PASTEL_DIVERGING_SCALE
 from adfm_core.primary_data import fetch_fred_series
-from adfm_core.ui import PageHeader, inject_institutional_tool_finish, render_footer, render_page_header
+from adfm_core.ui import (
+    PageHeader,
+    inject_institutional_tool_finish,
+    render_footer,
+    render_page_header,
+)
 
 TITLE = "Catalyst Calendar"
 MARKET_TICKERS: Tuple[str, ...] = ("SPY", "QQQ", "IWM", "TLT", "UUP", "GLD", "^VIX")

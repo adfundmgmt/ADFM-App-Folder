@@ -4,13 +4,14 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Standardized every tool sidebar around one concise purpose, three-step reading order, key caveat, and primary-input block; reordered the flat page list so SEC 13F and CFTC sit with Positioning + Flows before Risk + Execution and Historical Context.
 - Equity Leadership & Rotation now formats all relative-return percentages to exactly two decimal places in Rotation Map hover labels and chart captions.
 - Equity Leadership & Rotation now opens with the Rotation Map and renders every selected relationship as an expanded chart; the current read, family summary, momentum matrix, ranking table, and single-detail selector were removed.
 - Cross-Asset Ratio Chartbook now renders all selected families and all 50 default ratios immediately, removing the focused-versus-full view gate.
 
 ### Added
 
-- SEC 13F Exposure Browser (Page 23) with ticker-to-CUSIP resolution, amendment-aware filing consolidation, a $1 billion default minimum portfolio filter, manager rankings by disclosed portfolio weight, reported market value, or shares, searchable holdings, CSV export, and EDGAR filing links.
+- SEC 13F Exposure Browser (Page 17) with ticker-to-CUSIP resolution, amendment-aware filing consolidation, a $1 billion default minimum portfolio filter, manager rankings by disclosed portfolio weight, reported market value, or shares, searchable holdings, CSV export, and EDGAR filing links.
 - ADFM Underwriter (Page 22) with an ADFM-named route, SEC EDGAR financial normalization, complete-window 50-day and 200-day price averages, compact color-coded valuation and quality cards, collapsed calculation methodology, issuer-credit measures, debt maturities, recent filings, and source-audit links.
 - Options Positioning Compass (Page 20) with Yahoo Finance option-chain analytics, generated commentary, volatility/skew ranks, term structure, IV surface, estimated premium activity, and a price-derived fallback when hosted option endpoints are unavailable.
 - Relative Volatility Lab (Page 19).

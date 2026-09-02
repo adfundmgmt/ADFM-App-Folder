@@ -33,6 +33,7 @@ from adfm_core.ui import (
     render_page_header,
     render_section_header,
     render_selection_note,
+    render_sidebar_about,
     render_status_line,
 )
 
@@ -236,6 +237,7 @@ def inject_13f_style() -> None:
 
 def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], bool]:
     with st.sidebar:
+        render_sidebar_about("17_SEC_13F_Exposure_Browser.py")
         st.header("13F search")
         search_mode = st.radio(
             "Browse by",
@@ -282,17 +284,6 @@ def render_sidebar(releases: list[QuarterDataset]) -> tuple[dict[str, object], b
 
         st.caption(
             "The first run prepares the official SEC bulk release. Later searches reuse the cache."
-        )
-        st.markdown("---")
-        st.header("About This Tool")
-        st.markdown(
-            """
-            **Security workflow:** search a ticker, issuer, or CUSIP; rank institutional holders; then open any manager's effective portfolio.
-
-            **Manager workflow:** search a filing manager by name or CIK and browse its complete effective portfolio for the selected SEC release.
-
-            **Calculation:** portfolio weight uses the sum of the manager's effective SEC information-table holdings as the denominator. This avoids filer summary-page unit inconsistencies.
-            """
         )
 
     selected_release = next(r for r in releases if r.label == release_label)

@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from adfm_core.palette import PASTEL
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import yfinance as yf
 from plotly.subplots import make_subplots
 
@@ -408,22 +408,7 @@ RATIO_FAMILIES: Dict[str, List[RatioSpec]] = {
 
 # ============================== Sidebar ==================================
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Scroll through the full grouped chartbook for historical inspection of market relationships.
-
-        **How to read it**
-        - A rising ratio means the first ticker is outperforming the second ticker.
-        - Ratios are rebased to 100 at the selected lookback start date.
-        - The signal line gives trend, momentum, moving-average, and stale-data context.
-        - Use Equity Leadership & Rotation for systematic ranking and inflection signals.
-
-        **Data source:** Yahoo Finance adjusted daily close history.
-        """
-    )
-
-    st.markdown("---")
+    render_sidebar_about("11_Cross-Asset_Ratio_Chartbook.py")
     st.header("Chartbook")
     selected_families = st.multiselect(
         "Chart families",

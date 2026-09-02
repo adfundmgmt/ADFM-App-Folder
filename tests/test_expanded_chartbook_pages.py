@@ -12,10 +12,9 @@ import numpy as np
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-
 ROOT = Path(__file__).resolve().parents[1]
-LEADERSHIP_PAGE = ROOT / "pages" / "8_Equity_Leadership_and_Rotation.py"
-RATIO_PAGE = ROOT / "pages" / "11_Cross_Asset_Ratio_Chartbook.py"
+LEADERSHIP_PAGE = ROOT / "pages" / "8_Equity_Leadership_&_Rotation.py"
+RATIO_PAGE = ROOT / "pages" / "11_Cross-Asset_Ratio_Chartbook.py"
 
 
 def fake_yfinance_download(tickers, **_kwargs) -> pd.DataFrame:

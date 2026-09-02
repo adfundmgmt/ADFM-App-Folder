@@ -19,7 +19,7 @@ from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
     render_monthly_returns_matrix,
 )
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 
 plt.style.use("default")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
@@ -1543,22 +1543,7 @@ market_regime_monthly = build_monthly_regime_features(market_regime_daily)
 filter_table = build_filter_table(prices, regime_df, market_regime_monthly)
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** A coordinated seasonality workspace for monthly returns, hit rates, intra-month paths, and regime-conditioned behavior.
-
-        **Interaction model**
-        - The global lookback defines the sample for every output.
-        - Select a matrix month column to update both charts.
-        - Select a matrix year row to overlay that year on the intra-month path.
-        - Advanced filters change the matrix average row and both charts together.
-
-        **Data source**
-        - Yahoo Finance where available.
-        - FRED fallbacks and macro regime series.
-        """
-    )
+    render_sidebar_about("24_Monthly_Seasonality_Explorer.py")
 
 fed_options = ["All Fed regimes"] + sorted(
     [

@@ -11,7 +11,13 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 
 from adfm_core.palette import PASTEL
-from adfm_core.ui import PageHeader, inject_explorer_style, render_page_header
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_page_header,
+    render_sidebar_about,
+)
 
 
 TITLE = "Market Stress Composite"
@@ -211,15 +217,7 @@ def action_label(risk: float, dislocation: float, us_dd63: float) -> str:
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
-    st.header("About This Tool")
-    st.caption(
-        "Tracks foreign equity weakness, carry unwinds, haven-FX strength and abnormal foreign bond, FX and equity moves to identify stress before it reaches the U.S. tape."
-    )
-    st.caption(
-        "Risk-Off measures directional deterioration. Dislocation measures unusual cross-market movement regardless of direction."
-    )
-
-    st.markdown("---")
+    render_sidebar_about("19_Market_Stress_Composite.py")
     st.header("Settings")
 
     lookback_years = st.selectbox(
@@ -681,3 +679,7 @@ if not moves.empty:
         na_rep="",
     )
     st.dataframe(styled_moves, use_container_width=True, hide_index=True)
+
+render_footer(
+    data_note="Primary inputs: Yahoo Finance market history; local last-good cache on provider failure."
+)

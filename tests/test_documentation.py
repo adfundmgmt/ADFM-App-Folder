@@ -7,7 +7,9 @@ import unittest
 from pathlib import Path
 
 from adfm_core.catalog import (
+    SIDEBAR_GUIDES,
     TOOL_CATALOG,
+    sidebar_guide_for_page,
     tool_descriptions,
     tool_for_page,
     tool_groups,
@@ -48,17 +50,25 @@ class DocumentationTests(unittest.TestCase):
                 "ETF Flow Pressure Proxy",
                 "Volume Based Sentiment Indicator",
                 "Options Positioning Compass",
+                "SEC 13F Exposure Browser",
+                "CFTC Positioning Monitor",
                 "Market Stress Composite",
                 "Catalyst Calendar",
                 "Hedge Timer",
                 "Position Sizing Lab",
                 "Market Memory Explorer",
                 "Monthly Seasonality Explorer",
-                "SEC 13F Exposure Browser",
-                "CFTC Positioning Monitor",
                 "Commodity Event Study",
             ],
         )
+
+    def test_every_tool_has_one_concise_sidebar_guide(self) -> None:
+        self.assertEqual(set(SIDEBAR_GUIDES), {tool.page_filename for tool in TOOL_CATALOG})
+        for tool in TOOL_CATALOG:
+            guide = sidebar_guide_for_page(tool.page_filename)
+            self.assertIsNotNone(guide)
+            self.assertEqual(len(guide.read_order), 3)
+            self.assertTrue(all(step.endswith(".") for step in guide.read_order))
 
     def test_sidebar_labels_match_catalog_titles(self) -> None:
         for tool in TOOL_CATALOG:

@@ -2,7 +2,7 @@ import streamlit as st
 
 from adfm_core.palette import PASTEL
 from adfm_core.chart_patterns import PatternDetection, PatternLine, detect_chart_patterns
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -448,21 +448,7 @@ def read_settings() -> ChartSettings:
     apply_queued_ticker_update()
 
     with st.sidebar:
-        st.header("About This Tool")
-        st.markdown(
-            """
-            **Purpose:** Single-name technical chart workspace for regime framing, trend confirmation, momentum checks, and trade invalidation.
-
-            **How to read it**
-            - The header gives price, return, drawdown, and volatility context.
-            - The chart shows price, moving averages, Bollinger Bands, volume, RSI, MACD, and optional automatic pattern recognition.
-            - The signal matrix turns the tape into trend, momentum, volatility, structure, and risk-level context.
-
-            **Data source:** Yahoo Finance OHLCV history.
-            """
-        )
-
-        st.markdown("---")
+        render_sidebar_about("10_ADFM_Chart_Terminal.py")
         st.header("Chart Controls")
 
         ticker = st.text_input(

@@ -27,6 +27,7 @@ from adfm_core.ui import (
     render_footer,
     render_kpi_cards,
     render_page_header,
+    render_sidebar_about,
     render_selection_note,
 )
 
@@ -253,18 +254,7 @@ TE_SLUG_OVERRIDES = {
 }
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Purpose:** separate two different credit problems that are often conflated.
-
-        - **Spread stress** asks whether markets are charging more default/liquidity premium.
-        - **Funding-cost pressure** asks whether the risk-free base rate itself is expensive.
-        - **Market confirmation** checks HY, loans, banks, EM debt, and volatility.
-        - **Global 10Y moves** shows where sovereign borrowing costs are actually repricing.
-        """
-    )
-    st.markdown("---")
+    render_sidebar_about("5_Credit_Conditions_Monitor.py")
     st.header("Controls")
     focus_window = st.selectbox("Credit move window", FOCUS_WINDOWS, index=1)
     global_window = st.selectbox("Global 10Y move window", GLOBAL_WINDOWS, index=3)

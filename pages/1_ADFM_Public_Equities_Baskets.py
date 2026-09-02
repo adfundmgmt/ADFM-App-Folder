@@ -1,7 +1,7 @@
 import streamlit as st
 
 from adfm_core.palette import PASTEL_20
-from adfm_core.ui import PageHeader, render_footer, render_page_header
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 
 import pandas as pd
 
@@ -2967,46 +2967,7 @@ render_page_header(
 
 
 with st.sidebar:
-
-    st.header("About This Tool")
-
-    st.markdown(
-
-        """
-
-        **Purpose:** Internal sector, thematic, and country basket monitor.
-
-
-
-        **What this page includes**
-
-        - Sector and subsector baskets.
-
-        - Cross-sector thematic baskets.
-
-        - Country and regional baskets.
-
-        - Macro dislocation and special-situation baskets.
-
-
-
-        **What this page excludes**
-
-        - Pure factor baskets.
-
-        - Redundant duplicate baskets.
-
-
-
-        **Data source**
-
-        - Internal basket definitions and Yahoo Finance market data.
-
-        """
-
-    )
-
-    st.divider()
+    render_sidebar_about("1_ADFM_Public_Equities_Baskets.py")
 
     st.markdown("### Controls")
 

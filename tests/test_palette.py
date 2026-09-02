@@ -36,10 +36,12 @@ class ExcelPaletteTests(unittest.TestCase):
     def test_every_analytical_page_uses_the_shared_palette(self) -> None:
         indirect_palette_pages = {
             "7_Sector_Breadth_and_Rotation.py": ROOT / "adfm_sector_rotation_config.py",
-            "6_Currency_Tension_Dashboard.py": ROOT / "cte" / "dashboard" / "plots.py",
+            "6_Currency_Tension_Engine.py": ROOT / "cte" / "dashboard" / "plots.py",
+            "17_SEC_13F_Exposure_Browser.py": ROOT / "adfm_core" / "sec_13f_browser.py",
+            "20_Catalyst_Calendar.py": ROOT / "adfm_core" / "catalyst_calendar_page.py",
         }
         positioning_convention_pages = {
-            "24_CFTC_Positioning_Monitor.py",
+            "18_CFTC_Positioning_Monitor.py",
         }
         for tool in TOOL_CATALOG:
             page = ROOT / "pages" / tool.page_filename

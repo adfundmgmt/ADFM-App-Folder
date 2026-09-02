@@ -4,7 +4,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from adfm_core.palette import PASTEL
-from adfm_core.ui import PageHeader, render_footer, render_page_header, render_status_line
+from adfm_core.ui import (
+    PageHeader,
+    render_footer,
+    render_page_header,
+    render_sidebar_about,
+    render_status_line,
+)
 from plotly.subplots import make_subplots
 
 from adfm_core.data_integrity import DataIntegrityPolicy, build_data_quality_report
@@ -91,32 +97,7 @@ def fetch_history(
 
 
 with st.sidebar:
-    st.markdown("## About This Tool")
-    st.markdown(
-        """
-        **Purpose:** Rate-of-change regime explorer for identifying when price momentum is accelerating, fading, or transitioning.
-
-        **What this tab shows**
-
-        - Price trend with 21, 50, 100, and 200-day simple moving averages.
-        - Rolling rate of change over the selected lookback window.
-        - Second-derivative acceleration to flag turning points in momentum.
-        - Positive and negative inflection markers when acceleration crosses the zero line.
-
-        **Data source**
-
-        - Yahoo Finance daily OHLCV history via `yfinance`.
-
-        **Chart construction**
-
-        - The x-axis is plotted by trading session, then labeled with calendar dates.
-        - Weekends, holidays, and missing sessions are compressed automatically.
-        - Price, ROC, and acceleration therefore share the same observation-by-observation alignment.
-        """
-    )
-
-    st.markdown('<div class="tool-divider"></div>', unsafe_allow_html=True)
-
+    render_sidebar_about("12_Rate_of_Change_Regime_Explorer.py")
     st.markdown("### Display Controls")
     show_inflections = st.toggle("Show inflection markers", value=True)
 

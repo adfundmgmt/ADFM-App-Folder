@@ -31,6 +31,7 @@ from adfm_core.ui import (
     render_kpi_cards,
     render_page_header,
     render_section_header,
+    render_sidebar_about,
     render_selection_note,
     render_status_line,
 )
@@ -234,16 +235,7 @@ configure_yfinance_cache()
 inject_explorer_style(max_width_px=1600)
 
 with st.sidebar:
-    st.header("About This Tool")
-    st.markdown(
-        """
-        **Default view:** what is crowded, what changed this week, and which market deserves a closer look.
-
-        Financial futures default to **Asset Managers + Leveraged Funds**. Physical commodities default to **Managed Money**. Crowding uses a **3-year** history unless changed below.
-
-        **Timing:** COT is a weekly Tuesday position snapshot, normally released Friday. It is not a real-time flow feed.
-        """
-    )
+    render_sidebar_about("18_CFTC_Positioning_Monitor.py")
     with st.expander("Advanced Controls", expanded=False):
         lookback_label = st.select_slider(
             "Crowding lookback",

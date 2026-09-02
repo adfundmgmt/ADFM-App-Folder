@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from adfm_core import catalyst_calendar_page as base
-
+from adfm_core.ui import render_sidebar_about
 
 TITLE = "Catalyst Calendar"
 
@@ -65,17 +65,7 @@ def render_catalyst_calendar() -> None:
     base.inject_institutional_tool_finish()
 
     with st.sidebar:
-        st.header("About This Tool")
-        st.markdown(
-            "Forward catalyst planner for macro releases, FOMC decisions, options expirations, "
-            "Treasury supply, quarter-end flows, and user-defined events. Each catalyst is shown "
-            "on one assigned calendar date rather than as a vague event window."
-        )
-        st.caption(
-            "Recurring macro dates are calendar-planning dates generated from release patterns. "
-            "Confirm official agency schedules before trading directly around a release."
-        )
-        st.divider()
+        render_sidebar_about("20_Catalyst_Calendar.py")
         st.header("Controls")
         horizon_days = st.select_slider("Event horizon", options=[14, 30, 60, 90, 120, 180], value=90)
         include_macro = st.checkbox("Include recurring macro catalysts", value=True)

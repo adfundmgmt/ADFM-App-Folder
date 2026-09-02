@@ -11,7 +11,7 @@ from typing import Mapping, Optional, Sequence
 import pandas as pd
 import streamlit as st
 
-from .catalog import tool_for_page
+from .catalog import sidebar_guide_for_page, tool_for_page
 
 
 @dataclass(frozen=True)
@@ -837,6 +837,28 @@ def render_section_header(title: str, subtitle: str) -> None:
         f"<div class='adfm-section-subtitle'>{escape(str(subtitle))}</div>",
         unsafe_allow_html=True,
     )
+
+
+def render_sidebar_about(page_filename: str) -> None:
+    """Render the common purpose, reading sequence, caveat, and source block."""
+
+    tool = tool_for_page(page_filename)
+    guide = sidebar_guide_for_page(page_filename)
+    if tool is None or guide is None:
+        raise ValueError(f"No sidebar guide is registered for {page_filename!r}")
+
+    reading_steps = "\n".join(
+        f"{index}. {step}" for index, step in enumerate(guide.read_order, start=1)
+    )
+    st.header("About This Tool")
+    st.markdown(
+        f"**Purpose**\n\n{tool.description}\n\n"
+        f"**Read it in this order**\n\n{reading_steps}"
+    )
+    if guide.caveat:
+        st.caption(f"Keep in mind — {guide.caveat}")
+    st.caption(f"Primary inputs — {tool.primary_inputs.rstrip('.')}.")
+    st.divider()
 
 
 def render_page_header(header: PageHeader) -> None:

@@ -42,7 +42,7 @@ def _called_from_position_sizing() -> bool:
         frame = frame.f_back if frame is not None else None
         while frame is not None:
             filename = frame.f_code.co_filename.replace("\\", "/")
-            if filename.endswith("pages/20_Position_Sizing_Lab.py"):
+            if filename.endswith("pages/22_Position_Sizing_Lab.py"):
                 return True
             frame = frame.f_back
     finally:
@@ -214,7 +214,7 @@ def _called_from_monthly_seasonality() -> bool:
         frame = frame.f_back if frame is not None else None
         while frame is not None:
             filename = frame.f_code.co_filename.replace("\\", "/")
-            if filename.endswith("pages/22_Monthly_Seasonality_Explorer.py"):
+            if filename.endswith("pages/24_Monthly_Seasonality_Explorer.py"):
                 return True
             frame = frame.f_back
     finally:

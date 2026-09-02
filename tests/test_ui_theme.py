@@ -11,6 +11,7 @@ from adfm_core.ui import (
     inject_institutional_tool_finish,
     render_footer,
     render_page_header,
+    render_sidebar_about,
 )
 
 
@@ -92,13 +93,39 @@ class InstitutionalThemeTests(unittest.TestCase):
     def test_every_analytics_page_uses_the_shared_header(self):
         root = Path(__file__).resolve().parents[1]
         pages = sorted((root / "pages").glob("*.py"))
+        shared_renderers = {
+            "17_SEC_13F_Exposure_Browser.py": root / "adfm_core" / "sec_13f_browser.py",
+            "20_Catalyst_Calendar.py": root / "adfm_core" / "catalyst_calendar_exact_page.py",
+            "25_Commodity_Event_Study.py": root / "adfm_core" / "commodity_top_exhaustion_page.py",
+        }
 
-        self.assertEqual(24, len(pages))
+        self.assertEqual(25, len(pages))
         for page in pages:
             source = page.read_text(encoding="utf-8")
+            if page.name in shared_renderers:
+                source += shared_renderers[page.name].read_text(encoding="utf-8")
             with self.subTest(page=page.name):
                 self.assertIn("render_page_header(", source)
                 self.assertNotIn("st.title(", source)
+
+    @patch("adfm_core.ui.st.divider")
+    @patch("adfm_core.ui.st.caption")
+    @patch("adfm_core.ui.st.markdown")
+    @patch("adfm_core.ui.st.header")
+    def test_sidebar_about_uses_the_shared_reading_flow(
+        self, header, markdown, caption, divider
+    ):
+        render_sidebar_about("17_SEC_13F_Exposure_Browser.py")
+
+        header.assert_called_once_with("About This Tool")
+        body = markdown.call_args.args[0]
+        self.assertIn("**Purpose**", body)
+        self.assertIn("**Read it in this order**", body)
+        self.assertIn("1. Choose a security search", body)
+        self.assertEqual(caption.call_count, 2)
+        self.assertIn("Keep in mind", caption.call_args_list[0].args[0])
+        self.assertIn("Primary inputs", caption.call_args_list[1].args[0])
+        divider.assert_called_once_with()
 
     def test_mobile_first_render_contracts_for_legacy_tools(self):
         root = Path(__file__).resolve().parents[1]
@@ -106,7 +133,7 @@ class InstitutionalThemeTests(unittest.TestCase):
             encoding="utf-8"
         )
         ratio_charts = (
-            root / "pages" / "11_Cross_Asset_Ratio_Chartbook.py"
+            root / "pages" / "11_Cross-Asset_Ratio_Chartbook.py"
         ).read_text(
             encoding="utf-8"
         )
@@ -136,10 +163,10 @@ class InstitutionalThemeTests(unittest.TestCase):
     def test_leadership_and_ratio_pages_default_to_expanded_chartbooks(self):
         root = Path(__file__).resolve().parents[1]
         leadership = (
-            root / "pages" / "8_Equity_Leadership_and_Rotation.py"
+            root / "pages" / "8_Equity_Leadership_&_Rotation.py"
         ).read_text(encoding="utf-8")
         ratio_chartbook = (
-            root / "pages" / "11_Cross_Asset_Ratio_Chartbook.py"
+            root / "pages" / "11_Cross-Asset_Ratio_Chartbook.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn('st.subheader("Rotation Map")', leadership)
