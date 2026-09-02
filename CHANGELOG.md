@@ -6,7 +6,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 - Standardized every tool sidebar around one concise purpose, three-step reading order, key caveat, and primary-input block; reordered the flat page list so SEC 13F and CFTC sit with Positioning + Flows before Risk + Execution and Historical Context.
 - Equity Leadership & Rotation now formats all relative-return percentages to exactly two decimal places in Rotation Map hover labels and chart captions.
-- Equity Leadership & Rotation now opens with the Rotation Map and renders all 11 S&P 500 sectors versus SPY, China versus SPY, and equal-weight breadth for the Nasdaq 100, S&P 500, and Russell 2000 as expanded charts.
+- Equity Leadership & Rotation now opens with the Rotation Map and renders all 11 S&P 500 sectors versus SPY, five China/U.S. relationships, three breadth and alternative-weighting ratios, and six inter-sector relationships as expanded charts; the unavailable Russell 2000 equal-weight index pair was replaced with a live RWJ/IJR small-cap weighting comparison.
 - Cross-Asset Ratio Chartbook now renders 38 focused ratios across duration and crisis hedges, commodities versus equity indices, credit and funding, and financial-intermediary baskets; default single-stock ratios were removed.
 
 ### Added

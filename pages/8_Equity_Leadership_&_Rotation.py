@@ -26,8 +26,8 @@ render_page_header(
     PageHeader(
         title="Equity Leadership & Rotation",
         description=(
-            "A focused scanner for all eleven S&P 500 sectors versus SPY, China versus SPY, "
-            "and equal-weight breadth across the Nasdaq 100, S&P 500, and Russell 2000."
+            "A focused scanner for all eleven S&P 500 sectors versus SPY, China versus U.S. equities, "
+            "market breadth, and economically paired inter-sector leadership."
         ),
         eyebrow="ADFM Equity Leadership",
     )
@@ -98,11 +98,23 @@ LEADERSHIP_FAMILIES: Dict[str, List[RatioSpec]] = {
     ],
     "China / U.S. Leadership": [
         RatioSpec("FXI", "SPY", "China Large Caps / S&P 500", "China policy and growth beta versus U.S. equity leadership."),
+        RatioSpec("MCHI", "SPY", "Broad China / S&P 500", "Broad investable Chinese equities versus U.S. equity leadership."),
+        RatioSpec("KWEB", "QQQ", "China Internet / Nasdaq 100", "Chinese internet and platform companies versus U.S. large-cap technology."),
+        RatioSpec("CQQQ", "QQQ", "China Technology / Nasdaq 100", "Chinese technology leadership versus the U.S. technology benchmark."),
+        RatioSpec("ASHR", "SPY", "China A-Shares / S&P 500", "Mainland-listed China exposure and domestic policy transmission versus U.S. equities."),
     ],
-    "Equal Weight / Capitalization Weight": [
+    "Breadth / Alternative Weighting": [
         RatioSpec("QQQE", "QQQ", "Equal Weight Nasdaq 100 / Nasdaq 100", "Nasdaq breadth versus mega-cap concentration."),
         RatioSpec("RSP", "SPY", "Equal Weight S&P 500 / S&P 500", "Median-stock participation versus capitalization-weighted leadership."),
-        RatioSpec("^R2ESC", "^RUT", "Equal Weight Russell 2000 / Russell 2000", "Small-cap breadth without capitalization weighting versus the standard Russell 2000."),
+        RatioSpec("RWJ", "IJR", "Revenue Weight Small Caps / Cap Weight Small Caps", "A live small-cap alternative-weighting proxy using the same S&P 600 universe."),
+    ],
+    "Inter-Sector Leadership": [
+        RatioSpec("SMH", "IGV", "Semiconductors / Software", "AI hardware and compute leadership versus software and the application layer."),
+        RatioSpec("XLF", "XLK", "Financials / Technology", "Nominal-growth and curve-sensitive leadership versus long-duration technology."),
+        RatioSpec("XLI", "XLU", "Industrials / Utilities", "Cyclical growth and capex leadership versus defensive duration."),
+        RatioSpec("XLY", "XLP", "Consumer Discretionary / Staples", "Consumer-cycle leadership versus defensive consumption."),
+        RatioSpec("XLE", "XLK", "Energy / Technology", "Hard-asset and inflation beta versus long-duration growth."),
+        RatioSpec("KRE", "XLF", "Regional Banks / Financials", "Regional-bank funding and credit sensitivity versus diversified financials."),
     ],
 }
 
@@ -445,7 +457,7 @@ if unavailable:
 
 st.markdown(
     "<div class='method-note'>Leadership Score is a weighted cross-sectional rank of 1W, 1M, 3M, and 6M relative returns using 20%, 35%, 30%, and 15% weights. "
-    "Acceleration is the average 1W/1M rank minus the average 3M/6M rank. Scores are comparative within the fixed 15-relationship universe.</div>",
+    "Acceleration is the average 1W/1M rank minus the average 3M/6M rank. Scores are comparative within the fixed 25-relationship universe.</div>",
     unsafe_allow_html=True,
 )
 

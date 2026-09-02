@@ -35,7 +35,7 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
     ToolDefinition(5, "Credit Conditions Monitor", "5_Credit_Conditions_Monitor.py", "Macro Regime", "Separates credit-spread stress from outright funding-cost pressure, then checks banks, loans, volatility, and global benchmark 10-year government-yield repricing across flexible horizons.", "ICE BofA corporate OAS and U.S. Treasury yields via Federal Reserve FRED; Yahoo Finance market confirmation; Trading Economics or fresh Stooq sovereign yields with OECD/FRED structural fallback"),
     ToolDefinition(6, "Currency Tension Engine", "6_Currency_Tension_Engine.py", "Macro Regime", "Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags.", "Persisted Currency Tension Engine snapshot and configured adapters"),
     ToolDefinition(7, "Sector Breadth and Rotation", "7_Sector_Breadth_and_Rotation.py", "Equity Leadership", "Measures participation and sector rotation to identify where equity strength is broadening or narrowing.", "Yahoo Finance sector and subsector ETFs"),
-    ToolDefinition(8, "Equity Leadership & Rotation", "8_Equity_Leadership_&_Rotation.py", "Equity Leadership", "Ranks all 11 S&P 500 sectors versus SPY, China versus SPY, and three equal-weight breadth relationships across four horizons.", "Yahoo Finance adjusted ETF prices"),
+    ToolDefinition(8, "Equity Leadership & Rotation", "8_Equity_Leadership_&_Rotation.py", "Equity Leadership", "Ranks all 11 S&P 500 sectors versus SPY, five China/U.S. relationships, three breadth and alternative-weighting ratios, and six inter-sector relationships.", "Yahoo Finance adjusted ETF and index prices"),
     ToolDefinition(9, "ADFM Underwriter", "9_ADFM_Underwriter.py", "Fundamental Research", "Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events.", "SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history"),
     ToolDefinition(10, "ADFM Chart Terminal", "10_ADFM_Chart_Terminal.py", "Technical Confirmation", "Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages.", "Yahoo Finance OHLCV"),
     ToolDefinition(11, "Cross-Asset Ratio Chartbook", "11_Cross-Asset_Ratio_Chartbook.py", "Technical Confirmation", "Provides grouped historical inspection of 38 duration, crisis-hedge, commodity, credit, funding, and financial-intermediary ratios, plus custom relationships.", "Yahoo Finance adjusted close history"),
@@ -116,7 +116,7 @@ SIDEBAR_GUIDES: Final[dict[str, SidebarGuide]] = {
             "Use acceleration to compare short-horizon ranks with the 3- and 6-month trend.",
             "Open the related chartbook when a ranked relationship needs full historical context.",
         ),
-        "A positive score means the numerator ranks in the stronger half of the 15-ratio universe.",
+        "A positive score means the numerator ranks in the stronger half of the 25-ratio universe.",
     ),
     "9_ADFM_Underwriter.py": SidebarGuide(
         (
