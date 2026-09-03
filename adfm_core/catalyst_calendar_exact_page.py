@@ -94,10 +94,17 @@ def render_catalyst_calendar() -> None:
 
     custom = base._parse_custom_events(custom_text)
     if not custom.empty:
+        custom["Source"] = "Custom"
         frames.append(custom)
 
-    calendar = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    calendar = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
     if not calendar.empty:
+        if "Precision" not in calendar.columns:
+            calendar["Precision"] = "Rule"
+        if "Source" not in calendar.columns:
+            calendar["Source"] = "Calendar rule"
+        calendar["Precision"] = calendar["Precision"].fillna("Rule")
+        calendar["Source"] = calendar["Source"].fillna("Custom")
         calendar = calendar[(calendar["Date"] >= today) & (calendar["Date"] <= today + timedelta(days=horizon_days))]
         calendar = calendar.drop_duplicates(subset=["Date", "Event", "Type"], keep="last")
         calendar = base._score_events(calendar, today, stress_bonus)
@@ -108,7 +115,7 @@ def render_catalyst_calendar() -> None:
     base.render_page_header(
         base.PageHeader(
             title=TITLE,
-            description="Exact catalyst dates plus the latest macro prints that define the setup going into each event.",
+            description="Confirmed agency dates plus deterministic market-calendar events and the latest macro prints defining the setup into each catalyst.",
             eyebrow="ADFM Risk + Catalysts",
         )
     )
@@ -182,20 +189,26 @@ def render_catalyst_calendar() -> None:
         st.dataframe(macro, use_container_width=True, hide_index=True, height=420)
 
     st.markdown("<div class='section-title'>Upcoming Catalyst Dates</div>", unsafe_allow_html=True)
-    decision = calendar[["Date", "Days", "Event", "Type", "Risk Score", "Exposure", "Action"]].copy()
+    st.markdown(
+        "<div class='section-note'>Confirmed = published by the named source. Rule-based = deterministic market-calendar convention, not an estimated macro release date.</div>",
+        unsafe_allow_html=True,
+    )
+    decision = calendar[["Date", "Days", "Event", "Type", "Precision", "Source", "Risk Score", "Exposure", "Action"]].copy()
     decision["Date"] = decision["Date"].map(_format_event_date)
     decision["When"] = decision["Days"].map(lambda x: _format_days(int(x)))
+    decision["Status"] = decision["Precision"].replace({"Official": "Confirmed", "Rule": "Rule-based", "Custom": "Custom", "Estimated": "Estimated"})
     decision["Risk"] = decision["Risk Score"].map(lambda x: base._risk_label(float(x)))
     decision["Risk Score"] = decision["Risk Score"].map(lambda x: f"{float(x):.0f}")
-    decision = decision[["Date", "When", "Event", "Type", "Risk", "Risk Score", "Exposure", "Action"]]
+    decision = decision[["Date", "When", "Event", "Type", "Status", "Source", "Risk", "Risk Score", "Exposure", "Action"]]
     st.dataframe(decision, use_container_width=True, hide_index=True, height=390)
 
     with st.expander("Full event details"):
         details = calendar.copy()
         details["Date"] = details["Date"].map(_format_event_date)
         details["When"] = details["Days"].map(lambda x: _format_days(int(x)))
+        details["Status"] = details["Precision"].replace({"Official": "Confirmed", "Rule": "Rule-based", "Custom": "Custom", "Estimated": "Estimated"})
         st.dataframe(
-            details[["Date", "When", "Event", "Type", "Region", "Risk Score", "Cluster", "Why It Matters", "Exposure", "Action"]],
+            details[["Date", "When", "Event", "Type", "Status", "Source", "Region", "Risk Score", "Cluster", "Why It Matters", "Exposure", "Action"]],
             use_container_width=True,
             hide_index=True,
         )
