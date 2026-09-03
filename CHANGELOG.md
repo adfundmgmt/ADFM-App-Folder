@@ -4,6 +4,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Public Equities Baskets now includes the missing global bank, insurer, industrial, defense, grid, semiconductor, AI-hardware, energy-royalty, wealth-management, custody-bank, and BDC cohorts; geographic baskets are organized into continental groups rather than one flat country list.
 - Standardized every tool sidebar around one concise purpose, three-step reading order, key caveat, and primary-input block; reordered the flat page list so SEC 13F and CFTC sit with Positioning + Flows before Risk + Execution and Historical Context.
 - Equity Leadership & Rotation now formats all relative-return percentages to exactly two decimal places in Rotation Map hover labels and chart captions.
 - Equity Leadership & Rotation now opens with the Rotation Map and renders all 11 S&P 500 sectors versus SPY, five China/U.S. relationships, three breadth and alternative-weighting ratios, and six inter-sector relationships as expanded charts; the unavailable Russell 2000 equal-weight index pair was replaced with a live RWJ/IJR small-cap weighting comparison.
