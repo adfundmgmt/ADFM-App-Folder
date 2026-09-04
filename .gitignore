@@ -15,6 +15,12 @@ venv/
 .env.*
 .streamlit/secrets.toml
 
+# Node / Next.js build state
+node_modules/
+.next/
+out/
+npm-debug.log*
+
 # Application/provider caches and local artifacts
 data/cache/
 data/last_good/
