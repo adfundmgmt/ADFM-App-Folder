@@ -5,7 +5,7 @@ This directory contains the non-Streamlit replacement surface for the ADFM analy
 - `web/`: Next.js / React frontend.
 - `api/`: FastAPI backend that calls the existing Python analytics engine.
 
-The legacy Streamlit application remains untouched during migration so each native page can be compared against the established implementation before it is retired.
+The legacy Streamlit application remains available during migration so each native page can be compared against the established implementation before the legacy page is retired.
 
 ## Current migration status
 
@@ -19,7 +19,7 @@ The API reuses:
 - `adfm_core.data_integrity.build_data_quality_report`
 - `adfm_core.rate_of_change.compute_features`
 
-The React frontend owns the controls and Plotly rendering. It does not iframe, redirect to, or open Streamlit.
+The React frontend owns the controls and Plotly rendering. It does not iframe, redirect to, or open Streamlit. The native API runtime also does not install Streamlit; the shared market-data and observability modules fall back to framework-neutral behavior when the legacy UI package is absent.
 
 ## Run locally
 
@@ -40,6 +40,12 @@ NEXT_PUBLIC_ADFM_API_URL=http://localhost:8000 npm run dev
 
 Open `http://localhost:3000`.
 
+Or run both services with Docker:
+
+```bash
+docker compose -f docker-compose.web.yml up --build
+```
+
 ## Environment
 
 API:
@@ -58,4 +64,4 @@ For production these should be set to the ADFM web and API origins, or the servi
 
 ## Migration rule
 
-Do not add a tool to the live navigation until the native implementation reproduces the established data path, calculations, controls, diagnostics, and chart behavior without relying on Streamlit for presentation.
+Do not add a tool to the live navigation until the native implementation reproduces the established data path, calculations, controls, diagnostics, and chart behavior without relying on Streamlit for presentation or runtime services.
