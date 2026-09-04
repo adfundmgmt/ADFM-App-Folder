@@ -1,8 +1,8 @@
-"""Reusable, deterministic daily market-data helpers for ADFM Streamlit pages.
+"""Reusable, deterministic daily market-data helpers for ADFM analytics.
 
 The module preserves raw provider observations, reports non-fatal failures,
 and keeps benchmark-calendar alignment separate from any optional filling.
-It is suitable for both price-only dashboards and OHLCV technical analysis.
+Streamlit is an optional legacy caching adapter, not a runtime requirement.
 """
 
 from __future__ import annotations
@@ -18,10 +18,14 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import streamlit as st
 import yfinance as yf
 
 from .observability import record_data_load
+
+try:
+    import streamlit as st
+except ImportError:  # Native API runtime intentionally does not install Streamlit.
+    st = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -45,8 +49,6 @@ def configure_yfinance_cache() -> None:
         cache_dir = Path(tempfile.gettempdir()) / "adfm-yfinance-cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         yf.set_tz_cache_location(str(cache_dir))
-        # Newer yfinance releases also persist Yahoo cookies through a separate
-        # SQLite cache. Redirect both stores so read-only deployments work.
         if hasattr(yf, "cache") and hasattr(yf.cache, "set_cache_location"):
             yf.cache.set_cache_location(str(cache_dir))
     except Exception:
@@ -80,7 +82,7 @@ def drop_unfinished_daily_session(
 ) -> pd.DataFrame:
     """Exclude today's bar before the US cash-session close is settled.
 
-    Passing ``now`` makes this policy easy to test.  The function never
+    Passing ``now`` makes this policy easy to test. The function never
     modifies historical data and does not infer missing sessions.
     """
     if frame.empty:
@@ -138,7 +140,7 @@ def align_to_benchmark_calendar(
 ) -> pd.DataFrame:
     """Align a frame to benchmark sessions.
 
-    Filling is opt-in and should only be used for ratio-style analysis.  Do
+    Filling is opt-in and should only be used for ratio-style analysis. Do
     not use it for OHLCV patterns, volume, gaps, ATR, or breakout signals.
     """
     if frame.empty:
@@ -215,21 +217,19 @@ def _download_chunk(
             if frames:
                 return frames
         except Exception:
-            # Pages receive an explicit per-symbol failure instead of a hard stop.
             pass
         if attempt + 1 < config.retries:
             time.sleep(config.retry_base_seconds * (attempt + 1))
     return {}
 
 
-@st.cache_data(ttl=DEFAULT_CONFIG.cache_ttl_seconds, show_spinner=False)
-def fetch_daily_ohlcv(
+def _fetch_daily_ohlcv(
     tickers: Tuple[str, ...], period: str = "3y"
 ) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
     """Fetch raw daily OHLCV in batches with retries and individual fallback.
 
-    The returned frames are raw provider observations.  The diagnostics table
-    permits a page to continue rendering even when individual symbols fail.
+    The returned frames are raw provider observations. The diagnostics table
+    permits callers to continue even when individual symbols fail.
     """
     symbols = unique_tickers(tickers)
     frames: Dict[str, pd.DataFrame] = {}
@@ -251,6 +251,20 @@ def fetch_daily_ohlcv(
     )
     record_data_load("Yahoo Finance", frames, symbols)
     return frames, missing
+
+
+if st is not None:
+    fetch_daily_ohlcv = st.cache_data(
+        ttl=DEFAULT_CONFIG.cache_ttl_seconds,
+        show_spinner=False,
+    )(_fetch_daily_ohlcv)
+else:
+    fetch_daily_ohlcv = _fetch_daily_ohlcv
+
+    def _clear_fetch_daily_ohlcv_cache() -> None:
+        return None
+
+    fetch_daily_ohlcv.clear = _clear_fetch_daily_ohlcv_cache  # type: ignore[attr-defined]
 
 
 def close_panel(
