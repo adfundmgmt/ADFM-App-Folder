@@ -10,10 +10,9 @@
   },
   "dependencies": {
     "next": "^15.5.0",
-    "plotly.js": "^4.0.0",
+    "plotly.js-dist-min": "^4.0.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-plotly.js": "^4.1.0"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
