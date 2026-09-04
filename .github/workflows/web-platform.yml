@@ -1,0 +1,57 @@
+name: Web Platform
+
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "adfm_core/__init__.py"
+      - "adfm_core/market_data.py"
+      - "adfm_core/observability.py"
+      - "adfm_core/rate_of_change.py"
+      - "docker-compose.web.yml"
+      - ".github/workflows/web-platform.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/**"
+      - "adfm_core/__init__.py"
+      - "adfm_core/market_data.py"
+      - "adfm_core/observability.py"
+      - "adfm_core/rate_of_change.py"
+      - "docker-compose.web.yml"
+      - ".github/workflows/web-platform.yml"
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install API dependencies
+        run: python -m pip install -r apps/api/requirements.txt
+      - name: Verify Streamlit-free API runtime
+        run: python -c "import importlib.util; assert importlib.util.find_spec('streamlit') is None"
+      - name: Compile API and shared engine
+        run: python -m compileall -q apps/api/app adfm_core/__init__.py adfm_core/market_data.py adfm_core/observability.py adfm_core/rate_of_change.py
+      - name: Import API application
+        run: python -c "from apps.api.app.main import app; print(app.title)"
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Build frontend
+        env:
+          NEXT_PUBLIC_ADFM_API_URL: http://localhost:8000
+        run: npm run build

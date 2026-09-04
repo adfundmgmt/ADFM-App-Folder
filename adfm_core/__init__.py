@@ -7,13 +7,34 @@ small while applying narrowly scoped compatibility behavior for legacy pages.
 from __future__ import annotations
 
 import inspect
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
+from typing import Optional
 
 from .catalog import TOOL_CATALOG, ToolDefinition
 from .data_integrity import DataIntegrityPolicy, DataQualityReport
 from .market_data import MarketDataConfig
-from .ui import PageHeader, inject_institutional_theme
+
+try:
+    from .ui import PageHeader, inject_institutional_theme
+except ModuleNotFoundError as exc:
+    if exc.name != "streamlit":
+        raise
+
+    @dataclass(frozen=True)
+    class PageHeader:
+        """Framework-neutral fallback used by non-Streamlit runtimes."""
+
+        title: str
+        description: str
+        eyebrow: str = "ADFM Analytics"
+        as_of: Optional[str] = None
+        source_note: Optional[str] = None
+
+    def inject_institutional_theme(max_width_px: int = 1560) -> None:
+        """No-op when the legacy Streamlit presentation package is absent."""
+        return None
 
 
 def _called_from_analytics_page() -> bool:
