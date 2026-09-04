@@ -1,9 +1,6 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { FormEvent, useEffect, useMemo, useState } from "react";
-
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_ADFM_API_URL ?? "http://localhost:8000";
 
@@ -50,12 +47,43 @@ type RocResponse = {
   series: Point[];
 };
 
+type Figure = {
+  data: Record<string, unknown>[];
+  layout: Record<string, unknown>;
+};
+
 function pct(value: number | null, digits = 2) {
   return value === null ? "—" : `${(value * 100).toFixed(digits)}%`;
 }
 
 function number(value: number | null) {
   return value === null ? "—" : value.toFixed(2);
+}
+
+function NativePlot({ figure }: { figure: Figure }) {
+  const nodeRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let plotly: any = null;
+
+    import("plotly.js-dist-min").then((module) => {
+      if (cancelled || !nodeRef.current) return;
+      plotly = (module as any).default ?? module;
+      plotly.react(nodeRef.current, figure.data, figure.layout, {
+        responsive: true,
+        displaylogo: false,
+        scrollZoom: true,
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      if (plotly && nodeRef.current) plotly.purge(nodeRef.current);
+    };
+  }, [figure]);
+
+  return <div ref={nodeRef} style={{ width: "100%", height: "700px" }} />;
 }
 
 export function RocExplorer() {
@@ -102,11 +130,11 @@ export function RocExplorer() {
     if (next) setTicker(next);
   }
 
-  const figure = useMemo(() => {
+  const figure = useMemo<Figure | null>(() => {
     if (!data) return null;
 
     const x = data.series.map((point) => point.date);
-    const traces: any[] = [];
+    const traces: Record<string, unknown>[] = [];
 
     if (chartView === "Candlestick") {
       traces.push({
@@ -333,13 +361,7 @@ export function RocExplorer() {
         {loading || !figure ? (
           <div className="chart-loading">Loading completed-session market data…</div>
         ) : (
-          <Plot
-            data={figure.data}
-            layout={figure.layout as any}
-            config={{ responsive: true, displaylogo: false, scrollZoom: true }}
-            style={{ width: "100%", height: "700px" }}
-            useResizeHandler
-          />
+          <NativePlot figure={figure} />
         )}
       </div>
     </>
