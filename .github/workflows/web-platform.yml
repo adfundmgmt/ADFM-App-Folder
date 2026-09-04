@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "apps/**"
+      - "adfm_core/__init__.py"
+      - "adfm_core/market_data.py"
+      - "adfm_core/observability.py"
+      - "adfm_core/rate_of_change.py"
       - "docker-compose.web.yml"
       - ".github/workflows/web-platform.yml"
   push:
@@ -11,6 +15,10 @@ on:
       - main
     paths:
       - "apps/**"
+      - "adfm_core/__init__.py"
+      - "adfm_core/market_data.py"
+      - "adfm_core/observability.py"
+      - "adfm_core/rate_of_change.py"
       - "docker-compose.web.yml"
       - ".github/workflows/web-platform.yml"
 
@@ -24,8 +32,10 @@ jobs:
           python-version: "3.12"
       - name: Install API dependencies
         run: python -m pip install -r apps/api/requirements.txt
-      - name: Compile API
-        run: python -m compileall -q apps/api/app adfm_core/rate_of_change.py
+      - name: Verify Streamlit-free API runtime
+        run: python -c "import importlib.util; assert importlib.util.find_spec('streamlit') is None"
+      - name: Compile API and shared engine
+        run: python -m compileall -q apps/api/app adfm_core/__init__.py adfm_core/market_data.py adfm_core/observability.py adfm_core/rate_of_change.py
       - name: Import API application
         run: python -c "from apps.api.app.main import app; print(app.title)"
 
