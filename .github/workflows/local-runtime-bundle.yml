@@ -13,27 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Package Python runtime dependency
-        run: |
-          mkdir -p runtime/pydeps
-          python -m pip install --target runtime/pydeps -c constraints.txt yfinance
-
-      - name: Upload Python runtime dependency
-        uses: actions/upload-artifact@v4
-        with:
-          name: adfm-pydeps-313
-          path: runtime/pydeps
-          retention-days: 1
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install and build web app
+      - name: Install and build standalone web app
         working-directory: apps/web
         env:
           NEXT_PUBLIC_ADFM_API_URL: http://127.0.0.1:8000
@@ -45,32 +29,18 @@ jobs:
           EOF
           npm run build
 
-      - name: Assemble local runtime
+      - name: Package standalone web runtime
         run: |
-          mkdir -p runtime/source/apps
-          cp -R apps/api runtime/source/apps/api
-          cp -R adfm_core runtime/source/adfm_core
-          cp constraints.txt runtime/source/constraints.txt
+          mkdir -p runtime-web
+          cp -R apps/web/.next/standalone/. runtime-web/
+          mkdir -p runtime-web/.next
+          cp -R apps/web/.next/static runtime-web/.next/static
+          if [ -d apps/web/public ]; then cp -R apps/web/public runtime-web/public; fi
+          tar -czf adfm-web-standalone.tgz -C runtime-web .
 
-          mkdir -p runtime/web
-          cp -R apps/web/.next/standalone/. runtime/web/
-          mkdir -p runtime/web/.next
-          cp -R apps/web/.next/static runtime/web/.next/static
-          if [ -d apps/web/public ]; then cp -R apps/web/public runtime/web/public; fi
-
-          cat > runtime/START_LOCAL.txt <<'EOF'
-          API:
-            cd source
-            PYTHONPATH=../pydeps:. uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8000
-
-          WEB:
-            cd web
-            HOSTNAME=127.0.0.1 PORT=3000 node server.js
-          EOF
-
-      - name: Upload runtime bundle
+      - name: Upload standalone web runtime
         uses: actions/upload-artifact@v4
         with:
-          name: adfm-native-local-runtime
-          path: runtime
+          name: adfm-web-standalone
+          path: adfm-web-standalone.tgz
           retention-days: 1
