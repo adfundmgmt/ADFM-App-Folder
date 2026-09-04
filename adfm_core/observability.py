@@ -1,4 +1,4 @@
-"""Session-scoped, non-sensitive data-load observability for Streamlit pages."""
+"""Non-sensitive data-load observability shared by legacy and native runtimes."""
 
 from __future__ import annotations
 
@@ -7,9 +7,14 @@ from datetime import datetime, timezone
 from typing import Iterable, Mapping
 
 import pandas as pd
-import streamlit as st
+
+try:
+    import streamlit as st
+except ImportError:  # Native API runtime intentionally does not install Streamlit.
+    st = None  # type: ignore[assignment]
 
 SESSION_KEY = "adfm_data_health"
+_fallback_data_health: DataLoadEvent | None = None
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,9 @@ def record_data_load(
     frames: Mapping[str, pd.DataFrame],
     requested_symbols: Iterable[str],
 ) -> DataLoadEvent:
-    """Record a compact latest-provider status in the current Streamlit session."""
+    """Record the latest compact provider status for the active runtime."""
+    global _fallback_data_health
+
     requested = tuple(dict.fromkeys(symbol for symbol in requested_symbols if symbol))
     dates = [frame.index.max() for frame in frames.values() if not frame.empty]
     event = DataLoadEvent(
@@ -40,11 +47,16 @@ def record_data_load(
         data_through=pd.Timestamp(max(dates)).date().isoformat() if dates else None,
         recorded_at_utc=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     )
-    st.session_state[SESSION_KEY] = asdict(event)
+    if st is not None:
+        st.session_state[SESSION_KEY] = asdict(event)
+    else:
+        _fallback_data_health = event
     return event
 
 
 def current_data_health() -> DataLoadEvent | None:
-    """Return the latest data-load event recorded in this Streamlit session."""
-    raw = st.session_state.get(SESSION_KEY)
-    return DataLoadEvent(**raw) if isinstance(raw, dict) else None
+    """Return the latest data-load event for the active runtime."""
+    if st is not None:
+        raw = st.session_state.get(SESSION_KEY)
+        return DataLoadEvent(**raw) if isinstance(raw, dict) else None
+    return _fallback_data_health
