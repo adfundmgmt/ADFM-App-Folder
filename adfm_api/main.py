@@ -25,6 +25,7 @@ from adfm_engine.credit_service import load_credit
 from adfm_engine.cftc_service import load_cftc
 from adfm_engine.options_service import load_options
 from adfm_engine.underwriter_service import load_underwriter
+from adfm_engine.stress_service import load_stress
 from adfm_engine.calendar_service import load_calendar
 from adfm_engine.sec13f_service import load_sec13f, release_list
 from adfm_engine.jobs import JobQueue
@@ -32,6 +33,13 @@ from pathlib import Path
 
 logger = logging.getLogger("adfm.api")
 
+
+class StressParameters(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    lookback_years: Literal[1,2,3,5,10,25,50]=5
+    target_mode: Literal["Auto","S&P 500","Nasdaq Composite"]="Auto"
+    z_window_years: int=Field(default=3,ge=1,le=5)
+    smoothing_mode: Literal["Fast - 3D","Base - 5D","Slow - 10D","21D","63D"]="Slow - 10D"
 
 class CalendarParameters(BaseModel):
     model_config=ConfigDict(extra="forbid")
@@ -279,6 +287,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/calendar", dependencies=[Depends(require_gateway)])
     def catalysts(parameters:CalendarParameters):
         return load_calendar(**parameters.model_dump())
+
+    @app.post("/v1/stress", dependencies=[Depends(require_gateway)])
+    def market_stress(parameters:StressParameters):
+        return load_stress(**parameters.model_dump())
 
     return app
 
