@@ -24,8 +24,14 @@ from adfm_engine.liquidity_service import load_liquidity
 from adfm_engine.credit_service import load_credit
 from adfm_engine.cftc_service import load_cftc
 from adfm_engine.options_service import load_options
+from adfm_engine.underwriter_service import load_underwriter
 
 logger = logging.getLogger("adfm.api")
+
+
+class UnderwriterParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    query: str = Field(default="AAPL", min_length=1, max_length=200)
 
 
 class ROCParameters(BaseModel):
@@ -218,6 +224,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/options", dependencies=[Depends(require_gateway)])
     def options_compass(parameters: OptionsParameters):
         return load_options(**parameters.model_dump())
+
+    @app.post("/v1/underwriter", dependencies=[Depends(require_gateway)])
+    def issuer_underwrite(parameters: UnderwriterParameters):
+        return load_underwriter(**parameters.model_dump())
 
     return app
 
