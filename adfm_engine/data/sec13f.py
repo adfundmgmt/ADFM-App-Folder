@@ -277,7 +277,7 @@ def _prepare_holdings_and_catalog(
     holdings_target: Path,
     securities_target: Path,
 ) -> int:
-    read_options = arrow_csv.ReadOptions(block_size=16 * 1024 * 1024, use_threads=True)
+    read_options = arrow_csv.ReadOptions(block_size=4 * 1024 * 1024, use_threads=False)
     parse_options = arrow_csv.ParseOptions(delimiter="\t", newlines_in_values=False)
     convert_options = arrow_csv.ConvertOptions(
         include_columns=[

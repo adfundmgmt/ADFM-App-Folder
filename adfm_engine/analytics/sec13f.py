@@ -111,6 +111,7 @@ def rank_holdings(
     report_period: str | pd.Timestamp | None = None,
     position_kind: str = "Long holdings",
     minimum_portfolio_millions: float = 0.0,
+    portfolio_totals: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Rank holders using a self-reconciling information-table denominator.
 
@@ -128,7 +129,7 @@ def rank_holdings(
     if components.empty or all_holdings.empty:
         return pd.DataFrame()
 
-    totals = (
+    totals = portfolio_totals.copy() if portfolio_totals is not None else (
         all_holdings.groupby("CIK", as_index=False)["VALUE_USD"]
         .sum(min_count=1)
         .rename(columns={"VALUE_USD": "PORTFOLIO_VALUE_USD"})

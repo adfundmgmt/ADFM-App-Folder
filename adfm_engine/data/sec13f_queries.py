@@ -59,8 +59,28 @@ def _holdings_for_components(
 def search_manager_candidates(prepared,query,**kwargs):
     return find_managers(pd.read_parquet(prepared.filings_path),query,**kwargs)
 def rank_fund_exposure(prepared,cusips,**kwargs):
-    components,holdings=_effective_holdings(prepared,kwargs.get('report_period'))
-    return rank_holdings(components,holdings,cusips,**kwargs)
+    # Stream effective holdings; keep only the selected security in memory.
+    # Every effective line still contributes to the same portfolio denominator.
+    import pyarrow.parquet as parquet
+    components=base.select_effective_filing_components(pd.read_parquet(prepared.filings_path),kwargs.get('report_period'))
+    if components.empty:return pd.DataFrame()
+    components=components.copy();components['CIK']=components['CIK'].astype(str).str.zfill(10)
+    mapping=components[['ACCESSION_NUMBER','CIK','FILING_DATE']].drop_duplicates()
+    mapping['ACCESSION_NUMBER']=mapping['ACCESSION_NUMBER'].astype(str)
+    selected=[];totals=[];wanted={str(c).strip() for c in cusips}
+    for batch in parquet.ParquetFile(prepared.holdings_path).iter_batches(batch_size=32768):
+        frame=batch.to_pandas();frame['ACCESSION_NUMBER']=frame['ACCESSION_NUMBER'].astype(str)
+        frame=frame.merge(mapping,on='ACCESSION_NUMBER',how='inner')
+        if frame.empty:continue
+        frame['VALUE']=pd.to_numeric(frame['VALUE'],errors='coerce')
+        frame['SSHPRNAMT']=pd.to_numeric(frame['SSHPRNAMT'],errors='coerce')
+        frame['VALUE_USD']=frame['VALUE']*_value_multiplier(kwargs.get('report_period'))
+        totals.append(frame.groupby('CIK',as_index=False)['VALUE_USD'].sum(min_count=1))
+        subset=frame.loc[frame['CUSIP'].astype(str).isin(wanted)]
+        if not subset.empty:selected.append(subset)
+    if not totals or not selected:return pd.DataFrame()
+    portfolio_totals=pd.concat(totals,ignore_index=True).groupby('CIK',as_index=False)['VALUE_USD'].sum(min_count=1).rename(columns={'VALUE_USD':'PORTFOLIO_VALUE_USD'})
+    return rank_holdings(components,pd.concat(selected,ignore_index=True),cusips,portfolio_totals=portfolio_totals,**kwargs)
 def manager_portfolio(prepared,cik,report_period):
     filings=pd.read_parquet(prepared.filings_path)
     components=base.select_effective_filing_components(filings,report_period)

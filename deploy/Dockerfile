@@ -1,8 +1,9 @@
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080 ADFM_ENV=production
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080 ADFM_ENV=production ADFM_DATA_DIR=/var/lib/adfm
 WORKDIR /app
 COPY requirements-native.txt ./
 RUN pip install --no-cache-dir -r requirements-native.txt && useradd --create-home --uid 10001 adfm
+RUN mkdir -p /var/lib/adfm && chown adfm:adfm /var/lib/adfm
 COPY adfm_engine ./adfm_engine
 COPY adfm_api ./adfm_api
 USER adfm

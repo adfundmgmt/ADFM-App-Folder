@@ -4,7 +4,7 @@
 
 The protected `adfm-python-api` Render web service runs the native GitHub migration branch in Virginia. It is on the free plan for staging. Deployment successfully started on September 7, 2026. Health and authentication smoke checks passed. The production website source has native `/tools` changes in development, not yet published.
 
-The website uses server environment values `ADFM_API_ORIGIN`, `ADFM_GATEWAY_TOKEN`, `ADFM_TOOLS_ACCESS=private`, and `ADFM_TOOLS_ALLOWED_EMAILS`. The gateway token is generated randomly, stored as a secret in both hosts, and never shipped in browser bundles. Initial allowlist is the owner's `aryadeniz@adfundmgmt.com` account. The existing website's dispatch-owned ChatGPT sign-in identifies the visitor; API authorization stays server-side. If hosting moves away from Sites, replace this identity boundary with verified OIDC/session middleware; never trust a browser-supplied identity header on a generic origin.
+The website uses server environment values `ADFM_API_ORIGIN`, `ADFM_GATEWAY_TOKEN`, `ADFM_TOOLS_ACCESS=private`, and `ADFM_TOOLS_ALLOWED_EMAILS`. The gateway token is generated randomly, stored as a secret in both hosts, and never shipped in browser bundles. Allowlist includes the owner's ChatGPT account `aryadeniz@yahoo.com` and work account `aryadeniz@adfundmgmt.com`. The existing website's dispatch-owned ChatGPT sign-in identifies the visitor; API authorization stays server-side. If hosting moves away from Sites, replace this identity boundary with verified OIDC/session middleware; never trust a browser-supplied identity header on a generic origin.
 
 ## Run locally
 
@@ -49,10 +49,10 @@ An optional `api.adfundmgmt.com` custom hostname would need a GoDaddy CNAME matc
 | ESTAT_APP_ID | Later CTE Japan adapter | Required for that adapter |
 | ANTHROPIC_API_KEY | Optional CTE commentary | Optional, never required for core calculations |
 | SEC_USER_AGENT / ADFM_SEC_USER_AGENT | Later SEC loaders | Identifiable SEC requests, preserving each adapter's variable mapping |
-| ADFM_13F_CACHE_DIR | Later SEC bulk cache | Writable persistent directory or migrated object-store location |
+| ADFM_DATA_DIR | Later SEC bulk cache | Writable persistent directory or migrated object-store location |
 | STOOQ_API_KEY / TRADING_ECONOMICS_API_KEY | Later credit sovereign loaders | Only for selected fallback providers |
 
-The eight current pages need no persistent database. Keep temporary yfinance timezone/cookie caches on a writable temporary directory. Later CTE and SEC jobs should import the same analytics/data packages, publish validated immutable snapshots with timestamps and source hashes, and atomically advance a latest pointer. Retain a last-good version and surface age on failure. Use the existing scheduled GitHub Actions first where adequate; add a Render cron service only for jobs that need host-local credentials/resources. A simulation/watchlist database is added when those user workflows migrate, with user-scoped records and migrations.
+The 15-page release uses a lightweight SQLite background-job queue and prepared SEC parquet archives. Set `ADFM_DATA_DIR` to a persistent disk mount for production. Run one process and one instance; the disk cannot be shared across instances. Keep temporary yfinance timezone/cookie caches on a writable temporary directory. Later CTE and SEC jobs should import the same analytics/data packages, publish validated immutable snapshots with timestamps and source hashes, and atomically advance a latest pointer. Retain a last-good version and surface age on failure. Use the existing scheduled GitHub Actions first where adequate; add a Render cron service only for jobs that need host-local credentials/resources. A simulation/watchlist database is added when those user workflows migrate, with user-scoped records and migrations.
 
 ## Cost planning
 
@@ -67,3 +67,6 @@ Free services sleep after inactivity and have monthly instance-hour limits, so u
 Keep source and built website artifacts matched. Save reviewable website versions while migrating, then publish the complete version after all pages pass the agreed gates. Record the website version and API revision as one release manifest. API schema changes should remain backward compatible during rollout. Roll back to the prior matched native version on failure; retain original reference snapshots until validation is complete. Retire the Streamlit service only after the full native platform passes acceptance. Remove Streamlit from active deployment dependencies, workflows and runtime source at that point.
 
 A September 7 source update did not start a deployment despite `autoDeploy=yes`; a clean-cache deployment was triggered and verified live at the updated revision. Verify the deployed commit explicitly during releases instead of assuming the GitHub webhook is connected.
+
+## Revised release scope
+See RELEASE-15.md: fifteen analytics pages plus Home are the agreed release. Other pages are deferred by the user. Publish this release after its gates pass.

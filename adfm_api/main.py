@@ -25,6 +25,7 @@ from adfm_engine.credit_service import load_credit
 from adfm_engine.cftc_service import load_cftc
 from adfm_engine.options_service import load_options
 from adfm_engine.underwriter_service import load_underwriter
+from adfm_engine.hedge_service import load_hedge
 from adfm_engine.stress_service import load_stress
 from adfm_engine.calendar_service import load_calendar
 from adfm_engine.sec13f_service import load_sec13f, release_list
@@ -33,6 +34,10 @@ from pathlib import Path
 
 logger = logging.getLogger("adfm.api")
 
+
+class HedgeParameters(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    chart_years: Literal[1,2,3,5,10]=1
 
 class StressParameters(BaseModel):
     model_config=ConfigDict(extra="forbid")
@@ -291,6 +296,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/stress", dependencies=[Depends(require_gateway)])
     def market_stress(parameters:StressParameters):
         return load_stress(**parameters.model_dump())
+
+    @app.post("/v1/hedge", dependencies=[Depends(require_gateway)])
+    def hedge_timer(parameters:HedgeParameters):
+        return load_hedge(**parameters.model_dump())
 
     return app
 
