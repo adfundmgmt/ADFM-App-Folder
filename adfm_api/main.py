@@ -17,6 +17,8 @@ from adfm_engine.data.market import configure_yfinance_cache
 from adfm_engine.services import DataUnavailable, load_rate_of_change, overview
 from adfm_engine.leadership_service import load_leadership
 from adfm_engine.volatility_service import load_volatility
+from adfm_engine.ratio_service import load_ratios
+from adfm_engine.macro_service import load_macro_regime
 
 logger = logging.getLogger("adfm.api")
 
@@ -56,6 +58,17 @@ class VolatilityParameters(BaseModel):
     @classmethod
     def normalize(cls, value):
         return value.strip().upper() if isinstance(value, str) else value
+
+
+class RatioParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    families: list[Literal["Duration / Crisis Hedges", "Commodities / Equity Indices", "Credit / Funding", "Financial Intermediaries"]] | None = None
+    history: Literal["3 Months", "6 Months", "9 Months", "YTD", "1 Year", "3 Years", "5 Years", "10 Years", "20 Years"] = "3 Years"
+    rsi_window: int = Field(default=14, ge=5, le=30)
+    show_rsi: bool = False
+    show_signal_strip: bool = True
+    moving_averages: list[Literal[8, 21, 50, 100, 200]] | None = None
+    custom: str = Field(default="", max_length=8192)
 
 
 def require_gateway(authorization: Annotated[str | None, Header()] = None):
@@ -111,6 +124,14 @@ def create_app() -> FastAPI:
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
         return load_volatility(**parameters.model_dump())
+
+    @app.post("/v1/ratios", dependencies=[Depends(require_gateway)])
+    def ratio_chartbook(parameters: RatioParameters):
+        return load_ratios(**parameters.model_dump())
+
+    @app.get("/v1/macro-regime", dependencies=[Depends(require_gateway)])
+    def global_macro_regime():
+        return load_macro_regime()
 
     return app
 

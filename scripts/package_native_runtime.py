@@ -5,6 +5,8 @@ import ast
 
 root = Path(__file__).resolve().parents[1]
 target = root / '.native-runtime'
+if target.exists():
+    shutil.rmtree(target)
 target.mkdir(exist_ok=True)
 for name in ('adfm_engine', 'adfm_api'):
     shutil.copytree(root / name, target / name, dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
