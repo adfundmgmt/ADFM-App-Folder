@@ -25,12 +25,21 @@ from adfm_engine.credit_service import load_credit
 from adfm_engine.cftc_service import load_cftc
 from adfm_engine.options_service import load_options
 from adfm_engine.underwriter_service import load_underwriter
+from adfm_engine.calendar_service import load_calendar
 from adfm_engine.sec13f_service import load_sec13f, release_list
 from adfm_engine.jobs import JobQueue
 from pathlib import Path
 
 logger = logging.getLogger("adfm.api")
 
+
+class CalendarParameters(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    horizon_days: Literal[14,30,60,90,120,180]=90
+    include_macro: bool=True
+    include_fed: bool=True
+    hide_low: bool=False
+    custom_text: str=Field(default="",max_length=24000)
 
 class SEC13FParameters(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -266,6 +275,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/sec13f-job", dependencies=[Depends(require_gateway)])
     def sec_job(parameters:JobParameters,request:Request):
         return request.app.state.jobs.get(parameters.id)
+
+    @app.post("/v1/calendar", dependencies=[Depends(require_gateway)])
+    def catalysts(parameters:CalendarParameters):
+        return load_calendar(**parameters.model_dump())
 
     return app
 
