@@ -1,0 +1,8 @@
+# The Docker image installs this file only, never requirements.txt.
+fastapi==0.141.1
+uvicorn==0.52.4
+numpy==2.3.5
+pandas==3.0.1
+plotly==6.8.0
+yfinance==1.4.1
+cachetools==7.1.8

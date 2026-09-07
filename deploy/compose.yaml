@@ -1,0 +1,18 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      ADFM_ENV: production
+      ADFM_GATEWAY_TOKEN: ${ADFM_GATEWAY_TOKEN:?Set a random gateway token}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:uid=10001,gid=10001,size=128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

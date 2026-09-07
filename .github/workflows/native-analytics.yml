@@ -1,0 +1,20 @@
+name: Native analytics parity
+on:
+  pull_request:
+  push:
+    branches: [main, codex/native-analytics-migration]
+permissions:
+  contents: read
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-native-dev.txt
+      - run: python -m pytest native_tests -q
+      - run: python scripts/package_native_runtime.py
+      - run: pip check

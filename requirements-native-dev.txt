@@ -1,0 +1,4 @@
+-r requirements-native.txt
+httpx==0.28.1
+pytest==9.1.1
+Jinja2==3.1.6

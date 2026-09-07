@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: adfm-python-api
+    runtime: python
+    region: virginia
+    plan: free
+    branch: codex/native-analytics-migration
+    buildCommand: pip install -r requirements-native.txt && python scripts/package_native_runtime.py
+    startCommand: cd .native-runtime && python -m uvicorn adfm_api.main:app --host 0.0.0.0 --port $PORT --workers 1 --limit-concurrency 16 --timeout-keep-alive 5
+    healthCheckPath: /health/live
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.13
+      - key: ADFM_ENV
+        value: production
+      - key: ADFM_GATEWAY_TOKEN
+        sync: false
