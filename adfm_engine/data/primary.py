@@ -94,3 +94,10 @@ def fetch_fred_series(
     panel = pd.DataFrame(values).sort_index() if values else pd.DataFrame()
     diagnostics = pd.DataFrame(asdict(item) for item in statuses)
     return panel, diagnostics
+
+
+def read_fred_panel(symbols, start, end):
+    """Multi-series FRED transport for the original sovereign fallback."""
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        frames = list(pool.map(lambda symbol: read_fred(symbol, str(start), str(end)), symbols))
+    return pd.concat(frames, axis=1).sort_index() if frames else pd.DataFrame()

@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from adfm_engine.data.market import configure_yfinance_cache
 from adfm_engine.services import DataUnavailable, load_rate_of_change, overview
@@ -19,6 +19,9 @@ from adfm_engine.leadership_service import load_leadership
 from adfm_engine.volatility_service import load_volatility
 from adfm_engine.ratio_service import load_ratios
 from adfm_engine.macro_service import load_macro_regime
+from adfm_engine.yield_service import load_yields
+from adfm_engine.liquidity_service import load_liquidity
+from adfm_engine.credit_service import load_credit
 
 logger = logging.getLogger("adfm.api")
 
@@ -69,6 +72,36 @@ class RatioParameters(BaseModel):
     show_signal_strip: bool = True
     moving_averages: list[Literal[8, 21, 50, 100, 200]] | None = None
     custom: str = Field(default="", max_length=8192)
+
+
+class YieldParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    history: Literal["6M", "1Y", "2Y", "3Y", "5Y", "10Y"] = "5Y"
+    regime_period: Literal["Today", "1W", "1M", "3M", "YTD"] = "1M"
+    selected_curve: Literal["3m10y", "5s10s", "10s30s", "5s30s"] = "3m10y"
+    curve_compare: Literal["1W", "1M", "3M", "YTD"] = "1M"
+
+
+class LiquidityParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lookback: Literal["6m", "1y", "2y", "3y", "5y", "10y", "max"] = "5y"
+    z_window: int = Field(default=756, ge=252, le=1260)
+    min_periods: int = Field(default=252, ge=126, le=756)
+    smoothing: int = Field(default=3, ge=1, le=21)
+    show_fcig: bool = True
+
+    @model_validator(mode="after")
+    def valid_windows(self):
+        if self.min_periods > self.z_window:
+            raise ValueError("Minimum observations must not exceed the score lookback.")
+        return self
+
+
+class CreditParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    focus_window: Literal["5D", "1M", "3M", "YTD", "1Y"] = "1M"
+    global_window: Literal["5D", "1M", "YTD", "1Y", "3Y", "5Y"] = "1Y"
+    history: Literal["1 Year", "3 Years", "5 Years", "10 Years"] = "3 Years"
 
 
 def require_gateway(authorization: Annotated[str | None, Header()] = None):
@@ -132,6 +165,18 @@ def create_app() -> FastAPI:
     @app.get("/v1/macro-regime", dependencies=[Depends(require_gateway)])
     def global_macro_regime():
         return load_macro_regime()
+
+    @app.post("/v1/yields", dependencies=[Depends(require_gateway)])
+    def yield_curve(parameters: YieldParameters):
+        return load_yields(**parameters.model_dump())
+
+    @app.post("/v1/liquidity", dependencies=[Depends(require_gateway)])
+    def liquidity_conditions(parameters: LiquidityParameters):
+        return load_liquidity(**parameters.model_dump())
+
+    @app.post("/v1/credit", dependencies=[Depends(require_gateway)])
+    def credit_conditions(parameters: CreditParameters):
+        return load_credit(**parameters.model_dump())
 
     return app
 

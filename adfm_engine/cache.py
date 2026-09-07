@@ -29,6 +29,10 @@ def ttl_cache(*, seconds: int, max_entries: int = 128):
                 # The market loader reports provider failure as an empty frames
                 # mapping. Do not make a transient outage sticky for an hour.
                 failed = isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], dict) and not value[0]
+                # DataFrame loaders and (frame, diagnostics) providers also
+                # report outages with an empty result. Retry on the next call.
+                payload = value[0] if isinstance(value, tuple) and value else value
+                failed = failed or getattr(payload, "empty", False) is True
                 if not failed:
                     with condition:
                         cache[key] = deepcopy(value)

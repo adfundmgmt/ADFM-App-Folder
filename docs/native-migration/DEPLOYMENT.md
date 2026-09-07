@@ -52,7 +52,7 @@ An optional `api.adfundmgmt.com` custom hostname would need a GoDaddy CNAME matc
 | ADFM_13F_CACHE_DIR | Later SEC bulk cache | Writable persistent directory or migrated object-store location |
 | STOOQ_API_KEY / TRADING_ECONOMICS_API_KEY | Later credit sovereign loaders | Only for selected fallback providers |
 
-The five current pages need no persistent database. Keep temporary yfinance timezone/cookie caches on a writable temporary directory. Later CTE and SEC jobs should import the same analytics/data packages, publish validated immutable snapshots with timestamps and source hashes, and atomically advance a latest pointer. Retain a last-good version and surface age on failure. Use the existing scheduled GitHub Actions first where adequate; add a Render cron service only for jobs that need host-local credentials/resources. A simulation/watchlist database is added when those user workflows migrate, with user-scoped records and migrations.
+The eight current pages need no persistent database. Keep temporary yfinance timezone/cookie caches on a writable temporary directory. Later CTE and SEC jobs should import the same analytics/data packages, publish validated immutable snapshots with timestamps and source hashes, and atomically advance a latest pointer. Retain a last-good version and surface age on failure. Use the existing scheduled GitHub Actions first where adequate; add a Render cron service only for jobs that need host-local credentials/resources. A simulation/watchlist database is added when those user workflows migrate, with user-scoped records and migrations.
 
 ## Cost planning
 
@@ -65,3 +65,5 @@ Free services sleep after inactivity and have monthly instance-hour limits, so u
 ## Release and rollback
 
 Keep source and built website artifacts matched. Save reviewable website versions while migrating, then publish the complete version after all pages pass the agreed gates. Record the website version and API revision as one release manifest. API schema changes should remain backward compatible during rollout. Roll back to the prior matched native version on failure; retain original reference snapshots until validation is complete. Retire the Streamlit service only after the full native platform passes acceptance. Remove Streamlit from active deployment dependencies, workflows and runtime source at that point.
+
+A September 7 source update did not start a deployment despite `autoDeploy=yes`; a clean-cache deployment was triggered and verified live at the updated revision. Verify the deployed commit explicitly during releases instead of assuming the GitHub webhook is connected.

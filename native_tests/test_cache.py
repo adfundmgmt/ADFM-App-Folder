@@ -31,3 +31,17 @@ def test_errors_are_not_cached():
         return 42
     with pytest.raises(ValueError): load()
     assert load() == 42
+
+
+def test_empty_dataframe_outage_is_not_cached():
+    import pandas as pd
+    from adfm_engine.cache import ttl_cache
+    calls=[]
+    @ttl_cache(seconds=60)
+    def provider():
+        calls.append(1)
+        return (pd.DataFrame() if len(calls)==1 else pd.DataFrame({'x':[1]})), {'source':'fixture'}
+    assert provider()[0].empty
+    assert not provider()[0].empty
+    assert not provider()[0].empty
+    assert len(calls)==2
