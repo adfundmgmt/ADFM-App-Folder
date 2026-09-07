@@ -11,7 +11,9 @@ from adfm_engine.serialization import figure_json, records
 
 
 class DataUnavailable(RuntimeError):
-    pass
+    def __init__(self, message, *, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or []
 
 
 def rate_of_change(frame: pd.DataFrame, *, symbol="^SPX", window="3Y", roc="63D", view="Candlestick", inflections=True) -> dict:

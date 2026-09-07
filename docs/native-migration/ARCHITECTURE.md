@@ -4,7 +4,7 @@
 
 The existing **adfundmgmt.com website becomes the application**. Its actual source already uses React, TypeScript and the Next-compatible Vinext runtime on a Cloudflare Worker. Extend that project under `app/tools/`; do not introduce a second public frontend. Run CPython, FastAPI and the reusable `adfm_engine` package on Render. The website Worker forwards `/tools/api/*` to the protected API over HTTPS. Browsers remain on adfundmgmt.com.
 
-The first eight page implementations are complete and have fixture parity tests. The remaining seventeen require sequential migration. The current website deployment has NOT been replaced with this incomplete branch. A protected staging Python service exists at `https://adfm-python-api.onrender.com`; the runtime installs only native requirements and runs from an allowlisted package directory. This is not completion of the whole platform.
+The first ten page implementations are complete and have fixture parity tests. The remaining fifteen require sequential migration. The current website deployment has NOT been replaced with this incomplete branch. A protected staging Python service exists at `https://adfm-python-api.onrender.com`; the runtime installs only native requirements and runs from an allowlisted package directory. This is not completion of the whole platform.
 
 ## Source of truth and inventory
 
@@ -28,7 +28,7 @@ Original Home is a directory. Its replacement includes a real cross-asset pulse 
 | Scheduled ingestion, later | Existing GitHub Actions initially; Render cron if needed | CTE snapshots and SEC bulk refresh, atomic publish of validated artifacts |
 | Persistent storage, later | Object storage for Parquet/CSV snapshots; optional small database | Last-good validated datasets and provenance; saved portfolios/watchlists/session simulations only when required |
 
-No Celery, Kubernetes, Redis, or database is needed for the eight initial stateless page slices. Use one API process with bounded, per-key coalescing TTL caches and copy-on-read values. Preserve distinct loader semantics; cache keys include relevant controls and date bounds. Do not put user-specific inputs or private holdings in a shared unscoped cache. Introduce a shared cache only when multiple workers need one. Explicitly surface stale/failed data, including last-good timestamps when that workflow is migrated.
+No Celery, Kubernetes, Redis, or database is needed for the ten initial stateless page slices. Use one API process with bounded, per-key coalescing TTL caches and copy-on-read values. Preserve distinct loader semantics; cache keys include relevant controls and date bounds. Do not put user-specific inputs or private holdings in a shared unscoped cache. Introduce a shared cache only when multiple workers need one. Explicitly surface stale/failed data, including last-good timestamps when that workflow is migrated.
 
 CPU-intensive analog searches, large universes and model jobs need resource profiling as their pages migrate. Prefer bounded background jobs returning job IDs for genuinely long work. Keep algorithms in the same engine; do not introduce a second scheduled-job implementation of the math.
 
@@ -91,8 +91,8 @@ The order favors small representative vertical slices, then macro and provider f
 | 6 | 4. Yield Curve Rates Regime Monitor | Native implementation; 89 parity checks |
 | 7 | 3. Liquidity Conditions Monitor | Native implementation; 11 full-page parity checks |
 | 8 | 5. Credit Conditions Monitor | Native implementation; 27 parity checks |
-| 9 | 18. CFTC Positioning Monitor | Audited; next |
-| 10 | 16. Options Positioning Compass | Audited |
+| 9 | 18. CFTC Positioning Monitor | Complete; 22 parity/API tests |
+| 10 | 16. Options Positioning Compass | Complete; 30 parity/error tests |
 | 11 | 9. ADFM Underwriter | Audited |
 | 12 | 17. SEC 13F Exposure Browser | Audited |
 | 13 | 20. Catalyst Calendar | Audited |
@@ -140,3 +140,7 @@ Before the website cutover: finish all pages; run live provider checks and state
 ## Additional corrected source defects
 
 Liquidity allowed minimum observations greater than the score window, which crashes pandas rolling calculations; the native API validates that relationship. Its direct FRED CSV fallback could interpret a numeric row index as 1970 timestamps; the native adapter parses the observation-date column before normalization. Empty provider DataFrames are no longer cached as multi-hour outages. Credit public sovereign quotes without a parsable publication date are rejected instead of assigning today and accidentally passing freshness checks. None of these fixes changes valid-input investment formulas.
+
+CFTC preserves all financial/physical cohorts, mid-rank crowding lookbacks, five scanner rankings, selected-market weekly percentage-point changes, continuous-futures overlays, cohort decomposition, and both original CSV exports. Fixture tests replay the original page and compare all charts, tables, cards, and downloads. Live CFTC provider validation remains a release gate.
+
+Options preserves the original Black–Scholes IV solver/delta selection, peer mid-ranks, all controls, three charts, three CSVs, and Yahoo-to-Cboe fallback. A verified bug is corrected: when daily price history is unavailable, the valid chain underlying price is no longer overwritten with NaN. Missing realized volatility stays unavailable; no proxy is substituted. Calendar/chain fetches use four bounded threads.

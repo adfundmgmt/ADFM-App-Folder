@@ -22,6 +22,8 @@ from adfm_engine.macro_service import load_macro_regime
 from adfm_engine.yield_service import load_yields
 from adfm_engine.liquidity_service import load_liquidity
 from adfm_engine.credit_service import load_credit
+from adfm_engine.cftc_service import load_cftc
+from adfm_engine.options_service import load_options
 
 logger = logging.getLogger("adfm.api")
 
@@ -104,6 +106,37 @@ class CreditParameters(BaseModel):
     history: Literal["1 Year", "3 Years", "5 Years", "10 Years"] = "3 Years"
 
 
+class CFTCParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lookback: Literal["1Y", "2Y", "3Y", "5Y"] = "3Y"
+    tff_cohort: Literal["Asset Managers", "Leveraged Funds", "Asset Managers + Leveraged Funds", "Dealers", "Other Reportables"] = "Asset Managers + Leveraged Funds"
+    disagg_cohort: Literal["Managed Money", "Producer / Merchant", "Swap Dealers", "Other Reportables"] = "Managed Money"
+    selected: str | None = Field(default=None, max_length=64, pattern=r"^(TFF|Disaggregated)\|[A-Za-z0-9]+$")
+    assets: list[str] | None = Field(default=None, max_length=32)
+    sort: Literal["Most crowded shorts", "Most crowded longs", "Largest 1W shift", "Largest 4W contract change", "Largest absolute z-score"] = "Most crowded shorts"
+
+
+class OptionsParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    selected: str = Field(default="QQQ", min_length=1, max_length=32, pattern=r"^[A-Z0-9^=._-]+$")
+    universe_text: str = Field(default="SPY, QQQ, IWM, DIA, TLT, GLD, USO, SMH, EEM, HYG, LQD", max_length=8192)
+    target_dte: int = Field(default=45, ge=14, le=120)
+    term_count: int = Field(default=6, ge=3, le=10)
+    risk_free_rate: float = Field(default=0.04, ge=0, le=0.20)
+
+    @field_validator("selected", mode="before")
+    @classmethod
+    def normalize(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def valid_universe(self):
+        from adfm_engine.analytics.options import parse_universe
+        if len(parse_universe(self.universe_text, self.selected)) < 2:
+            raise ValueError("Add at least one comparison ticker.")
+        return self
+
+
 def require_gateway(authorization: Annotated[str | None, Header()] = None):
     token = os.getenv("ADFM_GATEWAY_TOKEN", "")
     if os.getenv("ADFM_ENV", "production") == "development" and not token:
@@ -136,7 +169,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(DataUnavailable)
     async def unavailable(request, exc):
-        return JSONResponse(status_code=502, content={"detail": str(exc), "code": "provider_unavailable"})
+        return JSONResponse(status_code=502, content={"detail": str(exc), "code": "provider_unavailable", "diagnostics": exc.diagnostics})
 
     @app.get("/health/live")
     def health():
@@ -177,6 +210,14 @@ def create_app() -> FastAPI:
     @app.post("/v1/credit", dependencies=[Depends(require_gateway)])
     def credit_conditions(parameters: CreditParameters):
         return load_credit(**parameters.model_dump())
+
+    @app.post("/v1/cftc", dependencies=[Depends(require_gateway)])
+    def cftc_positioning(parameters: CFTCParameters):
+        return load_cftc(**parameters.model_dump())
+
+    @app.post("/v1/options", dependencies=[Depends(require_gateway)])
+    def options_compass(parameters: OptionsParameters):
+        return load_options(**parameters.model_dump())
 
     return app
 
