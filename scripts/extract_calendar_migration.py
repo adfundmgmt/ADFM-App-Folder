@@ -34,6 +34,7 @@ from adfm_engine.serialization import records,figure_json
 # Underscore helpers are imported explicitly, never runtime star discovery.
 funcs=[n.name for n in ast.parse(model).body if isinstance(n,ast.FunctionDef) and n.name.startswith('_')]
 service+='from adfm_engine.analytics.calendar import '+','.join(funcs)+'\n\n'
+body=body.replace('if hide_low:', 'if hide_low and not calendar.empty:')
 service+='def calendar(market,macro_panel,macro_status,today=None,horizon_days=90,include_macro=True,include_fed=True,hide_low=False,custom_text=""):\n    today=today or date.today()\n    warnings=[]\n    stress_bonus,stress_label=_market_stress(market)\n'+body
 body=body.replace('if hide_low:', 'if hide_low and not calendar.empty:')
 service+='''    if include_macro and (today < date(2026,9,1) or today+timedelta(days=horizon_days)>date(2026,12,31)):

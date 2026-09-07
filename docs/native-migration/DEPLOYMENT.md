@@ -70,3 +70,10 @@ A September 7 source update did not start a deployment despite `autoDeploy=yes`;
 
 ## Revised release scope
 See RELEASE-15.md: fifteen analytics pages plus Home are the agreed release. Other pages are deferred by the user. Publish this release after its gates pass.
+
+## Production host setting still required
+The installed Render connector can deploy and update environment values, but does not expose service-plan changes or persistent-disk creation. The existing service remains `free` until those settings are applied in Render. The checked-in Blueprint now specifies the intended production setting; pushing it alone does not modify an existing service that was created directly.
+
+For `adfm-python-api`, select Standard (2 GB), add a 10 GB disk at `/var/data`, set `ADFM_DATA_DIR=/var/data`, and set health-check path `/health/live`. Keep one instance and one Uvicorn worker. The existing gateway secret stays unchanged. Approximate incremental base compute/storage: $25 + $2.50 = $27.50/month, excluding bandwidth, existing website/domain and any data subscriptions. Official sources: https://render.com/pricing and https://render.com/docs/disks.
+
+Until this host setting is applied, cold starts and lost prepared SEC caches/jobs across restarts remain limitations. The actual model data is recoverable from official sources; user controls remain in the browser. This is a deployment readiness issue, not additional page migration work.

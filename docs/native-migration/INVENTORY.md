@@ -26,10 +26,13 @@ Static call counts are audit clues, not the number of rendered charts or control
 | 18. CFTC Positioning Monitor | 496 | `cftc_positioning.py`, `market_data.py` | CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts |
 | 19. Market Stress Composite | 685 | Page-local functions | Yahoo Finance; local last-good cache on provider failure |
 | 20. Catalyst Calendar | 4 | `catalyst_calendar_exact_page.py`, `catalyst_calendar_official_page.py`, `catalyst_calendar_page.py`, `data_registry.py`, `primary_data.py` | Official agency calendars; recurring market-calendar rules; Yahoo Finance market proxies |
-| 21. Hedge Timer | 1122 | Page-local functions | Yahoo Finance; FRED regime inputs |
+| 21. Hedge Timer | 1122 | Page-local functions | Yahoo Finance adjusted index, ETF and volatility histories |
 | 22. Position Sizing Lab | 881 | `market_data.py`, `position_sizing.py` | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
 | 23. Market Memory Explorer | 1661 | Page-local functions | Yahoo Finance market history |
 | 24. Monthly Seasonality Explorer | 1841 | `monthly_returns_matrix.py` | Yahoo Finance; FRED for selected series and regime tags |
 | 25. Commodity Event Study | 18 | `cftc_positioning.py`, `commodity_top_exhaustion_page.py` | Yahoo Finance daily continuous-futures history; CFTC Disaggregated Managed Money positioning where mapped |
 
 See `source-audit.json` for full control/default expressions, functions, decorator TTLs, state/callback references, URLs, and hashes for **every** file. Presentation imports also execute `adfm_core/__init__.py`; its global patches are not included in the transitive counts above.
+
+## Release status
+The agreed September 7 release is fifteen analytics pages plus Home. See RELEASE-15.md for the exact included/deferred list and verified deployment state.

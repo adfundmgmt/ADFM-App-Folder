@@ -9,6 +9,7 @@ from adfm_engine.charts.sec13f import exposure_chart
 from adfm_engine.cache import ttl_cache
 from adfm_engine.serialization import records,figure_json
 from adfm_engine.services import DataUnavailable
+from adfm_engine.capacity import require_bulk_capacity
 
 @ttl_cache(seconds=21600)
 def releases():
@@ -46,6 +47,7 @@ def screen_result(ranking,selected,sort_label,top_n,manager_filter,detail_column
       'csv':filtered.to_csv(index=False),'filename':f"sec_13f_exposure_{re.sub(r'[^A-Za-z0-9_-]+','_',query)}_{period}.csv"}
 
 def load_sec13f(search_mode='Security',query='INTC',release_slug='',position_kind='Long holdings',minimum_portfolio_millions=1000.,sort_label='Portfolio weight',top_n=25,candidate=0,manager_cik='',manager_filter='',detail_columns=None,portfolio_filter='',portfolio_kind='All'):
+    require_bulk_capacity()
     try:
         options=releases();release=next((r for r in options if r.slug==release_slug),None) if release_slug else options[0]
         if release is None:raise DataUnavailable('Select a current SEC data release.')

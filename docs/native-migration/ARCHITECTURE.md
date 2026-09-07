@@ -26,9 +26,9 @@ Original Home is a directory. Its replacement includes a real cross-asset pulse 
 | `adfm_engine.charts` | Python | Original Plotly figure transformations, hover templates, axis ranges and precision |
 | Page services | Python | Orchestration and versioned results; callable without HTTP by reports/jobs/AI |
 | Scheduled ingestion, later | Existing GitHub Actions initially; Render cron if needed | CTE snapshots and SEC bulk refresh, atomic publish of validated artifacts |
-| Persistent storage, later | Object storage for Parquet/CSV snapshots; optional small database | Last-good validated datasets and provenance; saved portfolios/watchlists/session simulations only when required |
+| Persistent storage | Render disk at ADFM_DATA_DIR | Prepared SEC parquet archives and SQLite job records, with restart recovery |
 
-No Celery, Kubernetes, Redis, or database is needed for the ten initial stateless page slices. Use one API process with bounded, per-key coalescing TTL caches and copy-on-read values. Preserve distinct loader semantics; cache keys include relevant controls and date bounds. Do not put user-specific inputs or private holdings in a shared unscoped cache. Introduce a shared cache only when multiple workers need one. Explicitly surface stale/failed data, including last-good timestamps when that workflow is migrated.
+The fifteen-page release uses SQLite for a durable single-process background queue and a persistent disk for prepared SEC parquet archives. No Celery, Kubernetes, Redis or separate worker service is required. Use one API process with bounded, per-key coalescing TTL caches and copy-on-read values. Preserve distinct loader semantics; cache keys include relevant controls and date bounds. Do not put user-specific inputs or private holdings in a shared unscoped cache. Introduce a shared cache only when multiple workers need one. Explicitly surface stale/failed data, including last-good timestamps when that workflow is migrated.
 
 CPU-intensive analog searches, large universes and model jobs need resource profiling as their pages migrate. Prefer bounded background jobs returning job IDs for genuinely long work. Keep algorithms in the same engine; do not introduce a second scheduled-job implementation of the math.
 

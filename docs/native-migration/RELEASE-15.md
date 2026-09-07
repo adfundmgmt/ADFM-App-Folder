@@ -32,8 +32,17 @@ Market Stress: 31 tests compare full original figures, scores, global moves and 
 
 Hedge Timer: six tests verify original scores, calibration, gates, forward statistics, episode tables and chart vertices across all five lookbacks and missing optional inputs. The old static Matplotlib image becomes an interactive Plotly chart. Trading-session spacing, prices, MAs, gradient score segments, thresholds and onset dates are preserved; fonts and drawing primitives necessarily differ. The episode image becomes a searchable, sortable, downloadable native table. In-sample calibration is explicitly labelled.
 
-## Remaining release gates
-Whole-suite test, production build, live provider smoke tests, and matched website/API deployment must be recorded below. Do not claim these are complete based only on per-page checks.
+## Release verification
+- Full native suite: 420 passed, 2 warnings (483.85 seconds). Subsequent capacity protection: 4 passed. No additional investment-model changes followed the full suite.
+- Frontend TypeScript check passed. Production Worker build passed with all 15 analytics routes plus Home. Gateway/render checks: 5 passed.
+- Native runtime packaging and import exclusion passed; dependency check passed.
+- Website source 0a9708737ae0614bc2fed784cffaa60d94408306 saved as website version 19, archive-backed. Not published: do not cut over the public website until the API host is stable.
+- Fifteen-page API source 31711bcf254e46b92c39255644d56c1112e2380d deployed live on Render; then live checks exposed the host-capacity blocker.
+- Live responses passed for ROC, Home overview, Leadership (25 charts), Relative Volatility, Macro, Ratios (38 charts), Yields and Credit. These are smoke checks, not claims that every optional provider observation is complete.
+- During simultaneous data loading and an SEC bulk preparation, the 512 MB free instance exceeded memory and restarted. Render's email supplied by the user confirms the memory-limit event. Liquidity, CFTC and subsequent remaining requests returned gateway failures during this event; their live acceptance remains incomplete.
+- Stop broad live testing until the instance is upgraded. The capacity protection now refuses SEC bulk work on cgroups below 1 GB before allocation, so restart recovery cannot repeatedly launch the same oversized job on this tier.
+- Required next action: existing Render service to Standard 2 GB; 10 GB disk at /var/data; ADFM_DATA_DIR=/var/data; health check /health/live. Installed connector cannot change plans/create disks. After the user applies these host settings, retry only the failed live checks and SEC job, then publish the existing saved website version 19. Do not rebuild or remigrate the 15 pages.
+
 
 ## Infrastructure
 Existing Sites website serves /tools and the same-origin /tools/api gateway. Existing Render Python service runs one Uvicorn process. The 13F background queue uses a single worker thread and SQLite in ADFM_DATA_DIR. Production should mount a persistent disk there to preserve jobs and prepared SEC archives across deployments. Free Render remains a staging tier until an always-on instance and persistent storage are configured. No Redis, separate worker service or Postgres is required for this release.

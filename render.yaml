@@ -3,7 +3,12 @@ services:
     name: adfm-python-api
     runtime: python
     region: virginia
-    plan: free
+    plan: standard
+    numInstances: 1
+    disk:
+      name: adfm-analytics-data
+      mountPath: /var/data
+      sizeGB: 10
     branch: codex/native-analytics-migration
     buildCommand: pip install -r requirements-native.txt && python scripts/package_native_runtime.py
     startCommand: cd .native-runtime && python -m uvicorn adfm_api.main:app --host 0.0.0.0 --port $PORT --workers 1 --limit-concurrency 16 --timeout-keep-alive 5
@@ -12,6 +17,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.13
+      - key: ADFM_DATA_DIR
+        value: /var/data
+      - key: ADFM_SEC_USER_AGENT
+        value: AD Fund Management LP aryadeniz@adfundmgmt.com
+      - key: SEC_USER_AGENT
+        value: AD Fund Management LP aryadeniz@adfundmgmt.com
       - key: ADFM_ENV
         value: production
       - key: ADFM_GATEWAY_TOKEN

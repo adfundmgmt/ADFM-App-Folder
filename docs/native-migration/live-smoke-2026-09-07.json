@@ -1,0 +1,267 @@
+[
+  {
+    "endpoint": "rate-of-change",
+    "status": 200,
+    "seconds": 15.3,
+    "detail": "",
+    "fields": [
+      "schema_version",
+      "parameters",
+      "source",
+      "data_through",
+      "retrieved_at",
+      "quality",
+      "quality_diagnostics",
+      "observation_count",
+      "warnings",
+      "figure",
+      "rows"
+    ],
+    "rows": {
+      "quality_diagnostics": 1,
+      "warnings": 0,
+      "rows": 690
+    }
+  },
+  {
+    "endpoint": "overview",
+    "status": 200,
+    "seconds": 11.1,
+    "detail": "",
+    "fields": [
+      "source",
+      "rows"
+    ],
+    "rows": {
+      "rows": 6
+    }
+  },
+  {
+    "endpoint": "leadership",
+    "status": 200,
+    "seconds": 28.6,
+    "detail": "",
+    "fields": [
+      "schema_version",
+      "families",
+      "states",
+      "history_options",
+      "warnings",
+      "unavailable",
+      "rotation",
+      "charts",
+      "rows"
+    ],
+    "rows": {
+      "families": 4,
+      "states": 4,
+      "history_options": 4,
+      "warnings": 0,
+      "unavailable": 0,
+      "charts": 25,
+      "rows": 25
+    }
+  },
+  {
+    "endpoint": "relative-volatility",
+    "status": 200,
+    "seconds": 20.5,
+    "detail": "",
+    "fields": [
+      "schema_version",
+      "data_through",
+      "warnings",
+      "overview",
+      "normalized",
+      "z_table",
+      "data",
+      "csv",
+      "filename",
+      "diagnostics",
+      "methodology"
+    ],
+    "rows": {
+      "warnings": 0,
+      "z_table": 4,
+      "data": 252,
+      "diagnostics": 0
+    }
+  },
+  {
+    "endpoint": "ratios",
+    "status": 200,
+    "seconds": 60.3,
+    "detail": "",
+    "fields": [
+      "schema_version",
+      "charts",
+      "warnings",
+      "unavailable",
+      "unavailable_custom"
+    ],
+    "rows": {
+      "charts": 38,
+      "warnings": 0,
+      "unavailable": 0,
+      "unavailable_custom": 0
+    }
+  },
+  {
+    "endpoint": "macro-regime",
+    "status": 200,
+    "seconds": 52.3,
+    "detail": "",
+    "fields": [
+      "schema_version",
+      "data_through",
+      "failed",
+      "market_loaded",
+      "market_total",
+      "macro_loaded",
+      "macro_total",
+      "current",
+      "narrative",
+      "drivers",
+      "tensions",
+      "states",
+      "rates",
+      "performance",
+      "performance_colors",
+      "macro_status"
+    ],
+    "rows": {
+      "failed": 0,
+      "drivers": 5,
+      "tensions": 1,
+      "states": 6,
+      "rates": 8,
+      "performance": 19,
+      "performance_colors": 19,
+      "macro_status": 9
+    }
+  },
+  {
+    "endpoint": "yields",
+    "status": 200,
+    "seconds": 15.4,
+    "detail": "",
+    "fields": [
+      "schema_version",
+      "selected_curve",
+      "warnings",
+      "diagnostics",
+      "data_through",
+      "available",
+      "cards",
+      "narrative",
+      "config",
+      "snapshot",
+      "pressure",
+      "history",
+      "curve_label",
+      "curve_level",
+      "curve_move",
+      "rows"
+    ],
+    "rows": {
+      "warnings": 0,
+      "diagnostics": 0,
+      "available": 4,
+      "cards": 6,
+      "rows": 260
+    }
+  },
+  {
+    "endpoint": "liquidity",
+    "status": 502,
+    "seconds": 82.5,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  },
+  {
+    "endpoint": "credit",
+    "status": 200,
+    "seconds": 40.5,
+    "detail": "",
+    "fields": [
+      "schema_version",
+      "cards",
+      "narrative",
+      "spread",
+      "funding",
+      "appetite",
+      "sovereign",
+      "sovereign_summary",
+      "sovereign_source",
+      "sovereign_note",
+      "rows",
+      "fred_status",
+      "market_status"
+    ],
+    "rows": {
+      "cards": 6,
+      "sovereign": 2,
+      "sovereign_summary": 2,
+      "rows": 12,
+      "fred_status": 5,
+      "market_status": 14
+    }
+  },
+  {
+    "endpoint": "cftc",
+    "status": 502,
+    "seconds": 30.5,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  },
+  {
+    "endpoint": "options",
+    "status": 502,
+    "seconds": 6.1,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  },
+  {
+    "endpoint": "underwriter",
+    "status": 502,
+    "seconds": 6.2,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  },
+  {
+    "endpoint": "sec13f-releases",
+    "status": 502,
+    "seconds": 6.3,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  },
+  {
+    "endpoint": "calendar",
+    "status": 502,
+    "seconds": 6.2,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  },
+  {
+    "endpoint": "stress",
+    "status": 502,
+    "seconds": 6.2,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  },
+  {
+    "endpoint": "hedge",
+    "status": 502,
+    "seconds": 6.3,
+    "detail": "",
+    "fields": [],
+    "rows": {}
+  }
+]
