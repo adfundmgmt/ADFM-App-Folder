@@ -25,9 +25,32 @@ from adfm_engine.credit_service import load_credit
 from adfm_engine.cftc_service import load_cftc
 from adfm_engine.options_service import load_options
 from adfm_engine.underwriter_service import load_underwriter
+from adfm_engine.sec13f_service import load_sec13f, release_list
+from adfm_engine.jobs import JobQueue
+from pathlib import Path
 
 logger = logging.getLogger("adfm.api")
 
+
+class SEC13FParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    search_mode: Literal["Security","Manager"] = "Security"
+    query: str = Field(default="INTC", min_length=1, max_length=200)
+    release_slug: str = Field(default="",max_length=100,pattern=r"^[A-Za-z0-9_-]*$")
+    position_kind: Literal["Long holdings","Call options","Put options","All reported"] = "Long holdings"
+    minimum_portfolio_millions: float = Field(default=1000,ge=0,le=1e9)
+    sort_label: Literal["Portfolio weight","Reported market value","Reported shares"] = "Portfolio weight"
+    top_n: Literal[10,15,20,25,30,35,40,45,50] = 25
+    candidate: int = Field(default=0,ge=0,le=24)
+    manager_cik: str = Field(default="",pattern=r"^[0-9]{0,10}$")
+    manager_filter: str = Field(default="",max_length=200)
+    detail_columns: list[Literal["PORTFOLIO_WEIGHT_PCT","POSITION_VALUE_USD","REPORTED_SHARES","PORTFOLIO_VALUE_USD","LATEST_FILING_DATE","CIK","COMPONENT_COUNT","FILING_URL"]] | None = None
+    portfolio_filter: str = Field(default="",max_length=200)
+    portfolio_kind: Literal["All","Long","Call","Put"] = "All"
+
+class JobParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 class UnderwriterParameters(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -158,7 +181,11 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    yield
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f})
+    try:
+        yield
+    finally:
+        app.state.jobs.close()
 
 
 def create_app() -> FastAPI:
@@ -228,6 +255,17 @@ def create_app() -> FastAPI:
     @app.post("/v1/underwriter", dependencies=[Depends(require_gateway)])
     def issuer_underwrite(parameters: UnderwriterParameters):
         return load_underwriter(**parameters.model_dump())
+
+    @app.get("/v1/sec13f-releases", dependencies=[Depends(require_gateway)])
+    def sec_releases():return release_list()
+
+    @app.post("/v1/sec13f", dependencies=[Depends(require_gateway)])
+    def sec_screen(parameters:SEC13FParameters,request:Request):
+        return request.app.state.jobs.submit("sec13f",parameters.model_dump())
+
+    @app.post("/v1/sec13f-job", dependencies=[Depends(require_gateway)])
+    def sec_job(parameters:JobParameters,request:Request):
+        return request.app.state.jobs.get(parameters.id)
 
     return app
 
