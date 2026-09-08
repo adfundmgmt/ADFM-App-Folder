@@ -260,11 +260,11 @@ def _rebuild() -> None:
 
 def _snapshot_label(frame: Optional[pd.DataFrame]) -> str:
     if frame is None or frame.empty or "date" not in frame.columns:
-        return "Latest"
+        return "Undated"
 
     dates = pd.to_datetime(frame["date"], errors="coerce").dropna()
     if dates.empty:
-        return "Latest"
+        return "Undated"
     return dates.max().strftime("%b %d, %Y")
 
 
@@ -580,6 +580,9 @@ status_1.metric("Snapshot", _snapshot_label(tm))
 status_2.metric("Active horizon", horizon.replace(" (~", " · ").replace(")", ""))
 status_3.metric("Map view", "Live" if not HIST_MODE else asof_sel)
 status_4.metric("Flagged currencies", str(len(flagged)))
+
+if not HIST_MODE and _snapshot_label(tm) == "Undated":
+    st.warning("The source snapshot has no observation date, so its freshness cannot be verified. The Live view shows the latest stored snapshot; it is not a real-time feed.")
 
 if CUSTOM_W:
     st.info(
