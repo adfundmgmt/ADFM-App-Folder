@@ -146,6 +146,7 @@ def build_leadership_frame(
         ["Above 50D + 200D", "Below 50D + 200D"],
         default="Mixed",
     )
+    frame.loc[frame[["vs 50D", "vs 200D"]].isna().any(axis=1), "Trend"] = "Unavailable"
     frame = frame.sort_values(
         ["Leadership Score", "Acceleration"], ascending=[False, False]
     )

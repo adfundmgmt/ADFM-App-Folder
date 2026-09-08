@@ -38,6 +38,18 @@ class ProxyDefinition:
     description: str
 
 
+TREASURY_YIELD_SERIES: Final[tuple[SeriesDefinition, ...]] = tuple(
+    SeriesDefinition(key, label, symbol, "Federal Reserve / FRED", "Treasury curve",
+                     "Daily Treasury constant-maturity yield, percent on an investment basis.")
+    for key, label, symbol in (
+        ("Y3M", "3-month Treasury", "DGS3MO"),
+        ("Y5", "5-year Treasury", "DGS5"),
+        ("Y10", "10-year Treasury", "DGS10"),
+        ("Y30", "30-year Treasury", "DGS30"),
+    )
+)
+
+
 MARKET_SERIES: Final[tuple[SeriesDefinition, ...]] = (
     SeriesDefinition(
         "spy",

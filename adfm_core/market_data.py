@@ -179,6 +179,18 @@ def adjusted_ohlcv(raw: pd.DataFrame) -> pd.DataFrame:
     return out.replace([np.inf, -np.inf], np.nan)
 
 
+def fill_short_calendar_gaps(frame: pd.DataFrame, limit: int = 2) -> pd.DataFrame:
+    """Bridge short interior close-price gaps without extending stale endpoints.
+
+    This is for explicitly aligned ratio calendars, never OHLCV or volume.
+    Each series retains its first and last actual provider observation dates.
+    """
+    clean = canonicalize_date_index(frame).replace([np.inf, -np.inf], np.nan)
+    observed = clean.notna()
+    interior = observed.cummax() & observed.iloc[::-1].cummax().iloc[::-1]
+    return clean.ffill(limit=limit).where(interior)
+
+
 def _extract_ohlcv(
     raw: pd.DataFrame, tickers: Sequence[str]
 ) -> Dict[str, pd.DataFrame]:

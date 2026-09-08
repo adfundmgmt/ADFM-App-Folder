@@ -560,13 +560,11 @@ def build_feature_frame(close_px: pd.Series, regime_data: dict) -> pd.DataFrame:
     df["Quarter"] = df.index.quarter
     df["_loc"] = np.arange(len(df))
 
-    prev_year_close = close_px.groupby(close_px.index.year).transform("first")
-    year_start_base = []
-    for date_value in close_px.index:
-        y = date_value.year
-        prev = close_px.loc[close_px.index.year < y]
-        year_start_base.append(float(prev.iloc[-1]) if not prev.empty else np.nan)
-    df["prior_year_close"] = year_start_base
+    # Map each year to the final observation in the preceding observed year.
+    # This preserves the historical anchor without rescanning the full history
+    # once per daily row (quadratic work for long index histories).
+    prior_year_closes = close_px.groupby(close_px.index.year).last().shift(1)
+    df["prior_year_close"] = close_px.index.year.map(prior_year_closes).to_numpy()
     df["ytd"] = df["Close"] / df["prior_year_close"] - 1.0
 
     daily = df["Close"].pct_change()
@@ -600,8 +598,12 @@ def build_feature_frame(close_px: pd.Series, regime_data: dict) -> pd.DataFrame:
 
     if "tnx" in regime_data:
         tnx = regime_data["tnx"].reindex(df.index).ffill()
+        # Yahoo may expose legacy index-point quotes (10x percent). Convert to
+        # percent first; one percentage point always equals 100 basis points.
+        if tnx.dropna().tail(260).median() > 20:
+            tnx = tnx / 10.0
         df["tnx"] = tnx
-        df["tnx_63_bps"] = (tnx - tnx.shift(63)) * 10.0
+        df["tnx_63_bps"] = (tnx - tnx.shift(63)) * 100.0
         df["tnx_trend"] = df["tnx_63_bps"].apply(bucket_bps_change)
     else:
         df["tnx"] = np.nan

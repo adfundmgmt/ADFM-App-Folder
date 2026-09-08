@@ -1,5 +1,10 @@
 # Performance and accuracy audit — 2026-09-08
 
+This initial audit was subsequently expanded to every live tool and authorized
+for deployment. See [the full-page release check](FULL_PAGE_RELEASE_CHECK.md)
+for the additional findings, fixes, and page-by-page evidence. The initial
+remaining-priorities list below describes the state before that follow-up.
+
 Reviewed against `ac2bd39` on `main`, using the canonical checkout. The live Home,
 Rate of Change, and Public Equities Baskets pages were observed rendering in the
 browser. This is a code and targeted live-page audit, not certification of every

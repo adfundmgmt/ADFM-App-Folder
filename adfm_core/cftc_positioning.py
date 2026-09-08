@@ -10,6 +10,7 @@ import pandas as pd
 import requests
 
 CFTC_HOST: Final = "https://publicreporting.cftc.gov"
+CFTC_PAGE_SIZE: Final = 50_000
 DATASETS: Final = {"TFF": "gpe5-46if", "Disaggregated": "72hh-3qpy"}
 REPORT_LABELS: Final = {
     "TFF": "Traders in Financial Futures · futures only",
@@ -220,10 +221,19 @@ def fetch_recent(report_type: str, years: int = 5, timeout: int = 30) -> pd.Data
     params = {
         "$select": select,
         "$where": f"report_date_as_yyyy_mm_dd >= '{start.isoformat()}T00:00:00.000'",
-        "$order": "report_date_as_yyyy_mm_dd ASC",
-        "$limit": 50000,
+        "$order": "report_date_as_yyyy_mm_dd ASC,cftc_contract_market_code ASC",
+        "$limit": CFTC_PAGE_SIZE,
     }
-    return normalize(_request(report_type, params, timeout), report_type)
+    pages = []
+    # The disaggregated five-year universe exceeds 50,000 records. Reading only
+    # the first ascending page silently omitted the most recent year of data.
+    for page_number in range(20):
+        block = _request(report_type, {**params, "$offset": page_number * CFTC_PAGE_SIZE}, timeout)
+        if not block.empty:
+            pages.append(block)
+        if len(block) < CFTC_PAGE_SIZE:
+            return normalize(pd.concat(pages, ignore_index=True) if pages else pd.DataFrame(), report_type)
+    raise ValueError("CFTC response exceeded the pagination safety limit; refusing a truncated report")
 
 
 def fetch_contract_history(

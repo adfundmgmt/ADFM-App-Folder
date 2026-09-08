@@ -17,6 +17,12 @@ from adfm_core.leadership import (
 
 
 class LeadershipTests(unittest.TestCase):
+    def test_thin_moving_average_history_does_not_become_a_bearish_trend(self) -> None:
+        dates = pd.bdate_range("2026-01-01", periods=25)
+        ratios = {"thin": pd.Series(np.linspace(100, 105, len(dates)), index=dates)}
+        frame = build_leadership_frame(ratios, pd.DataFrame(index=["thin"]))
+        self.assertEqual(frame.loc["thin", "Trend"], "Unavailable")
+
     def test_period_return_uses_completed_observations(self) -> None:
         series = pd.Series([100.0, 102.0, 104.0, 106.0])
         self.assertAlmostEqual(period_return(series, 2), 106.0 / 102.0 - 1.0)

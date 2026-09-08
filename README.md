@@ -28,7 +28,7 @@ The application contains 25 tools, in the same order and groups shown on the Hom
 | 1 | ADFM Public Equities Baskets | Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance. | Internal basket definitions; Yahoo Finance market data |
 | 2 | Global Macro Regime | Combines growth, inflation, policy, financial conditions, and market signals into a broad macro-regime read. | Yahoo Finance market proxies |
 | 3 | Liquidity Conditions Monitor | Separates the level and marginal impulse of system liquidity across Fed plumbing, overnight funding, credit transmission, and market confirmation. | Federal Reserve H.4.1; New York Fed; FRED; Yahoo Finance proxies |
-| 4 | Yield Curve Rates Regime Monitor | Tracks the Treasury curve, real yields, breakevens, and bull/bear steepener or flattener regimes. | Yahoo Finance rate and market proxies |
+| 4 | Yield Curve Rates Regime Monitor | Tracks outright Treasury yields, curve spreads, and bull/bear steepener or flattener regimes. | Yahoo Finance Treasury yields; Federal Reserve / FRED constant-maturity yields on provider failure |
 | 5 | Credit Conditions Monitor | Monitors credit spreads, credit ETF ratios, regional banks, loans, EM debt, and financial conditions. | Yahoo Finance market proxies |
 | 6 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
 | 7 | Sector Breadth and Rotation | Measures participation and sector rotation to identify where equity strength is broadening or narrowing. | Yahoo Finance sector and subsector ETFs |
