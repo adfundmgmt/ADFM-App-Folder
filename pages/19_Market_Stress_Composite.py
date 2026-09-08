@@ -11,6 +11,7 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 
 from adfm_core.market_data import canonicalize_date_index
+from adfm_core.primary_data import fetch_fred_symbols, render_fred_status
 from adfm_core.palette import PASTEL
 from adfm_core.ui import (
     PageHeader,
@@ -681,6 +682,18 @@ if not moves.empty:
     )
     st.dataframe(styled_moves, use_container_width=True, hide_index=True)
 
+st.markdown("### Independent financial-conditions comparison")
+conditions, conditions_status = fetch_fred_symbols(("NFCI", "STLFSI4"), start="2000-01-01")
+render_fred_status(conditions_status)
+for column, (symbol, label) in zip(st.columns(2), (("NFCI", "Chicago Fed NFCI"), ("STLFSI4", "St. Louis Fed Financial Stress Index"))):
+    with column:
+        if symbol in conditions and conditions[symbol].notna().any():
+            values = conditions[symbol].dropna()
+            st.metric(label, f"{values.iloc[-1]:.2f}")
+            st.caption(f"Weekly observation: {values.index[-1]:%Y-%m-%d}")
+            st.line_chart(values)
+st.caption("Weekly, revised macro comparisons; they do not change the daily Market Stress Composite or hedge thresholds. Positive values indicate conditions above each index's historical average.")
+
 render_footer(
-    data_note="Primary inputs: Yahoo Finance market history; local last-good cache on provider failure."
+    data_note="Primary inputs: Yahoo Finance market history; Federal Reserve NFCI and STLFSI4 comparison series through FRED; validated saved observations on provider failure."
 )

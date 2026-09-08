@@ -108,6 +108,11 @@ class YieldPageRecoveryTests(unittest.TestCase):
         dates = pd.bdate_range("2025-01-02", periods=420)
         official = pd.DataFrame({"Y3M": np.linspace(4.3, 4., len(dates)), "Y5": np.linspace(4.4, 4.1, len(dates)),
                                  "Y10": np.linspace(4.5, 4.3, len(dates)), "Y30": np.linspace(4.7, 4.6, len(dates))}, index=dates)
+        official["Y2"] = 4.1
+        official["R5"] = 1.7
+        official["R10"] = 1.8
+        official["BE5"] = 2.2
+        official["BE10"] = 2.3
         fred.return_value = (official, pd.DataFrame([{"symbol": "DGS10", "status": "OK", "data_through": str(dates[-1].date())}]))
         app = AppTest.from_file(str(ROOT / "pages" / "4_Yield_Curve_Rates_Regime_Monitor.py"), default_timeout=30).run()
         self.assertEqual(list(app.exception), [])
@@ -120,3 +125,5 @@ class YieldPageRecoveryTests(unittest.TestCase):
         self.assertEqual(list(app.exception), [])
         self.assertTrue(len(app.dataframe) > 0)
         self.assertEqual(fred.call_count, 1)
+        yahoo.assert_not_called()
+        self.assertTrue(any("2Y Treasury" in item.value for item in app.markdown))

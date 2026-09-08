@@ -7,6 +7,8 @@ owns all controls and rendering, so every Streamlit rerun follows one code path.
 
 from __future__ import annotations
 
+from adfm_core.primary_data import render_fred_status
+
 from pathlib import Path
 from typing import Any
 
@@ -226,6 +228,8 @@ with st.sidebar:
 
 with st.spinner("Loading primary-source liquidity data..."):
     fred, fred_errors = load_fred(FRED_IDS)
+
+render_fred_status(pd.DataFrame(fred.attrs.get("fred_status", [])))
 
 if fred.empty:
     st.error(

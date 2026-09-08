@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from adfm_core.primary_data import fetch_fred_symbols, render_fred_status
 from adfm_core.palette import PASTEL_20
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import yfinance as yf
@@ -1573,6 +1574,13 @@ if stale_bdays > 1:
 
 # Keep regime proxies disabled for this stripped version. The page is now only
 # calendar-year analogs, base-rate diagnostics, and current percentiles.
+with st.expander("Official rates and financial conditions context"):
+    macro_context, macro_status = fetch_fred_symbols(("DGS10", "NFCI"), start=str(close_px.index.min().date()), end=str(close_px.index.max().date()))
+    render_fred_status(macro_status)
+    for symbol, label in (("DGS10", "10Y Treasury yield (%)"), ("NFCI", "Chicago Fed financial conditions (weekly index)")):
+        if symbol in macro_context and macro_context[symbol].notna().any():
+            st.line_chart(macro_context[symbol].dropna().rename(label))
+    st.caption("Context only; these series do not alter the calendar-year analog rankings. Historical values use latest revisions and are not a point-in-time backtest.")
 regime_data, _ = load_regime_data(close_px, enabled=False)
 feature_df = build_feature_frame(close_px, regime_data)
 base_df = historical_universe(feature_df, start_year=start_year, min_history_days=252, max_horizon=252)

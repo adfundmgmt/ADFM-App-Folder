@@ -12,7 +12,7 @@ from plotly.subplots import make_subplots
 
 from adfm_core.data_registry import TREASURY_YIELD_SERIES
 from adfm_core.palette import PASTEL, PASTEL_RATES_SCALE
-from adfm_core.primary_data import fetch_fred_series
+from adfm_core.primary_data import fetch_fred_series, render_fred_status
 from adfm_core.ui import (
     PageHeader,
     inject_institutional_tool_finish,
@@ -54,7 +54,9 @@ PERIODS: Dict[str, Dict[str, object]] = {
     "YTD": {"kind": "ytd", "threshold": 35},
 }
 
-CURVE_OPTIONS = ["3m10y", "5s10s", "10s30s", "5s30s"]
+CURVE_OPTIONS = ["2s10s", "3m10y", "5s10s", "10s30s", "5s30s"]
+TENOR_YEARS = {"Y3M": 0.25, "Y2": 2.0, "Y5": 5.0, "Y10": 10.0, "Y30": 30.0}
+YIELD_LABELS["Y2"] = "2Y"
 
 COLORS = {
     "ink": "#111111",
@@ -383,34 +385,30 @@ def split_yahoo_yields(close: pd.DataFrame) -> pd.DataFrame:
     for ticker in yield_cols:
         yields[ticker] = normalize_yahoo_yield_series(yields[ticker])
     yields = yields.rename(columns=YIELD_TICKER_TO_FIELD)
-    return yields.ffill().dropna(how="all")
+    return yields.dropna(how="all")
 
 
 @st.cache_data(ttl=900, max_entries=16, show_spinner=False)
 def fetch_yield_panel(tickers: Tuple[str, ...], start_date: date, end_date: date):
-    """Use one coherent source for the curve, with official yields on failure."""
-    close, diagnostics = fetch_yahoo_close(tickers, start_date, end_date)
-    rates = split_yahoo_yields(close)
-    usable = [column for column in rates if rates[column].notna().any()]
+    """Prefer the saved official curve; never splice nominal providers."""
+    official, status = fetch_fred_series(TREASURY_YIELD_SERIES, start=start_date.isoformat(), end=end_date.isoformat())
+    usable = [c for c in TENOR_YEARS if c in official and official[c].notna().any()]
+    notes = tuple(f"{r['symbol']}: {r['status']} (through {r.get('data_through')})" for r in status.to_dict("records"))
     if "Y10" in usable and len(usable) >= 2:
-        return rates, diagnostics, "Yahoo Finance via yfinance"
-    official, status = fetch_fred_series(
-        TREASURY_YIELD_SERIES,
-        start=start_date.isoformat(),
-        end=end_date.isoformat(),
-    )
-    notes = list(diagnostics)
-    notes.append("Yahoo curve unavailable or incomplete; using Federal Reserve constant-maturity yields via FRED.")
-    for row in status.to_dict("records"):
-        notes.append(f"{row['symbol']}: {row['status']} (through {row.get('data_through')})")
-    # Keep the panel wholly in FRED percent units. Never splice different yield
-    # definitions into the same curve or run Yahoo's unit heuristic on FRED.
-    return official.dropna(how="all"), tuple(notes), "Federal Reserve / FRED constant-maturity yields"
+        official.attrs["fred_status"] = status.to_dict("records")
+        return official.dropna(how="all"), notes, "Federal Reserve / FRED constant-maturity yields"
+    close, yahoo_notes = fetch_yahoo_close(tickers, start_date, end_date)
+    rates = split_yahoo_yields(close)
+    rates.attrs["fred_status"] = status.to_dict("records")
+    return rates, notes + yahoo_notes, "Yahoo Finance fallback (official curve unavailable)"
+
 
 
 def add_derived_yahoo_rates(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
+    if {"Y10", "Y2"}.issubset(out.columns):
+        out["2s10s"] = out["Y10"] - out["Y2"]
     if {"Y10", "Y3M"}.issubset(out.columns):
         out["3m10y"] = out["Y10"] - out["Y3M"]
     if {"Y10", "Y5"}.issubset(out.columns):
@@ -427,13 +425,15 @@ def available_curve_columns(df: pd.DataFrame) -> List[str]:
     return [
         c
         for c in CURVE_OPTIONS
-        if c in df.columns and df[c].dropna().any()
+        if c in df.columns and df[c].notna().any()
     ]
 
 
 def label_for_series(col: str) -> str:
     labels = {
         "Y3M": "3M",
+        "Y2": "2Y",
+        "2s10s": "2s10s",
         "Y5": "5Y",
         "Y10": "10Y",
         "Y30": "30Y",
@@ -455,7 +455,7 @@ def classify_regime(
     if not np.isfinite(ten):
         return (
             "Insufficient Data",
-            "Need a valid Yahoo 10Y series.",
+            "Need a valid 10Y series.",
             COLORS["amber"],
         )
 
@@ -565,7 +565,7 @@ def regime_read(regime: str) -> str:
     }
     return reads.get(
         regime,
-        "Signal quality is low. Check data freshness and missing Yahoo yield symbols.",
+        "Signal quality is low. Check data freshness and missing yield maturities.",
     )
 
 
@@ -840,10 +840,11 @@ with st.spinner("Loading Treasury yield data..."):
 if rates_raw.empty:
     st.error("No usable Treasury yields loaded from Yahoo Finance or Federal Reserve / FRED.")
     if diagnostics:
-        with st.expander("Yahoo download status", expanded=True):
+        with st.expander("Yield download status", expanded=True):
             st.code("\n".join(diagnostics[-80:]))
     st.stop()
 
+render_fred_status(pd.DataFrame(rates_raw.attrs.get("fred_status", [])))
 rates = add_derived_yahoo_rates(rates_raw)
 
 if rates.empty or "Y10" not in rates.columns or rates["Y10"].dropna().empty:
@@ -852,7 +853,7 @@ if rates.empty or "Y10" not in rates.columns or rates["Y10"].dropna().empty:
         "A 10Y yield is required to classify the rates regime."
     )
     if diagnostics:
-        with st.expander("Yahoo download status", expanded=True):
+        with st.expander("Yield download status", expanded=True):
             st.code("\n".join(diagnostics[-80:]))
     st.stop()
 
@@ -874,10 +875,10 @@ if last_obs is not None:
     ).days
     st.caption(
         f"Source: {yield_source}. Last yield observation: "
-        f"{last_obs.date()}. Maturities: 3M, 5Y, 10Y, 30Y."
+        f"{last_obs.date()}. Maturities: 3M, 2Y, 5Y, 10Y, 30Y where available."
     )
     if yield_source.startswith("Federal Reserve"):
-        st.info("Yahoo yields were unavailable. This view uses Federal Reserve constant-maturity yields from FRED in percent. The 3M investment-basis yield differs from Yahoo's ^IRX bill-discount index; the entire curve uses the same FRED source.")
+        st.info("This view uses Federal Reserve constant-maturity yields from FRED in percent. The 3M investment-basis yield differs from Yahoo's ^IRX bill-discount index; the entire nominal curve uses one source.")
     if age_days > 4:
         st.warning(
             f"Last yield observation is {last_obs.date()}. "
@@ -897,7 +898,7 @@ if missing_yield_tickers:
     )
 
 if show_status:
-    with st.expander("Yahoo download status", expanded=False):
+    with st.expander("Yield download status", expanded=False):
         available = [
             ticker
             for ticker in all_tickers
@@ -959,7 +960,9 @@ cards = [
     ),
 ]
 
-for col, card in zip(st.columns(6), cards):
+cards.insert(2, ("2Y Treasury", fmt_pct(latest(rates["Y2"])) if "Y2" in rates else "N/A",
+                 f"{regime_period} {fmt_bp(change_bp(rates['Y2'], regime_period))}" if "Y2" in rates else "Unavailable", COLORS["slate"]))
+for col, card in zip(st.columns(len(cards)), cards):
     with col:
         metric_card(*card)
 
@@ -974,8 +977,8 @@ st.markdown(
 
 available_yields = [
     c
-    for c in ["Y3M", "Y5", "Y10", "Y30"]
-    if c in rates.columns and rates[c].dropna().any()
+    for c in TENOR_YEARS
+    if c in rates.columns and rates[c].notna().any()
 ]
 curve_data = rates[available_yields].dropna(how="all")
 
@@ -994,7 +997,7 @@ with left:
 
     if len(available_yields) < 2 or curve_data.empty:
         st.info(
-            "At least two Yahoo yield tenors are needed for the curve snapshot."
+            "At least two yield tenors are needed for the curve snapshot."
         )
     else:
         latest_curve, comparison_curve = curve_comparison_values(
@@ -1002,14 +1005,7 @@ with left:
             curve_compare,
         )
 
-        x_vals = [
-            float(
-                YAHOO_YIELD_TICKERS[
-                    FIELD_TO_TICKER[c]
-                ]["years"]
-            )
-            for c in available_yields
-        ]
+        x_vals = [TENOR_YEARS[c] for c in available_yields]
         x_labels = [YIELD_LABELS[c] for c in available_yields]
 
         fig = go.Figure()
@@ -1131,6 +1127,19 @@ st.plotly_chart(
     config=chart_display_mode(),
 )
 
+st.markdown("<div class='section-title'>Real Yields and Inflation Compensation</div>", unsafe_allow_html=True)
+real_columns = {"R5": "5Y real yield", "R10": "10Y real yield", "BE5": "5Y breakeven", "BE10": "10Y breakeven"}
+real_available = [c for c in real_columns if c in rates_raw and rates_raw[c].notna().any()]
+if real_available:
+    for column, field in zip(st.columns(len(real_available)), real_available):
+        values = rates_raw[field].dropna()
+        column.metric(real_columns[field], f"{values.iloc[-1]:.2f}%")
+        column.caption(f"Observed {values.index[-1]:%Y-%m-%d}")
+    st.line_chart(rates_raw[real_available].rename(columns=real_columns), y_label="Percent")
+    st.caption("Breakevens measure market inflation compensation and include risk and liquidity premia; they are not a pure inflation forecast.")
+else:
+    st.info("Official real yields and breakevens are unavailable; no substitute values are estimated.")
+
 if show_table:
     st.markdown(
         "<div class='section-title'>Source Yield Data</div>",
@@ -1158,13 +1167,12 @@ if show_table:
 st.markdown(
     """
     <div class='data-note'>
-        Method note: this page uses Yahoo Finance Treasury-yield symbols, with
-        Federal Reserve constant-maturity yields via FRED when Yahoo is unavailable.
-        It does not estimate missing 2Y yields, real yields, breakevens, or
-        cross-asset confirmation. Missing observations remain unavailable.
+        Method note: official Treasury nominal and real yields and inflation breakevens are loaded from validated FRED data.
+        Yahoo supplies a separate nominal-curve fallback when official data is unavailable.
+        Missing observations remain unavailable; sources are never mixed within the nominal curve.
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-render_footer(data_note="Primary inputs: Yahoo Finance Treasury yields; Federal Reserve / FRED constant-maturity yields on provider failure. The active source and observation date are shown above.")
+render_footer(data_note="Primary inputs: Federal Reserve / FRED nominal and real Treasury yields and inflation breakevens; Yahoo nominal-curve fallback. The active source and observation date are shown above.")
