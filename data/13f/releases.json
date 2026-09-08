@@ -34,5 +34,41 @@
     "label": "2024 December 2025 January February 13F",
     "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01dec2024-28feb2025_form13f.zip",
     "size_label": "82.53 MB"
+  },
+  {
+    "slug": "01sep2024-30nov2024_form13f",
+    "label": "2024 September October November 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01sep2024-30nov2024_form13f.zip",
+    "size_label": "77.88 MB"
+  },
+  {
+    "slug": "01jun2024-31aug2024_form13f",
+    "label": "2024 June July August 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01jun2024-31aug2024_form13f.zip",
+    "size_label": "80.02 MB"
+  },
+  {
+    "slug": "01mar2024-31may2024_form13f",
+    "label": "2024 March April May 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01mar2024-31may2024_form13f.zip",
+    "size_label": "74.55 MB"
+  },
+  {
+    "slug": "01jan2024-29feb2024_form13f",
+    "label": "2024 January February 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01jan2024-29feb2024_form13f.zip",
+    "size_label": "69.66 MB"
+  },
+  {
+    "slug": "2023q4_form13f",
+    "label": "2023 Q4 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/2023q4_form13f.zip",
+    "size_label": "69.64 MB"
+  },
+  {
+    "slug": "2023q3_form13f",
+    "label": "2023 Q3 13F",
+    "url": "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/2023q3_form13f.zip",
+    "size_label": "66.95 MB"
   }
 ]
