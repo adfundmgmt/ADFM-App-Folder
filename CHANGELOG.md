@@ -4,6 +4,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Restored scheduled currency-snapshot validation by installing its pinned Python dependencies, and restored the SEC 13F release refresh by running it as a module with the complete pinned application dependencies.
 - All-page release audit: CFTC now retrieves every response page (the former 50,000-row cap omitted the latest year of physical-commodity positioning) and rejects stale reports from current rankings. The Treasury curve recovers from Yahoo failures using a fully disclosed, unmixed Federal Reserve / FRED constant-maturity curve.
 - Ratio chartbooks now bridge only short interior gaps and retain actual observation endpoints; cross-asset YTD returns include the first trading day. Missing leadership trend, recession, policy-change, and market-stress breadth inputs no longer become false signals. Market Memory now converts Treasury yield changes to basis points correctly and computes prior-year anchors without repeatedly scanning the full history.
 - Corrected shared daily date normalization, duplicate selection, timezone-aware session cutoffs, dividend-adjusted price/volume treatment, missing return endpoints, and rejection of infinite observations or negative volume.

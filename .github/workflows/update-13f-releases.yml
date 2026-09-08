@@ -23,10 +23,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install refresher dependencies
-        run: python -m pip install requests beautifulsoup4 pandas pyarrow
+        # adfm_core imports the shared Streamlit/market-data package at startup.
+        run: python -m pip install -r requirements.txt
 
       - name: Refresh official SEC release list
-        run: python scripts/update_13f_release_fallbacks.py
+        run: python -m scripts.update_13f_release_fallbacks
 
       - name: Commit a newly published SEC release
         shell: bash
