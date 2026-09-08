@@ -16,23 +16,17 @@ def rolling_percentile_previous(
 ) -> pd.Series:
     """Rank each observation against prior observations only.
 
-    Excluding the current observation avoids a small but persistent look-ahead bias
-    in live percentile signals. Ties receive half credit.
+    The reference sample excludes the current observation. Ties receive half
+    credit. No future observations enter the calculation.
     """
-    clean = pd.to_numeric(series, errors="coerce")
+    clean = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
     window = max(int(window), 2)
     min_periods = max(1, min(int(min_periods), window))
 
-    def _rank(values: np.ndarray) -> float:
-        current = values[-1]
-        history = pd.Series(values[:-1]).dropna().to_numpy(dtype=float)
-        if not np.isfinite(current) or len(history) < min_periods:
-            return np.nan
-        below = float(np.sum(history < current))
-        tied = float(np.sum(history == current))
-        return ((below + 0.5 * tied) / len(history)) * float(scale)
-
-    return clean.rolling(window + 1, min_periods=min_periods + 1).apply(_rank, raw=True)
+    rolling = clean.rolling(window + 1, min_periods=min_periods + 1)
+    # Average rank = prior values below + half prior ties + 1 (the current
+    # observation). Subtracting 1 preserves the previous-only formula exactly.
+    return (rolling.rank(method="average") - 1.0).div(rolling.count() - 1.0) * float(scale)
 
 
 def grouped_weighted_composite(
@@ -55,14 +49,6 @@ def grouped_weighted_composite(
         if name and name in scores.columns:
             groups.setdefault(group, []).append(spec)
 
-    def _inside_group(row: pd.Series, member_weights: pd.Series) -> float:
-        valid = row.dropna()
-        if valid.empty:
-            return np.nan
-        active = member_weights.loc[valid.index]
-        total = float(active.sum())
-        return float((valid * active).sum() / total) if total > 0 else np.nan
-
     group_frame = pd.DataFrame(index=scores.index)
     for group, members in groups.items():
         names = [str(member["name"]) for member in members]
@@ -72,10 +58,10 @@ def grouped_weighted_composite(
                 for member in members
             }
         )
-        group_frame[group] = scores[names].apply(
-            _inside_group,
-            axis=1,
-            member_weights=weights,
+        members_frame = scores[names]
+        total = members_frame.notna().mul(weights).sum(axis=1)
+        group_frame[group] = members_frame.mul(weights).sum(axis=1, min_count=1).div(
+            total.where(total > 0)
         )
 
     if group_frame.empty:
@@ -89,16 +75,11 @@ def grouped_weighted_composite(
         }
     )
 
-    def _across_groups(row: pd.Series) -> float:
-        valid = row.dropna()
-        if len(valid) < max(1, int(min_groups)):
-            return np.nan
-        active = declared.loc[valid.index]
-        total = float(active.sum())
-        return float((valid * active).sum() / total) if total > 0 else np.nan
-
-    composite = group_frame.apply(_across_groups, axis=1)
     valid_groups = group_frame.notna().sum(axis=1)
+    total = group_frame.notna().mul(declared).sum(axis=1)
+    composite = group_frame.mul(declared).sum(axis=1, min_count=1).div(
+        total.where(total > 0)
+    ).where(valid_groups >= max(1, int(min_groups)))
     breadth = (group_frame.gt(0).sum(axis=1) / valid_groups.replace(0, np.nan)) * 100.0
     coverage = (valid_groups / max(1, len(group_frame.columns))) * 100.0
     breadth = breadth.where(valid_groups >= max(1, int(min_groups)))

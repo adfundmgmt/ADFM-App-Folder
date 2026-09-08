@@ -32,6 +32,7 @@ class MarketDataConfig:
     chunk_size: int = 40
     retries: int = 3
     retry_base_seconds: float = 0.75
+    request_timeout_seconds: float = 10.0
     completed_session_cutoff: clock_time = clock_time(16, 15)
 
 
@@ -69,8 +70,11 @@ def canonicalize_date_index(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     out.index = pd.to_datetime(out.index)
     if getattr(out.index, "tz", None) is not None:
-        out.index = out.index.tz_convert(None)
-    return out.sort_index().loc[~out.index.duplicated(keep="last")]
+        # Daily labels represent the exchange's date, not a UTC instant.
+        out.index = out.index.tz_localize(None)
+    out.index = out.index.normalize()
+    out = out.loc[out.index.notna()]
+    return out.loc[~out.index.duplicated(keep="last")].sort_index()
 
 
 def drop_unfinished_daily_session(
@@ -86,6 +90,8 @@ def drop_unfinished_daily_session(
     if frame.empty:
         return frame.copy()
     current = now or datetime.now(ZoneInfo("America/New_York"))
+    if current.tzinfo is not None:
+        current = current.astimezone(ZoneInfo("America/New_York"))
     latest = pd.Timestamp(frame.index[-1]).date()
     if latest == current.date() and current.timetz().replace(tzinfo=None) < cutoff:
         return frame.iloc[:-1].copy()
@@ -101,10 +107,13 @@ def safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
 
 def percent_change(series: pd.Series, periods: int) -> float:
     """Latest point-to-point return, or NaN when the requested window is thin."""
-    clean = pd.to_numeric(series, errors="coerce").dropna()
-    if len(clean) <= periods:
+    clean = pd.to_numeric(series, errors="coerce")
+    if periods < 1 or len(clean) <= periods:
         return np.nan
-    return float(clean.iloc[-1] / clean.iloc[-(periods + 1)] - 1.0)
+    latest, previous = clean.iloc[-1], clean.iloc[-(periods + 1)]
+    if pd.isna(latest) or pd.isna(previous) or not np.isfinite([latest, previous]).all() or previous == 0:
+        return np.nan
+    return float(latest / previous - 1.0)
 
 
 def benchmark_calendar(
@@ -150,7 +159,11 @@ def align_to_benchmark_calendar(
 
 
 def adjusted_ohlcv(raw: pd.DataFrame) -> pd.DataFrame:
-    """Derive split/dividend-adjusted OHLCV while retaining raw data upstream."""
+    """Adjust Yahoo OHLC prices while preserving provider share volume.
+
+    Yahoo already handles splits in its historical share volume. The adjusted
+    close ratio also includes dividends and must not be used to rescale volume.
+    """
     out = raw.copy()
     if out.empty or not {"Open", "High", "Low", "Close", "Volume"}.issubset(
         out.columns
@@ -159,12 +172,9 @@ def adjusted_ohlcv(raw: pd.DataFrame) -> pd.DataFrame:
     close = pd.to_numeric(out["Close"], errors="coerce")
     adjusted_close = pd.to_numeric(out.get("Adj Close", close), errors="coerce")
     factor = safe_divide(adjusted_close, close)
-    if factor.notna().any():
-        for column in ("Open", "High", "Low", "Close"):
-            out[column] = pd.to_numeric(out[column], errors="coerce") * factor
-        out["Volume"] = safe_divide(
-            pd.to_numeric(out["Volume"], errors="coerce"), factor
-        )
+    for column in ("Open", "High", "Low", "Close"):
+        out[column] = pd.to_numeric(out[column], errors="coerce") * factor
+    out["Volume"] = pd.to_numeric(out["Volume"], errors="coerce")
     out["Adj Close"] = pd.to_numeric(out["Close"], errors="coerce")
     return out.replace([np.inf, -np.inf], np.nan)
 
@@ -210,6 +220,7 @@ def _download_chunk(
                 auto_adjust=False,
                 group_by="column",
                 threads=True,
+                timeout=config.request_timeout_seconds,
             )
             frames = _extract_ohlcv(raw, tickers)
             if frames:
@@ -222,7 +233,7 @@ def _download_chunk(
     return {}
 
 
-@st.cache_data(ttl=DEFAULT_CONFIG.cache_ttl_seconds, show_spinner=False)
+@st.cache_data(ttl=DEFAULT_CONFIG.cache_ttl_seconds, max_entries=128, show_spinner=False)
 def fetch_daily_ohlcv(
     tickers: Tuple[str, ...], period: str = "3y"
 ) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:

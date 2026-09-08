@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
 import pandas as pd
 
 from adfm_core.data_integrity import (
@@ -54,6 +55,15 @@ class DataIntegrityContractTests(unittest.TestCase):
         row = report.diagnostics.set_index("Ticker").loc["AAA"]
         self.assertEqual(row["Valid Sessions"], 4)
         self.assertEqual(row["Missing Benchmark Sessions"], 1)
+
+    def test_infinite_prices_and_negative_volume_are_excluded(self) -> None:
+        infinite = valid_frame()
+        infinite.loc[infinite.index[2], "Close"] = np.inf
+        negative = valid_frame()
+        negative.loc[negative.index[2], "Volume"] = -1
+        report = build_data_quality_report({"SPY": valid_frame(), "INF": infinite, "NEG": negative}, "SPY", policy=self.policy)
+        self.assertEqual(report.reason_for("INF"), "Nonfinite raw observations")
+        self.assertEqual(report.reason_for("NEG"), "Negative volume")
 
 
 if __name__ == "__main__":

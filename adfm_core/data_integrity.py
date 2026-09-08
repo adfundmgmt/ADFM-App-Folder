@@ -88,17 +88,23 @@ def build_data_quality_report(
         observed = frame.copy()
         for field in policy.required_fields:
             observed[field] = pd.to_numeric(observed[field], errors="coerce")
+        nonfinite = np.isinf(observed[list(policy.required_fields)].to_numpy(dtype=float, na_value=np.nan)).any()
+        observed = observed.replace([np.inf, -np.inf], np.nan)
         complete = observed.dropna(subset=list(policy.required_fields))
         if complete.empty:
             rows.append(_empty_row(ticker, "No complete raw observations"))
             continue
         reason: Optional[str] = None
-        if len(complete) < policy.min_valid_sessions:
+        if nonfinite:
+            reason = "Nonfinite raw observations"
+        elif len(complete) < policy.min_valid_sessions:
             reason = f"Thin history (<{policy.min_valid_sessions} complete sessions)"
         elif policy.reject_invalid_ranges and {"High", "Low"}.issubset(complete.columns) and (complete["High"] < complete["Low"]).any():
             reason = "Invalid high/low range"
         elif policy.reject_nonpositive_close and (complete["Close"] <= 0).any():
             reason = "Nonpositive close"
+        elif "Volume" in complete and (complete["Volume"] < 0).any():
+            reason = "Negative volume"
         stale = stale_session_count(complete, sessions)
         if reason is None and stale > policy.max_stale_sessions:
             reason = f"Stale (>{policy.max_stale_sessions} benchmark sessions)"

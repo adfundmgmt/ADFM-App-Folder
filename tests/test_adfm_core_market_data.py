@@ -54,6 +54,24 @@ class MarketDataPrimitiveTests(unittest.TestCase):
         result = drop_unfinished_daily_session(frame, now=now)
         self.assertEqual(result.index.max().date().isoformat(), "2026-07-13")
 
+    def test_unsorted_duplicate_dates_keep_last_provider_observation(self) -> None:
+        frame = pd.DataFrame({"Close": [20.0, 10.0, 21.0]},
+                             index=pd.to_datetime(["2026-01-05", "2026-01-02", "2026-01-05"]))
+        result = canonicalize_date_index(frame)
+        self.assertEqual(result["Close"].tolist(), [10.0, 21.0])
+        self.assertTrue(result.index.is_unique)
+
+    def test_daily_dates_preserve_exchange_date_and_normalize_midnight(self) -> None:
+        frame = pd.DataFrame({"Close": [10.0, 11.0]}, index=pd.DatetimeIndex(
+            ["2026-01-05 00:00", "2026-01-06 16:00"], tz="Asia/Tokyo"))
+        result = canonicalize_date_index(frame)
+        self.assertEqual(result.index.tolist(), list(pd.to_datetime(["2026-01-05", "2026-01-06"])))
+
+    def test_session_cutoff_converts_aware_clock_to_new_york(self) -> None:
+        frame = sample_ohlcv(pd.to_datetime(["2026-07-13", "2026-07-14"]))
+        now = datetime(2026, 7, 14, 19, 0, tzinfo=ZoneInfo("UTC"))
+        self.assertEqual(len(drop_unfinished_daily_session(frame, now=now)), 1)
+
     def test_alignment_does_not_fill_by_default(self) -> None:
         sessions = pd.DatetimeIndex(["2026-01-02", "2026-01-05", "2026-01-06"])
         frame = pd.DataFrame({"Close": [10.0, 11.0]}, index=[sessions[0], sessions[2]])
@@ -67,11 +85,22 @@ class MarketDataPrimitiveTests(unittest.TestCase):
         benchmark = sample_ohlcv(index)
         self.assertEqual(stale_session_count(benchmark.iloc[:-1], benchmark_calendar({"SPY": benchmark}, "SPY")), 1)
 
-    def test_adjusted_ohlcv_scales_prices_and_volume(self) -> None:
+    def test_adjusted_ohlcv_scales_prices_and_preserves_provider_volume(self) -> None:
         frame = sample_ohlcv(pd.bdate_range("2026-01-02", periods=3))
         adjusted = adjusted_ohlcv(frame)
         self.assertAlmostEqual(adjusted["Open"].iloc[0], 50.0)
-        self.assertAlmostEqual(adjusted["Volume"].iloc[0], 2_000.0)
+        pd.testing.assert_series_equal(adjusted["Volume"], frame["Volume"])
+
+    def test_missing_adjusted_prices_are_not_replaced_with_raw_prices(self) -> None:
+        frame = sample_ohlcv(pd.bdate_range("2026-01-02", periods=3))
+        frame["Adj Close"] = np.nan
+        self.assertTrue(adjusted_ohlcv(frame)["Close"].isna().all())
+
+    def test_return_horizon_does_not_compress_missing_sessions(self) -> None:
+        self.assertTrue(np.isnan(percent_change(pd.Series([100.0, np.nan, 110.0]), 1)))
+        self.assertAlmostEqual(percent_change(pd.Series([100.0, np.nan, 110.0]), 2), .1)
+        self.assertTrue(np.isnan(percent_change(pd.Series([100.0, 110.0, np.nan]), 1)))
+        self.assertTrue(np.isnan(percent_change(pd.Series([0.0, 110.0]), 1)))
 
     def test_close_panel_and_returns_preserve_missing_data(self) -> None:
         index = pd.bdate_range("2026-01-02", periods=3)
