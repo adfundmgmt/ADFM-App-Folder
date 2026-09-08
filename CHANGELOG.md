@@ -4,6 +4,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- SEC release publishing now explicitly stages only the curated manifest from the ignored 13F cache folder and retries when another update reaches main first.
 - Restored scheduled currency-snapshot validation by installing its pinned Python dependencies, and restored the SEC 13F release refresh by running it as a module with the complete pinned application dependencies.
 - Currency maps without a source observation date now display Undated and explain that freshness cannot be verified instead of labeling the snapshot Latest.
 - All-page release audit: CFTC now retrieves every response page (the former 50,000-row cap omitted the latest year of physical-commodity positioning) and rejects stale reports from current rankings. The Treasury curve recovers from Yahoo failures using a fully disclosed, unmixed Federal Reserve / FRED constant-maturity curve.
