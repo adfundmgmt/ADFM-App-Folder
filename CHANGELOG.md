@@ -4,6 +4,11 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Added a shared FRED service with validated, scheduled macro snapshots, bounded requests and retries, per-series failure isolation, atomic last-good storage, source/cadence/history diagnostics, and fail-closed ALFRED vintage requests. Known snapshots load without provider requests; vendor series retain local runtime caches.
+- Treasury now prefers an unmixed official curve and includes the 2Y tenor, 2s10s, 5Y/10Y real yields, and 5Y/10Y inflation breakevens. Yahoo remains a separate nominal-curve fallback.
+- Credit rankings disclose actual available history instead of calling limited ICE histories five-year rankings. Liquidity and sovereign FRED inputs share the same recovery service.
+- Added official economic context to Macro, weekly financial-condition comparisons to Stress and Memory, and explicit retrospective-vintage disclosure in Seasonality. The Currency engine FRED adapter preserves original fetch timestamps and rejects stale inputs.
+
 - SEC release publishing now explicitly stages only the curated manifest from the ignored 13F cache folder and retries when another update reaches main first.
 - Restored scheduled currency-snapshot validation by installing its pinned Python dependencies, and restored the SEC 13F release refresh by running it as a module with the complete pinned application dependencies.
 - Currency maps without a source observation date now display Undated and explain that freshness cannot be verified instead of labeling the snapshot Latest.

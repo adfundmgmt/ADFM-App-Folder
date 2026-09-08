@@ -15,12 +15,12 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
-from pandas_datareader import data as web
 
 from adfm_core.data_registry import PRIMARY_MACRO_SERIES, SeriesDefinition
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.palette import PASTEL, PASTEL_20
-from adfm_core.primary_data import fetch_fred_series
+from adfm_core.primary_data import fetch_fred_series, fetch_fred_symbols, render_fred_status
+from adfm_core.macro_history import percentile_context
 from adfm_core.ui import (
     PageHeader,
     inject_explorer_style,
@@ -359,14 +359,7 @@ def absolute_move(series: pd.Series | None, label: str, scale: float = 1.0) -> f
 
 
 def trailing_percentile(series: pd.Series | None, years: int) -> float:
-    s = clean_series(series)
-    if s.empty:
-        return np.nan
-    cutoff = pd.Timestamp(s.index[-1]) - pd.DateOffset(years=years)
-    window = s.loc[s.index >= cutoff]
-    if len(window) < 30:
-        return np.nan
-    return float((window <= window.iloc[-1]).mean())
+    return percentile_context(series, years)[0]
 
 
 def fmt_pct(value: float, digits: int = 2, signed: bool = True) -> str:
@@ -566,43 +559,9 @@ def fetch_oecd_sovereigns(start_date: date, end_date: date) -> Dict[str, pd.Seri
         for row in SOVEREIGN_UNIVERSE
         if row.get("fred")
     }
-    results: Dict[str, pd.Series] = {}
-    series_ids = list(id_to_country.keys())
-
-    try:
-        raw = web.DataReader(series_ids, "fred", start_date, end_date)
-        if isinstance(raw, pd.DataFrame) and not raw.empty:
-            for series_id, country in id_to_country.items():
-                if series_id not in raw.columns:
-                    continue
-                series = clean_series(raw[series_id])
-                if len(series) >= 2:
-                    results[country] = series
-    except Exception:
-        pass
-
-    missing = [series_id for series_id in series_ids if id_to_country[series_id] not in results]
-    if missing:
-        def fetch_one(series_id: str) -> Tuple[str, pd.Series]:
-            try:
-                raw = web.DataReader(series_id, "fred", start_date, end_date)
-                if raw is not None and not raw.empty and series_id in raw.columns:
-                    return series_id, clean_series(raw[series_id])
-            except Exception:
-                pass
-            return series_id, pd.Series(dtype=float)
-
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(fetch_one, series_id): series_id for series_id in missing}
-            for future in as_completed(futures):
-                series_id = futures[future]
-                try:
-                    _, series = future.result()
-                except Exception:
-                    series = pd.Series(dtype=float)
-                if len(series) >= 2:
-                    results[id_to_country[series_id]] = series
-    return results
+    panel, _ = fetch_fred_symbols(id_to_country, start=start_date.isoformat(), end=end_date.isoformat())
+    return {country: clean_series(panel[symbol]) for symbol, country in id_to_country.items()
+            if symbol in panel and panel[symbol].notna().sum() >= 2}
 
 
 def _te_slug(country: str) -> str:
@@ -1096,6 +1055,13 @@ with st.spinner("Loading credit and rates data..."):
     )
     market = fetch_market_prices(MARKET_TICKERS, history_start, history_end)
 
+render_fred_status(fred_status)
+spread_history_rows = [{"Series": name, "Ranking window": percentile_context(series, 5)[1]}
+                      for name, series in [("HY OAS", fred.get("hy_oas")), ("IG OAS", fred.get("ig_oas")), ("BBB OAS", fred.get("bbb_oas"))]]
+if any("available" in row["Ranking window"] for row in spread_history_rows):
+    st.info("FRED limits these ICE credit-spread histories to about three years. Rankings use the actual available history, shown below; they are not five-year comparisons.")
+    st.dataframe(pd.DataFrame(spread_history_rows), hide_index=True, width="stretch")
+
 proxy = ratio_frame(market) if not market.empty else pd.DataFrame()
 hy_oas = clean_series(fred["hy_oas"]) if "hy_oas" in fred else pd.Series(dtype=float)
 ig_oas = clean_series(fred["ig_oas"]) if "ig_oas" in fred else pd.Series(dtype=float)
@@ -1159,12 +1125,12 @@ render_kpi_cards(
         (
             "HY OAS",
             f"{hy_oas_level * 100:.0f} bp" if np.isfinite(hy_oas_level) else "N/A",
-            f"1M {fmt_bp(hy_oas_1m_bp)} · 5Y {fmt_percentile(spread_percentiles['HY OAS'])}",
+            f"1M {fmt_bp(hy_oas_1m_bp)} · {percentile_context(hy_oas, 5)[1]} {fmt_percentile(spread_percentiles['HY OAS'])}",
         ),
         (
             "IG OAS",
             f"{ig_oas_level * 100:.0f} bp" if np.isfinite(ig_oas_level) else "N/A",
-            f"5Y {fmt_percentile(spread_percentiles['IG OAS'])}",
+            f"{percentile_context(ig_oas, 5)[1]} {fmt_percentile(spread_percentiles['IG OAS'])}",
         ),
         (
             "10Y Treasury",

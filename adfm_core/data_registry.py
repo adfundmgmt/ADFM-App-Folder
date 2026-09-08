@@ -40,12 +40,17 @@ class ProxyDefinition:
 
 TREASURY_YIELD_SERIES: Final[tuple[SeriesDefinition, ...]] = tuple(
     SeriesDefinition(key, label, symbol, "Federal Reserve / FRED", "Treasury curve",
-                     "Daily Treasury constant-maturity yield, percent on an investment basis.")
+                     "Daily official rate in percent: nominal Treasury, TIPS real yield, or inflation compensation as labeled.")
     for key, label, symbol in (
         ("Y3M", "3-month Treasury", "DGS3MO"),
+        ("Y2", "2-year Treasury", "DGS2"),
         ("Y5", "5-year Treasury", "DGS5"),
         ("Y10", "10-year Treasury", "DGS10"),
         ("Y30", "30-year Treasury", "DGS30"),
+        ("R5", "5-year real Treasury", "DFII5"),
+        ("R10", "10-year real Treasury", "DFII10"),
+        ("BE5", "5-year inflation breakeven", "T5YIE"),
+        ("BE10", "10-year inflation breakeven", "T10YIE"),
     )
 )
 

@@ -19,14 +19,14 @@ import os
 
 import pandas as pd
 
+from adfm_core.fred_store import FredStore
+from adfm_core.fred_store import api_key as configured_key
 from cte.adapters.base import make_session, utcnow
 from cte.config import (
     FRED_API_KEY_ENV,
     FRED_BASE,
     FRED_SERIES,
     FRED_US_REAL,
-    HTTP_TIMEOUT,
-    HTTP_UA,
 )
 
 _OBSERVATIONS = FRED_BASE + "/series/observations"
@@ -54,29 +54,12 @@ def fetch_series(
     api_key: str | None = None,
 ) -> pd.DataFrame:
     """Raw observations for one FRED series → DataFrame[date, value]."""
-    sess = session or make_session()
-    key = api_key or get_api_key()
-    params = {
-        "series_id": series_id,
-        "api_key": key,
-        "file_type": "json",
-        "observation_start": observation_start,
-    }
-    r = sess.get(
-        _OBSERVATIONS,
-        params=params,
-        headers={"User-Agent": HTTP_UA, "Accept": "application/json"},
-        timeout=HTTP_TIMEOUT,
-    )
-    r.raise_for_status()
-    obs = r.json().get("observations", [])
-    rows = []
-    for o in obs:
-        v = o.get("value")
-        if v in (None, ".", ""):  # FRED marks missing as "."
-            continue
-        rows.append({"date": pd.to_datetime(o["date"]), "value": float(v)})
-    return pd.DataFrame(rows)
+    result = FredStore().get(series_id, observation_start, utcnow().date().isoformat(), key=api_key)
+    if result.series.empty or result.metadata.get("status") == "STALE":
+        raise RuntimeError(f"{series_id}: {result.metadata.get('error') or result.metadata['status']}")
+    frame = result.series.rename("value").rename_axis("date").reset_index().dropna(subset=["value"])
+    frame.attrs["fred_status"] = result.metadata
+    return frame
 
 
 def _tidy(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -94,7 +77,7 @@ def fetch_fred_macro(observation_start: str = "1990-01-01") -> pd.DataFrame:
     the whole pull — a discontinued OECD ID shouldn't take down the other 40.
     """
     sess = make_session()
-    key = get_api_key()
+    key = configured_key()
     fetched = utcnow()
     frames: list[pd.DataFrame] = []
     failures: list[tuple[str, str, str]] = []
@@ -110,7 +93,7 @@ def fetch_fred_macro(observation_start: str = "1990-01-01") -> pd.DataFrame:
             d["ccy"] = ccy
             d["metric"] = metric
             d["source"] = f"fred:{sid}"
-            d["fetched_at"] = fetched
+            d["fetched_at"] = pd.Timestamp(d.attrs.get("fred_status", {}).get("fetched_at", fetched)).tz_localize(None)
             frames.append(d)
         except Exception as e:  # noqa: BLE001 — surface, don't abort
             failures.append((ccy, metric, f"{sid}: {type(e).__name__}"))

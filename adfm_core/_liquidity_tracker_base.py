@@ -8,9 +8,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from pandas_datareader import data as pdr
 from plotly.subplots import make_subplots
 
+from adfm_core.fred_store import FredStore
 from adfm_core.market_data import (
     close_panel,
     configure_yfinance_cache,
@@ -274,31 +274,13 @@ def _normalize_fred_frame(raw: pd.DataFrame, series_id: str) -> pd.Series:
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def fetch_fred_one(series_id: str, start: str, end: str) -> pd.Series:
-    """Fetch one FRED series sequentially. Failed calls are not cached by Streamlit."""
-    errors: List[str] = []
+    result = FredStore().get(series_id, start, end)
+    if result.series.empty:
+        raise RuntimeError(result.metadata.get("error", "No FRED observations"))
+    series = result.series.copy()
+    series.attrs["fred_status"] = result.metadata
+    return series
 
-    try:
-        raw = pdr.DataReader(series_id, "fred", start, end)
-        return _normalize_fred_frame(raw, series_id)
-    except Exception as exc:
-        errors.append(f"pandas_datareader: {type(exc).__name__}: {exc}")
-
-    try:
-        response = requests.get(
-            FRED_CSV_URL.format(series_id=series_id, start=start, end=end),
-            headers={
-                "User-Agent": "Mozilla/5.0 ADFM-Liquidity-Monitor/3.1",
-                "Accept": "text/csv,application/octet-stream;q=0.9,*/*;q=0.8",
-            },
-            timeout=(8, 45),
-        )
-        response.raise_for_status()
-        raw = pd.read_csv(BytesIO(response.content))
-        return _normalize_fred_frame(raw, series_id)
-    except Exception as exc:
-        errors.append(f"direct CSV: {type(exc).__name__}: {exc}")
-
-    raise RuntimeError(" | ".join(errors))
 
 
 def load_fred(ids: Tuple[str, ...]) -> Tuple[pd.DataFrame, Dict[str, str]]:
@@ -310,6 +292,9 @@ def load_fred(ids: Tuple[str, ...]) -> Tuple[pd.DataFrame, Dict[str, str]]:
     for series_id in ids:
         try:
             data[series_id] = fetch_fred_one(series_id, FRED_START, end)
+            status = data[series_id].attrs.get("fred_status", {})
+            if status.get("status") == "STALE" or status.get("error"):
+                errors[series_id] = str(status.get("error") or "Observations are older than the expected publication window")
         except Exception as exc:
             errors[series_id] = str(exc)
 
@@ -320,7 +305,9 @@ def load_fred(ids: Tuple[str, ...]) -> Tuple[pd.DataFrame, Dict[str, str]]:
     panel = panel[~panel.index.duplicated(keep="last")]
     business_index = pd.date_range(panel.index.min(), panel.index.max(), freq="B")
     panel = panel.reindex(business_index).ffill(limit=10)
-    return panel.dropna(how="all"), errors
+    panel = panel.dropna(how="all")
+    panel.attrs["fred_status"] = [s.attrs.get("fred_status", {}) for s in data.values()]
+    return panel, errors
 
 
 @st.cache_data(ttl=60 * 60 * 4, show_spinner=False)

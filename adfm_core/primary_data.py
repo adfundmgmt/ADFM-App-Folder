@@ -1,78 +1,58 @@
-"""Primary-source macro loading with explicit source and freshness metadata."""
+"""Shared macro loading: snapshots first, bounded provider recovery, diagnostics."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Iterable
 
 import pandas as pd
-from pandas_datareader import data as web
 
 from .data_registry import PRIMARY_MACRO_SERIES, SeriesDefinition
-
-
-@dataclass(frozen=True)
-class PrimarySeriesStatus:
-    """Provider status for one primary-source series."""
-
-    key: str
-    symbol: str
-    provider: str
-    data_through: str | None
-    observations: int
-    status: str
-    error: str | None = None
+from .fred_store import FredStore
 
 
 def fetch_fred_series(
     definitions: Iterable[SeriesDefinition] = PRIMARY_MACRO_SERIES,
-    *,
-    start: str = "2000-01-01",
-    end: str | None = None,
+    *, start: str = "2000-01-01", end: str | None = None,
+    refresh: bool = False, offline: bool = False,
+    store: FredStore | None = None, vintage: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch registered FRED series and return values plus status diagnostics.
-
-    Each series is requested independently. One provider failure cannot erase
-    the remaining macro panel. Missing values remain missing.
-    """
-
-    values: dict[str, pd.Series] = {}
-    statuses: list[PrimarySeriesStatus] = []
+    definitions = tuple(definitions)
+    if not definitions:
+        return pd.DataFrame(), pd.DataFrame()
     end_date = end or datetime.now(timezone.utc).date().isoformat()
+    source = store or FredStore()
 
-    for definition in definitions:
-        try:
-            raw = web.DataReader(definition.symbol, "fred", start, end_date)
-            series = pd.to_numeric(raw[definition.symbol], errors="coerce")
-            series.index = pd.to_datetime(series.index).tz_localize(None)
-            values[definition.key] = series
-            observed = series.dropna()
-            statuses.append(
-                PrimarySeriesStatus(
-                    key=definition.key,
-                    symbol=definition.symbol,
-                    provider=definition.provider,
-                    data_through=observed.index.max().date().isoformat()
-                    if not observed.empty
-                    else None,
-                    observations=len(observed),
-                    status="OK" if not observed.empty else "EMPTY",
-                )
-            )
-        except Exception as exc:
-            statuses.append(
-                PrimarySeriesStatus(
-                    key=definition.key,
-                    symbol=definition.symbol,
-                    provider=definition.provider,
-                    data_through=None,
-                    observations=0,
-                    status="FAILED",
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-            )
+    def fetch(definition):
+        result = source.get(definition.symbol, start, end_date, refresh=refresh, offline=offline, vintage=vintage)
+        status = {**result.metadata, "key": definition.key, "provider": definition.provider}
+        return definition.key, result.series, status
 
-    panel = pd.DataFrame(values).sort_index() if values else pd.DataFrame()
-    diagnostics = pd.DataFrame(asdict(item) for item in statuses)
-    return panel, diagnostics
+    with ThreadPoolExecutor(max_workers=min(3, len(definitions))) as pool:
+        rows = list(pool.map(fetch, definitions))
+    values = {key: series for key, series, _ in rows if not series.empty}
+    return pd.DataFrame(values).sort_index(), pd.DataFrame([status for _, _, status in rows])
+
+
+def fetch_fred_symbols(symbols: Iterable[str], *, start: str, end: str | None = None):
+    definitions = tuple(SeriesDefinition(s, s, s, "FRED", "Macro", "Natural-unit provider observations") for s in dict.fromkeys(symbols))
+    return fetch_fred_series(definitions, start=start, end=end)
+
+
+def render_fred_status(status: pd.DataFrame, *, expanded: bool = False):
+    """Every consuming page can disclose failures, staleness and provenance."""
+    import streamlit as st
+
+    if status.empty:
+        return
+    problems = status[status["status"].isin(["FAILED", "STALE", "EMPTY"])]
+    if not problems.empty:
+        st.warning("Some macro observations are unavailable or older than their expected publication window: " + ", ".join(problems["symbol"].astype(str)))
+    recovered = status[status.get("delivery", pd.Series(index=status.index, dtype=str)).eq("last-good fallback")]
+    if not recovered.empty:
+        st.info("A provider refresh failed. The last validated observations are retained with their original dates.")
+    with st.expander("Macro data freshness and sources", expanded=expanded):
+        columns = [c for c in ("symbol", "status", "data_from", "data_through", "fetched_at", "history_years", "units", "frequency", "source", "delivery", "error") if c in status]
+        st.dataframe(status[columns], width="stretch", hide_index=True)
+        st.caption("Observation dates describe the measured period; download dates do not make old observations current. Historical macro values use the latest revisions unless a vintage is explicitly selected.")

@@ -13,7 +13,7 @@ from adfm_core.market_data import (
     fetch_daily_ohlcv,
 )
 from adfm_core.palette import PASTEL
-from adfm_core.primary_data import fetch_fred_series
+from adfm_core.primary_data import fetch_fred_series, fetch_fred_symbols, render_fred_status
 from adfm_core.ui import (
     PageHeader,
     inject_explorer_style,
@@ -740,6 +740,7 @@ with st.sidebar:
 
 prices, failed = fetch_market_prices(tuple(TICKERS.keys()))
 macro, macro_status = fetch_macro_data()
+render_fred_status(macro_status)
 
 if prices.empty:
     st.error("Market data did not load.")
@@ -757,7 +758,7 @@ tensions = build_tensions(current, prices, macro)
 loaded_market = sum(not clean_series(prices[col]).empty for col in prices.columns)
 macro_ok = 0
 if not macro_status.empty and "status" in macro_status.columns:
-    macro_ok = int((macro_status["status"] == "OK").sum())
+    macro_ok = int(macro_status["status"].isin(["OK", "CACHED"]).sum())
 
 st.markdown(
     f"""
@@ -854,5 +855,23 @@ with st.expander("Signal definitions and data notes"):
     )
     if not macro_status.empty:
         st.dataframe(macro_status, width="stretch", hide_index=True)
+
+with st.expander("Official inflation, employment, and production context"):
+    fundamentals, fundamentals_status = fetch_fred_symbols(("CPIAUCSL", "PCEPILFE", "UNRATE", "PAYEMS", "INDPRO", "ICSA"), start="2000-01-01")
+    render_fred_status(fundamentals_status)
+    context_rows = []
+    for symbol, label, transform in (("CPIAUCSL", "CPI inflation YoY", "yoy"), ("PCEPILFE", "Core PCE inflation YoY", "yoy"),
+                                     ("UNRATE", "Unemployment rate", "level"), ("PAYEMS", "Payroll change (thousands)", "change"),
+                                     ("INDPRO", "Industrial production YoY", "yoy"), ("ICSA", "Initial claims (persons)", "level")):
+        if symbol not in fundamentals or fundamentals[symbol].dropna().empty:
+            continue
+        observed = fundamentals[symbol].dropna()
+        values = observed.resample("MS").last() if transform != "level" else observed
+        values = values.pct_change(12, fill_method=None) * 100 if transform == "yoy" else values.diff() if transform == "change" else values
+        valid = values.dropna()
+        if not valid.empty:
+            context_rows.append({"Indicator": label, "Value": round(float(valid.iloc[-1]), 2), "Observation period": str(valid.index[-1].date())})
+    st.dataframe(pd.DataFrame(context_rows), hide_index=True, width="stretch")
+    st.caption("Official economic context uses each series' publication cadence and latest revisions. It does not change the market-based regime score or reconstruct historical information availability.")
 
 render_footer()

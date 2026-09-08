@@ -14,6 +14,7 @@ from matplotlib import gridspec
 from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator, PercentFormatter
 
+from adfm_core.primary_data import fetch_fred_symbols, render_fred_status
 from adfm_core.palette import PASTEL
 from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
@@ -31,10 +32,6 @@ try:
 except Exception:
     pass
 
-try:
-    from pandas_datareader import data as pdr
-except ImportError:
-    pdr = None
 
 
 # =========================
@@ -203,24 +200,12 @@ def _yf_download(
 
 
 def _fred_series(series_code: str, start: str, end: str) -> Optional[pd.Series]:
-    if pdr is None:
+    panel, status = fetch_fred_symbols((series_code,), start=start, end=end)
+    if series_code not in panel or panel[series_code].dropna().empty:
         return None
-
-    try:
-        df = pdr.DataReader(series_code, "fred", start, end)
-        if df is None or df.empty or series_code not in df.columns:
-            return None
-
-        ser = pd.to_numeric(df[series_code], errors="coerce").dropna()
-        ser.index = pd.to_datetime(ser.index).tz_localize(None)
-
-        if ser.empty:
-            return None
-
-        return ser.rename(series_code)
-
-    except Exception:
-        return None
+    result = panel[series_code].copy()
+    result.attrs["fred_status"] = status.to_dict("records")
+    return result
 
 
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
@@ -335,6 +320,7 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
         regime["is_recession"] == 1, "Recession", "Expansion"
     )
     regime.loc[~regime["is_recession"].isin([0, 1]), "regime_cycle"] = "Unknown"
+    regime.attrs["fred_status"] = [record for series in (usrec, fedfunds) if series is not None for record in series.attrs.get("fred_status", [])]
     return regime
 
 
@@ -1536,6 +1522,8 @@ latest_complete_year = _latest_complete_year(prices)
 regime_df = fetch_regime_data(
     str(prices.index.min().date()), str(prices.index.max().date())
 )
+render_fred_status(pd.DataFrame(regime_df.attrs.get("fred_status", [])))
+st.caption("Macro regime filters are retrospective: FRED values use latest revisions, and recession labels can be assigned after the event. They do not represent what an investor knew in each historical month.")
 market_regime_daily = fetch_regime_market_series(
     str(prices.index.min().date()), str(prices.index.max().date())
 )
