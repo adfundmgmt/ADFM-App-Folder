@@ -1157,6 +1157,8 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         ignore_tz=True,
 
+        timeout=10,
+
     )
 
 
@@ -1179,7 +1181,7 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         close.columns = [str(c).upper() for c in close.columns]
 
-        return _to_float_frame(_clean_index(close))
+        return _to_float_frame(_clean_index(close)).dropna(axis=1, how="all")
 
 
 
@@ -1189,7 +1191,7 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         close = df[["Close"]].rename(columns={"Close": sym}).copy()
 
-        return _to_float_frame(_clean_index(close))
+        return _to_float_frame(_clean_index(close)).dropna(axis=1, how="all")
 
 
 
@@ -1229,7 +1231,7 @@ def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, re
 
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)
+@st.cache_data(show_spinner=False, ttl=60 * 30, max_entries=16)
 
 def fetch_daily_levels(
 
@@ -1343,11 +1345,12 @@ def fetch_daily_levels(
 
         else:
 
-            before_columns = set(wide.columns)
+            live_aligned, cached_aligned = wide.align(cached, join="outer")
+
+            cache_used = bool((live_aligned.isna() & cached_aligned.notna()).to_numpy().any())
 
             wide = wide.combine_first(cached)
 
-            cache_used = bool(set(uniq) - before_columns)
 
 
 

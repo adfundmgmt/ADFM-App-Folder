@@ -46,7 +46,13 @@ LOOKBACKS = {"1Y": 52, "2Y": 104, "3Y": 156, "5Y": 260}
 @st.cache_data(ttl=21_600, show_spinner=False)
 def load_report(report_type: str) -> tuple[pd.DataFrame, str]:
     try:
-        return fetch_recent(report_type, years=5), ""
+        frame = fetch_recent(report_type, years=5)
+        if not frame.empty:
+            latest = pd.Timestamp(frame["report_date"].max())
+            today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+            if (today - latest).days > 21:
+                return pd.DataFrame(), f"Latest report is {latest.date()}; excluded from current rankings because it is over 21 days old."
+        return frame, ""
     except Exception as exc:
         return pd.DataFrame(), str(exc)
 
@@ -296,6 +302,9 @@ render_status_line(
 )
 if tff_error or disagg_error:
     st.warning("One CFTC report failed to load, so the dashboard is running on partial coverage.")
+    for report_error in (tff_error, disagg_error):
+        if report_error:
+            st.caption(report_error)
 
 render_section_header(
     "What matters now",

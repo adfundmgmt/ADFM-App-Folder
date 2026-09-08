@@ -13,6 +13,7 @@ import streamlit as st
 import yfinance as yf
 
 from adfm_core.leadership import build_leadership_frame
+from adfm_core.market_data import fill_short_calendar_gaps
 from adfm_core.palette import PASTEL
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 
@@ -212,7 +213,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFra
         output.index = pd.to_datetime(output.index).tz_localize(None)
         output = output.sort_index()
         output = output.loc[~output.index.duplicated(keep="last")]
-        return output.ffill().dropna(how="all")
+        return output.dropna(how="all")
 
     frames = []
     for batch in chunked(ticker_list, 30):
@@ -250,7 +251,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFra
     if not frames:
         return pd.DataFrame()
     output = pd.concat(frames, axis=1)
-    return output.loc[:, ~output.columns.duplicated()].sort_index().ffill().dropna(how="all")
+    return fill_short_calendar_gaps(output.loc[:, ~output.columns.duplicated()]).dropna(how="all")
 
 
 def raw_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
@@ -457,7 +458,8 @@ if unavailable:
 
 st.markdown(
     "<div class='method-note'>Leadership Score is a weighted cross-sectional rank of 1W, 1M, 3M, and 6M relative returns using 20%, 35%, 30%, and 15% weights. "
-    "Acceleration is the average 1W/1M rank minus the average 3M/6M rank. Scores are comparative within the fixed 25-relationship universe.</div>",
+    "Acceleration is the average 1W/1M rank minus the average 3M/6M rank. Scores are comparative within the fixed 25-relationship universe. "
+    "Ratio alignment bridges at most two interior calendar gaps; series are never extended past their last observed price.</div>",
     unsafe_allow_html=True,
 )
 

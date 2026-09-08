@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from adfm_core.palette import PASTEL
+from adfm_core.market_data import fill_short_calendar_gaps
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import yfinance as yf
 from plotly.subplots import make_subplots
@@ -352,7 +353,6 @@ def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFra
         out.index = pd.to_datetime(out.index).tz_localize(None)
         out = out.sort_index()
         out = out[~out.index.duplicated(keep="last")]
-        out = out.ffill()
         out = out.dropna(how="all")
 
         return out
@@ -399,7 +399,7 @@ def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFra
 
     out = pd.concat(frames, axis=1)
     out = out.loc[:, ~out.columns.duplicated()]
-    out = out.sort_index().ffill().dropna(how="all")
+    out = fill_short_calendar_gaps(out).dropna(how="all")
 
     return out
 
@@ -500,7 +500,10 @@ def ytd_change(series: pd.Series) -> float:
     latest_date = s.index[-1]
     year_start = pd.Timestamp(datetime(latest_date.year, 1, 1))
 
-    _, base_val = first_valid_on_or_after(s, year_start)
+    prior_year = s.loc[s.index < year_start]
+    if prior_year.empty:
+        return np.nan
+    base_val = prior_year.iloc[-1]
     latest = s.iloc[-1]
 
     if not np.isfinite(base_val) or base_val == 0:

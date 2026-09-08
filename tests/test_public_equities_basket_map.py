@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import ast
+import unittest
 from collections import Counter
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "pages" / "1_ADFM_Public_Equities_Baskets.py"
@@ -95,3 +95,11 @@ def test_local_listing_suffixes_have_fx_conversion_rules() -> None:
         if not any(ticker.endswith(suffix) for suffix in suffix_rules)
     }
     assert not uncovered
+
+
+def load_tests(loader, tests, pattern):
+    """Include the function-style basket regressions in the unittest CI suite."""
+    for name, function in sorted(globals().items()):
+        if name.startswith("test_") and callable(function):
+            tests.addTest(unittest.FunctionTestCase(function))
+    return tests

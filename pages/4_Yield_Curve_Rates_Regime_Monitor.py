@@ -10,7 +10,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from adfm_core.data_registry import TREASURY_YIELD_SERIES
 from adfm_core.palette import PASTEL, PASTEL_RATES_SCALE
+from adfm_core.primary_data import fetch_fred_series
 from adfm_core.ui import (
     PageHeader,
     inject_institutional_tool_finish,
@@ -382,6 +384,28 @@ def split_yahoo_yields(close: pd.DataFrame) -> pd.DataFrame:
         yields[ticker] = normalize_yahoo_yield_series(yields[ticker])
     yields = yields.rename(columns=YIELD_TICKER_TO_FIELD)
     return yields.ffill().dropna(how="all")
+
+
+@st.cache_data(ttl=900, max_entries=16, show_spinner=False)
+def fetch_yield_panel(tickers: Tuple[str, ...], start_date: date, end_date: date):
+    """Use one coherent source for the curve, with official yields on failure."""
+    close, diagnostics = fetch_yahoo_close(tickers, start_date, end_date)
+    rates = split_yahoo_yields(close)
+    usable = [column for column in rates if rates[column].notna().any()]
+    if "Y10" in usable and len(usable) >= 2:
+        return rates, diagnostics, "Yahoo Finance via yfinance"
+    official, status = fetch_fred_series(
+        TREASURY_YIELD_SERIES,
+        start=start_date.isoformat(),
+        end=end_date.isoformat(),
+    )
+    notes = list(diagnostics)
+    notes.append("Yahoo curve unavailable or incomplete; using Federal Reserve constant-maturity yields via FRED.")
+    for row in status.to_dict("records"):
+        notes.append(f"{row['symbol']}: {row['status']} (through {row.get('data_through')})")
+    # Keep the panel wholly in FRED percent units. Never splice different yield
+    # definitions into the same curve or run Yahoo's unit heuristic on FRED.
+    return official.dropna(how="all"), tuple(notes), "Federal Reserve / FRED constant-maturity yields"
 
 
 def add_derived_yahoo_rates(df: pd.DataFrame) -> pd.DataFrame:
@@ -787,8 +811,8 @@ with st.sidebar:
         horizontal=True,
     )
 
-    show_table = st.checkbox("Show raw Yahoo table", value=False)
-    show_status = st.checkbox("Show Yahoo download status", value=False)
+    show_table = st.checkbox("Show source yield table", value=False)
+    show_status = st.checkbox("Show yield download status", value=False)
 
 
 render_page_header(
@@ -806,27 +830,26 @@ start = date.today() - timedelta(days=lookback_days + 10)
 end = date.today()
 all_tickers = tuple(YAHOO_YIELD_TICKERS.keys())
 
-with st.spinner("Loading Yahoo Finance yield data..."):
-    yahoo_close, diagnostics = fetch_yahoo_close(
+with st.spinner("Loading Treasury yield data..."):
+    rates_raw, diagnostics, yield_source = fetch_yield_panel(
         all_tickers,
         start,
         end,
     )
 
-if yahoo_close.empty:
-    st.error("No usable Yahoo Finance yield data loaded.")
+if rates_raw.empty:
+    st.error("No usable Treasury yields loaded from Yahoo Finance or Federal Reserve / FRED.")
     if diagnostics:
         with st.expander("Yahoo download status", expanded=True):
             st.code("\n".join(diagnostics[-80:]))
     st.stop()
 
-rates_raw = split_yahoo_yields(yahoo_close)
 rates = add_derived_yahoo_rates(rates_raw)
 
 if rates.empty or "Y10" not in rates.columns or rates["Y10"].dropna().empty:
     st.error(
-        "No usable 10Y Treasury yield loaded from Yahoo Finance. "
-        "The page needs ^TNX to classify the rates regime."
+        "No usable 10Y Treasury yield loaded. "
+        "A 10Y yield is required to classify the rates regime."
     )
     if diagnostics:
         with st.expander("Yahoo download status", expanded=True):
@@ -836,7 +859,7 @@ if rates.empty or "Y10" not in rates.columns or rates["Y10"].dropna().empty:
 curve_cols = available_curve_columns(rates)
 if not curve_cols:
     st.error(
-        "Yahoo loaded the 10Y yield, but not enough curve points "
+        "The 10Y yield loaded, but not enough curve points "
         "to calculate a curve spread."
     )
     st.stop()
@@ -850,23 +873,25 @@ if last_obs is not None:
         pd.Timestamp(date.today()) - last_obs.normalize()
     ).days
     st.caption(
-        f"Source: Yahoo Finance via yfinance. Last yield observation: "
-        f"{last_obs.date()}. Yield set: ^IRX 3M, ^FVX 5Y, ^TNX 10Y, ^TYX 30Y."
+        f"Source: {yield_source}. Last yield observation: "
+        f"{last_obs.date()}. Maturities: 3M, 5Y, 10Y, 30Y."
     )
+    if yield_source.startswith("Federal Reserve"):
+        st.info("Yahoo yields were unavailable. This view uses Federal Reserve constant-maturity yields from FRED in percent. The 3M investment-basis yield differs from Yahoo's ^IRX bill-discount index; the entire curve uses the same FRED source.")
     if age_days > 4:
         st.warning(
-            f"Last Yahoo yield observation is {last_obs.date()}. "
+            f"Last yield observation is {last_obs.date()}. "
             "The rates tape may be stale."
         )
 
 missing_yield_tickers = [
     ticker
     for ticker in YAHOO_YIELD_TICKERS
-    if ticker not in yahoo_close.columns
+    if YIELD_TICKER_TO_FIELD[ticker] not in rates_raw or rates_raw[YIELD_TICKER_TO_FIELD[ticker]].dropna().empty
 ]
 if missing_yield_tickers:
     st.warning(
-        "Missing Yahoo yield symbols: "
+        "Missing yield maturities (Yahoo symbol equivalents): "
         + ", ".join(missing_yield_tickers)
         + ". Outputs are recalculated from available data only."
     )
@@ -876,8 +901,8 @@ if show_status:
         available = [
             ticker
             for ticker in all_tickers
-            if ticker in yahoo_close.columns
-            and yahoo_close[ticker].dropna().any()
+            if YIELD_TICKER_TO_FIELD[ticker] in rates_raw
+            and rates_raw[YIELD_TICKER_TO_FIELD[ticker]].notna().any()
         ]
         st.markdown(
             "<div class='data-note'>Available tickers: "
@@ -1108,11 +1133,11 @@ st.plotly_chart(
 
 if show_table:
     st.markdown(
-        "<div class='section-title'>Raw Yahoo Data</div>",
+        "<div class='section-title'>Source Yield Data</div>",
         unsafe_allow_html=True,
     )
 
-    table = pd.DataFrame(index=yahoo_close.index)
+    table = pd.DataFrame(index=rates_raw.index)
     for ticker, meta in YAHOO_YIELD_TICKERS.items():
         field = str(meta["field"])
         label = str(meta["label"])
@@ -1133,7 +1158,8 @@ if show_table:
 st.markdown(
     """
     <div class='data-note'>
-        Method note: this page uses Yahoo Finance Treasury-yield symbols only.
+        Method note: this page uses Yahoo Finance Treasury-yield symbols, with
+        Federal Reserve constant-maturity yields via FRED when Yahoo is unavailable.
         It does not estimate missing 2Y yields, real yields, breakevens, or
         cross-asset confirmation. Missing observations remain unavailable.
     </div>
@@ -1141,4 +1167,4 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-render_footer()
+render_footer(data_note="Primary inputs: Yahoo Finance Treasury yields; Federal Reserve / FRED constant-maturity yields on provider failure. The active source and observation date are shown above.")

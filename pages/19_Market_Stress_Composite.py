@@ -10,6 +10,7 @@ import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
 
+from adfm_core.market_data import canonicalize_date_index
 from adfm_core.palette import PASTEL
 from adfm_core.ui import (
     PageHeader,
@@ -128,11 +129,7 @@ def load_prices(tickers: List[str], start: date) -> pd.DataFrame:
     if df.empty:
         return df
 
-    idx = pd.DatetimeIndex(pd.to_datetime(df.index))
-    if idx.tz is not None:
-        idx = idx.tz_convert(None)
-    df.index = idx.normalize()
-    return df.sort_index().groupby(level=0).last()
+    return canonicalize_date_index(df)
 
 
 def robust_z(s: pd.Series, window: int, min_periods: int = 126) -> pd.Series:
@@ -151,6 +148,14 @@ def safe_mean(frame: pd.DataFrame) -> pd.Series:
     if frame is None or frame.empty:
         return pd.Series(dtype=float)
     return frame.mean(axis=1, skipna=True)
+
+
+def foreign_breadth_components(prices: pd.DataFrame, returns: pd.DataFrame):
+    """Count only observed returns and available trend comparisons in breadth."""
+    negative = returns.lt(0).where(returns.notna()).mean(axis=1)
+    average = prices.rolling(100, min_periods=60).mean()
+    below_average = prices.lt(average).where(prices.notna() & average.notna()).mean(axis=1)
+    return negative, below_average
 
 
 def available_cols(px: pd.DataFrame, universe: Dict[str, str]) -> List[str]:
@@ -286,11 +291,7 @@ eq_r63 = pd.DataFrame({t: pct_return(px[t], 63) for t in eq_cols})
 eq_weak_21 = safe_mean(pd.DataFrame({t: -robust_z(eq_r21[t], z_window) for t in eq_cols}))
 eq_weak_63 = safe_mean(pd.DataFrame({t: -robust_z(eq_r63[t], z_window) for t in eq_cols}))
 
-breadth_neg21 = (eq_r21 < 0).mean(axis=1) if not eq_r21.empty else pd.Series(index=calendar, dtype=float)
-below_ma = pd.DataFrame(
-    {t: (px[t] < px[t].rolling(100, min_periods=60).mean()).astype(float) for t in eq_cols}
-)
-breadth_ma = below_ma.mean(axis=1) if not below_ma.empty else pd.Series(index=calendar, dtype=float)
+breadth_neg21, breadth_ma = foreign_breadth_components(px[eq_cols], eq_r21)
 breadth_z = robust_z(0.50 * breadth_neg21 + 0.50 * breadth_ma, z_window)
 
 spx_r21 = pct_return(px[SPX], 21)

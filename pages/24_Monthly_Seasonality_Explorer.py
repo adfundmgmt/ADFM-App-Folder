@@ -311,9 +311,8 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
         usrec_m = usrec.resample("ME").last()
         usrec_m.index = usrec_m.index.to_period("M")
         regime["is_recession"] = usrec_m.reindex(monthly_index)
-        regime["is_recession"] = regime["is_recession"].fillna(0).astype(int)
     else:
-        regime["is_recession"] = 0
+        regime["is_recession"] = np.nan
 
     if fedfunds is not None:
         ff_m = fedfunds.resample("ME").last()
@@ -327,7 +326,7 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
             "Hiking",
             np.where(delta_3m < -0.05, "Cutting", "Steady"),
         )
-        regime.loc[regime["fedfunds"].isna(), "fed_regime"] = "Unknown"
+        regime.loc[delta_3m.isna(), "fed_regime"] = "Unknown"
     else:
         regime["fedfunds"] = np.nan
         regime["fed_regime"] = "Unknown"
@@ -335,6 +334,7 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
     regime["regime_cycle"] = np.where(
         regime["is_recession"] == 1, "Recession", "Expansion"
     )
+    regime.loc[~regime["is_recession"].isin([0, 1]), "regime_cycle"] = "Unknown"
     return regime
 
 
@@ -470,8 +470,8 @@ def build_filter_table(
         keep_cols = ["is_recession", "regime_cycle", "fed_regime", "fedfunds"]
         df = df.join(regime_df[keep_cols], how="left")
     else:
-        df["is_recession"] = 0
-        df["regime_cycle"] = "Expansion"
+        df["is_recession"] = np.nan
+        df["regime_cycle"] = "Unknown"
         df["fed_regime"] = "Unknown"
         df["fedfunds"] = np.nan
 

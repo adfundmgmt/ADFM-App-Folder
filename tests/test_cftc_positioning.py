@@ -204,6 +204,19 @@ class CFTCPositioningTests(unittest.TestCase):
         self.assertIn("209''742", params["$where"])
         self.assertEqual(params["$order"], "report_date_as_yyyy_mm_dd ASC")
 
+    @patch("adfm_core.cftc_positioning.CFTC_PAGE_SIZE", 2)
+    @patch("adfm_core.cftc_positioning._request")
+    def test_recent_report_includes_newer_records_beyond_first_page(self, request: Mock) -> None:
+        old = pd.concat([raw_tff(), raw_tff()], ignore_index=True)
+        old["report_date_as_yyyy_mm_dd"] = ["2025-08-19", "2025-08-26"]
+        current = raw_tff()
+        current["report_date_as_yyyy_mm_dd"] = "2026-09-01"
+        request.side_effect = [old, current]
+        result = fetch_recent("TFF")
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result["report_date"].max(), pd.Timestamp("2026-09-01"))
+        self.assertEqual([call.args[1]["$offset"] for call in request.call_args_list], [0, 2])
+
     @patch("adfm_core.cftc_positioning.requests.get")
     def test_request_uses_public_reporting_endpoint(self, get: Mock) -> None:
         response = Mock()

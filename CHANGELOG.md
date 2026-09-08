@@ -4,6 +4,13 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- All-page release audit: CFTC now retrieves every response page (the former 50,000-row cap omitted the latest year of physical-commodity positioning) and rejects stale reports from current rankings. The Treasury curve recovers from Yahoo failures using a fully disclosed, unmixed Federal Reserve / FRED constant-maturity curve.
+- Ratio chartbooks now bridge only short interior gaps and retain actual observation endpoints; cross-asset YTD returns include the first trading day. Missing leadership trend, recession, policy-change, and market-stress breadth inputs no longer become false signals. Market Memory now converts Treasury yield changes to basis points correctly and computes prior-year anchors without repeatedly scanning the full history.
+- Corrected shared daily date normalization, duplicate selection, timezone-aware session cutoffs, dividend-adjusted price/volume treatment, missing return endpoints, and rejection of infinite observations or negative volume.
+- Accelerated previous-observation percentile and grouped-composite calculations while retaining their weighting, tie, missing-data, and coverage rules; bounded shared/basket caches and made download timeouts explicit.
+- Basket loading now retries completely empty ticker columns and identifies partial recovery from the last-good cache in source diagnostics.
+- Restored four basket-map checks to unittest discovery and added regression coverage for market data, basket recovery, and commodity-study causality and forward outcomes.
+
 - Public Equities Baskets now includes the missing global bank, insurer, industrial, defense, grid, semiconductor, AI-hardware, energy-royalty, wealth-management, custody-bank, and BDC cohorts; geographic baskets are organized into continental groups rather than one flat country list.
 - Standardized every tool sidebar around one concise purpose, three-step reading order, key caveat, and primary-input block; reordered the flat page list so SEC 13F and CFTC sit with Positioning + Flows before Risk + Execution and Historical Context.
 - Equity Leadership & Rotation now formats all relative-return percentages to exactly two decimal places in Rotation Map hover labels and chart captions.
