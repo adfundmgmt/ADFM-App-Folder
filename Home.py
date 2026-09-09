@@ -17,43 +17,62 @@ st.set_page_config(
     page_title="ADFM Analytics",
     page_icon=PAGE_ICON,
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
-
 
 TOOLS = tool_definitions()
 TOOLS_BY_GROUP = {
     group: [tool for tool in TOOLS if tool.group == group] for group in GROUP_ORDER
 }
 
+DISPLAY_TITLES = {
+    "1_ADFM_Public_Equities_Baskets.py": "Equity Baskets",
+    "2_Global_Macro_Regime.py": "Global Macro",
+    "3_Liquidity_Conditions_Monitor.py": "Liquidity",
+    "4_Yield_Curve_Rates_Regime_Monitor.py": "Rates & Yield Curve",
+    "5_Credit_Conditions_Monitor.py": "Credit Conditions",
+    "6_Currency_Tension_Engine.py": "FX Regime",
+    "7_Sector_Breadth_and_Rotation.py": "Sector Rotation",
+    "8_Equity_Leadership_&_Rotation.py": "Equity Leadership",
+    "9_ADFM_Underwriter.py": "Equity Underwriter",
+    "10_ADFM_Chart_Terminal.py": "Chart Terminal",
+    "11_Cross-Asset_Ratio_Chartbook.py": "Cross-Asset Ratios",
+    "12_Rate_of_Change_Regime_Explorer.py": "Momentum & Rate of Change",
+    "13_Relative_Volatility_Lab.py": "Relative Volatility",
+    "14_ETF_Flow_Pressure_Proxy.py": "ETF Flow Pressure",
+    "15_Volume_Based_Sentiment_Indicator.py": "Volume Sentiment",
+    "16_Options_Positioning_Compass.py": "Options Positioning",
+    "17_SEC_13F_Exposure_Browser.py": "13F Holdings",
+    "18_CFTC_Positioning_Monitor.py": "CFTC Positioning",
+    "19_Market_Stress_Composite.py": "Market Stress",
+    "20_Catalyst_Calendar.py": "Catalyst Calendar",
+    "21_Hedge_Timer.py": "Hedge Timing",
+    "22_Position_Sizing_Lab.py": "Position Sizing",
+    "23_Market_Memory_Explorer.py": "Market Memory",
+    "24_Monthly_Seasonality_Explorer.py": "Seasonality",
+    "25_Commodity_Event_Study.py": "Commodity Event Study",
+}
+
+
+def display_title(tool) -> str:
+    return DISPLAY_TITLES.get(tool.page_filename, tool.title)
+
+
+def legacy_url_path(page_filename: str) -> str:
+    stem = Path(page_filename).stem
+    _, separator, stable_name = stem.partition("_")
+    return stable_name if separator else stem
+
 
 def logo_data_uri() -> str:
-    """Return the approved ADFM shield as an embeddable image."""
-
     encoded = b64encode(LOGO_PATH.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
 
 
-def current_page_path(page_filename: str) -> str:
-    """Resolve a catalog page after a numeric-prefix reorder or hot deploy."""
-
-    _, separator, stable_name = page_filename.partition("_")
-    if separator:
-        matches = sorted((ROOT / "pages").glob(f"*_{stable_name}"))
-        if len(matches) == 1:
-            return matches[0].relative_to(ROOT).as_posix()
-    return f"pages/{page_filename}"
-
-
 def render_tool(tool) -> None:
-    """Render one fully clickable catalog entry with native page routing."""
-
+    page = NAV_PAGE_BY_FILENAME[tool.page_filename]
     with st.container(key=f"directory_entry_{tool.number}"):
-        st.page_link(
-            current_page_path(tool.page_filename),
-            label=f"**{tool.title}**",
-            width="content",
-        )
+        st.page_link(page, label=f"**{display_title(tool)}**", width="content")
         st.markdown(
             f"<div class='tool-description'>{escape(tool.description)}</div>",
             unsafe_allow_html=True,
@@ -62,375 +81,152 @@ def render_tool(tool) -> None:
 
 
 def render_group(group: str, *, first: bool = False) -> None:
-    """Render a naturally sized directory group in catalog order."""
-
-    title_class = "directory-group-title directory-group-title--first" if first else "directory-group-title"
-    st.markdown(
-        f"<div class='{title_class}'>{escape(group)}</div>",
-        unsafe_allow_html=True,
+    title_class = (
+        "directory-group-title directory-group-title--first"
+        if first
+        else "directory-group-title"
     )
-
+    st.markdown(
+        f"<div class='{title_class}'>{escape(group)}</div>", unsafe_allow_html=True
+    )
     group_tools = TOOLS_BY_GROUP[group]
     if len(group_tools) == 1:
         render_tool(group_tools[0])
         return
-
     for row_start in range(0, len(group_tools), 2):
-        row_columns = st.columns(2, gap="large")
+        columns = st.columns(2, gap="large")
         for column_index, tool in enumerate(group_tools[row_start : row_start + 2]):
-            with row_columns[column_index]:
+            with columns[column_index]:
                 render_tool(tool)
 
 
-st.html(
-    """
-    <style>
-        :root {
-            color-scheme: light;
+def render_home() -> None:
+    st.html(
+        """
+        <style>
+        :root { color-scheme: light; }
+        html, body, .stApp, main, [data-testid="stAppViewContainer"] {
+            background: #ffffff !important; color: #000000;
         }
-
-        html,
-        body,
-        .stApp,
-        main,
-        [data-testid="stAppViewContainer"] {
-            background: #ffffff !important;
-            color: #000000;
-        }
-
-        header[data-testid="stHeader"] {
-            height: 3rem !important;
-            background: rgba(255, 255, 255, 0.98);
-        }
-
-        [data-testid="stToolbar"] {
-            height: 100% !important;
-        }
-
-        [data-testid="stToolbarActions"],
-        [data-testid="stMainMenu"],
-        [data-testid="stDecoration"] {
+        header[data-testid="stHeader"] { background: rgba(255,255,255,.98); }
+        [data-testid="stToolbarActions"], [data-testid="stMainMenu"], [data-testid="stDecoration"] {
             display: none !important;
         }
-
         section[data-testid="stSidebar"] {
-            background: #ffffff !important;
-            border-right: 1px solid #000000 !important;
+            background: #ffffff !important; border-right: 1px solid #000000 !important;
         }
-
         section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-            background: #ffffff !important;
-            padding-top: 1.25rem !important;
+            background: #ffffff !important; padding-top: 1.25rem !important;
         }
-
         section[data-testid="stSidebar"] p,
         section[data-testid="stSidebar"] li,
         section[data-testid="stSidebar"] label {
-            color: #303030 !important;
-            font-family: Arial, Helvetica, sans-serif !important;
-            font-size: .78rem !important;
-            line-height: 1.5 !important;
+            color: #303030 !important; font-family: Arial, Helvetica, sans-serif !important;
+            font-size: .78rem !important; line-height: 1.5 !important;
         }
-
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2 {
-            border-bottom: 2px solid #000000 !important;
-            padding-bottom: .48rem !important;
-            color: #000000 !important;
-            font-size: .72rem !important;
-            font-weight: 800 !important;
-            letter-spacing: .13em !important;
-            text-transform: uppercase !important;
-        }
-
-        section[data-testid="stSidebar"] button {
-            border: 1px solid #000000 !important;
-            border-radius: 0 !important;
-            background: #ffffff !important;
-            color: #000000 !important;
-            box-shadow: none !important;
-        }
-
         .block-container {
-            max-width: 1180px;
-            padding: calc(3.25rem + env(safe-area-inset-top, 0px)) 2rem 3rem;
+            max-width: 1180px; padding: calc(3.25rem + env(safe-area-inset-top,0px)) 2rem 3rem;
         }
-
         .block-container > [data-testid="stVerticalBlock"],
         .block-container [data-testid="stColumn"] [data-testid="stVerticalBlock"],
-        [class*="st-key-directory_entry_"] > [data-testid="stVerticalBlock"] {
-            gap: 0 !important;
-        }
-
+        [class*="st-key-directory_entry_"] > [data-testid="stVerticalBlock"] { gap: 0 !important; }
         .adfm-masthead {
-            display: grid;
-            grid-template-columns: 56px minmax(0, 1fr);
-            align-items: center;
-            column-gap: 0.9rem;
-            border-top: 3px solid #000000;
-            border-bottom: 1px solid #000000;
-            padding: 0.7rem 0 0.75rem;
-            overflow: visible;
+            display: grid; grid-template-columns: 56px minmax(0,1fr); align-items: center;
+            column-gap: .9rem; border-top: 3px solid #000000; border-bottom: 1px solid #000000;
+            padding: .7rem 0 .75rem;
         }
-
-        .adfm-mark {
-            display: block;
-            width: 48px;
-            height: 48px;
-            object-fit: contain;
-        }
-
+        .adfm-mark { display:block; width:48px; height:48px; object-fit:contain; }
         .firm-name {
-            margin: 0 0 0.24rem;
-            color: #000000;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.66rem;
-            font-weight: 700;
-            letter-spacing: 0.18em;
-            line-height: 1.2;
-            text-transform: uppercase;
-            white-space: normal;
-            overflow: visible;
+            margin:0 0 .24rem; font-family:Arial,Helvetica,sans-serif; font-size:.66rem;
+            font-weight:700; letter-spacing:.18em; text-transform:uppercase;
         }
-
         .adfm-title {
-            margin: 0 !important;
-            padding: 0 !important;
-            color: #000000;
-            font-family: Arial, Helvetica, sans-serif !important;
-            font-size: clamp(2rem, 3vw, 2.2rem) !important;
-            font-weight: 800 !important;
-            letter-spacing: -0.04em;
-            line-height: 0.98 !important;
-            white-space: normal !important;
-            overflow: visible !important;
+            margin:0 !important; padding:0 !important; font-family:Arial,Helvetica,sans-serif !important;
+            font-size:clamp(2rem,3vw,2.2rem) !important; font-weight:800 !important;
+            letter-spacing:-.04em; line-height:.98 !important;
         }
-
         .adfm-subtitle {
-            margin: 0.3rem 0 0;
-            color: #414141;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.88rem;
-            line-height: 1.35;
+            margin:.3rem 0 0; color:#414141; font-family:Arial,Helvetica,sans-serif;
+            font-size:.88rem; line-height:1.35;
         }
-
         .directory-group-title {
-            border-bottom: 2px solid #000000;
-            margin: 2rem 0 0.9rem;
-            padding: 0 0 0.55rem;
-            color: #000000;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.7rem;
-            font-weight: 800;
-            letter-spacing: 0.14em;
-            line-height: 1.2;
-            text-transform: uppercase;
+            border-bottom:2px solid #000000; margin:2rem 0 .9rem; padding:0 0 .55rem;
+            font-family:Arial,Helvetica,sans-serif; font-size:.7rem; font-weight:800;
+            letter-spacing:.14em; line-height:1.2; text-transform:uppercase;
         }
-
-        .directory-group-title--first {
-            margin-top: 2.25rem;
-        }
-
+        .directory-group-title--first { margin-top:2.25rem; }
         [class*="st-key-directory_entry_"] {
-            position: relative;
-            height: 100%;
-            padding: 0.9rem 0 1.15rem;
-            cursor: pointer;
+            position:relative; height:100%; padding:.9rem 0 1.15rem; cursor:pointer;
         }
-
-        [class*="st-key-directory_entry_"] > [data-testid="stVerticalBlock"] {
-            height: 100%;
-        }
-
-        div[data-testid="stPageLink"] {
-            margin: 0;
-            padding-right: 2rem;
-        }
-
-        div[data-testid="stPageLink"]::after {
-            content: "→";
-            position: absolute;
-            top: 0.14rem;
-            right: 0;
-            color: #777777;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.95rem;
-            line-height: 1;
-            transition: color 120ms ease, transform 120ms ease;
-        }
-
+        div[data-testid="stPageLink"] { margin:0; padding-right:2rem; }
         div[data-testid="stPageLink"] a {
-            display: inline-flex !important;
-            width: auto !important;
-            min-height: 0 !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            background: transparent !important;
-            padding: 0 !important;
-            box-shadow: none !important;
-            text-decoration: none !important;
+            display:inline-flex !important; width:auto !important; min-height:0 !important;
+            border:0 !important; border-radius:0 !important; background:transparent !important;
+            padding:0 !important; box-shadow:none !important; text-decoration:none !important;
         }
-
-        div[data-testid="stPageLink"] a::after {
-            content: "";
-            position: absolute;
-            inset: 0;
-            z-index: 1;
-        }
-
         div[data-testid="stPageLink"] p,
         div[data-testid="stPageLink"] p strong {
-            margin: 0 !important;
-            color: #000000 !important;
-            font-family: Georgia, "Times New Roman", serif !important;
-            font-size: 1.28rem !important;
-            font-weight: 800 !important;
-            letter-spacing: -0.014em !important;
-            line-height: 1.25 !important;
+            margin:0 !important; color:#000000 !important; font-family:Georgia,"Times New Roman",serif !important;
+            font-size:1.28rem !important; font-weight:800 !important; letter-spacing:-.014em !important;
+            line-height:1.25 !important;
         }
-
         [class*="st-key-directory_entry_"]:hover div[data-testid="stPageLink"] p,
-        [class*="st-key-directory_entry_"]:hover div[data-testid="stPageLink"] p strong,
-        div[data-testid="stPageLink"] a:focus-visible p,
-        div[data-testid="stPageLink"] a:focus-visible p strong {
-            text-decoration: underline !important;
-            text-decoration-thickness: 1px !important;
-            text-underline-offset: 0.18em !important;
+        [class*="st-key-directory_entry_"]:hover div[data-testid="stPageLink"] p strong {
+            text-decoration:underline !important; text-decoration-thickness:1px !important;
+            text-underline-offset:.18em !important;
         }
-
-        [class*="st-key-directory_entry_"]:hover div[data-testid="stPageLink"]::after {
-            color: #000000;
-            transform: translateX(2px);
-        }
-
-        div[data-testid="stPageLink"] a:focus-visible::after {
-            outline: 1px solid #000000;
-            outline-offset: 4px;
-        }
-
         .tool-description {
-            max-width: 42rem;
-            margin-top: 0.5rem;
-            color: #505050;
-            font-family: Arial, Helvetica, sans-serif;
-            font-size: 0.84rem;
-            line-height: 1.5;
+            max-width:42rem; margin-top:.5rem; color:#505050; font-family:Arial,Helvetica,sans-serif;
+            font-size:.84rem; line-height:1.5;
         }
-
-        [class*="st-key-directory_entry_"] [data-testid="stElementContainer"]:has(.entry-rule) {
-            margin-top: auto !important;
-        }
-
-        .entry-rule {
-            height: 1px;
-            margin-top: 1rem;
-            background: #d7d7d7;
-        }
-
-        @media (max-width: 760px) {
-            header[data-testid="stHeader"] {
-                height: 2.6rem !important;
-            }
-
-            .block-container {
-                max-width: none;
-                padding: calc(3.2rem + env(safe-area-inset-top, 0px)) 1rem 2.25rem;
-            }
-
-            .adfm-masthead {
-                grid-template-columns: 46px minmax(0, 1fr);
-                column-gap: 0.72rem;
-                margin-top: 0.3rem;
-                padding: 0.55rem 0 0.65rem;
-            }
-
-            .adfm-mark {
-                width: 43px;
-                height: 43px;
-            }
-
-            .firm-name {
-                margin-bottom: 0.18rem;
-                font-size: 0.61rem;
-                letter-spacing: 0.15em;
-            }
-
-            .adfm-title {
-                font-size: clamp(1.68rem, 7.3vw, 1.9rem) !important;
-                line-height: 1 !important;
-            }
-
-            .adfm-subtitle {
-                margin-top: 0.22rem;
-                font-size: 0.81rem;
-                line-height: 1.35;
-            }
-
-            .directory-group-title {
-                margin: 1.7rem 0 0.8rem;
-                padding-bottom: 0.5rem;
-                font-size: 0.68rem;
-            }
-
-            .directory-group-title--first {
-                margin-top: 2.2rem;
-            }
-
-            div[data-testid="stHorizontalBlock"] {
-                flex-direction: column !important;
-                gap: 0 !important;
-            }
-
+        .entry-rule { height:1px; margin-top:1rem; background:#d7d7d7; }
+        @media (max-width:760px) {
+            .block-container { max-width:none; padding:calc(3.2rem + env(safe-area-inset-top,0px)) 1rem 2.25rem; }
+            .adfm-masthead { grid-template-columns:46px minmax(0,1fr); column-gap:.72rem; padding:.55rem 0 .65rem; }
+            .adfm-mark { width:43px; height:43px; }
+            .firm-name { font-size:.61rem; letter-spacing:.15em; }
+            .adfm-title { font-size:clamp(1.68rem,7.3vw,1.9rem) !important; }
+            .adfm-subtitle { font-size:.81rem; }
+            div[data-testid="stHorizontalBlock"] { flex-direction:column !important; gap:0 !important; }
             div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
-                width: 100% !important;
-                min-width: 100% !important;
-                flex: 1 1 100% !important;
+                width:100% !important; min-width:100% !important; flex:1 1 100% !important;
             }
-
-            div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:not(:has([class*="st-key-directory_entry_"])) {
-                display: none !important;
-            }
-
-            [class*="st-key-directory_entry_"] {
-                padding: 0.78rem 0 1.1rem;
-            }
-
             div[data-testid="stPageLink"] p,
-            div[data-testid="stPageLink"] p strong {
-                font-size: 1.22rem !important;
-                line-height: 1.28 !important;
-            }
-
-            .tool-description {
-                max-width: none;
-                margin-top: 0.42rem;
-                font-size: 0.88rem;
-                line-height: 1.5;
-            }
-
-            .entry-rule {
-                margin-top: 0.9rem;
-            }
+            div[data-testid="stPageLink"] p strong { font-size:1.22rem !important; }
+            .tool-description { max-width:none; font-size:.88rem; }
         }
-    </style>
-    """,
-)
+        </style>
+        """
+    )
+    st.markdown(
+        f"""
+        <header class="adfm-masthead">
+            <img class="adfm-mark" src="{logo_data_uri()}" alt="AD Fund Management shield">
+            <div>
+                <div class="firm-name">AD Fund Management LP</div>
+                <h1 class="adfm-title">ADFM Analytics</h1>
+                <p class="adfm-subtitle">Market research and analytical tools.</p>
+            </div>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+    for group_index, group in enumerate(GROUP_ORDER):
+        render_group(group, first=group_index == 0)
 
 
-st.markdown(
-    f"""
-    <header class="adfm-masthead" data-home-revision="2026-08-22-responsive-directory-v1">
-        <img class="adfm-mark" src="{logo_data_uri()}" alt="AD Fund Management shield">
-        <div>
-            <div class="firm-name">AD Fund Management LP</div>
-            <h1 class="adfm-title">ADFM Analytics</h1>
-            <p class="adfm-subtitle">Market research and analytical tools.</p>
-        </div>
-    </header>
-    """,
-    unsafe_allow_html=True,
-)
+HOME_PAGE = st.Page(render_home, title="Home", default=True)
+TOOL_PAGES = [
+    st.Page(
+        f"pages/{tool.page_filename}",
+        title=display_title(tool),
+        url_path=legacy_url_path(tool.page_filename),
+    )
+    for tool in TOOLS
+]
+NAV_PAGE_BY_FILENAME = {
+    tool.page_filename: page for tool, page in zip(TOOLS, TOOL_PAGES, strict=True)
+}
 
-
-for group_index, group in enumerate(GROUP_ORDER):
-    render_group(group, first=group_index == 0)
+NAVIGATION = st.navigation([HOME_PAGE, *TOOL_PAGES], position="sidebar")
+NAVIGATION.run()
