@@ -1959,127 +1959,6 @@ def ew_rets_from_levels(
     return pd.DataFrame(out).dropna(how="all")
 
 
-def build_basket_diagnostics(
-    levels: pd.DataFrame,
-    baskets: Dict[str, List[str]],
-) -> Dict[str, Dict[str, Any]]:
-    """Return compact breadth and dispersion diagnostics for each live basket."""
-    diagnostics: Dict[str, Dict[str, Any]] = {}
-    if levels.empty:
-        return diagnostics
-
-    unique_members = {
-        member
-        for members in baskets.values()
-        for member in members
-        if member in levels.columns
-    }
-    member_stats: Dict[str, Dict[str, Any]] = {}
-    for member in unique_members:
-        series = levels[member].dropna()
-        if series.empty:
-            continue
-
-        one_month_return = pct_since(
-            series,
-            series.index.max() - pd.DateOffset(months=1),
-        )
-        above_50dma: Optional[bool] = None
-        if series.shape[0] >= 50:
-            latest_50dma = series.rolling(50, min_periods=50).mean().iloc[-1]
-            if pd.notna(latest_50dma):
-                above_50dma = bool(series.iloc[-1] > latest_50dma)
-
-        member_stats[member] = {
-            "one_month_return": (
-                float(one_month_return) * 100.0
-                if pd.notna(one_month_return)
-                else np.nan
-            ),
-            "above_50dma": above_50dma,
-        }
-
-    for basket_id, members in baskets.items():
-        live_members = [member for member in members if member in levels.columns]
-        one_month_returns = [
-            float(member_stats[member]["one_month_return"])
-            for member in live_members
-            if member in member_stats
-            and pd.notna(member_stats[member]["one_month_return"])
-        ]
-        above_50dma = [
-            bool(member_stats[member]["above_50dma"])
-            for member in live_members
-            if member in member_stats
-            and member_stats[member]["above_50dma"] is not None
-        ]
-
-        diagnostics[basket_id] = {
-            "Breadth >50DMA %": (
-                round(100.0 * sum(above_50dma) / len(above_50dma), 1)
-                if above_50dma
-                else np.nan
-            ),
-            "1M Dispersion %": (
-                round(float(np.std(one_month_returns, ddof=0)), 1)
-                if len(one_month_returns) >= 2
-                else np.nan
-            ),
-            "Members": str(len(live_members)),
-        }
-
-    return diagnostics
-
-
-def build_constituent_table(
-    levels: pd.DataFrame,
-    members: List[str],
-    display_start: pd.Timestamp,
-    dynamic_label: str,
-) -> pd.DataFrame:
-    """Build one concise constituent table for an optional basket drilldown."""
-    dynamic_col = f"%{dynamic_label}"
-    rows: List[Dict[str, Any]] = []
-
-    for member in members:
-        if member not in levels.columns:
-            continue
-        series = levels[member].dropna()
-        if series.shape[0] < 2:
-            continue
-
-        r5d = (
-            (series.iloc[-1] / series.iloc[-6]) - 1.0
-            if series.shape[0] >= 6
-            else np.nan
-        )
-        r1m = pct_since(series, series.index.max() - pd.DateOffset(months=1))
-        r_dynamic = pct_since(series, display_start)
-        dma_50 = basket_vs_dma_pct(series, window=50)
-
-        row: Dict[str, Any] = {
-            "Ticker": member,
-            "%5D": round(r5d * 100.0, 1) if pd.notna(r5d) else np.nan,
-            "%1M": round(r1m * 100.0, 1) if pd.notna(r1m) else np.nan,
-            "vs 50DMA %": round(dma_50, 1) if pd.notna(dma_50) else np.nan,
-        }
-        row[dynamic_col] = (
-            round(r_dynamic * 100.0, 1) if pd.notna(r_dynamic) else np.nan
-        )
-        rows.append(row)
-
-    if not rows:
-        return pd.DataFrame(
-            columns=["Ticker", "%5D", "%1M", dynamic_col, "vs 50DMA %"]
-        )
-
-    return pd.DataFrame(rows).sort_values(
-        dynamic_col,
-        ascending=False,
-        na_position="last",
-    )
-
-
 
 
 
@@ -2357,8 +2236,6 @@ def build_panel_df(
 
     benchmark_series_full: pd.Series,
 
-    basket_diagnostics: Dict[str, Dict[str, Any]],
-
 ) -> pd.DataFrame:
 
     dynamic_col = f"%{dynamic_label}"
@@ -2375,9 +2252,9 @@ def build_panel_df(
 
         "Basket", *return_cols,
 
-        relative_col, "Relative Trend", "Breadth >50DMA %",
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", relative_col,
 
-        "1M Dispersion %", "Members",
+        "vs 21DMA %", "vs 50DMA %",
 
     ]
 
@@ -2451,19 +2328,31 @@ def build_panel_df(
 
 
 
-        relative_levels = pd.concat(
-            [s_full.rename("basket"), bench_levels.rename("benchmark")],
-            axis=1,
-            join="inner",
-        ).dropna()
-        relative_series = (
-            relative_levels["basket"] / relative_levels["benchmark"]
-            if not relative_levels.empty
-            else pd.Series(dtype=float)
-        )
-        relative_trend = ema_regime(relative_series, 4, 9, 18)
+        dma_21_pct = basket_vs_dma_pct(s_full, window=21)
 
-        diagnostics = basket_diagnostics.get(basket_id, {})
+        dma_50_pct = basket_vs_dma_pct(s_full, window=50)
+
+
+
+        weekly = s_full.resample("W-FRI").last().dropna()
+
+        rsi_14w = np.nan
+
+        if weekly.shape[0] >= 14:
+
+            rsi_w = rsi(weekly, 14)
+
+            if rsi_w.dropna().shape[0]:
+
+                rsi_14w = rsi_w.dropna().iloc[-1]
+
+
+
+        hist = macd_hist(s_full, 12, 26, 9)
+
+        macd_m = momentum_label(hist, lookback=5, z_window=63)
+
+        ema_tag = ema_regime(s_full, 4, 9, 18)
 
 
 
@@ -2505,13 +2394,15 @@ def build_panel_df(
 
             relative_col: round(relative_return * 100, 1) if pd.notna(relative_return) else np.nan,
 
-            "Relative Trend": relative_trend,
+            "MACD Momentum": macd_m,
 
-            "Breadth >50DMA %": diagnostics.get("Breadth >50DMA %", np.nan),
+            "EMA 4/9/18": ema_tag,
 
-            "1M Dispersion %": diagnostics.get("1M Dispersion %", np.nan),
+            "RSI(14W)": round(rsi_14w, 2) if pd.notna(rsi_14w) else np.nan,
 
-            "Members": diagnostics.get("Members", str(meta.get("Live Members", ""))),
+            "vs 21DMA %": round(dma_21_pct, 1) if pd.notna(dma_21_pct) else np.nan,
+
+            "vs 50DMA %": round(dma_50_pct, 1) if pd.notna(dma_50_pct) else np.nan,
 
         }
 
@@ -2699,16 +2590,6 @@ def color_ema(tag):
     return "rgb(230,236,245)"
 
 
-def color_breadth(value):
-    if pd.isna(value):
-        return "white"
-    if value >= 60:
-        return "rgb(204,238,204)"
-    if value <= 40:
-        return "rgb(255,210,210)"
-    return "rgb(230,236,245)"
-
-
 
 
 def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
@@ -2733,76 +2614,157 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
 
 
-    display_columns = [
-        "Basket",
-        *return_cols,
-        relative_col,
-        "Relative Trend",
-        "Breadth >50DMA %",
-        "1M Dispersion %",
-        "Members",
-    ]
-    display_df = panel_df[
-        [column for column in display_columns if column in panel_df.columns]
-    ].reset_index(drop=True)
+    headers = [
 
-    percentage_columns = [
-        column
-        for column in [
-            *return_cols,
-            relative_col,
-            "Breadth >50DMA %",
-            "1M Dispersion %",
-        ]
-        if column in display_df.columns
+        "Basket", *return_cols,
+
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", relative_col,
+
+        "vs 21DMA %", "vs 50DMA %",
+
     ]
-    styled = display_df.style
-    return_style_columns = [
-        column for column in [*return_cols, relative_col] if column in display_df.columns
-    ]
-    for column in return_style_columns:
-        styled = styled.map(
-            lambda value: f"background-color: {color_ret(value)}",
-            subset=[column],
-        )
-    if "Relative Trend" in display_df.columns:
-        styled = styled.map(
-            lambda value: f"background-color: {color_ema(value)}",
-            subset=["Relative Trend"],
-        )
-    if "Breadth >50DMA %" in display_df.columns:
-        styled = styled.map(
-            lambda value: f"background-color: {color_breadth(value)}",
-            subset=["Breadth >50DMA %"],
+
+
+
+    values: List[List[Any]] = [panel_df["Basket"].tolist()]
+
+    fill_colors: List[List[str]] = [["white"] * len(panel_df)]
+
+
+
+    for col in return_cols:
+
+        vals = panel_df[col].tolist()
+
+        values.append(vals)
+
+        fill_colors.append([color_ret(v) for v in vals])
+
+
+
+    vals = panel_df["MACD Momentum"].tolist()
+
+    values.append(vals)
+
+    fill_colors.append([color_macd(v) for v in vals])
+
+
+
+    vals = panel_df["EMA 4/9/18"].tolist()
+
+    values.append(vals)
+
+    fill_colors.append([color_ema(v) for v in vals])
+
+
+
+    vals = panel_df["RSI(14W)"].tolist()
+
+    values.append(vals)
+
+    fill_colors.append([color_rsi(v) for v in vals])
+
+
+
+    vals = panel_df[relative_col].tolist()
+
+    values.append(vals)
+
+    fill_colors.append([color_ret(v) for v in vals])
+
+
+
+    for col in ["vs 21DMA %", "vs 50DMA %"]:
+
+        vals = panel_df[col].tolist()
+
+        values.append(vals)
+
+        fill_colors.append([color_ret(v) for v in vals])
+
+
+
+    if dynamic_col in ["%5D", "%1M"]:
+
+        col_widths = [0.27, 0.065, 0.065, 0.16, 0.11, 0.08, 0.08, 0.085, 0.085]
+
+    else:
+
+        col_widths = [0.25, 0.06, 0.06, 0.085, 0.155, 0.105, 0.075, 0.075, 0.085, 0.085]
+
+
+
+    formats = []
+
+    for header in headers:
+
+        if header in {"Basket", "MACD Momentum", "EMA 4/9/18"}:
+
+            formats.append(None)
+
+        elif header == "RSI(14W)":
+
+            formats.append(".2f")
+
+        else:
+
+            formats.append(".1f")
+
+
+
+    fig_tbl = go.Figure(data=[go.Table(
+
+        columnwidth=[int(w * 1000) for w in col_widths],
+
+        header=dict(
+
+            values=headers,
+
+            fill_color="white",
+
+            line_color="rgb(230,230,230)",
+
+            font=dict(color="black", size=13),
+
+            align="left",
+
+            height=32
+
+        ),
+
+        cells=dict(
+
+            values=values,
+
+            fill_color=fill_colors,
+
+            line_color="rgb(240,240,240)",
+
+            font=dict(color="black", size=12),
+
+            align="left",
+
+            height=26,
+
+            format=formats
+
         )
 
-    column_config: Dict[str, Any] = {
-        column: st.column_config.NumberColumn(column, format="%.1f%%")
-        for column in percentage_columns
-    }
-    column_config["Basket"] = st.column_config.TextColumn("Basket", width="large")
-    column_config["Relative Trend"] = st.column_config.TextColumn(
-        "Relative Trend",
-        help="EMA 4/9/18 regime of the basket-to-SPY relative-strength ratio.",
-    )
-    column_config["Breadth >50DMA %"] = st.column_config.NumberColumn(
-        "Breadth >50DMA",
-        format="%.1f%%",
-        help="Share of eligible live members trading above their own 50-day average.",
-    )
-    column_config["1M Dispersion %"] = st.column_config.NumberColumn(
-        "1M Dispersion",
-        format="%.1f%%",
-        help="Cross-sectional standard deviation of live-member one-month returns.",
+    )])
+
+
+
+    fig_tbl.update_layout(
+
+        margin=dict(l=0, r=0, t=6, b=0),
+
+        height=min(920, 64 + 26 * max(3, len(panel_df)))
+
     )
 
-    st.dataframe(
-        styled,
-        hide_index=True,
-        width="stretch",
-        height=min(860, 38 + 35 * max(3, min(len(display_df), 23))),
-        column_config=column_config,
-    )
+
+
+    st.plotly_chart(fig_tbl, use_container_width=True)
 
 
 
@@ -2996,7 +2958,7 @@ def plot_cumulative_chart(
 
 
 
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 
@@ -3013,11 +2975,9 @@ def render_basket_section(
 
     dynamic_label: str,
 
+    show_chart: bool,
+
     basket_metadata: Dict[str, Dict[str, Any]],
-
-    basket_diagnostics: Dict[str, Dict[str, Any]],
-
-    basket_query: str = "",
 
 ) -> pd.DataFrame:
 
@@ -3037,17 +2997,47 @@ def render_basket_section(
 
         benchmark_series_full=benchmark_returns_full,
 
-        basket_diagnostics=basket_diagnostics,
-
     )
 
-    if basket_query.strip():
-        query = basket_query.strip()
-        panel_df = panel_df[
-            panel_df["Basket"].str.contains(query, case=False, na=False, regex=False)
-        ]
+
 
     plot_panel_table(panel_df, dynamic_label=dynamic_label)
+
+
+
+    if show_chart:
+
+        dynamic_col = f"%{dynamic_label}"
+
+        ordered_cols = [
+
+            basket_id for basket_id in panel_df.index
+
+            if basket_id in basket_returns_full.columns
+
+            and dynamic_col in panel_df.columns
+
+            and pd.notna(panel_df.loc[basket_id, dynamic_col])
+
+        ]
+
+        chart_rets = basket_returns_full[ordered_cols] if ordered_cols else basket_returns_full
+
+
+
+        plot_cumulative_chart(
+
+            basket_returns_full=chart_rets,
+
+            title=f"{heading} | Cumulative Performance vs SPY",
+
+            benchmark_returns_full=benchmark_returns_full,
+
+            display_start=display_start,
+
+            basket_metadata=basket_metadata,
+
+        )
 
 
 
@@ -3115,11 +3105,16 @@ with st.sidebar:
 
     )
 
-    basket_query = st.text_input(
-        "Find Basket",
-        placeholder="Banks, grid, Japan...",
-        help="Filters the ranked output without changing the underlying calculations.",
-    )
+
+
+    st.markdown("### Optional Sections")
+
+    show_category_sections = st.checkbox("Show per-category panels and charts", value=False)
+
+
+    show_full_map = st.checkbox("Show raw basket map", value=True)
+
+    show_data_notes = st.checkbox("Show data notes", value=False)
 
 
 
@@ -3297,36 +3292,17 @@ if all_basket_rets_full.empty:
 
 bench_rets_full = aligned_levels[BENCH].dropna().pct_change(fill_method=None).dropna()
 
-basket_diagnostics = build_basket_diagnostics(
-    levels=aligned_levels,
-    baskets=live_all_baskets,
-)
-
-source_label = str(fetch_meta.get("source") or "Yahoo")
-requested_count = fetch_meta.get("requested_tickers")
-returned_count = fetch_meta.get("returned_tickers")
-coverage_text = (
-    f"{returned_count}/{requested_count} requested series"
-    if requested_count is not None and returned_count is not None
-    else "coverage unavailable"
-)
-st.caption(
-    f"As of {reference_date.date()} | {source_label} | "
-    f"{len(live_all_baskets)} live baskets | {coverage_text} | "
-    "Daily equal-weight returns; current constituents applied historically."
-)
-
 
 
 # ============================================================
 
-# Consolidated panel and one optional drilldown
+# Consolidated panel and optional sections
 
 # ============================================================
 
 all_panel_df = render_basket_section(
 
-    heading="Basket Rankings",
+    heading="All Baskets | Consolidated Panel",
 
     basket_returns_full=all_basket_rets_full,
 
@@ -3336,86 +3312,118 @@ all_panel_df = render_basket_section(
 
     dynamic_label=DYNAMIC_LABEL,
 
+    show_chart=False,
+
     basket_metadata=basket_metadata,
-
-    basket_diagnostics=basket_diagnostics,
-
-    basket_query=basket_query,
 
 )
 
 
 
-if not all_panel_df.empty:
-    with st.expander("Inspect One Basket", expanded=False):
-        drilldown_options = list(all_panel_df.index)
-        selected_basket_id = st.selectbox(
-            "Basket",
-            drilldown_options,
-            format_func=lambda basket_id: str(all_panel_df.loc[basket_id, "Basket"]),
-        )
-        selected_basket_name = str(all_panel_df.loc[selected_basket_id, "Basket"])
-        selected_members = live_all_baskets.get(selected_basket_id, [])
+if show_category_sections:
 
-        plot_cumulative_chart(
-            basket_returns_full=all_basket_rets_full[[selected_basket_id]],
-            title=f"{selected_basket_name} | Cumulative Performance vs SPY",
-            benchmark_returns_full=bench_rets_full,
-            display_start=display_start_ts,
-            basket_metadata=basket_metadata,
-        )
+    for category, baskets in live_categories.items():
 
-        constituent_df = build_constituent_table(
-            levels=aligned_levels,
-            members=selected_members,
-            display_start=display_start_ts,
-            dynamic_label=DYNAMIC_LABEL,
-        )
-        constituent_percentage_columns = [
-            column
-            for column in ["%5D", "%1M", f"%{DYNAMIC_LABEL}", "vs 50DMA %"]
-            if column in constituent_df.columns
+        cat_names = [
+
+            basket_key(category, basket_name)
+
+            for basket_name in baskets
+
+            if basket_key(category, basket_name) in all_basket_rets_full.columns
+
         ]
-        st.dataframe(
-            constituent_df,
-            hide_index=True,
-            width="stretch",
-            column_config={
-                column: st.column_config.NumberColumn(column, format="%.1f%%")
-                for column in constituent_percentage_columns
-            },
+
+
+
+        if not cat_names:
+
+            st.info(f"{category}: no data for this group in the selected range.")
+
+            continue
+
+
+
+        cat_rets_full = all_basket_rets_full[cat_names].dropna(how="all")
+
+        if cat_rets_full.empty:
+
+            st.info(f"{category}: no data for this group in the selected range.")
+
+            continue
+
+
+
+        render_basket_section(
+
+            heading=category,
+
+            basket_returns_full=cat_rets_full,
+
+            benchmark_returns_full=bench_rets_full,
+
+            display_start=display_start_ts,
+
+            dynamic_label=DYNAMIC_LABEL,
+
+            show_chart=True,
+
+            basket_metadata=basket_metadata,
+
         )
 
 
-with st.expander("Data Quality and Methodology", expanded=False):
-    st.write(
-        "Basket returns are the daily equal-weight mean of available live-member "
-        "returns. The history uses the current basket map and is not a "
-        "point-in-time constituent backtest. Foreign local listings are converted "
-        "to USD before returns are calculated."
-    )
-    st.write(f"Price source: {source_label}. Coverage: {coverage_text}.")
-
-    missing = fetch_meta.get("missing_tickers", [])
-    if missing:
-        st.write(f"Missing price series ({len(missing)}): {', '.join(missing[:300])}")
-    if dropped_baskets:
-        st.write(
-            f"Dropped baskets below member-coverage requirements ({len(dropped_baskets)}): "
-            f"{', '.join(dropped_baskets[:100])}"
-        )
-    if fx_issues:
-        st.write(f"FX conversion issues ({len(fx_issues)}): {', '.join(fx_issues[:100])}")
 
 
-with st.expander("Basket Definitions", expanded=False):
-    definition_category = st.selectbox(
-        "Category",
-        selected_categories,
-        key="basket_definition_category",
-    )
-    for name, tickers in CATEGORIES[definition_category].items():
-        st.write(f"{name}: {', '.join(tickers)}")
+
+if show_full_map:
+
+    with st.expander("Full Basket Map", expanded=True):
+
+        st.caption("Raw basket definitions before data-quality filtering.")
+
+        for category, groups in CATEGORIES.items():
+
+            st.markdown(f"**{category}**")
+
+            for name, tickers in groups.items():
+
+                st.write(f"- {name}: {', '.join(tickers)}")
+
+
+
+if show_data_notes:
+
+    with st.expander("Data Notes", expanded=True):
+
+        last_obs = fetch_meta.get("last_observation")
+
+        requested = fetch_meta.get("requested_tickers")
+
+        returned = fetch_meta.get("returned_tickers")
+
+
+
+        if last_obs:
+
+            st.write(f"Last observation: {last_obs}")
+
+
+
+        if requested is not None and returned is not None:
+
+            st.write(f"Yahoo price coverage: {returned}/{requested} tickers returned.")
+
+
+
+        missing = fetch_meta.get("missing_tickers", [])
+
+        if missing:
+
+            st.write("Tickers missing from Yahoo result:")
+
+            st.write(", ".join(missing[:300]))
+
 
 
 render_footer()
