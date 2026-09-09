@@ -8,7 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pandas as pd
+
+
+class PriceFeedUnavailable(RuntimeError):
+    """Test-harness stand-in for the page exception class."""
 
 
 class BasketDataLoadingTests(unittest.TestCase):
@@ -28,9 +33,11 @@ class BasketDataLoadingTests(unittest.TestCase):
         self.usable = Mock(return_value=False)
         self.namespace = {
             "pd": pd,
+            "np": np,
             "yf": SimpleNamespace(download=self.download),
             "time": SimpleNamespace(sleep=Mock()),
             "BENCH": "SPY",
+            "PriceFeedUnavailable": PriceFeedUnavailable,
             "_cache_key": Mock(return_value="fixture"),
             "compatible_snapshot": self.snapshot,
             "_cache_is_usable": self.usable,
