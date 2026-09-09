@@ -2659,11 +2659,11 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats):
     return '''<!doctype html><html><head><meta charset="utf-8"><style>
 *{box-sizing:border-box}html,body{margin:0;background:white;color:black;font-family:Arial,sans-serif}
 .table-scroll{height:100vh;overflow:auto;padding-top:6px}
-table{width:100%;min-width:1000px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:12px}
-th,td{text-align:left;font-weight:400;padding:4px 8px;border-right:1px solid rgb(240,240,240);border-bottom:1px solid rgb(240,240,240);overflow-wrap:break-word}
+table{width:100%;min-width:1000px;table-layout:auto;border-collapse:separate;border-spacing:0;font-size:12px}
+th,td{text-align:left;font-weight:400;padding:4px 8px;border-right:1px solid rgb(240,240,240);border-bottom:1px solid rgb(240,240,240);white-space:nowrap}
 td{height:26px}th{height:32px;background:white;font-size:13px;position:sticky;top:0;z-index:1;border-color:rgb(230,230,230);border-top:1px solid rgb(230,230,230)}
 th:first-child,td:first-child{border-left:1px solid rgb(230,230,230)}
-.heading{display:flex;align-items:center;gap:2px}.heading span{flex:1;min-width:0}
+.heading{display:flex;align-items:center;gap:2px}.heading span{flex:1;min-width:max-content;white-space:nowrap}
 select{width:17px;flex:0 0 17px;appearance:none;border:0;border-radius:0;background:transparent;color:#666;font:12px Arial;cursor:pointer;padding:0;text-align:center}
 select:hover,select:focus-visible{background:#eee;color:black;outline:1px solid #aaa}
 </style></head><body><div class="table-scroll"><table aria-label="Equity basket scanner"><colgroup>''' + columns + '''</colgroup><thead><tr>''' + "".join(header_cells) + '''</tr></thead><tbody>''' + "".join(rows) + '''</tbody></table></div><script>
