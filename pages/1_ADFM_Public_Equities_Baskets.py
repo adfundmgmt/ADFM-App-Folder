@@ -1,6 +1,6 @@
 import streamlit as st
 
-from adfm_core.palette import PASTEL_20
+from adfm_core.palette import PASTEL
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 
 import pandas as pd
@@ -71,10 +71,6 @@ SUBTITLE = "Sector, thematic, country, and macro dislocation baskets."
 
 
 
-PASTEL = list(PASTEL_20)
-
-
-
 MIN_MARKET_CAP = 1_000_000_000
 
 INDICATOR_WARMUP_DAYS = 520
@@ -89,11 +85,15 @@ CACHE_VERSION = 2
 
 CACHE_MAX_AGE_DAYS = 7
 
-MIN_LIVE_MEMBER_COVERAGE = 0.50
+MIN_LIVE_MEMBER_COVERAGE = 0.75
 
-MIN_DAILY_MEMBER_COVERAGE = 0.60
+MIN_DAILY_MEMBER_COVERAGE = 0.75
 
-MAX_FORWARD_FILL_SESSIONS = 5
+MIN_BREADTH_MEMBER_COVERAGE = 0.75
+
+MAX_PLAUSIBLE_ABSOLUTE_DAILY_RETURN = 10.0
+
+MAX_FX_FORWARD_FILL_SESSIONS = 3
 
 BASKET_KEY_SEPARATOR = " :: "
 
@@ -171,6 +171,28 @@ FX_SUFFIX_CONVERSIONS: Tuple[Tuple[str, Tuple[str, str]], ...] = (
 )
 
 FUND_QUOTE_TYPES = {"ETF", "MUTUALFUND", "MONEYMARKET"}
+
+
+# MACD is intentionally tied to the selected analysis horizon. Multi-year views
+# use completed weekly observations rather than very long daily EMA spans.
+MACD_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "1W": {"frequency": "daily", "fast": 2, "slow": 5, "signal": 2,
+           "acceleration_lookback": 2, "strength_window": 20, "min_observations": 20},
+    "1M": {"frequency": "daily", "fast": 4, "slow": 9, "signal": 3,
+           "acceleration_lookback": 3, "strength_window": 30, "min_observations": 30},
+    "3M": {"frequency": "daily", "fast": 8, "slow": 17, "signal": 5,
+           "acceleration_lookback": 5, "strength_window": 63, "min_observations": 63},
+    "6M": {"frequency": "daily", "fast": 12, "slow": 26, "signal": 9,
+           "acceleration_lookback": 5, "strength_window": 63, "min_observations": 63},
+    "YTD": {"frequency": "daily", "fast": 12, "slow": 26, "signal": 9,
+            "acceleration_lookback": 5, "strength_window": 63, "min_observations": 63},
+    "1Y": {"frequency": "weekly", "fast": 4, "slow": 9, "signal": 3,
+           "acceleration_lookback": 3, "strength_window": 26, "min_observations": 26},
+    "3Y": {"frequency": "weekly", "fast": 8, "slow": 17, "signal": 5,
+           "acceleration_lookback": 4, "strength_window": 52, "min_observations": 52},
+    "5Y": {"frequency": "weekly", "fast": 12, "slow": 26, "signal": 9,
+           "acceleration_lookback": 5, "strength_window": 104, "min_observations": 104},
+}
 
 
 
@@ -972,6 +994,22 @@ def _to_float_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.apply(pd.to_numeric, errors="coerce")
 
 
+def completed_download_end(ny_now: datetime) -> date:
+    """Return Yahoo's exclusive end date without admitting an unfinished US session.
+
+    Yahoo naturally returns no row for exchange holidays or weekends. On weekdays,
+    today's row is requested only after the page's conservative 16:15 New York
+    completion cutoff.
+    """
+    local_now = ny_now
+    if ny_now.tzinfo is not None:
+        local_now = ny_now.astimezone(NY_TZ)
+    session_complete = (
+        local_now.weekday() >= 5 or local_now.time().replace(tzinfo=None) >= COMPLETED_SESSION_TIME
+    )
+    return local_now.date() + timedelta(days=1) if session_complete else local_now.date()
+
+
 
 
 
@@ -1139,6 +1177,8 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
 
 
+    # auto_adjust=True makes the returned Close series split- and
+    # dividend-adjusted. Raw and adjusted closes are never mixed on this page.
     df = yf.download(
 
         tickers=batch,
@@ -1540,6 +1580,14 @@ def normalize_basket_members(
 
 ) -> List[str]:
 
+    """Apply current availability, freshness, and optional market-cap eligibility.
+
+    Missing equity market-cap metadata fails closed when the filter is enabled.
+    Recognized funds are intentionally exempt because fund AUM is not equity
+    market capitalization. These are current-definition filters applied to the
+    full displayed history, not reconstructed historical membership rules.
+    """
+
     valid: List[str] = []
 
 
@@ -1788,7 +1836,9 @@ def convert_foreign_levels_to_usd(levels: pd.DataFrame) -> Tuple[pd.DataFrame, L
 
         union_index = local.index.union(fx.index).sort_values()
 
-        fx_aligned = fx.reindex(union_index).ffill(limit=MAX_FORWARD_FILL_SESSIONS).reindex(local.index)
+        # FX may have a short calendar gap; only past FX observations are carried
+        # and foreign equity prices themselves are never forward-filled.
+        fx_aligned = fx.reindex(union_index).ffill(limit=MAX_FX_FORWARD_FILL_SESSIONS).reindex(local.index)
 
         if operation == "multiply":
 
@@ -1805,6 +1855,37 @@ def convert_foreign_levels_to_usd(levels: pd.DataFrame) -> Tuple[pd.DataFrame, L
             issues.append(f"{ticker}: unsupported FX operation {operation}")
 
     return out.drop(columns=required_fx_tickers(out.columns), errors="ignore"), issues
+
+
+def exclude_strongly_suspect_price_series(
+    levels: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    """Exclude only series with strong evidence of corruption.
+
+    A non-positive or infinite adjusted price is invalid. A one-session move above
+    1,000% in absolute terms is treated as a likely ticker, adjustment, currency,
+    or provider error and excludes the full series rather than manufacturing a
+    replacement observation. Legitimate but merely large equity moves remain.
+    """
+    if levels.empty:
+        return levels, {}
+
+    clean = levels.copy()
+    issues: Dict[str, str] = {}
+    for ticker in clean.columns:
+        series = pd.to_numeric(clean[ticker], errors="coerce")
+        finite = series.replace([np.inf, -np.inf], np.nan)
+        if ((finite.dropna() <= 0).any() or series.isin([np.inf, -np.inf]).any()):
+            issues[ticker] = "non-positive or infinite adjusted price"
+            clean[ticker] = np.nan
+            continue
+
+        daily_returns = finite.pct_change(fill_method=None)
+        if (daily_returns.abs() > MAX_PLAUSIBLE_ABSOLUTE_DAILY_RETURN).any():
+            issues[ticker] = "implausible adjusted one-day return above 1,000%"
+            clean[ticker] = np.nan
+
+    return clean.dropna(axis=1, how="all"), issues
 
 
 
@@ -1891,6 +1972,13 @@ def ew_rets_from_levels(
     min_daily_coverage: float = MIN_DAILY_MEMBER_COVERAGE,
 
 ) -> pd.DataFrame:
+
+    """Build daily-rebalanced equal-weight basket returns.
+
+    Each session assigns equal weight only to observed eligible member returns.
+    Missing observations remain missing and never become zero. The basket itself
+    is unavailable unless the centralized daily coverage threshold is met.
+    """
 
     if levels.empty:
 
@@ -2013,6 +2101,54 @@ def macd_hist(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
     return macd_line - signal_line
 
 
+def get_macd_config(preset: str) -> Dict[str, Any]:
+    """Return a copy of the deterministic MACD methodology for a page preset."""
+    if preset not in MACD_CONFIGS:
+        raise ValueError(f"Unsupported MACD preset: {preset}")
+    return dict(MACD_CONFIGS[preset])
+
+
+def prepare_macd_series(series: pd.Series, frequency: str) -> pd.Series:
+    """Prepare daily or completed Friday-labelled weekly observations."""
+    clean = series.dropna().sort_index()
+    if frequency == "daily":
+        return clean
+    if frequency != "weekly" or clean.empty:
+        return pd.Series(dtype=float)
+
+    weekly = clean.resample("W-FRI", label="right", closed="right").last().dropna()
+    # A Thursday observation receives the following Friday's resample label. Drop
+    # that bar until Friday's completed close exists; this prevents an incomplete
+    # week from entering long-horizon momentum.
+    return weekly[weekly.index <= clean.index.max()]
+
+
+def dynamic_macd_momentum(series: pd.Series, preset: str) -> str:
+    """Classify MACD using the sampling and parameters assigned to the preset."""
+    config = get_macd_config(preset)
+    prepared = prepare_macd_series(series, str(config["frequency"]))
+    required = max(
+        int(config["min_observations"]),
+        int(config["slow"]) + int(config["signal"]),
+        int(config["strength_window"]),
+        int(config["acceleration_lookback"]) + 1,
+    )
+    if prepared.shape[0] < required:
+        return "Neutral"
+
+    hist = macd_hist(
+        prepared,
+        fast=int(config["fast"]),
+        slow=int(config["slow"]),
+        signal=int(config["signal"]),
+    )
+    return momentum_label(
+        hist,
+        lookback=int(config["acceleration_lookback"]),
+        z_window=int(config["strength_window"]),
+    )
+
+
 
 
 
@@ -2098,29 +2234,38 @@ def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> st
 
 
 
-def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
+def anchored_total_return(
+    levels: pd.Series,
+    start_ts: pd.Timestamp,
+    end_ts: Optional[pd.Timestamp] = None,
+) -> float:
+    """Return from the last observation on/before start through completed end.
 
-    clean = levels.dropna()
-
+    This preserves the prior close as the economic anchor. For YTD, a January 1
+    start therefore uses the final completed close of the prior calendar year and
+    retains the first trading session's return.
+    """
+    clean = levels.dropna().sort_index()
+    if end_ts is not None:
+        clean = clean[clean.index <= pd.Timestamp(end_ts)]
     if clean.empty:
-
         return np.nan
 
     anchors = clean[clean.index <= pd.Timestamp(start_ts)]
-
     if anchors.empty:
-
         return np.nan
 
+    anchor_date = anchors.index[-1]
     anchor = anchors.iloc[-1]
-
+    latest_date = clean.index[-1]
     latest = clean.iloc[-1]
-
-    if pd.isna(anchor) or anchor == 0 or pd.isna(latest):
-
+    if latest_date <= anchor_date or pd.isna(anchor) or anchor == 0 or pd.isna(latest):
         return np.nan
-
     return float((latest / anchor) - 1.0)
+
+
+def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
+    return anchored_total_return(levels, start_ts=start_ts)
 
 
 
@@ -2157,6 +2302,63 @@ def compute_display_start(preset: str, today: date) -> date:
 def compute_fetch_start(display_start: date) -> date:
 
     return display_start - timedelta(days=INDICATOR_WARMUP_DAYS)
+
+
+def calculate_basket_breadth(
+    levels: pd.DataFrame,
+    baskets: Dict[str, List[str]],
+    display_start: pd.Timestamp,
+    reference_date: pd.Timestamp,
+    min_member_coverage: float = MIN_BREADTH_MEMBER_COVERAGE,
+) -> Dict[str, Dict[str, Any]]:
+    """Measure positive constituent participation over the selected horizon."""
+    details: Dict[str, Dict[str, Any]] = {}
+    if levels.empty:
+        return details
+
+    unique_members = {
+        member
+        for members in baskets.values()
+        for member in members
+        if member in levels.columns
+    }
+    horizon_returns = {
+        member: anchored_total_return(
+            levels[member],
+            start_ts=display_start,
+            end_ts=reference_date,
+        )
+        for member in unique_members
+    }
+
+    for basket_id, members in baskets.items():
+        eligible = [member for member in members if member in levels.columns]
+        member_returns = [
+            float(horizon_returns[member])
+            for member in eligible
+            if pd.notna(horizon_returns.get(member))
+        ]
+
+        eligible_count = len(eligible)
+        required_count = (
+            1
+            if eligible_count <= 1
+            else max(2, int(math.ceil(eligible_count * min_member_coverage)))
+        )
+        valid_count = len(member_returns)
+        breadth = (
+            100.0 * sum(value > 0 for value in member_returns) / valid_count
+            if valid_count >= required_count and valid_count > 0
+            else np.nan
+        )
+        details[basket_id] = {
+            "Breadth %": round(float(breadth), 1) if pd.notna(breadth) else np.nan,
+            "Valid Members": valid_count,
+            "Eligible Members": eligible_count,
+            "Required Members": required_count,
+        }
+
+    return details
 
 
 
@@ -2234,7 +2436,7 @@ def build_panel_df(
 
     basket_metadata: Dict[str, Dict[str, Any]],
 
-    benchmark_series_full: pd.Series,
+    breadth_details: Dict[str, Dict[str, Any]],
 
 ) -> pd.DataFrame:
 
@@ -2246,13 +2448,11 @@ def build_panel_df(
 
         return_cols.append(dynamic_col)
 
-    relative_col = f"vs SPY {dynamic_label}"
-
     cols = [
 
         "Basket", *return_cols,
 
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", relative_col,
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", "Breadth %",
 
         "vs 21DMA %", "vs 50DMA %",
 
@@ -2269,12 +2469,6 @@ def build_panel_df(
     levels_full = 100.0 * (1.0 + basket_returns_full).cumprod(skipna=True)
 
     rows: List[Dict[str, Any]] = []
-
-
-
-    bench_levels = 100.0 * (1.0 + benchmark_series_full.dropna()).cumprod()
-
-    bench_dynamic = pct_since(bench_levels, display_start)
 
 
 
@@ -2320,12 +2514,6 @@ def build_panel_df(
 
         r_dyn = pct_since(s_full, display_start)
 
-        relative_return = np.nan
-
-        if pd.notna(r_dyn) and pd.notna(bench_dynamic) and (1.0 + bench_dynamic) != 0:
-
-            relative_return = ((1.0 + r_dyn) / (1.0 + bench_dynamic)) - 1.0
-
 
 
         dma_21_pct = basket_vs_dma_pct(s_full, window=21)
@@ -2334,7 +2522,7 @@ def build_panel_df(
 
 
 
-        weekly = s_full.resample("W-FRI").last().dropna()
+        weekly = prepare_macd_series(s_full, "weekly")
 
         rsi_14w = np.nan
 
@@ -2348,9 +2536,7 @@ def build_panel_df(
 
 
 
-        hist = macd_hist(s_full, 12, 26, 9)
-
-        macd_m = momentum_label(hist, lookback=5, z_window=63)
+        macd_m = dynamic_macd_momentum(s_full, dynamic_label)
 
         ema_tag = ema_regime(s_full, 4, 9, 18)
 
@@ -2392,13 +2578,13 @@ def build_panel_df(
 
             "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
 
-            relative_col: round(relative_return * 100, 1) if pd.notna(relative_return) else np.nan,
-
             "MACD Momentum": macd_m,
 
             "EMA 4/9/18": ema_tag,
 
             "RSI(14W)": round(rsi_14w, 2) if pd.notna(rsi_14w) else np.nan,
+
+            "Breadth %": breadth_details.get(basket_id, {}).get("Breadth %", np.nan),
 
             "vs 21DMA %": round(dma_21_pct, 1) if pd.notna(dma_21_pct) else np.nan,
 
@@ -2425,36 +2611,6 @@ def build_panel_df(
         df = df.sort_values(by=dynamic_col, ascending=False, na_position="last")
 
     return df[[column for column in cols if column in df.columns]]
-
-
-
-def cumulative_return_since(returns: pd.Series, display_start: pd.Timestamp) -> pd.Series:
-
-    clean = returns.dropna()
-
-    if clean.empty:
-
-        return pd.Series(dtype=float)
-
-    levels = 100.0 * (1.0 + clean).cumprod()
-
-    anchors = levels[levels.index <= pd.Timestamp(display_start)]
-
-    if anchors.empty:
-
-        return pd.Series(dtype=float)
-
-    anchor = anchors.iloc[-1]
-
-    if pd.isna(anchor) or anchor == 0:
-
-        return pd.Series(dtype=float)
-
-    display = levels[levels.index >= pd.Timestamp(display_start)]
-
-    return ((display / anchor) - 1.0) * 100.0
-
-
 
 
 
@@ -2590,398 +2746,204 @@ def color_ema(tag):
     return "rgb(230,236,245)"
 
 
+def color_breadth(value):
+    if pd.isna(value):
+        return "white"
+    if value >= 60:
+        intensity = min((float(value) - 50.0) / 50.0, 1.0)
+        return color_ret(20.0 * intensity)
+    if value <= 40:
+        intensity = min((50.0 - float(value)) / 50.0, 1.0)
+        return color_ret(-20.0 * intensity)
+    return "rgb(230,236,245)"
+
+
 
 
 def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
-
+    """Render a native sortable table while keeping every metric numeric."""
     if panel_df.empty:
-
         st.info("No baskets passed the data-quality checks for this window.")
-
         return
-
-
 
     dynamic_col = f"%{dynamic_label}"
-
-    relative_col = f"vs SPY {dynamic_label}"
-
     return_cols = ["%5D", "%1M"]
-
     if dynamic_col not in return_cols:
-
         return_cols.append(dynamic_col)
 
-
-
-    headers = [
-
-        "Basket", *return_cols,
-
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", relative_col,
-
-        "vs 21DMA %", "vs 50DMA %",
-
+    display_columns = [
+        "Basket",
+        *return_cols,
+        "MACD Momentum",
+        "EMA 4/9/18",
+        "RSI(14W)",
+        "Breadth %",
+        "vs 21DMA %",
+        "vs 50DMA %",
     ]
-
-
-
-    values: List[List[Any]] = [panel_df["Basket"].tolist()]
-
-    fill_colors: List[List[str]] = [["white"] * len(panel_df)]
-
-
-
-    for col in return_cols:
-
-        vals = panel_df[col].tolist()
-
-        values.append(vals)
-
-        fill_colors.append([color_ret(v) for v in vals])
-
-
-
-    vals = panel_df["MACD Momentum"].tolist()
-
-    values.append(vals)
-
-    fill_colors.append([color_macd(v) for v in vals])
-
-
-
-    vals = panel_df["EMA 4/9/18"].tolist()
-
-    values.append(vals)
-
-    fill_colors.append([color_ema(v) for v in vals])
-
-
-
-    vals = panel_df["RSI(14W)"].tolist()
-
-    values.append(vals)
-
-    fill_colors.append([color_rsi(v) for v in vals])
-
-
-
-    vals = panel_df[relative_col].tolist()
-
-    values.append(vals)
-
-    fill_colors.append([color_ret(v) for v in vals])
-
-
-
-    for col in ["vs 21DMA %", "vs 50DMA %"]:
-
-        vals = panel_df[col].tolist()
-
-        values.append(vals)
-
-        fill_colors.append([color_ret(v) for v in vals])
-
-
-
-    if dynamic_col in ["%5D", "%1M"]:
-
-        col_widths = [0.27, 0.065, 0.065, 0.16, 0.11, 0.08, 0.08, 0.085, 0.085]
-
-    else:
-
-        col_widths = [0.25, 0.06, 0.06, 0.085, 0.155, 0.105, 0.075, 0.075, 0.085, 0.085]
-
-
-
-    formats = []
-
-    for header in headers:
-
-        if header in {"Basket", "MACD Momentum", "EMA 4/9/18"}:
-
-            formats.append(None)
-
-        elif header == "RSI(14W)":
-
-            formats.append(".2f")
-
-        else:
-
-            formats.append(".1f")
-
-
-
-    fig_tbl = go.Figure(data=[go.Table(
-
-        columnwidth=[int(w * 1000) for w in col_widths],
-
-        header=dict(
-
-            values=headers,
-
-            fill_color="white",
-
-            line_color="rgb(230,230,230)",
-
-            font=dict(color="black", size=13),
-
-            align="left",
-
-            height=32
-
-        ),
-
-        cells=dict(
-
-            values=values,
-
-            fill_color=fill_colors,
-
-            line_color="rgb(240,240,240)",
-
-            font=dict(color="black", size=12),
-
-            align="left",
-
-            height=26,
-
-            format=formats
-
+    display_df = panel_df[
+        [column for column in display_columns if column in panel_df.columns]
+    ].reset_index(drop=True)
+
+    return_style_columns = [
+        column
+        for column in [*return_cols, "vs 21DMA %", "vs 50DMA %"]
+        if column in display_df.columns
+    ]
+    styled = display_df.style
+    for column in return_style_columns:
+        styled = styled.map(
+            lambda value: f"background-color: {color_ret(value)}",
+            subset=[column],
+        )
+    styled = styled.map(
+        lambda value: f"background-color: {color_macd(value)}",
+        subset=["MACD Momentum"],
+    )
+    styled = styled.map(
+        lambda value: f"background-color: {color_ema(value)}",
+        subset=["EMA 4/9/18"],
+    )
+    styled = styled.map(
+        lambda value: f"background-color: {color_rsi(value)}",
+        subset=["RSI(14W)"],
+    )
+    styled = styled.map(
+        lambda value: f"background-color: {color_breadth(value)}",
+        subset=["Breadth %"],
+    )
+
+    percent_columns = [
+        column
+        for column in [
+            *return_cols,
+            "Breadth %",
+            "vs 21DMA %",
+            "vs 50DMA %",
+        ]
+        if column in display_df.columns
+    ]
+    column_config: Dict[str, Any] = {
+        column: st.column_config.NumberColumn(column, format="%.1f%%")
+        for column in percent_columns
+    }
+    column_config.update(
+        {
+            "Basket": st.column_config.TextColumn("Basket", width="large"),
+            "MACD Momentum": st.column_config.TextColumn(
+                "MACD Momentum",
+                width="large",
+                help="Preset-specific MACD direction, acceleration, and normalized strength.",
+            ),
+            "EMA 4/9/18": st.column_config.TextColumn("EMA 4/9/18", width="small"),
+            "RSI(14W)": st.column_config.NumberColumn("RSI(14W)", format="%.2f"),
+        }
+    )
+
+    st.dataframe(
+        styled,
+        hide_index=True,
+        width="stretch",
+        height=min(900, 38 + 35 * max(3, min(len(display_df), 24))),
+        column_config=column_config,
+    )
+
+def select_performance_extremes(
+    panel_df: pd.DataFrame,
+    dynamic_col: str,
+    count: int = 15,
+) -> pd.DataFrame:
+    """Select non-overlapping leaders and laggards from the table's return field."""
+    if panel_df.empty or dynamic_col not in panel_df.columns:
+        return pd.DataFrame(columns=panel_df.columns)
+    ranked = panel_df[pd.notna(panel_df[dynamic_col])]
+    if ranked.empty:
+        return ranked
+
+    top = ranked.nlargest(count, dynamic_col)
+    bottom = ranked.drop(index=top.index, errors="ignore").nsmallest(count, dynamic_col)
+    return pd.concat([bottom, top]).sort_values(dynamic_col, ascending=True)
+
+
+def plot_basket_performance(
+    panel_df: pd.DataFrame,
+    dynamic_label: str,
+    basket_metadata: Dict[str, Dict[str, Any]],
+    breadth_details: Dict[str, Dict[str, Any]],
+) -> None:
+    """Render one compact Top 15 / Bottom 15 chart from the table calculations."""
+    dynamic_col = f"%{dynamic_label}"
+    chart_df = select_performance_extremes(panel_df, dynamic_col, count=15)
+    if chart_df.empty:
+        st.info("Insufficient basket returns for the selected performance window.")
+        return
+
+    basket_names = chart_df["Basket"].astype(str).tolist()
+    returns = chart_df[dynamic_col].astype(float).tolist()
+    colors = [PASTEL["sage"] if value >= 0 else PASTEL["rose"] for value in returns]
+    hover_details: List[List[str]] = []
+    for basket_id in chart_df.index:
+        meta = basket_metadata.get(basket_id, {})
+        breadth = breadth_details.get(basket_id, {})
+        breadth_value = breadth.get("Breadth %")
+        breadth_text = f"{float(breadth_value):.1f}%" if pd.notna(breadth_value) else "NA"
+        valid_text = (
+            f"{breadth.get('Valid Members', 0)}/"
+            f"{breadth.get('Eligible Members', 0)}"
+        )
+        hover_details.append(
+            [str(meta.get("Category", "")), breadth_text, valid_text]
         )
 
-    )])
-
-
-
-    fig_tbl.update_layout(
-
-        margin=dict(l=0, r=0, t=6, b=0),
-
-        height=min(920, 64 + 26 * max(3, len(panel_df)))
-
+    fig = go.Figure(
+        go.Bar(
+            x=returns,
+            y=basket_names,
+            orientation="h",
+            marker_color=colors,
+            customdata=hover_details,
+            hovertemplate=(
+                "Basket: %{y}<br>"
+                "Category: %{customdata[0]}<br>"
+                f"{dynamic_label} return: %{{x:.1f}}%<br>"
+                "Breadth: %{customdata[1]}<br>"
+                "Valid constituents: %{customdata[2]}<extra></extra>"
+            ),
+        )
     )
-
-
-
-    st.plotly_chart(fig_tbl, use_container_width=True)
-
-
-
-
-def _chart_display_name(
-
-    basket_id: str,
-
-    basket_metadata: Dict[str, Dict[str, Any]],
-
-    duplicate_names: Dict[str, int],
-
-) -> str:
-
-    meta = basket_metadata.get(basket_id, {})
-
-    if BASKET_KEY_SEPARATOR in basket_id:
-
-        fallback_category, fallback_basket = basket_id.split(BASKET_KEY_SEPARATOR, 1)
-
-    else:
-
-        fallback_category, fallback_basket = "", basket_id
-
-    category = str(meta.get("Category", fallback_category))
-
-    basket_name = str(meta.get("Basket", fallback_basket))
-
-    if duplicate_names.get(basket_name, 0) > 1 and category:
-
-        return f"{category} | {basket_name}"
-
-    return basket_name
-
-
-
-
-def plot_cumulative_chart(
-
-    basket_returns_full: pd.DataFrame,
-
-    title: str,
-
-    benchmark_returns_full: pd.Series,
-
-    display_start: pd.Timestamp,
-
-    basket_metadata: Dict[str, Dict[str, Any]],
-
-):
-
-    if basket_returns_full.empty or benchmark_returns_full.dropna().empty:
-
-        st.info("Insufficient data to render chart for this window.")
-
-        return
-
-
-
-    cumulative: Dict[str, pd.Series] = {}
-
-    for basket_id in basket_returns_full.columns:
-
-        series = cumulative_return_since(basket_returns_full[basket_id], display_start)
-
-        if not series.empty:
-
-            cumulative[basket_id] = series
-
-
-
-    if not cumulative:
-
-        st.info("No basket return series available for this chart.")
-
-        return
-
-
-
-    cum_pct = pd.DataFrame(cumulative)
-
-    bm_cum = cumulative_return_since(benchmark_returns_full, display_start)
-
-    if bm_cum.empty:
-
-        st.info("Insufficient benchmark history for this chart window.")
-
-        return
-
-
-
-    duplicate_names: Dict[str, int] = {}
-
-    for basket_id in cum_pct.columns:
-
-        meta = basket_metadata.get(basket_id, {})
-
-        fallback = basket_id.split(BASKET_KEY_SEPARATOR, 1)[-1]
-
-        basket_name = str(meta.get("Basket", fallback))
-
-        duplicate_names[basket_name] = duplicate_names.get(basket_name, 0) + 1
-
-
-
-    fig = go.Figure()
-
-
-
-    for i, basket_id in enumerate(cum_pct.columns):
-
-        trace_name = _chart_display_name(basket_id, basket_metadata, duplicate_names)
-
-        fig.add_trace(go.Scatter(
-
-            x=cum_pct.index,
-
-            y=cum_pct[basket_id],
-
-            mode="lines",
-
-            line=dict(width=2, color=PASTEL[i % len(PASTEL)]),
-
-            name=trace_name,
-
-            hovertemplate=f"{trace_name}<br>% Cum: %{{y:.1f}}%<extra></extra>"
-
-        ))
-
-
-
-    fig.add_trace(go.Scatter(
-
-        x=bm_cum.index,
-
-        y=bm_cum.values,
-
-        mode="lines",
-
-        line=dict(width=2, dash="dash", color="#888"),
-
-        name="SPY",
-
-        hovertemplate="SPY<br>% Cum: %{y:.1f}%<extra></extra>"
-
-    ))
-
-
-
-    rangebreaks: List[Dict[str, Any]] = [dict(bounds=["sat", "mon"])]
-
-    business_days = pd.date_range(bm_cum.index.min(), bm_cum.index.max(), freq="B")
-
-    missing_sessions = business_days.difference(bm_cum.index)
-
-    if len(missing_sessions):
-
-        rangebreaks.append(dict(values=missing_sessions))
-
-
-
     fig.update_layout(
-
-        showlegend=True,
-
-        hovermode="x unified",
-
-        yaxis_title="Cumulative return, %",
-
-        title=dict(text=title, x=0, xanchor="left", y=0.95),
-
-        margin=dict(l=10, r=10, t=35, b=10),
-
-        xaxis=dict(
-
-            showspikes=True,
-
-            spikemode="across",
-
-            spikesnap="cursor",
-
-            showgrid=True,
-
-            rangebreaks=rangebreaks,
-
-        ),
-
-        yaxis=dict(zeroline=False, showgrid=True)
-
+        height=720,
+        margin=dict(l=260, r=20, t=10, b=35),
+        showlegend=False,
+        xaxis=dict(title=f"{dynamic_label} total return, %", zeroline=True),
+        yaxis=dict(title=None, automargin=True),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
     )
-
-
-
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 
 
 def render_basket_section(
 
-    heading: str,
+    heading: Optional[str],
 
     basket_returns_full: pd.DataFrame,
-
-    benchmark_returns_full: pd.Series,
 
     display_start: pd.Timestamp,
 
     dynamic_label: str,
 
-    show_chart: bool,
-
     basket_metadata: Dict[str, Dict[str, Any]],
+
+    breadth_details: Dict[str, Dict[str, Any]],
 
 ) -> pd.DataFrame:
 
-    st.subheader(heading)
+    if heading:
+
+        st.subheader(heading)
 
 
 
@@ -2995,49 +2957,13 @@ def render_basket_section(
 
         basket_metadata=basket_metadata,
 
-        benchmark_series_full=benchmark_returns_full,
+        breadth_details=breadth_details,
 
     )
 
 
 
     plot_panel_table(panel_df, dynamic_label=dynamic_label)
-
-
-
-    if show_chart:
-
-        dynamic_col = f"%{dynamic_label}"
-
-        ordered_cols = [
-
-            basket_id for basket_id in panel_df.index
-
-            if basket_id in basket_returns_full.columns
-
-            and dynamic_col in panel_df.columns
-
-            and pd.notna(panel_df.loc[basket_id, dynamic_col])
-
-        ]
-
-        chart_rets = basket_returns_full[ordered_cols] if ordered_cols else basket_returns_full
-
-
-
-        plot_cumulative_chart(
-
-            basket_returns_full=chart_rets,
-
-            title=f"{heading} | Cumulative Performance vs SPY",
-
-            benchmark_returns_full=benchmark_returns_full,
-
-            display_start=display_start,
-
-            basket_metadata=basket_metadata,
-
-        )
 
 
 
@@ -3109,10 +3035,10 @@ with st.sidebar:
 
     st.markdown("### Optional Sections")
 
-    show_category_sections = st.checkbox("Show per-category panels and charts", value=False)
+    show_category_sections = st.checkbox("Show per-category panels", value=False)
 
 
-    show_full_map = st.checkbox("Show raw basket map", value=True)
+    show_full_map = st.checkbox("Show raw basket map", value=False)
 
     show_data_notes = st.checkbox("Show data notes", value=False)
 
@@ -3140,9 +3066,7 @@ display_start_for_fetch = compute_display_start(preset, today)
 
 fetch_start_date = compute_fetch_start(display_start_for_fetch)
 
-include_today = ny_now.weekday() >= 5 or ny_now.time() >= COMPLETED_SESSION_TIME
-
-download_end_exclusive = today + timedelta(days=1) if include_today else today
+download_end_exclusive = completed_download_end(ny_now)
 
 DYNAMIC_LABEL = preset
 
@@ -3195,6 +3119,8 @@ if fetch_meta.get("source") == "last_good_cache":
 
 
 levels_usd, fx_issues = convert_foreign_levels_to_usd(levels)
+
+levels_usd, bad_data_issues = exclude_strongly_suspect_price_series(levels_usd)
 
 
 
@@ -3290,7 +3216,12 @@ if all_basket_rets_full.empty:
 
 
 
-bench_rets_full = aligned_levels[BENCH].dropna().pct_change(fill_method=None).dropna()
+breadth_details = calculate_basket_breadth(
+    levels=aligned_levels,
+    baskets=live_all_baskets,
+    display_start=display_start_ts,
+    reference_date=reference_date,
+)
 
 
 
@@ -3300,22 +3231,46 @@ bench_rets_full = aligned_levels[BENCH].dropna().pct_change(fill_method=None).dr
 
 # ============================================================
 
+available_equity_count = sum(
+    1
+    for ticker in equity_tickers
+    if ticker in levels_usd.columns and not levels_usd[ticker].dropna().empty
+)
+cache_suffix = (
+    f" | {fetch_meta.get('source')}"
+    if fetch_meta.get("source") in {"last_good_cache", "yahoo+cache"}
+    else ""
+)
+st.caption(
+    f"Data through {reference_date.date()} | "
+    f"{available_equity_count}/{len(equity_tickers)} tickers available"
+    f"{cache_suffix}"
+)
+
 all_panel_df = render_basket_section(
 
-    heading="All Baskets | Consolidated Panel",
+    heading=None,
 
     basket_returns_full=all_basket_rets_full,
-
-    benchmark_returns_full=bench_rets_full,
 
     display_start=display_start_ts,
 
     dynamic_label=DYNAMIC_LABEL,
 
-    show_chart=False,
-
     basket_metadata=basket_metadata,
 
+    breadth_details=breadth_details,
+
+)
+
+
+st.subheader("Basket Performance")
+
+plot_basket_performance(
+    panel_df=all_panel_df,
+    dynamic_label=DYNAMIC_LABEL,
+    basket_metadata=basket_metadata,
+    breadth_details=breadth_details,
 )
 
 
@@ -3360,15 +3315,13 @@ if show_category_sections:
 
             basket_returns_full=cat_rets_full,
 
-            benchmark_returns_full=bench_rets_full,
-
             display_start=display_start_ts,
 
             dynamic_label=DYNAMIC_LABEL,
 
-            show_chart=True,
-
             basket_metadata=basket_metadata,
+
+            breadth_details=breadth_details,
 
         )
 
@@ -3414,6 +3367,22 @@ if show_data_notes:
 
             st.write(f"Yahoo price coverage: {returned}/{requested} tickers returned.")
 
+        st.write(
+            "Returns use Yahoo split- and dividend-adjusted closes. Baskets are "
+            "daily-rebalanced equal weight across observed eligible members, with "
+            f"at least {MIN_DAILY_MEMBER_COVERAGE:.0%} daily member coverage."
+        )
+        st.write(
+            "Historical results apply today's basket definitions and, when enabled, "
+            "today's market-cap eligibility to history; they are not point-in-time "
+            "constituent backtests. Foreign listings are converted to USD without "
+            "filling missing foreign-equity sessions."
+        )
+
+        if fetch_meta.get("source") in {"last_good_cache", "yahoo+cache"}:
+
+            st.write(f"Cache provenance: {fetch_meta.get('source')}.")
+
 
 
         missing = fetch_meta.get("missing_tickers", [])
@@ -3423,6 +3392,67 @@ if show_data_notes:
             st.write("Tickers missing from Yahoo result:")
 
             st.write(", ".join(missing[:300]))
+
+        if dropped_baskets:
+
+            st.write("Baskets below the current 75% live-member requirement:")
+
+            st.write(", ".join(dropped_baskets[:300]))
+
+        stale_members = [
+            ticker
+            for ticker in equity_tickers
+            if ticker in levels_usd.columns
+            and not levels_usd[ticker].dropna().empty
+            and levels_usd[ticker].dropna().index.max()
+            < reference_date - pd.Timedelta(days=stale_days)
+        ]
+        if stale_members:
+
+            st.write("Members excluded as stale:")
+
+            st.write(", ".join(stale_members[:300]))
+
+        not_yet_listed = [
+            ticker
+            for ticker in live_tickers
+            if ticker != BENCH
+            and ticker in aligned_levels.columns
+            and not aligned_levels[ticker].dropna().empty
+            and aligned_levels[ticker].dropna().index.min() > display_start_ts
+        ]
+        if not_yet_listed:
+
+            st.write("Current members without a start-period observation:")
+
+            st.write(", ".join(not_yet_listed[:300]))
+
+        if apply_market_cap_filter:
+
+            missing_market_caps = [
+                ticker
+                for ticker in equity_tickers
+                if str(market_metadata.get(ticker, {}).get("quote_type") or "").upper()
+                not in FUND_QUOTE_TYPES
+                and market_metadata.get(ticker, {}).get("market_cap") is None
+            ]
+            if missing_market_caps:
+
+                st.write("Equities excluded because market capitalization was unavailable:")
+
+                st.write(", ".join(missing_market_caps[:300]))
+
+        if fx_issues:
+
+            st.write("FX conversion issues:")
+
+            st.write(", ".join(fx_issues[:300]))
+
+        if bad_data_issues:
+
+            st.write("Strongly suspect price series excluded:")
+
+            st.write(", ".join(f"{key}: {value}" for key, value in bad_data_issues.items()))
 
 
 
