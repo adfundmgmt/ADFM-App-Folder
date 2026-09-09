@@ -24,7 +24,7 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(len(TOOL_CATALOG), 25)
         self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 26)))
         self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 25)
-        self.assertEqual(TOOL_CATALOG[0].title, "ADFM Public Equities Baskets")
+        self.assertEqual(TOOL_CATALOG[0].title, "Equity Baskets")
         self.assertEqual(TOOL_CATALOG[8].page_filename, "9_ADFM_Underwriter.py")
         for tool in TOOL_CATALOG:
             self.assertTrue((REPOSITORY_ROOT / "pages" / tool.page_filename).is_file())
@@ -34,30 +34,30 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(
             [tool.title for tool in TOOL_CATALOG],
             [
-                "ADFM Public Equities Baskets",
-                "Global Macro Regime",
-                "Liquidity Conditions Monitor",
-                "Yield Curve Rates Regime Monitor",
-                "Credit Conditions Monitor",
-                "Currency Tension Engine",
-                "Sector Breadth and Rotation",
-                "Equity Leadership & Rotation",
-                "ADFM Underwriter",
-                "ADFM Chart Terminal",
-                "Cross-Asset Ratio Chartbook",
-                "Rate of Change Regime Explorer",
-                "Relative Volatility Lab",
-                "ETF Flow Pressure Proxy",
-                "Volume Based Sentiment Indicator",
-                "Options Positioning Compass",
-                "SEC 13F Exposure Browser",
-                "CFTC Positioning Monitor",
-                "Market Stress Composite",
+                "Equity Baskets",
+                "Global Macro",
+                "Liquidity",
+                "Rates & Yield Curve",
+                "Credit Conditions",
+                "FX Regime",
+                "Sector Rotation",
+                "Equity Leadership",
+                "Equity Underwriter",
+                "Chart Terminal",
+                "Cross-Asset Ratios",
+                "Momentum & Rate of Change",
+                "Relative Volatility",
+                "ETF Flow Pressure",
+                "Volume Sentiment",
+                "Options Positioning",
+                "13F Holdings",
+                "CFTC Positioning",
+                "Market Stress",
                 "Catalyst Calendar",
-                "Hedge Timer",
-                "Position Sizing Lab",
-                "Market Memory Explorer",
-                "Monthly Seasonality Explorer",
+                "Hedge Timing",
+                "Position Sizing",
+                "Market Memory",
+                "Seasonality",
                 "Commodity Event Study",
             ],
         )
@@ -70,11 +70,15 @@ class DocumentationTests(unittest.TestCase):
             self.assertEqual(len(guide.read_order), 3)
             self.assertTrue(all(step.endswith(".") for step in guide.read_order))
 
-    def test_sidebar_labels_match_catalog_titles(self) -> None:
-        for tool in TOOL_CATALOG:
-            stem = Path(tool.page_filename).stem
-            sidebar_label = re.sub(r"^\d+_", "", stem).replace("_", " ")
-            self.assertEqual(sidebar_label, tool.title)
+    def test_visible_titles_are_independent_from_legacy_filenames(self) -> None:
+        legacy_labels = [
+            re.sub(r"^\d+_", "", Path(tool.page_filename).stem).replace("_", " ")
+            for tool in TOOL_CATALOG
+        ]
+        self.assertEqual(len(set(legacy_labels)), 25)
+        self.assertTrue(
+            any(label != tool.title for label, tool in zip(legacy_labels, TOOL_CATALOG))
+        )
 
     def test_home_navigation_maps_to_catalog(self) -> None:
         self.assertEqual(tool_order(), [tool.title for tool in TOOL_CATALOG])
