@@ -1974,84 +1974,55 @@ def align_levels_to_calendar(
 
 
 def ew_rets_from_levels(
-
     levels: pd.DataFrame,
-
     baskets: Dict[str, List[str]],
-
     min_daily_coverage: float = MIN_DAILY_MEMBER_COVERAGE,
-
 ) -> pd.DataFrame:
+    """Coverage-aware daily equal-weight basket returns.
 
+    Constituent returns require prices on both adjacent benchmark-calendar
+    sessions. Missing returns are never compressed across a gap. A basket
+    remains observable when the configured coverage floor is met, so one
+    missing constituent or a recent IPO does not blank an otherwise valid
+    multi-year basket.
+    """
     if levels.empty:
-
         return pd.DataFrame()
 
-
-
     rets = pd.DataFrame(
-
         {
-
             column: levels[column].pct_change(fill_method=None)
-
             for column in levels.columns
-
         },
-
         index=levels.index,
-
     )
-
     out: Dict[str, pd.Series] = {}
 
-
-
     for basket_name, basket_tickers in baskets.items():
-
-        cols = list(dict.fromkeys(str(t).upper() for t in basket_tickers if str(t).upper() in rets.columns))
-
+        cols = list(dict.fromkeys(
+            str(t).upper() for t in basket_tickers if str(t).upper() in rets.columns
+        ))
         if not cols:
-
             continue
 
-
-
         member_rets = rets[cols]
-
-        # Fixed live membership and weights: no daily survivor reweighting.
-        required_count = len(cols)
-
+        required_count = 1 if len(cols) == 1 else max(
+            2, int(math.ceil(len(cols) * min_daily_coverage))
+        )
         valid_count = member_rets.notna().sum(axis=1)
-
         basket_ret = member_rets.mean(axis=1, skipna=True)
-
         basket_ret[valid_count < required_count] = np.nan
 
-
-
         price_count = levels[cols].notna().sum(axis=1)
-
         inception_dates = price_count[price_count >= required_count].index
-
         if len(inception_dates):
-
             inception_date = inception_dates[0]
-
             if pd.isna(basket_ret.loc[inception_date]):
-
                 basket_ret.loc[inception_date] = 0.0
-
-
 
         out[basket_name] = basket_ret
 
-
-
     return pd.DataFrame(out, index=levels.index)
-
-
-
 
 
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -2144,25 +2115,41 @@ def ema_regime(series: pd.Series, e1: int = 4, e2: int = 9, e3: int = 18) -> str
 
 
 
-def macd_settings(preset: str, as_of: pd.Timestamp) -> Tuple[int, int, int, int, int]:
-    """Horizon-adaptive daily MACD; 3M anchors the conventional 12/26/9.
-
-    Fixed presets use trading-session equivalents. YTD uses elapsed weekdays,
-    keeping settings identical across baskets regardless of missing observations.
-    These are custom scanner settings, not standard MACD for every preset.
-    """
+def preset_horizon_sessions(preset: str, as_of: pd.Timestamp) -> int:
     horizons = {"1W": 5, "1M": 21, "3M": 63, "6M": 126,
                 "1Y": 252, "3Y": 756, "5Y": 1260}
     if preset == "YTD":
         end = pd.Timestamp(as_of).date()
-        horizon = max(1, int(np.busday_count(date(end.year, 1, 1), end)) + 1)
-    else:
-        horizon = horizons[preset]
-    scale = max(0.25, horizon / 63.0)
-    fast, slow, signal = (max(2, int(round(span * scale))) for span in (12, 26, 9))
-    lookback = max(1, int(round(5 * scale)))
-    z_window = max(20, min(252, horizon))
+        return max(1, int(np.busday_count(date(end.year, 1, 1), end)) + 1)
+    if preset not in horizons:
+        raise ValueError(f"Unsupported date-range preset: {preset}")
+    return horizons[preset]
+
+
+def _horizon_scale(preset: str, as_of: pd.Timestamp) -> float:
+    """Sublinear scaling keeps long-horizon indicators responsive."""
+    horizon = preset_horizon_sessions(preset, as_of)
+    return min(4.5, max(0.35, math.sqrt(max(horizon, 1) / 63.0)))
+
+
+def macd_settings(preset: str, as_of: pd.Timestamp) -> Tuple[int, int, int, int, int]:
+    """Preset-responsive MACD anchored to conventional 12/26/9 at 3M."""
+    scale = _horizon_scale(preset, as_of)
+    fast = max(3, int(round(12 * scale)))
+    slow = max(fast + 2, int(round(26 * scale)))
+    signal = max(2, int(round(9 * scale)))
+    lookback = max(2, int(round(5 * scale)))
+    z_window = max(20, min(252, int(round(63 * scale))))
     return fast, slow, signal, lookback, z_window
+
+
+def ema_settings(preset: str, as_of: pd.Timestamp) -> Tuple[int, int, int]:
+    """Preset-responsive EMA stack anchored to 4/9/18 at 3M."""
+    scale = _horizon_scale(preset, as_of)
+    e1 = max(2, int(round(4 * scale)))
+    e2 = max(e1 + 1, int(round(9 * scale)))
+    e3 = max(e2 + 1, int(round(18 * scale)))
+    return e1, e2, e3
 
 
 def horizon_macd_momentum(series: pd.Series, settings: Tuple[int, int, int, int, int]) -> str:
@@ -2217,7 +2204,7 @@ def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> st
 
 
     # Magnitude of a z-score is unusualness, not directional conviction.
-    return f"{base} | {accel}"
+    return f"{base} | {accel} | {strength}"
 
 
 
@@ -2388,208 +2375,110 @@ def compute_basket_breadth(
 
 
 def build_panel_df(
-
     basket_returns_full: pd.DataFrame,
-
     display_start: pd.Timestamp,
-
     dynamic_label: str,
-
     basket_metadata: Dict[str, Dict[str, Any]],
-
     benchmark_series_full: pd.Series,
-
     basket_breadth: Dict[str, float],
-
 ) -> pd.DataFrame:
-
     dynamic_col = f"%{dynamic_label}"
-
     return_cols = ["%5D", "%1M"]
-
     if dynamic_col not in return_cols:
-
         return_cols.append(dynamic_col)
-
     breadth_col = f"Breadth % {dynamic_label}"
 
+    as_of = basket_returns_full.index[-1] if not basket_returns_full.empty else pd.Timestamp(display_start)
+    macd_config = macd_settings(dynamic_label, as_of)
+    ema_config = ema_settings(dynamic_label, as_of)
+    ema_col = f"EMA {ema_config[0]}/{ema_config[1]}/{ema_config[2]}"
+
     cols = [
-
         "Basket", *return_cols,
-
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", breadth_col,
-
+        "MACD Momentum", ema_col, "RSI(14W)", breadth_col,
         "vs 21DMA %", "vs 50DMA %",
-
     ]
-
-
-
     if basket_returns_full.empty:
-
         return pd.DataFrame(columns=cols)
 
-
-
     levels_full = 100.0 * (1.0 + basket_returns_full).cumprod(skipna=True)
-
     rows: List[Dict[str, Any]] = []
 
-
-
-    macd_config = macd_settings(dynamic_label, basket_returns_full.index[-1])
-
-
-
     basket_name_counts: Dict[str, int] = {}
-
     for basket_id in levels_full.columns:
-
         meta = basket_metadata.get(basket_id, {})
-
-        if BASKET_KEY_SEPARATOR in basket_id:
-
-            _, fallback_basket = basket_id.split(BASKET_KEY_SEPARATOR, 1)
-
-        else:
-
-            fallback_basket = basket_id
-
+        fallback_basket = basket_id.split(BASKET_KEY_SEPARATOR, 1)[-1]
         basket_name = str(meta.get("Basket", fallback_basket))
-
         basket_name_counts[basket_name] = basket_name_counts.get(basket_name, 0) + 1
 
-
-
     for basket_id in levels_full.columns:
-
         s_full = levels_full[basket_id]
         segment = trailing_valid_segment(s_full)
 
-
-
         r5d = np.nan
-
         if s_full.shape[0] >= 6:
             r5d = pct_since(s_full.iloc[-6:], s_full.index[-6])
-
-
-
         r1m = pct_since(s_full, s_full.index.max() - pd.DateOffset(months=1))
-
         r_dyn = pct_since(s_full, display_start)
-
         breadth = basket_breadth.get(basket_id, np.nan)
-
-
-
         dma_21_pct = basket_vs_dma_pct(s_full, window=21)
-
         dma_50_pct = basket_vs_dma_pct(s_full, window=50)
 
-
-
         weekly = segment.resample("W-FRI").last() if not segment.empty else pd.Series(dtype=float)
-        # Exclude the partial first and last weekly buckets.
         if not weekly.empty:
             first_complete = segment.index[0].to_period("W-FRI").end_time.normalize()
             weekly = weekly[(weekly.index > first_complete) & (weekly.index <= s_full.index[-1])]
-
         rsi_14w = np.nan
-
         if weekly.shape[0] >= 14:
-
             rsi_w = rsi(weekly, 14)
-
             if rsi_w.dropna().shape[0]:
-
                 rsi_14w = rsi_w.dropna().iloc[-1]
 
-
-
         macd_m = horizon_macd_momentum(s_full, macd_config)
-
-        ema_tag = ema_regime(s_full, 4, 9, 18)
-
-
+        ema_tag = ema_regime(s_full, *ema_config)
 
         meta = basket_metadata.get(basket_id, {})
-
         if BASKET_KEY_SEPARATOR in basket_id:
-
             fallback_category, fallback_basket = basket_id.split(BASKET_KEY_SEPARATOR, 1)
-
         else:
-
             fallback_category, fallback_basket = "", basket_id
-
         category = str(meta.get("Category", fallback_category))
-
         basket_name = str(meta.get("Basket", fallback_basket))
-
         display_name = (
-
             f"{category} | {basket_name}"
-
             if basket_name_counts.get(basket_name, 0) > 1 and category
-
             else basket_name
-
         )
 
-
-
         row: Dict[str, Any] = {
-
             "_BasketKey": basket_id,
-
             "Basket": display_name,
-
             "%5D": r5d * 100 if pd.notna(r5d) else np.nan,
-
             "%1M": r1m * 100 if pd.notna(r1m) else np.nan,
-
             breadth_col: breadth,
-
             "MACD Momentum": macd_m,
-
-            "EMA 4/9/18": ema_tag,
-
+            ema_col: ema_tag,
             "RSI(14W)": rsi_14w,
-
             "vs 21DMA %": dma_21_pct,
-
             "vs 50DMA %": dma_50_pct,
-
         }
-
         row[dynamic_col] = r_dyn * 100 if pd.notna(r_dyn) else np.nan
-
         rows.append(row)
 
-
-
     if not rows:
-
         return pd.DataFrame(columns=cols)
-
-
-
     df = pd.DataFrame(rows).set_index("_BasketKey")
-
     if dynamic_col in df.columns:
-
         df = df.sort_values(by=dynamic_col, ascending=False, na_position="last")
-
     df = df[[column for column in cols if column in df.columns]]
     df.attrs["row_notes"] = [
         f"Live/defined members: {basket_metadata.get(k, {}).get('Members', 'unknown')}. "
         f"{basket_metadata.get(k, {}).get('Breadth coverage', '')} "
-        "Returns require every live member on every session in the window; N/A means incomplete history."
+        "Daily basket returns require at least 60% of current live members with adjacent-session prices "
+        "(minimum two except one-name proxies); N/A means insufficient continuous basket coverage for that window."
         for k in df.index
     ]
     return df
-
 
 
 def cumulative_return_since(returns: pd.Series, display_start: pd.Timestamp) -> pd.Series:
@@ -2772,13 +2661,13 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats, row_n
     columns = "".join(f'<col style="width:{w / total_width * 100:.4f}%">' for w in col_widths)
     header_cells = []
     for i, name in enumerate(headers):
-        numeric = formats[i] is not None or name in {"MACD Momentum", "EMA 4/9/18"}
+        numeric = formats[i] is not None or name == "MACD Momentum" or name.startswith("EMA ")
         tooltip = (
             "Percent of valid defined equities with positive USD-adjusted returns over the selected range. "
             "Funds excluded. Flat returns are non-advancing. At least two valid equities and 60% of defined equities required. "
             "Only confirmed exchange closures may carry a local close. N/A means insufficient coverage or fund-only proxy."
             if name.startswith("Breadth %") else
-            ("Custom preset-scaled MACD histogram: Positive/Negative is histogram sign; acceleration compares histogram change. Sort order: positive accelerating, positive decelerating, neutral, negative decelerating, negative accelerating." if name == "MACD Momentum" else name)
+            ("Preset-responsive MACD histogram: Positive/Negative is histogram sign; acceleration compares preset-scaled histogram change; Strong/Weak reflects the histogram z-score." if name == "MACD Momentum" else name)
         )
         low, high = ("Lowest to highest", "Highest to lowest") if numeric else ("A to Z", "Z to A")
         header_cells.append(
@@ -2798,12 +2687,22 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats, row_n
             missing = pd.isna(value) or value == "N/A" or (numeric and not np.isfinite(float(value)))
             text_value = "N/A" if missing else (format(float(value), formats[col]) if numeric else str(value))
             sort_value = "" if missing else str(float(value) if numeric else value)
-            if not missing and headers[col] == "EMA 4/9/18":
+            if not missing and headers[col].startswith("EMA "):
                 sort_value = str({"Up":2, "Neutral":1, "Down":0}.get(value, 1))
             if not missing and headers[col] == "MACD Momentum":
-                sort_value = str({"Positive | Accelerating":4, "Positive | Decelerating":3,
-                                  "Neutral":2, "Negative | Decelerating":1,
-                                  "Negative | Accelerating":0}.get(value, 2))
+                tag = str(value)
+                if tag.startswith("Positive") and "Accelerating" in tag:
+                    sort_value = "4"
+                elif tag.startswith("Positive") and "Decelerating" in tag:
+                    sort_value = "3"
+                elif tag == "Neutral":
+                    sort_value = "2"
+                elif tag.startswith("Negative") and "Decelerating" in tag:
+                    sort_value = "1"
+                elif tag.startswith("Negative") and "Accelerating" in tag:
+                    sort_value = "0"
+                else:
+                    sort_value = "2"
             note = row_notes[row] if row_notes and col == 0 else text_value
             cells.append(
                 f'<td data-value="{escape(sort_value, quote=True)}" data-missing="{str(bool(missing)).lower()}" '
@@ -2848,132 +2747,67 @@ menus.forEach(menu=>menu.addEventListener('change',()=>{
 
 
 def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
-
     if panel_df.empty:
-
         st.info("No baskets passed the data-quality checks for this window.")
-
         return
 
-
-
     dynamic_col = f"%{dynamic_label}"
-
     breadth_col = f"Breadth % {dynamic_label}"
-
     return_cols = ["%5D", "%1M"]
-
     if dynamic_col not in return_cols:
-
         return_cols.append(dynamic_col)
 
-
-
+    ema_cols = [column for column in panel_df.columns if column.startswith("EMA ")]
+    ema_col = ema_cols[0] if ema_cols else "EMA Trend"
     headers = [
-
         "Basket", *return_cols,
-
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", breadth_col,
-
+        "MACD Momentum", ema_col, "RSI(14W)", breadth_col,
         "vs 21DMA %", "vs 50DMA %",
-
     ]
 
-
-
     values: List[List[Any]] = [panel_df["Basket"].tolist()]
-
     fill_colors: List[List[str]] = [["white"] * len(panel_df)]
-
-
-
     for col in return_cols:
-
         vals = panel_df[col].tolist()
-
         values.append(vals)
-
         fill_colors.append([color_ret(v) for v in vals])
-
-
 
     vals = panel_df["MACD Momentum"].tolist()
-
     values.append(vals)
-
     fill_colors.append([color_macd(v) for v in vals])
-
-
-
-    vals = panel_df["EMA 4/9/18"].tolist()
-
+    vals = panel_df[ema_col].tolist()
     values.append(vals)
-
     fill_colors.append([color_ema(v) for v in vals])
-
-
-
     vals = panel_df["RSI(14W)"].tolist()
-
     values.append(vals)
-
     fill_colors.append([color_rsi(v) for v in vals])
-
-
-
     vals = panel_df[breadth_col].tolist()
-
     values.append(vals)
-
     fill_colors.append([color_breadth(v) for v in vals])
-
-
-
     for col in ["vs 21DMA %", "vs 50DMA %"]:
-
         vals = panel_df[col].tolist()
-
         values.append(vals)
-
         fill_colors.append([color_ret(v) for v in vals])
 
-
-
     if dynamic_col in ["%5D", "%1M"]:
-
         col_widths = [0.27, 0.065, 0.065, 0.16, 0.11, 0.08, 0.08, 0.085, 0.085]
-
     else:
-
         col_widths = [0.25, 0.06, 0.06, 0.085, 0.155, 0.105, 0.075, 0.075, 0.085, 0.085]
 
-
-
     formats = []
-
     for header in headers:
-
-        if header in {"Basket", "MACD Momentum", "EMA 4/9/18"}:
-
+        if header in {"Basket", "MACD Momentum"} or header.startswith("EMA "):
             formats.append(None)
-
         elif header == "RSI(14W)":
-
             formats.append(".2f")
-
         else:
-
             formats.append(".1f")
-
-
 
     component_html(
         sortable_panel_html(headers, values, fill_colors, col_widths, formats, panel_df.attrs.get("row_notes")),
         height=min(920, 64 + int(23.4 * max(3, len(panel_df)))),
         scrolling=False,
     )
-
-
 
 
 def _chart_display_name(
@@ -3548,7 +3382,7 @@ for key, meta in basket_metadata.items():
 st.caption(
     f"As of {reference_date.date()} · {fetch_meta.get('source', 'yahoo')} · "
     f"{len(live_all_baskets)}/{len(raw_selected_baskets)} baskets eligible · "
-    "Current-universe, daily equal-weight adjusted returns · N/A = incomplete history/coverage; not a point-in-time backtest."
+    "Current-universe, coverage-aware daily equal-weight adjusted returns · N/A = genuinely insufficient history/coverage; not a point-in-time backtest."
 )
 if suspect_symbols:
     st.warning(f"Extreme adjusted-price moves quarantined in {len(suspect_symbols)} symbols; affected windows remain N/A. See Data Notes.")
@@ -3654,8 +3488,8 @@ if show_full_map:
 if show_data_notes:
 
     with st.expander("Data Notes", expanded=True):
-        st.write("Fixed live membership and equal weights; all live members need adjacent-session prices for each basket return. Gaps invalidate affected windows. Foreign holiday closes may carry only on verified exchange closures; unverified calendars remain missing.")
-        st.write("MACD is a custom preset-scaled histogram signal, not a validated forecast; Positive/Negative refers to histogram sign. RSI uses completed weekly buckets. EMA and DMA use uninterrupted sessions.")
+        st.write("Current live membership with coverage-aware daily equal weights: constituent returns require adjacent-session prices; a basket prints when at least 60% of current live members are valid (minimum two except one-name proxies). Foreign holiday closes may carry only on verified exchange closures; unverified calendars remain missing.")
+        st.write("MACD and EMA are preset-responsive, using square-root horizon scaling anchored at 3M (MACD 12/26/9; EMA 4/9/18). MACD Strong/Weak reflects histogram z-score. RSI uses completed weekly buckets. EMA and DMA use the latest uninterrupted basket segment.")
         st.write("Breadth is equity-only, based on defined constituents: at least two valid equities and 60% endpoint coverage. ETF-only baskets have no look-through breadth.")
         st.write("Symbols are current definitions, not a corporate-action-maintained historical universe. Quote repair and outlier quarantine do not certify vendor data. GBP minor-unit market-cap metadata is excluded from the optional size filter until independently verified.")
         st.write({"dropped_baskets": dropped_baskets, "fx_issues": fx_issues, "quarantined_symbols": suspect_symbols})

@@ -39,6 +39,28 @@ class IntegrityTests(unittest.TestCase):
         self.assertTrue(pd.isna(scope['pct_since'](100*(1+r).cumprod(),i[0])))
         self.assertTrue(scope['cumulative_return_since'](r,i[0]).empty)
 
+    def test_partial_member_gap_keeps_basket_when_coverage_is_sufficient(self):
+        i = pd.bdate_range('2026-01-05', periods=5)
+        p = pd.DataFrame({
+            'A': [100, 101, 102, 103, 104],
+            'B': [100, 100, 101, 102, 103],
+            'C': [100, np.nan, np.nan, 103, 104],
+        }, index=i)
+        r = scope['ew_rets_from_levels'](p, {'x': ['A', 'B', 'C']})['x']
+        self.assertTrue(pd.notna(r.iloc[1]))
+        self.assertTrue(pd.notna(r.iloc[2]))
+
+    def test_indicator_settings_are_dynamic_and_bounded(self):
+        as_of = pd.Timestamp('2026-09-09')
+        macd_1m = scope['macd_settings']('1M', as_of)
+        macd_5y = scope['macd_settings']('5Y', as_of)
+        ema_1m = scope['ema_settings']('1M', as_of)
+        ema_5y = scope['ema_settings']('5Y', as_of)
+        self.assertNotEqual(macd_1m[:3], macd_5y[:3])
+        self.assertNotEqual(ema_1m, ema_5y)
+        self.assertLess(macd_5y[1], 150)
+        self.assertLess(ema_5y[2], 100)
+
     def test_clean_reference(self):
         i=pd.bdate_range('2026-01-05',periods=3)
         p=pd.DataFrame({'A':[100,110,121],'B':[100,100,100]},index=i)
@@ -81,9 +103,9 @@ class IntegrityTests(unittest.TestCase):
         x=scope['_to_float_frame'](pd.DataFrame({'x':[100,0,-1,np.inf,'bad']}))
         self.assertEqual(x['x'].notna().sum(),1)
 
-    def test_strength_removed(self):
+    def test_strength_restored(self):
         x=scope['momentum_label'](pd.Series([10.]*62+[1.]))
-        self.assertEqual(x,'Positive | Decelerating')
+        self.assertEqual(x,'Positive | Decelerating | Strong')
 
     def test_short_window_and_render(self):
         i=pd.bdate_range('2024-01-02',periods=600)
@@ -95,7 +117,7 @@ class IntegrityTests(unittest.TestCase):
         panel=scope['build_panel_df'](r,i[-63],'3M',{},r['x'],{})
         self.assertTrue(pd.isna(panel.iloc[0]['%5D']))
         self.assertEqual(panel.iloc[0]['MACD Momentum'],'N/A')
-        h=scope['sortable_panel_html'](['Basket','%5D','MACD Momentum'],[['A'],[np.nan],['Positive | Accelerating']],[['white']]*3,[.5,.2,.3],[None,'.1f',None])
+        h=scope['sortable_panel_html'](['Basket','%5D','MACD Momentum'],[['A'],[np.nan],['Positive | Accelerating | Strong']],[['white']]*3,[.5,.2,.3],[None,'.1f',None])
         self.assertIn('N/A',h)
         self.assertIn('data-value="4"',h)
         self.assertIn('white-space:nowrap',h)
