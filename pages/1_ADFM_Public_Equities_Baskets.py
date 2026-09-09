@@ -2052,6 +2052,38 @@ def ema_regime(series: pd.Series, e1: int = 4, e2: int = 9, e3: int = 18) -> str
 
 
 
+def macd_settings(preset: str, as_of: pd.Timestamp) -> Tuple[int, int, int, int, int]:
+    """Horizon-adaptive daily MACD; 3M anchors the conventional 12/26/9.
+
+    Fixed presets use trading-session equivalents. YTD uses elapsed weekdays,
+    keeping settings identical across baskets regardless of missing observations.
+    These are custom scanner settings, not standard MACD for every preset.
+    """
+    horizons = {"1W": 5, "1M": 21, "3M": 63, "6M": 126,
+                "1Y": 252, "3Y": 756, "5Y": 1260}
+    if preset == "YTD":
+        end = pd.Timestamp(as_of).date()
+        horizon = max(1, int(np.busday_count(date(end.year, 1, 1), end)) + 1)
+    else:
+        horizon = horizons[preset]
+    scale = max(0.25, horizon / 63.0)
+    fast, slow, signal = (max(2, int(round(span * scale))) for span in (12, 26, 9))
+    lookback = max(1, int(round(5 * scale)))
+    z_window = max(20, min(252, horizon))
+    return fast, slow, signal, lookback, z_window
+
+
+def horizon_macd_momentum(series: pd.Series, settings: Tuple[int, int, int, int, int]) -> str:
+    """Calculate on full history and exclude EMA startup from classification."""
+    clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+    fast, slow, signal, lookback, z_window = settings
+    warmup = slow + signal - 2
+    if len(clean) < warmup + max(lookback + 1, z_window):
+        return "N/A"
+    hist = macd_hist(clean, fast, slow, signal).iloc[warmup:]
+    return momentum_label(hist, lookback=lookback, z_window=z_window)
+
+
 def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> str:
 
     h = hist.dropna()
@@ -2276,6 +2308,8 @@ def build_panel_df(
 
     bench_dynamic = pct_since(bench_levels, display_start)
 
+    macd_config = macd_settings(dynamic_label, benchmark_series_full.dropna().index.max())
+
 
 
     basket_name_counts: Dict[str, int] = {}
@@ -2348,9 +2382,7 @@ def build_panel_df(
 
 
 
-        hist = macd_hist(s_full, 12, 26, 9)
-
-        macd_m = momentum_label(hist, lookback=5, z_window=63)
+        macd_m = horizon_macd_momentum(s_full, macd_config)
 
         ema_tag = ema_regime(s_full, 4, 9, 18)
 
