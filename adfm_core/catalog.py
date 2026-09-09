@@ -28,30 +28,30 @@ class SidebarGuide:
 
 
 TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
-    ToolDefinition(1, "ADFM Public Equities Baskets", "1_ADFM_Public_Equities_Baskets.py", "Equity Discovery", "Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance.", "Internal basket definitions; Yahoo Finance market data"),
-    ToolDefinition(2, "Global Macro Regime", "2_Global_Macro_Regime.py", "Macro Regime", "Separates growth, inflation, rates, liquidity, and risk confirmation into a transparent cross-asset macro read, then highlights where those signals agree or conflict.", "Federal Reserve / FRED primary macro series; Yahoo Finance market proxies"),
-    ToolDefinition(3, "Liquidity Conditions Monitor", "3_Liquidity_Conditions_Monitor.py", "Macro Regime", "Separates the level and marginal impulse of system liquidity across Federal Reserve balance-sheet plumbing, overnight funding, credit transmission, and a capped market-confirmation sleeve.", "Federal Reserve H.4.1; New York Fed rates and RRP; ICE BofA OAS via FRED; broad dollar; real yields; Yahoo Finance confirmation proxies"),
-    ToolDefinition(4, "Yield Curve Rates Regime Monitor", "4_Yield_Curve_Rates_Regime_Monitor.py", "Macro Regime", "Tracks outright U.S. Treasury yield levels, curve shape, and bull/bear steepener or flattener regimes across multiple horizons.", "Federal Reserve / FRED nominal and real Treasury yields and inflation breakevens; Yahoo nominal-curve fallback"),
-    ToolDefinition(5, "Credit Conditions Monitor", "5_Credit_Conditions_Monitor.py", "Macro Regime", "Separates credit-spread stress from outright funding-cost pressure, then checks banks, loans, volatility, and global benchmark 10-year government-yield repricing across flexible horizons.", "ICE BofA corporate OAS and U.S. Treasury yields via Federal Reserve FRED; Yahoo Finance market confirmation; Trading Economics or fresh Stooq sovereign yields with OECD/FRED structural fallback"),
-    ToolDefinition(6, "Currency Tension Engine", "6_Currency_Tension_Engine.py", "Macro Regime", "Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags.", "Persisted Currency Tension Engine snapshot and configured adapters"),
-    ToolDefinition(7, "Sector Breadth and Rotation", "7_Sector_Breadth_and_Rotation.py", "Equity Leadership", "Measures participation and sector rotation to identify where equity strength is broadening or narrowing.", "Yahoo Finance sector and subsector ETFs"),
-    ToolDefinition(8, "Equity Leadership & Rotation", "8_Equity_Leadership_&_Rotation.py", "Equity Leadership", "Ranks all 11 S&P 500 sectors versus SPY, five China/U.S. relationships, three breadth and alternative-weighting ratios, and six inter-sector relationships.", "Yahoo Finance adjusted ETF and index prices"),
-    ToolDefinition(9, "ADFM Underwriter", "9_ADFM_Underwriter.py", "Fundamental Research", "Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events.", "SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history"),
-    ToolDefinition(10, "ADFM Chart Terminal", "10_ADFM_Chart_Terminal.py", "Technical Confirmation", "Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages.", "Yahoo Finance OHLCV"),
-    ToolDefinition(11, "Cross-Asset Ratio Chartbook", "11_Cross-Asset_Ratio_Chartbook.py", "Technical Confirmation", "Provides grouped historical inspection of 38 duration, crisis-hedge, commodity, credit, funding, and financial-intermediary ratios, plus custom relationships.", "Yahoo Finance adjusted close history"),
-    ToolDefinition(12, "Rate of Change Regime Explorer", "12_Rate_of_Change_Regime_Explorer.py", "Technical Confirmation", "Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure.", "Yahoo Finance daily OHLCV"),
-    ToolDefinition(13, "Relative Volatility Lab", "13_Relative_Volatility_Lab.py", "Technical Confirmation", "Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics.", "Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available"),
-    ToolDefinition(14, "ETF Flow Pressure Proxy", "14_ETF_Flow_Pressure_Proxy.py", "Positioning + Flows", "Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures.", "Yahoo Finance OHLCV"),
-    ToolDefinition(15, "Volume Based Sentiment Indicator", "15_Volume_Based_Sentiment_Indicator.py", "Positioning + Flows", "Reads conviction, participation, and sentiment using volume-regime signals across major liquid assets.", "Yahoo Finance adjusted OHLCV; provider fallback where available"),
-    ToolDefinition(16, "Options Positioning Compass", "16_Options_Positioning_Compass.py", "Positioning + Flows", "Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity across a selected universe.", "Yahoo Finance current option chains and adjusted close history"),
-    ToolDefinition(17, "SEC 13F Exposure Browser", "17_SEC_13F_Exposure_Browser.py", "Positioning + Flows", "Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio.", "SEC Form 13F bulk data sets; SEC company ticker directory"),
-    ToolDefinition(18, "CFTC Positioning Monitor", "18_CFTC_Positioning_Monitor.py", "Positioning + Flows", "Scans CFTC futures positioning for crowded longs, crowded shorts, and sharp weekly shifts across financial and physical futures, with historical percentile and z-score context.", "CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts"),
-    ToolDefinition(19, "Market Stress Composite", "19_Market_Stress_Composite.py", "Risk + Execution", "Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion.", "Yahoo Finance; local last-good cache on provider failure"),
+    ToolDefinition(1, "Equity Baskets", "1_ADFM_Public_Equities_Baskets.py", "Equity Discovery", "Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance.", "Internal basket definitions; Yahoo Finance market data"),
+    ToolDefinition(2, "Global Macro", "2_Global_Macro_Regime.py", "Macro Regime", "Separates growth, inflation, rates, liquidity, and risk confirmation into a transparent cross-asset macro read, then highlights where those signals agree or conflict.", "Federal Reserve / FRED primary macro series; Yahoo Finance market proxies"),
+    ToolDefinition(3, "Liquidity", "3_Liquidity_Conditions_Monitor.py", "Macro Regime", "Separates the level and marginal impulse of system liquidity across Federal Reserve balance-sheet plumbing, overnight funding, credit transmission, and a capped market-confirmation sleeve.", "Federal Reserve H.4.1; New York Fed rates and RRP; ICE BofA OAS via FRED; broad dollar; real yields; Yahoo Finance confirmation proxies"),
+    ToolDefinition(4, "Rates & Yield Curve", "4_Yield_Curve_Rates_Regime_Monitor.py", "Macro Regime", "Tracks outright U.S. Treasury yield levels, curve shape, and bull/bear steepener or flattener regimes across multiple horizons.", "Federal Reserve / FRED nominal and real Treasury yields and inflation breakevens; Yahoo nominal-curve fallback"),
+    ToolDefinition(5, "Credit Conditions", "5_Credit_Conditions_Monitor.py", "Macro Regime", "Separates credit-spread stress from outright funding-cost pressure, then checks banks, loans, volatility, and global benchmark 10-year government-yield repricing across flexible horizons.", "ICE BofA corporate OAS and U.S. Treasury yields via Federal Reserve FRED; Yahoo Finance market confirmation; Trading Economics or fresh Stooq sovereign yields with OECD/FRED structural fallback"),
+    ToolDefinition(6, "FX Regime", "6_Currency_Tension_Engine.py", "Macro Regime", "Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags.", "Persisted Currency Tension Engine snapshot and configured adapters"),
+    ToolDefinition(7, "Sector Rotation", "7_Sector_Breadth_and_Rotation.py", "Equity Leadership", "Measures participation and sector rotation to identify where equity strength is broadening or narrowing.", "Yahoo Finance sector and subsector ETFs"),
+    ToolDefinition(8, "Equity Leadership", "8_Equity_Leadership_&_Rotation.py", "Equity Leadership", "Ranks all 11 S&P 500 sectors versus SPY, five China/U.S. relationships, three breadth and alternative-weighting ratios, and six inter-sector relationships.", "Yahoo Finance adjusted ETF and index prices"),
+    ToolDefinition(9, "Equity Underwriter", "9_ADFM_Underwriter.py", "Fundamental Research", "Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events.", "SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history"),
+    ToolDefinition(10, "Chart Terminal", "10_ADFM_Chart_Terminal.py", "Technical Confirmation", "Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages.", "Yahoo Finance OHLCV"),
+    ToolDefinition(11, "Cross-Asset Ratios", "11_Cross-Asset_Ratio_Chartbook.py", "Technical Confirmation", "Provides grouped historical inspection of 38 duration, crisis-hedge, commodity, credit, funding, and financial-intermediary ratios, plus custom relationships.", "Yahoo Finance adjusted close history"),
+    ToolDefinition(12, "Momentum & Rate of Change", "12_Rate_of_Change_Regime_Explorer.py", "Technical Confirmation", "Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure.", "Yahoo Finance daily OHLCV"),
+    ToolDefinition(13, "Relative Volatility", "13_Relative_Volatility_Lab.py", "Technical Confirmation", "Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics.", "Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available"),
+    ToolDefinition(14, "ETF Flow Pressure", "14_ETF_Flow_Pressure_Proxy.py", "Positioning + Flows", "Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures.", "Yahoo Finance OHLCV"),
+    ToolDefinition(15, "Volume Sentiment", "15_Volume_Based_Sentiment_Indicator.py", "Positioning + Flows", "Reads conviction, participation, and sentiment using volume-regime signals across major liquid assets.", "Yahoo Finance adjusted OHLCV; provider fallback where available"),
+    ToolDefinition(16, "Options Positioning", "16_Options_Positioning_Compass.py", "Positioning + Flows", "Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity across a selected universe.", "Yahoo Finance current option chains and adjusted close history"),
+    ToolDefinition(17, "13F Holdings", "17_SEC_13F_Exposure_Browser.py", "Positioning + Flows", "Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio.", "SEC Form 13F bulk data sets; SEC company ticker directory"),
+    ToolDefinition(18, "CFTC Positioning", "18_CFTC_Positioning_Monitor.py", "Positioning + Flows", "Scans CFTC futures positioning for crowded longs, crowded shorts, and sharp weekly shifts across financial and physical futures, with historical percentile and z-score context.", "CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts"),
+    ToolDefinition(19, "Market Stress", "19_Market_Stress_Composite.py", "Risk + Execution", "Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion.", "Yahoo Finance; local last-good cache on provider failure"),
     ToolDefinition(20, "Catalyst Calendar", "20_Catalyst_Calendar.py", "Risk + Execution", "Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks.", "Official agency calendars; recurring market-calendar rules; Yahoo Finance market proxies"),
-    ToolDefinition(21, "Hedge Timer", "21_Hedge_Timer.py", "Risk + Execution", "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.", "Yahoo Finance; FRED regime inputs"),
-    ToolDefinition(22, "Position Sizing Lab", "22_Position_Sizing_Lab.py", "Risk + Execution", "Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk.", "Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies"),
-    ToolDefinition(23, "Market Memory Explorer", "23_Market_Memory_Explorer.py", "Historical Context", "Surfaces historical analogs to contextualize the current tape against prior return paths and regimes.", "Yahoo Finance market history"),
-    ToolDefinition(24, "Monthly Seasonality Explorer", "24_Monthly_Seasonality_Explorer.py", "Historical Context", "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.", "Yahoo Finance; FRED for selected series and regime tags"),
+    ToolDefinition(21, "Hedge Timing", "21_Hedge_Timer.py", "Risk + Execution", "Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges.", "Yahoo Finance; FRED regime inputs"),
+    ToolDefinition(22, "Position Sizing", "22_Position_Sizing_Lab.py", "Risk + Execution", "Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk.", "Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies"),
+    ToolDefinition(23, "Market Memory", "23_Market_Memory_Explorer.py", "Historical Context", "Surfaces historical analogs to contextualize the current tape against prior return paths and regimes.", "Yahoo Finance market history"),
+    ToolDefinition(24, "Seasonality", "24_Monthly_Seasonality_Explorer.py", "Historical Context", "Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity.", "Yahoo Finance; FRED for selected series and regime tags"),
     ToolDefinition(25, "Commodity Event Study", "25_Commodity_Event_Study.py", "Historical Context", "Identifies historically extended commodity moves, waits for exhaustion or reversal confirmation, and measures how often those signals marked durable tops.", "Yahoo Finance daily continuous-futures history; CFTC Disaggregated Managed Money positioning where mapped"),
 )
 
@@ -206,54 +206,69 @@ SIDEBAR_GUIDES: Final[dict[str, SidebarGuide]] = {
     "20_Catalyst_Calendar.py": SidebarGuide(
         (
             "Choose the event horizon and scan the dated catalyst sequence.",
-            "Prioritize events by timing, risk score, and the market setup going into them.",
-            "Add mandate-specific events with the custom-event template when needed.",
-        ),
-        "Confirm agency schedules before trading directly around a release; recurring market dates can be rule-based.",
+            "Prioritize events with the largest likely market sensitivity or portfolio overlap.",
+            "Use the source label and status to distinguish official dates from rule-based estimates.",
+        )
     ),
     "21_Hedge_Timer.py": SidebarGuide(
         (
-            "Start with the composite hedge state and its gating conditions.",
-            "Compare trend, stress, and drawdown evidence across horizons.",
-            "Use the post-2020 sanity check to understand historical misses and false positives.",
-        ),
-        "Treat the output as timing evidence within a hedge plan, not as a standalone trade instruction.",
+            "Start with the current hedge-timing state and its strongest contributing signals.",
+            "Separate persistent regime pressure from short-horizon tactical stress.",
+            "Use the underlying inputs before changing hedge size or structure.",
+        )
     ),
     "22_Position_Sizing_Lab.py": SidebarGuide(
         (
-            "Define direction, conviction, holding period, loss budget, and liquidity constraints.",
-            "Review the volatility, invalidation, event, tail, and liquidity caps.",
-            "Run multiple historical paths and size from the binding risk cap, not the best simulation outcome.",
+            "Set the instrument, holding period, and invalidation distance.",
+            "Compare the historical outcome distribution with the proposed position size.",
+            "Pressure-test volatility, event, tail, and liquidity risk before accepting the size.",
         )
     ),
     "23_Market_Memory_Explorer.py": SidebarGuide(
         (
-            "Choose the ticker and historical sample before ranking analog years.",
-            "Compare correlation, endpoint gap, volatility, drawdown, and slope across the top matches.",
-            "Keep unconditional base rates and the full distribution beside any highlighted analog.",
-        ),
-        "A similar historical year is context, not a forecast.",
+            "Choose the current setup and historical comparison window.",
+            "Rank analogs by path similarity, then inspect the surrounding regime.",
+            "Use forward outcomes as context rather than a point forecast.",
+        )
     ),
     "24_Monthly_Seasonality_Explorer.py": SidebarGuide(
         (
-            "Set the global lookback; it controls every output on the page.",
-            "Select a month for the return distribution and a year for the path overlay.",
-            "Apply regime filters, then verify that the conditional sample remains large enough to interpret.",
+            "Choose the asset and month or seasonal window.",
+            "Compare average, median, hit rate, and dispersion across the available history.",
+            "Use regime and sample-size context before treating seasonality as a trading signal.",
         )
     ),
     "25_Commodity_Event_Study.py": SidebarGuide(
         (
-            "Choose the commodity, signal profile, and history used to define an extreme.",
-            "Confirm whether price extension has been followed by actual reversal evidence.",
-            "Read forward returns, drawdowns, hit rates, and sample size across horizons.",
-        ),
-        "This is a top study: negative post-signal returns favor the signal. Continuous-futures roll construction can affect history.",
+            "Choose the commodity, extension threshold, and confirmation rule.",
+            "Inspect qualifying historical episodes and the path into each signal.",
+            "Compare forward returns and failure cases before treating exhaustion as durable.",
+        )
     ),
 }
 
+
+def tool_definitions() -> tuple[ToolDefinition, ...]:
+    """Return the stable tool catalog in display order."""
+
+    return TOOL_CATALOG
+
+
+def tool_definition_for_page(page_filename: str) -> ToolDefinition | None:
+    """Return one catalog definition by page filename."""
+
+    return next((tool for tool in TOOL_CATALOG if tool.page_filename == page_filename), None)
+
+
+def sidebar_guide_for_page(page_filename: str) -> SidebarGuide | None:
+    """Return the sidebar reading guide for a page, when defined."""
+
+    return SIDEBAR_GUIDES.get(page_filename)
+
+
 GROUP_ORDER: Final[tuple[str, ...]] = (
-    "Equity Discovery",
     "Macro Regime",
+    "Equity Discovery",
     "Equity Leadership",
     "Fundamental Research",
     "Technical Confirmation",
@@ -261,39 +276,3 @@ GROUP_ORDER: Final[tuple[str, ...]] = (
     "Risk + Execution",
     "Historical Context",
 )
-
-
-def tool_order() -> list[str]:
-    """Return Home's stable navigation order."""
-    return [tool.title for tool in TOOL_CATALOG]
-
-
-def tool_definitions() -> list[ToolDefinition]:
-    """Return the ordered catalog for navigation and governance checks."""
-    return list(TOOL_CATALOG)
-
-
-def tool_groups() -> dict[str, list[str]]:
-    """Return Home navigation groups while retaining catalog order."""
-    groups = {"All tools": tool_order()}
-    for group in GROUP_ORDER:
-        groups[group] = [tool.title for tool in TOOL_CATALOG if tool.group == group]
-    return groups
-
-
-def tool_descriptions() -> dict[str, str]:
-    """Return the Home-card description keyed by tool title."""
-    return {tool.title: tool.description for tool in TOOL_CATALOG}
-
-
-def tool_for_page(page_filename: str) -> ToolDefinition | None:
-    """Resolve catalog metadata from a Streamlit page filename."""
-    normalized = page_filename.replace("\\", "/").rsplit("/", 1)[-1]
-    return next((tool for tool in TOOL_CATALOG if tool.page_filename == normalized), None)
-
-
-def sidebar_guide_for_page(page_filename: str) -> SidebarGuide | None:
-    """Resolve the shared sidebar reading guide for a cataloged page."""
-
-    normalized = page_filename.replace("\\", "/").rsplit("/", 1)[-1]
-    return SIDEBAR_GUIDES.get(normalized)
