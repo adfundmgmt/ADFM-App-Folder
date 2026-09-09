@@ -2979,9 +2979,12 @@ def render_basket_section(
 
     basket_metadata: Dict[str, Dict[str, Any]],
 
+    show_heading: bool = True,
+
 ) -> pd.DataFrame:
 
-    st.subheader(heading)
+    if show_heading:
+        st.subheader(heading)
 
 
 
@@ -3303,6 +3306,8 @@ bench_rets_full = aligned_levels[BENCH].dropna().pct_change(fill_method=None).dr
 all_panel_df = render_basket_section(
 
     heading="All Baskets | Consolidated Panel",
+
+    show_heading=False,
 
     basket_returns_full=all_basket_rets_full,
 
