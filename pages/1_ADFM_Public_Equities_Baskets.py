@@ -1,4 +1,5 @@
 import streamlit as st
+import exchange_calendars as xcals
 from streamlit.components.v1 import html as component_html
 from html import escape
 
@@ -87,7 +88,7 @@ NY_TZ = ZoneInfo("America/New_York")
 
 COMPLETED_SESSION_TIME = dt_time(16, 15)
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 CACHE_MAX_AGE_DAYS = 7
 
@@ -173,6 +174,63 @@ FX_SUFFIX_CONVERSIONS: Tuple[Tuple[str, Tuple[str, str]], ...] = (
 )
 
 FUND_QUOTE_TYPES = {"ETF", "MUTUALFUND", "MONEYMARKET"}
+
+# Explicit proxy inventory for this definition map. Unknown/new instruments must
+# be reviewed before addition; these symbols are never counted as equity breadth.
+FUND_SYMBOLS = set("VEA IEMG EEM SPY RSP IWM EWC EWW ILF EWZ ARGT ECH EPU COLO VGK EZU EWG EWQ EWI EWP EWU EWL EWD EDEN NORW EPOL TUR EWJ DXJ MCHI FXI KWEB EWT EWY INDA EPI INDY EIDO IDX VNM EWA KSA UAE EIS EZA QAT IBIT ETHA ITB GREK MSOS URNM SLV SIL".split())
+
+LOCAL_CALENDARS = {".KS":"XKRX", ".T":"XTKS", ".TW":"XTAI",
+                   ".WA":"XWAR", ".DE":"XETR", ".MI":"XMIL", ".PA":"XPAR",
+                   ".AS":"XAMS", ".AT":"ASEX", ".SW":"XSWX", ".CO":"XCSE",
+                   ".ST":"XSTO", ".OL":"XOSL", ".L":"XLON", ".AX":"XASX",
+                   ".TO":"XTSE"}
+
+
+def completed_us_sessions(start, now):
+    """Exchange closes plus 15-minute vendor grace, including early closes."""
+    clock = pd.Timestamp(now)
+    if clock.tzinfo is None:
+        raise ValueError("Timezone-aware clock required")
+    calendar = xcals.get_calendar("XNYS", start=pd.Timestamp(start) - pd.Timedelta(days=10),
+                                  end=clock.tz_convert(NY_TZ).date() + timedelta(days=10))
+    schedule = calendar.schedule.loc[str(pd.Timestamp(start).date()):str(clock.tz_convert(NY_TZ).date())]
+    complete = schedule.index[schedule["close"] + pd.Timedelta(minutes=15) <= clock.tz_convert("UTC")]
+    return pd.DatetimeIndex(complete).tz_localize(None)
+
+
+def trailing_valid_segment(series):
+    """Never compress a data gap into an indicator's observation window."""
+    clean = series.replace([np.inf, -np.inf], np.nan)
+    missing = np.flatnonzero(clean.isna().to_numpy())
+    return clean.iloc[missing[-1] + 1:] if len(missing) else clean
+
+
+def carry_exchange_closures(levels):
+    """Carry a local close only on a confirmed exchange holiday, never a feed gap."""
+    out = levels.copy()
+    for suffix, name in LOCAL_CALENDARS.items():
+        columns = [c for c in out if c.endswith(suffix)]
+        if not columns or out.empty:
+            continue
+        try:
+            cal = xcals.get_calendar(name, start=out.index.min(), end=out.index.max())
+            sessions = cal.sessions_in_range(out.index.min(), out.index.max()).tz_localize(None)
+        except (ValueError, KeyError):
+            continue  # Unknown schedules remain missing, not assumed closed.
+        closed = ~out.index.isin(sessions)
+        for col in columns:
+            # Three union-calendar rows is a cap, not permission to fill open days.
+            candidate = out[col].ffill(limit=3)
+            observed_dates = pd.Series(out.index, index=out.index).where(out[col].notna()).ffill()
+            allowed = pd.Series(False, index=out.index)
+            for day in out.index[closed]:
+                try:
+                    prior_session = cal.date_to_session(day, direction="previous").tz_localize(None)
+                    allowed.loc[day] = observed_dates.loc[day] == prior_session
+                except ValueError:
+                    pass
+            out.loc[allowed, col] = out.loc[allowed, col].fillna(candidate.loc[allowed])
+    return out
 
 
 
@@ -971,7 +1029,8 @@ def _to_float_frame(df: pd.DataFrame) -> pd.DataFrame:
 
         return df
 
-    return df.apply(pd.to_numeric, errors="coerce")
+    clean = df.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    return clean.where(clean > 0)
 
 
 
@@ -1150,6 +1209,7 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
         end=end,
 
         auto_adjust=True,
+        repair=True,
 
         progress=False,
 
@@ -1347,11 +1407,9 @@ def fetch_daily_levels(
 
         else:
 
-            live_aligned, cached_aligned = wide.align(cached, join="outer")
-
-            cache_used = bool((live_aligned.isna() & cached_aligned.notna()).to_numpy().any())
-
-            wide = wide.combine_first(cached)
+            # Never splice adjusted-price histories from different snapshots.
+            # A fresh but incomplete symbol stays incomplete for this run.
+            pass
 
 
 
@@ -1602,7 +1660,8 @@ def normalize_basket_members(
 
 
 
-        valid.append(sym)
+        if sym not in valid:
+            valid.append(sym)
 
 
 
@@ -1838,11 +1897,14 @@ def convert_market_metadata_to_usd(
 
         market_cap = float(record["market_cap"])
 
+        # Quote units cannot establish market-cap units. Fail closed when
+        # metadata does not independently identify a major-unit currency.
         currency = str(record.get("currency") or "")
-
-        if currency in {"GBp", "GBX", "GBpence", "GBpenny"} and ticker.endswith(".L"):
-
-            market_cap /= 100.0
+        if currency in {"GBp", "GBX", "GBpence", "GBpenny"}:
+            record["market_cap"] = None
+            continue
+        if currency.upper() == "USD":
+            continue
 
         fx_value = float(raw_levels[fx_ticker].dropna().iloc[-1])
 
@@ -1904,7 +1966,7 @@ def ew_rets_from_levels(
 
         {
 
-            column: levels[column].dropna().pct_change(fill_method=None).reindex(levels.index)
+            column: levels[column].pct_change(fill_method=None)
 
             for column in levels.columns
 
@@ -1920,7 +1982,7 @@ def ew_rets_from_levels(
 
     for basket_name, basket_tickers in baskets.items():
 
-        cols = [str(t).upper() for t in basket_tickers if str(t).upper() in rets.columns]
+        cols = list(dict.fromkeys(str(t).upper() for t in basket_tickers if str(t).upper() in rets.columns))
 
         if not cols:
 
@@ -1930,7 +1992,8 @@ def ew_rets_from_levels(
 
         member_rets = rets[cols]
 
-        required_count = max(1, int(math.ceil(len(cols) * min_daily_coverage)))
+        # Fixed live membership and weights: no daily survivor reweighting.
+        required_count = len(cols)
 
         valid_count = member_rets.notna().sum(axis=1)
 
@@ -1958,7 +2021,7 @@ def ew_rets_from_levels(
 
 
 
-    return pd.DataFrame(out).dropna(how="all")
+    return pd.DataFrame(out, index=levels.index)
 
 
 
@@ -2020,11 +2083,11 @@ def macd_hist(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
 
 def ema_regime(series: pd.Series, e1: int = 4, e2: int = 9, e3: int = 18) -> str:
 
-    clean = series.dropna()
+    clean = trailing_valid_segment(series)
 
     if clean.shape[0] < max(e1, e2, e3):
 
-        return "Neutral"
+        return "N/A"
 
 
 
@@ -2077,7 +2140,7 @@ def macd_settings(preset: str, as_of: pd.Timestamp) -> Tuple[int, int, int, int,
 
 def horizon_macd_momentum(series: pd.Series, settings: Tuple[int, int, int, int, int]) -> str:
     """Calculate on full history and exclude EMA startup from classification."""
-    clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+    clean = trailing_valid_segment(series)
     fast, slow, signal, lookback, z_window = settings
     warmup = slow + signal - 2
     if len(clean) < warmup + max(lookback + 1, z_window):
@@ -2126,7 +2189,8 @@ def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> st
 
 
 
-    return f"{base} | {accel} | {strength}"
+    # Magnitude of a z-score is unusualness, not directional conviction.
+    return f"{base} | {accel}"
 
 
 
@@ -2134,7 +2198,7 @@ def momentum_label(hist: pd.Series, lookback: int = 5, z_window: int = 63) -> st
 
 def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
 
-    clean = levels.dropna()
+    clean = levels.replace([np.inf, -np.inf], np.nan).sort_index()
 
     if clean.empty:
 
@@ -2147,6 +2211,10 @@ def pct_since(levels: pd.Series, start_ts: pd.Timestamp) -> float:
         return np.nan
 
     anchor = anchors.iloc[-1]
+
+    window = clean.loc[anchors.index[-1]:]
+    if window.isna().any() or (window <= 0).any():
+        return np.nan
 
     latest = clean.iloc[-1]
 
@@ -2228,7 +2296,7 @@ def basket_vs_dma_pct(
 
     """
 
-    clean = series.dropna()
+    clean = trailing_valid_segment(series)
 
 
 
@@ -2262,13 +2330,12 @@ def compute_basket_breadth(
     levels: pd.DataFrame,
     baskets: Dict[str, List[str]],
     display_start: pd.Timestamp,
+    eligible_members: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, float]:
-    """Percent advancing among current live members with valid common endpoints.
+    """Equity-only breadth, at least two valid equities and 60% of defined equities.
 
-    Uses USD-adjusted levels on the scanner's benchmark calendar, including its
-    bounded forward fill. Require the existing daily coverage floor; exclude
-    missing/nonpositive endpoints. Flat constituents count in the denominator.
-    This measures current membership, not historical index membership.
+    Funds are excluded, including in mixed baskets. Only confirmed local exchange
+    closures can carry prices. No generic five-session stock-price fill exists.
     """
     result = {key: np.nan for key in baskets}
     if levels.empty:
@@ -2279,13 +2346,15 @@ def compute_basket_breadth(
         return result
     start, end = ordered.loc[anchors[-1]], ordered.iloc[-1]
     for key, members in baskets.items():
-        unique = list(dict.fromkeys(members))
-        if not unique:
+        unique = [s for s in dict.fromkeys(members) if s not in FUND_SYMBOLS]
+        if len(unique) < 2:
             continue
         a, b = start.reindex(unique), end.reindex(unique)
         valid = np.isfinite(a) & np.isfinite(b) & (a > 0) & (b > 0)
+        if eligible_members is not None:
+            valid &= valid.index.isin(eligible_members.get(key, []))
         count = int(valid.sum())
-        if count < max(1, math.ceil(len(unique) * MIN_DAILY_MEMBER_COVERAGE)):
+        if count < max(2, math.ceil(len(unique) * MIN_DAILY_MEMBER_COVERAGE)):
             continue
         result[key] = float((b[valid] > a[valid]).sum() / count * 100.0)
     return result
@@ -2341,7 +2410,7 @@ def build_panel_df(
 
 
 
-    macd_config = macd_settings(dynamic_label, benchmark_series_full.dropna().index.max())
+    macd_config = macd_settings(dynamic_label, basket_returns_full.index[-1])
 
 
 
@@ -2367,19 +2436,15 @@ def build_panel_df(
 
     for basket_id in levels_full.columns:
 
-        s_full = levels_full[basket_id].dropna()
-
-        if s_full.shape[0] < 15:
-
-            continue
+        s_full = levels_full[basket_id]
+        segment = trailing_valid_segment(s_full)
 
 
 
         r5d = np.nan
 
         if s_full.shape[0] >= 6:
-
-            r5d = (s_full.iloc[-1] / s_full.iloc[-6]) - 1.0
+            r5d = pct_since(s_full.iloc[-6:], s_full.index[-6])
 
 
 
@@ -2397,7 +2462,11 @@ def build_panel_df(
 
 
 
-        weekly = s_full.resample("W-FRI").last().dropna()
+        weekly = segment.resample("W-FRI").last() if not segment.empty else pd.Series(dtype=float)
+        # Exclude the partial first and last weekly buckets.
+        if not weekly.empty:
+            first_complete = segment.index[0].to_period("W-FRI").end_time.normalize()
+            weekly = weekly[(weekly.index > first_complete) & (weekly.index <= s_full.index[-1])]
 
         rsi_14w = np.nan
 
@@ -2449,25 +2518,25 @@ def build_panel_df(
 
             "Basket": display_name,
 
-            "%5D": round(r5d * 100, 1) if pd.notna(r5d) else np.nan,
+            "%5D": r5d * 100 if pd.notna(r5d) else np.nan,
 
-            "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
+            "%1M": r1m * 100 if pd.notna(r1m) else np.nan,
 
-            breadth_col: round(breadth, 1) if pd.notna(breadth) else np.nan,
+            breadth_col: breadth,
 
             "MACD Momentum": macd_m,
 
             "EMA 4/9/18": ema_tag,
 
-            "RSI(14W)": round(rsi_14w, 2) if pd.notna(rsi_14w) else np.nan,
+            "RSI(14W)": rsi_14w,
 
-            "vs 21DMA %": round(dma_21_pct, 1) if pd.notna(dma_21_pct) else np.nan,
+            "vs 21DMA %": dma_21_pct,
 
-            "vs 50DMA %": round(dma_50_pct, 1) if pd.notna(dma_50_pct) else np.nan,
+            "vs 50DMA %": dma_50_pct,
 
         }
 
-        row[dynamic_col] = round(r_dyn * 100, 1) if pd.notna(r_dyn) else np.nan
+        row[dynamic_col] = r_dyn * 100 if pd.notna(r_dyn) else np.nan
 
         rows.append(row)
 
@@ -2485,19 +2554,28 @@ def build_panel_df(
 
         df = df.sort_values(by=dynamic_col, ascending=False, na_position="last")
 
-    return df[[column for column in cols if column in df.columns]]
+    df = df[[column for column in cols if column in df.columns]]
+    df.attrs["row_notes"] = [
+        f"Live/defined members: {basket_metadata.get(k, {}).get('Members', 'unknown')}. "
+        f"{basket_metadata.get(k, {}).get('Breadth coverage', '')} "
+        "Returns require every live member on every session in the window; N/A means incomplete history."
+        for k in df.index
+    ]
+    return df
 
 
 
 def cumulative_return_since(returns: pd.Series, display_start: pd.Timestamp) -> pd.Series:
 
-    clean = returns.dropna()
+    clean = returns.replace([np.inf, -np.inf], np.nan)
 
     if clean.empty:
 
         return pd.Series(dtype=float)
 
-    levels = 100.0 * (1.0 + clean).cumprod()
+    levels = 100.0 * (1.0 + clean).cumprod(skipna=True)
+    if pd.isna(pct_since(levels, display_start)):
+        return pd.Series(dtype=float)
 
     anchors = levels[levels.index <= pd.Timestamp(display_start)]
 
@@ -2661,18 +2739,19 @@ def color_ema(tag):
 
 
 
-def sortable_panel_html(headers, values, fill_colors, col_widths, formats):
+def sortable_panel_html(headers, values, fill_colors, col_widths, formats, row_notes=None):
     """Read-only table with local sorting; retain the existing colors and widths."""
     total_width = sum(col_widths)
     columns = "".join(f'<col style="width:{w / total_width * 100:.4f}%">' for w in col_widths)
     header_cells = []
     for i, name in enumerate(headers):
-        numeric = formats[i] is not None
+        numeric = formats[i] is not None or name in {"MACD Momentum", "EMA 4/9/18"}
         tooltip = (
-            "Percent of valid current constituents with positive USD-adjusted returns over the selected range. "
-            "Flat returns count as non-advancing. Missing endpoints excluded; at least 60% coverage required. "
-            "Uses the scanner's maximum five-session forward fill."
-            if name.startswith("Breadth %") else name
+            "Percent of valid defined equities with positive USD-adjusted returns over the selected range. "
+            "Funds excluded. Flat returns are non-advancing. At least two valid equities and 60% of defined equities required. "
+            "Only confirmed exchange closures may carry a local close. N/A means insufficient coverage or fund-only proxy."
+            if name.startswith("Breadth %") else
+            ("Custom preset-scaled MACD histogram: Positive/Negative is histogram sign; acceleration compares histogram change. Sort order: positive accelerating, positive decelerating, neutral, negative decelerating, negative accelerating." if name == "MACD Momentum" else name)
         )
         low, high = ("Lowest to highest", "Highest to lowest") if numeric else ("A to Z", "Z to A")
         header_cells.append(
@@ -2689,12 +2768,19 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats):
         for col in range(len(headers)):
             value = values[col][row]
             numeric = formats[col] is not None
-            missing = pd.isna(value) or (numeric and not np.isfinite(float(value)))
-            text_value = "" if missing else (format(float(value), formats[col]) if numeric else str(value))
+            missing = pd.isna(value) or value == "N/A" or (numeric and not np.isfinite(float(value)))
+            text_value = "N/A" if missing else (format(float(value), formats[col]) if numeric else str(value))
             sort_value = "" if missing else str(float(value) if numeric else value)
+            if not missing and headers[col] == "EMA 4/9/18":
+                sort_value = str({"Up":2, "Neutral":1, "Down":0}.get(value, 1))
+            if not missing and headers[col] == "MACD Momentum":
+                sort_value = str({"Positive | Accelerating":4, "Positive | Decelerating":3,
+                                  "Neutral":2, "Negative | Decelerating":1,
+                                  "Negative | Accelerating":0}.get(value, 2))
+            note = row_notes[row] if row_notes and col == 0 else text_value
             cells.append(
                 f'<td data-value="{escape(sort_value, quote=True)}" data-missing="{str(bool(missing)).lower()}" '
-                f'style="background:{escape(fill_colors[col][row], quote=True)}">{escape(text_value)}</td>'
+                f'title="{escape(note, quote=True)}" style="background:{escape(fill_colors[col][row], quote=True)}">{escape(text_value)}</td>'
             )
         rows.append(f'<tr data-order="{row}">' + "".join(cells) + '</tr>')
     return '''<!doctype html><html><head><meta charset="utf-8"><style>
@@ -2855,7 +2941,7 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
 
     component_html(
-        sortable_panel_html(headers, values, fill_colors, col_widths, formats),
+        sortable_panel_html(headers, values, fill_colors, col_widths, formats, panel_df.attrs.get("row_notes")),
         height=min(920, 64 + int(23.4 * max(3, len(panel_df)))),
         scrolling=False,
     )
@@ -3241,9 +3327,11 @@ display_start_for_fetch = compute_display_start(preset, today)
 
 fetch_start_date = compute_fetch_start(display_start_for_fetch)
 
-include_today = ny_now.weekday() >= 5 or ny_now.time() >= COMPLETED_SESSION_TIME
-
-download_end_exclusive = today + timedelta(days=1) if include_today else today
+expected_sessions = completed_us_sessions(fetch_start_date, ny_now)
+if expected_sessions.empty:
+    st.error("No completed exchange sessions available for this range.")
+    st.stop()
+download_end_exclusive = expected_sessions[-1].date() + timedelta(days=1)
 
 DYNAMIC_LABEL = preset
 
@@ -3295,7 +3383,14 @@ if fetch_meta.get("source") == "last_good_cache":
 
 
 
+levels = carry_exchange_closures(levels)
 levels_usd, fx_issues = convert_foreign_levels_to_usd(levels)
+ratios = levels_usd.pct_change(fill_method=None) + 1.0
+suspect_prices = (ratios >= 5.0) | (ratios <= 0.2)
+suspect_symbols = suspect_prices.columns[suspect_prices.any()].tolist()
+# Extreme adjusted-price discontinuities require review, not automatic trust.
+# Legitimate exceptional moves can also trigger this conservative quarantine.
+levels_usd = levels_usd.mask(suspect_prices)
 
 
 
@@ -3307,7 +3402,10 @@ if BENCH not in levels_usd.columns or levels_usd[BENCH].dropna().empty:
 
 
 
-reference_date = pd.Timestamp(levels_usd[BENCH].dropna().index.max())
+benchmark_observed_date = pd.Timestamp(levels_usd[BENCH].dropna().index.max())
+reference_date = expected_sessions[-1]
+if benchmark_observed_date < reference_date:
+    st.warning(f"Benchmark data ends {benchmark_observed_date.date()}; expected {reference_date.date()}. Missing endpoints remain N/A.")
 
 display_start_date = compute_display_start(preset, reference_date.date())
 
@@ -3357,11 +3455,11 @@ if not live_all_baskets:
 
 
 
-live_tickers = unique_tickers_from_baskets(live_all_baskets, extra=[BENCH])
+live_tickers = unique_tickers_from_baskets(raw_selected_baskets, extra=[BENCH])
 
 available_tickers = [ticker for ticker in live_tickers if ticker in levels_usd.columns]
 
-benchmark_calendar = levels_usd[BENCH].dropna().index
+benchmark_calendar = expected_sessions
 
 aligned_levels = align_levels_to_calendar(
 
@@ -3391,7 +3489,10 @@ if all_basket_rets_full.empty:
 
 
 
-bench_rets_full = aligned_levels[BENCH].dropna().pct_change(fill_method=None).dropna()
+bench_rets_full = aligned_levels[BENCH].pct_change(fill_method=None)
+valid_benchmark = aligned_levels[BENCH].first_valid_index()
+if valid_benchmark is not None:
+    bench_rets_full.loc[valid_benchmark] = 0.0
 
 
 
@@ -3401,7 +3502,24 @@ bench_rets_full = aligned_levels[BENCH].dropna().pct_change(fill_method=None).dr
 
 # ============================================================
 
-all_basket_breadth = compute_basket_breadth(aligned_levels, live_all_baskets, display_start_ts)
+all_basket_breadth = compute_basket_breadth(aligned_levels, raw_selected_baskets, display_start_ts, live_all_baskets)
+anchors = aligned_levels.index[aligned_levels.index <= display_start_ts]
+for key, meta in basket_metadata.items():
+    equities = [t for t in dict.fromkeys(raw_selected_baskets.get(key, [])) if t not in FUND_SYMBOLS]
+    valid_count = 0
+    if len(anchors) and equities:
+        endpoints = aligned_levels.reindex(columns=equities).loc[[anchors[-1], aligned_levels.index[-1]]]
+        valid = (endpoints.notna() & (endpoints > 0)).all()
+        valid &= valid.index.isin(live_all_baskets.get(key, []))
+        valid_count = int(valid.sum())
+    meta["Breadth coverage"] = f"Breadth valid/defined equities: {valid_count}/{len(equities)}; funds excluded."
+st.caption(
+    f"As of {reference_date.date()} · {fetch_meta.get('source', 'yahoo')} · "
+    f"{len(live_all_baskets)}/{len(raw_selected_baskets)} baskets eligible · "
+    "Current-universe, daily equal-weight adjusted returns · N/A = incomplete history/coverage; not a point-in-time backtest."
+)
+if suspect_symbols:
+    st.warning(f"Extreme adjusted-price moves quarantined in {len(suspect_symbols)} symbols; affected windows remain N/A. See Data Notes.")
 
 all_panel_df = render_basket_section(
 
@@ -3504,6 +3622,12 @@ if show_full_map:
 if show_data_notes:
 
     with st.expander("Data Notes", expanded=True):
+        st.write("Fixed live membership and equal weights; all live members need adjacent-session prices for each basket return. Gaps invalidate affected windows. Foreign holiday closes may carry only on verified exchange closures; unverified calendars remain missing.")
+        st.write("MACD is a custom preset-scaled histogram signal, not a validated forecast; Positive/Negative refers to histogram sign. RSI uses completed weekly buckets. EMA and DMA use uninterrupted sessions.")
+        st.write("Breadth is equity-only, based on defined constituents: at least two valid equities and 60% endpoint coverage. ETF-only baskets have no look-through breadth.")
+        st.write("Symbols are current definitions, not a corporate-action-maintained historical universe. Quote repair and outlier quarantine do not certify vendor data. GBP minor-unit market-cap metadata is excluded from the optional size filter until independently verified.")
+        st.write({"dropped_baskets": dropped_baskets, "fx_issues": fx_issues, "quarantined_symbols": suspect_symbols})
+        st.dataframe(pd.DataFrame.from_dict(basket_metadata, orient="index"), hide_index=True)
 
         last_obs = fetch_meta.get("last_observation")
 

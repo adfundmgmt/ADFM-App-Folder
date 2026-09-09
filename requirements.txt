@@ -17,3 +17,4 @@ beautifulsoup4
 cot_reports
 pypdf
 pyarrow
+exchange-calendars

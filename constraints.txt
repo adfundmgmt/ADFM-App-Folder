@@ -16,3 +16,4 @@ requests==2.34.2
 sec-edgar-downloader==5.1.0
 streamlit==1.58.0
 yfinance==1.4.1
+exchange-calendars==4.13.2
