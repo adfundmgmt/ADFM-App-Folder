@@ -4,6 +4,7 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Simplified Public Equities Baskets into one searchable ranking table with relative trend, member breadth, one-month dispersion, visible source coverage, and one optional constituent drilldown; removed the multi-panel chart controls and default expanded 314-basket map.
 - Added a shared FRED service with validated, scheduled macro snapshots, bounded requests and retries, per-series failure isolation, atomic last-good storage, source/cadence/history diagnostics, and fail-closed ALFRED vintage requests. Known snapshots load without provider requests; vendor series retain local runtime caches.
 - Treasury now prefers an unmixed official curve and includes the 2Y tenor, 2s10s, 5Y/10Y real yields, and 5Y/10Y inflation breakevens. Yahoo remains a separate nominal-curve fallback.
 - Credit rankings disclose actual available history instead of calling limited ICE histories five-year rankings. Liquidity and sovereign FRED inputs share the same recovery service.
