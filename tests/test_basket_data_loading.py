@@ -19,14 +19,23 @@ class BasketDataLoadingTests(unittest.TestCase):
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
         for node in functions:
             node.decorator_list = []
-        module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *functions], type_ignores=[])
+        module = ast.Module(
+            body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *functions],
+            type_ignores=[],
+        )
         self.download = Mock()
-        self.cached = Mock(return_value=(pd.DataFrame(), {}))
+        self.snapshot = Mock(return_value=(pd.DataFrame(), {}))
         self.usable = Mock(return_value=False)
-        self.namespace = {"pd": pd, "yf": SimpleNamespace(download=self.download), "time": SimpleNamespace(sleep=Mock()),
-                          "BENCH": "SPY", "_cache_key": Mock(return_value="fixture"),
-                          "load_last_good_levels": self.cached, "_cache_is_usable": self.usable,
-                          "save_last_good_levels": Mock(return_value=None)}
+        self.namespace = {
+            "pd": pd,
+            "yf": SimpleNamespace(download=self.download),
+            "time": SimpleNamespace(sleep=Mock()),
+            "BENCH": "SPY",
+            "_cache_key": Mock(return_value="fixture"),
+            "compatible_snapshot": self.snapshot,
+            "_cache_is_usable": self.usable,
+            "save_last_good_levels": Mock(return_value=None),
+        }
         exec(compile(ast.fix_missing_locations(module), str(page), "exec"), self.namespace)
         self.dates = pd.bdate_range("2026-01-02", periods=3)
 
@@ -36,29 +45,46 @@ class BasketDataLoadingTests(unittest.TestCase):
         return result
 
     def fetch(self):
-        return self.namespace["fetch_daily_levels"](["SPY", "AAA"], self.dates[0], self.dates[-1] + pd.Timedelta(days=1))
+        return self.namespace["fetch_daily_levels"](
+            ["SPY", "AAA"], self.dates[0], self.dates[-1] + pd.Timedelta(days=1)
+        )
+
+    def stale_snapshot(self):
+        return pd.DataFrame(
+            {"SPY": [99, 100], "AAA": [49, 50]},
+            index=self.dates[:2],
+        )
 
     def test_all_missing_provider_column_gets_retried(self):
-        self.download.side_effect = [self.raw({"SPY": [100, 101, 102], "AAA": [None, None, None]}),
-                                     self.raw({"AAA": [50, 51, 52]})]
+        self.download.side_effect = [
+            self.raw({"SPY": [100, 101, 102], "AAA": [None, None, None]}),
+            self.raw({"AAA": [50, 51, 52]}),
+        ]
         result, metadata = self.fetch()
         self.assertEqual(result["AAA"].tolist(), [50, 51, 52])
         self.assertEqual(self.download.call_count, 2)
         self.assertEqual(self.download.call_args.kwargs["tickers"], ["AAA"])
         self.assertEqual(metadata["missing_tickers"], [])
 
-    def test_filling_a_cached_observation_is_disclosed(self):
+    def test_partial_live_history_is_not_spliced_with_cache(self):
         self.download.return_value = self.raw({"SPY": [100, 101, 102], "AAA": [50, None, 52]})
-        self.cached.return_value = (pd.DataFrame({"SPY": [99, 100, 101], "AAA": [49, 51, 51]}, index=self.dates), {"source": "older"})
+        self.snapshot.return_value = (self.stale_snapshot(), {"source": "older"})
         self.usable.return_value = True
         result, metadata = self.fetch()
-        self.assertEqual(result["AAA"].tolist(), [50, 51, 52])
-        self.assertEqual(metadata["source"], "yahoo+cache")
-        self.assertEqual(metadata["cache_meta"], {"source": "older"})
+        self.assertEqual(result["AAA"].iloc[0], 50)
+        self.assertTrue(pd.isna(result["AAA"].iloc[1]))
+        self.assertEqual(result["AAA"].iloc[2], 52)
+        self.assertEqual(metadata["source"], "yahoo")
+        self.assertEqual(metadata["cache_meta"], {})
 
     def test_unused_cache_is_not_reported_as_used(self):
         self.download.return_value = self.raw({"SPY": [100, 101, 102], "AAA": [50, 51, 52]})
-        self.cached.return_value = (pd.DataFrame({"SPY": [99, 100, 101], "AAA": [49, 50, 51]}, index=self.dates), {})
+        self.snapshot.return_value = (self.stale_snapshot(), {"source": "older"})
         self.usable.return_value = True
         _, metadata = self.fetch()
         self.assertEqual(metadata["source"], "yahoo")
+        self.assertEqual(metadata["cache_meta"], {})
+
+
+if __name__ == "__main__":
+    unittest.main()
