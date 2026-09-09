@@ -18,7 +18,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
           targets = [
               "Taiwan AI ODM and Thermal",
@@ -30,11 +29,41 @@ jobs:
 
           page = Path("pages/1_ADFM_Public_Equities_Baskets.py")
           text = page.read_text(encoding="utf-8")
+
+          def remove_dict_list_entry(source: str, name: str) -> str:
+              needle = f"'{name}': ["
+              pos = source.find(needle)
+              if pos < 0:
+                  raise SystemExit(f"Basket definition not found: {name}")
+              line_start = source.rfind("\n", 0, pos) + 1
+              open_bracket = source.find("[", pos)
+              depth = 0
+              close_bracket = None
+              for i in range(open_bracket, len(source)):
+                  if source[i] == "[":
+                      depth += 1
+                  elif source[i] == "]":
+                      depth -= 1
+                      if depth == 0:
+                          close_bracket = i
+                          break
+              if close_bracket is None:
+                  raise SystemExit(f"Unclosed ticker list for {name}")
+
+              end = close_bracket + 1
+              if end < len(source) and source[end] == ",":
+                  end += 1
+              if end < len(source) and source[end] == "\n":
+                  end += 1
+                  replacement = ""
+              elif end < len(source) and source[end] == "}":
+                  replacement = source[line_start:pos]
+              else:
+                  replacement = ""
+              return source[:line_start] + replacement + source[end:]
+
           for name in targets:
-              pattern = rf"(?m)^\s*'{re.escape(name)}':\s*\[[^\]]*\],?\n"
-              text, count = re.subn(pattern, "", text, count=1)
-              if count != 1:
-                  raise SystemExit(f"Expected exactly one basket definition for {name}, found {count}")
+              text = remove_dict_list_entry(text, name)
           page.write_text(text, encoding="utf-8")
 
           test_path = Path("tests/test_public_equities_basket_map.py")
