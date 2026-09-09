@@ -1,6 +1,6 @@
 # ADFM Analytics Platform
 
-ADFM's internal Streamlit toolkit for daily market monitoring, technical analysis, macro regimes, risk management, and portfolio decision support. Run the application from [Home.py](Home.py); its tool map is the source of truth for the catalog below.
+ADFM's internal Streamlit toolkit for daily market monitoring, technical analysis, macro regimes, risk management, and portfolio decision support. Run the application from [Home.py](Home.py); its tool map is the source of truth for the catalog below. Visible navigation titles are intentionally decoupled from legacy page filenames so routes can remain stable while naming stays concise and consistent.
 
 ## Run locally
 
@@ -25,44 +25,44 @@ The application contains 25 tools, in the same order and groups shown on the Hom
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
-| 1 | ADFM Public Equities Baskets | Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance. | Internal basket definitions; Yahoo Finance market data |
-| 2 | Global Macro Regime | Combines growth, inflation, policy, financial conditions, and market signals into a broad macro-regime read. | Yahoo Finance market proxies |
-| 3 | Liquidity Conditions Monitor | Separates the level and marginal impulse of system liquidity across Fed plumbing, overnight funding, credit transmission, and market confirmation. | Federal Reserve H.4.1; New York Fed; FRED; Yahoo Finance proxies |
-| 4 | Yield Curve Rates Regime Monitor | Tracks outright Treasury yields, curve spreads, and bull/bear steepener or flattener regimes. | Federal Reserve / FRED nominal and real Treasury yields and inflation breakevens; Yahoo nominal-curve fallback |
-| 5 | Credit Conditions Monitor | Monitors credit spreads, credit ETF ratios, regional banks, loans, EM debt, and financial conditions. | Yahoo Finance market proxies |
-| 6 | Currency Tension Engine | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
-| 7 | Sector Breadth and Rotation | Measures participation and sector rotation to identify where equity strength is broadening or narrowing. | Yahoo Finance sector and subsector ETFs |
-| 8 | Equity Leadership & Rotation | Maps all 11 S&P 500 sectors versus SPY, five China/U.S. relationships, three breadth and alternative-weighting ratios, and six inter-sector relationships. | Yahoo Finance adjusted ETF and index prices |
-| 9 | ADFM Underwriter | Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events. | SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history |
-| 10 | ADFM Chart Terminal | Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages. | Yahoo Finance OHLCV |
-| 11 | Cross-Asset Ratio Chartbook | Displays 38 duration, crisis-hedge, commodity, credit, funding, and financial-intermediary ratios as a grouped scrollable chartbook, plus custom relationships. | Yahoo Finance adjusted close history |
-| 12 | Rate of Change Regime Explorer | Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure. | Yahoo Finance daily OHLCV |
-| 13 | Relative Volatility Lab | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
-| 14 | ETF Flow Pressure Proxy | Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures. | Yahoo Finance OHLCV |
-| 15 | Volume Based Sentiment Indicator | Reads conviction, participation, and sentiment using volume-regime signals across major liquid assets. | Yahoo Finance adjusted OHLCV; provider fallback where available |
-| 16 | Options Positioning Compass | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
-| 17 | SEC 13F Exposure Browser | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
-| 18 | CFTC Positioning Monitor | Scans financial and physical futures for crowded longs, crowded shorts, and sharp weekly positioning shifts, with historical percentile and z-score context. | CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts |
-| 19 | Market Stress Composite | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
+| 1 | Equity Baskets | Compares ADFM equity baskets across leadership, trend strength, dispersion, and benchmark-relative performance. | Internal basket definitions; Yahoo Finance market data |
+| 2 | Global Macro | Combines growth, inflation, policy, financial conditions, and market signals into a broad macro-regime read. | Yahoo Finance market proxies |
+| 3 | Liquidity | Separates the level and marginal impulse of system liquidity across Fed plumbing, overnight funding, credit transmission, and market confirmation. | Federal Reserve H.4.1; New York Fed; FRED; Yahoo Finance proxies |
+| 4 | Rates & Yield Curve | Tracks outright Treasury yields, curve spreads, and bull/bear steepener or flattener regimes. | Federal Reserve / FRED nominal and real Treasury yields and inflation breakevens; Yahoo nominal-curve fallback |
+| 5 | Credit Conditions | Monitors credit spreads, credit ETF ratios, regional banks, loans, EM debt, and financial conditions. | Yahoo Finance market proxies |
+| 6 | FX Regime | Maps currencies across trajectory and valuation-policy stretch, with carry, pillar scores, overlays, and daily risk flags. | Persisted Currency Tension Engine snapshot and configured adapters |
+| 7 | Sector Rotation | Measures participation and sector rotation to identify where equity strength is broadening or narrowing. | Yahoo Finance sector and subsector ETFs |
+| 8 | Equity Leadership | Maps all 11 S&P 500 sectors versus SPY, five China/U.S. relationships, three breadth and alternative-weighting ratios, and six inter-sector relationships. | Yahoo Finance adjusted ETF and index prices |
+| 9 | Equity Underwriter | Calculates filing-driven valuation, per-share growth, margins, returns, liquidity, capital structure, issuer-credit ratios, debt maturities, and recent SEC events. | SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history |
+| 10 | Chart Terminal | Explores multi-timeframe chart structure, trend, momentum, volatility bands, and key moving averages. | Yahoo Finance OHLCV |
+| 11 | Cross-Asset Ratios | Displays 38 duration, crisis-hedge, commodity, credit, funding, and financial-intermediary ratios as a grouped scrollable chartbook, plus custom relationships. | Yahoo Finance adjusted close history |
+| 12 | Momentum & Rate of Change | Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure. | Yahoo Finance daily OHLCV |
+| 13 | Relative Volatility | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
+| 14 | ETF Flow Pressure | Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures. | Yahoo Finance OHLCV |
+| 15 | Volume Sentiment | Reads conviction, participation, and sentiment using volume-regime signals across major liquid assets. | Yahoo Finance adjusted OHLCV; provider fallback where available |
+| 16 | Options Positioning | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
+| 17 | 13F Holdings | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
+| 18 | CFTC Positioning | Scans financial and physical futures for crowded longs, crowded shorts, and sharp weekly positioning shifts, with historical percentile and z-score context. | CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts |
+| 19 | Market Stress | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
 | 20 | Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Official agency calendars; recurring market-calendar rules; Yahoo Finance market proxies |
-| 21 | Hedge Timer | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
-| 22 | Position Sizing Lab | Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
-| 23 | Market Memory Explorer | Surfaces historical analogs to contextualize the current tape against prior return paths and regimes. | Yahoo Finance market history |
-| 24 | Monthly Seasonality Explorer | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
+| 21 | Hedge Timing | Provides tactical timing cues for adding, holding, reducing, or rolling portfolio hedges. | Yahoo Finance; FRED regime inputs |
+| 22 | Position Sizing | Runs an interactive bankroll simulation using real historical holding-period outcomes, then pressure-tests conviction-based exposure against volatility, invalidation, event, tail, and liquidity risk. | Yahoo Finance adjusted OHLCV, earnings dates, and liquid cross-asset proxies |
+| 23 | Market Memory | Surfaces historical analogs to contextualize the current tape against prior return paths and regimes. | Yahoo Finance market history |
+| 24 | Seasonality | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
 | 25 | Commodity Event Study | Marks repeatable commodity price events and measures historical forward returns and drawdowns across Yahoo Finance futures histories. | Yahoo Finance daily continuous-futures price history |
 
 ## Tool groups
 
 | Group | Tools |
 |---|---|
-| Equity Discovery | ADFM Public Equities Baskets |
-| Macro Regime | Global Macro Regime; Liquidity Conditions Monitor; Yield Curve Rates Regime Monitor; Credit Conditions Monitor; Currency Tension Engine |
-| Equity Leadership | Sector Breadth and Rotation; Equity Leadership & Rotation |
-| Fundamental Research | ADFM Underwriter |
-| Technical Confirmation | ADFM Chart Terminal; Cross-Asset Ratio Chartbook; Rate of Change Regime Explorer; Relative Volatility Lab |
-| Positioning + Flows | ETF Flow Pressure Proxy; Volume Based Sentiment Indicator; Options Positioning Compass; SEC 13F Exposure Browser; CFTC Positioning Monitor |
-| Risk + Execution | Market Stress Composite; Catalyst Calendar; Hedge Timer; Position Sizing Lab |
-| Historical Context | Market Memory Explorer; Monthly Seasonality Explorer; Commodity Event Study |
+| Macro Regime | Global Macro; Liquidity; Rates & Yield Curve; Credit Conditions; FX Regime |
+| Equity Discovery | Equity Baskets |
+| Equity Leadership | Sector Rotation; Equity Leadership |
+| Fundamental Research | Equity Underwriter |
+| Technical Confirmation | Chart Terminal; Cross-Asset Ratios; Momentum & Rate of Change; Relative Volatility |
+| Positioning + Flows | ETF Flow Pressure; Volume Sentiment; Options Positioning; 13F Holdings; CFTC Positioning |
+| Risk + Execution | Market Stress; Catalyst Calendar; Hedge Timing; Position Sizing |
+| Historical Context | Market Memory; Seasonality; Commodity Event Study |
 
 ## Shared application foundations
 
@@ -79,7 +79,7 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - SEC Form 13F quarterly archive discovery, local preparation, amendment-aware consolidation, ticker/CUSIP matching, and institutional exposure ranking.
 - CFTC Commitments of Traders retrieval, cohort normalization, open-interest-adjusted crowding percentiles, z-scores, weekly changes, and mapped futures price overlays.
 
-The Rate of Change Regime Explorer, Global Macro Regime, and Liquidity Conditions Monitor use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
+The Momentum & Rate of Change, Global Macro, and Liquidity tools use these foundations. Other pages are being migrated incrementally so their established layouts and calculations remain stable. See [the architecture guide](docs/ARCHITECTURE.md) for the data-source and scoring policies.
 
 ## Data-use notes
 
