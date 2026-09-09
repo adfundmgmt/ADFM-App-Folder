@@ -93,7 +93,7 @@ def render_home() -> None:
             font-size: .78rem !important; line-height: 1.5 !important;
         }
         .block-container {
-            max-width: 1180px; padding: calc(3.25rem + env(safe-area-inset-top,0px)) 2rem 3rem;
+            max-width: 1180px; padding: calc(3.25rem + env(safe-area-inset-top, 0px)) 2rem 3rem;
         }
         .block-container > [data-testid="stVerticalBlock"],
         .block-container [data-testid="stColumn"] [data-testid="stVerticalBlock"],
@@ -101,17 +101,19 @@ def render_home() -> None:
         .adfm-masthead {
             display: grid; grid-template-columns: 56px minmax(0,1fr); align-items: center;
             column-gap: .9rem; border-top: 3px solid #000000; border-bottom: 1px solid #000000;
-            padding: .7rem 0 .75rem;
+            padding: .7rem 0 .75rem; overflow: visible !important;
         }
         .adfm-mark { display:block; width:48px; height:48px; object-fit:contain; }
         .firm-name {
             margin:0 0 .24rem; font-family:Arial,Helvetica,sans-serif; font-size:.66rem;
             font-weight:700; letter-spacing:.18em; text-transform:uppercase;
+            white-space: normal !important; overflow: visible !important;
         }
         .adfm-title {
             margin:0 !important; padding:0 !important; font-family:Arial,Helvetica,sans-serif !important;
             font-size:clamp(2rem,3vw,2.2rem) !important; font-weight:800 !important;
             letter-spacing:-.04em; line-height:.98 !important;
+            white-space: normal !important; overflow: visible !important;
         }
         .adfm-subtitle {
             margin:.3rem 0 0; color:#414141; font-family:Arial,Helvetica,sans-serif;
@@ -149,7 +151,7 @@ def render_home() -> None:
         }
         .entry-rule { height:1px; margin-top:1rem; background:#d7d7d7; }
         @media (max-width:760px) {
-            .block-container { max-width:none; padding:calc(3.2rem + env(safe-area-inset-top,0px)) 1rem 2.25rem; }
+            .block-container { max-width:none; padding: calc(3.2rem + env(safe-area-inset-top, 0px)) 1rem 2.25rem; }
             .adfm-masthead { grid-template-columns:46px minmax(0,1fr); column-gap:.72rem; padding:.55rem 0 .65rem; }
             .adfm-mark { width:43px; height:43px; }
             .firm-name { font-size:.61rem; letter-spacing:.15em; }
