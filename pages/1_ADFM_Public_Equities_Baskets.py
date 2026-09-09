@@ -1,4 +1,6 @@
 import streamlit as st
+from streamlit.components.v1 import html as component_html
+from html import escape
 
 from adfm_core.palette import PASTEL_20
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
@@ -2624,6 +2626,73 @@ def color_ema(tag):
 
 
 
+def sortable_panel_html(headers, values, fill_colors, col_widths, formats):
+    """Read-only table with local sorting; retain the existing colors and widths."""
+    total_width = sum(col_widths)
+    columns = "".join(f'<col style="width:{w / total_width * 100:.4f}%">' for w in col_widths)
+    header_cells = []
+    for i, name in enumerate(headers):
+        numeric = formats[i] is not None
+        low, high = ("Lowest to highest", "Highest to lowest") if numeric else ("A to Z", "Z to A")
+        header_cells.append(
+            f'<th scope="col" aria-sort="none"><div class="heading"><span>{escape(name)}</span>'
+            f'<select data-column="{i}" data-numeric="{str(numeric).lower()}" '
+            f'aria-label="Sort {escape(name, quote=True)}" title="Sort {escape(name, quote=True)}">'
+            f'<option value="">▾</option><option value="asc">{low}</option>'
+            f'<option value="desc">{high}</option><option value="reset">Original order</option>'
+            '</select></div></th>'
+        )
+    rows = []
+    for row in range(len(values[0])):
+        cells = []
+        for col in range(len(headers)):
+            value = values[col][row]
+            numeric = formats[col] is not None
+            missing = pd.isna(value) or (numeric and not np.isfinite(float(value)))
+            text_value = "" if missing else (format(float(value), formats[col]) if numeric else str(value))
+            sort_value = "" if missing else str(float(value) if numeric else value)
+            cells.append(
+                f'<td data-value="{escape(sort_value, quote=True)}" data-missing="{str(bool(missing)).lower()}" '
+                f'style="background:{escape(fill_colors[col][row], quote=True)}">{escape(text_value)}</td>'
+            )
+        rows.append(f'<tr data-order="{row}">' + "".join(cells) + '</tr>')
+    return '''<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}html,body{margin:0;background:white;color:black;font-family:Arial,sans-serif}
+.table-scroll{height:100vh;overflow:auto;padding-top:6px}
+table{width:100%;min-width:1000px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:12px}
+th,td{text-align:left;font-weight:400;padding:4px 8px;border-right:1px solid rgb(240,240,240);border-bottom:1px solid rgb(240,240,240);overflow-wrap:break-word}
+td{height:26px}th{height:32px;background:white;font-size:13px;position:sticky;top:0;z-index:1;border-color:rgb(230,230,230);border-top:1px solid rgb(230,230,230)}
+th:first-child,td:first-child{border-left:1px solid rgb(230,230,230)}
+.heading{display:flex;align-items:center;gap:2px}.heading span{flex:1;min-width:0}
+select{width:17px;flex:0 0 17px;appearance:none;border:0;border-radius:0;background:transparent;color:#666;font:12px Arial;cursor:pointer;padding:0;text-align:center}
+select:hover,select:focus-visible{background:#eee;color:black;outline:1px solid #aaa}
+</style></head><body><div class="table-scroll"><table aria-label="Equity basket scanner"><colgroup>''' + columns + '''</colgroup><thead><tr>''' + "".join(header_cells) + '''</tr></thead><tbody>''' + "".join(rows) + '''</tbody></table></div><script>
+const body=document.querySelector('tbody');
+const original=Array.from(body.rows);
+const menus=Array.from(document.querySelectorAll('select'));
+menus.forEach(menu=>menu.addEventListener('change',()=>{
+ const direction=menu.value, column=Number(menu.dataset.column), numeric=menu.dataset.numeric==='true';
+ if(!direction)return;
+ const sorted=original.slice();
+ if(direction!=='reset')sorted.sort((a,b)=>{
+  const ac=a.cells[column],bc=b.cells[column];
+  const am=ac.dataset.missing==='true',bm=bc.dataset.missing==='true';
+  if(am!==bm)return am?1:-1;
+  if(am)return Number(a.dataset.order)-Number(b.dataset.order);
+  const result=numeric?Number(ac.dataset.value)-Number(bc.dataset.value):ac.dataset.value.localeCompare(bc.dataset.value,undefined,{sensitivity:'base'});
+  return (direction==='asc'?result:-result)||Number(a.dataset.order)-Number(b.dataset.order);
+ });
+ body.replaceChildren(...sorted);
+ menus.forEach(other=>{
+  const active=other===menu&&direction!=='reset';
+  other.closest('th').setAttribute('aria-sort',active?(direction==='asc'?'ascending':'descending'):'none');
+  other.options[0].textContent=active?(direction==='asc'?'▴':'▾'):'▾';
+  other.value='';
+ });
+}));
+</script></body></html>'''
+
+
 def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
     if panel_df.empty:
@@ -2744,59 +2813,11 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
 
 
-    fig_tbl = go.Figure(data=[go.Table(
-
-        columnwidth=[int(w * 1000) for w in col_widths],
-
-        header=dict(
-
-            values=headers,
-
-            fill_color="white",
-
-            line_color="rgb(230,230,230)",
-
-            font=dict(color="black", size=13),
-
-            align="left",
-
-            height=32
-
-        ),
-
-        cells=dict(
-
-            values=values,
-
-            fill_color=fill_colors,
-
-            line_color="rgb(240,240,240)",
-
-            font=dict(color="black", size=12),
-
-            align="left",
-
-            height=26,
-
-            format=formats
-
-        )
-
-    )])
-
-
-
-    fig_tbl.update_layout(
-
-        margin=dict(l=0, r=0, t=6, b=0),
-
-        height=min(920, 64 + 26 * max(3, len(panel_df)))
-
+    component_html(
+        sortable_panel_html(headers, values, fill_colors, col_widths, formats),
+        height=min(920, 64 + 26 * max(3, len(panel_df))),
+        scrolling=False,
     )
-
-
-
-    st.plotly_chart(fig_tbl, use_container_width=True)
 
 
 
