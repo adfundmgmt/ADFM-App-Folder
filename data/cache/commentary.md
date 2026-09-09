@@ -1,9 +1,9 @@
-**Regime: Risk-premium dominates; carry crowded across USD, EUR, GBP, AUD at 86–97th percentile—fragile to vol spike.**
+**Regime: Risk-premium mode; carry crowded across three heavyweight pairs (AUD, GBP, JPY all >85th percentile) — vol-spike vulnerability dominant.**
 
-**Extremes:**
-- **GBP short** — valuation (+1.6) and carry (+97th %ile crowding) are doing all the work; policy feasibility collapsed (-0.6) as growth softens and hawkish tailwind fades. One-legged unwind risk.
-- **AUD short** — same unwind playbook: valuation (+2.0), real-yield stress (−0.57 mult), carry crowded (+94th %ile), policy trap (feasibility −0.9). Deteriorating fundamentals (−0.24) compound the stretch (+1.59).
-- **JPY long** — cheap (−0.47 stretch, −1.69 valuation) with improving fundamentals (+0.45); real-yield support downweighted (mult −0.46) in risk-premium regime, but mean-reversion setup intact despite 86th %ile carry crowding. USD strength partly masks.
-- **CAD long** — cheap (−1.15 stretch, −2.03 valuation) and improving (+0.35 fund); external pillar strong (+1.06); rewarded yield regime; lower carry crowding (64th %ile) = cleaner long.
+• **AUD sell signal hardening.** Deteriorating fundamentals (-0.24), extreme stretch (+1.59), and the classic carry-unwind setup (valuation +2.0 doing all work; growth/inflation/policy all weak). Real-yield regime punishing despite high nominal rates (mult -0.57). Crowding at 98th percentile is the tipping point.
 
-**Carry pair:** **GBP/AUD**—both crumbling on policy fatigue and one-legged valuation props; AUD deteriorating fundamentals add urgency.
+• **CAD emerging long candidate.** Cheap valuation (-2.03) with turning fundamentals (+0.34). External pillar solid (+1.06). Rewarded yield regime and feasibility neutral — less fragile than EUR/GBP peers. Stretch minimal (-1.15).
+
+• **JPY carry unwind risk matches AUD.** Cheap and improving (valuation -1.69, fundamentals +0.43) but yield stress regime (-0.52 mult) means real-rate strength doesn't support the currency — *inverse correlation is the trap*. Crowding at 86th percentile. Mean reversion setup collides with vol risk.
+
+• **AUD/JPY: short the pair.** Both are extreme-crowd carry longs; AUD deteriorating, JPY mean-reverting; widening yield gaps don't matter in risk-premium regimes. Vol spike triggers simultaneous unwind.

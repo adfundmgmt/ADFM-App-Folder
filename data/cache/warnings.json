@@ -6,7 +6,7 @@
   ],
   "JPY": [
     "Cheap and improving \u2014 the mean-reversion setup: valuation is below its own norm (-0.5) while fundamentals are turning up (+0.4).",
-    "Yield stress: real 10Y is high (z +1.6) but the currency weakens as yields rise (-0.25 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.46). Note: cross vs USD partly confounds this in a strong-dollar tape.",
+    "Yield stress: real 10Y is high (z +1.5) but the currency weakens as yields rise (-0.29 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.52). Note: cross vs USD partly confounds this in a strong-dollar tape.",
     "Carry crowded: carry-to-vol in the 86th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
   ],
   "GBP": [
@@ -25,16 +25,16 @@
     "One-legged read: Valuation (+2.0) is doing almost all the work; the other pillars are near neutral, so treat this as narrow, not broad-based.",
     "Policy trap: inflation above target but growth soft and policy already tight (feasibility -0.9) \u2014 the hawkish tailwind is fading toward a stagflation drag; inflation's axis-1 contribution is dampened (mult -0.71).",
     "Yield stress: real 10Y is high (z +0.9) but the currency weakens as yields rise (-0.33 corr) \u2014 risk-premium regime, not reward; real-yield support downweighted (mult -0.57). Note: cross vs USD partly confounds this in a strong-dollar tape.",
-    "Carry crowded: carry-to-vol in the 94th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
+    "Carry crowded: carry-to-vol in the 98th percentile \u2014 a lot of carry riding on quiet vol, fragile to a vol spike."
   ],
   "CAD": [
-    "Cheap and improving \u2014 the mean-reversion setup: valuation is below its own norm (-1.1) while fundamentals are turning up (+0.3).",
+    "Cheap and improving \u2014 the mean-reversion setup: valuation is below its own norm (-1.2) while fundamentals are turning up (+0.3).",
     "One-legged read: Valuation (-2.0) is doing almost all the work; the other pillars are near neutral, so treat this as narrow, not broad-based."
   ],
   "NZD": [
     "One-legged read: External (+1.1) is doing almost all the work; the other pillars are near neutral, so treat this as narrow, not broad-based."
   ],
   "USD": [
-    "Fat carry on a fragile base: out-yields the field in real terms (avg +0.9%) but sits on a stretched valuation \u2014 the classic carry-unwind setup."
+    "Fat carry on a fragile base: out-yields the field in real terms (avg +1.0%) but sits on a stretched valuation \u2014 the classic carry-unwind setup."
   ]
 }
