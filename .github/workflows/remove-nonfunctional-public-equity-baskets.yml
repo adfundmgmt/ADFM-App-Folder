@@ -1,0 +1,55 @@
+name: Remove nonfunctional public equity baskets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/remove-nonfunctional-public-equity-baskets.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Remove nonfunctional basket definitions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          targets = [
+              "Taiwan AI ODM and Thermal",
+              "Korea Shipbuilding and Defense",
+              "Korea Power Equipment",
+              "India Defense and Capital Goods",
+              "India Power and Grid Equipment",
+          ]
+
+          page = Path("pages/1_ADFM_Public_Equities_Baskets.py")
+          text = page.read_text(encoding="utf-8")
+          for name in targets:
+              pattern = rf"(?m)^\s*'{re.escape(name)}':\s*\[[^\]]*\],?\n"
+              text, count = re.subn(pattern, "", text, count=1)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one basket definition for {name}, found {count}")
+          page.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/test_public_equities_basket_map.py")
+          if test_path.exists():
+              lines = test_path.read_text(encoding="utf-8").splitlines()
+              lines = [line for line in lines if not any(name in line for name in targets)]
+              test_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+          git config user.name "adfundmgmt"
+          git config user.email "aryadeniz@adfundmgmt.com"
+          git add pages/1_ADFM_Public_Equities_Baskets.py tests/test_public_equities_basket_map.py
+          if git diff --cached --quiet; then
+            echo "No changes produced"
+            exit 1
+          fi
+          git commit -m "Remove nonfunctional public equity baskets"
+          git push
