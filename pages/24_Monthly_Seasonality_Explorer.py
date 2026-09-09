@@ -14,7 +14,7 @@ from matplotlib import gridspec
 from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator, PercentFormatter
 
-from adfm_core.primary_data import fetch_fred_symbols, render_fred_status
+from adfm_core.primary_data import fetch_fred_symbols
 from adfm_core.palette import PASTEL
 from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
@@ -1610,7 +1610,6 @@ def render_explorer():
     regime_df = fetch_regime_data(
         str(prices.index.min().date()), str(prices.index.max().date())
     )
-    render_fred_status(pd.DataFrame(regime_df.attrs.get("fred_status", [])))
     st.caption("Macro regime filters are retrospective: FRED values use latest revisions, and recession labels can be assigned after the event. They do not represent what an investor knew in each historical month.")
     market_regime_daily = fetch_regime_market_series(
         str(prices.index.min().date()), str(prices.index.max().date())
@@ -1859,56 +1858,6 @@ def render_explorer():
         st.image(curve_buf, width="stretch")
         st.caption(
             f"Filtered average path with ±1 standard deviation and the {selected_year} path overlaid when available."
-        )
-
-    summary = build_intra_month_summary(
-        prices,
-        filtered,
-        selected_month,
-        used_symbol,
-        comparison_year=selected_year,
-    )
-    st.subheader("Selected-Month Read")
-    render_intra_month_cards(summary)
-    render_intra_month_commentary(summary)
-
-    with st.expander("Methodology and active sample"):
-        st.markdown(
-            f"""
-            **Chart context:** {chart_context}
-
-            - Global lookback and advanced filters feed the matrix average row, monthly profile, and intra-month path.
-            - Calendar rows remain realized returns; FILTER AVG is recalculated from the active filtered sample.
-            - Intra-month paths are anchored to the previous month-end and equal-weighted across included observations.
-            - Missing observations remain unavailable rather than being fabricated.
-            - Latest price date: **{latest_price_date}**
-            - Filtered observations: **{int(filtered.shape[0])} months across {int(filtered["year"].nunique())} years**
-            """
-        )
-
-    with st.expander("Audit included observations"):
-        audit_df = filtered.copy().reset_index().rename(columns={"index": "period"})
-        audit_df["period"] = audit_df["period"].astype(str)
-        audit_cols = [
-            "period",
-            "year",
-            "month",
-            "pres_cycle_bucket",
-            "regime_cycle",
-            "fed_regime",
-            "vix_bucket",
-            "teny_trend",
-            "dxy_trend",
-            "is_complete_month",
-            "total_ret",
-            "h1_ret",
-            "h2_ret",
-        ]
-        audit_cols = [column for column in audit_cols if column in audit_df.columns]
-        st.dataframe(
-            audit_df[audit_cols].sort_values(["year", "month"]),
-            width="stretch",
-            hide_index=True,
         )
 
     render_footer()
