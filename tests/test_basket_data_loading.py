@@ -47,6 +47,15 @@ class BasketDataLoadingTests(unittest.TestCase):
         self.assertEqual(self.download.call_args.kwargs["tickers"], ["AAA"])
         self.assertEqual(metadata["missing_tickers"], [])
 
+    def test_download_explicitly_requests_adjusted_prices(self):
+        self.download.return_value = self.raw({"AAA": [50, 51, 52]})
+        self.namespace["_download_close_once"](
+            ["AAA"],
+            self.dates[0],
+            self.dates[-1] + pd.Timedelta(days=1),
+        )
+        self.assertTrue(self.download.call_args.kwargs["auto_adjust"])
+
     def test_filling_a_cached_observation_is_disclosed(self):
         self.download.return_value = self.raw({"SPY": [100, 101, 102], "AAA": [50, None, 52]})
         self.cached.return_value = (pd.DataFrame({"SPY": [99, 100, 101], "AAA": [49, 51, 51]}, index=self.dates), {"source": "older"})
