@@ -2258,6 +2258,39 @@ def basket_vs_dma_pct(
 
 
 
+def compute_basket_breadth(
+    levels: pd.DataFrame,
+    baskets: Dict[str, List[str]],
+    display_start: pd.Timestamp,
+) -> Dict[str, float]:
+    """Percent advancing among current live members with valid common endpoints.
+
+    Uses USD-adjusted levels on the scanner's benchmark calendar, including its
+    bounded forward fill. Require the existing daily coverage floor; exclude
+    missing/nonpositive endpoints. Flat constituents count in the denominator.
+    This measures current membership, not historical index membership.
+    """
+    result = {key: np.nan for key in baskets}
+    if levels.empty:
+        return result
+    ordered = levels.sort_index()
+    anchors = ordered.index[ordered.index <= pd.Timestamp(display_start)]
+    if anchors.empty or anchors[-1] >= ordered.index[-1]:
+        return result
+    start, end = ordered.loc[anchors[-1]], ordered.iloc[-1]
+    for key, members in baskets.items():
+        unique = list(dict.fromkeys(members))
+        if not unique:
+            continue
+        a, b = start.reindex(unique), end.reindex(unique)
+        valid = np.isfinite(a) & np.isfinite(b) & (a > 0) & (b > 0)
+        count = int(valid.sum())
+        if count < max(1, math.ceil(len(unique) * MIN_DAILY_MEMBER_COVERAGE)):
+            continue
+        result[key] = float((b[valid] > a[valid]).sum() / count * 100.0)
+    return result
+
+
 def build_panel_df(
 
     basket_returns_full: pd.DataFrame,
@@ -2270,6 +2303,8 @@ def build_panel_df(
 
     benchmark_series_full: pd.Series,
 
+    basket_breadth: Dict[str, float],
+
 ) -> pd.DataFrame:
 
     dynamic_col = f"%{dynamic_label}"
@@ -2280,13 +2315,13 @@ def build_panel_df(
 
         return_cols.append(dynamic_col)
 
-    relative_col = f"vs SPY {dynamic_label}"
+    breadth_col = f"Breadth % {dynamic_label}"
 
     cols = [
 
         "Basket", *return_cols,
 
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", relative_col,
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", breadth_col,
 
         "vs 21DMA %", "vs 50DMA %",
 
@@ -2305,10 +2340,6 @@ def build_panel_df(
     rows: List[Dict[str, Any]] = []
 
 
-
-    bench_levels = 100.0 * (1.0 + benchmark_series_full.dropna()).cumprod()
-
-    bench_dynamic = pct_since(bench_levels, display_start)
 
     macd_config = macd_settings(dynamic_label, benchmark_series_full.dropna().index.max())
 
@@ -2356,11 +2387,7 @@ def build_panel_df(
 
         r_dyn = pct_since(s_full, display_start)
 
-        relative_return = np.nan
-
-        if pd.notna(r_dyn) and pd.notna(bench_dynamic) and (1.0 + bench_dynamic) != 0:
-
-            relative_return = ((1.0 + r_dyn) / (1.0 + bench_dynamic)) - 1.0
+        breadth = basket_breadth.get(basket_id, np.nan)
 
 
 
@@ -2426,7 +2453,7 @@ def build_panel_df(
 
             "%1M": round(r1m * 100, 1) if pd.notna(r1m) else np.nan,
 
-            relative_col: round(relative_return * 100, 1) if pd.notna(relative_return) else np.nan,
+            breadth_col: round(breadth, 1) if pd.notna(breadth) else np.nan,
 
             "MACD Momentum": macd_m,
 
@@ -2541,6 +2568,14 @@ def color_ret(x):
 
 
 
+def color_breadth(x):
+    if pd.isna(x):
+        return "white"
+    if x == 50:
+        return "rgb(230,236,245)"
+    return color_ret((float(x) - 50.0) * 0.4)
+
+
 def color_rsi(x):
 
     if pd.isna(x):
@@ -2633,9 +2668,15 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats):
     header_cells = []
     for i, name in enumerate(headers):
         numeric = formats[i] is not None
+        tooltip = (
+            "Percent of valid current constituents with positive USD-adjusted returns over the selected range. "
+            "Flat returns count as non-advancing. Missing endpoints excluded; at least 60% coverage required. "
+            "Uses the scanner's maximum five-session forward fill."
+            if name.startswith("Breadth %") else name
+        )
         low, high = ("Lowest to highest", "Highest to lowest") if numeric else ("A to Z", "Z to A")
         header_cells.append(
-            f'<th scope="col" aria-sort="none"><div class="heading"><span>{escape(name)}</span>'
+            f'<th scope="col" aria-sort="none"><div class="heading"><span title="{escape(tooltip, quote=True)}">{escape(name)}</span>'
             f'<select data-column="{i}" data-numeric="{str(numeric).lower()}" '
             f'aria-label="Sort {escape(name, quote=True)}" title="Sort {escape(name, quote=True)}">'
             f'<option value="">▾</option><option value="asc">{low}</option>'
@@ -2705,7 +2746,7 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
     dynamic_col = f"%{dynamic_label}"
 
-    relative_col = f"vs SPY {dynamic_label}"
+    breadth_col = f"Breadth % {dynamic_label}"
 
     return_cols = ["%5D", "%1M"]
 
@@ -2719,7 +2760,7 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
         "Basket", *return_cols,
 
-        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", relative_col,
+        "MACD Momentum", "EMA 4/9/18", "RSI(14W)", breadth_col,
 
         "vs 21DMA %", "vs 50DMA %",
 
@@ -2767,11 +2808,11 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
 
 
-    vals = panel_df[relative_col].tolist()
+    vals = panel_df[breadth_col].tolist()
 
     values.append(vals)
 
-    fill_colors.append([color_ret(v) for v in vals])
+    fill_colors.append([color_breadth(v) for v in vals])
 
 
 
@@ -3032,6 +3073,8 @@ def render_basket_section(
 
     basket_metadata: Dict[str, Dict[str, Any]],
 
+    basket_breadth: Dict[str, float],
+
     show_heading: bool = True,
 
 ) -> pd.DataFrame:
@@ -3052,6 +3095,8 @@ def render_basket_section(
         basket_metadata=basket_metadata,
 
         benchmark_series_full=benchmark_returns_full,
+
+        basket_breadth=basket_breadth,
 
     )
 
@@ -3356,6 +3401,8 @@ bench_rets_full = aligned_levels[BENCH].dropna().pct_change(fill_method=None).dr
 
 # ============================================================
 
+all_basket_breadth = compute_basket_breadth(aligned_levels, live_all_baskets, display_start_ts)
+
 all_panel_df = render_basket_section(
 
     heading="All Baskets | Consolidated Panel",
@@ -3371,6 +3418,8 @@ all_panel_df = render_basket_section(
     dynamic_label=DYNAMIC_LABEL,
 
     show_chart=False,
+
+    basket_breadth=all_basket_breadth,
 
     basket_metadata=basket_metadata,
 
@@ -3425,6 +3474,8 @@ if show_category_sections:
             dynamic_label=DYNAMIC_LABEL,
 
             show_chart=True,
+
+            basket_breadth=all_basket_breadth,
 
             basket_metadata=basket_metadata,
 
