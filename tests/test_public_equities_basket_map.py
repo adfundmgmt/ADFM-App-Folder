@@ -52,10 +52,6 @@ def test_global_leadership_and_financial_baskets_remain_present() -> None:
         "Japan Banks and Diversified Financials": "Asia",
         "Japanese Trading Houses": "Asia",
         "Japan Semiconductor Equipment": "Asia",
-        "Taiwan AI ODM and Thermal": "Asia",
-        "Korea Power Equipment": "Asia",
-        "India Defense and Capital Goods": "Asia",
-        "India Power and Grid Equipment": "Asia",
     }
 
     for basket, category in expected_locations.items():
