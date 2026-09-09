@@ -71,6 +71,7 @@ LIGHT_GREY = "#f2f2f2"
 BACKGROUND = "#fcfcfb"
 
 CACHE_TTL_SECONDS = 3600
+PRICE_TTL_SECONDS = 300
 
 
 # =========================
@@ -163,7 +164,7 @@ render_page_header(
 
 
 def _today() -> pd.Timestamp:
-    return pd.Timestamp.today().normalize()
+    return pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
 
 
 def _clean_symbol(symbol: str) -> str:
@@ -179,17 +180,32 @@ def _yf_download(
                 symbol,
                 start=start,
                 end=end,
-                auto_adjust=True,
+                auto_adjust=False,
                 progress=False,
                 threads=False,
             )
             if df is not None and not df.empty and "Close" in df:
-                ser = df["Close"]
-                if isinstance(ser, pd.DataFrame):
-                    ser = ser.iloc[:, 0]
-                ser = pd.to_numeric(ser, errors="coerce").dropna()
+                def column(name):
+                    value = df[name]
+                    if isinstance(value, pd.DataFrame):
+                        value = value.iloc[:, 0]
+                    return pd.to_numeric(value, errors="coerce")
+
+                raw = column("Close")
+                adjusted = column("Adj Close") if "Adj Close" in df else raw
+                ser = adjusted.dropna()
+                ser = ser[np.isfinite(ser) & (ser > 0)]
                 ser.index = pd.to_datetime(ser.index).tz_localize(None)
+                ser = ser[~ser.index.duplicated(keep="last")].sort_index()
                 if not ser.empty:
+                    last = ser.index[-1]
+                    # Carry the daily adjustment factor so intraday/open observations
+                    # use the same split/dividend basis as the historical series.
+                    factor = adjusted.iloc[-1] / raw.iloc[-1]
+                    ser.attrs.update(source_symbol=symbol, source="Yahoo Finance",
+                                     adjustment_factor=float(factor),
+                                     daily_date=str(last.date()),
+                                     daily_open=float(column("Open").iloc[-1]))
                     return ser.rename("Close")
         except Exception:
             pass
@@ -208,10 +224,11 @@ def _fred_series(series_code: str, start: str, end: str) -> Optional[pd.Series]:
     return result
 
 
-@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
+@st.cache_data(show_spinner=False, ttl=PRICE_TTL_SECONDS)
 def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     symbol = _clean_symbol(symbol)
-    end = min(pd.Timestamp(end), _today()).strftime("%Y-%m-%d")
+    # Yahoo's end date is exclusive; include the requested final session.
+    end = (min(pd.Timestamp(end), _today()) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
     start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
     start_pad = start_pad_dt.strftime("%Y-%m-%d")
@@ -229,9 +246,69 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
         fred_tk = FALLBACK_MAP[symbol]
         series = _fred_series(fred_tk, start_pad, end)
         if series is not None:
+            series.attrs.update(source="FRED", source_symbol=fred_tk)
             return series.rename("Close")
 
     return None
+
+
+@st.cache_data(show_spinner=False, ttl=PRICE_TTL_SECONDS)
+def fetch_intraday(symbol: str) -> pd.DataFrame:
+    """Small regular-session request; historical data remains daily."""
+    try:
+        frame = yf.Ticker(symbol).history(
+            period="1d", interval="1m", auto_adjust=False,
+            prepost=False, actions=False, timeout=10,
+        )
+        return frame if frame is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def current_price_overlay(
+    prices: pd.Series, intraday: pd.DataFrame,
+    now: Optional[pd.Timestamp] = None,
+) -> Tuple[pd.Series, str]:
+    """Replace at most today's endpoint; never relabel stale bars as today."""
+    result = prices.copy()
+    source = prices.attrs.get("source", "Yahoo Finance")
+    last_date = prices.index[-1]
+    label = f"Last available close · {last_date:%Y-%m-%d}"
+    now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now)
+    if now.tzinfo is None:
+        now = now.tz_localize("UTC")
+    local_today = now.tz_convert("America/New_York").tz_localize(None).normalize()
+    factor = prices.attrs.get("adjustment_factor", 1.0)
+    if source != "Yahoo Finance" or not np.isfinite(factor) or factor <= 0:
+        return result, f"{source} · {label}"
+
+    # Intraday bars have an exchange timezone. Reject naive/future timestamps.
+    if intraday is not None and not intraday.empty and "Close" in intraday:
+        idx = pd.DatetimeIndex(intraday.index)
+        if idx.tz is not None:
+            local_today = now.tz_convert(idx.tz).tz_localize(None).normalize()
+            values = pd.to_numeric(intraday["Close"], errors="coerce")
+            valid = (idx.date == local_today.date()) & (idx <= now)
+            valid &= np.isfinite(values) & (values > 0)
+            bars = values.loc[valid].sort_index()
+            # Only apply a factor known for this session; prior-session factors
+            # can differ on an ex-dividend or split date.
+            if not bars.empty and prices.attrs.get("daily_date") == str(local_today.date()):
+                stamp = bars.index[-1]
+                result.loc[local_today] = float(bars.iloc[-1]) * factor
+                return result.sort_index(), (
+                    f"Latest available · {stamp:%Y-%m-%d %H:%M %Z} · "
+                    "1-minute bar; may be delayed"
+                )
+
+    if last_date == local_today:
+        opening = prices.attrs.get("daily_open", np.nan)
+        if np.isfinite(opening) and opening > 0:
+            result.loc[local_today] = float(opening) * factor
+            label = f"Today's open · {local_today:%Y-%m-%d} · intraday quote unavailable"
+        else:
+            label = f"Latest daily price · {last_date:%Y-%m-%d} · intraday timestamp unavailable"
+    return result.sort_index(), label
 
 
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
@@ -396,7 +473,7 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
     for m in months:
         m_mask = prices.index.to_period("M") == m
         month_days = prices.loc[m_mask]
-        if month_days.shape[0] < 3:
+        if month_days.empty or (month_days.shape[0] < 3 and m != current_month):
             continue
 
         prev_month_days = prices.loc[prices.index.to_period("M") == (m - 1)]
@@ -408,11 +485,8 @@ def _intra_month_halves(prices: pd.Series) -> pd.DataFrame:
 
         n = month_days.shape[0]
         mid_idx = (n // 2) - 1
-        if mid_idx < 0:
-            continue
-
-        mid_close = float(month_days.iloc[mid_idx])
         tot = (last / prev_eom - 1.0) * 100.0
+        mid_close = float(month_days.iloc[mid_idx]) if n >= 3 else np.nan
         h1 = (mid_close / prev_eom - 1.0) * 100.0
         h2 = tot - h1
 
@@ -910,7 +984,7 @@ def _month_paths_prev_eom_equal_weight_from_filtered(
         month_days = prices.loc[
             (prices.index.year == y) & (prices.index.month == m_num)
         ]
-        if month_days.shape[0] < 3:
+        if month_days.empty or (month_days.shape[0] < 3 and m != current_month):
             continue
 
         prev_p = p - 1
@@ -1308,7 +1382,7 @@ def plot_intra_month_curve(
 
     comparison_year = int(comparison_year or _today().year)
     comparison_path = _year_month_path(prices, comparison_year, month_int)
-    if len(comparison_path) >= 3:
+    if len(comparison_path) >= 2:
         ax.plot(
             comparison_path.index.values,
             comparison_path.values,
@@ -1413,417 +1487,432 @@ def plot_intra_month_curve(
 # MAIN CONTROLS
 # =========================
 
-today_dt = _today()
-this_year = int(today_dt.year)
-
-def _reset_seasonality_view() -> None:
-    keys = [
-        "seasonality_symbol",
-        "seasonality_lookback",
-        "seasonality_custom_start",
-        "seasonality_custom_end",
-        "seasonality_cycle",
-        "seasonality_complete_only",
-        "seasonality_fed",
-        "seasonality_vix",
-        "seasonality_teny",
-        "seasonality_dxy",
-        "seasonality_month_picker",
-        "seasonality_year_picker",
-        "seasonality_matrix",
-    ]
-    for key in keys:
-        st.session_state.pop(key, None)
-
-
-control_symbol, control_lookback, control_reset = st.columns(
-    [2.2, 2.4, 0.75], vertical_alignment="bottom"
-)
-with control_symbol:
-    symbol = st.text_input(
-        "Ticker symbol", value="^SPX", key="seasonality_symbol"
-    ).upper()
-with control_lookback:
-    lookback = st.segmented_control(
-        "Global lookback",
-        options=["5Y", "10Y", "20Y", "All", "Custom"],
-        default="10Y",
-        key="seasonality_lookback",
-        width="stretch",
-    )
-with control_reset:
-    st.button("Reset", on_click=_reset_seasonality_view, width="stretch")
-
-custom_start_year = max(1900, this_year - 9)
-custom_end_year = this_year
-if lookback == "Custom":
-    custom_start_col, custom_end_col = st.columns(2)
-    with custom_start_col:
-        custom_start_year = int(
-            st.number_input(
-                "Custom start year",
-                min_value=1900,
-                max_value=this_year,
-                value=max(1900, this_year - 9),
-                key="seasonality_custom_start",
-            )
-        )
-    with custom_end_col:
-        custom_end_year = int(
-            st.number_input(
-                "Custom end year",
-                min_value=custom_start_year,
-                max_value=this_year,
-                value=this_year,
-                key="seasonality_custom_end",
-            )
-        )
-
-preset_map = {
-    "5Y": "Last 5 years",
-    "10Y": "Last 10 years",
-    "20Y": "Last 20 years",
-    "All": "All history",
-    "Custom": "Custom",
-}
-sample_preset = preset_map.get(str(lookback or "10Y"), "Last 10 years")
-
-if sample_preset == "All history":
-    start_fetch_year = 1900
-elif sample_preset == "Custom":
-    start_fetch_year = max(1900, custom_start_year - 2)
-else:
-    start_fetch_year = max(1900, this_year - 22)
-
-start_fetch_date = f"{start_fetch_year}-01-01"
-end_fetch_date = f"{this_year}-12-31"
-
-with st.spinner("Fetching and analyzing data..."):
-    used_symbol = symbol
-    prices = fetch_prices(symbol, start_fetch_date, end_fetch_date)
-    if prices is None and symbol == "SPY":
-        prices = fetch_prices("^GSPC", start_fetch_date, end_fetch_date)
-        if prices is not None:
-            used_symbol = "^GSPC"
-
-if prices is None or prices.empty:
-    st.error(f"No data found for '{symbol}'. Try a different symbol or lookback.")
-    st.stop()
-
-first_valid = prices.first_valid_index()
-if first_valid is not None:
-    prices = prices.loc[first_valid:]
-
-if used_symbol != symbol:
-    st.info("SPY data unavailable. Using S&P 500 index fallback for seasonality.")
-
-latest_price_date = prices.index.max().strftime("%Y-%m-%d")
-latest_complete_year = _latest_complete_year(prices)
-regime_df = fetch_regime_data(
-    str(prices.index.min().date()), str(prices.index.max().date())
-)
-render_fred_status(pd.DataFrame(regime_df.attrs.get("fred_status", [])))
-st.caption("Macro regime filters are retrospective: FRED values use latest revisions, and recession labels can be assigned after the event. They do not represent what an investor knew in each historical month.")
-market_regime_daily = fetch_regime_market_series(
-    str(prices.index.min().date()), str(prices.index.max().date())
-)
-market_regime_monthly = build_monthly_regime_features(market_regime_daily)
-filter_table = build_filter_table(prices, regime_df, market_regime_monthly)
-
 with st.sidebar:
     render_sidebar_about("24_Monthly_Seasonality_Explorer.py")
 
-fed_options = ["All Fed regimes"] + sorted(
-    [
-        value
-        for value in filter_table["fed_regime"].dropna().unique()
-        if value != "Unknown"
-    ]
-)
-vix_options = ["All VIX regimes"] + sorted(
-    [
-        value
-        for value in filter_table["vix_bucket"].dropna().unique()
-        if value != "Unknown"
-    ]
-)
-teny_options = ["All 10Y regimes"] + sorted(
-    [
-        value
-        for value in filter_table["teny_trend"].dropna().unique()
-        if value != "Unknown"
-    ]
-)
-dxy_options = ["All dollar regimes"] + sorted(
-    [
-        value
-        for value in filter_table["dxy_trend"].dropna().unique()
-        if value != "Unknown"
-    ]
-)
 
-for key, options in [
-    ("seasonality_fed", fed_options),
-    ("seasonality_vix", vix_options),
-    ("seasonality_teny", teny_options),
-    ("seasonality_dxy", dxy_options),
-]:
-    if st.session_state.get(key) not in options:
-        st.session_state[key] = options[0]
+@st.fragment(run_every=PRICE_TTL_SECONDS)
+def render_explorer():
+    today_dt = _today()
+    this_year = int(today_dt.year)
 
-with st.expander("Advanced sample and regime filters", expanded=False):
-    filter_row_1 = st.columns([1.45, 1.0, 1.35])
-    with filter_row_1[0]:
-        cycle_filter = st.selectbox(
-            "Presidential cycle",
-            [
-                "All years",
-                "Election years",
-                "Midterm years",
-                "Pre-election years",
-                "Post-election years",
-            ],
-            key="seasonality_cycle",
+    def _reset_seasonality_view() -> None:
+        keys = [
+            "seasonality_symbol",
+            "seasonality_lookback",
+            "seasonality_custom_start",
+            "seasonality_custom_end",
+            "seasonality_cycle",
+            "seasonality_complete_only",
+            "seasonality_fed",
+            "seasonality_vix",
+            "seasonality_teny",
+            "seasonality_dxy",
+            "seasonality_month_picker",
+            "seasonality_year_picker",
+            "seasonality_matrix",
+        ]
+        for key in keys:
+            st.session_state.pop(key, None)
+
+
+    control_symbol, control_lookback, control_reset = st.columns(
+        [2.2, 2.4, 0.75], vertical_alignment="bottom"
+    )
+    with control_symbol:
+        symbol = st.text_input(
+            "Ticker symbol", value="^SPX", key="seasonality_symbol"
+        ).upper()
+    with control_lookback:
+        lookback = st.segmented_control(
+            "Global lookback",
+            options=["5Y", "10Y", "20Y", "All", "Custom"],
+            default="10Y",
+            key="seasonality_lookback",
+            width="stretch",
         )
-    with filter_row_1[1]:
-        complete_months_only = st.checkbox(
-            "Complete months only",
-            value=True,
-            key="seasonality_complete_only",
+    with control_reset:
+        st.button("Reset", on_click=_reset_seasonality_view, width="stretch")
+
+    custom_start_year = max(1900, this_year - 9)
+    custom_end_year = this_year
+    if lookback == "Custom":
+        custom_start_col, custom_end_col = st.columns(2)
+        with custom_start_col:
+            custom_start_year = int(
+                st.number_input(
+                    "Custom start year",
+                    min_value=1900,
+                    max_value=this_year,
+                    value=max(1900, this_year - 9),
+                    key="seasonality_custom_start",
+                )
+            )
+        with custom_end_col:
+            custom_end_year = int(
+                st.number_input(
+                    "Custom end year",
+                    min_value=custom_start_year,
+                    max_value=this_year,
+                    value=this_year,
+                    key="seasonality_custom_end",
+                )
+            )
+
+    preset_map = {
+        "5Y": "Last 5 years",
+        "10Y": "Last 10 years",
+        "20Y": "Last 20 years",
+        "All": "All history",
+        "Custom": "Custom",
+    }
+    sample_preset = preset_map.get(str(lookback or "10Y"), "Last 10 years")
+
+    if sample_preset == "All history":
+        start_fetch_year = 1900
+    elif sample_preset == "Custom":
+        start_fetch_year = max(1900, custom_start_year - 2)
+    else:
+        start_fetch_year = max(1900, this_year - 22)
+
+    start_fetch_date = f"{start_fetch_year}-01-01"
+    end_fetch_date = f"{this_year}-12-31"
+
+    with st.spinner("Fetching and analyzing data..."):
+        used_symbol = symbol
+        prices = fetch_prices(symbol, start_fetch_date, end_fetch_date)
+        if prices is None and symbol == "SPY":
+            prices = fetch_prices("^GSPC", start_fetch_date, end_fetch_date)
+            if prices is not None:
+                used_symbol = "^GSPC"
+
+    if prices is None or prices.empty:
+        st.error(f"No data found for '{symbol}'. Try a different symbol or lookback.")
+        st.stop()
+
+    first_valid = prices.first_valid_index()
+    if first_valid is not None:
+        prices = prices.loc[first_valid:]
+
+    used_symbol = prices.attrs.get("source_symbol", used_symbol)
+    if used_symbol != symbol:
+        st.info(f"{symbol} data unavailable. Using {used_symbol} from {prices.attrs.get('source', 'Yahoo Finance')}.")
+
+    intraday = (fetch_intraday(used_symbol)
+                if prices.attrs.get("source", "Yahoo Finance") == "Yahoo Finance"
+                else pd.DataFrame())
+    prices, price_status = current_price_overlay(prices, intraday)
+    st.caption(f"{used_symbol} · {prices.iloc[-1]:,.2f} (adjusted) · {price_status} · checks every 5 minutes while open. "
+               "Current-month returns are provisional.")
+
+    latest_price_date = prices.index.max().strftime("%Y-%m-%d")
+    latest_complete_year = _latest_complete_year(prices)
+    regime_df = fetch_regime_data(
+        str(prices.index.min().date()), str(prices.index.max().date())
+    )
+    render_fred_status(pd.DataFrame(regime_df.attrs.get("fred_status", [])))
+    st.caption("Macro regime filters are retrospective: FRED values use latest revisions, and recession labels can be assigned after the event. They do not represent what an investor knew in each historical month.")
+    market_regime_daily = fetch_regime_market_series(
+        str(prices.index.min().date()), str(prices.index.max().date())
+    )
+    market_regime_monthly = build_monthly_regime_features(market_regime_daily)
+    filter_table = build_filter_table(prices, regime_df, market_regime_monthly)
+
+    fed_options = ["All Fed regimes"] + sorted(
+        [
+            value
+            for value in filter_table["fed_regime"].dropna().unique()
+            if value != "Unknown"
+        ]
+    )
+    vix_options = ["All VIX regimes"] + sorted(
+        [
+            value
+            for value in filter_table["vix_bucket"].dropna().unique()
+            if value != "Unknown"
+        ]
+    )
+    teny_options = ["All 10Y regimes"] + sorted(
+        [
+            value
+            for value in filter_table["teny_trend"].dropna().unique()
+            if value != "Unknown"
+        ]
+    )
+    dxy_options = ["All dollar regimes"] + sorted(
+        [
+            value
+            for value in filter_table["dxy_trend"].dropna().unique()
+            if value != "Unknown"
+        ]
+    )
+
+    for key, options in [
+        ("seasonality_fed", fed_options),
+        ("seasonality_vix", vix_options),
+        ("seasonality_teny", teny_options),
+        ("seasonality_dxy", dxy_options),
+    ]:
+        if st.session_state.get(key) not in options:
+            st.session_state[key] = options[0]
+
+    with st.expander("Advanced sample and regime filters", expanded=False):
+        filter_row_1 = st.columns([1.45, 1.0, 1.35])
+        with filter_row_1[0]:
+            cycle_filter = st.selectbox(
+                "Presidential cycle",
+                [
+                    "All years",
+                    "Election years",
+                    "Midterm years",
+                    "Pre-election years",
+                    "Post-election years",
+                ],
+                key="seasonality_cycle",
+            )
+        with filter_row_1[1]:
+            complete_months_only = st.checkbox(
+                "Complete months only",
+                value=True,
+                key="seasonality_complete_only",
+            )
+        with filter_row_1[2]:
+            fed_filter = st.selectbox("Fed regime", fed_options, key="seasonality_fed")
+
+        filter_row_2 = st.columns(3)
+        with filter_row_2[0]:
+            vix_filter = st.selectbox("VIX regime", vix_options, key="seasonality_vix")
+        with filter_row_2[1]:
+            teny_filter = st.selectbox("10Y trend", teny_options, key="seasonality_teny")
+        with filter_row_2[2]:
+            dxy_filter = st.selectbox("Dollar trend", dxy_options, key="seasonality_dxy")
+
+    start_year, end_year = resolve_year_window(
+        sample_preset,
+        custom_start_year,
+        custom_end_year,
+        latest_complete_year,
+    )
+    filtered = apply_filters(
+        filter_table=filter_table,
+        start_year=start_year,
+        end_year=end_year,
+        cycle_filter=cycle_filter,
+        complete_months_only=complete_months_only,
+        fed_filter=fed_filter,
+        vix_filter=vix_filter,
+        teny_filter=teny_filter,
+        dxy_filter=dxy_filter,
+    )
+
+    if filtered.empty:
+        st.error("No observations match the selected lookback and advanced filters.")
+        st.stop()
+
+    stats = seasonal_stats_from_filtered(filtered)
+    stats_valid = stats.dropna(subset=["mean_total"])
+    if stats.dropna(subset=["mean_h1", "mean_h2"]).empty or stats_valid.empty:
+        st.error(
+            "Insufficient data in the selected sample to compute seasonality statistics."
         )
-    with filter_row_1[2]:
-        fed_filter = st.selectbox("Fed regime", fed_options, key="seasonality_fed")
+        st.stop()
 
-    filter_row_2 = st.columns(3)
-    with filter_row_2[0]:
-        vix_filter = st.selectbox("VIX regime", vix_options, key="seasonality_vix")
-    with filter_row_2[1]:
-        teny_filter = st.selectbox("10Y trend", teny_options, key="seasonality_teny")
-    with filter_row_2[2]:
-        dxy_filter = st.selectbox("Dollar trend", dxy_options, key="seasonality_dxy")
-
-start_year, end_year = resolve_year_window(
-    sample_preset,
-    custom_start_year,
-    custom_end_year,
-    latest_complete_year,
-)
-filtered = apply_filters(
-    filter_table=filter_table,
-    start_year=start_year,
-    end_year=end_year,
-    cycle_filter=cycle_filter,
-    complete_months_only=complete_months_only,
-    fed_filter=fed_filter,
-    vix_filter=vix_filter,
-    teny_filter=teny_filter,
-    dxy_filter=dxy_filter,
-)
-
-if filtered.empty:
-    st.error("No observations match the selected lookback and advanced filters.")
-    st.stop()
-
-stats = seasonal_stats_from_filtered(filtered)
-stats_valid = stats.dropna(subset=["mean_total"])
-if stats.dropna(subset=["mean_h1", "mean_h2"]).empty or stats_valid.empty:
-    st.error(
-        "Insufficient data in the selected sample to compute seasonality statistics."
+    current_period = prices.index.max().to_period("M")
+    sample_years = sorted(
+        filtered["year"].dropna().astype(int).unique().tolist(), reverse=True
     )
-    st.stop()
-
-current_period = prices.index.max().to_period("M")
-sample_years = sorted(
-    filtered["year"].dropna().astype(int).unique().tolist(), reverse=True
-)
-matrix_years = [int(current_period.year)] + [
-    year for year in sample_years if year != int(current_period.year)
-]
-
-if "seasonality_month_picker" not in st.session_state:
-    st.session_state["seasonality_month_picker"] = MONTH_LABELS[
-        int(current_period.month) - 1
-    ]
-if st.session_state["seasonality_month_picker"] not in MONTH_LABELS:
-    st.session_state["seasonality_month_picker"] = MONTH_LABELS[
-        int(current_period.month) - 1
+    matrix_years = [int(current_period.year)] + [
+        year for year in sample_years if year != int(current_period.year)
     ]
 
-if (
-    "seasonality_year_picker" not in st.session_state
-    or st.session_state["seasonality_year_picker"] not in matrix_years
-):
-    st.session_state["seasonality_year_picker"] = matrix_years[0]
+    if "seasonality_month_picker" not in st.session_state:
+        st.session_state["seasonality_month_picker"] = MONTH_LABELS[
+            int(current_period.month) - 1
+        ]
+    if st.session_state["seasonality_month_picker"] not in MONTH_LABELS:
+        st.session_state["seasonality_month_picker"] = MONTH_LABELS[
+            int(current_period.month) - 1
+        ]
 
-selected_month_label = str(st.session_state["seasonality_month_picker"])
-selected_month = MONTH_LABELS.index(selected_month_label) + 1
-selected_year = int(st.session_state["seasonality_year_picker"])
+    if (
+        "seasonality_year_picker" not in st.session_state
+        or st.session_state["seasonality_year_picker"] not in matrix_years
+    ):
+        st.session_state["seasonality_year_picker"] = matrix_years[0]
 
-active_filters = [
-    f"{lookback} lookback",
-    f"{start_year}-{end_year} completed-year sample",
-    cycle_filter,
-    fed_filter,
-    vix_filter,
-    teny_filter,
-    dxy_filter,
-]
-active_filters = [item for item in active_filters if not str(item).startswith("All ")]
-st.caption("Active sample · " + " · ".join(active_filters))
+    selected_month_label = str(st.session_state["seasonality_month_picker"])
+    selected_month = MONTH_LABELS.index(selected_month_label) + 1
+    selected_year = int(st.session_state["seasonality_year_picker"])
 
-if int(filtered.shape[0]) < 24 or int(filtered["year"].nunique()) < 5:
-    st.warning(
-        "Thin sample warning: the current filter set leaves a small historical base. "
-        "Read the output as directional rather than stable."
-    )
+    active_filters = [
+        f"{lookback} lookback",
+        f"{start_year}-{end_year} completed-year sample",
+        cycle_filter,
+        fed_filter,
+        vix_filter,
+        teny_filter,
+        dxy_filter,
+    ]
+    active_filters = [item for item in active_filters if not str(item).startswith("All ")]
+    st.caption("Active sample · " + " · ".join(active_filters))
 
-st.subheader("Monthly Returns Matrix")
-st.caption(
-    "FILTER AVG uses the active sample; calendar rows show realized close-to-close returns. "
-    "The highlighted month and year coordinate the charts below."
-)
+    if int(filtered.shape[0]) < 24 or int(filtered["year"].nunique()) < 5:
+        st.warning(
+            "Thin sample warning: the current filter set leaves a small historical base. "
+            "Read the output as directional rather than stable."
+        )
 
-matrix_observations = filter_table.loc[
-    filter_table["year"].astype(int).isin(matrix_years)
-].sort_index()
-matrix_frame = build_monthly_returns_frame(matrix_observations, stats, matrix_years)
-render_monthly_returns_matrix(
-    matrix_observations,
-    stats,
-    matrix_years,
-    current_period,
-    selected_month=selected_month,
-    selected_year=selected_year,
-    average_label=f"{lookback} AVG" if lookback in {"5Y", "10Y", "20Y"} else "FILTER AVG",
-)
-
-selection_month_col, selection_year_col = st.columns(
-    [4.2, 1.3], vertical_alignment="bottom"
-)
-with selection_month_col:
-    st.segmented_control(
-        "Selected month",
-        options=MONTH_LABELS,
-        key="seasonality_month_picker",
-        width="stretch",
-    )
-with selection_year_col:
-    st.selectbox(
-        "Comparison year",
-        options=matrix_years,
-        key="seasonality_year_picker",
-    )
-
-selected_month_label = str(st.session_state["seasonality_month_picker"])
-selected_month = MONTH_LABELS.index(selected_month_label) + 1
-selected_year = int(st.session_state["seasonality_year_picker"])
-selected_stats = stats.loc[selected_month]
-comparison_value = matrix_frame.loc[str(selected_year), selected_month_label]
-comparison_text = (
-    f"{comparison_value:+.2f}%" if pd.notna(comparison_value) else "not available"
-)
-st.markdown(
-    f"""
-    <div class="adfm-note">
-        <div class="adfm-note-title">ACTIVE SELECTION</div>
-        <div><b>{selected_month_label}</b> averages {selected_stats["mean_total"]:+.2f}% with a
-        positive-return hit rate of {selected_stats["hit_rate"]:.0f}% in the filtered sample.
-        <b>{selected_year} {selected_month_label}</b> is {comparison_text}.</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-filter_caption_parts = [
-    used_symbol,
-    f"{start_year}-{end_year}",
-    cycle_filter,
-    fed_filter,
-    vix_filter,
-    teny_filter,
-    dxy_filter,
-]
-filter_caption_parts = [
-    part for part in filter_caption_parts if not str(part).startswith("All ")
-]
-chart_context = " | ".join(filter_caption_parts)
-
-profile_buf = plot_monthly_profile(
-    stats,
-    f"{used_symbol} | Monthly Profile",
-    selected_month,
-)
-curve_buf = plot_intra_month_curve(
-    prices,
-    filtered,
-    selected_month,
-    used_symbol,
-    comparison_year=selected_year,
-)
-
-profile_col, curve_col = st.columns(2, gap="large")
-with profile_col:
-    st.subheader("Monthly Profile")
-    st.image(profile_buf, width="stretch")
+    st.subheader("Monthly Returns Matrix")
     st.caption(
-        "Bars show filtered average monthly returns; whiskers show the interquartile range. "
-        "The line shows hit rate, and the active month is outlined."
-    )
-with curve_col:
-    st.subheader(f"{selected_month_label} Intra-Month Path")
-    st.image(curve_buf, width="stretch")
-    st.caption(
-        f"Filtered average path with ±1 standard deviation and the {selected_year} path overlaid when available."
+        "FILTER AVG uses the active sample; completed months show adjusted close-to-close returns; the current month uses the price shown above. "
+        "The highlighted month and year coordinate the charts below."
     )
 
-summary = build_intra_month_summary(
-    prices,
-    filtered,
-    selected_month,
-    used_symbol,
-    comparison_year=selected_year,
-)
-st.subheader("Selected-Month Read")
-render_intra_month_cards(summary)
-render_intra_month_commentary(summary)
+    matrix_observations = filter_table.loc[
+        filter_table["year"].astype(int).isin(matrix_years)
+    ].sort_index()
+    matrix_frame = build_monthly_returns_frame(matrix_observations, stats, matrix_years)
+    render_monthly_returns_matrix(
+        matrix_observations,
+        stats,
+        matrix_years,
+        current_period,
+        selected_month=selected_month,
+        selected_year=selected_year,
+        average_label=f"{lookback} AVG" if lookback in {"5Y", "10Y", "20Y"} else "FILTER AVG",
+    )
 
-with st.expander("Methodology and active sample"):
+    selection_month_col, selection_year_col = st.columns(
+        [4.2, 1.3], vertical_alignment="bottom"
+    )
+    with selection_month_col:
+        st.segmented_control(
+            "Selected month",
+            options=MONTH_LABELS,
+            key="seasonality_month_picker",
+            width="stretch",
+        )
+    with selection_year_col:
+        st.selectbox(
+            "Comparison year",
+            options=matrix_years,
+            key="seasonality_year_picker",
+        )
+
+    selected_month_label = str(st.session_state["seasonality_month_picker"])
+    selected_month = MONTH_LABELS.index(selected_month_label) + 1
+    selected_year = int(st.session_state["seasonality_year_picker"])
+    selected_stats = stats.loc[selected_month]
+    comparison_value = matrix_frame.loc[str(selected_year), selected_month_label]
+    comparison_text = (
+        f"{comparison_value:+.2f}%" if pd.notna(comparison_value) else "not available"
+    )
     st.markdown(
         f"""
-        **Chart context:** {chart_context}
-
-        - Global lookback and advanced filters feed the matrix average row, monthly profile, and intra-month path.
-        - Calendar rows remain realized returns; FILTER AVG is recalculated from the active filtered sample.
-        - Intra-month paths are anchored to the previous month-end and equal-weighted across included observations.
-        - Missing observations remain unavailable rather than being fabricated.
-        - Latest price date: **{latest_price_date}**
-        - Filtered observations: **{int(filtered.shape[0])} months across {int(filtered["year"].nunique())} years**
-        """
+        <div class="adfm-note">
+            <div class="adfm-note-title">ACTIVE SELECTION</div>
+            <div><b>{selected_month_label}</b> averages {selected_stats["mean_total"]:+.2f}% with a
+            positive-return hit rate of {selected_stats["hit_rate"]:.0f}% in the filtered sample.
+            <b>{selected_year} {selected_month_label}</b> is {comparison_text}.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-with st.expander("Audit included observations"):
-    audit_df = filtered.copy().reset_index().rename(columns={"index": "period"})
-    audit_df["period"] = audit_df["period"].astype(str)
-    audit_cols = [
-        "period",
-        "year",
-        "month",
-        "pres_cycle_bucket",
-        "regime_cycle",
-        "fed_regime",
-        "vix_bucket",
-        "teny_trend",
-        "dxy_trend",
-        "is_complete_month",
-        "total_ret",
-        "h1_ret",
-        "h2_ret",
+    filter_caption_parts = [
+        used_symbol,
+        f"{start_year}-{end_year}",
+        cycle_filter,
+        fed_filter,
+        vix_filter,
+        teny_filter,
+        dxy_filter,
     ]
-    audit_cols = [column for column in audit_cols if column in audit_df.columns]
-    st.dataframe(
-        audit_df[audit_cols].sort_values(["year", "month"]),
-        width="stretch",
-        hide_index=True,
+    filter_caption_parts = [
+        part for part in filter_caption_parts if not str(part).startswith("All ")
+    ]
+    chart_context = " | ".join(filter_caption_parts)
+
+    profile_buf = plot_monthly_profile(
+        stats,
+        f"{used_symbol} | Monthly Profile",
+        selected_month,
+    )
+    curve_buf = plot_intra_month_curve(
+        prices,
+        filtered,
+        selected_month,
+        used_symbol,
+        comparison_year=selected_year,
     )
 
-render_footer()
+    profile_col, curve_col = st.columns(2, gap="large")
+    with profile_col:
+        st.subheader("Monthly Profile")
+        st.image(profile_buf, width="stretch")
+        st.caption(
+            "Bars show filtered average monthly returns; whiskers show the interquartile range. "
+            "The line shows hit rate, and the active month is outlined."
+        )
+    with curve_col:
+        st.subheader(f"{selected_month_label} Intra-Month Path")
+        st.image(curve_buf, width="stretch")
+        st.caption(
+            f"Filtered average path with ±1 standard deviation and the {selected_year} path overlaid when available."
+        )
+
+    summary = build_intra_month_summary(
+        prices,
+        filtered,
+        selected_month,
+        used_symbol,
+        comparison_year=selected_year,
+    )
+    st.subheader("Selected-Month Read")
+    render_intra_month_cards(summary)
+    render_intra_month_commentary(summary)
+
+    with st.expander("Methodology and active sample"):
+        st.markdown(
+            f"""
+            **Chart context:** {chart_context}
+
+            - Global lookback and advanced filters feed the matrix average row, monthly profile, and intra-month path.
+            - Calendar rows remain realized returns; FILTER AVG is recalculated from the active filtered sample.
+            - Intra-month paths are anchored to the previous month-end and equal-weighted across included observations.
+            - Missing observations remain unavailable rather than being fabricated.
+            - Latest price date: **{latest_price_date}**
+            - Filtered observations: **{int(filtered.shape[0])} months across {int(filtered["year"].nunique())} years**
+            """
+        )
+
+    with st.expander("Audit included observations"):
+        audit_df = filtered.copy().reset_index().rename(columns={"index": "period"})
+        audit_df["period"] = audit_df["period"].astype(str)
+        audit_cols = [
+            "period",
+            "year",
+            "month",
+            "pres_cycle_bucket",
+            "regime_cycle",
+            "fed_regime",
+            "vix_bucket",
+            "teny_trend",
+            "dxy_trend",
+            "is_complete_month",
+            "total_ret",
+            "h1_ret",
+            "h2_ret",
+        ]
+        audit_cols = [column for column in audit_cols if column in audit_df.columns]
+        st.dataframe(
+            audit_df[audit_cols].sort_values(["year", "month"]),
+            width="stretch",
+            hide_index=True,
+        )
+
+    render_footer()
+
+
+
+render_explorer()
