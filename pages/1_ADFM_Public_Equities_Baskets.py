@@ -1209,17 +1209,19 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
         end=end,
 
         auto_adjust=True,
-        repair=True,
+        # Repair can trigger many additional requests per symbol. Keep bulk
+        # loading lean; the downstream discontinuity quarantine still applies.
+        repair=False,
 
         progress=False,
 
         group_by="column",
 
-        threads=True,
+        threads=4,
 
         ignore_tz=True,
 
-        timeout=10,
+        timeout=20,
 
     )
 
@@ -1263,7 +1265,7 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
 
 
-def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, retries: int = 2) -> pd.DataFrame:
+def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, retries: int = 1) -> pd.DataFrame:
 
     for attempt in range(retries + 1):
 
@@ -1293,7 +1295,35 @@ def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, re
 
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 30, max_entries=16)
+class PriceFeedUnavailable(RuntimeError):
+    """Transient failures must not become cached successful empty results."""
+
+
+def compatible_snapshot(tickers, start, end, primary_key):
+    """Reuse one complete raw-price snapshot across cache versions/date presets.
+
+    Raw adjusted Close storage did not change in the integrity update. Always
+    revalidate and sanitize; never join separate adjusted-price snapshots.
+    """
+    keys = [primary_key]
+    if CACHE_DIR.exists():
+        paths = sorted(CACHE_DIR.glob("basket_levels_*.pkl"), key=lambda p:p.stat().st_mtime, reverse=True)[:24]
+        keys.extend(p.stem.removeprefix("basket_levels_") for p in paths)
+    best, best_meta = pd.DataFrame(), {}
+    for key in dict.fromkeys(keys):
+        candidate, meta = load_last_good_levels(key)
+        if candidate.empty:
+            continue
+        candidate = _to_float_frame(candidate.loc[(candidate.index >= start) & (candidate.index < end)])
+        candidate = candidate.reindex(columns=tickers).dropna(axis=1, how="all")
+        if not _cache_is_usable(candidate, tickers, start, end):
+            continue
+        if best.empty or candidate[BENCH].last_valid_index() > best[BENCH].last_valid_index():
+            best, best_meta = candidate, meta
+    return best, best_meta
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 10, max_entries=16)
 
 def fetch_daily_levels(
 
@@ -1315,9 +1345,16 @@ def fetch_daily_levels(
 
     cache_key = _cache_key(uniq, start)
 
-    cached, cached_meta = load_last_good_levels(cache_key)
+    cached, cached_meta = compatible_snapshot(uniq, start, end, cache_key)
 
     cache_usable = _cache_is_usable(cached, uniq, start, end)
+    if cache_usable and cached[BENCH].last_valid_index() == end - pd.Timedelta(days=1):
+        return cached, {
+            **cached_meta, "source": "saved_snapshot",
+            "requested_tickers": len(uniq), "returned_tickers": len(cached.columns),
+            "missing_tickers": sorted(set(uniq) - set(cached.columns)),
+            "last_observation": str(cached[BENCH].last_valid_index().date()),
+        }
 
     frames: List[pd.DataFrame] = []
 
@@ -1337,7 +1374,8 @@ def fetch_daily_levels(
 
             consecutive_failed_batches += 1
 
-            if cache_usable and consecutive_failed_batches >= 3:
+            # Stop a provider-wide outage even without a local snapshot.
+            if consecutive_failed_batches >= 2:
 
                 break
 
@@ -1363,7 +1401,7 @@ def fetch_daily_levels(
 
     retry_frames: List[pd.DataFrame] = []
 
-    retry_batches = _chunk(missing_after_batches, 8) if frames else []
+    retry_batches = _chunk(missing_after_batches, 8)[:3] if frames and consecutive_failed_batches < 2 else []
 
     for batch in retry_batches:
 
@@ -1399,7 +1437,8 @@ def fetch_daily_levels(
 
         cached = cached.loc[(cached.index >= start) & (cached.index < end)]
 
-        if wide.empty:
+        live_coverage = sum(t in wide and wide[t].notna().any() for t in uniq) / max(len(uniq), 1)
+        if wide.empty or BENCH not in wide or wide[BENCH].dropna().empty or live_coverage < 0.70:
 
             wide = cached.copy()
 
@@ -1416,19 +1455,7 @@ def fetch_daily_levels(
 
     if wide.empty:
 
-        return pd.DataFrame(), {
-
-            "source": "yahoo",
-
-            "requested_tickers": len(uniq),
-
-            "returned_tickers": 0,
-
-            "failed_batches": failed_batches,
-
-            "cache_meta": cached_meta,
-
-        }
+        raise PriceFeedUnavailable("Yahoo returned no usable price history and no compatible recent snapshot is available.")
 
 
 
@@ -1438,7 +1465,7 @@ def fetch_daily_levels(
 
     wide = _to_float_frame(_clean_index(wide)).dropna(axis=1, how="all")
 
-    source = "last_good_cache" if not frames and cache_used else ("yahoo+cache" if cache_used else "yahoo")
+    source = "last_good_cache" if cache_used else "yahoo"
 
     last_observation = None
 
@@ -1472,7 +1499,7 @@ def fetch_daily_levels(
 
     coverage = wide.shape[1] / max(len(uniq), 1)
 
-    if frames and BENCH in wide.columns and coverage >= 0.70:
+    if frames and not cache_used and BENCH in wide.columns and coverage >= 0.70:
 
         cache_error = save_last_good_levels(wide, meta, cache_key)
 
@@ -3356,16 +3383,14 @@ need = sorted(set(equity_tickers + fx_tickers + [BENCH]))
 
 
 with st.spinner("Fetching basket price history..."):
-
-    levels, fetch_meta = fetch_daily_levels(
-
-        need,
-
-        start=pd.to_datetime(fetch_start_date),
-
-        end=pd.to_datetime(download_end_exclusive),
-
-    )
+    try:
+        levels, fetch_meta = fetch_daily_levels(
+            need, start=pd.to_datetime(fetch_start_date),
+            end=pd.to_datetime(download_end_exclusive),
+        )
+    except PriceFeedUnavailable as exc:
+        st.error(f"Price provider temporarily unavailable. {exc} Please retry shortly; this failed request has not been cached.")
+        st.stop()
 
 
 
@@ -3404,6 +3429,13 @@ if BENCH not in levels_usd.columns or levels_usd[BENCH].dropna().empty:
 
 benchmark_observed_date = pd.Timestamp(levels_usd[BENCH].dropna().index.max())
 reference_date = expected_sessions[-1]
+if fetch_meta.get("source") in {"saved_snapshot", "last_good_cache"}:
+    # A labelled snapshot is evaluated at its own common close, not padded
+    # to today with missing endpoints that would blank the entire scanner.
+    reference_date = min(reference_date, benchmark_observed_date)
+    if reference_date < expected_sessions[-1]:
+        st.warning(f"Showing saved prices as of {reference_date.date()}; the latest expected close is {expected_sessions[-1].date()}.")
+    expected_sessions = expected_sessions[expected_sessions <= reference_date]
 if benchmark_observed_date < reference_date:
     st.warning(f"Benchmark data ends {benchmark_observed_date.date()}; expected {reference_date.date()}. Missing endpoints remain N/A.")
 
