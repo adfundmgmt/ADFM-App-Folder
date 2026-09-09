@@ -57,212 +57,46 @@ TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
 
 
 SIDEBAR_GUIDES: Final[dict[str, SidebarGuide]] = {
-    "1_ADFM_Public_Equities_Baskets.py": SidebarGuide(
-        (
-            "Choose the basket family and benchmark that match the research question.",
-            "Compare leadership, trend strength, dispersion, and benchmark-relative performance.",
-            "Open the composition and chart detail before treating a basket signal as actionable.",
-        )
-    ),
-    "2_Global_Macro_Regime.py": SidebarGuide(
-        (
-            "Read growth, inflation, rates, liquidity, and risk confirmation as separate sleeves.",
-            "Use the tension notes to find signals that disagree with the headline regime.",
-            "Confirm the narrative in the cross-asset performance and primary-series tables.",
-        ),
-        "The page is a transparent dashboard of sleeves, not a hidden weighted macro score.",
-    ),
-    "3_Liquidity_Conditions_Monitor.py": SidebarGuide(
-        (
-            "Start with the overall liquidity level and marginal impulse.",
-            "Compare balance-sheet, funding, transmission, and market-confirmation sleeves.",
-            "Check source status before relying on a sleeve with partial coverage.",
-        ),
-        "Changing the display window does not change the fixed-history scoring formula.",
-    ),
-    "4_Yield_Curve_Rates_Regime_Monitor.py": SidebarGuide(
-        (
-            "Start with outright Treasury yield levels and their direction.",
-            "Read curve spreads next to classify steepening or flattening.",
-            "Compare horizons to separate a short-lived move from a persistent rates regime.",
-        ),
-        "This page isolates U.S. rates and curve structure; cross-asset confirmation belongs in the other macro tools.",
-    ),
-    "5_Credit_Conditions_Monitor.py": SidebarGuide(
-        (
-            "Separate spread stress from the level of risk-free funding costs.",
-            "Confirm the move through high yield, loans, banks, emerging-market debt, and volatility.",
-            "Use the global 10-year table to locate sovereign-rate repricing.",
-        )
-    ),
-    "6_Currency_Tension_Engine.py": SidebarGuide(
-        (
-            "Choose the scoring horizon before comparing currencies.",
-            "Read the map as trajectory on the horizontal axis and valuation-policy stretch on the vertical axis.",
-            "Open the pillars, carry, positioning, and flags to understand why a currency moved.",
-        ),
-        "Lower-right is the cleanest cheap-and-improving quadrant; rings and notes flag crowding or data caveats.",
-    ),
-    "7_Sector_Breadth_and_Rotation.py": SidebarGuide(
-        (
-            "Choose major sectors for a top-down read or subsectors for more detail.",
-            "Use the rotation map to identify direction and persistence.",
-            "Confirm the move with breadth, relative strength, and underlying coverage.",
-        )
-    ),
-    "8_Equity_Leadership_&_Rotation.py": SidebarGuide(
-        (
-            "Scan the four leadership states for established leaders, laggards, and transitions.",
-            "Use acceleration to compare short-horizon ranks with the 3- and 6-month trend.",
-            "Open the related chartbook when a ranked relationship needs full historical context.",
-        ),
-        "A positive score means the numerator ranks in the stronger half of the 25-ratio universe.",
-    ),
-    "9_ADFM_Underwriter.py": SidebarGuide(
-        (
-            "Search the issuer and verify the filing period and coverage status.",
-            "Review valuation, per-share growth, margins, returns, and liquidity together.",
-            "Finish with capital structure, debt service, maturities, and recent SEC events.",
-        ),
-        "Banks, insurers, foreign private issuers, partnerships, and custom-tag-heavy filers can require issuer-specific adjustments.",
-    ),
-    "10_ADFM_Chart_Terminal.py": SidebarGuide(
-        (
-            "Set the symbol, window, and interval for the decision horizon.",
-            "Read price, return, drawdown, and volatility context before the indicators.",
-            "Use the signal matrix to confirm trend, momentum, volatility, structure, and invalidation levels.",
-        )
-    ),
-    "11_Cross-Asset_Ratio_Chartbook.py": SidebarGuide(
-        (
-            "Choose the relationship families and lookback that match the thesis.",
-            "Read a rising ratio as outperformance by the first ticker versus the second.",
-            "Use the signal line for trend and stale-data context, then compare related charts.",
-        ),
-        "Ratios are rebased to 100 at the selected lookback start.",
-    ),
-    "12_Rate_of_Change_Regime_Explorer.py": SidebarGuide(
-        (
-            "Anchor on price versus the 21-, 50-, 100-, and 200-day moving averages.",
-            "Read rate of change for momentum direction and magnitude.",
-            "Use acceleration and zero-line inflections to identify transitions.",
-        ),
-        "Trading sessions share one observation index, so weekends and holidays are compressed.",
-    ),
-    "13_Relative_Volatility_Lab.py": SidebarGuide(
-        (
-            "Choose the numerator, denominator, and realized-volatility window.",
-            "Compare each instrument's volatility before reading the ratio and its percentile.",
-            "Use implied volatility and fixed stress diagnostics to confirm or challenge the ratio signal.",
-        ),
-        "Missing observations remain unavailable rather than being filled with fabricated values.",
-    ),
-    "14_ETF_Flow_Pressure_Proxy.py": SidebarGuide(
-        (
-            "Choose the lookback and ranking metric.",
-            "Scan sign and magnitude to find the strongest positive and negative pressure.",
-            "Compare nearby sectors, factors, regions, rates, credit, commodities, and FX exposures.",
-        ),
-        "This is a directional price-volume pressure proxy, not official ETF creation and redemption data.",
-    ),
-    "15_Volume_Based_Sentiment_Indicator.py": SidebarGuide(
-        (
-            "Choose the symbol and percentile window.",
-            "Classify current participation as heavy, normal, or quiet.",
-            "Use setup labels and matured forward returns to judge how similar signals behaved.",
-        )
-    ),
-    "16_Options_Positioning_Compass.py": SidebarGuide(
-        (
-            "Set the focus ticker and a relevant comparison universe.",
-            "Compare ATM volatility, downside skew, term structure, and activity ranks.",
-            "Inspect the selected ticker's expirations, surface, open interest, and largest activity.",
-        ),
-        "Public chains do not reveal trade direction, spread IDs, dealer positioning, or a complete historical chain record.",
-    ),
-    "17_SEC_13F_Exposure_Browser.py": SidebarGuide(
-        (
-            "Choose a security search or a manager search and select the SEC release.",
-            "Rank holders by portfolio weight, reported value, or shares when screening a security.",
-            "Open a manager to inspect the effective disclosed portfolio and position detail.",
-        ),
-        "Form 13F is a delayed quarterly disclosure, not a real-time holdings or trade feed.",
-    ),
-    "18_CFTC_Positioning_Monitor.py": SidebarGuide(
-        (
-            "Scan crowded longs, crowded shorts, and the largest weekly changes.",
-            "Choose one contract for historical percentile, z-score, and price context.",
-            "Change cohorts or the crowding lookback only when the research question requires it.",
-        ),
-        "COT is a Tuesday position snapshot normally released Friday; it is not a real-time flow feed.",
-    ),
-    "19_Market_Stress_Composite.py": SidebarGuide(
-        (
-            "Read directional Risk-Off separately from direction-agnostic Dislocation.",
-            "Identify the regions and asset groups contributing most to the signal.",
-            "Use the U.S. overlay and forward-drawdown history to frame transmission risk.",
-        )
-    ),
-    "20_Catalyst_Calendar.py": SidebarGuide(
-        (
-            "Choose the event horizon and scan the dated catalyst sequence.",
-            "Prioritize events with the largest likely market sensitivity or portfolio overlap.",
-            "Use the source label and status to distinguish official dates from rule-based estimates.",
-        )
-    ),
-    "21_Hedge_Timer.py": SidebarGuide(
-        (
-            "Start with the current hedge-timing state and its strongest contributing signals.",
-            "Separate persistent regime pressure from short-horizon tactical stress.",
-            "Use the underlying inputs before changing hedge size or structure.",
-        )
-    ),
-    "22_Position_Sizing_Lab.py": SidebarGuide(
-        (
-            "Set the instrument, holding period, and invalidation distance.",
-            "Compare the historical outcome distribution with the proposed position size.",
-            "Pressure-test volatility, event, tail, and liquidity risk before accepting the size.",
-        )
-    ),
-    "23_Market_Memory_Explorer.py": SidebarGuide(
-        (
-            "Choose the current setup and historical comparison window.",
-            "Rank analogs by path similarity, then inspect the surrounding regime.",
-            "Use forward outcomes as context rather than a point forecast.",
-        )
-    ),
-    "24_Monthly_Seasonality_Explorer.py": SidebarGuide(
-        (
-            "Choose the asset and month or seasonal window.",
-            "Compare average, median, hit rate, and dispersion across the available history.",
-            "Use regime and sample-size context before treating seasonality as a trading signal.",
-        )
-    ),
-    "25_Commodity_Event_Study.py": SidebarGuide(
-        (
-            "Choose the commodity, extension threshold, and confirmation rule.",
-            "Inspect qualifying historical episodes and the path into each signal.",
-            "Compare forward returns and failure cases before treating exhaustion as durable.",
-        )
-    ),
+    "1_ADFM_Public_Equities_Baskets.py": SidebarGuide(("Choose the basket family and benchmark that match the research question.", "Compare leadership, trend strength, dispersion, and benchmark-relative performance.", "Open the composition and chart detail before treating a basket signal as actionable.")),
+    "2_Global_Macro_Regime.py": SidebarGuide(("Read growth, inflation, rates, liquidity, and risk confirmation as separate sleeves.", "Use the tension notes to find signals that disagree with the headline regime.", "Confirm the narrative in the cross-asset performance and primary-series tables."), "The page is a transparent dashboard of sleeves, not a hidden weighted macro score."),
+    "3_Liquidity_Conditions_Monitor.py": SidebarGuide(("Start with the overall liquidity level and marginal impulse.", "Compare balance-sheet, funding, transmission, and market-confirmation sleeves.", "Check source status before relying on a sleeve with partial coverage."), "Changing the display window does not change the fixed-history scoring formula."),
+    "4_Yield_Curve_Rates_Regime_Monitor.py": SidebarGuide(("Start with outright Treasury yield levels and their direction.", "Read curve spreads next to classify steepening or flattening.", "Compare horizons to separate a short-lived move from a persistent rates regime."), "This page isolates U.S. rates and curve structure; cross-asset confirmation belongs in the other macro tools."),
+    "5_Credit_Conditions_Monitor.py": SidebarGuide(("Separate spread stress from the level of risk-free funding costs.", "Confirm the move through high yield, loans, banks, emerging-market debt, and volatility.", "Use the global 10-year table to locate sovereign-rate repricing.")),
+    "6_Currency_Tension_Engine.py": SidebarGuide(("Choose the scoring horizon before comparing currencies.", "Read the map as trajectory on the horizontal axis and valuation-policy stretch on the vertical axis.", "Open the pillars, carry, positioning, and flags to understand why a currency moved."), "Lower-right is the cleanest cheap-and-improving quadrant; rings and notes flag crowding or data caveats."),
+    "7_Sector_Breadth_and_Rotation.py": SidebarGuide(("Choose major sectors for a top-down read or subsectors for more detail.", "Use the rotation map to identify direction and persistence.", "Confirm the move with breadth, relative strength, and underlying coverage.")),
+    "8_Equity_Leadership_&_Rotation.py": SidebarGuide(("Scan the four leadership states for established leaders, laggards, and transitions.", "Use acceleration to compare short-horizon ranks with the 3- and 6-month trend.", "Open the related chartbook when a ranked relationship needs full historical context."), "A positive score means the numerator ranks in the stronger half of the 25-ratio universe."),
+    "9_ADFM_Underwriter.py": SidebarGuide(("Search the issuer and verify the filing period and coverage status.", "Review valuation, per-share growth, margins, returns, and liquidity together.", "Finish with capital structure, debt service, maturities, and recent SEC events."), "Banks, insurers, foreign private issuers, partnerships, and custom-tag-heavy filers can require issuer-specific adjustments."),
+    "10_ADFM_Chart_Terminal.py": SidebarGuide(("Set the symbol, window, and interval for the decision horizon.", "Read price, return, drawdown, and volatility context before the indicators.", "Use the signal matrix to confirm trend, momentum, volatility, structure, and invalidation levels.")),
+    "11_Cross-Asset_Ratio_Chartbook.py": SidebarGuide(("Choose the relationship families and lookback that match the thesis.", "Read a rising ratio as outperformance by the first ticker versus the second.", "Use the signal line for trend and stale-data context, then compare related charts."), "Ratios are rebased to 100 at the selected lookback start."),
+    "12_Rate_of_Change_Regime_Explorer.py": SidebarGuide(("Anchor on price versus the 21-, 50-, 100-, and 200-day moving averages.", "Read rate of change for momentum direction and magnitude.", "Use acceleration and zero-line inflections to identify transitions."), "Trading sessions share one observation index, so weekends and holidays are compressed."),
+    "13_Relative_Volatility_Lab.py": SidebarGuide(("Choose the numerator, denominator, and realized-volatility window.", "Compare each instrument's volatility before reading the ratio and its percentile.", "Use implied volatility and fixed stress diagnostics to confirm or challenge the ratio signal."), "Missing observations remain unavailable rather than being filled with fabricated values."),
+    "14_ETF_Flow_Pressure_Proxy.py": SidebarGuide(("Choose the lookback and ranking metric.", "Scan sign and magnitude to find the strongest positive and negative pressure.", "Compare nearby sectors, factors, regions, rates, credit, commodities, and FX exposures."), "This is a directional price-volume pressure proxy, not official ETF creation and redemption data."),
+    "15_Volume_Based_Sentiment_Indicator.py": SidebarGuide(("Choose the symbol and percentile window.", "Classify current participation as heavy, normal, or quiet.", "Use setup labels and matured forward returns to judge how similar signals behaved.")),
+    "16_Options_Positioning_Compass.py": SidebarGuide(("Set the focus ticker and a relevant comparison universe.", "Compare ATM volatility, downside skew, term structure, and activity ranks.", "Inspect the selected ticker's expirations, surface, open interest, and largest activity."), "Public chains do not reveal trade direction, spread IDs, dealer positioning, or a complete historical chain record."),
+    "17_SEC_13F_Exposure_Browser.py": SidebarGuide(("Choose a security search or a manager search and select the SEC release.", "Rank holders by portfolio weight, reported value, or shares when screening a security.", "Open a manager to inspect the effective disclosed portfolio and position detail."), "Form 13F is a delayed quarterly disclosure, not a real-time holdings or trade feed."),
+    "18_CFTC_Positioning_Monitor.py": SidebarGuide(("Scan crowded longs, crowded shorts, and the largest weekly changes.", "Choose one contract for historical percentile, z-score, and price context.", "Change cohorts or the crowding lookback only when the research question requires it."), "COT is a Tuesday position snapshot normally released Friday; it is not a real-time flow feed."),
+    "19_Market_Stress_Composite.py": SidebarGuide(("Read directional Risk-Off separately from direction-agnostic Dislocation.", "Identify the regions and asset groups contributing most to the signal.", "Use the U.S. overlay and forward-drawdown history to frame transmission risk.")),
+    "20_Catalyst_Calendar.py": SidebarGuide(("Choose the event horizon and scan the dated catalyst sequence.", "Prioritize events with the largest likely market sensitivity or portfolio overlap.", "Use the source label and status to distinguish official dates from rule-based estimates.")),
+    "21_Hedge_Timer.py": SidebarGuide(("Start with the current hedge-timing state and its strongest contributing signals.", "Separate persistent regime pressure from short-horizon tactical stress.", "Use the underlying inputs before changing hedge size or structure.")),
+    "22_Position_Sizing_Lab.py": SidebarGuide(("Set the instrument, holding period, and invalidation distance.", "Compare the historical outcome distribution with the proposed position size.", "Pressure-test volatility, event, tail, and liquidity risk before accepting the size.")),
+    "23_Market_Memory_Explorer.py": SidebarGuide(("Choose the current setup and historical comparison window.", "Rank analogs by path similarity, then inspect the surrounding regime.", "Use forward outcomes as context rather than a point forecast.")),
+    "24_Monthly_Seasonality_Explorer.py": SidebarGuide(("Choose the asset and month or seasonal window.", "Compare average, median, hit rate, and dispersion across the available history.", "Use regime and sample-size context before treating seasonality as a trading signal.")),
+    "25_Commodity_Event_Study.py": SidebarGuide(("Choose the commodity, extension threshold, and confirmation rule.", "Inspect qualifying historical episodes and the path into each signal.", "Compare forward returns and failure cases before treating exhaustion as durable.")),
 }
 
 
 def tool_definitions() -> tuple[ToolDefinition, ...]:
     """Return the stable tool catalog in display order."""
-
     return TOOL_CATALOG
 
 
 def tool_definition_for_page(page_filename: str) -> ToolDefinition | None:
     """Return one catalog definition by page filename."""
-
     return next((tool for tool in TOOL_CATALOG if tool.page_filename == page_filename), None)
 
 
 def sidebar_guide_for_page(page_filename: str) -> SidebarGuide | None:
     """Return the sidebar reading guide for a page, when defined."""
-
     return SIDEBAR_GUIDES.get(page_filename)
 
 
