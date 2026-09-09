@@ -25,38 +25,6 @@ TOOLS_BY_GROUP = {
     group: [tool for tool in TOOLS if tool.group == group] for group in GROUP_ORDER
 }
 
-DISPLAY_TITLES = {
-    "1_ADFM_Public_Equities_Baskets.py": "Equity Baskets",
-    "2_Global_Macro_Regime.py": "Global Macro",
-    "3_Liquidity_Conditions_Monitor.py": "Liquidity",
-    "4_Yield_Curve_Rates_Regime_Monitor.py": "Rates & Yield Curve",
-    "5_Credit_Conditions_Monitor.py": "Credit Conditions",
-    "6_Currency_Tension_Engine.py": "FX Regime",
-    "7_Sector_Breadth_and_Rotation.py": "Sector Rotation",
-    "8_Equity_Leadership_&_Rotation.py": "Equity Leadership",
-    "9_ADFM_Underwriter.py": "Equity Underwriter",
-    "10_ADFM_Chart_Terminal.py": "Chart Terminal",
-    "11_Cross-Asset_Ratio_Chartbook.py": "Cross-Asset Ratios",
-    "12_Rate_of_Change_Regime_Explorer.py": "Momentum & Rate of Change",
-    "13_Relative_Volatility_Lab.py": "Relative Volatility",
-    "14_ETF_Flow_Pressure_Proxy.py": "ETF Flow Pressure",
-    "15_Volume_Based_Sentiment_Indicator.py": "Volume Sentiment",
-    "16_Options_Positioning_Compass.py": "Options Positioning",
-    "17_SEC_13F_Exposure_Browser.py": "13F Holdings",
-    "18_CFTC_Positioning_Monitor.py": "CFTC Positioning",
-    "19_Market_Stress_Composite.py": "Market Stress",
-    "20_Catalyst_Calendar.py": "Catalyst Calendar",
-    "21_Hedge_Timer.py": "Hedge Timing",
-    "22_Position_Sizing_Lab.py": "Position Sizing",
-    "23_Market_Memory_Explorer.py": "Market Memory",
-    "24_Monthly_Seasonality_Explorer.py": "Seasonality",
-    "25_Commodity_Event_Study.py": "Commodity Event Study",
-}
-
-
-def display_title(tool) -> str:
-    return DISPLAY_TITLES.get(tool.page_filename, tool.title)
-
 
 def legacy_url_path(page_filename: str) -> str:
     stem = Path(page_filename).stem
@@ -72,7 +40,7 @@ def logo_data_uri() -> str:
 def render_tool(tool) -> None:
     page = NAV_PAGE_BY_FILENAME[tool.page_filename]
     with st.container(key=f"directory_entry_{tool.number}"):
-        st.page_link(page, label=f"**{display_title(tool)}**", width="content")
+        st.page_link(page, label=f"**{tool.title}**", width="content")
         st.markdown(
             f"<div class='tool-description'>{escape(tool.description)}</div>",
             unsafe_allow_html=True,
@@ -219,7 +187,7 @@ HOME_PAGE = st.Page(render_home, title="Home", default=True)
 TOOL_PAGES = [
     st.Page(
         f"pages/{tool.page_filename}",
-        title=display_title(tool),
+        title=tool.title,
         url_path=legacy_url_path(tool.page_filename),
     )
     for tool in TOOLS
