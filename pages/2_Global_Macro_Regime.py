@@ -370,7 +370,7 @@ else:
             )
         else:
             st.caption(
-                "Higher-frequency OECD releases via FRED. Each country's actual observation "
+                "Higher-frequency OECD releases, using the OECD API with FRED fallbacks. Each country's actual observation "
                 "date is shown; unavailable or stale series remain gray."
             )
 
