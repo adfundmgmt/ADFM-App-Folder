@@ -4,11 +4,13 @@ import numpy as np
 import pandas as pd
 
 from adfm_core.global_macro import (
+    annualize_quarterly_growth,
     comparison_period,
     country_rows,
     currency_snapshot,
     equity_matrix,
     equity_snapshot,
+    macro_snapshot,
     parse_world_bank,
     period_snapshot,
 )
@@ -111,6 +113,21 @@ class GlobalMacroTests(unittest.TestCase):
         )
         self.assertEqual(r["Value"], -1)
         self.assertEqual(r["Period"], "2025")
+
+    def test_quarterly_growth_is_compounded_to_annual_rate(self):
+        self.assertAlmostEqual(
+            annualize_quarterly_growth(1.0),
+            ((1.01 ** 4) - 1) * 100,
+        )
+
+    def test_macro_snapshot_uses_latest_release_and_prior_release_change(self):
+        data = s(["2026-01-01", "2026-04-01"], [2.0, 3.5])
+        level = macro_snapshot(data, pd.Timestamp("2026-09-10"), "GDP growth", "Level")
+        change = macro_snapshot(data, pd.Timestamp("2026-09-10"), "GDP growth", "Change")
+        self.assertEqual(level["Value"], 3.5)
+        self.assertEqual(level["Period"], "2026-04-01")
+        self.assertEqual(change["Value"], 1.5)
+        self.assertEqual(change["Baseline"], "2026-01-01")
 
     def test_common_period_and_gray_missing(self):
         x = {
