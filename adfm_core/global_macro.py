@@ -1,12 +1,12 @@
 """G20 cross-country market and macro comparisons.
 
-The module intentionally keeps slow official macro series separate from the fast
-market layer. Missing observations are never imputed and no opaque composite
-score is created.
+Fast market series are kept separate from slower official macro releases. Missing
+observations are never imputed and no opaque composite score is created.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import StringIO
 
 import numpy as np
 import pandas as pd
@@ -52,11 +52,7 @@ COUNTRIES = (
     Country("United States", "USA", "^GSPC", "S&P 500", "USD", "IRLTLT01USM156N"),
 )
 
-INDICATORS = {
-    "GDP growth": "NY.GDP.MKTP.KD.ZG",
-    "Unemployment": "SL.UEM.TOTL.ZS",
-    "Inflation": "FP.CPI.TOTL.ZG",
-}
+INDICATORS = ("GDP growth", "Unemployment", "Inflation")
 MARKET_HORIZONS = ("1D", "1W", "1M", "3M", "6M", "YTD", "1Y")
 HORIZONS = {
     "1W": pd.DateOffset(weeks=1),
@@ -65,6 +61,26 @@ HORIZONS = {
     "6M": pd.DateOffset(months=6),
     "1Y": pd.DateOffset(years=1),
 }
+
+# OECD/FRED series use two-letter area codes in the compact legacy identifiers.
+OECD_ALPHA2 = {
+    "ARG": "AR", "AUS": "AU", "BRA": "BR", "CAN": "CA", "CHN": "CN",
+    "FRA": "FR", "DEU": "DE", "IND": "IN", "IDN": "ID", "ITA": "IT",
+    "JPN": "JP", "MEX": "MX", "RUS": "RU", "SAU": "SA", "ZAF": "ZA",
+    "KOR": "KR", "TUR": "TR", "GBR": "GB", "USA": "US",
+}
+
+
+def macro_symbols(iso: str) -> dict[str, tuple[str, ...]]:
+    cc = OECD_ALPHA2[iso]
+    return {
+        "GDP growth": (f"NAEXKP01{cc}Q657S",),
+        "Unemployment": (
+            f"LRUN64TT{cc}M156S",
+            f"LRUN64TT{cc}Q156S",
+        ),
+        "Inflation": (f"CPALTT01{cc}M659N",),
+    }
 
 
 def clean(series):
@@ -143,11 +159,7 @@ def equity_snapshot(series, today, horizon):
 
 
 def currency_snapshot(series, today, horizon, inverse_quote=False):
-    """Return local-currency performance versus USD.
-
-    inverse_quote=False means Yahoo is USD per local currency (e.g. EURUSD=X).
-    inverse_quote=True means Yahoo is local currency per USD (e.g. JPY=X).
-    """
+    """Return local-currency performance versus USD."""
     raw = market_return_snapshot(series, today, horizon)
     if not np.isfinite(raw["Value"]):
         return raw
@@ -162,8 +174,7 @@ def _merge_intraday(daily, intraday):
     intraday = clean(intraday)
     if intraday.empty:
         return daily
-    latest_time = intraday.index[-1]
-    latest_day = latest_time.normalize()
+    latest_day = intraday.index[-1].normalize()
     daily.loc[latest_day] = float(intraday.iloc[-1])
     return daily.sort_index()
 
@@ -188,34 +199,21 @@ def load_equities():
     tickers = sorted(set(index_tickers + fx_tickers))
     try:
         daily_raw = yf.download(
-            tickers,
-            period="2y",
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            threads=True,
-            timeout=12,
-            group_by="column",
+            tickers, period="2y", interval="1d", auto_adjust=False,
+            progress=False, threads=True, timeout=12, group_by="column",
         )
         daily = _close_frame(daily_raw)
         intraday = pd.DataFrame()
         try:
             intraday_raw = yf.download(
-                tickers,
-                period="5d",
-                interval="5m",
-                auto_adjust=False,
-                progress=False,
-                threads=True,
-                timeout=10,
-                group_by="column",
+                tickers, period="5d", interval="5m", auto_adjust=False,
+                progress=False, threads=True, timeout=10, group_by="column",
             )
             intraday = _close_frame(intraday_raw)
         except Exception:
             intraday = pd.DataFrame()
 
-        by_ticker = {}
-        errors = {}
+        by_ticker, errors = {}, {}
         for ticker in tickers:
             d = clean(daily[ticker]) if ticker in daily else pd.Series(dtype=float)
             i = clean(intraday[ticker]) if ticker in intraday else pd.Series(dtype=float)
@@ -226,7 +224,11 @@ def load_equities():
                 by_ticker[ticker] = merged
 
         equities = {c.iso: by_ticker[c.ticker] for c in COUNTRIES if c.ticker in by_ticker}
-        fx = {c.iso: by_ticker[c.fx_ticker] for c in COUNTRIES if c.fx_ticker and c.fx_ticker in by_ticker}
+        fx = {
+            c.iso: by_ticker[c.fx_ticker]
+            for c in COUNTRIES
+            if c.fx_ticker and c.fx_ticker in by_ticker
+        }
         return equities, fx, errors
     except Exception:
         return {}, {}, {"Yahoo Finance": "Market data download unavailable"}
@@ -235,12 +237,7 @@ def load_equities():
 def equity_matrix(equities, fx, today):
     rows = []
     for c in COUNTRIES:
-        row = {
-            "Country": c.name,
-            "ISO": c.iso,
-            "Index": c.index,
-            "Currency": c.currency,
-        }
+        row = {"Country": c.name, "ISO": c.iso, "Index": c.index, "Currency": c.currency}
         local = {}
         for horizon in MARKET_HORIZONS:
             eq = equity_snapshot(equities.get(c.iso, pd.Series(dtype=float)), today, horizon)
@@ -260,12 +257,11 @@ def equity_matrix(equities, fx, today):
             else:
                 fx_move = np.nan
             row[f"FX {horizon}"] = fx_move
-            usd_move = (
+            row[f"USD {horizon}"] = (
                 ((1 + eq["Value"] / 100) * (1 + fx_move / 100) - 1) * 100
                 if np.isfinite(eq["Value"]) and np.isfinite(fx_move)
                 else np.nan
             )
-            row[f"USD {horizon}"] = usd_move
 
         latest = equity_snapshot(equities.get(c.iso, pd.Series(dtype=float)), today, "1D")
         row["Level"] = latest["Level"]
@@ -292,8 +288,14 @@ def equity_matrix(equities, fx, today):
 @st.cache_data(ttl=21600, max_entries=4, show_spinner=False)
 def load_yields():
     countries = [c for c in COUNTRIES if c.yield_id]
-    panel, status = fetch_fred_symbols(tuple(c.yield_id for c in countries), start="2015-01-01")
-    series = {c.iso: clean(panel[c.yield_id]) for c in countries if c.yield_id in panel}
+    panel, status = fetch_fred_symbols(
+        tuple(c.yield_id for c in countries), start="2015-01-01"
+    )
+    series = {
+        c.iso: clean(panel[c.yield_id])
+        for c in countries
+        if c.yield_id in panel
+    }
     errors = {}
     if not status.empty:
         for _, row in status.iterrows():
@@ -303,14 +305,16 @@ def load_yields():
 
 
 def parse_world_bank(payload, indicator):
+    """Backward-compatible parser retained for historical tests and callers."""
     if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[1], list):
         raise ValueError("Invalid World Bank response")
     if int(payload[0].get("pages", 1)) > 1:
         raise ValueError("Incomplete World Bank response")
     observations = {}
+    allowed = {c.iso for c in COUNTRIES}
     for row in payload[1]:
         iso = row.get("countryiso3code")
-        if iso not in {c.iso for c in COUNTRIES} or row.get("indicator", {}).get("id") != indicator:
+        if iso not in allowed or row.get("indicator", {}).get("id") != indicator:
             continue
         value, year = row.get("value"), str(row.get("date", ""))
         if value is None or not year.isdigit():
@@ -320,21 +324,134 @@ def parse_world_bank(payload, indicator):
             observations.setdefault(iso, {})[pd.Timestamp(int(year), 12, 31)] = value
     return {iso: clean(pd.Series(values)) for iso, values in observations.items()}
 
+def annualize_quarterly_growth(qoq_percent):
+    """Compound a seasonally adjusted q/q growth rate for four quarters."""
+    value = float(qoq_percent)
+    if not np.isfinite(value) or value <= -100:
+        return np.nan
+    return ((1 + value / 100.0) ** 4 - 1) * 100.0
 
-@st.cache_data(ttl=21600, max_entries=6, show_spinner=False)
-def load_economics(metric):
-    indicator = INDICATORS[metric]
-    codes = ";".join(c.iso for c in COUNTRIES)
-    try:
-        response = requests.get(
-            f"https://api.worldbank.org/v2/country/{codes}/indicator/{indicator}",
-            params={"format": "json", "date": "2010:2030", "per_page": 1000},
-            timeout=(4, 15),
+
+def _transform_macro_series(series, metric):
+    s = clean(series)
+    if metric == "GDP growth" and not s.empty:
+        s = s.map(annualize_quarterly_growth)
+    return s.dropna()
+
+
+def _status_errors(status):
+    errors = {}
+    if status is None or status.empty:
+        return errors
+    for _, row in status.iterrows():
+        if row.get("error"):
+            errors[str(row.get("symbol", "FRED"))] = str(row["error"])
+    return errors
+
+
+def _parse_oecd_csv(text):
+    frame = pd.read_csv(StringIO(text))
+    needed = {"REF_AREA", "TIME_PERIOD", "OBS_VALUE"}
+    if frame.empty or not needed.issubset(frame.columns):
+        raise ValueError("OECD response is missing required columns")
+    frame = frame[list(needed)].copy()
+    frame["OBS_VALUE"] = pd.to_numeric(frame["OBS_VALUE"], errors="coerce")
+    frame["DATE"] = pd.to_datetime(frame["TIME_PERIOD"].astype(str), errors="coerce")
+    frame = frame.dropna(subset=["REF_AREA", "DATE", "OBS_VALUE"])
+    out = {}
+    for iso, group in frame.groupby("REF_AREA"):
+        if iso not in {c.iso for c in COUNTRIES}:
+            continue
+        s = pd.Series(group["OBS_VALUE"].to_numpy(), index=group["DATE"])
+        out[iso] = clean(s)
+    return out
+
+
+def _load_oecd_current(metric):
+    if metric == "Unemployment":
+        url = (
+            "https://sdmx.oecd.org/public/rest/data/"
+            "OECD.SDD.TPS,DSD_LFS@DF_IALFS_UNE_M,1.0/"
+            "..._Z.Y._T.Y_GE15..M"
         )
-        response.raise_for_status()
-        return parse_world_bank(response.json(), indicator), {}
-    except (requests.RequestException, ValueError, TypeError, KeyError):
-        return {}, {"World Bank": "Economic data download unavailable"}
+        params = {
+            "startPeriod": "2019-01",
+            "dimensionAtObservation": "AllDimensions",
+            "format": "csvfile",
+        }
+    elif metric == "Inflation":
+        url = (
+            "https://sdmx.oecd.org/public/rest/data/"
+            "OECD.SDD.TPS,DSD_PRICES@DF_PRICES_ALL,1.0/"
+            ".M.N.CPI.PA._T.N.GY"
+        )
+        params = {
+            "startPeriod": "2019-01",
+            "dimensionAtObservation": "AllDimensions",
+            "format": "csvfile",
+        }
+    else:
+        return {}
+
+    response = requests.get(
+        url,
+        params=params,
+        timeout=(5, 20),
+        headers={"Accept": "text/csv", "User-Agent": "ADFM-Global-Macro/1.0"},
+    )
+    response.raise_for_status()
+    return _parse_oecd_csv(response.text)
+
+
+def _load_fred_macro(metric):
+    requested = []
+    for c in COUNTRIES:
+        requested.extend(macro_symbols(c.iso)[metric])
+    panel, status = fetch_fred_symbols(tuple(requested), start="2019-01-01")
+    errors = _status_errors(status)
+    output = {}
+
+    for c in COUNTRIES:
+        candidates = []
+        for symbol in macro_symbols(c.iso)[metric]:
+            if symbol in panel:
+                candidate = _transform_macro_series(panel[symbol], metric)
+                if not candidate.empty:
+                    candidates.append(candidate)
+        if candidates:
+            output[c.iso] = max(candidates, key=lambda x: x.index[-1])
+    return output, errors
+
+
+@st.cache_data(ttl=3600, max_entries=6, show_spinner=False)
+def load_economics(metric):
+    """Load current higher-frequency macro releases.
+
+    GDP uses OECD quarterly national-accounts series delivered by FRED and is
+    annualized from the latest seasonally adjusted q/q rate. Unemployment and
+    inflation use the OECD's current SDMX API first, with FRED fallback series.
+    """
+    if metric not in INDICATORS:
+        return {}, {"OECD": f"Unsupported macro metric: {metric}"}
+
+    if metric == "GDP growth":
+        output, errors = _load_fred_macro(metric)
+    else:
+        output, errors = {}, {}
+        try:
+            output = _load_oecd_current(metric)
+        except (requests.RequestException, ValueError, TypeError, pd.errors.ParserError) as exc:
+            errors["OECD"] = f"Current {metric.lower()} API unavailable: {type(exc).__name__}"
+        fallback, fred_errors = _load_fred_macro(metric)
+        errors.update(fred_errors)
+        for iso, series in fallback.items():
+            if iso not in output or output[iso].empty or series.index[-1] > output[iso].index[-1]:
+                output[iso] = series
+
+    for c in COUNTRIES:
+        if c.iso not in output or output[c.iso].empty:
+            errors.setdefault(c.name, f"No current {metric.lower()} series returned")
+    return output, errors
 
 
 def period_snapshot(series, today, frequency, view, steps, period=None):
@@ -371,6 +488,48 @@ def period_snapshot(series, today, frequency, view, steps, period=None):
     return result
 
 
+def macro_snapshot(series, today, metric, view="Level"):
+    """Create a latest-release macro snapshot with metric-appropriate freshness."""
+    s = clean(series)
+    result = empty_snapshot()
+    if s.empty:
+        return result
+
+    now = pd.Timestamp(today).normalize()
+    s = s.loc[s.index.normalize() <= now]
+    if s.empty:
+        return result
+
+    end = s.index[-1]
+    value = float(s.iloc[-1])
+    result.update(Level=value, Period=end.strftime("%Y-%m-%d"))
+
+    if metric == "GDP growth":
+        stale_days = 220
+    elif metric == "Unemployment":
+        stale_days = 150
+    else:
+        stale_days = 150
+    if (now - end.normalize()).days > stale_days:
+        result["Status"] = "Stale observation"
+        return result
+
+    if view == "Level":
+        result.update(Value=value, Status="Available")
+        return result
+
+    prior = s.iloc[:-1]
+    if prior.empty:
+        result["Status"] = "Missing baseline"
+        return result
+    result.update(
+        Value=value - float(prior.iloc[-1]),
+        Baseline=prior.index[-1].strftime("%Y-%m-%d"),
+        Status="Available",
+    )
+    return result
+
+
 def comparison_period(series, today, frequency):
     """Latest completed period shared by 80% of fresh reporting countries."""
     coverage, reporters = {}, 0
@@ -384,8 +543,19 @@ def comparison_period(series, today, frequency):
         reporters += 1
         for p in recent:
             coverage[p] = coverage.get(p, 0) + 1
-    eligible = [p for p, count in coverage.items() if count >= max(1, np.ceil(.8 * reporters))]
+    eligible = [
+        p for p, count in coverage.items()
+        if count >= max(1, np.ceil(0.8 * reporters))
+    ]
     return str(max(eligible)) if eligible else None
+
+
+def _macro_source(metric):
+    if metric == "GDP growth":
+        return "https://fred.stlouisfed.org/tags/series?t=gdp%3Boecd%3Bquarterly%3Breal"
+    if metric == "Unemployment":
+        return "https://fred.stlouisfed.org/tags/series?t=monthly%3Boecd%3Bunemployment"
+    return "https://fred.stlouisfed.org/tags/series?t=cpi%3Binflation%3Bmonthly%3Boecd"
 
 
 def country_rows(series, today, metric, view="Level", horizon="1M", period=None):
@@ -394,32 +564,37 @@ def country_rows(series, today, metric, view="Level", horizon="1M", period=None)
         s = series.get(c.iso, pd.Series(dtype=float))
         if metric == "Equities":
             snap = equity_snapshot(s, today, horizon)
-            label, source = c.index, f"https://finance.yahoo.com/quote/{c.ticker}/history/"
+            label = c.index
+            source = f"https://finance.yahoo.com/quote/{c.ticker}/history/"
         elif metric == "10Y yields":
             snap = period_snapshot(
-                s,
-                today,
-                "M",
-                view,
+                s, today, "M", view,
                 {"1M": 1, "3M": 3, "6M": 6, "1Y": 12}[horizon],
                 period,
             )
             label = "10Y government yield · monthly average"
-            source = f"https://fred.stlouisfed.org/series/{c.yield_id}" if c.yield_id else ""
+            source = (
+                f"https://fred.stlouisfed.org/series/{c.yield_id}"
+                if c.yield_id else ""
+            )
             if not c.yield_id:
                 snap["Status"] = "No comparable series"
         else:
-            snap = period_snapshot(s, today, "Y", view, 1, period)
-            label = metric + (" · ILO modeled estimate" if metric == "Unemployment" else " · annual")
-            source = f"https://data.worldbank.org/indicator/{INDICATORS[metric]}?locations={c.iso}"
-        rows.append(
-            {
-                "Country": c.name,
-                "ISO": c.iso,
-                **snap,
-                "Series": label,
-                "Currency": c.currency if metric == "Equities" else "",
-                "Source": source,
-            }
-        )
+            snap = macro_snapshot(s, today, metric, view)
+            if metric == "GDP growth":
+                label = "Real GDP · latest q/q annualized"
+            elif metric == "Unemployment":
+                label = "Unemployment rate · latest SA release"
+            else:
+                label = "CPI inflation · latest YoY"
+            source = _macro_source(metric)
+
+        rows.append({
+            "Country": c.name,
+            "ISO": c.iso,
+            **snap,
+            "Series": label,
+            "Currency": c.currency if metric == "Equities" else "",
+            "Source": source,
+        })
     return pd.DataFrame(rows)
