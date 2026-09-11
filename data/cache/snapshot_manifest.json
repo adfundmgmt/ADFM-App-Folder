@@ -1,7 +1,7 @@
 {
   "files": {
     "carry_grid_nominal.parquet": {
-      "bytes": 5743,
+      "bytes": 5776,
       "columns": [
         "base",
         "USD",
@@ -14,10 +14,10 @@
         "NZD"
       ],
       "rows": 8,
-      "sha256": "8a003588fdafbc10045322d0ea53b20a848b3b9409ee598e6da8dec25f7dca62"
+      "sha256": "b79f9d907b69711e8285686b363b0b0e0257f18f45937a3e47f6b98ca7117071"
     },
     "carry_grid_real.parquet": {
-      "bytes": 5771,
+      "bytes": 5772,
       "columns": [
         "base",
         "USD",
@@ -30,10 +30,10 @@
         "NZD"
       ],
       "rows": 8,
-      "sha256": "1148cc421c3650dd0f3f70cb8b692ede234c64a1314ff4b487d2727e3e3febda"
+      "sha256": "9e71cb3f71f9613b89d45d16083435d69bf5da1ae074ce43b795e7de6cbcfd2d"
     },
     "carry_history.parquet": {
-      "bytes": 58175,
+      "bytes": 58273,
       "columns": [
         "date",
         "ccy",
@@ -41,19 +41,19 @@
         "real_2y",
         "nominal_2y"
       ],
-      "rows": 3418,
-      "sha256": "3b9b5c704743b9c9f5311ced343c5023e9f7c37911a839480bbbd47237e0ed9e"
+      "rows": 3426,
+      "sha256": "19600358991c7e02f772dcac2ede9ef94850f3bf7b7c2ce63ff08d0aa04fce66"
     },
     "commentary.md": {
-      "bytes": 1273,
-      "sha256": "6b54272a1ebbee1bf30f6002839790ffbfae3ee9057ed6ca4c80a8c92c1afd3e"
+      "bytes": 1342,
+      "sha256": "95f11e1f892298a508898b719541daf72d37d459a7b3d02f9ab848bf5bb01192"
     },
     "commentary_meta.json": {
       "bytes": 87,
-      "sha256": "149cca87764f06825247bb3e9b546fe7802a5a66c3e3c0ec8ebbee7dd729d9a0"
+      "sha256": "986f0c2729a518479e6fa6cb349fabc61626f637a7945349df1106350ee38d67"
     },
     "overlay_history.parquet": {
-      "bytes": 46543,
+      "bytes": 46622,
       "columns": [
         "ccy",
         "yld_fx_corr",
@@ -68,11 +68,11 @@
         "carry_to_vol",
         "ctv_pctile"
       ],
-      "rows": 5688,
-      "sha256": "891786da70926b2c7c2ca79c9bc1c8d443ffea3ad31c4e29c0eabee5dd1e8799"
+      "rows": 5696,
+      "sha256": "6e0472dd681e2cbf85dd28b4a5bd28508b44bfdfed0edc09b98a14bc591297a9"
     },
     "overlays.parquet": {
-      "bytes": 12277,
+      "bytes": 12267,
       "columns": [
         "ccy",
         "yld_fx_corr",
@@ -95,10 +95,10 @@
         "pos_date"
       ],
       "rows": 8,
-      "sha256": "3361443917735dcc3dea7501dac5baf4cc94f0adc0182c87497b77b28a460466"
+      "sha256": "5c103acb8485f7ba1561e725cd2b16bcd954b313accc8a47962b28acd61741df"
     },
     "pillar_history.parquet": {
-      "bytes": 457154,
+      "bytes": 457462,
       "columns": [
         "date",
         "ccy",
@@ -108,8 +108,8 @@
         "regime",
         "secular"
       ],
-      "rows": 20511,
-      "sha256": "9fc4ae7b178283c6d0d89f67d193e30555e6ff840e3143d85fb01eb689e396e5"
+      "rows": 20559,
+      "sha256": "ae0015d54d9820e9719141b7c72d30d51a58b65f19f6a63e4871814960f11300"
     },
     "pillar_scores.parquet": {
       "bytes": 4903,
@@ -123,7 +123,7 @@
         "G_valuation"
       ],
       "rows": 8,
-      "sha256": "11eb3401326b436eb0e2cf35d9b0e2488550fcfed0b0c4e9229a8e2e9d7ab154"
+      "sha256": "5294d3c774996549217398aa18186a5d807cbd888713c86960250ce601885e68"
     },
     "pos_history.parquet": {
       "bytes": 213905,
@@ -140,7 +140,7 @@
       "sha256": "1e803d97fcc31bcc5bf92748674a3a7f90e67660e0cfcafa0c786a72d54fc03f"
     },
     "snapshot_history.parquet": {
-      "bytes": 223248,
+      "bytes": 223620,
       "columns": [
         "date",
         "ccy",
@@ -152,8 +152,8 @@
         "axis1_fundamental_secular",
         "axis2_stretch_secular"
       ],
-      "rows": 4260,
-      "sha256": "bebbf1e6cddfd600916f01d8db8228103b747d5fd096c49a04184fd2fab07316"
+      "rows": 4268,
+      "sha256": "38d906af2b7f3f9e2fc5e6ec990c6431356b62f3da3db846dd48f21081dcf66a"
     },
     "tension_map.parquet": {
       "bytes": 5613,
@@ -167,7 +167,7 @@
         "axis2_stretch_secular"
       ],
       "rows": 8,
-      "sha256": "73a114aa3c903f4180b5b66c112b85811b167b994b60010c5434542552d603a9"
+      "sha256": "937adc79462d4e12dbaf43436229ef41508ffd338dcf96a19fe270557051d91b"
     },
     "tension_map_prev.parquet": {
       "bytes": 5613,
@@ -181,14 +181,14 @@
         "axis2_stretch_secular"
       ],
       "rows": 8,
-      "sha256": "73a114aa3c903f4180b5b66c112b85811b167b994b60010c5434542552d603a9"
+      "sha256": "937adc79462d4e12dbaf43436229ef41508ffd338dcf96a19fe270557051d91b"
     },
     "warnings.json": {
       "bytes": 3585,
-      "sha256": "24fb8f840ce7029d843d2a86f8ad19ff19c64a9b5aee327b4c96980a936d27a1"
+      "sha256": "be45f120d4e0da67f4ec1c2288998281bf9f43e21e567425d44852f1044df3d1"
     },
     "yields.parquet": {
-      "bytes": 1209478,
+      "bytes": 1205618,
       "columns": [
         "date",
         "ccy",
@@ -197,10 +197,10 @@
         "source",
         "fetched_at"
       ],
-      "rows": 174822,
-      "sha256": "22107d52a6614d3d35930aeff18f25ad3245624a8ad63da0a73d64333f1b0f61"
+      "rows": 174851,
+      "sha256": "94dd44b097fa3057a9cb3269779ae4d8e3f8253ed8462e13b4c1c70563ed889a"
     }
   },
   "schema_version": 1,
-  "validated_at_utc": "2026-09-10T12:13:50.788466+00:00"
+  "validated_at_utc": "2026-09-11T12:12:27.487324+00:00"
 }
