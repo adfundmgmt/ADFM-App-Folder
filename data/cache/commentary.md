@@ -1,13 +1,11 @@
-**Regime: Strong-dollar tape masking fragile carry crowding across AUD, GBP, JPY at extremes of risk-reward map.**
+**Regime: Strong dollar on fading hawkish tailwinds; carry crowded across all high-yielders in a risk-premium regime.**
 
-**Inflection points:**
+**Inflection currencies:**
 
-• **AUD short** — deteriorating fundamentals (-0.24), carry-crowded at 97th percentile, valuation (+2.0) doing all the work. Policy trap: tight stance vs soft growth, hawkish drag fading. Yield stress real (z +0.9) but currency weakens on rising yields (risk-premium regime, mult -0.57). Unwind vulnerability acute.
+- **AUD short**: Deteriorating fundamentals (-0.24) meet extreme stretch (+1.59). Valuation (+2.0) is the sole pillar; growth, inflation, and fiscal all drag. Yields weaken into higher rates (risk-premium regime, mult -0.57). Carry at 94th percentile—classic unwind setup. Policy pivot imminent.
+  
+- **GBP short**: Identical structure to AUD. Valuation (+1.6) carries nearly all weight while other pillars flatten. Real yield cushion gone (real 10Y decoupled, mult -0.53). Feasibility -0.6 signals hawkish fade into stagflation. Carry at 97th percentile—the crowding peak.
+  
+- **CAD long**: Cheap by 1.1 std devs (valuation -2.0) with fundamentals improving (+0.35). External pillar strong (+1.06). Yield rewarded, hike feasibility neutral. Mean-reversion candidate if carry unwind gains traction.
 
-• **GBP short** — stretched valuation (+1.6) anchoring a one-legged read; policy tightening space exhausted (feasibility -0.6), stagflation drag looming. Carry crowded 97th percentile. Real-yield reward/stress read ambiguous; treat decoupling as ongoing.
-
-• **JPY long** — improving fundamentals (+0.41), valuation cheap (-0.49), mean-reversion setup intact. Carry crowded 86th percentile but cross vs USD confounds; real 10Y stress priced as risk-premium regime (mult -0.52), not yield support. Play the dislocation, not the carry.
-
-• **CAD long** — cheap valuation (-2.03) + improving fundamentals (+0.35), classic mean reversion. One-legged read, but yield regime rewarded (0.49) and carry feasible (0.03).
-
-**Carry standout:** **AUD/JPY short** — AUD crowded unwind + JPY valuation mean reversion + both sit on fragile carry bases; vol compression amplifies risk.
+**Standout carry pair: Short AUD/CAD.** AUD unwind + CAD mean reversion = two-sided tailwind.
