@@ -88,7 +88,7 @@ class HedgeTimerModelTests(unittest.TestCase):
         prices.iloc[30:46] = [100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 89, 88, 87, 88, 89, 90]
         prices.iloc[46:] = 100.0
         warnings = pd.Series(False, index=idx)
-        warnings.iloc[20] = True
+        warnings.iloc[30] = True
         warnings.iloc[60] = True
 
         summary = warning_summary(prices, warnings, lookback=15)
