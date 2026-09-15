@@ -7,6 +7,7 @@ import unittest
 import pandas as pd
 
 from adfm_core.hedge_timer_model import (
+    find_drawdown_episodes,
     fresh_short_onset,
     select_full_recall_candidate,
     warning_summary,
@@ -81,6 +82,20 @@ class HedgeTimerModelTests(unittest.TestCase):
         chosen = select_full_recall_candidate(candidates)
 
         self.assertEqual(chosen["threshold"], 70)
+
+    def test_drawdown_ledger_resets_to_a_new_local_peak(self) -> None:
+        idx = pd.date_range("2020-01-02", periods=150, freq="B")
+        prices = pd.Series(100.0, index=idx)
+        prices.iloc[20:31] = [100, 98, 96, 94, 92, 90, 88, 89, 91, 94, 97]
+        prices.iloc[31:105] = 97.0
+        prices.iloc[105:116] = [97, 95, 93, 91, 89, 87, 85, 87, 90, 94, 97]
+        prices.iloc[116:] = 97.0
+
+        episodes = find_drawdown_episodes(prices)
+
+        self.assertEqual(len(episodes), 2)
+        self.assertLessEqual(episodes[0][3], -0.10)
+        self.assertLessEqual(episodes[1][3], -0.10)
 
     def test_warning_summary_counts_captured_and_false_warnings(self) -> None:
         idx = pd.date_range("2020-01-02", periods=80, freq="B")
