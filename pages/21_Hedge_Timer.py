@@ -1,23 +1,40 @@
-# app.py
 # Hedge Timer
-# Static (image) charts with a sidebar lookback toggle for 1, 2, 3, 5, 10 years.
-# Sidebar: About This Tool + Chart lookback + Sanity check since 2020 (forward risk stats).
-#
-# Goal update:
-# - Avoid "short at the bottom" by adding (1) early-stage gating, (2) oversold block for NEW signals.
-# - Calibrate threshold to maximize recall of 10%+ drawdowns since 2020 across ^SPX and ^NDX.
+# High-recall drawdown warning system for ^SPX and ^NDX.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Tuple
+from typing import List
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import streamlit as st
+import yfinance as yf
 
+from adfm_core.hedge_timer_model import (
+    CALIBRATION_START,
+    CONFIRM_COMPONENTS,
+    CONFIRM_THRESHOLD,
+    HORIZON_DAYS,
+    LEAD_LOOKBACK,
+    NDX_LABEL,
+    NDX_TICKER,
+    SPX_LABEL,
+    SPX_TICKER,
+    TICKERS,
+    WATCH_COMPONENTS,
+    calibrate_watch_threshold,
+    compute_scores,
+    drawdown,
+    episode_audit,
+    fresh_short_onset,
+    forward_stats,
+    onset,
+    state_label,
+    warning_summary,
+    watch_signal,
+)
 from adfm_core.palette import PASTEL
 from adfm_core.ui import (
     PageHeader,
@@ -26,99 +43,83 @@ from adfm_core.ui import (
     render_page_header,
     render_sidebar_about,
 )
-import yfinance as yf
-from matplotlib.collections import LineCollection
-from matplotlib.colors import LinearSegmentedColormap, Normalize
 
 
-# ============================== Page + Style ==============================
 st.set_page_config(page_title="Hedge Timer", layout="wide")
-
 inject_institutional_tool_finish()
+
 st.markdown(
     f"""
     <style>
-    .badge.b_bad {{ background: {PASTEL['rose']} !important; color: #171717 !important; }}
-    .badge.b_mid {{ background: {PASTEL['amber']} !important; color: #171717 !important; }}
-    .badge.b_good {{ background: {PASTEL['sage']} !important; color: #171717 !important; }}
+    .hedge-state {{
+        display: inline-block;
+        border: 1px solid #111111;
+        padding: .22rem .48rem;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: .72rem;
+        font-weight: 800;
+        letter-spacing: .05em;
+    }}
+    .hedge-stand {{ background: {PASTEL['sage']}; }}
+    .hedge-watch {{ background: {PASTEL['amber']}; }}
+    .hedge-confirmed {{ background: {PASTEL['coral']}; }}
+    .hedge-short {{ background: {PASTEL['rose']}; }}
+    .hedge-index-title {{
+        font-family: Georgia, 'Times New Roman', serif;
+        font-size: 1.18rem;
+        font-weight: 700;
+        margin-bottom: .35rem;
+    }}
+    .hedge-line {{
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: .80rem;
+        line-height: 1.55;
+        margin-top: .45rem;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-plt.rcParams["figure.dpi"] = 200
-
-
-# ============================== Constants ==============================
-# Yahoo uses ^GSPC for S&P 500. We display it as ^SPX.
-SPX_TICKER = "^GSPC"
-NDX_TICKER = "^NDX"
-SPX_LABEL = "^SPX"
-NDX_LABEL = "^NDX"
-
-CALIBRATION_START = "2020-01-01"
-DISPLAY_SESSIONS_DEFAULT = 252  # ~12 months of trading sessions
-HORIZON_DAYS = 20
-LEAD_LOOKBACK = 40
-
-# Drawdown definition for "major selloffs"
-DD_MAJOR = -0.10
-
-# Prevent "short at the bottom" by only allowing NEW signals while drawdown-from-recent-high is still early.
-# -12% is intentionally loose so fast breaks still qualify early; beyond that, we do not allow fresh shorts.
-EARLY_STAGE_DD63 = -0.12
-
-# Oversold block for NEW signals (do not initiate new shorts in washed-out tape)
-RSI_OVERSOLD = 30.0
-RSI_SOFT_OVERSOLD = 35.0
-
-# Core inputs (targets + risk layers). Targets are indices. Ratios use liquid ETFs.
-TICKERS = [
-    SPX_TICKER,
-    NDX_TICKER,
-    "SPY",
-    "RSP",
-    "XLY",
-    "XLP",
-    "HYG",
-    "LQD",
-    "TLT",
-    "^VIX",
-    "^VIX9D",
-    "^VIX3M",
-    "^VVIX",
-]
-
+plt.rcParams["figure.dpi"] = 180
 LOOKBACK_OPTIONS = [1, 2, 3, 5, 10]
 
 
-# ============================== Sidebar ==============================
 with st.sidebar:
     render_sidebar_about("21_Hedge_Timer.py")
+    st.markdown(
+        "**Scoring model**\n\n"
+        "Hedge Watch prioritizes early deterioration in credit, breadth, defensive rotation, "
+        "volatility acceleration, drawdown velocity, and daily/weekly momentum. Hedge Confirmed "
+        "adds price structure, realized-volatility expansion, and longer-term trend confirmation. "
+        "RSI and 63-session drawdown gates apply only to fresh short initiation, not to the warning itself."
+    )
+    st.divider()
+    chart_index = st.radio(
+        "Chart index",
+        options=[SPX_LABEL, NDX_LABEL],
+        index=0,
+    )
     chart_years = st.radio(
         "Chart lookback",
         options=LOOKBACK_OPTIONS,
         index=0,
-        horizontal=False,
-        format_func=lambda x: f"{x} year" if x == 1 else f"{x} years",
+        format_func=lambda value: f"{value} year" if value == 1 else f"{value} years",
     )
-
-    st.markdown("---")
+    st.divider()
     st.markdown("### Sanity check since 2020")
     sanity_box = st.empty()
 
 
-# ============================== Helpers ==============================
 def _today() -> date:
     return date.today()
 
 
 def _start_date() -> date:
-    # enough history to compute MA200 and multi-timeframe indicators cleanly
     return _today() - timedelta(days=int(10 * 365.25) + 180)
 
 
-def sessions_for_years(years: int) -> int:
+def _sessions_for_years(years: int) -> int:
     return int(round(252 * years))
 
 
@@ -140,983 +141,331 @@ def extract_close(df_raw: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
 
     if isinstance(df_raw.columns, pd.MultiIndex):
         out = {}
-        for t in tickers:
-            if (t, "Close") in df_raw.columns:
-                out[t] = df_raw[(t, "Close")]
-            elif (t, "Adj Close") in df_raw.columns:
-                out[t] = df_raw[(t, "Adj Close")]
-        df = pd.DataFrame(out)
-        df.index = pd.to_datetime(df.index)
-        return df.sort_index()
+        for ticker in tickers:
+            if (ticker, "Close") in df_raw.columns:
+                out[ticker] = df_raw[(ticker, "Close")]
+            elif (ticker, "Adj Close") in df_raw.columns:
+                out[ticker] = df_raw[(ticker, "Adj Close")]
+        result = pd.DataFrame(out)
+        result.index = pd.to_datetime(result.index)
+        return result.sort_index()
 
-    # single ticker fallback
     if "Close" in df_raw.columns:
-        df = df_raw[["Close"]].rename(columns={"Close": tickers[0]})
+        result = df_raw[["Close"]].rename(columns={"Close": tickers[0]})
     elif "Adj Close" in df_raw.columns:
-        df = df_raw[["Adj Close"]].rename(columns={"Adj Close": tickers[0]})
+        result = df_raw[["Adj Close"]].rename(columns={"Adj Close": tickers[0]})
     else:
         return pd.DataFrame()
-
-    df.index = pd.to_datetime(df.index)
-    return df.sort_index()
-
-
-def last_valid(s: pd.Series) -> float:
-    s = s.dropna()
-    return float(s.iloc[-1]) if len(s) else float("nan")
+    result.index = pd.to_datetime(result.index)
+    return result.sort_index()
 
 
-def fmt_pct(x: float) -> str:
-    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
+def last_valid(series: pd.Series) -> float:
+    clean = series.dropna()
+    return float(clean.iloc[-1]) if len(clean) else float("nan")
+
+
+def last_bool(series: pd.Series, default: bool = False) -> bool:
+    clean = series.dropna()
+    return bool(clean.iloc[-1]) if len(clean) else default
+
+
+def fmt_num(value: float, decimals: int = 1) -> str:
+    if not np.isfinite(value):
         return "NA"
-    return f"{x*100:.2f}%"
+    return f"{value:.{decimals}f}"
 
 
-def fmt_num(x: float, nd: int = 2) -> str:
-    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
+def fmt_pct(value: float, decimals: int = 1) -> str:
+    if not np.isfinite(value):
         return "NA"
-    return f"{x:.{nd}f}"
+    return f"{value * 100:.{decimals}f}%"
 
 
-def safe_ratio(a: pd.Series, b: pd.Series) -> pd.Series:
-    out = a / b
-    return out.replace([np.inf, -np.inf], np.nan)
-
-
-def rolling_ma(s: pd.Series, w: int, minp: int = 1) -> pd.Series:
-    return s.rolling(w, min_periods=minp).mean()
-
-
-def ema(s: pd.Series, span: int) -> pd.Series:
-    return s.ewm(span=span, adjust=False, min_periods=span).mean()
-
-
-def rsi(s: pd.Series, period: int = 14) -> pd.Series:
-    delta = s.diff()
-    gain = delta.clip(lower=0)
-    loss = (-delta).clip(lower=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    rs = avg_gain / (avg_loss + 1e-12)
-    return 100 - (100 / (1 + rs))
-
-
-def macd_hist(s: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
-    m = ema(s, fast) - ema(s, slow)
-    sig = ema(m, signal)
-    return m - sig
-
-
-def resample_last(s: pd.Series, rule: str) -> pd.Series:
-    s = s.dropna().copy()
-    if s.empty:
-        return s
-
-    if not isinstance(s.index, pd.DatetimeIndex):
-        s.index = pd.to_datetime(s.index)
-
-    # pandas now expects explicit end-of-period aliases like ME/QE/YE
-    freq_map = {
-        "M": "ME",
-        "Q": "QE",
-        "Y": "YE",
-        "A": "YE",
-        "BM": "BME",
-        "BQ": "BQE",
-        "BY": "BYE",
-    }
-    rule = freq_map.get(rule, rule)
-
-    return s.resample(rule).last()
-
-
-def mtf_to_daily(daily_index: pd.DatetimeIndex, mtf_series: pd.Series) -> pd.Series:
-    return mtf_series.reindex(daily_index, method="ffill")
-
-
-def drawdown(px: pd.Series) -> pd.Series:
-    s = px.dropna()
-    peak = s.cummax()
-    return s / peak - 1.0
-
-
-def dd_from_rolling_high(px: pd.Series, window: int) -> pd.Series:
-    s = px.dropna()
-    hi = s.rolling(window, min_periods=max(20, window // 4)).max()
-    out = (s / hi) - 1.0
-    return out.reindex(px.index)
-
-
-def forward_min_return(px: pd.Series, h: int) -> pd.Series:
-    s = px.dropna()
-    fut_min = s[::-1].rolling(h, min_periods=1).min()[::-1].shift(-1)
-    return fut_min / s - 1.0
-
-
-def find_drawdown_episodes(
-    px: pd.Series,
-    threshold: float,
-    recovery: float = -0.02,
-    start_after: str | None = None,
-) -> List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]]:
-    """
-    Episodes:
-      start: first date DD <= threshold
-      end: first date after start where DD >= recovery (or last date)
-      trough: min DD date between start and end
-      depth: min DD between start and end
-    """
-    s = px.dropna()
-    if start_after is not None:
-        s = s.loc[s.index >= pd.Timestamp(start_after)]
-    if len(s) < 260:
-        return []
-
-    dd = drawdown(s)
-
-    episodes: List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]] = []
-    in_ep = False
-    start = None
-
-    for ts, v in dd.items():
-        if (not in_ep) and (v <= threshold):
-            in_ep = True
-            start = ts
-            continue
-
-        if in_ep and (v >= recovery) and start is not None:
-            seg = dd.loc[start:ts]
-            trough = seg.idxmin()
-            depth = float(seg.min())
-            end = ts
-            episodes.append((start, end, trough, depth))
-            in_ep = False
-            start = None
-
-    if in_ep and start is not None:
-        seg = dd.loc[start:]
-        trough = seg.idxmin()
-        depth = float(seg.min())
-        end = seg.index[-1]
-        episodes.append((start, end, trough, depth))
-
-    return sorted(episodes, key=lambda x: x[3])  # deepest first
-
-
-# ============================== Signal Model ==============================
-@dataclass
-class Component:
-    key: str
-    label: str
-    weight: int
-
-
-COMPONENTS: List[Component] = [
-    Component("credit_risk", "Credit risk-off", 16),
-    Component("breadth_risk", "Breadth weak", 12),
-    Component("defensive_tape", "Defensive tape", 8),
-    Component("vol_stress", "Vol stress", 18),
-    Component("mtf_momentum", "RSI/MACD rollover (D/W/M)", 24),
-    Component("short_term_break", "Short-term break", 8),
-    Component("trend_confirm", "Trend confirms", 14),
-]
-
-
-def compute_components_and_meta(
-    df: pd.DataFrame, target_ticker: str
-) -> Tuple[Dict[str, pd.Series], Dict[str, pd.Series], int]:
-    idx = df.index
-
-    spy = df.get("SPY", pd.Series(index=idx, dtype=float))
-    rsp = df.get("RSP", pd.Series(index=idx, dtype=float))
-    xly = df.get("XLY", pd.Series(index=idx, dtype=float))
-    xlp = df.get("XLP", pd.Series(index=idx, dtype=float))
-    hyg = df.get("HYG", pd.Series(index=idx, dtype=float))
-    lqd = df.get("LQD", pd.Series(index=idx, dtype=float))
-
-    vix = df.get("^VIX", pd.Series(index=idx, dtype=float))
-    vix9 = df.get("^VIX9D", pd.Series(index=idx, dtype=float))
-    vix3m = df.get("^VIX3M", pd.Series(index=idx, dtype=float))
-    vvix = df.get("^VVIX", pd.Series(index=idx, dtype=float))
-
-    tgt = df.get(target_ticker, pd.Series(index=idx, dtype=float))
-
-    # Credit: HYG/LQD below long MA and deteriorating
-    credit = safe_ratio(hyg, lqd)
-    credit_ma200 = rolling_ma(credit, 200)
-    credit_rollover = (credit < credit_ma200) & (credit.diff(30) < 0)
-
-    # Breadth: RSP/SPY below long MA and deteriorating
-    rsp_spy = safe_ratio(rsp, spy)
-    rsp_ma200 = rolling_ma(rsp_spy, 200)
-    breadth_rollover = (rsp_spy < rsp_ma200) & (rsp_spy.diff(30) < 0)
-
-    # Defensive tape: XLY/XLP below long MA and deteriorating
-    xly_xlp = safe_ratio(xly, xlp)
-    xlyxlp_ma200 = rolling_ma(xly_xlp, 200)
-    defensive = (xly_xlp < xlyxlp_ma200) & (xly_xlp.diff(30) < 0)
-
-    # Vol stress: level, term structure, and VVIX tail
-    vix_ma50 = rolling_ma(vix, 50)
-    vol_level = (vix > vix_ma50) & (vix.diff(10) > 0)
-
-    has_vix9 = vix9.notna().sum() > 50
-    has_vix3m = vix3m.notna().sum() > 50
-    has_vvix = vvix.notna().sum() > 100
-
-    vol_term_front = (safe_ratio(vix9, vix) >= 1.00) if has_vix9 else pd.Series(False, index=idx)
-    vol_term_back = (safe_ratio(vix, vix3m) >= 1.00) if has_vix3m else pd.Series(False, index=idx)
-    vvix_tail = (
-        vvix >= vvix.rolling(252, min_periods=126).quantile(0.70)
-        if has_vvix
-        else pd.Series(False, index=idx)
-    )
-
-    vol_stress = (vol_level | vol_term_front | vol_term_back) & (vvix_tail | (vix >= 18))
-
-    # Multi-timeframe RSI/MACD
-    rsi_d = rsi(tgt, 14)
-    macd_d = macd_hist(tgt)
-
-    w = resample_last(tgt, "W-FRI")
-    m = resample_last(tgt, "ME")
-
-    rsi_w = mtf_to_daily(idx, rsi(w, 14))
-    rsi_m = mtf_to_daily(idx, rsi(m, 14))
-    macd_w = mtf_to_daily(idx, macd_hist(w))
-    macd_m = mtf_to_daily(idx, macd_hist(m))
-
-    # We want rollover-from-strength, not "already nuked".
-    rsi_d_roll = ((rsi_d.shift(1) >= 60) & (rsi_d < 60)) | (
-        (rsi_d >= 45)
-        & (rsi_d.diff(5) < 0)
-        & (rsi_d < rsi_d.rolling(10, min_periods=5).max() - 2)
-    )
-    rsi_w_roll = ((rsi_w.shift(1) >= 58) & (rsi_w < 58)) | ((rsi_w >= 48) & (rsi_w.diff(3) < 0))
-    rsi_m_roll = ((rsi_m.shift(1) >= 55) & (rsi_m < 55)) | ((rsi_m >= 50) & (rsi_m.diff(2) < 0))
-
-    macd_d_bear = ((macd_d.shift(1) > 0) & (macd_d < 0)) | (
-        (macd_d < macd_d.shift(3)) & (macd_d.diff(3) < 0)
-    )
-    macd_w_bear = ((macd_w.shift(1) > 0) & (macd_w < 0)) | (
-        (macd_w < macd_w.shift(2)) & (macd_w.diff(2) < 0)
-    )
-    macd_m_bear = ((macd_m.shift(1) > 0) & (macd_m < 0)) | (
-        (macd_m < macd_m.shift(2)) & (macd_m.diff(2) < 0)
-    )
-
-    rsi_votes = (
-        rsi_d_roll.fillna(False).astype(int)
-        + rsi_w_roll.fillna(False).astype(int)
-        + rsi_m_roll.fillna(False).astype(int)
-    )
-    macd_votes = (
-        macd_d_bear.fillna(False).astype(int)
-        + macd_w_bear.fillna(False).astype(int)
-        + macd_m_bear.fillna(False).astype(int)
-    )
-
-    mtf_momentum = (rsi_votes >= 2) | (macd_votes >= 2) | ((rsi_votes >= 1) & (macd_votes >= 1))
-
-    # Short-term break: fast structure break
-    ema9 = ema(tgt, 9)
-    ema21 = ema(tgt, 21)
-    short_term_break = ((tgt < ema21) & (ema21.diff(10) < 0)) | ((tgt < ema9) & (ema9 < ema21))
-
-    # Trend confirmation: longer trend and slope
-    ma50 = rolling_ma(tgt, 50)
-    ma200 = rolling_ma(tgt, 200)
-    trend_confirm = ((tgt < ma50) & (ma50.diff(20) < 0)) | (tgt < ma200)
-
-    cond = {
-        "credit_risk": credit_rollover,
-        "breadth_risk": breadth_rollover,
-        "defensive_tape": defensive,
-        "vol_stress": vol_stress,
-        "mtf_momentum": mtf_momentum,
-        "short_term_break": short_term_break,
-        "trend_confirm": trend_confirm,
-    }
-
-    # Meta for gating / reporting
-    dd63 = dd_from_rolling_high(tgt, 63)
-    oversold_block = (rsi_d < RSI_OVERSOLD) | ((rsi_d < RSI_SOFT_OVERSOLD) & (rsi_d.diff(5) > 0))
-    early_stage = dd63 > EARLY_STAGE_DD63
-
-    meta = {
-        "rsi_d": rsi_d,
-        "dd63": dd63,
-        "oversold_block": oversold_block,
-        "early_stage": early_stage,
-        "ma50": ma50,
-        "ma200": ma200,
-    }
-
-    cond = {k: v.reindex(idx).fillna(False).astype(bool) for k, v in cond.items()}
-    meta = {k: v.reindex(idx) for k, v in meta.items()}
-
-    denom = sum(c.weight for c in COMPONENTS)
-    return cond, meta, max(denom, 1)
-
-
-def compute_score_and_meta(df: pd.DataFrame, target_ticker: str) -> Tuple[pd.Series, Dict[str, pd.Series]]:
-    cond, meta, denom = compute_components_and_meta(df, target_ticker)
-    score = pd.Series(0.0, index=df.index)
-    for c in COMPONENTS:
-        score = score.add(cond[c.key].astype(float) * c.weight, fill_value=0.0)
-    score = (score / denom) * 100.0
-    return score.clip(0, 100).fillna(0.0), meta
-
-
-def stance_from_score(x: float, t_short: int) -> Tuple[str, str]:
-    t_bias = max(40, t_short - 12)
-    if x >= t_short:
-        return "SHORT ALLOWED", "b_bad"
-    if x >= t_bias:
-        return "HEDGE BIAS", "b_mid"
-    return "STAND DOWN", "b_good"
-
-
-def pick_target_today(df: pd.DataFrame) -> str:
-    spx = df[SPX_TICKER].dropna()
-    ndx = df[NDX_TICKER].dropna()
-    idx = spx.index.intersection(ndx.index)
-    if len(idx) < 260:
-        return SPX_TICKER
-
-    rs = (ndx.reindex(idx) / spx.reindex(idx)).dropna()
-    rs_ma200 = rolling_ma(rs, 200)
-    rs_ma20 = rolling_ma(rs, 20)
-
-    if (last_valid(rs) < last_valid(rs_ma200)) and (
-        last_valid(rs_ma20) < last_valid(rolling_ma(rs_ma200, 20))
-    ):
-        return NDX_TICKER
-    return SPX_TICKER
-
-
-def signal_series(score: pd.Series, meta: Dict[str, pd.Series], t_short: int) -> pd.Series:
-    idx = score.index
-    s = (score >= t_short).reindex(idx).fillna(False)
-    return s.astype(bool)
-
-
-def signal_onset(score: pd.Series, meta: Dict[str, pd.Series], t_short: int) -> pd.Series:
-    idx = score.index
-    base = signal_series(score, meta, t_short)
-
-    early = meta.get("early_stage", pd.Series(True, index=idx)).reindex(idx).fillna(True).astype(bool)
-    oversold = meta.get("oversold_block", pd.Series(False, index=idx)).reindex(idx).fillna(False).astype(bool)
-
-    new_allowed = base & early & (~oversold)
-    on = new_allowed & (~new_allowed.shift(1).fillna(False))
-    return on.astype(bool)
-
-
-def forward_stats(score: pd.Series, px: pd.Series, meta: Dict[str, pd.Series], t_short: int) -> Dict[str, float]:
-    idx = score.index.intersection(px.index)
-    sc = score.reindex(idx)
-    pr = px.reindex(idx)
-
-    sig_on = signal_onset(sc, {k: v.reindex(idx) for k, v in meta.items()}, t_short)
-    fwd_min = forward_min_return(pr, HORIZON_DAYS).reindex(idx)
-
-    hit = fwd_min[sig_on].dropna()
-    miss = fwd_min[~sig_on].dropna()
-
-    def q(x: pd.Series, p: float) -> float:
-        return float(np.nanquantile(x.values, p)) if len(x) else float("nan")
-
+def state_css(label: str) -> str:
     return {
-        "signal_rate": float(sig_on.mean()),
-        "signals": float(sig_on.sum()),
-        "avg_worst_signal": float(hit.mean()) if len(hit) else float("nan"),
-        "med_worst_signal": q(hit, 0.50),
-        "avg_worst_nosig": float(miss.mean()) if len(miss) else float("nan"),
-        "med_worst_nosig": q(miss, 0.50),
-    }
+        "STAND DOWN": "hedge-stand",
+        "HEDGE WATCH": "hedge-watch",
+        "HEDGE CONFIRMED": "hedge-confirmed",
+        "SHORT ALLOWED": "hedge-short",
+    }.get(label, "hedge-stand")
 
 
-def lead_before_episode_onset(sig_on: pd.Series, start_ts: pd.Timestamp, lookback: int) -> int:
-    s = sig_on.dropna()
-    if len(s) == 0:
-        return -1
-
-    if start_ts not in s.index:
-        loc = s.index.get_indexer([start_ts], method="nearest")[0]
-        start_ts = s.index[loc]
-
-    loc = s.index.get_loc(start_ts)
-    lo = max(0, loc - lookback)
-    window = s.iloc[lo : loc + 1]
-
-    hits = window[window]
-    if hits.empty:
-        return -1
-
-    first = hits.index[0]
-    return int(loc - s.index.get_loc(first))
-
-
-def episode_coverage_obj(
-    px: pd.Series,
-    sig_on: pd.Series,
-    threshold: float,
-    start_after: str,
-    lookback: int,
-) -> Tuple[float, int]:
-    eps = find_drawdown_episodes(px, threshold=threshold, recovery=-0.02, start_after=start_after)
-    if not eps:
-        return 0.0, 0
-    covered = 0
-    for start_ts, _, _, _ in eps:
-        lead = lead_before_episode_onset(sig_on, start_ts, lookback)
-        if lead >= 0:
-            covered += 1
-    return covered / max(len(eps), 1), len(eps)
-
-
-def calibrate_threshold(
-    score_spx: pd.Series,
-    meta_spx: Dict[str, pd.Series],
-    px_spx: pd.Series,
-    score_ndx: pd.Series,
-    meta_ndx: Dict[str, pd.Series],
-    px_ndx: pd.Series,
-) -> int:
-    s0 = pd.to_datetime(CALIBRATION_START)
-
-    best_t, best_obj = 68, -1e18
-
-    for t in range(55, 86):
-        sc_a = score_spx.loc[score_spx.index >= s0].dropna()
-        pr_a = px_spx.loc[px_spx.index >= s0].dropna()
-        idx_a = sc_a.index.intersection(pr_a.index)
-        sc_a = sc_a.reindex(idx_a)
-        pr_a = pr_a.reindex(idx_a)
-        meta_a = {k: v.reindex(idx_a) for k, v in meta_spx.items()}
-
-        sc_b = score_ndx.loc[score_ndx.index >= s0].dropna()
-        pr_b = px_ndx.loc[px_ndx.index >= s0].dropna()
-        idx_b = sc_b.index.intersection(pr_b.index)
-        sc_b = sc_b.reindex(idx_b)
-        pr_b = pr_b.reindex(idx_b)
-        meta_b = {k: v.reindex(idx_b) for k, v in meta_ndx.items()}
-
-        if len(sc_a) < 800 or len(sc_b) < 800:
-            continue
-
-        sig_on_a = signal_onset(sc_a, meta_a, t)
-        sig_on_b = signal_onset(sc_b, meta_b, t)
-
-        cov_a, n_a = episode_coverage_obj(pr_a, sig_on_a, DD_MAJOR, CALIBRATION_START, LEAD_LOOKBACK)
-        cov_b, n_b = episode_coverage_obj(pr_b, sig_on_b, DD_MAJOR, CALIBRATION_START, LEAD_LOOKBACK)
-        cov = 0.5 * (cov_a + cov_b)
-
-        fwd_a = forward_min_return(pr_a, HORIZON_DAYS).reindex(idx_a)
-        fwd_b = forward_min_return(pr_b, HORIZON_DAYS).reindex(idx_b)
-        hit_a = fwd_a[sig_on_a].dropna()
-        hit_b = fwd_b[sig_on_b].dropna()
-        if hit_a.shape[0] < 12 or hit_b.shape[0] < 12:
-            continue
-
-        avg_worst = 0.5 * (float(hit_a.mean()) + float(hit_b.mean()))
-
-        rate = 0.5 * (float(sig_on_a.mean()) + float(sig_on_b.mean()))
-        dd63_a = meta_a.get("dd63", pd.Series(index=idx_a, dtype=float))
-        dd63_b = meta_b.get("dd63", pd.Series(index=idx_b, dtype=float))
-        late_a = float((dd63_a[sig_on_a] <= EARLY_STAGE_DD63).mean()) if sig_on_a.sum() else 0.0
-        late_b = float((dd63_b[sig_on_b] <= EARLY_STAGE_DD63).mean()) if sig_on_b.sum() else 0.0
-        late = 0.5 * (late_a + late_b)
-
-        obj = (
-            cov * 1000.0
-            + (-avg_worst * 100.0) * 3.0
-            - rate * 300.0
-            - late * 400.0
+def format_audit(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    for column in ("Start", "End", "Trough", "First warning"):
+        out[column] = out[column].map(
+            lambda value: value.strftime("%Y-%m-%d") if pd.notna(value) else "No warning"
         )
-
-        if rate < 0.02:
-            obj -= 120.0
-        if rate > 0.20:
-            obj -= 180.0
-
-        if (n_a + n_b) < 6:
-            obj -= 80.0
-
-        if obj > best_obj:
-            best_obj = obj
-            best_t = t
-
-    return int(best_t)
-
-
-# ============================== Static Chart Helpers ==============================
-def _display_name(ticker: str) -> str:
-    if ticker == SPX_TICKER:
-        return SPX_LABEL
-    if ticker == NDX_TICKER:
-        return NDX_LABEL
-    return ticker
-
-
-def _apply_subtle_grid(ax: plt.Axes, y_only: bool = False) -> None:
-    ax.set_axisbelow(True)
-    ax.grid(
-        True,
-        which="major",
-        axis="y" if y_only else "both",
-        linestyle="-",
-        linewidth=0.7,
-        alpha=0.16,
+    out["Depth"] = out["Depth"].map(lambda value: f"{value * 100:.1f}%")
+    out["Lead sessions"] = out["Lead sessions"].map(
+        lambda value: int(value) if pd.notna(value) else "No"
     )
-    for side in ["top", "right"]:
-        ax.spines[side].set_visible(False)
-    ax.spines["left"].set_alpha(0.30)
-    ax.spines["bottom"].set_alpha(0.30)
+    out["Captured"] = out["Captured"].map(lambda value: "Yes" if bool(value) else "No")
+    return out
 
 
-def _plot_score_gradient(ax: plt.Axes, x: np.ndarray, y: np.ndarray, lw: float = 2.2) -> None:
-    # Risk score grade: constructive sage -> caution amber -> adverse rose.
-    cmap = LinearSegmentedColormap.from_list(
-        "pastel_risk", [PASTEL["sage"], PASTEL["amber"], PASTEL["rose"]]
-    )
-    norm = Normalize(vmin=0, vmax=100)
-
-    pts = np.array([x, y]).T.reshape(-1, 1, 2)
-    segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
-
-    lc = LineCollection(segs, cmap=cmap, norm=norm)
-    lc.set_array(y[:-1])
-    lc.set_linewidth(lw)
-    lc.set_alpha(0.95)
-    ax.add_collection(lc)
-
-    # Safety line on top for crispness
-    ax.plot(x, y, linewidth=max(0.55, lw * 0.30), color=(0, 0, 0, 0.10))
-
-
-def tick_rule_for_years(years: int) -> str:
-    if years <= 1:
-        return "MS"
-    if years == 2:
-        return "QS"
-    if years == 3:
-        return "4MS"
-    if years == 5:
-        return "2QS"
-    return "YS"
-
-
-def tick_label_for_years(d: pd.Timestamp, years: int) -> str:
-    if years <= 1:
-        return d.strftime("%b %Y")
-    if years <= 3:
-        return d.strftime("%b %Y")
-    return d.strftime("%Y")
-
-
-def chart_style_for_years(years: int) -> Dict[str, float]:
-    if years <= 1:
-        return {
-            "fig_w": 13.6,
-            "fig_h": 7.4,
-            "price_lw": 2.3,
-            "ma_lw": 1.7,
-            "score_lw": 2.2,
-            "marker_s": 72,
-            "marker_lw": 0.8,
-            "title_fs": 14,
-            "legend_fs": 9,
-            "label_fs": 10,
-            "xtick_fs": 9,
-        }
-    if years <= 2:
-        return {
-            "fig_w": 13.8,
-            "fig_h": 7.5,
-            "price_lw": 2.1,
-            "ma_lw": 1.55,
-            "score_lw": 2.0,
-            "marker_s": 58,
-            "marker_lw": 0.75,
-            "title_fs": 14,
-            "legend_fs": 9,
-            "label_fs": 10,
-            "xtick_fs": 9,
-        }
-    if years <= 3:
-        return {
-            "fig_w": 14.0,
-            "fig_h": 7.6,
-            "price_lw": 1.9,
-            "ma_lw": 1.45,
-            "score_lw": 1.9,
-            "marker_s": 50,
-            "marker_lw": 0.70,
-            "title_fs": 14,
-            "legend_fs": 9,
-            "label_fs": 10,
-            "xtick_fs": 8,
-        }
-    if years <= 5:
-        return {
-            "fig_w": 14.2,
-            "fig_h": 7.8,
-            "price_lw": 1.75,
-            "ma_lw": 1.30,
-            "score_lw": 1.75,
-            "marker_s": 38,
-            "marker_lw": 0.65,
-            "title_fs": 14,
-            "legend_fs": 8.5,
-            "label_fs": 10,
-            "xtick_fs": 8,
-        }
-    return {
-        "fig_w": 14.4,
-        "fig_h": 8.0,
-        "price_lw": 1.55,
-        "ma_lw": 1.15,
-        "score_lw": 1.55,
-        "marker_s": 30,
-        "marker_lw": 0.60,
-        "title_fs": 14,
-        "legend_fs": 8.5,
-        "label_fs": 10,
-        "xtick_fs": 8,
-    }
-
-
-# ============================== Static Chart (no calendar gaps) ==============================
-def plot_price_and_score_image(
+def plot_index(
     price: pd.Series,
-    score: pd.Series,
-    meta: Dict[str, pd.Series],
-    t_short: int,
-    title_prefix: str,
-    years: int = 1,
+    watch_score: pd.Series,
+    confirm_score: pd.Series,
+    meta: dict[str, pd.Series],
+    watch_threshold: float,
+    label: str,
+    years: int,
 ) -> plt.Figure:
-    dfp = pd.DataFrame({"price": price, "score": score}).copy()
-    dfp = dfp.dropna(subset=["price"])
-    if dfp.empty:
-        fig = plt.figure(figsize=(13, 6))
-        plt.text(0.5, 0.5, "Insufficient data", ha="center", va="center")
-        return fig
+    frame = pd.DataFrame(
+        {
+            "Price": price,
+            "Watch": watch_score,
+            "Confirm": confirm_score,
+        }
+    ).dropna(subset=["Price"])
+    if len(frame) > _sessions_for_years(years):
+        frame = frame.iloc[-_sessions_for_years(years) :].copy()
 
-    display_sessions = sessions_for_years(years)
-    if len(dfp) > display_sessions:
-        dfp = dfp.iloc[-display_sessions:].copy()
+    fig = plt.figure(figsize=(13.5, 7.4))
+    grid = fig.add_gridspec(2, 1, height_ratios=[3.0, 1.35], hspace=0.09)
+    ax_price = fig.add_subplot(grid[0])
+    ax_score = fig.add_subplot(grid[1], sharex=ax_price)
 
-    style = chart_style_for_years(years)
+    x = np.arange(len(frame))
+    idx = frame.index
+    ma50 = meta["ma50"].reindex(idx)
+    ma200 = meta["ma200"].reindex(idx)
 
-    x = np.arange(len(dfp))
-    idx = dfp.index
+    ax_price.plot(x, frame["Price"].values, linewidth=2.0, color="#111111", label="Price")
+    ax_price.plot(x, ma50.values, linewidth=1.3, color=PASTEL["blue"], label="MA50")
+    ax_price.plot(x, ma200.values, linewidth=1.25, color=PASTEL["lavender"], label="MA200")
 
-    ma50 = meta.get("ma50", rolling_ma(price, 50)).reindex(idx)
-    ma200 = meta.get("ma200", rolling_ma(price, 200)).reindex(idx)
+    warning_onsets = onset(watch_signal(watch_score.reindex(idx), watch_threshold))
+    confirmation = confirm_score.reindex(idx) >= CONFIRM_THRESHOLD
+    short_onsets = fresh_short_onset(
+        watch_score.reindex(idx),
+        {key: value.reindex(idx) for key, value in meta.items()},
+        watch_threshold,
+        confirmation=confirmation,
+    )
 
-    t_bias = max(40, t_short - 12)
-
-    fig = plt.figure(figsize=(style["fig_w"], style["fig_h"]))
-    gs = fig.add_gridspec(2, 1, height_ratios=[3.0, 1.25], hspace=0.10)
-    ax1 = fig.add_subplot(gs[0])
-    ax2 = fig.add_subplot(gs[1], sharex=ax1)
-
-    # Price stays black while moving averages use the shared pastel hierarchy.
-    price_c = "#111111"
-    ma50_c = PASTEL["blue"]
-    ma200_c = PASTEL["lavender"]
-
-    ax1.plot(x, dfp["price"].values, linewidth=style["price_lw"], color=price_c, label="Price")
-    ax1.plot(x, ma50.values, linewidth=style["ma_lw"], color=ma50_c, label="MA50")
-    ax1.plot(x, ma200.values, linewidth=style["ma_lw"], color=ma200_c, label="MA200")
-
-    pmin = float(np.nanmin(dfp["price"].values))
-    pmax = float(np.nanmax(dfp["price"].values))
-    pad = (pmax - pmin) * 0.04 if pmax > pmin else 1.0
-    ax1.set_ylim(pmin - pad, pmax + pad)
-    ax1.set_xlim(-0.5, len(dfp) - 0.5)
-
-    # NEW short signal onsets
-    sig_on = signal_onset(score.reindex(idx), {k: v.reindex(idx) for k, v in meta.items()}, t_short)
-    if sig_on.any():
-        ax1.scatter(
-            x[sig_on.values],
-            dfp["price"].values[sig_on.values],
-            marker="v",
-            s=style["marker_s"],
-            color=PASTEL["rose"],
-            edgecolors="white",
-            linewidths=style["marker_lw"],
-            label="Short signal (new)",
+    if warning_onsets.any():
+        ax_price.scatter(
+            x[warning_onsets.values],
+            frame["Price"].values[warning_onsets.values],
+            marker="o",
+            s=38,
+            color=PASTEL["amber"],
+            edgecolors="#111111",
+            linewidths=.45,
+            label="Hedge Watch onset",
             zorder=6,
-            alpha=0.95 if years <= 3 else 0.90,
+        )
+    if short_onsets.any():
+        ax_price.scatter(
+            x[short_onsets.values],
+            frame["Price"].values[short_onsets.values],
+            marker="v",
+            s=58,
+            color=PASTEL["rose"],
+            edgecolors="#111111",
+            linewidths=.45,
+            label="Short allowed onset",
+            zorder=7,
         )
 
-    _apply_subtle_grid(ax1, y_only=False)
-    ax1.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
-    ax1.tick_params(axis="y", labelsize=style["label_fs"])
+    ax_price.grid(True, linewidth=.6, alpha=.14)
+    ax_price.spines[["top", "right"]].set_visible(False)
+    ax_price.tick_params(axis="x", bottom=False, labelbottom=False)
+    ax_price.legend(loc="upper left", frameon=False, ncol=5, fontsize=8.5)
 
-    # Score panel with red->yellow->green grading, omit from legend
-    y_score = dfp["score"].fillna(0.0).values.astype(float)
-    _plot_score_gradient(ax2, x.astype(float), y_score, lw=style["score_lw"])
+    ax_score.plot(x, frame["Watch"].values, linewidth=1.8, color=PASTEL["amber"], label="Hedge Watch")
+    ax_score.plot(x, frame["Confirm"].values, linewidth=1.5, color=PASTEL["rose"], label="Confirmation")
+    ax_score.axhline(watch_threshold, linewidth=1.0, color="#111111", alpha=.72, label="Watch threshold")
+    ax_score.axhline(CONFIRM_THRESHOLD, linewidth=.9, color="#777777", alpha=.55, linestyle="--")
+    ax_score.set_ylim(0, 100)
+    ax_score.set_ylabel("Score")
+    ax_score.grid(True, axis="y", linewidth=.6, alpha=.14)
+    ax_score.spines[["top", "right"]].set_visible(False)
+    ax_score.legend(loc="upper left", frameon=False, ncol=3, fontsize=8.5)
 
-    t_short_c = "#111111"
-    t_bias_c = PASTEL["amber"]
-    ax2.axhline(t_short, linewidth=1.1, color=t_short_c, alpha=0.70)
-    ax2.axhline(t_bias, linewidth=1.0, color=t_bias_c, alpha=0.55)
-    ax2.set_ylim(0, 100)
-    ax2.set_ylabel("Score (0-100)", fontsize=style["label_fs"])
-    ax2.tick_params(axis="y", labelsize=style["label_fs"])
-    _apply_subtle_grid(ax2, y_only=True)
-    ax2.set_xlim(-0.5, len(dfp) - 0.5)
+    tick_count = 8 if years <= 2 else 10
+    tick_positions = np.linspace(0, max(len(frame) - 1, 0), min(tick_count, len(frame)), dtype=int)
+    tick_positions = np.unique(tick_positions)
+    tick_labels = [
+        idx[position].strftime("%b %Y") if years <= 3 else idx[position].strftime("%Y-%m")
+        for position in tick_positions
+    ]
+    ax_score.set_xticks(tick_positions)
+    ax_score.set_xticklabels(tick_labels, fontsize=8)
 
-    # Adaptive date ticks
-    tick_freq = tick_rule_for_years(years)
-    ticks = pd.date_range(idx.min().normalize(), idx.max().normalize(), freq=tick_freq)
-    tick_pos, tick_lbl = [], []
-    min_spacing = {
-        1: 18,
-        2: 26,
-        3: 32,
-        5: 45,
-        10: 70,
-    }.get(years, 32)
-
-    for d in ticks:
-        loc = idx.get_indexer([d], method="nearest")[0]
-        if 0 <= loc < len(idx):
-            if not tick_pos or loc - tick_pos[-1] >= min_spacing:
-                tick_pos.append(int(loc))
-                tick_lbl.append(tick_label_for_years(d, years))
-
-    # Always ensure final point is represented
-    if len(idx) > 0:
-        last_loc = len(idx) - 1
-        if not tick_pos or last_loc - tick_pos[-1] >= max(10, min_spacing // 2):
-            tick_pos.append(last_loc)
-            tick_lbl.append(idx[-1].strftime("%b %Y") if years <= 3 else idx[-1].strftime("%Y"))
-
-    ax2.set_xticks(tick_pos)
-    ax2.set_xticklabels(tick_lbl, rotation=0, ha="center", fontsize=style["xtick_fs"])
-
-    yr_label = f"{years} Year" if years == 1 else f"{years} Years"
-    fig.suptitle(f"{title_prefix} ({yr_label})", fontsize=style["title_fs"], fontweight="bold", y=0.985)
-
-    # Legend: drop Score entirely
-    handles1, labels1 = ax1.get_legend_handles_labels()
-    fig.legend(
-        handles1,
-        labels1,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.952),
-        ncol=4,
-        frameon=False,
-        fontsize=style["legend_fs"],
-    )
-
-    fig.tight_layout(rect=[0.02, 0.02, 0.98, 0.90])
+    period = f"{years} Year" if years == 1 else f"{years} Years"
+    fig.suptitle(f"{label} Hedge Timer | {period}", fontsize=14, fontweight="bold", y=.99)
+    fig.tight_layout(rect=[.01, .01, .99, .96])
     return fig
 
 
-def plot_episode_table_image(table_df: pd.DataFrame, title: str) -> plt.Figure:
-    dfp = table_df.copy()
-    if dfp.empty:
-        fig = plt.figure(figsize=(13, 2.2))
-        plt.text(0.5, 0.5, "No episodes found", ha="center", va="center")
-        return fig
-
-    fig, ax = plt.subplots(figsize=(13.6, 5.2))
-    ax.axis("off")
-
-    fig.suptitle(title, fontsize=13, fontweight="bold", y=0.975)
-
-    cell_text = dfp.values.tolist()
-    col_labels = dfp.columns.tolist()
-
-    tbl = ax.table(
-        cellText=cell_text,
-        colLabels=col_labels,
-        cellLoc="center",
-        colLoc="center",
-        loc="upper center",
-        bbox=[0.0, 0.02, 1.0, 0.90],
-    )
-
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(9)
-    tbl.scale(1.0, 1.18)
-
-    for (row, col), cell in tbl.get_celld().items():
-        cell.set_edgecolor((0, 0, 0, 0.08))
-        cell.set_linewidth(0.6)
-        if row == 0:
-            cell.set_text_props(weight="bold")
-            cell.set_facecolor((0.96, 0.96, 0.96, 1.0))
-
-    fig.tight_layout(rect=[0.01, 0.01, 0.99, 0.965])
-    return fig
-
-
-# ============================== App ==============================
 render_page_header(
     PageHeader(
         title="Hedge Timer",
         description=(
-            "Decision slip for shorting ^SPX or ^NDX based on early-warning stress, "
-            "multi-timeframe momentum, and trend confirmation, with explicit "
-            "early-stage gating to avoid bottom-shorting."
+            "High-recall drawdown warning system for the S&P 500 and Nasdaq-100. "
+            "Hedge Watch is calibrated first for capture of 10%+ drawdowns since 2020; "
+            "confirmation and anti-bottom-short gates determine whether a fresh directional short is allowed."
         ),
-        eyebrow="ADFM Risk + Catalysts",
+        eyebrow="ADFM Risk + Execution",
     )
 )
 
-start = _start_date()
-raw = yf_download(TICKERS, start)
-df0 = extract_close(raw, TICKERS)
-
+raw = yf_download(list(TICKERS), _start_date())
+df0 = extract_close(raw, list(TICKERS))
 if df0.empty or SPX_TICKER not in df0.columns or NDX_TICKER not in df0.columns:
-    st.error("Yahoo feed failed for ^SPX/^NDX. Retry later.")
+    st.error("Yahoo Finance did not return usable S&P 500 and Nasdaq-100 data.")
     st.stop()
 
 base_idx = df0[SPX_TICKER].dropna().index.intersection(df0[NDX_TICKER].dropna().index)
 df = df0.reindex(base_idx).ffill()
 
-score_spx, meta_spx = compute_score_and_meta(df, SPX_TICKER)
-score_ndx, meta_ndx = compute_score_and_meta(df, NDX_TICKER)
+watch_spx, confirm_spx, meta_spx, conditions_spx = compute_scores(df, SPX_TICKER)
+watch_ndx, confirm_ndx, meta_ndx, conditions_ndx = compute_scores(df, NDX_TICKER)
 
-t_short = calibrate_threshold(score_spx, meta_spx, df[SPX_TICKER], score_ndx, meta_ndx, df[NDX_TICKER])
-t_bias = max(40, t_short - 12)
-
-target = pick_target_today(df)
-target_label = _display_name(target)
-
-spx_last = last_valid(df[SPX_TICKER])
-ndx_last = last_valid(df[NDX_TICKER])
-vix_last = last_valid(df["^VIX"]) if "^VIX" in df.columns else float("nan")
-
-dd_spx = last_valid(drawdown(df[SPX_TICKER]))
-dd_ndx = last_valid(drawdown(df[NDX_TICKER]))
-
-score_today_spx = float(last_valid(score_spx))
-score_today_ndx = float(last_valid(score_ndx))
-
-stance_spx, badge_spx = stance_from_score(score_today_spx, t_short)
-stance_ndx, badge_ndx = stance_from_score(score_today_ndx, t_short)
-
-stance_target = stance_ndx if target == NDX_TICKER else stance_spx
-badge_target = badge_ndx if target == NDX_TICKER else badge_spx
-score_target = score_today_ndx if target == NDX_TICKER else score_today_spx
-
-stats_spx = forward_stats(
-    score_spx[score_spx.index >= CALIBRATION_START],
-    df[SPX_TICKER][df.index >= CALIBRATION_START],
-    {k: v[v.index >= CALIBRATION_START] for k, v in meta_spx.items()},
-    t_short,
+calibration = calibrate_watch_threshold(
+    watch_spx,
+    df[SPX_TICKER],
+    watch_ndx,
+    df[NDX_TICKER],
 )
-stats_ndx = forward_stats(
-    score_ndx[score_ndx.index >= CALIBRATION_START],
-    df[NDX_TICKER][df.index >= CALIBRATION_START],
-    {k: v[v.index >= CALIBRATION_START] for k, v in meta_ndx.items()},
-    t_short,
-)
+watch_threshold = float(calibration["threshold"])
+
+warning_on_spx = onset(watch_signal(watch_spx, watch_threshold))
+warning_on_ndx = onset(watch_signal(watch_ndx, watch_threshold))
+summary_spx = warning_summary(df[SPX_TICKER], warning_on_spx)
+summary_ndx = warning_summary(df[NDX_TICKER], warning_on_ndx)
+
+audit_spx = episode_audit(SPX_LABEL, df[SPX_TICKER], warning_on_spx)
+audit_ndx = episode_audit(NDX_LABEL, df[NDX_TICKER], warning_on_ndx)
+audit = pd.concat([audit_spx, audit_ndx], ignore_index=True)
+
+captured_total = int(summary_spx["captured"] + summary_ndx["captured"])
+episode_total = int(summary_spx["episodes"] + summary_ndx["episodes"])
+false_warnings_total = int(summary_spx["false_warnings"] + summary_ndx["false_warnings"])
+lead_values = audit.loc[audit["Captured"], "Lead sessions"].dropna() if not audit.empty else pd.Series(dtype=float)
+median_lead = float(lead_values.median()) if len(lead_values) else float("nan")
+full_recall = calibration["spx_coverage"] >= 1.0 and calibration["ndx_coverage"] >= 1.0
 
 sanity_box.markdown(
-    f"""
-Forward risk stats (next {HORIZON_DAYS} sessions). Signals are NEW-signal onsets only (early-stage gated, oversold blocked).
-
-**{SPX_LABEL}** | signal rate: {stats_spx["signal_rate"]*100:.1f}% | signals: {int(stats_spx["signals"])}  
-Avg worst next {HORIZON_DAYS}d after signal: {stats_spx["avg_worst_signal"]*100:.2f}% | when no signal: {stats_spx["avg_worst_nosig"]*100:.2f}%  
-Median worst next {HORIZON_DAYS}d after signal: {stats_spx["med_worst_signal"]*100:.2f}% | when no signal: {stats_spx["med_worst_nosig"]*100:.2f}%  
-
-**{NDX_LABEL}** | signal rate: {stats_ndx["signal_rate"]*100:.1f}% | signals: {int(stats_ndx["signals"])}  
-Avg worst next {HORIZON_DAYS}d after signal: {stats_ndx["avg_worst_signal"]*100:.2f}% | when no signal: {stats_ndx["avg_worst_nosig"]*100:.2f}%  
-Median worst next {HORIZON_DAYS}d after signal: {stats_ndx["med_worst_signal"]*100:.2f}% | when no signal: {stats_ndx["med_worst_nosig"]*100:.2f}%
-""".strip()
-)
-
-meta_target = meta_ndx if target == NDX_TICKER else meta_spx
-dd63_today = float(last_valid(meta_target["dd63"]))
-rsi_today = float(last_valid(meta_target["rsi_d"]))
-early_today = bool(last_valid(meta_target["early_stage"].astype(float)) > 0.5) if "early_stage" in meta_target else True
-oversold_today = bool(last_valid(meta_target["oversold_block"].astype(float)) > 0.5) if "oversold_block" in meta_target else False
-
-st.markdown(
-    f"""
-<div class="card">
-  <div class="row">
-    <div>
-      <span class="badge {badge_target}">{stance_target}</span>
-      <span class="small" style="margin-left:10px;">Decision target: <b>{target_label}</b></span>
-    </div>
-    <div class="small">Score: <b>{int(round(score_target))}/100</b> | Short threshold: <b>{t_short}</b> | Hedge bias: <b>{t_bias}</b></div>
-  </div>
-
-  <div class="kv">
-    <div>{SPX_LABEL}: <b>{fmt_num(spx_last,2)}</b> | DD: <b>{fmt_pct(dd_spx)}</b> | Stance: <b>{stance_spx}</b></div>
-    <div>{NDX_LABEL}: <b>{fmt_num(ndx_last,2)}</b> | DD: <b>{fmt_pct(dd_ndx)}</b> | Stance: <b>{stance_ndx}</b></div>
-    <div>VIX: <b>{fmt_num(vix_last,2)}</b></div>
-    <div>Target RSI14 (D): <b>{fmt_num(rsi_today,1)}</b> | DD from 63d high: <b>{fmt_pct(dd63_today)}</b> | Early-stage: <b>{'Yes' if early_today else 'No'}</b> | Oversold block: <b>{'Yes' if oversold_today else 'No'}</b></div>
-  </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-st.markdown("<hr/>", unsafe_allow_html=True)
-
-score_target_series = score_ndx if target == NDX_TICKER else score_spx
-meta_target_series = meta_ndx if target == NDX_TICKER else meta_spx
-
-fig = plot_price_and_score_image(
-    price=df[target],
-    score=score_target_series,
-    meta=meta_target_series,
-    t_short=t_short,
-    title_prefix=f"{target_label}",
-    years=chart_years,
-)
-st.pyplot(fig, use_container_width=True)
-
-st.markdown("<hr/>", unsafe_allow_html=True)
-st.subheader("Did it warn before major selloffs?")
-st.write(
-    f"We look at 10%+ drawdowns and ask if a NEW short signal fired within the prior {LEAD_LOOKBACK} sessions. New signals are gated (early-stage) and oversold-blocked."
+    (
+        f"**Drawdowns captured:** {captured_total}/{episode_total}  \n"
+        f"**Median lead:** {fmt_num(median_lead, 0)} sessions  \n"
+        f"**False warnings:** {false_warnings_total}  \n"
+        f"**Calibrated watch threshold:** {watch_threshold:.0f}/100  \n"
+        f"**Full-recall constraint:** {'Met' if full_recall else 'Best available'}  \n\n"
+        f"{SPX_LABEL}: {int(summary_spx['captured'])}/{int(summary_spx['episodes'])} captured  \n"
+        f"{NDX_LABEL}: {int(summary_ndx['captured'])}/{int(summary_ndx['episodes'])} captured"
+    )
 )
 
 
-def summarize_eps(name_label: str, px: pd.Series, score: pd.Series, meta: Dict[str, pd.Series]) -> pd.DataFrame:
-    eps = find_drawdown_episodes(px, threshold=DD_MAJOR, recovery=-0.02, start_after=CALIBRATION_START)
-    sig_on = signal_onset(score, meta, t_short)
+def render_index_state(
+    label: str,
+    ticker: str,
+    watch: pd.Series,
+    confirm: pd.Series,
+    meta: dict[str, pd.Series],
+) -> None:
+    watch_now = last_valid(watch)
+    confirm_now = last_valid(confirm)
+    early_now = last_bool(meta["early_stage"], True)
+    oversold_now = last_bool(meta["oversold_block"], False)
+    state = state_label(watch_now, confirm_now, watch_threshold, early_now, oversold_now)
+    css = state_css(state)
+    price_now = last_valid(df[ticker])
+    current_dd = last_valid(drawdown(df[ticker]))
+    rsi_now = last_valid(meta["rsi_d"])
+    dd63_now = last_valid(meta["dd63"])
+    sector_weak = last_valid(meta["sector_breadth_share"])
+    rv_ratio = last_valid(meta["realized_vol_ratio"])
+
+    st.markdown(
+        f"""
+        <div class="hedge-index-title">{label}</div>
+        <span class="hedge-state {css}">{state}</span>
+        <div class="hedge-line">
+            Price <b>{fmt_num(price_now, 2)}</b> &nbsp;·&nbsp; Current drawdown <b>{fmt_pct(current_dd)}</b><br>
+            Hedge Watch <b>{fmt_num(watch_now, 0)}/100</b> &nbsp;·&nbsp;
+            Confirmation <b>{fmt_num(confirm_now, 0)}/100</b><br>
+            RSI14 <b>{fmt_num(rsi_now, 1)}</b> &nbsp;·&nbsp;
+            63-session drawdown <b>{fmt_pct(dd63_now)}</b><br>
+            Sectors below MA50 <b>{fmt_pct(sector_weak, 0)}</b> &nbsp;·&nbsp;
+            RV10 / RV63 <b>{fmt_num(rv_ratio, 2)}x</b><br>
+            Fresh-short gate: <b>{'Open' if early_now and not oversold_now else 'Blocked'}</b>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+col_spx, col_ndx = st.columns(2)
+with col_spx:
+    render_index_state(SPX_LABEL, SPX_TICKER, watch_spx, confirm_spx, meta_spx)
+with col_ndx:
+    render_index_state(NDX_LABEL, NDX_TICKER, watch_ndx, confirm_ndx, meta_ndx)
+
+st.caption(
+    f"Hedge Watch threshold {watch_threshold:.0f}/100 is calibrated across both indices from "
+    f"{CALIBRATION_START}. Confirmation threshold is {CONFIRM_THRESHOLD:.0f}/100. "
+    "An oversold or late-stage tape can block a fresh short while Hedge Watch remains active."
+)
+
+st.divider()
+selected_ticker = SPX_TICKER if chart_index == SPX_LABEL else NDX_TICKER
+selected_watch = watch_spx if selected_ticker == SPX_TICKER else watch_ndx
+selected_confirm = confirm_spx if selected_ticker == SPX_TICKER else confirm_ndx
+selected_meta = meta_spx if selected_ticker == SPX_TICKER else meta_ndx
+
+figure = plot_index(
+    df[selected_ticker],
+    selected_watch,
+    selected_confirm,
+    selected_meta,
+    watch_threshold,
+    chart_index,
+    chart_years,
+)
+st.pyplot(figure, use_container_width=True)
+plt.close(figure)
+
+st.divider()
+st.subheader("10%+ drawdown audit since 2020")
+st.caption(
+    f"Captured means a new Hedge Watch onset occurred within the prior {LEAD_LOOKBACK} trading sessions. "
+    "The audit uses the warning layer before RSI and late-drawdown short-entry gates."
+)
+if audit.empty:
+    st.info("No qualifying drawdown episodes are available in the current history.")
+else:
+    st.dataframe(format_audit(audit), use_container_width=True, hide_index=True)
+
+with st.expander("Current signal drivers"):
     rows = []
-    for start_ts, end_ts, trough_ts, depth in eps[:12]:
-        lead = lead_before_episode_onset(sig_on, start_ts, LEAD_LOOKBACK)
+    component_map = {item.key: item.label for item in (*WATCH_COMPONENTS, *CONFIRM_COMPONENTS)}
+    for key, label in component_map.items():
         rows.append(
             {
-                "Index": name_label,
-                "Start": start_ts.date().isoformat(),
-                "End": end_ts.date().isoformat(),
-                "Trough": trough_ts.date().isoformat(),
-                "Depth": f"{depth*100:.2f}%",
-                "Lead (sessions)": lead if lead >= 0 else "No",
+                "Signal": label,
+                SPX_LABEL: "Active" if last_bool(conditions_spx[key]) else "Inactive",
+                NDX_LABEL: "Active" if last_bool(conditions_ndx[key]) else "Inactive",
+                "Layer": "Watch" if key in {item.key for item in WATCH_COMPONENTS} else "Confirm",
             }
         )
-    return pd.DataFrame(rows)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-
-tbl = pd.concat(
-    [
-        summarize_eps(SPX_LABEL, df[SPX_TICKER], score_spx, meta_spx),
-        summarize_eps(NDX_LABEL, df[NDX_TICKER], score_ndx, meta_ndx),
-    ],
-    ignore_index=True,
+stats_spx = forward_stats(watch_spx[watch_spx.index >= CALIBRATION_START], df[SPX_TICKER], watch_threshold)
+stats_ndx = forward_stats(watch_ndx[watch_ndx.index >= CALIBRATION_START], df[NDX_TICKER], watch_threshold)
+st.caption(
+    f"Forward check, next {HORIZON_DAYS} sessions: average worst return after a Hedge Watch onset was "
+    f"{fmt_pct(stats_spx['avg_worst_warning'])} for {SPX_LABEL} and "
+    f"{fmt_pct(stats_ndx['avg_worst_warning'])} for {NDX_LABEL}."
 )
-
-fig_tbl = plot_episode_table_image(
-    tbl,
-    title="Largest drawdowns (10%+) and whether a NEW short signal fired beforehand",
-)
-st.pyplot(fig_tbl, use_container_width=True)
 
 render_footer()
