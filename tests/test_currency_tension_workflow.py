@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from cte.config import OECD_CPI_CCYS
+from cte.adapters.oecd import CPI_CCYS
 
 
 class CurrencyTensionWorkflowTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class CurrencyTensionWorkflowTests(unittest.TestCase):
         self.assertNotIn("ESTAT_APP_ID", workflow)
 
     def test_japan_cpi_uses_the_secretless_oecd_headline_series(self) -> None:
-        self.assertIn("JPY", OECD_CPI_CCYS)
+        self.assertIn("JPY", CPI_CCYS)
 
 
 if __name__ == "__main__":
