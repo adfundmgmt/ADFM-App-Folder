@@ -15,6 +15,7 @@ NDX_LABEL = "^NDX"
 
 CALIBRATION_START = "2020-01-01"
 DD_MAJOR = -0.10
+EPISODE_PEAK_WINDOW = 63
 LEAD_LOOKBACK = 40
 EARLY_STAGE_DD63 = -0.12
 RSI_OVERSOLD = 30.0
@@ -337,13 +338,13 @@ def find_drawdown_episodes(
     recovery: float = -0.02,
     start_after: str = CALIBRATION_START,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]]:
-    """Find distinct threshold-crossing drawdown episodes from a running peak."""
+    """Find distinct threshold-crossing episodes from rolling local peaks."""
 
     s = px.dropna().loc[lambda x: x.index >= pd.Timestamp(start_after)]
     if len(s) < 20:
         return []
 
-    dd = drawdown(s)
+    dd = drawdown_from_rolling_high(s, EPISODE_PEAK_WINDOW)
     episodes: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]] = []
     start: pd.Timestamp | None = None
 
