@@ -238,14 +238,27 @@ def plot_index(
     ax_price.plot(x, frame["Price"].values, linewidth=2.0, color="#111111", label="Price")
     ax_price.plot(x, ma50.values, linewidth=1.3, color=PASTEL["blue"], label="MA50")
     ax_price.plot(x, ma200.values, linewidth=1.25, color=PASTEL["lavender"], label="MA200")
-    ax_price.grid(True, linewidth=.6, alpha=.14)
-    ax_price.spines[["top", "right"]].set_visible(False)
-    ax_price.tick_params(axis="x", bottom=False, labelbottom=False)
-    ax_price.legend(loc="upper left", frameon=False, ncol=3, fontsize=8.5)
 
     watch_active = watch_signal(watch_score.reindex(idx), watch_threshold)
     confirmation = confirm_score.reindex(idx) >= CONFIRM_THRESHOLD
     confirmed_onsets = onset((watch_active & confirmation).fillna(False))
+    if confirmed_onsets.any():
+        ax_price.scatter(
+            x[confirmed_onsets.values],
+            frame["Price"].values[confirmed_onsets.values],
+            marker="o",
+            s=42,
+            color=PASTEL["rose"],
+            edgecolors="#111111",
+            linewidths=.45,
+            label="Confirmed",
+            zorder=6,
+        )
+
+    ax_price.grid(True, linewidth=.6, alpha=.14)
+    ax_price.spines[["top", "right"]].set_visible(False)
+    ax_price.tick_params(axis="x", bottom=False, labelbottom=False)
+    ax_price.legend(loc="upper left", frameon=False, ncol=4, fontsize=8.5)
 
     ax_score.plot(
         x,
@@ -261,24 +274,11 @@ def plot_index(
         alpha=.72,
         label="Threshold",
     )
-    if confirmed_onsets.any():
-        ax_score.scatter(
-            x[confirmed_onsets.values],
-            frame["Watch"].values[confirmed_onsets.values],
-            marker="o",
-            s=42,
-            color=PASTEL["rose"],
-            edgecolors="#111111",
-            linewidths=.45,
-            label="Confirmed",
-            zorder=6,
-        )
-
     ax_score.set_ylim(0, 100)
     ax_score.set_ylabel("Score")
     ax_score.grid(True, axis="y", linewidth=.6, alpha=.14)
     ax_score.spines[["top", "right"]].set_visible(False)
-    ax_score.legend(loc="upper left", frameon=False, ncol=3, fontsize=8.5)
+    ax_score.legend(loc="upper left", frameon=False, ncol=2, fontsize=8.5)
 
     tick_count = 8 if years <= 2 else 10
     tick_positions = np.linspace(0, max(len(frame) - 1, 0), min(tick_count, len(frame)), dtype=int)
