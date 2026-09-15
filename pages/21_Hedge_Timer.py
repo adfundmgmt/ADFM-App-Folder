@@ -28,7 +28,6 @@ from adfm_core.hedge_timer_model import (
     compute_scores,
     drawdown,
     episode_audit,
-    fresh_short_onset,
     forward_stats,
     onset,
     state_label,
@@ -239,50 +238,42 @@ def plot_index(
     ax_price.plot(x, frame["Price"].values, linewidth=2.0, color="#111111", label="Price")
     ax_price.plot(x, ma50.values, linewidth=1.3, color=PASTEL["blue"], label="MA50")
     ax_price.plot(x, ma200.values, linewidth=1.25, color=PASTEL["lavender"], label="MA200")
-
-    warning_onsets = onset(watch_signal(watch_score.reindex(idx), watch_threshold))
-    confirmation = confirm_score.reindex(idx) >= CONFIRM_THRESHOLD
-    short_onsets = fresh_short_onset(
-        watch_score.reindex(idx),
-        {key: value.reindex(idx) for key, value in meta.items()},
-        watch_threshold,
-        confirmation=confirmation,
-    )
-
-    if warning_onsets.any():
-        ax_price.scatter(
-            x[warning_onsets.values],
-            frame["Price"].values[warning_onsets.values],
-            marker="o",
-            s=38,
-            color=PASTEL["amber"],
-            edgecolors="#111111",
-            linewidths=.45,
-            label="Hedge Watch onset",
-            zorder=6,
-        )
-    if short_onsets.any():
-        ax_price.scatter(
-            x[short_onsets.values],
-            frame["Price"].values[short_onsets.values],
-            marker="v",
-            s=58,
-            color=PASTEL["rose"],
-            edgecolors="#111111",
-            linewidths=.45,
-            label="Short allowed onset",
-            zorder=7,
-        )
-
     ax_price.grid(True, linewidth=.6, alpha=.14)
     ax_price.spines[["top", "right"]].set_visible(False)
     ax_price.tick_params(axis="x", bottom=False, labelbottom=False)
-    ax_price.legend(loc="upper left", frameon=False, ncol=5, fontsize=8.5)
+    ax_price.legend(loc="upper left", frameon=False, ncol=3, fontsize=8.5)
 
-    ax_score.plot(x, frame["Watch"].values, linewidth=1.8, color=PASTEL["amber"], label="Hedge Watch")
-    ax_score.plot(x, frame["Confirm"].values, linewidth=1.5, color=PASTEL["rose"], label="Confirmation")
-    ax_score.axhline(watch_threshold, linewidth=1.0, color="#111111", alpha=.72, label="Watch threshold")
-    ax_score.axhline(CONFIRM_THRESHOLD, linewidth=.9, color="#777777", alpha=.55, linestyle="--")
+    watch_active = watch_signal(watch_score.reindex(idx), watch_threshold)
+    confirmation = confirm_score.reindex(idx) >= CONFIRM_THRESHOLD
+    confirmed_onsets = onset((watch_active & confirmation).fillna(False))
+
+    ax_score.plot(
+        x,
+        frame["Watch"].values,
+        linewidth=1.9,
+        color=PASTEL["amber"],
+        label="Hedge Score",
+    )
+    ax_score.axhline(
+        watch_threshold,
+        linewidth=1.0,
+        color="#111111",
+        alpha=.72,
+        label="Threshold",
+    )
+    if confirmed_onsets.any():
+        ax_score.scatter(
+            x[confirmed_onsets.values],
+            frame["Watch"].values[confirmed_onsets.values],
+            marker="o",
+            s=42,
+            color=PASTEL["rose"],
+            edgecolors="#111111",
+            linewidths=.45,
+            label="Confirmed",
+            zorder=6,
+        )
+
     ax_score.set_ylim(0, 100)
     ax_score.set_ylabel("Score")
     ax_score.grid(True, axis="y", linewidth=.6, alpha=.14)

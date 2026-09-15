@@ -22,6 +22,17 @@ class HedgeTimerPageTests(unittest.TestCase):
         self.assertNotIn("pick_target_today", source)
         self.assertNotIn('"TLT"', source)
 
+    def test_chart_has_one_visible_score_line_and_confirmation_dots_only(self) -> None:
+        source = PAGE.read_text(encoding="utf-8")
+
+        self.assertIn('label="Hedge Score"', source)
+        self.assertIn('label="Confirmed"', source)
+        self.assertIn("ax_score.scatter(", source)
+        self.assertNotIn('label="Hedge Watch onset"', source)
+        self.assertNotIn('label="Short allowed onset"', source)
+        self.assertNotIn('label="Confirmation"', source)
+        self.assertNotIn("ax_price.scatter(", source)
+
     def test_about_metadata_matches_the_recall_model(self) -> None:
         tool = tool_for_page("21_Hedge_Timer.py")
         guide = sidebar_guide_for_page("21_Hedge_Timer.py")
