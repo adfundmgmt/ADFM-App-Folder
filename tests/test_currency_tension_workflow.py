@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from cte.config import OECD_CPI_CCYS
+
 
 class CurrencyTensionWorkflowTests(unittest.TestCase):
     def test_workflow_builds_snapshot_locally(self) -> None:
@@ -19,7 +21,10 @@ class CurrencyTensionWorkflowTests(unittest.TestCase):
             "python scripts/validate_currency_snapshot.py data/cache", workflow
         )
         self.assertIn("FRED_API_KEY", workflow)
-        self.assertIn("ESTAT_APP_ID", workflow)
+        self.assertNotIn("ESTAT_APP_ID", workflow)
+
+    def test_japan_cpi_uses_the_secretless_oecd_headline_series(self) -> None:
+        self.assertIn("JPY", OECD_CPI_CCYS)
 
 
 if __name__ == "__main__":
