@@ -2,7 +2,11 @@ name: Sync currency tension snapshot
 
 on:
   schedule:
-    - cron: "15 7 * * 1-5"
+    # The upstream refresh begins at 06:30 UTC but rebuilds the full history and
+    # can finish several hours later. Run after the expected completion window,
+    # then retry once an hour later in case GitHub Actions or ingestion is delayed.
+    - cron: "30 12 * * 1-5"
+    - cron: "30 13 * * 1-5"
   workflow_dispatch:
 
 permissions:
