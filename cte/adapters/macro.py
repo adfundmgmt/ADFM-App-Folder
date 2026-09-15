@@ -6,7 +6,7 @@ truth per (currency, metric):
   bcicp            OECD amplitude-adjusted business confidence for all 8 (standalone
                    Pillar A leading indicator; replaced the composite CLI entirely).
   cpi              Headline CPI YoY for all 8: FRED index (US/EUR/CHF, YoY'd here);
-                   OECD headline YoY (GBP/CAD/AUD/NZD); Japan e-Stat (JPY).
+                   OECD headline YoY (JPY/GBP/CAD/AUD/NZD).
   unemp            FRED for USD/JPN/GBR/CHF/CAD/AUS/NZD; Eurostat for EUR.
   gdp              Real GDP level (chain-linked vol): OECD QNA for 7, FRED for EUR.
   current_account  OECD BOP, % of GDP (Pillar C flow), all 8.
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from cte.adapters import bis_reer, estat, eurostat, external, fred, oecd, ons
+from cte.adapters import bis_reer, eurostat, external, fred, oecd, ons
 
 
 def _cpi_index_to_yoy(df: pd.DataFrame) -> pd.DataFrame:
@@ -48,18 +48,15 @@ def build_macro_backbone() -> pd.DataFrame:
     fred_df = fred.fetch_fred_macro()
     oecd_df = oecd.fetch_oecd_all()
     ea_df = eurostat.fetch_ea_unemployment()
-    jp_cpi = estat.fetch_estat_cpi()
     ca_df = external.fetch_current_account()
     niip_df = external.fetch_niip()
     policy_df = bis_reer.fetch_policy_rates()
     gb_unemp = ons.fetch_uk_unemployment()
 
-    # FRED headline CPI (index) -> unified YoY 'cpi'; OECD/e-Stat already provide YoY
+    # FRED headline CPI (index) -> unified YoY 'cpi'; OECD CPI is already YoY.
     cpi_yoy = _cpi_index_to_yoy(fred_df)
     oecd_cpi = oecd_df[oecd_df.metric == "cpi_yoy"].copy()
     oecd_cpi["metric"] = "cpi"
-    jp_cpi = jp_cpi.copy()
-    jp_cpi["metric"] = "cpi"
     # CLI replaced by OECD business confidence (BCICP) for all 8, standalone
     oecd_bcicp = oecd_df[oecd_df.metric == "bcicp"].copy()
     # Real GDP levels: OECD QNA for 7 legs, FRED (EUR) via fred_rest — uniform basis
@@ -78,7 +75,6 @@ def build_macro_backbone() -> pd.DataFrame:
             oecd_gdp,
             oecd_unemp,
             gb_unemp,
-            jp_cpi,
             ea_df,
             ca_df,
             niip_df,
