@@ -29,6 +29,13 @@ class CurrencySnapshotMetaTests(unittest.TestCase):
 
             self.assertEqual(stamp, pd.Timestamp("2026-09-15T12:34:56+00:00"))
 
+    def test_currency_page_uses_snapshot_manifest_freshness(self) -> None:
+        page = Path("pages/6_Currency_Tension_Engine.py").read_text(encoding="utf-8")
+
+        self.assertIn("from cte.snapshot_meta import snapshot_generated_at", page)
+        self.assertIn("return snapshot_generated_at()", page)
+        self.assertNotIn('CACHE_DIR / "commentary_meta.json"', page)
+
 
 if __name__ == "__main__":
     unittest.main()
