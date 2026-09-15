@@ -35,32 +35,27 @@ jobs:
       - name: Install Currency Tension dependencies
         run: python -m pip install -r requirements-cte.txt
 
-      - name: Verify required provider credentials
+      - name: Verify required provider credential
         shell: bash
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-          ESTAT_APP_ID: ${{ secrets.ESTAT_APP_ID }}
         run: |
           set -euo pipefail
           test -n "${FRED_API_KEY:-}" || { echo "FRED_API_KEY is not configured."; exit 1; }
-          test -n "${ESTAT_APP_ID:-}" || { echo "ESTAT_APP_ID is not configured."; exit 1; }
 
       - name: Refresh primary source caches
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-          ESTAT_APP_ID: ${{ secrets.ESTAT_APP_ID }}
         run: python -m scripts.backfill --daily
 
       - name: Seed map history when needed
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-          ESTAT_APP_ID: ${{ secrets.ESTAT_APP_ID }}
         run: python -m scripts.backfill_history --if-missing
 
       - name: Rebuild Currency Tension scores
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-          ESTAT_APP_ID: ${{ secrets.ESTAT_APP_ID }}
         run: python -m cte.scoring.engine
 
       - name: Refresh optional Daily Read
