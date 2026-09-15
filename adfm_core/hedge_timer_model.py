@@ -192,8 +192,10 @@ def compute_scores(
     sector_below50 = []
     for ticker in SECTOR_TICKERS:
         sector = _series(df, ticker)
-        sector_below50.append((sector < rolling_ma(sector, 50, 30)).astype(float))
-    sector_breadth_share = pd.concat(sector_below50, axis=1).mean(axis=1)
+        sector_ma50 = rolling_ma(sector, 50, 30)
+        available = sector.notna() & sector_ma50.notna()
+        sector_below50.append((sector < sector_ma50).astype(float).where(available))
+    sector_breadth_share = pd.concat(sector_below50, axis=1).mean(axis=1, skipna=True)
     sector_breadth = (sector_breadth_share >= 0.55) & (
         (sector_breadth_share.diff(10) >= 0.18) | (sector_breadth_share >= 0.73)
     )
@@ -408,6 +410,22 @@ def episode_audit(
     return pd.DataFrame(rows)
 
 
+def _useful_warning_dates(
+    onsets: pd.Series,
+    px: pd.Series,
+    lookback: int = LEAD_LOOKBACK,
+) -> set[pd.Timestamp]:
+    useful: set[pd.Timestamp] = set()
+    for start, _, _, _ in find_drawdown_episodes(px):
+        loc = onsets.index.get_indexer([start], method="nearest")[0]
+        if loc < 0:
+            continue
+        lo = max(0, loc - lookback)
+        window = onsets.iloc[lo : loc + 1]
+        useful.update(window[window.fillna(False)].index)
+    return useful
+
+
 def _false_warning_rate(
     onsets: pd.Series,
     px: pd.Series,
@@ -416,11 +434,7 @@ def _false_warning_rate(
     onset_dates = onsets[onsets.fillna(False)].index
     if len(onset_dates) == 0:
         return 0.0
-    useful: set[pd.Timestamp] = set()
-    for start, _, _, _ in find_drawdown_episodes(px):
-        loc = onsets.index.get_indexer([start], method="nearest")[0]
-        lo = max(0, loc - lookback)
-        useful.update(onsets.iloc[lo : loc + 1][onsets.iloc[lo : loc + 1].fillna(False)].index)
+    useful = _useful_warning_dates(onsets, px, lookback)
     false_count = sum(date not in useful for date in onset_dates)
     return float(false_count / len(onset_dates))
 
@@ -434,6 +448,26 @@ def coverage_stats(
     leads = [_lead_for_episode(warning_onsets, start, lookback) for start, _, _, _ in episodes]
     captured = [lead for lead in leads if lead >= 0]
     return len(captured) / len(episodes), captured
+
+
+def warning_summary(
+    px: pd.Series, warning_onsets: pd.Series, lookback: int = LEAD_LOOKBACK
+) -> dict[str, float | int]:
+    """Summarize drawdown recall, lead time, and false warning count."""
+
+    episodes = find_drawdown_episodes(px)
+    leads = [_lead_for_episode(warning_onsets, start, lookback) for start, _, _, _ in episodes]
+    captured_leads = [lead for lead in leads if lead >= 0]
+    onset_dates = warning_onsets[warning_onsets.fillna(False)].index
+    useful = _useful_warning_dates(warning_onsets, px, lookback)
+    false_warnings = sum(date not in useful for date in onset_dates)
+    return {
+        "episodes": len(episodes),
+        "captured": len(captured_leads),
+        "warnings": int(len(onset_dates)),
+        "false_warnings": int(false_warnings),
+        "median_lead": float(np.median(captured_leads)) if captured_leads else float("nan"),
+    }
 
 
 def select_full_recall_candidate(candidates: list[dict[str, float]]) -> dict[str, float]:
