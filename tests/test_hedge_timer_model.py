@@ -9,6 +9,7 @@ import pandas as pd
 from adfm_core.hedge_timer_model import (
     fresh_short_onset,
     select_full_recall_candidate,
+    warning_summary,
     watch_signal,
 )
 
@@ -80,6 +81,23 @@ class HedgeTimerModelTests(unittest.TestCase):
         chosen = select_full_recall_candidate(candidates)
 
         self.assertEqual(chosen["threshold"], 70)
+
+    def test_warning_summary_counts_captured_and_false_warnings(self) -> None:
+        idx = pd.date_range("2020-01-02", periods=80, freq="B")
+        prices = pd.Series(100.0, index=idx)
+        prices.iloc[30:46] = [100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 89, 88, 87, 88, 89, 90]
+        prices.iloc[46:] = 100.0
+        warnings = pd.Series(False, index=idx)
+        warnings.iloc[20] = True
+        warnings.iloc[60] = True
+
+        summary = warning_summary(prices, warnings, lookback=15)
+
+        self.assertEqual(summary["episodes"], 1)
+        self.assertEqual(summary["captured"], 1)
+        self.assertEqual(summary["warnings"], 2)
+        self.assertEqual(summary["false_warnings"], 1)
+        self.assertEqual(summary["median_lead"], 10.0)
 
 
 if __name__ == "__main__":
