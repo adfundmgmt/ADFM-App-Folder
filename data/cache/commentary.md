@@ -1,11 +1,9 @@
-**Regime: Strong dollar on fading hawkish tailwinds; carry crowded across all high-yielders in a risk-premium regime.**
+**Regime: Carry crowding in risk-premium mode—vol-starved longs on AUD, GBP, JPY vulnerable; USD and EUR stretched but policy-anchored.**
 
-**Inflection currencies:**
+- **AUD & GBP: Twin unwind risks.** Both pinned on valuation alone (+2.0, +1.6) with deteriorating fundamentals and policy trapped (feasibility -0.9, -0.73). Carry at 96th–97th percentile; real yields inversely correlated with FX (risk-premium regime, not reward). AUD especially fragile: growth collapsing (-0.47), external dragging (-0.49 fiscal).
 
-- **AUD short**: Deteriorating fundamentals (-0.24) meet extreme stretch (+1.59). Valuation (+2.0) is the sole pillar; growth, inflation, and fiscal all drag. Yields weaken into higher rates (risk-premium regime, mult -0.57). Carry at 94th percentile—classic unwind setup. Policy pivot imminent.
-  
-- **GBP short**: Identical structure to AUD. Valuation (+1.6) carries nearly all weight while other pillars flatten. Real yield cushion gone (real 10Y decoupled, mult -0.53). Feasibility -0.6 signals hawkish fade into stagflation. Carry at 97th percentile—the crowding peak.
-  
-- **CAD long**: Cheap by 1.1 std devs (valuation -2.0) with fundamentals improving (+0.35). External pillar strong (+1.06). Yield rewarded, hike feasibility neutral. Mean-reversion candidate if carry unwind gains traction.
+- **JPY: Cheap mean reversion.** Valuation -1.69 (well below norm) while fundamentals improving (+0.39); real yield stress (-0.55 mult) is offset by strong policy (+1.94) and growth (+0.53). Carry crowded (86th percentile) but technicals favor range-support into vol spikes.
 
-**Standout carry pair: Short AUD/CAD.** AUD unwind + CAD mean reversion = two-sided tailwind.
+- **CAD: Inverse mirror—cheap and improving.** Valuation -2.03, fundamentals +0.35; only carry pair trading *below* norm. Real-yield reward intact (mult +0.45). Narrow setup but structurally aligned.
+
+- **Carry standout: USD.** Rewarded yield, policy-supported (+0.92), but stretched valuation (+0.97). Profits sitting on quiet vol; less crowded downside than AUD/GBP/JPY.
