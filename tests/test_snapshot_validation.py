@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.validate_currency_snapshot import (
+    OPTIONAL_TEXT_FILES,
     REQUIRED_PARQUET_COLUMNS,
     REQUIRED_TEXT_FILES,
     validate_snapshot,
@@ -14,7 +15,7 @@ from scripts.validate_currency_snapshot import (
 
 
 class CurrencySnapshotValidationTests(unittest.TestCase):
-    def _write_snapshot(self, directory: Path) -> None:
+    def _write_snapshot(self, directory: Path, *, include_commentary: bool = True) -> None:
         for filename, columns in REQUIRED_PARQUET_COLUMNS.items():
             values = {
                 column: (
@@ -30,8 +31,12 @@ class CurrencySnapshotValidationTests(unittest.TestCase):
             }
             pd.DataFrame(values).to_parquet(directory / filename, index=False)
         for filename in REQUIRED_TEXT_FILES:
-            content = "{}" if filename.endswith(".json") else "Snapshot commentary"
+            content = "{}" if filename.endswith(".json") else "Snapshot text"
             (directory / filename).write_text(content, encoding="utf-8")
+        if include_commentary:
+            for filename in OPTIONAL_TEXT_FILES:
+                content = "{}" if filename.endswith(".json") else "Snapshot commentary"
+                (directory / filename).write_text(content, encoding="utf-8")
 
     def test_valid_snapshot_produces_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,8 +48,18 @@ class CurrencySnapshotValidationTests(unittest.TestCase):
             self.assertEqual(manifest["schema_version"], 1)
             self.assertEqual(
                 set(manifest["files"]),
-                set(REQUIRED_PARQUET_COLUMNS) | REQUIRED_TEXT_FILES,
+                set(REQUIRED_PARQUET_COLUMNS) | REQUIRED_TEXT_FILES | OPTIONAL_TEXT_FILES,
             )
+
+    def test_commentary_is_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._write_snapshot(directory, include_commentary=False)
+
+            manifest = validate_snapshot(directory)
+
+            self.assertEqual(manifest["schema_version"], 1)
+            self.assertFalse(set(OPTIONAL_TEXT_FILES) & set(manifest["files"]))
 
     def test_missing_required_column_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

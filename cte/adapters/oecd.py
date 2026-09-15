@@ -1,9 +1,11 @@
 """OECD SDMX adapter — cross-country macro inputs from the OECD Data Explorer.
 
-Two inputs, from the OECD Data Explorer SDMX API (SDMX-CSV):
-  bcicp    Amplitude-adjusted business confidence for ALL 8 currencies — the
+Inputs from the OECD Data Explorer SDMX API (SDMX-CSV):
+  bcicp    Amplitude-adjusted business confidence for all 8 currencies — the
            standalone Pillar A leading indicator (a PMI-equivalent survey).
-  cpi_yoy  Headline CPI year-on-year (%) for GBP/CAD/AUS/NZL.
+  cpi_yoy  Headline national CPI year-on-year (%) for JPY/GBP/CAD/AUD/NZD.
+  gdp      Real GDP levels for the non-EUR legs.
+  unemp    Harmonised unemployment for the non-US/EUR/GBP legs.
 
 Returns the same tidy long contract as the FRED adapter:
   [date, ccy, metric, value, source, fetched_at]
@@ -32,6 +34,11 @@ from cte.config import (
 )
 
 _START = "1990-01"
+# Japan is now available in the same OECD national headline-CPI dataflow used for
+# the other non-FRED legs. Keep the legacy config tuple untouched for compatibility,
+# but make the runtime CPI universe explicit here so production no longer needs an
+# e-Stat application credential.
+CPI_CCYS: tuple[str, ...] = (*OECD_CPI_CCYS, "JPY")
 
 
 def _get_csv(dataflow: str, start: str = _START, session=None) -> pd.DataFrame:
@@ -92,31 +99,28 @@ def fetch_oecd_bcicp(session=None) -> pd.DataFrame:
 
 def fetch_oecd_cpi(session=None) -> pd.DataFrame:
     raw = _get_csv(OECD_CPI_DATAFLOW, session=session)
-    a2c = _area_to_ccy(OECD_CPI_CCYS)
+    a2c = _area_to_ccy(CPI_CCYS)
     df = raw[
         (raw.EXPENDITURE == "_T")
         & (raw.MEASURE == "CPI")
         & (raw.TRANSFORMATION == "GY")
         & (raw.UNIT_MEASURE == "PA")
-        & (
-            raw.METHODOLOGY == "N"
-        )  # national basis (GBP also has HICP; use N for consistency)
+        & (raw.METHODOLOGY == "N")
         & (raw.FREQ.isin(["M", "Q"]))
         & (raw.REF_AREA.isin(a2c))
     ].copy()
-    # prefer monthly where a country publishes both M and Q
     df["date"] = _parse_period(df.TIME_PERIOD)
     df["ccy"] = df.REF_AREA.map(a2c)
     df["value"] = pd.to_numeric(df.OBS_VALUE, errors="coerce")
     df = df.dropna(subset=["value"])
-    # Prefer monthly only where it has real depth (>=10y). Australia's monthly CPI
+    # Prefer monthly where it has real depth (>=10y). Australia's monthly CPI
     # indicator is only ~1y long, so it falls back to its 30y+ quarterly series;
-    # GBP/CAD keep their long monthly series. NZ is quarterly-only.
+    # JPY/GBP/CAD keep their long monthly series. NZ is quarterly-only.
     keep = []
     for _ccy, g in df.groupby("ccy"):
-        m = g[g.FREQ == "M"]
-        if len(m) and (m.date.max() - m.date.min()).days / 365.25 >= 10:
-            keep.append(m)
+        monthly = g[g.FREQ == "M"]
+        if len(monthly) and (monthly.date.max() - monthly.date.min()).days / 365.25 >= 10:
+            keep.append(monthly)
         else:
             keep.append(g[g.FREQ == "Q"] if (g.FREQ == "Q").any() else g)
     df = pd.concat(keep, ignore_index=True)
@@ -177,9 +181,9 @@ def fetch_oecd_unemployment(session=None) -> pd.DataFrame:
     df = df.dropna(subset=["value"])
     keep = []
     for _ccy, g in df.groupby("ccy"):
-        m = g[g.FREQ == "M"]
-        if len(m) and (m.date.max() - m.date.min()).days / 365.25 >= 10:
-            keep.append(m)
+        monthly = g[g.FREQ == "M"]
+        if len(monthly) and (monthly.date.max() - monthly.date.min()).days / 365.25 >= 10:
+            keep.append(monthly)
         else:
             keep.append(g[g.FREQ == "Q"] if (g.FREQ == "Q").any() else g)
     df = pd.concat(keep, ignore_index=True)

@@ -18,7 +18,13 @@ from adfm_core.global_macro import (
     load_yields,
 )
 from adfm_core.palette import PASTEL, PASTEL_DIVERGING_SCALE, PASTEL_RATES_SCALE
-from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header
+from adfm_core.ui import (
+    PageHeader,
+    inject_explorer_style,
+    render_footer,
+    render_page_header,
+    render_sidebar_about,
+)
 
 
 st.set_page_config(
@@ -33,6 +39,9 @@ render_page_header(
         "G20 · Current market leadership and higher-frequency macro momentum",
     )
 )
+
+with st.sidebar:
+    render_sidebar_about("2_Global_Macro_Regime.py")
 
 now_ny = pd.Timestamp.now(tz="America/New_York")
 today = now_ny.tz_localize(None)

@@ -22,6 +22,7 @@ from adfm_core.ui import (
 from cte.adapters.base import read_cache
 from cte.config import CACHE_DIR
 from cte.dashboard.plots import pillar_heatmap_fig, tension_map_fig
+from cte.snapshot_meta import snapshot_generated_at
 
 st.set_page_config(
     page_title="Currency Tension Engine",
@@ -98,25 +99,7 @@ def _quadrant_label(fundamental: Any, stretch: Any) -> str:
 
 
 def _snapshot_generated_at() -> Optional[pd.Timestamp]:
-    meta_path = CACHE_DIR / "commentary_meta.json"
-    if meta_path.exists():
-        try:
-            payload = json.loads(meta_path.read_text(encoding="utf-8"))
-            raw = payload.get("generated_at")
-            if raw:
-                stamp = pd.Timestamp(raw)
-                if stamp.tzinfo is None:
-                    stamp = stamp.tz_localize("UTC")
-                return stamp
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            pass
-
-    history = read_cache("snapshot_history")
-    if history is not None and not history.empty and "date" in history.columns:
-        dates = pd.to_datetime(history["date"], errors="coerce", utc=True).dropna()
-        if not dates.empty:
-            return dates.max()
-    return None
+    return snapshot_generated_at()
 
 
 def _snapshot_label() -> str:
@@ -197,7 +180,6 @@ def _ranking_table(
         if historical
         else table["FX"].map(lambda ccy: len(warning_map.get(ccy, []))).astype("Int64")
     )
-
     table["Fundamental"] = pd.to_numeric(table["Fundamental"], errors="coerce").round(2)
     table["Stretch"] = pd.to_numeric(table["Stretch"], errors="coerce").round(2)
     if "Carry/Vol %ile" in table.columns:
@@ -559,7 +541,7 @@ with st.sidebar:
         )
 
 st.markdown(
-    '<div class="cte-note">Sources: FRED, OECD, BIS, Eurostat, Japan e-Stat, UK ONS, '
+    '<div class="cte-note">Sources: FRED, OECD, BIS, Eurostat, UK ONS, '
     'CFTC, Yahoo Finance and national debt-management offices. Signals are descriptive, '
     'not trade instructions.</div>',
     unsafe_allow_html=True,

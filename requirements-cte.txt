@@ -1,0 +1,5 @@
+# Workflow-only dependencies for rebuilding the Currency Tension Engine snapshot.
+-r requirements.txt
+
+openpyxl>=3.1,<4
+anthropic>=0.40,<1

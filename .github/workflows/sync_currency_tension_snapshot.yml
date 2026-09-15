@@ -1,10 +1,7 @@
-name: Sync currency tension snapshot
+name: Rebuild currency tension snapshot
 
 on:
   schedule:
-    # The upstream refresh begins at 06:30 UTC but rebuilds the full history and
-    # can finish several hours later. Run after the expected completion window,
-    # then retry once an hour later in case GitHub Actions or ingestion is delayed.
     - cron: "30 12 * * 1-5"
     - cron: "30 13 * * 1-5"
   workflow_dispatch:
@@ -13,13 +10,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: sync-currency-tension-snapshot
+  group: rebuild-currency-tension-snapshot
   cancel-in-progress: false
 
 jobs:
-  sync:
+  rebuild:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
         with:
@@ -29,70 +26,89 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-cte.txt
+            constraints.txt
 
-      - name: Install snapshot validation dependencies
-        run: python -m pip install -c constraints.txt pandas pyarrow
+      - name: Install Currency Tension dependencies
+        run: python -m pip install -r requirements-cte.txt
 
-      - name: Download latest analyst snapshot
+      - name: Verify required provider credential
+        shell: bash
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${FRED_API_KEY:-}" || { echo "FRED_API_KEY is not configured."; exit 1; }
+
+      - name: Refresh primary source caches
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python -m scripts.backfill --daily
+
+      - name: Seed map history when needed
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python -m scripts.backfill_history --if-missing
+
+      - name: Rebuild Currency Tension scores
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python -m cte.scoring.engine
+
+      - name: Refresh optional Daily Read
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            python -m cte.commentary.narrator
+          else
+            echo "ANTHROPIC_API_KEY is not configured; removing stale cached commentary."
+            rm -f data/cache/commentary.md data/cache/commentary_meta.json
+          fi
+
+      - name: Validate rebuilt snapshot
+        run: python scripts/validate_currency_snapshot.py data/cache
+
+      - name: Commit validated snapshot
         shell: bash
         run: |
           set -euo pipefail
-          base_url="https://raw.githubusercontent.com/smileys21/currency_tension_tool-main/main/data/cache"
-          staging_dir="$(mktemp -d)"
-          files=(
-            carry_grid_nominal.parquet
-            carry_grid_real.parquet
-            commentary.md
-            commentary_meta.json
-            overlays.parquet
-            pillar_scores.parquet
-            snapshot_history.parquet
-            pillar_history.parquet
-            carry_history.parquet
-            pos_history.parquet
-            overlay_history.parquet
-            tension_map.parquet
-            tension_map_prev.parquet
-            warnings.json
-            yields.parquet
-          )
+          git config user.name "ADFM Currency Data Bot"
+          git config user.email "adfundmgmt@users.noreply.github.com"
 
-          for file in "${files[@]}"; do
-            curl \
-              --fail \
-              --silent \
-              --show-error \
-              --location \
-              --retry 5 \
-              --retry-all-errors \
-              --retry-delay 2 \
-              --connect-timeout 15 \
-              --max-time 120 \
-              "$base_url/$file" \
-              --output "$staging_dir/$file"
-            test -s "$staging_dir/$file"
-          done
+          git add -f -- \
+            data/cache/carry_grid_nominal.parquet \
+            data/cache/carry_grid_real.parquet \
+            data/cache/carry_history.parquet \
+            data/cache/overlay_history.parquet \
+            data/cache/overlays.parquet \
+            data/cache/pillar_history.parquet \
+            data/cache/pillar_scores.parquet \
+            data/cache/pos_history.parquet \
+            data/cache/snapshot_history.parquet \
+            data/cache/tension_map.parquet \
+            data/cache/tension_map_prev.parquet \
+            data/cache/warnings.json \
+            data/cache/yields.parquet \
+            data/cache/snapshot_manifest.json
 
-          python scripts/validate_currency_snapshot.py "$staging_dir"
-          mkdir -p data/cache
-          cp "$staging_dir"/* data/cache/
-
-      - name: Commit snapshot changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "cte-sync-bot"
-          git config user.email "cte-sync-bot@users.noreply.github.com"
-          # Runtime cache files are ignored by default. This scheduled snapshot
-          # is the controlled exception, so force-stage the curated files.
-          git add -f -- data/cache
+          if [ -f data/cache/commentary.md ]; then
+            git add -f -- data/cache/commentary.md data/cache/commentary_meta.json
+          else
+            git add -u -- data/cache/commentary.md data/cache/commentary_meta.json || true
+          fi
 
           if git diff --cached --quiet; then
             echo "Currency tension snapshot is already current."
             exit 0
           fi
 
-          git commit -m "chore: sync validated currency tension snapshot"
+          git commit -m "chore: rebuild validated currency tension snapshot"
 
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then
