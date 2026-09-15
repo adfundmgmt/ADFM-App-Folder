@@ -67,6 +67,12 @@ DEFAULT_DETAIL_COLUMNS = [
 
 OFFICIAL_RELEASE_FALLBACKS = (
     QuarterDataset(
+        slug='01jun2026-31aug2026_form13f',
+        label='2026 June July August 13F',
+        url='https://www.sec.gov/files/datastandardsinnovation/data/form-13f-data-sets/01jun2026-31aug2026_form13f.zip',
+        size_label='96.05 MB',
+    ),
+    QuarterDataset(
         slug='01mar2026-31may2026_form13f',
         label='2026 March April May 13F',
         url='https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01mar2026-31may2026_form13f.zip',
@@ -131,12 +137,6 @@ OFFICIAL_RELEASE_FALLBACKS = (
         label='2023 Q4 13F',
         url='https://www.sec.gov/files/structureddata/data/form-13f-data-sets/2023q4_form13f.zip',
         size_label='69.64 MB',
-    ),
-    QuarterDataset(
-        slug='2023q3_form13f',
-        label='2023 Q3 13F',
-        url='https://www.sec.gov/files/structureddata/data/form-13f-data-sets/2023q3_form13f.zip',
-        size_label='66.95 MB',
     ),
 )
 
