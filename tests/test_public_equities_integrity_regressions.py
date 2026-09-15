@@ -125,7 +125,8 @@ class IntegrityTests(unittest.TestCase):
 
     def test_registry_and_definitions(self):
         c=scope['CATEGORIES']
-        self.assertEqual(sum(len(v) for v in c.values()),314)
+        # Five intentionally nonfunctional baskets were removed on 2026-09-09.
+        self.assertEqual(sum(len(v) for v in c.values()),309)
         for baskets in c.values():
             for members in baskets.values():
                 self.assertEqual(len(members),len(set(members)))
