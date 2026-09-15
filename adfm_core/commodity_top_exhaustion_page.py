@@ -9,6 +9,8 @@ from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
@@ -38,6 +40,9 @@ except Exception:
 
 TITLE = "Commodity Event Study"
 CACHE_TTL_SECONDS = 3600
+BOOTSTRAP_DRAWS = 2000
+CFTC_MAX_STALE_SESSIONS = 7
+US_BUSINESS_DAY = CustomBusinessDay(calendar=USFederalHolidayCalendar())
 
 COMMODITY_GROUPS: Dict[str, List[Tuple[str, str]]] = {
     "Energy": [
@@ -136,6 +141,68 @@ PROFILE_PRESETS = {
     },
 }
 
+CFTC_CONTRACT_CODES: Dict[str, str] = {
+    str(values[0]).upper(): str(code) for code, values in PRICE_PROXIES.items()
+}
+CFTC_CONTRACT_CODES.update(
+    {
+        "CL=F": "067651",
+        "BZ=F": "06765T",
+        "NG=F": "023651",
+        "HO=F": "022651",
+        "RB=F": "111659",
+        "GC=F": "088691",
+        "MGC=F": "088691",
+        "SI=F": "084691",
+        "SIL=F": "084691",
+        "HG=F": "085692",
+        "PL=F": "076651",
+        "PA=F": "075651",
+        "ZC=F": "002602",
+        "ZW=F": "001602",
+        "KE=F": "001612",
+        "ZS=F": "005602",
+        "ZM=F": "026603",
+        "ZL=F": "007601",
+        "ZR=F": "039601",
+        "LE=F": "057642",
+        "GF=F": "061641",
+        "HE=F": "054642",
+        "CC=F": "073732",
+        "KC=F": "083731",
+        "SB=F": "080732",
+        "CT=F": "033661",
+        "OJ=F": "040701",
+    }
+)
+
+CFTC_PUBLICATION_OVERRIDES: Dict[str, str] = {
+    "2020-12-21": "2020-12-28",
+    "2021-06-15": "2021-06-21",
+    "2023-01-31": "2023-02-24",
+    "2023-02-07": "2023-03-03",
+    "2023-02-14": "2023-03-08",
+    "2023-02-21": "2023-03-10",
+    "2023-02-28": "2023-03-14",
+    "2023-03-07": "2023-03-16",
+    "2023-03-14": "2023-03-21",
+    "2025-01-07": "2025-01-13",
+    "2025-09-30": "2025-11-19",
+    "2025-10-07": "2025-11-21",
+    "2025-10-14": "2025-11-25",
+    "2025-10-21": "2025-12-02",
+    "2025-10-28": "2025-12-05",
+    "2025-11-04": "2025-12-10",
+    "2025-11-10": "2025-12-10",
+    "2025-11-18": "2025-12-12",
+    "2025-11-25": "2025-12-15",
+    "2025-12-02": "2025-12-17",
+    "2025-12-09": "2025-12-19",
+    "2025-12-16": "2025-12-23",
+    "2025-12-23": "2025-12-29",
+}
+CFTC_EXCLUDED_REPORT_RANGES = ((pd.Timestamp("2018-12-24"), pd.Timestamp("2019-02-26")),)
+
 
 def _inject_page_style() -> None:
     inject_explorer_style(max_width_px=1540)
@@ -201,10 +268,12 @@ def _render_sidebar(profile: str, settings: dict, crowding_source: str | None = 
         st.subheader("Current definition")
         st.caption(
             f"{profile} · return ≥ {settings['return_pctile']:.0f}th pct · "
-            f"trend ≥ {settings['trend_z']:.2f}σ · RSI ≥ {settings['rsi']:.0f} · "
+            f"trend ≥ {settings['trend_z']:.2f} vol units · RSI ≥ {settings['rsi']:.0f} · "
             f"vol ≥ {settings['vol_pctile']:.0f}th pct"
         )
-        if crowding_source:
+        if crowding_source == "CFTC unavailable":
+            st.caption("Crowding: CFTC unavailable; Crowded Blow-Off is disabled.")
+        elif crowding_source:
             st.caption(f"Crowding input: {crowding_source}")
 
 
@@ -263,34 +332,57 @@ def load_contract_history(symbol: str) -> pd.DataFrame:
     raise RuntimeError(f"Could not load {symbol}: {last_error}")
 
 
-def _reverse_cftc_proxy_map() -> Dict[str, str]:
-    return {str(values[0]).upper(): str(code) for code, values in PRICE_PROXIES.items()}
+def _report_date_is_excluded(report_date: pd.Timestamp) -> bool:
+    date = pd.Timestamp(report_date).normalize()
+    return any(start <= date <= end for start, end in CFTC_EXCLUDED_REPORT_RANGES)
+
+
+def cftc_publication_date(report_date: pd.Timestamp) -> pd.Timestamp:
+    date = pd.Timestamp(report_date).normalize()
+    if _report_date_is_excluded(date):
+        return pd.NaT
+    override = CFTC_PUBLICATION_OVERRIDES.get(date.strftime("%Y-%m-%d"))
+    if override:
+        return pd.Timestamp(override)
+    return date + pd.Timedelta(days=3)
+
+
+def cftc_availability_date(report_date: pd.Timestamp) -> pd.Timestamp:
+    publication = cftc_publication_date(report_date)
+    if pd.isna(publication):
+        return pd.NaT
+    return pd.Timestamp(publication + US_BUSINESS_DAY).normalize()
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def load_cftc_crowding(symbol: str) -> Tuple[pd.Series, str]:
-    code = _reverse_cftc_proxy_map().get(str(symbol).upper())
+    code = CFTC_CONTRACT_CODES.get(str(symbol).upper())
     if not code:
-        return pd.Series(dtype=float), ""
+        return pd.Series(dtype=float), "CFTC unavailable"
     try:
         raw = fetch_contract_history("Disaggregated", code)
         if raw is None or raw.empty:
-            return pd.Series(dtype=float), ""
+            return pd.Series(dtype=float), "CFTC unavailable"
         metrics = add_metrics(raw, "Disaggregated", "Managed Money")
         weekly = metrics[["report_date", "net_pct_oi"]].dropna().sort_values("report_date")
         if len(weekly) < 52:
-            return pd.Series(dtype=float), ""
+            return pd.Series(dtype=float), "CFTC unavailable"
         weekly["crowding_pctile"] = (
             weekly["net_pct_oi"].rolling(156, min_periods=52).rank(pct=True) * 100.0
         )
-        # COT Tuesday positions are normally published Friday. Shift availability to Friday
-        # so the event study does not use the Tuesday observation before it was public.
-        release_date = pd.to_datetime(weekly["report_date"]) + pd.Timedelta(days=3)
-        series = pd.Series(weekly["crowding_pctile"].to_numpy(), index=release_date)
+        weekly["availability_date"] = weekly["report_date"].map(cftc_availability_date)
+        weekly = weekly.dropna(subset=["availability_date", "crowding_pctile"])
+        if weekly.empty:
+            return pd.Series(dtype=float), "CFTC unavailable"
+        series = pd.Series(
+            weekly["crowding_pctile"].to_numpy(dtype=float),
+            index=pd.to_datetime(weekly["availability_date"]),
+            dtype=float,
+        )
         series = series[~series.index.duplicated(keep="last")].sort_index()
-        return series, "CFTC Managed Money · 3Y percentile"
+        return series, "CFTC Managed Money · 3Y percentile · next-session availability"
     except Exception:
-        return pd.Series(dtype=float), ""
+        return pd.Series(dtype=float), "CFTC unavailable"
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -311,6 +403,14 @@ def _rolling_percentile(series: pd.Series, window: int, min_periods: int) -> pd.
     return clean.rolling(window, min_periods=min_periods).rank(pct=True) * 100.0
 
 
+def _align_cftc_to_prices(cftc: pd.Series, close_index: pd.DatetimeIndex) -> pd.Series:
+    if cftc.empty:
+        return pd.Series(np.nan, index=close_index, dtype=float)
+    union_index = cftc.index.union(close_index)
+    aligned = cftc.reindex(union_index).sort_index().ffill(limit=CFTC_MAX_STALE_SESSIONS)
+    return aligned.reindex(close_index).astype(float)
+
+
 def build_exhaustion_frame(
     data: pd.DataFrame,
     symbol: str,
@@ -327,25 +427,24 @@ def build_exhaustion_frame(
     period_return = period_return.mask((close <= 0.0) | (lag <= 0.0))
     return_pctile = _rolling_percentile(period_return, 1260, 252)
 
-    ma200 = close.rolling(200, min_periods=160).mean()
-    std200 = close.rolling(200, min_periods=160).std(ddof=0)
-    trend_z = (close - ma200) / std200.replace(0.0, np.nan)
-    rsi14 = _rsi(close, 14)
-
     log_return = np.log(positive_close / positive_close.shift(1))
-    realized_vol = log_return.rolling(20, min_periods=15).std(ddof=0) * np.sqrt(252.0)
+    daily_vol = log_return.rolling(20, min_periods=15).std(ddof=0)
+    realized_vol = daily_vol * np.sqrt(252.0)
     vol_pctile = _rolling_percentile(realized_vol, 756, 126)
     volume_pctile = _rolling_percentile(volume.replace(0.0, np.nan), 756, 126)
 
+    ma200 = close.rolling(200, min_periods=160).mean()
+    trend_scale = daily_vol * np.sqrt(20.0)
+    trend_z = np.log(positive_close / ma200.where(ma200 > 0.0)) / trend_scale.replace(0.0, np.nan)
+    rsi14 = _rsi(close, 14)
+
     cftc_weekly, cftc_label = load_cftc_crowding(symbol)
     if not cftc_weekly.empty:
-        union_index = cftc_weekly.index.union(close.index)
-        cftc_daily = cftc_weekly.reindex(union_index).sort_index().ffill().reindex(close.index)
-        crowding_pctile = cftc_daily
+        crowding_pctile = _align_cftc_to_prices(cftc_weekly, close.index)
         crowding_source = cftc_label
     else:
-        crowding_pctile = volume_pctile
-        crowding_source = "Volume intensity fallback"
+        crowding_pctile = pd.Series(np.nan, index=close.index, dtype=float)
+        crowding_source = "CFTC unavailable"
 
     ma10 = close.rolling(10, min_periods=8).mean()
     ret5 = close / close.shift(5) - 1.0
@@ -366,30 +465,35 @@ def build_exhaustion_frame(
     early_setup = ret_extreme & (core_count >= 2)
 
     if profile == "Early Warning":
-        condition = early_setup
+        profile_setup = early_setup
+        condition = profile_setup
         label = (
             f"Early warning: {return_days}D return ≥ {settings['return_pctile']:.0f}th pct "
             "+ 2/3 trend, RSI, vol extremes"
         )
     elif profile == "Confirmed Exhaustion":
-        recent_setup = early_setup.rolling(int(settings["memory"]), min_periods=1).max().astype(bool)
+        profile_setup = early_setup
+        recent_setup = profile_setup.rolling(int(settings["memory"]), min_periods=1).max().astype(bool)
         condition = recent_setup & (reversal_score >= int(settings["reversal_components"]))
         label = (
-            f"Confirmed exhaustion: recent extreme + {int(settings['reversal_components'])}/3 reversal checks"
+            f"Confirmed exhaustion: recent extreme + {int(settings['reversal_components'])}/3 "
+            "price-reversal checks"
         )
     else:
         strong_count = (
             trend_extreme.astype(int)
             + rsi_extreme.astype(int)
             + vol_extreme.astype(int)
-            + crowd_extreme.astype(int)
+            + crowd_extreme.fillna(False).astype(int)
         )
-        blowoff_setup = ret_extreme & (strong_count >= 3) & crowd_extreme
-        recent_setup = blowoff_setup.rolling(int(settings["memory"]), min_periods=1).max().astype(bool)
+        profile_setup = ret_extreme & (strong_count >= 3) & crowd_extreme.fillna(False)
+        recent_setup = profile_setup.rolling(int(settings["memory"]), min_periods=1).max().astype(bool)
         condition = recent_setup & (reversal_score >= int(settings["reversal_components"]))
-        label = (
-            f"Crowded blow-off: extreme tape + {crowding_source.lower()} + reversal"
-        )
+        if crowding_source == "CFTC unavailable":
+            condition = pd.Series(False, index=close.index, dtype=bool)
+            label = "Crowded blow-off unavailable: no mapped CFTC positioning"
+        else:
+            label = "Crowded blow-off: extreme tape + CFTC crowding + price reversal"
 
     frame = pd.DataFrame(
         {
@@ -407,6 +511,7 @@ def build_exhaustion_frame(
             "Prior5Low": prior5_low,
             "ReversalScore": reversal_score,
             "EarlySetup": early_setup.astype(bool),
+            "ProfileSetup": profile_setup.fillna(False).astype(bool),
             "Signal": condition.fillna(False).astype(bool),
         },
         index=close.index,
@@ -435,8 +540,16 @@ def build_event_observations(
     close = close.dropna().astype(float)
     positions = {timestamp: i for i, timestamp in enumerate(close.index)}
     rows: List[dict] = []
-    store: Dict[str, Dict[str, List[float]]] = {
-        label: {"return": [], "signal_dd": [], "path_dd": [], "upside": []}
+    store: Dict[str, Dict[str, list]] = {
+        label: {
+            "date": [],
+            "return": [],
+            "signal_dd": [],
+            "path_dd": [],
+            "upside": [],
+            "signal_dd_vol": [],
+            "upside_vol": [],
+        }
         for label in FORWARD_HORIZONS
     }
 
@@ -445,7 +558,10 @@ def build_event_observations(
             continue
         start_pos = positions[event_date]
         start_price = float(close.iloc[start_pos])
+        if not np.isfinite(start_price) or start_price == 0.0:
+            continue
         diag = diagnostics.reindex([event_date]).iloc[0]
+        realized_vol = float(diag.get("RealizedVol", np.nan))
         row = {
             "Date": event_date,
             "Price": start_price,
@@ -455,6 +571,7 @@ def build_event_observations(
             "VolPctile": diag.get("VolPctile", np.nan),
             "CrowdingPctile": diag.get("CrowdingPctile", np.nan),
             "ReversalScore": diag.get("ReversalScore", np.nan),
+            "RealizedVol": realized_vol,
         }
 
         if start_pos + 21 < len(close):
@@ -465,7 +582,7 @@ def build_event_observations(
             peak_pos = positions[peak_date]
             peak_price = float(local_path.max())
             row["DaysFromLocalPeak"] = float(start_pos - peak_pos)
-            row["PeakToSignal"] = start_price / peak_price - 1.0
+            row["PeakToSignal"] = start_price / peak_price - 1.0 if peak_price else np.nan
         else:
             row["DaysFromLocalPeak"] = np.nan
             row["PeakToSignal"] = np.nan
@@ -479,20 +596,37 @@ def build_event_observations(
             end_return = float(path.iloc[-1] / start_price - 1.0)
             from_signal = path / start_price - 1.0
             running_peak = path.cummax()
-            path_dd = path / running_peak - 1.0
+            path_dd = path / running_peak.replace(0.0, np.nan) - 1.0
+            signal_dd = float(from_signal.min())
+            upside = float(from_signal.max())
+            horizon_sigma = (
+                realized_vol * np.sqrt(horizon / 252.0)
+                if np.isfinite(realized_vol) and realized_vol > 0.0
+                else np.nan
+            )
             row[label] = end_return
+            store[label]["date"].append(pd.Timestamp(event_date))
             store[label]["return"].append(end_return)
-            store[label]["signal_dd"].append(float(from_signal.min()))
+            store[label]["signal_dd"].append(signal_dd)
             store[label]["path_dd"].append(float(path_dd.min()))
-            store[label]["upside"].append(float(from_signal.max()))
+            store[label]["upside"].append(upside)
+            store[label]["signal_dd_vol"].append(
+                signal_dd / horizon_sigma if np.isfinite(horizon_sigma) else np.nan
+            )
+            store[label]["upside_vol"].append(
+                upside / horizon_sigma if np.isfinite(horizon_sigma) else np.nan
+            )
         rows.append(row)
 
     history = pd.DataFrame(rows)
     arrays: Dict[str, Dict[str, np.ndarray]] = {}
     for label, metrics in store.items():
-        arrays[label] = {
-            metric: np.asarray(values, dtype=float) for metric, values in metrics.items()
-        }
+        arrays[label] = {}
+        for metric, values in metrics.items():
+            if metric == "date":
+                arrays[label][metric] = np.asarray(values, dtype="datetime64[ns]")
+            else:
+                arrays[label][metric] = np.asarray(values, dtype=float)
     return history, arrays
 
 
@@ -527,6 +661,168 @@ def summarize_forward_performance(arrays: Dict[str, Dict[str, np.ndarray]]) -> p
     return summary
 
 
+def _independent_indices(
+    close_index: pd.DatetimeIndex,
+    event_dates: np.ndarray,
+    horizon: int,
+) -> np.ndarray:
+    positions = {timestamp: i for i, timestamp in enumerate(close_index)}
+    kept: List[int] = []
+    last_position = -10**9
+    for array_index, raw_date in enumerate(event_dates):
+        date = pd.Timestamp(raw_date)
+        position = positions.get(date)
+        if position is None:
+            continue
+        if position - last_position >= max(int(horizon), 1):
+            kept.append(array_index)
+            last_position = position
+    return np.asarray(kept, dtype=int)
+
+
+def _seasonally_matched_baseline(
+    close: pd.Series,
+    start_date: pd.Timestamp,
+    horizon: int,
+    signal_dates: pd.DatetimeIndex,
+) -> np.ndarray:
+    close = close.dropna().astype(float)
+    start_date = pd.Timestamp(start_date)
+    positions = {timestamp: i for i, timestamp in enumerate(close.index)}
+    signal_positions = [positions[date] for date in signal_dates if date in positions]
+    month_counts = pd.Series(signal_dates.month).value_counts().to_dict() if len(signal_dates) else {}
+    if not month_counts:
+        month_counts = {month: 1 for month in range(1, 13)}
+
+    weighted_returns: List[np.ndarray] = []
+    for month, weight in sorted(month_counts.items()):
+        candidates: List[float] = []
+        last_position = -10**9
+        for position, date in enumerate(close.index):
+            if date < start_date or date.month != int(month):
+                continue
+            end_pos = position + horizon
+            if end_pos >= len(close) or position - last_position < max(horizon, 1):
+                continue
+            start_price = float(close.iloc[position])
+            end_price = float(close.iloc[end_pos])
+            if not np.isfinite(start_price) or not np.isfinite(end_price) or start_price <= 0.0:
+                continue
+            if any(abs(position - signal_pos) < max(horizon, 1) for signal_pos in signal_positions):
+                continue
+            candidates.append(end_price / start_price - 1.0)
+            last_position = position
+        if candidates:
+            values = np.asarray(candidates, dtype=float)
+            weighted_returns.extend([values] * int(weight))
+    if weighted_returns:
+        return np.concatenate(weighted_returns)
+
+    fallback: List[float] = []
+    last_position = -10**9
+    for position, date in enumerate(close.index):
+        if date < start_date:
+            continue
+        end_pos = position + horizon
+        if end_pos >= len(close) or position - last_position < max(horizon, 1):
+            continue
+        start_price = float(close.iloc[position])
+        end_price = float(close.iloc[end_pos])
+        if not np.isfinite(start_price) or not np.isfinite(end_price) or start_price <= 0.0:
+            continue
+        if any(abs(position - signal_pos) < max(horizon, 1) for signal_pos in signal_positions):
+            continue
+        fallback.append(end_price / start_price - 1.0)
+        last_position = position
+    return np.asarray(fallback, dtype=float)
+
+
+def _bootstrap_median_edge_ci(
+    signal_returns: np.ndarray,
+    baseline_median: float,
+    seed: int,
+) -> Tuple[float, float]:
+    signal_returns = np.asarray(signal_returns, dtype=float)
+    signal_returns = signal_returns[np.isfinite(signal_returns)]
+    if signal_returns.size < 3 or not np.isfinite(baseline_median):
+        return np.nan, np.nan
+    rng = np.random.default_rng(seed)
+    edges = np.empty(BOOTSTRAP_DRAWS, dtype=float)
+    for i in range(BOOTSTRAP_DRAWS):
+        sampled = rng.choice(signal_returns, size=signal_returns.size, replace=True)
+        edges[i] = float(np.median(sampled) - baseline_median)
+    low, high = np.quantile(edges, [0.025, 0.975])
+    return float(low), float(high)
+
+
+def summarize_forward_edge(
+    close: pd.Series,
+    history: pd.DataFrame,
+    arrays: Dict[str, Dict[str, np.ndarray]],
+    start_date: pd.Timestamp,
+) -> pd.DataFrame:
+    metrics = [
+        "Signal Median",
+        "Baseline Median",
+        "Median Edge",
+        "% Negative",
+        "Baseline % Negative",
+        "Hit-Rate Lift",
+        "Median Further Upside",
+        "Median Subsequent Decline",
+        "95% CI Low",
+        "95% CI High",
+        "Independent N",
+    ]
+    summary = pd.DataFrame(index=metrics, columns=list(FORWARD_HORIZONS), dtype=float)
+    close = close.dropna().astype(float)
+
+    for label, horizon in FORWARD_HORIZONS.items():
+        store = arrays[label]
+        event_dates = store.get("date", np.asarray([], dtype="datetime64[ns]"))
+        independent = _independent_indices(close.index, event_dates, horizon)
+        signal_returns = store["return"][independent] if independent.size else np.asarray([], dtype=float)
+        signal_dates = (
+            pd.DatetimeIndex(pd.to_datetime(event_dates[independent]))
+            if independent.size
+            else pd.DatetimeIndex([])
+        )
+        baseline = _seasonally_matched_baseline(close, start_date, horizon, signal_dates)
+
+        if baseline.size:
+            baseline_median = float(np.median(baseline))
+            summary.loc["Baseline Median", label] = baseline_median
+            summary.loc["Baseline % Negative", label] = float(np.mean(baseline < 0.0))
+        else:
+            baseline_median = np.nan
+
+        summary.loc["Independent N", label] = float(signal_returns.size)
+        if signal_returns.size == 0:
+            continue
+
+        signal_median = float(np.median(signal_returns))
+        signal_negative = float(np.mean(signal_returns < 0.0))
+        summary.loc["Signal Median", label] = signal_median
+        summary.loc["% Negative", label] = signal_negative
+        if np.isfinite(baseline_median):
+            summary.loc["Median Edge", label] = signal_median - baseline_median
+            summary.loc["Hit-Rate Lift", label] = (
+                signal_negative - float(summary.loc["Baseline % Negative", label])
+            )
+            ci_low, ci_high = _bootstrap_median_edge_ci(
+                signal_returns, baseline_median, seed=7300 + int(horizon)
+            )
+            summary.loc["95% CI Low", label] = ci_low
+            summary.loc["95% CI High", label] = ci_high
+
+        upside = store["upside"][independent]
+        decline = store["signal_dd"][independent]
+        summary.loc["Median Further Upside", label] = float(np.nanmedian(upside))
+        summary.loc["Median Subsequent Decline", label] = float(np.nanmedian(decline))
+
+    return summary
+
+
 def _top_hit_rate(values: np.ndarray, threshold: float, direction: str) -> float:
     clean = np.asarray(values, dtype=float)
     clean = clean[np.isfinite(clean)]
@@ -538,14 +834,18 @@ def _top_hit_rate(values: np.ndarray, threshold: float, direction: str) -> float
 
 
 def top_diagnostics(history: pd.DataFrame, arrays: Dict[str, Dict[str, np.ndarray]]) -> dict:
-    days = pd.to_numeric(history.get("DaysFromLocalPeak", pd.Series(dtype=float)), errors="coerce").dropna()
-    peak_move = pd.to_numeric(history.get("PeakToSignal", pd.Series(dtype=float)), errors="coerce").dropna()
+    days = pd.to_numeric(
+        history.get("DaysFromLocalPeak", pd.Series(dtype=float)), errors="coerce"
+    ).dropna()
+    peak_move = pd.to_numeric(
+        history.get("PeakToSignal", pd.Series(dtype=float)), errors="coerce"
+    ).dropna()
     return {
         "days_from_peak": float(days.median()) if not days.empty else np.nan,
         "peak_to_signal": float(peak_move.median()) if not peak_move.empty else np.nan,
-        "down10_3m": _top_hit_rate(arrays["3M"]["signal_dd"], 0.10, "down"),
-        "down20_6m": _top_hit_rate(arrays["6M"]["signal_dd"], 0.20, "down"),
-        "up10_3m": _top_hit_rate(arrays["3M"]["upside"], 0.10, "up"),
+        "down1sigma_3m": _top_hit_rate(arrays["3M"]["signal_dd_vol"], 1.0, "down"),
+        "down15sigma_6m": _top_hit_rate(arrays["6M"]["signal_dd_vol"], 1.5, "down"),
+        "up1sigma_3m": _top_hit_rate(arrays["3M"]["upside_vol"], 1.0, "up"),
     }
 
 
@@ -585,7 +885,7 @@ def make_price_chart(
                 hovertemplate=(
                     "%{x|%b %d, %Y}<br>Price: %{y:,.2f}"
                     "<br>Return pctile: %{customdata[0]:.2f}"
-                    "<br>Trend Z: %{customdata[1]:.2f}"
+                    "<br>Trend extension: %{customdata[1]:.2f} vol units"
                     "<br>RSI: %{customdata[2]:.2f}"
                     "<br>Vol pctile: %{customdata[3]:.2f}"
                     "<br>Crowding pctile: %{customdata[4]:.2f}"
@@ -628,22 +928,24 @@ def make_price_chart(
 
 
 def _cell_class(metric: str, value: float) -> str:
-    if metric == "Sample" or pd.isna(value):
+    if pd.isna(value):
         return "neutral"
-    if metric == "% Negative":
-        return "good" if value >= 0.5 else "bad"
-    if "DD" in metric:
-        return "good"
-    return "good" if value <= 0.0 else "bad"
+    if metric == "Median Edge":
+        return "good" if value < 0.0 else "bad" if value > 0.0 else "neutral"
+    if metric == "Hit-Rate Lift":
+        return "good" if value > 0.0 else "bad" if value < 0.0 else "neutral"
+    return "neutral"
 
 
 def _format_summary_value(metric: str, value: float) -> str:
     if pd.isna(value):
         return "—"
-    if metric == "Sample":
+    if metric == "Independent N":
         return f"{int(round(value))}"
-    if metric == "% Negative":
-        return f"{value * 100.0:.2f}%"
+    if metric in {"% Negative", "Baseline % Negative"}:
+        return f"{value * 100.0:.1f}%"
+    if metric == "Hit-Rate Lift":
+        return f"{value * 100.0:+.1f} pp"
     return f"{value * 100.0:+.2f}%"
 
 
@@ -681,19 +983,19 @@ def _format_days_from_peak(value: float) -> str:
     return f"{days}d after" if value > 0 else f"{days}d before"
 
 
+def _format_number(value: float, fmt: str) -> str:
+    return "—" if pd.isna(value) or not np.isfinite(float(value)) else format(float(value), fmt)
+
+
 def _history_display(history: pd.DataFrame) -> pd.DataFrame:
     if history.empty:
         return history
     display = history.copy().sort_values("Date", ascending=False)
     display["Date"] = pd.to_datetime(display["Date"]).dt.strftime("%Y-%m-%d")
-    display["Price"] = display["Price"].map(lambda x: f"{x:,.2f}")
+    display["Price"] = display["Price"].map(lambda x: _format_number(x, ",.2f"))
     for column in ["ReturnPctile", "RSI", "VolPctile", "CrowdingPctile"]:
-        display[column] = display[column].map(
-            lambda x: "—" if pd.isna(x) else f"{float(x):.2f}"
-        )
-    display["TrendZ"] = display["TrendZ"].map(
-        lambda x: "—" if pd.isna(x) else f"{float(x):.2f}"
-    )
+        display[column] = display[column].map(lambda x: _format_number(x, ".2f"))
+    display["TrendZ"] = display["TrendZ"].map(lambda x: _format_number(x, ".2f"))
     display["ReversalScore"] = display["ReversalScore"].map(
         lambda x: "—" if pd.isna(x) else f"{int(x)}/3"
     )
@@ -707,7 +1009,20 @@ def _history_display(history: pd.DataFrame) -> pd.DataFrame:
         display[column] = display[column].map(
             lambda x: "—" if pd.isna(x) else f"{float(x) * 100.0:+.2f}%"
         )
-    return display
+    columns = [
+        "Date",
+        "Price",
+        "ReturnPctile",
+        "TrendZ",
+        "RSI",
+        "VolPctile",
+        "CrowdingPctile",
+        "ReversalScore",
+        "DaysFromLocalPeak",
+        "PeakToSignal",
+        *FORWARD_HORIZONS,
+    ]
+    return display[[column for column in columns if column in display.columns]]
 
 
 def _settings_controls(profile: str) -> Tuple[dict, str]:
@@ -720,24 +1035,47 @@ def _settings_controls(profile: str) -> Tuple[dict, str]:
                     "Return percentile", 80.0, 99.5, float(preset["return_pctile"]), 0.5
                 )
                 preset["trend_z"] = st.slider(
-                    "Trend extension (σ)", 0.5, 4.0, float(preset["trend_z"]), 0.25
+                    "Trend extension (20D vol units)",
+                    0.5,
+                    4.0,
+                    float(preset["trend_z"]),
+                    0.25,
                 )
                 preset["rsi"] = st.slider("RSI threshold", 55.0, 90.0, float(preset["rsi"]), 1.0)
                 preset["vol_pctile"] = st.slider(
                     "Realized-vol percentile", 50.0, 99.0, float(preset["vol_pctile"]), 1.0
                 )
                 preset["crowding_pctile"] = st.slider(
-                    "Crowding percentile", 70.0, 99.0, float(preset["crowding_pctile"]), 1.0
+                    "CFTC crowding percentile", 70.0, 99.0, float(preset["crowding_pctile"]), 1.0
                 )
                 preset["memory"] = st.slider(
                     "Setup memory (sessions)", 3, 20, int(preset["memory"]), 1
                 )
                 if profile != "Early Warning":
                     preset["reversal_components"] = st.slider(
-                        "Reversal checks required", 1, 3, int(preset["reversal_components"]), 1
+                        "Price-reversal checks required",
+                        1,
+                        3,
+                        int(preset["reversal_components"]),
+                        1,
                     )
             return_window = st.selectbox("Extension return window", list(RETURN_WINDOWS), index=2)
     return preset, return_window
+
+
+def _current_state(
+    profile: str,
+    current_signal: bool,
+    recent_profile_setup: bool,
+    crowding_source: str,
+) -> str:
+    if profile == "Crowded Blow-Off" and crowding_source == "CFTC unavailable":
+        return "Unavailable · no CFTC"
+    if current_signal:
+        return "ACTIVE"
+    if profile == "Early Warning":
+        return "Recent setup" if recent_profile_setup else "Normal"
+    return "Setup / waiting for reversal" if recent_profile_setup else "Normal"
 
 
 def render_commodity_event_study() -> None:
@@ -747,10 +1085,10 @@ def render_commodity_event_study() -> None:
             title=TITLE,
             description=(
                 "Find historically extended commodity moves, wait for exhaustion or reversal, "
-                "and measure how often the signal actually identified a top."
+                "and measure whether the signal changed the forward distribution versus history."
             ),
             eyebrow="ADFM Historical Context",
-            source_note="Yahoo Finance continuous futures · CFTC positioning where mapped",
+            source_note="Yahoo Finance continuous futures · CFTC Disaggregated COT where mapped",
         )
     )
 
@@ -819,7 +1157,7 @@ def render_commodity_event_study() -> None:
 
     study_events = all_events[all_events >= chart_close.index.min()]
     history, arrays = build_event_observations(close_full, study_events, diagnostics)
-    summary = summarize_forward_performance(arrays)
+    summary = summarize_forward_edge(close_full, history, arrays, chart_close.index.min())
     top_stats = top_diagnostics(history, arrays)
 
     latest_date = close_full.index.max()
@@ -827,12 +1165,17 @@ def render_commodity_event_study() -> None:
     latest_event = study_events.max() if len(study_events) else None
     latest_event_text = latest_event.strftime("%b %d, %Y") if latest_event is not None else "None"
     current_signal = bool(condition.reindex([latest_date]).fillna(False).iloc[0])
-    recent_setup = bool(
-        diagnostics["EarlySetup"].tail(int(settings["memory"])).fillna(False).any()
+    recent_profile_setup = bool(
+        diagnostics["ProfileSetup"].tail(int(settings["memory"])).fillna(False).any()
     )
-    current_state = "ACTIVE" if current_signal else "Setup / waiting for reversal" if recent_setup else "Normal"
+    current_state = _current_state(
+        profile, current_signal, recent_profile_setup, crowding_source
+    )
     crowding_value = latest.get("CrowdingPctile", np.nan)
     crowding_text = "n/a" if pd.isna(crowding_value) else f"{float(crowding_value):.2f}th pct"
+    return_pctile_value = latest.get("ReturnPctile", np.nan)
+    trend_value = latest.get("TrendZ", np.nan)
+    rsi_value = latest.get("RSI", np.nan)
 
     st.markdown(
         (
@@ -840,9 +1183,10 @@ def render_commodity_event_study() -> None:
             f"<span><strong>{escape(contract_name)}</strong> · {escape(symbol)}</span>"
             f"<span><strong>Signal</strong> {escape(profile)}</span>"
             f"<span><strong>Current</strong> {escape(current_state)}</span>"
-            f"<span><strong>63D pctile</strong> {float(latest.get('ReturnPctile', np.nan)):.2f}</span>"
-            f"<span><strong>Trend Z</strong> {float(latest.get('TrendZ', np.nan)):.2f}</span>"
-            f"<span><strong>RSI</strong> {float(latest.get('RSI', np.nan)):.2f}</span>"
+            f"<span><strong>{escape(return_window)} return pctile</strong> "
+            f"{_format_number(return_pctile_value, '.2f')}</span>"
+            f"<span><strong>Trend ext.</strong> {_format_number(trend_value, '.2f')}</span>"
+            f"<span><strong>RSI</strong> {_format_number(rsi_value, '.2f')}</span>"
             f"<span><strong>Crowding</strong> {escape(crowding_text)}</span>"
             f"<span><strong>Events</strong> {len(study_events)}</span>"
             f"<span><strong>Latest event</strong> {escape(latest_event_text)}</span>"
@@ -855,40 +1199,58 @@ def render_commodity_event_study() -> None:
     figure = make_price_chart(chart_close, study_events, diagnostics, signal_label)
     st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
 
-    st.markdown("<div class='event-study-table-title'>Top-Picking Diagnostics</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='event-study-table-title'>Top-Picking Diagnostics</div>",
+        unsafe_allow_html=True,
+    )
     diag_cols = st.columns(5, gap="small")
     diag_cols[0].metric("Median signal timing", _format_days_from_peak(top_stats["days_from_peak"]))
     diag_cols[1].metric(
         "Median peak → signal",
-        "—" if not np.isfinite(top_stats["peak_to_signal"]) else f"{top_stats['peak_to_signal'] * 100.0:+.2f}%",
+        "—"
+        if not np.isfinite(top_stats["peak_to_signal"])
+        else f"{top_stats['peak_to_signal'] * 100.0:+.2f}%",
     )
     diag_cols[2].metric(
-        "3M ≥10% decline",
-        "—" if not np.isfinite(top_stats["down10_3m"]) else f"{top_stats['down10_3m'] * 100.0:.2f}%",
+        "3M ≥1σ decline",
+        "—"
+        if not np.isfinite(top_stats["down1sigma_3m"])
+        else f"{top_stats['down1sigma_3m'] * 100.0:.1f}%",
     )
     diag_cols[3].metric(
-        "6M ≥20% decline",
-        "—" if not np.isfinite(top_stats["down20_6m"]) else f"{top_stats['down20_6m'] * 100.0:.2f}%",
+        "6M ≥1.5σ decline",
+        "—"
+        if not np.isfinite(top_stats["down15sigma_6m"])
+        else f"{top_stats['down15sigma_6m'] * 100.0:.1f}%",
     )
     diag_cols[4].metric(
-        "3M >10% further upside",
-        "—" if not np.isfinite(top_stats["up10_3m"]) else f"{top_stats['up10_3m'] * 100.0:.2f}%",
+        "3M >1σ further upside",
+        "—"
+        if not np.isfinite(top_stats["up1sigma_3m"])
+        else f"{top_stats['up1sigma_3m'] * 100.0:.1f}%",
     )
     st.markdown(
-        "<div class='event-study-caption'>Local peak timing is measured against the highest close in the 21 sessions before through 21 sessions after each signal. Further-upside rate is a direct false-positive check.</div>",
+        (
+            "<div class='event-study-caption'>Local peak timing uses the highest close in the 21 "
+            "sessions before through 21 sessions after each signal. Decline and further-upside "
+            "thresholds are scaled by the annualized volatility known on the signal date, so the "
+            "diagnostic is comparable across commodities.</div>"
+        ),
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        f"<div class='event-study-table-title'>{escape(contract_name)} Forward Performance After Top Signal</div>",
+        f"<div class='event-study-table-title'>{escape(contract_name)} Edge After Top Signal</div>",
         unsafe_allow_html=True,
     )
     st.markdown(summary_table_html(summary), unsafe_allow_html=True)
     st.markdown(
         (
             "<div class='event-study-caption'>"
-            "Green means the top signal worked: negative forward return or a meaningful post-signal drawdown. "
-            "Best/Worst are defined from the perspective of a top signal. Sample falls at longer horizons when recent events have not matured."
+            "Edge compares de-overlapped signal outcomes with a seasonally matched historical "
+            "baseline from the same lookback. Green is reserved for favorable top-signal edge: "
+            "a more-negative median than baseline or a higher negative-return hit rate. The 95% "
+            "interval bootstraps the independent signal median around the historical baseline."
             "</div>"
         ),
         unsafe_allow_html=True,
@@ -911,18 +1273,22 @@ def render_commodity_event_study() -> None:
     with st.expander("Method and data caveat"):
         st.markdown(
             """
-            - Return percentiles use the selected return window ranked against up to five years of trailing daily observations. The current observation is included only with information available that day.
-            - Trend extension is the close versus its 200-day moving average, scaled by the rolling 200-day price standard deviation.
+            - Return percentiles use the selected return window ranked against up to five years of trailing daily observations. Only information available by that session is used.
+            - Trend extension is the log distance from the 200-day moving average divided by the current 20-session expected move. This is more stable across commodity price regimes than scaling by the standard deviation of price levels.
             - Realized volatility uses 20-day annualized log-return volatility ranked against a trailing three-year distribution.
-            - Confirmed Exhaustion requires an extreme setup within the recent setup-memory window, then reversal confirmation from negative 5-day return, close below the 10-day moving average, and close below the prior 5-session low.
-            - CFTC Managed Money positioning is used only for mapped contracts and is shifted from Tuesday report date to estimated Friday public availability to reduce look-ahead bias. Unmapped contracts use volume intensity only for the Crowded Blow-Off profile.
-            - Yahoo Finance futures histories are continuous provider series. Contract-roll methodology can create discontinuities, so this is historical tendency research rather than execution-grade roll attribution.
+            - Confirmed Exhaustion uses three price-reversal checks after a recent extreme: negative 5-day return, close below the 10-day moving average, and close below the prior 5-session low. These are deliberately described as related price checks, not independent evidence.
+            - Crowded Blow-Off requires actual CFTC Disaggregated Managed Money positioning. Volume is never substituted for positioning. Contracts without a verified CFTC mapping show crowding as unavailable and cannot generate a Crowded Blow-Off signal.
+            - CFTC observations become usable only on the first business session after public release at 3:30 p.m. ET. Known 2020, 2021, 2023 and 2025 delays are explicitly dated; the 2018-19 shutdown backlog is excluded rather than assigned invented publication dates. Positioning also expires after seven sessions if no fresh report is available.
+            - Forward statistics de-overlap signal events separately for each horizon. The baseline is conditioned on the signal sample's calendar months, excludes starts close to signal windows, and is de-overlapped before comparison. If a short history leaves no same-month control, the page falls back to an unconditional de-overlapped control. Bootstrap intervals require at least three independent signals.
+            - Volatility-normalized excursion diagnostics scale each event by the annualized volatility known on the signal date and the square root of the forward horizon.
+            - Yahoo Finance futures histories are provider-supplied continuous series. Roll methodology can create discontinuities; the study does not infer or back-adjust individual contract rolls and should not be treated as execution-grade roll attribution.
             """
         )
 
     render_footer(
         data_note=(
-            "Primary input: Yahoo Finance daily continuous-futures history. CFTC Disaggregated Futures Only positioning is used where mapped. "
-            "Historical tendency only; event studies are descriptive and not forecasts."
+            "Primary input: Yahoo Finance daily continuous-futures history. CFTC Disaggregated "
+            "Futures Only positioning is used where a verified contract mapping exists. Historical "
+            "tendency only; event studies are descriptive and not forecasts."
         )
     )
