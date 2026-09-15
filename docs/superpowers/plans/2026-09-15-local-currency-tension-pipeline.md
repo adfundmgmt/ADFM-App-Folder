@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove the Currency Tension Engine's dependency on `smileys21/currency_tension_tool-main` and build validated production snapshots entirely inside `ADFM-App-Folder`.
+**Goal:** Remove the Currency Tension Engine's dependency on the legacy external Currency Tension repository and build validated production snapshots entirely inside `ADFM-App-Folder`.
 
-**Architecture:** Keep the existing `cte/` engine and adapters. Add the missing local ingestion runner, make the scheduled workflow execute ingestion → history → scoring → optional commentary → validation locally, and make the Streamlit page read freshness from the validator manifest rather than commentary metadata.
+**Architecture:** Keep the existing `cte/` engine and adapters. Add the missing local ingestion runner, make the scheduled workflow execute ingestion → history → scoring → optional commentary → validation locally, source Japan headline CPI through OECD, and make the Streamlit page read freshness from the validator manifest rather than commentary metadata.
 
 **Tech Stack:** Python 3.12, pandas, pyarrow, yfinance, requests, openpyxl, optional Anthropic SDK, GitHub Actions, Streamlit.
 
@@ -14,7 +14,7 @@
 
 - `ADFM-App-Folder` must be the only GitHub repository in the Currency Tension production data path.
 - Preserve the existing CTE scoring mathematics and historical replay outputs.
-- `FRED_API_KEY` and `ESTAT_APP_ID` are required for scheduled production ingestion.
+- `FRED_API_KEY` is the only required scheduled-ingestion secret; Japan CPI comes from OECD.
 - Commentary is optional and must never control data freshness.
 - A failed refresh must leave the last-good committed cache available.
 
@@ -29,27 +29,29 @@
 
 **Interfaces:**
 - Consumes: existing validator and workflow file.
-- Produces: tests requiring local workflow commands, optional commentary validation, and manifest-based freshness parsing.
+- Produces: tests requiring local workflow commands, optional commentary validation, OECD Japan CPI, and manifest-based freshness parsing.
 
-- [ ] Add a validator test that builds all required parquet/text outputs except commentary and asserts validation succeeds.
-- [ ] Add a workflow contract test that asserts `.github/workflows/sync_currency_tension_snapshot.yml` contains `python -m scripts.backfill --daily`, `python -m cte.scoring.engine`, and local validation, while excluding `smileys21` and `raw.githubusercontent.com`.
-- [ ] Add a metadata test for `cte.snapshot_meta.snapshot_generated_at(cache_dir)` using `snapshot_manifest.json.validated_at_utc`.
-- [ ] Run the three targeted tests and verify they fail for the expected missing behavior.
+- [x] Add a validator test that builds all required parquet/text outputs except commentary and asserts validation succeeds.
+- [x] Add a workflow contract test requiring local ingestion/scoring/validation while excluding cross-repository raw GitHub downloads.
+- [x] Add a metadata test for `cte.snapshot_meta.snapshot_generated_at(cache_dir)` using `snapshot_manifest.json.validated_at_utc`.
+- [x] Verify the tests fail against the pre-migration behavior for the expected reasons.
 
 ### Task 2: Add local ingestion and workflow-only dependencies
 
 **Files:**
 - Create: `scripts/backfill.py`
 - Create: `requirements-cte.txt`
+- Modify: `cte/adapters/oecd.py`
+- Modify: `cte/adapters/macro.py`
 
 **Interfaces:**
-- Consumes: `cte.adapters.*`, `cte.store.merge_cache`, environment variables `FRED_API_KEY` and `ESTAT_APP_ID`.
+- Consumes: `cte.adapters.*`, `cte.store.merge_cache`, environment variable `FRED_API_KEY`.
 - Produces: refreshed `macro_backbone`, `fx_spot`, `yields`, `reer`, and `tff` caches.
 
-- [ ] Port the existing ingestion runner into this repository without any GitHub-repository dependency.
-- [ ] Keep `--daily` as the incremental scheduled mode and full-history behavior as the default manual/cold-start mode.
-- [ ] Add a workflow-only requirements file that includes the app requirements plus `openpyxl` and `anthropic`.
-- [ ] Compile `scripts/backfill.py` and run its import-level tests.
+- [x] Port the existing ingestion runner into this repository without any GitHub-repository dependency.
+- [x] Keep `--daily` as the incremental scheduled mode and full-history behavior as the default manual/cold-start mode.
+- [x] Add a workflow-only requirements file that includes the app requirements plus `openpyxl` and `anthropic`.
+- [x] Move Japan headline CPI onto the existing OECD national CPI adapter so the production job does not require e-Stat credentials.
 
 ### Task 3: Make validation and freshness independent of commentary
 
@@ -61,10 +63,10 @@
 **Interfaces:**
 - Produces: `snapshot_manifest.json` with `validated_at_utc`; `snapshot_generated_at(cache_dir) -> Optional[pd.Timestamp]`.
 
-- [ ] Change commentary files from required snapshot files to optional validated artifacts when present.
-- [ ] Implement manifest timestamp parsing in `cte.snapshot_meta` with a safe fallback to snapshot-history dates.
-- [ ] Replace the page's commentary-based freshness helper with the new module.
-- [ ] Run targeted validator/metadata tests and verify they pass.
+- [x] Change commentary files from required snapshot files to optional validated artifacts when present.
+- [x] Implement manifest timestamp parsing in `cte.snapshot_meta` with a safe fallback to snapshot-history dates.
+- [x] Replace the page's commentary-based freshness helper with the new module.
+- [x] Add a regression test that the page uses manifest freshness.
 
 ### Task 4: Replace the cross-repository sync workflow
 
@@ -75,19 +77,18 @@
 - Consumes: `requirements-cte.txt`, `scripts.backfill`, `scripts.backfill_history`, `cte.scoring.engine`, `scripts.validate_currency_snapshot`.
 - Produces: validated committed `data/cache` in the same repository.
 
-- [ ] Replace the raw GitHub download stage with local ingestion using `FRED_API_KEY` and `ESTAT_APP_ID`.
-- [ ] Run local history seeding and scoring.
-- [ ] Regenerate commentary only when `ANTHROPIC_API_KEY` exists; otherwise delete cached commentary artifacts before validation.
-- [ ] Validate `data/cache` locally and force-stage the curated snapshot files plus manifest.
-- [ ] Preserve rebase/retry push handling for concurrent scheduled jobs.
-- [ ] Run the workflow contract test and repository search for `smileys21`.
+- [x] Replace the raw GitHub download stage with local ingestion using `FRED_API_KEY`.
+- [x] Run local history seeding and scoring.
+- [x] Regenerate commentary only when `ANTHROPIC_API_KEY` exists; otherwise delete cached commentary artifacts before validation.
+- [x] Validate `data/cache` locally and force-stage the curated snapshot files plus manifest.
+- [x] Preserve rebase/retry push handling for concurrent scheduled jobs.
 
 ### Task 5: Full verification and merge
 
 **Files:**
 - No new production files.
 
-- [ ] Run compile checks for `pages`, `cte`, `scripts`, and tests.
-- [ ] Run the targeted Currency Tension tests plus existing `test_cte_math.py`.
-- [ ] Run the full repository test suite and distinguish baseline failures from migration regressions.
-- [ ] Open a pull request, inspect changed files, and merge only if the branch is mergeable and no new regression is found.
+- [ ] Run fresh compile and test verification on the final branch head.
+- [ ] Confirm migration-specific tests pass and only known baseline failures remain in the full repository suite.
+- [ ] Inspect the final PR diff and confirm the workflow contains no legacy raw-GitHub source dependency.
+- [ ] Mark the pull request ready and merge only if the branch remains mergeable.
