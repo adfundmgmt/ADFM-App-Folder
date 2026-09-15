@@ -34,7 +34,8 @@ REQUIRED_PARQUET_COLUMNS: dict[str, set[str]] = {
     },
     "yields.parquet": {"date", "ccy", "tenor", "value", "source", "fetched_at"},
 }
-REQUIRED_TEXT_FILES = {"commentary.md", "commentary_meta.json", "warnings.json"}
+REQUIRED_TEXT_FILES = {"warnings.json"}
+OPTIONAL_TEXT_FILES = {"commentary.md", "commentary_meta.json"}
 EXPECTED_CURRENCIES = {"USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"}
 
 
@@ -44,6 +45,27 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validate_text_file(
+    path: Path,
+    filename: str,
+    errors: list[str],
+    file_details: dict[str, dict[str, object]],
+) -> None:
+    if not path.is_file() or path.stat().st_size == 0:
+        errors.append(f"{filename}: missing or empty")
+        return
+    if path.suffix == ".json":
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            errors.append(f"{filename}: invalid JSON ({exc})")
+            return
+    file_details[filename] = {
+        "bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    }
 
 
 def validate_snapshot(directory: Path) -> dict[str, object]:
@@ -82,20 +104,12 @@ def validate_snapshot(directory: Path) -> dict[str, object]:
         }
 
     for filename in sorted(REQUIRED_TEXT_FILES):
+        _validate_text_file(directory / filename, filename, errors, file_details)
+
+    for filename in sorted(OPTIONAL_TEXT_FILES):
         path = directory / filename
-        if not path.is_file() or path.stat().st_size == 0:
-            errors.append(f"{filename}: missing or empty")
-            continue
-        if path.suffix == ".json":
-            try:
-                json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-                errors.append(f"{filename}: invalid JSON ({exc})")
-                continue
-        file_details[filename] = {
-            "bytes": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
+        if path.exists():
+            _validate_text_file(path, filename, errors, file_details)
 
     if errors:
         raise ValueError("Snapshot validation failed:\n- " + "\n- ".join(errors))
