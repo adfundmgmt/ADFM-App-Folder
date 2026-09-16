@@ -1,9 +1,13 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
 from adfm_core.global_macro import (
+    _load_fred_macro,
+    _macro_source,
+    _parse_oecd_csv,
     annualize_quarterly_growth,
     comparison_period,
     country_rows,
@@ -128,6 +132,33 @@ class GlobalMacroTests(unittest.TestCase):
         self.assertEqual(level["Period"], "2026-04-01")
         self.assertEqual(change["Value"], 1.5)
         self.assertEqual(change["Baseline"], "2026-01-01")
+
+    def test_oecd_parser_rejects_conflicting_country_period_duplicates(self):
+        payload = (
+            "REF_AREA,TIME_PERIOD,OBS_VALUE\n"
+            "USA,2026-07,2.0\n"
+            "USA,2026-07,2.1\n"
+        )
+        with self.assertRaises(ValueError):
+            _parse_oecd_csv(payload)
+
+    @patch("adfm_core.global_macro.fetch_fred_symbols")
+    def test_fred_macro_fallback_can_be_limited_to_selected_countries(self, fetch):
+        dates = pd.to_datetime(["2026-06-01", "2026-07-01"])
+        fetch.return_value = (
+            pd.DataFrame({"CPALTT01USM659N": [2.7, 2.8]}, index=dates),
+            pd.DataFrame(),
+        )
+        output, errors = _load_fred_macro("Inflation", ["USA"])
+        requested = fetch.call_args.args[0]
+        self.assertEqual(requested, ("CPALTT01USM659N",))
+        self.assertEqual(set(output), {"USA"})
+        self.assertEqual(errors, {})
+
+    def test_current_oecd_sources_are_exposed_for_fast_macro_series(self):
+        self.assertIn("data-explorer.oecd.org", _macro_source("Unemployment"))
+        self.assertIn("data-explorer.oecd.org", _macro_source("Inflation"))
+        self.assertIn("fred.stlouisfed.org", _macro_source("GDP growth"))
 
     def test_common_period_and_gray_missing(self):
         x = {
