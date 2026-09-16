@@ -324,6 +324,7 @@ def parse_world_bank(payload, indicator):
             observations.setdefault(iso, {})[pd.Timestamp(int(year), 12, 31)] = value
     return {iso: clean(pd.Series(values)) for iso, values in observations.items()}
 
+
 def annualize_quarterly_growth(qoq_percent):
     """Compound a seasonally adjusted q/q growth rate for four quarters."""
     value = float(qoq_percent)
@@ -358,10 +359,18 @@ def _parse_oecd_csv(text):
     frame["OBS_VALUE"] = pd.to_numeric(frame["OBS_VALUE"], errors="coerce")
     frame["DATE"] = pd.to_datetime(frame["TIME_PERIOD"].astype(str), errors="coerce")
     frame = frame.dropna(subset=["REF_AREA", "DATE", "OBS_VALUE"])
+    allowed = {c.iso for c in COUNTRIES}
+    frame = frame.loc[frame["REF_AREA"].isin(allowed)]
+    if frame.empty:
+        return {}
+
+    conflicts = frame.groupby(["REF_AREA", "DATE"])["OBS_VALUE"].nunique(dropna=True)
+    if (conflicts > 1).any():
+        raise ValueError("OECD response contains conflicting country-period observations")
+    frame = frame.drop_duplicates(subset=["REF_AREA", "DATE"], keep="last")
+
     out = {}
     for iso, group in frame.groupby("REF_AREA"):
-        if iso not in {c.iso for c in COUNTRIES}:
-            continue
         s = pd.Series(group["OBS_VALUE"].to_numpy(), index=group["DATE"])
         out[iso] = clean(s)
     return out
@@ -382,8 +391,8 @@ def _load_oecd_current(metric):
     elif metric == "Inflation":
         url = (
             "https://sdmx.oecd.org/public/rest/data/"
-            "OECD.SDD.TPS,DSD_PRICES@DF_PRICES_ALL,1.0/"
-            ".M.N.CPI.PA._T.N.GY"
+            "OECD.SDD.TPS,DSD_G20_PRICES@DF_G20_PRICES,1.0/"
+            ".M...PA..."
         )
         params = {
             "startPeriod": "2019-01",
@@ -403,15 +412,20 @@ def _load_oecd_current(metric):
     return _parse_oecd_csv(response.text)
 
 
-def _load_fred_macro(metric):
+def _load_fred_macro(metric, isos=None):
+    selected = set(isos) if isos is not None else {c.iso for c in COUNTRIES}
+    countries = [c for c in COUNTRIES if c.iso in selected]
+    if not countries:
+        return {}, {}
+
     requested = []
-    for c in COUNTRIES:
+    for c in countries:
         requested.extend(macro_symbols(c.iso)[metric])
     panel, status = fetch_fred_symbols(tuple(requested), start="2019-01-01")
     errors = _status_errors(status)
     output = {}
 
-    for c in COUNTRIES:
+    for c in countries:
         candidates = []
         for symbol in macro_symbols(c.iso)[metric]:
             if symbol in panel:
@@ -429,7 +443,8 @@ def load_economics(metric):
 
     GDP uses OECD quarterly national-accounts series delivered by FRED and is
     annualized from the latest seasonally adjusted q/q rate. Unemployment and
-    inflation use the OECD's current SDMX API first, with FRED fallback series.
+    inflation use current OECD SDMX datasets first, with targeted FRED fallbacks
+    only for countries that the direct OECD response does not cover.
     """
     if metric not in INDICATORS:
         return {}, {"OECD": f"Unsupported macro metric: {metric}"}
@@ -442,10 +457,16 @@ def load_economics(metric):
             output = _load_oecd_current(metric)
         except (requests.RequestException, ValueError, TypeError, pd.errors.ParserError) as exc:
             errors["OECD"] = f"Current {metric.lower()} API unavailable: {type(exc).__name__}"
-        fallback, fred_errors = _load_fred_macro(metric)
-        errors.update(fred_errors)
-        for iso, series in fallback.items():
-            if iso not in output or output[iso].empty or series.index[-1] > output[iso].index[-1]:
+
+        fallback_isos = [
+            c.iso
+            for c in COUNTRIES
+            if c.iso not in output or output[c.iso].empty
+        ]
+        if fallback_isos:
+            fallback, fred_errors = _load_fred_macro(metric, fallback_isos)
+            errors.update(fred_errors)
+            for iso, series in fallback.items():
                 output[iso] = series
 
     for c in COUNTRIES:
@@ -554,8 +575,14 @@ def _macro_source(metric):
     if metric == "GDP growth":
         return "https://fred.stlouisfed.org/tags/series?t=gdp%3Boecd%3Bquarterly%3Breal"
     if metric == "Unemployment":
-        return "https://fred.stlouisfed.org/tags/series?t=monthly%3Boecd%3Bunemployment"
-    return "https://fred.stlouisfed.org/tags/series?t=cpi%3Binflation%3Bmonthly%3Boecd"
+        return (
+            "https://data-explorer.oecd.org/vis?df%5Bag%5D=OECD.SDD.TPS&"
+            "df%5Bid%5D=DSD_LFS%40DF_IALFS_UNE_M&df%5Bvs%5D=1.0"
+        )
+    return (
+        "https://data-explorer.oecd.org/vis?df%5Bag%5D=OECD.SDD.TPS&"
+        "df%5Bid%5D=DSD_G20_PRICES%40DF_G20_PRICES&df%5Bvs%5D=1.0"
+    )
 
 
 def country_rows(series, today, metric, view="Level", horizon="1M", period=None):
