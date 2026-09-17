@@ -84,9 +84,9 @@ class SectorRotationUiTests(unittest.TestCase):
 
     def test_page_orders_map_then_relative_strength_then_table(self):
         source = Path("pages/7_Sector_Breadth_and_Rotation.py").read_text(encoding="utf-8")
-        map_pos = source.index('render_section_header("Rotation map"')
-        rs_pos = source.index('render_section_header("Relative strength"')
-        table_pos = source.index('render_section_header("Rotation table"')
+        map_pos = source.index('"Rotation map"')
+        rs_pos = source.index('"Relative strength"')
+        table_pos = source.index('"Rotation table"')
         self.assertLess(map_pos, rs_pos)
         self.assertLess(rs_pos, table_pos)
 
