@@ -12,6 +12,7 @@ from adfm_core.sector_rotation import (
     compute_relative_metrics,
     confirm_state_series,
     movement_from_coordinates,
+    parse_spdr_holdings_table,
 )
 
 
@@ -72,6 +73,19 @@ class SectorRotationUpgradeTests(unittest.TestCase):
         self.assertEqual(out["above_50d"], 100.0)
         self.assertEqual(out["above_200d"], 100.0)
         self.assertTrue(np.isfinite(out["breadth_1m_change"]))
+
+    def test_spdr_holdings_parser_keeps_firstcash_and_drops_cash_line(self):
+        raw = pd.DataFrame([
+            ["Fund Name", "Technology Select Sector SPDR Fund", None],
+            ["Ticker", "Name", "Weight"],
+            ["FCFS", "FirstCash Holdings Inc.", 0.12],
+            ["CASH_USD", "US DOLLAR", 0.03],
+            ["MSFT", "Microsoft Corp.", 18.0],
+        ])
+        holdings = parse_spdr_holdings_table(raw)
+        self.assertIn("FCFS", holdings)
+        self.assertIn("MSFT", holdings)
+        self.assertNotIn("CASH_USD", holdings)
 
 
 if __name__ == "__main__":
