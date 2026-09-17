@@ -276,7 +276,7 @@ def rotation_history(asset: pd.Series, benchmark: pd.Series, short_window: int =
     ratio = aligned["asset"] / aligned["benchmark"]
     x = ratio.pct_change(long_window, fill_method=None)
     y = ratio.pct_change(short_window, fill_method=None)
-    raw = pd.Series([classify_coordinates(a, b) for a, b in zip(x, y)], index=ratio.index)
+    raw = pd.Series([classify_coordinates(a, b) for a, b in zip(x, y, strict=True)], index=ratio.index)
     confirmed, days = confirm_state_series(raw)
     return pd.DataFrame({"x": x, "y": y, "raw_state": raw, "state": confirmed, "days_in_state": days})
 
