@@ -27,9 +27,8 @@ from adfm_core.sector_rotation_holdings import (
 from adfm_core.sector_rotation_ui import (
     STATE_EDGE,
     STATE_PALETTE,
-    clip_to_axis,
     display_name,
-    robust_axis_range,
+    full_extent_axis_range,
     select_auto_labels,
     style_rotation_table,
 )
@@ -305,15 +304,9 @@ render_section_header(
     "Rotation map",
     "Pastel quadrants show the current state. Every exposure carries a short tail; selected markers are emphasized.",
 )
-x_range = robust_axis_range(snapshot["Map X"])
-y_range = robust_axis_range(snapshot["Map Y"])
+x_range = full_extent_axis_range(snapshot["Map X"])
+y_range = full_extent_axis_range(snapshot["Map Y"])
 plot_snapshot = snapshot.copy()
-plot_snapshot["Plot X"] = clip_to_axis(plot_snapshot["Map X"], x_range)
-plot_snapshot["Plot Y"] = clip_to_axis(plot_snapshot["Map Y"], y_range)
-plot_snapshot["Clipped"] = (
-    (plot_snapshot["Plot X"] != plot_snapshot["Map X"])
-    | (plot_snapshot["Plot Y"] != plot_snapshot["Map Y"])
-)
 label_ids = select_auto_labels(plot_snapshot, selected_ids=selected_ids, max_labels=14)
 
 map_fig = go.Figure()
@@ -334,12 +327,10 @@ for item_id in snapshot["Id"]:
     hist = rotation_by_id[item_id].dropna(subset=["x", "y"]).tail(trail_sessions)
     if len(hist) < 2:
         continue
-    hist_x = clip_to_axis(hist["x"], x_range)
-    hist_y = clip_to_axis(hist["y"], y_range)
     edge = STATE_EDGE.get(str(row["State"]), "#7B8791")
     map_fig.add_trace(go.Scatter(
-        x=hist_x,
-        y=hist_y,
+        x=hist["x"],
+        y=hist["y"],
         mode="lines",
         line=dict(color=_rgba(edge, 0.22), width=0.9),
         hoverinfo="skip",
@@ -353,17 +344,15 @@ for state, group in plot_snapshot.groupby("State", dropna=False):
     ]
     sizes = [13 if item_id in selected_ids else 10 for item_id in group["Id"]]
     widths = [2.4 if item_id in selected_ids else 1.1 for item_id in group["Id"]]
-    symbols = ["diamond" if clipped else "circle" for clipped in group["Clipped"]]
     map_fig.add_trace(go.Scatter(
-        x=group["Plot X"],
-        y=group["Plot Y"],
+        x=group["Map X"],
+        y=group["Map Y"],
         mode="markers+text",
         text=labels,
         textposition="top center",
         textfont=dict(size=10, color="#4B5563"),
         marker=dict(
             size=sizes,
-            symbol=symbols,
             color=STATE_PALETTE.get(str(state), STATE_PALETTE["Neutral"]),
             line=dict(width=widths, color=STATE_EDGE.get(str(state), "#7B8791")),
         ),
@@ -402,7 +391,6 @@ map_fig.update_layout(
     legend=dict(orientation="h", yanchor="top", y=-0.14, xanchor="left", x=0),
 )
 st.plotly_chart(map_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
-st.caption("Diamond markers are clipped to the robust display range; hover shows the actual relative-return coordinates.")
 
 render_section_header(
     "Relative strength",
