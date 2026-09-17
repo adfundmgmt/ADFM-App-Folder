@@ -27,11 +27,25 @@ class SectorRotationUiTests(unittest.TestCase):
         self.assertEqual(display_name("XLK", "Technology"), "XLK")
 
     def test_robust_axis_range_prevents_single_outlier_from_flattening_map(self):
-        values = pd.Series([-0.12, -0.08, -0.04, 0.0, 0.03, 0.06, 0.09, 0.12, 0.80])
+        values = pd.Series([-0.12, -0.08, -0.04, 0.0, 0.03, 0.06, 0.09, 0.12, 0.15, 0.80])
         low, high = robust_axis_range(values)
-        self.assertLess(low, 0.0)
-        self.assertGreater(high, 0.0)
-        self.assertLess(high, 0.50)
+        self.assertLess(low, -0.12)
+        self.assertGreater(high, 0.15)
+        self.assertLess(high, 0.25)
+
+    def test_robust_axis_range_contracts_for_tight_cross_section(self):
+        values = pd.Series([-0.004, -0.003, -0.002, 0.0, 0.001, 0.002, 0.004])
+        low, high = robust_axis_range(values)
+        self.assertLess(low, -0.004)
+        self.assertGreater(high, 0.004)
+        self.assertLess(high - low, 0.02)
+
+    def test_robust_axis_range_expands_for_wide_cross_section(self):
+        values = pd.Series([-0.30, -0.20, -0.10, 0.0, 0.10, 0.20, 0.30])
+        low, high = robust_axis_range(values)
+        self.assertLess(low, -0.30)
+        self.assertGreater(high, 0.30)
+        self.assertGreater(high - low, 0.60)
 
     def test_auto_labels_limit_dense_universe_and_keep_selected(self):
         frame = pd.DataFrame({
