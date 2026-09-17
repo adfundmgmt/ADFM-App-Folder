@@ -176,7 +176,7 @@ with st.sidebar:
     st.header("Settings")
     scope = st.selectbox("Universe", ["Sectors", "Industries", "Themes", "Countries", "All"], index=1)
     window_label = st.selectbox("Rotation window", list(WINDOWS), index=0)
-    trail_sessions = st.selectbox("Tail length", [8, 12, 20, 40], index=1, format_func=lambda value: f"{value} sessions")
+    trail_sessions = st.selectbox("Tail length", [3, 5, 8, 12], index=1, format_func=lambda value: f"{value} sessions")
 
 if scope != "All":
     view = catalog[catalog["Universe"] == scope].copy()
@@ -303,7 +303,7 @@ else:
 
 render_section_header(
     "Rotation map",
-    "Pastel quadrants show the current state. Every exposure carries a short tail; selected rows are emphasized.",
+    "Pastel quadrants show the current state. Every exposure carries a short tail; selected markers are emphasized.",
 )
 x_range = robust_axis_range(snapshot["Map X"])
 y_range = robust_axis_range(snapshot["Map Y"])
@@ -336,13 +336,12 @@ for item_id in snapshot["Id"]:
         continue
     hist_x = clip_to_axis(hist["x"], x_range)
     hist_y = clip_to_axis(hist["y"], y_range)
-    selected = item_id in selected_ids
     edge = STATE_EDGE.get(str(row["State"]), "#7B8791")
     map_fig.add_trace(go.Scatter(
         x=hist_x,
         y=hist_y,
         mode="lines",
-        line=dict(color=_rgba(edge, 0.82 if selected else 0.28), width=2.8 if selected else 1.15),
+        line=dict(color=_rgba(edge, 0.22), width=0.9),
         hoverinfo="skip",
         showlegend=False,
     ))
@@ -407,7 +406,7 @@ st.caption("Diamond markers are clipped to the robust display range; hover shows
 
 render_section_header(
     "Relative strength",
-    "Selected exposures versus their broad benchmark, rebased to 100. Table selections update this chart and the emphasized map tails.",
+    "Selected exposures versus their broad benchmark, rebased to 100. Table selections update this chart and the selected map markers.",
 )
 rs_fig = go.Figure()
 for line_index, item_id in enumerate(selected_ids):
@@ -447,7 +446,7 @@ st.plotly_chart(rs_fig, width="stretch", config={"displayModeBar": False, "respo
 
 render_section_header(
     "Rotation table",
-    "Sortable leadership, transition, extension and breadth measures. Select rows to emphasize them in the charts above.",
+    "Sortable leadership, transition, extension and breadth measures. Select rows to highlight their markers and relative-strength series above.",
 )
 table_columns = [
     "ETF", "Industry", "Group", "State", "Days in State", "1W Rel", "1M Rel", "3M Rel",
