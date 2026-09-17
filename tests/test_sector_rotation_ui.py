@@ -7,7 +7,7 @@ import pandas as pd
 from adfm_core.sector_rotation_ui import (
     STATE_PALETTE,
     display_name,
-    robust_axis_range,
+    full_extent_axis_range,
     select_auto_labels,
     style_rotation_table,
 )
@@ -26,23 +26,23 @@ class SectorRotationUiTests(unittest.TestCase):
         self.assertEqual(display_name("BASKET_REFINERS", "Refiners"), "Refiners")
         self.assertEqual(display_name("XLK", "Technology"), "XLK")
 
-    def test_robust_axis_range_prevents_single_outlier_from_flattening_map(self):
+    def test_full_extent_axis_range_keeps_single_outlier_visible(self):
         values = pd.Series([-0.12, -0.08, -0.04, 0.0, 0.03, 0.06, 0.09, 0.12, 0.15, 0.80])
-        low, high = robust_axis_range(values)
+        low, high = full_extent_axis_range(values)
         self.assertLess(low, -0.12)
-        self.assertGreater(high, 0.15)
-        self.assertLess(high, 0.25)
+        self.assertGreater(high, 0.80)
+        self.assertGreater(high - low, 0.92)
 
-    def test_robust_axis_range_contracts_for_tight_cross_section(self):
+    def test_full_extent_axis_range_contracts_for_tight_cross_section(self):
         values = pd.Series([-0.004, -0.003, -0.002, 0.0, 0.001, 0.002, 0.004])
-        low, high = robust_axis_range(values)
+        low, high = full_extent_axis_range(values)
         self.assertLess(low, -0.004)
         self.assertGreater(high, 0.004)
         self.assertLess(high - low, 0.02)
 
-    def test_robust_axis_range_expands_for_wide_cross_section(self):
+    def test_full_extent_axis_range_expands_for_wide_cross_section(self):
         values = pd.Series([-0.30, -0.20, -0.10, 0.0, 0.10, 0.20, 0.30])
-        low, high = robust_axis_range(values)
+        low, high = full_extent_axis_range(values)
         self.assertLess(low, -0.30)
         self.assertGreater(high, 0.30)
         self.assertGreater(high - low, 0.60)
@@ -113,6 +113,13 @@ class SectorRotationUiTests(unittest.TestCase):
         self.assertIn('line=dict(color=_rgba(edge, 0.22), width=0.9)', source)
         self.assertNotIn('0.82 if selected else 0.28', source)
         self.assertNotIn('2.8 if selected else 1.15', source)
+
+    def test_rotation_map_does_not_clip_outlier_coordinates(self):
+        source = Path("pages/7_Sector_Breadth_and_Rotation.py").read_text(encoding="utf-8")
+        self.assertIn('x_range = full_extent_axis_range(snapshot["Map X"])', source)
+        self.assertIn('y_range = full_extent_axis_range(snapshot["Map Y"])', source)
+        self.assertNotIn("clip_to_axis", source)
+        self.assertNotIn("Diamond markers are clipped", source)
 
 
 if __name__ == "__main__":
