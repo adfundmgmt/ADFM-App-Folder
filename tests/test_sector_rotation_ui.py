@@ -64,6 +64,24 @@ class SectorRotationUiTests(unittest.TestCase):
         self.assertNotIn("BASKET_REFINERS", html)
         self.assertIn("Refiners", html)
 
+    def test_compact_table_aliases_remain_formatted_and_heatmapped(self):
+        frame = pd.DataFrame({
+            "Exposure": ["Refiners"],
+            "State": ["Leading"],
+            "1W Δ Rel": [0.025],
+            "Rank Δ": [3.0],
+            "vs Parent": [0.04],
+            "vs 50D": [0.05],
+            ">50D": [80.0],
+            "Breadth Δ": [12.0],
+        })
+        html = style_rotation_table(frame).to_html()
+        self.assertIn("+2.5%", html)
+        self.assertIn("+3", html)
+        self.assertIn("80%", html)
+        self.assertIn("#CFE8D8", html)
+        self.assertIn("#A8D4B6", html)
+
     def test_page_orders_map_then_relative_strength_then_table(self):
         source = Path("pages/7_Sector_Breadth_and_Rotation.py").read_text(encoding="utf-8")
         map_pos = source.index('render_section_header("Rotation map"')
