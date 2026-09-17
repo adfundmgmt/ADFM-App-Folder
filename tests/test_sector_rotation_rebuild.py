@@ -35,7 +35,7 @@ class SectorRotationRebuildTests(unittest.TestCase):
         self.assertEqual(int((catalog["Kind"] == "Stock Basket").sum()), 36)
         self.assertEqual(int((catalog["Universe"] == "Countries").sum()), 40)
         self.assertEqual(set(catalog.query("Universe == 'Countries'")["Broad Benchmark"]), {"ACWI"})
-        self.assertEqual(len(select_catalog(catalog, "Industries")), 91)
+        self.assertEqual(len(select_catalog(catalog, "Industries")), 101)
         self.assertFalse(select_catalog(catalog, "Countries", ["Countries & Regions"]).empty)
 
     def test_equal_weight_basket_is_daily_rebalanced_and_keeps_gaps_visible(self):
