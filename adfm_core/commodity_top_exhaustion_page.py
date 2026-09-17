@@ -117,7 +117,6 @@ PROFILE_PRESETS = {
         "trend_z": 1.50,
         "rsi": 70.0,
         "vol_pctile": 65.0,
-        "crowding_pctile": 85.0,
         "memory": 8,
         "reversal_components": 0,
     },
@@ -126,18 +125,12 @@ PROFILE_PRESETS = {
         "trend_z": 1.75,
         "rsi": 72.0,
         "vol_pctile": 70.0,
-        "crowding_pctile": 88.0,
         "memory": 10,
         "reversal_components": 2,
     },
-    "Crowded Blow-Off": {
-        "return_pctile": 97.0,
-        "trend_z": 2.00,
-        "rsi": 75.0,
-        "vol_pctile": 80.0,
-        "crowding_pctile": 90.0,
+    "Failed Breakout": {
+        "breakout_days": 63,
         "memory": 10,
-        "reversal_components": 2,
     },
 }
 
@@ -266,15 +259,22 @@ def _render_sidebar(profile: str, settings: dict, crowding_source: str | None = 
     with st.sidebar:
         render_sidebar_about("25_Commodity_Event_Study.py")
         st.subheader("Current definition")
-        st.caption(
-            f"{profile} · return ≥ {settings['return_pctile']:.0f}th pct · "
-            f"trend ≥ {settings['trend_z']:.2f} vol units · RSI ≥ {settings['rsi']:.0f} · "
-            f"vol ≥ {settings['vol_pctile']:.0f}th pct"
-        )
+        if profile == "Failed Breakout":
+            st.caption(
+                f"Close above the prior {settings['breakout_days']}D closing high, then "
+                f"close below that original level and the 10D average within "
+                f"{settings['memory']} sessions. First failure per breakout."
+            )
+        else:
+            st.caption(
+                f"{profile} · return ≥ {settings['return_pctile']:.0f}th pct · "
+                f"trend ≥ {settings['trend_z']:.2f} vol units · RSI ≥ {settings['rsi']:.0f} · "
+                f"vol ≥ {settings['vol_pctile']:.0f}th pct"
+            )
         if crowding_source == "CFTC unavailable":
-            st.caption("Crowding: CFTC unavailable; Crowded Blow-Off is disabled.")
+            st.caption("Crowding: CFTC unavailable; price signals remain available.")
         elif crowding_source:
-            st.caption(f"Crowding input: {crowding_source}")
+            st.caption(f"Crowding context only: {crowding_source}")
 
 
 def _flatten_yfinance_columns(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -411,6 +411,37 @@ def _align_cftc_to_prices(cftc: pd.Series, close_index: pd.DatetimeIndex) -> pd.
     return aligned.reindex(close_index).astype(float)
 
 
+def failed_breakout_frame(close: pd.Series, breakout_days: int, memory: int) -> pd.DataFrame:
+    """Track each breakout's fixed level, using only closes known at that session."""
+    prior_high = close.shift(1).rolling(breakout_days, min_periods=breakout_days).max()
+    setup = close > prior_high
+    ma10 = close.rolling(10, min_periods=10).mean()
+    signal = pd.Series(False, index=close.index)
+    pending = pd.Series(False, index=close.index)
+    level = pd.Series(np.nan, index=close.index)
+    active: List[Tuple[int, float]] = []
+    for position, price in enumerate(close.to_numpy(dtype=float)):
+        active = [(start, threshold) for start, threshold in active if position - start <= memory]
+        remaining = []
+        for start, threshold in active:
+            if price < threshold and price < ma10.iloc[position]:
+                signal.iloc[position] = True
+                level.iloc[position] = threshold
+            else:
+                remaining.append((start, threshold))
+        active = remaining
+        # A breakout cannot fail on its own setup day. New highs do not reset older levels.
+        if setup.iloc[position]:
+            active.append((position, float(prior_high.iloc[position])))
+        # After the tenth close, an unfailed setup has no remaining confirmation window.
+        active = [(start, threshold) for start, threshold in active if position - start < memory]
+        pending.iloc[position] = bool(active)
+        if active and not signal.iloc[position]:
+            level.iloc[position] = active[-1][1]
+    return pd.DataFrame({"ProfileSetup": setup, "BreakoutPending": pending,
+                         "BreakoutLevel": level, "Signal": signal}, index=close.index)
+
+
 def build_exhaustion_frame(
     data: pd.DataFrame,
     symbol: str,
@@ -455,45 +486,39 @@ def build_exhaustion_frame(
         + (close < prior5_low).astype(int)
     )
 
-    ret_extreme = return_pctile >= float(settings["return_pctile"])
-    trend_extreme = trend_z >= float(settings["trend_z"])
-    rsi_extreme = rsi14 >= float(settings["rsi"])
-    vol_extreme = vol_pctile >= float(settings["vol_pctile"])
-    crowd_extreme = crowding_pctile >= float(settings["crowding_pctile"])
-
-    core_count = trend_extreme.astype(int) + rsi_extreme.astype(int) + vol_extreme.astype(int)
-    early_setup = ret_extreme & (core_count >= 2)
-
-    if profile == "Early Warning":
-        profile_setup = early_setup
-        condition = profile_setup
+    breakout = None
+    if profile == "Failed Breakout":
+        breakout = failed_breakout_frame(close, int(settings["breakout_days"]), int(settings["memory"]))
+        profile_setup = breakout["ProfileSetup"]
+        condition = breakout["Signal"]
+        early_setup = pd.Series(False, index=close.index)
         label = (
-            f"Early warning: {return_days}D return ≥ {settings['return_pctile']:.0f}th pct "
-            "+ 2/3 trend, RSI, vol extremes"
-        )
-    elif profile == "Confirmed Exhaustion":
-        profile_setup = early_setup
-        recent_setup = profile_setup.rolling(int(settings["memory"]), min_periods=1).max().astype(bool)
-        condition = recent_setup & (reversal_score >= int(settings["reversal_components"]))
-        label = (
-            f"Confirmed exhaustion: recent extreme + {int(settings['reversal_components'])}/3 "
-            "price-reversal checks"
+            f"Failed breakout: prior {settings['breakout_days']}D closing high lost within "
+            f"{settings['memory']} sessions + close below 10D average"
         )
     else:
-        strong_count = (
-            trend_extreme.astype(int)
-            + rsi_extreme.astype(int)
-            + vol_extreme.astype(int)
-            + crowd_extreme.fillna(False).astype(int)
-        )
-        profile_setup = ret_extreme & (strong_count >= 3) & crowd_extreme.fillna(False)
-        recent_setup = profile_setup.rolling(int(settings["memory"]), min_periods=1).max().astype(bool)
-        condition = recent_setup & (reversal_score >= int(settings["reversal_components"]))
-        if crowding_source == "CFTC unavailable":
-            condition = pd.Series(False, index=close.index, dtype=bool)
-            label = "Crowded blow-off unavailable: no mapped CFTC positioning"
+        ret_extreme = return_pctile >= float(settings["return_pctile"])
+        trend_extreme = trend_z >= float(settings["trend_z"])
+        rsi_extreme = rsi14 >= float(settings["rsi"])
+        vol_extreme = vol_pctile >= float(settings["vol_pctile"])
+        core_count = trend_extreme.astype(int) + rsi_extreme.astype(int) + vol_extreme.astype(int)
+        early_setup = ret_extreme & (core_count >= 2)
+        profile_setup = early_setup
+        if profile == "Early Warning":
+            condition = profile_setup
+            label = (
+                f"Early warning: {return_days}D return ≥ {settings['return_pctile']:.0f}th pct "
+                "+ 2/3 trend, RSI, vol extremes"
+            )
+        elif profile == "Confirmed Exhaustion":
+            recent_setup = profile_setup.rolling(int(settings["memory"]), min_periods=1).max().astype(bool)
+            condition = recent_setup & (reversal_score >= int(settings["reversal_components"]))
+            label = (
+                f"Confirmed exhaustion: recent extreme + {int(settings['reversal_components'])}/3 "
+                "price-reversal checks"
+            )
         else:
-            label = "Crowded blow-off: extreme tape + CFTC crowding + price reversal"
+            raise ValueError(f"Unknown signal profile: {profile}")
 
     frame = pd.DataFrame(
         {
@@ -516,6 +541,8 @@ def build_exhaustion_frame(
         },
         index=close.index,
     )
+    if breakout is not None:
+        frame[["BreakoutPending", "BreakoutLevel"]] = breakout[["BreakoutPending", "BreakoutLevel"]]
     return frame, condition.fillna(False).astype(bool), label, crowding_source
 
 
@@ -573,6 +600,9 @@ def build_event_observations(
             "ReversalScore": diag.get("ReversalScore", np.nan),
             "RealizedVol": realized_vol,
         }
+
+        if "BreakoutLevel" in diagnostics.columns:
+            row["BreakoutLevel"] = diag.get("BreakoutLevel", np.nan)
 
         if start_pos + 21 < len(close):
             local_start = max(0, start_pos - 21)
@@ -868,9 +898,14 @@ def make_price_chart(
     )
     if len(event_dates):
         event_prices = close.reindex(event_dates)
+        hover_extra = ""
         custom = diagnostics.reindex(event_dates)[
             ["ReturnPctile", "TrendZ", "RSI", "VolPctile", "CrowdingPctile", "ReversalScore"]
         ].to_numpy()
+        if "BreakoutLevel" in diagnostics:
+            custom = np.column_stack([custom, diagnostics.reindex(event_dates)["BreakoutLevel"],
+                                      diagnostics.reindex(event_dates)["MA10"]])
+            hover_extra = "<br>Original breakout level: %{customdata[6]:,.2f}<br>10D average: %{customdata[7]:,.2f}"
         figure.add_trace(
             go.Scatter(
                 x=event_dates,
@@ -890,7 +925,7 @@ def make_price_chart(
                     "<br>Vol pctile: %{customdata[3]:.2f}"
                     "<br>Crowding pctile: %{customdata[4]:.2f}"
                     "<br>Reversal score: %{customdata[5]:.0f}/3"
-                    "<extra></extra>"
+                    + hover_extra + "<extra></extra>"
                 ),
                 name=signal_label,
             )
@@ -993,6 +1028,8 @@ def _history_display(history: pd.DataFrame) -> pd.DataFrame:
     display = history.copy().sort_values("Date", ascending=False)
     display["Date"] = pd.to_datetime(display["Date"]).dt.strftime("%Y-%m-%d")
     display["Price"] = display["Price"].map(lambda x: _format_number(x, ",.2f"))
+    if "BreakoutLevel" in display:
+        display["BreakoutLevel"] = display["BreakoutLevel"].map(lambda x: _format_number(x, ",.2f"))
     for column in ["ReturnPctile", "RSI", "VolPctile", "CrowdingPctile"]:
         display[column] = display[column].map(lambda x: _format_number(x, ".2f"))
     display["TrendZ"] = display["TrendZ"].map(lambda x: _format_number(x, ".2f"))
@@ -1012,6 +1049,7 @@ def _history_display(history: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "Date",
         "Price",
+        "BreakoutLevel",
         "ReturnPctile",
         "TrendZ",
         "RSI",
@@ -1028,6 +1066,8 @@ def _history_display(history: pd.DataFrame) -> pd.DataFrame:
 def _settings_controls(profile: str) -> Tuple[dict, str]:
     preset = dict(PROFILE_PRESETS[profile])
     with st.sidebar:
+        if profile == "Failed Breakout":
+            return preset, "3M"
         with st.expander("Advanced thresholds", expanded=False):
             customize = st.checkbox("Customize preset", value=False)
             if customize:
@@ -1044,9 +1084,6 @@ def _settings_controls(profile: str) -> Tuple[dict, str]:
                 preset["rsi"] = st.slider("RSI threshold", 55.0, 90.0, float(preset["rsi"]), 1.0)
                 preset["vol_pctile"] = st.slider(
                     "Realized-vol percentile", 50.0, 99.0, float(preset["vol_pctile"]), 1.0
-                )
-                preset["crowding_pctile"] = st.slider(
-                    "CFTC crowding percentile", 70.0, 99.0, float(preset["crowding_pctile"]), 1.0
                 )
                 preset["memory"] = st.slider(
                     "Setup memory (sessions)", 3, 20, int(preset["memory"]), 1
@@ -1069,10 +1106,10 @@ def _current_state(
     recent_profile_setup: bool,
     crowding_source: str,
 ) -> str:
-    if profile == "Crowded Blow-Off" and crowding_source == "CFTC unavailable":
-        return "Unavailable · no CFTC"
     if current_signal:
         return "ACTIVE"
+    if profile == "Failed Breakout":
+        return "Breakout / waiting for failure" if recent_profile_setup else "Normal"
     if profile == "Early Warning":
         return "Recent setup" if recent_profile_setup else "Normal"
     return "Setup / waiting for reversal" if recent_profile_setup else "Normal"
@@ -1098,7 +1135,7 @@ def render_commodity_event_study() -> None:
     with controls[1]:
         profile = st.selectbox(
             "Top signal",
-            ["Early Warning", "Confirmed Exhaustion", "Crowded Blow-Off"],
+            list(PROFILE_PRESETS),
             index=1,
         )
     with controls[2]:
@@ -1165,8 +1202,10 @@ def render_commodity_event_study() -> None:
     latest_event = study_events.max() if len(study_events) else None
     latest_event_text = latest_event.strftime("%b %d, %Y") if latest_event is not None else "None"
     current_signal = bool(condition.reindex([latest_date]).fillna(False).iloc[0])
-    recent_profile_setup = bool(
-        diagnostics["ProfileSetup"].tail(int(settings["memory"])).fillna(False).any()
+    recent_profile_setup = (
+        bool(latest["BreakoutPending"])
+        if profile == "Failed Breakout"
+        else bool(diagnostics["ProfileSetup"].tail(int(settings["memory"])).fillna(False).any())
     )
     current_state = _current_state(
         profile, current_signal, recent_profile_setup, crowding_source
@@ -1277,7 +1316,8 @@ def render_commodity_event_study() -> None:
             - Trend extension is the log distance from the 200-day moving average divided by the current 20-session expected move. This is more stable across commodity price regimes than scaling by the standard deviation of price levels.
             - Realized volatility uses 20-day annualized log-return volatility ranked against a trailing three-year distribution.
             - Confirmed Exhaustion uses three price-reversal checks after a recent extreme: negative 5-day return, close below the 10-day moving average, and close below the prior 5-session low. These are deliberately described as related price checks, not independent evidence.
-            - Crowded Blow-Off requires actual CFTC Disaggregated Managed Money positioning. Volume is never substituted for positioning. Contracts without a verified CFTC mapping show crowding as unavailable and cannot generate a Crowded Blow-Off signal.
+            - Failed Breakout starts with a close above the highest close of the preceding 63 sessions. Each breakout keeps its original level for the following 10 sessions; the first close below both that level and the 10-day moving average signals failure. Later highs do not reset earlier levels or extend their expiry. Multiple failures on one date count once, with the existing event-spacing rule applied afterward.
+            - CFTC Managed Money positioning is context only and never gates a price signal. Volume is never substituted for positioning; missing CFTC data remains unavailable.
             - CFTC observations become usable only on the first business session after public release at 3:30 p.m. ET. Known 2020, 2021, 2023 and 2025 delays are explicitly dated; the 2018-19 shutdown backlog is excluded rather than assigned invented publication dates. Positioning also expires after seven sessions if no fresh report is available.
             - Forward statistics de-overlap signal events separately for each horizon. The baseline is conditioned on the signal sample's calendar months, excludes starts close to signal windows, and is de-overlapped before comparison. If a short history leaves no same-month control, the page falls back to an unconditional de-overlapped control. Bootstrap intervals require at least three independent signals.
             - Volatility-normalized excursion diagnostics scale each event by the annualized volatility known on the signal date and the square root of the forward horizon.

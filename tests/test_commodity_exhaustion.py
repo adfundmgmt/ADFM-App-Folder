@@ -43,32 +43,48 @@ class CommodityExhaustionTests(unittest.TestCase):
                     changed, "TEST", profile, settings, 21
                 )
                 pd.testing.assert_frame_equal(original.iloc[:500], future.iloc[:500])
-                self.assertFalse(signals.iloc[:252].any())
+                warmup = 63 if profile == "Failed Breakout" else 252
+                self.assertFalse(signals.iloc[:warmup].any())
                 self.assertEqual(source, "CFTC unavailable")
 
     @patch("adfm_core.commodity_top_exhaustion_page.load_cftc_crowding")
-    def test_crowded_profile_requires_real_positioning_and_never_uses_volume_as_crowding(
-        self, crowding
-    ):
+    def test_failed_breakout_fires_without_positioning_once_per_setup(self, crowding):
         crowding.return_value = (pd.Series(dtype=float), "CFTC unavailable")
-        dates = pd.bdate_range("2020-01-01", periods=800)
-        close = 100 * np.exp(np.linspace(0.0, 1.8, len(dates)))
-        volume = np.linspace(1000.0, 100000.0, len(dates))
-        data = pd.DataFrame({"Close": close, "Volume": volume}, index=dates)
-
+        close = [100.0] * 80 + [105.0, 104.0, 99.0, 98.0, 97.0]
+        data = pd.DataFrame({"Close": close, "Volume": 1000.0},
+                            index=pd.bdate_range("2020-01-01", periods=len(close)))
         diagnostics, signals, _, source = build_exhaustion_frame(
-            data,
-            "UNMAPPED",
-            "Crowded Blow-Off",
-            PROFILE_PRESETS["Crowded Blow-Off"],
-            63,
+            data, "UNMAPPED", "Failed Breakout",
+            {"breakout_days": 63, "memory": 10}, 63,
         )
-
         self.assertEqual(source, "CFTC unavailable")
         self.assertTrue(diagnostics["CrowdingPctile"].isna().all())
-        self.assertIn("ProfileSetup", diagnostics.columns)
-        self.assertFalse(diagnostics["ProfileSetup"].any())
-        self.assertFalse(signals.any())
+        self.assertEqual(np.flatnonzero(signals).tolist(), [82])
+        self.assertEqual(diagnostics.iloc[82]["BreakoutLevel"], 100.0)
+        self.assertFalse(diagnostics.iloc[-1]["BreakoutPending"])
+        crowding.return_value = (pd.Series(99.0, index=data.index), "CFTC test fixture")
+        _, with_crowding, _, _ = build_exhaustion_frame(
+            data, "MAPPED", "Failed Breakout", {"breakout_days": 63, "memory": 10}, 63,
+        )
+        pd.testing.assert_series_equal(signals, with_crowding)
+
+    def test_failed_breakout_freezes_levels_and_requires_ma_confirmation(self):
+        self.assertTrue(hasattr(study, "failed_breakout_frame"))
+        close = pd.Series([100.0] * 63 + [105.0, 110.0, 107.0, 104.0, 99.0])
+        result = study.failed_breakout_frame(close, 63, 10)
+        # 107 is below the latest high but above both original breakout levels.
+        # 104 fails 105, but is still above the 10-day average.
+        self.assertEqual(np.flatnonzero(result["Signal"]).tolist(), [67])
+        self.assertEqual(result.iloc[67]["BreakoutLevel"], 105.0)
+
+    def test_failed_breakout_window_includes_tenth_session_but_not_eleventh(self):
+        self.assertTrue(hasattr(study, "failed_breakout_frame"))
+        for count, expected in [(9, [73]), (10, [])]:
+            with self.subTest(sessions_before_failure=count):
+                close = pd.Series([100.0] * 63 + [105.0] + [105.0] * count + [99.0])
+                result = study.failed_breakout_frame(close, 63, 10)
+                self.assertEqual(np.flatnonzero(result["Signal"]).tolist(), expected)
+                self.assertFalse(result.iloc[-1]["BreakoutPending"])
 
     def test_cftc_positioning_is_available_only_after_publication(self):
         self.assertTrue(hasattr(study, "cftc_availability_date"))
