@@ -158,51 +158,66 @@ def style_rotation_table(frame: pd.DataFrame):
         ]
 
     styler = display.style
-    signed_cols = [
-        col
-        for col in (
-            "1W Rel",
-            "1M Rel",
-            "3M Rel",
-            "Weekly Rel Change",
-            "1M Abs",
-            "vs Parent 1M",
-            "Dist. 50D",
-            "52W Drawdown",
-            "Breadth 1M Chg",
-        )
-        if col in display.columns
-    ]
+    signed_candidates = (
+        "1W Rel",
+        "1M Rel",
+        "3M Rel",
+        "Weekly Rel Change",
+        "1W Δ Rel",
+        "1M Abs",
+        "vs Parent 1M",
+        "vs Parent",
+        "Dist. 50D",
+        "vs 50D",
+        "52W Drawdown",
+        "52W DD",
+        "Breadth 1M Chg",
+        "Breadth Δ",
+    )
+    signed_cols = [col for col in signed_candidates if col in display.columns]
     if signed_cols:
         styler = styler.map(_signed_fill, subset=signed_cols)
-    if "Weekly Rank Change" in display.columns:
-        styler = styler.map(_rank_fill, subset=["Weekly Rank Change"])
-    breadth_cols = [col for col in ("Above 50D", "Above 200D") if col in display.columns]
+
+    rank_cols = [col for col in ("Weekly Rank Change", "Rank Δ") if col in display.columns]
+    if rank_cols:
+        styler = styler.map(_rank_fill, subset=rank_cols)
+
+    breadth_cols = [
+        col
+        for col in ("Above 50D", "Above 200D", ">50D", ">200D")
+        if col in display.columns
+    ]
     if breadth_cols:
         styler = styler.map(_breadth_fill, subset=breadth_cols)
     if "State" in display.columns:
         styler = styler.map(_state_fill, subset=["State"])
 
-    percent_cols = [
-        col
-        for col in (
-            "1W Rel",
-            "1M Rel",
-            "3M Rel",
-            "Weekly Rel Change",
-            "1M Abs",
-            "vs Parent 1M",
-            "Dist. 50D",
-            "52W Drawdown",
-        )
-        if col in display.columns
-    ]
+    percent_candidates = (
+        "1W Rel",
+        "1M Rel",
+        "3M Rel",
+        "Weekly Rel Change",
+        "1W Δ Rel",
+        "1M Abs",
+        "vs Parent 1M",
+        "vs Parent",
+        "Dist. 50D",
+        "vs 50D",
+        "52W Drawdown",
+        "52W DD",
+    )
+    percent_cols = [col for col in percent_candidates if col in display.columns]
     formats = {col: "{:+.1%}" for col in percent_cols}
-    for col in ("Above 50D", "Above 200D", "Breadth 1M Chg"):
+
+    for col in ("Above 50D", "Above 200D", ">50D", ">200D"):
         if col in display.columns:
             formats[col] = "{:.0f}%"
-    if "Weekly Rank Change" in display.columns:
-        formats["Weekly Rank Change"] = "{:+.0f}"
+    for col in ("Breadth 1M Chg", "Breadth Δ"):
+        if col in display.columns:
+            formats[col] = "{:+.0f}%"
+    for col in rank_cols:
+        formats[col] = "{:+.0f}"
+
     styler = styler.format(formats, na_rep="N/A")
     return styler.set_table_styles(
         [
