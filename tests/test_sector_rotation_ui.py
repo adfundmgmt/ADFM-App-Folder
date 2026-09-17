@@ -90,6 +90,16 @@ class SectorRotationUiTests(unittest.TestCase):
         self.assertLess(map_pos, rs_pos)
         self.assertLess(rs_pos, table_pos)
 
+    def test_rotation_map_uses_short_uniform_tails(self):
+        source = Path("pages/7_Sector_Breadth_and_Rotation.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'trail_sessions = st.selectbox("Tail length", [3, 5, 8, 12], index=1',
+            source,
+        )
+        self.assertIn('line=dict(color=_rgba(edge, 0.22), width=0.9)', source)
+        self.assertNotIn('0.82 if selected else 0.28', source)
+        self.assertNotIn('2.8 if selected else 1.15', source)
+
 
 if __name__ == "__main__":
     unittest.main()
