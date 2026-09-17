@@ -40,42 +40,23 @@ def display_name(ticker: str, industry: str) -> str:
     return ticker_text
 
 
-def robust_axis_range(
+def full_extent_axis_range(
     values: Iterable[float],
-    outlier_iqr_factor: float = 1.5,
-    padding_ratio: float = 0.08,
+    padding_ratio: float = 0.05,
 ) -> tuple[float, float]:
-    """Scale to the current cross-section while excluding genuine outliers."""
+    """Scale to the full observed extent, including every visible outlier."""
     clean = pd.Series(list(values), dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
     if clean.empty:
         return (-0.05, 0.05)
 
-    core = clean
-    if len(clean) >= 8:
-        q1 = float(clean.quantile(0.25))
-        q3 = float(clean.quantile(0.75))
-        iqr = q3 - q1
-        if iqr > 0:
-            lower_fence = q1 - outlier_iqr_factor * iqr
-            upper_fence = q3 + outlier_iqr_factor * iqr
-            filtered = clean[(clean >= lower_fence) & (clean <= upper_fence)]
-            if not filtered.empty:
-                core = filtered
-
-    lo = min(float(core.min()), 0.0)
-    hi = max(float(core.max()), 0.0)
+    lo = min(float(clean.min()), 0.0)
+    hi = max(float(clean.max()), 0.0)
     span = hi - lo
     if span <= 0:
         return (-0.01, 0.01)
 
     pad = span * padding_ratio
     return lo - pad, hi + pad
-
-
-def clip_to_axis(values: pd.Series, axis_range: tuple[float, float]) -> pd.Series:
-    """Clip plotted positions to a robust range while preserving true values for hover."""
-    numeric = pd.to_numeric(values, errors="coerce")
-    return numeric.clip(lower=axis_range[0], upper=axis_range[1])
 
 
 def select_auto_labels(
@@ -252,9 +233,8 @@ def style_rotation_table(frame: pd.DataFrame):
 __all__ = [
     "STATE_EDGE",
     "STATE_PALETTE",
-    "clip_to_axis",
     "display_name",
-    "robust_axis_range",
+    "full_extent_axis_range",
     "select_auto_labels",
     "style_rotation_table",
 ]
