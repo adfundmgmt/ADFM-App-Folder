@@ -42,26 +42,33 @@ def display_name(ticker: str, industry: str) -> str:
 
 def robust_axis_range(
     values: Iterable[float],
-    lower_quantile: float = 0.08,
-    upper_quantile: float = 0.92,
-    min_span: float = 0.06,
+    outlier_iqr_factor: float = 1.5,
+    padding_ratio: float = 0.08,
 ) -> tuple[float, float]:
-    """Create a robust chart range so one extreme point cannot flatten the map."""
+    """Scale to the current cross-section while excluding genuine outliers."""
     clean = pd.Series(list(values), dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
     if clean.empty:
         return (-0.05, 0.05)
 
-    if len(clean) < 5:
-        lo = float(clean.min())
-        hi = float(clean.max())
-    else:
-        lo = float(clean.quantile(lower_quantile))
-        hi = float(clean.quantile(upper_quantile))
+    core = clean
+    if len(clean) >= 8:
+        q1 = float(clean.quantile(0.25))
+        q3 = float(clean.quantile(0.75))
+        iqr = q3 - q1
+        if iqr > 0:
+            lower_fence = q1 - outlier_iqr_factor * iqr
+            upper_fence = q3 + outlier_iqr_factor * iqr
+            filtered = clean[(clean >= lower_fence) & (clean <= upper_fence)]
+            if not filtered.empty:
+                core = filtered
 
-    lo = min(lo, 0.0)
-    hi = max(hi, 0.0)
-    span = max(hi - lo, min_span)
-    pad = max(span * 0.12, 0.006)
+    lo = min(float(core.min()), 0.0)
+    hi = max(float(core.max()), 0.0)
+    span = hi - lo
+    if span <= 0:
+        return (-0.01, 0.01)
+
+    pad = span * padding_ratio
     return lo - pad, hi + pad
 
 
