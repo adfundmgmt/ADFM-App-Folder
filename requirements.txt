@@ -18,3 +18,4 @@ cot_reports
 pypdf
 pyarrow
 exchange-calendars
+openpyxl
