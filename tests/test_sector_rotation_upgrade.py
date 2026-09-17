@@ -12,8 +12,8 @@ from adfm_core.sector_rotation import (
     compute_relative_metrics,
     confirm_state_series,
     movement_from_coordinates,
-    parse_spdr_holdings_table,
 )
+from adfm_core.sector_rotation_holdings import parse_spdr_holdings_table
 
 
 class SectorRotationUpgradeTests(unittest.TestCase):
