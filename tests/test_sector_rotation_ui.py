@@ -116,8 +116,12 @@ class SectorRotationUiTests(unittest.TestCase):
 
     def test_rotation_map_does_not_clip_outlier_coordinates(self):
         source = Path("pages/7_Sector_Breadth_and_Rotation.py").read_text(encoding="utf-8")
-        self.assertIn('x_range = full_extent_axis_range(snapshot["Map X"])', source)
-        self.assertIn('y_range = full_extent_axis_range(snapshot["Map Y"])', source)
+        self.assertIn('axis_x = snapshot["Map X"].tolist()', source)
+        self.assertIn('axis_y = snapshot["Map Y"].tolist()', source)
+        self.assertIn('axis_x.extend(hist["x"].tolist())', source)
+        self.assertIn('axis_y.extend(hist["y"].tolist())', source)
+        self.assertIn("x_range = full_extent_axis_range(axis_x)", source)
+        self.assertIn("y_range = full_extent_axis_range(axis_y)", source)
         self.assertNotIn("clip_to_axis", source)
         self.assertNotIn("Diamond markers are clipped", source)
 
