@@ -304,8 +304,18 @@ render_section_header(
     "Rotation map",
     "Pastel quadrants show the current state. Every exposure carries a short tail; selected markers are emphasized.",
 )
-x_range = full_extent_axis_range(snapshot["Map X"])
-y_range = full_extent_axis_range(snapshot["Map Y"])
+tail_by_id: Dict[str, pd.DataFrame] = {}
+axis_x = snapshot["Map X"].tolist()
+axis_y = snapshot["Map Y"].tolist()
+for item_id in snapshot["Id"]:
+    hist = rotation_by_id[item_id].dropna(subset=["x", "y"]).tail(trail_sessions)
+    tail_by_id[item_id] = hist
+    if not hist.empty:
+        axis_x.extend(hist["x"].tolist())
+        axis_y.extend(hist["y"].tolist())
+
+x_range = full_extent_axis_range(axis_x)
+y_range = full_extent_axis_range(axis_y)
 plot_snapshot = snapshot.copy()
 label_ids = select_auto_labels(plot_snapshot, selected_ids=selected_ids, max_labels=14)
 
@@ -324,7 +334,7 @@ for x0, x1, y0, y1, fill in quadrants:
 
 for item_id in snapshot["Id"]:
     row = plot_snapshot.loc[plot_snapshot["Id"] == item_id].iloc[0]
-    hist = rotation_by_id[item_id].dropna(subset=["x", "y"]).tail(trail_sessions)
+    hist = tail_by_id[item_id]
     if len(hist) < 2:
         continue
     edge = STATE_EDGE.get(str(row["State"]), "#7B8791")
