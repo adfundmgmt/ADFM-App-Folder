@@ -1,538 +1,190 @@
+"""Bond monitor at the established Global Macro Regime URL."""
 from __future__ import annotations
+
+from html import escape
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.global_macro import (
-    COUNTRIES,
-    INDICATORS,
-    MARKET_HORIZONS,
-    clean,
-    comparison_period,
-    country_rows,
-    equity_matrix,
-    load_economics,
-    load_equities,
-    load_yields,
-)
-from adfm_core.palette import PASTEL, PASTEL_DIVERGING_SCALE, PASTEL_RATES_SCALE
-from adfm_core.ui import (
-    PageHeader,
-    inject_explorer_style,
-    render_footer,
-    render_page_header,
-    render_sidebar_about,
-)
+from adfm_core.bond_monitor import daily_snapshot, monthly_snapshot, spread_series
+from adfm_core.global_macro import COUNTRIES, clean, load_yields
+from adfm_core.palette import PASTEL
+from adfm_core.primary_data import fetch_fred_symbols
+from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header, render_sidebar_about
 
 
-st.set_page_config(
-    page_title="Global Macro Regime",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-inject_explorer_style(max_width_px=1700)
-render_page_header(
-    PageHeader(
-        "Global Macro Regime",
-        "G20 · Current market leadership and higher-frequency macro momentum",
-    )
-)
-
-with st.sidebar:
-    render_sidebar_about("2_Global_Macro_Regime.py")
-
-now_ny = pd.Timestamp.now(tz="America/New_York")
-today = now_ny.tz_localize(None)
-metric = st.segmented_control(
-    "Market / economy",
-    ["Equities", "10Y yields", *INDICATORS],
-    default="Equities",
-    key="gm_metric",
-    label_visibility="collapsed",
-) or "Equities"
+US = (("3-month Treasury", "DGS3MO"), ("2-year Treasury", "DGS2"),
+      ("5-year Treasury", "DGS5"), ("10-year Treasury", "DGS10"), ("30-year Treasury", "DGS30"))
+REAL = (("5-year real yield", "DFII5"), ("10-year real yield", "DFII10"),
+        ("5-year breakeven", "T5YIE"), ("10-year breakeven", "T10YIE"))
+CREDIT = (("US investment grade OAS", "BAMLC0A0CM"), ("US BBB OAS", "BAMLC0A4CBBB"),
+          ("US high yield OAS", "BAMLH0A0HYM2"))
+VIEWS = ("US Treasury", "Real yields & inflation", "Global sovereign", "Credit spreads")
+PERIODS = {"1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10}
 
 
-def tape_label(one_month, three_month):
-    if not np.isfinite(one_month) or not np.isfinite(three_month):
-        return "Unavailable"
-    if one_month > 0 and three_month > 0:
-        return "Leading"
-    if one_month > 0 and three_month <= 0:
-        return "Rebounding"
-    if one_month <= 0 and three_month > 0:
-        return "Fading"
-    return "Struggling"
+def style():
+    inject_explorer_style(max_width_px=1540)
+    st.markdown("""
+    <style>
+    .bond-status {display:flex;flex-wrap:wrap;gap:.45rem 1.1rem;border-top:1px solid #d7d7d7;
+        border-bottom:1px solid #d7d7d7;margin:.25rem 0 .75rem;padding:.57rem 0;color:#222;
+        font:.78rem/1.35 Arial,Helvetica,sans-serif}
+    .bond-status strong {color:#000;font-weight:800}
+    .bond-heading {margin:1.05rem 0 .55rem;color:#000;
+        font:700 1.25rem/1.2 Georgia,"Times New Roman",serif;letter-spacing:-.018em}
+    .bond-wrap {overflow-x:auto;border:1px solid #aeb7bd;background:#fff;margin:.15rem 0 .6rem}
+    .bond-table {width:100%;min-width:850px;border-collapse:collapse;table-layout:fixed;
+        font:.76rem/1.2 Arial,Helvetica,sans-serif}
+    .bond-table th,.bond-table td {border-right:1px solid #aeb7bd;border-bottom:1px solid #aeb7bd;
+        padding:.57rem .48rem;text-align:right;white-space:nowrap}
+    .bond-table th:first-child,.bond-table td:first-child {text-align:left;width:25%;padding-left:.72rem}
+    .bond-table th:last-child,.bond-table td:last-child {border-right:0}
+    .bond-table tr:last-child td {border-bottom:0}
+    .bond-table th {background:#357f8d;color:white;font-weight:800}
+    .bond-table td:first-child {background:#edf0f2;font-weight:800}
+    .bond-table td.up {background:#edc9cd}
+    .bond-table td.down {background:#dce9e1}
+    .bond-table td.flat {background:#e7edf1}
+    .bond-table td.na {background:#f4f5f5;color:#777}
+    .bond-note {color:#666;font:.73rem/1.45 Arial,Helvetica,sans-serif;margin:.2rem 0 .7rem}
+    </style>""", unsafe_allow_html=True)
 
 
-def _map_scale(metric_name, is_change):
-    if is_change:
-        if metric_name in ("10Y yields", "Inflation", "Unemployment"):
-            return PASTEL_RATES_SCALE
-        return PASTEL_DIVERGING_SCALE
-    if metric_name == "GDP growth":
-        return PASTEL_DIVERGING_SCALE
-    if metric_name == "10Y yields":
-        return [
-            [0.0, PASTEL["blue"]],
-            [0.5, "#FBFBF8"],
-            [1.0, PASTEL["coral"]],
-        ]
-    if metric_name in ("Inflation", "Unemployment"):
-        return [
-            [0.0, PASTEL["sage"]],
-            [0.5, "#FBFBF8"],
-            [1.0, PASTEL["rose"]],
-        ]
-    return PASTEL_DIVERGING_SCALE
+@st.cache_data(ttl=3600, max_entries=4, show_spinner=False)
+def daily_data(symbols: tuple[str, ...]):
+    return fetch_fred_symbols(symbols, start="2015-01-01")
 
 
-def render_world_map(data, metric_name, measure, unit, is_change, key):
-    available = data.loc[data["Value"].notna()].copy()
+def comparison_table(rows: list[dict], monthly: bool, spread: bool):
+    horizons = ("1M", "3M", "YTD") if monthly else ("1D", "1W", "1M", "3M", "YTD")
 
-    fig = go.Figure(
-        go.Choropleth(
-            locations=data["ISO"],
-            z=[0] * len(data),
-            locationmode="ISO-3",
-            colorscale=[[0, "#D9DDE3"], [1, "#D9DDE3"]],
-            showscale=False,
-            text=data["Country"],
-            customdata=data[["Status", "Observation"]].fillna("").to_numpy(),
-            marker_line_color="#FFFFFF",
-            marker_line_width=0.8,
-            hovertemplate=(
-                "<b>%{text}</b><br>%{customdata[0]}"
-                "<br>Observation: %{customdata[1]}<extra></extra>"
-            ),
-        )
-    )
+    def cell(value, change=False):
+        if not np.isfinite(value):
+            return '<td class="na">—</td>'
+        if not change:
+            return f"<td>{value:.2f}%</td>"
+        tone = "flat" if abs(value) < .5 else "up" if value > 0 else "down"
+        return f'<td class="{tone}">{value:+.0f} bp</td>'
 
-    if not available.empty:
-        bounds = {}
-        if is_change or metric_name == "GDP growth":
-            limit = max(float(available["Value"].abs().max()), 0.01)
-            bounds = dict(zmin=-limit, zmax=limit, zmid=0)
-
-        fig.add_trace(
-            go.Choropleth(
-                locations=available["ISO"],
-                z=available["Value"],
-                locationmode="ISO-3",
-                text=available["Country"],
-                colorscale=_map_scale(metric_name, is_change),
-                **bounds,
-                customdata=available[["Series", "Observation", "Baseline"]]
-                .fillna("")
-                .to_numpy(),
-                marker_line_color="#FFFFFF",
-                marker_line_width=0.8,
-                colorbar=dict(
-                    title=dict(text=unit, font=dict(color="#4B5563")),
-                    thickness=10,
-                    len=0.62,
-                    outlinewidth=0,
-                    tickfont=dict(color="#4B5563"),
-                ),
-                hovertemplate=(
-                    f"<b>%{{text}}</b><br>%{{customdata[0]}}"
-                    f"<br>{measure}: %{{z:.2f}} {unit}"
-                    "<br>Observation: %{customdata[1]}"
-                    "<br>Baseline: %{customdata[2]}<extra></extra>"
-                ),
-            )
-        )
-
-    fig.update_geos(
-        projection_type="natural earth",
-        showframe=False,
-        showcoastlines=False,
-        showland=True,
-        landcolor="#F3F4F6",
-        showcountries=True,
-        countrycolor="#FFFFFF",
-        countrywidth=0.6,
-        showocean=True,
-        oceancolor="#FFFFFF",
-        bgcolor="#FFFFFF",
-        lataxis_range=[-58, 85],
-    )
-    fig.update_layout(
-        height=500,
-        margin=dict(l=0, r=0, t=4, b=4),
-        paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF",
-        font=dict(color="#111827"),
-        dragmode=False,
-    )
-    st.plotly_chart(
-        fig,
-        width="stretch",
-        config={"displayModeBar": False, "scrollZoom": False},
-        key=key,
-    )
+    head = "<th>Instrument</th><th>Level</th>" + "".join(f"<th>{h} Δ</th>" for h in horizons) + "<th>Observed</th>"
+    body = []
+    for row in rows:
+        snap = row["snapshot"]
+        date = escape(snap["Observation"] or "—")
+        label = date + (" · stale" if snap["Status"] == "Stale" else "")
+        body.append("<tr><td>" + escape(row["name"]) + "</td>" + cell(snap["Yield"])
+                    + "".join(cell(snap[h], True) for h in horizons) + f"<td>{label}</td></tr>")
+    st.markdown('<div class="bond-wrap"><table class="bond-table"><thead><tr>' + head
+                + '</tr></thead><tbody>' + "".join(body) + '</tbody></table></div>', unsafe_allow_html=True)
+    unit = "spread" if spread else "yield"
+    frequency = "monthly average" if monthly else "daily observation"
+    st.markdown(f'<div class="bond-note">Level is {unit} in %. Changes are basis points; '
+                f'{frequency} dates are shown for every instrument. Red = higher/wider, '
+                'green = lower/tighter. Missing comparisons are blank.</div>', unsafe_allow_html=True)
 
 
-def render_country_history(series, selected_metric):
-    selected = st.selectbox(
-        "Country history",
-        [c.name for c in COUNTRIES],
-        index=18,
-        key=f"gm_history_{selected_metric}",
-    )
-    country = next(c for c in COUNTRIES if c.name == selected)
-    history = clean(series.get(country.iso, pd.Series(dtype=float)))
-
+def history_chart(series: pd.Series, name: str, years: int, monthly: bool, spread: bool):
+    history = clean(series)
     if history.empty:
-        st.caption(f"No {selected_metric.lower()} history available for {selected}.")
+        st.info("No history is available for this instrument.")
         return
-
-    line = go.Figure(
-        go.Scatter(
-            x=history.index,
-            y=history,
-            mode="lines",
-            line=dict(color=PASTEL["blue"], width=2),
-            connectgaps=False,
-        )
-    )
-    if selected_metric == "Equities":
-        yaxis_title = country.index
-        history_type = f"index level in {country.currency}"
-    elif selected_metric == "10Y yields":
-        yaxis_title = "10Y yield (%)"
-        history_type = "monthly average"
-    elif selected_metric == "GDP growth":
-        yaxis_title = "q/q annualized (%)"
-        history_type = "quarterly real GDP growth, annualized"
-    elif selected_metric == "Unemployment":
-        yaxis_title = "unemployment (%)"
-        history_type = "latest seasonally adjusted monthly/quarterly rate"
-    else:
-        yaxis_title = "inflation YoY (%)"
-        history_type = "monthly CPI year-over-year"
-
-    line.update_layout(
-        height=245,
-        margin=dict(l=0, r=20, t=8, b=0),
-        template="plotly_white",
-        yaxis_title=yaxis_title,
-        xaxis_title=None,
-        showlegend=False,
-    )
-    st.plotly_chart(line, width="stretch", config={"displayModeBar": False})
-    st.caption(
-        f"{selected} · {history_type} · history through {history.index[-1]:%Y-%m-%d}"
-    )
+    history = history.loc[history.index >= history.index[-1] - pd.DateOffset(years=years)]
+    fig = go.Figure(go.Scatter(x=history.index, y=history, mode="lines",
+                               line=dict(color=PASTEL["blue"], width=2), name=name,
+                               hovertemplate="%{x|%b %d, %Y}<br>%{y:.2f}%<extra></extra>"))
+    fig.update_layout(height=330, margin=dict(l=35, r=20, t=10, b=25), paper_bgcolor="white",
+                      plot_bgcolor="white", showlegend=False, font=dict(family="Arial", color="#222", size=12),
+                      xaxis=dict(showgrid=False, linecolor="#aeb7bd"),
+                      yaxis=dict(title="Spread (%)" if spread else "Yield (%)", gridcolor="#e7edf1", zeroline=False))
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    st.caption(f"{name} · {'monthly average' if monthly else 'daily observation'} · latest observation {history.index[-1]:%Y-%m-%d}")
 
 
-errors = {}
+def render():
+    style()
+    render_page_header(PageHeader(
+        title="Global Bond Monitor",
+        description="Track sovereign yields, the Treasury curve, inflation compensation and credit spreads across horizons.",
+        eyebrow="ADFM Rates & Credit",
+        source_note="Federal Reserve / FRED · OECD long-term rates via FRED",
+    ))
+    with st.sidebar:
+        render_sidebar_about("2_Global_Macro_Regime.py")
+        st.caption("Daily U.S. yields and spreads are end-of-day observations. Global 10-year yields are monthly averages.")
 
-if metric == "Equities":
-    a, b, c = st.columns([1, 1, 2])
+    a, b, c = st.columns([1.75, 1.65, .7], gap="small")
     with a:
-        horizon = st.selectbox(
-            "Ranking / map window",
-            list(MARKET_HORIZONS),
-            index=2,
-            key="gm_equity_horizon",
-        )
+        view = st.selectbox("Bond market", VIEWS, key="bond_view")
+    monthly = view == "Global sovereign"
+    if monthly:
+        names = [country.name for country in COUNTRIES if country.yield_id]
+        default = "United States"
+    else:
+        definitions = US if view == "US Treasury" else REAL if view == "Real yields & inflation" else CREDIT
+        names = [name for name, _ in definitions]
+        default = "10-year Treasury" if view == "US Treasury" else names[0]
+        if view == "US Treasury":
+            names += ["2s10s curve", "5s30s curve"]
     with b:
-        basis = st.selectbox(
-            "Return basis",
-            ["Local currency", "USD-adjusted"],
-            index=0,
-            key="gm_equity_basis",
-            help=(
-                "USD-adjusted combines the local index return with the local currency's "
-                "move versus USD."
-            ),
-        )
+        selected = st.selectbox("Chart instrument", names, index=names.index(default), key="bond_instrument")
     with c:
-        st.caption(
-            "Yahoo Finance daily history with the latest available 5-minute bar overlaid. "
-            "Market data can be exchange-delayed. Cache refreshes every 2 minutes."
-        )
+        period = st.selectbox("Chart history", tuple(PERIODS), index=1, key="bond_period")
 
-    with st.spinner("Loading global equity and FX tape…"):
-        equities, fx, errors = load_equities()
-    matrix = equity_matrix(equities, fx, today)
-
-    prefix = "Local " if basis == "Local currency" else "USD "
-    selected_col = f"{prefix}{horizon}"
-    one_month_col = f"{prefix}1M"
-    three_month_col = f"{prefix}3M"
-    matrix["Tape"] = [
-        tape_label(x, y)
-        for x, y in zip(matrix[one_month_col], matrix[three_month_col])
-    ]
-
-    valid = matrix.loc[matrix[selected_col].notna()].copy()
-    if valid.empty:
-        st.warning("No fresh equity observations are available for this view.")
+    today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
+    if monthly:
+        with st.spinner("Loading sovereign yield history…"):
+            raw, errors = load_yields()
+        items = [(country.name, country.yield_id, raw.get(country.iso, pd.Series(dtype=float)))
+                 for country in COUNTRIES if country.yield_id]
+        problems = list(errors.items())
     else:
-        leader = valid.loc[valid[selected_col].idxmax()]
-        laggard = valid.loc[valid[selected_col].idxmin()]
-        breadth = float((valid[selected_col] > 0).mean() * 100)
-        rebounds = int((matrix["Tape"] == "Rebounding").sum())
-        struggling = int((matrix["Tape"] == "Struggling").sum())
-        st.caption(
-            f"{horizon} {basis.lower()} breadth: {breadth:.0f}% positive · "
-            f"leader: {leader['Country']} {leader[selected_col]:+.2f}% · "
-            f"laggard: {laggard['Country']} {laggard[selected_col]:+.2f}% · "
-            f"rebounding: {rebounds} · struggling: {struggling}"
-        )
+        symbols = tuple(symbol for _, symbol in definitions)
+        with st.spinner("Loading bond market history…"):
+            panel, status = daily_data(symbols)
+        items = [(name, symbol, panel[symbol] if symbol in panel else pd.Series(dtype=float))
+                 for name, symbol in definitions]
+        problems = [(str(row.get("symbol", "FRED")), str(row["error"]))
+                    for _, row in status.iterrows() if row.get("error")] if not status.empty and "error" in status else []
+        if view == "US Treasury":
+            indexed = {symbol: data for _, symbol, data in items}
+            items += [("2s10s curve", "DGS10-DGS2", spread_series(indexed["DGS10"], indexed["DGS2"])),
+                      ("5s30s curve", "DGS30-DGS5", spread_series(indexed["DGS30"], indexed["DGS5"]))]
 
-    map_data = matrix[
-        ["Country", "ISO", "Observation", "Status", "Index", selected_col]
-    ].rename(columns={selected_col: "Value", "Index": "Series"})
-    map_data["Baseline"] = ""
-    st.caption(
-        f"World map · {horizon} {basis.lower()} index performance · "
-        "green = rising, red = falling, gray = unavailable"
-    )
-    render_world_map(
-        map_data,
-        "Equities",
-        f"{horizon} return",
-        "%",
-        True,
-        "gm_equity_world_map",
-    )
+    rows = [{"name": name, "symbol": symbol, "series": series,
+             "snapshot": monthly_snapshot(series, today) if monthly else daily_snapshot(series, today)}
+            for name, symbol, series in items]
+    current = [row["snapshot"]["Observation"] for row in rows if row["snapshot"]["Status"] == "Current"]
+    st.markdown('<div class="bond-status">'
+                f'<span><strong>Market</strong> {escape(view)}</span>'
+                f'<span><strong>Coverage</strong> {len(current)}/{len(rows)} current</span>'
+                f'<span><strong>Frequency</strong> {"Monthly average" if monthly else "Daily"}</span>'
+                f'<span><strong>Latest period</strong> {escape(max(current) if current else "Unavailable")}</span>'
+                '<span><strong>Changes</strong> Basis points</span></div>', unsafe_allow_html=True)
+    if not current:
+        st.warning("No current observations were returned. Historical levels remain visible with their original dates.")
+    st.markdown('<div class="bond-heading">Market comparison</div>', unsafe_allow_html=True)
+    comparison_table(rows, monthly, view == "Credit spreads")
+    chosen = next(row for row in rows if row["name"] == selected)
+    st.markdown(f'<div class="bond-heading">{escape(selected)} · history</div>', unsafe_allow_html=True)
+    history_chart(chosen["series"], selected, PERIODS[period], monthly,
+                  view == "Credit spreads" or "curve" in selected)
 
-    ranked = matrix.copy()
-    ranked.insert(
-        0,
-        "Rank",
-        ranked[selected_col].rank(ascending=False, method="min").astype("Int64"),
-    )
-    performance_columns = (
-        ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y"]
-        if basis == "Local currency"
-        else [f"USD {h}" for h in MARKET_HORIZONS]
-    )
-    table_columns = [
-        "Rank", "Country", "Tape", "Level", *performance_columns,
-        "FX 1M", "Observation", "Index", "Currency", "Status",
-    ]
-    number_config = {
-        "Level": st.column_config.NumberColumn(format="%.2f"),
-        "FX 1M": st.column_config.NumberColumn(
-            format="%.2f",
-            help="Local currency return versus USD over one month. Positive = stronger local currency.",
-        ),
-        "Rank": st.column_config.NumberColumn(
-            help=f"Descending rank by {horizon} {basis.lower()} performance."
-        ),
-    }
-    for col in performance_columns:
-        number_config[col] = st.column_config.NumberColumn(format="%.2f")
-
-    st.dataframe(
-        ranked[table_columns],
-        hide_index=True,
-        width="stretch",
-        height=38 + 35 * 19,
-        column_config=number_config,
-    )
-    render_country_history(equities, "Equities")
-
-else:
-    a, b, c = st.columns([1, 1, 2])
-    view = "Change" if metric == "10Y yields" else "Level"
-    horizon = "1M"
-    mode = "Latest per country"
-
-    with a:
-        view = st.selectbox(
-            "Map measure",
-            ["Level", "Change"],
-            index=1 if metric == "10Y yields" else 0,
-            key=f"gm_view_{metric}",
-        )
-    with b:
-        if metric == "10Y yields" and view == "Change":
-            horizon = st.selectbox(
-                "Change window",
-                ["1M", "3M", "6M", "1Y"],
-                index=0,
-                key="gm_yield_horizon",
-            )
-        elif metric == "GDP growth":
-            st.caption("Latest quarterly real GDP growth · q/q rate compounded to an annual rate")
-        elif metric == "Unemployment":
-            st.caption("Latest seasonally adjusted monthly rate · quarterly fallback where needed")
-        elif metric == "Inflation":
-            st.caption("Latest monthly CPI inflation · year-over-year rate")
-    with c:
-        if metric == "10Y yields":
-            mode = st.selectbox(
-                "Observation alignment",
-                ["Latest per country", "Comparable period"],
-                index=0,
-                help=(
-                    "Latest per country maximizes freshness. Comparable period uses the latest "
-                    "completed month covered by at least 80% of fresh reporters."
-                ),
-                key="gm_alignment_yields",
-            )
+    with st.expander("Sources and definitions"):
+        if monthly:
+            st.write("OECD 10-year long-term interest rates distributed by FRED. These are monthly averages, not tradable bond prices or intraday quotes. Missing prior months are never bridged.")
         else:
-            st.caption(
-                "Higher-frequency OECD releases, using the OECD API with FRED fallbacks. Each country's actual observation "
-                "date is shown; unavailable or stale series remain gray."
-            )
-
-    with st.spinner(f"Loading {metric.lower()}…"):
-        if metric == "10Y yields":
-            series, errors = load_yields()
-        else:
-            series, errors = load_economics(metric)
-
-    period = (
-        comparison_period(series, today, "M")
-        if metric == "10Y yields" and mode == "Comparable period"
-        else None
-    )
-    data = country_rows(series, today, metric, view, horizon, period)
-    if metric == "10Y yields" and mode == "Comparable period" and period is None:
-        data["Value"] = np.nan
-        data["Status"] = "No comparable period"
-
-    is_change = view == "Change"
-    if metric == "10Y yields":
-        unit = "bp" if is_change else "%"
-        measure = f"{horizon} yield change" if is_change else "10Y yield"
-    elif metric == "GDP growth":
-        unit = "pp" if is_change else "%"
-        measure = "Change vs prior quarter" if is_change else "GDP q/q annualized"
-    elif metric == "Unemployment":
-        unit = "pp" if is_change else "%"
-        measure = "Change vs prior release" if is_change else "Unemployment"
-    else:
-        unit = "pp" if is_change else "%"
-        measure = "Change vs prior release" if is_change else "Inflation YoY"
-
-    available = data.loc[data["Value"].notna()].copy()
-    if metric == "10Y yields":
-        st.caption(
-            f"{len(available)}/19 countries observed · official 10Y government-bond monthly "
-            "averages via OECD/FRED · observation dates shown explicitly."
-        )
-    elif metric == "GDP growth":
-        st.caption(
-            f"{len(available)}/19 countries observed · latest seasonally adjusted quarterly "
-            "real GDP growth, compounded to an annual rate."
-        )
-    elif metric == "Unemployment":
-        st.caption(
-            f"{len(available)}/19 countries observed · latest seasonally adjusted unemployment "
-            "rate, monthly where available with quarterly fallback."
-        )
-    else:
-        st.caption(
-            f"{len(available)}/19 countries observed · latest monthly CPI year-over-year inflation."
-        )
-
-    if available.empty:
-        st.warning(
-            "No observations meet this view's coverage and freshness requirements. "
-            "Unavailable countries remain gray."
-        )
-
-    map_data = data.rename(columns={"Period": "Observation"}).copy()
-    st.caption(
-        f"World map · {measure.lower()} · gray = unavailable or outside the 19 G20 countries"
-    )
-    render_world_map(
-        map_data,
-        metric,
-        measure,
-        unit,
-        is_change,
-        f"gm_world_map_{metric}_{view}",
-    )
-
-    value_label = f"{measure} ({unit})"
-    ranked = data.sort_values("Value", ascending=False, na_position="last").copy()
-    ranked.insert(
-        0,
-        "Rank",
-        ranked["Value"].rank(ascending=False, method="min").astype("Int64"),
-    )
-    ranked = ranked.rename(
-        columns={
-            "Value": value_label,
-            "Period": "Observation",
-            "Level": "Level (%)",
-        }
-    )
-    columns = ["Rank", "Country", value_label]
-    if is_change:
-        columns += ["Level (%)"]
-    columns += ["Observation", "Baseline", "Series", "Status", "Source"]
-
-    st.dataframe(
-        ranked[columns],
-        hide_index=True,
-        width="stretch",
-        height=38 + 35 * 19,
-        column_config={
-            value_label: st.column_config.NumberColumn(format="%.2f"),
-            "Level (%)": st.column_config.NumberColumn(format="%.2f"),
-            "Source": st.column_config.LinkColumn(display_text="Source"),
-            "Rank": st.column_config.NumberColumn(
-                help="Descending numeric rank. Rank is descriptive, not an economic score."
-            ),
-        },
-    )
-    render_country_history(series, metric)
+            st.write("Treasury constant-maturity yields, TIPS real yields and inflation compensation use Federal Reserve series distributed by FRED. Credit uses ICE BofA option-adjusted spread indices distributed by FRED. Values are end-of-day observations, not executable bond prices.")
+            st.write("Treasury curve spreads subtract yields observed on the same date. A positive 2s10s level means the 10-year yield exceeds the 2-year yield.")
+        st.write("Changes require a baseline near the requested daily horizon or the exact prior month. Daily observations older than seven calendar days and monthly averages older than four reporting periods are stale; their changes are withheld. YTD uses the prior December for monthly data and the prior year-end for daily data.")
+        if problems:
+            st.dataframe(pd.DataFrame(problems, columns=["Series", "Provider status"]), hide_index=True, width="stretch")
+        if "curve" not in selected:
+            st.link_button("View source series on FRED", f"https://fred.stlouisfed.org/series/{chosen['symbol']}")
+    render_footer()
 
 
-with st.expander("Sources, freshness and definitions"):
-    st.markdown(
-        "**Universe:** the G20's 19 individual countries. The EU and African Union are "
-        "regional members and are not painted as countries. Other countries remain unhighlighted."
-    )
-    st.markdown(
-        "**Equities:** Yahoo Finance national headline indices in local currency. Two years "
-        "of daily history are overlaid with the latest available 5-minute observation and cached "
-        "for two minutes. Current-session observations are used when available."
-    )
-    st.markdown(
-        "**USD-adjusted equities:** local index return compounded with the local currency's "
-        "return versus USD. Missing FX remains missing."
-    )
-    st.markdown(
-        "**Tape labels:** Leading = positive 1M and 3M; Rebounding = positive 1M but non-positive "
-        "3M; Fading = non-positive 1M but positive 3M; Struggling = non-positive 1M and 3M."
-    )
-    st.markdown(
-        "**10Y yields:** OECD long-term interest rates delivered by FRED. They are monthly "
-        "averages rather than live sovereign yields. Changes are basis points between exact months."
-    )
-    st.markdown(
-        "**GDP:** OECD quarterly real GDP growth delivered by FRED. The latest seasonally adjusted "
-        "q/q growth rate is compounded for four quarters: (1 + q/q)^4 - 1. This is a run-rate "
-        "annualization, not a forecast for full-year GDP."
-    )
-    st.markdown(
-        "**Unemployment:** latest OECD seasonally adjusted rate, monthly when available with a "
-        "quarterly fallback. The level is not annualized because unemployment is a point-in-time rate."
-    )
-    st.markdown(
-        "**Inflation:** latest OECD monthly CPI year-over-year rate. It is already expressed over a "
-        "12-month interval, so no additional annualization is applied."
-    )
-    st.markdown(
-        "**Freshness:** each country's observation date is displayed. GDP older than roughly two "
-        "quarters and monthly labor/inflation data older than roughly five months are treated as stale "
-        "and remain gray."
-    )
-    if errors:
-        st.dataframe(
-            pd.DataFrame(errors.items(), columns=["Provider / series", "Load status"]),
-            hide_index=True,
-        )
-
-render_footer()
+st.set_page_config(page_title="Global Bond Monitor", layout="wide", initial_sidebar_state="collapsed")
+render()

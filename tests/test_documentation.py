@@ -35,7 +35,7 @@ class DocumentationTests(unittest.TestCase):
             [tool.title for tool in TOOL_CATALOG],
             [
                 "Equity Baskets",
-                "Global Macro",
+                "Global Bond Monitor",
                 "Liquidity",
                 "Rates & Yield Curve",
                 "Credit Conditions",
