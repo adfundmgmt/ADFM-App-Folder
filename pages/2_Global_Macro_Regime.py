@@ -59,8 +59,8 @@ def daily_data(symbols: tuple[str, ...]):
 
 
 @st.cache_data(ttl=21600, max_entries=1, show_spinner=False)
-def global_data():
-    return fetch_fred_symbols(tuple(symbol for _, symbol in GLOBAL_SOVEREIGNS), start="2015-01-01")
+def global_data(symbols: tuple[str, ...]):
+    return fetch_fred_symbols(symbols, start="2015-01-01")
 
 
 def comparison_table(rows: list[dict], monthly: bool, spread: bool):
@@ -141,7 +141,7 @@ def render():
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
     if monthly:
         with st.spinner("Loading sovereign yield history…"):
-            panel, status = global_data()
+            panel, status = global_data(tuple(symbol for _, symbol in GLOBAL_SOVEREIGNS))
         items = [(name, symbol, panel[symbol] if symbol in panel else pd.Series(dtype=float))
                  for name, symbol in GLOBAL_SOVEREIGNS]
         problems = [(str(row.get("symbol", "FRED")), str(row["error"]))

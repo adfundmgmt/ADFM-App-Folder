@@ -46,7 +46,7 @@ POLICIES = {
 
 
 def policy_for(symbol: str) -> FredPolicy:
-    if symbol.startswith("IRLTLT01"):
+    if symbol.startswith("IRLTLT01") or symbol == "INDIRLTLT01STM":
         return FredPolicy("Percent", "Monthly", 100, -10, 100)
     return POLICIES.get(symbol, FredPolicy())
 
