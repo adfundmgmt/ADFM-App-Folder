@@ -8,8 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.bond_monitor import daily_snapshot, monthly_snapshot, spread_series
-from adfm_core.global_macro import COUNTRIES, clean, load_yields
+from adfm_core.bond_monitor import GLOBAL_SOVEREIGNS, daily_snapshot, monthly_snapshot, spread_series
+from adfm_core.global_macro import clean
 from adfm_core.palette import PASTEL
 from adfm_core.primary_data import fetch_fred_symbols
 from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header, render_sidebar_about
@@ -58,6 +58,11 @@ def daily_data(symbols: tuple[str, ...]):
     return fetch_fred_symbols(symbols, start="2015-01-01")
 
 
+@st.cache_data(ttl=21600, max_entries=1, show_spinner=False)
+def global_data():
+    return fetch_fred_symbols(tuple(symbol for _, symbol in GLOBAL_SOVEREIGNS), start="2015-01-01")
+
+
 def comparison_table(rows: list[dict], monthly: bool, spread: bool):
     horizons = ("1M", "3M", "YTD") if monthly else ("1D", "1W", "1M", "3M", "YTD")
 
@@ -95,7 +100,7 @@ def history_chart(series: pd.Series, name: str, years: int, monthly: bool, sprea
     fig = go.Figure(go.Scatter(x=history.index, y=history, mode="lines",
                                line=dict(color=PASTEL["blue"], width=2), name=name,
                                hovertemplate="%{x|%b %d, %Y}<br>%{y:.2f}%<extra></extra>"))
-    fig.update_layout(height=330, margin=dict(l=35, r=20, t=10, b=25), paper_bgcolor="white",
+    fig.update_layout(height=430, margin=dict(l=35, r=20, t=10, b=25), paper_bgcolor="white",
                       plot_bgcolor="white", showlegend=False, font=dict(family="Arial", color="#222", size=12),
                       xaxis=dict(showgrid=False, linecolor="#aeb7bd"),
                       yaxis=dict(title="Spread (%)" if spread else "Yield (%)", gridcolor="#e7edf1", zeroline=False))
@@ -120,7 +125,7 @@ def render():
         view = st.selectbox("Bond market", VIEWS, key="bond_view")
     monthly = view == "Global sovereign"
     if monthly:
-        names = [country.name for country in COUNTRIES if country.yield_id]
+        names = [name for name, _ in GLOBAL_SOVEREIGNS]
         default = "United States"
     else:
         definitions = US if view == "US Treasury" else REAL if view == "Real yields & inflation" else CREDIT
@@ -136,10 +141,11 @@ def render():
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
     if monthly:
         with st.spinner("Loading sovereign yield history…"):
-            raw, errors = load_yields()
-        items = [(country.name, country.yield_id, raw.get(country.iso, pd.Series(dtype=float)))
-                 for country in COUNTRIES if country.yield_id]
-        problems = list(errors.items())
+            panel, status = global_data()
+        items = [(name, symbol, panel[symbol] if symbol in panel else pd.Series(dtype=float))
+                 for name, symbol in GLOBAL_SOVEREIGNS]
+        problems = [(str(row.get("symbol", "FRED")), str(row["error"]))
+                    for _, row in status.iterrows() if row.get("error")] if not status.empty and "error" in status else []
     else:
         symbols = tuple(symbol for _, symbol in definitions)
         with st.spinner("Loading bond market history…"):
@@ -165,12 +171,12 @@ def render():
                 '<span><strong>Changes</strong> Basis points</span></div>', unsafe_allow_html=True)
     if not current:
         st.warning("No current observations were returned. Historical levels remain visible with their original dates.")
-    st.markdown('<div class="bond-heading">Market comparison</div>', unsafe_allow_html=True)
-    comparison_table(rows, monthly, view == "Credit spreads")
     chosen = next(row for row in rows if row["name"] == selected)
     st.markdown(f'<div class="bond-heading">{escape(selected)} · history</div>', unsafe_allow_html=True)
     history_chart(chosen["series"], selected, PERIODS[period], monthly,
                   view == "Credit spreads" or "curve" in selected)
+    st.markdown('<div class="bond-heading">Market comparison</div>', unsafe_allow_html=True)
+    comparison_table(rows, monthly, view == "Credit spreads")
 
     with st.expander("Sources and definitions"):
         if monthly:
@@ -186,5 +192,5 @@ def render():
     render_footer()
 
 
-st.set_page_config(page_title="Global Bond Monitor", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Global Bond Monitor", layout="wide", initial_sidebar_state="expanded")
 render()

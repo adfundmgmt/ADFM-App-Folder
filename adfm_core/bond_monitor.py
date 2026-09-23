@@ -16,6 +16,23 @@ DAILY_WINDOWS = {
     "3M": pd.DateOffset(months=3),
 }
 
+# OECD benchmark 10-year yield identifiers distributed by FRED. Some countries
+# publish with a lag or discontinue a series; the UI retains the original date.
+GLOBAL_SOVEREIGNS = (
+    ("United States", "IRLTLT01USM156N"), ("Canada", "IRLTLT01CAM156N"),
+    ("United Kingdom", "IRLTLT01GBM156N"), ("Germany", "IRLTLT01DEM156N"),
+    ("France", "IRLTLT01FRM156N"), ("Italy", "IRLTLT01ITM156N"),
+    ("Spain", "IRLTLT01ESM156N"), ("Netherlands", "IRLTLT01NLM156N"),
+    ("Switzerland", "IRLTLT01CHM156N"), ("Sweden", "IRLTLT01SEM156N"),
+    ("Norway", "IRLTLT01NOM156N"), ("Australia", "IRLTLT01AUM156N"),
+    ("New Zealand", "IRLTLT01NZM156N"), ("Japan", "IRLTLT01JPM156N"),
+    ("South Korea", "IRLTLT01KRM156N"), ("China", "IRLTLT01CNM156N"),
+    ("India", "IRLTLT01INM156N"), ("Brazil", "IRLTLT01BRM156N"),
+    ("Mexico", "IRLTLT01MXM156N"), ("South Africa", "IRLTLT01ZAM156N"),
+    ("Poland", "IRLTLT01PLM156N"), ("Czechia", "IRLTLT01CZM156N"),
+    ("Hungary", "IRLTLT01HUM156N"), ("Türkiye", "IRLTLT01TRM156N"),
+)
+
 
 def spread_series(long_leg: pd.Series, short_leg: pd.Series) -> pd.Series:
     """Subtract yields only on dates observed for both instruments."""

@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from adfm_core.bond_monitor import daily_snapshot, monthly_snapshot, spread_series
+from adfm_core.bond_monitor import GLOBAL_SOVEREIGNS, daily_snapshot, monthly_snapshot, spread_series
 
 
 def series(dates, values):
@@ -11,6 +11,11 @@ def series(dates, values):
 
 
 class BondMonitorTests(unittest.TestCase):
+    def test_global_universe_covers_developed_and_emerging_bond_markets(self):
+        countries = {name for name, _ in GLOBAL_SOVEREIGNS}
+        self.assertGreaterEqual(len(countries), 24)
+        self.assertTrue({"United States", "Germany", "Japan", "China", "India", "Brazil", "Türkiye"} <= countries)
+
     def test_daily_move_is_basis_points_with_exact_observation_date(self):
         data = series(["2026-08-21", "2026-09-18", "2026-09-21", "2026-09-22"], [4.0, 4.2, 4.3, 4.4])
         result = daily_snapshot(data, pd.Timestamp("2026-09-23"))
