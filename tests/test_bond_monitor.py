@@ -12,9 +12,10 @@ def series(dates, values):
 
 class BondMonitorTests(unittest.TestCase):
     def test_global_universe_covers_developed_and_emerging_bond_markets(self):
-        countries = {name for name, _ in GLOBAL_SOVEREIGNS}
+        countries = dict(GLOBAL_SOVEREIGNS)
         self.assertGreaterEqual(len(countries), 24)
-        self.assertTrue({"United States", "Germany", "Japan", "China", "India", "Brazil", "Türkiye"} <= countries)
+        self.assertTrue({"United States", "Germany", "Japan", "China", "India", "Brazil", "Türkiye"} <= countries.keys())
+        self.assertEqual(countries["India"], "INDIRLTLT01STM")
 
     def test_daily_move_is_basis_points_with_exact_observation_date(self):
         data = series(["2026-08-21", "2026-09-18", "2026-09-21", "2026-09-22"], [4.0, 4.2, 4.3, 4.4])

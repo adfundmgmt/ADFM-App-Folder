@@ -27,7 +27,7 @@ GLOBAL_SOVEREIGNS = (
     ("Norway", "IRLTLT01NOM156N"), ("Australia", "IRLTLT01AUM156N"),
     ("New Zealand", "IRLTLT01NZM156N"), ("Japan", "IRLTLT01JPM156N"),
     ("South Korea", "IRLTLT01KRM156N"), ("China", "IRLTLT01CNM156N"),
-    ("India", "IRLTLT01INM156N"), ("Brazil", "IRLTLT01BRM156N"),
+    ("India", "INDIRLTLT01STM"), ("Brazil", "IRLTLT01BRM156N"),
     ("Mexico", "IRLTLT01MXM156N"), ("South Africa", "IRLTLT01ZAM156N"),
     ("Poland", "IRLTLT01PLM156N"), ("Czechia", "IRLTLT01CZM156N"),
     ("Hungary", "IRLTLT01HUM156N"), ("Türkiye", "IRLTLT01TRM156N"),
