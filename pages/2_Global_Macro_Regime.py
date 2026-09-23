@@ -23,7 +23,7 @@ REAL = (("5-year real yield", "DFII5"), ("10-year real yield", "DFII10"),
 CREDIT = (("US investment grade OAS", "BAMLC0A0CM"), ("US BBB OAS", "BAMLC0A4CBBB"),
           ("US high yield OAS", "BAMLH0A0HYM2"))
 VIEWS = ("US Treasury", "Real yields & inflation", "Global sovereign", "Credit spreads")
-PERIODS = {"1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10}
+PERIODS = {"Max": None, "1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10}
 
 
 def style():
@@ -92,13 +92,14 @@ def comparison_table(rows: list[dict], monthly: bool, spread: bool):
                 'green = lower/tighter. Missing comparisons are blank.</div>', unsafe_allow_html=True)
 
 
-def history_chart(series: pd.Series, name: str, years: int, monthly: bool, spread: bool,
+def history_chart(series: pd.Series, name: str, years: int | None, monthly: bool, spread: bool,
                   events: pd.DatetimeIndex):
     history = clean(series)
     if history.empty:
         st.info("No history is available for this instrument.")
         return
-    history = history.loc[history.index >= history.index[-1] - pd.DateOffset(years=years)]
+    if years is not None:
+        history = history.loc[history.index >= history.index[-1] - pd.DateOffset(years=years)]
     fig = go.Figure(go.Scatter(x=history.index, y=history, mode="lines",
                                line=dict(color=PASTEL["blue"], width=2), name=name,
                                hovertemplate="%{x|%b %d, %Y}<br>%{y:.2f}%<extra></extra>"))
@@ -173,7 +174,7 @@ def render():
     with c:
         profile = st.selectbox("Top signal", PROFILES, index=1, key="bond_profile")
     with d:
-        period = st.selectbox("Lookback", tuple(PERIODS), index=3, key="bond_period")
+        period = st.selectbox("Lookback", tuple(PERIODS), index=0, key="bond_period")
 
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
     if monthly:
@@ -207,8 +208,10 @@ def render():
     diagnostics = signal_frame(chosen["series"], frequency, profile)
     full_events = event_dates(diagnostics, 6 if monthly else 63)
     clean_history = clean(chosen["series"])
-    study_start = (clean_history.index[-1] - pd.DateOffset(years=PERIODS[period])
-                   if not clean_history.empty else today)
+    study_start = today
+    if not clean_history.empty:
+        study_start = (clean_history.index[0] if period == "Max" else
+                       clean_history.index[-1] - pd.DateOffset(years=PERIODS[period]))
     events = full_events[full_events >= study_start]
     latest = diagnostics.iloc[-1] if not diagnostics.empty else None
     current_state = "Unavailable" if latest is None or chosen["snapshot"]["Status"] != "Current" else (
