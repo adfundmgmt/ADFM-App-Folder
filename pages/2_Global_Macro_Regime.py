@@ -37,13 +37,18 @@ def style():
     .bond-heading {margin:1.05rem 0 .55rem;color:#000;
         font:700 1.25rem/1.2 Georgia,"Times New Roman",serif;letter-spacing:-.018em}
     .bond-wrap {overflow-x:auto;border:1px solid #aeb7bd;background:#fff;margin:.15rem 0 .6rem}
-    .bond-table {width:100%;min-width:850px;border-collapse:collapse;table-layout:fixed;
-        font:.76rem/1.2 Arial,Helvetica,sans-serif}
+    .bond-table {width:100%;min-width:1700px;border-collapse:collapse;table-layout:fixed;
+        font:.74rem/1.2 Arial,Helvetica,sans-serif}
     .bond-table th,.bond-table td {border-right:1px solid #aeb7bd;border-bottom:1px solid #aeb7bd;
         padding:.57rem .48rem;text-align:right;white-space:nowrap}
-    .bond-table th:first-child,.bond-table td:first-child {text-align:left;width:25%;padding-left:.72rem}
+    .bond-table th:first-child,.bond-table td:first-child {text-align:left;width:17%;padding-left:.72rem}
     .bond-table th:last-child,.bond-table td:last-child {border-right:0}
     .bond-table tr:last-child td {border-bottom:0}
+    .bond-table tr.selected td:first-child {border-left:4px solid #357f8d;padding-left:calc(.72rem - 4px)}
+    .bond-table td.state,.bond-table th:nth-last-child(8) {text-align:left;width:10%;font-weight:700}
+    .bond-table td.state.active {background:#dce9e1}
+    .bond-table td.state.watch {background:#fff1cf}
+    .bond-table td.state.stale {background:#f4f5f5;color:#777}
     .bond-table th {background:#357f8d;color:white;font-weight:800}
     .bond-table td:first-child {background:#edf0f2;font-weight:800}
     .bond-table td.up {background:#edc9cd}
@@ -64,8 +69,8 @@ def global_data(symbols: tuple[str, ...]):
     return fetch_fred_symbols(symbols, start="2015-01-01")
 
 
-def comparison_table(rows: list[dict], monthly: bool, spread: bool):
-    horizons = ("1M", "3M", "YTD") if monthly else ("1D", "1W", "1M", "3M", "YTD")
+def monitor_table(rows: list[dict], monthly: bool, spread: bool, selected: str):
+    horizons = ("1M", "3M", "YTD") if monthly else ("1W", "1M", "3M", "YTD")
 
     def cell(value, change=False):
         if not np.isfinite(value):
@@ -75,21 +80,48 @@ def comparison_table(rows: list[dict], monthly: bool, spread: bool):
         tone = "flat" if abs(value) < .5 else "up" if value > 0 else "down"
         return f'<td class="{tone}">{value:+.0f} bp</td>'
 
-    head = "<th>Instrument</th><th>Level</th>" + "".join(f"<th>{h} Δ</th>" for h in horizons) + "<th>Observed</th>"
+    head = ("<th>Instrument</th><th>Level</th>" + "".join(f"<th>{h} Δ</th>" for h in horizons)
+            + "<th>Signal state</th><th>Move %ile</th><th>Last top</th>"
+            + "<th>3M post-top</th><th>3M edge</th><th>3M lift</th><th>N</th><th>Observed</th>")
     body = []
     for row in rows:
         snap = row["snapshot"]
         date = escape(snap["Observation"] or "—")
         label = date + (" · stale" if snap["Status"] == "Stale" else "")
-        body.append("<tr><td>" + escape(row["name"]) + "</td>" + cell(snap["Yield"])
-                    + "".join(cell(snap[h], True) for h in horizons) + f"<td>{label}</td></tr>")
+        latest = row["latest"]
+        state = row["state"]
+        state_tone = ("active" if state == "Yield top signal" else "watch" if state in
+                      ("Potential yield top", "Exhaustion watch") else "stale" if state == "Unavailable" else "")
+        summary = row["summary"]
+        median = summary.loc["Signal median", "3M"]
+        edge = summary.loc["Median edge", "3M"]
+        lift = summary.loc["Hit-rate lift", "3M"]
+        count = summary.loc["Independent N", "3M"]
+
+        def study_cell(value, unit, favorable):
+            if not np.isfinite(value):
+                return '<td class="na">—</td>'
+            tone = "flat" if value == 0 else "down" if (value < 0) == favorable else "up"
+            return f'<td class="{tone}">{value:+.0f} {unit}</td>'
+
+        body.append(f'<tr class="{"selected" if row["name"] == selected else ""}"><td>{escape(row["name"])}</td>'
+                    + cell(snap["Yield"]) + "".join(cell(snap[h], True) for h in horizons)
+                    + f'<td class="state {state_tone}">{escape(state)}</td>'
+                    + f'<td>{display_number(float(latest["ChangePctile"])) if latest is not None else "—"}</td>'
+                    + f'<td>{escape(row["latest_event"])}</td>'
+                    + study_cell(median, "bp", True) + study_cell(edge, "bp", True)
+                    + study_cell(lift, "pp", False)
+                    + f'<td>{count:.0f}</td><td>{label}</td></tr>')
     st.markdown('<div class="bond-wrap"><table class="bond-table"><thead><tr>' + head
                 + '</tr></thead><tbody>' + "".join(body) + '</tbody></table></div>', unsafe_allow_html=True)
     unit = "spread" if spread else "yield"
     frequency = "monthly average" if monthly else "daily observation"
     st.markdown(f'<div class="bond-note">Level is {unit} in %. Changes are basis points; '
-                f'{frequency} dates are shown for every instrument. Red = higher/wider, '
-                'green = lower/tighter. Missing comparisons are blank.</div>', unsafe_allow_html=True)
+                f'{frequency} dates are shown per instrument. 3M post-top is the median change after independent '
+                'historical signals; edge is versus non-overlapping baseline windows, lift is the difference '
+                'in lower-yield hit rate (percentage points), and N is independent 3M signals. '
+                'Green favors a yield top; red opposes it. These are yield outcomes, not bond returns.</div>',
+                unsafe_allow_html=True)
 
 
 def history_chart(series: pd.Series, name: str, years: int | None, monthly: bool, spread: bool,
@@ -117,31 +149,23 @@ def history_chart(series: pd.Series, name: str, years: int | None, monthly: bool
                f"{len(marked)} signal markers in view · latest observation {history.index[-1]:%Y-%m-%d}")
 
 
-def signal_table(summary: pd.DataFrame, frequency: str):
-    labels = list(HORIZONS[frequency])
-    head = "<th>Metric</th>" + "".join(f"<th>{escape(label)}</th>" for label in labels)
-    body = []
-    for metric, values in summary.iterrows():
-        cells = []
-        for value in values:
-            if not np.isfinite(value):
-                cells.append('<td class="na">—</td>')
-                continue
-            if metric == "Independent N":
-                cells.append(f'<td class="flat">{value:.0f}</td>')
-                continue
-            favorable = (value < 0 if metric in ("Signal median", "Median edge")
-                         else value > 0 if metric == "Hit-rate lift" else None)
-            tone = "flat" if favorable is None else "down" if favorable else "up"
-            suffix = " bp" if "median" in metric.lower() or metric == "Median edge" else " pp" if metric == "Hit-rate lift" else "%"
-            cells.append(f'<td class="{tone}">{value:+.0f}{suffix}</td>')
-        body.append(f'<tr><td>{escape(metric)}</td>{"".join(cells)}</tr>')
-    st.markdown('<div class="bond-wrap"><table class="bond-table"><thead><tr>' + head
-                + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>', unsafe_allow_html=True)
-
-
 def display_number(value: float, suffix: str = "") -> str:
     return f"{value:.1f}{suffix}" if np.isfinite(value) else "—"
+
+
+@st.cache_data(ttl=3600, max_entries=128, show_spinner=False)
+def study_row(series: pd.Series, frequency: str, profile: str, period: str):
+    diagnostics = signal_frame(series, frequency, profile)
+    full_events = event_dates(diagnostics, 6 if frequency == "monthly" else 63)
+    history = clean(series)
+    if history.empty:
+        start = pd.Timestamp.now().normalize()
+    else:
+        start = (history.index[0] if period == "Max" else
+                 history.index[-1] - pd.DateOffset(years=PERIODS[period]))
+    events = full_events[full_events >= start]
+    summary, outcomes = event_summary(history.loc[history.index >= start], events, frequency)
+    return diagnostics, events, summary, outcomes
 
 
 def render():
@@ -205,43 +229,40 @@ def render():
         st.warning("No current observations were returned. Historical levels remain visible with their original dates.")
     chosen = next(row for row in rows if row["name"] == selected)
     frequency = "monthly" if monthly else "daily"
-    diagnostics = signal_frame(chosen["series"], frequency, profile)
-    full_events = event_dates(diagnostics, 6 if monthly else 63)
-    clean_history = clean(chosen["series"])
-    study_start = today
-    if not clean_history.empty:
-        study_start = (clean_history.index[0] if period == "Max" else
-                       clean_history.index[-1] - pd.DateOffset(years=PERIODS[period]))
-    events = full_events[full_events >= study_start]
-    latest = diagnostics.iloc[-1] if not diagnostics.empty else None
-    current_state = "Unavailable" if latest is None or chosen["snapshot"]["Status"] != "Current" else (
-        "Yield top signal" if latest["Signal"] else "Potential yield top" if latest["Setup"]
-        else "Exhaustion watch" if latest["Watch"] else "Normal")
-    latest_event = events[-1].strftime("%b %Y" if monthly else "%b %d, %Y") if len(events) else "None"
+    with st.spinner("Studying bond signals…"):
+        for row in rows:
+            diagnostics, events, summary, history = study_row(row["series"], frequency, profile, period)
+            latest = diagnostics.iloc[-1] if not diagnostics.empty else None
+            row["latest"] = latest
+            row["events"] = events
+            row["summary"] = summary
+            row["history"] = history
+            row["state"] = "Unavailable" if latest is None or row["snapshot"]["Status"] != "Current" else (
+                "Yield top signal" if latest["Signal"] else "Potential yield top" if latest["Setup"]
+                else "Exhaustion watch" if latest["Watch"] else "Normal")
+            row["latest_event"] = (events[-1].strftime("%b %Y" if monthly else "%b %d, %Y")
+                                   if len(events) else "None")
+    latest = chosen["latest"]
+    events = chosen["events"]
+    history = chosen["history"]
     st.markdown('<div class="bond-status">'
                 f'<span><strong>{escape(selected)}</strong> · {escape(view)}</span>'
                 f'<span><strong>Signal</strong> {escape(profile)}</span>'
-                f'<span><strong>Current</strong> {escape(current_state)}</span>'
+                f'<span><strong>Current</strong> {escape(chosen["state"])}</span>'
                 f'<span><strong>Move pctile</strong> {display_number(float(latest["ChangePctile"])) if latest is not None else "—"}</span>'
                 f'<span><strong>Trend ext.</strong> {display_number(float(latest["TrendZ"])) if latest is not None else "—"}</span>'
                 f'<span><strong>Yield RSI</strong> {display_number(float(latest["RSI"])) if latest is not None else "—"}</span>'
                 f'<span><strong>Vol pctile</strong> {display_number(float(latest["VolPctile"])) if latest is not None else "—"}</span>'
                 f'<span><strong>Events</strong> {len(events)}</span>'
-                f'<span><strong>Latest event</strong> {escape(latest_event)}</span>'
+                f'<span><strong>Latest event</strong> {escape(chosen["latest_event"])}</span>'
                 f'<span><strong>Coverage</strong> {len(current)}/{len(rows)} current</span>'
                 f'<span><strong>Data through</strong> {escape(chosen["snapshot"]["Observation"] or "Unavailable")}</span>'
                 '</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="bond-heading">{escape(selected)} · yield top signals</div>', unsafe_allow_html=True)
     history_chart(chosen["series"], selected, PERIODS[period], monthly,
                   view == "Credit spreads" or "curve" in selected, events)
-    summary, history = event_summary(clean_history.loc[clean_history.index >= study_start], events, frequency)
-    st.markdown(f'<div class="bond-heading">{escape(selected)} · after a yield top signal</div>', unsafe_allow_html=True)
-    signal_table(summary, frequency)
-    st.markdown('<div class="bond-note">Negative yield changes favor a yield-top signal. '
-                'The baseline uses non-overlapping historical windows outside signal dates; '
-                'independent N can differ by horizon. A yield top can imply a bond-price bottom '
-                'for outright nominal or real yields; spread and curve signals have different exposures.</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="bond-heading">Bond signal monitor</div>', unsafe_allow_html=True)
+    monitor_table(rows, monthly, view == "Credit spreads", selected)
     with st.expander("Historical yield top signals"):
         if history.empty:
             st.write("No historical events met this profile for the available series.")
@@ -249,9 +270,6 @@ def render():
             st.dataframe(history.sort_values("Date", ascending=False), hide_index=True, width="stretch",
                          column_config={label: st.column_config.NumberColumn(format="%.0f bp")
                                         for label in HORIZONS[frequency]})
-    st.markdown('<div class="bond-heading">Market comparison</div>', unsafe_allow_html=True)
-    comparison_table(rows, monthly, view == "Credit spreads")
-
     with st.expander("Sources and definitions"):
         if monthly:
             st.write("OECD 10-year long-term interest rates distributed by FRED. These are monthly averages, not tradable bond prices or intraday quotes. Missing prior months are never bridged.")
