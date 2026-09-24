@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from adfm_core.bond_monitor import GLOBAL_SOVEREIGNS, daily_snapshot, monthly_snapshot, spread_series
+from adfm_core.bond_monitor import GLOBAL_SOVEREIGNS, daily_snapshot, monthly_snapshot
 from adfm_core.bond_event_study import HORIZONS, PROFILES, event_dates, event_summary, signal_frame
 from adfm_core.global_macro import clean
 from adfm_core.palette import PASTEL
@@ -61,14 +61,14 @@ def style():
     </style>""", unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=3600, max_entries=4, show_spinner=False)
+@st.cache_data(ttl=1800, max_entries=4, show_spinner=False)
 def daily_data(symbols: tuple[str, ...]):
-    return fetch_fred_symbols(symbols, start="2015-01-01")
+    return fetch_fred_symbols(symbols, start="1900-01-01", refresh=True)
 
 
 @st.cache_data(ttl=21600, max_entries=1, show_spinner=False)
 def global_data(symbols: tuple[str, ...]):
-    return fetch_fred_symbols(symbols, start="2015-01-01")
+    return fetch_fred_symbols(symbols, start="1900-01-01")
 
 
 def monitor_table(rows: list[dict], monthly: bool, spread: bool, selected: str):
@@ -192,8 +192,6 @@ def render():
         definitions = US if view == "US Treasury" else REAL if view == "Real yields & inflation" else CREDIT
         names = [name for name, _ in definitions]
         default = "10-year Treasury" if view == "US Treasury" else names[0]
-        if view == "US Treasury":
-            names += ["2s10s curve", "5s30s curve"]
     with b:
         selected = st.selectbox("Bond / yield series", names, index=names.index(default), key="bond_instrument")
     with c:
@@ -217,10 +215,6 @@ def render():
                  for name, symbol in definitions]
         problems = [(str(row.get("symbol", "FRED")), str(row["error"]))
                     for _, row in status.iterrows() if row.get("error")] if not status.empty and "error" in status else []
-        if view == "US Treasury":
-            indexed = {symbol: data for _, symbol, data in items}
-            items += [("2s10s curve", "DGS10-DGS2", spread_series(indexed["DGS10"], indexed["DGS2"])),
-                      ("5s30s curve", "DGS30-DGS5", spread_series(indexed["DGS30"], indexed["DGS5"]))]
 
     rows = [{"name": name, "symbol": symbol, "series": series,
              "snapshot": monthly_snapshot(series, today) if monthly else daily_snapshot(series, today)}
@@ -246,6 +240,9 @@ def render():
     latest = chosen["latest"]
     events = chosen["events"]
     history = chosen["history"]
+    first = clean(chosen["series"]).index.min()
+    history_from = (first.strftime("%Y-%m" if monthly else "%Y-%m-%d")
+                    if pd.notna(first) else "Unavailable")
     st.markdown('<div class="bond-status">'
                 f'<span><strong>{escape(selected)}</strong> · {escape(view)}</span>'
                 f'<span><strong>Signal</strong> {escape(profile)}</span>'
@@ -258,10 +255,11 @@ def render():
                 f'<span><strong>Latest event</strong> {escape(chosen["latest_event"])}</span>'
                 f'<span><strong>Coverage</strong> {len(current)}/{len(rows)} current</span>'
                 f'<span><strong>Data through</strong> {escape(chosen["snapshot"]["Observation"] or "Unavailable")}</span>'
+                f'<span><strong>History from</strong> {history_from}</span>'
                 '</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="bond-heading">{escape(selected)} · yield top signals</div>', unsafe_allow_html=True)
     history_chart(chosen["series"], selected, PERIODS[period], monthly,
-                  view == "Credit spreads" or "curve" in selected, events)
+                  view == "Credit spreads", events)
     st.markdown('<div class="bond-heading">Bond signal monitor</div>', unsafe_allow_html=True)
     monitor_table(rows, monthly, view == "Credit spreads", selected)
     with st.expander("Historical yield top signals"):
@@ -276,13 +274,12 @@ def render():
             st.write("OECD 10-year long-term interest rates distributed by FRED. These are monthly averages, not tradable bond prices or intraday quotes. Missing prior months are never bridged.")
         else:
             st.write("Treasury constant-maturity yields, TIPS real yields and inflation compensation use Federal Reserve series distributed by FRED. Credit uses ICE BofA option-adjusted spread indices distributed by FRED. Values are end-of-day observations, not executable bond prices.")
-            st.write("Treasury curve spreads subtract yields observed on the same date. A positive 2s10s level means the 10-year yield exceeds the 2-year yield.")
         st.write("Changes require a baseline near the requested daily horizon or the exact prior month. Daily observations older than seven calendar days and monthly averages older than four reporting periods are stale; their changes are withheld. YTD uses the prior December for monthly data and the prior year-end for daily data.")
+        st.write("Max uses each provider series from its earliest available observation. U.S. daily series are checked for new end-of-day FRED observations at most every 30 minutes; OECD sovereign series are monthly and follow their publication schedule. Observation dates, rather than download times, determine freshness. If a refresh fails, the last validated history is retained with its original dates.")
         st.write("Yield top profiles use trailing yield-change percentile, distance above the long moving average measured in yield-change volatility, yield RSI, and volatility percentile. Exhaustion watch means at least two of these four readings are elevated; it is not an event. Early Warning requires a high change percentile plus two other extremes; Confirmed Exhaustion requires a subsequent downward reversal; Failed Breakout requires a prior long-window high to fail. No positioning proxy is inferred. Monthly windows are counted in months and missing months cannot be filled by a later observation. Markers and forward tables describe historical yield behavior, not forecasts or bond total returns.")
         if problems:
             st.dataframe(pd.DataFrame(problems, columns=["Series", "Provider status"]), hide_index=True, width="stretch")
-        if "curve" not in selected:
-            st.link_button("View source series on FRED", f"https://fred.stlouisfed.org/series/{chosen['symbol']}")
+        st.link_button("View source series on FRED", f"https://fred.stlouisfed.org/series/{chosen['symbol']}")
     render_footer()
 
 

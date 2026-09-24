@@ -35,9 +35,10 @@ def fetch_fred_series(
     return pd.DataFrame(values).sort_index(), pd.DataFrame([status for _, _, status in rows])
 
 
-def fetch_fred_symbols(symbols: Iterable[str], *, start: str, end: str | None = None):
+def fetch_fred_symbols(symbols: Iterable[str], *, start: str, end: str | None = None,
+                       refresh: bool = False):
     definitions = tuple(SeriesDefinition(s, s, s, "FRED", "Macro", "Natural-unit provider observations") for s in dict.fromkeys(symbols))
-    return fetch_fred_series(definitions, start=start, end=end)
+    return fetch_fred_series(definitions, start=start, end=end, refresh=refresh)
 
 
 def render_fred_status(status: pd.DataFrame, *, expanded: bool = False):
