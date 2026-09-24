@@ -37,15 +37,17 @@ def style():
     .bond-heading {margin:1.05rem 0 .55rem;color:#000;
         font:700 1.25rem/1.2 Georgia,"Times New Roman",serif;letter-spacing:-.018em}
     .bond-wrap {overflow-x:auto;border:1px solid #aeb7bd;background:#fff;margin:.15rem 0 .6rem}
-    .bond-table {width:100%;min-width:1700px;border-collapse:collapse;table-layout:fixed;
-        font:.74rem/1.2 Arial,Helvetica,sans-serif}
+    .bond-table {width:100%;min-width:980px;border-collapse:collapse;table-layout:fixed;
+        font:.71rem/1.2 Arial,Helvetica,sans-serif}
     .bond-table th,.bond-table td {border-right:1px solid #aeb7bd;border-bottom:1px solid #aeb7bd;
-        padding:.57rem .48rem;text-align:right;white-space:nowrap}
-    .bond-table th:first-child,.bond-table td:first-child {text-align:left;width:17%;padding-left:.72rem}
+        padding:.45rem .3rem;text-align:right;white-space:nowrap}
+    .bond-table th:first-child,.bond-table td:first-child {text-align:left;width:17%;padding-left:.55rem}
     .bond-table th:last-child,.bond-table td:last-child {border-right:0}
     .bond-table tr:last-child td {border-bottom:0}
-    .bond-table tr.selected td:first-child {border-left:4px solid #357f8d;padding-left:calc(.72rem - 4px)}
-    .bond-table td.state,.bond-table th:nth-last-child(8) {text-align:left;width:10%;font-weight:700}
+    .bond-table tr.selected td:first-child {border-left:4px solid #357f8d;padding-left:calc(.55rem - 4px)}
+    .bond-table td.state,.bond-table th:nth-child(2) {text-align:left;width:16%;font-weight:700}
+    .bond-table td.study,.bond-table th:nth-child(3) {text-align:left;width:21%}
+    .bond-table td small {display:block;color:#66757e;font-size:.66rem;font-weight:400;margin-top:.15rem}
     .bond-table td.state.active {background:#dce9e1}
     .bond-table td.state.watch {background:#fff1cf}
     .bond-table td.state.stale {background:#f4f5f5;color:#777}
@@ -70,7 +72,7 @@ def global_data(symbols: tuple[str, ...]):
 
 
 def monitor_table(rows: list[dict], monthly: bool, spread: bool, selected: str):
-    horizons = ("1M", "3M", "YTD") if monthly else ("1W", "1M", "3M", "YTD")
+    horizons = ("1M", "3M", "YTD")
 
     def cell(value, change=False):
         if not np.isfinite(value):
@@ -80,9 +82,9 @@ def monitor_table(rows: list[dict], monthly: bool, spread: bool, selected: str):
         tone = "flat" if abs(value) < .5 else "up" if value > 0 else "down"
         return f'<td class="{tone}">{value:+.0f} bp</td>'
 
-    head = ("<th>Instrument</th><th>Level</th>" + "".join(f"<th>{h} Δ</th>" for h in horizons)
-            + "<th>Signal state</th><th>Move %ile</th><th>Last top</th>"
-            + "<th>3M post-top</th><th>3M edge</th><th>3M lift</th><th>N</th><th>Observed</th>")
+    head = ("<th>Instrument</th><th>Signal state</th><th>3M after top · edge</th><th>Level</th>"
+            + "".join(f"<th>{h} Δ</th>" for h in horizons)
+            + "<th>Move %ile</th><th>Observed</th>")
     body = []
     for row in rows:
         snap = row["snapshot"]
@@ -98,28 +100,27 @@ def monitor_table(rows: list[dict], monthly: bool, spread: bool, selected: str):
         lift = summary.loc["Hit-rate lift", "3M"]
         count = summary.loc["Independent N", "3M"]
 
-        def study_cell(value, unit, favorable):
-            if not np.isfinite(value):
-                return '<td class="na">—</td>'
-            tone = "flat" if value == 0 else "down" if (value < 0) == favorable else "up"
-            return f'<td class="{tone}">{value:+.0f} {unit}</td>'
+        tone = "na" if not np.isfinite(edge) else "flat" if edge == 0 else "down" if edge < 0 else "up"
+        result = (f'{median:+.0f} / {edge:+.0f} bp' if np.isfinite(median) and np.isfinite(edge)
+                  else "—")
+        detail = (f'{lift:+.0f} pp lift · n={count:.0f}' if np.isfinite(lift) and count else
+                  f'n={count:.0f}' if count else "No completed events")
 
         body.append(f'<tr class="{"selected" if row["name"] == selected else ""}"><td>{escape(row["name"])}</td>'
+                    + f'<td class="state {state_tone}">{escape(state)}'
+                    + f'<small>Last top: {escape(row["latest_event"])}</small></td>'
+                    + f'<td class="study {tone}">{result}<small>{detail}</small></td>'
                     + cell(snap["Yield"]) + "".join(cell(snap[h], True) for h in horizons)
-                    + f'<td class="state {state_tone}">{escape(state)}</td>'
                     + f'<td>{display_number(float(latest["ChangePctile"])) if latest is not None else "—"}</td>'
-                    + f'<td>{escape(row["latest_event"])}</td>'
-                    + study_cell(median, "bp", True) + study_cell(edge, "bp", True)
-                    + study_cell(lift, "pp", False)
-                    + f'<td>{count:.0f}</td><td>{label}</td></tr>')
+                    + f'<td>{label}</td></tr>')
     st.markdown('<div class="bond-wrap"><table class="bond-table"><thead><tr>' + head
                 + '</tr></thead><tbody>' + "".join(body) + '</tbody></table></div>', unsafe_allow_html=True)
     unit = "spread" if spread else "yield"
     frequency = "monthly average" if monthly else "daily observation"
     st.markdown(f'<div class="bond-note">Level is {unit} in %. Changes are basis points; '
-                f'{frequency} dates are shown per instrument. 3M post-top is the median change after independent '
-                'historical signals; edge is versus non-overlapping baseline windows, lift is the difference '
-                'in lower-yield hit rate (percentage points), and N is independent 3M signals. '
+                f'{frequency} dates are shown per instrument. 3M after top is median yield change / edge '
+                'versus non-overlapping baseline windows. Lift is the difference in lower-yield hit rate '
+                '(percentage points); n is independent 3M signals. '
                 'Green favors a yield top; red opposes it. These are yield outcomes, not bond returns.</div>',
                 unsafe_allow_html=True)
 
