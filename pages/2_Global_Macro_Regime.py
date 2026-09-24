@@ -37,7 +37,7 @@ def style():
     .bond-heading {margin:1.05rem 0 .55rem;color:#000;
         font:700 1.25rem/1.2 Georgia,"Times New Roman",serif;letter-spacing:-.018em}
     .bond-wrap {overflow-x:auto;border:1px solid #aeb7bd;background:#fff;margin:.15rem 0 .6rem}
-    .bond-table {width:100%;min-width:980px;border-collapse:collapse;table-layout:fixed;
+    .bond-table {width:100%;min-width:850px;border-collapse:collapse;table-layout:fixed;
         font:.71rem/1.2 Arial,Helvetica,sans-serif}
     .bond-table th,.bond-table td {border-right:1px solid #aeb7bd;border-bottom:1px solid #aeb7bd;
         padding:.45rem .3rem;text-align:right;white-space:nowrap}
