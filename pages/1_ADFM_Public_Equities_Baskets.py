@@ -176,7 +176,7 @@ FX_SUFFIX_CONVERSIONS: Tuple[Tuple[str, Tuple[str, str]], ...] = (
 FUND_QUOTE_TYPES = {"ETF", "MUTUALFUND", "MONEYMARKET"}
 
 # Explicit proxy inventory for this definition map. Unknown/new instruments must
-# be reviewed before addition; these symbols are never counted as equity breadth.
+# be reviewed before addition; these fund symbols are not individual equities.
 FUND_SYMBOLS = set("VEA IEMG EEM SPY RSP IWM EWC EWW ILF EWZ ARGT ECH EPU COLO VGK EZU EWG EWQ EWI EWP EWU EWL EWD EDEN NORW EPOL TUR EWJ DXJ MCHI FXI KWEB EWT EWY INDA EPI INDY EIDO IDX VNM EWA KSA UAE EIS EZA QAT IBIT ETHA ITB GREK MSOS URNM SLV SIL".split())
 
 LOCAL_CALENDARS = {".KS":"XKRX", ".T":"XTKS", ".TW":"XTAI",
@@ -1943,15 +1943,39 @@ def align_levels_to_calendar(
     return levels.reindex(calendar)
 
 
+def reliable_price_sessions(
+    levels: pd.DataFrame,
+    calendar: pd.DatetimeIndex,
+    constituents: List[str],
+) -> Tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
+    """Discard dates where the provider lost most prices across the universe.
+
+    A basket return after an omitted date spans the two observed closes;
+    individual missing quotes still obey the basket coverage requirement.
+    Compare each date with nearby dates so IPOs do not invalidate older history.
+    """
+    calendar = pd.DatetimeIndex(calendar)
+    if calendar.empty:
+        return calendar, calendar
+    symbols = list(dict.fromkeys(t for t in constituents if t in levels.columns and t != BENCH))
+    observed = levels.reindex(calendar)
+    counts = observed[symbols].notna().sum(axis=1) if symbols else pd.Series(0, index=calendar)
+    nearby = counts.rolling(11, center=True, min_periods=3).median()
+    unreliable = (nearby >= 2) & (counts < nearby * 0.70)
+    if BENCH in observed:
+        unreliable |= observed[BENCH].isna()
+    return calendar[~unreliable], calendar[unreliable]
+
+
 
 def ew_rets_from_levels(
     levels: pd.DataFrame,
     baskets: Dict[str, List[str]],
     min_daily_coverage: float = MIN_DAILY_MEMBER_COVERAGE,
 ) -> pd.DataFrame:
-    """Coverage-aware daily equal-weight basket returns.
+    """Coverage-aware equal-weight returns on observed price sessions.
 
-    Constituent returns require prices on both adjacent benchmark-calendar
+    Constituent returns require prices on both adjacent observed
     sessions. Missing returns are never compressed across a gap. A basket
     remains observable when the configured coverage floor is met, so one
     missing constituent or a recent IPO does not blank an otherwise valid
@@ -2311,53 +2335,17 @@ def basket_vs_dma_pct(
 
 
 
-def compute_basket_breadth(
-    levels: pd.DataFrame,
-    baskets: Dict[str, List[str]],
-    display_start: pd.Timestamp,
-    eligible_members: Optional[Dict[str, List[str]]] = None,
-) -> Dict[str, float]:
-    """Equity-only breadth, at least two valid equities and 60% of defined equities.
-
-    Funds are excluded, including in mixed baskets. Only confirmed local exchange
-    closures can carry prices. No generic five-session stock-price fill exists.
-    """
-    result = {key: np.nan for key in baskets}
-    if levels.empty:
-        return result
-    ordered = levels.sort_index()
-    anchors = ordered.index[ordered.index <= pd.Timestamp(display_start)]
-    if anchors.empty or anchors[-1] >= ordered.index[-1]:
-        return result
-    start, end = ordered.loc[anchors[-1]], ordered.iloc[-1]
-    for key, members in baskets.items():
-        unique = [s for s in dict.fromkeys(members) if s not in FUND_SYMBOLS]
-        if len(unique) < 2:
-            continue
-        a, b = start.reindex(unique), end.reindex(unique)
-        valid = np.isfinite(a) & np.isfinite(b) & (a > 0) & (b > 0)
-        if eligible_members is not None:
-            valid &= valid.index.isin(eligible_members.get(key, []))
-        count = int(valid.sum())
-        if count < max(2, math.ceil(len(unique) * MIN_DAILY_MEMBER_COVERAGE)):
-            continue
-        result[key] = float((b[valid] > a[valid]).sum() / count * 100.0)
-    return result
-
-
 def build_panel_df(
     basket_returns_full: pd.DataFrame,
     display_start: pd.Timestamp,
     dynamic_label: str,
     basket_metadata: Dict[str, Dict[str, Any]],
     benchmark_series_full: pd.Series,
-    basket_breadth: Dict[str, float],
 ) -> pd.DataFrame:
     dynamic_col = f"%{dynamic_label}"
     return_cols = ["%5D", "%1M"]
     if dynamic_col not in return_cols:
         return_cols.append(dynamic_col)
-    breadth_col = f"Breadth % {dynamic_label}"
 
     as_of = basket_returns_full.index[-1] if not basket_returns_full.empty else pd.Timestamp(display_start)
     macd_config = macd_settings(dynamic_label, as_of)
@@ -2366,7 +2354,7 @@ def build_panel_df(
 
     cols = [
         "Basket", *return_cols,
-        "MACD Momentum", ema_col, "RSI(14W)", breadth_col,
+        "MACD Momentum", ema_col, "RSI(14W)",
         "vs 21DMA %", "vs 50DMA %",
     ]
     if basket_returns_full.empty:
@@ -2391,7 +2379,6 @@ def build_panel_df(
             r5d = pct_since(s_full.iloc[-6:], s_full.index[-6])
         r1m = pct_since(s_full, s_full.index.max() - pd.DateOffset(months=1))
         r_dyn = pct_since(s_full, display_start)
-        breadth = basket_breadth.get(basket_id, np.nan)
         dma_21_pct = basket_vs_dma_pct(s_full, window=21)
         dma_50_pct = basket_vs_dma_pct(s_full, window=50)
 
@@ -2426,7 +2413,6 @@ def build_panel_df(
             "Basket": display_name,
             "%5D": r5d * 100 if pd.notna(r5d) else np.nan,
             "%1M": r1m * 100 if pd.notna(r1m) else np.nan,
-            breadth_col: breadth,
             "MACD Momentum": macd_m,
             ema_col: ema_tag,
             "RSI(14W)": rsi_14w,
@@ -2444,8 +2430,7 @@ def build_panel_df(
     df = df[[column for column in cols if column in df.columns]]
     df.attrs["row_notes"] = [
         f"Live/defined members: {basket_metadata.get(k, {}).get('Members', 'unknown')}. "
-        f"{basket_metadata.get(k, {}).get('Breadth coverage', '')} "
-        "Daily basket returns require at least 60% of current live members with adjacent-session prices "
+        "Basket returns require at least 60% of current live members with adjacent observed-session prices "
         "(minimum two except one-name proxies); N/A means insufficient continuous basket coverage for that window."
         for k in df.index
     ]
@@ -2531,14 +2516,6 @@ def color_ret(x):
     return f"rgb({r},{g},{b})"
 
 
-
-
-def color_breadth(x):
-    if pd.isna(x):
-        return "white"
-    if x == 50:
-        return "rgb(230,236,245)"
-    return color_ret((float(x) - 50.0) * 0.4)
 
 
 def color_rsi(x):
@@ -2634,11 +2611,8 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats, row_n
     for i, name in enumerate(headers):
         numeric = formats[i] is not None or name == "MACD Momentum" or name.startswith("EMA ")
         tooltip = (
-            "Percent of valid defined equities with positive USD-adjusted returns over the selected range. "
-            "Funds excluded. Flat returns are non-advancing. At least two valid equities and 60% of defined equities required. "
-            "Only confirmed exchange closures may carry a local close. N/A means insufficient coverage or fund-only proxy."
-            if name.startswith("Breadth %") else
-            ("Preset-responsive MACD histogram: Positive/Negative is histogram sign; acceleration compares preset-scaled histogram change; Strong/Weak reflects the histogram z-score." if name == "MACD Momentum" else name)
+            "Preset-responsive MACD histogram: Positive/Negative is histogram sign; acceleration compares preset-scaled histogram change; Strong/Weak reflects the histogram z-score."
+            if name == "MACD Momentum" else name
         )
         low, high = ("Lowest to highest", "Highest to lowest") if numeric else ("A to Z", "Z to A")
         header_cells.append(
@@ -2723,7 +2697,6 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
         return
 
     dynamic_col = f"%{dynamic_label}"
-    breadth_col = f"Breadth % {dynamic_label}"
     return_cols = ["%5D", "%1M"]
     if dynamic_col not in return_cols:
         return_cols.append(dynamic_col)
@@ -2732,7 +2705,7 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
     ema_col = ema_cols[0] if ema_cols else "EMA Trend"
     headers = [
         "Basket", *return_cols,
-        "MACD Momentum", ema_col, "RSI(14W)", breadth_col,
+        "MACD Momentum", ema_col, "RSI(14W)",
         "vs 21DMA %", "vs 50DMA %",
     ]
 
@@ -2752,18 +2725,15 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
     vals = panel_df["RSI(14W)"].tolist()
     values.append(vals)
     fill_colors.append([color_rsi(v) for v in vals])
-    vals = panel_df[breadth_col].tolist()
-    values.append(vals)
-    fill_colors.append([color_breadth(v) for v in vals])
     for col in ["vs 21DMA %", "vs 50DMA %"]:
         vals = panel_df[col].tolist()
         values.append(vals)
         fill_colors.append([color_ret(v) for v in vals])
 
     if dynamic_col in ["%5D", "%1M"]:
-        col_widths = [0.27, 0.065, 0.065, 0.16, 0.11, 0.08, 0.08, 0.085, 0.085]
+        col_widths = [0.29, 0.07, 0.07, 0.18, 0.12, 0.09, 0.09, 0.09]
     else:
-        col_widths = [0.25, 0.06, 0.06, 0.085, 0.155, 0.105, 0.075, 0.075, 0.085, 0.085]
+        col_widths = [0.27, 0.065, 0.065, 0.09, 0.175, 0.115, 0.085, 0.095, 0.095]
 
     formats = []
     for header in headers:
@@ -2991,7 +2961,6 @@ def render_basket_section(
 
     basket_metadata: Dict[str, Dict[str, Any]],
 
-    basket_breadth: Dict[str, float],
 
     show_heading: bool = True,
 
@@ -3014,7 +2983,6 @@ def render_basket_section(
 
         benchmark_series_full=benchmark_returns_full,
 
-        basket_breadth=basket_breadth,
 
     )
 
@@ -3232,17 +3200,16 @@ if BENCH not in levels_usd.columns or levels_usd[BENCH].dropna().empty:
 
 
 
-benchmark_observed_date = pd.Timestamp(levels_usd[BENCH].dropna().index.max())
+latest_expected_close = expected_sessions[-1]
+expected_sessions, skipped_sessions = reliable_price_sessions(
+    levels_usd, expected_sessions, equity_tickers,
+)
+if expected_sessions.empty:
+    st.error("The price feed has no reliable completed sessions for this range.")
+    st.stop()
 reference_date = expected_sessions[-1]
-if fetch_meta.get("source") in {"saved_snapshot", "last_good_cache"}:
-    # A labelled snapshot is evaluated at its own common close, not padded
-    # to today with missing endpoints that would blank the entire scanner.
-    reference_date = min(reference_date, benchmark_observed_date)
-    if reference_date < expected_sessions[-1]:
-        st.warning(f"Showing saved prices as of {reference_date.date()}; the latest expected close is {expected_sessions[-1].date()}.")
-    expected_sessions = expected_sessions[expected_sessions <= reference_date]
-if benchmark_observed_date < reference_date:
-    st.warning(f"Benchmark data ends {benchmark_observed_date.date()}; expected {reference_date.date()}. Missing endpoints remain N/A.")
+if reference_date < latest_expected_close:
+    st.warning(f"Showing observed prices as of {reference_date.date()}; the latest expected close is {latest_expected_close.date()}.")
 
 display_start_date = compute_display_start(preset, reference_date.date())
 
@@ -3339,21 +3306,12 @@ if valid_benchmark is not None:
 
 # ============================================================
 
-all_basket_breadth = compute_basket_breadth(aligned_levels, raw_selected_baskets, display_start_ts, live_all_baskets)
-anchors = aligned_levels.index[aligned_levels.index <= display_start_ts]
-for key, meta in basket_metadata.items():
-    equities = [t for t in dict.fromkeys(raw_selected_baskets.get(key, [])) if t not in FUND_SYMBOLS]
-    valid_count = 0
-    if len(anchors) and equities:
-        endpoints = aligned_levels.reindex(columns=equities).loc[[anchors[-1], aligned_levels.index[-1]]]
-        valid = (endpoints.notna() & (endpoints > 0)).all()
-        valid &= valid.index.isin(live_all_baskets.get(key, []))
-        valid_count = int(valid.sum())
-    meta["Breadth coverage"] = f"Breadth valid/defined equities: {valid_count}/{len(equities)}; funds excluded."
+omitted_label = f"{len(skipped_sessions)} incomplete provider sessions omitted · " if len(skipped_sessions) else ""
 st.caption(
     f"As of {reference_date.date()} · {fetch_meta.get('source', 'yahoo')} · "
     f"{len(live_all_baskets)}/{len(raw_selected_baskets)} baskets eligible · "
-    "Current-universe, coverage-aware daily equal-weight adjusted returns · N/A = genuinely insufficient history/coverage; not a point-in-time backtest."
+    + omitted_label +
+    "Current-universe, coverage-aware equal-weight adjusted returns · N/A = insufficient observed history/coverage; not a point-in-time backtest."
 )
 if suspect_symbols:
     st.warning(f"Extreme adjusted-price moves quarantined in {len(suspect_symbols)} symbols; affected windows remain N/A. See Data Notes.")
@@ -3374,7 +3332,6 @@ all_panel_df = render_basket_section(
 
     show_chart=False,
 
-    basket_breadth=all_basket_breadth,
 
     basket_metadata=basket_metadata,
 
@@ -3430,7 +3387,6 @@ if show_category_sections:
 
             show_chart=True,
 
-            basket_breadth=all_basket_breadth,
 
             basket_metadata=basket_metadata,
 
@@ -3459,9 +3415,10 @@ if show_full_map:
 if show_data_notes:
 
     with st.expander("Data Notes", expanded=True):
-        st.write("Current live membership with coverage-aware daily equal weights: constituent returns require adjacent-session prices; a basket prints when at least 60% of current live members are valid (minimum two except one-name proxies). Foreign holiday closes may carry only on verified exchange closures; unverified calendars remain missing.")
+        st.write("Current live membership with coverage-aware equal weights: constituent returns require prices on both adjacent observed sessions; a basket prints when at least 60% of current live members are valid (minimum two except one-name proxies). Provider-wide incomplete sessions are omitted and the next return spans the last two observed closes. Foreign holiday closes may carry only on verified exchange closures; unverified calendars remain missing.")
         st.write("MACD and EMA are preset-responsive, using square-root horizon scaling anchored at 3M (MACD 12/26/9; EMA 4/9/18). MACD Strong/Weak reflects histogram z-score. RSI uses completed weekly buckets. EMA and DMA use the latest uninterrupted basket segment.")
-        st.write("Breadth is equity-only, based on defined constituents: at least two valid equities and 60% endpoint coverage. ETF-only baskets have no look-through breadth.")
+        if len(skipped_sessions):
+            st.write("Provider-wide price gaps omitted from the return calendar: " + ", ".join(str(day.date()) for day in skipped_sessions))
         st.write("Symbols are current definitions, not a corporate-action-maintained historical universe. Quote repair and outlier quarantine do not certify vendor data. GBP minor-unit market-cap metadata is excluded from the optional size filter until independently verified.")
         st.write({"dropped_baskets": dropped_baskets, "fx_issues": fx_issues, "quarantined_symbols": suspect_symbols})
         st.dataframe(pd.DataFrame.from_dict(basket_metadata, orient="index"), hide_index=True)
