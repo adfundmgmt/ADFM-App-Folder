@@ -50,6 +50,34 @@ class IntegrityTests(unittest.TestCase):
         self.assertTrue(pd.notna(r.iloc[1]))
         self.assertTrue(pd.notna(r.iloc[2]))
 
+    def test_provider_wide_missing_session_does_not_blank_current_baskets(self):
+        dates = pd.bdate_range('2026-09-14', periods=9)
+        prices = pd.DataFrame({
+            'SPY': [100, 101, 102, 103, 104, 105, 106, 107, 108],
+            'A': [100, 101, 102, 103, 104, 105, 106, 107, 108],
+            'B': [100, 101, 102, 103, 104, 105, 106, 107, 108],
+            'C': [100, 101, 102, 103, 104, 105, 106, 107, 108],
+            'D': [100, 101, 102, 103, 104, 105, 106, 107, 108],
+        }, index=dates, dtype=float)
+        # Yahoo has SPY, but drops nearly all constituent prices on one day.
+        prices.loc[dates[-2], ['A', 'B', 'C', 'D']] = np.nan
+        calendar, omitted = scope['reliable_price_sessions'](prices, dates, ['A', 'B', 'C', 'D'])
+        self.assertEqual(list(omitted), [dates[-2]])
+        rets = scope['ew_rets_from_levels'](prices.reindex(calendar), {'basket': ['A', 'B', 'C', 'D']})['basket']
+        self.assertAlmostEqual(rets.iloc[-1], 108 / 106 - 1)
+        self.assertAlmostEqual(scope['pct_since'](100 * (1 + rets).cumprod(), dates[-5]), 108 / 104 - 1)
+
+    def test_isolated_symbol_gap_is_not_mistaken_for_provider_outage(self):
+        dates = pd.bdate_range('2026-09-14', periods=9)
+        prices = pd.DataFrame({
+            'SPY': range(100, 109), 'A': range(100, 109),
+            'B': range(100, 109), 'C': range(100, 109), 'D': range(100, 109),
+        }, index=dates, dtype=float)
+        prices.loc[dates[-2], 'A'] = np.nan
+        calendar, omitted = scope['reliable_price_sessions'](prices, dates, ['A', 'B', 'C', 'D'])
+        self.assertEqual(list(calendar), list(dates))
+        self.assertTrue(omitted.empty)
+
     def test_indicator_settings_are_dynamic_and_bounded(self):
         as_of = pd.Timestamp('2026-09-09')
         macd_1m = scope['macd_settings']('1M', as_of)
@@ -78,13 +106,6 @@ class IntegrityTests(unittest.TestCase):
         self.assertEqual(scope['ema_regime'](s),'N/A')
         self.assertEqual(scope['horizon_macd_momentum'](s,(12,26,9,5,63)),'N/A')
 
-    def test_equity_breadth(self):
-        i=pd.to_datetime(['2026-01-02','2026-02-02'])
-        p=pd.DataFrame({'A':[100,110],'B':[100,100],'SPY':[100,120]},index=i)
-        r=scope['compute_basket_breadth'](p,{'proxy':['SPY'],'mixed':['SPY','A','B'],'low':['A','B','C','D']},i[0])
-        self.assertTrue(pd.isna(r['proxy']) and pd.isna(r['low']))
-        self.assertEqual(r['mixed'],50)
-
     def test_early_close(self):
         f=scope['completed_us_sessions']
         self.assertEqual(f('2026-11-23',pd.Timestamp('2026-11-27 13:16',tz='America/New_York'))[-1],pd.Timestamp('2026-11-27'))
@@ -110,11 +131,11 @@ class IntegrityTests(unittest.TestCase):
     def test_short_window_and_render(self):
         i=pd.bdate_range('2024-01-02',periods=600)
         r=pd.DataFrame({'x':.001},index=i)
-        panel=scope['build_panel_df'](r,i[-63],'3M',{'x':{'Basket':'Test','Members':'2/2'}},r['x'],{'x':50})
+        panel=scope['build_panel_df'](r,i[-63],'3M',{'x':{'Basket':'Test','Members':'2/2'}},r['x'])
         self.assertAlmostEqual(panel.iloc[0]['%5D'],((1.001)**5-1)*100)
-        self.assertEqual(panel.iloc[0]['Breadth % 3M'],50)
+        self.assertFalse(any(col.startswith('Breadth') for col in panel.columns))
         r.iloc[-1,0]=np.nan
-        panel=scope['build_panel_df'](r,i[-63],'3M',{},r['x'],{})
+        panel=scope['build_panel_df'](r,i[-63],'3M',{},r['x'])
         self.assertTrue(pd.isna(panel.iloc[0]['%5D']))
         self.assertEqual(panel.iloc[0]['MACD Momentum'],'N/A')
         h=scope['sortable_panel_html'](['Basket','%5D','MACD Momentum'],[['A'],[np.nan],['Positive | Accelerating | Strong']],[['white']]*3,[.5,.2,.3],[None,'.1f',None])
