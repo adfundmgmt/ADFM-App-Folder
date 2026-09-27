@@ -40,6 +40,7 @@ from adfm_engine.volume_sentiment_service import load_volume_sentiment
 from adfm_engine.etf_flow_service import load_etf_flow
 from adfm_engine.position_sizing_service import load_position_sizing
 from adfm_engine.currency_tension_service import load_currency_tension, DEFAULT_WEIGHTS, PILLAR_AXIS
+from adfm_engine.seasonality_service import load_monthly_seasonality
 from adfm_engine.sector_rotation_config import UNIVERSE_SCOPES, BENCHMARKS, ROTATION_MODES, WINDOW_PRESETS, TRAIL_OPTIONS, LABEL_MODES, SECTOR_GROUP_COLORS
 from pathlib import Path
 
@@ -219,6 +220,27 @@ class JobParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
+class SeasonalityParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    symbol: str = Field(default="^SPX", min_length=1, max_length=20, pattern=r"^[A-Z0-9^=._-]+$")
+    lookback: Literal["5Y","10Y","20Y","All","Custom"] = "10Y"
+    start_year: int | None = Field(default=None, ge=1900, le=2100)
+    end_year: int | None = Field(default=None, ge=1900, le=2100)
+    cycle: Literal["All years","Election years","Midterm years","Pre-election years","Post-election years"] = "All years"
+    complete_only: bool = True
+    fed: Literal["All Fed regimes","Hiking","Cutting","Steady"] = "All Fed regimes"
+    vix: Literal["All VIX regimes","VIX <15","VIX 15-20","VIX 20-25","VIX >25"] = "All VIX regimes"
+    teny: Literal["All 10Y regimes","10Y rising","10Y falling","10Y flat"] = "All 10Y regimes"
+    dxy: Literal["All dollar regimes","Dollar rising","Dollar falling","Dollar flat"] = "All dollar regimes"
+    month: int | None = Field(default=None, ge=1, le=12)
+    year: int | None = Field(default=None, ge=1900, le=2100)
+
+    @model_validator(mode="after")
+    def valid_window(self):
+        if self.lookback == "Custom" and self.start_year and self.end_year and self.start_year > self.end_year:
+            raise ValueError("Start year must precede end year.")
+        return self
+
 class UnderwriterParameters(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     query: str = Field(default="AAPL", min_length=1, max_length=200)
@@ -348,7 +370,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment,"etf_flow":load_etf_flow,"position_sizing":load_position_sizing,"currency_tension":load_currency_tension})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment,"etf_flow":load_etf_flow,"position_sizing":load_position_sizing,"currency_tension":load_currency_tension,"seasonality":load_monthly_seasonality})
     try:
         yield
     finally:
@@ -460,6 +482,16 @@ def create_app() -> FastAPI:
     @app.post("/v1/currency-tension-engine-job", dependencies=[Depends(require_gateway)])
     def currency_tension_engine_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="currency_tension")
+
+    @app.post("/v1/monthly-seasonality-explorer", dependencies=[Depends(require_gateway)])
+    def monthly_seasonality(parameters: SeasonalityParameters, request: Request):
+        payload = parameters.model_dump()
+        payload["session_hour"] = int(datetime.now(ZoneInfo("America/New_York")).timestamp() // 3600)
+        return request.app.state.jobs.submit("seasonality", payload)
+
+    @app.post("/v1/monthly-seasonality-explorer-job", dependencies=[Depends(require_gateway)])
+    def monthly_seasonality_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="seasonality")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
