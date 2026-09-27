@@ -1160,6 +1160,16 @@ def fetch_daily_levels(
 
     cache_usable = _cache_is_usable(cached, uniq, start, end)
 
+    # A completed snapshot is reusable across visitors and parameter changes.
+    # Keep the short window used by the original Streamlit price cache.
+    levels_path, _ = _cache_paths(cache_key)
+    if cache_usable and levels_path.exists() and time.time() - levels_path.stat().st_mtime < 1800:
+        cached = cached.loc[(cached.index >= start) & (cached.index < end)]
+        return cached, {
+            "source": "recent_cache", "requested_tickers": len(uniq),
+            "returned_tickers": int(cached.shape[1]),
+        }
+
     frames: List[pd.DataFrame] = []
 
     failed_batches: List[List[str]] = []
@@ -1178,7 +1188,7 @@ def fetch_daily_levels(
 
             consecutive_failed_batches += 1
 
-            if cache_usable and consecutive_failed_batches >= 3:
+            if consecutive_failed_batches >= 3:
 
                 break
 
@@ -1204,7 +1214,8 @@ def fetch_daily_levels(
 
     retry_frames: List[pd.DataFrame] = []
 
-    retry_batches = _chunk(missing_after_batches, 8) if frames else []
+    # A broad outage must not turn into hundreds of smaller retry requests.
+    retry_batches = _chunk(missing_after_batches, 8) if frames and len(missing_after_batches) <= 16 else []
 
     for batch in retry_batches:
 
@@ -2276,4 +2287,3 @@ def cumulative_return_since(returns: pd.Series, display_start: pd.Timestamp) -> 
     display = levels[levels.index >= pd.Timestamp(display_start)]
 
     return ((display / anchor) - 1.0) * 100.0
-

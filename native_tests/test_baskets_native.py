@@ -54,3 +54,16 @@ def test_raw_definitions_are_available_without_price_downloads(monkeypatch):
         response = client.get("/v1/basket-definitions")
     assert response.status_code == 200
     assert response.json()["categories"] == CATEGORIES
+
+
+def test_recent_price_snapshot_skips_repeat_download(monkeypatch, tmp_path):
+    from adfm_engine import baskets_legacy_math as b
+    monkeypatch.setattr(b, "CACHE_DIR", tmp_path)
+    dates = pd.bdate_range("2026-09-21", "2026-09-25")
+    levels = pd.DataFrame({"AAA": [1, 2, 3, 4, 5], "SPY": [10, 11, 12, 13, 14]}, index=dates)
+    key = b._cache_key(["AAA", "SPY"], pd.Timestamp("2026-09-20"))
+    assert b.save_last_good_levels(levels, {}, key) is None
+    monkeypatch.setattr(b, "_download_close", lambda *_a, **_kw: pytest.fail("unnecessary price download"))
+    returned, meta = b.fetch_daily_levels(["AAA", "SPY"], pd.Timestamp("2026-09-20"), pd.Timestamp("2026-09-27"))
+    pd.testing.assert_frame_equal(returned, levels)
+    assert meta["source"] == "recent_cache"
