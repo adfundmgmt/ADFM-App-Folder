@@ -36,6 +36,7 @@ from adfm_engine.baskets_service import load_baskets
 from adfm_engine.baskets_legacy_math import CATEGORIES
 from adfm_engine.commodity_service import load_commodity_event_study
 from adfm_engine.sector_rotation_service import load_sector_rotation
+from adfm_engine.volume_sentiment_service import load_volume_sentiment
 from adfm_engine.sector_rotation_config import UNIVERSE_SCOPES, BENCHMARKS, ROTATION_MODES, WINDOW_PRESETS, TRAIL_OPTIONS, LABEL_MODES, SECTOR_GROUP_COLORS
 from pathlib import Path
 
@@ -101,6 +102,20 @@ class SectorRotationParameters(BaseModel):
                                   any(group not in SECTOR_GROUP_COLORS for group in value)):
             raise ValueError("Unknown or duplicate sector group.")
         return value
+
+
+class VolumeSentimentParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    symbol: str = Field(default="QQQ", min_length=1, max_length=15, pattern=r"^[A-Z0-9^=._-]+$")
+    lookback_months: int = Field(default=18, ge=6, le=48)
+    volume_mode: Literal["Dollar volume", "Raw volume", "Turnover %"] = "Dollar volume"
+    percentile_window: int = Field(default=126, ge=60, le=252)
+    smooth_window: int = Field(default=20, ge=10, le=80)
+    high_cutoff: int = Field(default=90, ge=75, le=99)
+    low_cutoff: int = Field(default=10, ge=1, le=25)
+    show_price_mas: bool = True
+    event_filter: Literal["All extremes", "Heavy only", "Quiet only"] = "All extremes"
+    max_event_rows: int = Field(default=12, ge=5, le=25)
 
 
 class HedgeParameters(BaseModel):
@@ -271,7 +286,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment})
     try:
         yield
     finally:
@@ -345,6 +360,14 @@ def create_app() -> FastAPI:
     @app.post("/v1/sector-breadth-and-rotation-job", dependencies=[Depends(require_gateway)])
     def sector_breadth_and_rotation_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="sector_rotation")
+
+    @app.post("/v1/volume-based-sentiment-indicator", dependencies=[Depends(require_gateway)])
+    def volume_based_sentiment_indicator(parameters: VolumeSentimentParameters, request: Request):
+        return request.app.state.jobs.submit("volume_sentiment", parameters.model_dump())
+
+    @app.post("/v1/volume-based-sentiment-indicator-job", dependencies=[Depends(require_gateway)])
+    def volume_based_sentiment_indicator_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="volume_sentiment")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
