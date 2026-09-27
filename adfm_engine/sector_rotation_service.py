@@ -1,9 +1,17 @@
 """Native data boundary for the original sector breadth and rotation calculations."""
 import pandas as pd
+from functools import lru_cache
+from time import monotonic
 
 from adfm_engine import sector_rotation_legacy_math as rotation
 from adfm_engine.serialization import figure_json, records
 from adfm_engine.services import DataUnavailable
+
+
+@lru_cache(maxsize=32)
+def _cached_prices(tickers: tuple[str, ...], bucket: int) -> pd.DataFrame:
+    """Reuse a market snapshot while visitors change presentation controls."""
+    return rotation.fetch_prices(list(tickers))
 
 
 def load_sector_rotation(*, universe="Core subsectors", benchmark="SPY",
@@ -18,7 +26,7 @@ def load_sector_rotation(*, universe="Core subsectors", benchmark="SPY",
     cfg = rotation.get_rotation_config(window)
     min_rows = cfg.long_window + 30
     tickers = list(dict.fromkeys(selected["Ticker"].tolist() + [benchmark]))
-    raw = rotation.fetch_prices(tickers)
+    raw = _cached_prices(tuple(tickers), int(monotonic() // 900))
     ok, message = rotation.validate_benchmark(raw, benchmark, min_rows)
     if not ok:
         raise DataUnavailable(message)
