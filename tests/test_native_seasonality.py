@@ -27,3 +27,14 @@ def test_rejects_inverted_custom_sample():
         pass
     else:
         raise AssertionError("Inverted sample accepted")
+
+
+def test_provider_gaps_keep_calendar_returns(monkeypatch):
+    dates = pd.bdate_range("2020-01-01", "2026-08-31")
+    prices = pd.Series(np.linspace(100, 175, len(dates)), index=dates)
+    monkeypatch.setattr(service, "_download", lambda symbol, *_: prices if symbol == "SPY" else pd.Series(dtype=float))
+    monkeypatch.setattr(service, "_fred", lambda *args: pd.Series(dtype=float, index=pd.DatetimeIndex([])))
+    _, _, table = service._history.__wrapped__("SPY", "2020-01-01", "2026-09-01") if hasattr(service._history, "__wrapped__") else service._history("SPY", "2020-01-01", "2026-09-01")
+    assert not table.empty
+    assert (table["fed_regime"] == "Unknown").all()
+    assert table["total_ret"].notna().all()

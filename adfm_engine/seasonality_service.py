@@ -21,7 +21,7 @@ def _download(symbol, start, end):
         value.index = pd.to_datetime(value.index).tz_localize(None)
         return value.sort_index()
     except Exception:
-        return pd.Series(dtype=float)
+        return pd.Series(dtype=float,index=pd.DatetimeIndex([]))
 
 def _fred(code,start,end):
     try:
@@ -29,7 +29,7 @@ def _fred(code,start,end):
         value.index=pd.to_datetime(value.index).tz_localize(None)
         return value
     except Exception:
-        return pd.Series(dtype=float)
+        return pd.Series(dtype=float,index=pd.DatetimeIndex([]))
 
 @ttl_cache(seconds=3600,max_entries=48)
 def _history(symbol,start,end):
