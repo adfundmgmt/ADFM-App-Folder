@@ -38,6 +38,7 @@ from adfm_engine.commodity_service import load_commodity_event_study
 from adfm_engine.sector_rotation_service import load_sector_rotation
 from adfm_engine.volume_sentiment_service import load_volume_sentiment
 from adfm_engine.etf_flow_service import load_etf_flow
+from adfm_engine.position_sizing_service import load_position_sizing
 from adfm_engine.sector_rotation_config import UNIVERSE_SCOPES, BENCHMARKS, ROTATION_MODES, WINDOW_PRESETS, TRAIL_OPTIONS, LABEL_MODES, SECTOR_GROUP_COLORS
 from pathlib import Path
 
@@ -122,6 +123,40 @@ class VolumeSentimentParameters(BaseModel):
 class ETFFlowParameters(BaseModel):
     model_config = ConfigDict(extra="forbid")
     period_label: Literal["1 Month", "3 Months", "6 Months", "12 Months", "YTD"] = "1 Month"
+
+
+class PositionSizingParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    ticker: str = Field(default="AAPL", min_length=1, max_length=15, pattern=r"^[A-Z0-9^=._-]+$")
+    direction: Literal["Long", "Short"] = "Long"
+    conviction: int = Field(default=3, ge=1, le=5)
+    horizon_label: Literal["1 month", "3 months", "1 year", "5 years"] = "3 months"
+    portfolio_nav: float = Field(default=5_000_000, ge=1000, le=1e12)
+    max_loss_pct: float = Field(default=1.25, ge=.1, le=10)
+    hold_earnings: bool = True
+    participation: int = Field(default=10, ge=1, le=25)
+    liquidation_days: int = Field(default=3, ge=1, le=10)
+    entry: float | None = Field(default=None, gt=0, le=1e8)
+    target: float | None = Field(default=None, gt=0, le=1e8)
+    stop: float | None = Field(default=None, gt=0, le=1e8)
+    sampling_mode: Literal["Random historical blocks", "Recent-regime weighted blocks", "Chronological regime replay"] = "Random historical blocks"
+    simulation_position_pct: float | None = Field(default=None, ge=.5, le=25)
+    starting_balance: float | None = Field(default=None, ge=1000, le=1e12)
+    seed: int | None = Field(default=None, ge=0, le=1_000_000_000)
+
+    @field_validator("ticker")
+    @classmethod
+    def uppercase_ticker(cls, value):
+        return value.upper()
+
+    @model_validator(mode="after")
+    def valid_trade(self):
+        if self.entry is not None and self.stop is not None:
+            if (self.direction == "Long" and self.stop >= self.entry) or (self.direction == "Short" and self.stop <= self.entry):
+                raise ValueError("Invalidation must be on the adverse side of entry.")
+        if self.simulation_position_pct is not None and self.simulation_position_pct > self.conviction * 5:
+            raise ValueError("Simulation exposure cannot exceed the conviction ceiling.")
+        return self
 
 
 class HedgeParameters(BaseModel):
@@ -292,7 +327,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment,"etf_flow":load_etf_flow})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment,"etf_flow":load_etf_flow,"position_sizing":load_position_sizing})
     try:
         yield
     finally:
@@ -384,6 +419,16 @@ def create_app() -> FastAPI:
     @app.post("/v1/etf-flow-pressure-proxy-job", dependencies=[Depends(require_gateway)])
     def etf_flow_pressure_proxy_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="etf_flow")
+
+    @app.post("/v1/position-sizing-lab", dependencies=[Depends(require_gateway)])
+    def position_sizing_lab(parameters: PositionSizingParameters, request: Request):
+        payload = parameters.model_dump()
+        payload["session_hour"] = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d-%H")
+        return request.app.state.jobs.submit("position_sizing", payload)
+
+    @app.post("/v1/position-sizing-lab-job", dependencies=[Depends(require_gateway)])
+    def position_sizing_lab_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="position_sizing")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
