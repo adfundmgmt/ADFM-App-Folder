@@ -37,6 +37,7 @@ from adfm_engine.baskets_legacy_math import CATEGORIES
 from adfm_engine.commodity_service import load_commodity_event_study
 from adfm_engine.sector_rotation_service import load_sector_rotation
 from adfm_engine.volume_sentiment_service import load_volume_sentiment
+from adfm_engine.etf_flow_service import load_etf_flow
 from adfm_engine.sector_rotation_config import UNIVERSE_SCOPES, BENCHMARKS, ROTATION_MODES, WINDOW_PRESETS, TRAIL_OPTIONS, LABEL_MODES, SECTOR_GROUP_COLORS
 from pathlib import Path
 
@@ -116,6 +117,11 @@ class VolumeSentimentParameters(BaseModel):
     show_price_mas: bool = True
     event_filter: Literal["All extremes", "Heavy only", "Quiet only"] = "All extremes"
     max_event_rows: int = Field(default=12, ge=5, le=25)
+
+
+class ETFFlowParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    period_label: Literal["1 Month", "3 Months", "6 Months", "12 Months", "YTD"] = "1 Month"
 
 
 class HedgeParameters(BaseModel):
@@ -286,7 +292,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment,"etf_flow":load_etf_flow})
     try:
         yield
     finally:
@@ -368,6 +374,16 @@ def create_app() -> FastAPI:
     @app.post("/v1/volume-based-sentiment-indicator-job", dependencies=[Depends(require_gateway)])
     def volume_based_sentiment_indicator_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="volume_sentiment")
+
+    @app.post("/v1/etf-flow-pressure-proxy", dependencies=[Depends(require_gateway)])
+    def etf_flow_pressure_proxy(parameters: ETFFlowParameters, request: Request):
+        payload = parameters.model_dump()
+        payload["session_hour"] = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d-%H")
+        return request.app.state.jobs.submit("etf_flow", payload)
+
+    @app.post("/v1/etf-flow-pressure-proxy-job", dependencies=[Depends(require_gateway)])
+    def etf_flow_pressure_proxy_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="etf_flow")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
