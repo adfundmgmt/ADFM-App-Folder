@@ -31,7 +31,8 @@ class RatioCapture(Capture):
 def fixture(missing=False):
     symbols=sorted({t for s in CORE_RATIO_SPECS for t in (s.ticker_1,s.ticker_2)}|{'AAA','BBB'})
     rng=np.random.default_rng(11)
-    frame=pd.DataFrame(100*np.exp(np.cumsum(rng.normal(.0002,.013,(5600,len(symbols))),axis=0)),index=pd.bdate_range(end=date.today(),periods=5600),columns=symbols)
+    sessions=pd.bdate_range(end=pd.offsets.BDay().rollback(pd.Timestamp(date.today())),periods=5600)
+    frame=pd.DataFrame(100*np.exp(np.cumsum(rng.normal(.0002,.013,(len(sessions),len(symbols))),axis=0)),index=sessions,columns=symbols)
     if missing:
         frame=frame.drop(columns=['JAAA','AAA']);frame.loc[frame.index[:-80],'PBDC']=np.nan;frame.loc[frame.index[-20:],'SHY']=0
     return frame
