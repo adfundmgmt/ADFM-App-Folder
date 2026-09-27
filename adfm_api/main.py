@@ -5,8 +5,10 @@ import hmac
 import logging
 import os
 import uuid
+from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
@@ -30,9 +32,26 @@ from adfm_engine.stress_service import load_stress
 from adfm_engine.calendar_service import load_calendar
 from adfm_engine.sec13f_service import load_sec13f, release_list
 from adfm_engine.jobs import JobQueue
+from adfm_engine.baskets_service import load_baskets
+from adfm_engine.baskets_legacy_math import CATEGORIES
 from pathlib import Path
 
 logger = logging.getLogger("adfm.api")
+
+
+class BasketParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    preset: Literal["YTD", "1W", "1M", "3M", "6M", "1Y", "3Y", "5Y"] = "YTD"
+    categories: list[str] | None = Field(default=None, max_length=20)
+    market_cap_filter: bool = False
+    stale_days: int = Field(default=30, ge=10, le=90, multiple_of=5)
+
+    @field_validator("categories")
+    @classmethod
+    def valid_categories(cls, value):
+        if value is not None and (len(value) != len(set(value)) or any(item not in CATEGORIES for item in value)):
+            raise ValueError("Unknown or duplicate basket category.")
+        return value
 
 
 class HedgeParameters(BaseModel):
@@ -203,7 +222,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets})
     try:
         yield
     finally:
@@ -241,6 +260,17 @@ def create_app() -> FastAPI:
     @app.post("/v1/leadership", dependencies=[Depends(require_gateway)])
     def equity_leadership(parameters: LeadershipParameters):
         return load_leadership(**parameters.model_dump())
+
+    @app.post("/v1/baskets", dependencies=[Depends(require_gateway)])
+    def public_baskets(parameters: BasketParameters, request: Request):
+        # A date in the fingerprint prevents yesterday's completed job being served as today's.
+        payload = parameters.model_dump()
+        payload["session_date"] = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        return request.app.state.jobs.submit("baskets", payload)
+
+    @app.post("/v1/baskets-job", dependencies=[Depends(require_gateway)])
+    def public_baskets_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="baskets")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):

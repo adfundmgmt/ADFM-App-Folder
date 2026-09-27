@@ -26,16 +26,17 @@ class JobQueue:
         payload=json.dumps(arguments,sort_keys=True);key=hashlib.sha256((kind+payload).encode()).hexdigest();now=time.time()
         with self.lock,self.db() as db:
             db.execute("DELETE FROM jobs WHERE status IN ('completed','failed') AND updated<?",(now-86400,))
-            previous=db.execute("SELECT id FROM jobs WHERE fingerprint=? AND (status IN ('queued','running') OR (status='completed' AND updated>?)) ORDER BY created DESC LIMIT 1",(key,now-21600)).fetchone()
+            ttl = 1800 if kind == 'baskets' else 21600
+            previous=db.execute("SELECT id FROM jobs WHERE fingerprint=? AND (status IN ('queued','running') OR (status='completed' AND updated>?)) ORDER BY created DESC LIMIT 1",(key,now-ttl)).fetchone()
             if previous:job_id=previous['id']
             else:
                 if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=8:raise DataUnavailable('The analysis queue is busy. Please retry shortly.')
                 job_id=uuid.uuid4().hex;db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',(job_id,key,kind,payload,'queued',None,None,now,now))
         if not previous:self.pool.submit(self.run,job_id)
         return self.get(job_id)
-    def get(self,job_id):
+    def get(self,job_id,kind=None):
         with self.db() as db:row=db.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()
-        if row is None:raise DataUnavailable('This job has expired. Run the analysis again.')
+        if row is None or (kind is not None and row['kind'] != kind):raise DataUnavailable('This job has expired. Run the analysis again.')
         return {'id':row['id'],'status':row['status'],'result':json.loads(row['result']) if row['result'] else None,'error':row['error']}
     def run(self,job_id):
         with self.db() as db:
