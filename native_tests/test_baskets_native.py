@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 import pytest
 
-from adfm_api.main import BasketParameters
+from adfm_api.main import BasketParameters, create_app
 from adfm_engine import baskets_service
 from adfm_engine.services import DataUnavailable
 
@@ -43,3 +43,14 @@ def test_baskets_reject_missing_benchmark(monkeypatch):
 def test_rejects_unknown_categories():
     with pytest.raises(ValueError):
         BasketParameters(categories=["Invented"])
+
+
+def test_raw_definitions_are_available_without_price_downloads(monkeypatch):
+    from fastapi.testclient import TestClient
+    from adfm_engine.baskets_legacy_math import CATEGORIES
+    monkeypatch.setenv("ADFM_ENV", "development")
+    monkeypatch.delenv("ADFM_GATEWAY_TOKEN", raising=False)
+    with TestClient(create_app()) as client:
+        response = client.get("/v1/basket-definitions")
+    assert response.status_code == 200
+    assert response.json()["categories"] == CATEGORIES

@@ -268,6 +268,11 @@ def create_app() -> FastAPI:
         payload["session_date"] = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
         return request.app.state.jobs.submit("baskets", payload)
 
+    @app.get("/v1/basket-definitions", dependencies=[Depends(require_gateway)])
+    def public_basket_definitions():
+        # Raw membership is independent of price downloads and quality filters.
+        return {"categories": CATEGORIES}
+
     @app.post("/v1/baskets-job", dependencies=[Depends(require_gateway)])
     def public_baskets_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="baskets")
