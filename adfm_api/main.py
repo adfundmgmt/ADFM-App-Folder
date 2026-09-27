@@ -34,6 +34,7 @@ from adfm_engine.sec13f_service import load_sec13f, release_list
 from adfm_engine.jobs import JobQueue
 from adfm_engine.baskets_service import load_baskets
 from adfm_engine.baskets_legacy_math import CATEGORIES
+from adfm_engine.commodity_service import load_commodity_event_study
 from pathlib import Path
 
 logger = logging.getLogger("adfm.api")
@@ -52,6 +53,32 @@ class BasketParameters(BaseModel):
         if value is not None and (len(value) != len(set(value)) or any(item not in CATEGORIES for item in value)):
             raise ValueError("Unknown or duplicate basket category.")
         return value
+
+
+class CommodityParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    symbol: str = Field(default="CL=F", min_length=2, max_length=20, pattern=r"^[A-Z0-9^=._-]+$")
+    signal_type: Literal["Return threshold", "52-week breakout", "RSI extreme", "200D trend stretch"] = "Return threshold"
+    direction: Literal["Rally", "Selloff", "High", "Low", "Overbought", "Oversold", "Above", "Below"] = "Rally"
+    return_window: Literal["1M", "2M", "3M", "6M", "12M"] = "3M"
+    threshold: float = Field(default=25.0, ge=1, le=300)
+    rsi_period: int = Field(default=14, ge=5, le=50)
+    spacing: Literal["1M", "2M", "3M", "6M", "12M"] = "3M"
+    lookback: Literal["Max", "10Y", "25Y", "50Y"] = "Max"
+
+    @model_validator(mode="after")
+    def valid_signal(self):
+        valid = {"Return threshold": ("Rally", "Selloff"),
+                 "52-week breakout": ("High", "Low"),
+                 "RSI extreme": ("Overbought", "Oversold"),
+                 "200D trend stretch": ("Above", "Below")}
+        if self.direction not in valid[self.signal_type]:
+            raise ValueError("Direction must match the event signal.")
+        if self.signal_type == "RSI extreme" and self.threshold > 99:
+            raise ValueError("RSI threshold cannot exceed 99.")
+        if self.signal_type == "200D trend stretch" and self.threshold > 200:
+            raise ValueError("Trend stretch cannot exceed 200%.")
+        return self
 
 
 class HedgeParameters(BaseModel):
@@ -222,7 +249,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study})
     try:
         yield
     finally:
@@ -276,6 +303,16 @@ def create_app() -> FastAPI:
     @app.post("/v1/baskets-job", dependencies=[Depends(require_gateway)])
     def public_baskets_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="baskets")
+
+    @app.post("/v1/commodity-event-study", dependencies=[Depends(require_gateway)])
+    def commodity_event_study(parameters: CommodityParameters, request: Request):
+        payload = parameters.model_dump()
+        payload["session_hour"] = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d-%H")
+        return request.app.state.jobs.submit("commodity", payload)
+
+    @app.post("/v1/commodity-event-study-job", dependencies=[Depends(require_gateway)])
+    def commodity_event_study_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="commodity")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
