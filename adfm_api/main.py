@@ -39,6 +39,7 @@ from adfm_engine.sector_rotation_service import load_sector_rotation
 from adfm_engine.volume_sentiment_service import load_volume_sentiment
 from adfm_engine.etf_flow_service import load_etf_flow
 from adfm_engine.position_sizing_service import load_position_sizing
+from adfm_engine.currency_tension_service import load_currency_tension, DEFAULT_WEIGHTS, PILLAR_AXIS
 from adfm_engine.sector_rotation_config import UNIVERSE_SCOPES, BENCHMARKS, ROTATION_MODES, WINDOW_PRESETS, TRAIL_OPTIONS, LABEL_MODES, SECTOR_GROUP_COLORS
 from pathlib import Path
 
@@ -157,6 +158,26 @@ class PositionSizingParameters(BaseModel):
         if self.simulation_position_pct is not None and self.simulation_position_pct > self.conviction * 5:
             raise ValueError("Simulation exposure cannot exceed the conviction ceiling.")
         return self
+
+
+class CurrencyTensionParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    horizon: Literal["struct", "regime", "secular"] = "struct"
+    trail: int = Field(default=6, ge=0, le=12)
+    asof: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    weights: dict[str, float] | None = None
+
+    @field_validator("weights")
+    @classmethod
+    def valid_weights(cls, value):
+        if value is None:
+            return value
+        if set(value) != set(DEFAULT_WEIGHTS) or any(not 0 <= weight <= 3 or round(weight * 4) != weight * 4 for weight in value.values()):
+            raise ValueError("Supply all six pillar weights between 0 and 3 in quarter-point steps.")
+        for axis in set(PILLAR_AXIS.values()):
+            if not any(value[key] > 0 for key, group in PILLAR_AXIS.items() if group == axis):
+                raise ValueError("Keep at least one pillar on each axis.")
+        return value
 
 
 class HedgeParameters(BaseModel):
@@ -327,7 +348,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment,"etf_flow":load_etf_flow,"position_sizing":load_position_sizing})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation,"volume_sentiment":load_volume_sentiment,"etf_flow":load_etf_flow,"position_sizing":load_position_sizing,"currency_tension":load_currency_tension})
     try:
         yield
     finally:
@@ -429,6 +450,16 @@ def create_app() -> FastAPI:
     @app.post("/v1/position-sizing-lab-job", dependencies=[Depends(require_gateway)])
     def position_sizing_lab_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="position_sizing")
+
+    @app.post("/v1/currency-tension-engine", dependencies=[Depends(require_gateway)])
+    def currency_tension_engine(parameters: CurrencyTensionParameters, request: Request):
+        payload = parameters.model_dump()
+        payload["session_slot"] = int(datetime.now(ZoneInfo("America/New_York")).timestamp() // 600)
+        return request.app.state.jobs.submit("currency_tension", payload)
+
+    @app.post("/v1/currency-tension-engine-job", dependencies=[Depends(require_gateway)])
+    def currency_tension_engine_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="currency_tension")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
