@@ -35,6 +35,8 @@ from adfm_engine.jobs import JobQueue
 from adfm_engine.baskets_service import load_baskets
 from adfm_engine.baskets_legacy_math import CATEGORIES
 from adfm_engine.commodity_service import load_commodity_event_study
+from adfm_engine.sector_rotation_service import load_sector_rotation
+from adfm_engine.sector_rotation_config import UNIVERSE_SCOPES, BENCHMARKS, ROTATION_MODES, WINDOW_PRESETS, TRAIL_OPTIONS, LABEL_MODES, SECTOR_GROUP_COLORS
 from pathlib import Path
 
 logger = logging.getLogger("adfm.api")
@@ -79,6 +81,26 @@ class CommodityParameters(BaseModel):
         if self.signal_type == "200D trend stretch" and self.threshold > 200:
             raise ValueError("Trend stretch cannot exceed 200%.")
         return self
+
+
+class SectorRotationParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    universe: Literal["Major sectors only", "Core subsectors", "Core + thematic subsectors"] = "Core subsectors"
+    benchmark: Literal["SPY", "RSP", "QQQ", "IWM", "DIA", "TLT", "IEF", "UUP"] = "SPY"
+    mode: Literal["Benchmark-relative rotation", "Absolute sector/subsector rotation"] = "Benchmark-relative rotation"
+    window: Literal["Fast (1M vs 3M)", "Intermediate (3M vs 6M)", "Trend (6M vs 12M)"] = "Fast (1M vs 3M)"
+    trail: Literal["None", "4 weeks", "8 weeks", "12 weeks"] = "4 weeks"
+    groups: list[str] | None = Field(default=None, max_length=12)
+    selected_ticker: str = Field(default="SMH", max_length=12, pattern=r"^[A-Z0-9^=._-]+$")
+    label_mode: Literal["Top ranked only", "All tickers", "No labels"] = "Top ranked only"
+
+    @field_validator("groups")
+    @classmethod
+    def valid_groups(cls, value):
+        if value is not None and (len(value) != len(set(value)) or
+                                  any(group not in SECTOR_GROUP_COLORS for group in value)):
+            raise ValueError("Unknown or duplicate sector group.")
+        return value
 
 
 class HedgeParameters(BaseModel):
@@ -249,7 +271,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ADFM_ENV", "production") != "development" and len(os.getenv("ADFM_GATEWAY_TOKEN", "")) < 32:
         raise RuntimeError("Set a random ADFM_GATEWAY_TOKEN of at least 32 characters before production startup.")
     configure_yfinance_cache()
-    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study})
+    app.state.jobs=JobQueue(Path(os.getenv("ADFM_DATA_DIR","/tmp/adfm-data"))/"jobs.sqlite", {"sec13f":load_sec13f,"baskets":load_baskets,"commodity":load_commodity_event_study,"sector_rotation":load_sector_rotation})
     try:
         yield
     finally:
@@ -313,6 +335,16 @@ def create_app() -> FastAPI:
     @app.post("/v1/commodity-event-study-job", dependencies=[Depends(require_gateway)])
     def commodity_event_study_job(parameters: JobParameters, request: Request):
         return request.app.state.jobs.get(parameters.id, kind="commodity")
+
+    @app.post("/v1/sector-breadth-and-rotation", dependencies=[Depends(require_gateway)])
+    def sector_breadth_and_rotation(parameters: SectorRotationParameters, request: Request):
+        payload = parameters.model_dump()
+        payload["session_hour"] = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d-%H")
+        return request.app.state.jobs.submit("sector_rotation", payload)
+
+    @app.post("/v1/sector-breadth-and-rotation-job", dependencies=[Depends(require_gateway)])
+    def sector_breadth_and_rotation_job(parameters: JobParameters, request: Request):
+        return request.app.state.jobs.get(parameters.id, kind="sector_rotation")
 
     @app.post("/v1/relative-volatility", dependencies=[Depends(require_gateway)])
     def relative_volatility(parameters: VolatilityParameters):
