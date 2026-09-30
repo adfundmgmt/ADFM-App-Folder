@@ -160,6 +160,33 @@ class OptionsPositioningTests(unittest.TestCase):
         self.assertTrue(math.isclose(result["put_call_volume"], 2.0))
         self.assertTrue(math.isclose(result["put_call_oi"], 350 / 275))
 
+    def test_snapshot_does_not_choose_contracts_with_invalid_strikes(self):
+        for strikes in ([np.nan, np.nan], [0.0, -10.0], [np.inf, -np.inf]):
+            with self.subTest(strikes=strikes):
+                chain = sample_chain(strikes, [0.2, 0.3], [10, 20], [50, 100])
+                result = option_snapshot(
+                    chain, chain, spot=100.0, expiry="2026-11-14", as_of=date(2026, 9, 30)
+                )
+                self.assertTrue(math.isnan(result["atm_iv"]))
+                self.assertTrue(math.isnan(result["put_skew"]))
+
+    def test_snapshot_with_missing_spot_returns_unavailable_volatility(self):
+        chain = sample_chain([100.0], [0.2], [10], [50])
+        result = option_snapshot(
+            chain, chain, spot=np.nan, expiry="2026-11-14", as_of=date(2026, 9, 30)
+        )
+        self.assertTrue(math.isnan(result["atm_iv"]))
+        self.assertTrue(math.isnan(result["put_skew"]))
+
+    def test_snapshot_with_empty_chains_returns_unavailable_volatility(self):
+        result = option_snapshot(
+            pd.DataFrame(), pd.DataFrame(), spot=100.0,
+            expiry="2026-11-14", as_of=date(2026, 9, 30),
+        )
+        self.assertTrue(math.isnan(result["atm_iv"]))
+        self.assertTrue(math.isnan(result["put_skew"]))
+        self.assertEqual(result["option_volume"], 0.0)
+
     def test_cross_sectional_ranks_use_current_peer_group(self):
         frame = pd.DataFrame(
             {

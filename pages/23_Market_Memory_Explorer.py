@@ -1,7 +1,6 @@
 import datetime as dt
 import io
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -13,7 +12,7 @@ import streamlit as st
 from adfm_core.primary_data import fetch_fred_symbols, render_fred_status
 from adfm_core.palette import PASTEL_20
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
-import yfinance as yf
+from adfm_core.market_data import download_market_data, fill_short_calendar_gaps
 from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 
@@ -278,16 +277,15 @@ def dataframe_download_button(df: pd.DataFrame, label: str, filename: str) -> No
 # DATA LOADING
 # =========================
 
-@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def load_history(symbol: str) -> pd.DataFrame:
     symbol = str(symbol).strip()
     attempts = 0
     delay = 1.0
     last_error = None
 
-    while attempts < 4:
+    while attempts < 2:
         try:
-            df = yf.download(
+            df = download_market_data(
                 symbol,
                 period="max",
                 auto_adjust=True,
@@ -307,13 +305,6 @@ def load_history(symbol: str) -> pd.DataFrame:
 
             out = pd.DataFrame({"Close": pd.to_numeric(close, errors="coerce")}).dropna()
 
-            if out.empty:
-                hist = yf.Ticker(symbol).history(period="max", auto_adjust=True)
-                if isinstance(hist.columns, pd.MultiIndex):
-                    hist.columns = hist.columns.get_level_values(0)
-                if "Close" in hist.columns:
-                    out = pd.DataFrame({"Close": pd.to_numeric(hist["Close"], errors="coerce")}).dropna()
-
             if not out.empty:
                 out.index = pd.to_datetime(out.index).tz_localize(None)
                 out = out[~out.index.duplicated(keep="last")].sort_index()
@@ -331,7 +322,7 @@ def load_history(symbol: str) -> pd.DataFrame:
     raise ValueError(last_error or "Yahoo returned no usable data.")
 
 
-@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS, max_entries=64)
 def load_regime_proxy(symbol: str) -> pd.Series:
     hist = load_history(symbol)
     return hist["Close"].dropna().copy()
@@ -590,7 +581,7 @@ def build_feature_frame(close_px: pd.Series, regime_data: dict) -> pd.DataFrame:
 
     # Optional macro/regime proxies aligned to the asset calendar.
     if "vix" in regime_data:
-        vix = regime_data["vix"].reindex(df.index).ffill()
+        vix = fill_short_calendar_gaps(regime_data["vix"].reindex(df.index).to_frame("value"), limit=2)["value"]
         df["vix"] = vix
         df["vix_bucket"] = df["vix"].apply(bucket_vix_value)
     else:
@@ -598,7 +589,7 @@ def build_feature_frame(close_px: pd.Series, regime_data: dict) -> pd.DataFrame:
         df["vix_bucket"] = "unknown"
 
     if "tnx" in regime_data:
-        tnx = regime_data["tnx"].reindex(df.index).ffill()
+        tnx = fill_short_calendar_gaps(regime_data["tnx"].reindex(df.index).to_frame("value"), limit=2)["value"]
         # Yahoo may expose legacy index-point quotes (10x percent). Convert to
         # percent first; one percentage point always equals 100 basis points.
         if tnx.dropna().tail(260).median() > 20:
@@ -612,7 +603,7 @@ def build_feature_frame(close_px: pd.Series, regime_data: dict) -> pd.DataFrame:
         df["tnx_trend"] = "unknown"
 
     if "dxy" in regime_data:
-        dxy = regime_data["dxy"].reindex(df.index).ffill()
+        dxy = fill_short_calendar_gaps(regime_data["dxy"].reindex(df.index).to_frame("value"), limit=2)["value"]
         df["dxy"] = dxy
         df["dxy_63"] = dxy / dxy.shift(63) - 1.0
         df["dxy_trend"] = df["dxy_63"].apply(lambda x: bucket_pct_change(x, 0.02, "rising", "falling"))
@@ -622,7 +613,7 @@ def build_feature_frame(close_px: pd.Series, regime_data: dict) -> pd.DataFrame:
         df["dxy_trend"] = "unknown"
 
     if "credit" in regime_data:
-        credit = regime_data["credit"].reindex(df.index).ffill()
+        credit = fill_short_calendar_gaps(regime_data["credit"].reindex(df.index).to_frame("value"), limit=2)["value"]
         df["credit"] = credit
         df["credit_63"] = credit / credit.shift(63) - 1.0
         df["credit_trend"] = df["credit_63"].apply(lambda x: bucket_pct_change(x, 0.02, "improving", "worsening"))
@@ -1067,14 +1058,14 @@ def apply_setup_filters(
         df = df[df["trail_dd_252"] >= max_trail_dd_252]
 
     if above_200d == "Above 200D only":
-        df = df[df["above_200d"] == True]
+        df = df[df["above_200d"]]
     elif above_200d == "Below 200D only":
-        df = df[df["above_200d"] == False]
+        df = df[~df["above_200d"]]
 
     if ma_50_vs_200 == "50D > 200D only":
-        df = df[df["ma_50_gt_200"] == True]
+        df = df[df["ma_50_gt_200"]]
     elif ma_50_vs_200 == "50D < 200D only":
-        df = df[df["ma_50_gt_200"] == False]
+        df = df[~df["ma_50_gt_200"]]
 
     if vix_max is not None and "vix" in df.columns:
         df = df[df["vix"] <= vix_max]

@@ -1,26 +1,35 @@
 from __future__ import annotations
 
-import tempfile
-import time
 import warnings
+from datetime import time as clock_time
 from html import escape
-from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 
 from adfm_core.cftc_positioning import (
     PRICE_PROXIES,
     add_metrics,
     fetch_contract_history,
 )
+from adfm_core.futures_contracts import discontinuity_candidates, get_contract_spec
+from adfm_core.market_data import download_market_data
 from adfm_core.palette import PASTEL
+from adfm_core.point_in_time import (
+    CFTC_ACTUAL_RELEASES,
+    CFTC_SCHEDULE_OVERRIDES,
+    cftc_publication,
+)
+from adfm_core.public_signal_capture import (
+    commodity_snapshot,
+    load_captured_commodity_history,
+)
+from adfm_core.signal_ledger import record_signal_snapshot
 from adfm_core.ui import (
     PageHeader,
     inject_explorer_style,
@@ -30,13 +39,6 @@ from adfm_core.ui import (
 )
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
-
-try:
-    _yf_cache_dir = Path(tempfile.gettempdir()) / "adfm-yfinance-cache"
-    _yf_cache_dir.mkdir(parents=True, exist_ok=True)
-    yf.set_tz_cache_location(str(_yf_cache_dir))
-except Exception:
-    pass
 
 TITLE = "Commodity Event Study"
 CACHE_TTL_SECONDS = 3600
@@ -169,31 +171,7 @@ CFTC_CONTRACT_CODES.update(
     }
 )
 
-CFTC_PUBLICATION_OVERRIDES: Dict[str, str] = {
-    "2020-12-21": "2020-12-28",
-    "2021-06-15": "2021-06-21",
-    "2023-01-31": "2023-02-24",
-    "2023-02-07": "2023-03-03",
-    "2023-02-14": "2023-03-08",
-    "2023-02-21": "2023-03-10",
-    "2023-02-28": "2023-03-14",
-    "2023-03-07": "2023-03-16",
-    "2023-03-14": "2023-03-21",
-    "2025-01-07": "2025-01-13",
-    "2025-09-30": "2025-11-19",
-    "2025-10-07": "2025-11-21",
-    "2025-10-14": "2025-11-25",
-    "2025-10-21": "2025-12-02",
-    "2025-10-28": "2025-12-05",
-    "2025-11-04": "2025-12-10",
-    "2025-11-10": "2025-12-10",
-    "2025-11-18": "2025-12-12",
-    "2025-11-25": "2025-12-15",
-    "2025-12-02": "2025-12-17",
-    "2025-12-09": "2025-12-19",
-    "2025-12-16": "2025-12-23",
-    "2025-12-23": "2025-12-29",
-}
+CFTC_PUBLICATION_OVERRIDES = {**CFTC_ACTUAL_RELEASES, **CFTC_SCHEDULE_OVERRIDES}
 CFTC_EXCLUDED_REPORT_RANGES = ((pd.Timestamp("2018-12-24"), pd.Timestamp("2019-02-26")),)
 
 
@@ -292,44 +270,31 @@ def _flatten_yfinance_columns(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return out
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL_SECONDS, max_entries=64, show_spinner=False)
 def load_contract_history(symbol: str) -> pd.DataFrame:
     symbol = str(symbol).strip().upper()
-    last_error = None
-    for attempt in range(3):
-        try:
-            frame = yf.download(
-                symbol,
-                period="max",
-                interval="1d",
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
-            if frame is None or frame.empty:
-                raise ValueError("Yahoo Finance returned no rows.")
-            frame = _flatten_yfinance_columns(frame, symbol)
-            if "Close" not in frame.columns:
-                raise ValueError("Yahoo Finance returned no Close column.")
-            close = pd.to_numeric(frame["Close"], errors="coerce")
-            volume = (
-                pd.to_numeric(frame["Volume"], errors="coerce")
-                if "Volume" in frame.columns
-                else pd.Series(index=frame.index, dtype=float)
-            )
-            out = pd.DataFrame({"Close": close, "Volume": volume})
-            out.index = pd.to_datetime(out.index)
-            if getattr(out.index, "tz", None) is not None:
-                out.index = out.index.tz_localize(None)
-            out = out[~out.index.duplicated(keep="last")].sort_index()
-            out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=["Close"])
-            if len(out) < 260:
-                raise ValueError("Insufficient daily history for an event study.")
-            return out
-        except Exception as exc:
-            last_error = exc
-            time.sleep(0.8 * (attempt + 1))
-    raise RuntimeError(f"Could not load {symbol}: {last_error}")
+    frame = download_market_data(symbol, period="max", interval="1d", auto_adjust=False,
+                                 progress=False, threads=False, completed_only=True,
+                                 session_timezone="America/New_York", session_cutoff=clock_time(17, 15))
+    if frame is None or frame.empty:
+        raise ValueError(f"No completed daily futures observations for {symbol}.")
+    health = frame.attrs.copy()
+    frame = _flatten_yfinance_columns(frame, symbol)
+    if "Close" not in frame:
+        raise ValueError("Yahoo Finance returned no Close column.")
+    close = pd.to_numeric(frame["Close"], errors="coerce")
+    volume = (pd.to_numeric(frame["Volume"], errors="coerce") if "Volume" in frame
+              else pd.Series(index=frame.index, dtype=float))
+    out = pd.DataFrame({"Close": close, "Volume": volume})
+    out.index = pd.to_datetime(out.index)
+    if getattr(out.index, "tz", None) is not None:
+        out.index = out.index.tz_localize(None)
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=["Close"])
+    if len(out) < 260:
+        raise ValueError("Insufficient daily history for an event study.")
+    out.attrs.update(health)
+    return out
 
 
 def _report_date_is_excluded(report_date: pd.Timestamp) -> bool:
@@ -337,25 +302,21 @@ def _report_date_is_excluded(report_date: pd.Timestamp) -> bool:
     return any(start <= date <= end for start, end in CFTC_EXCLUDED_REPORT_RANGES)
 
 
-def cftc_publication_date(report_date: pd.Timestamp) -> pd.Timestamp:
-    date = pd.Timestamp(report_date).normalize()
-    if _report_date_is_excluded(date):
-        return pd.NaT
-    override = CFTC_PUBLICATION_OVERRIDES.get(date.strftime("%Y-%m-%d"))
-    if override:
-        return pd.Timestamp(override)
-    return date + pd.Timedelta(days=3)
+def cftc_publication_date(report_date: pd.Timestamp, *, strict: bool = False) -> pd.Timestamp:
+    # Compatibility defaults preserve ordinary descriptive history; the renderer
+    # explicitly selects strict publication timing by default.
+    return cftc_publication(report_date, strict=strict)[0]
 
 
-def cftc_availability_date(report_date: pd.Timestamp) -> pd.Timestamp:
-    publication = cftc_publication_date(report_date)
+def cftc_availability_date(report_date: pd.Timestamp, *, strict: bool = False) -> pd.Timestamp:
+    publication = cftc_publication_date(report_date, strict=strict)
     if pd.isna(publication):
         return pd.NaT
     return pd.Timestamp(publication + US_BUSINESS_DAY).normalize()
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def load_cftc_crowding(symbol: str) -> Tuple[pd.Series, str]:
+@st.cache_data(ttl=21600, max_entries=64, show_spinner=False)
+def load_cftc_crowding(symbol: str, *, strict: bool = True) -> Tuple[pd.Series, str]:
     code = CFTC_CONTRACT_CODES.get(str(symbol).upper())
     if not code:
         return pd.Series(dtype=float), "CFTC unavailable"
@@ -365,22 +326,16 @@ def load_cftc_crowding(symbol: str) -> Tuple[pd.Series, str]:
             return pd.Series(dtype=float), "CFTC unavailable"
         metrics = add_metrics(raw, "Disaggregated", "Managed Money")
         weekly = metrics[["report_date", "net_pct_oi"]].dropna().sort_values("report_date")
+        weekly["availability_date"] = weekly["report_date"].map(lambda date: cftc_availability_date(date, strict=strict))
+        weekly = weekly.dropna(subset=["availability_date"]).sort_values("availability_date")
         if len(weekly) < 52:
             return pd.Series(dtype=float), "CFTC unavailable"
-        weekly["crowding_pctile"] = (
-            weekly["net_pct_oi"].rolling(156, min_periods=52).rank(pct=True) * 100.0
-        )
-        weekly["availability_date"] = weekly["report_date"].map(cftc_availability_date)
-        weekly = weekly.dropna(subset=["availability_date", "crowding_pctile"])
-        if weekly.empty:
-            return pd.Series(dtype=float), "CFTC unavailable"
-        series = pd.Series(
-            weekly["crowding_pctile"].to_numpy(dtype=float),
-            index=pd.to_datetime(weekly["availability_date"]),
-            dtype=float,
-        )
+        weekly["crowding_pctile"] = weekly["net_pct_oi"].rolling(156, min_periods=52).rank(pct=True) * 100.0
+        weekly = weekly.dropna(subset=["crowding_pctile"])
+        series = pd.Series(weekly["crowding_pctile"].to_numpy(dtype=float), index=pd.to_datetime(weekly["availability_date"]), dtype=float)
         series = series[~series.index.duplicated(keep="last")].sort_index()
-        return series, "CFTC Managed Money · 3Y percentile · next-session availability"
+        basis = "verified actual release dates only" if strict else "ordinary/announced release schedule assumptions"
+        return series, f"CFTC Managed Money · revised descriptive values · {basis} · next-session availability"
     except Exception:
         return pd.Series(dtype=float), "CFTC unavailable"
 
@@ -448,6 +403,7 @@ def build_exhaustion_frame(
     profile: str,
     settings: dict,
     return_days: int,
+    *, strict_cftc: bool = True,
 ) -> Tuple[pd.DataFrame, pd.Series, str, str]:
     close = pd.to_numeric(data["Close"], errors="coerce").astype(float)
     volume = pd.to_numeric(data["Volume"], errors="coerce").astype(float)
@@ -469,7 +425,7 @@ def build_exhaustion_frame(
     trend_z = np.log(positive_close / ma200.where(ma200 > 0.0)) / trend_scale.replace(0.0, np.nan)
     rsi14 = _rsi(close, 14)
 
-    cftc_weekly, cftc_label = load_cftc_crowding(symbol)
+    cftc_weekly, cftc_label = load_cftc_crowding(symbol, strict=strict_cftc)
     if not cftc_weekly.empty:
         crowding_pctile = _align_cftc_to_prices(cftc_weekly, close.index)
         crowding_source = cftc_label
@@ -1165,7 +1121,8 @@ def render_commodity_event_study() -> None:
         with st.spinner(f"Loading {symbol} history…"):
             data = load_contract_history(symbol)
             diagnostics, condition, signal_label, crowding_source = build_exhaustion_frame(
-                data, symbol, profile, settings, return_days
+                data, symbol, profile, settings, return_days,
+                strict_cftc=st.session_state.get("commodity_strict_cftc", True),
             )
     except Exception as exc:
         st.error(str(exc))
@@ -1210,6 +1167,11 @@ def render_commodity_event_study() -> None:
     current_state = _current_state(
         profile, current_signal, recent_profile_setup, crowding_source
     )
+    today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
+    if latest_date.normalize() > today:
+        current_state = "Unavailable · future-dated observation"
+    elif len(pd.bdate_range(latest_date.normalize(), today)) - 1 > 5:
+        current_state = "Stale · historical signal only"
     crowding_value = latest.get("CrowdingPctile", np.nan)
     crowding_text = "n/a" if pd.isna(crowding_value) else f"{float(crowding_value):.2f}th pct"
     return_pctile_value = latest.get("ReturnPctile", np.nan)
@@ -1238,45 +1200,14 @@ def render_commodity_event_study() -> None:
     figure = make_price_chart(chart_close, study_events, diagnostics, signal_label)
     st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
 
-    st.markdown(
-        "<div class='event-study-table-title'>Top-Picking Diagnostics</div>",
-        unsafe_allow_html=True,
-    )
-    diag_cols = st.columns(5, gap="small")
-    diag_cols[0].metric("Median signal timing", _format_days_from_peak(top_stats["days_from_peak"]))
-    diag_cols[1].metric(
-        "Median peak → signal",
-        "—"
-        if not np.isfinite(top_stats["peak_to_signal"])
-        else f"{top_stats['peak_to_signal'] * 100.0:+.2f}%",
-    )
-    diag_cols[2].metric(
-        "3M ≥1σ decline",
-        "—"
-        if not np.isfinite(top_stats["down1sigma_3m"])
-        else f"{top_stats['down1sigma_3m'] * 100.0:.1f}%",
-    )
-    diag_cols[3].metric(
-        "6M ≥1.5σ decline",
-        "—"
-        if not np.isfinite(top_stats["down15sigma_6m"])
-        else f"{top_stats['down15sigma_6m'] * 100.0:.1f}%",
-    )
-    diag_cols[4].metric(
-        "3M >1σ further upside",
-        "—"
-        if not np.isfinite(top_stats["up1sigma_3m"])
-        else f"{top_stats['up1sigma_3m'] * 100.0:.1f}%",
-    )
-    st.markdown(
-        (
-            "<div class='event-study-caption'>Local peak timing uses the highest close in the 21 "
-            "sessions before through 21 sessions after each signal. Decline and further-upside "
-            "thresholds are scaled by the annualized volatility known on the signal date, so the "
-            "diagnostic is comparable across commodities.</div>"
-        ),
-        unsafe_allow_html=True,
-    )
+    with st.expander("Top-picking diagnostics", expanded=False):
+        st.dataframe(pd.DataFrame({"Diagnostic": ["Median signal timing", "Median peak → signal", "3M ≥1σ decline", "6M ≥1.5σ decline", "3M >1σ further upside"],
+                                   "Value": [_format_days_from_peak(top_stats["days_from_peak"]),
+                                             _format_number(top_stats["peak_to_signal"] * 100, "+.2f") + "%",
+                                             _format_number(top_stats["down1sigma_3m"] * 100, ".1f") + "%",
+                                             _format_number(top_stats["down15sigma_6m"] * 100, ".1f") + "%",
+                                             _format_number(top_stats["up1sigma_3m"] * 100, ".1f") + "%"]}), hide_index=True, width="stretch")
+        st.caption("Local peak diagnostics inspect 21 sessions before and after a signal, so they are retrospective outcomes. Excursions use volatility known on the signal date.")
 
     st.markdown(
         f"<div class='event-study-table-title'>{escape(contract_name)} Edge After Top Signal</div>",
@@ -1295,6 +1226,19 @@ def render_commodity_event_study() -> None:
         unsafe_allow_html=True,
     )
 
+    with st.expander("Captured signal versions", expanded=False):
+        try:
+            # Public prices only. Unchanged reruns retain the original timestamp.
+            if latest_date.normalize() <= today and len(pd.bdate_range(latest_date.normalize(), today)) - 1 <= 5:
+                row = commodity_snapshot(symbol, profile, settings, return_days, diagnostics, condition)
+                record_signal_snapshot(row)
+            captured_history = load_captured_commodity_history()
+            selected = captured_history[captured_history["Key"].eq(commodity_snapshot(symbol, profile, settings, return_days, diagnostics, condition)["Key"].iloc[0])]
+            st.dataframe(selected.tail(100), hide_index=True, width="stretch")
+            st.caption("Immutable captured versions preserve each observed signal definition; identical page reruns do not change original capture times. Binary Composite=1 means the price rule fired; Confidence is input-availability coverage, not a probability. Historical recomputations above can change with provider corrections.")
+        except (OSError, ValueError) as exc:
+            st.warning(f"Signal capture unavailable: {exc}")
+
     with st.expander("Historical top signals"):
         if history.empty:
             st.info("No events met the selected definition in this lookback.")
@@ -1310,6 +1254,18 @@ def render_commodity_event_study() -> None:
             )
 
     with st.expander("Method and data caveat"):
+        st.checkbox("Use only verified actual CFTC publication dates", value=True, key="commodity_strict_cftc")
+        st.caption("Strict publication timing excludes unknown actual releases; the curated actual records currently cover a small subset of history. Announced/tentative dates are assumptions in the optional descriptive mode. CFTC downloaded positions may be revised and are context only in both modes.")
+        spec = get_contract_spec(symbol)
+        if spec:
+            st.markdown(f"Contract: {spec.contract_size:,.0f} {spec.contract_unit}; quotes in {spec.quote_unit}; USD P&L per +1 quoted unit: ${spec.multiplier:,.0f}. [Exchange specification]({spec.spec_url}). Applies to one specified contract; verify provider quote units before using its mark.")
+        else:
+            st.caption("Contract multiplier/quote units have not been verified for this symbol; exact contract P&L remains unavailable.")
+        gaps = discontinuity_candidates(close_full)
+        st.caption(f"{len(gaps)} discontinuity candidates in available history. Large market gaps and non-positive prices can trigger the same diagnostic as a possible roll. No prices are changed.")
+        if not gaps.empty:
+            st.dataframe(gaps.tail(100), width="stretch")
+        st.caption("Results are descriptive continuous-series price changes, not realizable contract P&L. Yahoo roll construction is unverified; contract selection, rolls, financing, slippage and fees are not reconstructed.")
         st.markdown(
             """
             - Return percentiles use the selected return window ranked against up to five years of trailing daily observations. Only information available by that session is used.
@@ -1318,7 +1274,7 @@ def render_commodity_event_study() -> None:
             - Confirmed Exhaustion uses three price-reversal checks after a recent extreme: negative 5-day return, close below the 10-day moving average, and close below the prior 5-session low. These are deliberately described as related price checks, not independent evidence.
             - Failed Breakout starts with a close above the highest close of the preceding 63 sessions. Each breakout keeps its original level for the following 10 sessions; the first close below both that level and the 10-day moving average signals failure. Later highs do not reset earlier levels or extend their expiry. Multiple failures on one date count once, with the existing event-spacing rule applied afterward.
             - CFTC Managed Money positioning is context only and never gates a price signal. Volume is never substituted for positioning; missing CFTC data remains unavailable.
-            - CFTC observations become usable only on the first business session after public release at 3:30 p.m. ET. Known 2020, 2021, 2023 and 2025 delays are explicitly dated; the 2018-19 shutdown backlog is excluded rather than assigned invented publication dates. Positioning also expires after seven sessions if no fresh report is available.
+            - CFTC release timing uses curated actual-publication records in strict mode. Optional descriptive timing uses clearly identified ordinary or announced schedule assumptions; unresolved holidays and the 2018-19 shutdown backlog stay excluded. Conservative next US business-day alignment after the 3:30 p.m. ET release is used; exact futures session calendars differ. Positioning expires after seven observed alignment sessions.
             - Forward statistics de-overlap signal events separately for each horizon. The baseline is conditioned on the signal sample's calendar months, excludes starts close to signal windows, and is de-overlapped before comparison. If a short history leaves no same-month control, the page falls back to an unconditional de-overlapped control. Bootstrap intervals require at least three independent signals.
             - Volatility-normalized excursion diagnostics scale each event by the annualized volatility known on the signal date and the square root of the forward horizon.
             - Yahoo Finance futures histories are provider-supplied continuous series. Roll methodology can create discontinuities; the study does not infer or back-adjust individual contract rolls and should not be treated as execution-grade roll attribution.

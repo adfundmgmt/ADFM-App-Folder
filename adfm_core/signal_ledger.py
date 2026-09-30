@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,9 +24,26 @@ LEDGER_COLUMNS = (
 )
 
 
-def load_signal_history(path: Path = DEFAULT_LEDGER_PATH) -> pd.DataFrame:
+
+def _ledger_path(path: Path | None) -> Path:
+    return Path(path) if path is not None else Path(os.getenv("ADFM_SIGNAL_LEDGER_PATH", str(DEFAULT_LEDGER_PATH)))
+
+
+@contextmanager
+def _write_lock(path: Path):
+    # flock coordinates both page threads and separate scheduled processes on Linux.
+    with path.with_suffix(path.suffix + ".lock").open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def load_signal_history(path: Path | None = None) -> pd.DataFrame:
     """Load prior snapshots, returning an empty stable schema when unavailable."""
 
+    path = _ledger_path(path)
     if not path.exists():
         return pd.DataFrame(columns=LEDGER_COLUMNS)
     try:
@@ -38,58 +58,67 @@ def load_signal_history(path: Path = DEFAULT_LEDGER_PATH) -> pd.DataFrame:
 
 def record_signal_snapshot(
     snapshot: pd.DataFrame,
-    path: Path = DEFAULT_LEDGER_PATH,
+    path: Path | None = None,
     *,
     captured_at: datetime | None = None,
 ) -> pd.DataFrame:
-    """Upsert one point-in-time snapshot and write it atomically."""
+    """Append immutable versions under a process lock; unchanged reruns are no-ops.
 
-    if snapshot.empty:
-        return load_signal_history(path)
-    required = {
-        "Data Through",
-        "Signal",
-        "Key",
-        "Group",
-        "Composite",
-        "Impulse",
-        "Confidence",
-    }
-    missing = required.difference(snapshot.columns)
-    if missing:
-        raise ValueError(
-            f"Signal snapshot is missing required columns: {sorted(missing)}"
-        )
-
+    Set ADFM_SIGNAL_LEDGER_PATH to a persistent mounted location in deployment.
+    Explicit captured_at identifies a scheduled capture; implicit page reruns compare
+    each key with its latest version, retaining the original capture timestamp.
+    """
+    path = _ledger_path(path)
+    required = list(LEDGER_COLUMNS[1:])
+    missing = set(required).difference(snapshot.columns)
+    if missing and not snapshot.empty:
+        raise ValueError(f"Signal snapshot is missing required columns: {sorted(missing)}")
     captured = captured_at or datetime.now(timezone.utc)
-    current = snapshot[list(required)].copy()
-    current["Captured At UTC"] = captured.replace(microsecond=0).isoformat()
+    if captured.tzinfo is None:
+        raise ValueError("captured_at must be timezone-aware")
+    captured = captured.astimezone(timezone.utc)
+    current = snapshot.reindex(columns=required).copy()
+    current["Captured At UTC"] = captured.isoformat()
     current = current[list(LEDGER_COLUMNS)]
-
-    history = load_signal_history(path)
-    dates = set(current["Data Through"].dropna().astype(str))
-    keys = set(current["Key"].dropna().astype(str))
-    if not history.empty and dates and keys:
-        keep = ~(
-            history["Data Through"].astype(str).isin(dates)
-            & history["Key"].astype(str).isin(keys)
-        )
-        history = history.loc[keep]
-    combined = pd.concat([history, current], ignore_index=True)
-    combined = combined.sort_values(["Data Through", "Key", "Captured At UTC"])
-
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        dir=path.parent, prefix=f".{path.stem}-", suffix=".parquet", delete=False
-    ) as handle:
-        temp_path = Path(handle.name)
-    try:
-        combined.to_parquet(temp_path, index=False)
-        temp_path.replace(path)
-    finally:
-        if temp_path.exists():
-            temp_path.unlink()
-    return combined.reset_index(drop=True)
+    with _write_lock(path):
+        if path.exists():
+            try:
+                history = pd.read_parquet(path)
+            except Exception as exc:
+                raise ValueError("Signal ledger cannot be read; original file retained") from exc
+            if set(LEDGER_COLUMNS).difference(history.columns):
+                raise ValueError("Signal ledger schema is invalid; original file retained")
+            history = history[list(LEDGER_COLUMNS)]
+        else:
+            history = pd.DataFrame(columns=LEDGER_COLUMNS)
+        pending = []
+        for _, row in current.iterrows():
+            prior = history[history["Key"].astype(str).eq(str(row["Key"]))]
+            columns = list(LEDGER_COLUMNS) if captured_at is not None else required
+            candidates = prior if captured_at is not None else prior.sort_values("Captured At UTC").tail(1)
+            matches = candidates[columns].fillna("<missing>").astype(str).eq(row[columns].fillna("<missing>").astype(str), axis=1).all(axis=1)
+            if not matches.any():
+                pending.append(row.to_dict())
+        if not pending:
+            return history.reset_index(drop=True)
+        combined = pd.concat([history, pd.DataFrame(pending)], ignore_index=True)
+        combined = combined.sort_values(["Data Through", "Key", "Captured At UTC"], kind="stable")
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.stem}-", suffix=".parquet", delete=False) as handle:
+            temp_path = Path(handle.name)
+        try:
+            combined.to_parquet(temp_path, index=False)
+            with temp_path.open("rb") as handle:
+                os.fsync(handle.fileno())
+            temp_path.replace(path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            temp_path.unlink(missing_ok=True)
+        return combined.reset_index(drop=True)
 
 
 def latest_score_changes(history: pd.DataFrame) -> pd.DataFrame:

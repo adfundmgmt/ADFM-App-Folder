@@ -28,7 +28,7 @@ def page_functions(filename, names, extra=None):
             node.decorator_list = []
             nodes.append(node)
     module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *nodes], type_ignores=[])
-    namespace = {"pd": pd, "np": np, "datetime": datetime, "date": date, **(extra or {})}
+    namespace = {"pd": pd, "np": np, "datetime": datetime, "date": date, "fill_short_calendar_gaps": fill_short_calendar_gaps, **(extra or {})}
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
     return namespace
 

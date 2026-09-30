@@ -9,8 +9,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from adfm_core.bond_monitor import GLOBAL_SOVEREIGNS, daily_snapshot, monthly_snapshot
-from adfm_core.bond_event_study import HORIZONS, PROFILES, event_dates, event_summary, signal_frame
+from adfm_core.bond_event_study import HORIZONS, PROFILES, event_dates, event_summary, monthly_history, signal_frame
 from adfm_core.global_macro import clean
+from adfm_core.sovereign_daily import DAILY_SOVEREIGNS, load_daily_sovereigns
 from adfm_core.palette import PASTEL
 from adfm_core.primary_data import fetch_fred_symbols
 from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header, render_sidebar_about
@@ -63,7 +64,7 @@ def style():
 
 @st.cache_data(ttl=1800, max_entries=4, show_spinner=False)
 def daily_data(symbols: tuple[str, ...]):
-    return fetch_fred_symbols(symbols, start="1900-01-01", refresh=True)
+    return fetch_fred_symbols(symbols, start="1900-01-01")
 
 
 @st.cache_data(ttl=21600, max_entries=1, show_spinner=False)
@@ -71,63 +72,46 @@ def global_data(symbols: tuple[str, ...]):
     return fetch_fred_symbols(symbols, start="1900-01-01")
 
 
+@st.cache_data(ttl=1800, max_entries=1, show_spinner=False)
+def sovereign_daily_data():
+    return load_daily_sovereigns()
+
+
 def monitor_table(rows: list[dict], monthly: bool, spread: bool, selected: str):
-    horizons = ("1M", "3M", "YTD")
-
-    def cell(value, change=False):
-        if not np.isfinite(value):
-            return '<td class="na">—</td>'
-        if not change:
-            return f"<td>{value:.2f}%</td>"
-        tone = "flat" if abs(value) < .5 else "up" if value > 0 else "down"
-        return f'<td class="{tone}">{value:+.0f} bp</td>'
-
-    head = ("<th>Instrument</th><th>Signal state</th><th>3M after top · edge</th><th>Level</th>"
-            + "".join(f"<th>{h} Δ</th>" for h in horizons)
-            + "<th>Move %ile</th><th>Observed</th>")
-    body = []
+    table = []
     for row in rows:
-        snap = row["snapshot"]
-        date = escape(snap["Observation"] or "—")
-        label = date + (" · stale" if snap["Status"] == "Stale" else "")
-        latest = row["latest"]
-        state = row["state"]
-        state_tone = ("active" if state == "Yield top signal" else "watch" if state in
-                      ("Potential yield top", "Exhaustion watch") else "stale" if state == "Unavailable" else "")
-        summary = row["summary"]
-        median = summary.loc["Signal median", "3M"]
-        edge = summary.loc["Median edge", "3M"]
-        lift = summary.loc["Hit-rate lift", "3M"]
+        snap, summary, latest = row["snapshot"], row["summary"], row["latest"]
         count = summary.loc["Independent N", "3M"]
-
-        tone = "na" if not np.isfinite(edge) else "flat" if edge == 0 else "down" if edge < 0 else "up"
-        result = (f'{median:+.0f} / {edge:+.0f} bp' if np.isfinite(median) and np.isfinite(edge)
-                  else "—")
-        detail = (f'{lift:+.0f} pp lift · n={count:.0f}' if np.isfinite(lift) and count else
-                  f'n={count:.0f}' if count else "No completed events")
-
-        body.append(f'<tr class="{"selected" if row["name"] == selected else ""}"><td>{escape(row["name"])}</td>'
-                    + f'<td class="state {state_tone}">{escape(state)}'
-                    + f'<small>Last top: {escape(row["latest_event"])}</small></td>'
-                    + f'<td class="study {tone}">{result}<small>{detail}</small></td>'
-                    + cell(snap["Yield"]) + "".join(cell(snap[h], True) for h in horizons)
-                    + f'<td>{display_number(float(latest["ChangePctile"])) if latest is not None else "—"}</td>'
-                    + f'<td>{label}</td></tr>')
-    st.markdown('<div class="bond-wrap"><table class="bond-table"><thead><tr>' + head
-                + '</tr></thead><tbody>' + "".join(body) + '</tbody></table></div>', unsafe_allow_html=True)
-    unit = "spread" if spread else "yield"
-    frequency = "monthly average" if monthly else "daily observation"
-    st.markdown(f'<div class="bond-note">Level is {unit} in %. Changes are basis points; '
-                f'{frequency} dates are shown per instrument. 3M after top is median yield change / edge '
-                'versus non-overlapping baseline windows. Lift is the difference in lower-yield hit rate '
-                '(percentage points); n is independent 3M signals. '
-                'Green favors a yield top; red opposes it. These are yield outcomes, not bond returns.</div>',
-                unsafe_allow_html=True)
-
+        controls = summary.loc["Control N", "3M"]
+        table.append({"Instrument": row["name"], "Signal state": row["state"],
+                      "3M after top (bp)": summary.loc["Signal median", "3M"],
+                      "3M matched edge (bp)": summary.loc["Median edge", "3M"],
+                      "95% edge low (bp)": summary.loc["Edge CI low", "3M"],
+                      "95% edge high (bp)": summary.loc["Edge CI high", "3M"],
+                      "Independent N": count, "Control N": controls,
+                      "Evidence": "Small sample" if min(count, controls) < 20 else "Retrospective",
+                      "Level (%)": snap["Yield"], "1M Δ (bp)": snap["1M"],
+                      "3M Δ (bp)": snap["3M"], "YTD Δ (bp)": snap["YTD"],
+                      "Move %ile": float(latest["ChangePctile"]) if latest is not None else np.nan,
+                      "Observed": snap["Observation"], "Availability proxy": snap.get("Availability", ""), "Status": snap["Status"],
+                      "Last top": row["latest_event"], "Source / basis": row["basis"]})
+    data = pd.DataFrame(table)
+    numeric = data.select_dtypes(include="number").columns
+    config = {name: st.column_config.NumberColumn(format="%.1f") for name in numeric}
+    def tone(value):
+        if pd.isna(value):
+            return "background-color: #f4f5f5; color: #777"
+        return "background-color: #dce9e1" if value < 0 else "background-color: #edc9cd" if value > 0 else ""
+    painted = data.style.map(tone, subset=["3M matched edge (bp)", "1M Δ (bp)", "3M Δ (bp)", "YTD Δ (bp)"])
+    st.dataframe(painted, hide_index=True, width="stretch", column_config=config,
+                 height=min(800, 38 + 35 * len(data)))
+    st.caption("Click a column header to sort. Changes and outcomes are basis points of yield, not bond returns. "
+               "Edge and its 95% interval compare matched trend/volatility regimes using non-overlapping windows. "
+               "Fewer than 20 independent signals or controls is a small sample.")
 
 def history_chart(series: pd.Series, name: str, years: int | None, monthly: bool, spread: bool,
                   events: pd.DatetimeIndex):
-    history = clean(series)
+    history = monthly_history(series) if monthly else clean(series)
     if history.empty:
         st.info("No history is available for this instrument.")
         return
@@ -146,7 +130,7 @@ def history_chart(series: pd.Series, name: str, years: int | None, monthly: bool
                       xaxis=dict(showgrid=False, linecolor="#aeb7bd"),
                       yaxis=dict(title="Spread (%)" if spread else "Yield (%)", gridcolor="#e7edf1", zeroline=False))
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-    st.caption(f"{name} · {'monthly average' if monthly else 'daily observation'} · "
+    st.caption(f"{name} · {'monthly average; month-end availability proxy' if monthly else 'daily observation'} · "
                f"{len(marked)} signal markers in view · latest observation {history.index[-1]:%Y-%m-%d}")
 
 
@@ -158,7 +142,7 @@ def display_number(value: float, suffix: str = "") -> str:
 def study_row(series: pd.Series, frequency: str, profile: str, period: str):
     diagnostics = signal_frame(series, frequency, profile)
     full_events = event_dates(diagnostics, 6 if frequency == "monthly" else 63)
-    history = clean(series)
+    history = monthly_history(series) if frequency == "monthly" else clean(series)
     if history.empty:
         start = pd.Timestamp.now().normalize()
     else:
@@ -175,17 +159,24 @@ def render():
         title="Global Bond Monitor",
         description="Find extended yield moves, identify potential tops, and compare what happened after historical signals.",
         eyebrow="ADFM Rates & Credit",
-        source_note="Federal Reserve / FRED · OECD long-term rates via FRED",
+        source_note="Federal Reserve / FRED · official daily sovereign curves · OECD monthly via FRED",
     ))
     with st.sidebar:
         render_sidebar_about("2_Global_Macro_Regime.py")
-        st.caption("Daily U.S. yields and spreads are end-of-day observations. Global 10-year yields are monthly averages.")
+        st.caption("Daily official 10-year curves retain their published basis. OECD long history uses monthly averages separately.")
 
     a, b, c, d = st.columns([1.45, 1.55, 1.35, .7], gap="small")
     with a:
         view = st.selectbox("Bond market", VIEWS, key="bond_view")
-    monthly = view == "Global sovereign"
-    if monthly:
+    global_view = view == "Global sovereign"
+    sovereign_frequency = (st.sidebar.radio("Sovereign history", ("Daily official", "Monthly OECD"),
+                           index=0, key="bond_sovereign_frequency") if global_view else "")
+    monthly = global_view and sovereign_frequency == "Monthly OECD"
+    official_daily = global_view and not monthly
+    if official_daily:
+        names = [item[0] for item in DAILY_SOVEREIGNS]
+        default = "United States"
+    elif monthly:
         names = [name for name, _ in GLOBAL_SOVEREIGNS]
         default = "United States"
     else:
@@ -207,6 +198,12 @@ def render():
                  for name, symbol in GLOBAL_SOVEREIGNS]
         problems = [(str(row.get("symbol", "FRED")), str(row["error"]))
                     for _, row in status.iterrows() if row.get("error")] if not status.empty and "error" in status else []
+    elif official_daily:
+        with st.spinner("Loading official daily 10-year history…"):
+            panel, status = sovereign_daily_data()
+        items = [(country, source, panel[country] if country in panel else pd.Series(dtype=float))
+                 for country, _, source, _, _ in DAILY_SOVEREIGNS]
+        problems = [(row["country"], row["error"]) for _, row in status.iterrows() if row["error"]]
     else:
         symbols = tuple(symbol for _, symbol in definitions)
         with st.spinner("Loading bond market history…"):
@@ -216,9 +213,18 @@ def render():
         problems = [(str(row.get("symbol", "FRED")), str(row["error"]))
                     for _, row in status.iterrows() if row.get("error")] if not status.empty and "error" in status else []
 
+    # Incomplete monthly averages never enter signal calculation. Daily future
+    # dates likewise cannot become a current signal even if a provider returns them.
+    items = [(name, symbol, clean(series).loc[lambda x: (x.index.to_period("M") < today.to_period("M"))
+              if monthly else (x.index.normalize() <= today)]) for name, symbol, series in items]
+    basis_map = {country: basis for country, _, _, basis, _ in DAILY_SOVEREIGNS}
     rows = [{"name": name, "symbol": symbol, "series": series,
+             "basis": basis_map.get(name, "Official daily 10Y") if official_daily else
+                      "OECD monthly average" if monthly else "FRED daily yield / OAS",
              "snapshot": monthly_snapshot(series, today) if monthly else daily_snapshot(series, today)}
             for name, symbol, series in items]
+    if official_daily and problems:
+        st.warning("Some official daily sources failed validation or refresh: " + ", ".join(country for country, _ in problems) + ". Valid histories remain available with their original dates.")
     current = [row["snapshot"]["Observation"] for row in rows if row["snapshot"]["Status"] == "Current"]
     if not current:
         st.warning("No current observations were returned. Historical levels remain visible with their original dates.")
@@ -235,7 +241,7 @@ def render():
             row["state"] = "Unavailable" if latest is None or row["snapshot"]["Status"] != "Current" else (
                 "Yield top signal" if latest["Signal"] else "Potential yield top" if latest["Setup"]
                 else "Exhaustion watch" if latest["Watch"] else "Normal")
-            row["latest_event"] = (events[-1].strftime("%b %Y" if monthly else "%b %d, %Y")
+            row["latest_event"] = (events[-1].strftime("%b %d, %Y")
                                    if len(events) else "None")
     latest = chosen["latest"]
     events = chosen["events"]
@@ -262,6 +268,17 @@ def render():
                   view == "Credit spreads", events)
     st.markdown('<div class="bond-heading">Bond signal monitor</div>', unsafe_allow_html=True)
     monitor_table(rows, monthly, view == "Credit spreads", selected)
+    with st.expander("Historical statistics and chronological holdout"):
+        st.dataframe(chosen["summary"], width="stretch")
+        st.caption("Earliest 70% of observations form the training period; latest 30% form the holdout. "
+                   "Outcome windows crossing the split are purged. Controls remain within the same partition. "
+                   "Independent N includes every completed, de-overlapped signal; matched N excludes unknown regimes "
+                   "and signals without an eligible control. Edge uses matched samples. "
+                   "95% percentile bootstrap intervals resample both signals and controls; they are descriptive, "
+                   "and do not correct for parameter selection or residual serial dependence.")
+        st.caption("Adverse excursion is the largest forward yield rise; favorable excursion is the largest "
+                   "forward yield fall, including zero at entry. All endpoints and intervening monthly observations "
+                   "must exist. Holdout results are chronological descriptive checks, not a prospective live test.")
     with st.expander("Historical yield top signals"):
         if history.empty:
             st.write("No historical events met this profile for the available series.")
@@ -271,15 +288,30 @@ def render():
                                         for label in HORIZONS[frequency]})
     with st.expander("Sources and definitions"):
         if monthly:
-            st.write("OECD 10-year long-term interest rates distributed by FRED. These are monthly averages, not tradable bond prices or intraday quotes. Missing prior months are never bridged.")
+            st.write("OECD 10-year long-term interest rates distributed by FRED. Monthly averages are charted and signaled "
+                     "at month-end, an earliest availability proxy rather than a verified publication date. Actual releases "
+                     "can be later; historical values may be revised. These are retrospective monthly studies and cannot "
+                     "reconstruct a contemporaneous trading decision. Current incomplete months and missing intervals are excluded.")
+        elif official_daily:
+            st.write("Official daily 10-year observations; each country's exact curve basis is shown in the main table. "
+                     "UK and Swiss curves are spot rates; US/Japanese curves are constant-maturity references. "
+                     "Neither spot curves nor euro-area composites are relabeled as benchmark bonds. Monthly OECD "
+                     "averages are never spliced into these histories. Direct sources refresh at most every 30 minutes; "
+                     "validated persisted histories retain their dates on failure. The New Zealand source transitioned "
+                     "from mid to closing observations in 2025; historical basis changes must be considered.")
         else:
             st.write("Treasury constant-maturity yields, TIPS real yields and inflation compensation use Federal Reserve series distributed by FRED. Credit uses ICE BofA option-adjusted spread indices distributed by FRED. Values are end-of-day observations, not executable bond prices.")
         st.write("Changes require a baseline near the requested daily horizon or the exact prior month. Daily observations older than seven calendar days and monthly averages older than four reporting periods are stale; their changes are withheld. YTD uses the prior December for monthly data and the prior year-end for daily data.")
-        st.write("Max uses each provider series from its earliest available observation. U.S. daily series are checked for new end-of-day FRED observations at most every 30 minutes; OECD sovereign series are monthly and follow their publication schedule. Observation dates, rather than download times, determine freshness. If a refresh fails, the last validated history is retained with its original dates.")
-        st.write("Yield top profiles use trailing yield-change percentile, distance above the long moving average measured in yield-change volatility, yield RSI, and volatility percentile. Exhaustion watch means at least two of these four readings are elevated; it is not an event. Early Warning requires a high change percentile plus two other extremes; Confirmed Exhaustion requires a subsequent downward reversal; Failed Breakout requires a prior long-window high to fail. No positioning proxy is inferred. Monthly windows are counted in months and missing months cannot be filled by a later observation. Markers and forward tables describe historical yield behavior, not forecasts or bond total returns.")
+        st.write("Max uses each provider series from its earliest available observation. U.S. daily FRED series use validated snapshots refreshed by the scheduled source writer; missing history is requested directly; OECD sovereign series are monthly and follow their publication schedule. Observation dates, rather than download times, determine freshness. If a refresh fails, the last validated history is retained with its original dates.")
+        st.write("Yield top profiles use trailing yield-change percentile, distance above the long moving average measured in yield-change volatility, yield RSI, and volatility percentile. Exhaustion watch means at least two of these four readings are elevated; it is not an event. Early Warning requires a high change percentile plus two other extremes; Confirmed Exhaustion requires a subsequent downward reversal; Failed Breakout requires a return below the original long-window high breached during its confirmation window. No positioning proxy is inferred. Monthly windows are counted in months and missing months cannot be filled by a later observation. Markers and forward tables describe historical yield behavior, not forecasts or bond total returns.")
         if problems:
             st.dataframe(pd.DataFrame(problems, columns=["Series", "Provider status"]), hide_index=True, width="stretch")
-        st.link_button("View source series on FRED", f"https://fred.stlouisfed.org/series/{chosen['symbol']}")
+        if official_daily:
+            definition = next(item for item in DAILY_SOVEREIGNS if item[0] == selected)
+            st.link_button("View official source", definition[4])
+            st.caption(f"10Y · {definition[3]} · {definition[2]}")
+        else:
+            st.link_button("View source series on FRED", f"https://fred.stlouisfed.org/series/{chosen['symbol']}")
     render_footer()
 
 

@@ -4,7 +4,7 @@
 
 | Layer | Responsibility |
 |---|---|
-| `Home.py` | PM command center, regime read, movers, confidence, and navigation |
+| `Home.py` | Lightweight grouped tool directory and stable page navigation |
 | `pages/` | Focused analytical tools and page-specific presentation |
 | `adfm_core/` | Shared market loading, source registry, integrity policy, scoring, signal history, catalog, and UI |
 | `cte/` | Currency Tension Engine adapters, transformations, scoring, overlays, persistence, and commentary |
@@ -28,16 +28,29 @@
    market-price observation separate from the filing denominator and expose the
    calculation formula and source concept.
 
-## PM command-center scoring
+## Analytical signals and point-in-time records
 
-The home page converts the registered cross-asset proxies into causal percentile
-scores: each observation is ranked only against information available before that
-date. Constructive signals point in the same direction, so the composite,
-breadth, impulse, and group scores are directly comparable. The local
-point-in-time ledger records dated snapshots atomically for change analysis.
+Shared scoring functions convert registered cross-asset proxies into causal
+percentiles. Home intentionally performs no provider downloads or scoring.
+Individual tools are responsible for the dates, eligibility, and interpretation
+of their own signals. Historical observations, their publication dates, and
+capture timestamps are distinct fields; revised descriptive research must not
+be represented as a contemporaneous trading backtest.
 
-The command center is an orientation layer, not a portfolio optimizer. Individual
-tool pages remain the source for detailed diagnostics and trade-level judgment.
+Provider transport is centralized in `adfm_core.market_data`; legacy page
+adapters preserve their response shape and explicitly choose daily completion
+and calendar-alignment rules. Performance diagnostics contain aggregate timings,
+cache delivery, request counts, and process peak memory, never account positions.
+
+Portfolio stress analysis is pure scenario math on a dated, session-only CSV.
+It uses supplied marks, signed quantities, FX conversion, contract multipliers,
+DV01/convexity and option-model changes. Broker margin, assignment and executable
+prices remain separate from scenario estimates. Uploaded data is never persisted
+by the application or scheduled public-data workflows.
+
+The presentation contract is a primary consolidated table, selected detail
+charts and collapsed secondary analysis/methodology. Existing page routes remain
+stable even when calculations are extracted into smaller core modules.
 
 ## Snapshot promotion
 

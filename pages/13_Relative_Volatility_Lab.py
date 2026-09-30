@@ -503,9 +503,10 @@ comparison_rvol = latest_value(usable["comparison_rvol"])
 primary_zscore = latest_value(analysis["primary_zscore"])
 comparison_zscore = latest_value(analysis["comparison_zscore"])
 
-overview_tab, normalized_tab, data_tab, methodology_tab = st.tabs(
-    ["Volatility spread", "Normalized stress", "Data", "Methodology"]
-)
+overview_tab = st.container()
+normalized_tab = st.expander('Normalized stress', expanded=False, on_change="rerun")
+data_tab = st.expander('Data', expanded=False, on_change="rerun")
+methodology_tab = st.expander('Methodology', expanded=False, on_change="rerun")
 
 with overview_tab:
     render_section_header(
@@ -529,125 +530,128 @@ with overview_tab:
     )
 
 with normalized_tab:
-    render_section_header(
-        "Each asset's own volatility regime",
-        (
-            f"Each reading is standardized against its own prior {normalization_window} sessions. "
-            "The current day is excluded from the reference mean and standard deviation."
-        ),
-    )
-    st.plotly_chart(
-        normalized_chart(
-            analysis,
-            primary_label,
-            comparison_label,
-            primary_implied_label,
-            comparison_implied_label,
-        ),
-        width="stretch",
-        config={"displaylogo": False, "scrollZoom": True},
-    )
-    z_table = pd.DataFrame(
-        [
-            {
-                "Series": primary,
-                "Current synthetic VIX": primary_rvol,
-                "Z-score": primary_zscore,
-            },
-            {
-                "Series": comparison,
-                "Current synthetic VIX": comparison_rvol,
-                "Z-score": comparison_zscore,
-            },
-        ]
-    )
-    if primary_implied and "primary_implied_level" in analysis:
-        z_table.loc[len(z_table)] = {
-            "Series": primary_implied,
-            "Current synthetic VIX": latest_value(
-                analysis["primary_implied_level"]
+    if normalized_tab.open:
+        render_section_header(
+            "Each asset's own volatility regime",
+            (
+                f"Each reading is standardized against its own prior {normalization_window} sessions. "
+                "The current day is excluded from the reference mean and standard deviation."
             ),
-            "Z-score": latest_value(analysis["primary_implied_zscore"]),
-        }
-    if comparison_implied and "comparison_implied_level" in analysis:
-        z_table.loc[len(z_table)] = {
-            "Series": comparison_implied,
-            "Current synthetic VIX": latest_value(
-                analysis["comparison_implied_level"]
+        )
+        st.plotly_chart(
+            normalized_chart(
+                analysis,
+                primary_label,
+                comparison_label,
+                primary_implied_label,
+                comparison_implied_label,
             ),
-            "Z-score": latest_value(analysis["comparison_implied_zscore"]),
-        }
-    st.dataframe(
-        z_table.style.format(
-            {"Current synthetic VIX": "{:.2f}", "Z-score": "{:+.2f}"},
-            na_rep="N/A",
-        ),
-        hide_index=True,
-        width="stretch",
-    )
+            width="stretch",
+            config={"displaylogo": False, "scrollZoom": True},
+        )
+        z_table = pd.DataFrame(
+            [
+                {
+                    "Series": primary,
+                    "Current synthetic VIX": primary_rvol,
+                    "Z-score": primary_zscore,
+                },
+                {
+                    "Series": comparison,
+                    "Current synthetic VIX": comparison_rvol,
+                    "Z-score": comparison_zscore,
+                },
+            ]
+        )
+        if primary_implied and "primary_implied_level" in analysis:
+            z_table.loc[len(z_table)] = {
+                "Series": primary_implied,
+                "Current synthetic VIX": latest_value(
+                    analysis["primary_implied_level"]
+                ),
+                "Z-score": latest_value(analysis["primary_implied_zscore"]),
+            }
+        if comparison_implied and "comparison_implied_level" in analysis:
+            z_table.loc[len(z_table)] = {
+                "Series": comparison_implied,
+                "Current synthetic VIX": latest_value(
+                    analysis["comparison_implied_level"]
+                ),
+                "Z-score": latest_value(analysis["comparison_implied_zscore"]),
+            }
+        st.dataframe(
+            z_table.style.format(
+                {"Current synthetic VIX": "{:.2f}", "Z-score": "{:+.2f}"},
+                na_rep="N/A",
+            ),
+            hide_index=True,
+            width="stretch",
+        )
 
 with data_tab:
-    render_section_header(
-        "Calculation history",
-        "Most recent 252 observations are shown below; the download contains the full loaded history.",
-    )
-    export = analysis.rename(
-        columns={
-            "primary_rvol": f"{primary}_synthetic_vix",
-            "comparison_rvol": f"{comparison}_synthetic_vix",
-            "rvol_ratio": f"{primary}_{comparison}_rvol_ratio",
-            "primary_zscore": f"{primary}_vol_zscore",
-            "comparison_zscore": f"{comparison}_vol_zscore",
-            "primary_implied_level": f"{primary_implied}_level",
-            "primary_implied_zscore": f"{primary_implied}_zscore",
-            "comparison_implied_level": f"{comparison_implied}_level",
-            "comparison_implied_zscore": f"{comparison_implied}_zscore",
-            "implied_ratio": f"{primary_implied}_{comparison_implied}_ratio",
-        }
-    )
-    export.index.name = "Date"
-    display = export.dropna(how="all").tail(252).sort_index(ascending=False).reset_index()
-    st.dataframe(
-        display.style.format(precision=3, na_rep=""),
-        hide_index=True,
-        width="stretch",
-        height=430,
-    )
-    dataframe_download(
-        "Download full volatility history",
-        export.reset_index(),
-        f"relative_volatility_{primary}_{comparison}.csv".replace("^", ""),
-    )
-    if not missing.empty:
-        with st.expander("Provider diagnostics"):
-            st.dataframe(missing, hide_index=True, width="stretch")
+    if data_tab.open:
+        render_section_header(
+            "Calculation history",
+            "Most recent 252 observations are shown below; the download contains the full loaded history.",
+        )
+        export = analysis.rename(
+            columns={
+                "primary_rvol": f"{primary}_synthetic_vix",
+                "comparison_rvol": f"{comparison}_synthetic_vix",
+                "rvol_ratio": f"{primary}_{comparison}_rvol_ratio",
+                "primary_zscore": f"{primary}_vol_zscore",
+                "comparison_zscore": f"{comparison}_vol_zscore",
+                "primary_implied_level": f"{primary_implied}_level",
+                "primary_implied_zscore": f"{primary_implied}_zscore",
+                "comparison_implied_level": f"{comparison_implied}_level",
+                "comparison_implied_zscore": f"{comparison_implied}_zscore",
+                "implied_ratio": f"{primary_implied}_{comparison_implied}_ratio",
+            }
+        )
+        export.index.name = "Date"
+        display = export.dropna(how="all").tail(252).sort_index(ascending=False).reset_index()
+        st.dataframe(
+            display.style.format(precision=3, na_rep=""),
+            hide_index=True,
+            width="stretch",
+            height=430,
+        )
+        dataframe_download(
+            "Download full volatility history",
+            export.reset_index(),
+            f"relative_volatility_{primary}_{comparison}.csv".replace("^", ""),
+        )
+        if not missing.empty:
+            with st.expander("Provider diagnostics"):
+                st.dataframe(missing, hide_index=True, width="stretch")
 
 with methodology_tab:
-    st.markdown(
-        f"""
-        **Synthetic VIX calculation**
+    if methodology_tab.open:
+        st.markdown(
+            f"""
+            **Synthetic VIX calculation**
 
-        - Daily price action is measured with log returns.
-        - The selected {rvol_window}-session rolling standard deviation is annualized by multiplying by the square root of 252 and shown in percent units.
-        - This is a realized-volatility estimate. It is comparable across liquid assets, but it is not an options-implied volatility index and does not contain a forward volatility risk premium.
+            - Daily price action is measured with log returns.
+            - The selected {rvol_window}-session rolling standard deviation is annualized by multiplying by the square root of 252 and shown in percent units.
+            - This is a realized-volatility estimate. It is comparable across liquid assets, but it is not an options-implied volatility index and does not contain a forward volatility risk premium.
 
-        **Normalization and comparison**
+            **Normalization and comparison**
 
-        - Each z-score compares today's synthetic VIX with the mean and sample standard deviation of up to {normalization_window} prior observations. Excluding today keeps the calculation causal.
-        - The ratio divides {primary} synthetic VIX by {comparison} synthetic VIX on overlapping dates.
-        - The two asset percentiles and the ratio percentile rank each latest reading against all earlier observations in the loaded history; ties receive half credit. The current observation is excluded from its own reference set.
-        - The 5D ratio change is the point-to-point change from five valid ratio observations earlier.
-        - `{primary_implied or 'Primary implied volatility'}` divided by `{comparison_implied or 'comparison implied volatility'}` is shown beside the realized ratio. Both implied series are plotted as reported by Yahoo Finance and are not transformed into realized-volatility estimates.
+            - Each z-score compares today's synthetic VIX with the mean and sample standard deviation of up to {normalization_window} prior observations. Excluding today keeps the calculation causal.
+            - The ratio divides {primary} synthetic VIX by {comparison} synthetic VIX on overlapping dates.
+            - The two asset percentiles and the ratio percentile rank each latest reading against all earlier observations in the loaded history; ties receive half credit. The current observation is excluded from its own reference set.
+            - The 5D ratio change is the point-to-point change from five valid ratio observations earlier.
+            - `{primary_implied or 'Primary implied volatility'}` divided by `{comparison_implied or 'comparison implied volatility'}` is shown beside the realized ratio. Both implied series are plotted as reported by Yahoo Finance and are not transformed into realized-volatility estimates.
 
-        **Fixed-window diagnostics**
+            **Fixed-window diagnostics**
 
-        - Relative-volatility acceleration divides the 5-session {primary}/{comparison} RVOL ratio by the 21-session ratio. A reading above 1.0 means short-term relative stress is running above the recent regime.
-        - SOXX/NDX and QEW/QQQ divide 21-session annualized realized volatility for those fixed benchmark pairs. QEW is used as the Nasdaq-100 equal-weight proxy and QQQ as the cap-weight proxy.
-        - The downside-semivolatility ratio uses the annualized sample standard deviation of negative log-return sessions observed within each trailing 21-session window. It requires at least two negative sessions per asset; sparse windows remain unavailable.
-        - No optional series is filled or fabricated. Missing implied-volatility or ETF history produces `N/A` diagnostics while the selected pair continues to render.
+            - Relative-volatility acceleration divides the 5-session {primary}/{comparison} RVOL ratio by the 21-session ratio. A reading above 1.0 means short-term relative stress is running above the recent regime.
+            - SOXX/NDX and QEW/QQQ divide 21-session annualized realized volatility for those fixed benchmark pairs. QEW is used as the Nasdaq-100 equal-weight proxy and QQQ as the cap-weight proxy.
+            - The downside-semivolatility ratio uses the annualized sample standard deviation of negative log-return sessions observed within each trailing 21-session window. It requires at least two negative sessions per asset; sparse windows remain unavailable.
+            - No optional series is filled or fabricated. Missing implied-volatility or ETF history produces `N/A` diagnostics while the selected pair continues to render.
 
-        Thin trading, stale observations, leverage, market-hour differences, and overnight gaps can make comparisons less representative. This dashboard is an analytical tool, not an investment recommendation.
-        """
-    )
+            Thin trading, stale observations, leverage, market-hour differences, and overnight gaps can make comparisons less representative. This dashboard is an analytical tool, not an investment recommendation.
+            """
+        )
 
 render_footer()

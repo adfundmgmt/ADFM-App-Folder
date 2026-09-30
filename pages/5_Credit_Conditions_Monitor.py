@@ -4,7 +4,7 @@ import os
 import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from html import unescape
 from io import StringIO
 from typing import Dict, List, Optional, Tuple
@@ -14,7 +14,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-import yfinance as yf
+from adfm_core.market_data import download_market_data, fill_short_calendar_gaps, required_inputs_fresh
 
 from adfm_core.data_registry import PRIMARY_MACRO_SERIES, SeriesDefinition
 from adfm_core.market_data import configure_yfinance_cache
@@ -409,10 +409,9 @@ def apply_axis_style(fig: go.Figure) -> go.Figure:
     return fig
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_market_prices(tickers: Tuple[str, ...], start: str, end: str) -> pd.DataFrame:
     try:
-        raw = yf.download(
+        raw = download_market_data(
             list(tickers),
             start=start,
             end=end,
@@ -450,7 +449,7 @@ def fetch_market_prices(tickers: Tuple[str, ...], start: str, end: str) -> pd.Da
     if out.empty:
         return out
     out.index = pd.to_datetime(out.index, errors="coerce")
-    out = out.loc[out.index.notna()].sort_index().ffill().dropna(how="all")
+    out = out.loc[out.index.notna()].sort_index().dropna(how="all")
     return out
 
 
@@ -469,7 +468,7 @@ def ratio_frame(market: pd.DataFrame) -> pd.DataFrame:
     for label, (num, den) in definitions.items():
         if num in market.columns and den in market.columns:
             out[label] = market[num] / market[den].replace(0, np.nan)
-    return out.replace([np.inf, -np.inf], np.nan).dropna(how="all").ffill()
+    return fill_short_calendar_gaps(out.replace([np.inf, -np.inf], np.nan), limit=2)
 
 
 def _get_secret(name: str) -> Optional[str]:
@@ -524,7 +523,7 @@ def _fetch_stooq_symbol(symbol: str, start_date: date, end_date: date) -> pd.Ser
     return pd.Series(dtype=float)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=64)
 def fetch_stooq_sovereigns(start_date: date, end_date: date) -> Tuple[Dict[str, pd.Series], List[str]]:
     probe = _fetch_stooq_symbol("10YUSY.B", start_date, end_date)
     if probe.empty:
@@ -552,7 +551,7 @@ def fetch_stooq_sovereigns(start_date: date, end_date: date) -> Tuple[Dict[str, 
     return results, errors
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=21600, show_spinner=False, max_entries=64)
 def fetch_oecd_sovereigns(start_date: date, end_date: date) -> Dict[str, pd.Series]:
     id_to_country = {
         str(row["fred"]): str(row["country"])
@@ -640,7 +639,7 @@ def _parse_te_public_page(country: str, raw_html: str) -> Optional[dict]:
     }
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=64)
 def fetch_te_public_snapshots() -> pd.DataFrame:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
@@ -1088,6 +1087,21 @@ rate_percentiles = {
 rate_values = [value for value in rate_percentiles.values() if np.isfinite(value)]
 funding_pressure = float(np.mean(rate_values)) if rate_values else np.nan
 
+# Current classification requires fresh observed daily primary inputs. Historical
+# curves remain intact; revised FRED histories are not point-in-time signals.
+spread_inputs_fresh = all(
+    required_inputs_fresh(pd.DataFrame({"value": series}), ["value"], max_age_days=7)
+    for series in (hy_oas, ig_oas)
+)
+rate_inputs_fresh = all(
+    required_inputs_fresh(pd.DataFrame({"value": series}), ["value"], max_age_days=7)
+    for series in (dgs10, dgs30)
+)
+if not spread_inputs_fresh:
+    spread_stress = np.nan
+if not rate_inputs_fresh:
+    funding_pressure = np.nan
+
 if np.isfinite(spread_stress) and np.isfinite(funding_pressure):
     if spread_stress >= 0.70 and funding_pressure >= 0.70:
         credit_state = "Broad credit stress"
@@ -1100,14 +1114,18 @@ if np.isfinite(spread_stress) and np.isfinite(funding_pressure):
     else:
         credit_state = "Mixed credit conditions"
 elif np.isfinite(spread_stress):
-    credit_state = "Spread read only"
+    credit_state = "Incomplete or stale inputs"
 elif np.isfinite(funding_pressure):
-    credit_state = "Funding-cost read only"
+    credit_state = "Incomplete or stale inputs"
 else:
     credit_state = "Insufficient data"
 
 hyg_lqd_move = pct_move(proxy["HYG/LQD"], focus_window) if "HYG/LQD" in proxy else np.nan
+if not required_inputs_fresh(market, ["HYG", "LQD"]):
+    hyg_lqd_move = np.nan
 kre_spy_move = pct_move(proxy["KRE/SPY"], focus_window) if "KRE/SPY" in proxy else np.nan
+if not required_inputs_fresh(market, ["KRE", "SPY"]):
+    kre_spy_move = np.nan
 vix_level = latest(market["^VIX"]) if "^VIX" in market else np.nan
 hy_oas_level = latest(hy_oas)
 hy_oas_1m_bp = absolute_move(hy_oas, "1M", scale=100.0)

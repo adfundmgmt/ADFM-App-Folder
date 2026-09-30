@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from datetime import date, timedelta
+import time
 from html import escape as html_escape
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -10,7 +11,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
+from adfm_core.market_data import download_market_data
 
 from adfm_core.leadership import build_leadership_frame
 from adfm_core.market_data import fill_short_calendar_gaps
@@ -162,8 +163,8 @@ def chunked(items: Sequence[str], size: int) -> Iterable[List[str]]:
         yield list(items[index : index + size])
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFrame:
+    deadline = time.monotonic() + 25.0
     ticker_list = unique_keep_order(tickers)
     if not ticker_list:
         return pd.DataFrame()
@@ -217,8 +218,11 @@ def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFra
 
     frames = []
     for batch in chunked(ticker_list, 30):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            raw = yf.download(
+            raw = download_market_data(
                 tickers=batch,
                 start=start,
                 end=end,
@@ -226,6 +230,8 @@ def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFra
                 progress=False,
                 group_by="ticker",
                 threads=True,
+                recovery_budget_seconds=remaining,
+                timeout=min(10.0, remaining),
             )
             normalized = normalize(raw, batch)
             if not normalized.empty:
@@ -233,14 +239,19 @@ def fetch_closes(tickers: Tuple[str, ...], start: date, end: date) -> pd.DataFra
                 continue
         except Exception:
             pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            raw = yf.download(
+            raw = download_market_data(
                 tickers=batch,
                 period="max",
                 auto_adjust=True,
                 progress=False,
                 group_by="ticker",
                 threads=True,
+                recovery_budget_seconds=remaining,
+                timeout=min(10.0, remaining),
             )
             normalized = normalize(raw, batch)
             if not normalized.empty:

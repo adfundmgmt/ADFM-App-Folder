@@ -15,8 +15,8 @@ scoring; they feed correlation/technical context and commentary.
 from __future__ import annotations
 
 import pandas as pd
-import yfinance as yf
 
+from adfm_core.market_data import download_market_data
 from cte.adapters.base import utcnow
 from cte.config import (
     YF_DXY,
@@ -26,7 +26,7 @@ from cte.config import (
 
 
 def _download(tickers: list[str], period: str) -> pd.DataFrame:
-    raw = yf.download(
+    raw = download_market_data(
         tickers,
         period=period,
         interval="1d",

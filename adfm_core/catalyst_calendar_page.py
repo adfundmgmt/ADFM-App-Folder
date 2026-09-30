@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
 
 from adfm_core.data_registry import SeriesDefinition
+from adfm_core.market_data import download_market_data, fill_short_calendar_gaps
 from adfm_core.palette import PASTEL, PASTEL_DIVERGING_SCALE
 from adfm_core.primary_data import fetch_fred_series
 from adfm_core.ui import (
@@ -239,13 +239,13 @@ def _close_from_yfinance(data: pd.DataFrame) -> pd.DataFrame:
     else:
         close = data.copy()
     close.index = pd.to_datetime(close.index).tz_localize(None)
-    return close.sort_index().dropna(how="all").ffill()
+    return fill_short_calendar_gaps(close.sort_index().dropna(how="all"), limit=2)
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _fetch_market(start_iso: str) -> pd.DataFrame:
     try:
-        raw = yf.download(list(MARKET_TICKERS), start=start_iso, interval="1d", auto_adjust=True, progress=False, threads=False)
+        raw = download_market_data(list(MARKET_TICKERS), start=start_iso, interval="1d", auto_adjust=True, progress=False, threads=False)
     except Exception:
         return pd.DataFrame()
     return _close_from_yfinance(raw)

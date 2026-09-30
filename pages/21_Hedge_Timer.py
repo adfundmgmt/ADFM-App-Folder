@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import yfinance as yf
+from adfm_core.market_data import download_market_data, fill_short_calendar_gaps, required_inputs_fresh
 
 from adfm_core.hedge_timer_model import (
     CALIBRATION_START,
@@ -122,9 +122,8 @@ def _sessions_for_years(years: int) -> int:
     return int(round(252 * years))
 
 
-@st.cache_data(ttl=900, show_spinner=False)
 def yf_download(tickers: List[str], start: date) -> pd.DataFrame:
-    return yf.download(
+    return download_market_data(
         tickers=tickers,
         start=start.isoformat(),
         auto_adjust=True,
@@ -315,7 +314,8 @@ if df0.empty or SPX_TICKER not in df0.columns or NDX_TICKER not in df0.columns:
     st.stop()
 
 base_idx = df0[SPX_TICKER].dropna().index.intersection(df0[NDX_TICKER].dropna().index)
-df = df0.reindex(base_idx).ffill()
+df = fill_short_calendar_gaps(df0.reindex(base_idx), limit=2)
+current_inputs_fresh = required_inputs_fresh(df0, list(TICKERS))
 
 watch_spx, confirm_spx, meta_spx, conditions_spx = compute_scores(df, SPX_TICKER)
 watch_ndx, confirm_ndx, meta_ndx, conditions_ndx = compute_scores(df, NDX_TICKER)
@@ -369,6 +369,9 @@ def render_index_state(
     early_now = last_bool(meta["early_stage"], True)
     oversold_now = last_bool(meta["oversold_block"], False)
     state = state_label(watch_now, confirm_now, watch_threshold, early_now, oversold_now)
+    if not current_inputs_fresh:
+        state = "Unavailable: stale or missing inputs"
+        early_now = False
     css = state_css(state)
     price_now = last_valid(df[ticker])
     current_dd = last_valid(drawdown(df[ticker]))

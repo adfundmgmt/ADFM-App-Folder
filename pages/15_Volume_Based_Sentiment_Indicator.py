@@ -17,6 +17,7 @@ from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.regime_math import rolling_percentile_previous
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import yfinance as yf
+from adfm_core.market_data import download_market_data
 from plotly.subplots import make_subplots
 from zoneinfo import ZoneInfo
 
@@ -467,7 +468,7 @@ def request_text(url: str, timeout: int = 20, retries: int = 3) -> str:
 # =============================================================================
 
 
-@st.cache_data(ttl=12 * 3600, show_spinner=False)
+@st.cache_data(ttl=12 * 3600, show_spinner=False, max_entries=64)
 def get_holiday_values(start_date_str: str, end_date_str: str) -> list:
     start_date = pd.Timestamp(start_date_str).normalize()
     end_date = pd.Timestamp(end_date_str).normalize()
@@ -673,7 +674,7 @@ def fetch_from_yahoo_chart_api(
 def fetch_from_yfinance(
     symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp
 ) -> pd.DataFrame:
-    df = yf.download(
+    df = download_market_data(
         symbol,
         start=start_date.strftime("%Y-%m-%d"),
         end=(end_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
@@ -697,7 +698,7 @@ def fetch_from_yfinance(
     return validate_ohlcv(df, "yfinance")
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False, max_entries=64)
 def fetch_ohlcv(
     symbol: str, start_date_str: str, end_date_str: str
 ) -> Tuple[pd.DataFrame, str]:
@@ -732,7 +733,7 @@ def fetch_ohlcv(
     raise RuntimeError(" | ".join(errors))
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=64)
 def fetch_shares_outstanding(symbol: str) -> Optional[float]:
     try:
         ticker = yf.Ticker(symbol)
@@ -1777,9 +1778,9 @@ st.caption(
 # RECENT EXTREMES TABLE
 # =============================================================================
 
-tab_events, tab_outcomes, tab_method = st.tabs(
-    ["Recent Extremes", "Historical Outcomes", "Methodology"]
-)
+tab_events = st.container()
+tab_outcomes = st.expander('Historical Outcomes', expanded=False, on_change="rerun")
+tab_method = st.expander('Methodology', expanded=False, on_change="rerun")
 
 with tab_events:
     render_volume_section(
@@ -1803,46 +1804,48 @@ with tab_events:
         )
 
 with tab_outcomes:
-    render_volume_section(
-        "Setup Outcome Matrix",
-        "Descriptive event study across the full loaded history. Rows require at least three fully realized 20-session outcomes.",
-    )
-    if setup_outcomes.empty:
-        st.info("Not enough fully realized setup observations are available.")
-    else:
-        outcome_display = setup_outcomes.copy()
-        for column in ["Avg 5D", "Avg 20D", "20D Hit Rate", "Median Max DD"]:
-            outcome_display[column] = pd.to_numeric(
-                outcome_display[column], errors="coerce"
-            )
-        st.dataframe(
-            outcome_display.style.format(
-                {
-                    "Avg 5D": "{:+.1f}%",
-                    "Avg 20D": "{:+.1f}%",
-                    "20D Hit Rate": "{:.0f}%",
-                    "Median Max DD": "{:+.1f}%",
-                },
-                na_rep="N/A",
-            ),
-            width="stretch",
-            hide_index=True,
+    if tab_outcomes.open:
+        render_volume_section(
+            "Setup Outcome Matrix",
+            "Descriptive event study across the full loaded history. Rows require at least three fully realized 20-session outcomes.",
         )
+        if setup_outcomes.empty:
+            st.info("Not enough fully realized setup observations are available.")
+        else:
+            outcome_display = setup_outcomes.copy()
+            for column in ["Avg 5D", "Avg 20D", "20D Hit Rate", "Median Max DD"]:
+                outcome_display[column] = pd.to_numeric(
+                    outcome_display[column], errors="coerce"
+                )
+            st.dataframe(
+                outcome_display.style.format(
+                    {
+                        "Avg 5D": "{:+.1f}%",
+                        "Avg 20D": "{:+.1f}%",
+                        "20D Hit Rate": "{:.0f}%",
+                        "Median Max DD": "{:+.1f}%",
+                    },
+                    na_rep="N/A",
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
 with tab_method:
-    st.markdown(
-        f"""
-        **Participation score.** The current volume-to-baseline ratio is ranked against the prior
-        {percentile_window} sessions; the current row is excluded from both the baseline and percentile history.
-        This makes the live signal causal and reduces upward drift in dollar-volume levels.
+    if tab_method.open:
+        st.markdown(
+            f"""
+            **Participation score.** The current volume-to-baseline ratio is ranked against the prior
+            {percentile_window} sessions; the current row is excluded from both the baseline and percentile history.
+            This makes the live signal causal and reduces upward drift in dollar-volume levels.
 
-        **Volume modes.** Dollar volume uses unadjusted close times reported volume where the source provides both
-        raw and adjusted prices. Price returns use adjusted closes. Turnover falls back to raw shares when shares
-        outstanding is unavailable.
+            **Volume modes.** Dollar volume uses unadjusted close times reported volume where the source provides both
+            raw and adjusted prices. Price returns use adjusted closes. Turnover falls back to raw shares when shares
+            outstanding is unavailable.
 
-        **Setup labels.** Labels combine participation percentile, one-day return, close location, ATR-normalized
-        range, and 20D/50D trend state. Forward outcomes are descriptive and are not forecasts.
-        """
-    )
+            **Setup labels.** Labels combine participation percentile, one-day return, close location, ATR-normalized
+            range, and 20D/50D trend state. Forward outcomes are descriptive and are not forecasts.
+            """
+        )
 
 render_footer()

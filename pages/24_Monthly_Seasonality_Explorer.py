@@ -1,20 +1,18 @@
 import io
-import tempfile
-import time
 import warnings
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import yfinance as yf
 from matplotlib import gridspec
 from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator, PercentFormatter
 
 from adfm_core.primary_data import fetch_fred_symbols
+from adfm_core.market_data import download_market_data
+from adfm_core.point_in_time import fetch_fred_availability_records, fed_regimes_from_availability
 from adfm_core.palette import PASTEL
 from adfm_core.monthly_returns_matrix import (
     build_monthly_returns_frame,
@@ -24,15 +22,6 @@ from adfm_core.ui import PageHeader, render_footer, render_page_header, render_s
 
 plt.style.use("default")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
-
-try:
-    _yf_cache_dir = Path(tempfile.gettempdir()) / "adfm-yfinance-cache"
-    _yf_cache_dir.mkdir(parents=True, exist_ok=True)
-    yf.set_tz_cache_location(str(_yf_cache_dir))
-except Exception:
-    pass
-
-
 
 # =========================
 # CONFIG
@@ -174,43 +163,41 @@ def _clean_symbol(symbol: str) -> str:
 def _yf_download(
     symbol: str, start: str, end: str, retries: int = 3
 ) -> Optional[pd.Series]:
-    for n in range(retries):
-        try:
-            df = yf.download(
-                symbol,
-                start=start,
-                end=end,
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
-            if df is not None and not df.empty and "Close" in df:
-                def column(name):
-                    value = df[name]
-                    if isinstance(value, pd.DataFrame):
-                        value = value.iloc[:, 0]
-                    return pd.to_numeric(value, errors="coerce")
+    try:
+        df = download_market_data(
+            symbol,
+            start=start,
+            end=end,
+            auto_adjust=False,
+            progress=False,
+            threads=False, completed_only=False, retries=retries,
+        )
+        if df is not None and not df.empty and "Close" in df:
+            def column(name):
+                value = df[name]
+                if isinstance(value, pd.DataFrame):
+                    value = value.iloc[:, 0]
+                return pd.to_numeric(value, errors="coerce")
 
-                raw = column("Close")
-                adjusted = column("Adj Close") if "Adj Close" in df else raw
-                ser = adjusted.dropna()
-                ser = ser[np.isfinite(ser) & (ser > 0)]
-                ser.index = pd.to_datetime(ser.index).tz_localize(None)
-                ser = ser[~ser.index.duplicated(keep="last")].sort_index()
-                if not ser.empty:
-                    last = ser.index[-1]
-                    # Carry the daily adjustment factor so intraday/open observations
-                    # use the same split/dividend basis as the historical series.
-                    factor = adjusted.iloc[-1] / raw.iloc[-1]
-                    ser.attrs.update(source_symbol=symbol, source="Yahoo Finance",
-                                     adjustment_factor=float(factor),
-                                     daily_date=str(last.date()),
-                                     daily_open=float(column("Open").iloc[-1]))
-                    return ser.rename("Close")
-        except Exception:
-            pass
+            raw = column("Close")
+            adjusted = column("Adj Close") if "Adj Close" in df else raw
+            ser = adjusted.dropna()
+            ser = ser[np.isfinite(ser) & (ser > 0)]
+            ser.index = pd.to_datetime(ser.index).tz_localize(None)
+            ser = ser[~ser.index.duplicated(keep="last")].sort_index()
+            if not ser.empty:
+                last = ser.index[-1]
+                # Carry the daily adjustment factor so intraday/open observations
+                # use the same split/dividend basis as the historical series.
+                factor = adjusted.iloc[-1] / raw.iloc[-1]
+                ser.attrs.update(source_symbol=symbol, source="Yahoo Finance",
+                                 adjustment_factor=float(factor),
+                                 daily_date=str(last.date()),
+                                 daily_open=float(column("Open").iloc[-1]))
+                return ser.rename("Close")
+    except Exception:
+        pass
 
-        time.sleep(1.25 * (n + 1))
 
     return None
 
@@ -224,7 +211,7 @@ def _fred_series(series_code: str, start: str, end: str) -> Optional[pd.Series]:
     return result
 
 
-@st.cache_data(show_spinner=False, ttl=PRICE_TTL_SECONDS)
+@st.cache_data(show_spinner=False, ttl=PRICE_TTL_SECONDS, max_entries=64)
 def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     symbol = _clean_symbol(symbol)
     # Yahoo's end date is exclusive; include the requested final session.
@@ -252,15 +239,22 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     return None
 
 
-@st.cache_data(show_spinner=False, ttl=PRICE_TTL_SECONDS)
+@st.cache_data(show_spinner=False, ttl=PRICE_TTL_SECONDS, max_entries=64)
 def fetch_intraday(symbol: str) -> pd.DataFrame:
     """Small regular-session request; historical data remains daily."""
     try:
-        frame = yf.Ticker(symbol).history(
+        frame = download_market_data(symbol,
             period="1d", interval="1m", auto_adjust=False,
             prepost=False, actions=False, timeout=10,
         )
-        return frame if frame is not None else pd.DataFrame()
+        if frame is None:
+            return pd.DataFrame()
+        if isinstance(frame.columns, pd.MultiIndex):
+            for level in range(frame.columns.nlevels):
+                if symbol in frame.columns.get_level_values(level):
+                    frame = frame.xs(symbol, axis=1, level=level, drop_level=True)
+                    break
+        return frame
     except Exception:
         return pd.DataFrame()
 
@@ -311,7 +305,7 @@ def current_price_overlay(
     return result.sort_index(), label
 
 
-@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS, max_entries=64)
 def fetch_regime_market_series(start: str, end: str) -> pd.DataFrame:
     start_dt = pd.Timestamp(start) - pd.DateOffset(years=1)
     end_dt = min(pd.Timestamp(end), _today()) + pd.DateOffset(days=5)
@@ -351,7 +345,7 @@ def fetch_regime_market_series(start: str, end: str) -> pd.DataFrame:
     return out
 
 
-@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS, max_entries=64)
 def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
     start_dt = pd.Timestamp(start) - pd.DateOffset(years=2)
     end_dt = min(pd.Timestamp(end), _today()) + pd.DateOffset(days=31)
@@ -401,7 +395,20 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
     return regime
 
 
-def build_monthly_regime_features(regime_daily: pd.DataFrame) -> pd.DataFrame:
+@st.cache_data(show_spinner=False, ttl=21600, max_entries=16)
+def fetch_decision_regime_data(start: str, end: str) -> pd.DataFrame:
+    months = pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M")
+    try:
+        records = fetch_fred_availability_records("FEDFUNDS", (pd.Timestamp(start) - pd.DateOffset(months=8)).date().isoformat(), end)
+        result = fed_regimes_from_availability(months, records)
+        result.attrs["availability_error"] = "" if result["fed_regime"].ne("Unknown").any() else "No historical ALFRED releases verified for this sample."
+    except Exception as exc:
+        result = pd.DataFrame({"fedfunds": np.nan, "fed_regime": "Unknown", "is_recession": np.nan, "regime_cycle": "Unknown"}, index=months)
+        result.attrs["availability_error"] = f"Historical Fed filter unavailable ({type(exc).__name__}); configure FRED_API_KEY and verify ALFRED release coverage."
+    return result
+
+
+def build_monthly_regime_features(regime_daily: pd.DataFrame, *, information_mode: str = "Revised descriptive") -> pd.DataFrame:
     if regime_daily is None or regime_daily.empty:
         return pd.DataFrame()
 
@@ -428,6 +435,8 @@ def build_monthly_regime_features(regime_daily: pd.DataFrame) -> pd.DataFrame:
             np.where(tnx_delta < -0.15, "10Y falling", "10Y flat"),
         )
 
+        monthly.loc[tnx_delta.isna(), "teny_trend"] = "Unknown"
+
     if "dxy" in daily:
         dxy_m = daily["dxy"].resample("ME").last()
         dxy_delta = dxy_m.pct_change(3) * 100.0
@@ -439,10 +448,18 @@ def build_monthly_regime_features(regime_daily: pd.DataFrame) -> pd.DataFrame:
             np.where(dxy_delta < -1.5, "Dollar falling", "Dollar flat"),
         )
 
+        monthly.loc[dxy_delta.isna(), "dxy_trend"] = "Unknown"
+
     if monthly.empty:
         return monthly
 
     monthly.index = monthly.index.to_period("M")
+    if information_mode == "Known at month start":
+        # A June return can only be conditioned on completed May features.
+        monthly = monthly.reindex(pd.period_range(monthly.index.min(), monthly.index.max(), freq="M")).shift(1)
+        for column in ("vix_bucket", "teny_trend", "dxy_trend"):
+            if column in monthly:
+                monthly[column] = monthly[column].fillna("Unknown")
     return monthly
 
 
@@ -984,7 +1001,7 @@ def _month_paths_prev_eom_equal_weight_from_filtered(
         month_days = prices.loc[
             (prices.index.year == y) & (prices.index.month == m_num)
         ]
-        if month_days.empty or (month_days.shape[0] < 3 and m != current_month):
+        if month_days.empty:
             continue
 
         prev_p = p - 1
@@ -1009,7 +1026,11 @@ def _month_paths_prev_eom_equal_weight_from_filtered(
 
     df = pd.DataFrame(index=full_index)
     for k, s in raw_paths.items():
-        df[k] = s.reindex(full_index).ffill()
+        # Completed months retain their observed end-of-month level; the latest
+        # incomplete month stops at its last actual observation.
+        df[k] = s.reindex(full_index)
+        if pd.Period(k, freq="M") < prices.index.max().to_period("M"):
+            df[k] = df[k].ffill()
 
     avg_path = df.mean(axis=1)
     return df, avg_path
@@ -1511,6 +1532,8 @@ def render_explorer():
             "seasonality_month_picker",
             "seasonality_year_picker",
             "seasonality_matrix",
+            "seasonality_information_mode",
+            "seasonality_enable_alfred",
         ]
         for key in keys:
             st.session_state.pop(key, None)
@@ -1605,16 +1628,28 @@ def render_explorer():
     st.caption(f"{used_symbol} · {prices.iloc[-1]:,.2f} (adjusted) · {price_status} · checks every 5 minutes while open. "
                "Current-month returns are provisional.")
 
-    latest_price_date = prices.index.max().strftime("%Y-%m-%d")
     latest_complete_year = _latest_complete_year(prices)
-    regime_df = fetch_regime_data(
-        str(prices.index.min().date()), str(prices.index.max().date())
-    )
-    st.caption("Macro regime filters are retrospective: FRED values use latest revisions, and recession labels can be assigned after the event. They do not represent what an investor knew in each historical month.")
-    market_regime_daily = fetch_regime_market_series(
-        str(prices.index.min().date()), str(prices.index.max().date())
-    )
-    market_regime_monthly = build_monthly_regime_features(market_regime_daily)
+    start_year, end_year = resolve_year_window(sample_preset, custom_start_year, custom_end_year, latest_complete_year)
+    with st.expander("Historical information and methodology", expanded=False):
+        information_mode = st.selectbox("Regime information basis", ["Known at month start", "Revised descriptive"], key="seasonality_information_mode")
+        enable_alfred = st.checkbox("Enable historical ALFRED Fed conditioning", value=False, key="seasonality_enable_alfred")
+        st.caption("Known-at-month-start mode uses the previous completed month for market features. Optional Fed conditioning uses official ALFRED release/revision records available before the first day of each return month. Unknown releases remain excluded from conditioning. Recession labels are unavailable for causal filtering. Adjusted market histories can still be corrected by the provider.")
+        st.caption("Revised descriptive mode uses current FRED revisions and same-month market features to describe a historical sample; it cannot reconstruct a trading decision. Recession classifications may be announced later.")
+        st.caption("Monthly profile bars show filtered means and interquartile ranges; the line shows hit rate. Intra-month paths are anchored to prior month-end, with a descriptive ±1 standard deviation band. Current-price overlays retain the historical adjustment factor and current-month returns remain provisional.")
+    strict_information = information_mode == "Known at month start"
+    if strict_information:
+        if enable_alfred:
+            with st.spinner("Loading historical ALFRED releases…"):
+                regime_df = fetch_decision_regime_data(f"{start_year}-01-01", str(prices.index.max().date()))
+            if regime_df.attrs.get("availability_error"):
+                st.caption(regime_df.attrs["availability_error"])
+        else:
+            regime_df = pd.DataFrame()
+    else:
+        regime_df = fetch_regime_data(str(prices.index.min().date()), str(prices.index.max().date()))
+    st.caption(f"Regime basis: {information_mode}." + (" Fed conditioning is disabled." if strict_information and not enable_alfred else ""))
+    market_regime_daily = fetch_regime_market_series(str(prices.index.min().date()), str(prices.index.max().date()))
+    market_regime_monthly = build_monthly_regime_features(market_regime_daily, information_mode=information_mode)
     filter_table = build_filter_table(prices, regime_df, market_regime_monthly)
 
     fed_options = ["All Fed regimes"] + sorted(
@@ -1801,23 +1836,6 @@ def render_explorer():
     selected_month_label = str(st.session_state["seasonality_month_picker"])
     selected_month = MONTH_LABELS.index(selected_month_label) + 1
     selected_year = int(st.session_state["seasonality_year_picker"])
-    selected_stats = stats.loc[selected_month]
-    comparison_value = matrix_frame.loc[str(selected_year), selected_month_label]
-    comparison_text = (
-        f"{comparison_value:+.2f}%" if pd.notna(comparison_value) else "not available"
-    )
-    st.markdown(
-        f"""
-        <div class="adfm-note">
-            <div class="adfm-note-title">ACTIVE SELECTION</div>
-            <div><b>{selected_month_label}</b> averages {selected_stats["mean_total"]:+.2f}% with a
-            positive-return hit rate of {selected_stats["hit_rate"]:.0f}% in the filtered sample.
-            <b>{selected_year} {selected_month_label}</b> is {comparison_text}.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     filter_caption_parts = [
         used_symbol,
         f"{start_year}-{end_year}",
@@ -1849,16 +1867,11 @@ def render_explorer():
     with profile_col:
         st.subheader("Monthly Profile")
         st.image(profile_buf, width="stretch")
-        st.caption(
-            "Bars show filtered average monthly returns; whiskers show the interquartile range. "
-            "The line shows hit rate, and the active month is outlined."
-        )
+
     with curve_col:
         st.subheader(f"{selected_month_label} Intra-Month Path")
         st.image(curve_buf, width="stretch")
-        st.caption(
-            f"Filtered average path with ±1 standard deviation and the {selected_year} path overlaid when available."
-        )
+
 
     render_footer()
 

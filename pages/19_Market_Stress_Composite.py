@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
+from adfm_core.market_data import download_market_data, fill_short_calendar_gaps, required_inputs_fresh
 from plotly.subplots import make_subplots
 
 from adfm_core.market_data import canonicalize_date_index
@@ -101,9 +101,8 @@ render_page_header(
 
 
 # ---------------- Helpers ----------------
-@st.cache_data(ttl=900, show_spinner=False)
 def load_prices(tickers: List[str], start: date) -> pd.DataFrame:
-    raw = yf.download(
+    raw = download_market_data(
         tickers=tickers,
         start=start.isoformat(),
         auto_adjust=True,
@@ -271,8 +270,9 @@ if px.empty or SPX not in px.columns:
     st.error("Yahoo Finance did not return enough market data to build the Global Fracture Monitor.")
     st.stop()
 
+observed_px = px.copy()
 calendar = px[SPX].dropna().index
-px = px.reindex(calendar).ffill(limit=2)
+px = fill_short_calendar_gaps(px.reindex(calendar), limit=2)
 
 eq_cols = available_cols(px, FOREIGN_EQUITIES)
 carry_cols = available_cols(px, CARRY_FX)
@@ -406,6 +406,11 @@ us_high63 = target_px.rolling(63, min_periods=20).max()
 us_dd63 = target_px / us_high63 - 1.0
 us_dd63_now = latest_valid(us_dd63)
 action = action_label(risk_now, dislocation_now, us_dd63_now)
+current_inputs_fresh = required_inputs_fresh(observed_px, [target_ticker, *eq_cols, *carry_cols])
+if not current_inputs_fresh:
+    action = "Unavailable: stale or missing required observations"
+    regime = "Incomplete current inputs"
+    risk_now = dislocation_now = np.nan
 
 watch_signal = (
     ((risk_score >= WATCH_RISK) | (dislocation_score >= WATCH_DISLOCATION))
@@ -415,7 +420,7 @@ watch_onset = watch_signal & ~watch_signal.shift(1, fill_value=False)
 onset_dates = watch_onset[watch_onset].index
 
 signal_age = "No active watch"
-if watch_signal.iloc[-1] and len(onset_dates):
+if current_inputs_fresh and watch_signal.iloc[-1] and len(onset_dates):
     onset_pos = int(calendar.get_indexer([onset_dates[-1]])[0])
     current_pos = int(calendar.get_indexer([calendar[-1]])[0])
     signal_age = f"{current_pos - onset_pos} sessions"
@@ -682,17 +687,19 @@ if not moves.empty:
     )
     st.dataframe(styled_moves, use_container_width=True, hide_index=True)
 
-st.markdown("### Independent financial-conditions comparison")
-conditions, conditions_status = fetch_fred_symbols(("NFCI", "STLFSI4"), start="2000-01-01")
-render_fred_status(conditions_status)
-for column, (symbol, label) in zip(st.columns(2), (("NFCI", "Chicago Fed NFCI"), ("STLFSI4", "St. Louis Fed Financial Stress Index"))):
-    with column:
-        if symbol in conditions and conditions[symbol].notna().any():
-            values = conditions[symbol].dropna()
-            st.metric(label, f"{values.iloc[-1]:.2f}")
-            st.caption(f"Weekly observation: {values.index[-1]:%Y-%m-%d}")
-            st.line_chart(values)
-st.caption("Weekly, revised macro comparisons; they do not change the daily Market Stress Composite or hedge thresholds. Positive values indicate conditions above each index's historical average.")
+with st.expander("Independent financial-conditions comparison", expanded=False, on_change="rerun") as comparison_details:
+    if comparison_details.open:
+        st.markdown("### Independent financial-conditions comparison")
+        conditions, conditions_status = fetch_fred_symbols(("NFCI", "STLFSI4"), start="2000-01-01")
+        render_fred_status(conditions_status)
+        for column, (symbol, label) in zip(st.columns(2), (("NFCI", "Chicago Fed NFCI"), ("STLFSI4", "St. Louis Fed Financial Stress Index"))):
+            with column:
+                if symbol in conditions and conditions[symbol].notna().any():
+                    values = conditions[symbol].dropna()
+                    st.metric(label, f"{values.iloc[-1]:.2f}")
+                    st.caption(f"Weekly observation: {values.index[-1]:%Y-%m-%d}")
+                    st.line_chart(values)
+        st.caption("Weekly, revised macro comparisons; they do not change the daily Market Stress Composite or hedge thresholds. Positive values indicate conditions above each index's historical average.")
 
 render_footer(
     data_note="Primary inputs: Yahoo Finance market history; Federal Reserve NFCI and STLFSI4 comparison series through FRED; validated saved observations on provider failure."

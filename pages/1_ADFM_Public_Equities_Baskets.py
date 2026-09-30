@@ -3,6 +3,7 @@ import exchange_calendars as xcals
 from streamlit.components.v1 import html as component_html
 from html import escape
 
+from adfm_core.market_data import download_market_data
 from adfm_core.palette import PASTEL_20
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 
@@ -96,7 +97,7 @@ MIN_LIVE_MEMBER_COVERAGE = 0.50
 
 MIN_DAILY_MEMBER_COVERAGE = 0.60
 
-MAX_FORWARD_FILL_SESSIONS = 5
+MAX_FORWARD_FILL_SESSIONS = 2
 
 BASKET_KEY_SEPARATOR = " :: "
 
@@ -199,10 +200,8 @@ def completed_us_sessions(start, now):
 
 
 def trailing_valid_segment(series):
-    """Never compress a data gap into an indicator's observation window."""
-    clean = series.replace([np.inf, -np.inf], np.nan)
-    missing = np.flatnonzero(clean.isna().to_numpy())
-    return clean.iloc[missing[-1] + 1:] if len(missing) else clean
+    from adfm_core.basket_calculations import trailing_valid_segment as calculate
+    return calculate(series)
 
 
 def carry_exchange_closures(levels):
@@ -1047,6 +1046,8 @@ def save_last_good_levels(
 
 ) -> Optional[str]:
 
+    from adfm_core.basket_cache import prune_basket_snapshots
+
     levels_path, meta_path = _cache_paths(cache_key)
 
     tmp_levels = Path(f"{levels_path}.tmp")
@@ -1066,6 +1067,7 @@ def save_last_good_levels(
         tmp_levels.replace(levels_path)
 
         tmp_meta.replace(meta_path)
+        prune_basket_snapshots(CACHE_DIR)
 
         return None
 
@@ -1163,17 +1165,24 @@ def _cache_is_usable(
 
 
 
-def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, deadline: Optional[float] = None) -> pd.DataFrame:
 
     if not batch:
 
         return pd.DataFrame()
 
+    remaining = 25.0 if deadline is None else deadline - time.monotonic()
+    if remaining <= 0:
+        return pd.DataFrame()
 
 
-    df = yf.download(
+
+    df = download_market_data(
 
         tickers=batch,
+        # Completed US calendar drives end-exclusive; foreign/FX share this
+        # batch and must not inherit an assumed US exchange cutoff.
+        completed_only=False,
 
         start=start,
 
@@ -1192,7 +1201,8 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         ignore_tz=True,
 
-        timeout=20,
+        timeout=min(20.0, remaining),
+        recovery_budget_seconds=remaining,
 
     )
 
@@ -1236,13 +1246,18 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
 
 
-def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, retries: int = 1) -> pd.DataFrame:
+def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, retries: int = 1, deadline: Optional[float] = None) -> pd.DataFrame:
+
+    deadline = time.monotonic() + 25.0 if deadline is None else deadline
 
     for attempt in range(retries + 1):
 
+        if time.monotonic() >= deadline:
+            break
+
         try:
 
-            close = _download_close_once(batch, start=start, end=end)
+            close = _download_close_once(batch, start=start, end=end, deadline=deadline)
 
             if not close.empty:
 
@@ -1256,7 +1271,7 @@ def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, re
 
         if attempt < retries:
 
-            time.sleep(0.5 * (attempt + 1))
+            time.sleep(min(0.5 * (attempt + 1), max(0.0, deadline - time.monotonic())))
 
 
 
@@ -1308,6 +1323,8 @@ def fetch_daily_levels(
 
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
+    deadline = time.monotonic() + 25.0
+
     uniq = sorted({str(t).upper().strip() for t in tickers if str(t).strip()})
 
     start = pd.Timestamp(start).tz_localize(None) if pd.Timestamp(start).tzinfo else pd.Timestamp(start)
@@ -1337,7 +1354,9 @@ def fetch_daily_levels(
 
     for batch in _chunk(uniq, chunk_size):
 
-        close = _download_close(batch, start=start, end=end)
+        if time.monotonic() >= deadline:
+            break
+        close = _download_close(batch, start=start, end=end, deadline=deadline)
 
         if close.empty:
 
@@ -1376,7 +1395,9 @@ def fetch_daily_levels(
 
     for batch in retry_batches:
 
-        retry = _download_close(batch, start=start, end=end, retries=1)
+        if time.monotonic() >= deadline:
+            break
+        retry = _download_close(batch, start=start, end=end, retries=1, deadline=deadline)
 
         if not retry.empty:
 
@@ -1392,9 +1413,9 @@ def fetch_daily_levels(
 
 
 
-    if BENCH not in wide.columns or wide[BENCH].dropna().empty:
+    if (BENCH not in wide.columns or wide[BENCH].dropna().empty) and time.monotonic() < deadline:
 
-        spy_only = _download_close([BENCH], start=start, end=end)
+        spy_only = _download_close([BENCH], start=start, end=end, deadline=deadline)
 
         if not spy_only.empty:
 
@@ -1486,7 +1507,7 @@ def fetch_daily_levels(
 
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 12)
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 12, max_entries=16)
 
 def fetch_market_metadata(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
 
@@ -1823,6 +1844,8 @@ def convert_foreign_levels_to_usd(levels: pd.DataFrame) -> Tuple[pd.DataFrame, L
 
         return levels, []
 
+    from adfm_core.market_data import fill_short_calendar_gaps
+
     out = levels.copy()
 
     issues: List[str] = []
@@ -1847,7 +1870,9 @@ def convert_foreign_levels_to_usd(levels: pd.DataFrame) -> Tuple[pd.DataFrame, L
 
         union_index = local.index.union(fx.index).sort_values()
 
-        fx_aligned = fx.reindex(union_index).ffill(limit=MAX_FORWARD_FILL_SESSIONS).reindex(local.index)
+        fx_aligned = fill_short_calendar_gaps(
+            fx.reindex(union_index).to_frame(), limit=2
+        ).iloc[:, 0].reindex(local.index)
 
         if operation == "multiply":
 
@@ -1943,81 +1968,15 @@ def align_levels_to_calendar(
     return levels.reindex(calendar)
 
 
-def reliable_price_sessions(
-    levels: pd.DataFrame,
-    calendar: pd.DatetimeIndex,
-    constituents: List[str],
-) -> Tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
-    """Discard dates where the provider lost most prices across the universe.
-
-    A basket return after an omitted date spans the two observed closes;
-    individual missing quotes still obey the basket coverage requirement.
-    Compare each date with nearby dates so IPOs do not invalidate older history.
-    """
-    calendar = pd.DatetimeIndex(calendar)
-    if calendar.empty:
-        return calendar, calendar
-    symbols = list(dict.fromkeys(t for t in constituents if t in levels.columns and t != BENCH))
-    observed = levels.reindex(calendar)
-    counts = observed[symbols].notna().sum(axis=1) if symbols else pd.Series(0, index=calendar)
-    nearby = counts.rolling(11, center=True, min_periods=3).median()
-    unreliable = (nearby >= 2) & (counts < nearby * 0.70)
-    if BENCH in observed:
-        unreliable |= observed[BENCH].isna()
-    return calendar[~unreliable], calendar[unreliable]
+def reliable_price_sessions(levels: pd.DataFrame, calendar: pd.DatetimeIndex, constituents: List[str]) -> Tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
+    from adfm_core.basket_calculations import reliable_price_sessions as calculate
+    return calculate(levels, calendar, constituents)
 
 
 
-def ew_rets_from_levels(
-    levels: pd.DataFrame,
-    baskets: Dict[str, List[str]],
-    min_daily_coverage: float = MIN_DAILY_MEMBER_COVERAGE,
-) -> pd.DataFrame:
-    """Coverage-aware equal-weight returns on observed price sessions.
-
-    Constituent returns require prices on both adjacent observed
-    sessions. Missing returns are never compressed across a gap. A basket
-    remains observable when the configured coverage floor is met, so one
-    missing constituent or a recent IPO does not blank an otherwise valid
-    multi-year basket.
-    """
-    if levels.empty:
-        return pd.DataFrame()
-
-    rets = pd.DataFrame(
-        {
-            column: levels[column].pct_change(fill_method=None)
-            for column in levels.columns
-        },
-        index=levels.index,
-    )
-    out: Dict[str, pd.Series] = {}
-
-    for basket_name, basket_tickers in baskets.items():
-        cols = list(dict.fromkeys(
-            str(t).upper() for t in basket_tickers if str(t).upper() in rets.columns
-        ))
-        if not cols:
-            continue
-
-        member_rets = rets[cols]
-        required_count = 1 if len(cols) == 1 else max(
-            2, int(math.ceil(len(cols) * min_daily_coverage))
-        )
-        valid_count = member_rets.notna().sum(axis=1)
-        basket_ret = member_rets.mean(axis=1, skipna=True)
-        basket_ret[valid_count < required_count] = np.nan
-
-        price_count = levels[cols].notna().sum(axis=1)
-        inception_dates = price_count[price_count >= required_count].index
-        if len(inception_dates):
-            inception_date = inception_dates[0]
-            if pd.isna(basket_ret.loc[inception_date]):
-                basket_ret.loc[inception_date] = 0.0
-
-        out[basket_name] = basket_ret
-
-    return pd.DataFrame(out, index=levels.index)
+def ew_rets_from_levels(levels: pd.DataFrame, baskets: Dict[str, List[str]], min_daily_coverage: float=MIN_DAILY_MEMBER_COVERAGE) -> pd.DataFrame:
+    from adfm_core.basket_calculations import ew_rets_from_levels as calculate
+    return calculate(levels, baskets, min_daily_coverage)
 
 
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -2273,63 +2232,9 @@ def compute_fetch_start(display_start: date) -> date:
 
 
 
-def basket_vs_dma_pct(
-
-    series: pd.Series,
-
-    window: int,
-
-) -> float:
-
-    """
-
-    Current basket level versus the basket's own moving average.
-
-
-
-    The basket series is already equal-weighted by ew_rets_from_levels().
-
-    This returns the percent distance between today's basket level and
-
-    today's rolling DMA:
-
-
-
-        current basket level / current basket DMA - 1
-
-
-
-    A positive value means the basket is trading above that DMA.
-
-    A negative value means the basket is trading below that DMA.
-
-    """
-
-    clean = trailing_valid_segment(series)
-
-
-
-    if clean.shape[0] < window:
-
-        return np.nan
-
-
-
-    dma = clean.rolling(window=window, min_periods=window).mean()
-
-    latest_px = clean.iloc[-1]
-
-    latest_dma = dma.dropna().iloc[-1] if dma.dropna().shape[0] else np.nan
-
-
-
-    if pd.isna(latest_px) or pd.isna(latest_dma) or latest_dma == 0:
-
-        return np.nan
-
-
-
-    return float((latest_px / latest_dma - 1.0) * 100.0)
+def basket_vs_dma_pct(series: pd.Series, window: int) -> float:
+    from adfm_core.basket_calculations import basket_vs_dma_pct as calculate
+    return calculate(series, window)
 
 
 
@@ -2342,8 +2247,10 @@ def build_panel_df(
     basket_metadata: Dict[str, Dict[str, Any]],
     benchmark_series_full: pd.Series,
 ) -> pd.DataFrame:
+    from adfm_core.basket_calculations import basket_observation
+
     dynamic_col = f"%{dynamic_label}"
-    return_cols = ["%5D", "%1M"]
+    return_cols = ["%Close", "%5D", "%1M"]
     if dynamic_col not in return_cols:
         return_cols.append(dynamic_col)
 
@@ -2362,6 +2269,7 @@ def build_panel_df(
 
     levels_full = 100.0 * (1.0 + basket_returns_full).cumprod(skipna=True)
     rows: List[Dict[str, Any]] = []
+    observations: Dict[str, Dict[str, Any]] = {}
 
     basket_name_counts: Dict[str, int] = {}
     for basket_id in levels_full.columns:
@@ -2372,6 +2280,7 @@ def build_panel_df(
 
     for basket_id in levels_full.columns:
         s_full = levels_full[basket_id]
+        observations[basket_id] = basket_observation(basket_returns_full[basket_id])
         segment = trailing_valid_segment(s_full)
 
         r5d = np.nan
@@ -2411,6 +2320,7 @@ def build_panel_df(
         row: Dict[str, Any] = {
             "_BasketKey": basket_id,
             "Basket": display_name,
+            "%Close": observations[basket_id]["prior_close_change_pct"],
             "%5D": r5d * 100 if pd.notna(r5d) else np.nan,
             "%1M": r1m * 100 if pd.notna(r1m) else np.nan,
             "MACD Momentum": macd_m,
@@ -2429,6 +2339,9 @@ def build_panel_df(
         df = df.sort_values(by=dynamic_col, ascending=False, na_position="last")
     df = df[[column for column in cols if column in df.columns]]
     df.attrs["row_notes"] = [
+        (f"Basket return observed as of {pd.Timestamp(observations[k]['observed_as_of']).date()} · "
+         f"{observations[k]['observation_age_days']} calendar days old. "
+         if observations[k]['observed_as_of'] is not None else "No observed basket return. ") +
         f"Live/defined members: {basket_metadata.get(k, {}).get('Members', 'unknown')}. "
         "Basket returns require at least 60% of current live members with adjacent observed-session prices "
         "(minimum two except one-name proxies); N/A means insufficient continuous basket coverage for that window."
@@ -2612,7 +2525,9 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats, row_n
         numeric = formats[i] is not None or name == "MACD Momentum" or name.startswith("EMA ")
         tooltip = (
             "Preset-responsive MACD histogram: Positive/Negative is histogram sign; acceleration compares preset-scaled histogram change; Strong/Weak reflects the histogram z-score."
-            if name == "MACD Momentum" else name
+            if name == "MACD Momentum" else
+            "Change from the prior reliable observed close; spans omitted provider sessions. N/A means the latest basket return is missing."
+            if name == "%Close" else name
         )
         low, high = ("Lowest to highest", "Highest to lowest") if numeric else ("A to Z", "Z to A")
         header_cells.append(
@@ -2697,7 +2612,7 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
         return
 
     dynamic_col = f"%{dynamic_label}"
-    return_cols = ["%5D", "%1M"]
+    return_cols = ["%Close", "%5D", "%1M"]
     if dynamic_col not in return_cols:
         return_cols.append(dynamic_col)
 
@@ -2731,9 +2646,9 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
         fill_colors.append([color_ret(v) for v in vals])
 
     if dynamic_col in ["%5D", "%1M"]:
-        col_widths = [0.29, 0.07, 0.07, 0.18, 0.12, 0.09, 0.09, 0.09]
+        col_widths = [0.25, 0.055, 0.065, 0.065, 0.18, 0.12, 0.085, 0.09, 0.09]
     else:
-        col_widths = [0.27, 0.065, 0.065, 0.09, 0.175, 0.115, 0.085, 0.095, 0.095]
+        col_widths = [0.235, 0.055, 0.06, 0.06, 0.08, 0.17, 0.11, 0.075, 0.08, 0.075]
 
     formats = []
     for header in headers:
@@ -2940,7 +2855,7 @@ def plot_cumulative_chart(
 
 
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 
@@ -3311,6 +3226,7 @@ st.caption(
     f"As of {reference_date.date()} · {fetch_meta.get('source', 'yahoo')} · "
     f"{len(live_all_baskets)}/{len(raw_selected_baskets)} baskets eligible · "
     + omitted_label +
+    "%Close = change from prior reliable observed close · Hover basket names for observation age · "
     "Current-universe, coverage-aware equal-weight adjusted returns · N/A = insufficient observed history/coverage; not a point-in-time backtest."
 )
 if suspect_symbols:
@@ -3336,6 +3252,21 @@ all_panel_df = render_basket_section(
     basket_metadata=basket_metadata,
 
 )
+
+
+with st.expander("Selected basket detail", expanded=False):
+    show_selected_chart = st.checkbox("Show selected basket chart", value=False)
+    if show_selected_chart and not all_panel_df.empty:
+        selected_basket = st.selectbox(
+            "Basket", options=all_panel_df.index.tolist(),
+            format_func=lambda key: all_panel_df.loc[key, "Basket"],
+        )
+        plot_cumulative_chart(
+            basket_returns_full=all_basket_rets_full[[selected_basket]],
+            title=f"{all_panel_df.loc[selected_basket, 'Basket']} | Cumulative Performance vs SPY",
+            benchmark_returns_full=bench_rets_full,
+            display_start=display_start_ts, basket_metadata=basket_metadata,
+        )
 
 
 
@@ -3398,7 +3329,7 @@ if show_category_sections:
 
 if show_full_map:
 
-    with st.expander("Full Basket Map", expanded=True):
+    with st.expander("Full Basket Map", expanded=False):
 
         st.caption("Raw basket definitions before data-quality filtering.")
 
@@ -3414,8 +3345,8 @@ if show_full_map:
 
 if show_data_notes:
 
-    with st.expander("Data Notes", expanded=True):
-        st.write("Current live membership with coverage-aware equal weights: constituent returns require prices on both adjacent observed sessions; a basket prints when at least 60% of current live members are valid (minimum two except one-name proxies). Provider-wide incomplete sessions are omitted and the next return spans the last two observed closes. Foreign holiday closes may carry only on verified exchange closures; unverified calendars remain missing.")
+    with st.expander("Data Notes", expanded=False):
+        st.write("FX alignment bridges at most two interior dates and never extends a missing trailing FX endpoint. Current live membership with coverage-aware equal weights: constituent returns require prices on both adjacent observed sessions; a basket prints when at least 60% of current live members are valid (minimum two except one-name proxies). Provider-wide incomplete sessions are omitted and the next return spans the last two observed closes. Foreign holiday closes may carry only on verified exchange closures; unverified calendars remain missing.")
         st.write("MACD and EMA are preset-responsive, using square-root horizon scaling anchored at 3M (MACD 12/26/9; EMA 4/9/18). MACD Strong/Weak reflects histogram z-score. RSI uses completed weekly buckets. EMA and DMA use the latest uninterrupted basket segment.")
         if len(skipped_sessions):
             st.write("Provider-wide price gaps omitted from the return calendar: " + ", ".join(str(day.date()) for day in skipped_sessions))

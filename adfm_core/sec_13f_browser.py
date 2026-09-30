@@ -595,80 +595,77 @@ def render_screen(releases: list[QuarterDataset], request: dict[str, object]) ->
         ]
     )
 
-    overview_tab, data_tab, methodology_tab = st.tabs(
-        ["Overview", "Fund holdings", "Methodology"]
+    render_section_header(
+        "Fund holdings",
+        "Search the holder list and click a manager row to open the complete 13F portfolio.",
     )
-    with overview_tab:
-        render_section_header(
-            f"Top managers by {sort_label.lower()}",
-            "Portfolio weights reconcile to each manager's effective SEC information table.",
+    st.markdown(
+        '<div class="adfm-13f-note"><strong>Values:</strong> current Form 13F information-table values are displayed in dollars with thousands separators. Portfolio weights use the sum of effective holding lines, not the filer summary total.</div>',
+        unsafe_allow_html=True,
+    )
+    manager_col, columns_col = st.columns([.8, 1.4])
+    with manager_col:
+        manager_query = st.text_input("Filter managers", placeholder="Search manager name")
+    with columns_col:
+        optional_columns = st.multiselect(
+            "Customize columns",
+            list(DETAIL_COLUMN_LABELS),
+            default=DEFAULT_DETAIL_COLUMNS,
+            format_func=lambda c: DETAIL_COLUMN_LABELS[c],
         )
-        st.plotly_chart(
-            exposure_chart(ranked, sort_label, int(request["top_n"])),
-            width="stretch",
-            config={"displaylogo": False},
-        )
+    filtered = ranked
+    if manager_query.strip():
+        filtered = ranked.loc[
+            ranked["MANAGER"].str.contains(manager_query.strip(), case=False, na=False, regex=False)
+        ]
+    display = filtered[["RANK", "MANAGER", *optional_columns]].head(500).reset_index(drop=True)
+    st.markdown(f"**Results ({len(filtered):,} of {len(ranked):,} funds)**")
+    selection = st.dataframe(
+        display,
+        hide_index=True,
+        width="stretch",
+        height=520,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="sec_13f_holder_table",
+        column_config={
+            "RANK": st.column_config.NumberColumn("Rank", format="%,d"),
+            "MANAGER": "Manager — click row to open",
+            "PORTFOLIO_WEIGHT_PCT": st.column_config.NumberColumn("Portfolio weight", format="%.2f%%"),
+            "POSITION_VALUE_USD": st.column_config.NumberColumn("Position value", format="$%,.0f"),
+            "REPORTED_SHARES": st.column_config.NumberColumn("Reported shares", format="%,.0f"),
+            "PORTFOLIO_VALUE_USD": st.column_config.NumberColumn("13F portfolio", format="$%,.0f"),
+            "LATEST_FILING_DATE": st.column_config.DateColumn("Latest filing", format="MMM D, YYYY"),
+            "CIK": "Manager CIK",
+            "COMPONENT_COUNT": st.column_config.NumberColumn("Filing components", format="%,d"),
+            "FILING_URL": st.column_config.LinkColumn("Filing", display_text="Open EDGAR"),
+        },
+    )
+    rows = list(selection.selection.rows)
+    if rows:
+        manager_name = str(display.iloc[int(rows[0])]["MANAGER"])
+        manager_row = ranked.loc[ranked["MANAGER"].eq(manager_name)].iloc[0]
+        st.query_params["manager"] = str(manager_row["CIK"])
+        st.rerun()
+    dataframe_download(
+        "Download filtered holdings CSV",
+        filtered,
+        f"sec_13f_exposure_{re.sub(r'[^A-Za-z0-9_-]+', '_', str(request['query']))}_{report_period.date().isoformat()}.csv",
+    )
 
-    with data_tab:
-        render_section_header(
-            "Fund holdings",
-            "Search the holder list and click a manager row to open the complete 13F portfolio.",
-        )
-        st.markdown(
-            '<div class="adfm-13f-note"><strong>Values:</strong> current Form 13F information-table values are displayed in dollars with thousands separators. Portfolio weights use the sum of effective holding lines, not the filer summary total.</div>',
-            unsafe_allow_html=True,
-        )
-        manager_col, columns_col = st.columns([.8, 1.4])
-        with manager_col:
-            manager_query = st.text_input("Filter managers", placeholder="Search manager name")
-        with columns_col:
-            optional_columns = st.multiselect(
-                "Customize columns",
-                list(DETAIL_COLUMN_LABELS),
-                default=DEFAULT_DETAIL_COLUMNS,
-                format_func=lambda c: DETAIL_COLUMN_LABELS[c],
+    with st.expander("Top-manager exposure chart", expanded=False, on_change="rerun") as chart_detail:
+        if chart_detail.open:
+            render_section_header(
+                f"Top managers by {sort_label.lower()}",
+                "Portfolio weights reconcile to each manager's effective SEC information table.",
             )
-        filtered = ranked
-        if manager_query.strip():
-            filtered = ranked.loc[
-                ranked["MANAGER"].str.contains(manager_query.strip(), case=False, na=False, regex=False)
-            ]
-        display = filtered[["RANK", "MANAGER", *optional_columns]].head(500).reset_index(drop=True)
-        st.markdown(f"**Results ({len(filtered):,} of {len(ranked):,} funds)**")
-        selection = st.dataframe(
-            display,
-            hide_index=True,
-            width="stretch",
-            height=520,
-            on_select="rerun",
-            selection_mode="single-row",
-            key="sec_13f_holder_table",
-            column_config={
-                "RANK": st.column_config.NumberColumn("Rank", format="%,d"),
-                "MANAGER": "Manager — click row to open",
-                "PORTFOLIO_WEIGHT_PCT": st.column_config.NumberColumn("Portfolio weight", format="%.2f%%"),
-                "POSITION_VALUE_USD": st.column_config.NumberColumn("Position value", format="$%,.0f"),
-                "REPORTED_SHARES": st.column_config.NumberColumn("Reported shares", format="%,.0f"),
-                "PORTFOLIO_VALUE_USD": st.column_config.NumberColumn("13F portfolio", format="$%,.0f"),
-                "LATEST_FILING_DATE": st.column_config.DateColumn("Latest filing", format="MMM D, YYYY"),
-                "CIK": "Manager CIK",
-                "COMPONENT_COUNT": st.column_config.NumberColumn("Filing components", format="%,d"),
-                "FILING_URL": st.column_config.LinkColumn("Filing", display_text="Open EDGAR"),
-            },
-        )
-        rows = list(selection.selection.rows)
-        if rows:
-            manager_name = str(display.iloc[int(rows[0])]["MANAGER"])
-            manager_row = ranked.loc[ranked["MANAGER"].eq(manager_name)].iloc[0]
-            st.query_params["manager"] = str(manager_row["CIK"])
-            st.rerun()
-        dataframe_download(
-            "Download filtered holdings CSV",
-            filtered,
-            f"sec_13f_exposure_{re.sub(r'[^A-Za-z0-9_-]+', '_', str(request['query']))}_{report_period.date().isoformat()}.csv",
-        )
+            st.plotly_chart(
+                exposure_chart(ranked, sort_label, int(request["top_n"])),
+                width="stretch",
+                config={"displaylogo": False},
+            )
 
-    with methodology_tab:
+    with st.expander("Methodology", expanded=False):
         st.markdown(
             """
             **Portfolio-weight correction**

@@ -337,21 +337,20 @@ def extract_close_frame(
     return data[present_cols].dropna(how="all"), tuple(diagnostics)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
 def fetch_yahoo_close(
     tickers: Tuple[str, ...], start_date: date, end_date: date
 ) -> Tuple[pd.DataFrame, Tuple[str, ...]]:
     diagnostics: List[str] = []
 
     try:
-        import yfinance as yf
+        from adfm_core.market_data import download_market_data
     except Exception as exc:
         return pd.DataFrame(), (
             f"yfinance import failed: {type(exc).__name__}: {exc}",
         )
 
     try:
-        raw = yf.download(
+        raw = download_market_data(
             list(tickers),
             start=start_date.isoformat(),
             end=(end_date + timedelta(days=1)).isoformat(),

@@ -80,7 +80,6 @@ st.markdown(
 )
 
 
-@st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(
     ticker: str,
     period: str,

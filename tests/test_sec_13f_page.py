@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from adfm_core.sec_13f import QuarterDataset
@@ -18,7 +19,7 @@ PAGE = ROOT / "pages" / "17_SEC_13F_Exposure_Browser.py"
 
 
 class Sec13FPageTests(unittest.TestCase):
-    def test_page_renders_real_chart_and_detail_table_from_fixture(self) -> None:
+    def test_page_renders_holdings_table_and_lazy_chart_from_fixture(self) -> None:
         release = QuarterDataset(
             slug="fixture",
             label="Fixture SEC release",
@@ -48,13 +49,24 @@ class Sec13FPageTests(unittest.TestCase):
                 self.assertEqual(app.number_input[0].value, 1.0)
                 app.number_input[0].set_value(0.0)
                 app = app.button[0].click().run(timeout=30)
+                default_plot_count = len(app.get("plotly_chart"))
+                original_expander = st.expander
+
+                def opened(label, *args, **kwargs):
+                    if label == "Top-manager exposure chart":
+                        kwargs["expanded"] = True
+                    return original_expander(label, *args, **kwargs)
+
+                with patch("streamlit.expander", side_effect=opened):
+                    open_app = app.run(timeout=30)
 
         self.assertEqual(list(app.exception), [])
-        self.assertEqual(
-            [tab.label for tab in app.tabs],
-            ["Overview", "Fund holdings", "Methodology"],
-        )
-        self.assertEqual(len(app.get("plotly_chart")), 1)
+        self.assertEqual(list(app.tabs), [])
+        self.assertEqual(default_plot_count, 0)
+        self.assertEqual(list(open_app.exception), [])
+        self.assertEqual(len(open_app.get("plotly_chart")), 1)
+        self.assertIn("Top-manager exposure chart", [item.label for item in app.expander])
+        self.assertIn("Methodology", [item.label for item in app.expander])
         self.assertGreaterEqual(len(app.dataframe), 1)
         self.assertTrue(
             any(item.label == "Filter managers" for item in app.text_input)
