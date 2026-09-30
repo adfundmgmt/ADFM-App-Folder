@@ -32,7 +32,6 @@ from adfm_core.ui import (
     inject_explorer_style,
     metric_table,
     render_footer,
-    render_kpi_cards,
     render_page_header,
     render_section_header,
     render_sidebar_about,
@@ -426,27 +425,15 @@ def render_underwriter_legend() -> None:
 
 
 def render_underwriter_cards(rows: list[dict[str, str]]) -> None:
-    cards: list[str] = []
-    for row in rows:
-        formula = str(row["Formula"])
-        context = str(row["Context"])
-        tooltip = escape(f"{formula}. Color: {context}.", quote=True)
-        tone = str(row["Tone"])
-        cards.append(
-            f"<div class='underwriter-metric-card underwriter-tone-{escape(tone)}' title='{tooltip}'>"
-            "<div class='underwriter-metric-topline'>"
-            f"<div><div class='underwriter-section-tag'>{escape(str(row['Section']))}</div>"
-            f"<div class='underwriter-metric-label'>{escape(str(row['Metric']))}</div></div>"
-            f"<span class='underwriter-info' title='{tooltip}'>i</span>"
-            "</div>"
-            f"<div class='underwriter-metric-value'>{escape(str(row['Value']))}</div>"
-            f"<div class='underwriter-metric-context'>{escape(context)}</div>"
-            "</div>"
-        )
-    st.markdown(
-        "<div class='underwriter-metric-grid'>" + "".join(cards) + "</div>",
-        unsafe_allow_html=True,
+    """Render underwriting measures as one sortable table, preserving audit context."""
+    frame = pd.DataFrame(rows, columns=["Section", "Metric", "Value", "Formula", "Context", "Tone"])
+    colors = {"positive": "#237a3b", "caution": "#9a6700", "negative": "#b13030", "neutral": "#6b6b6b"}
+    tones = frame.pop("Tone")
+    styled = frame.style.apply(
+        lambda column: [f"color: {colors.get(tone, '#6b6b6b')}" for tone in tones],
+        subset=["Value", "Context"],
     )
+    st.dataframe(styled, hide_index=True, width="stretch", height="auto")
 
 
 def _latest_quarter_margin(metrics: Mapping[str, Any]) -> Optional[float]:
@@ -910,263 +897,229 @@ render_selection_note(
     f"CIK {identity.padded_cik} · {sic_description} · Fiscal year end {fiscal_year_end} · Latest filing {latest_form} on {latest_filed}",
 )
 
-if not close_history.empty:
-    render_section_header(
-        "One-year price history",
-        "Latest year shown; moving averages use two years of underlying history so the 50-day and 200-day lines cover the complete visible window.",
-    )
-    st.plotly_chart(
-        price_history_chart(close_history, identity.ticker, "USD"),
-        use_container_width=True,
-        config={"displayModeBar": False, "responsive": True},
-    )
-
-render_kpi_cards(
-    [
-        ("Price", format_money(price), f"Close through {period_label(price_date)}"),
-        ("Market Cap", format_money(valuation.market_cap), "Price × SEC shares"),
-        (
-            "Enterprise Value",
-            format_money(valuation.enterprise_value),
-            "Calculated capital value",
-        ),
-        (
-            "LTM Revenue",
-            format_money(valuation.ltm_revenue, currency=currency),
-            "Latest four quarters",
-        ),
-        (
-            "LTM Free Cash Flow",
-            format_money(valuation.ltm_fcf, currency=currency),
-            "CFO less capex",
-        ),
-        (
-            "Net Debt / EBITDA",
-            format_multiple(valuation.net_debt_ebitda),
-            "Calculated issuer leverage",
-        ),
-    ]
+render_section_header(
+    "Issuer underwriting metrics",
+    "SEC filing denominators and latest completed-session market price. Click any column header to sort; formulas and assessment context remain visible.",
+)
+rows = valuation_cards(valuation, currency=currency) if currency == "USD" else []
+rows += sec_snapshot_cards(valuation, currency=currency)
+render_underwriter_cards(rows)
+st.caption(
+    f"Price {format_money(price)} through {period_label(price_date)} · Filing currency {currency}. "
+    "SEC Company Facts and Yahoo Finance completed-session close; exact filing provenance is in Filings & Sources."
 )
 
-valuation_tab, financials_tab, credit_tab, filings_tab = st.tabs(
-    ["Valuation", "Financials", "Credit", "Filings & Sources"]
-)
-
-with valuation_tab:
-    render_section_header(
-        "Current valuation",
-        "Compact underwriting view. SEC supplies each filing denominator; Yahoo Finance supplies the latest completed-session close. Hover the information icon for the calculation.",
-    )
-    if currency == "USD":
-        render_underwriter_legend()
-        render_underwriter_cards(valuation_cards(valuation, currency=currency))
-    else:
-        st.info(
-            "Valuation multiples are unavailable because the filing currency is not USD."
+with st.expander("Selected issuer price history", expanded=False, on_change="rerun") as price_detail:
+    if price_detail.open and not close_history.empty:
+        render_section_header(
+            "One-year price history",
+            "Latest year shown; moving averages use two years of underlying history so the 50-day and 200-day lines cover the complete visible window.",
+        )
+        st.plotly_chart(
+            price_history_chart(close_history, identity.ticker, "USD"),
+            use_container_width=True,
+            config={"displayModeBar": False, "responsive": True},
         )
 
-    render_section_header(
-        "SEC-calculated company snapshot",
-        "Backward-looking per-share, margin, return, liquidity, and capital-allocation measures derived from standardized 10-K and 10-Q facts and scored against broad non-financial-company guardrails.",
-    )
-    render_underwriter_cards(sec_snapshot_cards(valuation, currency=currency))
-
-    with st.expander("Calculation methodology and underwriting bands", expanded=False):
-        st.caption(
-            "Green, amber, and red are transparent absolute underwriting bands, not sector peer rankings or investment recommendations. Lower valuation and leverage are treated as favorable; higher cash yield, margins, returns, and liquidity are treated as favorable. Banks, insurers, REITs, pre-revenue companies, and sector-specific structures require different thresholds."
-        )
-        st.markdown("**Valuation calculations**")
-        metric_table(valuation_table(valuation, currency=currency))
-        st.markdown("**SEC snapshot calculations**")
-        metric_table(sec_snapshot_table(valuation, currency=currency))
-
-    render_section_header(
-        "Reported growth",
-        "Quarterly comparisons and annual compound growth calculated from SEC filing periods. Non-positive CAGR bases remain unavailable.",
-    )
-    metric_table(growth_table(metrics))
-
-    render_section_header(
-        "Issuer read-through",
-        "A deterministic first pass from the latest reported operating trajectory, cash conversion, leverage, and debt service.",
-    )
-    reads = underwrite_read(metrics, valuation, currency=currency)
-    if reads:
-        for label, text in reads:
-            st.markdown(f"**{label}.** {text}")
-    else:
-        st.info(
-            "The filing does not contain enough standardized data for an automated issuer read-through."
-        )
-
-    events = recent_filings(submissions, forms=("8-K", "6-K"), limit=8)
-    render_section_header(
-        "Recent SEC events",
-        "Material current reports and foreign-issuer updates. These are filing events, not a general news feed.",
-    )
-    if events.empty:
-        st.caption("No recent 8-K or 6-K filings were returned.")
-    else:
-        metric_table(
-            events[["Filed", "Period", "Form", "Description", "Document"]],
-            column_config={
-                "Document": st.column_config.LinkColumn(
-                    "SEC Document", display_text="Open"
-                )
-            },
-        )
-
+with st.expander("Calculation methodology and underwriting bands", expanded=False):
     st.caption(
-        "Enterprise value includes separately tagged debt, preferred equity, and minority interest when available, and subtracts tagged cash and short-term investments. It does not infer missing pension, lease, derivative, or unconsolidated obligations. Forward estimates, analyst targets, short interest, and aggregated ownership are not calculated because they are not 10-K/10-Q Company Facts."
+        "Green, amber, and red are transparent absolute underwriting bands, not sector peer rankings or investment recommendations. Lower valuation and leverage are treated as favorable; higher cash yield, margins, returns, and liquidity are treated as favorable. Banks, insurers, REITs, pre-revenue companies, and sector-specific structures require different thresholds. Formulas remain visible in the metric table."
     )
 
-with financials_tab:
-    quarterly = financial_table(
-        metrics,
-        ("revenue", "gross_profit", "operating_income", "net_income", "cfo", "capex"),
-        frequency="quarterly",
-        periods=12,
-    )
-    annual = financial_table(
-        metrics,
-        ("revenue", "gross_profit", "operating_income", "net_income", "cfo", "capex"),
-        frequency="annual",
-        periods=8,
-    )
-    balance_sheet = balance_sheet_table(
-        metrics,
-        (
-            "cash",
-            "short_term_investments",
-            "receivables",
-            "current_assets",
-            "current_liabilities",
-            "debt_current",
-            "debt_noncurrent",
-            "short_term_borrowings",
-            "equity",
-            "assets",
-        ),
-        periods=12,
-    )
+with st.expander("Operating trajectory and issuer read-through", expanded=False, on_change="rerun") as trajectory_detail:
+    if trajectory_detail.open:
+        render_section_header(
+            "Reported growth",
+            "Quarterly comparisons and annual compound growth calculated from SEC filing periods. Non-positive CAGR bases remain unavailable.",
+        )
+        metric_table(growth_table(metrics))
 
-    render_section_header(
-        "Quarterly operating record",
-        f"Stand-alone quarters in {currency_prefix(currency)} millions. Cash-flow quarters can be mechanically derived from issuer-reported YTD values.",
-    )
-    if quarterly.empty:
-        st.info("No standardized quarterly financial series were available.")
-    else:
-        if {"Revenue", "Operating Income"}.issubset(quarterly.columns):
-            st.plotly_chart(
-                quarterly_chart(quarterly, currency),
-                use_container_width=True,
-                config={"displayModeBar": False, "responsive": True},
+        render_section_header(
+            "Issuer read-through",
+            "A deterministic first pass from the latest reported operating trajectory, cash conversion, leverage, and debt service.",
+        )
+        reads = underwrite_read(metrics, valuation, currency=currency)
+        if reads:
+            for label, text in reads:
+                st.markdown(f"**{label}.** {text}")
+        else:
+            st.info(
+                "The filing does not contain enough standardized data for an automated issuer read-through."
             )
-        quarterly_display = scale_financial_table(quarterly, currency)
-        metric_table(quarterly_display)
-        dataframe_download(
-            "Download quarterly data",
-            quarterly,
-            f"{identity.ticker}_sec_quarterly.csv",
+
+        events = recent_filings(submissions, forms=("8-K", "6-K"), limit=8)
+        render_section_header(
+            "Recent SEC events",
+            "Material current reports and foreign-issuer updates. These are filing events, not a general news feed.",
         )
+        if events.empty:
+            st.caption("No recent 8-K or 6-K filings were returned.")
+        else:
+            metric_table(
+                events[["Filed", "Period", "Form", "Description", "Document"]],
+                column_config={
+                    "Document": st.column_config.LinkColumn(
+                        "SEC Document", display_text="Open"
+                    )
+                },
+            )
 
-    render_section_header(
-        "Annual operating record",
-        f"Full fiscal years in {currency_prefix(currency)} millions, using the latest-filed observation for each period.",
-    )
-    metric_table(
-        scale_financial_table(annual, currency)
-    ) if not annual.empty else st.caption("Unavailable")
-
-    render_section_header(
-        "Balance-sheet history",
-        f"Point-in-time reported values in {currency_prefix(currency)} millions. No observations are forward-filled.",
-    )
-    metric_table(
-        scale_financial_table(balance_sheet, currency)
-    ) if not balance_sheet.empty else st.caption("Unavailable")
-
-with credit_tab:
-    render_section_header(
-        "Issuer credit profile",
-        "Capital structure and debt-service measures from current market value and the latest SEC-reported balance sheet and income statement.",
-    )
-    metric_table(credit_table(valuation, currency=currency))
-
-    maturities = maturity_table(company_facts)
-    render_section_header(
-        "Debt maturity ladder",
-        "Standardized principal maturities from the latest filing. Many issuers place issue-level detail in custom tags or debt-footnote text, so missing buckets remain blank.",
-    )
-    if maturities.empty:
         st.caption(
-            "The issuer did not expose a standardized debt maturity ladder through SEC Company Facts."
+            "Enterprise value includes separately tagged debt, preferred equity, and minority interest when available, and subtracts tagged cash and short-term investments. It does not infer missing pension, lease, derivative, or unconsolidated obligations. Forward estimates, analyst targets, short interest, and aggregated ownership are not calculated because they are not 10-K/10-Q Company Facts."
         )
-    else:
-        maturity_display = maturities.copy()
-        maturity_display["Principal"] = (
-            pd.to_numeric(maturity_display["Principal"], errors="coerce")
-            .div(1_000_000)
-            .map(
-                lambda value: (
-                    _signed_currency(value, currency)
-                    if pd.notna(value)
-                    else "Unavailable"
+
+with st.expander("Financials", expanded=False, on_change="rerun") as financial_detail:
+    if financial_detail.open:
+        quarterly = financial_table(
+            metrics,
+            ("revenue", "gross_profit", "operating_income", "net_income", "cfo", "capex"),
+            frequency="quarterly",
+            periods=12,
+        )
+        annual = financial_table(
+            metrics,
+            ("revenue", "gross_profit", "operating_income", "net_income", "cfo", "capex"),
+            frequency="annual",
+            periods=8,
+        )
+        balance_sheet = balance_sheet_table(
+            metrics,
+            (
+                "cash",
+                "short_term_investments",
+                "receivables",
+                "current_assets",
+                "current_liabilities",
+                "debt_current",
+                "debt_noncurrent",
+                "short_term_borrowings",
+                "equity",
+                "assets",
+            ),
+            periods=12,
+        )
+
+        render_section_header(
+            "Quarterly operating record",
+            f"Stand-alone quarters in {currency_prefix(currency)} millions. Cash-flow quarters can be mechanically derived from issuer-reported YTD values.",
+        )
+        if quarterly.empty:
+            st.info("No standardized quarterly financial series were available.")
+        else:
+            if {"Revenue", "Operating Income"}.issubset(quarterly.columns):
+                st.plotly_chart(
+                    quarterly_chart(quarterly, currency),
+                    use_container_width=True,
+                    config={"displayModeBar": False, "responsive": True},
+                )
+            quarterly_display = scale_financial_table(quarterly, currency)
+            metric_table(quarterly_display)
+            dataframe_download(
+                "Download quarterly data",
+                quarterly,
+                f"{identity.ticker}_sec_quarterly.csv",
+            )
+
+        render_section_header(
+            "Annual operating record",
+            f"Full fiscal years in {currency_prefix(currency)} millions, using the latest-filed observation for each period.",
+        )
+        if not annual.empty:
+            metric_table(scale_financial_table(annual, currency))
+        else:
+            st.caption("Unavailable")
+
+        render_section_header(
+            "Balance-sheet history",
+            f"Point-in-time reported values in {currency_prefix(currency)} millions. No observations are forward-filled.",
+        )
+        if not balance_sheet.empty:
+            metric_table(scale_financial_table(balance_sheet, currency))
+        else:
+            st.caption("Unavailable")
+
+with st.expander("Credit", expanded=False, on_change="rerun") as credit_detail:
+    if credit_detail.open:
+        render_section_header(
+            "Issuer credit profile",
+            "Capital structure and debt-service measures from current market value and the latest SEC-reported balance sheet and income statement.",
+        )
+        metric_table(credit_table(valuation, currency=currency))
+
+        maturities = maturity_table(company_facts)
+        render_section_header(
+            "Debt maturity ladder",
+            "Standardized principal maturities from the latest filing. Many issuers place issue-level detail in custom tags or debt-footnote text, so missing buckets remain blank.",
+        )
+        if maturities.empty:
+            st.caption(
+                "The issuer did not expose a standardized debt maturity ladder through SEC Company Facts."
+            )
+        else:
+            maturity_display = maturities.copy()
+            maturity_display["Principal"] = (
+                pd.to_numeric(maturity_display["Principal"], errors="coerce")
+                .div(1_000_000)
+                .map(
+                    lambda value: (
+                        _signed_currency(value, currency)
+                        if pd.notna(value)
+                        else "Unavailable"
+                    )
                 )
             )
-        )
-        maturity_display = maturity_display.rename(
-            columns={"Principal": f"Principal ({currency_prefix(currency)} millions)"}
-        )
-        metric_table(
-            maturity_display,
-            column_config={
-                "Source": st.column_config.LinkColumn("SEC Source", display_text="Open")
-            },
-        )
+            maturity_display = maturity_display.rename(
+                columns={"Principal": f"Principal ({currency_prefix(currency)} millions)"}
+            )
+            metric_table(
+                maturity_display,
+                column_config={
+                    "Source": st.column_config.LinkColumn("SEC Source", display_text="Open")
+                },
+            )
 
-with filings_tab:
-    filings = recent_filings(submissions, limit=35)
-    render_section_header(
-        "Recent filings",
-        "Direct links to the issuer's recent annual, quarterly, and current reports.",
-    )
-    if filings.empty:
-        st.caption("No matching filing metadata was returned.")
-    else:
-        metric_table(
-            filings,
-            column_config={
-                "Document": st.column_config.LinkColumn(
-                    "Primary Document", display_text="Open"
-                ),
-                "Filing Index": st.column_config.LinkColumn(
-                    "Filing Index", display_text="Index"
-                ),
-            },
+with st.expander("Filings & Sources", expanded=False, on_change="rerun") as filing_detail:
+    if filing_detail.open:
+        filings = recent_filings(submissions, limit=35)
+        render_section_header(
+            "Recent filings",
+            "Direct links to the issuer's recent annual, quarterly, and current reports.",
         )
+        if filings.empty:
+            st.caption("No matching filing metadata was returned.")
+        else:
+            metric_table(
+                filings,
+                column_config={
+                    "Document": st.column_config.LinkColumn(
+                        "Primary Document", display_text="Open"
+                    ),
+                    "Filing Index": st.column_config.LinkColumn(
+                        "Filing Index", display_text="Index"
+                    ),
+                },
+            )
 
-    audit = source_audit_table(metrics)
-    render_section_header(
-        "Source audit",
-        "The exact taxonomy concept selected for each normalized metric, including reporting period, filing date, form, and source filing.",
-    )
-    if audit.empty:
-        st.caption("No standardized source observations were available.")
-    else:
-        audit_display = format_source_audit(audit)
-        metric_table(
-            audit_display,
-            column_config={
-                "Source": st.column_config.LinkColumn("SEC Source", display_text="Open")
-            },
+        audit = source_audit_table(metrics)
+        render_section_header(
+            "Source audit",
+            "The exact taxonomy concept selected for each normalized metric, including reporting period, filing date, form, and source filing.",
         )
-        dataframe_download(
-            "Download source audit",
-            audit.drop(columns=["Source"]),
-            f"{identity.ticker}_sec_source_audit.csv",
-        )
+        if audit.empty:
+            st.caption("No standardized source observations were available.")
+        else:
+            audit_display = format_source_audit(audit)
+            metric_table(
+                audit_display,
+                column_config={
+                    "Source": st.column_config.LinkColumn("SEC Source", display_text="Open")
+                },
+            )
+            dataframe_download(
+                "Download source audit",
+                audit.drop(columns=["Source"]),
+                f"{identity.ticker}_sec_source_audit.csv",
+            )
 
 render_footer(
     data_note=(

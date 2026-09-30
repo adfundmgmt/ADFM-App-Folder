@@ -43,7 +43,7 @@ GRID_COLOR = "rgba(127,140,141,0.20)"
 LOOKBACKS = {"1Y": 52, "2Y": 104, "3Y": 156, "5Y": 260}
 
 
-@st.cache_data(ttl=21_600, show_spinner=False)
+@st.cache_data(ttl=21_600, show_spinner=False, max_entries=64)
 def load_report(report_type: str) -> tuple[pd.DataFrame, str]:
     try:
         frame = fetch_recent(report_type, years=5)
@@ -57,7 +57,7 @@ def load_report(report_type: str) -> tuple[pd.DataFrame, str]:
         return pd.DataFrame(), str(exc)
 
 
-@st.cache_data(ttl=21_600, show_spinner=False)
+@st.cache_data(ttl=21_600, show_spinner=False, max_entries=64)
 def load_history(report_type: str, contract_code: str) -> tuple[pd.DataFrame, str]:
     try:
         return fetch_contract_history(report_type, contract_code), ""
@@ -65,7 +65,6 @@ def load_history(report_type: str, contract_code: str) -> tuple[pd.DataFrame, st
         return pd.DataFrame(), str(exc)
 
 
-@st.cache_data(ttl=3_600, show_spinner=False)
 def load_price(ticker: str) -> tuple[pd.Series, str]:
     frames, failures = fetch_daily_ohlcv((ticker,), period="max")
     frame = frames.get(ticker)
@@ -400,9 +399,10 @@ else:
         st.caption(f"Price proxy warning: {price_warning}")
 
     with st.expander("Advanced Analysis", expanded=False):
-        scanner_tab, cohorts_tab, data_tab, method_tab = st.tabs(
-            ["Full scanner", "Cohorts", "Raw history", "Methodology"]
-        )
+        scanner_tab = st.container()
+        cohorts_tab = st.expander('Cohorts', expanded=False, on_change="rerun")
+        data_tab = st.expander('Raw history', expanded=False, on_change="rerun")
+        method_tab = st.expander('Methodology', expanded=False, on_change="rerun")
 
         with scanner_tab:
             filter_col, sort_col = st.columns(2)
@@ -453,52 +453,55 @@ else:
             dataframe_download("Download scanner CSV", display, "adfm_cftc_positioning_scanner.csv")
 
         with cohorts_tab:
-            render_section_header(
-                f"{market_name} cohort decomposition",
-                f"Net long minus short as a share of open interest for every public cohort in the {REPORT_LABELS[report_type]} report.",
-            )
-            st.plotly_chart(
-                cohort_chart(history_raw, report_type),
-                width="stretch",
-                config={"displaylogo": False},
-            )
+            if cohorts_tab.open:
+                render_section_header(
+                    f"{market_name} cohort decomposition",
+                    f"Net long minus short as a share of open interest for every public cohort in the {REPORT_LABELS[report_type]} report.",
+                )
+                st.plotly_chart(
+                    cohort_chart(history_raw, report_type),
+                    width="stretch",
+                    config={"displaylogo": False},
+                )
 
         with data_tab:
-            data = history[
-                [
-                    "report_date",
-                    "market_name",
-                    "contract_code",
-                    "open_interest",
-                    "cohort_long",
-                    "cohort_short",
-                    "net_contracts",
-                    "net_pct_oi",
-                    "rolling_zscore",
-                    "rolling_percentile",
-                ]
-            ].tail(520)
-            st.dataframe(data, hide_index=True, width="stretch", height=520)
-            dataframe_download(
-                "Download selected history CSV",
-                data,
-                f"adfm_cftc_{report_type.lower()}_{contract_code}.csv",
-            )
+            if data_tab.open:
+                data = history[
+                    [
+                        "report_date",
+                        "market_name",
+                        "contract_code",
+                        "open_interest",
+                        "cohort_long",
+                        "cohort_short",
+                        "net_contracts",
+                        "net_pct_oi",
+                        "rolling_zscore",
+                        "rolling_percentile",
+                    ]
+                ].tail(520)
+                st.dataframe(data, hide_index=True, width="stretch", height=520)
+                dataframe_download(
+                    "Download selected history CSV",
+                    data,
+                    f"adfm_cftc_{report_type.lower()}_{contract_code}.csv",
+                )
 
         with method_tab:
-            st.markdown(
-                """
-                **Financial futures:** Traders in Financial Futures separates Dealer/Intermediary, Asset Manager/Institutional, Leveraged Funds and Other Reportables. The default combines Asset Managers and Leveraged Funds.
+            if method_tab.open:
+                st.markdown(
+                    """
+                    **Financial futures:** Traders in Financial Futures separates Dealer/Intermediary, Asset Manager/Institutional, Leveraged Funds and Other Reportables. The default combines Asset Managers and Leveraged Funds.
 
-                **Physical futures:** Disaggregated COT separates Producer/Merchant, Swap Dealers, Managed Money and Other Reportables. Managed Money is the default speculative cohort.
+                    **Physical futures:** Disaggregated COT separates Producer/Merchant, Swap Dealers, Managed Money and Other Reportables. Managed Money is the default speculative cohort.
 
-                **Crowding:** net contracts = longs − shorts. The dashboard divides net contracts by open interest and ranks the latest observation against the selected trailing history. Extreme Short is ≤2.5th percentile and Extreme Long is ≥97.5th percentile.
+                    **Crowding:** net contracts = longs − shorts. The dashboard divides net contracts by open interest and ranks the latest observation against the selected trailing history. Extreme Short is ≤2.5th percentile and Extreme Long is ≥97.5th percentile.
 
-                **Weekly shifts:** the top-panel shift scales the weekly change in net contracts by current open interest for a fast cross-market comparison. The selected-market PM read uses the exact week-over-week change in net positioning as a share of open interest.
+                    **Weekly shifts:** the top-panel shift scales the weekly change in net contracts by current open interest for a fast cross-market comparison. The selected-market PM read uses the exact week-over-week change in net positioning as a share of open interest.
 
-                **Timing:** COT is a weekly Tuesday position snapshot, normally published Friday. It is a positioning-regime input, not a real-time flow feed.
-                """
-            )
+                    **Timing:** COT is a weekly Tuesday position snapshot, normally published Friday. It is a positioning-regime input, not a real-time flow feed.
+                    """
+                )
 
 render_footer(
     data_note="Primary inputs: CFTC TFF Futures Only (gpe5-46if), CFTC Disaggregated Futures Only (72hh-3qpy), and Yahoo Finance continuous-futures price proxies where mapped."

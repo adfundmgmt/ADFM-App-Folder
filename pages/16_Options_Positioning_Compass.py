@@ -65,7 +65,7 @@ def parse_universe(value: str, selected: str) -> tuple[str, ...]:
     return unique_tickers([selected, *raw])
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
 def fetch_expirations(symbol: str) -> tuple[str, ...]:
     try:
         return tuple(yf.Ticker(symbol).options)
@@ -73,14 +73,14 @@ def fetch_expirations(symbol: str) -> tuple[str, ...]:
         return ()
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
 def fetch_cboe_snapshot(
     symbol: str,
 ) -> tuple[pd.DataFrame, dict[str, object], str]:
     return fetch_cboe_delayed_options(symbol)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
 def fetch_chain(
     symbol: str, expiry: str
 ) -> tuple[
@@ -124,7 +124,7 @@ def fetch_chain(
         )
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
 def fetch_cboe_expirations(symbol: str) -> tuple[str, ...]:
     try:
         frame, _, _ = fetch_cboe_snapshot(symbol)
@@ -389,8 +389,8 @@ with st.spinner("Loading current option-chain snapshots…"):
             provider_errors.append({"Ticker": symbol, "Issue": error or "Empty option chain"})
             continue
         spot = price_metrics[symbol]["spot"]
-        if not np.isfinite(spot):
-            spot = float(underlying.get("regularMarketPrice", np.nan))
+        if not np.isfinite(spot) or spot <= 0:
+            spot = float(pd.to_numeric(underlying.get("regularMarketPrice", np.nan), errors="coerce"))
         if not np.isfinite(spot) or spot <= 0:
             provider_errors.append({"Ticker": symbol, "Issue": "No valid underlying price"})
             continue
@@ -402,13 +402,16 @@ with st.spinner("Loading current option-chain snapshots…"):
             as_of=as_of_date,
             risk_free_rate=float(risk_free_rate),
         )
+        if not np.isfinite(snapshot["atm_iv"]):
+            provider_errors.append({"Ticker": symbol, "Issue": "No valid strikes and implied volatility in the option chain"})
+            continue
         universe_rows.append(
             {
                 "ticker": symbol,
                 "chain_source": source,
                 "source_timestamp": source_timestamp,
-                **snapshot,
                 **price_metrics[symbol],
+                **snapshot,
             }
         )
 
@@ -448,9 +451,11 @@ render_kpi_cards(
     ]
 )
 
-compass_tab, structure_tab, activity_tab, data_tab, methodology_tab = st.tabs(
-    ["Compass", "Term structure + surface", "Premium activity", "Data", "Methodology"]
-)
+compass_tab = st.container()
+structure_tab = st.expander('Term structure + surface', expanded=False, on_change="rerun")
+activity_tab = st.expander('Premium activity', expanded=False, on_change="rerun")
+data_tab = st.expander('Data', expanded=False, on_change="rerun")
+methodology_tab = st.expander('Methodology', expanded=False, on_change="rerun")
 
 with compass_tab:
     render_section_header(
@@ -521,46 +526,43 @@ for expiry in eligible_terms:
 term_frame = pd.DataFrame(term_rows)
 
 with structure_tab:
-    if term_frame.empty:
-        st.info("No additional expirations were available for the term-structure view.")
-    else:
-        render_section_header(
-            f"{selected} implied-volatility term structure",
-            "ATM and estimated 25-delta volatility by expiration. Delta uses the sidebar risk-free-rate assumption and no dividend-yield adjustment.",
-        )
-        st.plotly_chart(term_structure_chart(term_frame), width="stretch", config={"displaylogo": False})
-        render_section_header(
-            "Fixed-moneyness IV surface",
-            "OTM puts are used below spot and OTM calls above spot; values are linearly interpolated only within observed strikes.",
-        )
-        st.plotly_chart(
-            iv_surface_chart(term_chains, float(risk_free_rate)),
-            width="stretch",
-            config={"displaylogo": False},
-        )
-        st.dataframe(
-            term_frame.style.format(
-                {
-                    "dte": "{:.0f}",
-                    "spot": "${:,.2f}",
-                    "atm_iv": "{:.1%}",
-                    "put_25d_iv": "{:.1%}",
-                    "call_25d_iv": "{:.1%}",
-                    "put_skew": "{:+.1%}",
-                    "put_call_volume": "{:.2f}",
-                    "put_call_oi": "{:.2f}",
-                },
-                na_rep="N/A",
-            ),
-            hide_index=True,
-            width="stretch",
-        )
+    if structure_tab.open:
+        if term_frame.empty:
+            st.info("No additional expirations were available for the term-structure view.")
+        else:
+            render_section_header(
+                f"{selected} implied-volatility term structure",
+                "ATM and estimated 25-delta volatility by expiration. Delta uses the sidebar risk-free-rate assumption and no dividend-yield adjustment.",
+            )
+            st.plotly_chart(term_structure_chart(term_frame), width="stretch", config={"displaylogo": False})
+            render_section_header(
+                "Fixed-moneyness IV surface",
+                "OTM puts are used below spot and OTM calls above spot; values are linearly interpolated only within observed strikes.",
+            )
+            st.plotly_chart(
+                iv_surface_chart(term_chains, float(risk_free_rate)),
+                width="stretch",
+                config={"displaylogo": False},
+            )
+            st.dataframe(
+                term_frame.style.format(
+                    {
+                        "dte": "{:.0f}",
+                        "spot": "${:,.2f}",
+                        "atm_iv": "{:.1%}",
+                        "put_25d_iv": "{:.1%}",
+                        "call_25d_iv": "{:.1%}",
+                        "put_skew": "{:+.1%}",
+                        "put_call_volume": "{:.2f}",
+                        "put_call_oi": "{:.2f}",
+                    },
+                    na_rep="N/A",
+                ),
+                hide_index=True,
+                width="stretch",
+            )
 
-with activity_tab:
-    render_section_header(
-        f"Largest estimated premium activity · {selected_expiry}",
-        "Contract premium is estimated as midquote × reported volume × 100 (last price is used when no valid two-sided quote exists). This is aggregate activity, not a tape of individual trades.",
-    )
+if activity_tab.open or data_tab.open:
     selected_time_years = max(float(selected_row["dte"]), 1.0) / 365.0
     activity = pd.concat(
         [
@@ -602,63 +604,72 @@ with activity_tab:
             "lastTradeDate",
         ]
     ]
-    st.dataframe(
-        display_activity.style.format(
-            {
-                "strike": "${:,.2f}",
-                "moneyness": "{:.1%}",
-                "lastPrice": "${:,.2f}",
-                "bid": "${:,.2f}",
-                "ask": "${:,.2f}",
-                "mid": "${:,.2f}",
-                "impliedVolatility": "{:.1%}",
-                "volume": "{:,.0f}",
-                "openInterest": "{:,.0f}",
-                "premium_activity": "${:,.0f}",
-            },
-            na_rep="N/A",
-        ),
-        hide_index=True,
-        width="stretch",
-        height=670,
-    )
-    st.warning(
-        "Public Yahoo chains do not reveal whether volume was bought or sold, opening or closing, or part of a multi-leg spread. The table must not be read as directional trade flow."
-    )
+
+with activity_tab:
+    if activity_tab.open:
+        render_section_header(
+            f"Largest estimated premium activity · {selected_expiry}",
+            "Contract premium is estimated as midquote × reported volume × 100 (last price is used when no valid two-sided quote exists). This is aggregate activity, not a tape of individual trades.",
+        )
+        st.dataframe(
+            display_activity.style.format(
+                {
+                    "strike": "${:,.2f}",
+                    "moneyness": "{:.1%}",
+                    "lastPrice": "${:,.2f}",
+                    "bid": "${:,.2f}",
+                    "ask": "${:,.2f}",
+                    "mid": "${:,.2f}",
+                    "impliedVolatility": "{:.1%}",
+                    "volume": "{:,.0f}",
+                    "openInterest": "{:,.0f}",
+                    "premium_activity": "${:,.0f}",
+                },
+                na_rep="N/A",
+            ),
+            hide_index=True,
+            width="stretch",
+            height=670,
+        )
+        st.warning(
+            "Public Yahoo chains do not reveal whether volume was bought or sold, opening or closing, or part of a multi-leg spread. The table must not be read as directional trade flow."
+        )
 
 with data_tab:
-    render_section_header("Downloadable current snapshot", "Numeric values remain in decimal units in the downloads.")
-    dataframe_download("Download compass snapshot", universe_frame, "options_positioning_compass.csv")
-    if not term_frame.empty:
-        dataframe_download("Download selected term structure", term_frame, f"{selected}_options_term_structure.csv")
-    dataframe_download("Download premium activity", display_activity, f"{selected}_{selected_expiry}_premium_activity.csv")
-    diagnostics = provider_errors.copy()
-    for row in price_failures.to_dict("records"):
-        diagnostics.append({"Ticker": str(row.get("Ticker", "")), "Issue": str(row.get("Reason", "Price history unavailable"))})
-    if diagnostics:
-        st.markdown("**Provider diagnostics**")
-        st.dataframe(pd.DataFrame(diagnostics).drop_duplicates(), hide_index=True, width="stretch")
+    if data_tab.open:
+        render_section_header("Downloadable current snapshot", "Numeric values remain in decimal units in the downloads.")
+        dataframe_download("Download compass snapshot", universe_frame, "options_positioning_compass.csv")
+        if not term_frame.empty:
+            dataframe_download("Download selected term structure", term_frame, f"{selected}_options_term_structure.csv")
+        dataframe_download("Download premium activity", display_activity, f"{selected}_{selected_expiry}_premium_activity.csv")
+        diagnostics = provider_errors.copy()
+        for row in price_failures.to_dict("records"):
+            diagnostics.append({"Ticker": str(row.get("Ticker", "")), "Issue": str(row.get("Reason", "Price history unavailable"))})
+        if diagnostics:
+            st.markdown("**Provider diagnostics**")
+            st.dataframe(pd.DataFrame(diagnostics).drop_duplicates(), hide_index=True, width="stretch")
 
 with methodology_tab:
-    st.markdown(
-        """
-        **What is directly observed**
+    if methodology_tab.open:
+        st.markdown(
+            """
+            **What is directly observed**
 
-        Expirations, strikes, bid, ask, last price, reported contract volume, open interest, and implied volatility come from Yahoo Finance when available. If Yahoo is unavailable, the same option-chain fields come from Cboe delayed quotes. The page never replaces these measurements with a price-volatility proxy. When a provider returns an obviously invalid IV below 2% or above 500%, the page solves Black-Scholes IV from the quote midpoint, or from the latest option price when no two-sided quote exists; those rows are labeled `Solved from price`.
+            Expirations, strikes, bid, ask, last price, reported contract volume, open interest, and implied volatility come from Yahoo Finance when available. If Yahoo is unavailable, the same option-chain fields come from Cboe delayed quotes. The page never replaces these measurements with a price-volatility proxy. When a provider returns an obviously invalid IV below 2% or above 500%, the page solves Black-Scholes IV from the quote midpoint, or from the latest option price when no two-sided quote exists; those rows are labeled `Solved from price`.
 
-        **What is calculated**
+            **What is calculated**
 
-        - ATM IV averages the valid call and put IV at each side's strike nearest spot.
-        - 25-delta contracts are selected by Black-Scholes delta using the configured risk-free rate, no dividend yield, and calendar days to expiration. This is an estimate, not an exchange-supplied Greek.
-        - Put skew is 25-delta put IV minus 25-delta call IV. A positive reading means downside puts are richer.
-        - IV richness is ATM IV minus annualized 21-session close-to-close realized volatility.
-        - Percentiles are mid-ranks across the currently loaded universe. They are **not historical IV rank or historical skew percentile**.
-        - Estimated premium activity is quote midpoint × reported contract volume × 100; last price substitutes when there is no valid two-sided quote.
+            - ATM IV averages the valid call and put IV at each side's strike nearest spot.
+            - 25-delta contracts are selected by Black-Scholes delta using the configured risk-free rate, no dividend yield, and calendar days to expiration. This is an estimate, not an exchange-supplied Greek.
+            - Put skew is 25-delta put IV minus 25-delta call IV. A positive reading means downside puts are richer.
+            - IV richness is ATM IV minus annualized 21-session close-to-close realized volatility.
+            - Percentiles are mid-ranks across the currently loaded universe. They are **not historical IV rank or historical skew percentile**.
+            - Estimated premium activity is quote midpoint × reported contract volume × 100; last price substitutes when there is no valid two-sided quote.
 
-        **Important limitations**
+            **Important limitations**
 
-        Yahoo provides a current aggregate chain rather than a complete historical options tape. The page cannot infer buyer versus seller, opening versus closing, spread linkage, dealer gamma, or institutional intent. Quotes can be delayed, stale, crossed, or missing. Generated commentary describes the measurements only and is not an investment recommendation.
-        """
-    )
+            Yahoo provides a current aggregate chain rather than a complete historical options tape. The page cannot infer buyer versus seller, opening versus closing, spread linkage, dealer gamma, or institutional intent. Quotes can be delayed, stale, crossed, or missing. Generated commentary describes the measurements only and is not an investment recommendation.
+            """
+        )
 
 render_footer()

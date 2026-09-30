@@ -77,7 +77,7 @@ class DocumentationTests(unittest.TestCase):
         ]
         self.assertEqual(len(set(legacy_labels)), 25)
         self.assertTrue(
-            any(label != tool.title for label, tool in zip(legacy_labels, TOOL_CATALOG))
+            any(label != tool.title for label, tool in zip(legacy_labels, TOOL_CATALOG, strict=True))
         )
 
     def test_home_navigation_maps_to_catalog(self) -> None:

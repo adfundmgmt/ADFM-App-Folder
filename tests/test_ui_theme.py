@@ -108,16 +108,18 @@ class InstitutionalThemeTests(unittest.TestCase):
                 self.assertIn("render_page_header(", source)
                 self.assertNotIn("st.title(", source)
 
+    @patch("adfm_core.ui.st.expander")
     @patch("adfm_core.ui.st.divider")
     @patch("adfm_core.ui.st.caption")
     @patch("adfm_core.ui.st.markdown")
     @patch("adfm_core.ui.st.header")
     def test_sidebar_about_uses_the_shared_reading_flow(
-        self, header, markdown, caption, divider
+        self, header, markdown, caption, divider, expander
     ):
         render_sidebar_about("17_SEC_13F_Exposure_Browser.py")
 
-        header.assert_called_once_with("About This Tool")
+        expander.assert_called_once_with("About This Tool", expanded=False)
+        header.assert_not_called()
         body = markdown.call_args.args[0]
         self.assertIn("**Purpose**", body)
         self.assertIn("**Read it in this order**", body)
@@ -125,7 +127,7 @@ class InstitutionalThemeTests(unittest.TestCase):
         self.assertEqual(caption.call_count, 2)
         self.assertIn("Keep in mind", caption.call_args_list[0].args[0])
         self.assertIn("Primary inputs", caption.call_args_list[1].args[0])
-        divider.assert_called_once_with()
+        divider.assert_not_called()
 
     def test_mobile_first_render_contracts_for_legacy_tools(self):
         root = Path(__file__).resolve().parents[1]

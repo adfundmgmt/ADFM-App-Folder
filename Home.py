@@ -8,6 +8,7 @@ import streamlit as st
 from PIL import Image
 
 from adfm_core.catalog import GROUP_ORDER, tool_definitions
+from adfm_core.observability import page_timer
 
 ROOT = Path(__file__).resolve().parent
 LOGO_PATH = ROOT / "assets" / "ADFM_Logo_Naked.png"
@@ -199,4 +200,5 @@ NAV_PAGE_BY_FILENAME = {
 }
 
 NAVIGATION = st.navigation([HOME_PAGE, *TOOL_PAGES], position="sidebar")
-NAVIGATION.run()
+with page_timer():
+    NAVIGATION.run()

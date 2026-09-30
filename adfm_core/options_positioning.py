@@ -189,10 +189,18 @@ def prepare_chain(
 
 
 def _valid_iv(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.loc[frame["impliedVolatility"].between(0.02, 5.0)].copy()
+    if frame.empty:
+        return frame.copy()
+    return frame.loc[
+        frame["impliedVolatility"].between(0.02, 5.0)
+        & frame["strike"].gt(0)
+        & np.isfinite(frame["strike"])
+    ].copy()
 
 
 def _atm_iv(calls: pd.DataFrame, puts: pd.DataFrame, spot: float) -> float:
+    if not np.isfinite(spot) or spot <= 0:
+        return np.nan
     readings: list[float] = []
     for frame in (calls, puts):
         valid = _valid_iv(frame)

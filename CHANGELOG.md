@@ -4,6 +4,13 @@ All notable application changes are recorded here. Dates use ISO 8601.
 
 ## Unreleased
 
+- Unified active Yahoo price loaders around bounded shared transport, explicit completed-session policies, per-symbol delivery provenance, last-good recovery, and aggregate performance diagnostics. Completed US cash bars use the exchange calendar, including early closes.
+- Added official daily sovereign 10Y observations as a separate view from monthly OECD histories. Bond failed breakouts retain their original levels; event studies now include matched non-overlapping controls, confidence intervals, excursions, and a purged chronological holdout.
+- Added release-aware historical conditioning, strict CFTC availability controls, immutable concurrent signal capture, and scheduled public commodity captures. Verified futures quote multipliers and continuous-series roll limitations are explicit.
+- Added private dated holdings uploads and combined portfolio stress to Position Sizing, including equity/ETF options, rates DV01, FX, futures, explicit underlying price targets, scenario NAV, and supplied-margin estimates.
+- Preserved existing tool routes and sortable tables while making secondary charts, audits, and methodology sections lazy or collapsed. Extracted basket and chart calculations into focused modules; stale FX endpoints and unsupported return anchors no longer become fabricated observations.
+- Release review corrected independent Options data downloads, missing portfolio currency, stale commodity current signals, provisional-close cache rollover, and incomplete-month chart paths.
+
 - Added a shared FRED service with validated, scheduled macro snapshots, bounded requests and retries, per-series failure isolation, atomic last-good storage, source/cadence/history diagnostics, and fail-closed ALFRED vintage requests. Known snapshots load without provider requests; vendor series retain local runtime caches.
 - Treasury now prefers an unmixed official curve and includes the 2Y tenor, 2s10s, 5Y/10Y real yields, and 5Y/10Y inflation breakevens. Yahoo remains a separate nominal-curve fallback.
 - Credit rankings disclose actual available history instead of calling limited ICE histories five-year rankings. Liquidity and sovereign FRED inputs share the same recovery service.

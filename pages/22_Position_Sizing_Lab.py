@@ -18,6 +18,7 @@ from adfm_core.market_data import (
     unique_tickers,
 )
 from adfm_core.palette import PASTEL
+from adfm_core.portfolio_stress_page import render_portfolio_stress
 from adfm_core.position_sizing import (
     HORIZON_TRADING_DAYS,
     annualized_volatility,
@@ -36,7 +37,6 @@ from adfm_core.ui import (
     dataframe_download,
     inject_explorer_style,
     render_footer,
-    render_kpi_cards,
     render_page_header,
     render_section_header,
     render_sidebar_about,
@@ -51,6 +51,11 @@ BLUE, RED, GREEN, ORANGE = (PASTEL[key] for key in ("blue", "rose", "sage", "cor
 GRID = "rgba(148,163,184,.30)"
 PFX = "psl_"
 BLOCK_SIZE = 20
+
+
+def render_detail_metrics(rows):
+    st.dataframe(pd.DataFrame(rows, columns=["Metric", "Value", "Basis"]),
+                 width="stretch", hide_index=True)
 
 
 def pct(value: float, digits: int = 1, signed: bool = False) -> str:
@@ -312,6 +317,7 @@ def sensitivity_table(
         aligned = pd.concat(
             [selected_returns.rename("asset"), benchmark.rename("benchmark")],
             axis=1,
+            sort=False,
         ).dropna().tail(756)
         if len(aligned) < 40:
             continue
@@ -361,518 +367,521 @@ st.markdown(
 
 with st.sidebar:
     render_sidebar_about("22_Position_Sizing_Lab.py")
-    st.header("Position setup")
-    ticker = st.text_input("Ticker", "AAPL").strip().upper()
-    direction = st.selectbox("Direction", ("Long", "Short"))
-    conviction = st.slider(
-        "Conviction level",
-        1,
-        5,
-        3,
-        help="1=5%, 2=10%, 3=15%, 4=20%, 5=25% maximum gross exposure.",
-    )
-    horizon_label = st.selectbox(
-        "Intended holding period",
-        tuple(HORIZON_TRADING_DAYS),
-        index=1,
-    )
-    portfolio_nav = st.number_input(
-        "Portfolio NAV",
-        min_value=1_000.0,
-        value=5_000_000.0,
-        step=100_000.0,
-        format="%.0f",
-    )
-    max_loss_pct = st.number_input(
-        "Maximum NAV loss at invalidation",
-        .10,
-        10.0,
-        1.25,
-        .05,
-        format="%.2f",
-    )
-    hold_earnings = st.checkbox(
-        "Assume position is held through earnings",
-        value=horizon_label != "1 month",
-    )
-    with st.expander("Liquidity assumptions"):
-        participation = st.slider(
-            "Maximum share of median daily dollar volume",
+    with st.expander("Individual position setup"):
+        ticker = st.text_input("Ticker", "AAPL").strip().upper()
+        direction = st.selectbox("Direction", ("Long", "Short"))
+        conviction = st.slider(
+            "Conviction level",
             1,
-            25,
-            10,
-            format="%d%%",
+            5,
+            3,
+            help="1=5%, 2=10%, 3=15%, 4=20%, 5=25% maximum gross exposure.",
         )
-        liquidation_days = st.slider("Target liquidation window", 1, 10, 3, format="%d days")
+        horizon_label = st.selectbox(
+            "Intended holding period",
+            tuple(HORIZON_TRADING_DAYS),
+            index=1,
+        )
+        portfolio_nav = st.number_input(
+            "Individual sizing NAV",
+            min_value=1_000.0,
+            value=5_000_000.0,
+            step=100_000.0,
+            format="%.0f",
+        )
+        max_loss_pct = st.number_input(
+            "Maximum NAV loss at invalidation",
+            .10,
+            10.0,
+            1.25,
+            .05,
+            format="%.2f",
+        )
+        hold_earnings = st.checkbox(
+            "Assume position is held through earnings",
+            value=horizon_label != "1 month",
+        )
+        with st.expander("Liquidity assumptions"):
+            participation = st.slider(
+                "Maximum share of median daily dollar volume",
+                1,
+                25,
+                10,
+                format="%d%%",
+            )
+            liquidation_days = st.slider("Target liquidation window", 1, 10, 3, format="%d days")
 
 render_page_header(
     PageHeader(
         title=TITLE,
         description=(
-            "Set conviction, define the trade, and run a live path simulation using observed daily returns from the selected ticker's history."
+            "Stress dated portfolio holdings with combined factor shocks, or expand the individual-position sizing and historical path simulator."
         ),
         eyebrow="ADFM Risk + Decision Support",
     )
 )
-if not ticker:
-    st.error("Enter a ticker.")
-    st.stop()
 
-with st.spinner(f"Loading full available history for {ticker}..."):
-    frames, missing = fetch_daily_ohlcv(
-        unique_tickers([ticker, *BENCHMARKS]),
-        period="max",
-    )
-close = close_series(frames, ticker)
-ohlcv = adjusted_frame(frames, ticker)
-if len(close) < 63:
-    st.error(f"No usable historical series was returned for {ticker}.")
-    st.stop()
+render_portfolio_stress()
 
-latest = float(close.iloc[-1])
-horizon_days = HORIZON_TRADING_DAYS[horizon_label]
-render_status_line(
-    ticker=ticker,
-    data_through=pd.Timestamp(close.index[-1]).strftime("%Y-%m-%d"),
-    history=f"{len(close):,} sessions",
-    holding_period=horizon_label,
-    source="Yahoo Finance",
-)
+with st.expander("Individual-position sizing and historical simulator"):
+    individual_enabled = st.checkbox("Load individual-position history", value=False, key="psl_load_history")
+    if individual_enabled:
+        if not ticker:
+            st.error("Enter a ticker.")
+            st.stop()
 
-render_section_header(
-    "Trade structure",
-    "Target and invalidation distances are applied proportionally to every historical starting date.",
-)
-c1, c2, c3 = st.columns(3)
-entry = c1.number_input(
-    "Entry price",
-    min_value=.01,
-    value=latest,
-    step=max(.01, latest * .0025),
-    format="%.2f",
-    key=f"entry_{ticker}_{direction}",
-)
-target = c2.number_input(
-    "Target price",
-    min_value=.01,
-    value=latest * (1.15 if direction == "Long" else .85),
-    step=max(.01, latest * .0025),
-    format="%.2f",
-    key=f"target_{ticker}_{direction}",
-)
-stop = c3.number_input(
-    "Invalidation price",
-    min_value=.01,
-    value=latest * (.92 if direction == "Long" else 1.08),
-    step=max(.01, latest * .0025),
-    format="%.2f",
-    key=f"stop_{ticker}_{direction}",
-)
-if direction == "Long":
-    target_move, stop_distance = target / entry - 1, 1 - stop / entry
-else:
-    target_move, stop_distance = 1 - target / entry, stop / entry - 1
-if stop_distance <= 0:
-    st.error("The invalidation is on the wrong side of the entry for the selected direction.")
-    st.stop()
-if target_move <= 0:
-    st.warning("The target is on the wrong side of the entry. Target-hit statistics are disabled until corrected.")
+        with st.spinner(f"Loading full available history for {ticker}..."):
+            frames, missing = fetch_daily_ohlcv(
+                unique_tickers([ticker, *BENCHMARKS]),
+                period="max",
+            )
+        close = close_series(frames, ticker)
+        ohlcv = adjusted_frame(frames, ticker)
+        if len(close) < 63:
+            st.error(f"No usable historical series was returned for {ticker}.")
+            st.stop()
 
-returns = close.pct_change(fill_method=None).dropna()
-simulation_returns = directional_daily_returns(close, direction)
-rolling_vol = rolling_annualized_volatility(returns, 63)
-current_vol = annualized_volatility(returns, 63)
-median_vol = float(rolling_vol.dropna().median())
-tail_move = historical_tail_move(returns, direction.lower(), 5)
-daily_es = expected_shortfall(returns, direction.lower(), .01)
-median_dollar_volume = float(
-    (
-        close.reindex(ohlcv.index)
-        * pd.to_numeric(ohlcv["Volume"], errors="coerce")
-    ).dropna().tail(252).median()
-)
-
-dates = earnings_dates(ticker)
-events = earnings_reaction_frame(ohlcv, dates)
-if len(events) >= 4:
-    event_move = float(events["abs_move"].quantile(.90))
-    event_basis = f"90th-percentile earnings reaction across {len(events)} events"
-else:
-    event_move = daily_gap_proxy(ohlcv, .90)
-    event_basis = "90th-percentile overnight gap; earnings history unavailable"
-today = pd.Timestamp(datetime.now(NY_TZ).date())
-next_earnings = min((date for date in dates if date.normalize() >= today), default=None)
-
-step = {21: 5, 63: 5, 252: 21, 1260: 63}[horizon_days]
-paths = historical_windows(close, horizon_days, direction.lower(), step=step)
-max_loss = max_loss_pct / 100
-sizing = calculate_sizing(
-    conviction=conviction,
-    max_nav_loss=max_loss,
-    stop_distance=stop_distance,
-    current_volatility=current_vol,
-    historical_median_volatility=median_vol,
-    event_move=event_move,
-    tail_move=tail_move,
-    portfolio_nav=portfolio_nav,
-    median_dollar_volume=median_dollar_volume,
-    hold_through_earnings=hold_earnings,
-    participation_rate=participation / 100,
-    liquidation_days=liquidation_days,
-)
-position_value = portfolio_nav * sizing.suggested_size
-loss_at_stop = sizing.suggested_size * stop_distance
-target_nav = sizing.suggested_size * target_move if target_move > 0 else np.nan
-event_nav = sizing.suggested_size * event_move
-
-verdict = (
-    f"{sizing.binding_constraint} reduces the {pct(sizing.conviction_ceiling)} conviction ceiling to {pct(sizing.suggested_size)}."
-    if sizing.suggested_size < sizing.conviction_ceiling - 1e-9
-    else "The conviction ceiling remains binding; the selected risk constraints do not force a smaller position."
-)
-render_selection_note("Sizing verdict", verdict)
-render_kpi_cards(
-    [
-        ("Conviction ceiling", pct(sizing.conviction_ceiling), f"Conviction {conviction} of 5"),
-        ("Suggested exposure", pct(sizing.suggested_size), sizing.binding_constraint),
-        ("Position notional", money(position_value), f"At {money(portfolio_nav)} NAV"),
-        ("Loss at invalidation", pct(loss_at_stop, 2), f"Budget {pct(max_loss, 2)}"),
-        ("NAV impact at target", pct(target_nav, 2), f"Target move {pct(target_move)}"),
-        ("Historical event loss", pct(event_nav, 2), event_basis),
-    ]
-)
-
-st.markdown(
-    "<div class='sim-head'><div class='sim-kicker'>Interactive historical simulation</div>"
-    "<div class='sim-title'>Run one holding-period path, session by session, using observed ticker returns.</div></div>",
-    unsafe_allow_html=True,
-)
-
-if paths.empty or len(simulation_returns) < horizon_days:
-    st.warning(
-        f"{ticker} does not have enough history for a full {horizon_label} simulation. Choose a shorter holding period or a ticker with longer history."
-    )
-else:
-    horizon_hit_rate = float(paths["return"].gt(0).mean())
-    median_horizon_return = float(paths["return"].median())
-    daily_hit_rate = float(simulation_returns.gt(0).mean())
-    log_optimal = empirical_log_optimal(simulation_returns, sizing.conviction_ceiling)
-
-    a, b, c, d = st.columns([1.1, 1.15, .8, .8])
-    starting_balance = a.number_input(
-        "Starting balance",
-        min_value=1_000.0,
-        value=float(portfolio_nav),
-        step=100_000.0,
-        format="%.0f",
-    )
-    mode = b.selectbox(
-        "Sampling mode",
-        (
-            "Random historical blocks",
-            "Recent-regime weighted blocks",
-            "Chronological regime replay",
-        ),
-        help=(
-            "Random modes sample 20-session blocks so serial dependence is partly preserved. Chronological replay follows one continuous historical path."
-        ),
-    )
-    c.number_input(
-        "Sessions in run",
-        min_value=horizon_days,
-        max_value=horizon_days,
-        value=horizon_days,
-        disabled=True,
-    )
-    sessions_per_pulse = d.slider("Sessions per pulse", 1, 25, 5)
-
-    ceiling_pct = sizing.conviction_ceiling * 100
-    suggested_pct = sizing.suggested_size * 100
-    control_signature = (
-        f"{ticker}|{direction}|{horizon_label}|{conviction}|{starting_balance:.2f}|"
-        f"{mode}|{suggested_pct:.3f}"
-    )
-    position_key = PFX + "position_pct"
-    if st.session_state.get(PFX + "control_signature") != control_signature:
-        st.session_state[PFX + "control_signature"] = control_signature
-        st.session_state[position_key] = min(
-            ceiling_pct,
-            max(.5, round(suggested_pct * 2) / 2),
+        latest = float(close.iloc[-1])
+        horizon_days = HORIZON_TRADING_DAYS[horizon_label]
+        render_status_line(
+            ticker=ticker,
+            data_through=pd.Timestamp(close.index[-1]).strftime("%Y-%m-%d"),
+            history=f"{len(close):,} sessions",
+            holding_period=horizon_label,
+            source="Yahoo Finance",
         )
-    simulation_position_pct = st.slider(
-        "Simulation position size",
-        .5,
-        max(.5, float(ceiling_pct)),
-        step=.5,
-        key=position_key,
-        help="Gross exposure applied to each observed daily return. It cannot exceed the conviction ceiling.",
-    )
-    simulation_fraction = simulation_position_pct / 100
-    seed = abs(hash((ticker, direction, horizon_label, conviction))) % 1_000_000
-    signature = f"{control_signature}|{simulation_position_pct:.2f}|{seed}"
-    if st.session_state.get(PFX + "signature") != signature:
-        reset_simulation(starting_balance, signature, seed)
 
-    @st.fragment(run_every=.8)
-    def live_simulator() -> None:
-        if st.session_state[PFX + "running"]:
-            remaining = max(
-                0,
-                horizon_days - len(st.session_state[PFX + "returns"]),
-            )
-            for _ in range(min(sessions_per_pulse, remaining)):
-                add_session(
-                    simulation_returns,
-                    simulation_fraction,
-                    mode,
-                    seed,
-                    horizon_days,
-                )
-            if (
-                len(st.session_state[PFX + "returns"]) >= horizon_days
-                or st.session_state[PFX + "balances"][-1] <= 0
-            ):
-                st.session_state[PFX + "running"] = False
+        render_section_header(
+            "Trade structure",
+            "Target and invalidation distances are applied proportionally to every historical starting date.",
+        )
+        c1, c2, c3 = st.columns(3)
+        entry = c1.number_input(
+            "Entry price",
+            min_value=.01,
+            value=latest,
+            step=max(.01, latest * .0025),
+            format="%.2f",
+            key=f"entry_{ticker}_{direction}",
+        )
+        target = c2.number_input(
+            "Target price",
+            min_value=.01,
+            value=latest * (1.15 if direction == "Long" else .85),
+            step=max(.01, latest * .0025),
+            format="%.2f",
+            key=f"target_{ticker}_{direction}",
+        )
+        stop = c3.number_input(
+            "Invalidation price",
+            min_value=.01,
+            value=latest * (.92 if direction == "Long" else 1.08),
+            step=max(.01, latest * .0025),
+            format="%.2f",
+            key=f"stop_{ticker}_{direction}",
+        )
+        if direction == "Long":
+            target_move, stop_distance = target / entry - 1, 1 - stop / entry
+        else:
+            target_move, stop_distance = 1 - target / entry, stop / entry - 1
+        if stop_distance <= 0:
+            st.error("The invalidation is on the wrong side of the entry for the selected direction.")
+            st.stop()
+        if target_move <= 0:
+            st.warning("The target is on the wrong side of the entry. Target-hit statistics are disabled until corrected.")
 
-        balances = st.session_state[PFX + "balances"]
-        sampled = st.session_state[PFX + "returns"]
-        nav_returns = st.session_state[PFX + "nav_returns"]
-        sampled_dates = st.session_state[PFX + "dates"]
-        completed = len(sampled)
-        current_balance = float(balances[-1])
-        cumulative = current_balance / starting_balance - 1
-        realized_hit = float(np.mean(np.asarray(sampled) > 0)) if sampled else np.nan
+        returns = close.pct_change(fill_method=None).dropna()
+        simulation_returns = directional_daily_returns(close, direction)
+        rolling_vol = rolling_annualized_volatility(returns, 63)
+        current_vol = annualized_volatility(returns, 63)
+        median_vol = float(rolling_vol.dropna().median())
+        tail_move = historical_tail_move(returns, direction.lower(), 5)
+        daily_es = expected_shortfall(returns, direction.lower(), .01)
+        median_dollar_volume = float(
+            (
+                close.reindex(ohlcv.index)
+                * pd.to_numeric(ohlcv["Volume"], errors="coerce")
+            ).dropna().tail(252).median()
+        )
 
-        left, right = st.columns([.82, 1.18], gap="large")
-        with left:
-            st.markdown(
-                f"**{ticker} finished positive in {horizon_hit_rate * 100:.1f}% of rolling {horizon_label} windows.**"
-            )
-            st.caption(
-                "The game advances one observed daily session at a time. It does not stack repeated full holding-period returns."
-            )
-            st.markdown(outcome_grid(sampled), unsafe_allow_html=True)
-            st.markdown(
-                f"<div class='sim-balance'><span>Balance</span><span>{escape(money(current_balance))}</span></div>",
-                unsafe_allow_html=True,
-            )
-            buttons = st.columns(4)
-            if buttons[0].button(
-                "Start simulation",
-                type="primary",
-                use_container_width=True,
-                disabled=(
-                    st.session_state[PFX + "running"]
-                    or completed >= horizon_days
-                    or current_balance <= 0
-                ),
-            ):
-                st.session_state[PFX + "running"] = True
-            if buttons[1].button(
-                "Run one session",
-                use_container_width=True,
-                disabled=(
-                    st.session_state[PFX + "running"]
-                    or completed >= horizon_days
-                    or current_balance <= 0
-                ),
-            ):
-                add_session(
-                    simulation_returns,
-                    simulation_fraction,
-                    mode,
-                    seed,
-                    horizon_days,
-                )
-            if buttons[2].button(
-                "Stop",
-                use_container_width=True,
-                disabled=not st.session_state[PFX + "running"],
-            ):
-                st.session_state[PFX + "running"] = False
-            if buttons[3].button("Reset", use_container_width=True):
-                reset_simulation(starting_balance, signature, seed)
+        dates = earnings_dates(ticker)
+        events = earnings_reaction_frame(ohlcv, dates)
+        if len(events) >= 4:
+            event_move = float(events["abs_move"].quantile(.90))
+            event_basis = f"90th-percentile earnings reaction across {len(events)} events"
+        else:
+            event_move = daily_gap_proxy(ohlcv, .90)
+            event_basis = "90th-percentile overnight gap; earnings history unavailable"
+        today = pd.Timestamp(datetime.now(NY_TZ).date())
+        next_earnings = min((date for date in dates if date.normalize() >= today), default=None)
 
-            if simulation_fraction > sizing.suggested_size + .0025:
-                st.error(
-                    f"Above the risk-adjusted suggestion by {(simulation_fraction - sizing.suggested_size) * 100:.1f} percentage points."
-                )
-            elif simulation_fraction + .0025 < sizing.suggested_size:
-                st.info(
-                    f"Below the risk-adjusted suggestion by {(sizing.suggested_size - simulation_fraction) * 100:.1f} percentage points."
-                )
-            else:
-                st.success("Simulation size is aligned with the risk-adjusted suggestion.")
-            if sampled_dates:
-                st.caption(
-                    f"Last draw: {sampled_dates[-1]:%Y-%m-%d} · ticker return {sampled[-1] * 100:+.2f}% · NAV contribution {nav_returns[-1] * 100:+.3f}%"
-                )
-            else:
-                st.caption(
-                    "Each step uses an observed daily return. Random modes preserve returns in 20-session blocks."
-                )
+        step = {21: 5, 63: 5, 252: 21, 1260: 63}[horizon_days]
+        paths = historical_windows(close, horizon_days, direction.lower(), step=step)
+        max_loss = max_loss_pct / 100
+        sizing = calculate_sizing(
+            conviction=conviction,
+            max_nav_loss=max_loss,
+            stop_distance=stop_distance,
+            current_volatility=current_vol,
+            historical_median_volatility=median_vol,
+            event_move=event_move,
+            tail_move=tail_move,
+            portfolio_nav=portfolio_nav,
+            median_dollar_volume=median_dollar_volume,
+            hold_through_earnings=hold_earnings,
+            participation_rate=participation / 100,
+            liquidation_days=liquidation_days,
+        )
+        position_value = portfolio_nav * sizing.suggested_size
+        loss_at_stop = sizing.suggested_size * stop_distance
+        target_nav = sizing.suggested_size * target_move if target_move > 0 else np.nan
+        event_nav = sizing.suggested_size * event_move
 
-        with right:
-            st.plotly_chart(bankroll_chart(balances), use_container_width=True)
-            st.plotly_chart(volatility_chart(nav_returns), use_container_width=True)
-
-        render_kpi_cards(
+        verdict = (
+            f"{sizing.binding_constraint} reduces the {pct(sizing.conviction_ceiling)} conviction ceiling to {pct(sizing.suggested_size)}."
+            if sizing.suggested_size < sizing.conviction_ceiling - 1e-9
+            else "The conviction ceiling remains binding; the selected risk constraints do not force a smaller position."
+        )
+        render_selection_note("Sizing verdict", verdict)
+        render_detail_metrics(
             [
-                ("Sessions completed", f"{completed:,} / {horizon_days:,}", mode),
-                ("Cumulative return", pct(cumulative, 1, True), money(current_balance)),
-                ("Maximum drawdown", pct(max_balance_drawdown(balances)), "Simulation balance"),
-                ("Realized daily hit rate", pct(realized_hit, 0), f"Historical daily rate {pct(daily_hit_rate, 0)}"),
-                ("Position size", pct(simulation_fraction), f"Suggested {pct(sizing.suggested_size)}"),
-                ("Historical log-optimal", pct(log_optimal), "Daily-return estimate within conviction ceiling"),
+                ("Conviction ceiling", pct(sizing.conviction_ceiling), f"Conviction {conviction} of 5"),
+                ("Suggested exposure", pct(sizing.suggested_size), sizing.binding_constraint),
+                ("Position notional", money(position_value), f"At {money(portfolio_nav)} NAV"),
+                ("Loss at invalidation", pct(loss_at_stop, 2), f"Budget {pct(max_loss, 2)}"),
+                ("NAV impact at target", pct(target_nav, 2), f"Target move {pct(target_move)}"),
+                ("Historical event loss", pct(event_nav, 2), event_basis),
             ]
         )
 
-    live_simulator()
-    with st.expander("Simulation methodology and historical edge inputs"):
         st.markdown(
-            "One simulation now represents one selected holding period. The balance advances through observed daily returns rather than compounding 100 separate one-, three-, or five-year outcomes. Random modes resample 20-session blocks, while chronological replay follows one continuous historical path. This keeps the path economically interpretable and avoids the explosive double-counting visible in the prior version."
+            "<div class='sim-head'><div class='sim-kicker'>Interactive historical simulation</div>"
+            "<div class='sim-title'>Run one holding-period path, session by session, using observed ticker returns.</div></div>",
+            unsafe_allow_html=True,
         )
-        st.dataframe(
-            pd.DataFrame(
+
+        if paths.empty or len(simulation_returns) < horizon_days:
+            st.warning(
+                f"{ticker} does not have enough history for a full {horizon_label} simulation. Choose a shorter holding period or a ticker with longer history."
+            )
+        else:
+            horizon_hit_rate = float(paths["return"].gt(0).mean())
+            median_horizon_return = float(paths["return"].median())
+            daily_hit_rate = float(simulation_returns.gt(0).mean())
+            log_optimal = empirical_log_optimal(simulation_returns, sizing.conviction_ceiling)
+
+            a, b, c, d = st.columns([1.1, 1.15, .8, .8])
+            starting_balance = a.number_input(
+                "Starting balance",
+                min_value=1_000.0,
+                value=float(portfolio_nav),
+                step=100_000.0,
+                format="%.0f",
+            )
+            mode = b.selectbox(
+                "Sampling mode",
+                (
+                    "Random historical blocks",
+                    "Recent-regime weighted blocks",
+                    "Chronological regime replay",
+                ),
+                help=(
+                    "Random modes sample 20-session blocks so serial dependence is partly preserved. Chronological replay follows one continuous historical path."
+                ),
+            )
+            c.number_input(
+                "Sessions in run",
+                min_value=horizon_days,
+                max_value=horizon_days,
+                value=horizon_days,
+                disabled=True,
+            )
+            sessions_per_pulse = d.slider("Sessions per pulse", 1, 25, 5)
+
+            ceiling_pct = sizing.conviction_ceiling * 100
+            suggested_pct = sizing.suggested_size * 100
+            control_signature = (
+                f"{ticker}|{direction}|{horizon_label}|{conviction}|{starting_balance:.2f}|"
+                f"{mode}|{suggested_pct:.3f}"
+            )
+            position_key = PFX + "position_pct"
+            if st.session_state.get(PFX + "control_signature") != control_signature:
+                st.session_state[PFX + "control_signature"] = control_signature
+                st.session_state[position_key] = min(
+                    ceiling_pct,
+                    max(.5, round(suggested_pct * 2) / 2),
+                )
+            simulation_position_pct = st.slider(
+                "Simulation position size",
+                .5,
+                max(.5, float(ceiling_pct)),
+                step=.5,
+                key=position_key,
+                help="Gross exposure applied to each observed daily return. It cannot exceed the conviction ceiling.",
+            )
+            simulation_fraction = simulation_position_pct / 100
+            seed = abs(hash((ticker, direction, horizon_label, conviction))) % 1_000_000
+            signature = f"{control_signature}|{simulation_position_pct:.2f}|{seed}"
+            if st.session_state.get(PFX + "signature") != signature:
+                reset_simulation(starting_balance, signature, seed)
+
+            @st.fragment(run_every=.8)
+            def live_simulator() -> None:
+                if st.session_state[PFX + "running"]:
+                    remaining = max(
+                        0,
+                        horizon_days - len(st.session_state[PFX + "returns"]),
+                    )
+                    for _ in range(min(sessions_per_pulse, remaining)):
+                        add_session(
+                            simulation_returns,
+                            simulation_fraction,
+                            mode,
+                            seed,
+                            horizon_days,
+                        )
+                    if (
+                        len(st.session_state[PFX + "returns"]) >= horizon_days
+                        or st.session_state[PFX + "balances"][-1] <= 0
+                    ):
+                        st.session_state[PFX + "running"] = False
+
+                balances = st.session_state[PFX + "balances"]
+                sampled = st.session_state[PFX + "returns"]
+                nav_returns = st.session_state[PFX + "nav_returns"]
+                sampled_dates = st.session_state[PFX + "dates"]
+                completed = len(sampled)
+                current_balance = float(balances[-1])
+                cumulative = current_balance / starting_balance - 1
+                realized_hit = float(np.mean(np.asarray(sampled) > 0)) if sampled else np.nan
+
+                left, right = st.columns([.82, 1.18], gap="large")
+                with left:
+                    st.markdown(
+                        f"**{ticker} finished positive in {horizon_hit_rate * 100:.1f}% of rolling {horizon_label} windows.**"
+                    )
+                    st.caption(
+                        "The game advances one observed daily session at a time. It does not stack repeated full holding-period returns."
+                    )
+                    st.markdown(outcome_grid(sampled), unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div class='sim-balance'><span>Balance</span><span>{escape(money(current_balance))}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    buttons = st.columns(4)
+                    if buttons[0].button(
+                        "Start simulation",
+                        type="primary",
+                        width="stretch",
+                        disabled=(
+                            st.session_state[PFX + "running"]
+                            or completed >= horizon_days
+                            or current_balance <= 0
+                        ),
+                    ):
+                        st.session_state[PFX + "running"] = True
+                    if buttons[1].button(
+                        "Run one session",
+                        width="stretch",
+                        disabled=(
+                            st.session_state[PFX + "running"]
+                            or completed >= horizon_days
+                            or current_balance <= 0
+                        ),
+                    ):
+                        add_session(
+                            simulation_returns,
+                            simulation_fraction,
+                            mode,
+                            seed,
+                            horizon_days,
+                        )
+                    if buttons[2].button(
+                        "Stop",
+                        width="stretch",
+                        disabled=not st.session_state[PFX + "running"],
+                    ):
+                        st.session_state[PFX + "running"] = False
+                    if buttons[3].button("Reset", width="stretch"):
+                        reset_simulation(starting_balance, signature, seed)
+
+                    if simulation_fraction > sizing.suggested_size + .0025:
+                        st.error(
+                            f"Above the risk-adjusted suggestion by {(simulation_fraction - sizing.suggested_size) * 100:.1f} percentage points."
+                        )
+                    elif simulation_fraction + .0025 < sizing.suggested_size:
+                        st.info(
+                            f"Below the risk-adjusted suggestion by {(sizing.suggested_size - simulation_fraction) * 100:.1f} percentage points."
+                        )
+                    else:
+                        st.success("Simulation size is aligned with the risk-adjusted suggestion.")
+                    if sampled_dates:
+                        st.caption(
+                            f"Last draw: {sampled_dates[-1]:%Y-%m-%d} · ticker return {sampled[-1] * 100:+.2f}% · NAV contribution {nav_returns[-1] * 100:+.3f}%"
+                        )
+                    else:
+                        st.caption(
+                            "Each step uses an observed daily return. Random modes preserve returns in 20-session blocks."
+                        )
+
+                with right:
+                    st.plotly_chart(bankroll_chart(balances), width="stretch")
+                    st.plotly_chart(volatility_chart(nav_returns), width="stretch")
+
+                render_detail_metrics(
+                    [
+                        ("Sessions completed", f"{completed:,} / {horizon_days:,}", mode),
+                        ("Cumulative return", pct(cumulative, 1, True), money(current_balance)),
+                        ("Maximum drawdown", pct(max_balance_drawdown(balances)), "Simulation balance"),
+                        ("Realized daily hit rate", pct(realized_hit, 0), f"Historical daily rate {pct(daily_hit_rate, 0)}"),
+                        ("Position size", pct(simulation_fraction), f"Suggested {pct(sizing.suggested_size)}"),
+                        ("Historical log-optimal", pct(log_optimal), "Daily-return estimate within conviction ceiling"),
+                    ]
+                )
+
+            live_simulator()
+            with st.expander("Simulation methodology and historical edge inputs"):
+                st.markdown(
+                    "One simulation now represents one selected holding period. The balance advances through observed daily returns rather than compounding 100 separate one-, three-, or five-year outcomes. Random modes resample 20-session blocks, while chronological replay follows one continuous historical path. This keeps the path economically interpretable and avoids the explosive double-counting visible in the prior version."
+                )
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            ("Historical daily hit rate", pct(daily_hit_rate)),
+                            (f"Rolling {horizon_label} hit rate", pct(horizon_hit_rate)),
+                            (f"Median {horizon_label} return", pct(median_horizon_return, 1, True)),
+                            ("Daily log-growth maximizing size", pct(log_optimal)),
+                            ("Sessions in one run", f"{horizon_days:,}"),
+                            ("Bootstrap block length", f"{BLOCK_SIZE} sessions"),
+                        ],
+                        columns=["Metric", "Value"],
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+        caps = pd.DataFrame(
+            [
+                ("Conviction ceiling", sizing.conviction_ceiling, f"Conviction {conviction} × 5%"),
+                ("Volatility adjustment", sizing.volatility_cap, "Current 63D volatility versus full-history median"),
+                ("Invalidation loss budget", sizing.invalidation_cap, "NAV loss budget divided by invalidation distance"),
+                ("Earnings / event risk", sizing.event_cap, event_basis if hold_earnings else "Disabled"),
+                ("Historical tail risk", sizing.tail_cap, "NAV loss budget divided by five-day adverse tail"),
+                ("Liquidity", sizing.liquidity_cap, f"{participation}% of median dollar volume across {liquidation_days} days"),
+            ],
+            columns=["Constraint", "Maximum position", "Method"],
+        )
+        caps["Reduction vs ceiling"] = sizing.conviction_ceiling - caps["Maximum position"]
+        for column in ("Maximum position", "Reduction vs ceiling"):
+            caps[column] *= 100
+
+        with st.expander("Sizing attribution"):
+            st.dataframe(
+                caps,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Maximum position": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Reduction vs ceiling": st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
+            metrics = pd.DataFrame(
                 [
-                    ("Historical daily hit rate", pct(daily_hit_rate)),
-                    (f"Rolling {horizon_label} hit rate", pct(horizon_hit_rate)),
-                    (f"Median {horizon_label} return", pct(median_horizon_return, 1, True)),
-                    ("Daily log-growth maximizing size", pct(log_optimal)),
-                    ("Sessions in one run", f"{horizon_days:,}"),
-                    ("Bootstrap block length", f"{BLOCK_SIZE} sessions"),
+                    ("Latest price", money(latest)),
+                    ("21D realized volatility", pct(annualized_volatility(returns, 21))),
+                    ("63D realized volatility", pct(current_vol)),
+                    ("252D realized volatility", pct(annualized_volatility(returns, 252))),
+                    ("Historical median 63D volatility", pct(median_vol)),
+                    ("Maximum historical drawdown", pct(maximum_drawdown_from_prices(close))),
+                    ("1% daily expected shortfall", pct(daily_es)),
+                    ("Five-day adverse tail", pct(tail_move)),
+                    ("Median daily dollar volume", money(median_dollar_volume)),
                 ],
                 columns=["Metric", "Value"],
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-caps = pd.DataFrame(
-    [
-        ("Conviction ceiling", sizing.conviction_ceiling, f"Conviction {conviction} × 5%"),
-        ("Volatility adjustment", sizing.volatility_cap, "Current 63D volatility versus full-history median"),
-        ("Invalidation loss budget", sizing.invalidation_cap, "NAV loss budget divided by invalidation distance"),
-        ("Earnings / event risk", sizing.event_cap, event_basis if hold_earnings else "Disabled"),
-        ("Historical tail risk", sizing.tail_cap, "NAV loss budget divided by five-day adverse tail"),
-        ("Liquidity", sizing.liquidity_cap, f"{participation}% of median dollar volume across {liquidation_days} days"),
-    ],
-    columns=["Constraint", "Maximum position", "Method"],
-)
-caps["Reduction vs ceiling"] = sizing.conviction_ceiling - caps["Maximum position"]
-for column in ("Maximum position", "Reduction vs ceiling"):
-    caps[column] *= 100
-
-sizing_tab, paths_tab, events_tab, sensitivity_tab = st.tabs(
-    ("Sizing attribution", "Historical paths", "Event + tail risk", "Sensitivities")
-)
-with sizing_tab:
-    st.dataframe(
-        caps,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Maximum position": st.column_config.NumberColumn(format="%.1f%%"),
-            "Reduction vs ceiling": st.column_config.NumberColumn(format="%.1f%%"),
-        },
-    )
-    metrics = pd.DataFrame(
-        [
-            ("Latest price", money(latest)),
-            ("21D realized volatility", pct(annualized_volatility(returns, 21))),
-            ("63D realized volatility", pct(current_vol)),
-            ("252D realized volatility", pct(annualized_volatility(returns, 252))),
-            ("Historical median 63D volatility", pct(median_vol)),
-            ("Maximum historical drawdown", pct(maximum_drawdown_from_prices(close))),
-            ("1% daily expected shortfall", pct(daily_es)),
-            ("Five-day adverse tail", pct(tail_move)),
-            ("Median daily dollar volume", money(median_dollar_volume)),
-        ],
-        columns=["Metric", "Value"],
-    )
-    st.dataframe(metrics, use_container_width=True, hide_index=True)
-
-with paths_tab:
-    if paths.empty:
-        st.info("Insufficient history for this holding period.")
-    else:
-        st.plotly_chart(
-            distribution_chart(paths, max(target_move, 0), stop_distance),
-            use_container_width=True,
-        )
-        touch = first_touch_statistics(
-            ohlcv,
-            horizon_days,
-            direction.lower(),
-            max(target_move, 0),
-            stop_distance,
-            step=step,
-        )
-        if touch:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        ("Target reached first", touch["target_first_rate"] * 100, touch["target_first"]),
-                        ("Invalidation reached first", touch["stop_first_rate"] * 100, touch["stop_first"]),
-                        ("Both reached same session", touch["same_day_rate"] * 100, touch["same_day"]),
-                        ("Neither reached", touch["neither_rate"] * 100, touch["neither"]),
-                    ],
-                    columns=["Outcome", "Rate", "Observations"],
-                ),
-                use_container_width=True,
-                hide_index=True,
-                column_config={"Rate": st.column_config.NumberColumn(format="%.1f%%")},
             )
-        dataframe_download(
-            "Download historical paths",
-            paths,
-            f"{ticker.lower()}_{horizon_label.replace(' ', '_')}_paths.csv",
-        )
+            st.dataframe(metrics, width="stretch", hide_index=True)
 
-with events_tab:
-    render_kpi_cards(
-        [
-            ("Event move", pct(event_move), event_basis),
-            ("Event NAV loss", pct(event_nav, 2), "Suggested exposure × event move"),
-            ("Five-day tail", pct(tail_move), "Historical adverse tail"),
-            ("Next earnings", next_earnings.strftime("%Y-%m-%d") if next_earnings is not None else "N/A", "Yahoo schedule when available"),
-        ]
-    )
-    if events.empty:
-        st.info("No earnings history was returned. Event sizing uses the historical overnight-gap distribution.")
-    else:
-        display = events.sort_values("date", ascending=False).copy()
-        display["date"] = pd.to_datetime(display["date"]).dt.strftime("%Y-%m-%d")
-        for column in ("gap", "session", "close_to_close", "abs_move"):
-            display[column] *= 100
-        st.dataframe(
-            display,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                column: st.column_config.NumberColumn(format="%.1f%%")
-                for column in ("gap", "session", "close_to_close", "abs_move")
-            },
-        )
+        with st.expander("Historical paths"):
+            if paths.empty:
+                st.info("Insufficient history for this holding period.")
+            else:
+                st.plotly_chart(
+                    distribution_chart(paths, max(target_move, 0), stop_distance),
+                    width="stretch",
+                )
+                touch = first_touch_statistics(
+                    ohlcv,
+                    horizon_days,
+                    direction.lower(),
+                    max(target_move, 0),
+                    stop_distance,
+                    step=step,
+                )
+                if touch:
+                    st.dataframe(
+                        pd.DataFrame(
+                            [
+                                ("Target reached first", touch["target_first_rate"] * 100, touch["target_first"]),
+                                ("Invalidation reached first", touch["stop_first_rate"] * 100, touch["stop_first"]),
+                                ("Both reached same session", touch["same_day_rate"] * 100, touch["same_day"]),
+                                ("Neither reached", touch["neither_rate"] * 100, touch["neither"]),
+                            ],
+                            columns=["Outcome", "Rate", "Observations"],
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                        column_config={"Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                    )
+                dataframe_download(
+                    "Download historical paths",
+                    paths,
+                    f"{ticker.lower()}_{horizon_label.replace(' ', '_')}_paths.csv",
+                )
 
-with sensitivity_tab:
-    sensitivity = sensitivity_table(returns, frames, direction)
-    if sensitivity.empty:
-        st.info("Insufficient overlapping data for sensitivity analysis.")
-    else:
-        st.dataframe(
-            sensitivity,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Position correlation": st.column_config.NumberColumn(format="%.2f"),
-                "Position beta": st.column_config.NumberColumn(format="%.2f"),
-            },
-        )
+        with st.expander("Event and tail risk"):
+            render_detail_metrics(
+                [
+                    ("Event move", pct(event_move), event_basis),
+                    ("Event NAV loss", pct(event_nav, 2), "Suggested exposure × event move"),
+                    ("Five-day tail", pct(tail_move), "Historical adverse tail"),
+                    ("Next earnings", next_earnings.strftime("%Y-%m-%d") if next_earnings is not None else "N/A", "Yahoo schedule when available"),
+                ]
+            )
+            if events.empty:
+                st.info("No earnings history was returned. Event sizing uses the historical overnight-gap distribution.")
+            else:
+                display = events.sort_values("date", ascending=False).copy()
+                display["date"] = pd.to_datetime(display["date"]).dt.strftime("%Y-%m-%d")
+                for column in ("gap", "session", "close_to_close", "abs_move"):
+                    display[column] *= 100
+                st.dataframe(
+                    display,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        column: st.column_config.NumberColumn(format="%.1f%%")
+                        for column in ("gap", "session", "close_to_close", "abs_move")
+                    },
+                )
 
-if not missing.empty:
-    with st.expander("Data diagnostics"):
-        st.dataframe(missing, use_container_width=True, hide_index=True)
+        with st.expander("Sensitivities"):
+            sensitivity = sensitivity_table(returns, frames, direction)
+            if sensitivity.empty:
+                st.info("Insufficient overlapping data for sensitivity analysis.")
+            else:
+                st.dataframe(
+                    sensitivity,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "Position correlation": st.column_config.NumberColumn(format="%.2f"),
+                        "Position beta": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                )
+
+        if not missing.empty:
+            with st.expander("Data diagnostics"):
+                st.dataframe(missing, width="stretch", hide_index=True)
 
 render_footer(
     data_note=(

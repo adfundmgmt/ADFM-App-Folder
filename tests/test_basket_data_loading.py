@@ -34,8 +34,8 @@ class BasketDataLoadingTests(unittest.TestCase):
         self.namespace = {
             "pd": pd,
             "np": np,
-            "yf": SimpleNamespace(download=self.download),
-            "time": SimpleNamespace(sleep=Mock()),
+            "download_market_data": self.download,
+            "time": SimpleNamespace(sleep=Mock(), monotonic=lambda: 0.),
             "BENCH": "SPY",
             "PriceFeedUnavailable": PriceFeedUnavailable,
             "_cache_key": Mock(return_value="fixture"),

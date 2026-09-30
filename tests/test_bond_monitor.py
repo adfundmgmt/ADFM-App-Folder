@@ -3,7 +3,12 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from adfm_core.bond_monitor import GLOBAL_SOVEREIGNS, daily_snapshot, monthly_snapshot, spread_series
+from adfm_core.bond_monitor import (
+    GLOBAL_SOVEREIGNS,
+    daily_snapshot,
+    monthly_snapshot,
+    spread_series,
+)
 
 
 def series(dates, values):

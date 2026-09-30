@@ -74,7 +74,7 @@ def fake_market_data(tickers: tuple[str, ...], period: str = "5y"):
 
 
 class RelativeVolatilityPageTests(unittest.TestCase):
-    def test_page_renders_controls_and_tabs_without_summary_cards(self):
+    def test_page_renders_controls_and_collapsed_details_without_summary_cards(self):
         with patch(
             "adfm_core.market_data.fetch_daily_ohlcv",
             side_effect=fake_market_data,
@@ -87,10 +87,9 @@ class RelativeVolatilityPageTests(unittest.TestCase):
             ["^NDX", "^GSPC", "^VXN", "^VIX"],
         )
         self.assertEqual(len(app.selectbox), 3)
-        self.assertEqual(
-            [tab.label for tab in app.tabs],
-            ["Volatility spread", "Normalized stress", "Data", "Methodology"],
-        )
+        self.assertEqual(len(app.tabs), 0)
+        self.assertTrue({"Normalized stress", "Data", "Methodology"}.issubset({item.label for item in app.expander}))
+        self.assertTrue(all(not item.proto.expanded for item in app.expander if item.label in {"Normalized stress", "Data", "Methodology"}))
         markdown = [block.value for block in app.markdown]
         self.assertFalse(any("Current relative-volatility read" in value for value in markdown))
         self.assertFalse(any("Ratio decomposition" in value for value in markdown))

@@ -9,7 +9,6 @@ import pandas as pd
 
 from .global_macro import clean
 
-
 DAILY_WINDOWS = {
     "1W": pd.DateOffset(weeks=1),
     "1M": pd.DateOffset(months=1),
@@ -44,7 +43,7 @@ def spread_series(long_leg: pd.Series, short_leg: pd.Series) -> pd.Series:
 
 def _blank() -> dict:
     return {"Yield": np.nan, "1D": np.nan, "1W": np.nan, "1M": np.nan,
-            "3M": np.nan, "YTD": np.nan, "Observation": "", "Status": "Unavailable"}
+            "3M": np.nan, "YTD": np.nan, "Observation": "", "Availability": "", "Status": "Unavailable"}
 
 
 def daily_snapshot(series: pd.Series, today: pd.Timestamp) -> dict:
@@ -87,6 +86,7 @@ def monthly_snapshot(series: pd.Series, today: pd.Timestamp) -> dict:
     end = data.index[-1]
     result["Yield"] = float(data.iloc[-1])
     result["Observation"] = str(end)
+    result["Availability"] = f"{end.to_timestamp('M'):%Y-%m-%d} · release unverified"
     if current.ordinal - end.ordinal > 4:
         result["Status"] = "Stale"
         return result

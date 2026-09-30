@@ -11,7 +11,7 @@ import streamlit as st
 
 from adfm_core.palette import PASTEL
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
-import yfinance as yf
+from adfm_core.market_data import download_market_data
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
@@ -469,10 +469,15 @@ def safe_yf_download(
     threads: bool = True,
     attempts: int = 3,
     delay: float = 0.9,
+    deadline: float = None,
 ) -> pd.DataFrame:
+    deadline = time.monotonic() + 25.0 if deadline is None else deadline
     for i in range(attempts):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            raw = yf.download(
+            raw = download_market_data(
                 tickers=list(tickers),
                 start=start_date,
                 end=end_date,
@@ -481,6 +486,8 @@ def safe_yf_download(
                 group_by="ticker",
                 threads=threads,
                 progress=False,
+                recovery_budget_seconds=remaining,
+                timeout=min(10.0, remaining),
             )
 
             if raw is not None and not raw.empty:
@@ -489,12 +496,12 @@ def safe_yf_download(
         except Exception:
             pass
 
-        time.sleep(delay * (i + 1))
+        if i < attempts - 1:
+            time.sleep(min(delay * (i + 1), max(0.0, deadline - time.monotonic())))
 
     return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False, ttl=900)
 def fetch_prices(
     tickers: Tuple[str, ...],
     start_date: date,
@@ -503,17 +510,20 @@ def fetch_prices(
     batch_size: int = 35,
 ) -> Dict[str, pd.DataFrame]:
     _ = cache_key
+    deadline = time.monotonic() + 25.0
 
     out: Dict[str, pd.DataFrame] = {}
 
     for batch in chunked(tickers, batch_size):
-        raw = safe_yf_download(batch, start_date, end_date, threads=True)
+        if time.monotonic() >= deadline:
+            break
+        raw = safe_yf_download(batch, start_date, end_date, threads=True, deadline=deadline)
 
         for tk in batch:
             df = normalize_ohlcv(extract_ticker_frame(raw, tk, len(batch)))
 
-            if df.empty and len(batch) > 1:
-                raw_single = safe_yf_download((tk,), start_date, end_date, threads=False, attempts=2)
+            if df.empty and len(batch) > 1 and time.monotonic() < deadline:
+                raw_single = safe_yf_download((tk,), start_date, end_date, threads=False, attempts=2, deadline=deadline)
                 df = normalize_ohlcv(extract_ticker_frame(raw_single, tk, 1))
 
             out[tk] = df
@@ -635,7 +645,7 @@ def classify_data_status(
 # =========================================================
 # TABLE BUILD
 # =========================================================
-@st.cache_data(show_spinner=True, ttl=900)
+@st.cache_data(show_spinner=True, ttl=900, max_entries=64)
 def build_table(
     tickers: Tuple[str, ...],
     period_label: str,

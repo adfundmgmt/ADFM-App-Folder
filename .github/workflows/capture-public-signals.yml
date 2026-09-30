@@ -1,0 +1,58 @@
+name: Capture public commodity signal versions
+
+on:
+  workflow_dispatch:
+  schedule:
+    # After the US futures daily close in both daylight and standard time.
+    - cron: "35 23 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: adfm-public-signal-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ADFM_SIGNAL_LEDGER_PATH: data/signals/public_signal_ledger.parquet
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Capture computed public commodity signals
+        id: capture
+        continue-on-error: true
+        run: python -m scripts.capture_public_signals
+      - name: Publish immutable public audit copies and complete ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d data/signals/captures ]; then exit 0; fi
+          git add -- data/signals/public_signal_ledger.parquet data/signals/captures/*.json
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "ADFM Signal Data Bot"
+          git config user.email "adfundmgmt@users.noreply.github.com"
+          git commit -m "Capture public commodity signal versions"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            git fetch origin main
+            # All writers use this workflow's concurrency group. A binary-ledger
+            # conflict stops here instead of selecting one side and losing history.
+            git rebase origin/main
+          done
+      - name: Report partial capture failure
+        if: steps.capture.outcome == 'failure'
+        run: |
+          echo "Some public providers were unavailable or stale. Successful captures and original history were retained."
+          exit 1

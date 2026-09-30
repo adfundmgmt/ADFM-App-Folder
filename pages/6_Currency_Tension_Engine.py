@@ -473,25 +473,9 @@ st.caption(
     "Leveraged Funds Z is CFTC TFF positioning. Historical views suppress live flag counts."
 )
 
-with st.expander("Diagnostics", expanded=False):
-    tab_pillars, tab_detail, tab_daily = st.tabs(
-        ["Pillar Scores", "Currency Detail", "Daily Read"]
-    )
-
-    with tab_pillars:
-        if pillars_v is None or pillars_v.empty:
-            st.info("No pillar-score data is available for this view.")
-        else:
-            st.pyplot(
-                pillar_heatmap_fig(pillars_v, tm_v, hz),
-                use_container_width=True,
-            )
-        st.caption(
-            "Positive values point toward the positive pole of the relevant axis. "
-            "The map remains the primary decision surface."
-        )
-
-    with tab_detail:
+with st.expander("Diagnostics", expanded=False, on_change="rerun") as diagnostics:
+    if diagnostics.open:
+        st.markdown("**Currency detail**")
         currency_options = list(tm_v["ccy"])
         ccy = st.selectbox("Currency", currency_options, key="currency_detail_select")
         detail = ranking[ranking["FX"] == ccy]
@@ -515,20 +499,19 @@ with st.expander("Diagnostics", expanded=False):
         else:
             st.caption("No live warning notes for this currency.")
 
-    with tab_daily:
-        from cte.commentary.narrator import load_commentary
-
-        note, meta = load_commentary()
-        st.markdown(note or "No daily commentary is available for this snapshot.")
-        if meta.get("generated_at"):
-            stamp = pd.Timestamp(meta["generated_at"])
-            if stamp.tzinfo is None:
-                stamp = stamp.tz_localize("UTC")
-            stamp = stamp.tz_convert("America/New_York")
-            st.caption(
-                f"Generated {stamp.strftime('%b %d, %Y · %-I:%M %p ET')} "
-                f"· {meta.get('model', '')}"
+        st.markdown("**Pillar scores**")
+        if pillars_v is None or pillars_v.empty:
+            st.info("No pillar-score data is available for this view.")
+        else:
+            st.pyplot(
+                pillar_heatmap_fig(pillars_v, tm_v, hz),
+                use_container_width=True,
             )
+        st.caption(
+            "Positive values point toward the positive pole of the relevant axis. "
+            "The map remains the primary decision surface."
+        )
+
 
 with st.sidebar:
     with st.expander("Export", expanded=False):

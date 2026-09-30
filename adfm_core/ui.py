@@ -804,19 +804,17 @@ def _inject_page_layout_contract() -> None:
 
 
 def render_kpi_cards(cards: Sequence[tuple[str, str, str]]) -> None:
-    """Render a responsive strip of compact decision-oriented KPI cards."""
-    body = []
-    for label, value, note in cards:
-        body.append(
-            "<div class='adfm-kpi-card'>"
-            f"<div class='adfm-kpi-label'>{escape(str(label))}</div>"
-            f"<div class='adfm-kpi-value'>{escape(str(value))}</div>"
-            f"<div class='adfm-kpi-note'>{escape(str(note))}</div>"
-            "</div>"
+    """Compatibility renderer for compact, escaped inline decision metadata."""
+    parts = [
+        f"<strong>{escape(str(label))}: {escape(str(value))}</strong>"
+        + (f" ({escape(str(note))})" if note else "")
+        for label, value, note in cards
+    ]
+    if parts:
+        st.markdown(
+            "<div class='adfm-status'>" + " · ".join(parts) + "</div>",
+            unsafe_allow_html=True,
         )
-    st.markdown(
-        "<div class='adfm-kpi-grid'>" + "".join(body) + "</div>", unsafe_allow_html=True
-    )
 
 
 def render_selection_note(label: str, text: str) -> None:
@@ -850,15 +848,14 @@ def render_sidebar_about(page_filename: str) -> None:
     reading_steps = "\n".join(
         f"{index}. {step}" for index, step in enumerate(guide.read_order, start=1)
     )
-    st.header("About This Tool")
-    st.markdown(
-        f"**Purpose**\n\n{tool.description}\n\n"
-        f"**Read it in this order**\n\n{reading_steps}"
-    )
-    if guide.caveat:
-        st.caption(f"Keep in mind — {guide.caveat}")
-    st.caption(f"Primary inputs — {tool.primary_inputs.rstrip('.')}.")
-    st.divider()
+    with st.expander("About This Tool", expanded=False):
+        st.markdown(
+            f"**Purpose**\n\n{tool.description}\n\n"
+            f"**Read it in this order**\n\n{reading_steps}"
+        )
+        if guide.caveat:
+            st.caption(f"Keep in mind — {guide.caveat}")
+        st.caption(f"Primary inputs — {tool.primary_inputs.rstrip('.')}.")
 
 
 def render_page_header(header: PageHeader) -> None:
@@ -940,6 +937,9 @@ def render_footer(
                 f"Primary inputs: {tool.primary_inputs}. Data dates and benchmarks are shown above when applicable. "
                 "Missing observations remain unavailable rather than being fabricated."
             )
+    from adfm_core.observability import render_performance_diagnostics
+
+    render_performance_diagnostics()
     st.markdown(
         "<footer class='adfm-footer'>"
         + (

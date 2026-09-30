@@ -5,7 +5,7 @@ from adfm_core.chart_patterns import PatternDetection, PatternLine, detect_chart
 from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from adfm_core.market_data import download_market_data
 import plotly.graph_objects as go
 
 from dataclasses import dataclass
@@ -500,7 +500,7 @@ def read_settings() -> ChartSettings:
                 st.button(
                     watch_ticker,
                     key=f"watch_{selected_watchlist}_{watch_ticker}",
-                    use_container_width=True,
+                    width="stretch",
                     on_click=queue_watchlist_ticker,
                     args=(watch_ticker,),
                 )
@@ -638,73 +638,16 @@ def format_last_bar(index_value: pd.Timestamp) -> str:
 # ============================================================
 
 def flatten_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-
-    if not isinstance(df.columns, pd.MultiIndex):
-        return df
-
-    required = set(REQUIRED_PRICE_COLUMNS)
-
-    level_0 = list(df.columns.get_level_values(0))
-    level_1 = list(df.columns.get_level_values(1))
-
-    if required.issubset(set(level_0)):
-        out = df.copy()
-        out.columns = df.columns.get_level_values(0)
-        return out
-
-    if required.issubset(set(level_1)):
-        out = df.copy()
-        out.columns = df.columns.get_level_values(1)
-        return out
-
-    out = df.copy()
-    out.columns = ["_".join(str(x) for x in col if str(x) != "") for col in df.columns]
-    return out
+    from adfm_core.chart_terminal_data import flatten_yfinance_columns as calculate
+    return calculate(df)
 
 
 def clean_price_data(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    out = flatten_yfinance_columns(df).copy()
-
-    if getattr(out.index, "tz", None) is not None:
-        out.index = out.index.tz_localize(None)
-
-    out = out.sort_index()
-    out = out[~out.index.duplicated(keep="last")]
-
-    rename_map = {}
-    for col in out.columns:
-        clean = str(col).strip()
-        if clean in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
-            rename_map[col] = clean
-
-    out = out.rename(columns=rename_map)
-
-    missing = [col for col in REQUIRED_PRICE_COLUMNS if col not in out.columns]
-    if missing:
-        return pd.DataFrame()
-
-    for col in REQUIRED_PRICE_COLUMNS:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-
-    if "Volume" not in out.columns:
-        out["Volume"] = np.nan
-    else:
-        out["Volume"] = pd.to_numeric(out["Volume"], errors="coerce")
-
-    out = out.dropna(subset=REQUIRED_PRICE_COLUMNS)
-
-    if len(out) > CAP_MAX_ROWS:
-        out = out.tail(CAP_MAX_ROWS)
-
-    return out
+    from adfm_core.chart_terminal_data import clean_price_data as calculate
+    return calculate(df)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=64)
 def fetch_with_yfinance_download(
     ticker: str,
     interval: str,
@@ -712,8 +655,9 @@ def fetch_with_yfinance_download(
     fetch_start: str | None,
 ) -> pd.DataFrame:
     if fetch_start is None:
-        raw = yf.download(
+        raw = download_market_data(
             tickers=ticker,
+            completed_only=False,
             period="max",
             interval=interval,
             auto_adjust=auto_adjust,
@@ -722,8 +666,9 @@ def fetch_with_yfinance_download(
             threads=False,
         )
     else:
-        raw = yf.download(
+        raw = download_market_data(
             tickers=ticker,
+            completed_only=False,
             start=fetch_start,
             interval=interval,
             auto_adjust=auto_adjust,
@@ -732,10 +677,14 @@ def fetch_with_yfinance_download(
             threads=False,
         )
 
-    return clean_price_data(raw)
+    cleaned = clean_price_data(raw)
+    if cleaned.empty:
+        # Exceptions are not cached: a transient outage can recover next rerun.
+        raise RuntimeError(f"Price fetch returned no usable OHLC data for {ticker}.")
+    return cleaned
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=64)
 def fetch_with_ticker_history(
     ticker: str,
     interval: str,
@@ -743,35 +692,22 @@ def fetch_with_ticker_history(
     fetch_start: str | None,
     fallback_period: str,
 ) -> pd.DataFrame:
-    ticker_obj = yf.Ticker(ticker)
+    """Period fallback through the same bounded, retrying transport.
 
-    if fetch_start is None:
-        raw = ticker_obj.history(
-            period="max",
-            interval=interval,
-            auto_adjust=auto_adjust,
-            actions=False,
-        )
-    else:
-        raw = ticker_obj.history(
-            start=fetch_start,
-            interval=interval,
-            auto_adjust=auto_adjust,
-            actions=False,
-        )
-
+    The shared adapter already retries the requested warmup range. A shorter
+    range can recover a symbol with unsupported historical coverage, without
+    maintaining an independent Ticker.history transport path.
+    """
+    period = "max" if fetch_start is None else ("1y" if fallback_period == "YTD" else fallback_period)
+    raw = download_market_data(
+        tickers=ticker, period=period, interval=interval,
+        auto_adjust=auto_adjust, actions=False, progress=False, threads=False,
+        completed_only=False,
+    )
     cleaned = clean_price_data(raw)
-
     if cleaned.empty:
-        fallback_period_clean = "1y" if fallback_period == "YTD" else fallback_period
-        raw = ticker_obj.history(
-            period=fallback_period_clean,
-            interval=interval,
-            auto_adjust=auto_adjust,
-            actions=False,
-        )
-        cleaned = clean_price_data(raw)
-
+        # Exceptions are not cached: a transient outage can recover next rerun.
+        raise RuntimeError(f"Price fetch returned no usable OHLC data for {ticker}.")
     return cleaned
 
 
@@ -852,108 +788,29 @@ def has_usable_volume(df: pd.DataFrame) -> bool:
 # Indicators
 # ============================================================
 
-def compute_rsi(close: pd.Series, length: int = 14) -> pd.Series:
-    close = close.astype(float)
-    delta = close.diff()
-
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-
-    avg_gain = gain.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
-    avg_loss = loss.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
-
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-
-    rsi = rsi.where(~((avg_loss == 0) & (avg_gain > 0)), 100)
-    rsi = rsi.where(~((avg_gain == 0) & (avg_loss > 0)), 0)
-    rsi = rsi.where(~((avg_gain == 0) & (avg_loss == 0)), 50)
-
-    return rsi
+def compute_rsi(close: pd.Series, length: int=14) -> pd.Series:
+    from adfm_core.chart_terminal_data import compute_rsi as calculate
+    return calculate(close, length)
 
 
-def compute_macd(
-    close: pd.Series,
-    fast: int = 12,
-    slow: int = 26,
-    signal: int = 9,
-) -> tuple[pd.Series, pd.Series, pd.Series]:
-    close = close.astype(float)
-
-    ema_fast = close.ewm(span=fast, adjust=False, min_periods=fast).mean()
-    ema_slow = close.ewm(span=slow, adjust=False, min_periods=slow).mean()
-
-    macd = ema_fast - ema_slow
-    signal_line = macd.ewm(span=signal, adjust=False, min_periods=signal).mean()
-    hist = macd - signal_line
-
-    return macd, signal_line, hist
+def compute_macd(close: pd.Series, fast: int=12, slow: int=26, signal: int=9) -> tuple[pd.Series, pd.Series, pd.Series]:
+    from adfm_core.chart_terminal_data import compute_macd as calculate
+    return calculate(close, fast, slow, signal)
 
 
-def compute_bollinger_bands(
-    close: pd.Series,
-    window: int = 20,
-    mult: float = 2.0,
-) -> tuple[pd.Series, pd.Series, pd.Series]:
-    close = close.astype(float)
-
-    mid = close.rolling(window=window, min_periods=window).mean()
-    std = close.rolling(window=window, min_periods=window).std()
-
-    upper = mid + mult * std
-    lower = mid - mult * std
-
-    return mid, upper, lower
+def compute_bollinger_bands(close: pd.Series, window: int=20, mult: float=2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
+    from adfm_core.chart_terminal_data import compute_bollinger_bands as calculate
+    return calculate(close, window, mult)
 
 
-def compute_atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
-    high = df["High"].astype(float)
-    low = df["Low"].astype(float)
-    close = df["Close"].astype(float)
-
-    previous_close = close.shift(1)
-
-    true_range = pd.concat(
-        [
-            high - low,
-            (high - previous_close).abs(),
-            (low - previous_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-
-    return true_range.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
+def compute_atr(df: pd.DataFrame, length: int=14) -> pd.Series:
+    from adfm_core.chart_terminal_data import compute_atr as calculate
+    return calculate(df, length)
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-
-    for window in [8, 20, 50, 65, 100, 130, 195, 200, 260]:
-        out[f"SMA{window}"] = out["Close"].rolling(
-            window=window,
-            min_periods=window,
-        ).mean()
-
-    out["RSI14"] = compute_rsi(out["Close"], length=14)
-
-    macd, signal, hist = compute_macd(out["Close"])
-    out["MACD"] = macd
-    out["MACD_SIGNAL"] = signal
-    out["MACD_HIST"] = hist
-
-    bb_mid, bb_upper, bb_lower = compute_bollinger_bands(out["Close"])
-    out["BB_MID"] = bb_mid
-    out["BB_UPPER"] = bb_upper
-    out["BB_LOWER"] = bb_lower
-
-    out["ATR14"] = compute_atr(out)
-    out["ATR14_PCT"] = out["ATR14"] / out["Close"].replace(0, np.nan)
-
-    out["ROLLING_VOL_20"] = out["Close"].pct_change().rolling(20, min_periods=20).std() * np.sqrt(252)
-
-    out["DRAWDOWN_252"] = (out["Close"] / out["Close"].rolling(252, min_periods=30).max()) - 1.0
-
-    return out
+    from adfm_core.chart_terminal_data import add_indicators as calculate
+    return calculate(df)
 
 
 # ============================================================
@@ -997,9 +854,6 @@ def close_asof(df: pd.DataFrame, target_date: pd.Timestamp) -> float | None:
         return None
 
     eligible = df[df.index <= target_date]
-
-    if eligible.empty:
-        eligible = df[df.index >= target_date]
 
     if eligible.empty:
         return None
@@ -1076,11 +930,6 @@ def compute_return_metrics(df: pd.DataFrame) -> dict[str, float | None]:
 
     prior_year_end = pd.Timestamp(year=latest_date.year - 1, month=12, day=31)
     ytd_base = close_asof(df, prior_year_end)
-
-    if ytd_base is None:
-        year_data = df[df.index >= pd.Timestamp(year=latest_date.year, month=1, day=1)]
-        if not year_data.empty:
-            ytd_base = float(year_data["Close"].iloc[0])
 
     out["YTD"] = return_from_close(latest_close, ytd_base)
 
@@ -2942,7 +2791,7 @@ def build_pattern_chart(
 # Compare Chart
 # ============================================================
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=64)
 def fetch_compare_close(
     ticker: str,
     interval: str,
@@ -3002,7 +2851,7 @@ def build_compare_chart(
     if start is not None:
         combined = combined[combined.index >= start]
 
-    combined = combined.ffill().dropna(how="any")
+    combined = combined.dropna(how="any")
 
     if combined.empty or len(combined) < 2:
         return None
@@ -3107,41 +2956,30 @@ def render_header(
 ) -> None:
     stats_source = metrics_df if metrics_df is not None and not metrics_df.empty else display_df
     stats = compute_header_stats(stats_source)
-    last_bar = format_last_bar(display_df.index[-1])
-
     ticker = html_escape(settings.ticker)
-    interval = html_escape(settings.interval)
-    period = html_escape(settings.period)
-    last_bar_text = html_escape(last_bar)
-
-    bar_one_label = interval_bar_label(settings.interval, 1)
-    bar_five_label = interval_bar_label(settings.interval, 5)
-    horizon_cards = [
-        metric_card(label, stats[key])
-        for label, key in header_horizon_keys(settings.interval)
-    ]
-
-    cards = "".join(
-        [
-            metric_card("Last", stats["Last"]),
-            metric_card(bar_one_label, stats["1BAR"], interval_bar_note(settings.interval, 1)),
-            metric_card(bar_five_label, stats["5BAR"], interval_bar_note(settings.interval, 5)),
-            *horizon_cards,
-            metric_card("YTD", stats["YTD"]),
-            metric_card("Drawdown", stats["Drawdown"], drawdown_note_for_interval(settings.interval)),
-            metric_card("ATR", stats["ATR"], atr_note_for_interval(settings.interval)),
-        ]
-    )
-
-    html = (
+    st.markdown(
         '<div class="adfm-header">'
         f'<div class="adfm-title">{ticker} Technical Regime</div>'
-        f'<div class="adfm-subtitle">Interval: {interval} | Window: {period} | Last bar: {last_bar_text}</div>'
-        f'<div class="metric-strip">{cards}</div>'
-        '</div>'
+        f'<div class="adfm-subtitle">Last {stats["Last"]} · '
+        f'{interval_bar_label(settings.interval, 1)} {stats["1BAR"]} · '
+        f'Interval {html_escape(settings.interval)} · Window {html_escape(settings.period)}</div>'
+        '</div>', unsafe_allow_html=True,
     )
-
-    st.markdown(html, unsafe_allow_html=True)
+    observed = pd.Timestamp(display_df.index[-1]).normalize()
+    age = max(0, (today_normalized() - observed).days)
+    adjustment = "Adjusted OHLC" if settings.auto_adjust else "Raw OHLC"
+    st.caption(
+        f"Observed bar {observed.date()} · {age} calendar days old · {adjustment}; raw volume. "
+        "Latest daily, weekly or monthly bar may be provisional; exchange completion is not assumed."
+    )
+    with st.expander("Return and risk statistics", expanded=False):
+        rows = [{"Statistic": "Last", "Value": stats["Last"]},
+                {"Statistic": interval_bar_label(settings.interval, 1), "Value": stats["1BAR"]},
+                {"Statistic": interval_bar_label(settings.interval, 5), "Value": stats["5BAR"]}]
+        rows += [{"Statistic": label, "Value": stats[key]} for label, key in header_horizon_keys(settings.interval)]
+        rows += [{"Statistic": label, "Value": stats[label]} for label in ["YTD", "Drawdown", "ATR", "1Y Low Dist", "RSI"]]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption(drawdown_note_for_interval(settings.interval) + " · " + atr_note_for_interval(settings.interval))
 
 
 # ============================================================
@@ -3188,7 +3026,7 @@ chart = build_chart(
 
 st.plotly_chart(
     chart,
-    use_container_width=True,
+    width="stretch",
     config={
         "displaylogo": False,
         "displayModeBar": False,
@@ -3203,33 +3041,33 @@ st.plotly_chart(
 )
 
 if settings.show_chart_patterns:
-    st.markdown(
-        (
-            '<div class="pattern-section-header">'
-            '<div class="pattern-section-title">Automatic Chart Patterns</div>'
-            '<div class="pattern-section-note">'
-            'A selective current-structure view with candlesticks and only the 20, 50, and 200 DMA.'
-            '</div>'
-            '</div>'
-        ),
-        unsafe_allow_html=True,
-    )
-    pattern_chart = build_pattern_chart(display_df, chart_patterns)
-    st.plotly_chart(
-        pattern_chart,
-        use_container_width=True,
-        config={
-            "displaylogo": False,
-            "scrollZoom": True,
-            "modeBarButtonsToRemove": [
-                "select2d",
-                "lasso2d",
-                "autoScale2d",
-            ],
-        },
-    )
-    st.markdown(pattern_summary_html(chart_patterns), unsafe_allow_html=True)
-
+    with st.expander("Automatic chart pattern detail", expanded=False):
+        st.markdown(
+            (
+                '<div class="pattern-section-header">'
+                '<div class="pattern-section-title">Automatic Chart Patterns</div>'
+                '<div class="pattern-section-note">'
+                'A selective current-structure view with candlesticks and only the 20, 50, and 200 DMA.'
+                '</div>'
+                '</div>'
+            ),
+            unsafe_allow_html=True,
+        )
+        pattern_chart = build_pattern_chart(display_df, chart_patterns)
+        st.plotly_chart(
+            pattern_chart,
+            width="stretch",
+            config={
+                "displaylogo": False,
+                "scrollZoom": True,
+                "modeBarButtonsToRemove": [
+                    "select2d",
+                    "lasso2d",
+                    "autoScale2d",
+                ],
+            },
+        )
+        st.markdown(pattern_summary_html(chart_patterns), unsafe_allow_html=True)
 compare_tickers = parse_compare_tickers(settings.compare_tickers, settings.ticker)
 compare_fig = build_compare_chart(
     primary_df=indicator_df,
@@ -3238,40 +3076,44 @@ compare_fig = build_compare_chart(
 )
 
 if compare_fig is not None:
-    st.markdown('<div class="compare-chart-top-gap"></div>', unsafe_allow_html=True)
-    st.plotly_chart(
-        compare_fig,
-        use_container_width=True,
-        config={
-            "displaylogo": False,
-            "scrollZoom": True,
-            "modeBarButtonsToRemove": [
-                "select2d",
-                "lasso2d",
-            ],
-        },
-    )
+    with st.expander("Comparison chart", expanded=False):
+        st.markdown('<div class="compare-chart-top-gap"></div>', unsafe_allow_html=True)
+        st.plotly_chart(
+            compare_fig,
+            width="stretch",
+            config={
+                "displaylogo": False,
+                "scrollZoom": True,
+                "modeBarButtonsToRemove": [
+                    "select2d",
+                    "lasso2d",
+                ],
+            },
+        )
+with st.expander("Signal methodology and detail", expanded=False):
+    show_detail = st.checkbox("Show signal matrix and technical memo", value=False)
+    st.caption("Signals describe the observed bar above. RSI, MACD, ATR and moving averages use the displayed interval; Elliott and Fibonacci are heuristic swing context.")
+    if show_detail:
+        signal_rows = build_signal_rows(
+            indicator_df,
+            include_elliott=settings.show_elliott_wave,
+            include_fibonacci=settings.show_fibonacci,
+        )
+        memo = build_technical_memo(
+            indicator_df,
+            settings.ticker,
+            include_elliott=settings.show_elliott_wave,
+            include_fibonacci=settings.show_fibonacci,
+        )
 
-signal_rows = build_signal_rows(
-    indicator_df,
-    include_elliott=settings.show_elliott_wave,
-    include_fibonacci=settings.show_fibonacci,
-)
-memo = build_technical_memo(
-    indicator_df,
-    settings.ticker,
-    include_elliott=settings.show_elliott_wave,
-    include_fibonacci=settings.show_fibonacci,
-)
+        left, right = st.columns([1.35, 1.00])
 
-left, right = st.columns([1.35, 1.00])
+        with left:
+            st.markdown("#### Signal Matrix")
+            st.markdown(signal_table_html(signal_rows), unsafe_allow_html=True)
 
-with left:
-    st.markdown("#### Signal Matrix")
-    st.markdown(signal_table_html(signal_rows), unsafe_allow_html=True)
-
-with right:
-    st.markdown("#### Technical Memo")
-    st.markdown(f'<div class="memo-box">{html_escape(memo)}</div>', unsafe_allow_html=True)
+        with right:
+            st.markdown("#### Technical Memo")
+            st.markdown(f'<div class="memo-box">{html_escape(memo)}</div>', unsafe_allow_html=True)
 
 render_footer()

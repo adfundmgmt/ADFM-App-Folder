@@ -97,6 +97,20 @@ class CommodityExhaustionTests(unittest.TestCase):
         # A delayed report published Monday becomes usable the following business session.
         self.assertEqual(availability(pd.Timestamp("2025-11-25")), pd.Timestamp("2025-12-16"))
 
+    def test_strict_publication_dates_exclude_unverified_history(self):
+        self.assertTrue(pd.isna(study.cftc_availability_date(pd.Timestamp("2026-09-08"), strict=True)))
+        self.assertEqual(study.cftc_availability_date(pd.Timestamp("2023-02-14"), strict=True), pd.Timestamp("2023-03-09"))
+
+    def test_contract_loader_preserves_raw_close_and_volume_and_completes_sessions(self):
+        dates = pd.bdate_range("2024-01-01", periods=300)
+        prices = pd.DataFrame({"Close": np.linspace(100, 150, len(dates)), "Volume": np.arange(len(dates)), "Adj Close": 1.0}, index=dates)
+        study.load_contract_history.clear()
+        with patch.object(study, "download_market_data", return_value=prices, create=True) as download:
+            result = study.load_contract_history("CL=F")
+        self.assertEqual(result["Close"].iloc[-1], 150)
+        self.assertEqual(result["Volume"].iloc[-1], 299)
+        self.assertTrue(download.call_args.kwargs["completed_only"])
+
     def test_cftc_contract_map_covers_core_commodity_futures_and_micro_aliases(self):
         self.assertTrue(hasattr(study, "CFTC_CONTRACT_CODES"))
         mapping = study.CFTC_CONTRACT_CODES
