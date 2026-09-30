@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime
 from typing import Mapping
 from zoneinfo import ZoneInfo
@@ -31,6 +32,7 @@ from adfm_core.options_sources import (
     select_cboe_expiry,
 )
 from adfm_core.palette import PASTEL
+from adfm_core.provider_calls import CBOE_OPTIONS, YAHOO_OPTIONS
 from adfm_core.relative_volatility import annualized_realized_volatility
 from adfm_core.ui import (
     PageHeader,
@@ -65,24 +67,35 @@ def parse_universe(value: str, selected: str) -> tuple[str, ...]:
     return unique_tickers([selected, *raw])
 
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
-def fetch_expirations(symbol: str) -> tuple[str, ...]:
+def fetch_expirations(symbol: str, *, deadline: float | None = None) -> tuple[str, ...]:
     try:
-        return tuple(yf.Ticker(symbol).options)
+        return YAHOO_OPTIONS.call(("expirations", symbol), lambda: tuple(yf.Ticker(symbol).options),
+            deadline=min(deadline if deadline is not None else float("inf"), time.perf_counter() + 3), valid=bool)
     except Exception:
         return ()
 
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
 def fetch_cboe_snapshot(
     symbol: str,
+    *, deadline: float | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object], str]:
-    return fetch_cboe_delayed_options(symbol)
+    return CBOE_OPTIONS.call(("snapshot", symbol), lambda: fetch_cboe_delayed_options(symbol, timeout=6),
+        deadline=min(deadline if deadline is not None else float("inf"), time.perf_counter() + 6),
+        valid=lambda result: not result[0].empty)
 
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
+def _yahoo_chain(symbol: str, expiry: str):
+    # yfinance creates its Options namedtuple inside option_chain; normalize it
+    # before caching because that transient type cannot be pickled.
+    chain = yf.Ticker(symbol).option_chain(expiry)
+    calls = chain.calls if isinstance(chain.calls, pd.DataFrame) else pd.DataFrame()
+    puts = chain.puts if isinstance(chain.puts, pd.DataFrame) else pd.DataFrame()
+    underlying = dict(chain.underlying) if isinstance(chain.underlying, Mapping) else {}
+    return calls, puts, underlying
+
+
 def fetch_chain(
-    symbol: str, expiry: str
+    symbol: str, expiry: str, *, deadline: float | None = None,
 ) -> tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -92,12 +105,13 @@ def fetch_chain(
     str,
 ]:
     try:
-        chain = yf.Ticker(symbol).option_chain(expiry)
-        underlying = chain.underlying if isinstance(chain.underlying, Mapping) else {}
-        if not chain.calls.empty and not chain.puts.empty:
+        calls, puts, underlying = YAHOO_OPTIONS.call(("chain", symbol, expiry), lambda: _yahoo_chain(symbol, expiry),
+            deadline=min(deadline if deadline is not None else float("inf"), time.perf_counter() + 3),
+            valid=lambda result: not result[0].empty and not result[1].empty)
+        if not calls.empty and not puts.empty:
             return (
-                chain.calls.copy(),
-                chain.puts.copy(),
+                calls.copy(),
+                puts.copy(),
                 dict(underlying),
                 None,
                 "Yahoo Finance",
@@ -108,7 +122,7 @@ def fetch_chain(
         yahoo_error = str(exc)
 
     try:
-        cboe_frame, underlying, timestamp = fetch_cboe_snapshot(symbol)
+        cboe_frame, underlying, timestamp = fetch_cboe_snapshot(symbol, deadline=deadline)
         calls, puts = select_cboe_expiry(cboe_frame, expiry)
         if calls.empty or puts.empty:
             raise ValueError("No matching Cboe expiration")
@@ -124,18 +138,17 @@ def fetch_chain(
         )
 
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=64)
-def fetch_cboe_expirations(symbol: str) -> tuple[str, ...]:
+def fetch_cboe_expirations(symbol: str, *, deadline: float | None = None) -> tuple[str, ...]:
     try:
-        frame, _, _ = fetch_cboe_snapshot(symbol)
+        frame, _, _ = fetch_cboe_snapshot(symbol, deadline=deadline)
         return expirations_from_cboe(frame)
     except Exception:
         return ()
 
 
-def available_expirations(symbol: str) -> tuple[str, ...]:
+def available_expirations(symbol: str, *, deadline: float | None = None) -> tuple[str, ...]:
     """Use Yahoo's calendar when available and Cboe's when Yahoo is blocked."""
-    return fetch_expirations(symbol) or fetch_cboe_expirations(symbol)
+    return fetch_expirations(symbol, deadline=deadline) or fetch_cboe_expirations(symbol, deadline=deadline)
 
 
 def nearest_expiry(expirations: tuple[str, ...], target_dte: int, as_of: date) -> str | None:
@@ -375,15 +388,16 @@ for symbol in universe:
 
 universe_rows: list[dict[str, object]] = []
 provider_errors: list[dict[str, str]] = []
+options_deadline = time.perf_counter() + 20.0
 with st.spinner("Loading current option-chain snapshots…"):
     for symbol in universe:
-        expirations = available_expirations(symbol)
+        expirations = available_expirations(symbol, deadline=options_deadline)
         expiry = nearest_expiry(expirations, target_dte, as_of_date)
         if expiry is None:
             provider_errors.append({"Ticker": symbol, "Issue": "No eligible option expiration returned"})
             continue
         calls, puts, underlying, error, source, source_timestamp = fetch_chain(
-            symbol, expiry
+            symbol, expiry, deadline=options_deadline
         )
         if error or calls.empty or puts.empty:
             provider_errors.append({"Ticker": symbol, "Issue": error or "Empty option chain"})
@@ -424,9 +438,11 @@ if universe_frame.empty or selected not in set(universe_frame.get("ticker", []))
     st.stop()
 
 selected_row = universe_frame.loc[universe_frame["ticker"].eq(selected)].iloc[0]
+if provider_errors:
+    st.caption(f"Loaded {len(universe_frame)} of {len(universe)} tickers within the request window. Missing chains are excluded from peer ranks; details are under Data.")
 selected_expiry = str(selected_row["expiry"])
 selected_calls, selected_puts, _, _, selected_source, selected_timestamp = fetch_chain(
-    selected, selected_expiry
+    selected, selected_expiry, deadline=options_deadline
 )
 source_detail = selected_source
 if selected_timestamp:
@@ -501,7 +517,7 @@ with compass_tab:
         width="stretch",
     )
 
-selected_expirations = available_expirations(selected)
+selected_expirations = available_expirations(selected, deadline=options_deadline)
 eligible_terms = [
     expiry
     for expiry in selected_expirations
@@ -510,7 +526,9 @@ eligible_terms = [
 term_rows: list[dict[str, object]] = []
 term_chains: list[tuple[dict[str, object], pd.DataFrame, pd.DataFrame]] = []
 for expiry in eligible_terms:
-    calls, puts, _, error, _, _ = fetch_chain(selected, expiry)
+    if not (structure_tab.open or data_tab.open) and expiry != selected_expiry:
+        continue
+    calls, puts, _, error, _, _ = fetch_chain(selected, expiry, deadline=options_deadline)
     if error or calls.empty or puts.empty:
         continue
     snapshot = option_snapshot(

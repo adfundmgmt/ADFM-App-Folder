@@ -22,3 +22,16 @@ Monthly OECD values remain revised descriptive observations with an explicitly u
 Portfolio inputs remain private and session-only. Option P&L uses instantaneous European model changes anchored to supplied premiums; early exercise, assignment, trade liquidity and broker portfolio-margin rules are outside that approximation. Rates exposures require supplied sensitivities or an explicit underlying price target. Margin totals remain unavailable when any required broker input is missing.
 
 Public provider outages are source limitations, not successful quote reconciliation. Local AppTest measurements are not production browser latency or a concurrent-user load test. Controlled fixtures verify the retained analytical paths and lazy sections when providers supply valid observations.
+
+## Provider deadline follow-up, 2026-09-30
+
+Public-provider rechecks initially exceeded 90 seconds on Options Positioning and Monthly Seasonality. Options calendars, Yahoo chains and Cboe fallbacks now share a 20-second request window, with one in-flight daemon worker per source and a success-only cache limited to 32 entries and 64 MiB. Late results are discarded. Term expirations beyond the selected snapshot are fetched when the structure or data expander is opened.
+
+Seasonality price requests and Yahoo aliases share 15 seconds, followed by at most 10 seconds for a FRED fallback. Market-regime requests and their aliases share 25 seconds; intraday overlays use five seconds. Optional historical ALFRED conditioning has a 25-second aggregate deadline and keeps all unverified regimes Unknown after failure. Failed price, regime and ALFRED deliveries are no longer stored by outer Streamlit caches.
+
+- Final full suite: **415 tests passed in 64.492 seconds**, **66% coverage**.
+- Compilation, dependency consistency, shared-code lint, fatal page lint and diff checks passed.
+- Independent follow-up review: no blocking defects; four provider-worker tests and seven page-deadline tests passed.
+- Local public-provider recheck at a 60-second AppTest limit: Options cold/warm **45.47 / 45.10 seconds**, zero runtime errors, explicit unavailable-chain output; Seasonality **41.90 / 41.27 seconds**, zero runtime errors. See `provider-deadline-benchmark.json`. These outage measurements do not demonstrate healthy quotes or production latency.
+
+The public Streamlit URL showed a generic "Error running app" screen after the main release merge. Refreshing did not expose a traceback. The deployment dashboard requires sign-in in this browser; the cloud startup cause and live deployment have not been verified. Repository CI and local application tests are separate from cloud deployment health.
