@@ -12,7 +12,8 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from adfm_core.market_data import adjusted_ohlcv, configure_yfinance_cache, fetch_daily_ohlcv
-from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header
+from adfm_core.palette import PASTEL
+from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header, render_sidebar_about
 from adfm_core.volatility_sizing import scale_exposure, volatility_history
 
 
@@ -80,11 +81,11 @@ def history_chart(history, base, current, ceiling, window):
     displayed = history.tail(252)
     target = (base * displayed.baseline / displayed.recent).clip(upper=ceiling)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=.12, row_heights=[.56,.44])
-    fig.add_trace(go.Scatter(x=displayed.index, y=displayed.recent*100, name=f"{window}-session volatility", line=dict(color="#386b9e",width=2.5), fill="tozeroy", fillcolor="rgba(128,175,218,.12)", hovertemplate="%{y:.1f}% annualized<extra>Recent volatility</extra>"),row=1,col=1)
+    fig.add_trace(go.Scatter(x=displayed.index, y=displayed.recent*100, name=f"{window}-session volatility", line=dict(color=PASTEL["cornflower"],width=2.5), fill="tozeroy", fillcolor="rgba(128,175,218,.12)", hovertemplate="%{y:.1f}% annualized<extra>Recent volatility</extra>"),row=1,col=1)
     fig.add_trace(go.Scatter(x=displayed.index, y=displayed.baseline*100, name="Historical normal", line=dict(color="#a3adbc",width=1.8,dash="dot"), hovertemplate="%{y:.1f}% annualized<extra>Historical normal</extra>"),row=1,col=1)
-    fig.add_trace(go.Scatter(x=displayed.index,y=target*100,name="Vol-adjusted exposure",line=dict(color="#258a76",width=2.5),fill="tozeroy",fillcolor="rgba(144,207,187,.16)",hovertemplate="%{y:.2f}% NAV<extra>Model exposure</extra>"),row=2,col=1)
+    fig.add_trace(go.Scatter(x=displayed.index,y=target*100,name="Vol-adjusted exposure",line=dict(color=PASTEL["seafoam"],width=2.5),fill="tozeroy",fillcolor="rgba(144,207,187,.16)",hovertemplate="%{y:.2f}% NAV<extra>Model exposure</extra>"),row=2,col=1)
     fig.add_hline(y=current*100,row=2,col=1,line=dict(color="#748398",width=1.2,dash="dash"))
-    fig.update_layout(height=440,template="plotly_white",margin=dict(l=12,r=12,t=32,b=14),font=dict(family="Arial",color="#45556b",size=12),paper_bgcolor="#fff",plot_bgcolor="#fff",hovermode="x unified",legend=dict(orientation="h",y=1.1,x=0,font=dict(size=11)))
+    fig.update_layout(height=400,template="plotly_white",margin=dict(l=12,r=12,t=32,b=14),font=dict(family="Arial",color="#45556b",size=12),paper_bgcolor="#fff",plot_bgcolor="#fff",hovermode="x unified",legend=dict(orientation="h",y=1.1,x=0,font=dict(size=11)))
     fig.update_xaxes(showgrid=False,zeroline=False)
     fig.update_yaxes(gridcolor="#edf0f4",zeroline=False,ticksuffix="%",rangemode="tozero")
     fig.update_yaxes(title_text="Annualized vol",row=1,col=1)
@@ -98,9 +99,7 @@ inject_explorer_style(max_width_px=1350)
 render_page_header(PageHeader(title="Position Sizing Lab",description="Scale a position with the volatility regime. Set your base exposure, compare the adjustment, and see the change in risk.",eyebrow="ADFM Risk + Execution"))
 st.markdown(CSS,unsafe_allow_html=True)
 with st.sidebar:
-    with st.expander("About This Tool"):
-        st.write("Base exposure is the size you want at normal volatility. The model scales that size inversely with recent realized volatility and applies your exposure ceiling.")
-        st.caption("Normal volatility is the median of 252 prior rolling volatility observations, ending before the recent window. Volatility measures movement, not conviction or expected return.")
+    render_sidebar_about("22_Position_Sizing_Lab.py")
     window = st.selectbox("Volatility window",[10,20,60],index=1,format_func=lambda x:f"{x} trading sessions",key="psl_window")
     ceiling_pct = st.number_input("Exposure ceiling (% NAV)",min_value=0.0,max_value=500.0,value=30.0,step=5.0,key="psl_ceiling")
     with st.expander("Dollar sizing (optional)"):
@@ -138,7 +137,7 @@ base,current,ceiling = base_pct/100,current_pct/100,ceiling_pct/100
 result = scale_exposure(base,current,recent,baseline,ceiling)
 render_exposure(ticker,side,current,base,ceiling,result,recent,baseline,window)
 st.markdown('<div class="psl-legend">VOLATILITY & POSITION SIZE · Past year · dashed exposure line = your current size</div>',unsafe_allow_html=True)
-st.plotly_chart(history_chart(history,base,current,ceiling,window),width="stretch",config={"displayModeBar":False})
+st.plotly_chart(history_chart(history,base,current,ceiling,window),width="stretch",theme=None,config={"displayModeBar":False,"scrollZoom":False})
 st.caption("Historical exposure uses the same base size and ceiling you entered, with volatility known on each date. It is a sizing illustration, not a backtest.")
 daily = recent/np.sqrt(252)
 rows = [
