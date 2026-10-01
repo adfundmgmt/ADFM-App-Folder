@@ -41,7 +41,7 @@ from adfm_core.ui import (
     render_status_line,
 )
 
-TITLE = "Options Positioning Compass"
+TITLE = "Options Relative Value Compass"
 DEFAULT_UNIVERSE = "SPY, QQQ, IWM, DIA, TLT, GLD, USO, SMH, EEM, HYG, LQD"
 NY_TZ = ZoneInfo("America/New_York")
 SELECTED_COLOR = PASTEL["rose"]
@@ -173,9 +173,9 @@ def fmt(value: float, suffix: str = "", digits: int = 1) -> str:
 def quadrant_label(price_return: float, richness_percentile: float) -> str:
     if not np.isfinite(price_return) or not np.isfinite(richness_percentile):
         return "Unavailable"
-    direction = "Up" if price_return >= 0 else "Down"
-    valuation = "Expensive" if richness_percentile >= 50 else "Cheap"
-    return f"{direction} + {valuation}"
+    trend = "Positive Trend" if price_return >= 0 else "Negative Trend"
+    relative_value = "IV Rich" if richness_percentile >= 50 else "IV Cheap"
+    return f"{trend} · {relative_value}"
 
 
 def compass_chart(
@@ -216,10 +216,10 @@ def compass_chart(
     fig.add_vline(x=0, line=dict(color="#666666", width=1))
 
     point_colors = {
-        "Up + Cheap": PASTEL["sage"],
-        "Up + Expensive": PASTEL["amber"],
-        "Down + Cheap": PASTEL["periwinkle"],
-        "Down + Expensive": PASTEL["rose"],
+        "Positive Trend · IV Cheap": PASTEL["sage"],
+        "Positive Trend · IV Rich": PASTEL["amber"],
+        "Negative Trend · IV Cheap": PASTEL["periwinkle"],
+        "Negative Trend · IV Rich": PASTEL["rose"],
     }
     plot["quadrant"] = [
         quadrant_label(float(ret), float(rank))
@@ -255,21 +255,21 @@ def compass_chart(
             ),
             hovertemplate=(
                 "<b>%{text}</b><br>%{customdata[4]}"
-                f"<br>{return_label}: %{{x:+.1f}}%"
-                "<br>Options richness rank: %{y:.0f}"
+                f"<br>{return_label} return: %{{x:+.1f}}%"
+                "<br>IV richness percentile: %{y:.0f}"
                 "<br>ATM IV: %{customdata[0]:.1f}%"
                 "<br>21D realized vol: %{customdata[1]:.1f}%"
-                "<br>IV - realized: %{customdata[2]:+.1f} vol pts"
+                "<br>IV-RV spread: %{customdata[2]:+.1f} vol pts"
                 "<br>Expiry: %{customdata[3]}<extra></extra>"
             ),
         )
     )
 
     annotations = (
-        (-x_extent * 0.52, 91, "DOWN + EXPENSIVE"),
-        (x_extent * 0.52, 91, "UP + EXPENSIVE"),
-        (-x_extent * 0.52, 9, "DOWN + CHEAP"),
-        (x_extent * 0.52, 9, "UP + CHEAP"),
+        (-x_extent * 0.52, 91, "NEGATIVE TREND · IV RICH"),
+        (x_extent * 0.52, 91, "POSITIVE TREND · IV RICH"),
+        (-x_extent * 0.52, 9, "NEGATIVE TREND · IV CHEAP"),
+        (x_extent * 0.52, 9, "POSITIVE TREND · IV CHEAP"),
     )
     for x, y, label in annotations:
         fig.add_annotation(
@@ -288,7 +288,7 @@ def compass_chart(
         showgrid=False,
     )
     fig.update_yaxes(
-        title="Options richness percentile vs loaded universe",
+        title="IV richness percentile (ATM IV − 21D realized vol)",
         range=[0, 100],
         tickvals=[0, 25, 50, 75, 100],
         showgrid=False,
@@ -311,23 +311,23 @@ inject_explorer_style(max_width_px=1560)
 
 with st.sidebar:
     render_sidebar_about("16_Options_Positioning_Compass.py")
-    st.header("Compass setup")
+    st.header("Relative value setup")
     selected = normalize_ticker(st.text_input("Highlight ticker", value="QQQ"))
     universe_text = st.text_area(
         "Comparison universe",
         value=DEFAULT_UNIVERSE,
         height=105,
-        help="Comma-separated liquid tickers. Cheap/expensive is ranked only within this loaded universe.",
+        help="Comma-separated liquid tickers. IV richness is ranked cross-sectionally within the successfully loaded universe.",
     )
-    momentum_horizon = st.selectbox("Price direction", ("1 month", "3 months"), index=0)
-    target_dte = st.slider("Options tenor", min_value=14, max_value=120, value=45, step=1, format="%d DTE")
+    momentum_horizon = st.selectbox("Trend horizon", ("1 month", "3 months"), index=0)
+    target_dte = st.slider("Target options tenor", min_value=14, max_value=120, value=45, step=1, format="%d DTE")
     risk_free_rate = 0.04
 
 render_page_header(
     PageHeader(
         title=TITLE,
         description=(
-            "See which markets are rising or falling while their options screen expensive or cheap relative to the rest of the loaded universe."
+            "Cross-sectional relative-value map of underlying price trend versus volatility premium. Identify where implied volatility is rich or cheap to recent realized volatility while the underlying trend is strengthening or weakening."
         ),
         eyebrow="ADFM Options Intelligence",
     )
@@ -444,11 +444,11 @@ render_status_line(
 )
 
 render_section_header(
-    "Price direction vs options richness",
+    "Trend vs Volatility Relative Value",
     (
-        f"Horizontal axis is {return_label} price return. Vertical axis ranks ATM implied volatility minus "
-        "21-day realized volatility across the currently loaded universe. Above 50 = expensive vs peers; "
-        "below 50 = cheap vs peers."
+        f"The horizontal axis is {return_label} underlying return. The vertical axis is the cross-sectional percentile "
+        "of ATM implied volatility minus 21-day realized volatility. Read the map as trend on the x-axis and "
+        "relative option richness on the y-axis."
     ),
 )
 st.plotly_chart(
@@ -478,48 +478,48 @@ display = universe_frame[
 display = display.rename(
     columns={
         "ticker": "Ticker",
-        "quadrant": "Quadrant",
+        "quadrant": "Regime",
         "price_return": f"{return_label} Return",
         "atm_iv": "ATM IV",
         "realized_vol_21d": "21D Realized",
-        "iv_richness": "IV - Realized",
-        "iv_richness_percentile": "Richness Rank",
+        "iv_richness": "IV-RV Spread",
+        "iv_richness_percentile": "IV Richness Pctl",
         "expiry": "Expiry",
         "dte": "DTE",
     }
 )
 quadrant_order = {
-    "Up + Cheap": 0,
-    "Up + Expensive": 1,
-    "Down + Cheap": 2,
-    "Down + Expensive": 3,
+    "Positive Trend · IV Cheap": 0,
+    "Positive Trend · IV Rich": 1,
+    "Negative Trend · IV Cheap": 2,
+    "Negative Trend · IV Rich": 3,
     "Unavailable": 4,
 }
-display["_order"] = display["Quadrant"].map(quadrant_order).fillna(4)
+display["_order"] = display["Regime"].map(quadrant_order).fillna(4)
 display = display.sort_values(
     ["_order", f"{return_label} Return"],
     ascending=[True, False],
 ).drop(columns="_order")
 
 quadrant_colors = {
-    "Up + Cheap": "#237a3b",
-    "Up + Expensive": "#9a6700",
-    "Down + Cheap": "#2f5597",
-    "Down + Expensive": "#b13030",
+    "Positive Trend · IV Cheap": "#237a3b",
+    "Positive Trend · IV Rich": "#9a6700",
+    "Negative Trend · IV Cheap": "#2f5597",
+    "Negative Trend · IV Rich": "#b13030",
 }
 styled = display.style.format(
     {
         f"{return_label} Return": "{:+.1%}",
         "ATM IV": "{:.1%}",
         "21D Realized": "{:.1%}",
-        "IV - Realized": "{:+.1%}",
-        "Richness Rank": "{:.0f}",
+        "IV-RV Spread": "{:+.1%}",
+        "IV Richness Pctl": "{:.0f}",
         "DTE": "{:.0f}",
     },
     na_rep="N/A",
 ).map(
     lambda value: f"color: {quadrant_colors.get(str(value), '#171717')}; font-weight: 700",
-    subset=["Quadrant"],
+    subset=["Regime"],
 )
 st.dataframe(styled, hide_index=True, width="stretch", height="auto")
 
@@ -531,21 +531,22 @@ if provider_errors:
 with st.expander("Methodology & coverage", expanded=False):
     st.markdown(
         f"""
-        **How to read the four quadrants**
+        **Interpretation framework**
 
-        - **Up + Expensive:** {return_label} price return is positive and IV richness ranks above the peer median.
-        - **Up + Cheap:** {return_label} price return is positive and IV richness ranks below the peer median.
-        - **Down + Expensive:** {return_label} price return is negative and IV richness ranks above the peer median.
-        - **Down + Cheap:** {return_label} price return is negative and IV richness ranks below the peer median.
+        - **Positive Trend · IV Rich:** the underlying is advancing, while the volatility premium sits above the peer median.
+        - **Positive Trend · IV Cheap:** the underlying is advancing, while the volatility premium sits below the peer median.
+        - **Negative Trend · IV Rich:** the underlying is declining, while the volatility premium sits above the peer median.
+        - **Negative Trend · IV Cheap:** the underlying is declining, while the volatility premium sits below the peer median.
 
-        **Options richness** is ATM implied volatility minus annualized 21-session realized volatility. The chart uses the
-        cross-sectional percentile of that spread within the tickers successfully loaded on this run. It is therefore a
-        relative current-snapshot measure, not a historical IV rank.
+        **IV richness** is defined as ATM implied volatility minus annualized 21-session realized volatility. The vertical
+        axis ranks that spread across the tickers successfully loaded on the current run. A high percentile means implied
+        volatility carries a larger premium to recent realized volatility than most peers; a low percentile means that
+        premium is relatively compressed. This is a current cross-sectional relative-value measure, not historical IV rank.
 
         The option expiration shown for each ticker is the available expiry nearest the selected {target_dte}-day tenor.
         Current option chains come from Yahoo Finance when available, with Cboe delayed quotes as fallback. The 4% risk-free
         assumption is used only in chain calculations that require estimated option delta; it does not determine the
-        cheap/expensive quadrant.
+        relative-value classification.
         """
     )
     if provider_errors:
