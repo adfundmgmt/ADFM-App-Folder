@@ -315,19 +315,22 @@ class BasketFreshnessIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(actual.columns.tolist(), ["ABC.PA"])
 
-    def test_panel_prior_close_change_and_observed_age_keep_missing_endpoint(self):
+    def test_panel_omits_close_column_and_keeps_observed_age_for_missing_endpoint(self):
         from tests.test_public_equities_integrity_regressions import scope
 
         dates = pd.bdate_range("2024-01-02", periods=600)
         returns = pd.DataFrame({"active": 0.001, "stale": 0.001}, index=dates)
         returns.loc[dates[-2] :, "stale"] = np.nan
         panel = scope["build_panel_df"](returns, dates[-63], "3M", {}, returns.active)
-        self.assertIn("%Close", panel.columns)
-        self.assertAlmostEqual(panel.loc["active", "%Close"], 0.1)
-        self.assertTrue(pd.isna(panel.loc["stale", "%Close"]))
+        self.assertNotIn("%Close", panel.columns)
         note = dict(zip(panel.index, panel.attrs["row_notes"], strict=True))["stale"]
         self.assertIn(str(dates[-3].date()), note)
         self.assertIn("calendar days old", note)
+
+    def test_basket_scanner_height_expands_to_show_every_row(self):
+        source = (ROOT / "pages" / "1_ADFM_Public_Equities_Baskets.py").read_text()
+        self.assertIn("height=64 + int(23.4 * max(3, len(panel_df)))", source)
+        self.assertNotIn("height=min(920", source)
 
     @patch("adfm_core.market_data.download_market_data")
     def test_basket_page_keeps_one_table_and_selected_chart_on_demand(self, provider):
