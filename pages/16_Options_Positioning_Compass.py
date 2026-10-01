@@ -44,8 +44,6 @@ from adfm_core.ui import (
 TITLE = "Options Relative Value Compass"
 DEFAULT_UNIVERSE = "SPY, QQQ, IWM, DIA, TLT, GLD, USO, SMH, EEM, HYG, LQD"
 NY_TZ = ZoneInfo("America/New_York")
-SELECTED_COLOR = PASTEL["rose"]
-PEER_COLOR = PASTEL["lavender"]
 
 
 def normalize_ticker(value: str) -> str:
@@ -245,8 +243,8 @@ def compass_chart(
             marker=dict(
                 size=[16 if ticker == selected else 11 for ticker in plot["ticker"]],
                 color=[
-                    SELECTED_COLOR if ticker == selected else point_colors.get(quadrant, PEER_COLOR)
-                    for ticker, quadrant in zip(plot["ticker"], plot["quadrant"], strict=False)
+                    point_colors.get(quadrant, PASTEL["slate_blue"])
+                    for quadrant in plot["quadrant"]
                 ],
                 line=dict(
                     color=["#111111" if ticker == selected else "#ffffff" for ticker in plot["ticker"]],
