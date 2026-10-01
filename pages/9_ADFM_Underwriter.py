@@ -372,7 +372,7 @@ def price_history_chart(close: pd.Series, ticker: str, currency: str) -> go.Figu
             ),
         )
     )
-    for window, color in ((50, PASTEL["coral"]), (200, PASTEL["sage"])):
+    for window, color in ((20, PASTEL["lavender"]), (50, PASTEL["coral"]), (200, PASTEL["sage"])):
         average = (
             clean.rolling(window, min_periods=window).mean().reindex(visible.index)
         )
@@ -390,7 +390,7 @@ def price_history_chart(close: pd.Series, ticker: str, currency: str) -> go.Figu
                 )
             )
     fig.update_layout(
-        height=390,
+        height=330,
         margin={"l": 25, "r": 25, "t": 18, "b": 25},
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
@@ -1269,39 +1269,48 @@ latest_form = first_recent_value(submissions, "form")
 latest_filed = first_recent_value(submissions, "filingDate")
 sic_description = str(submissions.get("sicDescription", "Unavailable"))
 fiscal_year_end = str(submissions.get("fiscalYearEnd", "Unavailable"))
-render_selection_note(
-    f"{identity.ticker} · {identity.name}",
-    f"CIK {identity.padded_cik} · {sic_description} · Fiscal year end {fiscal_year_end} · Latest filing {latest_form} on {latest_filed}",
+render_issuer_masthead(
+    ticker=identity.ticker,
+    name=identity.name,
+    price=price,
+    price_date=price_date,
+    sic_description=sic_description,
+    latest_form=latest_form,
+    latest_filed=latest_filed,
+    currency="USD",
 )
 
-render_section_header(
-    "Issuer underwriting metrics",
-    "SEC filing denominators and latest completed-session market price. Click any column header to sort; formulas and assessment context remain visible.",
-)
-rows = valuation_cards(valuation, currency=currency) if currency == "USD" else []
-rows += sec_snapshot_cards(valuation, currency=currency)
-render_underwriter_cards(rows)
-st.caption(
-    f"Price {format_money(price)} through {period_label(price_date)} · Filing currency {currency}. "
-    "SEC Company Facts and Yahoo Finance completed-session close; exact filing provenance is in Filings & Sources."
-)
-
-with st.expander("Selected issuer price history", expanded=False, on_change="rerun") as price_detail:
-    if price_detail.open and not close_history.empty:
-        render_section_header(
-            "One-year price history",
-            "Latest year shown; moving averages use two years of underlying history so the 50-day and 200-day lines cover the complete visible window.",
-        )
-        st.plotly_chart(
-            price_history_chart(close_history, identity.ticker, "USD"),
-            use_container_width=True,
-            config={"displayModeBar": False, "responsive": True},
-        )
-
-with st.expander("Calculation methodology and underwriting bands", expanded=False):
-    st.caption(
-        "Green, amber, and red are transparent absolute underwriting bands, not sector peer rankings or investment recommendations. Lower valuation and leverage are treated as favorable; higher cash yield, margins, returns, and liquidity are treated as favorable. Banks, insurers, REITs, pre-revenue companies, and sector-specific structures require different thresholds. Formulas remain visible in the metric table."
+if not close_history.empty:
+    st.plotly_chart(
+        price_history_chart(close_history, identity.ticker, "USD"),
+        use_container_width=True,
+        config={"displayModeBar": False, "responsive": True},
     )
+
+rows = overview_cards(
+    metrics,
+    valuation,
+    close_history,
+    currency=currency,
+)
+render_underwriter_cards(rows)
+
+st.caption(
+    f"SEC Company Facts through the latest accepted filing; market price through {period_label(price_date)}. "
+    "The overview uses reported historical data and current completed-session price only. "
+    "Forward estimates, analyst targets, ownership and short-interest data are intentionally excluded."
+)
+
+render_annual_snapshot(metrics, currency)
+
+with st.expander("Metric definitions & methodology", expanded=False):
+    render_underwriter_legend()
+    st.caption(
+        "Valuation, leverage, profitability and liquidity colors use transparent absolute underwriting bands, "
+        "not sector-relative rankings or investment recommendations. Growth and price-performance colors indicate direction only. "
+        "Banks, insurers, REITs, pre-revenue companies and other sector-specific structures can require different thresholds."
+    )
+    render_underwriter_audit(rows)
 
 with st.expander("Operating trajectory and issuer read-through", expanded=False, on_change="rerun") as trajectory_detail:
     if trajectory_detail.open:
