@@ -93,6 +93,14 @@ CACHE_VERSION = 3
 
 CACHE_MAX_AGE_DAYS = 7
 
+# This page requests a much larger symbol universe than the other public tools.
+# Bound each Yahoo batch separately so one slow request cannot starve the rest
+# of the universe, while keeping a cold load below one minute.
+BASKET_FETCH_BUDGET_SECONDS = 40.0
+BASKET_BATCH_BUDGET_SECONDS = 9.0
+BASKET_DOWNLOAD_CHUNK_SIZE = 300
+BASKET_DOWNLOAD_THREADS = 32
+
 MIN_LIVE_MEMBER_COVERAGE = 0.50
 
 MIN_DAILY_MEMBER_COVERAGE = 0.60
@@ -1171,9 +1179,10 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         return pd.DataFrame()
 
-    remaining = 25.0 if deadline is None else deadline - time.monotonic()
+    remaining = BASKET_FETCH_BUDGET_SECONDS if deadline is None else deadline - time.monotonic()
     if remaining <= 0:
         return pd.DataFrame()
+    batch_budget = min(BASKET_BATCH_BUDGET_SECONDS, remaining)
 
 
 
@@ -1197,7 +1206,7 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         group_by="column",
 
-        threads=16,
+        threads=BASKET_DOWNLOAD_THREADS,
 
         # Sweep the whole universe before the page's bounded missing-symbol
         # retries. Per-symbol transport retries otherwise consume this window.
@@ -1206,8 +1215,8 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         ignore_tz=True,
 
-        timeout=min(20.0, remaining),
-        recovery_budget_seconds=remaining,
+        timeout=min(8.0, batch_budget),
+        recovery_budget_seconds=batch_budget,
 
     )
 
@@ -1253,7 +1262,7 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
 def _download_close(batch: List[str], start: pd.Timestamp, end: pd.Timestamp, retries: int = 1, deadline: Optional[float] = None) -> pd.DataFrame:
 
-    deadline = time.monotonic() + 25.0 if deadline is None else deadline
+    deadline = time.monotonic() + BASKET_FETCH_BUDGET_SECONDS if deadline is None else deadline
 
     for attempt in range(retries + 1):
 
@@ -1322,11 +1331,11 @@ def fetch_daily_levels(
 
     end: pd.Timestamp,
 
-    chunk_size: int = 45,
+    chunk_size: int = BASKET_DOWNLOAD_CHUNK_SIZE,
 
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
-    deadline = time.monotonic() + 25.0
+    deadline = time.monotonic() + BASKET_FETCH_BUDGET_SECONDS
 
     uniq = sorted({str(t).upper().strip() for t in tickers if str(t).strip()})
 
@@ -1355,15 +1364,32 @@ def fetch_daily_levels(
 
 
 
-    # The benchmark is required by every basket. Fetch it before the shared
-    # deadline can be spent on the much larger constituent universe.
-    download_order = [BENCH, *[ticker for ticker in uniq if ticker != BENCH]] if BENCH in uniq else uniq
+    # The benchmark is required by every basket. On warm loads, prioritize
+    # symbols absent from the last compatible snapshot so reruns fill holes
+    # instead of repeatedly spending the budget on already-covered names.
+    cached_symbols = {
+        ticker for ticker in uniq
+        if ticker in cached.columns and not cached[ticker].dropna().empty
+    } if cache_usable else set()
+    missing_from_cache = [
+        ticker for ticker in uniq if ticker != BENCH and ticker not in cached_symbols
+    ]
+    covered_in_cache = [
+        ticker for ticker in uniq if ticker != BENCH and ticker in cached_symbols
+    ]
+    download_order = (
+        [BENCH, *missing_from_cache, *covered_in_cache]
+        if BENCH in uniq else [*missing_from_cache, *covered_in_cache]
+    )
 
     for batch in _chunk(download_order, chunk_size):
 
         if time.monotonic() >= deadline:
             break
-        close = _download_close(batch, start=start, end=end, deadline=deadline)
+        # One bulk attempt per chunk. Targeted recovery happens below.
+        close = _download_close(
+            batch, start=start, end=end, retries=0, deadline=deadline
+        )
 
         if close.empty:
 
@@ -1398,7 +1424,7 @@ def fetch_daily_levels(
 
     retry_frames: List[pd.DataFrame] = []
 
-    retry_batches = _chunk(missing_after_batches, 8)[:3] if frames and consecutive_failed_batches < 2 else []
+    retry_batches = _chunk(missing_after_batches, 24)[:3] if frames and consecutive_failed_batches < 2 else []
 
     for batch in retry_batches:
 
@@ -1431,23 +1457,37 @@ def fetch_daily_levels(
             wide = wide.loc[:, ~wide.columns.duplicated()].sort_index()
 
     cache_used = False
+    cache_fallback_symbols: List[str] = []
 
     if cache_usable:
 
         cached = cached.loc[(cached.index >= start) & (cached.index < end)]
 
-        live_coverage = sum(t in wide and wide[t].notna().any() for t in uniq) / max(len(uniq), 1)
-        if wide.empty or BENCH not in wide or wide[BENCH].dropna().empty or live_coverage < 0.70:
+        if wide.empty or BENCH not in wide or wide[BENCH].dropna().empty:
 
             wide = cached.copy()
 
             cache_used = True
+            cache_fallback_symbols = [
+                ticker for ticker in uniq
+                if ticker in cached.columns and not cached[ticker].dropna().empty
+            ]
 
         else:
 
-            # Never splice adjusted-price histories from different snapshots.
-            # A fresh but incomplete symbol stays incomplete for this run.
-            pass
+            # Fall back only by whole symbol history. Never splice dates within
+            # one adjusted-price series; temporary Yahoo misses should not erase
+            # an otherwise valid basket.
+            cache_fallback_symbols = [
+                ticker for ticker in uniq
+                if (ticker not in wide.columns or wide[ticker].dropna().empty)
+                and ticker in cached.columns
+                and not cached[ticker].dropna().empty
+            ]
+            if cache_fallback_symbols:
+                wide = pd.concat([wide, cached[cache_fallback_symbols]], axis=1)
+                wide = wide.loc[:, ~wide.columns.duplicated(keep="first")].sort_index()
+                wide = _to_float_frame(_clean_index(wide))
 
 
 
@@ -1469,7 +1509,11 @@ def fetch_daily_levels(
     if BENCH not in wide.columns or wide[BENCH].dropna().empty:
         raise PriceFeedUnavailable("SPY benchmark history is unavailable for the selected range and no compatible recent snapshot is available.")
 
-    source = "last_good_cache" if cache_used else "yahoo"
+    source = (
+        "last_good_cache" if cache_used
+        else "yahoo+saved_snapshot" if cache_fallback_symbols
+        else "yahoo"
+    )
 
     last_observation = None
 
@@ -1495,7 +1539,8 @@ def fetch_daily_levels(
 
         "last_observation": last_observation,
 
-        "cache_meta": cached_meta if cache_used else {},
+        "cache_meta": cached_meta if (cache_used or cache_fallback_symbols) else {},
+        "cache_fallback_symbols": cache_fallback_symbols,
 
     }
 
