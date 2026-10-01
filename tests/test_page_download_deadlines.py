@@ -127,6 +127,38 @@ class PageDownloadDeadlineTests(unittest.TestCase):
                 else:
                     self.assertEqual(result.shape, (2, 90))
 
+    def test_basket_benchmark_survives_deadline_in_large_alphabetical_universe(self):
+        clock = Clock()
+
+        def first_batch_only(tickers, **kwargs):
+            clock.elapsed += kwargs["recovery_budget_seconds"]
+            return self.raw_prices(tickers)
+
+        namespace, overrides, _ = self.loader("baskets", clock, first_batch_only)
+        symbols = [f"A{i:04}" for i in range(1100)] + ["SPY"]
+        with patch.dict(namespace, overrides):
+            result, metadata = namespace["fetch_daily_levels"](
+                symbols, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-02-01"),
+            )
+        self.assertIn("SPY", result)
+        self.assertEqual(result["SPY"].tolist(), [100.0, 100.0])
+        self.assertEqual(metadata["returned_tickers"], 45)
+        self.assertEqual(len(metadata["missing_tickers"]), 1056)
+        self.assertLessEqual(clock.elapsed, 25.0)
+
+    def test_basket_partial_response_without_benchmark_is_not_usable(self):
+        clock = Clock()
+
+        def no_benchmark(tickers, **kwargs):
+            clock.elapsed += kwargs["recovery_budget_seconds"]
+            return self.raw_prices([symbol for symbol in tickers if symbol != "SPY"])
+
+        namespace, overrides, load = self.loader("baskets", clock, no_benchmark)
+        with patch.dict(namespace, overrides):
+            with self.assertRaises(namespace["PriceFeedUnavailable"]):
+                load()
+        self.assertLessEqual(clock.elapsed, 25.0)
+
     def test_seasonality_regimes_share_one_budget_across_symbols_and_aliases(self):
         clock = Clock()
 

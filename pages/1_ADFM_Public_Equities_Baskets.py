@@ -1352,7 +1352,11 @@ def fetch_daily_levels(
 
 
 
-    for batch in _chunk(uniq, chunk_size):
+    # The benchmark is required by every basket. Fetch it before the shared
+    # deadline can be spent on the much larger constituent universe.
+    download_order = [BENCH, *[ticker for ticker in uniq if ticker != BENCH]] if BENCH in uniq else uniq
+
+    for batch in _chunk(download_order, chunk_size):
 
         if time.monotonic() >= deadline:
             break
@@ -1456,6 +1460,11 @@ def fetch_daily_levels(
     wide = wide.loc[:, ~wide.columns.duplicated()]
 
     wide = _to_float_frame(_clean_index(wide)).dropna(axis=1, how="all")
+
+    # A nonempty constituent response without SPY cannot drive this page.
+    # Raising before returning also keeps it out of Streamlit's success cache.
+    if BENCH not in wide.columns or wide[BENCH].dropna().empty:
+        raise PriceFeedUnavailable("SPY benchmark history is unavailable for the selected range and no compatible recent snapshot is available.")
 
     source = "last_good_cache" if cache_used else "yahoo"
 
