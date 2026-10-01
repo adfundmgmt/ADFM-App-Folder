@@ -55,87 +55,135 @@ configure_yfinance_cache()
 st.markdown(
     """
     <style>
-    .underwriter-legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: .55rem 1rem;
-        margin: -.1rem 0 .75rem;
-        color: #555555;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: .72rem;
+    .uw-issuer {
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-end;
+        gap:1.25rem;
+        border-top:3px solid #111;
+        border-bottom:1px solid #b9b9b9;
+        padding:.78rem .05rem .72rem;
+        margin:.05rem 0 .75rem;
     }
-    .underwriter-legend-item { display: inline-flex; align-items: center; gap: .35rem; }
-    .underwriter-legend-dot { width: .56rem; height: .56rem; border-radius: 50%; }
-    .underwriter-metric-grid {
-        display: grid;
-        grid-template-columns: repeat(6, minmax(0, 1fr));
-        gap: .65rem;
-        margin: .15rem 0 .9rem;
+    .uw-symbol-line {
+        display:flex;
+        align-items:baseline;
+        gap:.6rem;
+        min-width:0;
     }
-    .underwriter-metric-card {
-        min-height: 108px;
-        border: 1px solid #c5c5c5;
-        border-left-width: 4px;
-        padding: 11px 12px;
-        background: #ffffff;
+    .uw-symbol {
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:1.55rem;
+        line-height:1;
+        font-weight:800;
+        color:#111;
+        letter-spacing:.015em;
     }
-    .underwriter-tone-positive { border-left-color: #2f7d32; background: #f4faf4; }
-    .underwriter-tone-caution { border-left-color: #b97900; background: #fff9e8; }
-    .underwriter-tone-negative { border-left-color: #b13030; background: #fff4f4; }
-    .underwriter-tone-neutral { border-left-color: #6b6b6b; background: #f7f7f5; }
-    .underwriter-metric-topline { display: flex; justify-content: space-between; gap: .35rem; }
-    .underwriter-metric-label {
-        color: #4f4f4f;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: .66rem;
-        font-weight: 800;
-        letter-spacing: .065em;
-        line-height: 1.25;
-        text-transform: uppercase;
+    .uw-company {
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:1rem;
+        line-height:1.15;
+        font-weight:700;
+        color:#2f5597;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
     }
-    .underwriter-info {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex: 0 0 16px;
-        width: 16px;
-        height: 16px;
-        border: 1px solid #777777;
-        border-radius: 50%;
-        color: #444444;
-        cursor: help;
-        font-family: Georgia, "Times New Roman", serif;
-        font-size: .66rem;
-        font-weight: 700;
-        line-height: 1;
+    .uw-meta {
+        margin-top:.38rem;
+        color:#666;
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:.68rem;
+        line-height:1.35;
     }
-    .underwriter-metric-value {
-        margin-top: .48rem;
-        color: #111111;
-        font-family: Georgia, "Times New Roman", serif;
-        font-size: 1.18rem;
-        font-weight: 700;
-        line-height: 1.1;
+    .uw-quote {
+        text-align:right;
+        flex:0 0 auto;
     }
-    .underwriter-metric-context {
-        margin-top: .42rem;
-        color: #555555;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: .68rem;
-        line-height: 1.28;
+    .uw-price {
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:1.75rem;
+        line-height:1;
+        font-weight:800;
+        color:#111;
+        font-variant-numeric:tabular-nums;
     }
-    .underwriter-section-tag {
-        color: #777777;
-        font-size: .61rem;
-        font-weight: 800;
-        letter-spacing: .07em;
-        text-transform: uppercase;
+    .uw-price-date {
+        margin-top:.3rem;
+        color:#666;
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:.66rem;
     }
+    .uw-overview {
+        display:grid;
+        grid-template-columns:repeat(5,minmax(0,1fr));
+        border-top:1px solid #c8c8c8;
+        border-left:1px solid #d7d7d7;
+        margin:.25rem 0 .55rem;
+        background:#fff;
+    }
+    .uw-overview-cell {
+        min-width:0;
+        display:grid;
+        grid-template-columns:minmax(0,1fr) auto;
+        align-items:baseline;
+        gap:.45rem;
+        padding:.42rem .52rem;
+        border-right:1px solid #d7d7d7;
+        border-bottom:1px solid #e0e0e0;
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:.69rem;
+        line-height:1.2;
+        cursor:help;
+    }
+    .uw-overview-label {
+        color:#6b7280;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+    }
+    .uw-overview-value {
+        color:#171717;
+        font-weight:800;
+        text-align:right;
+        white-space:nowrap;
+        font-variant-numeric:tabular-nums;
+    }
+    .uw-tone-positive .uw-overview-value { color:#237a3b; }
+    .uw-tone-caution .uw-overview-value { color:#9a6700; }
+    .uw-tone-negative .uw-overview-value { color:#b13030; }
+    .uw-tone-neutral .uw-overview-value { color:#171717; }
+    .uw-overview-value.uw-unavailable { color:#8b8b8b; font-weight:600; }
+    .uw-overview-note {
+        color:#6b6b6b;
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:.64rem;
+        line-height:1.35;
+        margin:.1rem 0 .85rem;
+    }
+    .uw-legend {
+        display:flex;
+        flex-wrap:wrap;
+        gap:.55rem 1rem;
+        margin:.1rem 0 .7rem;
+        color:#666;
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:.66rem;
+    }
+    .uw-legend-item { display:inline-flex; align-items:center; gap:.3rem; }
+    .uw-legend-dot { width:.5rem; height:.5rem; border-radius:50%; }
+    div[data-testid="stPlotlyChart"] { margin-top:-.1rem; }
     @media (max-width: 1250px) {
-        .underwriter-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .uw-overview { grid-template-columns:repeat(4,minmax(0,1fr)); }
     }
-    @media (max-width: 760px) {
-        .underwriter-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    @media (max-width: 950px) {
+        .uw-overview { grid-template-columns:repeat(3,minmax(0,1fr)); }
+        .uw-issuer { align-items:flex-start; }
+    }
+    @media (max-width: 700px) {
+        .uw-overview { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        .uw-issuer { display:block; }
+        .uw-quote { text-align:left; margin-top:.65rem; }
     }
     </style>
     """,
@@ -413,11 +461,10 @@ def _card(
 def render_underwriter_legend() -> None:
     st.markdown(
         """
-        <div class="underwriter-legend">
-          <span class="underwriter-legend-item"><span class="underwriter-legend-dot" style="background:#2f7d32"></span>Favorable</span>
-          <span class="underwriter-legend-item"><span class="underwriter-legend-dot" style="background:#b97900"></span>Watch</span>
-          <span class="underwriter-legend-item"><span class="underwriter-legend-dot" style="background:#b13030"></span>Adverse</span>
-          <span class="underwriter-legend-item"><span class="underwriter-legend-dot" style="background:#6b6b6b"></span>Context only or unavailable</span>
+        <div class="uw-legend">
+          <span class="uw-legend-item"><span class="uw-legend-dot" style="background:#237a3b"></span>Favorable / improving</span>
+          <span class="uw-legend-item"><span class="uw-legend-dot" style="background:#9a6700"></span>Watch</span>
+          <span class="uw-legend-item"><span class="uw-legend-dot" style="background:#b13030"></span>Adverse / deteriorating</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -425,15 +472,345 @@ def render_underwriter_legend() -> None:
 
 
 def render_underwriter_cards(rows: list[dict[str, str]]) -> None:
-    """Render underwriting measures as one sortable table, preserving audit context."""
-    frame = pd.DataFrame(rows, columns=["Section", "Metric", "Value", "Formula", "Context", "Tone"])
-    colors = {"positive": "#237a3b", "caution": "#9a6700", "negative": "#b13030", "neutral": "#6b6b6b"}
+    """Render a dense Finviz-style metric matrix; formulas remain available on hover."""
+    cells: list[str] = []
+    for row in rows:
+        metric = escape(str(row.get("Metric", "")))
+        value = escape(str(row.get("Value", "Unavailable")))
+        section = str(row.get("Section", ""))
+        formula = str(row.get("Formula", ""))
+        context = str(row.get("Context", ""))
+        tone = str(row.get("Tone", "neutral"))
+        title = escape(
+            " · ".join(part for part in (section, formula, context) if part),
+            quote=True,
+        )
+        unavailable = value.lower() == "unavailable"
+        value_class = "uw-overview-value uw-unavailable" if unavailable else "uw-overview-value"
+        cells.append(
+            f'<div class="uw-overview-cell uw-tone-{escape(tone)}" title="{title}">'
+            f'<span class="uw-overview-label">{metric}</span>'
+            f'<span class="{value_class}">{value}</span>'
+            "</div>"
+        )
+    st.markdown(
+        '<div class="uw-overview">' + "".join(cells) + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="uw-overview-note">Hover any metric for the SEC-derived formula and underwriting context. '
+        "Green/red on growth and price metrics indicates direction; valuation, profitability, liquidity and leverage use the existing transparent underwriting bands.</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_underwriter_audit(rows: list[dict[str, str]]) -> None:
+    frame = pd.DataFrame(
+        rows,
+        columns=["Section", "Metric", "Value", "Formula", "Context", "Tone"],
+    )
+    colors = {
+        "positive": "#237a3b",
+        "caution": "#9a6700",
+        "negative": "#b13030",
+        "neutral": "#6b6b6b",
+    }
     tones = frame.pop("Tone")
     styled = frame.style.apply(
-        lambda column: [f"color: {colors.get(tone, '#6b6b6b')}" for tone in tones],
+        lambda column: [
+            f"color: {colors.get(tone, '#6b6b6b')}" for tone in tones
+        ],
         subset=["Value", "Context"],
     )
     st.dataframe(styled, hide_index=True, width="stretch", height="auto")
+
+
+def _directional_assessment(value: Optional[float]) -> tuple[str, str]:
+    if value is None or pd.isna(value):
+        return "neutral", "Unavailable"
+    if value > 0:
+        return "positive", "Improving / positive"
+    if value < 0:
+        return "negative", "Deteriorating / negative"
+    return "neutral", "Flat"
+
+
+def _trailing_price_change(close: pd.Series, periods: int) -> Optional[float]:
+    clean = pd.to_numeric(close, errors="coerce").dropna()
+    if len(clean) <= periods:
+        return None
+    base = float(clean.iloc[-1 - periods])
+    return float(clean.iloc[-1] / base - 1.0) if base else None
+
+
+def _ytd_price_change(close: pd.Series) -> Optional[float]:
+    clean = pd.to_numeric(close, errors="coerce").dropna()
+    if clean.empty:
+        return None
+    dated = clean.copy()
+    dated.index = pd.to_datetime(dated.index)
+    latest_year = int(dated.index[-1].year)
+    year = dated[dated.index.year == latest_year]
+    if len(year) < 2 or float(year.iloc[0]) == 0:
+        return None
+    return float(year.iloc[-1] / year.iloc[0] - 1.0)
+
+
+def price_context_cards(close: pd.Series, *, currency: str = "USD") -> list[dict[str, str]]:
+    clean = pd.to_numeric(close, errors="coerce").dropna()
+    if clean.empty:
+        return []
+    last = float(clean.iloc[-1])
+    rows = [
+        _card("Market", "Price", _signed_currency(last, currency, 2), "Latest completed-session close", _context_only(last)),
+    ]
+    for label, periods in (
+        ("Perf 1W", 5),
+        ("Perf 1M", 21),
+        ("Perf 3M", 63),
+        ("Perf 6M", 126),
+        ("Perf 1Y", 252),
+    ):
+        value = _trailing_price_change(clean, periods)
+        rows.append(_card("Market", label, format_percent(value), f"Price change over {periods} trading sessions", _directional_assessment(value)))
+    ytd = _ytd_price_change(clean)
+    rows.append(_card("Market", "Perf YTD", format_percent(ytd), "Price change from first completed session of the calendar year", _directional_assessment(ytd)))
+
+    year = clean.tail(252)
+    high = float(year.max()) if not year.empty else None
+    low = float(year.min()) if not year.empty else None
+    from_high = last / high - 1.0 if high else None
+    from_low = last / low - 1.0 if low else None
+    rows.extend([
+        _card("Market", "From 52W High", format_percent(from_high), "Latest close ÷ trailing 252-session high − 1", _context_only(from_high)),
+        _card("Market", "From 52W Low", format_percent(from_low), "Latest close ÷ trailing 252-session low − 1", _context_only(from_low)),
+    ])
+    for window in (20, 50, 200):
+        average = clean.rolling(window, min_periods=window).mean().iloc[-1]
+        distance = last / float(average) - 1.0 if pd.notna(average) and float(average) != 0 else None
+        rows.append(
+            _card(
+                "Market",
+                f"SMA{window}",
+                format_percent(distance),
+                f"Latest close ÷ {window}-session simple moving average − 1",
+                _directional_assessment(distance),
+            )
+        )
+    return rows
+
+
+def growth_cards(metrics: Mapping[str, Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for label, key in (("Sales", "revenue"), ("EPS", "eps_diluted")):
+        metric = metrics.get(key)
+        values = (
+            (f"{label} Q/Q", _quarter_change(metric, 1), "Latest reported quarter versus immediately prior quarter"),
+            (f"{label} Y/Y", _quarter_change(metric, 4), "Latest reported quarter versus year-ago quarter"),
+            (f"{label} 3Y CAGR", annual_cagr(metric, 3), "Compound annual growth across the latest three fiscal years"),
+            (f"{label} 5Y CAGR", annual_cagr(metric, 5), "Compound annual growth across the latest five fiscal years"),
+        )
+        for metric_label, value, formula in values:
+            rows.append(
+                _card(
+                    "Growth",
+                    metric_label,
+                    format_percent(value),
+                    formula,
+                    _directional_assessment(value),
+                )
+            )
+    return rows
+
+
+def credit_overview_cards(
+    snapshot: ValuationSnapshot, *, currency: str = "USD"
+) -> list[dict[str, str]]:
+    return [
+        _card(
+            "Credit",
+            "Debt / EBITDA",
+            format_multiple(snapshot.debt_ebitda),
+            "Funded debt ÷ LTM calculated EBITDA",
+            _lower_is_better(snapshot.debt_ebitda, 2.0, 4.0),
+        ),
+        _card(
+            "Credit",
+            "Net Debt / EBITDA",
+            format_multiple(snapshot.net_debt_ebitda),
+            "(Funded debt − cash and short-term investments) ÷ LTM calculated EBITDA",
+            _lower_is_better(snapshot.net_debt_ebitda, 1.5, 3.5),
+        ),
+        _card(
+            "Credit",
+            "Interest Coverage",
+            format_multiple(snapshot.interest_coverage),
+            "LTM calculated EBITDA ÷ LTM reported interest expense",
+            _higher_is_better(snapshot.interest_coverage, 6.0, 3.0),
+        ),
+    ]
+
+
+def overview_cards(
+    metrics: Mapping[str, Any],
+    snapshot: ValuationSnapshot,
+    close: pd.Series,
+    *,
+    currency: str = "USD",
+) -> list[dict[str, str]]:
+    combined = (
+        price_context_cards(close, currency=currency)
+        + valuation_cards(snapshot, currency=currency)
+        + growth_cards(metrics)
+        + sec_snapshot_cards(snapshot, currency=currency)
+        + credit_overview_cards(snapshot, currency=currency)
+    )
+    ordered_metrics = [
+        "Price", "Market Capitalization", "Enterprise Value", "Shares Outstanding", "LTM Diluted EPS",
+        "Sales / Share", "Book / Share", "Cash / Share", "P / E", "P / Sales", "P / Book", "P / FCF",
+        "EV / Revenue", "EV / EBITDA", "FCF Yield", "Sales Q/Q", "Sales Y/Y", "Sales 3Y CAGR", "Sales 5Y CAGR",
+        "EPS Q/Q", "EPS Y/Y", "EPS 3Y CAGR", "EPS 5Y CAGR", "Gross Margin", "Operating Margin", "Profit Margin",
+        "FCF Margin", "ROA", "ROE", "ROIC", "Current Ratio", "Quick Ratio", "Debt / Equity", "Debt / EBITDA",
+        "Net Debt / EBITDA", "Interest Coverage", "Dividend Yield", "Payout Ratio", "Perf 1W", "Perf 1M",
+        "Perf 3M", "Perf 6M", "Perf YTD", "Perf 1Y", "From 52W High", "From 52W Low", "SMA20", "SMA50", "SMA200",
+    ]
+    first_by_metric: dict[str, dict[str, str]] = {}
+    for row in combined:
+        first_by_metric.setdefault(str(row["Metric"]), row)
+    rows = [first_by_metric[name] for name in ordered_metrics if name in first_by_metric]
+    rows.extend(
+        row for name, row in first_by_metric.items() if name not in set(ordered_metrics)
+    )
+    return rows
+
+
+def render_issuer_masthead(
+    *,
+    ticker: str,
+    name: str,
+    price: Optional[float],
+    price_date: Optional[pd.Timestamp],
+    sic_description: str,
+    latest_form: str,
+    latest_filed: str,
+    currency: str,
+) -> None:
+    price_text = (
+        _signed_currency(float(price), currency, 2)
+        if price is not None and pd.notna(price)
+        else "Unavailable"
+    )
+    date_text = period_label(price_date)
+    st.markdown(
+        f"""
+        <div class="uw-issuer">
+          <div>
+            <div class="uw-symbol-line">
+              <span class="uw-symbol">{escape(ticker)}</span>
+              <span class="uw-company">{escape(name)}</span>
+            </div>
+            <div class="uw-meta">{escape(sic_description)} · Filing currency {escape(currency)} · Latest filing {escape(latest_form)} on {escape(latest_filed)}</div>
+          </div>
+          <div class="uw-quote">
+            <div class="uw-price">{escape(price_text)}</div>
+            <div class="uw-price-date">Completed-session close · {escape(date_text)}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _annual_series(metrics: Mapping[str, Any], key: str, *, instant: bool = False) -> pd.Series:
+    metric = metrics.get(key)
+    if metric is None:
+        return pd.Series(dtype="float64")
+    observations = metric.instant if instant else metric.annual
+    if not observations:
+        return pd.Series(dtype="float64")
+    series = pd.Series(
+        {pd.Timestamp(item.end): float(item.value) for item in observations},
+        dtype="float64",
+    ).sort_index()
+    if instant and not series.empty:
+        frame = series.to_frame("value")
+        frame["year"] = frame.index.year
+        series = frame.groupby("year")["value"].last()
+        series.index = pd.to_datetime([f"{int(year)}-12-31" for year in series.index])
+    return series.tail(8)
+
+
+def _mini_bar_chart(
+    series: pd.Series,
+    *,
+    title: str,
+    color: str,
+    scale: float = 1.0,
+    suffix: str = "",
+    decimals: int = 2,
+) -> go.Figure:
+    values = pd.to_numeric(series, errors="coerce").dropna() / scale
+    labels = [str(pd.Timestamp(index).year) for index in values.index]
+    text_values = [f"{value:,.{decimals}f}{suffix}" for value in values.values]
+    fig = go.Figure(
+        go.Bar(
+            x=labels,
+            y=values.values,
+            marker_color=color,
+            text=text_values,
+            textposition="inside",
+            insidetextanchor="end",
+            hovertemplate=f"%{{x}}<br>{title}: %{{y:,.{decimals}f}}{suffix}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        height=245,
+        margin={"l": 12, "r": 12, "t": 38, "b": 22},
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font={"color": "#4b5563", "family": "Arial", "size": 10},
+        title={"text": title, "x": 0.01, "xanchor": "left", "font": {"size": 12, "color": "#4b5563"}},
+        showlegend=False,
+        bargap=0.12,
+    )
+    fig.update_xaxes(showgrid=False, fixedrange=True)
+    fig.update_yaxes(gridcolor="#ececec", zeroline=False, fixedrange=True)
+    return fig
+
+
+def render_annual_snapshot(metrics: Mapping[str, Any], currency: str) -> None:
+    eps = _annual_series(metrics, "eps_diluted")
+    revenue = _annual_series(metrics, "revenue")
+    shares = _annual_series(metrics, "shares_outstanding", instant=True)
+    if eps.empty and revenue.empty and shares.empty:
+        return
+    render_section_header(
+        "Annual trajectory",
+        "Reported fiscal-year history. Shares use the last reported point-in-time balance for each year.",
+    )
+    columns = st.columns(3)
+    series_specs = (
+        (columns[0], eps, "GAAP EPS", PASTEL["blue"], 1.0, "", 2),
+        (columns[1], revenue, f"Sales ({currency_prefix(currency)}bn)", PASTEL["lavender"], 1_000_000_000, "", 1),
+        (columns[2], shares, "Shares outstanding (bn)", PASTEL["teal"], 1_000_000_000, "", 2),
+    )
+    for column, series, title, color, scale, suffix, decimals in series_specs:
+        with column:
+            if series.empty:
+                st.caption(f"{title}: unavailable")
+            else:
+                st.plotly_chart(
+                    _mini_bar_chart(
+                        series,
+                        title=title,
+                        color=color,
+                        scale=scale,
+                        suffix=suffix,
+                        decimals=decimals,
+                    ),
+                    use_container_width=True,
+                    config={"displayModeBar": False, "responsive": True},
+                )
 
 
 def _latest_quarter_margin(metrics: Mapping[str, Any]) -> Optional[float]:
