@@ -417,6 +417,7 @@ def _download_before_deadline(symbols: Sequence[str], kwargs: dict, deadline: fl
 
 _SUCCESS_CACHE = OrderedDict()
 _SUCCESS_CACHE_LOCK = threading.Lock()
+_SUCCESS_CACHE_MAX_ENTRIES = 64  # Retain one large-universe sweep within the existing byte cap.
 
 
 @st.cache_data(show_spinner=False)
@@ -430,7 +431,7 @@ def _clear_success_cache() -> None:
         _SUCCESS_CACHE.clear()
 
 
-def _cached_download(symbols: Tuple[str, ...], provider_kwargs: dict, _retries: int, _recovery_budget_seconds: float = 25.0, completion_epoch: tuple = (), _request_timeout_seconds: float = 10.0) -> tuple:
+def _cached_download(symbols: Tuple[str, ...], provider_kwargs: dict, _retries: int, _recovery_budget_seconds: float = 25.0, completion_epoch: tuple = (), _request_timeout_seconds: float = 10.0, _recover_missing: bool = True) -> tuple:
     """Cache successes without holding a cache lock during provider I/O.
 
     Streamlit's per-key function lock cannot wrap a network request: waiting
@@ -477,7 +478,7 @@ def _cached_download(symbols: Tuple[str, ...], provider_kwargs: dict, _retries: 
     # Multi-symbol partial failure should not discard successful observations.
     provider_returned_any = any(_usable(frame) for frame in frames.values())
     for symbol in symbols:
-        if not provider_returned_any or time.perf_counter() >= deadline:
+        if not _recover_missing or not provider_returned_any or time.perf_counter() >= deadline:
             break
         if _usable(frames.get(symbol, pd.DataFrame())):
             continue
@@ -546,7 +547,7 @@ def _cached_download(symbols: Tuple[str, ...], provider_kwargs: dict, _retries: 
     with _SUCCESS_CACHE_LOCK:
         _SUCCESS_CACHE[cache_key] = (result, created)
         _SUCCESS_CACHE.move_to_end(cache_key)
-        while len(_SUCCESS_CACHE) > 16 or sum(int(frame.memory_usage(deep=True).sum()) for frame, _ in _SUCCESS_CACHE.values()) > _LAST_GOOD_MAX_BYTES:
+        while len(_SUCCESS_CACHE) > _SUCCESS_CACHE_MAX_ENTRIES or sum(int(frame.memory_usage(deep=True).sum()) for frame, _ in _SUCCESS_CACHE.values()) > _LAST_GOOD_MAX_BYTES:
             _SUCCESS_CACHE.popitem(last=False)
     return result, created
 
@@ -559,7 +560,7 @@ def download_market_data(tickers, **kwargs) -> pd.DataFrame:
 
     All Yahoo arguments (including actions, repair, rounding, keepna, timeout,
     prepost, back_adjust and multi_level_index) pass through. Additional options
-    are retries, recovery_budget_seconds (25 by default), completed_only,
+    are retries, recover_missing (True by default), recovery_budget_seconds (25 by default), completed_only,
     session_timezone, session_cutoff and now. The recovery budget stops new
     requests/retries; provider timeout bounds each underlying request. An
     entirely failed universe does not trigger individual-symbol fanout.
@@ -572,6 +573,7 @@ def download_market_data(tickers, **kwargs) -> pd.DataFrame:
     started = time.perf_counter()
     symbols = unique_tickers(tickers.replace(",", " ").split() if isinstance(tickers, str) else tickers)
     retries = min(5, max(1, int(kwargs.pop("retries", DEFAULT_CONFIG.retries))))
+    recover_missing = bool(kwargs.pop("recover_missing", True))
     recovery_budget_seconds = min(60.0, max(0.01, float(kwargs.pop("recovery_budget_seconds", 25.0))))
     completed_only = kwargs.pop("completed_only", False)
     session_timezone = kwargs.pop("session_timezone", None)
@@ -592,7 +594,7 @@ def download_market_data(tickers, **kwargs) -> pd.DataFrame:
     try:
         # Deadline/retry limits control delivery, not the identity of successful
         # observations. Keep varying remaining budgets out of the cache key.
-        result, created = _cached_download(symbols, kwargs, retries, recovery_budget_seconds, completion_epoch, request_timeout_seconds)
+        result, created = _cached_download(symbols, kwargs, retries, recovery_budget_seconds, completion_epoch, request_timeout_seconds, recover_missing)
     except _UncachedDownload as failure:
         result, created = failure.result, failure.created
     result = result.copy()

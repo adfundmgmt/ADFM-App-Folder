@@ -95,6 +95,19 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(meta["source"], "saved_snapshot")
         download.assert_not_called()
 
+    def test_current_partial_snapshot_does_not_prevent_constituent_recovery(self):
+        self.cache.index = pd.to_datetime(["2026-09-01", "2026-09-04", "2026-09-09"])
+        self.cache["BBB"] = [20.0, 21.0, 22.0]
+        self.save()
+        recovered = self.cache.assign(CCC=[30.0, 31.0, 32.0])
+        with patch.dict(scope, {"_download_close": Mock(return_value=recovered)}):
+            data, meta = scope["fetch_daily_levels"](
+                ["SPY", "AAA", "BBB", "CCC"], self.start, self.end
+            )
+        self.assertIn("CCC", data)
+        self.assertEqual(data["CCC"].tolist(), [30.0, 31.0, 32.0])
+        self.assertEqual(meta["missing_tickers"], [])
+
     def test_empty_feed_raises_and_stops_request_storm(self):
         download = Mock(return_value=pd.DataFrame())
         with patch.dict(scope, {"_download_close": download}):
