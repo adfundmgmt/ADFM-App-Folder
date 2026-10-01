@@ -1761,28 +1761,32 @@ def build_live_baskets(
             )
 
             key = basket_key(category, basket_name)
+            eligible = len(live_members) >= required_count
 
-            if len(live_members) >= required_count:
+            # Keep every defined basket in the scanner. If live coverage falls
+            # below the integrity threshold, retain the row but suppress the
+            # calculation so its metrics render as N/A instead of disappearing.
+            live_baskets[basket_name] = live_members if eligible else []
 
-                live_baskets[basket_name] = live_members
+            basket_metadata[key] = {
 
-                basket_metadata[key] = {
+                "Category": category,
 
-                    "Category": category,
+                "Basket": basket_name,
 
-                    "Basket": basket_name,
+                "Live Members": len(live_members),
 
-                    "Live Members": len(live_members),
+                "Defined Members": defined_count,
 
-                    "Defined Members": defined_count,
+                "Members": f"{len(live_members)}/{defined_count}",
 
-                    "Members": f"{len(live_members)}/{defined_count}",
+                "Coverage %": round((len(live_members) / defined_count) * 100.0, 1) if defined_count else np.nan,
 
-                    "Coverage %": round((len(live_members) / defined_count) * 100.0, 1) if defined_count else np.nan,
+                "Eligible": eligible,
 
-                }
+            }
 
-            else:
+            if not eligible:
 
                 dropped_baskets.append(key)
 
@@ -3207,6 +3211,10 @@ all_basket_rets_full = ew_rets_from_levels(
 
 )
 
+# Calculation helpers intentionally skip baskets with no eligible live members.
+# Reindex them back into the scanner so every defined basket remains visible.
+all_basket_rets_full = all_basket_rets_full.reindex(columns=list(live_all_baskets))
+
 
 
 if all_basket_rets_full.empty:
@@ -3231,9 +3239,12 @@ if valid_benchmark is not None:
 # ============================================================
 
 omitted_label = f"{len(skipped_sessions)} incomplete provider sessions omitted · " if len(skipped_sessions) else ""
+eligible_basket_count = sum(
+    bool(meta.get("Eligible", True)) for meta in basket_metadata.values()
+)
 st.caption(
     f"As of {reference_date.date()} · {fetch_meta.get('source', 'yahoo')} · "
-    f"{len(live_all_baskets)}/{len(raw_selected_baskets)} baskets eligible · "
+    f"{eligible_basket_count}/{len(raw_selected_baskets)} baskets with live coverage · all defined baskets shown · "
     + omitted_label +
     "Hover basket names for observation age · "
     "Current-universe, coverage-aware equal-weight adjusted returns · N/A = insufficient observed history/coverage; not a point-in-time backtest."
