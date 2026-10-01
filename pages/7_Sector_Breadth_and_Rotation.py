@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from adfm_core.market_data import download_market_data
+import yfinance as yf
 
 from adfm_core.palette import PASTEL_20
 from adfm_core.sector_rotation import (
@@ -54,19 +54,15 @@ SPDR_SECTOR_ETFS = {"XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XL
 SPDR_HOLDINGS_URL = "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/holdings-daily-us-en-{ticker}.xlsx"
 
 
-def _download_batch(tickers: Tuple[str, ...], deadline: float = None) -> pd.DataFrame:
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=64)
+def _download_batch(tickers: Tuple[str, ...]) -> pd.DataFrame:
     if not tickers:
         return pd.DataFrame()
-    deadline = time.monotonic() + 25.0 if deadline is None else deadline
     for attempt in range(DOWNLOAD_RETRIES):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
         try:
-            raw = download_market_data(
+            raw = yf.download(
                 list(tickers), period="3y", interval="1d", auto_adjust=False,
                 progress=False, group_by="column", threads=True,
-                recovery_budget_seconds=remaining, timeout=min(10.0, remaining),
             )
             if raw is None or raw.empty:
                 raise ValueError("empty download")
@@ -93,19 +89,16 @@ def _download_batch(tickers: Tuple[str, ...], deadline: float = None) -> pd.Data
             return frame.sort_index()
         except Exception:
             if attempt < DOWNLOAD_RETRIES - 1:
-                time.sleep(min(0.5 * (attempt + 1), max(0.0, deadline - time.monotonic())))
+                time.sleep(0.5 * (attempt + 1))
     return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=64)
 def fetch_prices(tickers: Tuple[str, ...]) -> pd.DataFrame:
-    deadline = time.monotonic() + 25.0
     unique = list(dict.fromkeys(ticker for ticker in tickers if ticker and not ticker.startswith("BASKET_")))
     pieces: List[pd.DataFrame] = []
     for i in range(0, len(unique), DOWNLOAD_CHUNK_SIZE):
-        if time.monotonic() >= deadline:
-            break
-        part = _download_batch(tuple(unique[i:i + DOWNLOAD_CHUNK_SIZE]), deadline=deadline)
+        part = _download_batch(tuple(unique[i:i + DOWNLOAD_CHUNK_SIZE]))
         if not part.empty:
             pieces.append(part)
     prices = pd.concat(pieces, axis=1) if pieces else pd.DataFrame()
@@ -115,9 +108,7 @@ def fetch_prices(tickers: Tuple[str, ...]) -> pd.DataFrame:
     missing_tickers = [ticker for ticker in unique if ticker not in prices.columns or not prices[ticker].notna().any()]
     fallback_tickers = [ticker for ticker in missing_tickers if ticker in BENCHMARKS]
     for ticker in fallback_tickers:
-        if time.monotonic() >= deadline:
-            break
-        part = _download_batch((ticker,), deadline=deadline)
+        part = _download_batch((ticker,))
         if not part.empty:
             prices = pd.concat([prices, part], axis=1)
             prices = prices.loc[:, ~prices.columns.duplicated(keep="last")]
