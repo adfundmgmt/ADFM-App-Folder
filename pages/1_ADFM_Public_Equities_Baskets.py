@@ -2262,7 +2262,7 @@ def build_panel_df(
     from adfm_core.basket_calculations import basket_observation
 
     dynamic_col = f"%{dynamic_label}"
-    return_cols = ["%Close", "%5D", "%1M"]
+    return_cols = ["%5D", "%1M"]
     if dynamic_col not in return_cols:
         return_cols.append(dynamic_col)
 
@@ -2332,7 +2332,6 @@ def build_panel_df(
         row: Dict[str, Any] = {
             "_BasketKey": basket_id,
             "Basket": display_name,
-            "%Close": observations[basket_id]["prior_close_change_pct"],
             "%5D": r5d * 100 if pd.notna(r5d) else np.nan,
             "%1M": r1m * 100 if pd.notna(r1m) else np.nan,
             "MACD Momentum": macd_m,
@@ -2537,9 +2536,7 @@ def sortable_panel_html(headers, values, fill_colors, col_widths, formats, row_n
         numeric = formats[i] is not None or name == "MACD Momentum" or name.startswith("EMA ")
         tooltip = (
             "Preset-responsive MACD histogram: Positive/Negative is histogram sign; acceleration compares preset-scaled histogram change; Strong/Weak reflects the histogram z-score."
-            if name == "MACD Momentum" else
-            "Change from the prior reliable observed close; spans omitted provider sessions. N/A means the latest basket return is missing."
-            if name == "%Close" else name
+            if name == "MACD Momentum" else name
         )
         low, high = ("Lowest to highest", "Highest to lowest") if numeric else ("A to Z", "Z to A")
         header_cells.append(
@@ -2658,9 +2655,9 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
         fill_colors.append([color_ret(v) for v in vals])
 
     if dynamic_col in ["%5D", "%1M"]:
-        col_widths = [0.25, 0.055, 0.065, 0.065, 0.18, 0.12, 0.085, 0.09, 0.09]
+        col_widths = [0.29, 0.07, 0.07, 0.18, 0.12, 0.09, 0.09, 0.09]
     else:
-        col_widths = [0.235, 0.055, 0.06, 0.06, 0.08, 0.17, 0.11, 0.075, 0.08, 0.075]
+        col_widths = [0.27, 0.065, 0.065, 0.09, 0.175, 0.115, 0.085, 0.095, 0.095]
 
     formats = []
     for header in headers:
@@ -2673,7 +2670,7 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
 
     component_html(
         sortable_panel_html(headers, values, fill_colors, col_widths, formats, panel_df.attrs.get("row_notes")),
-        height=min(920, 64 + int(23.4 * max(3, len(panel_df)))),
+        height=64 + int(23.4 * max(3, len(panel_df))),
         scrolling=False,
     )
 
@@ -3238,7 +3235,7 @@ st.caption(
     f"As of {reference_date.date()} · {fetch_meta.get('source', 'yahoo')} · "
     f"{len(live_all_baskets)}/{len(raw_selected_baskets)} baskets eligible · "
     + omitted_label +
-    "%Close = change from prior reliable observed close · Hover basket names for observation age · "
+    "Hover basket names for observation age · "
     "Current-universe, coverage-aware equal-weight adjusted returns · N/A = insufficient observed history/coverage; not a point-in-time backtest."
 )
 if suspect_symbols:
