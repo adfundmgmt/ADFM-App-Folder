@@ -112,6 +112,29 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(data["CCC"].tolist(), [30.0, 31.0, 32.0])
         self.assertEqual(meta["missing_tickers"], [])
 
+    def test_broad_partial_live_universe_fills_missing_symbols_from_cache(self):
+        current_dates = pd.to_datetime(["2026-09-01", "2026-09-04", "2026-09-08"])
+        cached = pd.DataFrame(
+            {
+                "SPY": [100.0, 101.0, 102.0],
+                "AAA": [50.0, 51.0, 52.0],
+                "BBB": [60.0, 61.0, 62.0],
+                "CCC": [70.0, 71.0, 72.0],
+            },
+            index=current_dates,
+        )
+        self.save(cached)
+        fresh = cached.drop(columns=["CCC"]).copy()
+        fresh[["SPY", "AAA", "BBB"]] += 1.0
+        with patch.dict(scope, {"_download_close": Mock(return_value=fresh)}):
+            data, meta = scope["fetch_daily_levels"](
+                ["SPY", "AAA", "BBB", "CCC"], self.start, self.end
+            )
+        self.assertEqual(meta["source"], "yahoo+saved_snapshot")
+        self.assertEqual(meta["cache_fallback_symbols"], ["CCC"])
+        self.assertEqual(data["CCC"].tolist(), [70.0, 71.0, 72.0])
+        self.assertEqual(data["AAA"].tolist(), [51.0, 52.0, 53.0])
+
     def test_empty_feed_raises_and_stops_request_storm(self):
         download = Mock(return_value=pd.DataFrame())
         with patch.dict(scope, {"_download_close": download}):
