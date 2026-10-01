@@ -217,10 +217,6 @@ with st.sidebar:
         value=3,
         step=1,
     )
-    show_drivers = st.checkbox("Show primary liquidity drivers", value=True)
-    show_scorecards = st.checkbox("Show component scorecards", value=True)
-    show_fcig = st.checkbox("Show Fed financial conditions", value=True)
-    show_download = st.checkbox("Show download", value=True)
     st.caption(
         "Display lookback changes the visible date range only. The market-confirmation "
         "history is fixed at ten years."
@@ -402,262 +398,177 @@ fig_main.update_yaxes(title_text="Level score", row=1, col=1)
 fig_main.update_yaxes(title_text="Impulse score", row=2, col=1)
 st.plotly_chart(fig_main, width="stretch")
 
-if show_fcig:
-    with st.expander("Federal Reserve FCI-G overlay", expanded=False, on_change="rerun") as fcig_detail:
-        if fcig_detail.open:
-            render_section_header(
-                "Federal Reserve FCI-G Overlay",
-                (
-                    "Above zero means financial conditions are a growth headwind. "
-                    "Below zero means they are a growth tailwind. FCI-G measures transmission "
-                    "and is therefore kept separate from the liquidity score."
+render_section_header(
+    "Federal Reserve FCI-G Overlay",
+    (
+        "Above zero means financial conditions are a growth headwind. "
+        "Below zero means they are a growth tailwind. FCI-G measures transmission "
+        "and is therefore kept separate from the liquidity score."
+    ),
+)
+fcig, fcig_errors = load_fcig()
+if fcig.empty:
+    st.info(
+        "Federal Reserve FCI-G is temporarily unavailable. "
+        "The primary liquidity composite is unaffected."
+    )
+else:
+    fcig_display = filter_lookback(fcig, lookback)
+    fig_fcig = go.Figure()
+    fcig_colors = {
+        "FCI-G Baseline": BLUE,
+        "FCI-G 1Y Lookback": ORANGE,
+    }
+    for column in fcig_display.columns:
+        fig_fcig.add_trace(
+            go.Scatter(
+                x=fcig_display.index,
+                y=fcig_display[column],
+                name=column,
+                mode="lines",
+                line=dict(
+                    color=fcig_colors.get(column),
+                    width=2.4,
                 ),
             )
-            fcig, fcig_errors = load_fcig()
-            if fcig.empty:
-                st.info(
-                    "Federal Reserve FCI-G is temporarily unavailable. "
-                    "The primary liquidity composite is unaffected."
-                )
-            else:
-                fcig_display = filter_lookback(fcig, lookback)
-                fig_fcig = go.Figure()
-                fcig_colors = {
-                    "FCI-G Baseline": BLUE,
-                    "FCI-G 1Y Lookback": ORANGE,
-                }
-                for column in fcig_display.columns:
-                    fig_fcig.add_trace(
-                        go.Scatter(
-                            x=fcig_display.index,
-                            y=fcig_display[column],
-                            name=column,
-                            mode="lines",
-                            line=dict(
-                                color=fcig_colors.get(column),
-                                width=2.4,
-                            ),
-                        )
-                    )
+        )
 
-                y_values = pd.to_numeric(
-                    fcig_display.stack(),
-                    errors="coerce",
-                ).dropna()
-                if not y_values.empty:
-                    y_min = min(float(y_values.min()), -0.25)
-                    y_max = max(float(y_values.max()), 0.25)
-                    fig_fcig.add_hrect(
-                        y0=0,
-                        y1=y_max,
-                        fillcolor="rgba(192,0,0,.055)",
-                        line_width=0,
-                        annotation_text="Growth headwind",
-                        annotation_position="top left",
-                    )
-                    fig_fcig.add_hrect(
-                        y0=y_min,
-                        y1=0,
-                        fillcolor="rgba(112,173,71,.055)",
-                        line_width=0,
-                        annotation_text="Growth tailwind",
-                        annotation_position="bottom left",
-                    )
+    y_values = pd.to_numeric(
+        fcig_display.stack(),
+        errors="coerce",
+    ).dropna()
+    if not y_values.empty:
+        y_min = min(float(y_values.min()), -0.25)
+        y_max = max(float(y_values.max()), 0.25)
+        fig_fcig.add_hrect(
+            y0=0,
+            y1=y_max,
+            fillcolor="rgba(192,0,0,.055)",
+            line_width=0,
+            annotation_text="Growth headwind",
+            annotation_position="top left",
+        )
+        fig_fcig.add_hrect(
+            y0=y_min,
+            y1=0,
+            fillcolor="rgba(112,173,71,.055)",
+            line_width=0,
+            annotation_text="Growth tailwind",
+            annotation_position="bottom left",
+        )
 
-                fig_fcig.add_hline(
-                    y=0,
-                    line_dash="dot",
-                    line_color=GRAY,
-                )
-                plot_layout(
-                    fig_fcig,
-                    430,
-                    margin=dict(l=52, r=28, t=68, b=44),
-                )
-                fig_fcig.update_yaxes(title_text="FCI-G")
-                st.plotly_chart(fig_fcig, width="stretch")
+    fig_fcig.add_hline(
+        y=0,
+        line_dash="dot",
+        line_color=GRAY,
+    )
+    plot_layout(
+        fig_fcig,
+        430,
+        margin=dict(l=52, r=28, t=68, b=44),
+    )
+    fig_fcig.update_yaxes(title_text="FCI-G")
+    st.plotly_chart(fig_fcig, width="stretch")
 
-if show_drivers:
-    with st.expander("Primary liquidity drivers", expanded=False, on_change="rerun") as driver_detail:
-        if driver_detail.open:
-            render_section_header(
-                "Primary Liquidity Drivers",
-                (
-                    "The line chart shows which primary sleeve is changing. "
-                    "The bar chart ranks the individual components driving the latest reading. "
-                    "Positive scores ease liquidity; negative scores tighten it."
+render_section_header(
+    "Primary Liquidity Drivers",
+    (
+        "The line chart shows which primary sleeve is changing. "
+        "The bar chart ranks the individual components driving the latest reading. "
+        "Positive scores ease liquidity; negative scores tighten it."
+    ),
+)
+
+primary_sleeves = [
+    sleeve
+    for sleeve in ("Balance Sheet", "Funding", "Transmission")
+    if sleeve in display_sleeve_impulses.columns
+]
+if primary_sleeves:
+    sleeve_colors = {
+        "Balance Sheet": BLUE,
+        "Funding": ORANGE,
+        "Transmission": PURPLE,
+    }
+    fig_sleeves = go.Figure()
+    for sleeve in primary_sleeves:
+        fig_sleeves.add_trace(
+            go.Scatter(
+                x=display_sleeve_impulses.index,
+                y=display_sleeve_impulses[sleeve],
+                name=sleeve,
+                mode="lines",
+                line=dict(
+                    color=sleeve_colors[sleeve],
+                    width=2.4,
                 ),
             )
+        )
+    fig_sleeves.add_hrect(
+        y0=-0.35,
+        y1=0.35,
+        fillcolor="rgba(107,114,128,.07)",
+        line_width=0,
+    )
+    fig_sleeves.add_hline(
+        y=0,
+        line_dash="dot",
+        line_color=GRAY,
+    )
+    plot_layout(
+        fig_sleeves,
+        420,
+        margin=dict(l=52, r=28, t=64, b=44),
+    )
+    fig_sleeves.update_yaxes(title_text="Sleeve impulse")
+    st.plotly_chart(fig_sleeves, width="stretch")
 
-            primary_sleeves = [
-                sleeve
-                for sleeve in ("Balance Sheet", "Funding", "Transmission")
-                if sleeve in display_sleeve_impulses.columns
-            ]
-            if primary_sleeves:
-                sleeve_colors = {
-                    "Balance Sheet": BLUE,
-                    "Funding": ORANGE,
-                    "Transmission": PURPLE,
-                }
-                fig_sleeves = go.Figure()
-                for sleeve in primary_sleeves:
-                    fig_sleeves.add_trace(
-                        go.Scatter(
-                            x=display_sleeve_impulses.index,
-                            y=display_sleeve_impulses[sleeve],
-                            name=sleeve,
-                            mode="lines",
-                            line=dict(
-                                color=sleeve_colors[sleeve],
-                                width=2.4,
-                            ),
-                        )
-                    )
-                fig_sleeves.add_hrect(
-                    y0=-0.35,
-                    y1=0.35,
-                    fillcolor="rgba(107,114,128,.07)",
-                    line_width=0,
-                )
-                fig_sleeves.add_hline(
-                    y=0,
-                    line_dash="dot",
-                    line_color=GRAY,
-                )
-                plot_layout(
-                    fig_sleeves,
-                    420,
-                    margin=dict(l=52, r=28, t=64, b=44),
-                )
-                fig_sleeves.update_yaxes(title_text="Sleeve impulse")
-                st.plotly_chart(fig_sleeves, width="stretch")
+latest_components = pd.Series(
+    {
+        column: latest(primary_impulses[column])
+        for column in primary_impulses.columns
+    },
+    dtype=float,
+).dropna().sort_values()
 
-            latest_components = pd.Series(
-                {
-                    column: latest(primary_impulses[column])
-                    for column in primary_impulses.columns
-                },
-                dtype=float,
-            ).dropna().sort_values()
-
-            if not latest_components.empty:
-                bar_colors = [
-                    RED if value < -0.35 else GREEN if value > 0.35 else GRAY
-                    for value in latest_components
-                ]
-                fig_components = go.Figure()
-                fig_components.add_vline(
-                    x=0,
-                    line_dash="dot",
-                    line_color=GRAY,
-                )
-                fig_components.add_trace(
-                    go.Bar(
-                        x=latest_components.values,
-                        y=latest_components.index,
-                        orientation="h",
-                        marker_color=bar_colors,
-                        text=[
-                            f"{value:+.2f}"
-                            for value in latest_components.values
-                        ],
-                        textposition="outside",
-                        cliponaxis=False,
-                        hovertemplate="%{y}<br>Impulse: %{x:+.2f}<extra></extra>",
-                    )
-                )
-                plot_layout(
-                    fig_components,
-                    max(390, 36 * len(latest_components) + 90),
-                    margin=dict(l=190, r=58, t=30, b=42),
-                    showlegend=False,
-                    hovermode="closest",
-                )
-                fig_components.update_xaxes(
-                    title_text="Latest component impulse"
-                )
-                fig_components.update_yaxes(showgrid=False)
-                st.plotly_chart(fig_components, width="stretch")
-
-if show_scorecards:
-    with st.expander("Component audit", expanded=False, on_change="rerun") as audit_detail:
-        if audit_detail.open:
-            primary_card = scorecard(primary, primary_levels, primary_impulses, primary_specs)
-            market_card = scorecard(market, market_levels, market_impulses, market_specs) if not market.empty else pd.DataFrame()
-            audit_frames = []
-            if not primary_card.empty:
-                audit_frames.append(primary_card.assign(View="Primary sources"))
-            if not market_card.empty:
-                audit_frames.append(market_card.assign(View="Market confirmation"))
-            if audit_frames:
-                combined = pd.concat(audit_frames, ignore_index=True, sort=False)
-                st.dataframe(
-                    _style_scores(combined, ["Level Score", "Impulse Score"], {
-                        "Level Score": "{:+.2f}", "Impulse Score": "{:+.2f}", "Within-Sleeve Weight": "{:.0%}",
-                    }),
-                    width="stretch", hide_index=True,
-                )
-            else:
-                st.info("Component audit data are unavailable.")
-    with st.expander("Source diagnostics", expanded=False, on_change="rerun") as source_detail:
-        if source_detail.open:
-            diagnostics = pd.DataFrame(
-                [
-                    {
-                        "Series": FRED_LABELS.get(series_id, series_id),
-                        "FRED ID": series_id,
-                        "Status": (
-                            "Unavailable"
-                            if series_id in fred_errors
-                            else "Loaded"
-                        ),
-                        "Latest Observation": (
-                            fred[series_id]
-                            .dropna()
-                            .index.max()
-                            .date()
-                            .isoformat()
-                            if (
-                                series_id in fred
-                                and fred[series_id].notna().any()
-                            )
-                            else "N/A"
-                        ),
-                        "Error": fred_errors.get(series_id, ""),
-                    }
-                    for series_id in FRED_IDS
-                ]
-            )
-            st.dataframe(
-                diagnostics,
-                width="stretch",
-                hide_index=True,
-            )
-
-if show_download:
-    with st.expander("Download history", expanded=False, on_change="rerun") as export_detail:
-        if export_detail.open:
-            render_section_header(
-                "Download",
-                "Exports preserve numeric values for independent audit and backtesting.",
-            )
-            export = pd.concat(
-                {
-                    "Liquidity Level": liquidity_level,
-                    "Liquidity Impulse": liquidity_impulse,
-                    "Weighted Breadth": easing_breadth,
-                    "Coverage": impulse_coverage,
-                    "Market Confirmation": market_confirmation,
-                },
-                axis=1,
-            ).reset_index(names="Date")
-            st.download_button(
-                "Download liquidity history",
-                export.to_csv(index=False).encode("utf-8"),
-                "adfm_liquidity_conditions.csv",
-                "text/csv",
-            )
+if not latest_components.empty:
+    bar_colors = [
+        RED if value < -0.35 else GREEN if value > 0.35 else GRAY
+        for value in latest_components
+    ]
+    fig_components = go.Figure()
+    fig_components.add_vline(
+        x=0,
+        line_dash="dot",
+        line_color=GRAY,
+    )
+    fig_components.add_trace(
+        go.Bar(
+            x=latest_components.values,
+            y=latest_components.index,
+            orientation="h",
+            marker_color=bar_colors,
+            text=[
+                f"{value:+.2f}"
+                for value in latest_components.values
+            ],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{y}<br>Impulse: %{x:+.2f}<extra></extra>",
+        )
+    )
+    plot_layout(
+        fig_components,
+        max(390, 36 * len(latest_components) + 90),
+        margin=dict(l=190, r=58, t=30, b=42),
+        showlegend=False,
+        hovermode="closest",
+    )
+    fig_components.update_xaxes(
+        title_text="Latest component impulse"
+    )
+    fig_components.update_yaxes(showgrid=False)
+    st.plotly_chart(fig_components, width="stretch")
 
 render_footer(
     data_note=(
