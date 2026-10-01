@@ -63,62 +63,38 @@ class StressUITests(unittest.TestCase):
                 math.isnan(app.dataframe[0].value.iloc[-1]["Gross DV01 USD/bp"])
             )
 
-    def test_individual_simulator_operates_when_expanded(self):
-        index = pd.bdate_range("2025-05-01", periods=350)
-        close = pd.Series(
-            100 + np.arange(350) * 0.04 + 3 * np.sin(np.arange(350) / 8), index=index
-        )
-        frame = pd.DataFrame(
-            {
-                "Open": close * 0.999,
-                "High": close * 1.01,
-                "Low": close * 0.99,
-                "Close": close,
-                "Adj Close": close,
-                "Volume": 1000000,
-            },
-            index=index,
-        )
-        frames = {
-            symbol: frame.copy()
-            for symbol in ("AAPL", "SPY", "QQQ", "TLT", "UUP", "USO", "^VIX")
-        }
-
-        class TickerFixture:
-            def __init__(self, symbol):
-                self.symbol = symbol
-
-            def get_earnings_dates(self, limit):
-                return pd.DataFrame()
-
+    def test_volatility_sizing_loads_and_updates_without_simulator(self):
+        index = pd.bdate_range("2025-01-01", periods=400)
+        returns = np.random.default_rng(1).normal(0, .01, 400)
+        returns[-20:] *= 3
+        close = pd.Series(100 * np.cumprod(1 + returns), index=index)
+        frame = pd.DataFrame({"Close": close, "Adj Close": close}, index=index)
         page = Path(__file__).resolve().parents[1] / "pages/22_Position_Sizing_Lab.py"
-        with (
-            patch(
-                "adfm_core.market_data.fetch_daily_ohlcv",
-                return_value=(frames, pd.DataFrame()),
-            ),
-            patch("yfinance.Ticker", TickerFixture),
-        ):
+        with patch("adfm_core.market_data.fetch_daily_ohlcv", return_value=({"TLT": frame}, pd.DataFrame())):
             app = AppTest.from_file(str(page)).run(timeout=20)
             self.assertFalse(app.exception)
+            self.assertEqual(len(app.dataframe), 1)
+            table = app.dataframe[0].value
+            target = float(table.iloc[0]["Vol-adjusted"].rstrip("%"))
+            self.assertLess(target, 10)
+            app.number_input(key="psl_ceiling").set_value(1.0).run(timeout=20)
+            self.assertFalse(app.exception)
+            self.assertEqual(app.dataframe[0].value.iloc[0]["Vol-adjusted"], "1.00%")
+            app.selectbox(key="psl_side").set_value("Short")
+            app.number_input(key="psl_nav").set_value(100000).run(timeout=20)
+            self.assertFalse(app.exception)
+            self.assertEqual(app.dataframe[0].value.iloc[3]["Vol-adjusted"], "$1,000")
+            app.checkbox(key="psl_stress").set_value(True).run(timeout=20)
+            self.assertFalse(app.exception)
+            self.assertTrue(any(input.key == "stress_nav" for input in app.number_input))
+
+    def test_missing_history_shows_error_without_fabricated_sizing(self):
+        page = Path(__file__).resolve().parents[1] / "pages/22_Position_Sizing_Lab.py"
+        with patch("adfm_core.market_data.fetch_daily_ohlcv", return_value=({}, pd.DataFrame())):
+            app = AppTest.from_file(str(page)).run(timeout=20)
+            self.assertFalse(app.exception)
+            self.assertTrue(app.error)
             self.assertEqual(len(app.dataframe), 0)
-            app.checkbox(key="psl_load_history").set_value(True).run(timeout=20)
-            self.assertFalse(app.exception)
-            self.assertTrue(
-                any("Constraint" in table.value.columns for table in app.dataframe)
-            )
-            button = next(
-                button for button in app.button if button.label == "Run one session"
-            )
-            button.click().run(timeout=20)
-            self.assertFalse(app.exception)
-            self.assertEqual(len(app.session_state["psl_returns"]), 1)
-            self.assertEqual(len(app.session_state["psl_balances"]), 2)
-            self.assertAlmostEqual(
-                app.session_state["psl_balances"][-1],
-                app.session_state["psl_balances"][0]
-                * (1 + app.session_state["psl_nav_returns"][0]),
-            )
 
     def test_invalid_uploaded_row_shows_error_without_partial_table(self):
         invalid = CSV + b"BAD,shares,10,1,,2026-09-29,USD,1,equity,0.5\n"

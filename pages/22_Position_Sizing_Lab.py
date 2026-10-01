@@ -1,4 +1,4 @@
-"""Interactive historical position-sizing simulator."""
+"""A visual, volatility-based position scaling tool."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,882 +9,150 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
+from plotly.subplots import make_subplots
 
-from adfm_core.market_data import (
-    adjusted_ohlcv,
-    configure_yfinance_cache,
-    fetch_daily_ohlcv,
-    unique_tickers,
-)
-from adfm_core.palette import PASTEL
-from adfm_core.portfolio_stress_page import render_portfolio_stress
-from adfm_core.position_sizing import (
-    HORIZON_TRADING_DAYS,
-    annualized_volatility,
-    calculate_sizing,
-    daily_gap_proxy,
-    earnings_reaction_frame,
-    expected_shortfall,
-    first_touch_statistics,
-    historical_tail_move,
-    historical_windows,
-    maximum_drawdown_from_prices,
-    rolling_annualized_volatility,
-)
-from adfm_core.ui import (
-    PageHeader,
-    dataframe_download,
-    inject_explorer_style,
-    render_footer,
-    render_page_header,
-    render_section_header,
-    render_sidebar_about,
-    render_selection_note,
-    render_status_line,
-)
-
-TITLE = "Position Sizing Lab"
-NY_TZ = ZoneInfo("America/New_York")
-BENCHMARKS = ("SPY", "QQQ", "TLT", "UUP", "USO", "^VIX")
-BLUE, RED, GREEN, ORANGE = (PASTEL[key] for key in ("blue", "rose", "sage", "coral"))
-GRID = "rgba(148,163,184,.30)"
-PFX = "psl_"
-BLOCK_SIZE = 20
+from adfm_core.market_data import adjusted_ohlcv, configure_yfinance_cache, fetch_daily_ohlcv
+from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header
+from adfm_core.volatility_sizing import scale_exposure, volatility_history
 
 
-def render_detail_metrics(rows):
-    st.dataframe(pd.DataFrame(rows, columns=["Metric", "Value", "Basis"]),
-                 width="stretch", hide_index=True)
+CSS = """
+<style>
+.psl-hero{background:radial-gradient(ellipse at 100% 0%,#263d5b 0%,#101c30 55%);color:#fff;padding:30px 34px;margin:14px 0 12px;overflow:hidden;border-radius:14px;position:relative}
+.psl-top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:24px}
+.psl-symbol{font:700 13px Arial;letter-spacing:.13em;color:#e9f0fa}
+.psl-state{font:700 11px Arial;letter-spacing:.09em;color:var(--psl-accent);background:#ffffff0d;border:1px solid #ffffff24;padding:8px 12px;border-radius:30px}
+.psl-main{display:grid;grid-template-columns:1.15fr 1fr;gap:45px;align-items:center}
+.psl-exposure{display:flex;align-items:center;gap:22px}
+.psl-label{font:600 11px Arial;letter-spacing:.09em;text-transform:uppercase;color:#b7c5d9;margin-bottom:8px}
+.psl-number{font:500 clamp(35px,4.6vw,66px) Arial;letter-spacing:-.055em;color:#fff;font-variant-numeric:tabular-nums;line-height:1.12;white-space:nowrap}
+.psl-target{color:var(--psl-accent)}
+.psl-arrow{font:300 30px Arial;color:#8b9bb2}
+.psl-change{font:600 14px Arial;color:var(--psl-accent);margin-top:19px}
+.psl-rule{font:400 13px Arial;color:#c0cddd;line-height:1.6;margin-top:9px;max-width:490px}
+.psl-ruler{position:relative;padding-top:20px}
+.psl-ruler svg{width:100%;height:auto;display:block}
+.psl-key{display:flex;justify-content:space-between;gap:10px;font:400 11px Arial;color:#c4cfdd;margin-top:4px}
+.psl-bottom{border-top:1px solid #ffffff21;margin-top:25px;padding-top:17px;display:flex;flex-wrap:wrap;gap:10px 26px;font:400 12px Arial;color:#b7c5d9}
+.psl-bottom b{color:#edf3fa;font-weight:600}
+.psl-legend{font:500 12px Arial;color:#526176;margin:19px 0 3px}
+.psl-footnote{font:400 12px Arial;color:#5e6b7b;line-height:1.6;margin:5px 0 20px}
+@media(max-width:800px){.psl-hero{padding:23px 20px}.psl-main{grid-template-columns:1fr;gap:10px}.psl-exposure{gap:18px}.psl-number{font-size:47px}.psl-top{margin-bottom:22px}.psl-bottom{gap:10px 17px}.psl-state{font-size:9px}.psl-ruler{padding-top:8px}}
+</style>
+"""
 
 
-def pct(value: float, digits: int = 1, signed: bool = False) -> str:
-    if not np.isfinite(value):
-        return "N/A"
-    prefix = "+" if signed and value > 0 else ""
-    return f"{prefix}{value * 100:,.{digits}f}%"
-
-
-def money(value: float) -> str:
-    if not np.isfinite(value):
-        return "N/A"
-    if abs(value) >= 1_000_000_000:
-        return f"${value / 1_000_000_000:,.2f}B"
-    if abs(value) >= 1_000_000:
-        return f"${value / 1_000_000:,.2f}M"
-    if abs(value) >= 1_000:
-        return f"${value / 1_000:,.1f}K"
-    return f"${value:,.0f}"
-
-
-def close_series(frames: dict[str, pd.DataFrame], ticker: str) -> pd.Series:
-    frame = frames.get(ticker)
-    if frame is None or frame.empty:
-        return pd.Series(dtype=float, name=ticker)
-    series = pd.to_numeric(adjusted_ohlcv(frame).get("Close"), errors="coerce").dropna()
-    series.name = ticker
-    return series
-
-
-def adjusted_frame(frames: dict[str, pd.DataFrame], ticker: str) -> pd.DataFrame:
-    frame = frames.get(ticker)
-    if frame is None or frame.empty:
-        return pd.DataFrame()
-    return adjusted_ohlcv(frame).dropna(subset=["Open", "High", "Low", "Close"])
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def earnings_dates(symbol: str) -> tuple[pd.Timestamp, ...]:
-    try:
-        data = yf.Ticker(symbol).get_earnings_dates(limit=48)
-        if data is None or data.empty:
-            return ()
-        index = pd.DatetimeIndex(data.index)
-        if index.tz is not None:
-            index = index.tz_convert("America/New_York").tz_localize(None)
-        return tuple(pd.Timestamp(value) for value in index)
-    except Exception:
-        return ()
-
-
-def directional_daily_returns(close: pd.Series, direction: str) -> pd.Series:
-    daily = pd.to_numeric(close, errors="coerce").pct_change(fill_method=None)
-    daily = daily.replace([np.inf, -np.inf], np.nan).dropna()
-    daily = daily.loc[daily.gt(-1.0)]
-    if direction == "Short":
-        daily = -daily
-    daily.name = "directional_return"
-    return daily
-
-
-def chart_style(fig: go.Figure, height: int) -> go.Figure:
-    fig.update_xaxes(showgrid=True, gridcolor=GRID, zeroline=False)
-    fig.update_yaxes(showgrid=True, gridcolor=GRID, zeroline=False)
-    fig.update_layout(
-        height=height,
-        template="plotly_white",
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        margin=dict(l=56, r=24, t=34, b=44),
-        font=dict(family="Arial, sans-serif", color="#404040"),
-        legend=dict(orientation="h", y=1.03, x=0),
-        hovermode="x unified",
+def render_exposure(ticker, side, current, base, ceiling, result, recent, baseline, window):
+    delta = result.change * 100
+    relative = result.target / current - 1 if current > 0 else None
+    at_target = abs(delta) < .05
+    state = "AT MODEL SIZE" if at_target else "REDUCE EXPOSURE" if delta < 0 else "INCREASE EXPOSURE"
+    accent = "#bcd9ff" if at_target else "#ffc3b4" if delta < 0 else "#a5e3cf"
+    change = "Current exposure matches the volatility model" if at_target else f"{abs(delta):.2f} percentage points {'less' if delta < 0 else 'more'} exposure"
+    if relative is not None and not at_target:
+        change += f" · {abs(relative):.1%} {'reduction' if delta < 0 else 'increase'}"
+    maximum = max(ceiling, current, result.target, .01)
+    x_current = 12 + 376 * current / maximum
+    x_target = 12 + 376 * result.target / maximum
+    ticks = "".join(f'<line x1="{12+376*i/4}" y1="58" x2="{12+376*i/4}" y2="65" stroke="#637188"/><text x="{12+376*i/4}" y="86" fill="#b7c5d9" text-anchor="middle" font-size="11">{maximum*i/4:.0%}</text>' for i in range(5))
+    limit = "Exposure ceiling is binding." if result.uncapped > ceiling else "Risk held constant relative to your base size."
+    st.markdown(
+        f'<div class="psl-hero" style="--psl-accent:{accent}">'
+        f'<div class="psl-top"><div class="psl-symbol">{escape(ticker)} / {escape(side).upper()}</div><div class="psl-state">{state}</div></div>'
+        '<div class="psl-main"><div><div class="psl-exposure">'
+        f'<div><div class="psl-label">Current exposure</div><div class="psl-number">{current:.1%}</div></div>'
+        '<div class="psl-arrow">→</div>'
+        f'<div><div class="psl-label">Vol-adjusted exposure</div><div class="psl-number psl-target">{result.target:.1%}</div></div></div>'
+        f'<div class="psl-change">{change}</div><div class="psl-rule">{base:.1%} base size × {baseline:.1%} normal volatility ÷ {recent:.1%} recent volatility. {limit}</div></div>'
+        '<div class="psl-ruler"><svg viewBox="0 0 400 100" role="img" aria-label="Current and adjusted exposure on a NAV percentage scale">'
+        '<rect x="12" y="37" width="376" height="15" rx="7.5" fill="#ffffff12"/>'
+        f'<rect x="12" y="37" width="{max(0,x_target-12):.2f}" height="15" rx="7.5" fill="{accent}" opacity=".85"/>'
+        f'<line x1="{x_current:.2f}" y1="20" x2="{x_current:.2f}" y2="56" stroke="#fff" stroke-width="2"/>'
+        f'<circle cx="{x_target:.2f}" cy="44.5" r="8.5" fill="{accent}" stroke="#101c30" stroke-width="3"/>{ticks}</svg>'
+        '<div class="psl-key"><span>│ Current</span><span>● Vol-adjusted</span><span>Exposure / NAV</span></div></div></div>'
+        f'<div class="psl-bottom"><span>Recent {window} sessions <b>{recent:.1%} vol</b></span><span>Historical normal <b>{baseline:.1%} vol</b></span>'
+        f'<span>Uncapped scaling <b>{result.multiplier:.2f}× base</b></span><span>Ceiling <b>{ceiling:.1%} NAV</b></span></div></div>',
+        unsafe_allow_html=True,
     )
+
+
+def history_chart(history, base, current, ceiling, window):
+    displayed = history.tail(252)
+    target = (base * displayed.baseline / displayed.recent).clip(upper=ceiling)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=.12, row_heights=[.56,.44])
+    fig.add_trace(go.Scatter(x=displayed.index, y=displayed.recent*100, name=f"{window}-session volatility", line=dict(color="#386b9e",width=2.5), fill="tozeroy", fillcolor="rgba(128,175,218,.12)", hovertemplate="%{y:.1f}% annualized<extra>Recent volatility</extra>"),row=1,col=1)
+    fig.add_trace(go.Scatter(x=displayed.index, y=displayed.baseline*100, name="Historical normal", line=dict(color="#a3adbc",width=1.8,dash="dot"), hovertemplate="%{y:.1f}% annualized<extra>Historical normal</extra>"),row=1,col=1)
+    fig.add_trace(go.Scatter(x=displayed.index,y=target*100,name="Vol-adjusted exposure",line=dict(color="#258a76",width=2.5),fill="tozeroy",fillcolor="rgba(144,207,187,.16)",hovertemplate="%{y:.2f}% NAV<extra>Model exposure</extra>"),row=2,col=1)
+    fig.add_hline(y=current*100,row=2,col=1,line=dict(color="#748398",width=1.2,dash="dash"))
+    fig.update_layout(height=440,template="plotly_white",margin=dict(l=12,r=12,t=32,b=14),font=dict(family="Arial",color="#45556b",size=12),paper_bgcolor="#fff",plot_bgcolor="#fff",hovermode="x unified",legend=dict(orientation="h",y=1.1,x=0,font=dict(size=11)))
+    fig.update_xaxes(showgrid=False,zeroline=False)
+    fig.update_yaxes(gridcolor="#edf0f4",zeroline=False,ticksuffix="%",rangemode="tozero")
+    fig.update_yaxes(title_text="Annualized vol",row=1,col=1)
+    fig.update_yaxes(title_text="Exposure / NAV",row=2,col=1)
     return fig
 
 
-def bankroll_chart(balances: list[float]) -> go.Figure:
-    values = np.asarray(balances, dtype=float)
-    sessions = np.arange(values.size)
-    fig = go.Figure(
-        go.Scatter(
-            x=sessions,
-            y=values,
-            mode="lines",
-            name="Balance",
-            line=dict(color="#2E7D32", width=3.0),
-            fill="tozeroy",
-            fillcolor="rgba(112,173,71,.22)",
-            hovertemplate="Session %{x}<br>$%{y:,.0f}<extra></extra>",
-        )
-    )
-    fig.add_hline(y=float(values[0]), line=dict(color="#7F8C8D", width=1.2, dash="dash"))
-    fig.update_xaxes(title="Trading sessions simulated")
-    fig.update_yaxes(title="Balance", tickprefix="$", tickformat=",.3s")
-    return chart_style(fig, 350)
-
-
-def volatility_chart(nav_returns: list[float]) -> go.Figure:
-    rolling = (
-        pd.Series(nav_returns, dtype=float)
-        .rolling(20, min_periods=5)
-        .std(ddof=1)
-        .mul(np.sqrt(252) * 100)
-    )
-    fig = go.Figure(
-        go.Scatter(
-            x=np.arange(1, len(rolling) + 1),
-            y=rolling,
-            mode="lines",
-            name="20-session annualized σ",
-            line=dict(color="#C65911", width=2.8),
-            fill="tozeroy",
-            fillcolor="rgba(237,125,49,.18)",
-            hovertemplate="Session %{x}<br>%{y:.2f}%<extra></extra>",
-        )
-    )
-    fig.update_xaxes(title="Trading sessions simulated")
-    fig.update_yaxes(title="Annualized portfolio σ", ticksuffix="%")
-    return chart_style(fig, 240)
-
-
-def distribution_chart(paths: pd.DataFrame, target: float, stop: float) -> go.Figure:
-    fig = go.Figure(
-        go.Histogram(
-            x=paths["return"] * 100,
-            nbinsx=45,
-            marker_color=BLUE,
-            opacity=.86,
-        )
-    )
-    if target > 0:
-        fig.add_vline(
-            x=target * 100,
-            line=dict(color=GREEN, width=2, dash="dash"),
-            annotation_text="Target",
-        )
-    fig.add_vline(
-        x=-stop * 100,
-        line=dict(color=RED, width=2, dash="dash"),
-        annotation_text="Invalidation",
-    )
-    fig.update_xaxes(title="Directional holding-period return", ticksuffix="%")
-    fig.update_yaxes(title="Observations")
-    return chart_style(fig, 420)
-
-
-def empirical_log_optimal(values: pd.Series, ceiling: float) -> float:
-    returns = pd.to_numeric(values, errors="coerce").dropna().to_numpy(float)
-    if len(returns) < 20 or ceiling <= 0:
-        return np.nan
-    candidates = np.linspace(0, ceiling, 501)
-    scores = np.full(len(candidates), -np.inf)
-    for index, fraction in enumerate(candidates):
-        gross = 1 + fraction * returns
-        if np.all(gross > 0):
-            scores[index] = np.mean(np.log(gross))
-    return float(candidates[int(np.argmax(scores))]) if np.isfinite(scores).any() else np.nan
-
-
-def max_balance_drawdown(balances: list[float]) -> float:
-    values = np.asarray(balances, dtype=float)
-    if values.size == 0:
-        return np.nan
-    return float(np.min(values / np.maximum.accumulate(values) - 1))
-
-
-def outcome_grid(values: list[float]) -> str:
-    recent = values[-100:]
-    cells = ["<span class='sim-dot empty'></span>" for _ in range(100 - len(recent))]
-    for value in recent:
-        state, mark = ("win", "+") if value > 0 else ("loss", "−") if value < 0 else ("flat", "·")
-        label = escape(f"{value * 100:+.2f}% observed daily return")
-        cells.append(f"<span class='sim-dot {state}' title='{label}'>{mark}</span>")
-    return "<div class='sim-grid'>" + "".join(cells) + "</div>"
-
-
-def reset_simulation(balance: float, signature: str, seed: int) -> None:
-    st.session_state[PFX + "signature"] = signature
-    st.session_state[PFX + "running"] = False
-    st.session_state[PFX + "balances"] = [float(balance)]
-    st.session_state[PFX + "returns"] = []
-    st.session_state[PFX + "nav_returns"] = []
-    st.session_state[PFX + "dates"] = []
-    st.session_state[PFX + "seed"] = int(seed)
-
-
-def sampled_session_index(
-    size: int,
-    session_no: int,
-    mode: str,
-    seed: int,
-    target_sessions: int,
-) -> int:
-    if size <= 1:
-        return 0
-    if mode == "Chronological regime replay":
-        maximum_start = max(1, size - target_sessions + 1)
-        start = seed % maximum_start
-        return min(start + session_no, size - 1)
-
-    block_no, offset = divmod(session_no, BLOCK_SIZE)
-    maximum_start = max(1, size - BLOCK_SIZE + 1)
-    rng = np.random.default_rng(seed + block_no * 7919)
-    if mode == "Recent-regime weighted blocks":
-        weights = np.linspace(1.0, 4.0, maximum_start)
-        start = int(rng.choice(maximum_start, p=weights / weights.sum()))
-    else:
-        start = int(rng.integers(0, maximum_start))
-    return min(start + offset, size - 1)
-
-
-def add_session(
-    daily_returns: pd.Series,
-    fraction: float,
-    mode: str,
-    seed: int,
-    target_sessions: int,
-) -> None:
-    balances = st.session_state[PFX + "balances"]
-    sampled = st.session_state[PFX + "returns"]
-    if not balances or balances[-1] <= 0 or daily_returns.empty:
-        st.session_state[PFX + "running"] = False
-        return
-    index = sampled_session_index(
-        len(daily_returns),
-        len(sampled),
-        mode,
-        seed,
-        target_sessions,
-    )
-    observed_return = float(daily_returns.iloc[index])
-    nav_return = fraction * observed_return
-    balances.append(max(0.0, balances[-1] * (1 + nav_return)))
-    sampled.append(observed_return)
-    st.session_state[PFX + "nav_returns"].append(nav_return)
-    st.session_state[PFX + "dates"].append(pd.Timestamp(daily_returns.index[index]))
-    if balances[-1] <= 0:
-        st.session_state[PFX + "running"] = False
-
-
-def sensitivity_table(
-    selected_returns: pd.Series,
-    frames: dict[str, pd.DataFrame],
-    direction: str,
-) -> pd.DataFrame:
-    labels = {
-        "SPY": "US equities",
-        "QQQ": "Growth / duration",
-        "TLT": "Long duration",
-        "UUP": "US dollar",
-        "USO": "Oil",
-        "^VIX": "Equity volatility",
-    }
-    sign = 1 if direction == "Long" else -1
-    rows = []
-    for symbol, label in labels.items():
-        benchmark = close_series(frames, symbol).pct_change(fill_method=None)
-        aligned = pd.concat(
-            [selected_returns.rename("asset"), benchmark.rename("benchmark")],
-            axis=1,
-            sort=False,
-        ).dropna().tail(756)
-        if len(aligned) < 40:
-            continue
-        variance = aligned["benchmark"].var(ddof=1)
-        beta = aligned["asset"].cov(aligned["benchmark"]) / variance if variance > 0 else np.nan
-        rows.append(
-            (
-                label,
-                symbol,
-                sign * aligned["asset"].corr(aligned["benchmark"]),
-                sign * beta,
-                len(aligned),
-            )
-        )
-    return pd.DataFrame(
-        rows,
-        columns=["Exposure", "Proxy", "Position correlation", "Position beta", "Observations"],
-    )
-
-
-st.set_page_config(page_title=TITLE, layout="wide")
+st.set_page_config(page_title="Position Sizing Lab",layout="wide")
 configure_yfinance_cache()
-inject_explorer_style(max_width_px=1560)
-st.markdown(
-    """
-    <style>
-    .sim-head{border-top:3px solid #000;border-bottom:1px solid #000;margin:1.2rem 0 .75rem;padding:.7rem 0}
-    .sim-kicker{font:800 .68rem Arial;letter-spacing:.13em;text-transform:uppercase}
-    .sim-title{font:700 1.5rem Georgia;margin-top:.22rem}
-    .sim-grid{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:7px;margin:.45rem 0 1rem}
-    .sim-dot{display:flex;align-items:center;justify-content:center;aspect-ratio:1;border:2px solid #7f7f7f;border-radius:50%;background:#fff;color:#262626;font:900 .72rem Arial}
-    .sim-dot.win{background:#C6E0B4;border-color:#548235;color:#1F4E21}
-    .sim-dot.loss{background:#F4B183;border-color:#C00000;color:#9C0006}
-    .sim-dot.flat{background:#D9E1F2;border-color:#4472C4;color:#203864}
-    .sim-dot.empty{background:#F2F2F2;border-color:#A6A6A6;color:transparent}
-    .sim-balance{display:flex;justify-content:space-between;border-top:2px solid #000;border-bottom:2px solid #000;margin:.55rem 0 .85rem;padding:.72rem 0}
-    .sim-balance span:first-child{font:800 .7rem Arial;letter-spacing:.1em;text-transform:uppercase;color:#262626}
-    .sim-balance span:last-child{font:700 1.35rem Georgia}
-    main:has(.sim-head) [data-testid="stBaseButton-primary"]{border:1px solid #7F7F7F!important;background:#E7E6E6!important;color:#000!important;box-shadow:none!important}
-    main:has(.sim-head) [data-testid="stBaseButton-primary"]:hover{background:#D9D9D9!important;color:#000!important}
-    main:has(.sim-head) [data-testid="stBaseButton-primary"]:disabled{border-color:#A6A6A6!important;background:#E7E6E6!important;color:#595959!important;opacity:1!important}
-    @media(max-width:760px){.sim-grid{gap:5px}.sim-dot{font-size:.64rem}}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
+inject_explorer_style(max_width_px=1350)
+render_page_header(PageHeader(title="Position Sizing Lab",description="Scale a position with the volatility regime. Set your base exposure, compare the adjustment, and see the change in risk.",eyebrow="ADFM Risk + Execution"))
+st.markdown(CSS,unsafe_allow_html=True)
 with st.sidebar:
-    render_sidebar_about("22_Position_Sizing_Lab.py")
-    with st.expander("Individual position setup"):
-        ticker = st.text_input("Ticker", "AAPL").strip().upper()
-        direction = st.selectbox("Direction", ("Long", "Short"))
-        conviction = st.slider(
-            "Conviction level",
-            1,
-            5,
-            3,
-            help="1=5%, 2=10%, 3=15%, 4=20%, 5=25% maximum gross exposure.",
-        )
-        horizon_label = st.selectbox(
-            "Intended holding period",
-            tuple(HORIZON_TRADING_DAYS),
-            index=1,
-        )
-        portfolio_nav = st.number_input(
-            "Individual sizing NAV",
-            min_value=1_000.0,
-            value=5_000_000.0,
-            step=100_000.0,
-            format="%.0f",
-        )
-        max_loss_pct = st.number_input(
-            "Maximum NAV loss at invalidation",
-            .10,
-            10.0,
-            1.25,
-            .05,
-            format="%.2f",
-        )
-        hold_earnings = st.checkbox(
-            "Assume position is held through earnings",
-            value=horizon_label != "1 month",
-        )
-        with st.expander("Liquidity assumptions"):
-            participation = st.slider(
-                "Maximum share of median daily dollar volume",
-                1,
-                25,
-                10,
-                format="%d%%",
-            )
-            liquidation_days = st.slider("Target liquidation window", 1, 10, 3, format="%d days")
+    with st.expander("About This Tool"):
+        st.write("Base exposure is the size you want at normal volatility. The model scales that size inversely with recent realized volatility and applies your exposure ceiling.")
+        st.caption("Normal volatility is the median of 252 prior rolling volatility observations, ending before the recent window. Volatility measures movement, not conviction or expected return.")
+    window = st.selectbox("Volatility window",[10,20,60],index=1,format_func=lambda x:f"{x} trading sessions",key="psl_window")
+    ceiling_pct = st.number_input("Exposure ceiling (% NAV)",min_value=0.0,max_value=500.0,value=30.0,step=5.0,key="psl_ceiling")
+    with st.expander("Dollar sizing (optional)"):
+        nav = st.number_input("Current NAV (USD)",min_value=0.0,value=0.0,step=100000.0,format="%.0f",key="psl_nav")
+        st.caption("Enter NAV to translate exposures into dollar notionals. No portfolio assumptions are stored here.")
 
-render_page_header(
-    PageHeader(
-        title=TITLE,
-        description=(
-            "Stress dated portfolio holdings with combined factor shocks, or expand the individual-position sizing and historical path simulator."
-        ),
-        eyebrow="ADFM Risk + Decision Support",
-    )
-)
-
-render_portfolio_stress()
-
-with st.expander("Individual-position sizing and historical simulator"):
-    individual_enabled = st.checkbox("Load individual-position history", value=False, key="psl_load_history")
-    if individual_enabled:
-        if not ticker:
-            st.error("Enter a ticker.")
-            st.stop()
-
-        with st.spinner(f"Loading full available history for {ticker}..."):
-            frames, missing = fetch_daily_ohlcv(
-                unique_tickers([ticker, *BENCHMARKS]),
-                period="max",
-            )
-        close = close_series(frames, ticker)
-        ohlcv = adjusted_frame(frames, ticker)
-        if len(close) < 63:
-            st.error(f"No usable historical series was returned for {ticker}.")
-            st.stop()
-
-        latest = float(close.iloc[-1])
-        horizon_days = HORIZON_TRADING_DAYS[horizon_label]
-        render_status_line(
-            ticker=ticker,
-            data_through=pd.Timestamp(close.index[-1]).strftime("%Y-%m-%d"),
-            history=f"{len(close):,} sessions",
-            holding_period=horizon_label,
-            source="Yahoo Finance",
-        )
-
-        render_section_header(
-            "Trade structure",
-            "Target and invalidation distances are applied proportionally to every historical starting date.",
-        )
-        c1, c2, c3 = st.columns(3)
-        entry = c1.number_input(
-            "Entry price",
-            min_value=.01,
-            value=latest,
-            step=max(.01, latest * .0025),
-            format="%.2f",
-            key=f"entry_{ticker}_{direction}",
-        )
-        target = c2.number_input(
-            "Target price",
-            min_value=.01,
-            value=latest * (1.15 if direction == "Long" else .85),
-            step=max(.01, latest * .0025),
-            format="%.2f",
-            key=f"target_{ticker}_{direction}",
-        )
-        stop = c3.number_input(
-            "Invalidation price",
-            min_value=.01,
-            value=latest * (.92 if direction == "Long" else 1.08),
-            step=max(.01, latest * .0025),
-            format="%.2f",
-            key=f"stop_{ticker}_{direction}",
-        )
-        if direction == "Long":
-            target_move, stop_distance = target / entry - 1, 1 - stop / entry
-        else:
-            target_move, stop_distance = 1 - target / entry, stop / entry - 1
-        if stop_distance <= 0:
-            st.error("The invalidation is on the wrong side of the entry for the selected direction.")
-            st.stop()
-        if target_move <= 0:
-            st.warning("The target is on the wrong side of the entry. Target-hit statistics are disabled until corrected.")
-
-        returns = close.pct_change(fill_method=None).dropna()
-        simulation_returns = directional_daily_returns(close, direction)
-        rolling_vol = rolling_annualized_volatility(returns, 63)
-        current_vol = annualized_volatility(returns, 63)
-        median_vol = float(rolling_vol.dropna().median())
-        tail_move = historical_tail_move(returns, direction.lower(), 5)
-        daily_es = expected_shortfall(returns, direction.lower(), .01)
-        median_dollar_volume = float(
-            (
-                close.reindex(ohlcv.index)
-                * pd.to_numeric(ohlcv["Volume"], errors="coerce")
-            ).dropna().tail(252).median()
-        )
-
-        dates = earnings_dates(ticker)
-        events = earnings_reaction_frame(ohlcv, dates)
-        if len(events) >= 4:
-            event_move = float(events["abs_move"].quantile(.90))
-            event_basis = f"90th-percentile earnings reaction across {len(events)} events"
-        else:
-            event_move = daily_gap_proxy(ohlcv, .90)
-            event_basis = "90th-percentile overnight gap; earnings history unavailable"
-        today = pd.Timestamp(datetime.now(NY_TZ).date())
-        next_earnings = min((date for date in dates if date.normalize() >= today), default=None)
-
-        step = {21: 5, 63: 5, 252: 21, 1260: 63}[horizon_days]
-        paths = historical_windows(close, horizon_days, direction.lower(), step=step)
-        max_loss = max_loss_pct / 100
-        sizing = calculate_sizing(
-            conviction=conviction,
-            max_nav_loss=max_loss,
-            stop_distance=stop_distance,
-            current_volatility=current_vol,
-            historical_median_volatility=median_vol,
-            event_move=event_move,
-            tail_move=tail_move,
-            portfolio_nav=portfolio_nav,
-            median_dollar_volume=median_dollar_volume,
-            hold_through_earnings=hold_earnings,
-            participation_rate=participation / 100,
-            liquidation_days=liquidation_days,
-        )
-        position_value = portfolio_nav * sizing.suggested_size
-        loss_at_stop = sizing.suggested_size * stop_distance
-        target_nav = sizing.suggested_size * target_move if target_move > 0 else np.nan
-        event_nav = sizing.suggested_size * event_move
-
-        verdict = (
-            f"{sizing.binding_constraint} reduces the {pct(sizing.conviction_ceiling)} conviction ceiling to {pct(sizing.suggested_size)}."
-            if sizing.suggested_size < sizing.conviction_ceiling - 1e-9
-            else "The conviction ceiling remains binding; the selected risk constraints do not force a smaller position."
-        )
-        render_selection_note("Sizing verdict", verdict)
-        render_detail_metrics(
-            [
-                ("Conviction ceiling", pct(sizing.conviction_ceiling), f"Conviction {conviction} of 5"),
-                ("Suggested exposure", pct(sizing.suggested_size), sizing.binding_constraint),
-                ("Position notional", money(position_value), f"At {money(portfolio_nav)} NAV"),
-                ("Loss at invalidation", pct(loss_at_stop, 2), f"Budget {pct(max_loss, 2)}"),
-                ("NAV impact at target", pct(target_nav, 2), f"Target move {pct(target_move)}"),
-                ("Historical event loss", pct(event_nav, 2), event_basis),
-            ]
-        )
-
-        st.markdown(
-            "<div class='sim-head'><div class='sim-kicker'>Interactive historical simulation</div>"
-            "<div class='sim-title'>Run one holding-period path, session by session, using observed ticker returns.</div></div>",
-            unsafe_allow_html=True,
-        )
-
-        if paths.empty or len(simulation_returns) < horizon_days:
-            st.warning(
-                f"{ticker} does not have enough history for a full {horizon_label} simulation. Choose a shorter holding period or a ticker with longer history."
-            )
-        else:
-            horizon_hit_rate = float(paths["return"].gt(0).mean())
-            median_horizon_return = float(paths["return"].median())
-            daily_hit_rate = float(simulation_returns.gt(0).mean())
-            log_optimal = empirical_log_optimal(simulation_returns, sizing.conviction_ceiling)
-
-            a, b, c, d = st.columns([1.1, 1.15, .8, .8])
-            starting_balance = a.number_input(
-                "Starting balance",
-                min_value=1_000.0,
-                value=float(portfolio_nav),
-                step=100_000.0,
-                format="%.0f",
-            )
-            mode = b.selectbox(
-                "Sampling mode",
-                (
-                    "Random historical blocks",
-                    "Recent-regime weighted blocks",
-                    "Chronological regime replay",
-                ),
-                help=(
-                    "Random modes sample 20-session blocks so serial dependence is partly preserved. Chronological replay follows one continuous historical path."
-                ),
-            )
-            c.number_input(
-                "Sessions in run",
-                min_value=horizon_days,
-                max_value=horizon_days,
-                value=horizon_days,
-                disabled=True,
-            )
-            sessions_per_pulse = d.slider("Sessions per pulse", 1, 25, 5)
-
-            ceiling_pct = sizing.conviction_ceiling * 100
-            suggested_pct = sizing.suggested_size * 100
-            control_signature = (
-                f"{ticker}|{direction}|{horizon_label}|{conviction}|{starting_balance:.2f}|"
-                f"{mode}|{suggested_pct:.3f}"
-            )
-            position_key = PFX + "position_pct"
-            if st.session_state.get(PFX + "control_signature") != control_signature:
-                st.session_state[PFX + "control_signature"] = control_signature
-                st.session_state[position_key] = min(
-                    ceiling_pct,
-                    max(.5, round(suggested_pct * 2) / 2),
-                )
-            simulation_position_pct = st.slider(
-                "Simulation position size",
-                .5,
-                max(.5, float(ceiling_pct)),
-                step=.5,
-                key=position_key,
-                help="Gross exposure applied to each observed daily return. It cannot exceed the conviction ceiling.",
-            )
-            simulation_fraction = simulation_position_pct / 100
-            seed = abs(hash((ticker, direction, horizon_label, conviction))) % 1_000_000
-            signature = f"{control_signature}|{simulation_position_pct:.2f}|{seed}"
-            if st.session_state.get(PFX + "signature") != signature:
-                reset_simulation(starting_balance, signature, seed)
-
-            @st.fragment(run_every=.8)
-            def live_simulator() -> None:
-                if st.session_state[PFX + "running"]:
-                    remaining = max(
-                        0,
-                        horizon_days - len(st.session_state[PFX + "returns"]),
-                    )
-                    for _ in range(min(sessions_per_pulse, remaining)):
-                        add_session(
-                            simulation_returns,
-                            simulation_fraction,
-                            mode,
-                            seed,
-                            horizon_days,
-                        )
-                    if (
-                        len(st.session_state[PFX + "returns"]) >= horizon_days
-                        or st.session_state[PFX + "balances"][-1] <= 0
-                    ):
-                        st.session_state[PFX + "running"] = False
-
-                balances = st.session_state[PFX + "balances"]
-                sampled = st.session_state[PFX + "returns"]
-                nav_returns = st.session_state[PFX + "nav_returns"]
-                sampled_dates = st.session_state[PFX + "dates"]
-                completed = len(sampled)
-                current_balance = float(balances[-1])
-                cumulative = current_balance / starting_balance - 1
-                realized_hit = float(np.mean(np.asarray(sampled) > 0)) if sampled else np.nan
-
-                left, right = st.columns([.82, 1.18], gap="large")
-                with left:
-                    st.markdown(
-                        f"**{ticker} finished positive in {horizon_hit_rate * 100:.1f}% of rolling {horizon_label} windows.**"
-                    )
-                    st.caption(
-                        "The game advances one observed daily session at a time. It does not stack repeated full holding-period returns."
-                    )
-                    st.markdown(outcome_grid(sampled), unsafe_allow_html=True)
-                    st.markdown(
-                        f"<div class='sim-balance'><span>Balance</span><span>{escape(money(current_balance))}</span></div>",
-                        unsafe_allow_html=True,
-                    )
-                    buttons = st.columns(4)
-                    if buttons[0].button(
-                        "Start simulation",
-                        type="primary",
-                        width="stretch",
-                        disabled=(
-                            st.session_state[PFX + "running"]
-                            or completed >= horizon_days
-                            or current_balance <= 0
-                        ),
-                    ):
-                        st.session_state[PFX + "running"] = True
-                    if buttons[1].button(
-                        "Run one session",
-                        width="stretch",
-                        disabled=(
-                            st.session_state[PFX + "running"]
-                            or completed >= horizon_days
-                            or current_balance <= 0
-                        ),
-                    ):
-                        add_session(
-                            simulation_returns,
-                            simulation_fraction,
-                            mode,
-                            seed,
-                            horizon_days,
-                        )
-                    if buttons[2].button(
-                        "Stop",
-                        width="stretch",
-                        disabled=not st.session_state[PFX + "running"],
-                    ):
-                        st.session_state[PFX + "running"] = False
-                    if buttons[3].button("Reset", width="stretch"):
-                        reset_simulation(starting_balance, signature, seed)
-
-                    if simulation_fraction > sizing.suggested_size + .0025:
-                        st.error(
-                            f"Above the risk-adjusted suggestion by {(simulation_fraction - sizing.suggested_size) * 100:.1f} percentage points."
-                        )
-                    elif simulation_fraction + .0025 < sizing.suggested_size:
-                        st.info(
-                            f"Below the risk-adjusted suggestion by {(sizing.suggested_size - simulation_fraction) * 100:.1f} percentage points."
-                        )
-                    else:
-                        st.success("Simulation size is aligned with the risk-adjusted suggestion.")
-                    if sampled_dates:
-                        st.caption(
-                            f"Last draw: {sampled_dates[-1]:%Y-%m-%d} · ticker return {sampled[-1] * 100:+.2f}% · NAV contribution {nav_returns[-1] * 100:+.3f}%"
-                        )
-                    else:
-                        st.caption(
-                            "Each step uses an observed daily return. Random modes preserve returns in 20-session blocks."
-                        )
-
-                with right:
-                    st.plotly_chart(bankroll_chart(balances), width="stretch")
-                    st.plotly_chart(volatility_chart(nav_returns), width="stretch")
-
-                render_detail_metrics(
-                    [
-                        ("Sessions completed", f"{completed:,} / {horizon_days:,}", mode),
-                        ("Cumulative return", pct(cumulative, 1, True), money(current_balance)),
-                        ("Maximum drawdown", pct(max_balance_drawdown(balances)), "Simulation balance"),
-                        ("Realized daily hit rate", pct(realized_hit, 0), f"Historical daily rate {pct(daily_hit_rate, 0)}"),
-                        ("Position size", pct(simulation_fraction), f"Suggested {pct(sizing.suggested_size)}"),
-                        ("Historical log-optimal", pct(log_optimal), "Daily-return estimate within conviction ceiling"),
-                    ]
-                )
-
-            live_simulator()
-            with st.expander("Simulation methodology and historical edge inputs"):
-                st.markdown(
-                    "One simulation now represents one selected holding period. The balance advances through observed daily returns rather than compounding 100 separate one-, three-, or five-year outcomes. Random modes resample 20-session blocks, while chronological replay follows one continuous historical path. This keeps the path economically interpretable and avoids the explosive double-counting visible in the prior version."
-                )
-                st.dataframe(
-                    pd.DataFrame(
-                        [
-                            ("Historical daily hit rate", pct(daily_hit_rate)),
-                            (f"Rolling {horizon_label} hit rate", pct(horizon_hit_rate)),
-                            (f"Median {horizon_label} return", pct(median_horizon_return, 1, True)),
-                            ("Daily log-growth maximizing size", pct(log_optimal)),
-                            ("Sessions in one run", f"{horizon_days:,}"),
-                            ("Bootstrap block length", f"{BLOCK_SIZE} sessions"),
-                        ],
-                        columns=["Metric", "Value"],
-                    ),
-                    width="stretch",
-                    hide_index=True,
-                )
-
-        caps = pd.DataFrame(
-            [
-                ("Conviction ceiling", sizing.conviction_ceiling, f"Conviction {conviction} × 5%"),
-                ("Volatility adjustment", sizing.volatility_cap, "Current 63D volatility versus full-history median"),
-                ("Invalidation loss budget", sizing.invalidation_cap, "NAV loss budget divided by invalidation distance"),
-                ("Earnings / event risk", sizing.event_cap, event_basis if hold_earnings else "Disabled"),
-                ("Historical tail risk", sizing.tail_cap, "NAV loss budget divided by five-day adverse tail"),
-                ("Liquidity", sizing.liquidity_cap, f"{participation}% of median dollar volume across {liquidation_days} days"),
-            ],
-            columns=["Constraint", "Maximum position", "Method"],
-        )
-        caps["Reduction vs ceiling"] = sizing.conviction_ceiling - caps["Maximum position"]
-        for column in ("Maximum position", "Reduction vs ceiling"):
-            caps[column] *= 100
-
-        with st.expander("Sizing attribution"):
-            st.dataframe(
-                caps,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Maximum position": st.column_config.NumberColumn(format="%.1f%%"),
-                    "Reduction vs ceiling": st.column_config.NumberColumn(format="%.1f%%"),
-                },
-            )
-            metrics = pd.DataFrame(
-                [
-                    ("Latest price", money(latest)),
-                    ("21D realized volatility", pct(annualized_volatility(returns, 21))),
-                    ("63D realized volatility", pct(current_vol)),
-                    ("252D realized volatility", pct(annualized_volatility(returns, 252))),
-                    ("Historical median 63D volatility", pct(median_vol)),
-                    ("Maximum historical drawdown", pct(maximum_drawdown_from_prices(close))),
-                    ("1% daily expected shortfall", pct(daily_es)),
-                    ("Five-day adverse tail", pct(tail_move)),
-                    ("Median daily dollar volume", money(median_dollar_volume)),
-                ],
-                columns=["Metric", "Value"],
-            )
-            st.dataframe(metrics, width="stretch", hide_index=True)
-
-        with st.expander("Historical paths"):
-            if paths.empty:
-                st.info("Insufficient history for this holding period.")
-            else:
-                st.plotly_chart(
-                    distribution_chart(paths, max(target_move, 0), stop_distance),
-                    width="stretch",
-                )
-                touch = first_touch_statistics(
-                    ohlcv,
-                    horizon_days,
-                    direction.lower(),
-                    max(target_move, 0),
-                    stop_distance,
-                    step=step,
-                )
-                if touch:
-                    st.dataframe(
-                        pd.DataFrame(
-                            [
-                                ("Target reached first", touch["target_first_rate"] * 100, touch["target_first"]),
-                                ("Invalidation reached first", touch["stop_first_rate"] * 100, touch["stop_first"]),
-                                ("Both reached same session", touch["same_day_rate"] * 100, touch["same_day"]),
-                                ("Neither reached", touch["neither_rate"] * 100, touch["neither"]),
-                            ],
-                            columns=["Outcome", "Rate", "Observations"],
-                        ),
-                        width="stretch",
-                        hide_index=True,
-                        column_config={"Rate": st.column_config.NumberColumn(format="%.1f%%")},
-                    )
-                dataframe_download(
-                    "Download historical paths",
-                    paths,
-                    f"{ticker.lower()}_{horizon_label.replace(' ', '_')}_paths.csv",
-                )
-
-        with st.expander("Event and tail risk"):
-            render_detail_metrics(
-                [
-                    ("Event move", pct(event_move), event_basis),
-                    ("Event NAV loss", pct(event_nav, 2), "Suggested exposure × event move"),
-                    ("Five-day tail", pct(tail_move), "Historical adverse tail"),
-                    ("Next earnings", next_earnings.strftime("%Y-%m-%d") if next_earnings is not None else "N/A", "Yahoo schedule when available"),
-                ]
-            )
-            if events.empty:
-                st.info("No earnings history was returned. Event sizing uses the historical overnight-gap distribution.")
-            else:
-                display = events.sort_values("date", ascending=False).copy()
-                display["date"] = pd.to_datetime(display["date"]).dt.strftime("%Y-%m-%d")
-                for column in ("gap", "session", "close_to_close", "abs_move"):
-                    display[column] *= 100
-                st.dataframe(
-                    display,
-                    width="stretch",
-                    hide_index=True,
-                    column_config={
-                        column: st.column_config.NumberColumn(format="%.1f%%")
-                        for column in ("gap", "session", "close_to_close", "abs_move")
-                    },
-                )
-
-        with st.expander("Sensitivities"):
-            sensitivity = sensitivity_table(returns, frames, direction)
-            if sensitivity.empty:
-                st.info("Insufficient overlapping data for sensitivity analysis.")
-            else:
-                st.dataframe(
-                    sensitivity,
-                    width="stretch",
-                    hide_index=True,
-                    column_config={
-                        "Position correlation": st.column_config.NumberColumn(format="%.2f"),
-                        "Position beta": st.column_config.NumberColumn(format="%.2f"),
-                    },
-                )
-
-        if not missing.empty:
-            with st.expander("Data diagnostics"):
-                st.dataframe(missing, width="stretch", hide_index=True)
-
-render_footer(
-    data_note=(
-        "Primary inputs: Yahoo Finance adjusted daily OHLCV, available earnings dates, and liquid market proxies. The live simulation advances through observed daily returns for one selected holding period and is descriptive rather than predictive."
-    )
-)
+c1,c2,c3,c4 = st.columns([1.05,.85,1.3,1.3])
+ticker = c1.text_input("Ticker","TLT",key="psl_ticker",help="Equity or ETF ticker. Exposure refers to the entered instrument.").strip().upper()
+side = c2.selectbox("Direction",["Long","Short"],key="psl_side")
+current_pct = c3.number_input("Current exposure (% NAV)",min_value=0.0,max_value=500.0,value=10.0,step=1.0,key="psl_current")
+base_pct = c4.number_input("Base exposure (% NAV)",min_value=0.0,max_value=500.0,value=10.0,step=1.0,key="psl_base",help="Desired size when volatility is normal. All exposures are absolute magnitudes.")
+if not ticker:
+    st.info("Enter a ticker to see its volatility-adjusted size.")
+    st.stop()
+with st.spinner(f"Reading {ticker} volatility..."):
+    frames,_ = fetch_daily_ohlcv([ticker],period="3y")
+frame = frames.get(ticker)
+if frame is None or frame.empty or "Close" not in frame:
+    st.error(f"Price history is unavailable for {ticker}. Try another equity or ETF ticker.")
+    st.stop()
+close = pd.to_numeric(adjusted_ohlcv(frame)["Close"],errors="coerce").replace([np.inf,-np.inf],np.nan).dropna()
+close = close.loc[close.gt(0)].sort_index()
+close = close.loc[~close.index.duplicated(keep="last")]
+history = volatility_history(close,window)
+if history.empty or history.index[-1] != close.index[-1]:
+    st.warning(f"{ticker} needs at least {252+2*window+1} valid daily closes and nonzero volatility for this window. No sizing estimate is available.")
+    st.stop()
+as_of = pd.Timestamp(close.index[-1])
+age = (pd.Timestamp(datetime.now(ZoneInfo("America/New_York")).date())-as_of.tz_localize(None).normalize()).days
+st.caption(f"{escape(ticker)} · Data through {as_of:%b %d, %Y} · Yahoo Finance adjusted daily closes · Exposure as % of NAV")
+if age > 5:
+    st.warning(f"Price history is {age} calendar days old. Treat the size below as dated, rather than a current adjustment.")
+recent,baseline = history.iloc[-1][["recent","baseline"]]
+base,current,ceiling = base_pct/100,current_pct/100,ceiling_pct/100
+result = scale_exposure(base,current,recent,baseline,ceiling)
+render_exposure(ticker,side,current,base,ceiling,result,recent,baseline,window)
+st.markdown('<div class="psl-legend">VOLATILITY & POSITION SIZE · Past year · dashed exposure line = your current size</div>',unsafe_allow_html=True)
+st.plotly_chart(history_chart(history,base,current,ceiling,window),width="stretch",config={"displayModeBar":False})
+st.caption("Historical exposure uses the same base size and ceiling you entered, with volatility known on each date. It is a sizing illustration, not a backtest.")
+daily = recent/np.sqrt(252)
+rows = [
+    {"Measure":"Exposure / NAV","Current":f"{current:.2%}","Vol-adjusted":f"{result.target:.2%}"},
+    {"Measure":"1σ daily NAV move","Current":f"±{current*daily:.2%}","Vol-adjusted":f"±{result.target*daily:.2%}"},
+    {"Measure":"2σ adverse day / NAV","Current":f"−{current*daily*2:.2%}","Vol-adjusted":f"−{result.target*daily*2:.2%}"},
+]
+if nav > 0:
+    rows.append({"Measure":"Absolute position notional","Current":f"${current*nav:,.0f}","Vol-adjusted":f"${result.target*nav:,.0f}"})
+    rows.append({"Measure":"Notional adjustment","Current":"—","Vol-adjusted":f"{'Reduce' if result.change < 0 else 'Add'} ${abs(result.change)*nav:,.0f}"})
+st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
+st.markdown('<div class="psl-footnote">Daily moves isolate this position, using recent realized volatility. A 2σ move is a scenario, not a loss limit; gaps and tail events can exceed it. Long and short exposures use the same volatility scaling. Options and futures need instrument-specific risk treatment.</div>',unsafe_allow_html=True)
+with st.expander("Portfolio stress testing"):
+    if st.checkbox("Load portfolio stress tool",key="psl_stress"):
+        from adfm_core.portfolio_stress_page import render_portfolio_stress
+        render_portfolio_stress()
+render_footer(data_note="Sizing = base exposure × normal volatility ÷ recent volatility, capped at your ceiling. Inputs are illustrative until changed. Source: Yahoo Finance adjusted daily closes.")
