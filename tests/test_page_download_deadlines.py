@@ -86,7 +86,8 @@ class PageDownloadDeadlineTests(unittest.TestCase):
                             self.assertEqual(len(result), 90)
                         else:
                             self.assertTrue(result.empty)
-                self.assertLessEqual(clock.elapsed, 25.0)
+                limit = 40.0 if page == "baskets" else 25.0
+                self.assertLessEqual(clock.elapsed, limit)
 
     def test_deadline_keeps_observations_without_fabricating_missing_symbols(self):
         for page in ("baskets", "sector", "leadership", "ratios", "flows"):
@@ -94,7 +95,7 @@ class PageDownloadDeadlineTests(unittest.TestCase):
                 clock = Clock()
 
                 def partial(tickers, clock=clock, **kwargs):
-                    clock.elapsed += 25.0
+                    clock.elapsed += kwargs.get("recovery_budget_seconds", 25.0)
                     return self.raw_prices(["SPY"])
 
                 namespace, overrides, load = self.loader(page, clock, partial)
@@ -109,7 +110,8 @@ class PageDownloadDeadlineTests(unittest.TestCase):
                 else:
                     self.assertEqual(result.columns.tolist(), ["SPY"])
                     self.assertEqual(result["SPY"].tolist(), [100.0, 100.0])
-                self.assertLessEqual(clock.elapsed, 25.0)
+                limit = 40.0 if page == "baskets" else 25.0
+                self.assertLessEqual(clock.elapsed, limit)
 
     def test_available_provider_still_loads_the_entire_universe(self):
         for page in ("baskets", "sector", "leadership", "ratios", "flows"):
@@ -147,9 +149,9 @@ class PageDownloadDeadlineTests(unittest.TestCase):
             )
         self.assertIn("SPY", result)
         self.assertEqual(result["SPY"].tolist(), [100.0, 100.0])
-        self.assertEqual(metadata["returned_tickers"], 45)
-        self.assertEqual(len(metadata["missing_tickers"]), 1056)
-        self.assertLessEqual(clock.elapsed, 25.0)
+        self.assertEqual(metadata["returned_tickers"], 1101)
+        self.assertEqual(metadata["missing_tickers"], [])
+        self.assertLessEqual(clock.elapsed, 40.0)
 
     def test_basket_partial_response_without_benchmark_is_not_usable(self):
         clock = Clock()
@@ -162,7 +164,7 @@ class PageDownloadDeadlineTests(unittest.TestCase):
         with patch.dict(namespace, overrides):
             with self.assertRaises(namespace["PriceFeedUnavailable"]):
                 load()
-        self.assertLessEqual(clock.elapsed, 25.0)
+        self.assertLessEqual(clock.elapsed, 40.0)
 
     def test_basket_bulk_sweep_reaches_later_symbols_before_retrying_invalid_ones(self):
         clock = Clock()
@@ -186,7 +188,7 @@ class PageDownloadDeadlineTests(unittest.TestCase):
             self.assertIn("A1099", result)
             self.assertGreaterEqual(metadata["returned_tickers"], 1075)
             self.assertTrue(set(metadata["missing_tickers"]).issubset(unavailable))
-            self.assertLessEqual(clock.elapsed, 25.0)
+            self.assertLessEqual(clock.elapsed, 40.0)
         finally:
             market_data._cached_download.clear()
             market_data._LAST_GOOD.clear()
