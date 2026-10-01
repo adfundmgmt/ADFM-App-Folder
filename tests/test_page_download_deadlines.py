@@ -1,6 +1,7 @@
 """Exercise actual page loaders against slow and partially available providers."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -17,6 +18,8 @@ class Clock:
 
     def sleep(self, duration):
         self.elapsed += duration
+
+    perf_counter = monotonic
 
 
 class PageDownloadDeadlineTests(unittest.TestCase):
@@ -123,6 +126,66 @@ class PageDownloadDeadlineTests(unittest.TestCase):
                     self.assertTrue(all(len(frame) == 2 for frame in result.values()))
                 else:
                     self.assertEqual(result.shape, (2, 90))
+
+    def test_seasonality_regimes_share_one_budget_across_symbols_and_aliases(self):
+        clock = Clock()
+
+        def unavailable(symbol, start, end, **kwargs):
+            clock.elapsed += kwargs.get("recovery_budget_seconds", 25.0)
+            return None
+
+        namespace = page_functions("24_Monthly_Seasonality_Explorer.py", {"fetch_regime_market_series"},
+            {"time": clock, "_today": lambda: pd.Timestamp("2026-09-30"),
+             "_yf_download": unavailable, "DXY_FALLBACKS": ["DX=F", "UUP"]})
+        self.assertTrue(namespace["fetch_regime_market_series"]("2020-01-01", "2026-09-30").empty)
+        self.assertLessEqual(clock.elapsed, 25.0)
+
+    def test_seasonality_price_fallback_has_no_duplicate_yahoo_retry(self):
+        clock = Clock()
+        requested = []
+
+        def unavailable(symbol, start, end, **kwargs):
+            requested.append(symbol)
+            clock.elapsed += kwargs.get("recovery_budget_seconds", 25.0)
+            return None
+
+        namespace = page_functions("24_Monthly_Seasonality_Explorer.py", {"fetch_prices"},
+            {"time": clock, "_today": lambda: pd.Timestamp("2026-09-30"),
+             "_clean_symbol": str, "_yf_download": unavailable,
+             "_fred_series": lambda *args, **kwargs: None, "FALLBACK_MAP": {"^GSPC": "SP500"}})
+        self.assertIsNone(namespace["fetch_prices"]("SPY", "2020-01-01", "2026-09-30"))
+        self.assertLessEqual(clock.elapsed, 15.0)
+        self.assertEqual(len(requested), len(set(requested)))
+
+    def test_options_calendar_fallback_respects_shared_deadline(self):
+        clock = Clock()
+
+        def stalled(key, fetch, *, deadline, **kwargs):
+            clock.elapsed = max(clock.elapsed, deadline)
+            raise TimeoutError("pending")
+
+        source = SimpleNamespace(call=stalled)
+        namespace = page_functions("16_Options_Positioning_Compass.py",
+            {"fetch_expirations", "fetch_cboe_snapshot", "fetch_cboe_expirations", "available_expirations"},
+            {"time": clock, "YAHOO_OPTIONS": source, "CBOE_OPTIONS": source,
+             "expirations_from_cboe": lambda frame: ()})
+        for symbol in ("SPY", "QQQ", "IWM", "DIA"):
+            self.assertEqual(namespace["available_expirations"](symbol, deadline=20.0), ())
+        self.assertLessEqual(clock.elapsed, 20.0)
+
+    def test_optional_alfred_timeout_keeps_all_regimes_unknown(self):
+        clock = Clock()
+
+        def unavailable(key, fetch, *, deadline, **kwargs):
+            clock.elapsed = deadline
+            raise TimeoutError("ALFRED stalled")
+
+        namespace = page_functions("24_Monthly_Seasonality_Explorer.py", {"fetch_decision_regime_data"},
+            {"time": clock, "SEASONALITY_FRED": SimpleNamespace(call=unavailable)})
+        result = namespace["fetch_decision_regime_data"]("2020-01-01", "2026-09-30")
+        self.assertTrue(result["fed_regime"].eq("Unknown").all())
+        self.assertIn("TimeoutError", result.attrs["availability_error"])
+        self.assertLessEqual(clock.elapsed, 25.0)
 
 
 if __name__ == "__main__":

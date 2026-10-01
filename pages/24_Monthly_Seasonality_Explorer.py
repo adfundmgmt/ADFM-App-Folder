@@ -1,4 +1,5 @@
 import io
+import time
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,6 +13,7 @@ from matplotlib.ticker import MaxNLocator, PercentFormatter
 
 from adfm_core.primary_data import fetch_fred_symbols
 from adfm_core.market_data import download_market_data
+from adfm_core.provider_calls import SEASONALITY_FRED
 from adfm_core.point_in_time import fetch_fred_availability_records, fed_regimes_from_availability
 from adfm_core.palette import PASTEL
 from adfm_core.monthly_returns_matrix import (
@@ -161,7 +163,7 @@ def _clean_symbol(symbol: str) -> str:
 
 
 def _yf_download(
-    symbol: str, start: str, end: str, retries: int = 3
+    symbol: str, start: str, end: str, retries: int = 3, *, recovery_budget_seconds: float = 25.0,
 ) -> Optional[pd.Series]:
     try:
         df = download_market_data(
@@ -171,6 +173,7 @@ def _yf_download(
             auto_adjust=False,
             progress=False,
             threads=False, completed_only=False, retries=retries,
+            recovery_budget_seconds=recovery_budget_seconds,
         )
         if df is not None and not df.empty and "Close" in df:
             def column(name):
@@ -203,7 +206,13 @@ def _yf_download(
 
 
 def _fred_series(series_code: str, start: str, end: str) -> Optional[pd.Series]:
-    panel, status = fetch_fred_symbols((series_code,), start=start, end=end)
+    try:
+        panel, status = SEASONALITY_FRED.call((series_code, start, end),
+            lambda: fetch_fred_symbols((series_code,), start=start, end=end),
+            deadline=time.perf_counter() + 10,
+            valid=lambda result: series_code in result[0] and not result[0][series_code].dropna().empty)
+    except Exception:
+        return None
     if series_code not in panel or panel[series_code].dropna().empty:
         return None
     result = panel[series_code].copy()
@@ -211,7 +220,6 @@ def _fred_series(series_code: str, start: str, end: str) -> Optional[pd.Series]:
     return result
 
 
-@st.cache_data(show_spinner=False, ttl=PRICE_TTL_SECONDS, max_entries=64)
 def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     symbol = _clean_symbol(symbol)
     # Yahoo's end date is exclusive; include the requested final session.
@@ -220,17 +228,19 @@ def fetch_prices(symbol: str, start: str, end: str) -> Optional[pd.Series]:
     start_pad_dt = pd.Timestamp(start) - pd.DateOffset(days=45)
     start_pad = start_pad_dt.strftime("%Y-%m-%d")
 
-    series = _yf_download(symbol, start_pad, end)
+    deadline = time.perf_counter() + 15.0
+    series = _yf_download(symbol, start_pad, end, recovery_budget_seconds=max(0, deadline - time.perf_counter()))
     if series is not None:
         return series
 
     if symbol == "SPY":
-        series = _yf_download("^GSPC", start_pad, end)
+        series = _yf_download("^GSPC", start_pad, end, recovery_budget_seconds=max(0, deadline - time.perf_counter()))
         if series is not None:
             return series
 
-    if symbol in FALLBACK_MAP:
-        fred_tk = FALLBACK_MAP[symbol]
+    fallback_symbol = "^GSPC" if symbol == "SPY" else symbol
+    if fallback_symbol in FALLBACK_MAP:
+        fred_tk = FALLBACK_MAP[fallback_symbol]
         series = _fred_series(fred_tk, start_pad, end)
         if series is not None:
             series.attrs.update(source="FRED", source_symbol=fred_tk)
@@ -246,6 +256,7 @@ def fetch_intraday(symbol: str) -> pd.DataFrame:
         frame = download_market_data(symbol,
             period="1d", interval="1m", auto_adjust=False,
             prepost=False, actions=False, timeout=10,
+            recovery_budget_seconds=5,
         )
         if frame is None:
             return pd.DataFrame()
@@ -305,32 +316,32 @@ def current_price_overlay(
     return result.sort_index(), label
 
 
-@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS, max_entries=64)
 def fetch_regime_market_series(start: str, end: str) -> pd.DataFrame:
     start_dt = pd.Timestamp(start) - pd.DateOffset(years=1)
     end_dt = min(pd.Timestamp(end), _today()) + pd.DateOffset(days=5)
 
     out = pd.DataFrame()
+    deadline = time.perf_counter() + 25.0
 
     vix = _yf_download(
-        "^VIX", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
+        "^VIX", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), recovery_budget_seconds=max(0, deadline - time.perf_counter())
     )
     if vix is not None:
         out["vix"] = vix
 
     tnx = _yf_download(
-        "^TNX", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
+        "^TNX", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), recovery_budget_seconds=max(0, deadline - time.perf_counter())
     )
     if tnx is not None:
         out["tnx"] = tnx / 10.0
 
     dxy = _yf_download(
-        "DX-Y.NYB", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
+        "DX-Y.NYB", start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), recovery_budget_seconds=max(0, deadline - time.perf_counter())
     )
     if dxy is None:
         for fallback in DXY_FALLBACKS:
             dxy = _yf_download(
-                fallback, start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
+                fallback, start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), recovery_budget_seconds=max(0, deadline - time.perf_counter())
             )
             if dxy is not None:
                 break
@@ -395,11 +406,13 @@ def fetch_regime_data(start: str, end: str) -> pd.DataFrame:
     return regime
 
 
-@st.cache_data(show_spinner=False, ttl=21600, max_entries=16)
 def fetch_decision_regime_data(start: str, end: str) -> pd.DataFrame:
     months = pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M")
     try:
-        records = fetch_fred_availability_records("FEDFUNDS", (pd.Timestamp(start) - pd.DateOffset(months=8)).date().isoformat(), end)
+        padded_start = (pd.Timestamp(start) - pd.DateOffset(months=8)).date().isoformat()
+        records = SEASONALITY_FRED.call(("ALFRED", "FEDFUNDS", padded_start, end),
+            lambda: fetch_fred_availability_records("FEDFUNDS", padded_start, end),
+            deadline=time.perf_counter() + 25, valid=lambda records: not records.empty)
         result = fed_regimes_from_availability(months, records)
         result.attrs["availability_error"] = "" if result["fed_regime"].ne("Unknown").any() else "No historical ALFRED releases verified for this sample."
     except Exception as exc:
@@ -1604,10 +1617,6 @@ def render_explorer():
     with st.spinner("Fetching and analyzing data..."):
         used_symbol = symbol
         prices = fetch_prices(symbol, start_fetch_date, end_fetch_date)
-        if prices is None and symbol == "SPY":
-            prices = fetch_prices("^GSPC", start_fetch_date, end_fetch_date)
-            if prices is not None:
-                used_symbol = "^GSPC"
 
     if prices is None or prices.empty:
         st.error(f"No data found for '{symbol}'. Try a different symbol or lookback.")

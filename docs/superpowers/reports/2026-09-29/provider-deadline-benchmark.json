@@ -1,0 +1,31 @@
+{
+  "measurement": "Local isolated AppTest; not production/browser latency",
+  "results": [
+    {
+      "page": "16_Options_Positioning_Compass.py",
+      "status": "ok",
+      "cold_seconds": 45.4727,
+      "warm_seconds": 45.1048,
+      "peak_process_memory_mib": 256.26,
+      "runtime_errors": 0,
+      "errors": [],
+      "provider_errors": 1,
+      "provider_warnings": 0,
+      "tables": 1,
+      "telemetry_events": 4
+    },
+    {
+      "page": "24_Monthly_Seasonality_Explorer.py",
+      "status": "ok",
+      "cold_seconds": 41.8971,
+      "warm_seconds": 41.271,
+      "peak_process_memory_mib": 331.28,
+      "runtime_errors": 0,
+      "errors": [],
+      "provider_errors": 0,
+      "provider_warnings": 0,
+      "tables": 0,
+      "telemetry_events": 24
+    }
+  ]
+}
