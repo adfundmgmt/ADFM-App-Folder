@@ -1197,7 +1197,12 @@ def _download_close_once(batch: List[str], start: pd.Timestamp, end: pd.Timestam
 
         group_by="column",
 
-        threads=4,
+        threads=16,
+
+        # Sweep the whole universe before the page's bounded missing-symbol
+        # retries. Per-symbol transport retries otherwise consume this window.
+        retries=1,
+        recover_missing=False,
 
         ignore_tz=True,
 
@@ -1309,8 +1314,6 @@ def compatible_snapshot(tickers, start, end, primary_key):
     return best, best_meta
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 10, max_entries=16)
-
 def fetch_daily_levels(
 
     tickers: List[str],
@@ -1336,7 +1339,7 @@ def fetch_daily_levels(
     cached, cached_meta = compatible_snapshot(uniq, start, end, cache_key)
 
     cache_usable = _cache_is_usable(cached, uniq, start, end)
-    if cache_usable and cached[BENCH].last_valid_index() == end - pd.Timedelta(days=1):
+    if cache_usable and all(ticker in cached for ticker in uniq) and cached[BENCH].last_valid_index() == end - pd.Timedelta(days=1):
         return cached, {
             **cached_meta, "source": "saved_snapshot",
             "requested_tickers": len(uniq), "returned_tickers": len(cached.columns),

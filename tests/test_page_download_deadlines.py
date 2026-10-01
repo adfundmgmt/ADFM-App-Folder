@@ -8,6 +8,8 @@ import pandas as pd
 from test_loader_recovery import scope as basket_scope
 from test_page_accuracy import page_functions
 
+from adfm_core import market_data
+
 
 class Clock:
     def __init__(self):
@@ -20,6 +22,9 @@ class Clock:
         self.elapsed += duration
 
     perf_counter = monotonic
+
+    def monotonic_ns(self):
+        return int(self.elapsed * 1_000_000_000)
 
 
 class PageDownloadDeadlineTests(unittest.TestCase):
@@ -158,6 +163,63 @@ class PageDownloadDeadlineTests(unittest.TestCase):
             with self.assertRaises(namespace["PriceFeedUnavailable"]):
                 load()
         self.assertLessEqual(clock.elapsed, 25.0)
+
+    def test_basket_bulk_sweep_reaches_later_symbols_before_retrying_invalid_ones(self):
+        clock = Clock()
+        symbols = ["SPY"] + [f"A{i:04}" for i in range(1100)]
+        unavailable = {f"A{i:04}" for i in range(0, 1100, 45)}
+
+        def provider(tickers, kwargs, deadline):
+            waves = (len(tickers) + kwargs["threads"] - 1) // kwargs["threads"]
+            clock.elapsed += min(8.0 if len(tickers) == 1 else 0.25 * waves, deadline - clock.elapsed)
+            return self.raw_prices([symbol for symbol in tickers if symbol not in unavailable])
+
+        market_data._cached_download.clear()
+        market_data._LAST_GOOD.clear()
+        namespace, overrides, _ = self.loader("baskets", clock, market_data.download_market_data)
+        try:
+            with patch.dict(namespace, overrides), patch.object(market_data, "time", clock), \
+                    patch.object(market_data, "_download_before_deadline", side_effect=provider):
+                result, metadata = namespace["fetch_daily_levels"](
+                    symbols, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-02-01"),
+                )
+            self.assertIn("A1099", result)
+            self.assertGreaterEqual(metadata["returned_tickers"], 1075)
+            self.assertTrue(set(metadata["missing_tickers"]).issubset(unavailable))
+            self.assertLessEqual(clock.elapsed, 25.0)
+        finally:
+            market_data._cached_download.clear()
+            market_data._LAST_GOOD.clear()
+
+    def test_complete_large_basket_sweep_keeps_successful_chunks_for_warm_load(self):
+        clock = Clock()
+        symbols = ["SPY"] + [f"A{i:04}" for i in range(1204)]
+        quote = {"value": 100.0}
+
+        def provider(tickers, kwargs, deadline):
+            clock.elapsed += 0.5
+            return self.raw_prices(tickers) * (quote["value"] / 100.0)
+
+        market_data._cached_download.clear()
+        market_data._LAST_GOOD.clear()
+        namespace, overrides, _ = self.loader("baskets", clock, market_data.download_market_data)
+        try:
+            with patch.dict(namespace, overrides), patch.object(market_data, "time", clock), \
+                    patch.object(market_data, "_download_before_deadline", side_effect=provider):
+                first, _ = namespace["fetch_daily_levels"](
+                    symbols, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-02-01"),
+                )
+                quote["value"] = 200.0
+                elapsed = clock.elapsed
+                warm, metadata = namespace["fetch_daily_levels"](
+                    symbols, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-02-01"),
+                )
+            pd.testing.assert_frame_equal(warm, first)
+            self.assertEqual(metadata["returned_tickers"], 1205)
+            self.assertEqual(clock.elapsed, elapsed)
+        finally:
+            market_data._cached_download.clear()
+            market_data._LAST_GOOD.clear()
 
     def test_seasonality_regimes_share_one_budget_across_symbols_and_aliases(self):
         clock = Clock()

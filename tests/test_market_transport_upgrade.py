@@ -130,6 +130,23 @@ class TransportUpgradeTests(unittest.TestCase):
         self.assertTrue(first[("Close", "QQQ")].isna().all())
         self.assertEqual(recovered[("Close", "QQQ")].iloc[-1], 21)
 
+    def test_bulk_owner_can_defer_symbol_recovery_without_caching_missing_data(self):
+        partial = pd.concat({"SPY": bars([10, 11])}, axis=1).swaplevel(axis=1)
+        complete = pd.concat({"SPY": bars([10, 11]), "QQQ": bars([20, 21])}, axis=1).swaplevel(axis=1)
+        bulk_responses = iter([partial, complete])
+
+        def provider(tickers, **kwargs):
+            if len(tickers) == 1:
+                return bars([99, 100])
+            return next(bulk_responses)
+
+        with patch.object(market_data.yf, "download", side_effect=provider):
+            first = self.download(["SPY", "QQQ"], retries=1, recover_missing=False)
+            recovered = self.download(["SPY", "QQQ"], retries=1, recover_missing=False)
+        self.assertEqual(first[("Close", "SPY")].iloc[-1], 11)
+        self.assertTrue(first[("Close", "QQQ")].isna().all())
+        self.assertEqual(recovered[("Close", "QQQ")].iloc[-1], 21)
+
     def test_last_good_delivery_does_not_cache_outage_over_provider_recovery(self):
         with patch.object(market_data.yf, "download", return_value=bars([10, 11])):
             self.download("SPY", retries=1)

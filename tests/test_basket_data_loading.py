@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
+import streamlit as st
 
 
 class PriceFeedUnavailable(RuntimeError):
@@ -91,6 +92,29 @@ class BasketDataLoadingTests(unittest.TestCase):
         _, metadata = self.fetch()
         self.assertEqual(metadata["source"], "yahoo")
         self.assertEqual(metadata["cache_meta"], {})
+
+    def test_partial_response_does_not_freeze_missing_constituents_on_next_load(self):
+        # Preserve the production decorator here: the page cache used to hide
+        # provider recovery even though the shared transport did not cache it.
+        page = Path(__file__).resolve().parents[1] / "pages" / "1_ADFM_Public_Equities_Baskets.py"
+        node = next(node for node in ast.parse(page.read_text()).body
+                    if isinstance(node, ast.FunctionDef) and node.name == "fetch_daily_levels")
+        self.namespace["st"] = st
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(page), "exec"), self.namespace)
+        load = self.namespace["fetch_daily_levels"]
+        if hasattr(load, "clear"):
+            load.clear()
+            self.addCleanup(load.clear)
+        self.download.side_effect = [
+            self.raw({"SPY": [100, 101, 102]}), pd.DataFrame(), pd.DataFrame(),
+            self.raw({"SPY": [100, 101, 102], "AAA": [50, 51, 52]}),
+        ]
+        first, _ = self.fetch()
+        self.assertNotIn("AAA", first)
+        recovered, metadata = self.fetch()
+        self.assertIn("AAA", recovered)
+        self.assertEqual(recovered["AAA"].tolist(), [50, 51, 52])
+        self.assertEqual(metadata["missing_tickers"], [])
 
 
 if __name__ == "__main__":
