@@ -172,7 +172,13 @@ class OptionsPositioningPageTests(unittest.TestCase):
                     raise RuntimeError("QQQ unavailable")
                 return super().option_chain(expiry)
 
-        with patch("yfinance.Ticker", OneTickerFails):
+        with (
+            patch("yfinance.Ticker", OneTickerFails),
+            patch(
+                "adfm_core.options_sources.fetch_cboe_delayed_options",
+                side_effect=RuntimeError("Cboe unavailable"),
+            ),
+        ):
             app = AppTest.from_file(str(PAGE)).run(timeout=20)
 
         self.assertFalse(app.exception)
