@@ -715,11 +715,12 @@ def render_issuer_masthead(
     sic_description: str,
     latest_form: str,
     latest_filed: str,
-    currency: str,
+    price_currency: str,
+    filing_currency: str,
     close_history: pd.Series,
 ) -> None:
     price_text = (
-        _signed_currency(float(price), currency, 2)
+        _signed_currency(float(price), price_currency, 2)
         if price is not None and pd.notna(price)
         else "Unavailable"
     )
@@ -748,7 +749,7 @@ def render_issuer_masthead(
               <span class="uw-symbol">{escape(ticker)}</span>
               <span class="uw-company">{escape(name)}</span>
             </div>
-            <div class="uw-meta">{escape(sic_description)} · Filing currency {escape(currency)} · Latest filing {escape(latest_form)} on {escape(latest_filed)}</div>
+            <div class="uw-meta">{escape(sic_description)} · Filing currency {escape(filing_currency)} · Latest filing {escape(latest_form)} on {escape(latest_filed)}</div>
           </div>
           <div class="uw-quote">
             <div class="uw-price">{escape(price_text)}</div>
@@ -1317,7 +1318,8 @@ render_issuer_masthead(
     sic_description=sic_description,
     latest_form=latest_form,
     latest_filed=latest_filed,
-    currency="USD",
+    price_currency="USD",
+    filing_currency=currency,
     close_history=close_history,
 )
 
