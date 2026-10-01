@@ -83,20 +83,52 @@ class OptionsPositioningPageTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_first_view_is_one_four_quadrant_chart_and_one_compact_table(self):
+        app = AppTest.from_file(str(PAGE)).run(timeout=20)
+
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        self.assertEqual(len(app.get("plotly_chart")), 1)
+        self.assertEqual(len(app.dataframe), 1)
+        self.assertEqual(
+            list(app.dataframe[0].value.columns),
+            [
+                "Ticker",
+                "Quadrant",
+                "1M Return",
+                "ATM IV",
+                "21D Realized",
+                "IV - Realized",
+                "Richness Rank",
+                "Expiry",
+                "DTE",
+            ],
+        )
+        self.assertEqual({item.label for item in app.expander}, {"Methodology & coverage"})
+        self.assertEqual(len(app.get("download_button")), 0)
+
+    def test_three_month_horizon_switches_price_direction_column(self):
+        app = AppTest.from_file(str(PAGE)).run(timeout=20)
+        app.selectbox[0].set_value("3 months")
+        app.run(timeout=20)
+
+        self.assertFalse(app.exception)
+        self.assertIn("3M Return", app.dataframe[0].value.columns)
+        self.assertNotIn("1M Return", app.dataframe[0].value.columns)
+
     def test_underlying_spot_is_preserved_when_price_history_is_missing(self):
         with patch(
             "adfm_core.market_data.fetch_daily_ohlcv",
             return_value=({}, pd.DataFrame([{"Ticker": "QQQ", "Reason": "Unavailable"}])),
         ):
             app = AppTest.from_file(str(PAGE)).run(timeout=20)
-            self.assertFalse(app.exception)
-            self.assertFalse(app.error)
-            set_expander(app, "Term structure + surface", True)
-            app.run(timeout=20)
 
         self.assertFalse(app.exception)
-        self.assertEqual(app.dataframe[-1].value["spot"].tolist(), [100.0])
-        self.assertAlmostEqual(app.dataframe[-1].value.iloc[0]["atm_iv"], 0.25)
+        self.assertFalse(app.error)
+        table = app.dataframe[0].value
+        row = table.loc[table["Ticker"].eq("QQQ")].iloc[0]
+        self.assertAlmostEqual(row["ATM IV"], 0.25)
+        self.assertEqual(row["Quadrant"], "Unavailable")
 
     def test_missing_strikes_report_unusable_chain_without_crashing(self):
         class MissingStrikesTicker(FixtureTicker):
@@ -133,50 +165,30 @@ class OptionsPositioningPageTests(unittest.TestCase):
             all("underlying price" in issue for issue in app.dataframe[0].value["Issue"])
         )
 
-    def test_data_opens_without_opening_premium_activity(self):
-        app = AppTest.from_file(str(PAGE)).run(timeout=20)
+    def test_failed_highlight_ticker_does_not_hide_loaded_peer_map(self):
+        class OneTickerFails(FixtureTicker):
+            def option_chain(self, expiry):
+                if self.symbol == "QQQ":
+                    raise RuntimeError("QQQ unavailable")
+                return super().option_chain(expiry)
+
+        with patch("yfinance.Ticker", OneTickerFails):
+            app = AppTest.from_file(str(PAGE)).run(timeout=20)
+
         self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        self.assertEqual(len(app.get("plotly_chart")), 1)
         self.assertEqual(len(app.dataframe), 1)
-        self.assertEqual(len(app.get("download_button")), 0)
+        self.assertNotIn("QQQ", app.dataframe[0].value["Ticker"].tolist())
 
-        set_expander(app, "Data", True)
-        app.run(timeout=20)
-
-        self.assertFalse(app.exception)
-        self.assertEqual(len(app.dataframe), 1)
-        self.assertEqual(
-            {item.proto.label for item in app.get("download_button")},
-            {"Download compass snapshot", "Download selected term structure", "Download premium activity"},
-        )
-        activity = next(item for item in app.expander if item.label == "Premium activity")
-        self.assertFalse(activity.proto.expanded)
-
-    def test_premium_activity_renders_then_data_survives_its_collapse(self):
-        app = AppTest.from_file(str(PAGE)).run(timeout=20)
-        set_expander(app, "Premium activity", True)
-        app.run(timeout=20)
-        self.assertFalse(app.exception)
-        table = app.dataframe[-1].value
-        self.assertEqual(table["premium_activity"].tolist(), [6000.0, 6000.0, 2000.0, 2000.0])
-        self.assertEqual(set(table["type"]), {"call", "put"})
-
-        set_expander(app, "Data", True)
-        set_expander(app, "Premium activity", True)
-        set_expander(app, "Term structure + surface", True)
-        set_expander(app, "Methodology", True)
-        app.run(timeout=20)
-        self.assertFalse(app.exception)
-        self.assertEqual(len(app.dataframe), 3)
-        self.assertEqual(len(app.get("download_button")), 3)
-
-        set_expander(app, "Premium activity", False)
-        set_expander(app, "Term structure + surface", False)
-        set_expander(app, "Data", True)
-        app.run(timeout=20)
-
-        self.assertFalse(app.exception)
-        self.assertEqual(len(app.dataframe), 1)
-        self.assertEqual(len(app.get("download_button")), 3)
+    def test_source_no_longer_contains_old_detail_surfaces(self):
+        source = PAGE.read_text(encoding="utf-8")
+        self.assertNotIn("Term structure + surface", source)
+        self.assertNotIn("Premium activity", source)
+        self.assertNotIn("Download compass snapshot", source)
+        self.assertNotIn("build_positioning_commentary", source)
+        self.assertIn("UP + EXPENSIVE", source)
+        self.assertIn("DOWN + CHEAP", source)
 
 
 if __name__ == "__main__":
