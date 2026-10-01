@@ -189,14 +189,14 @@ def compass_chart(
 
     plot["price_return_pct"] = pd.to_numeric(plot[return_column], errors="coerce") * 100.0
     max_abs = float(np.nanmax(np.abs(plot["price_return_pct"]))) if not plot.empty else 5.0
-    x_extent = max(5.0, max_abs * 1.22)
+    x_extent = max(5.0, max_abs * 1.18)
 
     fig = go.Figure()
     quadrants = (
-        (-x_extent, 0, 50, 100, "rgba(192,80,77,.13)"),
-        (0, x_extent, 50, 100, "rgba(255,192,0,.12)"),
-        (-x_extent, 0, 0, 50, "rgba(91,155,213,.11)"),
-        (0, x_extent, 0, 50, "rgba(112,173,71,.13)"),
+        (-x_extent, 0, 50, 100, "rgba(192,80,77,.055)"),
+        (0, x_extent, 50, 100, "rgba(255,192,0,.050)"),
+        (-x_extent, 0, 0, 50, "rgba(91,155,213,.045)"),
+        (0, x_extent, 0, 50, "rgba(112,173,71,.050)"),
     )
     for x0, x1, y0, y1, color in quadrants:
         fig.add_shape(
@@ -210,8 +210,8 @@ def compass_chart(
             layer="below",
         )
 
-    fig.add_hline(y=50, line=dict(color="#666666", width=1))
-    fig.add_vline(x=0, line=dict(color="#666666", width=1))
+    fig.add_hline(y=50, line=dict(color="#7a7a7a", width=1))
+    fig.add_vline(x=0, line=dict(color="#7a7a7a", width=1))
 
     point_colors = {
         "Positive Trend · IV Cheap": PASTEL["sage"],
@@ -223,14 +223,23 @@ def compass_chart(
         quadrant_label(float(ret), float(rank))
         for ret, rank in zip(plot[return_column], plot["iv_richness_percentile"], strict=False)
     ]
+    display_labels = [
+        f"<b>{ticker}</b>" if ticker == selected else str(ticker)
+        for ticker in plot["ticker"]
+    ]
+    text_positions = [
+        "bottom center" if float(rank) >= 90 else "top center"
+        for rank in plot["iv_richness_percentile"]
+    ]
 
     fig.add_trace(
         go.Scatter(
             x=plot["price_return_pct"],
             y=plot["iv_richness_percentile"],
-            text=plot["ticker"],
+            text=display_labels,
             customdata=np.column_stack(
                 [
+                    plot["ticker"],
                     plot["atm_iv"] * 100.0,
                     plot["realized_vol_21d"] * 100.0,
                     plot["iv_richness"] * 100.0,
@@ -239,62 +248,79 @@ def compass_chart(
                 ]
             ),
             mode="markers+text",
-            textposition="top center",
+            textposition=text_positions,
+            textfont=dict(size=11, color="#172033"),
             marker=dict(
-                size=[16 if ticker == selected else 11 for ticker in plot["ticker"]],
+                size=[16 if ticker == selected else 10 for ticker in plot["ticker"]],
                 color=[
                     point_colors.get(quadrant, PASTEL["slate_blue"])
                     for quadrant in plot["quadrant"]
                 ],
+                opacity=0.95,
                 line=dict(
                     color=["#111111" if ticker == selected else "#ffffff" for ticker in plot["ticker"]],
-                    width=[2.0 if ticker == selected else 1.0 for ticker in plot["ticker"]],
+                    width=[2.2 if ticker == selected else 1.0 for ticker in plot["ticker"]],
                 ),
             ),
             hovertemplate=(
-                "<b>%{text}</b><br>%{customdata[4]}"
+                "<b>%{customdata[0]}</b><br>%{customdata[5]}"
                 f"<br>{return_label} return: %{{x:+.1f}}%"
                 "<br>IV richness percentile: %{y:.0f}"
-                "<br>ATM IV: %{customdata[0]:.1f}%"
-                "<br>21D realized vol: %{customdata[1]:.1f}%"
-                "<br>IV-RV spread: %{customdata[2]:+.1f} vol pts"
-                "<br>Expiry: %{customdata[3]}<extra></extra>"
+                "<br>ATM IV: %{customdata[1]:.1f}%"
+                "<br>21D realized vol: %{customdata[2]:.1f}%"
+                "<br>IV-RV spread: %{customdata[3]:+.1f} vol pts"
+                "<br>Expiry: %{customdata[4]}<extra></extra>"
             ),
         )
     )
 
-    annotations = (
-        (-x_extent * 0.52, 91, "NEGATIVE TREND · IV RICH"),
-        (x_extent * 0.52, 91, "POSITIVE TREND · IV RICH"),
-        (-x_extent * 0.52, 9, "NEGATIVE TREND · IV CHEAP"),
-        (x_extent * 0.52, 9, "POSITIVE TREND · IV CHEAP"),
+    quadrant_tags = (
+        (0.015, 0.975, "NEGATIVE TREND<br><b>IV RICH</b>", "left", "top"),
+        (0.985, 0.975, "POSITIVE TREND<br><b>IV RICH</b>", "right", "top"),
+        (0.015, 0.025, "NEGATIVE TREND<br><b>IV CHEAP</b>", "left", "bottom"),
+        (0.985, 0.025, "POSITIVE TREND<br><b>IV CHEAP</b>", "right", "bottom"),
     )
-    for x, y, label in annotations:
+    for x, y, label, xanchor, yanchor in quadrant_tags:
         fig.add_annotation(
             x=x,
             y=y,
-            text=f"<b>{label}</b>",
+            xref="paper",
+            yref="paper",
+            text=label,
             showarrow=False,
-            font=dict(size=13, color="#4b5563"),
+            xanchor=xanchor,
+            yanchor=yanchor,
+            align=xanchor,
+            font=dict(size=10, color="#5f6672"),
+            bgcolor="rgba(255,255,255,.78)",
+            bordercolor="rgba(120,120,120,.18)",
+            borderwidth=1,
+            borderpad=4,
         )
 
     fig.update_xaxes(
-        title=f"{return_label} price return",
+        title=f"{return_label} return",
         ticksuffix="%",
         range=[-x_extent, x_extent],
         zeroline=False,
-        showgrid=False,
+        showgrid=True,
+        gridcolor="rgba(148,163,184,.12)",
+        tickfont=dict(size=11, color="#667085"),
+        title_font=dict(size=12, color="#667085"),
     )
     fig.update_yaxes(
-        title="IV richness percentile (ATM IV − 21D realized vol)",
+        title="IV richness percentile",
         range=[0, 100],
         tickvals=[0, 25, 50, 75, 100],
-        showgrid=False,
+        showgrid=True,
+        gridcolor="rgba(148,163,184,.12)",
+        tickfont=dict(size=11, color="#667085"),
+        title_font=dict(size=12, color="#667085"),
     )
     fig.update_layout(
-        height=610,
+        height=560,
         template="plotly_white",
-        margin=dict(l=58, r=28, t=24, b=55),
+        margin=dict(l=62, r=30, t=22, b=56),
         showlegend=False,
         hovermode="closest",
         font=dict(family="Arial, sans-serif", color="#1f2937"),
@@ -457,7 +483,7 @@ st.plotly_chart(
         return_label=return_label,
     ),
     width="stretch",
-    config={"displaylogo": False},
+    config={"displayModeBar": False, "displaylogo": False, "responsive": True},
 )
 
 display = universe_frame[
