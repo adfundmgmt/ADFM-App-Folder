@@ -114,6 +114,13 @@ class SectorRotationUiTests(unittest.TestCase):
         self.assertNotIn('0.82 if selected else 0.28', source)
         self.assertNotIn('2.8 if selected else 1.15', source)
 
+    def test_sector_rotation_uses_direct_yahoo_batches(self):
+        source = Path("pages/7_Sector_Breadth_and_Rotation.py").read_text(encoding="utf-8")
+        self.assertIn("import yfinance as yf", source)
+        self.assertIn("raw = yf.download(", source)
+        self.assertNotIn("download_market_data", source)
+        self.assertNotIn("deadline: float = None", source)
+
     def test_rotation_map_does_not_clip_outlier_coordinates(self):
         source = Path("pages/7_Sector_Breadth_and_Rotation.py").read_text(encoding="utf-8")
         self.assertIn('axis_x = snapshot["Map X"].tolist()', source)
