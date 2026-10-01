@@ -61,6 +61,29 @@ class IntegrityTests(unittest.TestCase):
         self.assertTrue(pd.isna(scope["pct_since"](100 * (1 + r).cumprod(), i[0])))
         self.assertTrue(scope["cumulative_return_since"](r, i[0]).empty)
 
+    def test_undercovered_basket_stays_visible_as_na_definition(self):
+        dates = pd.bdate_range("2026-09-28", periods=3)
+        levels = pd.DataFrame({"A": [100.0, 101.0, 102.0]}, index=dates)
+        categories = {
+            "Test": {
+                "Live": ["A"],
+                "Undercovered": ["A", "B", "C"],
+            }
+        }
+        live, metadata, dropped = scope["build_live_baskets"](
+            levels=levels,
+            categories=categories,
+            market_metadata={},
+            min_market_cap=None,
+            stale_days=30,
+            reference_date=dates[-1],
+        )
+        self.assertEqual(live["Test"]["Live"], ["A"])
+        self.assertEqual(live["Test"]["Undercovered"], [])
+        key = scope["basket_key"]("Test", "Undercovered")
+        self.assertFalse(metadata[key]["Eligible"])
+        self.assertIn(key, dropped)
+
     def test_partial_member_gap_keeps_basket_when_coverage_is_sufficient(self):
         i = pd.bdate_range("2026-01-05", periods=5)
         p = pd.DataFrame(
