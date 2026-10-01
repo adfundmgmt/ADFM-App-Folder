@@ -713,6 +713,7 @@ def render_issuer_masthead(
     price: Optional[float],
     price_date: Optional[pd.Timestamp],
     sic_description: str,
+    fiscal_year_end: str,
     latest_form: str,
     latest_filed: str,
     price_currency: str,
@@ -749,7 +750,7 @@ def render_issuer_masthead(
               <span class="uw-symbol">{escape(ticker)}</span>
               <span class="uw-company">{escape(name)}</span>
             </div>
-            <div class="uw-meta">{escape(sic_description)} · Filing currency {escape(filing_currency)} · Latest filing {escape(latest_form)} on {escape(latest_filed)}</div>
+            <div class="uw-meta">{escape(sic_description)} · FY end {escape(fiscal_year_end)} · Filing currency {escape(filing_currency)} · Latest filing {escape(latest_form)} on {escape(latest_filed)}</div>
           </div>
           <div class="uw-quote">
             <div class="uw-price">{escape(price_text)}</div>
@@ -1316,6 +1317,7 @@ render_issuer_masthead(
     price=price,
     price_date=price_date,
     sic_description=sic_description,
+    fiscal_year_end=fiscal_year_end,
     latest_form=latest_form,
     latest_filed=latest_filed,
     price_currency="USD",
