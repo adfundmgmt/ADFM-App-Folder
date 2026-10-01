@@ -27,21 +27,22 @@ class LayoutUpgradeTests(unittest.TestCase):
         assert "&quot;quoted&quot;" in body
 
 
-    def test_underwriter_renderer_keeps_metric_formula_and_context_in_sortable_table(self):
+    def test_underwriter_renderer_uses_dense_hoverable_metric_matrix(self):
         path = ROOT / "pages/9_ADFM_Underwriter.py"
         node = next(node for node in ast.parse(path.read_text()).body
                     if isinstance(node, ast.FunctionDef) and node.name == "render_underwriter_cards")
-        script = "import pandas as pd\nimport streamlit as st\n"
+        script = "from html import escape\nimport streamlit as st\n"
         script += ast.unparse(node) + "\n"
         script += "render_underwriter_cards([{'Section': 'Valuation', 'Metric': 'P/E', 'Value': '12.0x', 'Formula': 'Price divided by diluted EPS', 'Context': 'Favorable', 'Tone': 'positive'}])\n"
         app = AppTest.from_string(script).run()
         assert not app.exception
-        assert len(app.dataframe) == 1
-        frame = app.dataframe[0].value
-        assert list(frame.columns) == ["Section", "Metric", "Value", "Formula", "Context"]
-        assert frame.loc[0, "Formula"] == "Price divided by diluted EPS"
-        assert frame.loc[0, "Context"] == "Favorable"
-        assert not any("underwriter-metric-card" in block.value for block in app.markdown)
+        assert not app.dataframe
+        body = "\n".join(block.value for block in app.markdown)
+        assert "uw-overview" in body
+        assert "P/E" in body
+        assert "12.0x" in body
+        assert "Price divided by diluted EPS" in body
+        assert "uw-tone-positive" in body
 
 
     def test_catalyst_first_view_is_table_without_secondary_provider_requests(self):
@@ -123,17 +124,17 @@ assert set(performance_events()[-1]) == {"operation", "elapsed_seconds", "cache_
         assert "Source diagnostics" not in expander_labels
         assert "Download history" not in expander_labels
 
-    def test_underwriter_default_table_and_open_financial_credit_source_sections(self):
+    def test_underwriter_default_is_dense_overview_with_visible_market_and_annual_charts(self):
         import streamlit as st
 
         from tests.test_sec_fundamentals import company_facts_payload
 
         dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=520)
-        prices = pd.DataFrame({"Close": np.full(len(dates), 10.0)}, index=dates)
+        prices = pd.DataFrame({"Close": np.linspace(8.0, 10.0, len(dates))}, index=dates)
         directory = {"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}
         original_expander = st.expander
         def opened(label, *args, **kwargs):
-            if label in {"Selected issuer price history", "Operating trajectory and issuer read-through", "Financials", "Credit", "Filings & Sources"}:
+            if label in {"Metric definitions & methodology", "Operating trajectory and issuer read-through", "Financials", "Credit", "Filings & Sources"}:
                 kwargs["expanded"] = True
             return original_expander(label, *args, **kwargs)
         with (
@@ -146,16 +147,18 @@ assert set(performance_events()[-1]) == {"operation", "elapsed_seconds", "cache_
             app = app.button[0].click().run()
             assert not app.exception
             assert not app.tabs
-            assert len(app.dataframe) == 1
-            main = app.dataframe[0].value
-            assert {"Section", "Metric", "Formula", "Context"} <= set(main.columns)
-            assert len(main) > 20
-            assert not app.get("plotly_chart")
+            assert not app.dataframe
+            assert len(app.get("plotly_chart")) >= 2
+            body = "\n".join(item.value for item in app.markdown)
+            assert "uw-issuer" in body
+            assert "uw-overview" in body
+            assert "Annual trajectory" in body
+            assert "Selected issuer price history" not in {item.label for item in app.expander}
             with patch("streamlit.expander", side_effect=opened):
                 app = app.run()
         assert not app.exception
-        assert len(app.get("plotly_chart")) == 2
-        assert len(app.dataframe) >= 6
+        assert len(app.get("plotly_chart")) >= 3
+        assert len(app.dataframe) >= 5
         assert any("Reported growth" in item.value for item in app.markdown)
         assert any("Source audit" in item.value for item in app.markdown)
 
