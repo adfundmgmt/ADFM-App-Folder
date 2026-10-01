@@ -38,7 +38,7 @@ from adfm_core.ui import (
     render_selection_note,
 )
 
-TITLE = "ADFM Underwriter"
+TITLE = "Equity Underwriter"
 DESCRIPTION = (
     "Filing-driven company fundamentals, current valuation, capital structure, "
     "issuer-credit ratios, debt maturities, market context, and recent SEC events."
