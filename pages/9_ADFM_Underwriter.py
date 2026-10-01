@@ -114,6 +114,16 @@ st.markdown(
         font-family:Arial,Helvetica,sans-serif;
         font-size:.66rem;
     }
+    .uw-day-change {
+        margin-top:.22rem;
+        font-family:Arial,Helvetica,sans-serif;
+        font-size:.72rem;
+        font-weight:800;
+        font-variant-numeric:tabular-nums;
+    }
+    .uw-day-change-positive { color:#237a3b; }
+    .uw-day-change-negative { color:#b13030; }
+    .uw-day-change-neutral { color:#666; }
     .uw-overview {
         display:grid;
         grid-template-columns:repeat(5,minmax(0,1fr));
@@ -706,6 +716,7 @@ def render_issuer_masthead(
     latest_form: str,
     latest_filed: str,
     currency: str,
+    close_history: pd.Series,
 ) -> None:
     price_text = (
         _signed_currency(float(price), currency, 2)
@@ -713,6 +724,22 @@ def render_issuer_masthead(
         else "Unavailable"
     )
     date_text = period_label(price_date)
+    clean_close = pd.to_numeric(close_history, errors="coerce").dropna()
+    day_change_text = ""
+    day_change_class = "uw-day-change-neutral"
+    if len(clean_close) >= 2:
+        prior = float(clean_close.iloc[-2])
+        current = float(clean_close.iloc[-1])
+        day_change = current - prior
+        day_change_pct = day_change / prior if prior else 0.0
+        day_change_text = f"{day_change:+.2f} ({day_change_pct:+.2%})"
+        day_change_class = (
+            "uw-day-change-positive"
+            if day_change > 0
+            else "uw-day-change-negative"
+            if day_change < 0
+            else "uw-day-change-neutral"
+        )
     st.markdown(
         f"""
         <div class="uw-issuer">
@@ -725,6 +752,7 @@ def render_issuer_masthead(
           </div>
           <div class="uw-quote">
             <div class="uw-price">{escape(price_text)}</div>
+            <div class="uw-day-change {day_change_class}">{escape(day_change_text)}</div>
             <div class="uw-price-date">Completed-session close · {escape(date_text)}</div>
           </div>
         </div>
@@ -1290,6 +1318,7 @@ render_issuer_masthead(
     latest_form=latest_form,
     latest_filed=latest_filed,
     currency="USD",
+    close_history=close_history,
 )
 
 if not close_history.empty:
