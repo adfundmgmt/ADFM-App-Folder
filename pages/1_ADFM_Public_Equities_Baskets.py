@@ -2621,7 +2621,7 @@ def plot_panel_table(panel_df: pd.DataFrame, dynamic_label: str):
         return
 
     dynamic_col = f"%{dynamic_label}"
-    return_cols = ["%Close", "%5D", "%1M"]
+    return_cols = ["%5D", "%1M"]
     if dynamic_col not in return_cols:
         return_cols.append(dynamic_col)
 
