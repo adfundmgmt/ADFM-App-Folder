@@ -1462,8 +1462,17 @@ def fetch_daily_levels(
     if cache_usable:
 
         cached = cached.loc[(cached.index >= start) & (cached.index < end)]
+        live_coverage = sum(
+            ticker in wide.columns and not wide[ticker].dropna().empty
+            for ticker in uniq
+        ) / max(len(uniq), 1)
 
-        if wide.empty or BENCH not in wide or wide[BENCH].dropna().empty:
+        if (
+            wide.empty
+            or BENCH not in wide
+            or wide[BENCH].dropna().empty
+            or live_coverage < 0.70
+        ):
 
             wide = cached.copy()
 
