@@ -623,6 +623,18 @@ def growth_cards(metrics: Mapping[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
+def _net_leverage_assessment(value: Optional[float]) -> tuple[str, str]:
+    if value is None or pd.isna(value):
+        return "neutral", "Unavailable"
+    if value < 0:
+        return "positive", "Net cash"
+    if value <= 1.5:
+        return "positive", "Favorable band"
+    if value <= 3.5:
+        return "caution", "Watch band"
+    return "negative", "Adverse band"
+
+
 def credit_overview_cards(
     snapshot: ValuationSnapshot, *, currency: str = "USD"
 ) -> list[dict[str, str]]:
@@ -639,7 +651,7 @@ def credit_overview_cards(
             "Net Debt / EBITDA",
             format_multiple(snapshot.net_debt_ebitda),
             "(Funded debt − cash and short-term investments) ÷ LTM calculated EBITDA",
-            _lower_is_better(snapshot.net_debt_ebitda, 1.5, 3.5),
+            _net_leverage_assessment(snapshot.net_debt_ebitda),
         ),
         _card(
             "Credit",
@@ -659,7 +671,7 @@ def overview_cards(
     currency: str = "USD",
 ) -> list[dict[str, str]]:
     combined = (
-        price_context_cards(close, currency=currency)
+        price_context_cards(close, currency="USD")
         + valuation_cards(snapshot, currency=currency)
         + growth_cards(metrics)
         + sec_snapshot_cards(snapshot, currency=currency)
