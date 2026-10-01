@@ -1,4 +1,4 @@
-"""Deterministic interaction coverage for lazy options detail expanders."""
+"""Deterministic coverage for the options relative-value compass."""
 
 import unittest
 from datetime import datetime
@@ -94,12 +94,12 @@ class OptionsPositioningPageTests(unittest.TestCase):
             list(app.dataframe[0].value.columns),
             [
                 "Ticker",
-                "Quadrant",
+                "Regime",
                 "1M Return",
                 "ATM IV",
                 "21D Realized",
-                "IV - Realized",
-                "Richness Rank",
+                "IV-RV Spread",
+                "IV Richness Pctl",
                 "Expiry",
                 "DTE",
             ],
@@ -128,7 +128,7 @@ class OptionsPositioningPageTests(unittest.TestCase):
         table = app.dataframe[0].value
         row = table.loc[table["Ticker"].eq("QQQ")].iloc[0]
         self.assertAlmostEqual(row["ATM IV"], 0.25)
-        self.assertEqual(row["Quadrant"], "Unavailable")
+        self.assertEqual(row["Regime"], "Unavailable")
 
     def test_missing_strikes_report_unusable_chain_without_crashing(self):
         class MissingStrikesTicker(FixtureTicker):
@@ -193,8 +193,8 @@ class OptionsPositioningPageTests(unittest.TestCase):
         self.assertNotIn("Premium activity", source)
         self.assertNotIn("Download compass snapshot", source)
         self.assertNotIn("build_positioning_commentary", source)
-        self.assertIn("UP + EXPENSIVE", source)
-        self.assertIn("DOWN + CHEAP", source)
+        self.assertIn("POSITIVE TREND · IV RICH", source)
+        self.assertIn("NEGATIVE TREND · IV CHEAP", source)
 
 
 if __name__ == "__main__":
