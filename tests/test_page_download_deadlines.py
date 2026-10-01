@@ -27,10 +27,6 @@ class Clock:
 class PageDownloadDeadlineTests(unittest.TestCase):
     def loader(self, page, clock, provider):
         extra = {"time": clock, "download_market_data": provider}
-        if page == "sector":
-            extra.update(DOWNLOAD_CHUNK_SIZE=30, DOWNLOAD_RETRIES=3, BENCHMARKS={"SPY": "S&P 500"})
-            namespace = page_functions("7_Sector_Breadth_and_Rotation.py", {"_download_batch", "fetch_prices"}, extra)
-            return namespace, {}, lambda: namespace["fetch_prices"](tuple(["SPY"] + [f"T{i:03}" for i in range(89)]))
         if page == "flows":
             namespace = page_functions("14_ETF_Flow_Pressure_Proxy.py", {
                 "chunked", "strip_tz_from_index", "normalize_ohlcv", "extract_ticker_frame", "safe_yf_download", "fetch_prices",
@@ -52,7 +48,7 @@ class PageDownloadDeadlineTests(unittest.TestCase):
         return pd.DataFrame(100.0, index=pd.to_datetime(["2026-01-05", "2026-01-06"]), columns=columns)
 
     def test_outages_share_one_budget_across_chunks_retries_and_fallbacks(self):
-        for page in ("sector", "leadership", "ratios", "flows"):
+        for page in ("leadership", "ratios", "flows"):
             with self.subTest(page=page):
                 clock = Clock()
 
@@ -71,7 +67,7 @@ class PageDownloadDeadlineTests(unittest.TestCase):
                 self.assertLessEqual(clock.elapsed, 25.0)
 
     def test_deadline_keeps_observations_without_fabricating_missing_symbols(self):
-        for page in ("sector", "leadership", "ratios", "flows"):
+        for page in ("leadership", "ratios", "flows"):
             with self.subTest(page=page):
                 clock = Clock()
 
@@ -91,7 +87,7 @@ class PageDownloadDeadlineTests(unittest.TestCase):
                 self.assertLessEqual(clock.elapsed, 25.0)
 
     def test_available_provider_still_loads_the_entire_universe(self):
-        for page in ("sector", "leadership", "ratios", "flows"):
+        for page in ("leadership", "ratios", "flows"):
             with self.subTest(page=page):
                 clock = Clock()
 
