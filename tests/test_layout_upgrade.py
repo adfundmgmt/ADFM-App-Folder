@@ -98,23 +98,30 @@ assert set(performance_events()[-1]) == {"operation", "elapsed_seconds", "cache_
         assert "Diagnostics" in [item.label for item in app.expander]
         assert not any("Daily Read" in item.label for item in app.expander)
 
-    def test_liquidity_default_keeps_primary_chart_and_defers_fcig_network(self):
+    def test_liquidity_default_shows_fcig_and_primary_drivers_without_lower_sections(self):
         dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=1000)
         values = 100 + np.linspace(0, 10, len(dates)) + np.sin(np.arange(len(dates)) / 20)
         def fred(symbol, *args, **kwargs):
             return SimpleNamespace(series=pd.Series(values, index=dates, name=symbol), metadata={})
         def prices(tickers, **kwargs):
             return ({ticker: pd.DataFrame({"Close": values}, index=dates) for ticker in tickers}, {})
+        fcig = pd.DataFrame({"Date": dates[::20], "FCI-G": np.sin(np.arange(len(dates[::20])))})
+        response = SimpleNamespace(content=fcig.to_csv(index=False).encode(), raise_for_status=lambda: None)
         with (
             patch("adfm_core.fred_store.FredStore.get", side_effect=fred),
             patch("adfm_core.market_data.fetch_daily_ohlcv", side_effect=prices),
-            patch("requests.get", side_effect=AssertionError("Closed FCI-G section fetched")),
+            patch("requests.get", return_value=response),
         ):
             app = AppTest.from_file(str(ROOT / "pages/3_Liquidity_Conditions_Monitor.py")).run(timeout=30)
         assert not app.exception
         assert not app.tabs
-        assert len(app.get("plotly_chart")) == 1
-        assert {"Component audit", "Source diagnostics", "Primary liquidity drivers", "Federal Reserve FCI-G overlay"} <= {item.label for item in app.expander}
+        assert len(app.get("plotly_chart")) == 4
+        expander_labels = {item.label for item in app.expander}
+        assert "Federal Reserve FCI-G overlay" not in expander_labels
+        assert "Primary liquidity drivers" not in expander_labels
+        assert "Component audit" not in expander_labels
+        assert "Source diagnostics" not in expander_labels
+        assert "Download history" not in expander_labels
 
     def test_underwriter_default_table_and_open_financial_credit_source_sections(self):
         import streamlit as st
@@ -177,31 +184,3 @@ assert set(performance_events()[-1]) == {"operation", "elapsed_seconds", "cache_
         assert "Why It Matters" in app.dataframe[-1].value.columns
         assert "Headline CPI YoY" in app.dataframe[1].value["Catalyst"].tolist()
 
-    def test_open_liquidity_sections_preserve_driver_charts_and_consolidated_audit(self):
-        import streamlit as st
-
-        dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=1000)
-        values = 100 + np.linspace(0, 10, len(dates)) + np.sin(np.arange(len(dates)) / 20)
-        def fred(symbol, *args, **kwargs):
-            return SimpleNamespace(series=pd.Series(values, index=dates, name=symbol), metadata={})
-        def prices(tickers, **kwargs):
-            return ({ticker: pd.DataFrame({"Close": values}, index=dates) for ticker in tickers}, {})
-        fcig = pd.DataFrame({"Date": dates[::20], "FCI-G": np.sin(np.arange(len(dates[::20])))})
-        response = SimpleNamespace(content=fcig.to_csv(index=False).encode(), raise_for_status=lambda: None)
-        original_expander = st.expander
-        def opened(label, *args, **kwargs):
-            if label in {"Federal Reserve FCI-G overlay", "Primary liquidity drivers", "Component audit", "Source diagnostics", "Download history"}:
-                kwargs["expanded"] = True
-            return original_expander(label, *args, **kwargs)
-        with (
-            patch("adfm_core.fred_store.FredStore.get", side_effect=fred),
-            patch("adfm_core.market_data.fetch_daily_ohlcv", side_effect=prices),
-            patch("requests.get", return_value=response),
-            patch("streamlit.expander", side_effect=opened),
-        ):
-            app = AppTest.from_file(str(ROOT / "pages/3_Liquidity_Conditions_Monitor.py")).run(timeout=30)
-        assert not app.exception
-        assert len(app.get("plotly_chart")) == 4
-        audit = next(frame.value for frame in app.dataframe if "View" in frame.value.columns)
-        assert set(audit["View"]) == {"Primary sources", "Market confirmation"}
-        assert {"Latest", "Impulse Score", "Source"} <= set(audit.columns)
