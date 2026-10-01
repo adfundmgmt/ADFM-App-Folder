@@ -21,10 +21,7 @@ from adfm_core.market_data import (
 )
 from adfm_core.options_positioning import (
     add_cross_sectional_ranks,
-    build_positioning_commentary,
     option_snapshot,
-    ordinal,
-    prepare_chain,
 )
 from adfm_core.options_sources import (
     expirations_from_cboe,
@@ -36,24 +33,17 @@ from adfm_core.provider_calls import CBOE_OPTIONS, YAHOO_OPTIONS
 from adfm_core.relative_volatility import annualized_realized_volatility
 from adfm_core.ui import (
     PageHeader,
-    dataframe_download,
     inject_explorer_style,
     render_footer,
-    render_kpi_cards,
     render_page_header,
     render_section_header,
     render_sidebar_about,
-    render_selection_note,
     render_status_line,
 )
 
 TITLE = "Options Positioning Compass"
 DEFAULT_UNIVERSE = "SPY, QQQ, IWM, DIA, TLT, GLD, USO, SMH, EEM, HYG, LQD"
 NY_TZ = ZoneInfo("America/New_York")
-GRID_COLOR = "rgba(148,163,184,0.23)"
-PRIMARY_COLOR = PASTEL["blue"]
-PUT_COLOR = PASTEL["coral"]
-CALL_COLOR = PASTEL["periwinkle"]
 SELECTED_COLOR = PASTEL["rose"]
 PEER_COLOR = PASTEL["lavender"]
 
@@ -178,16 +168,6 @@ def latest_value(series: pd.Series) -> float:
 
 def fmt(value: float, suffix: str = "", digits: int = 1) -> str:
     return f"{value:,.{digits}f}{suffix}" if np.isfinite(value) else "N/A"
-
-
-def money(value: float) -> str:
-    if not np.isfinite(value):
-        return "N/A"
-    if abs(value) >= 1_000_000:
-        return f"${value / 1_000_000:,.1f}M"
-    if abs(value) >= 1_000:
-        return f"${value / 1_000:,.0f}K"
-    return f"${value:,.0f}"
 
 
 def quadrant_label(price_return: float, richness_percentile: float) -> str:
@@ -325,93 +305,6 @@ def compass_chart(
 
 
 
-def term_structure_chart(frame: pd.DataFrame) -> go.Figure:
-    plot = frame.sort_values("dte")
-    fig = go.Figure()
-    for column, label, color, dash in (
-        ("atm_iv", "ATM IV", PRIMARY_COLOR, "solid"),
-        ("put_25d_iv", "25-delta put IV", PUT_COLOR, "dash"),
-        ("call_25d_iv", "25-delta call IV", CALL_COLOR, "dot"),
-    ):
-        fig.add_trace(
-            go.Scatter(
-                x=plot["dte"],
-                y=plot[column] * 100.0,
-                name=label,
-                mode="lines+markers",
-                line=dict(color=color, width=2, dash=dash),
-                hovertemplate="%{x:.0f} DTE<br>%{y:.1f}%<extra></extra>",
-            )
-        )
-    fig.update_xaxes(title="Days to expiration", showgrid=True, gridcolor=GRID_COLOR)
-    fig.update_yaxes(title="Implied volatility", ticksuffix="%", showgrid=True, gridcolor=GRID_COLOR)
-    fig.update_layout(
-        height=445,
-        template="plotly_white",
-        hovermode="x unified",
-        margin=dict(l=45, r=25, t=30, b=45),
-        legend=dict(orientation="h", y=1.04, x=0),
-    )
-    return fig
-
-
-def iv_surface_chart(
-    term_chains: list[tuple[dict[str, object], pd.DataFrame, pd.DataFrame]],
-    risk_free_rate: float,
-) -> go.Figure:
-    grid = np.arange(80.0, 120.1, 2.5)
-    rows: list[np.ndarray] = []
-    labels: list[str] = []
-    for snapshot, calls, puts in term_chains:
-        spot = float(snapshot["spot"])
-        time_years = max(float(snapshot["dte"]), 1.0) / 365.0
-        call_frame = prepare_chain(
-            calls,
-            "call",
-            spot=spot,
-            time_years=time_years,
-            risk_free_rate=risk_free_rate,
-        )
-        put_frame = prepare_chain(
-            puts,
-            "put",
-            spot=spot,
-            time_years=time_years,
-            risk_free_rate=risk_free_rate,
-        )
-        call_frame["moneyness"] = call_frame["strike"] / spot * 100.0
-        put_frame["moneyness"] = put_frame["strike"] / spot * 100.0
-        otm = pd.concat(
-            [
-                put_frame.loc[put_frame["moneyness"].le(100.0)],
-                call_frame.loc[call_frame["moneyness"].gt(100.0)],
-            ],
-            ignore_index=True,
-        ).dropna(subset=["moneyness", "impliedVolatility"])
-        otm = otm.loc[otm["impliedVolatility"].between(0.02, 5.0)].sort_values("moneyness")
-        otm = otm.groupby("moneyness", as_index=False)["impliedVolatility"].median()
-        if len(otm) < 2:
-            continue
-        values = np.interp(grid, otm["moneyness"], otm["impliedVolatility"] * 100.0, left=np.nan, right=np.nan)
-        rows.append(values)
-        labels.append(f"{snapshot['expiry']} · {int(float(snapshot['dte']))}D")
-    fig = go.Figure(
-        go.Heatmap(
-            x=grid,
-            y=labels,
-            z=np.asarray(rows),
-            colorscale="RdBu_r",
-            colorbar=dict(title="IV %"),
-            hovertemplate="%{y}<br>Moneyness: %{x:.1f}%<br>IV: %{z:.1f}%<extra></extra>",
-        )
-    )
-    fig.add_vline(x=100, line=dict(color="#111827", width=1.5))
-    fig.update_xaxes(title="Strike / spot", ticksuffix="%")
-    fig.update_yaxes(title="Expiration", autorange="reversed")
-    fig.update_layout(height=max(390, 70 * len(labels)), template="plotly_white", margin=dict(l=55, r=35, t=25, b=50))
-    return fig
-
-
 st.set_page_config(page_title=TITLE, layout="wide")
 configure_yfinance_cache()
 inject_explorer_style(max_width_px=1560)
@@ -509,14 +402,17 @@ with st.spinner("Loading current option-chain snapshots…"):
         )
 
 universe_frame = add_cross_sectional_ranks(pd.DataFrame(universe_rows)) if universe_rows else pd.DataFrame()
-if universe_frame.empty or selected not in set(universe_frame.get("ticker", [])):
-    st.error(f"Neither Yahoo nor Cboe returned a usable option chain for {selected}.")
+if universe_frame.empty:
+    st.error("No usable option chains were returned for the current universe.")
     if provider_errors:
         st.dataframe(pd.DataFrame(provider_errors), hide_index=True, width="stretch")
     render_footer()
     st.stop()
 
-selected_row = universe_frame.loc[universe_frame["ticker"].eq(selected)].iloc[0]
+loaded_tickers = set(universe_frame.get("ticker", []))
+highlight_ticker = selected if selected in loaded_tickers else ""
+if selected and not highlight_ticker:
+    st.caption(f"{selected} did not return a usable chain on this run; the peer map is still shown.")
 return_column = "return_21d" if momentum_horizon == "1 month" else "return_63d"
 return_label = "1M" if momentum_horizon == "1 month" else "3M"
 
@@ -558,7 +454,7 @@ render_section_header(
 st.plotly_chart(
     compass_chart(
         universe_frame,
-        selected,
+        highlight_ticker,
         return_column=return_column,
         return_label=return_label,
     ),
