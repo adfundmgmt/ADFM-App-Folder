@@ -12,4 +12,10 @@ The table compares current, half, uncapped volatility reference and permitted ex
 
 The initial complete suite stalled in the provider-dependent basket UI test and was interrupted. A subsequent run excluded that test and the basket transport test, both previously observed to invoke unrelated live provider requests. Of 433 tests run, 426 passed and seven failed. All seven are the previously baseline-confirmed failures listed in `2026-10-01-position-sizing.md`: basket partial response, two catalog/documentation expectations, Underwriter layout and three Options Positioning expectations. No new broad-suite failures were observed. A clean full-suite result is not claimed.
 
+Coverage on the 433-test run was 65%, above the CI threshold of 45%.
+
+## Live check
+
+Published application commit `6f23dac88cc062cd854648be7a3c861bd04eb6b0` and inspected the public Streamlit page. TLT loaded ten years of data through October 1, 2026. Default permitted exposure was 8.52% NAV. Entering a $60 long invalidation against the latest $77.71 close and a 1% NAV loss budget changed permitted exposure to 4.39%, named the invalidation budget as binding, and showed exactly -1.00% NAV at invalidation in the comparison table. The historical exposure chart updated to apply the entered exposure cap. The volatility levels, directional historical shock rows and one-table layout rendered.
+
 Invalidation budgets assume execution at the entered price; gaps, slippage and costs may exceed the budget. Historical tails and two-sigma scenarios are descriptive, not forecasts or loss guarantees. Options/futures still require instrument-specific risk treatment.
