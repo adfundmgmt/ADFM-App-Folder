@@ -39,6 +39,72 @@ class VolatilitySizingTests(unittest.TestCase):
         for n in (50, 500):
             self.assertTrue(sizing.volatility_history(pd.Series(np.ones(n) * 100), 20).empty)
 
+    def test_invalidation_budget_limits_size_and_respects_direction(self):
+        long_distance = sizing.invalidation_distance(100, 92, "Long")
+        short_distance = sizing.invalidation_distance(100, 108, "Short")
+        for distance in (long_distance, short_distance):
+            result = sizing.scale_exposure(.20, .20, .20, .20, .25,
+                                          loss_budget=.01, stop_distance=distance)
+            self.assertAlmostEqual(result.target, .125)
+            self.assertAlmostEqual(result.loss_cap, .125)
+            self.assertEqual(result.binding, "Invalidation loss budget")
+            self.assertAlmostEqual(result.target * distance, .01)
+        self.assertIsNone(sizing.invalidation_distance(100, 0, "Long"))
+        for side, price in [("Long", 108), ("Short", 92), ("Long", 100)]:
+            with self.subTest(side=side), self.assertRaises(ValueError):
+                sizing.invalidation_distance(100, price, side)
+
+    def test_zero_loss_budget_allows_no_exposure_and_ceiling_can_bind(self):
+        result = sizing.scale_exposure(.20, .20, .20, .20, .25,
+                                      loss_budget=0, stop_distance=.08)
+        self.assertEqual(result.target, 0)
+        ceiling = sizing.scale_exposure(.20, .20, .20, .20, .10,
+                                       loss_budget=.01, stop_distance=.08)
+        self.assertEqual(ceiling.binding, "Exposure ceiling")
+
+    def test_directional_tails_use_upside_for_shorts_and_compounded_week(self):
+        daily = np.tile([.10, -.02, .01, -.03, .02], 30)
+        close = pd.Series(100*np.cumprod(1+daily), index=pd.bdate_range("2025-01-01", periods=len(daily)))
+        frame = pd.DataFrame({"Close": close, "Open": close.shift(1)*1.04})
+        long = sizing.downside_statistics(frame, "Long")
+        short = sizing.downside_statistics(frame, "Short")
+        self.assertAlmostEqual(long["Average worst 5% day"], .03)
+        self.assertAlmostEqual(short["Average worst 5% day"], .10)
+        self.assertEqual(long["Worst adverse gap"], 0)
+        self.assertAlmostEqual(short["Worst adverse gap"], .04)
+        expected_week = np.prod(1 + daily[:5]) - 1
+        self.assertAlmostEqual(short["Average worst 5% week"], expected_week)
+
+    def test_missing_open_or_short_history_is_unavailable_not_zero(self):
+        frame = pd.DataFrame({"Close":np.arange(100, 150, dtype=float)})
+        stats = sizing.downside_statistics(frame, "Long")
+        self.assertTrue(np.isnan(stats["Worst adverse gap"]))
+        self.assertTrue(np.isnan(stats["Average worst 5% day"]))
+
+    def test_context_percentile_and_acceleration_use_known_prior_observations(self):
+        rng = np.random.default_rng(12)
+        returns = rng.normal(0, .005, 600)
+        returns[-20:] *= 7
+        close = pd.Series(100*np.cumprod(1+returns),index=pd.bdate_range("2024-01-01",periods=600))
+        contexts = sizing.volatility_context(close)
+        self.assertEqual(set(contexts.index), {10, 20, 60})
+        self.assertGreater(contexts.loc[20, "percentile"], 95)
+        self.assertGreater(contexts.loc[20, "change"], 1)
+        self.assertAlmostEqual(contexts.loc[20,"recent"], sizing.volatility_history(close,20).iloc[-1].recent)
+
+    def test_comparison_uses_same_shock_for_all_sizes(self):
+        result = sizing.scale_exposure(.20, .20, .20, .20, .25,
+                                      loss_budget=.01, stop_distance=.08)
+        table = sizing.comparison_table(.20, result, {}, "Short", stop_distance=.08)
+        shock = table.loc[table.Scenario.eq("10% adverse move")].iloc[0]
+        self.assertAlmostEqual(shock["Market move"], 10)
+        self.assertAlmostEqual(shock["Current"], -2)
+        self.assertAlmostEqual(shock["Half size"], -1)
+        self.assertAlmostEqual(shock["Vol reference"], -2)
+        self.assertAlmostEqual(shock["Permitted"], -1.25)
+        stop = table.loc[table.Scenario.eq("At invalidation")].iloc[0]
+        self.assertAlmostEqual(stop["Permitted"], -1)
+
 
 if __name__ == '__main__':
     unittest.main()
