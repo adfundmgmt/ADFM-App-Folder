@@ -14,6 +14,20 @@ from adfm_core.market_data import _cached_download
 
 
 class HedgeTimerDataTests(unittest.TestCase):
+    def test_failed_endpoint_recovery_retries_on_next_page_load(self):
+        old = pd.DataFrame({("SPY", "Close"): [100.], ("HYG", "Close"): [80.]}, index=pd.to_datetime(["2026-10-01"]))
+        fresh = pd.DataFrame({("SPY", "Close"): [100., 102.], ("HYG", "Close"): [80., 81.]}, index=pd.to_datetime(["2026-10-01", "2026-10-02"]))
+        _cached_download.clear()
+        try:
+            with patch("yfinance.download", side_effect=[old, old, fresh]):
+                _, _, first = load_hedge_inputs(["SPY", "HYG"], date(2020, 1, 1), now=pd.Timestamp("2026-10-02 18:00", tz="America/New_York"))
+                panel, _, second = load_hedge_inputs(["SPY", "HYG"], date(2020, 1, 1), now=pd.Timestamp("2026-10-02 18:01", tz="America/New_York"))
+            self.assertEqual(first["Status"].tolist(), ["Lagging", "Lagging"])
+            self.assertEqual(second["Status"].tolist(), ["Current", "Current"])
+            self.assertEqual(panel.loc[pd.Timestamp("2026-10-02"), "HYG"], 81.)
+        finally:
+            _cached_download.clear()
+
     def test_all_lagging_inputs_retry_provider_instead_of_reusing_cached_panel(self):
         old = pd.DataFrame({("SPY", "Close"): [100.], ("HYG", "Close"): [80.]}, index=pd.to_datetime(["2026-10-01"]))
         fresh = pd.DataFrame({("SPY", "Close"): [100., 102.], ("HYG", "Close"): [80., 81.]}, index=pd.to_datetime(["2026-10-01", "2026-10-02"]))

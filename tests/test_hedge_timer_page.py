@@ -55,9 +55,29 @@ class HedgeTimerPageTests(unittest.TestCase):
             app = AppTest.from_file(str(PAGE)).run(timeout=30)
         self.assertFalse(app.exception)
         displayed = "\n".join(item.value for item in app.markdown)
-        self.assertIn('hedge-unavailable', displayed)
-        self.assertIn("Hedge Watch <b>NA</b>", displayed)
+        self.assertIn("Price <b>149.89</b>", displayed)
+        self.assertNotIn("Price <b>150.00</b>", displayed)
+        self.assertIn("Fresh-short gate: <b>Blocked</b>", displayed)
         self.assertTrue(any("XLU" in item.value for item in app.warning))
+
+    def test_older_than_previous_session_stays_unavailable(self) -> None:
+        endpoint = _last_completed_us_session()
+        dates = pd.bdate_range(end=endpoint, periods=450)
+        raw = pd.DataFrame(
+            {(ticker, "Close"): np.linspace(100.0, 150.0, len(dates)) for ticker in TICKERS},
+            index=dates,
+        )
+        raw.loc[dates[-3:], ("XLU", "Close")] = np.nan
+
+        def provider(tickers, **kwargs):
+            return raw if len(tickers) == len(TICKERS) else pd.DataFrame()
+
+        with patch("adfm_core.market_data.download_market_data", side_effect=provider):
+            app = AppTest.from_file(str(PAGE)).run(timeout=30)
+        self.assertFalse(app.exception)
+        displayed = "\n".join(item.value for item in app.markdown)
+        self.assertIn("hedge-unavailable", displayed)
+        self.assertIn("Hedge Watch <b>NA</b>", displayed)
 
     def test_page_uses_recall_model_and_keeps_spx_ndx_separate(self) -> None:
         source = PAGE.read_text(encoding="utf-8")

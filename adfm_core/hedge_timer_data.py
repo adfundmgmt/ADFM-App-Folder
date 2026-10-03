@@ -53,7 +53,7 @@ def load_hedge_inputs(
         retry = market_data.download_market_data(
             lagging, start=start.isoformat(), end=(expected + pd.Timedelta(days=1)).date().isoformat(),
             retries=1, recovery_budget_seconds=10,
-            timeout=5, recover_missing=False, **options,
+            timeout=5, recover_missing=False, force_refresh=True, **options,
         )
         recent = extract_close(retry, lagging)
         recent = recent.loc[recent.index <= expected]

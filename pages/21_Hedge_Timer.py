@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from adfm_core.hedge_timer_data import load_hedge_inputs
-from adfm_core.market_data import fill_short_calendar_gaps
+from adfm_core.market_data import _last_completed_us_session, fill_short_calendar_gaps
 
 from adfm_core.hedge_timer_model import (
     CALIBRATION_START,
@@ -282,6 +282,15 @@ if base_idx.empty:
     st.stop()
 df = fill_short_calendar_gaps(df0.reindex(base_idx), limit=2)
 current_inputs_fresh = bool(input_status["Status"].eq("Current").all() and df.index[-1] == expected_session)
+common_sessions = df0.dropna(subset=list(TICKERS)).index
+previous_session = _last_completed_us_session(pd.Timestamp(expected_session).tz_localize("America/New_York")) if expected_session is not None else None
+signal_inputs_usable = bool(
+    len(common_sessions) and previous_session is not None
+    and common_sessions[-1] >= previous_session
+    and not input_status["Status"].eq("Last-good cache").any()
+)
+if signal_inputs_usable:
+    df = df.loc[df.index <= common_sessions[-1]]
 
 watch_spx, confirm_spx, meta_spx, conditions_spx = compute_scores(df, SPX_TICKER)
 watch_ndx, confirm_ndx, meta_ndx, conditions_ndx = compute_scores(df, NDX_TICKER)
@@ -337,10 +346,10 @@ def render_index_state(
 ) -> None:
     watch_now = latest_value(watch)
     confirm_now = latest_value(confirm)
-    early_now = last_bool(meta["early_stage"], True)
+    early_now = last_bool(meta["early_stage"], True) and current_inputs_fresh
     oversold_now = last_bool(meta["oversold_block"], False)
     state = state_label(watch_now, confirm_now, watch_threshold, early_now, oversold_now)
-    if not current_inputs_fresh:
+    if not signal_inputs_usable:
         state = "Unavailable: stale or missing inputs"
         early_now = False
         watch_now = confirm_now = float("nan")
@@ -349,7 +358,7 @@ def render_index_state(
     current_dd = latest_value(drawdown(df[ticker]))
     rsi_now = latest_value(meta["rsi_d"])
     dd63_now = latest_value(meta["dd63"])
-    sector_weak = latest_value(meta["sector_breadth_share"]) if current_inputs_fresh else float("nan")
+    sector_weak = latest_value(meta["sector_breadth_share"]) if signal_inputs_usable else float("nan")
     rv_ratio = latest_value(meta["realized_vol_ratio"])
     watch_display = f"{fmt_num(watch_now, 0)}/100" if np.isfinite(watch_now) else "NA"
     confirm_display = f"{fmt_num(confirm_now, 0)}/100" if np.isfinite(confirm_now) else "NA"
@@ -373,11 +382,12 @@ def render_index_state(
     )
 
 
-st.caption(f"Index observations through {df.index[-1].date().isoformat()}. Latest completed US session: {expected_session.date().isoformat() if expected_session is not None else 'unavailable'}.")
+st.caption(f"{'Signals as of' if signal_inputs_usable else 'Index observations through'} {df.index[-1].date().isoformat()}. Latest completed US session: {expected_session.date().isoformat() if expected_session is not None else 'unavailable'}.")
 if not current_inputs_fresh:
     unavailable_inputs = input_status.loc[input_status["Status"] != "Current"]
-    details = "; ".join(f"{row['Input']}: {row['Last observation']} ({row['Status'].lower()})" for _, row in unavailable_inputs.iterrows())
-    st.warning(f"Waiting for completed-session inputs: {details}. Current scores and fresh shorts are blocked.")
+    details = ", ".join(unavailable_inputs["Input"])
+    message = "Showing the last complete signal; fresh shorts remain blocked." if signal_inputs_usable else "Current scores and fresh shorts are blocked."
+    st.warning(f"Awaiting the latest close for {details}. {message} See Input dates for source dates.")
 
 col_spx, col_ndx = st.columns(2)
 with col_spx:
@@ -427,8 +437,8 @@ with st.expander("Current signal drivers"):
         rows.append(
             {
                 "Signal": label,
-                SPX_LABEL: ("Active" if last_bool(conditions_spx[key]) else "Inactive") if current_inputs_fresh else "Unavailable",
-                NDX_LABEL: ("Active" if last_bool(conditions_ndx[key]) else "Inactive") if current_inputs_fresh else "Unavailable",
+                SPX_LABEL: ("Active" if last_bool(conditions_spx[key]) else "Inactive") if signal_inputs_usable else "Unavailable",
+                NDX_LABEL: ("Active" if last_bool(conditions_ndx[key]) else "Inactive") if signal_inputs_usable else "Unavailable",
                 "Layer": "Watch" if key in {item.key for item in WATCH_COMPONENTS} else "Confirm",
             }
         )

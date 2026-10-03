@@ -431,7 +431,7 @@ def _clear_success_cache() -> None:
         _SUCCESS_CACHE.clear()
 
 
-def _cached_download(symbols: Tuple[str, ...], provider_kwargs: dict, _retries: int, _recovery_budget_seconds: float = 25.0, completion_epoch: tuple = (), _request_timeout_seconds: float = 10.0, _recover_missing: bool = True) -> tuple:
+def _cached_download(symbols: Tuple[str, ...], provider_kwargs: dict, _retries: int, _recovery_budget_seconds: float = 25.0, completion_epoch: tuple = (), _request_timeout_seconds: float = 10.0, _recover_missing: bool = True, _force_refresh: bool = False) -> tuple:
     """Cache successes without holding a cache lock during provider I/O.
 
     Streamlit's per-key function lock cannot wrap a network request: waiting
@@ -442,7 +442,7 @@ def _cached_download(symbols: Tuple[str, ...], provider_kwargs: dict, _retries: 
     started = time.perf_counter()
     cache_key = (_transport_cache_generation(), _last_good_key(symbols, provider_kwargs, completion_epoch))
     with _SUCCESS_CACHE_LOCK:
-        cached = _SUCCESS_CACHE.get(cache_key)
+        cached = None if _force_refresh else _SUCCESS_CACHE.get(cache_key)
         if cached is not None:
             result, created = cached
             if started - created < DEFAULT_CONFIG.cache_ttl_seconds:
@@ -561,6 +561,7 @@ def download_market_data(tickers, **kwargs) -> pd.DataFrame:
     All Yahoo arguments (including actions, repair, rounding, keepna, timeout,
     prepost, back_adjust and multi_level_index) pass through. Additional options
     are retries, recover_missing (True by default), recovery_budget_seconds (25 by default), completed_only,
+    force_refresh (False by default; bypasses successful transport cache reads),
     session_timezone, session_cutoff and now. The recovery budget stops new
     requests/retries; provider timeout bounds each underlying request. An
     entirely failed universe does not trigger individual-symbol fanout.
@@ -574,6 +575,7 @@ def download_market_data(tickers, **kwargs) -> pd.DataFrame:
     symbols = unique_tickers(tickers.replace(",", " ").split() if isinstance(tickers, str) else tickers)
     retries = min(5, max(1, int(kwargs.pop("retries", DEFAULT_CONFIG.retries))))
     recover_missing = bool(kwargs.pop("recover_missing", True))
+    force_refresh = bool(kwargs.pop("force_refresh", False))
     recovery_budget_seconds = min(60.0, max(0.01, float(kwargs.pop("recovery_budget_seconds", 25.0))))
     completed_only = kwargs.pop("completed_only", False)
     session_timezone = kwargs.pop("session_timezone", None)
@@ -594,7 +596,7 @@ def download_market_data(tickers, **kwargs) -> pd.DataFrame:
     try:
         # Deadline/retry limits control delivery, not the identity of successful
         # observations. Keep varying remaining budgets out of the cache key.
-        result, created = _cached_download(symbols, kwargs, retries, recovery_budget_seconds, completion_epoch, request_timeout_seconds, recover_missing)
+        result, created = _cached_download(symbols, kwargs, retries, recovery_budget_seconds, completion_epoch, request_timeout_seconds, recover_missing, force_refresh)
     except _UncachedDownload as failure:
         result, created = failure.result, failure.created
     result = result.copy()
