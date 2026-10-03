@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-from adfm_core.market_data import download_market_data, fill_short_calendar_gaps, required_inputs_fresh
+from adfm_core.hedge_timer_data import load_hedge_inputs
+from adfm_core.market_data import fill_short_calendar_gaps
 
 from adfm_core.hedge_timer_model import (
     CALIBRATION_START,
@@ -63,6 +63,7 @@ st.markdown(
     .hedge-watch {{ background: {PASTEL['amber']}; }}
     .hedge-confirmed {{ background: {PASTEL['coral']}; }}
     .hedge-short {{ background: {PASTEL['rose']}; }}
+    .hedge-unavailable {{ background: #eeeeee; color: #555555; }}
     .hedge-index-title {{
         font-family: Georgia, 'Times New Roman', serif;
         font-size: 1.18rem;
@@ -122,50 +123,13 @@ def _sessions_for_years(years: int) -> int:
     return int(round(252 * years))
 
 
-def yf_download(tickers: List[str], start: date) -> pd.DataFrame:
-    return download_market_data(
-        tickers=tickers,
-        start=start.isoformat(),
-        auto_adjust=True,
-        progress=False,
-        group_by="ticker",
-        threads=True,
-    )
-
-
-def extract_close(df_raw: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
-    if df_raw is None or df_raw.empty:
-        return pd.DataFrame()
-
-    if isinstance(df_raw.columns, pd.MultiIndex):
-        out = {}
-        for ticker in tickers:
-            if (ticker, "Close") in df_raw.columns:
-                out[ticker] = df_raw[(ticker, "Close")]
-            elif (ticker, "Adj Close") in df_raw.columns:
-                out[ticker] = df_raw[(ticker, "Adj Close")]
-        result = pd.DataFrame(out)
-        result.index = pd.to_datetime(result.index)
-        return result.sort_index()
-
-    if "Close" in df_raw.columns:
-        result = df_raw[["Close"]].rename(columns={"Close": tickers[0]})
-    elif "Adj Close" in df_raw.columns:
-        result = df_raw[["Adj Close"]].rename(columns={"Adj Close": tickers[0]})
-    else:
-        return pd.DataFrame()
-    result.index = pd.to_datetime(result.index)
-    return result.sort_index()
-
-
-def last_valid(series: pd.Series) -> float:
-    clean = series.dropna()
-    return float(clean.iloc[-1]) if len(clean) else float("nan")
+def latest_value(series: pd.Series) -> float:
+    return float(series.reindex(df.index).iloc[-1]) if len(df) else float("nan")
 
 
 def last_bool(series: pd.Series, default: bool = False) -> bool:
-    clean = series.dropna()
-    return bool(clean.iloc[-1]) if len(clean) else default
+    value = series.reindex(df.index).iloc[-1] if len(df) else np.nan
+    return bool(value) if pd.notna(value) else default
 
 
 def fmt_num(value: float, decimals: int = 1) -> str:
@@ -186,7 +150,7 @@ def state_css(label: str) -> str:
         "HEDGE WATCH": "hedge-watch",
         "HEDGE CONFIRMED": "hedge-confirmed",
         "SHORT ALLOWED": "hedge-short",
-    }.get(label, "hedge-stand")
+    }.get(label, "hedge-unavailable")
 
 
 def format_audit(frame: pd.DataFrame) -> pd.DataFrame:
@@ -307,18 +271,25 @@ render_page_header(
     )
 )
 
-raw = yf_download(list(TICKERS), _start_date())
-df0 = extract_close(raw, list(TICKERS))
-if df0.empty or SPX_TICKER not in df0.columns or NDX_TICKER not in df0.columns:
+df0, expected_session, input_status = load_hedge_inputs(TICKERS, _start_date())
+if df0.empty or not df0[SPX_TICKER].notna().any() or not df0[NDX_TICKER].notna().any():
     st.error("Yahoo Finance did not return usable S&P 500 and Nasdaq-100 data.")
     st.stop()
 
 base_idx = df0[SPX_TICKER].dropna().index.intersection(df0[NDX_TICKER].dropna().index)
+if base_idx.empty:
+    st.error("No matching completed S&P 500 and Nasdaq-100 sessions are available.")
+    st.stop()
 df = fill_short_calendar_gaps(df0.reindex(base_idx), limit=2)
-current_inputs_fresh = required_inputs_fresh(df0, list(TICKERS))
+current_inputs_fresh = bool(input_status["Status"].eq("Current").all() and df.index[-1] == expected_session)
 
 watch_spx, confirm_spx, meta_spx, conditions_spx = compute_scores(df, SPX_TICKER)
 watch_ndx, confirm_ndx, meta_ndx, conditions_ndx = compute_scores(df, NDX_TICKER)
+complete_rows = df.reindex(columns=list(TICKERS)).notna().all(axis=1)
+watch_spx = watch_spx.where(complete_rows)
+confirm_spx = confirm_spx.where(complete_rows)
+watch_ndx = watch_ndx.where(complete_rows)
+confirm_ndx = confirm_ndx.where(complete_rows)
 
 calibration = calibrate_watch_threshold(
     watch_spx,
@@ -364,21 +335,24 @@ def render_index_state(
     confirm: pd.Series,
     meta: dict[str, pd.Series],
 ) -> None:
-    watch_now = last_valid(watch)
-    confirm_now = last_valid(confirm)
+    watch_now = latest_value(watch)
+    confirm_now = latest_value(confirm)
     early_now = last_bool(meta["early_stage"], True)
     oversold_now = last_bool(meta["oversold_block"], False)
     state = state_label(watch_now, confirm_now, watch_threshold, early_now, oversold_now)
     if not current_inputs_fresh:
         state = "Unavailable: stale or missing inputs"
         early_now = False
+        watch_now = confirm_now = float("nan")
     css = state_css(state)
-    price_now = last_valid(df[ticker])
-    current_dd = last_valid(drawdown(df[ticker]))
-    rsi_now = last_valid(meta["rsi_d"])
-    dd63_now = last_valid(meta["dd63"])
-    sector_weak = last_valid(meta["sector_breadth_share"])
-    rv_ratio = last_valid(meta["realized_vol_ratio"])
+    price_now = latest_value(df[ticker])
+    current_dd = latest_value(drawdown(df[ticker]))
+    rsi_now = latest_value(meta["rsi_d"])
+    dd63_now = latest_value(meta["dd63"])
+    sector_weak = latest_value(meta["sector_breadth_share"]) if current_inputs_fresh else float("nan")
+    rv_ratio = latest_value(meta["realized_vol_ratio"])
+    watch_display = f"{fmt_num(watch_now, 0)}/100" if np.isfinite(watch_now) else "NA"
+    confirm_display = f"{fmt_num(confirm_now, 0)}/100" if np.isfinite(confirm_now) else "NA"
 
     st.markdown(
         f"""
@@ -386,8 +360,8 @@ def render_index_state(
         <span class="hedge-state {css}">{state}</span>
         <div class="hedge-line">
             Price <b>{fmt_num(price_now, 2)}</b> &nbsp;·&nbsp; Current drawdown <b>{fmt_pct(current_dd)}</b><br>
-            Hedge Watch <b>{fmt_num(watch_now, 0)}/100</b> &nbsp;·&nbsp;
-            Confirmation <b>{fmt_num(confirm_now, 0)}/100</b><br>
+            Hedge Watch <b>{watch_display}</b> &nbsp;·&nbsp;
+            Confirmation <b>{confirm_display}</b><br>
             RSI14 <b>{fmt_num(rsi_now, 1)}</b> &nbsp;·&nbsp;
             63-session drawdown <b>{fmt_pct(dd63_now)}</b><br>
             Sectors below MA50 <b>{fmt_pct(sector_weak, 0)}</b> &nbsp;·&nbsp;
@@ -398,6 +372,12 @@ def render_index_state(
         unsafe_allow_html=True,
     )
 
+
+st.caption(f"Index observations through {df.index[-1].date().isoformat()}. Latest completed US session: {expected_session.date().isoformat() if expected_session is not None else 'unavailable'}.")
+if not current_inputs_fresh:
+    unavailable_inputs = input_status.loc[input_status["Status"] != "Current"]
+    details = "; ".join(f"{row['Input']}: {row['Last observation']} ({row['Status'].lower()})" for _, row in unavailable_inputs.iterrows())
+    st.warning(f"Waiting for completed-session inputs: {details}. Current scores and fresh shorts are blocked.")
 
 col_spx, col_ndx = st.columns(2)
 with col_spx:
@@ -447,12 +427,15 @@ with st.expander("Current signal drivers"):
         rows.append(
             {
                 "Signal": label,
-                SPX_LABEL: "Active" if last_bool(conditions_spx[key]) else "Inactive",
-                NDX_LABEL: "Active" if last_bool(conditions_ndx[key]) else "Inactive",
+                SPX_LABEL: ("Active" if last_bool(conditions_spx[key]) else "Inactive") if current_inputs_fresh else "Unavailable",
+                NDX_LABEL: ("Active" if last_bool(conditions_ndx[key]) else "Inactive") if current_inputs_fresh else "Unavailable",
                 "Layer": "Watch" if key in {item.key for item in WATCH_COMPONENTS} else "Confirm",
             }
         )
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+with st.expander("Input dates"):
+    st.dataframe(input_status, use_container_width=True, hide_index=True)
 
 stats_spx = forward_stats(watch_spx[watch_spx.index >= CALIBRATION_START], df[SPX_TICKER], watch_threshold)
 stats_ndx = forward_stats(watch_ndx[watch_ndx.index >= CALIBRATION_START], df[NDX_TICKER], watch_threshold)

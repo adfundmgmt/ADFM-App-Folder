@@ -4,14 +4,61 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+import pandas as pd
+from streamlit.testing.v1 import AppTest
 
 from adfm_core.catalog import sidebar_guide_for_page, tool_for_page
+from adfm_core.hedge_timer_model import TICKERS
+from adfm_core.market_data import _last_completed_us_session
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "pages" / "21_Hedge_Timer.py"
 
 
 class HedgeTimerPageTests(unittest.TestCase):
+    def test_missing_recent_close_is_recovered_before_displaying_signal(self) -> None:
+        endpoint = _last_completed_us_session()
+        dates = pd.bdate_range(end=endpoint, periods=450)
+        raw = pd.DataFrame(
+            { (ticker, "Close"): np.linspace(100.0, 150.0, len(dates)) for ticker in TICKERS },
+            index=dates,
+        )
+        raw.loc[endpoint, ("^VIX9D", "Close")] = np.nan
+        recovery = pd.DataFrame({"Close": [150.0]}, index=[endpoint])
+
+        def provider(tickers, **kwargs):
+            return raw if len(tickers) == len(TICKERS) else recovery
+
+        with patch("adfm_core.market_data.download_market_data", side_effect=provider):
+            app = AppTest.from_file(str(PAGE)).run(timeout=30)
+        self.assertFalse(app.exception)
+        displayed = "\n".join(item.value for item in app.markdown)
+        self.assertNotIn("Unavailable: stale or missing inputs", displayed)
+        self.assertIn(endpoint.date().isoformat(), "\n".join(item.value for item in app.caption))
+
+    def test_unrecovered_input_is_identified_without_publishing_partial_score(self) -> None:
+        endpoint = _last_completed_us_session()
+        dates = pd.bdate_range(end=endpoint, periods=450)
+        raw = pd.DataFrame(
+            { (ticker, "Close"): np.linspace(100.0, 150.0, len(dates)) for ticker in TICKERS },
+            index=dates,
+        )
+        raw.loc[endpoint, ("XLU", "Close")] = np.nan
+
+        def provider(tickers, **kwargs):
+            return raw if len(tickers) == len(TICKERS) else pd.DataFrame()
+
+        with patch("adfm_core.market_data.download_market_data", side_effect=provider):
+            app = AppTest.from_file(str(PAGE)).run(timeout=30)
+        self.assertFalse(app.exception)
+        displayed = "\n".join(item.value for item in app.markdown)
+        self.assertIn('hedge-unavailable', displayed)
+        self.assertIn("Hedge Watch <b>NA</b>", displayed)
+        self.assertTrue(any("XLU" in item.value for item in app.warning))
+
     def test_page_uses_recall_model_and_keeps_spx_ndx_separate(self) -> None:
         source = PAGE.read_text(encoding="utf-8")
 
