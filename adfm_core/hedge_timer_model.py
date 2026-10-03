@@ -16,7 +16,12 @@ NDX_LABEL = "^NDX"
 CALIBRATION_START = "2020-01-01"
 DD_MAJOR = -0.10
 EPISODE_PEAK_WINDOW = 63
-LEAD_LOOKBACK = 40
+LEAD_LOOKBACK = 20
+EARLY_WARNING_LOSS = -0.03
+EPISODE_REBOUND = 0.10
+WARNING_OUTCOME_SESSIONS = 60
+FROZEN_WATCH_THRESHOLD = 20.0
+MODEL_FIT_END = "2026-10-02"
 EARLY_STAGE_DD63 = -0.12
 RSI_OVERSOLD = 30.0
 RSI_SOFT_OVERSOLD = 35.0
@@ -230,7 +235,7 @@ def compute_scores(
     ret5 = tgt.pct_change(5)
     ret10 = tgt.pct_change(10)
     dd20 = drawdown_from_rolling_high(tgt, 20)
-    drawdown_velocity = (ret5 <= -0.03) | (ret10 <= -0.045) | (dd20 <= -0.05)
+    drawdown_velocity = (ret5 <= -0.02) | (ret10 <= -0.03) | (dd20 <= -0.015)
 
     rsi_d = rsi(tgt, 14)
     macd_d = macd_hist(tgt)
@@ -332,213 +337,227 @@ def fresh_short_onset(
     return onset(base & early & ~oversold)
 
 
+def _price_bars(px: pd.Series | pd.DataFrame) -> pd.DataFrame:
+    if isinstance(px, pd.Series):
+        return pd.DataFrame({"Close": px, "High": px, "Low": px}).dropna().sort_index()
+    return px.loc[:, ["Close", "High", "Low"]].dropna().sort_index()
+
+
+@dataclass(frozen=True)
+class DrawdownEpisode:
+    peak: pd.Timestamp
+    start: pd.Timestamp
+    end: pd.Timestamp
+    trough: pd.Timestamp
+    depth: float
+    deadline: pd.Timestamp
+
+
+def _drawdown_ledger(
+    px: pd.Series | pd.DataFrame, threshold: float = DD_MAJOR,
+    start_after: str = CALIBRATION_START,
+) -> list[DrawdownEpisode]:
+    """Price swings; a 10% close rebound from the trough rearms a local peak.
+
+    Peak and trough prices stay fixed until a genuine reversal. Future prices
+    label historical outcomes only; they are never inputs to the warning score.
+    """
+    bars = _price_bars(px)
+    s, highs, lows = bars["Close"], bars["High"], bars["Low"]
+    if s.empty:
+        return []
+    begin = int(s.index.searchsorted(pd.Timestamp(start_after)))
+    if begin == len(s):
+        return []
+    warm = highs.iloc[max(0, begin - EPISODE_PEAK_WINDOW):begin + 1]
+    peak = warm.index[-1 - int(np.argmax(warm.values[::-1]))]
+    peak_price = float(highs.loc[peak])
+    start = None
+    trough = peak
+    trough_price = peak_price
+    deadline = s.index[max(0, int(s.index.get_loc(peak)) - 1)]
+    breached = False
+    result = []
+
+    def record(end):
+        result.append(DrawdownEpisode(
+            peak, start, end, trough, trough_price / peak_price - 1, deadline
+        ))
+
+    for loc, (ts, price, high, low) in enumerate(zip(s.index[begin:], s.values[begin:], highs.values[begin:], lows.values[begin:], strict=True), start=begin):
+        price, high, low = float(price), float(high), float(low)
+        if start is None:
+            if high >= peak_price:
+                peak, peak_price, breached = ts, high, False
+                deadline = s.index[max(0, loc - 1)]
+            loss = low / peak_price - 1
+            if not breached:
+                if loss >= EARLY_WARNING_LOSS - 1e-12:
+                    deadline = ts
+                else:
+                    breached = True
+            if loss <= threshold + 1e-12:
+                start, trough, trough_price = ts, ts, low
+        else:
+            if low < trough_price:
+                trough, trough_price = ts, low
+            if price / trough_price - 1 >= EPISODE_REBOUND - 1e-12:
+                record(ts)
+                peak, peak_price = ts, high
+                breached = low / high - 1 < EARLY_WARNING_LOSS - 1e-12
+                deadline = s.index[max(0, loc - 1)] if breached else ts
+                start = None
+    if start is not None:
+        record(s.index[-1])
+    return result
+
+
 def find_drawdown_episodes(
-    px: pd.Series,
-    threshold: float = DD_MAJOR,
-    recovery: float = -0.02,
+    px: pd.Series | pd.DataFrame, threshold: float = DD_MAJOR, recovery: float = -0.02,
     start_after: str = CALIBRATION_START,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]]:
-    """Find distinct threshold-crossing episodes from rolling local peaks."""
+    """Distinct 10% declines, separated by a 10% rebound from their trough.
 
-    s = px.dropna().loc[lambda x: x.index >= pd.Timestamp(start_after)]
-    if len(s) < 20:
-        return []
-
-    dd = drawdown_from_rolling_high(s, EPISODE_PEAK_WINDOW)
-    episodes: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, float]] = []
-    start: pd.Timestamp | None = None
-
-    for ts, value in dd.items():
-        if start is None and value <= threshold:
-            start = ts
-            continue
-        if start is not None and value >= recovery:
-            segment = dd.loc[start:ts]
-            episodes.append((start, ts, segment.idxmin(), float(segment.min())))
-            start = None
-
-    if start is not None:
-        segment = dd.loc[start:]
-        episodes.append((start, segment.index[-1], segment.idxmin(), float(segment.min())))
-
-    return episodes
+    recovery is retained for compatibility; the ledger uses a fixed rebound
+    rule to capture separate bear-market legs without expiring the original peak.
+    """
+    return [(e.start, e.end, e.trough, e.depth)
+            for e in _drawdown_ledger(px, threshold, start_after)]
 
 
-def _lead_for_episode(onsets: pd.Series, start_ts: pd.Timestamp, lookback: int) -> int:
-    signal = onsets.fillna(False).astype(bool)
-    if signal.empty:
-        return -1
-    loc = signal.index.get_indexer([start_ts], method="nearest")[0]
-    if loc < 0:
-        return -1
-    lo = max(0, loc - lookback)
-    hits = signal.iloc[lo : loc + 1]
-    hits = hits[hits]
-    if hits.empty:
-        return -1
-    first_loc = signal.index.get_loc(hits.index[0])
-    return int(loc - first_loc)
+def _warning_window(px: pd.Series | pd.DataFrame, episode: DrawdownEpisode, lookback: int) -> pd.Index:
+    idx = _price_bars(px).index
+    peak_loc = int(idx.get_loc(episode.peak))
+    return idx[max(0, peak_loc - lookback):int(idx.get_loc(episode.deadline)) + 1]
 
 
 def episode_audit(
-    name: str,
-    px: pd.Series,
-    warning_onsets: pd.Series,
-    threshold: float = DD_MAJOR,
-    start_after: str = CALIBRATION_START,
-    lookback: int = LEAD_LOOKBACK,
+    name: str, px: pd.Series | pd.DataFrame, warning_onsets: pd.Series,
+    threshold: float = DD_MAJOR, start_after: str = CALIBRATION_START,
+    lookback: int = LEAD_LOOKBACK, warning_active: pd.Series | None = None,
 ) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    for start, end, trough, depth in find_drawdown_episodes(
-        px, threshold=threshold, start_after=start_after
-    ):
-        lead = _lead_for_episode(warning_onsets, start, lookback)
-        window = warning_onsets.loc[:start].tail(lookback + 1)
-        warning_dates = window[window.fillna(False)].index
-        first_warning = warning_dates[0] if len(warning_dates) else pd.NaT
-        rows.append(
-            {
-                "Index": name,
-                "Start": start,
-                "End": end,
-                "Trough": trough,
-                "Depth": depth,
-                "First warning": first_warning,
-                "Lead sessions": lead if lead >= 0 else np.nan,
-                "Captured": lead >= 0,
-            }
-        )
-    return pd.DataFrame(rows)
+    rows = []
+    bars = _price_bars(px)
+    s = bars["Close"]
+    previous_end = None
+    for e in _drawdown_ledger(bars, threshold, start_after):
+        window = _warning_window(bars, e, lookback)
+        if previous_end is not None:
+            window = window[window >= previous_end]
+        hits = warning_onsets.reindex(window).fillna(False).astype(bool)
+        first = hits[hits].index[0] if hits.any() else pd.NaT
+        # If the peak session breached 3%, only a warning known at the prior
+        # close can qualify. An end-of-day alert would already be late.
+        active_date = e.peak if e.deadline >= e.peak else s.index[max(0, int(s.index.get_loc(e.peak)) - 1)]
+        ongoing = False
+        active_at_peak = bool(warning_active.reindex([active_date]).fillna(False).iloc[0]) if warning_active is not None else False
+        if pd.isna(first) and active_at_peak:
+            first, ongoing = active_date, True
+        late = warning_onsets.reindex(s.loc[e.peak:e.trough].index).fillna(False).astype(bool)
+        late_dates = late[late].index
+        first_any = first if pd.notna(first) else (late_dates[0] if len(late_dates) else pd.NaT)
+        rows.append({
+            "Index": name, "Peak": e.peak, "3% deadline": e.deadline,
+            "Start": e.start, "End": e.end, "Trough": e.trough, "Depth": e.depth,
+            "First warning": first_any,
+            "Loss at warning": (0.0 if first_any < e.peak else float(s.loc[first_any] / bars.loc[e.peak, "High"] - 1)) if pd.notna(first_any) else np.nan,
+            "Lead sessions": int(s.index.get_loc(e.start) - s.index.get_loc(first_any)) if pd.notna(first_any) else np.nan,
+            "Captured": bool(pd.notna(first)),
+            "Timing": (("Active at peak" if active_date == e.peak else "Active before peak") if ongoing else
+                       "Before peak" if pd.notna(first) and first < e.peak else
+                       "At peak" if pd.notna(first) and first == e.peak else
+                       "Early decline" if pd.notna(first) else
+                       "Late" if pd.notna(first_any) else "No warning"),
+        })
+        previous_end = e.end
+    return pd.DataFrame(rows, columns=[
+        "Index", "Peak", "3% deadline", "Start", "End", "Trough", "Depth",
+        "First warning", "Loss at warning", "Lead sessions", "Captured", "Timing",
+    ])
 
 
-def _useful_warning_dates(
-    onsets: pd.Series,
-    px: pd.Series,
-    lookback: int = LEAD_LOOKBACK,
-) -> set[pd.Timestamp]:
-    useful: set[pd.Timestamp] = set()
-    for start, _, _, _ in find_drawdown_episodes(px):
-        loc = onsets.index.get_indexer([start], method="nearest")[0]
-        if loc < 0:
-            continue
-        lo = max(0, loc - lookback)
-        window = onsets.iloc[lo : loc + 1]
-        useful.update(window[window.fillna(False)].index)
+def _useful_warning_dates(onsets: pd.Series, px: pd.Series | pd.DataFrame, lookback: int = LEAD_LOOKBACK) -> set[pd.Timestamp]:
+    useful = set()
+    previous_end = None
+    for e in _drawdown_ledger(px):
+        window = _warning_window(px, e, lookback)
+        if previous_end is not None:
+            window = window[window >= previous_end]
+        hits = onsets.reindex(window).fillna(False).astype(bool)
+        useful.update(hits[hits].index)
+        previous_end = e.end
     return useful
 
 
-def _false_warning_rate(
-    onsets: pd.Series,
-    px: pd.Series,
-    lookback: int = LEAD_LOOKBACK,
-) -> float:
-    onset_dates = onsets[onsets.fillna(False)].index
-    if len(onset_dates) == 0:
-        return 0.0
+def coverage_stats(px: pd.Series | pd.DataFrame, warning_onsets: pd.Series, lookback: int = LEAD_LOOKBACK, warning_active: pd.Series | None = None) -> tuple[float, list[int]]:
+    audit = episode_audit("", px, warning_onsets, lookback=lookback, warning_active=warning_active)
+    if audit.empty:
+        return float("nan"), []
+    captured = audit.loc[audit["Captured"], "Lead sessions"].tolist()
+    return len(captured) / len(audit), captured
+
+
+def warning_summary(px: pd.Series | pd.DataFrame, warning_onsets: pd.Series, lookback: int = LEAD_LOOKBACK, warning_active: pd.Series | None = None) -> dict[str, float | int]:
+    """Early recall; non-capturing onsets need 60 sessions to mature."""
+    audit = episode_audit("", px, warning_onsets, lookback=lookback, warning_active=warning_active)
+    onsets = warning_onsets.reindex(_price_bars(px).index).fillna(False).astype(bool)
+    dates = onsets[onsets & (onsets.index >= pd.Timestamp(CALIBRATION_START))].index
     useful = _useful_warning_dates(onsets, px, lookback)
-    false_count = sum(date not in useful for date in onset_dates)
-    return float(false_count / len(onset_dates))
-
-
-def coverage_stats(
-    px: pd.Series, warning_onsets: pd.Series, lookback: int = LEAD_LOOKBACK
-) -> tuple[float, list[int]]:
-    episodes = find_drawdown_episodes(px)
-    if not episodes:
-        return 1.0, []
-    leads = [_lead_for_episode(warning_onsets, start, lookback) for start, _, _, _ in episodes]
-    captured = [lead for lead in leads if lead >= 0]
-    return len(captured) / len(episodes), captured
-
-
-def warning_summary(
-    px: pd.Series, warning_onsets: pd.Series, lookback: int = LEAD_LOOKBACK
-) -> dict[str, float | int]:
-    """Summarize drawdown recall, lead time, and false warning count."""
-
-    episodes = find_drawdown_episodes(px)
-    leads = [_lead_for_episode(warning_onsets, start, lookback) for start, _, _, _ in episodes]
-    captured_leads = [lead for lead in leads if lead >= 0]
-    onset_dates = warning_onsets[warning_onsets.fillna(False)].index
-    useful = _useful_warning_dates(warning_onsets, px, lookback)
-    false_warnings = sum(date not in useful for date in onset_dates)
+    pending_dates = set(onsets.index[-WARNING_OUTCOME_SESSIONS:])
+    late_dates = set()
+    for e in _drawdown_ledger(px):
+        late_dates.update(onsets.loc[(onsets.index > e.deadline) & (onsets.index <= e.end)].index)
+    late = sum(date not in useful and date in late_dates for date in dates)
+    false = sum(date not in useful and date not in late_dates and date not in pending_dates for date in dates)
+    pending = sum(date not in useful and date not in late_dates and date in pending_dates for date in dates)
+    captured = audit.loc[audit["Captured"], "Lead sessions"]
     return {
-        "episodes": len(episodes),
-        "captured": len(captured_leads),
-        "warnings": int(len(onset_dates)),
-        "false_warnings": int(false_warnings),
-        "median_lead": float(np.median(captured_leads)) if captured_leads else float("nan"),
+        "episodes": len(audit), "captured": len(captured), "warnings": len(dates),
+        "false_warnings": false, "pending_warnings": pending, "late_warnings": late,
+        "median_lead": float(captured.median()) if len(captured) else float("nan"),
     }
 
 
 def select_full_recall_candidate(candidates: list[dict[str, float]]) -> dict[str, float]:
-    """Choose lead time first among candidates that fully capture both indices."""
-
+    """SPX recall first, then least time in warning and false alarms. NDX is held out."""
     if not candidates:
         raise ValueError("At least one calibration candidate is required")
-
-    full_recall = [
-        row
-        for row in candidates
-        if row["spx_coverage"] >= 1.0 and row["ndx_coverage"] >= 1.0
-    ]
-    if full_recall:
-        return max(
-            full_recall,
-            key=lambda row: (
-                row["median_lead"],
-                -row["false_warning_rate"],
-                row["threshold"],
-            ),
-        )
-
-    return max(
-        candidates,
-        key=lambda row: (
-            min(row["spx_coverage"], row["ndx_coverage"]),
-            row["spx_coverage"] + row["ndx_coverage"],
-            row["median_lead"],
-            -row["false_warning_rate"],
-        ),
-    )
+    return max(candidates, key=lambda row: (
+        row["spx_coverage"] if np.isfinite(row["spx_coverage"]) else -1,
+        -row.get("warning_time", 1.0), -row["false_warning_rate"], row["threshold"],
+    ))
 
 
 def calibrate_watch_threshold(
-    score_spx: pd.Series,
-    px_spx: pd.Series,
-    score_ndx: pd.Series,
-    px_ndx: pd.Series,
+    score_spx: pd.Series, px_spx: pd.Series | pd.DataFrame,
+    score_ndx: pd.Series | None = None, px_ndx: pd.Series | pd.DataFrame | None = None,
 ) -> dict[str, float]:
-    """Calibrate warning threshold with full drawdown recall as the hard first constraint."""
-
-    start = pd.Timestamp(CALIBRATION_START)
-    score_spx = score_spx.loc[score_spx.index >= start]
-    score_ndx = score_ndx.loc[score_ndx.index >= start]
-    px_spx = px_spx.reindex(score_spx.index).dropna()
-    px_ndx = px_ndx.reindex(score_ndx.index).dropna()
-
-    candidates: list[dict[str, float]] = []
-    for threshold in range(35, 86):
-        on_spx = onset(watch_signal(score_spx.reindex(px_spx.index), threshold))
-        on_ndx = onset(watch_signal(score_ndx.reindex(px_ndx.index), threshold))
-        spx_coverage, spx_leads = coverage_stats(px_spx, on_spx)
-        ndx_coverage, ndx_leads = coverage_stats(px_ndx, on_ndx)
-        leads = spx_leads + ndx_leads
-        median_lead = float(np.median(leads)) if leads else -1.0
-        false_rate = 0.5 * (
-            _false_warning_rate(on_spx, px_spx) + _false_warning_rate(on_ndx, px_ndx)
-        )
-        candidates.append(
-            {
-                "threshold": float(threshold),
-                "spx_coverage": float(spx_coverage),
-                "ndx_coverage": float(ndx_coverage),
-                "median_lead": median_lead,
-                "false_warning_rate": float(false_rate),
-            }
-        )
-
-    return select_full_recall_candidate(candidates)
+    """Fit SPX only. Optional NDX series supply diagnostics after selection."""
+    index = _price_bars(px_spx).index.intersection(score_spx.index)
+    prices = px_spx.reindex(index)
+    score = score_spx.reindex(index)
+    fit = index >= pd.Timestamp(CALIBRATION_START)
+    candidates = []
+    for threshold in range(1, 86):
+        active = watch_signal(score, threshold)
+        signals = onset(active)
+        coverage, leads = coverage_stats(prices, signals, warning_active=active)
+        summary = warning_summary(prices, signals, warning_active=active)
+        mature = summary["warnings"] - summary["pending_warnings"]
+        candidates.append({
+            "threshold": float(threshold), "spx_coverage": float(coverage),
+            "median_lead": float(np.median(leads)) if leads else float("nan"),
+            "false_warning_rate": summary["false_warnings"] / mature if mature else 0.0,
+            "warning_time": float(active.loc[fit].mean()) if fit.any() else float("nan"),
+        })
+    chosen = select_full_recall_candidate(candidates).copy()
+    chosen["ndx_coverage"] = float("nan")
+    if score_ndx is not None and px_ndx is not None:
+        chosen["ndx_coverage"] = coverage_stats(
+            px_ndx, onset(watch_signal(score_ndx, chosen["threshold"])),
+            warning_active=watch_signal(score_ndx, chosen["threshold"])
+        )[0]
+    return chosen
 
 
 def state_label(

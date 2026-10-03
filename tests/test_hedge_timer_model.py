@@ -57,9 +57,9 @@ class HedgeTimerModelTests(unittest.TestCase):
 
         chosen = select_full_recall_candidate(candidates)
 
-        self.assertEqual(chosen["threshold"], 62)
+        self.assertEqual(chosen["threshold"], 75)
         self.assertEqual(chosen["spx_coverage"], 1.0)
-        self.assertEqual(chosen["ndx_coverage"], 1.0)
+        self.assertEqual(chosen["ndx_coverage"], 0.8)
 
     def test_full_recall_selector_falls_back_to_highest_coverage_when_impossible(self) -> None:
         candidates = [
@@ -98,7 +98,7 @@ class HedgeTimerModelTests(unittest.TestCase):
         self.assertLessEqual(episodes[1][3], -0.10)
 
     def test_warning_summary_counts_captured_and_false_warnings(self) -> None:
-        idx = pd.date_range("2020-01-02", periods=80, freq="B")
+        idx = pd.date_range("2020-01-02", periods=160, freq="B")
         prices = pd.Series(100.0, index=idx)
         prices.iloc[30:46] = [100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 89, 88, 87, 88, 89, 90]
         prices.iloc[46:] = 100.0

@@ -1,0 +1,30 @@
+name: Hedge Timer early-warning checks
+on:
+  pull_request:
+    paths:
+      - 'adfm_core/hedge_timer*'
+      - 'pages/21_Hedge_Timer.py'
+      - 'tests/test_hedge_timer*'
+      - '.github/workflows/hedge-early-warning-checks.yml'
+permissions:
+  contents: read
+jobs:
+  hedge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pip check
+      - name: Compile recovered implementation
+        run: python -m compileall -q adfm_core/hedge_timer_model.py adfm_core/hedge_timer_data.py pages/21_Hedge_Timer.py tests/test_hedge_timer_early_warning.py
+      - name: Check historical episodes, deadlines, transfer and browser
+        run: python -m unittest discover -s tests -p 'test_hedge_timer*.py' -v
+      - name: Lint Hedge Timer changes
+        run: |
+          python -m ruff check --select E,F,I,B --ignore E501 adfm_core/hedge_timer_model.py adfm_core/hedge_timer_data.py tests/test_hedge_timer_model.py tests/test_hedge_timer_page.py tests/test_hedge_timer_early_warning.py
+          python -m ruff check --select E9,F63,F7,F82 pages/21_Hedge_Timer.py

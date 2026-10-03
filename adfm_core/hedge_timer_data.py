@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from pathlib import Path
 from typing import Sequence
 
 import numpy as np
@@ -25,11 +26,21 @@ def extract_close(raw: pd.DataFrame, tickers: Sequence[str]) -> pd.DataFrame:
                     break
             if ticker in columns:
                 break
+    for ticker in ("^GSPC", "^NDX"):
+        if ticker not in tickers:
+            continue
+        for field in ("High", "Low"):
+            keys = ((ticker, field), (field, ticker)) if isinstance(raw.columns, pd.MultiIndex) else (field,)
+            for key in keys:
+                if key in raw.columns and (isinstance(raw.columns, pd.MultiIndex) or len(tickers) == 1):
+                    columns[f"{ticker} {field}"] = pd.to_numeric(raw[key], errors="coerce")
+                    break
     return market_data.canonicalize_date_index(pd.DataFrame(columns, index=raw.index)).replace([np.inf, -np.inf], np.nan)
 
 
 def load_hedge_inputs(
-    tickers: Sequence[str], start: date, *, now: datetime | None = None
+    tickers: Sequence[str], start: date, *, now: datetime | None = None,
+    research_snapshot_path: Path | None = None
 ) -> tuple[pd.DataFrame, pd.Timestamp | None, pd.DataFrame]:
     """Retry lagging endpoints, then report actual dates against the NYSE close.
 
@@ -42,7 +53,8 @@ def load_hedge_inputs(
         completed_only=True, session_timezone="America/New_York", now=now,
     )
     raw = market_data.download_market_data(list(tickers), start=start.isoformat(), **options)
-    observed = extract_close(raw, tickers).reindex(columns=list(tickers))
+    observed = extract_close(raw, tickers)
+    observed = observed.reindex(columns=[*tickers, *[key for key in observed if key not in tickers]])
     if expected is not None:
         observed = observed.loc[observed.index <= expected]
     health = raw.attrs.get("market_data_health", {})
@@ -57,7 +69,7 @@ def load_hedge_inputs(
         )
         recent = extract_close(retry, lagging)
         recent = recent.loc[recent.index <= expected]
-        observed = recent.combine_first(observed).sort_index().reindex(columns=list(tickers))
+        observed = recent.combine_first(observed).sort_index()
         retry_health = retry.attrs.get("market_data_health", {})
         for ticker in lagging:
             if retry_health.get(ticker, {}).get("status") == "last_good":
@@ -72,4 +84,16 @@ def load_hedge_inputs(
         if ticker in last_good:
             status = "Last-good cache"
         rows.append({"Input": ticker, "Last observation": as_of.date().isoformat() if as_of is not None else "Unavailable", "Status": status})
+    if not observed.reindex(columns=list(tickers)).notna().any().any() and research_snapshot_path is not None and expected is not None:
+        close_file = research_snapshot_path / "research_inputs.csv"
+        ranges_file = research_snapshot_path / "research_indices_ohlc.csv"
+        if close_file.is_file() and ranges_file.is_file():
+            observed = pd.read_csv(close_file, index_col="Date", parse_dates=True).reindex(columns=list(tickers))
+            raw_ranges = pd.read_csv(ranges_file, header=[0, 1], index_col=0, parse_dates=True)
+            for ticker in ("^GSPC", "^NDX"):
+                if ticker in tickers:
+                    for field in ("High", "Low"):
+                        observed[f"{ticker} {field}"] = raw_ranges[(field, ticker)]
+            observed = observed.loc[(observed.index >= pd.Timestamp(start)) & (observed.index <= expected)]
+            rows = [{"Input": ticker, "Last observation": values.index[-1].date().isoformat() if len(values := observed[ticker].dropna()) else "Unavailable", "Status": "Research snapshot"} for ticker in tickers]
     return observed, expected, pd.DataFrame(rows)
