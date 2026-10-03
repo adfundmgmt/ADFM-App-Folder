@@ -1,0 +1,7 @@
+{
+  "provider": "Yahoo Finance via yfinance 1.4.1",
+  "adjusted_etf_prices": true,
+  "retrieved_utc": "2026-10-03T14:26:23.709580+00:00",
+  "first_session": "2016-01-04",
+  "last_session": "2026-10-02"
+}
