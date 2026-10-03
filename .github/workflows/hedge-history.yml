@@ -1,0 +1,53 @@
+name: Capture Hedge Timer research inputs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/hedge-history.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -m pip install yfinance==1.4.1 pandas==3.0.1 numpy==2.4.6
+      - name: Retrieve provider history for reproducible calibration
+        run: |
+          python - <<'PY'
+          import json
+          import runpy
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import yfinance as yf
+          model = runpy.run_path('adfm_core/hedge_timer_model.py')
+          tickers = list(model['TICKERS'])
+          raw = yf.download(tickers, start='2016-01-01', auto_adjust=True, threads=False, timeout=20)
+          close = raw['Close'].reindex(columns=tickers).dropna(how='all')
+          assert not close.empty and all(close.count() > 1500), 'Incomplete research history'
+          assert close.loc['2020-02-01':'2020-03-31'].notna().all().all(), 'Missing COVID inputs'
+          assert close.loc['2022-01-01':'2022-12-31'].notna().all().all(), 'Missing 2022 inputs'
+          folder = Path('data/hedge_timer')
+          folder.mkdir(parents=True, exist_ok=True)
+          close.to_csv(folder / 'research_inputs.csv', index_label='Date')
+          raw.loc[:, raw.columns.get_level_values(1).isin(['^GSPC', '^NDX'])].to_csv(folder / 'research_indices_ohlc.csv', index_label='Date')
+          (folder / 'research_source.json').write_text(json.dumps({'provider': 'Yahoo Finance via yfinance 1.4.1', 'adjusted_etf_prices': True, 'retrieved_utc': datetime.now(timezone.utc).isoformat(), 'first_session': str(close.index[0].date()), 'last_session': str(close.index[-1].date())}, indent=2) + '\n')
+          PY
+      - name: Save research checkpoint
+        run: |
+          git add data/hedge_timer
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'ADFM Research Data Bot'
+          git config user.email 'adfundmgmt@users.noreply.github.com'
+          git commit -m 'Capture Hedge Timer historical research inputs'
+          git pull --rebase origin main
+          git push origin HEAD:main
