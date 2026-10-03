@@ -83,7 +83,7 @@ class HedgeTimerPageTests(unittest.TestCase):
         source = PAGE.read_text(encoding="utf-8")
 
         self.assertIn("from adfm_core.hedge_timer_model import", source)
-        self.assertIn("calibrate_watch_threshold", source)
+        self.assertIn("FROZEN_WATCH_THRESHOLD", source)
         self.assertIn("episode_audit", source)
         self.assertIn("warning_summary", source)
         self.assertNotIn("pick_target_today", source)
