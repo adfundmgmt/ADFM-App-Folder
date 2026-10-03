@@ -1,8 +1,8 @@
 # Hedge Timer early-warning verification
 
-Rules are fitted on SPX only through 2026-10-02 and frozen at20/100. NDX uses identical metrics, weights and thresholds. The price-retreat watch metric now activates at a1.5% fall from the20-session high, a2% five-session fall, or a3% ten-session fall; other watch metrics retain their original definitions and weights.
+Rules are fitted on SPX only through 2026-10-02 and frozen at 20/100. NDX uses identical metrics, weights and thresholds. The price-retreat watch metric now activates at a 1.5% fall from the20-session high, a 2% five-session fall, or a 3% ten-session fall; other watch metrics retain their original definitions and weights.
 
-A qualifying warning begins within20 sessions before the peak, is already active at the peak, or begins before the first loss beyond3%. Separate local-peak legs rearm after a10% close rebound from the trough. Historical highs/lows are used for outcome auditing only, not warning scores. Rebounds do not reopen the deadline. An existing warning credited at a peak is explicitly an observation of its state, not a new alert.
+A qualifying warning begins within 20 sessions before the peak, is already active at the peak, or begins before the first loss beyond 3%. Separate local-peak legs rearm after a 10% close rebound from the trough. Historical highs/lows are used for outcome auditing only, not warning scores. Rebounds do not reopen the deadline. An existing warning credited at a peak is explicitly an observation of its state, not a new alert.
 
 | Basis | SPX early captures | NDX unchanged rules |
 | --- | --- | --- |
@@ -19,11 +19,13 @@ A qualifying warning begins within20 sessions before the peak, is already active
 |2023-07-27|2023-10-27|2023-07-07|Before peak|
 |2025-02-19|2025-04-07|2025-01-27|Before peak|
 
-SPX spends about61% of sessions in warning; NDX about66%. The app reports mature false alarms separately from late/repeat alerts and pending outcomes with fewer than60 completed follow-up sessions. Historical recall is fitted evidence, not a future prediction guarantee. NDX is a cross-index transfer check, not a temporally independent validation.
+SPX spends about 61% of sessions in warning; NDX about 66%. The app reports mature false alarms separately from late/repeat alerts and pending outcomes with fewer than 60 completed follow-up sessions. Historical recall is fitted evidence, not a future prediction guarantee. NDX is a cross-index transfer check, not a temporally independent validation.
 
 Input source: [Yahoo Finance research checkpoint](../data/hedge_timer/research_source.json), with [22 close series](../data/hedge_timer/research_inputs.csv) and [actual index daily ranges](../data/hedge_timer/research_indices_ohlc.csv). Missing intraday ranges trigger explicit daily-close fallback and block intraday certification. Incomplete historical signal inputs are disclosed. A total live outage uses the dated research snapshot for browsing while blocking current signals and fresh shorts.
 
-The reviewed local implementation passed34 focused tests, compilation, dependency checks and lint; independent read-only review approved the fixes. Initial full-repository verification ran459 tests with64% coverage and the same11 pre-existing unrelated failures below. The execution environment disconnected during a later verification run, so the recovery branch must pass fresh GitHub-hosted Hedge Timer checks before publication.
+The recovered implementation passed all 34 focused tests, compilation, dependency checks, and lint in [GitHub-hosted verification](https://github.com/adfundmgmt/ADFM-App-Folder/actions/runs/37133023756). Independent read-only review approved the recovered source. It was merged in [PR #121](https://github.com/adfundmgmt/ADFM-App-Folder/pull/121).
+
+[Full-repository verification](https://github.com/adfundmgmt/ADFM-App-Folder/actions/runs/37133023737) ran 461 tests and reported the same 8 failures and 3 errors listed below, all previously reproduced outside these Hedge Timer changes. The 34 Hedge Timer tests passed within that full run as well. The earlier local run reported 64% coverage.
 
 Pre-existing unrelated errors:
 - test_basket_chart_maintenance.BasketFreshnessIntegrationTests.test_basket_page_keeps_one_table_and_selected_chart_on_demand
@@ -40,4 +42,4 @@ Pre-existing unrelated failures:
 - test_options_positioning_page.OptionsPositioningPageTests.test_first_view_is_one_four_quadrant_chart_and_one_compact_table
 - test_options_positioning_page.OptionsPositioningPageTests.test_source_no_longer_contains_old_detail_surfaces
 
-Production originally showed Streamlit's memory resource-limit page. Live deployment verification remains a separate requirement.
+Production last showed Streamlit's memory resource-limit page. After the merge, the execution and browser environments were disconnected, and a public fetch returned a redirect loop. The deployed page could not be reverified. A successful hosted test run does not establish that the production hosting resource limit has cleared.
