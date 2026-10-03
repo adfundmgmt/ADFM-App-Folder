@@ -446,6 +446,8 @@ with st.expander("Current signal drivers"):
 
 with st.expander("Input dates"):
     st.dataframe(input_status, use_container_width=True, hide_index=True)
+    st.download_button("Download input history", df0.to_csv(index_label="Date"),
+                       file_name="hedge_timer_inputs.csv", mime="text/csv")
 
 stats_spx = forward_stats(watch_spx[watch_spx.index >= CALIBRATION_START], df[SPX_TICKER], watch_threshold)
 stats_ndx = forward_stats(watch_ndx[watch_ndx.index >= CALIBRATION_START], df[NDX_TICKER], watch_threshold)
