@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from adfm_core.hedge_timer_data import load_hedge_inputs
+from adfm_core.hedge_timer_data import callout_session_inputs, load_hedge_inputs
 from adfm_core.hedge_timer_model import (
     CALIBRATION_START,
     CALLOUT_LEAD_LOOKBACK,
@@ -263,11 +263,15 @@ if signal_inputs_usable:
 
 _, _, meta_spx, _ = compute_scores(df, SPX_TICKER)
 _, _, meta_ndx, _ = compute_scores(df, NDX_TICKER)
-# Preserve actual observations for events: a filled provider gap cannot create a dot.
-event_inputs = df0.reindex(df.index)
+# Preserve unknown sessions as well as raw observations; a missing index close
+# must interrupt recovery rather than disappearing from the event calendar.
+event_inputs = callout_session_inputs(df0.loc[:df.index[-1]])
 signals_spx = compute_callouts(event_inputs, SPX_TICKER)
 signals_ndx = compute_callouts(event_inputs, NDX_TICKER)
-complete_rows = event_inputs.reindex(columns=list(TICKERS)).notna().all(axis=1)
+complete_rows = signals_spx["Inputs valid"] & signals_ndx["Inputs valid"]
+latest_model_valid = last_bool(complete_rows)
+signal_inputs_usable = signal_inputs_usable and latest_model_valid
+current_inputs_fresh = current_inputs_fresh and latest_model_valid
 warning_on_spx, warning_on_ndx = signals_spx["Callout"], signals_ndx["Callout"]
 
 
@@ -340,6 +344,11 @@ def render_index_state(
 st.caption(f"{'Signals as of' if signal_inputs_usable else 'Index observations through'} {df.index[-1].date().isoformat()}. Latest completed US session: {expected_session.date().isoformat() if expected_session is not None else 'unavailable'}.")
 if input_status["Status"].eq("Research snapshot").any():
     st.warning("Live inputs are unavailable. Browsing the dated research snapshot; current scores and fresh shorts remain blocked.")
+elif not latest_model_valid:
+    latest_observed = pd.to_numeric(event_inputs.reindex(columns=list(TICKERS)).iloc[-1], errors="coerce")
+    invalid_inputs = latest_observed.index[~(np.isfinite(latest_observed) & latest_observed.gt(0))]
+    details = ", ".join(invalid_inputs) or "insufficient observed history"
+    st.warning(f"Invalid latest inputs: {details}. Current signals and fresh shorts remain blocked. See Input dates for source dates.")
 elif not current_inputs_fresh:
     unavailable_inputs = input_status.loc[input_status["Status"] != "Current"]
     details = ", ".join(unavailable_inputs["Input"])

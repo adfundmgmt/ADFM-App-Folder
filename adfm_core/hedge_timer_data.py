@@ -6,10 +6,25 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Sequence
 
+import exchange_calendars as xcals
 import numpy as np
 import pandas as pd
 
 from . import market_data
+
+
+def callout_session_inputs(observed: pd.DataFrame) -> pd.DataFrame:
+    """Keep unknown NYSE sessions in recovery windows, excluding market holidays.
+
+    Calendar alignment adds missing rows only; it never fills a price.
+    """
+    if observed.empty:
+        return observed.copy()
+    first, last = observed.index.min(), observed.index.max()
+    calendar = xcals.get_calendar("XNYS", start=first - pd.Timedelta(days=7), end=last + pd.Timedelta(days=7))
+    sessions = calendar.sessions_in_range(first, last).tz_localize(None)
+    sessions.name = observed.index.name
+    return observed.reindex(sessions)
 
 
 def extract_close(raw: pd.DataFrame, tickers: Sequence[str]) -> pd.DataFrame:

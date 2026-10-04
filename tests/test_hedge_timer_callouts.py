@@ -9,13 +9,14 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from adfm_core import hedge_timer_model as model
+from adfm_core.hedge_timer_data import callout_session_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def history():
     close = pd.read_csv(ROOT / "data/hedge_timer/research_inputs.csv", index_col="Date", parse_dates=True)
-    close = close.loc[close[model.SPX_TICKER].notna() & close[model.NDX_TICKER].notna()]
+    close = callout_session_inputs(close)
     bars = pd.read_csv(ROOT / "data/hedge_timer/research_indices_ohlc.csv", header=[0, 1], index_col=0, parse_dates=True)
     return close, bars
 
@@ -25,6 +26,23 @@ def actual_callouts(close, ticker):
 
 
 class RedDotContracts(unittest.TestCase):
+    def test_event_calendar_excludes_holidays_and_preserves_unknown_sessions(self):
+        observed = pd.DataFrame({"^GSPC": [100.0] * 4},
+                                index=pd.to_datetime(["2026-05-22", "2026-05-25", "2026-05-26", "2026-05-28"]))
+        aligned = callout_session_inputs(observed)
+        self.assertEqual(aligned.index.tolist(), pd.to_datetime(
+            ["2026-05-22", "2026-05-26", "2026-05-27", "2026-05-28"]
+        ).tolist())
+        self.assertTrue(aligned.loc["2026-05-27"].isna().all())
+        self.assertEqual(aligned.loc["2026-05-26", "^GSPC"], 100.0)
+
+    def test_missing_index_recovery_session_cannot_manufacture_a_new_dot(self):
+        close, _ = history()
+        close.loc["2020-04-27", model.NDX_TICKER] = float("nan")
+        result = actual_callouts(callout_session_inputs(close), model.SPX_TICKER)
+        self.assertFalse(result.loc["2020-04-27", "Recovery"])
+        self.assertFalse(result.loc["2020-05-12", "Callout"])
+
     def test_page_audits_the_dates_of_the_actual_plotted_red_dots(self):
         close, bars = history()
         raw = bars.swaplevel(axis=1)

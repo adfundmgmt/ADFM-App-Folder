@@ -13,6 +13,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from adfm_core.hedge_timer_data import callout_session_inputs  # noqa: E402
 from adfm_core.hedge_timer_model import (  # noqa: E402
     CALLOUT_LEAD_LOOKBACK,
     FROZEN_CALLOUT_RULES,
@@ -31,7 +32,7 @@ def main():
     parser.add_argument("--audit", type=Path, default=ROOT / "data/hedge_timer/callout_drawdown_audit.csv")
     args = parser.parse_args()
     close = pd.read_csv(ROOT / "data/hedge_timer/research_inputs.csv", index_col="Date", parse_dates=True).loc[:MODEL_FIT_END]
-    close = close.loc[close[SPX_TICKER].notna() & close[NDX_TICKER].notna()]
+    close = callout_session_inputs(close)
     bars = pd.read_csv(ROOT / "data/hedge_timer/research_indices_ohlc.csv", header=[0, 1], index_col=0, parse_dates=True).loc[:MODEL_FIT_END]
     spx_prices = bars.xs(SPX_TICKER, level=1, axis=1)
     candidates = []
