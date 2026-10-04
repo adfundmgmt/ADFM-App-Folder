@@ -53,7 +53,7 @@ The new regression tests first failed against the previous red-dot rule for COVI
 
 All 53 Hedge Timer checks pass locally, independently, and in the dedicated GitHub Actions job `111438840593`, including actual chart/audit date agreement, unknown trading-session preservation, invalid latest-input gates, recovery, minimum spacing, and causal prefix replay. Repository compile, full shared-code/script/test lint, fatal page lint, and dependency consistency pass. The 108-candidate calibration still reproduces exactly the checked-in rules and both indices’ audited results. The daily-close alternative reports SPX 6/6 and NDX 8/13; the default intraday basis is stricter.
 
-The first repository-wide run completed 476 tests with eight failures and five errors, none in Hedge Timer, and 65% coverage (above the 45% required floor). Eleven failures/errors match the previously documented main-branch baseline. Two additional chart fixtures fail because their Sunday-derived business-date ranges have one fewer row than their fixed 320-value arrays; both were separately reproduced against unchanged base `ed25d339` under the same dependencies and clock.
+The final repository-wide run completed 480 tests with eight failures and five errors (matching the first 476-test run), none in Hedge Timer, and 65% coverage (above the 45% required floor). Eleven failures/errors match the previously documented main-branch baseline. Two additional chart fixtures fail because their Sunday-derived business-date ranges have one fewer row than their fixed 320-value arrays; both were separately reproduced against unchanged base `ed25d339` under the same dependencies and clock.
 
 Repository failures:
 
