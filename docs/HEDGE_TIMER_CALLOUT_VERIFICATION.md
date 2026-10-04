@@ -75,3 +75,18 @@ Repository errors:
 - `test_layout_upgrade.LayoutUpgradeTests.test_catalyst_open_details_retain_charts_macro_prints_and_event_sources` (calendar fixture)
 
 The repository-wide suite is not represented as passing. Repairs to those unrelated pages and fixtures are outside this Hedge Timer change.
+
+## Live verification, 2026-10-04
+
+Merged implementation PR #123 and deployment-refresh PR #124. Community Cloud initially retained the old data-module import, producing an ImportError. A comment-only annotation of the existing exchange-calendars requirement triggered a fresh build; the dependency list and pinned versions were unchanged. The app subsequently loaded the new model successfully at https://adfundmgmt.streamlit.app/Hedge_Timer.
+
+Verified on the live page:
+
+- Default intraday sidebar: SPX 7/7, NDX 5/17, 39/34 dots, 30/24 mature false callouts, 1/4 late or repeat calls, and one pending outcome each.
+- SPX COVID selection: actual callout 2020-02-21, loss 1.6%, early capture Yes; one price panel with confirmed red dots only.
+- Spring 2022 selection: actual callout 2022-03-31, loss 2.3%, early capture Yes. The table also shows the January and August 2022 dates.
+- NDX COVID selection: callout 2020-02-21, marked Late and early capture No under the intraday deadline; no carried-state capture is fabricated.
+- Daily-close selector: SPX 6/6 and NDX 8/13; restored default intraday basis and SPX afterwards.
+- The current provider history reports seven unavailable historical signal sessions. The UI displays this limitation; events are suppressed on unknown rows. The available-date event and capture counts match the checkpoint results, but provider completeness is not certified.
+
+Browser proof: `hedge-timer-covid-callout-20261004.jpg`, with the episode caption, red-dot price chart, sidebar counts/false alarms, and COVID audit row visible together.
