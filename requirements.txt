@@ -17,5 +17,6 @@ beautifulsoup4
 cot_reports
 pypdf
 pyarrow
+# NYSE completed sessions and Hedge Timer recovery-gap calendar.
 exchange-calendars
 openpyxl
