@@ -1,5 +1,7 @@
 # Hedge Timer early-warning verification
 
+This document describes the superseded weighted **Watch** layer, not the red dots now displayed. See [the actual-callout verification](HEDGE_TIMER_CALLOUT_VERIFICATION.md) for current plotted-event coverage and rules. The earlier NDX 17/17 Watch-state result must not be presented as red-dot coverage.
+
 Rules are fitted on SPX only through 2026-10-02 and frozen at 20/100. NDX uses identical metrics, weights and thresholds. The price-retreat watch metric now activates at a 1.5% fall from the20-session high, a 2% five-session fall, or a 3% ten-session fall; other watch metrics retain their original definitions and weights.
 
 A qualifying warning begins within 20 sessions before the peak, is already active at the peak, or begins before the first loss beyond 3%. Separate local-peak legs rearm after a 10% close rebound from the trough. Historical highs/lows are used for outcome auditing only, not warning scores. Rebounds do not reopen the deadline. An existing warning credited at a peak is explicitly an observation of its state, not a new alert.

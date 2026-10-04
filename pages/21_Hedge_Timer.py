@@ -14,10 +14,8 @@ import streamlit as st
 from adfm_core.hedge_timer_data import load_hedge_inputs
 from adfm_core.hedge_timer_model import (
     CALIBRATION_START,
-    CONFIRM_COMPONENTS,
-    CONFIRM_THRESHOLD,
-    FROZEN_WATCH_THRESHOLD,
-    HORIZON_DAYS,
+    CALLOUT_LEAD_LOOKBACK,
+    FROZEN_CALLOUT_RULES,
     LEAD_LOOKBACK,
     MODEL_FIT_END,
     NDX_LABEL,
@@ -25,15 +23,11 @@ from adfm_core.hedge_timer_model import (
     SPX_LABEL,
     SPX_TICKER,
     TICKERS,
-    WATCH_COMPONENTS,
+    compute_callouts,
     compute_scores,
     drawdown,
     episode_audit,
-    forward_stats,
-    onset,
-    state_label,
     warning_summary,
-    watch_signal,
 )
 from adfm_core.market_data import _last_completed_us_session, fill_short_calendar_gaps
 from adfm_core.palette import PASTEL
@@ -89,11 +83,10 @@ LOOKBACK_OPTIONS = [1, 2, 3, 5, 10]
 with st.sidebar:
     render_sidebar_about("21_Hedge_Timer.py")
     st.markdown(
-        "**Scoring model**\n\n"
-        "Hedge Watch prioritizes early deterioration in credit, breadth, defensive rotation, "
-        "volatility acceleration, drawdown velocity, and daily/weekly momentum. Hedge Confirmed "
-        "adds price structure, realized-volatility expansion, and longer-term trend confirmation. "
-        "RSI and 63-session drawdown gates apply only to fresh short initiation, not to the warning itself."
+        "**Red-dot rule**\n\n"
+        "A fresh price break plus two risk groups, a price/volatility shock, or near-high "
+        "volatility divergence. Breadth, volatility, and credit each count once. "
+        "Another dot requires three recovery closes and at least ten sessions since the prior dot."
     )
     st.divider()
     chart_index = st.radio(
@@ -109,7 +102,7 @@ with st.sidebar:
     )
     audit_basis = st.radio("Drawdown basis", ["Intraday high / low", "Daily close"], index=0)
     st.divider()
-    st.markdown("### Early capture since 2020")
+    st.markdown("### Red-dot audit since 2020")
     sanity_box = st.empty()
 
 
@@ -151,6 +144,8 @@ def state_css(label: str) -> str:
         "STAND DOWN": "hedge-stand",
         "HEDGE WATCH": "hedge-watch",
         "HEDGE CONFIRMED": "hedge-confirmed",
+        "HEDGE SIGNAL": "hedge-confirmed",
+        "ARMED": "hedge-stand",
         "SHORT ALLOWED": "hedge-short",
     }.get(label, "hedge-unavailable")
 
@@ -169,15 +164,13 @@ def format_audit(frame: pd.DataFrame) -> pd.DataFrame:
         lambda value: int(value) if pd.notna(value) else "No"
     )
     out["Captured"] = out["Captured"].map(lambda value: "Yes" if bool(value) else "No")
-    return out
+    return out.rename(columns={"First warning": "First callout", "Loss at warning": "Loss at callout"})
 
 
 def plot_index(
     price: pd.Series,
-    watch_score: pd.Series,
-    confirm_score: pd.Series,
+    callouts: pd.Series,
     meta: dict[str, pd.Series],
-    watch_threshold: float,
     label: str,
     years: int,
     episode: pd.Series | None = None,
@@ -202,7 +195,7 @@ def plot_index(
     ax_price.plot(x, ma50.values, linewidth=1.3, color=PASTEL["blue"], label="MA50")
     ax_price.plot(x, ma200.values, linewidth=1.25, color=PASTEL["lavender"], label="MA200")
 
-    confirmed_onsets = onset((watch_signal(watch_score, watch_threshold) & (confirm_score >= CONFIRM_THRESHOLD)).fillna(False)).reindex(idx)
+    confirmed_onsets = callouts.reindex(idx).fillna(False).astype(bool)
     if confirmed_onsets.any():
         ax_price.scatter(
             x[confirmed_onsets.values],
@@ -240,10 +233,8 @@ render_page_header(
     PageHeader(
         title="Hedge Timer",
         description=(
-            "High-recall drawdown warning system for the S&P 500 and Nasdaq-100. "
-            "Warnings qualify before the peak or within the first 3% of a decline. "
-            "Rules are fitted on SPX since 2020 and applied unchanged to NDX; "
-            "confirmation and anti-bottom-short gates determine whether a fresh directional short is allowed."
+            "Timely hedge callouts from price breaks and breadth, volatility, and credit. "
+            "SPX-fitted rules apply unchanged to NDX. The audit measures the red dots shown on the chart."
         ),
         eyebrow="ADFM Risk + Execution",
     )
@@ -270,19 +261,14 @@ signal_inputs_usable = bool(
 if signal_inputs_usable:
     df = df.loc[df.index <= common_sessions[-1]]
 
-watch_spx, confirm_spx, meta_spx, conditions_spx = compute_scores(df, SPX_TICKER)
-watch_ndx, confirm_ndx, meta_ndx, conditions_ndx = compute_scores(df, NDX_TICKER)
-complete_rows = df.reindex(columns=list(TICKERS)).notna().all(axis=1)
-watch_spx = watch_spx.where(complete_rows)
-confirm_spx = confirm_spx.where(complete_rows)
-watch_ndx = watch_ndx.where(complete_rows)
-confirm_ndx = confirm_ndx.where(complete_rows)
-
-watch_threshold = FROZEN_WATCH_THRESHOLD
-warning_active_spx = watch_signal(watch_spx, watch_threshold)
-warning_active_ndx = watch_signal(watch_ndx, watch_threshold)
-warning_on_spx = onset(warning_active_spx)
-warning_on_ndx = onset(warning_active_ndx)
+_, _, meta_spx, _ = compute_scores(df, SPX_TICKER)
+_, _, meta_ndx, _ = compute_scores(df, NDX_TICKER)
+# Preserve actual observations for events: a filled provider gap cannot create a dot.
+event_inputs = df0.reindex(df.index)
+signals_spx = compute_callouts(event_inputs, SPX_TICKER)
+signals_ndx = compute_callouts(event_inputs, NDX_TICKER)
+complete_rows = event_inputs.reindex(columns=list(TICKERS)).notna().all(axis=1)
+warning_on_spx, warning_on_ndx = signals_spx["Callout"], signals_ndx["Callout"]
 
 
 def audit_prices(ticker: str) -> pd.Series | pd.DataFrame:
@@ -297,51 +283,45 @@ def audit_prices(ticker: str) -> pd.Series | pd.DataFrame:
 
 
 px_audit_spx, px_audit_ndx = audit_prices(SPX_TICKER), audit_prices(NDX_TICKER)
-summary_spx = warning_summary(px_audit_spx, warning_on_spx, warning_active=warning_active_spx)
-summary_ndx = warning_summary(px_audit_ndx, warning_on_ndx, warning_active=warning_active_ndx)
-audit_spx = episode_audit(SPX_LABEL, px_audit_spx, warning_on_spx, warning_active=warning_active_spx)
-audit_ndx = episode_audit(NDX_LABEL, px_audit_ndx, warning_on_ndx, warning_active=warning_active_ndx)
+summary_spx = warning_summary(px_audit_spx, warning_on_spx, lookback=CALLOUT_LEAD_LOOKBACK)
+summary_ndx = warning_summary(px_audit_ndx, warning_on_ndx, lookback=CALLOUT_LEAD_LOOKBACK)
+audit_spx = episode_audit(SPX_LABEL, px_audit_spx, warning_on_spx, lookback=CALLOUT_LEAD_LOOKBACK)
+audit_ndx = episode_audit(NDX_LABEL, px_audit_ndx, warning_on_ndx, lookback=CALLOUT_LEAD_LOOKBACK)
+for audit_frame, signals in ((audit_spx, signals_spx), (audit_ndx, signals_ndx)):
+    audit_frame["Trigger"] = audit_frame["First warning"].map(signals["Trigger"]).fillna("")
 audit = pd.concat([audit_spx, audit_ndx], ignore_index=True)
 
-warning_time_spx = warning_active_spx.loc[warning_active_spx.index >= CALIBRATION_START].mean()
-warning_time_ndx = warning_active_ndx.loc[warning_active_ndx.index >= CALIBRATION_START].mean()
 sanity_box.markdown(
     f"**SPX fit:** {summary_spx['captured']}/{summary_spx['episodes']} early captures  \n"
     f"**NDX same rules:** {summary_ndx['captured']}/{summary_ndx['episodes']} early captures  \n"
-    f"**Warning time:** SPX {fmt_pct(warning_time_spx, 0)} · NDX {fmt_pct(warning_time_ndx, 0)}  \n"
+    f"**Red dots:** SPX {summary_spx['warnings']} · NDX {summary_ndx['warnings']}  \n"
     f"**False alarms:** SPX {summary_spx['false_warnings']} · NDX {summary_ndx['false_warnings']}  \n"
     f"**Late / repeat alerts:** SPX {summary_spx['late_warnings']} · NDX {summary_ndx['late_warnings']}  \n"
     f"**Pending:** SPX {summary_spx['pending_warnings']} · NDX {summary_ndx['pending_warnings']}  \n"
-    f"**Frozen threshold:** {watch_threshold:.0f}/100  \n\n"
-    "SPX fitted through " + MODEL_FIT_END + ". NDX did not influence the fit."
+    "\nSPX fitted through " + MODEL_FIT_END + ". NDX did not influence the fit. Only actual red dots count."
 )
 
 
 def render_index_state(
     label: str,
     ticker: str,
-    watch: pd.Series,
-    confirm: pd.Series,
+    signals: pd.DataFrame,
     meta: dict[str, pd.Series],
 ) -> None:
-    watch_now = latest_value(watch)
-    confirm_now = latest_value(confirm)
     early_now = last_bool(meta["early_stage"], True) and current_inputs_fresh
     oversold_now = last_bool(meta["oversold_block"], False)
-    state = state_label(watch_now, confirm_now, watch_threshold, early_now, oversold_now)
+    signal_active = last_bool(signals["Latched"])
+    state = "HEDGE SIGNAL" if signal_active else "ARMED"
+    callout_dates = signals.index[signals["Callout"]]
+    last_callout = callout_dates[-1].date().isoformat() if len(callout_dates) else "None"
     if not signal_inputs_usable:
         state = "Unavailable: stale or missing inputs"
         early_now = False
-        watch_now = confirm_now = float("nan")
+        last_callout = "NA"
     css = state_css(state)
     price_now = latest_value(df[ticker])
     current_dd = latest_value(drawdown(df[ticker]))
     rsi_now = latest_value(meta["rsi_d"])
-    dd63_now = latest_value(meta["dd63"])
-    sector_weak = latest_value(meta["sector_breadth_share"]) if signal_inputs_usable else float("nan")
-    rv_ratio = latest_value(meta["realized_vol_ratio"])
-    watch_display = f"{fmt_num(watch_now, 0)}/100" if np.isfinite(watch_now) else "NA"
-    confirm_display = f"{fmt_num(confirm_now, 0)}/100" if np.isfinite(confirm_now) else "NA"
 
     st.markdown(
         f"""
@@ -349,13 +329,8 @@ def render_index_state(
         <span class="hedge-state {css}">{state}</span>
         <div class="hedge-line">
             Price <b>{fmt_num(price_now, 2)}</b> &nbsp;·&nbsp; Current drawdown <b>{fmt_pct(current_dd)}</b><br>
-            Hedge Watch <b>{watch_display}</b> &nbsp;·&nbsp;
-            Confirmation <b>{confirm_display}</b><br>
-            RSI14 <b>{fmt_num(rsi_now, 1)}</b> &nbsp;·&nbsp;
-            63-session drawdown <b>{fmt_pct(dd63_now)}</b><br>
-            Sectors below MA50 <b>{fmt_pct(sector_weak, 0)}</b> &nbsp;·&nbsp;
-            RV10 / RV63 <b>{fmt_num(rv_ratio, 2)}x</b><br>
-            Fresh-short gate: <b>{'Open' if early_now and not oversold_now else 'Blocked'}</b>
+            Last callout <b>{last_callout}</b> &nbsp;·&nbsp; RSI14 <b>{fmt_num(rsi_now, 1)}</b><br>
+            Fresh-short gate: <b>{'Open' if signal_active and early_now and not oversold_now else 'Blocked'}</b>
         </div>
         """,
         unsafe_allow_html=True,
@@ -373,20 +348,18 @@ elif not current_inputs_fresh:
 
 col_spx, col_ndx = st.columns(2)
 with col_spx:
-    render_index_state(SPX_LABEL, SPX_TICKER, watch_spx, confirm_spx, meta_spx)
+    render_index_state(SPX_LABEL, SPX_TICKER, signals_spx, meta_spx)
 with col_ndx:
-    render_index_state(NDX_LABEL, NDX_TICKER, watch_ndx, confirm_ndx, meta_ndx)
+    render_index_state(NDX_LABEL, NDX_TICKER, signals_ndx, meta_ndx)
 
 st.caption(
-    f"Hedge Watch threshold {watch_threshold:.0f}/100 was fitted on SPX through {MODEL_FIT_END} and frozen for both indices. "
-    f"Confirmation threshold is {CONFIRM_THRESHOLD:.0f}/100. "
-    "An oversold or late-stage tape can block a fresh short while Hedge Watch remains active."
+    "Red dots mark new qualifying hedge events. Moving averages are chart context; they do not trigger dots. "
+    "An oversold or late-stage tape can block a fresh short independently."
 )
 
 st.divider()
 selected_ticker = SPX_TICKER if chart_index == SPX_LABEL else NDX_TICKER
-selected_watch = watch_spx if selected_ticker == SPX_TICKER else watch_ndx
-selected_confirm = confirm_spx if selected_ticker == SPX_TICKER else confirm_ndx
+selected_signals = signals_spx if selected_ticker == SPX_TICKER else signals_ndx
 selected_meta = meta_spx if selected_ticker == SPX_TICKER else meta_ndx
 selected_audit = audit_spx if selected_ticker == SPX_TICKER else audit_ndx
 selected_prices = px_audit_spx if selected_ticker == SPX_TICKER else px_audit_ndx
@@ -402,16 +375,14 @@ selected_episode = selected_audit.iloc[choice - 1] if choice else None
 if selected_episode is not None:
     warning_date = selected_episode["First warning"]
     warning_date_text = warning_date.date().isoformat() if pd.notna(warning_date) else "none"
-    st.caption(f"Audit warning: {warning_date_text} · {selected_episode['Timing']} · "
-               f"Loss at warning: {fmt_pct(selected_episode['Loss at warning'])} · "
+    st.caption(f"Red-dot callout: {warning_date_text} · {selected_episode['Timing']} · "
+               f"Loss at callout: {fmt_pct(selected_episode['Loss at warning'])} · "
                f"Early capture: {'Yes' if selected_episode['Captured'] else 'No'}")
 
 figure = plot_index(
     df[selected_ticker],
-    selected_watch,
-    selected_confirm,
+    selected_signals["Callout"],
     selected_meta,
-    watch_threshold,
     chart_index,
     chart_years,
     selected_episode,
@@ -422,10 +393,9 @@ plt.close(figure)
 st.divider()
 st.subheader("10%+ drawdown audit since 2020")
 st.caption(
-    f"A warning must start within {LEAD_LOOKBACK} sessions before the peak, already be active at the peak, "
-    "or start before the first loss beyond 3%. A rebound does not reopen that deadline. "
+    f"Capture requires an actual red dot within {CALLOUT_LEAD_LOOKBACK} sessions before the peak "
+    "or before the first loss beyond 3%. An ongoing signal is not credited as a new dot. "
     "Distinct local-peak legs rearm after a 10% rebound from the trough. "
-    "An ongoing warning is dated at the peak, or the preceding close when that peak session already breached 3%; this is not a new alert. "
     "Before-peak loss is shown as 0%; lead is measured to the first 10% crossing. "
     "False alarms have 60 completed sessions of follow-up and are separate from late or repeat drawdown alerts. "
     "Historical recall is fitted evidence, not a guarantee of future warnings."
@@ -434,38 +404,33 @@ if audit.empty:
     st.info("No qualifying drawdown episodes are available in the current history.")
 else:
     st.dataframe(format_audit(selected_audit), width="stretch", hide_index=True)
-    st.download_button("Download drawdown audit", audit.to_csv(index=False),
+    st.download_button("Download drawdown audit", audit.rename(columns={"First warning": "First callout", "Loss at warning": "Loss at callout"}).to_csv(index=False),
                        file_name="hedge_timer_drawdown_audit.csv", mime="text/csv")
 
 driver_date = selected_episode["First warning"] if selected_episode is not None else df.index[-1]
-with st.expander("Warning signal drivers" if selected_episode is not None else "Current signal drivers"):
+with st.expander("Callout signal drivers" if selected_episode is not None else "Current signal drivers"):
     if pd.notna(driver_date):
-        st.caption(f"Drivers at close on {driver_date.date()}. Watch weights total 100; price retreat triggers at a 1.5% loss from the 20-session high, a 2% five-session fall, or a 3% ten-session fall.")
+        st.caption(f"Drivers at close on {driver_date.date()}. Breadth, volatility, and credit each count once; no weighted score.")
     rows = []
-    component_map = {item.key: item.label for item in (*WATCH_COMPONENTS, *CONFIRM_COMPONENTS)}
-    for key, label in component_map.items():
+    for key in ("Price break", "Breadth", "Volatility", "Credit proxy", "Shock", "Divergence", "Recovery"):
         rows.append(
             {
-                "Signal": label,
-                SPX_LABEL: ("Active" if bool(conditions_spx[key].get(driver_date, False)) else "Inactive") if pd.notna(driver_date) and (selected_episode is not None or signal_inputs_usable) else "Unavailable",
-                NDX_LABEL: ("Active" if bool(conditions_ndx[key].get(driver_date, False)) else "Inactive") if pd.notna(driver_date) and (selected_episode is not None or signal_inputs_usable) else "Unavailable",
-                "Weight": next(item.weight for item in (*WATCH_COMPONENTS, *CONFIRM_COMPONENTS) if item.key == key),
-                "Layer": "Watch" if key in {item.key for item in WATCH_COMPONENTS} else "Confirm",
+                "Signal": key,
+                SPX_LABEL: ("Active" if bool(signals_spx[key].get(driver_date, False)) else "Inactive") if pd.notna(driver_date) and bool(signals_spx["Inputs valid"].get(driver_date, False)) and (selected_episode is not None or signal_inputs_usable) else "Unavailable",
+                NDX_LABEL: ("Active" if bool(signals_ndx[key].get(driver_date, False)) else "Inactive") if pd.notna(driver_date) and bool(signals_ndx["Inputs valid"].get(driver_date, False)) and (selected_episode is not None or signal_inputs_usable) else "Unavailable",
             }
         )
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.caption(
+        f"Price break: prior three-session close low, {FROZEN_CALLOUT_RULES.price_retreat:.2%}–3% below the 20-session close high, plus two risk groups. "
+        "Shock: at least a 1.25% one-day loss with VIX up 15%. Divergence: within 0.5% of the close high, "
+        "rising over five sessions, weak breadth, and VIX up 15% over five sessions and above its 20-session average by 5%. "
+        "Credit uses HYG/LQD as a proxy; verified full-history spread publication dates were unavailable."
+    )
 
 with st.expander("Input dates"):
     st.dataframe(input_status, width="stretch", hide_index=True)
     st.download_button("Download input history", df0.to_csv(index_label="Date"),
                        file_name="hedge_timer_inputs.csv", mime="text/csv")
-
-stats_spx = forward_stats(watch_spx[watch_spx.index >= CALIBRATION_START], df[SPX_TICKER], watch_threshold)
-stats_ndx = forward_stats(watch_ndx[watch_ndx.index >= CALIBRATION_START], df[NDX_TICKER], watch_threshold)
-st.caption(
-    f"Forward check, next {HORIZON_DAYS} sessions: average worst return after a Hedge Watch onset was "
-    f"{fmt_pct(stats_spx['avg_worst_warning'])} for {SPX_LABEL} and "
-    f"{fmt_pct(stats_ndx['avg_worst_warning'])} for {NDX_LABEL}."
-)
 
 render_footer()

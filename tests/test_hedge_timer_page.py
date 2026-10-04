@@ -77,13 +77,13 @@ class HedgeTimerPageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         displayed = "\n".join(item.value for item in app.markdown)
         self.assertIn("hedge-unavailable", displayed)
-        self.assertIn("Hedge Watch <b>NA</b>", displayed)
+        self.assertIn("Last callout <b>NA</b>", displayed)
 
     def test_page_uses_recall_model_and_keeps_spx_ndx_separate(self) -> None:
         source = PAGE.read_text(encoding="utf-8")
 
         self.assertIn("from adfm_core.hedge_timer_model import", source)
-        self.assertIn("FROZEN_WATCH_THRESHOLD", source)
+        self.assertIn("FROZEN_CALLOUT_RULES", source)
         self.assertIn("episode_audit", source)
         self.assertIn("warning_summary", source)
         self.assertNotIn("pick_target_today", source)
@@ -112,11 +112,11 @@ class HedgeTimerPageTests(unittest.TestCase):
         self.assertIsNotNone(guide)
         assert tool is not None
         assert guide is not None
-        self.assertIn("high-recall", tool.description.lower())
+        self.assertIn("actual red dots", tool.description.lower())
         self.assertIn("10%+", tool.description)
         self.assertIn("IWM", tool.primary_inputs)
         self.assertIn("sector ETFs", tool.primary_inputs)
-        self.assertIn("Hedge Watch", " ".join(guide.read_order))
+        self.assertIn("confirmed red dots", " ".join(guide.read_order))
         self.assertIn("local", " ".join(guide.read_order).lower())
 
 

@@ -84,6 +84,120 @@ CONFIRM_COMPONENTS = (
 )
 
 
+@dataclass(frozen=True)
+class CalloutRules:
+    """SPX-fitted event rules; identical defaults apply to NDX."""
+
+    price_retreat: float = 0.0125
+    volatility_jump: float = 0.05
+    relative_volatility: float = 1.15
+    credit_retreat: float = 0.01
+    shock_loss: float = 0.0125
+    shock_volatility: float = 0.15
+    divergence_jump: float = 0.15
+    recovery_sessions: int = 3
+    minimum_spacing: int = 10
+
+
+FROZEN_CALLOUT_RULES = CalloutRules()
+CALLOUT_LEAD_LOOKBACK = 5
+
+
+def debounce_callouts(
+    candidate: pd.Series, recovery: pd.Series, valid: pd.Series, *,
+    recovery_sessions: int = 3, minimum_spacing: int = 10,
+) -> pd.DataFrame:
+    """Latch an event until sustained recovery, rather than each score crossing.
+
+    Unknown rows cannot emit an event or count towards consecutive recovery.
+    minimum_spacing is a lower bound; time alone never rearms the signal.
+    """
+    idx = candidate.index
+    valid = valid.reindex(idx).fillna(False).astype(bool)
+    candidates = candidate.reindex(idx).fillna(False).astype(bool) & valid
+    recovered = recovery.reindex(idx).fillna(False).astype(bool) & valid
+    reset = recovered.rolling(recovery_sessions, min_periods=recovery_sessions).sum().eq(recovery_sessions)
+    dots, latched = [], []
+    active, last = False, -minimum_spacing
+    for loc, (hit, healed, known) in enumerate(zip(candidates, reset, valid, strict=True)):
+        if known and active and loc - last >= minimum_spacing and healed:
+            active = False
+        emit = bool(known and not active and hit)
+        if emit:
+            active, last = True, loc
+        dots.append(emit)
+        latched.append(active)
+    return pd.DataFrame({"Callout": dots, "Latched": latched, "Armed": [not value for value in latched]}, index=idx)
+
+
+def compute_callouts(
+    df: pd.DataFrame, target_ticker: str, rules: CalloutRules = FROZEN_CALLOUT_RULES,
+) -> pd.DataFrame:
+    """Causal close-of-session hedge events, with no weighted trend score.
+
+    Price break + two distinct risk groups, a price/volatility shock, or
+    near-high price/volatility divergence. Outcome highs/lows and future
+    drawdown labels are never used to generate or reset an event.
+    """
+    idx = df.index
+    observed = df.reindex(columns=list(TICKERS)).apply(pd.to_numeric, errors="coerce")
+    df = observed.where(np.isfinite(observed) & observed.gt(0))
+    price, vix = _series(df, target_ticker), _series(df, "^VIX")
+    retreat = safe_ratio(price, price.rolling(20).max()) - 1
+    rsp_spy = safe_ratio(_series(df, "RSP"), _series(df, "SPY"))
+    iwm_spy = safe_ratio(_series(df, "IWM"), _series(df, "SPY"))
+    rsp_weak = (rsp_spy < rolling_ma(rsp_spy, 100, 40)) & (rsp_spy.pct_change(20, fill_method=None) < 0)
+    iwm_weak = (iwm_spy < rolling_ma(iwm_spy, 100, 40)) & (iwm_spy.pct_change(20, fill_method=None) < 0)
+    sector_rows = []
+    for ticker in SECTOR_TICKERS:
+        sector = _series(df, ticker)
+        average = rolling_ma(sector, 50, 30)
+        sector_rows.append((sector < average).astype(float).where(sector.notna() & average.notna()))
+    sector_share = pd.concat(sector_rows, axis=1).mean(axis=1)
+    sector_weak = (sector_share >= .55) & ((sector_share.diff(10) >= .18) | (sector_share >= .73))
+    breadth = rsp_weak | iwm_weak | sector_weak
+
+    ratio = safe_ratio(_series(df, "HYG"), _series(df, "LQD"))
+    credit = (safe_ratio(ratio, ratio.rolling(10).max()) - 1 <= -rules.credit_retreat) & (ratio.pct_change(3, fill_method=None) < 0)
+    vix_change = vix.pct_change(fill_method=None)
+    vix_relative = safe_ratio(vix, vix.rolling(20).mean())
+    volatility = (
+        (vix_change >= rules.volatility_jump)
+        | (vix.pct_change(3, fill_method=None) >= .10)
+        | (vix_relative >= rules.relative_volatility)
+        | (safe_ratio(_series(df, "^VIX9D"), vix) >= 1)
+    )
+    group_count = breadth.astype(int) + credit.astype(int) + volatility.astype(int)
+    early = retreat >= EARLY_WARNING_LOSS - 1e-12
+    price_break = (price < price.shift(1).rolling(3).min()) & (retreat <= -rules.price_retreat) & early
+    shock = (price.pct_change(fill_method=None) <= -rules.shock_loss) & (vix_change >= rules.shock_volatility) & early
+    divergence = (
+        (retreat >= -.005) & (price.pct_change(5, fill_method=None) > 0) & breadth
+        & (vix.pct_change(5, fill_method=None) >= rules.divergence_jump) & (vix_relative >= 1.05)
+    )
+    valid = df.notna().all(axis=1) & price.rolling(20).count().eq(20)
+    candidate = ((price_break & (group_count >= 2)) | shock | divergence) & valid
+    recovery = (price > ema(price, 10)) & (retreat >= -.01) & (vix.pct_change(3, fill_method=None) <= 0)
+    result = debounce_callouts(candidate, recovery, valid,
+                              recovery_sessions=rules.recovery_sessions, minimum_spacing=rules.minimum_spacing)
+    result["Inputs valid"] = valid
+    result["Price break"] = price_break & valid
+    result["Breadth"] = breadth & valid
+    result["Volatility"] = volatility & valid
+    result["Credit proxy"] = credit & valid
+    result["Shock"] = shock & valid
+    result["Divergence"] = divergence & valid
+    result["Recovery"] = recovery & valid
+    result["Retreat"] = retreat
+    result["Risk groups"] = group_count.where(valid)
+    result["Trigger"] = pd.Series(
+        np.select([shock & valid, divergence & valid, price_break & (group_count >= 2) & valid],
+                  ["Price / volatility shock", "Near-high volatility divergence", "Price break + risk groups"], default=""),
+        index=idx,
+    ).where(result["Callout"], "")
+    return result
+
+
 def safe_ratio(a: pd.Series, b: pd.Series) -> pd.Series:
     return (a / b).replace([np.inf, -np.inf], np.nan)
 

@@ -1,0 +1,50 @@
+{
+  "fit_index": "^GSPC",
+  "fit_start": "2020-01-01",
+  "fit_end": "2026-10-02",
+  "rules": {
+    "price_retreat": 0.0125,
+    "volatility_jump": 0.05,
+    "relative_volatility": 1.15,
+    "credit_retreat": 0.01,
+    "shock_loss": 0.0125,
+    "shock_volatility": 0.15,
+    "divergence_jump": 0.15,
+    "recovery_sessions": 3,
+    "minimum_spacing": 10
+  },
+  "refinement_candidates": 108,
+  "pre_peak_sessions": 5,
+  "carried_state_counts": false,
+  "spx": {
+    "episodes": 7,
+    "captured": 7,
+    "warnings": 39,
+    "false_warnings": 30,
+    "pending_warnings": 1,
+    "late_warnings": 1,
+    "median_lead": 12.0
+  },
+  "ndx_unchanged_transfer": {
+    "episodes": 17,
+    "captured": 5,
+    "warnings": 34,
+    "false_warnings": 24,
+    "pending_warnings": 1,
+    "late_warnings": 4,
+    "median_lead": 14.0
+  },
+  "source": {
+    "provider": "Yahoo Finance via yfinance 1.4.1",
+    "adjusted_etf_prices": true,
+    "retrieved_utc": "2026-10-03T14:26:23.709580+00:00",
+    "first_session": "2016-01-04",
+    "last_session": "2026-10-02"
+  },
+  "limitations": [
+    "SPX results are fitted in-sample",
+    "NDX was evaluated after selection and has missed episodes",
+    "Retrospective provider prices may be revised",
+    "Credit uses HYG/LQD; full publication-dated OAS history was unavailable"
+  ]
+}
