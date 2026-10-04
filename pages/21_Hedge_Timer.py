@@ -182,13 +182,7 @@ def plot_index(
     years: int,
     episode: pd.Series | None = None,
 ) -> plt.Figure:
-    frame = pd.DataFrame(
-        {
-            "Price": price,
-            "Watch": watch_score,
-            "Confirm": confirm_score,
-        }
-    ).dropna(subset=["Price"])
+    frame = pd.DataFrame({"Price": price}).dropna(subset=["Price"])
     if episode is not None:
         price_index = frame.index
         left = max(0, int(price_index.get_indexer([episode["Peak"]], method="nearest")[0]) - LEAD_LOOKBACK - 5)
@@ -197,10 +191,7 @@ def plot_index(
     elif len(frame) > _sessions_for_years(years):
         frame = frame.iloc[-_sessions_for_years(years) :].copy()
 
-    fig = plt.figure(figsize=(13.5, 7.4))
-    grid = fig.add_gridspec(2, 1, height_ratios=[3.0, 1.35], hspace=0.09)
-    ax_price = fig.add_subplot(grid[0])
-    ax_score = fig.add_subplot(grid[1], sharex=ax_price)
+    fig, ax_price = plt.subplots(figsize=(13.5, 5.4))
 
     x = np.arange(len(frame))
     idx = frame.index
@@ -211,22 +202,6 @@ def plot_index(
     ax_price.plot(x, ma50.values, linewidth=1.3, color=PASTEL["blue"], label="MA50")
     ax_price.plot(x, ma200.values, linewidth=1.25, color=PASTEL["lavender"], label="MA200")
 
-    watch_active = watch_signal(watch_score, watch_threshold).reindex(idx)
-    warning_onsets = onset(watch_signal(watch_score, watch_threshold)).reindex(idx)
-    ax_price.scatter(x[warning_onsets.values], frame["Price"].values[warning_onsets.values],
-                     marker="^", s=28, color=PASTEL["amber"], edgecolors="#111111",
-                     linewidths=.4, label="Hedge Watch", zorder=7)
-    ax_score.fill_between(x, 0, 100, where=watch_active.values, color=PASTEL["amber"], alpha=.14)
-    if episode is not None:
-        peak_x = int(idx.get_indexer([episode["Peak"]], method="nearest")[0])
-        trough_x = int(idx.get_indexer([episode["Trough"]], method="nearest")[0])
-        ax_price.axvspan(peak_x, trough_x, color="#aaaaaa", alpha=.10, label="Drawdown")
-        deadline_x = int(idx.get_indexer([episode["3% deadline"]], method="nearest")[0])
-        ax_price.axvline(deadline_x, color="#777777", linestyle=":", linewidth=1, label="3% deadline")
-        if pd.notna(episode["First warning"]) and episode["First warning"] in idx:
-            warning_x = int(idx.get_loc(episode["First warning"]))
-            ax_price.scatter([warning_x], [frame["Price"].iloc[warning_x]], marker="^", s=95,
-                             color=PASTEL["amber"], edgecolors="#111111", linewidths=.9, zorder=8)
     confirmed_onsets = onset((watch_signal(watch_score, watch_threshold) & (confirm_score >= CONFIRM_THRESHOLD)).fillna(False)).reindex(idx)
     if confirmed_onsets.any():
         ax_price.scatter(
@@ -243,28 +218,7 @@ def plot_index(
 
     ax_price.grid(True, linewidth=.6, alpha=.14)
     ax_price.spines[["top", "right"]].set_visible(False)
-    ax_price.tick_params(axis="x", bottom=False, labelbottom=False)
     ax_price.legend(loc="upper left", frameon=False, ncol=4, fontsize=8.5)
-
-    ax_score.plot(
-        x,
-        frame["Watch"].values,
-        linewidth=1.9,
-        color=PASTEL["amber"],
-        label="Hedge Score",
-    )
-    ax_score.axhline(
-        watch_threshold,
-        linewidth=1.0,
-        color="#111111",
-        alpha=.72,
-        label="Threshold",
-    )
-    ax_score.set_ylim(0, 100)
-    ax_score.set_ylabel("Score")
-    ax_score.grid(True, axis="y", linewidth=.6, alpha=.14)
-    ax_score.spines[["top", "right"]].set_visible(False)
-    ax_score.legend(loc="upper left", frameon=False, ncol=2, fontsize=8.5)
 
     tick_count = 8 if years <= 2 else 10
     tick_positions = np.linspace(0, max(len(frame) - 1, 0), min(tick_count, len(frame)), dtype=int)
@@ -273,8 +227,8 @@ def plot_index(
         idx[position].strftime("%b %Y") if years <= 3 else idx[position].strftime("%Y-%m")
         for position in tick_positions
     ]
-    ax_score.set_xticks(tick_positions)
-    ax_score.set_xticklabels(tick_labels, fontsize=8)
+    ax_price.set_xticks(tick_positions)
+    ax_price.set_xticklabels(tick_labels, fontsize=8)
 
     period = f"{years} Year" if years == 1 else f"{years} Years"
     fig.suptitle(f"{label} Hedge Timer | {episode['Peak'].date().isoformat() if episode is not None else period}", fontsize=14, fontweight="bold", y=.99)
