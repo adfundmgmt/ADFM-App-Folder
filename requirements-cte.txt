@@ -2,4 +2,4 @@
 -r requirements.txt
 
 openpyxl>=3.1,<4
-anthropic>=0.40,<1
+anthropic>=1.11.0,<2
