@@ -58,7 +58,7 @@ class InstitutionalThemeTests(unittest.TestCase):
     def test_page_header_uses_catalog_title_and_group(self, markdown, tool_for_page):
         tool_for_page.return_value = SimpleNamespace(
             title="ADFM Public Equities Baskets",
-            group="Equity Discovery",
+            group="Equity Research",
         )
 
         render_page_header(
@@ -71,7 +71,7 @@ class InstitutionalThemeTests(unittest.TestCase):
 
         body = markdown.call_args.args[0]
         self.assertIn("ADFM Public Equities Baskets", body)
-        self.assertIn("ADFM Equity Discovery", body)
+        self.assertIn("ADFM Equity Research", body)
         self.assertNotIn("Legacy page title", body)
         self.assertNotIn("ADFM Equity Leadership", body)
 

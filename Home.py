@@ -176,7 +176,7 @@ def render_home() -> None:
             <div>
                 <div class="firm-name">AD Fund Management LP</div>
                 <h1 class="adfm-title">ADFM Analytics</h1>
-                <p class="adfm-subtitle">Market research and analytical tools.</p>
+                <p class="adfm-subtitle">Research across macro regimes, market leadership, positioning and risk.</p>
             </div>
         </header>
         """,
@@ -199,6 +199,11 @@ NAV_PAGE_BY_FILENAME = {
     tool.page_filename: page for tool, page in zip(TOOLS, TOOL_PAGES, strict=True)
 }
 
-NAVIGATION = st.navigation([HOME_PAGE, *TOOL_PAGES], position="sidebar")
+NAVIGATION_GROUPS = {"": [HOME_PAGE]}
+NAVIGATION_GROUPS.update({
+    group: [NAV_PAGE_BY_FILENAME[tool.page_filename] for tool in TOOLS_BY_GROUP[group]]
+    for group in GROUP_ORDER
+})
+NAVIGATION = st.navigation(NAVIGATION_GROUPS, position="sidebar", expanded=True)
 with page_timer():
     NAVIGATION.run()

@@ -10,7 +10,8 @@ from adfm_core.catalog import GROUP_ORDER, tool_definitions
 
 class HomeResearchDirectoryTests(unittest.TestCase):
     def test_home_renders_ordered_native_page_links(self):
-        app = AppTest.from_file("Home.py", default_timeout=30).run()
+        home = Path(__file__).resolve().parents[1] / "Home.py"
+        app = AppTest.from_file(str(home), default_timeout=30).run()
 
         self.assertEqual(list(app.exception), [])
         self.assertEqual(len(app.metric), 0)

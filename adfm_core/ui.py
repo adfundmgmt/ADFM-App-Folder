@@ -869,7 +869,13 @@ def render_page_header(header: PageHeader) -> None:
         else ""
     )
     tool = tool_for_page(caller_file)
+    while tool is None and caller is not None:
+        caller = caller.f_back
+        if caller is not None:
+            caller_file = Path(str(caller.f_globals.get("__file__", ""))).name
+            tool = tool_for_page(caller_file)
     title = tool.title if tool is not None else header.title
+    st.set_page_config(page_title=title)
     eyebrow = f"ADFM {tool.group}" if tool is not None else header.eyebrow
     status = " · ".join(item for item in (header.as_of, header.source_note) if item)
     st.markdown(
