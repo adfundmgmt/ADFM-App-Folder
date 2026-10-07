@@ -48,10 +48,12 @@ class ETFPressurePageTests(unittest.TestCase):
 
         self.assertEqual(len(readings), 99)
         self.assertIn("1 Month Dollar Pressure", readings.columns)
-        self.assertIn("Prior Full Week $ Pressure", readings.columns)
         self.assertIn("WTD $ Pressure", readings.columns)
-        self.assertIn("Pressure Intensity (%)", readings.columns)
-        self.assertTrue(readings["Pressure Intensity (%)"].dropna().between(-100, 100).all())
+        self.assertIn("Pressure / ADV (x)", readings.columns)
+        self.assertIn("1Y Pressure Percentile", readings.columns)
+        self.assertIn("Price / Pressure", readings.columns)
+        self.assertTrue(readings["1Y Pressure Percentile"].dropna().between(0, 100).all())
+        self.assertTrue(readings["Pressure / ADV (x)"].notna().all())
 
         subheads = [item.value for item in app.subheader]
         self.assertNotIn("Reported ETF capital flows", subheads)
@@ -67,6 +69,9 @@ class ETFPressurePageTests(unittest.TestCase):
         readings = app.dataframe[0].value
         self.assertTrue(readings["Asset Class"].eq("FX").all())
         self.assertTrue(readings["1 Month Dollar Pressure"].notna().all())
+        self.assertTrue(readings["Pressure / ADV (x)"].notna().all())
+        self.assertTrue(readings["1Y Pressure Percentile"].notna().all())
+        self.assertTrue(readings["Price / Pressure"].ne("N/A").all())
 
     def test_missing_provider_data_stays_visible_instead_of_shrinking_universe(self):
         with patch("adfm_core.market_data.download_market_data", return_value=pd.DataFrame()):
