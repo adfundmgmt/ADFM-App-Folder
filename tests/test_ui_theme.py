@@ -98,7 +98,7 @@ class InstitutionalThemeTests(unittest.TestCase):
             "25_Commodity_Event_Study.py": root / "adfm_core" / "commodity_top_exhaustion_page.py",
         }
 
-        self.assertEqual(24, len(pages))
+        self.assertEqual(23, len(pages))
         for page in pages:
             source = page.read_text(encoding="utf-8")
             if page.name in shared_renderers:

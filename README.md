@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 24 tools, in the same order and groups shown on the Home page.
+The application contains 23 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -45,7 +45,6 @@ The application contains 24 tools, in the same order and groups shown on the Hom
 | 19 | Market Stress | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
 | 20 | Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Official agency calendars; recurring market-calendar rules; Yahoo Finance market proxies |
 | 21 | Hedge Timing | Plots SPX-fitted hedge callouts from price breaks and distinct breadth, volatility, and credit risk groups, with shock and divergence triggers, recovery resets, and an audit of actual red dots in 10%+ local-peak drawdowns. NDX uses the same frozen rules; missed and late events remain visible. | Yahoo Finance adjusted closes for S&P 500, Nasdaq-100, SPY, RSP, IWM, HYG, LQD, all 11 S&P 500 sector ETFs, VIX, VIX9D, VIX3M, and VVIX; index daily highs and lows |
-| 22 | Position Sizing | Scales exposure with recent volatility, applies optional invalidation loss budgets, and compares permitted size against directional historical downside scenarios; retains optional portfolio stress testing. | Yahoo Finance adjusted daily OHLCV; explicit exposure and optional loss-budget inputs; optional session-only portfolio stress inputs |
 | 23 | Market Memory | Surfaces historical analogs to contextualize the current tape against prior return paths and regimes. | Yahoo Finance market history |
 | 24 | Seasonality | Shows recurring monthly return and volatility patterns by asset, index, sector, or commodity. | Yahoo Finance; FRED for selected series and regime tags |
 | 25 | Commodity Event Study | Marks repeatable commodity price events and measures historical forward returns and drawdowns across Yahoo Finance futures histories. | Yahoo Finance daily continuous-futures price history |
@@ -60,7 +59,7 @@ The application contains 24 tools, in the same order and groups shown on the Hom
 | Fundamental Research | Equity Underwriter |
 | Technical Confirmation | Chart Terminal; Cross-Asset Ratios; Momentum & Rate of Change; Relative Volatility |
 | Positioning + Flows | ETF Flow Pressure; Volume Sentiment; Options Relative Value; CFTC Positioning |
-| Risk + Execution | Market Stress; Catalyst Calendar; Hedge Timing; Position Sizing |
+| Risk + Execution | Market Stress; Catalyst Calendar; Hedge Timing |
 | Historical Context | Market Memory; Seasonality; Commodity Event Study |
 
 ## Shared application foundations

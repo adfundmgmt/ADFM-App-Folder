@@ -81,7 +81,7 @@ def render_catalyst_calendar() -> None:
 
     today = date.today()
     market = base._fetch_market(min(date(today.year, 1, 1) - timedelta(days=10), today - timedelta(days=460)).isoformat())
-    stress_bonus, stress_label = base._market_stress(market)
+    stress_bonus, _ = base._market_stress(market)
 
     frames: List[pd.DataFrame] = []
     if include_macro:
@@ -109,7 +109,7 @@ def render_catalyst_calendar() -> None:
     base.render_page_header(
         base.PageHeader(
             title=TITLE,
-            description="Confirmed agency dates plus deterministic market-calendar events and the latest macro prints defining the setup into each catalyst.",
+            description="Upcoming agency releases and market-calendar events, shown in one catalyst chart and dated table.",
             eyebrow="ADFM Risk + Catalysts",
         )
     )
@@ -118,60 +118,24 @@ def render_catalyst_calendar() -> None:
         st.info("No events to show. Enable recurring macro catalysts or paste a custom CSV.")
         return
 
-    st.caption(f"Volatility backdrop: {stress_label} · Event-risk add-on: {stress_bonus:+.1f}")
+    st.plotly_chart(base._timeline(calendar, today), width="stretch")
 
     st.markdown("<div class='section-title'>Upcoming Catalyst Dates</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='section-note'>Confirmed = published by the named source. Rule-based = deterministic market-calendar convention, not an estimated macro release date.</div>",
         unsafe_allow_html=True,
     )
-    decision = calendar[["Date", "Days", "Event", "Type", "Precision", "Source", "Risk Score", "Exposure", "Action"]].copy()
+    decision = calendar[["Date", "Days", "Event", "Type", "Precision", "Source", "Risk Score"]].copy()
     decision["Date"] = pd.to_datetime(decision["Date"])
     decision["When"] = decision["Days"].map(lambda x: _format_days(int(x)))
     decision["Status"] = decision["Precision"].replace({"Official": "Confirmed", "Rule": "Rule-based", "Custom": "Custom", "Estimated": "Estimated"})
     decision["Risk"] = decision["Risk Score"].map(lambda x: base._risk_label(float(x)))
-    decision = decision[["Date", "When", "Event", "Type", "Status", "Source", "Risk", "Risk Score", "Exposure", "Action"]]
+    decision = decision[["Date", "When", "Event", "Type", "Status", "Source", "Risk"]]
     st.dataframe(
         decision, width="stretch", hide_index=True, height=390,
         column_config={
             "Date": st.column_config.DateColumn("Date", format="MMM DD, YYYY"),
-            "Risk Score": st.column_config.NumberColumn("Risk Score", format="%.0f"),
         },
     )
 
-    with st.expander("Catalyst charts and market backdrop", expanded=False, on_change="rerun") as charts:
-        if charts.open:
-            st.plotly_chart(base._timeline(calendar, today), use_container_width=True)
-            perf = base._build_market_table(market, today)
-            if perf.empty:
-                st.info("Market data unavailable.")
-            else:
-                st.plotly_chart(base._heatmap(perf), use_container_width=True)
-
-    with st.expander("Latest macro prints", expanded=False, on_change="rerun") as macro_detail:
-        if macro_detail.open:
-            macro_panel, macro_status = base._fetch_macro(date(today.year - 3, 1, 1).isoformat(), today.isoformat())
-            st.caption("Latest and previous values from primary U.S. releases distributed through FRED.")
-            macro = base._macro_prints(macro_panel)
-            if macro.empty:
-                st.info("Primary macro data is temporarily unavailable.")
-            else:
-                st.dataframe(macro, use_container_width=True, hide_index=True, height=420)
-            with st.expander("Macro data status"):
-                if not macro_status.empty:
-                    st.dataframe(macro_status[["key", "symbol", "provider", "data_through", "status"]], use_container_width=True, hide_index=True)
-
-    with st.expander("Full event details", expanded=False, on_change="rerun") as event_detail:
-        if event_detail.open:
-            details = calendar.copy()
-            details["Date"] = pd.to_datetime(details["Date"])
-            details["When"] = details["Days"].map(lambda x: _format_days(int(x)))
-            details["Status"] = details["Precision"].replace({"Official": "Confirmed", "Rule": "Rule-based", "Custom": "Custom", "Estimated": "Estimated"})
-            st.dataframe(
-                details[["Date", "When", "Event", "Type", "Status", "Source", "Region", "Risk Score", "Cluster", "Why It Matters", "Exposure", "Action"]],
-                use_container_width=True,
-                hide_index=True,
-                column_config={"Date": st.column_config.DateColumn("Date", format="MMM DD, YYYY")},
-            )
-
-    base.render_footer()
+    base.render_footer(show_diagnostics=False)

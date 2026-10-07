@@ -921,7 +921,8 @@ def dataframe_download(label: str, frame: pd.DataFrame, filename: str) -> None:
 
 
 def render_footer(
-    text: str = "© 2026 AD Fund Management LP", data_note: Optional[str] = None
+    text: str = "© 2026 AD Fund Management LP", data_note: Optional[str] = None,
+    show_diagnostics: bool = True,
 ) -> None:
     """Render a standard source/data-policy disclosure and discreet ADFM footer."""
     if data_note is None:
@@ -939,7 +940,8 @@ def render_footer(
             )
     from adfm_core.observability import render_performance_diagnostics
 
-    render_performance_diagnostics()
+    if show_diagnostics:
+        render_performance_diagnostics()
     st.markdown(
         "<footer class='adfm-footer'>"
         + (
