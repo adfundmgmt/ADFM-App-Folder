@@ -10,6 +10,7 @@ import streamlit as st
 
 from adfm_core.bond_monitor import GLOBAL_SOVEREIGNS, daily_snapshot, monthly_snapshot
 from adfm_core.bond_event_study import HORIZONS, PROFILES, event_dates, event_summary, monthly_history, signal_frame
+from adfm_core.bond_top_audit import audit_reference_tops, event_spacing
 from adfm_core.global_macro import clean
 from adfm_core.sovereign_daily import DAILY_SOVEREIGNS, load_daily_sovereigns
 from adfm_core.palette import PASTEL
@@ -90,6 +91,7 @@ def monitor_table(rows: list[dict], monthly: bool, spread: bool, selected: str):
                       "95% edge high (bp)": summary.loc["Edge CI high", "3M"],
                       "Independent N": count, "Control N": controls,
                       "Evidence": "Small sample" if min(count, controls) < 20 else "Retrospective",
+                      "3M lower yield (%)": summary.loc["% lower yield", "3M"],
                       "Level (%)": snap["Yield"], "1M Δ (bp)": snap["1M"],
                       "3M Δ (bp)": snap["3M"], "YTD Δ (bp)": snap["YTD"],
                       "Move %ile": float(latest["ChangePctile"]) if latest is not None else np.nan,
@@ -141,7 +143,7 @@ def display_number(value: float, suffix: str = "") -> str:
 @st.cache_data(ttl=3600, max_entries=128, show_spinner=False)
 def study_row(series: pd.Series, frequency: str, profile: str, period: str):
     diagnostics = signal_frame(series, frequency, profile)
-    full_events = event_dates(diagnostics, 6 if frequency == "monthly" else 63)
+    full_events = event_dates(diagnostics, event_spacing(frequency, profile))
     history = monthly_history(series) if frequency == "monthly" else clean(series)
     if history.empty:
         start = pd.Timestamp.now().normalize()
@@ -185,13 +187,24 @@ def render():
         default = "10-year Treasury" if view == "US Treasury" else names[0]
     with b:
         selected = st.selectbox("Bond / yield series", names, index=names.index(default), key="bond_instrument")
+    monthly_us = False
+    if view == "US Treasury" and selected == "10-year Treasury":
+        monthly_us = st.sidebar.radio("10Y history", ("Daily since 1962", "Monthly since 1953"),
+                                      key="bond_us_frequency") == "Monthly since 1953"
+        monthly = monthly_us
     with c:
-        profile = st.selectbox("Top signal", PROFILES, index=1, key="bond_profile")
+        profile = st.selectbox("Top signal", PROFILES, index=PROFILES.index("Cycle Top"), key="bond_profile")
     with d:
         period = st.selectbox("Lookback", tuple(PERIODS), index=0, key="bond_period")
 
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
-    if monthly:
+    if monthly_us:
+        with st.spinner("Loading monthly 10-year history since 1953…"):
+            panel, status = daily_data(("GS10",))
+        items = [(selected, "GS10", panel["GS10"] if "GS10" in panel else pd.Series(dtype=float))]
+        problems = [(str(row.get("symbol", "FRED")), str(row["error"]))
+                    for _, row in status.iterrows() if row.get("error")] if not status.empty and "error" in status else []
+    elif monthly:
         with st.spinner("Loading sovereign yield history…"):
             panel, status = global_data(tuple(symbol for _, symbol in GLOBAL_SOVEREIGNS))
         items = [(name, symbol, panel[symbol] if symbol in panel else pd.Series(dtype=float))
@@ -220,6 +233,7 @@ def render():
     basis_map = {country: basis for country, _, _, basis, _ in DAILY_SOVEREIGNS}
     rows = [{"name": name, "symbol": symbol, "series": series,
              "basis": basis_map.get(name, "Official daily 10Y") if official_daily else
+                      "Federal Reserve monthly average (GS10)" if monthly_us else
                       "OECD monthly average" if monthly else "FRED daily yield / OAS",
              "snapshot": monthly_snapshot(series, today) if monthly else daily_snapshot(series, today)}
             for name, symbol, series in items]
@@ -266,6 +280,38 @@ def render():
     st.markdown(f'<div class="bond-heading">{escape(selected)} · yield top signals</div>', unsafe_allow_html=True)
     history_chart(chosen["series"], selected, PERIODS[period], monthly,
                   view == "Credit spreads", events)
+    if view == "US Treasury" and selected == "10-year Treasury":
+        reference = audit_reference_tops(chosen["series"], frequency, profile)
+        if not monthly:
+            monthly_panel, _ = daily_data(("GS10",))
+            monthly_rates = monthly_panel["GS10"] if "GS10" in monthly_panel else pd.Series(dtype=float)
+            monthly_rates = clean(monthly_rates).loc[lambda x: x.index.to_period("M") < today.to_period("M")]
+            monthly_reference = audit_reference_tops(monthly_rates, "monthly", profile)
+            # January 1960 predates DGS10. The separate GS10 audit supplies that
+            # row without splicing monthly values into the daily chart/signals.
+            if reference.loc[0, "Status"] == "History unavailable":
+                reference.iloc[0] = monthly_reference.iloc[0]
+        st.markdown('<div class="bond-heading">Ten historical yield peaks · capture audit</div>', unsafe_allow_html=True)
+        captures = int(reference["Status"].eq("Captured").sum())
+        st.caption(f"{captures}/10 captured by {profile}. Daily capture: an actual alert within 10 observed sessions after the peak. "
+                   "Monthly capture: within three months. This audit uses full history regardless of chart lookback.")
+        display = reference.copy()
+        for column in ("Peak date", "Alert date"):
+            display[column] = pd.to_datetime(display[column]).dt.strftime("%Y-%m-%d").fillna("—")
+        st.dataframe(display, hide_index=True, width="stretch", height=390,
+                     column_config={"Peak yield (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                                    "Alert yield (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                                    "Yield fall at alert (bp)": st.column_config.NumberColumn(format="%.0f"),
+                                    "3M after alert (bp)": st.column_config.NumberColumn(format="%.0f")})
+        st.caption("The ten episodes are calibration cases, not an independent validation sample. Peaks are identified retrospectively; "
+                   "alerts use only observations through their own dates and are never placed back on the peak. "
+                   "1960 uses GS10 monthly averages with unverified release timing; other daily rows use DGS10 closes, not intraday yields. "
+                   "The 1974–75 row reports the higher peak within that period. See all signals and matched outcomes below for failed calls.")
+        _, all_events, all_summary, _ = study_row(chosen["series"], frequency, profile, "Max")
+        st.caption(f"Full-history check: {len(all_events)} total alerts; "
+                   f'{all_summary.loc["Independent N", "3M"]:.0f} independent completed 3M outcomes; '
+                   f'{display_number(all_summary.loc["% lower yield", "3M"], "%")} ended with lower yields. '
+                   "Capturing the reference peaks does not mean every alert identified a durable top.")
     st.markdown('<div class="bond-heading">Bond signal monitor</div>', unsafe_allow_html=True)
     monitor_table(rows, monthly, view == "Credit spreads", selected)
     with st.expander("Historical statistics and chronological holdout"):
@@ -287,7 +333,11 @@ def render():
                          column_config={label: st.column_config.NumberColumn(format="%.0f bp")
                                         for label in HORIZONS[frequency]})
     with st.expander("Sources and definitions"):
-        if monthly:
+        if monthly_us:
+            st.write("Federal Reserve H.15 10-year constant-maturity monthly averages (GS10), available since April 1953. "
+                     "These are averages of business-day yields, not month-end closes. Dates are labeled at month-end as an "
+                     "unverified availability proxy; actual release can be later. Monthly and daily histories remain separate.")
+        elif monthly:
             st.write("OECD 10-year long-term interest rates distributed by FRED. Monthly averages are charted and signaled "
                      "at month-end, an earliest availability proxy rather than a verified publication date. Actual releases "
                      "can be later; historical values may be revised. These are retrospective monthly studies and cannot "
@@ -304,6 +354,13 @@ def render():
         st.write("Changes require a baseline near the requested daily horizon or the exact prior month. Daily observations older than seven calendar days and monthly averages older than four reporting periods are stale; their changes are withheld. YTD uses the prior December for monthly data and the prior year-end for daily data.")
         st.write("Max uses each provider series from its earliest available observation. U.S. daily FRED series use validated snapshots refreshed by the scheduled source writer; missing history is requested directly; OECD sovereign series are monthly and follow their publication schedule. Observation dates, rather than download times, determine freshness. If a refresh fails, the last validated history is retained with its original dates.")
         st.write("Yield top profiles use trailing yield-change percentile, distance above the long moving average measured in yield-change volatility, yield RSI, and volatility percentile. Exhaustion watch means at least two of these four readings are elevated; it is not an event. Early Warning requires a high change percentile plus two other extremes; Confirmed Exhaustion requires a subsequent downward reversal; Failed Breakout requires a return below the original long-window high breached during its confirmation window. No positioning proxy is inferred. Monthly windows are counted in months and missing months cannot be filled by a later observation. Markers and forward tables describe historical yield behavior, not forecasts or bond total returns.")
+        st.write("Cycle Top uses a separate structural rule: yield within 10 basis points of its trailing 252-session "
+                 "high (12 months for monthly data), after a rise of at least 35 basis points from the trailing "
+                 "126-session low (12 months). The setup remains eligible for 63 sessions or six months. Confirmation "
+                 "requires at least a 10-basis-point pullback from the pending peak and a close below the five-session "
+                 "average (two-month average). Only one alert is emitted for that peak; a higher peak rearms it. "
+                 "Missing months or daily gaps longer than ten calendar days cancel pending setups. These rules "
+                 "were selected using the ten requested episodes; higher recall can create additional false alarms.")
         if problems:
             st.dataframe(pd.DataFrame(problems, columns=["Series", "Provider status"]), hide_index=True, width="stretch")
         if official_daily:

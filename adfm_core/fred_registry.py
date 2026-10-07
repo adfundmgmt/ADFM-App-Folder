@@ -28,6 +28,7 @@ POLICIES = {
     "NFCI": FredPolicy("Index", "Weekly", 14, -100, 100, True),
     "STLFSI4": FredPolicy("Index", "Weekly", 14, -100, 100, True),
     "FEDFUNDS": FredPolicy("Percent", "Monthly", 65, -10, 100, True),
+    "GS10": FredPolicy("Percent", "Monthly", 65, -10, 100, True),
     "UNRATE": FredPolicy("Percent", "Monthly", 65, 0, 100, True),
     # Monthly FRED dates label period starts; the next release can arrive more
     # than two months after the last period-start label, especially on holidays.

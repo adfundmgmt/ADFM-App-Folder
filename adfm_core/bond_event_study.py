@@ -12,7 +12,7 @@ import pandas as pd
 
 from .global_macro import clean
 
-PROFILES = ("Early Warning", "Confirmed Exhaustion", "Failed Breakout")
+PROFILES = ("Early Warning", "Confirmed Exhaustion", "Failed Breakout", "Cycle Top")
 PRESETS = {
     "Early Warning": dict(change_pctile=90, trend_z=1.25, rsi=65, vol_pctile=60,
                           memory=5, reversal_components=0),
@@ -20,6 +20,8 @@ PRESETS = {
                                   memory=8, reversal_components=2),
     "Failed Breakout": dict(change_pctile=90, trend_z=1.25, rsi=65, vol_pctile=60,
                             memory=5, reversal_components=2),
+    "Cycle Top": dict(change_pctile=90, trend_z=1.25, rsi=65, vol_pctile=60,
+                      memory=63, reversal_components=2),
 }
 HORIZONS = {"daily": {"1D": 1, "1W": 5, "1M": 21, "3M": 63, "6M": 126},
             "monthly": {"1M": 1, "3M": 3, "6M": 6, "12M": 12}}
@@ -36,6 +38,49 @@ def _rsi(series: pd.Series, window: int) -> pd.Series:
     down = (-delta.clip(upper=0)).rolling(window, min_periods=window).mean()
     total = up + down
     return (100 * up / total).where(total > 0, 50.0)
+
+
+def cycle_top_signals(yields: pd.Series, frequency: str) -> pd.DataFrame:
+    """Causal high/reversal rule; benchmark dates never enter this calculation.
+
+    The ten requested historical episodes are calibration cases, not an
+    independent validation set. One alert per pending peak; a higher observed
+    peak can rearm it. Missing months/large daily gaps cancel pending setups.
+    """
+    high_window, rise_window, memory, trend_window = (
+        (252, 126, 63, 5) if frequency == "daily" else (12, 12, 6, 2)
+    )
+    high = yields.rolling(high_window, min_periods=high_window // 2).max()
+    low = yields.rolling(rise_window, min_periods=rise_window // 2).min()
+    rise_bp = (yields - low) * 100
+    near_high = yields.ge(high - .10) & high.notna()
+    setup = near_high & rise_bp.ge(35)
+    trend = yields.rolling(trend_window, min_periods=trend_window).mean()
+    signals, pending, pullbacks = [], [], []
+    peak, alerted_peak = None, None
+    last_setup = -10**9
+    previous_date = None
+    for pos, (date, level) in enumerate(yields.items()):
+        missing = not np.isfinite(level)
+        gap = frequency == "daily" and previous_date is not None and (date - previous_date).days > 10
+        if missing or gap or pos - last_setup > memory:
+            peak, alerted_peak = None, None
+        previous_date = date
+        if bool(setup.iloc[pos]):
+            peak = float(level) if peak is None else max(peak, float(level))
+            last_setup = pos
+        pullback = (peak - level) * 100 if peak is not None and not missing else np.nan
+        new_peak = peak is not None and (alerted_peak is None or peak > alerted_peak + 1e-9)
+        confirmed = bool(new_peak and np.isfinite(pullback) and pullback >= 10 - 1e-9
+                         and level < trend.iloc[pos])
+        if confirmed:
+            alerted_peak = peak
+        signals.append(confirmed)
+        pending.append(peak if peak is not None else np.nan)
+        pullbacks.append(pullback)
+    return pd.DataFrame({"Watch": near_high & rise_bp.ge(20), "Setup": setup,
+                         "Signal": signals, "CyclePeak": pending,
+                         "CycleRiseBp": rise_bp, "PeakPullbackBp": pullbacks}, index=yields.index)
 
 
 def signal_frame(rates: pd.Series, frequency: str, profile: str,
@@ -69,7 +114,11 @@ def signal_frame(rates: pd.Series, frequency: str, profile: str,
     watch = (core + (percentile >= setting["change_pctile"]).astype(int) >= 2) & yield_level.notna()
     setup = (percentile >= setting["change_pctile"]) & (core >= 2) & yield_level.notna()
     recent = setup.rolling(int(setting["memory"]), min_periods=1).max().astype(bool)
-    if profile == "Early Warning":
+    cycle = None
+    if profile == "Cycle Top":
+        cycle = cycle_top_signals(yield_level, frequency)
+        watch, setup, signal = cycle["Watch"], cycle["Setup"], cycle["Signal"]
+    elif profile == "Early Warning":
         signal = setup
     elif profile == "Confirmed Exhaustion":
         signal = recent & (reversal >= int(setting["reversal_components"]))
@@ -89,10 +138,13 @@ def signal_frame(rates: pd.Series, frequency: str, profile: str,
             if np.isfinite(prior) and level > prior:
                 active.append((pos, float(prior)))
         signal = pd.Series(signals, index=yield_level.index)
-    return pd.DataFrame({"Yield": yield_level, "ChangePctile": percentile, "TrendZ": trend_z,
+    result = pd.DataFrame({"Yield": yield_level, "ChangePctile": percentile, "TrendZ": trend_z,
                          "RSI": rsi, "VolPctile": vol_pctile, "ReversalScore": reversal,
                          "Watch": watch.fillna(False), "Setup": setup.fillna(False),
                          "Signal": signal.fillna(False)})
+    if cycle is not None:
+        result = result.join(cycle[["CyclePeak", "CycleRiseBp", "PeakPullbackBp"]])
+    return result
 
 
 def event_dates(frame: pd.DataFrame, spacing: int) -> pd.DatetimeIndex:
