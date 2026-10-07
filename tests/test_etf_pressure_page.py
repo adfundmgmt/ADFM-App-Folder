@@ -50,9 +50,9 @@ class ETFPressurePageTests(unittest.TestCase):
         self.assertIn("1 Month Dollar Pressure", readings.columns)
         self.assertIn("WTD $ Pressure", readings.columns)
         self.assertIn("Pressure / ADV (x)", readings.columns)
-        self.assertIn("1Y Pressure Percentile", readings.columns)
+        self.assertIn("1Y Pressure %ile", readings.columns)
         self.assertIn("Price / Pressure", readings.columns)
-        self.assertTrue(readings["1Y Pressure Percentile"].dropna().between(0, 100).all())
+        self.assertTrue(readings["1Y Pressure %ile"].dropna().between(0, 100).all())
         self.assertTrue(readings["Pressure / ADV (x)"].notna().all())
 
         subheads = [item.value for item in app.subheader]
@@ -70,7 +70,7 @@ class ETFPressurePageTests(unittest.TestCase):
         self.assertTrue(readings["Asset Class"].eq("FX").all())
         self.assertTrue(readings["1 Month Dollar Pressure"].notna().all())
         self.assertTrue(readings["Pressure / ADV (x)"].notna().all())
-        self.assertTrue(readings["1Y Pressure Percentile"].notna().all())
+        self.assertTrue(readings["1Y Pressure %ile"].notna().all())
         self.assertTrue(readings["Price / Pressure"].ne("N/A").all())
 
     def test_missing_provider_data_stays_visible_instead_of_shrinking_universe(self):
