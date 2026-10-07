@@ -623,13 +623,13 @@ def classify_price_pressure(return_pct: float, pressure_score: float) -> str:
     if pd.isna(return_pct) or pd.isna(pressure_score):
         return "N/A"
     if return_pct > 0 and pressure_score > 0:
-        return "Confirmed accumulation"
+        return "Confirmed buying"
     if return_pct > 0 and pressure_score < 0:
-        return "Distribution into strength"
+        return "Bearish divergence"
     if return_pct < 0 and pressure_score > 0:
-        return "Accumulation into weakness"
+        return "Bullish divergence"
     if return_pct < 0 and pressure_score < 0:
-        return "Confirmed distribution"
+        return "Confirmed selling"
     return "Mixed"
 
 
@@ -1125,6 +1125,7 @@ display_df = display_df.rename(
         flow_col: f"{period_label} Dollar Pressure",
         "Week to Date": "WTD $ Pressure",
         return_col: f"{period_label} Return (%)",
+        "1Y Pressure Percentile": "1Y Pressure %ile",
         "Avg Daily Dollar Vol": "Avg Daily $ Volume",
     }
 )
@@ -1136,7 +1137,7 @@ display_cols = [
     f"{period_label} Dollar Pressure",
     "WTD $ Pressure",
     "Pressure / ADV (x)",
-    "1Y Pressure Percentile",
+    "1Y Pressure %ile",
     f"{period_label} Return (%)",
     "Price / Pressure",
     "Avg Daily $ Volume",
@@ -1164,7 +1165,7 @@ styled = display_df.style.format(
         f"{period_label} Dollar Pressure": fmt_compact_cur,
         "WTD $ Pressure": fmt_compact_cur,
         "Pressure / ADV (x)": lambda x: "" if pd.isna(x) else f"{float(x):+.2f}x",
-        "1Y Pressure Percentile": lambda x: "" if pd.isna(x) else f"{float(x):.0f}th",
+        "1Y Pressure %ile": lambda x: "" if pd.isna(x) else f"{float(x):.0f}th",
         f"{period_label} Return (%)": lambda x: "" if pd.isna(x) else f"{float(x):+.2f}",
         "Avg Daily $ Volume": fmt_compact_cur,
     },
