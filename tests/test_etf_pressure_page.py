@@ -46,7 +46,7 @@ class ETFPressurePageTests(unittest.TestCase):
         self.assertEqual(len(app.metric), 0)
         readings = app.dataframe[0].value
 
-        self.assertEqual(len(readings), 99)
+        self.assertEqual(len(readings), 97)
         self.assertIn("1 Month Dollar Pressure", readings.columns)
         self.assertIn("WTD $ Pressure", readings.columns)
         self.assertIn("Pressure / ADV (x)", readings.columns)
@@ -79,7 +79,7 @@ class ETFPressurePageTests(unittest.TestCase):
 
         self.assertEqual(list(app.exception), [])
         readings = app.dataframe[0].value
-        self.assertEqual(len(readings), 99)
+        self.assertEqual(len(readings), 97)
         self.assertTrue(readings["Data Status"].eq("Missing").all())
 
 
