@@ -14,21 +14,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from adfm_core.market_data import download_market_data, fill_short_calendar_gaps, required_inputs_fresh
+from adfm_core.market_data import download_market_data, fill_short_calendar_gaps
 
 from adfm_core.data_registry import PRIMARY_MACRO_SERIES, SeriesDefinition
 from adfm_core.market_data import configure_yfinance_cache
 from adfm_core.palette import PASTEL, PASTEL_20
-from adfm_core.primary_data import fetch_fred_series, fetch_fred_symbols, render_fred_status
+from adfm_core.primary_data import fetch_fred_series, fetch_fred_symbols
 from adfm_core.macro_history import percentile_context
 from adfm_core.ui import (
     PageHeader,
     inject_explorer_style,
     render_footer,
-    render_kpi_cards,
     render_page_header,
     render_sidebar_about,
-    render_selection_note,
 )
 
 configure_yfinance_cache()
@@ -37,8 +35,8 @@ pd.options.mode.chained_assignment = None
 
 TITLE = "Credit Conditions Monitor"
 SUBTITLE = (
-    "Separates credit-spread stress from outright funding-cost pressure, then "
-    "checks banks, loans, volatility, and global sovereign yields for confirmation."
+    "Global sovereign repricing, credit spreads, and funding costs, with "
+    "banks, loans, and market ratios for confirmation."
 )
 
 st.set_page_config(layout="wide", page_title=TITLE, initial_sidebar_state="expanded")
@@ -183,7 +181,6 @@ DISPLAY_NAMES: Dict[str, str] = {
     "^VIX": "VIX",
 }
 
-FOCUS_WINDOWS = ["5D", "1M", "3M", "YTD", "1Y"]
 GLOBAL_WINDOWS = ["5D", "1M", "YTD", "1Y", "3Y", "5Y"]
 
 PRIMARY_BY_KEY = {definition.key: definition for definition in PRIMARY_MACRO_SERIES}
@@ -256,7 +253,6 @@ TE_SLUG_OVERRIDES = {
 with st.sidebar:
     render_sidebar_about("5_Credit_Conditions_Monitor.py")
     st.header("Controls")
-    focus_window = st.selectbox("Credit move window", FOCUS_WINDOWS, index=1)
     global_window = st.selectbox("Global 10Y move window", GLOBAL_WINDOWS, index=3)
     history_label = st.selectbox(
         "Chart history", ["1 Year", "3 Years", "5 Years", "10 Years"], index=1
@@ -1043,6 +1039,58 @@ render_page_header(
     )
 )
 
+st.markdown('<div class="section-title">Global 10Y Government Yield Moves</div>', unsafe_allow_html=True)
+st.markdown(
+    f'<div class="section-subtitle">Change in benchmark 10-year sovereign yields over <b>{global_window}</b>. '
+    'Bars show the direction and magnitude of repricing; current and starting yields are printed beside each bar. '
+    'Only observations that pass freshness and coverage checks are displayed.</div>',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f'''<div class="sovereign-legend">
+        <span class="sovereign-legend-item"><span class="sovereign-swatch" style="background:{SOVEREIGN_UP};"></span>Yields higher</span>
+        <span class="sovereign-legend-item"><span class="sovereign-swatch" style="background:{SOVEREIGN_DOWN};"></span>Yields lower</span>
+        <span class="sovereign-legend-item"><span class="sovereign-median-line"></span>Group median</span>
+        <span class="sovereign-legend-item"><span class="sovereign-zero-line"></span>Zero change</span>
+    </div>''',
+    unsafe_allow_html=True,
+)
+
+with st.spinner("Loading global sovereign yields..."):
+    sovereign_moves, sovereign_source, sovereign_note = load_global_sovereign_moves(global_window)
+
+if sovereign_moves.empty:
+    st.info(
+        "Global sovereign-yield panel is unavailable for this horizon. "
+        "The page will not substitute bond ETFs or stale values for benchmark yields."
+    )
+    st.markdown(f'<div class="source-line">{sovereign_note}</div>', unsafe_allow_html=True)
+else:
+    dm_count = int((sovereign_moves["Group"] == "Developed").sum())
+    em_count = int((sovereign_moves["Group"] == "Emerging").sum())
+    dm_median = sovereign_moves.loc[sovereign_moves["Group"] == "Developed", "Move bp"].median()
+    em_median = sovereign_moves.loc[sovereign_moves["Group"] == "Emerging", "Move bp"].median()
+    higher_count = int(sovereign_moves["Move bp"].gt(0).sum())
+    lower_count = int(sovereign_moves["Move bp"].lt(0).sum())
+    flat_count = int(sovereign_moves["Move bp"].eq(0).sum())
+    st.markdown(
+        '<div class="quality-line">'
+        f'<b>Source:</b> {sovereign_source} · '
+        f'<b>Coverage:</b> {dm_count} developed / {em_count} emerging · '
+        f'<b>Median move:</b> Developed {dm_median:+.0f} bp · Emerging {em_median:+.0f} bp · '
+        f'<b>Breadth:</b> {higher_count} higher / {lower_count} lower / {flat_count} unchanged'
+        + (f' · {sovereign_note}' if sovereign_note else '')
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    max_abs = float(sovereign_moves["Move bp"].abs().max())
+    x_limit = max(75.0, np.ceil((max_abs * 1.42 + 20.0) / 25.0) * 25.0)
+    dm_col, em_col = st.columns(2)
+    with dm_col:
+        st.plotly_chart(sovereign_bar_chart(sovereign_moves, "Developed", x_limit), width="stretch")
+    with em_col:
+        st.plotly_chart(sovereign_bar_chart(sovereign_moves, "Emerging", x_limit), width="stretch")
+
 history_start = (date.today() - timedelta(days=365 * 10 + 45)).isoformat()
 history_end = (date.today() + timedelta(days=1)).isoformat()
 
@@ -1054,148 +1102,12 @@ with st.spinner("Loading credit and rates data..."):
     )
     market = fetch_market_prices(MARKET_TICKERS, history_start, history_end)
 
-render_fred_status(fred_status)
-spread_history_rows = [{"Series": name, "Ranking window": percentile_context(series, 5)[1]}
-                      for name, series in [("HY OAS", fred.get("hy_oas")), ("IG OAS", fred.get("ig_oas")), ("BBB OAS", fred.get("bbb_oas"))]]
-if any("available" in row["Ranking window"] for row in spread_history_rows):
-    st.info("FRED limits these ICE credit-spread histories to about three years. Rankings use the actual available history, shown below; they are not five-year comparisons.")
-    st.dataframe(pd.DataFrame(spread_history_rows), hide_index=True, width="stretch")
-
 proxy = ratio_frame(market) if not market.empty else pd.DataFrame()
 hy_oas = clean_series(fred["hy_oas"]) if "hy_oas" in fred else pd.Series(dtype=float)
 ig_oas = clean_series(fred["ig_oas"]) if "ig_oas" in fred else pd.Series(dtype=float)
 bbb_oas = clean_series(fred["bbb_oas"]) if "bbb_oas" in fred else pd.Series(dtype=float)
 dgs10 = clean_series(fred["dgs10"]) if "dgs10" in fred else pd.Series(dtype=float)
 dgs30 = clean_series(fred["dgs30"]) if "dgs30" in fred else pd.Series(dtype=float)
-
-if hy_oas.empty and market.empty:
-    st.error("Neither primary credit spreads nor market confirmation data loaded.")
-    st.stop()
-
-spread_percentiles = {
-    "HY OAS": trailing_percentile(hy_oas, 5),
-    "IG OAS": trailing_percentile(ig_oas, 5),
-    "BBB OAS": trailing_percentile(bbb_oas, 5),
-}
-spread_values = [value for value in spread_percentiles.values() if np.isfinite(value)]
-spread_stress = float(np.mean(spread_values)) if spread_values else np.nan
-
-rate_percentiles = {
-    "10Y": trailing_percentile(dgs10, 10),
-    "30Y": trailing_percentile(dgs30, 10),
-}
-rate_values = [value for value in rate_percentiles.values() if np.isfinite(value)]
-funding_pressure = float(np.mean(rate_values)) if rate_values else np.nan
-
-# Current classification requires fresh observed daily primary inputs. Historical
-# curves remain intact; revised FRED histories are not point-in-time signals.
-spread_inputs_fresh = all(
-    required_inputs_fresh(pd.DataFrame({"value": series}), ["value"], max_age_days=7)
-    for series in (hy_oas, ig_oas)
-)
-rate_inputs_fresh = all(
-    required_inputs_fresh(pd.DataFrame({"value": series}), ["value"], max_age_days=7)
-    for series in (dgs10, dgs30)
-)
-if not spread_inputs_fresh:
-    spread_stress = np.nan
-if not rate_inputs_fresh:
-    funding_pressure = np.nan
-
-if np.isfinite(spread_stress) and np.isfinite(funding_pressure):
-    if spread_stress >= 0.70 and funding_pressure >= 0.70:
-        credit_state = "Broad credit stress"
-    elif spread_stress <= 0.40 and funding_pressure >= 0.70:
-        credit_state = "High-rate / tight-spread"
-    elif spread_stress >= 0.70 and funding_pressure < 0.70:
-        credit_state = "Credit-specific stress"
-    elif spread_stress <= 0.40 and funding_pressure <= 0.40:
-        credit_state = "Easy spreads / easy funding"
-    else:
-        credit_state = "Mixed credit conditions"
-elif np.isfinite(spread_stress):
-    credit_state = "Incomplete or stale inputs"
-elif np.isfinite(funding_pressure):
-    credit_state = "Incomplete or stale inputs"
-else:
-    credit_state = "Insufficient data"
-
-hyg_lqd_move = pct_move(proxy["HYG/LQD"], focus_window) if "HYG/LQD" in proxy else np.nan
-if not required_inputs_fresh(market, ["HYG", "LQD"]):
-    hyg_lqd_move = np.nan
-kre_spy_move = pct_move(proxy["KRE/SPY"], focus_window) if "KRE/SPY" in proxy else np.nan
-if not required_inputs_fresh(market, ["KRE", "SPY"]):
-    kre_spy_move = np.nan
-vix_level = latest(market["^VIX"]) if "^VIX" in market else np.nan
-hy_oas_level = latest(hy_oas)
-hy_oas_1m_bp = absolute_move(hy_oas, "1M", scale=100.0)
-ig_oas_level = latest(ig_oas)
-ten_y = latest(dgs10)
-ten_y_pct = trailing_percentile(dgs10, 10)
-
-render_kpi_cards(
-    [
-        (
-            "Credit state",
-            credit_state,
-            f"Spread stress {fmt_percentile(spread_stress)} · funding pressure {fmt_percentile(funding_pressure)}",
-        ),
-        (
-            "HY OAS",
-            f"{hy_oas_level * 100:.0f} bp" if np.isfinite(hy_oas_level) else "N/A",
-            f"1M {fmt_bp(hy_oas_1m_bp)} · {percentile_context(hy_oas, 5)[1]} {fmt_percentile(spread_percentiles['HY OAS'])}",
-        ),
-        (
-            "IG OAS",
-            f"{ig_oas_level * 100:.0f} bp" if np.isfinite(ig_oas_level) else "N/A",
-            f"{percentile_context(ig_oas, 5)[1]} {fmt_percentile(spread_percentiles['IG OAS'])}",
-        ),
-        (
-            "10Y Treasury",
-            fmt_yield(ten_y),
-            f"10Y history {fmt_percentile(ten_y_pct)}",
-        ),
-        (
-            "HY vs IG",
-            fmt_pct(hyg_lqd_move),
-            f"HYG/LQD · {focus_window}",
-        ),
-        (
-            "Bank beta",
-            fmt_pct(kre_spy_move),
-            f"KRE/SPY · {focus_window} · VIX {vix_level:.1f}"
-            if np.isfinite(vix_level)
-            else f"KRE/SPY · {focus_window}",
-        ),
-    ]
-)
-
-if np.isfinite(spread_stress) and np.isfinite(funding_pressure):
-    if credit_state == "High-rate / tight-spread":
-        active_read = (
-            "Outright borrowing costs are historically expensive while credit spreads remain compressed. "
-            "That is a very different regime from low credit stress: the market is charging little incremental "
-            "default/liquidity premium on top of a high risk-free base rate."
-        )
-    elif credit_state == "Broad credit stress":
-        active_read = (
-            "Both the risk-free base rate and credit risk premia are elevated. This is the cleanest broad "
-            "tightening signal and the most hostile configuration for levered balance sheets."
-        )
-    elif credit_state == "Credit-specific stress":
-        active_read = (
-            "Credit risk premia are elevated even without unusually high sovereign funding costs. "
-            "The stress is coming from credit transmission rather than the risk-free curve."
-        )
-    else:
-        active_read = (
-            "Funding costs and spread stress are giving a mixed signal. Treat them as separate dimensions "
-            "and use bank, loan, and HY relative performance for confirmation."
-        )
-else:
-    active_read = "Primary spread or rate data are incomplete; use the loaded series without forcing a composite."
-
-render_selection_note("Active credit read", active_read)
 
 display_start = pd.Timestamp(date.today() - timedelta(days=HISTORY_DAYS[history_label]))
 left, right = st.columns([1.0, 1.0])
@@ -1207,7 +1119,7 @@ with left:
         'This measures default/liquidity risk premium, not the outright Treasury yield level.</div>',
         unsafe_allow_html=True,
     )
-    spread_frame = pd.DataFrame(index=fred.index)
+    spread_frame = pd.DataFrame(index=pd.to_datetime(fred.index))
     if not hy_oas.empty:
         spread_frame["HY OAS"] = hy_oas * 100.0
     if not bbb_oas.empty:
@@ -1247,7 +1159,7 @@ with right:
         'coexist with historically expensive base rates, which is why this is kept separate.</div>',
         unsafe_allow_html=True,
     )
-    rate_frame = pd.DataFrame(index=fred.index)
+    rate_frame = pd.DataFrame(index=pd.to_datetime(fred.index))
     if not dgs10.empty:
         rate_frame["10Y"] = dgs10
     if not dgs30.empty:
@@ -1273,54 +1185,6 @@ with right:
         fig.update_yaxes(title_text="Yield (%)")
         apply_axis_style(fig)
         st.plotly_chart(fig, width="stretch")
-
-st.markdown('<div class="section-title">Global 10Y Government Yield Moves</div>', unsafe_allow_html=True)
-st.markdown(
-    f'<div class="section-subtitle">Change in benchmark 10-year sovereign yields over <b>{global_window}</b>. '
-    'Bars show the direction and magnitude of repricing; current and starting yields are printed beside each bar. '
-    'Only observations that pass freshness and coverage checks are displayed.</div>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    f'''<div class="sovereign-legend">
-        <span class="sovereign-legend-item"><span class="sovereign-swatch" style="background:{SOVEREIGN_UP};"></span>Yields higher</span>
-        <span class="sovereign-legend-item"><span class="sovereign-swatch" style="background:{SOVEREIGN_DOWN};"></span>Yields lower</span>
-        <span class="sovereign-legend-item"><span class="sovereign-median-line"></span>Group median</span>
-        <span class="sovereign-legend-item"><span class="sovereign-zero-line"></span>Zero change</span>
-    </div>''',
-    unsafe_allow_html=True,
-)
-
-with st.spinner("Loading global sovereign yields..."):
-    sovereign_moves, sovereign_source, sovereign_note = load_global_sovereign_moves(global_window)
-
-if sovereign_moves.empty:
-    st.info(
-        "Global sovereign-yield panel is unavailable for this horizon. "
-        "The page will not substitute bond ETFs or stale values for benchmark yields."
-    )
-    st.markdown(f'<div class="source-line">{sovereign_note}</div>', unsafe_allow_html=True)
-else:
-    dm_count = int((sovereign_moves["Group"] == "Developed").sum())
-    em_count = int((sovereign_moves["Group"] == "Emerging").sum())
-    dm_median = sovereign_moves.loc[sovereign_moves["Group"] == "Developed", "Move bp"].median()
-    em_median = sovereign_moves.loc[sovereign_moves["Group"] == "Emerging", "Move bp"].median()
-    st.markdown(
-        '<div class="quality-line">'
-        f'<b>Source:</b> {sovereign_source} · '
-        f'<b>Coverage:</b> {dm_count} developed / {em_count} emerging · '
-        f'<b>Median move:</b> Developed {dm_median:+.0f} bp · Emerging {em_median:+.0f} bp'
-        + (f' · {sovereign_note}' if sovereign_note else '')
-        + '</div>',
-        unsafe_allow_html=True,
-    )
-    max_abs = float(sovereign_moves["Move bp"].abs().max())
-    x_limit = max(75.0, np.ceil((max_abs * 1.42 + 20.0) / 25.0) * 25.0)
-    dm_col, em_col = st.columns(2)
-    with dm_col:
-        st.plotly_chart(sovereign_bar_chart(sovereign_moves, "Developed", x_limit), width="stretch")
-    with em_col:
-        st.plotly_chart(sovereign_bar_chart(sovereign_moves, "Emerging", x_limit), width="stretch")
 
 st.markdown('<div class="section-title">Credit Risk Appetite</div>', unsafe_allow_html=True)
 st.markdown(
@@ -1451,6 +1315,12 @@ else:
 
 if show_raw:
     st.markdown('<div class="section-title">Data Audit</div>', unsafe_allow_html=True)
+    spread_history_rows = [{"Series": name, "Ranking window": percentile_context(series, 5)[1]}
+                          for name, series in [("HY OAS", fred.get("hy_oas")), ("IG OAS", fred.get("ig_oas")), ("BBB OAS", fred.get("bbb_oas"))]]
+    if any("available" in row["Ranking window"] for row in spread_history_rows):
+        st.caption("Credit-spread rankings use the available history shown below; shorter histories are not five-year comparisons.")
+        st.dataframe(pd.DataFrame(spread_history_rows), hide_index=True, width="stretch")
+
     if not fred_status.empty:
         st.markdown(
             '<div class="section-subtitle">Primary FRED source status. Failed or stale series are '
