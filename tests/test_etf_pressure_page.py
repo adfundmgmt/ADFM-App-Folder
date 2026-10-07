@@ -1,8 +1,6 @@
-"""ETF page rendering with real calculations and mocked external providers."""
-import json
+"""ETF trading-pressure page regression checks with mocked market data."""
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -13,24 +11,20 @@ from streamlit.testing.v1 import AppTest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def issuance_html():
-    snapshot = json.loads((ROOT / 'data/ici/etf_net_issuance.json').read_text())
-    labels = ['Domestic', 'World', 'Taxable', 'Municipal', 'Hybrid', 'Commodity', 'Total']
-    html = '<p>Millions of dollars</p><table><tr><td></td>'
-    html += ''.join(f'<td>{pd.Timestamp(week):%m/%d/%Y}</td>' for week in snapshot['weeks']) + '</tr>'
-    for label, values in zip(labels, snapshot['values'], strict=True):
-        html += f'<tr><td>{label}</td>' + ''.join(f'<td>{value * 1000:.0f}</td>' for value in values) + '</tr>'
-    return html + '</table>'
-
-
 def prices(tickers, **kwargs):
     del kwargs
-    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=800)
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize() - pd.Timedelta(days=1), periods=800)
     columns = {}
     for i, ticker in enumerate(tickers):
         close = pd.Series(100 + np.arange(len(dates)) * .02, index=dates)
-        for field, values in {'Open': close, 'High': close + 1, 'Low': close - 3,
-                              'Close': close, 'Adj Close': close, 'Volume': (i + 1) * 100000.}.items():
+        for field, values in {
+            "Open": close,
+            "High": close + 1,
+            "Low": close - 3,
+            "Close": close,
+            "Adj Close": close,
+            "Volume": (i + 1) * 100000.0,
+        }.items():
             columns[field, ticker] = values
     frame = pd.DataFrame(columns, index=dates)
     frame.columns = pd.MultiIndex.from_tuples(frame.columns)
@@ -44,35 +38,45 @@ class ETFPressurePageTests(unittest.TestCase):
     def tearDown(self):
         st.cache_data.clear()
 
-    def test_page_reports_industry_flows_and_bounded_individual_pressure(self):
-        response = SimpleNamespace(text=issuance_html(), raise_for_status=lambda: None)
-        with patch('requests.get', return_value=response), patch('adfm_core.market_data.download_market_data', side_effect=prices):
-            app = AppTest.from_file(str(ROOT / 'pages/14_ETF_Flow_Pressure_Proxy.py')).run(timeout=30)
-            self.assertEqual(list(app.exception), [])
-            issuance = app.dataframe[0].value
-            self.assertEqual(issuance.loc['Total'].iloc[0], 53.376)
-            readings = next(d.value for d in app.dataframe if 'Pressure (%)' in d.value.columns)
-            self.assertEqual(len(readings), 99)
-            self.assertTrue(readings['Pressure (%)'].between(-100, 100).all())
-            # Dollar volume changes with fund size; normalized pressure does not.
-            self.assertAlmostEqual(readings['Pressure (%)'].min(), 50.)
-            self.assertAlmostEqual(readings['Pressure (%)'].max(), 50.)
-            self.assertEqual(len(app.metric), 0)
-            self.assertEqual(len(app.warning), 0)
-            app.selectbox[1].select('FX').run(timeout=30)
-            self.assertEqual(list(app.exception), [])
-            readings = next(d.value for d in app.dataframe if 'Pressure (%)' in d.value.columns)
-            self.assertTrue(readings['Asset class'].eq('FX').all())
+    def test_full_dollar_weighted_universe_is_visible(self):
+        with patch("adfm_core.market_data.download_market_data", side_effect=prices):
+            app = AppTest.from_file(str(ROOT / "pages/14_ETF_Flow_Pressure_Proxy.py")).run(timeout=30)
 
-    def test_saved_issuance_keeps_its_original_week_when_provider_fails(self):
-        with patch('requests.get', side_effect=TimeoutError), patch('adfm_core.market_data.download_market_data', return_value=pd.DataFrame()):
-            app = AppTest.from_file(str(ROOT / 'pages/14_ETF_Flow_Pressure_Proxy.py')).run(timeout=30)
         self.assertEqual(list(app.exception), [])
-        self.assertEqual(app.dataframe[0].value.columns[0], 'Sep 30, 2026')
-        self.assertEqual(app.dataframe[0].value.loc['Total'].iloc[0], 53.376)
-        self.assertEqual(len(app.get('plotly_chart')), 0)
-        self.assertEqual(len(app.warning), 0)
+        self.assertEqual(len(app.metric), 0)
+        readings = app.dataframe[0].value
+
+        self.assertEqual(len(readings), 99)
+        self.assertIn("1 Month Dollar Pressure", readings.columns)
+        self.assertIn("Prior Full Week $ Pressure", readings.columns)
+        self.assertIn("WTD $ Pressure", readings.columns)
+        self.assertIn("Pressure Intensity (%)", readings.columns)
+        self.assertTrue(readings["Pressure Intensity (%)"].dropna().between(-100, 100).all())
+
+        subheads = [item.value for item in app.subheader]
+        self.assertNotIn("Reported ETF capital flows", subheads)
+        self.assertIn("Dollar-Weighted Trading Pressure", subheads)
+        self.assertIn("ETF Pressure Detail", subheads)
+
+    def test_asset_filter_keeps_underlying_dollar_pressure_columns(self):
+        with patch("adfm_core.market_data.download_market_data", side_effect=prices):
+            app = AppTest.from_file(str(ROOT / "pages/14_ETF_Flow_Pressure_Proxy.py")).run(timeout=30)
+            app.selectbox[0].select("FX").run(timeout=30)
+
+        self.assertEqual(list(app.exception), [])
+        readings = app.dataframe[0].value
+        self.assertTrue(readings["Asset Class"].eq("FX").all())
+        self.assertTrue(readings["1 Month Dollar Pressure"].notna().all())
+
+    def test_missing_provider_data_stays_visible_instead_of_shrinking_universe(self):
+        with patch("adfm_core.market_data.download_market_data", return_value=pd.DataFrame()):
+            app = AppTest.from_file(str(ROOT / "pages/14_ETF_Flow_Pressure_Proxy.py")).run(timeout=30)
+
+        self.assertEqual(list(app.exception), [])
+        readings = app.dataframe[0].value
+        self.assertEqual(len(readings), 99)
+        self.assertTrue(readings["Data Status"].eq("Missing").all())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
