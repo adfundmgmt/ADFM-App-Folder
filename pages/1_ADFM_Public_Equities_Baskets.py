@@ -839,11 +839,6 @@ CATEGORIES: Dict[str, Dict[str, List[str]]] = {'Information Technology': {'Semic
                                                                                     'RKLB',
                                                                                     'ASTS',
                                                                                     'IRDM'],
-                                              'Greece Reclassification': ['GREK',
-                                                                          'NBG',
-                                                                          'EUROB.AT',
-                                                                          'OPAP.AT',
-                                                                          'MYTIL.AT'],
                                               'Cannabis and MSOs': ['MSOS',
                                                                     'CURLF',
                                                                     'GTBIF',
@@ -3318,7 +3313,7 @@ if show_category_sections:
 
 if show_full_map:
 
-    with st.expander("Full Basket Map", expanded=False):
+    with st.expander("Full Basket Map", expanded=True):
 
         st.caption("Raw basket definitions before data-quality filtering.")
 
