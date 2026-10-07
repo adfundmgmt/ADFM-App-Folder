@@ -167,7 +167,7 @@ lookback_dict = {
 
 # =========================================================
 # ETF COVERAGE
-# 99-name ETF signal universe.
+# 97-name ETF signal universe.
 # Broad allocator parking-lot ETFs such as QQQ, SPY, IVV, VOO,
 # SPLG, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG are excluded.
 # =========================================================
@@ -176,7 +176,6 @@ etf_info = {
     # US EQUITY: TACTICAL INDEX, STYLE, FACTOR
     # -------------------------
     "DIA": ("Dow Industrials", "Old-economy large-cap cyclicals"),
-    "IWM": ("Russell 2000", "Small-cap equity risk appetite"),
     "IJR": ("S&P SmallCap 600", "Higher-quality small-cap proxy"),
     "MDY": ("S&P MidCap 400", "Mid-cap equity risk appetite"),
     "RSP": ("S&P 500 Equal Weight", "Equal-weight breadth versus cap-weight leadership"),
@@ -250,7 +249,6 @@ etf_info = {
     # -------------------------
     # RATES, CREDIT, CASH, INFLATION
     # -------------------------
-    "SGOV": ("UST Bills", "0-3 month Treasury bills"),
     "BIL": ("UST Bills Alt", "1-3 month Treasury bills"),
     "SHY": ("UST 1-3y", "Short-duration Treasuries"),
     "IEF": ("UST 7-10y", "Intermediate-duration Treasuries"),
@@ -295,7 +293,7 @@ etf_info = {
 etf_tickers = tuple(etf_info.keys())
 
 US_EQUITY_TICKERS = {
-    "DIA", "IWM", "IJR", "MDY", "RSP",
+    "DIA", "IJR", "MDY", "RSP",
     "IWF", "IWD", "IWO", "IWN",
     "MTUM", "QUAL", "USMV", "VLUE", "SPHB", "SPLV", "SCHD",
     "XLK", "SMH", "SOXX", "XSD", "XLC", "XLY", "XLP", "XLF", "KRE",
@@ -311,7 +309,7 @@ INTERNATIONAL_EQUITY_TICKERS = {
 }
 
 RATES_CREDIT_TICKERS = {
-    "SGOV", "BIL", "SHY", "IEF", "TLT", "EDV",
+    "BIL", "SHY", "IEF", "TLT", "EDV",
     "TIP", "STIP",
     "LQD", "VCIT", "HYG", "JNK", "BKLN", "MBB", "EMB", "MUB", "GOVT",
 }
@@ -987,7 +985,7 @@ render_page_header(
     PageHeader(
         title="ETF Trading Pressure",
         description=(
-            "Dollar-weighted price-volume pressure across the full 99-name tactical ETF universe. "
+            "Dollar-weighted price-volume pressure across the full 97-name tactical ETF universe. "
             "Positive values indicate trading concentrated toward session highs; negative values "
             "indicate trading concentrated toward session lows."
         ),
