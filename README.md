@@ -21,7 +21,7 @@ python -m ruff check --select E9,F63,F7,F82 pages adfm_sector_rotation_config.py
 
 ## Tool catalog
 
-The application contains 25 tools, in the same order and groups shown on the Home page.
+The application contains 24 tools, in the same order and groups shown on the Home page.
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
@@ -41,7 +41,6 @@ The application contains 25 tools, in the same order and groups shown on the Hom
 | 14 | ETF Flow Pressure | Combines reported weekly ETF net issuance with normalized daily trading pressure across tactical ETF exposures. | Investment Company Institute; Yahoo Finance OHLCV |
 | 15 | Volume Sentiment | Reads conviction, participation, and sentiment using volume-regime signals across major liquid assets. | Yahoo Finance adjusted OHLCV; provider fallback where available |
 | 16 | Options Relative Value | Maps underlying price trend against the volatility premium to identify markets where implied volatility screens rich or cheap to recent realized volatility. | Yahoo Finance current option chains and adjusted close history; Cboe delayed option-chain fallback |
-| 17 | 13F Holdings | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
 | 18 | CFTC Positioning | Scans financial and physical futures for crowded longs, crowded shorts, and sharp weekly positioning shifts, with historical percentile and z-score context. | CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts |
 | 19 | Market Stress | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
 | 20 | Catalyst Calendar | Maps upcoming macro catalysts, options windows, Treasury supply, earnings season, and custom event risks. | Official agency calendars; recurring market-calendar rules; Yahoo Finance market proxies |
@@ -60,7 +59,7 @@ The application contains 25 tools, in the same order and groups shown on the Hom
 | Equity Leadership | Sector Rotation; Equity Leadership |
 | Fundamental Research | Equity Underwriter |
 | Technical Confirmation | Chart Terminal; Cross-Asset Ratios; Momentum & Rate of Change; Relative Volatility |
-| Positioning + Flows | ETF Flow Pressure; Volume Sentiment; Options Relative Value; 13F Holdings; CFTC Positioning |
+| Positioning + Flows | ETF Flow Pressure; Volume Sentiment; Options Relative Value; CFTC Positioning |
 | Risk + Execution | Market Stress; Catalyst Calendar; Hedge Timing; Position Sizing |
 | Historical Context | Market Memory; Seasonality; Commodity Event Study |
 
@@ -76,7 +75,6 @@ The `adfm_core` package is the incremental shared layer for common functionality
 - Reusable Rate of Change calculations and chart-axis helpers.
 - Historical conviction-based position sizing, target/invalidation first-touch analysis, earnings-event risk, liquidity caps, and an interactive compounding simulation built from observed holding-period outcomes.
 - SEC EDGAR ticker resolution, XBRL concept normalization, stand-alone-quarter reconstruction, filing provenance, current valuation, and issuer-credit calculations.
-- SEC Form 13F quarterly archive discovery, local preparation, amendment-aware consolidation, ticker/CUSIP matching, and institutional exposure ranking.
 - CFTC Commitments of Traders retrieval, cohort normalization, open-interest-adjusted crowding percentiles, z-scores, weekly changes, and mapped futures price overlays.
 
 Daily market transport is shared across the tools while page adapters retain their established calculation and calendar rules. See [the architecture guide](docs/ARCHITECTURE.md) for data-source, historical-availability, portfolio-privacy and presentation policies.
@@ -99,7 +97,6 @@ Each page reports runtime failures, provider-error/warning counts, cold and warm
 - Known-at-month-start seasonality uses prior market observations and ALFRED release/revision records. `FRED_API_KEY` is required for the official release-history API; missing historical availability stays unknown. Revised descriptive studies remain available. Strict CFTC timing excludes dates without verified actual release records.
 - Public commodity captures run through `.github/workflows/capture-public-signals.yml` and preserve scheduled versions in `data/signals/`. Set `ADFM_SIGNAL_LEDGER_PATH` to a persistent location for runtime captures. Continuous-futures histories are price studies; actual contract P&L requires the correct traded contract and quote multiplier.
 - Market data are provider supplied and may be delayed, revised, unavailable, or incomplete.
-- The 13F browser stores prepared public SEC releases in the ignored `data/13f/` cache. Deployments can set `ADFM_13F_CACHE_DIR` for persistent storage and `ADFM_SEC_USER_AGENT` for an organization-specific SEC request identity.
 - CFTC positioning is a weekly Tuesday snapshot normally released Friday; it is not a real-time flow feed. Dollar notional is shown only for contracts with explicit mapped multipliers.
 - Signals and dashboards are deterministic analytical tools, not investment advice or a guarantee of future returns.
 - Pages should surface their own as-of date and source context. Where a data field is unavailable, the application should leave it blank rather than fabricate a value.

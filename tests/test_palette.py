@@ -37,7 +37,6 @@ class ExcelPaletteTests(unittest.TestCase):
         indirect_palette_pages = {
             "7_Sector_Breadth_and_Rotation.py": ROOT / "adfm_sector_rotation_config.py",
             "6_Currency_Tension_Engine.py": ROOT / "cte" / "dashboard" / "plots.py",
-            "17_SEC_13F_Exposure_Browser.py": ROOT / "adfm_core" / "sec_13f_browser.py",
             "20_Catalyst_Calendar.py": ROOT / "adfm_core" / "catalyst_calendar_page.py",
         }
         positioning_convention_pages = {

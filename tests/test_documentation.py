@@ -20,10 +20,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationTests(unittest.TestCase):
-    def test_catalog_contains_25_unique_existing_pages(self) -> None:
-        self.assertEqual(len(TOOL_CATALOG), 25)
-        self.assertEqual([tool.number for tool in TOOL_CATALOG], list(range(1, 26)))
-        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 25)
+    def test_catalog_contains_24_unique_existing_pages(self) -> None:
+        self.assertEqual(len(TOOL_CATALOG), 24)
+        self.assertEqual([tool.number for tool in TOOL_CATALOG], [number for number in range(1, 26) if number != 17])
+        self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 24)
         self.assertEqual(TOOL_CATALOG[0].title, "Equity Baskets")
         self.assertEqual(TOOL_CATALOG[8].page_filename, "9_ADFM_Underwriter.py")
         for tool in TOOL_CATALOG:
@@ -50,7 +50,6 @@ class DocumentationTests(unittest.TestCase):
                 "ETF Flow Pressure",
                 "Volume Sentiment",
                 "Options Relative Value",
-                "13F Holdings",
                 "CFTC Positioning",
                 "Market Stress",
                 "Catalyst Calendar",
@@ -75,7 +74,7 @@ class DocumentationTests(unittest.TestCase):
             re.sub(r"^\d+_", "", Path(tool.page_filename).stem).replace("_", " ")
             for tool in TOOL_CATALOG
         ]
-        self.assertEqual(len(set(legacy_labels)), 25)
+        self.assertEqual(len(set(legacy_labels)), 24)
         self.assertTrue(
             any(label != tool.title for label, tool in zip(legacy_labels, TOOL_CATALOG, strict=True))
         )

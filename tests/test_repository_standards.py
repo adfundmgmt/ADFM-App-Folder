@@ -28,7 +28,6 @@ class RepositoryStandardsTests(unittest.TestCase):
 
     def test_every_cataloged_page_parses_and_configures_streamlit(self) -> None:
         shared_sidebar_modules = {
-            "17_SEC_13F_Exposure_Browser.py": ROOT / "adfm_core" / "sec_13f_browser.py",
             "20_Catalyst_Calendar.py": ROOT / "adfm_core" / "catalyst_calendar_exact_page.py",
             "25_Commodity_Event_Study.py": ROOT / "adfm_core" / "commodity_top_exhaustion_page.py",
         }
@@ -53,7 +52,7 @@ class RepositoryStandardsTests(unittest.TestCase):
             )
             self.assertIn(
                 f'render_sidebar_about("{tool.page_filename}")',
-                runtime_source,
+                runtime_source.replace("'", '"'),
                 msg=f"{tool.page_filename} is missing the standardized About This Tool section.",
             )
 

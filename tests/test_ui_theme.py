@@ -94,12 +94,11 @@ class InstitutionalThemeTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         pages = sorted((root / "pages").glob("*.py"))
         shared_renderers = {
-            "17_SEC_13F_Exposure_Browser.py": root / "adfm_core" / "sec_13f_browser.py",
             "20_Catalyst_Calendar.py": root / "adfm_core" / "catalyst_calendar_exact_page.py",
             "25_Commodity_Event_Study.py": root / "adfm_core" / "commodity_top_exhaustion_page.py",
         }
 
-        self.assertEqual(25, len(pages))
+        self.assertEqual(24, len(pages))
         for page in pages:
             source = page.read_text(encoding="utf-8")
             if page.name in shared_renderers:
@@ -116,14 +115,14 @@ class InstitutionalThemeTests(unittest.TestCase):
     def test_sidebar_about_uses_the_shared_reading_flow(
         self, header, markdown, caption, divider, expander
     ):
-        render_sidebar_about("17_SEC_13F_Exposure_Browser.py")
+        render_sidebar_about("18_CFTC_Positioning_Monitor.py")
 
         expander.assert_called_once_with("About This Tool", expanded=False)
         header.assert_not_called()
         body = markdown.call_args.args[0]
         self.assertIn("**Purpose**", body)
         self.assertIn("**Read it in this order**", body)
-        self.assertIn("1. Choose a security search", body)
+        self.assertIn("1. Scan crowded longs", body)
         self.assertEqual(caption.call_count, 2)
         self.assertIn("Keep in mind", caption.call_args_list[0].args[0])
         self.assertIn("Primary inputs", caption.call_args_list[1].args[0])
