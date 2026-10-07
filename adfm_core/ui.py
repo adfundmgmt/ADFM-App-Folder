@@ -573,6 +573,10 @@ def _inject_page_layout_contract() -> None:
     st.markdown(
         """
         <style>
+        [data-testid="stSidebarNav"] [data-testid="stNavSectionHeader"],
+        [data-testid="stSidebarNav"] [data-testid="stNavSectionHeader"] p {
+            font-weight: 700 !important;
+        }
         .block-container {
             padding-top: calc(4rem + env(safe-area-inset-top, 0px)) !important;
             padding-bottom: 2rem !important;

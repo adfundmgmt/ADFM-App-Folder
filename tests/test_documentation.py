@@ -22,10 +22,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 class DocumentationTests(unittest.TestCase):
     def test_catalog_contains_23_unique_existing_pages(self) -> None:
         self.assertEqual(len(TOOL_CATALOG), 23)
-        self.assertEqual([tool.number for tool in TOOL_CATALOG], [2, 3, 4, 5, 6, 1, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 23, 24, 25])
+        self.assertEqual([tool.number for tool in TOOL_CATALOG], [1, 7, 8, 9, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 23, 24, 25])
         self.assertEqual(len({tool.title for tool in TOOL_CATALOG}), 23)
-        self.assertEqual(TOOL_CATALOG[0].title, "Bond Cycle Monitor")
-        self.assertEqual(TOOL_CATALOG[8].page_filename, "9_ADFM_Underwriter.py")
+        self.assertEqual(TOOL_CATALOG[0].title, "Equity Baskets")
+        self.assertEqual(TOOL_CATALOG[3].page_filename, "9_ADFM_Underwriter.py")
         for tool in TOOL_CATALOG:
             self.assertTrue((REPOSITORY_ROOT / "pages" / tool.page_filename).is_file())
             self.assertTrue(tool.page_filename.startswith(f"{tool.number}_"))
@@ -34,15 +34,15 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(
             [tool.title for tool in TOOL_CATALOG],
             [
+                'Equity Baskets',
+                'Sector Breadth and Rotation',
+                'Equity Relative Strength',
+                'Equity Underwriter',
                 'Bond Cycle Monitor',
                 'Liquidity Conditions',
                 'Rates and Yield Curve',
                 'Credit Conditions',
                 'FX Valuation and Trend',
-                'Equity Baskets',
-                'Sector Breadth and Rotation',
-                'Equity Relative Strength',
-                'Equity Underwriter',
                 'Chart Terminal',
                 'Cross-Asset Ratios',
                 'Momentum',

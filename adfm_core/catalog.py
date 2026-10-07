@@ -28,15 +28,15 @@ class SidebarGuide:
 
 
 TOOL_CATALOG: Final[tuple[ToolDefinition, ...]] = (
+    ToolDefinition(1, 'Equity Baskets', '1_ADFM_Public_Equities_Baskets.py', 'Equity Research', 'Compares thematic equity baskets by performance, trend, leadership and dispersion against a selected benchmark.', 'Internal basket definitions; Yahoo Finance market data'),
+    ToolDefinition(7, 'Sector Breadth and Rotation', '7_Sector_Breadth_and_Rotation.py', 'Equity Research', 'Shows where equity participation is broadening or narrowing and which sectors are gaining or losing leadership.', 'Yahoo Finance sector and subsector ETFs'),
+    ToolDefinition(8, 'Equity Relative Strength', '8_Equity_Leadership_&_Rotation.py', 'Equity Research', 'Ranks sector, regional and breadth relationships to show which equity exposures are outperforming their counterparts.', 'Yahoo Finance adjusted ETF and index prices'),
+    ToolDefinition(9, 'Equity Underwriter', '9_ADFM_Underwriter.py', 'Equity Research', 'Examines company valuation, growth, profitability, balance-sheet strength and debt using financial statements and recent market prices.', 'SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history'),
     ToolDefinition(2, 'Bond Cycle Monitor', '2_Global_Macro_Regime.py', 'Macro Regime', 'Examines yield exhaustion, reversal signals and historical outcomes across Treasury yields, credit spreads and global sovereign rates.', 'Federal Reserve and ICE BofA via FRED; OECD monthly sovereign rates via FRED'),
     ToolDefinition(3, 'Liquidity Conditions', '3_Liquidity_Conditions_Monitor.py', 'Macro Regime', 'Tracks changes in central-bank liquidity, funding conditions and credit transmission, alongside market confirmation and financial conditions.', 'Federal Reserve H.4.1; New York Fed rates and RRP; ICE BofA OAS via FRED; broad dollar; real yields; Yahoo Finance confirmation proxies'),
     ToolDefinition(4, 'Rates and Yield Curve', '4_Yield_Curve_Rates_Regime_Monitor.py', 'Macro Regime', 'Tracks Treasury yields, real yields, inflation expectations and changes in the shape of the yield curve.', 'Federal Reserve / FRED nominal and real Treasury yields and inflation breakevens; Yahoo nominal-curve fallback'),
     ToolDefinition(5, 'Credit Conditions', '5_Credit_Conditions_Monitor.py', 'Macro Regime', 'Compares global government-yield moves, corporate credit spreads and funding costs, with market indicators of financial stress.', 'ICE BofA corporate OAS and U.S. Treasury yields via Federal Reserve FRED; Yahoo Finance market confirmation; Trading Economics or fresh Stooq sovereign yields with OECD/FRED structural fallback'),
     ToolDefinition(6, 'FX Valuation and Trend', '6_Currency_Tension_Engine.py', 'Macro Regime', 'Compares currency trends with valuation, policy and carry to identify stretched or changing market conditions.', 'Persisted Currency Tension Engine snapshot and configured adapters'),
-    ToolDefinition(1, 'Equity Baskets', '1_ADFM_Public_Equities_Baskets.py', 'Equity Research', 'Compares thematic equity baskets by performance, trend, leadership and dispersion against a selected benchmark.', 'Internal basket definitions; Yahoo Finance market data'),
-    ToolDefinition(7, 'Sector Breadth and Rotation', '7_Sector_Breadth_and_Rotation.py', 'Equity Research', 'Shows where equity participation is broadening or narrowing and which sectors are gaining or losing leadership.', 'Yahoo Finance sector and subsector ETFs'),
-    ToolDefinition(8, 'Equity Relative Strength', '8_Equity_Leadership_&_Rotation.py', 'Equity Research', 'Ranks sector, regional and breadth relationships to show which equity exposures are outperforming their counterparts.', 'Yahoo Finance adjusted ETF and index prices'),
-    ToolDefinition(9, 'Equity Underwriter', '9_ADFM_Underwriter.py', 'Equity Research', 'Examines company valuation, growth, profitability, balance-sheet strength and debt using financial statements and recent market prices.', 'SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history'),
     ToolDefinition(10, 'Chart Terminal', '10_ADFM_Chart_Terminal.py', 'Technical Confirmation', 'Explores price history, trend, momentum, volatility and chart structure across assets and multiple time horizons.', 'Yahoo Finance OHLCV'),
     ToolDefinition(11, 'Cross-Asset Ratios', '11_Cross-Asset_Ratio_Chartbook.py', 'Technical Confirmation', 'Charts relative performance across rates, equities, commodities, credit and currencies, including relationships selected by the user.', 'Yahoo Finance adjusted close history'),
     ToolDefinition(12, 'Momentum', '12_Rate_of_Change_Regime_Explorer.py', 'Technical Confirmation', 'Compares price trends, returns and acceleration across several horizons to identify strengthening or weakening market momentum.', 'Yahoo Finance daily OHLCV'),
@@ -81,8 +81,8 @@ SIDEBAR_GUIDES: Final[dict[str, SidebarGuide]] = {
 }
 
 GROUP_ORDER: Final[tuple[str, ...]] = (
-    'Macro Regime',
     'Equity Research',
+    'Macro Regime',
     'Technical Confirmation',
     'Positioning and Flows',
     'Risk and Catalysts',

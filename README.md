@@ -25,15 +25,15 @@ The application contains 23 tools, in the same order and groups shown on the Hom
 
 | # | Home-page tool | Primary purpose | Primary inputs |
 |---:|---|---|---|
+| 1 | Equity Baskets | Compares thematic equity baskets by performance, trend, leadership and dispersion against a selected benchmark. | Internal basket definitions; Yahoo Finance market data |
+| 7 | Sector Breadth and Rotation | Shows where equity participation is broadening or narrowing and which sectors are gaining or losing leadership. | Yahoo Finance sector and subsector ETFs |
+| 8 | Equity Relative Strength | Ranks sector, regional and breadth relationships to show which equity exposures are outperforming their counterparts. | Yahoo Finance adjusted ETF and index prices |
+| 9 | Equity Underwriter | Examines company valuation, growth, profitability, balance-sheet strength and debt using financial statements and recent market prices. | SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history |
 | 2 | Bond Cycle Monitor | Examines yield exhaustion, reversal signals and historical outcomes across Treasury yields, credit spreads and global sovereign rates. | Federal Reserve and ICE BofA via FRED; OECD monthly sovereign rates via FRED |
 | 3 | Liquidity Conditions | Tracks changes in central-bank liquidity, funding conditions and credit transmission, alongside market confirmation and financial conditions. | Federal Reserve H.4.1; New York Fed rates and RRP; ICE BofA OAS via FRED; broad dollar; real yields; Yahoo Finance confirmation proxies |
 | 4 | Rates and Yield Curve | Tracks Treasury yields, real yields, inflation expectations and changes in the shape of the yield curve. | Federal Reserve / FRED nominal and real Treasury yields and inflation breakevens; Yahoo nominal-curve fallback |
 | 5 | Credit Conditions | Compares global government-yield moves, corporate credit spreads and funding costs, with market indicators of financial stress. | ICE BofA corporate OAS and U.S. Treasury yields via Federal Reserve FRED; Yahoo Finance market confirmation; Trading Economics or fresh Stooq sovereign yields with OECD/FRED structural fallback |
 | 6 | FX Valuation and Trend | Compares currency trends with valuation, policy and carry to identify stretched or changing market conditions. | Persisted Currency Tension Engine snapshot and configured adapters |
-| 1 | Equity Baskets | Compares thematic equity baskets by performance, trend, leadership and dispersion against a selected benchmark. | Internal basket definitions; Yahoo Finance market data |
-| 7 | Sector Breadth and Rotation | Shows where equity participation is broadening or narrowing and which sectors are gaining or losing leadership. | Yahoo Finance sector and subsector ETFs |
-| 8 | Equity Relative Strength | Ranks sector, regional and breadth relationships to show which equity exposures are outperforming their counterparts. | Yahoo Finance adjusted ETF and index prices |
-| 9 | Equity Underwriter | Examines company valuation, growth, profitability, balance-sheet strength and debt using financial statements and recent market prices. | SEC EDGAR Company Facts and submissions; Yahoo Finance completed-session close and price history |
 | 10 | Chart Terminal | Explores price history, trend, momentum, volatility and chart structure across assets and multiple time horizons. | Yahoo Finance OHLCV |
 | 11 | Cross-Asset Ratios | Charts relative performance across rates, equities, commodities, credit and currencies, including relationships selected by the user. | Yahoo Finance adjusted close history |
 | 12 | Momentum | Compares price trends, returns and acceleration across several horizons to identify strengthening or weakening market momentum. | Yahoo Finance daily OHLCV |
@@ -53,8 +53,8 @@ The application contains 23 tools, in the same order and groups shown on the Hom
 
 | Group | Tools |
 |---|---|
-| Macro Regime | Bond Cycle Monitor; Liquidity Conditions; Rates and Yield Curve; Credit Conditions; FX Valuation and Trend |
 | Equity Research | Equity Baskets; Sector Breadth and Rotation; Equity Relative Strength; Equity Underwriter |
+| Macro Regime | Bond Cycle Monitor; Liquidity Conditions; Rates and Yield Curve; Credit Conditions; FX Valuation and Trend |
 | Technical Confirmation | Chart Terminal; Cross-Asset Ratios; Momentum; Relative Volatility |
 | Positioning and Flows | ETF Trading Pressure; Volume Participation; Options Relative Value; CFTC Positioning |
 | Risk and Catalysts | Market Stress; Catalyst Calendar; Drawdown Risk |

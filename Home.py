@@ -93,6 +93,10 @@ def render_home() -> None:
             color: #303030 !important; font-family: Arial, Helvetica, sans-serif !important;
             font-size: .78rem !important; line-height: 1.5 !important;
         }
+        [data-testid="stSidebarNav"] [data-testid="stNavSectionHeader"],
+        [data-testid="stSidebarNav"] [data-testid="stNavSectionHeader"] p {
+            font-weight: 700 !important;
+        }
         .block-container {
             max-width: 1180px; padding: calc(3.25rem + env(safe-area-inset-top, 0px)) 2rem 3rem;
         }
