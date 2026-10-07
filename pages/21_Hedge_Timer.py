@@ -14,6 +14,7 @@ import streamlit as st
 from adfm_core.hedge_timer_data import callout_session_inputs, load_hedge_inputs
 from adfm_core.hedge_timer_model import (
     CALIBRATION_START,
+    CALLOUT_INPUT_TICKERS,
     CALLOUT_LEAD_LOOKBACK,
     FROZEN_CALLOUT_RULES,
     LEAD_LOOKBACK,
@@ -83,10 +84,10 @@ LOOKBACK_OPTIONS = [1, 2, 3, 5, 10]
 with st.sidebar:
     render_sidebar_about("21_Hedge_Timer.py")
     st.markdown(
-        "**Red-dot rule**\n\n"
+        "**Hedge alert rules**\n\n"
         "A fresh price break plus two risk groups, a price/volatility shock, or near-high "
         "volatility divergence. Breadth, volatility, and credit each count once. "
-        "Another dot requires three recovery closes and at least ten sessions since the prior dot."
+        "A new alert requires three recovery closes and at least ten sessions since the prior alert."
     )
     st.divider()
     chart_index = st.radio(
@@ -97,12 +98,12 @@ with st.sidebar:
     chart_years = st.radio(
         "Chart lookback",
         options=LOOKBACK_OPTIONS,
-        index=4,
+        index=1,
         format_func=lambda value: f"{value} year" if value == 1 else f"{value} years",
     )
     audit_basis = st.radio("Drawdown basis", ["Intraday high / low", "Daily close"], index=0)
     st.divider()
-    st.markdown("### Red-dot audit since 2020")
+    st.markdown("### Hedge alert audit since 2020")
     sanity_box = st.empty()
 
 
@@ -144,8 +145,8 @@ def state_css(label: str) -> str:
         "STAND DOWN": "hedge-stand",
         "HEDGE WATCH": "hedge-watch",
         "HEDGE CONFIRMED": "hedge-confirmed",
-        "HEDGE SIGNAL": "hedge-confirmed",
-        "ARMED": "hedge-stand",
+        "HEDGE ALERT ACTIVE": "hedge-confirmed",
+        "NO ACTIVE HEDGE ALERT": "hedge-stand",
         "SHORT ALLOWED": "hedge-short",
     }.get(label, "hedge-unavailable")
 
@@ -164,7 +165,7 @@ def format_audit(frame: pd.DataFrame) -> pd.DataFrame:
         lambda value: int(value) if pd.notna(value) else "No"
     )
     out["Captured"] = out["Captured"].map(lambda value: "Yes" if bool(value) else "No")
-    return out.rename(columns={"First warning": "First callout", "Loss at warning": "Loss at callout"})
+    return out.rename(columns={"First warning": "First alert", "Loss at warning": "Loss at alert"})
 
 
 def plot_index(
@@ -205,7 +206,7 @@ def plot_index(
             color=PASTEL["rose"],
             edgecolors="#111111",
             linewidths=.45,
-            label="Confirmed",
+            label="Hedge alert",
             zorder=6,
         )
 
@@ -233,7 +234,7 @@ render_page_header(
     PageHeader(
         title="Hedge Timer",
         description=(
-            "Timely hedge callouts from price breaks and breadth, volatility, and credit. "
+            "Timely hedge alerts from price breaks and breadth, volatility, and credit. "
             "SPX-fitted rules apply unchanged to NDX. The audit measures the red dots shown on the chart."
         ),
         eyebrow="ADFM Risk + Execution",
@@ -250,13 +251,14 @@ if base_idx.empty:
     st.error("No matching completed S&P 500 and Nasdaq-100 sessions are available.")
     st.stop()
 df = fill_short_calendar_gaps(df0.reindex(base_idx), limit=2)
-current_inputs_fresh = bool(input_status["Status"].eq("Current").all() and df.index[-1] == expected_session)
-common_sessions = df0.dropna(subset=list(TICKERS)).index
+signal_input_status = input_status.loc[input_status["Input"].isin(CALLOUT_INPUT_TICKERS)]
+current_inputs_fresh = bool(signal_input_status["Status"].eq("Current").all() and df.index[-1] == expected_session)
+common_sessions = df0.dropna(subset=list(CALLOUT_INPUT_TICKERS)).index
 previous_session = _last_completed_us_session(pd.Timestamp(expected_session).tz_localize("America/New_York")) if expected_session is not None else None
 signal_inputs_usable = bool(
     len(common_sessions) and previous_session is not None
     and common_sessions[-1] >= previous_session
-    and not input_status["Status"].isin(["Last-good cache", "Research snapshot"]).any()
+    and not signal_input_status["Status"].isin(["Last-good cache", "Research snapshot"]).any()
 )
 if signal_inputs_usable:
     df = df.loc[df.index <= common_sessions[-1]]
@@ -315,7 +317,7 @@ def render_index_state(
     early_now = last_bool(meta["early_stage"], True) and current_inputs_fresh
     oversold_now = last_bool(meta["oversold_block"], False)
     signal_active = last_bool(signals["Latched"])
-    state = "HEDGE SIGNAL" if signal_active else "ARMED"
+    state = "HEDGE ALERT ACTIVE" if signal_active else "NO ACTIVE HEDGE ALERT"
     callout_dates = signals.index[signals["Callout"]]
     last_callout = callout_dates[-1].date().isoformat() if len(callout_dates) else "None"
     if not signal_inputs_usable:
@@ -333,8 +335,8 @@ def render_index_state(
         <span class="hedge-state {css}">{state}</span>
         <div class="hedge-line">
             Price <b>{fmt_num(price_now, 2)}</b> &nbsp;·&nbsp; Current drawdown <b>{fmt_pct(current_dd)}</b><br>
-            Last callout <b>{last_callout}</b> &nbsp;·&nbsp; RSI14 <b>{fmt_num(rsi_now, 1)}</b><br>
-            Fresh-short gate: <b>{'Open' if signal_active and early_now and not oversold_now else 'Blocked'}</b>
+            Last hedge alert <b>{last_callout}</b> &nbsp;·&nbsp; RSI14 <b>{fmt_num(rsi_now, 1)}</b><br>
+            New short entry: <b>{'Eligible' if signal_active and early_now and not oversold_now else 'Blocked'}</b>
         </div>
         """,
         unsafe_allow_html=True,
@@ -343,16 +345,16 @@ def render_index_state(
 
 st.caption(f"{'Signals as of' if signal_inputs_usable else 'Index observations through'} {df.index[-1].date().isoformat()}. Latest completed US session: {expected_session.date().isoformat() if expected_session is not None else 'unavailable'}.")
 if input_status["Status"].eq("Research snapshot").any():
-    st.warning("Live inputs are unavailable. Browsing the dated research snapshot; current scores and fresh shorts remain blocked.")
+    st.warning("Live inputs are unavailable. Browsing the dated research snapshot; current alerts and new short entries remain unavailable.")
 elif not latest_model_valid:
-    latest_observed = pd.to_numeric(event_inputs.reindex(columns=list(TICKERS)).iloc[-1], errors="coerce")
+    latest_observed = pd.to_numeric(event_inputs.reindex(columns=list(CALLOUT_INPUT_TICKERS)).iloc[-1], errors="coerce")
     invalid_inputs = latest_observed.index[~(np.isfinite(latest_observed) & latest_observed.gt(0))]
     details = ", ".join(invalid_inputs) or "insufficient observed history"
-    st.warning(f"Invalid latest inputs: {details}. Current signals and fresh shorts remain blocked. See Input dates for source dates.")
+    st.warning(f"Invalid latest inputs: {details}. Current alerts and new short entries are unavailable. See Input dates for source dates.")
 elif not current_inputs_fresh:
-    unavailable_inputs = input_status.loc[input_status["Status"] != "Current"]
+    unavailable_inputs = signal_input_status.loc[signal_input_status["Status"] != "Current"]
     details = ", ".join(unavailable_inputs["Input"])
-    message = "Showing the last complete signal; fresh shorts remain blocked." if signal_inputs_usable else "Current scores and fresh shorts are blocked."
+    message = "Showing the last complete alert status; new short entries are blocked." if signal_inputs_usable else "Current alerts and new short entries are unavailable."
     st.warning(f"Awaiting the latest close for {details}. {message} See Input dates for source dates.")
 
 col_spx, col_ndx = st.columns(2)
@@ -362,7 +364,7 @@ with col_ndx:
     render_index_state(NDX_LABEL, NDX_TICKER, signals_ndx, meta_ndx)
 
 st.caption(
-    "Red dots mark new qualifying hedge events. Moving averages are chart context; they do not trigger dots. "
+    "Red dots mark new hedge alerts. Moving averages are chart context; they do not trigger dots. "
     "An oversold or late-stage tape can block a fresh short independently."
 )
 
@@ -384,8 +386,8 @@ selected_episode = selected_audit.iloc[choice - 1] if choice else None
 if selected_episode is not None:
     warning_date = selected_episode["First warning"]
     warning_date_text = warning_date.date().isoformat() if pd.notna(warning_date) else "none"
-    st.caption(f"Red-dot callout: {warning_date_text} · {selected_episode['Timing']} · "
-               f"Loss at callout: {fmt_pct(selected_episode['Loss at warning'])} · "
+    st.caption(f"Hedge alert: {warning_date_text} · {selected_episode['Timing']} · "
+               f"Loss at alert: {fmt_pct(selected_episode['Loss at warning'])} · "
                f"Early capture: {'Yes' if selected_episode['Captured'] else 'No'}")
 
 figure = plot_index(
@@ -413,11 +415,11 @@ if audit.empty:
     st.info("No qualifying drawdown episodes are available in the current history.")
 else:
     st.dataframe(format_audit(selected_audit), width="stretch", hide_index=True)
-    st.download_button("Download drawdown audit", audit.rename(columns={"First warning": "First callout", "Loss at warning": "Loss at callout"}).to_csv(index=False),
+    st.download_button("Download drawdown audit", audit.rename(columns={"First warning": "First alert", "Loss at warning": "Loss at alert"}).to_csv(index=False),
                        file_name="hedge_timer_drawdown_audit.csv", mime="text/csv")
 
 driver_date = selected_episode["First warning"] if selected_episode is not None else df.index[-1]
-with st.expander("Callout signal drivers" if selected_episode is not None else "Current signal drivers"):
+with st.expander("Alert drivers" if selected_episode is not None else "Current risk conditions"):
     if pd.notna(driver_date):
         st.caption(f"Drivers at close on {driver_date.date()}. Breadth, volatility, and credit each count once; no weighted score.")
     rows = []

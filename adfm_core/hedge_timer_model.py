@@ -57,6 +57,10 @@ TICKERS = (
     *SECTOR_TICKERS,
 )
 
+# VIX3M and VVIX belong to the legacy weighted score, not the event rules.
+# Missing optional context must not invalidate an otherwise observed alert.
+CALLOUT_INPUT_TICKERS = tuple(ticker for ticker in TICKERS if ticker not in ("^VIX3M", "^VVIX"))
+
 
 @dataclass(frozen=True)
 class Component:
@@ -140,7 +144,7 @@ def compute_callouts(
     drawdown labels are never used to generate or reset an event.
     """
     idx = df.index
-    observed = df.reindex(columns=list(TICKERS)).apply(pd.to_numeric, errors="coerce")
+    observed = df.reindex(columns=list(CALLOUT_INPUT_TICKERS)).apply(pd.to_numeric, errors="coerce")
     df = observed.where(np.isfinite(observed) & observed.gt(0))
     price, vix = _series(df, target_ticker), _series(df, "^VIX")
     retreat = safe_ratio(price, price.rolling(20).max()) - 1

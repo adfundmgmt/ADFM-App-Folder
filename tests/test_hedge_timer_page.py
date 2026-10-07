@@ -20,6 +20,22 @@ PAGE = ROOT / "pages" / "21_Hedge_Timer.py"
 
 
 class HedgeTimerPageTests(unittest.TestCase):
+    def test_optional_legacy_inputs_do_not_block_current_alert_status(self) -> None:
+        endpoint = _last_completed_us_session()
+        dates = pd.bdate_range(start="2019-01-02", end=endpoint)
+        raw = pd.DataFrame(
+            {(ticker, "Close"): np.linspace(100.0, 150.0, len(dates)) for ticker in TICKERS},
+            index=dates,
+        )
+        raw.loc[:, [("^VVIX", "Close"), ("^VIX3M", "Close")]] = np.nan
+        with patch("adfm_core.market_data.download_market_data", return_value=raw):
+            app = AppTest.from_file(str(PAGE)).run(timeout=30)
+        self.assertFalse(app.exception)
+        displayed = "\n".join(item.value for item in app.markdown)
+        self.assertIn("NO ACTIVE HEDGE ALERT", displayed)
+        self.assertNotIn("hedge-unavailable", displayed.split('<div class="hedge-index-title">', 1)[-1])
+        self.assertFalse(any("Historical signal inputs" in item.value for item in app.warning))
+
     def test_missing_index_session_is_preserved_in_recovery_inputs(self) -> None:
         endpoint = _last_completed_us_session()
         dates = pd.bdate_range(end=endpoint, periods=450)
@@ -63,9 +79,9 @@ class HedgeTimerPageTests(unittest.TestCase):
                 self.assertFalse(app.exception)
                 displayed = "\n".join(item.value for item in app.markdown)
                 self.assertIn("hedge-unavailable", displayed)
-                self.assertNotIn("Fresh-short gate: <b>Open</b>", displayed)
+                self.assertNotIn("New short entry: <b>Eligible</b>", displayed)
                 if np.isfinite(invalid):
-                    self.assertIn("Last callout <b>NA</b>", displayed)
+                    self.assertIn("Last hedge alert <b>NA</b>", displayed)
                 self.assertTrue(any("^VIX" in item.value for item in app.warning))
 
     def test_missing_recent_close_is_recovered_before_displaying_signal(self) -> None:
@@ -106,7 +122,7 @@ class HedgeTimerPageTests(unittest.TestCase):
         displayed = "\n".join(item.value for item in app.markdown)
         self.assertIn("Price <b>149.89</b>", displayed)
         self.assertNotIn("Price <b>150.00</b>", displayed)
-        self.assertIn("Fresh-short gate: <b>Blocked</b>", displayed)
+        self.assertIn("New short entry: <b>Blocked</b>", displayed)
         self.assertTrue(any("XLU" in item.value for item in app.warning))
 
     def test_older_than_previous_session_stays_unavailable(self) -> None:
@@ -126,7 +142,7 @@ class HedgeTimerPageTests(unittest.TestCase):
         self.assertFalse(app.exception)
         displayed = "\n".join(item.value for item in app.markdown)
         self.assertIn("hedge-unavailable", displayed)
-        self.assertIn("Last callout <b>NA</b>", displayed)
+        self.assertIn("Last hedge alert <b>NA</b>", displayed)
 
     def test_page_uses_recall_model_and_keeps_spx_ndx_separate(self) -> None:
         source = PAGE.read_text(encoding="utf-8")
@@ -142,7 +158,7 @@ class HedgeTimerPageTests(unittest.TestCase):
         source = PAGE.read_text(encoding="utf-8")
 
         self.assertNotIn('label="Hedge Score"', source)
-        self.assertIn('label="Confirmed"', source)
+        self.assertIn('label="Hedge alert"', source)
         self.assertIn("ax_price.scatter(", source)
         self.assertNotIn("ax_score", source)
         self.assertNotIn('marker="^"', source)
@@ -165,7 +181,7 @@ class HedgeTimerPageTests(unittest.TestCase):
         self.assertIn("10%+", tool.description)
         self.assertIn("IWM", tool.primary_inputs)
         self.assertIn("sector ETFs", tool.primary_inputs)
-        self.assertIn("confirmed red dots", " ".join(guide.read_order))
+        self.assertIn("red hedge alerts", " ".join(guide.read_order))
         self.assertIn("local", " ".join(guide.read_order).lower())
 
 

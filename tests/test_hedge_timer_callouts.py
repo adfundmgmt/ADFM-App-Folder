@@ -26,6 +26,13 @@ def actual_callouts(close, ticker):
 
 
 class RedDotContracts(unittest.TestCase):
+    def test_unused_legacy_volatility_inputs_do_not_block_hedge_alerts(self):
+        close, _ = history()
+        close = close.drop(columns=["^VVIX", "^VIX3M"])
+        result = actual_callouts(close, model.SPX_TICKER)
+        self.assertTrue(result.loc["2020":, "Inputs valid"].all())
+        self.assertTrue(result.loc["2020-02-21", "Callout"])
+
     def test_event_calendar_excludes_holidays_and_preserves_unknown_sessions(self):
         observed = pd.DataFrame({"^GSPC": [100.0] * 4},
                                 index=pd.to_datetime(["2026-05-22", "2026-05-25", "2026-05-26", "2026-05-28"]))
@@ -56,9 +63,12 @@ class RedDotContracts(unittest.TestCase):
 
         with patch("adfm_core.market_data.download_market_data", return_value=raw), patch("streamlit.pyplot", side_effect=capture):
             app = AppTest.from_file(str(ROOT / "pages/21_Hedge_Timer.py")).run(timeout=30)
+            self.assertEqual(app.radio[1].value, 2)
+            plots.clear()
+            app.radio[1].set_value(10).run(timeout=30)
         self.assertFalse(app.exception)
         audit = next(table.value for table in app.dataframe if "Captured" in table.value)
-        date_column = "First callout" if "First callout" in audit else "First warning"
+        date_column = "First alert"
         self.assertEqual(audit.iloc[0][date_column], "2020-02-21")
         chart_dates = close.index[-2520:]
         dots = {chart_dates[int(point[0])] for point in plots[0]}
