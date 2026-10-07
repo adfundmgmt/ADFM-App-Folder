@@ -1,28 +1,174 @@
-"""Reported ETF issuance and daily cross-asset trading pressure."""
-from __future__ import annotations
-
-import json
 import time
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
-from zoneinfo import ZoneInfo
+from datetime import datetime, date
+from functools import wraps
+from io import BytesIO
+from typing import Dict, Tuple, List, Sequence
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-import requests
+import pytz
 import streamlit as st
 
-from adfm_core.etf_pressure import ICI_URL, parse_ici_issuance, pressure_reading
-from adfm_core.market_data import completed_daily_observations, configure_yfinance_cache, download_market_data
 from adfm_core.palette import PASTEL
-from adfm_core.ui import PageHeader, inject_explorer_style, render_footer, render_page_header, render_sidebar_about
+from adfm_core.ui import PageHeader, render_footer, render_page_header, render_sidebar_about
+from adfm_core.market_data import completed_daily_observations, download_market_data
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
-st.set_page_config(page_title="ETF Flow Pressure", layout="wide")
-configure_yfinance_cache()
-inject_explorer_style(max_width_px=1700)
 
+# =========================================================
+# PAGE SETUP
+# =========================================================
+st.set_page_config(page_title="ETF Trading Pressure", layout="wide")
+
+CUSTOM_CSS = """
+<style>
+    .block-container {
+        padding-top: 0.85rem;
+        padding-bottom: 1.65rem;
+        max-width: 1750px;
+    }
+
+    h1, h2, h3 {
+        letter-spacing: 0.1px;
+        font-weight: 650;
+        margin-bottom: 0.35rem;
+    }
+
+    div[data-testid="stMetric"] {
+        background: #fafafa;
+        border: 1px solid #ececec;
+        border-radius: 12px;
+        padding: 10px 12px;
+    }
+
+    .section-card {
+        background: #ffffff;
+        border: 1px solid #ececec;
+        border-radius: 14px;
+        padding: 15px 17px;
+        margin-top: 12px;
+        margin-bottom: 12px;
+        color: #242833;
+        line-height: 1.55;
+    }
+
+    .muted-note {
+        color: #6b7280;
+        font-size: 0.88rem;
+        line-height: 1.4;
+    }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+plt.rcParams["figure.dpi"] = 160
+plt.rcParams["savefig.dpi"] = 260
+plt.rcParams["text.antialiased"] = True
+plt.rcParams["font.size"] = 9
+
+
+# =========================================================
+# GLOBALS
+# =========================================================
+TZ = pytz.timezone("America/New_York")
+
+PASTEL_GREEN = PASTEL["sage"]
+PASTEL_RED = PASTEL["rose"]
+PASTEL_GREY = "#8b949e"
+AXIS_GREY = "#6b7280"
+TEXT_DARK = "#1f2937"
+
+
+# =========================================================
+# TIME HELPERS
+# =========================================================
+def now_et() -> datetime:
+    return datetime.now(TZ)
+
+
+def floor_time_to_bucket(dt: datetime, minutes: int = 15) -> datetime:
+    minute = (dt.minute // minutes) * minutes
+    return dt.replace(minute=minute, second=0, microsecond=0)
+
+
+def strip_tz_from_index(idx: pd.Index) -> pd.DatetimeIndex:
+    out = pd.to_datetime(idx, errors="coerce")
+    try:
+        if out.tz is not None:
+            out = out.tz_convert(None)
+    except Exception:
+        try:
+            out = out.tz_localize(None)
+        except Exception:
+            pass
+    return pd.DatetimeIndex(out)
+
+
+def ytd_days(as_of: datetime) -> int:
+    start_ytd = TZ.localize(datetime(as_of.year, 1, 1))
+    return max((as_of - start_ytd).days, 1)
+
+
+def calc_start_date(days: int, as_of: date) -> date:
+    padding = 30
+    return (pd.Timestamp(as_of) - pd.Timedelta(days=int(days) + padding)).date()
+
+
+def last_friday(on_or_before: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(on_or_before).normalize()
+    wd = ts.weekday()
+    days_back = wd - 4 if wd >= 4 else wd + 3
+    return ts - pd.Timedelta(days=int(days_back))
+
+
+def monday_of_week(ts: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(ts).normalize()
+    return ts - pd.Timedelta(days=int(ts.weekday()))
+
+
+def week_start_monday(week_ending_friday: pd.Timestamp) -> pd.Timestamp:
+    return (pd.Timestamp(week_ending_friday).normalize() - pd.tseries.offsets.BDay(4)).normalize()
+
+
+def business_day_gap(last_data_date: date, as_of: date) -> int:
+    if last_data_date is None or pd.isna(last_data_date):
+        return 999
+
+    last_ts = pd.Timestamp(last_data_date).normalize()
+    as_of_ts = pd.Timestamp(as_of).normalize()
+
+    if last_ts >= as_of_ts:
+        return 0
+
+    start = last_ts + pd.tseries.offsets.BDay(1)
+    rng = pd.bdate_range(start=start, end=as_of_ts)
+    return int(len(rng))
+
+
+# =========================================================
+# RUNTIME
+# =========================================================
+as_of_dt_et = now_et()
+as_of_bucket = floor_time_to_bucket(as_of_dt_et, minutes=15)
+as_of_bucket_key = as_of_bucket.strftime("%Y-%m-%d %H:%M %Z")
+as_of_date = as_of_dt_et.date()
+
+lookback_dict = {
+    "1 Month": 30,
+    "3 Months": 90,
+    "6 Months": 180,
+    "12 Months": 365,
+    "YTD": ytd_days(as_of_dt_et),
+}
+
+
+# =========================================================
+# ETF COVERAGE
+# 99-name ETF signal universe.
+# Broad allocator parking-lot ETFs such as QQQ, SPY, IVV, VOO,
+# SPLG, VTI, VEA, IEFA, IEMG, VWO, BND, and AGG are excluded.
+# =========================================================
 etf_info = {
     # -------------------------
     # US EQUITY: TACTICAL INDEX, STYLE, FACTOR
@@ -199,20 +345,78 @@ def infer_asset_class(ticker: str) -> str:
     return "Other"
 
 
-def strip_tz_from_index(idx: pd.Index) -> pd.DatetimeIndex:
-    out = pd.to_datetime(idx, errors="coerce")
-    try:
-        if out.tz is not None:
-            out = out.tz_localize(None)
-    except Exception:
-        try:
-            out = out.tz_localize(None)
-        except Exception:
-            pass
-    return pd.DatetimeIndex(out)
+# =========================================================
+# FORMATTERS
+# =========================================================
+def fmt_compact_cur(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    x = float(x)
+    ax = abs(x)
+    sign = "-" if x < 0 else ""
+
+    if ax >= 1e12:
+        return f"{sign}${ax / 1e12:,.2f}T"
+    if ax >= 1e9:
+        return f"{sign}${ax / 1e9:,.2f}B"
+    if ax >= 1e6:
+        return f"{sign}${ax / 1e6:,.2f}M"
+    if ax >= 1e3:
+        return f"{sign}${ax / 1e3:,.0f}K"
+    return f"{sign}${ax:,.0f}"
+
+
+def fmt_pct(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"{float(x):,.2f}%"
+
+
+def fmt_price(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"${float(x):,.2f}"
+
+
+def fmt_score(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"{float(x):.4f}"
+
+
+def fmt_int(x) -> str:
+    if x is None or pd.isna(x):
+        return ""
+    return f"{int(x):,}"
+
+
+def axis_fmt_currency(x, _pos=None) -> str:
+    return fmt_compact_cur(x)
+
+
+# =========================================================
+# RETRY AND DOWNLOAD HELPERS
+# =========================================================
+def retry(n: int = 3, delay: float = 0.8):
+    def deco(fn):
+        @wraps(fn)
+        def wrap(*args, **kwargs):
+            last = None
+            for i in range(n):
+                try:
+                    return fn(*args, **kwargs)
+                except Exception as e:
+                    last = e
+                    time.sleep(delay * (i + 1))
+            if last:
+                raise last
+        return wrap
+    return deco
+
 
 def chunked(seq: Sequence[str], size: int) -> List[Tuple[str, ...]]:
     return [tuple(seq[i:i + size]) for i in range(0, len(seq), size)]
+
 
 def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
@@ -235,6 +439,7 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
     return out[needed]
 
+
 def extract_ticker_frame(raw: pd.DataFrame, ticker: str, batch_len: int) -> pd.DataFrame:
     if raw is None or raw.empty:
         return pd.DataFrame()
@@ -255,6 +460,7 @@ def extract_ticker_frame(raw: pd.DataFrame, ticker: str, batch_len: int) -> pd.D
         return raw.copy()
 
     return pd.DataFrame()
+
 
 def safe_yf_download(
     tickers: Tuple[str, ...],
@@ -295,6 +501,7 @@ def safe_yf_download(
 
     return pd.DataFrame()
 
+
 def fetch_prices(
     tickers: Tuple[str, ...],
     start_date: date,
@@ -327,131 +534,620 @@ def fetch_prices(
 
     return out
 
-@st.cache_data(ttl=900, show_spinner=False, max_entries=4)
-def load_price_history(tickers: tuple, bucket: str) -> dict:
-    today = datetime.now(ZoneInfo('America/New_York')).date()
-    frames = fetch_prices(tickers, today - timedelta(days=365 * 3 + 30), today + timedelta(days=1), bucket)
-    return {ticker: completed_daily_observations(frame, ticker) for ticker, frame in frames.items()}
+
+# =========================================================
+# FLOW PRESSURE ENGINE
+# =========================================================
+def compute_money_flow_proxy(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype="float64")
+
+    high = pd.to_numeric(df["High"], errors="coerce")
+    low = pd.to_numeric(df["Low"], errors="coerce")
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
+
+    hl = (high - low).replace(0, np.nan)
+
+    mfm = ((close - low) - (high - close)) / hl
+    mfm = mfm.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-1.0, 1.0)
+
+    typical = ((high + low + close) / 3.0).fillna(close)
+    money_flow_value = (mfm * vol * typical).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    money_flow_value.index = strip_tz_from_index(money_flow_value.index)
+
+    return money_flow_value.sort_index()
 
 
-@st.cache_data(ttl=3600, show_spinner=False, max_entries=2)
-def load_issuance() -> tuple:
-    error = ''
-    try:
-        response = requests.get(ICI_URL, timeout=10)
-        response.raise_for_status()
-        result = parse_ici_issuance(response.text)
-        if result.columns.max().date() > datetime.now(ZoneInfo('America/New_York')).date():
-            raise ValueError('Future report date')
-        return result, 'ICI published report', ''
-    except Exception as exc:
-        error = type(exc).__name__
-    try:
-        snapshot = json.loads((Path(__file__).resolve().parents[1] / 'data/ici/etf_net_issuance.json').read_text())
-        frame = pd.DataFrame(snapshot['values'], index=snapshot['categories'], columns=pd.to_datetime(snapshot['weeks']))
-        return frame, 'Last saved ICI report', error
-    except Exception:
-        return pd.DataFrame(), 'Unavailable', error
+def compute_traded_value(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype="float64")
+
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
+
+    tv = (close * vol).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    tv.index = strip_tz_from_index(tv.index)
+
+    return tv.sort_index()
 
 
-def pressure_chart(frame: pd.DataFrame) -> go.Figure:
-    positive = frame.loc[frame['Pressure (%)'] > 0].nlargest(10, 'Pressure (%)')
-    negative = frame.loc[frame['Pressure (%)'] < 0].nsmallest(10, 'Pressure (%)')
-    view = pd.concat([positive, negative]).sort_values('Pressure (%)', ascending=False)
-    fig = go.Figure(go.Bar(
-        x=view['Pressure (%)'], y=view['Exposure'] + ' (' + view['Ticker'] + ')', orientation='h',
-        marker_color=[PASTEL['sage'] if value > 0 else PASTEL['rose'] for value in view['Pressure (%)']],
-        text=[f'{value:+.1f}%' for value in view['Pressure (%)']], textposition='outside',
-        customdata=view[['Return (%)', 'Activity (x)']].to_numpy(),
-        hovertemplate='%{y}<br>Pressure %{x:+.1f}%<br>Return %{customdata[0]:+.2f}%<br>Activity %{customdata[1]:.2f}x<extra></extra>',
-    ))
-    fig.add_vline(x=0, line_color='#94a3b8', line_width=1)
-    fig.update_layout(
-        height=max(330, 25 * len(view) + 95), margin=dict(l=10, r=65, t=15, b=40),
-        template='plotly_white', paper_bgcolor='white', plot_bgcolor='white', showlegend=False,
-        xaxis=dict(range=[-115, 115], title='Normalized trading pressure (%)', ticksuffix='%'),
-        yaxis=dict(autorange='reversed'), font=dict(size=12, color='#1f2937'),
+def compute_pressure_score(df: pd.DataFrame) -> float:
+    if df is None or df.empty:
+        return np.nan
+
+    mfv = compute_money_flow_proxy(df)
+    traded_value = compute_traded_value(df)
+
+    if mfv.empty or traded_value.empty:
+        return np.nan
+
+    denom = float(traded_value.sum())
+
+    if denom <= 0:
+        return np.nan
+
+    return float(mfv.sum() / denom)
+
+
+def compute_window_sum(daily: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> float:
+    if daily is None or daily.empty:
+        return np.nan
+
+    s = daily.copy()
+    s.index = strip_tz_from_index(s.index)
+    s = s.sort_index()
+
+    start = pd.Timestamp(start).normalize()
+    end = pd.Timestamp(end).normalize()
+
+    window = s.loc[(s.index >= start) & (s.index <= end)]
+
+    if window.empty:
+        return np.nan
+
+    return float(window.sum())
+
+
+def classify_data_status(
+    px: pd.DataFrame,
+    lookback_px: pd.DataFrame,
+    period_days: int,
+    as_of: date,
+    adv: float,
+) -> Tuple[str, int, float, int, str]:
+    if px is None or px.empty:
+        return "Missing", 0, np.nan, 999, ""
+
+    last_date = px.index.max().date()
+    stale_gap = business_day_gap(last_date, as_of)
+
+    cutoff = pd.Timestamp(as_of).normalize() - pd.Timedelta(days=int(period_days))
+    expected_obs = max(len(pd.bdate_range(start=cutoff, end=pd.Timestamp(as_of))), 1)
+    obs_count = int(len(lookback_px))
+    coverage_ratio = float(obs_count / expected_obs) if expected_obs > 0 else np.nan
+
+    last_date_str = str(last_date)
+
+    if stale_gap >= 4:
+        return "Stale", obs_count, coverage_ratio, stale_gap, last_date_str
+
+    if coverage_ratio < 0.60:
+        return "Partial History", obs_count, coverage_ratio, stale_gap, last_date_str
+
+    if pd.notna(adv) and adv > 0 and adv < 2_000_000:
+        return "Low Volume", obs_count, coverage_ratio, stale_gap, last_date_str
+
+    return "OK", obs_count, coverage_ratio, stale_gap, last_date_str
+
+
+# =========================================================
+# TABLE BUILD
+# =========================================================
+@st.cache_data(show_spinner=True, ttl=900, max_entries=64)
+def build_table(
+    tickers: Tuple[str, ...],
+    period_label: str,
+    period_days: int,
+    as_of: date,
+    cache_key: str,
+) -> pd.DataFrame:
+    start_date = calc_start_date(period_days, as_of)
+    end_date = (pd.Timestamp(as_of) + pd.Timedelta(days=1)).date()
+
+    price_map = fetch_prices(tickers, start_date, end_date, cache_key)
+
+    cutoff = pd.Timestamp(as_of).normalize() - pd.Timedelta(days=int(period_days))
+
+    as_of_ts_local = pd.Timestamp(as_of).normalize()
+    latest_complete_week_end = last_friday(as_of_ts_local - pd.Timedelta(days=1))
+    latest_complete_week_start = week_start_monday(latest_complete_week_end)
+
+    current_week_start = monday_of_week(as_of_ts_local)
+    current_day_end = as_of_ts_local
+
+    rows: List[Dict] = []
+
+    for tk in tickers:
+        cat, desc = etf_info.get(tk, ("", ""))
+        asset_class = infer_asset_class(tk)
+        px = completed_daily_observations(price_map.get(tk, pd.DataFrame()).copy(), tk)
+
+        lookback_px = pd.DataFrame()
+        if px is not None and not px.empty:
+            lookback_px = px.loc[px.index >= cutoff].copy()
+
+        full_daily_proxy = compute_money_flow_proxy(px) if px is not None and not px.empty else pd.Series(dtype="float64")
+
+        lookback_proxy = np.nan
+        pressure_score = np.nan
+        ret = np.nan
+        last_price = np.nan
+        adv = np.nan
+
+        if not lookback_px.empty:
+            lookback_daily_proxy = compute_money_flow_proxy(lookback_px)
+
+            if not lookback_daily_proxy.empty:
+                lookback_proxy = float(lookback_daily_proxy.sum())
+
+            pressure_score = compute_pressure_score(lookback_px)
+
+            close = pd.to_numeric(lookback_px["Close"], errors="coerce").dropna()
+            adjusted = pd.to_numeric(lookback_px.get("Adj Close", lookback_px["Close"]), errors="coerce").dropna()
+            if len(adjusted) >= 2 and adjusted.iloc[0] != 0:
+                ret = float((adjusted.iloc[-1] / adjusted.iloc[0] - 1.0) * 100.0)
+
+            if len(close) >= 1:
+                last_price = float(close.iloc[-1])
+
+            adv_series = compute_traded_value(lookback_px)
+            if adv_series.notna().any():
+                adv = float(adv_series.mean())
+
+        latest_complete_week_proxy = compute_window_sum(
+            full_daily_proxy,
+            latest_complete_week_start,
+            latest_complete_week_end,
+        )
+
+        week_to_date_proxy = compute_window_sum(
+            full_daily_proxy,
+            current_week_start,
+            current_day_end,
+        )
+
+        data_status, obs_count, coverage_ratio, stale_gap, last_data_date = classify_data_status(
+            px=px,
+            lookback_px=lookback_px,
+            period_days=period_days,
+            as_of=as_of,
+            adv=adv,
+        )
+
+        rows.append(
+            {
+                "Ticker": tk,
+                "Label": f"{cat} ({tk})",
+                "Asset Class": asset_class,
+                "Category": cat,
+                "Description": desc,
+                "Last Price": last_price,
+                f"{period_label} Flow Pressure Proxy": lookback_proxy,
+                "Latest Complete Week": latest_complete_week_proxy,
+                "Week to Date": week_to_date_proxy,
+                "Pressure Score": pressure_score,
+                f"{period_label} Return %": ret,
+                "Avg Daily Dollar Vol": adv,
+                "Obs": obs_count,
+                "Coverage %": coverage_ratio * 100.0 if pd.notna(coverage_ratio) else np.nan,
+                "Business Days Since Last Bar": stale_gap,
+                "Last Data Date": last_data_date,
+                "Data Status": data_status,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+# =========================================================
+# DISPLAY HELPERS
+# =========================================================
+def render_matplotlib_high_res(fig) -> bytes:
+    buf = BytesIO()
+    fig.savefig(
+        buf,
+        format="png",
+        dpi=285,
+        bbox_inches="tight",
+        pad_inches=0.04,
+        facecolor="white",
+        edgecolor="white",
     )
-    return fig
+    buf.seek(0)
+    return buf.getvalue()
 
 
-def tint(value):
+def color_for_value(v: float, was_missing: bool = False) -> str:
+    if was_missing:
+        return PASTEL_GREY
+    if pd.isna(v) or abs(float(v)) < 1e-12:
+        return PASTEL_GREY
+    if float(v) > 0:
+        return PASTEL_GREEN
+    return PASTEL_RED
+
+
+def metric_is_currency(metric_name: str) -> bool:
+    return metric_name in {
+        "Latest Complete Week",
+        "Week to Date",
+    } or "Flow Pressure Proxy" in metric_name
+
+
+def format_metric_value(metric_name: str, value) -> str:
     if pd.isna(value):
-        return ''
-    return f"color: {'#28734c' if value > 0 else '#a33d4b' if value < 0 else '#64748b'}"
+        return ""
+
+    if metric_is_currency(metric_name):
+        return fmt_compact_cur(value)
+
+    if metric_name.endswith("Return %") or metric_name == "Coverage %":
+        return fmt_pct(value)
+
+    if metric_name == "Pressure Score":
+        return fmt_score(value)
+
+    return f"{float(value):,.2f}"
 
 
+def top_names(df: pd.DataFrame, metric: str, n: int = 3, positive: bool = True) -> str:
+    x = df.copy()
+    x[metric] = pd.to_numeric(x[metric], errors="coerce")
+    x = x.dropna(subset=[metric])
+
+    if x.empty:
+        return "None"
+
+    x = x[x[metric] > 0] if positive else x[x[metric] < 0]
+
+    if x.empty:
+        return "None"
+
+    x = x.nlargest(n, metric) if positive else x.nsmallest(n, metric)
+
+    parts = [
+        f"{row['Ticker']} {format_metric_value(metric, row[metric])}"
+        for _, row in x.iterrows()
+    ]
+
+    return ", ".join(parts)
+
+
+def build_tape_read(df: pd.DataFrame, flow_col: str) -> str:
+    valid = df[df["Data Status"] != "Missing"].copy()
+    valid[flow_col] = pd.to_numeric(valid[flow_col], errors="coerce")
+
+    if valid.empty or valid[flow_col].dropna().empty:
+        return "Tape read unavailable because no usable flow-pressure values were returned."
+
+    net = valid[flow_col].sum(min_count=1)
+
+    group = (
+        valid.groupby("Asset Class", dropna=False)[flow_col]
+        .sum(min_count=1)
+        .dropna()
+        .sort_values(ascending=False)
+    )
+
+    if group.empty:
+        group_leader = "None"
+        group_lagger = "None"
+    else:
+        group_leader = f"{group.index[0]} {fmt_compact_cur(group.iloc[0])}"
+        group_lagger = f"{group.index[-1]} {fmt_compact_cur(group.iloc[-1])}"
+
+    top_pos = top_names(valid, flow_col, n=3, positive=True)
+    top_neg = top_names(valid, flow_col, n=3, positive=False)
+
+    if pd.isna(net):
+        net_text = "unavailable"
+    elif net > 0:
+        net_text = f"positive at {fmt_compact_cur(net)}"
+    elif net < 0:
+        net_text = f"negative at {fmt_compact_cur(net)}"
+    else:
+        net_text = "flat"
+
+    return (
+        f"<strong>Tape read:</strong> Aggregate {flow_col.lower()} is {net_text}. "
+        f"The strongest positive pressure is in {top_pos}. "
+        f"The weakest pressure is in {top_neg}. "
+        f"By asset class, the leader is {group_leader}, while the weakest bucket is {group_lagger}. "
+        f"This is a price-volume pressure proxy from public OHLCV data. Treat it as a directional tape signal, "
+        f"separate from official ETF creation and redemption flow data."
+    )
+
+
+def build_chart_dataframe(
+    source_df: pd.DataFrame,
+    metric: str,
+    sort_mode: str,
+) -> pd.DataFrame:
+    chart_df = source_df[
+        ["Ticker", "Label", "Asset Class", metric, "Data Status"]
+    ].copy()
+
+    chart_df["Raw Value"] = pd.to_numeric(chart_df[metric], errors="coerce")
+    chart_df["Missing Chart Value"] = chart_df["Raw Value"].isna()
+    chart_df["Chart Value"] = chart_df["Raw Value"].fillna(0.0)
+
+    def label_with_status(row):
+        label = row["Label"]
+        status = row["Data Status"]
+        if status in {"Missing", "Stale", "Partial History", "Low Volume"}:
+            return f"{label} [{status}]"
+        return label
+
+    chart_df["Chart Label"] = chart_df.apply(label_with_status, axis=1)
+
+    if sort_mode == "Positive to Negative":
+        chart_df = chart_df.sort_values("Chart Value", ascending=False)
+    elif sort_mode == "Negative to Positive":
+        chart_df = chart_df.sort_values("Chart Value", ascending=True)
+    elif sort_mode == "Asset Class":
+        chart_df = chart_df.sort_values(["Asset Class", "Chart Value"], ascending=[True, False])
+    else:
+        chart_df["Original Order"] = range(len(chart_df))
+        chart_df = chart_df.sort_values("Original Order")
+
+    return chart_df.reset_index(drop=True)
+
+
+# =========================================================
+# SIDEBAR CONTROLS
+# =========================================================
 with st.sidebar:
-    render_sidebar_about('14_ETF_Flow_Pressure_Proxy.py')
-    window_label = st.selectbox('Trading window', ['5 sessions', '21 sessions', '63 sessions', '252 sessions', 'YTD'], index=1)
-    asset_filter = st.selectbox('Asset class', ['All'] + sorted({infer_asset_class(ticker) for ticker in etf_tickers}))
+    render_sidebar_about("14_ETF_Flow_Pressure_Proxy.py")
+    period_label = st.radio(
+        "Lookback Window",
+        list(lookback_dict.keys()),
+        index=0,
+    )
+    asset_filter = st.selectbox(
+        "Asset Class",
+        ["All"] + sorted({infer_asset_class(ticker) for ticker in etf_tickers}),
+        index=0,
+    )
+    st.caption(f"As of: {as_of_dt_et.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
-render_page_header(PageHeader(
-    title='ETF Flow Pressure', eyebrow='ADFM Flows + Sentiment',
-    description='Weekly ETF net issuance by asset class, with daily trading pressure across tactical ETF exposures.',
-))
 
-issuance, issuance_delivery, issuance_error = load_issuance()
-st.subheader('Reported ETF capital flows')
-if not issuance.empty:
-    displayed = issuance.copy()
-    displayed.columns = [stamp.strftime('%b %d, %Y') for stamp in displayed.columns]
-    displayed.index.name = 'Category'
-    st.dataframe(displayed.style.format('{:+.2f}').map(tint), width='stretch', height=318)
-    st.caption(f'ICI weekly net issuance estimates, $ billions. Latest week ended {issuance.columns.max():%B %d, %Y}. Industry categories cover more funds than the tactical ETF universe below.')
+period_days = int(lookback_dict[period_label])
+flow_col = f"{period_label} Flow Pressure Proxy"
+return_col = f"{period_label} Return %"
+
+
+# =========================================================
+# HEADER
+# =========================================================
+render_page_header(
+    PageHeader(
+        title="ETF Trading Pressure",
+        description=(
+            "Dollar-weighted price-volume pressure across the full 99-name tactical ETF universe. "
+            "Positive values indicate trading concentrated toward session highs; negative values "
+            "indicate trading concentrated toward session lows."
+        ),
+        eyebrow="ADFM Flows and Sentiment",
+    )
+)
+
+
+# =========================================================
+# DATA
+# =========================================================
+df = build_table(
+    tickers=etf_tickers,
+    period_label=period_label,
+    period_days=period_days,
+    as_of=as_of_date,
+    cache_key=as_of_bucket_key,
+)
+
+view_df = df if asset_filter == "All" else df.loc[df["Asset Class"] == asset_filter].copy()
+
+
+# =========================================================
+# FULL-UNIVERSE DOLLAR PRESSURE RANKING
+# =========================================================
+st.subheader("Dollar-Weighted Trading Pressure")
+
+chart_df = build_chart_dataframe(
+    source_df=view_df,
+    metric=flow_col,
+    sort_mode="Positive to Negative",
+)
+
+st.caption(
+    f"{period_label} · showing {len(chart_df)} of {len(df)} ETFs"
+    + ("" if asset_filter == "All" else f" · {asset_filter}")
+    + ". Every ETF remains in the ranking; unavailable observations are shown in grey."
+)
+
+if chart_df.empty:
+    st.info("No ETF observations are available for this selection.")
 else:
-    st.caption('The weekly ICI report is currently unavailable. Daily ETF trading pressure remains available below.')
+    vals = chart_df["Chart Value"].astype(float)
+    raw_vals = chart_df["Raw Value"]
 
-st.subheader('ETF trading pressure')
-now = datetime.now(ZoneInfo('America/New_York'))
-bucket = now.strftime('%Y-%m-%d %H:') + str(now.minute // 15)
-with st.spinner('Loading ETF trading history...'):
-    frames = load_price_history(tuple(['SPY'] + list(etf_tickers)), bucket)
-benchmark = frames.get('SPY', pd.DataFrame())
-sessions = pd.DatetimeIndex(benchmark.loc[benchmark['Close'].notna()].index) if 'Close' in benchmark else pd.DatetimeIndex([])
-if len(sessions) and (pd.Timestamp(now.date()) - sessions[-1]).days > 7:
-    sessions = pd.DatetimeIndex([])
-window = int((sessions.year == sessions[-1].year).sum()) if window_label == 'YTD' and len(sessions) else int(window_label.split()[0]) if window_label != 'YTD' else 1
-rows = []
-for ticker in etf_tickers:
-    reading = pressure_reading(frames.get(ticker, pd.DataFrame()), sessions, window)
-    rows.append({'Ticker': ticker, 'Exposure': etf_info[ticker][0], 'Asset class': infer_asset_class(ticker), **reading})
-full = pd.DataFrame(rows)
-filtered = full if asset_filter == 'All' else full.loc[full['Asset class'] == asset_filter]
-ranked = filtered.loc[filtered['Pressure (%)'].notna()].sort_values('Pressure (%)', ascending=False)
-if ranked.empty:
-    st.caption('No completed ETF observations are available for this selection.')
-else:
-    st.caption(f'Completed session: {sessions[-1]:%b %d, %Y} · {len(ranked)} of {len(filtered)} ETFs · {window_label}. Positive pressure means more traded value closed near session highs; negative pressure means near lows.')
-    st.plotly_chart(pressure_chart(ranked), width='stretch', config={'displaylogo': False})
-    st.caption('Chart: up to ten strongest positive and ten strongest negative readings. Ticker pressure is a price-volume statistic; the reported capital-flow estimates are in the table above.')
-    columns = ['Ticker', 'Exposure', 'Asset class', 'Pressure (%)', 'Pressure change (pp)', 'Return (%)', 'Up/down volume (%)', 'Activity (x)', 'Avg daily traded ($M)']
-    st.dataframe(ranked[columns].style.format({
-        'Pressure (%)': '{:+.1f}', 'Pressure change (pp)': '{:+.1f}', 'Return (%)': '{:+.2f}',
-        'Up/down volume (%)': '{:+.1f}', 'Activity (x)': '{:.2f}', 'Avg daily traded ($M)': '{:,.1f}',
-    }, na_rep='N/A').map(tint, subset=['Pressure (%)', 'Pressure change (pp)', 'Return (%)', 'Up/down volume (%)']),
-        hide_index=True, width='stretch', height=650)
-    st.caption('Pressure change compares with the preceding equal-length window. Up/down volume is the traded-value balance of positive versus negative adjusted-return sessions. Activity compares average share volume with its prior 63-session median. Click column headers to sort.')
-    st.download_button('Download ETF readings', full.to_csv(index=False).encode(),
-                       file_name=f'etf_trading_pressure_{sessions[-1]:%Y%m%d}.csv', mime='text/csv')
+    x_min = min(float(vals.min()), 0.0)
+    x_max = max(float(vals.max()), 0.0)
+    span = (x_max - x_min) if (x_max - x_min) > 0 else 1.0
+    pad = 0.075 * span
 
-with st.expander('Method and source details', expanded=False):
-    st.markdown('''**Trading pressure** is the close-location value `(2 × close − high − low) / (high − low)`, weighted by each session's close × share volume and normalized to a −100% to +100% scale. A flat high/low session contributes neutral pressure when its price and volume are valid. Large funds receive no automatic advantage from their dollar turnover.
+    n = len(chart_df)
+    fig_h = max(7.5, min(29.0, 0.255 * n + 1.8))
+    bar_height = 0.82 if n >= 70 else 0.78
+    y_font = 6.8 if n >= 80 else 7.3
+    value_font = 6.7 if n >= 80 else 7.2
 
-**Returns** use adjusted closes, including distributions when provided. **Up/down volume** assigns each session's traded value the sign of its adjusted return. These are complementary descriptions of the same trading tape, not independent evidence of investor purchases. **Activity** uses a prior-volume median and excludes the measured window.
+    colors = [
+        color_for_value(v, was_missing=missing)
+        for v, missing in zip(chart_df["Chart Value"], chart_df["Missing Chart Value"])
+    ]
 
-**ICI figures** are published weekly estimates of primary-market ETF net issuance. The table shows non-overlapping categories, with the total displayed separately. They are industry aggregates and are never allocated to individual tickers.
+    fig, ax = plt.subplots(figsize=(16.8, fig_h), dpi=220)
+    bars = ax.barh(
+        chart_df["Chart Label"],
+        vals,
+        color=colors,
+        alpha=0.98,
+        height=bar_height,
+        linewidth=0,
+    )
 
-ETFs use one completed SPY session calendar. Missing or invalid price-volume windows remain unranked. The ETF universe can contain overlapping underlying exposures; no cross-ETF capital-flow total is constructed.''')
-    st.markdown(f'[ICI published ETF issuance report]({ICI_URL})')
-    st.caption(f'ICI delivery: {issuance_delivery}' + (f' · Refresh: {issuance_error}' if issuance_error else ''))
-    omitted = full.loc[full['Pressure (%)'].isna(), ['Ticker', 'Exposure', 'As of', 'Status']]
-    if not omitted.empty:
-        st.dataframe(omitted, hide_index=True, width='stretch')
-    if not issuance.empty:
-        export = issuance.copy()
-        export.columns = [stamp.date().isoformat() for stamp in export.columns]
-        st.download_button('Download reported weekly issuance', export.to_csv().encode(),
-                           file_name='ici_etf_net_issuance.csv', mime='text/csv')
+    ax.axvline(0, color="#9ca3af", linewidth=0.85, alpha=0.85)
+    ax.set_xlabel("Estimated dollar trading pressure", fontsize=9, color=TEXT_DARK)
+    ax.set_title(
+        f"{period_label} Dollar-Weighted Trading Pressure | {len(chart_df)} ETFs",
+        fontsize=10.8,
+        pad=7,
+        color=TEXT_DARK,
+    )
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(axis_fmt_currency))
+    ax.tick_params(axis="y", labelsize=y_font, pad=0.6, length=0, colors=TEXT_DARK)
+    ax.tick_params(axis="x", labelsize=8.2, colors=AXIS_GREY)
+    ax.grid(False)
+    ax.invert_yaxis()
+    ax.set_ylim(n - 0.5, -0.5)
+    ax.margins(y=0.0)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#e5e7eb")
+    ax.spines["bottom"].set_color("#e5e7eb")
+    ax.set_xlim(x_min - pad, x_max + pad)
 
-render_footer(data_note='Reported weekly ETF net issuance: Investment Company Institute. Daily ETF trading pressure and adjusted returns: Yahoo Finance. Observation dates are shown with each output.')
+    text_pad = 0.0075 * span
+    for bar, raw, chart_value, was_missing in zip(
+        bars,
+        raw_vals,
+        vals,
+        chart_df["Missing Chart Value"],
+    ):
+        label_txt = "NA" if was_missing else fmt_compact_cur(raw)
+        if chart_value > 0:
+            x_text, ha = chart_value + text_pad, "left"
+        elif chart_value < 0:
+            x_text, ha = chart_value - text_pad, "right"
+        else:
+            x_text, ha = 0.0, "center"
+
+        ax.text(
+            x_text,
+            bar.get_y() + bar.get_height() / 2,
+            label_txt,
+            va="center",
+            ha=ha,
+            fontsize=value_font,
+            color="#374151",
+            clip_on=False,
+        )
+
+    fig.subplots_adjust(left=0.285, right=0.975, top=0.955, bottom=0.055)
+    chart_png = render_matplotlib_high_res(fig)
+    st.image(chart_png, use_container_width=True)
+    plt.close(fig)
+
+
+# =========================================================
+# DENSE UNDERLYING TABLE
+# =========================================================
+st.subheader("ETF Pressure Detail")
+
+display_df = view_df.copy()
+display_df["Pressure Intensity (%)"] = pd.to_numeric(display_df["Pressure Score"], errors="coerce") * 100.0
+
+display_df = display_df.rename(
+    columns={
+        "Category": "Exposure",
+        flow_col: f"{period_label} Dollar Pressure",
+        "Latest Complete Week": "Prior Full Week $ Pressure",
+        "Week to Date": "WTD $ Pressure",
+        return_col: f"{period_label} Return (%)",
+        "Avg Daily Dollar Vol": "Avg Daily $ Volume",
+    }
+)
+
+display_cols = [
+    "Ticker",
+    "Exposure",
+    "Asset Class",
+    f"{period_label} Dollar Pressure",
+    "Prior Full Week $ Pressure",
+    "WTD $ Pressure",
+    "Pressure Intensity (%)",
+    f"{period_label} Return (%)",
+    "Avg Daily $ Volume",
+    "Last Data Date",
+    "Data Status",
+]
+
+display_df = display_df[display_cols].copy()
+display_df = display_df.sort_values(f"{period_label} Dollar Pressure", ascending=False, na_position="last")
+
+signed_cols = [
+    f"{period_label} Dollar Pressure",
+    "Prior Full Week $ Pressure",
+    "WTD $ Pressure",
+    "Pressure Intensity (%)",
+    f"{period_label} Return (%)",
+]
+
+def tint_signed(value):
+    if value is None or pd.isna(value):
+        return ""
+    return f"color: {'#28734c' if float(value) > 0 else '#a33d4b' if float(value) < 0 else '#64748b'}"
+
+styled = display_df.style.format(
+    {
+        f"{period_label} Dollar Pressure": fmt_compact_cur,
+        "Prior Full Week $ Pressure": fmt_compact_cur,
+        "WTD $ Pressure": fmt_compact_cur,
+        "Pressure Intensity (%)": lambda x: "" if pd.isna(x) else f"{float(x):+.1f}",
+        f"{period_label} Return (%)": lambda x: "" if pd.isna(x) else f"{float(x):+.2f}",
+        "Avg Daily $ Volume": fmt_compact_cur,
+    },
+    na_rep="",
+).map(tint_signed, subset=signed_cols)
+
+st.dataframe(
+    styled,
+    hide_index=True,
+    width="stretch",
+    height=820,
+)
+
+st.caption(
+    "Dollar pressure = close-location multiplier × typical price × shares traded, summed across the selected window. "
+    "Pressure Intensity divides that dollar signal by total traded value, making the strength of the tape comparable across ETF sizes. "
+    "This is a public-market trading-pressure proxy, not reported ETF creations or redemptions."
+)
+
+raw_export = df.copy()
+raw_export.insert(0, "Run Timestamp ET", as_of_dt_et.strftime("%Y-%m-%d %H:%M:%S %Z"))
+raw_export.insert(1, "Cache Bucket ET", as_of_bucket_key)
+
+st.download_button(
+    "Download ETF pressure data",
+    raw_export.to_csv(index=False).encode("utf-8"),
+    file_name=f"etf_trading_pressure_{as_of_date}.csv",
+    mime="text/csv",
+)
+
+render_footer(
+    data_note=(
+        "ETF trading pressure and adjusted returns: Yahoo Finance OHLCV. "
+        "The dollar-weighted pressure measure is derived from price location and traded value."
+    )
+)
