@@ -168,7 +168,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    with st.expander("Chart Settings", expanded=False):
+    with st.expander("Chart Settings", expanded=True):
         show_signal_strip = st.checkbox("Show signal strip", value=True)
         rsi_window = st.slider(
             "RSI window",

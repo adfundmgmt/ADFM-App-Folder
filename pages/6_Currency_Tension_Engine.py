@@ -241,7 +241,7 @@ with st.sidebar:
     custom_weights = False
     user_w: dict[str, float] = {}
 
-    with st.expander("Advanced", expanded=False):
+    with st.expander("Advanced", expanded=True):
         trail_n = st.slider(
             "Trail length, month-ends",
             min_value=0,
@@ -514,7 +514,7 @@ with st.expander("Diagnostics", expanded=False, on_change="rerun") as diagnostic
 
 
 with st.sidebar:
-    with st.expander("Export", expanded=False):
+    with st.expander("Export", expanded=True):
         st.download_button(
             "Download current map CSV",
             data=tm_v.to_csv(index=False).encode("utf-8"),

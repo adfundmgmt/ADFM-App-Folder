@@ -20,6 +20,7 @@ from adfm_core.cftc_positioning import (
     positioning_signal,
     price_proxy,
     rolling_metrics,
+    select_major_markets,
 )
 from adfm_core.market_data import adjusted_ohlcv, configure_yfinance_cache, fetch_daily_ohlcv
 from adfm_core.palette import EXCEL, PASTEL_20
@@ -241,7 +242,7 @@ inject_explorer_style(max_width_px=1600)
 
 with st.sidebar:
     render_sidebar_about("18_CFTC_Positioning_Monitor.py")
-    with st.expander("Advanced Controls", expanded=False):
+    with st.expander("Advanced Controls", expanded=True):
         lookback_label = st.select_slider(
             "Crowding lookback",
             options=list(LOOKBACKS),
@@ -257,6 +258,7 @@ with st.sidebar:
             list(COHORTS["Disaggregated"]),
             index=list(COHORTS["Disaggregated"]).index(DEFAULT_COHORT["Disaggregated"]),
         )
+        market_scope = st.selectbox("Markets", ["Major markets", "All CFTC markets"])
 
 lookback_weeks = LOOKBACKS[lookback_label]
 
@@ -278,6 +280,8 @@ if not tff.empty:
 if not disagg.empty:
     parts.append(build_scanner(disagg, "Disaggregated", disagg_cohort, lookback_weeks))
 scanner = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+if market_scope == "Major markets":
+    scanner = select_major_markets(scanner)
 if scanner.empty:
     st.error("CFTC Public Reporting did not return usable positioning data.")
     if tff_error:
@@ -491,7 +495,9 @@ else:
             if method_tab.open:
                 st.markdown(
                     """
-                    **Financial futures:** Traders in Financial Futures separates Dealer/Intermediary, Asset Manager/Institutional, Leveraged Funds and Other Reportables. The default combines Asset Managers and Leveraged Funds.
+                    **Financial futures:** Traders in Financial Futures separates Dealer/Intermediary, Asset Manager/Institutional, Leveraged Funds and Other Reportables. Leveraged Funds is the default cohort.
+
+                    **Market coverage:** Major markets selects 32 benchmark contracts across rates, equity indices, volatility, FX, energy, metals and grains. It excludes regional basis contracts and duplicate consolidated or micro index reports. This is a curated benchmark universe, not a ranking by daily trading volume. All CFTC markets remains available in the sidebar.
 
                     **Physical futures:** Disaggregated COT separates Producer/Merchant, Swap Dealers, Managed Money and Other Reportables. Managed Money is the default speculative cohort.
 

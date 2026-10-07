@@ -1357,7 +1357,7 @@ with st.sidebar:
             help="If unchecked, the app excludes today's row while the NYSE session is still open.",
         )
 
-    with st.expander("Table", expanded=False):
+    with st.expander("Table", expanded=True):
         event_filter = st.selectbox(
             "Recent extremes",
             options=["All extremes", "Heavy only", "Quiet only"],

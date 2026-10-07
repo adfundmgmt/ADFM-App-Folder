@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 
 from adfm_core.cftc_positioning import (
+    DEFAULT_COHORT,
+    MAJOR_MARKETS,
     _request,
     add_metrics,
     build_scanner,
@@ -21,6 +23,7 @@ from adfm_core.cftc_positioning import (
     positioning_signal,
     price_proxy,
     rolling_metrics,
+    select_major_markets,
     zscore_latest,
 )
 
@@ -68,6 +71,24 @@ def raw_tff() -> pd.DataFrame:
 
 
 class CFTCPositioningTests(unittest.TestCase):
+    def test_fx_price_proxies_match_cftc_contract_identities(self) -> None:
+        self.assertEqual(price_proxy("090741")[0], "6C=F")
+        self.assertEqual(price_proxy("092741")[0], "6S=F")
+
+    def test_major_markets_exclude_basis_and_duplicate_index_contracts(self) -> None:
+        frame = pd.DataFrame({
+            "report_type": ["TFF", "TFF", "Disaggregated", "Disaggregated"],
+            "contract_code": ["13874A", "13874+", "023651", "0233AN"],
+            "open_interest": [100, 200, 100, 999999],
+        })
+        selected = select_major_markets(frame)
+        self.assertEqual(selected.contract_code.tolist(), ["13874A", "023651"])
+        self.assertEqual(selected.market.tolist(), ["S&P 500 E-mini", "Henry Hub natural gas"])
+        self.assertEqual(len(frame), 4)
+        self.assertEqual(DEFAULT_COHORT["TFF"], "Leveraged Funds")
+        self.assertEqual(len(MAJOR_MARKETS), 32)
+        self.assertTrue(select_major_markets(pd.DataFrame()).empty)
+
     def test_normalize_converts_public_api_payload_to_numeric_history(self) -> None:
         out = normalize(raw_tff(), "TFF")
 

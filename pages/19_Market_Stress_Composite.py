@@ -432,7 +432,7 @@ with st.sidebar:
     st.caption(f"{regime}  |  {target_label}")
     st.caption(f"{action}  |  Watch age: {signal_age}")
 
-    with st.expander("Signal construction", expanded=False):
+    with st.expander("Signal construction", expanded=True):
         st.markdown(
             """
             **Risk-Off:** foreign equity weakness and breadth, foreign underperformance versus the U.S., carry unwind, and haven-FX strength.
@@ -443,7 +443,7 @@ with st.sidebar:
             """
         )
 
-    with st.expander("Data health", expanded=False):
+    with st.expander("Data health", expanded=True):
         health_rows = []
         for ticker in ALL_TICKERS:
             s = px[ticker].dropna() if ticker in px.columns else pd.Series(dtype=float)

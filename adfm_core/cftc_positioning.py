@@ -35,9 +35,57 @@ COHORTS: Final = {
     },
 }
 DEFAULT_COHORT: Final = {
-    "TFF": "Asset Managers + Leveraged Funds",
+    "TFF": "Leveraged Funds",
     "Disaggregated": "Managed Money",
 }
+
+# Curated benchmark contracts, not a daily-volume league table. Codes identify
+# the reporting venue and avoid duplicate consolidated/micro/basis exposures.
+MAJOR_MARKETS: Final = {
+    ("TFF", "042601"): "2Y Treasury note",
+    ("TFF", "044601"): "5Y Treasury note",
+    ("TFF", "043602"): "10Y Treasury note",
+    ("TFF", "043607"): "Ultra 10Y Treasury note",
+    ("TFF", "020601"): "Treasury bond",
+    ("TFF", "020604"): "Ultra Treasury bond",
+    ("TFF", "134741"): "3M SOFR",
+    ("TFF", "045601"): "Fed Funds",
+    ("TFF", "13874A"): "S&P 500 E-mini",
+    ("TFF", "209742"): "Nasdaq-100 E-mini",
+    ("TFF", "239742"): "Russell 2000 E-mini",
+    ("TFF", "124603"): "Dow Jones E-mini",
+    ("TFF", "1170E1"): "VIX",
+    ("TFF", "099741"): "Euro",
+    ("TFF", "097741"): "Japanese yen",
+    ("TFF", "096742"): "British pound",
+    ("TFF", "090741"): "Canadian dollar",
+    ("TFF", "092741"): "Swiss franc",
+    ("TFF", "232741"): "Australian dollar",
+    ("TFF", "098662"): "US Dollar Index",
+    ("Disaggregated", "067651"): "WTI crude oil",
+    ("Disaggregated", "023651"): "Henry Hub natural gas",
+    ("Disaggregated", "022651"): "ULSD / heating oil",
+    ("Disaggregated", "111659"): "RBOB gasoline",
+    ("Disaggregated", "088691"): "Gold",
+    ("Disaggregated", "084691"): "Silver",
+    ("Disaggregated", "085692"): "Copper",
+    ("Disaggregated", "002602"): "Corn",
+    ("Disaggregated", "001602"): "Chicago wheat",
+    ("Disaggregated", "005602"): "Soybeans",
+    ("Disaggregated", "007601"): "Soybean oil",
+    ("Disaggregated", "026603"): "Soybean meal",
+}
+
+
+def select_major_markets(scanner: pd.DataFrame) -> pd.DataFrame:
+    """Select benchmark reporting contracts and give them concise labels."""
+    if scanner.empty:
+        return scanner.copy()
+    keys = list(zip(scanner["report_type"], scanner["contract_code"], strict=True))
+    names = pd.Series([MAJOR_MARKETS.get(key) for key in keys], index=scanner.index)
+    selected = scanner.loc[names.notna()].copy()
+    selected["market"] = names.loc[selected.index]
+    return selected
 BASE_FIELDS: Final = (
     "market_and_exchange_names",
     "contract_market_name",
@@ -63,7 +111,8 @@ PRICE_PROXIES: Final = {
     "099741": ("6E=F", "Euro FX", None),
     "097741": ("6J=F", "Japanese yen", None),
     "096742": ("6B=F", "British pound", None),
-    "092741": ("6C=F", "Canadian dollar", None),
+    "090741": ("6C=F", "Canadian dollar", None),
+    "092741": ("6S=F", "Swiss franc", None),
     "232741": ("6A=F", "Australian dollar", None),
 }
 

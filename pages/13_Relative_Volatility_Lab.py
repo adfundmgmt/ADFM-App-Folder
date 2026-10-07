@@ -334,7 +334,7 @@ with st.sidebar:
             "Volatility window", RVOL_WINDOWS, index=2,
             format_func=lambda value: f"{value} sessions",
         )
-        with st.expander("Advanced settings", expanded=False):
+        with st.expander("Advanced settings", expanded=True):
             show_implied = st.checkbox("Show implied-volatility overlays", value=False)
             primary_implied_ticker = st.text_input(
                 "Primary implied-vol ticker", value="^VXN",

@@ -1024,7 +1024,7 @@ def _settings_controls(profile: str) -> Tuple[dict, str]:
     with st.sidebar:
         if profile == "Failed Breakout":
             return preset, "3M"
-        with st.expander("Advanced thresholds", expanded=False):
+        with st.expander("Advanced thresholds", expanded=True):
             customize = st.checkbox("Customize preset", value=False)
             if customize:
                 preset["return_pctile"] = st.slider(

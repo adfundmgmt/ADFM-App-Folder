@@ -848,7 +848,7 @@ def render_sidebar_about(page_filename: str) -> None:
     reading_steps = "\n".join(
         f"{index}. {step}" for index, step in enumerate(guide.read_order, start=1)
     )
-    with st.expander("About This Tool", expanded=False):
+    with st.expander("About This Tool", expanded=True):
         st.markdown(
             f"**Purpose**\n\n{tool.description}\n\n"
             f"**Read it in this order**\n\n{reading_steps}"

@@ -111,7 +111,7 @@ with st.sidebar:
     render_sidebar_about("22_Position_Sizing_Lab.py")
     window = st.selectbox("Volatility window",[10,20,60],index=1,format_func=lambda x:f"{x} trading sessions",key="psl_window")
     ceiling_pct = st.number_input("Exposure ceiling (% NAV)",min_value=0.0,max_value=500.0,value=30.0,step=5.0,key="psl_ceiling")
-    with st.expander("Dollar sizing (optional)"):
+    with st.expander("Dollar sizing (optional)", expanded=True):
         nav = st.number_input("Current NAV (USD)",min_value=0.0,value=0.0,step=100000.0,format="%.0f",key="psl_nav")
         st.caption("Enter NAV to translate exposures into dollar notionals. No portfolio assumptions are stored here.")
 
@@ -148,7 +148,7 @@ raw_close = pd.to_numeric(frame["Close"],errors="coerce").sort_index()
 raw_close = raw_close.loc[~raw_close.index.duplicated(keep="last")]
 mark = float(raw_close.loc[close.index[-1]])
 with st.sidebar:
-    with st.expander("Invalidation loss budget (optional)"):
+    with st.expander("Invalidation loss budget (optional)", expanded=True):
         st.caption(f"Latest {ticker} close: ${mark:,.2f}. Set an invalidation price to cap size from today's mark.")
         invalidation = st.number_input("Invalidation price",min_value=0.0,value=0.0,step=1.0,format="%.2f",key=f"psl_invalidation_{ticker}_{side}",help="Below the latest close for a long; above it for a short. Zero disables this cap.")
         loss_budget_pct = st.number_input("Loss budget (% NAV)",min_value=0.0,max_value=100.0,value=1.0,step=.25,key="psl_loss_budget")

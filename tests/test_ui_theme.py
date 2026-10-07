@@ -117,7 +117,7 @@ class InstitutionalThemeTests(unittest.TestCase):
     ):
         render_sidebar_about("18_CFTC_Positioning_Monitor.py")
 
-        expander.assert_called_once_with("About This Tool", expanded=False)
+        expander.assert_called_once_with("About This Tool", expanded=True)
         header.assert_not_called()
         body = markdown.call_args.args[0]
         self.assertIn("**Purpose**", body)
