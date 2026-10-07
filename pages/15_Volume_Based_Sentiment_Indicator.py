@@ -143,98 +143,6 @@ CUSTOM_CSS = """
         border-right: 1px solid rgba(100, 116, 139, 0.16);
     }
 
-    .vbsi-title {
-        font-size: 1.42rem;
-        font-weight: 760;
-        letter-spacing: -0.025em;
-        margin: 0.2rem 0 0.05rem;
-        color: inherit;
-    }
-
-    .vbsi-subtitle {
-        font-size: 0.72rem;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-        color: #64748b;
-        margin-bottom: 0.45rem;
-    }
-
-    .vbsi-banner {
-        border: 1px solid rgba(100, 116, 139, 0.18);
-        border-left: 3px solid #4f765f;
-        border-radius: 6px;
-        background: rgba(100, 116, 139, 0.045);
-        padding: 9px 12px;
-        margin: 0.45rem 0 0.55rem;
-        font-size: 0.89rem;
-        line-height: 1.45;
-    }
-
-    .vbsi-banner.negative { border-left-color: #a06452; }
-    .vbsi-banner.neutral {
-        border-left-color: #cbd5e1;
-        background: rgba(100, 116, 139, 0.025);
-    }
-
-    .vbsi-kicker {
-        font-size: 0.64rem;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-        font-weight: 800;
-        color: #4f765f;
-        margin-right: 10px;
-    }
-
-    .vbsi-banner.negative .vbsi-kicker { color: #a06452; }
-    .vbsi-banner.neutral .vbsi-kicker {
-        color: inherit;
-        background: rgba(100, 116, 139, 0.15);
-        padding: 3px 7px;
-        border-radius: 2px;
-    }
-
-    .vbsi-kpi-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        border: 1px solid rgba(100, 116, 139, 0.16);
-        border-radius: 7px;
-        overflow: hidden;
-        margin: 0.55rem 0 0.85rem;
-    }
-
-    .vbsi-kpi {
-        padding: 10px 13px 11px;
-        min-height: 66px;
-        border-right: 1px solid rgba(100, 116, 139, 0.14);
-    }
-
-    .vbsi-kpi:last-child { border-right: 0; }
-
-    .vbsi-kpi-label {
-        font-size: 0.61rem;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: #64748b;
-        margin-bottom: 5px;
-    }
-
-    .vbsi-kpi-value {
-        font-size: 1.13rem;
-        line-height: 1;
-        font-weight: 780;
-        color: inherit;
-    }
-
-    .vbsi-kpi-note {
-        font-size: 0.68rem;
-        line-height: 1.25;
-        color: #64748b;
-        margin-top: 5px;
-    }
-
-    .vbsi-kpi.positive .vbsi-kpi-value { color: #4f765f; }
-    .vbsi-kpi.negative .vbsi-kpi-value { color: #a06452; }
-
     .vbsi-section-title {
         font-size: 1.04rem;
         font-weight: 760;
@@ -274,56 +182,14 @@ CUSTOM_CSS = """
         font-size: 12px;
     }
 
-    @media (max-width: 900px) {
-        .vbsi-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .vbsi-kpi:nth-child(2) { border-right: 0; }
-        .vbsi-kpi:nth-child(-n+2) { border-bottom: 1px solid rgba(100, 116, 139, 0.14); }
-    }
-
     @media (prefers-color-scheme: dark) {
-        .vbsi-subtitle, .vbsi-kpi-label, .vbsi-kpi-note, .vbsi-section-subtitle {
+        .vbsi-section-subtitle {
             color: #94a3b8;
         }
     }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-
-def render_lens_header(symbol: str, volume_mode: str) -> None:
-    st.markdown(
-        "<div class='vbsi-title'>Volume Sentiment</div>"
-        f"<div class='vbsi-subtitle'>{escape(symbol)} &middot; {escape(volume_mode)} &middot; hover, scan, compare</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def render_signal_banner(label: str, text: str, tone: str = "neutral") -> None:
-    safe_tone = tone if tone in {"positive", "negative", "neutral"} else "neutral"
-    st.markdown(
-        f"<div class='vbsi-banner {safe_tone}'>"
-        f"<span class='vbsi-kicker'>{escape(label)}</span>"
-        f"{escape(text)}"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def render_metric_grid(cards: list[tuple[str, str, str, str]]) -> None:
-    body = []
-    for label, value, note, tone in cards:
-        safe_tone = tone if tone in {"positive", "negative", "neutral"} else "neutral"
-        body.append(
-            f"<div class='vbsi-kpi {safe_tone}'>"
-            f"<div class='vbsi-kpi-label'>{escape(label)}</div>"
-            f"<div class='vbsi-kpi-value'>{escape(value)}</div>"
-            f"<div class='vbsi-kpi-note'>{escape(note)}</div>"
-            "</div>"
-        )
-    st.markdown(
-        "<div class='vbsi-kpi-grid'>" + "".join(body) + "</div>",
-        unsafe_allow_html=True,
-    )
 
 
 def render_volume_section(title: str, subtitle: str) -> None:
@@ -1295,34 +1161,6 @@ def build_chart(
 # =============================================================================
 
 
-def render_current_read(
-    latest: pd.Series,
-    symbol: str,
-    vol_label: str,
-    data_source: str,
-    latest_date: pd.Timestamp,
-) -> None:
-    latest_setup = str(latest.get("Setup", "Unavailable"))
-    latest_close = float(latest.get("Close", np.nan))
-    latest_ret = float(latest.get("Ret_1D", np.nan))
-    latest_pctl = float(latest.get("Volume_Pctl", np.nan))
-    latest_ratio = float(latest.get("Volume_Ratio", np.nan))
-    latest_vol = float(latest.get("Volume_Display", np.nan))
-    latest_base = float(latest.get("Volume_Baseline", np.nan))
-    latest_rvol20 = float(latest.get("RVOL_20D", np.nan))
-
-    vol_text = fmt_volume_value(latest_vol, vol_label)
-    base_text = fmt_volume_value(latest_base, vol_label)
-
-    st.caption(
-        f"{symbol} | {latest_date:%Y-%m-%d} | {latest_setup} | "
-        f"Volume percentile {fmt_pctl(latest_pctl)} ({vol_text}) | "
-        f"{fmt_ratio(latest_ratio)} baseline (base {base_text}) | "
-        f"Close {fmt_price(latest_close)} {fmt_pct(latest_ret)} | "
-        f"RVOL 20D {fmt_ratio(latest_rvol20)} | {data_source}"
-    )
-
-
 def build_recent_events(
     df: pd.DataFrame, event_filter: str, max_rows: int
 ) -> pd.DataFrame:
@@ -1641,7 +1479,6 @@ if df.empty:
     st.warning("No usable data remained after processing.")
     st.stop()
 
-latest = df.iloc[-1]
 latest_date = df.index[-1]
 setup_outcomes = build_setup_outcomes(df_full)
 
@@ -1649,96 +1486,6 @@ holiday_values = get_holiday_values(
     start_date_str=df.index.min().strftime("%Y-%m-%d"),
     end_date_str=df.index.max().strftime("%Y-%m-%d"),
 )
-
-
-# =============================================================================
-# CURRENT READ
-# =============================================================================
-
-latest_setup = str(latest.get("Setup", "Unavailable"))
-latest_state = str(latest.get("State", "Unavailable"))
-latest_pctl = float(latest.get("Volume_Pctl", np.nan))
-latest_ratio = float(latest.get("Volume_Ratio", np.nan))
-latest_ret = float(latest.get("Ret_1D", np.nan))
-latest_close_loc = float(latest.get("Close_Location", np.nan))
-
-same_setup = setup_outcomes[setup_outcomes["Setup"] == latest_setup]
-if same_setup.empty:
-    outcome_value = "Insufficient sample"
-    outcome_note = "Fewer than 3 realized historical matches"
-else:
-    setup_row = same_setup.iloc[0]
-    outcome_value = fmt_pct(float(setup_row["Avg 20D"]), 1)
-    outcome_note = (
-        f"Avg 20D after {int(setup_row['Observations'])} matches · "
-        f"{float(setup_row['20D Hit Rate']):.0f}% positive"
-    )
-
-setup_tone = "neutral"
-latest_setup_color = setup_color(latest_setup, latest_ret)
-if latest_setup_color == PASTEL_GREEN:
-    setup_tone = "positive"
-elif latest_setup_color == PASTEL_RED:
-    setup_tone = "negative"
-
-session_tone = "positive" if latest_ret > 0 else "negative" if latest_ret < 0 else "neutral"
-outcome_tone = "positive" if outcome_value.startswith("+") else "negative" if outcome_value.startswith("-") else "neutral"
-
-render_lens_header(symbol=symbol, volume_mode=vol_label)
-
-render_signal_banner(
-    "Sentiment",
-    f"{latest_setup} · {latest_state} participation · {fmt_pctl(latest_pctl)}th percentile · "
-    f"session {fmt_pct(latest_ret, 1)}.",
-    tone=setup_tone,
-)
-
-render_signal_banner(
-    "Now",
-    f"{symbol} closed at {fmt_price(float(latest.get('Close', np.nan)))} on {latest_date:%b %d, %Y}. "
-    f"Participation is {fmt_ratio(latest_ratio)} the prior {smooth_window}D median; "
-    f"close location is {fmt_pct(latest_close_loc * 100, 0, False)}.",
-    tone="neutral",
-)
-
-render_metric_grid(
-    [
-        (
-            "Participation percentile",
-            fmt_pctl(latest_pctl),
-            f"vs prior {percentile_window} sessions",
-            setup_tone,
-        ),
-        (
-            "Relative volume",
-            fmt_ratio(latest_ratio),
-            f"vs prior {smooth_window}D median",
-            setup_tone,
-        ),
-        (
-            "Session move",
-            fmt_pct(latest_ret, 1),
-            f"close location {fmt_pct(latest_close_loc * 100, 0, False)}",
-            session_tone,
-        ),
-        (
-            "20D historical read",
-            outcome_value,
-            outcome_note,
-            outcome_tone,
-        ),
-    ]
-)
-
-if incomplete_session_excluded:
-    st.caption(
-        "Current NYSE session appears open, so today's incomplete daily volume row was excluded from the signal."
-    )
-
-if turnover_fallback:
-    st.caption(
-        "Shares outstanding was unavailable or unreliable, so the app fell back to raw share volume."
-    )
 
 
 # =============================================================================
@@ -1773,6 +1520,16 @@ st.caption(
     f"Percentile history: {percentile_window} sessions · Baseline: prior {smooth_window} sessions"
 )
 
+
+if incomplete_session_excluded:
+    st.caption(
+        "Current NYSE session appears open, so today's incomplete daily volume row was excluded from the signal."
+    )
+
+if turnover_fallback:
+    st.caption(
+        "Shares outstanding was unavailable or unreliable, so the app fell back to raw share volume."
+    )
 
 # =============================================================================
 # RECENT EXTREMES TABLE
