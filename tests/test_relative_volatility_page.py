@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -78,7 +79,7 @@ class RelativeVolatilityPageTests(unittest.TestCase):
         with patch(
             "adfm_core.market_data.fetch_daily_ohlcv",
             side_effect=fake_market_data,
-        ):
+        ) as loader:
             app = AppTest.from_file(str(PAGE)).run(timeout=30)
 
         self.assertEqual(len(app.exception), 0)
@@ -88,8 +89,24 @@ class RelativeVolatilityPageTests(unittest.TestCase):
         )
         self.assertEqual(len(app.selectbox), 3)
         self.assertEqual(len(app.tabs), 0)
-        self.assertTrue({"Normalized stress", "Data", "Methodology"}.issubset({item.label for item in app.expander}))
-        self.assertTrue(all(not item.proto.expanded for item in app.expander if item.label in {"Normalized stress", "Data", "Methodology"}))
+        self.assertFalse(app.checkbox[0].value)
+        self.assertEqual(tuple(loader.call_args.args[0]), ("^NDX", "^GSPC"))
+        summary = app.dataframe[0].value
+        self.assertEqual(summary.Asset.tolist(), ["NDX", "SPX"])
+        self.assertEqual(list(summary.columns), ["Asset", "Volatility (%)", "5-session change (pp)", "History percentile"])
+        frames, _ = fake_market_data(("^NDX", "^GSPC"))
+        for row, ticker in enumerate(("^NDX", "^GSPC")):
+            returns = np.log(frames[ticker]["Close"]).diff()
+            expected = returns.iloc[-21:].std(ddof=1) * np.sqrt(252) * 100
+            prior = returns.iloc[-26:-5].std(ddof=1) * np.sqrt(252) * 100
+            self.assertAlmostEqual(summary.iloc[row]["Volatility (%)"], expected)
+            self.assertAlmostEqual(summary.iloc[row]["5-session change (pp)"], expected - prior)
+            self.assertTrue(0 <= summary.iloc[row]["History percentile"] <= 100)
+        plot = json.loads(app.get("plotly_chart")[0].proto.spec)
+        self.assertEqual(len(plot["data"]), 4)  # two assets, ratio, latest marker
+        self.assertTrue(any(item["text"] == "1.00x = equal volatility" for item in plot["layout"]["annotations"]))
+        self.assertTrue({"Historical stress detail", "Data", "Methodology"}.issubset({item.label for item in app.expander}))
+        self.assertTrue(all(not item.proto.expanded for item in app.expander if item.label in {"Historical stress detail", "Data", "Methodology"}))
         markdown = [block.value for block in app.markdown]
         self.assertFalse(any("Current relative-volatility read" in value for value in markdown))
         self.assertFalse(any("Ratio decomposition" in value for value in markdown))
@@ -116,11 +133,35 @@ class RelativeVolatilityPageTests(unittest.TestCase):
             side_effect=required_pair_only,
         ):
             app = AppTest.from_file(str(PAGE)).run(timeout=30)
+            self.assertEqual(len(app.warning), 0)
+            app.checkbox[0].check()
+            app.button[0].click().run(timeout=30)
 
         self.assertEqual(len(app.exception), 0)
         self.assertTrue(
-            any("Optional diagnostics are unavailable" in item.value for item in app.warning)
+            any("Implied-volatility overlays are unavailable" in item.value for item in app.warning)
         )
+        self.assertEqual(len(app.dataframe[0].value), 2)
+
+    def test_implied_overlay_remains_available_when_enabled(self):
+        with patch("adfm_core.market_data.fetch_daily_ohlcv", side_effect=fake_market_data) as loader:
+            app = AppTest.from_file(str(PAGE)).run(timeout=30)
+            app.checkbox[0].check()
+            app.button[0].click().run(timeout=30)
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(set(loader.call_args.args[0]), {"^NDX", "^GSPC", "^VXN", "^VIX"})
+        plot = json.loads(app.get("plotly_chart")[0].proto.spec)
+        self.assertEqual(len(plot["data"]), 7)
+
+    def test_custom_pair_uses_selected_assets_without_default_index_overlays(self):
+        with patch("adfm_core.market_data.fetch_daily_ohlcv", side_effect=fake_market_data) as loader:
+            app = AppTest.from_file(str(PAGE)).run(timeout=30)
+            app.text_input[0].set_value("SOXX")
+            app.text_input[1].set_value("QQQ")
+            app.button[0].click().run(timeout=30)
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(set(loader.call_args.args[0]), {"SOXX", "QQQ"})
+        self.assertEqual(app.dataframe[0].value.Asset.tolist(), ["SOXX", "QQQ"])
 
 
 if __name__ == "__main__":
