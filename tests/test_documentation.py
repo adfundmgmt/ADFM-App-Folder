@@ -49,7 +49,7 @@ class DocumentationTests(unittest.TestCase):
                 "Relative Volatility",
                 "ETF Flow Pressure",
                 "Volume Sentiment",
-                "Options Positioning",
+                "Options Relative Value",
                 "13F Holdings",
                 "CFTC Positioning",
                 "Market Stress",

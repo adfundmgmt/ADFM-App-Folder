@@ -38,9 +38,9 @@ The application contains 25 tools, in the same order and groups shown on the Hom
 | 11 | Cross-Asset Ratios | Displays 38 duration, crisis-hedge, commodity, credit, funding, and financial-intermediary ratios as a grouped scrollable chartbook, plus custom relationships. | Yahoo Finance adjusted close history |
 | 12 | Momentum & Rate of Change | Tracks multi-horizon rate-of-change regimes for fast reads on momentum, acceleration, and trend pressure. | Yahoo Finance daily OHLCV |
 | 13 | Relative Volatility | Decomposes selectable realized-volatility ratios and compares them with implied volatility, acceleration, downside, semiconductor, and breadth diagnostics. | Yahoo Finance adjusted close history; implied-volatility indexes and ETF proxies where available |
-| 14 | ETF Flow Pressure | Tracks ETF flow-pressure proxies to monitor allocation shifts across macro, equity, and thematic exposures. | Yahoo Finance OHLCV |
+| 14 | ETF Flow Pressure | Combines reported weekly ETF net issuance with normalized daily trading pressure across tactical ETF exposures. | Investment Company Institute; Yahoo Finance OHLCV |
 | 15 | Volume Sentiment | Reads conviction, participation, and sentiment using volume-regime signals across major liquid assets. | Yahoo Finance adjusted OHLCV; provider fallback where available |
-| 16 | Options Positioning | Maps current implied-volatility richness, downside skew, term structure, and aggregate option activity, with a price-derived volatility fallback when chains are unavailable. | Yahoo Finance current option chains and adjusted close history |
+| 16 | Options Relative Value | Maps underlying price trend against the volatility premium to identify markets where implied volatility screens rich or cheap to recent realized volatility. | Yahoo Finance current option chains and adjusted close history; Cboe delayed option-chain fallback |
 | 17 | 13F Holdings | Ranks institutional managers by a selected security's share of their disclosed Form 13F portfolio. | SEC Form 13F bulk data sets; SEC company ticker directory |
 | 18 | CFTC Positioning | Scans financial and physical futures for crowded longs, crowded shorts, and sharp weekly positioning shifts, with historical percentile and z-score context. | CFTC Public Reporting Environment; Yahoo Finance price overlays for mapped contracts |
 | 19 | Market Stress | Builds a cross-asset stress score across equities, credit, commodities, FX, rates, breadth, and dispersion. | Yahoo Finance; local last-good cache on provider failure |
@@ -60,7 +60,7 @@ The application contains 25 tools, in the same order and groups shown on the Hom
 | Equity Leadership | Sector Rotation; Equity Leadership |
 | Fundamental Research | Equity Underwriter |
 | Technical Confirmation | Chart Terminal; Cross-Asset Ratios; Momentum & Rate of Change; Relative Volatility |
-| Positioning + Flows | ETF Flow Pressure; Volume Sentiment; Options Positioning; 13F Holdings; CFTC Positioning |
+| Positioning + Flows | ETF Flow Pressure; Volume Sentiment; Options Relative Value; 13F Holdings; CFTC Positioning |
 | Risk + Execution | Market Stress; Catalyst Calendar; Hedge Timing; Position Sizing |
 | Historical Context | Market Memory; Seasonality; Commodity Event Study |
 
