@@ -111,7 +111,9 @@ def ytd_days(as_of: datetime) -> int:
 
 
 def calc_start_date(days: int, as_of: date) -> date:
-    padding = 30
+    # Keep enough pre-window history to compare the current pressure regime
+    # with like-for-like rolling windows over the prior year.
+    padding = 420
     return (pd.Timestamp(as_of) - pd.Timedelta(days=int(days) + padding)).date()
 
 
@@ -591,6 +593,46 @@ def compute_pressure_score(df: pd.DataFrame) -> float:
     return float(mfv.sum() / denom)
 
 
+def compute_pressure_percentile(df: pd.DataFrame, window_obs: int, history_days: int = 365) -> float:
+    """Percentile of the current normalized pressure versus like-for-like rolling windows."""
+    if df is None or df.empty or int(window_obs) < 2:
+        return np.nan
+
+    mfv = compute_money_flow_proxy(df)
+    traded_value = compute_traded_value(df)
+    if mfv.empty or traded_value.empty:
+        return np.nan
+
+    window_obs = int(window_obs)
+    rolling_flow = mfv.rolling(window_obs, min_periods=window_obs).sum()
+    rolling_turnover = traded_value.rolling(window_obs, min_periods=window_obs).sum()
+    rolling_score = (rolling_flow / rolling_turnover.replace(0.0, np.nan)).replace([np.inf, -np.inf], np.nan).dropna()
+    if rolling_score.empty:
+        return np.nan
+
+    current = float(rolling_score.iloc[-1])
+    cutoff = rolling_score.index[-1] - pd.Timedelta(days=int(history_days))
+    history = rolling_score.loc[rolling_score.index >= cutoff].dropna()
+    if len(history) < 20:
+        return np.nan
+
+    return float((history <= current).mean() * 100.0)
+
+
+def classify_price_pressure(return_pct: float, pressure_score: float) -> str:
+    if pd.isna(return_pct) or pd.isna(pressure_score):
+        return "N/A"
+    if return_pct > 0 and pressure_score > 0:
+        return "Confirmed accumulation"
+    if return_pct > 0 and pressure_score < 0:
+        return "Distribution into strength"
+    if return_pct < 0 and pressure_score > 0:
+        return "Accumulation into weakness"
+    if return_pct < 0 and pressure_score < 0:
+        return "Confirmed distribution"
+    return "Mixed"
+
+
 def compute_window_sum(daily: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> float:
     if daily is None or daily.empty:
         return np.nan
@@ -682,6 +724,8 @@ def build_table(
 
         lookback_proxy = np.nan
         pressure_score = np.nan
+        pressure_adv = np.nan
+        pressure_percentile = np.nan
         ret = np.nan
         last_price = np.nan
         adv = np.nan
@@ -705,6 +749,11 @@ def build_table(
             adv_series = compute_traded_value(lookback_px)
             if adv_series.notna().any():
                 adv = float(adv_series.mean())
+
+            if pd.notna(lookback_proxy) and pd.notna(adv) and adv > 0:
+                pressure_adv = float(lookback_proxy / adv)
+
+            pressure_percentile = compute_pressure_percentile(px, len(lookback_px))
 
         latest_complete_week_proxy = compute_window_sum(
             full_daily_proxy,
@@ -738,6 +787,9 @@ def build_table(
                 "Latest Complete Week": latest_complete_week_proxy,
                 "Week to Date": week_to_date_proxy,
                 "Pressure Score": pressure_score,
+                "Pressure / ADV (x)": pressure_adv,
+                "1Y Pressure Percentile": pressure_percentile,
+                "Price / Pressure": classify_price_pressure(ret, pressure_score),
                 f"{period_label} Return %": ret,
                 "Avg Daily Dollar Vol": adv,
                 "Obs": obs_count,
@@ -1066,13 +1118,11 @@ else:
 st.subheader("ETF Pressure Detail")
 
 display_df = view_df.copy()
-display_df["Pressure Intensity (%)"] = pd.to_numeric(display_df["Pressure Score"], errors="coerce") * 100.0
 
 display_df = display_df.rename(
     columns={
         "Category": "Exposure",
         flow_col: f"{period_label} Dollar Pressure",
-        "Latest Complete Week": "Prior Full Week $ Pressure",
         "Week to Date": "WTD $ Pressure",
         return_col: f"{period_label} Return (%)",
         "Avg Daily Dollar Vol": "Avg Daily $ Volume",
@@ -1084,23 +1134,23 @@ display_cols = [
     "Exposure",
     "Asset Class",
     f"{period_label} Dollar Pressure",
-    "Prior Full Week $ Pressure",
     "WTD $ Pressure",
-    "Pressure Intensity (%)",
+    "Pressure / ADV (x)",
+    "1Y Pressure Percentile",
     f"{period_label} Return (%)",
+    "Price / Pressure",
     "Avg Daily $ Volume",
-    "Last Data Date",
-    "Data Status",
 ]
+if display_df["Data Status"].ne("OK").any():
+    display_cols.append("Data Status")
 
 display_df = display_df[display_cols].copy()
 display_df = display_df.sort_values(f"{period_label} Dollar Pressure", ascending=False, na_position="last")
 
 signed_cols = [
     f"{period_label} Dollar Pressure",
-    "Prior Full Week $ Pressure",
     "WTD $ Pressure",
-    "Pressure Intensity (%)",
+    "Pressure / ADV (x)",
     f"{period_label} Return (%)",
 ]
 
@@ -1112,9 +1162,9 @@ def tint_signed(value):
 styled = display_df.style.format(
     {
         f"{period_label} Dollar Pressure": fmt_compact_cur,
-        "Prior Full Week $ Pressure": fmt_compact_cur,
         "WTD $ Pressure": fmt_compact_cur,
-        "Pressure Intensity (%)": lambda x: "" if pd.isna(x) else f"{float(x):+.1f}",
+        "Pressure / ADV (x)": lambda x: "" if pd.isna(x) else f"{float(x):+.2f}x",
+        "1Y Pressure Percentile": lambda x: "" if pd.isna(x) else f"{float(x):.0f}th",
         f"{period_label} Return (%)": lambda x: "" if pd.isna(x) else f"{float(x):+.2f}",
         "Avg Daily $ Volume": fmt_compact_cur,
     },
@@ -1130,7 +1180,9 @@ st.dataframe(
 
 st.caption(
     "Dollar pressure = close-location multiplier × typical price × shares traded, summed across the selected window. "
-    "Pressure Intensity divides that dollar signal by total traded value, making the strength of the tape comparable across ETF sizes. "
+    "Pressure / ADV expresses that cumulative signal in average daily turnover equivalents. "
+    "The 1Y percentile compares normalized pressure with like-for-like rolling windows over the prior year. "
+    "Price / Pressure highlights confirmation or divergence between return direction and trading pressure. "
     "This is a public-market trading-pressure proxy, not reported ETF creations or redemptions."
 )
 
