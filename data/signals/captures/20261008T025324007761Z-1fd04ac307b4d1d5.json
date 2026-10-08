@@ -1,0 +1,72 @@
+[
+  {
+    "Captured At UTC":"2026-10-08T02:53:24.007761+00:00",
+    "Data Through":"2026-10-07",
+    "Signal":"CL=F \u00b7 Confirmed Exhaustion",
+    "Key":"commodity:CL=F:e9cf7a3fbe19",
+    "Group":"Commodity price signal",
+    "Composite":0.0,
+    "Impulse":0.0,
+    "Confidence":1.0
+  },
+  {
+    "Captured At UTC":"2026-10-08T02:53:24.007761+00:00",
+    "Data Through":"2026-10-07",
+    "Signal":"NG=F \u00b7 Confirmed Exhaustion",
+    "Key":"commodity:NG=F:e9cf7a3fbe19",
+    "Group":"Commodity price signal",
+    "Composite":0.0,
+    "Impulse":0.0,
+    "Confidence":1.0
+  },
+  {
+    "Captured At UTC":"2026-10-08T02:53:24.007761+00:00",
+    "Data Through":"2026-10-07",
+    "Signal":"GC=F \u00b7 Confirmed Exhaustion",
+    "Key":"commodity:GC=F:e9cf7a3fbe19",
+    "Group":"Commodity price signal",
+    "Composite":0.0,
+    "Impulse":0.0,
+    "Confidence":1.0
+  },
+  {
+    "Captured At UTC":"2026-10-08T02:53:24.007761+00:00",
+    "Data Through":"2026-10-07",
+    "Signal":"SI=F \u00b7 Confirmed Exhaustion",
+    "Key":"commodity:SI=F:e9cf7a3fbe19",
+    "Group":"Commodity price signal",
+    "Composite":0.0,
+    "Impulse":0.0,
+    "Confidence":1.0
+  },
+  {
+    "Captured At UTC":"2026-10-08T02:53:24.007761+00:00",
+    "Data Through":"2026-10-07",
+    "Signal":"HG=F \u00b7 Confirmed Exhaustion",
+    "Key":"commodity:HG=F:e9cf7a3fbe19",
+    "Group":"Commodity price signal",
+    "Composite":0.0,
+    "Impulse":0.0,
+    "Confidence":1.0
+  },
+  {
+    "Captured At UTC":"2026-10-08T02:53:24.007761+00:00",
+    "Data Through":"2026-10-07",
+    "Signal":"ZC=F \u00b7 Confirmed Exhaustion",
+    "Key":"commodity:ZC=F:e9cf7a3fbe19",
+    "Group":"Commodity price signal",
+    "Composite":0.0,
+    "Impulse":0.0,
+    "Confidence":1.0
+  },
+  {
+    "Captured At UTC":"2026-10-08T02:53:24.007761+00:00",
+    "Data Through":"2026-10-07",
+    "Signal":"ZS=F \u00b7 Confirmed Exhaustion",
+    "Key":"commodity:ZS=F:e9cf7a3fbe19",
+    "Group":"Commodity price signal",
+    "Composite":0.0,
+    "Impulse":0.0,
+    "Confidence":1.0
+  }
+]
